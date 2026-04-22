@@ -10,16 +10,32 @@ import { memoroFetch } from '../lib/api.js';
 const TOKEN_ACCOUNT = 'memoro-api-token';
 const ANTHROPIC_ACCOUNT = 'anthropic-api-key';
 
-export async function login(_argv) {
+export async function login(argv) {
   const existing = await getSecret(TOKEN_ACCOUNT);
   if (existing) {
     console.log('A Memoro token is already stored. Run `memoro-cli logout` to remove it first.');
     return 1;
   }
-  console.log('Create a token at https://meetmemoro.app/app/settings → API tokens (Full access recommended).');
-  const token = await promptSecret('Memoro API token: ');
-  if (!token || !token.startsWith('mem_')) {
-    console.error('Invalid token format — must start with "mem_".');
+
+  // Token sources, in priority order:
+  //   --token <value>  (convenient, but leaks to shell history)
+  //   MEMORO_TOKEN env (good for scripts)
+  //   piped stdin       (`echo mem_... | memoro-cli login` — no history risk)
+  //   interactive       (hidden prompt)
+  const tokenIdx = argv.indexOf('--token');
+  let token = null;
+  if (tokenIdx !== -1 && argv[tokenIdx + 1]) {
+    token = argv[tokenIdx + 1].trim();
+  } else if (process.env.MEMORO_TOKEN) {
+    token = process.env.MEMORO_TOKEN.trim();
+  } else {
+    console.log('Create a token at https://meetmemoro.app/app/settings → API tokens (Full access recommended).');
+    console.log('Tip: if paste into the hidden prompt misbehaves, run: echo "mem_..." | memoro-cli login');
+    token = (await promptSecret('Memoro API token: ')).trim();
+  }
+
+  if (!token || !token.startsWith('mem_') || token.length < 20) {
+    console.error('Invalid token format — must start with "mem_" and be the full token copied from settings.');
     return 1;
   }
   const stored = await setSecret(TOKEN_ACCOUNT, token);
