@@ -77,7 +77,9 @@ export async function installHooks({ memoroCliBin = 'memoro-cli' } = {}) {
     hooks: [
       // Claude Code pipes the hook event as JSON on stdin; session upload
       // extracts transcript_path from it when no positional arg is given.
-      { type: 'command', command: `${memoroCliBin} session upload --tool ${ID} --yes` },
+      // --background detaches the actual upload into a grandchild so the
+      // hook returns before Claude reaps its process tree on exit.
+      { type: 'command', command: `${memoroCliBin} session upload --tool ${ID} --yes --background` },
     ],
   });
 

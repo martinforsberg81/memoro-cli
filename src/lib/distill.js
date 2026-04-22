@@ -46,6 +46,11 @@ export function parseTranscript(raw) {
     const content = normalizeContent(entry.content || entry.message?.content || entry.text);
 
     if (!role || !content) continue;
+    // Claude Code injects synthetic "user" entries wrapping local CLI
+    // output — slash-command invocations, caveats, stdout echoes. These
+    // aren't real user turns; skip them so empty sessions don't distill
+    // into a rejected payload.
+    if (isLocalCommandArtifact(content)) continue;
     if (role === 'user' || role === 'human') {
       messages.push({ role: 'user', content, at: ts });
     } else if (role === 'assistant' || role === 'model') {
@@ -54,6 +59,11 @@ export function parseTranscript(raw) {
   }
 
   return { messages, startedAt, endedAt, sessionId };
+}
+
+function isLocalCommandArtifact(content) {
+  const head = content.slice(0, 32);
+  return head.startsWith('<local-command-') || head.startsWith('<command-name>') || head.startsWith('<command-message>');
 }
 
 function normalizeContent(content) {
