@@ -17,10 +17,12 @@ import { parseTranscript, distill } from '../lib/distill.js';
 import { memoroFetch } from '../lib/api.js';
 import { confirm } from '../lib/prompt.js';
 import { readHookEvent, parseHookEvent } from '../lib/hook-event.js';
+import { buildAnnotations } from '../lib/annotate.js';
 
 export async function uploadSession(argv) {
   const { flags, positional } = parseFlags(argv);
   let transcriptPath = positional[0];
+  let sessionCwd = null;
 
   // --background: fork a detached child that does the real work, so Claude
   // Code's SessionEnd hook returns immediately and the upload survives
@@ -36,14 +38,16 @@ export async function uploadSession(argv) {
       const raw = await readFile(flags.fromEventFile, 'utf8');
       const event = parseHookEvent(raw);
       if (event?.transcript_path) transcriptPath = event.transcript_path;
+      if (event?.cwd) sessionCwd = event.cwd;
     } finally {
       await rm(flags.fromEventFile, { force: true });
     }
   } else if (!transcriptPath) {
     // When invoked from a SessionEnd hook, the tool pipes a JSON event on
-    // stdin (e.g. Claude Code: { transcript_path, session_id, ... }).
+    // stdin (e.g. Claude Code: { transcript_path, session_id, cwd, ... }).
     const event = await readHookEvent();
     if (event?.transcript_path) transcriptPath = event.transcript_path;
+    if (event?.cwd) sessionCwd = event.cwd;
   }
 
   if (!transcriptPath) {
@@ -85,6 +89,15 @@ export async function uploadSession(argv) {
     repoHint: flags.repo,
     toolVersion: flags.toolVersion,
   });
+
+  // Attach deterministic client-side annotations — languages, frameworks,
+  // tool-use stats, repo manifest. Zero LLM, zero privacy surface beyond
+  // what the distilled prose already carries. The server-side coding
+  // extractor uses these to sharpen its output without paying for another
+  // prompt pass to infer them.
+  const annotations = buildAnnotations({ raw, parsed, cwd: sessionCwd });
+  payload.coding_context = annotations.coding_context;
+  if (annotations.repo_manifest) payload.repo_manifest = annotations.repo_manifest;
 
   // First-session trust moment: dry-run preview + confirmation.
   const isFirst = !config.lastSessionUploadAt;
