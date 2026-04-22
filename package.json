@@ -1,0 +1,37 @@
+{
+  "name": "memoro-cli",
+  "version": "0.1.0",
+  "description": "Command-line glue between external coding tools (Claude Code, Cursor, Codex, Windsurf, Gemini CLI) and your Memoro account — session ingest, lens injection, secure token storage.",
+  "type": "module",
+  "bin": {
+    "memoro-cli": "./src/bin.js",
+    "memoro": "./src/bin.js"
+  },
+  "main": "./src/index.js",
+  "engines": {
+    "node": ">=18"
+  },
+  "files": [
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node --test 'tests/**/*.test.js'"
+  },
+  "keywords": [
+    "memoro",
+    "cli",
+    "claude-code",
+    "cursor",
+    "codex",
+    "ai",
+    "knowledge-hub"
+  ],
+  "homepage": "https://meetmemoro.app",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/martinforsberg81/memoro-cli.git"
+  }
+}
