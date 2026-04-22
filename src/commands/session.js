@@ -15,11 +15,18 @@ import { ACCOUNTS } from './auth.js';
 import { parseTranscript, distill } from '../lib/distill.js';
 import { memoroFetch } from '../lib/api.js';
 import { confirm } from '../lib/prompt.js';
+import { readHookEvent } from '../lib/hook-event.js';
 
 export async function uploadSession(argv) {
-  const flags = parseFlags(argv);
-  const positional = argv.filter(a => !a.startsWith('--'));
-  const transcriptPath = positional[0];
+  const { flags, positional } = parseFlags(argv);
+  let transcriptPath = positional[0];
+
+  // When invoked from a SessionEnd hook, the tool pipes a JSON event on
+  // stdin (e.g. Claude Code: { transcript_path, session_id, ... }).
+  if (!transcriptPath) {
+    const event = await readHookEvent();
+    if (event?.transcript_path) transcriptPath = event.transcript_path;
+  }
 
   if (!transcriptPath) {
     console.error('Usage: memoro-cli session upload <transcript-path> [--repo <name>] [--tool-version <v>] [--dry-run]');
@@ -98,13 +105,22 @@ export async function uploadSession(argv) {
 }
 
 function parseFlags(argv) {
-  const flags = { repo: null, toolVersion: null, dryRun: false, yes: false };
+  const flags = { repo: null, tool: null, toolVersion: null, dryRun: false, yes: false };
+  const positional = [];
+  const valueFlags = new Set(['--repo', '--tool', '--tool-version', '--api-url']);
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--repo' && argv[i + 1])          { flags.repo = argv[++i]; continue; }
+    if (a === '--tool' && argv[i + 1])          { flags.tool = argv[++i]; continue; }
     if (a === '--tool-version' && argv[i + 1])  { flags.toolVersion = argv[++i]; continue; }
     if (a === '--dry-run')                      { flags.dryRun = true; continue; }
     if (a === '--yes' || a === '-y')            { flags.yes = true; continue; }
+    // Consume value for any recognized-but-unhandled flag (e.g. --api-url,
+    // handled via getApiUrl(argv) elsewhere) so its value isn't misread as
+    // a positional arg.
+    if (valueFlags.has(a) && argv[i + 1])       { i++; continue; }
+    if (a.startsWith('--')) continue;
+    positional.push(a);
   }
-  return flags;
+  return { flags, positional };
 }

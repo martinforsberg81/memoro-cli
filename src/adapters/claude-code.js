@@ -75,8 +75,9 @@ export async function installHooks({ memoroCliBin = 'memoro-cli' } = {}) {
   settings.hooks.SessionEnd.push({
     _memoro: MEMORO_HOOK_ID,
     hooks: [
-      // Claude Code exposes the transcript path in $CLAUDE_TRANSCRIPT_PATH
-      { type: 'command', command: `${memoroCliBin} session upload "$CLAUDE_TRANSCRIPT_PATH" --tool ${ID} --yes` },
+      // Claude Code pipes the hook event as JSON on stdin; session upload
+      // extracts transcript_path from it when no positional arg is given.
+      { type: 'command', command: `${memoroCliBin} session upload --tool ${ID} --yes` },
     ],
   });
 
