@@ -1,8 +1,8 @@
 /**
  * memoro-cli session upload <transcript>
  *
- * Reads a Claude Code transcript file, distills locally, POSTs to Memoro.
- * Raw transcript never leaves the machine.
+ * Reads a coding-tool transcript file, cleans it locally, POSTs to Memoro.
+ * Raw tool I/O never leaves the machine.
  */
 
 import { readFile, writeFile, mkdir, rm } from 'node:fs/promises';
@@ -13,11 +13,12 @@ import { spawn } from 'node:child_process';
 import { getSecret } from '../lib/keychain.js';
 import { readConfig, updateConfig, getApiUrl, CONFIG_DIR } from '../lib/config.js';
 import { ACCOUNTS } from './auth.js';
-import { parseTranscript, distill } from '../lib/distill.js';
+import { parseTranscript, buildSessionPayload } from '../lib/distill.js';
 import { memoroFetch } from '../lib/api.js';
 import { confirm } from '../lib/prompt.js';
 import { readHookEvent, parseHookEvent } from '../lib/hook-event.js';
 import { buildAnnotations } from '../lib/annotate.js';
+import { findLatestCodexSession } from '../lib/codex.js';
 
 export async function uploadSession(argv) {
   const { flags, positional } = parseFlags(argv);
@@ -50,6 +51,15 @@ export async function uploadSession(argv) {
     if (event?.cwd) sessionCwd = event.cwd;
   }
 
+  if (!transcriptPath && flags.tool === 'codex') {
+    const latest = await findLatestCodexSession({ cwd: process.cwd() });
+    if (latest?.path) {
+      transcriptPath = latest.path;
+      if (!sessionCwd) sessionCwd = latest.cwd;
+      if (!flags.toolVersion && latest.toolVersion) flags.toolVersion = latest.toolVersion;
+    }
+  }
+
   if (!transcriptPath) {
     console.error('Usage: memoro-cli session upload <transcript-path> [--repo <name>] [--tool-version <v>] [--dry-run] [--background]');
     return 2;
@@ -64,18 +74,17 @@ export async function uploadSession(argv) {
     console.error('Not logged in. Run `memoro-cli login` first.');
     return 1;
   }
-  const anthropicKey = await getSecret(ACCOUNTS.ANTHROPIC);
-  if (!anthropicKey) {
-    console.error('Anthropic API key not set. Run `memoro-cli config set anthropic-api-key sk-ant-...`');
-    return 1;
-  }
 
   const config = await readConfig();
   const apiUrl = getApiUrl(argv) || config.apiUrl;
 
-  console.error(`Distilling ${transcriptPath}…`);
+  console.error(`Preparing ${transcriptPath}…`);
   const raw = await readFile(transcriptPath, 'utf8');
-  const parsed = parseTranscript(raw);
+  const source = flags.tool || 'claude-code';
+  const parsed = parseTranscript(raw, { tool: source });
+  parsed.source = source;
+  if (!sessionCwd && parsed.cwd) sessionCwd = parsed.cwd;
+  if (!flags.toolVersion && parsed.toolVersion) flags.toolVersion = parsed.toolVersion;
   const hasUser      = parsed.messages.some(m => m.role === 'user');
   const hasAssistant = parsed.messages.some(m => m.role === 'assistant');
   if (!hasUser || !hasAssistant) {
@@ -83,18 +92,18 @@ export async function uploadSession(argv) {
     return 0;
   }
 
-  const payload = await distill({
+  const payload = buildSessionPayload({
     parsed,
-    anthropicApiKey: anthropicKey,
     repoHint: flags.repo,
     toolVersion: flags.toolVersion,
+    source,
   });
 
   // Attach deterministic client-side annotations — languages, frameworks,
   // tool-use stats, repo manifest. Zero LLM, zero privacy surface beyond
-  // what the distilled prose already carries. The server-side coding
-  // extractor uses these to sharpen its output without paying for another
-  // prompt pass to infer them.
+  // the cleaned transcript already being uploaded. The server-side coding
+  // extractor uses these to sharpen its prompt without forcing the client
+  // to infer durable claims.
   const annotations = buildAnnotations({ raw, parsed, cwd: sessionCwd });
   payload.coding_context = annotations.coding_context;
   if (annotations.repo_manifest) payload.repo_manifest = annotations.repo_manifest;
@@ -105,7 +114,7 @@ export async function uploadSession(argv) {
     const previewPath = join(CONFIG_DIR, 'last-session-preview.json');
     await writeFile(previewPath, JSON.stringify(payload, null, 2), { mode: 0o600 });
     console.error('');
-    console.error('── Distilled payload ────────────────────────────────────');
+    console.error('── Session payload ──────────────────────────────────────');
     console.error(JSON.stringify(payload, null, 2));
     console.error('─────────────────────────────────────────────────────────');
     console.error(`Preview written to ${previewPath}`);

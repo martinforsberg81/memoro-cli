@@ -53,6 +53,17 @@ function userCommand(slash) {
   };
 }
 
+function codexFunctionCall(name, args) {
+  return {
+    type: 'response_item',
+    payload: {
+      type: 'function_call',
+      name,
+      arguments: JSON.stringify(args),
+    },
+  };
+}
+
 // ─────────────────────────────────────────────────────────────
 // Language detection
 // ─────────────────────────────────────────────────────────────
@@ -133,6 +144,16 @@ describe('detectBuildTools / detectPackageManager', () => {
       toolUseEntry('Bash', { command: 'pnpm install' }),
     ];
     assert.equal(detectPackageManager(entries), 'pnpm');
+  });
+
+  test('picks up Codex exec_command calls as Bash tool usage', () => {
+    const entries = [
+      codexFunctionCall('exec_command', { command: 'npm test' }),
+      codexFunctionCall('exec_command', { command: 'wrangler dev' }),
+    ];
+    const tools = detectBuildTools(entries);
+    assert.ok(tools.includes('npm'));
+    assert.ok(tools.includes('wrangler'));
   });
 });
 
@@ -284,9 +305,21 @@ describe('buildAnnotations', () => {
       JSON.stringify(toolUseEntry('Bash',  { command: 'npm test' })),
       JSON.stringify(textEntry('assistant', 'Landed as abcdef1.')),
     ].join('\n');
-    const parsed = { startedAt: '2026-04-22T10:00:00Z', endedAt: '2026-04-22T10:15:00Z' };
+    const parsed = {
+      startedAt: '2026-04-22T10:00:00Z',
+      endedAt: '2026-04-22T10:15:00Z',
+      source: 'codex',
+      modelProvider: 'openai',
+      modelName: 'gpt-5.4',
+      toolVersion: '0.123.0',
+      originator: 'codex_exec',
+      clientSource: 'exec',
+    };
 
     const out = buildAnnotations({ raw, parsed, cwd: null });
+    assert.equal(out.coding_context.ai_session.tool, 'codex');
+    assert.equal(out.coding_context.ai_session.provider, 'openai');
+    assert.equal(out.coding_context.ai_session.model, 'gpt-5.4');
     assert.equal(out.coding_context.primary_languages[0].lang, 'javascript');
     assert.equal(out.coding_context.package_manager, 'npm');
     assert.equal(out.coding_context.duration_minutes, 15);

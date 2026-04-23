@@ -3,7 +3,7 @@
  *
  * Deterministic enrichment attached to every session upload. Zero LLM,
  * zero privacy surface (metadata only — no code bodies, no user prose
- * beyond what distill already sends). Purpose: give the server-side
+ * beyond what the cleaned transcript already sends). Purpose: give the server-side
  * coding extractors sharper signal than prose alone can carry.
  *
  * See docs/plans/coding-profile.md.
@@ -11,6 +11,7 @@
 
 import { readFileSync, existsSync, statSync } from 'node:fs';
 import { join } from 'node:path';
+import { parseCodexFunctionArgs } from './codex.js';
 
 // ─────────────────────────────────────────────────────────────
 // Public API
@@ -40,6 +41,14 @@ export function buildAnnotations({ raw, parsed, cwd }) {
 
 export function buildCodingContext(entries, parsed) {
   return {
+    ai_session: {
+      tool: parsed?.source || null,
+      provider: parsed?.modelProvider || null,
+      model: parsed?.modelName || null,
+      tool_version: parsed?.toolVersion || null,
+      originator: parsed?.originator || null,
+      client_source: parsed?.clientSource || null,
+    },
     primary_languages:     detectLanguages(entries),
     frameworks_detected:   detectFrameworks(entries),
     build_tools_seen:      detectBuildTools(entries),
@@ -420,6 +429,13 @@ function parseJsonl(raw) {
  */
 function forEachToolUse(entries, fn) {
   for (const entry of entries) {
+    if (entry?.type === 'response_item' && entry?.payload?.type === 'function_call') {
+      fn({
+        name: mapCodexToolName(entry.payload.name),
+        input: parseCodexFunctionArgs(entry.payload.arguments),
+      });
+      continue;
+    }
     const content = entry?.message?.content || entry?.content;
     if (!Array.isArray(content)) continue;
     for (const block of content) {
@@ -434,19 +450,19 @@ function forEachToolUse(entries, fn) {
  */
 function forEachTextBlock(entries, roleFilter, fn) {
   for (const entry of entries) {
-    const role = entry.role || entry.message?.role || entry.type;
+    const role = entry.role || entry.message?.role || entry.payload?.role || entry.type;
     if (roleFilter !== 'any') {
       if (roleFilter === 'user' && role !== 'user' && role !== 'human') continue;
       if (roleFilter === 'assistant' && role !== 'assistant' && role !== 'model') continue;
     }
-    const content = entry?.message?.content ?? entry?.content ?? entry?.text;
+    const content = entry?.payload?.content ?? entry?.message?.content ?? entry?.content ?? entry?.text;
     if (typeof content === 'string') {
       fn(content);
       continue;
     }
     if (!Array.isArray(content)) continue;
     for (const block of content) {
-      if (block?.type === 'text' && typeof block.text === 'string') fn(block.text);
+      if ((block?.type === 'text' || block?.type === 'input_text' || block?.type === 'output_text') && typeof block.text === 'string') fn(block.text);
       else if (typeof block?.text === 'string' && !block.type) fn(block.text);
     }
   }
@@ -456,11 +472,17 @@ function forEachTextBlock(entries, roleFilter, fn) {
 function collectBashCommands(entries) {
   const out = [];
   forEachToolUse(entries, (block) => {
-    if (block.name === 'Bash' && typeof block.input?.command === 'string') {
+    if ((block.name === 'Bash' || block.name === 'exec_command') && typeof block.input?.command === 'string') {
       out.push(block.input.command);
     }
   });
   return out;
+}
+
+function mapCodexToolName(name) {
+  if (name === 'exec_command') return 'Bash';
+  if (name === 'apply_patch') return 'Edit';
+  return name || 'unknown';
 }
 
 function extToLang(path) {

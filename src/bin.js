@@ -9,6 +9,7 @@ import { configSet, configGet } from './commands/config.js';
 import { uploadSession } from './commands/session.js';
 import { pullLens } from './commands/lens.js';
 import { hookInstall, hookUninstall } from './commands/hook.js';
+import { runCodex } from './commands/codex.js';
 
 const HELP = `memoro-cli — bridge your coding tools to Memoro
 
@@ -20,11 +21,13 @@ COMMANDS
   logout                             Remove the stored token
   status                             Show token + last activity
 
-  config set <key> <value>           Set config (e.g. anthropic-api-key)
+  config set <key> <value>           Set config (e.g. api-url)
   config get <key>                   Read config
 
-  session upload <transcript>        Distill + POST a Claude Code transcript
-  lens pull [--repo <name>]          Fetch portrait-coding lens into tool config
+  session upload <transcript>        Clean + POST a coding-session transcript
+  lens pull [--tool <id>] [--repo <name>]
+                                     Fetch portrait-coding lens into tool config
+  codex run [-- <codex args...>]     Run Codex with lens pull + post-session upload
 
   hook install [--tool claude-code]  Wire SessionStart + SessionEnd hooks
   hook uninstall [--tool claude-code] Remove hooks
@@ -70,6 +73,9 @@ async function main(argv) {
       case 'lens':
         if (sub === 'pull') return await pullLens(rest);
         throw new Error(`Unknown lens subcommand: ${sub}`);
+      case 'codex':
+        if (sub === 'run') return await runCodex(rest);
+        throw new Error(`Unknown codex subcommand: ${sub}`);
       case 'hook':
         if (sub === 'install')   return await hookInstall(rest);
         if (sub === 'uninstall') return await hookUninstall(rest);
