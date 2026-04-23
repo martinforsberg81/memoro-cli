@@ -14,6 +14,7 @@
   "files": [
     "src",
     "README.md",
+    "CHANGELOG.md",
     "LICENSE"
   ],
   "scripts": {
@@ -32,6 +33,6 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/martinforsberg81/memoro-cli.git"
+    "url": "git+https://github.com/martinforsberg81/memoro-cli.git"
   }
 }
