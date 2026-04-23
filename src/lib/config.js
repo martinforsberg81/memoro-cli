@@ -1,7 +1,7 @@
 /**
  * Config file management — non-secret settings only.
  *
- * Secrets (Memoro token, Anthropic API key) live in the OS keychain; see
+ * Secrets (such as the Memoro token) live in the OS keychain; see
  * ./keychain.js. This file holds everything else: API base URL, last
  * activity timestamps, installed hooks.
  *

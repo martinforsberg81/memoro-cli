@@ -4,18 +4,20 @@
  * Each adapter exports: ID, LABEL, CONFIG_PATH, writeLens, removeLens,
  * installHooks, uninstallHooks, detect.
  *
- * MVP ships claude-code only; others are stubs that explain the TODO.
+ * Available adapters are fully implemented. Planned adapters remain stubbed
+ * with explicit notes so the CLI can explain the current support boundary.
  */
 
 import * as claudeCode from './claude-code.js';
+import * as codex from './codex.js';
 
 const ADAPTERS = {
   [claudeCode.ID]: claudeCode,
+  [codex.ID]: codex,
 };
 
 const PLANNED = {
   'cursor':     { label: 'Cursor',     note: 'Stubbed — writes to .cursorrules; adapter coming in PR 4.1' },
-  'codex':      { label: 'Codex CLI',  note: 'Stubbed — writes to AGENTS.md; adapter coming in PR 4.1' },
   'windsurf':   { label: 'Windsurf',   note: 'Stubbed — writes to .windsurfrules; adapter coming in PR 4.1' },
   'gemini-cli': { label: 'Gemini CLI', note: 'Stubbed — adapter coming in PR 4.1' },
 };

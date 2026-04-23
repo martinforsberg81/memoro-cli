@@ -1,55 +1,61 @@
 /**
- * Client-side transcript distillation.
+ * Client-side transcript shaping.
  *
- * Claude Code stores session transcripts as JSONL (one JSON message per
- * line). We parse the user turns + a paraphrase of each assistant turn,
- * then ask a cheap Anthropic model to produce the structured payload
- * Memoro expects. Code bodies, diffs, and tool outputs never leave the
- * user's machine — the LLM only sees prose.
- *
- * Output schema matches POST /api/sessions/external:
- *   {
- *     source: 'claude-code',
- *     session_id, started_at, ended_at,
- *     summary, user_turns[], corrections[], decisions[], open_threads[],
- *     repo_hint, tool_version
- *   }
+ * We normalize tool transcripts into a cleaned conversation payload that
+ * Memoro processes server-side. Exact user queries are preserved verbatim.
+ * Raw tool output is stripped, but safe execution context is retained as
+ * structured activity events for future extraction passes.
  */
-
-const DEFAULT_MODEL = 'claude-haiku-4-5-20251001';
 
 /**
- * Parse a Claude Code JSONL transcript into a plain message list.
- * Strips tool_use / tool_result bodies — we keep only what the user said
- * and short descriptions of what the assistant did.
+ * Parse a coding-tool JSONL transcript into a plain message list plus
+ * structured tool activity. Tool output bodies are never uploaded.
  */
-export function parseTranscript(raw) {
+export function parseTranscript(raw, { tool = 'claude-code' } = {}) {
   const lines = raw.split('\n').filter(l => l.trim());
   const messages = [];
+  const activities = [];
   let startedAt = null;
   let endedAt = null;
   let sessionId = null;
+  let cwd = null;
+  let toolVersion = null;
+  let modelProvider = null;
+  let modelName = null;
+  let originator = null;
+  let clientSource = null;
 
   for (const line of lines) {
     let entry;
     try { entry = JSON.parse(line); } catch { continue; }
 
+    if (tool === 'codex' && entry.type === 'session_meta' && entry.payload) {
+      if (entry.payload.id && !sessionId) sessionId = entry.payload.id;
+      if (entry.payload.cwd && !cwd) cwd = entry.payload.cwd;
+      if (entry.payload.cli_version && !toolVersion) toolVersion = entry.payload.cli_version;
+      if (entry.payload.model_provider && !modelProvider) modelProvider = entry.payload.model_provider;
+      if (entry.payload.originator && !originator) originator = entry.payload.originator;
+      if (entry.payload.source && !clientSource) clientSource = entry.payload.source;
+    }
+
+    if (tool === 'codex' && entry.type === 'turn_context' && entry.payload) {
+      if (entry.payload.model && !modelName) modelName = entry.payload.model;
+    }
+
     const ts = entry.timestamp || entry.created_at || null;
     if (ts) {
       if (!startedAt || new Date(ts) < new Date(startedAt)) startedAt = ts;
-      if (!endedAt   || new Date(ts) > new Date(endedAt))   endedAt   = ts;
+      if (!endedAt || new Date(ts) > new Date(endedAt)) endedAt = ts;
     }
     if (entry.session_id && !sessionId) sessionId = entry.session_id;
-    if (entry.sessionId  && !sessionId) sessionId = entry.sessionId;
+    if (entry.sessionId && !sessionId) sessionId = entry.sessionId;
 
-    const role = entry.role || entry.message?.role || entry.type;
-    const content = normalizeContent(entry.content || entry.message?.content || entry.text);
+    activities.push(...extractActivities(entry, tool, ts));
+
+    const role = extractRole(entry, tool);
+    const content = normalizeContent(extractContent(entry, tool));
 
     if (!role || !content) continue;
-    // Claude Code injects synthetic "user" entries wrapping local CLI
-    // output — slash-command invocations, caveats, stdout echoes. These
-    // aren't real user turns; skip them so empty sessions don't distill
-    // into a rejected payload.
     if (isLocalCommandArtifact(content)) continue;
     if (role === 'user' || role === 'human') {
       messages.push({ role: 'user', content, at: ts });
@@ -58,7 +64,61 @@ export function parseTranscript(raw) {
     }
   }
 
-  return { messages, startedAt, endedAt, sessionId };
+  if (!modelProvider) modelProvider = inferProvider(tool);
+
+  return {
+    messages,
+    activities,
+    startedAt,
+    endedAt,
+    sessionId,
+    cwd,
+    toolVersion,
+    modelProvider,
+    modelName,
+    originator,
+    clientSource,
+  };
+}
+
+/**
+ * Build the external-session payload Memoro expects now: a cleaned
+ * conversation stream plus deterministic metadata.
+ */
+export function buildSessionPayload({ parsed, repoHint = null, toolVersion = null, source = 'claude-code' }) {
+  if (!parsed || !Array.isArray(parsed.messages) || parsed.messages.length === 0) {
+    throw new Error('Transcript has no usable messages');
+  }
+
+  return {
+    source,
+    session_id: parsed.sessionId || fallbackSessionId(parsed),
+    started_at: parsed.startedAt || null,
+    ended_at: parsed.endedAt || null,
+    cleaned_conversation: buildCleanedConversation(parsed),
+    repo_hint: repoHint,
+    tool_version: toolVersion,
+  };
+}
+
+function buildCleanedConversation(parsed) {
+  const entries = [
+    ...parsed.messages.map(message => ({
+      kind: 'message',
+      role: message.role,
+      content: message.content,
+      at: message.at || null,
+    })),
+    ...(Array.isArray(parsed.activities) ? parsed.activities : []),
+  ];
+
+  return entries.sort(compareConversationEntries);
+}
+
+function inferProvider(tool) {
+  if (tool === 'claude-code') return 'anthropic';
+  if (tool === 'codex') return 'openai';
+  return null;
 }
 
 function isLocalCommandArtifact(content) {
@@ -70,17 +130,15 @@ function normalizeContent(content) {
   if (content == null) return '';
   if (typeof content === 'string') return content.trim();
   if (!Array.isArray(content)) return String(content).trim();
-  // Content blocks: keep text, summarise tool_use / tool_result opaquely.
   const parts = [];
   for (const block of content) {
     if (!block || typeof block !== 'object') continue;
-    if (block.type === 'text' && typeof block.text === 'string') {
+    if ((block.type === 'text' || block.type === 'input_text' || block.type === 'output_text') && typeof block.text === 'string') {
       parts.push(block.text);
     } else if (block.type === 'tool_use') {
       parts.push(`[tool: ${block.name || 'unknown'}]`);
     } else if (block.type === 'tool_result') {
-      // Opaque — never expose raw tool output to the distillation LLM.
-      parts.push(`[tool result]`);
+      parts.push('[tool result]');
     } else if (typeof block.text === 'string') {
       parts.push(block.text);
     }
@@ -88,130 +146,126 @@ function normalizeContent(content) {
   return parts.join('\n').trim();
 }
 
-/**
- * Build the LLM prompt for distillation.
- *
- * The transcript may be large — we pass it verbatim for user turns, and
- * let the LLM summarise assistant turns in one sentence each. We do NOT
- * include tool outputs or assistant code blocks directly; parseTranscript
- * has already stripped them to opaque `[tool: …]` placeholders.
- */
-export function buildDistillPrompt(parsed, { repoHint = null, toolVersion = null } = {}) {
-  const conversation = parsed.messages
-    .map(m => `${m.role.toUpperCase()}: ${m.content}`)
-    .join('\n\n---\n\n');
-
-  const systemPrompt = `You are distilling a coding-session transcript into a structured knowledge payload for an external knowledge hub (Memoro).
-
-Memoro is interested in what the USER did and decided, not in the code. Extract only:
-- User turns (verbatim — the user's queries are the primary signal)
-- A one-sentence paraphrase of what the assistant did in response to each user turn
-- Explicit corrections the user issued ("no, don't use X")
-- Decisions committed during the session
-- Open threads left unresolved
-
-Do NOT include code blocks, file paths, diffs, or tool outputs. Those stay on the user's machine.
-
-Output JSON exactly matching this schema — no extra fields:
-
-{
-  "summary": "1–3 sentence retrospective of what was accomplished",
-  "user_turns": [
-    { "text": "verbatim user message", "responded_with": "1-sentence paraphrase of what the assistant did" }
-  ],
-  "corrections": [
-    { "text": "the correction as stated", "about": "what it was about, brief" }
-  ],
-  "decisions": [
-    { "text": "decision committed by the user" }
-  ],
-  "open_threads": [
-    { "text": "unresolved question or next step the user identified" }
-  ]
+function extractRole(entry, tool) {
+  if (tool === 'codex') {
+    if (entry.type === 'response_item' && entry.payload?.type === 'message') {
+      return entry.payload.role || null;
+    }
+    return null;
+  }
+  return entry.role || entry.message?.role || entry.type;
 }
 
-Rules:
-- user_turns preserves user text verbatim. No paraphrasing of what the user said.
-- Merge consecutive user turns that form one logical ask.
-- corrections are explicit user pushbacks ("don't do X", "use Y instead"). Do not fabricate.
-- decisions are decisions the user explicitly committed to, not discussed alternatives.
-- open_threads are things left unresolved, or explicit "next steps" the user stated.
-- If a field has no content, use an empty array. Never invent.
-- Output pure JSON. No markdown fences. No prose.`;
-
-  return {
-    system: systemPrompt,
-    user: `Session transcript:\n\n${conversation}\n\n---\n\nOutput the JSON distillation.`,
-    meta: {
-      sessionId: parsed.sessionId,
-      startedAt: parsed.startedAt,
-      endedAt: parsed.endedAt,
-      repoHint,
-      toolVersion,
-    },
-  };
+function extractContent(entry, tool) {
+  if (tool === 'codex') {
+    if (entry.type === 'response_item' && entry.payload?.type === 'message') {
+      return entry.payload.content;
+    }
+    return null;
+  }
+  return entry.content || entry.message?.content || entry.text;
 }
 
-/**
- * Call Anthropic's API with the distillation prompt and return the parsed
- * payload, ready to POST to /api/sessions/external.
- */
-export async function distill({ parsed, anthropicApiKey, repoHint = null, toolVersion = null, model = DEFAULT_MODEL }) {
-  if (!anthropicApiKey) throw new Error('Anthropic API key not set. Run `memoro-cli config set anthropic-api-key sk-ant-...`');
-  if (!parsed || !Array.isArray(parsed.messages) || parsed.messages.length === 0) {
-    throw new Error('Transcript has no usable messages');
+function extractActivities(entry, tool, at) {
+  const activities = [];
+
+  if (tool === 'codex') {
+    if (entry.type === 'response_item' && entry.payload?.type === 'function_call') {
+      const args = parseCodexArguments(entry.payload.arguments);
+      activities.push({
+        kind: 'tool_call',
+        actor: 'assistant',
+        tool_name: entry.payload.name || 'unknown',
+        summary: describeToolCall(entry.payload.name, args),
+        safe_metadata: pickSafeToolMetadata(args),
+        at,
+      });
+    }
+    return activities;
   }
 
-  const prompt = buildDistillPrompt(parsed, { repoHint, toolVersion });
-
-  const response = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': anthropicApiKey,
-      'anthropic-version': '2023-06-01',
-    },
-    body: JSON.stringify({
-      model,
-      max_tokens: 2000,
-      system: prompt.system,
-      messages: [{ role: 'user', content: prompt.user }],
-    }),
-  });
-
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`Anthropic API ${response.status}: ${text.slice(0, 300)}`);
+  const content = entry.content || entry.message?.content;
+  if (!Array.isArray(content)) return activities;
+  for (const block of content) {
+    if (!block || block.type !== 'tool_use') continue;
+    const input = block.input || {};
+    activities.push({
+      kind: 'tool_call',
+      actor: 'assistant',
+      tool_name: block.name || 'unknown',
+      summary: describeToolCall(block.name, input),
+      safe_metadata: pickSafeToolMetadata(input),
+      at,
+    });
   }
-
-  const data = await response.json();
-  const text = data.content?.[0]?.text;
-  if (!text) throw new Error('Anthropic response missing content');
-
-  const distilled = parseDistillJson(text);
-
-  return {
-    source: 'claude-code',
-    session_id: parsed.sessionId || fallbackSessionId(parsed),
-    started_at: parsed.startedAt || null,
-    ended_at: parsed.endedAt || null,
-    summary: distilled.summary || null,
-    user_turns: Array.isArray(distilled.user_turns) ? distilled.user_turns : [],
-    corrections: Array.isArray(distilled.corrections) ? distilled.corrections : [],
-    decisions: Array.isArray(distilled.decisions) ? distilled.decisions : [],
-    open_threads: Array.isArray(distilled.open_threads) ? distilled.open_threads : [],
-    repo_hint: repoHint,
-    tool_version: toolVersion,
-  };
+  return activities;
 }
 
-function parseDistillJson(text) {
-  // Strip any markdown fences the model may have added despite instructions.
-  const cleaned = text.trim()
-    .replace(/^```json\s*/i, '')
-    .replace(/^```\s*/, '')
-    .replace(/\s*```$/, '');
-  return JSON.parse(cleaned);
+function parseCodexArguments(raw) {
+  if (!raw || typeof raw !== 'string') return {};
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function describeToolCall(name, input) {
+  const tool = String(name || 'unknown');
+  const metadata = pickSafeToolMetadata(input);
+  if (metadata.file_path) return `${tool} on ${metadata.file_path}`;
+  if (metadata.paths?.length) return `${tool} on ${metadata.paths[0]}`;
+  if (metadata.command_preview) return `${tool}: ${metadata.command_preview}`;
+  if (metadata.pattern) return `${tool} for pattern "${metadata.pattern}"`;
+  return tool;
+}
+
+function pickSafeToolMetadata(input) {
+  const metadata = {};
+  if (!input || typeof input !== 'object') return metadata;
+
+  const filePath = firstString(input, ['file_path', 'path', 'notebook_path']);
+  if (filePath) metadata.file_path = filePath;
+
+  const paths = Array.isArray(input.paths)
+    ? input.paths.filter(v => typeof v === 'string').slice(0, 5)
+    : [];
+  if (paths.length > 0) metadata.paths = paths;
+
+  const command = firstString(input, ['command', 'cmd']);
+  if (command) metadata.command_preview = truncateValue(command, 160);
+
+  const pattern = firstString(input, ['pattern', 'query']);
+  if (pattern) metadata.pattern = truncateValue(pattern, 120);
+
+  if (typeof input.old_string === 'string' || typeof input.new_string === 'string') {
+    metadata.has_inline_code = true;
+  }
+
+  return metadata;
+}
+
+function firstString(input, keys) {
+  for (const key of keys) {
+    if (typeof input[key] === 'string' && input[key].trim()) return input[key].trim();
+  }
+  return null;
+}
+
+function truncateValue(value, max) {
+  if (value.length <= max) return value;
+  return `${value.slice(0, max - 1)}…`;
+}
+
+function compareConversationEntries(a, b) {
+  const atA = a?.at || '';
+  const atB = b?.at || '';
+  if (atA && atB && atA !== atB) return atA.localeCompare(atB);
+  if (a.kind === b.kind) return 0;
+  if (a.kind === 'message') return -1;
+  if (b.kind === 'message') return 1;
+  return 0;
 }
 
 function fallbackSessionId(parsed) {

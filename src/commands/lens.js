@@ -29,11 +29,11 @@ export async function pullLens(argv) {
   if (!result?.markdown) {
     console.error('No lens content available yet — Memoro needs more observation data.');
     // Still bust any stale managed block so it doesn't go stale silently.
-    await adapter.removeLens();
+    await adapter.removeLens({ cwd: process.cwd() });
     return 0;
   }
 
-  const target = await adapter.writeLens(result.markdown);
+  const target = await adapter.writeLens(result.markdown, { cwd: process.cwd() });
   await updateConfig({ lastLensPullAt: new Date().toISOString() });
   console.error(`✓ Lens written to ${target}`);
   console.error(`  Version: ${result.version || 'unknown'} · Generated: ${result.generatedAt || 'now'}`);

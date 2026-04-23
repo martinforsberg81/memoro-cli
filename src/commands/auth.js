@@ -8,7 +8,6 @@ import { promptSecret } from '../lib/prompt.js';
 import { memoroFetch } from '../lib/api.js';
 
 const TOKEN_ACCOUNT = 'memoro-api-token';
-const ANTHROPIC_ACCOUNT = 'anthropic-api-key';
 
 export async function login(argv) {
   const existing = await getSecret(TOKEN_ACCOUNT);
@@ -58,11 +57,9 @@ export async function status(argv) {
   const config = await readConfig();
   const apiUrl = getApiUrl(argv) || config.apiUrl;
   const token = await getSecret(TOKEN_ACCOUNT);
-  const anthropic = await getSecret(ANTHROPIC_ACCOUNT);
 
   console.log(`Memoro API:            ${apiUrl}`);
   console.log(`Memoro token:          ${token ? '✓ stored' : '✗ not logged in'}`);
-  console.log(`Anthropic key:         ${anthropic ? '✓ stored' : '✗ not set (run: memoro-cli config set anthropic-api-key ...)'}`);
   console.log(`Last session upload:   ${config.lastSessionUploadAt || 'never'}`);
   console.log(`Last lens pull:        ${config.lastLensPullAt || 'never'}`);
 
@@ -86,5 +83,4 @@ export async function status(argv) {
 // Exposed for other commands
 export const ACCOUNTS = {
   TOKEN: TOKEN_ACCOUNT,
-  ANTHROPIC: ANTHROPIC_ACCOUNT,
 };
