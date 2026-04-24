@@ -21,6 +21,8 @@ const DEFAULT_CONFIG = {
   lastSessionUploadAt: null,
   lastLensPullAt: null,
   installedHooks: {}, // { [tool]: { installedAt, configPath } }
+  latestVersion: null,   // cached npm-registry latest (refreshed daily)
+  latestCheckedAt: null, // ISO timestamp of last refresh attempt
 };
 
 export async function readConfig() {
