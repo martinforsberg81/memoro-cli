@@ -11,6 +11,7 @@ import { pullLens } from './commands/lens.js';
 import { hookInstall, hookUninstall } from './commands/hook.js';
 import { runCodex } from './commands/codex.js';
 import { showSection, listSections } from './commands/show.js';
+import { showUpdateNoticeIfAvailable, spawnBackgroundUpdateCheck } from './lib/update-check.js';
 
 const HELP = `memoro-cli — bridge your coding tools to Memoro
 
@@ -44,19 +45,31 @@ OPTIONS
 See README for details. MIT license.
 `;
 
+async function loadPackageVersion() {
+  const { readFile } = await import('node:fs/promises');
+  const { fileURLToPath } = await import('node:url');
+  const { dirname, join } = await import('node:path');
+  const here = dirname(fileURLToPath(import.meta.url));
+  const pkg = JSON.parse(await readFile(join(here, '../package.json'), 'utf8'));
+  return pkg.version;
+}
+
 async function main(argv) {
   const args = argv.slice(2);
+
+  // Fire the update notice before anything else, so even --help / --version
+  // users get nudged. Any failure here is silenced inside the function.
+  try {
+    const currentVersion = await loadPackageVersion();
+    await showUpdateNoticeIfAvailable(currentVersion);
+  } catch { /* best effort */ }
+
   if (args.length === 0 || args[0] === '--help' || args[0] === '-h') {
     console.log(HELP);
     return 0;
   }
   if (args[0] === '--version' || args[0] === '-v') {
-    const { readFile } = await import('node:fs/promises');
-    const { fileURLToPath } = await import('node:url');
-    const { dirname, join } = await import('node:path');
-    const here = dirname(fileURLToPath(import.meta.url));
-    const pkg = JSON.parse(await readFile(join(here, '../package.json'), 'utf8'));
-    console.log(pkg.version);
+    console.log(await loadPackageVersion());
     return 0;
   }
 
@@ -99,4 +112,11 @@ async function main(argv) {
   }
 }
 
-main(process.argv).then(code => process.exit(code ?? 0));
+main(process.argv).then(async code => {
+  // Kick off the background cache refresh after the command completes.
+  // The parent gates on staleness before spawning, so most invocations
+  // pay zero extra cost; when it does spawn, the child is detached +
+  // unref'd and the parent exits without waiting on it.
+  try { await spawnBackgroundUpdateCheck(); } catch { /* silent */ }
+  process.exit(code ?? 0);
+});
