@@ -10,6 +10,7 @@ import { uploadSession } from './commands/session.js';
 import { pullLens } from './commands/lens.js';
 import { hookInstall, hookUninstall } from './commands/hook.js';
 import { runCodex } from './commands/codex.js';
+import { showSection, listSections } from './commands/show.js';
 
 const HELP = `memoro-cli — bridge your coding tools to Memoro
 
@@ -29,8 +30,11 @@ COMMANDS
                                      Fetch portrait-coding lens into tool config
   codex run [-- <codex args...>]     Run Codex with lens pull + post-session upload
 
-  hook install [--tool claude-code]  Wire SessionStart + SessionEnd hooks
-  hook uninstall [--tool claude-code] Remove hooks
+  show <section> [--repo <name>]     Print one lens section (loose-ends, decisions,
+                                     rules, stack, repos, practices, tool-use)
+
+  hook install [--tool claude-code]  Wire SessionStart + SessionEnd hooks + slash commands
+  hook uninstall [--tool claude-code] Remove hooks + slash commands
 
 OPTIONS
   --help, -h                         Show this help
@@ -76,6 +80,9 @@ async function main(argv) {
       case 'codex':
         if (sub === 'run') return await runCodex(rest);
         throw new Error(`Unknown codex subcommand: ${sub}`);
+      case 'show':
+        // `memoro show <section>` — sub is the section name, not a subcommand
+        return await showSection(sub ? [sub, ...rest] : rest);
       case 'hook':
         if (sub === 'install')   return await hookInstall(rest);
         if (sub === 'uninstall') return await hookUninstall(rest);

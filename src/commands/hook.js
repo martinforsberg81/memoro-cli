@@ -7,6 +7,7 @@
 
 import { readConfig, updateConfig } from '../lib/config.js';
 import { getAdapter, detectInstalled } from '../adapters/index.js';
+import { listSections } from './show.js';
 
 export async function hookInstall(argv) {
   const flags = parseFlags(argv);
@@ -18,6 +19,7 @@ export async function hookInstall(argv) {
 
   const config = await readConfig();
   const installed = { ...(config.installedHooks || {}) };
+  const sections = listSections();
 
   for (const adapter of targets) {
     console.error(`Installing hooks for ${adapter.LABEL}…`);
@@ -28,6 +30,16 @@ export async function hookInstall(argv) {
         configPath,
       };
       console.error(`  ✓ ${configPath}`);
+
+      if (typeof adapter.installCommands === 'function') {
+        const written = await adapter.installCommands({
+          memoroCliBin: flags.bin,
+          sections,
+        });
+        if (written.length > 0) {
+          console.error(`  ✓ ${written.length} slash command${written.length === 1 ? '' : 's'} in ${dirOf(written[0])}`);
+        }
+      }
     } catch (err) {
       console.error(`  ✗ ${err.message}`);
     }
@@ -35,6 +47,11 @@ export async function hookInstall(argv) {
 
   await updateConfig({ installedHooks: installed });
   return 0;
+}
+
+function dirOf(filePath) {
+  const idx = filePath.lastIndexOf('/');
+  return idx > 0 ? filePath.slice(0, idx) : filePath;
 }
 
 export async function hookUninstall(argv) {
@@ -52,6 +69,12 @@ export async function hookUninstall(argv) {
     console.error(`Removing hooks for ${adapter.LABEL}…`);
     try {
       await adapter.uninstallHooks();
+      if (typeof adapter.uninstallCommands === 'function') {
+        const removed = await adapter.uninstallCommands();
+        if (removed.length > 0) {
+          console.error(`  ✓ ${removed.length} slash command${removed.length === 1 ? '' : 's'} removed`);
+        }
+      }
       delete installed[adapter.ID];
       console.error(`  ✓ removed`);
     } catch (err) {

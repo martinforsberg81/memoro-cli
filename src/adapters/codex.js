@@ -83,6 +83,15 @@ export async function uninstallHooks({
   return shimPath;
 }
 
+/**
+ * Codex doesn't currently expose a bang-style slash-command surface
+ * equivalent to Claude Code's `~/.claude/commands/`. Return an empty list
+ * so the hook-install orchestrator can treat command install as best-effort
+ * per adapter without special-casing.
+ */
+export async function installCommands() { return []; }
+export async function uninstallCommands() { return []; }
+
 export function detect() {
   return existsSync(join(homedir(), '.codex'));
 }
