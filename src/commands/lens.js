@@ -10,6 +10,8 @@ import { readConfig, updateConfig, getApiUrl } from '../lib/config.js';
 import { ACCOUNTS } from './auth.js';
 import { memoroFetch } from '../lib/api.js';
 import { getAdapter } from '../adapters/index.js';
+import { getPackageVersion } from '../lib/version.js';
+import { detectStaleness, formatStaleLensBanner } from '../lib/staleness.js';
 
 export async function pullLens(argv) {
   const flags = parseFlags(argv);
@@ -33,11 +35,38 @@ export async function pullLens(argv) {
     return 0;
   }
 
-  const target = await adapter.writeLens(result.markdown, { cwd: process.cwd() });
+  // Prepend a staleness banner if the running binary is newer than the
+  // hook stamp, or if npm has a newer release than what's installed. Banner
+  // lives inside the managed lens block, so it lands in Claude Code's
+  // standing context on the next session — no TTY required.
+  const markdown = await maybePrependStalenessBanner(result.markdown, adapter, config);
+
+  const target = await adapter.writeLens(markdown, { cwd: process.cwd() });
   await updateConfig({ lastLensPullAt: new Date().toISOString() });
   console.error(`✓ Lens written to ${target}`);
   console.error(`  Version: ${result.version || 'unknown'} · Generated: ${result.generatedAt || 'now'}`);
   return 0;
+}
+
+async function maybePrependStalenessBanner(markdown, adapter, config) {
+  if (typeof adapter.readInstalledHookVersion !== 'function') return markdown;
+  let hookVersion = null;
+  try {
+    hookVersion = await adapter.readInstalledHookVersion();
+  } catch { /* best effort — never block the lens write on this */ }
+
+  const installedVersion = await getPackageVersion();
+  const latestVersion = config.latestVersion || null;
+  const status = detectStaleness({ installedVersion, hookVersion, latestVersion });
+  if (!status.stale) return markdown;
+
+  const banner = formatStaleLensBanner({
+    installedVersion,
+    hookVersion,
+    latestVersion,
+    reasons: status.reasons,
+  });
+  return `${banner}\n\n${markdown}`;
 }
 
 function parseFlags(argv) {

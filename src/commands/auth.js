@@ -6,6 +6,9 @@ import { setSecret, getSecret, deleteSecret } from '../lib/keychain.js';
 import { readConfig, getApiUrl } from '../lib/config.js';
 import { promptSecret } from '../lib/prompt.js';
 import { memoroFetch } from '../lib/api.js';
+import { getPackageVersion } from '../lib/version.js';
+import { detectStaleness, formatStaleStatusLine } from '../lib/staleness.js';
+import { readInstalledHookVersion } from '../adapters/claude-code.js';
 
 const TOKEN_ACCOUNT = 'memoro-api-token';
 
@@ -66,6 +69,28 @@ export async function status(argv) {
   const hooks = config.installedHooks || {};
   const toolCount = Object.keys(hooks).length;
   console.log(`Hooks installed:       ${toolCount === 0 ? 'none' : Object.keys(hooks).join(', ')}`);
+
+  // Surface staleness for power users who proactively check status. Pulls
+  // the hook version from claude-code's settings.json — other adapters will
+  // grow their own readers as they ship.
+  try {
+    const installedVersion = await getPackageVersion();
+    const hookVersion = hooks['claude-code'] ? await readInstalledHookVersion() : null;
+    const status = detectStaleness({
+      installedVersion,
+      hookVersion,
+      latestVersion: config.latestVersion || null,
+    });
+    if (status.stale) {
+      const line = formatStaleStatusLine({
+        installedVersion,
+        hookVersion,
+        latestVersion: config.latestVersion || null,
+        reasons: status.reasons,
+      });
+      console.log(`Update available:      ${line}`);
+    }
+  } catch { /* best effort */ }
 
   if (token) {
     try {
