@@ -14,6 +14,7 @@ import { existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { upsertManagedBlock, removeManagedBlock } from '../lib/managed-block.js';
+import { getPackageVersion } from '../lib/version.js';
 
 // Paths are resolved lazily via homedir() so tests (and any future env
 // override) can redirect HOME without having to bust the module cache.
@@ -69,6 +70,9 @@ export async function removeLens() {
 export async function installHooks({ memoroCliBin = 'memoro-cli' } = {}) {
   await ensureDir(claudeDir());
   const settings = await readSettings();
+  // Stamp the installing version on each managed block so we can detect when
+  // the binary has been updated but the hooks haven't been re-installed.
+  const version = await getPackageVersion();
 
   settings.hooks = settings.hooks || {};
   settings.hooks.SessionStart = dedupeHooks(settings.hooks.SessionStart, MEMORO_HOOK_ID);
@@ -76,6 +80,7 @@ export async function installHooks({ memoroCliBin = 'memoro-cli' } = {}) {
 
   settings.hooks.SessionStart.push({
     _memoro: MEMORO_HOOK_ID,
+    _memoro_version: version,
     hooks: [
       { type: 'command', command: `${memoroCliBin} lens pull --tool ${ID}` },
       // Spawn the heartbeat daemon detached — Claude Code reaps its hook
@@ -85,6 +90,7 @@ export async function installHooks({ memoroCliBin = 'memoro-cli' } = {}) {
   });
   settings.hooks.SessionEnd.push({
     _memoro: MEMORO_HOOK_ID,
+    _memoro_version: version,
     hooks: [
       // Stop the heartbeat daemon first (reads session_id from stdin),
       // then upload the session. Both consume the same stdin payload, but
@@ -101,6 +107,27 @@ export async function installHooks({ memoroCliBin = 'memoro-cli' } = {}) {
 
   await writeSettings(settings);
   return settingsJson();
+}
+
+/**
+ * Read the version stamped on the installed hook entry. Returns null when
+ * no memoro block is present, or when an older install (pre-stamp) wrote
+ * the block without a version. Either way the caller treats null as
+ * "unknown — can't compare".
+ */
+export async function readInstalledHookVersion() {
+  if (!existsSync(settingsJson())) return null;
+  const settings = await readSettings();
+  const candidates = [
+    ...(Array.isArray(settings?.hooks?.SessionStart) ? settings.hooks.SessionStart : []),
+    ...(Array.isArray(settings?.hooks?.SessionEnd) ? settings.hooks.SessionEnd : []),
+  ];
+  for (const entry of candidates) {
+    if (entry?._memoro === MEMORO_HOOK_ID && typeof entry._memoro_version === 'string') {
+      return entry._memoro_version;
+    }
+  }
+  return null;
 }
 
 export async function uninstallHooks() {
@@ -144,6 +171,27 @@ export async function installCommands({
     written.push(file);
   }
   return written;
+}
+
+/**
+ * Drop a `/memoro-update` slash command that surfaces the two-step update
+ * recipe (npm install -g + hook re-install) inside Claude Code.
+ *
+ * Returns the absolute path to the written file. Idempotent — re-running
+ * overwrites the existing file.
+ *
+ * Why not execute the commands directly? `npm install -g` typically needs
+ * permissions Claude Code shouldn't run unattended (sudo on some setups).
+ * Printing the recipe lets the LLM decide whether to run it and lets the
+ * user copy-paste safely. The body is rendered into the conversation as a
+ * user message, so the model sees the recipe and can offer to run it.
+ */
+export async function installUpdateCommand({ memoroCliBin = 'memoro-cli' } = {}) {
+  await ensureDir(commandsDir());
+  const file = join(commandsDir(), `${COMMAND_PREFIX}update.md`);
+  const body = renderUpdateCommandFile({ memoroCliBin });
+  await writeFile(file, body, { mode: 0o644 });
+  return file;
 }
 
 export async function uninstallCommands() {
@@ -206,6 +254,33 @@ description: ${title}
 ${COMMAND_MARKER}
 
 !${memoroCliBin} show ${section}
+`;
+}
+
+function renderUpdateCommandFile({ memoroCliBin }) {
+  // Body is rendered into the conversation as a user message — give the
+  // LLM enough to either run the commands (with the user's permission) or
+  // print them clearly. No leading `!` so the recipe doesn't auto-execute.
+  return `---
+description: Update memoro-cli and re-install its Claude Code hooks
+---
+
+${COMMAND_MARKER}
+
+The user wants to update memoro-cli to the latest version.
+
+Run these two commands in the user's shell, in order. The second step is
+required — it re-stamps the SessionStart/SessionEnd hooks so any new
+hook behaviour (heartbeat, new commands) is wired up:
+
+\`\`\`sh
+npm install -g ${memoroCliBin === 'memoro-cli' ? 'memoro-cli' : memoroCliBin}
+${memoroCliBin} hook install --tool claude-code
+\`\`\`
+
+If \`npm install -g\` reports permission errors, suggest \`sudo npm install -g\`
+or fixing the global npm prefix. After both commands succeed, the next
+SessionStart will pull a fresh lens and the staleness banner will clear.
 `;
 }
 

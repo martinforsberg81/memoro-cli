@@ -40,6 +40,12 @@ export async function hookInstall(argv) {
           console.error(`  ✓ ${written.length} slash command${written.length === 1 ? '' : 's'} in ${dirOf(written[0])}`);
         }
       }
+      if (typeof adapter.installUpdateCommand === 'function') {
+        try {
+          await adapter.installUpdateCommand({ memoroCliBin: flags.bin });
+          console.error('  ✓ /memoro-update slash command installed');
+        } catch { /* best effort — non-fatal if the update command fails */ }
+      }
     } catch (err) {
       console.error(`  ✗ ${err.message}`);
     }
