@@ -78,11 +78,19 @@ export async function installHooks({ memoroCliBin = 'memoro-cli' } = {}) {
     _memoro: MEMORO_HOOK_ID,
     hooks: [
       { type: 'command', command: `${memoroCliBin} lens pull --tool ${ID}` },
+      // Spawn the heartbeat daemon detached — Claude Code reaps its hook
+      // process tree on exit, so the daemon needs to survive that.
+      { type: 'command', command: `${memoroCliBin} heartbeat-loop --tool ${ID} --background` },
     ],
   });
   settings.hooks.SessionEnd.push({
     _memoro: MEMORO_HOOK_ID,
     hooks: [
+      // Stop the heartbeat daemon first (reads session_id from stdin),
+      // then upload the session. Both consume the same stdin payload, but
+      // SessionEnd hooks run sequentially and each receives a fresh stdin
+      // copy from Claude Code.
+      { type: 'command', command: `${memoroCliBin} heartbeat-stop` },
       // Claude Code pipes the hook event as JSON on stdin; session upload
       // extracts transcript_path from it when no positional arg is given.
       // --background detaches the actual upload into a grandchild so the

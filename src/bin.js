@@ -11,6 +11,8 @@ import { pullLens } from './commands/lens.js';
 import { hookInstall, hookUninstall } from './commands/hook.js';
 import { runCodex } from './commands/codex.js';
 import { showSection, listSections } from './commands/show.js';
+import { heartbeatLoop } from './commands/heartbeat-loop.js';
+import { heartbeatStop } from './commands/heartbeat-stop.js';
 import { showUpdateNoticeIfAvailable, spawnBackgroundUpdateCheck } from './lib/update-check.js';
 
 const HELP = `memoro-cli — bridge your coding tools to Memoro
@@ -100,6 +102,12 @@ async function main(argv) {
         if (sub === 'install')   return await hookInstall(rest);
         if (sub === 'uninstall') return await hookUninstall(rest);
         throw new Error(`Unknown hook subcommand: ${sub}`);
+      case 'heartbeat-loop':
+        // Internal — installed by the SessionStart hook; not in --help.
+        return await heartbeatLoop(sub ? [sub, ...rest] : rest);
+      case 'heartbeat-stop':
+        // Internal — installed by the SessionEnd hook; not in --help.
+        return await heartbeatStop(sub ? [sub, ...rest] : rest);
       default:
         console.error(`Unknown command: ${cmd}`);
         console.error(HELP);
