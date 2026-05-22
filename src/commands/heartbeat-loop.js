@@ -36,6 +36,8 @@ import { memoroFetch } from '../lib/api.js';
 import { readHookEvent, parseHookEvent } from '../lib/hook-event.js';
 import { getRepoContext, deriveRepoName } from '../lib/git-context.js';
 import { lookupOrMint } from '../lib/coding-session.js';
+import { CliWsClient } from './ws-client.js';
+import { createFetchTranscriptHandler } from './handlers/fetch-transcript.js';
 
 const TICK_INTERVAL_MS = 60_000;
 const RETRY_INTERVAL_MS = 5 * 60 * 1000;
@@ -99,6 +101,27 @@ export async function heartbeatLoop(argv) {
   const source = flags.tool || 'claude-code';
   const repo = deriveRepoName(repoContext);
 
+  // Open the WS command channel in parallel with the heartbeat ticker.
+  // The CLI reads its local transcript on demand when the dashboard's
+  // scoped-session view asks for it; nothing is streamed otherwise.
+  const wsLogger = makeFileLogger(join(CONFIG_DIR, 'heartbeat.log'));
+  const wsClient = new CliWsClient({
+    apiUrl,
+    token,
+    codingSessionId,
+    handlers: {
+      fetch_transcript: createFetchTranscriptHandler({
+        transcriptPath: event?.transcript_path,
+        source,
+      }),
+    },
+    logger: wsLogger,
+  });
+  wsClient.start();
+  const stopWs = () => wsClient.stop();
+  process.on('SIGTERM', stopWs);
+  process.on('SIGINT', stopWs);
+
   while (alive) {
     await postHeartbeatWithRetry({
       apiUrl,
@@ -121,8 +144,25 @@ export async function heartbeatLoop(argv) {
     } catch { /* signal-interrupted sleep — falls through to alive check */ }
   }
 
+  wsClient.stop();
   await cleanupPidFile(pidFile);
   return 0;
+}
+
+/**
+ * Append-only logger that writes to heartbeat.log instead of stderr.
+ * heartbeat-loop runs detached with stderr → heartbeat.log already, so
+ * `appendFile` here is paranoia in case stderr is captured differently in
+ * the future.
+ */
+function makeFileLogger(_path) {
+  // For now, route through console.error which is already piped to the
+  // heartbeat.log file via the detached child's stdio redirect.
+  return {
+    info: (msg) => console.error(msg),
+    warn: (msg) => console.error(msg),
+    error: (msg) => console.error(msg),
+  };
 }
 
 async function postHeartbeatWithRetry({ apiUrl, token, payload }) {
