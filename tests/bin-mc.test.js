@@ -7,6 +7,7 @@ import {
   writeToPty,
   renderIntro,
   formatStatus,
+  extractExcerpt,
 } from '../src/bin-mc.js';
 
 // Strip ANSI escape sequences so we can match on visible text.
@@ -84,6 +85,69 @@ describe('renderIntro', () => {
     const out = renderIntro(ctx);
     assert.ok(out.startsWith('\n'));
     assert.ok(out.endsWith('\n\n'));
+  });
+});
+
+describe('extractExcerpt', () => {
+  test('returns empty for null / empty input', () => {
+    assert.equal(extractExcerpt(''), '');
+    assert.equal(extractExcerpt(null), '');
+    assert.equal(extractExcerpt(undefined), '');
+  });
+
+  test('passes plain text through unchanged', () => {
+    const out = extractExcerpt('Hello, world.');
+    assert.equal(out, 'Hello, world.');
+  });
+
+  test('strips SGR color sequences', () => {
+    const input = '\x1b[1;31mERROR\x1b[0m: something broke';
+    assert.equal(extractExcerpt(input), 'ERROR: something broke');
+  });
+
+  test('strips cursor-positioning CSI sequences', () => {
+    const input = '\x1b[H\x1b[2JHow should I proceed?\n  1. Update\n  2. Hold';
+    assert.equal(extractExcerpt(input), 'How should I proceed?\n  1. Update\n  2. Hold');
+  });
+
+  test('strips OSC (window title) sequences', () => {
+    const input = '\x1b]0;some title\x07hello';
+    assert.equal(extractExcerpt(input), 'hello');
+  });
+
+  test('drops non-printable control bytes but preserves newlines + tabs', () => {
+    const input = 'line 1\n\tindented\rline 2';
+    assert.equal(extractExcerpt(input), 'line 1\n\tindented' + 'line 2');
+  });
+
+  test('collapses 3+ blank lines into 2', () => {
+    const input = 'top\n\n\n\n\nbottom';
+    assert.equal(extractExcerpt(input), 'top\n\nbottom');
+  });
+
+  test('returns the trailing `max` chars when input is long', () => {
+    const longText = 'X'.repeat(2000) + ' END OF LONG TEXT';
+    const out = extractExcerpt(longText, 50);
+    assert.equal(out.length <= 50, true);
+    assert.ok(out.endsWith('END OF LONG TEXT'));
+  });
+
+  test('Claude prompt menu example survives ANSI stripping', () => {
+    // Simulates a Claude TUI redraw with color + cursor positioning around a
+    // menu — the kind of output the coordinator needs to spot as paused.
+    const input =
+      '\x1b[H\x1b[2J' +
+      '\x1b[36m❯ \x1b[0mHow should I proceed?\n\n' +
+      '\x1b[1m  1. Update Gemini Flash only (Recommended)\x1b[0m\n' +
+      '  2. Update Gemini + dig into Sonnet\n' +
+      '  3. Hold — let me look first\n' +
+      '\x1b[2K';  // erase-line at end (TUI cleanup)
+    const out = extractExcerpt(input);
+    assert.match(out, /How should I proceed\?/);
+    assert.match(out, /1\. Update Gemini Flash only/);
+    assert.match(out, /3\. Hold/);
+    // No raw escape sequences leaked
+    assert.equal(out.includes('\x1b['), false);
   });
 });
 

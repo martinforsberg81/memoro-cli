@@ -4,6 +4,15 @@ All notable changes to `memoro-cli` are documented in this file. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- `mc` heartbeats now carry `last_assistant_excerpt` — the trailing text
+  of what Claude is currently showing in the wrapped session, ANSI-stripped.
+  `mc sessions list` displays it under each session so a peer coordinator
+  can spot paused prompts (e.g. *"How should I proceed? 1. Update Gemini
+  Flash only…"*) at a glance instead of relying on `idle_seconds` alone.
+
 ## [0.2.0] — 2026-04-24
 
 ### Added
