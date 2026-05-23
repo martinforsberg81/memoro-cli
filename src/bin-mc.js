@@ -21,7 +21,7 @@
  */
 
 import { spawnSync, spawn } from 'node:child_process';
-import { mkdirSync, existsSync, unlinkSync, chmodSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, existsSync, unlinkSync, chmodSync, readFileSync, writeFileSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -484,8 +484,19 @@ export const __test__ = {
 };
 
 // Only run main() when invoked as a script — not when imported by tests
-// or other modules. process.argv[1] is the resolved script path; ESM's
-// import.meta.url is the file:// URL of this module.
-if (fileURLToPath(import.meta.url) === process.argv[1]) {
+// or other modules. Compare via realpath because npm installs the bin as
+// a symlink (e.g. /opt/homebrew/bin/mc → .../node_modules/memoro-cli/src/bin-mc.js);
+// import.meta.url resolves to the real path, process.argv[1] does not.
+if (isEntryScript()) {
   main().then(code => { process.exit(code ?? 0); });
+}
+
+function isEntryScript() {
+  try {
+    const here = fileURLToPath(import.meta.url);
+    const argv1 = realpathSync(process.argv[1]);
+    return here === argv1;
+  } catch {
+    return false;
+  }
 }
