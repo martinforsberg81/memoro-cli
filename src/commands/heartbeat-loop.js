@@ -46,6 +46,13 @@ const MAX_ATTEMPTS = 3;
 export async function heartbeatLoop(argv) {
   const { flags } = parseFlags(argv);
 
+  // When `mc` parents the session, IT owns the heartbeat + WS lifecycle.
+  // The Claude SessionStart hook still fires this command, so it must
+  // detect the parent and exit immediately to avoid a duplicate daemon.
+  if (process.env.MEMORO_MC_PARENT === '1') {
+    return 0;
+  }
+
   if (flags.background) {
     return forkDetached(argv);
   }
