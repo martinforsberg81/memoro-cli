@@ -124,6 +124,7 @@ async function runWrap(argv) {
   const passthrough = argv.filter(a => a !== '--no-attach');
 
   preflight();
+  refuseIfAlreadyInsideTmux();
 
   if (!existsSync(MC_DIR)) {
     mkdirSync(MC_DIR, { recursive: true, mode: 0o700 });
@@ -185,9 +186,15 @@ async function runWrap(argv) {
     process.exit(1);
   }
 
-  // Enable mouse mode so scroll-wheel scrolls tmux history instead of being
-  // absorbed by Claude's TUI.
-  spawnSync('tmux', ['set-option', '-t', tmuxSession, '-g', 'mouse', 'on'], { stdio: 'ignore' });
+  // Tmux defaults aren't great for a modern TUI like Claude Code's:
+  //   - mouse off          → scroll-wheel goes to the app, no scrollback
+  //   - escape-time 500ms  → arrow keys + Alt-modifiers feel sluggish
+  //   - xterm-keys off     → modifier combos arrive mangled
+  //   - default-terminal   → some installs default to "screen", which is
+  //                          too conservative for italics + truecolor.
+  // Set sensible session-scoped overrides so the user doesn't have to
+  // know any tmux to get a snappy, modern experience.
+  setTmuxOptions(tmuxSession);
 
   process.stderr.write(`[mc] session ${codingSessionId} — ${deriveRepoName(repoContext)} (${repoContext.branch})\n`);
   process.stderr.write(`[mc] dispatch socket: ${sockPath}\n`);
@@ -409,6 +416,36 @@ function preflight() {
   if (spawnSync('which', [CLAUDE_BIN], { stdio: 'ignore' }).status !== 0) {
     console.error(`mc: '${CLAUDE_BIN}' not found in PATH`);
     process.exit(1);
+  }
+}
+
+/**
+ * Refuse to run inside an existing tmux session. Nesting tmux-in-tmux
+ * causes mangled keys, sluggish input, and a stacked status bar.
+ * Exported for tests.
+ */
+export function refuseIfAlreadyInsideTmux(env = process.env, exit = process.exit) {
+  if (env.TMUX) {
+    console.error('mc: already inside a tmux session — nesting will mangle keys and add a duplicate status bar.');
+    console.error('mc: open a fresh terminal, or detach from the outer tmux first (Ctrl+B then D).');
+    exit(1);
+  }
+}
+
+/**
+ * Apply session-scoped tmux options that make Claude Code's TUI behave.
+ * Each is a separate spawn so a single bad option doesn't take the rest
+ * down (e.g. older tmux without xterm-keys).
+ */
+function setTmuxOptions(tmuxSession) {
+  const opts = [
+    ['mouse', 'on'],                     // scroll-wheel scrolls tmux history
+    ['escape-time', '10'],               // snappier modifier keys
+    ['xterm-keys', 'on'],                // Alt/Shift modifiers reach the TUI
+    ['default-terminal', 'tmux-256color'], // truecolor + italics
+  ];
+  for (const [name, value] of opts) {
+    spawnSync('tmux', ['set-option', '-t', tmuxSession, '-g', name, value], { stdio: 'ignore' });
   }
 }
 
