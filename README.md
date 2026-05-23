@@ -17,8 +17,9 @@ The result: every coding tool you use feels like it remembers you.
 npm install -g memoro-cli
 ```
 
-Node 22 or later. For the `mc` coordinator (below), also install `tmux`
-(`brew install tmux` on macOS).
+Node 22 or later. macOS or Linux. The `mc` coordinator (below) uses
+`node-pty` for transparent terminal wrapping — no extra system dep
+beyond a normal `npm install`.
 
 ## Quick start
 
@@ -86,9 +87,11 @@ Inside any `mc` session, the slash command `/memoro-coordinator` opens the
 coordinator role — Claude shows the current snapshot of your other
 sessions and helps you route attention across them.
 
-Under the hood: `mc` wraps `claude` in a tmux session, opens a WebSocket
-to Memoro, and feeds remote dispatches into Claude via `tmux send-keys`
-so they land as real user turns — no Claude Code modifications needed.
+Under the hood: `mc` runs `claude` in a PTY it owns, with the user's
+terminal piped transparently to and from it. A WebSocket to Memoro
+delivers remote dispatches by writing into Claude's PTY stdin — they
+land as real user turns. No tmux, no Claude Code modifications,
+terminal-native scrollback works.
 
 ## Security
 

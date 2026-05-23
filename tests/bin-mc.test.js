@@ -2,46 +2,10 @@ import assert from 'node:assert/strict';
 import test, { describe } from 'node:test';
 
 import {
-  sanitizeTmuxName,
-  shquote,
   ageSeconds,
   humanAge,
-  refuseIfAlreadyInsideTmux,
+  writeToPty,
 } from '../src/bin-mc.js';
-
-describe('sanitizeTmuxName', () => {
-  test('preserves a coding session id verbatim', () => {
-    assert.equal(sanitizeTmuxName('sess_abc123XYZ'), 'sess_abc123XYZ');
-  });
-
-  test('replaces unsafe characters with underscore', () => {
-    assert.equal(sanitizeTmuxName('weird:name/with spaces'), 'weird_name_with_spaces');
-  });
-
-  test('truncates very long ids', () => {
-    const long = 'a'.repeat(200);
-    assert.equal(sanitizeTmuxName(long).length, 64);
-  });
-});
-
-describe('shquote', () => {
-  test('passes safe identifiers through unquoted', () => {
-    assert.equal(shquote('claude'), 'claude');
-    assert.equal(shquote('--tool'), '--tool');
-    assert.equal(shquote('MEMORO_MC_PARENT=1'), 'MEMORO_MC_PARENT=1');
-    assert.equal(shquote('/usr/bin/env'), '/usr/bin/env');
-  });
-
-  test('single-quotes arguments containing spaces or special chars', () => {
-    assert.equal(shquote('hello world'), `'hello world'`);
-    assert.equal(shquote('$HOME'), `'$HOME'`);
-    assert.equal(shquote('a;b'), `'a;b'`);
-  });
-
-  test('escapes embedded single quotes', () => {
-    assert.equal(shquote("it's fine"), `'it'\\''s fine'`);
-  });
-});
 
 describe('ageSeconds', () => {
   test('returns null for missing / invalid input', () => {
@@ -59,20 +23,6 @@ describe('ageSeconds', () => {
   test('clamps future timestamps to 0', () => {
     const future = new Date(Date.now() + 10_000).toISOString();
     assert.equal(ageSeconds(future), 0);
-  });
-});
-
-describe('refuseIfAlreadyInsideTmux', () => {
-  test('does nothing when TMUX is unset', () => {
-    let called = false;
-    refuseIfAlreadyInsideTmux({}, () => { called = true; });
-    assert.equal(called, false);
-  });
-
-  test('calls exit(1) when TMUX is set', () => {
-    const calls = [];
-    refuseIfAlreadyInsideTmux({ TMUX: '/tmp/tmux-501/default,1234,0' }, (code) => calls.push(code));
-    assert.deepEqual(calls, [1]);
   });
 });
 
@@ -95,5 +45,21 @@ describe('humanAge', () => {
   test('formats days', () => {
     assert.equal(humanAge(86400), '1d ago');
     assert.equal(humanAge(172800), '2d ago');
+  });
+});
+
+describe('writeToPty', () => {
+  test('writes message + carriage return to the pty', () => {
+    const writes = [];
+    const fakePty = { write: (s) => writes.push(s) };
+    writeToPty(fakePty, 'hello');
+    assert.deepEqual(writes, ['hello\r']);
+  });
+
+  test('preserves multi-line messages and trailing whitespace', () => {
+    const writes = [];
+    const fakePty = { write: (s) => writes.push(s) };
+    writeToPty(fakePty, 'line 1\nline 2');
+    assert.deepEqual(writes, ['line 1\nline 2\r']);
   });
 });
