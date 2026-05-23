@@ -170,9 +170,15 @@ async function runWrap(argv) {
     pid: process.pid,
   }, null, 2), { mode: 0o600 });
 
-  // Print the one-line banner BEFORE handing the TTY to Claude. Stays in
-  // the terminal's scrollback above Claude's output.
-  process.stderr.write(`[mc] session ${codingSessionId} — ${deriveRepoName(repoContext)} (${repoContext.branch})\n`);
+  // Print a short stylized intro BEFORE handing the TTY to Claude. The
+  // intro lands in the terminal's scrollback above Claude's TUI, so the
+  // user can scroll up to find the session id whenever they need it.
+  process.stderr.write(renderIntro({
+    version: await packageVersion(),
+    codingSessionId,
+    repo: deriveRepoName(repoContext),
+    branch: repoContext.branch,
+  }));
 
   // ─── Spawn claude in a PTY we own ────────────────────────────────────────
   const ptyProcess = pty.spawn(CLAUDE_BIN, argv, {
@@ -186,8 +192,11 @@ async function runWrap(argv) {
     },
   });
 
-  // Pipe PTY output → user's terminal.
+  // Pipe PTY output → user's terminal. Also stamp `lastOutputAt` so the
+  // heartbeat ticker can report idle vs active to peer coordinators.
+  let lastOutputAt = Date.now();
   ptyProcess.onData((data) => {
+    lastOutputAt = Date.now();
     process.stdout.write(data);
   });
 
@@ -273,9 +282,14 @@ async function runWrap(argv) {
   };
   (async () => {
     while (alive) {
+      const now = Date.now();
       await postHeartbeatWithRetry({
         apiUrl, token,
-        payload: { ...heartbeatBase, at: new Date().toISOString() },
+        payload: {
+          ...heartbeatBase,
+          idle_seconds: Math.max(0, Math.floor((now - lastOutputAt) / 1000)),
+          at: new Date(now).toISOString(),
+        },
       });
       if (!alive) break;
       try { await sleep(TICK_INTERVAL_MS); } catch {}
@@ -349,11 +363,25 @@ async function runSessionsList(_argv) {
   for (const s of sessions) {
     const ageSec = ageSeconds(s.received_at);
     const ageLabel = ageSec == null ? '?' : humanAge(ageSec);
+    const statusLabel = formatStatus(s.idle_seconds);
     const excerpt = (s.last_user_excerpt || s.last_assistant_excerpt || '').replace(/\s+/g, ' ').slice(0, 80);
-    console.log(`[${s.coding_session_id}] ${s.repo}  ${s.branch}  ${s.machine_id}  ${ageLabel}`);
+    console.log(`[${s.coding_session_id}] ${s.repo}  ${s.branch}  ${s.machine_id}  ${statusLabel}  ${ageLabel}`);
     if (excerpt) console.log(`    ${excerpt}`);
   }
   return 0;
+}
+
+/**
+ * Translate `idle_seconds` from a heartbeat into a human-readable
+ * status: ACTIVE (output recent), IDLE Nm (output stale — likely
+ * awaiting input). Exported for tests.
+ */
+export function formatStatus(idleSeconds) {
+  if (typeof idleSeconds !== 'number' || idleSeconds < 0) return 'unknown';
+  if (idleSeconds < 5) return 'ACTIVE';
+  if (idleSeconds < 60) return `idle ${idleSeconds}s`;
+  if (idleSeconds < 3600) return `idle ${Math.floor(idleSeconds / 60)}m`;
+  return `idle ${Math.floor(idleSeconds / 3600)}h`;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -444,6 +472,24 @@ function preflight() {
  */
 export function writeToPty(ptyProcess, message) {
   ptyProcess.write(message + '\r');
+}
+
+/**
+ * Render the multi-line stylized intro printed before Claude takes the
+ * terminal. Pure function for testing. Trailing blank line gives the
+ * Claude TUI breathing room.
+ */
+export function renderIntro({ version, codingSessionId, repo, branch }) {
+  return [
+    '',
+    `  \x1b[1mmc\x1b[0m \x1b[2m${version}\x1b[0m  ·  ${repo} \x1b[2m(${branch})\x1b[0m`,
+    `  \x1b[2msession\x1b[0m  ${codingSessionId}`,
+    '',
+    `  \x1b[36m/memoro-coordinator\x1b[0m   manage other sessions from inside Claude`,
+    `  \x1b[36mmc --help\x1b[0m              cli reference`,
+    '',
+    '',
+  ].join('\n');
 }
 
 async function postHeartbeatWithRetry({ apiUrl, token, payload }) {
