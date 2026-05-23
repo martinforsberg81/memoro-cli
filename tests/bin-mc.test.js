@@ -6,6 +6,7 @@ import {
   shquote,
   ageSeconds,
   humanAge,
+  refuseIfAlreadyInsideTmux,
 } from '../src/bin-mc.js';
 
 describe('sanitizeTmuxName', () => {
@@ -58,6 +59,20 @@ describe('ageSeconds', () => {
   test('clamps future timestamps to 0', () => {
     const future = new Date(Date.now() + 10_000).toISOString();
     assert.equal(ageSeconds(future), 0);
+  });
+});
+
+describe('refuseIfAlreadyInsideTmux', () => {
+  test('does nothing when TMUX is unset', () => {
+    let called = false;
+    refuseIfAlreadyInsideTmux({}, () => { called = true; });
+    assert.equal(called, false);
+  });
+
+  test('calls exit(1) when TMUX is set', () => {
+    const calls = [];
+    refuseIfAlreadyInsideTmux({ TMUX: '/tmp/tmux-501/default,1234,0' }, (code) => calls.push(code));
+    assert.deepEqual(calls, [1]);
   });
 });
 
