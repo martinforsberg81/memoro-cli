@@ -17,7 +17,8 @@ The result: every coding tool you use feels like it remembers you.
 npm install -g memoro-cli
 ```
 
-Node 18 or later.
+Node 22 or later. For the `mc` coordinator (below), also install `tmux`
+(`brew install tmux` on macOS).
 
 ## Quick start
 
@@ -67,6 +68,27 @@ Node 18 or later.
 - Codex CLI
 
 Cursor, Windsurf, and Gemini CLI remain planned.
+
+## `mc` — the terminal coordinator
+
+`mc` is a Memoro-aware wrapper around Claude Code. It registers each
+Claude session with Memoro so peer sessions on the same account can see
+and dispatch to each other from inside any session.
+
+```sh
+mc                        # start a wrapped Claude Code session in a git repo
+mc sessions list          # show your active coding sessions across machines
+mc sessions send <id> "commit and switch to the docs PR"
+mc sessions read <id>     # fetch the recent transcript of a peer session
+```
+
+Inside any `mc` session, the slash command `/memoro-coordinator` opens the
+coordinator role — Claude shows the current snapshot of your other
+sessions and helps you route attention across them.
+
+Under the hood: `mc` wraps `claude` in a tmux session, opens a WebSocket
+to Memoro, and feeds remote dispatches into Claude via `tmux send-keys`
+so they land as real user turns — no Claude Code modifications needed.
 
 ## Security
 

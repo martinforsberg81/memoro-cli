@@ -14,6 +14,9 @@ import { readHookEvent } from '../lib/hook-event.js';
 import { pidFilePath } from './heartbeat-loop.js';
 
 export async function heartbeatStop(_argv) {
+  // mc parents the daemon — nothing for the SessionEnd hook to stop.
+  if (process.env.MEMORO_MC_PARENT === '1') return 0;
+
   const event = await readHookEvent();
   const llmSessionId = event?.session_id;
   if (!llmSessionId) return 0;
