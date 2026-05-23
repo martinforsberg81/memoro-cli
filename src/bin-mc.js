@@ -4,9 +4,10 @@
  *
  * The terminal coordinator. Two modes:
  *
- *   mc                          # wrap `claude` in a tmux session, attach you
- *                                 to it, and register the session with Memoro
- *                                 so it can be coordinated with peers.
+ *   mc                          # wrap `claude` in a PTY this process owns,
+ *                                 pipe it to your terminal, register the
+ *                                 session with Memoro for cross-session
+ *                                 dispatch.
  *   mc sessions list            # show your active coding sessions across
  *                                 machines.
  *   mc sessions send <id> <msg> # dispatch a message into another session
@@ -14,13 +15,18 @@
  *   mc sessions read <id>       # fetch the recent transcript of another
  *                                 session.
  *
- * The wrapper attaches a Unix-domain dispatch socket per session, holds a
- * WebSocket to Memoro's `UserSession` Durable Object, and routes incoming
- * `dispatch_message` commands to the wrapped Claude via `tmux send-keys`.
- * The same channel serves `fetch_transcript` for the future dashboard.
+ * The wrapper holds:
+ *   - a node-pty child running `claude`, piped transparently to/from this
+ *     process's TTY (so your terminal's native scrollback works)
+ *   - a Unix-domain dispatch socket for local senders
+ *   - a WebSocket to Memoro's UserSession DO for remote `dispatch_message`
+ *     and `fetch_transcript` commands
+ *
+ * Dispatches land by writing to the PTY's input stream, which delivers the
+ * bytes to Claude's stdin as if the user had typed them.
  */
 
-import { spawnSync, spawn } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { mkdirSync, existsSync, unlinkSync, chmodSync, readFileSync, writeFileSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, dirname } from 'node:path';
@@ -28,6 +34,8 @@ import { fileURLToPath } from 'node:url';
 import { createServer } from 'node:net';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { hostname } from 'node:os';
+
+import pty from 'node-pty';
 
 import { getSecret } from './lib/keychain.js';
 import { ACCOUNTS } from './commands/auth.js';
@@ -87,9 +95,8 @@ function printHelp() {
   console.log(`mc — Memoro for developers
 
 USAGE
-  mc                              Wrap \`claude\` and register this session
-  mc [args...]                    Same; args passed through to claude
-  mc --no-attach                  Wrap but don't attach (debug / scripting)
+  mc [args...]                    Wrap \`claude\` (args passed through);
+                                  register this session with Memoro.
 
   mc sessions list                List your active coding sessions
   mc sessions send <id> <msg>     Dispatch a message into another session
@@ -99,7 +106,6 @@ USAGE
   mc --version                    Print version
 
 REQUIREMENTS
-  - tmux       (brew install tmux)
   - claude     (Claude Code CLI)
   - memoro-cli login              (one-time token setup)
 `);
@@ -120,17 +126,11 @@ async function packageVersion() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 async function runWrap(argv) {
-  const attach = !argv.includes('--no-attach');
-  const passthrough = argv.filter(a => a !== '--no-attach');
-
   preflight();
-  refuseIfAlreadyInsideTmux();
 
   if (!existsSync(MC_DIR)) {
     mkdirSync(MC_DIR, { recursive: true, mode: 0o700 });
   }
-
-  // First-run idempotent install of the /memoro-coordinator slash command.
   await ensureCoordinatorSlashCommand();
 
   const cwd = process.cwd();
@@ -157,14 +157,11 @@ async function runWrap(argv) {
     llmSessionId,
   });
 
-  const tmuxSession = sanitizeTmuxName(codingSessionId);
   const sockPath = join(MC_DIR, `${codingSessionId}.sock`);
   const metaPath = join(MC_DIR, `${codingSessionId}.json`);
 
-  // Persist session metadata for `mc sessions list` (local view).
   writeFileSync(metaPath, JSON.stringify({
     coding_session_id: codingSessionId,
-    tmux_session: tmuxSession,
     sock_path: sockPath,
     repo: deriveRepoName(repoContext),
     branch: repoContext.branch,
@@ -173,34 +170,48 @@ async function runWrap(argv) {
     pid: process.pid,
   }, null, 2), { mode: 0o600 });
 
-  // Build the claude command line. Set MEMORO_MC_PARENT=1 so any
-  // SessionStart/SessionEnd heartbeat-loop hook installed in claude config
-  // sees the env var and no-ops, avoiding duplicate daemons.
-  const claudeCmd = ['env', 'MEMORO_MC_PARENT=1', CLAUDE_BIN, ...passthrough].map(shquote).join(' ');
-
-  const newSession = spawnSync('tmux', [
-    'new-session', '-d', '-s', tmuxSession, claudeCmd,
-  ], { stdio: 'inherit' });
-  if (newSession.status !== 0) {
-    console.error(`mc: failed to start tmux session "${tmuxSession}"`);
-    process.exit(1);
-  }
-
-  // Tmux defaults aren't great for a modern TUI like Claude Code's:
-  //   - mouse off          → scroll-wheel goes to the app, no scrollback
-  //   - escape-time 500ms  → arrow keys + Alt-modifiers feel sluggish
-  //   - xterm-keys off     → modifier combos arrive mangled
-  //   - default-terminal   → some installs default to "screen", which is
-  //                          too conservative for italics + truecolor.
-  // Set sensible session-scoped overrides so the user doesn't have to
-  // know any tmux to get a snappy, modern experience.
-  setTmuxOptions(tmuxSession);
-
+  // Print the one-line banner BEFORE handing the TTY to Claude. Stays in
+  // the terminal's scrollback above Claude's output.
   process.stderr.write(`[mc] session ${codingSessionId} — ${deriveRepoName(repoContext)} (${repoContext.branch})\n`);
-  process.stderr.write(`[mc] dispatch socket: ${sockPath}\n`);
 
-  // ─── Dispatch socket (local nc dispatch — also used by mc sessions send
-  // when the target is on this same machine) ───────────────────────────────
+  // ─── Spawn claude in a PTY we own ────────────────────────────────────────
+  const ptyProcess = pty.spawn(CLAUDE_BIN, argv, {
+    name: process.env.TERM || 'xterm-256color',
+    cols: process.stdout.columns || 80,
+    rows: process.stdout.rows || 24,
+    cwd,
+    env: {
+      ...process.env,
+      MEMORO_MC_PARENT: '1',  // hooks see this and no-op their heartbeat-loop
+    },
+  });
+
+  // Pipe PTY output → user's terminal.
+  ptyProcess.onData((data) => {
+    process.stdout.write(data);
+  });
+
+  // Pipe user's keystrokes → PTY input. Raw mode so each keystroke flows
+  // through unmodified (no line buffering, no signal translation by the
+  // line discipline — Claude sees Ctrl+C / arrows / etc. exactly as typed).
+  if (process.stdin.isTTY) {
+    process.stdin.setRawMode(true);
+  }
+  process.stdin.resume();
+  process.stdin.setEncoding('utf8');
+  process.stdin.on('data', (data) => {
+    ptyProcess.write(data);
+  });
+
+  // Terminal resize → PTY resize, so Claude redraws to the new size.
+  const onResize = () => {
+    try {
+      ptyProcess.resize(process.stdout.columns, process.stdout.rows);
+    } catch { /* PTY closed */ }
+  };
+  process.stdout.on('resize', onResize);
+
+  // ─── Dispatch socket (local nc senders + mc sessions send) ───────────────
   if (existsSync(sockPath)) {
     try { unlinkSync(sockPath); } catch {}
   }
@@ -219,8 +230,8 @@ async function runWrap(argv) {
         conn.end(JSON.stringify({ ok: false, error: 'message required' }) + '\n');
         return;
       }
-      const sent = sendKeys(tmuxSession, message);
-      conn.end(JSON.stringify({ ok: sent, message }) + '\n');
+      writeToPty(ptyProcess, message);
+      conn.end(JSON.stringify({ ok: true, message }) + '\n');
     });
   });
   server.listen(sockPath, () => {
@@ -234,14 +245,13 @@ async function runWrap(argv) {
     codingSessionId,
     handlers: {
       fetch_transcript: createFetchTranscriptHandler({
-        transcriptPath: null,  // mc owns its lifecycle — no SessionStart hook event
+        transcriptPath: null,
         source: 'claude-code',
       }),
       dispatch_message: async (args) => {
         const message = typeof args?.message === 'string' ? args.message : null;
         if (!message?.trim()) throw new Error('message required');
-        const sent = sendKeys(tmuxSession, message);
-        if (!sent) throw new Error('tmux send-keys failed');
+        writeToPty(ptyProcess, message);
         return { ok: true, delivered_at: new Date().toISOString() };
       },
     },
@@ -251,7 +261,7 @@ async function runWrap(argv) {
 
   // ─── Heartbeat ticker ───────────────────────────────────────────────────
   let alive = true;
-  const heartbeatPayload = {
+  const heartbeatBase = {
     coding_session_id: codingSessionId,
     machine_id: machineId,
     source: 'claude-code',
@@ -265,35 +275,48 @@ async function runWrap(argv) {
     while (alive) {
       await postHeartbeatWithRetry({
         apiUrl, token,
-        payload: { ...heartbeatPayload, at: new Date().toISOString() },
+        payload: { ...heartbeatBase, at: new Date().toISOString() },
       });
       if (!alive) break;
       try { await sleep(TICK_INTERVAL_MS); } catch {}
     }
   })();
 
-  // ─── Cleanup on shutdown ─────────────────────────────────────────────────
-  const cleanup = () => {
+  // ─── Cleanup ─────────────────────────────────────────────────────────────
+  let cleanedUp = false;
+  const cleanup = (exitCode = 0) => {
+    if (cleanedUp) return;
+    cleanedUp = true;
     alive = false;
     try { wsClient.stop(); } catch {}
     try { server.close(); } catch {}
     try { unlinkSync(sockPath); } catch {}
     try { unlinkSync(metaPath); } catch {}
-    spawnSync('tmux', ['kill-session', '-t', tmuxSession], { stdio: 'ignore' });
-    process.exit(0);
+    process.stdout.removeListener('resize', onResize);
+    if (process.stdin.isTTY) {
+      try { process.stdin.setRawMode(false); } catch {}
+    }
+    try { process.stdin.pause(); } catch {}
+    try { ptyProcess.kill(); } catch {}
+    process.exit(exitCode);
   };
-  process.on('SIGINT', cleanup);
-  process.on('SIGTERM', cleanup);
 
-  if (attach) {
-    const attached = spawn('tmux', ['attach-session', '-t', tmuxSession], {
-      stdio: 'inherit',
-    });
-    attached.on('exit', () => cleanup());
-  } else {
-    process.stderr.write('[mc] running detached; Ctrl+C to stop\n');
-  }
-  return 0;
+  // When claude exits (user types /exit, Ctrl+D etc.), tear down.
+  ptyProcess.onExit(({ exitCode }) => {
+    cleanup(exitCode || 0);
+  });
+
+  // External signals → forward to claude, let its exit drive cleanup.
+  // (User's Ctrl+C is bytes through stdin in raw mode, not SIGINT to us.)
+  process.on('SIGTERM', () => {
+    try { ptyProcess.kill('SIGTERM'); } catch {}
+  });
+  process.on('SIGHUP', () => {
+    try { ptyProcess.kill('SIGHUP'); } catch {}
+  });
+
+  // Resolve never — wait for ptyProcess.onExit to call process.exit().
+  return new Promise(() => {});
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -409,10 +432,6 @@ async function runSessionsRead(argv) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 function preflight() {
-  if (spawnSync('tmux', ['-V'], { stdio: 'ignore' }).status !== 0) {
-    console.error('mc: tmux is required. Install: brew install tmux');
-    process.exit(1);
-  }
   if (spawnSync('which', [CLAUDE_BIN], { stdio: 'ignore' }).status !== 0) {
     console.error(`mc: '${CLAUDE_BIN}' not found in PATH`);
     process.exit(1);
@@ -420,40 +439,11 @@ function preflight() {
 }
 
 /**
- * Refuse to run inside an existing tmux session. Nesting tmux-in-tmux
- * causes mangled keys, sluggish input, and a stacked status bar.
- * Exported for tests.
+ * Send a dispatched message into the wrapped Claude session. Appends a
+ * carriage return so the TUI submits the prompt. Exported for tests.
  */
-export function refuseIfAlreadyInsideTmux(env = process.env, exit = process.exit) {
-  if (env.TMUX) {
-    console.error('mc: already inside a tmux session — nesting will mangle keys and add a duplicate status bar.');
-    console.error('mc: open a fresh terminal, or detach from the outer tmux first (Ctrl+B then D).');
-    exit(1);
-  }
-}
-
-/**
- * Apply session-scoped tmux options that make Claude Code's TUI behave.
- * Each is a separate spawn so a single bad option doesn't take the rest
- * down (e.g. older tmux without xterm-keys).
- */
-function setTmuxOptions(tmuxSession) {
-  const opts = [
-    ['mouse', 'on'],                     // scroll-wheel scrolls tmux history
-    ['escape-time', '10'],               // snappier modifier keys
-    ['xterm-keys', 'on'],                // Alt/Shift modifiers reach the TUI
-    ['default-terminal', 'tmux-256color'], // truecolor + italics
-  ];
-  for (const [name, value] of opts) {
-    spawnSync('tmux', ['set-option', '-t', tmuxSession, '-g', name, value], { stdio: 'ignore' });
-  }
-}
-
-export function sendKeys(tmuxSession, message) {
-  const text = spawnSync('tmux', ['send-keys', '-t', tmuxSession, '-l', message], { stdio: 'ignore' });
-  if (text.status !== 0) return false;
-  const enter = spawnSync('tmux', ['send-keys', '-t', tmuxSession, 'Enter'], { stdio: 'ignore' });
-  return enter.status === 0;
+export function writeToPty(ptyProcess, message) {
+  ptyProcess.write(message + '\r');
 }
 
 async function postHeartbeatWithRetry({ apiUrl, token, payload }) {
@@ -486,15 +476,6 @@ async function pollCommandResult(apiUrl, token, commandId) {
   return { status: 'timeout' };
 }
 
-export function sanitizeTmuxName(s) {
-  return String(s).replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 64);
-}
-
-export function shquote(arg) {
-  if (/^[A-Za-z0-9_\-./@:=]+$/.test(arg)) return arg;
-  return `'${String(arg).replace(/'/g, `'\\''`)}'`;
-}
-
 export function ageSeconds(isoString) {
   if (!isoString) return null;
   const t = Date.parse(isoString);
@@ -520,10 +501,8 @@ export const __test__ = {
   POLL_TIMEOUT_MS,
 };
 
-// Only run main() when invoked as a script — not when imported by tests
-// or other modules. Compare via realpath because npm installs the bin as
-// a symlink (e.g. /opt/homebrew/bin/mc → .../node_modules/memoro-cli/src/bin-mc.js);
-// import.meta.url resolves to the real path, process.argv[1] does not.
+// Only run main() when invoked as a script — not when imported by tests.
+// Compare via realpath because npm installs the bin as a symlink.
 if (isEntryScript()) {
   main().then(code => { process.exit(code ?? 0); });
 }

@@ -14,12 +14,14 @@
   },
   "files": [
     "src",
+    "scripts",
     "README.md",
     "CHANGELOG.md",
     "LICENSE"
   ],
   "scripts": {
-    "test": "node --test 'tests/**/*.test.js'"
+    "test": "node --test 'tests/**/*.test.js'",
+    "postinstall": "node scripts/fix-pty-helper.js"
   },
   "keywords": [
     "memoro",
@@ -35,5 +37,8 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/martinforsberg81/memoro-cli.git"
+  },
+  "dependencies": {
+    "node-pty": "^1.1.0"
   }
 }
