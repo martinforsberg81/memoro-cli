@@ -22,7 +22,7 @@ import { memoroFetch } from '../lib/api.js';
 // is the user's own info and voice is a one-liner that adds nothing to a
 // coding prompt.
 export const SECTION_MAP = {
-  'loose-ends':  'openThreads',
+  'loose-ends':  'looseEnds',
   'decisions':   'recentDecisions',
   'rules':       'rules',
   'stack':       'stack',

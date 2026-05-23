@@ -236,7 +236,7 @@ const MEMORO_HOOK_ID = 'memoro-cli';
 const COMMAND_MARKER = '<!-- memoro:managed:command -->';
 
 const COMMAND_TITLES = {
-  'loose-ends': 'Show open threads from recent coding sessions',
+  'loose-ends': 'Show loose ends from recent coding sessions',
   'decisions':  'Show recent decisions from coding sessions',
   'rules':      'Show learned coding rules',
   'stack':      'Show detected stack (languages, frameworks, preferences)',
