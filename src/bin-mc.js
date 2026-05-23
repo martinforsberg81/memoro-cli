@@ -60,6 +60,12 @@ const RETRY_INTERVAL_MS = 5 * 60 * 1000;
 const POLL_INTERVAL_MS = 500;
 const POLL_TIMEOUT_MS = 30_000;
 
+// Raw PTY bytes kept for excerpt extraction. ANSI escapes typically
+// strip down to ~30–50%, so 4 KiB raw yields plenty of clean text to
+// slice the trailing 500 chars from (server's EXCERPT_MAX).
+const OUTPUT_BUFFER_BYTES = 4096;
+const EXCERPT_MAX_CHARS = 500;
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Entry point
 // ─────────────────────────────────────────────────────────────────────────────
@@ -192,11 +198,21 @@ async function runWrap(argv) {
     },
   });
 
-  // Pipe PTY output → user's terminal. Also stamp `lastOutputAt` so the
-  // heartbeat ticker can report idle vs active to peer coordinators.
+  // Pipe PTY output → user's terminal. Also:
+  //   - stamp `lastOutputAt` so the heartbeat ticker can report idle vs
+  //     active to peer coordinators
+  //   - keep a rolling raw-output buffer so the heartbeat can carry a
+  //     stripped excerpt of what Claude is currently showing (lets a peer
+  //     coordinator spot e.g. "How should I proceed?" prompts at a
+  //     glance, not just "session B has been idle 2m")
   let lastOutputAt = Date.now();
+  let outputBuffer = '';
   ptyProcess.onData((data) => {
     lastOutputAt = Date.now();
+    outputBuffer += data;
+    if (outputBuffer.length > OUTPUT_BUFFER_BYTES) {
+      outputBuffer = outputBuffer.slice(-OUTPUT_BUFFER_BYTES);
+    }
     process.stdout.write(data);
   });
 
@@ -278,7 +294,6 @@ async function runWrap(argv) {
     branch: repoContext.branch,
     files_touched_since_last: [],
     last_user_excerpt: '',
-    last_assistant_excerpt: '',
   };
   (async () => {
     while (alive) {
@@ -287,6 +302,7 @@ async function runWrap(argv) {
         apiUrl, token,
         payload: {
           ...heartbeatBase,
+          last_assistant_excerpt: extractExcerpt(outputBuffer, EXCERPT_MAX_CHARS),
           idle_seconds: Math.max(0, Math.floor((now - lastOutputAt) / 1000)),
           at: new Date(now).toISOString(),
         },
@@ -472,6 +488,49 @@ function preflight() {
  */
 export function writeToPty(ptyProcess, message) {
   ptyProcess.write(message + '\r');
+}
+
+/**
+ * Strip ANSI escapes and control characters from a raw PTY-output buffer,
+ * collapse runs of blank lines, and return the trailing `max` characters.
+ *
+ * Used to feed the heartbeat's `last_assistant_excerpt` so peer
+ * coordinators can see what Claude is currently showing (e.g. a paused
+ * "Next step?" prompt) instead of just "session B has been idle 2m".
+ *
+ * Conservative: we keep readable text + newlines + tabs, drop everything
+ * that's screen-positioning, color, or other-noise. If the entire buffer
+ * is ANSI noise, returns an empty string.
+ *
+ * Pure for testing.
+ */
+export function extractExcerpt(rawBuffer, max = EXCERPT_MAX_CHARS) {
+  if (!rawBuffer) return '';
+
+  // 1. CSI / SGR sequences: ESC [ ... letter
+  // 2. OSC sequences: ESC ] ... BEL or ESC ]
+  // 3. Single-character ESC escapes (ESC =, ESC >, ESC c, etc.)
+  // 4. Bracketed paste / DECPRIVATE: covered by the CSI regex
+  let s = rawBuffer
+    .replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '')   // CSI / SGR
+    .replace(/\x1b\][^\x07\x1b]*(\x07|\x1b\\)/g, '')  // OSC (BEL or ST terminated)
+    .replace(/\x1b[=>cDEHM7-9NO]/g, '');      // common single-char ESC
+
+  // Drop non-printable control bytes except newline + tab
+  s = s.replace(/[\x00-\x08\x0b-\x1f\x7f]/g, '');
+
+  // Collapse runs of 3+ blank lines into 2 for legibility
+  s = s.replace(/\n{3,}/g, '\n\n');
+
+  // Trim trailing whitespace per line (TUI redraws often leave trailing
+  // spaces from cleared cells)
+  s = s.split('\n').map(line => line.replace(/[ \t]+$/, '')).join('\n');
+
+  // Return the trailing `max` chars — that's what's "currently on screen"
+  if (s.length > max) s = s.slice(-max);
+
+  // Strip leading whitespace from the slice so we don't start mid-line
+  return s.replace(/^\s+/, '');
 }
 
 /**
