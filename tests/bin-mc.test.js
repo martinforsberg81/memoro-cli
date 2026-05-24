@@ -8,6 +8,8 @@ import {
   renderIntro,
   formatStatus,
   extractExcerpt,
+  validateLabel,
+  resolveSessionIdentifier,
 } from '../src/bin-mc.js';
 
 // Strip ANSI escape sequences so we can match on visible text.
@@ -85,6 +87,86 @@ describe('renderIntro', () => {
     const out = renderIntro(ctx);
     assert.ok(out.startsWith('\n'));
     assert.ok(out.endsWith('\n\n'));
+  });
+});
+
+describe('validateLabel', () => {
+  test('accepts simple alphanumeric labels', () => {
+    assert.equal(validateLabel('audit').ok, true);
+    assert.equal(validateLabel('UI').ok, true);
+    assert.equal(validateLabel('feat_42').ok, true);
+    assert.equal(validateLabel('a-b-c').ok, true);
+    assert.equal(validateLabel('x').ok, true);
+  });
+
+  test('rejects empty / missing', () => {
+    assert.equal(validateLabel('').ok, false);
+    assert.equal(validateLabel(null).ok, false);
+    assert.equal(validateLabel(undefined).ok, false);
+  });
+
+  test('rejects labels starting with a dash (looks like a flag)', () => {
+    assert.equal(validateLabel('-audit').ok, false);
+  });
+
+  test('rejects forbidden characters', () => {
+    assert.equal(validateLabel('with space').ok, false);
+    assert.equal(validateLabel('slash/in/it').ok, false);
+    assert.equal(validateLabel('semi;colon').ok, false);
+    assert.equal(validateLabel('emoji🙂').ok, false);
+  });
+
+  test('rejects labels over 32 chars', () => {
+    assert.equal(validateLabel('x'.repeat(33)).ok, false);
+    assert.equal(validateLabel('x'.repeat(32)).ok, true);
+  });
+});
+
+describe('resolveSessionIdentifier', () => {
+  const make = (id, label, received_at) => ({
+    coding_session_id: id, label, received_at,
+  });
+
+  test('returns null when nothing matches', () => {
+    const r = resolveSessionIdentifier([], 'anything');
+    assert.equal(r.id, null);
+  });
+
+  test('direct id match takes priority', () => {
+    const sessions = [
+      make('sess_aaaaaa', 'audit', '2026-05-24T00:00:00Z'),
+      make('sess_bbbbbb', null, '2026-05-24T00:00:01Z'),
+    ];
+    const r = resolveSessionIdentifier(sessions, 'sess_aaaaaa');
+    assert.equal(r.id, 'sess_aaaaaa');
+    assert.equal(r.matchedBy, 'id');
+  });
+
+  test('label match resolves to id', () => {
+    const sessions = [
+      make('sess_aaaaaa', 'audit', '2026-05-24T00:00:00Z'),
+      make('sess_bbbbbb', 'ui',    '2026-05-24T00:00:01Z'),
+    ];
+    const r = resolveSessionIdentifier(sessions, 'ui');
+    assert.equal(r.id, 'sess_bbbbbb');
+    assert.equal(r.matchedBy, 'label');
+  });
+
+  test('label collision returns most-recent + flags collision count', () => {
+    const sessions = [
+      make('sess_old', 'audit', '2026-05-24T00:00:00Z'),
+      make('sess_new', 'audit', '2026-05-24T01:00:00Z'),
+      make('sess_mid', 'audit', '2026-05-24T00:30:00Z'),
+    ];
+    const r = resolveSessionIdentifier(sessions, 'audit');
+    assert.equal(r.id, 'sess_new');
+    assert.equal(r.matchedBy, 'label');
+    assert.equal(r.collisions, 3);
+  });
+
+  test('null identifier returns null', () => {
+    const r = resolveSessionIdentifier([make('sess_x', 'audit', '2026-05-24T00:00:00Z')], null);
+    assert.equal(r.id, null);
   });
 });
 

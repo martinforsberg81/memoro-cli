@@ -93,27 +93,64 @@ async function main() {
     return 2;
   }
 
-  // Default: wrap claude.
+  // mc new <label> [args...]  →  wrap claude with a friendly label
+  if (argv[0] === 'new') {
+    const label = argv[1];
+    const rest = argv.slice(2);
+    const v = validateLabel(label);
+    if (!v.ok) {
+      console.error(`mc: ${v.error}`);
+      return 2;
+    }
+    return runWrap(rest, { label });
+  }
+
+  // Default: wrap claude (no label).
   return runWrap(argv);
+}
+
+/**
+ * Allowed label characters keep things shell- and url-safe and rule
+ * out leading dashes (so it can't masquerade as a flag).
+ * Exported for tests.
+ */
+export function validateLabel(label) {
+  if (typeof label !== 'string' || !label) {
+    return { ok: false, error: 'label required: `mc new <label> [args...]`' };
+  }
+  if (label.length > 32) {
+    return { ok: false, error: 'label must be ≤ 32 chars' };
+  }
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(label)) {
+    return { ok: false, error: 'label must match /^[a-zA-Z0-9][a-zA-Z0-9_-]*$/' };
+  }
+  return { ok: true };
 }
 
 function printHelp() {
   console.log(`mc — Memoro for developers
 
 USAGE
-  mc [args...]                    Wrap \`claude\` (args passed through);
-                                  register this session with Memoro.
+  mc [args...]                       Wrap \`claude\` in current cwd
+  mc new <label> [args...]           Same, but tag this session with a
+                                     friendly label for peer lookup
 
-  mc sessions list                List your active coding sessions
-  mc sessions send <id> <msg>     Dispatch a message into another session
-  mc sessions read <id>           Fetch another session's recent transcript
+  mc sessions list                   List your active coding sessions
+  mc sessions send <label|id> <msg>  Dispatch a message into another session
+  mc sessions read <label|id>        Fetch another session's recent transcript
 
-  mc --help                       This help
-  mc --version                    Print version
+  mc --help                          This help
+  mc --version                       Print version
+
+LABELS
+  Labels let you refer to sessions by topic instead of by random
+  sess_xxx id. Example: \`mc new audit\` → then from anywhere
+  \`mc sessions send audit "summary please"\`. Labels are local-machine
+  free-form; first-match-wins on collision.
 
 REQUIREMENTS
   - claude     (Claude Code CLI)
-  - memoro-cli login              (one-time token setup)
+  - memoro-cli login                 (one-time token setup)
 `);
 }
 
@@ -131,7 +168,7 @@ async function packageVersion() {
 // Wrap mode — the main mc experience
 // ─────────────────────────────────────────────────────────────────────────────
 
-async function runWrap(argv) {
+async function runWrap(argv, { label = null } = {}) {
   preflight();
 
   if (!existsSync(MC_DIR)) {
@@ -168,6 +205,7 @@ async function runWrap(argv) {
 
   writeFileSync(metaPath, JSON.stringify({
     coding_session_id: codingSessionId,
+    label,
     sock_path: sockPath,
     repo: deriveRepoName(repoContext),
     branch: repoContext.branch,
@@ -184,6 +222,7 @@ async function runWrap(argv) {
     codingSessionId,
     repo: deriveRepoName(repoContext),
     branch: repoContext.branch,
+    label,
   }));
 
   // ─── Spawn claude in a PTY we own ────────────────────────────────────────
@@ -294,6 +333,7 @@ async function runWrap(argv) {
     branch: repoContext.branch,
     files_touched_since_last: [],
     last_user_excerpt: '',
+    ...(label ? { label } : {}),
   };
   (async () => {
     while (alive) {
@@ -381,10 +421,57 @@ async function runSessionsList(_argv) {
     const ageLabel = ageSec == null ? '?' : humanAge(ageSec);
     const statusLabel = formatStatus(s.idle_seconds);
     const excerpt = (s.last_user_excerpt || s.last_assistant_excerpt || '').replace(/\s+/g, ' ').slice(0, 80);
-    console.log(`[${s.coding_session_id}] ${s.repo}  ${s.branch}  ${s.machine_id}  ${statusLabel}  ${ageLabel}`);
+    const identifier = s.label || s.coding_session_id;
+    console.log(`[${identifier}] ${s.repo}  ${s.branch}  ${s.machine_id}  ${statusLabel}  ${ageLabel}`);
     if (excerpt) console.log(`    ${excerpt}`);
   }
   return 0;
+}
+
+/**
+ * Fetch active sessions, resolve `identifier` (label or id) to a real id.
+ * Returns null after logging a clear error if not found.
+ */
+async function resolveIdentifierToId(apiUrl, token, identifier) {
+  // Skip the lookup if the identifier already looks like a real session id.
+  if (/^sess_[a-zA-Z0-9_-]{6,}$/.test(identifier)) return identifier;
+
+  let res;
+  try {
+    res = await memoroFetch(apiUrl, '/api/coding-sessions/active', { token });
+  } catch (err) {
+    console.error(`mc: failed to look up "${identifier}": ${err.message}`);
+    return null;
+  }
+  const { id, matchedBy, collisions } = resolveSessionIdentifier(res?.sessions ?? [], identifier);
+  if (!id) {
+    console.error(`mc: no active session matches "${identifier}"`);
+    return null;
+  }
+  if (matchedBy === 'label' && collisions > 1) {
+    console.error(`mc: warning — ${collisions} active sessions share label "${identifier}"; using most recent (${id})`);
+  }
+  return id;
+}
+
+/**
+ * Resolve an identifier (label or coding_session_id) to a coding_session_id
+ * by listing active sessions. Returns null if no match. If multiple
+ * sessions share a label, prefers the most-recently-received_at one and
+ * warns to stderr. Exported for tests.
+ */
+export function resolveSessionIdentifier(sessions, identifier) {
+  if (!identifier || !Array.isArray(sessions)) return { id: null };
+  // Direct id match takes priority over label lookup.
+  const direct = sessions.find(s => s.coding_session_id === identifier);
+  if (direct) return { id: direct.coding_session_id, matchedBy: 'id' };
+  const matches = sessions.filter(s => s.label === identifier);
+  if (matches.length === 0) return { id: null };
+  if (matches.length > 1) {
+    matches.sort((a, b) => (b.received_at || '').localeCompare(a.received_at || ''));
+    return { id: matches[0].coding_session_id, matchedBy: 'label', collisions: matches.length };
+  }
+  return { id: matches[0].coding_session_id, matchedBy: 'label' };
 }
 
 /**
@@ -405,10 +492,10 @@ export function formatStatus(idleSeconds) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 async function runSessionsSend(argv) {
-  const sid = argv[0];
+  const identifier = argv[0];
   const message = argv.slice(1).join(' ');
-  if (!sid || !message) {
-    console.error('Usage: mc sessions send <session_id> <message>');
+  if (!identifier || !message) {
+    console.error('Usage: mc sessions send <label_or_session_id> <message>');
     return 2;
   }
 
@@ -419,6 +506,9 @@ async function runSessionsSend(argv) {
     console.error('mc: no Memoro token. Run `memoro-cli login` first.');
     return 1;
   }
+
+  const sid = await resolveIdentifierToId(apiUrl, token, identifier);
+  if (!sid) return 1;
 
   const enqueue = await memoroFetch(apiUrl, `/api/coding-sessions/${encodeURIComponent(sid)}/commands`, {
     token,
@@ -441,9 +531,9 @@ async function runSessionsSend(argv) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 async function runSessionsRead(argv) {
-  const sid = argv[0];
-  if (!sid) {
-    console.error('Usage: mc sessions read <session_id>');
+  const identifier = argv[0];
+  if (!identifier) {
+    console.error('Usage: mc sessions read <label_or_session_id>');
     return 2;
   }
 
@@ -454,6 +544,9 @@ async function runSessionsRead(argv) {
     console.error('mc: no Memoro token. Run `memoro-cli login` first.');
     return 1;
   }
+
+  const sid = await resolveIdentifierToId(apiUrl, token, identifier);
+  if (!sid) return 1;
 
   const enqueue = await memoroFetch(apiUrl, `/api/coding-sessions/${encodeURIComponent(sid)}/commands`, {
     token,
@@ -538,10 +631,13 @@ export function extractExcerpt(rawBuffer, max = EXCERPT_MAX_CHARS) {
  * terminal. Pure function for testing. Trailing blank line gives the
  * Claude TUI breathing room.
  */
-export function renderIntro({ version, codingSessionId, repo, branch }) {
+export function renderIntro({ version, codingSessionId, repo, branch, label = null }) {
+  const headline = label
+    ? `  \x1b[1mmc\x1b[0m \x1b[2m${version}\x1b[0m  ·  \x1b[33m${label}\x1b[0m  ·  ${repo} \x1b[2m(${branch})\x1b[0m`
+    : `  \x1b[1mmc\x1b[0m \x1b[2m${version}\x1b[0m  ·  ${repo} \x1b[2m(${branch})\x1b[0m`;
   return [
     '',
-    `  \x1b[1mmc\x1b[0m \x1b[2m${version}\x1b[0m  ·  ${repo} \x1b[2m(${branch})\x1b[0m`,
+    headline,
     `  \x1b[2msession\x1b[0m  ${codingSessionId}`,
     '',
     `  \x1b[36m/memoro-coordinator\x1b[0m   manage other sessions from inside Claude`,

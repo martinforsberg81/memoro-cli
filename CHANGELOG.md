@@ -7,6 +7,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- `mc new <label>` — launch a labeled mc session. Labels appear in
+  `mc sessions list` (`[audit]` instead of `[sess_xxx]`) and resolve
+  cleanly when dispatching: `mc sessions send audit "..."`. First-match
+  wins on collision; warns to stderr.
 - `mc` heartbeats now carry `last_assistant_excerpt` — the trailing text
   of what Claude is currently showing in the wrapped session, ANSI-stripped.
   `mc sessions list` displays it under each session so a peer coordinator
