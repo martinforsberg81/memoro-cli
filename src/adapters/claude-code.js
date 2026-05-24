@@ -258,29 +258,30 @@ ${COMMAND_MARKER}
 }
 
 function renderUpdateCommandFile({ memoroCliBin }) {
-  // Body is rendered into the conversation as a user message — give the
-  // LLM enough to either run the commands (with the user's permission) or
-  // print them clearly. No leading `!` so the recipe doesn't auto-execute.
+  // Body is rendered into the conversation as a user message. The LLM
+  // should DISPLAY this recipe to the user — not try to run it, since
+  // `npm install -g` is sanctioned global persistence and auto-mode
+  // (correctly) blocks Claude Code from doing it unattended.
   return `---
-description: Update memoro-cli and re-install its Claude Code hooks
+description: Show the recipe for updating memoro-cli + hooks
 ---
 
 ${COMMAND_MARKER}
 
-The user wants to update memoro-cli to the latest version.
-
-Run these two commands in the user's shell, in order. The second step is
-required — it re-stamps the SessionStart/SessionEnd hooks so any new
-hook behaviour (heartbeat, new commands) is wired up:
+The user invoked \`/memoro-update\`. **Display** the two-step recipe
+below — do not try to run it yourself. \`npm install -g\` is sanctioned
+global persistence; auto-mode will block it, and even if it didn't, the
+user should opt in to global package changes themselves.
 
 \`\`\`sh
 npm install -g ${memoroCliBin === 'memoro-cli' ? 'memoro-cli' : memoroCliBin}
 ${memoroCliBin} hook install --tool claude-code
 \`\`\`
 
-If \`npm install -g\` reports permission errors, suggest \`sudo npm install -g\`
-or fixing the global npm prefix. After both commands succeed, the next
-SessionStart will pull a fresh lens and the staleness banner will clear.
+After the user runs both, the next \`mc\` (or restart of this session)
+picks up the new version + refreshed hooks automatically. Reply with
+just the recipe block and a brief one-line confirmation — no further
+commentary, no offers to run it.
 `;
 }
 

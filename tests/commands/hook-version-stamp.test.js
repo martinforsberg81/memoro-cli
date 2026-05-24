@@ -112,6 +112,11 @@ describe('claude-code adapter — /memoro-update slash command', () => {
     assert.match(body, /memoro-cli hook install --tool claude-code/);
     // No leading `!` — the body is a prompt, not an auto-exec line.
     assert.equal(body.includes('\n!'), false, 'update slash command must not auto-execute');
+    // The body must clearly tell the LLM not to run the recipe — `npm
+    // install -g` is sanctioned global persistence and auto-mode will
+    // (correctly) block it.
+    assert.match(body, /[Dd]isplay/);
+    assert.match(body, /do not (try to )?run/i);
   });
 
   test('installUpdateCommand is idempotent (overwrites cleanly)', async () => {

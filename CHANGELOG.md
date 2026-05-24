@@ -6,6 +6,17 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+- `/memoro-update` body rewritten to be unambiguously display-only.
+  Previous wording ("Run these two commands in the user's shell") had
+  the LLM trying to execute `npm install -g memoro-cli` via Bash, which
+  auto-mode correctly blocks as sanctioned global persistence. New body
+  tells the LLM to display the recipe and not run it.
+- `/memoro-update`, `/memoro-coordinator`, `/memoro-coordinator-suggest`
+  files are now refreshed on every `mc` launch (in addition to the
+  existing `hook install` path). Updates to their canonical bodies
+  propagate without re-running `memoro-cli hook install`.
+
 ### Added
 - `/memoro-coordinator-suggest` slash command — analyses every active
   session and recommends a concrete next step per session, plus a
