@@ -46,6 +46,7 @@ import { lookupOrMint } from './lib/coding-session.js';
 import { CliWsClient } from './commands/ws-client.js';
 import { createFetchTranscriptHandler } from './commands/handlers/fetch-transcript.js';
 import { ensureCoordinatorSlashCommand } from './mc/coordinator-command.js';
+import { installUpdateCommand } from './adapters/claude-code.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constants
@@ -174,7 +175,11 @@ async function runWrap(argv, { label = null } = {}) {
   if (!existsSync(MC_DIR)) {
     mkdirSync(MC_DIR, { recursive: true, mode: 0o700 });
   }
+  // Refresh managed Claude Code slash commands on every mc launch — pushes
+  // updated bodies (coordinator prompts, update recipe) to existing
+  // installs without requiring `memoro-cli hook install`.
   await ensureCoordinatorSlashCommand();
+  await installUpdateCommand().catch(() => { /* best effort */ });
 
   const cwd = process.cwd();
   const repoContext = await getRepoContext(cwd);
