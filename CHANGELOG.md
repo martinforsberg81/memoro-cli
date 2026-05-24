@@ -7,6 +7,21 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- `/memoro-coordinator-suggest` slash command — analyses every active
+  session and recommends a concrete next step per session, plus a
+  one-sentence prioritisation. Built for the "where should I spend the
+  next 30 minutes?" triage moment.
+
+### Changed
+- `/memoro-coordinator` body upgraded: instructs the LLM to present
+  active sessions as a **numbered list** with one-line characterisation
+  per session, flag PAUSED sessions explicitly, and point users at
+  `/memoro-coordinator-suggest` when they want next-step recommendations.
+- Coordinator slash command files now **overwrite-on-launch** if their
+  canonical content has changed — updates land automatically without
+  re-running `memoro-cli hook install`.
+
+### Added
 - `mc new <label>` — launch a labeled mc session. Labels appear in
   `mc sessions list` (`[audit]` instead of `[sess_xxx]`) and resolve
   cleanly when dispatching: `mc sessions send audit "..."`. First-match
