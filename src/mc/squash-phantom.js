@@ -6,16 +6,28 @@
  * branch reads as "N commits ahead" but `mc end` should accept it
  * without prompting.
  *
- * Detection is two-stage:
+ * Three-tier detection (soft-degrade per plan §9b):
  *
- *   1. `gh pr list --head <branch> --state merged` — confirms a merged
- *      PR exists. Injectable for tests; soft-fails to `false` when `gh`
- *      isn't installed / auth'd (callers degrade per plan §9b).
- *   2. `git diff <branch>...origin/main` on the branch's touched files —
- *      if empty, the changeset is already on main.
+ *   Tier 0 — `git cherry main <branch>`. Purely local, no network, no
+ *     auth. Lines starting with `-` are patch-equivalent on main
+ *     (git hashes the patch contents, not the commit object). If
+ *     every line is `-`, the branch's work is already on main.
+ *     Catches the common case (single-commit branch squash-merged)
+ *     without needing gh.
  *
- * Returns { isPhantom, hadMergedPr, diffEmpty }. Pure helper; tests
- * supply both the temp repo and the gh stub.
+ *   Tier 1 — `gh pr list --head <branch> --state merged` + content
+ *     diff. Reached when cherry didn't confirm (multi-commit branch
+ *     squash-merged, or any case where patch-ids diverged). Higher
+ *     confidence when both signals agree.
+ *
+ *   Tier 2 — degraded `NEEDS_REVIEW`. When tier 0 says no and tier 1
+ *     can't run (gh missing) or returns no PR. Callers (mc end / mc
+ *     status) treat as `NEEDS_REVIEW` and prompt for human judgement.
+ *
+ * Returns { isPhantom, cherryConfirms, hadMergedPr, diffEmpty }. The
+ * tier-0 path leaves hadMergedPr/diffEmpty as undefined since they
+ * weren't consulted. Pure helper; tests supply both the temp repo and
+ * the gh stub.
  */
 import { spawnSync } from 'node:child_process';
 
@@ -50,33 +62,51 @@ function defaultGh() {
 /**
  * Detect whether `branch` is a squash-merge phantom.
  *
- * Note on the diff check: we compare the branch to `origin/main` over
- * the *full tree* (no path filter). If they agree on every file, the
- * branch's contribution is already represented on main. The plan §9b
- * suggests filtering to "files-from-branch-commits"; in practice that
- * adds complexity without changing the answer because git's diff is
- * already content-based.
+ * Cherry-first ordering lets `mc end` work without `gh` for the common
+ * case. When cherry confirms, we return immediately and skip the
+ * network round-trip. The diff check on the tier-1 path uses two-dot
+ * (tree-vs-tree, not merge-base) so identical content on both sides
+ * reads as empty even when SHAs diverge.
  */
 export async function detectSquashPhantom({ repoDir, branch, gh = defaultGh() } = {}) {
   if (!repoDir || !branch) {
     throw new Error('detectSquashPhantom: repoDir and branch required');
   }
-  const merged = await gh.prListMerged(branch);
-  const hadMergedPr = Array.isArray(merged) && merged.length > 0;
 
   // Determine upstream main ref to diff against. Prefer origin/main; fall
   // back to main if no remote.
   const hasOriginMain = git(repoDir, ['rev-parse', '--verify', '--quiet', 'origin/main']) !== null;
   const mainRef = hasOriginMain ? 'origin/main' : 'main';
 
-  // Empty diff = phantom signal. Use two-dot (tree-vs-tree, not
-  // merge-base) so identical content on both sides reads as empty even
-  // when the SHAs diverge — the whole point of phantom detection.
+  // Tier 0 — git cherry, local-only. If every commit on the branch has
+  // a patch-equivalent on main, the work is represented on main. No
+  // gh required.
+  const cherry = git(repoDir, ['cherry', mainRef, branch]);
+  if (cherry !== null && cherry !== '') {
+    const lines = cherry.split('\n').filter(Boolean);
+    const allMatched = lines.every((l) => l.startsWith('- '));
+    if (allMatched) {
+      return {
+        isPhantom: true,
+        cherryConfirms: true,
+        hadMergedPr: undefined,
+        diffEmpty: undefined,
+      };
+    }
+  }
+
+  // Tier 1 — gh + content-diff. Higher confidence when both agree;
+  // reached when cherry didn't fully confirm (multi-commit squash
+  // merges and any case where patch-ids diverged).
+  const merged = await gh.prListMerged(branch);
+  const hadMergedPr = Array.isArray(merged) && merged.length > 0;
+
   const diff = git(repoDir, ['diff', branch, mainRef, '--name-only']);
   const diffEmpty = diff === '';
 
   return {
     isPhantom: hadMergedPr && diffEmpty,
+    cherryConfirms: false,
     hadMergedPr,
     diffEmpty,
   };
