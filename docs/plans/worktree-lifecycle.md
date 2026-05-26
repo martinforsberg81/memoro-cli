@@ -706,12 +706,84 @@ silently expired. Fix:
 Same pattern for any external auth mc depends on (Memoro account
 token, OpenAI/Anthropic keys if `mc switch`/`mc spawn` is invoked).
 
+**9j. Orphan daemon reaping in `mc gc` and `mc list`** (extends §2 `mc gc`,
+`mc list`)
+
+Real observation from 2026-05-26: 9 orphaned `memoro-cli heartbeat-loop`
+daemons were running on the user's machine — accumulated over a week
+from sessions whose Claude process had died but whose heartbeat daemon
+kept ticking. Several daemons fought for the same `coding_session_id`,
+producing a tight ping-pong:
+
+```
+GET /api/sessions/ws ...                                            (daemon A connects)
+[UserSession] Closed { deviceId: 'cli', code: 4003 }                (server closes daemon B)
+GET /api/sessions/ws ...                                            (daemon B reconnects)
+[UserSession] Closed { deviceId: 'cli', code: 4003 }                (server closes daemon A)
+...
+```
+
+~1 req/s per orphan pair, sustained indefinitely.
+
+The immediate client bug — daemon ignoring server's `4003 'Replaced'`
+close code — landed as a code fix (`isTerminalCloseCode` in
+`src/commands/ws-client.js`). After that, the *replaced* daemon exits
+cleanly. But that doesn't help the case where Claude dies and *no
+other* daemon replaces the old one — the heartbeat-loop keeps ticking
+until something else evicts it.
+
+Surface in mc:
+
+```
+mc list --orphans
+   List heartbeat-loop processes whose llm_session_id no longer
+   maps to a live worktree on this machine, or whose pidfile is
+   newer than 24h with no observed activity.
+
+mc gc --reap-orphans [--dry-run]
+   Inspect `~/.memoro/heartbeat-*.pid`, cross-reference against
+   `mc list`'s known worktrees + active llm sessions, and SIGTERM
+   the daemons that don't belong to anything live. Refuses to
+   reap a daemon younger than `--min-age` (default 5 min) to
+   avoid killing a freshly-spawned one mid-handshake.
+
+mc list (default)
+   Annotate any session whose paired daemon is dead, or whose
+   daemon is alive but the worktree it's heartbeating for is
+   gone, with an `(orphan-daemon)` flag.
+```
+
+Detection algorithm (pure helper, testable):
+
+```
+for each pidfile in ~/.memoro/heartbeat-*.pid:
+  pid = readPidFile()
+  if !isAlive(pid): mark "stale pidfile" → unlink, move on
+  llmSessionId = parsePidFilename()
+  worktree = findWorktreeForLlmSession(llmSessionId)
+  if !worktree && pidAge > minAge:
+    mark "orphan" → eligible for SIGTERM
+```
+
+The pidfile naming already encodes `llm_session_id`
+(`pidFilePath()` in `src/commands/heartbeat-loop.js`), so the cross-
+reference is local-only. No server round-trip required.
+
+**Server-side complement** (not in this plan; flagged for a separate
+follow-up): the UserSession DO emits `4003 'Replaced'` correctly today
+but has no eviction path for *truly stale* sessions (no client ever
+reconnects, KV TTL hasn't fired yet). A short-lived heartbeat ack
+TTL on the server would let it close idle connections faster.
+
 **Priority order**
 
 Of these, **9a, 9b, 9c, 9d** were the friction points that hit during
 *every* session in the 2026-05-26 run — they should land in the same
-release as the §2 base commands, not as a follow-up. The rest (9e–9i)
-are still wins but have narrower trigger conditions.
+release as the §2 base commands, not as a follow-up. **9j** (orphan
+daemon reaping) is high-priority follow-up because the trigger
+condition was already observed in prod (9 accumulated daemons hitting
+the API ~1 req/s each). The rest (9e–9i) are still wins but have
+narrower trigger conditions.
 
 ### 10. Orchestration patterns — agent fleets, ensembles, verifiers
 
