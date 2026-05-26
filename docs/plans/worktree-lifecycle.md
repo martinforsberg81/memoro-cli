@@ -44,7 +44,11 @@ status).
 5. Spawn heterogeneous subagents — parent on one model, workers on
    cheaper/different models — with a single command. Parallel,
    coordinated, cost-aware.
-6. Graceful migration: existing `cs` worktrees keep working until cut
+6. Orchestrate fleets of agents from a single parent session:
+   plan-driven fan-out, hierarchical mid-agents, multi-model
+   ensembles, and adversarial verifiers — without the parent
+   blocking on any of them.
+7. Graceful migration: existing `cs` worktrees keep working until cut
    over; nothing breaks under foot.
 
 ## Non-goals
@@ -613,6 +617,328 @@ Of these, **9a, 9b, 9c, 9d** were the friction points that hit during
 release as the §2 base commands, not as a follow-up. The rest (9e–9i)
 are still wins but have narrower trigger conditions.
 
+### 10. Orchestration patterns — agent fleets, ensembles, verifiers
+
+§5b introduced `mc spawn` for single heterogeneous subagents. This
+section builds on that primitive to support four orchestration
+patterns the user named as core to "easier coding": a parent session
+becomes a coordinator that ships work in parallel and stays
+responsive for planning while children execute.
+
+The patterns are independent primitives — they can be combined (a
+fan-out's child can be a mid-agent; an ensemble can be used as a
+verifier).
+
+#### 10a. Fan-out by plan phases
+
+```
+mc fanout <plan.md> [--from main] [--model-default gpt-4.1-mini]
+                   [--budget-total $5] [--strategy serial-deps]
+```
+
+mc parses the plan's phase headings (`## Phase 1: ...` or a YAML
+frontmatter `phases:` list — both supported, YAML preferred when
+ordering or dependencies matter) and spawns one agent per phase in
+parallel. Each agent:
+
+- Receives the phase body as its task prompt (plus the plan's intro
+  as shared context — captured as a frozen preamble so phases stay
+  reproducible).
+- Runs in its own fresh isolation worktree (per §6) with a branch
+  `fan/<plan-slug>/<phase-N>` rooted at `--from`.
+- On completion, opens a PR against a **shared collection branch**
+  `wip/<plan-slug>` (not `main` directly) — keeps every phase's
+  diff visible side-by-side for review.
+- Pings the parent session via push event (`fanout_phase_done`).
+
+Parent renders a collection card in chat (per
+`chat-coordinator-coding.md` §6) with one progress row per phase.
+**Crucial property: the parent does not block.** While children
+work, the parent keeps the conversation going — planning the next
+slice, drafting copy, anything.
+
+When all phases land, `mc gather <plan-slug>`:
+
+1. Detects diff conflicts between sibling PRs (overlap on same
+   file ranges → escalate, don't auto-merge).
+2. Merges phases in dependency order (`--strategy serial-deps`)
+   or all-at-once (default) into the collection branch.
+3. Opens one summary PR `wip/<plan-slug> → main` with the merged
+   set, ready for human review.
+
+#### 10b. Hierarchical orchestration — agents spawning agents
+
+A mid-level agent (e.g. handling "frontend changes") can call
+`mc spawn` recursively, becoming a coordinator for its own
+sub-fleet. The orchestration tree is what differs from §5b's flat
+spawn — mc needs:
+
+- **Tree visualisation:**
+
+  ```
+  mc list --tree
+  └─ refactor-frontend (Claude Opus, planning sub-areas)
+     ├─ refactor-auth (Sonnet, ▶ planning 3 children)
+     │  ├─ oauth-flow      (gpt-4.1-mini, ▶ step 2/5)
+     │  ├─ session-store   (gpt-4.1-mini, ✓ PR #6478)
+     │  └─ logout-route    (gpt-4.1-mini, ✘ failed: tests broken)
+     ├─ refactor-nav       (Sonnet, ⏸ blocked on refactor-auth)
+     └─ refactor-settings  (Sonnet, ✓ PR #6481)
+  ```
+
+  `mc list --tree --deep` to expand grandchildren by default (off
+  by default — parents typically only care about their direct
+  reports).
+- **Budget propagation.** Parent budget is allocated to children
+  with a default reserve (e.g. 80/20 split: 80 % to children equally,
+  20 % held by parent). Mid-agents wanting to fan-out further must
+  request a sub-budget back through `mc spawn --request-budget`.
+- **Status bubble-up.** Children push state to mid-agent;
+  mid-agent aggregates and pushes a *summary* to grandparent
+  (e.g. "refactor-auth: 2/3 done, 1 failed (recovering)"). The
+  parent does not see grandchild noise by default.
+- **Failure policy per level.** Mid-agent receives default recovery
+  for its children (re-run once, then skip; or fail-fast — see §10g).
+  The parent only intervenes if the mid-agent fully fails.
+
+#### 10c. Ensemble — multi-model vote / synthesis / debate
+
+```
+mc ensemble "<task>" --models claude-opus,gpt-5-mini,gemini-2.5-pro \
+                    --strategy synthesize    # default
+                                | judge      # cheap judge picks best
+                                | debate --rounds 2
+                                | unanimous-only
+                    [--budget $0.50]
+                    [--judge-model claude-haiku]
+                    [--synthesize-model claude-haiku]
+```
+
+All N models receive the same task simultaneously. Strategies:
+
+- **synthesize** (default): a separate "synthesis" model reads all
+  N answers and produces a unified response, keeping insights
+  unique to each source. Bias warning: synthesis-model has its own
+  bias — use a *peer-quality* synthesis model when stakes are
+  high, not necessarily the cheapest one.
+- **judge**: a cheap model picks the best answer based on
+  task-specific rubric (default: "most actionable + most likely
+  correct given the codebase context"). Returns the winner verbatim,
+  not a remix.
+- **debate**: each model sees the others' first-round answers,
+  produces an updated answer. Repeat N rounds. Final round is
+  presented as-is (no synthesis). Useful when models disagree on
+  facts — convergence is informative.
+- **unanimous-only**: returns the answer only if all N agree on
+  the core recommendation (heuristic: structural similarity in
+  diff suggestions, or LLM-judged equivalence). Otherwise returns
+  "no consensus" with all N answers shown. Conservative — use for
+  high-stakes decisions like schema changes.
+
+Use cases:
+
+- Hard debugging problems where one model gets stuck
+- Code review of risky diffs (3 models inspecting the same PR)
+- Design decisions where models have different strengths (Claude
+  on reasoning, GPT on idiomatic JS, Gemini on long-context recall
+  of the codebase)
+- Final "do you trust this fix" pass before merge
+
+Output card in chat shows per-model: latency, cost, one-line
+summary, plus the synthesis/winner. Full answers expand on click.
+
+#### 10d. Verification step — adversarial check after "done"
+
+Not parallel — *serial after*. When an agent claims completion:
+
+```
+mc verify <session-id> [--model claude-opus]
+                       [--against "<assertion>"]
+                       [--rerun-on-fail]
+```
+
+The verifier agent receives:
+
+- The session's diff (the PR contents)
+- The original task prompt
+- Read-only access to the sandbox to run tests, build, lint
+- Read-only access to the relevant code paths
+- **Explicit prohibition on writing code** — the verifier can only
+  observe and report
+
+Verdict: `VERIFIED` | `FAILED` | `INCONCLUSIVE` with evidence
+(test output, log excerpts, specific assertions). On `FAILED` and
+`--rerun-on-fail`, the original session is re-spawned with the
+verifier's findings appended as additional context (a "your
+previous attempt missed X, fix and rerun" prompt).
+
+Cost-of-Opus for the verifier is almost always justified — the
+task that needed verifying was usually larger than a quick read.
+
+A heuristic mc surface: **whenever a session opens a PR claiming
+completion, automatically queue a verifier in the background.**
+Default off (cost), but enable per-session via `mc spawn --verify`.
+
+#### 10e. Common orchestration registry
+
+The mc session registry (currently `worktree path → branch →
+session id`) extends with orchestration metadata:
+
+- `parent_id` — for tree linkage
+- `kind`: `work | fanout-leader | fanout-phase | mid-agent |
+  ensemble-member | ensemble-judge | ensemble-synth | verifier`
+- `ensemble_group_id` — siblings of an ensemble
+- `result_branch` — where the agent landed work
+- `result_pr` — PR number when opened (cached, with 15-min TTL)
+- `result_status`: `running | completed | failed | verified |
+  rejected-by-verifier`
+- `budget_alloc` / `budget_used` — per the propagation rules
+
+This is the same registry §2 already uses for `mc list`; just
+more columns.
+
+#### 10f. Result reporting protocol
+
+Each agent terminates by writing a structured `result.json` to
+its sandbox (path: `/workspace/.mc-result.json`):
+
+```json
+{
+  "status": "completed | failed | inconclusive",
+  "summary": "Added null guard, all tests pass",
+  "pr": "https://github.com/.../pull/6478",
+  "branch": "fan/auth/oauth-flow",
+  "tokens_used": 45000,
+  "tools_called": 23,
+  "cost_estimate_usd": 0.07,
+  "verifier_hint": "Test the OAuth callback specifically",
+  "failures_to_report": []
+}
+```
+
+The parent's push handler reads this on `mc_agent_done` events
+and updates the orchestration card. **The result file is the
+contract** — without it, an agent claiming completion is treated
+as inconclusive (and verifier fires automatically if the parent
+opted into auto-verify).
+
+#### 10g. Failure + budget policies
+
+**Failure defaults** (configurable per fan-out / spawn):
+
+- Single agent fails → **surface to parent**, parent decides
+  (retry / skip / abandon).
+- Fan-out: by default, *continue* the other phases (don't
+  cancel siblings on one failure). Parent gets a card showing
+  the dead phase and a one-click "retry with these adjustments"
+  prompt.
+- Hierarchical: mid-agent's default is **one retry then skip**;
+  fail-fast available via `--on-fail abort`.
+- Ensemble: failed members are dropped from synthesis;
+  unanimous-only with any failure returns "no consensus".
+- Verifier: failed verification respawns the original session
+  with findings if `--rerun-on-fail`; otherwise just reports.
+
+**Budget policies:**
+
+- All commands accept `--budget $X` as a total cap including
+  children + verifier passes.
+- `mc fanout` divides budget across phases proportional to phase
+  size (heuristic: word count of phase body) with a 10 % parent
+  reserve.
+- `mc ensemble` divides budget equally across members, with a
+  separate `--judge-budget` / `--synthesize-budget` for the
+  aggregation step.
+- A child hitting its budget cap pauses and asks the parent for
+  more (push event: `budget_request`). Parent can approve
+  inline or auto-approve up to a configurable multiplier.
+
+#### 10h. Cost guardrails (non-negotiable)
+
+Multi-agent operations multiply LLM costs in non-obvious ways.
+mc surfaces this proactively:
+
+- **Up-front estimate.** Before fanout/ensemble runs, mc prints
+  estimated cost based on phase sizes × model rates × number of
+  agents. Refuses to start if `--budget` is below the estimate,
+  unless `--force`.
+- **Live cost meter.** `mc list --tree --cost` shows running
+  cost per agent. Parent card in chat shows aggregate.
+- **Per-user monthly soft caps.** Configurable. Hard cap not
+  imposed by default (the user is the one paying), but warning
+  card at 80 % of cap.
+- **Ensemble special warning.** N-way ensemble with frontier
+  models prints an explicit "this is N × normal cost" prompt
+  before first run in a session.
+
+#### 10i. UI surfaces
+
+- **CLI:** `mc list --tree`, `mc list --tree --cost`, per-pattern
+  status commands (`mc fanout status <plan>`, `mc ensemble
+  show <id>`).
+- **Chat:** the existing `chat-coordinator-coding.md` status-card
+  pattern, extended:
+  - Fan-out card: progress bar per phase, links to PRs as they
+    open, "gather" button when all done.
+  - Ensemble card: row per model with latency + cost + one-line
+    summary; synthesis/winner expanded.
+  - Verifier card: VERDICT badge with evidence excerpt; click to
+    see full report.
+  - Tree card: collapsible hierarchy, click any node to drill
+    into that sub-session's card.
+- **Browser terminal (§8):** each agent in the tree is a tab,
+  with the orchestration card pinned as a separate "overview"
+  tab.
+
+#### 10j. Phasing
+
+1. **MVP** — `mc fanout` over a flat plan (no hierarchy yet),
+   plus `mc gather`. Parent stays responsive while children
+   work. *Goal: prove "ship a plan as N PRs in parallel" path.*
+   ~1.5 weeks solo.
+2. **Verifier** — `mc verify` and `mc spawn --verify` opt-in
+   auto-verify after completion. *Goal: trust agent claims.*
+   ~1 week.
+3. **Ensemble** — all four strategies, with cost guardrails
+   front-and-centre. *Goal: cover hard debugging + risky-diff
+   review.* ~1.5 weeks.
+4. **Hierarchical** — recursive spawn with tree visualisation,
+   budget propagation, bubble-up status. *Goal: scale to
+   refactors that touch multiple sub-areas.* ~2 weeks.
+5. **Chat integration polish** — full status-card surface for
+   each pattern in Memoro chat (per
+   `chat-coordinator-coding.md`). *Goal: the user named pattern
+   ships end-to-end.* ~1 week.
+
+Total: ~7 weeks for the full orchestration surface. The MVP
+(phase 1 above) alone delivers the user's stated "plan-driven
+parallel agents" use case and is the de-risk point.
+
+#### 10k. Open questions specific to orchestration
+
+- **Plan format.** Markdown phase parsing is brittle (heading
+  conventions vary). YAML frontmatter declaring `phases:` is
+  more robust but less natural to write. Probably: support both,
+  prefer YAML when present, fall back to heading-based parse.
+- **Cross-phase context.** Should each phase agent see the
+  *other* phases' bodies as context? Pro: prevents contradictions.
+  Con: 4× context cost, may dilute focus. Lean: by default
+  share only the plan intro + their own phase; opt-in
+  `--share-siblings` for tightly-coupled plans.
+- **Conflict detection in `mc gather`.** Simple: diff overlap
+  on file:line ranges. Sophisticated: semantic conflicts (one
+  phase removes an import, another uses it). MVP does file:line;
+  upgrade later.
+- **Ensemble determinism.** Same inputs, different models — runs
+  aren't deterministic across providers. Should we cache the
+  ensemble result for replay? Probably yes for cost reasons;
+  cache key = task hash + model set + strategy.
+- **When does an ensemble "trigger automatically"?** The user
+  hinted at "verkar svårlöst" — a session retrying the same file
+  >3 times. Should mc proactively suggest `mc ensemble`? Probably
+  yes via a soft prompt: "I've been stuck on this for 3 retries
+  — want me to ensemble against gpt-5-mini and gemini?".
+
 ## Open questions
 
 - **Cross-machine session handling.** Today's `mc sessions list` shows
@@ -649,3 +975,12 @@ are still wins but have narrower trigger conditions.
 - Bulk `mc end a b c` and `mc end --dry-run` available (per §9c).
 - `mc list --awaiting / --idle / --safe-to-end` filters available
   (per §9d).
+- A user can pass a plan to `mc fanout` and ship N PRs in parallel
+  while still planning the next step in the parent session (§10a).
+- `mc ensemble "<hard problem>" --models a,b,c` returns a synthesis
+  from three models with up-front cost estimate and a budget cap
+  (§10c, §10h).
+- `mc verify <session>` runs an adversarial check that can re-spawn
+  the original session with findings on FAILED (§10d).
+- `mc list --tree` shows hierarchical orchestration with per-agent
+  status, model, and cost (§10b, §10i).
