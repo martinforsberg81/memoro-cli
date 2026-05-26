@@ -4,6 +4,7 @@ import test, { describe } from 'node:test';
 import {
   buildWsUrl,
   nextBackoff,
+  isTerminalCloseCode,
   __test__,
 } from '../../src/commands/ws-client.js';
 
@@ -43,6 +44,39 @@ describe('nextBackoff', () => {
   test('starts at INITIAL when given 0 or undefined', () => {
     assert.equal(nextBackoff(0), 2_000);
     assert.equal(nextBackoff(undefined), 2_000);
+  });
+});
+
+describe('isTerminalCloseCode', () => {
+  test('4003 Replaced is terminal', () => {
+    assert.equal(isTerminalCloseCode(4003, 'Replaced by new CLI connection'), true);
+  });
+
+  test('4003 Invalid session is terminal', () => {
+    assert.equal(isTerminalCloseCode(4003, 'Invalid session'), true);
+  });
+
+  test('4003 case-insensitive reason match', () => {
+    assert.equal(isTerminalCloseCode(4003, 'REPLACED by something'), true);
+  });
+
+  test('4003 with unrecognised reason is transient', () => {
+    // 4003 might be reused with other meanings in the future; only the
+    // known reasons short-circuit reconnect. Unknown → reconnect.
+    assert.equal(isTerminalCloseCode(4003, 'rate limit'), false);
+  });
+
+  test('normal close 1000 is transient', () => {
+    assert.equal(isTerminalCloseCode(1000, ''), false);
+  });
+
+  test('abnormal close 1006 is transient', () => {
+    assert.equal(isTerminalCloseCode(1006, ''), false);
+  });
+
+  test('missing reason returns false safely', () => {
+    assert.equal(isTerminalCloseCode(4003), false);
+    assert.equal(isTerminalCloseCode(4003, null), false);
   });
 });
 
