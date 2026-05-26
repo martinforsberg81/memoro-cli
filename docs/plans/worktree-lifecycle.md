@@ -433,6 +433,186 @@ Honest constraints:
   ([[project_unused_providers]] reminds us the subprocessors page must
   match reality).
 
+### 9. Cleanup tooling — lessons from a real session-cleanup run
+
+Friction notes from a real session-cleanup run on 2026-05-26 where ~20
+parallel sessions had to be triaged, ended, or routed for action. The
+existing scaffolding worked but required too much manual bash + jq +
+`gh pr view` cross-referencing. Each item below maps a pain point to a
+concrete design, with a pointer to where it lives in mc.
+
+**9a. `mc status <name>` and `mc list --rich`** (extends §2 `mc list`)
+
+Combine into a single command what cleanup actually needs per session:
+
+- last activity timestamp (mtime of newest `.jsonl`)
+- last *user* message (string-content only — skip tool results)
+- last *assistant text* (`type=assistant` text content blocks — skip
+  tool calls)
+- open question (heuristic on last assistant text: ends with `?`, or
+  contains "Vill du" / "Want me to" / "ja eller nej" / "A or B" /
+  numbered choices)
+- dirty file count
+- commits ahead of `origin/main`
+- safety verdict: `SAFE_TO_END` | `NEEDS_REVIEW` | `HAS_UNMERGED_WORK`
+  | `IS_ACTIVE_NOW` (transcript mtime < 5 min) | `IS_SQUASH_PHANTOM`
+
+`mc list --rich` runs this for every session in one pass and shows the
+verdict + open question inline so a human can scan 14 sessions in 30
+seconds instead of opening each one.
+
+Open-question detection can fall back to a tiny LLM call (gpt-4.1-mini
+or similar via [[feedback_short_llm_interactions]]) when the heuristic
+is ambiguous. Budget: ~5 tokens output per session, batched.
+
+**9b. Squash-merge phantom detection in `mc end`** (extends §2 `mc end`)
+
+A branch with N commits ahead of main may already be merged via squash
+— the change set lives on main under a different hash. Today this
+shows as "1 commit ahead" and looks unsafe. The fix:
+
+For each branch whose `mc end` is invoked with non-zero ahead count:
+
+1. Look up `gh pr list --head <branch> --state merged` — if there's
+   a recent merged PR for this branch, mark as candidate phantom.
+2. Compare the branch's changeset to main: `git diff <branch> origin/main
+   -- <files-from-branch-commits>` — if empty, confirmed phantom.
+3. Surface as `IS_SQUASH_PHANTOM` in `mc status`; `mc end` proceeds
+   without prompting (the work *is* on main, the branch is just an
+   alternate hash).
+
+Without this, the user has to manually run `gh pr view`, grep for
+files on main, and *decide* — every time. With this, end-of-cycle
+cleanup is one command.
+
+**9c. Bulk `mc end` and `--dry-run`** (extends §2 `mc end`)
+
+```
+mc end home-status inbox liveapp xero            # bulk, sequential
+mc end --dry-run home-status inbox liveapp xero  # preview only
+```
+
+`--dry-run` output is one line per target:
+
+```
+home-status  → SAFE_TO_END (clean, 0 ahead, branch merged)
+inbox        → SAFE_TO_END (clean, 0 ahead, branch merged)
+liveapp      → SAFE_TO_END (clean, 0 ahead, branch merged)
+xero         → NEEDS_REVIEW (1 dirty file: docs/CHANGELOG.md)
+```
+
+→ Today's "4 separate `cs end` commands + read 4 separate confirmations"
+becomes one paste + one read.
+
+**9d. `mc list --awaiting` and other status filters** (extends §2 `mc list`)
+
+The single most valuable categorisation during cleanup was "which
+sessions are paused on a question to me". Make it a built-in filter:
+
+```
+mc list --awaiting           # sessions whose last asst msg is a question
+mc list --idle [--since 6h]  # no activity since N (default 6h)
+mc list --safe-to-end        # SAFE_TO_END verdict from 9a
+mc list --has-unmerged       # commits ahead of main that aren't phantoms
+mc list --active             # live heartbeat or transcript activity < 5m
+```
+
+Compose with `mc end --dry-run "$(mc list --safe-to-end --names)"`
+for one-shot cleanup of the safe set.
+
+**9e. `mc reconcile` — "your work is already on main"**
+
+New top-level command. Scans every session in `mc list` and surfaces:
+
+- Sessions whose entire commit set is on main (squash-merge phantoms,
+  per 9b). Suggested action: `mc end`.
+- Sessions whose recent transcript references a PR number that has
+  since merged. Suggested action: verify + end.
+- Sessions whose dirty files match files modified by a recently-merged
+  PR (parallel-session collisions). Suggested action: review for lost
+  work, then end.
+
+Output is a triage list, one suggested action per session. The user
+runs `mc reconcile --apply --only-safe` to act on the unambiguous
+cases automatically.
+
+This solves the recurring "I shipped this fix from a parallel session
+but the original session doesn't know" problem that hit four times in
+the 2026-05-26 cleanup run.
+
+**9f. PR ↔ session mapping** (extends §2 `mc list`)
+
+Today, when a PR merges I have to *guess* which local session owned
+that work. `mc list` should show, per session, the PRs that:
+
+- have `head = <session-branch>` and are open
+- have `head = <session-branch>` and merged in the last 7 days
+- modified files that overlap with the session's dirty/staged files
+
+Cache the GitHub API responses per branch with a 15-minute TTL so this
+doesn't hammer rate limits on every `mc list`.
+
+**9g. `mc since <window>` — activity timeline**
+
+```
+mc since 1h       # what changed in the last hour
+mc since today
+mc since 7d
+```
+
+Lists, across all sessions:
+
+- PRs that merged (and which sessions owned them)
+- branches that moved (commits added)
+- sessions that flipped state (`dirty` ↔ `clean`, `active` ↔ `idle`)
+- new questions surfaced by sessions (their last asst msg became
+  a question since last `mc since` call)
+
+→ Answers "what happened while I was gone" without `git log`
+spelunking. Same data the browser UI in §8 surfaces; this is the CLI
+view.
+
+**9h. Dispatch to dead sessions + bulk dispatch** (extends §2 `mc dispatch`)
+
+Today's `mc sessions send` only works if the live CLI is attached.
+Most sessions in the 2026-05-26 run had dead heartbeats (post-shutdown).
+Fix:
+
+- **Queue if not live.** `mc dispatch <name> "<msg>"` writes the
+  message to the session's pending-inbox under `~/.mc/inbox/<name>/`.
+  On next `mc resume <name>`, the message is replayed as the first
+  user turn (after the resume picker selects the transcript).
+- **Bulk dispatch:** `mc dispatch fixes asc onboarding "Verifierat —
+  du kan stänga"`. Sends the same message to N sessions.
+- **Safety:** dispatching to live sessions still goes through the
+  existing send channel; queued dispatch is for dead-but-resumable.
+
+→ Lets the user respond to all the "väntar på ditt svar"-sessions in
+one batch instead of resuming each first.
+
+**9i. Auth pre-flight in `mc end` / `mc ship` / `mc reconcile`**
+
+The 2026-05-26 run had a parallel Claude session spend 2 min 45 s
+hitting `gh auth status` failures because a `gh` keyring token had
+silently expired. Fix:
+
+- Any mc command that *will* call `gh` (PR ops, reconcile, etc.)
+  runs a 200 ms pre-flight: `gh auth status -h github.com` quietly.
+- If it fails, refuse the command up-front with a clear single-line
+  hint: `gh token expired or missing — run 'gh auth login -h github.com'
+  and retry`.
+- Never silently consume a failure and try again 4 times.
+
+Same pattern for any external auth mc depends on (Memoro account
+token, OpenAI/Anthropic keys if `mc switch`/`mc spawn` is invoked).
+
+**Priority order**
+
+Of these, **9a, 9b, 9c, 9d** were the friction points that hit during
+*every* session in the 2026-05-26 run — they should land in the same
+release as the §2 base commands, not as a follow-up. The rest (9e–9i)
+are still wins but have narrower trigger conditions.
+
 ## Open questions
 
 - **Cross-machine session handling.** Today's `mc sessions list` shows
@@ -462,3 +642,10 @@ Honest constraints:
 - `mc spawn` runs parent + workers on different models with a single
   command per worker; results land in a path the parent can read.
 - One command rename (branch + dir), no manual `git branch -m`.
+- A `mc list --rich` covers the cross-reference workflow that today
+  requires bash + jq + `gh pr view` (per §9a).
+- `mc end` recognises squash-merge phantoms without manual
+  intervention (per §9b).
+- Bulk `mc end a b c` and `mc end --dry-run` available (per §9c).
+- `mc list --awaiting / --idle / --safe-to-end` filters available
+  (per §9d).
