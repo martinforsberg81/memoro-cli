@@ -17,8 +17,15 @@ const MARK_END = '# <<< memoro mc shell wrapper <<<';
 
 const WRAPPER_BODY = String.raw`
 mc() {
+  # Capture only fd 3 (shell directives) into $out. stdout is routed
+  # to the terminal via fd 2 so the user sees normal command output;
+  # stderr is left untouched on fd 2 so warnings and tips reach the
+  # terminal as well. An earlier version of this wrapper also
+  # redirected stderr into fd 3, which leaked stderr into the eval
+  # buffer and broke any command whose stderr contained shell
+  # metacharacters (e.g. "<branch>" in a hint).
   local out rc
-  out=$(command memoro-cli "$@" --emit-shell-directives 3>&1 1>&2 2>&3)
+  out=$(command memoro-cli "$@" --emit-shell-directives 3>&1 1>&2)
   rc=$?
   [ -n "$out" ] && eval "$out"
   return $rc
