@@ -19,12 +19,13 @@ const MAX_BACKOFF_MS = 30_000;
 const COMMAND_TIMEOUT_MS = 30_000;
 
 export class CliWsClient {
-  constructor({ apiUrl, token, codingSessionId, handlers, logger = silentLogger() }) {
+  constructor({ apiUrl, token, codingSessionId, handlers, logger = silentLogger(), onTerminalClose }) {
     this.apiUrl = apiUrl;
     this.token = token;
     this.codingSessionId = codingSessionId;
     this.handlers = handlers;
     this.logger = logger;
+    this.onTerminalClose = onTerminalClose;
     this.ws = null;
     this.alive = false;
     this.backoffMs = INITIAL_BACKOFF_MS;
@@ -79,7 +80,21 @@ export class CliWsClient {
 
     ws.addEventListener('close', (event) => {
       this.ws = null;
-      this.logger.info(`[ws] closed (code=${event?.code ?? '?'} reason=${event?.reason || ''})`);
+      const code = event?.code ?? 0;
+      const reason = event?.reason || '';
+      this.logger.info(`[ws] closed (code=${code} reason=${reason})`);
+      if (isTerminalCloseCode(code, reason)) {
+        // Server told us another CLI replaced us, or our session id is
+        // invalid. Don't reconnect — that just trades messages with the
+        // newer daemon forever. Stop the loop and notify the caller so
+        // the wider daemon can exit cleanly.
+        this.alive = false;
+        this.logger.info('[ws] terminal close — not reconnecting');
+        if (typeof this.onTerminalClose === 'function') {
+          try { this.onTerminalClose({ code, reason }); } catch { /* best effort */ }
+        }
+        return;
+      }
       this._scheduleReconnect();
     });
 
@@ -166,6 +181,25 @@ export class CliWsClient {
  */
 export function nextBackoff(currentMs) {
   return Math.min((currentMs || INITIAL_BACKOFF_MS) * 2, MAX_BACKOFF_MS);
+}
+
+/**
+ * Pure: decide whether a close (code, reason) pair is *terminal* — i.e.
+ * reconnecting would just trade close codes with whatever rejected us.
+ *
+ * Server-emitted terminal codes:
+ *   4003 'Replaced by new CLI connection' — another mc daemon for the
+ *         same (userId, codingSessionId) connected; we've been replaced.
+ *   4003 'Invalid session'                 — our session id is no longer
+ *         valid (expired or never registered).
+ *
+ * Any other close (network blip, server restart, normal 1000/1006) is
+ * transient and the caller should reconnect with backoff.
+ */
+export function isTerminalCloseCode(code, reason = '') {
+  if (code !== 4003) return false;
+  const r = String(reason).toLowerCase();
+  return r.includes('replaced') || r.includes('invalid session');
 }
 
 /**

@@ -123,6 +123,15 @@ export async function heartbeatLoop(argv) {
       }),
     },
     logger: wsLogger,
+    // Server tells us our session was replaced or is invalid (4003).
+    // Exit the daemon — the new owner (or the absence of any owner)
+    // means continuing to tick heartbeats is wasted work and a
+    // 1 req/s reconnect storm if multiple daemons race for the same
+    // session id.
+    onTerminalClose: ({ code, reason }) => {
+      wsLogger.info(`[heartbeat-loop] terminal close (${code} ${reason}) — exiting`);
+      alive = false;
+    },
   });
   wsClient.start();
   const stopWs = () => wsClient.stop();
