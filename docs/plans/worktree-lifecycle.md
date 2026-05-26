@@ -61,36 +61,63 @@ status).
 
 ## Design
 
-### 1. Worktree placement — centralised under `~/.mc/`
+### 1. Worktree placement — under existing `~/.memoro/mc/`
 
 Drop both `.claude/worktrees/<name>` (leaks into repo working tree) AND
 the cs-style sibling-dir `<repo>--<name>` (clutters the parent
 directory; the user explicitly called this out as a pain point — having
 ~20 `memoro--sess-*` siblings next to the repo is too messy to scan).
 
-**Default:** `~/.mc/worktrees/<repo-slug>/<name>`
+**Default:** `~/.memoro/mc/worktrees/<repo-slug>/<name>`
+
+(Earlier drafts of this plan named `~/.mc/`; the foundation-decisions
+round revealed that `~/.memoro/mc/` already exists with sockets and
+metadata. Consolidating mc state under one root is cleaner — backup,
+audit, and "delete all mc state" become one operation.)
 
 - `<repo-slug>` = the basename of the primary worktree (`memoro`,
   `memoro-cli`, etc.). Collisions across different repos with the same
   basename are resolved by appending a short hash of the absolute
   primary-worktree path.
-- The directory is hidden (`.mc`) so it doesn't visually compete with
-  user dirs in `~`.
+- **Do not disturb existing `~/.memoro/mc/` contents** (sockets, the
+  registry, runtime metadata). The `worktrees/` directory is purely
+  additive as a sibling under that root.
 - Editors handle longer paths fine; project-root detection still works
   (each worktree has a `.git` file pointing back at the primary
   worktree's `.git/worktrees/<name>` — git tooling stays happy).
 
-Overridable per-machine via `mc config worktree.root <path>` for users
-who want sibling-dir or an XDG location (`~/.local/share/memoro-cli/...`).
+`MC_HOME` env var (defaults to `~/.memoro/mc`) controls the root for
+testing and per-machine overrides. Public `mc config worktree.root
+<path>` is deferred — YAGNI until a second user wants a different
+location.
 
 The shell wrapper (§2b) makes the long path irrelevant in practice —
 users navigate by name (`mc cd <name>`), not by typing the path.
 
 ### 2. First-class lifecycle commands
 
+Today's `mc new <label>` (tag a wrapped Claude session in cwd with a
+label, no worktree) and the new `mc new <name>` (create worktree +
+branch + launch tool) are semantically different operations sharing
+one verb. Foundation release splits them:
+
+- **`mc new <name>`** — the §2 contract below: worktree + branch +
+  launch. The label-tagging behaviour is gone from this verb.
+- **`mc wrap <label>`** — the old label-tagging behaviour, moved to
+  its own verb. Attaches mc tracking to a Claude session already
+  running in cwd. Useful for sessions Claude started outside mc.
+- Plain `mc` (no args) keeps its current ad-hoc behaviour.
+
+Registry-schema implication: store `label` and `worktree_name` as
+**separate fields** even when they have the same value. Lets us
+later add `mc rename --label <new>` without touching the worktree
+directory.
+
 ```
-mc new <name> [--from <ref>] [--tool claude|codex|gemini]
-   create worktree, create bootstrap branch sess/<name>, launch tool
+mc new <name> [--from <ref>] [--tool claude|codex|gemini] [--no-launch]
+   create worktree, create bootstrap branch sess/<name>, launch tool.
+   --no-launch is an undocumented test-only flag that skips the
+   tool-launch step (otherwise tests would hang on a real Claude TUI).
 
 mc list
    default: only user-created work-sessions. Table: name · branch ·
@@ -103,9 +130,15 @@ mc list --all
    sessions still pending gc. Same columns plus a `kind` flag
    (work | isolation | spawn).
 
-mc resume <name>
+mc resume <name> [--no-launch]
    cd to worktree, claude --resume (or codex resume, etc., per stored
-   tool); same picker behaviour the user already knows
+   tool); same picker behaviour the user already knows.
+   --no-launch: test-only, same as on `mc new`.
+
+mc wrap <label>
+   attach mc tracking to the Claude session already running in cwd,
+   with <label> as the friendly identifier. Does NOT create a worktree.
+   Use when Claude was started outside mc and you want it in `mc list`.
 
 mc end [<name>|.] [--force] [--keep-branch]
    - mc end <name>   end by name from anywhere
@@ -134,6 +167,33 @@ mc dispatch <name> "<message>"
 mc read <name> [--last N]
    today's `mc sessions read`, name-resolved
 ```
+
+### 2a. Source layout + registry path
+
+memoro-cli has two binaries (`memoro` / `memoro-cli` via `src/bin.js`,
+and `mc` via `src/bin-mc.js`). They have different command domains.
+Keep them in mirrored trees:
+
+```
+src/bin.js          → src/commands/<name>.js    (memoro-cli verbs)
+src/bin-mc.js       → src/mc/commands/<name>.js (mc verbs)
+src/mc/coordinator.js (renamed from coordinator-command.js — follow-up)
+```
+
+`bin-mc.js` is a **thin + lazy** dispatcher: it parses the verb and
+`await import('./commands/<verb>.js')` on demand, never preloads all
+commands. Cold-start matters because `mc` is invoked frequently from
+fan-out flows (§10).
+
+Future mc sub-systems (`src/mc/registry/`, `src/mc/sandbox/`,
+`src/mc/orchestration/`, `src/mc/transport/`) all live under
+`src/mc/` so the boundary stays clear.
+
+**Registry location:** `${MC_HOME}/registry.json` (default
+`~/.memoro/mc/registry.json`). One JSON document per machine, edited
+through registry helpers in `src/mc/registry/`. Schema includes
+`worktree_name`, `label`, `branch`, `tool`, `parent_id` (§10),
+`kind` (§5b + §10), and timestamps.
 
 ### 2b. Shell wrapper — make `mc cd` and post-`end` cd-back actually work
 
@@ -473,21 +533,57 @@ is ambiguous. Budget: ~5 tokens output per session, batched.
 
 A branch with N commits ahead of main may already be merged via squash
 — the change set lives on main under a different hash. Today this
-shows as "1 commit ahead" and looks unsafe. The fix:
+shows as "1 commit ahead" and looks unsafe.
 
-For each branch whose `mc end` is invoked with non-zero ahead count:
+**Three-tier detection** (soft-degrade across the chain):
 
-1. Look up `gh pr list --head <branch> --state merged` — if there's
-   a recent merged PR for this branch, mark as candidate phantom.
-2. Compare the branch's changeset to main: `git diff <branch> origin/main
-   -- <files-from-branch-commits>` — if empty, confirmed phantom.
-3. Surface as `IS_SQUASH_PHANTOM` in `mc status`; `mc end` proceeds
-   without prompting (the work *is* on main, the branch is just an
-   alternate hash).
+```js
+// Tier 1 — local, no auth, fast
+const cherry = await git('cherry', mainRef, branchRef);
+// Output: lines starting with '+' (unmerged) or '-' (patch-equivalent on main)
+const allPatchesOnMain = cherry.lines.every(l => l.startsWith('- '));
+if (allPatchesOnMain) {
+  return { verdict: 'IS_SQUASH_PHANTOM', confidence: 'high', source: 'cherry' };
+}
+
+// Tier 2 — remote, requires gh, higher confidence
+if (await gh.available()) {
+  const prs = await gh.prList({ head: branchRef, state: 'merged' });
+  if (prs.length > 0) {
+    // Cross-check: do all files touched by the branch appear identical on main?
+    const branchFiles = await git('diff', '--name-only', mainRef, branchRef);
+    const diff = await git('diff', branchRef, mainRef, '--', ...branchFiles);
+    if (diff.empty) {
+      return { verdict: 'IS_SQUASH_PHANTOM', confidence: 'high', source: 'gh-pr' };
+    }
+  }
+}
+
+// Tier 3 — degraded; gh unavailable AND cherry inconclusive
+return {
+  verdict: 'NEEDS_REVIEW',
+  hint: 'Possibly squash-phantom. Run `gh auth login` to confirm, ' +
+        'or check `gh pr list --head <branch>` manually.',
+};
+```
+
+Why three tiers:
+
+- Tier 1 catches the common case for free — no auth, no network, ~10ms
+- Tier 2 confirms via PR history when gh is present (higher confidence
+  because cherry alone can have false positives on rebased branches)
+- Tier 3 keeps the command working without gh — `NEEDS_REVIEW` prompts
+  human judgement instead of silently proceeding
+
+**`gh` is injected, not invoked directly** — `mc end` takes an
+optional `{ gh }` portal in its options; default = real gh shell
+wrapper, tests pass a stub. Same DI port for any other gh-touching
+command (`mc gather`, `mc fanout`, `mc verify`).
 
 Without this, the user has to manually run `gh pr view`, grep for
 files on main, and *decide* — every time. With this, end-of-cycle
-cleanup is one command.
+cleanup is one command in the common case and explicit about
+uncertainty in the degraded case.
 
 **9c. Bulk `mc end` and `--dry-run`** (extends §2 `mc end`)
 
