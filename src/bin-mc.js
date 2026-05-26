@@ -71,6 +71,22 @@ const EXCERPT_MAX_CHARS = 500;
 // Entry point
 // ─────────────────────────────────────────────────────────────────────────────
 
+// Lifecycle subcommands → src/mc/commands/<name>.js (lazy-loaded so the
+// hot path of `mc` wrap-mode boot doesn't pay for them).
+const LIFECYCLE = {
+  new:           () => import('./mc/commands/new.js'),
+  list:          () => import('./mc/commands/list.js'),
+  end:           () => import('./mc/commands/end.js'),
+  rename:        () => import('./mc/commands/rename.js'),
+  cd:            () => import('./mc/commands/cd.js'),
+  resume:        () => import('./mc/commands/resume.js'),
+  gc:            () => import('./mc/commands/gc.js'),
+  status:        () => import('./mc/commands/status.js'),
+  dispatch:      () => import('./mc/commands/dispatch.js'),
+  read:          () => import('./mc/commands/read.js'),
+  'install-shell': () => import('./mc/commands/install-shell.js'),
+};
+
 async function main() {
   const argv = process.argv.slice(2);
 
@@ -94,8 +110,17 @@ async function main() {
     return 2;
   }
 
-  // mc new <label> [args...]  →  wrap claude with a friendly label
-  if (argv[0] === 'new') {
+  // Lifecycle dispatch.
+  if (Object.prototype.hasOwnProperty.call(LIFECYCLE, argv[0])) {
+    const loader = LIFECYCLE[argv[0]];
+    const mod = await loader();
+    return mod.run(argv.slice(1));
+  }
+
+  // `mc wrap <label> [args...]` — tag a wrapped Claude session in the
+  // current cwd with a friendly label. This is the old `mc new <label>`
+  // semantics; the new lifecycle `mc new <name>` owns that verb now.
+  if (argv[0] === 'wrap') {
     const label = argv[1];
     const rest = argv.slice(2);
     const v = validateLabel(label);
@@ -106,7 +131,7 @@ async function main() {
     return runWrap(rest, { label });
   }
 
-  // Default: wrap claude (no label).
+  // Default: wrap claude (no label, current cwd).
   return runWrap(argv);
 }
 
@@ -133,8 +158,18 @@ function printHelp() {
 
 USAGE
   mc [args...]                       Wrap \`claude\` in current cwd
-  mc new <label> [args...]           Same, but tag this session with a
+  mc wrap <label> [args...]          Same, but tag this session with a
                                      friendly label for peer lookup
+
+  mc new <name>                      Create worktree + branch + launch tool
+  mc list [--rich|--awaiting|...]    Show sessions (filters per §9d)
+  mc status <name>                   Per-session derived status (§9a)
+  mc resume <name>                   cd into worktree + relaunch tool
+  mc end <name> [<name>...]          End worktrees (bulk + --dry-run supported)
+  mc rename <old> <new>              Rename branch + dir + registry entry
+  mc cd <name>                       cd into worktree (needs install-shell)
+  mc gc [--dry-run]                  Reap dead + merged + clean worktrees
+  mc install-shell                   Install the zsh/bash wrapper
 
   mc sessions list                   List your active coding sessions
   mc sessions send <label|id> <msg>  Dispatch a message into another session
