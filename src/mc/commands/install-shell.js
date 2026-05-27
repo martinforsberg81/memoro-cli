@@ -25,9 +25,9 @@ mc() {
   # buffer and broke any command whose stderr contained shell
   # metacharacters (e.g. "<branch>" in a hint).
   local out rc
-  # `command mc` bypasses this very function and resolves to the mc
+  # "command mc" bypasses this very function and resolves to the mc
   # binary on PATH (src/bin-mc.js, where the LIFECYCLE dispatch lives).
-  # `command memoro-cli` would hit src/bin.js — the OTHER binary in
+  # "command memoro-cli" would hit src/bin.js — the OTHER binary in
   # this package, which does not know about the lifecycle subcommands.
   out=$(command mc "$@" --emit-shell-directives 3>&1 1>&2)
   rc=$?
