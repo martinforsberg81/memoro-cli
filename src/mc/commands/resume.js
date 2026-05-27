@@ -5,6 +5,7 @@
  * the launched tool's cwd is the worktree. In `--no-launch` mode (tests
  * + when the user just wants to cd), we emit the directive and exit.
  */
+import { spawnSync } from 'node:child_process';
 import { findEntry } from '../registry.js';
 import { emitCd, parseDirectiveFlag } from '../shell-directives.js';
 
@@ -42,11 +43,14 @@ export async function run(rawArgv) {
     return 0;
   }
 
-  // Real tool spawn lands when the adapter layer's resume hook is wired
-  // up. For now, surface a hint so the user can drop into the worktree
-  // manually if they're outside the wrapper.
-  console.log(`mc: cd ${entry.worktree_path} && ${entry.tool || 'claude'} --resume`);
-  return 0;
+  // Re-exec mc in wrap mode with --resume so claude opens its resume
+  // picker. Same approach as `mc new`: same binary, cwd=worktree,
+  // inherited stdio. Adapter routing for non-claude tools follows §5.
+  const result = spawnSync(process.execPath, [process.argv[1], '--resume'], {
+    stdio: 'inherit',
+    cwd: entry.worktree_path,
+  });
+  return result.status ?? 0;
 }
 
 function parseArgs(argv) {
