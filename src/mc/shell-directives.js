@@ -32,9 +32,16 @@ export function parseDirectiveFlag(argv) {
  * Write a `cd <path>` directive on fd 3 if `enabled`. Falls back to a
  * one-line tip to stderr if not enabled (only when `tipIfDisabled`).
  *
+ * When `enabled` isn't passed explicitly, defaults to whatever the
+ * dispatcher set via the `MC_EMIT_SHELL_DIRECTIVES` env var (bin-mc.js
+ * strips --emit-shell-directives once and lifts it into the env so
+ * commands don't have to thread the flag through their signatures).
+ *
  * Returns true if a directive was actually emitted.
  */
-export function emitCd(path, { enabled, tipIfDisabled = false } = {}) {
+export function emitCd(path, opts = {}) {
+  const enabled = opts.enabled ?? (process.env.MC_EMIT_SHELL_DIRECTIVES === '1');
+  const tipIfDisabled = opts.tipIfDisabled || false;
   if (!enabled) {
     if (tipIfDisabled) {
       process.stderr.write(

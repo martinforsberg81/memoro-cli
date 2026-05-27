@@ -26,7 +26,7 @@ export async function run(rawArgv) {
   }
 
   if (entry.worktree_path) {
-    emitCd(entry.worktree_path, { enabled: emitDirectives });
+    emitCd(entry.worktree_path, { enabled: emitDirectives || undefined });
   }
 
   if (opts.json) {
