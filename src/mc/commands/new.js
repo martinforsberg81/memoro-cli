@@ -12,6 +12,7 @@
  */
 import { mkdirSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { findEntry, upsertEntry } from '../registry.js';
 import { worktreePath, mcHome } from '../paths.js';
 import { git, isInsideRepo, primaryWorktree, branchExists } from '../git.js';
@@ -108,17 +109,27 @@ export async function run(rawArgv) {
     return 0;
   }
 
+  console.log(`mc: created worktree ${opts.name} at ${wt}`);
+
   if (opts.noLaunch || process.env.MC_TEST_MODE === '1') {
-    console.log(`mc: created worktree ${opts.name} at ${wt}`);
     return 0;
   }
 
-  // Real launch is wired in when the tool-launch glue lands — for now
-  // the test path covers `--no-launch`. Production fallback: print the
-  // worktree path and let the user `mc resume <name>` to launch.
-  console.log(`mc: created worktree ${opts.name} at ${wt}`);
-  console.log(`mc: run \`mc resume ${opts.name}\` to launch ${entry.tool}.`);
-  return 0;
+  // Re-exec the same mc binary in wrap mode with cwd=worktree. This
+  // re-uses the existing wrap-mode plumbing (pty.spawn of claude,
+  // heartbeat-loop, ws-client, registry tick) without duplicating it
+  // here. stdio inherits so the user's terminal becomes claude's TUI;
+  // when claude exits, we exit too and the shell wrapper's auto-cd
+  // (already emitted above) keeps the user in the worktree.
+  //
+  // Adapter routing per --tool (codex, gemini, …) is deferred — for
+  // claude this is just the plain wrap path. When the adapter layer
+  // lands (§5), this re-exec becomes a per-tool launcher call.
+  const result = spawnSync(process.execPath, [process.argv[1]], {
+    stdio: 'inherit',
+    cwd: wt,
+  });
+  return result.status ?? 0;
 }
 
 function parseArgs(argv) {
