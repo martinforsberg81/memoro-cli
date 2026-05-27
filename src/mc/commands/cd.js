@@ -29,8 +29,13 @@ export async function run(rawArgv) {
     return 1;
   }
 
+  // Note: `emitDirectives` from parseDirectiveFlag will always be false
+  // here because bin-mc.js strips the flag before dispatch. emitCd
+  // picks up the dispatcher's MC_EMIT_SHELL_DIRECTIVES env var via its
+  // built-in default. parseDirectiveFlag is still useful in case
+  // someone calls run() directly with the flag in argv (tests).
   const emitted = emitCd(entry.worktree_path, {
-    enabled: emitDirectives,
+    enabled: emitDirectives || undefined, // fall through to env-var default when false
     tipIfDisabled: false, // tip handled below so it's visible on stdout for tests
   });
   if (!emitted) {

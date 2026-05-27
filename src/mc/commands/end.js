@@ -129,7 +129,7 @@ export async function run(rawArgv) {
   );
   if (insideTarget) {
     // Emit the path-as-the-user-knows-it, not git's realpath'd form.
-    emitCd(unprivateMac(primary), { enabled: emitDirectives });
+    emitCd(unprivateMac(primary), { enabled: emitDirectives || undefined });
   }
 
   const results = [];

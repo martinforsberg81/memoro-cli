@@ -88,7 +88,20 @@ const LIFECYCLE = {
 };
 
 async function main() {
-  const argv = process.argv.slice(2);
+  // The shell wrapper installed by `mc install-shell` appends
+  // --emit-shell-directives to every invocation. Strip it once at
+  // the dispatcher so individual commands don't need to know about
+  // it; expose the enabled state via MC_EMIT_SHELL_DIRECTIVES env so
+  // shell-directives.emitCd can pick it up by default.
+  const rawArgv = process.argv.slice(2);
+  const stripped = [];
+  let directivesEnabled = false;
+  for (const a of rawArgv) {
+    if (a === '--emit-shell-directives') { directivesEnabled = true; continue; }
+    stripped.push(a);
+  }
+  if (directivesEnabled) process.env.MC_EMIT_SHELL_DIRECTIVES = '1';
+  const argv = stripped;
 
   if (argv[0] === '--help' || argv[0] === '-h' || argv[0] === 'help') {
     printHelp();

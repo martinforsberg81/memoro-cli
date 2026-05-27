@@ -94,7 +94,7 @@ export async function run(rawArgv) {
     safety_verdict: 'SAFE_TO_END',
   });
 
-  emitCd(wt, { enabled: emitDirectives });
+  emitCd(wt, { enabled: emitDirectives || undefined });
 
   if (opts.json) {
     console.log(JSON.stringify({
