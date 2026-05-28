@@ -187,6 +187,8 @@ USAGE
   mc gc --reap-orphans [--min-age D] SIGTERM orphan heartbeat daemons (§9j)
   mc install-shell                   Install the zsh/bash wrapper
   mc auth status [--json]            Single-screen health check (§11a)
+  mc auth memoro [--logout|--status] Log in / out of Memoro (§11c)
+  mc auth <claude|codex|gemini>      Re-check that tool's status + hint
 
   mc sessions list                   List your active coding sessions
   mc sessions send <label|id> <msg>  Dispatch a message into another session

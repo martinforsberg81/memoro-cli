@@ -1,21 +1,27 @@
 /**
- * `mc auth status [--json]` (§11a).
+ * `mc auth [status | memoro | claude | codex | gemini]` (§11a + §11c).
  *
- * Single-screen health check: is mc ready to use on this machine?
- * Composes four probes:
- *   1. Memoro keychain — token present? (no network call in the hot path)
+ * `status` is the single-screen health check (§11a):
+ *   1. Memoro keychain — token present?
  *   2. LLM tools — per-adapter getStatus() (Claude deep, Codex shallow,
  *      Gemini surfaced as planned)
  *   3. Shell wrapper — managed block present in zshrc/bashrc?
- *   4. Workspace — MC_HOME exists? registry has entries?
+ *   4. Workspace — MC_HOME + registry + orphan-daemon counts
+ *
+ * Per-target helpers (§11c):
+ *   - `mc auth memoro`               — alias for `memoro-cli login`
+ *   - `mc auth memoro --logout`      — alias for `memoro-cli logout`
+ *   - `mc auth memoro --status`      — print just the Memoro section
+ *   - `mc auth <tool> [--status]`    — re-run that tool's probe + fix hint
  *
  * `mc auth` (no sub) defaults to `mc auth status` so the muscle-memory
- * `mc auth` works without ceremony. Other subcommands (`memoro`, `<tool>`)
- * are added in §11c.
+ * `mc auth` works without ceremony.
  */
 import { existsSync, readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { getSecret } from '../../lib/keychain.js';
 import { ACCOUNTS } from '../../commands/auth.js';
@@ -23,6 +29,16 @@ import * as claudeCode from '../../adapters/claude-code.js';
 import * as codex from '../../adapters/codex.js';
 import { readRegistry } from '../registry.js';
 import { mcHome, mcHomeExists } from '../paths.js';
+import { scanDaemons } from '../orphan-daemons.js';
+
+const TOOL_ADAPTERS = {
+  claude: { adapter: claudeCode, label: 'claude' },
+  codex:  { adapter: codex,      label: 'codex'  },
+};
+// Gemini is surfaced as a planned row in `status`; per-target `mc auth
+// gemini` reaches into the same stub probe so the user gets a consistent
+// answer regardless of which entry point they hit.
+const PLANNED_TOOLS = new Set(['gemini']);
 
 const SHELL_WRAPPER_MARK = '# >>> memoro mc shell wrapper >>>';
 
@@ -30,8 +46,133 @@ export async function run(argv) {
   const sub = argv[0];
   const rest = argv.slice(1);
   if (!sub || sub === 'status') return runStatus(rest);
+  if (sub === 'memoro')                          return runAuthMemoro(rest);
+  if (Object.prototype.hasOwnProperty.call(TOOL_ADAPTERS, sub)) return runAuthTool(sub, rest);
+  if (PLANNED_TOOLS.has(sub))                    return runAuthTool(sub, rest);
   console.error(`mc: unknown auth subcommand "${sub}". Try \`mc auth status\`.`);
   return 2;
+}
+
+// ─────────────────────────────────────────────────────────────
+// `mc auth memoro [--logout|--status] [--json]`
+// ─────────────────────────────────────────────────────────────
+
+async function runAuthMemoro(argv) {
+  const opts = parseMemoroArgs(argv);
+  if (opts.error) { console.error(`mc: ${opts.error}`); return 2; }
+
+  if (opts.status) {
+    const memoro = await probeMemoro();
+    if (opts.json) {
+      console.log(JSON.stringify({ memoro }, null, 2));
+    } else {
+      printMemoroSection(memoro);
+    }
+    return memoro.authenticated ? 0 : 1;
+  }
+
+  // Thin alias: shell out to `memoro-cli {login,logout} <passthrough>`
+  // so we don't duplicate the token-routing logic that lives in
+  // commands/auth.js (token via flag/env/stdin/prompt). Spawning via
+  // node + bin.js avoids depending on memoro-cli being on PATH.
+  // Unknown flags + positional args are forwarded verbatim — that's
+  // what "alias" means.
+  const action = opts.logout ? 'logout' : 'login';
+  const memoroBin = resolveMemoroBin();
+  const r = spawnSync(process.execPath, [memoroBin, action, ...opts.passthrough], {
+    stdio: 'inherit',
+  });
+  return r.status ?? 1;
+}
+
+function printMemoroSection(memoro) {
+  const mark = memoro.authenticated ? '✓' : '✗';
+  process.stdout.write(`Memoro account:\n`);
+  process.stdout.write(`  ${mark} ${memoro.authenticated ? 'token stored in keychain' : 'no token'}\n`);
+  if (memoro.hint) process.stdout.write(`    → ${memoro.hint}\n`);
+}
+
+export function resolveMemoroBin() {
+  // src/mc/commands/auth.js → ../../bin.js
+  const here = dirname(fileURLToPath(import.meta.url));
+  return join(here, '..', '..', 'bin.js');
+}
+
+export function parseMemoroArgs(argv) {
+  const opts = { status: false, logout: false, json: false, passthrough: [] };
+  for (const a of argv) {
+    if (a === '--status') { opts.status = true; continue; }
+    if (a === '--logout') { opts.logout = true; continue; }
+    if (a === '--json')   { opts.json = true; continue; }
+    // Everything else (including --token / MEMORO_TOKEN-equivalents)
+    // forwards verbatim to memoro-cli login/logout. Thin alias.
+    opts.passthrough.push(a);
+  }
+  if (opts.logout && opts.status) return { error: '--logout and --status are mutually exclusive' };
+  return opts;
+}
+
+// ─────────────────────────────────────────────────────────────
+// `mc auth <tool> [--status] [--json]`
+// ─────────────────────────────────────────────────────────────
+
+async function runAuthTool(tool, argv) {
+  const opts = parseToolArgs(argv);
+  if (opts.error) { console.error(`mc: ${opts.error}`); return 2; }
+
+  const status = await getToolStatus(tool);
+  if (opts.json) {
+    console.log(JSON.stringify({ tool, ...status }, null, 2));
+    return toolExitCode(status);
+  }
+
+  printToolSection(tool, status);
+  return toolExitCode(status);
+}
+
+function toolExitCode(status) {
+  if (!status.installed) return 1;
+  if (status.authenticated === false) return 1;
+  return 0;
+}
+
+async function getToolStatus(tool) {
+  if (Object.prototype.hasOwnProperty.call(TOOL_ADAPTERS, tool)) {
+    return safeStatus(TOOL_ADAPTERS[tool].adapter);
+  }
+  if (tool === 'gemini') return plannedGeminiStatus();
+  return {
+    installed: false, version: null, authenticated: null,
+    hint: `Unknown tool "${tool}"`, detailLines: [],
+  };
+}
+
+function printToolSection(tool, status) {
+  const label = TOOL_ADAPTERS[tool]?.label || tool;
+  const bits = [];
+  bits.push(status.installed ? (status.version || 'installed') : 'not installed');
+  if (status.installed) {
+    if (status.authenticated === true)  bits.push('authenticated');
+    else if (status.authenticated === false) bits.push('NOT authenticated');
+    else bits.push('auth: unknown');
+  }
+  if (PLANNED_TOOLS.has(tool)) bits.push('(planned)');
+  const mark = status.installed && status.authenticated !== false ? '✓' : (status.installed ? '·' : '✗');
+  process.stdout.write(`${mark} ${label.padEnd(10)}${bits.join(' · ')}\n`);
+  if (status.hint) process.stdout.write(`    → ${status.hint}\n`);
+  for (const detail of status.detailLines || []) {
+    process.stdout.write(`    ${detail}\n`);
+  }
+}
+
+function parseToolArgs(argv) {
+  const opts = { status: false, json: false };
+  for (const a of argv) {
+    if (a === '--status') { opts.status = true; continue; }
+    if (a === '--json')   { opts.json = true; continue; }
+    return { error: `unknown flag: ${a}` };
+  }
+  return opts;
 }
 
 async function runStatus(argv) {
@@ -192,14 +333,19 @@ function probeWorkspace() {
   const exists = mcHomeExists();
   let sessionCount = 0;
   try { sessionCount = readRegistry().entries.length; } catch { /* empty */ }
-  // Orphan/stale counts are surfaced once the §9j helper lands (PR #32).
-  // Until then auth status omits the workspace warning row.
+  let orphanCount = 0;
+  let staleCount = 0;
+  try {
+    const scan = scanDaemons();
+    orphanCount = scan.orphan.length;
+    staleCount = scan.stale.length;
+  } catch { /* best effort */ }
   return {
     mc_home: home,
     mc_home_exists: exists,
     session_count: sessionCount,
-    orphan_daemon_count: 0,
-    stale_pidfile_count: 0,
+    orphan_daemon_count: orphanCount,
+    stale_pidfile_count: staleCount,
   };
 }
 

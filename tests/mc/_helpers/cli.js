@@ -40,11 +40,26 @@ function safePathForTests() {
   return '/usr/bin:/bin:/usr/sbin:/sbin';
 }
 
+/**
+ * Strip mc-relevant env vars that leak from a parent shell that is itself
+ * running under `mc`. Without this scrub, tests inherit
+ * MC_EMIT_SHELL_DIRECTIVES=1 (or MEMORO_MC_PARENT=1) and behave as if
+ * the user opted into wrapper mode — which silently flips the expected
+ * stdout/fd3 routing of commands under test.
+ */
+function scrubMcEnv(env) {
+  const out = { ...env };
+  for (const k of ['MC_EMIT_SHELL_DIRECTIVES', 'MEMORO_MC_PARENT', 'MC_ORPHAN_PID_DIR']) {
+    delete out[k];
+  }
+  return out;
+}
+
 export function runMc(args, { cwd, env = {}, timeoutMs = 10_000 } = {}) {
   const res = spawnSync(process.execPath, [CLI_PATH, ...args], {
     cwd: cwd ?? process.cwd(),
     env: {
-      ...process.env,
+      ...scrubMcEnv(process.env),
       // Belt-and-braces: tests must never hit the real API or keychain.
       MC_TEST_MODE: '1',
       MEMORO_API_URL: 'http://127.0.0.1:1',
@@ -71,7 +86,7 @@ export function runMcCaptureFd3(args, { cwd, env = {}, timeoutMs = 10_000 } = {}
     const child = spawn(process.execPath, [CLI_PATH, ...args], {
       cwd: cwd ?? process.cwd(),
       env: {
-        ...process.env,
+        ...scrubMcEnv(process.env),
         MC_TEST_MODE: '1',
         MEMORO_API_URL: 'http://127.0.0.1:1',
         PATH: safePathForTests(),
@@ -91,7 +106,10 @@ export function runMcCaptureFd3(args, { cwd, env = {}, timeoutMs = 10_000 } = {}
     }, timeoutMs);
 
     child.on('error', (err) => { clearTimeout(t); reject(err); });
-    child.on('exit', (code) => {
+    // `close` (not `exit`) fires after stdio streams have flushed — using
+    // `exit` lost the "tip" the cd command writes to stdout because the
+    // write buffer hadn't drained yet when the child terminated.
+    child.on('close', (code) => {
       clearTimeout(t);
       resolve({ status: code, stdout, stderr, fd3 });
     });
