@@ -1232,7 +1232,22 @@ A separate `docs/onboarding.md` covers the long story (per-tool
 install commands, Memoro account creation, shell-wrapper quirks per
 zsh/bash/fish, machine identity for multi-machine users).
 
-#### 11f. Open onboarding-specific questions
+#### 11f. Decided
+
+- **`mc setup` does not auto-install Claude Code.** Surprise
+  npm-installs from a verb named "setup" are hostile — users expect
+  setup to *configure*, not to mutate global packages. Setup prints
+  the exact install command (`npm install -g
+  @anthropic-ai/claude-code`) and leaves the run to the human. Same
+  policy for Codex / Gemini. (Decided 2026-05-28 with drev 2.)
+
+- **`mc setup` is non-interactive.** No prompts, no `--non-interactive`
+  flag (that would be redundant). The verb is: read auth status,
+  print only the missing steps with exact commands, write the
+  `${MC_HOME}/.setup-done-v1` sentinel when everything is green.
+  Idempotent + self-verifying. (Decided 2026-05-28 with drev 2.)
+
+#### 11g. Open onboarding-specific questions
 
 - **Token format and rotation.** Memoro tokens currently live in
   keychain under `ACCOUNTS.TOKEN`. Multi-machine users today log in
