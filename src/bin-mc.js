@@ -87,6 +87,7 @@ const LIFECYCLE = {
   'install-shell': () => import('./mc/commands/install-shell.js'),
   auth:          () => import('./mc/commands/auth.js'),
   setup:         () => import('./mc/commands/setup.js'),
+  reconcile:     () => import('./mc/commands/reconcile.js'),
 };
 
 async function main() {
@@ -186,6 +187,7 @@ USAGE
   mc cd <name>                       cd into worktree (needs install-shell)
   mc gc [--dry-run]                  Reap dead + merged + clean worktrees
   mc gc --reap-orphans [--min-age D] SIGTERM orphan heartbeat daemons (§9j)
+  mc reconcile [--apply --only-safe] Detect shipped-elsewhere sessions (§9e)
   mc install-shell                   Install the zsh/bash wrapper
   mc setup [--json]                  Self-verifying setup checklist (§11b)
   mc auth status [--json]            Single-screen health check (§11a)

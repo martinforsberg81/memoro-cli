@@ -7,6 +7,18 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- `mc reconcile [--apply --only-safe] [--json]` (§9e). Detects
+  sessions whose work has already shipped elsewhere and groups them
+  by suggested action: `safe_to_end` (squash-phantoms — deterministic
+  via cherry + content-diff), `branch_merged_recently` (gh PR head
+  match within 7 days), `verify_and_end` (transcript-mention PRs that
+  merged in 7 days, found by scanning the last ≤200 KB of the
+  session's Claude transcript). `--apply --only-safe` acts ONLY on
+  the squash-phantom bucket — the cron-safe acceptance bar
+  ("can I run this on a cron and never lose work?"). `gh` calls go
+  through an injectable portal so missing/expired auth soft-degrades
+  to empty buckets instead of crashing. File-overlap heuristic
+  category deferred to v2 (§11f.5).
 - `mc setup` — non-interactive self-verifying onboarding checklist
   (§11b). Runs every probe `mc auth status` exposes and prints only
   the missing steps with exact runnable commands. Writes
