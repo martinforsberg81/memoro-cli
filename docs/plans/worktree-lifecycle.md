@@ -1058,6 +1058,84 @@ mc surfaces this proactively:
   with the orchestration card pinned as a separate "overview"
   tab.
 
+#### 10i.1. Relationship with the host TUI's agent rendering
+
+Claude Code (and similar TUIs) already render parallel-agent
+lifecycles natively when the model invokes their `Agent` tool —
+folded status lines per agent, live progress, expand-on-click.
+Example from a Claude Code session:
+
+```
+2 agents finished (ctrl+o to expand)
+   ├ Architecture grounding review · 81 tool uses · 76.2k tokens
+   └ Operational risk + rollout review · 6 tool uses · 35.7k tokens
+```
+
+That rendering is **owned by the host TUI**, not by mc. mc cannot
+modify it, inject elements into it, or reach across the boundary.
+It can only choose whether to compete with it or piggyback.
+
+Three scenarios with three different surfaces:
+
+**A. `mc spawn` invoked from inside a host TUI session.** Three
+implementation options, ranked by ergonomic match:
+
+1. **Piggyback via the host's Agent tool.** The parent model
+   invokes `Agent`, gets native fold-summary + expand. *But*
+   blocked today because no TUI exposes its Agent tool to
+   external CLIs — `mc spawn` from a Bash invocation can't
+   trigger Claude Code's Agent rendering. Possibly addressed by
+   future TUI APIs; not a v1 dependency.
+2. **mc's own rendering, side-channel.** mc writes its own live
+   status to a known location (top-of-pane via ANSI escape, or
+   a bottom status line, or a separate terminal pane via
+   `tmux`/`screen` split). Owns full control of cost/budget/
+   model-chain display the host TUI doesn't know about. Doesn't
+   compete visually with the host's chat area.
+3. **Hybrid.** When invoked from a host TUI we can detect (env
+   var sniff or PTY check), prefer option 2 but match the
+   host's visual language so the two surfaces feel coherent.
+   When invoked outside a host TUI, go full-screen (§10i CLI).
+
+Default for v1: option 2 with a copy of Claude Code's visual
+grammar (`└─`, `▶`, `✓`, monospace progress lines). Detect host
+TUI via `process.env.CLAUDE_CODE_SESSION` (or whatever the host
+exposes) and adjust placement only.
+
+**B. `mc fanout` from a plain terminal (no host TUI).** mc owns
+the entire display. Render per §10i's CLI section — `mc list
+--tree` is the canonical format. Live updates via ANSI
+overwrite.
+
+**C. Memoro browser-terminal (§8) or chat status-cards
+(`chat-coordinator-coding.md`).** mc emits push events to the
+Memoro session DO; the browser / chat renders. xterm.js for
+PTY streams, React-style status cards for the orchestration
+tree. We own the entire stack here.
+
+Design principle: **never ship a half-rendering of the host
+TUI's territory.** If we can't render as well as the host
+inside its window, we render *adjacent* (status line, separate
+pane) and let the host own its area. The worst outcome is a
+mediocre mc UI competing with a polished host UI in the same
+visual space.
+
+**Detection mechanics** (for §10 implementation):
+
+- `process.env.CLAUDE_CODE_SESSION` (or equivalent) → host TUI
+  present → use side-channel placement
+- `process.stdout.isTTY === false` → script / pipe → emit
+  machine-readable status (`--json`-equivalent stdout) and skip
+  ANSI altogether
+- `process.env.MEMORO_CHAT_SESSION` (future) → emit push events
+  to the DO instead of rendering locally
+- Otherwise → full-screen mc-owned terminal rendering
+
+**Tests should cover all four detection branches** so
+detection changes don't silently degrade one surface while
+fixing another. The CI matrix is small (env-var permutations)
+but valuable.
+
 #### 10j. Phasing
 
 1. **MVP** — `mc fanout` over a flat plan (no hierarchy yet),
