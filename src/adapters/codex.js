@@ -12,6 +12,7 @@
 
 import { readFile, writeFile, mkdir, chmod, rm } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { upsertManagedBlock, removeManagedBlock } from '../lib/managed-block.js';
@@ -94,6 +95,61 @@ export async function uninstallCommands() { return []; }
 
 export function detect() {
   return existsSync(join(homedir(), '.codex'));
+}
+
+// ─────────────────────────────────────────────────────────────
+// `mc auth status` adapter contract (§11a)
+//
+// Codex ships a `--version` flag but no documented headless auth probe;
+// `codex /status` is interactive. So this is the shallow form of the
+// contract — installed + version only, with a user-friendly hint
+// pointing at the right next action. Deep auth probe is tracked in
+// §11f for v2.
+// ─────────────────────────────────────────────────────────────
+
+export const TOOL_NAME = 'codex';
+export const STATUS_TIMEOUT_MS = 500;
+
+const CODEX_BIN = 'codex';
+
+function defaultWhich(bin) {
+  const r = spawnSync('which', [bin], { encoding: 'utf8' });
+  if (r.status !== 0) return null;
+  return (r.stdout || '').trim() || null;
+}
+
+function defaultVersionProbe(binPath, timeoutMs) {
+  const r = spawnSync(binPath, ['--version'], { encoding: 'utf8', timeout: timeoutMs });
+  if (r.status !== 0) return null;
+  const out = (r.stdout || '').trim();
+  const m = out.match(/\b(\d+\.\d+\.\d+)/);
+  return m ? m[1] : (out || null);
+}
+
+export async function getStatus({
+  binPath,
+  timeoutMs = STATUS_TIMEOUT_MS,
+  which = defaultWhich,
+  versionProbe = defaultVersionProbe,
+} = {}) {
+  const resolvedPath = binPath || which(CODEX_BIN);
+  if (!resolvedPath) {
+    return {
+      installed: false,
+      version: null,
+      authenticated: null,
+      hint: 'Install Codex CLI from openai/codex, then run `codex /status` to verify auth',
+      detailLines: [],
+    };
+  }
+  const version = await Promise.resolve(versionProbe(resolvedPath, timeoutMs));
+  return {
+    installed: true,
+    version,
+    authenticated: null,
+    hint: 'Run `codex /status` to verify auth, or open codex',
+    detailLines: [`bin: ${resolvedPath}`],
+  };
 }
 
 function shellQuote(value) {

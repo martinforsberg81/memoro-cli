@@ -85,6 +85,7 @@ const LIFECYCLE = {
   dispatch:      () => import('./mc/commands/dispatch.js'),
   read:          () => import('./mc/commands/read.js'),
   'install-shell': () => import('./mc/commands/install-shell.js'),
+  auth:          () => import('./mc/commands/auth.js'),
 };
 
 async function main() {
@@ -185,6 +186,7 @@ USAGE
   mc gc [--dry-run]                  Reap dead + merged + clean worktrees
   mc gc --reap-orphans [--min-age D] SIGTERM orphan heartbeat daemons (§9j)
   mc install-shell                   Install the zsh/bash wrapper
+  mc auth status [--json]            Single-screen health check (§11a)
 
   mc sessions list                   List your active coding sessions
   mc sessions send <label|id> <msg>  Dispatch a message into another session
