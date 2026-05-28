@@ -11,6 +11,7 @@
 
 import { readFile, writeFile, mkdir, chmod, readdir, unlink } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { upsertManagedBlock, removeManagedBlock } from '../lib/managed-block.js';
@@ -226,6 +227,83 @@ export async function uninstallCommands() {
  */
 export function detect() {
   return existsSync(claudeDir());
+}
+
+// ─────────────────────────────────────────────────────────────
+// `mc auth status` adapter contract (§11a)
+//
+// Every adapter that wants to appear in `mc auth status` exports:
+//   - TOOL_NAME       — short label for the row
+//   - STATUS_TIMEOUT_MS — bound on the probe wall-clock
+//   - getStatus(opts?) → { installed, version, authenticated, hint,
+//                          detailLines }
+//
+// `authenticated: null` means "can't verify without launching the TUI".
+// In that case `hint` must be non-null and user-facing — "Run `claude
+// /status` to verify" beats "auth probe not implemented".
+// ─────────────────────────────────────────────────────────────
+
+export const TOOL_NAME = 'claude';
+export const STATUS_TIMEOUT_MS = 500;
+
+const CLAUDE_BIN = 'claude';
+const CREDENTIALS_FILE = () => join(claudeDir(), '.credentials.json');
+
+function defaultWhich(bin) {
+  const r = spawnSync('which', [bin], { encoding: 'utf8' });
+  if (r.status !== 0) return null;
+  return (r.stdout || '').trim() || null;
+}
+
+function defaultVersionProbe(binPath, timeoutMs) {
+  const r = spawnSync(binPath, ['--version'], {
+    encoding: 'utf8',
+    timeout: timeoutMs,
+  });
+  if (r.status !== 0) return null;
+  const out = (r.stdout || '').trim();
+  // claude --version emits "2.1.152 (Claude Code)"
+  const m = out.match(/\b(\d+\.\d+\.\d+)/);
+  return m ? m[1] : (out || null);
+}
+
+function defaultCredentialsExist() {
+  // Existence-only probe — never reads the credentials body.
+  return existsSync(CREDENTIALS_FILE());
+}
+
+/**
+ * Deep probe: PATH lookup + --version + credentials-file existence.
+ * Existence of `~/.claude/.credentials.json` is the most reliable signal
+ * we can read without launching the TUI; reading its body is both
+ * unnecessary and blocked by the user's security hook.
+ */
+export async function getStatus({
+  binPath,
+  timeoutMs = STATUS_TIMEOUT_MS,
+  which = defaultWhich,
+  versionProbe = defaultVersionProbe,
+  credentialsExist = defaultCredentialsExist,
+} = {}) {
+  const resolvedPath = binPath || which(CLAUDE_BIN);
+  if (!resolvedPath) {
+    return {
+      installed: false,
+      version: null,
+      authenticated: null,
+      hint: 'Install with: npm install -g @anthropic-ai/claude-code',
+      detailLines: [],
+    };
+  }
+  const version = await Promise.resolve(versionProbe(resolvedPath, timeoutMs));
+  const authed = credentialsExist();
+  return {
+    installed: true,
+    version,
+    authenticated: authed,
+    hint: authed ? null : 'Run `claude` and complete the sign-in flow',
+    detailLines: [`bin: ${resolvedPath}`],
+  };
 }
 
 // ─────────────────────────────────────────────────────────────
