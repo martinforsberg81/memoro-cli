@@ -1247,6 +1247,16 @@ zsh/bash/fish, machine identity for multi-machine users).
   `${MC_HOME}/.setup-done-v1` sentinel when everything is green.
   Idempotent + self-verifying. (Decided 2026-05-28 with drev 2.)
 
+#### 11f.5. Deferred from drev 2
+
+- **`mc reconcile` category 3 — file-overlap heuristic.** The plan §9e
+  third category ("sessions whose dirty files match files modified by
+  a recently-merged PR") is deferred. It would need a stable
+  dirty-file capture per session plus a PR-file-diff fetcher; both
+  are doable but the false-positive cost is real. Drev 2 ships
+  categories 1 + 2 only — squash-phantoms and PR look-ups by branch
+  match + transcript mention. Revisit in v2.
+
 #### 11g. Open onboarding-specific questions
 
 - **Token format and rotation.** Memoro tokens currently live in
