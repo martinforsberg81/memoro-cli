@@ -3,6 +3,7 @@
  *   --awaiting   --idle [--since 6h]   --safe-to-end   --has-unmerged   --active
  */
 import { readRegistry } from '../registry.js';
+import { scanDaemons } from '../orphan-daemons.js';
 
 const DEFAULT_IDLE_CUTOFF_MIN = 6 * 60;
 const ACTIVE_CUTOFF_MIN = 5;
@@ -13,6 +14,8 @@ export async function run(argv) {
     console.error(`mc: ${opts.error}`);
     return 2;
   }
+
+  if (opts.orphans) return runOrphans(opts);
 
   const reg = readRegistry();
   let entries = reg.entries.slice();
@@ -70,6 +73,49 @@ export async function run(argv) {
     process.stdout.write(parts.join('  ') + '\n');
   }
   if (projected.length === 0) process.stdout.write('(no sessions)\n');
+
+  // §9j: footer-level annotation for orphan daemons. Scan is best-effort;
+  // a missing pid dir or unreadable file silently yields zero.
+  try {
+    const scan = scanDaemons();
+    const orphanCount = scan.orphan.length;
+    const staleCount = scan.stale.length;
+    if (orphanCount > 0 || staleCount > 0) {
+      const bits = [];
+      if (orphanCount > 0) bits.push(`${orphanCount} orphan-daemon${orphanCount === 1 ? '' : 's'}`);
+      if (staleCount > 0) bits.push(`${staleCount} stale pidfile${staleCount === 1 ? '' : 's'}`);
+      process.stdout.write(`\n⚠  ${bits.join(', ')} — run \`mc gc --reap-orphans\` to clean up\n`);
+    }
+  } catch { /* best effort */ }
+  return 0;
+}
+
+function runOrphans(opts) {
+  const scan = scanDaemons();
+  if (opts.json) {
+    console.log(JSON.stringify({
+      orphan: scan.orphan.map((e) => ({
+        pid_file: e.pidFile, llm_session_id: e.llmSessionId,
+        pid: e.pid, ppid: e.ppid, age_ms: e.ageMs,
+      })),
+      stale: scan.stale.map((e) => ({
+        pid_file: e.pidFile, llm_session_id: e.llmSessionId,
+        pid: e.pid, reason: e.reason,
+      })),
+    }, null, 2));
+    return 0;
+  }
+  if (scan.orphan.length === 0 && scan.stale.length === 0) {
+    process.stdout.write('(no orphan daemons)\n');
+    return 0;
+  }
+  for (const e of scan.orphan) {
+    const ageMin = Math.floor(e.ageMs / 60_000);
+    process.stdout.write(`orphan  pid=${e.pid}  age=${ageMin}m  ${e.llmSessionId}\n`);
+  }
+  for (const e of scan.stale) {
+    process.stdout.write(`stale   ${e.reason}  ${e.llmSessionId}\n`);
+  }
   return 0;
 }
 
@@ -123,6 +169,7 @@ function parseArgs(argv) {
     all: false, rich: false, json: false, names: false,
     awaiting: false, idle: false, since: null,
     safeToEnd: false, hasUnmerged: false, active: false,
+    orphans: false,
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -137,6 +184,7 @@ function parseArgs(argv) {
       case '--safe-to-end': opts.safeToEnd = true; break;
       case '--has-unmerged': opts.hasUnmerged = true; break;
       case '--active': opts.active = true; break;
+      case '--orphans': opts.orphans = true; break;
       default:
         if (a.startsWith('--')) return { error: `unknown flag: ${a}` };
         return { error: `unexpected positional arg: ${a}` };

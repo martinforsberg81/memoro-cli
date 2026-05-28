@@ -176,12 +176,14 @@ USAGE
 
   mc new <name>                      Create worktree + branch + launch tool
   mc list [--rich|--awaiting|...]    Show sessions (filters per §9d)
+  mc list --orphans                  List orphan heartbeat daemons (§9j)
   mc status <name>                   Per-session derived status (§9a)
   mc resume <name>                   cd into worktree + relaunch tool
   mc end <name> [<name>...]          End worktrees (bulk + --dry-run supported)
   mc rename <old> <new>              Rename branch + dir + registry entry
   mc cd <name>                       cd into worktree (needs install-shell)
   mc gc [--dry-run]                  Reap dead + merged + clean worktrees
+  mc gc --reap-orphans [--min-age D] SIGTERM orphan heartbeat daemons (§9j)
   mc install-shell                   Install the zsh/bash wrapper
 
   mc sessions list                   List your active coding sessions
