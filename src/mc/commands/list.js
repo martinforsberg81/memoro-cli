@@ -4,6 +4,7 @@
  */
 import { readRegistry } from '../registry.js';
 import { scanDaemons } from '../orphan-daemons.js';
+import { checkAndPrintFreshInstall } from '../first-run.js';
 
 const DEFAULT_IDLE_CUTOFF_MIN = 6 * 60;
 const ACTIVE_CUTOFF_MIN = 5;
@@ -16,6 +17,12 @@ export async function run(argv) {
   }
 
   if (opts.orphans) return runOrphans(opts);
+
+  // §11d: friendly first-run hint to stderr. Doesn't short-circuit —
+  // `mc list` on an empty registry is a valid call ("(no sessions)")
+  // and the hint just nudges the user toward setup. JSON / --names
+  // callers stay machine-parseable because the hint goes to stderr.
+  await checkAndPrintFreshInstall();
 
   const reg = readRegistry();
   let entries = reg.entries.slice();

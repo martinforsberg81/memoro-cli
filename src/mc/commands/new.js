@@ -17,6 +17,7 @@ import { findEntry, upsertEntry } from '../registry.js';
 import { worktreePath, mcHome } from '../paths.js';
 import { git, isInsideRepo, primaryWorktree, branchExists } from '../git.js';
 import { emitCd, parseDirectiveFlag } from '../shell-directives.js';
+import { checkAndPrintFreshInstall, ensureSentinel } from '../first-run.js';
 
 const NAME_RE = /^[a-z0-9][a-z0-9_-]*$/i;
 
@@ -37,6 +38,14 @@ export async function run(rawArgv) {
   if (!NAME_RE.test(opts.name)) {
     console.error(`mc: invalid name "${opts.name}" — must match ${NAME_RE}`);
     return 2;
+  }
+
+  // §11d: friendly first-run hint when both sentinel AND keychain
+  // token miss. Runs after arg validation so `mc new --json` and
+  // `--help` semantics aren't changed for fresh installs in a
+  // way that would surprise scripts.
+  if (await checkAndPrintFreshInstall()) {
+    return 1;
   }
 
   const cwd = process.cwd();
@@ -96,6 +105,13 @@ export async function run(rawArgv) {
   });
 
   emitCd(wt, { enabled: emitDirectives || undefined });
+
+  // §11d: on a successful `mc new`, ensure the sentinel exists. For
+  // migrants (token in keychain from `memoro-cli login` before mc
+  // setup existed) this is the silent upgrade path — next call to
+  // any first-run-aware command skips the hint without ever having
+  // shown one.
+  ensureSentinel();
 
   if (opts.json) {
     console.log(JSON.stringify({
