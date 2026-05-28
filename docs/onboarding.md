@@ -1,0 +1,118 @@
+# Onboarding `mc`
+
+The README's [Quick start](../README.md#quick-start) covers the
+two-command path: `npm install -g memoro-cli` then `mc setup`. This
+file is the longer story — useful when something doesn't line up,
+when you're moving to a second machine, or when you want to know
+exactly which tools mc will try to integrate with.
+
+## The setup flow in one paragraph
+
+`mc setup` runs every probe `mc auth status` exposes (Memoro keychain,
+LLM tools, shell wrapper, workspace) and prints a numbered checklist
+of *only* the missing steps. Each step is a real `mc` verb you can
+paste — `mc auth memoro`, `mc auth claude`, `mc install-shell`, or
+the canonical `npm install -g …` line for a tool you don't have. When
+everything passes, it writes `${MC_HOME}/.setup-done-v1` and exits 0.
+Re-run it any time; it's idempotent.
+
+## Why install commands are not duplicated here
+
+mc adapters own their install hints (`getStatus()` returns a
+`"Install with: …"` string for tools that aren't on PATH). Setup and
+`mc auth status` print that string verbatim. This document
+deliberately doesn't repeat install commands — drift between docs and
+adapters is the bug pattern we're avoiding. To see the exact command
+for any tool on your machine, run:
+
+```sh
+mc setup
+```
+
+…or for one tool's row:
+
+```sh
+mc auth claude     # or codex / gemini
+```
+
+## What `mc setup` checks, step by step
+
+1. **Memoro token in the OS keychain.** Stored by `mc auth memoro`
+   (which is a thin alias for `memoro-cli login`). The token check is
+   existence-only; `mc setup` does no network round-trip in the hot
+   path. Create a token at <https://meetmemoro.app/app/settings> →
+   **API tokens**. Pick **Full access** for the default flow, or
+   split into `sessions.write` + `lens.read` if you want a narrower
+   blast radius.
+
+2. **At least one LLM tool installed and authenticated.** Currently
+   that means Claude Code; Codex is supported but optional. The probe
+   is `which <bin>` plus `<bin> --version`. For Claude Code the
+   auth check is existence of the credentials file in the Claude
+   config dir — `mc` never reads its contents. If you're missing
+   the tool, the checklist prints the exact npm command and asks
+   you to run it before re-running `mc setup`.
+
+3. **The shell wrapper.** Installed by `mc install-shell` into your
+   `~/.zshrc` or `~/.bashrc` inside a managed block. Without it,
+   `mc cd <name>` can't change your shell's cwd — the wrapper
+   captures fd 3 from the CLI and `eval`s it. Fish is not currently
+   supported by `install-shell` (it's tracked in plan §11f); fish
+   users can paste the equivalent function manually.
+
+When all three pass, `mc setup` writes the `${MC_HOME}/.setup-done-v1`
+sentinel so the friendly first-run hint in `mc new` / `mc list`
+silences itself for that machine.
+
+## Migrating from `memoro-cli login`
+
+If you already ran `memoro-cli login` before `mc setup` existed, you
+have a token but no sentinel. The first-run hint won't fire (the
+trigger is **both** signals missing — see [§11d](./plans/worktree-lifecycle.md#11d-first-run-friendliness-in-existing-commands)),
+and the first successful `mc new` writes the sentinel silently. No
+action required.
+
+## Multi-machine
+
+`mc auth memoro` is per-machine. The keychain entry doesn't
+synchronise across hosts, so on each new laptop / server / VM you'll
+run:
+
+```sh
+npm install -g memoro-cli
+mc setup
+```
+
+`mc sessions list` will then show sessions from every machine that
+has reported a heartbeat against the same Memoro account — it's the
+multi-host view; worktrees themselves stay per-machine.
+
+A "trust this machine from your phone" QR / short-code link is
+discussed in plan §11f as a deferred v2 idea. For v1, the manual
+login per machine is the path.
+
+## Shell wrapper quirks
+
+`mc install-shell` writes a function into your rc file inside a
+managed block (`# >>> memoro mc shell wrapper >>>`). The function
+runs `command mc "$@" --emit-shell-directives` and `eval`s the
+captured fd 3 — that's how `mc cd <name>` actually changes your
+shell's cwd, and how `mc end <name>` can drop you back to the
+primary worktree.
+
+- **zsh and bash** are first-class. The same template works for both;
+  the install script writes to whichever your `$SHELL` points at.
+- **fish** isn't supported by `install-shell` today (plan §11f).
+  Fish users get a clear unsupported message and can paste the
+  equivalent function manually.
+- **WSL** isn't a targeted environment today; the stack assumes a
+  POSIX shell with `node-pty` working transparently in the terminal.
+
+## Authority lives in the verbs, not in this document
+
+If anything in this file disagrees with what `mc setup` /
+`mc auth status` prints on your machine — believe the CLI. The
+checklist is generated from live probes against your actual
+installation; this document is a longer-form rationale around it.
+The plan in [`docs/plans/worktree-lifecycle.md`](./plans/worktree-lifecycle.md)
+is the authoritative design source.

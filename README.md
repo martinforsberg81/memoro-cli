@@ -17,81 +17,91 @@ The result: every coding tool you use feels like it remembers you.
 npm install -g memoro-cli
 ```
 
-Node 22 or later. macOS or Linux. The `mc` coordinator (below) uses
-`node-pty` for transparent terminal wrapping — no extra system dep
-beyond a normal `npm install`.
+Node 22 or later. macOS or Linux. The `mc` coordinator (below) uses `node-pty` for transparent terminal wrapping — no extra system dep beyond a normal `npm install`.
 
 ## Quick start
 
-1. Create a Memoro API token at <https://meetmemoro.app/app/settings> → API tokens. Pick **Full access** (or issue two narrower tokens: `sessions.write` for upload, `lens.read` for pull).
+```sh
+mc setup
+```
 
-2. Log in locally:
+`mc setup` reads every probe needed to get you running and prints a numbered checklist of *only* the missing steps — each step is a single command you can paste. Re-run it whenever; once everything is green it just confirms.
 
-   ```sh
-   memoro-cli login
-   ```
+Then a typical day:
 
-   Paste the token. It goes into your OS keychain (macOS Keychain / Linux libsecret / Windows Credential Manager) — never a plaintext file unless no keyring is available.
+```sh
+mc new my-experiment      # branch + worktree + Claude Code launches in it
+# ... work, /exit when done ...
+mc end my-experiment      # close the worktree, hand the branch back
+```
 
-3. Install hooks into your coding tool:
+See [`docs/onboarding.md`](docs/onboarding.md) for the long story — per-tool install details, multi-machine notes, and shell-wrapper specifics.
 
-   ```sh
-   memoro-cli hook install --tool claude-code
-   ```
+## `mc` — the terminal coordinator
 
-   For Codex, install the wrapper instead:
+`mc` is a Memoro-aware wrapper around your coding tool of choice. It owns a worktree per session, registers each session with Memoro so peer sessions on the same account can see and dispatch to each other, and gives you the shell ergonomics that drop the manual `git worktree` / `git branch` ceremony.
 
-   ```sh
-   memoro-cli hook install --tool codex
-   ```
+```sh
+mc setup                  # idempotent self-check; prints what's left to do
+mc auth status            # single-screen health check
+mc new <name>             # create worktree + branch + launch the tool
+mc list                   # show your sessions, filters per §9d of the plan
+mc end <name>             # close worktree, deal with the branch
+mc resume <name>          # cd back into a worktree, relaunch the tool
+mc sessions list          # active sessions across machines
+mc sessions send <id|label> "<msg>"
+```
 
-4. Start a coding session.
-   Claude Code uses native hooks.
-   Codex installs a `~/.local/bin/codex` shim plus `codex-memoro`. If `~/.local/bin` comes before the real Codex binary in your `PATH`, plain `codex ...` now pulls the lens into `AGENTS.md`, runs the real Codex binary, and uploads the finished session when Codex exits.
+Inside any wrapped Claude session, the slash command `/memoro-coordinator` opens the coordinator role — Claude shows the current snapshot of your other sessions and helps you route attention across them. `/memoro-coordinator-suggest` recommends a next step per session for the "where should I spend the next 30 minutes?" triage moment.
+
+Under the hood: `mc` runs the tool in a PTY it owns, with your terminal piped transparently to and from it. A WebSocket to Memoro delivers remote dispatches by writing into the tool's PTY stdin — they land as real user turns. No tmux, no Claude Code modifications, terminal-native scrollback works.
 
 ## Commands
+
+### `mc` — coordinator + worktree lifecycle
+
+| Command | Purpose |
+|---|---|
+| `mc setup` | Self-verifying setup checklist (§11b) |
+| `mc auth status [--json]` | Single-screen health check |
+| `mc auth memoro [--logout]` | Alias for `memoro-cli login/logout` |
+| `mc auth <claude\|codex\|gemini>` | Re-check one tool's status + fix hint |
+| `mc new <name> [--from <ref>] [--tool <id>]` | Create worktree + launch tool |
+| `mc list [--rich\|--awaiting\|--safe-to-end\|--orphans]` | List sessions with filters |
+| `mc status <name>` | Per-session derived status |
+| `mc resume <name>` | cd into worktree + relaunch tool |
+| `mc end <name> [<name>...]` | End worktrees (bulk + `--dry-run`) |
+| `mc rename <old> <new>` | Branch + dir + registry rename in one verb |
+| `mc cd <name>` | cd into worktree (needs `mc install-shell`) |
+| `mc gc [--dry-run]` | Reap dead + merged + clean worktrees |
+| `mc gc --reap-orphans` | SIGTERM orphan heartbeat daemons |
+| `mc install-shell` | Install the zsh/bash wrapper |
+| `mc sessions list` | List active sessions across machines |
+| `mc sessions send <id\|label> <msg>` | Dispatch a message into another session |
+| `mc sessions read <id\|label>` | Fetch a peer session's recent transcript |
+
+### `memoro-cli` — low-level surface
 
 | Command | Purpose |
 |---|---|
 | `memoro-cli login` | Save a Memoro API token to the OS keychain |
 | `memoro-cli logout` | Remove the stored token |
-| `memoro-cli status` | Show stored token info, last session uploaded, last lens pull |
+| `memoro-cli status` | Show token info, last session uploaded, last lens pull |
 | `memoro-cli config set <key> <value>` | Store non-secret CLI config such as `api-url` |
 | `memoro-cli session upload <transcript>` | Clean + POST a session transcript |
-| `memoro-cli lens pull [--tool <id>] [--repo <name>]` | Fetch the coding lens and write it to the tool's managed section |
-| `memoro-cli codex run [-- <codex args...>]` | Run Codex with lens pull on start and session upload on exit |
-| `memoro-cli hook install [--tool ...]` | Wire SessionStart + SessionEnd hooks into a coding tool |
+| `memoro-cli lens pull [--tool <id>] [--repo <name>]` | Fetch the coding lens |
+| `memoro-cli codex run [-- <codex args...>]` | Run Codex with lens pull on start + upload on exit |
+| `memoro-cli hook install [--tool ...]` | Wire SessionStart + SessionEnd hooks |
 | `memoro-cli hook uninstall [--tool ...]` | Remove hooks |
+
+Most users only ever see `mc setup` and `mc auth memoro` — those wrap the underlying `memoro-cli login` and `hook install` flows.
 
 ## Supported tools
 
 - Claude Code
 - Codex CLI
 
-Cursor, Windsurf, and Gemini CLI remain planned.
-
-## `mc` — the terminal coordinator
-
-`mc` is a Memoro-aware wrapper around Claude Code. It registers each
-Claude session with Memoro so peer sessions on the same account can see
-and dispatch to each other from inside any session.
-
-```sh
-mc                        # start a wrapped Claude Code session in a git repo
-mc sessions list          # show your active coding sessions across machines
-mc sessions send <id> "commit and switch to the docs PR"
-mc sessions read <id>     # fetch the recent transcript of a peer session
-```
-
-Inside any `mc` session, the slash command `/memoro-coordinator` opens the
-coordinator role — Claude shows the current snapshot of your other
-sessions and helps you route attention across them.
-
-Under the hood: `mc` runs `claude` in a PTY it owns, with the user's
-terminal piped transparently to and from it. A WebSocket to Memoro
-delivers remote dispatches by writing into Claude's PTY stdin — they
-land as real user turns. No tmux, no Claude Code modifications,
-terminal-native scrollback works.
+Cursor, Windsurf, and Gemini CLI remain planned. `mc auth status` shows a row for Gemini today as a placeholder so the layout matches what you'll see once the adapter ships.
 
 ## Security
 

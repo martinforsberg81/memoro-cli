@@ -6,6 +6,38 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- `mc setup` — non-interactive self-verifying onboarding checklist
+  (§11b). Runs every probe `mc auth status` exposes and prints only
+  the missing steps with exact runnable commands. Writes
+  `${MC_HOME}/.setup-done-v1` when everything is green.
+- `mc auth status [--json]` — single-screen health check answering
+  "is mc ready to use here?" (§11a). Adapter contract codified:
+  `TOOL_NAME`, `STATUS_TIMEOUT_MS`, `getStatus(opts?)` →
+  `{ installed, version, authenticated, hint, detailLines }`. Hint
+  invariant locked in the contract test so future tool-adders can't
+  ship placeholder strings.
+- `mc auth memoro [--logout|--status]` and `mc auth <claude|codex|gemini>`
+  per-target helpers (§11c). `mc auth memoro` is a thin alias for
+  `memoro-cli login/logout` with passthrough for unknown flags.
+- `mc list --orphans` and `mc gc --reap-orphans [--dry-run --min-age D]`
+  (§9j). Detects orphaned `memoro-cli heartbeat-loop` daemons via the
+  canonical Unix reparent-to-PID-1 signal and cleans them up — landed
+  after observing 9 accumulated orphans pinging the API ~1 req/min
+  sustained.
+- First-run friendliness in `mc new` and `mc list` (§11d). When both
+  the sentinel and the keychain token are missing, a one-line hint
+  ("Looks like a fresh install. Run `mc setup` to get started.") goes
+  to stderr in place of the cryptic prereq failure. `mc list` keeps
+  stdout machine-parseable. Migrants who already ran `memoro-cli login`
+  get a silent sentinel write on first successful `mc new` and never
+  see the hint.
+- README rewrite + `docs/onboarding.md` (§11e). README front door is
+  now `mc setup`; the long story (per-tool install, multi-machine
+  notes, shell-wrapper specifics) lives in `docs/onboarding.md`.
+  Install commands are not duplicated in docs — `mc setup` and
+  `mc auth status` are the authority.
+
 ### Fixed
 - `/memoro-update` body rewritten to be unambiguously display-only.
   Previous wording ("Run these two commands in the user's shell") had
