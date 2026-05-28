@@ -1107,6 +1107,147 @@ parallel agents" use case and is the de-risk point.
   yes via a soft prompt: "I've been stuck on this for 3 retries
   — want me to ensemble against gpt-5-mini and gemini?".
 
+### 11. Onboarding — first-run path for new users
+
+§2 + §9 assume mc is already authenticated and the user knows where
+to point it. For an early-adopter friend or a fresh machine, that's a
+silent friction wall. The onboarding surface makes the first 10
+minutes obvious: log in to Memoro, verify LLM tools, install the
+shell wrapper, ready to `mc new`.
+
+Non-goal: re-implementing each tool's auth. Claude Code, Codex CLI,
+and Gemini CLI each own their own login flows. mc orchestrates
+*around* them — points at the right install command, runs the right
+verification, never stores third-party tokens.
+
+#### 11a. `mc auth status` — single-screen health check
+
+```
+mc auth status
+```
+
+Output:
+
+```
+Memoro account:
+  ✓ Authenticated as martinforsberg@me.com
+  Token expires: 2026-08-15
+
+LLM tools on this machine:
+  ✓ claude        2.1.152      authenticated (Claude Max)
+  ✗ codex         not installed
+  ✗ gemini        not installed
+
+Shell wrapper:
+  ✓ Installed in ~/.zshrc, active in this shell
+
+Workspace:
+  ✓ MC_HOME = ~/.memoro/mc
+  ✓ Registry has 0 sessions, 14 cs-managed worktrees (unmanaged)
+```
+
+`mc auth status --json` for scripting. Designed to be the **single
+command** to answer "is mc ready to use here?".
+
+Detection rules per tool (adapter responsibility — `src/adapters/<tool>.js`
+exports `getStatus({ binPath?: string })`):
+
+- `which <bin>` — installed? Bail with install hint if not.
+- `<bin> --version` — version capture, error if it fails.
+- Tool-specific auth probe — for Claude, a quick `claude --help` plus
+  reading `~/.claude/config.json` if present; for Codex, similar; for
+  Gemini, the SDK's status command.
+
+The probe must never spawn an interactive TUI — `mc auth status`
+should complete in <500ms.
+
+#### 11b. `mc setup` — interactive first-run wizard
+
+```
+mc setup [--non-interactive]
+```
+
+Walks the user through onboarding in order:
+
+1. **Memoro account.**
+   - If keychain has a token, validate it (HEAD `/api/me`); skip if OK.
+   - Else: open browser at `meetmemoro.app/login?source=mc-setup&device=<hostname>`
+     and poll for token via the existing `memoro-cli login` flow.
+2. **Primary LLM tool.**
+   - Default: Claude Code.
+   - Detect installation; if missing, print exact install command
+     (`npm install -g @anthropic-ai/claude-code` or equivalent) and
+     wait for retry.
+   - Verify auth by running `claude --help` and inspecting
+     `~/.claude/config.json` for an active subscription.
+3. **Optional secondary tools.** Yes/no prompts for Codex / Gemini.
+   Same install + verify pattern.
+4. **Shell wrapper.** Run `mc install-shell` (idempotent).
+5. **Verification.** Run `mc auth status` and show its output.
+
+Each step is independently re-runnable — `mc setup` resumes from the
+first unticked checkbox so the user can quit and come back.
+
+`--non-interactive` mode skips browser flows and prompts; useful for
+CI / scripted bootstraps. Fails on first missing dependency with
+exit code and machine-readable error.
+
+#### 11c. `mc auth memoro` and `mc auth <tool>` — per-target helpers
+
+```
+mc auth memoro              # explicit Memoro login (alias for `memoro-cli login`)
+mc auth memoro --logout
+mc auth claude              # verify Claude Code; print fix hint if broken
+mc auth codex
+mc auth gemini
+```
+
+Lets users re-auth one piece without re-running the full wizard.
+Each subcommand has `--status` to print just that target's section
+from `mc auth status`.
+
+#### 11d. First-run friendliness in existing commands
+
+Today `mc new` and `mc list` assume auth is in place; they fail with
+opaque errors otherwise. Wrap each command's first call with a
+"have we run setup?" check:
+
+- If the registry hasn't been touched and Memoro keychain is empty,
+  print: *"Looks like a fresh install. Run `mc setup` to get
+  started, or `mc setup --help` for the long version."* and exit 1.
+- Once setup has been completed once (sentinel file at
+  `${MC_HOME}/.setup-done`), commands skip the check.
+
+#### 11e. README + docs/onboarding.md
+
+The README's current "Requirements" section assumes the reader is
+already running multiple LLM CLIs. Replace with:
+
+1. One-liner install of mc itself.
+2. `mc setup` — single command bootstrap.
+3. First-day flow: `mc new my-experiment` → claude opens → work →
+   `/exit` → `mc end my-experiment`.
+
+A separate `docs/onboarding.md` covers the long story (per-tool
+install commands, Memoro account creation, shell-wrapper quirks per
+zsh/bash/fish, machine identity for multi-machine users).
+
+#### 11f. Open onboarding-specific questions
+
+- **Token format and rotation.** Memoro tokens currently live in
+  keychain under `ACCOUNTS.TOKEN`. Multi-machine users today log in
+  separately on each. Should `mc setup` offer a QR code or short
+  code link from an already-authed machine ("trust this machine
+  from your phone")? Probably not in v1 — defer.
+- **Should `mc setup` install Claude Code automatically?** npm
+  installs surprise users. Default: detect-and-instruct only;
+  `mc setup --install-tools` opts in to running the installer.
+- **Fish shell support in `mc install-shell`.** Currently zsh/bash
+  only. Fish users get a clear "unsupported, paste this manually"
+  message. Promote to first-class when first fish user asks.
+- **What about Windows / WSL?** Out of scope for v1 onboarding; the
+  whole mc stack assumes POSIX shells today.
+
 ## Open questions
 
 - **Cross-machine session handling.** Today's `mc sessions list` shows
