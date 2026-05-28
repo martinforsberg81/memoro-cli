@@ -86,6 +86,7 @@ const LIFECYCLE = {
   read:          () => import('./mc/commands/read.js'),
   'install-shell': () => import('./mc/commands/install-shell.js'),
   auth:          () => import('./mc/commands/auth.js'),
+  setup:         () => import('./mc/commands/setup.js'),
 };
 
 async function main() {
@@ -186,6 +187,7 @@ USAGE
   mc gc [--dry-run]                  Reap dead + merged + clean worktrees
   mc gc --reap-orphans [--min-age D] SIGTERM orphan heartbeat daemons (§9j)
   mc install-shell                   Install the zsh/bash wrapper
+  mc setup [--json]                  Self-verifying setup checklist (§11b)
   mc auth status [--json]            Single-screen health check (§11a)
   mc auth memoro [--logout|--status] Log in / out of Memoro (§11c)
   mc auth <claude|codex|gemini>      Re-check that tool's status + hint

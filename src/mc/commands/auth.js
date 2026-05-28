@@ -136,7 +136,7 @@ function toolExitCode(status) {
   return 0;
 }
 
-async function getToolStatus(tool) {
+export async function getToolStatus(tool) {
   if (Object.prototype.hasOwnProperty.call(TOOL_ADAPTERS, tool)) {
     return safeStatus(TOOL_ADAPTERS[tool].adapter);
   }
@@ -248,7 +248,7 @@ function printHuman(r) {
   }
 }
 
-async function probeMemoro() {
+export async function probeMemoro() {
   try {
     const token = await getSecret(ACCOUNTS.TOKEN);
     if (token) {
@@ -281,7 +281,7 @@ async function safeStatus(adapter) {
  * is consistent with the plan §11a layout: row exists, surface says
  * "not installed (planned)" with an install hint.
  */
-async function plannedGeminiStatus() {
+export async function plannedGeminiStatus() {
   // Best-effort `which gemini`: if the user already has it on PATH we
   // surface that fact even though we don't yet integrate with it. Same
   // friendly hint contract as Codex (auth: unknown).
@@ -308,7 +308,7 @@ async function plannedGeminiStatus() {
   };
 }
 
-function probeShellWrapper() {
+export function probeShellWrapper() {
   // Check both zsh and bash rc files for the managed block marker.
   const home = homedir();
   const candidates = [join(home, '.zshrc'), join(home, '.bashrc')];
@@ -328,7 +328,7 @@ function probeShellWrapper() {
   };
 }
 
-function probeWorkspace() {
+export function probeWorkspace() {
   const home = mcHome();
   const exists = mcHomeExists();
   let sessionCount = 0;
