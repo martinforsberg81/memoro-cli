@@ -20,18 +20,16 @@
  * npm-installing surprise side effects from a "setup" verb is hostile.
  * We print the install command and let the user run it.
  */
-import { writeFileSync, mkdirSync, existsSync } from 'node:fs';
-import { join } from 'node:path';
-
 import {
   probeMemoro,
   getToolStatus,
   probeShellWrapper,
   probeWorkspace,
 } from './auth.js';
-import { mcHome } from '../paths.js';
-
-const SENTINEL_NAME = '.setup-done-v1';
+import {
+  sentinelPath as freshInstallSentinelPath,
+  ensureSentinel as freshInstallEnsureSentinel,
+} from '../first-run.js';
 
 // Required tools — at least one of these must be installed AND authed
 // for setup to consider the machine "ready". Codex/Gemini are tracked
@@ -193,18 +191,11 @@ function printChecklist(steps) {
   process.stdout.write(`Re-run \`mc setup\` when done to verify.\n`);
 }
 
-export function sentinelPath() {
-  return join(mcHome(), SENTINEL_NAME);
-}
-
-export function writeSentinel() {
-  try {
-    mkdirSync(mcHome(), { recursive: true, mode: 0o700 });
-    const path = sentinelPath();
-    if (existsSync(path)) return;
-    writeFileSync(path, new Date().toISOString() + '\n', { mode: 0o600 });
-  } catch { /* best effort — sentinel is convenience, not a gate */ }
-}
+// Sentinel reads/writes live in src/mc/first-run.js so `mc new`,
+// `mc list`, and `mc setup` all agree on one location. Re-exported
+// under the same names so the existing test imports still resolve.
+export const sentinelPath = freshInstallSentinelPath;
+export const writeSentinel = freshInstallEnsureSentinel;
 
 function parseArgs(argv) {
   const opts = { json: false };
