@@ -1351,6 +1351,348 @@ zsh/bash/fish, machine identity for multi-machine users).
 - **What about Windows / WSL?** Out of scope for v1 onboarding; the
   whole mc stack assumes POSIX shells today.
 
+### 12. Token vault — provider-independent secret management
+
+The recurring real-world failure that motivates this section: the
+user has had to figure out, multiple times, that an LLM running
+inside a coding tool (Claude Code, Codex CLI) ended up *reading a
+token in cleartext* via Read / Bash. Once a token enters model
+context, it's gone — logs, training corpora, provider servers,
+potentially leaked. Existing `block-secret-reads.sh` catches
+known-shaped paths (`.env`, `.zshrc`, `~/.aws/credentials`, etc.)
+but the regex misses anything novel.
+
+The vision: log into mc once, all your tokens available on every
+machine, change in one place propagates everywhere, **and the LLM
+never sees a single byte of cleartext**.
+
+The insight that makes this tractable: **the tool needs the token,
+the model doesn't.** Claude Code reads `~/.claude/.credentials.json`
+to authenticate against Anthropic. The *model* running inside
+Claude Code never needs that file — only the tool process does.
+mc's job is to materialise tokens where the tool expects them,
+block model reads of those paths, and shred on session end.
+
+#### 12a. Why this is a high-priority section
+
+- **Stops a concrete, repeating leak vector.** The user has lost
+  tokens this way more than once. Every leaked token is a rotation
+  cost minimum, a credential-compromise risk maximum.
+- **Differentiator for "Memoro for coders".** Other secret
+  managers (1Password CLI, Doppler, Infisical, HashiCorp Vault)
+  are not designed for the LLM-blindness hot path. They store
+  ciphertext at rest, materialise plaintext for the *app*, and
+  trust the app's host process. None install hooks that block the
+  app's children. mc is unique here.
+- **Cross-machine UX is the multi-device pitch.** "Open mc on a
+  fresh machine, all your tokens are there" is the polish that
+  makes mc feel like a managed product rather than a CLI tool.
+
+#### 12b. Existing Memoro vault infrastructure (what we leverage)
+
+Memoro already ships a **production zero-knowledge vault**. Phase 1
+of this section is mostly a port + JIT layer, not net-new
+cryptography:
+
+| Component | Lives at | What it gives us |
+|---|---|---|
+| Schema | `~/memoro/migrations/0027_vault.sql` | `vault_config` + `vault_secrets` tables, per-user encrypted blob storage with arbitrary `secret_type` |
+| Server crypto | `~/memoro/src/crypto/vault-crypto.js` | auth-hash verification, salt generation, hash-of-hash storage so DB leak ≠ auth-hash leak |
+| Server API | `~/memoro/src/routes/vault/index.js` | `/api/vault/setup`, `/unlock`, `/lock`, `/status`, `/secrets` (GET/POST/PUT/DELETE), `/change-password`, `DELETE /api/vault` |
+| Client crypto | `~/memoro/public/js/crypto/vault-client-crypto.js` | PBKDF2 600k → 512-bit key split (vault-key + auth-key), AES-GCM encrypt/decrypt, in-memory key cache with 15-min TTL |
+| Client API | `~/memoro/public/js/api/vault.js` | Browser wrapper around server endpoints |
+| UI | `~/memoro/public/js/ui/canvas/embedded/Vault.js` | Canvas-embedded vault view; today shows passwords |
+| Autofill | `~/memoro/public/js/vault/autofill.js` | Filters by `secret_type === 'password'`; pattern reusable for `'api_token'` |
+
+The cryptographic design (zero-knowledge, vault-key never leaves
+the client, hash-of-hash on the server, PBKDF2 600k, AES-GCM,
+per-secret IVs, rate-limited unlock with 15-min session TTL) is
+already battle-tested and used in production for passwords. mc
+inherits it wholesale.
+
+#### 12c. mc vault commands
+
+```
+mc vault setup
+   Create vault for this Memoro account (prompts for master password).
+   Generates salt server-side via /api/vault/setup; derives keys
+   client-side; stores hash(authHash) on server.
+
+mc vault unlock
+   Prompts for master password, derives keys, validates against
+   /api/vault/unlock, caches vault-key in OS keychain with 15-min
+   TTL so subsequent mc commands don't re-prompt.
+
+mc vault lock
+   Clears the keychain-cached vault-key and notifies the server
+   (calls /api/vault/lock).
+
+mc vault status [--json]
+   Shows: vault setup yes/no, locked/unlocked, time until
+   auto-lock, number of secrets stored.
+
+mc vault list [--type api_token|password|...] [--json]
+   Lists secret labels (decrypted client-side). Never echoes
+   secret values to stdout.
+
+mc vault get <label> [--field token|account|...] [--json]
+   Decrypts and prints a single secret's data. Hard prompt:
+   "About to print a secret to your terminal. Continue?" unless
+   --no-confirm. Used rarely — JIT materialisation (§12d) is the
+   preferred read path.
+
+mc vault set <provider> [--account x] [--label y]
+   Interactive prompt for the token value (or read from --stdin).
+   Encrypts client-side, POSTs ciphertext + IV to
+   /api/vault/secrets. `secret_type='api_token'` with structured
+   metadata (provider, account, scopes, expires_at).
+
+mc vault rm <label>
+   DELETE /api/vault/secrets/:id after confirm.
+
+mc vault rotate <label>
+   Sets new value, keeps old as `<label>-prev` for 24h then
+   auto-purges. Lets the user verify the new token works before
+   losing the old.
+
+mc vault change-password
+   Re-encrypts auth-hash with new master; all stored secrets
+   stay encrypted with the same vault-key (the design lets us
+   rotate the auth-hash without re-encrypting every blob —
+   coordinator-spec read of vault-client-crypto.js says this is
+   possible; verify during implementation).
+```
+
+#### 12d. JIT materialisation protocol
+
+Extends the §11a adapter contract with two methods per tool:
+
+```js
+// src/adapters/<tool>.js — added in this section
+export function tokenLocations() {
+  return [
+    { type: 'file', path: '~/.claude/.credentials.json', format: 'json', shape: 'anthropic-credentials-v1' },
+    { type: 'env',  name: 'ANTHROPIC_API_KEY' },
+  ];
+}
+export async function materializeToken({ token, location, sessionId }) { /* write or set env */ }
+export async function shredToken({ location, sessionId }) { /* unlink or unset */ }
+```
+
+Lifecycle:
+
+1. `mc new` / `mc resume` resolves "which token(s) for which adapter(s)" via session metadata
+2. Pulls decrypted tokens from vault (vault-key cached in keychain)
+3. Calls `materializeToken()` per adapter
+4. Installs PreToolUse hook (§12e) covering each materialised path
+5. Launches the tool
+6. On `mc end` / session termination: uninstalls hook, calls `shredToken()` per adapter
+
+**Invariant: a token is in cleartext on disk only for the
+lifetime of the session that needs it.** Never longer. Never
+elsewhere. mc owns the lifecycle.
+
+#### 12e. PreToolUse hook integration
+
+A dynamic hook (in contrast to the static-regex
+`block-secret-reads.sh`) installed per session:
+
+```
+~/.memoro/mc/hooks/active/<session-id>-vault-block.sh
+```
+
+The hook reads `~/.memoro/mc/state/<session-id>-paths.json`
+(written by `materializeToken()`) and denies any Read/Bash that
+targets one of those paths. Auto-installed at session start,
+auto-removed at session end. The user's existing
+`block-secret-reads.sh` stays as a fallback for paths mc didn't
+know to register.
+
+The hook activation mechanism uses Claude Code's per-session
+hook-install (or whatever the host TUI exposes). Verified
+detection per §10i.1 — if the host doesn't support session-scoped
+hooks, fall back to user-global hook with a session-token check.
+
+#### 12f. OS-keychain session cache
+
+After `mc vault unlock`, the vault-key is held in OS keychain
+under `mc-vault:<user-id>:active-key`, scoped to expire 15 min
+after the last `mc <verb>` call. Each mc command:
+
+1. Checks keychain for active-key
+2. If present and not expired: use it, touch its TTL
+3. If expired: prompt for master password (silent if `MC_VAULT_PASSPHRASE` env set, for CI)
+4. If absent: error with hint to run `mc vault unlock`
+
+Why OS keychain rather than process memory: mc commands are
+short-lived. Each `mc list` / `mc new` is a fresh process. Without
+keychain caching, every command would prompt for the master
+password. Keychain TTL gives us the same in-memory-with-timeout
+UX without coupling to a long-running daemon.
+
+#### 12g. `.env` triage at session start (optional, v1.5)
+
+A separate flow that scans `.env` files in the target worktree
+on `mc new`, asks the user once per file ("which of these are
+secrets vs config?"), then:
+
+- **Secrets**: imported into vault under `env:<repo>:<key>`,
+  removed from materialised `.env`
+- **Config**: kept in `.env` as-is
+
+The session sees a `.env` with only config; secrets that the
+project genuinely needs (DATABASE_URL, OPENAI_API_KEY for prod
+code that calls OpenAI) are materialised separately into env or
+files the LLM hook blocks.
+
+Deferred to v1.5 — phase 1 ships without this; manual `mc vault
+set` covers the use case until the UX is worth it.
+
+#### 12h. Multi-account / per-session selection
+
+Session metadata in the registry (§2 + §10e extension) carries
+an optional `vault_account` field. `mc new mc-thing --account work`
+sets it; subsequent `mc resume mc-thing` uses the same account
+without re-specifying.
+
+Lookup precedence for "which token to materialise":
+
+1. Session's `vault_account` field, if set
+2. Repo-level default at `${repo}/.mc/vault.json` (gitignored)
+3. User-level default at `${MC_HOME}/vault-defaults.json`
+4. First account found of the right provider, with warning
+
+#### 12i. CI / non-interactive token loading
+
+For CI: `MC_VAULT_PASSPHRASE` env unlocks without prompt;
+session loads tokens as usual. mc never echoes the passphrase or
+any token to stdout/stderr. Designed-in: tests under
+`tests/mc/vault/` assert no token bytes appear in subprocess
+captured output across the lifecycle.
+
+Alternative for stricter CI: `MC_VAULT_BYPASS=1` + per-token
+envs (`MC_VAULT_TOKEN_ANTHROPIC=...`) skips the vault entirely
+and loads from env. Both supported; `MC_VAULT_BYPASS` is for
+"my CI already has secrets via the platform's own secret store
+and I don't want to introduce vault here".
+
+#### 12j. Cryptographic review scope
+
+We are **not** designing new cryptography in this section.
+Phase 1 ports an existing battle-tested client to Node. Phase 2
+adds session-cache + hook integration. Review scope:
+
+- **Port verification**: confirm `crypto.subtle` in Node 22 produces
+  byte-identical outputs vs the browser implementation for the
+  same inputs (especially PBKDF2 + AES-GCM). Implementation test:
+  encrypt a fixed plaintext+IV+key in both, assert ciphertexts
+  match.
+- **Keychain cache risk**: holding the vault-key in OS keychain for
+  15 min is a tradeoff against re-prompt-every-command friction.
+  Risk surface: anything that can read the keychain (TouchID-
+  protected on macOS, password-protected on Linux Secret Service).
+  Document the tradeoff, offer `--no-cache` for paranoid mode.
+- **Hook bypass risk**: a malicious or buggy LLM could try to
+  bypass the PreToolUse hook (e.g., by spawning a process the
+  hook doesn't intercept). Mitigation: hook covers Read and Bash;
+  shell out via Bash is the primary vector and is covered. Other
+  vectors (network exfiltration of env, prompt-injection-driven
+  leaks via response text) are *not* covered — flag in user-facing
+  docs.
+
+External review recommended for phase 2 (hook integration). Phase
+1 (port) is review-light because the design is unchanged.
+
+#### 12k. Phasing
+
+1. **Phase 1 — mc vault client + basic CRUD (~1 week solo).**
+   Port `vault-client-crypto.js` to Node. `mc vault setup /
+   unlock / list / get / set / rm / status`. Talks to existing
+   `/api/vault/*` endpoints. No JIT, no hook, no keychain cache
+   yet — every command prompts for master password. Validates
+   the port; useful standalone for "I just want to manage
+   secrets across machines".
+
+2. **Phase 2 — OS-keychain cache + JIT materialisation
+   (~1 week).** Vault-key cached in keychain with 15-min TTL.
+   Adapter contract gains `tokenLocations()` /
+   `materializeToken()` / `shredToken()`. `mc new` /
+   `mc resume` pull and materialise; `mc end` shreds.
+   *Without* the hook yet — the LLM-safety story is incomplete
+   but the multi-machine token-sync story is done.
+
+3. **Phase 3 — PreToolUse hook integration (~1 week).** Dynamic
+   per-session hook that reads mc-known paths. Auto-install on
+   session start, auto-remove on end. Tests assert hook
+   actually blocks. This closes the LLM-blindness invariant.
+
+4. **Phase 4 — Multi-account + .env triage + audit log (~1
+   week).** Polish: per-session account selection, `.env`
+   scanning + redaction, structured audit log of who-read-what-
+   when at `${MC_HOME}/vault-audit.log`.
+
+5. **Phase 5 — `mc auth status` integration (~2 days).** The
+   `auth status` surface from §11a learns about the vault:
+   shows "Vault: unlocked (4 secrets, 13 min until lock)" or
+   "Vault: locked — run mc vault unlock". Stays out of every
+   other mc command (no surprise prompts).
+
+Total: ~4 weeks solo for the whole vision. Phase 1 alone
+delivers cross-machine secret-sync standalone (no LLM context
+needed); phase 3 delivers the LLM-blindness invariant; phases
+4–5 are polish.
+
+#### 12l. Acceptance check
+
+- A user can run `mc vault set anthropic` once on machine A,
+  `mc vault list` on machine B (after `mc vault unlock`), and see
+  the same secret.
+- Starting a session via `mc new` materialises the right token
+  for the right tool without the user typing it.
+- Running `cat ~/.claude/.credentials.json` inside the session
+  (via the Bash tool the LLM uses) returns a hook denial — not
+  the cleartext.
+- `mc end` removes the materialised file; checking the path
+  after end returns "no such file".
+- Master password change via `mc vault change-password` rotates
+  the auth-hash; all stored secrets stay decryptable with the
+  same vault-key (verify with `mc vault list` succeeding
+  after change).
+- CI mode: `MC_VAULT_PASSPHRASE=... mc new ci-job --no-launch`
+  succeeds without prompts.
+- Tests verify: no token bytes appear in subprocess-captured
+  stdout/stderr across any tested code path.
+
+#### 12m. Open questions specific to the vault
+
+- **Master password recovery.** Currently no recovery: lose the
+  master, lose the vault (the cryptography won't let it be
+  otherwise without a backdoor). UX must be glass-clear at
+  setup. Consider: optional encrypted backup blob the user
+  prints + stores physically? Defer to v2 design.
+- **Vault sync across mc instances on the same machine.** Two
+  shells, two `mc` invocations, both want the vault-key. First
+  one prompts, second one finds it in keychain. Race condition
+  during the prompt? Probably mutex via keychain itself; verify
+  during implementation.
+- **Secret-type schema evolution.** Today `secret_type` is free
+  text. mc introduces `api_token`, `oauth_token`. Should mc
+  publish a typed schema (JSON Schema?) for each so other clients
+  reading the vault know the data shape? Probably yes; lands
+  in phase 2.
+- **Hook bypass for legitimate cases.** What if the user
+  *intentionally* wants to debug their materialised token (run
+  `cat ~/.claude/.credentials.json` themselves outside the LLM)?
+  The hook denies that too. Either: a `mc vault inspect <label>`
+  command that bypasses, or document that the hook is
+  session-scoped and inspect-from-outside-the-worktree always
+  works. Lean: latter.
+- **What happens when the vault server is down.** Phase 2's
+  keychain cache provides 15-min offline tolerance, but a longer
+  outage means new sessions can't unlock fresh tokens. Document
+  + acceptable for v1; offline-first re-design is phase-6
+  territory.
+
 ## Open questions
 
 - **Cross-machine session handling.** Today's `mc sessions list` shows
