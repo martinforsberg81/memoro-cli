@@ -88,6 +88,7 @@ const LIFECYCLE = {
   auth:          () => import('./mc/commands/auth.js'),
   setup:         () => import('./mc/commands/setup.js'),
   reconcile:     () => import('./mc/commands/reconcile.js'),
+  vault:         () => import('./mc/commands/vault.js'),
 };
 
 async function main() {
@@ -193,6 +194,16 @@ USAGE
   mc auth status [--json]            Single-screen health check (§11a)
   mc auth memoro [--logout|--status] Log in / out of Memoro (§11c)
   mc auth <claude|codex|gemini>      Re-check that tool's status + hint
+
+  mc vault setup                     Create a Memoro-account-wide token vault
+  mc vault unlock                    Validate the master password
+  mc vault list [--json]             List secret labels (no values)
+  mc vault get <label>               Print a secret value (with confirm)
+  mc vault set <label> [--type ...]  Store a new secret
+  mc vault rm <label>                Delete a secret
+  mc vault rotate <label>            Replace a secret (keeps -prev copy)
+  mc vault change-password           Change the master password
+  mc vault status / lock / --help    Self-explanatory
 
   mc sessions list                   List your active coding sessions
   mc sessions send <label|id> <msg>  Dispatch a message into another session
