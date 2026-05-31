@@ -6,6 +6,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-05-31
+
 ### Added
 - `mc reconcile [--apply --only-safe] [--json]` (§9e). Detects
   sessions whose work has already shipped elsewhere and groups them
