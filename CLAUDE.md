@@ -18,7 +18,9 @@
 
 For multi-PR work, multi-agent coordination, or any task delegated
 from a coordinator session, **load `.claude/skills/agent-coordination.md`
-first.** It codifies the coordinator ↔ agent loop and the engineering
+first.** To prime a fresh session as coordinator in one step, run
+`/be-coordinator` — it reads CLAUDE.md + the skill + the active plan,
+runs a state probe, and announces ready. It codifies the coordinator ↔ agent loop and the engineering
 patterns established across drev 1 (foundation) + drev 2 (polish +
 onboarding) — 8 PRs, +89 tests, zero regressions. Patterns include:
 
