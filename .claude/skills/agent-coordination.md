@@ -41,6 +41,57 @@ Steps 2–3 may repeat for a single drev (more questions surface mid-
 implementation). Steps 4–6 produce one PR. Steps 1–6 produce one drev
 (one logical scope of work).
 
+## Why this loop mitigates LLM failure modes
+
+LLMs have two opposing failure modes with the same root cause:
+
+- **Lazy**: silent skipping under time/effort pressure. "Tests
+  don't apply here", "this edge case is uncommon", placeholder
+  strings shipped as done.
+- **Over-eager**: "while I'm at it" creep, unrequested
+  abstractions, refactors that weren't asked for, gold-plating.
+
+Both come from **underspecified prompts** — the model fills in
+from its own priors when "done" is ambiguous, picking its own
+threshold (lazy or eager depending on the day).
+
+The 7-step loop mitigates both via six mechanisms:
+
+1. **Coordinator is allowed to be slow + thorough.** Different
+   cognitive load than the builder. Can think through edge cases
+   while the worker focuses on shipping.
+2. **Up-front design questions kill ambiguity.** When the worker
+   asks "alt 1/2/3" before coding, the choice is locked
+   explicitly. It can't be silently skipped (it was answered) and
+   can't be over-built (the alt is bounded).
+3. **PR-body judgment-calls forces honesty.** A worker that
+   silently skips something must explain *why* in the body.
+   Laziness becomes visible. Scope-creep becomes flaggable
+   ("I added X because…").
+4. **TDD spec as definition of done.** "Done" = "tests pass". No
+   vibe-based completion. The worker can't claim done with
+   unmet requirements.
+5. **Coordinator review catches scope drift.** 200 lines when 50
+   were asked → review flags. 50 lines when 100 were needed →
+   tests fail → review flags.
+6. **Fresh worker context per drev.** Worker sessions are
+   short-lived; no accumulated bias. Coordinator owns the long
+   context.
+
+The deeper structural insight: **LLMs work better with a peer
+than a manager.** Manager-LLM (gives orders) → blind to own
+errors. Helper-LLM (serves) → accepts vagueness, fills in too
+much. **Peer-LLM with different stakes and a different time
+budget → friction → quality.**
+
+In the coordinator/worker split, the coordinator owns design
+quality (does the review), the worker owns shipping velocity
+(does the build). The tension between the two roles produces
+output neither would alone. This is the load-bearing insight
+that makes the protocol work — preserve it as you evolve the
+specifics. If the loop ever feels ritualistic, the peer dynamic
+is what to re-establish first.
+
 ## Step 1 — Delegate
 
 A good coordinator handoff has four parts:
@@ -258,6 +309,16 @@ with documented reason.
     design question always adds one nuance beyond the alt
     selection. Design quality propagates without the original spec
     needing every edge case.
+
+11. **Negative requirements in delegation prompts.** Positive
+    requirements ("build X") leave room for additions. Negative
+    requirements ("build X, do NOT add Y or Z, if tempted stop
+    and ask") read tighter and bind better. Use both: state what
+    to build, state what NOT to build, state when to escalate.
+    The drev 2 coordinator prompts paired positive spec with
+    explicit "deferred from this drev" lists — that's the form.
+    Models read negative constraints more carefully than positive
+    ones; lean on them when the natural failure mode is creep.
 
 ## Anti-patterns observed (don't repeat)
 
