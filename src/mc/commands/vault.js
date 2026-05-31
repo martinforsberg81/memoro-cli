@@ -137,8 +137,8 @@ async function cmdSetup(argv, opts = {}) {
     return 1;
   }
 
-  const password = await readMasterPassword('Choose a master password (no recovery if lost): ', opts);
-  const confirmPwd = await readMasterPassword('Confirm master password:                          ', opts);
+  const password = await readMasterPassword('Choose a master password (min 12 chars, no recovery if lost): ', opts);
+  const confirmPwd = await readMasterPassword('Confirm master password:                                       ', opts);
   if (password !== confirmPwd) {
     emit(flags.json, { ok: false, error: 'passwords do not match' });
     return 1;
@@ -678,9 +678,9 @@ async function cmdChangePassword(argv, opts = {}) {
   const config = await requireSetup(portal);
   if (!config) return 1;
 
-  const oldPassword = await readMasterPassword('Current master password: ', opts);
-  const newPassword = await readMasterPassword('New master password:     ', opts);
-  const confirmPwd  = await readMasterPassword('Confirm new password:    ', opts);
+  const oldPassword = await readMasterPassword('Current master password:        ', opts);
+  const newPassword = await readMasterPassword('New master password (min 12):   ', opts);
+  const confirmPwd  = await readMasterPassword('Confirm new password:           ', opts);
   if (newPassword !== confirmPwd) {
     emit(flags.json, { ok: false, error: 'new passwords do not match' });
     return 1;
@@ -925,11 +925,18 @@ function parseFlags(argv) {
 function emit(json, jsonObj, humanLine = null) {
   if (json) {
     console.log(JSON.stringify(jsonObj));
-  } else if (humanLine != null) {
-    if (jsonObj?.ok === false) {
-      console.error(`mc vault: ${jsonObj.error}`);
-    } else {
-      console.log(humanLine);
-    }
+    return;
+  }
+  // Errors always print to stderr in non-JSON mode regardless of whether
+  // the caller supplied a humanLine. Earlier behaviour silently swallowed
+  // errors when humanLine was omitted — which made `mc vault setup`
+  // failures invisible until the user noticed `mc vault status` said
+  // "setup: no" minutes later.
+  if (jsonObj?.ok === false) {
+    console.error(`mc vault: ${jsonObj.error}`);
+    return;
+  }
+  if (humanLine != null) {
+    console.log(humanLine);
   }
 }

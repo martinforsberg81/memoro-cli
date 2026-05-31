@@ -322,4 +322,32 @@ describe('mc vault — pure error paths (no portal needed)', () => {
     const out = JSON.parse(cap.out.join('\n'));
     assert.match(out.error, /unknown --type/);
   });
+
+  it('setup with too-short password prints error to stderr in non-JSON mode (regression)', async () => {
+    // Earlier, emit() silently swallowed { ok: false } whenever the
+    // caller did not pass a humanLine — which is exactly what setup's
+    // validation paths do. The user saw two blank lines, no error,
+    // and `mc vault status` still said "setup: no" with no clue why.
+    // This test locks the fix: errors always print to stderr regardless
+    // of --json / humanLine.
+    delete process.env.MC_VAULT_PASSPHRASE;
+    const promptStub = () => Promise.resolve('short'); // 5 chars < 12 min
+    const cap = captureConsole();
+    const rc = await vaultRun(['setup'], {
+      portal: {
+        apiUrl: 'x',
+        token: 'y',
+        memoroFetch: async () => ({ ok: true, vault: { setup: false } }),
+      },
+      promptStub,
+    });
+    cap.restore();
+    assert.equal(rc, 1);
+    assert.equal(cap.out.length, 0, 'stdout should be empty when setup fails validation');
+    const stderr = cap.err.join('\n');
+    assert.match(stderr, /master password must be at least 12 characters/i,
+      `expected error on stderr, got:\nstdout: ${cap.out.join('\n')}\nstderr: ${stderr}`);
+    assert.match(stderr, /^mc vault: /,
+      `error should be prefixed with "mc vault: ", got: ${stderr}`);
+  });
 });
