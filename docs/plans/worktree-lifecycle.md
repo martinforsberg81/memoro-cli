@@ -1693,6 +1693,225 @@ needed); phase 3 delivers the LLM-blindness invariant; phases
   + acceptable for v1; offline-first re-design is phase-6
   territory.
 
+### 13. Tool-portability — instructions, hooks, commands per adapter
+
+Switching from Claude Code to Codex / GPT / Cursor / Aider /
+future tools must not strand the user. Today the project's
+operating instructions, agent skill, slash command, and hooks
+all live under Claude-Code-specific conventions
+(`CLAUDE.md`, `.claude/skills/`, `.claude/commands/`,
+`.claude/hooks/`). Other tools read different files:
+
+| Tool | Native instructions | Skills / scripts | Hooks |
+|---|---|---|---|
+| Claude Code | `CLAUDE.md` | `.claude/skills/*.md` + `.claude/commands/*.md` | `.claude/hooks/*.sh` + `.claude/settings.json` |
+| Codex / GPT | `AGENTS.md` (per agents.md spec) | markdown read manually | tool-specific (TBD per Codex release) |
+| Cursor | `.cursor/rules/*.mdc` | none | none |
+| Aider | `CONVENTIONS.md` | none | repo-level config |
+| Future | TBD | TBD | TBD |
+
+The phase-1 step (PR #44) added a canonical
+`docs/coding-agent-protocol.md` plus thin wrappers (CLAUDE.md +
+AGENTS.md). That gets us instruction-file parity manually. §13
+specifies the mc-driven mechanism that does the rest
+automatically.
+
+#### 13a. Adapter contract extension
+
+Each `src/adapters/<tool>.js` gains four optional methods that
+describe the tool's native filesystem footprint for project-level
+configuration:
+
+```js
+// src/adapters/<tool>.js — added in this section
+export function instructionsFile() {
+  return { path: 'CLAUDE.md', renderer: 'markdown-wrapper' };
+  // or { path: 'AGENTS.md', renderer: 'markdown-wrapper' }
+  // or { path: '.cursor/rules/project.mdc', renderer: 'cursor-mdc' }
+}
+
+export function commandsDir() {
+  return '.claude/commands';  // null for tools without slash commands
+}
+
+export function hooksDir() {
+  return '.claude/hooks';      // null for tools without hooks
+}
+
+export function settingsFile() {
+  return '.claude/settings.json';  // null if not applicable
+}
+```
+
+`renderer` is the format converter — most are markdown-wrapper
+(thin file pointing at canonical), but Cursor needs MDC
+frontmatter, Aider needs YAML config, etc.
+
+#### 13b. Canonical source layout
+
+All tool-portable content lives in a single place per concern:
+
+```
+docs/
+  coding-agent-protocol.md           # canonical instructions (active today)
+  agent-skills/                      # canonical skill source (planned)
+    agent-coordination.md
+  agent-commands/                    # canonical command source (planned)
+    be-coordinator.md
+  agent-hooks/                       # canonical hook source (planned)
+    block-secret-reads.sh
+```
+
+Today everything still lives under `.claude/` because Claude
+Code reads it there directly. §13 introduces the
+canonical-source pattern incrementally: new content goes under
+`docs/agent-*/`; existing content gets migrated when an adapter
+needs it.
+
+#### 13c. `mc adapter sync` — materialise per-tool files
+
+```
+mc adapter sync [--tool <name>] [--dry-run]
+```
+
+For each enabled adapter (per `mc auth status`), copy /
+transform canonical sources into the adapter's native paths.
+`--dry-run` lists what would change without writing. Run
+automatically on `mc setup` and on `mc tool-switch`.
+
+Example output:
+
+```
+mc adapter sync --dry-run
+
+Claude Code:
+  CLAUDE.md                              up to date
+  .claude/skills/agent-coordination.md   up to date
+  .claude/commands/be-coordinator.md     up to date
+
+Codex:
+  AGENTS.md                              up to date
+
+Cursor:
+  .cursor/rules/project.mdc              MISSING — would create
+  .cursor/rules/skill-coord.mdc          MISSING — would create
+```
+
+Designed so the user can have multiple tools' files coexisting in
+one repo — useful for projects with mixed-tool teams.
+
+#### 13d. `mc tool-switch <tool>` — make a different tool the primary
+
+```
+mc tool-switch codex
+```
+
+What it does:
+
+1. Verifies the target adapter's tool is installed + authed
+   (per §11a `getStatus()`)
+2. Updates registry: future `mc new` defaults to this tool
+3. Runs `mc adapter sync` to make sure target tool's files
+   exist
+4. Leaves other tools' files intact (they may be co-active)
+5. Reports any drift between canonical and per-tool files
+   that the user should resolve
+
+Doesn't touch existing sessions — they keep running their
+spawned tool. Only affects new `mc new` / `mc resume` invocations.
+
+#### 13e. Hook portability gap
+
+Hooks are the hardest part. Each tool has its own hook syntax:
+
+- Claude Code: `.claude/hooks/*.sh` + `settings.json` with
+  PreToolUse / PostToolUse routing
+- Codex: TBD per Codex release (likely JSON config)
+- Cursor: no hook system today
+- Aider: limited; commit-message templates and similar
+
+Phase 1 of §13 ships only the **instructions** portability
+(canonical + wrappers). Hook portability deferred until at
+least two tools' hook systems are stable enough to design a
+common abstraction. Until then, Claude Code is the only tool
+with mc-managed hook integration; other tools' users get
+docs telling them to install equivalents manually.
+
+#### 13f. Phasing
+
+1. **Phase 1 — Canonical instructions (shipped, PR #44).**
+   `docs/coding-agent-protocol.md` exists; CLAUDE.md and
+   AGENTS.md wrap it. Manual sync.
+
+2. **Phase 2 — Adapter contract + `mc adapter sync` for
+   instructions (~3 days solo).** `instructionsFile()` on the
+   three adapters we have today (claude-code, codex, gemini —
+   gemini gets a stub). `mc adapter sync` materialises
+   wrappers from the canonical. Idempotent; safe to re-run.
+
+3. **Phase 3 — `mc tool-switch <tool>` verb (~2 days).**
+   Verifies target adapter health + switches default tool +
+   syncs files. Mostly orchestration on top of phase 2.
+
+4. **Phase 4 — Canonical skills + commands (~1 week).**
+   Migrate `.claude/skills/` and `.claude/commands/` to
+   `docs/agent-skills/` and `docs/agent-commands/`. Add
+   per-adapter renderers (markdown-wrapper for most; Cursor
+   gets MDC frontmatter). `mc adapter sync` extended to cover
+   these.
+
+5. **Phase 5 — Cursor + Aider adapters (~3 days).** First
+   non-Claude tools to land with full canonical-source-driven
+   instruction files. Validates the adapter contract on
+   tools that don't use agents.md convention.
+
+6. **Phase 6 — Hook portability (deferred).** Re-evaluate
+   when at least two tools have stable hook systems worth
+   abstracting.
+
+Total: ~3 weeks solo for phases 2–5. Phase 1 is already done.
+Phase 6 is open-ended.
+
+#### 13g. Acceptance check
+
+- Running `mc adapter sync` from a fresh clone materialises every
+  enabled tool's instruction file from the canonical source.
+- Editing `docs/coding-agent-protocol.md` and re-running
+  `mc adapter sync` updates all derived files.
+- Running `mc tool-switch codex` on a Claude-default project
+  switches `mc new`'s default tool without breaking existing
+  sessions, and ensures AGENTS.md exists + is fresh.
+- A user can clone a memoro-cli-like repo, run `mc setup` with
+  Codex as their installed tool, and get AGENTS.md (not
+  CLAUDE.md) as the primary on-disk instruction surface —
+  with the protocol intact.
+
+#### 13h. Open questions
+
+- **Drift handling.** A user edits CLAUDE.md by hand; canonical
+  source is now stale. `mc adapter sync` detects drift but does
+  it overwrite (canonical wins) or surface a 3-way merge?
+  Lean: surface drift, refuse to overwrite without `--force`,
+  point user at the canonical to edit instead.
+- **Multi-tool teams.** If a team has both Claude and Codex
+  users, both CLAUDE.md and AGENTS.md need to coexist. mc
+  should handle this transparently (sync both, don't choose).
+  Phase 2 default.
+- **Cursor's MDC frontmatter.** Each `.cursor/rules/*.mdc`
+  file has YAML frontmatter with `description`, `globs`,
+  `alwaysApply` fields. Need a renderer that maps canonical
+  metadata to these. Defer details to phase 5.
+- **What if a future tool wants markdown but in a different
+  location?** The adapter declares its path; canonical is
+  read-once; renderer is per-adapter. Adding a new tool is
+  one adapter file + one entry in the adapter index. Designed
+  to be cheap.
+- **What about user-level instructions (not project-level)?**
+  Users with `~/.claude/CLAUDE.md` for global preferences want
+  the same portability. Out of scope for §13 (project-only);
+  user-level portability is a separate §14 if it becomes a
+  pain point.
+
 ## Open questions
 
 - **Cross-machine session handling.** Today's `mc sessions list` shows
