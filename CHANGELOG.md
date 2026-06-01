@@ -6,6 +6,40 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.7.0] — 2026-06-01
+
+### Added
+- `mc vault` — encrypted secret store with full lifecycle (§12 phase
+  1+2+3). Client-side AES-GCM with PBKDF2 (600k iterations); the
+  server holds only ciphertext. Verbs: `init`, `unlock`, `lock`,
+  `set`, `get`, `list`, `delete`, `change-password`, `destroy`,
+  `status`. Phase 2 caches the unlocked key in the OS keychain so
+  repeated `mc resume` doesn't reprompt; JIT materialisation writes
+  decrypted tokens to disk only for the lifetime of the launched
+  session (PR #47, #51). Phase 3 installs a per-session PreToolUse
+  hook that blocks foreign LLMs from reading the materialised
+  paths — the LLM-blindness invariant (PR #53). `mc vault` errors
+  print human-readable codes in non-JSON mode (PR #48).
+- `mc auth devices` — list and revoke registered devices (§14
+  phase 1 client). Fresh installs auto-trigger the OAuth Device
+  Flow on first command so onboarding is one less prompt
+  (PR #54).
+
+### Plan
+- §14 — device-aware auth via OAuth Device Flow, with fixed 90-day
+  rotation instead of sliding TTL (PRs #49, #50).
+- §15 — memoro-agent as a remote Streamable-HTTP MCP endpoint on
+  the Memoro Worker, exposing the existing chat orchestrator as a
+  tool surface for Claude Code, Cursor, and Codex. Token enrollment
+  via Pattern A (bearer in MCP config) or Pattern B (`headersHelper`
+  from OS keychain). Implementation drev queued (PR #55).
+
+### Docs
+- Skill: `agent-coordination.md` gains the drev 3+4 lessons —
+  honest uncertainty disclosure when verification is blocked, and
+  the bounded architectural-self-upgrade pattern (PR #52). Also
+  the test-only `--json` anti-pattern from PR #48.
+
 ## [0.6.0] — 2026-05-31
 
 ### Added
