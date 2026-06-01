@@ -36,6 +36,7 @@ import { readCachedVaultKey } from './key-cache.js';
 import { deriveVaultKeys, decryptSecretPayload } from './client-crypto.js';
 import * as VaultApi from './api.js';
 import { normaliseSecretPayload } from './types.js';
+import { installHook, uninstallHook } from './hook.js';
 import { detectInstalled } from '../../adapters/index.js';
 import { getSecret as keychainGet } from '../../lib/keychain.js';
 import { ACCOUNTS } from '../../commands/auth.js';
@@ -178,6 +179,13 @@ async function ensureUnlocked({ portal, authHash }) {
  *
  * @param {object} arg
  * @param {string} arg.sessionId       - session name (registry entry name)
+ * @param {string} [arg.worktreePath]  - absolute path to the session
+ *   worktree. When present AND at least one secret materialises, a
+ *   per-session PreToolUse hook is installed at
+ *   `<worktree>/.claude/hooks/mc-vault-block-<sid>.sh` and registered
+ *   in `<worktree>/.claude/settings.json`. Without `worktreePath` the
+ *   lifecycle still materialises but skips hook install (used by tests
+ *   that exercise the materialise path in isolation).
  * @param {object} [arg.portal]        - optional injected portal (tests)
  * @param {Array}  [arg.adapters]      - optional list of installed adapters
  *   (tests inject; production uses detectInstalled())
@@ -188,6 +196,7 @@ async function ensureUnlocked({ portal, authHash }) {
  *     ok: true,
  *     materialised: [ { tool, label, materializedPath } ],
  *     skipped: [ { reason, ... } ],
+ *     hook?: { installedSettingsPath, hookScriptPath, settingsCreated },
  *   }
  *
  * Or {ok:false, reason:'vault-locked', hint:string} if no key is
@@ -195,6 +204,7 @@ async function ensureUnlocked({ portal, authHash }) {
  */
 export async function materialiseForSession({
   sessionId,
+  worktreePath,
   portal: portalOverride,
   adapters: adaptersOverride,
   deps = {},
@@ -295,6 +305,10 @@ export async function materialiseForSession({
   // Manifest: persist materialised list so `mc end` can shred without
   // re-reading the vault. We do NOT persist the token value — only
   // which path was written, by which adapter, for which label.
+  //
+  // Phase 3: extend the manifest shape with an optional `hooks` block.
+  // Backward-compat: drev-4 manifests (no `hooks` key) are still valid;
+  // shredForSession just skips the hook-uninstall step.
   const manifest = {
     schema: 1,
     sessionId,
@@ -305,18 +319,63 @@ export async function materialiseForSession({
       location: m.location,
     })),
   };
-  await writeStateFile(manifestPath(sessionId), JSON.stringify(manifest, null, 2), { mode: 0o600 })
+  const sessionManifestPath = manifestPath(sessionId);
+  await writeStateFile(sessionManifestPath, JSON.stringify(manifest, null, 2), { mode: 0o600 })
     .catch(() => { /* best-effort; lifecycle continues */ });
 
-  return { ok: true, materialised, skipped };
+  // Phase-3 hook install. Skip when:
+  //   - worktreePath wasn't provided (lifecycle-only test path)
+  //   - nothing materialised (no paths to block — leaving the worktree
+  //     without an mc hook entry is the right outcome)
+  let hookResult = null;
+  if (worktreePath && materialised.length > 0) {
+    try {
+      const r = await installHook({
+        worktreePath,
+        sessionId,
+        manifestPath: sessionManifestPath,
+        deps,
+      });
+      if (r.ok) {
+        hookResult = {
+          installedSettingsPath: r.installedSettingsPath,
+          hookScriptPath: r.hookScriptPath,
+          settingsCreated: !!r.settingsCreated,
+        };
+        // Re-write manifest with the hook block so `shredForSession`
+        // knows what to unwind.
+        const withHooks = { ...manifest, hooks: hookResult };
+        await writeStateFile(sessionManifestPath, JSON.stringify(withHooks, null, 2), { mode: 0o600 })
+          .catch(() => { /* best-effort */ });
+      } else {
+        // Hook install failed; surface as skipped but don't fail the
+        // whole materialisation. The materialised files exist — the
+        // user just doesn't get the LLM-blindness guard for them.
+        skipped.push({ reason: 'hook-install-failed', hint: r.reason || null });
+      }
+    } catch (err) {
+      skipped.push({ reason: 'hook-install-threw', hint: err.message });
+    }
+  }
+
+  return { ok: true, materialised, skipped, hook: hookResult };
 }
 
 /**
  * Shred everything that materialiseForSession wrote. Idempotent —
  * missing manifest / already-shredded files are not errors.
+ *
+ * Phase 3: also uninstall the PreToolUse hook (if the manifest carries
+ * a `hooks` block). The hook lives inside the worktree's `.claude/`,
+ * so `worktreePath` is required to reach it. The caller (`mc end`)
+ * shreds BEFORE removing the worktree, so the path is still live.
+ *
+ * Backward-compat: drev-4 manifests (no `hooks` block) skip hook
+ * uninstall — they never installed one.
  */
 export async function shredForSession({
   sessionId,
+  worktreePath,
   adapters: adaptersOverride,
   deps = {},
 } = {}) {
@@ -346,6 +405,20 @@ export async function shredForSession({
   const adapterByTool = new Map();
   for (const a of (adaptersOverride || detectInstalled())) {
     adapterByTool.set(a.TOOL_NAME, a);
+  }
+
+  // Phase-3: uninstall the PreToolUse hook BEFORE we remove the
+  // adapter files. If anything went wrong we still proceed with shred —
+  // the hook ceasing to deny on a path that no longer exists is benign.
+  if (worktreePath && manifest.hooks && typeof manifest.hooks === 'object') {
+    try {
+      await uninstallHook({
+        worktreePath,
+        sessionId,
+        settingsCreatedByMc: !!manifest.hooks.settingsCreated,
+        deps,
+      });
+    } catch { /* best effort */ }
   }
 
   const shredded = [];

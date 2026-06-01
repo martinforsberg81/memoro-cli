@@ -138,7 +138,7 @@ export async function run(rawArgv) {
   // the session just starts without materialised tokens.
   try {
     const { materialiseForSession } = await import('../vault/lifecycle.js');
-    const res = await materialiseForSession({ sessionId: opts.name });
+    const res = await materialiseForSession({ sessionId: opts.name, worktreePath: wt });
     if (!res.ok && res.hint) {
       process.stderr.write(`mc: ${res.hint}\n`);
     }

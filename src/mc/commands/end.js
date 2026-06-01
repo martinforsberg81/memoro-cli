@@ -142,7 +142,10 @@ export async function run(rawArgv) {
       // this is a cheap no-op.
       try {
         const { shredForSession } = await import('../vault/lifecycle.js');
-        await shredForSession({ sessionId: entry.name });
+        await shredForSession({
+          sessionId: entry.name,
+          worktreePath: entry.worktree_path || undefined,
+        });
       } catch (_err) {
         // Swallow — `mc end` must succeed even if vault module
         // can't load (e.g. partial dev install).
