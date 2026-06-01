@@ -230,6 +230,19 @@ export function detect() {
   return existsSync(claudeDir());
 }
 
+/**
+ * Per §13a — the project-level instruction file Claude Code reads
+ * natively. `mc adapter sync` (§13c) materialises a thin wrapper here
+ * pointing at the canonical `docs/coding-agent-protocol.md`.
+ *
+ * Returning a path means "sync me"; null means "no instruction file for
+ * this tool" (used by the gemini stub today). The `renderer` selects
+ * the format converter — only `markdown-wrapper` exists in phase 2.
+ */
+export function instructionsFile() {
+  return { path: 'CLAUDE.md', renderer: 'markdown-wrapper' };
+}
+
 // ─────────────────────────────────────────────────────────────
 // `mc auth status` adapter contract (§11a)
 //
