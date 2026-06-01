@@ -1909,8 +1909,285 @@ Phase 6 is open-ended.
 - **What about user-level instructions (not project-level)?**
   Users with `~/.claude/CLAUDE.md` for global preferences want
   the same portability. Out of scope for §13 (project-only);
-  user-level portability is a separate §14 if it becomes a
+  user-level portability gets its own section if it becomes a
   pain point.
+
+### 14. Device-aware authentication via OAuth Device Flow
+
+The user-facing goal: **new computer → install memoro-cli → run `mc`
+→ browser opens → OAuth → done.** No manual `memoro-cli login`
+ceremony, no copy-paste of tokens, no untracked credentials.
+
+The architectural goal: **per-device tokens with sliding TTL and
+per-device revocation,** so a lost laptop is a 30-second revoke
+operation rather than an account-wide rotation.
+
+#### 14a. The pain we're solving
+
+Today's `memoro-cli login` flow is fine for the founder on the
+primary dev machine — it's run once and forgotten. The first time
+the user tried `mc` on a fresh machine (Vanja's MacBook Air during
+the §12 integration probe on 2026-05-31), every command had to be
+preceded by manual setup:
+
+1. Run `memoro-cli login` on the machine (where the user has to
+   remember this exists)
+2. Wait for browser flow
+3. Token lands in keychain
+4. Now mc works
+
+For external testers / future users this onboarding wall is the
+difference between "I tried it" and "I gave up". Device-aware
+auth folds steps 1–3 into a single `mc` invocation with a clean
+browser handoff.
+
+Per-device tokens also enable revocation hygiene that account-wide
+tokens can't:
+
+- **Lost laptop:** revoke just that device in Memoro UI; other
+  devices keep working without rotation.
+- **Audit trail:** "this commit was opened from device X on date Y"
+  is queryable.
+- **Per-device permissions (future):** read-only on this device,
+  full on that one.
+
+#### 14b. Reuse architecture — Memoro already has 90 % of this
+
+Memoro already ships `src/auth/api-token.js` which gives us
+everything we need *except* the Device Flow front door and a
+sliding-TTL refresh. The bake-time was massively over-estimated
+before this audit:
+
+| Component | Lives at | Status |
+|---|---|---|
+| Token format `mem_<64hex>` | `api-token.js:91-92` | ✓ reuse as-is |
+| Hashed storage (SHA-256) | `api-token.js:99,116` | ✓ reuse |
+| Default 90-day TTL, max 365 | `api-token.js:79,88` | ✓ reuse |
+| `name` field for human label | `api-token.js:73` | ✓ stores `"Vanjas MacBook Air (darwin 25.4)"` directly |
+| `lastUsedAt` for idle tracking | `api-token.js:112` | ✓ already there; needs §14c to drive sliding refresh |
+| `tokenPrefix` (safe-to-show 4 chars) | `api-token.js:97` | ✓ surfaces in `mc auth devices` UI without revealing secret |
+| Per-user enumeration | `api-token.js:127` (`api-tokens:${userId}`) | ✓ reuse — feeds `mc auth devices` list |
+| `'device'` scope value | `api-token.js:46` | ✓ already exists ("Capacitor native-app auth exchange"); we share it |
+| `validateApiToken` | `session-guard.js:18` | ✓ already wired into request auth |
+
+So `device_tokens` is **not a new table.** It's `api-tokens` filtered
+on `scope='device'`. No migration needed.
+
+#### 14c. OAuth Device Flow per RFC 8628
+
+Standard three-endpoint flow used by `gh`, `gcloud`, `docker login`,
+`fly.io`. Three new routes on the server:
+
+```
+POST /api/auth/device/init       — start a device-authorization request
+GET  /auth/device                — browser-facing OAuth + authorize page
+POST /api/auth/device/poll       — CLI polls for completion
+```
+
+**Init** (called by mc):
+
+```
+POST /api/auth/device/init
+Body: { device_name: "Vanjas MacBook Air", device_os: "darwin 25.4" }
+
+Response:
+{
+  user_code: "ABCD-1234",          // human-typeable, 8 chars
+  device_code: "<opaque-uuid>",    // CLI uses this to poll
+  verification_url: "https://meetmemoro.app/auth/device",
+  expires_in: 600,                 // 10 min
+  interval: 5                      // poll every 5s
+}
+```
+
+State stored in KV: `device-auth-pending:<device_code>` →
+`{ user_code, device_name, device_os, created_at, status: 'pending' }`
+with 10-min TTL.
+
+**Browser page** (`GET /auth/device`):
+
+1. User types or clicks pre-filled `user_code`
+2. If not signed in: standard Memoro OAuth (Google/Apple)
+3. After sign-in: render *device-authorization screen*
+
+```
+Authorize this device?
+
+  Vanjas MacBook Air
+  darwin 25.4
+  Code: ABCD-1234
+  Requested 30 seconds ago
+
+  [Allow]    [Deny]
+```
+
+On Allow: server creates an api-token via existing
+`createApiToken({ scope: 'device', name: '<device_name> (<device_os>)',
+expiryDays: 90 })` and writes the token to
+`device-auth-pending:<device_code>` with `status: 'authorized'`.
+
+**Poll** (called by mc on a loop):
+
+```
+POST /api/auth/device/poll
+Body: { device_code: "<opaque-uuid>" }
+
+Responses:
+{ status: 'pending' }
+{ status: 'expired' }
+{ status: 'denied' }
+{ status: 'authorized', token: 'mem_...', token_prefix: 'mem_a1b2…', expires_at: '...' }
+```
+
+mc stops polling on any terminal status, stores the token in
+keychain on `authorized`.
+
+#### 14d. Sliding TTL via `lastUsedAt`
+
+Today `validateApiToken` updates `lastUsedAt` opportunistically.
+§14 extends this: each time `lastUsedAt` is written, also extend the
+KV TTL by the original `expiryDays` (default 90). Five-line change
+in `api-token.js`'s validation path.
+
+Result: a daily user's device-token never expires. A token unused for
+90 days dies. Hard cap at the existing 365-day max from
+`createApiToken` prevents indefinite extension.
+
+#### 14e. `mc auth devices` verb
+
+Three sub-verbs added to the `mc auth` surface (alongside the
+`mc auth memoro` / `mc auth <tool>` from §11c):
+
+```
+mc auth devices [--json]
+   List all device-tokens for this account: name, last_used,
+   expires_at, token_prefix, current-device marker.
+
+mc auth devices revoke <prefix-or-id> [--confirm]
+   Revoke a specific device. Refuses to revoke the current device
+   without --confirm-self to prevent accidentally locking
+   yourself out.
+
+mc auth devices rename <prefix-or-id> "<new-name>"
+   Convenience — updates the api-token's name field. Useful when
+   hostname.local is uninformative.
+```
+
+`mc auth devices` lives at `src/mc/commands/auth.js` alongside the
+existing per-target helpers. Server-side: thin filter over existing
+api-token list-and-delete endpoints — no new schema, no new model.
+
+#### 14f. mc-side: detection + browser open + polling
+
+`bin-mc.js` gets a fresh-install detection branch at the top of
+`main()` (before any command dispatch):
+
+```js
+if (await needsDeviceAuth()) {
+  return runDeviceFlow();
+}
+```
+
+`needsDeviceAuth()`: returns true iff the keychain has no Memoro
+token AND we're not in `--no-launch` / test mode AND we're attached
+to a TTY (CI uses MEMORO_TOKEN env directly, like today).
+
+`runDeviceFlow()`:
+
+1. `POST /api/auth/device/init` with `hostname` + `os.release()`
+2. Print `user_code` + `verification_url` to terminal
+3. Try `open` (macOS) / `xdg-open` (Linux) / `start` (Windows) on
+   the URL; fall back to "open this URL manually" hint if all fail
+4. Poll every `interval` seconds; render a dot per poll to show
+   liveness
+5. On `authorized`: store token in keychain, print success line
+   with token-prefix + expiry, continue with the original `mc`
+   invocation
+6. On `expired` / `denied`: clear error + exit 1
+7. On Ctrl-C: cancel cleanly, no token created
+
+Plus: `memoro-cli login` stays available as a CI-compatible
+fallback (its existing browser-flow + manual token entry).
+
+#### 14g. Integration with other sections
+
+- **§11 onboarding:** `mc setup` becomes simpler — the Memoro auth
+  step is no longer "run `memoro-cli login` then come back". It's
+  just "auth is already done at first mc invocation; verify it's
+  still active".
+- **§12 vault:** vault session is per-device-token. Revoke device →
+  vault inaccessible from that device. New device → vault visible
+  after first `mc vault unlock` with master password (Memoro auth
+  proves identity; master password proves vault ownership; both
+  required).
+- **§13 tool-portability:** device-token is Memoro-account-bound,
+  not tool-bound. Switching from Claude to Codex on same device
+  requires no re-auth. New device requires the device flow once.
+- **Forgotten-master-password recovery** (parked from §12 discussion
+  2026-05-31): the UI-only flow at `/vault/forgot-password` uses
+  fresh OAuth re-authentication. The mechanism is the same as
+  Device Flow — just initiated from the UI rather than CLI.
+
+#### 14h. Acceptance check
+
+- A user can `npm install -g memoro-cli` on a fresh machine, run
+  `mc`, complete OAuth in the browser, and immediately use any
+  `mc` command without further setup.
+- `mc auth devices` lists this device alongside other machines the
+  user has signed in from.
+- Revoking a device in `mc auth devices revoke <prefix>` (or via
+  Memoro UI when that ships) makes all `mc` commands on that
+  device fail with a friendly "this device was revoked; re-auth
+  to continue".
+- A token used daily never expires. A token idle for 90 days
+  expires automatically.
+- `memoro-cli login` still works for CI / scripted environments
+  where browser-open is not viable.
+- No new database table. The `device_tokens` model is a filter
+  on existing `api-tokens` with `scope='device'`.
+
+#### 14i. Phasing
+
+1. **Phase 1 — Server-side device flow (~3-4 hours).** Three new
+   routes, KV state, the `/auth/device` UI page, sliding-TTL
+   extension to `validateApiToken`. Plus the
+   `GET /api/auth/devices` + revoke endpoints (filtered list of
+   existing api-tokens).
+2. **Phase 2 — mc-side (~2-3 hours).** `needsDeviceAuth` detection,
+   `runDeviceFlow` with browser-open + polling, `mc auth devices`
+   verb. Existing `memoro-cli login` kept as CI fallback.
+3. **Phase 3 — Memoro UI for device management (~2-3 hours,
+   deferrable).** Settings page listing devices with revoke. Most
+   users will manage devices from `mc auth devices` directly;
+   UI is for the "I lost a laptop and can't get to a terminal"
+   case.
+
+Total phases 1+2: **~1 day solo.** Phase 3 is decoupled and can
+ship later.
+
+#### 14j. Open questions
+
+- **Device-naming policy.** Default: `<hostname>.local (<os>)` per
+  Node `os.hostname()` and `os.release()`. User can rename via
+  `mc auth devices rename`. Open: should the auth page show the
+  *user-claimed* name or the raw hostname? Probably the claimed
+  one with the raw hostname underneath for verification.
+- **What if the same device runs multiple Memoro accounts?**
+  Today's keychain layout assumes one token per account
+  prefix. Cross-account support is out of scope; document
+  `MEMORO_ACCOUNT=<email>` as the future env-override.
+- **Rate limiting on device init.** Probably reuse the existing
+  rate-limit module with a new `deviceAuthInit` bucket — same
+  pattern as vault unlock.
+- **What about `cs`-style "I'm on Vanja's machine" trust?** A
+  device-token issued to "Vanjas MacBook Air" is still
+  technically the founder's account. If that machine is shared,
+  the trust is on whoever physically owns it. Out of scope —
+  shared machines are explicitly not supported in v1.
+- **CI flow without a browser.** Document that CI environments
+  should keep using `memoro-cli login` with `MEMORO_TOKEN` env
+  (or a service-account-style token created by an authed
+  admin). Device Flow is interactive-only.
 
 ## Open questions
 
