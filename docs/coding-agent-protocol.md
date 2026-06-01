@@ -39,7 +39,16 @@ established across drev 1 (foundation) + drev 2 (polish + onboarding)
 - Env-scrub in test helpers
 - Ask-vs-guess discipline (zero guesses on design)
 - Negative requirements in delegation prompts
+- **Honest uncertainty disclosure** (added drev 4): when verification
+  of an acceptance criterion is blocked, surface it in judgment
+  calls — never silently ship "verified"
+- **Architectural self-upgrades, bounded** (added drev 4): ship the
+  DRY helper / extensibility seam when one-line PR-body explanation
+  is enough; refuse if it crosses into gold-plating
 - Judgment calls in PR body (TDD-style)
+- **Tests cover non-JSON error paths too** (added PR #48): never
+  test-only the `--json` branch; errors on stderr must be asserted
+  in the human-readable mode the user actually sees
 
 **Priming as coordinator** depends on your tool:
 
