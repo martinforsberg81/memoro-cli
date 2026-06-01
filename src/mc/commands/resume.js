@@ -47,7 +47,10 @@ export async function run(rawArgv) {
   // Same contract as `mc new` — soft-degrade on vault-locked.
   try {
     const { materialiseForSession } = await import('../vault/lifecycle.js');
-    const res = await materialiseForSession({ sessionId: entry.name });
+    const res = await materialiseForSession({
+      sessionId: entry.name,
+      worktreePath: entry.worktree_path || undefined,
+    });
     if (!res.ok && res.hint) {
       process.stderr.write(`mc: ${res.hint}\n`);
     }

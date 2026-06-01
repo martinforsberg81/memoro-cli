@@ -253,6 +253,68 @@ describe('materialiseForSession', () => {
     }
   });
 
+  it('installs the PreToolUse hook when worktreePath is provided', async () => {
+    const { portal, vaultKeyBytes } = await bootstrapVaultWithSecrets([
+      { label: 'a', token: TOKEN_CLAUDE, provider: 'anthropic' },
+    ]);
+    const cacheDeps = makeMemCacheDeps();
+    await cacheVaultKey(vaultKeyBytes, { deps: cacheDeps });
+
+    const worktree = join(mcHomeDir, 'sess-with-hook-wt');
+    mkdirSync(worktree, { recursive: true });
+
+    const claudeStub = makeStubAdapter({
+      toolName: 'claude',
+      locations: [{ type: 'file', path: join(mcHomeDir, 'hook-claude.json') }],
+    });
+    const res = await materialiseForSession({
+      sessionId: 'sess-with-hook',
+      worktreePath: worktree,
+      portal,
+      adapters: [claudeStub],
+      deps: { cacheDeps },
+    });
+    assert.equal(res.ok, true, JSON.stringify(res));
+    assert.ok(res.hook, 'res.hook must be populated');
+    assert.equal(typeof res.hook.installedSettingsPath, 'string');
+    assert.equal(res.hook.settingsCreated, true);
+    // settings.json + script both exist.
+    assert.ok(existsSync(res.hook.installedSettingsPath));
+    assert.ok(existsSync(res.hook.hookScriptPath));
+    // Manifest carries the hook block.
+    const manifest = JSON.parse(readFileSync(manifestPath('sess-with-hook'), 'utf8'));
+    assert.ok(manifest.hooks, 'manifest.hooks must be present');
+    assert.equal(manifest.hooks.settingsCreated, true);
+  });
+
+  it('skips hook install when nothing materialised', async () => {
+    const { portal, vaultKeyBytes } = await bootstrapVaultWithSecrets([
+      // Vault has no matching secret for our installed adapter.
+      { label: 'a', token: 'sk-other-zzz3', provider: 'unknown-provider' },
+    ]);
+    const cacheDeps = makeMemCacheDeps();
+    await cacheVaultKey(vaultKeyBytes, { deps: cacheDeps });
+
+    const worktree = join(mcHomeDir, 'sess-empty-wt');
+    mkdirSync(worktree, { recursive: true });
+    const claudeStub = makeStubAdapter({
+      toolName: 'claude',
+      locations: [{ type: 'file', path: join(mcHomeDir, 'empty-claude.json') }],
+    });
+    const res = await materialiseForSession({
+      sessionId: 'sess-empty-hook',
+      worktreePath: worktree,
+      portal,
+      adapters: [claudeStub],
+      deps: { cacheDeps },
+    });
+    assert.equal(res.ok, true);
+    assert.equal(res.materialised.length, 0);
+    assert.equal(res.hook, null);
+    // No hook script was written.
+    assert.equal(existsSync(join(worktree, '.claude')), false);
+  });
+
   it('returned object never embeds the token value', async () => {
     const { portal, vaultKeyBytes } = await bootstrapVaultWithSecrets([
       { label: 'a', token: TOKEN_CLAUDE, provider: 'anthropic' },
@@ -322,6 +384,47 @@ describe('shredForSession', () => {
     });
     assert.equal(res.ok, true);
     assert.equal(res.reason, 'no-manifest');
+  });
+
+  it('uninstalls the PreToolUse hook when manifest.hooks is present', async () => {
+    const stateDir = join(mcHomeDir, 'state');
+    mkdirSync(stateDir, { recursive: true });
+
+    // Build a worktree with an mc-installed hook so shred can unwind it.
+    const worktree = join(mcHomeDir, 'sess-shred-hook-wt');
+    mkdirSync(worktree, { recursive: true });
+    const { installHook } = await import('../../../src/mc/vault/hook.js');
+    const sessionId = 'sess-shred-hook';
+    const installRes = await installHook({
+      worktreePath: worktree,
+      sessionId,
+      manifestPath: manifestPath(sessionId),
+    });
+    assert.equal(installRes.ok, true);
+    assert.equal(installRes.settingsCreated, true);
+    assert.ok(existsSync(installRes.installedSettingsPath));
+    assert.ok(existsSync(installRes.hookScriptPath));
+
+    // Write a manifest that references the hook.
+    writeFileSync(manifestPath(sessionId), JSON.stringify({
+      schema: 1,
+      sessionId,
+      materialised: [],
+      hooks: {
+        installedSettingsPath: installRes.installedSettingsPath,
+        hookScriptPath: installRes.hookScriptPath,
+        settingsCreated: true,
+      },
+    }));
+
+    const res = await shredForSession({
+      sessionId, worktreePath: worktree, adapters: [],
+    });
+    assert.equal(res.ok, true);
+    // settings.json removed (mc created it, only mc entries inside).
+    assert.equal(existsSync(installRes.installedSettingsPath), false);
+    // hook script also gone.
+    assert.equal(existsSync(installRes.hookScriptPath), false);
   });
 
   it('is idempotent — running twice doesn\'t error', async () => {
