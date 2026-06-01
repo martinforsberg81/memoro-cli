@@ -91,6 +91,8 @@ const LIFECYCLE = {
   reconcile:     () => import('./mc/commands/reconcile.js'),
   vault:         () => import('./mc/commands/vault.js'),
   adapter:       () => import('./mc/commands/adapter.js'),
+  fanout:        () => import('./mc/commands/fanout.js'),
+  gather:        () => import('./mc/commands/gather.js'),
 };
 
 async function main() {
@@ -223,6 +225,10 @@ USAGE
 
   mc adapter sync [--tool ...] [...] Materialise per-tool instruction files
                                      from docs/coding-agent-protocol.md
+  mc fanout <plan.md> [--from main]  Parse \`## Phase N:\` headings + spawn one
+                                     idle session per phase (§10a MVP)
+  mc gather <plan-slug> [--dry-run]  Merge phase PRs into wip/<plan-slug>;
+                                     stop on cross-phase conflict (§10a MVP)
 
   mc sessions list                   List your active coding sessions
   mc sessions send <label|id> <msg>  Dispatch a message into another session
