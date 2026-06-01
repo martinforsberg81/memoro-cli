@@ -48,10 +48,22 @@ export async function run(argv) {
   const rest = argv.slice(1);
   if (!sub || sub === 'status') return runStatus(rest);
   if (sub === 'memoro')                          return runAuthMemoro(rest);
+  if (sub === 'devices')                         return runAuthDevices(rest);
   if (Object.prototype.hasOwnProperty.call(TOOL_ADAPTERS, sub)) return runAuthTool(sub, rest);
   if (PLANNED_TOOLS.has(sub))                    return runAuthTool(sub, rest);
   console.error(`mc: unknown auth subcommand "${sub}". Try \`mc auth status\`.`);
   return 2;
+}
+
+// ─────────────────────────────────────────────────────────────
+// `mc auth devices [list | revoke <target>]` (§14e)
+// ─────────────────────────────────────────────────────────────
+
+async function runAuthDevices(argv) {
+  // Lazy-import the devices module so the help / status fast paths stay
+  // cold. Same idiom as the LIFECYCLE table in bin-mc.js.
+  const mod = await import('./auth-devices.js');
+  return mod.run(argv);
 }
 
 // ─────────────────────────────────────────────────────────────

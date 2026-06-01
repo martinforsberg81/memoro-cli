@@ -41,6 +41,7 @@ import { getSecret } from './lib/keychain.js';
 import { ACCOUNTS } from './commands/auth.js';
 import { readConfig, getApiUrl } from './lib/config.js';
 import { memoroFetch } from './lib/api.js';
+import { needsDeviceAuth, runDeviceFlow } from './lib/device-flow.js';
 import { getRepoContext, deriveRepoName } from './lib/git-context.js';
 import { lookupOrMint } from './lib/coding-session.js';
 import { CliWsClient } from './commands/ws-client.js';
@@ -114,6 +115,18 @@ async function main() {
   if (argv[0] === '--version' || argv[0] === '-v') {
     console.log(await packageVersion());
     return 0;
+  }
+
+  // §14 — fresh-install path: when no Memoro token is stored AND the user
+  // is on a real TTY (not CI / not a test), kick off the OAuth Device
+  // Flow before dispatching the original command. After a successful
+  // flow we exit 0 and ask the user to re-run their command — the
+  // device-code is opaque to the rest of mc and re-dispatching is fancy.
+  // Bypass list (help/version, `mc auth memoro`, `mc auth devices`) lives
+  // inside shouldTriggerDeviceFlow.
+  if (await needsDeviceAuth({ argv })) {
+    const apiUrl = getApiUrl(argv) || (await readConfig()).apiUrl;
+    return runDeviceFlow({ apiUrl });
   }
 
   if (argv[0] === 'sessions') {
@@ -193,6 +206,8 @@ USAGE
   mc setup [--json]                  Self-verifying setup checklist (§11b)
   mc auth status [--json]            Single-screen health check (§11a)
   mc auth memoro [--logout|--status] Log in / out of Memoro (§11c)
+  mc auth devices [--json]           List device tokens (§14e)
+  mc auth devices revoke <prefix>    Revoke a device token
   mc auth <claude|codex|gemini>      Re-check that tool's status + hint
 
   mc vault setup                     Create a Memoro-account-wide token vault
@@ -262,7 +277,10 @@ async function runWrap(argv, { label = null } = {}) {
   const apiUrl = getApiUrl(argv) || config.apiUrl;
   const token = await getSecret(ACCOUNTS.TOKEN);
   if (!token) {
-    console.error('mc: no Memoro token. Run `memoro-cli login` first.');
+    // Reachable when MC_TEST_MODE=1 (device-flow auto-trigger skipped) or
+    // when the user wipes the keychain mid-session. The user-friendly
+    // path is "just run mc on a real TTY"; CI keeps memoro-cli login.
+    console.error('mc: no Memoro token. Run `mc` on a real TTY to start the device flow, or `memoro-cli login` for CI.');
     process.exit(1);
   }
 
