@@ -68,6 +68,7 @@ const VERBS = {
   rm:                { handler: cmdRm,               help: 'Delete a secret' },
   rotate:            { handler: cmdRotate,           help: 'Replace a secret, keeping the old as <label>-prev' },
   'change-password': { handler: cmdChangePassword,   help: 'Change the master password (re-encrypts auth hash)' },
+  'destroy-forgotten': { handler: cmdDestroyForgotten, help: 'Wipe the vault when the master password is lost (requires fresh login)' },
 };
 
 export async function run(argv, opts = {}) {
@@ -812,6 +813,67 @@ async function cmdChangePassword(argv, opts = {}) {
     `Master password changed. ${restaged.length} secret${restaged.length === 1 ? '' : 's'} re-encrypted.`,
   );
   return 0;
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// Verb: destroy-forgotten
+// ────────────────────────────────────────────────────────────────────────
+//
+// Wipes the entire vault — used when the master password is lost. The
+// vault is zero-knowledge so there is no recovery; the only option is
+// to destroy and re-setup.
+//
+// Server-side gate: the Memoro session must have been created within
+// the last 5 minutes (proves the user just re-OAuth'd). On a stale
+// session the server returns 403 with code OAUTH_STALE; we surface
+// that with a clear "log out + log in, then retry" message.
+//
+// The `mc vault destroy` verb (which requires unlock) handles the
+// non-forgotten path; this verb is the recovery escape hatch only.
+
+async function cmdDestroyForgotten(argv, opts = {}) {
+  const flags = parseFlags(argv);
+  const portal = await loadPortal(opts);
+
+  if (!flags.noConfirm && !flags.json) {
+    console.log('This will permanently delete ALL secrets in your vault.');
+    console.log('The vault is zero-knowledge — no recovery is possible after this.');
+    const ok = await confirm('Type "yes" to continue', { defaultYes: false });
+    if (!ok) {
+      console.log('Cancelled.');
+      return 1;
+    }
+  }
+
+  const res = await VaultApi.destroyVaultForgotten(portal);
+  if (res?.ok) {
+    emit(flags.json,
+      { ok: true },
+      'Vault destroyed. Run `mc vault setup` to create a fresh vault.',
+    );
+    return 0;
+  }
+
+  if (res?.code === 'OAUTH_STALE') {
+    emit(flags.json,
+      { ok: false, error: res.error, code: 'OAUTH_STALE' },
+      [
+        'Fresh authentication required.',
+        '',
+        'To destroy a vault when the master password is lost, the server',
+        'needs proof that you just re-authenticated. Steps:',
+        '',
+        '  1. Run `mc auth logout`',
+        '  2. Run any mc command (e.g. `mc auth status`) — it will reopen',
+        '     the browser OAuth flow.',
+        '  3. Within 5 minutes, run `mc vault destroy-forgotten` again.',
+      ].join('\n'),
+    );
+    return 1;
+  }
+
+  emit(flags.json, { ok: false, error: res?.error || 'destroy failed' });
+  return 1;
 }
 
 // ────────────────────────────────────────────────────────────────────────
