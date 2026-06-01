@@ -91,6 +91,7 @@ const LIFECYCLE = {
   reconcile:     () => import('./mc/commands/reconcile.js'),
   vault:         () => import('./mc/commands/vault.js'),
   adapter:       () => import('./mc/commands/adapter.js'),
+  'tool-switch': () => import('./mc/commands/tool-switch.js'),
   fanout:        () => import('./mc/commands/fanout.js'),
   gather:        () => import('./mc/commands/gather.js'),
 };
@@ -225,6 +226,9 @@ USAGE
 
   mc adapter sync [--tool ...] [...] Materialise per-tool instruction files
                                      from docs/coding-agent-protocol.md
+  mc tool-switch <tool> [--dry-run]  Switch default coding tool (§13d):
+                                     verify install + auth, persist
+                                     default, sync target's instructions
   mc fanout <plan.md> [--from main]  Parse \`## Phase N:\` headings + spawn one
                                      idle session per phase (§10a MVP)
   mc gather <plan-slug> [--dry-run]  Merge phase PRs into wip/<plan-slug>;
