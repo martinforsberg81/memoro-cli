@@ -1918,9 +1918,10 @@ The user-facing goal: **new computer → install memoro-cli → run `mc`
 → browser opens → OAuth → done.** No manual `memoro-cli login`
 ceremony, no copy-paste of tokens, no untracked credentials.
 
-The architectural goal: **per-device tokens with sliding TTL and
-per-device revocation,** so a lost laptop is a 30-second revoke
-operation rather than an account-wide rotation.
+The architectural goal: **per-device tokens with fixed 90-day TTL
+and per-device revocation,** so a lost laptop is a 30-second revoke
+operation rather than an account-wide rotation, and every device
+re-authenticates predictably four times a year.
 
 #### 14a. The pain we're solving
 
@@ -1954,9 +1955,8 @@ tokens can't:
 #### 14b. Reuse architecture — Memoro already has 90 % of this
 
 Memoro already ships `src/auth/api-token.js` which gives us
-everything we need *except* the Device Flow front door and a
-sliding-TTL refresh. The bake-time was massively over-estimated
-before this audit:
+everything we need *except* the Device Flow front door. The
+bake-time was massively over-estimated before this audit:
 
 | Component | Lives at | Status |
 |---|---|---|
@@ -1964,7 +1964,8 @@ before this audit:
 | Hashed storage (SHA-256) | `api-token.js:99,116` | ✓ reuse |
 | Default 90-day TTL, max 365 | `api-token.js:79,88` | ✓ reuse |
 | `name` field for human label | `api-token.js:73` | ✓ stores `"Vanjas MacBook Air (darwin 25.4)"` directly |
-| `lastUsedAt` for idle tracking | `api-token.js:112` | ✓ already there; needs §14c to drive sliding refresh |
+| `lastUsedAt` for idle tracking | `api-token.js:112,168-183` | ✓ already throttled to 1/min; surfaces in `mc auth devices` list |
+| Fixed 90-day expiry from creation | `api-token.js:79,88,166` | ✓ reuse; sliding TTL intentionally deferred (see §14d) |
 | `tokenPrefix` (safe-to-show 4 chars) | `api-token.js:97` | ✓ surfaces in `mc auth devices` UI without revealing secret |
 | Per-user enumeration | `api-token.js:127` (`api-tokens:${userId}`) | ✓ reuse — feeds `mc auth devices` list |
 | `'device'` scope value | `api-token.js:46` | ✓ already exists ("Capacitor native-app auth exchange"); we share it |
@@ -2042,16 +2043,28 @@ Responses:
 mc stops polling on any terminal status, stores the token in
 keychain on `authorized`.
 
-#### 14d. Sliding TTL via `lastUsedAt`
+#### 14d. TTL policy — fixed 90 days, sliding deferred
 
-Today `validateApiToken` updates `lastUsedAt` opportunistically.
-§14 extends this: each time `lastUsedAt` is written, also extend the
-KV TTL by the original `expiryDays` (default 90). Five-line change
-in `api-token.js`'s validation path.
+Existing `validateApiToken` (rad 168-183) already throttles
+`lastUsedAt` writes to ~1/min and refreshes the KV entry TTL to
+match `expiresAt`. **Sliding TTL — extending `expiresAt` itself on
+each use — is intentionally NOT in §14 v1.** A fixed 90-day cycle
+from token creation is acceptable for the foreseeable user base
+and gives predictable, hygienic re-auth.
 
-Result: a daily user's device-token never expires. A token unused for
-90 days dies. Hard cap at the existing 365-day max from
-`createApiToken` prevents indefinite extension.
+Arguments considered:
+
+- **For sliding** (gh / gcloud convention): daily users never
+  re-auth as long as they're active. Lower friction.
+- **For fixed** (Stripe / GitHub PAT / Slack convention): predictable
+  expiry, forced periodic re-auth as a security hygiene practice,
+  no ambiguity about "when does this die".
+
+The 90-day fixed window means an active user re-auths ~4 times a
+year. Memoro CLI users have not reported this as friction. If they
+do, sliding is a ~7-line change in `api-token.js`'s validation path
+— add it as a small follow-up amendment, don't pre-emptively design
+for it.
 
 #### 14e. `mc auth devices` verb
 
@@ -2139,8 +2152,9 @@ fallback (its existing browser-flow + manual token entry).
   Memoro UI when that ships) makes all `mc` commands on that
   device fail with a friendly "this device was revoked; re-auth
   to continue".
-- A token used daily never expires. A token idle for 90 days
-  expires automatically.
+- A token expires 90 days from creation regardless of activity
+  (sliding TTL deferred per §14d). Users are prompted to re-auth
+  via Device Flow on the next `mc` invocation after expiry.
 - `memoro-cli login` still works for CI / scripted environments
   where browser-open is not viable.
 - No new database table. The `device_tokens` model is a filter
@@ -2148,11 +2162,11 @@ fallback (its existing browser-flow + manual token entry).
 
 #### 14i. Phasing
 
-1. **Phase 1 — Server-side device flow (~3-4 hours).** Three new
-   routes, KV state, the `/auth/device` UI page, sliding-TTL
-   extension to `validateApiToken`. Plus the
+1. **Phase 1 — Server-side device flow (~2-3 hours).** Three new
+   routes, KV state, the `/auth/device` UI page. Plus the
    `GET /api/auth/devices` + revoke endpoints (filtered list of
-   existing api-tokens).
+   existing api-tokens). No changes to `api-token.js` itself —
+   sliding TTL deferred per §14d.
 2. **Phase 2 — mc-side (~2-3 hours).** `needsDeviceAuth` detection,
    `runDeviceFlow` with browser-open + polling, `mc auth devices`
    verb. Existing `memoro-cli login` kept as CI fallback.
