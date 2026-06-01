@@ -98,6 +98,15 @@ export function detect() {
   return existsSync(join(homedir(), '.codex'));
 }
 
+/**
+ * Per §13a — Codex reads project-level `AGENTS.md` (per agents.md
+ * convention). `mc adapter sync` materialises a thin wrapper here
+ * pointing at the canonical `docs/coding-agent-protocol.md`.
+ */
+export function instructionsFile() {
+  return { path: 'AGENTS.md', renderer: 'markdown-wrapper' };
+}
+
 // ─────────────────────────────────────────────────────────────
 // `mc auth status` adapter contract (§11a)
 //

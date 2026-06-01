@@ -90,6 +90,7 @@ const LIFECYCLE = {
   setup:         () => import('./mc/commands/setup.js'),
   reconcile:     () => import('./mc/commands/reconcile.js'),
   vault:         () => import('./mc/commands/vault.js'),
+  adapter:       () => import('./mc/commands/adapter.js'),
   fanout:        () => import('./mc/commands/fanout.js'),
   gather:        () => import('./mc/commands/gather.js'),
 };
@@ -222,6 +223,8 @@ USAGE
   mc vault change-password           Change the master password
   mc vault status / lock / --help    Self-explanatory
 
+  mc adapter sync [--tool ...] [...] Materialise per-tool instruction files
+                                     from docs/coding-agent-protocol.md
   mc fanout <plan.md> [--from main]  Parse \`## Phase N:\` headings + spawn one
                                      idle session per phase (§10a MVP)
   mc gather <plan-slug> [--dry-run]  Merge phase PRs into wip/<plan-slug>;
