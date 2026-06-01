@@ -30,6 +30,7 @@ import * as codex from '../../adapters/codex.js';
 import { readRegistry } from '../registry.js';
 import { mcHome, mcHomeExists } from '../paths.js';
 import { scanDaemons } from '../orphan-daemons.js';
+import { inspectCachedVaultKey } from '../vault/key-cache.js';
 
 const TOOL_ADAPTERS = {
   claude: { adapter: claudeCode, label: 'claude' },
@@ -179,13 +180,14 @@ async function runStatus(argv) {
   const opts = parseStatusArgs(argv);
   if (opts.error) { console.error(`mc: ${opts.error}`); return 2; }
 
-  const [memoro, claude, codexStatus, gemini, shell, workspace] = await Promise.all([
+  const [memoro, claude, codexStatus, gemini, shell, workspace, vault] = await Promise.all([
     probeMemoro(),
     safeStatus(claudeCode),
     safeStatus(codex),
     plannedGeminiStatus(),
     probeShellWrapper(),
     probeWorkspace(),
+    probeVault(),
   ]);
 
   const report = {
@@ -197,6 +199,7 @@ async function runStatus(argv) {
     ],
     shell_wrapper: shell,
     workspace,
+    vault,
   };
 
   if (opts.json) {
@@ -237,6 +240,16 @@ function printHuman(r) {
   process.stdout.write(`\nShell wrapper:\n`);
   process.stdout.write(`  ${tick(r.shell_wrapper.installed)} ${r.shell_wrapper.installed ? `installed in ${r.shell_wrapper.rc}` : 'not installed'}\n`);
   if (r.shell_wrapper.hint) process.stdout.write(`    → ${r.shell_wrapper.hint}\n`);
+  if (r.vault) {
+    process.stdout.write(`\nVault:\n`);
+    if (r.vault.cache_present) {
+      const mins = Math.max(1, Math.round((r.vault.cache_expires_in_ms || 0) / 60_000));
+      process.stdout.write(`  ✓ unlocked — ${mins} min${mins === 1 ? '' : 's'} until lock\n`);
+    } else {
+      process.stdout.write(`  · locked\n`);
+      process.stdout.write(`    → Run \`mc vault unlock\` to cache the key for 15 min\n`);
+    }
+  }
   process.stdout.write(`\nWorkspace:\n`);
   process.stdout.write(`  ${tick(r.workspace.mc_home_exists)} MC_HOME = ${r.workspace.mc_home}\n`);
   process.stdout.write(`  ${tick(true)} Registry: ${r.workspace.session_count} session${r.workspace.session_count === 1 ? '' : 's'}\n`);
@@ -306,6 +319,29 @@ export async function plannedGeminiStatus() {
     hint: 'Install with: npm install -g @google/gemini-cli (adapter is planned)',
     detailLines: [],
   };
+}
+
+/**
+ * §12f surface: surface the vault-key cache state so users can debug
+ * "why aren't my tokens materialising?". Reads the keychain entry
+ * via inspectCachedVaultKey, which never imports the key itself.
+ */
+export async function probeVault() {
+  try {
+    const info = await inspectCachedVaultKey();
+    return {
+      cache_present: !!info.present,
+      cache_expires_at: info.expiresAt || null,
+      cache_expires_in_ms: info.expiresInMs || 0,
+    };
+  } catch (err) {
+    return {
+      cache_present: false,
+      cache_expires_at: null,
+      cache_expires_in_ms: 0,
+      hint: `vault probe failed: ${err.message}`,
+    };
+  }
 }
 
 export function probeShellWrapper() {

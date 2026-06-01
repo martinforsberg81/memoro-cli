@@ -1,0 +1,379 @@
+/**
+ * Vault → lifecycle glue (§12d).
+ *
+ * `mc new` / `mc resume` pull tokens from the vault and materialise
+ * them where each installed adapter expects to read them. `mc end`
+ * reverses the materialisation.
+ *
+ * Phase-2 boundary: this module is responsible for
+ *   (a) deciding *which* secrets feed *which* adapter,
+ *   (b) calling the adapter's materializeToken / shredToken,
+ *   (c) persisting a per-session manifest at
+ *       ${MC_HOME}/state/<session-id>-materialised.json so `mc end`
+ *       can reverse the operation without re-reading the vault.
+ *
+ * Phase 3 will install a PreToolUse hook that denies model reads of
+ * the materialised paths. We don't do that here.
+ *
+ * No-leak invariant: tokens travel only through the
+ *   vault → decryptSecretPayload → adapter.materializeToken
+ * path. We never log a token value; tests assert this via the
+ * "secret-bytes-never-leak" suite.
+ *
+ * Soft-degrade: if the vault is locked OR there's no Memoro token,
+ * `materialiseForSession` returns
+ *   { ok: false, reason: 'vault-locked', materialised: [], hint: <string> }
+ * and the lifecycle prints the hint to stderr but continues. The
+ * session just starts without tokens — same UX as today.
+ */
+
+import { existsSync } from 'node:fs';
+import { mkdir, writeFile, readFile, unlink } from 'node:fs/promises';
+import { join } from 'node:path';
+
+import { mcHome } from '../paths.js';
+import { readCachedVaultKey } from './key-cache.js';
+import { deriveVaultKeys, decryptSecretPayload } from './client-crypto.js';
+import * as VaultApi from './api.js';
+import { normaliseSecretPayload } from './types.js';
+import { detectInstalled } from '../../adapters/index.js';
+import { getSecret as keychainGet } from '../../lib/keychain.js';
+import { ACCOUNTS } from '../../commands/auth.js';
+import { readConfig, getApiUrl } from '../../lib/config.js';
+
+const PASSPHRASE_ENV = 'MC_VAULT_PASSPHRASE';
+
+/**
+ * Per-adapter → vault-provider mapping. The `provider` metadata stored
+ * on each vault secret is what links a vault entry to an adapter.
+ *
+ * This map is INTENTIONALLY narrow: matching is by provider string,
+ * not by adapter probing. If a user stores a secret with
+ *   --provider anthropic
+ * then any installed adapter whose `TOOL_NAME` is in the matching list
+ * gets it materialised. Multiple adapters can claim the same provider
+ * (e.g. a future "anthropic" matches both claude-code and another).
+ */
+const ADAPTER_PROVIDERS = {
+  claude:  ['anthropic'],
+  codex:   ['openai'],
+  // gemini stub — once the adapter lands, add ['google']
+};
+
+/**
+ * State directory + per-session manifest file path. The manifest is a
+ * JSON file the lifecycle writes at session start and reads at end.
+ */
+function stateDir() { return join(mcHome(), 'state'); }
+export function manifestPath(sessionId) {
+  if (!sessionId || typeof sessionId !== 'string') {
+    throw new Error('manifestPath: sessionId required');
+  }
+  return join(stateDir(), `${sessionId}-materialised.json`);
+}
+
+/**
+ * Resolve the vault-key for this lifecycle call.
+ *
+ * Precedence:
+ *   1. Cached key in OS keychain (set by `mc vault unlock`).
+ *   2. MC_VAULT_PASSPHRASE env — derive on the fly for CI.
+ *   3. Neither → return null (caller surfaces the hint).
+ *
+ * Returns:
+ *   { vaultKey, authHash, source } | null
+ */
+export async function resolveVaultKeyForLifecycle({ portal, deps = {} } = {}) {
+  // 1. Try the keychain cache first.
+  const cached = await readCachedVaultKey({ deps: deps.cacheDeps }).catch(() => null);
+  if (cached) {
+    return { vaultKey: cached.vaultKey, authHash: null, source: 'cache' };
+  }
+
+  // 2. MC_VAULT_PASSPHRASE → derive against the server's salt.
+  const passphrase = (deps.env || process.env)[PASSPHRASE_ENV];
+  if (passphrase) {
+    if (!portal) return null;
+    const status = await VaultApi.getStatus(portal).catch(() => null);
+    if (!status?.vault?.setup) return null;
+    const { vaultKey, authHash } = await deriveVaultKeys(
+      passphrase, status.vault.salt, status.vault.iterations || 600_000,
+    );
+    return { vaultKey, authHash, source: 'env' };
+  }
+  return null;
+}
+
+/**
+ * Build the default portal — same shape `vault.js` uses. Lets the
+ * lifecycle hook the existing API surface without duplicating
+ * keychain/config plumbing.
+ *
+ * Returns null when there's no Memoro token (vault is unreachable).
+ */
+export async function loadDefaultPortal() {
+  let token = null;
+  try { token = await keychainGet(ACCOUNTS.TOKEN); } catch { token = null; }
+  if (!token) return null;
+  let config = {};
+  try { config = await readConfig(); } catch { /* OK — readConfig soft-degrades */ }
+  const apiUrl = getApiUrl([]) || config.apiUrl;
+  if (!apiUrl) return null;
+  return { apiUrl, token };
+}
+
+/**
+ * Decrypt all secrets in the vault using the given vault-key and
+ * return the subset whose `provider` matches at least one installed
+ * adapter.
+ */
+async function pullMatchingSecrets({ portal, vaultKey, installedAdapters }) {
+  // Need an unlocked server-side session to list secrets. The cache
+  // tells us the user already unlocked at some point, so re-unlock
+  // here using the same authHash (we don't have it from cache → we
+  // have to skip this when cache-derived). For the env path we DO
+  // have authHash. For the cache path, attempt the list and trust
+  // the server to error helpfully if the session expired.
+  const listRes = await VaultApi.listSecrets(portal).catch((err) => ({ ok: false, error: err.message }));
+  if (!listRes?.ok) {
+    return { ok: false, reason: 'list-failed', error: listRes?.error || 'unknown', matches: [] };
+  }
+  const wantedProviders = new Set();
+  for (const adapter of installedAdapters) {
+    for (const p of (ADAPTER_PROVIDERS[adapter.TOOL_NAME] || [])) {
+      wantedProviders.add(p);
+    }
+  }
+  const matches = [];
+  for (const wire of (listRes.secrets || [])) {
+    try {
+      const { label, data } = await decryptSecretPayload(vaultKey, wire);
+      const norm = normaliseSecretPayload(data);
+      if (!norm) continue;
+      if (norm.kind !== 'api_token' && norm.kind !== 'oauth_token') continue;
+      if (!norm.token) continue;
+      if (!norm.provider || !wantedProviders.has(norm.provider)) continue;
+      matches.push({ id: wire.id, label, payload: norm });
+    } catch { /* skip undecryptable */ }
+  }
+  return { ok: true, matches };
+}
+
+/**
+ * Re-unlock the vault server-side using a freshly-derived auth hash.
+ * Required before /api/vault/secrets returns rows.
+ *
+ * For the keychain-cached path we don't have authHash, so we just
+ * try the list and let the server's response carry the truth.
+ * `mc vault unlock` already issued the unlock; the session lifetime
+ * on the server is also 15 min so this usually works.
+ */
+async function ensureUnlocked({ portal, authHash }) {
+  if (!authHash) return; // cache path — we trust the existing session
+  await VaultApi.unlockVault(portal, { authHash }).catch(() => {});
+}
+
+/**
+ * Top-level: materialise vault tokens for a session.
+ *
+ * @param {object} arg
+ * @param {string} arg.sessionId       - session name (registry entry name)
+ * @param {object} [arg.portal]        - optional injected portal (tests)
+ * @param {Array}  [arg.adapters]      - optional list of installed adapters
+ *   (tests inject; production uses detectInstalled())
+ * @param {object} [arg.deps]          - test injection for keychain + fs
+ *
+ * Result:
+ *   {
+ *     ok: true,
+ *     materialised: [ { tool, label, materializedPath } ],
+ *     skipped: [ { reason, ... } ],
+ *   }
+ *
+ * Or {ok:false, reason:'vault-locked', hint:string} if no key is
+ * available.
+ */
+export async function materialiseForSession({
+  sessionId,
+  portal: portalOverride,
+  adapters: adaptersOverride,
+  deps = {},
+} = {}) {
+  if (!sessionId || typeof sessionId !== 'string') {
+    return { ok: false, reason: 'sessionId-required', materialised: [], hint: 'internal: sessionId missing' };
+  }
+
+  // Exit-before-side-effect: don't even build a portal if state dir
+  // can't be created. Throws here propagate to callers as "abort
+  // materialisation".
+  const writeStateFile = deps.writeFile || writeFile;
+  const ensureDir = deps.mkdir || mkdir;
+  await ensureDir(stateDir(), { recursive: true, mode: 0o700 }).catch(() => {});
+
+  const portal = portalOverride || await loadDefaultPortal();
+  if (!portal) {
+    return {
+      ok: false, reason: 'no-memoro-token',
+      materialised: [], skipped: [],
+      hint: 'vault locked — tokens not materialised for this session; run `mc auth memoro` first',
+    };
+  }
+
+  const resolved = await resolveVaultKeyForLifecycle({ portal, deps });
+  if (!resolved) {
+    return {
+      ok: false, reason: 'vault-locked',
+      materialised: [], skipped: [],
+      hint: `vault locked — tokens not materialised for this session; run \`mc vault unlock\` then \`mc resume ${sessionId}\``,
+    };
+  }
+  await ensureUnlocked({ portal, authHash: resolved.authHash });
+
+  const installed = adaptersOverride || detectInstalled();
+  if (!installed.length) {
+    return { ok: true, materialised: [], skipped: [{ reason: 'no-adapters' }] };
+  }
+
+  const pull = await pullMatchingSecrets({
+    portal, vaultKey: resolved.vaultKey, installedAdapters: installed,
+  });
+  if (!pull.ok) {
+    return {
+      ok: false, reason: pull.reason, materialised: [], skipped: [],
+      hint: `vault list failed (${pull.error}); session starting without materialised tokens`,
+    };
+  }
+
+  // For each adapter, materialise the FIRST matching secret per location.
+  // Multi-account / per-session selection is §12h (deferred to phase 4).
+  const materialised = [];
+  const skipped = [];
+
+  for (const adapter of installed) {
+    const providers = ADAPTER_PROVIDERS[adapter.TOOL_NAME] || [];
+    if (!providers.length) {
+      skipped.push({ tool: adapter.TOOL_NAME, reason: 'no-provider-mapping' });
+      continue;
+    }
+    if (typeof adapter.tokenLocations !== 'function') {
+      skipped.push({ tool: adapter.TOOL_NAME, reason: 'no-tokenLocations' });
+      continue;
+    }
+    const locations = adapter.tokenLocations();
+    if (!locations.length) {
+      skipped.push({ tool: adapter.TOOL_NAME, reason: 'empty-locations' });
+      continue;
+    }
+    const match = pull.matches.find((m) => providers.includes(m.payload.provider));
+    if (!match) {
+      skipped.push({ tool: adapter.TOOL_NAME, reason: 'no-matching-secret' });
+      continue;
+    }
+    for (const location of locations) {
+      const res = await adapter.materializeToken({
+        token: match.payload.token,
+        location,
+        sessionId,
+      }).catch((err) => ({ ok: false, reason: err.message }));
+      if (res?.ok) {
+        materialised.push({
+          tool: adapter.TOOL_NAME,
+          label: match.label,
+          location: { type: location.type, path: location.path || null, name: location.name || null },
+          materializedPath: res.materializedPath || null,
+        });
+      } else {
+        skipped.push({
+          tool: adapter.TOOL_NAME,
+          location: { type: location.type, path: location.path || null },
+          reason: res?.reason || 'materialize-failed',
+        });
+      }
+    }
+  }
+
+  // Manifest: persist materialised list so `mc end` can shred without
+  // re-reading the vault. We do NOT persist the token value — only
+  // which path was written, by which adapter, for which label.
+  const manifest = {
+    schema: 1,
+    sessionId,
+    createdAt: new Date().toISOString(),
+    materialised: materialised.map((m) => ({
+      tool: m.tool,
+      label: m.label,
+      location: m.location,
+    })),
+  };
+  await writeStateFile(manifestPath(sessionId), JSON.stringify(manifest, null, 2), { mode: 0o600 })
+    .catch(() => { /* best-effort; lifecycle continues */ });
+
+  return { ok: true, materialised, skipped };
+}
+
+/**
+ * Shred everything that materialiseForSession wrote. Idempotent —
+ * missing manifest / already-shredded files are not errors.
+ */
+export async function shredForSession({
+  sessionId,
+  adapters: adaptersOverride,
+  deps = {},
+} = {}) {
+  if (!sessionId || typeof sessionId !== 'string') {
+    return { ok: false, reason: 'sessionId-required', shredded: [] };
+  }
+  const path = manifestPath(sessionId);
+  const readManifest = deps.readFile || readFile;
+  const unlinkManifest = deps.unlink || unlink;
+  const exists = deps.existsSync || existsSync;
+
+  if (!exists(path)) {
+    return { ok: true, shredded: [], reason: 'no-manifest' };
+  }
+
+  let manifest;
+  try {
+    const raw = await readManifest(path, 'utf8');
+    manifest = JSON.parse(raw);
+  } catch (err) {
+    // Manifest unreadable — still try to delete it so we don't keep
+    // dragging it around.
+    try { await unlinkManifest(path); } catch { /* best effort */ }
+    return { ok: false, reason: `manifest-unreadable: ${err.message}`, shredded: [] };
+  }
+
+  const adapterByTool = new Map();
+  for (const a of (adaptersOverride || detectInstalled())) {
+    adapterByTool.set(a.TOOL_NAME, a);
+  }
+
+  const shredded = [];
+  const failures = [];
+  for (const m of (manifest.materialised || [])) {
+    const adapter = adapterByTool.get(m.tool);
+    if (!adapter || typeof adapter.shredToken !== 'function') {
+      failures.push({ tool: m.tool, reason: 'adapter-missing' });
+      continue;
+    }
+    // Reconstruct the location shape from the manifest. We persisted
+    // type + path + name only, which is enough for shredFile to work.
+    const location = {
+      type: m.location?.type,
+      path: m.location?.path,
+      name: m.location?.name,
+    };
+    const res = await adapter.shredToken({ location, sessionId })
+      .catch((err) => ({ ok: false, reason: err.message }));
+    if (res?.ok) {
+      shredded.push({ tool: m.tool, location, removed: !!res.removed });
+    } else {
+      failures.push({ tool: m.tool, location, reason: res?.reason || 'shred-failed' });
+    }
+  }
+
+  // Delete the manifest after best-effort shred.
+  try { await unlinkManifest(path); } catch { /* best effort */ }
+
+  return { ok: failures.length === 0, shredded, failures };
+}

@@ -131,6 +131,22 @@ export async function run(rawArgv) {
     return 0;
   }
 
+  // §12d: materialise vault tokens for the session BEFORE re-exec.
+  // The materialised files must exist by the time the spawned tool
+  // reads its credentials path. Soft-degrade: if the vault is locked
+  // or unreachable, print a one-line hint to stderr and continue —
+  // the session just starts without materialised tokens.
+  try {
+    const { materialiseForSession } = await import('../vault/lifecycle.js');
+    const res = await materialiseForSession({ sessionId: opts.name });
+    if (!res.ok && res.hint) {
+      process.stderr.write(`mc: ${res.hint}\n`);
+    }
+  } catch (err) {
+    // Materialisation must never block the session — surface but continue.
+    process.stderr.write(`mc: vault materialise failed (${err.message}); continuing without tokens\n`);
+  }
+
   // Re-exec the same mc binary in wrap mode with cwd=worktree. This
   // re-uses the existing wrap-mode plumbing (pty.spawn of claude,
   // heartbeat-loop, ws-client, registry tick) without duplicating it

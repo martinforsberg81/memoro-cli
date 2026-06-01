@@ -50,6 +50,30 @@ describe('adapter getStatus contract', () => {
         assert.equal(typeof mod.getStatus, 'function');
       });
 
+      // §12d vault contract: every adapter exposes tokenLocations() (array),
+      // materializeToken(), shredToken(). Empty `tokenLocations` is allowed
+      // (means "no JIT materialisation path known yet" — gemini stub etc.);
+      // the array shape itself is the gate.
+      test('exposes vault materialisation contract (§12d)', () => {
+        assert.equal(typeof mod.tokenLocations, 'function', 'tokenLocations must be a function');
+        const locs = mod.tokenLocations();
+        assert.ok(Array.isArray(locs), 'tokenLocations() must return an array');
+        for (const loc of locs) {
+          assert.ok(loc && typeof loc === 'object', 'each location must be an object');
+          assert.ok(['file', 'env'].includes(loc.type), `unknown location.type: ${loc.type}`);
+          if (loc.type === 'file') {
+            assert.equal(typeof loc.path, 'string', 'file location needs path');
+            assert.ok(loc.path.length > 0);
+          }
+          if (loc.type === 'env') {
+            assert.equal(typeof loc.name, 'string', 'env location needs name');
+            assert.ok(loc.name.length > 0);
+          }
+        }
+        assert.equal(typeof mod.materializeToken, 'function', 'materializeToken must be a function');
+        assert.equal(typeof mod.shredToken, 'function', 'shredToken must be a function');
+      });
+
       test('not-installed branch returns valid shape with hint', async () => {
         const s = await mod.getStatus({
           which: () => null,

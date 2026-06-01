@@ -135,6 +135,18 @@ export async function run(rawArgv) {
   const results = [];
   for (const { entry, verdict } of plans) {
     try {
+      // §12d: shred any materialised vault tokens for this session
+      // BEFORE removing the worktree. Best-effort: failures here are
+      // logged via the result but don't block worktree teardown. If
+      // there's no manifest (session never materialised anything),
+      // this is a cheap no-op.
+      try {
+        const { shredForSession } = await import('../vault/lifecycle.js');
+        await shredForSession({ sessionId: entry.name });
+      } catch (_err) {
+        // Swallow — `mc end` must succeed even if vault module
+        // can't load (e.g. partial dev install).
+      }
       await endOne(entry, { primary, keepBranch: opts.keepBranch, verdict });
       removeEntry(entry.name);
       results.push({ name: entry.name, ok: true, verdict: verdict.value });
