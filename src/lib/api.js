@@ -16,6 +16,31 @@ export async function memoroFetch(apiUrl, path, { token, method = 'GET', body = 
   };
   if (body != null) headers['Content-Type'] = 'application/json';
 
+  return _doFetch(url, { method, headers, body, timeoutMs });
+}
+
+/**
+ * Anonymous variant — used by pre-auth endpoints like the OAuth Device
+ * Flow init/poll. No Authorization header. Same response/error shape as
+ * memoroFetch so callers can share error handling.
+ *
+ * Kept as a separate export rather than relaxing memoroFetch's `token`
+ * check so the "not logged in" guard on the authenticated path stays
+ * loud + early — every existing caller still trips it on a missing token.
+ */
+export async function memoroFetchAnon(apiUrl, path, { method = 'GET', body = null, timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
+  if (!apiUrl) throw new Error('apiUrl missing');
+  const url = `${apiUrl.replace(/\/$/, '')}${path}`;
+  const headers = {
+    'User-Agent': `memoro-cli/${await pkgVersion()}`,
+  };
+  if (body != null) headers['Content-Type'] = 'application/json';
+
+  return _doFetch(url, { method, headers, body, timeoutMs });
+}
+
+async function _doFetch(url, { method, headers, body, timeoutMs }) {
+
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
 
