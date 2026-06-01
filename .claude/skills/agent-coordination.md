@@ -92,6 +92,56 @@ that makes the protocol work — preserve it as you evolve the
 specifics. If the loop ever feels ritualistic, the peer dynamic
 is what to re-establish first.
 
+## Drev sizing + risk assessment
+
+Empirical from drev 3 + 4 (the first two fully-autonomous agent
+drev runs against this repo):
+
+| Drev | Scope | Files | Time | Tokens | New tests | Judgment calls |
+|---|---|---|---|---|---|---|
+| 3 — vault phase 1 | 10 verbs, crypto port | 10 | 17 min | 165k | 35 | 7 |
+| 4 — vault phase 2 | keychain + JIT + adapter ext | 16 | 23 min | 203k | 42 | 9 |
+
+Approximately linear scaling: 60 % more scope ≈ 35 % more time.
+Strong signal that drev-scale tasks fit within one agent invocation
+when properly briefed.
+
+**Risk axes that matter when sizing a drev:**
+
+1. **Single-repo vs cross-repo.** Single-repo (drev 3, drev 4) is
+   lower risk: one PR, one merge, one test suite to run. Cross-repo
+   (server + client changes together, e.g. §14 phase 1+2) introduces
+   coordination cost, deploy timing, and rollback complexity. **Split
+   cross-repo drev into single-repo sub-drev when possible.**
+2. **Live deploy required vs not.** Drev that needs a memoro server
+   deploy can't be smoke-tested before deploy. Higher risk. Split
+   server-side changes into a separate drev that the coordinator
+   reviews + deploys before client-side lands.
+3. **Touches user-global config (e.g. `~/.zshrc`, `~/.claude/settings.json`).**
+   Higher risk because bugs land in every session. Require importing
+   smoke tests (per anti-pattern below). Drev brief should call out
+   the user-global surface explicitly.
+4. **Cryptographic / security-critical code.** Drev 3 ported existing
+   crypto with byte-identical verification. Lower risk than designing
+   new crypto, but still requires golden-value tests as the gate.
+5. **Hooks into the host LLM TUI.** PreToolUse hook installation
+   touches host-specific machinery. Either confine to project-scoped
+   `.claude/settings.json` (per worktree) or split into a coordinator-
+   verified follow-up.
+
+**When to split a drev:**
+
+- Any combination of cross-repo + live deploy + user-global config →
+  split.
+- Any single dimension scoring "high risk" → coordinator should
+  verify each sub-drev before next one starts.
+- A drev with no high-risk dimensions can ship autonomously with
+  coordinator review-only at the PR stage.
+
+The drev 4 brief explicitly excluded the PreToolUse hook (§12 phase 3)
+*because* it would have crossed the user-global config axis. That
+exclusion is what kept drev 4 single-repo + autonomous-safe.
+
 ## Step 1 — Delegate
 
 A good coordinator handoff has four parts:
@@ -101,29 +151,60 @@ A good coordinator handoff has four parts:
 3. **Reminders** — established patterns the agent should re-use
 4. **Eskaleringsväg** — "come back to coordinator when X"
 
-Template:
+Template (used in drev 3 + 4; refine as the project evolves):
 
 ```
-We're starting implementation drev #N against
-docs/plans/<plan>.md. Scope:
+You're implementing drev #N against <repo>. Work in <absolute path>.
+The coordinator session that spawned you cannot answer mid-run
+questions — read this brief as your complete contract.
 
-- §X.a, §X.b, §X.c
+## First: load the protocol
+1. CLAUDE.md + docs/coding-agent-protocol.md
+2. .claude/skills/agent-coordination.md (this file)
+3. The plan section(s) in scope
+4. Read-only references the drev depends on
 
-Reminders from prior drev:
-- Pattern A (with one-line reference)
-- Pattern B
-- ...
+## In scope (positive)
+- Bullet per sub-feature with one-line "what" + "why"
 
-Deferred from this drev: §Y (reason)
+## NOT in scope (negative — same weight as positive)
+- §X (reason: belongs to drev N+1)
+- §Y (reason: cross-repo, separate split)
+- (anything else worth pre-emptively forbidding)
 
-Read the plan + ask all design questions up front before writing
-code. Log every judgment call in the PR body (the TDD-style
-pattern from PR #21). Come back to coordinator for any decision
-that has 2+ reasonable options. Send the PR link when ready.
+## Critical engineering constraints
+- Predictable platform / edge-case gotchas the coordinator wants
+  prescribed up front. Drev 4's "embedded expiresAt in cache value
+  because OS-keychain TTL varies" is the form.
+- Hard gates (e.g. "extend contract test to enforce X").
+
+## Security expectations (gate before ship)
+- Anything that, if it slips, leaks secrets / corrupts user state /
+  bricks a live system.
+
+## Workflow
+- Branch name, single PR vs split, no-merge.
+
+## Design questions — if any
+- STOP at the decision point. Continue with unblocked work.
+  Surface question(s) in the final report with options + recommended.
+
+## Final report shape
+- Status (PR URL, tests, branch)
+- What shipped (one-liner per sub-feature)
+- Open design questions (if any)
+- Judgment calls (the obvious ones; full set in PR body)
+- Deferred / blocked
 ```
 
 Anti-pattern: terse one-liners like "implement §11". Forces the
 agent to guess, makes the loop noisy.
+
+**The "NOT in scope" section is load-bearing.** Drev 3 + 4 both
+respected it verbatim, which is what kept their scope tight.
+Coordinator should think harder about what to forbid than about
+what to permit — the agent's natural failure mode (over-eager
+scope creep) is blocked at this gate.
 
 ## Step 2 — Read + plan + ask up front
 
@@ -197,13 +278,18 @@ Every PR body has these sections:
 ## Judgment calls
 - **Decision in bold.** Why I made it. Trade-off considered.
 - (one bullet per non-obvious choice)
+- **Any acceptance criterion you could NOT verify yourself**
+  (because a security hook blocked a read, an external system
+  was unreachable, or you lacked credentials) — explicitly here,
+  not buried elsewhere. Pattern 12 in this skill.
 - Pre-existing flake (if any) noted as not introduced by this PR
 
 ## Test plan
 - [x] Pure unit tests: N cases covering …
 - [x] CLI integration tests: M cases covering …
 - [x] Full npm test: X/X pass
-- [ ] Manual: thing the coordinator should verify post-merge
+- [ ] Manual: things the coordinator should verify post-merge,
+      especially anything an uncertainty disclosure above flagged
 
 ## Follow-ups
 - Item the coordinator may want next
@@ -320,6 +406,34 @@ with documented reason.
     Models read negative constraints more carefully than positive
     ones; lean on them when the natural failure mode is creep.
 
+12. **Honest uncertainty disclosure.** When verification of an
+    acceptance criterion is blocked (security hook denies a read,
+    external system unreachable, missing OAuth credential, etc.),
+    surface it explicitly in *both* judgment calls AND the report's
+    follow-ups. Never silently ship "verified" when you couldn't
+    actually verify. Drev 4's claude-code on-disk shape is the
+    template — the agent flagged "I couldn't read the actual file;
+    I trusted the drev 3 documented shape; coordinator should do a
+    real smoke before phase 3" *as a judgment call*, not buried in
+    a follow-up. That clarity is what makes the disclosure
+    actionable. Zero open questions is suspicious; zero open
+    questions + zero uncertainty disclosures on a non-trivial drev
+    is a smell.
+
+13. **Architectural self-upgrades (bounded).** When the agent
+    identifies a DRY opportunity (shared helper), an extensibility
+    seam (e.g. `cacheAccountFor(identity)` reserved for future
+    per-user scoping), or a portability concern (embedded
+    `expiresAt` because OS-keychain TTL semantics vary), ship the
+    improvement with a one-line PR-body explanation. **But: this
+    is bounded by anti-gold-plating.** The test: would a skeptical
+    reviewer ask "why is this here?" If yes, document the why. If
+    you can't justify it in one PR-body line, you're gold-plating
+    — don't ship it. Drev 4's `_materialise.js` shared helper
+    passes this test (DRY across claude-code + codex, file mode
+    0600 invariant); a hypothetical "I made the registry pluggable"
+    would not.
+
 ## Anti-patterns observed (don't repeat)
 
 - **Template-literal backticks in code.** Inline backticks in
@@ -340,11 +454,21 @@ with documented reason.
 - **Passing wrapper-injected flags through to subcommands.**
   Strip them once at the dispatcher, lift to env var, let
   emitCd-style helpers pick them up by default. (PR #29.)
+- **Test-only the `--json` path for errors.** Drev 3 shipped vault
+  with 35 new tests but every error test asserted JSON shape. The
+  non-JSON path silently swallowed errors when an `emit()` helper
+  was missing a `humanLine` arg, so `mc vault setup` with a bad
+  password printed nothing and the user saw a stale status with
+  no clue why. Tests MUST cover the human-readable path too —
+  errors on stderr must be asserted in non-JSON mode. (PR #48.)
 
 The pattern under these: **a wrapper that affects every invocation
 must be tested by importing + invoking, not by manual `mc list`
 after install.** Add smoke tests for any wrapper / dispatcher / glue
-code that gets installed into the user's shell.
+code that gets installed into the user's shell. The non-JSON error
+path is the equivalent for command output — tests must drive a
+failing input through the path the user actually sees, not just
+the JSON variant.
 
 ## CLAUDE.md pointer
 
