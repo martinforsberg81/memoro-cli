@@ -2203,6 +2203,148 @@ ship later.
   (or a service-account-style token created by an authed
   admin). Device Flow is interactive-only.
 
+### 15. Memoro-agent — remote MCP endpoint to the chat orchestrator
+
+The strategic apex of the mc + Memoro architecture: a remote MCP server
+served by the Memoro Worker that lets any MCP-compatible client (Claude
+Code, Cursor, Codex, Claude.ai, …) ask the user's Memoro chat
+orchestrator questions — *from inside the coding session*, without
+context-switching to memoro.app.
+
+This section integrates the standalone plan at
+[`memoro/docs/plans/memoro-agent.md`](https://github.com/martinforsberg81/memoro/blob/main/docs/plans/memoro-agent.md)
+(memoro-side spec) into the mc-side roadmap. **The memoro-side plan is
+the source of truth for architecture, security, and server-side
+implementation.** This section captures the mc-side concerns and the
+integration points.
+
+#### 15a. Why this is high-priority
+
+Two earlier "deferred" assumptions stopped being true on 2026-06-01:
+
+1. **mc became a real working surface** (§12 vault + §14 device flow
+   shipped). "Switch from mc to Memoro chat to ask a question" is now
+   a daily friction, not hypothetical.
+2. **Strategic positioning of mc** (free + open source, backed by
+   paid Memoro) makes memoro-agent the *primary conversion mechanism*
+   from gratis-mc-user to Memoro-paying-user. Not a v2 convenience.
+
+Plus the architecture got dramatically simpler when verified: Claude
+Code, Cursor, and Codex all support **remote HTTPS MCP** with bearer
+auth + OAuth. The originally-planned local stdio shim
+(`memoro-cli mcp`) is unnecessary — the Worker serves MCP directly.
+See the memoro-agent plan for the architecture diagram.
+
+#### 15b. What mc owns vs what Memoro owns
+
+| Concern | Lives at | Why there |
+|---|---|---|
+| `/mcp` Streamable HTTP endpoint | Memoro Worker | MCP server-side IS Memoro chat orchestrator; can't be local |
+| `memoro.ask` tool dispatch | Memoro Worker | tool implementation calls chat orchestrator |
+| Tool denylist + privacy curation | Memoro Worker | belongs with the data it gates |
+| api-token with `scope='agent'` | Memoro Worker (existing api-token.js) | reuse, no new model |
+| Token enrollment UI (`/settings/agent-access`) | Memoro Worker | matches existing settings pattern |
+| `mc auth agent enroll` verb | memoro-cli | mc owns CLI ergonomics |
+| OS keychain storage of agent token (Pattern B) | memoro-cli (`src/lib/keychain.js`) | existing local-secrets infra |
+| `mc auth agent print-headers` helper | memoro-cli | wired as Claude Code's `headersHelper` so token never lands in `.claude.json` |
+
+#### 15c. Two enrollment patterns
+
+Per the memoro-agent plan §"Enrollment + token storage":
+
+**Pattern A — bearer token in MCP config (simplest).** User runs
+`mc auth agent enroll`, browser opens to enrollment page, token shown
+once, user copies + pastes into:
+
+```
+claude mcp add --transport http --header "Authorization: Bearer mem_xxx" \
+  memoro https://mcp.meetmemoro.app/mcp
+```
+
+Token lives in `~/.claude.json`. Acceptable security floor (Anthropic
+encrypts it on disk), fastest user experience.
+
+**Pattern B — `headersHelper` reads from OS keychain (most secure).**
+User runs `mc auth agent enroll --to-keychain`, token stored in
+OS keychain. Then:
+
+```
+claude mcp add-json memoro '{
+  "type": "http",
+  "url": "https://mcp.meetmemoro.app/mcp",
+  "headersHelper": "mc auth agent print-headers"
+}'
+```
+
+Token never lands in `.claude.json`. `mc auth agent print-headers`
+emits `{"Authorization":"Bearer mem_xxx"}` from OS keychain on each
+MCP connect. Rotation is `mc auth agent rotate` with no Claude Code
+config change. Recommended for sophisticated users.
+
+#### 15d. Reuse pattern with §11a / §11c / §14
+
+The new `mc auth agent` verb slots into the existing `mc auth` family:
+
+- `mc auth status` (§11a) — extends to show agent-token state per
+  client ("agent.claude-code: ✓ token in keychain, last used 5 min ago")
+- `mc auth memoro` (§11c) — unchanged
+- `mc auth <tool>` (§11c) — unchanged
+- `mc auth devices` (§14e) — peer verb
+- `mc auth agent` (§15) — new peer verb
+
+This keeps the mental model consistent: `mc auth <target>` for any
+auth concern, target-specific subcommands underneath.
+
+#### 15e. Server name reservation
+
+Claude Code reserves `workspace` as a server name. Cursor and Codex
+have no explicit reservations but `memoro` is the natural choice
+across all clients. The `mc auth agent enroll` UX should pre-fill
+this name in the example commands it generates.
+
+#### 15f. Implementation order (cross-repo)
+
+Cross-repo drev. Per §10i.1's "single-repo lower risk" guidance, split:
+
+1. **Phase 1 — Memoro server (~3-4 hours).** `/mcp` Streamable HTTP
+   endpoint, `requireApiToken({ scope: 'agent' })` helper, `/api/agent/tokens`
+   CRUD, `/settings/agent-access` UI. Merged + deployed before phase 2.
+2. **Phase 2 — memoro-cli (~2-3 hours).** `mc auth agent enroll | list |
+   revoke | print-headers` verbs. Token in keychain (Pattern B); enrollment
+   browser-flow mirrors §14's Device Flow pattern.
+
+Total: ~1 day solo across both repos. Pattern A enrollment works without
+any mc-side changes (user just pastes the token themselves), so phase 1
+is independently shippable.
+
+#### 15g. Acceptance check (mc-side)
+
+- `mc auth agent enroll --to-keychain` opens browser, stores token in
+  keychain after user authorises in `/settings/agent-access`
+- `mc auth agent print-headers` emits valid JSON
+  `{"Authorization":"Bearer mem_xxx"}` to stdout from keychain
+- `mc auth agent list` shows agent-scoped tokens with name + last-used
+  + expires
+- `mc auth agent revoke <prefix>` deletes the server-side token; next
+  MCP call from a client using that token gets 401 → reconnect failure
+- `mc auth status` includes an "Agent tokens" section listing clients
+- A Claude Code instance configured with `headersHelper: "mc auth agent print-headers"`
+  successfully calls `memoro.ask("test")` and gets a response from the
+  chat orchestrator — verified via manual smoke after both phases land
+- No token bytes appear in subprocess-captured stdout/stderr across
+  the full lifecycle (no-leak invariant pattern from drev 3)
+
+#### 15h. Open questions
+
+- **MCP server name "memoro" vs "memoro-app"?** Probably just "memoro";
+  matches the brand, is short, no collision.
+- **OAuth for high-volume / multi-account users?** Pattern A and B
+  both use api-tokens. Future tier-3 use cases (multi-account,
+  team agents) might need OAuth. Defer until first user asks.
+- **Tool surface beyond `memoro.ask`?** Per the memoro-agent plan,
+  v1 is one tool. v2 might add `memoro.observe(file_path, kind)` for
+  proactive "store this decision" writes. Out of scope here.
+
 ## Open questions
 
 - **Cross-machine session handling.** Today's `mc sessions list` shows
