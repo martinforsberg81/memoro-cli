@@ -58,6 +58,13 @@ export async function destroyVault(portal) {
   });
 }
 
+export async function destroyVaultForgotten(portal) {
+  const p = portalOrDefault(portal);
+  return p.memoroFetch(p.apiUrl, '/api/vault/destroy-forgotten', {
+    token: p.token, method: 'POST', body: {},
+  });
+}
+
 export async function listSecrets(portal) {
   const p = portalOrDefault(portal);
   return p.memoroFetch(p.apiUrl, '/api/vault/secrets', { token: p.token });
