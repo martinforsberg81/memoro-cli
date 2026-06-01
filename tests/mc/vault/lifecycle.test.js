@@ -1,0 +1,338 @@
+/**
+ * Tests for the §12d lifecycle glue — materialiseForSession +
+ * shredForSession.
+ *
+ * Strategy:
+ *   - Inject a mock portal (the same one the vault-commands tests use)
+ *   - Pre-populate the in-memory vault with encrypted secrets
+ *   - Inject a fake set of adapters with stub materializeToken /
+ *     shredToken that record calls
+ *   - Inject an in-memory cacheDeps so the keychain-cache path doesn't
+ *     touch the host
+ *   - Drive a fresh MC_HOME via env so the manifest file lives in a
+ *     tmpdir
+ *
+ * Covered:
+ *   - vault-locked path → ok:false with hint, no materialisation
+ *   - cached-key path → matching secrets land via the adapter
+ *   - manifest persisted at the documented location
+ *   - shredForSession reads manifest + calls adapter.shredToken
+ *   - shred idempotency (running twice doesn't error)
+ *   - provider filtering: secrets for adapters NOT installed are skipped
+ *   - no-leak invariant: token bytes never appear in returned objects
+ */
+
+import { describe, it, before, after, beforeEach } from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync, existsSync, readFileSync, mkdirSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+import {
+  materialiseForSession,
+  shredForSession,
+  manifestPath,
+} from '../../../src/mc/vault/lifecycle.js';
+import {
+  deriveVaultKeys,
+  encryptSecretPayload,
+  bytesToBase64,
+} from '../../../src/mc/vault/client-crypto.js';
+import { cacheVaultKey } from '../../../src/mc/vault/key-cache.js';
+import { createMockVaultServer, makeTestPortal } from './_helpers/mock-server.js';
+
+const PW = 'lifecycle-test-master-password';
+const TOKEN_CLAUDE = 'sk-ant-test-token-leakcheck-zzz1';
+const TOKEN_CODEX = 'sk-openai-test-token-leakcheck-zzz2';
+
+function makeMemCacheDeps() {
+  const store = new Map();
+  return {
+    async getSecret(account) { return store.get(account) ?? null; },
+    async setSecret(account, value) { store.set(account, value); return 'mem'; },
+    async deleteSecret(account) { store.delete(account); return 'mem'; },
+    now: () => Date.now(),
+  };
+}
+
+/**
+ * Stub adapter with recordable materialize/shred. Stays out of disk —
+ * tests for the actual file writes are in tests/adapters/materialise.test.js.
+ */
+function makeStubAdapter({ toolName, locations }) {
+  const calls = { materialise: [], shred: [] };
+  return {
+    TOOL_NAME: toolName,
+    tokenLocations: () => locations,
+    async materializeToken({ token, location, sessionId }) {
+      calls.materialise.push({ token, location, sessionId });
+      return { ok: true, materializedPath: location.path || null };
+    },
+    async shredToken({ location, sessionId }) {
+      calls.shred.push({ location, sessionId });
+      return { ok: true, removed: true };
+    },
+    _calls: calls,
+  };
+}
+
+/**
+ * Set up a mock server, set up the vault, populate with the given
+ * secrets (already encrypted via the real client crypto), and return
+ * everything tests need to drive lifecycle.materialiseForSession.
+ */
+async function bootstrapVaultWithSecrets(secrets) {
+  const server = createMockVaultServer();
+  const portal = makeTestPortal(server);
+
+  // Setup the vault: derive against placeholder salt, POST setup,
+  // server returns real salt, re-derive against it.
+  const placeholderSalt = bytesToBase64(new Uint8Array(32));
+  const { authHash: ph } = await deriveVaultKeys(PW, placeholderSalt);
+  const setupRes = await server.memoroFetch('', '/api/vault/setup', { method: 'POST', body: { authHash: ph } });
+  const realSalt = setupRes.salt;
+  const { authHash, vaultKey, vaultKeyBytes } = await deriveVaultKeys(PW, realSalt);
+  // The mock server's "auth_hash" was hashed from the placeholder; to
+  // bring it in sync with the real authHash we replicate the
+  // change-password call from the setup verb.
+  await server.memoroFetch('', '/api/vault/unlock', { method: 'POST', body: { authHash: ph } });
+  await server.memoroFetch('', '/api/vault/change-password', {
+    method: 'POST', body: { currentAuthHash: ph, newAuthHash: authHash, newSalt: realSalt },
+  });
+  // Unlock with the real hash so we can POST secrets.
+  await server.memoroFetch('', '/api/vault/unlock', { method: 'POST', body: { authHash } });
+
+  for (const s of secrets) {
+    const enc = await encryptSecretPayload(vaultKey, s.label, {
+      kind: 'api_token',
+      token: s.token,
+      provider: s.provider,
+      account: s.account || null,
+    });
+    await server.memoroFetch('', '/api/vault/secrets', {
+      method: 'POST',
+      body: {
+        secretType: 'api_key',
+        encryptedLabel: enc.encryptedLabel,
+        encryptedData: enc.encryptedData,
+        iv: enc.iv,
+        labelIv: enc.labelIv,
+      },
+    });
+  }
+
+  return { server, portal, vaultKey, vaultKeyBytes, authHash };
+}
+
+describe('materialiseForSession', () => {
+  let mcHomeDir;
+  before(() => {
+    mcHomeDir = mkdtempSync(join(tmpdir(), 'mc-vault-lifecycle-'));
+    process.env.MC_HOME = mcHomeDir;
+  });
+  after(() => {
+    delete process.env.MC_HOME;
+    try { rmSync(mcHomeDir, { recursive: true, force: true }); } catch { /* best effort */ }
+  });
+
+  it('returns ok:false with hint when vault is locked (no cache, no env)', async () => {
+    const { portal } = await bootstrapVaultWithSecrets([
+      { label: 'a', token: TOKEN_CLAUDE, provider: 'anthropic' },
+    ]);
+    const cacheDeps = makeMemCacheDeps();
+    const claudeStub = makeStubAdapter({
+      toolName: 'claude',
+      locations: [{ type: 'file', path: join(mcHomeDir, 'fake-claude.json') }],
+    });
+    delete process.env.MC_VAULT_PASSPHRASE;
+    const res = await materialiseForSession({
+      sessionId: 'sess-locked',
+      portal,
+      adapters: [claudeStub],
+      deps: { cacheDeps },
+    });
+    assert.equal(res.ok, false);
+    assert.equal(res.reason, 'vault-locked');
+    assert.ok(res.hint.includes('mc vault unlock'));
+    assert.equal(claudeStub._calls.materialise.length, 0);
+  });
+
+  it('with cached key: materialises matching secret + writes manifest', async () => {
+    const { portal, vaultKeyBytes } = await bootstrapVaultWithSecrets([
+      { label: 'anthropic-default', token: TOKEN_CLAUDE, provider: 'anthropic' },
+      { label: 'openai-default', token: TOKEN_CODEX, provider: 'openai' },
+    ]);
+    const cacheDeps = makeMemCacheDeps();
+    await cacheVaultKey(vaultKeyBytes, { deps: cacheDeps });
+
+    const claudeLoc = { type: 'file', path: join(mcHomeDir, 'claude-materialised.json') };
+    const codexLoc = { type: 'file', path: join(mcHomeDir, 'codex-materialised.json') };
+    const claudeStub = makeStubAdapter({ toolName: 'claude', locations: [claudeLoc] });
+    const codexStub = makeStubAdapter({ toolName: 'codex', locations: [codexLoc] });
+
+    const res = await materialiseForSession({
+      sessionId: 'sess-ok',
+      portal,
+      adapters: [claudeStub, codexStub],
+      deps: { cacheDeps },
+    });
+
+    assert.equal(res.ok, true, JSON.stringify(res));
+    assert.equal(res.materialised.length, 2);
+    // Each adapter should have been called exactly once with the right token.
+    assert.equal(claudeStub._calls.materialise.length, 1);
+    assert.equal(claudeStub._calls.materialise[0].token, TOKEN_CLAUDE);
+    assert.equal(codexStub._calls.materialise.length, 1);
+    assert.equal(codexStub._calls.materialise[0].token, TOKEN_CODEX);
+
+    // Manifest persisted at the documented location.
+    const path = manifestPath('sess-ok');
+    assert.ok(existsSync(path), 'manifest file must exist');
+    const manifest = JSON.parse(readFileSync(path, 'utf8'));
+    assert.equal(manifest.schema, 1);
+    assert.equal(manifest.sessionId, 'sess-ok');
+    assert.equal(manifest.materialised.length, 2);
+    // Manifest must NEVER contain the token.
+    const body = readFileSync(path, 'utf8');
+    assert.ok(!body.includes(TOKEN_CLAUDE), 'manifest leaked anthropic token');
+    assert.ok(!body.includes(TOKEN_CODEX), 'manifest leaked openai token');
+  });
+
+  it('skips adapters without a matching secret', async () => {
+    const { portal, vaultKeyBytes } = await bootstrapVaultWithSecrets([
+      // ONLY anthropic — codex should be skipped.
+      { label: 'a', token: TOKEN_CLAUDE, provider: 'anthropic' },
+    ]);
+    const cacheDeps = makeMemCacheDeps();
+    await cacheVaultKey(vaultKeyBytes, { deps: cacheDeps });
+
+    const claudeStub = makeStubAdapter({
+      toolName: 'claude',
+      locations: [{ type: 'file', path: join(mcHomeDir, 'c.json') }],
+    });
+    const codexStub = makeStubAdapter({
+      toolName: 'codex',
+      locations: [{ type: 'file', path: join(mcHomeDir, 'cx.json') }],
+    });
+
+    const res = await materialiseForSession({
+      sessionId: 'sess-partial',
+      portal,
+      adapters: [claudeStub, codexStub],
+      deps: { cacheDeps },
+    });
+    assert.equal(res.ok, true);
+    assert.equal(res.materialised.length, 1);
+    assert.equal(res.materialised[0].tool, 'claude');
+    assert.equal(codexStub._calls.materialise.length, 0);
+    assert.ok(res.skipped.some((s) => s.tool === 'codex' && s.reason === 'no-matching-secret'));
+  });
+
+  it('CI path: MC_VAULT_PASSPHRASE unlocks without cache', async () => {
+    const { portal } = await bootstrapVaultWithSecrets([
+      { label: 'a', token: TOKEN_CLAUDE, provider: 'anthropic' },
+    ]);
+    const cacheDeps = makeMemCacheDeps(); // empty
+    process.env.MC_VAULT_PASSPHRASE = PW;
+    try {
+      const claudeStub = makeStubAdapter({
+        toolName: 'claude',
+        locations: [{ type: 'file', path: join(mcHomeDir, 'ci.json') }],
+      });
+      const res = await materialiseForSession({
+        sessionId: 'sess-ci',
+        portal,
+        adapters: [claudeStub],
+        deps: { cacheDeps },
+      });
+      assert.equal(res.ok, true);
+      assert.equal(res.materialised.length, 1);
+      assert.equal(claudeStub._calls.materialise[0].token, TOKEN_CLAUDE);
+    } finally {
+      delete process.env.MC_VAULT_PASSPHRASE;
+    }
+  });
+
+  it('returned object never embeds the token value', async () => {
+    const { portal, vaultKeyBytes } = await bootstrapVaultWithSecrets([
+      { label: 'a', token: TOKEN_CLAUDE, provider: 'anthropic' },
+    ]);
+    const cacheDeps = makeMemCacheDeps();
+    await cacheVaultKey(vaultKeyBytes, { deps: cacheDeps });
+    const stub = makeStubAdapter({
+      toolName: 'claude',
+      locations: [{ type: 'file', path: join(mcHomeDir, 'noleak.json') }],
+    });
+    const res = await materialiseForSession({
+      sessionId: 'sess-noleak',
+      portal,
+      adapters: [stub],
+      deps: { cacheDeps },
+    });
+    const serialised = JSON.stringify(res);
+    assert.ok(!serialised.includes(TOKEN_CLAUDE),
+      `materialiseForSession return leaked: ${serialised}`);
+  });
+});
+
+describe('shredForSession', () => {
+  let mcHomeDir;
+  before(() => {
+    mcHomeDir = mkdtempSync(join(tmpdir(), 'mc-vault-shred-'));
+    process.env.MC_HOME = mcHomeDir;
+  });
+  after(() => {
+    delete process.env.MC_HOME;
+    try { rmSync(mcHomeDir, { recursive: true, force: true }); } catch { /* best effort */ }
+  });
+
+  it('reads manifest + calls adapter.shredToken for each entry', async () => {
+    // Write a manifest by hand so we don't need to materialise first.
+    const stateDir = join(mcHomeDir, 'state');
+    mkdirSync(stateDir, { recursive: true });
+    const manifest = {
+      schema: 1,
+      sessionId: 'sess-end',
+      createdAt: new Date().toISOString(),
+      materialised: [
+        { tool: 'claude', label: 'a', location: { type: 'file', path: '/tmp/never' } },
+        { tool: 'codex',  label: 'b', location: { type: 'file', path: '/tmp/never2' } },
+      ],
+    };
+    writeFileSync(manifestPath('sess-end'), JSON.stringify(manifest));
+
+    const claudeStub = makeStubAdapter({ toolName: 'claude', locations: [] });
+    const codexStub = makeStubAdapter({ toolName: 'codex', locations: [] });
+    const res = await shredForSession({
+      sessionId: 'sess-end',
+      adapters: [claudeStub, codexStub],
+    });
+    assert.equal(res.ok, true);
+    assert.equal(res.shredded.length, 2);
+    assert.equal(claudeStub._calls.shred.length, 1);
+    assert.equal(codexStub._calls.shred.length, 1);
+    // Manifest removed.
+    assert.equal(existsSync(manifestPath('sess-end')), false);
+  });
+
+  it('no-manifest is a no-op with ok:true', async () => {
+    const res = await shredForSession({
+      sessionId: 'never-existed',
+      adapters: [],
+    });
+    assert.equal(res.ok, true);
+    assert.equal(res.reason, 'no-manifest');
+  });
+
+  it('is idempotent — running twice doesn\'t error', async () => {
+    const stateDir = join(mcHomeDir, 'state');
+    mkdirSync(stateDir, { recursive: true });
+    writeFileSync(manifestPath('sess-twice'), JSON.stringify({
+      schema: 1, sessionId: 'sess-twice', materialised: [],
+    }));
+    const r1 = await shredForSession({ sessionId: 'sess-twice', adapters: [] });
+    assert.equal(r1.ok, true);
+    const r2 = await shredForSession({ sessionId: 'sess-twice', adapters: [] });
+    assert.equal(r2.ok, true);
+  });
+});

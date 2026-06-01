@@ -43,6 +43,18 @@ export async function run(rawArgv) {
     return 0;
   }
 
+  // §12d: materialise vault tokens for the session BEFORE re-exec.
+  // Same contract as `mc new` — soft-degrade on vault-locked.
+  try {
+    const { materialiseForSession } = await import('../vault/lifecycle.js');
+    const res = await materialiseForSession({ sessionId: entry.name });
+    if (!res.ok && res.hint) {
+      process.stderr.write(`mc: ${res.hint}\n`);
+    }
+  } catch (err) {
+    process.stderr.write(`mc: vault materialise failed (${err.message}); continuing without tokens\n`);
+  }
+
   // Re-exec mc in wrap mode with --resume so claude opens its resume
   // picker. Same approach as `mc new`: same binary, cwd=worktree,
   // inherited stdio. Adapter routing for non-claude tools follows §5.

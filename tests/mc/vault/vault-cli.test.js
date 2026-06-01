@@ -90,6 +90,43 @@ describe('mc vault — secret-bytes-never-leak invariant', () => {
     }
   });
 
+  it('the passphrase + secret never appears across mc new / mc resume / mc end', async () => {
+    // §12d/§12f: phase 2 lifecycle integration. `mc new` (and resume)
+    // call materialiseForSession before re-exec; `mc end` calls
+    // shredForSession. Even with the vault unreachable (the loopback
+    // API), the soft-degrade path may emit a hint to stderr. Verify
+    // the hint never embeds the passphrase or any token we control.
+    //
+    // We don't drive a real session here (would require a git repo,
+    // worktree creation, etc. — covered by lifecycle.test.js in-
+    // process). This subprocess test exercises the hint-emission
+    // branch in `mc new` / `mc resume` / `mc end`:
+    //   - bogus session name → command fails fast
+    //   - any emitted hint must not include MC_VAULT_PASSPHRASE
+    const verbsToProbe = [
+      ['new', 'no-such-name-bogus-aaa'],   // will fail on "not in repo" or registry check
+      ['resume', 'no-such-name-bogus-aaa'], // will fail on "no such session"
+      ['end',    'no-such-name-bogus-aaa'], // will fail on "unknown session"
+    ];
+    for (const argv of verbsToProbe) {
+      const res = runMc(argv, {
+        env: {
+          MC_VAULT_PASSPHRASE: PASSPHRASE,
+          // Force materialisation to attempt (would otherwise short-
+          // circuit on `MC_TEST_MODE=1`). `runMc` sets MC_TEST_MODE
+          // already; we leave it on so we don't actually spawn the
+          // tool — the materialise path runs BEFORE that branch
+          // anyway in `mc new`/`mc resume`.
+        },
+      });
+      const combined = `${res.stdout}\n${res.stderr}`;
+      assert.ok(!combined.includes(PASSPHRASE),
+        `passphrase leaked into output for ${argv.join(' ')}:\nstdout: ${res.stdout}\nstderr: ${res.stderr}`);
+      assert.ok(!combined.includes(SECRET_VALUE),
+        `secret-value leaked into output for ${argv.join(' ')}`);
+    }
+  });
+
   it('`vault set` with --stdin never echoes the piped value', async () => {
     // Pipe a "secret value" via stdin (--stdin path). Verify it
     // doesn't reappear in any captured output. The verb will fail on

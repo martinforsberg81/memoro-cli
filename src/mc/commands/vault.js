@@ -44,6 +44,12 @@ import { getSecret as keychainGet } from '../../lib/keychain.js';
 import { ACCOUNTS } from '../../commands/auth.js';
 import { readConfig, getApiUrl } from '../../lib/config.js';
 import { promptSecret, confirm } from '../../lib/prompt.js';
+import {
+  cacheVaultKey,
+  clearCachedVaultKey,
+  readCachedVaultKey,
+  inspectCachedVaultKey,
+} from '../vault/key-cache.js';
 
 const PASSPHRASE_ENV = 'MC_VAULT_PASSPHRASE';
 
@@ -229,15 +235,23 @@ async function cmdUnlock(argv, opts = {}) {
   if (!config) return 1;
 
   const password = await readMasterPassword('Master password: ', opts);
-  const { authHash } = await deriveVaultKeys(password, config.salt, config.iterations);
+  // Capture vaultKeyBytes too — phase 2 caches the raw key bytes in
+  // the OS keychain so subsequent mc commands (and `mc new` / `mc
+  // resume` materialisation) don't re-derive PBKDF2.
+  const { authHash, vaultKeyBytes } = await deriveVaultKeys(password, config.salt, config.iterations);
   const res = await VaultApi.unlockVault(portal, { authHash });
   if (!res?.ok) {
     emit(flags.json, { ok: false, error: res?.error || 'unlock failed' });
     return 1;
   }
+  // §12f: cache the vault-key under the OS keychain. Best-effort:
+  // a cache failure is *not* an unlock failure — the verb still
+  // succeeded server-side, we just lose the no-prompt UX for
+  // subsequent calls. tests + CI pass via opts.cacheDeps.
+  await cacheVaultKey(vaultKeyBytes, { deps: opts.cacheDeps });
   emit(flags.json,
     { ok: true },
-    'Vault unlocked. Subsequent `mc vault` commands will still re-prompt in phase 1.',
+    'Vault unlocked. Key cached for 15 min — subsequent commands won\'t re-prompt.',
   );
   return 0;
 }
@@ -248,11 +262,16 @@ async function cmdUnlock(argv, opts = {}) {
 
 async function cmdLock(argv, opts = {}) {
   const flags = parseFlags(argv);
+  // §12f: clear the OS-keychain cache FIRST so a "lock" is local-
+  // first — even if the server-side lock call fails, the user's
+  // intent (drop the cached key) is honoured. tests inject via
+  // opts.cacheDeps.
+  await clearCachedVaultKey({ deps: opts.cacheDeps });
   const portal = await loadPortal(opts);
   const res = await VaultApi.lockVault(portal);
   emit(flags.json,
     { ok: !!res?.ok },
-    res?.ok ? 'Vault session locked on the server.' : 'mc vault: server reported no active vault session.',
+    res?.ok ? 'Vault locked: cached key cleared and server session ended.' : 'mc vault: cached key cleared; server reported no active vault session.',
   );
   return res?.ok ? 0 : 1;
 }
@@ -264,7 +283,10 @@ async function cmdLock(argv, opts = {}) {
 async function cmdStatus(argv, opts = {}) {
   const flags = parseFlags(argv);
   const portal = await loadPortal(opts);
-  const res = await VaultApi.getStatus(portal);
+  const [res, cacheInfo] = await Promise.all([
+    VaultApi.getStatus(portal),
+    inspectCachedVaultKey({ deps: opts.cacheDeps }).catch(() => ({ present: false, expiresAt: null, expiresInMs: 0 })),
+  ]);
   if (!res?.ok) {
     emit(flags.json, { ok: false, error: res?.error || 'status failed' });
     return 1;
@@ -278,18 +300,31 @@ async function cmdStatus(argv, opts = {}) {
         unlocked: !!v.unlocked,
         iterations: v.iterations || null,
         created_at: v.createdAt || null,
+        // §12f: cache state — surfaces "is the key cached, and for
+        // how long?" without exposing the key itself.
+        cache: {
+          present: !!cacheInfo.present,
+          expires_at: cacheInfo.expiresAt || null,
+          expires_in_ms: cacheInfo.expiresInMs || 0,
+        },
       },
     }, null, 2));
   } else {
     console.log(`mc vault status`);
     console.log(`  setup:      ${v.setup ? 'yes' : 'no'}`);
     console.log(`  unlocked:   ${v.unlocked ? 'yes (server session live)' : 'no'}`);
+    if (cacheInfo.present) {
+      const mins = Math.round(cacheInfo.expiresInMs / 60_000);
+      console.log(`  cached key: yes (${mins} min${mins === 1 ? '' : 's'} until lock)`);
+    } else {
+      console.log(`  cached key: no`);
+    }
     if (v.iterations) console.log(`  pbkdf2:     ${v.iterations} iterations`);
     if (v.createdAt) console.log(`  created:    ${v.createdAt}`);
     if (!v.setup) {
       console.log(`\nRun \`mc vault setup\` to create the vault.`);
-    } else if (!v.unlocked) {
-      console.log(`\nRun \`mc vault unlock\` to use the vault.`);
+    } else if (!cacheInfo.present) {
+      console.log(`\nRun \`mc vault unlock\` to cache the key for 15 min.`);
     }
   }
   return 0;
@@ -306,14 +341,9 @@ async function cmdList(argv, opts = {}) {
   const config = await requireSetup(portal);
   if (!config) return 1;
 
-  const password = await readMasterPassword('Master password: ', opts);
-  const { vaultKey, authHash } = await deriveVaultKeys(password, config.salt, config.iterations);
-
-  const unlock = await VaultApi.unlockVault(portal, { authHash });
-  if (!unlock?.ok) {
-    emit(flags.json, { ok: false, error: unlock?.error || 'unlock failed' });
-    return 1;
-  }
+  const got = await getUnlockedVaultKey({ portal, config, flags, opts });
+  if (!got) return 1;
+  const { vaultKey } = got;
 
   const listRes = await VaultApi.listSecrets(portal);
   const wire = listRes?.secrets || [];
@@ -374,13 +404,9 @@ async function cmdGet(argv, opts = {}) {
   const config = await requireSetup(portal);
   if (!config) return 1;
 
-  const password = await readMasterPassword('Master password: ', opts);
-  const { vaultKey, authHash } = await deriveVaultKeys(password, config.salt, config.iterations);
-  const unlock = await VaultApi.unlockVault(portal, { authHash });
-  if (!unlock?.ok) {
-    emit(flags.json, { ok: false, error: unlock?.error || 'unlock failed' });
-    return 1;
-  }
+  const got = await getUnlockedVaultKey({ portal, config, flags, opts });
+  if (!got) return 1;
+  const { vaultKey } = got;
 
   const found = await findSecretByLabel(portal, vaultKey, label);
   if (!found) {
@@ -487,13 +513,9 @@ async function cmdSet(argv, opts = {}) {
     expiresAt: flags.expiresAt,
   });
 
-  const password = await readMasterPassword('Master password: ', opts);
-  const { vaultKey, authHash } = await deriveVaultKeys(password, config.salt, config.iterations);
-  const unlock = await VaultApi.unlockVault(portal, { authHash });
-  if (!unlock?.ok) {
-    emit(flags.json, { ok: false, error: unlock?.error || 'unlock failed' });
-    return 1;
-  }
+  const got = await getUnlockedVaultKey({ portal, config, flags, opts });
+  if (!got) return 1;
+  const { vaultKey } = got;
 
   // Reject duplicate labels — silent overwrite would be surprising.
   const existing = await findSecretByLabel(portal, vaultKey, label);
@@ -536,13 +558,9 @@ async function cmdRm(argv, opts = {}) {
   const config = await requireSetup(portal);
   if (!config) return 1;
 
-  const password = await readMasterPassword('Master password: ', opts);
-  const { vaultKey, authHash } = await deriveVaultKeys(password, config.salt, config.iterations);
-  const unlock = await VaultApi.unlockVault(portal, { authHash });
-  if (!unlock?.ok) {
-    emit(flags.json, { ok: false, error: unlock?.error || 'unlock failed' });
-    return 1;
-  }
+  const got = await getUnlockedVaultKey({ portal, config, flags, opts });
+  if (!got) return 1;
+  const { vaultKey } = got;
 
   const found = await findSecretByLabel(portal, vaultKey, label);
   if (!found) {
@@ -598,13 +616,9 @@ async function cmdRotate(argv, opts = {}) {
     return 1;
   }
 
-  const password = await readMasterPassword('Master password: ', opts);
-  const { vaultKey, authHash } = await deriveVaultKeys(password, config.salt, config.iterations);
-  const unlock = await VaultApi.unlockVault(portal, { authHash });
-  if (!unlock?.ok) {
-    emit(flags.json, { ok: false, error: unlock?.error || 'unlock failed' });
-    return 1;
-  }
+  const got = await getUnlockedVaultKey({ portal, config, flags, opts });
+  if (!got) return 1;
+  const { vaultKey } = got;
 
   const existing = await findSecretByLabel(portal, vaultKey, label);
   if (!existing) {
@@ -730,7 +744,7 @@ async function cmdChangePassword(argv, opts = {}) {
   const newSaltBytes = new Uint8Array(32);
   globalThis.crypto.getRandomValues(newSaltBytes);
   const newSaltB64 = bytesToBase64(newSaltBytes);
-  const { authHash: newAuthHash, vaultKey: newVaultKey } =
+  const { authHash: newAuthHash, vaultKey: newVaultKey, vaultKeyBytes: newVaultKeyBytes } =
     await deriveVaultKeys(newPassword, newSaltB64, config.iterations);
 
   // Step 2 + 3: pull, decrypt + re-encrypt to an in-memory staging list.
@@ -777,6 +791,12 @@ async function cmdChangePassword(argv, opts = {}) {
     if (!updRes?.ok) failures.push({ id: item.id, label: item.label, error: updRes?.error });
   }
 
+  // §12f: any cached vault-key is now stale (the password change
+  // rotated the key). Refresh the cache with the NEW key so the next
+  // verb runs without re-prompting. Best-effort: cache failure here
+  // just means the next verb prompts.
+  await cacheVaultKey(newVaultKeyBytes, { deps: opts.cacheDeps });
+
   if (failures.length) {
     emit(flags.json, {
       ok: false,
@@ -822,6 +842,45 @@ async function requireSetup(portal) {
     iterations: status.vault.iterations || 600_000,
     createdAt: status.vault.createdAt,
   };
+}
+
+/**
+ * §12f: get an unlocked vault-key, checking the OS-keychain cache first.
+ *
+ * Cache hit → use it directly (no PBKDF2, no server unlock — the
+ * cache existence implies the user unlocked recently and we trust the
+ * server's 15-min session window too).
+ *
+ * Cache miss → fall back to the phase-1 prompt flow: derive from
+ * master password, server unlock, then cache for next time so the
+ * second verb in a row doesn't re-prompt.
+ *
+ * Returns { vaultKey } on success, null on failure (after emitting an
+ * error to the caller's emit channel).
+ *
+ * Test injection: opts.cacheDeps threads through to readCachedVaultKey
+ * and cacheVaultKey.
+ */
+async function getUnlockedVaultKey({ portal, config, flags, opts }) {
+  // 1. Cache hit?
+  const cached = await readCachedVaultKey({ deps: opts.cacheDeps }).catch(() => null);
+  if (cached) {
+    return { vaultKey: cached.vaultKey };
+  }
+  // 2. Cache miss → prompt + derive + cache.
+  const password = await readMasterPassword('Master password: ', opts);
+  const { vaultKey, vaultKeyBytes, authHash } = await deriveVaultKeys(
+    password, config.salt, config.iterations,
+  );
+  const unlock = await VaultApi.unlockVault(portal, { authHash });
+  if (!unlock?.ok) {
+    emit(flags.json, { ok: false, error: unlock?.error || 'unlock failed' });
+    return null;
+  }
+  // Cache for the next call. Best-effort — failure here just means
+  // the next verb will re-prompt.
+  await cacheVaultKey(vaultKeyBytes, { deps: opts.cacheDeps });
+  return { vaultKey };
 }
 
 async function findSecretByLabel(portal, vaultKey, label) {

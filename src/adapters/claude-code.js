@@ -16,6 +16,7 @@ import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { upsertManagedBlock, removeManagedBlock } from '../lib/managed-block.js';
 import { getPackageVersion } from '../lib/version.js';
+import { writeProtectedFile, shredFile } from './_materialise.js';
 
 // Paths are resolved lazily via homedir() so tests (and any future env
 // override) can redirect HOME without having to bust the module cache.
@@ -304,6 +305,99 @@ export async function getStatus({
     hint: authed ? null : 'Run `claude` and complete the sign-in flow',
     detailLines: [`bin: ${resolvedPath}`],
   };
+}
+
+// ─────────────────────────────────────────────────────────────
+// Token vault — JIT materialisation contract (§12d)
+//
+// Phase 2 of the vault plan: mc materialises tokens to per-tool paths
+// at session start (`mc new`/`mc resume`) and shreds them at session
+// end (`mc end`). Adapter declares WHERE tokens live and HOW they're
+// shaped on disk; the lifecycle owns WHEN.
+//
+// Claude Code reads `~/.claude/.credentials.json` for auth. The on-
+// disk shape (confirmed in drev 3) is
+//   { "anthropic": { "apiKey": "<token>" } }
+// We materialise that exactly, mode 0600. The model running inside
+// Claude Code never needs to *read* this file — only the tool process
+// does. Phase 3 of the plan will install a PreToolUse hook that denies
+// model reads of this path; phase 2 just gets the materialisation +
+// shred lifecycle right.
+//
+// `env` location is declared but not directly writable by the mc
+// parent — child processes get their env from `spawn` calls, and
+// `mc new` doesn't currently spawn the tool with custom env (it re-
+// execs into wrap mode, which spawns claude with parent env). We
+// return `{ ok: false, reason: 'env-only' }` for env locations so the
+// caller can surface a "set this env var manually" hint without
+// failing the whole flow.
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Where claude-code looks for credentials. Empty → "no materialisable
+ * location known".
+ */
+export function tokenLocations() {
+  return [
+    {
+      type: 'file',
+      path: join(claudeDir(), '.credentials.json'),
+      format: 'json',
+      shape: 'anthropic-credentials-v1',
+    },
+  ];
+}
+
+/**
+ * Materialise a token to the given location. Idempotent — overwriting
+ * a previously-materialised file is fine; the shape doesn't carry any
+ * mc-specific state, so re-running with the same token is a no-op
+ * from the tool's perspective.
+ *
+ * @param {object} arg
+ * @param {string} arg.token       - the token string
+ * @param {object} arg.location    - one of the entries from tokenLocations()
+ * @param {string} [arg.sessionId] - session-name (informational; the
+ *   adapter doesn't fan files out per session — Claude Code reads
+ *   a single, fixed path)
+ * @param {object} [arg.deps]      - test injection for writeProtectedFile
+ */
+export async function materializeToken({ token, location, sessionId, deps = {} } = {}) {
+  if (!token || typeof token !== 'string') {
+    return { ok: false, reason: 'token required' };
+  }
+  if (!location || typeof location !== 'object') {
+    return { ok: false, reason: 'location required' };
+  }
+  if (location.type === 'env') {
+    return { ok: false, reason: 'env-only', envName: location.name || null };
+  }
+  if (location.type !== 'file') {
+    return { ok: false, reason: `unsupported location type: ${location.type}` };
+  }
+  // Shape decision lives here — keep it tight. The body must NEVER be
+  // logged or echoed by writeProtectedFile (verified by the
+  // no-token-leak tests in tests/mc/vault/vault-cli.test.js).
+  const body = JSON.stringify({ anthropic: { apiKey: token } });
+  const path = await writeProtectedFile(location.path, body, { deps });
+  return { ok: true, materializedPath: path };
+}
+
+/**
+ * Shred a previously-materialised file. Best-effort + idempotent —
+ * missing files are not an error. Errors during shred are reported
+ * via the return value but never thrown, so `mc end` can shred all
+ * adapters' files in a row without one failure blocking the rest.
+ */
+export async function shredToken({ location, sessionId, deps = {} } = {}) {
+  if (!location || typeof location !== 'object') {
+    return { ok: false, reason: 'location required' };
+  }
+  if (location.type !== 'file') {
+    // env-only locations have nothing to shred from disk.
+    return { ok: true, removed: false, reason: location.type };
+  }
+  return shredFile(location.path, { deps });
 }
 
 // ─────────────────────────────────────────────────────────────

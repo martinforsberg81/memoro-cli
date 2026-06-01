@@ -17,10 +17,33 @@
 import { describe, it, before, after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { run as vaultRun } from '../../../src/mc/commands/vault.js';
+import { run as vaultRunRaw } from '../../../src/mc/commands/vault.js';
 import { createMockVaultServer, makeTestPortal } from './_helpers/mock-server.js';
 
 const PW = 'this-is-a-long-test-master-password';
+
+/**
+ * In-memory keychain stand-in for the §12f cache. Without this, tests
+ * accidentally read/write the host's real OS keychain and pollute
+ * across runs. Each test gets its own store via beforeEach.
+ */
+function makeMemCacheDeps() {
+  const store = new Map();
+  return {
+    async getSecret(account) { return store.get(account) ?? null; },
+    async setSecret(account, value) { store.set(account, value); return 'mem'; },
+    async deleteSecret(account) { store.delete(account); return 'mem'; },
+    now: () => Date.now(),
+  };
+}
+
+// Each test gets its own cacheDeps assigned in beforeEach; the wrapper
+// below threads it through opts so every vault verb runs against the
+// in-memory cache.
+let activeCacheDeps = null;
+function vaultRun(argv, opts = {}) {
+  return vaultRunRaw(argv, { cacheDeps: activeCacheDeps, ...opts });
+}
 
 // Capture console output per test so we can assert on it without
 // polluting test runner output. Returns a restore fn.
@@ -46,6 +69,7 @@ describe('mc vault — full lifecycle (in-process)', () => {
   beforeEach(() => {
     server = createMockVaultServer();
     portal = makeTestPortal(server);
+    activeCacheDeps = makeMemCacheDeps();
     cap = captureConsole();
   });
 
