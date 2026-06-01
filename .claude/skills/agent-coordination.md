@@ -434,6 +434,35 @@ with documented reason.
     0600 invariant); a hypothetical "I made the registry pluggable"
     would not.
 
+14. **Parallel agents — safe when briefs are disjoint.** Drev 5a
+    (mc PreToolUse hook for vault paths) and 5b-server (memoro
+    Device Flow endpoints) ran fully in parallel in separate repos.
+    Both shipped clean PRs, zero cross-contamination. The conditions
+    that made it safe: (a) briefs touched mutually exclusive file
+    paths, (b) neither's acceptance criteria depended on the
+    other's output, (c) both got the same coordinator-protocol
+    priming so divergence on conventions was bounded. When briefs
+    share files or one's output is the other's input, sequence them
+    instead — the parallel saving is small and the merge-conflict
+    risk plus design-drift compound. The heuristic: parallel-safe
+    if you can describe each agent's "done" without mentioning the
+    other.
+
+15. **Which-layer-fired verification.** When testing a security
+    hook or gate, prove *the specific layer under test* fired —
+    not just "the deny happened". Drev 5a's smoke test tried to
+    read a materialised vault path under the new per-session
+    PreToolUse hook; the read got denied — but the global
+    `~/.claude/hooks/block-secret-reads.sh` caught it first, so we
+    couldn't tell whether the new hook worked at all. When you set
+    up the test, isolate the layer (disable upstream hooks
+    temporarily, route through a path only the layer under test
+    matches, or assert on the layer's own stderr/log signature).
+    Otherwise you've verified that *something* denies — not that
+    the thing you just shipped denies. A sub-case of pattern 12
+    (honest uncertainty disclosure): "verified" must mean
+    "verified the right mechanism".
+
 ## Anti-patterns observed (don't repeat)
 
 - **Template-literal backticks in code.** Inline backticks in
