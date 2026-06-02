@@ -18,6 +18,45 @@ import { worktreePath, mcHome } from '../paths.js';
 import { git, isInsideRepo, primaryWorktree, branchExists } from '../git.js';
 import { emitCd, parseDirectiveFlag } from '../shell-directives.js';
 import { checkAndPrintFreshInstall, ensureSentinel } from '../first-run.js';
+import { resolveToolInput } from '../../adapters/index.js';
+import { readConfig } from '../../lib/config.js';
+
+const FALLBACK_TOOL_SHORT = 'claude';
+
+/**
+ * Decide which tool the new session runs under. Precedence:
+ *   1. explicit `--tool` flag (resolved through `resolveToolInput` so
+ *      short names AND adapter IDs are accepted)
+ *   2. `config.defaultTool` from `mc tool-switch` (always an adapter ID)
+ *   3. the hardcoded fallback short name (`claude`)
+ * The return value is always the short-name form (`claude`, `codex`,
+ * `gemini`) — that's what the registry has stored historically and what
+ * `mc list` expects to render. Adapter IDs are translated here so the
+ * outer surface stays uniform.
+ *
+ * Exported for unit testing. `configLoader` is injectable so tests
+ * don't touch real disk.
+ */
+export async function resolveToolForNew({ flagValue, configLoader = readConfig } = {}) {
+  if (flagValue) {
+    const resolved = resolveToolInput(flagValue);
+    if (!resolved) {
+      return { error: `unknown tool: ${flagValue}. Try: claude | codex | gemini` };
+    }
+    return { tool: resolved.shortName, source: 'flag' };
+  }
+  let cfg = null;
+  try { cfg = await configLoader(); } catch { /* no config yet — soft fallback */ }
+  const stored = cfg?.defaultTool;
+  if (stored) {
+    const resolved = resolveToolInput(stored);
+    if (resolved) return { tool: resolved.shortName, source: 'config' };
+    // Config has a value we can't resolve — surface in the registry
+    // entry's tool field via the fallback rather than failing the verb,
+    // so a misconfigured config doesn't lock the user out of `mc new`.
+  }
+  return { tool: FALLBACK_TOOL_SHORT, source: 'fallback' };
+}
 
 const NAME_RE = /^[a-z0-9][a-z0-9_-]*$/i;
 
@@ -91,6 +130,14 @@ export async function run(rawArgv) {
     return 1;
   }
 
+  const toolResolution = await resolveToolForNew({ flagValue: opts.tool });
+  if (toolResolution.error) {
+    console.error(`mc: ${toolResolution.error}`);
+    try { git(primary, ['worktree', 'remove', wt, '--force']); } catch {}
+    try { git(primary, ['branch', '-D', branch]); } catch {}
+    return 2;
+  }
+
   const entry = upsertEntry({
     name: opts.name,
     branch,
@@ -98,7 +145,7 @@ export async function run(rawArgv) {
     repo_slug: wt.split('/worktrees/')[1]?.split('/')[0] || null,
     primary_worktree: primary,
     kind: 'work',
-    tool: opts.tool || 'claude',
+    tool: toolResolution.tool,
     model_chain: [],
     session_state: 'no-session-yet',
     safety_verdict: 'SAFE_TO_END',

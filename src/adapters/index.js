@@ -48,3 +48,36 @@ export function listPlanned() {
 export function detectInstalled() {
   return Object.values(ADAPTERS).filter(a => typeof a.detect === 'function' && a.detect());
 }
+
+/**
+ * Two name spaces exist for the same tool, by accident of history:
+ *   - **adapter ID** (e.g. `claude-code`, `codex`, `gemini-cli`) — what
+ *     `mc adapter sync --tool` and `mc tool-switch` accept, and what
+ *     `config.defaultTool` stores. Stable identifier across the contract.
+ *   - **short name** (e.g. `claude`, `codex`, `gemini`) — what
+ *     `mc auth <tool>` and `mc new --tool` accept. Closer to what users
+ *     type at the prompt.
+ *
+ * `resolveToolInput` accepts either form and returns both, plus the
+ * resolved adapter (or null when the input matches a planned-but-not-
+ * implemented adapter). Returns null when input is unknown so callers
+ * can decide whether to error or fall back.
+ */
+const SHORT_NAME_TO_ID = {
+  'claude':     'claude-code',
+  'codex':      'codex',
+  'gemini':     'gemini-cli',
+};
+
+const ID_TO_SHORT_NAME = Object.fromEntries(
+  Object.entries(SHORT_NAME_TO_ID).map(([s, id]) => [id, s]),
+);
+
+export function resolveToolInput(input) {
+  if (typeof input !== 'string' || !input) return null;
+  const id = SHORT_NAME_TO_ID[input] || (ADAPTERS[input] || PLANNED[input] ? input : null);
+  if (!id) return null;
+  const shortName = ID_TO_SHORT_NAME[id] || input;
+  const adapter = ADAPTERS[id] || null;
+  return { id, shortName, adapter, planned: !!PLANNED[id] && !adapter };
+}
