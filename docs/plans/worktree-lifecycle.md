@@ -2442,6 +2442,13 @@ this name in the example commands it generates.
 
 #### 15f. Implementation order (cross-repo)
 
+**Code-verified (2026-06-02): Phase 1 is NOT built on memoro.** No `/mcp`
+endpoint, no `memoro.ask` tool, and no `agent` scope exist in memoro's code
+(only full / sessions.write / lens.read / upload / read / device scopes;
+`/api/agent` is admin-only run-approvals). So mc-side Phase 2 is
+**genuinely gated** until memoro ships the server side — and memoro's
+current focus is the App Store launch. Park §15 mc-side work until then.
+
 Cross-repo drev. Per §10i.1's "single-repo lower risk" guidance, split:
 
 1. **Phase 1 — Memoro server (~3-4 hours).** `/mcp` Streamable HTTP
@@ -2495,6 +2502,15 @@ surface.
 
 #### 16a. The two directions
 
+**Code-verified on the memoro side (2026-06-02): both endpoints this loop
+needs are LIVE** — `POST /api/sessions/external`
+(`src/routes/sessions/external.js`, scope `sessions.write`, accepts
+`decisions`/`loose_ends`/`corrections` from claude-code/codex/cursor/
+gemini-cli) and `GET /api/lens/portrait-coding` (`src/routes/lens/read.js`,
+the only externally exposed lens). The earlier "planned / phase 8" doc tags
+were stale. So this loop is **buildable now on the mc side; it is not gated
+on memoro.**
+
 - **Session → Memoro (observe).** A session emits what happened —
   decisions, loose-ends, practices, stack — for Memoro to store and learn
   from. **Partially built:** `src/commands/heartbeat-loop.js` streams
@@ -2526,21 +2542,23 @@ surface.
 
 #### 16c. Cross-repo boundary
 
-The lens API and the learning that builds it are **memoro-side**
-(`~/memoro`). mc owns the bridge (fetch + inject + emit), the
-orchestration-flow integration, and session bootstrap. The rich
-user_state / user-development model needs the memoro roadmap mapped before
-this section's phasing can be fixed — this is the standing cross-product
-dependency named in the mission.
+The endpoints exist (16a), so mc owns the buildable parts now: the bridge
+(fetch lens + emit sessions), the orchestration-flow integration, and
+session bootstrap. The one part still memoro-gated is **Phase 3** — the
+*broadening* of the lens from "coding portrait" to the full user_state /
+user-development model, which depends on memoro-side learning not yet
+exposed. That broadening, not the loop itself, is the standing
+cross-product dependency.
 
-#### 16d. Phasing (provisional, pending memoro mapping)
+#### 16d. Phasing
 
-1. **Phase 1 — Surface today's loop.** Document + test the existing
-   `lens pull` + heartbeat paths as the loop's v0; no new behaviour.
-2. **Phase 2 — Auto-inject into orchestrated sessions.** Lens flows into
-   coordinator + fanout agents at bootstrap; no manual pull.
-3. **Phase 3 — Broaden the lens to user_state / development.** Requires
-   the memoro-side model — design after mapping.
+1. **Phase 1 — Surface today's loop (buildable now).** Document + test the
+   existing `lens pull` + heartbeat / `sessions/external` paths as v0.
+2. **Phase 2 — Auto-inject into orchestrated sessions (buildable now).**
+   Lens flows into coordinator + fanout agents at bootstrap (no manual
+   pull); emit observations on session/phase end to `/api/sessions/external`.
+3. **Phase 3 — Broaden the lens to user_state / development (memoro-gated).**
+   Depends on memoro-side learning not yet exposed via the lens.
 4. **Phase 4 — Observations as a first-class orchestration output.** Each
    spine result (§10s) feeds structured observations back to Memoro.
 
