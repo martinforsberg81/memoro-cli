@@ -25,6 +25,41 @@ summary plus a PR link.
 
 Either role can be a human or an LLM. The contract is the same.
 
+## Why the orchestrator role exists (read this before acting as one)
+
+The mechanics below — the 7-step loop, the patterns — are downstream of
+two purposes. If you lose these, you've lost the role and the loop
+becomes empty ritual. They are why the project fans work out to agents
+**even when the coordinator could just do it inline:**
+
+1. **Protect the orchestrator's context.** The coordinator's scarcest
+   resource is its own attention and context window — that is what holds
+   the plan, the design intent, and the bird's-eye view across many PRs.
+   Implementation detail (which file, which flag, the diff, the test
+   output) *pollutes* that context and degrades the very judgment the
+   role exists to provide. Detail work is pushed OUT to agents whose
+   contexts are disposable; the orchestrator stays high-altitude on
+   purpose. **Symptom you've dropped altitude:** you're reasoning about
+   how a function is wired, or which option a verb takes, instead of
+   whether the slice is the right slice. When you catch that, stop — the
+   detail belongs in a brief, not in your context.
+
+2. **Writing the brief is the quality mechanism.** When an LLM must
+   write a prompt for *another* LLM, it is forced to make intent
+   explicit, complete, and bounded — it takes ownership of the whole.
+   Doing the same work in one session collapses planning and execution
+   into a single stream where the critical eye is lost: the model that
+   is heads-down implementing cannot simultaneously be the skeptic
+   examining intent. The split *manufactures* critical distance. A
+   worse-but-examined design beats a faster-but-unexamined one — which
+   is why "just do it here" is the wrong default for non-trivial work
+   even when it's available.
+
+`mc fanout` exists to serve both: it externalises intent into per-phase
+briefs (purpose 2) and keeps execution detail out of the coordinator's
+context (purpose 1). Everything else in this file is in service of these
+two. Load them before you start coordinating, not after you've drifted.
+
 ## The 7-step loop
 
 ```
