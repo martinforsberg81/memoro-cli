@@ -1,8 +1,35 @@
-# mc as the worktree + session manager (subsume and replace cs)
+# mc — the AI-agent orchestration substrate
 
-**Status:** proposed • 2026-05-25
+**Status:** proposed • 2026-05-25 (mission-first reframe 2026-06-02)
 
-## Motivation
+## Mission (north star)
+
+memoro-cli (`mc`) exists to make **one human able to orchestrate a fleet
+of AI coding agents** — across any tool (Claude Code, Codex, Cursor,
+Gemini…), model, repo, user, and machine — from a single **high-altitude
+coordinator session**. That overarching session is not a way of working
+*in* this repo; it **is the product** mc builds.
+
+The bottleneck in AI-assisted coding is not model coding ability — it is
+the human's capacity to direct many agents while keeping critical
+oversight. mc removes that bottleneck: intent is externalised into
+per-agent briefs (the brief is the quality mechanism), the coordinator's
+context is kept clean (it stays high-altitude), work is verified before
+merge, nothing leaks, and — via **Memoro** — nothing is forgotten.
+
+**Memoro** is the user's personal knowledge base. mc is the on-machine
+bridge to it, and the two form a **bidirectional loop**: sessions emit
+observations (decisions, loose-ends, practices) *into* Memoro; Memoro
+feeds **user_state context** (a personal "lens") *back into* sessions —
+so orchestration is not just parallel, it is **personalised**, and the
+user's own development is a first-class goal. (Memoro-side detail lives in
+the memoro repo; mc owns the bridge — see §15 + §16.)
+
+The sections below were written origin-first (mc subsuming `cs`). Read
+§ Motivation as the **first milestone**, not the goal — the goal is the
+mission above, and every section serves it.
+
+## Motivation (origin — the first milestone)
 
 Today `mc` tracks live Claude processes (heartbeat, list, send) but knows
 nothing about the *container* they run in — the worktree and branch. `cs`
@@ -796,6 +823,34 @@ responsive for planning while children execute.
 The patterns are independent primitives — they can be combined (a
 fan-out's child can be a mid-agent; an ensemble can be used as a
 verifier).
+
+#### 10s. The spine: fanout → verify → gather (priority order, added 2026-06-02)
+
+Of the patterns in this section, three form the **core loop** that makes
+the mission real end-to-end — the spine. The rest (ensemble §10c,
+hierarchy §10b) are *enhancements* layered on it, not peers:
+
+```
+mc fanout <plan>  →  agents execute (one PR/phase)  →  mc verify  →  mc gather
+   stage phases         the build                       the gate       merge
+```
+
+Build-priority order and the gaps between "shipped" and "works":
+
+1. **fanout** stages phases (worktrees + briefs) — **shipped (PR #60),
+   but it only STAGES; it does not yet run the agents** (sessions land
+   `no-session-yet`). Wiring execution is the first spine step.
+   *(gap — not yet an explicit plan step)*
+2. **mc verify** — the adversarial trust gate before merge — **not
+   built** (§10d; Phase 2 of the 10j phasing).
+3. **mc gather** — **shipped**, but does **not yet respect the verifier
+   verdict**; it must refuse to merge `rejected-by-verifier` phases per
+   the §10e registry contract. *(gap)*
+
+`mc spawn` (§5b — heterogeneous *single* subagent) is **not built**; the
+spine does not require it. Heterogeneous models per worker (Goal 5) and
+cost guardrails (§10h) are the depth pass *after* the spine works.
+Everything from 10a onward is the detail of these primitives.
 
 #### 10a. Fan-out by plan phases
 
@@ -1768,6 +1823,56 @@ canonical-source pattern incrementally: new content goes under
 `docs/agent-*/`; existing content gets migrated when an adapter
 needs it.
 
+#### 13b.1. Two layers of canon — project vs tool-universal (amended 2026-06-02)
+
+The layout above conflates two kinds of canon that have
+different *homes* and different *audiences*:
+
+- **Project canon.** This repo's stack, critical paths,
+  conventions, and plan (`docs/coding-agent-protocol.md`, this
+  file). True only for memoro-cli. Lives in the repo's `docs/`;
+  `mc adapter sync` reads it *from the repo* and writes the
+  repo's tool-native files. This is what 13b describes.
+- **Tool-universal canon.** The orchestrator role and the
+  coordinator ↔ agent protocol (`be-coordinator`,
+  `agent-coordination`). These describe how to work *with mc* —
+  true for every user in every project, regardless of codebase.
+  They must NOT be stranded in one repo's `docs/`.
+
+Tool-universal canon **ships inside the mc package** — bundled
+with the binary (via `package.json` `files`, alongside `src/`),
+so it travels everywhere mc is installed. `mc setup` /
+`mc adapter sync` materialise it into the current repo's
+tool-native paths *from mc's own bundled copy*, even in a repo
+that has never seen these files. That is what makes the
+overarching orchestrator session a property of `mc` rather than
+of memoro-cli: a developer who installs mc in a fresh project
+and runs `mc setup` gets `/be-coordinator` and the coordination
+skill because mc shipped them, not because the repo did.
+
+**Merge model.** In any repo, the materialised files =
+tool-universal canon (from the package) layered with optional
+project overrides (from the repo's `docs/agent-*/`). Project
+canon extends or annotates tool canon; it never has to re-state
+it. A repo with no overrides still gets the full orchestrator
+session.
+
+**Source resolution order** for a given asset, highest priority
+first:
+
+1. repo-local override (`docs/agent-commands/<name>.md`, etc.)
+2. mc package-shipped universal canon
+3. (nothing — asset absent)
+
+This is the only structural change the universal vision
+requires; the renderer + sync machinery in 13c is unchanged —
+only the *source resolution* gains the package layer. The
+distinction also resolves a latent ambiguity in 13b: the
+coordination skill + command currently under this repo's
+`.claude/` are tool-universal canon living in a project-specific
+location. Phase 4 graduates them to the package, not to this
+repo's `docs/`.
+
 #### 13c. `mc adapter sync` — materialise per-tool files
 
 ```
@@ -1854,11 +1959,20 @@ docs telling them to install equivalents manually.
    syncs files. Mostly orchestration on top of phase 2.
 
 4. **Phase 4 — Canonical skills + commands (~1 week).**
-   Migrate `.claude/skills/` and `.claude/commands/` to
-   `docs/agent-skills/` and `docs/agent-commands/`. Add
-   per-adapter renderers (markdown-wrapper for most; Cursor
-   gets MDC frontmatter). `mc adapter sync` extended to cover
-   these.
+   Add per-adapter renderers (markdown-wrapper for most; Cursor
+   gets MDC frontmatter) and extend `mc adapter sync` to cover
+   skills + commands. **Amended (2026-06-02, per 13b.1):** the
+   coordination skill + command (`agent-coordination`,
+   `be-coordinator`) are *tool-universal* canon — they graduate
+   to the **mc package** (bundled, shipped via `package.json`
+   `files`), not to this repo's `docs/agent-*/`. `mc adapter
+   sync` resolves a requested asset repo-override → package-canon
+   → absent (13b.1 resolution order), so any repo — including one
+   that has never carried these files — materialises the full
+   orchestrator session from mc's own copy. Project-specific
+   skills/commands still live in the repo's `docs/agent-*/` and
+   layer on top. This is the phase that delivers "mc creates the
+   overarching session, repo- and user-agnostic".
 
 5. **Phase 5 — Cursor + Aider adapters (~3 days).** First
    non-Claude tools to land with full canonical-source-driven
@@ -1885,6 +1999,13 @@ Phase 6 is open-ended.
   Codex as their installed tool, and get AGENTS.md (not
   CLAUDE.md) as the primary on-disk instruction surface —
   with the protocol intact.
+- **(amended 2026-06-02)** In a repo that has *never* carried
+  coordination files — a fresh project, any language — running
+  `mc setup` materialises the orchestrator session
+  (`be-coordinator` + `agent-coordination`) from the mc package,
+  for any user. Deleting the repo's copy and re-running restores
+  it. A repo-local override in `docs/agent-commands/` wins over
+  the package copy (13b.1 resolution order).
 
 #### 13h. Open questions
 
@@ -1911,6 +2032,23 @@ Phase 6 is open-ended.
   the same portability. Out of scope for §13 (project-only);
   user-level portability gets its own section if it becomes a
   pain point.
+- **(amended 2026-06-02) Upgrade semantics for package-shipped
+  canon.** When mc upgrades, its bundled universal canon
+  (`be-coordinator`, `agent-coordination`) changes — but repos
+  already carry materialised copies. Does `mc adapter sync`
+  re-materialise on version bump (canonical-wins, modulo the
+  drift rule in 13h above), and how does it tell a stale
+  package copy from a deliberate repo override? Lean: stamp the
+  materialised file with the package version (cf. the existing
+  `<!-- mc-adapter-sync:version=… -->` sentinel), re-sync when
+  the package version is newer AND the file is unmodified;
+  surface drift otherwise. Needs design before Phase 4 ships.
+- **(amended 2026-06-02) Is `mc setup` enough, or is a thin
+  entrypoint warranted?** 13b.1 makes the orchestrator session
+  materialise on `mc setup` / `mc adapter sync`. Whether to also
+  add an explicit verb (e.g. `mc coordinate`) that primes the
+  session in one step is a UX question, deferred — the
+  capability lands via sync regardless of the entrypoint.
 
 ### 14. Device-aware authentication via OAuth Device Flow
 
@@ -2344,6 +2482,67 @@ is independently shippable.
 - **Tool surface beyond `memoro.ask`?** Per the memoro-agent plan,
   v1 is one tool. v2 might add `memoro.observe(file_path, kind)` for
   proactive "store this decision" writes. Out of scope here.
+
+### 16. The memory loop — Memoro ↔ session, bidirectional (proposed 2026-06-02)
+
+The mission (north star, top of file) names Memoro as the user's personal
+knowledge base and mc as the on-machine bridge. The two form a
+**bidirectional loop** that makes orchestration *personalised* and treats
+the user's own development as a first-class goal. This loop is core to the
+mission but, until now, had no home in this plan — its parts live in the
+low-level `memoro-cli` binary (`src/bin.js`), not in the mc orchestration
+surface.
+
+#### 16a. The two directions
+
+- **Session → Memoro (observe).** A session emits what happened —
+  decisions, loose-ends, practices, stack — for Memoro to store and learn
+  from. **Partially built:** `src/commands/heartbeat-loop.js` streams
+  heartbeats + transcript excerpts; Memoro derives the structured records
+  (surfaced by the `memoro-*` skills). Not yet a first-class
+  mc-orchestration output (a fanout phase's result should feed
+  observations too).
+- **Memoro → session (user_state / lens).** Memoro feeds context about
+  *who the user is and where they are heading* back into the session's
+  standing context. **Partially built:** `memoro-cli lens pull`
+  (`src/commands/lens.js`) fetches a coding "portrait"
+  (`/api/lens/portrait-coding`) and writes it as a managed block so it
+  lands in the tool's standing context. Today it is manual / hook-driven,
+  lives on the low-level binary, and is coding-scoped only.
+
+#### 16b. Gaps toward the mission
+
+1. **Automatic + first-class in the orchestrator flow.** The lens should
+   flow into every mc-orchestrated session (coordinator and each fanned
+   agent) at bootstrap, without a manual `lens pull`.
+2. **Broaden beyond "coding portrait".** From "how this user codes" to
+   "who this user is, what they're working toward" — the user_state the
+   mission describes, supporting the person's development, not just the
+   diff.
+3. **Close the loop with §15.** The `memoro-agent` (MCP) gives agents
+   *pull* access to the whole knowledge base on demand; the lens is the
+   *push* of the most relevant slice into standing context. Complementary,
+   not redundant.
+
+#### 16c. Cross-repo boundary
+
+The lens API and the learning that builds it are **memoro-side**
+(`~/memoro`). mc owns the bridge (fetch + inject + emit), the
+orchestration-flow integration, and session bootstrap. The rich
+user_state / user-development model needs the memoro roadmap mapped before
+this section's phasing can be fixed — this is the standing cross-product
+dependency named in the mission.
+
+#### 16d. Phasing (provisional, pending memoro mapping)
+
+1. **Phase 1 — Surface today's loop.** Document + test the existing
+   `lens pull` + heartbeat paths as the loop's v0; no new behaviour.
+2. **Phase 2 — Auto-inject into orchestrated sessions.** Lens flows into
+   coordinator + fanout agents at bootstrap; no manual pull.
+3. **Phase 3 — Broaden the lens to user_state / development.** Requires
+   the memoro-side model — design after mapping.
+4. **Phase 4 — Observations as a first-class orchestration output.** Each
+   spine result (§10s) feeds structured observations back to Memoro.
 
 ## Open questions
 
