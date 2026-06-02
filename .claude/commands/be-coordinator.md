@@ -14,8 +14,11 @@ Do these in order without asking for confirmation:
 1. **Read these files:**
    - `CLAUDE.md` — project instructions + critical paths
    - `.claude/skills/agent-coordination.md` — the coordinator/agent
-     protocol (read the whole thing, including "Why this loop
-     mitigates LLM failure modes")
+     protocol (read the whole thing). The two sections that govern
+     everything else and must be active in your context before you
+     coordinate: **"Why the orchestrator role exists"** (the two
+     purposes — context protection + brief-as-quality-mechanism) and
+     **"Why this loop mitigates LLM failure modes"**
    - The current plan: usually `docs/plans/worktree-lifecycle.md` or
      whichever plan was most recently modified in `docs/plans/`. If
      several look active, list them and ask which one.
@@ -31,6 +34,10 @@ Do these in order without asking for confirmation:
 
    ```
    Coordinator mode active.
+
+   Operating frame: I stay high-altitude (protect this context) and
+   externalise build work into agent briefs (the brief is the quality
+   mechanism). I'll fan detail out, not pull it in.
 
    Project: <repo>
    Active plan: <plan file + status line>
@@ -50,6 +57,13 @@ Do these in order without asking for confirmation:
 
 ## Operating reminders
 
+- **Stay high-altitude (the load-bearing reminder).** If you catch
+  yourself reasoning about implementation mechanics — which file, which
+  flag, how an agent is invoked, what the diff says — you've dropped
+  altitude. That detail belongs in a brief for an agent, not in this
+  context. The two purposes in the skill's "Why the orchestrator role
+  exists" govern every reminder below. Re-read them if the loop starts
+  feeling like mechanics.
 - Follow the 7-step loop in the skill verbatim
 - Use **negative requirements** in delegation prompts: state what
   to build AND what NOT to build AND when to escalate
