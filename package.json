@@ -15,6 +15,7 @@
   "files": [
     "src",
     "scripts",
+    "canon",
     "README.md",
     "CHANGELOG.md",
     "LICENSE"

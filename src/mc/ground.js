@@ -31,6 +31,8 @@ import { readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join, basename } from 'node:path';
 
+import { readPackageCanon } from './canon.js';
+
 // ─────────────────────────────────────────────────────────────
 // Pure: bundle assembly
 // ─────────────────────────────────────────────────────────────
@@ -480,40 +482,117 @@ export function lifecycleGuidance({ map, repoName } = {}) {
 }
 
 /**
- * The orchestrator role framing. Authority lives in the verbs / canonical
- * docs — we point at the repo's own protocol + coordination files rather
- * than duplicating their content here. The grounded session reads those
- * files via its native tooling; this block tells it they exist and why
- * they matter, so the session wakes knowing its role without the user
- * re-explaining it.
+ * The orchestrator role framing — UNIVERSAL as of Phase 5 (plan §13b.1).
  *
- * Phase 5 ships this as package-canon; Phase 1 references the existing
- * repo `.claude` sources, soft-degrading to a terse default if none are
- * present (so grounding still works in a repo without them).
+ * Two layers, by design:
+ *
+ *   1. INLINE, ALWAYS. The orchestrator framing PLUS a short distillation of
+ *      the two load-bearing purposes (protect the coordinator's context;
+ *      the brief is the quality mechanism). This is the part that must be
+ *      fully present in *any* repo — including an empty one — because it is
+ *      the whole point of "universal": the role does not depend on the repo
+ *      carrying files. Kept short so it never bloats the bundle.
+ *
+ *   2. POINTERS to the long canon. The full protocol / coordination skill is
+ *      long; we point at it rather than inlining it. Source resolution follows
+ *      §13b.1: a repo-local copy is the override (point at the repo path so the
+ *      session reads its project-specific annotations); ELSE the mc package
+ *      ships the canon (`mc setup` / `mc adapter sync` materialise it from the
+ *      package), so the pointer is still surfaced. Only when NEITHER the repo
+ *      nor the package has the file (a broken install) does the pointer drop —
+ *      that, and only that, is the terse fallback. "Repo has no .claude" is NOT
+ *      terse fallback any more: the package canon covers it.
+ *
+ * Canon resolution is injected (Pattern 2) + soft-degrades: a throwing /
+ * empty resolver collapses to the inline framing alone, never throwing.
+ *
+ * @param {string} cwd
+ * @param {object} [arg]
+ * @param {Function} [arg.exists] — (absPath) => boolean; injected.
+ * @param {Function} [arg.canon]  — () => packaged-canon map; injected. Defaults
+ *   to reading the package `canon/` dir via `readPackageCanon`.
  */
-export function buildRole(cwd, { exists = existsSync } = {}) {
-  const coordination = join(cwd, '.claude', 'skills', 'agent-coordination.md');
-  const protocol = join(cwd, 'docs', 'coding-agent-protocol.md');
-  const beCoordinator = join(cwd, '.claude', 'commands', 'be-coordinator.md');
+export function buildRole(cwd, { exists = existsSync, canon = readPackageCanon } = {}) {
+  // Where the repo carries its own copy (the override layer).
+  const repoHas = {
+    protocol: exists(join(cwd, 'docs', 'coding-agent-protocol.md')),
+    coordination: exists(join(cwd, '.claude', 'skills', 'agent-coordination.md')),
+    beCoordinator: exists(join(cwd, '.claude', 'commands', 'be-coordinator.md')),
+  };
 
-  const refs = [];
-  if (exists(protocol)) refs.push('`docs/coding-agent-protocol.md` — the project protocol');
-  if (exists(coordination)) {
-    refs.push('`.claude/skills/agent-coordination.md` — the coordinator ↔ agent loop and why it exists');
+  // What the package ships (the universal baseline). Soft-degrade: a broken
+  // install (canon unreadable) → all-null, and the pointers simply drop.
+  let pkg = { protocol: null, coordination: null, beCoordinator: null };
+  try {
+    const resolved = canon();
+    if (resolved && typeof resolved === 'object') pkg = resolved;
+  } catch {
+    // keep the all-null default — terse fallback.
   }
-  if (exists(beCoordinator)) refs.push('`.claude/commands/be-coordinator.md` — priming as coordinator');
+
+  // A pointer is surfaced when EITHER layer has the asset. Repo path wins as
+  // the pointer text (project override); else we point at the package copy
+  // that `mc setup`/`mc adapter sync` materialise into this repo.
+  const refs = [];
+  if (repoHas.protocol || pkg.protocol) {
+    refs.push(refLine('protocol', repoHas.protocol));
+  }
+  if (repoHas.coordination || pkg.coordination) {
+    refs.push(refLine('coordination', repoHas.coordination));
+  }
+  if (repoHas.beCoordinator || pkg.beCoordinator) {
+    refs.push(refLine('beCoordinator', repoHas.beCoordinator));
+  }
 
   const lines = [
     'You are the orchestrator of this work. One human directs a fleet; this ' +
       'session is the high-altitude seat that holds the whole — the plan, the ' +
       'intent, the bird\'s-eye view across many changes. Protect that altitude: ' +
       'push implementation detail out to focused agents, keep design judgment here.',
+    '',
+    'Two purposes govern the role (lose them and the loop becomes empty ritual):',
+    '- **Protect the coordinator\'s context.** Your scarcest resource is your own ' +
+      'attention and context window — it holds the plan and the design intent. ' +
+      'Push implementation detail (which file, which flag, the diff) OUT to ' +
+      'focused agents whose contexts are disposable; stay high-altitude on purpose.',
+    '- **The brief is the quality mechanism.** Writing a brief for another agent ' +
+      'forces intent to be explicit, complete, and bounded — it manufactures the ' +
+      'critical distance a single heads-down stream loses. A worse-but-examined ' +
+      'design beats a faster-but-unexamined one.',
   ];
   if (refs.length) {
     lines.push('', 'Canonical sources for this role (read them, don\'t make the user re-explain):');
     for (const r of refs) lines.push(`- ${r}`);
   }
   return lines.join('\n');
+}
+
+// Pointer text for a canon asset. When the repo carries the file we point at
+// its repo-relative path (the project override the session should read); when
+// only the package has it we name the file mc materialises into the repo.
+function refLine(key, repoHas) {
+  // When only the package ships the asset (repo carries no copy), we still
+  // name the canonical file — and note it travels with mc — so the session
+  // knows the canon exists even in a repo that has never seen it. We do NOT
+  // promise a specific verb materialises it (that is the §13c follow-up); the
+  // session can read the file straight from the mc package if it needs the
+  // full text.
+  switch (key) {
+    case 'protocol':
+      return repoHas
+        ? '`docs/coding-agent-protocol.md` — the project protocol'
+        : '`docs/coding-agent-protocol.md` — the project protocol (ships with mc)';
+    case 'coordination':
+      return repoHas
+        ? '`.claude/skills/agent-coordination.md` — the coordinator ↔ agent loop and why it exists'
+        : '`.claude/skills/agent-coordination.md` — the coordinator ↔ agent loop and why it exists (ships with mc)';
+    case 'beCoordinator':
+      return repoHas
+        ? '`.claude/commands/be-coordinator.md` — priming as coordinator'
+        : '`.claude/commands/be-coordinator.md` — priming as coordinator (ships with mc)';
+    default:
+      return '';
+  }
 }
 
 /**
