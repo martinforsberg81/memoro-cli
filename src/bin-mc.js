@@ -320,6 +320,25 @@ async function runWrap(argv, { label = null } = {}) {
     pid: process.pid,
   }, null, 2), { mode: 0o600 });
 
+  // ─── Grounding (Phase 1) — pre-launch slot ──────────────────────────────
+  // Ground the session in place BEFORE spawning the tool: assemble
+  // { map + role + lens + focus } and materialise it as one managed block
+  // into this cwd's CLAUDE.md, so the LLM wakes holding the whole. Mirrors
+  // the §12d vault-materialise slot in `mc new`. Soft-degrade: any failure
+  // (no MEMORO.md, no Memoro lens, write error) prints a one-line hint and
+  // continues — grounding must never block the launch.
+  try {
+    const { groundSession } = await import('./mc/ground.js');
+    const { getAdapter } = await import('./adapters/index.js');
+    const adapter = getAdapter('claude-code');
+    const res = await groundSession({ cwd, adapter, focus: label || null });
+    if (!res.ok && res.reason) {
+      process.stderr.write(`mc: grounding skipped (${res.reason}); continuing\n`);
+    }
+  } catch (err) {
+    process.stderr.write(`mc: grounding failed (${err.message}); continuing without it\n`);
+  }
+
   // Print a short stylized intro BEFORE handing the TTY to Claude. The
   // intro lands in the terminal's scrollback above Claude's TUI, so the
   // user can scroll up to find the session id whenever they need it.

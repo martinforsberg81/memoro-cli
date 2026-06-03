@@ -46,6 +46,51 @@ export async function writeLens(markdown) {
   return claudeMd();
 }
 
+// Grounding block markers — distinct from the lens block so the two
+// managed sections (global lens vs. per-session grounding bundle) never
+// collide in the same file. The grounding bundle is written into the
+// SESSION's cwd instruction file, not the global ~/.claude/CLAUDE.md.
+const GROUNDING_BEGIN = '<!-- memoro:managed:grounding:begin -->';
+const GROUNDING_END   = '<!-- memoro:managed:grounding:end -->';
+
+const projectClaudeMd = (cwd) => join(cwd, 'CLAUDE.md');
+
+/**
+ * Write the grounding bundle into the SESSION's project-level CLAUDE.md
+ * (in cwd), replacing any existing grounding managed block. This is the
+ * generalised `writeLens` pattern — one managed block, same round-trip —
+ * applied to the whole grounding bundle at the cwd scope.
+ *
+ * Distinct from `writeLens`, which targets the GLOBAL ~/.claude/CLAUDE.md
+ * and the portrait-coding marker. Grounding is per-session and per-cwd.
+ */
+export async function writeGrounding(markdown, { cwd = process.cwd() } = {}) {
+  const target = projectClaudeMd(cwd);
+  const existing = existsSync(target) ? await readFile(target, 'utf8') : '';
+  const next = upsertManagedBlock(existing, markdown, {
+    beginMarker: GROUNDING_BEGIN,
+    endMarker: GROUNDING_END,
+  });
+  await writeFile(target, next);
+  return target;
+}
+
+/**
+ * Remove the grounding managed block from the cwd's CLAUDE.md. Leaves
+ * any hand-edited content (and the lens block, which uses a different
+ * marker) untouched.
+ */
+export async function removeGrounding({ cwd = process.cwd() } = {}) {
+  const target = projectClaudeMd(cwd);
+  if (!existsSync(target)) return;
+  const existing = await readFile(target, 'utf8');
+  const next = removeManagedBlock(existing, {
+    beginMarker: GROUNDING_BEGIN,
+    endMarker: GROUNDING_END,
+  });
+  await writeFile(target, next);
+}
+
 /**
  * Remove the managed block (undoes writeLens). Leaves any hand-edited
  * content in CLAUDE.md untouched.
