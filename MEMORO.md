@@ -63,15 +63,16 @@ A session must be handed the right context *before the user types*. Today
 ### Orchestration — the fleet   · serves G1
 Ship a plan as verified parallel agents; the coordinator never blocks.
 
-- **The orchestrator loop (fanout)** — `active · M · now`
-  One session holds the whole and loops: see → write a strong brief → send an
-  agent → a separate review agent (2nd opinion, prompted from the goal) → merge
-  (the human's go). This is the loop we ran by hand to ship the grounding MVP, so
-  it's proven, not speculative. The orchestrator's leverage is writing two good
-  prompts per unit of work (build + review); it never builds and never
-  self-reviews. Minimal build: `mc fanout --run` (wire the parked launcher) + a
-  review-agent pass. Reaper / verify state-machine / trust-buckets deliberately
-  deferred until a real failure forces them. → `docs/plans/fanout-spine.md`
+- **Continuity: resume work in a new session** — `active · S · now`
+  mc is a **continuity layer**, not an agent-runner: the engine (agents, spawn,
+  parallelism) comes free from the underlying model/tool; mc adds grounding +
+  MEMORO.md as living project state. Payoff: resume a piece of work in a new
+  session (other day/machine/tool) because it grounds in the map. The orchestrator
+  operates a loop with *borrowed* agents — brief → tool-agent → separate review
+  agent (2nd opinion) → merge — proven by hand this session. A fanout/verify/gather
+  spine was considered and **rejected as premature**. Only real next build: keep
+  the map's in-flight state reliable so resuming a specific half-done thread is
+  frictionless. → `docs/plans/fanout-spine.md`
 - **Ensemble & hierarchy** — `later · M · —`
   Multi-model ensembles and recursive mid-agents, layered on the spine. → §10b/§10c
 
