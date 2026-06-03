@@ -63,18 +63,28 @@ A session must be handed the right context *before the user types*. Today
 ### Orchestration — the fleet   · serves G1
 Ship a plan as verified parallel agents; the coordinator never blocks.
 
-- **Fanout spine: execute → verify → gather** — `next · L · after grounding`
-  fanout stages today but doesn't run agents. Add headless background execution,
-  `mc verify` as the trust gate, and make `mc gather` refuse rejected phases.
-  → `docs/plans/worktree-lifecycle.md` §10s
+- **Continuity: resume work in a new session** — `active · S · now`
+  mc is a **continuity layer**, not an agent-runner: the engine (agents, spawn,
+  parallelism) comes free from the underlying model/tool; mc adds grounding +
+  MEMORO.md as living project state. Payoff: resume a piece of work in a new
+  session (other day/machine/tool) because it grounds in the map. The orchestrator
+  operates a loop with *borrowed* agents — brief → tool-agent → separate review
+  agent (2nd opinion) → merge — proven by hand this session. A fanout/verify/gather
+  spine was considered and **rejected as premature**. Only real next build: keep
+  the map's in-flight state reliable so resuming a specific half-done thread is
+  frictionless. → `docs/plans/fanout-spine.md`
 - **Ensemble & hierarchy** — `later · M · —`
   Multi-model ensembles and recursive mid-agents, layered on the spine. → §10b/§10c
 
 ### Memory loop — Memoro ↔ session   · serves G1, G2
-- **Wire the bidirectional loop** — `unblocked · M · after grounding`
-  Emit observations on session end → `/api/sessions/external`; pull the
-  `portrait-coding` lens into standing context. Both endpoints verified LIVE on
-  the memoro side. → `docs/plans/worktree-lifecycle.md` §16
+- **Wire the bidirectional loop** — `shipped · M · —`
+  Both directions live. Emit: session-end observations → `/api/sessions/external`
+  was already wired to the claude-code `SessionEnd` hook (`src/commands/session.js`,
+  with deterministic annotations + a first-upload trust moment). Pull: the
+  `portrait-coding` lens auto-injects into standing context — delivered by
+  grounding Phase 4. The loop closed when Phase 4 landed. Remaining enhancement is
+  the server-side language field (cross-repo), which sharpens the lens but is not
+  required for the loop. → `docs/plans/worktree-lifecycle.md` §16
 
 ### Tool-portability — any tool, any repo   · serves G1
 - **Canonical skills/commands in the mc package + Cursor/Aider** — `planned · M · —`
