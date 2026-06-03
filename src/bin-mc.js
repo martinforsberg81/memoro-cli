@@ -343,6 +343,28 @@ async function runWrap(argv, { label = null } = {}) {
     pid: process.pid,
   }, null, 2), { mode: 0o600 });
 
+  // ─── Vault unlock grind — pre-launch slot ───────────────────────────────
+  // If the vault is configured but LOCKED, ask the user to unlock now
+  // (default Y), read the master password, unlock, and materialise tokens —
+  // BEFORE the tool spawns — so the session starts CONNECTED to the
+  // coordinator WS channel. Decline (or an abandoned bad password) → launch
+  // in degraded mode as an EXPLICIT choice, matching the old behaviour but
+  // no longer a silent default. Soft-degrades on every error; never blocks.
+  //
+  // `mc new` / `mc resume` re-exec into this runWrap, but they already ran
+  // the grind before re-exec (so the prompt lands before the registry
+  // namespace is lost). They set MC_VAULT_GRIND_DONE=1 in the re-exec env so
+  // we don't double-prompt here. Bare `mc` / `mc wrap` have no prior grind,
+  // so this is THE slot for them — same shared helper, one code path.
+  if (process.env.MC_VAULT_GRIND_DONE !== '1') {
+    try {
+      const { ensureVaultUnlockedForLaunch } = await import('./mc/vault/unlock-grind.js');
+      await ensureVaultUnlockedForLaunch({ sessionId: codingSessionId, worktreePath: cwd });
+    } catch (err) {
+      process.stderr.write(`mc: vault unlock grind failed (${err.message}); continuing without tokens\n`);
+    }
+  }
+
   // ─── Grounding (Phase 1) — pre-launch slot ──────────────────────────────
   // Ground the session in place BEFORE spawning the tool: assemble
   // { map + role + lens + focus } and materialise it as one managed block

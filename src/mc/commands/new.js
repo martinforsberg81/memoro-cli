@@ -186,20 +186,19 @@ export async function run(rawArgv) {
     return 0;
   }
 
-  // §12d: materialise vault tokens for the session BEFORE re-exec.
-  // The materialised files must exist by the time the spawned tool
-  // reads its credentials path. Soft-degrade: if the vault is locked
-  // or unreachable, print a one-line hint to stderr and continue —
-  // the session just starts without materialised tokens.
+  // §12d: pre-launch vault unlock grind BEFORE re-exec. If the vault is
+  // configured but LOCKED, ask the user to unlock now (default Y), read the
+  // master password, unlock, and materialise — so the session starts
+  // CONNECTED. If they decline (or a bad password is abandoned), we launch
+  // in degraded mode as an EXPLICIT choice. The materialised credential
+  // files must exist by the time the spawned tool reads them. The grind
+  // soft-degrades on every error — it never blocks the launch.
   try {
-    const { materialiseForSession } = await import('../vault/lifecycle.js');
-    const res = await materialiseForSession({ sessionId: opts.name, worktreePath: wt });
-    if (!res.ok && res.hint) {
-      process.stderr.write(`mc: ${res.hint}\n`);
-    }
+    const { ensureVaultUnlockedForLaunch } = await import('../vault/unlock-grind.js');
+    await ensureVaultUnlockedForLaunch({ sessionId: opts.name, worktreePath: wt });
   } catch (err) {
-    // Materialisation must never block the session — surface but continue.
-    process.stderr.write(`mc: vault materialise failed (${err.message}); continuing without tokens\n`);
+    // The grind must never block the session — surface but continue.
+    process.stderr.write(`mc: vault unlock grind failed (${err.message}); continuing without tokens\n`);
   }
 
   // Re-exec the same mc binary in wrap mode with cwd=worktree. This
@@ -218,6 +217,10 @@ export async function run(rawArgv) {
   // grounds with focus through ONE code path, not a forked one.
   const reexecEnv = { ...process.env };
   if (opts.task) reexecEnv.MC_GROUNDING_FOCUS = opts.task;
+  // We already ran the vault unlock grind above (before re-exec, while the
+  // registry name was still in scope). Tell the re-exec'd runWrap not to
+  // grind again so the user isn't prompted twice.
+  reexecEnv.MC_VAULT_GRIND_DONE = '1';
   // Route the wrap-mode launcher to the chosen tool's adapter. The
   // registry stores the short name; the launcher resolves either form, so
   // we pass the adapter ID when known (canonical) and fall back to the

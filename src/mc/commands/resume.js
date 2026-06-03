@@ -50,19 +50,18 @@ export async function run(rawArgv) {
     return 0;
   }
 
-  // §12d: materialise vault tokens for the session BEFORE re-exec.
-  // Same contract as `mc new` — soft-degrade on vault-locked.
+  // §12d: pre-launch vault unlock grind BEFORE re-exec. Same contract as
+  // `mc new` — if the vault is locked, ask to unlock now (default Y) so the
+  // resumed session starts CONNECTED; decline → degraded launch as an
+  // explicit choice. Soft-degrades on every error; never blocks the launch.
   try {
-    const { materialiseForSession } = await import('../vault/lifecycle.js');
-    const res = await materialiseForSession({
+    const { ensureVaultUnlockedForLaunch } = await import('../vault/unlock-grind.js');
+    await ensureVaultUnlockedForLaunch({
       sessionId: entry.name,
       worktreePath: entry.worktree_path || undefined,
     });
-    if (!res.ok && res.hint) {
-      process.stderr.write(`mc: ${res.hint}\n`);
-    }
   } catch (err) {
-    process.stderr.write(`mc: vault materialise failed (${err.message}); continuing without tokens\n`);
+    process.stderr.write(`mc: vault unlock grind failed (${err.message}); continuing without tokens\n`);
   }
 
   // Re-exec mc in wrap mode with --resume so claude opens its resume
@@ -75,6 +74,9 @@ export async function run(rawArgv) {
   // groundSession seam in runWrap.
   const reexecEnv = { ...process.env };
   if (entry.label) reexecEnv.MC_GROUNDING_FOCUS = entry.label;
+  // We already ran the vault unlock grind above (before re-exec). Tell the
+  // re-exec'd runWrap not to grind again so the user isn't prompted twice.
+  reexecEnv.MC_VAULT_GRIND_DONE = '1';
   // Relaunch under the tool the session was created with, routing the
   // wrap-mode launcher to that adapter (same seam as `mc new`). The
   // wrapper-injected `--resume` is dropped by adapters that have no resume
