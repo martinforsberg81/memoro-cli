@@ -63,14 +63,15 @@ A session must be handed the right context *before the user types*. Today
 ### Orchestration — the fleet   · serves G1
 Ship a plan as verified parallel agents; the coordinator never blocks.
 
-- **Fanout spine: execute → verify → gather** — `active · L · now`
-  fanout stages today but doesn't run agents; gather merges every open PR with no
-  trust gate. Organizing principle is **trust**, design rule is **simplicity**.
-  One rule: a phase merges iff it *proved itself* (result-file `completed` or
-  `verified`) — everything else surfaces to the orchestrator. `verify` = per-phase
-  trust (agent, adversarial); `gather` = integration trust (mechanical merge + a
-  suite on `wip/`, then orchestrator-decided seams). 8-drev sequence; functional
-  after drev 6, reliable after drev 7. → `docs/plans/fanout-spine.md`
+- **The orchestrator loop (fanout)** — `active · M · now`
+  One session holds the whole and loops: see → write a strong brief → send an
+  agent → a separate review agent (2nd opinion, prompted from the goal) → merge
+  (the human's go). This is the loop we ran by hand to ship the grounding MVP, so
+  it's proven, not speculative. The orchestrator's leverage is writing two good
+  prompts per unit of work (build + review); it never builds and never
+  self-reviews. Minimal build: `mc fanout --run` (wire the parked launcher) + a
+  review-agent pass. Reaper / verify state-machine / trust-buckets deliberately
+  deferred until a real failure forces them. → `docs/plans/fanout-spine.md`
 - **Ensemble & hierarchy** — `later · M · —`
   Multi-model ensembles and recursive mid-agents, layered on the spine. → §10b/§10c
 
