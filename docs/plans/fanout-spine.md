@@ -68,17 +68,29 @@ be the orchestrator, or an agent it already spawns on demand.
 
 ## Reliability decisions (load-bearing, kept simple)
 
-- **The reaper owns all post-spawn registry writes.** The registry is
-  read-modify-write without locks; N parallel agents writing it would race. So
-  agents write **only** their own `.mc-result.json` (filesystem, no race); a
-  single reaper sweep reads pid + result-file and patches the registry. The
-  spawning `fanout` process sets `running`/`live`/`pid` serially in its loop.
+**Guiding line: LLM where there's a judgment, code where there's a fact.** "Is
+pid 4823 alive? does the result-file exist? what status does it report?" are
+facts, not opinions — so the bookkeeping below is plain deterministic code, never
+an LLM and never a separate session. Determinism, not intelligence, is what makes
+it reliable. (verify and seam-resolution *are* judgment → LLM; everything here is
+fact → code.)
+
+- **A deterministic reconcile step owns all post-spawn registry writes** — and it
+  is *not* a standing component or session, just a `reconcile()` helper that
+  `mc fanout status` / `mc gather` run inline (plus an explicit `mc fanout
+  reconcile <slug>` for direct use). The registry is read-modify-write without
+  locks; N parallel agents writing it would race. So agents write **only** their
+  own `.mc-result.json` (filesystem, no race); the reconcile step reads pid +
+  result-file and patches the registry. The spawning `fanout` process sets
+  `running`/`live`/`pid` serially in its loop. The orchestrator never hand-polls
+  pids — it triggers `status`/`gather` and reads the reconciled state.
 - **Stall gets a deadline.** A hung headless agent stays alive (pid present) but
   produces nothing — we saw exactly this stall in the grounding work. Each phase
-  gets a wall-clock deadline (`--phase-timeout`, config default); the reaper
-  SIGTERMs over-runners → `failed`, reason `stalled`. An explicit sweep, **no
-  long-running daemon** (avoids a new orphan source); reuse the orphan-daemon
-  liveness helpers.
+  gets a wall-clock deadline (`--phase-timeout`, config default); reconcile
+  SIGTERMs over-runners → `failed`, reason `stalled`. It runs **lazily at
+  status/gather time** — no long-running daemon (avoids a new orphan source); a
+  stall is caught the next time you look, which is enough for a human-in-the-loop.
+  Reuse the orphan-daemon liveness helpers.
 - **Partial failure continues.** One phase falling does not fail the fanout (per
   §10g); the others proceed. Gather merges the proven ones and **explicitly lists
   the excluded** with reasons — never silently skips.
@@ -111,10 +123,12 @@ be the orchestrator, or an agent it already spawns on demand.
    via adapter capability-routing; set `live`/`running`/`pid`; update the brief so
    the agent writes `.mc-result.json`. Risk: detached-spawn in prod, PATH
    resolution, serial registry writes by the spawning process.
-4. **Completion-reaper + stall-watchdog** — `medium-high`. Sweep: poll pid → read
-   result-file → `classifyOutcome` → registry patch; SIGTERM stalls past deadline.
-   The reliability core (crash + stall). Risk: stall detection without false
-   positives.
+4. **Completion reconcile + stall deadline** — `medium-high`. A deterministic
+   `reconcile()` helper (code, **not** an agent): poll pid → read result-file →
+   `classifyOutcome` → registry patch; SIGTERM stalls past deadline. Folded into
+   `mc fanout status`/`gather` (+ explicit `mc fanout reconcile`), run lazily — no
+   daemon. The reliability core (crash + stall). Risk: stall detection without
+   false positives.
 5. **`mc fanout status`** — `low-medium`. Readable table + `--json`. The human's
    high-altitude overview without reading logs.
 6. **gather trust-gate (two-layer)** — `medium`. Layer 1: merge proven phases +
