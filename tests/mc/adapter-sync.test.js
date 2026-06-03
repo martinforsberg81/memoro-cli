@@ -559,6 +559,70 @@ describe('runSyncWith — drift handling', () => {
   });
 });
 
+// ─────────────────────────────────────────────────────────────
+// Drift-strip (Phase 2): a per-session grounding managed block in the
+// wrapper is NOT adapter-sync canon, so it must be stripped BEFORE the
+// byte-compare. Otherwise every grounded session would report its own
+// CLAUDE.md as drift on the next `mc adapter sync`. The strip must be
+// symmetric with how claude-code's writeGrounding writes the block
+// (same markers) — verified here against the real markers + a real
+// on-disk-shaped wrapper, not just a hand-rolled fixture.
+// ─────────────────────────────────────────────────────────────
+
+describe('runSyncWith — grounding block is not drift', () => {
+  // Build the *exact* expected wrapper, then graft a grounding managed
+  // block onto it (as a live grounded session would). Sync must see
+  // "up to date", write nothing, exit 0.
+  function wrapperWithGrounding() {
+    const expected = markdownWrapperFor({
+      canonicalPath: CANONICAL_REL, canonicalContent: CANONICAL_BODY,
+      toolLabel: 'Claude Code', wrapperPath: 'CLAUDE.md',
+    });
+    const grounding = [
+      '<!-- memoro:managed:grounding:begin -->',
+      '# Session grounding',
+      '',
+      '## Your role',
+      'You are the orchestrator.',
+      '<!-- memoro:managed:grounding:end -->',
+    ].join('\n');
+    return expected + '\n' + grounding + '\n';
+  }
+
+  it('treats expected-wrapper + grounding block as up-to-date (no drift)', async () => {
+    const { dep, writes } = makeDeps({
+      files: {
+        [CANONICAL_ABS]: CANONICAL_BODY,
+        '/repo/CLAUDE.md': wrapperWithGrounding(),
+      },
+      adapters: [FULL_ADAPTERS[0]],
+    });
+    const { code, stdout, stderr } = await captureStreams(() =>
+      runSyncWith({ tool: null, dryRun: false, force: false, json: false }, dep));
+    assert.equal(code, 0, `stderr:${stderr} stdout:${stdout}`);
+    assert.equal(writes.length, 0, 'a grounding block must not trigger a re-write');
+    assert.match(stdout, /up to date/);
+    assert.ok(!/DRIFT/.test(stdout), 'grounding block must not be reported as drift');
+  });
+
+  it('still detects a genuine hand-edit even with a grounding block present', async () => {
+    const handEdited = '# I hand-edited the wrapper\n'
+      + '<!-- memoro:managed:grounding:begin -->\nbody\n<!-- memoro:managed:grounding:end -->\n';
+    const { dep, writes } = makeDeps({
+      files: {
+        [CANONICAL_ABS]: CANONICAL_BODY,
+        '/repo/CLAUDE.md': handEdited,
+      },
+      adapters: [FULL_ADAPTERS[0]],
+    });
+    const { code, stdout } = await captureStreams(() =>
+      runSyncWith({ tool: null, dryRun: false, force: false, json: false }, dep));
+    assert.equal(code, 1, 'real drift outside the grounding block must still be caught');
+    assert.equal(writes.length, 0);
+    assert.match(stdout, /DRIFT/);
+  });
+});
+
 describe('runSyncWith — --tool scoping', () => {
   it('--tool claude-code only touches CLAUDE.md', async () => {
     const { dep, writes } = makeDeps({

@@ -125,4 +125,28 @@ describe('mc new', () => {
     assert.ok(j);
     assert.equal(j.tool, 'codex');
   });
+
+  // Phase 2 — entry parity: the optional `<task>` positional is the soft
+  // grounding focus. It's standing context, not a name and not an opening
+  // prompt; multi-word tasks join without quotes.
+  test('optional <task> positional is surfaced as focus (no quotes needed)', () => {
+    const r = runMc(['new', 'focus-x', 'grab', 'the', 'flaky', 'test', '--no-launch', '--json'], {
+      cwd: repo.dir, env: { MC_HOME: repo.mcHome },
+    });
+    assert.equal(r.status, 0, `stderr:${r.stderr}`);
+    const j = parseJsonOrNull(r.stdout);
+    assert.ok(j, `expected JSON, got: ${r.stdout}`);
+    assert.equal(j.name, 'focus-x', 'first positional is still the name');
+    assert.equal(j.focus, 'grab the flaky test', 'remaining positionals form the focus');
+  });
+
+  test('focus is null when no <task> is given', () => {
+    const r = runMc(['new', 'no-focus', '--no-launch', '--json'], {
+      cwd: repo.dir, env: { MC_HOME: repo.mcHome },
+    });
+    assert.equal(r.status, 0, `stderr:${r.stderr}`);
+    const j = parseJsonOrNull(r.stdout);
+    assert.ok(j);
+    assert.equal(j.focus, null);
+  });
 });

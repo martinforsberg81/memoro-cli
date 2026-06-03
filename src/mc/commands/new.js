@@ -1,11 +1,18 @@
 /**
- * `mc new <name> [--from <ref>] [--tool …] [--no-launch] [--json]
+ * `mc new <name> [<task>] [--from <ref>] [--tool …] [--no-launch] [--json]
  *               [--emit-shell-directives]`
  *
  * §2: create worktree at ${MC_HOME}/worktrees/<repo-slug>/<name> with
  * branch `sess/<name>`, register it, launch the chosen tool (unless
  * --no-launch). §2b: emit `cd <worktree>` on fd 3 when the wrapper is
  * attached.
+ *
+ * Grounding (Phase 2): an optional `<task>` positional is the soft
+ * `focus` pointer — standing context only, NOT an opening prompt (the
+ * session stays free to switch tracks). The re-exec into wrap mode drops
+ * argv, so focus is threaded across the process boundary via the
+ * `MC_GROUNDING_FOCUS` env var, which `runWrap` reads at its pre-launch
+ * grounding slot — the SAME `groundSession` seam bare `mc` uses.
  *
  * The label-tagging Claude wrap that used to live under `mc new <label>`
  * moved to `mc wrap` — see commands/wrap.js.
@@ -168,6 +175,7 @@ export async function run(rawArgv) {
       worktree_path: wt,
       tool: entry.tool,
       from: opts.from || null,
+      focus: opts.task || null,
     }, null, 2));
     return 0;
   }
@@ -204,15 +212,23 @@ export async function run(rawArgv) {
   // Adapter routing per --tool (codex, gemini, …) is deferred — for
   // claude this is just the plain wrap path. When the adapter layer
   // lands (§5), this re-exec becomes a per-tool launcher call.
+  // Thread the soft focus across the re-exec boundary (argv is dropped by
+  // the bare-`mc` wrap path). `runWrap` reads MC_GROUNDING_FOCUS at its
+  // pre-launch grounding slot — the same `groundSession` seam — so `mc new`
+  // grounds with focus through ONE code path, not a forked one.
+  const reexecEnv = { ...process.env };
+  if (opts.task) reexecEnv.MC_GROUNDING_FOCUS = opts.task;
   const result = spawnSync(process.execPath, [process.argv[1]], {
     stdio: 'inherit',
     cwd: wt,
+    env: reexecEnv,
   });
   return result.status ?? 0;
 }
 
 function parseArgs(argv) {
-  const opts = { name: null, from: null, tool: null, noLaunch: false, json: false };
+  const opts = { name: null, task: null, from: null, tool: null, noLaunch: false, json: false };
+  const positionals = [];
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--from') { opts.from = argv[++i]; continue; }
@@ -220,12 +236,17 @@ function parseArgs(argv) {
     if (a === '--no-launch') { opts.noLaunch = true; continue; }
     if (a === '--json') { opts.json = true; continue; }
     if (a.startsWith('--')) { return { error: `unknown flag: ${a}` }; }
-    if (opts.name) { return { error: `unexpected positional arg: ${a}` }; }
-    opts.name = a;
+    positionals.push(a);
   }
+  // <name> is the first positional. Any remaining words form the optional
+  // <task> — the soft grounding focus. We join them so `mc new fix-x grab
+  // the flaky test` works without quotes, matching the free-form intent of
+  // a focus pointer (it's never parsed as a flag or a name).
+  opts.name = positionals[0] ?? null;
+  if (positionals.length > 1) opts.task = positionals.slice(1).join(' ');
   return opts;
 }
 
 function printUsage() {
-  console.error('Usage: mc new <name> [--from <ref>] [--tool claude|codex|gemini] [--no-launch] [--json]');
+  console.error('Usage: mc new <name> [<task>] [--from <ref>] [--tool claude|codex|gemini] [--no-launch] [--json]');
 }

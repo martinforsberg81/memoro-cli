@@ -26,6 +26,30 @@ import {
   summariseDrift,
   KNOWN_TOOL_NAMES,
 } from '../adapter-sync.js';
+import { removeManagedBlock } from '../../lib/managed-block.js';
+import { GROUNDING_BEGIN, GROUNDING_END } from '../../adapters/claude-code.js';
+
+/**
+ * Strip the per-session grounding managed block from a wrapper's content
+ * before drift comparison (Phase 2 drift-fix).
+ *
+ * The grounding bundle (`mc` / `mc new` / `mc resume` write it at the
+ * pre-launch slot) is per-session context, NOT adapter-sync canon. Left
+ * in place it would make every grounded session's CLAUDE.md report as
+ * drift on the next `mc adapter sync`. We remove it with the SAME markers
+ * `writeGrounding` uses, so the strip is symmetric by construction —
+ * verified byte-exact against the real on-disk layout in
+ * tests/mc/adapter-sync.test.js. Hand-edits OUTSIDE the block still drift.
+ *
+ * Pure + null-safe: a missing file (null) passes through untouched.
+ */
+export function stripGroundingBlock(content) {
+  if (typeof content !== 'string') return content;
+  return removeManagedBlock(content, {
+    beginMarker: GROUNDING_BEGIN,
+    endMarker: GROUNDING_END,
+  });
+}
 
 const CANONICAL_PATH = 'docs/coding-agent-protocol.md';
 
@@ -169,7 +193,9 @@ export async function runSyncWith(opts, deps) {
     : allAdapters;
 
   const resolveWrapperPath = (relPath) => isAbsolute(relPath) ? relPath : join(root, relPath);
-  const readWrapper = (abs) => deps.readFileText(abs);
+  // Strip the per-session grounding block before the byte-compare — it's
+  // not adapter-sync canon, so it must not be read as drift (Phase 2).
+  const readWrapper = (abs) => stripGroundingBlock(deps.readFileText(abs));
 
   const actions = planSync({
     adapters,

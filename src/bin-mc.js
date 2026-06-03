@@ -331,7 +331,13 @@ async function runWrap(argv, { label = null } = {}) {
     const { groundSession } = await import('./mc/ground.js');
     const { getAdapter } = await import('./adapters/index.js');
     const adapter = getAdapter('claude-code');
-    const res = await groundSession({ cwd, adapter, focus: label || null });
+    // Focus precedence: the per-session `mc wrap <label>` tag, else the
+    // `<task>` `mc new` threaded across the re-exec via MC_GROUNDING_FOCUS.
+    // Both are soft standing-context pointers — never an opening prompt.
+    // This is the SAME seam bare `mc`, `mc new`, and `mc resume` share
+    // (new/resume re-exec into this runWrap), so entry-parity is one path.
+    const focus = label || process.env.MC_GROUNDING_FOCUS || null;
+    const res = await groundSession({ cwd, adapter, focus });
     if (!res.ok && res.reason) {
       process.stderr.write(`mc: grounding skipped (${res.reason}); continuing\n`);
     }

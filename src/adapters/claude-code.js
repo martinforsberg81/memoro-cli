@@ -50,8 +50,14 @@ export async function writeLens(markdown) {
 // managed sections (global lens vs. per-session grounding bundle) never
 // collide in the same file. The grounding bundle is written into the
 // SESSION's cwd instruction file, not the global ~/.claude/CLAUDE.md.
-const GROUNDING_BEGIN = '<!-- memoro:managed:grounding:begin -->';
-const GROUNDING_END   = '<!-- memoro:managed:grounding:end -->';
+//
+// Exported so `mc adapter sync` can STRIP this per-session block before
+// byte-comparing the wrapper against canon (Phase 2 drift-fix). The
+// strip is symmetric with writeGrounding by construction — same markers,
+// one source of truth — so a grounded session's CLAUDE.md never reports
+// as drift.
+export const GROUNDING_BEGIN = '<!-- memoro:managed:grounding:begin -->';
+export const GROUNDING_END   = '<!-- memoro:managed:grounding:end -->';
 
 const projectClaudeMd = (cwd) => join(cwd, 'CLAUDE.md');
 
