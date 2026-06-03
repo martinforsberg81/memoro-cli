@@ -81,3 +81,68 @@ export function resolveToolInput(input) {
   const adapter = ADAPTERS[id] || null;
   return { id, shortName, adapter, planned: !!PLANNED[id] && !adapter };
 }
+
+/**
+ * Resolve a tool name (short name OR adapter ID) to everything the
+ * wrap-mode launcher needs to spawn it: the live adapter (for grounding)
+ * and its `launchSpec()` (the binary + heartbeat shape). Pure-ish — the
+ * only impurity is the adapter's own binary resolution inside
+ * `launchSpec()`, which is injectable on the codex adapter for tests.
+ *
+ * Fails HIGH (never a silent no-op), distinguishing the failure modes so
+ * the caller can surface a precise, actionable error:
+ *   - unknown      → the name matches no adapter at all
+ *   - planned      → a known-but-unimplemented adapter (e.g. gemini-cli)
+ *   - missing-bin  → adapter exists but its binary isn't installed
+ *
+ * @param {string} toolInput — `claude` | `codex` | `claude-code` | …
+ * @returns {{ ok: true, id, shortName, adapter, spec }
+ *          | { ok: false, reason, hint, id?, label? }}
+ */
+export function resolveLaunch(toolInput) {
+  const resolved = resolveToolInput(toolInput);
+  if (!resolved) {
+    return {
+      ok: false,
+      reason: 'unknown',
+      hint: `unknown tool: ${toolInput}. Known: ${Object.keys(SHORT_NAME_TO_ID).join(', ')}`,
+    };
+  }
+  if (resolved.planned || !resolved.adapter) {
+    const planned = PLANNED[resolved.id];
+    return {
+      ok: false,
+      reason: 'planned',
+      id: resolved.id,
+      hint: planned?.note
+        ? `${planned.label} adapter is not implemented yet. ${planned.note}`
+        : `${resolved.id} adapter is not implemented yet.`,
+    };
+  }
+  const adapter = resolved.adapter;
+  if (typeof adapter.launchSpec !== 'function') {
+    return {
+      ok: false,
+      reason: 'no-launch',
+      id: resolved.id,
+      hint: `${resolved.id} adapter cannot be launched interactively (no launchSpec).`,
+    };
+  }
+  const spec = adapter.launchSpec();
+  if (!spec || !spec.bin) {
+    return {
+      ok: false,
+      reason: 'missing-bin',
+      id: resolved.id,
+      label: spec?.label || resolved.id,
+      hint: spec?.installHint || `${resolved.id} binary not found in PATH.`,
+    };
+  }
+  return {
+    ok: true,
+    id: resolved.id,
+    shortName: resolved.shortName,
+    adapter,
+    spec,
+  };
+}

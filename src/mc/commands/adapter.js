@@ -27,28 +27,48 @@ import {
   KNOWN_TOOL_NAMES,
 } from '../adapter-sync.js';
 import { removeManagedBlock } from '../../lib/managed-block.js';
-import { GROUNDING_BEGIN, GROUNDING_END } from '../../adapters/claude-code.js';
+import {
+  GROUNDING_BEGIN as CLAUDE_GROUNDING_BEGIN,
+  GROUNDING_END as CLAUDE_GROUNDING_END,
+} from '../../adapters/claude-code.js';
+import {
+  GROUNDING_BEGIN as CODEX_GROUNDING_BEGIN,
+  GROUNDING_END as CODEX_GROUNDING_END,
+} from '../../adapters/codex.js';
 
 /**
- * Strip the per-session grounding managed block from a wrapper's content
- * before drift comparison (Phase 2 drift-fix).
+ * Strip the per-session grounding managed block(s) from a wrapper's
+ * content before drift comparison (Phase 2 drift-fix, extended for the
+ * Phase 3 tool-switch).
  *
  * The grounding bundle (`mc` / `mc new` / `mc resume` write it at the
  * pre-launch slot) is per-session context, NOT adapter-sync canon. Left
- * in place it would make every grounded session's CLAUDE.md report as
- * drift on the next `mc adapter sync`. We remove it with the SAME markers
- * `writeGrounding` uses, so the strip is symmetric by construction —
- * verified byte-exact against the real on-disk layout in
- * tests/mc/adapter-sync.test.js. Hand-edits OUTSIDE the block still drift.
+ * in place it would make every grounded session's instruction file report
+ * as drift on the next `mc adapter sync`. We remove it with the SAME
+ * markers `writeGrounding` uses, so the strip is symmetric by construction.
+ *
+ * Phase 3 makes a session switchable between tools (claude-code ↔ codex)
+ * in the same worktree. A switched session can leave BOTH adapters' markers
+ * behind in a shared instruction file (e.g. AGENTS.md after a switch from
+ * codex, or a stale block from a prior tool). So we strip every known
+ * adapter's grounding markers, not just claude-code's — otherwise codex's
+ * AGENTS.md would drift after a switch. Each adapter owns its own distinct
+ * markers (re-exported here), so the set is the single source of truth.
  *
  * Pure + null-safe: a missing file (null) passes through untouched.
  */
+const GROUNDING_MARKERS = [
+  { beginMarker: CLAUDE_GROUNDING_BEGIN, endMarker: CLAUDE_GROUNDING_END },
+  { beginMarker: CODEX_GROUNDING_BEGIN, endMarker: CODEX_GROUNDING_END },
+];
+
 export function stripGroundingBlock(content) {
   if (typeof content !== 'string') return content;
-  return removeManagedBlock(content, {
-    beginMarker: GROUNDING_BEGIN,
-    endMarker: GROUNDING_END,
-  });
+  let next = content;
+  for (const markers of GROUNDING_MARKERS) {
+    next = removeManagedBlock(next, markers);
+  }
+  return next;
 }
 
 const CANONICAL_PATH = 'docs/coding-agent-protocol.md';

@@ -268,16 +268,37 @@ async function packageVersion() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 async function runWrap(argv, { label = null } = {}) {
-  preflight();
+  // ─── Resolve the tool to launch (adapter-routed) ─────────────────────
+  // Default is claude-code; `mc new --tool`, `mc resume`, and the
+  // mid-session `mc tool-switch --here` thread the chosen tool across the
+  // wrap-mode re-exec via MC_GROUNDING_TOOL. The launch spec carries the
+  // binary to spawn, how to map argv, and the heartbeat source. Unknown /
+  // unimplemented / not-installed tools fail HIGH here (exit-before-side-
+  // effect) — never a silent no-op spawning the wrong binary.
+  const { resolveLaunch } = await import('./adapters/index.js');
+  const requestedTool = process.env.MC_GROUNDING_TOOL || 'claude-code';
+  const launch = resolveLaunch(requestedTool);
+  if (!launch.ok) {
+    console.error(`mc: cannot launch "${requestedTool}": ${launch.hint}`);
+    process.exit(1);
+  }
+  const launchSpec = launch.spec;
+  const launchAdapter = launch.adapter;
+  const launchToolId = launch.id;
+
+  preflight(launchSpec.bin);
 
   if (!existsSync(MC_DIR)) {
     mkdirSync(MC_DIR, { recursive: true, mode: 0o700 });
   }
   // Refresh managed Claude Code slash commands on every mc launch — pushes
   // updated bodies (coordinator prompts, update recipe) to existing
-  // installs without requiring `memoro-cli hook install`.
-  await ensureCoordinatorSlashCommand();
-  await installUpdateCommand().catch(() => { /* best effort */ });
+  // installs without requiring `memoro-cli hook install`. Claude-only:
+  // these write into ~/.claude/commands, which codex doesn't read.
+  if (launchToolId === 'claude-code') {
+    await ensureCoordinatorSlashCommand();
+    await installUpdateCommand().catch(() => { /* best effort */ });
+  }
 
   const cwd = process.cwd();
   const repoContext = await getRepoContext(cwd);
@@ -329,8 +350,11 @@ async function runWrap(argv, { label = null } = {}) {
   // continues — grounding must never block the launch.
   try {
     const { groundSession } = await import('./mc/ground.js');
-    const { getAdapter } = await import('./adapters/index.js');
-    const adapter = getAdapter('claude-code');
+    // Route grounding through the SAME adapter the launcher picked, so the
+    // bundle lands in THIS tool's native instruction file (CLAUDE.md for
+    // claude, AGENTS.md for codex). The bundle itself is tool-agnostic —
+    // only the target adapter changes.
+    const adapter = launchAdapter;
     // Focus precedence: the per-session `mc wrap <label>` tag, else the
     // `<task>` `mc new` threaded across the re-exec via MC_GROUNDING_FOCUS.
     // Both are soft standing-context pointers — never an opening prompt.
@@ -354,10 +378,11 @@ async function runWrap(argv, { label = null } = {}) {
     repo: deriveRepoName(repoContext),
     branch: repoContext.branch,
     label,
+    tool: launchSpec.label,
   }));
 
-  // ─── Spawn claude in a PTY we own ────────────────────────────────────────
-  const ptyProcess = pty.spawn(CLAUDE_BIN, argv, {
+  // ─── Spawn the chosen tool in a PTY we own ───────────────────────────────
+  const ptyProcess = pty.spawn(launchSpec.bin, launchSpec.args(argv), {
     name: process.env.TERM || 'xterm-256color',
     cols: process.stdout.columns || 80,
     rows: process.stdout.rows || 24,
@@ -441,7 +466,7 @@ async function runWrap(argv, { label = null } = {}) {
     handlers: {
       fetch_transcript: createFetchTranscriptHandler({
         transcriptPath: null,
-        source: 'claude-code',
+        source: launchSpec.heartbeatSource,
       }),
       dispatch_message: async (args) => {
         const message = typeof args?.message === 'string' ? args.message : null;
@@ -459,7 +484,7 @@ async function runWrap(argv, { label = null } = {}) {
   const heartbeatBase = {
     coding_session_id: codingSessionId,
     machine_id: machineId,
-    source: 'claude-code',
+    source: launchSpec.heartbeatSource,
     repo: deriveRepoName(repoContext),
     branch: repoContext.branch,
     files_touched_since_last: [],
@@ -699,9 +724,19 @@ async function runSessionsRead(argv) {
 // Internal helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-function preflight() {
-  if (spawnSync('which', [CLAUDE_BIN], { stdio: 'ignore' }).status !== 0) {
-    console.error(`mc: '${CLAUDE_BIN}' not found in PATH`);
+function preflight(bin = CLAUDE_BIN) {
+  // `bin` may be a bare name (claude, resolved via PATH) or an absolute
+  // path (the real codex binary, already resolved by the adapter). For an
+  // absolute path, existence on disk is the check; for a name, PATH.
+  if (bin.includes('/')) {
+    if (!existsSync(bin)) {
+      console.error(`mc: launch binary not found: ${bin}`);
+      process.exit(1);
+    }
+    return;
+  }
+  if (spawnSync('which', [bin], { stdio: 'ignore' }).status !== 0) {
+    console.error(`mc: '${bin}' not found in PATH`);
     process.exit(1);
   }
 }
@@ -762,16 +797,20 @@ export function extractExcerpt(rawBuffer, max = EXCERPT_MAX_CHARS) {
  * terminal. Pure function for testing. Trailing blank line gives the
  * Claude TUI breathing room.
  */
-export function renderIntro({ version, codingSessionId, repo, branch, label = null }) {
+export function renderIntro({ version, codingSessionId, repo, branch, label = null, tool = null }) {
+  // The tool segment lets the banner show which LLM is being launched
+  // (claude vs codex) — load-bearing now that the launcher is adapter-
+  // routed, so a switched session visibly reflects the new tool.
+  const toolSeg = tool ? `  ·  \x1b[35m${tool}\x1b[0m` : '';
   const headline = label
-    ? `  \x1b[1mmc\x1b[0m \x1b[2m${version}\x1b[0m  ·  \x1b[33m${label}\x1b[0m  ·  ${repo} \x1b[2m(${branch})\x1b[0m`
-    : `  \x1b[1mmc\x1b[0m \x1b[2m${version}\x1b[0m  ·  ${repo} \x1b[2m(${branch})\x1b[0m`;
+    ? `  \x1b[1mmc\x1b[0m \x1b[2m${version}\x1b[0m${toolSeg}  ·  \x1b[33m${label}\x1b[0m  ·  ${repo} \x1b[2m(${branch})\x1b[0m`
+    : `  \x1b[1mmc\x1b[0m \x1b[2m${version}\x1b[0m${toolSeg}  ·  ${repo} \x1b[2m(${branch})\x1b[0m`;
   return [
     '',
     headline,
     `  \x1b[2msession\x1b[0m  ${codingSessionId}`,
     '',
-    `  \x1b[36m/memoro-coordinator\x1b[0m   manage other sessions from inside Claude`,
+    `  \x1b[36m/memoro-coordinator\x1b[0m   manage other sessions from inside your tool`,
     `  \x1b[36mmc --help\x1b[0m              cli reference`,
     '',
     '',

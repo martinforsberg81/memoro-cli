@@ -295,6 +295,34 @@ export function instructionsFile() {
 }
 
 // ─────────────────────────────────────────────────────────────
+// Interactive launch contract (§5 / Grounding Phase 3)
+//
+// The wrap-mode launcher (`runWrap` in bin-mc.js) used to hardcode
+// `claude`. It now routes through the adapter: `launchSpec()` declares
+// WHICH binary to spawn in the PTY and HOW the session identifies itself
+// in heartbeats. The bundle written by `writeGrounding` is tool-agnostic;
+// only the binary + the instruction file differ per tool — and the file
+// is already owned by `writeGrounding`, so the launcher only needs the
+// spawn shape here.
+//
+// `bin`            — the executable to spawn in the PTY.
+// `args(argv)`     — map the user-supplied argv into the binary's args.
+//                    claude takes argv verbatim (incl. `--resume`).
+// `heartbeatSource`— the `source` field stamped on heartbeats so peer
+//                    coordinators can tell which tool a session runs.
+// `label`          — human label for the launch banner / errors.
+// ─────────────────────────────────────────────────────────────
+export function launchSpec() {
+  return {
+    bin: CLAUDE_BIN,
+    args: (argv = []) => [...argv],
+    heartbeatSource: 'claude-code',
+    label: LABEL,
+    installHint: 'Install with: npm install -g @anthropic-ai/claude-code',
+  };
+}
+
+// ─────────────────────────────────────────────────────────────
 // `mc auth status` adapter contract (§11a)
 //
 // Every adapter that wants to appear in `mc auth status` exports:
