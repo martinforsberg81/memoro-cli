@@ -63,18 +63,26 @@ A session must be handed the right context *before the user types*. Today
 ### Orchestration — the fleet   · serves G1
 Ship a plan as verified parallel agents; the coordinator never blocks.
 
-- **Fanout spine: execute → verify → gather** — `next · L · after grounding`
-  fanout stages today but doesn't run agents. Add headless background execution,
-  `mc verify` as the trust gate, and make `mc gather` refuse rejected phases.
-  → `docs/plans/worktree-lifecycle.md` §10s
+- **Fanout spine: execute → verify → gather** — `active · L · now`
+  fanout stages today but doesn't run agents; gather merges every open PR with no
+  trust gate. Organizing principle is **trust**, design rule is **simplicity**.
+  One rule: a phase merges iff it *proved itself* (result-file `completed` or
+  `verified`) — everything else surfaces to the orchestrator. `verify` = per-phase
+  trust (agent, adversarial); `gather` = integration trust (mechanical merge + a
+  suite on `wip/`, then orchestrator-decided seams). 8-drev sequence; functional
+  after drev 6, reliable after drev 7. → `docs/plans/fanout-spine.md`
 - **Ensemble & hierarchy** — `later · M · —`
   Multi-model ensembles and recursive mid-agents, layered on the spine. → §10b/§10c
 
 ### Memory loop — Memoro ↔ session   · serves G1, G2
-- **Wire the bidirectional loop** — `unblocked · M · after grounding`
-  Emit observations on session end → `/api/sessions/external`; pull the
-  `portrait-coding` lens into standing context. Both endpoints verified LIVE on
-  the memoro side. → `docs/plans/worktree-lifecycle.md` §16
+- **Wire the bidirectional loop** — `shipped · M · —`
+  Both directions live. Emit: session-end observations → `/api/sessions/external`
+  was already wired to the claude-code `SessionEnd` hook (`src/commands/session.js`,
+  with deterministic annotations + a first-upload trust moment). Pull: the
+  `portrait-coding` lens auto-injects into standing context — delivered by
+  grounding Phase 4. The loop closed when Phase 4 landed. Remaining enhancement is
+  the server-side language field (cross-repo), which sharpens the lens but is not
+  required for the loop. → `docs/plans/worktree-lifecycle.md` §16
 
 ### Tool-portability — any tool, any repo   · serves G1
 - **Canonical skills/commands in the mc package + Cursor/Aider** — `planned · M · —`
