@@ -42,6 +42,115 @@ const PREAMBLE =
   'before the user typed — read it so you start grounded in the whole, ' +
   'not from a blank slate. It is standing context, not a task.';
 
+// ─────────────────────────────────────────────────────────────
+// Pure: language resolution (Phase 4)
+//
+// The session's RENDER language — the language the LLM wakes and responds
+// in — is DERIVED from the user's Memoro profile, never a static choice.
+// The default is English, expressed as `null` (no directive at all), so an
+// ungrounded / English session carries zero extra noise.
+//
+// SERVER-GATE NOTE (verified live 2026-06-03 against meetmemoro.app): the
+// lens endpoints do NOT expose a language/locale field today, and no
+// /api/user_state endpoint exists (all 404). So this resolver returns null
+// (English) for every real response right now — language steering is
+// server-gated. It is wired against the actual response SHAPE (the lens
+// object is the only realistic carrier) across a small set of candidate
+// keys, so the moment the server adds a `language` / `locale` / nested
+// preference field, language steering lights up with no CLI change.
+// ─────────────────────────────────────────────────────────────
+
+// Minimal locale-code → language-label map. Deliberately small: it covers
+// the common cases and otherwise passes the raw tag through (better to
+// instruct the LLM with `ja` than to silently drop a real preference).
+// English variants resolve to null (the default), not the label "English".
+const LOCALE_TO_LANGUAGE = {
+  sv: 'Swedish',
+  de: 'German',
+  fr: 'French',
+  es: 'Spanish',
+  it: 'Italian',
+  pt: 'Portuguese',
+  nl: 'Dutch',
+  da: 'Danish',
+  no: 'Norwegian',
+  nb: 'Norwegian',
+  fi: 'Finnish',
+  pl: 'Polish',
+  ru: 'Russian',
+  ja: 'Japanese',
+  ko: 'Korean',
+  zh: 'Chinese',
+};
+
+const ENGLISH = /^(en|eng|english)$/i;
+
+/**
+ * Resolve the session's render language from a Memoro lens response object.
+ * PURE. Returns a language LABEL (e.g. "Swedish") or `null` for the English
+ * default. Never throws on a hostile / missing shape.
+ *
+ * Carrier search order (first non-empty wins): top-level `language`, then
+ * `locale`, then the same two nested under `user_state` / `preferences`.
+ * A `locale` value is mapped via LOCALE_TO_LANGUAGE (unmapped codes pass
+ * through verbatim). English variants → null (no directive).
+ *
+ * @param {*} lensResponse — the parsed lens endpoint response (or null)
+ * @returns {string|null}
+ */
+export function resolveLanguage(lensResponse) {
+  if (!lensResponse || typeof lensResponse !== 'object') return null;
+
+  const carriers = [
+    lensResponse,
+    isObj(lensResponse.user_state) ? lensResponse.user_state : null,
+    isObj(lensResponse.preferences) ? lensResponse.preferences : null,
+  ];
+
+  for (const c of carriers) {
+    if (!c) continue;
+    const lang = nonEmpty(c.language);
+    if (lang) return normalizeLanguage(lang);
+    const locale = nonEmpty(c.locale);
+    if (locale) return normalizeLocale(locale);
+  }
+  return null;
+}
+
+function isObj(v) {
+  return v != null && typeof v === 'object';
+}
+
+function normalizeLanguage(label) {
+  if (ENGLISH.test(label.trim())) return null;
+  return label.trim();
+}
+
+function normalizeLocale(locale) {
+  // "sv-SE" → "sv"; map to a label, else pass the raw tag through.
+  const base = locale.trim().split(/[-_]/)[0].toLowerCase();
+  if (ENGLISH.test(base)) return null;
+  return LOCALE_TO_LANGUAGE[base] || locale.trim();
+}
+
+/**
+ * Render the minimal "respond in <language>" directive line for the bundle.
+ * PURE. Empty string for the English default (null) — zero noise when the
+ * session needs no steering. Kept to a single explicit instruction line
+ * rather than re-rendering the whole role in the target language: minimal,
+ * tool-agnostic, and it leaves mc's own framing untouched.
+ *
+ * @param {string|null} language
+ * @returns {string}
+ */
+export function languageDirective(language) {
+  const lang = nonEmpty(language);
+  if (!lang) return '';
+  return `**Respond to the user in ${lang}.** This is their preferred language ` +
+    '(from their Memoro profile); use it for your replies and prose. Keep code, ' +
+    'identifiers, commit messages, and file contents in their conventional language.';
+}
+
 /**
  * Render the grounding bundle into one markdown body (no managed-block
  * markers — the adapter wraps it). Pure: same input → same output, no I/O.
@@ -58,9 +167,13 @@ const PREAMBLE =
  * @param {string} [parts.lifecycle] — MEMORO.md lifecycle OFFER block
  *   (Phase 2). Read-only on mc's side: it tells the grounded LLM it MAY
  *   offer to seed/update the map, always with the user's confirmation.
+ * @param {string} [parts.language]  — the session's render language
+ *   (Phase 4), resolved from the lens/user_state. `null`/empty → English
+ *   (no directive). Rendered as a single "respond in <language>" line
+ *   right after the preamble so it governs the whole session.
  * @returns {string} markdown body for the managed block
  */
-export function assembleBundle({ map, role, lens, focus, lifecycle } = {}) {
+export function assembleBundle({ map, role, lens, focus, lifecycle, language } = {}) {
   const sections = [];
 
   const cleanMap = nonEmpty(map);
@@ -68,6 +181,7 @@ export function assembleBundle({ map, role, lens, focus, lifecycle } = {}) {
   const cleanLens = nonEmpty(lens);
   const cleanFocus = nonEmpty(focus);
   const cleanLifecycle = nonEmpty(lifecycle);
+  const directive = languageDirective(language);
 
   if (cleanRole) {
     sections.push(section('Your role', cleanRole));
@@ -85,7 +199,11 @@ export function assembleBundle({ map, role, lens, focus, lifecycle } = {}) {
     sections.push(section('Keeping the map current (MEMORO.md)', cleanLifecycle));
   }
 
-  const body = [`${HEADER}`, '', PREAMBLE, '', ...interleave(sections)].join('\n');
+  // The language directive sits right after the preamble — before the
+  // role/map/lens — so it governs how the LLM reads and replies to
+  // everything below it. English default ⇒ empty ⇒ omitted entirely.
+  const head = directive ? [`${HEADER}`, '', PREAMBLE, '', directive, ''] : [`${HEADER}`, '', PREAMBLE, ''];
+  const body = [...head, ...interleave(sections)].join('\n');
   return body.replace(/\n{3,}/g, '\n\n').trimEnd() + '\n';
 }
 
@@ -299,29 +417,62 @@ export function buildRole(cwd, { exists = existsSync } = {}) {
 }
 
 /**
- * Pull the Memoro coding lens for inclusion in the bundle. Phase 1 uses
- * ONLY the existing `lens pull` mechanism — no new Memoro wiring. The
- * dependency is injected so tests never hit the network or keychain, and
- * the default soft-degrades to null (no lens) on any failure: not logged
- * in, Memoro unreachable, no observation data yet.
+ * Auto-injection portal (Phase 4): fetch the WHOLE Memoro lens response —
+ * not just its markdown — so grounding can both render the lens AND derive
+ * the session language from the same call. Lens auto-injection is
+ * first-class: no manual `lens pull` step precedes this; it fetches
+ * directly through the keychain-token + endpoint path.
  *
- * Note: we read the lens *markdown*, we do not re-materialise it — the
- * SessionStart `lens pull` hook still owns writing the standalone lens
- * block to the global config. Here it's one part of the grounding bundle.
+ * The dependency is injected so tests never hit the network or keychain.
+ * The default soft-degrades to `null` on ANY failure (not logged in,
+ * Memoro unreachable, no config) — grounding then proceeds with no lens
+ * and the English default, never throwing.
+ *
+ * @param {object} [arg]
+ * @param {() => Promise<*>} [arg.fetchLens] — returns the lens response
+ *   object (or a bare markdown string); injected in tests.
+ * @returns {Promise<*|null>} the lens response (object or string) or null
  */
-export async function pullLensMarkdown({ fetchLens = defaultFetchLens } = {}) {
+export async function fetchLensData({ fetchLens = defaultFetchLens } = {}) {
   try {
-    const md = await fetchLens();
-    return nonEmpty(md);
+    const resp = await fetchLens();
+    return resp ?? null;
   } catch {
     return null;
   }
 }
 
+/**
+ * Pull just the lens *markdown* for inclusion in the bundle. Built on
+ * `fetchLensData`; tolerates either the full response object (extracts
+ * `.markdown`) or a bare markdown string (back-compat with Phase 1 tests
+ * and any caller injecting a plain string). Soft-degrades to null.
+ *
+ * Note: we read the lens, we do not re-materialise it — the SessionStart
+ * `lens pull` hook still owns writing the standalone lens block to the
+ * global config. Here it's one part of the grounding bundle.
+ */
+export async function pullLensMarkdown({ fetchLens = defaultFetchLens } = {}) {
+  const resp = await fetchLensData({ fetchLens });
+  return lensMarkdownOf(resp);
+}
+
+/**
+ * Extract the lens markdown from a fetch result that may be a full
+ * response object or a bare string. PURE; null when neither yields text.
+ */
+export function lensMarkdownOf(resp) {
+  if (typeof resp === 'string') return nonEmpty(resp);
+  if (isObj(resp)) return nonEmpty(resp.markdown);
+  return null;
+}
+
 async function defaultFetchLens() {
   // Reuse the existing lens path: keychain token + portrait-coding endpoint.
   // Any missing piece (no token, no config, no data) returns null instead
-  // of throwing, so grounding proceeds without a lens.
+  // of throwing, so grounding proceeds without a lens. Returns the WHOLE
+  // response object so the caller can both render markdown and resolve the
+  // language from it (Phase 4).
   const { getSecret } = await import('../lib/keychain.js');
   const { ACCOUNTS } = await import('../commands/auth.js');
   const { readConfig, getApiUrl } = await import('../lib/config.js');
@@ -332,8 +483,7 @@ async function defaultFetchLens() {
   const config = await readConfig();
   const apiUrl = getApiUrl([]) || config.apiUrl;
   if (!apiUrl) return null;
-  const result = await memoroFetch(apiUrl, '/api/lens/portrait-coding', { token });
-  return result?.markdown || null;
+  return memoroFetch(apiUrl, '/api/lens/portrait-coding', { token });
 }
 
 /**
@@ -357,13 +507,31 @@ export async function groundSession({ cwd, adapter, focus = null, deps = {} } = 
   const {
     readMapImpl = (c) => readMap(c, deps.mapDeps || {}),
     buildRoleImpl = (c) => buildRole(c, deps.roleDeps || {}),
-    pullLensImpl = () => pullLensMarkdown(deps.lensDeps || {}),
+    // Phase 4: fetch the WHOLE lens response once, then derive both the
+    // rendered markdown and the session language from it — one Memoro call,
+    // not two. `fetchLensDataImpl` is the injectable seam (tests stub it);
+    // `pullLensImpl` is kept for back-compat with callers/tests that only
+    // care about markdown (it short-circuits the data fetch when given).
+    fetchLensDataImpl = () => fetchLensData(deps.lensDeps || {}),
+    pullLensImpl = null,
     repoName = basename(cwd),
   } = deps;
 
   const map = await safe(() => readMapImpl(cwd), null);
   const role = await safe(() => buildRoleImpl(cwd), null);
-  const lens = await safe(() => pullLensImpl(), null);
+
+  // Lens auto-injection + language (Phase 4). Soft-degrade everywhere: a
+  // null lens response → no lens section + English default.
+  let lens = null;
+  let language = null;
+  if (pullLensImpl) {
+    // Legacy markdown-only path (Phase 1/2 tests inject this).
+    lens = await safe(() => pullLensImpl(), null);
+  } else {
+    const lensResp = await safe(() => fetchLensDataImpl(), null);
+    lens = lensMarkdownOf(lensResp);
+    language = safeSync(() => resolveLanguage(lensResp), null);
+  }
 
   // MEMORO.md lifecycle OFFER (Phase 2). PURE + read-only on mc's side —
   // it only adds guidance the LLM may act on (seed when absent, offer an
@@ -371,7 +539,7 @@ export async function groundSession({ cwd, adapter, focus = null, deps = {} } = 
   // surprise never blocks the launch.
   const lifecycle = safeSync(() => lifecycleGuidance({ map, repoName }), null);
 
-  const parts = { map, role, lens, focus, lifecycle };
+  const parts = { map, role, lens, focus, lifecycle, language };
   const markdown = assembleBundle(parts);
 
   try {
