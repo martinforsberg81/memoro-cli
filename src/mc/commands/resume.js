@@ -14,6 +14,7 @@
 import { spawnSync } from 'node:child_process';
 import { findEntry } from '../registry.js';
 import { emitCd, parseDirectiveFlag } from '../shell-directives.js';
+import { resolveToolInput } from '../../adapters/index.js';
 
 export async function run(rawArgv) {
   const { args: argv, enabled: emitDirectives } = parseDirectiveFlag(rawArgv);
@@ -74,6 +75,14 @@ export async function run(rawArgv) {
   // groundSession seam in runWrap.
   const reexecEnv = { ...process.env };
   if (entry.label) reexecEnv.MC_GROUNDING_FOCUS = entry.label;
+  // Relaunch under the tool the session was created with, routing the
+  // wrap-mode launcher to that adapter (same seam as `mc new`). The
+  // wrapper-injected `--resume` is dropped by adapters that have no resume
+  // picker (codex); claude consumes it verbatim.
+  if (entry.tool) {
+    const launchTool = resolveToolInput(entry.tool);
+    reexecEnv.MC_GROUNDING_TOOL = launchTool?.id || entry.tool;
+  }
   const result = spawnSync(process.execPath, [process.argv[1], '--resume'], {
     stdio: 'inherit',
     cwd: entry.worktree_path,

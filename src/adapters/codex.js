@@ -48,6 +48,57 @@ export async function removeLens({ cwd = process.cwd() } = {}) {
   await writeFile(target, next);
 }
 
+// Grounding block markers — codex's OWN markers, distinct from both the
+// lens block (default portrait-coding marker) AND the claude-code
+// grounding markers, so a session that switches between tools never has
+// one tool's block collide with another's in a shared AGENTS.md. Same
+// managed-block round-trip as claude-code; only the target file
+// (AGENTS.md) and the marker text differ.
+export const GROUNDING_BEGIN = '<!-- memoro:managed:grounding:codex:begin -->';
+export const GROUNDING_END   = '<!-- memoro:managed:grounding:codex:end -->';
+
+const projectAgentsMd = (cwd) => join(resolveWorkspaceRoot(cwd), 'AGENTS.md');
+
+/**
+ * Write the grounding bundle into the SESSION's workspace-level AGENTS.md,
+ * replacing any existing codex grounding block. The bundle is the SAME
+ * tool-agnostic markdown the claude-code adapter writes into CLAUDE.md —
+ * `groundSession` assembles it once and routes it through whichever
+ * adapter the launcher picked. Codex reads AGENTS.md natively, so this is
+ * the parity of claude-code's `writeGrounding`.
+ *
+ * Mirrors `writeLens`: resolves the workspace root (worktrees share the
+ * repo's AGENTS.md location) and best-effort git-ignores AGENTS.md so a
+ * grounded session never dirties the tree.
+ */
+export async function writeGrounding(markdown, { cwd = process.cwd() } = {}) {
+  const target = projectAgentsMd(cwd);
+  const existing = existsSync(target) ? await readFile(target, 'utf8') : '';
+  const next = upsertManagedBlock(existing, markdown, {
+    beginMarker: GROUNDING_BEGIN,
+    endMarker: GROUNDING_END,
+  });
+  await writeFile(target, next);
+  await ensureCodexAgentsIgnored(resolveWorkspaceRoot(cwd));
+  return target;
+}
+
+/**
+ * Remove the codex grounding managed block from the workspace AGENTS.md.
+ * Leaves any hand-edited content (and the lens block, which uses a
+ * different marker) untouched.
+ */
+export async function removeGrounding({ cwd = process.cwd() } = {}) {
+  const target = projectAgentsMd(cwd);
+  if (!existsSync(target)) return;
+  const existing = await readFile(target, 'utf8');
+  const next = removeManagedBlock(existing, {
+    beginMarker: GROUNDING_BEGIN,
+    endMarker: GROUNDING_END,
+  });
+  await writeFile(target, next);
+}
+
 export async function installHooks({
   memoroCliBin = 'memoro-cli',
   launcherPath = DEFAULT_LAUNCHER,
@@ -105,6 +156,32 @@ export function detect() {
  */
 export function instructionsFile() {
   return { path: 'AGENTS.md', renderer: 'markdown-wrapper' };
+}
+
+// ─────────────────────────────────────────────────────────────
+// Interactive launch contract (§5 / Grounding Phase 3)
+//
+// Parity with claude-code's `launchSpec()`. The wrap-mode launcher spawns
+// `bin` in the PTY; for codex we resolve the REAL codex binary (skipping
+// the `~/.local/bin/codex` shim + `codex-memoro` launcher) so we don't
+// recurse through mc's own wrapper. When the real binary can't be found,
+// `bin` is null — the launcher fails high with the install hint rather
+// than spawning nothing (soft-degrade is NOT silent here, per §5).
+//
+// NOTE: codex has no `--resume` picker contract equivalent to claude's;
+// we drop the wrapper-injected `--resume` for codex and pass any other
+// argv verbatim. Interactive resume for codex is a follow-up.
+// ─────────────────────────────────────────────────────────────
+export function launchSpec({ resolveBinary = resolveRealCodexBinary } = {}) {
+  let bin = null;
+  try { bin = resolveBinary(); } catch { bin = null; }
+  return {
+    bin,
+    args: (argv = []) => argv.filter((a) => a !== '--resume'),
+    heartbeatSource: 'codex',
+    label: LABEL,
+    installHint: 'Install Codex CLI from openai/codex (could not locate the codex binary)',
+  };
 }
 
 // ─────────────────────────────────────────────────────────────

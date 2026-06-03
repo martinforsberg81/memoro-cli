@@ -218,6 +218,12 @@ export async function run(rawArgv) {
   // grounds with focus through ONE code path, not a forked one.
   const reexecEnv = { ...process.env };
   if (opts.task) reexecEnv.MC_GROUNDING_FOCUS = opts.task;
+  // Route the wrap-mode launcher to the chosen tool's adapter. The
+  // registry stores the short name; the launcher resolves either form, so
+  // we pass the adapter ID when known (canonical) and fall back to the
+  // short name. claude-code stays the implicit default when unresolved.
+  const launchTool = resolveToolInput(entry.tool);
+  reexecEnv.MC_GROUNDING_TOOL = launchTool?.id || entry.tool;
   const result = spawnSync(process.execPath, [process.argv[1]], {
     stdio: 'inherit',
     cwd: wt,
@@ -226,6 +232,17 @@ export async function run(rawArgv) {
   return result.status ?? 0;
 }
 
+/**
+ * Sugar flags that select a tool without `--tool <x>`. `--tool` is the
+ * canonical form; these map 1:1 to short names. Exported so the launcher
+ * arg-parsing stays testable in-process (Pattern 4).
+ */
+export const TOOL_SUGAR = {
+  '--claude': 'claude',
+  '--codex': 'codex',
+  '--gemini': 'gemini',
+};
+
 function parseArgs(argv) {
   const opts = { name: null, task: null, from: null, tool: null, noLaunch: false, json: false };
   const positionals = [];
@@ -233,6 +250,15 @@ function parseArgs(argv) {
     const a = argv[i];
     if (a === '--from') { opts.from = argv[++i]; continue; }
     if (a === '--tool') { opts.tool = argv[++i]; continue; }
+    if (Object.prototype.hasOwnProperty.call(TOOL_SUGAR, a)) {
+      // `--codex` / `--claude` are sugar over `--tool <x>`. Reject a
+      // conflicting explicit `--tool` rather than silently picking one.
+      if (opts.tool && opts.tool !== TOOL_SUGAR[a]) {
+        return { error: `conflicting tool flags: --tool ${opts.tool} and ${a}` };
+      }
+      opts.tool = TOOL_SUGAR[a];
+      continue;
+    }
     if (a === '--no-launch') { opts.noLaunch = true; continue; }
     if (a === '--json') { opts.json = true; continue; }
     if (a.startsWith('--')) { return { error: `unknown flag: ${a}` }; }
@@ -248,5 +274,5 @@ function parseArgs(argv) {
 }
 
 function printUsage() {
-  console.error('Usage: mc new <name> [<task>] [--from <ref>] [--tool claude|codex|gemini] [--no-launch] [--json]');
+  console.error('Usage: mc new <name> [<task>] [--from <ref>] [--tool claude|codex|gemini | --claude | --codex] [--no-launch] [--json]');
 }

@@ -126,6 +126,36 @@ describe('mc new', () => {
     assert.equal(j.tool, 'codex');
   });
 
+  // Phase 3 — tool selection sugar: `--codex` / `--claude` are sugar over
+  // `--tool <x>`; `--tool` stays the canonical form.
+  test('--codex sugar selects codex (sugar over --tool)', () => {
+    const r = runMc(['new', 'sugar-codex', '--codex', '--no-launch', '--json'], {
+      cwd: repo.dir, env: { MC_HOME: repo.mcHome },
+    });
+    assert.equal(r.status, 0, `stderr:${r.stderr}`);
+    const j = parseJsonOrNull(r.stdout);
+    assert.ok(j);
+    assert.equal(j.tool, 'codex');
+  });
+
+  test('--claude sugar selects claude', () => {
+    const r = runMc(['new', 'sugar-claude', '--claude', '--no-launch', '--json'], {
+      cwd: repo.dir, env: { MC_HOME: repo.mcHome },
+    });
+    assert.equal(r.status, 0, `stderr:${r.stderr}`);
+    const j = parseJsonOrNull(r.stdout);
+    assert.ok(j);
+    assert.equal(j.tool, 'claude');
+  });
+
+  test('conflicting --tool + sugar is rejected (exit 2)', () => {
+    const r = runMc(['new', 'conflict-x', '--tool', 'claude', '--codex', '--no-launch'], {
+      cwd: repo.dir, env: { MC_HOME: repo.mcHome },
+    });
+    assert.notEqual(r.status, 0);
+    assert.match(r.stderr + r.stdout, /conflict/i);
+  });
+
   // Phase 2 — entry parity: the optional `<task>` positional is the soft
   // grounding focus. It's standing context, not a name and not an opening
   // prompt; multi-word tasks join without quotes.

@@ -62,31 +62,47 @@ export async function run(argv) {
     return 2;
   }
 
+  // Mid-session switch (`mc tool-switch <tool> --here`, runnable inline as
+  // `!mc tool-switch codex --here`): re-ground the CURRENT worktree into
+  // the target tool's native instruction file + persist the tool, so the
+  // NEXT launch of this session comes up under the new LLM. Distinct from
+  // the default form, which only flips the default for FUTURE `mc new`.
+  if (opts.here) {
+    return runSwitchHere(opts, defaultHereDeps());
+  }
+
   return runSwitchWith(opts, defaultDeps());
 }
 
 function printHelp() {
-  process.stdout.write(`mc tool-switch — make a different coding tool the default (plan §13d)
+  process.stdout.write(`mc tool-switch — switch coding tool: default for new sessions, or this one (plan §13d, §5)
 
 USAGE
-  mc tool-switch <tool> [--dry-run] [--force] [--json]
+  mc tool-switch <tool> [--dry-run] [--force] [--json]   # flip the DEFAULT
+  mc tool-switch <tool> --here [--dry-run] [--json]       # switch THIS session
 
 ARGUMENTS
   <tool>          One of: ${[...KNOWN_TOOL_NAMES].join(', ')}
 
 FLAGS
+  --here          Switch the CURRENT session: re-ground this worktree into
+                  the target tool's native file + persist the per-session
+                  tool, then print the relaunch command. Runnable inline
+                  from inside a session as \`!mc tool-switch <tool> --here\`.
   --dry-run       Report planned changes without writing
   --force         Overwrite drift on the target tool's instruction file
   --json          Machine-readable report
 
-WHAT IT DOES
+WHAT IT DOES (default form)
   1. Verifies the target tool is installed + authenticated
   2. Updates the persisted default tool (~/.memoro/config.json)
   3. Runs \`mc adapter sync --tool <tool>\` for the target
   4. Reports drift across all tools at the end
 
-Doesn't touch existing sessions — only affects future \`mc new\`
-and \`mc resume\` defaults.
+The default form doesn't touch existing sessions — only future \`mc new\`
+and \`mc resume\` defaults. Use \`--here\` to switch the session you're in;
+the same worktree, branch, and grounding bundle persist — only the LLM
+and its native instruction file change.
 
 EXIT CODES
   0   success (or dry-run with no blockers)
@@ -104,12 +120,13 @@ function printUsage() {
 // ─────────────────────────────────────────────────────────────
 
 export function parseArgs(argv) {
-  const opts = { tool: null, dryRun: false, force: false, json: false };
+  const opts = { tool: null, dryRun: false, force: false, json: false, here: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--dry-run') { opts.dryRun = true; continue; }
     if (a === '--force')   { opts.force = true; continue; }
     if (a === '--json')    { opts.json = true; continue; }
+    if (a === '--here')    { opts.here = true; continue; }
     if (a.startsWith('--')) {
       // Preserve json-state on error so the dispatcher can emit JSON if
       // requested (a flag-order corner case the user shouldn't suffer).
@@ -197,6 +214,142 @@ export function composeSwitchPlan({ target, previous }) {
     previous: previous ?? null,
     targetChanged: previous !== target,
   };
+}
+
+/**
+ * Find the registry entry whose worktree contains `cwd` — used by the
+ * mid-session `--here` switch to identify which session is being switched.
+ * Matches the deepest worktree path that is a prefix of cwd (handles a cwd
+ * nested under the worktree root). Pure: (cwd, entries) → entry|null.
+ */
+export function findEntryByCwd(cwd, entries) {
+  if (!cwd || !Array.isArray(entries)) return null;
+  const norm = (p) => (p && !p.endsWith('/') ? p + '/' : p);
+  const target = norm(cwd);
+  let best = null;
+  for (const e of entries) {
+    const wt = e?.worktree_path;
+    if (!wt) continue;
+    const wtNorm = norm(wt);
+    if (target === wtNorm || target.startsWith(wtNorm)) {
+      if (!best || wt.length > best.worktree_path.length) best = e;
+    }
+  }
+  return best;
+}
+
+/**
+ * The exact command the user re-runs to bring the session up under the new
+ * tool. Pure. We do NOT auto-relaunch: a mid-session switch is invoked
+ * inline (`!mc ...`) from *inside* the old tool, which still owns the TTY —
+ * spawning a nested PTY there is unsafe. The minimal-safe contract is
+ * "re-ground + persist now; you relaunch". A named session uses `mc
+ * resume`; an unregistered in-place session re-runs bare `mc`.
+ */
+export function relaunchCommand({ sessionName }) {
+  return sessionName ? `mc resume ${sessionName}` : 'mc';
+}
+
+// ─────────────────────────────────────────────────────────────
+// Mid-session switch (`--here`) — re-ground + persist, user relaunches
+// ─────────────────────────────────────────────────────────────
+
+export function defaultHereDeps() {
+  return {
+    cwd: () => process.cwd(),
+    insideSession: () => process.env.MEMORO_MC_PARENT === '1',
+    readEntries: async () => {
+      const { readRegistry } = await import('../registry.js');
+      return readRegistry().entries;
+    },
+    persistTool: async (name, shortName) => {
+      const { upsertEntry } = await import('../registry.js');
+      upsertEntry({ name, tool: shortName });
+    },
+    ground: async ({ cwd, adapter }) => {
+      const { groundSession } = await import('../ground.js');
+      return groundSession({ cwd, adapter });
+    },
+    resolveLaunch: async (tool) => {
+      const { resolveLaunch } = await import('../../adapters/index.js');
+      return resolveLaunch(tool);
+    },
+  };
+}
+
+/**
+ * In-process mid-session switch. Re-renders the SAME grounding bundle via
+ * the target adapter (so it lands in that tool's native file), persists
+ * the per-session tool, and prints the relaunch command. Never spawns —
+ * the user relaunches, which keeps the old tool's TTY ownership safe.
+ */
+export async function runSwitchHere(opts, deps) {
+  // Resolve the target tool's launcher up front (fails high on
+  // unknown/planned/missing-bin — same contract as the wrap launcher).
+  const launch = await deps.resolveLaunch(opts.tool);
+  if (!launch.ok) {
+    return emitError(`cannot switch to "${opts.tool}": ${launch.hint}`, 1, opts);
+  }
+
+  const cwd = deps.cwd();
+  const entries = await deps.readEntries();
+  const entry = findEntryByCwd(cwd, entries);
+  const sessionName = entry?.name || null;
+
+  if (!deps.insideSession() && !entry) {
+    // Not obviously in an mc session and no worktree match — still allow
+    // (re-ground in place), but note it so the user isn't surprised.
+  }
+
+  // Re-ground the cwd into the target tool's instruction file. Soft fail
+  // is surfaced, but persistence still proceeds so the relaunch is correct.
+  let groundResult = { ok: false };
+  try {
+    groundResult = await deps.ground({ cwd, adapter: launch.adapter });
+  } catch (err) {
+    groundResult = { ok: false, reason: err?.message || 'ground failed' };
+  }
+
+  if (sessionName && !opts.dryRun) {
+    try {
+      await deps.persistTool(sessionName, launch.shortName);
+    } catch (err) {
+      return emitError(`re-grounded, but failed to persist tool: ${err?.message ?? String(err)}`, 1, opts);
+    }
+  }
+
+  const relaunch = relaunchCommand({ sessionName });
+
+  if (opts.json) {
+    console.log(JSON.stringify({
+      ok: true,
+      mode: 'here',
+      tool: launch.id,
+      session: sessionName,
+      dry_run: opts.dryRun,
+      grounded: !!groundResult.ok,
+      grounding_path: groundResult.path || null,
+      relaunch,
+    }, null, 2));
+    return 0;
+  }
+
+  const tag = opts.dryRun ? ' [dry-run]' : '';
+  process.stdout.write(`mc tool-switch --here${tag} — ${launch.spec.label}\n\n`);
+  if (groundResult.ok) {
+    process.stdout.write(`  ✓ re-grounded this worktree into ${launch.spec.label} (${groundResult.path})\n`);
+  } else {
+    process.stdout.write(`  · grounding skipped (${groundResult.reason || 'unknown'}) — relaunch will re-ground\n`);
+  }
+  if (sessionName) {
+    process.stdout.write(opts.dryRun
+      ? `  + would set session "${sessionName}" tool → ${launch.shortName}\n`
+      : `  ✓ session "${sessionName}" tool → ${launch.shortName}\n`);
+  } else {
+    process.stdout.write(`  · no registered session for this cwd — re-grounded in place only\n`);
+  }
+  process.stdout.write(`\nExit your current tool, then relaunch:\n  ${relaunch}\n`);
+  return 0;
 }
 
 // ─────────────────────────────────────────────────────────────

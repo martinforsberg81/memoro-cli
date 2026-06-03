@@ -31,7 +31,16 @@ import {
 import {
   parseSyncArgs,
   runSyncWith,
+  stripGroundingBlock,
 } from '../../src/mc/commands/adapter.js';
+import {
+  GROUNDING_BEGIN as CLAUDE_GB,
+  GROUNDING_END as CLAUDE_GE,
+} from '../../src/adapters/claude-code.js';
+import {
+  GROUNDING_BEGIN as CODEX_GB,
+  GROUNDING_END as CODEX_GE,
+} from '../../src/adapters/codex.js';
 import {
   instructionsFile as claudeInstructions,
 } from '../../src/adapters/claude-code.js';
@@ -569,6 +578,45 @@ describe('runSyncWith — drift handling', () => {
 // on-disk-shaped wrapper, not just a hand-rolled fixture.
 // ─────────────────────────────────────────────────────────────
 
+describe('stripGroundingBlock — pure, multi-adapter', () => {
+  it('strips the claude-code grounding block', () => {
+    const body = `# wrapper\n${CLAUDE_GB}\nground\n${CLAUDE_GE}\ntail\n`;
+    const out = stripGroundingBlock(body);
+    assert.ok(!out.includes(CLAUDE_GB));
+    assert.ok(!out.includes('ground'));
+    assert.match(out, /# wrapper/);
+    assert.match(out, /tail/);
+  });
+
+  it('strips the codex grounding block too (acute Phase 3 fix)', () => {
+    const body = `# wrapper\n${CODEX_GB}\ncodexground\n${CODEX_GE}\ntail\n`;
+    const out = stripGroundingBlock(body);
+    assert.ok(!out.includes(CODEX_GB));
+    assert.ok(!out.includes('codexground'));
+    assert.match(out, /# wrapper/);
+    assert.match(out, /tail/);
+  });
+
+  it('strips BOTH markers when both are present (post-switch file)', () => {
+    const body = [
+      '# wrapper',
+      CLAUDE_GB, 'c-ground', CLAUDE_GE,
+      CODEX_GB, 'x-ground', CODEX_GE,
+      'tail',
+    ].join('\n') + '\n';
+    const out = stripGroundingBlock(body);
+    assert.ok(!out.includes('c-ground'));
+    assert.ok(!out.includes('x-ground'));
+    assert.match(out, /# wrapper/);
+    assert.match(out, /tail/);
+  });
+
+  it('null-safe: non-string passes through untouched', () => {
+    assert.equal(stripGroundingBlock(null), null);
+    assert.equal(stripGroundingBlock(undefined), undefined);
+  });
+});
+
 describe('runSyncWith — grounding block is not drift', () => {
   // Build the *exact* expected wrapper, then graft a grounding managed
   // block onto it (as a live grounded session would). Sync must see
@@ -620,6 +668,42 @@ describe('runSyncWith — grounding block is not drift', () => {
     assert.equal(code, 1, 'real drift outside the grounding block must still be caught');
     assert.equal(writes.length, 0);
     assert.match(stdout, /DRIFT/);
+  });
+
+  // Phase 3: the strip must cover EVERY adapter's grounding markers, not
+  // just claude-code's. A session that switched to codex leaves codex's
+  // OWN grounding block in AGENTS.md — that block must not read as drift
+  // either, or `mc adapter sync` would fight every switched session.
+  function agentsWithCodexGrounding() {
+    const expected = markdownWrapperFor({
+      canonicalPath: CANONICAL_REL, canonicalContent: CANONICAL_BODY,
+      toolLabel: 'Codex / GPT', wrapperPath: 'AGENTS.md',
+    });
+    const grounding = [
+      '<!-- memoro:managed:grounding:codex:begin -->',
+      '# Session grounding',
+      '',
+      '## Your role',
+      'You are the orchestrator.',
+      '<!-- memoro:managed:grounding:codex:end -->',
+    ].join('\n');
+    return expected + '\n' + grounding + '\n';
+  }
+
+  it('treats AGENTS.md + codex grounding block as up-to-date (no drift)', async () => {
+    const { dep, writes } = makeDeps({
+      files: {
+        [CANONICAL_ABS]: CANONICAL_BODY,
+        '/repo/AGENTS.md': agentsWithCodexGrounding(),
+      },
+      adapters: [FULL_ADAPTERS[1]],
+    });
+    const { code, stdout, stderr } = await captureStreams(() =>
+      runSyncWith({ tool: null, dryRun: false, force: false, json: false }, dep));
+    assert.equal(code, 0, `stderr:${stderr} stdout:${stdout}`);
+    assert.equal(writes.length, 0, 'a codex grounding block must not trigger a re-write');
+    assert.match(stdout, /up to date/);
+    assert.ok(!/DRIFT/.test(stdout), 'codex grounding block must not be reported as drift');
   });
 });
 

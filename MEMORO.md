@@ -33,8 +33,14 @@ A session must be handed the right context *before the user types*. Today
   grounded. Phase 1 shipped bare `mc`; Phase 2 shipped entry-parity (`mc new
   [<task>]` / `mc resume` ground via the same seam), the read-only MEMORO.md
   lifecycle (offer-to-seed/update, never silent), and the adapter-sync drift-fix
-  (grounding block stripped before the wrapper byte-compare). Tool-switch (P3),
-  lens auto-injection (P4), package-canon (P5) remain. → `docs/plans/mc-new-grounding.md`
+  (grounding block stripped before the wrapper byte-compare). Phase 3 shipped
+  tool-switching: the launcher is adapter-routed (no longer claude-hardcoded),
+  codex has writeGrounding/removeGrounding parity into AGENTS.md, `mc new
+  --codex`/`--claude` sugar over `--tool`, and a mid-session switch unified into
+  `mc tool-switch <tool> --here` (re-renders the same bundle via the target
+  adapter + persists the per-session tool, user relaunches). Drift-strip now
+  covers BOTH adapters' markers. Lens auto-injection (P4), package-canon (P5)
+  remain. → `docs/plans/mc-new-grounding.md`
 
 ### Orchestration — the fleet   · serves G1
 Ship a plan as verified parallel agents; the coordinator never blocks.
