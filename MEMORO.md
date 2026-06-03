@@ -45,8 +45,12 @@ A session must be handed the right context *before the user types*. Today
   a "respond in <language>" directive, English default. Language is SERVER-
   GATED: the lens endpoints expose no language/locale field today (verified
   live), so it resolves to English for every real response — the seam is wired
-  to light up the instant the server adds the field. Package-canon (P5)
-  remains. → `docs/plans/mc-new-grounding.md`
+  to light up the instant the server adds the field. A per-repo `language`
+  setting in MEMORO.md (a single `<!-- memoro:language: <Lang> -->` line, any
+  position) now un-gates language steering locally and WINS over the server
+  locale (`MEMORO.md > server locale > English`), stripped from the rendered
+  map so it never shows as prose. Package-canon (P5) remains.
+  → `docs/plans/mc-new-grounding.md`
 
 ### Orchestration — the fleet   · serves G1
 Ship a plan as verified parallel agents; the coordinator never blocks.
