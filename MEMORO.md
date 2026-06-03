@@ -30,8 +30,11 @@ A session must be handed the right context *before the user types*. Today
 - **Session grounding at entry** — `active · L · now`
   Every entry (`mc`, `mc new`, `mc resume`) injects the bundle `{ map + role +
   lens + focus }` into standing context before the user types, so the LLM wakes
-  grounded. Introduces MEMORO.md as the intent-map; fixes today's context-less
-  entry. → `docs/plans/mc-new-grounding.md`
+  grounded. Phase 1 shipped bare `mc`; Phase 2 shipped entry-parity (`mc new
+  [<task>]` / `mc resume` ground via the same seam), the read-only MEMORO.md
+  lifecycle (offer-to-seed/update, never silent), and the adapter-sync drift-fix
+  (grounding block stripped before the wrapper byte-compare). Tool-switch (P3),
+  lens auto-injection (P4), package-canon (P5) remain. → `docs/plans/mc-new-grounding.md`
 
 ### Orchestration — the fleet   · serves G1
 Ship a plan as verified parallel agents; the coordinator never blocks.

@@ -285,4 +285,59 @@ describe('groundSession', () => {
     assert.equal(res.ok, false);
     assert.match(res.reason, /adapter/);
   });
+
+  // ── Phase 2: MEMORO.md lifecycle folds into the bundle, read-only ──
+
+  it('folds a SEED offer into the bundle when MEMORO.md is absent', async () => {
+    const adapter = fakeAdapter();
+    await groundSession({
+      cwd: dir,
+      adapter,
+      deps: {
+        readMapImpl: async () => null,      // no MEMORO.md
+        buildRoleImpl: () => 'role',
+        pullLensImpl: async () => null,
+        repoName: 'acme-cli',
+      },
+    });
+    assert.match(adapter.written.markdown, /Keeping the map current/);
+    assert.match(adapter.written.markdown, /seed|create/i);
+    assert.match(adapter.written.markdown, /offer|opt-in|confirm|with the user/i);
+  });
+
+  it('folds an UPDATE offer + in-flight nodes when MEMORO.md exists', async () => {
+    const adapter = fakeAdapter();
+    await groundSession({
+      cwd: dir,
+      adapter,
+      deps: {
+        readMapImpl: async () => '- **Live node** — `active · L · now`',
+        buildRoleImpl: () => 'role',
+        pullLensImpl: async () => null,
+      },
+    });
+    assert.match(adapter.written.markdown, /Keeping the map current/);
+    assert.match(adapter.written.markdown, /Live node/);
+    assert.match(adapter.written.markdown, /read-only by default/i);
+  });
+
+  it('default grounding NEVER mutates MEMORO.md on disk (load-bearing)', async () => {
+    // A real MEMORO.md on disk; ground through the real readMap path.
+    const mapDir = mkdtempSync(join(tmpdir(), 'mc-ground-readonly-'));
+    const p = join(mapDir, 'MEMORO.md');
+    writeFileSync(p, '# MEMORO.md\n- **Node** — `active · L · now`\n', 'utf8');
+    const before = readFileSync(p, 'utf8');
+
+    const adapter = fakeAdapter();
+    const res = await groundSession({
+      cwd: mapDir,
+      adapter,
+      deps: { buildRoleImpl: () => 'role', pullLensImpl: async () => null },
+    });
+    assert.equal(res.ok, true);
+    // The bundle read the map (it appears) but the file is byte-identical.
+    assert.match(adapter.written.markdown, /## The map/);
+    assert.equal(readFileSync(p, 'utf8'), before, 'grounding must not write MEMORO.md');
+    rmSync(mapDir, { recursive: true, force: true });
+  });
 });

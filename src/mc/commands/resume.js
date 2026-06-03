@@ -4,6 +4,12 @@
  * §2 + §2b: emit `cd <worktree>` on fd 3 *before* the tool launches, so
  * the launched tool's cwd is the worktree. In `--no-launch` mode (tests
  * + when the user just wants to cd), we emit the directive and exit.
+ *
+ * Grounding (Phase 2 — entry parity): resume re-execs into wrap mode the
+ * same way `mc new` does, so it grounds through the SAME `groundSession`
+ * seam in `runWrap` — no forked grounding logic here. The session's label
+ * (if any) is threaded across the re-exec as the soft `focus` pointer via
+ * `MC_GROUNDING_FOCUS`, matching `mc new`'s `<task>` plumbing.
  */
 import { spawnSync } from 'node:child_process';
 import { findEntry } from '../registry.js';
@@ -61,9 +67,17 @@ export async function run(rawArgv) {
   // Re-exec mc in wrap mode with --resume so claude opens its resume
   // picker. Same approach as `mc new`: same binary, cwd=worktree,
   // inherited stdio. Adapter routing for non-claude tools follows §5.
+  //
+  // Thread the session label as the soft grounding focus across the
+  // re-exec (argv is dropped by the wrap path), so the resumed session
+  // grounds with the same standing-context pointer through the ONE
+  // groundSession seam in runWrap.
+  const reexecEnv = { ...process.env };
+  if (entry.label) reexecEnv.MC_GROUNDING_FOCUS = entry.label;
   const result = spawnSync(process.execPath, [process.argv[1], '--resume'], {
     stdio: 'inherit',
     cwd: entry.worktree_path,
+    env: reexecEnv,
   });
   return result.status ?? 0;
 }
