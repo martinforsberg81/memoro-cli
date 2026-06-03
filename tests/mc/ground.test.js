@@ -321,6 +321,59 @@ describe('groundSession', () => {
     assert.match(adapter.written.markdown, /read-only by default/i);
   });
 
+  // ── Phase 4: language resolved from the lens response governs the bundle ──
+
+  it('resolves language from the lens response and renders a directive', async () => {
+    const adapter = fakeAdapter();
+    const res = await groundSession({
+      cwd: dir,
+      adapter,
+      deps: {
+        readMapImpl: async () => null,
+        buildRoleImpl: () => 'role',
+        // Phase 4: grounding pulls the WHOLE lens response, not just markdown.
+        fetchLensDataImpl: async () => ({ ok: true, markdown: 'lens body', language: 'Swedish' }),
+      },
+    });
+    assert.match(adapter.written.markdown, /## Who you are working with/);
+    assert.match(adapter.written.markdown, /lens body/);
+    assert.match(adapter.written.markdown, /Swedish/);
+    assert.match(adapter.written.markdown, /respond/i);
+    assert.equal(res.parts?.language, 'Swedish');
+  });
+
+  it('defaults to English (no directive) when the lens carries no language', async () => {
+    const adapter = fakeAdapter();
+    const res = await groundSession({
+      cwd: dir,
+      adapter,
+      deps: {
+        readMapImpl: async () => null,
+        buildRoleImpl: () => 'role',
+        fetchLensDataImpl: async () => ({ ok: true, markdown: 'lens body' }),
+      },
+    });
+    assert.ok(!/respond in/i.test(adapter.written.markdown), 'English default → no directive');
+    assert.equal(res.parts.language, null);
+  });
+
+  it('soft-degrades to English + no lens when Memoro is unreachable', async () => {
+    const adapter = fakeAdapter();
+    const res = await groundSession({
+      cwd: dir,
+      adapter,
+      deps: {
+        readMapImpl: async () => 'map',
+        buildRoleImpl: () => 'role',
+        fetchLensDataImpl: async () => { throw new Error('unreachable'); },
+      },
+    });
+    assert.equal(res.ok, true);
+    assert.ok(!/## Who you are working with/.test(adapter.written.markdown));
+    assert.ok(!/respond in/i.test(adapter.written.markdown));
+    assert.equal(res.parts.language, null);
+  });
+
   it('default grounding NEVER mutates MEMORO.md on disk (load-bearing)', async () => {
     // A real MEMORO.md on disk; ground through the real readMap path.
     const mapDir = mkdtempSync(join(tmpdir(), 'mc-ground-readonly-'));

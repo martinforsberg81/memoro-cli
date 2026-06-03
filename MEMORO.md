@@ -39,8 +39,14 @@ A session must be handed the right context *before the user types*. Today
   --codex`/`--claude` sugar over `--tool`, and a mid-session switch unified into
   `mc tool-switch <tool> --here` (re-renders the same bundle via the target
   adapter + persists the per-session tool, user relaunches). Drift-strip now
-  covers BOTH adapters' markers. Lens auto-injection (P4), package-canon (P5)
-  remain. → `docs/plans/mc-new-grounding.md`
+  covers BOTH adapters' markers. Phase 4 made lens auto-injection first-class
+  (the whole `portrait-coding` response is pulled in one call, no manual `lens
+  pull`) and derives the session's render language from the lens/user_state →
+  a "respond in <language>" directive, English default. Language is SERVER-
+  GATED: the lens endpoints expose no language/locale field today (verified
+  live), so it resolves to English for every real response — the seam is wired
+  to light up the instant the server adds the field. Package-canon (P5)
+  remains. → `docs/plans/mc-new-grounding.md`
 
 ### Orchestration — the fleet   · serves G1
 Ship a plan as verified parallel agents; the coordinator never blocks.
