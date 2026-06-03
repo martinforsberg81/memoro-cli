@@ -27,7 +27,7 @@ enterprise systems.
 A session must be handed the right context *before the user types*. Today
 `mc new` gives almost none — this is the first thing to get right.
 
-- **Session grounding at entry** — `active · L · now`
+- **Session grounding at entry** — `shipped · L · now`
   Every entry (`mc`, `mc new`, `mc resume`) injects the bundle `{ map + role +
   lens + focus }` into standing context before the user types, so the LLM wakes
   grounded. Phase 1 shipped bare `mc`; Phase 2 shipped entry-parity (`mc new
@@ -49,7 +49,15 @@ A session must be handed the right context *before the user types*. Today
   setting in MEMORO.md (a single `<!-- memoro:language: <Lang> -->` line, any
   position) now un-gates language steering locally and WINS over the server
   locale (`MEMORO.md > server locale > English`), stripped from the rendered
-  map so it never shows as prose. Package-canon (P5) remains.
+  map so it never shows as prose. Phase 5 (Universal) shipped: the orchestrator
+  role + coordination canon now ship INSIDE the mc package (`canon/`, in
+  `package.json` `files`), so `buildRole` is package-canon-aware — an empty repo
+  with no `.claude`/`docs` files still wakes with the FULL role (framing + the
+  two load-bearing purposes inline + canonical-source pointers), resolved from
+  mc's own install root (works `npm i -g`/npx/cloned checkout). Terse fallback
+  now means a broken install only, never "repo has no .claude". The checked-in
+  canon copy is guarded against drift from its repo source by a test. Grounding
+  MVP is complete.
   → `docs/plans/mc-new-grounding.md`
 
 ### Orchestration — the fleet   · serves G1

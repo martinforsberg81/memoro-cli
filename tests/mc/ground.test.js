@@ -149,11 +149,14 @@ describe('buildRole', () => {
     assert.match(out, /agent-coordination\.md/);
   });
 
-  it('degrades to terse framing when no sources exist', () => {
+  it('an empty repo still gets the FULL role from package canon (Phase 5)', () => {
+    // Phase 5: the canon ships in the package, so an empty repo is NO LONGER
+    // terse — it gets the full framing + canonical-source pointers. (Terse
+    // fallback now means a broken install only; see ground-role-canon.test.js.)
     const empty = mkdtempSync(join(tmpdir(), 'mc-ground-role-empty-'));
     const out = buildRole(empty);
     assert.match(out, /orchestrator/i);
-    assert.ok(!/agent-coordination\.md/.test(out));
+    assert.match(out, /agent-coordination\.md/);
     rmSync(empty, { recursive: true, force: true });
   });
 });
