@@ -226,6 +226,8 @@ USAGE
 
   mc adapter sync [--tool ...] [...] Materialise per-tool instruction files
                                      from docs/coding-agent-protocol.md
+  mc adapter materialise [...]       Copy the package orchestrator canon into
+                                     this repo's docs/ + .claude/ (§13c)
   mc tool-switch <tool> [--dry-run]  Switch default coding tool (§13d):
                                      verify install + auth, persist
                                      default, sync target's instructions

@@ -26,6 +26,11 @@ import {
   summariseDrift,
   KNOWN_TOOL_NAMES,
 } from '../adapter-sync.js';
+import {
+  planMaterialise,
+  CANON_DESTINATIONS,
+} from '../canon-materialise.js';
+import { readPackageCanon } from '../canon.js';
 import { removeManagedBlock } from '../../lib/managed-block.js';
 import {
   GROUNDING_BEGIN as CLAUDE_GROUNDING_BEGIN,
@@ -81,6 +86,7 @@ export async function run(argv) {
     return sub ? 0 : 2;
   }
   if (sub === 'sync') return runSync(rest);
+  if (sub === 'materialise' || sub === 'materialize') return runMaterialise(rest);
   console.error(`mc: unknown adapter subcommand "${sub}". Try \`mc adapter --help\`.`);
   return 2;
 }
@@ -90,23 +96,29 @@ function printHelp() {
 
 USAGE
   mc adapter sync [--tool <name>] [--dry-run] [--force] [--json]
+  mc adapter materialise [--dry-run] [--force] [--json]
 
 VERBS
-  sync   Materialise per-tool instruction-file wrappers (CLAUDE.md,
-         AGENTS.md, …) from docs/coding-agent-protocol.md. Idempotent;
-         safe to re-run. Refuses to overwrite hand-edited wrappers
-         without --force.
+  sync         Materialise per-tool instruction-file wrappers (CLAUDE.md,
+               AGENTS.md, …) from docs/coding-agent-protocol.md. Idempotent;
+               safe to re-run. Refuses to overwrite hand-edited wrappers
+               without --force.
+  materialise  Copy the orchestrator canon shipped IN the mc package
+               (coding-agent-protocol.md, agent-coordination.md,
+               be-coordinator.md) into this repo's docs/ + .claude/, so any
+               repo can carry the coordinator tooling. Idempotent; refuses
+               to overwrite a differing file without --force.
 
 FLAGS
-  --tool <name>   Limit to one adapter: claude-code | codex | gemini-cli
+  --tool <name>   (sync only) Limit to one adapter: claude-code | codex | gemini-cli
   --dry-run       Report actions without writing
-  --force         Overwrite drift (hand-edited wrappers)
+  --force         Overwrite drift (hand-edited / differing files)
   --json          Machine-readable report
 
 EXIT CODES
-  0   all in sync (or dry-run, no pending drift)
+  0   all in sync / up to date (or dry-run, no pending drift)
   1   drift detected without --force
-  2   misuse (unknown flag, unknown tool, missing canonical)
+  2   misuse (unknown flag, unknown tool, missing canonical/package canon)
 `);
 }
 
@@ -328,6 +340,185 @@ function printHuman({ actions, opts, written, driftBlocked }) {
     process.stdout.write(`\n  Drift detected — refusing to overwrite without --force.\n`);
     process.stdout.write(`  Either edit ${CANONICAL_PATH} (the canonical) and re-sync,\n`);
     process.stdout.write(`  or run \`mc adapter sync --force\` if you mean to discard the local edit.\n`);
+  } else if (!opts.dryRun && written.length > 0) {
+    process.stdout.write(`\n  Wrote ${written.length} file${written.length === 1 ? '' : 's'}.\n`);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// `mc adapter materialise`
+// ─────────────────────────────────────────────────────────────
+
+export function parseMaterialiseArgs(argv) {
+  const opts = { dryRun: false, force: false, json: false };
+  for (const a of argv) {
+    if (a === '--dry-run') { opts.dryRun = true; continue; }
+    if (a === '--force')   { opts.force = true; continue; }
+    if (a === '--json')    { opts.json = true; continue; }
+    return { error: `unknown flag: ${a}` };
+  }
+  return opts;
+}
+
+async function runMaterialise(argv) {
+  const opts = parseMaterialiseArgs(argv);
+  if (opts.error) {
+    if (argv.includes('--json')) {
+      console.log(JSON.stringify({ ok: false, error: opts.error }, null, 2));
+    }
+    console.error(`mc: ${opts.error}`);
+    return 2;
+  }
+  return runMaterialiseWith(opts, defaultMaterialiseDeps());
+}
+
+export function defaultMaterialiseDeps() {
+  return {
+    cwd: process.cwd(),
+    repoRoot: defaultRepoRoot,
+    // Package canon is the source of truth (resolved from mc's OWN install
+    // root, never cwd — see canon.js). Soft-degrades a broken install to
+    // all-null without throwing.
+    readCanon: () => readPackageCanon(),
+    readFileText: (abs) => existsSync(abs) ? readFileSync(abs, 'utf8') : null,
+    writeFileText: (abs, body) => {
+      mkdirSync(dirname(abs), { recursive: true });
+      writeFileSync(abs, body, { encoding: 'utf8' });
+    },
+  };
+}
+
+/**
+ * In-process entry point for tests. Same surface as `runMaterialise` but
+ * with deps explicit. The verb body lives here.
+ *
+ * Exit-before-side-effect (Pattern 3): the whole plan is computed and the
+ * drift decision is made BEFORE any write, so a drift refusal leaves the
+ * repo untouched (no half-materialised state).
+ */
+export async function runMaterialiseWith(opts, deps) {
+  const root = deps.repoRoot(deps.cwd);
+  const canon = deps.readCanon();
+
+  // A wholly-broken install (no canon at all) is misuse → exit 2 with a
+  // clear message on BOTH the human and --json paths. Partial installs
+  // (some files present) materialise what's there and skip the rest.
+  const anyCanon = canon && Object.values(canon).some((v) => typeof v === 'string' && v.length);
+  if (!anyCanon) {
+    const msg = 'no package canon found — the mc install looks broken (missing canon/ dir). Reinstall mc.';
+    if (opts.json) {
+      console.log(JSON.stringify({ ok: false, error: msg }, null, 2));
+    }
+    console.error(`mc: ${msg}`);
+    return 2;
+  }
+
+  const resolveDest = (relPath) => isAbsolute(relPath) ? relPath : join(root, relPath);
+  const readDest = (abs) => deps.readFileText(abs);
+
+  const actions = planMaterialise({ canon, resolveDest, readDest });
+
+  // Decide what to write. `drift` is written only with --force.
+  const writes = [];
+  const driftActions = [];
+  for (const a of actions) {
+    if (a.action === 'create') writes.push(a);
+    else if (a.action === 'drift') {
+      driftActions.push(a);
+      if (opts.force) writes.push(a);
+    }
+  }
+
+  // Exit-before-side-effect (Pattern 3): if any file drifts and --force was
+  // not given, abort the WHOLE materialise — write nothing, not even the
+  // clean creates. A partial materialise (some files, not others) is a
+  // half-state we refuse to leave behind. With --force the drifted files are
+  // already in `writes`, so this guard is a no-op and everything lands.
+  const driftBlocked = driftActions.length > 0 && !opts.force;
+
+  const written = [];
+  if (!opts.dryRun && !driftBlocked) {
+    for (const a of writes) {
+      try {
+        deps.writeFileText(a.absPath, a.packagedContent);
+        written.push(a.destPath);
+      } catch (err) {
+        const msg = `failed to write ${a.destPath}: ${err.message}`;
+        if (opts.json) {
+          console.log(JSON.stringify({ ok: false, error: msg }, null, 2));
+        }
+        console.error(`mc: ${msg}`);
+        return 2;
+      }
+    }
+  }
+
+  const exitCode = driftBlocked ? 1 : 0;
+
+  if (opts.json) {
+    console.log(JSON.stringify({
+      ok: !driftBlocked,
+      dry_run: opts.dryRun,
+      force: opts.force,
+      destinations: CANON_DESTINATIONS,
+      actions: actions.map(serialiseMaterialiseAction),
+      written,
+    }, null, 2));
+    return exitCode;
+  }
+
+  printMaterialiseHuman({ actions, opts, written, driftBlocked });
+  return exitCode;
+}
+
+function serialiseMaterialiseAction(a) {
+  return {
+    canon: a.key,
+    dest_path: a.destPath,
+    action: a.action,
+    drift_state: a.driftState ?? null,
+    reason: a.reason ?? null,
+  };
+}
+
+function printMaterialiseHuman({ actions, opts, written, driftBlocked }) {
+  const mode = opts.dryRun ? '[dry-run] ' : '';
+  process.stdout.write(`mc adapter materialise ${mode}— canon from the mc package\n\n`);
+  for (const a of actions) {
+    const dpath = (a.destPath || '').padEnd(40);
+    if (a.action === 'skip') {
+      process.stdout.write(`  · ${dpath}skipped — ${a.reason}\n`);
+      continue;
+    }
+    if (a.action === 'noop') {
+      process.stdout.write(`  ✓ ${dpath}up to date\n`);
+      continue;
+    }
+    if (a.action === 'create') {
+      const verb = opts.dryRun ? 'would create' : 'created';
+      process.stdout.write(`  + ${dpath}${verb}\n`);
+      continue;
+    }
+    if (a.action === 'drift') {
+      if (opts.force) {
+        const verb = opts.dryRun ? 'would overwrite (--force)' : 'overwritten (--force)';
+        process.stdout.write(`  ! ${dpath}${verb}\n`);
+      } else {
+        process.stdout.write(`  ✗ ${dpath}DRIFT — differs from package canon\n`);
+        for (const line of summariseDrift({
+          existing: a.existingContent,
+          expected: a.packagedContent,
+        })) {
+          process.stdout.write(`  ${line}\n`);
+        }
+      }
+    }
+  }
+  if (driftBlocked) {
+    process.stdout.write(`\n  Drift detected — refusing to overwrite without --force.\n`);
+    process.stdout.write(`  A local copy differs from the package canon. Re-run with\n`);
+    process.stdout.write(`  \`mc adapter materialise --force\` to discard the local edit,\n`);
+    process.stdout.write(`  or leave it if the divergence is intentional.\n`);
   } else if (!opts.dryRun && written.length > 0) {
     process.stdout.write(`\n  Wrote ${written.length} file${written.length === 1 ? '' : 's'}.\n`);
   }
