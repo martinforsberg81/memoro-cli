@@ -87,9 +87,19 @@ Ship a plan as verified parallel agents; the coordinator never blocks.
   required for the loop. → `docs/plans/worktree-lifecycle.md` §16
 
 ### Tool-portability — any tool, any repo   · serves G1
-- **Canonical skills/commands in the mc package + Cursor/Aider** — `planned · M · —`
-  Ship the orchestrator role as package-canon materialised into any repo
-  (§13b.1); add Cursor/Aider adapters. → §13 Ph4–5
+- **Materialise package-canon into any repo** — `shipped · M · —`
+  The orchestrator canon ships IN the mc package (Phase 5) and `buildRole`
+  inlines the role at grounding time — but a fresh repo never received the
+  actual skill/command FILES, so `/be-coordinator` + the agent-coordination
+  skill didn't exist on disk there. `mc adapter materialise` now copies the
+  package canon (coding-agent-protocol.md, agent-coordination.md,
+  be-coordinator.md) into the repo's docs/ + .claude/ at their verified
+  destinations, so any repo can carry the coordinator tooling. Drift-aware
+  (never silent clobber: missing → materialise, differs → refuse without
+  --force), idempotent, exit-before-side-effect (a single drift aborts the
+  whole run — no half-materialised state). Same `mc adapter` verb family as
+  `sync`, opposite direction (materialise lays down the canonical sources;
+  sync points the per-tool wrappers at them). → §13c
 
 ### Knowledge access — memoro-agent   · serves G1
 - **`mc auth agent` enrollment** — `gated (memoro server) · S · —`
