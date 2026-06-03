@@ -133,6 +133,106 @@ function normalizeLocale(locale) {
   return LOCALE_TO_LANGUAGE[base] || locale.trim();
 }
 
+// ─────────────────────────────────────────────────────────────
+// Pure: MEMORO.md `language` setting + precedence (this drev)
+//
+// Product decision: code-language ≠ Memoro-locale. A per-repo `language`
+// setting in MEMORO.md un-gates language steering LOCALLY, ahead of the
+// server (whose lens exposes no language field today). Precedence — the
+// MEMORO.md setting WINS:
+//
+//   MEMORO.md language-setting   (primary — explicit per-repo choice)
+//     > Memoro user_state locale  (fallback — unchanged Phase 4 seam)
+//       > English                 (default)
+//
+// SYNTAX: a single HTML-comment convention line, anywhere in MEMORO.md:
+//
+//   <!-- memoro:language: Swedish -->
+//
+// Chosen over YAML frontmatter because `readMap` renders the WHOLE file as
+// prose into the bundle's map section — an HTML comment is invisible in
+// rendered markdown, sits anywhere, and strips out with one regex without
+// disturbing the sparse prose-map form (frontmatter would change the file's
+// first bytes and the heading rendering). Deliberately NOT a general config
+// system: one setting, one line. The value reuses the SAME normalisation as
+// the lens path (locale codes map, English → null), so a `sv-SE` here behaves
+// identically to a `sv-SE` from the server.
+// ─────────────────────────────────────────────────────────────
+
+// Matches `<!-- memoro:language: <value> -->` with loose whitespace. The
+// value is everything up to the comment close; trimmed by the caller.
+const MAP_LANGUAGE_SETTING = /<!--\s*memoro:language:\s*([^>]*?)\s*-->/i;
+
+/**
+ * Parse the MEMORO.md `language` setting out of the map text. PURE. Returns a
+ * language LABEL (e.g. "Swedish") or `null` (no setting / English / hostile
+ * input). Reuses the lens-path normalisation so locale codes map to labels
+ * and English variants collapse to null. Never throws.
+ *
+ * @param {string|null} map — MEMORO.md contents
+ * @returns {string|null}
+ */
+export function parseMapLanguage(map) {
+  const text = nonEmpty(map);
+  if (!text) return null;
+  const m = text.match(MAP_LANGUAGE_SETTING);
+  if (!m) return null;
+  const value = nonEmpty(m[1]);
+  if (!value) return null;
+  // Same normalisation as a server-provided language label/locale: a bare
+  // label passes through (English → null), a locale code maps via the table.
+  return /[-_]/.test(value) || LOCALE_TO_LANGUAGE[value.toLowerCase()] !== undefined
+    ? normalizeLocale(value)
+    : normalizeLanguage(value);
+}
+
+/**
+ * Resolve the session render language by precedence: the MEMORO.md setting
+ * wins, else the Memoro server locale (Phase 4 seam), else English (null).
+ * PURE. Never throws — a hostile map or lens degrades to the next level.
+ *
+ * Note an explicit English setting in the map (→ null) deliberately SHADOWS a
+ * non-English server locale: a user who chooses English locally overrides
+ * their Memoro profile for this repo. That's the point of the per-repo
+ * setting. ("No setting present" — parseMapLanguage returns null too, so we
+ * distinguish the two by whether the map carried the convention line at all.)
+ *
+ * @param {object} [arg]
+ * @param {string|null} [arg.map]          — MEMORO.md contents
+ * @param {*}           [arg.lensResponse] — the Memoro lens response (Phase 4)
+ * @returns {string|null}
+ */
+export function resolveSessionLanguage({ map, lensResponse } = {}) {
+  const text = safeSync(() => nonEmpty(map), null);
+  // The map's setting wins whenever the convention line is PRESENT — even if
+  // its resolved value is null (an explicit English choice shadows the server).
+  if (text && MAP_LANGUAGE_SETTING.test(text)) {
+    return safeSync(() => parseMapLanguage(text), null);
+  }
+  return safeSync(() => resolveLanguage(lensResponse), null);
+}
+
+/**
+ * Strip mc settings (today: the `language` convention line) out of the map
+ * text before it is rendered as prose into the bundle. PURE. A map with no
+ * setting is returned byte-identical. Non-string input is returned unchanged.
+ * Never throws. Collapses the blank line the removed comment would leave so
+ * the prose-map spacing stays clean.
+ *
+ * @param {string|null} map
+ * @returns {string|null}
+ */
+export function stripMapSettings(map) {
+  if (typeof map !== 'string') return map;
+  if (!MAP_LANGUAGE_SETTING.test(map)) return map; // byte-identical fast path
+  // Remove the setting line (and its trailing newline) wherever it sits, then
+  // collapse any resulting run of blank lines so we don't leave a gap.
+  return map
+    .replace(new RegExp(`^[ \\t]*${MAP_LANGUAGE_SETTING.source}[ \\t]*\\n?`, 'gim'), '')
+    .replace(MAP_LANGUAGE_SETTING, '') // any inline occurrence not on its own line
+    .replace(/\n{3,}/g, '\n\n');
+}
+
 /**
  * Render the minimal "respond in <language>" directive line for the bundle.
  * PURE. Empty string for the English default (null) — zero noise when the
@@ -520,26 +620,37 @@ export async function groundSession({ cwd, adapter, focus = null, deps = {} } = 
   const map = await safe(() => readMapImpl(cwd), null);
   const role = await safe(() => buildRoleImpl(cwd), null);
 
-  // Lens auto-injection + language (Phase 4). Soft-degrade everywhere: a
-  // null lens response → no lens section + English default.
+  // Lens auto-injection + language. Soft-degrade everywhere: a null lens
+  // response → no lens section + (absent a MEMORO.md setting) English default.
   let lens = null;
-  let language = null;
+  let lensResp = null;
   if (pullLensImpl) {
-    // Legacy markdown-only path (Phase 1/2 tests inject this).
+    // Legacy markdown-only path (Phase 1/2 tests inject this). No lens
+    // response object → no server locale to resolve from; the MEMORO.md
+    // setting still drives the language below.
     lens = await safe(() => pullLensImpl(), null);
   } else {
-    const lensResp = await safe(() => fetchLensDataImpl(), null);
+    lensResp = await safe(() => fetchLensDataImpl(), null);
     lens = lensMarkdownOf(lensResp);
-    language = safeSync(() => resolveLanguage(lensResp), null);
   }
+
+  // Language precedence (this drev): MEMORO.md `language` setting WINS over
+  // the server locale, which wins over English. Resolved from the SAME map
+  // we read above + the lens response. Pure + soft-degrading.
+  const language = safeSync(() => resolveSessionLanguage({ map, lensResponse: lensResp }), null);
+
+  // Strip mc settings (the language convention line) out of the map prose so
+  // the setting never renders as text in the bundle. A map with no setting is
+  // byte-identical — the pre-drev grounding output is preserved.
+  const mapProse = safeSync(() => stripMapSettings(map), map);
 
   // MEMORO.md lifecycle OFFER (Phase 2). PURE + read-only on mc's side —
   // it only adds guidance the LLM may act on (seed when absent, offer an
   // update when nodes look in-flight), never a silent write. safe() so a
   // surprise never blocks the launch.
-  const lifecycle = safeSync(() => lifecycleGuidance({ map, repoName }), null);
+  const lifecycle = safeSync(() => lifecycleGuidance({ map: mapProse, repoName }), null);
 
-  const parts = { map, role, lens, focus, lifecycle, language };
+  const parts = { map: mapProse, role, lens, focus, lifecycle, language };
   const markdown = assembleBundle(parts);
 
   try {
