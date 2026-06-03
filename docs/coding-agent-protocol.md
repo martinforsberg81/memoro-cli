@@ -130,7 +130,7 @@ only the invocation differs.
 | §10 orchestration | the whole skill | fanout MVP shipped; verifier + ensemble + hierarchy pending |
 | §11 onboarding | patterns 5, 8 | shipped (drev 2) |
 | §12 token vault | patterns 2, 7, 12 | phases 1–3 shipped (drev 3, 4, 5a) |
-| §13 tool-portability | this file | phases 1–3 shipped; canonical skills/commands + Cursor pending (phases 4–5) |
+| §13 tool-portability | this file | phases 1–3 shipped; canon materialised into repos (§13c) |
 | §14 device flow | pattern 12 | shipped |
 | §15 memoro-agent MCP | pattern 14 | proposed |
 
@@ -141,8 +141,6 @@ only the invocation differs.
 | Claude Code | `CLAUDE.md` (root) + `.claude/skills/`, `.claude/commands/`, `.claude/hooks/`, `.claude/settings.json` | Full native support today |
 | Codex / GPT | `AGENTS.md` (root) | Markdown only; skills and slash commands are read manually via the prompt above |
 | Gemini CLI | none yet | `instructionsFile()` returns null pending verification of Gemini's project-instruction convention |
-| Cursor | `.cursor/rules/` (planned, §13 phase 5) | Not yet generated |
-| Aider | `CONVENTIONS.md` (planned, §13 phase 5) | Not yet generated |
 
 `mc adapter sync` materialises the wrappers from this file. `mc
 tool-switch <tool>` swaps the default tool for new `mc new` sessions
