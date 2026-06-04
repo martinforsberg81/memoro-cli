@@ -35,6 +35,9 @@ Do these in order without asking for confirmation:
    ```
    Coordinator mode active.
 
+   Targets: keep the roadmap/end-goal visible, preserve the
+   orchestrator role, and keep work projects ordered across sessions.
+
    Operating frame: I stay high-altitude (protect this context) and
    externalise build work into agent briefs (the brief is the quality
    mechanism). I'll fan detail out, not pull it in.

@@ -157,6 +157,28 @@ describe('materialiseForSession', () => {
     assert.equal(claudeStub._calls.materialise.length, 0);
   });
 
+  it('does not ask for vault unlock when the selected adapter has no provider mapping', async () => {
+    const { portal } = await bootstrapVaultWithSecrets([
+      { label: 'openai-default', token: TOKEN_CODEX, provider: 'openai' },
+    ]);
+    const cacheDeps = makeMemCacheDeps();
+    const codexStub = makeStubAdapter({
+      toolName: 'codex',
+      locations: [{ type: 'file', path: join(mcHomeDir, 'codex-should-not-write.json') }],
+    });
+    delete process.env.MC_VAULT_PASSPHRASE;
+    const res = await materialiseForSession({
+      sessionId: 'sess-codex-no-vault',
+      portal,
+      adapters: [codexStub],
+      deps: { cacheDeps },
+    });
+    assert.equal(res.ok, true, JSON.stringify(res));
+    assert.equal(res.materialised.length, 0);
+    assert.equal(codexStub._calls.materialise.length, 0);
+    assert.ok(res.skipped.some((s) => s.tool === 'codex' && s.reason === 'no-provider-mapping'));
+  });
+
   it('with cached key: materialises matching secret + writes manifest', async () => {
     const { portal, vaultKeyBytes } = await bootstrapVaultWithSecrets([
       { label: 'anthropic-default', token: TOKEN_CLAUDE, provider: 'anthropic' },
@@ -178,12 +200,13 @@ describe('materialiseForSession', () => {
     });
 
     assert.equal(res.ok, true, JSON.stringify(res));
-    assert.equal(res.materialised.length, 2);
-    // Each adapter should have been called exactly once with the right token.
+    assert.equal(res.materialised.length, 1);
+    // Claude gets the matching Anthropic token. Codex must not receive a generic
+    // OpenAI token; Codex may be using ChatGPT/Pro auth in its own auth file.
     assert.equal(claudeStub._calls.materialise.length, 1);
     assert.equal(claudeStub._calls.materialise[0].token, TOKEN_CLAUDE);
-    assert.equal(codexStub._calls.materialise.length, 1);
-    assert.equal(codexStub._calls.materialise[0].token, TOKEN_CODEX);
+    assert.equal(codexStub._calls.materialise.length, 0);
+    assert.ok(res.skipped.some((s) => s.tool === 'codex' && s.reason === 'no-provider-mapping'));
 
     // Manifest persisted at the documented location.
     const path = manifestPath('sess-ok');
@@ -191,7 +214,7 @@ describe('materialiseForSession', () => {
     const manifest = JSON.parse(readFileSync(path, 'utf8'));
     assert.equal(manifest.schema, 1);
     assert.equal(manifest.sessionId, 'sess-ok');
-    assert.equal(manifest.materialised.length, 2);
+    assert.equal(manifest.materialised.length, 1);
     // Manifest must NEVER contain the token.
     const body = readFileSync(path, 'utf8');
     assert.ok(!body.includes(TOKEN_CLAUDE), 'manifest leaked anthropic token');
@@ -225,7 +248,7 @@ describe('materialiseForSession', () => {
     assert.equal(res.materialised.length, 1);
     assert.equal(res.materialised[0].tool, 'claude');
     assert.equal(codexStub._calls.materialise.length, 0);
-    assert.ok(res.skipped.some((s) => s.tool === 'codex' && s.reason === 'no-matching-secret'));
+    assert.ok(res.skipped.some((s) => s.tool === 'codex' && s.reason === 'no-provider-mapping'));
   });
 
   it('CI path: MC_VAULT_PASSPHRASE unlocks without cache', async () => {

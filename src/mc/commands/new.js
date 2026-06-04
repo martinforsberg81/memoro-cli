@@ -19,7 +19,6 @@
  */
 import { mkdirSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
-import { spawnSync } from 'node:child_process';
 import { findEntry, upsertEntry } from '../registry.js';
 import { worktreePath, mcHome } from '../paths.js';
 import { git, isInsideRepo, primaryWorktree, branchExists } from '../git.js';
@@ -27,6 +26,7 @@ import { emitCd, parseDirectiveFlag } from '../shell-directives.js';
 import { checkAndPrintFreshInstall, ensureSentinel } from '../first-run.js';
 import { resolveToolInput } from '../../adapters/index.js';
 import { readConfig } from '../../lib/config.js';
+import { launchWithPreflight } from './launch-preflight.js';
 
 const FALLBACK_TOOL_SHORT = 'claude';
 
@@ -186,22 +186,6 @@ export async function run(rawArgv) {
     return 0;
   }
 
-  // §12d: materialise vault tokens for the session BEFORE re-exec.
-  // The materialised files must exist by the time the spawned tool
-  // reads its credentials path. Soft-degrade: if the vault is locked
-  // or unreachable, print a one-line hint to stderr and continue —
-  // the session just starts without materialised tokens.
-  try {
-    const { materialiseForSession } = await import('../vault/lifecycle.js');
-    const res = await materialiseForSession({ sessionId: opts.name, worktreePath: wt });
-    if (!res.ok && res.hint) {
-      process.stderr.write(`mc: ${res.hint}\n`);
-    }
-  } catch (err) {
-    // Materialisation must never block the session — surface but continue.
-    process.stderr.write(`mc: vault materialise failed (${err.message}); continuing without tokens\n`);
-  }
-
   // Re-exec the same mc binary in wrap mode with cwd=worktree. This
   // re-uses the existing wrap-mode plumbing (pty.spawn of claude,
   // heartbeat-loop, ws-client, registry tick) without duplicating it
@@ -209,27 +193,38 @@ export async function run(rawArgv) {
   // when claude exits, we exit too and the shell wrapper's auto-cd
   // (already emitted above) keeps the user in the worktree.
   //
-  // Adapter routing per --tool (codex, gemini, …) is deferred — for
-  // claude this is just the plain wrap path. When the adapter layer
-  // lands (§5), this re-exec becomes a per-tool launcher call.
   // Thread the soft focus across the re-exec boundary (argv is dropped by
   // the bare-`mc` wrap path). `runWrap` reads MC_GROUNDING_FOCUS at its
   // pre-launch grounding slot — the same `groundSession` seam — so `mc new`
   // grounds with focus through ONE code path, not a forked one.
-  const reexecEnv = { ...process.env };
-  if (opts.task) reexecEnv.MC_GROUNDING_FOCUS = opts.task;
-  // Route the wrap-mode launcher to the chosen tool's adapter. The
-  // registry stores the short name; the launcher resolves either form, so
-  // we pass the adapter ID when known (canonical) and fall back to the
-  // short name. claude-code stays the implicit default when unresolved.
-  const launchTool = resolveToolInput(entry.tool);
-  reexecEnv.MC_GROUNDING_TOOL = launchTool?.id || entry.tool;
-  const result = spawnSync(process.execPath, [process.argv[1]], {
-    stdio: 'inherit',
-    cwd: wt,
-    env: reexecEnv,
+  return launchNewSession({
+    entry,
+    worktreePath: wt,
+    focus: opts.task,
   });
-  return result.status ?? 0;
+}
+
+export async function launchNewSession({
+  entry,
+  worktreePath,
+  focus = null,
+  env,
+  execPath,
+  mcBin,
+  stderr,
+  deps = {},
+} = {}) {
+  return launchWithPreflight({
+    sessionName: entry.name,
+    worktreePath,
+    tool: entry.tool,
+    focus,
+    env,
+    execPath,
+    mcBin,
+    stderr,
+    deps,
+  });
 }
 
 /**

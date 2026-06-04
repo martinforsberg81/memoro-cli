@@ -57,7 +57,11 @@ const PASSPHRASE_ENV = 'MC_VAULT_PASSPHRASE';
  */
 const ADAPTER_PROVIDERS = {
   claude:  ['anthropic'],
-  codex:   ['openai'],
+  // Codex commonly authenticates through ChatGPT/Pro, stored in Codex's own
+  // auth file. A generic `provider=openai` vault secret may be for mc/dev use,
+  // not for Codex itself, so do not auto-materialise it into ~/.codex/auth.json.
+  // Add an explicit per-tool secret selection contract before enabling this.
+  codex:   [],
   // gemini stub — once the adapter lands, add ['google']
 };
 
@@ -220,45 +224,13 @@ export async function materialiseForSession({
   const ensureDir = deps.mkdir || mkdir;
   await ensureDir(stateDir(), { recursive: true, mode: 0o700 }).catch(() => {});
 
-  const portal = portalOverride || await loadDefaultPortal();
-  if (!portal) {
-    return {
-      ok: false, reason: 'no-memoro-token',
-      materialised: [], skipped: [],
-      hint: 'vault locked — tokens not materialised for this session; run `mc auth memoro` first',
-    };
-  }
-
-  const resolved = await resolveVaultKeyForLifecycle({ portal, deps });
-  if (!resolved) {
-    return {
-      ok: false, reason: 'vault-locked',
-      materialised: [], skipped: [],
-      hint: `vault locked — tokens not materialised for this session; run \`mc vault unlock\` then \`mc resume ${sessionId}\``,
-    };
-  }
-  await ensureUnlocked({ portal, authHash: resolved.authHash });
-
   const installed = adaptersOverride || detectInstalled();
   if (!installed.length) {
     return { ok: true, materialised: [], skipped: [{ reason: 'no-adapters' }] };
   }
 
-  const pull = await pullMatchingSecrets({
-    portal, vaultKey: resolved.vaultKey, installedAdapters: installed,
-  });
-  if (!pull.ok) {
-    return {
-      ok: false, reason: pull.reason, materialised: [], skipped: [],
-      hint: `vault list failed (${pull.error}); session starting without materialised tokens`,
-    };
-  }
-
-  // For each adapter, materialise the FIRST matching secret per location.
-  // Multi-account / per-session selection is §12h (deferred to phase 4).
-  const materialised = [];
   const skipped = [];
-
+  const candidates = [];
   for (const adapter of installed) {
     const providers = ADAPTER_PROVIDERS[adapter.TOOL_NAME] || [];
     if (!providers.length) {
@@ -274,6 +246,49 @@ export async function materialiseForSession({
       skipped.push({ tool: adapter.TOOL_NAME, reason: 'empty-locations' });
       continue;
     }
+    candidates.push({ adapter, providers, locations });
+  }
+
+  // Nothing in this session's selected tool needs vault materialisation.
+  // Return before touching Memoro auth or prompting for vault unlock.
+  if (!candidates.length) {
+    return { ok: true, materialised: [], skipped };
+  }
+
+  const portal = portalOverride || await loadDefaultPortal();
+  if (!portal) {
+    return {
+      ok: false, reason: 'no-memoro-token',
+      materialised: [], skipped,
+      hint: 'vault locked — tokens not materialised for this session; run `mc auth memoro` first',
+    };
+  }
+
+  const resolved = await resolveVaultKeyForLifecycle({ portal, deps });
+  if (!resolved) {
+    return {
+      ok: false, reason: 'vault-locked',
+      materialised: [], skipped,
+      hint: `vault locked — tokens not materialised for this session; run \`mc vault unlock\` then \`mc resume ${sessionId}\``,
+    };
+  }
+  await ensureUnlocked({ portal, authHash: resolved.authHash });
+
+  const pull = await pullMatchingSecrets({
+    portal, vaultKey: resolved.vaultKey, installedAdapters: candidates.map((c) => c.adapter),
+  });
+  if (!pull.ok) {
+    return {
+      ok: false, reason: pull.reason, materialised: [], skipped,
+      hint: `vault list failed (${pull.error}); session starting without materialised tokens`,
+    };
+  }
+
+  // For each adapter, materialise the FIRST matching secret per location.
+  // Multi-account / per-session selection is §12h (deferred to phase 4).
+  const materialised = [];
+
+  for (const { adapter, providers, locations } of candidates) {
     const match = pull.matches.find((m) => providers.includes(m.payload.provider));
     if (!match) {
       skipped.push({ tool: adapter.TOOL_NAME, reason: 'no-matching-secret' });

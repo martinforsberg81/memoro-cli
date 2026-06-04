@@ -100,6 +100,11 @@ describe('mc status <name>', () => {
         open_question: false,
         safety_verdict: 'SAFE_TO_END',
       }),
+      makeEntry({
+        name: 'codex-session',
+        tool: 'codex',
+        safety_verdict: 'IS_ACTIVE_NOW',
+      }),
     ]);
   });
   after(() => { rmSync(mcHome, { recursive: true, force: true }); });
@@ -133,10 +138,26 @@ describe('mc status <name>', () => {
     assert.ok(j);
     for (const k of [
       'name', 'branch', 'safety_verdict', 'dirty_files', 'ahead',
-      'last_activity', 'session_state',
+      'last_activity', 'session_state', 'tool', 'relaunch_command',
     ]) {
       assert.ok(k in j, `field ${k} missing from status output`);
     }
+  });
+
+  test('surfaces session tool + relaunch command in JSON', () => {
+    const r = runMc(['status', 'codex-session', '--json'], { env: { MC_HOME: mcHome } });
+    assert.equal(r.status, 0, `stderr:${r.stderr}`);
+    const j = parseJsonOrNull(r.stdout);
+    assert.ok(j);
+    assert.equal(j.tool, 'codex');
+    assert.equal(j.relaunch_command, 'mc resume codex-session');
+  });
+
+  test('human output includes tool + relaunch command', () => {
+    const r = runMc(['status', 'codex-session'], { env: { MC_HOME: mcHome } });
+    assert.equal(r.status, 0, `stderr:${r.stderr}`);
+    assert.match(r.stdout, /tool\s+codex/);
+    assert.match(r.stdout, /relaunch\s+mc resume codex-session/);
   });
 
   test('unknown name → non-zero exit + error', () => {

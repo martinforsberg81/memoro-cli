@@ -6,6 +6,67 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.7.5] — 2026-06-04
+
+### Added
+- `mc` now sends a real first user message into the launched coding
+  session when a repo is missing `MEMORO.md`, so the file is created
+  inside Claude/Codex only after user opt-in instead of being silently
+  seeded out-of-band.
+- `mc new`, `mc resume`, and bare `mc` share a selected-tool preflight
+  path for vault startup, grounding focus, and relaunch environment.
+  Bare `mc` now honours the persisted default from `mc tool-switch`.
+- `mc resume <name>` accepts `--codex`, `--claude`, and `--tool <name>`
+  to relaunch an existing session under a different tool after the
+  current TUI has been closed.
+- Wrap-mode runtime pieces are split into testable modules for startup
+  decisions, local session metadata, heartbeats, dispatch socket handling,
+  WebSocket command handlers, and delayed startup-message delivery.
+
+### Changed
+- `mc --help` is rewritten around the ordinary user workflow: start,
+  resume, setup, secrets, fleet/advanced, and what happens on session
+  start.
+- Bare `mc` now refuses to start a coding session in the primary
+  worktree; use `mc new <name>` for isolated work or `mc resume <name>`
+  for existing session work.
+- Coordinator grounding now states the three product targets explicitly:
+  roadmap/end-goal awareness, orchestrator-role discipline, and
+  cross-session work-project order.
+- `MEMORO.md` and the fanout plan now document the sharper product
+  boundary: mc is a continuity/grounding layer, not a PM system or
+  agent-runner.
+
+### Fixed
+- `mc tool-switch codex --dry-run` now works in ordinary repos that have
+  not materialised `docs/coding-agent-protocol.md`; it falls back to the
+  coordinator canon shipped in the installed package.
+- Adapter sync now treats an instruction file containing only mc grounding
+  as a missing wrapper, not as hand-edited drift. This fixes grounded
+  Codex sessions whose `AGENTS.md` existed before `mc adapter sync`.
+- Codex session grounding no longer writes runtime state into `AGENTS.md`;
+  the static adapter-sync wrapper stays clean and the grounding bundle is
+  delivered as Codex's initial CLI prompt instead.
+- Claude session grounding no longer writes runtime state into `CLAUDE.md`;
+  the static adapter-sync wrapper stays clean and the grounding bundle is
+  delivered via Claude Code's `--append-system-prompt` launch arg instead.
+- Startup grounding no longer tells agents to read repo-local coordinator
+  canon paths when those files are absent. Package-canon is described as
+  already supplied by mc, with `mc adapter materialise` as the explicit way
+  to put full canon files on disk.
+- `mc resume <name>` under Codex no longer falls into Codex's native
+  resume picker. mc strips the Claude-only resume signal and starts Codex
+  with the grounding bundle as its initial prompt in the selected worktree.
+- `mc resume` without a name now lists mc registry sessions across tools,
+  so Claude-started sessions remain visible after relaunching under Codex
+  or changing the default tool.
+- Codex-selected sessions no longer auto-materialise generic OpenAI vault
+  secrets into Codex auth. This avoids overwriting ChatGPT/Pro native
+  auth with a project/API token.
+- Vault startup skips unlock prompts when the selected tool has no
+  matching provider target, and `mc status <name>` now shows the stored
+  session tool plus the recommended relaunch command.
+
 ## [0.7.0] — 2026-06-01
 
 ### Added
@@ -174,5 +235,7 @@ Initial public release.
 - `SessionEnd` transcript path now read from stdin JSON for compatibility with
   current Claude Code hook payloads.
 
+[0.7.5]: https://github.com/martinforsberg81/memoro-cli/releases/tag/v0.7.5
+[0.7.0]: https://github.com/martinforsberg81/memoro-cli/releases/tag/v0.7.0
 [0.2.0]: https://github.com/martinforsberg81/memoro-cli/releases/tag/v0.2.0
 [0.1.0]: https://github.com/martinforsberg81/memoro-cli/releases/tag/v0.1.0

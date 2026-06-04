@@ -22,15 +22,25 @@
  */
 import test, { describe, after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { runMc, parseJsonOrNull } from '../_helpers/cli.js';
 import { makeTempRepo, git } from '../_helpers/git-fixture.js';
+import { launchNewSession } from '../../../src/mc/commands/new.js';
+import * as claudeAdapter from '../../../src/adapters/claude-code.js';
+import * as codexAdapter from '../../../src/adapters/codex.js';
 
 describe('mc new', () => {
   let repo;
-  beforeEach(() => { repo = makeTempRepo({ name: 'new' }); });
+  beforeEach(() => {
+    repo = makeTempRepo({ name: 'new' });
+    // These tests exercise lifecycle behavior, not first-run onboarding.
+    // Keep the sentinel explicit so the file is order-independent from
+    // tests/mc/lifecycle/first-run-cli.test.js.
+    mkdirSync(repo.mcHome, { recursive: true });
+    writeFileSync(join(repo.mcHome, '.setup-done-v1'), 'test\n');
+  });
   after(() => { repo?.cleanup(); });
 
   test('rejects missing name with non-zero exit + usage hint', () => {
@@ -178,5 +188,45 @@ describe('mc new', () => {
     const j = parseJsonOrNull(r.stdout);
     assert.ok(j);
     assert.equal(j.focus, null);
+  });
+
+  test('prelaunch for --codex uses only the codex vault adapter and canonical reexec env', async () => {
+    const materialiseCalls = [];
+    const spawnCalls = [];
+    const status = await launchNewSession({
+      entry: { name: 'codex-prelaunch', tool: 'codex' },
+      worktreePath: '/tmp/memoro-new-codex',
+      focus: 'build the first map',
+      env: { PATH: '/bin', MC_GROUNDING_TOOL: 'claude-code' },
+      execPath: '/usr/bin/node-test',
+      mcBin: '/repo/src/bin-mc.js',
+      stderr: { write() {} },
+      deps: {
+        materialiseVaultBeforeLaunch: async (arg) => {
+          materialiseCalls.push(arg);
+          return { ok: true, materialised: [], skipped: [] };
+        },
+        spawnSync: (cmd, args, opts) => {
+          spawnCalls.push({ cmd, args, opts });
+          return { status: 0 };
+        },
+      },
+    });
+
+    assert.equal(status, 0);
+    assert.equal(materialiseCalls.length, 1);
+    assert.equal(materialiseCalls[0].sessionId, 'codex-prelaunch');
+    assert.equal(materialiseCalls[0].worktreePath, '/tmp/memoro-new-codex');
+    assert.deepEqual(materialiseCalls[0].adapters, [codexAdapter]);
+    assert.notDeepEqual(materialiseCalls[0].adapters, [claudeAdapter]);
+
+    assert.equal(spawnCalls.length, 1);
+    assert.equal(spawnCalls[0].cmd, '/usr/bin/node-test');
+    assert.deepEqual(spawnCalls[0].args, ['/repo/src/bin-mc.js']);
+    assert.equal(spawnCalls[0].opts.cwd, '/tmp/memoro-new-codex');
+    assert.equal(spawnCalls[0].opts.env.MC_SESSION_NAME, 'codex-prelaunch');
+    assert.equal(spawnCalls[0].opts.env.MC_VAULT_STARTUP_DONE, '1');
+    assert.equal(spawnCalls[0].opts.env.MC_GROUNDING_TOOL, 'codex');
+    assert.equal(spawnCalls[0].opts.env.MC_GROUNDING_FOCUS, 'build the first map');
   });
 });

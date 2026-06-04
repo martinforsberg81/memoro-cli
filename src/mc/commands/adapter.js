@@ -76,6 +76,12 @@ export function stripGroundingBlock(content) {
   return next;
 }
 
+export function comparableWrapperContent(content) {
+  if (typeof content !== 'string') return content;
+  const stripped = stripGroundingBlock(content);
+  return stripped !== content && stripped.trim().length === 0 ? null : stripped;
+}
+
 const CANONICAL_PATH = 'docs/coding-agent-protocol.md';
 
 export async function run(argv) {
@@ -179,6 +185,7 @@ export function defaultDeps() {
     cwd: process.cwd(),
     repoRoot: defaultRepoRoot,
     readFileText: (abs) => existsSync(abs) ? readFileSync(abs, 'utf8') : null,
+    readCanon: () => readPackageCanon(),
     writeFileText: (abs, body) => {
       mkdirSync(dirname(abs), { recursive: true });
       writeFileSync(abs, body, { encoding: 'utf8' });
@@ -209,9 +216,9 @@ function defaultRepoRoot(cwd) {
 export async function runSyncWith(opts, deps) {
   const root = deps.repoRoot(deps.cwd);
   const canonicalAbs = join(root, CANONICAL_PATH);
-  const canonicalContent = deps.readFileText(canonicalAbs);
+  const canonicalContent = resolveCanonicalContent(deps, canonicalAbs);
   if (canonicalContent == null) {
-    const msg = `canonical source not found at ${CANONICAL_PATH} — run \`mc adapter sync\` from a memoro-cli-style repo, or restore the file.`;
+    const msg = `canonical source not found at ${CANONICAL_PATH} and no package canon is available — run \`mc adapter materialise\` or reinstall mc.`;
     if (opts.json) {
       console.log(JSON.stringify({ ok: false, error: msg }, null, 2));
     }
@@ -227,7 +234,7 @@ export async function runSyncWith(opts, deps) {
   const resolveWrapperPath = (relPath) => isAbsolute(relPath) ? relPath : join(root, relPath);
   // Strip the per-session grounding block before the byte-compare — it's
   // not adapter-sync canon, so it must not be read as drift (Phase 2).
-  const readWrapper = (abs) => stripGroundingBlock(deps.readFileText(abs));
+  const readWrapper = (abs) => comparableWrapperContent(deps.readFileText(abs));
 
   const actions = planSync({
     adapters,
@@ -283,6 +290,15 @@ export async function runSyncWith(opts, deps) {
 
   printHuman({ actions, opts, written, driftBlocked });
   return exitCode;
+}
+
+export function resolveCanonicalContent(deps, canonicalAbs) {
+  const repoLocal = deps.readFileText(canonicalAbs);
+  if (repoLocal != null) return repoLocal;
+  const canon = typeof deps.readCanon === 'function' ? deps.readCanon() : null;
+  return typeof canon?.protocol === 'string' && canon.protocol.trim().length
+    ? canon.protocol
+    : null;
 }
 
 function serialiseAction(a) {

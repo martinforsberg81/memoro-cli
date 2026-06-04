@@ -46,45 +46,40 @@ export async function writeLens(markdown) {
   return claudeMd();
 }
 
-// Grounding block markers — distinct from the lens block so the two
-// managed sections (global lens vs. per-session grounding bundle) never
-// collide in the same file. The grounding bundle is written into the
-// SESSION's cwd instruction file, not the global ~/.claude/CLAUDE.md.
+// Grounding block markers — distinct from the lens block. Current launches
+// deliver per-session grounding through Claude's launch args instead of
+// mutating project CLAUDE.md, but these markers remain exported so legacy
+// blocks left by older mc versions can be stripped safely.
 //
 // Exported so `mc adapter sync` can STRIP this per-session block before
 // byte-comparing the wrapper against canon (Phase 2 drift-fix). The
-// strip is symmetric with writeGrounding by construction — same markers,
-// one source of truth — so a grounded session's CLAUDE.md never reports
-// as drift.
+// strip is symmetric with the legacy writer by construction — same markers,
+// one source of truth — so an older grounded session's CLAUDE.md never
+// reports as drift.
 export const GROUNDING_BEGIN = '<!-- memoro:managed:grounding:begin -->';
 export const GROUNDING_END   = '<!-- memoro:managed:grounding:end -->';
 
 const projectClaudeMd = (cwd) => join(cwd, 'CLAUDE.md');
 
 /**
- * Write the grounding bundle into the SESSION's project-level CLAUDE.md
- * (in cwd), replacing any existing grounding managed block. This is the
- * generalised `writeLens` pattern — one managed block, same round-trip —
- * applied to the whole grounding bundle at the cwd scope.
- *
- * Distinct from `writeLens`, which targets the GLOBAL ~/.claude/CLAUDE.md
- * and the portrait-coding marker. Grounding is per-session and per-cwd.
+ * Deliver the grounding bundle without mutating project CLAUDE.md.
+ * CLAUDE.md is often a tracked adapter-sync wrapper; writing runtime state
+ * there leaves every Claude launch with a dirty worktree. The wrap launcher
+ * passes this message to Claude via `--append-system-prompt` before the
+ * user starts working.
  */
 export async function writeGrounding(markdown, { cwd = process.cwd() } = {}) {
-  const target = projectClaudeMd(cwd);
-  const existing = existsSync(target) ? await readFile(target, 'utf8') : '';
-  const next = upsertManagedBlock(existing, markdown, {
-    beginMarker: GROUNDING_BEGIN,
-    endMarker: GROUNDING_END,
-  });
-  await writeFile(target, next);
-  return target;
+  return {
+    path: projectClaudeMd(cwd),
+    delivery: 'launch-args',
+    message: markdown,
+  };
 }
 
 /**
- * Remove the grounding managed block from the cwd's CLAUDE.md. Leaves
- * any hand-edited content (and the lens block, which uses a different
- * marker) untouched.
+ * Remove a legacy grounding managed block from the cwd's CLAUDE.md.
+ * New launches do not write this block, but cleanup remains so old
+ * sessions and interrupted pre-0.7.5 runs can be repaired safely.
  */
 export async function removeGrounding({ cwd = process.cwd() } = {}) {
   const target = projectClaudeMd(cwd);
@@ -307,7 +302,8 @@ export function instructionsFile() {
 //
 // `bin`            — the executable to spawn in the PTY.
 // `args(argv)`     — map the user-supplied argv into the binary's args.
-//                    claude takes argv verbatim (incl. `--resume`).
+//                    claude takes argv verbatim (incl. `--resume`) and
+//                    appends grounding as an extra system prompt.
 // `heartbeatSource`— the `source` field stamped on heartbeats so peer
 //                    coordinators can tell which tool a session runs.
 // `label`          — human label for the launch banner / errors.
@@ -315,9 +311,14 @@ export function instructionsFile() {
 export function launchSpec() {
   return {
     bin: CLAUDE_BIN,
-    args: (argv = []) => [...argv],
+    args: (argv = [], { startupMessage = null } = {}) => {
+      const base = [...argv];
+      if (!startupMessage) return base;
+      return [...base, '--append-system-prompt', startupMessage];
+    },
     heartbeatSource: 'claude-code',
     label: LABEL,
+    startupMessageDelivery: 'launch-args',
     installHint: 'Install with: npm install -g @anthropic-ai/claude-code',
   };
 }

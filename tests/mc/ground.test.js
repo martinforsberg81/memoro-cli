@@ -135,8 +135,17 @@ describe('buildRole', () => {
 
   it('always includes orchestrator framing', () => {
     const out = buildRole(dir, { exists: () => false });
-    assert.match(out, /orchestrator/i);
+    assert.match(out, /coordinator/i);
     assert.match(out, /altitude/i);
+  });
+
+  it('pins the three coordinator targets in the wake-up role', () => {
+    const out = buildRole(dir, { exists: () => false });
+    assert.match(out, /Roadmap and end-goal awareness/);
+    assert.match(out, /Orchestrator-role discipline/);
+    assert.match(out, /Cross-session work-project order/);
+    assert.match(out, /plan, brief, delegate, and review/i);
+    assert.match(out, /MEMORO\.md.*session state.*worktrees.*branches.*tool choice/s);
   });
 
   it('references repo .claude sources when present', () => {
@@ -151,12 +160,13 @@ describe('buildRole', () => {
 
   it('an empty repo still gets the FULL role from package canon (Phase 5)', () => {
     // Phase 5: the canon ships in the package, so an empty repo is NO LONGER
-    // terse — it gets the full framing + canonical-source pointers. (Terse
-    // fallback now means a broken install only; see ground-role-canon.test.js.)
+    // terse — it gets the full framing, but does not get bogus repo-paths
+    // to read. Terse fallback now means a broken install only.
     const empty = mkdtempSync(join(tmpdir(), 'mc-ground-role-empty-'));
     const out = buildRole(empty);
     assert.match(out, /orchestrator/i);
-    assert.match(out, /agent-coordination\.md/);
+    assert.match(out, /Repo-local coordinator source files are not present/);
+    assert.match(out, /mc adapter materialise/);
     rmSync(empty, { recursive: true, force: true });
   });
 });
@@ -220,6 +230,29 @@ describe('groundSession', () => {
     assert.match(adapter.written.markdown, /## Who you are working with/);
     assert.match(adapter.written.markdown, /on grounding/);
     assert.equal(adapter.written.cwd, dir);
+  });
+
+  it('supports adapters that deliver grounding as a startup message', async () => {
+    const adapter = {
+      async writeGrounding(markdown, { cwd }) {
+        return { path: join(cwd, 'AGENTS.md'), delivery: 'startup-message', message: markdown };
+      },
+    };
+    const res = await groundSession({
+      cwd: dir,
+      adapter,
+      focus: 'startup delivery',
+      deps: {
+        readMapImpl: async () => '# MEMORO.md\nmap',
+        buildRoleImpl: () => 'role',
+        pullLensImpl: async () => null,
+      },
+    });
+    assert.equal(res.ok, true);
+    assert.equal(res.delivery, 'startup-message');
+    assert.match(res.path, /AGENTS\.md$/);
+    assert.match(res.message, /# Session grounding/);
+    assert.match(res.message, /startup delivery/);
   });
 
   it('soft-degrades when MEMORO.md missing — bundle without map', async () => {
@@ -306,6 +339,8 @@ describe('groundSession', () => {
     assert.match(adapter.written.markdown, /Keeping the map current/);
     assert.match(adapter.written.markdown, /seed|create/i);
     assert.match(adapter.written.markdown, /offer|opt-in|confirm|with the user/i);
+    assert.match(adapter.written.markdown, /Inspect repo evidence/i);
+    assert.match(adapter.written.markdown, /do not stop at an empty skeleton/i);
   });
 
   it('folds an UPDATE offer + in-flight nodes when MEMORO.md exists', async () => {

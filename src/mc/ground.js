@@ -353,17 +353,19 @@ export async function readMap(cwd, { readFileImpl = readFile, exists = existsSyn
 //
 // mc itself NEVER writes MEMORO.md. The lifecycle is realised as guidance
 // folded into the grounding bundle: when the map is absent the bundle
-// hands the LLM a seed template + an instruction to OFFER seeding; when
-// nodes look in-flight it surfaces them + an instruction to OFFER an
-// update. Every write is the LLM's, confirmed by the user. The default
-// grounding path stays strictly read-only — asserted in the tests.
+// hands the LLM a seed template + an instruction to OFFER seeding, then
+// build the first draft from repo evidence after opt-in; when nodes look
+// in-flight it surfaces them + an instruction to OFFER an update. Every
+// write is the LLM's, confirmed by the user. The default grounding path
+// stays strictly read-only — asserted in the tests.
 // ─────────────────────────────────────────────────────────────
 
 /**
- * An initial MEMORO.md skeleton the grounded LLM can OFFER to write when
- * the repo has no map. Mirrors this repo's reference form (north star →
- * long-term goals → nodes) and keeps the sparse-by-rule reminder so the
- * seeded file stays a map, not a docs dump. Pure + deterministic.
+ * An initial MEMORO.md skeleton the grounded LLM can use as the shape for
+ * the first repo-derived draft when the repo has no map. Mirrors this
+ * repo's reference form (north star → long-term goals → nodes) and keeps
+ * the sparse-by-rule reminder so the seeded file stays a map, not a docs
+ * dump. Pure + deterministic.
  *
  * @param {object} [arg]
  * @param {string} [arg.repoName] — threaded into the heading; generic if absent
@@ -438,7 +440,8 @@ export function detectStale(map) {
  * The read-only MEMORO.md lifecycle OFFER block folded into the bundle.
  * Pure. mc writes nothing here — this is *instructions to the LLM*:
  *
- *   - No map  → include the seed template + "OFFER to create it" (opt-in).
+ *   - No map  → include the seed template + "OFFER to create it" (opt-in),
+ *               then inspect repo evidence and write the first draft.
  *   - Map     → "you MAY offer to update it" + (if any) the in-flight
  *               nodes to re-check. Always confirmed with the user; never
  *               a silent write.
@@ -452,11 +455,22 @@ export function lifecycleGuidance({ map, repoName } = {}) {
   if (!text) {
     return [
       'This repo has **no `MEMORO.md`** yet — the intent-map that grounds every',
-      'future session. As your first move you MAY *offer* to seed one: ask the',
-      'user, and only if they agree, write the skeleton below (then fill it in',
-      'with them). Never create or overwrite `MEMORO.md` without that opt-in.',
+      'future session. As your first move inside this Claude/Codex session,',
+      'offer to create one: ask the user, and only if they agree, build the',
+      'first `MEMORO.md` inside the launched coding session. Never create or',
+      'overwrite `MEMORO.md` before that opt-in.',
       '',
-      'Suggested skeleton:',
+      'After opt-in, do not stop at an empty skeleton and do not ask broad',
+      'discovery questions before making a first draft. Inspect repo evidence',
+      'first — README, package/manifest files, docs/plans, tests, git status/log',
+      'where useful — then write a concise MEMORO.md using the skeleton shape',
+      'below. Use placeholders only for facts the repo does not support, and',
+      'after writing the file summarize assumptions/gaps for the user to correct.',
+      'Because `MEMORO.md` is cross-session project state, tell the user it',
+      'should be committed after creation so every future worktree/session',
+      'inherits the same map.',
+      '',
+      'Draft shape:',
       '',
       '```markdown',
       seedTemplate({ repoName }).trimEnd(),
@@ -469,6 +483,8 @@ export function lifecycleGuidance({ map, repoName } = {}) {
     '`MEMORO.md` is **read-only by default** — you ground in it, you do not',
     'auto-edit it. As work lands you MAY *offer* to update a node\'s status or',
     'add one, but only with the user\'s confirmation — never a silent write.',
+    'When the user approves a map change, remind them it should be committed',
+    'because it is cross-session project state.',
   ];
   if (stale.length) {
     lines.push(
@@ -530,25 +546,26 @@ export function buildRole(cwd, { exists = existsSync, canon = readPackageCanon }
     // keep the all-null default — terse fallback.
   }
 
-  // A pointer is surfaced when EITHER layer has the asset. Repo path wins as
-  // the pointer text (project override); else we point at the package copy
-  // that `mc setup`/`mc adapter sync` materialise into this repo.
-  const refs = [];
-  if (repoHas.protocol || pkg.protocol) {
-    refs.push(refLine('protocol', repoHas.protocol));
-  }
-  if (repoHas.coordination || pkg.coordination) {
-    refs.push(refLine('coordination', repoHas.coordination));
-  }
-  if (repoHas.beCoordinator || pkg.beCoordinator) {
-    refs.push(refLine('beCoordinator', repoHas.beCoordinator));
-  }
+  const repoRefs = [];
+  if (repoHas.protocol) repoRefs.push(refLine('protocol'));
+  if (repoHas.coordination) repoRefs.push(refLine('coordination'));
+  if (repoHas.beCoordinator) repoRefs.push(refLine('beCoordinator'));
+  const hasPackageCanon = !!(pkg.protocol || pkg.coordination || pkg.beCoordinator);
 
   const lines = [
-    'You are the orchestrator of this work. One human directs a fleet; this ' +
-      'session is the high-altitude seat that holds the whole — the plan, the ' +
-      'intent, the bird\'s-eye view across many changes. Protect that altitude: ' +
+    'You are the coordinator of this work. One human directs the work; this ' +
+      'session is the high-altitude seat that holds the whole — the roadmap, the ' +
+      'intent, and the bird\'s-eye view across changes. Protect that altitude: ' +
       'push implementation detail out to focused agents, keep design judgment here.',
+    '',
+    'Three targets define the role:',
+    '- **Roadmap and end-goal awareness.** Keep the north star, active project ' +
+      'nodes, and why the current work matters in view before acting.',
+    '- **Orchestrator-role discipline.** Plan, brief, delegate, and review by ' +
+      'default; only implement here when the user explicitly asks or the task is tiny.',
+    '- **Cross-session work-project order.** Treat `MEMORO.md`, session state, ' +
+      'worktrees, branches, and tool choice as one continuity system so work ' +
+      'projects survive across sessions and days.',
     '',
     'Two purposes govern the role (lose them and the loop becomes empty ritual):',
     '- **Protect the coordinator\'s context.** Your scarcest resource is your own ' +
@@ -560,36 +577,29 @@ export function buildRole(cwd, { exists = existsSync, canon = readPackageCanon }
       'critical distance a single heads-down stream loses. A worse-but-examined ' +
       'design beats a faster-but-unexamined one.',
   ];
-  if (refs.length) {
-    lines.push('', 'Canonical sources for this role (read them, don\'t make the user re-explain):');
-    for (const r of refs) lines.push(`- ${r}`);
+  if (repoRefs.length) {
+    lines.push('', 'Repo-local coordinator sources available to read:');
+    for (const r of repoRefs) lines.push(`- ${r}`);
+  } else if (hasPackageCanon) {
+    lines.push(
+      '',
+      'Repo-local coordinator source files are not present in this worktree. Do not try to read `docs/coding-agent-protocol.md`, `.claude/skills/agent-coordination.md`, or `.claude/commands/be-coordinator.md` unless they have been materialised here. The mc package canon has already supplied the coordinator role summary in this grounding; if full on-disk canon is needed, ask to run `mc adapter materialise`.',
+    );
   }
   return lines.join('\n');
 }
 
-// Pointer text for a canon asset. When the repo carries the file we point at
-// its repo-relative path (the project override the session should read); when
-// only the package has it we name the file mc materialises into the repo.
-function refLine(key, repoHas) {
-  // When only the package ships the asset (repo carries no copy), we still
-  // name the canonical file — and note it travels with mc — so the session
-  // knows the canon exists even in a repo that has never seen it. We do NOT
-  // promise a specific verb materialises it (that is the §13c follow-up); the
-  // session can read the file straight from the mc package if it needs the
-  // full text.
+// Pointer text for repo-local canon assets. Package-only canon is described
+// as already supplied by mc, not as repo paths to read, because those paths
+// may not exist in ordinary target repos.
+function refLine(key) {
   switch (key) {
     case 'protocol':
-      return repoHas
-        ? '`docs/coding-agent-protocol.md` — the project protocol'
-        : '`docs/coding-agent-protocol.md` — the project protocol (ships with mc)';
+      return '`docs/coding-agent-protocol.md` — the project protocol';
     case 'coordination':
-      return repoHas
-        ? '`.claude/skills/agent-coordination.md` — the coordinator ↔ agent loop and why it exists'
-        : '`.claude/skills/agent-coordination.md` — the coordinator ↔ agent loop and why it exists (ships with mc)';
+      return '`.claude/skills/agent-coordination.md` — the coordinator ↔ agent loop and why it exists';
     case 'beCoordinator':
-      return repoHas
-        ? '`.claude/commands/be-coordinator.md` — priming as coordinator'
-        : '`.claude/commands/be-coordinator.md` — priming as coordinator (ships with mc)';
+      return '`.claude/commands/be-coordinator.md` — priming as coordinator';
     default:
       return '';
   }
@@ -667,9 +677,11 @@ async function defaultFetchLens() {
 
 /**
  * Ground a session in place: assemble the bundle from cwd + injected
- * dep-portals and materialise it into the cwd's tool instruction file at
- * the pre-launch slot. Returns a result object; NEVER throws — grounding
- * must not block the launch.
+ * dep-portals and hand it to the selected adapter at the pre-launch slot.
+ * Adapters may materialise it into a tool instruction file or return a
+ * startup-message delivery when the native instruction file is tracked
+ * project state. Returns a result object; NEVER throws — grounding must
+ * not block the launch.
  *
  * @param {object} arg
  * @param {string} arg.cwd          — the session's working directory
@@ -733,10 +745,20 @@ export async function groundSession({ cwd, adapter, focus = null, deps = {} } = 
   const markdown = assembleBundle(parts);
 
   try {
-    const path = await adapter.writeGrounding(markdown, { cwd });
-    return { ok: true, path, parts };
+    const writeResult = await adapter.writeGrounding(markdown, { cwd });
+    if (writeResult && typeof writeResult === 'object') {
+      return {
+        ok: true,
+        path: writeResult.path || null,
+        delivery: writeResult.delivery || 'file',
+        message: writeResult.message || null,
+        parts,
+        markdown,
+      };
+    }
+    return { ok: true, path: writeResult, delivery: 'file', message: null, parts, markdown };
   } catch (err) {
-    return { ok: false, reason: err?.message || 'write failed', parts };
+    return { ok: false, reason: err?.message || 'write failed', parts, markdown };
   }
 }
 

@@ -6,9 +6,9 @@
  * safe, EVERY launchable adapter must expose the same surface with the
  * same signature:
  *
- *   - writeGrounding(markdown, { cwd })  → Promise<path>
+ *   - writeGrounding(markdown, { cwd })  → Promise<path | delivery object>
  *   - removeGrounding({ cwd })           → Promise<void>
- *   - launchSpec()                       → { bin, args, heartbeatSource, label }
+ *   - launchSpec()                       → { bin, args, heartbeatSource, label, submitEnterCount? }
  *   - GROUNDING_BEGIN / GROUNDING_END    → distinct managed-block markers
  *
  * This is the gate that keeps claude-code + codex from drifting apart.
@@ -57,12 +57,27 @@ describe('adapter contract — grounding + launch surface', () => {
         assert.equal(typeof spec.args, 'function', 'spec.args maps argv');
         assert.equal(typeof spec.heartbeatSource, 'string');
         assert.equal(typeof spec.label, 'string');
+        if ('submitEnterCount' in spec) {
+          assert.equal(typeof spec.submitEnterCount, 'number');
+          assert.ok(spec.submitEnterCount >= 1);
+        }
+        if ('submitEnterDelayMs' in spec) {
+          assert.equal(typeof spec.submitEnterDelayMs, 'number');
+          assert.ok(spec.submitEnterDelayMs >= 0);
+        }
       });
 
-      it('writeGrounding returns the on-disk path and round-trips', async () => {
+      it('writeGrounding returns a valid delivery and round-trips file delivery', async () => {
         const dir = mkdtempSync(join(tmpdir(), `mc-contract-${id}-`));
         try {
           const p = await mod.writeGrounding('# Session grounding\nx', { cwd: dir });
+          if (p && typeof p === 'object') {
+            assert.ok(['startup-message', 'launch-args'].includes(p.delivery));
+            assert.equal(typeof p.message, 'string');
+            assert.ok(p.message.includes('# Session grounding'));
+            if (p.path) assert.equal(typeof p.path, 'string');
+            return;
+          }
           assert.ok(typeof p === 'string' && p.length > 0);
           const body = readFileSync(p, 'utf8');
           assert.ok(body.includes(mod.GROUNDING_BEGIN));

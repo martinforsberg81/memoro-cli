@@ -106,8 +106,14 @@ describe('lifecycleGuidance (pure)', () => {
   it('offers to SEED when no map is present — and says never auto-write', () => {
     const out = lifecycleGuidance({ map: null, repoName: 'acme' });
     assert.match(out, /seed|create/i);
+    assert.match(out, /inside this Claude\/Codex session|launched coding session/i);
     // Must instruct the LLM to OFFER + get confirmation, never silently write.
     assert.match(out, /offer|ask|confirm|opt-in|with the user/i);
+    assert.match(out, /Inspect repo evidence/i);
+    assert.match(out, /do not stop at an empty skeleton/i);
+    assert.match(out, /first draft/i);
+    assert.match(out, /committed/i);
+    assert.match(out, /future worktree\/session|cross-session project state/i);
     assert.match(out, /MEMORO\.md/);
   });
 
@@ -125,6 +131,7 @@ describe('lifecycleGuidance (pure)', () => {
     // No stale list, but still references the opt-in maintenance posture.
     assert.ok(!/`active · L · now`/.test(out));
     assert.match(out, /MEMORO\.md/);
+    assert.match(out, /committed/i);
   });
 
   it('never throws with no args', () => {

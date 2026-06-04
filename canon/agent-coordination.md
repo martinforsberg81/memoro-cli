@@ -1,6 +1,6 @@
 ---
 name: agent-coordination
-description: Patterns for splitting work between a coordinator session and one or more implementation/spawned sessions. Load when about to delegate a multi-PR feature, when receiving a delegated task, or when planning to use mc spawn / mc fanout.
+description: Patterns for splitting work between a coordinator session and one or more implementation sessions. Load when about to delegate a multi-PR feature, when receiving a delegated task, or when using an available agent tool from a grounded coordinator session.
 ---
 
 # Coordinator ↔ Agent coordination
@@ -9,14 +9,19 @@ This skill codifies a working pattern observed on 2026-05-27 — 28: one
 coordinator session designed a 7-segment delivery, an implementation
 session executed it across 7 PRs in 24 hours, +89 tests with zero
 regressions. The pattern is now the contract for any future
-coordinator-spawned work, including future `mc fanout` / `mc spawn`
-agents (per `docs/plans/worktree-lifecycle.md` §10).
+coordinator-delegated work through whatever agent surface the host tool
+provides.
 
 ## Roles
 
 **Coordinator** — owns the plan, design intent, and merge authority.
 Holds the long context. Answers design questions. Reviews PRs.
 Doesn't write production code in this role.
+
+The coordinator has three targets: keep roadmap/end-goal awareness alive,
+preserve orchestrator-role discipline, and maintain cross-session
+work-project order through `MEMORO.md`, session state, worktrees, branches,
+and tool choice.
 
 **Implementation session (agent)** — owns the build. Reads the plan,
 asks design questions up front, codes one PR per drev segment, logs
@@ -55,10 +60,11 @@ becomes empty ritual. They are why the project fans work out to agents
    is why "just do it here" is the wrong default for non-trivial work
    even when it's available.
 
-`mc fanout` exists to serve both: it externalises intent into per-phase
-briefs (purpose 2) and keeps execution detail out of the coordinator's
-context (purpose 1). Everything else in this file is in service of these
-two. Load them before you start coordinating, not after you've drifted.
+`mc` exists to serve both by making the coordinator wake grounded. The
+coordinator session then externalises intent into briefs and sends work
+through the agent tools already available in the host. Everything else in
+this file is in service of these two purposes. Load them before you start
+coordinating, not after you've drifted.
 
 ## The 7-step loop
 
@@ -550,12 +556,11 @@ Load explicitly (via the skill mechanism or by reading the file)
 when:
 
 - You're about to use the `Agent` tool to spawn subagents
-- You're about to use `mc spawn` / `mc fanout` once §10 lands
+- You're about to use an equivalent agent surface in another host tool
 - A request mentions "coordinate", "delegate", "fan out", or
   "implementations-session"
 - You're working in `~/memoro-cli/` and reading the plan file
 
 Auto-loading depends on the harness; today's Claude Code loads
-skills on slash-command invocation. Future runtimes (notably
-`mc spawn`) should treat this file as a required preamble for any
-spawned agent.
+skills on slash-command invocation. Other runtimes should treat this
+file as a required preamble for any delegated implementation agent.

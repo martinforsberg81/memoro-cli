@@ -112,7 +112,7 @@ describe('codex adapter — materializeToken / shredToken', () => {
     const res = await codex.materializeToken({ token: SENTINEL_TOKEN, location: loc });
     assert.equal(res.ok, true);
     const parsed = JSON.parse(readFileSync(target, 'utf8'));
-    assert.equal(parsed.auth_mode, 'ApiKey');
+    assert.equal(parsed.auth_mode, 'apikey');
     assert.equal(parsed.OPENAI_API_KEY, SENTINEL_TOKEN);
     assert.equal(statSync(target).mode & 0o777, 0o600);
   });

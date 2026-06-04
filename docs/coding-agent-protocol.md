@@ -8,6 +8,12 @@ this file by `mc adapter sync` (plan §13).
 `memoro-cli` — the terminal coordinator for Memoro. Ships the `mc`,
 `memoro-cli`, and `memoro` binaries. Node 22+, ESM, `node --test`.
 
+Current product boundary: `mc` is a **minimal grounded coordinator
+runtime**, not a project-management system and not an agent runner. It
+keeps the roadmap/end-goal, coordinator role, and cross-session work
+projects visible; the launched LLM session writes briefs and uses the
+agent tools already available in its host.
+
 ## Stack + commands
 
 - Two binaries from one package (`package.json` `bin` field):
@@ -23,8 +29,8 @@ this file by `mc adapter sync` (plan §13).
 
 ## Working on this codebase as a coding agent
 
-For multi-PR work, multi-agent coordination, or any task delegated
-from a coordinator session, **load
+For multi-PR work, multi-agent coordination, or any task delegated from a
+coordinator session through the host tool's agent surface, **load
 `.claude/skills/agent-coordination.md` first**. The file lives under
 `.claude/` because Claude Code auto-discovers it there, but the
 content is tool-agnostic — Codex / GPT agents read the same file
@@ -143,5 +149,7 @@ only the invocation differs.
 | Gemini CLI | none yet | `instructionsFile()` returns null pending verification of Gemini's project-instruction convention |
 
 `mc adapter sync` materialises the wrappers from this file. `mc
-tool-switch <tool>` swaps the default tool for new `mc new` sessions
-(plan §13d).
+tool-switch <tool>` swaps the default tool for future bare `mc` / `mc new`
+starts (plan §13d). Existing sessions change tool only when relaunched with
+`mc resume <name> --codex` / `--claude`; a running TUI cannot switch tool
+in place.

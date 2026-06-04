@@ -1,13 +1,11 @@
 /**
  * Codex CLI adapter.
  *
- * Codex reads workspace-local `AGENTS.md` files, but does not currently
- * expose Claude-style SessionStart / SessionEnd hook registration. So the
- * integration model is:
- *   - managed lens block in `<workspace>/AGENTS.md`
- *   - launcher script `codex-memoro` that runs `memoro-cli codex run`
- *   - a `~/.local/bin/codex` shim so normal `codex ...` usage becomes
- *     automatic when `~/.local/bin` is ahead of the real Codex binary
+ * Codex reads workspace-local `AGENTS.md` files. mc keeps that file as
+ * static project instructions managed by `mc adapter sync`; per-session
+ * grounding is delivered as the initial CLI prompt so the tracked wrapper
+ * is not dirtied by runtime state and Codex does not open its resume picker
+ * on an empty launch.
  */
 
 import { readFile, writeFile, mkdir, chmod, rm } from 'node:fs/promises';
@@ -60,33 +58,25 @@ export const GROUNDING_END   = '<!-- memoro:managed:grounding:codex:end -->';
 const projectAgentsMd = (cwd) => join(resolveWorkspaceRoot(cwd), 'AGENTS.md');
 
 /**
- * Write the grounding bundle into the SESSION's workspace-level AGENTS.md,
- * replacing any existing codex grounding block. The bundle is the SAME
- * tool-agnostic markdown the claude-code adapter writes into CLAUDE.md —
- * `groundSession` assembles it once and routes it through whichever
- * adapter the launcher picked. Codex reads AGENTS.md natively, so this is
- * the parity of claude-code's `writeGrounding`.
- *
- * Mirrors `writeLens`: resolves the workspace root (worktrees share the
- * repo's AGENTS.md location) and best-effort git-ignores AGENTS.md so a
- * grounded session never dirties the tree.
+ * Deliver the grounding bundle without mutating AGENTS.md. AGENTS.md is
+ * now the static adapter-sync wrapper and is usually tracked project state;
+ * putting per-session runtime state there leaves a dirty worktree after
+ * every Codex launch. The shared `groundSession` seam understands this
+ * structured return value and passes `message` as Codex's initial prompt
+ * before the user's real work begins.
  */
 export async function writeGrounding(markdown, { cwd = process.cwd() } = {}) {
-  const target = projectAgentsMd(cwd);
-  const existing = existsSync(target) ? await readFile(target, 'utf8') : '';
-  const next = upsertManagedBlock(existing, markdown, {
-    beginMarker: GROUNDING_BEGIN,
-    endMarker: GROUNDING_END,
-  });
-  await writeFile(target, next);
-  await ensureCodexAgentsIgnored(resolveWorkspaceRoot(cwd));
-  return target;
+  return {
+    path: projectAgentsMd(cwd),
+    delivery: 'startup-message',
+    message: markdown,
+  };
 }
 
 /**
- * Remove the codex grounding managed block from the workspace AGENTS.md.
- * Leaves any hand-edited content (and the lens block, which uses a
- * different marker) untouched.
+ * Remove a legacy codex grounding managed block from the workspace
+ * AGENTS.md. New launches do not write this block, but cleanup remains so
+ * old sessions and interrupted pre-0.7.5 runs can be repaired safely.
  */
 export async function removeGrounding({ cwd = process.cwd() } = {}) {
   const target = projectAgentsMd(cwd);
@@ -168,20 +158,46 @@ export function instructionsFile() {
 // `bin` is null — the launcher fails high with the install hint rather
 // than spawning nothing (soft-degrade is NOT silent here, per §5).
 //
-// NOTE: codex has no `--resume` picker contract equivalent to claude's;
-// we drop the wrapper-injected `--resume` for codex and pass any other
-// argv verbatim. Interactive resume for codex is a follow-up.
+// NOTE: codex has a native `resume` picker, but mc resume must re-enter the
+// mc worktree session directly. We strip mc's internal Claude-only
+// `--resume [id]` signal and pass grounding as the initial prompt so Codex
+// starts a fresh interactive turn in the selected worktree instead of
+// opening its own picker.
 // ─────────────────────────────────────────────────────────────
+const FALLBACK_INITIAL_PROMPT = 'Start a new mc coding session in this worktree.';
+
 export function launchSpec({ resolveBinary = resolveRealCodexBinary } = {}) {
   let bin = null;
   try { bin = resolveBinary(); } catch { bin = null; }
   return {
     bin,
-    args: (argv = []) => argv.filter((a) => a !== '--resume'),
+    args: (argv = [], { startupMessage = null } = {}) => {
+      const base = stripInternalResumeArgs(argv);
+      if (startupMessage) return [...base, startupMessage];
+      if (base.length === 0) return [FALLBACK_INITIAL_PROMPT];
+      return base;
+    },
     heartbeatSource: 'codex',
     label: LABEL,
     installHint: 'Install Codex CLI from openai/codex (could not locate the codex binary)',
+    startupMessageDelivery: 'argv-prompt',
+    submitEnterCount: 2,
+    submitEnterDelayMs: 150,
   };
+}
+
+function stripInternalResumeArgs(argv = []) {
+  const out = [];
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
+    if (arg !== '--resume') {
+      out.push(arg);
+      continue;
+    }
+    const next = argv[i + 1];
+    if (next && !String(next).startsWith('-')) i += 1;
+  }
+  return out;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -251,7 +267,7 @@ function shellQuote(value) {
 //   { auth_mode, OPENAI_API_KEY, tokens, last_refresh }
 //
 // mc materialises the api-key path only: writes `OPENAI_API_KEY` +
-// `auth_mode: "ApiKey"` into the file at mode 0600. The OAuth
+// `auth_mode: "apikey"` into the file at mode 0600. The OAuth
 // `tokens` path (browser sign-in) is NOT materialised by mc — those
 // tokens come from a different flow and live under a different vault
 // kind once we add OAuth materialisation.
@@ -288,7 +304,7 @@ export async function materializeToken({ token, location, sessionId, deps = {} }
     return { ok: false, reason: `unsupported location type: ${location.type}` };
   }
   const body = JSON.stringify({
-    auth_mode: 'ApiKey',
+    auth_mode: 'apikey',
     OPENAI_API_KEY: token,
     tokens: null,
     last_refresh: new Date().toISOString(),

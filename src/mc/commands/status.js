@@ -43,6 +43,7 @@ export async function run(argv) {
     tool: entry.tool ?? null,
     model_chain: entry.model_chain ?? [],
     worktree_path: entry.worktree_path ?? null,
+    relaunch_command: `mc resume ${entry.name}`,
   };
 
   if (opts.json) {
@@ -52,6 +53,8 @@ export async function run(argv) {
 
   // Human-readable
   process.stdout.write(`${out.name}  ${out.branch}\n`);
+  process.stdout.write(`  tool          ${out.tool || 'claude'}\n`);
+  process.stdout.write(`  relaunch      ${out.relaunch_command}\n`);
   process.stdout.write(`  verdict       ${out.safety_verdict}\n`);
   process.stdout.write(`  session       ${out.session_state}\n`);
   process.stdout.write(`  dirty files   ${out.dirty_files}\n`);
