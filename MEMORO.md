@@ -70,6 +70,12 @@ the prompt, sends work through the available agent tools, and asks review agents
 when useful; mc's job is to make that session wake with the map, role, repo, and
 tool state intact.
 
+- **Session Fabric: tracked project sessions** — `active · M · now`
+  The endgame is one coordinator session plus several durable project sessions
+  (`i18n`, `automations`, `courses`, etc.), all created and tracked by mc. Tool
+  agents remain disposable inside a project session; mc owns the top-level
+  topology: parent/child, worktree, branch, focus, policy, transcript/status,
+  and MEMORO.md reconciliation. → `docs/plans/session-fabric.md`
 - **Continuity: resume work in a new session** — `active · S · now`
   mc is a **continuity layer**, not an agent-runner: the engine (agents, spawn,
   parallelism) comes free from the underlying model/tool; mc adds grounding +
@@ -86,6 +92,19 @@ tool state intact.
   nodes, role boundary, current worktree/tool, and the rule that non-trivial
   implementation gets delegated via a brief rather than done heads-down here.
   → `docs/plans/fanout-spine.md`
+- **Map reconciliation guard** — `next · S · after 0.7.5`
+  Reading MEMORO.md at startup is not enough; the session must reconcile the map
+  when work lands or drifts. mc should provide deterministic tripwires (status/end
+  hints, stale active nodes, branches without map nodes) while keeping writes
+  user-approved and avoiding a `mc map` command family. → `docs/plans/map-reconciliation.md`
+
+### Policy & safety — same freedom across tools   · serves G2, G3
+- **Unified permissions and secrets policy** — `next · M · after 0.7.5`
+  Users should configure their desired freedom and secret handling once, not
+  separately for Claude, Codex, Gemini, and future tools. mc owns the
+  tool-neutral policy intent; adapters render it into each tool's enforcement
+  surface, and vault materialisation requires explicit targets rather than
+  provider-name guessing. → `docs/plans/unified-policy.md`
 
 ### Memory loop — Memoro ↔ session   · serves G1, G3
 - **Wire the bidirectional loop** — `shipped · M · —`

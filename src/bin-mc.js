@@ -91,6 +91,7 @@ const STARTUP_MESSAGE_IDLE_MS = 1500;
 // hot path of `mc` wrap-mode boot doesn't pay for them).
 const LIFECYCLE = {
   new:           () => import('./mc/commands/new.js'),
+  spawn:         () => import('./mc/commands/spawn.js'),
   list:          () => import('./mc/commands/list.js'),
   end:           () => import('./mc/commands/end.js'),
   rename:        () => import('./mc/commands/rename.js'),
@@ -226,11 +227,13 @@ function printHelp() {
 USAGE
   mc                              Start the default grounded coding tool here
   mc new <name> [focus]           Create worktree + branch + start a session
+  mc spawn <name> "<brief>"       Create an idle tracked project session
   mc resume                       List mc sessions available to resume
   mc resume <name>                Re-enter an existing session
 
 COMMON
   mc list [--rich|--awaiting]     Show local sessions
+  mc list --tree                  Show coordinator/project session tree
   mc status <name>                Show one session's state
   mc cd <name>                    cd into a session worktree
   mc end <name> [<name>...]       End and clean up sessions
@@ -263,6 +266,7 @@ SECRETS
   mc vault rm|rotate|lock         Manage stored secrets
 
 FLEET / ADVANCED
+  mc spawn <name> "<brief>"       Create durable child project session
   mc fanout <plan.md>             Create one idle session per plan phase
   mc gather <plan-slug>           Merge phase PRs into a summary branch
   mc sessions list                List active sessions seen by Memoro

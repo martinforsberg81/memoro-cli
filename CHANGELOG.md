@@ -6,6 +6,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- `mc spawn <name> "<brief>"` creates an idle, durable project session
+  with its own worktree/branch, `.mc/brief.md`, parent coordinator,
+  focus, and optional `MEMORO.md` node metadata.
+- `mc list --tree` shows parent/child session fabric so coordinator and
+  project sessions are visible together.
+
 ## [0.7.5] — 2026-06-04
 
 ### Added

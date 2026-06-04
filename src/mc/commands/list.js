@@ -1,5 +1,5 @@
 /**
- * `mc list [--all|--rich|--json|--names]` plus filters from §9d:
+ * `mc list [--all|--rich|--json|--names|--tree]` plus filters from §9d:
  *   --awaiting   --idle [--since 6h]   --safe-to-end   --has-unmerged   --active
  */
 import { readRegistry } from '../registry.js';
@@ -27,8 +27,11 @@ export async function run(argv) {
   const reg = readRegistry();
   let entries = reg.entries.slice();
 
-  // Default scope: only "work" entries. --all expands to everything.
-  if (!opts.all) entries = entries.filter((e) => (e.kind || 'work') === 'work');
+  // Default scope: user-facing sessions. --all expands to internal/legacy
+  // orchestration entries too (fanout phases, isolation fixtures, etc.).
+  if (!opts.all && !opts.tree) {
+    entries = entries.filter((e) => ['work', 'project'].includes(e.kind || 'work'));
+  }
 
   // §9d filters — each operates on the registry's stored fields. The
   // registry is responsible for keeping them fresh (a follow-up command
@@ -58,6 +61,8 @@ export async function run(argv) {
   // refresh step would update them in place before listing. For now the
   // registry fixtures the tests inject already have these populated.
   const projected = entries.map((e) => projectEntry(e, opts.rich));
+
+  if (opts.tree) return emitTree(projected, opts);
 
   if (opts.names) {
     for (const e of projected) process.stdout.write(`${e.name}\n`);
@@ -137,6 +142,10 @@ function projectEntry(e, rich) {
     ahead: e.ahead || 0,
     last_activity: e.last_activity || null,
     open_question: !!e.open_question,
+    parent: e.parent ?? null,
+    role: e.role ?? null,
+    focus: e.focus ?? null,
+    memoro_node: e.memoro_node ?? null,
   };
   if (!rich) return base;
   return {
@@ -147,7 +156,55 @@ function projectEntry(e, rich) {
     model_chain: e.model_chain ?? [],
     worktree_path: e.worktree_path ?? null,
     parent: e.parent ?? null,
+    role: e.role ?? null,
+    focus: e.focus ?? null,
+    memoro_node: e.memoro_node ?? null,
+    brief_path: e.brief_path ?? null,
   };
+}
+
+function emitTree(entries, opts) {
+  const byParent = new Map();
+  const byName = new Map(entries.map((e) => [e.name, e]));
+  for (const e of entries) {
+    const parent = e.parent || null;
+    if (!byParent.has(parent)) byParent.set(parent, []);
+    byParent.get(parent).push(e);
+  }
+  for (const list of byParent.values()) {
+    list.sort((a, b) => String(a.name).localeCompare(String(b.name)));
+  }
+
+  const roots = (byParent.get(null) || [])
+    .concat(entries.filter((e) => e.parent && !byName.has(e.parent)))
+    .filter((e, i, arr) => arr.findIndex((x) => x.name === e.name) === i);
+
+  if (opts.json) {
+    console.log(JSON.stringify({ entries, roots: roots.map((e) => e.name) }, null, 2));
+    return 0;
+  }
+  if (roots.length === 0) {
+    process.stdout.write('(no sessions)\n');
+    return 0;
+  }
+
+  const seen = new Set();
+  const render = (entry, depth = 0) => {
+    if (seen.has(entry.name)) return;
+    seen.add(entry.name);
+    const indent = '  '.repeat(depth);
+    const bits = [
+      entry.name,
+      entry.session_state || 'unknown',
+      entry.tool || '',
+      entry.branch || '',
+    ].filter(Boolean);
+    const suffix = entry.memoro_node ? `  node=${entry.memoro_node}` : '';
+    process.stdout.write(`${indent}${bits.join('  ')}${suffix}\n`);
+    for (const child of byParent.get(entry.name) || []) render(child, depth + 1);
+  };
+  for (const root of roots) render(root, 0);
+  return 0;
 }
 
 function isWithinMinutes(isoString, minutes) {
@@ -173,7 +230,7 @@ export function parseDurationMinutes(spec) {
 
 function parseArgs(argv) {
   const opts = {
-    all: false, rich: false, json: false, names: false,
+    all: false, rich: false, json: false, names: false, tree: false,
     awaiting: false, idle: false, since: null,
     safeToEnd: false, hasUnmerged: false, active: false,
     orphans: false,
@@ -185,6 +242,7 @@ function parseArgs(argv) {
       case '--rich': opts.rich = true; break;
       case '--json': opts.json = true; break;
       case '--names': opts.names = true; break;
+      case '--tree': opts.tree = true; opts.rich = true; break;
       case '--awaiting': opts.awaiting = true; break;
       case '--idle': opts.idle = true; break;
       case '--since': opts.since = argv[++i]; break;
