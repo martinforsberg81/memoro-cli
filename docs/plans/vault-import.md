@@ -158,22 +158,24 @@ Classification is advisory. User choice wins.
   where supported and fall back to not materialising into LLM-readable paths
   where no equivalent guard exists.
 
-## Landed: Read-Only Scan
+## Landed: Read-Only Scan + Import Dry-Run
 
-Shipped in the first implementation slice:
+Shipped:
 
 1. Pure dotenv parser and classifier.
 2. `mc vault scan [file...] [--json]` for dotenv-shaped files, including
    `.env` and `.dev.vars`.
-3. JSON and human output include key metadata only, never values.
-4. Tests assert sentinel secret bytes never appear in scan output.
+3. `mc vault import <file> --dry-run [--json]` previews selected secrets,
+   deterministic vault labels, and the proposed `.mc/secrets.json` binding.
+4. JSON and human output include key metadata only, never values.
+5. Tests assert sentinel secret bytes never appear in scan/import output.
 
-No import/write path exists yet.
+No real import/write path exists yet. A non-dry-run `mc vault import` refuses
+before any mutation path can run.
 
 ## Next Build Slice
 
-1. Add `mc vault import <file> --dry-run --json`.
-2. Derive deterministic labels without storing values.
-3. Show the proposed `.mc/secrets.json` binding shape.
-4. Keep mutation disabled until explicit non-dry-run import is designed and
-   reviewed.
+1. Add real `mc vault import <file>` behind explicit confirmation.
+2. Store selected values in the encrypted vault using the dry-run labels.
+3. Keep `.mc/secrets.json` writes disabled until binding persistence is reviewed.
+4. Preserve the no-value-output invariant across success and every error path.

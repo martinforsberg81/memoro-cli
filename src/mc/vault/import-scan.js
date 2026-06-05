@@ -78,6 +78,43 @@ export function scanVaultImportFiles(paths = [], { cwd = process.cwd() } = {}) {
   };
 }
 
+export function buildVaultImportDryRun(file, { cwd = process.cwd(), repoName = null } = {}) {
+  const scan = scanVaultImportFiles([file], { cwd });
+  const scanned = scan.files[0];
+  if (!scanned?.ok) {
+    return {
+      ok: false,
+      dry_run: true,
+      error: scanned?.error || 'scan failed',
+      file,
+      writes: [],
+    };
+  }
+
+  const repo = normaliseRepoName(repoName || basename(cwd) || 'repo');
+  const provider = providerForFormat(scanned.format);
+  const candidates = scanned.keys.map((k) => {
+    const selected = k.classification === 'secret' && k.confidence === 'high';
+    return {
+      ...k,
+      selected,
+      label: selected ? `${provider}:${repo}:${k.name}` : null,
+    };
+  });
+  const selected = candidates.filter((k) => k.selected);
+
+  return {
+    ok: true,
+    dry_run: true,
+    file: scanned.file,
+    format: scanned.format,
+    repo,
+    candidates,
+    binding: buildBindingPreview(scanned, selected),
+    writes: [],
+  };
+}
+
 export function classifyEnvEntry({ key, value }) {
   const k = String(key || '');
   const v = String(value || '').trim();
@@ -207,4 +244,29 @@ function formatForPath(file) {
 
 function resolveInputPath(file, cwd) {
   return isAbsolute(file) ? file : join(cwd, file);
+}
+
+function providerForFormat(format) {
+  return format === 'wrangler-dotenv' ? 'wrangler' : 'env';
+}
+
+function buildBindingPreview(scanned, selected) {
+  return {
+    version: 1,
+    sources: [
+      {
+        file: scanned.file,
+        format: 'dotenv',
+        materialise: 'file',
+        keys: Object.fromEntries(selected.map((k) => [k.name, k.label])),
+      },
+    ],
+  };
+}
+
+function normaliseRepoName(name) {
+  const s = String(name || 'repo').trim().toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return s || 'repo';
 }

@@ -262,6 +262,8 @@ SECRETS
   mc vault setup                  Create a Memoro-account token vault
   mc vault unlock                 Unlock and cache the vault key briefly
   mc vault scan [file...]         Scan dotenv files for import candidates
+  mc vault import <file> --dry-run
+                                  Preview value-free vault import bindings
   mc vault set <label>            Store a secret
   mc vault list                   List secret labels, never values
   mc vault get <label>            Print a secret value, with confirmation

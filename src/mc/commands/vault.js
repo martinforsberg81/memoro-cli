@@ -50,7 +50,7 @@ import {
   readCachedVaultKey,
   inspectCachedVaultKey,
 } from '../vault/key-cache.js';
-import { scanVaultImportFiles } from '../vault/import-scan.js';
+import { buildVaultImportDryRun, scanVaultImportFiles } from '../vault/import-scan.js';
 
 const PASSPHRASE_ENV = 'MC_VAULT_PASSPHRASE';
 
@@ -64,6 +64,7 @@ const VERBS = {
   lock:              { handler: cmdLock,             help: 'End the server-side vault session' },
   status:            { handler: cmdStatus,           help: 'Show vault setup + unlock state' },
   scan:              { handler: cmdScan,             help: 'Scan local dotenv files for import candidates (no values)' },
+  import:            { handler: cmdImport,           help: 'Preview dotenv secret import into the vault (dry-run only)' },
   list:              { handler: cmdList,             help: 'List secret labels (no values)' },
   get:               { handler: cmdGet,              help: 'Print a secret (prompts for confirmation)' },
   set:               { handler: cmdSet,              help: 'Store a new secret' },
@@ -113,6 +114,7 @@ VERBS`);
   console.log(`
 COMMON OPTIONS
   --json              Machine-readable output
+  --dry-run           Preview planned writes without mutating vault/files
   --no-confirm        Skip confirmation prompts (use with care)
   --type <kind>       For \`set\` and \`list\`: ${MC_SECRET_KINDS.join(' | ')}
 
@@ -170,6 +172,55 @@ function printScan(scan) {
       console.log(`  ${k.name.padEnd(width)}  ${label}  line ${k.line} - ${k.reason}`);
     }
   }
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// Verb: import
+// ────────────────────────────────────────────────────────────────────────
+
+async function cmdImport(argv, opts = {}) {
+  const flags = parseFlags(argv);
+  if (flags.positional.length !== 1) {
+    emit(flags.json, { ok: false, error: 'usage: mc vault import <file> --dry-run [--json]' });
+    return 2;
+  }
+  if (!flags.dryRun) {
+    emit(flags.json, { ok: false, error: '`mc vault import` is dry-run only in this version; rerun with --dry-run' });
+    return 2;
+  }
+
+  const plan = buildVaultImportDryRun(flags.positional[0], { cwd: opts.cwd || process.cwd() });
+  if (flags.json) {
+    console.log(JSON.stringify(plan));
+  } else {
+    printImportDryRun(plan);
+  }
+  return plan.ok ? 0 : 1;
+}
+
+function printImportDryRun(plan) {
+  if (!plan.ok) {
+    console.error(`mc vault: ${plan.error}`);
+    return;
+  }
+
+  const selected = plan.candidates.filter((k) => k.selected);
+  console.log(`Dry run: ${selected.length} secret${selected.length === 1 ? '' : 's'} would be imported from ${plan.file}`);
+  if (!plan.candidates.length) {
+    console.log('  no keys found');
+    return;
+  }
+
+  const width = Math.max(8, ...plan.candidates.map((k) => k.name.length));
+  for (const k of plan.candidates) {
+    if (k.selected) {
+      console.log(`  ${k.name.padEnd(width)}  import as ${k.label}`);
+    } else {
+      console.log(`  ${k.name.padEnd(width)}  skip (${k.classification}, ${k.confidence})`);
+    }
+  }
+  console.log('\nBinding preview: .mc/secrets.json');
+  console.log(JSON.stringify(plan.binding, null, 2));
 }
 
 // ────────────────────────────────────────────────────────────────────────
@@ -1057,6 +1108,7 @@ function bytesToBase64(bytes) {
  * Tiny flag parser shared across verbs. Positional args (no leading -)
  * are collected into .positional. Flags follow the conventions:
  *   --json
+ *   --dry-run
  *   --no-confirm
  *   --stdin
  *   --type <kind>
@@ -1073,6 +1125,7 @@ function parseFlags(argv) {
   const out = {
     positional: [],
     json: false,
+    dryRun: false,
     noConfirm: false,
     stdin: false,
     type: null,
@@ -1088,6 +1141,7 @@ function parseFlags(argv) {
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--json') out.json = true;
+    else if (a === '--dry-run') out.dryRun = true;
     else if (a === '--no-confirm') out.noConfirm = true;
     else if (a === '--stdin') out.stdin = true;
     else if (a === '--type') out.type = argv[++i];

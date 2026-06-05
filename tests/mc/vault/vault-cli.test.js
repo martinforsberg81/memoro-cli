@@ -31,7 +31,7 @@ describe('mc vault — subprocess wiring', () => {
     assert.match(res.stdout, /mc vault/);
     assert.match(res.stdout, /VERBS/);
     // The help must include every shipped verb name.
-    for (const verb of ['setup', 'unlock', 'lock', 'scan', 'list', 'get', 'set', 'rm', 'rotate', 'status', 'change-password']) {
+    for (const verb of ['setup', 'unlock', 'lock', 'scan', 'import', 'list', 'get', 'set', 'rm', 'rotate', 'status', 'change-password']) {
       assert.ok(res.stdout.includes(verb), `help missing verb: ${verb}`);
     }
   });
@@ -81,6 +81,38 @@ describe('mc vault — subprocess wiring', () => {
       ['CLOUDFLARE_API_TOKEN', 'secret'],
       ['PUBLIC_API_URL', 'config'],
     ]);
+  });
+
+  it('`mc vault import --dry-run --json` previews bindings without a vault login or secret leak', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mc-vault-import-cli-'));
+    const secret = 'pancakes-and-syrup-9af237';
+    writeFileSync(join(dir, '.env'), `OPENAI_API_KEY=${secret}\nPUBLIC_API_URL=http://localhost:8787\n`);
+
+    const res = runMc(['vault', 'import', '.env', '--dry-run', '--json'], { cwd: dir });
+    assert.equal(res.status, 0, res.stderr);
+    assert.equal(res.stderr, '');
+    assert.ok(!res.stdout.includes(secret), `import dry-run leaked secret value: ${res.stdout}`);
+
+    const parsed = JSON.parse(res.stdout);
+    assert.equal(parsed.ok, true);
+    assert.equal(parsed.dry_run, true);
+    assert.deepEqual(parsed.candidates.map((k) => [k.name, k.selected]), [
+      ['OPENAI_API_KEY', true],
+      ['PUBLIC_API_URL', false],
+    ]);
+    assert.equal(parsed.binding.sources[0].keys.OPENAI_API_KEY.endsWith(':OPENAI_API_KEY'), true);
+    assert.deepEqual(parsed.writes, []);
+  });
+
+  it('`mc vault import` without --dry-run refuses before mutation work exists', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mc-vault-import-refuse-'));
+    writeFileSync(join(dir, '.env'), 'OPENAI_API_KEY=secret\n');
+
+    const res = runMc(['vault', 'import', '.env', '--json'], { cwd: dir });
+    assert.equal(res.status, 2);
+    const parsed = JSON.parse(res.stdout);
+    assert.equal(parsed.ok, false);
+    assert.match(parsed.error, /dry-run only/);
   });
 });
 
