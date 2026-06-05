@@ -25,12 +25,14 @@ import { fileURLToPath } from 'node:url';
 
 import { getSecret } from '../../lib/keychain.js';
 import { ACCOUNTS } from '../../commands/auth.js';
+import { readConfig } from '../../lib/config.js';
 import * as claudeCode from '../../adapters/claude-code.js';
 import * as codex from '../../adapters/codex.js';
 import { readRegistry } from '../registry.js';
 import { mcHome, mcHomeExists } from '../paths.js';
 import { scanDaemons } from '../orphan-daemons.js';
 import { inspectCachedVaultKey } from '../vault/key-cache.js';
+import { formatPolicySummary, readRepoPolicy, resolveEffectivePolicy } from '../policy.js';
 
 const TOOL_ADAPTERS = {
   claude: { adapter: claudeCode, label: 'claude' },
@@ -192,7 +194,7 @@ async function runStatus(argv) {
   const opts = parseStatusArgs(argv);
   if (opts.error) { console.error(`mc: ${opts.error}`); return 2; }
 
-  const [memoro, claude, codexStatus, gemini, shell, workspace, vault] = await Promise.all([
+  const [memoro, claude, codexStatus, gemini, shell, workspace, vault, config] = await Promise.all([
     probeMemoro(),
     safeStatus(claudeCode),
     safeStatus(codex),
@@ -200,7 +202,9 @@ async function runStatus(argv) {
     probeShellWrapper(),
     probeWorkspace(),
     probeVault(),
+    safeReadConfig(),
   ]);
+  const policy = buildAuthPolicyReport({ config, repoPolicy: readRepoPolicy() });
 
   const report = {
     memoro,
@@ -212,6 +216,7 @@ async function runStatus(argv) {
     shell_wrapper: shell,
     workspace,
     vault,
+    policy,
   };
 
   if (opts.json) {
@@ -262,6 +267,13 @@ function printHuman(r) {
       process.stdout.write(`    → Run \`mc vault unlock\` to cache the key for 15 min\n`);
     }
   }
+  if (r.policy) {
+    process.stdout.write(`\nPolicy:\n`);
+    process.stdout.write(`  default tool ${r.policy.default_tool || 'claude-code'}\n`);
+    for (const row of r.policy.tools || []) {
+      process.stdout.write(`  ${formatPolicySummary(row.effective_policy)}\n`);
+    }
+  }
   process.stdout.write(`\nWorkspace:\n`);
   process.stdout.write(`  ${tick(r.workspace.mc_home_exists)} MC_HOME = ${r.workspace.mc_home}\n`);
   process.stdout.write(`  ${tick(true)} Registry: ${r.workspace.session_count} session${r.workspace.session_count === 1 ? '' : 's'}\n`);
@@ -271,6 +283,24 @@ function printHuman(r) {
     if (r.workspace.stale_pidfile_count > 0) bits.push(`${r.workspace.stale_pidfile_count} stale pidfile${r.workspace.stale_pidfile_count === 1 ? '' : 's'}`);
     process.stdout.write(`  ⚠ ${bits.join(', ')} — run \`mc gc --reap-orphans\`\n`);
   }
+}
+
+async function safeReadConfig() {
+  try {
+    return await readConfig();
+  } catch {
+    return {};
+  }
+}
+
+export function buildAuthPolicyReport({ config = {}, repoPolicy = null } = {}) {
+  return {
+    default_tool: config.defaultTool || 'claude-code',
+    tools: ['claude', 'codex', 'gemini'].map((tool) => ({
+      tool,
+      effective_policy: resolveEffectivePolicy({ tool, repoPolicy, config }),
+    })),
+  };
 }
 
 export async function probeMemoro() {

@@ -4,7 +4,12 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { readRepoPolicy, resolveEffectivePolicy } from '../../src/mc/policy.js';
+import {
+  formatPolicySummary,
+  readRepoPolicy,
+  resolveEffectivePolicy,
+  unsupportedPermissionFields,
+} from '../../src/mc/policy.js';
 
 describe('resolveEffectivePolicy', () => {
   test('Codex defaults to tool-owned native auth and no vault target', () => {
@@ -98,6 +103,23 @@ describe('resolveEffectivePolicy', () => {
     assert.deepEqual(stripRenderTarget(codex), stripRenderTarget(claude));
     assert.equal(claude.permissions.rendered_for, 'claude');
     assert.equal(codex.permissions.rendered_for, 'codex');
+  });
+});
+
+describe('policy formatting helpers', () => {
+  test('summarises native-auth and unsupported permission fields', () => {
+    const policy = resolveEffectivePolicy({ entry: { tool: 'codex' } });
+    assert.deepEqual(unsupportedPermissionFields(policy), [
+      'profile',
+      'workspace',
+      'network',
+      'approval',
+      'secrets',
+    ]);
+    assert.equal(
+      formatPolicySummary(policy),
+      'codex: native auth owned by tool; no vault target; permissions unsupported: profile, workspace, network, approval, secrets',
+    );
   });
 });
 

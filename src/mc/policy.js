@@ -68,6 +68,24 @@ export function readRepoPolicy({ worktreePath = null, cwd = process.cwd(), exist
   }
 }
 
+export function formatPolicySummary(policy) {
+  const tool = policy?.permissions?.rendered_for || 'claude';
+  const targets = policy?.secrets?.materialisation_targets || [];
+  const unsupported = unsupportedPermissionFields(policy);
+  const supportSuffix = unsupported.length ? `; permissions unsupported: ${unsupported.join(', ')}` : '';
+  if (!targets.length) return `${tool}: native auth owned by tool; no vault target${supportSuffix}`;
+  const labels = targets.map((t) => `${t.provider || t.tool}/${t.source || 'target'}`).join(', ');
+  return `${tool}: vault targets ${labels}${supportSuffix}`;
+}
+
+export function unsupportedPermissionFields(policy) {
+  const permissions = policy?.adapter_support?.permissions;
+  if (!permissions || typeof permissions !== 'object') return [];
+  return Object.entries(permissions)
+    .filter(([, support]) => support === 'unsupported')
+    .map(([field]) => field);
+}
+
 function selectPolicySource({ entryPolicy, repoPolicy, globalPolicy }) {
   if (entryPolicy && typeof entryPolicy === 'object') return { source: 'session', policy: entryPolicy };
   if (repoPolicy && typeof repoPolicy === 'object') return { source: 'repo', policy: repoPolicy };

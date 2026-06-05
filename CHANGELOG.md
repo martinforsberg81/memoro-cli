@@ -24,6 +24,9 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   global mc config, then defaults.
 - `mc status` now labels permission profile fields unsupported per adapter
   until mc has explicit, reversible renderer support for that tool.
+- `mc auth status` now includes the same effective policy/secrets report per
+  tool, including native-auth ownership, vault targets, repo policy precedence,
+  and unsupported permission fields.
 
 ## [0.7.5] — 2026-06-04
 

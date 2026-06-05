@@ -99,12 +99,14 @@ tool state intact.
   user-approved and avoiding a `mc map` command family. → `docs/plans/map-reconciliation.md`
 
 ### Policy & safety — same freedom across tools   · serves G2, G3
-- **Unified permissions and secrets policy** — `next · M · after 0.7.5`
+- **Unified permissions and secrets policy** — `active · M · now`
   Users should configure their desired freedom and secret handling once, not
-  separately for Claude, Codex, Gemini, and future tools. mc owns the
-  tool-neutral policy intent; adapters render it into each tool's enforcement
-  surface, and vault materialisation requires explicit targets rather than
-  provider-name guessing. → `docs/plans/unified-policy.md`
+  separately for Claude, Codex, Gemini, and future tools. P1-P3 are landed:
+  status now explains effective policy, explicit vault targets prevent
+  provider-name guessing, and permission profile precedence is visible as
+  `session > repo > global > default` with unsupported adapter fields labelled
+  honestly. Next is narrow Phase 4 adapter rendering, one reversible tool
+  surface at a time. → `docs/plans/unified-policy.md`
 
 ### Memory loop — Memoro ↔ session   · serves G1, G3
 - **Wire the bidirectional loop** — `shipped · M · —`

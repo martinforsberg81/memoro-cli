@@ -74,6 +74,8 @@ Surfaces:
 
 - `mc status <name> --json` includes `effective_policy`.
 - human `mc status <name>` shows a short `policy` line.
+- `mc auth status --json` includes a per-tool policy/secrets report for the
+  current repo/global default context.
 - launch intro may show only a terse summary later; start with status to avoid
   noisy TUI launches.
 
@@ -169,6 +171,7 @@ This phase likely differs per tool and should be built adapter by adapter.
 ## Acceptance
 
 - `mc auth status` / `mc status` can explain what policy/secrets would apply.
+  Landed for visibility.
 - Codex ChatGPT/Pro auth survives mc launches unchanged.
 - Claude/Anthropic vault materialisation still works when explicitly configured.
 - Future adapters can add policy rendering without changing the user-facing
