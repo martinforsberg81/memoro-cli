@@ -49,6 +49,7 @@ import { installUpdateCommand } from './adapters/claude-code.js';
 import { primaryWorktree } from './mc/git.js';
 import {
   materialiseVaultForWrap,
+  resolvePolicyForWrap,
   resolveRequestedToolForWrap,
   resolveWrapFocus,
   startupMessageFromGroundingParts,
@@ -362,6 +363,12 @@ async function runWrap(argv, { label = null } = {}) {
   }
 
   const cwd = process.cwd();
+  const effectivePolicy = resolvePolicyForWrap({
+    sessionName: process.env.MC_SESSION_NAME || null,
+    cwd,
+    tool: launch.shortName,
+    config,
+  });
   const repoContext = await getRepoContext(cwd);
   if (!repoContext) {
     console.error('mc: not inside a git repository. Coordinator is gated on repos.');
@@ -465,7 +472,10 @@ async function runWrap(argv, { label = null } = {}) {
   }));
 
   // ─── Spawn the chosen tool in a PTY we own ───────────────────────────────
-  const spawnArgs = launchSpec.args(argv, { startupMessage: groundingLaunchMessage });
+  const spawnArgs = launchSpec.args(argv, {
+    startupMessage: groundingLaunchMessage,
+    effectivePolicy,
+  });
   if (launchSpec.startupMessageDelivery === 'argv-prompt') {
     startupMessage = null;
   }

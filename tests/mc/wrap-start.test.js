@@ -3,6 +3,7 @@ import test, { describe } from 'node:test';
 
 import {
   materialiseVaultForWrap,
+  resolvePolicyForWrap,
   resolveRequestedToolForWrap,
   resolveWrapFocus,
   startupMessageFromGroundingParts,
@@ -45,6 +46,45 @@ describe('resolveWrapFocus', () => {
 
   test('returns null when no focus source is available', () => {
     assert.equal(resolveWrapFocus({ label: null, env: {} }), null);
+  });
+});
+
+describe('resolvePolicyForWrap', () => {
+  test('uses session entry + repo policy + explicit launch tool', () => {
+    const policy = resolvePolicyForWrap({
+      sessionName: 'data',
+      cwd: '/repo',
+      tool: 'codex',
+      config: { policy: { permissions: { workspace: 'read-only' } } },
+      deps: {
+        findEntry: (name) => ({
+          name,
+          tool: 'claude',
+          policy: { permissions: { approval: 'never' } },
+        }),
+        readRepoPolicy: () => ({ permissions: { workspace: 'full' } }),
+      },
+    });
+    assert.equal(policy.permissions.rendered_for, 'codex');
+    assert.equal(policy.permissions.source, 'session');
+    assert.equal(policy.permissions.approval, 'never');
+    assert.equal(policy.permissions.workspace, 'worktree');
+    assert.deepEqual(policy.explicit_permissions, ['approval']);
+  });
+
+  test('falls through to repo policy when there is no session entry', () => {
+    const policy = resolvePolicyForWrap({
+      sessionName: 'missing',
+      cwd: '/repo',
+      tool: 'codex',
+      deps: {
+        findEntry: () => null,
+        readRepoPolicy: () => ({ permissions: { workspace: 'read-only' } }),
+      },
+    });
+    assert.equal(policy.permissions.source, 'repo');
+    assert.equal(policy.permissions.workspace, 'read-only');
+    assert.deepEqual(policy.explicit_permissions, ['workspace']);
   });
 });
 

@@ -5,6 +5,8 @@
  * and process lifecycle; this module owns the small contracts that must be
  * stable across bare `mc`, `mc new`, and `mc resume`.
  */
+import { findEntry } from './registry.js';
+import { readRepoPolicy, resolveEffectivePolicy } from './policy.js';
 
 export function resolveRequestedToolForWrap({ env = process.env, config = {} } = {}) {
   return env.MC_GROUNDING_TOOL || config.defaultTool || 'claude-code';
@@ -12,6 +14,21 @@ export function resolveRequestedToolForWrap({ env = process.env, config = {} } =
 
 export function resolveWrapFocus({ label = null, env = process.env } = {}) {
   return label || env.MC_GROUNDING_FOCUS || null;
+}
+
+export function resolvePolicyForWrap({
+  sessionName = null,
+  cwd = process.cwd(),
+  tool = null,
+  config = {},
+  deps = {},
+} = {}) {
+  const lookupEntry = deps.findEntry || findEntry;
+  const readPolicy = deps.readRepoPolicy || readRepoPolicy;
+  const resolvePolicy = deps.resolveEffectivePolicy || resolveEffectivePolicy;
+  const entry = sessionName ? (lookupEntry(sessionName) || {}) : {};
+  const repoPolicy = readPolicy({ worktreePath: cwd, cwd });
+  return resolvePolicy({ entry, tool, repoPolicy, config });
 }
 
 export async function materialiseVaultForWrap({

@@ -169,8 +169,9 @@ describe('mc status <name>', () => {
     assert.equal(j.relaunch_command, 'mc resume codex-session');
     assert.equal(j.effective_policy.permissions.rendered_for, 'codex');
     assert.equal(j.effective_policy.adapter_support.tool, 'codex');
+    assert.equal(j.effective_policy.adapter_support.permissions.workspace, 'supported');
     assert.equal(j.effective_policy.adapter_support.permissions.network, 'unsupported');
-    assert.equal(j.effective_policy.adapter_support.permissions.approval, 'unsupported');
+    assert.equal(j.effective_policy.adapter_support.permissions.approval, 'supported');
     assert.equal(j.effective_policy.secrets.vault_required, false);
     assert.equal(j.effective_policy.secrets.native_auth_owned_by_tool, true);
     assert.deepEqual(j.effective_policy.secrets.materialisation_targets, []);
@@ -182,7 +183,7 @@ describe('mc status <name>', () => {
     assert.match(r.stdout, /tool\s+codex/);
     assert.match(r.stdout, /relaunch\s+mc resume codex-session/);
     assert.match(r.stdout, /policy\s+codex: native auth owned by tool; no vault target/);
-    assert.match(r.stdout, /permissions unsupported: profile, workspace, network, approval, secrets/);
+    assert.match(r.stdout, /permissions unsupported: profile, network, secrets/);
   });
 
   test('Claude status reports legacy Anthropic vault target', () => {

@@ -64,7 +64,9 @@ describe('mc auth status', () => {
     const claude = j.policy.tools.find((t) => t.tool === 'claude').effective_policy;
     assert.equal(codex.secrets.vault_required, false);
     assert.equal(codex.secrets.native_auth_owned_by_tool, true);
+    assert.equal(codex.adapter_support.permissions.workspace, 'supported');
     assert.equal(codex.adapter_support.permissions.network, 'unsupported');
+    assert.equal(codex.adapter_support.permissions.approval, 'supported');
     assert.equal(claude.secrets.vault_required, true);
     assert.equal(claude.secrets.materialisation_targets[0].provider, 'anthropic');
   });

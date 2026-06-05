@@ -105,8 +105,9 @@ tool state intact.
   status now explains effective policy, explicit vault targets prevent
   provider-name guessing, and permission profile precedence is visible as
   `session > repo > global > default` with unsupported adapter fields labelled
-  honestly. Next is narrow Phase 4 adapter rendering, one reversible tool
-  surface at a time. → `docs/plans/unified-policy.md`
+  honestly. Phase 4a has started with Codex launch-arg rendering for explicit
+  `workspace`/`approval` only; default policy renders no flags, Claude remains
+  visibility-only until its mapping is defensible. → `docs/plans/unified-policy.md`
 
 ### Memory loop — Memoro ↔ session   · serves G1, G3
 - **Wire the bidirectional loop** — `shipped · M · —`

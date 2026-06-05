@@ -33,6 +33,15 @@ export const LABEL = 'Claude Code';
 // Prefer reading the return value of writeLens / installHooks for the
 // effective path after a call.
 export const CONFIG_PATH = claudeMd();
+export const POLICY_SUPPORT = Object.freeze({
+  permissions: Object.freeze({
+    profile: 'unsupported',
+    workspace: 'unsupported',
+    network: 'unsupported',
+    approval: 'unsupported',
+    secrets: 'unsupported',
+  }),
+});
 
 /**
  * Write the lens markdown into the user's Claude Code config, replacing

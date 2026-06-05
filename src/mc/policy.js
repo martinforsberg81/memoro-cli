@@ -7,6 +7,8 @@
  */
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { POLICY_SUPPORT as CLAUDE_POLICY_SUPPORT } from '../adapters/claude-code.js';
+import { POLICY_SUPPORT as CODEX_POLICY_SUPPORT } from '../adapters/codex.js';
 
 const LEGACY_PROVIDER_TARGETS = Object.freeze({
   claude: [{ provider: 'anthropic', source: 'legacy-provider-mapping', target_auth_mode: 'api_key' }],
@@ -27,12 +29,18 @@ const PERMISSION_FIELDS = Object.freeze(Object.keys(DEFAULT_PERMISSIONS));
 export function resolveEffectivePolicy({ entry = {}, tool = null, repoPolicy = null, config = {} } = {}) {
   const selectedTool = normaliseTool(tool || entry.tool || config.defaultTool || 'claude');
   const selected = selectPolicySource({ entryPolicy: entry.policy, repoPolicy, globalPolicy: config.policy });
+  const selectedPermissions = selected.policy?.permissions && typeof selected.policy.permissions === 'object'
+    ? selected.policy.permissions
+    : {};
   const permissions = {
     ...DEFAULT_PERMISSIONS,
-    ...(selected.policy?.permissions && typeof selected.policy.permissions === 'object' ? selected.policy.permissions : {}),
+    ...selectedPermissions,
     source: selected.source,
     rendered_for: selectedTool,
   };
+  const explicit_permissions = PERMISSION_FIELDS.filter((field) => (
+    Object.prototype.hasOwnProperty.call(selectedPermissions, field)
+  ));
 
   const legacyTargets = LEGACY_PROVIDER_TARGETS[selectedTool] || [];
   const materialisationTargets = legacyTargets.map((target) => ({
@@ -42,6 +50,7 @@ export function resolveEffectivePolicy({ entry = {}, tool = null, repoPolicy = n
 
   return {
     permissions,
+    explicit_permissions,
     adapter_support: {
       tool: selectedTool,
       permissions: permissionSupportForTool(selectedTool),
@@ -94,7 +103,14 @@ function selectPolicySource({ entryPolicy, repoPolicy, globalPolicy }) {
 }
 
 function permissionSupportForTool(_tool) {
-  return Object.fromEntries(PERMISSION_FIELDS.map((field) => [field, 'unsupported']));
+  const support = {
+    claude: CLAUDE_POLICY_SUPPORT,
+    codex: CODEX_POLICY_SUPPORT,
+  }[_tool];
+  return {
+    ...Object.fromEntries(PERMISSION_FIELDS.map((field) => [field, 'unsupported'])),
+    ...(support?.permissions || {}),
+  };
 }
 
 function normaliseTool(tool) {

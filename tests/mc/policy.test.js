@@ -20,12 +20,13 @@ describe('resolveEffectivePolicy', () => {
       tool: 'codex',
       permissions: {
         profile: 'unsupported',
-        workspace: 'unsupported',
+        workspace: 'supported',
         network: 'unsupported',
-        approval: 'unsupported',
+        approval: 'supported',
         secrets: 'unsupported',
       },
     });
+    assert.deepEqual(policy.explicit_permissions, []);
     assert.equal(policy.secrets.vault_required, false);
     assert.equal(policy.secrets.native_auth_owned_by_tool, true);
     assert.deepEqual(policy.secrets.materialisation_targets, []);
@@ -60,6 +61,7 @@ describe('resolveEffectivePolicy', () => {
     assert.equal(policy.permissions.source, 'session');
     assert.equal(policy.permissions.profile, 'trusted');
     assert.equal(policy.permissions.approval, 'never');
+    assert.deepEqual(policy.explicit_permissions, ['profile', 'approval']);
     assert.equal(policy.permissions.rendered_for, 'codex');
   });
 
@@ -111,14 +113,12 @@ describe('policy formatting helpers', () => {
     const policy = resolveEffectivePolicy({ entry: { tool: 'codex' } });
     assert.deepEqual(unsupportedPermissionFields(policy), [
       'profile',
-      'workspace',
       'network',
-      'approval',
       'secrets',
     ]);
     assert.equal(
       formatPolicySummary(policy),
-      'codex: native auth owned by tool; no vault target; permissions unsupported: profile, workspace, network, approval, secrets',
+      'codex: native auth owned by tool; no vault target; permissions unsupported: profile, network, secrets',
     );
   });
 });

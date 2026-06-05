@@ -27,6 +27,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `mc auth status` now includes the same effective policy/secrets report per
   tool, including native-auth ownership, vault targets, repo policy precedence,
   and unsupported permission fields.
+- Codex launches now render explicit mc permission policy into launch args for
+  `workspace` (`--sandbox`) and `approval` (`--ask-for-approval`). Default
+  policy placeholders render no flags, so native Codex behavior stays unchanged
+  unless the user configures policy.
 
 ## [0.7.5] — 2026-06-04
 

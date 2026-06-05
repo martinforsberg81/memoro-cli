@@ -170,7 +170,7 @@ This phase likely differs per tool and should be built adapter by adapter.
 
 ### Phase 4 design checkpoint
 
-Status: designed, not implemented.
+Status: first Codex launch-arg slice landed in dev.
 
 The first render target should be **Codex launch args**, not config files. Local
 CLI help confirms the interactive Codex surface has explicit runtime flags for
@@ -235,14 +235,14 @@ behavior unless the user has configured a real mc policy.
 
 #### First implementation slice
 
-1. Add pure adapter capability/render helpers for Codex.
+1. Add pure adapter capability/render helpers for Codex. Landed.
 2. Thread `effective_policy` into launch resolution/preflight so launch args can
-   be appended without changing adapter-sync wrappers.
+   be appended without changing adapter-sync wrappers. Landed.
 3. Update `mc status` / `mc auth status` support labels for Codex fields from
-   `unsupported` to `supported` only for fields that actually render.
+   `unsupported` to `supported` only for fields that actually render. Landed.
 4. Add tests proving explicit Codex policy yields the expected launch args, while
-   default policy yields no args.
-5. Add tests proving Claude remains visibility-only for these fields.
+   default policy yields no args. Landed.
+5. Add tests proving Claude remains visibility-only for these fields. Landed.
 
 No new CLI verbs. No `mc map` family. No writing policy into `AGENTS.md`,
 `CLAUDE.md`, or native auth files.
@@ -273,5 +273,6 @@ mc touch anything new.
 
 ## Next build slice
 
-Build the first Phase 4 slice: Codex launch-arg rendering for explicit
-`workspace` and `approval` fields only. Keep Claude visibility-only.
+Live-test Codex launch rendering with `.mc/policy.json`, then decide whether the
+next slice is policy-config ergonomics or a separate Claude-specific mapping
+design. Keep Claude visibility-only until that mapping is defensible.

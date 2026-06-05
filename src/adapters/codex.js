@@ -27,6 +27,15 @@ const DEFAULT_SHIM = join(homedir(), '.local', 'bin', 'codex');
 export const ID = 'codex';
 export const LABEL = 'Codex CLI';
 export const CONFIG_PATH = 'AGENTS.md';
+export const POLICY_SUPPORT = Object.freeze({
+  permissions: Object.freeze({
+    profile: 'unsupported',
+    workspace: 'supported',
+    network: 'unsupported',
+    approval: 'supported',
+    secrets: 'unsupported',
+  }),
+});
 
 export async function writeLens(markdown, { cwd = process.cwd() } = {}) {
   const root = resolveWorkspaceRoot(cwd);
@@ -171,11 +180,12 @@ export function launchSpec({ resolveBinary = resolveRealCodexBinary } = {}) {
   try { bin = resolveBinary(); } catch { bin = null; }
   return {
     bin,
-    args: (argv = [], { startupMessage = null } = {}) => {
+    args: (argv = [], { startupMessage = null, effectivePolicy = null } = {}) => {
       const base = stripInternalResumeArgs(argv);
-      if (startupMessage) return [...base, startupMessage];
-      if (base.length === 0) return [FALLBACK_INITIAL_PROMPT];
-      return base;
+      const policyArgs = renderPolicy(effectivePolicy).launchArgs;
+      if (startupMessage) return [...base, ...policyArgs, startupMessage];
+      if (base.length === 0) return [...policyArgs, FALLBACK_INITIAL_PROMPT];
+      return [...base, ...policyArgs];
     },
     heartbeatSource: 'codex',
     label: LABEL,
@@ -184,6 +194,47 @@ export function launchSpec({ resolveBinary = resolveRealCodexBinary } = {}) {
     submitEnterCount: 2,
     submitEnterDelayMs: 150,
   };
+}
+
+export function renderPolicy(policy = null) {
+  const permissions = policy?.permissions && typeof policy.permissions === 'object'
+    ? policy.permissions
+    : {};
+  const explicit = Array.isArray(policy?.explicit_permissions)
+    ? new Set(policy.explicit_permissions)
+    : new Set();
+  const launchArgs = [];
+
+  if (explicit.has('workspace')) {
+    const sandbox = codexSandboxForWorkspace(permissions.workspace);
+    if (sandbox) launchArgs.push('--sandbox', sandbox);
+  }
+  if (explicit.has('approval')) {
+    const approval = codexApprovalForPolicy(permissions.approval);
+    if (approval) launchArgs.push('--ask-for-approval', approval);
+  }
+
+  return {
+    launchArgs,
+    env: {},
+    artefacts: [],
+    support: POLICY_SUPPORT,
+    warnings: [],
+  };
+}
+
+function codexSandboxForWorkspace(workspace) {
+  if (workspace === 'read-only') return 'read-only';
+  if (workspace === 'worktree') return 'workspace-write';
+  if (workspace === 'full') return 'danger-full-access';
+  return null;
+}
+
+function codexApprovalForPolicy(approval) {
+  if (approval === 'untrusted') return 'untrusted';
+  if (approval === 'on-request') return 'on-request';
+  if (approval === 'never') return 'never';
+  return null;
 }
 
 function stripInternalResumeArgs(argv = []) {
