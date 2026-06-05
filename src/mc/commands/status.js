@@ -7,6 +7,8 @@
  */
 import { findEntry } from '../registry.js';
 import { detectOpenQuestion } from '../open-question.js';
+import { readConfig } from '../../lib/config.js';
+import { resolveEffectivePolicy } from '../policy.js';
 
 export async function run(argv) {
   const opts = parseArgs(argv);
@@ -26,6 +28,9 @@ export async function run(argv) {
   }
 
   const open_question = entry.open_question ?? detectOpenQuestion(entry.last_assistant_text || '');
+  let config = {};
+  try { config = await readConfig(); } catch { /* status remains best-effort */ }
+  const effective_policy = resolveEffectivePolicy({ entry, config });
 
   const out = {
     name: entry.name,
@@ -44,6 +49,7 @@ export async function run(argv) {
     model_chain: entry.model_chain ?? [],
     worktree_path: entry.worktree_path ?? null,
     relaunch_command: `mc resume ${entry.name}`,
+    effective_policy,
   };
 
   if (opts.json) {
@@ -55,6 +61,7 @@ export async function run(argv) {
   process.stdout.write(`${out.name}  ${out.branch}\n`);
   process.stdout.write(`  tool          ${out.tool || 'claude'}\n`);
   process.stdout.write(`  relaunch      ${out.relaunch_command}\n`);
+  process.stdout.write(`  policy        ${formatPolicyLine(out.effective_policy)}\n`);
   process.stdout.write(`  verdict       ${out.safety_verdict}\n`);
   process.stdout.write(`  session       ${out.session_state}\n`);
   process.stdout.write(`  dirty files   ${out.dirty_files}\n`);
@@ -64,6 +71,14 @@ export async function run(argv) {
     process.stdout.write(`  asst: ${out.last_assistant_text.slice(0, 200).replace(/\n+/g, ' ')}\n`);
   }
   return 0;
+}
+
+function formatPolicyLine(policy) {
+  const tool = policy?.permissions?.rendered_for || 'claude';
+  const targets = policy?.secrets?.materialisation_targets || [];
+  if (!targets.length) return `${tool}: native auth owned by tool; no vault target`;
+  const labels = targets.map((t) => `${t.provider || t.tool}/${t.source || 'target'}`).join(', ');
+  return `${tool}: vault targets ${labels}`;
 }
 
 function parseArgs(argv) {

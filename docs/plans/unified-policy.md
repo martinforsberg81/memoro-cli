@@ -50,8 +50,8 @@ vault target.
 
 ## Phase 1 — Effective policy visibility
 
-No behavior change. Add a small policy resolver that can explain what mc thinks
-will happen before launch.
+Status: landed in dev. No behavior change. A small policy resolver explains what
+mc thinks will happen before launch.
 
 Shape:
 
@@ -171,13 +171,20 @@ This phase likely differs per tool and should be built adapter by adapter.
 
 ## First build slice
 
-Build Phase 1 only:
+Phase 1 has now landed:
 
-1. Add a pure `resolveEffectivePolicy({ entry, adapter, config })` helper.
-2. Add tests for Codex, Claude legacy Anthropic, and tool switching.
-3. Surface the result in `mc status <name> --json` and human output.
-4. Do not write tool config files yet.
-5. Do not change vault matching behavior yet.
+1. Added pure `resolveEffectivePolicy({ entry, tool, config })`.
+2. Added tests for Codex, Claude legacy Anthropic, session-policy precedence,
+   and adapter-id normalisation.
+3. Surfaced `effective_policy` in `mc status <name> --json` and a terse policy
+   line in human output.
+4. Did not write tool config files.
+5. Did not change vault matching behavior.
 
 This gives the user a trustworthy answer to "what will mc touch?" before we make
 mc touch anything new.
+
+## Next build slice
+
+Build Phase 2 only: explicit vault target metadata in encrypted payloads and
+matching logic, while preserving the current Codex no-mutation invariant.

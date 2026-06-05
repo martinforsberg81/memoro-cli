@@ -12,6 +12,9 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   focus, and optional `MEMORO.md` node metadata.
 - `mc list --tree` shows parent/child session fabric so coordinator and
   project sessions are visible together.
+- `mc status <name>` now reports effective policy visibility: selected
+  tool, permission profile source, whether vault materialisation is
+  expected, and whether native auth remains owned by the tool.
 
 ## [0.7.5] — 2026-06-04
 

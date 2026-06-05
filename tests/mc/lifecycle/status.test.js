@@ -139,6 +139,7 @@ describe('mc status <name>', () => {
     for (const k of [
       'name', 'branch', 'safety_verdict', 'dirty_files', 'ahead',
       'last_activity', 'session_state', 'tool', 'relaunch_command',
+      'effective_policy',
     ]) {
       assert.ok(k in j, `field ${k} missing from status output`);
     }
@@ -151,6 +152,10 @@ describe('mc status <name>', () => {
     assert.ok(j);
     assert.equal(j.tool, 'codex');
     assert.equal(j.relaunch_command, 'mc resume codex-session');
+    assert.equal(j.effective_policy.permissions.rendered_for, 'codex');
+    assert.equal(j.effective_policy.secrets.vault_required, false);
+    assert.equal(j.effective_policy.secrets.native_auth_owned_by_tool, true);
+    assert.deepEqual(j.effective_policy.secrets.materialisation_targets, []);
   });
 
   test('human output includes tool + relaunch command', () => {
@@ -158,6 +163,21 @@ describe('mc status <name>', () => {
     assert.equal(r.status, 0, `stderr:${r.stderr}`);
     assert.match(r.stdout, /tool\s+codex/);
     assert.match(r.stdout, /relaunch\s+mc resume codex-session/);
+    assert.match(r.stdout, /policy\s+codex: native auth owned by tool; no vault target/);
+  });
+
+  test('Claude status reports legacy Anthropic vault target', () => {
+    const r = runMc(['status', 'safe', '--json'], { env: { MC_HOME: mcHome } });
+    assert.equal(r.status, 0, `stderr:${r.stderr}`);
+    const j = parseJsonOrNull(r.stdout);
+    assert.equal(j.effective_policy.permissions.rendered_for, 'claude');
+    assert.equal(j.effective_policy.secrets.vault_required, true);
+    assert.deepEqual(j.effective_policy.secrets.materialisation_targets, [{
+      tool: 'claude',
+      provider: 'anthropic',
+      source: 'legacy-provider-mapping',
+      target_auth_mode: 'api_key',
+    }]);
   });
 
   test('unknown name → non-zero exit + error', () => {
