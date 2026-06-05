@@ -16,6 +16,15 @@ import { findEntry, readRegistry, upsertEntry } from '../registry.js';
 import { emitCd, parseDirectiveFlag } from '../shell-directives.js';
 import { launchWithPreflight } from './launch-preflight.js';
 import { resolveToolInput } from '../../adapters/index.js';
+import {
+  buildSessionListView,
+  fetchActiveCodingSessions,
+  findActiveForLocalEntry,
+  listChoices,
+  parseNumberedChoice,
+  renderActiveSelectionMessage,
+  renderSessionListHuman,
+} from '../session-list.js';
 
 export const TOOL_SUGAR = {
   '--claude': 'claude',
@@ -23,30 +32,58 @@ export const TOOL_SUGAR = {
   '--gemini': 'gemini',
 };
 
-export async function run(rawArgv) {
+export async function run(rawArgv, deps = {}) {
+  const stdout = deps.stdout || process.stdout;
+  const stderr = deps.stderr || process.stderr;
+  const stdin = deps.stdin || process.stdin;
   const { args: argv, enabled: emitDirectives } = parseDirectiveFlag(rawArgv);
   const opts = parseArgs(argv);
   if (opts.error) {
-    console.error(`mc: ${opts.error}`);
+    stderr.write(`mc: ${opts.error}\n`);
     return 2;
   }
   if (!opts.name) {
-    printResumeList({ opts });
-    return 0;
+    return runResumePicker({
+      opts,
+      argv,
+      stdin,
+      stdout,
+      stderr,
+      emitDirectives,
+      deps,
+    });
   }
-  let entry = findEntry(opts.name);
+  const lookupEntry = deps.findEntry || findEntry;
+  let entry = lookupEntry(opts.name);
   if (!entry) {
-    console.error(`mc: no such session "${opts.name}"`);
+    stderr.write(`mc: no such session "${opts.name}"\n`);
     return 1;
   }
 
+  const toolValidation = validateToolFlag(opts.tool);
+  if (toolValidation.error) {
+    stderr.write(`mc: ${toolValidation.error}\n`);
+    return 2;
+  }
+
+  if (!opts.json && !opts.noLaunch && process.env.MC_TEST_MODE !== '1') {
+    const active = await activeMatchForEntry(entry, { argv, deps });
+    if (active) {
+      stdout.write(renderActiveSelectionMessage(active));
+      return 0;
+    }
+  }
+
   if (opts.tool) {
-    const resolved = resolveToolInput(opts.tool);
-    if (!resolved) {
-      console.error(`mc: unknown tool: ${opts.tool}. Try: claude | codex | gemini`);
+    const res = applyToolOverride(entry, opts.tool, {
+      upsert: deps.upsertEntry || upsertEntry,
+      resolved: toolValidation.resolved,
+    });
+    if (res.error) {
+      stderr.write(`mc: ${res.error}\n`);
       return 2;
     }
-    entry = upsertEntry({ name: entry.name, tool: resolved.shortName });
+    entry = res.entry;
   }
 
   if (entry.worktree_path) {
@@ -54,11 +91,12 @@ export async function run(rawArgv) {
   }
 
   if (opts.json) {
-    console.log(JSON.stringify({
+    stdout.write(JSON.stringify({
       name: entry.name,
       tool: entry.tool || 'claude',
       worktree_path: entry.worktree_path || null,
-    }, null, 2));
+      coding_session_id: entry.coding_session_id || null,
+    }, null, 2) + '\n');
     return 0;
   }
 
@@ -74,7 +112,8 @@ export async function run(rawArgv) {
   // re-exec (argv is dropped by the wrap path), so the resumed session
   // grounds with the same standing-context pointer through the ONE
   // groundSession seam in runWrap.
-  return launchResumeSession({ entry });
+  const launch = deps.launchResumeSession || launchResumeSession;
+  return launch({ entry });
 }
 
 export async function launchResumeSession({
@@ -136,39 +175,149 @@ export function resumableEntries(reg = readRegistry()) {
       session_state: e.session_state || 'no-session-yet',
       worktree_path: e.worktree_path || null,
       kind: e.kind || 'work',
+      label: e.label || null,
+      coding_session_id: e.coding_session_id || null,
+      repo_slug: e.repo_slug || null,
     }))
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
-function printResumeList({ opts }) {
-  const entries = resumableEntries();
+export async function runResumePicker({
+  opts,
+  argv = [],
+  stdin = process.stdin,
+  stdout = process.stdout,
+  stderr = process.stderr,
+  emitDirectives = false,
+  deps = {},
+} = {}) {
+  const loadRegistry = deps.readRegistry || readRegistry;
+  const fetchActive = deps.fetchActiveSessions || ((args) => fetchActiveCodingSessions({ argv: args }));
+  const launch = deps.launchResumeSession || launchResumeSession;
+  const upsert = deps.upsertEntry || upsertEntry;
+  const entries = resumableEntries(loadRegistry());
+  const toolValidation = validateToolFlag(opts.tool);
+  if (toolValidation.error) {
+    stderr.write(`mc: ${toolValidation.error}\n`);
+    return 2;
+  }
 
   if (opts.json) {
-    console.log(JSON.stringify({
+    stdout.write(JSON.stringify({
       entries,
       hint: 'Run `mc resume <name>` to re-enter a session, or `mc resume <name> --codex/--claude` to relaunch it under another tool.',
-    }, null, 2));
-    return;
+    }, null, 2) + '\n');
+    return 0;
   }
 
-  if (entries.length === 0) {
-    process.stdout.write('(no mc sessions)\n');
-    process.stdout.write('Create one with `mc new <name> [focus] --codex`.\n');
-    return;
+  const activeRes = await fetchActive(argv);
+  if (activeRes?.warning) stderr.write(`mc: ${activeRes.warning}\n`);
+  const view = buildSessionListView({
+    activeSessions: activeRes?.sessions || [],
+    localEntries: entries,
+  });
+  stdout.write(renderSessionListHuman({
+    view,
+    title: 'mc sessions available to resume:',
+    emptyLocalHint: 'Create one with `mc new <name> [focus] --codex`.',
+  }));
+
+  const choices = listChoices(view);
+  if (choices.length === 0) return 0;
+
+  const isInteractive = deps.isTTY ?? (stdin?.isTTY && stdout?.isTTY);
+  if (!isInteractive) {
+    const toolHint = opts.tool
+      ? `mc resume <name> --${opts.tool === 'claude' ? 'claude' : opts.tool}`
+      : 'mc resume <name>';
+    stdout.write(`Run \`${toolHint}\` to re-enter a local session.\n`);
+    return 0;
   }
 
-  process.stdout.write('mc sessions available to resume:\n');
-  for (const e of entries) {
-    const parts = [
-      `  ${e.name.padEnd(20)}`,
-      e.tool.padEnd(8),
-      (e.branch || '').padEnd(24),
-      e.session_state,
-    ];
-    process.stdout.write(parts.join('  ') + '\n');
+  const answer = await promptForChoice({ stdin, stdout, deps });
+  const parsed = parseNumberedChoice(answer, choices);
+  if (parsed.error) {
+    stderr.write(`mc: ${parsed.error}\n`);
+    return 2;
   }
-  const toolHint = opts.tool
-    ? `mc resume <name> --${opts.tool === 'claude' ? 'claude' : opts.tool}`
-    : 'mc resume <name>';
-  process.stdout.write(`\nRun \`${toolHint}\` to re-enter one of these sessions.\n`);
+  return resumeSelectedChoice(parsed.choice, {
+    opts,
+    emitDirectives,
+    stdout,
+    stderr,
+    launchResumeSession: launch,
+    upsertEntry: upsert,
+    resolvedTool: toolValidation.resolved,
+  });
+}
+
+export async function resumeSelectedChoice(choice, {
+  opts = {},
+  emitDirectives = false,
+  stdout = process.stdout,
+  stderr = process.stderr,
+  launchResumeSession: launch = launchResumeSession,
+  upsertEntry: upsert = upsertEntry,
+  resolvedTool = null,
+} = {}) {
+  if (!choice) return 2;
+  if (choice.type === 'active') {
+    stdout.write(renderActiveSelectionMessage(choice));
+    return 0;
+  }
+
+  let entry = choice;
+  if (opts.tool) {
+    const res = applyToolOverride(entry, opts.tool, { upsert, resolved: resolvedTool });
+    if (res.error) {
+      stderr.write(`mc: ${res.error}\n`);
+      return 2;
+    }
+    entry = res.entry;
+  }
+
+  if (entry.worktree_path) {
+    emitCd(entry.worktree_path, { enabled: emitDirectives || undefined });
+  }
+  if (opts.noLaunch || process.env.MC_TEST_MODE === '1') return 0;
+  return launch({ entry });
+}
+
+async function activeMatchForEntry(entry, { argv = [], deps = {} } = {}) {
+  const fetchActive = deps.fetchActiveSessions || ((args) => fetchActiveCodingSessions({ argv: args }));
+  const activeRes = await fetchActive(argv);
+  if (!activeRes?.ok) return null;
+  return findActiveForLocalEntry(entry, activeRes.sessions || []);
+}
+
+function validateToolFlag(tool) {
+  if (!tool) return { resolved: null };
+  const resolved = resolveToolInput(tool);
+  if (!resolved) {
+    return { error: `unknown tool: ${tool}. Try: claude | codex | gemini` };
+  }
+  return { resolved };
+}
+
+function applyToolOverride(entry, tool, { upsert = upsertEntry, resolved = null } = {}) {
+  const resolvedTool = resolved || validateToolFlag(tool).resolved;
+  if (!resolvedTool) {
+    return { error: `unknown tool: ${tool}. Try: claude | codex | gemini` };
+  }
+  return { entry: upsert({ name: entry.name, tool: resolvedTool.shortName }) };
+}
+
+async function promptForChoice({ stdin, stdout, deps = {} } = {}) {
+  const prompt = 'Select a session number: ';
+  if (typeof deps.readLine === 'function') {
+    stdout.write(prompt);
+    return deps.readLine({ stdin, stdout, prompt });
+  }
+  const { createInterface } = await import('node:readline/promises');
+  const rl = createInterface({ input: stdin, output: stdout });
+  try {
+    return await rl.question(prompt);
+  } finally {
+    rl.close();
+  }
 }

@@ -23,7 +23,13 @@ import { readFileSync } from 'node:fs';
 import { runMc, parseJsonOrNull } from '../_helpers/cli.js';
 import { makeTempRepo, git, addWorktree } from '../_helpers/git-fixture.js';
 import { writeRegistry, makeEntry, REGISTRY_REL_PATH } from '../_helpers/registry-fixture.js';
-import { launchResumeSession, parseArgs, resumableEntries } from '../../../src/mc/commands/resume.js';
+import {
+  launchResumeSession,
+  parseArgs,
+  run as runResume,
+  runResumePicker,
+  resumableEntries,
+} from '../../../src/mc/commands/resume.js';
 import * as claudeAdapter from '../../../src/adapters/claude-code.js';
 import * as codexAdapter from '../../../src/adapters/codex.js';
 
@@ -87,6 +93,129 @@ describe('mc resume <name>', () => {
       ['a', 'claude'],
       ['z', 'codex'],
     ]);
+  });
+
+  test('interactive picker launches a selected local stopped session', async () => {
+    const stdout = [];
+    const stderr = [];
+    const launched = [];
+    const status = await runResumePicker({
+      opts: { name: null, tool: null, noLaunch: false, json: false },
+      stdin: { isTTY: true },
+      stdout: { isTTY: true, write: (s) => stdout.push(s) },
+      stderr: { write: (s) => stderr.push(s) },
+      deps: {
+        readRegistry: () => ({ entries: [
+          makeEntry({
+            name: 'local-dead',
+            branch: 'sess/local-dead',
+            tool: 'codex',
+            session_state: 'dead',
+            worktree_path: '/tmp/local-dead',
+          }),
+        ] }),
+        fetchActiveSessions: async () => ({ ok: true, sessions: [] }),
+        readLine: async () => '1',
+        launchResumeSession: ({ entry }) => {
+          launched.push(entry);
+          return 0;
+        },
+      },
+    });
+    assert.equal(status, 0);
+    assert.equal(stderr.join(''), '');
+    assert.match(stdout.join(''), /Select a session number/);
+    assert.equal(launched.length, 1);
+    assert.equal(launched[0].name, 'local-dead');
+  });
+
+  test('interactive picker selection of an active session explains send/read instead of launching', async () => {
+    const stdout = [];
+    let launched = false;
+    const status = await runResumePicker({
+      opts: { name: null, tool: null, noLaunch: false, json: false },
+      stdin: { isTTY: true },
+      stdout: { isTTY: true, write: (s) => stdout.push(s) },
+      stderr: { write() {} },
+      deps: {
+        readRegistry: () => ({ entries: [
+          makeEntry({
+            name: 'data',
+            branch: 'sess/data',
+            coding_session_id: 'sess_data',
+            session_state: 'live',
+          }),
+        ] }),
+        fetchActiveSessions: async () => ({
+          ok: true,
+          sessions: [{
+            coding_session_id: 'sess_data',
+            label: 'data',
+            repo: 'memoro',
+            branch: 'main',
+            machine_id: 'host-a',
+            source: 'codex',
+            idle_seconds: 2,
+          }],
+        }),
+        readLine: async () => '1',
+        launchResumeSession: () => {
+          launched = true;
+          return 0;
+        },
+      },
+    });
+    assert.equal(status, 0);
+    assert.equal(launched, false);
+    const out = stdout.join('');
+    assert.match(out, /already active/);
+    assert.match(out, /mc sessions send sess_data "<message>"/);
+    assert.match(out, /mc sessions read sess_data/);
+  });
+
+  test('direct resume of an active server-visible session does not spawn a duplicate', async () => {
+    const old = process.env.MC_TEST_MODE;
+    delete process.env.MC_TEST_MODE;
+    const stdout = [];
+    let launched = false;
+    let upserted = false;
+    try {
+      const status = await runResume(['data', '--codex'], {
+        stdout: { write: (s) => stdout.push(s) },
+        stderr: { write() {} },
+        findEntry: () => makeEntry({
+          name: 'data',
+          branch: 'sess/data',
+          worktree_path: '/tmp/data',
+          coding_session_id: 'sess_data',
+        }),
+        fetchActiveSessions: async () => ({
+          ok: true,
+          sessions: [{
+            coding_session_id: 'sess_data',
+            label: 'data',
+            repo: 'memoro',
+            branch: 'main',
+            machine_id: 'host-a',
+          }],
+        }),
+        launchResumeSession: () => {
+          launched = true;
+          return 0;
+        },
+        upsertEntry: () => {
+          upserted = true;
+          return makeEntry({ name: 'data', tool: 'codex' });
+        },
+      });
+      assert.equal(status, 0);
+      assert.equal(launched, false);
+      assert.equal(upserted, false);
+      assert.match(stdout.join(''), /already active/);
+    } finally {
+      if (old === undefined) delete process.env.MC_TEST_MODE;
+      else process.env.MC_TEST_MODE = old;
+    }
   });
 
   test('rejects unknown name', () => {

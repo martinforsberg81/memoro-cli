@@ -6,6 +6,10 @@ import {
   buildHeartbeatBase,
   buildHeartbeatPayload,
   buildSessionMeta,
+  buildWrapExitRegistryPatch,
+  buildWrapLookupIdentity,
+  buildWrapStartRegistryPatch,
+  resolveCodingSessionIdForWrap,
   wrapRuntimePaths,
 } from '../../src/mc/wrap-runtime.js';
 
@@ -116,5 +120,115 @@ describe('buildHeartbeatPayload', () => {
       extractExcerpt: () => '',
     });
     assert.equal(payload.idle_seconds, 0);
+  });
+});
+
+describe('wrap coding session identity', () => {
+  test('named sessions reuse the registry coding_session_id without minting', async () => {
+    let called = false;
+    const res = await resolveCodingSessionIdForWrap({
+      sessionName: 'data',
+      registryEntry: { name: 'data', coding_session_id: 'sess_registry' },
+      repoIdentity: 'git@github.com:acme/memoro.git',
+      machineId: 'host-a',
+      lookupOrMint: async () => {
+        called = true;
+        return 'sess_new';
+      },
+    });
+    assert.equal(res.codingSessionId, 'sess_registry');
+    assert.equal(res.source, 'registry');
+    assert.equal(called, false);
+  });
+
+  test('named sessions mint through a stable per-session lookup key', async () => {
+    const seen = [];
+    const res = await resolveCodingSessionIdForWrap({
+      sessionName: 'data',
+      registryEntry: { name: 'data', coding_session_id: null },
+      repoIdentity: 'git@github.com:acme/memoro.git',
+      machineId: 'host-a',
+      nowMs: 123,
+      pid: 456,
+      lookupOrMint: async (identity) => {
+        seen.push(identity);
+        return 'sess_stable';
+      },
+    });
+    assert.equal(res.codingSessionId, 'sess_stable');
+    assert.equal(res.source, 'stable-session-name');
+    assert.deepEqual(seen, [{
+      repoIdentity: 'git@github.com:acme/memoro.git',
+      machineId: 'host-a',
+      llmSessionId: 'mc-session:data',
+    }]);
+  });
+
+  test('bare mc keeps per-runtime lookup identity', () => {
+    assert.deepEqual(buildWrapLookupIdentity({
+      repoIdentity: 'origin',
+      machineId: 'host-a',
+      nowMs: 123,
+      pid: 456,
+    }), {
+      repoIdentity: 'origin',
+      machineId: 'host-a',
+      llmSessionId: 'mc-123-456',
+    });
+  });
+});
+
+describe('wrap registry lifecycle patches', () => {
+  test('start patch marks named sessions live without dropping stable id', () => {
+    const patch = buildWrapStartRegistryPatch({
+      sessionName: 'data',
+      codingSessionId: 'sess_abc123',
+      tool: 'codex',
+      heartbeatSource: 'codex',
+      repoContext,
+      cwd: '/repo/memoro',
+      machineId: 'host-a',
+      pid: 12345,
+      now: new Date('2026-06-04T10:00:00.000Z'),
+    });
+    assert.deepEqual(patch, {
+      name: 'data',
+      coding_session_id: 'sess_abc123',
+      session_state: 'live',
+      last_activity: '2026-06-04T10:00:00.000Z',
+      last_started_at: '2026-06-04T10:00:00.000Z',
+      last_pid: 12345,
+      machine_id: 'host-a',
+      tool: 'codex',
+      source: 'codex',
+      branch: 'main',
+      worktree_path: '/repo/memoro',
+    });
+  });
+
+  test('exit patch marks clean exits idle and failed exits dead', () => {
+    assert.equal(buildWrapExitRegistryPatch({
+      sessionName: 'data',
+      codingSessionId: 'sess_abc123',
+      exitCode: 0,
+      now: new Date('2026-06-04T10:00:00.000Z'),
+    }).session_state, 'idle');
+    assert.equal(buildWrapExitRegistryPatch({
+      sessionName: 'data',
+      codingSessionId: 'sess_abc123',
+      exitCode: 2,
+      now: new Date('2026-06-04T10:00:00.000Z'),
+    }).session_state, 'dead');
+  });
+
+  test('registry patches are skipped for unnamed bare mc', () => {
+    assert.equal(buildWrapStartRegistryPatch({
+      sessionName: null,
+      codingSessionId: 'sess_abc123',
+    }), null);
+    assert.equal(buildWrapExitRegistryPatch({
+      sessionName: null,
+      codingSessionId: 'sess_abc123',
+    }), null);
   });
 });

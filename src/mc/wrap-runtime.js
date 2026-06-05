@@ -77,6 +77,100 @@ export function buildHeartbeatPayload({
   };
 }
 
+export async function resolveCodingSessionIdForWrap({
+  sessionName = null,
+  registryEntry = null,
+  repoIdentity,
+  machineId,
+  nowMs = Date.now(),
+  pid = process.pid,
+  lookupOrMint,
+} = {}) {
+  if (sessionName && registryEntry?.coding_session_id) {
+    return { codingSessionId: registryEntry.coding_session_id, source: 'registry' };
+  }
+  if (typeof lookupOrMint !== 'function') {
+    throw new Error('resolveCodingSessionIdForWrap: lookupOrMint required');
+  }
+  const identity = buildWrapLookupIdentity({
+    repoIdentity,
+    machineId,
+    sessionName,
+    nowMs,
+    pid,
+  });
+  const codingSessionId = await lookupOrMint(identity);
+  return {
+    codingSessionId,
+    source: sessionName ? 'stable-session-name' : 'runtime',
+    identity,
+  };
+}
+
+export function buildWrapLookupIdentity({
+  repoIdentity,
+  machineId,
+  sessionName = null,
+  nowMs = Date.now(),
+  pid = process.pid,
+} = {}) {
+  return {
+    repoIdentity,
+    machineId,
+    llmSessionId: sessionName ? `mc-session:${sessionName}` : `mc-${nowMs}-${pid}`,
+  };
+}
+
+export function buildWrapStartRegistryPatch({
+  sessionName,
+  codingSessionId,
+  tool,
+  heartbeatSource,
+  repoContext,
+  cwd,
+  machineId,
+  pid,
+  now = new Date(),
+} = {}) {
+  if (!sessionName) return null;
+  if (!codingSessionId) throw new Error('buildWrapStartRegistryPatch: codingSessionId required');
+  const at = asIso(now);
+  const patch = {
+    name: sessionName,
+    coding_session_id: codingSessionId,
+    session_state: 'live',
+    last_activity: at,
+    last_started_at: at,
+    last_pid: pid ?? null,
+    machine_id: machineId || null,
+  };
+  if (tool) patch.tool = tool;
+  if (heartbeatSource) patch.source = heartbeatSource;
+  if (repoContext?.branch) patch.branch = repoContext.branch;
+  if (repoContext?.toplevel || cwd) patch.worktree_path = repoContext?.toplevel || cwd;
+  return patch;
+}
+
+export function buildWrapExitRegistryPatch({
+  sessionName,
+  codingSessionId,
+  exitCode = 0,
+  now = new Date(),
+} = {}) {
+  if (!sessionName) return null;
+  if (!codingSessionId) throw new Error('buildWrapExitRegistryPatch: codingSessionId required');
+  const at = asIso(now);
+  return {
+    name: sessionName,
+    coding_session_id: codingSessionId,
+    session_state: exitCode === 0 ? 'idle' : 'dead',
+    last_activity: at,
+    last_exit_at: at,
+    last_exit_code: exitCode ?? null,
+    last_pid: null,
+  };
+}
+
 function asIso(value) {
   if (value instanceof Date) return value.toISOString();
   const d = new Date(value);

@@ -47,6 +47,7 @@ import { CliWsClient } from './commands/ws-client.js';
 import { ensureCoordinatorSlashCommand } from './mc/coordinator-command.js';
 import { installUpdateCommand } from './adapters/claude-code.js';
 import { primaryWorktree } from './mc/git.js';
+import { findEntry, upsertEntry } from './mc/registry.js';
 import {
   materialiseVaultForWrap,
   resolvePolicyForWrap,
@@ -59,6 +60,9 @@ import {
   buildHeartbeatBase,
   buildHeartbeatPayload,
   buildSessionMeta,
+  buildWrapExitRegistryPatch,
+  buildWrapStartRegistryPatch,
+  resolveCodingSessionIdForWrap,
   wrapRuntimePaths,
 } from './mc/wrap-runtime.js';
 import { createDispatchSocketServer } from './mc/wrap-dispatch.js';
@@ -401,13 +405,33 @@ async function runWrap(argv, { label = null } = {}) {
     process.exit(1);
   }
 
+  const sessionName = process.env.MC_SESSION_NAME || null;
+  const runtimeLabel = sessionName || label;
   const machineId = hostname();
-  const llmSessionId = `mc-${Date.now()}-${process.pid}`;
-  const codingSessionId = await lookupOrMint({
+  const registryEntry = sessionName ? findEntry(sessionName) : null;
+  const { codingSessionId } = await resolveCodingSessionIdForWrap({
+    sessionName,
+    registryEntry,
     repoIdentity: repoContext.remoteUrl,
     machineId,
-    llmSessionId,
+    lookupOrMint,
   });
+  if (sessionName) {
+    try {
+      upsertEntry(buildWrapStartRegistryPatch({
+        sessionName,
+        codingSessionId,
+        tool: launch.shortName,
+        heartbeatSource: launchSpec.heartbeatSource,
+        repoContext,
+        cwd,
+        machineId,
+        pid: process.pid,
+      }));
+    } catch (err) {
+      process.stderr.write(`mc: registry live-state update failed (${err.message}); continuing\n`);
+    }
+  }
 
   let wrapVault = { sessionId: null, shouldShredOnExit: false };
   try {
@@ -425,7 +449,7 @@ async function runWrap(argv, { label = null } = {}) {
 
   writeFileSync(metaPath, JSON.stringify(buildSessionMeta({
     codingSessionId,
-    label,
+    label: runtimeLabel,
     sockPath,
     repoContext,
     cwd,
@@ -470,7 +494,7 @@ async function runWrap(argv, { label = null } = {}) {
     codingSessionId,
     repo: repoName,
     branch: repoContext.branch,
-    label,
+    label: runtimeLabel,
     tool: launchSpec.label,
   }));
 
@@ -576,7 +600,7 @@ async function runWrap(argv, { label = null } = {}) {
     machineId,
     heartbeatSource: launchSpec.heartbeatSource,
     repoContext,
-    label,
+    label: runtimeLabel,
   });
   (async () => {
     while (alive) {
@@ -614,6 +638,15 @@ async function runWrap(argv, { label = null } = {}) {
     }
     try { process.stdin.pause(); } catch {}
     try { ptyProcess.kill(); } catch {}
+    if (sessionName) {
+      try {
+        upsertEntry(buildWrapExitRegistryPatch({
+          sessionName,
+          codingSessionId,
+          exitCode,
+        }));
+      } catch { /* best effort */ }
+    }
     if (wrapVault.shouldShredOnExit && wrapVault.sessionId) {
       try {
         const { shredForSession } = await import('./mc/vault/lifecycle.js');
