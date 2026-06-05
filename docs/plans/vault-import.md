@@ -65,6 +65,10 @@ env:<repo>:DATABASE_URL
 wrangler:<repo>:CLOUDFLARE_API_TOKEN
 ```
 
+Non-dry-run import creates new vault entries for selected keys after explicit
+confirmation. Existing vault labels are skipped by default; overwrite/rotate is
+not part of the first import mutation slice.
+
 ### `mc vault import <file> --move`
 
 After import succeeds, rewrite the source file so secrets are no longer stored
@@ -161,7 +165,7 @@ Classification is advisory. User choice wins.
   where supported and fall back to not materialising into LLM-readable paths
   where no equivalent guard exists.
 
-## Landed: Read-Only Scan + Import Dry-Run
+## Landed: Read-Only Scan + Import
 
 Shipped:
 
@@ -170,22 +174,22 @@ Shipped:
    `.env` and `.dev.vars`.
 3. `mc vault import <file> --dry-run [--json]` previews selected secrets,
    deterministic vault labels, and the proposed `.mc/secrets.json` binding.
-4. Human dry-run output is the primary UX: compact summary, warnings, import
+4. `mc vault import <file>` creates selected new vault entries after explicit
+   confirmation; existing labels are detected and skipped by default.
+5. Human dry-run output is the primary UX: compact summary, warnings, import
    list, skipped list, and value-free binding preview. `--json` is for machines.
-5. Duplicate keys are warnings and are not auto-bound; the user must fix the
+6. Duplicate keys are warnings and are not auto-bound; the user must fix the
    source file before real import.
-6. JSON and human output include key metadata only, never values.
-7. Tests assert sentinel secret bytes never appear in scan/import output.
+7. JSON and human output include key metadata only, never values.
+8. Tests assert sentinel secret bytes never appear in scan/import output.
 
-No real import/write path exists yet. A non-dry-run `mc vault import` refuses
-before any mutation path can run.
+No source-file rewrite path exists yet.
 
 ## Next Build Slice
 
-1. Add real `mc vault import <file>` behind explicit confirmation.
-2. Preflight existing vault labels and mark each candidate as create / exists.
+1. Add `.mc/secrets.json` binding persistence after successful import.
+2. Preflight existing vault labels and mark each candidate as create / exists
+   in the dry-run plan too, when the vault is unlocked.
 3. Default existing labels to skip; support explicit per-key overwrite/rotate
    only after the user confirms.
-4. Store selected new values in the encrypted vault using the dry-run labels.
-5. Keep `.mc/secrets.json` writes disabled until binding persistence is reviewed.
-6. Preserve the no-value-output invariant across success and every error path.
+4. Preserve the no-value-output invariant across success and every error path.

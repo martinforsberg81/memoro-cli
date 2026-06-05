@@ -129,7 +129,7 @@ describe('mc vault — subprocess wiring', () => {
     assert.ok(!res.stdout.trim().startsWith('{'), `human output should not be raw JSON:\n${res.stdout}`);
   });
 
-  it('`mc vault import` without --dry-run refuses before mutation work exists', () => {
+  it('`mc vault import --json` requires explicit --no-confirm before mutation', () => {
     const dir = mkdtempSync(join(tmpdir(), 'mc-vault-import-refuse-'));
     writeFileSync(join(dir, '.env'), 'OPENAI_API_KEY=secret\n');
 
@@ -137,7 +137,7 @@ describe('mc vault — subprocess wiring', () => {
     assert.equal(res.status, 2);
     const parsed = JSON.parse(res.stdout);
     assert.equal(parsed.ok, false);
-    assert.match(parsed.error, /dry-run only/);
+    assert.match(parsed.error, /requires --no-confirm/);
   });
 });
 

@@ -16,6 +16,9 @@
 
 import { describe, it, before, after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { basename, join } from 'node:path';
+import { tmpdir } from 'node:os';
 
 import { run as vaultRunRaw } from '../../../src/mc/commands/vault.js';
 import { createMockVaultServer, makeTestPortal } from './_helpers/mock-server.js';
@@ -186,6 +189,78 @@ describe('mc vault — full lifecycle (in-process)', () => {
     const out = JSON.parse(cap.out.join('\n'));
     assert.match(out.error, /already exists/);
     assert.match(out.error, /rotate/);
+  });
+
+  it('import stores selected dotenv secrets and never echoes values', async () => {
+    await vaultRun(['setup', '--json'], { portal });
+    const dir = mkdtempSync(join(tmpdir(), 'mc-vault-import-live-'));
+    const label = `env:${basename(dir).toLowerCase()}:OPENAI_API_KEY`;
+    const secret = 'import-secret-value-123';
+    writeFileSync(join(dir, '.env'), [
+      `OPENAI_API_KEY=${secret}`,
+      'PUBLIC_API_URL=http://localhost:8787',
+      '',
+    ].join('\n'));
+
+    cap.restore(); cap = captureConsole();
+    const rc = await vaultRun(['import', '.env', '--json', '--no-confirm'], { portal, cwd: dir });
+    cap.restore();
+    assert.equal(rc, 0, `import failed: ${JSON.stringify({ out: cap.out, err: cap.err })}`);
+    const out = JSON.parse(cap.out.join('\n'));
+    assert.equal(out.imported.length, 1);
+    assert.equal(out.imported[0].label, label);
+    assert.equal(out.skipped.some((s) => s.name === 'PUBLIC_API_URL'), true);
+    assert.ok(!JSON.stringify(out).includes(secret), 'import JSON must not leak secret value');
+
+    cap = captureConsole();
+    const listRc = await vaultRun(['list', '--json'], { portal });
+    cap.restore();
+    assert.equal(listRc, 0);
+    const list = JSON.parse(cap.out.join('\n'));
+    assert.equal(list.secrets.length, 1);
+    assert.equal(list.secrets[0].label, label);
+    assert.equal(list.secrets[0].provider, 'env');
+    assert.equal(list.secrets[0].account, basename(dir).toLowerCase());
+
+    cap = captureConsole();
+    const getRc = await vaultRun(['get', label, '--json'], { portal });
+    cap.restore();
+    assert.equal(getRc, 0);
+    const got = JSON.parse(cap.out.join('\n'));
+    assert.equal(got.secret.value, secret);
+  });
+
+  it('import skips existing labels by default', async () => {
+    await vaultRun(['setup', '--json'], { portal });
+    const dir = mkdtempSync(join(tmpdir(), 'mc-vault-import-exists-'));
+    const label = `env:${basename(dir).toLowerCase()}:OPENAI_API_KEY`;
+    writeFileSync(join(dir, '.env'), 'OPENAI_API_KEY=first\n');
+
+    cap.restore(); cap = captureConsole();
+    await vaultRun(['import', '.env', '--json', '--no-confirm'], { portal, cwd: dir });
+    cap.restore(); cap = captureConsole();
+    writeFileSync(join(dir, '.env'), 'OPENAI_API_KEY=second\n');
+    const rc = await vaultRun(['import', '.env', '--json', '--no-confirm'], { portal, cwd: dir });
+    cap.restore();
+    assert.equal(rc, 0);
+    const out = JSON.parse(cap.out.join('\n'));
+    assert.deepEqual(out.imported, []);
+    assert.equal(out.skipped.some((s) => s.label === label && s.reason === 'label already exists'), true);
+    assert.equal(server.inspect().secrets.length, 1, 'existing label should not be overwritten or duplicated');
+  });
+
+  it('import --json refuses mutation unless --no-confirm is explicit', async () => {
+    await vaultRun(['setup', '--json'], { portal });
+    const dir = mkdtempSync(join(tmpdir(), 'mc-vault-import-confirm-'));
+    writeFileSync(join(dir, '.env'), 'OPENAI_API_KEY=secret\n');
+
+    cap.restore(); cap = captureConsole();
+    const rc = await vaultRun(['import', '.env', '--json'], { portal, cwd: dir });
+    cap.restore();
+    assert.equal(rc, 2);
+    const out = JSON.parse(cap.out.join('\n'));
+    assert.match(out.error, /requires --no-confirm/);
+    assert.equal(server.inspect().secrets.length, 0);
   });
 
   it('rm deletes a secret (with --no-confirm)', async () => {

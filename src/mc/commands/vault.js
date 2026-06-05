@@ -40,6 +40,9 @@ import {
 } from '../vault/types.js';
 import * as VaultApi from '../vault/api.js';
 
+import { readFileSync } from 'node:fs';
+import { isAbsolute, join } from 'node:path';
+
 import { getSecret as keychainGet } from '../../lib/keychain.js';
 import { ACCOUNTS } from '../../commands/auth.js';
 import { readConfig, getApiUrl } from '../../lib/config.js';
@@ -50,7 +53,7 @@ import {
   readCachedVaultKey,
   inspectCachedVaultKey,
 } from '../vault/key-cache.js';
-import { buildVaultImportDryRun, scanVaultImportFiles } from '../vault/import-scan.js';
+import { buildVaultImportDryRun, parseDotenv, scanVaultImportFiles } from '../vault/import-scan.js';
 
 const PASSPHRASE_ENV = 'MC_VAULT_PASSPHRASE';
 
@@ -64,7 +67,7 @@ const VERBS = {
   lock:              { handler: cmdLock,             help: 'End the server-side vault session' },
   status:            { handler: cmdStatus,           help: 'Show vault setup + unlock state' },
   scan:              { handler: cmdScan,             help: 'Scan local dotenv files for import candidates (no values)' },
-  import:            { handler: cmdImport,           help: 'Preview dotenv secret import into the vault (dry-run only)' },
+  import:            { handler: cmdImport,           help: 'Import dotenv secrets into the vault (use --dry-run to preview)' },
   list:              { handler: cmdList,             help: 'List secret labels (no values)' },
   get:               { handler: cmdGet,              help: 'Print a secret (prompts for confirmation)' },
   set:               { handler: cmdSet,              help: 'Store a new secret' },
@@ -181,21 +184,52 @@ function printScan(scan) {
 async function cmdImport(argv, opts = {}) {
   const flags = parseFlags(argv);
   if (flags.positional.length !== 1) {
-    emit(flags.json, { ok: false, error: 'usage: mc vault import <file> --dry-run [--json]' });
-    return 2;
-  }
-  if (!flags.dryRun) {
-    emit(flags.json, { ok: false, error: '`mc vault import` is dry-run only in this version; rerun with --dry-run' });
+    emit(flags.json, { ok: false, error: 'usage: mc vault import <file> [--dry-run] [--json] [--no-confirm]' });
     return 2;
   }
 
   const plan = buildVaultImportDryRun(flags.positional[0], { cwd: opts.cwd || process.cwd() });
-  if (flags.json) {
-    console.log(JSON.stringify(plan));
-  } else {
-    printImportDryRun(plan);
+  if (flags.dryRun) {
+    if (flags.json) {
+      console.log(JSON.stringify(plan));
+    } else {
+      printImportDryRun(plan);
+    }
+    return plan.ok ? 0 : 1;
   }
-  return plan.ok ? 0 : 1;
+
+  if (!plan.ok) {
+    if (flags.json) console.log(JSON.stringify(plan));
+    else console.error(`mc vault: ${plan.error}`);
+    return 1;
+  }
+
+  const selected = plan.candidates.filter((k) => k.selected);
+  if (!selected.length) {
+    emit(flags.json, {
+      ok: true,
+      imported: [],
+      skipped: plan.candidates.map((k) => ({ name: k.name, reason: k.decision })),
+      warnings: plan.warnings,
+    }, 'No secrets selected for import.');
+    return 0;
+  }
+
+  if (flags.json && !flags.noConfirm) {
+    emit(flags.json, { ok: false, error: 'non-dry-run import with --json requires --no-confirm' });
+    return 2;
+  }
+
+  if (!flags.noConfirm && !flags.json) {
+    printImportDryRun(plan);
+    const ok = await confirm(`Import ${selected.length} secret${selected.length === 1 ? '' : 's'} into mc vault?`, { defaultYes: false });
+    if (!ok) {
+      console.log('Cancelled.');
+      return 1;
+    }
+  }
+
+  return importSelectedSecrets({ file: flags.positional[0], plan, flags, opts });
 }
 
 function printImportDryRun(plan) {
@@ -255,6 +289,128 @@ function printImportDryRun(plan) {
     }
   }
   console.log('\nNo changes made. Use --json for the exact machine-readable plan.');
+}
+
+async function importSelectedSecrets({ file, plan, flags, opts }) {
+  const portal = await loadPortal(opts);
+  const config = await requireSetup(portal);
+  if (!config) return 1;
+
+  const got = await getUnlockedVaultKey({ portal, config, flags, opts });
+  if (!got) return 1;
+  const { vaultKey } = got;
+
+  const values = readDotenvValueMap(file, { cwd: opts.cwd || process.cwd() });
+  const existingLabels = await listVaultLabels(portal, vaultKey);
+  const imported = [];
+  const skipped = [];
+
+  for (const candidate of plan.candidates) {
+    if (!candidate.selected) {
+      skipped.push({ name: candidate.name, label: candidate.label, reason: candidate.decision });
+      continue;
+    }
+    if (existingLabels.has(candidate.label)) {
+      skipped.push({ name: candidate.name, label: candidate.label, reason: 'label already exists' });
+      continue;
+    }
+    const token = values.get(candidate.name);
+    if (!token) {
+      skipped.push({ name: candidate.name, label: candidate.label, reason: 'empty value' });
+      continue;
+    }
+
+    const payloadData = buildSecretPayload({
+      kind: 'api_token',
+      token,
+      provider: providerFromLabel(candidate.label),
+      account: plan.repo,
+      extra: {
+        source: 'vault_import',
+        source_file: plan.file,
+        env_key: candidate.name,
+      },
+    });
+    const enc = await encryptSecretPayload(vaultKey, candidate.label, payloadData);
+    const res = await VaultApi.createSecret(portal, {
+      secretType: WIRE_SECRET_TYPE,
+      encryptedLabel: enc.encryptedLabel,
+      encryptedData: enc.encryptedData,
+      iv: enc.iv,
+      labelIv: enc.labelIv,
+    });
+    if (!res?.ok) {
+      emit(flags.json, { ok: false, error: res?.error || `create failed for ${candidate.label}` });
+      return 1;
+    }
+    existingLabels.add(candidate.label);
+    imported.push({ name: candidate.name, label: candidate.label, id: res.secret?.id || null });
+  }
+
+  const result = {
+    ok: true,
+    imported,
+    skipped,
+    warnings: plan.warnings,
+    binding: plan.binding,
+    writes: [],
+  };
+
+  if (flags.json) {
+    console.log(JSON.stringify(result));
+  } else {
+    printImportResult(result);
+  }
+  return 0;
+}
+
+function printImportResult(result) {
+  console.log(`Imported ${result.imported.length} secret${result.imported.length === 1 ? '' : 's'} into mc vault.`);
+  if (result.imported.length) {
+    const width = Math.max(8, ...result.imported.map((x) => x.name.length));
+    for (const item of result.imported) {
+      console.log(`  ${item.name.padEnd(width)}  -> ${item.label}`);
+    }
+  }
+  const skipped = result.skipped.filter((x) => x.reason !== 'not selected by default');
+  if (skipped.length) {
+    console.log(`\nSkipped ${skipped.length} key${skipped.length === 1 ? '' : 's'}:`);
+    const width = Math.max(8, ...skipped.map((x) => x.name.length));
+    for (const item of skipped) {
+      console.log(`  ${item.name.padEnd(width)}  ${item.reason}`);
+    }
+  }
+  console.log('\nNo files changed.');
+}
+
+function readDotenvValueMap(file, { cwd }) {
+  const diskPath = isAbsolute(file) ? file : join(cwd, file);
+  const entries = parseDotenv(readFileSync(diskPath, 'utf8'));
+  const values = new Map();
+  for (const entry of entries) {
+    // Duplicates are never selected by the plan, so "last wins" here is
+    // only relevant for non-selected metadata keys. Keep it simple.
+    values.set(entry.key, entry.value);
+  }
+  return values;
+}
+
+async function listVaultLabels(portal, vaultKey) {
+  const listRes = await VaultApi.listSecrets(portal);
+  const wire = listRes?.secrets || [];
+  const labels = new Set();
+  for (const s of wire) {
+    try {
+      const { label } = await decryptSecretPayload(vaultKey, s);
+      labels.add(label);
+    } catch { /* skip undecryptable */ }
+  }
+  return labels;
+}
+
+function providerFromLabel(label) {
+  const idx = String(label || '').indexOf(':');
+  return idx > 0 ? label.slice(0, idx) : null;
 }
 
 // ────────────────────────────────────────────────────────────────────────

@@ -112,9 +112,10 @@ tool state intact.
   The user path must be migration, not manual copy-paste: scan `.env` /
   `.dev.vars`, import selected secret values into mc vault, commit only
   value-free bindings, and materialise session/worktree runtime files when
-  needed. Scan and import dry-run are shipped: mc parses dotenv-shaped files
-  offline, emits key metadata only, and previews deterministic labels plus
-  `.mc/secrets.json` bindings without values or writes.
+  needed. Scan, import dry-run, and first real import are shipped: mc parses
+  dotenv-shaped files, emits key metadata only, creates new vault entries after
+  explicit confirmation, and skips existing labels by default. Binding writes
+  and source-file rewrites are still future slices.
   → `docs/plans/vault-import.md`
 
 ### Memory loop — Memoro ↔ session   · serves G1, G3
