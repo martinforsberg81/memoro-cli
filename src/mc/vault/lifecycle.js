@@ -128,11 +128,11 @@ export async function loadDefaultPortal() {
 }
 
 /**
- * Decrypt all secrets in the vault using the given vault-key and
- * return the subset whose `provider` matches at least one installed
- * adapter.
+ * Decrypt all token-shaped secrets in the vault using the given vault-key.
+ * Matching to adapters happens after decrypt so explicit `target_tool`
+ * can win over legacy provider matching.
  */
-async function pullMatchingSecrets({ portal, vaultKey, installedAdapters }) {
+async function pullMatchingSecrets({ portal, vaultKey }) {
   // Need an unlocked server-side session to list secrets. The cache
   // tells us the user already unlocked at some point, so re-unlock
   // here using the same authHash (we don't have it from cache → we
@@ -143,12 +143,6 @@ async function pullMatchingSecrets({ portal, vaultKey, installedAdapters }) {
   if (!listRes?.ok) {
     return { ok: false, reason: 'list-failed', error: listRes?.error || 'unknown', matches: [] };
   }
-  const wantedProviders = new Set();
-  for (const adapter of installedAdapters) {
-    for (const p of (ADAPTER_PROVIDERS[adapter.TOOL_NAME] || [])) {
-      wantedProviders.add(p);
-    }
-  }
   const matches = [];
   for (const wire of (listRes.secrets || [])) {
     try {
@@ -157,11 +151,16 @@ async function pullMatchingSecrets({ portal, vaultKey, installedAdapters }) {
       if (!norm) continue;
       if (norm.kind !== 'api_token' && norm.kind !== 'oauth_token') continue;
       if (!norm.token) continue;
-      if (!norm.provider || !wantedProviders.has(norm.provider)) continue;
       matches.push({ id: wire.id, label, payload: norm });
     } catch { /* skip undecryptable */ }
   }
   return { ok: true, matches };
+}
+
+async function hasVaultLookupSignal({ deps = {} } = {}) {
+  const cached = await readCachedVaultKey({ deps: deps.cacheDeps }).catch(() => null);
+  if (cached) return true;
+  return !!(deps.env || process.env)[PASSPHRASE_ENV];
 }
 
 /**
@@ -229,14 +228,11 @@ export async function materialiseForSession({
     return { ok: true, materialised: [], skipped: [{ reason: 'no-adapters' }] };
   }
 
+  const explicitTargetLookup = await hasVaultLookupSignal({ deps });
   const skipped = [];
   const candidates = [];
   for (const adapter of installed) {
     const providers = ADAPTER_PROVIDERS[adapter.TOOL_NAME] || [];
-    if (!providers.length) {
-      skipped.push({ tool: adapter.TOOL_NAME, reason: 'no-provider-mapping' });
-      continue;
-    }
     if (typeof adapter.tokenLocations !== 'function') {
       skipped.push({ tool: adapter.TOOL_NAME, reason: 'no-tokenLocations' });
       continue;
@@ -244,6 +240,10 @@ export async function materialiseForSession({
     const locations = adapter.tokenLocations();
     if (!locations.length) {
       skipped.push({ tool: adapter.TOOL_NAME, reason: 'empty-locations' });
+      continue;
+    }
+    if (!providers.length && !explicitTargetLookup) {
+      skipped.push({ tool: adapter.TOOL_NAME, reason: 'no-provider-mapping' });
       continue;
     }
     candidates.push({ adapter, providers, locations });
@@ -275,7 +275,7 @@ export async function materialiseForSession({
   await ensureUnlocked({ portal, authHash: resolved.authHash });
 
   const pull = await pullMatchingSecrets({
-    portal, vaultKey: resolved.vaultKey, installedAdapters: candidates.map((c) => c.adapter),
+    portal, vaultKey: resolved.vaultKey,
   });
   if (!pull.ok) {
     return {
@@ -289,9 +289,12 @@ export async function materialiseForSession({
   const materialised = [];
 
   for (const { adapter, providers, locations } of candidates) {
-    const match = pull.matches.find((m) => providers.includes(m.payload.provider));
+    const match = pull.matches.find((m) => secretMatchesAdapter(m.payload, adapter, providers));
     if (!match) {
-      skipped.push({ tool: adapter.TOOL_NAME, reason: 'no-matching-secret' });
+      skipped.push({
+        tool: adapter.TOOL_NAME,
+        reason: providers.length ? 'no-matching-secret' : 'no-provider-mapping',
+      });
       continue;
     }
     for (const location of locations) {
@@ -374,6 +377,19 @@ export async function materialiseForSession({
   }
 
   return { ok: true, materialised, skipped, hook: hookResult };
+}
+
+function secretMatchesAdapter(payload, adapter, providers) {
+  const targetTool = normaliseTool(payload.target_tool);
+  if (targetTool) return targetTool === normaliseTool(adapter.TOOL_NAME);
+  return providers.includes(payload.provider);
+}
+
+function normaliseTool(tool) {
+  if (!tool) return null;
+  if (tool === 'claude-code') return 'claude';
+  if (tool === 'gemini-cli') return 'gemini';
+  return String(tool);
 }
 
 /**

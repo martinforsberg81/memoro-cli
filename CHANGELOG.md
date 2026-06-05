@@ -15,6 +15,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `mc status <name>` now reports effective policy visibility: selected
   tool, permission profile source, whether vault materialisation is
   expected, and whether native auth remains owned by the tool.
+- Vault secret payloads now support explicit native-auth target metadata
+  (`target_tool`, `target_auth_mode`, `target_location`). Provider-only
+  OpenAI secrets still do not materialise into Codex; an explicit Codex
+  target is required.
 
 ## [0.7.5] — 2026-06-04
 

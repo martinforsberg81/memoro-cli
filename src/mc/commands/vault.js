@@ -363,6 +363,9 @@ async function cmdList(argv, opts = {}) {
         label,
         provider: norm.provider,
         account: norm.account,
+        target_tool: norm.target_tool,
+        target_auth_mode: norm.target_auth_mode,
+        target_location: norm.target_location,
         created_at: s.created_at,
         updated_at: s.updated_at,
       });
@@ -460,6 +463,9 @@ async function cmdGet(argv, opts = {}) {
         account: payload.account,
         scopes: payload.scopes,
         expires_at: payload.expires_at,
+        target_tool: payload.target_tool,
+        target_auth_mode: payload.target_auth_mode,
+        target_location: payload.target_location,
         value: payload.token,
       },
     }));
@@ -512,6 +518,9 @@ async function cmdSet(argv, opts = {}) {
     account: flags.account,
     scopes: flags.scopes ? flags.scopes.split(',').map(s => s.trim()).filter(Boolean) : null,
     expiresAt: flags.expiresAt,
+    targetTool: flags.targetTool,
+    targetAuthMode: flags.targetAuthMode,
+    targetLocation: flags.targetLocation,
   });
 
   const got = await getUnlockedVaultKey({ portal, config, flags, opts });
@@ -636,6 +645,9 @@ async function cmdRotate(argv, opts = {}) {
     account: flags.account ?? existingPayload.account,
     scopes: flags.scopes ? flags.scopes.split(',').map(s => s.trim()).filter(Boolean) : existingPayload.scopes,
     expiresAt: flags.expiresAt ?? existingPayload.expires_at,
+    targetTool: flags.targetTool ?? existingPayload.target_tool,
+    targetAuthMode: flags.targetAuthMode ?? existingPayload.target_auth_mode,
+    targetLocation: flags.targetLocation ?? existingPayload.target_location,
   });
 
   // Step 1: stash the old value as <label>-prev. Auto-purge after 24h
@@ -1006,6 +1018,9 @@ function bytesToBase64(bytes) {
  *   --type <kind>
  *   --provider <name>
  *   --account <name>
+ *   --target-tool <tool>
+ *   --target-auth-mode <mode>
+ *   --target-location <location>
  *   --scopes a,b,c
  *   --expires-at <iso>
  *   --field <name>
@@ -1019,6 +1034,9 @@ function parseFlags(argv) {
     type: null,
     provider: null,
     account: null,
+    targetTool: null,
+    targetAuthMode: null,
+    targetLocation: null,
     scopes: null,
     expiresAt: null,
     field: null,
@@ -1031,6 +1049,9 @@ function parseFlags(argv) {
     else if (a === '--type') out.type = argv[++i];
     else if (a === '--provider') out.provider = argv[++i];
     else if (a === '--account') out.account = argv[++i];
+    else if (a === '--target-tool') out.targetTool = argv[++i];
+    else if (a === '--target-auth-mode') out.targetAuthMode = argv[++i];
+    else if (a === '--target-location') out.targetLocation = argv[++i];
     else if (a === '--scopes') out.scopes = argv[++i];
     else if (a === '--expires-at') out.expiresAt = argv[++i];
     else if (a === '--field') out.field = argv[++i];

@@ -108,6 +108,9 @@ async function bootstrapVaultWithSecrets(secrets) {
       token: s.token,
       provider: s.provider,
       account: s.account || null,
+      target_tool: s.targetTool || null,
+      target_auth_mode: s.targetAuthMode || null,
+      target_location: s.targetLocation || null,
     });
     await server.memoroFetch('', '/api/vault/secrets', {
       method: 'POST',
@@ -219,6 +222,39 @@ describe('materialiseForSession', () => {
     const body = readFileSync(path, 'utf8');
     assert.ok(!body.includes(TOKEN_CLAUDE), 'manifest leaked anthropic token');
     assert.ok(!body.includes(TOKEN_CODEX), 'manifest leaked openai token');
+  });
+
+  it('with cached key: explicit target_tool=codex is the only Codex materialisation path', async () => {
+    const { portal, vaultKeyBytes } = await bootstrapVaultWithSecrets([
+      { label: 'openai-provider-only', token: 'sk-openai-provider-only', provider: 'openai' },
+      {
+        label: 'openai-codex-explicit',
+        token: TOKEN_CODEX,
+        provider: 'openai',
+        targetTool: 'codex',
+        targetAuthMode: 'api_key',
+        targetLocation: 'native-auth',
+      },
+    ]);
+    const cacheDeps = makeMemCacheDeps();
+    await cacheVaultKey(vaultKeyBytes, { deps: cacheDeps });
+
+    const codexLoc = { type: 'file', path: join(mcHomeDir, 'codex-explicit.json') };
+    const codexStub = makeStubAdapter({ toolName: 'codex', locations: [codexLoc] });
+    const res = await materialiseForSession({
+      sessionId: 'sess-codex-explicit',
+      portal,
+      adapters: [codexStub],
+      deps: { cacheDeps },
+    });
+
+    assert.equal(res.ok, true, JSON.stringify(res));
+    assert.equal(res.materialised.length, 1);
+    assert.equal(res.materialised[0].tool, 'codex');
+    assert.equal(res.materialised[0].label, 'openai-codex-explicit');
+    assert.equal(codexStub._calls.materialise.length, 1);
+    assert.equal(codexStub._calls.materialise[0].token, TOKEN_CODEX);
+    assert.notEqual(codexStub._calls.materialise[0].token, 'sk-openai-provider-only');
   });
 
   it('skips adapters without a matching secret', async () => {

@@ -88,6 +88,8 @@ Acceptance:
 
 ## Phase 2 — Explicit vault targets
 
+Status: landed in dev.
+
 Extend the encrypted mc secret payload with target fields:
 
 ```json
@@ -110,12 +112,12 @@ Rules:
 Acceptance:
 
 - `normaliseSecretPayload` exposes `target_tool`, `target_auth_mode`, and
-  `target_location` as first-class fields.
+  `target_location` as first-class fields. Landed.
 - vault lifecycle matches explicit target fields before provider-derived legacy
-  mappings.
-- tests prove `provider=openai` without `target_tool=codex` is skipped.
+  mappings. Landed.
+- tests prove `provider=openai` without `target_tool=codex` is skipped. Landed.
 - tests prove an explicit Codex target is the only path that reaches Codex
-  materialisation.
+  materialisation. Landed.
 
 ## Phase 3 — Permission profiles
 
@@ -186,5 +188,6 @@ mc touch anything new.
 
 ## Next build slice
 
-Build Phase 2 only: explicit vault target metadata in encrypted payloads and
-matching logic, while preserving the current Codex no-mutation invariant.
+Build Phase 3 only: permission profile source precedence (`session > repo >
+global > default`) and status visibility. Do not render profile settings into
+tool files yet.

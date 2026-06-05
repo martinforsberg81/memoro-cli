@@ -37,6 +37,24 @@ describe('buildSecretPayload', () => {
     const p = buildSecretPayload({ kind: 'api_token', token: 'sk-abc', provider: 'anthropic', account: 'work' });
     assert.deepEqual(p, { kind: 'api_token', token: 'sk-abc', provider: 'anthropic', account: 'work' });
   });
+  it('includes explicit native auth target metadata when provided', () => {
+    const p = buildSecretPayload({
+      kind: 'api_token',
+      token: 'sk-abc',
+      provider: 'openai',
+      targetTool: 'codex',
+      targetAuthMode: 'api_key',
+      targetLocation: 'native-auth',
+    });
+    assert.deepEqual(p, {
+      kind: 'api_token',
+      token: 'sk-abc',
+      provider: 'openai',
+      target_tool: 'codex',
+      target_auth_mode: 'api_key',
+      target_location: 'native-auth',
+    });
+  });
   it('includes scopes + expires_at on oauth_token', () => {
     const p = buildSecretPayload({
       kind: 'oauth_token', token: 'ya29.x', provider: 'google',
@@ -89,6 +107,21 @@ describe('normaliseSecretPayload', () => {
     const n = normaliseSecretPayload({ kind: 'api_token', token: 't', custom: 1 });
     assert.deepEqual(n.extra, { custom: 1 });
   });
+  it('normalises explicit target fields as first-class metadata', () => {
+    const n = normaliseSecretPayload({
+      kind: 'api_token',
+      token: 't',
+      provider: 'openai',
+      target_tool: 'codex',
+      target_auth_mode: 'api_key',
+      target_location: 'native-auth',
+      custom: 1,
+    });
+    assert.equal(n.target_tool, 'codex');
+    assert.equal(n.target_auth_mode, 'api_key');
+    assert.equal(n.target_location, 'native-auth');
+    assert.deepEqual(n.extra, { custom: 1 });
+  });
   it('returns null extra when no unknown fields', () => {
     const n = normaliseSecretPayload({ kind: 'api_token', token: 't', provider: 'p' });
     assert.equal(n.extra, null);
@@ -128,6 +161,7 @@ describe('formatListJson — never includes secret values', () => {
     assert.equal(out.secrets[0].id, 'vid_1');
     assert.equal(out.secrets[0].label, 'anthropic');
     assert.equal(out.secrets[0].provider, 'anthropic');
+    assert.equal(out.secrets[0].target_tool, null);
   });
   it('handles empty list', () => {
     assert.deepEqual(formatListJson({ secrets: [] }), { ok: true, secrets: [] });
