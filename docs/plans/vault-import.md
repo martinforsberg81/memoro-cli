@@ -148,6 +148,9 @@ Classification is advisory. User choice wins.
 
 - Scans never print values.
 - Dry-runs never write vault entries or files.
+- Existing vault labels are never overwritten silently. Real import must resolve
+  collisions per key with an explicit choice: skip, overwrite, or rotate to a
+  `-prev` copy before replacement. Default is skip.
 - Imports never delete or rewrite the source file unless `--move` is explicit
   and import succeeded.
 - Rewrites are atomic: write temp file, fsync where practical, rename.
@@ -180,6 +183,9 @@ before any mutation path can run.
 ## Next Build Slice
 
 1. Add real `mc vault import <file>` behind explicit confirmation.
-2. Store selected values in the encrypted vault using the dry-run labels.
-3. Keep `.mc/secrets.json` writes disabled until binding persistence is reviewed.
-4. Preserve the no-value-output invariant across success and every error path.
+2. Preflight existing vault labels and mark each candidate as create / exists.
+3. Default existing labels to skip; support explicit per-key overwrite/rotate
+   only after the user confirms.
+4. Store selected new values in the encrypted vault using the dry-run labels.
+5. Keep `.mc/secrets.json` writes disabled until binding persistence is reviewed.
+6. Preserve the no-value-output invariant across success and every error path.

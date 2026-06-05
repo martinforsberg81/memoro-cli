@@ -137,6 +137,10 @@ export function classifyEnvEntry({ key, value }) {
     return { classification: 'config', confidence: 'medium', reason: 'key identifier, not secret material' };
   }
 
+  if (/(^|_)(USER_ID|ISSUER_ID)$/i.test(k)) {
+    return { classification: 'config', confidence: 'medium', reason: 'identifier metadata, not secret material' };
+  }
+
   if (SECRET_KEY_RE.test(k)) {
     return { classification: 'secret', confidence: 'high', reason: 'secret-like key name' };
   }

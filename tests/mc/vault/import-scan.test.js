@@ -72,6 +72,16 @@ describe('vault import scan — classification', () => {
       confidence: 'medium',
       reason: 'key identifier, not secret material',
     });
+    assert.deepEqual(classifyEnvEntry({ key: 'OWNER_USER_ID', value: 'usr_abc123' }), {
+      classification: 'config',
+      confidence: 'medium',
+      reason: 'identifier metadata, not secret material',
+    });
+    assert.deepEqual(classifyEnvEntry({ key: 'ASC_ISSUER_ID', value: 'issuer-abc123' }), {
+      classification: 'config',
+      confidence: 'medium',
+      reason: 'identifier metadata, not secret material',
+    });
     assert.deepEqual(classifyEnvEntry({ key: 'GOOGLE_REDIRECT_URI', value: 'http://localhost:8787/callback' }), {
       classification: 'config',
       confidence: 'medium',
