@@ -158,11 +158,22 @@ Classification is advisory. User choice wins.
   where supported and fall back to not materialising into LLM-readable paths
   where no equivalent guard exists.
 
-## First Build Slice
+## Landed: Read-Only Scan
+
+Shipped in the first implementation slice:
 
 1. Pure dotenv parser and classifier.
-2. `mc vault scan <file> --json` for `.env` and `.dev.vars`, no values.
-3. Tests that secret bytes never appear in scan output.
-4. No import/write path yet.
+2. `mc vault scan [file...] [--json]` for dotenv-shaped files, including
+   `.env` and `.dev.vars`.
+3. JSON and human output include key metadata only, never values.
+4. Tests assert sentinel secret bytes never appear in scan output.
 
-This gives us a safe read-only inventory before building mutation.
+No import/write path exists yet.
+
+## Next Build Slice
+
+1. Add `mc vault import <file> --dry-run --json`.
+2. Derive deterministic labels without storing values.
+3. Show the proposed `.mc/secrets.json` binding shape.
+4. Keep mutation disabled until explicit non-dry-run import is designed and
+   reviewed.

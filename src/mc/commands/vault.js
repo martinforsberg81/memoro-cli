@@ -50,6 +50,7 @@ import {
   readCachedVaultKey,
   inspectCachedVaultKey,
 } from '../vault/key-cache.js';
+import { scanVaultImportFiles } from '../vault/import-scan.js';
 
 const PASSPHRASE_ENV = 'MC_VAULT_PASSPHRASE';
 
@@ -62,6 +63,7 @@ const VERBS = {
   unlock:            { handler: cmdUnlock,           help: 'Validate the master password (phase 1: no-op cache)' },
   lock:              { handler: cmdLock,             help: 'End the server-side vault session' },
   status:            { handler: cmdStatus,           help: 'Show vault setup + unlock state' },
+  scan:              { handler: cmdScan,             help: 'Scan local dotenv files for import candidates (no values)' },
   list:              { handler: cmdList,             help: 'List secret labels (no values)' },
   get:               { handler: cmdGet,              help: 'Print a secret (prompts for confirmation)' },
   set:               { handler: cmdSet,              help: 'Store a new secret' },
@@ -126,6 +128,48 @@ PRECONDITIONS
   - Run \`mc auth memoro\` first to store your Memoro API token.
   - Run \`mc vault setup\` once per Memoro account to create the vault.
 `);
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// Verb: scan
+// ────────────────────────────────────────────────────────────────────────
+
+async function cmdScan(argv, opts = {}) {
+  const flags = parseFlags(argv);
+  const scan = scanVaultImportFiles(flags.positional, { cwd: opts.cwd || process.cwd() });
+  const hasErrors = scan.files.some((f) => !f.ok);
+
+  if (flags.json) {
+    console.log(JSON.stringify(scan));
+  } else {
+    printScan(scan);
+  }
+
+  return hasErrors ? 1 : 0;
+}
+
+function printScan(scan) {
+  if (!scan.files.length) {
+    console.log('No dotenv secret files found.');
+    return;
+  }
+
+  for (const file of scan.files) {
+    console.log(file.file);
+    if (!file.ok) {
+      console.log(`  error: ${file.error}`);
+      continue;
+    }
+    if (!file.keys.length) {
+      console.log('  no keys found');
+      continue;
+    }
+    const width = Math.max(8, ...file.keys.map((k) => k.name.length));
+    for (const k of file.keys) {
+      const label = `${k.classification === 'secret' ? 'likely secret' : k.classification === 'config' ? 'likely config' : 'unknown'} (${k.confidence})`;
+      console.log(`  ${k.name.padEnd(width)}  ${label}  line ${k.line} - ${k.reason}`);
+    }
+  }
 }
 
 // ────────────────────────────────────────────────────────────────────────

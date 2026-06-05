@@ -18,6 +18,9 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 
 import { runMc } from '../_helpers/cli.js';
 
@@ -28,7 +31,7 @@ describe('mc vault — subprocess wiring', () => {
     assert.match(res.stdout, /mc vault/);
     assert.match(res.stdout, /VERBS/);
     // The help must include every shipped verb name.
-    for (const verb of ['setup', 'unlock', 'lock', 'list', 'get', 'set', 'rm', 'rotate', 'status', 'change-password']) {
+    for (const verb of ['setup', 'unlock', 'lock', 'scan', 'list', 'get', 'set', 'rm', 'rotate', 'status', 'change-password']) {
       assert.ok(res.stdout.includes(verb), `help missing verb: ${verb}`);
     }
   });
@@ -58,6 +61,26 @@ describe('mc vault — subprocess wiring', () => {
   it('`mc vault --help` exits 0', () => {
     const res = runMc(['vault', '--help']);
     assert.equal(res.status, 0);
+  });
+
+  it('`mc vault scan --json` scans local dotenv files without a vault login', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mc-vault-scan-cli-'));
+    const secret = 'pancakes-and-syrup-9af237';
+    writeFileSync(join(dir, '.dev.vars'), `CLOUDFLARE_API_TOKEN=${secret}\nPUBLIC_API_URL=http://localhost:8787\n`);
+
+    const res = runMc(['vault', 'scan', '.dev.vars', '--json'], { cwd: dir });
+    assert.equal(res.status, 0, res.stderr);
+    assert.equal(res.stderr, '');
+    assert.ok(!res.stdout.includes(secret), `scan leaked secret value: ${res.stdout}`);
+
+    const parsed = JSON.parse(res.stdout);
+    assert.equal(parsed.ok, true);
+    assert.equal(parsed.files[0].file, '.dev.vars');
+    assert.equal(parsed.files[0].format, 'wrangler-dotenv');
+    assert.deepEqual(parsed.files[0].keys.map((k) => [k.name, k.classification]), [
+      ['CLOUDFLARE_API_TOKEN', 'secret'],
+      ['PUBLIC_API_URL', 'config'],
+    ]);
   });
 });
 

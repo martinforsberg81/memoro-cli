@@ -108,11 +108,12 @@ tool state intact.
   honestly. Phase 4a has started with Codex launch-arg rendering for explicit
   `workspace`/`approval` only; default policy renders no flags, Claude remains
   visibility-only until its mapping is defensible. → `docs/plans/unified-policy.md`
-- **Vault import from local secret files** — `next · M · now`
+- **Vault import from local secret files** — `active · M · now`
   The user path must be migration, not manual copy-paste: scan `.env` /
   `.dev.vars`, import selected secret values into mc vault, commit only
   value-free bindings, and materialise session/worktree runtime files when
-  needed. First slice is read-only scan/classify with no value output.
+  needed. First slice shipped: `mc vault scan [file...] [--json]` parses
+  dotenv-shaped files offline and emits key metadata only, never values.
   → `docs/plans/vault-import.md`
 
 ### Memory loop — Memoro ↔ session   · serves G1, G3
