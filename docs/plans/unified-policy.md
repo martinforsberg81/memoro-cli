@@ -168,6 +168,85 @@ Rules:
 
 This phase likely differs per tool and should be built adapter by adapter.
 
+### Phase 4 design checkpoint
+
+Status: designed, not implemented.
+
+The first render target should be **Codex launch args**, not config files. Local
+CLI help confirms the interactive Codex surface has explicit runtime flags for
+the two permission fields mc can safely translate today:
+
+- `--sandbox <read-only|workspace-write|danger-full-access>`
+- `--ask-for-approval <untrusted|on-request|never>`
+
+This is the right first surface because it is per launch, leaves no tracked
+project file dirty, and needs no cleanup manifest: no artefact is written. It
+also keeps ChatGPT/Pro auth untouched because auth remains separate from policy.
+
+Claude Code is not the first render target. It has `--permission-mode` plus
+tool allow/deny flags, but it does not expose the same sandbox model as Codex.
+Rendering the same mc intent into Claude too early would create false parity.
+For Claude, keep fields visible as unsupported or partial until a smaller,
+defensible mapping is designed.
+
+#### Adapter rendering contract
+
+Adapters should expose a pure function shaped like:
+
+```js
+renderPolicy(policy) -> {
+  launchArgs: [],
+  env: {},
+  artefacts: [],
+  support: { permissions: { ... } },
+  warnings: []
+}
+```
+
+Rules:
+
+- `launchArgs` are appended by the mc launcher after user-supplied args, unless
+  the adapter explicitly needs another position.
+- `env` is limited to non-secret policy state. Secrets still go through the
+  vault materialisation lifecycle.
+- `artefacts` is empty for the first Codex slice. If a future adapter writes
+  files, every file must be managed-marker based and recorded for cleanup/audit.
+- `support` must distinguish `supported`, `partial`, and `unsupported`.
+- unsupported fields are never silently dropped from status; they remain visible.
+
+#### Codex mapping
+
+Only render explicit fields, never the default placeholders:
+
+| mc permission | Codex render | Notes |
+| --- | --- | --- |
+| `workspace: "read-only"` | `--sandbox read-only` | Strictest useful mode. |
+| `workspace: "worktree"` | `--sandbox workspace-write` | Default mc worktree workflow. |
+| `workspace: "full"` | `--sandbox danger-full-access` | Only if explicitly configured. |
+| `approval: "untrusted"` | `--ask-for-approval untrusted` | Conservative. |
+| `approval: "on-request"` | `--ask-for-approval on-request` | Normal interactive autonomy. |
+| `approval: "never"` | `--ask-for-approval never` | Requires explicit config. |
+| `network` | no render yet | Codex `--search` is web-search, not shell network. |
+| `secrets` | no render here | Handled by vault targets/materialisation. |
+| `profile` | no direct render | Profile is intent metadata unless expanded first. |
+
+`tool-default` and `default` must render no flags. This preserves native tool
+behavior unless the user has configured a real mc policy.
+
+#### First implementation slice
+
+1. Add pure adapter capability/render helpers for Codex.
+2. Thread `effective_policy` into launch resolution/preflight so launch args can
+   be appended without changing adapter-sync wrappers.
+3. Update `mc status` / `mc auth status` support labels for Codex fields from
+   `unsupported` to `supported` only for fields that actually render.
+4. Add tests proving explicit Codex policy yields the expected launch args, while
+   default policy yields no args.
+5. Add tests proving Claude remains visibility-only for these fields.
+
+No new CLI verbs. No `mc map` family. No writing policy into `AGENTS.md`,
+`CLAUDE.md`, or native auth files.
+
 ## Acceptance
 
 - `mc auth status` / `mc status` can explain what policy/secrets would apply.
@@ -194,5 +273,5 @@ mc touch anything new.
 
 ## Next build slice
 
-Phase 4 can start adapter-by-adapter rendering, but only after choosing one
-tool surface and keeping it idempotent, reversible, and managed-marker based.
+Build the first Phase 4 slice: Codex launch-arg rendering for explicit
+`workspace` and `approval` fields only. Keep Claude visibility-only.
