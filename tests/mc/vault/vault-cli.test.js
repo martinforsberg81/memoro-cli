@@ -104,6 +104,31 @@ describe('mc vault — subprocess wiring', () => {
     assert.deepEqual(parsed.writes, []);
   });
 
+  it('`mc vault import --dry-run` prints a compact human preview', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mc-vault-import-human-'));
+    const secret = 'pancakes-and-syrup-9af237';
+    writeFileSync(join(dir, '.env'), [
+      `OPENAI_API_KEY=${secret}`,
+      'PUBLIC_API_URL=http://localhost:8787',
+      'STRIPE_SECRET_KEY=stripe-one',
+      'STRIPE_SECRET_KEY=stripe-two',
+      '',
+    ].join('\n'));
+
+    const res = runMc(['vault', 'import', '.env', '--dry-run'], { cwd: dir });
+    assert.equal(res.status, 0, res.stderr);
+    assert.equal(res.stderr, '');
+    assert.match(res.stdout, /Vault import preview: \.env/);
+    assert.match(res.stdout, /Will Import/);
+    assert.match(res.stdout, /Skipped/);
+    assert.match(res.stdout, /Warnings/);
+    assert.match(res.stdout, /STRIPE_SECRET_KEY.*lines 3, 4/);
+    assert.match(res.stdout, /No changes made/);
+    assert.ok(!res.stdout.includes(secret), `human import preview leaked secret value: ${res.stdout}`);
+    assert.ok(!res.stdout.includes('stripe-one'), `human import preview leaked duplicate secret: ${res.stdout}`);
+    assert.ok(!res.stdout.trim().startsWith('{'), `human output should not be raw JSON:\n${res.stdout}`);
+  });
+
   it('`mc vault import` without --dry-run refuses before mutation work exists', () => {
     const dir = mkdtempSync(join(tmpdir(), 'mc-vault-import-refuse-'));
     writeFileSync(join(dir, '.env'), 'OPENAI_API_KEY=secret\n');

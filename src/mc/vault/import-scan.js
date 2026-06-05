@@ -9,9 +9,9 @@ export const DEFAULT_DOTENV_CANDIDATES = [
   '.dev.vars',
 ];
 
-const SECRET_KEY_RE = /(TOKEN|SECRET|PASSWORD|PRIVATE|API_?KEY|ACCESS_?KEY|CLIENT_?SECRET|AUTH)/i;
+const SECRET_KEY_RE = /(TOKEN|SECRET|PASSWORD|PRIVATE|API_?KEY|ACCESS_?KEY|CLIENT_?SECRET|AUTH|(^|_)KEY$)/i;
 const PUBLIC_KEY_RE = /^(PUBLIC_|NEXT_PUBLIC_|VITE_)/i;
-const CONFIG_KEY_RE = /(URL|HOST|PORT|MODE|ENV|DEBUG|PUBLIC|REGION|ZONE|NAME)$/i;
+const CONFIG_KEY_RE = /(URL|URI|HOST|PORT|MODE|ENV|DEBUG|PUBLIC|REGION|ZONE|NAME|USER_ID|ISSUER_ID|KEY_ID)$/i;
 const TOKEN_PREFIX_RE = /^(sk-|sk_live_|sk_test_|sk-ant-|ghp_|github_pat_|npm_|xox[baprs]-|ya29\.|eyJ[A-Za-z0-9_-]*\.)/;
 
 export function parseDotenv(content) {
@@ -93,15 +93,20 @@ export function buildVaultImportDryRun(file, { cwd = process.cwd(), repoName = n
 
   const repo = normaliseRepoName(repoName || basename(cwd) || 'repo');
   const provider = providerForFormat(scanned.format);
+  const counts = countByName(scanned.keys);
   const candidates = scanned.keys.map((k) => {
-    const selected = k.classification === 'secret' && k.confidence === 'high';
+    const duplicate = counts.get(k.name) > 1;
+    const selected = !duplicate && k.classification === 'secret' && k.confidence === 'high';
     return {
       ...k,
+      duplicate,
       selected,
+      decision: duplicate ? 'duplicate key; fix before import' : selected ? 'selected by high-confidence secret heuristic' : 'not selected by default',
       label: selected ? `${provider}:${repo}:${k.name}` : null,
     };
   });
   const selected = candidates.filter((k) => k.selected);
+  const warnings = duplicateWarnings(scanned.keys, counts);
 
   return {
     ok: true,
@@ -109,6 +114,7 @@ export function buildVaultImportDryRun(file, { cwd = process.cwd(), repoName = n
     file: scanned.file,
     format: scanned.format,
     repo,
+    warnings,
     candidates,
     binding: buildBindingPreview(scanned, selected),
     writes: [],
@@ -121,6 +127,14 @@ export function classifyEnvEntry({ key, value }) {
 
   if (PUBLIC_KEY_RE.test(k)) {
     return { classification: 'config', confidence: 'high', reason: 'public key prefix' };
+  }
+
+  if (/(^|_)(PRIVATE|SECRET|KEY).*_PATH$/i.test(k) || /_KEY_PATH$/i.test(k)) {
+    return { classification: 'config', confidence: 'medium', reason: 'path to secret material, not secret material' };
+  }
+
+  if (/(^|_)KEY_ID$/i.test(k)) {
+    return { classification: 'config', confidence: 'medium', reason: 'key identifier, not secret material' };
   }
 
   if (SECRET_KEY_RE.test(k)) {
@@ -262,6 +276,29 @@ function buildBindingPreview(scanned, selected) {
       },
     ],
   };
+}
+
+function countByName(keys) {
+  const counts = new Map();
+  for (const k of keys) counts.set(k.name, (counts.get(k.name) || 0) + 1);
+  return counts;
+}
+
+function duplicateWarnings(keys, counts) {
+  const warnings = [];
+  const seen = new Set();
+  for (const k of keys) {
+    if (counts.get(k.name) > 1 && !seen.has(k.name)) {
+      seen.add(k.name);
+      warnings.push({
+        type: 'duplicate_key',
+        key: k.name,
+        lines: keys.filter((x) => x.name === k.name).map((x) => x.line),
+        message: `${k.name} appears multiple times; fix the file before import`,
+      });
+    }
+  }
+  return warnings;
 }
 
 function normaliseRepoName(name) {

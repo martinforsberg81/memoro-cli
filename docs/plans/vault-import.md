@@ -167,8 +167,12 @@ Shipped:
    `.env` and `.dev.vars`.
 3. `mc vault import <file> --dry-run [--json]` previews selected secrets,
    deterministic vault labels, and the proposed `.mc/secrets.json` binding.
-4. JSON and human output include key metadata only, never values.
-5. Tests assert sentinel secret bytes never appear in scan/import output.
+4. Human dry-run output is the primary UX: compact summary, warnings, import
+   list, skipped list, and value-free binding preview. `--json` is for machines.
+5. Duplicate keys are warnings and are not auto-bound; the user must fix the
+   source file before real import.
+6. JSON and human output include key metadata only, never values.
+7. Tests assert sentinel secret bytes never appear in scan/import output.
 
 No real import/write path exists yet. A non-dry-run `mc vault import` refuses
 before any mutation path can run.

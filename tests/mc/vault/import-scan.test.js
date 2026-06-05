@@ -55,6 +55,29 @@ describe('vault import scan — classification', () => {
       reason: 'url contains credentials',
     });
   });
+
+  it('handles key/path/id naming from real .dev.vars files', () => {
+    assert.deepEqual(classifyEnvEntry({ key: 'GOOGLE_CLOUD_TTS_KEY', value: 'abc' }), {
+      classification: 'secret',
+      confidence: 'high',
+      reason: 'secret-like key name',
+    });
+    assert.deepEqual(classifyEnvEntry({ key: 'APPLE_IAP_PRIVATE_KEY_PATH', value: './private.p8' }), {
+      classification: 'config',
+      confidence: 'medium',
+      reason: 'path to secret material, not secret material',
+    });
+    assert.deepEqual(classifyEnvEntry({ key: 'ASC_KEY_ID', value: 'ABC123' }), {
+      classification: 'config',
+      confidence: 'medium',
+      reason: 'key identifier, not secret material',
+    });
+    assert.deepEqual(classifyEnvEntry({ key: 'GOOGLE_REDIRECT_URI', value: 'http://localhost:8787/callback' }), {
+      classification: 'config',
+      confidence: 'medium',
+      reason: 'config-like key/value',
+    });
+  });
 });
 
 describe('vault import scan — no value output', () => {
@@ -113,5 +136,37 @@ describe('vault import dry-run — binding preview', () => {
     assert.deepEqual(plan.writes, []);
     assert.ok(!json.includes(secret), `dry-run leaked secret value: ${json}`);
     assert.ok(!json.includes('value'), `dry-run JSON should not expose a value field: ${json}`);
+  });
+
+  it('warns on duplicate keys and does not bind ambiguous duplicates', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mc-vault-import-dupe-'));
+    writeFileSync(join(dir, '.dev.vars'), [
+      'STRIPE_SECRET_KEY=first-secret',
+      'STRIPE_SECRET_KEY=second-secret',
+      'OPENAI_API_KEY=single-secret',
+      '',
+    ].join('\n'));
+
+    const plan = buildVaultImportDryRun('.dev.vars', { cwd: dir, repoName: 'memoro' });
+    const json = JSON.stringify(plan);
+
+    assert.deepEqual(plan.warnings, [
+      {
+        type: 'duplicate_key',
+        key: 'STRIPE_SECRET_KEY',
+        lines: [1, 2],
+        message: 'STRIPE_SECRET_KEY appears multiple times; fix the file before import',
+      },
+    ]);
+    assert.deepEqual(plan.candidates.map((k) => [k.name, k.duplicate, k.selected, k.label]), [
+      ['STRIPE_SECRET_KEY', true, false, null],
+      ['STRIPE_SECRET_KEY', true, false, null],
+      ['OPENAI_API_KEY', false, true, 'wrangler:memoro:OPENAI_API_KEY'],
+    ]);
+    assert.deepEqual(plan.binding.sources[0].keys, {
+      OPENAI_API_KEY: 'wrangler:memoro:OPENAI_API_KEY',
+    });
+    assert.ok(!json.includes('first-secret'), `dry-run leaked first duplicate secret: ${json}`);
+    assert.ok(!json.includes('second-secret'), `dry-run leaked second duplicate secret: ${json}`);
   });
 });

@@ -205,22 +205,56 @@ function printImportDryRun(plan) {
   }
 
   const selected = plan.candidates.filter((k) => k.selected);
-  console.log(`Dry run: ${selected.length} secret${selected.length === 1 ? '' : 's'} would be imported from ${plan.file}`);
+  const skipped = plan.candidates.filter((k) => !k.selected);
+  console.log(`Vault import preview: ${plan.file}`);
+  console.log(`  import ${selected.length} secret${selected.length === 1 ? '' : 's'} into mc vault`);
+  console.log(`  skip   ${skipped.length} key${skipped.length === 1 ? '' : 's'}`);
+  console.log(`  write  nothing (dry-run)\n`);
+
+  if (plan.warnings?.length) {
+    console.log('Warnings');
+    for (const w of plan.warnings) {
+      const where = w.lines?.length ? ` lines ${w.lines.join(', ')}` : '';
+      console.log(`  ${w.key}${where}: ${w.message}`);
+    }
+    console.log('');
+  }
+
   if (!plan.candidates.length) {
-    console.log('  no keys found');
+    console.log('No keys found.');
     return;
   }
 
-  const width = Math.max(8, ...plan.candidates.map((k) => k.name.length));
-  for (const k of plan.candidates) {
-    if (k.selected) {
-      console.log(`  ${k.name.padEnd(width)}  import as ${k.label}`);
-    } else {
-      console.log(`  ${k.name.padEnd(width)}  skip (${k.classification}, ${k.confidence})`);
+  if (selected.length) {
+    console.log('Will Import');
+    const width = Math.max(8, ...selected.map((k) => k.name.length));
+    for (const k of selected) {
+      console.log(`  ${k.name.padEnd(width)}  -> ${k.label}`);
+    }
+    console.log('');
+  }
+
+  if (skipped.length) {
+    console.log('Skipped');
+    const width = Math.max(8, ...skipped.map((k) => k.name.length));
+    for (const k of skipped) {
+      const detail = k.duplicate ? 'duplicate; fix before import' : `${k.classification}, ${k.confidence}`;
+      console.log(`  ${k.name.padEnd(width)}  ${detail}`);
+    }
+    console.log('');
+  }
+
+  console.log('Binding Preview');
+  const bindings = Object.entries(plan.binding?.sources?.[0]?.keys || {});
+  if (!bindings.length) {
+    console.log('  no bindings would be written');
+  } else {
+    const width = Math.max(8, ...bindings.map(([key]) => key.length));
+    for (const [key, label] of bindings) {
+      console.log(`  ${key.padEnd(width)}  -> ${label}`);
     }
   }
-  console.log('\nBinding preview: .mc/secrets.json');
-  console.log(JSON.stringify(plan.binding, null, 2));
+  console.log('\nNo changes made. Use --json for the exact machine-readable plan.');
 }
 
 // ────────────────────────────────────────────────────────────────────────
