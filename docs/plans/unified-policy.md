@@ -176,7 +176,7 @@ The first render target should be **Codex launch args**, not config files. Local
 CLI help confirms the interactive Codex surface has explicit runtime flags for
 the two permission fields mc can safely translate today:
 
-- `--sandbox <read-only|workspace-write|danger-full-access>`
+- `--sandbox <read-only|workspace-write>`
 - `--ask-for-approval <untrusted|on-request|never>`
 
 This is the right first surface because it is per launch, leaves no tracked
@@ -222,7 +222,7 @@ Only render explicit fields, never the default placeholders:
 | --- | --- | --- |
 | `workspace: "read-only"` | `--sandbox read-only` | Strictest useful mode. |
 | `workspace: "worktree"` | `--sandbox workspace-write` | Default mc worktree workflow. |
-| `workspace: "full"` | `--sandbox danger-full-access` | Only if explicitly configured. |
+| `workspace: "full"` | never rendered as full access | Capped to `workspace-write` with a warning. |
 | `approval: "untrusted"` | `--ask-for-approval untrusted` | Conservative. |
 | `approval: "on-request"` | `--ask-for-approval on-request` | Normal interactive autonomy. |
 | `approval: "never"` | `--ask-for-approval never` | Requires explicit config. |
@@ -232,6 +232,10 @@ Only render explicit fields, never the default placeholders:
 
 `tool-default` and `default` must render no flags. This preserves native tool
 behavior unless the user has configured a real mc policy.
+
+`danger-full-access` is not part of mc's policy model. mc should never hand an
+LLM full host access; if a future user needs that kind of execution it belongs
+outside mc in an external sandbox boundary, not as a normal policy profile.
 
 #### First implementation slice
 

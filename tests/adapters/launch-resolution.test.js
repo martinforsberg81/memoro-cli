@@ -111,7 +111,7 @@ describe('codex launchSpec — binary resolution', () => {
     const effectivePolicy = resolveEffectivePolicy({
       entry: {
         tool: 'codex',
-        policy: { permissions: { workspace: 'full', approval: 'never' } },
+        policy: { permissions: { workspace: 'worktree', approval: 'never' } },
       },
     });
     assert.deepEqual(spec.args(['--resume', 'DATA'], {
@@ -119,7 +119,7 @@ describe('codex launchSpec — binary resolution', () => {
       effectivePolicy,
     }), [
       '--sandbox',
-      'danger-full-access',
+      'workspace-write',
       '--ask-for-approval',
       'never',
       'grounding',
@@ -147,6 +147,19 @@ describe('codex renderPolicy', () => {
       support: codex.POLICY_SUPPORT,
       warnings: [],
     });
+  });
+
+  it('never renders Codex danger-full-access, even if workspace=full is configured', () => {
+    const effectivePolicy = resolveEffectivePolicy({
+      entry: {
+        tool: 'codex',
+        policy: { permissions: { workspace: 'full' } },
+      },
+    });
+    const rendered = codex.renderPolicy(effectivePolicy);
+    assert.deepEqual(rendered.launchArgs, ['--sandbox', 'workspace-write']);
+    assert.ok(!rendered.launchArgs.includes('danger-full-access'));
+    assert.match(rendered.warnings[0], /never grants full tool access/);
   });
 });
 

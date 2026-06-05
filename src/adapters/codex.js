@@ -204,9 +204,12 @@ export function renderPolicy(policy = null) {
     ? new Set(policy.explicit_permissions)
     : new Set();
   const launchArgs = [];
+  const warnings = [];
 
   if (explicit.has('workspace')) {
-    const sandbox = codexSandboxForWorkspace(permissions.workspace);
+    const rendered = codexSandboxForWorkspace(permissions.workspace);
+    const sandbox = rendered?.sandbox || null;
+    if (rendered?.warning) warnings.push(rendered.warning);
     if (sandbox) launchArgs.push('--sandbox', sandbox);
   }
   if (explicit.has('approval')) {
@@ -219,14 +222,19 @@ export function renderPolicy(policy = null) {
     env: {},
     artefacts: [],
     support: POLICY_SUPPORT,
-    warnings: [],
+    warnings,
   };
 }
 
 function codexSandboxForWorkspace(workspace) {
-  if (workspace === 'read-only') return 'read-only';
-  if (workspace === 'worktree') return 'workspace-write';
-  if (workspace === 'full') return 'danger-full-access';
+  if (workspace === 'read-only') return { sandbox: 'read-only' };
+  if (workspace === 'worktree') return { sandbox: 'workspace-write' };
+  if (workspace === 'full') {
+    return {
+      sandbox: 'workspace-write',
+      warning: 'workspace=full is not rendered; capped to workspace-write because mc never grants full tool access',
+    };
+  }
   return null;
 }
 
