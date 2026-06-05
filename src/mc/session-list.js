@@ -87,6 +87,7 @@ export function renderSessionListHuman({
   view,
   title = 'mc sessions:',
   emptyLocalHint = null,
+  includeExcerpts = false,
 } = {}) {
   const out = [];
   out.push(title);
@@ -97,7 +98,7 @@ export function renderSessionListHuman({
   } else {
     for (const session of view.active) {
       out.push(renderActiveLine(session));
-      if (session.excerpt) out.push(`     ${session.excerpt}`);
+      if (includeExcerpts && session.excerpt) out.push(`     ${session.excerpt}`);
     }
   }
   out.push('');
@@ -192,18 +193,19 @@ function activeLocalContextMatches(active, local) {
 }
 
 function renderActiveLine(session) {
-  const name = (session.name || session.coding_session_id || '').padEnd(20);
-  const source = (session.source || '').padEnd(10);
-  const location = [session.repo, session.branch, session.machine_id].filter(Boolean).join(' ');
-  const age = session.age_label ? ` ${session.age_label}` : '';
+  const name = fixed(session.name || session.coding_session_id || '', 28);
+  const source = fixed(session.source || '', 10);
+  const repo = fixed(session.repo || '', 12);
+  const branch = fixed(session.branch || '', 28);
+  const status = fixed(session.status || 'unknown', 10);
   const id = session.coding_session_id ? ` id=${session.coding_session_id}` : '';
-  return `  ${session.number}. ${name} active  ${source} ${location} ${session.status}${age}${id}`.replace(/\s+$/g, '');
+  return `  ${session.number}. ${name} active  ${source} ${repo} ${branch} ${status}${id}`.replace(/\s+$/g, '');
 }
 
 function renderLocalLine(entry) {
-  const name = String(entry.name || '').padEnd(20);
-  const tool = String(entry.tool || '').padEnd(10);
-  const branch = String(entry.branch || '').padEnd(24);
+  const name = fixed(entry.name || '', 28);
+  const tool = fixed(entry.tool || '', 10);
+  const branch = fixed(entry.branch || '', 28);
   const state = entry.session_state || 'no-session-yet';
   return `  ${entry.number}. ${name} local   ${tool} ${branch} ${state}`.replace(/\s+$/g, '');
 }
@@ -239,7 +241,15 @@ function formatAge(isoString) {
 }
 
 function cleanExcerpt(value) {
-  return String(value || '').replace(/\s+/g, ' ').trim().slice(0, 100);
+  return String(value || '')
+    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')
+    .replace(/\x1b\][^\x07\x1b]*(\x07|\x1b\\)/g, '')
+    .replace(/\x1b[=>cDEHM7-9NO]/g, '')
+    .replace(/\[[0-9;?]+[ -/]*[@-~]/g, '')
+    .replace(/[\x00-\x1f\x7f]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 100);
 }
 
 function nonEmpty(value) {
@@ -249,4 +259,14 @@ function nonEmpty(value) {
 function normaliseRepo(value) {
   const s = nonEmpty(value);
   return s ? s.toLowerCase() : null;
+}
+
+function fixed(value, width) {
+  return clip(String(value || ''), width).padEnd(width);
+}
+
+function clip(value, width) {
+  if (value.length <= width) return value;
+  if (width <= 3) return value.slice(0, width);
+  return `${value.slice(0, width - 3)}...`;
 }

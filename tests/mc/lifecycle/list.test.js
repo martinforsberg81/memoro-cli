@@ -263,6 +263,42 @@ describe('mc list', () => {
     assert.match(out, /id=sess_remote/);
   });
 
+  test('human output hides active-session excerpts by default', () => {
+    const view = buildSessionListView({
+      activeSessions: [{
+        coding_session_id: 'sess_remote',
+        label: 'active-local',
+        repo: 'memoro-cli',
+        branch: 'sess/dev',
+        source: 'codex',
+        last_assistant_excerpt: 'raw \x1b[0 q terminal [0 q chatter',
+      }],
+      localEntries: [],
+    });
+    const out = renderSessionListHuman({ view });
+    assert.match(out, /1\. active-local\s+active\s+codex/);
+    assert.doesNotMatch(out, /terminal/);
+    assert.doesNotMatch(out, /\[0 q/);
+  });
+
+  test('optional active-session excerpts are sanitized before rendering', () => {
+    const view = buildSessionListView({
+      activeSessions: [{
+        coding_session_id: 'sess_remote',
+        label: 'active-local',
+        repo: 'memoro-cli',
+        branch: 'sess/dev',
+        source: 'codex',
+        last_assistant_excerpt: 'Need \x1b[0 q clean [0 q text',
+      }],
+      localEntries: [],
+    });
+    const out = renderSessionListHuman({ view, includeExcerpts: true });
+    assert.match(out, /Need\s+clean\s+text/);
+    assert.doesNotMatch(out, /\x1b/);
+    assert.doesNotMatch(out, /\[0 q/);
+  });
+
   test('--all includes isolation worktrees with kind flag', () => {
     const r = runMc(['list', '--all', '--json'], { env: { MC_HOME: mcHome } });
     assert.equal(r.status, 0, `stderr:${r.stderr}`);
