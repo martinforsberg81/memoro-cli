@@ -5,6 +5,8 @@
  * session without writing tool config, changing vault matching, or mutating
  * native auth. Later phases can render this policy into adapters.
  */
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 const LEGACY_PROVIDER_TARGETS = Object.freeze({
   claude: [{ provider: 'anthropic', source: 'legacy-provider-mapping', target_auth_mode: 'api_key' }],
@@ -20,14 +22,15 @@ const DEFAULT_PERMISSIONS = Object.freeze({
   secrets: 'mc-vault-explicit',
 });
 
-export function resolveEffectivePolicy({ entry = {}, tool = null, config = {} } = {}) {
+const PERMISSION_FIELDS = Object.freeze(Object.keys(DEFAULT_PERMISSIONS));
+
+export function resolveEffectivePolicy({ entry = {}, tool = null, repoPolicy = null, config = {} } = {}) {
   const selectedTool = normaliseTool(tool || entry.tool || config.defaultTool || 'claude');
-  const policy = entry.policy || config.policy || null;
-  const source = entry.policy ? 'session' : config.policy ? 'config' : 'default';
+  const selected = selectPolicySource({ entryPolicy: entry.policy, repoPolicy, globalPolicy: config.policy });
   const permissions = {
     ...DEFAULT_PERMISSIONS,
-    ...(policy?.permissions && typeof policy.permissions === 'object' ? policy.permissions : {}),
-    source,
+    ...(selected.policy?.permissions && typeof selected.policy.permissions === 'object' ? selected.policy.permissions : {}),
+    source: selected.source,
     rendered_for: selectedTool,
   };
 
@@ -39,12 +42,41 @@ export function resolveEffectivePolicy({ entry = {}, tool = null, config = {} } 
 
   return {
     permissions,
+    adapter_support: {
+      tool: selectedTool,
+      permissions: permissionSupportForTool(selectedTool),
+    },
     secrets: {
       vault_required: materialisationTargets.length > 0,
       native_auth_owned_by_tool: materialisationTargets.length === 0,
       materialisation_targets: materialisationTargets,
     },
   };
+}
+
+export function readRepoPolicy({ worktreePath = null, cwd = process.cwd(), exists = existsSync, readFile = readFileSync } = {}) {
+  const root = worktreePath || cwd;
+  if (!root) return null;
+  const path = join(root, '.mc', 'policy.json');
+  if (!exists(path)) return null;
+  try {
+    const parsed = JSON.parse(readFile(path, 'utf8'));
+    if (!parsed || typeof parsed !== 'object') return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function selectPolicySource({ entryPolicy, repoPolicy, globalPolicy }) {
+  if (entryPolicy && typeof entryPolicy === 'object') return { source: 'session', policy: entryPolicy };
+  if (repoPolicy && typeof repoPolicy === 'object') return { source: 'repo', policy: repoPolicy };
+  if (globalPolicy && typeof globalPolicy === 'object') return { source: 'global', policy: globalPolicy };
+  return { source: 'default', policy: null };
+}
+
+function permissionSupportForTool(_tool) {
+  return Object.fromEntries(PERMISSION_FIELDS.map((field) => [field, 'unsupported']));
 }
 
 function normaliseTool(tool) {

@@ -121,6 +121,8 @@ Acceptance:
 
 ## Phase 3 — Permission profiles
 
+Status: landed in dev for visibility only.
+
 Add a minimal mc-owned permission profile model, still mostly informational:
 
 ```json
@@ -145,9 +147,10 @@ visible but not enforced; mc must not pretend enforcement exists.
 
 Acceptance:
 
-- policy resolver reports source precedence.
-- unsupported adapter fields are shown as `unsupported`, not silently applied.
-- switching a session from Claude to Codex keeps the mc policy object stable.
+- policy resolver reports source precedence. Landed.
+- unsupported adapter fields are shown as `unsupported`, not silently applied. Landed.
+- switching a session from Claude to Codex keeps the mc permission intent stable.
+  Landed.
 
 ## Phase 4 — Adapter rendering
 
@@ -188,6 +191,5 @@ mc touch anything new.
 
 ## Next build slice
 
-Build Phase 3 only: permission profile source precedence (`session > repo >
-global > default`) and status visibility. Do not render profile settings into
-tool files yet.
+Phase 4 can start adapter-by-adapter rendering, but only after choosing one
+tool surface and keeping it idempotent, reversible, and managed-marker based.

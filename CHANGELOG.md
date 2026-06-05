@@ -19,6 +19,11 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (`target_tool`, `target_auth_mode`, `target_location`). Provider-only
   OpenAI secrets still do not materialise into Codex; an explicit Codex
   target is required.
+- Effective policy visibility now honours permission profile precedence:
+  session registry policy, then `.mc/policy.json` in the worktree, then
+  global mc config, then defaults.
+- `mc status` now labels permission profile fields unsupported per adapter
+  until mc has explicit, reversible renderer support for that tool.
 
 ## [0.7.5] — 2026-06-04
 
