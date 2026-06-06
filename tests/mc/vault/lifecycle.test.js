@@ -127,6 +127,21 @@ async function bootstrapVaultWithSecrets(secrets) {
   return { server, portal, vaultKey, vaultKeyBytes, authHash };
 }
 
+function writeRepoBindings(worktree, keys) {
+  mkdirSync(join(worktree, '.mc'), { recursive: true });
+  writeFileSync(join(worktree, '.mc', 'secrets.json'), JSON.stringify({
+    version: 1,
+    sources: [
+      {
+        file: '.env',
+        format: 'dotenv',
+        materialise: 'file',
+        keys,
+      },
+    ],
+  }, null, 2));
+}
+
 describe('materialiseForSession', () => {
   let mcHomeDir;
   before(() => {
@@ -222,6 +237,67 @@ describe('materialiseForSession', () => {
     const body = readFileSync(path, 'utf8');
     assert.ok(!body.includes(TOKEN_CLAUDE), 'manifest leaked anthropic token');
     assert.ok(!body.includes(TOKEN_CODEX), 'manifest leaked openai token');
+  });
+
+  it('with repo bindings: materialises the repo-bound secret instead of another provider match', async () => {
+    const projectToken = 'sk-ant-project-bound-token';
+    const globalToken = 'sk-ant-global-token';
+    const { portal, vaultKeyBytes } = await bootstrapVaultWithSecrets([
+      { label: 'anthropic-global', token: globalToken, provider: 'anthropic' },
+      { label: 'anthropic-project', token: projectToken, provider: 'anthropic' },
+    ]);
+    const cacheDeps = makeMemCacheDeps();
+    await cacheVaultKey(vaultKeyBytes, { deps: cacheDeps });
+
+    const worktree = join(mcHomeDir, 'sess-repo-bound-wt');
+    writeRepoBindings(worktree, { ANTHROPIC_API_KEY: 'anthropic-project' });
+    const claudeStub = makeStubAdapter({
+      toolName: 'claude',
+      locations: [{ type: 'file', path: join(mcHomeDir, 'repo-bound-claude.json') }],
+    });
+
+    const res = await materialiseForSession({
+      sessionId: 'sess-repo-bound',
+      worktreePath: worktree,
+      portal,
+      adapters: [claudeStub],
+      deps: { cacheDeps },
+    });
+
+    assert.equal(res.ok, true, JSON.stringify(res));
+    assert.equal(res.materialised.length, 1);
+    assert.equal(res.materialised[0].label, 'anthropic-project');
+    assert.equal(claudeStub._calls.materialise.length, 1);
+    assert.equal(claudeStub._calls.materialise[0].token, projectToken);
+    assert.notEqual(claudeStub._calls.materialise[0].token, globalToken);
+  });
+
+  it('with repo bindings: never falls back to an unbound global secret', async () => {
+    const { portal, vaultKeyBytes } = await bootstrapVaultWithSecrets([
+      { label: 'anthropic-global', token: TOKEN_CLAUDE, provider: 'anthropic' },
+    ]);
+    const cacheDeps = makeMemCacheDeps();
+    await cacheVaultKey(vaultKeyBytes, { deps: cacheDeps });
+
+    const worktree = join(mcHomeDir, 'sess-no-fallback-wt');
+    writeRepoBindings(worktree, { ANTHROPIC_API_KEY: 'anthropic-other-project' });
+    const claudeStub = makeStubAdapter({
+      toolName: 'claude',
+      locations: [{ type: 'file', path: join(mcHomeDir, 'no-fallback-claude.json') }],
+    });
+
+    const res = await materialiseForSession({
+      sessionId: 'sess-no-fallback',
+      worktreePath: worktree,
+      portal,
+      adapters: [claudeStub],
+      deps: { cacheDeps },
+    });
+
+    assert.equal(res.ok, true, JSON.stringify(res));
+    assert.equal(res.materialised.length, 0);
+    assert.equal(claudeStub._calls.materialise.length, 0);
+    assert.ok(res.skipped.some((s) => s.tool === 'claude' && s.reason === 'no-repo-bound-secret'));
   });
 
   it('with cached key: explicit target_tool=codex is the only Codex materialisation path', async () => {

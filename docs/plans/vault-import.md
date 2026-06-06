@@ -188,6 +188,9 @@ Shipped:
 10. Binding helpers filter materialisation candidates to labels explicitly bound
     by the current repo. Account-wide vault storage remains available for
     `mc vault list/get`, but runtime reconstruction has a repo-local contract.
+11. Session launch token materialisation respects repo bindings when
+    `.mc/secrets.json` exists in the worktree: bound labels win, and mc will not
+    fall back to another provider-compatible secret from the account vault.
 
 No source-file rewrite path exists yet.
 
