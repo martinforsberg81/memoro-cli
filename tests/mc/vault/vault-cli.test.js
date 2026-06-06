@@ -153,7 +153,7 @@ describe('mc vault — subprocess wiring', () => {
     });
     assert.equal(res.status, 1, res.stderr);
     assert.match(res.stdout, /Vault import preview: \.env/);
-    assert.match(res.stdout, /write\s+vault entries after confirmation; no files changed/);
+    assert.match(res.stdout, /write\s+vault entries \+ \.mc\/secrets\.json after confirmation; source file unchanged/);
     assert.match(res.stdout, /No changes yet\. Confirm to import selected secrets into mc vault\./);
     assert.doesNotMatch(res.stdout, /write\s+nothing \(dry-run\)/);
     assert.ok(!res.stdout.includes(secret), `human import preview leaked secret value: ${res.stdout}`);

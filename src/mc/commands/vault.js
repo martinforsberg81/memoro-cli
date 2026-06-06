@@ -56,6 +56,12 @@ import {
   inspectCachedVaultKey,
 } from '../vault/key-cache.js';
 import { buildVaultImportDryRun, parseDotenv, scanVaultImportFiles } from '../vault/import-scan.js';
+import {
+  SECRET_BINDINGS_RELATIVE_PATH,
+  bindingForLabels,
+  persistSecretBindingPlan,
+  planSecretBindingPersistence,
+} from '../vault/bindings.js';
 
 const PASSPHRASE_ENV = 'MC_VAULT_PASSPHRASE';
 
@@ -247,7 +253,7 @@ function printImportPreview(plan, { dryRun = true } = {}) {
   console.log(`  skip   ${skipped.length} key${skipped.length === 1 ? '' : 's'}`);
   console.log(dryRun
     ? '  write  nothing (dry-run)\n'
-    : '  write  vault entries after confirmation; no files changed\n');
+    : `  write  vault entries + ${SECRET_BINDINGS_RELATIVE_PATH} after confirmation; source file unchanged\n`);
 
   if (plan.warnings?.length) {
     console.log('Warnings');
@@ -298,6 +304,9 @@ function printImportPreview(plan, { dryRun = true } = {}) {
 }
 
 async function importSelectedSecrets({ file, plan, flags, opts }) {
+  const cwd = opts.cwd || process.cwd();
+  await planSecretBindingPersistence(plan.binding, { cwd });
+
   const portal = await loadPortal(opts);
   const config = await requireSetup(portal);
   if (!config) return 1;
@@ -306,10 +315,11 @@ async function importSelectedSecrets({ file, plan, flags, opts }) {
   if (!got) return 1;
   const { vaultKey } = got;
 
-  const values = readDotenvValueMap(file, { cwd: opts.cwd || process.cwd() });
+  const values = readDotenvValueMap(file, { cwd });
   const existingLabels = await listVaultLabels(portal, vaultKey);
   const imported = [];
   const skipped = [];
+  const bindableLabels = new Set();
 
   for (const candidate of plan.candidates) {
     if (!candidate.selected) {
@@ -318,6 +328,7 @@ async function importSelectedSecrets({ file, plan, flags, opts }) {
     }
     if (existingLabels.has(candidate.label)) {
       skipped.push({ name: candidate.name, label: candidate.label, reason: 'label already exists' });
+      bindableLabels.add(candidate.label);
       continue;
     }
     const token = values.get(candidate.name);
@@ -350,16 +361,29 @@ async function importSelectedSecrets({ file, plan, flags, opts }) {
       return 1;
     }
     existingLabels.add(candidate.label);
+    bindableLabels.add(candidate.label);
     imported.push({ name: candidate.name, label: candidate.label, id: res.secret?.id || null });
   }
+
+  const binding = bindingForLabels(plan.binding, bindableLabels);
+  const bindingPlan = bindableLabels.size
+    ? await planSecretBindingPersistence(binding, { cwd })
+    : null;
+  const bindingFile = bindingPlan
+    ? await persistSecretBindingPlan(bindingPlan)
+    : null;
+  const writes = bindingFile?.changed
+    ? [{ path: bindingFile.path, action: bindingFile.action }]
+    : [];
 
   const result = {
     ok: true,
     imported,
     skipped,
     warnings: plan.warnings,
-    binding: plan.binding,
-    writes: [],
+    binding,
+    binding_file: bindingFile,
+    writes,
   };
 
   if (flags.json) {
@@ -386,7 +410,15 @@ function printImportResult(result) {
       console.log(`  ${item.name.padEnd(width)}  ${item.reason}`);
     }
   }
-  console.log('\nNo files changed.');
+  if (result.writes?.length) {
+    const write = result.writes[0];
+    const verb = write.action === 'created' ? 'Created' : 'Updated';
+    console.log(`\n${verb} ${write.path}.`);
+  } else if (result.binding_file?.action === 'unchanged') {
+    console.log(`\nRepo bindings already up to date in ${result.binding_file.path}.`);
+  } else {
+    console.log('\nNo files changed.');
+  }
 }
 
 function readDotenvValueMap(file, { cwd }) {

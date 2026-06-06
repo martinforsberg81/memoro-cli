@@ -165,7 +165,7 @@ Classification is advisory. User choice wins.
   where supported and fall back to not materialising into LLM-readable paths
   where no equivalent guard exists.
 
-## Landed: Read-Only Scan + Import
+## Landed: Read-Only Scan + Import + Bindings
 
 Shipped:
 
@@ -182,14 +182,23 @@ Shipped:
    source file before real import.
 7. JSON and human output include key metadata only, never values.
 8. Tests assert sentinel secret bytes never appear in scan/import output.
+9. Successful import persists repo-local `.mc/secrets.json` bindings. Existing
+   vault labels are still skipped for value writes, but the repo gets the
+   value-free pointer so future materialisation is repo-scoped.
+10. Binding helpers filter materialisation candidates to labels explicitly bound
+    by the current repo. Account-wide vault storage remains available for
+    `mc vault list/get`, but runtime reconstruction has a repo-local contract.
 
 No source-file rewrite path exists yet.
 
 ## Next Build Slice
 
-1. Add `.mc/secrets.json` binding persistence after successful import.
-2. Preflight existing vault labels and mark each candidate as create / exists
+1. Preflight existing vault labels and mark each candidate as create / exists
    in the dry-run plan too, when the vault is unlocked.
-3. Default existing labels to skip; support explicit per-key overwrite/rotate
+2. Default existing labels to skip; support explicit per-key overwrite/rotate
    only after the user confirms.
-4. Preserve the no-value-output invariant across success and every error path.
+3. Add `mc vault materialise [--dry-run]` for repo-bound dotenv surfaces and
+   manifest-track the files so `mc end` can shred them.
+4. Add `mc vault import --move` source-file rewrite once materialisation is
+   reliable.
+5. Preserve the no-value-output invariant across success and every error path.
