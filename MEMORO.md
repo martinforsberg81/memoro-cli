@@ -98,9 +98,10 @@ tool state intact.
 - **Map reconciliation guard** — `active · S · now`
   Reading MEMORO.md at startup is not enough; 0.7.6 itself proved that shipped
   work can leave the map stale unless reconciliation is prompted deliberately.
-  Next slice: deterministic tripwires plus a prompt-only session affordance
-  (for example `/mc map`) that asks the LLM to draft a concrete MEMORO.md patch.
-  Writes remain user-approved; avoid silent edits and PM-style map CRUD.
+  Next slice: deterministic tripwires plus a single prompt-only session
+  affordance, `/mc map`, that asks the LLM to draft a concrete MEMORO.md patch.
+  Writes remain user-approved; avoid silent edits, duplicate `/mc end`
+  reconciliation flow, and PM-style map CRUD.
   → `docs/plans/map-reconciliation.md`
 
 ### Policy & safety — same freedom across tools   · serves G2, G3
