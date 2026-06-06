@@ -204,6 +204,10 @@ Shipped:
     fall back to another provider-compatible secret from the account vault.
 12. Manual `mc vault set` supports the same choice: global by default, or
     repo-bound when the user passes `--bind ENV_KEY`.
+13. Repo-bound dotenv secrets materialise at session launch into managed blocks
+    in the bound files, are included in the per-session vault manifest, are
+    covered by the same LLM read-blocking hook, and are shredded by `mc end`.
+    Existing keys outside the mc-managed block are never overwritten.
 
 No source-file rewrite path exists yet.
 
@@ -213,8 +217,8 @@ No source-file rewrite path exists yet.
    in the dry-run plan too, when the vault is unlocked.
 2. Default existing labels to skip; support explicit per-key overwrite/rotate
    only after the user confirms.
-3. Add `mc vault materialise [--dry-run]` for repo-bound dotenv surfaces and
-   manifest-track the files so `mc end` can shred them.
+3. Add an explicit `mc vault materialise [--dry-run]` inspection/manual command
+   on top of the now-shipped session-launch materialisation path.
 4. Add `mc vault import --move` source-file rewrite once materialisation is
    reliable.
 5. Preserve the no-value-output invariant across success and every error path.

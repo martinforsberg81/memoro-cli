@@ -127,13 +127,13 @@ async function bootstrapVaultWithSecrets(secrets) {
   return { server, portal, vaultKey, vaultKeyBytes, authHash };
 }
 
-function writeRepoBindings(worktree, keys) {
+function writeRepoBindings(worktree, keys, file = '.env') {
   mkdirSync(join(worktree, '.mc'), { recursive: true });
   writeFileSync(join(worktree, '.mc', 'secrets.json'), JSON.stringify({
     version: 1,
     sources: [
       {
-        file: '.env',
+        file,
         format: 'dotenv',
         materialise: 'file',
         keys,
@@ -265,8 +265,8 @@ describe('materialiseForSession', () => {
     });
 
     assert.equal(res.ok, true, JSON.stringify(res));
-    assert.equal(res.materialised.length, 1);
-    assert.equal(res.materialised[0].label, 'anthropic-project');
+    assert.ok(res.materialised.length >= 1);
+    assert.equal(res.materialised.find((m) => m.tool === 'claude')?.label, 'anthropic-project');
     assert.equal(claudeStub._calls.materialise.length, 1);
     assert.equal(claudeStub._calls.materialise[0].token, projectToken);
     assert.notEqual(claudeStub._calls.materialise[0].token, globalToken);
@@ -298,6 +298,83 @@ describe('materialiseForSession', () => {
     assert.equal(res.materialised.length, 0);
     assert.equal(claudeStub._calls.materialise.length, 0);
     assert.ok(res.skipped.some((s) => s.tool === 'claude' && s.reason === 'no-repo-bound-secret'));
+  });
+
+  it('with repo bindings: materialises dotenv secrets and shreds them on session end', async () => {
+    const token = 'repo-openai-secret-value-123';
+    const label = 'wrangler:memoro:OPENAI_API_KEY';
+    const { portal, vaultKeyBytes } = await bootstrapVaultWithSecrets([
+      { label, token, provider: 'wrangler', account: 'memoro' },
+    ]);
+    const cacheDeps = makeMemCacheDeps();
+    await cacheVaultKey(vaultKeyBytes, { deps: cacheDeps });
+
+    const worktree = join(mcHomeDir, 'sess-repo-dotenv-wt');
+    writeRepoBindings(worktree, { OPENAI_API_KEY: label }, '.dev.vars');
+    const codexStub = makeStubAdapter({
+      toolName: 'codex',
+      locations: [{ type: 'file', path: join(mcHomeDir, 'codex-no-auth-write.json') }],
+    });
+
+    const res = await materialiseForSession({
+      sessionId: 'sess-repo-dotenv',
+      worktreePath: worktree,
+      portal,
+      adapters: [codexStub],
+      deps: { cacheDeps },
+    });
+
+    assert.equal(res.ok, true, JSON.stringify(res));
+    assert.equal(codexStub._calls.materialise.length, 0, 'repo app secret must not become Codex native auth');
+    assert.ok(res.materialised.some((m) => m.tool === 'repo' && m.location.source === '.dev.vars'));
+    const body = readFileSync(join(worktree, '.dev.vars'), 'utf8');
+    assert.match(body, /mc vault materialised begin/);
+    assert.match(body, /OPENAI_API_KEY=repo-openai-secret-value-123/);
+
+    const returned = JSON.stringify(res);
+    assert.ok(!returned.includes(token), `materialise result leaked token: ${returned}`);
+    const manifest = readFileSync(manifestPath('sess-repo-dotenv'), 'utf8');
+    assert.ok(!manifest.includes(token), 'manifest must not contain the token value');
+
+    const shred = await shredForSession({
+      sessionId: 'sess-repo-dotenv',
+      worktreePath: worktree,
+      adapters: [codexStub],
+      deps: { cacheDeps },
+    });
+    assert.equal(shred.ok, true, JSON.stringify(shred));
+    assert.equal(existsSync(join(worktree, '.dev.vars')), false, 'created runtime secret file should be removed');
+  });
+
+  it('with repo bindings: refuses to overwrite an existing dotenv key', async () => {
+    const token = 'repo-openai-secret-value-456';
+    const label = 'wrangler:memoro:OPENAI_API_KEY';
+    const { portal, vaultKeyBytes } = await bootstrapVaultWithSecrets([
+      { label, token, provider: 'wrangler', account: 'memoro' },
+    ]);
+    const cacheDeps = makeMemCacheDeps();
+    await cacheVaultKey(vaultKeyBytes, { deps: cacheDeps });
+
+    const worktree = join(mcHomeDir, 'sess-repo-dotenv-conflict-wt');
+    writeRepoBindings(worktree, { OPENAI_API_KEY: label }, '.dev.vars');
+    writeFileSync(join(worktree, '.dev.vars'), 'OPENAI_API_KEY=already-here\n');
+    const codexStub = makeStubAdapter({
+      toolName: 'codex',
+      locations: [{ type: 'file', path: join(mcHomeDir, 'codex-conflict.json') }],
+    });
+
+    const res = await materialiseForSession({
+      sessionId: 'sess-repo-dotenv-conflict',
+      worktreePath: worktree,
+      portal,
+      adapters: [codexStub],
+      deps: { cacheDeps },
+    });
+
+    assert.equal(res.ok, true, JSON.stringify(res));
+    assert.equal(res.materialised.some((m) => m.tool === 'repo'), false);
+    assert.ok(res.skipped.some((s) => s.tool === 'repo' && s.key === 'OPENAI_API_KEY' && s.reason === 'key-already-present'));
+    assert.equal(readFileSync(join(worktree, '.dev.vars'), 'utf8'), 'OPENAI_API_KEY=already-here\n');
   });
 
   it('with cached key: explicit target_tool=codex is the only Codex materialisation path', async () => {

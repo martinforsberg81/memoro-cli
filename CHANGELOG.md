@@ -31,6 +31,38 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `workspace` (`--sandbox`) and `approval` (`--ask-for-approval`). Default
   policy placeholders render no flags, so native Codex behavior stays unchanged
   unless the user configures policy. mc never renders Codex full-access mode.
+- `mc vault scan` and `mc vault import <dotenv-file>` migrate existing `.env`
+  / `.dev.vars` secrets into the encrypted vault without printing values.
+  Imports create deterministic labels, skip duplicate source keys, skip existing
+  vault labels by default, and persist value-free repo bindings in
+  `.mc/secrets.json`.
+- `mc vault set <label> --bind ENV_KEY` lets manually created secrets be
+  attached to the current repo. Without `--bind`, manually set secrets remain
+  account-wide/global by design.
+- Repo-bound dotenv secrets now materialise during session launch into managed
+  blocks in the bound `.env` / `.dev.vars` file, are tracked in the session
+  vault manifest, covered by the existing LLM read-blocking hook, and shredded
+  by `mc end`.
+
+### Changed
+- `mc list` now separates reachable active sessions from local dead/idle
+  sessions, uses clean terminal excerpt sanitisation, and supports a numbered
+  picker path via `mc resume`.
+- Session resume now reuses stable mc coding session IDs for named sessions,
+  so a resumed session reconnects to the same tracked mc session instead of
+  silently minting a new identity.
+- Repo-bound vault materialisation is an allowlist: when `.mc/secrets.json`
+  exists, runtime use is limited to labels bound by that repo. Provider-compatible
+  global secrets are not used as fallback.
+
+### Fixed
+- `mc tool-switch codex` now persists the default tool even when adapter wrapper
+  sync reports drift, so later `mc new` / bare `mc` invocations honour the
+  selected default.
+- JSON/non-interactive `mc vault import` no longer prompts for the master
+  password when the vault is locked; it returns a structured locked-vault error.
+- `mc vault import` human output no longer calls a confirmed mutation preview a
+  dry-run, and `mc vault list` sizes its columns to long labels.
 
 ## [0.7.5] — 2026-06-04
 

@@ -38,6 +38,7 @@ import * as VaultApi from './api.js';
 import { normaliseSecretPayload } from './types.js';
 import { installHook, uninstallHook } from './hook.js';
 import { SECRET_BINDINGS_RELATIVE_PATH, collectBoundLabels, readSecretBindings } from './bindings.js';
+import { REPO_SECRET_TOOL, materialiseRepoBoundSecrets, shredRepoMaterialisation } from './repo-materialise.js';
 import { detectInstalled } from '../../adapters/index.js';
 import { getSecret as keychainGet } from '../../lib/keychain.js';
 import { ACCOUNTS } from '../../commands/auth.js';
@@ -265,10 +266,12 @@ export async function materialiseForSession({
 
   // Nothing in this session's selected tool needs vault materialisation.
   // Return before touching Memoro auth or prompting for vault unlock.
-  if (!candidates.length) {
+  const needsRepoMaterialisation = !!(worktreePath && repoBindingScope.present && repoBindingScope.labels.size > 0);
+
+  if (!candidates.length && !needsRepoMaterialisation) {
     return { ok: true, materialised: [], skipped };
   }
-  if (repoBindingScope.present && repoBindingScope.labels.size === 0) {
+  if (repoBindingScope.present && repoBindingScope.labels.size === 0 && !needsRepoMaterialisation) {
     for (const { adapter } of candidates) {
       skipped.push({ tool: adapter.TOOL_NAME, reason: 'no-repo-bound-secret' });
     }
@@ -310,6 +313,18 @@ export async function materialiseForSession({
   // For each adapter, materialise the FIRST matching secret per location.
   // Multi-account / per-session selection is §12h (deferred to phase 4).
   const materialised = [];
+
+  if (needsRepoMaterialisation) {
+    const repoRes = await materialiseRepoBoundSecrets({
+      bindings: repoBindingScope.bindings,
+      matches,
+      worktreePath,
+      sessionId,
+      deps,
+    });
+    materialised.push(...repoRes.materialised);
+    skipped.push(...repoRes.skipped);
+  }
 
   for (const { adapter, providers, locations } of candidates) {
     const match = matches.find((m) => secretMatchesAdapter(m.payload, adapter, providers));
@@ -406,7 +421,7 @@ async function readRepoBindingScope({ worktreePath, deps = {} }) {
   try {
     const bindings = await readSecretBindings({ cwd: worktreePath, deps });
     if (!bindings) return { present: false, labels: new Set() };
-    return { present: true, labels: collectBoundLabels(bindings) };
+    return { present: true, labels: collectBoundLabels(bindings), bindings };
   } catch (err) {
     return { present: true, labels: new Set(), error: err.message };
   }
@@ -488,6 +503,16 @@ export async function shredForSession({
   const shredded = [];
   const failures = [];
   for (const m of (manifest.materialised || [])) {
+    if (m.tool === REPO_SECRET_TOOL) {
+      const res = await shredRepoMaterialisation({ location: m.location, deps })
+        .catch((err) => ({ ok: false, reason: err.message }));
+      if (res?.ok) {
+        shredded.push({ tool: m.tool, location: m.location, removed: !!res.removed });
+      } else {
+        failures.push({ tool: m.tool, location: m.location, reason: res?.reason || 'shred-failed' });
+      }
+      continue;
+    }
     const adapter = adapterByTool.get(m.tool);
     if (!adapter || typeof adapter.shredToken !== 'function') {
       failures.push({ tool: m.tool, reason: 'adapter-missing' });
