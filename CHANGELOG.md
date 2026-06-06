@@ -6,6 +6,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.7.6] — 2026-06-06
+
 ### Added
 - `mc spawn <name> "<brief>"` creates an idle, durable project session
   with its own worktree/branch, `.mc/brief.md`, parent coordinator,
@@ -293,6 +295,7 @@ Initial public release.
 - `SessionEnd` transcript path now read from stdin JSON for compatibility with
   current Claude Code hook payloads.
 
+[0.7.6]: https://github.com/martinforsberg81/memoro-cli/releases/tag/v0.7.6
 [0.7.5]: https://github.com/martinforsberg81/memoro-cli/releases/tag/v0.7.5
 [0.7.0]: https://github.com/martinforsberg81/memoro-cli/releases/tag/v0.7.0
 [0.2.0]: https://github.com/martinforsberg81/memoro-cli/releases/tag/v0.2.0
