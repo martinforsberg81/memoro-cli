@@ -574,10 +574,12 @@ async function cmdUnlock(argv, opts = {}) {
   // a cache failure is *not* an unlock failure — the verb still
   // succeeded server-side, we just lose the no-prompt UX for
   // subsequent calls. tests + CI pass via opts.cacheDeps.
-  await cacheVaultKey(vaultKeyBytes, { deps: opts.cacheDeps });
+  const cacheStored = await cacheVaultKey(vaultKeyBytes, { deps: opts.cacheDeps });
   emit(flags.json,
-    { ok: true },
-    'Vault unlocked. Key cached for 15 min — subsequent commands won\'t re-prompt.',
+    { ok: true, cache: { stored: cacheStored, ttl_ms: cacheStored ? 15 * 60 * 1000 : 0 } },
+    cacheStored
+      ? 'Vault unlocked. Key cached for 15 min — subsequent commands won\'t re-prompt.'
+      : 'Vault unlocked, but the local key cache could not be written. This session is live, but commands that decrypt secrets may need `mc vault unlock` again.',
   );
   return 0;
 }
@@ -632,6 +634,7 @@ async function cmdStatus(argv, opts = {}) {
           present: !!cacheInfo.present,
           expires_at: cacheInfo.expiresAt || null,
           expires_in_ms: cacheInfo.expiresInMs || 0,
+          reason: cacheInfo.reason || (cacheInfo.present ? 'ok' : 'missing'),
         },
       },
     }, null, 2));
@@ -642,6 +645,8 @@ async function cmdStatus(argv, opts = {}) {
     if (cacheInfo.present) {
       const mins = Math.round(cacheInfo.expiresInMs / 60_000);
       console.log(`  cached key: yes (${mins} min${mins === 1 ? '' : 's'} until lock)`);
+    } else if (cacheInfo.reason && !['missing', 'expired'].includes(cacheInfo.reason)) {
+      console.log(`  cached key: invalid (${cacheInfo.reason})`);
     } else {
       console.log(`  cached key: no`);
     }
@@ -1266,6 +1271,7 @@ async function requireSetup(portal) {
     salt: status.vault.salt,
     iterations: status.vault.iterations || 600_000,
     createdAt: status.vault.createdAt,
+    unlocked: !!status.vault.unlocked,
   };
 }
 
@@ -1294,9 +1300,12 @@ async function getUnlockedVaultKey({ portal, config, flags, opts }) {
   }
 
   if (!canPromptForVaultKey({ flags, opts })) {
+    const error = config.unlocked
+      ? `vault key not cached locally; run \`mc vault unlock\` again, or set ${PASSPHRASE_ENV} for non-interactive use`
+      : `vault locked; run \`mc vault unlock\` first, or set ${PASSPHRASE_ENV} for non-interactive use`;
     emit(flags.json, {
       ok: false,
-      error: `vault locked; run \`mc vault unlock\` first, or set ${PASSPHRASE_ENV} for non-interactive use`,
+      error,
     });
     return null;
   }

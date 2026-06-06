@@ -178,6 +178,40 @@ describe('inspectCachedVaultKey', () => {
     assert.equal(info.present, false);
     assert.equal(info.expiresInMs, 0);
   });
+
+  it('does not report TTL-only entries as present', async () => {
+    const store = new Map();
+    store.set(VAULT_CACHE_ACCOUNT, JSON.stringify({
+      expiresAt: new Date(1_000_000 + TTL_MS).toISOString(),
+    }));
+    const deps = {
+      async getSecret(a) { return store.get(a) ?? null; },
+      async setSecret() {},
+      async deleteSecret(a) { store.delete(a); },
+      now: () => 1_000_000,
+    };
+    const info = await inspectCachedVaultKey({ deps });
+    assert.equal(info.present, false);
+    assert.equal(info.reason, 'missing-vault-key');
+  });
+
+  it('does not report wrong-length key entries as present', async () => {
+    const store = new Map();
+    const sixteen = btoa(String.fromCharCode(...new Uint8Array(16)));
+    store.set(VAULT_CACHE_ACCOUNT, JSON.stringify({
+      vaultKeyB64: sixteen,
+      expiresAt: new Date(1_000_000 + TTL_MS).toISOString(),
+    }));
+    const deps = {
+      async getSecret(a) { return store.get(a) ?? null; },
+      async setSecret() {},
+      async deleteSecret(a) { store.delete(a); },
+      now: () => 1_000_000,
+    };
+    const info = await inspectCachedVaultKey({ deps });
+    assert.equal(info.present, false);
+    assert.equal(info.reason, 'invalid-vault-key');
+  });
 });
 
 describe('clearCachedVaultKey', () => {

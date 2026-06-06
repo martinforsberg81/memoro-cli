@@ -65,6 +65,9 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   password when the vault is locked; it returns a structured locked-vault error.
 - `mc vault import` human output no longer calls a confirmed mutation preview a
   dry-run, and `mc vault list` sizes its columns to long labels.
+- `mc vault status`, `unlock`, and JSON `get` now distinguish a usable cached
+  vault key from a live server session without a local decrypt key, so
+  metadata reads no longer fail with a misleading generic locked-vault message.
 
 ## [0.7.5] — 2026-06-04
 

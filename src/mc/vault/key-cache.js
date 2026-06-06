@@ -110,26 +110,19 @@ export async function readCachedVaultKey({
     return null;
   }
   if (!raw) return null;
-  let parsed;
-  try { parsed = JSON.parse(raw); } catch { return null; }
-  if (!parsed || typeof parsed.vaultKeyB64 !== 'string' || typeof parsed.expiresAt !== 'string') {
+  const parsed = parseCacheRecord(raw, now);
+  if (!parsed.present) {
+    if (parsed.clear) await clearCachedVaultKey({ identity, deps }).catch(() => {});
     return null;
   }
-  const expiresMs = Date.parse(parsed.expiresAt);
-  if (!Number.isFinite(expiresMs) || expiresMs <= now) {
-    // Eagerly clear stale entries so cache-state stays honest.
+  let vaultKey;
+  try {
+    vaultKey = await importVaultKey(parsed.vaultKeyBytes);
+  } catch {
     await clearCachedVaultKey({ identity, deps }).catch(() => {});
     return null;
   }
-  let vaultKeyBytes;
-  try {
-    vaultKeyBytes = base64ToBytes(parsed.vaultKeyB64);
-  } catch {
-    return null;
-  }
-  if (vaultKeyBytes.length !== 32) return null;
-  const vaultKey = await importVaultKey(vaultKeyBytes);
-  return { vaultKey, vaultKeyBytes, expiresAt: parsed.expiresAt };
+  return { vaultKey, vaultKeyBytes: parsed.vaultKeyBytes, expiresAt: parsed.expiresAt };
 }
 
 /**
@@ -145,19 +138,15 @@ export async function inspectCachedVaultKey({
   const now = typeof deps.now === 'function' ? deps.now() : Date.now();
   let raw;
   try { raw = await getSecret(cacheAccountFor(identity)); }
-  catch { return { present: false, expiresAt: null, expiresInMs: 0 }; }
-  if (!raw) return { present: false, expiresAt: null, expiresInMs: 0 };
-  let parsed;
-  try { parsed = JSON.parse(raw); }
-  catch { return { present: false, expiresAt: null, expiresInMs: 0 }; }
-  const expiresMs = Date.parse(parsed?.expiresAt);
-  if (!Number.isFinite(expiresMs)) {
-    return { present: false, expiresAt: null, expiresInMs: 0 };
-  }
-  if (expiresMs <= now) {
-    return { present: false, expiresAt: parsed.expiresAt, expiresInMs: 0 };
-  }
-  return { present: true, expiresAt: parsed.expiresAt, expiresInMs: expiresMs - now };
+  catch { return emptyInspect('unreadable'); }
+  if (!raw) return emptyInspect('missing');
+  const parsed = parseCacheRecord(raw, now);
+  return {
+    present: parsed.present,
+    expiresAt: parsed.expiresAt,
+    expiresInMs: parsed.expiresInMs,
+    reason: parsed.reason,
+  };
 }
 
 /**
@@ -173,4 +162,46 @@ export async function clearCachedVaultKey({
     await deleteSecret(cacheAccountFor(identity));
   } catch { /* best effort */ }
   return true;
+}
+
+function emptyInspect(reason) {
+  return { present: false, expiresAt: null, expiresInMs: 0, reason };
+}
+
+function parseCacheRecord(raw, now) {
+  let parsed;
+  try { parsed = JSON.parse(raw); }
+  catch { return { present: false, expiresAt: null, expiresInMs: 0, reason: 'invalid-json', clear: true }; }
+
+  const expiresAt = typeof parsed?.expiresAt === 'string' ? parsed.expiresAt : null;
+  const expiresMs = Date.parse(expiresAt);
+  if (!Number.isFinite(expiresMs)) {
+    return { present: false, expiresAt, expiresInMs: 0, reason: 'invalid-expires-at', clear: true };
+  }
+  if (expiresMs <= now) {
+    return { present: false, expiresAt, expiresInMs: 0, reason: 'expired', clear: true };
+  }
+
+  if (typeof parsed?.vaultKeyB64 !== 'string') {
+    return { present: false, expiresAt, expiresInMs: expiresMs - now, reason: 'missing-vault-key', clear: true };
+  }
+
+  let vaultKeyBytes;
+  try {
+    vaultKeyBytes = base64ToBytes(parsed.vaultKeyB64);
+  } catch {
+    return { present: false, expiresAt, expiresInMs: expiresMs - now, reason: 'invalid-vault-key', clear: true };
+  }
+  if (vaultKeyBytes.length !== 32) {
+    return { present: false, expiresAt, expiresInMs: expiresMs - now, reason: 'invalid-vault-key', clear: true };
+  }
+
+  return {
+    present: true,
+    expiresAt,
+    expiresInMs: expiresMs - now,
+    reason: 'ok',
+    clear: false,
+    vaultKeyBytes,
+  };
 }

@@ -122,6 +122,26 @@ describe('mc vault — full lifecycle (in-process)', () => {
     process.env.MC_VAULT_PASSPHRASE = PW;
   });
 
+  it('unlock reports when the local key cache cannot be written', async () => {
+    await vaultRun(['setup', '--json'], { portal });
+    activeCacheDeps = {
+      async getSecret() { return null; },
+      async setSecret() { throw new Error('keychain unavailable'); },
+      async deleteSecret() {},
+      now: () => Date.now(),
+    };
+    cap.restore(); cap = captureConsole();
+
+    const rc = await vaultRun(['unlock', '--json'], { portal });
+    cap.restore();
+
+    assert.equal(rc, 0);
+    assert.equal(server.inspect().unlocked, true);
+    const out = JSON.parse(cap.out.join('\n'));
+    assert.equal(out.ok, true);
+    assert.equal(out.cache.stored, false);
+  });
+
   it('lock zeroes the server-side unlock flag', async () => {
     await vaultRun(['setup', '--json'], { portal });
     await vaultRun(['unlock', '--json'], { portal });
@@ -392,6 +412,28 @@ describe('mc vault — full lifecycle (in-process)', () => {
       assert.match(out.error, /vault locked/);
       assert.match(out.error, /mc vault unlock/);
       assert.equal(server.inspect().secrets.length, 0);
+    } finally {
+      process.env.MC_VAULT_PASSPHRASE = oldPassphrase;
+    }
+  });
+
+  it('get --json distinguishes a live server session from a missing local vault-key cache', async () => {
+    await vaultRun(['setup', '--json'], { portal });
+    await vaultRun(['unlock', '--json'], { portal });
+    assert.equal(server.inspect().unlocked, true);
+
+    const oldPassphrase = process.env.MC_VAULT_PASSPHRASE;
+    delete process.env.MC_VAULT_PASSPHRASE;
+    activeCacheDeps = makeMemCacheDeps();
+    cap.restore(); cap = captureConsole();
+    try {
+      const rc = await vaultRun(['get', 'anything', '--json'], { portal });
+      cap.restore();
+      assert.equal(rc, 1);
+      const out = JSON.parse(cap.out.join('\n'));
+      assert.equal(out.ok, false);
+      assert.match(out.error, /vault key not cached locally/);
+      assert.match(out.error, /mc vault unlock/);
     } finally {
       process.env.MC_VAULT_PASSPHRASE = oldPassphrase;
     }
