@@ -16,6 +16,7 @@ import {
   normaliseSecretPayload,
   parseTypeFlag,
   formatListJson,
+  formatListWidths,
   formatListLine,
 } from '../../../src/mc/vault/types.js';
 
@@ -192,5 +193,17 @@ describe('formatListLine — no secret values', () => {
   it('falls back to bare kind when no provider', () => {
     const line = formatListLine({ id: 'v', kind: 'api_token', label: 'l', provider: null, account: null });
     assert.ok(line.includes('api_token'));
+  });
+  it('uses shared dynamic widths so long labels do not collide with kind', () => {
+    const rows = [
+      { id: 'v1', kind: 'api_token', label: 'short', provider: 'env', account: 'dev' },
+      { id: 'v2', kind: 'api_token', label: 'wrangler:memoro:GOOGLE_CLOUD_TTS_KEY', provider: 'wrangler', account: 'memoro' },
+    ];
+    const widths = formatListWidths(rows);
+    const short = formatListLine(rows[0], widths);
+    const long = formatListLine(rows[1], widths);
+    const kindColumn = long.indexOf('api_token:wrangler/memoro');
+    assert.ok(kindColumn > long.indexOf(rows[1].label), long);
+    assert.equal(short.indexOf('api_token:env/dev'), kindColumn);
   });
 });

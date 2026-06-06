@@ -21,8 +21,9 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { spawnSync } from 'node:child_process';
 
-import { runMc } from '../_helpers/cli.js';
+import { runMc, CLI_PATH } from '../_helpers/cli.js';
 
 describe('mc vault — subprocess wiring', () => {
   it('`mc vault` with no args prints help and exits 0', () => {
@@ -127,6 +128,35 @@ describe('mc vault — subprocess wiring', () => {
     assert.ok(!res.stdout.includes(secret), `human import preview leaked secret value: ${res.stdout}`);
     assert.ok(!res.stdout.includes('stripe-one'), `human import preview leaked duplicate secret: ${res.stdout}`);
     assert.ok(!res.stdout.trim().startsWith('{'), `human output should not be raw JSON:\n${res.stdout}`);
+  });
+
+  it('`mc vault import` human confirmation preview does not call itself a dry-run', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mc-vault-import-confirm-preview-'));
+    const secret = 'pancakes-and-syrup-9af237';
+    writeFileSync(join(dir, '.env'), `OPENAI_API_KEY=${secret}\n`);
+
+    const env = { ...process.env };
+    delete env.MC_EMIT_SHELL_DIRECTIVES;
+    delete env.MEMORO_MC_PARENT;
+    delete env.MC_ORPHAN_PID_DIR;
+
+    const res = spawnSync(process.execPath, [CLI_PATH, 'vault', 'import', '.env'], {
+      cwd: dir,
+      input: 'n\n',
+      encoding: 'utf8',
+      env: {
+        ...env,
+        MC_TEST_MODE: '1',
+        MEMORO_API_URL: 'http://127.0.0.1:1',
+        PATH: '/usr/bin:/bin:/usr/sbin:/sbin',
+      },
+    });
+    assert.equal(res.status, 1, res.stderr);
+    assert.match(res.stdout, /Vault import preview: \.env/);
+    assert.match(res.stdout, /write\s+vault entries after confirmation; no files changed/);
+    assert.match(res.stdout, /No changes yet\. Confirm to import selected secrets into mc vault\./);
+    assert.doesNotMatch(res.stdout, /write\s+nothing \(dry-run\)/);
+    assert.ok(!res.stdout.includes(secret), `human import preview leaked secret value: ${res.stdout}`);
   });
 
   it('`mc vault import --json` requires explicit --no-confirm before mutation', () => {

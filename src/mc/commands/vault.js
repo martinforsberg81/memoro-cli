@@ -34,7 +34,9 @@ import {
   normaliseSecretPayload,
   parseTypeFlag,
   formatListJson,
+  formatListHeader,
   formatListLine,
+  formatListWidths,
   MC_SECRET_KINDS,
   WIRE_SECRET_TYPE,
 } from '../vault/types.js';
@@ -193,7 +195,7 @@ async function cmdImport(argv, opts = {}) {
     if (flags.json) {
       console.log(JSON.stringify(plan));
     } else {
-      printImportDryRun(plan);
+      printImportPreview(plan, { dryRun: true });
     }
     return plan.ok ? 0 : 1;
   }
@@ -221,7 +223,7 @@ async function cmdImport(argv, opts = {}) {
   }
 
   if (!flags.noConfirm && !flags.json) {
-    printImportDryRun(plan);
+    printImportPreview(plan, { dryRun: false });
     const ok = await confirm(`Import ${selected.length} secret${selected.length === 1 ? '' : 's'} into mc vault?`, { defaultYes: false });
     if (!ok) {
       console.log('Cancelled.');
@@ -232,7 +234,7 @@ async function cmdImport(argv, opts = {}) {
   return importSelectedSecrets({ file: flags.positional[0], plan, flags, opts });
 }
 
-function printImportDryRun(plan) {
+function printImportPreview(plan, { dryRun = true } = {}) {
   if (!plan.ok) {
     console.error(`mc vault: ${plan.error}`);
     return;
@@ -243,7 +245,9 @@ function printImportDryRun(plan) {
   console.log(`Vault import preview: ${plan.file}`);
   console.log(`  import ${selected.length} secret${selected.length === 1 ? '' : 's'} into mc vault`);
   console.log(`  skip   ${skipped.length} key${skipped.length === 1 ? '' : 's'}`);
-  console.log(`  write  nothing (dry-run)\n`);
+  console.log(dryRun
+    ? '  write  nothing (dry-run)\n'
+    : '  write  vault entries after confirmation; no files changed\n');
 
   if (plan.warnings?.length) {
     console.log('Warnings');
@@ -288,7 +292,9 @@ function printImportDryRun(plan) {
       console.log(`  ${key.padEnd(width)}  -> ${label}`);
     }
   }
-  console.log('\nNo changes made. Use --json for the exact machine-readable plan.');
+  console.log(dryRun
+    ? '\nNo changes made. Use --json for the exact machine-readable plan.'
+    : '\nNo changes yet. Confirm to import selected secrets into mc vault.');
 }
 
 async function importSelectedSecrets({ file, plan, flags, opts }) {
@@ -670,8 +676,9 @@ async function cmdList(argv, opts = {}) {
     console.log('No secrets stored. Add one with `mc vault set <label>`.');
   } else {
     console.log(`mc vault — ${decrypted.length} secret${decrypted.length === 1 ? '' : 's'}:\n`);
-    console.log(`  ${'label'.padEnd(32)}  ${'kind'.padEnd(28)}  id`);
-    for (const s of decrypted) console.log(formatListLine(s));
+    const widths = formatListWidths(decrypted);
+    console.log(formatListHeader(widths));
+    for (const s of decrypted) console.log(formatListLine(s, widths));
     console.log(`\nRun \`mc vault get <label>\` to print a value.`);
   }
   return 0;

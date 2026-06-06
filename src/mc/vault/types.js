@@ -170,13 +170,29 @@ export function formatListJson({ secrets }) {
   };
 }
 
+function listTag(secret) {
+  return secret.provider
+    ? `${secret.kind}:${secret.provider}${secret.account ? `/${secret.account}` : ''}`
+    : secret.kind;
+}
+
+export function formatListWidths(secrets = []) {
+  const rows = Array.isArray(secrets) ? secrets : [];
+  return {
+    label: Math.max('label'.length, ...rows.map((s) => String(s.label || '').length)),
+    kind: Math.max('kind'.length, ...rows.map((s) => listTag(s).length)),
+  };
+}
+
+export function formatListHeader(widths = formatListWidths([])) {
+  return `  ${'label'.padEnd(widths.label)}  ${'kind'.padEnd(widths.kind)}  id`;
+}
+
 /**
  * Pretty (non-JSON) one-line summary of a secret for `mc vault list`.
  * No secret values. Pure for tests.
  */
-export function formatListLine(secret) {
-  const tag = secret.provider
-    ? `${secret.kind}:${secret.provider}${secret.account ? `/${secret.account}` : ''}`
-    : secret.kind;
-  return `  ${secret.label.padEnd(32)}  ${tag.padEnd(28)}  ${secret.id}`;
+export function formatListLine(secret, widths = formatListWidths([secret])) {
+  const tag = listTag(secret);
+  return `  ${String(secret.label || '').padEnd(widths.label)}  ${tag.padEnd(widths.kind)}  ${secret.id}`;
 }
