@@ -127,6 +127,28 @@ export function bindingForLabels(binding, labels) {
   return { version: 1, sources };
 }
 
+export function buildDotenvSecretBinding({ file = '.env', key, label, materialise = 'file' } = {}) {
+  if (!key || typeof key !== 'string' || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
+    throw new Error('--bind must be a valid env key, e.g. OPENAI_API_KEY');
+  }
+  if (!label || typeof label !== 'string') {
+    throw new Error('binding label is required');
+  }
+  return {
+    version: 1,
+    sources: [
+      {
+        file,
+        format: 'dotenv',
+        materialise,
+        keys: {
+          [key]: label,
+        },
+      },
+    ],
+  };
+}
+
 function normaliseSecretBindings(input) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) {
     throw new Error(`${SECRET_BINDINGS_RELATIVE_PATH} must contain an object`);

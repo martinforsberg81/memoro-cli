@@ -59,6 +59,7 @@ import { buildVaultImportDryRun, parseDotenv, scanVaultImportFiles } from '../va
 import {
   SECRET_BINDINGS_RELATIVE_PATH,
   bindingForLabels,
+  buildDotenvSecretBinding,
   persistSecretBindingPlan,
   planSecretBindingPersistence,
 } from '../vault/bindings.js';
@@ -78,7 +79,7 @@ const VERBS = {
   import:            { handler: cmdImport,           help: 'Import dotenv secrets into the vault (use --dry-run to preview)' },
   list:              { handler: cmdList,             help: 'List secret labels (no values)' },
   get:               { handler: cmdGet,              help: 'Print a secret (prompts for confirmation)' },
-  set:               { handler: cmdSet,              help: 'Store a new secret' },
+  set:               { handler: cmdSet,              help: 'Store a new secret (use --bind KEY to attach it to this repo)' },
   rm:                { handler: cmdRm,               help: 'Delete a secret' },
   rotate:            { handler: cmdRotate,           help: 'Replace a secret, keeping the old as <label>-prev' },
   'change-password': { handler: cmdChangePassword,   help: 'Change the master password (re-encrypts auth hash)' },
@@ -127,6 +128,7 @@ COMMON OPTIONS
   --json              Machine-readable output
   --dry-run           Preview planned writes without mutating vault/files
   --no-confirm        Skip confirmation prompts (use with care)
+  --bind <ENV_KEY>    For \`set\`: attach this secret to the current repo
   --type <kind>       For \`set\` and \`list\`: ${MC_SECRET_KINDS.join(' | ')}
 
 MASTER PASSWORD
@@ -811,6 +813,13 @@ async function cmdSet(argv, opts = {}) {
     return 2;
   }
   const kind = parseTypeFlag(flags.type) || 'api_token';
+  const cwd = opts.cwd || process.cwd();
+  const binding = flags.bind
+    ? buildDotenvSecretBinding({ file: flags.bindFile || '.env', key: flags.bind, label })
+    : null;
+  const bindingPlan = binding
+    ? await planSecretBindingPersistence(binding, { cwd })
+    : null;
 
   const portal = await loadPortal(opts);
   const config = await requireSetup(portal);
@@ -870,11 +879,29 @@ async function cmdSet(argv, opts = {}) {
     emit(flags.json, { ok: false, error: res?.error || 'create failed' });
     return 1;
   }
-  emit(flags.json,
-    { ok: true, secret: { id: res.secret?.id, label, kind } },
-    `Stored "${label}" (${kind}). Use \`mc vault list\` to verify, \`mc vault get ${label}\` to read.`,
-  );
+  const bindingFile = bindingPlan
+    ? await persistSecretBindingPlan(bindingPlan)
+    : null;
+  const result = {
+    ok: true,
+    secret: { id: res.secret?.id, label, kind },
+    binding,
+    binding_file: bindingFile,
+    writes: bindingFile?.changed ? [{ path: bindingFile.path, action: bindingFile.action }] : [],
+  };
+  emit(flags.json, result, formatSetResult(label, kind, bindingFile));
   return 0;
+}
+
+function formatSetResult(label, kind, bindingFile) {
+  const lines = [`Stored "${label}" (${kind}). Use \`mc vault list\` to verify, \`mc vault get ${label}\` to read.`];
+  if (bindingFile?.changed) {
+    const verb = bindingFile.action === 'created' ? 'Created' : 'Updated';
+    lines.push(`${verb} ${bindingFile.path}.`);
+  } else if (bindingFile?.action === 'unchanged') {
+    lines.push(`Repo bindings already up to date in ${bindingFile.path}.`);
+  }
+  return lines.join('\n');
 }
 
 // ────────────────────────────────────────────────────────────────────────
@@ -1356,6 +1383,8 @@ function bytesToBase64(bytes) {
  *   --dry-run
  *   --no-confirm
  *   --stdin
+ *   --bind <ENV_KEY>
+ *   --bind-file <path>
  *   --type <kind>
  *   --provider <name>
  *   --account <name>
@@ -1373,6 +1402,8 @@ function parseFlags(argv) {
     dryRun: false,
     noConfirm: false,
     stdin: false,
+    bind: null,
+    bindFile: null,
     type: null,
     provider: null,
     account: null,
@@ -1389,6 +1420,8 @@ function parseFlags(argv) {
     else if (a === '--dry-run') out.dryRun = true;
     else if (a === '--no-confirm') out.noConfirm = true;
     else if (a === '--stdin') out.stdin = true;
+    else if (a === '--bind') out.bind = argv[++i];
+    else if (a === '--bind-file') out.bindFile = argv[++i];
     else if (a === '--type') out.type = argv[++i];
     else if (a === '--provider') out.provider = argv[++i];
     else if (a === '--account') out.account = argv[++i];

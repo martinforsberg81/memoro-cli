@@ -69,6 +69,17 @@ Non-dry-run import creates new vault entries for selected keys after explicit
 confirmation. Existing vault labels are skipped by default; overwrite/rotate is
 not part of the first import mutation slice.
 
+### `mc vault set <label> [--bind ENV_KEY]`
+
+Manual creation remains explicit about scope:
+
+- Without `--bind`, the secret is account-wide/global vault storage only.
+- With `--bind ENV_KEY`, mc writes a value-free repo-local binding in
+  `.mc/secrets.json`, defaulting to `.env` as the materialisation source.
+
+This lets a user keep shared/global tokens in the vault while choosing separate
+OpenAI/Anthropic/etc bindings per repo.
+
 ### `mc vault import <file> --move`
 
 After import succeeds, rewrite the source file so secrets are no longer stored
@@ -191,6 +202,8 @@ Shipped:
 11. Session launch token materialisation respects repo bindings when
     `.mc/secrets.json` exists in the worktree: bound labels win, and mc will not
     fall back to another provider-compatible secret from the account vault.
+12. Manual `mc vault set` supports the same choice: global by default, or
+    repo-bound when the user passes `--bind ENV_KEY`.
 
 No source-file rewrite path exists yet.
 

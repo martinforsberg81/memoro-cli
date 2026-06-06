@@ -178,6 +178,67 @@ describe('mc vault — full lifecycle (in-process)', () => {
     assert.equal(getJson.secret.value, PW, 'get --json should round-trip the value');
   });
 
+  it('set leaves a secret global unless --bind is explicit', async () => {
+    await vaultRun(['setup', '--json'], { portal });
+    const dir = mkdtempSync(join(tmpdir(), 'mc-vault-set-global-'));
+    cap.restore(); cap = captureConsole();
+
+    const rc = await vaultRun(
+      ['set', 'global-openai-test', '--type', 'api_token', '--provider', 'openai', '--account', 'personal', '--json', '--no-confirm'],
+      { portal, cwd: dir },
+    );
+    cap.restore();
+
+    assert.equal(rc, 0, `set failed: ${JSON.stringify({ out: cap.out, err: cap.err })}`);
+    const out = JSON.parse(cap.out.join('\n'));
+    assert.deepEqual(out.writes, []);
+    assert.equal(out.binding, null);
+    assert.equal(existsSync(join(dir, '.mc', 'secrets.json')), false);
+  });
+
+  it('set --bind stores a repo-local value-free binding for a manually created secret', async () => {
+    await vaultRun(['setup', '--json'], { portal });
+    const dir = mkdtempSync(join(tmpdir(), 'mc-vault-set-bind-'));
+    const label = 'env:manual-repo:OPENAI_API_KEY';
+    cap.restore(); cap = captureConsole();
+
+    const rc = await vaultRun(
+      ['set', label, '--type', 'api_token', '--provider', 'env', '--account', 'manual-repo', '--bind', 'OPENAI_API_KEY', '--json', '--no-confirm'],
+      { portal, cwd: dir },
+    );
+    cap.restore();
+
+    assert.equal(rc, 0, `set failed: ${JSON.stringify({ out: cap.out, err: cap.err })}`);
+    const out = JSON.parse(cap.out.join('\n'));
+    assert.deepEqual(out.writes, [{ path: '.mc/secrets.json', action: 'created' }]);
+    assert.equal(out.binding.sources[0].keys.OPENAI_API_KEY, label);
+
+    const bindingsBody = readFileSync(join(dir, '.mc', 'secrets.json'), 'utf8');
+    assert.ok(!bindingsBody.includes(PW), 'binding file must not contain the secret value');
+    assert.deepEqual(JSON.parse(bindingsBody), {
+      version: 1,
+      sources: [
+        {
+          file: '.env',
+          format: 'dotenv',
+          keys: {
+            OPENAI_API_KEY: label,
+          },
+          materialise: 'file',
+        },
+      ],
+    });
+
+    cap = captureConsole();
+    const listRc = await vaultRun(['list', '--json'], { portal });
+    cap.restore();
+    assert.equal(listRc, 0);
+    const list = JSON.parse(cap.out.join('\n'));
+    assert.equal(list.secrets[0].label, label);
+    assert.equal(list.secrets[0].provider, 'env');
+    assert.equal(list.secrets[0].account, 'manual-repo');
+  });
+
   it('set refuses duplicate labels with a pointer at rotate', async () => {
     await vaultRun(['setup', '--json'], { portal });
     cap.restore(); cap = captureConsole();
