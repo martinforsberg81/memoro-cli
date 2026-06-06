@@ -1226,6 +1226,15 @@ async function getUnlockedVaultKey({ portal, config, flags, opts }) {
   if (cached) {
     return { vaultKey: cached.vaultKey };
   }
+
+  if (!canPromptForVaultKey({ flags, opts })) {
+    emit(flags.json, {
+      ok: false,
+      error: `vault locked; run \`mc vault unlock\` first, or set ${PASSPHRASE_ENV} for non-interactive use`,
+    });
+    return null;
+  }
+
   // 2. Cache miss → prompt + derive + cache.
   const password = await readMasterPassword('Master password: ', opts);
   const { vaultKey, vaultKeyBytes, authHash } = await deriveVaultKeys(
@@ -1240,6 +1249,13 @@ async function getUnlockedVaultKey({ portal, config, flags, opts }) {
   // the next verb will re-prompt.
   await cacheVaultKey(vaultKeyBytes, { deps: opts.cacheDeps });
   return { vaultKey };
+}
+
+function canPromptForVaultKey({ flags = {}, opts = {} } = {}) {
+  if (typeof opts.promptStub === 'function') return true;
+  if (process.env[PASSPHRASE_ENV]) return true;
+  if (flags.json) return false;
+  return process.stdin.isTTY === true;
 }
 
 async function findSecretByLabel(portal, vaultKey, label) {

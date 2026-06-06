@@ -263,6 +263,32 @@ describe('mc vault — full lifecycle (in-process)', () => {
     assert.equal(server.inspect().secrets.length, 0);
   });
 
+  it('import --json --no-confirm fails cleanly when vault is locked and no cache/passphrase is available', async () => {
+    await vaultRun(['setup', '--json'], { portal });
+    const dir = mkdtempSync(join(tmpdir(), 'mc-vault-import-locked-json-'));
+    const secret = 'locked-import-secret-123';
+    writeFileSync(join(dir, '.env'), `OPENAI_API_KEY=${secret}\n`);
+
+    const oldPassphrase = process.env.MC_VAULT_PASSPHRASE;
+    delete process.env.MC_VAULT_PASSPHRASE;
+    cap.restore(); cap = captureConsole();
+    try {
+      const rc = await vaultRun(['import', '.env', '--json', '--no-confirm'], { portal, cwd: dir });
+      cap.restore();
+      assert.equal(rc, 1);
+      assert.equal(cap.err.join('\n'), '');
+      assert.doesNotMatch(cap.out.join('\n'), /Master password/);
+      assert.ok(!cap.out.join('\n').includes(secret), 'locked import JSON must not leak secret value');
+      const out = JSON.parse(cap.out.join('\n'));
+      assert.equal(out.ok, false);
+      assert.match(out.error, /vault locked/);
+      assert.match(out.error, /mc vault unlock/);
+      assert.equal(server.inspect().secrets.length, 0);
+    } finally {
+      process.env.MC_VAULT_PASSPHRASE = oldPassphrase;
+    }
+  });
+
   it('rm deletes a secret (with --no-confirm)', async () => {
     await vaultRun(['setup', '--json'], { portal });
     await vaultRun(['set', 'doomed', '--no-confirm', '--json'], { portal });
