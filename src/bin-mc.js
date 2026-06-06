@@ -506,16 +506,30 @@ async function runWrap(argv, { label = null } = {}) {
   if (launchSpec.startupMessageDelivery === 'argv-prompt') {
     startupMessage = null;
   }
+  let spawnEnv = {
+    ...process.env,
+    MEMORO_MC_PARENT: '1',  // hooks see this and no-op their heartbeat-loop
+  };
+  if (launchToolId === 'codex') {
+    try {
+      const { prepareCloudflareGuardEnv } = await import('./mc/cloudflare-guard.js');
+      spawnEnv = prepareCloudflareGuardEnv({
+        baseEnv: spawnEnv,
+        mcDir: MC_DIR,
+        codingSessionId,
+      }).env;
+    } catch (err) {
+      console.error(`mc: failed to install Codex Cloudflare guard (${err.message}); refusing to launch`);
+      process.exit(1);
+    }
+  }
 
   const ptyProcess = pty.spawn(launchSpec.bin, spawnArgs, {
     name: process.env.TERM || 'xterm-256color',
     cols: process.stdout.columns || 80,
     rows: process.stdout.rows || 24,
     cwd,
-    env: {
-      ...process.env,
-      MEMORO_MC_PARENT: '1',  // hooks see this and no-op their heartbeat-loop
-    },
+    env: spawnEnv,
   });
 
   // Pipe PTY output → user's terminal. Also:
