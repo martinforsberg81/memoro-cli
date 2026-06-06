@@ -12,13 +12,11 @@
  *      authority lives in the verbs (pattern 1), so we never re-author
  *      the hint here.
  *   3. Persist the new default in `~/.memoro/config.json` under
- *      `defaultTool`. (Consumer wiring in `mc new` / `mc resume` lands as
- *      a follow-up — they still hardcode 'claude' today. The switch is
- *      a no-op for them until that follow-up ships; this is documented
- *      in the PR body so it can't slip silently.)
+ *      `defaultTool`.
  *   4. Run `mc adapter sync` for the target tool only by calling
  *      `runSyncWith({ tool, force, dryRun }, deps)`. Drift on the target
- *      without `--force` aborts the switch.
+ *      without `--force` leaves the default switch intact but refuses to
+ *      overwrite the wrapper.
  *   5. After the target sync succeeds, surface drift state across ALL
  *      tools (not just the target) using `planSync` — the "drift surface"
  *      mentioned in §13d step 5. Co-existence is by design; we never
@@ -86,6 +84,9 @@ WHAT IT DOES
   2. Updates the persisted default tool (~/.memoro/config.json)
   3. Runs \`mc adapter sync --tool <tool>\` for the target
   4. Reports drift across all tools at the end
+
+Wrapper drift never blocks saving the default. It only blocks overwriting
+the target instruction file unless you pass --force.
 
 This does not touch existing sessions. To relaunch one existing session with
 a different tool, exit the current tool completely and run:
@@ -335,16 +336,7 @@ export async function runSwitchWith(opts, deps) {
     if (opts.json && captured.stdout) process.stdout.write(captured.stdout);
     return 2;
   }
-  if (captured.code === 1) {
-    // sync refused (drift detected, target tool only). Print the sync
-    // output verbatim and abort — don't flip the default.
-    process.stdout.write(captured.stdout);
-    process.stderr.write(captured.stderr);
-    if (!opts.json) {
-      process.stderr.write(`\nmc: refusing to switch to ${target.id} — target instruction file has drift. Re-run with --force to overwrite.\n`);
-    }
-    return 1;
-  }
+  const syncRefused = captured.code === 1;
 
   // ── Phase 3 (write): persist the new default. Dry-run skips. ─────
   if (!opts.dryRun && plan.targetChanged) {
@@ -371,7 +363,12 @@ export async function runSwitchWith(opts, deps) {
       current: plan.target,
       target_changed: plan.targetChanged,
       dry_run: opts.dryRun,
-      sync: { actions: extractSyncActions(captured.stdout, opts.json) },
+      sync: {
+        ok: !syncRefused,
+        refused: syncRefused,
+        warning: syncRefused ? syncRefusalWarning(target.id, opts.dryRun) : null,
+        actions: extractSyncActions(captured.stdout, opts.json),
+      },
       drift: allDrift,
     }, null, 2));
     return 0;
@@ -384,6 +381,7 @@ export async function runSwitchWith(opts, deps) {
     targetLabel: target.label,
     dryRun: opts.dryRun,
     syncOutput: captured.stdout,
+    syncWarning: syncRefused ? syncRefusalWarning(target.id, opts.dryRun) : null,
     drift: allDrift,
   });
   return 0;
@@ -483,7 +481,14 @@ function extractSyncActions(captured, jsonMode) {
   }
 }
 
-function printHumanReport({ plan, targetLabel, dryRun, syncOutput, drift }) {
+function syncRefusalWarning(tool, dryRun) {
+  const prefix = dryRun
+    ? 'target instruction file has drift; default would still be switched'
+    : 'target instruction file has drift; default tool was saved';
+  return `${prefix}, but ${tool} wrapper was not overwritten. Re-run with --force to refresh it.`;
+}
+
+function printHumanReport({ plan, targetLabel, dryRun, syncOutput, syncWarning = null, drift }) {
   const tag = dryRun ? ' [dry-run]' : '';
   process.stdout.write(`mc tool-switch${tag} — target: ${plan.target} (${targetLabel})\n\n`);
 
@@ -499,6 +504,10 @@ function printHumanReport({ plan, targetLabel, dryRun, syncOutput, drift }) {
   if (syncOutput && syncOutput.trim().length) {
     process.stdout.write(`\n${syncOutput}`);
     if (!syncOutput.endsWith('\n')) process.stdout.write('\n');
+  }
+
+  if (syncWarning) {
+    process.stdout.write(`\n  ! ${syncWarning}\n`);
   }
 
   // Cross-tool drift surface.

@@ -391,8 +391,8 @@ describe('runSwitchWith — refusals (not ready)', () => {
   });
 });
 
-describe('runSwitchWith — drift refusals', () => {
-  it('refuses + does not flip default when target wrapper has drift', async () => {
+describe('runSwitchWith — drift warnings', () => {
+  it('persists the default but does not overwrite the target wrapper when it has drift', async () => {
     const { deps, writes, state } = makeDeps({
       files: {
         [CANONICAL_ABS]: CANONICAL_BODY,
@@ -403,13 +403,37 @@ describe('runSwitchWith — drift refusals', () => {
     });
     const { code, stdout, stderr } = await captureStreams(() =>
       runSwitchWith({ tool: 'codex', dryRun: false, force: false, json: false }, deps));
-    assert.equal(code, 1, `stdout: ${stdout} stderr: ${stderr}`);
+    assert.equal(code, 0, `stdout: ${stdout} stderr: ${stderr}`);
     assert.equal(writes.length, 0);
-    assert.equal(state.defaultTool, 'claude-code');
+    assert.equal(state.defaultTool, 'codex');
     // The drift surface (from the inner sync) reaches stdout.
     assert.match(stdout, /DRIFT/);
-    // And the switch wrapper adds its own --force pointer on stderr.
-    assert.match(stderr, /--force/);
+    // The switch wrapper adds its own --force pointer without making
+    // wrapper drift look like a failed default switch.
+    assert.match(stdout, /default tool/);
+    assert.match(stdout, /--force/);
+    assert.equal(stderr, '');
+  });
+
+  it('--json reports sync refusal while still reporting a successful switch', async () => {
+    const { deps, state } = makeDeps({
+      files: {
+        [CANONICAL_ABS]: CANONICAL_BODY,
+        '/repo/AGENTS.md': '# I hand-edited this\n',
+      },
+      statuses: READY,
+      defaultTool: 'claude-code',
+    });
+    const { code, stdout } = await captureStreams(() =>
+      runSwitchWith({ tool: 'codex', dryRun: false, force: false, json: true }, deps));
+    assert.equal(code, 0);
+    assert.equal(state.defaultTool, 'codex');
+    const parsed = JSON.parse(stdout.trim());
+    assert.equal(parsed.ok, true);
+    assert.equal(parsed.current, 'codex');
+    assert.equal(parsed.sync.ok, false);
+    assert.equal(parsed.sync.refused, true);
+    assert.match(parsed.sync.warning, /--force/);
   });
 
   it('--force overwrites target drift and flips default', async () => {
@@ -456,6 +480,24 @@ describe('runSwitchWith — --dry-run', () => {
     const parsed = JSON.parse(stdout.trim());
     assert.equal(parsed.dry_run, true);
     assert.equal(parsed.target_changed, true);
+  });
+
+  it('--dry-run with target drift still reports the default switch plan', async () => {
+    const { deps, writes, state } = makeDeps({
+      files: {
+        [CANONICAL_ABS]: CANONICAL_BODY,
+        '/repo/AGENTS.md': '# I hand-edited this\n',
+      },
+      statuses: READY,
+      defaultTool: 'claude-code',
+    });
+    const { code, stdout } = await captureStreams(() =>
+      runSwitchWith({ tool: 'codex', dryRun: true, force: false, json: false }, deps));
+    assert.equal(code, 0);
+    assert.equal(state.defaultTool, 'claude-code');
+    assert.equal(writes.length, 0);
+    assert.match(stdout, /would set default/);
+    assert.match(stdout, /--force/);
   });
 
   it('works in an ordinary repo with no repo-local canonical by using package canon', async () => {
