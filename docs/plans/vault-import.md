@@ -1,6 +1,6 @@
 # Vault Import
 
-**Status:** design · 2026-06-05 · serves G3
+**Status:** core shipped / next slices active · 2026-06-06 · serves G3
 
 Users often already have working local secrets in `.env`, `.env.local`,
 `.dev.vars`, shell profiles, or tool-specific config files. mc vault must not

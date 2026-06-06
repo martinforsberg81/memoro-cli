@@ -75,28 +75,33 @@ tool state intact.
   (`i18n`, `automations`, `courses`, etc.), all created and tracked by mc. Tool
   agents remain disposable inside a project session; mc owns the top-level
   topology: parent/child, worktree, branch, focus, policy, transcript/status,
-  and MEMORO.md reconciliation. → `docs/plans/session-fabric.md`
+  and MEMORO.md reconciliation. First slices shipped in 0.7.6: `mc spawn`
+  creates tracked project sessions with briefs, and `mc list --tree` exposes
+  the coordinator/project shape. → `docs/plans/session-fabric.md`
 - **Continuity: resume work in a new session** — `active · S · now`
   mc is a **continuity layer**, not an agent-runner: the engine (agents, spawn,
   parallelism) comes free from the underlying model/tool; mc adds grounding +
   MEMORO.md as living project state. Payoff: resume a piece of work in a new
-  session (other day/machine/tool) because it grounds in the map. The orchestrator
-  operates a loop with *borrowed* agents — brief → tool-agent → separate review
-  agent (2nd opinion) → merge — proven by hand. A fanout/verify/gather spine,
-  map subcommands, and resume-by-intent machinery are all rejected for now as
-  LLM-cruft: keep the start state excellent and let the coordinator session do
-  the orchestration. → `docs/plans/fanout-spine.md`
+  session (other day/machine/tool) because it grounds in the map. 0.7.6 fixed
+  the concrete resume/list incident: named sessions now reuse stable mc coding
+  session IDs, `mc list` separates reachable active sessions from local dead
+  sessions, and numbered resume/picker paths are usable. A fanout/verify/gather
+  spine, PM-ish map verbs, and resume-by-intent machinery remain rejected for
+  now: keep the start state excellent and let the coordinator session do the
+  orchestration. → `docs/plans/fanout-spine.md`
 - **Coordinator wake-up quality** — `active · M · now`
   The next quality bar is not more CLI verbs; it is a sharper first minute. A
   resumed coordinator should immediately see the north star, active project
   nodes, role boundary, current worktree/tool, and the rule that non-trivial
   implementation gets delegated via a brief rather than done heads-down here.
   → `docs/plans/fanout-spine.md`
-- **Map reconciliation guard** — `next · S · after 0.7.5`
-  Reading MEMORO.md at startup is not enough; the session must reconcile the map
-  when work lands or drifts. mc should provide deterministic tripwires (status/end
-  hints, stale active nodes, branches without map nodes) while keeping writes
-  user-approved and avoiding a `mc map` command family. → `docs/plans/map-reconciliation.md`
+- **Map reconciliation guard** — `active · S · now`
+  Reading MEMORO.md at startup is not enough; 0.7.6 itself proved that shipped
+  work can leave the map stale unless reconciliation is prompted deliberately.
+  Next slice: deterministic tripwires plus a prompt-only session affordance
+  (for example `/mc map`) that asks the LLM to draft a concrete MEMORO.md patch.
+  Writes remain user-approved; avoid silent edits and PM-style map CRUD.
+  → `docs/plans/map-reconciliation.md`
 
 ### Policy & safety — same freedom across tools   · serves G2, G3
 - **Unified permissions and secrets policy** — `active · M · now`
@@ -112,10 +117,12 @@ tool state intact.
   The user path must be migration, not manual copy-paste: scan `.env` /
   `.dev.vars`, import selected secret values into mc vault, commit only
   value-free bindings, and materialise session/worktree runtime files when
-  needed. Scan, import dry-run, and first real import are shipped: mc parses
-  dotenv-shaped files, emits key metadata only, creates new vault entries after
-  explicit confirmation, and skips existing labels by default. Binding writes
-  and source-file rewrites are still future slices.
+  needed. Core migration shipped in 0.7.6: scan/import, duplicate-safe previews,
+  value-free `.mc/secrets.json` repo bindings, `mc vault set --bind`, repo-bound
+  runtime materialisation, LLM read-blocking, shred on `mc end`, and honest
+  cache/metadata-read diagnostics. Remaining slices are inspection/manual
+  materialisation (`mc vault materialise --dry-run`), existing-label
+  overwrite/rotate UX, and explicit source-file rewrite (`--move`).
   → `docs/plans/vault-import.md`
 
 ### Memory loop — Memoro ↔ session   · serves G1, G3
@@ -142,11 +149,11 @@ tool state intact.
   whole run — no half-materialised state). Same `mc adapter` verb family as
   `sync`, opposite direction (materialise lays down the canonical sources;
   sync points the per-tool wrappers at them). → §13c
-- **Tool-switch in ordinary repos** — `active · S · now`
-  Live testing in `memoro` found `mc tool-switch codex --dry-run` still expected
-  repo-local `docs/coding-agent-protocol.md`. That violates package-canon
-  portability: ordinary repos should ground/switch from the installed mc canon
-  unless the repo has intentionally materialised its own copy. → `docs/plans/mc-hardening.md`
+- **Tool-switch in ordinary repos** — `shipped · S · —`
+  0.7.6 fixed the portability gap found live in `memoro`: `mc tool-switch` can
+  use the installed package canon when an ordinary repo has no materialised
+  local canon, and wrapper drift no longer blocks persisting the selected
+  default tool. → `docs/plans/mc-hardening.md`
 
 ### Knowledge access — memoro-agent   · serves G1, G3
 - **`mc auth agent` enrollment** — `gated (memoro server) · S · —`

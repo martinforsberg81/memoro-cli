@@ -1,6 +1,6 @@
 # Map Reconciliation Guard
 
-**Status:** next · 2026-06-04 · serves G1, G3
+**Status:** active · 2026-06-06 · serves G1, G3
 
 Reading `MEMORO.md` at session start does not make an LLM remember to update it.
 The product needs a reconciliation loop: deterministic prompts and status hints
@@ -31,4 +31,17 @@ Start with hints, not a command family:
 - `mc end <name>` can warn when a dirty/shipped session did not reconcile the map.
 - `mc list --rich`/tree views can surface project sessions without a map node.
 
-Do not build `mc map ...` yet. Let the coordinator session draft the patch.
+## Session Prompt Affordance
+
+A lightweight in-session slash command is in scope if it only hands the LLM a
+well-written reconciliation prompt. For example, `/mc map` can tell the current
+session to inspect recent commits, plans, release notes, and `MEMORO.md`, then
+draft a concrete patch for user approval.
+
+This is deliberately not a map CRUD API:
+
+- no silent writes
+- no `mc map set-status` / `mc map add-node` command family
+- no auto-generated roadmap text bypassing coordinator review
+- the LLM drafts the patch, the user approves it, then the file is edited and
+  committed as cross-session project state
