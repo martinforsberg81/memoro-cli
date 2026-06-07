@@ -76,6 +76,10 @@ describe('mc auth status', () => {
     writeFileSync(join(repo.dir, '.mc', 'policy.json'), JSON.stringify({
       permissions: { profile: 'repo-trusted', network: 'enabled' },
     }));
+    writeFileSync(join(repo.dir, '.mc', 'local.json'), JSON.stringify({
+      defaultTool: 'codex',
+      permissions: { approval: 'untrusted' },
+    }));
     const r = runMc(['auth', 'status', '--json'], {
       cwd: repo.dir,
       env: { MC_HOME: repo.mcHome, MC_ORPHAN_PID_DIR: pidDir, HOME: repo.root },
@@ -85,6 +89,12 @@ describe('mc auth status', () => {
     assert.equal(codex.permissions.source, 'repo');
     assert.equal(codex.permissions.profile, 'repo-trusted');
     assert.equal(codex.permissions.network, 'enabled');
+    assert.equal(j.policy.effective_config.defaultTool.value, 'codex');
+    assert.equal(j.policy.effective_config.defaultTool.source, '.mc/local.json');
+    assert.equal(j.policy.effective_config.permissions.profile.value, 'repo-trusted');
+    assert.equal(j.policy.effective_config.permissions.profile.source, '.mc/policy.json');
+    assert.equal(j.policy.effective_config.permissions.approval.value, 'untrusted');
+    assert.equal(j.policy.effective_config.permissions.approval.source, '.mc/local.json');
   });
 
   test('tools all report not-installed on safe PATH', () => {

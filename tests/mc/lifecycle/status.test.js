@@ -38,6 +38,10 @@ describe('mc status <name>', () => {
     writeFileSync(join(repoPolicyWorktree, '.mc', 'policy.json'), JSON.stringify({
       permissions: { profile: 'repo-trusted', network: 'enabled' },
     }));
+    writeFileSync(join(repoPolicyWorktree, '.mc', 'local.json'), JSON.stringify({
+      defaultTool: 'codex',
+      permissions: { approval: 'untrusted' },
+    }));
     writeRegistry(mcHome, [
       makeEntry({
         name: 'safe',
@@ -207,6 +211,12 @@ describe('mc status <name>', () => {
     assert.equal(j.effective_policy.permissions.source, 'repo');
     assert.equal(j.effective_policy.permissions.profile, 'repo-trusted');
     assert.equal(j.effective_policy.permissions.network, 'enabled');
+    assert.equal(j.effective_config.defaultTool.value, 'codex');
+    assert.equal(j.effective_config.defaultTool.source, '.mc/local.json');
+    assert.equal(j.effective_config.permissions.profile.value, 'repo-trusted');
+    assert.equal(j.effective_config.permissions.profile.source, '.mc/policy.json');
+    assert.equal(j.effective_config.permissions.approval.value, 'untrusted');
+    assert.equal(j.effective_config.permissions.approval.source, '.mc/local.json');
   });
 
   test('unknown name → non-zero exit + error', () => {

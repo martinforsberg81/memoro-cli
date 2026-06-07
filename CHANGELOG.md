@@ -6,6 +6,12 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- `mc status --json` and `mc auth status --json` now expose an
+  `effective_config` object with source metadata for package defaults, global
+  config, repo policy, repo-local config, and session policy. This is
+  visibility-only groundwork for policy-driven repo customization.
+
 ### Fixed
 - Codex sessions launched by `mc` now get a guarded PATH that blocks direct
   Cloudflare Wrangler data-access commands (`d1 execute`, R2 object access,

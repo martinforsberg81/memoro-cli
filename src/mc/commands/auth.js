@@ -33,6 +33,7 @@ import { mcHome, mcHomeExists } from '../paths.js';
 import { scanDaemons } from '../orphan-daemons.js';
 import { inspectCachedVaultKey } from '../vault/key-cache.js';
 import { formatPolicySummary, readRepoPolicy, resolveEffectivePolicy } from '../policy.js';
+import { readRepoLocalConfig, resolveEffectiveConfig } from '../config-model.js';
 
 const TOOL_ADAPTERS = {
   claude: { adapter: claudeCode, label: 'claude' },
@@ -204,7 +205,14 @@ async function runStatus(argv) {
     probeVault(),
     safeReadConfig(),
   ]);
-  const policy = buildAuthPolicyReport({ config, repoPolicy: readRepoPolicy() });
+  const repoPolicy = readRepoPolicy();
+  const repoLocal = readRepoLocalConfig();
+  const policy = buildAuthPolicyReport({
+    config,
+    repoPolicy,
+    repoLocalConfig: repoLocal.config,
+    configWarnings: repoLocal.warnings,
+  });
 
   const report = {
     memoro,
@@ -293,9 +301,20 @@ async function safeReadConfig() {
   }
 }
 
-export function buildAuthPolicyReport({ config = {}, repoPolicy = null } = {}) {
+export function buildAuthPolicyReport({
+  config = {},
+  repoPolicy = null,
+  repoLocalConfig = null,
+  configWarnings = [],
+} = {}) {
   return {
     default_tool: config.defaultTool || 'claude-code',
+    effective_config: resolveEffectiveConfig({
+      globalConfig: config,
+      repoPolicy,
+      localConfig: repoLocalConfig,
+      warnings: configWarnings,
+    }),
     tools: ['claude', 'codex', 'gemini'].map((tool) => ({
       tool,
       effective_policy: resolveEffectivePolicy({ tool, repoPolicy, config }),
