@@ -15,9 +15,9 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Fixed
 - Codex sessions launched by `mc` now get a guarded PATH that blocks direct
   Cloudflare Wrangler data-access commands (`d1 execute`, R2 object access,
-  KV reads, tail, secrets, and similar) while still allowing approved
-  `scripts/admin/{my,aggregate,inspect,survey,bulk,user-debug}-*.mjs`
-  admin scripts to run their internal Wrangler calls.
+  KV reads, tail, secrets, and similar). Repo-approved admin scripts can be
+  declared through `dataAccess.cloudflare.approvedScripts` in `.mc/policy.json`
+  instead of being hardcoded in the package.
 
 ## [0.7.6] — 2026-06-06
 

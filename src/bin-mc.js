@@ -513,10 +513,28 @@ async function runWrap(argv, { label = null } = {}) {
   if (launchToolId === 'codex') {
     try {
       const { prepareCloudflareGuardEnv } = await import('./mc/cloudflare-guard.js');
+      const {
+        readRepoLocalConfig,
+        readRepoPolicyConfig,
+        resolveEffectiveConfig,
+      } = await import('./mc/config-model.js');
+      const repoPolicyConfig = readRepoPolicyConfig({ cwd });
+      const repoLocalConfig = readRepoLocalConfig({ cwd });
+      const effectiveConfig = resolveEffectiveConfig({
+        globalConfig: config,
+        repoPolicy: repoPolicyConfig.config,
+        localConfig: repoLocalConfig.config,
+        entry: registryEntry || {},
+        warnings: [
+          ...(repoPolicyConfig.warnings || []),
+          ...(repoLocalConfig.warnings || []),
+        ],
+      });
       spawnEnv = prepareCloudflareGuardEnv({
         baseEnv: spawnEnv,
         mcDir: MC_DIR,
         codingSessionId,
+        effectiveConfig,
       }).env;
     } catch (err) {
       console.error(`mc: failed to install Codex Cloudflare guard (${err.message}); refusing to launch`);

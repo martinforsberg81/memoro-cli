@@ -1,18 +1,27 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import test, { describe } from 'node:test';
 
 import {
   GUARD_ENV,
+  approvedScriptsFromEffectiveConfig,
   extractNpxWranglerArgs,
   isAllowedAdminAncestor,
   isAllowedAdminCommandLine,
   isDeniedWranglerCommand,
+  normaliseApprovedScriptSpecs,
   prepareCloudflareGuardEnv,
+  renderCloudflareGuardScript,
 } from '../../src/mc/cloudflare-guard.js';
+
+const APPROVED_SCRIPTS = Object.freeze([
+  { command: 'node', args: ['scripts/admin/my-*.mjs'] },
+  { command: '/opt/homebrew/bin/node', args: ['scripts/admin/aggregate-*.mjs'] },
+  'node scripts/admin/inspect-*.mjs',
+]);
 
 describe('Cloudflare guard policy', () => {
   test('denies D1 commands that can return row data', () => {
@@ -49,13 +58,53 @@ describe('Cloudflare guard policy', () => {
     assert.equal(extractNpxWranglerArgs(['eslint', '.']), null);
   });
 
-  test('recognises approved admin script ancestors', () => {
-    assert.equal(isAllowedAdminCommandLine('node scripts/admin/my-recent-items.mjs --limit 5'), true);
-    assert.equal(isAllowedAdminCommandLine('/opt/homebrew/bin/node /repo/scripts/admin/aggregate-test-users.mjs'), true);
-    assert.equal(isAllowedAdminCommandLine('node scripts/admin/inspect-user.mjs'), true);
-    assert.equal(isAllowedAdminCommandLine('node scripts/admin/list-all-users.mjs'), false);
-    assert.equal(isAllowedAdminCommandLine('node -e "spawn wrangler"'), false);
-    assert.equal(isAllowedAdminCommandLine('node -e "spawn wrangler" scripts/admin/my-item.mjs'), false);
+  test('requires repo-approved admin scripts for ancestor bypass', () => {
+    assert.equal(isAllowedAdminCommandLine('node scripts/admin/my-recent-items.mjs --limit 5'), false);
+    assert.equal(isAllowedAdminCommandLine('node scripts/admin/my-recent-items.mjs --limit 5', {
+      approvedScripts: APPROVED_SCRIPTS,
+    }), true);
+    assert.equal(isAllowedAdminCommandLine('/opt/homebrew/bin/node /repo/scripts/admin/aggregate-test-users.mjs', {
+      approvedScripts: APPROVED_SCRIPTS,
+    }), true);
+    assert.equal(isAllowedAdminCommandLine('node scripts/admin/inspect-user.mjs', {
+      approvedScripts: APPROVED_SCRIPTS,
+    }), true);
+    assert.equal(isAllowedAdminCommandLine('node scripts/admin/list-all-users.mjs', {
+      approvedScripts: APPROVED_SCRIPTS,
+    }), false);
+    assert.equal(isAllowedAdminCommandLine('node other.mjs scripts/admin/my-item.mjs', {
+      approvedScripts: APPROVED_SCRIPTS,
+    }), false);
+    assert.equal(isAllowedAdminCommandLine('node -e "spawn wrangler"', {
+      approvedScripts: APPROVED_SCRIPTS,
+    }), false);
+    assert.equal(isAllowedAdminCommandLine('node -e "spawn wrangler" scripts/admin/my-item.mjs', {
+      approvedScripts: APPROVED_SCRIPTS,
+    }), false);
+  });
+
+  test('normalises approved script policy from config shapes', () => {
+    assert.deepEqual(normaliseApprovedScriptSpecs([
+      { command: 'node', args: ['scripts/admin/my-*.mjs'] },
+      'node --loader tsx scripts/admin/inspect-*.mjs',
+      { command: 'bash', args: ['scripts/admin/nope.sh'] },
+      { command: 'node', args: ['-e', 'scripts/admin/nope.mjs'] },
+      null,
+    ]), [
+      { command: 'node', script: 'scripts/admin/my-*.mjs' },
+      { command: 'node', script: 'scripts/admin/inspect-*.mjs' },
+    ]);
+    assert.deepEqual(approvedScriptsFromEffectiveConfig({
+      dataAccess: {
+        cloudflare: {
+          approvedScripts: {
+            value: ['node scripts/admin/my-*.mjs'],
+          },
+        },
+      },
+    }), [
+      { command: 'node', script: 'scripts/admin/my-*.mjs' },
+    ]);
   });
 
   test('walks ancestor process commands through injected ps', () => {
@@ -68,6 +117,7 @@ describe('Cloudflare guard policy', () => {
     assert.equal(isAllowedAdminAncestor({
       pid: 10,
       ps: (pid, field) => seen.get(`${pid}:${field}`) || '',
+      approvedScripts: APPROVED_SCRIPTS,
     }), true);
   });
 });
@@ -80,13 +130,22 @@ describe('Cloudflare guard runtime shim', () => {
         mcDir: dir,
         codingSessionId: 'sess/A B',
         baseEnv: { PATH: '/usr/bin' },
+        approvedScripts: APPROVED_SCRIPTS,
       });
       assert.equal(res.env[GUARD_ENV], 'codex');
       assert.ok(res.env.PATH.startsWith(res.dir + delimiter));
       assert.match(res.dir, /sess_A_B$/);
+      assert.match(readFileSync(join(res.dir, 'wrangler'), 'utf8'), /scripts\/admin\/my-\*\.mjs/);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  test('renders no hardcoded repo admin script allowlist by default', () => {
+    const script = renderCloudflareGuardScript();
+    assert.doesNotMatch(script, /scripts\/admin\/\{my/);
+    assert.doesNotMatch(script, /aggregate-\[\^/);
+    assert.equal(isAllowedAdminCommandLine('node scripts/admin/my-item.mjs'), false);
   });
 
   test('blocks denied wrangler commands before the real binary runs', () => {

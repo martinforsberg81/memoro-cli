@@ -8,19 +8,20 @@ export const GUARDED_TOOL_ID = 'codex';
 export const GUARD_ENV = 'MC_CLOUDFLARE_GUARD';
 export const GUARDED_COMMANDS = Object.freeze(['wrangler', 'npx']);
 
-const ADMIN_SCRIPT_PREFIXES = Object.freeze([
-  'my',
-  'aggregate',
-  'inspect',
-  'survey',
-  'bulk',
-  'user-debug',
-]);
-
 const D1_DENIED = new Set(['execute', 'export', 'backup', 'time-travel']);
 const KV_KEY_DENIED = new Set(['get', 'list', 'put', 'delete']);
 const R2_OBJECT_DENIED = new Set(['get', 'put', 'delete', 'list']);
 const SECRET_DENIED = new Set(['list', 'get', 'put', 'delete']);
+const NODE_VALUE_OPTIONS = new Set([
+  '--conditions',
+  '--env-file',
+  '--experimental-loader',
+  '--import',
+  '--loader',
+  '--require',
+  '-C',
+  '-r',
+]);
 
 /**
  * Install a tiny PATH guard for Codex sessions. Codex does not expose a
@@ -32,13 +33,17 @@ export function prepareCloudflareGuardEnv({
   baseEnv = process.env,
   mcDir = defaultMcHome(),
   codingSessionId = 'session',
+  approvedScripts = null,
+  effectiveConfig = null,
   deps = {},
 } = {}) {
   const dir = deps.guardBinDir || guardBinDir({ mcDir, codingSessionId });
   const mkdir = deps.mkdirSync || mkdirSync;
   const writeFile = deps.writeFileSync || writeFileSync;
   const chmod = deps.chmodSync || chmodSync;
-  const script = renderCloudflareGuardScript();
+  const script = renderCloudflareGuardScript({
+    approvedScripts: resolveApprovedScripts({ approvedScripts, effectiveConfig }),
+  });
 
   mkdir(dir, { recursive: true, mode: 0o700 });
   for (const command of GUARDED_COMMANDS) {
@@ -116,15 +121,41 @@ export function extractNpxWranglerArgs(args = []) {
   return null;
 }
 
-export function isAllowedAdminCommandLine(commandLine = '') {
-  const normalized = String(commandLine).replace(/\\/g, '/');
-  if (/(^|\s)(-e|--eval)(\s|=|$)/.test(normalized)) return false;
-  const prefixPattern = ADMIN_SCRIPT_PREFIXES.join('|');
-  const scriptPattern = `(?:^|\\s)(?:\\S*/)?node(?:\\s+--[A-Za-z0-9_-]+(?:=[^\\s]+)?|\\s+-[A-Za-z]+)*\\s+(?:\\./)?(?:\\S*/)?scripts/admin/(?:${prefixPattern})-[^\\s/]*\\.mjs(?:\\s|$)`;
-  return new RegExp(scriptPattern).test(normalized);
+export function approvedScriptsFromEffectiveConfig(effectiveConfig = {}) {
+  const field = effectiveConfig?.dataAccess?.cloudflare?.approvedScripts;
+  if (Array.isArray(field)) return normaliseApprovedScriptSpecs(field);
+  return normaliseApprovedScriptSpecs(field?.value);
 }
 
-export function renderCloudflareGuardScript() {
+export function normaliseApprovedScriptSpecs(input = []) {
+  if (!Array.isArray(input)) return [];
+  return input
+    .map(normaliseApprovedScriptSpec)
+    .filter(Boolean);
+}
+
+export function isAllowedAdminCommandLine(commandLine = '', { approvedScripts = [] } = {}) {
+  const specs = normaliseApprovedScriptSpecs(approvedScripts);
+  if (!specs.length) return false;
+
+  const tokens = tokenizeCommandLine(commandLine).map(normalisePathToken);
+  if (!tokens.length) return false;
+  const command = normaliseCommandName(tokens[0]);
+  if (!command) return false;
+  if (tokens.some((token) => token === '-e' || token === '--eval' || token.startsWith('--eval='))) {
+    return false;
+  }
+
+  const scriptIndex = findNodeScriptArg(tokens.slice(1));
+  if (scriptIndex < 0) return false;
+  const scriptArg = tokens.slice(1)[scriptIndex];
+  return specs.some((spec) => (
+    command === spec.command && matchesScriptPattern(scriptArg, spec.script)
+  ));
+}
+
+export function renderCloudflareGuardScript({ approvedScripts = [] } = {}) {
+  const approved = normaliseApprovedScriptSpecs(approvedScripts);
   return `#!/usr/bin/env node
 import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
@@ -135,7 +166,8 @@ const d1Denied = new Set(${JSON.stringify([...D1_DENIED])});
 const kvKeyDenied = new Set(${JSON.stringify([...KV_KEY_DENIED])});
 const r2ObjectDenied = new Set(${JSON.stringify([...R2_OBJECT_DENIED])});
 const secretDenied = new Set(${JSON.stringify([...SECRET_DENIED])});
-const adminScriptPrefixes = ${JSON.stringify(ADMIN_SCRIPT_PREFIXES)};
+const approvedScripts = ${JSON.stringify(approved)};
+const nodeValueOptions = new Set(${JSON.stringify([...NODE_VALUE_OPTIONS])});
 
 const invoked = basename(process.argv[1] || '');
 const originalArgs = process.argv.slice(2);
@@ -153,7 +185,7 @@ const wranglerArgs = invoked === 'wrangler'
 if (wranglerArgs && isDeniedWranglerCommand(wranglerArgs) && !isAllowedAdminAncestor()) {
   process.stderr.write([
     'mc: blocked direct Cloudflare data access in this Codex session.',
-    'Use an approved scripts/admin/{my,aggregate,inspect,survey,bulk,user-debug}-*.mjs script,',
+    'Use a repo-approved admin script declared in .mc/policy.json,',
     'or run the admin Wrangler command yourself outside the LLM session.',
     '',
   ].join('\\n'));
@@ -304,13 +336,250 @@ function ps(pid, field) {
 }
 
 function isAllowedAdminCommandLine(commandLine = '') {
-  const normalized = String(commandLine).replace(/\\\\/g, '/');
-  if (/(^|\\s)(-e|--eval)(\\s|=|$)/.test(normalized)) return false;
-  const prefixPattern = adminScriptPrefixes.join('|');
-  const scriptPattern = '(?:^|\\\\s)(?:\\\\S*/)?node(?:\\\\s+--[A-Za-z0-9_-]+(?:=[^\\\\s]+)?|\\\\s+-[A-Za-z]+)*\\\\s+(?:\\\\./)?(?:\\\\S*/)?scripts/admin/(?:' + prefixPattern + ')-[^\\\\s/]*\\\\.mjs(?:\\\\s|$)';
-  return new RegExp(scriptPattern).test(normalized);
+  if (!approvedScripts.length) return false;
+  const tokens = tokenizeCommandLine(commandLine).map(normalisePathToken);
+  if (!tokens.length) return false;
+  const command = normaliseCommandName(tokens[0]);
+  if (!command) return false;
+  if (tokens.some((token) => token === '-e' || token === '--eval' || token.startsWith('--eval='))) {
+    return false;
+  }
+  const args = tokens.slice(1);
+  const scriptIndex = findNodeScriptArg(args);
+  if (scriptIndex < 0) return false;
+  const scriptArg = args[scriptIndex];
+  return approvedScripts.some((spec) => (
+    command === spec.command && matchesScriptPattern(scriptArg, spec.script)
+  ));
+}
+
+function tokenizeCommandLine(commandLine = '') {
+  const tokens = [];
+  let current = '';
+  let quote = null;
+  let escaped = false;
+  for (const char of String(commandLine)) {
+    if (escaped) {
+      current += char;
+      escaped = false;
+      continue;
+    }
+    if (char === '\\\\') {
+      escaped = true;
+      continue;
+    }
+    if (quote) {
+      if (char === quote) quote = null;
+      else current += char;
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+      continue;
+    }
+    if (/\\s/.test(char)) {
+      if (current) {
+        tokens.push(current);
+        current = '';
+      }
+      continue;
+    }
+    current += char;
+  }
+  if (current) tokens.push(current);
+  return tokens;
+}
+
+function normalisePathToken(token) {
+  return String(token || '').replace(/\\\\/g, '/');
+}
+
+function normaliseCommandName(token) {
+  const command = normalisePathToken(token).split('/').pop();
+  return command === 'node' || command === 'nodejs' ? command : null;
+}
+
+function findNodeScriptArg(args) {
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i];
+    if (arg === '--') return i + 1 < args.length ? i + 1 : -1;
+    if (arg === '-e' || arg === '--eval' || arg.startsWith('--eval=')) return -1;
+    if (nodeValueOptions.has(arg)) {
+      i += 1;
+      continue;
+    }
+    if (arg.startsWith('--') && arg.includes('=')) continue;
+    if (arg.startsWith('-')) continue;
+    return i;
+  }
+  return -1;
+}
+
+function matchesScriptPattern(scriptArg, pattern) {
+  const script = stripDotSlash(normalisePathToken(scriptArg));
+  const expected = stripDotSlash(normalisePathToken(pattern));
+  if (!script || !expected) return false;
+  const source = globSource(expected);
+  const regex = expected.startsWith('/')
+    ? new RegExp('^' + source + '$')
+    : new RegExp('^(?:.*\\/)?' + source + '$');
+  return regex.test(script);
+}
+
+function stripDotSlash(value) {
+  let s = String(value || '');
+  while (s.startsWith('./')) s = s.slice(2);
+  return s;
+}
+
+function globSource(pattern) {
+  let out = '';
+  for (const char of String(pattern)) {
+    if (char === '*') out += '[^/]*';
+    else if (char === '?') out += '[^/]';
+    else out += escapeRegExp(char);
+  }
+  return out;
+}
+
+function escapeRegExp(char) {
+  return /[|\\\\{}()[\\]^$+*?.]/.test(char) ? '\\\\' + char : char;
 }
 `;
+}
+
+function resolveApprovedScripts({ approvedScripts = null, effectiveConfig = null } = {}) {
+  if (approvedScripts != null) return normaliseApprovedScriptSpecs(approvedScripts);
+  return approvedScriptsFromEffectiveConfig(effectiveConfig);
+}
+
+function normaliseApprovedScriptSpec(spec) {
+  if (typeof spec === 'string') {
+    const tokens = tokenizeCommandLine(spec).map(normalisePathToken);
+    return normaliseApprovedScriptTokens(tokens);
+  }
+  if (!spec || typeof spec !== 'object' || Array.isArray(spec)) return null;
+  if (typeof spec.script === 'string') {
+    const command = normaliseCommandName(spec.command);
+    const script = normaliseScriptPattern(spec.script);
+    return command && script ? { command, script } : null;
+  }
+  const command = normaliseCommandName(spec.command);
+  const args = Array.isArray(spec.args) ? spec.args.map(normalisePathToken) : [];
+  return normaliseApprovedScriptTokens([command, ...args]);
+}
+
+function normaliseApprovedScriptTokens(tokens) {
+  if (!tokens.length) return null;
+  const command = normaliseCommandName(tokens[0]);
+  if (!command) return null;
+  if (tokens.some((token) => token === '-e' || token === '--eval' || token.startsWith('--eval='))) {
+    return null;
+  }
+  const args = tokens.slice(1);
+  const scriptIndex = findNodeScriptArg(args);
+  if (scriptIndex < 0) return null;
+  const script = normaliseScriptPattern(args[scriptIndex]);
+  return script ? { command, script } : null;
+}
+
+function normaliseScriptPattern(value) {
+  const script = stripDotSlash(normalisePathToken(value)).trim();
+  if (!script || script.startsWith('-') || /\s/.test(script)) return null;
+  return script;
+}
+
+function tokenizeCommandLine(commandLine = '') {
+  const tokens = [];
+  let current = '';
+  let quote = null;
+  let escaped = false;
+  for (const char of String(commandLine)) {
+    if (escaped) {
+      current += char;
+      escaped = false;
+      continue;
+    }
+    if (char === '\\') {
+      escaped = true;
+      continue;
+    }
+    if (quote) {
+      if (char === quote) quote = null;
+      else current += char;
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+      continue;
+    }
+    if (/\s/.test(char)) {
+      if (current) {
+        tokens.push(current);
+        current = '';
+      }
+      continue;
+    }
+    current += char;
+  }
+  if (current) tokens.push(current);
+  return tokens;
+}
+
+function normalisePathToken(token) {
+  return String(token || '').replace(/\\/g, '/');
+}
+
+function normaliseCommandName(token) {
+  const command = normalisePathToken(token).split('/').pop();
+  return command === 'node' || command === 'nodejs' ? command : null;
+}
+
+function findNodeScriptArg(args) {
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i];
+    if (arg === '--') return i + 1 < args.length ? i + 1 : -1;
+    if (arg === '-e' || arg === '--eval' || arg.startsWith('--eval=')) return -1;
+    if (NODE_VALUE_OPTIONS.has(arg)) {
+      i += 1;
+      continue;
+    }
+    if (arg.startsWith('--') && arg.includes('=')) continue;
+    if (arg.startsWith('-')) continue;
+    return i;
+  }
+  return -1;
+}
+
+function matchesScriptPattern(scriptArg, pattern) {
+  const script = stripDotSlash(normalisePathToken(scriptArg));
+  const expected = stripDotSlash(normalisePathToken(pattern));
+  if (!script || !expected) return false;
+  const source = globSource(expected);
+  const regex = expected.startsWith('/')
+    ? new RegExp(`^${source}$`)
+    : new RegExp(`^(?:.*/)?${source}$`);
+  return regex.test(script);
+}
+
+function stripDotSlash(value) {
+  let s = String(value || '');
+  while (s.startsWith('./')) s = s.slice(2);
+  return s;
+}
+
+function globSource(pattern) {
+  let out = '';
+  for (const char of String(pattern)) {
+    if (char === '*') out += '[^/]*';
+    else if (char === '?') out += '[^/]';
+    else out += escapeRegExp(char);
+  }
+  return out;
+}
+
+function escapeRegExp(char) {
+  return /[|\\{}()[\]^$+*?.]/.test(char) ? `\\${char}` : char;
 }
 
 function stripWranglerGlobalArgs(args) {
@@ -359,11 +628,16 @@ function safeSegment(value) {
 
 // Exported for parity tests if a future guard needs to inspect real process
 // trees in-process. The runtime shim carries its own copy to stay standalone.
-export function isAllowedAdminAncestor({ pid = process.ppid, depthLimit = 8, ps = defaultPs } = {}) {
+export function isAllowedAdminAncestor({
+  pid = process.ppid,
+  depthLimit = 8,
+  ps = defaultPs,
+  approvedScripts = [],
+} = {}) {
   let current = pid;
   for (let depth = 0; current && depth < depthLimit; depth += 1) {
     const command = ps(current, 'command=');
-    if (command && isAllowedAdminCommandLine(command)) return true;
+    if (command && isAllowedAdminCommandLine(command, { approvedScripts })) return true;
     const parent = String(ps(current, 'ppid=') || '').trim();
     const next = Number(parent);
     if (!Number.isFinite(next) || next <= 1 || next === current) return false;
