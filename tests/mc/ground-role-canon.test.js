@@ -39,6 +39,10 @@ describe('buildRole — universal (package canon)', () => {
     assert.match(out, /altitude/i);
     assert.match(out, /context/i);        // purpose 1: protect context
     assert.match(out, /brief/i);          // purpose 2: brief-as-quality
+    assert.match(out, /\/mc map/);
+    assert.match(out, /No map change/);
+    assert.match(out, /untrusted evidence/);
+    assert.match(out, /mc map --prompt/);
 
     // Package canon is acknowledged, but not as repo paths to read.
     assert.match(out, /Repo-local coordinator source files are not present/);

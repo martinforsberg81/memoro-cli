@@ -208,6 +208,8 @@ Do not build:
 
 ### Slice 1 - Managed Session Affordance
 
+Status: shipped after 0.7.6.
+
 Install the session habit before any terminal command.
 
 - Claude: install a managed command, likely `/memoro-map` unless the tool can

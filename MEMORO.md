@@ -102,9 +102,10 @@ tool state intact.
   Design is now locked: `/mc map` is primarily an in-session reconciliation
   habit, not a terminal CRUD surface; mc supplies a small deterministic evidence
   packet and a strict prompt, then the coordinator decides whether a focused
-  MEMORO.md patch is warranted. First implementation slice is the managed
-  session affordance/canon for `/mc map`; terminal `mc map` surfaces and
-  tripwires in status/list/end come later, after the habit is proven. Avoid
+  MEMORO.md patch is warranted. Slice 1 shipped the managed session affordance:
+  Claude gets `/memoro-map`, and grounding/canon teaches other tools the
+  `/mc map` convention. Next slices are evidence-procedure hardening, then only
+  later optional terminal preview/dispatch and status/list/end tripwires. Avoid
   hidden background edits, duplicate `/mc end` reconciliation flow, and PM-style
   map CRUD.
   → `docs/plans/map-reconciliation.md`

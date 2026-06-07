@@ -11,6 +11,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `effective_config` object with source metadata for package defaults, global
   config, repo policy, repo-local config, and session policy. This is
   visibility-only groundwork for policy-driven repo customization.
+- Coordinator sessions now have an in-session MEMORO.md reconciliation habit:
+  Claude Code gets the managed `/memoro-map` slash command, while grounding
+  teaches other tools the `/mc map` convention. The flow is prompt/procedure
+  only; it does not add a terminal `mc map` command or auto-edit the map.
 
 ### Fixed
 - Codex sessions launched by `mc` now get a guarded PATH that blocks direct
