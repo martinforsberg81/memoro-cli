@@ -158,7 +158,8 @@ Existing-session tool acceptance:
 
 Do less, better:
 
-- Keep `MEMORO.md` small, committed, and read-only by default.
+- Keep `MEMORO.md` small, committed, and updated deliberately by the
+  coordinator loop; avoid hidden background edits.
 - Ground every session with role + map + selected tool/worktree/session context.
 - Make the role boundary explicit: high-altitude coordinator by default; delegate
   non-trivial implementation through a brief; use a separate review agent when

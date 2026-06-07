@@ -352,13 +352,16 @@ Acceptance:
 
 Replace hardcoded approved admin-script prefixes with effective repo policy.
 
+Status: shipped in `memoro-cli` after 0.7.6.
+
 Changes:
 
 - keep generic Wrangler deny/allow matrix in package defaults
 - generate guard script with approved script specs from effective config
 - support `node scripts/admin/foo-*.mjs` style specs without accepting spoofed
   `node -e` invocations
-- expose warning when a repo has Cloudflare files but no approved scripts
+- follow-up: expose warning when a repo has Cloudflare files but no approved
+  scripts
 
 Tests:
 

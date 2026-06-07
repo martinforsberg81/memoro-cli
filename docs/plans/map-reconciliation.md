@@ -8,9 +8,11 @@ that force the question at the right time without silently editing the map.
 
 ## Product rule
 
-`MEMORO.md` is read-only by default. After non-trivial work, the session must
-decide whether the map changed. If yes, it proposes a concrete patch and asks the
-user before writing.
+`MEMORO.md` is coordinator-owned committed project state. After non-trivial
+work, the session must decide whether the map changed; if yes, it should draft
+and apply a focused patch as part of the coordinator loop. mc itself should
+avoid hidden background edits and should never turn map maintenance into a PM
+CRUD subsystem.
 
 ## Map discipline
 

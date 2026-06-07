@@ -35,8 +35,9 @@ A session must be handed the right context *before the user types*. Today
   Every entry (`mc`, `mc new`, `mc resume`) injects the bundle `{ map + role +
   lens + focus }` into standing context before the user types, so the LLM wakes
   grounded. Phase 1 shipped bare `mc`; Phase 2 shipped entry-parity (`mc new
-  [<task>]` / `mc resume` ground via the same seam), the read-only MEMORO.md
-  lifecycle (offer-to-seed/update, never silent), and the adapter-sync drift-fix
+  [<task>]` / `mc resume` ground via the same seam), the MEMORO.md lifecycle
+  (seed/update as committed coordinator state, never hidden background churn),
+  and the adapter-sync drift-fix
   (grounding block stripped before the wrapper byte-compare). Phase 3 shipped
   tool-switching: the launcher is adapter-routed (no longer claude-hardcoded),
   codex has writeGrounding/removeGrounding parity into AGENTS.md, `mc new
@@ -100,8 +101,9 @@ tool state intact.
   work can leave the map stale unless reconciliation is prompted deliberately.
   Next slice: deterministic tripwires plus a single prompt-only session
   affordance, `/mc map`, that asks the LLM to draft a concrete MEMORO.md patch.
-  Writes remain user-approved; avoid silent edits, duplicate `/mc end`
-  reconciliation flow, and PM-style map CRUD.
+  MEMORO.md is active coordinator-owned committed project state; avoid hidden
+  background edits, duplicate `/mc end` reconciliation flow, and PM-style map
+  CRUD.
   → `docs/plans/map-reconciliation.md`
 
 ### Policy & safety — same freedom across tools   · serves G2, G3
@@ -111,9 +113,18 @@ tool state intact.
   status now explains effective policy, explicit vault targets prevent
   provider-name guessing, and permission profile precedence is visible as
   `session > repo > global > default` with unsupported adapter fields labelled
-  honestly. Phase 4a has started with Codex launch-arg rendering for explicit
-  `workspace`/`approval` only; default policy renders no flags, Claude remains
+  honestly. Configuration model work has shipped: `mc status --json` and
+  `mc auth status --json` expose `effective_config`, package defaults are
+  safety-floored, repo policy/local config are first-class, and Codex launch
+  policy renders explicit `workspace`/`approval` only. Claude remains
   visibility-only until its mapping is defensible. → `docs/plans/unified-policy.md`
+- **Data-access guard policy** — `shipped · S · now`
+  Codex sessions launched by `mc` install a PATH guard that blocks direct
+  Cloudflare data surfaces (`d1 execute`, R2 object access, KV reads, tail,
+  secrets, and similar). The admin-script bypass is no longer hardcoded for
+  Memoro; repos declare their own safe wrappers through
+  `dataAccess.cloudflare.approvedScripts` in `.mc/policy.json`, with no bypass
+  by default. → `docs/plans/configuration-model.md`
 - **Vault import from local secret files** — `active · M · now`
   The user path must be migration, not manual copy-paste: scan `.env` /
   `.dev.vars`, import selected secret values into mc vault, commit only
