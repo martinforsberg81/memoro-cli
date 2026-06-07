@@ -20,9 +20,10 @@ surface. The normal user flow is:
 5. If yes, the coordinator edits `MEMORO.md` deliberately and commits it as
    cross-session project state.
 
-Terminal `mc map` exists first as a prompt/evidence generator, not as the main
-experience. It can later dispatch the same prompt to a live session, but it
-should never become a family of map-mutating commands.
+There is no terminal `mc map` requirement in the MVP. Terminal surfaces can come
+later for debugging, evidence preview, or dispatch to a live session, but the
+first product must work from inside the coordinator session. It should never
+become a family of map-mutating commands.
 
 ## Product Rule
 
@@ -133,33 +134,31 @@ The prompt should make the LLM answer:
 map-reconciliation behavior.
 
 Claude can get a managed slash command if the native command surface supports
-it. The command should run the prompt/evidence generator and instruct the LLM to
-follow the prompt.
+it. The command body should contain the reconciliation procedure and instruct
+the LLM to gather the bounded evidence itself through safe shell/git commands.
 
 Codex has no stable native slash-command surface today. For Codex, grounding
-should teach the coordinator that when the user writes `/mc map`, it should run
-the same terminal prompt command and follow the same procedure.
+should teach the coordinator that when the user writes `/mc map`, it should
+follow the same reconciliation procedure directly.
 
-### Terminal Fallback
+### Terminal Surface
 
-MVP terminal surface:
+No terminal `mc map` command is required for MVP. Do not add `mc map --prompt`
+as the first slice; it would move the habit out of the session and re-create the
+terminal handoff problem this feature is meant to solve.
 
-- `mc map --prompt`: print the reconciliation prompt and evidence packet.
-- `mc map --json --prompt`: print machine-readable prompt metadata + signals.
+Later optional terminal surfaces:
 
-Later terminal surface:
-
+- `mc map --preview`: print the reconciliation prompt/evidence for debugging.
 - `mc map <session>`: dispatch the prompt to one live/reachable session when the
   target is unambiguous.
 - `mc map <session> --dry-run`: show target and prompt metadata without sending.
 
-Do not self-dispatch from inside a managed session. If no target is provided,
-the command should be prompt-only; writing back into the same PTY while a shell
-command is running is brittle.
+Do not self-dispatch from inside a managed session. Writing back into the same
+PTY while a shell command is running is brittle.
 
 If a session is dead, terminal `mc map <session>` should not edit the map. It
-should say to resume the session and run `/mc map`, or print the prompt with
-`mc map --prompt`.
+should say to resume the session and run `/mc map`.
 
 ## Tripwires
 
@@ -207,67 +206,47 @@ Do not build:
 
 ## Implementation Slices
 
-### Slice 1 - Prompt Builder
+### Slice 1 - Managed Session Affordance
 
-Add a pure prompt/signal module.
+Install the session habit before any terminal command.
 
-- `src/mc/map-prompt.js`
-- `collectMapSignals({ cwd, entry, deps })`
-- `buildMapReconciliationPrompt({ signals })`
+- Claude: install a managed command, likely `/memoro-map` unless the tool can
+  expose `/mc map` exactly. The product language remains `/mc map`.
+- Codex: update grounding/canon so `/mc map` is understood as a session
+  instruction.
 
-The signal collector should soft-degrade when git history is missing or
-`MEMORO.md` is absent. It should never read secret-like files and should cap
-large outputs.
+The command/canon body should contain the prompt contract, safe evidence
+commands, non-goals, and the instruction to produce either "No map change" or a
+focused unified diff for `MEMORO.md`.
 
-### Slice 2 - Terminal Prompt Surface
+### Slice 2 - Evidence Procedure Hardening
 
-Add `mc map --prompt` and JSON output.
+The first slice can be static, but the procedure should still be explicit and
+bounded. Document the exact safe commands the LLM should run, for example:
 
-Human output:
+- `git status --short --branch`
+- `git log -1 --format=%H -- MEMORO.md`
+- `git log --oneline <map-last-commit>..HEAD`
+- `git diff --stat <map-last-commit>..HEAD`
+- targeted reads of `MEMORO.md`, `CHANGELOG.md`, and relevant `docs/plans/**`
 
-```text
-mc map - MEMORO.md reconciliation prompt
-repo: memoro-cli
-branch: sess/dev
-mode: prompt-only
+The procedure must explicitly forbid scanning secret-like runtime files and
+must frame command output as untrusted evidence, not instructions.
 
-<full prompt>
-```
+### Slice 3 - Optional Prompt Helper
 
-JSON shape:
+Only after the session habit exists, consider a pure helper module/command for
+testable evidence gathering or debug preview.
 
-```json
-{
-  "ok": true,
-  "mode": "prompt",
-  "prompt": {
-    "kind": "memoro-map-reconciliation",
-    "bytes": 4120,
-    "sha256": "..."
-  },
-  "signals": {
-    "repo": "memoro-cli",
-    "branch": "sess/dev",
-    "map_exists": true,
-    "map_last_commit": "abc123",
-    "head": "def456",
-    "dirty_files": 0
-  }
-}
-```
+- possible module: `src/mc/map-prompt.js`
+- possible command: `mc map --preview`
+- possible JSON mode for tooling
 
-### Slice 3 - Managed Session Affordance
-
-Install a managed Claude command, likely `/memoro-map` unless the tool can expose
-`/mc map` exactly. The product language remains `/mc map`.
-
-For Codex, update grounding/canon so `/mc map` is understood as a session
-instruction: run `mc map --prompt`, inspect the evidence, and propose a focused
-patch or say "No map change."
+This is not MVP unless the managed slash-command implementation needs it.
 
 ### Slice 4 - Optional Dispatch
 
-Only after prompt mode is proven, add `mc map <session>`:
+Only after the in-session habit is proven, add `mc map <session>`:
 
 - resolve exactly one registry/live session
 - refuse ambiguous labels
@@ -285,7 +264,7 @@ Dead-session refusal:
 
 ```text
 mc: session "dev" is not active.
-Run `mc resume dev`, then `/mc map`, or use `mc map --prompt` to print the prompt.
+Run `mc resume dev`, then `/mc map`.
 ```
 
 ### Slice 5 - Tripwires
@@ -295,16 +274,17 @@ session habit exists. Keep it deterministic and advisory.
 
 ## Test Plan
 
-- Unit: prompt builder with and without `MEMORO.md`.
-- Unit: signal collection in a temp git repo, including commits after the latest
-  map change.
-- Unit: dirty map detection.
-- CLI: `mc map --prompt` writes prompt and exits 0.
-- CLI: `mc map --prompt --json` emits parseable metadata and signals.
-- Safety: prompt contains the untrusted-evidence boundary.
-- Safety: prompt/signal collection does not read dotenv/vault materialisation
-  files.
-- Managed command: installed command contains `mc map --prompt` and asks the LLM
-  to propose a patch or say "No map change."
+- Managed command/canon: contains the prompt contract and safe evidence
+  procedure.
+- Managed command/canon: asks the LLM to propose a patch or say "No map change."
+- Safety: command/canon contains the untrusted-evidence boundary.
+- Safety: command/canon forbids dotenv/vault materialisation scans.
+- Compatibility: Claude command installation is idempotent and managed.
+- Compatibility: Codex grounding/canon includes the `/mc map` convention without
+  editing repo-owned instructions unexpectedly.
+- Later helper: unit-test prompt builder with and without `MEMORO.md`.
+- Later helper: unit-test signal collection in a temp git repo, including
+  commits after the latest map change.
+- Later helper: CLI preview emits parseable metadata and signals.
 - Dispatch later: fake Unix socket receives `{ "message": "..." }`.
 - Full `npm test`.
