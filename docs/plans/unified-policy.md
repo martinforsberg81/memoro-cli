@@ -277,6 +277,15 @@ mc touch anything new.
 
 ## Next build slice
 
-Live-test Codex launch rendering with `.mc/policy.json`, then decide whether the
-next slice is policy-config ergonomics or a separate Claude-specific mapping
-design. Keep Claude visibility-only until that mapping is defensible.
+The next policy slice should follow the configuration model in
+`docs/plans/configuration-model.md`: mc config controls mc behavior, never
+project instructions; repo policy is committed and safe to review; repo-local
+user overrides are gitignored; safety floors cannot be silently weakened.
+
+Concretely:
+
+1. Add the effective config resolver with source metadata and safety-floor merge
+   semantics.
+2. Move the Codex Cloudflare guard's approved-script allowlist out of package
+   code and into `.mc/policy.json`.
+3. Keep Claude visibility-only until a separate, defensible mapping exists.
