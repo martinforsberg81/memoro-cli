@@ -99,11 +99,13 @@ tool state intact.
 - **Map reconciliation guard** — `active · S · now`
   Reading MEMORO.md at startup is not enough; 0.7.6 itself proved that shipped
   work can leave the map stale unless reconciliation is prompted deliberately.
-  Next slice: deterministic tripwires plus a single prompt-only session
-  affordance, `/mc map`, that asks the LLM to draft a concrete MEMORO.md patch.
-  MEMORO.md is active coordinator-owned committed project state; avoid hidden
-  background edits, duplicate `/mc end` reconciliation flow, and PM-style map
-  CRUD.
+  Design is now locked: `/mc map` is primarily an in-session reconciliation
+  habit, not a terminal CRUD surface; mc supplies a small deterministic evidence
+  packet and a strict prompt, then the coordinator decides whether a focused
+  MEMORO.md patch is warranted. First implementation slice is prompt-only
+  (`mc map --prompt` plus a managed session affordance); tripwires in
+  status/list/end come after the habit is proven. Avoid hidden background edits,
+  duplicate `/mc end` reconciliation flow, and PM-style map CRUD.
   → `docs/plans/map-reconciliation.md`
 
 ### Policy & safety — same freedom across tools   · serves G2, G3
