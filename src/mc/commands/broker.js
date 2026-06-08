@@ -1,18 +1,18 @@
-import { spawn } from 'node:child_process';
-import { mkdirSync, openSync } from 'node:fs';
-import { dirname } from 'node:path';
-
 import { requestBroker } from '../broker/client.js';
 import { CloudBrokerClient } from '../broker/cloud.js';
 import { runBrokerDaemon } from '../broker/daemon.js';
-import { brokerLogPath, brokerPidPath, brokerSocketPath } from '../broker/paths.js';
+import { brokerPidPath, brokerSocketPath } from '../broker/paths.js';
+import {
+  ensureBrokerRunning,
+  spawnBrokerDaemon,
+  START_POLL_MS,
+  POLL_INTERVAL_MS,
+} from '../broker/supervisor.js';
 import { getSecret } from '../../lib/keychain.js';
 import { ACCOUNTS } from '../../commands/auth.js';
 import { readConfig, getApiUrl } from '../../lib/config.js';
 import { getPackageVersion } from '../../lib/version.js';
 
-const START_POLL_MS = 1_500;
-const POLL_INTERVAL_MS = 100;
 const CONNECT_READY_TIMEOUT_MS = 10_000;
 
 export async function run(argv) {
@@ -28,7 +28,8 @@ export async function run(argv) {
   }
   return runBrokerWith(opts, {
     request: requestBroker,
-    spawnDaemon,
+    ensureBroker: ensureBrokerRunning,
+    spawnDaemon: spawnBrokerDaemon,
     runDaemon: runBrokerDaemon,
     connectCloud: runCloudConnection,
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
@@ -38,6 +39,8 @@ export async function run(argv) {
 }
 
 export async function runBrokerWith(opts, deps) {
+  const ensureBroker = deps.ensureBroker || ensureBrokerRunning;
+
   if (opts.daemon) {
     await deps.runDaemon({ readyFile: opts.readyFile || null });
     return 0;
@@ -68,6 +71,13 @@ export async function runBrokerWith(opts, deps) {
   }
 
   if (opts.verb === 'connect') {
+    const broker = await ensureBroker({ request: deps.request, spawnDaemon: deps.spawnDaemon, sleep: deps.sleep });
+    if (!broker.ok) {
+      const out = { ok: false, error: `broker start failed (${broker.error || 'unknown'})` };
+      if (opts.json) deps.stdout.write(JSON.stringify(out, null, 2) + '\n');
+      else deps.stderr.write(`mc: ${out.error}\n`);
+      return 1;
+    }
     const res = await deps.connectCloud(opts, { stdout: deps.stdout, stderr: deps.stderr }).catch((err) => ({ ok: false, error: err.message || String(err) }));
     if (opts.json) {
       deps.stdout.write(JSON.stringify(res, null, 2) + '\n');
@@ -80,27 +90,24 @@ export async function runBrokerWith(opts, deps) {
   }
 
   if (opts.verb === 'start') {
-    const existing = await deps.request({ type: 'status' }).catch(() => null);
-    if (existing?.ok) {
-      const out = { ok: true, already_running: true, broker: existing.broker };
-      if (opts.json) deps.stdout.write(JSON.stringify(out, null, 2) + '\n');
-      else deps.stdout.write(`mc broker: already running (pid ${existing.broker?.pid ?? '?'})\n`);
-      return 0;
-    }
-
-    const spawned = deps.spawnDaemon({ readyFile: opts.readyFile || null });
-    if (!spawned.ok) {
-      const out = { ok: false, error: spawned.error };
-      if (opts.json) deps.stdout.write(JSON.stringify(out, null, 2) + '\n');
-      else deps.stderr.write(`mc: broker start failed (${spawned.error})\n`);
-      return 1;
-    }
-
-    const status = await waitForBroker(deps, START_POLL_MS, POLL_INTERVAL_MS);
-    const out = status?.ok
-      ? { ok: true, started: true, broker: status.broker }
-      : { ok: false, error: 'broker did not become ready in time' };
+    const res = await ensureBroker({
+      request: deps.request,
+      spawnDaemon: deps.spawnDaemon,
+      sleep: deps.sleep,
+      timeoutMs: START_POLL_MS,
+      intervalMs: POLL_INTERVAL_MS,
+      readyFile: opts.readyFile || null,
+    });
+    const out = res?.ok
+      ? {
+          ok: true,
+          ...(res.alreadyRunning ? { already_running: true } : {}),
+          ...(res.started ? { started: true } : {}),
+          broker: res.broker,
+        }
+      : { ok: false, error: res?.error || 'broker did not become ready in time' };
     if (opts.json) deps.stdout.write(JSON.stringify(out, null, 2) + '\n');
+    else if (out.already_running) deps.stdout.write(`mc broker: already running (pid ${out.broker?.pid ?? '?'})\n`);
     else if (out.ok) deps.stdout.write(`mc broker: started (pid ${out.broker?.pid ?? '?'})\n`);
     else deps.stderr.write(`mc: ${out.error}\n`);
     return out.ok ? 0 : 1;
@@ -108,37 +115,6 @@ export async function runBrokerWith(opts, deps) {
 
   deps.stderr.write(`mc: unknown broker verb: ${opts.verb}\n`);
   return 2;
-}
-
-async function waitForBroker(deps, timeoutMs, intervalMs) {
-  const started = Date.now();
-  while (Date.now() - started < timeoutMs) {
-    const res = await deps.request({ type: 'status' }).catch(() => null);
-    if (res?.ok) return res;
-    await deps.sleep(intervalMs);
-  }
-  return null;
-}
-
-function spawnDaemon({ readyFile = null } = {}) {
-  const logPath = brokerLogPath();
-  try {
-    mkdirSync(dirname(logPath), { recursive: true, mode: 0o700 });
-    const out = openSync(logPath, 'a');
-    const err = openSync(logPath, 'a');
-    const args = [process.argv[1], 'broker', '--daemon'];
-    if (readyFile) args.push('--ready-file', readyFile);
-    const child = spawn(process.execPath, args, {
-      detached: true,
-      stdio: ['ignore', out, err],
-      cwd: process.cwd(),
-      env: process.env,
-    });
-    child.unref();
-    return { ok: true, pid: child.pid };
-  } catch (err) {
-    return { ok: false, error: err.message || String(err) };
-  }
 }
 
 async function runCloudConnection(opts, io = {}) {
@@ -220,13 +196,15 @@ function formatDuration(ms) {
 }
 
 function printUsage() {
-  process.stdout.write(`mc broker — local PTY broker supervisor
+  process.stdout.write(`mc broker — local PTY broker admin
 
 USAGE
   mc broker start [--json]
   mc broker status [--json]
   mc broker stop [--json]
   mc broker connect [--json]
+
+Normal session commands auto-start the broker when needed.
 
 Internal:
   mc broker --daemon

@@ -286,7 +286,7 @@ FLEET / ADVANCED
   mc sessions read <label|id>     Fetch another session's recent transcript
   mc reconcile [--apply]          Detect sessions shipped elsewhere
   mc gc [--dry-run]               Reap dead, merged, or clean worktrees
-  mc broker start/status/stop     Local PTY broker supervisor
+  mc broker start/status/stop     Local PTY broker admin
   mc broker connect               Connect local broker to Memoro cloud
   mc attach <session_id>          Attach to a broker-owned local session
   mc adapter sync                 Refresh tool instruction wrappers

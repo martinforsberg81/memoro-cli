@@ -1,9 +1,12 @@
 import { attachBrokerSession } from '../broker/attach-client.js';
+import { requestBroker } from '../broker/client.js';
+import { ensureBrokerRunning } from '../broker/supervisor.js';
 
-export async function run(argv) {
+export async function run(argv, deps = {}) {
   const opts = parseArgs(argv);
+  const stderr = deps.stderr || process.stderr;
   if (opts.error) {
-    console.error(`mc: ${opts.error}`);
+    stderr.write(`mc: ${opts.error}\n`);
     printUsage();
     return 2;
   }
@@ -11,7 +14,18 @@ export async function run(argv) {
     printUsage();
     return opts.help ? 0 : 2;
   }
-  return attachBrokerSession({ id: opts.id });
+  const ensureBroker = deps.ensureBrokerRunning || ensureBrokerRunning;
+  const broker = await ensureBroker({
+    request: deps.request || requestBroker,
+    spawnDaemon: deps.spawnDaemon,
+    sleep: deps.sleep,
+  });
+  if (!broker.ok) {
+    stderr.write(`mc: broker start failed (${broker.error || 'unknown'})\n`);
+    return 1;
+  }
+  const attach = deps.attachBrokerSession || attachBrokerSession;
+  return attach({ id: opts.id });
 }
 
 export function parseArgs(argv) {

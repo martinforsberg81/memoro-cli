@@ -146,11 +146,16 @@ Add hidden or low-level commands first:
 mc broker start
 mc broker status --json
 mc broker stop
+mc broker connect          # cloud bridge; auto-starts the local broker
 mc attach <name|id>          # local attach client; later mirrors browser attach
 ```
 
-`mc new` and `mc resume` should eventually stop spawning the tool directly.
-Instead they should:
+`mc broker start/status/stop` are administrative. Normal session commands
+should not require the user to start the broker by hand: `mc new`, `mc resume`,
+`mc attach`, and `mc broker connect` ensure it is running before continuing.
+
+`mc new` and `mc resume` should stop spawning the tool directly. Instead they
+should:
 
 1. Create/resolve the worktree and registry entry as today.
 2. Ensure the broker daemon is running.
@@ -486,6 +491,10 @@ Status:
   The runtime tracks attaches per session and forwards input from every attached
   client to the same PTY. The earlier writer-lease/read-only model was removed as
   product friction for the one-human hosted workspace.
+- **Phase 2g shipped 2026-06-08:** broker auto-start became part of the normal
+  command surface. `mc new`/`mc resume` already launched through the broker;
+  `mc attach` and `mc broker connect` now also ensure the local broker is running
+  before continuing, leaving `mc broker start/status/stop` as admin tools.
 - **Phase 3a shipped 2026-06-07:** CLI-side cloud bridge. `mc broker connect`
   connects to `/api/mc/broker/ws`, advertises local broker sessions, handles
   `refresh_sessions` / `list_sessions`, and answers server `attach_request`
@@ -520,9 +529,10 @@ Status:
 Scope:
 
 - Add daemon process and Unix-domain control socket under `${MC_HOME}`.
-- Add `mc broker start/status/stop`.
+- Add `mc broker start/status/stop` as admin tools.
 - Add `mc attach <name|id>` for local attach.
 - Change `mc new` / `mc resume` to launch via broker, then attach locally.
+- Auto-start the broker from normal attach/connect entrypoints.
 - Store broker/session manifests under `${MC_HOME}/state/`.
 - Add multi-attach local clients.
 

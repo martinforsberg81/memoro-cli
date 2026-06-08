@@ -1,6 +1,4 @@
-import { spawn } from 'node:child_process';
-import { openSync, mkdirSync } from 'node:fs';
-import { join, dirname } from 'node:path';
+import { join } from 'node:path';
 import { hostname } from 'node:os';
 
 import { resolveLaunch } from '../../adapters/index.js';
@@ -17,12 +15,9 @@ import { mcHome } from '../paths.js';
 import { findEntry } from '../registry.js';
 import { resolvePolicyForWrap } from '../wrap-start.js';
 import { requestBroker } from './client.js';
-import { brokerLogPath } from './paths.js';
 import { attachBrokerSession } from './attach-client.js';
 import { renderIntro } from '../session-intro.js';
-
-const START_POLL_MS = 1_500;
-const POLL_INTERVAL_MS = 100;
+import { ensureBrokerRunning } from './supervisor.js';
 
 export async function launchBrokerOwnedSession({
   cwd,
@@ -195,47 +190,6 @@ export async function launchBrokerOwnedSession({
   return { code, codingSessionId, broker: broker.broker || null };
 }
 
-export async function ensureBrokerRunning({
-  request = requestBroker,
-  spawnDaemon = spawnBrokerDaemon,
-  sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
-  timeoutMs = START_POLL_MS,
-  intervalMs = POLL_INTERVAL_MS,
-} = {}) {
-  const existing = await request({ type: 'status' }).catch(() => null);
-  if (existing?.ok) return { ok: true, alreadyRunning: true, broker: existing.broker };
-
-  const spawned = spawnDaemon();
-  if (!spawned.ok) return spawned;
-
-  const started = Date.now();
-  while (Date.now() - started < timeoutMs) {
-    const res = await request({ type: 'status' }).catch(() => null);
-    if (res?.ok) return { ok: true, started: true, broker: res.broker };
-    await sleep(intervalMs);
-  }
-  return { ok: false, error: 'broker did not become ready in time' };
-}
-
-export function spawnBrokerDaemon() {
-  const logPath = brokerLogPath();
-  try {
-    mkdirSync(dirname(logPath), { recursive: true, mode: 0o700 });
-    const out = openSync(logPath, 'a');
-    const err = openSync(logPath, 'a');
-    const child = spawn(process.execPath, [process.argv[1], 'broker', '--daemon'], {
-      detached: true,
-      stdio: ['ignore', out, err],
-      cwd: process.cwd(),
-      env: process.env,
-    });
-    child.unref();
-    return { ok: true, pid: child.pid };
-  } catch (err) {
-    return { ok: false, error: err.message || String(err) };
-  }
-}
-
 export function brokerSessionPaths(codingSessionId) {
   return {
     sockPath: join(mcHome(), `${codingSessionId}.sock`),
@@ -243,4 +197,4 @@ export function brokerSessionPaths(codingSessionId) {
   };
 }
 
-export const __test__ = { START_POLL_MS, POLL_INTERVAL_MS };
+export { ensureBrokerRunning } from './supervisor.js';

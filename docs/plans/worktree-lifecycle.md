@@ -463,7 +463,8 @@ What's new:
    active session in a `node-pty` instance, streams stdout/stderr up
    to Memoro over the existing channel, accepts stdin going back down.
    Detached by default — the broker survives terminal-app close, like
-   tmux. One broker per machine; auto-starts on `mc new`.
+   tmux. One broker per machine; auto-starts when normal session commands need
+   it (`mc new`, `mc resume`, `mc attach`, and `mc broker connect`).
 2. **Browser UI.** `xterm.js` per tab inside the Memoro app. Tabs are
    driven by `mc list` (filtered to this user's sessions across
    machines). Tab open = broker assigns a stream id, browser attaches.

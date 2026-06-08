@@ -145,9 +145,14 @@ describe('mc broker command', () => {
   test('connect delegates to the cloud connector', async () => {
     const streams = io();
     let connected = null;
+    let ensured = false;
     const code = await runBrokerWith({ verb: 'connect', json: true, once: true }, {
       request: async () => assert.fail('must not request directly'),
       spawnDaemon: () => assert.fail('must not spawn'),
+      ensureBroker: async () => {
+        ensured = true;
+        return { ok: true, broker: { pid: 11 } };
+      },
       runDaemon: () => assert.fail('must not daemon'),
       connectCloud: async (opts, ioArg) => {
         connected = opts;
@@ -161,7 +166,25 @@ describe('mc broker command', () => {
     });
 
     assert.equal(code, 0);
+    assert.equal(ensured, true);
     assert.equal(connected.once, true);
     assert.equal(JSON.parse(streams.out()).machine_id, 'machine');
+  });
+
+  test('connect fails before cloud connector when broker cannot start', async () => {
+    const streams = io();
+    const code = await runBrokerWith({ verb: 'connect', json: true, once: true }, {
+      request: async () => assert.fail('must not request directly'),
+      spawnDaemon: () => assert.fail('must not spawn'),
+      ensureBroker: async () => ({ ok: false, error: 'permission denied' }),
+      runDaemon: () => assert.fail('must not daemon'),
+      connectCloud: async () => assert.fail('must not connect cloud'),
+      sleep: async () => {},
+      stdout: streams.stdout,
+      stderr: streams.stderr,
+    });
+
+    assert.equal(code, 1);
+    assert.match(JSON.parse(streams.out()).error, /broker start failed/);
   });
 });
