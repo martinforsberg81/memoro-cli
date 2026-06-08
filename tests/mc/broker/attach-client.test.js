@@ -113,7 +113,7 @@ describe('attachBrokerSession', () => {
     assert.deepEqual(stdin.rawModes, []);
   });
 
-  test('surfaces read-only attach status', async () => {
+  test('does not surface legacy read-only attach status', async () => {
     const socket = makeSocket();
     const stdin = makeStream({ tty: true });
     const stdout = makeStream();
@@ -132,7 +132,7 @@ describe('attachBrokerSession', () => {
     socket.emit('end');
 
     assert.equal(await promise, 0);
-    assert.match(stderr.output(), /read-only/);
+    assert.equal(stderr.output(), '');
   });
 
   test('missing id is a usage error without opening a socket', async () => {

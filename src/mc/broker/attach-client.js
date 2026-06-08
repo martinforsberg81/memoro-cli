@@ -13,7 +13,6 @@ export function attachBrokerSession({
   stderr = process.stderr,
   cols = stdout.columns || 80,
   rows = stdout.rows || 24,
-  writer = true,
 } = {}) {
   if (!id) {
     stderr.write('mc: session id required\n');
@@ -82,10 +81,6 @@ export function attachBrokerSession({
         cleanup(1);
         return;
       }
-      if (ack.writer === false) {
-        stderr.write('mc: attached read-only (another writer is active)\n');
-      }
-
       attached = true;
       if (stdin.isTTY) {
         try {
@@ -115,8 +110,8 @@ export function attachBrokerSession({
         id,
         cols,
         rows,
-        writer,
-        mode: writer ? 'write' : 'read-only',
+        writer: true,
+        mode: 'write',
       }) + '\n');
     });
     socket.on('data', onSocketData);

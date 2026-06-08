@@ -61,8 +61,8 @@ What is missing:
 - The current WS command channel is request/response. Live attach needs a
   streaming data plane with binary PTY frames plus JSON control frames.
 - The output buffer is for excerpts, not high-fidelity screen restore.
-- There is no writer lease, attach/detach lifecycle, browser resize handling, or
-  cloud-side attach token.
+- There is no attach/detach lifecycle, browser resize handling, or cloud-side
+  attach token.
 - The newer `mc dispatch` / `mc read` lifecycle names are foundation-only and
   not yet wired to live cloud commands.
 
@@ -80,7 +80,7 @@ PtyStream Durable Object
         v
 local mc broker daemon
         |
-        | node-pty master, writer lease, screen/ring buffer
+        | node-pty master, multi-attach write relay, screen/ring buffer
         v
 Claude / Codex / Gemini PTY in local worktree
 ```
@@ -136,7 +136,6 @@ src/mc/broker/
   protocol.js        # JSON control message validation
   pty-session.js     # extracted PTY owner
   ring-buffer.js     # bounded binary replay buffer
-  writer-lease.js    # one writer, many viewers
   screen-state.js    # terminal snapshot/replay quality layer
   cloud.js           # broker control WS + attach stream client
 ```
@@ -183,8 +182,7 @@ class PtySession {
   start()
   attach({ attachId, cols, rows, mode })      // returns snapshot + event stream
   detach(attachId)
-  requestWriter(attachId, { force = false })
-  write(attachId, data)                       // rejects unless writer
+  write(attachId, data)                       // forwards PTY input from any attach
   resize(attachId, { cols, rows })
   kill({ signal = 'SIGTERM' })
   snapshot()                                  // screen + replay cursor + status
@@ -212,7 +210,7 @@ Data held per session:
   session_state,       // live | idle | dead
   attachable: true,
   attached: [{ attach_id, side, mode, writer, connected_at }],
-  writer_attach_id,
+  writer_attach_id: null, // legacy field; no exclusive writer lease in v1
   ring_cursor,
   pty_pid,
   exit: null | { code, signal, at },
@@ -263,7 +261,7 @@ Broker -> cloud:
   "machine_id": "martins-mbp",
   "device_name": "Martins MacBook Pro",
   "mc_version": "0.7.0",
-  "capabilities": ["pty-stream-v1", "resize-v1", "writer-lease-v1", "screen-snapshot-v1"]
+  "capabilities": ["pty-stream-v1", "resize-v1", "screen-snapshot-v1"]
 }
 ```
 
@@ -325,8 +323,6 @@ Text JSON frames:
 ```json
 { "type": "ready", "session": { "coding_session_id": "sess_x", "name": "billing-fix" } }
 { "type": "resize", "cols": 120, "rows": 34 }
-{ "type": "writer", "state": "granted" }
-{ "type": "writer", "state": "denied", "reason": "local-writer-active" }
 { "type": "detach" }
 { "type": "exit", "code": 0, "signal": null }
 { "type": "error", "message": "session not found" }
@@ -345,26 +341,25 @@ Initial attach order:
 4. Broker connects to `.../broker`.
 5. Broker sends screen snapshot/replay bytes.
 6. Broker sends `{ "type": "ready" }`.
-7. Binary frames flow both ways while writer lease is active.
+7. Binary frames flow both ways while attached.
 
-## Writer lease
+## Attach input policy
 
-One session can have many viewers but only one writer.
+One session can have many attached clients. In v1, every attached client can
+write PTY input.
 
-Rules:
+Rationale:
 
-- Local terminal attach gets writer by default.
-- Browser attach gets writer if no writer is active.
-- If a local writer is active, browser attach starts read-only and can request
-  control.
-- Taking control must be explicit in the UI. When control moves, the previous
-  writer receives a visible control message and input is ignored there until it
-  reclaims control.
-- A disconnected writer releases the lease after a short grace period.
-- `Ctrl-C` is just PTY input from the current writer; it interrupts the tool but
-  must not kill the broker.
+- The common case is one human moving between local terminal and browser, not two
+  people typing at once.
+- Text is usually buffered locally for only a few seconds before the user sends a
+  prompt.
+- The downside of accidental interleaving is a strange LLM instruction, not
+  direct code mutation.
+- Avoiding a read-only/control-transfer UX keeps the hosted workspace simple.
 
-For v1, do not support two simultaneous writers.
+`Ctrl-C` is just PTY input from whichever client sends it; it interrupts the tool
+but must not kill the broker.
 
 ## Browser UI model
 
@@ -487,10 +482,10 @@ Status:
   plus launch prep (grounding, Memoro token lookup, coding-session id minting,
   intro rendering, vault materialisation still in the lifecycle command), and
   the lifecycle commands now launch through the broker then attach locally.
-- **Phase 2f shipped 2026-06-07:** local writer lease. The runtime tracks
-  attaches per session, grants one writer and many read-only viewers, exposes
-  attach/writer state in broker session status, releases the writer on detach,
-  and `mc attach --read-only` gives an explicit local viewer mode.
+- **Phase 2f shipped 2026-06-07; revised 2026-06-08:** local multi-attach relay.
+  The runtime tracks attaches per session and forwards input from every attached
+  client to the same PTY. The earlier writer-lease/read-only model was removed as
+  product friction for the one-human hosted workspace.
 - **Phase 3a shipped 2026-06-07:** CLI-side cloud bridge. `mc broker connect`
   connects to `/api/mc/broker/ws`, advertises local broker sessions, handles
   `refresh_sessions` / `list_sessions`, and answers server `attach_request`
@@ -529,7 +524,7 @@ Scope:
 - Add `mc attach <name|id>` for local attach.
 - Change `mc new` / `mc resume` to launch via broker, then attach locally.
 - Store broker/session manifests under `${MC_HOME}/state/`.
-- Add writer lease for local clients.
+- Add multi-attach local clients.
 
 Acceptance:
 
@@ -589,7 +584,7 @@ Scope:
 - Resize forwarding.
 - Detach button.
 - Terminal mode and compose mode.
-- Writer lease UI for read-only vs control.
+- Multi-attach terminal input without read-only/control-transfer UI.
 
 Acceptance:
 

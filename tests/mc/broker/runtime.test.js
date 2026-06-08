@@ -202,7 +202,7 @@ describe('BrokerRuntime', () => {
     assert.equal(conn.ended, true);
   });
 
-  test('attachConnection grants one writer lease and makes parallel attaches read-only', () => {
+  test('attachConnection lets parallel attaches write to the same PTY', () => {
     const { runtime, fake } = makeRuntime();
     const makeConn = () => {
       const writes = [];
@@ -220,30 +220,30 @@ describe('BrokerRuntime', () => {
     };
 
     runtime.handle({ type: 'launch_session', session: { id: 'sess_a' } });
-    const writer = makeConn();
-    const viewer = makeConn();
+    const first = makeConn();
+    const second = makeConn();
 
-    runtime.attachConnection({ id: 'sess_a', attach_id: 'att_writer' }, writer);
-    runtime.attachConnection({ id: 'sess_a', attach_id: 'att_viewer' }, viewer);
+    runtime.attachConnection({ id: 'sess_a', attach_id: 'att_first' }, first);
+    runtime.attachConnection({ id: 'sess_a', attach_id: 'att_second' }, second);
 
-    assert.equal(JSON.parse(writer.writes[0]).writer, true);
-    assert.equal(JSON.parse(viewer.writes[0]).writer, false);
-    assert.equal(JSON.parse(viewer.writes[0]).attach.mode, 'read-only');
-    assert.deepEqual(runtime.listSessions()[0].attached.map((a) => a.attach_id), ['att_writer', 'att_viewer']);
-    assert.equal(runtime.listSessions()[0].writer_attach_id, 'att_writer');
+    assert.equal(JSON.parse(first.writes[0]).writer, true);
+    assert.equal(JSON.parse(second.writes[0]).writer, true);
+    assert.equal(JSON.parse(second.writes[0]).attach.mode, 'write');
+    assert.deepEqual(runtime.listSessions()[0].attached.map((a) => a.attach_id), ['att_first', 'att_second']);
+    assert.equal(runtime.listSessions()[0].writer_attach_id, null);
 
-    writer.emit('data', Buffer.from('yes'));
-    viewer.emit('data', Buffer.from('no'));
-    assert.deepEqual(fake.ptys[0].writes, ['yes']);
+    first.emit('data', Buffer.from('yes'));
+    second.emit('data', Buffer.from('no'));
+    assert.deepEqual(fake.ptys[0].writes, ['yes', 'no']);
 
-    writer.emit('end');
+    first.emit('end');
     assert.equal(runtime.listSessions()[0].writer_attach_id, null);
 
     const next = makeConn();
     runtime.attachConnection({ id: 'sess_a', attach_id: 'att_next' }, next);
     assert.equal(JSON.parse(next.writes[0]).writer, true);
     next.emit('data', Buffer.from('again'));
-    assert.deepEqual(fake.ptys[0].writes, ['yes', 'again']);
+    assert.deepEqual(fake.ptys[0].writes, ['yes', 'no', 'again']);
   });
 
   test('launch_session starts and stops sidecars when requested', () => {

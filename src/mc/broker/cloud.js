@@ -12,7 +12,6 @@ const SESSION_REFRESH_INTERVAL_MS = 5_000;
 const DEFAULT_CAPABILITIES = [
   'pty-stream-v1',
   'resize-v1',
-  'writer-lease-v1',
   'screen-replay-v1',
 ];
 
@@ -159,7 +158,6 @@ export class CloudBrokerClient extends EventEmitter {
       token: msg.token || null,
       cols: msg.cols || 80,
       rows: msg.rows || 24,
-      writer: msg.writer !== false,
       request: this.request,
       connect: this.connect,
       WebSocketImpl: this.WebSocketImpl,
@@ -224,7 +222,6 @@ export function createAttachBridge({
   token = null,
   cols = 80,
   rows = 24,
-  writer = true,
   request = requestBroker,
   connect = createConnection,
   WebSocketImpl = globalThis.WebSocket,
@@ -334,8 +331,8 @@ export function createAttachBridge({
           side: 'cloud',
           cols,
           rows,
-          writer,
-          mode: writer ? 'write' : 'read-only',
+          writer: true,
+          mode: 'write',
         }) + '\n');
       });
       addWsListener(remote, 'message', (event) => handleRemoteFrame(event?.data ?? event));

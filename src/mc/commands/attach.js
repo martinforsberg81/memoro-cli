@@ -11,18 +11,14 @@ export async function run(argv) {
     printUsage();
     return opts.help ? 0 : 2;
   }
-  return attachBrokerSession({ id: opts.id, writer: opts.writer });
+  return attachBrokerSession({ id: opts.id });
 }
 
 export function parseArgs(argv) {
-  const opts = { id: null, help: false, writer: true };
+  const opts = { id: null, help: false };
   for (const a of argv) {
     if (a === '--help' || a === '-h') {
       opts.help = true;
-      continue;
-    }
-    if (a === '--read-only') {
-      opts.writer = false;
       continue;
     }
     if (a.startsWith('--')) return { ...opts, error: `unknown flag: ${a}` };
@@ -37,6 +33,5 @@ function printUsage() {
 
 USAGE
   mc attach <session_id>
-  mc attach <session_id> --read-only
 `);
 }

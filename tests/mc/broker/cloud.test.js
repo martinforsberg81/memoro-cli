@@ -142,7 +142,7 @@ describe('CloudBrokerClient', () => {
         machine_id: 'machine',
         device_name: 'machine',
         mc_version: '0.7.6',
-        capabilities: ['pty-stream-v1', 'resize-v1', 'writer-lease-v1', 'screen-replay-v1'],
+        capabilities: ['pty-stream-v1', 'resize-v1', 'screen-replay-v1'],
       },
       {
         type: 'sessions',

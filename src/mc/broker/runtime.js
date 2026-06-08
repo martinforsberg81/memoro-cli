@@ -42,7 +42,6 @@ export class BrokerRuntime {
     this.sidecarFactory = sidecarFactory;
     this.sidecars = new Map();
     this.attaches = new Map();
-    this.writerBySession = new Map();
     this.manager.on('exit', ({ id }) => this._stopSidecars(id));
   }
 
@@ -170,17 +169,12 @@ export class BrokerRuntime {
     }
 
     const attachId = stringOrDefault(message.attach_id, makeAttachId());
-    const writer = this._claimWriter({
-      sessionId: id,
-      attachId,
-      wantsWriter: message.writer !== false && message.mode !== 'read-only',
-    });
     const attach = {
       attach_id: attachId,
       session_id: id,
       side: stringOrDefault(message.side, 'local'),
-      mode: writer ? 'write' : 'read-only',
-      writer,
+      mode: 'write',
+      writer: true,
       connected_at: new Date().toISOString(),
     };
     this.attaches.set(attachId, attach);
@@ -188,7 +182,7 @@ export class BrokerRuntime {
     conn.write(JSON.stringify({
       ok: true,
       attach,
-      writer,
+      writer: true,
       session: this._withAttachStatus(this.manager.status(id)),
     }) + '\n');
     const snapshot = typeof session.recentOutput === 'function' ? session.recentOutput() : '';
@@ -198,7 +192,6 @@ export class BrokerRuntime {
     let closed = false;
     const writeInput = (chunk) => {
       if (closed) return;
-      if (this.writerBySession.get(id) !== attachId) return;
       const data = Buffer.isBuffer(chunk) ? decoder.write(chunk) : String(chunk || '');
       if (data) session.write(data);
     };
@@ -214,13 +207,12 @@ export class BrokerRuntime {
       if (closed) return;
       closed = true;
       const tail = decoder.end();
-      if (tail && this.writerBySession.get(id) === attachId) {
+      if (tail) {
         try { session.write(tail); } catch {}
       }
       this.manager.off('data', onSessionData);
       this.manager.off('exit', onSessionExit);
       this.attaches.delete(attachId);
-      if (this.writerBySession.get(id) === attachId) this.writerBySession.delete(id);
       conn.off?.('data', writeInput);
       conn.off?.('end', cleanup);
       conn.off?.('close', cleanup);
@@ -269,14 +261,6 @@ export class BrokerRuntime {
     try { sidecars.stop(); } catch {}
   }
 
-  _claimWriter({ sessionId, attachId, wantsWriter }) {
-    if (!wantsWriter) return false;
-    const current = this.writerBySession.get(sessionId);
-    if (current && this.attaches.has(current)) return false;
-    this.writerBySession.set(sessionId, attachId);
-    return true;
-  }
-
   _withAttachStatus(session) {
     if (!session) return null;
     const attached = [...this.attaches.values()]
@@ -285,7 +269,7 @@ export class BrokerRuntime {
     return {
       ...session,
       attached,
-      writer_attach_id: this.writerBySession.get(session.id) || null,
+      writer_attach_id: null,
     };
   }
 }
