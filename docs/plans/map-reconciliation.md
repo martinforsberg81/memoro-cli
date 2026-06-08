@@ -212,8 +212,8 @@ Status: shipped after 0.7.6.
 
 Install the session habit before any terminal command.
 
-- Claude: install a managed command, likely `/memoro-map` unless the tool can
-  expose `/mc map` exactly. The product language remains `/mc map`.
+- Claude: install a managed `/mc` command so `/mc map` works as the same
+  user-facing session habit.
 - Codex: update grounding/canon so `/mc map` is understood as a session
   instruction.
 

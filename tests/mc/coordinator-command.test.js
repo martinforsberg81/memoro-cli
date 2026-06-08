@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test, { describe } from 'node:test';
@@ -33,9 +33,9 @@ describe('coordinator slash command body', () => {
     assert.match(__test__.COMMAND_BODY, /\/memoro-coordinator-suggest/);
   });
 
-  test('points users at /memoro-map for map reconciliation', () => {
-    assert.match(__test__.COMMAND_BODY, /\/memoro-map/);
+  test('points users at /mc map for map reconciliation', () => {
     assert.match(__test__.COMMAND_BODY, /\/mc map/);
+    assert.doesNotMatch(__test__.COMMAND_BODY, /\/memoro-map/);
   });
 
   test('has the required frontmatter description', () => {
@@ -71,7 +71,7 @@ describe('coordinator-suggest slash command body', () => {
   });
 });
 
-describe('memoro-map slash command body', () => {
+describe('/mc map slash command body', () => {
   test('carries the managed marker and frontmatter', () => {
     assert.ok(__test__.COMMAND_BODY_MAP.includes(__test__.COMMAND_MARKER));
     assert.match(__test__.COMMAND_BODY_MAP, /^---\ndescription:/);
@@ -79,6 +79,8 @@ describe('memoro-map slash command body', () => {
 
   test('implements the /mc map in-session habit', () => {
     assert.match(__test__.COMMAND_BODY_MAP, /\/mc map/);
+    assert.match(__test__.COMMAND_BODY_MAP, /\$ARGUMENTS/);
+    assert.match(__test__.COMMAND_BODY_MAP, /only `\/mc map`/);
     assert.match(__test__.COMMAND_BODY_MAP, /No map change/);
     assert.match(__test__.COMMAND_BODY_MAP, /focused unified diff/);
   });
@@ -101,15 +103,83 @@ describe('memoro-map slash command body', () => {
 });
 
 describe('coordinator slash command installer', () => {
-  test('installs the managed map command alongside coordinator commands', async () => {
+  test('installs the managed /mc command alongside coordinator commands', async () => {
     const sandbox = mkdtempSync(join(tmpdir(), 'mc-coord-commands-'));
     const oldHome = process.env.HOME;
     process.env.HOME = sandbox;
     try {
       await ensureCoordinatorSlashCommand();
-      const mapCommand = readFileSync(join(sandbox, '.claude', 'commands', 'memoro-map.md'), 'utf8');
+      const mapCommand = readFileSync(join(sandbox, '.claude', 'commands', 'mc.md'), 'utf8');
       assert.match(mapCommand, /\/mc map/);
       assert.match(mapCommand, /memoro:managed:command/);
+    } finally {
+      process.env.HOME = oldHome;
+      rmSync(sandbox, { recursive: true, force: true });
+    }
+  });
+
+  test('removes the legacy managed /memoro-map command', async () => {
+    const sandbox = mkdtempSync(join(tmpdir(), 'mc-coord-commands-'));
+    const oldHome = process.env.HOME;
+    process.env.HOME = sandbox;
+    try {
+      mkdirSync(join(sandbox, '.claude', 'commands'), { recursive: true });
+      const legacyPath = join(sandbox, '.claude', 'commands', 'memoro-map.md');
+      writeFileSync(legacyPath, `${__test__.COMMAND_MARKER}\nlegacy`, { mode: 0o644 });
+      await ensureCoordinatorSlashCommand();
+      assert.equal(existsSync(legacyPath), false);
+      assert.equal(existsSync(join(sandbox, '.claude', 'commands', 'mc.md')), true);
+    } finally {
+      process.env.HOME = oldHome;
+      rmSync(sandbox, { recursive: true, force: true });
+    }
+  });
+
+  test('does not remove a hand-authored legacy command', async () => {
+    const sandbox = mkdtempSync(join(tmpdir(), 'mc-coord-commands-'));
+    const oldHome = process.env.HOME;
+    process.env.HOME = sandbox;
+    try {
+      mkdirSync(join(sandbox, '.claude', 'commands'), { recursive: true });
+      const legacyPath = join(sandbox, '.claude', 'commands', 'memoro-map.md');
+      writeFileSync(legacyPath, 'user command', { mode: 0o644 });
+      await ensureCoordinatorSlashCommand();
+      assert.equal(readFileSync(legacyPath, 'utf8'), 'user command');
+    } finally {
+      process.env.HOME = oldHome;
+      rmSync(sandbox, { recursive: true, force: true });
+    }
+  });
+
+  test('does not overwrite a hand-authored /mc command', async () => {
+    const sandbox = mkdtempSync(join(tmpdir(), 'mc-coord-commands-'));
+    const oldHome = process.env.HOME;
+    process.env.HOME = sandbox;
+    try {
+      mkdirSync(join(sandbox, '.claude', 'commands'), { recursive: true });
+      const mcPath = join(sandbox, '.claude', 'commands', 'mc.md');
+      writeFileSync(mcPath, 'user-owned mc command', { mode: 0o644 });
+      await ensureCoordinatorSlashCommand();
+      assert.equal(readFileSync(mcPath, 'utf8'), 'user-owned mc command');
+    } finally {
+      process.env.HOME = oldHome;
+      rmSync(sandbox, { recursive: true, force: true });
+    }
+  });
+
+  test('keeps legacy managed command when /mc is user-owned', async () => {
+    const sandbox = mkdtempSync(join(tmpdir(), 'mc-coord-commands-'));
+    const oldHome = process.env.HOME;
+    process.env.HOME = sandbox;
+    try {
+      mkdirSync(join(sandbox, '.claude', 'commands'), { recursive: true });
+      const mcPath = join(sandbox, '.claude', 'commands', 'mc.md');
+      const legacyPath = join(sandbox, '.claude', 'commands', 'memoro-map.md');
+      writeFileSync(mcPath, 'user-owned mc command', { mode: 0o644 });
+      writeFileSync(legacyPath, `${__test__.COMMAND_MARKER}\nlegacy`, { mode: 0o644 });
+      await ensureCoordinatorSlashCommand();
+      assert.equal(readFileSync(mcPath, 'utf8'), 'user-owned mc command');
+      assert.equal(existsSync(legacyPath), true);
     } finally {
       process.env.HOME = oldHome;
       rmSync(sandbox, { recursive: true, force: true });
