@@ -119,14 +119,20 @@ describe('CloudBrokerClient', () => {
       apiUrl: 'https://memoro.test',
       token: 'tok',
       machineId: 'machine',
+      mcVersion: '0.7.6',
       WebSocketImpl: FakeWebSocket,
       request: async () => ({ ok: true, sessions: [{ id: 'sess_a' }] }),
       sleepImpl: async () => {},
     });
+    const opened = [];
+    const sessionsEvents = [];
+    client.on('open', (info) => opened.push(info));
+    client.on('sessions', (sessions) => sessionsEvents.push(sessions));
 
     client.start();
     const control = FakeWebSocket.instances[0];
     assert.match(control.url, /\/api\/mc\/broker\/ws/);
+    assert.equal(control.binaryType, 'arraybuffer');
     control.open();
     await new Promise((resolve) => setImmediate(resolve));
 
@@ -134,6 +140,8 @@ describe('CloudBrokerClient', () => {
       {
         type: 'hello',
         machine_id: 'machine',
+        device_name: 'machine',
+        mc_version: '0.7.6',
         capabilities: ['pty-stream-v1', 'resize-v1', 'writer-lease-v1', 'screen-replay-v1'],
       },
       {
@@ -142,6 +150,8 @@ describe('CloudBrokerClient', () => {
         sessions: [{ id: 'sess_a' }],
       },
     ]);
+    assert.deepEqual(opened, [{ machine_id: 'machine' }]);
+    assert.deepEqual(sessionsEvents, [[{ id: 'sess_a' }]]);
     client.stop();
   });
 
@@ -179,6 +189,7 @@ describe('CloudBrokerClient', () => {
 
     const stream = FakeWebSocket.instances[1];
     assert.equal(stream.url, 'wss://memoro.test/api/mc/pty/att_a/broker?token=stream-token');
+    assert.equal(stream.binaryType, 'arraybuffer');
     stream.open();
     assert.deepEqual(JSON.parse(local.writes[0]), {
       type: 'attach_session',
@@ -197,6 +208,9 @@ describe('CloudBrokerClient', () => {
 
     stream.message(Buffer.from('typed'));
     assert.equal(local.writes[1].toString('utf8'), 'typed');
+
+    stream.message(new Uint8Array([65, 66]).buffer);
+    assert.equal(local.writes[2].toString('utf8'), 'AB');
 
     stream.message(JSON.stringify({ type: 'resize', cols: 90, rows: 25 }));
     await Promise.resolve();

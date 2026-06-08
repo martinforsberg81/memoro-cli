@@ -9,9 +9,11 @@ import { brokerLogPath, brokerPidPath, brokerSocketPath } from '../broker/paths.
 import { getSecret } from '../../lib/keychain.js';
 import { ACCOUNTS } from '../../commands/auth.js';
 import { readConfig, getApiUrl } from '../../lib/config.js';
+import { getPackageVersion } from '../../lib/version.js';
 
 const START_POLL_MS = 1_500;
 const POLL_INTERVAL_MS = 100;
+const CONNECT_READY_TIMEOUT_MS = 10_000;
 
 export async function run(argv) {
   const opts = parseArgs(argv);
@@ -66,7 +68,7 @@ export async function runBrokerWith(opts, deps) {
   }
 
   if (opts.verb === 'connect') {
-    const res = await deps.connectCloud(opts).catch((err) => ({ ok: false, error: err.message || String(err) }));
+    const res = await deps.connectCloud(opts, { stdout: deps.stdout, stderr: deps.stderr }).catch((err) => ({ ok: false, error: err.message || String(err) }));
     if (opts.json) {
       deps.stdout.write(JSON.stringify(res, null, 2) + '\n');
     } else if (res.ok) {
@@ -139,20 +141,61 @@ function spawnDaemon({ readyFile = null } = {}) {
   }
 }
 
-async function runCloudConnection(opts) {
+async function runCloudConnection(opts, io = {}) {
+  const stdout = io.stdout || process.stdout;
   const config = await readConfig();
   const apiUrl = getApiUrl(opts.rawArgv || []) || config.apiUrl;
   const token = await getSecret(ACCOUNTS.TOKEN);
   if (!token) return { ok: false, error: 'no Memoro token' };
-  const client = new CloudBrokerClient({ apiUrl, token });
+  const mcVersion = await getPackageVersion().catch(() => null);
+  const client = new CloudBrokerClient({ apiUrl, token, mcVersion });
+  const ready = waitForCloudOpen(client, CONNECT_READY_TIMEOUT_MS);
   client.start();
-  if (opts.once) {
-    await client.refreshSessions().catch(() => {});
+  const opened = await ready.catch((err) => ({ ok: false, error: err.message || String(err) }));
+  if (opened?.ok === false) {
     client.stop();
-    return { ok: true, once: true, machine_id: client.machineId };
+    return opened;
   }
+  if (opts.once) {
+    let sessions = [];
+    let sessionsError = null;
+    try {
+      sessions = await client.refreshSessions();
+    } catch (err) {
+      sessionsError = err.message || String(err);
+    }
+    client.stop();
+    return {
+      ok: true,
+      once: true,
+      machine_id: client.machineId,
+      sessions_count: sessions.length,
+      ...(sessionsError ? { sessions_error: sessionsError } : {}),
+    };
+  }
+  const connected = { ok: true, machine_id: client.machineId };
+  if (opts.json) stdout.write(JSON.stringify(connected, null, 2) + '\n');
+  else stdout.write(`mc broker: connected to cloud (${client.machineId || 'unknown machine'})\n`);
   await new Promise(() => {});
-  return { ok: true, machine_id: client.machineId };
+  return connected;
+}
+
+function waitForCloudOpen(client, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      cleanup();
+      reject(new Error('cloud broker WebSocket did not open in time'));
+    }, timeoutMs);
+    const onOpen = (info = {}) => {
+      cleanup();
+      resolve(info);
+    };
+    const cleanup = () => {
+      clearTimeout(timer);
+      client.off?.('open', onOpen);
+    };
+    client.once('open', onOpen);
+  });
 }
 
 function formatStatus(res) {
@@ -206,4 +249,4 @@ export function parseArgs(argv) {
   return opts;
 }
 
-export const __test__ = { formatDuration, formatStatus, START_POLL_MS, POLL_INTERVAL_MS };
+export const __test__ = { formatDuration, formatStatus, START_POLL_MS, POLL_INTERVAL_MS, CONNECT_READY_TIMEOUT_MS };

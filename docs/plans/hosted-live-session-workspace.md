@@ -1,6 +1,6 @@
 # Hosted live-session workspace
 
-**Status:** proposed · 2026-06-07 · serves G1 (see `MEMORO.md`)
+**Status:** active · 2026-06-08 · serves G1 (see `MEMORO.md`)
 
 Detailed plan for the hosted Memoro workspace where the browser is a real
 viewport into local AI coding sessions. This is the buildable form of
@@ -496,8 +496,31 @@ Status:
   `refresh_sessions` / `list_sessions`, and answers server `attach_request`
   messages by bridging a short-lived cloud stream to the local
   `attach_session` PTY stream.
-- **Next:** Memoro Worker/Durable Object stream endpoints and hosted browser
-  terminal UI.
+- **Phase 3a hardening shipped 2026-06-08:** the cloud attach bridge now forces
+  WebSocket binary frames to `ArrayBuffer` before relaying browser terminal input
+  to the local broker. The contract is covered by tests so browser xterm input
+  cannot silently degrade into Blob string payloads in Node WebSocket runtimes.
+- **Phase 3a connect UX shipped 2026-06-08:** `mc broker connect` now waits for
+  the control WebSocket to actually open before reporting success. In long-running
+  mode it writes the connected status immediately and then stays attached to the
+  cloud control plane, instead of printing only after an effectively infinite
+  wait.
+- **Phase 3a identity polish shipped 2026-06-08:** broker `hello` now includes
+  `device_name` and `mc_version`, so Memoro can show and diagnose the connected
+  local machine instead of only a raw machine id.
+- **Phase 3a E2E smoke shipped 2026-06-08:** `tests/mc/broker/cloud-e2e.test.js`
+  now drives the local broker server, `BrokerRuntime`, `CloudBrokerClient`, and
+  a fake cloud WebSocket relay in one test. It verifies session advertisement,
+  attach acceptance, initial PTY replay, binary browser input, resize forwarding,
+  PTY output relay, and detach-without-kill.
+- **Server route smoke shipped 2026-06-08:** the Memoro repo now has a route-level
+  `/api/mc` smoke that authenticates with a scoped API token, lists broker
+  sessions through `handleMcRoutes`, requests attach through the user
+  orchestrator, verifies attach-token storage, and exposes `mc_version` in the
+  public broker session shape.
+- **Next:** run the real browser/manual E2E smoke: Memoro browser UI -> Memoro
+  `/api/mc/*` control/PTY stream -> `mc broker connect` -> local broker-owned
+  PTY. Then harden screen restore/reconnect quality before public release.
 
 Scope:
 
@@ -538,8 +561,22 @@ Status:
 
 - CLI side shipped 2026-06-07: `src/mc/broker/cloud.js` plus
   `mc broker connect` implement the local connector and attach bridge.
-- Server/app side remains next: Worker/Durable Object control+stream endpoints,
-  short-lived attach tokens, and xterm.js browser attach.
+- CLI attach-frame hardening shipped 2026-06-08: broker control and attach
+  WebSockets request `arraybuffer` binary frames, and the attach bridge test now
+  covers ArrayBuffer input relayed to the local PTY stream.
+- CLI connect observability shipped 2026-06-08: the cloud client emits open and
+  sessions events, and `mc broker connect` reports only after the control socket
+  is open while keeping the foreground process alive.
+- CLI broker identity shipped 2026-06-08: `hello` includes machine id, display
+  device name, mc version, and capabilities.
+- CLI E2E smoke shipped 2026-06-08: a single broker cloud smoke covers session
+  inventory, attach, replay, input, resize, output, and detach semantics through
+  the broker-owned PTY path.
+- Server route smoke shipped in the Memoro repo 2026-06-08: `/api/mc/sessions`
+  and `/api/mc/sessions/:id/attach` are covered through real auth + orchestrator
+  stubs, and public sessions include `mc_version`.
+- Remaining gate: a real browser/manual E2E smoke across both repos, not another
+  protocol design pass.
 
 ### Phase 4: Browser live attach UI
 

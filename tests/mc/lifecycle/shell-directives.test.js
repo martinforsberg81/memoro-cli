@@ -17,7 +17,7 @@
  */
 import test, { describe, after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync } from 'node:fs';
+import { existsSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { runMcCaptureFd3 } from '../_helpers/cli.js';
@@ -31,7 +31,11 @@ function extractCdTarget(fd3) {
 
 describe('shell-directive emission (§2b)', () => {
   let repo;
-  beforeEach(() => { repo = makeTempRepo({ name: 'directives' }); });
+  beforeEach(() => {
+    repo = makeTempRepo({ name: 'directives' });
+    // These tests exercise shell-directive routing, not first-run onboarding.
+    writeFileSync(join(repo.mcHome, '.setup-done-v1'), 'test\n');
+  });
   after(() => { repo?.cleanup(); });
 
   test('mc new emits a cd directive to the new worktree', async () => {

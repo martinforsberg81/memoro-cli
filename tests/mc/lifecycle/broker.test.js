@@ -149,8 +149,10 @@ describe('mc broker command', () => {
       request: async () => assert.fail('must not request directly'),
       spawnDaemon: () => assert.fail('must not spawn'),
       runDaemon: () => assert.fail('must not daemon'),
-      connectCloud: async (opts) => {
+      connectCloud: async (opts, ioArg) => {
         connected = opts;
+        assert.equal(ioArg.stdout, streams.stdout);
+        assert.equal(ioArg.stderr, streams.stderr);
         return { ok: true, once: true, machine_id: 'machine' };
       },
       sleep: async () => {},

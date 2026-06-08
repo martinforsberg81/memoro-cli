@@ -20,6 +20,8 @@ export class CloudBrokerClient extends EventEmitter {
     apiUrl,
     token,
     machineId = hostname(),
+    deviceName = machineId,
+    mcVersion = null,
     request = requestBroker,
     connect = createConnection,
     WebSocketImpl = globalThis.WebSocket,
@@ -35,6 +37,8 @@ export class CloudBrokerClient extends EventEmitter {
     this.apiUrl = apiUrl;
     this.token = token;
     this.machineId = machineId;
+    this.deviceName = deviceName;
+    this.mcVersion = mcVersion;
     this.request = request;
     this.connect = connect;
     this.WebSocketImpl = WebSocketImpl;
@@ -69,6 +73,7 @@ export class CloudBrokerClient extends EventEmitter {
   async refreshSessions() {
     const sessions = await listLocalBrokerSessions({ request: this.request });
     this._send({ type: 'sessions', machine_id: this.machineId, sessions });
+    this.emit('sessions', sessions);
     return sessions;
   }
 
@@ -80,6 +85,7 @@ export class CloudBrokerClient extends EventEmitter {
         token: this.token,
         machineId: this.machineId,
       }));
+      preferArrayBufferFrames(ws);
     } catch (err) {
       this.logger.warn(`[broker-cloud] control websocket failed: ${err.message}`);
       this._scheduleReconnect();
@@ -89,9 +95,12 @@ export class CloudBrokerClient extends EventEmitter {
 
     addWsListener(ws, 'open', () => {
       this.backoffMs = INITIAL_BACKOFF_MS;
+      this.emit('open', { machine_id: this.machineId });
       this._send({
         type: 'hello',
         machine_id: this.machineId,
+        device_name: this.deviceName,
+        ...(this.mcVersion ? { mc_version: this.mcVersion } : {}),
         capabilities: this.capabilities,
       });
       this.refreshSessions().catch((err) => {
@@ -277,6 +286,7 @@ export function createAttachBridge({
   return {
     start() {
       remote = new WebSocketImpl(appendToken(brokerWsUrl, token));
+      preferArrayBufferFrames(remote);
       local = connect(brokerSocket);
 
       addWsListener(remote, 'open', () => {
@@ -356,6 +366,10 @@ function decodeWsFrame(frame) {
   if (frame instanceof ArrayBuffer) return Buffer.from(frame);
   if (ArrayBuffer.isView(frame)) return Buffer.from(frame.buffer, frame.byteOffset, frame.byteLength);
   return Buffer.from(String(frame));
+}
+
+function preferArrayBufferFrames(ws) {
+  try { ws.binaryType = 'arraybuffer'; } catch {}
 }
 
 function requiredString(value, label) {
