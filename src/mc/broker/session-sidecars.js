@@ -7,6 +7,7 @@ import { CliWsClient } from '../../commands/ws-client.js';
 import { createFetchTranscriptHandler } from '../../commands/handlers/fetch-transcript.js';
 import { memoroFetch } from '../../lib/api.js';
 import { extractExcerpt } from '../session-excerpt.js';
+import { scheduleSessionUpload } from '../session-upload.js';
 
 const TICK_INTERVAL_MS = 60_000;
 const MAX_ATTEMPTS = 3;
@@ -27,6 +28,7 @@ export class BrokerSessionSidecars {
     retryIntervalMs = RETRY_INTERVAL_MS,
     maxAttempts = MAX_ATTEMPTS,
     excerptMaxChars = EXCERPT_MAX_CHARS,
+    sessionUploadScheduler = scheduleSessionUpload,
     logger = silentLogger(),
   } = {}) {
     if (!session) throw new TypeError('session is required');
@@ -43,12 +45,14 @@ export class BrokerSessionSidecars {
     this.retryIntervalMs = retryIntervalMs;
     this.maxAttempts = maxAttempts;
     this.excerptMaxChars = excerptMaxChars;
+    this.sessionUploadScheduler = sessionUploadScheduler;
     this.logger = logger;
 
     this.dispatchServer = null;
     this.wsClient = null;
     this.alive = false;
     this.heartbeatPromise = null;
+    this.uploadScheduled = false;
   }
 
   start() {
@@ -66,6 +70,7 @@ export class BrokerSessionSidecars {
     try { this.dispatchServer?.close?.(); } catch {}
     this._unlink(this.coding.sockPath);
     this._unlink(this.coding.metaPath);
+    void this._scheduleUpload();
   }
 
   _writeMetadata() {
@@ -175,6 +180,22 @@ export class BrokerSessionSidecars {
   _unlink(path) {
     if (!path) return;
     try { unlinkSync(path); } catch {}
+  }
+
+  async _scheduleUpload() {
+    if (this.uploadScheduled || this.coding.upload === false) return;
+    this.uploadScheduled = true;
+    try {
+      const startedAt = Number.isFinite(this.session.startedAt) ? this.session.startedAt - 1000 : 0;
+      await this.sessionUploadScheduler({
+        source: this.coding.source || 'claude-code',
+        cwd: this.session.cwd,
+        repoHint: this.coding.repo || null,
+        newerThanMs: startedAt,
+      });
+    } catch (err) {
+      this.logger.warn?.(`[broker-sidecars] session upload scheduling failed: ${err.message}`);
+    }
   }
 }
 

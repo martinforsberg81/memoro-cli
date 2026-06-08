@@ -90,11 +90,11 @@ Under the hood: `mc` runs the tool in a PTY it owns, with your terminal piped tr
 | `memoro-cli config set <key> <value>` | Store non-secret CLI config such as `api-url` |
 | `memoro-cli session upload <transcript>` | Clean + POST a session transcript |
 | `memoro-cli lens pull [--tool <id>] [--repo <name>]` | Fetch the coding lens |
-| `memoro-cli codex run [-- <codex args...>]` | Run Codex with lens pull on start + upload on exit |
-| `memoro-cli hook install [--tool ...]` | Wire SessionStart + SessionEnd hooks |
-| `memoro-cli hook uninstall [--tool ...]` | Remove hooks |
+| `memoro-cli codex run [-- <codex args...>]` | Legacy manual wrapper; prefer `mc new --codex` |
+| `memoro-cli hook install [--tool ...]` | Legacy raw-tool integration; not required for `mc` |
+| `memoro-cli hook uninstall [--tool ...]` | Remove legacy raw-tool hooks/shims |
 
-Most users only ever see `mc setup` and `mc auth memoro` — those wrap the underlying `memoro-cli login` and `hook install` flows.
+Most users only ever see `mc setup`, `mc auth memoro`, and `mc new` / `mc resume`.
 
 ## Supported tools
 

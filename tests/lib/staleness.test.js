@@ -91,7 +91,7 @@ describe('detectStaleness', () => {
 });
 
 describe('formatStaleLensBanner', () => {
-  test('mentions both update steps and the slash command', () => {
+  test('mentions the package update path without reinstalling raw hooks', () => {
     const banner = formatStaleLensBanner({
       installedVersion: '0.3.0',
       hookVersion: '0.2.0',
@@ -100,8 +100,8 @@ describe('formatStaleLensBanner', () => {
     });
     assert.match(banner, /memoro-cli update available/);
     assert.match(banner, /npm install -g memoro-cli/);
-    assert.match(banner, /memoro-cli hook install --tool claude-code/);
-    assert.match(banner, /\/memoro-update/);
+    assert.match(banner, /sessions with `mc`/);
+    assert.doesNotMatch(banner, /hook install/);
   });
 
   test('prefers the npm version detail when both reasons present', () => {
@@ -149,16 +149,17 @@ describe('formatStaleStatusLine', () => {
     assert.match(line, /you have 0\.2\.0/);
   });
 
-  test('reports the hook gap with the re-run hint', () => {
+  test('reports the hook gap as legacy raw-tool state', () => {
     const line = formatStaleStatusLine({
       installedVersion: '0.3.0',
       hookVersion: '0.2.0',
       latestVersion: null,
       reasons: ['hooks'],
     });
-    assert.match(line, /hooks stamped 0\.2\.0/);
+    assert.match(line, /legacy hooks stamped 0\.2\.0/);
     assert.match(line, /binary is 0\.3\.0/);
-    assert.match(line, /memoro-cli hook install/);
+    assert.match(line, /use `mc`/);
+    assert.doesNotMatch(line, /hook install/);
   });
 
   test('joins both gaps with a semicolon when both present', () => {
@@ -169,7 +170,7 @@ describe('formatStaleStatusLine', () => {
       reasons: ['hooks', 'npm'],
     });
     assert.match(line, /npm has 0\.4\.0/);
-    assert.match(line, /hooks stamped 0\.2\.0/);
+    assert.match(line, /legacy hooks stamped 0\.2\.0/);
     assert.match(line, /;/);
   });
 });

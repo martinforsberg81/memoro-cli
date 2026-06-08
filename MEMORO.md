@@ -163,12 +163,13 @@ tool state intact.
 ### Memory loop — Memoro ↔ session   · serves G1, G3
 - **Wire the bidirectional loop** — `shipped · M · —`
   Both directions live. Emit: session-end observations → `/api/sessions/external`
-  was already wired to the claude-code `SessionEnd` hook (`src/commands/session.js`,
-  with deterministic annotations + a first-upload trust moment). Pull: the
-  `portrait-coding` lens auto-injects into standing context — delivered by
-  grounding Phase 4. The loop closed when Phase 4 landed. Remaining enhancement is
-  the server-side language field (cross-repo), which sharpens the lens but is not
-  required for the loop. → `docs/plans/worktree-lifecycle.md` §16
+  now belongs to `mc` itself (wrap cleanup + broker sidecars schedule upload
+  through `src/commands/session.js`, with deterministic annotations + a
+  first-upload trust moment), so raw `claude` / `codex` can stay clean. Pull:
+  the `portrait-coding` lens auto-injects into standing context — delivered by
+  grounding Phase 4. Remaining enhancement is the server-side language field
+  (cross-repo), which sharpens the lens but is not required for the loop.
+  → `docs/plans/worktree-lifecycle.md` §16
 
 ### Tool-portability — any tool, any repo   · serves G2, G3
 - **Materialise package-canon into any repo** — `shipped · M · —`

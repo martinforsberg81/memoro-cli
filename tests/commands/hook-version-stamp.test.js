@@ -90,6 +90,35 @@ describe('claude-code adapter — hook version stamp', () => {
     assert.equal(endEntries.length, 1);
   });
 
+  test('installHooks removes legacy unstamped memoro hook entries', async () => {
+    mkdirSync(join(sandbox, '.claude'), { recursive: true });
+    writeFileSync(
+      join(sandbox, '.claude', 'settings.json'),
+      JSON.stringify({
+        hooks: {
+          SessionStart: [
+            { hooks: [{ type: 'command', command: 'memoro-cli lens pull --tool claude-code' }] },
+            { hooks: [{ type: 'command', command: 'echo user-hook' }] },
+          ],
+          SessionEnd: [
+            { hooks: [{ type: 'command', command: 'memoro-cli session upload --tool claude-code --yes --background' }] },
+          ],
+        },
+      }),
+    );
+
+    await installHooks({ memoroCliBin: 'memoro-cli' });
+
+    const settings = JSON.parse(readFileSync(join(sandbox, '.claude', 'settings.json'), 'utf8'));
+    const allCommands = [
+      ...settings.hooks.SessionStart.flatMap(entry => entry.hooks.map(h => h.command)),
+      ...settings.hooks.SessionEnd.flatMap(entry => entry.hooks.map(h => h.command)),
+    ];
+    assert.ok(allCommands.includes('echo user-hook'));
+    assert.equal(allCommands.filter(command => command.includes('lens pull')).length, 1);
+    assert.equal(allCommands.filter(command => command.includes('session upload')).length, 1);
+  });
+
   test('uninstallHooks removes the stamped entry', async () => {
     await installHooks({ memoroCliBin: 'memoro-cli' });
     await uninstallHooks();
@@ -107,9 +136,10 @@ describe('claude-code adapter — /memoro-update slash command', () => {
     const body = readFileSync(file, 'utf8');
     assert.match(body, /memoro:managed:command/);
     assert.match(body, /description:/);
-    // The recipe must surface both steps.
+    // The recipe must surface the package update, but must not reinstall
+    // raw-tool hooks; Memoro-aware sessions go through mc.
     assert.match(body, /npm install -g memoro-cli/);
-    assert.match(body, /memoro-cli hook install --tool claude-code/);
+    assert.doesNotMatch(body, /hook install/);
     // No leading `!` — the body is a prompt, not an auto-exec line.
     assert.equal(body.includes('\n!'), false, 'update slash command must not auto-execute');
     // The body must clearly tell the LLM not to run the recipe — `npm
@@ -136,8 +166,9 @@ describe('claude-code adapter — /memoro-update slash command', () => {
   test('honours a custom memoroCliBin', async () => {
     const file = await installUpdateCommand({ memoroCliBin: '/usr/local/bin/memoro-cli' });
     const body = readFileSync(file, 'utf8');
-    // The hook-install step is rendered against the resolved binary path so
-    // an alternate global install location still points to the right tool.
-    assert.match(body, /\/usr\/local\/bin\/memoro-cli hook install/);
+    // Alternate global package names/paths are still reflected in the
+    // install command, without adding raw-tool hook installation.
+    assert.match(body, /npm install -g \/usr\/local\/bin\/memoro-cli/);
+    assert.doesNotMatch(body, /hook install/);
   });
 });

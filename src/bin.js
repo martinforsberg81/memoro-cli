@@ -31,13 +31,14 @@ COMMANDS
   session upload <transcript>        Clean + POST a coding-session transcript
   lens pull [--tool <id>] [--repo <name>]
                                      Fetch portrait-coding lens into tool config
-  codex run [-- <codex args...>]     Run Codex with lens pull + post-session upload
+  codex run [-- <codex args...>]     Legacy manual wrapper; prefer mc new --codex
 
   show <section> [--repo <name>]     Print one lens section (loose-ends, decisions,
                                      rules, stack, repos, practices, tool-use)
 
-  hook install [--tool claude-code]  Wire SessionStart + SessionEnd hooks + slash commands
-  hook uninstall [--tool claude-code] Remove hooks + slash commands
+  hook install [--tool claude-code]  Legacy raw-tool integration; not required for mc
+  hook uninstall [--tool claude-code] [--hooks-only]
+                                     Remove legacy hooks/shims + slash commands
 
 OPTIONS
   --help, -h                         Show this help

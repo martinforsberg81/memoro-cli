@@ -2,11 +2,8 @@
  * Staleness detection for memoro-cli installs.
  *
  * Two flavours of stale:
- *   1. `hooks` — the hook entry in ~/.claude/settings.json was stamped by an
- *      older memoro-cli than the one currently installed. This is the
- *      pattern users hit after `npm update -g memoro-cli` without re-running
- *      `memoro-cli hook install`. New hook behaviour (e.g. the heartbeat
- *      ticker) lives in the new binary but isn't wired up.
+ *   1. `hooks` — a legacy raw-tool hook entry in ~/.claude/settings.json was
+ *      stamped by an older memoro-cli than the one currently installed.
  *   2. `npm` — the cached `latestVersion` from registry.npmjs.org is newer
  *      than the installed binary. Plain "your CLI is out of date" case.
  *
@@ -63,10 +60,10 @@ export function formatStaleLensBanner({ installedVersion, hookVersion, latestVer
   }
 
   lines.push('>');
-  lines.push('> To update, run from your shell:');
-  lines.push('> `npm install -g memoro-cli && memoro-cli hook install --tool claude-code`');
+  lines.push('> To update the CLI, run from your shell:');
+  lines.push('> `npm install -g memoro-cli`');
   lines.push('>');
-  lines.push('> Or run `/memoro-update` inside Claude Code.');
+  lines.push('> Then start Memoro-aware sessions with `mc`.');
 
   return lines.join('\n');
 }
@@ -81,7 +78,7 @@ export function formatStaleStatusLine({ installedVersion, hookVersion, latestVer
     bits.push(`npm has ${latestVersion} (you have ${installedVersion || 'unknown'})`);
   }
   if (reasons.includes('hooks') && hookVersion) {
-    bits.push(`hooks stamped ${hookVersion}, binary is ${installedVersion || 'unknown'} — re-run \`memoro-cli hook install\``);
+    bits.push(`legacy hooks stamped ${hookVersion}, binary is ${installedVersion || 'unknown'} — use \`mc\` for Memoro sessions`);
   }
   return bits.join('; ');
 }
