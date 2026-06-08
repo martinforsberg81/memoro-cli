@@ -136,6 +136,22 @@ describe('mc new', () => {
     assert.equal(j.tool, 'codex');
   });
 
+  test('uses repo-local defaultTool from .mc/local.json when no flag is passed', () => {
+    mkdirSync(join(repo.dir, '.mc'), { recursive: true });
+    writeFileSync(join(repo.dir, '.mc', 'local.json'), JSON.stringify({
+      defaultTool: 'codex',
+    }));
+
+    const r = runMc(['new', 'repo-default-codex', '--no-launch', '--json'], {
+      cwd: repo.dir, env: { MC_HOME: repo.mcHome },
+    });
+    assert.equal(r.status, 0, `stderr:${r.stderr}`);
+    const j = parseJsonOrNull(r.stdout);
+    assert.ok(j);
+    assert.equal(j.tool, 'codex');
+    assert.equal(j.tool_source, '.mc/local.json');
+  });
+
   // Phase 3 — tool selection sugar: `--codex` / `--claude` are sugar over
   // `--tool <x>`; `--tool` stays the canonical form.
   test('--codex sugar selects codex (sugar over --tool)', () => {

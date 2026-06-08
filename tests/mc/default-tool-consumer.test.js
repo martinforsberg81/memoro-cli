@@ -89,6 +89,15 @@ describe('mc new — resolveToolForNew', () => {
     assert.equal(r.source, 'config');
   });
 
+  test('uses effective config defaultTool values with their source', async () => {
+    const configLoader = async () => ({
+      defaultTool: { value: 'codex', source: '.mc/local.json' },
+    });
+    const r = await resolveToolForNew({ flagValue: null, configLoader });
+    assert.equal(r.tool, 'codex');
+    assert.equal(r.source, '.mc/local.json');
+  });
+
   test('config-stored adapter ID resolves to short name', async () => {
     // Drev G's `mc tool-switch` stores adapter IDs in defaultTool.
     // Consumer must translate to the short name used in the registry.

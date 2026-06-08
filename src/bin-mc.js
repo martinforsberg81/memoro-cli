@@ -67,6 +67,7 @@ import {
 import { createDispatchSocketServer } from './mc/wrap-dispatch.js';
 import { createWrapWsHandlers } from './mc/wrap-ws.js';
 import { scheduleSessionUpload } from './mc/session-upload.js';
+import { writeToPty } from './mc/pty-write.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constants
@@ -510,9 +511,11 @@ async function runWrap(argv, { label = null } = {}) {
     startupMessage: groundingLaunchMessage,
     effectivePolicy,
   });
-  if (launchSpec.startupMessageDelivery === 'argv-prompt') {
-    startupMessage = null;
-  }
+  startupMessage = resolveStartupMessageForLaunch({
+    delivery: launchSpec.startupMessageDelivery,
+    groundingLaunchMessage,
+    fallbackStartupMessage: startupMessage,
+  });
   let spawnEnv = {
     ...process.env,
     MEMORO_MC_PARENT: '1',  // hooks see this and no-op their heartbeat-loop
@@ -921,25 +924,6 @@ function preflight(bin = CLAUDE_BIN) {
 }
 
 /**
- * Send a dispatched message into the wrapped tool session. Appends a
- * carriage return so the TUI submits the prompt. Some TUIs (Codex, in
- * live PTY tests) need a second Enter after the text has landed, so the
- * adapter launch spec can request delayed extra carriage returns.
- *
- * Exported for tests.
- */
-export function writeToPty(ptyProcess, message, {
-  submitEnterCount = 1,
-  submitEnterDelayMs = 150,
-  setTimeoutFn = globalThis.setTimeout,
-} = {}) {
-  ptyProcess.write(message + '\r');
-  for (let i = 1; i < submitEnterCount; i += 1) {
-    setTimeoutFn(() => ptyProcess.write('\r'), submitEnterDelayMs * i);
-  }
-}
-
-/**
  * Strip ANSI escapes and control characters from a raw PTY-output buffer,
  * collapse runs of blank lines, and return the trailing `max` characters.
  *
@@ -954,6 +938,16 @@ export function writeToPty(ptyProcess, message, {
  * Pure for testing.
  */
 export { extractExcerpt };
+
+export function resolveStartupMessageForLaunch({
+  delivery,
+  groundingLaunchMessage = null,
+  fallbackStartupMessage = null,
+} = {}) {
+  if (delivery === 'argv-prompt' || delivery === 'launch-args') return null;
+  if (delivery === 'deferred-pty') return groundingLaunchMessage || fallbackStartupMessage || null;
+  return fallbackStartupMessage || null;
+}
 
 /**
  * Render the multi-line stylized intro printed before Claude takes the

@@ -90,6 +90,13 @@ tool state intact.
   spine, PM-ish map verbs, and resume-by-intent machinery remain rejected for
   now: keep the start state excellent and let the coordinator session do the
   orchestration. → `docs/plans/fanout-spine.md`
+- **Main/worktree hygiene** — `active · M · now`
+  `mc` must be stricter than `cs` about git/session order: primary `main` is a
+  clean baseline, while real work lives in named session worktrees and branches.
+  Next work should make `mc status`, `mc list`, `mc end`, and `mc reconcile`
+  expose dirty primary drift, local/remote divergence, squash-merged session
+  branches, and safe cleanup paths without hidden resets or PM behavior.
+  → `docs/plans/main-worktree-hygiene.md`
 - **Coordinator wake-up quality** — `active · M · now`
   The next quality bar is not more CLI verbs; it is a sharper first minute. A
   resumed coordinator should immediately see the north star, active project

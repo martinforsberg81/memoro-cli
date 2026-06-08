@@ -4,14 +4,15 @@ import test, { describe } from 'node:test';
 import {
   ageSeconds,
   humanAge,
-  writeToPty,
   renderIntro,
   formatStatus,
   extractExcerpt,
   validateLabel,
+  resolveStartupMessageForLaunch,
   shouldRefuseBareMcInPrimaryWorktree,
   resolveSessionIdentifier,
 } from '../src/bin-mc.js';
+import { writeToPty } from '../src/mc/pty-write.js';
 
 // Strip ANSI escape sequences so we can match on visible text.
 const stripAnsi = (s) => s.replace(/\x1b\[[0-9;]*m/g, '');
@@ -334,5 +335,36 @@ describe('writeToPty', () => {
     assert.equal(timers[0].ms, 42);
     timers[0].fn();
     assert.deepEqual(writes, ['hello\r', '\r']);
+  });
+});
+
+describe('resolveStartupMessageForLaunch', () => {
+  test('does not duplicate messages already delivered via launch args or argv prompt', () => {
+    assert.equal(resolveStartupMessageForLaunch({
+      delivery: 'launch-args',
+      groundingLaunchMessage: 'grounding',
+      fallbackStartupMessage: 'fallback',
+    }), null);
+    assert.equal(resolveStartupMessageForLaunch({
+      delivery: 'argv-prompt',
+      groundingLaunchMessage: 'grounding',
+      fallbackStartupMessage: 'fallback',
+    }), null);
+  });
+
+  test('deferred-pty sends full grounding through the PTY', () => {
+    assert.equal(resolveStartupMessageForLaunch({
+      delivery: 'deferred-pty',
+      groundingLaunchMessage: 'grounding',
+      fallbackStartupMessage: 'fallback',
+    }), 'grounding');
+  });
+
+  test('unknown delivery keeps the fallback-only startup prompt', () => {
+    assert.equal(resolveStartupMessageForLaunch({
+      delivery: null,
+      groundingLaunchMessage: 'grounding',
+      fallbackStartupMessage: 'fallback',
+    }), 'fallback');
   });
 });

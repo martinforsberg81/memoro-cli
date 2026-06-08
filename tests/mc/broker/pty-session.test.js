@@ -83,6 +83,27 @@ function makeSession(overrides = {}) {
   };
 }
 
+function makeManualTimers() {
+  const timers = new Map();
+  let next = 1;
+  return {
+    timers,
+    setTimeoutFn(fn, ms) {
+      const id = next++;
+      timers.set(id, { fn, ms });
+      return id;
+    },
+    clearTimeoutFn(id) {
+      timers.delete(id);
+    },
+    fireAll() {
+      const pending = [...timers.values()];
+      timers.clear();
+      for (const timer of pending) timer.fn();
+    },
+  };
+}
+
 describe('PtySession', () => {
   test('starts the configured PTY process', () => {
     const { session, fake } = makeSession();
@@ -168,6 +189,61 @@ describe('PtySession', () => {
     session.kill('SIGTERM');
 
     assert.deepEqual(fake.kills, ['SIGTERM']);
+  });
+
+  test('deferred-pty startup message is sent after first output, not as argv', () => {
+    const timers = makeManualTimers();
+    const { session, fake } = makeSession({
+      launchSpec: {
+        bin: '/x/codex',
+        startupMessageDelivery: 'deferred-pty',
+        submitEnterCount: 2,
+        submitEnterDelayMs: 5,
+        args: (argv, opts) => {
+          assert.equal(opts.startupMessage, null);
+          return argv;
+        },
+      },
+      argv: [],
+      launchOptions: { startupMessage: 'grounding' },
+      startupMessageDelayMs: 10,
+      startupMessageSetTimeoutFn: timers.setTimeoutFn,
+      startupMessageClearTimeoutFn: timers.clearTimeoutFn,
+    });
+
+    session.start();
+
+    assert.deepEqual(fake.calls[0].args, []);
+    assert.deepEqual(fake.writes, []);
+
+    fake.emitData('ready');
+    assert.equal(timers.timers.size, 1);
+    timers.fireAll();
+
+    assert.deepEqual(fake.writes, ['grounding\r']);
+  });
+
+  test('exit cancels a pending deferred startup message', () => {
+    const timers = makeManualTimers();
+    const { session, fake } = makeSession({
+      launchSpec: {
+        bin: '/x/codex',
+        startupMessageDelivery: 'deferred-pty',
+        args: (argv) => argv,
+      },
+      launchOptions: { startupMessage: 'grounding' },
+      startupMessageSetTimeoutFn: timers.setTimeoutFn,
+      startupMessageClearTimeoutFn: timers.clearTimeoutFn,
+    });
+
+    session.start();
+    fake.emitData('ready');
+    assert.equal(timers.timers.size, 1);
+
+    fake.emitExit({ exitCode: 0 });
+    assert.equal(timers.timers.size, 0);
+    timers.fireAll();
+    assert.deepEqual(fake.writes, []);
   });
 });
 
