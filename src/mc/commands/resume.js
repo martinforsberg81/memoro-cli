@@ -11,10 +11,10 @@
  * (if any) is threaded across the re-exec as the soft `focus` pointer via
  * `MC_GROUNDING_FOCUS`, matching `mc new`'s `<task>` plumbing.
  */
-import { spawnSync } from 'node:child_process';
-import { findEntry } from '../registry.js';
+import { findEntry, upsertEntry } from '../registry.js';
 import { emitCd, parseDirectiveFlag } from '../shell-directives.js';
 import { resolveToolInput } from '../../adapters/index.js';
+import { launchBrokerOwnedSession } from '../broker/launch-client.js';
 
 export async function run(rawArgv) {
   const { args: argv, enabled: emitDirectives } = parseDirectiveFlag(rawArgv);
@@ -65,30 +65,23 @@ export async function run(rawArgv) {
     process.stderr.write(`mc: vault materialise failed (${err.message}); continuing without tokens\n`);
   }
 
-  // Re-exec mc in wrap mode with --resume so claude opens its resume
-  // picker. Same approach as `mc new`: same binary, cwd=worktree,
-  // inherited stdio. Adapter routing for non-claude tools follows §5.
-  //
-  // Thread the session label as the soft grounding focus across the
-  // re-exec (argv is dropped by the wrap path), so the resumed session
-  // grounds with the same standing-context pointer through the ONE
-  // groundSession seam in runWrap.
-  const reexecEnv = { ...process.env };
-  if (entry.label) reexecEnv.MC_GROUNDING_FOCUS = entry.label;
-  // Relaunch under the tool the session was created with, routing the
-  // wrap-mode launcher to that adapter (same seam as `mc new`). The
-  // wrapper-injected `--resume` is dropped by adapters that have no resume
-  // picker (codex); claude consumes it verbatim.
-  if (entry.tool) {
-    const launchTool = resolveToolInput(entry.tool);
-    reexecEnv.MC_GROUNDING_TOOL = launchTool?.id || entry.tool;
-  }
-  const result = spawnSync(process.execPath, [process.argv[1], '--resume'], {
-    stdio: 'inherit',
+  const launchTool = entry.tool ? resolveToolInput(entry.tool) : null;
+  const result = await launchBrokerOwnedSession({
     cwd: entry.worktree_path,
-    env: reexecEnv,
+    label: entry.label || null,
+    focus: entry.label || null,
+    tool: launchTool?.id || entry.tool || 'claude',
+    argv: ['--resume'],
+    apiArgv: argv,
+    onLaunched: ({ codingSessionId }) => {
+      upsertEntry({
+        name: entry.name,
+        coding_session_id: codingSessionId,
+        session_state: 'live',
+      });
+    },
   });
-  return result.status ?? 0;
+  return result.code ?? 0;
 }
 
 function parseArgs(argv) {

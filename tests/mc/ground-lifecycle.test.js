@@ -1,20 +1,20 @@
 /**
  * TDD spec for MEMORO.md lifecycle helpers (Phase 2).
  *
- * Phase 2 lets grounding *offer* to seed / update the intent-map — but mc
- * itself NEVER writes MEMORO.md. The lifecycle is realised as guidance
- * folded into the grounding bundle that the (confirmed, opt-in) LLM acts
- * on. These pure helpers produce that guidance:
+ * Phase 2 lets grounding guide the agent to seed / update the intent-map when
+ * work changes durable project state. mc itself only reads MEMORO.md during
+ * grounding; the coding agent keeps the map current as part of the work. These
+ * pure helpers produce that guidance:
  *
- *   - `seedTemplate({ repoName })` — an initial intent-map the LLM can
- *     offer to write when the repo has no MEMORO.md. Pure, deterministic.
+ *   - `seedTemplate({ repoName })` — an initial intent-map the agent can write
+ *     when the repo has no MEMORO.md. Pure, deterministic.
  *   - `detectStale(map)` — a light heuristic returning the nodes whose
  *     status looks like it may need a re-check, so grounding can surface
  *     a gentle "verify these are current" nudge. Never asserts staleness;
  *     low-false-positive by design.
- *   - `lifecycleGuidance({ map, repoName })` — the markdown block folded
- *     into the bundle. Read-only on mc's side: it instructs the LLM to
- *     OFFER (seed when absent / update when stale), always opt-in.
+ *   - `lifecycleGuidance({ map, repoName })` — the markdown block folded into
+ *     the bundle. It instructs the agent to keep MEMORO.md current directly;
+ *     no separate confirmation gate.
  *
  * The load-bearing invariant — default grounding never mutates MEMORO.md —
  * is asserted here AND in ground.test.js (groundSession path).
@@ -30,7 +30,7 @@ import {
 } from '../../src/mc/ground.js';
 
 // ─────────────────────────────────────────────────────────────
-// seedTemplate — initial intent-map (an OFFER, never auto-written)
+// seedTemplate — initial intent-map
 // ─────────────────────────────────────────────────────────────
 
 describe('seedTemplate (pure)', () => {
@@ -99,30 +99,29 @@ describe('detectStale (pure heuristic)', () => {
 });
 
 // ─────────────────────────────────────────────────────────────
-// lifecycleGuidance — the read-only OFFER block folded into the bundle
+// lifecycleGuidance — living-map guidance folded into the bundle
 // ─────────────────────────────────────────────────────────────
 
 describe('lifecycleGuidance (pure)', () => {
-  it('offers to SEED when no map is present — and says never auto-write', () => {
+  it('guides seeding when no map is present without a confirmation gate', () => {
     const out = lifecycleGuidance({ map: null, repoName: 'acme' });
     assert.match(out, /seed|create/i);
-    // Must instruct the LLM to OFFER + get confirmation, never silently write.
-    assert.match(out, /offer|ask|confirm|opt-in|with the user/i);
+    assert.match(out, /No separate\s+confirmation step is required/i);
     assert.match(out, /MEMORO\.md/);
   });
 
-  it('offers to UPDATE (and surfaces stale nodes) when a map exists with in-flight nodes', () => {
+  it('guides updates and surfaces stale nodes when a map exists with in-flight nodes', () => {
     const map = '- **Live thing** — `active · L · now`';
     const out = lifecycleGuidance({ map, repoName: 'acme' });
     assert.match(out, /update|maintain|current/i);
     assert.match(out, /Live thing/);
-    assert.match(out, /offer|ask|confirm|opt-in|with the user/i);
+    assert.match(out, /No separate confirmation step is required/i);
   });
 
-  it('stays read-only in tone when the map is settled (no nudge spam)', () => {
+  it('stays sparse in tone when the map is settled (no nudge spam)', () => {
     const map = '- **X** — `done · L · shipped`';
     const out = lifecycleGuidance({ map, repoName: 'acme' });
-    // No stale list, but still references the opt-in maintenance posture.
+    // No stale list, but still references the sparse maintenance posture.
     assert.ok(!/`active · L · now`/.test(out));
     assert.match(out, /MEMORO\.md/);
   });

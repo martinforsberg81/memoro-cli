@@ -104,8 +104,9 @@ re-explanation of mission / role / where things stand.
 ## Open questions (resolve per phase — don't guess)
 
 - **Task delivery:** standing-context block only, or also as the opening prompt?
-- **MEMORO.md on entry:** read-only, or offer to add/append a node? (never silent
-  auto-write)
+- **MEMORO.md on entry:** settled: the map is living project state. Grounding
+  reads it only, but the coding agent may update it directly when work materially
+  changes roadmap state; no separate confirmation gate.
 - **First-run seeding** of MEMORO.md: in the grounding phase, or a follow-up?
 - **Maintenance:** how nodes stay current (status ticks) without rot — ordinary
   edits + a stale-flag surfaced at grounding?

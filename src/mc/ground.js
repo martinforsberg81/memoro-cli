@@ -266,9 +266,9 @@ export function languageDirective(language) {
  * @param {string} [parts.role]      — orchestrator framing
  * @param {string} [parts.lens]      — Memoro coding lens (who the user is)
  * @param {string} [parts.focus]     — soft opening pointer ("currently on X")
- * @param {string} [parts.lifecycle] — MEMORO.md lifecycle OFFER block
- *   (Phase 2). Read-only on mc's side: it tells the grounded LLM it MAY
- *   offer to seed/update the map, always with the user's confirmation.
+ * @param {string} [parts.lifecycle] — MEMORO.md lifecycle guidance
+ *   (Phase 2). mc itself only renders guidance; the grounded agent is
+ *   expected to keep the living map current when work changes project state.
  * @param {string} [parts.language]  — the session's render language
  *   (Phase 4), resolved from the lens/user_state. `null`/empty → English
  *   (no directive). Rendered as a single "respond in <language>" line
@@ -349,19 +349,18 @@ export async function readMap(cwd, { readFileImpl = readFile, exists = existsSyn
 }
 
 // ─────────────────────────────────────────────────────────────
-// Pure: MEMORO.md lifecycle (Phase 2) — OFFER, never auto-write
+// Pure: MEMORO.md lifecycle (Phase 2) — living-map guidance
 //
-// mc itself NEVER writes MEMORO.md. The lifecycle is realised as guidance
-// folded into the grounding bundle: when the map is absent the bundle
-// hands the LLM a seed template + an instruction to OFFER seeding; when
-// nodes look in-flight it surfaces them + an instruction to OFFER an
-// update. Every write is the LLM's, confirmed by the user. The default
-// grounding path stays strictly read-only — asserted in the tests.
+// mc itself only reads MEMORO.md during grounding and folds guidance into the
+// bundle. The grounded coding agent may then update the map directly when its
+// work materially changes roadmap state. The guardrail is sparse scope + final
+// summary visibility, not a separate confirmation gate.
 // ─────────────────────────────────────────────────────────────
 
 /**
- * An initial MEMORO.md skeleton the grounded LLM can OFFER to write when
- * the repo has no map. Mirrors this repo's reference form (north star →
+ * An initial MEMORO.md skeleton the grounded LLM can write when the repo has
+ * no map and the current work establishes project state. Mirrors this repo's
+ * reference form (north star →
  * long-term goals → nodes) and keeps the sparse-by-rule reminder so the
  * seeded file stays a map, not a docs dump. Pure + deterministic.
  *
@@ -435,13 +434,13 @@ export function detectStale(map) {
 }
 
 /**
- * The read-only MEMORO.md lifecycle OFFER block folded into the bundle.
- * Pure. mc writes nothing here — this is *instructions to the LLM*:
+ * The MEMORO.md lifecycle guidance block folded into the bundle.
+ * Pure. mc writes nothing here — this is *instructions to the grounded agent*:
  *
- *   - No map  → include the seed template + "OFFER to create it" (opt-in).
- *   - Map     → "you MAY offer to update it" + (if any) the in-flight
- *               nodes to re-check. Always confirmed with the user; never
- *               a silent write.
+ *   - No map  → include the seed template + create it when project state
+ *               needs a durable map.
+ *   - Map     → keep it current as work lands + (if any) the in-flight
+ *               nodes to re-check. No separate confirmation gate.
  *
  * @param {object} [arg]
  * @param {string} [arg.map]      — MEMORO.md contents (null/empty ⇒ seed)
@@ -452,9 +451,10 @@ export function lifecycleGuidance({ map, repoName } = {}) {
   if (!text) {
     return [
       'This repo has **no `MEMORO.md`** yet — the intent-map that grounds every',
-      'future session. As your first move you MAY *offer* to seed one: ask the',
-      'user, and only if they agree, write the skeleton below (then fill it in',
-      'with them). Never create or overwrite `MEMORO.md` without that opt-in.',
+      'future session. If your work establishes durable project state, create',
+      'one directly from the skeleton below and keep it sparse. No separate',
+      'confirmation step is required; report the map change in your final',
+      'summary so it is visible and can be committed with the work.',
       '',
       'Suggested skeleton:',
       '',
@@ -466,15 +466,17 @@ export function lifecycleGuidance({ map, repoName } = {}) {
 
   const stale = detectStale(text);
   const lines = [
-    '`MEMORO.md` is **read-only by default** — you ground in it, you do not',
-    'auto-edit it. As work lands you MAY *offer* to update a node\'s status or',
-    'add one, but only with the user\'s confirmation — never a silent write.',
+    '`MEMORO.md` is living project state. Keep it current when work materially',
+    'changes roadmap state, creates a new project node, lands a phase, or changes',
+    'what "next" means. No separate confirmation step is required. Keep edits',
+    'sparse, never turn the map into a changelog or plan dump, and report map',
+    'changes in your final summary.',
   ];
   if (stale.length) {
     lines.push(
       '',
       'These nodes read as in-flight; if you touch their area, confirm they\'re',
-      'still current and offer to tick the status:',
+      'still current and update their status when the work changes it:',
     );
     for (const s of stale) lines.push(`- ${s}`);
   }
@@ -723,10 +725,9 @@ export async function groundSession({ cwd, adapter, focus = null, deps = {} } = 
   // byte-identical — the pre-drev grounding output is preserved.
   const mapProse = safeSync(() => stripMapSettings(map), map);
 
-  // MEMORO.md lifecycle OFFER (Phase 2). PURE + read-only on mc's side —
-  // it only adds guidance the LLM may act on (seed when absent, offer an
-  // update when nodes look in-flight), never a silent write. safe() so a
-  // surprise never blocks the launch.
+  // MEMORO.md lifecycle guidance (Phase 2). PURE + read-only on mc's side:
+  // it only adds instructions for the grounded agent to keep the living map
+  // current as work lands. safe() so a surprise never blocks the launch.
   const lifecycle = safeSync(() => lifecycleGuidance({ map: mapProse, repoName }), null);
 
   const parts = { map: mapProse, role, lens, focus, lifecycle, language };

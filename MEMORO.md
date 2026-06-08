@@ -31,9 +31,10 @@ A session must be handed the right context *before the user types*. Today
   Every entry (`mc`, `mc new`, `mc resume`) injects the bundle `{ map + role +
   lens + focus }` into standing context before the user types, so the LLM wakes
   grounded. Phase 1 shipped bare `mc`; Phase 2 shipped entry-parity (`mc new
-  [<task>]` / `mc resume` ground via the same seam), the read-only MEMORO.md
-  lifecycle (offer-to-seed/update, never silent), and the adapter-sync drift-fix
-  (grounding block stripped before the wrapper byte-compare). Phase 3 shipped
+  [<task>]` / `mc resume` ground via the same seam), MEMORO.md maintenance
+  guidance (keep the living map current as work lands, without a separate
+  confirmation gate), and the adapter-sync drift-fix (grounding block stripped
+  before the wrapper byte-compare). Phase 3 shipped
   tool-switching: the launcher is adapter-routed (no longer claude-hardcoded),
   codex has writeGrounding/removeGrounding parity into AGENTS.md, `mc new
   --codex`/`--claude` sugar over `--tool`, and a mid-session switch unified into
@@ -73,6 +74,23 @@ Ship a plan as verified parallel agents; the coordinator never blocks.
   spine was considered and **rejected as premature**. Only real next build: keep
   the map's in-flight state reliable so resuming a specific half-done thread is
   frictionless. → `docs/plans/fanout-spine.md`
+- **Hosted live-session workspace** — `active · M · now`
+  Memoro gets a browser-native coding workspace where cloud exposes only a
+  constrained `mc` orchestrator surface, and `mc attach <session>` is a real live
+  PTY viewport into local AI coding sessions via a local `mc broker`. Phase 1
+  shipped the no-behavior-change PTY extraction (`PtySession` + byte ring buffer);
+  Phase 2a shipped the local broker supervisor (`mc broker start/status/stop`)
+  with a Unix-socket control plane; Phase 2b added the in-memory broker session
+  manager; Phase 2c/2d shipped the broker runtime session protocol plus a real
+  local attach stream (`mc attach <session_id>`) over the broker socket; Phase
+  2e moved wrap-mode sidecars into broker-owned launch and switched `mc new` /
+  `mc resume` to launch through the broker and attach as clients; Phase 2f added
+  the local writer lease (`mc attach --read-only`, one writer/many viewers);
+  Phase 3a shipped the CLI-side cloud bridge (`mc broker connect`,
+  `/api/mc/broker/ws` control, session inventory, `attach_request` → local
+  attach stream bridge). Next build is the Memoro Worker/Durable Object stream
+  endpoints plus the hosted browser terminal UI.
+  → `docs/plans/hosted-live-session-workspace.md`
 - **Ensemble & hierarchy** — `later · M · —`
   Multi-model ensembles and recursive mid-agents, layered on the spine. → §10b/§10c
 
@@ -105,3 +123,12 @@ Ship a plan as verified parallel agents; the coordinator never blocks.
 - **`mc auth agent` enrollment** — `gated (memoro server) · S · —`
   MCP endpoint + agent scope don't exist server-side yet (code-verified). Park
   until memoro ships them. → §15
+
+## Keeping the map current
+
+`MEMORO.md` is living project state, not a read-only artifact. Agents should
+update it directly when work materially changes roadmap state, creates a new
+project node, lands a phase, or changes what "next" means; no separate
+confirmation step is required. Keep edits sparse, never turn the map into a
+changelog or plan dump, and report map changes in the final summary so they are
+visible and can be committed with the work.

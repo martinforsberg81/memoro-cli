@@ -1,0 +1,292 @@
+import assert from 'node:assert/strict';
+import test, { describe } from 'node:test';
+
+import { BrokerRuntime } from '../../../src/mc/broker/runtime.js';
+
+function makeFakePtyFactory() {
+  const ptys = [];
+  const calls = [];
+  const factory = {
+    spawn(bin, args, options) {
+      let dataHandler = null;
+      let exitHandler = null;
+      const pty = {
+        pid: 9100 + ptys.length,
+        writes: [],
+        resizes: [],
+        kills: [],
+        onData(handler) { dataHandler = handler; },
+        onExit(handler) { exitHandler = handler; },
+        write(data) { this.writes.push(data); },
+        resize(cols, rows) { this.resizes.push({ cols, rows }); },
+        kill(signal) { this.kills.push(signal); },
+        emitData(data) { dataHandler?.(data); },
+        emitExit(event) { exitHandler?.(event); },
+      };
+      calls.push({ bin, args, options });
+      ptys.push(pty);
+      return pty;
+    },
+  };
+  return { factory, calls, ptys };
+}
+
+function makeLaunchResolver({ ok = true } = {}) {
+  const calls = [];
+  return {
+    calls,
+    resolve(toolInput) {
+      calls.push(toolInput);
+      if (!ok) {
+        return { ok: false, reason: 'missing-bin', hint: `missing ${toolInput}` };
+      }
+      return {
+        ok: true,
+        id: 'claude-code',
+        shortName: 'claude',
+        spec: {
+          bin: 'claude',
+          args: (argv = []) => ['--wrapped', ...argv],
+        },
+      };
+    },
+  };
+}
+
+function makeRuntime(opts = {}) {
+  const fake = makeFakePtyFactory();
+  const resolver = makeLaunchResolver(opts.launch || {});
+  const sidecars = [];
+  let now = 1_000;
+  const runtime = new BrokerRuntime({
+    ptyFactory: fake.factory,
+    launchResolver: resolver.resolve.bind(resolver),
+    env: { BASE: '1', MC_GROUNDING_TOOL: 'codex' },
+    cwd: () => '/fallback',
+    clock: () => now,
+    sidecarFactory: (spec) => {
+      const sidecar = {
+        spec,
+        started: false,
+        stopped: false,
+        start() { this.started = true; },
+        stop() { this.stopped = true; },
+      };
+      sidecars.push(sidecar);
+      return sidecar;
+    },
+  });
+  return {
+    runtime,
+    fake,
+    resolver,
+    sidecars,
+    tick(ms = 1) {
+      now += ms;
+      return now;
+    },
+  };
+}
+
+describe('BrokerRuntime', () => {
+  test('launch_session resolves the tool locally and creates an owned PTY session', () => {
+    const { runtime, fake, resolver } = makeRuntime();
+
+    const res = runtime.handle({
+      type: 'launch_session',
+      session: {
+        id: 'sess_a',
+        name: 'alpha',
+        cwd: '/repo/a',
+        tool: 'claude',
+        argv: ['--resume'],
+        cols: 120,
+        rows: 32,
+        env: { EXTRA: '2' },
+      },
+    });
+
+    assert.equal(res.ok, true);
+    assert.equal(res.session.id, 'sess_a');
+    assert.equal(res.session.name, 'alpha');
+    assert.equal(res.session.tool, 'claude');
+    assert.equal(res.session.pty_pid, 9100);
+    assert.deepEqual(resolver.calls, ['claude']);
+    assert.deepEqual(fake.calls[0].args, ['--wrapped', '--resume']);
+    assert.equal(fake.calls[0].options.cwd, '/repo/a');
+    assert.equal(fake.calls[0].options.cols, 120);
+    assert.equal(fake.calls[0].options.rows, 32);
+    assert.equal(fake.calls[0].options.env.BASE, '1');
+    assert.equal(fake.calls[0].options.env.EXTRA, '2');
+    assert.equal(fake.calls[0].options.env.MEMORO_MC_BROKER, '1');
+    assert.equal(fake.calls[0].options.env.MEMORO_MC_PARENT, '1');
+  });
+
+  test('launch_session defaults tool, cwd, terminal size, and argv', () => {
+    const { runtime, fake, resolver } = makeRuntime();
+
+    const res = runtime.handle({ type: 'launch_session', session: { id: 'sess_a' } });
+
+    assert.equal(res.ok, true);
+    assert.deepEqual(resolver.calls, ['codex']);
+    assert.equal(fake.calls[0].options.cwd, '/fallback');
+    assert.equal(fake.calls[0].options.cols, 80);
+    assert.equal(fake.calls[0].options.rows, 24);
+    assert.deepEqual(fake.calls[0].args, ['--wrapped']);
+  });
+
+  test('list and status expose live broker sessions', () => {
+    const { runtime } = makeRuntime();
+
+    runtime.handle({ type: 'launch_session', session: { id: 'sess_a' } });
+
+    assert.deepEqual(runtime.handle({ type: 'sessions' }).sessions.map((s) => s.id), ['sess_a']);
+    const status = runtime.handle({ type: 'session_status', id: 'sess_a' });
+    assert.equal(status.ok, true);
+    assert.equal(status.session.id, 'sess_a');
+    assert.equal(status.session.session_state, 'live');
+  });
+
+  test('write, dispatch, resize, stop, and remove forward to the session manager', () => {
+    const { runtime, fake } = makeRuntime();
+
+    runtime.handle({ type: 'launch_session', session: { id: 'sess_a' } });
+
+    assert.equal(runtime.handle({ type: 'write_session', id: 'sess_a', data: 'raw' }).ok, true);
+    assert.equal(runtime.handle({ type: 'dispatch_session', id: 'sess_a', message: 'prompt' }).ok, true);
+    assert.equal(runtime.handle({ type: 'resize_session', id: 'sess_a', cols: 100, rows: 40 }).ok, true);
+    assert.equal(runtime.handle({ type: 'stop_session', id: 'sess_a', signal: 'SIGHUP' }).ok, true);
+    assert.deepEqual(fake.ptys[0].writes, ['raw', 'prompt\r']);
+    assert.deepEqual(fake.ptys[0].resizes, [{ cols: 100, rows: 40 }]);
+    assert.deepEqual(fake.ptys[0].kills, ['SIGHUP']);
+
+    const removed = runtime.handle({ type: 'remove_session', id: 'sess_a' });
+    assert.deepEqual(removed, { ok: true, removed: true });
+    assert.deepEqual(runtime.handle({ type: 'sessions' }), { ok: true, sessions: [] });
+  });
+
+  test('attachConnection bridges a raw socket to an owned PTY session', () => {
+    const { runtime, fake } = makeRuntime();
+    const writes = [];
+    const conn = {
+      handlers: new Map(),
+      write(data) { writes.push(String(data)); },
+      end() {
+        this.ended = true;
+        this.handlers.get('end')?.();
+      },
+      on(event, handler) { this.handlers.set(event, handler); },
+      off(event, handler) {
+        if (this.handlers.get(event) === handler) this.handlers.delete(event);
+      },
+      emit(event, value) { this.handlers.get(event)?.(value); },
+    };
+
+    runtime.handle({ type: 'launch_session', session: { id: 'sess_a' } });
+    fake.ptys[0].emitData('snapshot');
+
+    const res = runtime.attachConnection({ id: 'sess_a', cols: 100, rows: 40 }, conn, Buffer.from('first'));
+
+    assert.equal(res.ok, true);
+    assert.equal(JSON.parse(writes[0]).ok, true);
+    assert.equal(writes[1], 'snapshot');
+    assert.deepEqual(fake.ptys[0].resizes, [{ cols: 100, rows: 40 }]);
+    assert.deepEqual(fake.ptys[0].writes, ['first']);
+
+    conn.emit('data', Buffer.from('input'));
+    fake.ptys[0].emitData('output');
+    assert.deepEqual(fake.ptys[0].writes, ['first', 'input']);
+    assert.equal(writes.at(-1), 'output');
+
+    fake.ptys[0].emitExit({ exitCode: 0, signal: null });
+    assert.equal(conn.ended, true);
+  });
+
+  test('attachConnection grants one writer lease and makes parallel attaches read-only', () => {
+    const { runtime, fake } = makeRuntime();
+    const makeConn = () => {
+      const writes = [];
+      return {
+        writes,
+        handlers: new Map(),
+        write(data) { writes.push(String(data)); },
+        end() { this.handlers.get('end')?.(); },
+        on(event, handler) { this.handlers.set(event, handler); },
+        off(event, handler) {
+          if (this.handlers.get(event) === handler) this.handlers.delete(event);
+        },
+        emit(event, value) { this.handlers.get(event)?.(value); },
+      };
+    };
+
+    runtime.handle({ type: 'launch_session', session: { id: 'sess_a' } });
+    const writer = makeConn();
+    const viewer = makeConn();
+
+    runtime.attachConnection({ id: 'sess_a', attach_id: 'att_writer' }, writer);
+    runtime.attachConnection({ id: 'sess_a', attach_id: 'att_viewer' }, viewer);
+
+    assert.equal(JSON.parse(writer.writes[0]).writer, true);
+    assert.equal(JSON.parse(viewer.writes[0]).writer, false);
+    assert.equal(JSON.parse(viewer.writes[0]).attach.mode, 'read-only');
+    assert.deepEqual(runtime.listSessions()[0].attached.map((a) => a.attach_id), ['att_writer', 'att_viewer']);
+    assert.equal(runtime.listSessions()[0].writer_attach_id, 'att_writer');
+
+    writer.emit('data', Buffer.from('yes'));
+    viewer.emit('data', Buffer.from('no'));
+    assert.deepEqual(fake.ptys[0].writes, ['yes']);
+
+    writer.emit('end');
+    assert.equal(runtime.listSessions()[0].writer_attach_id, null);
+
+    const next = makeConn();
+    runtime.attachConnection({ id: 'sess_a', attach_id: 'att_next' }, next);
+    assert.equal(JSON.parse(next.writes[0]).writer, true);
+    next.emit('data', Buffer.from('again'));
+    assert.deepEqual(fake.ptys[0].writes, ['yes', 'again']);
+  });
+
+  test('launch_session starts and stops sidecars when requested', () => {
+    const { runtime, sidecars } = makeRuntime();
+
+    const res = runtime.handle({
+      type: 'launch_session',
+      session: {
+        id: 'sess_a',
+        sidecars: {
+          codingSessionId: 'sess_real',
+          apiUrl: 'https://memoro.test',
+          token: 'tok',
+        },
+      },
+    });
+
+    assert.equal(res.ok, true);
+    assert.deepEqual(res.sidecars, { ok: true });
+    assert.equal(sidecars.length, 1);
+    assert.equal(sidecars[0].started, true);
+    assert.equal(sidecars[0].spec.session.id, 'sess_a');
+    assert.equal(sidecars[0].spec.coding.codingSessionId, 'sess_real');
+
+    runtime.handle({ type: 'remove_session', id: 'sess_a' });
+    assert.equal(sidecars[0].stopped, true);
+  });
+
+  test('returns structured errors for launch failures and invalid payloads', () => {
+    const failed = makeRuntime({ launch: { ok: false } }).runtime.handle({
+      type: 'launch_session',
+      session: { id: 'sess_a', tool: 'codex' },
+    });
+    assert.deepEqual(failed, {
+      ok: false,
+      reason: 'missing-bin',
+      error: 'missing codex',
+    });
+
+    const { runtime } = makeRuntime();
+    assert.equal(runtime.handle({ type: 'bogus' }), null);
+    assert.match(runtime.handle({ type: 'launch_session', session: { id: '' } }).error, /session id/);
+    assert.match(runtime.handle({ type: 'write_session', id: 'missing', data: 'x' }).error, /unknown broker session/);
+    assert.match(runtime.handle({ type: 'resize_session', id: 'missing', cols: 0, rows: 24 }).error, /cols/);
+  });
+});

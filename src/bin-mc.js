@@ -35,8 +35,6 @@ import { createServer } from 'node:net';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { hostname } from 'node:os';
 
-import pty from 'node-pty';
-
 import { getSecret } from './lib/keychain.js';
 import { ACCOUNTS } from './commands/auth.js';
 import { readConfig, getApiUrl } from './lib/config.js';
@@ -48,6 +46,9 @@ import { CliWsClient } from './commands/ws-client.js';
 import { createFetchTranscriptHandler } from './commands/handlers/fetch-transcript.js';
 import { ensureCoordinatorSlashCommand } from './mc/coordinator-command.js';
 import { installUpdateCommand } from './adapters/claude-code.js';
+import { PtySession } from './mc/broker/pty-session.js';
+import { extractExcerpt } from './mc/session-excerpt.js';
+import { renderIntro } from './mc/session-intro.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constants
@@ -92,6 +93,8 @@ const LIFECYCLE = {
   vault:         () => import('./mc/commands/vault.js'),
   adapter:       () => import('./mc/commands/adapter.js'),
   'tool-switch': () => import('./mc/commands/tool-switch.js'),
+  broker:        () => import('./mc/commands/broker.js'),
+  attach:        () => import('./mc/commands/attach.js'),
   fanout:        () => import('./mc/commands/fanout.js'),
   gather:        () => import('./mc/commands/gather.js'),
 };
@@ -231,6 +234,8 @@ USAGE
   mc tool-switch <tool> [--dry-run]  Switch default coding tool (§13d):
                                      verify install + auth, persist
                                      default, sync target's instructions
+  mc broker start/status/stop        Local PTY broker supervisor (§8)
+  mc attach <session_id>             Attach to a broker-owned local session
   mc fanout <plan.md> [--from main]  Parse \`## Phase N:\` headings + spawn one
                                      idle session per phase (§10a MVP)
   mc gather <plan-slug> [--dry-run]  Merge phase PRs into wip/<plan-slug>;
@@ -289,6 +294,8 @@ async function runWrap(argv, { label = null } = {}) {
   const launchToolId = launch.id;
 
   preflight(launchSpec.bin);
+  const ptyModule = await import('node-pty');
+  const pty = ptyModule.default || ptyModule;
 
   if (!existsSync(MC_DIR)) {
     mkdirSync(MC_DIR, { recursive: true, mode: 0o700 });
@@ -384,34 +391,30 @@ async function runWrap(argv, { label = null } = {}) {
   }));
 
   // ─── Spawn the chosen tool in a PTY we own ───────────────────────────────
-  const ptyProcess = pty.spawn(launchSpec.bin, launchSpec.args(argv), {
-    name: process.env.TERM || 'xterm-256color',
+  const ptySession = new PtySession({
+    id: codingSessionId,
+    name: label,
+    cwd,
+    tool: launchToolId,
+    launchSpec,
+    argv,
+    ptyFactory: pty,
+    termName: process.env.TERM || 'xterm-256color',
     cols: process.stdout.columns || 80,
     rows: process.stdout.rows || 24,
-    cwd,
     env: {
       ...process.env,
       MEMORO_MC_PARENT: '1',  // hooks see this and no-op their heartbeat-loop
     },
+    ringBytes: OUTPUT_BUFFER_BYTES,
   });
 
-  // Pipe PTY output → user's terminal. Also:
-  //   - stamp `lastOutputAt` so the heartbeat ticker can report idle vs
-  //     active to peer coordinators
-  //   - keep a rolling raw-output buffer so the heartbeat can carry a
-  //     stripped excerpt of what Claude is currently showing (lets a peer
-  //     coordinator spot e.g. "How should I proceed?" prompts at a
-  //     glance, not just "session B has been idle 2m")
-  let lastOutputAt = Date.now();
-  let outputBuffer = '';
-  ptyProcess.onData((data) => {
-    lastOutputAt = Date.now();
-    outputBuffer += data;
-    if (outputBuffer.length > OUTPUT_BUFFER_BYTES) {
-      outputBuffer = outputBuffer.slice(-OUTPUT_BUFFER_BYTES);
-    }
+  // Pipe PTY output → user's terminal. The session tracks last-output time and
+  // keeps the rolling raw-output buffer used by heartbeat excerpts.
+  ptySession.on('data', (data) => {
     process.stdout.write(data);
   });
+  ptySession.start();
 
   // Pipe user's keystrokes → PTY input. Raw mode so each keystroke flows
   // through unmodified (no line buffering, no signal translation by the
@@ -422,13 +425,13 @@ async function runWrap(argv, { label = null } = {}) {
   process.stdin.resume();
   process.stdin.setEncoding('utf8');
   process.stdin.on('data', (data) => {
-    ptyProcess.write(data);
+    ptySession.write(data);
   });
 
   // Terminal resize → PTY resize, so Claude redraws to the new size.
   const onResize = () => {
     try {
-      ptyProcess.resize(process.stdout.columns, process.stdout.rows);
+      ptySession.resize(process.stdout.columns, process.stdout.rows);
     } catch { /* PTY closed */ }
   };
   process.stdout.on('resize', onResize);
@@ -452,7 +455,7 @@ async function runWrap(argv, { label = null } = {}) {
         conn.end(JSON.stringify({ ok: false, error: 'message required' }) + '\n');
         return;
       }
-      writeToPty(ptyProcess, message);
+      ptySession.writeDispatchedMessage(message);
       conn.end(JSON.stringify({ ok: true, message }) + '\n');
     });
   });
@@ -473,7 +476,7 @@ async function runWrap(argv, { label = null } = {}) {
       dispatch_message: async (args) => {
         const message = typeof args?.message === 'string' ? args.message : null;
         if (!message?.trim()) throw new Error('message required');
-        writeToPty(ptyProcess, message);
+        ptySession.writeDispatchedMessage(message);
         return { ok: true, delivered_at: new Date().toISOString() };
       },
     },
@@ -500,8 +503,8 @@ async function runWrap(argv, { label = null } = {}) {
         apiUrl, token,
         payload: {
           ...heartbeatBase,
-          last_assistant_excerpt: extractExcerpt(outputBuffer, EXCERPT_MAX_CHARS),
-          idle_seconds: Math.max(0, Math.floor((now - lastOutputAt) / 1000)),
+          last_assistant_excerpt: extractExcerpt(ptySession.recentOutput(), EXCERPT_MAX_CHARS),
+          idle_seconds: Math.max(0, Math.floor((now - ptySession.lastOutputAt) / 1000)),
           at: new Date(now).toISOString(),
         },
       });
@@ -525,25 +528,25 @@ async function runWrap(argv, { label = null } = {}) {
       try { process.stdin.setRawMode(false); } catch {}
     }
     try { process.stdin.pause(); } catch {}
-    try { ptyProcess.kill(); } catch {}
+    try { ptySession.kill(); } catch {}
     process.exit(exitCode);
   };
 
   // When claude exits (user types /exit, Ctrl+D etc.), tear down.
-  ptyProcess.onExit(({ exitCode }) => {
+  ptySession.on('exit', ({ exitCode }) => {
     cleanup(exitCode || 0);
   });
 
   // External signals → forward to claude, let its exit drive cleanup.
   // (User's Ctrl+C is bytes through stdin in raw mode, not SIGINT to us.)
   process.on('SIGTERM', () => {
-    try { ptyProcess.kill('SIGTERM'); } catch {}
+    try { ptySession.kill('SIGTERM'); } catch {}
   });
   process.on('SIGHUP', () => {
-    try { ptyProcess.kill('SIGHUP'); } catch {}
+    try { ptySession.kill('SIGHUP'); } catch {}
   });
 
-  // Resolve never — wait for ptyProcess.onExit to call process.exit().
+  // Resolve never — wait for ptySession exit to call process.exit().
   return new Promise(() => {});
 }
 
@@ -765,59 +768,14 @@ export function writeToPty(ptyProcess, message) {
  *
  * Pure for testing.
  */
-export function extractExcerpt(rawBuffer, max = EXCERPT_MAX_CHARS) {
-  if (!rawBuffer) return '';
-
-  // 1. CSI / SGR sequences: ESC [ ... letter
-  // 2. OSC sequences: ESC ] ... BEL or ESC ]
-  // 3. Single-character ESC escapes (ESC =, ESC >, ESC c, etc.)
-  // 4. Bracketed paste / DECPRIVATE: covered by the CSI regex
-  let s = rawBuffer
-    .replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '')   // CSI / SGR
-    .replace(/\x1b\][^\x07\x1b]*(\x07|\x1b\\)/g, '')  // OSC (BEL or ST terminated)
-    .replace(/\x1b[=>cDEHM7-9NO]/g, '');      // common single-char ESC
-
-  // Drop non-printable control bytes except newline + tab
-  s = s.replace(/[\x00-\x08\x0b-\x1f\x7f]/g, '');
-
-  // Collapse runs of 3+ blank lines into 2 for legibility
-  s = s.replace(/\n{3,}/g, '\n\n');
-
-  // Trim trailing whitespace per line (TUI redraws often leave trailing
-  // spaces from cleared cells)
-  s = s.split('\n').map(line => line.replace(/[ \t]+$/, '')).join('\n');
-
-  // Return the trailing `max` chars — that's what's "currently on screen"
-  if (s.length > max) s = s.slice(-max);
-
-  // Strip leading whitespace from the slice so we don't start mid-line
-  return s.replace(/^\s+/, '');
-}
+export { extractExcerpt };
 
 /**
  * Render the multi-line stylized intro printed before Claude takes the
  * terminal. Pure function for testing. Trailing blank line gives the
  * Claude TUI breathing room.
  */
-export function renderIntro({ version, codingSessionId, repo, branch, label = null, tool = null }) {
-  // The tool segment lets the banner show which LLM is being launched
-  // (claude vs codex) — load-bearing now that the launcher is adapter-
-  // routed, so a switched session visibly reflects the new tool.
-  const toolSeg = tool ? `  ·  \x1b[35m${tool}\x1b[0m` : '';
-  const headline = label
-    ? `  \x1b[1mmc\x1b[0m \x1b[2m${version}\x1b[0m${toolSeg}  ·  \x1b[33m${label}\x1b[0m  ·  ${repo} \x1b[2m(${branch})\x1b[0m`
-    : `  \x1b[1mmc\x1b[0m \x1b[2m${version}\x1b[0m${toolSeg}  ·  ${repo} \x1b[2m(${branch})\x1b[0m`;
-  return [
-    '',
-    headline,
-    `  \x1b[2msession\x1b[0m  ${codingSessionId}`,
-    '',
-    `  \x1b[36m/memoro-coordinator\x1b[0m   manage other sessions from inside your tool`,
-    `  \x1b[36mmc --help\x1b[0m              cli reference`,
-    '',
-    '',
-  ].join('\n');
-}
+export { renderIntro };
 
 async function postHeartbeatWithRetry({ apiUrl, token, payload }) {
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {

@@ -19,7 +19,6 @@
  */
 import { mkdirSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
-import { spawnSync } from 'node:child_process';
 import { findEntry, upsertEntry } from '../registry.js';
 import { worktreePath, mcHome } from '../paths.js';
 import { git, isInsideRepo, primaryWorktree, branchExists } from '../git.js';
@@ -27,6 +26,7 @@ import { emitCd, parseDirectiveFlag } from '../shell-directives.js';
 import { checkAndPrintFreshInstall, ensureSentinel } from '../first-run.js';
 import { resolveToolInput } from '../../adapters/index.js';
 import { readConfig } from '../../lib/config.js';
+import { launchBrokerOwnedSession } from '../broker/launch-client.js';
 
 const FALLBACK_TOOL_SHORT = 'claude';
 
@@ -202,34 +202,27 @@ export async function run(rawArgv) {
     process.stderr.write(`mc: vault materialise failed (${err.message}); continuing without tokens\n`);
   }
 
-  // Re-exec the same mc binary in wrap mode with cwd=worktree. This
-  // re-uses the existing wrap-mode plumbing (pty.spawn of claude,
-  // heartbeat-loop, ws-client, registry tick) without duplicating it
-  // here. stdio inherits so the user's terminal becomes claude's TUI;
-  // when claude exits, we exit too and the shell wrapper's auto-cd
-  // (already emitted above) keeps the user in the worktree.
-  //
-  // Adapter routing per --tool (codex, gemini, …) is deferred — for
-  // claude this is just the plain wrap path. When the adapter layer
-  // lands (§5), this re-exec becomes a per-tool launcher call.
-  // Thread the soft focus across the re-exec boundary (argv is dropped by
-  // the bare-`mc` wrap path). `runWrap` reads MC_GROUNDING_FOCUS at its
-  // pre-launch grounding slot — the same `groundSession` seam — so `mc new`
-  // grounds with focus through ONE code path, not a forked one.
-  const reexecEnv = { ...process.env };
-  if (opts.task) reexecEnv.MC_GROUNDING_FOCUS = opts.task;
-  // Route the wrap-mode launcher to the chosen tool's adapter. The
-  // registry stores the short name; the launcher resolves either form, so
-  // we pass the adapter ID when known (canonical) and fall back to the
-  // short name. claude-code stays the implicit default when unresolved.
+  // Broker-owned process model: the local terminal becomes an attach
+  // client, while the broker owns the PTY and sidecars. This preserves
+  // the launch contract but means closing the terminal no longer kills
+  // the LLM session.
   const launchTool = resolveToolInput(entry.tool);
-  reexecEnv.MC_GROUNDING_TOOL = launchTool?.id || entry.tool;
-  const result = spawnSync(process.execPath, [process.argv[1]], {
-    stdio: 'inherit',
+  const result = await launchBrokerOwnedSession({
     cwd: wt,
-    env: reexecEnv,
+    label: null,
+    focus: opts.task || null,
+    tool: launchTool?.id || entry.tool,
+    argv: [],
+    apiArgv: argv,
+    onLaunched: ({ codingSessionId }) => {
+      upsertEntry({
+        name: opts.name,
+        coding_session_id: codingSessionId,
+        session_state: 'live',
+      });
+    },
   });
-  return result.status ?? 0;
+  return result.code ?? 0;
 }
 
 /**

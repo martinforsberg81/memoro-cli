@@ -289,7 +289,7 @@ describe('groundSession', () => {
     assert.match(res.reason, /adapter/);
   });
 
-  // ── Phase 2: MEMORO.md lifecycle folds into the bundle, read-only ──
+  // ── Phase 2: MEMORO.md lifecycle folds into the bundle ──
 
   it('folds a SEED offer into the bundle when MEMORO.md is absent', async () => {
     const adapter = fakeAdapter();
@@ -305,10 +305,10 @@ describe('groundSession', () => {
     });
     assert.match(adapter.written.markdown, /Keeping the map current/);
     assert.match(adapter.written.markdown, /seed|create/i);
-    assert.match(adapter.written.markdown, /offer|opt-in|confirm|with the user/i);
+    assert.match(adapter.written.markdown, /No separate\s+confirmation step is required/i);
   });
 
-  it('folds an UPDATE offer + in-flight nodes when MEMORO.md exists', async () => {
+  it('folds update guidance + in-flight nodes when MEMORO.md exists', async () => {
     const adapter = fakeAdapter();
     await groundSession({
       cwd: dir,
@@ -321,7 +321,7 @@ describe('groundSession', () => {
     });
     assert.match(adapter.written.markdown, /Keeping the map current/);
     assert.match(adapter.written.markdown, /Live node/);
-    assert.match(adapter.written.markdown, /read-only by default/i);
+    assert.match(adapter.written.markdown, /living project state/i);
   });
 
   // ── Phase 4: language resolved from the lens response governs the bundle ──

@@ -438,6 +438,12 @@ exist" stays git.
 
 ### 8. Memoro-native terminal — sessions in the browser
 
+**Update 2026-06-07:** the build-ready model for this section lives in
+`docs/plans/hosted-live-session-workspace.md`. The important refinement:
+this is a hosted live-session workspace, not a prompt router and not a cloud
+shell. The cloud exposes only a constrained `mc` orchestration surface; `attach`
+is a real live PTY viewport into a local `mc broker` session.
+
 End-game vision the user articulated: log in once to Memoro, see your
 parallel sessions as tabs in a fullscreen browser window — coordinator
 view as the entry surface, click a session to attach to its PTY.
