@@ -8,6 +8,7 @@ import { brokerSocketPath } from './paths.js';
 
 const INITIAL_BACKOFF_MS = 1_000;
 const MAX_BACKOFF_MS = 30_000;
+const SESSION_REFRESH_INTERVAL_MS = 5_000;
 const DEFAULT_CAPABILITIES = [
   'pty-stream-v1',
   'resize-v1',
@@ -27,6 +28,9 @@ export class CloudBrokerClient extends EventEmitter {
     WebSocketImpl = globalThis.WebSocket,
     brokerSocket = brokerSocketPath(),
     capabilities = DEFAULT_CAPABILITIES,
+    sessionRefreshIntervalMs = SESSION_REFRESH_INTERVAL_MS,
+    setIntervalImpl = setInterval,
+    clearIntervalImpl = clearInterval,
     sleepImpl = sleep,
     logger = silentLogger(),
   } = {}) {
@@ -44,12 +48,17 @@ export class CloudBrokerClient extends EventEmitter {
     this.WebSocketImpl = WebSocketImpl;
     this.brokerSocket = brokerSocket;
     this.capabilities = capabilities;
+    this.sessionRefreshIntervalMs = sessionRefreshIntervalMs;
+    this.setInterval = setIntervalImpl;
+    this.clearInterval = clearIntervalImpl;
     this.sleep = sleepImpl;
     this.logger = logger;
     this.ws = null;
     this.alive = false;
     this.backoffMs = INITIAL_BACKOFF_MS;
     this.attaches = new Map();
+    this.refreshTimer = null;
+    this.refreshInFlight = null;
   }
 
   start() {
@@ -60,6 +69,7 @@ export class CloudBrokerClient extends EventEmitter {
 
   stop() {
     this.alive = false;
+    this._stopSessionRefreshLoop();
     if (this.ws) {
       try { this.ws.close(1000, 'stopping'); } catch {}
       this.ws = null;
@@ -103,9 +113,8 @@ export class CloudBrokerClient extends EventEmitter {
         ...(this.mcVersion ? { mc_version: this.mcVersion } : {}),
         capabilities: this.capabilities,
       });
-      this.refreshSessions().catch((err) => {
-        this._send({ type: 'sessions_error', error: err.message || String(err) });
-      });
+      this._startSessionRefreshLoop();
+      this._refreshSessionsSafe();
     });
 
     addWsListener(ws, 'message', (event) => {
@@ -116,6 +125,7 @@ export class CloudBrokerClient extends EventEmitter {
 
     addWsListener(ws, 'close', () => {
       if (this.ws === ws) this.ws = null;
+      this._stopSessionRefreshLoop();
       this._scheduleReconnect();
     });
 
@@ -129,7 +139,7 @@ export class CloudBrokerClient extends EventEmitter {
     if (!msg || typeof msg.type !== 'string') return;
     if (msg.type === 'ack') return;
     if (msg.type === 'refresh_sessions' || msg.type === 'list_sessions') {
-      await this.refreshSessions();
+      await this._refreshSessionsSafe();
       return;
     }
     if (msg.type === 'attach_request') {
@@ -170,6 +180,32 @@ export class CloudBrokerClient extends EventEmitter {
     if (!this.ws || this.ws.readyState !== 1) return false;
     this.ws.send(JSON.stringify(message));
     return true;
+  }
+
+  _startSessionRefreshLoop() {
+    this._stopSessionRefreshLoop();
+    if (!Number.isFinite(this.sessionRefreshIntervalMs) || this.sessionRefreshIntervalMs <= 0) return;
+    this.refreshTimer = this.setInterval(() => this._refreshSessionsSafe(), this.sessionRefreshIntervalMs);
+    this.refreshTimer?.unref?.();
+  }
+
+  _stopSessionRefreshLoop() {
+    if (!this.refreshTimer) return;
+    this.clearInterval(this.refreshTimer);
+    this.refreshTimer = null;
+  }
+
+  _refreshSessionsSafe() {
+    if (!this.alive || !this.ws || this.ws.readyState !== 1) return Promise.resolve(null);
+    if (this.refreshInFlight) return this.refreshInFlight;
+    this.refreshInFlight = this.refreshSessions().catch((err) => {
+      this._send({ type: 'sessions_error', error: err.message || String(err) });
+      this.logger.warn(`[broker-cloud] session refresh failed: ${err.message || String(err)}`);
+      return null;
+    }).finally(() => {
+      this.refreshInFlight = null;
+    });
+    return this.refreshInFlight;
   }
 
   async _scheduleReconnect() {

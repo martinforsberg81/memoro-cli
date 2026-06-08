@@ -155,6 +155,54 @@ describe('CloudBrokerClient', () => {
     client.stop();
   });
 
+  test('refreshes session inventory periodically while connected', async () => {
+    resetFakeWs();
+    let tick = null;
+    let cleared = null;
+    const inventories = [
+      [{ id: 'sess_old' }],
+      [{ id: 'sess_current' }],
+    ];
+    const client = new CloudBrokerClient({
+      apiUrl: 'https://memoro.test',
+      token: 'tok',
+      machineId: 'machine',
+      WebSocketImpl: FakeWebSocket,
+      request: async () => ({ ok: true, sessions: inventories.shift() || [] }),
+      sessionRefreshIntervalMs: 25,
+      setIntervalImpl: (fn, ms) => {
+        tick = fn;
+        return { ms, unref() {} };
+      },
+      clearIntervalImpl: (timer) => {
+        cleared = timer;
+      },
+      sleepImpl: async () => {},
+    });
+
+    client.start();
+    const control = FakeWebSocket.instances[0];
+    control.open();
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.equal(typeof tick, 'function');
+    assert.deepEqual(JSON.parse(control.sent.at(-1)), {
+      type: 'sessions',
+      machine_id: 'machine',
+      sessions: [{ id: 'sess_old' }],
+    });
+
+    await tick();
+    assert.deepEqual(JSON.parse(control.sent.at(-1)), {
+      type: 'sessions',
+      machine_id: 'machine',
+      sessions: [{ id: 'sess_current' }],
+    });
+
+    client.stop();
+    assert.ok(cleared);
+  });
+
   test('handles attach_request by creating a broker-side attach stream', async () => {
     resetFakeWs();
     const local = makeLocalSocket();
