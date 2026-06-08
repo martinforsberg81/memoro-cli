@@ -100,13 +100,12 @@ tool state intact.
   Reading MEMORO.md at startup is not enough; 0.7.6 itself proved that shipped
   work can leave the map stale unless reconciliation is prompted deliberately.
   Design is now locked: `/mc map` is primarily an in-session reconciliation
-  habit, not a terminal CRUD surface; mc supplies a small deterministic evidence
-  packet and a strict prompt, then the coordinator decides whether a focused
-  MEMORO.md patch is warranted. Slice 1 shipped the managed session affordance:
-  `/mc map` is the single user-facing habit across tools; Claude gets a managed
-  `/mc` command that handles `map`, and grounding/canon teaches other tools the
-  same convention. Next slices are evidence-procedure hardening, then only later
-  optional terminal preview/dispatch and status/list/end tripwires. Avoid hidden
+  habit, not a terminal CRUD surface; it is a concise prompt to the live LLM
+  session to update `MEMORO.md` if the roadmap needs it. Slice 1 shipped the
+  managed session affordance: `/mc map` is the single user-facing habit across
+  tools; Claude gets a managed `/mc` command that handles `map`, and
+  grounding/canon teaches other tools the same convention. Next slices are
+  live-use polish and later optional status/list/end tripwires. Avoid hidden
   background edits, duplicate `/mc end` reconciliation flow, and PM-style map
   CRUD.
   → `docs/plans/map-reconciliation.md`

@@ -14,8 +14,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Coordinator sessions now have an in-session MEMORO.md reconciliation habit:
   `/mc map` is the user-facing command across tools. Claude Code gets a
   managed `/mc` command that handles `map`, while grounding teaches other
-  tools the same convention. The flow is prompt/procedure only; it does not
-  add a terminal `mc map` command or auto-edit the map.
+  tools the same convention. The flow is a concise in-session prompt; it does
+  not add a terminal `mc map` command or auto-edit the map.
 
 ### Fixed
 - Codex sessions launched by `mc` now get a guarded PATH that blocks direct

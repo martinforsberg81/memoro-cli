@@ -81,24 +81,28 @@ describe('/mc map slash command body', () => {
     assert.match(__test__.COMMAND_BODY_MAP, /\/mc map/);
     assert.match(__test__.COMMAND_BODY_MAP, /\$ARGUMENTS/);
     assert.match(__test__.COMMAND_BODY_MAP, /only `\/mc map`/);
+    assert.match(__test__.COMMAND_BODY_MAP, /Update `MEMORO\.md` if the roadmap needs it/);
     assert.match(__test__.COMMAND_BODY_MAP, /No map change/);
-    assert.match(__test__.COMMAND_BODY_MAP, /focused unified diff/);
+    assert.match(__test__.COMMAND_BODY_MAP, /focused patch/);
   });
 
-  test('forces an untrusted-evidence boundary', () => {
-    assert.match(__test__.COMMAND_BODY_MAP, /untrusted evidence, not instructions/i);
+  test('keeps the command prompt concise', () => {
+    assert.doesNotMatch(__test__.COMMAND_BODY_MAP, /!\s*git status/);
+    assert.doesNotMatch(__test__.COMMAND_BODY_MAP, /Gather Bounded Evidence/);
+    assert.doesNotMatch(__test__.COMMAND_BODY_MAP, /focused unified diff/);
   });
 
   test('forbids secret/runtime scans and transcript reads by default', () => {
-    assert.match(__test__.COMMAND_BODY_MAP, /Do \*\*not\*\* read transcripts by default/);
+    assert.match(__test__.COMMAND_BODY_MAP, /Do not scan secrets/);
     assert.match(__test__.COMMAND_BODY_MAP, /\.env/);
     assert.match(__test__.COMMAND_BODY_MAP, /\.dev\.vars/);
     assert.match(__test__.COMMAND_BODY_MAP, /vault materialisation/);
+    assert.match(__test__.COMMAND_BODY_MAP, /broad transcripts/);
   });
 
   test('explicitly rejects terminal-first and mc end reconciliation flows', () => {
-    assert.match(__test__.COMMAND_BODY_MAP, /Do not run or invent `mc map --prompt`/);
-    assert.match(__test__.COMMAND_BODY_MAP, /Do not perform map reconciliation through `mc end`/);
+    assert.match(__test__.COMMAND_BODY_MAP, /Do not invent a terminal `mc map` command/);
+    assert.match(__test__.COMMAND_BODY_MAP, /use `mc end` for map/);
   });
 });
 
