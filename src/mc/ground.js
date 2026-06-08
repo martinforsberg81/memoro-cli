@@ -574,11 +574,7 @@ export function buildRole(cwd, { exists = existsSync, canon = readPackageCanon }
       'design beats a faster-but-unexamined one.',
     '',
     'Session command habit:',
-    '- When the user writes `/mc map`, update `MEMORO.md` if the roadmap needs ' +
-      'it. Keep it short: use the session context and only the repo evidence ' +
-      'you need, say "No map change" if nothing durable changed, avoid secrets ' +
-      'and broad transcripts, and do not invent a terminal `mc map` workflow or ' +
-      'reconcile through `mc end`.',
+    '- When the user writes `/mc map`, update `MEMORO.md` if needed.',
   ];
   if (repoRefs.length) {
     lines.push('', 'Repo-local coordinator sources available to read:');

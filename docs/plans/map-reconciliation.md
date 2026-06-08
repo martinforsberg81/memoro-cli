@@ -13,8 +13,7 @@ surface. The normal user flow is:
 
 1. The user is inside a coordinator session.
 2. The user writes `/mc map`.
-3. The LLM receives a concise prompt: update `MEMORO.md` if the roadmap needs
-   it.
+3. The LLM receives a concise prompt: update `MEMORO.md` if needed.
 4. The LLM uses its existing session grounding plus normal repo inspection to
    decide whether `MEMORO.md` needs a focused patch.
 5. If yes, the coordinator edits `MEMORO.md` deliberately and commits it as
@@ -73,13 +72,7 @@ The managed prompt should be short. The LLM already has coordinator grounding
 and is capable of inspecting the repo when needed.
 
 ```text
-Update MEMORO.md if the roadmap needs it.
-
-Keep this short. Use the session context and inspect only the repo evidence you
-need. If nothing durable changed, say "No map change" with a short reason. If
-the map should change, edit MEMORO.md or propose a focused patch. Do not scan
-secrets or broad transcripts. Do not invent a terminal mc map command or use mc
-end for map reconciliation.
+Update MEMORO.md if needed.
 ```
 
 The detail discipline still comes from `MEMORO.md` itself: sparse nodes, durable
@@ -176,9 +169,8 @@ Install the session habit before any terminal command.
 - Codex: update grounding/canon so `/mc map` is understood as a session
   instruction.
 
-The command/canon body should contain the short prompt, the "No map change"
-fallback, and the key safety boundaries. It should not bake in a command list or
-turn map reconciliation into a procedure.
+The command/canon body should contain only the short prompt. It should not bake
+in a command list, safety checklist, fallback taxonomy, or procedure.
 
 ### Slice 2 - Live-Use Polish
 
@@ -187,7 +179,6 @@ practice:
 
 - whether the prompt is short enough to feel natural
 - whether the LLM edits too much or too little
-- whether the "No map change" path is clear
 - whether the banner/help text points users at the habit without overexplaining
 
 ### Slice 3 - Optional Prompt Helper
@@ -230,9 +221,9 @@ session habit exists. Keep it deterministic and advisory.
 
 ## Test Plan
 
-- Managed command/canon: contains a concise `/mc map` prompt.
-- Managed command/canon: asks the LLM to update the map or say "No map change."
-- Safety: command/canon forbids dotenv/vault materialisation scans.
+- Managed command/canon: contains only a concise `/mc map` prompt.
+- Managed command/canon: does not contain shell commands, safety checklists, or
+  procedure text.
 - Compatibility: Claude command installation is idempotent and managed.
 - Compatibility: Codex grounding/canon includes the `/mc map` convention without
   editing repo-owned instructions unexpectedly.

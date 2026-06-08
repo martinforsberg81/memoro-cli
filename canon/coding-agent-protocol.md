@@ -67,18 +67,8 @@ only the invocation differs.
 
 ## Session command: `/mc map`
 
-When the user writes `/mc map` inside a coordinator session, treat it
-as a short prompt: update `MEMORO.md` if the roadmap needs it.
-
-Use the session context and inspect only the repo evidence you need.
-If nothing durable changed, say **"No map change"** with a short
-reason. If the map should change, edit `MEMORO.md` or propose a
-focused patch, and remind the user to commit it as cross-session
-project state.
-
-Do not scan secrets, `.env`, `.dev.vars`, vault materialisation files,
-generated secret/runtime files, or broad transcripts. Do not invent a
-terminal `mc map` command or reconcile through `mc end`.
+When the user writes `/mc map` inside a coordinator session, update
+`MEMORO.md` if needed.
 
 ## Code conventions
 

@@ -155,23 +155,7 @@ description: Update MEMORO.md if needed
 
 ${COMMAND_MARKER}
 
-The user invoked **/mc $ARGUMENTS**.
-
-If the argument is not exactly \`map\`, explain that this managed mc session
-command currently supports only \`/mc map\`, then stop.
-
-Update \`MEMORO.md\` if the roadmap needs it.
-
-Keep this short:
-- Use the coordinator instructions already loaded for this session.
-- Inspect only the repo evidence you need.
-- If nothing durable changed, say **"No map change"** with a short reason.
-- If the map should change, edit \`MEMORO.md\` or propose a focused patch.
-- Do not scan secrets, \`.env\`, \`.dev.vars\`, vault materialisation files, or
-  broad transcripts.
-- Do not invent a terminal \`mc map\` command or use \`mc end\` for map
-  reconciliation.
-- After editing, remind the user to commit \`MEMORO.md\`.
+Update \`MEMORO.md\` if needed.
 `;
 
 // ─────────────────────────────────────────────────────────────────────────────
