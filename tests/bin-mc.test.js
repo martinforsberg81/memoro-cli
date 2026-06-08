@@ -81,11 +81,12 @@ describe('renderIntro', () => {
   test('mentions the coordinator slash command + cli help', () => {
     const plain = stripAnsi(renderIntro(ctx));
     assert.match(plain, /\/memoro-coordinator/);
-    assert.match(plain, /\/memoro-map/);
+    assert.match(plain, /\/mc map/);
+    assert.doesNotMatch(plain, /\/memoro-map/);
     assert.match(plain, /mc --help/);
   });
 
-  test('uses the /mc map convention for Codex launches', () => {
+  test('uses the same /mc map convention for Codex launches', () => {
     const plain = stripAnsi(renderIntro({ ...ctx, tool: 'Codex CLI' }));
     assert.match(plain, /\/mc map/);
     assert.doesNotMatch(plain, /\/memoro-map/);

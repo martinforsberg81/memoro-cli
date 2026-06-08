@@ -6,7 +6,7 @@
 
 import assert from 'node:assert/strict';
 import test, { describe, before, after, beforeEach } from 'node:test';
-import { mkdtempSync, rmSync, existsSync, writeFileSync, readFileSync, readdirSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, existsSync, writeFileSync, readFileSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -60,12 +60,27 @@ describe('claude-code adapter — slash command install', () => {
     const userFile = join(sandbox, '.claude', 'commands', 'memoro-notes.md');
     writeFileSync(userFile, '# My own notes command\n\n!echo hi\n');
 
+    const managedMcFile = join(sandbox, '.claude', 'commands', 'mc.md');
+    writeFileSync(managedMcFile, '<!-- memoro:managed:command -->\nmanaged /mc\n');
+
     const removed = await uninstallCommands();
-    assert.equal(removed.length, 2);
+    assert.equal(removed.length, 3);
 
     assert.ok(existsSync(userFile), 'user-authored file must survive uninstall');
     assert.ok(!existsSync(join(sandbox, '.claude', 'commands', 'memoro-loose-ends.md')));
     assert.ok(!existsSync(join(sandbox, '.claude', 'commands', 'memoro-rules.md')));
+    assert.ok(!existsSync(managedMcFile));
+  });
+
+  test('uninstall does not remove hand-authored /mc command', async () => {
+    const commandsDir = join(sandbox, '.claude', 'commands');
+    mkdirSync(commandsDir, { recursive: true });
+    const mcFile = join(commandsDir, 'mc.md');
+    writeFileSync(mcFile, '# user-owned /mc command\n');
+
+    const removed = await uninstallCommands();
+    assert.deepEqual(removed, []);
+    assert.ok(existsSync(mcFile), 'user-owned /mc command must survive uninstall');
   });
 
   test('uninstall is a no-op when commands dir does not exist', async () => {

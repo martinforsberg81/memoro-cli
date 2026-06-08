@@ -262,10 +262,11 @@ export async function uninstallCommands() {
 
   const removed = [];
   for (const name of entries) {
-    if (!name.startsWith(COMMAND_PREFIX) || !name.endsWith('.md')) continue;
+    const isManagedName = name === 'mc.md' || (name.startsWith(COMMAND_PREFIX) && name.endsWith('.md'));
+    if (!isManagedName) continue;
     const file = join(commandsDir(), name);
     // Defense in depth: only delete files that carry our managed marker,
-    // so a hand-authored `memoro-notes.md` the user dropped here isn't
+    // so a hand-authored `memoro-notes.md` or `mc.md` isn't
     // swept up by uninstall.
     try {
       const content = await readFile(file, 'utf8');

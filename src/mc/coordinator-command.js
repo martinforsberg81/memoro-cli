@@ -1,23 +1,24 @@
 /**
  * Coordinator slash command bootstrap.
  *
- * Drops two managed files into ~/.claude/commands/ on first `mc` run
- * (and overwrites them on subsequent runs so updates land automatically):
+ * Drops managed files into ~/.claude/commands/ on first `mc` run. Managed
+ * files are refreshed on subsequent runs so updates land automatically; an
+ * existing hand-authored file without our marker is left untouched.
  *
  *   memoro-coordinator.md          /memoro-coordinator   — overview + route
  *   memoro-coordinator-suggest.md  /memoro-coordinator-suggest
  *                                                       — analyse + suggest
  *                                                         next step per
  *                                                         session
- *   memoro-map.md                  /memoro-map           — run the /mc map
+ *   mc.md                          /mc map               — run the /mc map
  *                                                         reconciliation
  *                                                         habit in-session
  *
- * Both files carry the same `<!-- memoro:managed:command -->` marker the
+ * All files carry the same `<!-- memoro:managed:command -->` marker the
  * existing adapter uses, so `memoro-cli hook uninstall` cleans them up.
  */
 
-import { writeFile, mkdir, readFile } from 'node:fs/promises';
+import { writeFile, mkdir, readFile, unlink } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
@@ -90,8 +91,7 @@ Skip your own session in the list (or mark it as "(this session)").
 - If the user wants per-session **suggestions for next step**, recommend
   they run \`/memoro-coordinator-suggest\` — that command is built for it.
 - If the user wants to reconcile the roadmap after shipped or redirected
-  work, recommend \`/memoro-map\`. That command implements the product habit
-  \`/mc map\` inside this session.
+  work, recommend \`/mc map\`.
 
 You are the user's project lead across their parallel work. Be concise
 and decisive.
@@ -146,17 +146,22 @@ Be concise. The user has many sessions and limited attention.
 `;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// /memoro-map — in-session MEMORO.md reconciliation habit
+// /mc map — in-session MEMORO.md reconciliation habit
 // ─────────────────────────────────────────────────────────────────────────────
 
 const COMMAND_BODY_MAP = `---
-description: Reconcile MEMORO.md from inside this coordinator session
+description: Run mc session commands; currently supports /mc map
 ---
 
 ${COMMAND_MARKER}
 
 ! git status --short --branch
 ! git log -1 --format=%H -- MEMORO.md 2>/dev/null || true
+
+The user invoked **/mc $ARGUMENTS**.
+
+If the argument is not exactly \`map\`, explain that this managed mc session
+command currently supports only \`/mc map\`, then stop.
 
 You are running the **/mc map** reconciliation habit. This is in-session
 coordinator work: decide whether \`MEMORO.md\` needs a focused update, then
@@ -225,13 +230,13 @@ async function ensureFile(name, body) {
     if (!existsSync(dir)) {
       await mkdir(dir, { recursive: true, mode: 0o700 });
     }
-    // Overwrite only if content differs — avoids needless fs writes but
-    // ensures updates to the canonical body propagate to existing installs
-    // without requiring `memoro-cli hook install --tool claude-code` again.
+    // Overwrite only managed files. This is especially important for mc.md:
+    // `/mc` is generic enough that a user may already own it.
     if (existsSync(path)) {
       try {
         const existing = await readFile(path, 'utf8');
         if (existing === body) return false;
+        if (!existing.includes(COMMAND_MARKER)) return false;
       } catch { /* fall through and overwrite */ }
     }
     await writeFile(path, body, { mode: 0o644 });
@@ -241,10 +246,37 @@ async function ensureFile(name, body) {
   }
 }
 
+async function removeManagedFile(name) {
+  const path = join(COMMANDS_DIR(), name);
+  try {
+    if (!existsSync(path)) return false;
+    const existing = await readFile(path, 'utf8');
+    if (!existing.includes(COMMAND_MARKER)) return false;
+    await unlink(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function isManagedFile(name) {
+  const path = join(COMMANDS_DIR(), name);
+  try {
+    if (!existsSync(path)) return false;
+    const existing = await readFile(path, 'utf8');
+    return existing.includes(COMMAND_MARKER);
+  } catch {
+    return false;
+  }
+}
+
 export async function ensureCoordinatorSlashCommand() {
   await ensureFile('memoro-coordinator.md', COMMAND_BODY);
   await ensureFile('memoro-coordinator-suggest.md', COMMAND_BODY_SUGGEST);
-  await ensureFile('memoro-map.md', COMMAND_BODY_MAP);
+  await ensureFile('mc.md', COMMAND_BODY_MAP);
+  if (await isManagedFile('mc.md')) {
+    await removeManagedFile('memoro-map.md');
+  }
 }
 
 // Exported for tests.
