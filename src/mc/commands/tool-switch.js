@@ -1,9 +1,9 @@
 /**
  * `mc tool-switch <tool> [--dry-run] [--force] [--json]` (plan §13d).
  *
- * Make a different coding tool the default for future `mc new` / `mc
- * resume` invocations. Existing sessions are immutable — they keep the
- * tool they spawned with.
+ * Make a different coding tool the default for future bare `mc` / `mc new`
+ * invocations. Existing sessions keep their stored tool until the user
+ * relaunches them explicitly with `mc resume <name> --codex/--claude`.
  *
  * Five phases per §13d:
  *   1. Resolve the target adapter (`claude-code` | `codex` | `gemini-cli`).
@@ -12,13 +12,11 @@
  *      authority lives in the verbs (pattern 1), so we never re-author
  *      the hint here.
  *   3. Persist the new default in `~/.memoro/config.json` under
- *      `defaultTool`. (Consumer wiring in `mc new` / `mc resume` lands as
- *      a follow-up — they still hardcode 'claude' today. The switch is
- *      a no-op for them until that follow-up ships; this is documented
- *      in the PR body so it can't slip silently.)
+ *      `defaultTool`.
  *   4. Run `mc adapter sync` for the target tool only by calling
  *      `runSyncWith({ tool, force, dryRun }, deps)`. Drift on the target
- *      without `--force` aborts the switch.
+ *      without `--force` leaves the default switch intact but refuses to
+ *      overwrite the wrapper.
  *   5. After the target sync succeeds, surface drift state across ALL
  *      tools (not just the target) using `planSync` — the "drift surface"
  *      mentioned in §13d step 5. Co-existence is by design; we never
@@ -42,6 +40,8 @@ import {
 import {
   runSyncWith,
   defaultDeps as defaultSyncDeps,
+  resolveCanonicalContent,
+  comparableWrapperContent,
 } from './adapter.js';
 
 const CANONICAL_PATH = 'docs/coding-agent-protocol.md';
@@ -62,47 +62,36 @@ export async function run(argv) {
     return 2;
   }
 
-  // Mid-session switch (`mc tool-switch <tool> --here`, runnable inline as
-  // `!mc tool-switch codex --here`): re-ground the CURRENT worktree into
-  // the target tool's native instruction file + persist the tool, so the
-  // NEXT launch of this session comes up under the new LLM. Distinct from
-  // the default form, which only flips the default for FUTURE `mc new`.
-  if (opts.here) {
-    return runSwitchHere(opts, defaultHereDeps());
-  }
-
   return runSwitchWith(opts, defaultDeps());
 }
 
 function printHelp() {
-  process.stdout.write(`mc tool-switch — switch coding tool: default for new sessions, or this one (plan §13d, §5)
+  process.stdout.write(`mc tool-switch — set the default coding tool (plan §13d)
 
 USAGE
-  mc tool-switch <tool> [--dry-run] [--force] [--json]   # flip the DEFAULT
-  mc tool-switch <tool> --here [--dry-run] [--json]       # switch THIS session
+  mc tool-switch <tool> [--dry-run] [--force] [--json]
 
 ARGUMENTS
   <tool>          One of: ${[...KNOWN_TOOL_NAMES].join(', ')}
 
 FLAGS
-  --here          Switch the CURRENT session: re-ground this worktree into
-                  the target tool's native file + persist the per-session
-                  tool, then print the relaunch command. Runnable inline
-                  from inside a session as \`!mc tool-switch <tool> --here\`.
   --dry-run       Report planned changes without writing
   --force         Overwrite drift on the target tool's instruction file
   --json          Machine-readable report
 
-WHAT IT DOES (default form)
+WHAT IT DOES
   1. Verifies the target tool is installed + authenticated
   2. Updates the persisted default tool (~/.memoro/config.json)
   3. Runs \`mc adapter sync --tool <tool>\` for the target
   4. Reports drift across all tools at the end
 
-The default form doesn't touch existing sessions — only future \`mc new\`
-and \`mc resume\` defaults. Use \`--here\` to switch the session you're in;
-the same worktree, branch, and grounding bundle persist — only the LLM
-and its native instruction file change.
+Wrapper drift never blocks saving the default. It only blocks overwriting
+the target instruction file unless you pass --force.
+
+This does not touch existing sessions. To relaunch one existing session with
+a different tool, exit the current tool completely and run:
+  mc resume <name> --codex
+  mc resume <name> --claude
 
 EXIT CODES
   0   success (or dry-run with no blockers)
@@ -120,13 +109,12 @@ function printUsage() {
 // ─────────────────────────────────────────────────────────────
 
 export function parseArgs(argv) {
-  const opts = { tool: null, dryRun: false, force: false, json: false, here: false };
+  const opts = { tool: null, dryRun: false, force: false, json: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--dry-run') { opts.dryRun = true; continue; }
     if (a === '--force')   { opts.force = true; continue; }
     if (a === '--json')    { opts.json = true; continue; }
-    if (a === '--here')    { opts.here = true; continue; }
     if (a.startsWith('--')) {
       // Preserve json-state on error so the dispatcher can emit JSON if
       // requested (a flag-order corner case the user shouldn't suffer).
@@ -214,142 +202,6 @@ export function composeSwitchPlan({ target, previous }) {
     previous: previous ?? null,
     targetChanged: previous !== target,
   };
-}
-
-/**
- * Find the registry entry whose worktree contains `cwd` — used by the
- * mid-session `--here` switch to identify which session is being switched.
- * Matches the deepest worktree path that is a prefix of cwd (handles a cwd
- * nested under the worktree root). Pure: (cwd, entries) → entry|null.
- */
-export function findEntryByCwd(cwd, entries) {
-  if (!cwd || !Array.isArray(entries)) return null;
-  const norm = (p) => (p && !p.endsWith('/') ? p + '/' : p);
-  const target = norm(cwd);
-  let best = null;
-  for (const e of entries) {
-    const wt = e?.worktree_path;
-    if (!wt) continue;
-    const wtNorm = norm(wt);
-    if (target === wtNorm || target.startsWith(wtNorm)) {
-      if (!best || wt.length > best.worktree_path.length) best = e;
-    }
-  }
-  return best;
-}
-
-/**
- * The exact command the user re-runs to bring the session up under the new
- * tool. Pure. We do NOT auto-relaunch: a mid-session switch is invoked
- * inline (`!mc ...`) from *inside* the old tool, which still owns the TTY —
- * spawning a nested PTY there is unsafe. The minimal-safe contract is
- * "re-ground + persist now; you relaunch". A named session uses `mc
- * resume`; an unregistered in-place session re-runs bare `mc`.
- */
-export function relaunchCommand({ sessionName }) {
-  return sessionName ? `mc resume ${sessionName}` : 'mc';
-}
-
-// ─────────────────────────────────────────────────────────────
-// Mid-session switch (`--here`) — re-ground + persist, user relaunches
-// ─────────────────────────────────────────────────────────────
-
-export function defaultHereDeps() {
-  return {
-    cwd: () => process.cwd(),
-    insideSession: () => process.env.MEMORO_MC_PARENT === '1',
-    readEntries: async () => {
-      const { readRegistry } = await import('../registry.js');
-      return readRegistry().entries;
-    },
-    persistTool: async (name, shortName) => {
-      const { upsertEntry } = await import('../registry.js');
-      upsertEntry({ name, tool: shortName });
-    },
-    ground: async ({ cwd, adapter }) => {
-      const { groundSession } = await import('../ground.js');
-      return groundSession({ cwd, adapter });
-    },
-    resolveLaunch: async (tool) => {
-      const { resolveLaunch } = await import('../../adapters/index.js');
-      return resolveLaunch(tool);
-    },
-  };
-}
-
-/**
- * In-process mid-session switch. Re-renders the SAME grounding bundle via
- * the target adapter (so it lands in that tool's native file), persists
- * the per-session tool, and prints the relaunch command. Never spawns —
- * the user relaunches, which keeps the old tool's TTY ownership safe.
- */
-export async function runSwitchHere(opts, deps) {
-  // Resolve the target tool's launcher up front (fails high on
-  // unknown/planned/missing-bin — same contract as the wrap launcher).
-  const launch = await deps.resolveLaunch(opts.tool);
-  if (!launch.ok) {
-    return emitError(`cannot switch to "${opts.tool}": ${launch.hint}`, 1, opts);
-  }
-
-  const cwd = deps.cwd();
-  const entries = await deps.readEntries();
-  const entry = findEntryByCwd(cwd, entries);
-  const sessionName = entry?.name || null;
-
-  if (!deps.insideSession() && !entry) {
-    // Not obviously in an mc session and no worktree match — still allow
-    // (re-ground in place), but note it so the user isn't surprised.
-  }
-
-  // Re-ground the cwd into the target tool's instruction file. Soft fail
-  // is surfaced, but persistence still proceeds so the relaunch is correct.
-  let groundResult = { ok: false };
-  try {
-    groundResult = await deps.ground({ cwd, adapter: launch.adapter });
-  } catch (err) {
-    groundResult = { ok: false, reason: err?.message || 'ground failed' };
-  }
-
-  if (sessionName && !opts.dryRun) {
-    try {
-      await deps.persistTool(sessionName, launch.shortName);
-    } catch (err) {
-      return emitError(`re-grounded, but failed to persist tool: ${err?.message ?? String(err)}`, 1, opts);
-    }
-  }
-
-  const relaunch = relaunchCommand({ sessionName });
-
-  if (opts.json) {
-    console.log(JSON.stringify({
-      ok: true,
-      mode: 'here',
-      tool: launch.id,
-      session: sessionName,
-      dry_run: opts.dryRun,
-      grounded: !!groundResult.ok,
-      grounding_path: groundResult.path || null,
-      relaunch,
-    }, null, 2));
-    return 0;
-  }
-
-  const tag = opts.dryRun ? ' [dry-run]' : '';
-  process.stdout.write(`mc tool-switch --here${tag} — ${launch.spec.label}\n\n`);
-  if (groundResult.ok) {
-    process.stdout.write(`  ✓ re-grounded this worktree into ${launch.spec.label} (${groundResult.path})\n`);
-  } else {
-    process.stdout.write(`  · grounding skipped (${groundResult.reason || 'unknown'}) — relaunch will re-ground\n`);
-  }
-  if (sessionName) {
-    process.stdout.write(opts.dryRun
-      ? `  + would set session "${sessionName}" tool → ${launch.shortName}\n`
-      : `  ✓ session "${sessionName}" tool → ${launch.shortName}\n`);
-  } else {
-    process.stdout.write(`  · no registered session for this cwd — re-grounded in place only\n`);
-  }
-  process.stdout.write(`\nExit your current tool, then relaunch:\n  ${relaunch}\n`);
-  return 0;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -484,16 +336,7 @@ export async function runSwitchWith(opts, deps) {
     if (opts.json && captured.stdout) process.stdout.write(captured.stdout);
     return 2;
   }
-  if (captured.code === 1) {
-    // sync refused (drift detected, target tool only). Print the sync
-    // output verbatim and abort — don't flip the default.
-    process.stdout.write(captured.stdout);
-    process.stderr.write(captured.stderr);
-    if (!opts.json) {
-      process.stderr.write(`\nmc: refusing to switch to ${target.id} — target instruction file has drift. Re-run with --force to overwrite.\n`);
-    }
-    return 1;
-  }
+  const syncRefused = captured.code === 1;
 
   // ── Phase 3 (write): persist the new default. Dry-run skips. ─────
   if (!opts.dryRun && plan.targetChanged) {
@@ -520,7 +363,12 @@ export async function runSwitchWith(opts, deps) {
       current: plan.target,
       target_changed: plan.targetChanged,
       dry_run: opts.dryRun,
-      sync: { actions: extractSyncActions(captured.stdout, opts.json) },
+      sync: {
+        ok: !syncRefused,
+        refused: syncRefused,
+        warning: syncRefused ? syncRefusalWarning(target.id, opts.dryRun) : null,
+        actions: extractSyncActions(captured.stdout, opts.json),
+      },
       drift: allDrift,
     }, null, 2));
     return 0;
@@ -533,6 +381,7 @@ export async function runSwitchWith(opts, deps) {
     targetLabel: target.label,
     dryRun: opts.dryRun,
     syncOutput: captured.stdout,
+    syncWarning: syncRefused ? syncRefusalWarning(target.id, opts.dryRun) : null,
     drift: allDrift,
   });
   return 0;
@@ -589,12 +438,12 @@ async function computeAllToolsDrift(adapters, syncDeps) {
     const root = syncDeps.repoRoot(syncDeps.cwd);
     const { join, isAbsolute } = await import('node:path');
     const canonicalAbs = join(root, CANONICAL_PATH);
-    const canonicalContent = syncDeps.readFileText(canonicalAbs);
+    const canonicalContent = resolveCanonicalContent(syncDeps, canonicalAbs);
     if (canonicalContent == null) {
-      return { ok: false, error: 'canonical source not found', actions: [] };
+      return { ok: false, error: 'canonical source not found and no package canon is available', actions: [] };
     }
     const resolveWrapperPath = (rel) => isAbsolute(rel) ? rel : join(root, rel);
-    const readWrapper = (abs) => syncDeps.readFileText(abs);
+    const readWrapper = (abs) => comparableWrapperContent(syncDeps.readFileText(abs));
     const actions = planSync({
       adapters,
       canonicalPath: CANONICAL_PATH,
@@ -632,7 +481,14 @@ function extractSyncActions(captured, jsonMode) {
   }
 }
 
-function printHumanReport({ plan, targetLabel, dryRun, syncOutput, drift }) {
+function syncRefusalWarning(tool, dryRun) {
+  const prefix = dryRun
+    ? 'target instruction file has drift; default would still be switched'
+    : 'target instruction file has drift; default tool was saved';
+  return `${prefix}, but ${tool} wrapper was not overwritten. Re-run with --force to refresh it.`;
+}
+
+function printHumanReport({ plan, targetLabel, dryRun, syncOutput, syncWarning = null, drift }) {
   const tag = dryRun ? ' [dry-run]' : '';
   process.stdout.write(`mc tool-switch${tag} — target: ${plan.target} (${targetLabel})\n\n`);
 
@@ -648,6 +504,10 @@ function printHumanReport({ plan, targetLabel, dryRun, syncOutput, drift }) {
   if (syncOutput && syncOutput.trim().length) {
     process.stdout.write(`\n${syncOutput}`);
     if (!syncOutput.endsWith('\n')) process.stdout.write('\n');
+  }
+
+  if (syncWarning) {
+    process.stdout.write(`\n  ! ${syncWarning}\n`);
   }
 
   // Cross-tool drift surface.

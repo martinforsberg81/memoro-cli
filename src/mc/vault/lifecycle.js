@@ -37,6 +37,8 @@ import { deriveVaultKeys, decryptSecretPayload } from './client-crypto.js';
 import * as VaultApi from './api.js';
 import { normaliseSecretPayload } from './types.js';
 import { installHook, uninstallHook } from './hook.js';
+import { SECRET_BINDINGS_RELATIVE_PATH, collectBoundLabels, readSecretBindings } from './bindings.js';
+import { REPO_SECRET_TOOL, materialiseRepoBoundSecrets, shredRepoMaterialisation } from './repo-materialise.js';
 import { detectInstalled } from '../../adapters/index.js';
 import { getSecret as keychainGet } from '../../lib/keychain.js';
 import { ACCOUNTS } from '../../commands/auth.js';
@@ -57,7 +59,11 @@ const PASSPHRASE_ENV = 'MC_VAULT_PASSPHRASE';
  */
 const ADAPTER_PROVIDERS = {
   claude:  ['anthropic'],
-  codex:   ['openai'],
+  // Codex commonly authenticates through ChatGPT/Pro, stored in Codex's own
+  // auth file. A generic `provider=openai` vault secret may be for mc/dev use,
+  // not for Codex itself, so do not auto-materialise it into ~/.codex/auth.json.
+  // Add an explicit per-tool secret selection contract before enabling this.
+  codex:   [],
   // gemini stub — once the adapter lands, add ['google']
 };
 
@@ -124,11 +130,11 @@ export async function loadDefaultPortal() {
 }
 
 /**
- * Decrypt all secrets in the vault using the given vault-key and
- * return the subset whose `provider` matches at least one installed
- * adapter.
+ * Decrypt all token-shaped secrets in the vault using the given vault-key.
+ * Matching to adapters happens after decrypt so explicit `target_tool`
+ * can win over legacy provider matching.
  */
-async function pullMatchingSecrets({ portal, vaultKey, installedAdapters }) {
+async function pullMatchingSecrets({ portal, vaultKey }) {
   // Need an unlocked server-side session to list secrets. The cache
   // tells us the user already unlocked at some point, so re-unlock
   // here using the same authHash (we don't have it from cache → we
@@ -139,12 +145,6 @@ async function pullMatchingSecrets({ portal, vaultKey, installedAdapters }) {
   if (!listRes?.ok) {
     return { ok: false, reason: 'list-failed', error: listRes?.error || 'unknown', matches: [] };
   }
-  const wantedProviders = new Set();
-  for (const adapter of installedAdapters) {
-    for (const p of (ADAPTER_PROVIDERS[adapter.TOOL_NAME] || [])) {
-      wantedProviders.add(p);
-    }
-  }
   const matches = [];
   for (const wire of (listRes.secrets || [])) {
     try {
@@ -153,11 +153,16 @@ async function pullMatchingSecrets({ portal, vaultKey, installedAdapters }) {
       if (!norm) continue;
       if (norm.kind !== 'api_token' && norm.kind !== 'oauth_token') continue;
       if (!norm.token) continue;
-      if (!norm.provider || !wantedProviders.has(norm.provider)) continue;
       matches.push({ id: wire.id, label, payload: norm });
     } catch { /* skip undecryptable */ }
   }
   return { ok: true, matches };
+}
+
+async function hasVaultLookupSignal({ deps = {} } = {}) {
+  const cached = await readCachedVaultKey({ deps: deps.cacheDeps }).catch(() => null);
+  if (cached) return true;
+  return !!(deps.env || process.env)[PASSPHRASE_ENV];
 }
 
 /**
@@ -220,51 +225,29 @@ export async function materialiseForSession({
   const ensureDir = deps.mkdir || mkdir;
   await ensureDir(stateDir(), { recursive: true, mode: 0o700 }).catch(() => {});
 
-  const portal = portalOverride || await loadDefaultPortal();
-  if (!portal) {
-    return {
-      ok: false, reason: 'no-memoro-token',
-      materialised: [], skipped: [],
-      hint: 'vault locked — tokens not materialised for this session; run `mc auth memoro` first',
-    };
-  }
-
-  const resolved = await resolveVaultKeyForLifecycle({ portal, deps });
-  if (!resolved) {
-    return {
-      ok: false, reason: 'vault-locked',
-      materialised: [], skipped: [],
-      hint: `vault locked — tokens not materialised for this session; run \`mc vault unlock\` then \`mc resume ${sessionId}\``,
-    };
-  }
-  await ensureUnlocked({ portal, authHash: resolved.authHash });
-
   const installed = adaptersOverride || detectInstalled();
   if (!installed.length) {
     return { ok: true, materialised: [], skipped: [{ reason: 'no-adapters' }] };
   }
 
-  const pull = await pullMatchingSecrets({
-    portal, vaultKey: resolved.vaultKey, installedAdapters: installed,
-  });
-  if (!pull.ok) {
+  const repoBindingScope = worktreePath
+    ? await readRepoBindingScope({ worktreePath, deps })
+    : { present: false, labels: new Set() };
+  if (repoBindingScope.error) {
     return {
-      ok: false, reason: pull.reason, materialised: [], skipped: [],
-      hint: `vault list failed (${pull.error}); session starting without materialised tokens`,
+      ok: false,
+      reason: 'repo-bindings-invalid',
+      materialised: [],
+      skipped: [],
+      hint: `vault bindings invalid at ${SECRET_BINDINGS_RELATIVE_PATH}: ${repoBindingScope.error}`,
     };
   }
 
-  // For each adapter, materialise the FIRST matching secret per location.
-  // Multi-account / per-session selection is §12h (deferred to phase 4).
-  const materialised = [];
+  const explicitTargetLookup = await hasVaultLookupSignal({ deps });
   const skipped = [];
-
+  const candidates = [];
   for (const adapter of installed) {
     const providers = ADAPTER_PROVIDERS[adapter.TOOL_NAME] || [];
-    if (!providers.length) {
-      skipped.push({ tool: adapter.TOOL_NAME, reason: 'no-provider-mapping' });
-      continue;
-    }
     if (typeof adapter.tokenLocations !== 'function') {
       skipped.push({ tool: adapter.TOOL_NAME, reason: 'no-tokenLocations' });
       continue;
@@ -274,9 +257,82 @@ export async function materialiseForSession({
       skipped.push({ tool: adapter.TOOL_NAME, reason: 'empty-locations' });
       continue;
     }
-    const match = pull.matches.find((m) => providers.includes(m.payload.provider));
+    if (!providers.length && !explicitTargetLookup) {
+      skipped.push({ tool: adapter.TOOL_NAME, reason: 'no-provider-mapping' });
+      continue;
+    }
+    candidates.push({ adapter, providers, locations });
+  }
+
+  // Nothing in this session's selected tool needs vault materialisation.
+  // Return before touching Memoro auth or prompting for vault unlock.
+  const needsRepoMaterialisation = !!(worktreePath && repoBindingScope.present && repoBindingScope.labels.size > 0);
+
+  if (!candidates.length && !needsRepoMaterialisation) {
+    return { ok: true, materialised: [], skipped };
+  }
+  if (repoBindingScope.present && repoBindingScope.labels.size === 0 && !needsRepoMaterialisation) {
+    for (const { adapter } of candidates) {
+      skipped.push({ tool: adapter.TOOL_NAME, reason: 'no-repo-bound-secret' });
+    }
+    return { ok: true, materialised: [], skipped };
+  }
+
+  const portal = portalOverride || await loadDefaultPortal();
+  if (!portal) {
+    return {
+      ok: false, reason: 'no-memoro-token',
+      materialised: [], skipped,
+      hint: 'vault locked — tokens not materialised for this session; run `mc auth memoro` first',
+    };
+  }
+
+  const resolved = await resolveVaultKeyForLifecycle({ portal, deps });
+  if (!resolved) {
+    return {
+      ok: false, reason: 'vault-locked',
+      materialised: [], skipped,
+      hint: `vault locked — tokens not materialised for this session; run \`mc vault unlock\` then \`mc resume ${sessionId}\``,
+    };
+  }
+  await ensureUnlocked({ portal, authHash: resolved.authHash });
+
+  const pull = await pullMatchingSecrets({
+    portal, vaultKey: resolved.vaultKey,
+  });
+  if (!pull.ok) {
+    return {
+      ok: false, reason: pull.reason, materialised: [], skipped,
+      hint: `vault list failed (${pull.error}); session starting without materialised tokens`,
+    };
+  }
+  const matches = repoBindingScope.present
+    ? pull.matches.filter((m) => repoBindingScope.labels.has(m.label))
+    : pull.matches;
+
+  // For each adapter, materialise the FIRST matching secret per location.
+  // Multi-account / per-session selection is §12h (deferred to phase 4).
+  const materialised = [];
+
+  if (needsRepoMaterialisation) {
+    const repoRes = await materialiseRepoBoundSecrets({
+      bindings: repoBindingScope.bindings,
+      matches,
+      worktreePath,
+      sessionId,
+      deps,
+    });
+    materialised.push(...repoRes.materialised);
+    skipped.push(...repoRes.skipped);
+  }
+
+  for (const { adapter, providers, locations } of candidates) {
+    const match = matches.find((m) => secretMatchesAdapter(m.payload, adapter, providers));
     if (!match) {
-      skipped.push({ tool: adapter.TOOL_NAME, reason: 'no-matching-secret' });
+      skipped.push({
+        tool: adapter.TOOL_NAME,
+        reason: repoBindingScope.present ? 'no-repo-bound-secret' : providers.length ? 'no-matching-secret' : 'no-provider-mapping',
+      });
       continue;
     }
     for (const location of locations) {
@@ -361,6 +417,29 @@ export async function materialiseForSession({
   return { ok: true, materialised, skipped, hook: hookResult };
 }
 
+async function readRepoBindingScope({ worktreePath, deps = {} }) {
+  try {
+    const bindings = await readSecretBindings({ cwd: worktreePath, deps });
+    if (!bindings) return { present: false, labels: new Set() };
+    return { present: true, labels: collectBoundLabels(bindings), bindings };
+  } catch (err) {
+    return { present: true, labels: new Set(), error: err.message };
+  }
+}
+
+function secretMatchesAdapter(payload, adapter, providers) {
+  const targetTool = normaliseTool(payload.target_tool);
+  if (targetTool) return targetTool === normaliseTool(adapter.TOOL_NAME);
+  return providers.includes(payload.provider);
+}
+
+function normaliseTool(tool) {
+  if (!tool) return null;
+  if (tool === 'claude-code') return 'claude';
+  if (tool === 'gemini-cli') return 'gemini';
+  return String(tool);
+}
+
 /**
  * Shred everything that materialiseForSession wrote. Idempotent —
  * missing manifest / already-shredded files are not errors.
@@ -424,6 +503,16 @@ export async function shredForSession({
   const shredded = [];
   const failures = [];
   for (const m of (manifest.materialised || [])) {
+    if (m.tool === REPO_SECRET_TOOL) {
+      const res = await shredRepoMaterialisation({ location: m.location, deps })
+        .catch((err) => ({ ok: false, reason: err.message }));
+      if (res?.ok) {
+        shredded.push({ tool: m.tool, location: m.location, removed: !!res.removed });
+      } else {
+        failures.push({ tool: m.tool, location: m.location, reason: res?.reason || 'shred-failed' });
+      }
+      continue;
+    }
     const adapter = adapterByTool.get(m.tool);
     if (!adapter || typeof adapter.shredToken !== 'function') {
       failures.push({ tool: m.tool, reason: 'adapter-missing' });

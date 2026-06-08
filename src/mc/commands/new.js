@@ -17,10 +17,10 @@
  * The label-tagging Claude wrap that used to live under `mc new <label>`
  * moved to `mc wrap` — see commands/wrap.js.
  */
-import { mkdirSync, existsSync } from 'node:fs';
-import { join, dirname } from 'node:path';
+import { mkdirSync } from 'node:fs';
+import { dirname } from 'node:path';
 import { findEntry, upsertEntry } from '../registry.js';
-import { worktreePath, mcHome } from '../paths.js';
+import { worktreePath } from '../paths.js';
 import { git, isInsideRepo, primaryWorktree, branchExists } from '../git.js';
 import { emitCd, parseDirectiveFlag } from '../shell-directives.js';
 import { checkAndPrintFreshInstall, ensureSentinel } from '../first-run.js';
@@ -186,43 +186,66 @@ export async function run(rawArgv) {
     return 0;
   }
 
-  // §12d: materialise vault tokens for the session BEFORE re-exec.
-  // The materialised files must exist by the time the spawned tool
-  // reads its credentials path. Soft-degrade: if the vault is locked
-  // or unreachable, print a one-line hint to stderr and continue —
-  // the session just starts without materialised tokens.
+  // Broker-owned process model: the local terminal becomes an attach
+  // client, while the broker owns the PTY and sidecars. Closing the local
+  // terminal detaches without killing the LLM session.
+  return launchNewSession({
+    entry,
+    worktreePath: wt,
+    focus: opts.task,
+    apiArgv: argv,
+  });
+}
+
+export async function launchNewSession({
+  entry,
+  worktreePath,
+  focus = null,
+  apiArgv = [],
+  env = process.env,
+  stderr = process.stderr,
+  deps = {},
+} = {}) {
+  const launchTool = entry?.tool ? resolveToolInput(entry.tool) : null;
+  const materialise = deps.materialiseVaultBeforeLaunch
+    || (await import('../vault/startup.js')).materialiseVaultBeforeLaunch;
+
   try {
-    const { materialiseForSession } = await import('../vault/lifecycle.js');
-    const res = await materialiseForSession({ sessionId: opts.name, worktreePath: wt });
+    const res = await materialise({
+      sessionId: entry.name,
+      worktreePath: worktreePath || undefined,
+      adapters: launchTool?.adapter ? [launchTool.adapter] : undefined,
+    });
     if (!res.ok && res.hint) {
-      process.stderr.write(`mc: ${res.hint}\n`);
+      stderr.write(`mc: ${res.hint}\n`);
     }
   } catch (err) {
-    // Materialisation must never block the session — surface but continue.
-    process.stderr.write(`mc: vault materialise failed (${err.message}); continuing without tokens\n`);
+    stderr.write(`mc: vault materialise failed (${err.message}); continuing without tokens\n`);
   }
 
-  // Broker-owned process model: the local terminal becomes an attach
-  // client, while the broker owns the PTY and sidecars. This preserves
-  // the launch contract but means closing the terminal no longer kills
-  // the LLM session.
-  const launchTool = resolveToolInput(entry.tool);
-  const result = await launchBrokerOwnedSession({
-    cwd: wt,
+  const launch = deps.launchBrokerOwnedSession || launchBrokerOwnedSession;
+  const result = await launch({
+    cwd: worktreePath,
+    sessionName: entry.name,
     label: null,
-    focus: opts.task || null,
-    tool: launchTool?.id || entry.tool,
+    focus,
+    tool: launchTool?.id || entry.tool || 'claude',
     argv: [],
-    apiArgv: argv,
+    apiArgv,
+    env,
+    stderr,
     onLaunched: ({ codingSessionId }) => {
-      upsertEntry({
-        name: opts.name,
+      const upsert = deps.upsertEntry || upsertEntry;
+      upsert({
+        name: entry.name,
         coding_session_id: codingSessionId,
         session_state: 'live',
       });
     },
+    deps: deps.launchDeps || {},
   });
-  return result.code ?? 0;
+  if (typeof result === 'number') return result;
+  return result?.code ?? 0;
 }
 
 /**

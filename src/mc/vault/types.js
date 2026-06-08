@@ -48,9 +48,23 @@ export const WIRE_SECRET_TYPE = 'api_key';
  * @param {string} [opts.account]    - account discriminator, e.g. 'work'
  * @param {string[]} [opts.scopes]   - OAuth scopes (oauth_token only)
  * @param {string} [opts.expiresAt]  - ISO timestamp (oauth_token only)
+ * @param {string} [opts.targetTool] - explicit native-tool target, e.g. 'codex'
+ * @param {string} [opts.targetAuthMode] - explicit auth mode, e.g. 'api_key'
+ * @param {string} [opts.targetLocation] - optional target location id/path
  * @param {object} [opts.extra]      - arbitrary additional fields
  */
-export function buildSecretPayload({ kind, token, provider = null, account = null, scopes = null, expiresAt = null, extra = null }) {
+export function buildSecretPayload({
+  kind,
+  token,
+  provider = null,
+  account = null,
+  scopes = null,
+  expiresAt = null,
+  targetTool = null,
+  targetAuthMode = null,
+  targetLocation = null,
+  extra = null,
+}) {
   if (!MC_SECRET_KINDS.includes(kind)) {
     throw new Error(`unsupported mc secret kind: ${JSON.stringify(kind)} (allowed: ${MC_SECRET_KINDS.join(', ')})`);
   }
@@ -70,6 +84,9 @@ export function buildSecretPayload({ kind, token, provider = null, account = nul
   if (account) payload.account = account;
   if (kind === 'oauth_token' && scopes) payload.scopes = scopes;
   if (kind === 'oauth_token' && expiresAt) payload.expires_at = expiresAt;
+  if (targetTool) payload.target_tool = targetTool;
+  if (targetAuthMode) payload.target_auth_mode = targetAuthMode;
+  if (targetLocation) payload.target_location = targetLocation;
   if (extra && typeof extra === 'object') Object.assign(payload, extra);
   return payload;
 }
@@ -91,12 +108,25 @@ export function normaliseSecretPayload(decrypted) {
     account: decrypted.account || null,
     scopes: Array.isArray(decrypted.scopes) ? decrypted.scopes : null,
     expires_at: decrypted.expires_at || null,
+    target_tool: decrypted.target_tool || null,
+    target_auth_mode: decrypted.target_auth_mode || null,
+    target_location: decrypted.target_location || null,
     extra: stripKnown(decrypted),
   };
 }
 
 function stripKnown(obj) {
-  const known = new Set(['kind', 'token', 'provider', 'account', 'scopes', 'expires_at']);
+  const known = new Set([
+    'kind',
+    'token',
+    'provider',
+    'account',
+    'scopes',
+    'expires_at',
+    'target_tool',
+    'target_auth_mode',
+    'target_location',
+  ]);
   const out = {};
   for (const [k, v] of Object.entries(obj)) {
     if (!known.has(k)) out[k] = v;
@@ -131,19 +161,38 @@ export function formatListJson({ secrets }) {
       label: s.label,
       provider: s.provider,
       account: s.account,
+      target_tool: s.target_tool ?? null,
+      target_auth_mode: s.target_auth_mode ?? null,
+      target_location: s.target_location ?? null,
       created_at: s.created_at,
       updated_at: s.updated_at,
     })),
   };
 }
 
+function listTag(secret) {
+  return secret.provider
+    ? `${secret.kind}:${secret.provider}${secret.account ? `/${secret.account}` : ''}`
+    : secret.kind;
+}
+
+export function formatListWidths(secrets = []) {
+  const rows = Array.isArray(secrets) ? secrets : [];
+  return {
+    label: Math.max('label'.length, ...rows.map((s) => String(s.label || '').length)),
+    kind: Math.max('kind'.length, ...rows.map((s) => listTag(s).length)),
+  };
+}
+
+export function formatListHeader(widths = formatListWidths([])) {
+  return `  ${'label'.padEnd(widths.label)}  ${'kind'.padEnd(widths.kind)}  id`;
+}
+
 /**
  * Pretty (non-JSON) one-line summary of a secret for `mc vault list`.
  * No secret values. Pure for tests.
  */
-export function formatListLine(secret) {
-  const tag = secret.provider
-    ? `${secret.kind}:${secret.provider}${secret.account ? `/${secret.account}` : ''}`
-    : secret.kind;
-  return `  ${secret.label.padEnd(32)}  ${tag.padEnd(28)}  ${secret.id}`;
+export function formatListLine(secret, widths = formatListWidths([secret])) {
+  const tag = listTag(secret);
+  return `  ${String(secret.label || '').padEnd(widths.label)}  ${tag.padEnd(widths.kind)}  ${secret.id}`;
 }

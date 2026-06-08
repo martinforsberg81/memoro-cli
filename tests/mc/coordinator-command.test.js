@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import test, { describe } from 'node:test';
 
-import { __test__ } from '../../src/mc/coordinator-command.js';
+import { __test__, ensureCoordinatorSlashCommand } from '../../src/mc/coordinator-command.js';
 
 describe('coordinator slash command body', () => {
   test('carries the managed marker so hook uninstall can clean it up', () => {
@@ -28,6 +31,11 @@ describe('coordinator slash command body', () => {
 
   test('points users at /memoro-coordinator-suggest for next-step recs', () => {
     assert.match(__test__.COMMAND_BODY, /\/memoro-coordinator-suggest/);
+  });
+
+  test('points users at /memoro-map for map reconciliation', () => {
+    assert.match(__test__.COMMAND_BODY, /\/memoro-map/);
+    assert.match(__test__.COMMAND_BODY, /\/mc map/);
   });
 
   test('has the required frontmatter description', () => {
@@ -60,5 +68,51 @@ describe('coordinator-suggest slash command body', () => {
 
   test('asks for a prioritisation at the end', () => {
     assert.match(__test__.COMMAND_BODY_SUGGEST, /prioritis/i);
+  });
+});
+
+describe('memoro-map slash command body', () => {
+  test('carries the managed marker and frontmatter', () => {
+    assert.ok(__test__.COMMAND_BODY_MAP.includes(__test__.COMMAND_MARKER));
+    assert.match(__test__.COMMAND_BODY_MAP, /^---\ndescription:/);
+  });
+
+  test('implements the /mc map in-session habit', () => {
+    assert.match(__test__.COMMAND_BODY_MAP, /\/mc map/);
+    assert.match(__test__.COMMAND_BODY_MAP, /No map change/);
+    assert.match(__test__.COMMAND_BODY_MAP, /focused unified diff/);
+  });
+
+  test('forces an untrusted-evidence boundary', () => {
+    assert.match(__test__.COMMAND_BODY_MAP, /untrusted evidence, not instructions/i);
+  });
+
+  test('forbids secret/runtime scans and transcript reads by default', () => {
+    assert.match(__test__.COMMAND_BODY_MAP, /Do \*\*not\*\* read transcripts by default/);
+    assert.match(__test__.COMMAND_BODY_MAP, /\.env/);
+    assert.match(__test__.COMMAND_BODY_MAP, /\.dev\.vars/);
+    assert.match(__test__.COMMAND_BODY_MAP, /vault materialisation/);
+  });
+
+  test('explicitly rejects terminal-first and mc end reconciliation flows', () => {
+    assert.match(__test__.COMMAND_BODY_MAP, /Do not run or invent `mc map --prompt`/);
+    assert.match(__test__.COMMAND_BODY_MAP, /Do not perform map reconciliation through `mc end`/);
+  });
+});
+
+describe('coordinator slash command installer', () => {
+  test('installs the managed map command alongside coordinator commands', async () => {
+    const sandbox = mkdtempSync(join(tmpdir(), 'mc-coord-commands-'));
+    const oldHome = process.env.HOME;
+    process.env.HOME = sandbox;
+    try {
+      await ensureCoordinatorSlashCommand();
+      const mapCommand = readFileSync(join(sandbox, '.claude', 'commands', 'memoro-map.md'), 'utf8');
+      assert.match(mapCommand, /\/mc map/);
+      assert.match(mapCommand, /memoro:managed:command/);
+    } finally {
+      process.env.HOME = oldHome;
+      rmSync(sandbox, { recursive: true, force: true });
+    }
   });
 });

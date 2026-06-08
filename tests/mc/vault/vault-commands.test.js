@@ -16,6 +16,9 @@
 
 import { describe, it, before, after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { basename, join } from 'node:path';
+import { tmpdir } from 'node:os';
 
 import { run as vaultRunRaw } from '../../../src/mc/commands/vault.js';
 import { createMockVaultServer, makeTestPortal } from './_helpers/mock-server.js';
@@ -119,6 +122,26 @@ describe('mc vault — full lifecycle (in-process)', () => {
     process.env.MC_VAULT_PASSPHRASE = PW;
   });
 
+  it('unlock reports when the local key cache cannot be written', async () => {
+    await vaultRun(['setup', '--json'], { portal });
+    activeCacheDeps = {
+      async getSecret() { return null; },
+      async setSecret() { throw new Error('keychain unavailable'); },
+      async deleteSecret() {},
+      now: () => Date.now(),
+    };
+    cap.restore(); cap = captureConsole();
+
+    const rc = await vaultRun(['unlock', '--json'], { portal });
+    cap.restore();
+
+    assert.equal(rc, 0);
+    assert.equal(server.inspect().unlocked, true);
+    const out = JSON.parse(cap.out.join('\n'));
+    assert.equal(out.ok, true);
+    assert.equal(out.cache.stored, false);
+  });
+
   it('lock zeroes the server-side unlock flag', async () => {
     await vaultRun(['setup', '--json'], { portal });
     await vaultRun(['unlock', '--json'], { portal });
@@ -175,6 +198,67 @@ describe('mc vault — full lifecycle (in-process)', () => {
     assert.equal(getJson.secret.value, PW, 'get --json should round-trip the value');
   });
 
+  it('set leaves a secret global unless --bind is explicit', async () => {
+    await vaultRun(['setup', '--json'], { portal });
+    const dir = mkdtempSync(join(tmpdir(), 'mc-vault-set-global-'));
+    cap.restore(); cap = captureConsole();
+
+    const rc = await vaultRun(
+      ['set', 'global-openai-test', '--type', 'api_token', '--provider', 'openai', '--account', 'personal', '--json', '--no-confirm'],
+      { portal, cwd: dir },
+    );
+    cap.restore();
+
+    assert.equal(rc, 0, `set failed: ${JSON.stringify({ out: cap.out, err: cap.err })}`);
+    const out = JSON.parse(cap.out.join('\n'));
+    assert.deepEqual(out.writes, []);
+    assert.equal(out.binding, null);
+    assert.equal(existsSync(join(dir, '.mc', 'secrets.json')), false);
+  });
+
+  it('set --bind stores a repo-local value-free binding for a manually created secret', async () => {
+    await vaultRun(['setup', '--json'], { portal });
+    const dir = mkdtempSync(join(tmpdir(), 'mc-vault-set-bind-'));
+    const label = 'env:manual-repo:OPENAI_API_KEY';
+    cap.restore(); cap = captureConsole();
+
+    const rc = await vaultRun(
+      ['set', label, '--type', 'api_token', '--provider', 'env', '--account', 'manual-repo', '--bind', 'OPENAI_API_KEY', '--json', '--no-confirm'],
+      { portal, cwd: dir },
+    );
+    cap.restore();
+
+    assert.equal(rc, 0, `set failed: ${JSON.stringify({ out: cap.out, err: cap.err })}`);
+    const out = JSON.parse(cap.out.join('\n'));
+    assert.deepEqual(out.writes, [{ path: '.mc/secrets.json', action: 'created' }]);
+    assert.equal(out.binding.sources[0].keys.OPENAI_API_KEY, label);
+
+    const bindingsBody = readFileSync(join(dir, '.mc', 'secrets.json'), 'utf8');
+    assert.ok(!bindingsBody.includes(PW), 'binding file must not contain the secret value');
+    assert.deepEqual(JSON.parse(bindingsBody), {
+      version: 1,
+      sources: [
+        {
+          file: '.env',
+          format: 'dotenv',
+          keys: {
+            OPENAI_API_KEY: label,
+          },
+          materialise: 'file',
+        },
+      ],
+    });
+
+    cap = captureConsole();
+    const listRc = await vaultRun(['list', '--json'], { portal });
+    cap.restore();
+    assert.equal(listRc, 0);
+    const list = JSON.parse(cap.out.join('\n'));
+    assert.equal(list.secrets[0].label, label);
+    assert.equal(list.secrets[0].provider, 'env');
+    assert.equal(list.secrets[0].account, 'manual-repo');
+  });
+
   it('set refuses duplicate labels with a pointer at rotate', async () => {
     await vaultRun(['setup', '--json'], { portal });
     cap.restore(); cap = captureConsole();
@@ -186,6 +270,173 @@ describe('mc vault — full lifecycle (in-process)', () => {
     const out = JSON.parse(cap.out.join('\n'));
     assert.match(out.error, /already exists/);
     assert.match(out.error, /rotate/);
+  });
+
+  it('import stores selected dotenv secrets and never echoes values', async () => {
+    await vaultRun(['setup', '--json'], { portal });
+    const dir = mkdtempSync(join(tmpdir(), 'mc-vault-import-live-'));
+    const label = `env:${basename(dir).toLowerCase()}:OPENAI_API_KEY`;
+    const secret = 'import-secret-value-123';
+    writeFileSync(join(dir, '.env'), [
+      `OPENAI_API_KEY=${secret}`,
+      'PUBLIC_API_URL=http://localhost:8787',
+      '',
+    ].join('\n'));
+
+    cap.restore(); cap = captureConsole();
+    const rc = await vaultRun(['import', '.env', '--json', '--no-confirm'], { portal, cwd: dir });
+    cap.restore();
+    assert.equal(rc, 0, `import failed: ${JSON.stringify({ out: cap.out, err: cap.err })}`);
+    const out = JSON.parse(cap.out.join('\n'));
+    assert.equal(out.imported.length, 1);
+    assert.equal(out.imported[0].label, label);
+    assert.equal(out.skipped.some((s) => s.name === 'PUBLIC_API_URL'), true);
+    assert.deepEqual(out.writes, [{ path: '.mc/secrets.json', action: 'created' }]);
+    assert.ok(!JSON.stringify(out).includes(secret), 'import JSON must not leak secret value');
+
+    const bindingsPath = join(dir, '.mc', 'secrets.json');
+    assert.equal(existsSync(bindingsPath), true, 'import must persist repo-local bindings');
+    const bindingsBody = readFileSync(bindingsPath, 'utf8');
+    assert.ok(!bindingsBody.includes(secret), 'binding file must not contain secret value');
+    const bindings = JSON.parse(bindingsBody);
+    assert.deepEqual(bindings, {
+      version: 1,
+      sources: [
+        {
+          file: '.env',
+          format: 'dotenv',
+          keys: {
+            OPENAI_API_KEY: label,
+          },
+          materialise: 'file',
+        },
+      ],
+    });
+
+    cap = captureConsole();
+    const listRc = await vaultRun(['list', '--json'], { portal });
+    cap.restore();
+    assert.equal(listRc, 0);
+    const list = JSON.parse(cap.out.join('\n'));
+    assert.equal(list.secrets.length, 1);
+    assert.equal(list.secrets[0].label, label);
+    assert.equal(list.secrets[0].provider, 'env');
+    assert.equal(list.secrets[0].account, basename(dir).toLowerCase());
+
+    cap = captureConsole();
+    const getRc = await vaultRun(['get', label, '--json'], { portal });
+    cap.restore();
+    assert.equal(getRc, 0);
+    const got = JSON.parse(cap.out.join('\n'));
+    assert.equal(got.secret.value, secret);
+  });
+
+  it('import skips existing labels by default', async () => {
+    await vaultRun(['setup', '--json'], { portal });
+    const dir = mkdtempSync(join(tmpdir(), 'mc-vault-import-exists-'));
+    const label = `env:${basename(dir).toLowerCase()}:OPENAI_API_KEY`;
+    writeFileSync(join(dir, '.env'), 'OPENAI_API_KEY=first\n');
+
+    cap.restore(); cap = captureConsole();
+    await vaultRun(['import', '.env', '--json', '--no-confirm'], { portal, cwd: dir });
+    cap.restore(); cap = captureConsole();
+    writeFileSync(join(dir, '.env'), 'OPENAI_API_KEY=second\n');
+    const rc = await vaultRun(['import', '.env', '--json', '--no-confirm'], { portal, cwd: dir });
+    cap.restore();
+    assert.equal(rc, 0);
+    const out = JSON.parse(cap.out.join('\n'));
+    assert.deepEqual(out.imported, []);
+    assert.equal(out.skipped.some((s) => s.label === label && s.reason === 'label already exists'), true);
+    assert.deepEqual(out.writes, []);
+    assert.equal(out.binding_file.action, 'unchanged');
+    assert.equal(server.inspect().secrets.length, 1, 'existing label should not be overwritten or duplicated');
+  });
+
+  it('import binds selected keys even when the vault label already exists', async () => {
+    await vaultRun(['setup', '--json'], { portal });
+    const dir = mkdtempSync(join(tmpdir(), 'mc-vault-import-bind-existing-'));
+    const label = `env:${basename(dir).toLowerCase()}:OPENAI_API_KEY`;
+    writeFileSync(join(dir, '.env'), 'OPENAI_API_KEY=local-secret-that-should-not-print\n');
+
+    cap.restore(); cap = captureConsole();
+    await vaultRun(['set', label, '--no-confirm', '--json'], { portal });
+    cap.restore(); cap = captureConsole();
+
+    const rc = await vaultRun(['import', '.env', '--json', '--no-confirm'], { portal, cwd: dir });
+    cap.restore();
+
+    assert.equal(rc, 0);
+    const out = JSON.parse(cap.out.join('\n'));
+    assert.deepEqual(out.imported, []);
+    assert.equal(out.skipped.some((s) => s.label === label && s.reason === 'label already exists'), true);
+    assert.deepEqual(out.writes, [{ path: '.mc/secrets.json', action: 'created' }]);
+
+    const bindingsBody = readFileSync(join(dir, '.mc', 'secrets.json'), 'utf8');
+    assert.ok(!bindingsBody.includes('local-secret-that-should-not-print'), 'binding file must not leak local value');
+    assert.equal(JSON.parse(bindingsBody).sources[0].keys.OPENAI_API_KEY, label);
+    assert.equal(server.inspect().secrets.length, 1, 'existing label should not be overwritten or duplicated');
+  });
+
+  it('import --json refuses mutation unless --no-confirm is explicit', async () => {
+    await vaultRun(['setup', '--json'], { portal });
+    const dir = mkdtempSync(join(tmpdir(), 'mc-vault-import-confirm-'));
+    writeFileSync(join(dir, '.env'), 'OPENAI_API_KEY=secret\n');
+
+    cap.restore(); cap = captureConsole();
+    const rc = await vaultRun(['import', '.env', '--json'], { portal, cwd: dir });
+    cap.restore();
+    assert.equal(rc, 2);
+    const out = JSON.parse(cap.out.join('\n'));
+    assert.match(out.error, /requires --no-confirm/);
+    assert.equal(server.inspect().secrets.length, 0);
+  });
+
+  it('import --json --no-confirm fails cleanly when vault is locked and no cache/passphrase is available', async () => {
+    await vaultRun(['setup', '--json'], { portal });
+    const dir = mkdtempSync(join(tmpdir(), 'mc-vault-import-locked-json-'));
+    const secret = 'locked-import-secret-123';
+    writeFileSync(join(dir, '.env'), `OPENAI_API_KEY=${secret}\n`);
+
+    const oldPassphrase = process.env.MC_VAULT_PASSPHRASE;
+    delete process.env.MC_VAULT_PASSPHRASE;
+    cap.restore(); cap = captureConsole();
+    try {
+      const rc = await vaultRun(['import', '.env', '--json', '--no-confirm'], { portal, cwd: dir });
+      cap.restore();
+      assert.equal(rc, 1);
+      assert.equal(cap.err.join('\n'), '');
+      assert.doesNotMatch(cap.out.join('\n'), /Master password/);
+      assert.ok(!cap.out.join('\n').includes(secret), 'locked import JSON must not leak secret value');
+      const out = JSON.parse(cap.out.join('\n'));
+      assert.equal(out.ok, false);
+      assert.match(out.error, /vault locked/);
+      assert.match(out.error, /mc vault unlock/);
+      assert.equal(server.inspect().secrets.length, 0);
+    } finally {
+      process.env.MC_VAULT_PASSPHRASE = oldPassphrase;
+    }
+  });
+
+  it('get --json distinguishes a live server session from a missing local vault-key cache', async () => {
+    await vaultRun(['setup', '--json'], { portal });
+    await vaultRun(['unlock', '--json'], { portal });
+    assert.equal(server.inspect().unlocked, true);
+
+    const oldPassphrase = process.env.MC_VAULT_PASSPHRASE;
+    delete process.env.MC_VAULT_PASSPHRASE;
+    activeCacheDeps = makeMemCacheDeps();
+    cap.restore(); cap = captureConsole();
+    try {
+      const rc = await vaultRun(['get', 'anything', '--json'], { portal });
+      cap.restore();
+      assert.equal(rc, 1);
+      const out = JSON.parse(cap.out.join('\n'));
+      assert.equal(out.ok, false);
+      assert.match(out.error, /vault key not cached locally/);
+      assert.match(out.error, /mc vault unlock/);
+    } finally {
+      process.env.MC_VAULT_PASSPHRASE = oldPassphrase;
+    }
   });
 
   it('rm deletes a secret (with --no-confirm)', async () => {

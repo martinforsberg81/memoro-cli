@@ -16,6 +16,7 @@ import {
   normaliseSecretPayload,
   parseTypeFlag,
   formatListJson,
+  formatListWidths,
   formatListLine,
 } from '../../../src/mc/vault/types.js';
 
@@ -36,6 +37,24 @@ describe('buildSecretPayload', () => {
   it('includes provider + account when provided', () => {
     const p = buildSecretPayload({ kind: 'api_token', token: 'sk-abc', provider: 'anthropic', account: 'work' });
     assert.deepEqual(p, { kind: 'api_token', token: 'sk-abc', provider: 'anthropic', account: 'work' });
+  });
+  it('includes explicit native auth target metadata when provided', () => {
+    const p = buildSecretPayload({
+      kind: 'api_token',
+      token: 'sk-abc',
+      provider: 'openai',
+      targetTool: 'codex',
+      targetAuthMode: 'api_key',
+      targetLocation: 'native-auth',
+    });
+    assert.deepEqual(p, {
+      kind: 'api_token',
+      token: 'sk-abc',
+      provider: 'openai',
+      target_tool: 'codex',
+      target_auth_mode: 'api_key',
+      target_location: 'native-auth',
+    });
   });
   it('includes scopes + expires_at on oauth_token', () => {
     const p = buildSecretPayload({
@@ -89,6 +108,21 @@ describe('normaliseSecretPayload', () => {
     const n = normaliseSecretPayload({ kind: 'api_token', token: 't', custom: 1 });
     assert.deepEqual(n.extra, { custom: 1 });
   });
+  it('normalises explicit target fields as first-class metadata', () => {
+    const n = normaliseSecretPayload({
+      kind: 'api_token',
+      token: 't',
+      provider: 'openai',
+      target_tool: 'codex',
+      target_auth_mode: 'api_key',
+      target_location: 'native-auth',
+      custom: 1,
+    });
+    assert.equal(n.target_tool, 'codex');
+    assert.equal(n.target_auth_mode, 'api_key');
+    assert.equal(n.target_location, 'native-auth');
+    assert.deepEqual(n.extra, { custom: 1 });
+  });
   it('returns null extra when no unknown fields', () => {
     const n = normaliseSecretPayload({ kind: 'api_token', token: 't', provider: 'p' });
     assert.equal(n.extra, null);
@@ -128,6 +162,7 @@ describe('formatListJson — never includes secret values', () => {
     assert.equal(out.secrets[0].id, 'vid_1');
     assert.equal(out.secrets[0].label, 'anthropic');
     assert.equal(out.secrets[0].provider, 'anthropic');
+    assert.equal(out.secrets[0].target_tool, null);
   });
   it('handles empty list', () => {
     assert.deepEqual(formatListJson({ secrets: [] }), { ok: true, secrets: [] });
@@ -158,5 +193,17 @@ describe('formatListLine — no secret values', () => {
   it('falls back to bare kind when no provider', () => {
     const line = formatListLine({ id: 'v', kind: 'api_token', label: 'l', provider: null, account: null });
     assert.ok(line.includes('api_token'));
+  });
+  it('uses shared dynamic widths so long labels do not collide with kind', () => {
+    const rows = [
+      { id: 'v1', kind: 'api_token', label: 'short', provider: 'env', account: 'dev' },
+      { id: 'v2', kind: 'api_token', label: 'wrangler:memoro:GOOGLE_CLOUD_TTS_KEY', provider: 'wrangler', account: 'memoro' },
+    ];
+    const widths = formatListWidths(rows);
+    const short = formatListLine(rows[0], widths);
+    const long = formatListLine(rows[1], widths);
+    const kindColumn = long.indexOf('api_token:wrangler/memoro');
+    assert.ok(kindColumn > long.indexOf(rows[1].label), long);
+    assert.equal(short.indexOf('api_token:env/dev'), kindColumn);
   });
 });

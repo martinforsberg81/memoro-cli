@@ -32,6 +32,7 @@ import {
   parseSyncArgs,
   runSyncWith,
   stripGroundingBlock,
+  comparableWrapperContent,
 } from '../../src/mc/commands/adapter.js';
 import {
   GROUNDING_BEGIN as CLAUDE_GB,
@@ -375,7 +376,7 @@ describe('parseSyncArgs', () => {
 // runSyncWith — in-process verb with stub deps
 // ─────────────────────────────────────────────────────────────
 
-function makeDeps({ files = {}, adapters }) {
+function makeDeps({ files = {}, adapters, packageCanon = null }) {
   const writes = [];
   const dep = {
     cwd: '/repo',
@@ -383,6 +384,7 @@ function makeDeps({ files = {}, adapters }) {
     readFileText: (abs) => Object.prototype.hasOwnProperty.call(files, abs)
       ? files[abs]
       : null,
+    readCanon: () => packageCanon,
     writeFileText: (abs, body) => { writes.push({ abs, body }); files[abs] = body; },
     listAdapters: async () => adapters,
   };
@@ -442,6 +444,39 @@ describe('runSyncWith — clean state', () => {
     assert.match(stdout, /CLAUDE\.md/);
     assert.match(stdout, /AGENTS\.md/);
     assert.match(stdout, /created/);
+  });
+
+  it('falls back to package canon when repo-local canonical is missing', async () => {
+    const { dep, writes } = makeDeps({
+      files: {},
+      adapters: FULL_ADAPTERS,
+      packageCanon: { protocol: CANONICAL_BODY },
+    });
+    const { code, stdout } = await captureStreams(() =>
+      runSyncWith({ tool: 'codex', dryRun: false, force: false, json: false }, dep));
+    assert.equal(code, 0, stdout);
+    assert.deepEqual(writes.map((w) => w.abs), ['/repo/AGENTS.md']);
+    assert.match(writes[0].body, /docs\/coding-agent-protocol\.md/);
+  });
+
+  it('prefers repo-local canonical over package canon when both exist', async () => {
+    const localBody = '# local protocol\n';
+    const packageBody = '# package protocol\n';
+    const { dep, writes } = makeDeps({
+      files: { [CANONICAL_ABS]: localBody },
+      adapters: FULL_ADAPTERS,
+      packageCanon: { protocol: packageBody },
+    });
+    const { code } = await captureStreams(() =>
+      runSyncWith({ tool: 'codex', dryRun: false, force: false, json: false }, dep));
+    assert.equal(code, 0);
+    const expected = markdownWrapperFor({
+      canonicalPath: CANONICAL_REL,
+      canonicalContent: localBody,
+      toolLabel: 'Codex / GPT',
+      wrapperPath: 'AGENTS.md',
+    });
+    assert.equal(writes[0].body, expected);
   });
 
   it('--json branch emits a parseable object', async () => {
@@ -615,6 +650,18 @@ describe('stripGroundingBlock — pure, multi-adapter', () => {
     assert.equal(stripGroundingBlock(null), null);
     assert.equal(stripGroundingBlock(undefined), undefined);
   });
+
+  it('treats a file containing only grounding as a missing wrapper', () => {
+    const body = [
+      CODEX_GB,
+      '# Session grounding',
+      '',
+      'standing context only',
+      CODEX_GE,
+      '',
+    ].join('\n');
+    assert.equal(comparableWrapperContent(body), null);
+  });
 });
 
 describe('runSyncWith — grounding block is not drift', () => {
@@ -704,6 +751,31 @@ describe('runSyncWith — grounding block is not drift', () => {
     assert.equal(writes.length, 0, 'a codex grounding block must not trigger a re-write');
     assert.match(stdout, /up to date/);
     assert.ok(!/DRIFT/.test(stdout), 'codex grounding block must not be reported as drift');
+  });
+
+  it('creates the managed wrapper when AGENTS.md only contains codex grounding', async () => {
+    const groundingOnly = [
+      '<!-- memoro:managed:grounding:codex:begin -->',
+      '# Session grounding',
+      '',
+      'standing context only',
+      '<!-- memoro:managed:grounding:codex:end -->',
+      '',
+    ].join('\n');
+    const { dep, writes } = makeDeps({
+      files: {
+        [CANONICAL_ABS]: CANONICAL_BODY,
+        '/repo/AGENTS.md': groundingOnly,
+      },
+      adapters: [FULL_ADAPTERS[1]],
+    });
+    const { code, stdout, stderr } = await captureStreams(() =>
+      runSyncWith({ tool: null, dryRun: false, force: false, json: false }, dep));
+    assert.equal(code, 0, `stderr:${stderr} stdout:${stdout}`);
+    assert.equal(writes.length, 1, 'grounding-only AGENTS.md should be treated as missing wrapper');
+    assert.equal(writes[0].abs, '/repo/AGENTS.md');
+    assert.match(stdout, /created/);
+    assert.ok(!/DRIFT/.test(stdout), 'grounding-only wrapper must not be reported as hand drift');
   });
 });
 

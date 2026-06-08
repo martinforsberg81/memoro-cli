@@ -24,9 +24,9 @@ const DEFAULT_CONFIG = {
   latestVersion: null,   // cached npm-registry latest (refreshed daily)
   latestCheckedAt: null, // ISO timestamp of last refresh attempt
   // §13d: the adapter id (claude-code | codex | gemini-cli) that future
-  // `mc new` / `mc resume` invocations should default to. `null` means
-  // "use the legacy hardcoded default" — that consumer wiring lands as a
-  // follow-up; today this key is written by `mc tool-switch` only.
+  // bare `mc` / `mc new` invocations should default to. Existing sessions
+  // carry their own tool in the registry and can be relaunched with
+  // `mc resume <name> --codex/--claude`.
   defaultTool: null,
 };
 

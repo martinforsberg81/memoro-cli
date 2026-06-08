@@ -31,7 +31,6 @@ import { mkdirSync, existsSync, unlinkSync, chmodSync, readFileSync, writeFileSy
 import { homedir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createServer } from 'node:net';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { hostname } from 'node:os';
 
@@ -43,12 +42,30 @@ import { needsDeviceAuth, runDeviceFlow } from './lib/device-flow.js';
 import { getRepoContext, deriveRepoName } from './lib/git-context.js';
 import { lookupOrMint } from './lib/coding-session.js';
 import { CliWsClient } from './commands/ws-client.js';
-import { createFetchTranscriptHandler } from './commands/handlers/fetch-transcript.js';
 import { ensureCoordinatorSlashCommand } from './mc/coordinator-command.js';
 import { installUpdateCommand } from './adapters/claude-code.js';
-import { PtySession } from './mc/broker/pty-session.js';
 import { extractExcerpt } from './mc/session-excerpt.js';
-import { renderIntro } from './mc/session-intro.js';
+import { primaryWorktree } from './mc/git.js';
+import { findEntry, upsertEntry } from './mc/registry.js';
+import {
+  materialiseVaultForWrap,
+  resolvePolicyForWrap,
+  resolveRequestedToolForWrap,
+  resolveWrapFocus,
+  startupMessageFromGroundingParts,
+} from './mc/wrap-start.js';
+import { createStartupMessageController } from './mc/wrap-startup-message.js';
+import {
+  buildHeartbeatBase,
+  buildHeartbeatPayload,
+  buildSessionMeta,
+  buildWrapExitRegistryPatch,
+  buildWrapStartRegistryPatch,
+  resolveCodingSessionIdForWrap,
+  wrapRuntimePaths,
+} from './mc/wrap-runtime.js';
+import { createDispatchSocketServer } from './mc/wrap-dispatch.js';
+import { createWrapWsHandlers } from './mc/wrap-ws.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constants
@@ -68,6 +85,7 @@ const POLL_TIMEOUT_MS = 30_000;
 // slice the trailing 500 chars from (server's EXCERPT_MAX).
 const OUTPUT_BUFFER_BYTES = 4096;
 const EXCERPT_MAX_CHARS = 500;
+const STARTUP_MESSAGE_IDLE_MS = 1500;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Entry point
@@ -77,6 +95,7 @@ const EXCERPT_MAX_CHARS = 500;
 // hot path of `mc` wrap-mode boot doesn't pay for them).
 const LIFECYCLE = {
   new:           () => import('./mc/commands/new.js'),
+  spawn:         () => import('./mc/commands/spawn.js'),
   list:          () => import('./mc/commands/list.js'),
   end:           () => import('./mc/commands/end.js'),
   rename:        () => import('./mc/commands/rename.js'),
@@ -190,73 +209,118 @@ export function validateLabel(label) {
   return { ok: true };
 }
 
+export function shouldRefuseBareMcInPrimaryWorktree({
+  cwd,
+  primary,
+  env = process.env,
+} = {}) {
+  if (!cwd || !primary) return false;
+  if (env.MC_SESSION_NAME) return false;
+  const norm = (p) => {
+    const s = String(p).replace(/\/+$/, '');
+    return process.platform === 'darwin' && s.startsWith('/private/')
+      ? s.slice('/private'.length)
+      : s;
+  };
+  const current = norm(cwd);
+  const root = norm(primary);
+  return current === root || current.startsWith(`${root}/`);
+}
+
 function printHelp() {
-  console.log(`mc — Memoro for developers
+  console.log(`mc — grounded coding sessions
 
 USAGE
-  mc [args...]                       Wrap \`claude\` in current cwd
-  mc wrap <label> [args...]          Same, but tag this session with a
-                                     friendly label for peer lookup
+  mc                              Start the default grounded coding tool here
+  mc new <name> [focus]           Create worktree + branch + start a session
+  mc spawn <name> "<brief>"       Create an idle tracked project session
+  mc resume                       List mc sessions available to resume
+  mc resume <name>                Re-enter an existing session
 
-  mc new <name>                      Create worktree + branch + launch tool
-  mc list [--rich|--awaiting|...]    Show sessions (filters per §9d)
-  mc list --orphans                  List orphan heartbeat daemons (§9j)
-  mc status <name>                   Per-session derived status (§9a)
-  mc resume <name>                   cd into worktree + relaunch tool
-  mc end <name> [<name>...]          End worktrees (bulk + --dry-run supported)
-  mc rename <old> <new>              Rename branch + dir + registry entry
-  mc cd <name>                       cd into worktree (needs install-shell)
-  mc gc [--dry-run]                  Reap dead + merged + clean worktrees
-  mc gc --reap-orphans [--min-age D] SIGTERM orphan heartbeat daemons (§9j)
-  mc reconcile [--apply --only-safe] Detect shipped-elsewhere sessions (§9e)
-  mc install-shell                   Install the zsh/bash wrapper
-  mc setup [--json]                  Self-verifying setup checklist (§11b)
-  mc auth status [--json]            Single-screen health check (§11a)
-  mc auth memoro [--logout|--status] Log in / out of Memoro (§11c)
-  mc auth devices [--json]           List device tokens (§14e)
-  mc auth devices revoke <prefix>    Revoke a device token
-  mc auth <claude|codex|gemini>      Re-check that tool's status + hint
+COMMON
+  mc list [--rich|--awaiting]     Show local sessions
+  mc list --tree                  Show coordinator/project session tree
+  mc status <name>                Show one session's state
+  mc cd <name>                    cd into a session worktree
+  mc end <name> [<name>...]       End and clean up sessions
+  mc rename <old> <new>           Rename branch + worktree + registry entry
 
-  mc vault setup                     Create a Memoro-account-wide token vault
-  mc vault unlock                    Validate the master password
-  mc vault list [--json]             List secret labels (no values)
-  mc vault get <label>               Print a secret value (with confirm)
-  mc vault set <label> [--type ...]  Store a new secret
-  mc vault rm <label>                Delete a secret
-  mc vault rotate <label>            Replace a secret (keeps -prev copy)
-  mc vault change-password           Change the master password
-  mc vault status / lock / --help    Self-explanatory
+START OPTIONS
+  mc new <name> [focus] --codex   Start the new session under Codex
+  mc new <name> [focus] --claude  Start the new session under Claude Code
+  mc new <name> [focus] --tool <claude|codex|gemini>
+  mc new <name> --from <ref>      Branch from a ref other than HEAD
+  mc resume <name> --codex        Relaunch that session under Codex
+  mc resume <name> --claude       Relaunch that session under Claude Code
 
-  mc adapter sync [--tool ...] [...] Materialise per-tool instruction files
-                                     from docs/coding-agent-protocol.md
-  mc adapter materialise [...]       Copy the package orchestrator canon into
-                                     this repo's docs/ + .claude/ (§13c)
-  mc tool-switch <tool> [--dry-run]  Switch default coding tool (§13d):
-                                     verify install + auth, persist
-                                     default, sync target's instructions
-  mc broker start/status/stop        Local PTY broker supervisor (§8)
-  mc attach <session_id>             Attach to a broker-owned local session
-  mc fanout <plan.md> [--from main]  Parse \`## Phase N:\` headings + spawn one
-                                     idle session per phase (§10a MVP)
-  mc gather <plan-slug> [--dry-run]  Merge phase PRs into wip/<plan-slug>;
-                                     stop on cross-phase conflict (§10a MVP)
+SETUP
+  mc setup [--json]               Check installation, auth, shell wrapper
+  mc install-shell                Install auto-cd support for zsh/bash
+  mc auth status [--json]         Check Memoro + coding-tool auth
+  mc auth memoro                  Log in to Memoro
+  mc auth devices                 List/revoke Memoro device tokens
+  mc auth <claude|codex|gemini>   Re-check one coding tool
+  mc tool-switch <tool>           Set the default tool for future sessions
 
-  mc sessions list                   List your active coding sessions
-  mc sessions send <label|id> <msg>  Dispatch a message into another session
-  mc sessions read <label|id>        Fetch another session's recent transcript
+SECRETS
+  mc vault status                 Show vault setup + lock state
+  mc vault setup                  Create a Memoro-account token vault
+  mc vault unlock                 Unlock and cache the vault key briefly
+  mc vault scan [file...]         Scan dotenv files for import candidates
+  mc vault import <file>           Import dotenv secrets into the vault
+  mc vault import <file> --dry-run Preview value-free import bindings
+  mc vault set <label>            Store a secret
+  mc vault list                   List secret labels, never values
+  mc vault get <label>            Print a secret value, with confirmation
+  mc vault rm|rotate|lock         Manage stored secrets
 
-  mc --help                          This help
-  mc --version                       Print version
+FLEET / ADVANCED
+  mc spawn <name> "<brief>"       Create durable child project session
+  mc fanout <plan.md>             Create one idle session per plan phase
+  mc gather <plan-slug>           Merge phase PRs into a summary branch
+  mc sessions list                List active sessions seen by Memoro
+  mc sessions send <label|id> <msg>
+                                  Dispatch a message into another session
+  mc sessions read <label|id>     Fetch another session's recent transcript
+  mc reconcile [--apply]          Detect sessions shipped elsewhere
+  mc gc [--dry-run]               Reap dead, merged, or clean worktrees
+  mc broker start/status/stop     Local PTY broker supervisor
+  mc broker connect               Connect local broker to Memoro cloud
+  mc attach <session_id>          Attach to a broker-owned local session
+  mc adapter sync                 Refresh tool instruction wrappers
+  mc adapter materialise          Copy mc's coordinator canon into this repo
+  mc wrap <label> [args...]       Start an in-place labelled wrapper session
 
-LABELS
-  Labels let you refer to sessions by topic instead of by random
-  sess_xxx id. Example: \`mc new audit\` → then from anywhere
-  \`mc sessions send audit "summary please"\`. Labels are local-machine
-  free-form; first-match-wins on collision.
+WHAT HAPPENS ON START
+  mc injects project grounding before the coding tool wakes: MEMORO.md
+  when present, the coordinator role, your Memoro lens, and the focus.
+  If MEMORO.md is missing, mc sends the launched agent a first user
+  message asking whether to create it. If the vault is locked, mc can
+  offer to unlock it before launch so tokens materialise for the tool.
+
+TOOL SELECTION
+  \`mc tool-switch <tool>\` changes the default for future bare \`mc\` and
+  \`mc new\` starts. It does not change a running session. To change an
+  existing session's tool, exit the current TUI completely, then run
+  \`mc resume <name> --codex\` or \`mc resume <name> --claude\`.
+
+  \`mc resume\` lists mc's own registry sessions across tools. It does not
+  use Claude or Codex native resume pickers, so sessions started under one
+  tool remain visible after changing the relaunch tool.
+
+SESSION NAMES
+  \`mc new <name>\` creates a local session name. Use that same name with
+  \`mc resume\`, \`mc status\`, \`mc cd\`, \`mc rename\`, and \`mc end\`.
 
 REQUIREMENTS
-  - claude     (Claude Code CLI)
-  - memoro-cli login                 (one-time token setup)
+  - Run inside a git repository.
+  - Install at least one coding tool: Claude Code or Codex.
+  - Authenticate with Memoro: run \`mc\` for device login, or
+    \`memoro-cli login\` for CI/headless use.
+
+HELP
+  mc <command> --help                Show command-specific usage
+  mc --version                       Print version
 `);
 }
 
@@ -275,15 +339,17 @@ async function packageVersion() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 async function runWrap(argv, { label = null } = {}) {
+  const config = await readConfig();
+
   // ─── Resolve the tool to launch (adapter-routed) ─────────────────────
-  // Default is claude-code; `mc new --tool`, `mc resume`, and the
-  // mid-session `mc tool-switch --here` thread the chosen tool across the
-  // wrap-mode re-exec via MC_GROUNDING_TOOL. The launch spec carries the
+  // Default is claude-code; `mc new --tool` and `mc resume --tool` thread
+  // the chosen tool across the wrap-mode re-exec via MC_GROUNDING_TOOL.
+  // The launch spec carries the
   // binary to spawn, how to map argv, and the heartbeat source. Unknown /
   // unimplemented / not-installed tools fail HIGH here (exit-before-side-
   // effect) — never a silent no-op spawning the wrong binary.
   const { resolveLaunch } = await import('./adapters/index.js');
-  const requestedTool = process.env.MC_GROUNDING_TOOL || 'claude-code';
+  const requestedTool = resolveRequestedToolForWrap({ env: process.env, config });
   const launch = resolveLaunch(requestedTool);
   if (!launch.ok) {
     console.error(`mc: cannot launch "${requestedTool}": ${launch.hint}`);
@@ -310,14 +376,31 @@ async function runWrap(argv, { label = null } = {}) {
   }
 
   const cwd = process.cwd();
+  const effectivePolicy = resolvePolicyForWrap({
+    sessionName: process.env.MC_SESSION_NAME || null,
+    cwd,
+    tool: launch.shortName,
+    config,
+  });
   const repoContext = await getRepoContext(cwd);
   if (!repoContext) {
     console.error('mc: not inside a git repository. Coordinator is gated on repos.');
     console.error('mc: run from inside a git repo, or use plain `claude` for ad-hoc work.');
     process.exit(1);
   }
+  const primary = primaryWorktree(cwd);
+  if (shouldRefuseBareMcInPrimaryWorktree({
+    cwd,
+    primary,
+    env: process.env,
+    label,
+  })) {
+    console.error('mc: refusing to start a coding session in the primary worktree.');
+    console.error('mc: use `mc new <name> [focus] --codex` to create an isolated worktree,');
+    console.error('mc: or `mc resume <name> --codex` to re-enter an existing session.');
+    process.exit(1);
+  }
 
-  const config = await readConfig();
   const apiUrl = getApiUrl(argv) || config.apiUrl;
   const token = await getSecret(ACCOUNTS.TOKEN);
   if (!token) {
@@ -328,49 +411,80 @@ async function runWrap(argv, { label = null } = {}) {
     process.exit(1);
   }
 
+  const sessionName = process.env.MC_SESSION_NAME || null;
+  const runtimeLabel = sessionName || label;
   const machineId = hostname();
-  const llmSessionId = `mc-${Date.now()}-${process.pid}`;
-  const codingSessionId = await lookupOrMint({
+  const registryEntry = sessionName ? findEntry(sessionName) : null;
+  const { codingSessionId } = await resolveCodingSessionIdForWrap({
+    sessionName,
+    registryEntry,
     repoIdentity: repoContext.remoteUrl,
     machineId,
-    llmSessionId,
+    lookupOrMint,
   });
+  if (sessionName) {
+    try {
+      upsertEntry(buildWrapStartRegistryPatch({
+        sessionName,
+        codingSessionId,
+        tool: launch.shortName,
+        heartbeatSource: launchSpec.heartbeatSource,
+        repoContext,
+        cwd,
+        machineId,
+        pid: process.pid,
+      }));
+    } catch (err) {
+      process.stderr.write(`mc: registry live-state update failed (${err.message}); continuing\n`);
+    }
+  }
 
-  const sockPath = join(MC_DIR, `${codingSessionId}.sock`);
-  const metaPath = join(MC_DIR, `${codingSessionId}.json`);
+  let wrapVault = { sessionId: null, shouldShredOnExit: false };
+  try {
+    wrapVault = await materialiseVaultForWrap({
+      codingSessionId,
+      cwd,
+      launchAdapter,
+    });
+  } catch (err) {
+    process.stderr.write(`mc: vault materialise failed (${err.message}); continuing without tokens\n`);
+  }
 
-  writeFileSync(metaPath, JSON.stringify({
-    coding_session_id: codingSessionId,
-    label,
-    sock_path: sockPath,
-    repo: deriveRepoName(repoContext),
-    branch: repoContext.branch,
+  const { sockPath, metaPath } = wrapRuntimePaths({ mcDir: MC_DIR, codingSessionId });
+  const repoName = deriveRepoName(repoContext);
+
+  writeFileSync(metaPath, JSON.stringify(buildSessionMeta({
+    codingSessionId,
+    label: runtimeLabel,
+    sockPath,
+    repoContext,
     cwd,
-    started_at: new Date().toISOString(),
     pid: process.pid,
-  }, null, 2), { mode: 0o600 });
+  }), null, 2), { mode: 0o600 });
 
   // ─── Grounding (Phase 1) — pre-launch slot ──────────────────────────────
-  // Ground the session in place BEFORE spawning the tool: assemble
-  // { map + role + lens + focus } and materialise it as one managed block
-  // into this cwd's CLAUDE.md, so the LLM wakes holding the whole. Mirrors
-  // the §12d vault-materialise slot in `mc new`. Soft-degrade: any failure
-  // (no MEMORO.md, no Memoro lens, write error) prints a one-line hint and
-  // continues — grounding must never block the launch.
+  // Ground the session BEFORE spawning the tool: assemble
+  // { map + role + lens + focus } and hand it to the selected adapter.
+  // Adapters deliver it without mutating tracked project wrappers:
+  // Claude via launch args, Codex as the initial prompt. Soft-degrade:
+  // any failure prints a one-line hint and continues — grounding must
+  // never block the launch.
+  let groundingLaunchMessage = null;
+  let startupMessage = null;
   try {
     const { groundSession } = await import('./mc/ground.js');
-    // Route grounding through the SAME adapter the launcher picked, so the
-    // bundle lands in THIS tool's native instruction file (CLAUDE.md for
-    // claude, AGENTS.md for codex). The bundle itself is tool-agnostic —
-    // only the target adapter changes.
+    // Route grounding through the SAME adapter the launcher picked. The
+    // bundle itself is tool-agnostic; only the adapter delivery changes.
     const adapter = launchAdapter;
     // Focus precedence: the per-session `mc wrap <label>` tag, else the
     // `<task>` `mc new` threaded across the re-exec via MC_GROUNDING_FOCUS.
     // Both are soft standing-context pointers — never an opening prompt.
     // This is the SAME seam bare `mc`, `mc new`, and `mc resume` share
     // (new/resume re-exec into this runWrap), so entry-parity is one path.
-    const focus = label || process.env.MC_GROUNDING_FOCUS || null;
+    const focus = resolveWrapFocus({ label, env: process.env });
     const res = await groundSession({ cwd, adapter, focus });
+    groundingLaunchMessage = res.message || null;
+    startupMessage = startupMessageFromGroundingParts(res.parts);
     if (!res.ok && res.reason) {
       process.stderr.write(`mc: grounding skipped (${res.reason}); continuing\n`);
     }
@@ -384,37 +498,89 @@ async function runWrap(argv, { label = null } = {}) {
   process.stderr.write(renderIntro({
     version: await packageVersion(),
     codingSessionId,
-    repo: deriveRepoName(repoContext),
+    repo: repoName,
     branch: repoContext.branch,
-    label,
+    label: runtimeLabel,
     tool: launchSpec.label,
   }));
 
   // ─── Spawn the chosen tool in a PTY we own ───────────────────────────────
-  const ptySession = new PtySession({
-    id: codingSessionId,
-    name: label,
-    cwd,
-    tool: launchToolId,
-    launchSpec,
-    argv,
-    ptyFactory: pty,
-    termName: process.env.TERM || 'xterm-256color',
+  const spawnArgs = launchSpec.args(argv, {
+    startupMessage: groundingLaunchMessage,
+    effectivePolicy,
+  });
+  if (launchSpec.startupMessageDelivery === 'argv-prompt') {
+    startupMessage = null;
+  }
+  let spawnEnv = {
+    ...process.env,
+    MEMORO_MC_PARENT: '1',  // hooks see this and no-op their heartbeat-loop
+  };
+  if (launchToolId === 'codex') {
+    try {
+      const { prepareCloudflareGuardEnv } = await import('./mc/cloudflare-guard.js');
+      const {
+        readRepoLocalConfig,
+        readRepoPolicyConfig,
+        resolveEffectiveConfig,
+      } = await import('./mc/config-model.js');
+      const repoPolicyConfig = readRepoPolicyConfig({ cwd });
+      const repoLocalConfig = readRepoLocalConfig({ cwd });
+      const effectiveConfig = resolveEffectiveConfig({
+        globalConfig: config,
+        repoPolicy: repoPolicyConfig.config,
+        localConfig: repoLocalConfig.config,
+        entry: registryEntry || {},
+        warnings: [
+          ...(repoPolicyConfig.warnings || []),
+          ...(repoLocalConfig.warnings || []),
+        ],
+      });
+      spawnEnv = prepareCloudflareGuardEnv({
+        baseEnv: spawnEnv,
+        mcDir: MC_DIR,
+        codingSessionId,
+        effectiveConfig,
+      }).env;
+    } catch (err) {
+      console.error(`mc: failed to install Codex Cloudflare guard (${err.message}); refusing to launch`);
+      process.exit(1);
+    }
+  }
+
+  const ptyProcess = pty.spawn(launchSpec.bin, spawnArgs, {
+    name: process.env.TERM || 'xterm-256color',
     cols: process.stdout.columns || 80,
     rows: process.stdout.rows || 24,
-    env: {
-      ...process.env,
-      MEMORO_MC_PARENT: '1',  // hooks see this and no-op their heartbeat-loop
-    },
-    ringBytes: OUTPUT_BUFFER_BYTES,
+    cwd,
+    env: spawnEnv,
   });
 
-  // Pipe PTY output → user's terminal. The session tracks last-output time and
-  // keeps the rolling raw-output buffer used by heartbeat excerpts.
-  ptySession.on('data', (data) => {
-    process.stdout.write(data);
+  // Pipe PTY output → user's terminal. Also:
+  //   - stamp `lastOutputAt` so the heartbeat ticker can report idle vs
+  //     active to peer coordinators
+  //   - keep a rolling raw-output buffer so the heartbeat can carry a
+  //     stripped excerpt of what Claude is currently showing (lets a peer
+  //     coordinator spot e.g. "How should I proceed?" prompts at a
+  //     glance, not just "session B has been idle 2m")
+  let lastOutputAt = Date.now();
+  let outputBuffer = '';
+  const startupMessageController = createStartupMessageController({
+    message: startupMessage,
+    delayMs: STARTUP_MESSAGE_IDLE_MS,
+    deliver: (message) => {
+      writeToPty(ptyProcess, message, launchSpec);
+    },
   });
-  ptySession.start();
+  ptyProcess.onData((data) => {
+    lastOutputAt = Date.now();
+    outputBuffer += data;
+    if (outputBuffer.length > OUTPUT_BUFFER_BYTES) {
+      outputBuffer = outputBuffer.slice(-OUTPUT_BUFFER_BYTES);
+    }
+    process.stdout.write(data);
+    startupMessageController.schedule();
+  });
 
   // Pipe user's keystrokes → PTY input. Raw mode so each keystroke flows
   // through unmodified (no line buffering, no signal translation by the
@@ -425,13 +591,13 @@ async function runWrap(argv, { label = null } = {}) {
   process.stdin.resume();
   process.stdin.setEncoding('utf8');
   process.stdin.on('data', (data) => {
-    ptySession.write(data);
+    ptyProcess.write(data);
   });
 
   // Terminal resize → PTY resize, so Claude redraws to the new size.
   const onResize = () => {
     try {
-      ptySession.resize(process.stdout.columns, process.stdout.rows);
+      ptyProcess.resize(process.stdout.columns, process.stdout.rows);
     } catch { /* PTY closed */ }
   };
   process.stdout.on('resize', onResize);
@@ -440,24 +606,10 @@ async function runWrap(argv, { label = null } = {}) {
   if (existsSync(sockPath)) {
     try { unlinkSync(sockPath); } catch {}
   }
-  const server = createServer((conn) => {
-    let buf = '';
-    conn.on('data', (chunk) => { buf += chunk.toString('utf8'); });
-    conn.on('end', () => {
-      let payload;
-      try { payload = JSON.parse(buf); }
-      catch {
-        conn.end(JSON.stringify({ ok: false, error: 'invalid JSON' }) + '\n');
-        return;
-      }
-      const message = payload?.message;
-      if (typeof message !== 'string' || !message.trim()) {
-        conn.end(JSON.stringify({ ok: false, error: 'message required' }) + '\n');
-        return;
-      }
-      ptySession.writeDispatchedMessage(message);
-      conn.end(JSON.stringify({ ok: true, message }) + '\n');
-    });
+  const server = createDispatchSocketServer({
+    deliver: (message) => {
+      writeToPty(ptyProcess, message, launchSpec);
+    },
   });
   server.listen(sockPath, () => {
     try { chmodSync(sockPath, 0o600); } catch {}
@@ -468,45 +620,39 @@ async function runWrap(argv, { label = null } = {}) {
     apiUrl,
     token,
     codingSessionId,
-    handlers: {
-      fetch_transcript: createFetchTranscriptHandler({
-        transcriptPath: null,
-        source: launchSpec.heartbeatSource,
-      }),
-      dispatch_message: async (args) => {
-        const message = typeof args?.message === 'string' ? args.message : null;
-        if (!message?.trim()) throw new Error('message required');
-        ptySession.writeDispatchedMessage(message);
-        return { ok: true, delivered_at: new Date().toISOString() };
+    handlers: createWrapWsHandlers({
+      transcriptPath: null,
+      source: launchSpec.heartbeatSource,
+      deliver: (message) => {
+        writeToPty(ptyProcess, message, launchSpec);
       },
-    },
+    }),
     logger: silentLogger(),
   });
   wsClient.start();
 
   // ─── Heartbeat ticker ───────────────────────────────────────────────────
   let alive = true;
-  const heartbeatBase = {
-    coding_session_id: codingSessionId,
-    machine_id: machineId,
-    source: launchSpec.heartbeatSource,
-    repo: deriveRepoName(repoContext),
-    branch: repoContext.branch,
-    files_touched_since_last: [],
-    last_user_excerpt: '',
-    ...(label ? { label } : {}),
-  };
+  const heartbeatBase = buildHeartbeatBase({
+    codingSessionId,
+    machineId,
+    heartbeatSource: launchSpec.heartbeatSource,
+    repoContext,
+    label: runtimeLabel,
+  });
   (async () => {
     while (alive) {
       const now = Date.now();
       await postHeartbeatWithRetry({
         apiUrl, token,
-        payload: {
-          ...heartbeatBase,
-          last_assistant_excerpt: extractExcerpt(ptySession.recentOutput(), EXCERPT_MAX_CHARS),
-          idle_seconds: Math.max(0, Math.floor((now - ptySession.lastOutputAt) / 1000)),
-          at: new Date(now).toISOString(),
-        },
+        payload: buildHeartbeatPayload({
+          base: heartbeatBase,
+          outputBuffer,
+          lastOutputAt,
+          now,
+          excerptMax: EXCERPT_MAX_CHARS,
+          extractExcerpt,
+        }),
       });
       if (!alive) break;
       try { await sleep(TICK_INTERVAL_MS); } catch {}
@@ -515,11 +661,12 @@ async function runWrap(argv, { label = null } = {}) {
 
   // ─── Cleanup ─────────────────────────────────────────────────────────────
   let cleanedUp = false;
-  const cleanup = (exitCode = 0) => {
+  const cleanup = async (exitCode = 0) => {
     if (cleanedUp) return;
     cleanedUp = true;
     alive = false;
     try { wsClient.stop(); } catch {}
+    try { startupMessageController.cancel(); } catch {}
     try { server.close(); } catch {}
     try { unlinkSync(sockPath); } catch {}
     try { unlinkSync(metaPath); } catch {}
@@ -528,25 +675,40 @@ async function runWrap(argv, { label = null } = {}) {
       try { process.stdin.setRawMode(false); } catch {}
     }
     try { process.stdin.pause(); } catch {}
-    try { ptySession.kill(); } catch {}
+    try { ptyProcess.kill(); } catch {}
+    if (sessionName) {
+      try {
+        upsertEntry(buildWrapExitRegistryPatch({
+          sessionName,
+          codingSessionId,
+          exitCode,
+        }));
+      } catch { /* best effort */ }
+    }
+    if (wrapVault.shouldShredOnExit && wrapVault.sessionId) {
+      try {
+        const { shredForSession } = await import('./mc/vault/lifecycle.js');
+        await shredForSession({ sessionId: wrapVault.sessionId });
+      } catch { /* best effort */ }
+    }
     process.exit(exitCode);
   };
 
   // When claude exits (user types /exit, Ctrl+D etc.), tear down.
-  ptySession.on('exit', ({ exitCode }) => {
-    cleanup(exitCode || 0);
+  ptyProcess.onExit(({ exitCode }) => {
+    void cleanup(exitCode || 0);
   });
 
   // External signals → forward to claude, let its exit drive cleanup.
   // (User's Ctrl+C is bytes through stdin in raw mode, not SIGINT to us.)
   process.on('SIGTERM', () => {
-    try { ptySession.kill('SIGTERM'); } catch {}
+    try { ptyProcess.kill('SIGTERM'); } catch {}
   });
   process.on('SIGHUP', () => {
-    try { ptySession.kill('SIGHUP'); } catch {}
+    try { ptyProcess.kill('SIGHUP'); } catch {}
   });
 
-  // Resolve never — wait for ptySession exit to call process.exit().
+  // Resolve never — wait for ptyProcess exit to call process.exit().
   return new Promise(() => {});
 }
 
@@ -747,11 +909,22 @@ function preflight(bin = CLAUDE_BIN) {
 }
 
 /**
- * Send a dispatched message into the wrapped Claude session. Appends a
- * carriage return so the TUI submits the prompt. Exported for tests.
+ * Send a dispatched message into the wrapped tool session. Appends a
+ * carriage return so the TUI submits the prompt. Some TUIs (Codex, in
+ * live PTY tests) need a second Enter after the text has landed, so the
+ * adapter launch spec can request delayed extra carriage returns.
+ *
+ * Exported for tests.
  */
-export function writeToPty(ptyProcess, message) {
+export function writeToPty(ptyProcess, message, {
+  submitEnterCount = 1,
+  submitEnterDelayMs = 150,
+  setTimeoutFn = globalThis.setTimeout,
+} = {}) {
   ptyProcess.write(message + '\r');
+  for (let i = 1; i < submitEnterCount; i += 1) {
+    setTimeoutFn(() => ptyProcess.write('\r'), submitEnterDelayMs * i);
+  }
 }
 
 /**
@@ -775,7 +948,27 @@ export { extractExcerpt };
  * terminal. Pure function for testing. Trailing blank line gives the
  * Claude TUI breathing room.
  */
-export { renderIntro };
+export function renderIntro({ version, codingSessionId, repo, branch, label = null, tool = null }) {
+  // The tool segment lets the banner show which LLM is being launched
+  // (claude vs codex) — load-bearing now that the launcher is adapter-
+  // routed, so a switched session visibly reflects the new tool.
+  const toolSeg = tool ? `  ·  \x1b[35m${tool}\x1b[0m` : '';
+  const mapCommand = tool && /codex/i.test(tool) ? '/mc map' : '/memoro-map';
+  const headline = label
+    ? `  \x1b[1mmc\x1b[0m \x1b[2m${version}\x1b[0m${toolSeg}  ·  \x1b[33m${label}\x1b[0m  ·  ${repo} \x1b[2m(${branch})\x1b[0m`
+    : `  \x1b[1mmc\x1b[0m \x1b[2m${version}\x1b[0m${toolSeg}  ·  ${repo} \x1b[2m(${branch})\x1b[0m`;
+  return [
+    '',
+    headline,
+    `  \x1b[2msession\x1b[0m  ${codingSessionId}`,
+    '',
+    `  \x1b[36m/memoro-coordinator\x1b[0m   manage other sessions from inside your tool`,
+    `  \x1b[36m${mapCommand}\x1b[0m             reconcile MEMORO.md from this session`,
+    `  \x1b[36mmc --help\x1b[0m              cli reference`,
+    '',
+    '',
+  ].join('\n');
+}
 
 async function postHeartbeatWithRetry({ apiUrl, token, payload }) {
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {

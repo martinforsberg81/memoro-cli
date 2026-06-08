@@ -21,7 +21,7 @@
  */
 import test, { describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -30,8 +30,18 @@ import { writeRegistry, makeEntry } from '../_helpers/registry-fixture.js';
 
 describe('mc status <name>', () => {
   let mcHome;
+  let repoPolicyWorktree;
   before(() => {
     mcHome = mkdtempSync(join(tmpdir(), 'mc-status-'));
+    repoPolicyWorktree = mkdtempSync(join(tmpdir(), 'mc-status-policy-wt-'));
+    mkdirSync(join(repoPolicyWorktree, '.mc'), { recursive: true });
+    writeFileSync(join(repoPolicyWorktree, '.mc', 'policy.json'), JSON.stringify({
+      permissions: { profile: 'repo-trusted', network: 'enabled' },
+    }));
+    writeFileSync(join(repoPolicyWorktree, '.mc', 'local.json'), JSON.stringify({
+      defaultTool: 'codex',
+      permissions: { approval: 'untrusted' },
+    }));
     writeRegistry(mcHome, [
       makeEntry({
         name: 'safe',
@@ -100,9 +110,23 @@ describe('mc status <name>', () => {
         open_question: false,
         safety_verdict: 'SAFE_TO_END',
       }),
+      makeEntry({
+        name: 'codex-session',
+        tool: 'codex',
+        safety_verdict: 'IS_ACTIVE_NOW',
+      }),
+      makeEntry({
+        name: 'repo-policy',
+        tool: 'codex',
+        worktree_path: repoPolicyWorktree,
+        safety_verdict: 'SAFE_TO_END',
+      }),
     ]);
   });
-  after(() => { rmSync(mcHome, { recursive: true, force: true }); });
+  after(() => {
+    rmSync(mcHome, { recursive: true, force: true });
+    rmSync(repoPolicyWorktree, { recursive: true, force: true });
+  });
 
   for (const verdict of [
     'SAFE_TO_END', 'NEEDS_REVIEW', 'HAS_UNMERGED_WORK',
@@ -133,10 +157,66 @@ describe('mc status <name>', () => {
     assert.ok(j);
     for (const k of [
       'name', 'branch', 'safety_verdict', 'dirty_files', 'ahead',
-      'last_activity', 'session_state',
+      'last_activity', 'session_state', 'tool', 'relaunch_command',
+      'effective_policy',
     ]) {
       assert.ok(k in j, `field ${k} missing from status output`);
     }
+  });
+
+  test('surfaces session tool + relaunch command in JSON', () => {
+    const r = runMc(['status', 'codex-session', '--json'], { env: { MC_HOME: mcHome } });
+    assert.equal(r.status, 0, `stderr:${r.stderr}`);
+    const j = parseJsonOrNull(r.stdout);
+    assert.ok(j);
+    assert.equal(j.tool, 'codex');
+    assert.equal(j.relaunch_command, 'mc resume codex-session');
+    assert.equal(j.effective_policy.permissions.rendered_for, 'codex');
+    assert.equal(j.effective_policy.adapter_support.tool, 'codex');
+    assert.equal(j.effective_policy.adapter_support.permissions.workspace, 'supported');
+    assert.equal(j.effective_policy.adapter_support.permissions.network, 'unsupported');
+    assert.equal(j.effective_policy.adapter_support.permissions.approval, 'supported');
+    assert.equal(j.effective_policy.secrets.vault_required, false);
+    assert.equal(j.effective_policy.secrets.native_auth_owned_by_tool, true);
+    assert.deepEqual(j.effective_policy.secrets.materialisation_targets, []);
+  });
+
+  test('human output includes tool + relaunch command', () => {
+    const r = runMc(['status', 'codex-session'], { env: { MC_HOME: mcHome } });
+    assert.equal(r.status, 0, `stderr:${r.stderr}`);
+    assert.match(r.stdout, /tool\s+codex/);
+    assert.match(r.stdout, /relaunch\s+mc resume codex-session/);
+    assert.match(r.stdout, /policy\s+codex: native auth owned by tool; no vault target/);
+    assert.match(r.stdout, /permissions unsupported: profile, network, secrets/);
+  });
+
+  test('Claude status reports legacy Anthropic vault target', () => {
+    const r = runMc(['status', 'safe', '--json'], { env: { MC_HOME: mcHome } });
+    assert.equal(r.status, 0, `stderr:${r.stderr}`);
+    const j = parseJsonOrNull(r.stdout);
+    assert.equal(j.effective_policy.permissions.rendered_for, 'claude');
+    assert.equal(j.effective_policy.secrets.vault_required, true);
+    assert.deepEqual(j.effective_policy.secrets.materialisation_targets, [{
+      tool: 'claude',
+      provider: 'anthropic',
+      source: 'legacy-provider-mapping',
+      target_auth_mode: 'api_key',
+    }]);
+  });
+
+  test('status reads repo policy from the session worktree', () => {
+    const r = runMc(['status', 'repo-policy', '--json'], { env: { MC_HOME: mcHome } });
+    assert.equal(r.status, 0, `stderr:${r.stderr}`);
+    const j = parseJsonOrNull(r.stdout);
+    assert.equal(j.effective_policy.permissions.source, 'repo');
+    assert.equal(j.effective_policy.permissions.profile, 'repo-trusted');
+    assert.equal(j.effective_policy.permissions.network, 'enabled');
+    assert.equal(j.effective_config.defaultTool.value, 'codex');
+    assert.equal(j.effective_config.defaultTool.source, '.mc/local.json');
+    assert.equal(j.effective_config.permissions.profile.value, 'repo-trusted');
+    assert.equal(j.effective_config.permissions.profile.source, '.mc/policy.json');
+    assert.equal(j.effective_config.permissions.approval.value, 'untrusted');
+    assert.equal(j.effective_config.permissions.approval.source, '.mc/local.json');
   });
 
   test('unknown name → non-zero exit + error', () => {

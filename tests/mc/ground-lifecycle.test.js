@@ -107,6 +107,11 @@ describe('lifecycleGuidance (pure)', () => {
     const out = lifecycleGuidance({ map: null, repoName: 'acme' });
     assert.match(out, /seed|create/i);
     assert.match(out, /No separate\s+confirmation step is required/i);
+    assert.match(out, /Inspect repo evidence/i);
+    assert.match(out, /do not stop at an empty skeleton/i);
+    assert.match(out, /first draft/i);
+    assert.match(out, /committed/i);
+    assert.match(out, /future worktree\/session|cross-session project state/i);
     assert.match(out, /MEMORO\.md/);
   });
 
@@ -124,6 +129,7 @@ describe('lifecycleGuidance (pure)', () => {
     // No stale list, but still references the sparse maintenance posture.
     assert.ok(!/`active · L · now`/.test(out));
     assert.match(out, /MEMORO\.md/);
+    assert.match(out, /final summary/i);
   });
 
   it('never throws with no args', () => {

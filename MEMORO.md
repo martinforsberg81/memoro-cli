@@ -8,22 +8,26 @@ grounds in this file at session start and keeps it current as work lands.
 
 ## North star
 
-Make **one human able to orchestrate a fleet of AI coding agents** — across any
-tool, model, repo, and machine — from a single **high-altitude session grounded
-in the whole**; and give that power to **small developers** who can't buy
-enterprise systems.
+Make **one human able to run a grounded coordinator session** — across any tool,
+model, repo, and machine — that sees the whole, writes strong briefs, sends work
+to the agent tools already available, and returns to the project map without
+becoming a PM system.
 
 ## Long-term goals
 
-- **G1 — The grounded fleet.** A session wakes already holding the whole (this
-  map + role + who the user is) and ships work as verified parallel agents while
-  the human stays high-altitude.
-- **G2 — Project structure for the rest of us.** The intent-map + AI maintenance
-  that replaces a heavyweight PM system — free, in any repo, git or not.
+- **G1 — Roadmap and end-goal awareness.** The session always sees the
+  project's north star, active roadmap, and why the current work matters before
+  it starts touching details.
+- **G2 — Orchestrator-role discipline.** The LLM stays in the high-altitude
+  coordinator role: plan, brief, delegate, review, and only drop into
+  implementation when the user explicitly asks or the task is trivial.
+- **G3 — Cross-session work-project order.** Work projects stay coherent across
+  sessions, tools, branches, and days through a small committed `MEMORO.md` map
+  plus reliable session/worktree/tool continuity.
 
 ## Delmål & projects   (`status · scope · timeframe`)
 
-### Grounding — the core mechanic   · serves G1, G2
+### Grounding — the core mechanic   · serves G1, G2, G3
 A session must be handed the right context *before the user types*. Today
 `mc new` gives almost none — this is the first thing to get right.
 
@@ -31,16 +35,16 @@ A session must be handed the right context *before the user types*. Today
   Every entry (`mc`, `mc new`, `mc resume`) injects the bundle `{ map + role +
   lens + focus }` into standing context before the user types, so the LLM wakes
   grounded. Phase 1 shipped bare `mc`; Phase 2 shipped entry-parity (`mc new
-  [<task>]` / `mc resume` ground via the same seam), MEMORO.md maintenance
-  guidance (keep the living map current as work lands, without a separate
-  confirmation gate), and the adapter-sync drift-fix (grounding block stripped
-  before the wrapper byte-compare). Phase 3 shipped
+  [<task>]` / `mc resume` ground via the same seam), the MEMORO.md lifecycle
+  (seed/update as committed coordinator state, never hidden background churn),
+  and the adapter-sync drift-fix
+  (grounding block stripped before the wrapper byte-compare). Phase 3 shipped
   tool-switching: the launcher is adapter-routed (no longer claude-hardcoded),
   codex has writeGrounding/removeGrounding parity into AGENTS.md, `mc new
-  --codex`/`--claude` sugar over `--tool`, and a mid-session switch unified into
-  `mc tool-switch <tool> --here` (re-renders the same bundle via the target
-  adapter + persists the per-session tool, user relaunches). Drift-strip now
-  covers BOTH adapters' markers. Phase 4 made lens auto-injection first-class
+  --codex`/`--claude` sugar over `--tool`, and existing sessions switch tool
+  only on relaunch via `mc resume <name> --codex/--claude`. `mc tool-switch`
+  sets the default for future bare `mc` / `mc new`; it does not mutate a live
+  TUI session. Drift-strip now covers BOTH adapters' markers. Phase 4 made lens auto-injection first-class
   (the whole `portrait-coding` response is pulled in one call, no manual `lens
   pull`) and derives the session's render language from the lens/user_state →
   a "respond in <language>" directive, English default. Language is SERVER-
@@ -61,19 +65,50 @@ A session must be handed the right context *before the user types*. Today
   MVP is complete.
   → `docs/plans/mc-new-grounding.md`
 
-### Orchestration — the fleet   · serves G1
-Ship a plan as verified parallel agents; the coordinator never blocks.
+### Orchestration — minimal coordinator runtime   · serves G2, G3
+mc should not become an agent-runner or PM system. The LLM session itself writes
+the prompt, sends work through the available agent tools, and asks review agents
+when useful; mc's job is to make that session wake with the map, role, repo, and
+tool state intact.
 
+- **Session Fabric: tracked project sessions** — `active · M · now`
+  The endgame is one coordinator session plus several durable project sessions
+  (`i18n`, `automations`, `courses`, etc.), all created and tracked by mc. Tool
+  agents remain disposable inside a project session; mc owns the top-level
+  topology: parent/child, worktree, branch, focus, policy, transcript/status,
+  and MEMORO.md reconciliation. First slices shipped in 0.7.6: `mc spawn`
+  creates tracked project sessions with briefs, and `mc list --tree` exposes
+  the coordinator/project shape. → `docs/plans/session-fabric.md`
 - **Continuity: resume work in a new session** — `active · S · now`
   mc is a **continuity layer**, not an agent-runner: the engine (agents, spawn,
   parallelism) comes free from the underlying model/tool; mc adds grounding +
   MEMORO.md as living project state. Payoff: resume a piece of work in a new
-  session (other day/machine/tool) because it grounds in the map. The orchestrator
-  operates a loop with *borrowed* agents — brief → tool-agent → separate review
-  agent (2nd opinion) → merge — proven by hand this session. A fanout/verify/gather
-  spine was considered and **rejected as premature**. Only real next build: keep
-  the map's in-flight state reliable so resuming a specific half-done thread is
-  frictionless. → `docs/plans/fanout-spine.md`
+  session (other day/machine/tool) because it grounds in the map. 0.7.6 fixed
+  the concrete resume/list incident: named sessions now reuse stable mc coding
+  session IDs, `mc list` separates reachable active sessions from local dead
+  sessions, and numbered resume/picker paths are usable. A fanout/verify/gather
+  spine, PM-ish map verbs, and resume-by-intent machinery remain rejected for
+  now: keep the start state excellent and let the coordinator session do the
+  orchestration. → `docs/plans/fanout-spine.md`
+- **Coordinator wake-up quality** — `active · M · now`
+  The next quality bar is not more CLI verbs; it is a sharper first minute. A
+  resumed coordinator should immediately see the north star, active project
+  nodes, role boundary, current worktree/tool, and the rule that non-trivial
+  implementation gets delegated via a brief rather than done heads-down here.
+  → `docs/plans/fanout-spine.md`
+- **Map reconciliation guard** — `active · S · now`
+  Reading MEMORO.md at startup is not enough; 0.7.6 itself proved that shipped
+  work can leave the map stale unless reconciliation is prompted deliberately.
+  Design is now locked: `/mc map` is primarily an in-session reconciliation
+  habit, not a terminal CRUD surface; mc supplies a small deterministic evidence
+  packet and a strict prompt, then the coordinator decides whether a focused
+  MEMORO.md patch is warranted. Slice 1 shipped the managed session affordance:
+  Claude gets `/memoro-map`, and grounding/canon teaches other tools the
+  `/mc map` convention. Next slices are evidence-procedure hardening, then only
+  later optional terminal preview/dispatch and status/list/end tripwires. Avoid
+  hidden background edits, duplicate `/mc end` reconciliation flow, and PM-style
+  map CRUD.
+  → `docs/plans/map-reconciliation.md`
 - **Hosted live-session workspace** — `active · M · now`
   Memoro gets a browser-native coding workspace where cloud exposes only a
   constrained `mc` orchestrator surface, and `mc attach <session>` is a real live
@@ -94,7 +129,38 @@ Ship a plan as verified parallel agents; the coordinator never blocks.
 - **Ensemble & hierarchy** — `later · M · —`
   Multi-model ensembles and recursive mid-agents, layered on the spine. → §10b/§10c
 
-### Memory loop — Memoro ↔ session   · serves G1, G2
+### Policy & safety — same freedom across tools   · serves G2, G3
+- **Unified permissions and secrets policy** — `active · M · now`
+  Users should configure their desired freedom and secret handling once, not
+  separately for Claude, Codex, Gemini, and future tools. P1-P3 are landed:
+  status now explains effective policy, explicit vault targets prevent
+  provider-name guessing, and permission profile precedence is visible as
+  `session > repo > global > default` with unsupported adapter fields labelled
+  honestly. Configuration model work has shipped: `mc status --json` and
+  `mc auth status --json` expose `effective_config`, package defaults are
+  safety-floored, repo policy/local config are first-class, and Codex launch
+  policy renders explicit `workspace`/`approval` only. Claude remains
+  visibility-only until its mapping is defensible. → `docs/plans/unified-policy.md`
+- **Data-access guard policy** — `shipped · S · now`
+  Codex sessions launched by `mc` install a PATH guard that blocks direct
+  Cloudflare data surfaces (`d1 execute`, R2 object access, KV reads, tail,
+  secrets, and similar). The admin-script bypass is no longer hardcoded for
+  Memoro; repos declare their own safe wrappers through
+  `dataAccess.cloudflare.approvedScripts` in `.mc/policy.json`, with no bypass
+  by default. → `docs/plans/configuration-model.md`
+- **Vault import from local secret files** — `active · M · now`
+  The user path must be migration, not manual copy-paste: scan `.env` /
+  `.dev.vars`, import selected secret values into mc vault, commit only
+  value-free bindings, and materialise session/worktree runtime files when
+  needed. Core migration shipped in 0.7.6: scan/import, duplicate-safe previews,
+  value-free `.mc/secrets.json` repo bindings, `mc vault set --bind`, repo-bound
+  runtime materialisation, LLM read-blocking, shred on `mc end`, and honest
+  cache/metadata-read diagnostics. Remaining slices are inspection/manual
+  materialisation (`mc vault materialise --dry-run`), existing-label
+  overwrite/rotate UX, and explicit source-file rewrite (`--move`).
+  → `docs/plans/vault-import.md`
+
+### Memory loop — Memoro ↔ session   · serves G1, G3
 - **Wire the bidirectional loop** — `shipped · M · —`
   Both directions live. Emit: session-end observations → `/api/sessions/external`
   was already wired to the claude-code `SessionEnd` hook (`src/commands/session.js`,
@@ -104,7 +170,7 @@ Ship a plan as verified parallel agents; the coordinator never blocks.
   the server-side language field (cross-repo), which sharpens the lens but is not
   required for the loop. → `docs/plans/worktree-lifecycle.md` §16
 
-### Tool-portability — any tool, any repo   · serves G1
+### Tool-portability — any tool, any repo   · serves G2, G3
 - **Materialise package-canon into any repo** — `shipped · M · —`
   The orchestrator canon ships IN the mc package (Phase 5) and `buildRole`
   inlines the role at grounding time — but a fresh repo never received the
@@ -118,8 +184,13 @@ Ship a plan as verified parallel agents; the coordinator never blocks.
   whole run — no half-materialised state). Same `mc adapter` verb family as
   `sync`, opposite direction (materialise lays down the canonical sources;
   sync points the per-tool wrappers at them). → §13c
+- **Tool-switch in ordinary repos** — `shipped · S · —`
+  0.7.6 fixed the portability gap found live in `memoro`: `mc tool-switch` can
+  use the installed package canon when an ordinary repo has no materialised
+  local canon, and wrapper drift no longer blocks persisting the selected
+  default tool. → `docs/plans/mc-hardening.md`
 
-### Knowledge access — memoro-agent   · serves G1
+### Knowledge access — memoro-agent   · serves G1, G3
 - **`mc auth agent` enrollment** — `gated (memoro server) · S · —`
   MCP endpoint + agent scope don't exist server-side yet (code-verified). Park
   until memoro ships them. → §15

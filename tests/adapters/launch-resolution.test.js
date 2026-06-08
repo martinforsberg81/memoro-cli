@@ -12,7 +12,9 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { resolveLaunch } from '../../src/adapters/index.js';
+import * as claudeCode from '../../src/adapters/claude-code.js';
 import * as codex from '../../src/adapters/codex.js';
+import { resolveEffectivePolicy } from '../../src/mc/policy.js';
 
 describe('resolveLaunch', () => {
   it('resolves claude short name to the claude-code adapter + spec', () => {
@@ -83,13 +85,92 @@ describe('codex launchSpec — binary resolution', () => {
     assert.equal(spec.bin, '/usr/local/bin/codex');
   });
 
-  it('args() drops the wrapper-injected --resume (codex has no resume picker)', () => {
+  it('args() drops the wrapper-injected --resume and uses the startup message as initial prompt', () => {
     const spec = codex.launchSpec({ resolveBinary: () => '/x/codex' });
-    assert.deepEqual(spec.args(['--resume', '--foo']), ['--foo']);
+    assert.deepEqual(spec.args(['--resume', '--foo'], { startupMessage: 'grounding' }), ['--foo', 'grounding']);
+  });
+
+  it('args() drops an optional --resume value defensively', () => {
+    const spec = codex.launchSpec({ resolveBinary: () => '/x/codex' });
+    assert.deepEqual(spec.args(['--resume', 'DATA'], { startupMessage: 'grounding' }), ['grounding']);
+  });
+
+  it('args() supplies a fallback initial prompt on empty launches to avoid Codex resume picker', () => {
+    const spec = codex.launchSpec({ resolveBinary: () => '/x/codex' });
+    assert.deepEqual(spec.args([]), ['Start a new mc coding session in this worktree.']);
+  });
+
+  it('args() does not render default policy placeholders into launch flags', () => {
+    const spec = codex.launchSpec({ resolveBinary: () => '/x/codex' });
+    const effectivePolicy = resolveEffectivePolicy({ entry: { tool: 'codex' } });
+    assert.deepEqual(spec.args([], { effectivePolicy }), ['Start a new mc coding session in this worktree.']);
+  });
+
+  it('args() renders explicit workspace and approval policy before the startup prompt', () => {
+    const spec = codex.launchSpec({ resolveBinary: () => '/x/codex' });
+    const effectivePolicy = resolveEffectivePolicy({
+      entry: {
+        tool: 'codex',
+        policy: { permissions: { workspace: 'worktree', approval: 'never' } },
+      },
+    });
+    assert.deepEqual(spec.args(['--resume', 'DATA'], {
+      startupMessage: 'grounding',
+      effectivePolicy,
+    }), [
+      '--sandbox',
+      'workspace-write',
+      '--ask-for-approval',
+      'never',
+      'grounding',
+    ]);
   });
 
   it('does not throw when the resolver throws (fails to bin=null)', () => {
     const spec = codex.launchSpec({ resolveBinary: () => { throw new Error('boom'); } });
     assert.equal(spec.bin, null);
+  });
+});
+
+describe('codex renderPolicy', () => {
+  it('maps explicit mc permissions to Codex launch args', () => {
+    const effectivePolicy = resolveEffectivePolicy({
+      entry: {
+        tool: 'codex',
+        policy: { permissions: { workspace: 'read-only', approval: 'on-request' } },
+      },
+    });
+    assert.deepEqual(codex.renderPolicy(effectivePolicy), {
+      launchArgs: ['--sandbox', 'read-only', '--ask-for-approval', 'on-request'],
+      env: {},
+      artefacts: [],
+      support: codex.POLICY_SUPPORT,
+      warnings: [],
+    });
+  });
+
+  it('never renders Codex danger-full-access, even if workspace=full is configured', () => {
+    const effectivePolicy = resolveEffectivePolicy({
+      entry: {
+        tool: 'codex',
+        policy: { permissions: { workspace: 'full' } },
+      },
+    });
+    const rendered = codex.renderPolicy(effectivePolicy);
+    assert.deepEqual(rendered.launchArgs, ['--sandbox', 'workspace-write']);
+    assert.ok(!rendered.launchArgs.includes('danger-full-access'));
+    assert.match(rendered.warnings[0], /never grants full tool access/);
+  });
+});
+
+describe('claude-code launchSpec — grounding args', () => {
+  it('appends grounding through --append-system-prompt without dropping resume args', () => {
+    const spec = claudeCode.launchSpec();
+    assert.deepEqual(spec.args(['--resume'], { startupMessage: 'grounding' }), [
+      '--resume',
+      '--append-system-prompt',
+      'grounding',
+    ]);
+    assert.equal(spec.startupMessageDelivery, 'launch-args');
   });
 });

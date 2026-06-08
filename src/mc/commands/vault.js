@@ -34,11 +34,16 @@ import {
   normaliseSecretPayload,
   parseTypeFlag,
   formatListJson,
+  formatListHeader,
   formatListLine,
+  formatListWidths,
   MC_SECRET_KINDS,
   WIRE_SECRET_TYPE,
 } from '../vault/types.js';
 import * as VaultApi from '../vault/api.js';
+
+import { readFileSync } from 'node:fs';
+import { isAbsolute, join } from 'node:path';
 
 import { getSecret as keychainGet } from '../../lib/keychain.js';
 import { ACCOUNTS } from '../../commands/auth.js';
@@ -50,6 +55,14 @@ import {
   readCachedVaultKey,
   inspectCachedVaultKey,
 } from '../vault/key-cache.js';
+import { buildVaultImportDryRun, parseDotenv, scanVaultImportFiles } from '../vault/import-scan.js';
+import {
+  SECRET_BINDINGS_RELATIVE_PATH,
+  bindingForLabels,
+  buildDotenvSecretBinding,
+  persistSecretBindingPlan,
+  planSecretBindingPersistence,
+} from '../vault/bindings.js';
 
 const PASSPHRASE_ENV = 'MC_VAULT_PASSPHRASE';
 
@@ -62,9 +75,11 @@ const VERBS = {
   unlock:            { handler: cmdUnlock,           help: 'Validate the master password (phase 1: no-op cache)' },
   lock:              { handler: cmdLock,             help: 'End the server-side vault session' },
   status:            { handler: cmdStatus,           help: 'Show vault setup + unlock state' },
+  scan:              { handler: cmdScan,             help: 'Scan local dotenv files for import candidates (no values)' },
+  import:            { handler: cmdImport,           help: 'Import dotenv secrets into the vault (use --dry-run to preview)' },
   list:              { handler: cmdList,             help: 'List secret labels (no values)' },
   get:               { handler: cmdGet,              help: 'Print a secret (prompts for confirmation)' },
-  set:               { handler: cmdSet,              help: 'Store a new secret' },
+  set:               { handler: cmdSet,              help: 'Store a new secret (use --bind KEY to attach it to this repo)' },
   rm:                { handler: cmdRm,               help: 'Delete a secret' },
   rotate:            { handler: cmdRotate,           help: 'Replace a secret, keeping the old as <label>-prev' },
   'change-password': { handler: cmdChangePassword,   help: 'Change the master password (re-encrypts auth hash)' },
@@ -111,7 +126,9 @@ VERBS`);
   console.log(`
 COMMON OPTIONS
   --json              Machine-readable output
+  --dry-run           Preview planned writes without mutating vault/files
   --no-confirm        Skip confirmation prompts (use with care)
+  --bind <ENV_KEY>    For \`set\`: attach this secret to the current repo
   --type <kind>       For \`set\` and \`list\`: ${MC_SECRET_KINDS.join(' | ')}
 
 MASTER PASSWORD
@@ -126,6 +143,314 @@ PRECONDITIONS
   - Run \`mc auth memoro\` first to store your Memoro API token.
   - Run \`mc vault setup\` once per Memoro account to create the vault.
 `);
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// Verb: scan
+// ────────────────────────────────────────────────────────────────────────
+
+async function cmdScan(argv, opts = {}) {
+  const flags = parseFlags(argv);
+  const scan = scanVaultImportFiles(flags.positional, { cwd: opts.cwd || process.cwd() });
+  const hasErrors = scan.files.some((f) => !f.ok);
+
+  if (flags.json) {
+    console.log(JSON.stringify(scan));
+  } else {
+    printScan(scan);
+  }
+
+  return hasErrors ? 1 : 0;
+}
+
+function printScan(scan) {
+  if (!scan.files.length) {
+    console.log('No dotenv secret files found.');
+    return;
+  }
+
+  for (const file of scan.files) {
+    console.log(file.file);
+    if (!file.ok) {
+      console.log(`  error: ${file.error}`);
+      continue;
+    }
+    if (!file.keys.length) {
+      console.log('  no keys found');
+      continue;
+    }
+    const width = Math.max(8, ...file.keys.map((k) => k.name.length));
+    for (const k of file.keys) {
+      const label = `${k.classification === 'secret' ? 'likely secret' : k.classification === 'config' ? 'likely config' : 'unknown'} (${k.confidence})`;
+      console.log(`  ${k.name.padEnd(width)}  ${label}  line ${k.line} - ${k.reason}`);
+    }
+  }
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// Verb: import
+// ────────────────────────────────────────────────────────────────────────
+
+async function cmdImport(argv, opts = {}) {
+  const flags = parseFlags(argv);
+  if (flags.positional.length !== 1) {
+    emit(flags.json, { ok: false, error: 'usage: mc vault import <file> [--dry-run] [--json] [--no-confirm]' });
+    return 2;
+  }
+
+  const plan = buildVaultImportDryRun(flags.positional[0], { cwd: opts.cwd || process.cwd() });
+  if (flags.dryRun) {
+    if (flags.json) {
+      console.log(JSON.stringify(plan));
+    } else {
+      printImportPreview(plan, { dryRun: true });
+    }
+    return plan.ok ? 0 : 1;
+  }
+
+  if (!plan.ok) {
+    if (flags.json) console.log(JSON.stringify(plan));
+    else console.error(`mc vault: ${plan.error}`);
+    return 1;
+  }
+
+  const selected = plan.candidates.filter((k) => k.selected);
+  if (!selected.length) {
+    emit(flags.json, {
+      ok: true,
+      imported: [],
+      skipped: plan.candidates.map((k) => ({ name: k.name, reason: k.decision })),
+      warnings: plan.warnings,
+    }, 'No secrets selected for import.');
+    return 0;
+  }
+
+  if (flags.json && !flags.noConfirm) {
+    emit(flags.json, { ok: false, error: 'non-dry-run import with --json requires --no-confirm' });
+    return 2;
+  }
+
+  if (!flags.noConfirm && !flags.json) {
+    printImportPreview(plan, { dryRun: false });
+    const ok = await confirm(`Import ${selected.length} secret${selected.length === 1 ? '' : 's'} into mc vault?`, { defaultYes: false });
+    if (!ok) {
+      console.log('Cancelled.');
+      return 1;
+    }
+  }
+
+  return importSelectedSecrets({ file: flags.positional[0], plan, flags, opts });
+}
+
+function printImportPreview(plan, { dryRun = true } = {}) {
+  if (!plan.ok) {
+    console.error(`mc vault: ${plan.error}`);
+    return;
+  }
+
+  const selected = plan.candidates.filter((k) => k.selected);
+  const skipped = plan.candidates.filter((k) => !k.selected);
+  console.log(`Vault import preview: ${plan.file}`);
+  console.log(`  import ${selected.length} secret${selected.length === 1 ? '' : 's'} into mc vault`);
+  console.log(`  skip   ${skipped.length} key${skipped.length === 1 ? '' : 's'}`);
+  console.log(dryRun
+    ? '  write  nothing (dry-run)\n'
+    : `  write  vault entries + ${SECRET_BINDINGS_RELATIVE_PATH} after confirmation; source file unchanged\n`);
+
+  if (plan.warnings?.length) {
+    console.log('Warnings');
+    for (const w of plan.warnings) {
+      const where = w.lines?.length ? ` lines ${w.lines.join(', ')}` : '';
+      console.log(`  ${w.key}${where}: ${w.message}`);
+    }
+    console.log('');
+  }
+
+  if (!plan.candidates.length) {
+    console.log('No keys found.');
+    return;
+  }
+
+  if (selected.length) {
+    console.log('Will Import');
+    const width = Math.max(8, ...selected.map((k) => k.name.length));
+    for (const k of selected) {
+      console.log(`  ${k.name.padEnd(width)}  -> ${k.label}`);
+    }
+    console.log('');
+  }
+
+  if (skipped.length) {
+    console.log('Skipped');
+    const width = Math.max(8, ...skipped.map((k) => k.name.length));
+    for (const k of skipped) {
+      const detail = k.duplicate ? 'duplicate; fix before import' : `${k.classification}, ${k.confidence}`;
+      console.log(`  ${k.name.padEnd(width)}  ${detail}`);
+    }
+    console.log('');
+  }
+
+  console.log('Binding Preview');
+  const bindings = Object.entries(plan.binding?.sources?.[0]?.keys || {});
+  if (!bindings.length) {
+    console.log('  no bindings would be written');
+  } else {
+    const width = Math.max(8, ...bindings.map(([key]) => key.length));
+    for (const [key, label] of bindings) {
+      console.log(`  ${key.padEnd(width)}  -> ${label}`);
+    }
+  }
+  console.log(dryRun
+    ? '\nNo changes made. Use --json for the exact machine-readable plan.'
+    : '\nNo changes yet. Confirm to import selected secrets into mc vault.');
+}
+
+async function importSelectedSecrets({ file, plan, flags, opts }) {
+  const cwd = opts.cwd || process.cwd();
+  await planSecretBindingPersistence(plan.binding, { cwd });
+
+  const portal = await loadPortal(opts);
+  const config = await requireSetup(portal);
+  if (!config) return 1;
+
+  const got = await getUnlockedVaultKey({ portal, config, flags, opts });
+  if (!got) return 1;
+  const { vaultKey } = got;
+
+  const values = readDotenvValueMap(file, { cwd });
+  const existingLabels = await listVaultLabels(portal, vaultKey);
+  const imported = [];
+  const skipped = [];
+  const bindableLabels = new Set();
+
+  for (const candidate of plan.candidates) {
+    if (!candidate.selected) {
+      skipped.push({ name: candidate.name, label: candidate.label, reason: candidate.decision });
+      continue;
+    }
+    if (existingLabels.has(candidate.label)) {
+      skipped.push({ name: candidate.name, label: candidate.label, reason: 'label already exists' });
+      bindableLabels.add(candidate.label);
+      continue;
+    }
+    const token = values.get(candidate.name);
+    if (!token) {
+      skipped.push({ name: candidate.name, label: candidate.label, reason: 'empty value' });
+      continue;
+    }
+
+    const payloadData = buildSecretPayload({
+      kind: 'api_token',
+      token,
+      provider: providerFromLabel(candidate.label),
+      account: plan.repo,
+      extra: {
+        source: 'vault_import',
+        source_file: plan.file,
+        env_key: candidate.name,
+      },
+    });
+    const enc = await encryptSecretPayload(vaultKey, candidate.label, payloadData);
+    const res = await VaultApi.createSecret(portal, {
+      secretType: WIRE_SECRET_TYPE,
+      encryptedLabel: enc.encryptedLabel,
+      encryptedData: enc.encryptedData,
+      iv: enc.iv,
+      labelIv: enc.labelIv,
+    });
+    if (!res?.ok) {
+      emit(flags.json, { ok: false, error: res?.error || `create failed for ${candidate.label}` });
+      return 1;
+    }
+    existingLabels.add(candidate.label);
+    bindableLabels.add(candidate.label);
+    imported.push({ name: candidate.name, label: candidate.label, id: res.secret?.id || null });
+  }
+
+  const binding = bindingForLabels(plan.binding, bindableLabels);
+  const bindingPlan = bindableLabels.size
+    ? await planSecretBindingPersistence(binding, { cwd })
+    : null;
+  const bindingFile = bindingPlan
+    ? await persistSecretBindingPlan(bindingPlan)
+    : null;
+  const writes = bindingFile?.changed
+    ? [{ path: bindingFile.path, action: bindingFile.action }]
+    : [];
+
+  const result = {
+    ok: true,
+    imported,
+    skipped,
+    warnings: plan.warnings,
+    binding,
+    binding_file: bindingFile,
+    writes,
+  };
+
+  if (flags.json) {
+    console.log(JSON.stringify(result));
+  } else {
+    printImportResult(result);
+  }
+  return 0;
+}
+
+function printImportResult(result) {
+  console.log(`Imported ${result.imported.length} secret${result.imported.length === 1 ? '' : 's'} into mc vault.`);
+  if (result.imported.length) {
+    const width = Math.max(8, ...result.imported.map((x) => x.name.length));
+    for (const item of result.imported) {
+      console.log(`  ${item.name.padEnd(width)}  -> ${item.label}`);
+    }
+  }
+  const skipped = result.skipped.filter((x) => x.reason !== 'not selected by default');
+  if (skipped.length) {
+    console.log(`\nSkipped ${skipped.length} key${skipped.length === 1 ? '' : 's'}:`);
+    const width = Math.max(8, ...skipped.map((x) => x.name.length));
+    for (const item of skipped) {
+      console.log(`  ${item.name.padEnd(width)}  ${item.reason}`);
+    }
+  }
+  if (result.writes?.length) {
+    const write = result.writes[0];
+    const verb = write.action === 'created' ? 'Created' : 'Updated';
+    console.log(`\n${verb} ${write.path}.`);
+  } else if (result.binding_file?.action === 'unchanged') {
+    console.log(`\nRepo bindings already up to date in ${result.binding_file.path}.`);
+  } else {
+    console.log('\nNo files changed.');
+  }
+}
+
+function readDotenvValueMap(file, { cwd }) {
+  const diskPath = isAbsolute(file) ? file : join(cwd, file);
+  const entries = parseDotenv(readFileSync(diskPath, 'utf8'));
+  const values = new Map();
+  for (const entry of entries) {
+    // Duplicates are never selected by the plan, so "last wins" here is
+    // only relevant for non-selected metadata keys. Keep it simple.
+    values.set(entry.key, entry.value);
+  }
+  return values;
+}
+
+async function listVaultLabels(portal, vaultKey) {
+  const listRes = await VaultApi.listSecrets(portal);
+  const wire = listRes?.secrets || [];
+  const labels = new Set();
+  for (const s of wire) {
+    try {
+      const { label } = await decryptSecretPayload(vaultKey, s);
+      labels.add(label);
+    } catch { /* skip undecryptable */ }
+  }
+  return labels;
+}
+
+function providerFromLabel(label) {
+  const idx = String(label || '').indexOf(':');
+  return idx > 0 ? label.slice(0, idx) : null;
 }
 
 // ────────────────────────────────────────────────────────────────────────
@@ -249,10 +574,12 @@ async function cmdUnlock(argv, opts = {}) {
   // a cache failure is *not* an unlock failure — the verb still
   // succeeded server-side, we just lose the no-prompt UX for
   // subsequent calls. tests + CI pass via opts.cacheDeps.
-  await cacheVaultKey(vaultKeyBytes, { deps: opts.cacheDeps });
+  const cacheStored = await cacheVaultKey(vaultKeyBytes, { deps: opts.cacheDeps });
   emit(flags.json,
-    { ok: true },
-    'Vault unlocked. Key cached for 15 min — subsequent commands won\'t re-prompt.',
+    { ok: true, cache: { stored: cacheStored, ttl_ms: cacheStored ? 15 * 60 * 1000 : 0 } },
+    cacheStored
+      ? 'Vault unlocked. Key cached for 15 min — subsequent commands won\'t re-prompt.'
+      : 'Vault unlocked, but the local key cache could not be written. This session is live, but commands that decrypt secrets may need `mc vault unlock` again.',
   );
   return 0;
 }
@@ -307,6 +634,7 @@ async function cmdStatus(argv, opts = {}) {
           present: !!cacheInfo.present,
           expires_at: cacheInfo.expiresAt || null,
           expires_in_ms: cacheInfo.expiresInMs || 0,
+          reason: cacheInfo.reason || (cacheInfo.present ? 'ok' : 'missing'),
         },
       },
     }, null, 2));
@@ -317,6 +645,8 @@ async function cmdStatus(argv, opts = {}) {
     if (cacheInfo.present) {
       const mins = Math.round(cacheInfo.expiresInMs / 60_000);
       console.log(`  cached key: yes (${mins} min${mins === 1 ? '' : 's'} until lock)`);
+    } else if (cacheInfo.reason && !['missing', 'expired'].includes(cacheInfo.reason)) {
+      console.log(`  cached key: invalid (${cacheInfo.reason})`);
     } else {
       console.log(`  cached key: no`);
     }
@@ -363,6 +693,9 @@ async function cmdList(argv, opts = {}) {
         label,
         provider: norm.provider,
         account: norm.account,
+        target_tool: norm.target_tool,
+        target_auth_mode: norm.target_auth_mode,
+        target_location: norm.target_location,
         created_at: s.created_at,
         updated_at: s.updated_at,
       });
@@ -382,8 +715,9 @@ async function cmdList(argv, opts = {}) {
     console.log('No secrets stored. Add one with `mc vault set <label>`.');
   } else {
     console.log(`mc vault — ${decrypted.length} secret${decrypted.length === 1 ? '' : 's'}:\n`);
-    console.log(`  ${'label'.padEnd(32)}  ${'kind'.padEnd(28)}  id`);
-    for (const s of decrypted) console.log(formatListLine(s));
+    const widths = formatListWidths(decrypted);
+    console.log(formatListHeader(widths));
+    for (const s of decrypted) console.log(formatListLine(s, widths));
     console.log(`\nRun \`mc vault get <label>\` to print a value.`);
   }
   return 0;
@@ -460,6 +794,9 @@ async function cmdGet(argv, opts = {}) {
         account: payload.account,
         scopes: payload.scopes,
         expires_at: payload.expires_at,
+        target_tool: payload.target_tool,
+        target_auth_mode: payload.target_auth_mode,
+        target_location: payload.target_location,
         value: payload.token,
       },
     }));
@@ -481,6 +818,13 @@ async function cmdSet(argv, opts = {}) {
     return 2;
   }
   const kind = parseTypeFlag(flags.type) || 'api_token';
+  const cwd = opts.cwd || process.cwd();
+  const binding = flags.bind
+    ? buildDotenvSecretBinding({ file: flags.bindFile || '.env', key: flags.bind, label })
+    : null;
+  const bindingPlan = binding
+    ? await planSecretBindingPersistence(binding, { cwd })
+    : null;
 
   const portal = await loadPortal(opts);
   const config = await requireSetup(portal);
@@ -512,6 +856,9 @@ async function cmdSet(argv, opts = {}) {
     account: flags.account,
     scopes: flags.scopes ? flags.scopes.split(',').map(s => s.trim()).filter(Boolean) : null,
     expiresAt: flags.expiresAt,
+    targetTool: flags.targetTool,
+    targetAuthMode: flags.targetAuthMode,
+    targetLocation: flags.targetLocation,
   });
 
   const got = await getUnlockedVaultKey({ portal, config, flags, opts });
@@ -537,11 +884,29 @@ async function cmdSet(argv, opts = {}) {
     emit(flags.json, { ok: false, error: res?.error || 'create failed' });
     return 1;
   }
-  emit(flags.json,
-    { ok: true, secret: { id: res.secret?.id, label, kind } },
-    `Stored "${label}" (${kind}). Use \`mc vault list\` to verify, \`mc vault get ${label}\` to read.`,
-  );
+  const bindingFile = bindingPlan
+    ? await persistSecretBindingPlan(bindingPlan)
+    : null;
+  const result = {
+    ok: true,
+    secret: { id: res.secret?.id, label, kind },
+    binding,
+    binding_file: bindingFile,
+    writes: bindingFile?.changed ? [{ path: bindingFile.path, action: bindingFile.action }] : [],
+  };
+  emit(flags.json, result, formatSetResult(label, kind, bindingFile));
   return 0;
+}
+
+function formatSetResult(label, kind, bindingFile) {
+  const lines = [`Stored "${label}" (${kind}). Use \`mc vault list\` to verify, \`mc vault get ${label}\` to read.`];
+  if (bindingFile?.changed) {
+    const verb = bindingFile.action === 'created' ? 'Created' : 'Updated';
+    lines.push(`${verb} ${bindingFile.path}.`);
+  } else if (bindingFile?.action === 'unchanged') {
+    lines.push(`Repo bindings already up to date in ${bindingFile.path}.`);
+  }
+  return lines.join('\n');
 }
 
 // ────────────────────────────────────────────────────────────────────────
@@ -636,6 +1001,9 @@ async function cmdRotate(argv, opts = {}) {
     account: flags.account ?? existingPayload.account,
     scopes: flags.scopes ? flags.scopes.split(',').map(s => s.trim()).filter(Boolean) : existingPayload.scopes,
     expiresAt: flags.expiresAt ?? existingPayload.expires_at,
+    targetTool: flags.targetTool ?? existingPayload.target_tool,
+    targetAuthMode: flags.targetAuthMode ?? existingPayload.target_auth_mode,
+    targetLocation: flags.targetLocation ?? existingPayload.target_location,
   });
 
   // Step 1: stash the old value as <label>-prev. Auto-purge after 24h
@@ -903,6 +1271,7 @@ async function requireSetup(portal) {
     salt: status.vault.salt,
     iterations: status.vault.iterations || 600_000,
     createdAt: status.vault.createdAt,
+    unlocked: !!status.vault.unlocked,
   };
 }
 
@@ -929,6 +1298,18 @@ async function getUnlockedVaultKey({ portal, config, flags, opts }) {
   if (cached) {
     return { vaultKey: cached.vaultKey };
   }
+
+  if (!canPromptForVaultKey({ flags, opts })) {
+    const error = config.unlocked
+      ? `vault key not cached locally; run \`mc vault unlock\` again, or set ${PASSPHRASE_ENV} for non-interactive use`
+      : `vault locked; run \`mc vault unlock\` first, or set ${PASSPHRASE_ENV} for non-interactive use`;
+    emit(flags.json, {
+      ok: false,
+      error,
+    });
+    return null;
+  }
+
   // 2. Cache miss → prompt + derive + cache.
   const password = await readMasterPassword('Master password: ', opts);
   const { vaultKey, vaultKeyBytes, authHash } = await deriveVaultKeys(
@@ -943,6 +1324,13 @@ async function getUnlockedVaultKey({ portal, config, flags, opts }) {
   // the next verb will re-prompt.
   await cacheVaultKey(vaultKeyBytes, { deps: opts.cacheDeps });
   return { vaultKey };
+}
+
+function canPromptForVaultKey({ flags = {}, opts = {} } = {}) {
+  if (typeof opts.promptStub === 'function') return true;
+  if (process.env[PASSPHRASE_ENV]) return true;
+  if (flags.json) return false;
+  return process.stdin.isTTY === true;
 }
 
 async function findSecretByLabel(portal, vaultKey, label) {
@@ -1001,11 +1389,17 @@ function bytesToBase64(bytes) {
  * Tiny flag parser shared across verbs. Positional args (no leading -)
  * are collected into .positional. Flags follow the conventions:
  *   --json
+ *   --dry-run
  *   --no-confirm
  *   --stdin
+ *   --bind <ENV_KEY>
+ *   --bind-file <path>
  *   --type <kind>
  *   --provider <name>
  *   --account <name>
+ *   --target-tool <tool>
+ *   --target-auth-mode <mode>
+ *   --target-location <location>
  *   --scopes a,b,c
  *   --expires-at <iso>
  *   --field <name>
@@ -1014,11 +1408,17 @@ function parseFlags(argv) {
   const out = {
     positional: [],
     json: false,
+    dryRun: false,
     noConfirm: false,
     stdin: false,
+    bind: null,
+    bindFile: null,
     type: null,
     provider: null,
     account: null,
+    targetTool: null,
+    targetAuthMode: null,
+    targetLocation: null,
     scopes: null,
     expiresAt: null,
     field: null,
@@ -1026,11 +1426,17 @@ function parseFlags(argv) {
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--json') out.json = true;
+    else if (a === '--dry-run') out.dryRun = true;
     else if (a === '--no-confirm') out.noConfirm = true;
     else if (a === '--stdin') out.stdin = true;
+    else if (a === '--bind') out.bind = argv[++i];
+    else if (a === '--bind-file') out.bindFile = argv[++i];
     else if (a === '--type') out.type = argv[++i];
     else if (a === '--provider') out.provider = argv[++i];
     else if (a === '--account') out.account = argv[++i];
+    else if (a === '--target-tool') out.targetTool = argv[++i];
+    else if (a === '--target-auth-mode') out.targetAuthMode = argv[++i];
+    else if (a === '--target-location') out.targetLocation = argv[++i];
     else if (a === '--scopes') out.scopes = argv[++i];
     else if (a === '--expires-at') out.expiresAt = argv[++i];
     else if (a === '--field') out.field = argv[++i];

@@ -22,6 +22,8 @@ import { join } from 'node:path';
 
 import { runMc, parseJsonOrNull } from '../_helpers/cli.js';
 import { writeRegistry, makeEntry } from '../_helpers/registry-fixture.js';
+import { run as runList } from '../../../src/mc/commands/list.js';
+import { buildSessionListView, renderSessionListHuman } from '../../../src/mc/session-list.js';
 
 function isoMinutesAgo(min) {
   return new Date(Date.now() - min * 60_000).toISOString();
@@ -119,6 +121,182 @@ describe('mc list', () => {
       assert.ok(typeof e.branch === 'string');
       assert.ok(typeof e.safety_verdict === 'string');
     }
+  });
+
+  test('human output renders active server sessions first and local stopped sessions second', async () => {
+    const stdout = [];
+    const stderr = [];
+    const status = await runList([], {
+      stdout: { write: (s) => stdout.push(s) },
+      stderr: { write: (s) => stderr.push(s) },
+      checkAndPrintFreshInstall: async () => false,
+      scanDaemons: () => ({ orphan: [], stale: [] }),
+      readRegistry: () => ({ entries: [
+        makeEntry({
+          name: 'active-local',
+          branch: 'sess/active-local',
+          tool: 'codex',
+          coding_session_id: 'sess_active',
+          session_state: 'live',
+        }),
+        makeEntry({
+          name: 'local-dead',
+          branch: 'sess/local-dead',
+          tool: 'claude',
+          coding_session_id: 'sess_dead',
+          session_state: 'dead',
+        }),
+      ] }),
+      fetchActiveSessions: async () => ({
+        ok: true,
+        sessions: [{
+          coding_session_id: 'sess_active',
+          label: 'active-local',
+          repo: 'memoro',
+          branch: 'main',
+          machine_id: 'host-a',
+          source: 'codex',
+          idle_seconds: 0,
+          received_at: new Date().toISOString(),
+        }],
+      }),
+    });
+    assert.equal(status, 0);
+    assert.equal(stderr.join(''), '');
+    const out = stdout.join('');
+    assert.match(out, /Active sessions/);
+    assert.match(out, /1\. active-local\s+active\s+codex/);
+    assert.match(out, /Local sessions/);
+    assert.match(out, /2\. local-dead\s+local\s+claude/);
+    const localSection = out.split('Local sessions')[1];
+    assert.doesNotMatch(localSection, /active-local/);
+  });
+
+  test('human output soft-degrades when active-session fetch fails', async () => {
+    const stdout = [];
+    const stderr = [];
+    const status = await runList([], {
+      stdout: { write: (s) => stdout.push(s) },
+      stderr: { write: (s) => stderr.push(s) },
+      checkAndPrintFreshInstall: async () => false,
+      scanDaemons: () => ({ orphan: [], stale: [] }),
+      readRegistry: () => ({ entries: [
+        makeEntry({
+          name: 'local-dead',
+          branch: 'sess/local-dead',
+          tool: 'claude',
+          session_state: 'dead',
+        }),
+      ] }),
+      fetchActiveSessions: async () => ({
+        ok: false,
+        sessions: [],
+        warning: 'active sessions unavailable: offline',
+      }),
+    });
+    assert.equal(status, 0);
+    assert.match(stderr.join(''), /active sessions unavailable: offline/);
+    const out = stdout.join('');
+    assert.match(out, /Active sessions/);
+    assert.match(out, /\(none\)/);
+    assert.match(out, /1\. local-dead\s+local\s+claude/);
+  });
+
+  test('active/local dedupe does not hide a same-label session from another repo', () => {
+    const view = buildSessionListView({
+      activeSessions: [{
+        coding_session_id: 'sess_remote',
+        label: 'data',
+        repo: 'memoro',
+        branch: 'sess/data',
+        source: 'codex',
+      }],
+      localEntries: [
+        makeEntry({
+          name: 'data',
+          repo_slug: 'memoro-cli',
+          branch: 'sess/data',
+          coding_session_id: null,
+          tool: 'claude',
+        }),
+      ],
+    });
+    assert.equal(view.active.length, 1);
+    assert.equal(view.local.length, 1);
+    assert.equal(view.local[0].name, 'data');
+  });
+
+  test('active/local dedupe matches same repo and branch even when active label is missing', () => {
+    const view = buildSessionListView({
+      activeSessions: [{
+        coding_session_id: 'sess_remote',
+        repo: 'memoro-cli',
+        branch: 'sess/dev',
+        source: 'codex',
+      }],
+      localEntries: [
+        makeEntry({
+          name: 'dev',
+          repo_slug: 'memoro-cli',
+          branch: 'sess/dev',
+          coding_session_id: null,
+          tool: 'codex',
+        }),
+      ],
+    });
+    assert.equal(view.active.length, 1);
+    assert.equal(view.local.length, 0);
+  });
+
+  test('active sessions without labels render branch as the display name', () => {
+    const view = buildSessionListView({
+      activeSessions: [{
+        coding_session_id: 'sess_remote',
+        repo: 'memoro-cli',
+        branch: 'sess/dev',
+        source: 'codex',
+      }],
+      localEntries: [],
+    });
+    const out = renderSessionListHuman({ view });
+    assert.match(out, /1\. sess\/dev\s+active\s+codex/);
+    assert.match(out, /id=sess_remote/);
+  });
+
+  test('human output hides active-session excerpts by default', () => {
+    const view = buildSessionListView({
+      activeSessions: [{
+        coding_session_id: 'sess_remote',
+        label: 'active-local',
+        repo: 'memoro-cli',
+        branch: 'sess/dev',
+        source: 'codex',
+        last_assistant_excerpt: 'raw \x1b[0 q terminal [0 q chatter',
+      }],
+      localEntries: [],
+    });
+    const out = renderSessionListHuman({ view });
+    assert.match(out, /1\. active-local\s+active\s+codex/);
+    assert.doesNotMatch(out, /terminal/);
+    assert.doesNotMatch(out, /\[0 q/);
+  });
+
+  test('optional active-session excerpts are sanitized before rendering', () => {
+    const view = buildSessionListView({
+      activeSessions: [{
+        coding_session_id: 'sess_remote',
+        label: 'active-local',
+        repo: 'memoro-cli',
+        branch: 'sess/dev',
+        source: 'codex',
+        last_assistant_excerpt: 'Need \x1b[0 q clean [0 q text',
+      }],
+      localEntries: [],
+    });
+    const out = renderSessionListHuman({ view, includeExcerpts: true });
+    assert.match(out, /Need\s+clean\s+text/);
+    assert.doesNotMatch(out, /\x1b/);
+    assert.doesNotMatch(out, /\[0 q/);
   });
 
   test('--all includes isolation worktrees with kind flag', () => {

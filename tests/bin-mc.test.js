@@ -9,6 +9,7 @@ import {
   formatStatus,
   extractExcerpt,
   validateLabel,
+  shouldRefuseBareMcInPrimaryWorktree,
   resolveSessionIdentifier,
 } from '../src/bin-mc.js';
 
@@ -80,7 +81,14 @@ describe('renderIntro', () => {
   test('mentions the coordinator slash command + cli help', () => {
     const plain = stripAnsi(renderIntro(ctx));
     assert.match(plain, /\/memoro-coordinator/);
+    assert.match(plain, /\/memoro-map/);
     assert.match(plain, /mc --help/);
+  });
+
+  test('uses the /mc map convention for Codex launches', () => {
+    const plain = stripAnsi(renderIntro({ ...ctx, tool: 'Codex CLI' }));
+    assert.match(plain, /\/mc map/);
+    assert.doesNotMatch(plain, /\/memoro-map/);
   });
 
   test('begins and ends with blank lines for breathing room', () => {
@@ -119,6 +127,37 @@ describe('validateLabel', () => {
   test('rejects labels over 32 chars', () => {
     assert.equal(validateLabel('x'.repeat(33)).ok, false);
     assert.equal(validateLabel('x'.repeat(32)).ok, true);
+  });
+});
+
+describe('shouldRefuseBareMcInPrimaryWorktree', () => {
+  test('refuses bare mc at the primary worktree root', () => {
+    assert.equal(shouldRefuseBareMcInPrimaryWorktree({
+      cwd: '/repo',
+      primary: '/repo',
+      env: {},
+    }), true);
+  });
+
+  test('refuses bare mc in a subdirectory of the primary worktree', () => {
+    assert.equal(shouldRefuseBareMcInPrimaryWorktree({
+      cwd: '/repo/src',
+      primary: '/repo',
+      env: {},
+    }), true);
+  });
+
+  test('allows named session reexecs and separate worktrees', () => {
+    assert.equal(shouldRefuseBareMcInPrimaryWorktree({
+      cwd: '/repo',
+      primary: '/repo',
+      env: { MC_SESSION_NAME: 'data' },
+    }), false);
+    assert.equal(shouldRefuseBareMcInPrimaryWorktree({
+      cwd: '/Users/me/.memoro/mc/worktrees/repo/data',
+      primary: '/repo',
+      env: {},
+    }), false);
   });
 });
 
@@ -275,5 +314,24 @@ describe('writeToPty', () => {
     const fakePty = { write: (s) => writes.push(s) };
     writeToPty(fakePty, 'line 1\nline 2');
     assert.deepEqual(writes, ['line 1\nline 2\r']);
+  });
+
+  test('can send delayed extra enters for TUIs that require it', () => {
+    const writes = [];
+    const timers = [];
+    const fakePty = { write: (s) => writes.push(s) };
+    writeToPty(fakePty, 'hello', {
+      submitEnterCount: 2,
+      submitEnterDelayMs: 42,
+      setTimeoutFn: (fn, ms) => {
+        timers.push({ fn, ms });
+        return timers.length;
+      },
+    });
+    assert.deepEqual(writes, ['hello\r']);
+    assert.equal(timers.length, 1);
+    assert.equal(timers[0].ms, 42);
+    timers[0].fn();
+    assert.deepEqual(writes, ['hello\r', '\r']);
   });
 });

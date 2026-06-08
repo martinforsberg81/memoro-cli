@@ -7,6 +7,9 @@
  */
 import { findEntry } from '../registry.js';
 import { detectOpenQuestion } from '../open-question.js';
+import { readConfig } from '../../lib/config.js';
+import { formatPolicySummary, readRepoPolicy, resolveEffectivePolicy } from '../policy.js';
+import { readRepoLocalConfig, resolveEffectiveConfig } from '../config-model.js';
 
 export async function run(argv) {
   const opts = parseArgs(argv);
@@ -26,6 +29,18 @@ export async function run(argv) {
   }
 
   const open_question = entry.open_question ?? detectOpenQuestion(entry.last_assistant_text || '');
+  let config = {};
+  try { config = await readConfig(); } catch { /* status remains best-effort */ }
+  const repoPolicy = readRepoPolicy({ worktreePath: entry.worktree_path });
+  const repoLocal = readRepoLocalConfig({ worktreePath: entry.worktree_path });
+  const effective_policy = resolveEffectivePolicy({ entry, repoPolicy, config });
+  const effective_config = resolveEffectiveConfig({
+    globalConfig: config,
+    repoPolicy,
+    localConfig: repoLocal.config,
+    entry,
+    warnings: repoLocal.warnings,
+  });
 
   const out = {
     name: entry.name,
@@ -43,6 +58,9 @@ export async function run(argv) {
     tool: entry.tool ?? null,
     model_chain: entry.model_chain ?? [],
     worktree_path: entry.worktree_path ?? null,
+    relaunch_command: `mc resume ${entry.name}`,
+    effective_policy,
+    effective_config,
   };
 
   if (opts.json) {
@@ -52,6 +70,9 @@ export async function run(argv) {
 
   // Human-readable
   process.stdout.write(`${out.name}  ${out.branch}\n`);
+  process.stdout.write(`  tool          ${out.tool || 'claude'}\n`);
+  process.stdout.write(`  relaunch      ${out.relaunch_command}\n`);
+  process.stdout.write(`  policy        ${formatPolicySummary(out.effective_policy)}\n`);
   process.stdout.write(`  verdict       ${out.safety_verdict}\n`);
   process.stdout.write(`  session       ${out.session_state}\n`);
   process.stdout.write(`  dirty files   ${out.dirty_files}\n`);

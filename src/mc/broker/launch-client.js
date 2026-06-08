@@ -14,6 +14,8 @@ import { getPackageVersion } from '../../lib/version.js';
 import { ensureCoordinatorSlashCommand } from '../coordinator-command.js';
 import { groundSession } from '../ground.js';
 import { mcHome } from '../paths.js';
+import { findEntry } from '../registry.js';
+import { resolvePolicyForWrap } from '../wrap-start.js';
 import { requestBroker } from './client.js';
 import { brokerLogPath } from './paths.js';
 import { attachBrokerSession } from './attach-client.js';
@@ -27,6 +29,7 @@ export async function launchBrokerOwnedSession({
   label = null,
   focus = null,
   tool = 'claude-code',
+  sessionName = null,
   argv = [],
   apiArgv = [],
   request = requestBroker,
@@ -64,12 +67,22 @@ export async function launchBrokerOwnedSession({
     return { code: 1 };
   }
 
+  const registryEntry = sessionName ? ((deps.findEntry || findEntry)(sessionName) || {}) : {};
+  const effectivePolicy = (deps.resolvePolicyForWrap || resolvePolicyForWrap)({
+    sessionName,
+    cwd,
+    tool: launch.shortName,
+    config,
+    deps,
+  });
+  let groundingLaunchMessage = null;
   try {
     const res = await (deps.groundSession || groundSession)({
       cwd,
       adapter: launch.adapter,
       focus,
     });
+    groundingLaunchMessage = res.message || null;
     if (!res.ok && res.reason) {
       stderr.write(`mc: grounding skipped (${res.reason}); continuing\n`);
     }
@@ -101,6 +114,42 @@ export async function launchBrokerOwnedSession({
     return { code: 1 };
   }
 
+  let spawnEnv = {
+    ...env,
+    MEMORO_MC_PARENT: '1',
+  };
+  if (launch.id === 'codex') {
+    try {
+      const { prepareCloudflareGuardEnv } = await import('../cloudflare-guard.js');
+      const {
+        readRepoLocalConfig,
+        readRepoPolicyConfig,
+        resolveEffectiveConfig,
+      } = await import('../config-model.js');
+      const repoPolicyConfig = (deps.readRepoPolicyConfig || readRepoPolicyConfig)({ cwd });
+      const repoLocalConfig = (deps.readRepoLocalConfig || readRepoLocalConfig)({ cwd });
+      const effectiveConfig = (deps.resolveEffectiveConfig || resolveEffectiveConfig)({
+        globalConfig: config,
+        repoPolicy: repoPolicyConfig.config,
+        localConfig: repoLocalConfig.config,
+        entry: registryEntry,
+        warnings: [
+          ...(repoPolicyConfig.warnings || []),
+          ...(repoLocalConfig.warnings || []),
+        ],
+      });
+      spawnEnv = (deps.prepareCloudflareGuardEnv || prepareCloudflareGuardEnv)({
+        baseEnv: spawnEnv,
+        mcDir: mcHome(),
+        codingSessionId,
+        effectiveConfig,
+      }).env;
+    } catch (err) {
+      stderr.write(`mc: failed to install Codex Cloudflare guard (${err.message}); refusing to launch\n`);
+      return { code: 1 };
+    }
+  }
+
   const launchRes = await request({
     type: 'launch_session',
     session: {
@@ -109,10 +158,14 @@ export async function launchBrokerOwnedSession({
       cwd,
       tool,
       argv,
+      launch_options: {
+        startupMessage: groundingLaunchMessage,
+        effectivePolicy,
+      },
       cols: stdout.columns || 80,
       rows: stdout.rows || 24,
       term_name: env.TERM || 'xterm-256color',
-      env: { MEMORO_MC_PARENT: '1' },
+      env: spawnEnv,
       sidecars: {
         codingSessionId,
         label,

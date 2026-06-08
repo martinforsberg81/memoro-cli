@@ -2,12 +2,12 @@
  * Tests for the claude-code adapter's grounding materialisation
  * (Phase 1 — Grounding MVP).
  *
- * writeGrounding writes the bundle into the SESSION's cwd CLAUDE.md
- * (not the global ~/.claude/CLAUDE.md) under a managed block whose
- * markers are DISTINCT from the lens block, so the two never collide.
+ * writeGrounding returns the bundle as launch-arg delivery. CLAUDE.md is
+ * the static adapter-sync wrapper and must not be dirtied by per-session
+ * runtime state. removeGrounding still strips legacy managed blocks left
+ * by older releases.
  *
- * Covers: cwd targeting, managed-block round-trip (idempotent replace),
- * coexistence with a hand-edited file + a separate lens block, and
+ * Covers: cwd targeting, no mutation of hand-edited/project files, and
  * removeGrounding leaving everything else intact.
  */
 
@@ -24,27 +24,24 @@ describe('claude-code adapter — writeGrounding / removeGrounding', () => {
   before(() => { dir = mkdtempSync(join(tmpdir(), 'mc-grounding-')); });
   after(() => { try { rmSync(dir, { recursive: true, force: true }); } catch {} });
 
-  it('writes the bundle into the cwd CLAUDE.md (not global)', async () => {
+  it('delivers the bundle as launch args without creating CLAUDE.md', async () => {
     const target = await claudeCode.writeGrounding('# Session grounding\nbody', { cwd: dir });
-    assert.equal(target, join(dir, 'CLAUDE.md'));
-    assert.ok(existsSync(target));
-    const body = readFileSync(target, 'utf8');
-    assert.match(body, /memoro:managed:grounding:begin/);
-    assert.match(body, /memoro:managed:grounding:end/);
-    assert.match(body, /# Session grounding/);
+    assert.deepEqual(target, {
+      path: join(dir, 'CLAUDE.md'),
+      delivery: 'launch-args',
+      message: '# Session grounding\nbody',
+    });
+    assert.ok(!existsSync(join(dir, 'CLAUDE.md')), 'must not dirty the workspace wrapper');
   });
 
-  it('replace is idempotent — only one grounding block remains', async () => {
+  it('launch-arg delivery is idempotent', async () => {
     await claudeCode.writeGrounding('first bundle', { cwd: dir });
-    await claudeCode.writeGrounding('second bundle', { cwd: dir });
-    const body = readFileSync(join(dir, 'CLAUDE.md'), 'utf8');
-    const begins = body.match(/memoro:managed:grounding:begin/g) || [];
-    assert.equal(begins.length, 1);
-    assert.match(body, /second bundle/);
-    assert.ok(!body.includes('first bundle'));
+    const second = await claudeCode.writeGrounding('second bundle', { cwd: dir });
+    assert.equal(second.message, 'second bundle');
+    assert.ok(!existsSync(join(dir, 'CLAUDE.md')));
   });
 
-  it('preserves hand-edited content outside the block', async () => {
+  it('preserves hand-edited content by not writing around it', async () => {
     const handDir = mkdtempSync(join(tmpdir(), 'mc-grounding-hand-'));
     const p = join(handDir, 'CLAUDE.md');
     writeFileSync(p, '# My project rules\n- use tabs\n', 'utf8');
@@ -52,11 +49,11 @@ describe('claude-code adapter — writeGrounding / removeGrounding', () => {
     const body = readFileSync(p, 'utf8');
     assert.match(body, /# My project rules/);
     assert.match(body, /use tabs/);
-    assert.match(body, /bundle body/);
+    assert.ok(!body.includes('bundle body'));
     rmSync(handDir, { recursive: true, force: true });
   });
 
-  it('uses a marker distinct from the lens block (they coexist)', async () => {
+  it('does not disturb a lens block in the same CLAUDE.md', async () => {
     const coDir = mkdtempSync(join(tmpdir(), 'mc-grounding-coexist-'));
     const p = join(coDir, 'CLAUDE.md');
     // Simulate a pre-existing lens managed block (portrait-coding marker).
@@ -67,26 +64,33 @@ describe('claude-code adapter — writeGrounding / removeGrounding', () => {
     );
     await claudeCode.writeGrounding('grounding body', { cwd: coDir });
     const body = readFileSync(p, 'utf8');
-    // Both blocks present, untouched.
     assert.match(body, /portrait-coding:begin/);
     assert.match(body, /lens body/);
-    assert.match(body, /grounding:begin/);
-    assert.match(body, /grounding body/);
+    assert.ok(!body.includes('grounding:begin'));
+    assert.ok(!body.includes('grounding body'));
     rmSync(coDir, { recursive: true, force: true });
   });
 
-  it('removeGrounding strips only the grounding block', async () => {
+  it('removeGrounding strips only a legacy grounding block', async () => {
     const rmDir = mkdtempSync(join(tmpdir(), 'mc-grounding-rm-'));
     const p = join(rmDir, 'CLAUDE.md');
     writeFileSync(
       p,
-      '# hand\n<!-- memoro:managed:portrait-coding:begin -->\nlens\n<!-- memoro:managed:portrait-coding:end -->\n',
+      [
+        '# hand',
+        '<!-- memoro:managed:portrait-coding:begin -->',
+        'lens',
+        '<!-- memoro:managed:portrait-coding:end -->',
+        claudeCode.GROUNDING_BEGIN,
+        'legacy grounding body',
+        claudeCode.GROUNDING_END,
+        '',
+      ].join('\n'),
       'utf8',
     );
-    await claudeCode.writeGrounding('grounding body', { cwd: rmDir });
     await claudeCode.removeGrounding({ cwd: rmDir });
     const body = readFileSync(p, 'utf8');
-    assert.ok(!body.includes('grounding body'));
+    assert.ok(!body.includes('legacy grounding body'));
     assert.ok(!body.includes('grounding:begin'));
     // Lens block + hand content survive.
     assert.match(body, /# hand/);

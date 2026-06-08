@@ -13,7 +13,7 @@
  */
 import test, { describe, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -48,7 +48,53 @@ describe('mc auth status', () => {
     assert.deepEqual(ids, ['claude-code', 'codex', 'gemini-cli']);
     assert.ok(j.shell_wrapper);
     assert.ok(j.workspace);
+    assert.ok(j.policy);
+    assert.equal(j.policy.default_tool, 'claude-code');
+    assert.deepEqual(j.policy.tools.map((t) => t.tool), ['claude', 'codex', 'gemini']);
     assert.equal(j.workspace.mc_home, repo.mcHome);
+  });
+
+  test('--json policy section explains tool-specific secrets and unsupported permissions', () => {
+    const r = runMc(['auth', 'status', '--json'], {
+      cwd: repo.dir,
+      env: { MC_HOME: repo.mcHome, MC_ORPHAN_PID_DIR: pidDir, HOME: repo.root },
+    });
+    const j = parseJsonOrNull(r.stdout);
+    const codex = j.policy.tools.find((t) => t.tool === 'codex').effective_policy;
+    const claude = j.policy.tools.find((t) => t.tool === 'claude').effective_policy;
+    assert.equal(codex.secrets.vault_required, false);
+    assert.equal(codex.secrets.native_auth_owned_by_tool, true);
+    assert.equal(codex.adapter_support.permissions.workspace, 'supported');
+    assert.equal(codex.adapter_support.permissions.network, 'unsupported');
+    assert.equal(codex.adapter_support.permissions.approval, 'supported');
+    assert.equal(claude.secrets.vault_required, true);
+    assert.equal(claude.secrets.materialisation_targets[0].provider, 'anthropic');
+  });
+
+  test('--json policy section honours repo .mc/policy.json', () => {
+    mkdirSync(join(repo.dir, '.mc'), { recursive: true });
+    writeFileSync(join(repo.dir, '.mc', 'policy.json'), JSON.stringify({
+      permissions: { profile: 'repo-trusted', network: 'enabled' },
+    }));
+    writeFileSync(join(repo.dir, '.mc', 'local.json'), JSON.stringify({
+      defaultTool: 'codex',
+      permissions: { approval: 'untrusted' },
+    }));
+    const r = runMc(['auth', 'status', '--json'], {
+      cwd: repo.dir,
+      env: { MC_HOME: repo.mcHome, MC_ORPHAN_PID_DIR: pidDir, HOME: repo.root },
+    });
+    const j = parseJsonOrNull(r.stdout);
+    const codex = j.policy.tools.find((t) => t.tool === 'codex').effective_policy;
+    assert.equal(codex.permissions.source, 'repo');
+    assert.equal(codex.permissions.profile, 'repo-trusted');
+    assert.equal(codex.permissions.network, 'enabled');
+    assert.equal(j.policy.effective_config.defaultTool.value, 'codex');
+    assert.equal(j.policy.effective_config.defaultTool.source, '.mc/local.json');
+    assert.equal(j.policy.effective_config.permissions.profile.value, 'repo-trusted');
+    assert.equal(j.policy.effective_config.permissions.profile.source, '.mc/policy.json');
+    assert.equal(j.policy.effective_config.permissions.approval.value, 'untrusted');
+    assert.equal(j.policy.effective_config.permissions.approval.source, '.mc/local.json');
   });
 
   test('tools all report not-installed on safe PATH', () => {
@@ -104,6 +150,8 @@ describe('mc auth status', () => {
     assert.match(r.stdout, /Memoro account:/);
     assert.match(r.stdout, /LLM tools on this machine:/);
     assert.match(r.stdout, /Shell wrapper:/);
+    assert.match(r.stdout, /Policy:/);
+    assert.match(r.stdout, /codex: native auth owned by tool; no vault target/);
     assert.match(r.stdout, /Workspace:/);
   });
 

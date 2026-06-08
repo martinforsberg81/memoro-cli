@@ -83,6 +83,7 @@ export class BrokerRuntime {
     const cwd = stringOrDefault(input.cwd, this._cwd());
     const toolInput = stringOrDefault(input.tool, this.env.MC_GROUNDING_TOOL || 'claude-code');
     const argv = arrayOfStrings(input.argv, 'argv');
+    const launchOptions = plainObject(input.launch_options) ? input.launch_options : {};
     const cols = positiveInteger(input.cols, 80, 'cols');
     const rows = positiveInteger(input.rows, 24, 'rows');
     const launch = this.launchResolver(toolInput);
@@ -101,6 +102,7 @@ export class BrokerRuntime {
       tool: launch.shortName || launch.id || toolInput,
       launchSpec: launch.spec,
       argv,
+      launchOptions,
       cols,
       rows,
       termName: stringOrDefault(input.term_name, this.termName),

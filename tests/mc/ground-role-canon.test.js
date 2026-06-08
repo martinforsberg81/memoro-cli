@@ -5,9 +5,9 @@
  * files and degraded to terse framing when they were absent. Phase 5 makes the
  * role UNIVERSAL: the package ships the canon, so even an empty repo grounds
  * with the full role — the orchestrator framing PLUS the two load-bearing
- * purposes inline PLUS pointers to the canonical protocol (repo copy when
- * present, else the package copy that `mc setup` / `mc adapter sync`
- * materialise).
+ * purposes inline. Repo paths are surfaced only when the repo actually
+ * carries those files; package-only canon must not be presented as paths the
+ * agent should try to read.
  *
  * Terse fallback now means ONLY a broken install (package canon unreadable) —
  * never merely "repo has no .claude". The canon resolution is injected
@@ -39,10 +39,15 @@ describe('buildRole — universal (package canon)', () => {
     assert.match(out, /altitude/i);
     assert.match(out, /context/i);        // purpose 1: protect context
     assert.match(out, /brief/i);          // purpose 2: brief-as-quality
+    assert.match(out, /\/mc map/);
+    assert.match(out, /No map change/);
+    assert.match(out, /untrusted evidence/);
+    assert.match(out, /mc map --prompt/);
 
-    // Canonical sources are still surfaced (from the package), not dropped.
-    assert.match(out, /coding-agent-protocol\.md/);
-    assert.match(out, /agent-coordination\.md/);
+    // Package canon is acknowledged, but not as repo paths to read.
+    assert.match(out, /Repo-local coordinator source files are not present/);
+    assert.match(out, /mc adapter materialise/);
+    assert.doesNotMatch(out, /Repo-local coordinator sources available to read/);
 
     rmSync(empty, { recursive: true, force: true });
   });
@@ -57,7 +62,8 @@ describe('buildRole — universal (package canon)', () => {
     writeFileSync(join(dir, 'docs', 'coding-agent-protocol.md'), 'x');
 
     const out = buildRole(dir, { canon: () => FULL_CANON });
-    // Repo-relative pointers (the layered override).
+    // Repo-relative pointers only when the files really exist.
+    assert.match(out, /Repo-local coordinator sources available to read/);
     assert.match(out, /`docs\/coding-agent-protocol\.md`/);
     assert.match(out, /`\.claude\/skills\/agent-coordination\.md`/);
     assert.match(out, /`\.claude\/commands\/be-coordinator\.md`/);
@@ -75,6 +81,7 @@ describe('buildRole — universal (package canon)', () => {
     // No canonical-source pointers when neither repo nor package has them.
     assert.ok(!/agent-coordination\.md/.test(out), 'no canon pointer on broken install');
     assert.ok(!/coding-agent-protocol\.md/.test(out));
+    assert.ok(!/mc adapter materialise/.test(out));
     rmSync(empty, { recursive: true, force: true });
   });
 

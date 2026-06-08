@@ -18,8 +18,12 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { spawnSync } from 'node:child_process';
 
-import { runMc } from '../_helpers/cli.js';
+import { runMc, CLI_PATH } from '../_helpers/cli.js';
 
 describe('mc vault — subprocess wiring', () => {
   it('`mc vault` with no args prints help and exits 0', () => {
@@ -28,7 +32,7 @@ describe('mc vault — subprocess wiring', () => {
     assert.match(res.stdout, /mc vault/);
     assert.match(res.stdout, /VERBS/);
     // The help must include every shipped verb name.
-    for (const verb of ['setup', 'unlock', 'lock', 'list', 'get', 'set', 'rm', 'rotate', 'status', 'change-password']) {
+    for (const verb of ['setup', 'unlock', 'lock', 'scan', 'import', 'list', 'get', 'set', 'rm', 'rotate', 'status', 'change-password']) {
       assert.ok(res.stdout.includes(verb), `help missing verb: ${verb}`);
     }
   });
@@ -58,6 +62,112 @@ describe('mc vault — subprocess wiring', () => {
   it('`mc vault --help` exits 0', () => {
     const res = runMc(['vault', '--help']);
     assert.equal(res.status, 0);
+  });
+
+  it('`mc vault scan --json` scans local dotenv files without a vault login', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mc-vault-scan-cli-'));
+    const secret = 'pancakes-and-syrup-9af237';
+    writeFileSync(join(dir, '.dev.vars'), `CLOUDFLARE_API_TOKEN=${secret}\nPUBLIC_API_URL=http://localhost:8787\n`);
+
+    const res = runMc(['vault', 'scan', '.dev.vars', '--json'], { cwd: dir });
+    assert.equal(res.status, 0, res.stderr);
+    assert.equal(res.stderr, '');
+    assert.ok(!res.stdout.includes(secret), `scan leaked secret value: ${res.stdout}`);
+
+    const parsed = JSON.parse(res.stdout);
+    assert.equal(parsed.ok, true);
+    assert.equal(parsed.files[0].file, '.dev.vars');
+    assert.equal(parsed.files[0].format, 'wrangler-dotenv');
+    assert.deepEqual(parsed.files[0].keys.map((k) => [k.name, k.classification]), [
+      ['CLOUDFLARE_API_TOKEN', 'secret'],
+      ['PUBLIC_API_URL', 'config'],
+    ]);
+  });
+
+  it('`mc vault import --dry-run --json` previews bindings without a vault login or secret leak', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mc-vault-import-cli-'));
+    const secret = 'pancakes-and-syrup-9af237';
+    writeFileSync(join(dir, '.env'), `OPENAI_API_KEY=${secret}\nPUBLIC_API_URL=http://localhost:8787\n`);
+
+    const res = runMc(['vault', 'import', '.env', '--dry-run', '--json'], { cwd: dir });
+    assert.equal(res.status, 0, res.stderr);
+    assert.equal(res.stderr, '');
+    assert.ok(!res.stdout.includes(secret), `import dry-run leaked secret value: ${res.stdout}`);
+
+    const parsed = JSON.parse(res.stdout);
+    assert.equal(parsed.ok, true);
+    assert.equal(parsed.dry_run, true);
+    assert.deepEqual(parsed.candidates.map((k) => [k.name, k.selected]), [
+      ['OPENAI_API_KEY', true],
+      ['PUBLIC_API_URL', false],
+    ]);
+    assert.equal(parsed.binding.sources[0].keys.OPENAI_API_KEY.endsWith(':OPENAI_API_KEY'), true);
+    assert.deepEqual(parsed.writes, []);
+  });
+
+  it('`mc vault import --dry-run` prints a compact human preview', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mc-vault-import-human-'));
+    const secret = 'pancakes-and-syrup-9af237';
+    writeFileSync(join(dir, '.env'), [
+      `OPENAI_API_KEY=${secret}`,
+      'PUBLIC_API_URL=http://localhost:8787',
+      'STRIPE_SECRET_KEY=stripe-one',
+      'STRIPE_SECRET_KEY=stripe-two',
+      '',
+    ].join('\n'));
+
+    const res = runMc(['vault', 'import', '.env', '--dry-run'], { cwd: dir });
+    assert.equal(res.status, 0, res.stderr);
+    assert.equal(res.stderr, '');
+    assert.match(res.stdout, /Vault import preview: \.env/);
+    assert.match(res.stdout, /Will Import/);
+    assert.match(res.stdout, /Skipped/);
+    assert.match(res.stdout, /Warnings/);
+    assert.match(res.stdout, /STRIPE_SECRET_KEY.*lines 3, 4/);
+    assert.match(res.stdout, /No changes made/);
+    assert.ok(!res.stdout.includes(secret), `human import preview leaked secret value: ${res.stdout}`);
+    assert.ok(!res.stdout.includes('stripe-one'), `human import preview leaked duplicate secret: ${res.stdout}`);
+    assert.ok(!res.stdout.trim().startsWith('{'), `human output should not be raw JSON:\n${res.stdout}`);
+  });
+
+  it('`mc vault import` human confirmation preview does not call itself a dry-run', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mc-vault-import-confirm-preview-'));
+    const secret = 'pancakes-and-syrup-9af237';
+    writeFileSync(join(dir, '.env'), `OPENAI_API_KEY=${secret}\n`);
+
+    const env = { ...process.env };
+    delete env.MC_EMIT_SHELL_DIRECTIVES;
+    delete env.MEMORO_MC_PARENT;
+    delete env.MC_ORPHAN_PID_DIR;
+
+    const res = spawnSync(process.execPath, [CLI_PATH, 'vault', 'import', '.env'], {
+      cwd: dir,
+      input: 'n\n',
+      encoding: 'utf8',
+      env: {
+        ...env,
+        MC_TEST_MODE: '1',
+        MEMORO_API_URL: 'http://127.0.0.1:1',
+        PATH: '/usr/bin:/bin:/usr/sbin:/sbin',
+      },
+    });
+    assert.equal(res.status, 1, res.stderr);
+    assert.match(res.stdout, /Vault import preview: \.env/);
+    assert.match(res.stdout, /write\s+vault entries \+ \.mc\/secrets\.json after confirmation; source file unchanged/);
+    assert.match(res.stdout, /No changes yet\. Confirm to import selected secrets into mc vault\./);
+    assert.doesNotMatch(res.stdout, /write\s+nothing \(dry-run\)/);
+    assert.ok(!res.stdout.includes(secret), `human import preview leaked secret value: ${res.stdout}`);
+  });
+
+  it('`mc vault import --json` requires explicit --no-confirm before mutation', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mc-vault-import-refuse-'));
+    writeFileSync(join(dir, '.env'), 'OPENAI_API_KEY=secret\n');
+
+    const res = runMc(['vault', 'import', '.env', '--json'], { cwd: dir });
+    assert.equal(res.status, 2);
+    const parsed = JSON.parse(res.stdout);
+    assert.equal(parsed.ok, false);
+    assert.match(parsed.error, /requires --no-confirm/);
   });
 });
 

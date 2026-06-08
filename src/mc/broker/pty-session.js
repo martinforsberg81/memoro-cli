@@ -10,6 +10,7 @@ export class PtySession extends EventEmitter {
     tool = null,
     launchSpec,
     argv = [],
+    launchOptions = {},
     cols = 80,
     rows = 24,
     termName = 'xterm-256color',
@@ -32,6 +33,7 @@ export class PtySession extends EventEmitter {
     this.tool = tool;
     this.launchSpec = launchSpec;
     this.argv = argv;
+    this.launchOptions = launchOptions;
     this.cols = cols;
     this.rows = rows;
     this.termName = termName;
@@ -52,7 +54,7 @@ export class PtySession extends EventEmitter {
 
     this.startedAt = this._now();
     this.lastOutputAt = this.startedAt;
-    this.pty = this.ptyFactory.spawn(this.launchSpec.bin, this.launchSpec.args(this.argv), {
+    this.pty = this.ptyFactory.spawn(this.launchSpec.bin, this.launchSpec.args(this.argv, this.launchOptions), {
       name: this.termName,
       cols: this.cols,
       rows: this.rows,
@@ -128,4 +130,3 @@ export class PtySession extends EventEmitter {
     return Date.now();
   }
 }
-
