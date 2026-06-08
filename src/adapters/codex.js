@@ -8,10 +8,10 @@
  * on an empty launch.
  */
 
-import { readFile, writeFile, mkdir, chmod, rm } from 'node:fs/promises';
+import { readFile, writeFile, rm } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
-import { join, dirname } from 'node:path';
+import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { upsertManagedBlock, removeManagedBlock } from '../lib/managed-block.js';
 import {
@@ -99,40 +99,29 @@ export async function removeGrounding({ cwd = process.cwd() } = {}) {
 }
 
 export async function installHooks({
-  memoroCliBin = 'memoro-cli',
   launcherPath = DEFAULT_LAUNCHER,
   shimPath = DEFAULT_SHIM,
 } = {}) {
-  const realCodex = resolveRealCodexBinary({ wrapperPaths: [shimPath, launcherPath] });
-  if (!realCodex) throw new Error('Could not locate the real Codex binary to wrap');
-
-  await mkdir(dirname(launcherPath), { recursive: true, mode: 0o755 });
-  const launcherScript = [
-    '#!/bin/sh',
-    `exec ${memoroCliBin} codex run --real-codex ${shellQuote(realCodex)} -- "$@"`,
-    '',
-  ].join('\n');
-  await writeFile(launcherPath, launcherScript, { mode: 0o755 });
-  try { await chmod(launcherPath, 0o755); } catch { /* best effort */ }
-
-  const shimScript = [
-    '#!/bin/sh',
-    `exec ${shellQuote(launcherPath)} "$@"`,
-    '',
-  ].join('\n');
-  await writeFile(shimPath, shimScript, { mode: 0o755 });
-  try { await chmod(shimPath, 0o755); } catch { /* best effort */ }
-
-  return shimPath;
+  return {
+    skipped: true,
+    configPath: shimPath,
+    reason: 'Codex is no longer wrapped at the raw `codex` command. Use `mc new --codex` or `mc resume <name> --codex` for Memoro sessions.',
+    legacyCleanupHint: `Run \`memoro-cli hook uninstall --tool codex\` to remove an old ${launcherPath} shim.`,
+  };
 }
 
 export async function uninstallHooks({
   launcherPath = DEFAULT_LAUNCHER,
   shimPath = DEFAULT_SHIM,
 } = {}) {
-  if (existsSync(launcherPath)) await rm(launcherPath, { force: true });
-  if (existsSync(shimPath)) await rm(shimPath, { force: true });
-  return shimPath;
+  const removed = [];
+  if (await removeManagedCodexScript(launcherPath, isManagedCodexLauncher)) {
+    removed.push(launcherPath);
+  }
+  if (await removeManagedCodexScript(shimPath, (body) => isManagedCodexShim(body, launcherPath))) {
+    removed.push(shimPath);
+  }
+  return { path: shimPath, removed };
 }
 
 /**
@@ -314,8 +303,25 @@ export async function getStatus({
   };
 }
 
-function shellQuote(value) {
-  return `'${String(value).replace(/'/g, `'\"'\"'`)}'`;
+async function removeManagedCodexScript(path, predicate) {
+  if (!existsSync(path)) return false;
+  let body = '';
+  try {
+    body = await readFile(path, 'utf8');
+  } catch {
+    return false;
+  }
+  if (!predicate(body)) return false;
+  await rm(path, { force: true });
+  return true;
+}
+
+function isManagedCodexLauncher(body) {
+  return /\bmemoro-cli\b/.test(body) && /\bcodex\s+run\b/.test(body) && /--real-codex\b/.test(body);
+}
+
+function isManagedCodexShim(body, launcherPath) {
+  return body.includes('codex-memoro') || body.includes(launcherPath);
 }
 
 // ─────────────────────────────────────────────────────────────

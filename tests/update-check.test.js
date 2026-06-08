@@ -90,6 +90,8 @@ describe('showUpdateNoticeIfAvailable', () => {
       const out = stderrChunks.join('');
       assert.match(out, /memoro-cli: new version 0\.2\.0 available/);
       assert.match(out, /npm update -g memoro-cli/);
+      assert.match(out, /sessions with mc/);
+      assert.doesNotMatch(out, /hook install/);
     } finally {
       restoreStderr();
     }

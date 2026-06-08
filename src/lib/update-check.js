@@ -42,8 +42,8 @@ export async function showUpdateNoticeIfAvailable(currentVersion) {
 
   process.stderr.write(
     `\n  ${PKG_NAME}: new version ${latest} available (you have ${currentVersion})\n` +
-    `  run: npm update -g ${PKG_NAME} && ${PKG_NAME} hook install --tool claude-code\n` +
-    `  (the second step re-stamps your editor hooks so new behaviour ships)\n\n`,
+    `  run: npm update -g ${PKG_NAME}\n` +
+    `  then start Memoro-aware sessions with mc\n\n`,
   );
 }
 

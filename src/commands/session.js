@@ -23,7 +23,7 @@ import { findLatestCodexSession } from '../lib/codex.js';
 export async function uploadSession(argv) {
   const { flags, positional } = parseFlags(argv);
   let transcriptPath = positional[0];
-  let sessionCwd = null;
+  let sessionCwd = process.cwd();
 
   // --background: fork a detached child that does the real work, so Claude
   // Code's SessionEnd hook returns immediately and the upload survives

@@ -231,8 +231,8 @@ export async function installCommands({
 }
 
 /**
- * Drop a `/memoro-update` slash command that surfaces the two-step update
- * recipe (npm install -g + hook re-install) inside Claude Code.
+ * Drop a `/memoro-update` slash command that surfaces the package update
+ * recipe inside Claude Code.
  *
  * Returns the absolute path to the written file. Idempotent — re-running
  * overwrites the existing file.
@@ -509,6 +509,7 @@ export async function shredToken({ location, sessionId, deps = {} } = {}) {
 
 const MEMORO_HOOK_ID = 'memoro-cli';
 const COMMAND_MARKER = '<!-- memoro:managed:command -->';
+const LEGACY_MEMORO_HOOK_RE = /\bmemoro-cli\b\s+(lens\s+pull|heartbeat-loop|heartbeat-stop|session\s+upload)\b/;
 
 const COMMAND_TITLES = {
   'loose-ends': 'Show loose ends from recent coding sessions',
@@ -538,25 +539,23 @@ function renderUpdateCommandFile({ memoroCliBin }) {
   // `npm install -g` is sanctioned global persistence and auto-mode
   // (correctly) blocks Claude Code from doing it unattended.
   return `---
-description: Show the recipe for updating memoro-cli + hooks
+description: Show the recipe for updating memoro-cli
 ---
 
 ${COMMAND_MARKER}
 
-The user invoked \`/memoro-update\`. **Display** the two-step recipe
+The user invoked \`/memoro-update\`. **Display** the update recipe
 below — do not try to run it yourself. \`npm install -g\` is sanctioned
 global persistence; auto-mode will block it, and even if it didn't, the
 user should opt in to global package changes themselves.
 
 \`\`\`sh
 npm install -g ${memoroCliBin === 'memoro-cli' ? 'memoro-cli' : memoroCliBin}
-${memoroCliBin} hook install --tool claude-code
 \`\`\`
 
-After the user runs both, the next \`mc\` (or restart of this session)
-picks up the new version + refreshed hooks automatically. Reply with
-just the recipe block and a brief one-line confirmation — no further
-commentary, no offers to run it.
+After the user runs it, the next \`mc\` picks up the new version
+automatically. Reply with just the recipe block and a brief one-line
+confirmation — no further commentary, no offers to run it.
 `;
 }
 
@@ -582,5 +581,15 @@ async function ensureDir(d) {
 
 function dedupeHooks(list, id) {
   if (!Array.isArray(list)) return [];
-  return list.filter(h => h?._memoro !== id);
+  return list.filter(h => h?._memoro !== id && !isLegacyMemoroHookEntry(h));
+}
+
+function isLegacyMemoroHookEntry(entry) {
+  if (!entry || typeof entry !== 'object') return false;
+  if (entry._memoro) return false;
+  const hooks = Array.isArray(entry.hooks) ? entry.hooks : [];
+  return hooks.some((hook) => {
+    const command = typeof hook?.command === 'string' ? hook.command : '';
+    return LEGACY_MEMORO_HOOK_RE.test(command);
+  });
 }

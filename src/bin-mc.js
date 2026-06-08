@@ -66,6 +66,7 @@ import {
 } from './mc/wrap-runtime.js';
 import { createDispatchSocketServer } from './mc/wrap-dispatch.js';
 import { createWrapWsHandlers } from './mc/wrap-ws.js';
+import { scheduleSessionUpload } from './mc/session-upload.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constants
@@ -548,6 +549,7 @@ async function runWrap(argv, { label = null } = {}) {
     }
   }
 
+  const uploadStartMs = Date.now() - 1000;
   const ptyProcess = pty.spawn(launchSpec.bin, spawnArgs, {
     name: process.env.TERM || 'xterm-256color',
     cols: process.stdout.columns || 80,
@@ -684,6 +686,16 @@ async function runWrap(argv, { label = null } = {}) {
           exitCode,
         }));
       } catch { /* best effort */ }
+    }
+    try {
+      await scheduleSessionUpload({
+        source: launchSpec.heartbeatSource,
+        cwd,
+        repoHint: repoName,
+        newerThanMs: uploadStartMs,
+      });
+    } catch (err) {
+      process.stderr.write(`mc: session upload scheduling failed (${err.message}); continuing\n`);
     }
     if (wrapVault.shouldShredOnExit && wrapVault.sessionId) {
       try {
