@@ -27,6 +27,7 @@ import { checkAndPrintFreshInstall, ensureSentinel } from '../first-run.js';
 import { resolveToolInput } from '../../adapters/index.js';
 import { readConfig } from '../../lib/config.js';
 import { launchBrokerOwnedSession } from '../broker/launch-client.js';
+import { readRepoLocalConfig, readRepoPolicyConfig, resolveEffectiveConfig } from '../config-model.js';
 
 const FALLBACK_TOOL_SHORT = 'claude';
 
@@ -54,15 +55,45 @@ export async function resolveToolForNew({ flagValue, configLoader = readConfig }
   }
   let cfg = null;
   try { cfg = await configLoader(); } catch { /* no config yet — soft fallback */ }
-  const stored = cfg?.defaultTool;
+  const storedField = defaultToolFromConfig(cfg);
+  const stored = storedField.value;
   if (stored) {
     const resolved = resolveToolInput(stored);
-    if (resolved) return { tool: resolved.shortName, source: 'config' };
+    if (resolved) return { tool: resolved.shortName, source: storedField.source };
     // Config has a value we can't resolve — surface in the registry
     // entry's tool field via the fallback rather than failing the verb,
     // so a misconfigured config doesn't lock the user out of `mc new`.
   }
   return { tool: FALLBACK_TOOL_SHORT, source: 'fallback' };
+}
+
+export function defaultToolFromConfig(cfg) {
+  const raw = cfg?.defaultTool;
+  if (raw && typeof raw === 'object' && Object.prototype.hasOwnProperty.call(raw, 'value')) {
+    return {
+      value: raw.value ?? null,
+      source: raw.source || 'config',
+    };
+  }
+  return {
+    value: raw ?? null,
+    source: 'config',
+  };
+}
+
+async function readEffectiveConfigForNew({ primary }) {
+  const globalConfig = await readConfig();
+  const repoPolicy = readRepoPolicyConfig({ worktreePath: primary });
+  const repoLocal = readRepoLocalConfig({ worktreePath: primary });
+  return resolveEffectiveConfig({
+    globalConfig,
+    repoPolicy: repoPolicy.config,
+    localConfig: repoLocal.config,
+    warnings: [
+      ...(repoPolicy.warnings || []),
+      ...(repoLocal.warnings || []),
+    ],
+  });
 }
 
 const NAME_RE = /^[a-z0-9][a-z0-9_-]*$/i;
@@ -137,7 +168,10 @@ export async function run(rawArgv) {
     return 1;
   }
 
-  const toolResolution = await resolveToolForNew({ flagValue: opts.tool });
+  const toolResolution = await resolveToolForNew({
+    flagValue: opts.tool,
+    configLoader: () => readEffectiveConfigForNew({ primary }),
+  });
   if (toolResolution.error) {
     console.error(`mc: ${toolResolution.error}`);
     try { git(primary, ['worktree', 'remove', wt, '--force']); } catch {}
@@ -174,13 +208,14 @@ export async function run(rawArgv) {
       branch,
       worktree_path: wt,
       tool: entry.tool,
+      tool_source: toolResolution.source,
       from: opts.from || null,
       focus: opts.task || null,
     }, null, 2));
     return 0;
   }
 
-  console.log(`mc: created worktree ${opts.name} at ${wt}`);
+  console.log(`mc: created worktree ${opts.name} at ${wt} (tool: ${entry.tool}, source: ${toolResolution.source})`);
 
   if (opts.noLaunch || process.env.MC_TEST_MODE === '1') {
     return 0;

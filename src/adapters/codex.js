@@ -158,12 +158,10 @@ export function instructionsFile() {
 //
 // NOTE: codex has a native `resume` picker, but mc resume must re-enter the
 // mc worktree session directly. We strip mc's internal Claude-only
-// `--resume [id]` signal and pass grounding as the initial prompt so Codex
-// starts a fresh interactive turn in the selected worktree instead of
-// opening its own picker.
+// `--resume [id]` signal. Grounding is delivered later through the owned PTY,
+// not as argv, so Codex Apps/MCP startup can finish before the first prompt is
+// submitted.
 // ─────────────────────────────────────────────────────────────
-const FALLBACK_INITIAL_PROMPT = 'Start a new mc coding session in this worktree.';
-
 export function launchSpec({ resolveBinary = resolveRealCodexBinary } = {}) {
   let bin = null;
   try { bin = resolveBinary(); } catch { bin = null; }
@@ -172,14 +170,13 @@ export function launchSpec({ resolveBinary = resolveRealCodexBinary } = {}) {
     args: (argv = [], { startupMessage = null, effectivePolicy = null } = {}) => {
       const base = stripInternalResumeArgs(argv);
       const policyArgs = renderPolicy(effectivePolicy).launchArgs;
-      if (startupMessage) return [...base, ...policyArgs, startupMessage];
-      if (base.length === 0) return [...policyArgs, FALLBACK_INITIAL_PROMPT];
+      void startupMessage;
       return [...base, ...policyArgs];
     },
     heartbeatSource: 'codex',
     label: LABEL,
     installHint: 'Install Codex CLI from openai/codex (could not locate the codex binary)',
-    startupMessageDelivery: 'argv-prompt',
+    startupMessageDelivery: 'deferred-pty',
     submitEnterCount: 2,
     submitEnterDelayMs: 150,
   };

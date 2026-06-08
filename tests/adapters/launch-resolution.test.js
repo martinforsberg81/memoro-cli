@@ -85,28 +85,29 @@ describe('codex launchSpec — binary resolution', () => {
     assert.equal(spec.bin, '/usr/local/bin/codex');
   });
 
-  it('args() drops the wrapper-injected --resume and uses the startup message as initial prompt', () => {
+  it('args() drops the wrapper-injected --resume and leaves startup message for PTY delivery', () => {
     const spec = codex.launchSpec({ resolveBinary: () => '/x/codex' });
-    assert.deepEqual(spec.args(['--resume', '--foo'], { startupMessage: 'grounding' }), ['--foo', 'grounding']);
+    assert.deepEqual(spec.args(['--resume', '--foo'], { startupMessage: 'grounding' }), ['--foo']);
   });
 
   it('args() drops an optional --resume value defensively', () => {
     const spec = codex.launchSpec({ resolveBinary: () => '/x/codex' });
-    assert.deepEqual(spec.args(['--resume', 'DATA'], { startupMessage: 'grounding' }), ['grounding']);
+    assert.deepEqual(spec.args(['--resume', 'DATA'], { startupMessage: 'grounding' }), []);
   });
 
-  it('args() supplies a fallback initial prompt on empty launches to avoid Codex resume picker', () => {
+  it('args() allows empty launches; grounding is delivered through the owned PTY', () => {
     const spec = codex.launchSpec({ resolveBinary: () => '/x/codex' });
-    assert.deepEqual(spec.args([]), ['Start a new mc coding session in this worktree.']);
+    assert.deepEqual(spec.args([]), []);
+    assert.equal(spec.startupMessageDelivery, 'deferred-pty');
   });
 
   it('args() does not render default policy placeholders into launch flags', () => {
     const spec = codex.launchSpec({ resolveBinary: () => '/x/codex' });
     const effectivePolicy = resolveEffectivePolicy({ entry: { tool: 'codex' } });
-    assert.deepEqual(spec.args([], { effectivePolicy }), ['Start a new mc coding session in this worktree.']);
+    assert.deepEqual(spec.args([], { effectivePolicy }), []);
   });
 
-  it('args() renders explicit workspace and approval policy before the startup prompt', () => {
+  it('args() renders explicit workspace and approval policy without consuming the startup prompt', () => {
     const spec = codex.launchSpec({ resolveBinary: () => '/x/codex' });
     const effectivePolicy = resolveEffectivePolicy({
       entry: {
@@ -122,7 +123,6 @@ describe('codex launchSpec — binary resolution', () => {
       'workspace-write',
       '--ask-for-approval',
       'never',
-      'grounding',
     ]);
   });
 

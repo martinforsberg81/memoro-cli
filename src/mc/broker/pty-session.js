@@ -1,6 +1,10 @@
 import { EventEmitter } from 'node:events';
 
 import { RingBuffer } from './ring-buffer.js';
+import { createStartupMessageController } from '../wrap-startup-message.js';
+import { writeToPty } from '../pty-write.js';
+
+const STARTUP_MESSAGE_IDLE_MS = 1500;
 
 export class PtySession extends EventEmitter {
   constructor({
@@ -18,6 +22,9 @@ export class PtySession extends EventEmitter {
     ptyFactory,
     clock = Date,
     ringBytes = 2 * 1024 * 1024,
+    startupMessageDelayMs = STARTUP_MESSAGE_IDLE_MS,
+    startupMessageSetTimeoutFn = globalThis.setTimeout,
+    startupMessageClearTimeoutFn = globalThis.clearTimeout,
   }) {
     super();
     if (!id) throw new TypeError('id is required');
@@ -41,12 +48,16 @@ export class PtySession extends EventEmitter {
     this.ptyFactory = ptyFactory;
     this.clock = clock;
     this.ring = new RingBuffer({ maxBytes: ringBytes });
+    this.startupMessageDelayMs = startupMessageDelayMs;
+    this.startupMessageSetTimeoutFn = startupMessageSetTimeoutFn;
+    this.startupMessageClearTimeoutFn = startupMessageClearTimeoutFn;
 
     this.pty = null;
     this.startedAt = null;
     this.lastOutputAt = null;
     this.lastInputAt = null;
     this.exit = null;
+    this.startupMessageController = null;
   }
 
   start() {
@@ -54,7 +65,14 @@ export class PtySession extends EventEmitter {
 
     this.startedAt = this._now();
     this.lastOutputAt = this.startedAt;
-    this.pty = this.ptyFactory.spawn(this.launchSpec.bin, this.launchSpec.args(this.argv, this.launchOptions), {
+    const startupMessage = this.launchSpec.startupMessageDelivery === 'deferred-pty'
+      ? this.launchOptions.startupMessage
+      : null;
+    const spawnOptions = this.launchSpec.startupMessageDelivery === 'deferred-pty'
+      ? { ...this.launchOptions, startupMessage: null }
+      : this.launchOptions;
+
+    this.pty = this.ptyFactory.spawn(this.launchSpec.bin, this.launchSpec.args(this.argv, spawnOptions), {
       name: this.termName,
       cols: this.cols,
       rows: this.rows,
@@ -62,13 +80,25 @@ export class PtySession extends EventEmitter {
       env: this.env,
     });
 
+    this.startupMessageController = createStartupMessageController({
+      message: startupMessage,
+      delayMs: this.startupMessageDelayMs,
+      deliver: (message) => {
+        writeToPty(this.pty, message, this.launchSpec);
+      },
+      setTimeoutFn: this.startupMessageSetTimeoutFn,
+      clearTimeoutFn: this.startupMessageClearTimeoutFn,
+    });
+
     this.pty.onData((data) => {
       this.lastOutputAt = this._now();
       this.ring.append(data);
       this.emit('data', data);
+      this.startupMessageController?.schedule();
     });
 
     this.pty.onExit((event) => {
+      this.startupMessageController?.cancel();
       this.exit = {
         code: event?.exitCode ?? null,
         signal: event?.signal ?? null,
