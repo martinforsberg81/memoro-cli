@@ -1,7 +1,9 @@
 import { requestBroker } from '../broker/client.js';
 import { readLocalSessionOutput } from '../broker/cloud.js';
+import { setTimeout as sleep } from 'node:timers/promises';
 
 const DEFAULT_OUTPUT_TIMEOUT_MS = 750;
+const DEFAULT_FOLLOW_INTERVAL_MS = 5_000;
 const EXCERPT_CHARS = 500;
 
 export async function run(argv, deps = {}) {
@@ -18,7 +20,39 @@ export async function run(argv, deps = {}) {
     sessionId,
     timeoutMs: opts.outputTimeoutMs,
   }));
+  const wait = deps.sleep || sleep;
 
+  const collectSnapshot = () => collectWatchSnapshot({
+    request,
+    readOutput,
+    opts,
+    stderr,
+    now: currentNow(deps),
+  });
+
+  if (opts.follow) {
+    let previous = null;
+    for (let iteration = 0; ; iteration += 1) {
+      const snapshot = await collectSnapshot();
+      if (!previous) {
+        writeFollowSnapshot(stdout, snapshot, opts);
+      } else {
+        const events = diffWatchSnapshots(previous, snapshot);
+        if (events.length) writeFollowEvents(stdout, { snapshot, events }, opts);
+      }
+      previous = snapshot;
+      if (opts.iterations && iteration + 1 >= opts.iterations) return 0;
+      await wait(opts.intervalMs);
+    }
+  }
+
+  const snapshot = await collectSnapshot();
+  if (opts.json) stdout.write(JSON.stringify(snapshot, null, 2) + '\n');
+  else stdout.write(renderWatchSnapshot(snapshot));
+  return 0;
+}
+
+async function collectWatchSnapshot({ request, readOutput, opts, stderr, now }) {
   const broker = await request({ type: 'sessions' }).catch(async (err) => {
     const status = await request({ type: 'status' }).catch(() => null);
     if (status?.ok && Array.isArray(status.sessions)) return status;
@@ -47,15 +81,9 @@ export async function run(argv, deps = {}) {
       ...(opts.hideSelf && process.env.MC_SESSION_NAME ? [process.env.MC_SESSION_NAME] : []),
       ...opts.excludeWorktreeNames,
     ],
-    now: deps.now || Date.now(),
+    now,
   });
-
-  if (opts.json) {
-    stdout.write(JSON.stringify(snapshot, null, 2) + '\n');
-  } else {
-    stdout.write(renderWatchSnapshot(snapshot));
-  }
-  return 0;
+  return snapshot;
 }
 
 export function buildWatchSnapshot({
@@ -132,6 +160,24 @@ export function extractRecommendedReply(text) {
   return null;
 }
 
+export function diffWatchSnapshots(previous = {}, current = {}) {
+  const before = new Map((previous.sessions || []).map((session) => [session.id, session]));
+  const after = new Map((current.sessions || []).map((session) => [session.id, session]));
+  const events = [];
+  for (const session of current.sessions || []) {
+    const prior = before.get(session.id);
+    if (!prior) {
+      events.push({ type: 'new', session, previous: null });
+    } else if (watchSignature(prior) !== watchSignature(session)) {
+      events.push({ type: 'changed', session, previous: prior });
+    }
+  }
+  for (const session of previous.sessions || []) {
+    if (!after.has(session.id)) events.push({ type: 'removed', session: null, previous: session });
+  }
+  return events.sort(compareWatchEvents);
+}
+
 export function renderWatchSnapshot(snapshot) {
   const out = [];
   out.push('mc sessions watch');
@@ -160,9 +206,38 @@ export function renderWatchSnapshot(snapshot) {
   return out.join('\n') + '\n';
 }
 
+export function renderWatchEvents({ snapshot, events }) {
+  const out = [];
+  out.push('mc sessions watch changes');
+  out.push(`generated ${snapshot.generated_at}`);
+  out.push('');
+  for (const event of events) {
+    const session = event.session || event.previous;
+    const age = formatAge(session?.last_output_age_seconds);
+    const parts = [
+      event.type,
+      `[${session?.name || session?.id}]`,
+      event.session?.disposition || event.previous?.disposition,
+      event.session && event.previous ? `from=${event.previous.disposition}` : null,
+      age,
+    ].filter(Boolean);
+    out.push(parts.join('  '));
+    if (event.session?.latest_text) out.push(`  text: ${oneLine(event.session.latest_text, 180)}`);
+    if (event.session?.recommended_reply) out.push(`  recommended: ${event.session.recommended_reply}`);
+    if (event.session?.command) out.push(`  send: ${event.session.command}`);
+  }
+  out.push('');
+  const counts = Object.entries(snapshot.counts || {}).map(([k, v]) => `${k}=${v}`).join(' ');
+  if (counts) out.push(counts);
+  return out.join('\n') + '\n';
+}
+
 function parseArgs(argv) {
   const opts = {
     json: false,
+    follow: false,
+    intervalMs: DEFAULT_FOLLOW_INTERVAL_MS,
+    iterations: null,
     includeDead: false,
     hideSelf: false,
     excludeWorktreeNames: [],
@@ -172,6 +247,17 @@ function parseArgs(argv) {
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === '--json') opts.json = true;
+    else if (arg === '--follow') opts.follow = true;
+    else if (arg === '--interval') {
+      const ms = Number(argv[++i]);
+      if (!Number.isFinite(ms) || ms < 0) return { ...opts, error: '--interval must be a non-negative number of milliseconds' };
+      opts.intervalMs = ms;
+    }
+    else if (arg === '--iterations') {
+      const n = Number(argv[++i]);
+      if (!Number.isInteger(n) || n < 1) return { ...opts, error: '--iterations must be a positive integer' };
+      opts.iterations = n;
+    }
     else if (arg === '--include-dead') opts.includeDead = true;
     else if (arg === '--hide-self') opts.hideSelf = true;
     else if (arg === '--exclude-worktree') {
@@ -185,7 +271,7 @@ function parseArgs(argv) {
       if (!Number.isFinite(ms) || ms < 0) return { ...opts, error: '--output-timeout must be a non-negative number of milliseconds' };
       opts.outputTimeoutMs = ms;
     } else if (arg === '--help' || arg === '-h') {
-      return { ...opts, error: 'usage — `mc sessions watch [--json] [--include-dead] [--hide-self] [--exclude-worktree <name>] [--no-output]`' };
+      return { ...opts, error: 'usage — `mc sessions watch [--follow] [--json] [--interval <ms>] [--iterations <n>] [--include-dead] [--hide-self] [--exclude-worktree <name>] [--no-output]`' };
     } else {
       return { ...opts, error: `unknown flag: ${arg}` };
     }
@@ -265,8 +351,49 @@ function compareWatchItems(a, b) {
     || String(a.name || a.id).localeCompare(String(b.name || b.id));
 }
 
+function watchSignature(session) {
+  const tracksText = session?.disposition === 'awaiting_reply'
+    || session?.disposition === 'review_suggested';
+  return JSON.stringify({
+    disposition: session?.disposition || null,
+    recommended_reply: session?.recommended_reply || null,
+    latest_text: tracksText ? oneLine(session?.latest_text || '', 240) : null,
+    state: session?.state || null,
+    attachable: session?.attachable !== false,
+  });
+}
+
+function compareWatchEvents(a, b) {
+  const weight = { new: 0, changed: 1, removed: 2 };
+  return (weight[a.type] ?? 9) - (weight[b.type] ?? 9)
+    || compareWatchItems(a.session || a.previous, b.session || b.previous);
+}
+
+function writeFollowSnapshot(stdout, snapshot, opts) {
+  if (opts.json) stdout.write(JSON.stringify({ type: 'snapshot', ...snapshot }) + '\n');
+  else stdout.write(renderWatchSnapshot(snapshot));
+}
+
+function writeFollowEvents(stdout, { snapshot, events }, opts) {
+  if (opts.json) {
+    stdout.write(JSON.stringify({
+      type: 'events',
+      generated_at: snapshot.generated_at,
+      events,
+      counts: snapshot.counts,
+    }) + '\n');
+  } else {
+    stdout.write(renderWatchEvents({ snapshot, events }));
+  }
+}
+
 function countByDisposition(items) {
   const counts = {};
   for (const item of items) counts[item.disposition] = (counts[item.disposition] || 0) + 1;
   return counts;
+}
+
+function currentNow(deps = {}) {
+  if (typeof deps.now === 'function') return deps.now();
+  return deps.now || Date.now();
 }
