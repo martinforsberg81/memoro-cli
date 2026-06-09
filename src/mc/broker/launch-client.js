@@ -149,7 +149,7 @@ export async function launchBrokerOwnedSession({
     type: 'launch_session',
     session: {
       id: codingSessionId,
-      name: label,
+      name: sessionName || label,
       cwd,
       tool,
       argv,
@@ -170,6 +170,7 @@ export async function launchBrokerOwnedSession({
         source: launch.spec.heartbeatSource,
         repo: deriveRepoName(repoContext),
         branch: repoContext.branch,
+        worktreeName: sessionName || null,
         sockPath: paths.sockPath,
         metaPath: paths.metaPath,
         transcriptPath: null,

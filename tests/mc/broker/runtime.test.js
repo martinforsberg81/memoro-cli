@@ -147,6 +147,46 @@ describe('BrokerRuntime', () => {
     assert.equal(status.session.session_state, 'live');
   });
 
+  test('list exposes repo and worktree metadata for browser session lists', () => {
+    const { runtime } = makeRuntime();
+
+    runtime.handle({
+      type: 'launch_session',
+      session: {
+        id: 'sess_a',
+        name: 'alpha',
+        cwd: '/Users/me/.memoro/mc/worktrees/memoro-cli/alpha',
+        sidecars: {
+          repo: 'memoro-cli',
+          branch: 'sess/alpha',
+          worktreeName: 'alpha',
+        },
+      },
+    });
+
+    const [session] = runtime.handle({ type: 'sessions' }).sessions;
+    assert.equal(session.name, 'alpha');
+    assert.equal(session.repo, 'memoro-cli');
+    assert.equal(session.branch, 'sess/alpha');
+    assert.equal(session.worktree_name, 'alpha');
+  });
+
+  test('list derives repo and worktree metadata from cwd for older sessions', () => {
+    const { runtime } = makeRuntime();
+
+    runtime.handle({
+      type: 'launch_session',
+      session: {
+        id: 'sess_a',
+        cwd: '/Users/me/.memoro/mc/worktrees/memoro-cli/smoke-test',
+      },
+    });
+
+    const [session] = runtime.handle({ type: 'sessions' }).sessions;
+    assert.equal(session.repo, 'memoro-cli');
+    assert.equal(session.worktree_name, 'smoke-test');
+  });
+
   test('write, dispatch, resize, stop, and remove forward to the session manager', () => {
     const { runtime, fake } = makeRuntime();
 

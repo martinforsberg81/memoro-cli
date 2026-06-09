@@ -41,6 +41,7 @@ export class BrokerRuntime {
     this.termName = termName;
     this.sidecarFactory = sidecarFactory;
     this.sidecars = new Map();
+    this.sessionMetadata = new Map();
     this.attaches = new Map();
     this.manager.on('exit', ({ id }) => this._stopSidecars(id));
   }
@@ -94,6 +95,12 @@ export class BrokerRuntime {
       };
     }
 
+    const sessionMetadata = buildSessionMetadata({
+      id,
+      name: input.name,
+      cwd,
+      sidecars: input.sidecars,
+    });
     const session = this.manager.launch({
       id,
       name: typeof input.name === 'string' ? input.name : null,
@@ -113,9 +120,10 @@ export class BrokerRuntime {
         MEMORO_MC_PARENT: '1',
       },
     });
+    this.sessionMetadata.set(id, sessionMetadata);
 
     const sidecars = this._startSidecars(id, input.sidecars);
-    return { ok: true, session, ...(sidecars ? { sidecars } : {}) };
+    return { ok: true, session: this._withAttachStatus(session), ...(sidecars ? { sidecars } : {}) };
   }
 
   _status(id) {
@@ -152,6 +160,7 @@ export class BrokerRuntime {
   _remove(id) {
     const sessionId = requiredString(id, 'session id');
     this._stopSidecars(sessionId);
+    this.sessionMetadata.delete(sessionId);
     return { ok: true, removed: this.manager.remove(sessionId) };
   }
 
@@ -263,15 +272,55 @@ export class BrokerRuntime {
 
   _withAttachStatus(session) {
     if (!session) return null;
+    const metadata = {
+      ...deriveMetadataFromCwd(session.cwd),
+      ...(this.sessionMetadata.get(session.id) || {}),
+    };
     const attached = [...this.attaches.values()]
       .filter((attach) => attach.session_id === session.id)
       .map((attach) => ({ ...attach }));
     return {
       ...session,
+      ...metadata,
       attached,
       writer_attach_id: null,
     };
   }
+}
+
+function buildSessionMetadata({ id, name, cwd, sidecars } = {}) {
+  const fromCwd = deriveMetadataFromCwd(cwd);
+  const plainSidecars = plainObject(sidecars) ? sidecars : {};
+  const worktreeName = stringOrNull(
+    plainSidecars.worktree_name
+      || plainSidecars.worktreeName
+      || plainSidecars.sessionName
+      || plainSidecars.session_name
+      || name,
+  );
+  return {
+    repo: stringOrNull(plainSidecars.repo) || fromCwd.repo,
+    branch: stringOrNull(plainSidecars.branch),
+    label: stringOrNull(plainSidecars.label),
+    worktree_name: worktreeName && worktreeName !== id ? worktreeName : fromCwd.worktree_name,
+  };
+}
+
+function deriveMetadataFromCwd(cwd) {
+  if (typeof cwd !== 'string' || !cwd.trim()) return {};
+  const parts = cwd.split(/[\\/]+/).filter(Boolean);
+  const worktreesIdx = parts.lastIndexOf('worktrees');
+  if (worktreesIdx >= 0) {
+    return {
+      repo: parts[worktreesIdx + 1] || null,
+      worktree_name: parts[worktreesIdx + 2] || parts.at(-1) || null,
+    };
+  }
+  return { worktree_name: parts.at(-1) || null };
+}
+
+function stringOrNull(value) {
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
 
 function requiredString(value, label) {
