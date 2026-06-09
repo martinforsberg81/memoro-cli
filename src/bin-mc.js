@@ -68,6 +68,7 @@ import { createDispatchSocketServer } from './mc/wrap-dispatch.js';
 import { createWrapWsHandlers } from './mc/wrap-ws.js';
 import { scheduleSessionUpload } from './mc/session-upload.js';
 import { writeToPty } from './mc/pty-write.js';
+import { requestBroker } from './mc/broker/client.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constants
@@ -81,6 +82,7 @@ const MAX_ATTEMPTS = 3;
 const RETRY_INTERVAL_MS = 5 * 60 * 1000;
 const POLL_INTERVAL_MS = 500;
 const POLL_TIMEOUT_MS = 30_000;
+const SUBMIT_ENTER_DELAY_MS = 150;
 
 // Raw PTY bytes kept for excerpt extraction. ANSI escapes typically
 // strip down to ~30–50%, so 4 KiB raw yields plenty of clean text to
@@ -842,6 +844,16 @@ async function runSessionsSend(argv) {
     return 2;
   }
 
+  const local = await dispatchLocalBrokerSession(identifier, message).catch(() => null);
+  if (local?.ok) {
+    console.log(`✓ dispatched to ${local.id} via local broker`);
+    return 0;
+  }
+  if (local?.partial) {
+    console.error(`mc: local dispatch partially failed: ${local.error || 'unknown error'}`);
+    return 1;
+  }
+
   const config = await readConfig();
   const apiUrl = getApiUrl(argv) || config.apiUrl;
   const token = await getSecret(ACCOUNTS.TOKEN);
@@ -867,6 +879,90 @@ async function runSessionsSend(argv) {
   }
   console.error(`mc: dispatch failed: ${result?.error || result?.status || 'no result'}`);
   return 1;
+}
+
+export async function dispatchLocalBrokerSession(identifier, message, { request = requestBroker, wait = sleep } = {}) {
+  if (!identifier || !message) return { ok: false, skipped: true, error: 'identifier and message are required' };
+
+  const inventory = await request({ type: 'sessions' }).catch(() => null);
+  let sid = identifier;
+  let matched = false;
+  let session = null;
+
+  if (inventory?.ok && Array.isArray(inventory.sessions)) {
+    session = inventory.sessions.find((item) => localSessionMatches(item, identifier));
+    if (!session) return { ok: false, skipped: true, error: 'local session not found' };
+    sid = session.id || session.coding_session_id || identifier;
+    matched = true;
+  }
+
+  const raw = await writeLocalDispatchedInput({
+    request,
+    wait,
+    sessionId: sid,
+    message,
+    tool: session?.tool,
+  });
+  if (raw?.ok) {
+    return {
+      ok: true,
+      id: sid,
+      matched,
+      transport: 'write_session',
+    };
+  }
+  if (raw?.partial) return { ...raw, id: sid, matched };
+
+  const dispatched = await request({ type: 'dispatch_session', id: sid, message }).catch((err) => ({
+    ok: false,
+    error: err.message || String(err),
+  }));
+  if (dispatched?.ok) {
+    return {
+      ok: true,
+      id: sid,
+      matched,
+      transport: dispatched.transport || 'dispatch_session',
+    };
+  }
+  return { ok: false, skipped: true, id: sid, error: dispatched?.error || 'local dispatch failed' };
+}
+
+async function writeLocalDispatchedInput({ request, wait, sessionId, message, tool }) {
+  const first = await request({ type: 'write_session', id: sessionId, data: `${message}\r` }).catch((err) => ({
+    ok: false,
+    error: err.message || String(err),
+  }));
+  if (!first?.ok) return first;
+
+  for (let i = 1; i < submitEnterCountForLocalTool(tool); i += 1) {
+    await wait(SUBMIT_ENTER_DELAY_MS);
+    const next = await request({ type: 'write_session', id: sessionId, data: '\r' }).catch((err) => ({
+      ok: false,
+      error: err.message || String(err),
+    }));
+    if (!next?.ok) return { ...next, partial: true };
+  }
+  return { ok: true };
+}
+
+function submitEnterCountForLocalTool(tool) {
+  return /^codex\b|^codex-/i.test(String(tool || '').trim()) ? 2 : 1;
+}
+
+function localSessionMatches(session, identifier) {
+  if (!session || !identifier) return false;
+  return session.id === identifier
+    || session.coding_session_id === identifier
+    || session.name === identifier
+    || session.label === identifier
+    || localWorktreeName(session.cwd) === identifier;
+}
+
+function localWorktreeName(cwd) {
+  if (!cwd) return null;
+  const parts = String(cwd).split(/[\\/]+/).filter(Boolean);
+  return parts.at(-1) || null;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
