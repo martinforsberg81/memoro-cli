@@ -3,12 +3,15 @@ import { createConnection } from 'node:net';
 import { hostname } from 'node:os';
 import { setTimeout as sleep } from 'node:timers/promises';
 
+import { createFetchTranscriptHandler } from '../../commands/handlers/fetch-transcript.js';
 import { requestBroker } from './client.js';
 import { brokerSocketPath } from './paths.js';
 
 const INITIAL_BACKOFF_MS = 1_000;
 const MAX_BACKOFF_MS = 30_000;
 const SESSION_REFRESH_INTERVAL_MS = 5_000;
+const LOCAL_TRANSCRIPT_READ_MS = 1_000;
+const SUBMIT_ENTER_DELAY_MS = 150;
 const DEFAULT_CAPABILITIES = [
   'pty-stream-v1',
   'resize-v1',
@@ -31,6 +34,8 @@ export class CloudBrokerClient extends EventEmitter {
     setIntervalImpl = setInterval,
     clearIntervalImpl = clearInterval,
     sleepImpl = sleep,
+    localTranscriptReadMs = LOCAL_TRANSCRIPT_READ_MS,
+    fetchTranscriptHandlerFactory = createFetchTranscriptHandler,
     logger = silentLogger(),
   } = {}) {
     super();
@@ -51,6 +56,8 @@ export class CloudBrokerClient extends EventEmitter {
     this.setInterval = setIntervalImpl;
     this.clearInterval = clearIntervalImpl;
     this.sleep = sleepImpl;
+    this.localTranscriptReadMs = localTranscriptReadMs;
+    this.fetchTranscriptHandlerFactory = fetchTranscriptHandlerFactory;
     this.logger = logger;
     this.ws = null;
     this.alive = false;
@@ -143,7 +150,139 @@ export class CloudBrokerClient extends EventEmitter {
     }
     if (msg.type === 'attach_request') {
       await this._handleAttachRequest(msg);
+      return;
     }
+    if (msg.type === 'command') {
+      await this._handleCommand(msg);
+    }
+  }
+
+  async _handleCommand(msg) {
+    const commandId = msg?.command_id;
+    if (typeof commandId !== 'string' || commandId.length === 0) return;
+    try {
+      const data = await this._executeCommand(msg);
+      this._sendResult({ command_id: commandId, ok: true, data });
+    } catch (err) {
+      this._sendResult({ command_id: commandId, ok: false, error: err.message || String(err) });
+    }
+  }
+
+  async _executeCommand(msg) {
+    const kind = requiredString(msg?.kind, 'kind');
+    const args = plainObject(msg.args) ? msg.args : {};
+    if (kind === 'dispatch_message') {
+      const sessionId = requiredString(msg.coding_session_id || msg.session_id, 'coding_session_id');
+      const message = requiredString(args.message, 'message');
+      const result = await this._dispatchMessage({ sessionId, message, toolHint: args.tool || msg.tool || msg.source });
+      if (!result?.ok) {
+        throw new Error(result?.error || `dispatch failed for broker session: ${sessionId}`);
+      }
+      return result;
+    }
+    if (kind === 'fetch_transcript') {
+      const source = stringOrDefault(args.source, stringOrDefault(msg.source, 'claude-code'));
+      const transcriptPath = args.transcript_path || args.transcriptPath;
+      if (!transcriptPath) {
+        const sessionId = requiredString(msg.coding_session_id || msg.session_id, 'coding_session_id');
+        return this._fetchSessionOutputTranscript({ sessionId, source });
+      }
+      const handler = this.fetchTranscriptHandlerFactory({ transcriptPath, source });
+      return handler(args);
+    }
+    throw new Error(`No handler for kind '${kind}'`);
+  }
+
+  async _fetchSessionOutputTranscript({ sessionId, source }) {
+    const result = await this.request({
+      type: 'fetch_session_output',
+      id: sessionId,
+    });
+    if (!result?.ok) {
+      const output = await this._readLocalSessionOutput(sessionId);
+      return this._transcriptFromSessionOutput({
+        sessionId,
+        source,
+        session: {},
+        output,
+        fallback: 'broker_attach_output',
+      });
+    }
+    return this._transcriptFromSessionOutput({
+      sessionId,
+      source,
+      session: result.session && typeof result.session === 'object' ? result.session : {},
+      output: typeof result.output === 'string' ? result.output : '',
+      fallback: 'broker_recent_output',
+    });
+  }
+
+  async _dispatchMessage({ sessionId, message, toolHint = null }) {
+    const status = await this.request({ type: 'session_status', id: sessionId }).catch(() => null);
+    const session = status?.ok && status.session && typeof status.session === 'object'
+      ? status.session
+      : {};
+    const tool = stringOrDefault(session.tool, stringOrDefault(toolHint, ''));
+    const raw = await this._writeDispatchedInput({ sessionId, message, tool });
+    if (raw?.ok) {
+      return { ok: true, transport: 'write_session', session };
+    }
+    if (raw?.partial) return raw;
+    const fallback = await this.request({ type: 'dispatch_session', id: sessionId, message }).catch((err) => ({
+      ok: false,
+      error: err.message || String(err),
+    }));
+    if (!fallback?.ok) return fallback;
+    return { ...fallback, transport: fallback.transport || 'dispatch_session' };
+  }
+
+  async _writeDispatchedInput({ sessionId, message, tool }) {
+    const submitEnterCount = submitEnterCountForTool(tool);
+    const first = await this.request({ type: 'write_session', id: sessionId, data: `${message}\r` }).catch((err) => ({
+      ok: false,
+      error: err.message || String(err),
+    }));
+    if (!first?.ok) return first;
+
+    for (let i = 1; i < submitEnterCount; i += 1) {
+      await this.sleep(SUBMIT_ENTER_DELAY_MS);
+      const next = await this.request({ type: 'write_session', id: sessionId, data: '\r' }).catch((err) => ({
+        ok: false,
+        error: err.message || String(err),
+      }));
+      if (!next?.ok) return { ...next, partial: true };
+    }
+    return { ok: true };
+  }
+
+  _transcriptFromSessionOutput({ sessionId, source, session, output, fallback }) {
+    return {
+      source,
+      session_id: sessionId,
+      cwd: typeof session.cwd === 'string' ? session.cwd : null,
+      tool_version: null,
+      started_at: session.started_at || null,
+      ended_at: session.exit?.at || null,
+      messages: output ? [{ role: 'assistant', text: output }] : [],
+      activities: [],
+      fallback,
+    };
+  }
+
+  _readLocalSessionOutput(sessionId) {
+    return readLocalSessionOutput({
+      connect: this.connect,
+      brokerSocket: this.brokerSocket,
+      sessionId,
+      timeoutMs: this.localTranscriptReadMs,
+    });
+  }
+
+  _sendResult({ command_id, ok, data, error }) {
+    const payload = { type: 'result', command_id, ok };
+    if (ok) payload.data = data;
+    else payload.error = error;
+    this._send(payload);
   }
 
   async _handleAttachRequest(msg) {
@@ -175,9 +314,14 @@ export class CloudBrokerClient extends EventEmitter {
   }
 
   _send(message) {
-    if (!this.ws || this.ws.readyState !== 1) return false;
-    this.ws.send(JSON.stringify(message));
-    return true;
+    if (!this.ws) return false;
+    if (!isUsableWebSocket(this.ws)) return false;
+    try {
+      this.ws.send(JSON.stringify(message));
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   _startSessionRefreshLoop() {
@@ -194,7 +338,7 @@ export class CloudBrokerClient extends EventEmitter {
   }
 
   _refreshSessionsSafe() {
-    if (!this.alive || !this.ws || this.ws.readyState !== 1) return Promise.resolve(null);
+    if (!this.alive || !this.ws || !isUsableWebSocket(this.ws)) return Promise.resolve(null);
     if (this.refreshInFlight) return this.refreshInFlight;
     this.refreshInFlight = this.refreshSessions().catch((err) => {
       this._send({ type: 'sessions_error', error: err.message || String(err) });
@@ -410,6 +554,85 @@ function requiredString(value, label) {
     throw new TypeError(`${label} is required`);
   }
   return value;
+}
+
+function stringOrDefault(value, fallback) {
+  return typeof value === 'string' && value.length > 0 ? value : fallback;
+}
+
+function plainObject(value) {
+  return value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function submitEnterCountForTool(tool) {
+  return isCodexTool(tool) ? 2 : 1;
+}
+
+function isCodexTool(tool) {
+  return /^codex\b|^codex-/i.test(String(tool || '').trim());
+}
+
+function isUsableWebSocket(ws) {
+  return !(typeof ws?.readyState === 'number' && ws.readyState > 1);
+}
+
+export function readLocalSessionOutput({
+  connect = createConnection,
+  brokerSocket = brokerSocketPath(),
+  sessionId,
+  timeoutMs = LOCAL_TRANSCRIPT_READ_MS,
+} = {}) {
+  requiredString(sessionId, 'session id');
+  return new Promise((resolve, reject) => {
+    const socket = connect(brokerSocket);
+    let raw = '';
+    let settled = false;
+    const finish = (err = null) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try { socket.destroy?.(); } catch {}
+      if (err) reject(err);
+      else resolve(stripAttachPrelude(raw));
+    };
+    const timer = setTimeout(() => finish(), timeoutMs);
+    socket.setEncoding?.('utf8');
+    socket.on?.('data', (chunk) => {
+      raw += Buffer.isBuffer(chunk) ? chunk.toString('utf8') : String(chunk);
+    });
+    socket.on?.('error', (err) => finish(err));
+    socket.on?.('end', () => finish());
+    socket.on?.('close', () => finish());
+    socket.on?.('connect', () => {
+      socket.write(`${JSON.stringify({
+        type: 'attach_session',
+        id: sessionId,
+        side: 'monitor',
+        cols: 120,
+        rows: 72,
+        writer: false,
+        mode: 'read',
+      })}\n`);
+    });
+  });
+}
+
+function stripAttachPrelude(raw) {
+  const value = String(raw || '');
+  const newline = value.indexOf('\n');
+  if (newline >= 0) {
+    const first = value.slice(0, newline).trim();
+    if (first.startsWith('{')) return cleanTerminalText(value.slice(newline + 1));
+  }
+  return cleanTerminalText(value);
+}
+
+function cleanTerminalText(value) {
+  return String(value || '')
+    .replace(/\x1b\][\s\S]*?(?:\x07|\x1b\\)/g, '')
+    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')
+    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '')
+    .trim();
 }
 
 function silentLogger() {

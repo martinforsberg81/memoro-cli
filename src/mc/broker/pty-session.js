@@ -117,7 +117,9 @@ export class PtySession extends EventEmitter {
   }
 
   writeDispatchedMessage(message) {
-    this.write(`${message}\r`);
+    this._assertStarted();
+    this.lastInputAt = this._now();
+    writeToPty(this.pty, message, this.launchSpec);
   }
 
   resize(cols, rows) {

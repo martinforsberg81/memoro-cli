@@ -12,6 +12,7 @@ const SESSION_COMMANDS = new Set([
   'session_status',
   'write_session',
   'dispatch_session',
+  'fetch_session_output',
   'resize_session',
   'stop_session',
   'remove_session',
@@ -60,6 +61,7 @@ export class BrokerRuntime {
       if (type === 'session_status') return this._status(message.id);
       if (type === 'write_session') return this._write(message.id, message.data);
       if (type === 'dispatch_session') return this._dispatch(message.id, message.message);
+      if (type === 'fetch_session_output') return this._fetchOutput(message.id);
       if (type === 'resize_session') return this._resize(message.id, message.cols, message.rows);
       if (type === 'stop_session') return this._stop(message.id, message.signal);
       if (type === 'remove_session') return this._remove(message.id);
@@ -140,6 +142,19 @@ export class BrokerRuntime {
   _dispatch(id, message) {
     this.manager.dispatch(requiredString(id, 'session id'), requiredString(message, 'message'));
     return { ok: true };
+  }
+
+  _fetchOutput(id) {
+    const sessionId = requiredString(id, 'session id');
+    const session = this.manager.get(sessionId);
+    if (!session) return { ok: false, error: `unknown broker session: ${sessionId}` };
+    const status = this._withAttachStatus(this.manager.status(sessionId));
+    const output = typeof session.recentOutput === 'function' ? session.recentOutput() : '';
+    return {
+      ok: true,
+      session: status,
+      output,
+    };
   }
 
   _resize(id, cols, rows) {

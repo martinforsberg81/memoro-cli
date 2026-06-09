@@ -205,6 +205,22 @@ describe('BrokerRuntime', () => {
     assert.deepEqual(runtime.handle({ type: 'sessions' }), { ok: true, sessions: [] });
   });
 
+  test('fetch_session_output returns recent PTY output without attaching', () => {
+    const { runtime, fake } = makeRuntime();
+
+    runtime.handle({ type: 'launch_session', session: { id: 'sess_a' } });
+    fake.ptys[0].emitData('hello');
+    fake.ptys[0].emitData(' world');
+
+    const res = runtime.handle({ type: 'fetch_session_output', id: 'sess_a' });
+
+    assert.equal(res.ok, true);
+    assert.equal(res.output, 'hello world');
+    assert.equal(res.session.id, 'sess_a');
+    assert.equal(res.session.session_state, 'live');
+    assert.equal(res.session.attachable, true);
+  });
+
   test('attachConnection bridges a raw socket to an owned PTY session', () => {
     const { runtime, fake } = makeRuntime();
     const writes = [];

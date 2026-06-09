@@ -203,6 +203,32 @@ describe('CloudBrokerClient', () => {
     assert.ok(cleared);
   });
 
+  test('sends control frames when websocket readyState is absent', async () => {
+    resetFakeWs();
+    const client = new CloudBrokerClient({
+      apiUrl: 'https://memoro.test',
+      token: 'tok',
+      machineId: 'machine',
+      WebSocketImpl: FakeWebSocket,
+      request: async () => ({ ok: true, sessions: [] }),
+      sessionRefreshIntervalMs: 0,
+      sleepImpl: async () => {},
+    });
+
+    client.start();
+    const control = FakeWebSocket.instances[0];
+    delete control.readyState;
+    control.open = function openWithoutReadyState() {
+      this.emit('open');
+    };
+    control.open();
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.equal(JSON.parse(control.sent[0]).type, 'hello');
+    assert.equal(JSON.parse(control.sent[1]).type, 'sessions');
+    client.stop();
+  });
+
   test('handles attach_request by creating a broker-side attach stream', async () => {
     resetFakeWs();
     const local = makeLocalSocket();
@@ -269,6 +295,306 @@ describe('CloudBrokerClient', () => {
       rows: 25,
     });
 
+    client.stop();
+  });
+
+  test('handles dispatch_message commands through the local broker runtime', async () => {
+    resetFakeWs();
+    const requests = [];
+    const sleeps = [];
+    const client = new CloudBrokerClient({
+      apiUrl: 'https://memoro.test',
+      token: 'tok',
+      machineId: 'machine',
+      WebSocketImpl: FakeWebSocket,
+      request: async (msg) => {
+        requests.push(msg);
+        if (msg.type === 'sessions') return { ok: true, sessions: [] };
+        if (msg.type === 'session_status') return { ok: true, session: { id: 'sess_a', tool: 'codex' } };
+        if (msg.type === 'write_session') return { ok: true };
+        return { ok: false, error: `unexpected ${msg.type}` };
+      },
+      sessionRefreshIntervalMs: 0,
+      sleepImpl: async (ms) => { sleeps.push(ms); },
+    });
+
+    client.start();
+    const control = FakeWebSocket.instances[0];
+    control.open();
+    await new Promise((resolve) => setImmediate(resolve));
+    control.message(JSON.stringify({
+      type: 'command',
+      command_id: 'cmd_dispatch',
+      coding_session_id: 'sess_a',
+      kind: 'dispatch_message',
+      args: { message: 'ship it' },
+    }));
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.deepEqual(requests.slice(-3), [
+      { type: 'session_status', id: 'sess_a' },
+      { type: 'write_session', id: 'sess_a', data: 'ship it\r' },
+      { type: 'write_session', id: 'sess_a', data: '\r' },
+    ]);
+    assert.deepEqual(sleeps, [150]);
+    assert.deepEqual(JSON.parse(control.sent.at(-1)), {
+      type: 'result',
+      command_id: 'cmd_dispatch',
+      ok: true,
+      data: { ok: true, transport: 'write_session', session: { id: 'sess_a', tool: 'codex' } },
+    });
+    client.stop();
+  });
+
+  test('dispatch_message falls back to dispatch_session if raw write is unavailable', async () => {
+    resetFakeWs();
+    const requests = [];
+    const client = new CloudBrokerClient({
+      apiUrl: 'https://memoro.test',
+      token: 'tok',
+      machineId: 'machine',
+      WebSocketImpl: FakeWebSocket,
+      request: async (msg) => {
+        requests.push(msg);
+        if (msg.type === 'sessions') return { ok: true, sessions: [] };
+        if (msg.type === 'session_status') return { ok: true, session: { id: 'sess_a', tool: 'claude' } };
+        if (msg.type === 'write_session') return { ok: false, error: 'unknown broker command: write_session' };
+        if (msg.type === 'dispatch_session') return { ok: true, dispatched: true };
+        return { ok: false, error: `unexpected ${msg.type}` };
+      },
+      sessionRefreshIntervalMs: 0,
+      sleepImpl: async () => {},
+    });
+
+    client.start();
+    const control = FakeWebSocket.instances[0];
+    control.open();
+    await new Promise((resolve) => setImmediate(resolve));
+    control.message(JSON.stringify({
+      type: 'command',
+      command_id: 'cmd_dispatch_fallback',
+      coding_session_id: 'sess_a',
+      kind: 'dispatch_message',
+      args: { message: 'ship it' },
+    }));
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.deepEqual(requests.slice(-2), [
+      { type: 'write_session', id: 'sess_a', data: 'ship it\r' },
+      { type: 'dispatch_session', id: 'sess_a', message: 'ship it' },
+    ]);
+    assert.deepEqual(JSON.parse(control.sent.at(-1)), {
+      type: 'result',
+      command_id: 'cmd_dispatch_fallback',
+      ok: true,
+      data: { ok: true, dispatched: true, transport: 'dispatch_session' },
+    });
+    client.stop();
+  });
+
+  test('returns command errors for invalid dispatch_message commands', async () => {
+    resetFakeWs();
+    const client = new CloudBrokerClient({
+      apiUrl: 'https://memoro.test',
+      token: 'tok',
+      machineId: 'machine',
+      WebSocketImpl: FakeWebSocket,
+      request: async () => ({ ok: true, sessions: [] }),
+      sessionRefreshIntervalMs: 0,
+      sleepImpl: async () => {},
+    });
+
+    client.start();
+    const control = FakeWebSocket.instances[0];
+    control.open();
+    await new Promise((resolve) => setImmediate(resolve));
+    control.message(JSON.stringify({
+      type: 'command',
+      command_id: 'cmd_bad_dispatch',
+      coding_session_id: 'sess_a',
+      kind: 'dispatch_message',
+      args: {},
+    }));
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const result = JSON.parse(control.sent.at(-1));
+    assert.equal(result.type, 'result');
+    assert.equal(result.command_id, 'cmd_bad_dispatch');
+    assert.equal(result.ok, false);
+    assert.match(result.error, /message is required/);
+    client.stop();
+  });
+
+  test('handles fetch_transcript commands through the transcript handler', async () => {
+    resetFakeWs();
+    const factoryCalls = [];
+    const handlerCalls = [];
+    const client = new CloudBrokerClient({
+      apiUrl: 'https://memoro.test',
+      token: 'tok',
+      machineId: 'machine',
+      WebSocketImpl: FakeWebSocket,
+      request: async () => ({ ok: true, sessions: [] }),
+      fetchTranscriptHandlerFactory: (opts) => {
+        factoryCalls.push(opts);
+        return async (args) => {
+          handlerCalls.push(args);
+          return { source: opts.source, messages: [{ role: 'assistant', text: 'done' }] };
+        };
+      },
+      sessionRefreshIntervalMs: 0,
+      sleepImpl: async () => {},
+    });
+
+    client.start();
+    const control = FakeWebSocket.instances[0];
+    control.open();
+    await new Promise((resolve) => setImmediate(resolve));
+    control.message(JSON.stringify({
+      type: 'command',
+      command_id: 'cmd_fetch',
+      coding_session_id: 'sess_a',
+      kind: 'fetch_transcript',
+      args: { transcript_path: '/tmp/session.jsonl', source: 'codex', limit: 50 },
+    }));
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.deepEqual(factoryCalls, [{ transcriptPath: '/tmp/session.jsonl', source: 'codex' }]);
+    assert.deepEqual(handlerCalls, [{ transcript_path: '/tmp/session.jsonl', source: 'codex', limit: 50 }]);
+    assert.deepEqual(JSON.parse(control.sent.at(-1)), {
+      type: 'result',
+      command_id: 'cmd_fetch',
+      ok: true,
+      data: { source: 'codex', messages: [{ role: 'assistant', text: 'done' }] },
+    });
+    client.stop();
+  });
+
+  test('falls back to broker recent output when fetch_transcript has no transcript path', async () => {
+    resetFakeWs();
+    const requests = [];
+    const client = new CloudBrokerClient({
+      apiUrl: 'https://memoro.test',
+      token: 'tok',
+      machineId: 'machine',
+      WebSocketImpl: FakeWebSocket,
+      request: async (msg) => {
+        requests.push(msg);
+        if (msg.type === 'sessions') return { ok: true, sessions: [] };
+        if (msg.type === 'fetch_session_output') {
+          return {
+            ok: true,
+            output: 'latest screen',
+            session: {
+              id: 'sess_a',
+              cwd: '/repo',
+              started_at: '2026-06-09T12:00:00.000Z',
+            },
+          };
+        }
+        return { ok: false, error: `unexpected ${msg.type}` };
+      },
+      sessionRefreshIntervalMs: 0,
+      sleepImpl: async () => {},
+    });
+
+    client.start();
+    const control = FakeWebSocket.instances[0];
+    control.open();
+    await new Promise((resolve) => setImmediate(resolve));
+    control.message(JSON.stringify({
+      type: 'command',
+      command_id: 'cmd_fetch_fallback',
+      coding_session_id: 'sess_a',
+      kind: 'fetch_transcript',
+      args: { source: 'codex' },
+    }));
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.deepEqual(requests.at(-1), {
+      type: 'fetch_session_output',
+      id: 'sess_a',
+    });
+    assert.deepEqual(JSON.parse(control.sent.at(-1)), {
+      type: 'result',
+      command_id: 'cmd_fetch_fallback',
+      ok: true,
+      data: {
+        source: 'codex',
+        session_id: 'sess_a',
+        cwd: '/repo',
+        tool_version: null,
+        started_at: '2026-06-09T12:00:00.000Z',
+        ended_at: null,
+        messages: [{ role: 'assistant', text: 'latest screen' }],
+        activities: [],
+        fallback: 'broker_recent_output',
+      },
+    });
+    client.stop();
+  });
+
+  test('falls back to local attach output when broker recent output is unavailable', async () => {
+    resetFakeWs();
+    const local = makeLocalSocket();
+    const client = new CloudBrokerClient({
+      apiUrl: 'https://memoro.test',
+      token: 'tok',
+      machineId: 'machine',
+      WebSocketImpl: FakeWebSocket,
+      request: async (msg) => {
+        if (msg.type === 'sessions') return { ok: true, sessions: [] };
+        if (msg.type === 'fetch_session_output') return { ok: false, error: 'unknown broker command: fetch_session_output' };
+        return { ok: false, error: `unexpected ${msg.type}` };
+      },
+      connect: () => local,
+      localTranscriptReadMs: 50,
+      sessionRefreshIntervalMs: 0,
+      sleepImpl: async () => {},
+    });
+
+    client.start();
+    const control = FakeWebSocket.instances[0];
+    control.open();
+    await new Promise((resolve) => setImmediate(resolve));
+    control.message(JSON.stringify({
+      type: 'command',
+      command_id: 'cmd_fetch_attach',
+      coding_session_id: 'sess_a',
+      kind: 'fetch_transcript',
+      args: { source: 'codex' },
+    }));
+    await new Promise((resolve) => setImmediate(resolve));
+    local.emit('connect');
+    local.emit('data', Buffer.from('{"ok":true}\n\x1b[32mlatest screen\x1b[0m'));
+    local.emit('end');
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.deepEqual(JSON.parse(local.writes[0]), {
+      type: 'attach_session',
+      id: 'sess_a',
+      side: 'monitor',
+      cols: 120,
+      rows: 72,
+      writer: false,
+      mode: 'read',
+    });
+    assert.deepEqual(JSON.parse(control.sent.at(-1)), {
+      type: 'result',
+      command_id: 'cmd_fetch_attach',
+      ok: true,
+      data: {
+        source: 'codex',
+        session_id: 'sess_a',
+        cwd: null,
+        tool_version: null,
+        started_at: null,
+        ended_at: null,
+        messages: [{ role: 'assistant', text: 'latest screen' }],
+        activities: [],
+        fallback: 'broker_attach_output',
+      },
+    });
     client.stop();
   });
 });
