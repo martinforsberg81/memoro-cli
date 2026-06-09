@@ -161,6 +161,10 @@ async function main() {
     const sub = argv[1];
     const rest = argv.slice(2);
     if (sub === 'list')        return runSessionsList(rest);
+    if (sub === 'watch') {
+      const mod = await import('./mc/commands/sessions-watch.js');
+      return mod.run(rest);
+    }
     if (sub === 'send')        return runSessionsSend(rest);
     if (sub === 'read')        return runSessionsRead(rest);
     console.error(`Unknown sessions subcommand: ${sub ?? '<missing>'}`);
@@ -281,6 +285,7 @@ FLEET / ADVANCED
   mc fanout <plan.md>             Create one idle session per plan phase
   mc gather <plan-slug>           Merge phase PRs into a summary branch
   mc sessions list                List active sessions seen by Memoro
+  mc sessions watch               Summarize local broker sessions for orchestration
   mc sessions send <label|id> <msg>
                                   Dispatch a message into another session
   mc sessions read <label|id>     Fetch another session's recent transcript
