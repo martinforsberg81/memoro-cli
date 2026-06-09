@@ -186,6 +186,34 @@ describe('mc sessions watch', () => {
     assert.match(rendered, /recommended: Proceed\./);
   });
 
+  test('diffWatchSnapshots emits idle text changes without working churn', () => {
+    const sessions = [
+      { id: 'sess_idle', cwd: '/repo/idle', session_state: 'live', attachable: true, last_output_at: '2026-06-09T11:59:00.000Z' },
+      { id: 'sess_working', cwd: '/repo/working', session_state: 'live', attachable: true, last_output_at: '2026-06-09T11:59:00.000Z' },
+    ];
+    const previous = buildWatchSnapshot({
+      now: NOW,
+      sessions,
+      outputs: new Map([
+        ['sess_idle', 'Done.\n- tests passed'],
+        ['sess_working', 'Working(1s • esc to interrupt)'],
+      ]),
+    });
+    const current = buildWatchSnapshot({
+      now: NOW,
+      sessions,
+      outputs: new Map([
+        ['sess_idle', 'Done.\n- tests passed\n- diff clean'],
+        ['sess_working', 'Working(2s • esc to interrupt)'],
+      ]),
+    });
+
+    const events = diffWatchSnapshots(previous, current);
+    assert.deepEqual(events.map((event) => [event.type, event.session?.id]), [
+      ['changed', 'sess_idle'],
+    ]);
+  });
+
   test('follow mode emits an initial snapshot and later change events as JSON lines', async () => {
     const stdout = [];
     const stderr = [];

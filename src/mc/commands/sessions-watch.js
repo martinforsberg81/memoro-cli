@@ -352,15 +352,17 @@ function compareWatchItems(a, b) {
 }
 
 function watchSignature(session) {
-  const tracksText = session?.disposition === 'awaiting_reply'
-    || session?.disposition === 'review_suggested';
   return JSON.stringify({
     disposition: session?.disposition || null,
     recommended_reply: session?.recommended_reply || null,
-    latest_text: tracksText ? oneLine(session?.latest_text || '', 240) : null,
+    latest_text: shouldTrackLatestText(session) ? oneLine(session?.latest_text || '', 240) : null,
     state: session?.state || null,
     attachable: session?.attachable !== false,
   });
+}
+
+function shouldTrackLatestText(session) {
+  return ['awaiting_reply', 'review_suggested', 'idle', 'stale_idle'].includes(session?.disposition);
 }
 
 function compareWatchEvents(a, b) {
