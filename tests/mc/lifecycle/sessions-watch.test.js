@@ -124,6 +124,36 @@ describe('mc sessions watch', () => {
     assert.equal(parsed.sessions[0].disposition, 'awaiting_reply');
   });
 
+  test('run can filter snapshots to active dispositions', async () => {
+    const stdout = [];
+    const stderr = [];
+    const outputs = new Map([
+      ['sess_awaiting', 'Should I proceed?'],
+      ['sess_working', 'Working(3s • esc to interrupt)'],
+      ['sess_idle', 'Done.\n- tests passed'],
+    ]);
+    const status = await runSessionsWatch(['--json', '--only', 'active'], {
+      stdout: { write: (value) => stdout.push(value) },
+      stderr: { write: (value) => stderr.push(value) },
+      now: NOW,
+      requestBroker: async () => ({
+        ok: true,
+        sessions: [
+          { id: 'sess_awaiting', cwd: '/repo/awaiting', session_state: 'live', attachable: true },
+          { id: 'sess_working', cwd: '/repo/working', session_state: 'live', attachable: true },
+          { id: 'sess_idle', cwd: '/repo/idle', session_state: 'live', attachable: true },
+        ],
+      }),
+      readOutput: async (id) => outputs.get(id),
+    });
+
+    assert.equal(status, 0);
+    assert.equal(stderr.join(''), '');
+    const parsed = JSON.parse(stdout.join(''));
+    assert.deepEqual(parsed.sessions.map((session) => session.id), ['sess_awaiting', 'sess_working']);
+    assert.deepEqual(parsed.counts, { awaiting_reply: 1, working: 1 });
+  });
+
   test('human output includes text, recommendation, send command, and counts', () => {
     const snapshot = buildWatchSnapshot({
       now: NOW,

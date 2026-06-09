@@ -5,6 +5,11 @@ import { setTimeout as sleep } from 'node:timers/promises';
 const DEFAULT_OUTPUT_TIMEOUT_MS = 750;
 const DEFAULT_FOLLOW_INTERVAL_MS = 5_000;
 const EXCERPT_CHARS = 500;
+const DISPOSITIONS = ['awaiting_reply', 'review_suggested', 'working', 'idle', 'stale_idle', 'dead'];
+const ONLY_ALIASES = {
+  actionable: ['awaiting_reply', 'review_suggested'],
+  active: ['awaiting_reply', 'review_suggested', 'working'],
+};
 
 export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
@@ -81,6 +86,7 @@ async function collectWatchSnapshot({ request, readOutput, opts, stderr, now }) 
       ...(opts.hideSelf && process.env.MC_SESSION_NAME ? [process.env.MC_SESSION_NAME] : []),
       ...opts.excludeWorktreeNames,
     ],
+    onlyDispositions: opts.onlyDispositions,
     now,
   });
   return snapshot;
@@ -92,16 +98,19 @@ export function buildWatchSnapshot({
   includeDead = false,
   excludeWorktreeName = null,
   excludeWorktreeNames = [],
+  onlyDispositions = [],
   now = Date.now(),
 } = {}) {
   const excluded = new Set([
     ...(excludeWorktreeName ? [excludeWorktreeName] : []),
     ...(Array.isArray(excludeWorktreeNames) ? excludeWorktreeNames : []),
   ].filter(Boolean));
+  const only = new Set(Array.isArray(onlyDispositions) ? onlyDispositions : []);
   const items = (Array.isArray(sessions) ? sessions : [])
     .filter((session) => includeDead || session?.session_state !== 'dead')
     .filter((session) => !excluded.has(deriveWorktreeName(session?.cwd)))
     .map((session) => summarizeSession(session, outputs.get(session.id || session.coding_session_id) || '', now))
+    .filter((session) => !only.size || only.has(session.disposition))
     .sort(compareWatchItems);
   return {
     ok: true,
@@ -238,6 +247,7 @@ function parseArgs(argv) {
     follow: false,
     intervalMs: DEFAULT_FOLLOW_INTERVAL_MS,
     iterations: null,
+    onlyDispositions: [],
     includeDead: false,
     hideSelf: false,
     excludeWorktreeNames: [],
@@ -258,6 +268,13 @@ function parseArgs(argv) {
       if (!Number.isInteger(n) || n < 1) return { ...opts, error: '--iterations must be a positive integer' };
       opts.iterations = n;
     }
+    else if (arg === '--only') {
+      const value = argv[++i];
+      if (!value) return { ...opts, error: '--only requires a value' };
+      const parsed = parseOnlyDispositions(value);
+      if (parsed.error) return { ...opts, error: parsed.error };
+      opts.onlyDispositions.push(...parsed.values);
+    }
     else if (arg === '--include-dead') opts.includeDead = true;
     else if (arg === '--hide-self') opts.hideSelf = true;
     else if (arg === '--exclude-worktree') {
@@ -271,12 +288,31 @@ function parseArgs(argv) {
       if (!Number.isFinite(ms) || ms < 0) return { ...opts, error: '--output-timeout must be a non-negative number of milliseconds' };
       opts.outputTimeoutMs = ms;
     } else if (arg === '--help' || arg === '-h') {
-      return { ...opts, error: 'usage — `mc sessions watch [--follow] [--json] [--interval <ms>] [--iterations <n>] [--include-dead] [--hide-self] [--exclude-worktree <name>] [--no-output]`' };
+      return { ...opts, error: 'usage — `mc sessions watch [--follow] [--json] [--interval <ms>] [--iterations <n>] [--only <actionable|active|disposition>] [--include-dead] [--hide-self] [--exclude-worktree <name>] [--no-output]`' };
     } else {
       return { ...opts, error: `unknown flag: ${arg}` };
     }
   }
   return opts;
+}
+
+function parseOnlyDispositions(value) {
+  const values = [];
+  for (const raw of String(value || '').split(',')) {
+    const key = raw.trim().toLowerCase();
+    if (!key) continue;
+    if (ONLY_ALIASES[key]) {
+      values.push(...ONLY_ALIASES[key]);
+    } else if (DISPOSITIONS.includes(key)) {
+      values.push(key);
+    } else {
+      return {
+        error: `--only must be actionable, active, or one of: ${DISPOSITIONS.join(', ')}`,
+      };
+    }
+  }
+  if (!values.length) return { error: '--only requires at least one disposition' };
+  return { values: [...new Set(values)] };
 }
 
 function isReadableSession(session, opts) {
