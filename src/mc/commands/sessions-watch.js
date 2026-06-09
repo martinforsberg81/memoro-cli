@@ -324,7 +324,7 @@ function isReadableSession(session, opts) {
 function looksLikeOpenQuestion(text) {
   const tail = String(text || '').trim().slice(-600);
   if (!tail) return false;
-  return /(\?|Vill du|Ska jag|Want me|Do you want|Should I|Which option|Vilken)/i.test(tail);
+  return /([?？]\s*(?:$|\n)|Vill du|Ska jag|Want me|Do you want|Should I|Which option|Vilken)/i.test(tail);
 }
 
 function looksLikeReviewSuggestion(text) {
@@ -338,9 +338,34 @@ function cleanExcerpt(value) {
     .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')
     .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '')
     .replace(/\r/g, '\n')
+    .split('\n')
+    .map(stripCodexRedrawNoise)
+    .filter((line) => line.trim() || !isCodexRedrawNoise(line))
+    .join('\n')
     .replace(/[ \t]+/g, ' ')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
+}
+
+function stripCodexRedrawNoise(line) {
+  const value = String(line || '');
+  const matches = [...value.matchAll(/W{1,2}o|Wor|Worki?|Workin|Working|orking|rking|ingngg|ngg/gi)];
+  for (const match of matches) {
+    const index = match.index ?? 0;
+    const suffix = value.slice(index);
+    if (isCodexRedrawNoise(suffix)) return value.slice(0, index).trimEnd();
+  }
+  return value;
+}
+
+function isCodexRedrawNoise(value) {
+  const text = String(value || '');
+  const tokens = text.match(/W{1,2}o|Wor|Worki?|Workin|Working|orking|rking|ingngg|ngg/gi) || [];
+  if (tokens.length < 5) return false;
+  const letters = text.replace(/[^A-Za-z]/g, '');
+  if (!letters) return false;
+  const spinnerLetters = letters.match(/W|o|r|k|i|n|g|e|s|c|t|u|p/g) || [];
+  return spinnerLetters.length / letters.length > 0.85;
 }
 
 function oneLine(value, max) {

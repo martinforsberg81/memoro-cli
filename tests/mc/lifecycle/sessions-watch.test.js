@@ -177,6 +177,44 @@ describe('mc sessions watch', () => {
     assert.match(output, /awaiting_reply=1/);
   });
 
+  test('strips Codex redraw fragments from excerpts without removing content', () => {
+    const snapshot = buildWatchSnapshot({
+      now: NOW,
+      sessions: [{
+        id: 'sess_a',
+        cwd: '/repo/a',
+        tool: 'codex',
+        session_state: 'live',
+        attachable: true,
+      }],
+      outputs: new Map([
+        ['sess_a', 'Updated release checklist.\n141 each step lands.3WWo•Wor•WorkWorki•Workin•Working•WorkingWorking•orking•rking•king4ing•ngg5WWo•Wor•WorkWorki•Workin•Working•Working'],
+      ]),
+    });
+
+    assert.match(snapshot.sessions[0].latest_text, /Updated release checklist/);
+    assert.match(snapshot.sessions[0].latest_text, /141 each step lands\./);
+    assert.doesNotMatch(snapshot.sessions[0].latest_text, /WWo|WorkingWorking|ngg/);
+  });
+
+  test('does not treat optional chaining in code diffs as an open question', () => {
+    const snapshot = buildWatchSnapshot({
+      now: NOW,
+      sessions: [{
+        id: 'sess_code',
+        cwd: '/repo/code',
+        tool: 'codex',
+        session_state: 'live',
+        attachable: true,
+      }],
+      outputs: new Map([
+        ['sess_code', '155 + usedCardId: this.extras?.cardId || null,\n156 + result,\n157 + });'],
+      ]),
+    });
+
+    assert.equal(snapshot.sessions[0].disposition, 'idle');
+  });
+
   test('diffWatchSnapshots reports new, changed, and removed sessions', () => {
     const previous = buildWatchSnapshot({
       now: NOW,
