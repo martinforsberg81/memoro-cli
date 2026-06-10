@@ -94,6 +94,14 @@ function captureConsole(fn) {
   }).then((status) => ({ status, stdout: stdout.join('\n'), stderr: stderr.join('\n') }));
 }
 
+function parseCapturedJson(stdout) {
+  let start = stdout.indexOf('{\n  "ok"');
+  if (start < 0) start = stdout.indexOf('{"ok"');
+  const end = stdout.lastIndexOf('}');
+  assert.ok(start >= 0 && end > start, `expected JSON object in stdout: ${stdout}`);
+  return JSON.parse(stdout.slice(start, end + 1));
+}
+
 // ─── tests ─────────────────────────────────────────────────────────────────
 
 describe('mc fanout — happy path', () => {
@@ -125,7 +133,7 @@ describe('mc fanout — happy path', () => {
     );
     assert.equal(status, 0, stdout);
 
-    const payload = JSON.parse(stdout);
+    const payload = parseCapturedJson(stdout);
     assert.equal(payload.ok, true);
     assert.equal(payload.plan_slug, 'cool-plan');
     assert.equal(payload.from, 'main');
@@ -139,6 +147,8 @@ describe('mc fanout — happy path', () => {
       'fanout-cool-plan-phase-1',
       'fanout-cool-plan-phase-2',
     ]);
+    assert.deepEqual(payload.phases.map((p) => p.tool), ['codex', 'codex']);
+    assert.deepEqual(payload.phases.map((p) => p.tool_source), ['~/.memoro/config.json', '~/.memoro/config.json']);
 
     // Brief artefacts were written.
     assert.equal(fs.calls.writeBrief.length, 2);
@@ -162,6 +172,30 @@ describe('mc fanout — happy path', () => {
     assert.equal(reg.entries[0].parent_plan, 'cool-plan');
     assert.equal(reg.entries[0].phase_n, 1);
     assert.equal(reg.entries[0].from_ref, 'main');
+    assert.equal(reg.entries[0].tool, 'codex');
+  });
+
+  test('--claude override is recorded on spawned fanout sessions', async () => {
+    const plan = '## Phase 1: Parse\nbody\n';
+    const planPath = join(home.dir, 'override-plan.md');
+    writeFileSync(planPath, plan);
+
+    const git = makeFakeGit({ primary: home.dir });
+    const fs = makeFakeFs(plan);
+    const { status, stdout } = await captureConsole(() =>
+      runWithDeps(
+        { planPath, from: 'main', tool: 'claude', dryRun: false, json: true },
+        { git, fs, cwd: home.dir },
+      ),
+    );
+    assert.equal(status, 0, stdout);
+
+    const payload = parseCapturedJson(stdout);
+    assert.equal(payload.phases[0].tool, 'claude');
+    assert.equal(payload.phases[0].tool_source, 'flag');
+
+    const reg = JSON.parse(readFileSync(join(home.dir, 'registry.json'), 'utf8'));
+    assert.equal(reg.entries[0].tool, 'claude');
   });
 
   test('--dry-run touches no portal mutators', async () => {
@@ -178,7 +212,7 @@ describe('mc fanout — happy path', () => {
       ),
     );
     assert.equal(status, 0, stdout);
-    const payload = JSON.parse(stdout);
+    const payload = parseCapturedJson(stdout);
     assert.equal(payload.dry_run, true);
     assert.equal(payload.phase_count, 2);
     assert.equal(git.calls.createBranch.length, 0);
@@ -234,7 +268,7 @@ describe('mc fanout — error surface (non-JSON path also tested)', () => {
       ),
     );
     assert.equal(status, 1);
-    const payload = JSON.parse(stdout);
+    const payload = parseCapturedJson(stdout);
     assert.equal(payload.ok, false);
     assert.match(payload.error, /cannot read plan file/);
   });

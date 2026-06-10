@@ -24,8 +24,8 @@ describe('resolveRequestedToolForWrap', () => {
     }), 'codex');
   });
 
-  test('falls back to claude-code when neither env nor config selects a tool', () => {
-    assert.equal(resolveRequestedToolForWrap({ env: {}, config: {} }), 'claude-code');
+  test('falls back to codex when neither env nor config selects a tool', () => {
+    assert.equal(resolveRequestedToolForWrap({ env: {}, config: {} }), 'codex');
   });
 });
 

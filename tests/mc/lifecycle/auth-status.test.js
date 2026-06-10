@@ -49,7 +49,7 @@ describe('mc auth status', () => {
     assert.ok(j.shell_wrapper);
     assert.ok(j.workspace);
     assert.ok(j.policy);
-    assert.equal(j.policy.default_tool, 'claude-code');
+    assert.equal(j.policy.default_tool, 'codex');
     assert.deepEqual(j.policy.tools.map((t) => t.tool), ['claude', 'codex', 'gemini']);
     assert.equal(j.workspace.mc_home, repo.mcHome);
   });

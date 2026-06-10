@@ -25,7 +25,7 @@ import { fileURLToPath } from 'node:url';
 
 import { getSecret } from '../../lib/keychain.js';
 import { ACCOUNTS } from '../../commands/auth.js';
-import { readConfig } from '../../lib/config.js';
+import { DEFAULT_TOOL, readConfig } from '../../lib/config.js';
 import * as claudeCode from '../../adapters/claude-code.js';
 import * as codex from '../../adapters/codex.js';
 import { readRegistry } from '../registry.js';
@@ -237,10 +237,11 @@ async function runStatus(argv) {
 }
 
 function overallExitCode(report) {
-  // 0 if Memoro authed AND at least one tool installed-and-authed.
+  // 0 if Memoro authed AND at least one tool is usable. Some adapters
+  // (Codex) cannot verify auth headlessly, so auth:null is a soft pass.
   if (!report.memoro.authenticated) return 1;
-  const someAuthedTool = report.tools.some((t) => t.installed && t.authenticated === true);
-  return someAuthedTool ? 0 : 1;
+  const someUsableTool = report.tools.some((t) => t.installed && t.authenticated !== false);
+  return someUsableTool ? 0 : 1;
 }
 
 function printHuman(r) {
@@ -277,7 +278,7 @@ function printHuman(r) {
   }
   if (r.policy) {
     process.stdout.write(`\nPolicy:\n`);
-    process.stdout.write(`  default tool ${r.policy.default_tool || 'claude-code'}\n`);
+    process.stdout.write(`  default tool ${r.policy.default_tool || DEFAULT_TOOL}\n`);
     for (const row of r.policy.tools || []) {
       process.stdout.write(`  ${formatPolicySummary(row.effective_policy)}\n`);
     }
@@ -308,7 +309,7 @@ export function buildAuthPolicyReport({
   configWarnings = [],
 } = {}) {
   return {
-    default_tool: config.defaultTool || 'claude-code',
+    default_tool: config.defaultTool || DEFAULT_TOOL,
     effective_config: resolveEffectiveConfig({
       globalConfig: config,
       repoPolicy,

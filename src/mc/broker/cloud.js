@@ -199,13 +199,12 @@ export class CloudBrokerClient extends EventEmitter {
       id: sessionId,
     });
     if (!result?.ok) {
-      const output = await this._readLocalSessionOutput(sessionId);
       return this._transcriptFromSessionOutput({
         sessionId,
         source,
         session: {},
-        output,
-        fallback: 'broker_attach_output',
+        output: '',
+        fallback: 'broker_recent_output_unavailable',
       });
     }
     return this._transcriptFromSessionOutput({
@@ -271,8 +270,7 @@ export class CloudBrokerClient extends EventEmitter {
 
   _readLocalSessionOutput(sessionId) {
     return readLocalSessionOutput({
-      connect: this.connect,
-      brokerSocket: this.brokerSocket,
+      request: this.request,
       sessionId,
       timeoutMs: this.localTranscriptReadMs,
     });
@@ -577,54 +575,19 @@ function isUsableWebSocket(ws) {
 }
 
 export function readLocalSessionOutput({
-  connect = createConnection,
-  brokerSocket = brokerSocketPath(),
+  request = null,
   sessionId,
   timeoutMs = LOCAL_TRANSCRIPT_READ_MS,
 } = {}) {
   requiredString(sessionId, 'session id');
-  return new Promise((resolve, reject) => {
-    const socket = connect(brokerSocket);
-    let raw = '';
-    let settled = false;
-    const finish = (err = null) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      try { socket.destroy?.(); } catch {}
-      if (err) reject(err);
-      else resolve(stripAttachPrelude(raw));
-    };
-    const timer = setTimeout(() => finish(), timeoutMs);
-    socket.setEncoding?.('utf8');
-    socket.on?.('data', (chunk) => {
-      raw += Buffer.isBuffer(chunk) ? chunk.toString('utf8') : String(chunk);
-    });
-    socket.on?.('error', (err) => finish(err));
-    socket.on?.('end', () => finish());
-    socket.on?.('close', () => finish());
-    socket.on?.('connect', () => {
-      socket.write(`${JSON.stringify({
-        type: 'attach_session',
-        id: sessionId,
-        side: 'monitor',
-        cols: 120,
-        rows: 72,
-        writer: false,
-        mode: 'read',
-      })}\n`);
-    });
+  const requestFn = request || ((message) => requestBroker(message, { timeoutMs }));
+  return requestFn({
+    type: 'fetch_session_output',
+    id: sessionId,
+  }).then((res) => {
+    if (!res?.ok) throw new Error(res?.error || 'broker recent output unavailable');
+    return cleanTerminalText(typeof res.output === 'string' ? res.output : '');
   });
-}
-
-function stripAttachPrelude(raw) {
-  const value = String(raw || '');
-  const newline = value.indexOf('\n');
-  if (newline >= 0) {
-    const first = value.slice(0, newline).trim();
-    if (first.startsWith('{')) return cleanTerminalText(value.slice(newline + 1));
-  }
-  return cleanTerminalText(value);
 }
 
 function cleanTerminalText(value) {

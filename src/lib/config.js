@@ -15,6 +15,7 @@ import { join } from 'node:path';
 
 const CONFIG_DIR = join(homedir(), '.memoro');
 const CONFIG_FILE = join(CONFIG_DIR, 'config.json');
+export const DEFAULT_TOOL = 'codex';
 
 const DEFAULT_CONFIG = {
   apiUrl: 'https://meetmemoro.app',
@@ -27,7 +28,7 @@ const DEFAULT_CONFIG = {
   // bare `mc` / `mc new` invocations should default to. Existing sessions
   // carry their own tool in the registry and can be relaunched with
   // `mc resume <name> --codex/--claude`.
-  defaultTool: null,
+  defaultTool: DEFAULT_TOOL,
 };
 
 export async function readConfig() {

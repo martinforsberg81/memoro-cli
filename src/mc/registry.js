@@ -12,11 +12,12 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { registryPath, mcHome } from './paths.js';
+import { DEFAULT_TOOL } from '../lib/config.js';
 
 const DEFAULTS = {
   kind: 'work',          // work | isolation | spawn
   parent: null,
-  tool: 'claude',
+  tool: DEFAULT_TOOL,
   model_chain: [],
   session_state: 'no-session-yet', // live | idle | dead | no-session-yet
   dirty_files: 0,

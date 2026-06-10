@@ -1,7 +1,9 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { DEFAULT_TOOL } from '../lib/config.js';
 
 export const PACKAGE_DEFAULTS = Object.freeze({
+  defaultTool: DEFAULT_TOOL,
   grounding: Object.freeze({
     includeRoadmap: true,
     includeCoordinatorRole: true,

@@ -2,6 +2,8 @@ import { StringDecoder } from 'node:string_decoder';
 import { randomBytes } from 'node:crypto';
 
 import { resolveLaunch } from '../../adapters/index.js';
+import { DEFAULT_TOOL } from '../../lib/config.js';
+import { normalizeInteractivePtyEnv } from '../interactive-env.js';
 import { BrokerSessionManager } from './session-manager.js';
 import { BrokerSessionSidecars } from './session-sidecars.js';
 
@@ -83,7 +85,7 @@ export class BrokerRuntime {
   _launch(input) {
     const id = requiredString(input?.id, 'session id');
     const cwd = stringOrDefault(input.cwd, this._cwd());
-    const toolInput = stringOrDefault(input.tool, this.env.MC_GROUNDING_TOOL || 'claude-code');
+    const toolInput = stringOrDefault(input.tool, this.env.MC_GROUNDING_TOOL || DEFAULT_TOOL);
     const argv = arrayOfStrings(input.argv, 'argv');
     const launchOptions = plainObject(input.launch_options) ? input.launch_options : {};
     const cols = positiveInteger(input.cols, 80, 'cols');
@@ -96,6 +98,14 @@ export class BrokerRuntime {
         error: launch?.hint || `cannot launch tool: ${toolInput}`,
       };
     }
+
+    const interactiveEnv = normalizeInteractivePtyEnv({
+      baseEnv: {
+        ...this.env,
+        ...(plainObject(input.env) ? input.env : {}),
+      },
+      termName: stringOrDefault(input.term_name, this.termName),
+    });
 
     const sessionMetadata = buildSessionMetadata({
       id,
@@ -113,11 +123,9 @@ export class BrokerRuntime {
       launchOptions,
       cols,
       rows,
-      termName: stringOrDefault(input.term_name, this.termName),
+      termName: interactiveEnv.termName,
       env: {
-        ...this.env,
-        ...(plainObject(input.env) ? input.env : {}),
-        TERM: stringOrDefault(input.term_name, this.termName),
+        ...interactiveEnv.env,
         MEMORO_MC_BROKER: '1',
         MEMORO_MC_PARENT: '1',
       },
@@ -268,6 +276,7 @@ export class BrokerRuntime {
         coding: {
           ...sidecarSpec,
           codingSessionId: sidecarSpec.codingSessionId || id,
+          tool: sidecarSpec.tool || session.tool || null,
         },
       });
       sidecars.start();

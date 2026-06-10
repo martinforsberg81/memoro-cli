@@ -341,6 +341,7 @@ real tool auth and a global install candidate.
 
 Acceptance:
 
+- `npm run smoke:mc -- --mc src/bin-mc.js` passes against the dev candidate.
 - `~/memoro`: `mc tool-switch codex --dry-run --json` succeeds without repo-local
   canon files.
 - `~/memoro`: `mc resume data` launches Codex with real `MEMORO.md` grounding.
@@ -359,26 +360,15 @@ Acceptance:
 - `npm pack --dry-run` includes the new start/wrap/canon modules.
 - Global candidate shows the expected `mc --version`, `mc help`, and
   `mc tool-switch --help`.
+- `npm run smoke:mc` passes against the globally installed candidate.
 - Release notes call out native-auth safety, ordinary-repo tool-switch, and
   coordinator wake-up quality.
 
 Automated verification:
 
-- `node --test tests/mc/lifecycle/new.test.js tests/mc/lifecycle/resume.test.js tests/mc/vault/startup.test.js tests/mc/vault/lifecycle.test.js`
-- `node --test tests/mc/vault/lifecycle.test.js tests/mc/vault/startup.test.js tests/mc/lifecycle/status.test.js`
-- `node --test tests/bin-mc.test.js tests/mc/vault/startup.test.js tests/mc/vault/lifecycle.test.js tests/mc/lifecycle/status.test.js`
-- `node --test tests/mc/lifecycle/new.test.js tests/mc/lifecycle/resume.test.js tests/mc/lifecycle/status.test.js tests/mc/tool-switch-here.test.js tests/bin-mc.test.js tests/mc/vault/startup.test.js tests/mc/vault/lifecycle.test.js`
-- `node --test tests/mc/wrap-start.test.js tests/bin-mc.test.js`
-- `node --test tests/mc/wrap-start.test.js tests/bin-mc.test.js tests/mc/lifecycle/new.test.js tests/mc/lifecycle/resume.test.js tests/mc/vault/startup.test.js tests/mc/vault/lifecycle.test.js tests/mc/tool-switch-here.test.js`
-- `node --test tests/mc/wrap-runtime.test.js tests/mc/wrap-start.test.js tests/bin-mc.test.js`
-- `node --test tests/mc/wrap-runtime.test.js tests/mc/wrap-start.test.js tests/bin-mc.test.js tests/mc/lifecycle/new.test.js tests/mc/lifecycle/resume.test.js tests/mc/vault/startup.test.js tests/mc/vault/lifecycle.test.js tests/mc/tool-switch-here.test.js`
-- `node --test tests/mc/wrap-dispatch.test.js tests/mc/wrap-runtime.test.js tests/mc/wrap-start.test.js tests/bin-mc.test.js`
-- `node --test tests/mc/wrap-ws.test.js tests/mc/wrap-dispatch.test.js tests/mc/wrap-runtime.test.js tests/mc/wrap-start.test.js tests/bin-mc.test.js`
-- `node --test tests/mc/wrap-startup-message.test.js tests/mc/wrap-ws.test.js tests/mc/wrap-dispatch.test.js tests/mc/wrap-runtime.test.js tests/mc/wrap-start.test.js tests/bin-mc.test.js`
-- `node --test tests/mc/wrap-dispatch.test.js tests/mc/wrap-runtime.test.js tests/mc/wrap-start.test.js tests/bin-mc.test.js tests/mc/lifecycle/new.test.js tests/mc/lifecycle/resume.test.js tests/mc/vault/startup.test.js tests/mc/vault/lifecycle.test.js tests/mc/tool-switch-here.test.js tests/mc/lifecycle/dispatch-read.test.js`
-- `npm test` (943 passing)
-- `node --test tests/mc/ground.test.js tests/mc/ground-lifecycle.test.js tests/mc/ground-role-canon.test.js tests/mc/canon-drift.test.js tests/bin-mc.test.js` (87 passing)
-- `npm test` (950 passing)
+- `node --test tests/mc/registry.test.js tests/mc/orchestration/fanout.test.js tests/mc/broker/session-sidecars.test.js tests/mc/default-tool-consumer.test.js tests/mc/broker/launch-client.test.js tests/mc/broker/runtime.test.js tests/mc/help.test.js tests/mc/lifecycle/setup.test.js tests/mc/lifecycle/new.test.js`
+- `npm test` (1184 passing)
+- `npm run smoke:mc -- --mc src/bin-mc.js`
 - `npm_config_cache=/private/tmp/memoro-npm-cache npm pack --dry-run`
 
 Smoke-run finding fixed: `tests/mc/lifecycle/new.test.js` was order-dependent

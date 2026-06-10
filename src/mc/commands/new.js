@@ -25,18 +25,18 @@ import { git, isInsideRepo, primaryWorktree, branchExists } from '../git.js';
 import { emitCd, parseDirectiveFlag } from '../shell-directives.js';
 import { checkAndPrintFreshInstall, ensureSentinel } from '../first-run.js';
 import { resolveToolInput } from '../../adapters/index.js';
-import { readConfig } from '../../lib/config.js';
+import { DEFAULT_TOOL, readConfig } from '../../lib/config.js';
 import { launchBrokerOwnedSession } from '../broker/launch-client.js';
 import { readRepoLocalConfig, readRepoPolicyConfig, resolveEffectiveConfig } from '../config-model.js';
 
-const FALLBACK_TOOL_SHORT = 'claude';
+const FALLBACK_TOOL_SHORT = 'codex';
 
 /**
  * Decide which tool the new session runs under. Precedence:
  *   1. explicit `--tool` flag (resolved through `resolveToolInput` so
  *      short names AND adapter IDs are accepted)
  *   2. `config.defaultTool` from `mc tool-switch` (always an adapter ID)
- *   3. the hardcoded fallback short name (`claude`)
+ *   3. the hardcoded fallback short name (`codex`)
  * The return value is always the short-name form (`claude`, `codex`,
  * `gemini`) — that's what the registry has stored historically and what
  * `mc list` expects to render. Adapter IDs are translated here so the
@@ -81,7 +81,7 @@ export function defaultToolFromConfig(cfg) {
   };
 }
 
-async function readEffectiveConfigForNew({ primary }) {
+export async function readEffectiveConfigForNew({ primary }) {
   const globalConfig = await readConfig();
   const repoPolicy = readRepoPolicyConfig({ worktreePath: primary });
   const repoLocal = readRepoLocalConfig({ worktreePath: primary });
@@ -264,7 +264,7 @@ export async function launchNewSession({
     sessionName: entry.name,
     label: null,
     focus,
-    tool: launchTool?.id || entry.tool || 'claude',
+    tool: launchTool?.id || entry.tool || DEFAULT_TOOL,
     argv: [],
     apiArgv,
     env,

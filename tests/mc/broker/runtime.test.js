@@ -135,6 +135,30 @@ describe('BrokerRuntime', () => {
     assert.deepEqual(fake.calls[0].args, ['--wrapped']);
   });
 
+  test('launch_session repairs headless terminal env before spawning the PTY', () => {
+    const { runtime, fake } = makeRuntime();
+
+    const res = runtime.handle({
+      type: 'launch_session',
+      session: {
+        id: 'sess_a',
+        term_name: 'dumb',
+        env: {
+          TERM: 'dumb',
+          NO_COLOR: '1',
+          CLICOLOR: '0',
+        },
+      },
+    });
+
+    assert.equal(res.ok, true);
+    assert.equal(fake.calls[0].options.name, 'xterm-256color');
+    assert.equal(fake.calls[0].options.env.TERM, 'xterm-256color');
+    assert.equal(fake.calls[0].options.env.NO_COLOR, undefined);
+    assert.equal(fake.calls[0].options.env.CLICOLOR, undefined);
+    assert.equal(fake.calls[0].options.env.COLORTERM, 'truecolor');
+  });
+
   test('list and status expose live broker sessions', () => {
     const { runtime } = makeRuntime();
 

@@ -9,6 +9,7 @@ import {
   createAttachBridge,
   listLocalBrokerSessions,
   nextBackoff,
+  readLocalSessionOutput,
 } from '../../../src/mc/broker/cloud.js';
 
 class FakeWebSocket extends EventEmitter {
@@ -109,6 +110,25 @@ describe('listLocalBrokerSessions', () => {
 
     assert.deepEqual(seen, ['sessions', 'status']);
     assert.deepEqual(sessions, [{ id: 'sess_b' }]);
+  });
+});
+
+describe('readLocalSessionOutput', () => {
+  test('reads recent output through fetch_session_output without monitor attach', async () => {
+    const seen = [];
+    const output = await readLocalSessionOutput({
+      sessionId: 'sess_a',
+      request: async (msg) => {
+        seen.push(msg);
+        return { ok: true, output: '\x1b[32mlatest screen\x1b[0m' };
+      },
+    });
+
+    assert.deepEqual(seen, [{
+      type: 'fetch_session_output',
+      id: 'sess_a',
+    }]);
+    assert.equal(output, 'latest screen');
   });
 });
 
@@ -534,7 +554,7 @@ describe('CloudBrokerClient', () => {
     client.stop();
   });
 
-  test('falls back to local attach output when broker recent output is unavailable', async () => {
+  test('does not open a monitor attach when broker recent output is unavailable', async () => {
     resetFakeWs();
     const local = makeLocalSocket();
     const client = new CloudBrokerClient({
@@ -565,20 +585,9 @@ describe('CloudBrokerClient', () => {
       args: { source: 'codex' },
     }));
     await new Promise((resolve) => setImmediate(resolve));
-    local.emit('connect');
-    local.emit('data', Buffer.from('{"ok":true}\n\x1b[32mlatest screen\x1b[0m'));
-    local.emit('end');
     await new Promise((resolve) => setImmediate(resolve));
 
-    assert.deepEqual(JSON.parse(local.writes[0]), {
-      type: 'attach_session',
-      id: 'sess_a',
-      side: 'monitor',
-      cols: 120,
-      rows: 72,
-      writer: false,
-      mode: 'read',
-    });
+    assert.equal(local.writes.length, 0);
     assert.deepEqual(JSON.parse(control.sent.at(-1)), {
       type: 'result',
       command_id: 'cmd_fetch_attach',
@@ -590,9 +599,9 @@ describe('CloudBrokerClient', () => {
         tool_version: null,
         started_at: null,
         ended_at: null,
-        messages: [{ role: 'assistant', text: 'latest screen' }],
+        messages: [],
         activities: [],
-        fallback: 'broker_attach_output',
+        fallback: 'broker_recent_output_unavailable',
       },
     });
     client.stop();

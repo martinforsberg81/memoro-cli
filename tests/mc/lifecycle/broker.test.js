@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test, { describe } from 'node:test';
 
 import { parseArgs, runBrokerWith } from '../../../src/mc/commands/broker.js';
+import { BROKER_PROTOCOL_VERSION } from '../../../src/mc/broker/daemon.js';
 
 function io() {
   let stdout = '';
@@ -83,7 +84,7 @@ describe('mc broker command', () => {
     const streams = io();
     let spawned = false;
     const code = await runBrokerWith({ verb: 'start', json: true }, {
-      request: async () => ({ ok: true, broker: { pid: 9, uptime_ms: 10 } }),
+      request: async () => ({ ok: true, broker: { pid: 9, uptime_ms: 10, protocol_version: BROKER_PROTOCOL_VERSION } }),
       spawnDaemon: () => { spawned = true; return { ok: true }; },
       runDaemon: () => assert.fail('must not daemon'),
       sleep: async () => {},
@@ -106,7 +107,7 @@ describe('mc broker command', () => {
       request: async () => {
         requests += 1;
         if (!spawned) throw new Error('not running');
-        return { ok: true, broker: { pid: 77, uptime_ms: 0 } };
+        return { ok: true, broker: { pid: 77, uptime_ms: 0, protocol_version: BROKER_PROTOCOL_VERSION } };
       },
       spawnDaemon: () => { spawned = true; return { ok: true, pid: 77 }; },
       runDaemon: () => assert.fail('must not daemon'),

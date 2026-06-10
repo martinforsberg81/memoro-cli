@@ -8,4 +8,4 @@ This wrapper is managed by `mc adapter sync`. To update project
 conventions, edit `docs/coding-agent-protocol.md` and re-run `mc adapter sync`.
 Hand-edits here will be flagged as drift on the next sync.
 
-<!-- mc-adapter-sync:version=d2039d8c075b -->
+<!-- mc-adapter-sync:version=731f0826b43b -->

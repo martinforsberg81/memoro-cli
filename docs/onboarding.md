@@ -11,7 +11,7 @@ exactly which tools mc will try to integrate with.
 `mc setup` runs every probe `mc auth status` exposes (Memoro keychain,
 LLM tools, shell wrapper, workspace) and prints a numbered checklist
 of *only* the missing steps. Each step is a real `mc` verb you can
-paste — `mc auth memoro`, `mc auth claude`, `mc install-shell`, or
+paste — `mc auth memoro`, `mc auth codex`, `mc install-shell`, or
 the canonical `npm install -g …` line for a tool you don't have. When
 everything passes, it writes `${MC_HOME}/.setup-done-v1` and exits 0.
 Re-run it any time; it's idempotent.
@@ -32,7 +32,7 @@ mc setup
 …or for one tool's row:
 
 ```sh
-mc auth claude     # or codex / gemini
+mc auth codex      # or claude / gemini
 ```
 
 ## What `mc setup` checks, step by step
@@ -45,13 +45,14 @@ mc auth claude     # or codex / gemini
    split into `sessions.write` + `lens.read` if you want a narrower
    blast radius.
 
-2. **At least one LLM tool installed and authenticated.** Currently
-   that means Claude Code; Codex is supported but optional. The probe
-   is `which <bin>` plus `<bin> --version`. For Claude Code the
-   auth check is existence of the credentials file in the Claude
-   config dir — `mc` never reads its contents. If you're missing
-   the tool, the checklist prints the exact npm command and asks
-   you to run it before re-running `mc setup`.
+2. **The default LLM tool is installed and usable.** Fresh installs use
+   Codex by default. Claude Code is supported when selected with
+   `mc tool-switch claude` or per-session flags. The probe is
+   `which <bin>` plus `<bin> --version`; adapters that can verify auth
+   headlessly do so without reading credential contents. If you're
+   missing the selected tool, the checklist prints the exact install or
+   verification command and asks you to run it before re-running
+   `mc setup`.
 
 3. **The shell wrapper.** Installed by `mc install-shell` into your
    `~/.zshrc` or `~/.bashrc` inside a managed block. Without it,

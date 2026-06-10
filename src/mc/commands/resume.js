@@ -15,6 +15,7 @@
 import { findEntry, readRegistry, upsertEntry } from '../registry.js';
 import { emitCd, parseDirectiveFlag } from '../shell-directives.js';
 import { resolveToolInput } from '../../adapters/index.js';
+import { DEFAULT_TOOL } from '../../lib/config.js';
 import { launchBrokerOwnedSession } from '../broker/launch-client.js';
 import {
   buildSessionListView,
@@ -93,7 +94,7 @@ export async function run(rawArgv, deps = {}) {
   if (opts.json) {
     stdout.write(JSON.stringify({
       name: entry.name,
-      tool: entry.tool || 'claude',
+      tool: entry.tool || DEFAULT_TOOL,
       worktree_path: entry.worktree_path || null,
       coding_session_id: entry.coding_session_id || null,
     }, null, 2) + '\n');
@@ -141,7 +142,7 @@ export async function launchResumeSession({
     sessionName: entry.name,
     label: entry.label || null,
     focus: entry.label || null,
-    tool: launchTool?.id || entry.tool || 'claude',
+    tool: launchTool?.id || entry.tool || DEFAULT_TOOL,
     argv: ['--resume'],
     apiArgv,
     env,
@@ -193,7 +194,7 @@ export function resumableEntries(reg = readRegistry()) {
     .map((e) => ({
       name: e.name,
       branch: e.branch || '',
-      tool: e.tool || 'claude',
+      tool: e.tool || DEFAULT_TOOL,
       session_state: e.session_state || 'no-session-yet',
       worktree_path: e.worktree_path || null,
       kind: e.kind || 'work',

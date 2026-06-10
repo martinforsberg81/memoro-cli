@@ -107,10 +107,10 @@ describe('mc new — resolveToolForNew', () => {
     assert.equal(r.source, 'config');
   });
 
-  test('hardcoded fallback when both flag and config are unset', async () => {
+  test('hardcoded fallback is codex when both flag and config are unset', async () => {
     const configLoader = async () => ({ defaultTool: null });
     const r = await resolveToolForNew({ flagValue: null, configLoader });
-    assert.equal(r.tool, 'claude');
+    assert.equal(r.tool, 'codex');
     assert.equal(r.source, 'fallback');
   });
 
@@ -120,7 +120,7 @@ describe('mc new — resolveToolForNew', () => {
     // hardcoded default rather than refuse to create the session.
     const configLoader = async () => ({ defaultTool: 'totally-made-up' });
     const r = await resolveToolForNew({ flagValue: null, configLoader });
-    assert.equal(r.tool, 'claude');
+    assert.equal(r.tool, 'codex');
     assert.equal(r.source, 'fallback');
   });
 
@@ -138,7 +138,7 @@ describe('mc new — resolveToolForNew', () => {
   test('config loader throwing soft-falls-back', async () => {
     const configLoader = async () => { throw new Error('disk gone'); };
     const r = await resolveToolForNew({ flagValue: null, configLoader });
-    assert.equal(r.tool, 'claude');
+    assert.equal(r.tool, 'codex');
     assert.equal(r.source, 'fallback');
   });
 });

@@ -4,7 +4,8 @@
  *
  * The terminal coordinator. Two modes:
  *
- *   mc                          # wrap `claude` in a PTY this process owns,
+ *   mc                          # wrap the default coding tool in a PTY this
+ *                                 process owns,
  *                                 pipe it to your terminal, register the
  *                                 session with Memoro for cross-session
  *                                 dispatch.
@@ -16,14 +17,14 @@
  *                                 session.
  *
  * The wrapper holds:
- *   - a node-pty child running `claude`, piped transparently to/from this
- *     process's TTY (so your terminal's native scrollback works)
+ *   - a node-pty child running the selected coding tool, piped transparently
+ *     to/from this process's TTY (so your terminal's native scrollback works)
  *   - a Unix-domain dispatch socket for local senders
  *   - a WebSocket to Memoro's UserSession DO for remote `dispatch_message`
  *     and `fetch_transcript` commands
  *
  * Dispatches land by writing to the PTY's input stream, which delivers the
- * bytes to Claude's stdin as if the user had typed them.
+ * bytes to the selected tool's stdin as if the user had typed them.
  */
 
 import { spawnSync } from 'node:child_process';
@@ -69,12 +70,12 @@ import { createWrapWsHandlers } from './mc/wrap-ws.js';
 import { scheduleSessionUpload } from './mc/session-upload.js';
 import { writeToPty } from './mc/pty-write.js';
 import { requestBroker } from './mc/broker/client.js';
+import { normalizeInteractivePtyEnv } from './mc/interactive-env.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constants
 // ─────────────────────────────────────────────────────────────────────────────
 
-const CLAUDE_BIN = 'claude';
 const MC_DIR = join(homedir(), '.memoro', 'mc');
 
 const TICK_INTERVAL_MS = 60_000;
@@ -181,7 +182,7 @@ async function main() {
     return mod.run(argv.slice(1));
   }
 
-  // `mc wrap <label> [args...]` — tag a wrapped Claude session in the
+  // `mc wrap <label> [args...]` — tag a wrapped coding-tool session in the
   // current cwd with a friendly label. This is the old `mc new <label>`
   // semantics; the new lifecycle `mc new <name>` owns that verb now.
   if (argv[0] === 'wrap') {
@@ -195,7 +196,7 @@ async function main() {
     return runWrap(rest, { label });
   }
 
-  // Default: wrap claude (no label, current cwd).
+  // Default: wrap the configured coding tool (no label, current cwd).
   return runWrap(argv);
 }
 
@@ -323,7 +324,7 @@ SESSION NAMES
 
 REQUIREMENTS
   - Run inside a git repository.
-  - Install at least one coding tool: Claude Code or Codex.
+  - Install Codex CLI for the default path, or Claude Code if selected.
   - Authenticate with Memoro: run \`mc\` for device login, or
     \`memoro-cli login\` for CI/headless use.
 
@@ -351,7 +352,7 @@ async function runWrap(argv, { label = null } = {}) {
   const config = await readConfig();
 
   // ─── Resolve the tool to launch (adapter-routed) ─────────────────────
-  // Default is claude-code; `mc new --tool` and `mc resume --tool` thread
+  // Default is Codex; `mc new --tool` and `mc resume --tool` thread
   // the chosen tool across the wrap-mode re-exec via MC_GROUNDING_TOOL.
   // The launch spec carries the
   // binary to spawn, how to map argv, and the heartbeat source. Unknown /
@@ -394,7 +395,7 @@ async function runWrap(argv, { label = null } = {}) {
   const repoContext = await getRepoContext(cwd);
   if (!repoContext) {
     console.error('mc: not inside a git repository. Coordinator is gated on repos.');
-    console.error('mc: run from inside a git repo, or use plain `claude` for ad-hoc work.');
+    console.error('mc: run from inside a git repo, or use the coding tool directly for ad-hoc work.');
     process.exit(1);
   }
   const primary = primaryWorktree(cwd);
@@ -558,10 +559,15 @@ async function runWrap(argv, { label = null } = {}) {
       process.exit(1);
     }
   }
+  const interactiveEnv = normalizeInteractivePtyEnv({
+    baseEnv: spawnEnv,
+    termName: process.env.TERM,
+  });
+  spawnEnv = interactiveEnv.env;
 
   const uploadStartMs = Date.now() - 1000;
   const ptyProcess = pty.spawn(launchSpec.bin, spawnArgs, {
-    name: process.env.TERM || 'xterm-256color',
+    name: interactiveEnv.termName,
     cols: process.stdout.columns || 80,
     rows: process.stdout.rows || 24,
     cwd,
@@ -716,12 +722,12 @@ async function runWrap(argv, { label = null } = {}) {
     process.exit(exitCode);
   };
 
-  // When claude exits (user types /exit, Ctrl+D etc.), tear down.
+  // When the selected tool exits (user types /exit, Ctrl+D etc.), tear down.
   ptyProcess.onExit(({ exitCode }) => {
     void cleanup(exitCode || 0);
   });
 
-  // External signals → forward to claude, let its exit drive cleanup.
+  // External signals: forward to the selected tool and let its exit drive cleanup.
   // (User's Ctrl+C is bytes through stdin in raw mode, not SIGINT to us.)
   process.on('SIGTERM', () => {
     try { ptyProcess.kill('SIGTERM'); } catch {}
@@ -1007,7 +1013,11 @@ async function runSessionsRead(argv) {
 // Internal helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-function preflight(bin = CLAUDE_BIN) {
+function preflight(bin) {
+  if (!bin) {
+    console.error('mc: launch binary not configured');
+    process.exit(1);
+  }
   // `bin` may be a bare name (claude, resolved via PATH) or an absolute
   // path (the real codex binary, already resolved by the adapter). For an
   // absolute path, existence on disk is the check; for a name, PATH.

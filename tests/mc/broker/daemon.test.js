@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import test, { afterEach, describe } from 'node:test';
 
 import {
+  BROKER_PROTOCOL_VERSION,
   handleBrokerMessage,
   startBrokerServer,
 } from '../../../src/mc/broker/daemon.js';
@@ -163,6 +164,8 @@ describe('broker daemon lifecycle', () => {
 
     assert.equal(res.ok, true);
     assert.equal(res.broker.pid, 12345);
+    assert.equal(res.broker.mc_version, null);
+    assert.equal(res.broker.protocol_version, BROKER_PROTOCOL_VERSION);
     assert.equal(res.broker.socket_path, p.socketPath);
     assert.equal(res.broker.pid_path, p.pidPath);
     assert.equal(res.broker.uptime_ms, 1_500);

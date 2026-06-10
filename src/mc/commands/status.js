@@ -7,7 +7,7 @@
  */
 import { findEntry } from '../registry.js';
 import { detectOpenQuestion } from '../open-question.js';
-import { readConfig } from '../../lib/config.js';
+import { DEFAULT_TOOL, readConfig } from '../../lib/config.js';
 import { formatPolicySummary, readRepoPolicy, resolveEffectivePolicy } from '../policy.js';
 import { readRepoLocalConfig, resolveEffectiveConfig } from '../config-model.js';
 import { fetchActiveCodingSessions, findActiveForLocalEntry } from '../session-list.js';
@@ -82,7 +82,7 @@ export async function run(argv, deps = {}) {
 
   // Human-readable
   stdout.write(`${out.name}  ${out.branch}\n`);
-  stdout.write(`  tool          ${out.tool || 'claude'}\n`);
+  stdout.write(`  tool          ${out.tool || DEFAULT_TOOL}\n`);
   stdout.write(`  relaunch      ${out.relaunch_command}\n`);
   stdout.write(`  policy        ${formatPolicySummary(out.effective_policy)}\n`);
   stdout.write(`  verdict       ${out.safety_verdict}\n`);

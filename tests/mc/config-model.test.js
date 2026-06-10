@@ -29,6 +29,14 @@ describe('resolveEffectiveConfig', () => {
     });
   });
 
+  test('package defaults select codex when no user config exists', () => {
+    const effective = resolveEffectiveConfig({});
+    assert.deepEqual(effective.defaultTool, {
+      value: 'codex',
+      source: 'package-defaults',
+    });
+  });
+
   test('global legacy config.policy.permissions is normalised into permissions', () => {
     const effective = resolveEffectiveConfig({
       globalConfig: {
