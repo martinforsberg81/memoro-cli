@@ -9,6 +9,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { POLICY_SUPPORT as CLAUDE_POLICY_SUPPORT } from '../adapters/claude-code.js';
 import { POLICY_SUPPORT as CODEX_POLICY_SUPPORT } from '../adapters/codex.js';
+import { DEFAULT_TOOL } from '../lib/config.js';
 
 const LEGACY_PROVIDER_TARGETS = Object.freeze({
   claude: [{ provider: 'anthropic', source: 'legacy-provider-mapping', target_auth_mode: 'api_key' }],
@@ -27,7 +28,7 @@ const DEFAULT_PERMISSIONS = Object.freeze({
 const PERMISSION_FIELDS = Object.freeze(Object.keys(DEFAULT_PERMISSIONS));
 
 export function resolveEffectivePolicy({ entry = {}, tool = null, repoPolicy = null, config = {} } = {}) {
-  const selectedTool = normaliseTool(tool || entry.tool || config.defaultTool || 'claude');
+  const selectedTool = normaliseTool(tool || entry.tool || config.defaultTool || DEFAULT_TOOL);
   const selected = selectPolicySource({ entryPolicy: entry.policy, repoPolicy, globalPolicy: config.policy });
   const selectedPermissions = selected.policy?.permissions && typeof selected.policy.permissions === 'object'
     ? selected.policy.permissions
@@ -78,7 +79,7 @@ export function readRepoPolicy({ worktreePath = null, cwd = process.cwd(), exist
 }
 
 export function formatPolicySummary(policy) {
-  const tool = policy?.permissions?.rendered_for || 'claude';
+  const tool = policy?.permissions?.rendered_for || DEFAULT_TOOL;
   const targets = policy?.secrets?.materialisation_targets || [];
   const unsupported = unsupportedPermissionFields(policy);
   const supportSuffix = unsupported.length ? `; permissions unsupported: ${unsupported.join(', ')}` : '';
@@ -117,5 +118,5 @@ function normaliseTool(tool) {
   if (tool === 'claude-code') return 'claude';
   if (tool === 'gemini-cli') return 'gemini';
   if (tool === 'codex' || tool === 'claude' || tool === 'gemini') return tool;
-  return String(tool || 'claude');
+  return String(tool || DEFAULT_TOOL);
 }

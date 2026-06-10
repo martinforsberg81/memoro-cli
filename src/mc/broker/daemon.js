@@ -5,12 +5,17 @@ import { dirname } from 'node:path';
 
 import { BrokerRuntime } from './runtime.js';
 import { brokerPidPath, brokerSocketPath } from './paths.js';
+import { getPackageVersion } from '../../lib/version.js';
+
+export const BROKER_PROTOCOL_VERSION = 'mc-broker-pty-v2';
 
 export async function startBrokerServer({
   socketPath = brokerSocketPath(),
   pidPath = brokerPidPath(),
   createServerImpl = createServer,
   pid = process.pid,
+  mcVersion = null,
+  protocolVersion = BROKER_PROTOCOL_VERSION,
   now = () => Date.now(),
   onStop = null,
   exitOnStop = false,
@@ -29,6 +34,8 @@ export async function startBrokerServer({
       ok: true,
       broker: {
         pid,
+        mc_version: mcVersion,
+        protocol_version: protocolVersion,
         socket_path: socketPath,
         pid_path: pidPath,
         started_at: startedAt,
@@ -120,8 +127,12 @@ export async function stopBrokerServer({ server, socketPath = brokerSocketPath()
 
 export async function runBrokerDaemon(opts = {}) {
   const runtime = opts.runtime || await createDefaultRuntime();
+  const mcVersion = opts.mcVersion === undefined
+    ? await getPackageVersion().catch(() => null)
+    : opts.mcVersion;
   const state = await startBrokerServer({
     ...opts,
+    mcVersion,
     runtime,
     exitOnStop: opts.exitOnStop ?? true,
   });

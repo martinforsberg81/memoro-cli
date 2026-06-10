@@ -155,6 +155,29 @@ describe('PtySession', () => {
     assert.equal(session.lastInputAt, 1_010);
   });
 
+  test('dispatched messages honor adapter-specific submit enter count', () => {
+    const timers = makeManualTimers();
+    const { session, fake, tick } = makeSession({
+      launchSpec: {
+        bin: 'codex',
+        args: (argv) => ['--wrapped', ...argv],
+        submitEnterCount: 2,
+        submitEnterDelayMs: 42,
+        setTimeoutFn: timers.setTimeoutFn,
+      },
+    });
+
+    session.start();
+    tick(5);
+    session.writeDispatchedMessage('ship it');
+
+    assert.deepEqual(fake.writes, ['ship it\r']);
+    assert.equal(timers.timers.size, 1);
+    assert.equal(session.lastInputAt, 1_005);
+    timers.fireAll();
+    assert.deepEqual(fake.writes, ['ship it\r', '\r']);
+  });
+
   test('forwards terminal resize to the PTY', () => {
     const { session, fake } = makeSession();
 
@@ -246,4 +269,3 @@ describe('PtySession', () => {
     assert.deepEqual(fake.writes, []);
   });
 });
-

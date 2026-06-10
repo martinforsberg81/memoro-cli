@@ -135,6 +135,30 @@ describe('BrokerRuntime', () => {
     assert.deepEqual(fake.calls[0].args, ['--wrapped']);
   });
 
+  test('launch_session repairs headless terminal env before spawning the PTY', () => {
+    const { runtime, fake } = makeRuntime();
+
+    const res = runtime.handle({
+      type: 'launch_session',
+      session: {
+        id: 'sess_a',
+        term_name: 'dumb',
+        env: {
+          TERM: 'dumb',
+          NO_COLOR: '1',
+          CLICOLOR: '0',
+        },
+      },
+    });
+
+    assert.equal(res.ok, true);
+    assert.equal(fake.calls[0].options.name, 'xterm-256color');
+    assert.equal(fake.calls[0].options.env.TERM, 'xterm-256color');
+    assert.equal(fake.calls[0].options.env.NO_COLOR, undefined);
+    assert.equal(fake.calls[0].options.env.CLICOLOR, undefined);
+    assert.equal(fake.calls[0].options.env.COLORTERM, 'truecolor');
+  });
+
   test('list and status expose live broker sessions', () => {
     const { runtime } = makeRuntime();
 
@@ -203,6 +227,22 @@ describe('BrokerRuntime', () => {
     const removed = runtime.handle({ type: 'remove_session', id: 'sess_a' });
     assert.deepEqual(removed, { ok: true, removed: true });
     assert.deepEqual(runtime.handle({ type: 'sessions' }), { ok: true, sessions: [] });
+  });
+
+  test('fetch_session_output returns recent PTY output without attaching', () => {
+    const { runtime, fake } = makeRuntime();
+
+    runtime.handle({ type: 'launch_session', session: { id: 'sess_a' } });
+    fake.ptys[0].emitData('hello');
+    fake.ptys[0].emitData(' world');
+
+    const res = runtime.handle({ type: 'fetch_session_output', id: 'sess_a' });
+
+    assert.equal(res.ok, true);
+    assert.equal(res.output, 'hello world');
+    assert.equal(res.session.id, 'sess_a');
+    assert.equal(res.session.session_state, 'live');
+    assert.equal(res.session.attachable, true);
   });
 
   test('attachConnection bridges a raw socket to an owned PTY session', () => {

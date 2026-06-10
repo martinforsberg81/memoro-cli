@@ -43,7 +43,7 @@ describe('mc setup — checklist (red path)', () => {
     assert.match(r.stdout, /mc setup —/);
     assert.match(r.stdout, /1\. Sign in to Memoro/);
     assert.match(r.stdout, /run:\s+mc auth memoro/);
-    assert.match(r.stdout, /Install Claude Code/);
+    assert.match(r.stdout, /Install Codex CLI/);
     assert.match(r.stdout, /Install the shell wrapper/);
     assert.match(r.stdout, /run:\s+mc install-shell/);
     // Sentinel must NOT exist after a red run.
@@ -99,10 +99,11 @@ describe('mc setup — pure helpers (in-process)', () => {
     const greenReport = {
       memoro: { authenticated: true, hint: null },
       tools: {
-        claude: { installed: true, version: '2.1.152', authenticated: true,
-                  hint: null, detailLines: [] },
-        codex:  { installed: false, version: null, authenticated: null,
-                  hint: 'Install Codex CLI', detailLines: [] },
+        codex:  { installed: true, version: '0.137.0', authenticated: null,
+                  hint: 'Run `codex /status` to verify auth, or open codex', detailLines: [] },
+        claude: { installed: false, version: null, authenticated: null,
+                  hint: 'Install with: npm install -g @anthropic-ai/claude-code',
+                  detailLines: [] },
         gemini: { installed: false, version: null, authenticated: null,
                   hint: 'planned', detailLines: [] },
       },
@@ -113,16 +114,15 @@ describe('mc setup — pure helpers (in-process)', () => {
     assert.deepEqual(missingSteps(greenReport), []);
   });
 
-  test('missingSteps surfaces install + verify when Claude missing', async () => {
+  test('missingSteps surfaces install + verify when Codex missing', async () => {
     const { missingSteps } = await import('../../../src/mc/commands/setup.js');
     const report = {
       memoro: { authenticated: true, hint: null },
       tools: {
+        codex: { installed: false, version: null, authenticated: null,
+                 hint: 'Install Codex CLI from openai/codex', detailLines: [] },
         claude: { installed: false, version: null, authenticated: null,
-                  hint: 'Install with: npm install -g @anthropic-ai/claude-code',
-                  detailLines: [] },
-        codex:  { installed: false, version: null, authenticated: null,
-                  hint: 'planned', detailLines: [] },
+                  hint: 'Install with: npm install -g @anthropic-ai/claude-code', detailLines: [] },
         gemini: { installed: false, version: null, authenticated: null,
                   hint: 'planned', detailLines: [] },
       },
@@ -131,10 +131,29 @@ describe('mc setup — pure helpers (in-process)', () => {
     };
     const steps = missingSteps(report);
     assert.equal(steps.length, 2);
-    assert.equal(steps[0].id, 'install-claude');
-    assert.match(steps[0].command, /^npm install/);
-    assert.equal(steps[1].id, 'verify-claude');
-    assert.equal(steps[1].command, 'mc auth claude');
+    assert.equal(steps[0].id, 'install-codex');
+    assert.equal(steps[0].command, '');
+    assert.match(steps[0].note, /Codex CLI/i);
+    assert.equal(steps[1].id, 'verify-codex');
+    assert.equal(steps[1].command, 'mc auth codex');
+  });
+
+  test('missingSteps accepts installed Codex with unknown auth as ready', async () => {
+    const { missingSteps } = await import('../../../src/mc/commands/setup.js');
+    const report = {
+      memoro: { authenticated: true, hint: null },
+      tools: {
+        codex: { installed: true, version: '0.137.0', authenticated: null,
+                 hint: 'Run `codex /status` to verify auth, or open codex', detailLines: [] },
+        claude: { installed: false, version: null, authenticated: null,
+                  hint: 'Install with: npm install -g @anthropic-ai/claude-code', detailLines: [] },
+        gemini: { installed: false, version: null, authenticated: null,
+                  hint: 'planned', detailLines: [] },
+      },
+      shell_wrapper: { installed: true, rc: '/fake', hint: null },
+      workspace: {},
+    };
+    assert.deepEqual(missingSteps(report), []);
   });
 
   test('writeSentinel + sentinelPath write to MC_HOME on green', async () => {

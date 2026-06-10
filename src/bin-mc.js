@@ -4,7 +4,8 @@
  *
  * The terminal coordinator. Two modes:
  *
- *   mc                          # wrap `claude` in a PTY this process owns,
+ *   mc                          # wrap the default coding tool in a PTY this
+ *                                 process owns,
  *                                 pipe it to your terminal, register the
  *                                 session with Memoro for cross-session
  *                                 dispatch.
@@ -16,14 +17,14 @@
  *                                 session.
  *
  * The wrapper holds:
- *   - a node-pty child running `claude`, piped transparently to/from this
- *     process's TTY (so your terminal's native scrollback works)
+ *   - a node-pty child running the selected coding tool, piped transparently
+ *     to/from this process's TTY (so your terminal's native scrollback works)
  *   - a Unix-domain dispatch socket for local senders
  *   - a WebSocket to Memoro's UserSession DO for remote `dispatch_message`
  *     and `fetch_transcript` commands
  *
  * Dispatches land by writing to the PTY's input stream, which delivers the
- * bytes to Claude's stdin as if the user had typed them.
+ * bytes to the selected tool's stdin as if the user had typed them.
  */
 
 import { spawnSync } from 'node:child_process';
@@ -68,12 +69,13 @@ import { createDispatchSocketServer } from './mc/wrap-dispatch.js';
 import { createWrapWsHandlers } from './mc/wrap-ws.js';
 import { scheduleSessionUpload } from './mc/session-upload.js';
 import { writeToPty } from './mc/pty-write.js';
+import { requestBroker } from './mc/broker/client.js';
+import { normalizeInteractivePtyEnv } from './mc/interactive-env.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constants
 // ─────────────────────────────────────────────────────────────────────────────
 
-const CLAUDE_BIN = 'claude';
 const MC_DIR = join(homedir(), '.memoro', 'mc');
 
 const TICK_INTERVAL_MS = 60_000;
@@ -81,6 +83,7 @@ const MAX_ATTEMPTS = 3;
 const RETRY_INTERVAL_MS = 5 * 60 * 1000;
 const POLL_INTERVAL_MS = 500;
 const POLL_TIMEOUT_MS = 30_000;
+const SUBMIT_ENTER_DELAY_MS = 150;
 
 // Raw PTY bytes kept for excerpt extraction. ANSI escapes typically
 // strip down to ~30–50%, so 4 KiB raw yields plenty of clean text to
@@ -161,6 +164,10 @@ async function main() {
     const sub = argv[1];
     const rest = argv.slice(2);
     if (sub === 'list')        return runSessionsList(rest);
+    if (sub === 'watch') {
+      const mod = await import('./mc/commands/sessions-watch.js');
+      return mod.run(rest);
+    }
     if (sub === 'send')        return runSessionsSend(rest);
     if (sub === 'read')        return runSessionsRead(rest);
     console.error(`Unknown sessions subcommand: ${sub ?? '<missing>'}`);
@@ -175,7 +182,7 @@ async function main() {
     return mod.run(argv.slice(1));
   }
 
-  // `mc wrap <label> [args...]` — tag a wrapped Claude session in the
+  // `mc wrap <label> [args...]` — tag a wrapped coding-tool session in the
   // current cwd with a friendly label. This is the old `mc new <label>`
   // semantics; the new lifecycle `mc new <name>` owns that verb now.
   if (argv[0] === 'wrap') {
@@ -189,7 +196,7 @@ async function main() {
     return runWrap(rest, { label });
   }
 
-  // Default: wrap claude (no label, current cwd).
+  // Default: wrap the configured coding tool (no label, current cwd).
   return runWrap(argv);
 }
 
@@ -281,6 +288,7 @@ FLEET / ADVANCED
   mc fanout <plan.md>             Create one idle session per plan phase
   mc gather <plan-slug>           Merge phase PRs into a summary branch
   mc sessions list                List active sessions seen by Memoro
+  mc sessions watch               Summarize local broker sessions for orchestration
   mc sessions send <label|id> <msg>
                                   Dispatch a message into another session
   mc sessions read <label|id>     Fetch another session's recent transcript
@@ -316,7 +324,7 @@ SESSION NAMES
 
 REQUIREMENTS
   - Run inside a git repository.
-  - Install at least one coding tool: Claude Code or Codex.
+  - Install Codex CLI for the default path, or Claude Code if selected.
   - Authenticate with Memoro: run \`mc\` for device login, or
     \`memoro-cli login\` for CI/headless use.
 
@@ -344,7 +352,7 @@ async function runWrap(argv, { label = null } = {}) {
   const config = await readConfig();
 
   // ─── Resolve the tool to launch (adapter-routed) ─────────────────────
-  // Default is claude-code; `mc new --tool` and `mc resume --tool` thread
+  // Default is Codex; `mc new --tool` and `mc resume --tool` thread
   // the chosen tool across the wrap-mode re-exec via MC_GROUNDING_TOOL.
   // The launch spec carries the
   // binary to spawn, how to map argv, and the heartbeat source. Unknown /
@@ -387,7 +395,7 @@ async function runWrap(argv, { label = null } = {}) {
   const repoContext = await getRepoContext(cwd);
   if (!repoContext) {
     console.error('mc: not inside a git repository. Coordinator is gated on repos.');
-    console.error('mc: run from inside a git repo, or use plain `claude` for ad-hoc work.');
+    console.error('mc: run from inside a git repo, or use the coding tool directly for ad-hoc work.');
     process.exit(1);
   }
   const primary = primaryWorktree(cwd);
@@ -551,10 +559,15 @@ async function runWrap(argv, { label = null } = {}) {
       process.exit(1);
     }
   }
+  const interactiveEnv = normalizeInteractivePtyEnv({
+    baseEnv: spawnEnv,
+    termName: process.env.TERM,
+  });
+  spawnEnv = interactiveEnv.env;
 
   const uploadStartMs = Date.now() - 1000;
   const ptyProcess = pty.spawn(launchSpec.bin, spawnArgs, {
-    name: process.env.TERM || 'xterm-256color',
+    name: interactiveEnv.termName,
     cols: process.stdout.columns || 80,
     rows: process.stdout.rows || 24,
     cwd,
@@ -709,12 +722,12 @@ async function runWrap(argv, { label = null } = {}) {
     process.exit(exitCode);
   };
 
-  // When claude exits (user types /exit, Ctrl+D etc.), tear down.
+  // When the selected tool exits (user types /exit, Ctrl+D etc.), tear down.
   ptyProcess.onExit(({ exitCode }) => {
     void cleanup(exitCode || 0);
   });
 
-  // External signals → forward to claude, let its exit drive cleanup.
+  // External signals: forward to the selected tool and let its exit drive cleanup.
   // (User's Ctrl+C is bytes through stdin in raw mode, not SIGINT to us.)
   process.on('SIGTERM', () => {
     try { ptyProcess.kill('SIGTERM'); } catch {}
@@ -837,6 +850,16 @@ async function runSessionsSend(argv) {
     return 2;
   }
 
+  const local = await dispatchLocalBrokerSession(identifier, message).catch(() => null);
+  if (local?.ok) {
+    console.log(`✓ dispatched to ${local.id} via local broker`);
+    return 0;
+  }
+  if (local?.partial) {
+    console.error(`mc: local dispatch partially failed: ${local.error || 'unknown error'}`);
+    return 1;
+  }
+
   const config = await readConfig();
   const apiUrl = getApiUrl(argv) || config.apiUrl;
   const token = await getSecret(ACCOUNTS.TOKEN);
@@ -862,6 +885,90 @@ async function runSessionsSend(argv) {
   }
   console.error(`mc: dispatch failed: ${result?.error || result?.status || 'no result'}`);
   return 1;
+}
+
+export async function dispatchLocalBrokerSession(identifier, message, { request = requestBroker, wait = sleep } = {}) {
+  if (!identifier || !message) return { ok: false, skipped: true, error: 'identifier and message are required' };
+
+  const inventory = await request({ type: 'sessions' }).catch(() => null);
+  let sid = identifier;
+  let matched = false;
+  let session = null;
+
+  if (inventory?.ok && Array.isArray(inventory.sessions)) {
+    session = inventory.sessions.find((item) => localSessionMatches(item, identifier));
+    if (!session) return { ok: false, skipped: true, error: 'local session not found' };
+    sid = session.id || session.coding_session_id || identifier;
+    matched = true;
+  }
+
+  const raw = await writeLocalDispatchedInput({
+    request,
+    wait,
+    sessionId: sid,
+    message,
+    tool: session?.tool,
+  });
+  if (raw?.ok) {
+    return {
+      ok: true,
+      id: sid,
+      matched,
+      transport: 'write_session',
+    };
+  }
+  if (raw?.partial) return { ...raw, id: sid, matched };
+
+  const dispatched = await request({ type: 'dispatch_session', id: sid, message }).catch((err) => ({
+    ok: false,
+    error: err.message || String(err),
+  }));
+  if (dispatched?.ok) {
+    return {
+      ok: true,
+      id: sid,
+      matched,
+      transport: dispatched.transport || 'dispatch_session',
+    };
+  }
+  return { ok: false, skipped: true, id: sid, error: dispatched?.error || 'local dispatch failed' };
+}
+
+async function writeLocalDispatchedInput({ request, wait, sessionId, message, tool }) {
+  const first = await request({ type: 'write_session', id: sessionId, data: `${message}\r` }).catch((err) => ({
+    ok: false,
+    error: err.message || String(err),
+  }));
+  if (!first?.ok) return first;
+
+  for (let i = 1; i < submitEnterCountForLocalTool(tool); i += 1) {
+    await wait(SUBMIT_ENTER_DELAY_MS);
+    const next = await request({ type: 'write_session', id: sessionId, data: '\r' }).catch((err) => ({
+      ok: false,
+      error: err.message || String(err),
+    }));
+    if (!next?.ok) return { ...next, partial: true };
+  }
+  return { ok: true };
+}
+
+function submitEnterCountForLocalTool(tool) {
+  return /^codex\b|^codex-/i.test(String(tool || '').trim()) ? 2 : 1;
+}
+
+function localSessionMatches(session, identifier) {
+  if (!session || !identifier) return false;
+  return session.id === identifier
+    || session.coding_session_id === identifier
+    || session.name === identifier
+    || session.label === identifier
+    || localWorktreeName(session.cwd) === identifier;
+}
+
+function localWorktreeName(cwd) {
+  if (!cwd) return null;
+  const parts = String(cwd).split(/[\\/]+/).filter(Boolean);
+  return parts.at(-1) || null;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -906,7 +1013,11 @@ async function runSessionsRead(argv) {
 // Internal helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-function preflight(bin = CLAUDE_BIN) {
+function preflight(bin) {
+  if (!bin) {
+    console.error('mc: launch binary not configured');
+    process.exit(1);
+  }
   // `bin` may be a bare name (claude, resolved via PATH) or an absolute
   // path (the real codex binary, already resolved by the adapter). For an
   // absolute path, existence on disk is the check; for a name, PATH.

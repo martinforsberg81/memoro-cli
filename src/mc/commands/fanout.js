@@ -1,5 +1,5 @@
 /**
- * `mc fanout <plan.md> [--from main] [--dry-run] [--json]` (§10a MVP).
+ * `mc fanout <plan.md> [--from main] [--tool codex] [--dry-run] [--json]`.
  *
  * Parses a plan file's `## Phase N: <title>` headings and spawns one
  * idle session per phase. Each session lands in its own worktree on
@@ -14,7 +14,7 @@
  *   - no push-events / budget / model-selection / verifier
  *
  * Out of scope and intentionally NOT in this file:
- *   - launching the agent tool (claude/codex) — sessions are idle,
+ *   - launching the agent tool — sessions are idle,
  *     user attaches via `mc resume <session-name>` (follow-up: feed
  *     the brief to the tool on resume)
  *
@@ -29,7 +29,7 @@
  *     the default that shells out.
  *   - We deliberately do NOT call into `mc new` — its branch naming
  *     is `sess/<name>` and there's no programmatic entry point that
- *     skips the re-exec into claude wrap mode. Refactoring `new.js`
+ *     skips the launch path. Refactoring `new.js`
  *     to expose a `createSession({ name, branch, kind, parent })` helper
  *     would be a future-work follow-up (see the PR body).
  */
@@ -45,6 +45,7 @@ import {
   primaryWorktree,
   branchExists,
 } from '../git.js';
+import { readEffectiveConfigForNew, resolveToolForNew, TOOL_SUGAR } from './new.js';
 
 /**
  * Default git portal — wraps the synchronous shell-out used elsewhere
@@ -92,7 +93,7 @@ export async function run(argv) {
     return 2;
   }
   if (!opts.planPath) {
-    console.error('mc: usage — `mc fanout <plan.md> [--from <ref>] [--dry-run]`');
+    console.error('mc: usage — `mc fanout <plan.md> [--from <ref>] [--tool <tool>] [--dry-run]`');
     return 2;
   }
 
@@ -139,6 +140,14 @@ export async function runWithDeps(opts, { git, fs, cwd }) {
     return emitError(opts, 'could not resolve primary worktree path');
   }
 
+  const toolResolution = await resolveToolForNew({
+    flagValue: opts.tool,
+    configLoader: () => readEffectiveConfigForNew({ primary }),
+  });
+  if (toolResolution.error) {
+    return emitError(opts, toolResolution.error);
+  }
+
   // Build the per-phase plan up front so dry-run and live mode share
   // the same shape. Each entry has everything needed to spawn.
   const fromRef = opts.from || 'main';
@@ -160,6 +169,8 @@ export async function runWithDeps(opts, { git, fs, cwd }) {
       branch,
       worktree_path: wt,
       from: fromRef,
+      tool: toolResolution.tool,
+      tool_source: toolResolution.source,
       brief_length: brief.length,
       brief,
     };
@@ -213,7 +224,7 @@ export async function runWithDeps(opts, { git, fs, cwd }) {
       parent_plan: planSlug,
       phase_n: p.phaseN,
       from_ref: fromRef,
-      tool: 'claude',
+      tool: p.tool,
       model_chain: [],
       session_state: 'no-session-yet',
       safety_verdict: 'SAFE_TO_END',
@@ -245,6 +256,7 @@ function emitDryRun(opts, { planSlug, phases, fromRef }) {
     process.stdout.write(`    session:  ${p.session_name}\n`);
     process.stdout.write(`    branch:   ${p.branch}\n`);
     process.stdout.write(`    worktree: ${p.worktree_path}\n`);
+    process.stdout.write(`    tool:     ${p.tool} (${p.tool_source})\n`);
     process.stdout.write(`    brief:    ${p.brief_length} chars\n`);
   }
   return 0;
@@ -267,6 +279,7 @@ function emitSuccess(opts, { planSlug, phases, fromRef }) {
     process.stdout.write(`    session:  ${p.session_name}\n`);
     process.stdout.write(`    branch:   ${p.branch}  (from ${fromRef})\n`);
     process.stdout.write(`    worktree: ${p.worktree_path}\n`);
+    process.stdout.write(`    tool:     ${p.tool} (${p.tool_source})\n`);
     process.stdout.write(`    brief:    ${p.worktree_path}/.mc/brief.md\n`);
   }
   process.stdout.write(`\nNext:\n`);
@@ -287,10 +300,23 @@ function emitError(opts, msg) {
 }
 
 function parseArgs(argv) {
-  const opts = { planPath: null, from: null, dryRun: false, json: false };
+  const opts = { planPath: null, from: null, tool: null, dryRun: false, json: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--from') { opts.from = argv[++i]; continue; }
+    if (a === '--tool') {
+      const next = argv[++i];
+      if (!next || next.startsWith('--')) return { error: '--tool requires a value' };
+      opts.tool = next;
+      continue;
+    }
+    if (Object.prototype.hasOwnProperty.call(TOOL_SUGAR, a)) {
+      if (opts.tool && opts.tool !== TOOL_SUGAR[a]) {
+        return { error: `conflicting tool flags: --tool ${opts.tool} and ${a}` };
+      }
+      opts.tool = TOOL_SUGAR[a];
+      continue;
+    }
     if (a === '--dry-run') { opts.dryRun = true; continue; }
     if (a === '--json') { opts.json = true; continue; }
     if (a === '--help' || a === '-h') { opts.help = true; continue; }
@@ -302,7 +328,7 @@ function parseArgs(argv) {
 }
 
 function printUsage() {
-  console.error('Usage: mc fanout <plan.md> [--from <ref>] [--dry-run] [--json]');
+  console.error('Usage: mc fanout <plan.md> [--from <ref>] [--tool claude|codex|gemini | --claude | --codex] [--dry-run] [--json]');
   console.error('  Parses `## Phase N: <title>` headings and spawns one idle session per phase.');
   console.error('  Each phase gets its own worktree at fan/<plan-slug>/phase-N rooted at --from.');
 }

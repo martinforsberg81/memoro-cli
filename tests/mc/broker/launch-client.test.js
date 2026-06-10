@@ -6,6 +6,7 @@ import {
   ensureBrokerRunning,
   launchBrokerOwnedSession,
 } from '../../../src/mc/broker/launch-client.js';
+import { BROKER_PROTOCOL_VERSION } from '../../../src/mc/broker/daemon.js';
 
 function makeStreams() {
   let out = '';
@@ -111,6 +112,52 @@ describe('launchBrokerOwnedSession', () => {
     assert.equal(streams.err(), '');
   });
 
+  test('repairs headless terminal env for Claude broker launches too', async () => {
+    const streams = makeStreams();
+    const requests = [];
+
+    const res = await launchBrokerOwnedSession({
+      cwd: '/repo',
+      tool: 'claude',
+      stdout: streams.stdout,
+      stderr: streams.stderr,
+      env: {
+        TERM: 'dumb',
+        NO_COLOR: '1',
+        CLICOLOR: '0',
+        PATH: '/bin',
+      },
+      now: () => 10_000,
+      ensureBroker: async () => ({ ok: true, broker: { pid: 42 } }),
+      request: async (message) => {
+        requests.push(message);
+        return { ok: true, session: { id: message.session.id } };
+      },
+      attach: async () => 0,
+      deps: {
+        getRepoContext: async () => ({ remoteUrl: 'git@example.com:org/repo.git', branch: 'main', toplevel: '/repo' }),
+        ensureCoordinatorSlashCommand: async () => {},
+        installUpdateCommand: async () => {},
+        readConfig: async () => ({ apiUrl: 'https://memoro.test' }),
+        getApiUrl: () => null,
+        getSecret: async () => 'tok',
+        groundSession: async () => ({ ok: true }),
+        hostname: () => 'machine',
+        lookupOrMint: async () => 'sess_claude',
+        getPackageVersion: async () => '0.test',
+      },
+    });
+
+    assert.equal(res.code, 0);
+    const session = requests[0].session;
+    assert.equal(session.tool, 'claude');
+    assert.equal(session.term_name, 'xterm-256color');
+    assert.equal(session.env.TERM, 'xterm-256color');
+    assert.equal(session.env.NO_COLOR, undefined);
+    assert.equal(session.env.CLICOLOR, undefined);
+    assert.equal(session.env.COLORTERM, 'truecolor');
+  });
+
   test('fails before broker launch when no Memoro token is available', async () => {
     const streams = makeStreams();
     let requested = false;
@@ -142,13 +189,65 @@ describe('ensureBrokerRunning', () => {
   test('returns immediately when broker already responds', async () => {
     let spawned = false;
     const res = await ensureBrokerRunning({
-      request: async () => ({ ok: true, broker: { pid: 1 } }),
+      request: async () => ({ ok: true, broker: { pid: 1, protocol_version: BROKER_PROTOCOL_VERSION } }),
       spawnDaemon: () => { spawned = true; return { ok: true }; },
     });
 
     assert.equal(res.ok, true);
     assert.equal(res.alreadyRunning, true);
     assert.equal(spawned, false);
+  });
+
+  test('refuses to replace a stale broker with live sessions', async () => {
+    let spawned = false;
+    const res = await ensureBrokerRunning({
+      request: async () => ({
+        ok: true,
+        broker: { pid: 1 },
+        sessions: [{ id: 'sess_live', session_state: 'live', cwd: '/repo', tool: 'codex' }],
+      }),
+      spawnDaemon: () => { spawned = true; return { ok: true }; },
+    });
+
+    assert.equal(res.ok, false);
+    assert.equal(res.stale, true);
+    assert.match(res.error, /stale/);
+    assert.deepEqual(res.live_sessions, [{
+      id: 'sess_live',
+      name: null,
+      cwd: '/repo',
+      tool: 'codex',
+    }]);
+    assert.equal(spawned, false);
+  });
+
+  test('restarts a stale broker when no live sessions are present', async () => {
+    const seen = [];
+    let spawned = false;
+    const responses = [
+      { ok: true, broker: { pid: 1 }, sessions: [] },
+      { ok: true, stopping: true },
+      null,
+      { ok: true, broker: { pid: 2, protocol_version: BROKER_PROTOCOL_VERSION } },
+    ];
+    const res = await ensureBrokerRunning({
+      request: async (msg) => {
+        seen.push(msg.type);
+        const next = responses.shift();
+        if (next === null) throw new Error('offline');
+        return next;
+      },
+      spawnDaemon: () => {
+        spawned = true;
+        return { ok: true, pid: 2 };
+      },
+      sleep: async () => {},
+    });
+
+    assert.equal(res.ok, true);
+    assert.equal(res.started, true);
+    assert.equal(spawned, true);
+    assert.deepEqual(seen, ['status', 'stop', 'status', 'status']);
   });
 
   test('spawns and polls until broker is ready', async () => {
@@ -158,7 +257,7 @@ describe('ensureBrokerRunning', () => {
       request: async () => {
         requests += 1;
         if (!spawned) throw new Error('offline');
-        return { ok: true, broker: { pid: 2 } };
+        return { ok: true, broker: { pid: 2, protocol_version: BROKER_PROTOCOL_VERSION } };
       },
       spawnDaemon: () => {
         spawned = true;

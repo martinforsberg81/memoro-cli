@@ -6,6 +6,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { CliWsClient } from '../../commands/ws-client.js';
 import { createFetchTranscriptHandler } from '../../commands/handlers/fetch-transcript.js';
 import { memoroFetch } from '../../lib/api.js';
+import { DEFAULT_TOOL } from '../../lib/config.js';
 import { extractExcerpt } from '../session-excerpt.js';
 import { scheduleSessionUpload } from '../session-upload.js';
 
@@ -129,7 +130,7 @@ export class BrokerSessionSidecars {
       handlers: {
         fetch_transcript: this.fetchTranscriptHandlerFactory({
           transcriptPath: this.coding.transcriptPath || null,
-          source: this.coding.source || 'claude-code',
+          source: this._codingSource(),
         }),
         dispatch_message: async (args) => {
           const message = typeof args?.message === 'string' ? args.message : null;
@@ -157,7 +158,7 @@ export class BrokerSessionSidecars {
         payload: {
           coding_session_id: this.coding.codingSessionId,
           machine_id: this.coding.machineId || null,
-          source: this.coding.source || 'claude-code',
+          source: this._codingSource(),
           repo: this.coding.repo || null,
           branch: this.coding.branch || null,
           files_touched_since_last: [],
@@ -188,7 +189,7 @@ export class BrokerSessionSidecars {
     try {
       const startedAt = Number.isFinite(this.session.startedAt) ? this.session.startedAt - 1000 : 0;
       await this.sessionUploadScheduler({
-        source: this.coding.source || 'claude-code',
+        source: this._codingSource(),
         cwd: this.session.cwd,
         repoHint: this.coding.repo || null,
         newerThanMs: startedAt,
@@ -197,6 +198,26 @@ export class BrokerSessionSidecars {
       this.logger.warn?.(`[broker-sidecars] session upload scheduling failed: ${err.message}`);
     }
   }
+
+  _codingSource() {
+    return normaliseCodingSource(this.coding.source)
+      || sourceForTool(this.coding.tool)
+      || sourceForTool(DEFAULT_TOOL);
+  }
+}
+
+export function sourceForTool(tool) {
+  const value = normaliseCodingSource(tool);
+  if (!value) return null;
+  if (value === 'claude') return 'claude-code';
+  if (value === 'gemini') return 'gemini-cli';
+  return value;
+}
+
+function normaliseCodingSource(value) {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  return trimmed || null;
 }
 
 export async function postHeartbeatWithRetry({

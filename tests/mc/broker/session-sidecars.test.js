@@ -155,6 +155,59 @@ describe('BrokerSessionSidecars', () => {
     assert.equal(wsClients[0].stopped, true);
   });
 
+  test('falls back to Codex source when sidecar source is omitted', async () => {
+    const paths = tempPaths();
+    const session = makeSession();
+    const wsClients = [];
+    const fetchTranscriptCalls = [];
+    const heartbeats = [];
+    const uploads = [];
+
+    const sidecars = new BrokerSessionSidecars({
+      session,
+      coding: {
+        codingSessionId: 'sess_codex',
+        apiUrl: 'https://memoro.test',
+        token: 'tok',
+        machineId: 'machine',
+        tool: 'codex',
+        repo: 'repo',
+        branch: 'main',
+        metaPath: paths.metaPath,
+      },
+      fetchTranscriptHandlerFactory: (opts) => {
+        fetchTranscriptCalls.push(opts);
+        return async () => ({ ok: true });
+      },
+      wsClientFactory: (opts) => {
+        const client = {
+          opts,
+          start() {},
+          stop() {},
+        };
+        wsClients.push(client);
+        return client;
+      },
+      memoroFetchImpl: async (apiUrl, path, opts) => {
+        heartbeats.push({ apiUrl, path, opts });
+        return { ok: true };
+      },
+      sessionUploadScheduler: async (opts) => {
+        uploads.push(opts);
+      },
+      sleepImpl: async () => {},
+      now: () => 2_500,
+      heartbeatIntervalMs: null,
+    }).start();
+
+    await sidecars.heartbeatPromise;
+    await sidecars._scheduleUpload();
+
+    assert.equal(fetchTranscriptCalls[0].source, 'codex');
+    assert.equal(heartbeats[0].opts.body.source, 'codex');
+    assert.equal(uploads[0].source, 'codex');
+  });
+
   test('postHeartbeatWithRetry retries then reports failure', async () => {
     const sleeps = [];
     let attempts = 0;

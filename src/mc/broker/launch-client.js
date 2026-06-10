@@ -5,12 +5,13 @@ import { resolveLaunch } from '../../adapters/index.js';
 import { installUpdateCommand } from '../../adapters/claude-code.js';
 import { getSecret } from '../../lib/keychain.js';
 import { ACCOUNTS } from '../../commands/auth.js';
-import { readConfig, getApiUrl } from '../../lib/config.js';
+import { DEFAULT_TOOL, readConfig, getApiUrl } from '../../lib/config.js';
 import { getRepoContext, deriveRepoName } from '../../lib/git-context.js';
 import { lookupOrMint } from '../../lib/coding-session.js';
 import { getPackageVersion } from '../../lib/version.js';
 import { ensureCoordinatorSlashCommand } from '../coordinator-command.js';
 import { groundSession } from '../ground.js';
+import { normalizeInteractivePtyEnv } from '../interactive-env.js';
 import { mcHome } from '../paths.js';
 import { findEntry } from '../registry.js';
 import { resolvePolicyForWrap } from '../wrap-start.js';
@@ -23,7 +24,7 @@ export async function launchBrokerOwnedSession({
   cwd,
   label = null,
   focus = null,
-  tool = 'claude-code',
+  tool = DEFAULT_TOOL,
   sessionName = null,
   argv = [],
   apiArgv = [],
@@ -144,6 +145,11 @@ export async function launchBrokerOwnedSession({
       return { code: 1 };
     }
   }
+  const interactiveEnv = normalizeInteractivePtyEnv({
+    baseEnv: spawnEnv,
+    termName: env.TERM,
+  });
+  spawnEnv = interactiveEnv.env;
 
   const launchRes = await request({
     type: 'launch_session',
@@ -159,7 +165,7 @@ export async function launchBrokerOwnedSession({
       },
       cols: stdout.columns || 80,
       rows: stdout.rows || 24,
-      term_name: env.TERM || 'xterm-256color',
+      term_name: interactiveEnv.termName,
       env: spawnEnv,
       sidecars: {
         codingSessionId,
@@ -171,6 +177,7 @@ export async function launchBrokerOwnedSession({
         repo: deriveRepoName(repoContext),
         branch: repoContext.branch,
         worktreeName: sessionName || null,
+        tool: launch.shortName,
         sockPath: paths.sockPath,
         metaPath: paths.metaPath,
         transcriptPath: null,

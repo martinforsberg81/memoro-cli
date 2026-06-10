@@ -27,6 +27,7 @@ import { join } from 'node:path';
 
 import { runMc, parseJsonOrNull } from '../_helpers/cli.js';
 import { writeRegistry, makeEntry } from '../_helpers/registry-fixture.js';
+import { run as runStatus } from '../../../src/mc/commands/status.js';
 
 describe('mc status <name>', () => {
   let mcHome;
@@ -162,6 +163,100 @@ describe('mc status <name>', () => {
     ]) {
       assert.ok(k in j, `field ${k} missing from status output`);
     }
+  });
+
+  test('stale live registry state is downgraded when active lookup succeeds', async () => {
+    const stdout = [];
+    const stderr = [];
+    const code = await runStatus(['stale-live', '--json'], {
+      stdout: { write: (s) => stdout.push(s) },
+      stderr: { write: (s) => stderr.push(s) },
+      findEntry: () => makeEntry({
+        name: 'stale-live',
+        branch: 'sess/stale-live',
+        coding_session_id: 'sess_stale_live',
+        session_state: 'live',
+        safety_verdict: 'IS_ACTIVE_NOW',
+      }),
+      readConfig: async () => ({}),
+      fetchBrokerStatus: async () => ({ ok: true, sessions: [] }),
+      fetchActiveSessions: async () => ({ ok: true, sessions: [] }),
+    });
+
+    assert.equal(code, 0);
+    assert.equal(stderr.join(''), '');
+    const j = parseJsonOrNull(stdout.join(''));
+    assert.equal(j.session_state, 'idle');
+    assert.equal(j.reachability, 'stale');
+    assert.equal(j.safety_verdict, 'SAFE_TO_END');
+    assert.equal(j.active_session, null);
+  });
+
+  test('active lookup can mark an idle registry entry as reachable', async () => {
+    const stdout = [];
+    const code = await runStatus(['reachable', '--json'], {
+      stdout: { write: (s) => stdout.push(s) },
+      stderr: { write: () => {} },
+      findEntry: () => makeEntry({
+        name: 'reachable',
+        branch: 'sess/reachable',
+        coding_session_id: 'sess_reachable1',
+        session_state: 'idle',
+      }),
+      readConfig: async () => ({}),
+      fetchBrokerStatus: async () => ({ ok: true, sessions: [] }),
+      fetchActiveSessions: async () => ({
+        ok: true,
+        sessions: [{
+          coding_session_id: 'sess_reachable1',
+          label: 'reachable',
+          repo: 'memoro',
+          branch: 'sess/reachable',
+          machine_id: 'host-a',
+          idle_seconds: 0,
+        }],
+      }),
+    });
+
+    assert.equal(code, 0);
+    const j = parseJsonOrNull(stdout.join(''));
+    assert.equal(j.session_state, 'live');
+    assert.equal(j.reachability, 'reachable');
+    assert.equal(j.active_session.coding_session_id, 'sess_reachable1');
+  });
+
+  test('local broker reachability wins before cloud active lookup', async () => {
+    const stdout = [];
+    const code = await runStatus(['local-broker', '--json'], {
+      stdout: { write: (s) => stdout.push(s) },
+      stderr: { write: () => {} },
+      findEntry: () => makeEntry({
+        name: 'local-broker',
+        branch: 'sess/local-broker',
+        worktree_path: '/tmp/local-broker-worktree',
+        coding_session_id: 'sess_old_id',
+        session_state: 'live',
+      }),
+      readConfig: async () => ({}),
+      fetchBrokerStatus: async () => ({
+        ok: true,
+        sessions: [{
+          id: 'sess_local_live',
+          cwd: '/tmp/local-broker-worktree',
+          session_state: 'live',
+          attachable: true,
+          exit: null,
+          last_output_at: '2026-06-09T12:00:00.000Z',
+        }],
+      }),
+      fetchActiveSessions: async () => ({ ok: true, sessions: [] }),
+    });
+
+    assert.equal(code, 0);
+    const j = parseJsonOrNull(stdout.join(''));
+    assert.equal(j.session_state, 'live');
+    assert.equal(j.reachability, 'reachable');
+    assert.equal(j.active_session.coding_session_id, 'sess_local_live');
   });
 
   test('surfaces session tool + relaunch command in JSON', () => {

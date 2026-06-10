@@ -7,6 +7,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- `npm run smoke:mc` runs a release/global-install smoke gate against a selected
+  `mc` binary, checking Codex defaults, help text, tool-switch dry-run,
+  no-launch session creation, explicit Claude resume, and fanout defaults in an
+  isolated temp repo.
 - `mc status --json` and `mc auth status --json` now expose an
   `effective_config` object with source metadata for package defaults, global
   config, repo policy, repo-local config, and session policy. This is
@@ -18,6 +22,15 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   not add a terminal `mc map` command or auto-edit the map.
 
 ### Fixed
+- Fresh mc installs now default to Codex instead of falling through to Claude,
+  including `mc new`, bare `mc`, `mc setup`, and status policy reporting.
+- Fanout sessions and raw registry upserts now use the shared package default
+  tool instead of hardcoding Claude in fallback paths.
+- Broker sidecars now fall back to the selected/default tool source instead of
+  labeling partial launch payloads as Claude Code by default.
+- mc now repairs inherited headless terminal env (`TERM=dumb`, `NO_COLOR`) before
+  launching interactive PTYs, so broker-owned Codex sessions can render their
+  native styled input/footer instead of a plain downgraded TUI.
 - Codex sessions launched by `mc` now get a guarded PATH that blocks direct
   Cloudflare Wrangler data-access commands (`d1 execute`, R2 object access,
   KV reads, tail, secrets, and similar). Repo-approved admin scripts can be

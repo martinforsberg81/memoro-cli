@@ -7,9 +7,10 @@
  */
 import { findEntry } from './registry.js';
 import { readRepoPolicy, resolveEffectivePolicy } from './policy.js';
+import { DEFAULT_TOOL } from '../lib/config.js';
 
 export function resolveRequestedToolForWrap({ env = process.env, config = {} } = {}) {
-  return env.MC_GROUNDING_TOOL || config.defaultTool || 'claude-code';
+  return env.MC_GROUNDING_TOOL || config.defaultTool || DEFAULT_TOOL;
 }
 
 export function resolveWrapFocus({ label = null, env = process.env } = {}) {

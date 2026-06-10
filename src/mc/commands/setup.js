@@ -9,7 +9,7 @@
  *   - otherwise  → prints a numbered checklist of *only* the missing
  *                  steps with the EXACT command to fix each. Each
  *                  command is a real mc verb (`mc auth memoro`,
- *                  `mc auth claude`, `mc install-shell`) so the user
+ *                  `mc auth codex`, `mc install-shell`) so the user
  *                  just copies the line.
  *
  * Idempotent. Re-run it whenever — if a step has been completed
@@ -31,11 +31,11 @@ import {
   ensureSentinel as freshInstallEnsureSentinel,
 } from '../first-run.js';
 
-// Required tools — at least one of these must be installed AND authed
-// for setup to consider the machine "ready". Codex/Gemini are tracked
-// as optional; setup never blocks on them.
-const REQUIRED_TOOLS = ['claude'];
-const OPTIONAL_TOOLS = ['codex', 'gemini'];
+// Required tools — at least one of these must be ready for setup to consider
+// the machine usable. Codex is the default mc tool; its auth probe can be
+// unknown headlessly, so installed + not-explicitly-failed is ready enough.
+const REQUIRED_TOOLS = ['codex'];
+const OPTIONAL_TOOLS = ['claude', 'gemini'];
 
 export async function run(argv) {
   const opts = parseArgs(argv);
@@ -78,7 +78,7 @@ async function buildReport() {
 /**
  * Build the ordered checklist of *only* the missing steps. Order is
  * deliberate: log in to Memoro before anything else (everything else
- * keys off the account), then primary tool (Claude), then shell
+ * keys off the account), then primary tool (Codex), then shell
  * wrapper. Each step carries the exact command the user should run.
  */
 export function missingSteps(report) {
@@ -92,24 +92,27 @@ export function missingSteps(report) {
     });
   }
 
-  // Require at least one of the REQUIRED_TOOLS to be installed AND
-  // authenticated. If none are, surface install + auth steps for the
-  // first required tool (Claude).
+  // Require at least one primary tool to be installed and not explicitly
+  // unauthenticated. Codex cannot always verify auth headlessly, so null
+  // is accepted the same way `mc tool-switch` accepts it.
   const someRequiredReady = REQUIRED_TOOLS.some((t) => {
     const s = report.tools[t];
-    return s?.installed && s.authenticated === true;
+    return s?.installed && s.authenticated !== false;
   });
   if (!someRequiredReady) {
     const primary = REQUIRED_TOOLS[0];
     const s = report.tools[primary];
     if (!s?.installed) {
+      const installCommand = extractInstallCommand(s?.hint);
       steps.push({
         id: `install-${primary}`,
         title: `Install ${labelFor(primary)}`,
         // The hint from the not-installed branch is already the
         // canonical install command; surface it verbatim.
-        command: extractInstallCommand(s?.hint) || s?.hint || '',
-        note: 'mc setup will not auto-install — review the command before running.',
+        command: installCommand || '',
+        note: installCommand
+          ? 'mc setup will not auto-install — review the command before running.'
+          : (s?.hint || 'Install the tool, then re-run setup.'),
       });
       steps.push({
         id: `verify-${primary}`,
@@ -164,8 +167,9 @@ function printAllSet(report) {
   process.stdout.write(`  ✓ Memoro signed in\n`);
   for (const t of REQUIRED_TOOLS) {
     const s = report.tools[t];
-    if (s?.installed && s.authenticated === true) {
-      process.stdout.write(`  ✓ ${labelFor(t)} installed + authenticated\n`);
+    if (s?.installed && s.authenticated !== false) {
+      const suffix = s.authenticated === true ? 'installed + authenticated' : 'installed';
+      process.stdout.write(`  ✓ ${labelFor(t)} ${suffix}\n`);
     }
   }
   if (report.shell_wrapper.installed) {
