@@ -48,6 +48,10 @@ describe('launchBrokerOwnedSession', () => {
         sequence.push('ensureBroker');
         return { ok: true, broker: { pid: 42 } };
       },
+      ensureCloudBroker: async () => {
+        sequence.push('ensureCloudBroker');
+        return { ok: true, alreadyRunning: true, pid: 43 };
+      },
       request: async (message) => {
         sequence.push('request');
         requests.push(message);
@@ -87,7 +91,7 @@ describe('launchBrokerOwnedSession', () => {
 
     assert.equal(res.code, 0);
     assert.equal(res.codingSessionId, 'sess_abc');
-    assert.deepEqual(sequence, ['ensureBroker', 'request', 'onLaunched', 'attach']);
+    assert.deepEqual(sequence, ['ensureBroker', 'request', 'ensureCloudBroker', 'onLaunched', 'attach']);
     assert.deepEqual(attached, { id: 'sess_abc' });
     assert.equal(launched.codingSessionId, 'sess_abc');
 
@@ -129,6 +133,7 @@ describe('launchBrokerOwnedSession', () => {
       },
       now: () => 10_000,
       ensureBroker: async () => ({ ok: true, broker: { pid: 42 } }),
+      ensureCloudBroker: async () => ({ ok: true, alreadyRunning: true, pid: 43 }),
       request: async (message) => {
         requests.push(message);
         return { ok: true, session: { id: message.session.id } };
@@ -156,6 +161,79 @@ describe('launchBrokerOwnedSession', () => {
     assert.equal(session.env.NO_COLOR, undefined);
     assert.equal(session.env.CLICOLOR, undefined);
     assert.equal(session.env.COLORTERM, 'truecolor');
+  });
+
+  test('continues local launch when cloud bridge auto-start fails', async () => {
+    const streams = makeStreams();
+    const res = await launchBrokerOwnedSession({
+      cwd: '/repo',
+      tool: 'claude',
+      stdout: streams.stdout,
+      stderr: streams.stderr,
+      env: { TERM: 'xterm-256color' },
+      now: () => 10_000,
+      ensureBroker: async () => ({ ok: true, broker: { pid: 42 } }),
+      ensureCloudBroker: async () => ({ ok: false, error: 'spawn failed' }),
+      request: async (message) => ({ ok: true, session: { id: message.session.id } }),
+      attach: async () => 0,
+      deps: {
+        getRepoContext: async () => ({ remoteUrl: 'git@example.com:org/repo.git', branch: 'main', toplevel: '/repo' }),
+        ensureCoordinatorSlashCommand: async () => {},
+        installUpdateCommand: async () => {},
+        readConfig: async () => ({ apiUrl: 'https://memoro.test' }),
+        getApiUrl: () => null,
+        getSecret: async () => 'tok',
+        groundSession: async () => ({ ok: true }),
+        hostname: () => 'machine',
+        lookupOrMint: async () => 'sess_cloud_soft_fail',
+        getPackageVersion: async () => '0.test',
+      },
+    });
+
+    assert.equal(res.code, 0);
+    assert.match(streams.err(), /broker cloud bridge not started/);
+    assert.match(streams.err(), /continuing with local broker only/);
+  });
+
+  test('can suppress startup message delivery for resume relaunches', async () => {
+    const streams = makeStreams();
+    const requests = [];
+    let grounded = false;
+    const res = await launchBrokerOwnedSession({
+      cwd: '/repo',
+      tool: 'claude',
+      sendStartupMessage: false,
+      stdout: streams.stdout,
+      stderr: streams.stderr,
+      env: { TERM: 'xterm-256color' },
+      now: () => 10_000,
+      ensureBroker: async () => ({ ok: true, broker: { pid: 42 } }),
+      ensureCloudBroker: async () => ({ ok: true, alreadyRunning: true, pid: 43 }),
+      request: async (message) => {
+        requests.push(message);
+        return { ok: true, session: { id: message.session.id } };
+      },
+      attach: async () => 0,
+      deps: {
+        getRepoContext: async () => ({ remoteUrl: 'git@example.com:org/repo.git', branch: 'main', toplevel: '/repo' }),
+        ensureCoordinatorSlashCommand: async () => {},
+        installUpdateCommand: async () => {},
+        readConfig: async () => ({ apiUrl: 'https://memoro.test' }),
+        getApiUrl: () => null,
+        getSecret: async () => 'tok',
+        groundSession: async () => {
+          grounded = true;
+          return { ok: true, message: 'grounding prompt' };
+        },
+        hostname: () => 'machine',
+        lookupOrMint: async () => 'sess_no_prompt',
+        getPackageVersion: async () => '0.test',
+      },
+    });
+
+    assert.equal(res.code, 0);
+    assert.equal(grounded, true);
+    assert.equal(requests[0].session.launch_options.startupMessage, null);
   });
 
   test('fails before broker launch when no Memoro token is available', async () => {

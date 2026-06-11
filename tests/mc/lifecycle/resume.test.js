@@ -3,9 +3,11 @@
  *
  * Per the plan §2:
  *   mc resume <name>
- *     cd to worktree, then launch the stored tool. Claude gets its native
- *     --resume flag; Codex must not, because an empty Codex launch can
- *     open Codex's own resume picker instead of the mc worktree session.
+ *     cd to worktree, then attach to the broker-owned PTY when it is live.
+ *     If the PTY is gone, relaunch the stored tool without sending a fresh
+ *     startup prompt. Claude gets its native --resume flag; Codex must not,
+ *     because an empty Codex launch can open Codex's own resume picker
+ *     instead of the mc worktree session.
  *
  * Per §2b, `mc resume` emits a `cd <worktree>` directive on fd 3
  * *before* launching the tool (so the launched tool's cwd is correct).
@@ -28,6 +30,7 @@ import {
   parseArgs,
   run as runResume,
   runResumePicker,
+  selectLiveBrokerSessionForEntry,
   resumableEntries,
 } from '../../../src/mc/commands/resume.js';
 import * as claudeAdapter from '../../../src/adapters/claude-code.js';
@@ -116,6 +119,7 @@ describe('mc resume <name>', () => {
         ] }),
         fetchActiveSessions: async () => ({ ok: true, sessions: [] }),
         readLine: async () => '1',
+        attachLiveBrokerSession: async () => ({ attached: false }),
         launchResumeSession: ({ entry }) => {
           launched.push(entry);
           return 0;
@@ -159,6 +163,7 @@ describe('mc resume <name>', () => {
           }],
         }),
         readLine: async () => '1',
+        attachLiveBrokerSession: async () => ({ attached: false }),
         launchResumeSession: () => {
           launched = true;
           return 0;
@@ -171,6 +176,53 @@ describe('mc resume <name>', () => {
     assert.match(out, /already active/);
     assert.match(out, /mc sessions send sess_data "<message>"/);
     assert.match(out, /mc sessions read sess_data/);
+  });
+
+  test('interactive picker selection of a local active broker session attaches', async () => {
+    const stdout = [];
+    const attached = [];
+    let launched = false;
+    const status = await runResumePicker({
+      opts: { name: null, tool: null, noLaunch: false, json: false },
+      stdin: { isTTY: true },
+      stdout: { isTTY: true, write: (s) => stdout.push(s) },
+      stderr: { write() {} },
+      deps: {
+        readRegistry: () => ({ entries: [
+          makeEntry({
+            name: 'data',
+            branch: 'sess/data',
+            coding_session_id: 'sess_data',
+            session_state: 'live',
+          }),
+        ] }),
+        fetchActiveSessions: async () => ({
+          ok: true,
+          sessions: [{
+            coding_session_id: 'sess_data',
+            label: 'data',
+            repo: 'memoro',
+            branch: 'main',
+            machine_id: 'host-a',
+          }],
+        }),
+        readLine: async () => '1',
+        attachLiveBrokerSession: async (entry) => {
+          attached.push(entry);
+          return { attached: true, code: 0, id: entry.coding_session_id };
+        },
+        launchResumeSession: () => {
+          launched = true;
+          return 0;
+        },
+      },
+    });
+
+    assert.equal(status, 0);
+    assert.equal(launched, false);
+    assert.equal(attached.length, 1);
+    assert.equal(attached[0].coding_session_id, 'sess_data');
+    assert.doesNotMatch(stdout.join(''), /Send a message with:/);
   });
 
   test('direct resume of an active server-visible session does not spawn a duplicate', async () => {
@@ -199,6 +251,9 @@ describe('mc resume <name>', () => {
             machine_id: 'host-a',
           }],
         }),
+        requestBroker: async () => {
+          throw new Error('no local broker in test');
+        },
         launchResumeSession: () => {
           launched = true;
           return 0;
@@ -216,6 +271,77 @@ describe('mc resume <name>', () => {
       if (old === undefined) delete process.env.MC_TEST_MODE;
       else process.env.MC_TEST_MODE = old;
     }
+  });
+
+  test('direct resume attaches to a live local broker session without relaunching', async () => {
+    const old = process.env.MC_TEST_MODE;
+    delete process.env.MC_TEST_MODE;
+    const attached = [];
+    let launched = false;
+    let fetchedActive = false;
+    try {
+      const status = await runResume(['data'], {
+        stdout: { write() {} },
+        stderr: { write() {} },
+        findEntry: () => makeEntry({
+          name: 'data',
+          branch: 'sess/data',
+          worktree_path: '/tmp/data',
+          coding_session_id: 'sess_data',
+          tool: 'codex',
+        }),
+        requestBroker: async (message) => {
+          assert.deepEqual(message, { type: 'sessions' });
+          return {
+            ok: true,
+            sessions: [{
+              id: 'sess_data',
+              name: 'data',
+              cwd: '/tmp/data',
+              session_state: 'live',
+              attachable: true,
+            }],
+          };
+        },
+        attachBrokerSession: async (arg) => {
+          attached.push(arg);
+          return 0;
+        },
+        fetchActiveSessions: async () => {
+          fetchedActive = true;
+          return { ok: true, sessions: [] };
+        },
+        launchResumeSession: () => {
+          launched = true;
+          return 0;
+        },
+      });
+
+      assert.equal(status, 0);
+      assert.equal(launched, false);
+      assert.equal(fetchedActive, false);
+      assert.equal(attached.length, 1);
+      assert.equal(attached[0].id, 'sess_data');
+    } finally {
+      if (old === undefined) delete process.env.MC_TEST_MODE;
+      else process.env.MC_TEST_MODE = old;
+    }
+  });
+
+  test('live broker session matching falls back from id to cwd and name', () => {
+    const sessions = [
+      { id: 'dead', name: 'data', cwd: '/tmp/data', session_state: 'dead' },
+      { id: 'by-cwd', cwd: '/tmp/data', session_state: 'live', attachable: true },
+      { id: 'by-name', name: 'data', session_state: 'live', attachable: true },
+    ];
+
+    assert.equal(selectLiveBrokerSessionForEntry({
+      name: 'data',
+      worktree_path: '/tmp/data',
+    }, sessions).id, 'by-cwd');
+    assert.equal(selectLiveBrokerSessionForEntry({
+      name: 'data',
+    }, sessions).id, 'by-name');
   });
 
   test('rejects unknown name', () => {
@@ -311,6 +437,7 @@ describe('mc resume <name>', () => {
     assert.equal(launchCalls[0].label, 'identity cleanup');
     assert.equal(launchCalls[0].focus, 'identity cleanup');
     assert.deepEqual(launchCalls[0].argv, ['--resume']);
+    assert.equal(launchCalls[0].sendStartupMessage, false);
     assert.deepEqual(launchCalls[0].env, { PATH: '/bin', MC_GROUNDING_TOOL: 'codex' });
     assert.deepEqual(upserts, [{
       name: 'data',
@@ -347,5 +474,6 @@ describe('mc resume <name>', () => {
     assert.deepEqual(materialiseCalls[0].adapters, [codexAdapter]);
     assert.equal(launchCalls[0].tool, 'codex');
     assert.deepEqual(launchCalls[0].argv, ['--resume']);
+    assert.equal(launchCalls[0].sendStartupMessage, false);
   });
 });

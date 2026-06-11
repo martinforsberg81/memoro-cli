@@ -6,17 +6,18 @@
  * the launched tool's cwd is the worktree. In `--no-launch` mode (tests
  * + when the user just wants to cd), we emit the directive and exit.
  *
- * Grounding (Phase 2 — entry parity): resume re-execs into wrap mode the
- * same way `mc new` does, so it grounds through the SAME `groundSession`
- * seam in `runWrap` — no forked grounding logic here. The session's label
- * (if any) is threaded across the re-exec as the soft `focus` pointer via
- * `MC_GROUNDING_FOCUS`, matching `mc new`'s `<task>` plumbing.
+ * Resume is not `mc new` with another label. If the broker still owns a live
+ * PTY for this registry entry, resume attaches to it and sends no new prompt.
+ * If the old PTY is gone, resume may relaunch the stored tool, but suppresses
+ * startup-message delivery so Codex is not fed a fresh user prompt.
  */
 import { findEntry, readRegistry, upsertEntry } from '../registry.js';
 import { emitCd, parseDirectiveFlag } from '../shell-directives.js';
 import { resolveToolInput } from '../../adapters/index.js';
 import { DEFAULT_TOOL } from '../../lib/config.js';
 import { launchBrokerOwnedSession } from '../broker/launch-client.js';
+import { attachBrokerSession } from '../broker/attach-client.js';
+import { requestBroker } from '../broker/client.js';
 import {
   buildSessionListView,
   fetchActiveCodingSessions,
@@ -68,6 +69,15 @@ export async function run(rawArgv, deps = {}) {
   }
 
   if (!opts.json && !opts.noLaunch && process.env.MC_TEST_MODE !== '1') {
+    const attached = await attachLiveBrokerSession(entry, {
+      stdin,
+      stdout,
+      stderr,
+      request: deps.requestBroker || requestBroker,
+      attach: deps.attachBrokerSession || attachBrokerSession,
+    });
+    if (attached?.attached) return attached.code ?? 0;
+
     const active = await activeMatchForEntry(entry, { argv, deps });
     if (active) {
       stdout.write(renderActiveSelectionMessage(active));
@@ -145,6 +155,7 @@ export async function launchResumeSession({
     tool: launchTool?.id || entry.tool || DEFAULT_TOOL,
     argv: ['--resume'],
     apiArgv,
+    sendStartupMessage: false,
     env,
     stderr,
     onLaunched: ({ codingSessionId }) => {
@@ -217,6 +228,7 @@ export async function runResumePicker({
   const loadRegistry = deps.readRegistry || readRegistry;
   const fetchActive = deps.fetchActiveSessions || ((args) => fetchActiveCodingSessions({ argv: args }));
   const launch = deps.launchResumeSession || launchResumeSession;
+  const attachLive = deps.attachLiveBrokerSession || attachLiveBrokerSession;
   const upsert = deps.upsertEntry || upsertEntry;
   const entries = resumableEntries(loadRegistry());
   const toolValidation = validateToolFlag(opts.tool);
@@ -266,9 +278,11 @@ export async function runResumePicker({
   return resumeSelectedChoice(parsed.choice, {
     opts,
     emitDirectives,
+    stdin,
     stdout,
     stderr,
     launchResumeSession: launch,
+    attachLiveBrokerSession: attachLive,
     upsertEntry: upsert,
     resolvedTool: toolValidation.resolved,
   });
@@ -277,14 +291,21 @@ export async function runResumePicker({
 export async function resumeSelectedChoice(choice, {
   opts = {},
   emitDirectives = false,
+  stdin = process.stdin,
   stdout = process.stdout,
   stderr = process.stderr,
   launchResumeSession: launch = launchResumeSession,
+  attachLiveBrokerSession: attachLive = attachLiveBrokerSession,
   upsertEntry: upsert = upsertEntry,
   resolvedTool = null,
 } = {}) {
   if (!choice) return 2;
   if (choice.type === 'active') {
+    const attached = await attachLive({
+      name: choice.label || choice.name || null,
+      coding_session_id: choice.coding_session_id || choice.id || null,
+    }, { stdin, stdout, stderr });
+    if (attached?.attached) return attached.code ?? 0;
     stdout.write(renderActiveSelectionMessage(choice));
     return 0;
   }
@@ -303,7 +324,66 @@ export async function resumeSelectedChoice(choice, {
     emitCd(entry.worktree_path, { enabled: emitDirectives || undefined });
   }
   if (opts.noLaunch || process.env.MC_TEST_MODE === '1') return 0;
+  const attached = await attachLive(entry, { stdin, stdout, stderr });
+  if (attached?.attached) return attached.code ?? 0;
   return launch({ entry });
+}
+
+export async function attachLiveBrokerSession(entry, {
+  request = requestBroker,
+  attach = attachBrokerSession,
+  stdin = process.stdin,
+  stdout = process.stdout,
+  stderr = process.stderr,
+} = {}) {
+  const listed = await request({ type: 'sessions' }).catch(() => null);
+  const target = selectLiveBrokerSessionForEntry(entry, listed?.sessions || []);
+  const id = brokerSessionId(target);
+  if (!id) return { attached: false };
+  const code = await attach({ id, stdin, stdout, stderr });
+  return { attached: true, code, id };
+}
+
+export function selectLiveBrokerSessionForEntry(entry, sessions = []) {
+  if (!entry || !Array.isArray(sessions)) return null;
+  const live = sessions.filter(isLiveBrokerSession);
+
+  const entryId = nonEmpty(entry.coding_session_id);
+  if (entryId) {
+    const direct = live.find((session) => brokerSessionId(session) === entryId);
+    if (direct) return direct;
+  }
+
+  const worktreePath = nonEmpty(entry.worktree_path);
+  if (worktreePath) {
+    const byCwd = live.find((session) => nonEmpty(session.cwd) === worktreePath);
+    if (byCwd) return byCwd;
+  }
+
+  const name = nonEmpty(entry.name);
+  if (name) {
+    return live.find((session) => (
+      nonEmpty(session.name) === name
+      || nonEmpty(session.worktree_name) === name
+    )) || null;
+  }
+
+  return null;
+}
+
+function isLiveBrokerSession(session) {
+  return !!brokerSessionId(session)
+    && session?.attachable !== false
+    && session?.session_state !== 'dead'
+    && !session?.exit;
+}
+
+function brokerSessionId(session) {
+  return nonEmpty(session?.id) || nonEmpty(session?.coding_session_id);
+}
+
+function nonEmpty(value) {
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
 
 async function activeMatchForEntry(entry, { argv = [], deps = {} } = {}) {

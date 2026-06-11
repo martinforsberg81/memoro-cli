@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import test, { describe } from 'node:test';
 
-import { parseArgs, runBrokerWith } from '../../../src/mc/commands/broker.js';
+import { __test__, parseArgs, runBrokerWith } from '../../../src/mc/commands/broker.js';
 import { BROKER_PROTOCOL_VERSION } from '../../../src/mc/broker/daemon.js';
 
 function io() {
@@ -187,5 +190,27 @@ describe('mc broker command', () => {
 
     assert.equal(code, 1);
     assert.match(JSON.parse(streams.out()).error, /broker start failed/);
+  });
+
+  test('cloud connector pid registration writes and cleans pid file', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mc-broker-command-'));
+    try {
+      const pidPath = join(dir, 'broker-cloud.pid');
+      const listeners = new Map();
+      const cleanup = __test__.registerCloudConnectorPid({
+        pidPath,
+        pid: 12345,
+        processImpl: {
+          once(event, handler) { listeners.set(event, handler); },
+        },
+      });
+
+      assert.equal(readFileSync(pidPath, 'utf8'), '12345');
+      assert.equal(typeof cleanup, 'function');
+      listeners.get('exit')();
+      assert.equal(existsSync(pidPath), false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

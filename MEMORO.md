@@ -130,8 +130,11 @@ tool state intact.
   the local writer lease (`mc attach --read-only`, one writer/many viewers);
   Phase 3a shipped the CLI-side cloud bridge (`mc broker connect`,
   `/api/mc/broker/ws` control, session inventory, `attach_request` → local
-  attach stream bridge). Next build is the Memoro Worker/Durable Object stream
-  endpoints plus the hosted browser terminal UI.
+  attach stream bridge). Current follow-up makes broker-owned launches
+  best-effort start the cloud bridge, and `mc resume` re-attaches to live local
+  broker sessions without a fresh prompt before falling back to promptless
+  relaunch. Next build is the Memoro Worker/Durable Object stream endpoints
+  plus the hosted browser terminal UI.
   → `docs/plans/hosted-live-session-workspace.md`
 - **Ensemble & hierarchy** — `later · M · —`
   Multi-model ensembles and recursive mid-agents, layered on the spine. → §10b/§10c

@@ -13,3 +13,11 @@ export function brokerPidPath() {
 export function brokerLogPath() {
   return join(mcHome(), 'broker.log');
 }
+
+export function brokerCloudPidPath() {
+  return join(mcHome(), 'broker-cloud.pid');
+}
+
+export function brokerCloudLogPath() {
+  return join(mcHome(), 'broker-cloud.log');
+}
