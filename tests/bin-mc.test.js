@@ -79,18 +79,26 @@ describe('renderIntro', () => {
     assert.match(plain, /sess_abc123XYZ/);
   });
 
-  test('mentions the coordinator slash command + cli help', () => {
+  test('mentions portable coordinator actions + cli help', () => {
     const plain = stripAnsi(renderIntro(ctx));
-    assert.match(plain, /\/memoro-coordinator/);
+    assert.match(plain, /mc sessions watch/);
     assert.match(plain, /\/mc map/);
     assert.doesNotMatch(plain, /\/memoro-map/);
     assert.match(plain, /mc --help/);
+  });
+
+  test('shows Claude-only slash command when launching Claude Code', () => {
+    const plain = stripAnsi(renderIntro({ ...ctx, tool: 'Claude Code' }));
+    assert.match(plain, /\/memoro-coordinator/);
+    assert.doesNotMatch(plain, /mc sessions watch/);
   });
 
   test('uses the same /mc map convention for Codex launches', () => {
     const plain = stripAnsi(renderIntro({ ...ctx, tool: 'Codex CLI' }));
     assert.match(plain, /\/mc map/);
     assert.doesNotMatch(plain, /\/memoro-map/);
+    assert.match(plain, /mc sessions watch/);
+    assert.doesNotMatch(plain, /\/memoro-coordinator/);
   });
 
   test('begins and ends with blank lines for breathing room', () => {

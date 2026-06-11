@@ -13,10 +13,13 @@ describe('mc --help', () => {
     assert.match(r.stdout, /FLEET \/ ADVANCED/);
     assert.match(r.stdout, /WHAT HAPPENS ON START/);
     assert.match(r.stdout, /TOOL SELECTION/);
-    assert.match(r.stdout, /mc resume <name> --codex/);
+    assert.match(r.stdout, /mc resume <name> --codex\s+Use Codex if resume must relaunch/);
     assert.match(r.stdout, /MEMORO\.md is missing/);
     assert.match(r.stdout, /first user\s+message/);
     assert.match(r.stdout, /vault is locked/);
+    assert.match(r.stdout, /live broker-owned PTY/);
+    assert.match(r.stdout, /without sending a new prompt/);
+    assert.match(r.stdout, /tool-flag\s+variants attach to that running session as-is/);
   });
 
   it('does not expose internal plan-section shorthand', () => {

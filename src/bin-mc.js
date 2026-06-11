@@ -71,6 +71,7 @@ import { scheduleSessionUpload } from './mc/session-upload.js';
 import { writeToPty } from './mc/pty-write.js';
 import { requestBroker } from './mc/broker/client.js';
 import { normalizeInteractivePtyEnv } from './mc/interactive-env.js';
+import { renderIntro as renderSessionIntro } from './mc/session-intro.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constants
@@ -259,8 +260,8 @@ START OPTIONS
   mc new <name> [focus] --claude  Start the new session under Claude Code
   mc new <name> [focus] --tool <claude|codex|gemini>
   mc new <name> --from <ref>      Branch from a ref other than HEAD
-  mc resume <name> --codex        Relaunch that session under Codex
-  mc resume <name> --claude       Relaunch that session under Claude Code
+  mc resume <name> --codex        Use Codex if resume must relaunch
+  mc resume <name> --claude       Use Claude Code if resume must relaunch
 
 SETUP
   mc setup [--json]               Check installation, auth, shell wrapper
@@ -302,17 +303,28 @@ FLEET / ADVANCED
   mc wrap <label> [args...]       Start an in-place labelled wrapper session
 
 WHAT HAPPENS ON START
-  mc injects project grounding before the coding tool wakes: MEMORO.md
-  when present, the coordinator role, your Memoro lens, and the focus.
-  If MEMORO.md is missing, mc sends the launched agent a first user
-  message asking whether to create it. If the vault is locked, mc can
-  offer to unlock it before launch so tokens materialise for the tool.
+  Fresh starts (\`mc\`, \`mc new\`) inject project grounding before the
+  coding tool wakes: MEMORO.md when present, the coordinator role, your
+  Memoro lens, and the focus. If MEMORO.md is missing, mc sends the
+  launched agent a first user message asking whether to create it. If
+  the vault is locked, mc can offer to unlock it before launch so tokens
+  materialise for the tool.
+
+  \`mc resume\` first attaches to a live broker-owned PTY when one exists,
+  preserving that session surface without sending a new prompt. If no
+  local live PTY is attachable, resume may relaunch the stored tool
+  without a startup prompt.
 
 TOOL SELECTION
   \`mc tool-switch <tool>\` changes the default for future bare \`mc\` and
   \`mc new\` starts. It does not change a running session. To change an
-  existing session's tool, exit the current TUI completely, then run
+  existing session's relaunch tool, make sure no live broker PTY is
+  attachable for that session, then run
   \`mc resume <name> --codex\` or \`mc resume <name> --claude\`.
+
+  When a live broker PTY exists, \`mc resume <name>\` and its tool-flag
+  variants attach to that running session as-is instead of starting a
+  duplicate.
 
   \`mc resume\` lists mc's own registry sessions across tools. It does not
   use Claude or Codex native resume pickers, so sessions started under one
@@ -1066,24 +1078,7 @@ export function resolveStartupMessageForLaunch({
  * Claude TUI breathing room.
  */
 export function renderIntro({ version, codingSessionId, repo, branch, label = null, tool = null }) {
-  // The tool segment lets the banner show which LLM is being launched
-  // (claude vs codex) — load-bearing now that the launcher is adapter-
-  // routed, so a switched session visibly reflects the new tool.
-  const toolSeg = tool ? `  ·  \x1b[35m${tool}\x1b[0m` : '';
-  const headline = label
-    ? `  \x1b[1mmc\x1b[0m \x1b[2m${version}\x1b[0m${toolSeg}  ·  \x1b[33m${label}\x1b[0m  ·  ${repo} \x1b[2m(${branch})\x1b[0m`
-    : `  \x1b[1mmc\x1b[0m \x1b[2m${version}\x1b[0m${toolSeg}  ·  ${repo} \x1b[2m(${branch})\x1b[0m`;
-  return [
-    '',
-    headline,
-    `  \x1b[2msession\x1b[0m  ${codingSessionId}`,
-    '',
-    `  \x1b[36m/memoro-coordinator\x1b[0m   manage other sessions from inside your tool`,
-    `  \x1b[36m/mc map\x1b[0m             reconcile MEMORO.md from this session`,
-    `  \x1b[36mmc --help\x1b[0m              cli reference`,
-    '',
-    '',
-  ].join('\n');
+  return renderSessionIntro({ version, codingSessionId, repo, branch, label, tool });
 }
 
 async function postHeartbeatWithRetry({ apiUrl, token, payload }) {
