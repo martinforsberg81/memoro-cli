@@ -11,9 +11,13 @@ describe('mc --help', () => {
     assert.match(r.stdout, /SETUP/);
     assert.match(r.stdout, /SECRETS/);
     assert.match(r.stdout, /FLEET \/ ADVANCED/);
+    assert.match(r.stdout, /COMMAND SURFACES/);
     assert.match(r.stdout, /WHAT HAPPENS ON START/);
     assert.match(r.stdout, /TOOL SELECTION/);
     assert.match(r.stdout, /mc resume <name> --codex\s+Use Codex if resume must relaunch/);
+    assert.match(r.stdout, /Run `mc \.\.\.` commands in your terminal/);
+    assert.match(r.stdout, /Inside a launched LLM session/);
+    assert.match(r.stdout, /same across Codex, Claude Code/);
     assert.match(r.stdout, /MEMORO\.md is missing/);
     assert.match(r.stdout, /first user\s+message/);
     assert.match(r.stdout, /vault is locked/);

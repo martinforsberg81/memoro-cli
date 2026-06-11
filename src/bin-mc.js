@@ -302,6 +302,13 @@ FLEET / ADVANCED
   mc adapter materialise          Copy mc's coordinator canon into this repo
   mc wrap <label> [args...]       Start an in-place labelled wrapper session
 
+COMMAND SURFACES
+  Run \`mc ...\` commands in your terminal. Inside a launched LLM session,
+  use in-session instructions such as \`/mc map\` for session-local habits.
+  The primary workflow stays the same across Codex, Claude Code, and other
+  adapters; tool-specific slash commands are adapter conveniences, not the
+  main path.
+
 WHAT HAPPENS ON START
   Fresh starts (\`mc\`, \`mc new\`) inject project grounding before the
   coding tool wakes: MEMORO.md when present, the coordinator role, your

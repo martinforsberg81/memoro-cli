@@ -81,16 +81,20 @@ describe('renderIntro', () => {
 
   test('mentions portable coordinator actions + cli help', () => {
     const plain = stripAnsi(renderIntro(ctx));
+    assert.match(plain, /terminal/);
     assert.match(plain, /mc sessions watch/);
+    assert.match(plain, /mc --help/);
+    assert.match(plain, /LLM session/);
     assert.match(plain, /\/mc map/);
     assert.doesNotMatch(plain, /\/memoro-map/);
-    assert.match(plain, /mc --help/);
+    assert.doesNotMatch(plain, /\/memoro-coordinator/);
   });
 
-  test('shows Claude-only slash command when launching Claude Code', () => {
+  test('keeps the same primary actions when launching Claude Code', () => {
     const plain = stripAnsi(renderIntro({ ...ctx, tool: 'Claude Code' }));
-    assert.match(plain, /\/memoro-coordinator/);
-    assert.doesNotMatch(plain, /mc sessions watch/);
+    assert.match(plain, /mc sessions watch/);
+    assert.match(plain, /\/mc map/);
+    assert.doesNotMatch(plain, /\/memoro-coordinator/);
   });
 
   test('uses the same /mc map convention for Codex launches', () => {
