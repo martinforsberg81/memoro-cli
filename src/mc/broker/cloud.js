@@ -25,6 +25,11 @@ export class CloudBrokerClient extends EventEmitter {
     machineId = hostname(),
     deviceName = machineId,
     mcVersion = null,
+    sourceId = null,
+    sourceKind = null,
+    sourceName = null,
+    cloudSessionId = null,
+    env = process.env,
     request = requestBroker,
     connect = createConnection,
     WebSocketImpl = globalThis.WebSocket,
@@ -47,6 +52,15 @@ export class CloudBrokerClient extends EventEmitter {
     this.machineId = machineId;
     this.deviceName = deviceName;
     this.mcVersion = mcVersion;
+    this.sourceIdentity = resolveSourceIdentity({
+      sourceId,
+      sourceKind,
+      sourceName,
+      cloudSessionId,
+      env,
+      machineId,
+      deviceName,
+    });
     this.request = request;
     this.connect = connect;
     this.WebSocketImpl = WebSocketImpl;
@@ -88,7 +102,12 @@ export class CloudBrokerClient extends EventEmitter {
 
   async refreshSessions() {
     const sessions = await listLocalBrokerSessions({ request: this.request });
-    this._send({ type: 'sessions', machine_id: this.machineId, sessions });
+    this._send({
+      type: 'sessions',
+      machine_id: this.machineId,
+      ...sourceIdentityPayload(this.sourceIdentity),
+      sessions,
+    });
     this.emit('sessions', sessions);
     return sessions;
   }
@@ -100,6 +119,7 @@ export class CloudBrokerClient extends EventEmitter {
       ws = new this.WebSocketImpl(buildBrokerWsUrl(this.apiUrl, {
         token: this.token,
         machineId: this.machineId,
+        ...sourceIdentityPayload(this.sourceIdentity),
       }));
       preferArrayBufferFrames(ws);
     } catch (err) {
@@ -117,6 +137,7 @@ export class CloudBrokerClient extends EventEmitter {
         machine_id: this.machineId,
         device_name: this.deviceName,
         ...(this.mcVersion ? { mc_version: this.mcVersion } : {}),
+        ...sourceIdentityPayload(this.sourceIdentity),
         capabilities: this.capabilities,
       });
       this._startSessionRefreshLoop();
@@ -501,11 +522,26 @@ export async function listLocalBrokerSessions({ request = requestBroker } = {}) 
   throw new Error(res?.error || status?.error || 'broker did not return sessions');
 }
 
-export function buildBrokerWsUrl(apiUrl, { token, machineId } = {}) {
+export function buildBrokerWsUrl(apiUrl, {
+  token,
+  machineId,
+  sourceId,
+  sourceKind,
+  sourceName,
+  cloudSessionId,
+  source_id,
+  source_kind,
+  source_name,
+  cloud_session_id,
+} = {}) {
   const wsBase = apiUrl.replace(/^http(s?):\/\//i, (_, s) => (s === 's' ? 'wss://' : 'ws://'));
   const url = new URL('/api/mc/broker/ws', wsBase);
   if (token) url.searchParams.set('token', token);
   if (machineId) url.searchParams.set('machine_id', machineId);
+  setOptionalQueryParam(url, 'source_id', stringOrDefault(sourceId, source_id));
+  setOptionalQueryParam(url, 'source_kind', stringOrDefault(sourceKind, source_kind));
+  setOptionalQueryParam(url, 'source_name', stringOrDefault(sourceName, source_name));
+  setOptionalQueryParam(url, 'cloud_session_id', stringOrDefault(cloudSessionId, cloud_session_id));
   return url.toString();
 }
 
@@ -514,6 +550,24 @@ export function appendToken(urlString, token) {
   const url = new URL(urlString);
   url.searchParams.set('token', token);
   return url.toString();
+}
+
+export function resolveSourceIdentity({
+  sourceId = null,
+  sourceKind = null,
+  sourceName = null,
+  cloudSessionId = null,
+  env = process.env,
+  machineId = hostname(),
+  deviceName = machineId,
+} = {}) {
+  const kind = stringOrDefault(sourceKind, stringOrDefault(env?.MC_SOURCE_KIND, 'local'));
+  return {
+    source_id: stringOrDefault(sourceId, stringOrDefault(env?.MC_SOURCE_ID, `local:${machineId}`)),
+    source_kind: kind,
+    source_name: stringOrDefault(sourceName, stringOrDefault(env?.MC_SOURCE_NAME, deviceName)),
+    cloud_session_id: stringOrDefault(cloudSessionId, stringOrDefault(env?.MC_CLOUD_SESSION_ID, null)),
+  };
 }
 
 export function nextBackoff(currentMs) {
@@ -556,6 +610,22 @@ function requiredString(value, label) {
 
 function stringOrDefault(value, fallback) {
   return typeof value === 'string' && value.length > 0 ? value : fallback;
+}
+
+function sourceIdentityPayload(identity) {
+  const payload = {};
+  for (const key of ['source_id', 'source_kind', 'source_name', 'cloud_session_id']) {
+    if (typeof identity?.[key] === 'string' && identity[key].length > 0) {
+      payload[key] = identity[key];
+    }
+  }
+  return payload;
+}
+
+function setOptionalQueryParam(url, key, value) {
+  if (typeof value === 'string' && value.length > 0) {
+    url.searchParams.set(key, value);
+  }
 }
 
 function plainObject(value) {

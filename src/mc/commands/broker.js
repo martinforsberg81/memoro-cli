@@ -132,7 +132,15 @@ async function runCloudConnection(opts, io = {}) {
       return { ok: false, error: 'no Memoro token' };
     }
     const mcVersion = await getPackageVersion().catch(() => null);
-    const client = new CloudBrokerClient({ apiUrl, token, mcVersion });
+    const client = new CloudBrokerClient({
+      apiUrl,
+      token,
+      mcVersion,
+      sourceId: opts.sourceId,
+      sourceKind: opts.sourceKind,
+      sourceName: opts.sourceName,
+      cloudSessionId: opts.cloudSessionId,
+    });
     const ready = waitForCloudOpen(client, CONNECT_READY_TIMEOUT_MS);
     client.start();
     const opened = await ready.catch((err) => ({ ok: false, error: err.message || String(err) }));
@@ -237,7 +245,8 @@ USAGE
   mc broker start [--json]
   mc broker status [--json]
   mc broker stop [--json]
-  mc broker connect [--json]
+  mc broker connect [--json] [--source-id <id>] [--source-kind <kind>]
+                    [--source-name <name>] [--cloud-session-id <id>]
 
 Normal session commands auto-start the broker when needed.
 
@@ -247,7 +256,19 @@ Internal:
 }
 
 export function parseArgs(argv) {
-  const opts = { verb: null, json: false, daemon: false, help: false, readyFile: null, once: false, rawArgv: argv };
+  const opts = {
+    verb: null,
+    json: false,
+    daemon: false,
+    help: false,
+    readyFile: null,
+    once: false,
+    sourceId: null,
+    sourceKind: null,
+    sourceName: null,
+    cloudSessionId: null,
+    rawArgv: argv,
+  };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--help' || a === '-h') { opts.help = true; continue; }
@@ -255,6 +276,30 @@ export function parseArgs(argv) {
     if (a === '--once') { opts.once = true; continue; }
     if (a === '--daemon') { opts.daemon = true; opts.verb = opts.verb || 'daemon'; continue; }
     if (a === '--ready-file') { opts.readyFile = argv[++i]; continue; }
+    if (a === '--source-id') {
+      const next = argv[++i];
+      if (!next || next.startsWith('--')) return { ...opts, error: '--source-id requires a value' };
+      opts.sourceId = next;
+      continue;
+    }
+    if (a === '--source-kind') {
+      const next = argv[++i];
+      if (!next || next.startsWith('--')) return { ...opts, error: '--source-kind requires a value' };
+      opts.sourceKind = next;
+      continue;
+    }
+    if (a === '--source-name') {
+      const next = argv[++i];
+      if (!next || next.startsWith('--')) return { ...opts, error: '--source-name requires a value' };
+      opts.sourceName = next;
+      continue;
+    }
+    if (a === '--cloud-session-id') {
+      const next = argv[++i];
+      if (!next || next.startsWith('--')) return { ...opts, error: '--cloud-session-id requires a value' };
+      opts.cloudSessionId = next;
+      continue;
+    }
     if (a.startsWith('--')) return { ...opts, error: `unknown flag: ${a}` };
     if (opts.verb) return { ...opts, error: `unexpected arg: ${a}` };
     opts.verb = a;

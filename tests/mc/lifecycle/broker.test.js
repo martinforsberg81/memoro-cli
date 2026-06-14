@@ -27,6 +27,10 @@ describe('mc broker parseArgs', () => {
       help: false,
       readyFile: null,
       once: false,
+      sourceId: null,
+      sourceKind: null,
+      sourceName: null,
+      cloudSessionId: null,
       rawArgv: ['status', '--json'],
     });
   });
@@ -45,9 +49,29 @@ describe('mc broker parseArgs', () => {
     assert.equal(opts.json, true);
   });
 
+  test('parses cloud source identity flags', () => {
+    const opts = parseArgs([
+      'connect',
+      '--source-id',
+      'cloud:abc',
+      '--source-kind',
+      'cloud',
+      '--source-name',
+      'Cloud worker',
+      '--cloud-session-id',
+      'cloud_sess_abc',
+    ]);
+    assert.equal(opts.verb, 'connect');
+    assert.equal(opts.sourceId, 'cloud:abc');
+    assert.equal(opts.sourceKind, 'cloud');
+    assert.equal(opts.sourceName, 'Cloud worker');
+    assert.equal(opts.cloudSessionId, 'cloud_sess_abc');
+  });
+
   test('rejects unknown flags and extra positionals', () => {
     assert.match(parseArgs(['--wat']).error, /unknown flag/);
     assert.match(parseArgs(['start', 'extra']).error, /unexpected arg/);
+    assert.match(parseArgs(['connect', '--source-id']).error, /requires a value/);
   });
 });
 
