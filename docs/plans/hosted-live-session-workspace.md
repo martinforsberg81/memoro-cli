@@ -653,9 +653,8 @@ Status:
   sessions through `handleMcRoutes`, requests attach through the user
   orchestrator, verifies attach-token storage, and exposes `mc_version` in the
   public broker session shape.
-- **Next:** make the Memoro `/api/mc` registry and browser attach flow
-  source-aware, so multiple local machines and Memoro Cloud can coexist without
-  ambiguous `coding_session_id` routing.
+- **Next:** add cloud-session create, so Memoro can start a sandbox-owned `mc`
+  session without requiring any local broker online.
 
 Scope:
 
@@ -712,8 +711,9 @@ Status:
 - Server route smoke shipped in the Memoro repo 2026-06-08: `/api/mc/sessions`
   and `/api/mc/sessions/:id/attach` are covered through real auth + orchestrator
   stubs, and public sessions include `mc_version`.
-- Remaining gate: source-aware attach routing across both repos, followed by a
-  real browser/manual E2E smoke.
+- Phase 4 source-aware attach routing shipped 2026-06-14 across the current
+  memoro-cli + Memoro branches. Remaining gate before cloud start is a real
+  browser/manual E2E smoke.
 
 ### Phase 4: Source-aware browser attach
 
@@ -742,6 +742,20 @@ Acceptance:
 - Local-only manual smoke still works:
   `mc broker connect -> browser list -> attach -> type -> detach`.
 - UI shows source name/kind clearly and exposes no free command field.
+
+Status:
+
+- Shipped 2026-06-14 in current branches:
+  - `mc broker connect` / `CloudBrokerClient` accept explicit/env source
+    identity and advertise it in the control WS query plus `hello` and sessions
+    payloads.
+  - Memoro `UserOrchestratorDO`, `/api/mc` routes, active-session/heartbeat
+    shapes, and attach tokens carry source metadata.
+  - `POST /api/mc/sources/:source_id/sessions/:coding_session_id/attach` is
+    the preferred attach route; legacy unscoped attach succeeds only when the
+    coding session id is unambiguous.
+  - Coding app rows are grouped by source, attach by source+session, preserve
+    source in reconnect URLs, and do not expose any free command field.
 
 ### Phase 5: Cloud `mc` session create MVP
 
@@ -803,48 +817,40 @@ Acceptance:
 
 ## Next implementation brief
 
-Start with Phase 4, not cloud boot.
+Start with Phase 5, not a broader shell.
 
-Build brief:
+Next build brief:
 
 ```
-You are implementing Phase 4 of docs/plans/hosted-live-session-workspace.md:
-source-aware browser attach.
+You are implementing Phase 5 of docs/plans/hosted-live-session-workspace.md:
+cloud mc session create MVP.
 
 Goal:
-- Make local and future cloud brokers first-class session sources.
-- Attach must route to the selected source, not to the first matching
-  coding_session_id.
+- A signed-in Memoro user can start a cloud-owned `mc` session from the browser
+  without any local broker online.
+- The cloud surface is a typed mc-launch surface, not a shell or command box.
 
 In scope:
-- memoro-cli:
-  - allow CloudBrokerClient / `mc broker connect` to advertise source identity
-    from explicit options or env (`MC_SOURCE_ID`, `MC_SOURCE_KIND`,
-    `MC_SOURCE_NAME`, `MC_CLOUD_SESSION_ID`).
-  - include source fields in broker `hello` and session advertisement payloads.
-  - tests for default local identity and explicit cloud identity.
 - memoro server:
-  - store brokers/sessions by `source_id`.
-  - return source metadata from `GET /api/mc/sessions`.
-  - add source-scoped attach route.
-  - keep unscoped attach only when exactly one source owns the session id.
-  - tests with two brokers for one user.
+  - add `POST /api/mc/cloud-sessions` with a narrow structured payload.
+  - add `McCloudSessionDO` to own sandbox boot/lifecycle.
+  - reject `cmd`, `shell`, arbitrary args/env, and user-chosen raw cwd.
+  - mint a narrow runtime token and start controlled `mc new`.
 - browser UI:
-  - group/show sessions by source.
-  - attach using source-scoped route.
-  - no cloud start form yet unless the source-aware attach slice is complete.
+  - add a typed cloud start action/form.
+  - show booting/running/error states in the existing source-aware list.
+  - auto-attach only after the broker-advertised session is attachable.
 
 Not in scope:
-- Cloudflare Sandbox launch.
-- Cloud `mc` Docker image.
-- Provider-token provisioning.
-- New free terminal or arbitrary command APIs.
+- General terminal.
+- Arbitrary command execution API.
+- Full provider-token/vault UX beyond the minimal runtime token path.
 
 Gates:
-- memoro-cli `npm test`.
-- memoro targeted `/api/mc` route tests and Coding app static/unit tests.
-- Manual local smoke with one broker; fake multi-source route test for two
-  brokers.
+- Route/DO tests for create, reject-list, lifecycle state, and limits.
+- Coding app tests for typed start UI and no free command field.
+- Manual browser smoke: start cloud session, see it under source "Memoro Cloud",
+  attach, type, detach.
 ```
 
 ## Open decisions before Phase 5
