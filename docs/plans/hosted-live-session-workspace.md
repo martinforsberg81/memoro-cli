@@ -1,9 +1,10 @@
 # Hosted live-session workspace
 
-**Status:** active · 2026-06-08 · serves G1 (see `MEMORO.md`)
+**Status:** active · 2026-06-12 · serves G1 (see `MEMORO.md`)
 
 Detailed plan for the hosted Memoro workspace where the browser is a real
-viewport into local AI coding sessions. This is the buildable form of
+viewport into `mc`-owned AI coding sessions, whether the owning runtime is a
+local user machine or a Memoro Cloud sandbox. This is the buildable form of
 `docs/plans/worktree-lifecycle.md` §8.
 
 ## Product line
@@ -13,28 +14,37 @@ This is **not** a cloud shell.
 The hosted surface is a single-purpose `mc` orchestrator workspace:
 
 ```
-list sessions -> attach one -> work in the live session -> detach -> list again
+list sources/sessions -> start cloud mc or attach one -> work in the live session -> detach -> list again
 ```
 
 The user should feel like they are inside the real Claude/Codex/Gemini session,
 not sending messages to a remote queue. The browser must show the live TUI,
-accept raw terminal input, handle resize, preserve scrollback/screen state across
-reconnects, and detach without killing the local session.
+accept raw terminal input after attach, handle resize, preserve
+scrollback/screen state across reconnects, and detach without killing the
+owning session.
 
 ## Hard constraints
 
-- The only cloud command surface is `mc`. No shell, no arbitrary binaries, no
-  package installs, no cloud repo checkout.
-- All code execution stays on the user's machine: repo files, git, credentials,
-  vault materialisation, tool logins, and host-specific hooks remain local.
-- Memoro pays for relay/control-plane traffic only. No Memoro-owned LLM credits
-  are consumed by this feature.
+- The browser never gets a free terminal launcher. It can only start a typed
+  `mc` session through a narrow API or attach to an already-authorized `mc`
+  session source.
+- A session source can be local or cloud:
+  - local source: repo files, git, credentials, vault materialisation, tool
+    logins, and host-specific hooks stay on the user's machine.
+  - cloud source: execution happens inside a Memoro-owned Cloudflare Sandbox
+    with a prepared repo/workspace and a constrained `mc` launch path.
+- Cloud start accepts only structured fields (`name`, `task`, `tool`, `policy`,
+  optional repo/workspace selector). It must reject `cmd`, `shell`, `cwd`, `env`,
+  arbitrary args, and package-install style escape hatches.
 - The browser is allowed to be a real terminal viewport while attached. "Only
-  `mc` in cloud" means the cloud cannot execute arbitrary commands; it does not
-  mean the browser cannot stream raw input to the local PTY that already runs the
-  user's chosen AI coding tool.
+  `mc` in cloud" means Memoro does not expose arbitrary process launch; it does
+  not mean the attached TUI cannot receive raw terminal input for the running
+  coding tool.
+- LLM/tool command execution is governed by session policy below the prompt
+  layer. Cloud MVP starts with a sandboxed `workspace-write` profile, then grows
+  stricter/larger profiles deliberately.
 - Detach is not exit. Closing the browser, refreshing the page, or leaving an
-  attached session must never kill the local PTY.
+  attached session must never kill the owning PTY.
 
 ## Existing cli seams
 
@@ -63,6 +73,11 @@ What is missing:
 - The output buffer is for excerpts, not high-fidelity screen restore.
 - There is no attach/detach lifecycle, browser resize handling, or cloud-side
   attach token.
+- The cloud/server registry is not yet source-aware enough for multiple local
+  machines plus cloud-owned sessions to coexist without ambiguous attach
+  routing.
+- There is not yet a typed cloud-session launcher that starts `mc` inside a
+  sandbox without exposing arbitrary shell/process launch.
 - The newer `mc dispatch` / `mc read` lifecycle names are foundation-only and
   not yet wired to live cloud commands.
 
@@ -72,29 +87,31 @@ What is missing:
 Memoro browser UI
   xterm/chat hybrid workspace
         |
-        | WebSocket: raw PTY bytes + JSON control
+        | source-aware WebSocket: raw PTY bytes + JSON control
         v
 PtyStream Durable Object
         |
-        | paired WebSocket stream, no inbound connection to user machine
+        | paired WebSocket stream
         v
-local mc broker daemon
+mc session source
+  ├─ local mc broker daemon on a user machine
+  └─ cloud mc sandbox broker inside Cloudflare Sandbox
         |
-        | node-pty master, multi-attach write relay, screen/ring buffer
+        | node-pty master, multi-attach relay, screen/ring buffer
         v
-Claude / Codex / Gemini PTY in local worktree
+Claude / Codex / Gemini PTY in worktree/workspace
 ```
 
 Control plane:
 
 ```
-Browser/app -> UserOrchestrator DO -> broker control WS
+Browser/app -> UserOrchestrator DO -> source registry -> broker control WS
 ```
 
 Data plane:
 
 ```
-Browser attach WS <-> PtyStream DO <-> broker attach WS <-> local PTY
+Browser attach WS <-> PtyStream DO <-> source attach WS <-> owned PTY
 ```
 
 The control plane should be quiet and hibernation-friendly. The data plane is
@@ -111,12 +128,15 @@ runtime we need for v1. Their documented browser terminal protocol uses:
 - Reconnect replay from a buffered output stream.
 - xterm.js integration with automatic resize/reconnect helpers.
 
-Workers + Durable Objects are enough for our v1 relay because the PTY lives on
-the user's machine, not inside a Cloudflare container. Durable Objects are the
-right primitive for pairing long-lived browser and broker WebSockets, and the
-hibernation API keeps idle control sockets cheap. Sandbox/Containers stay useful
-later only if we decide to host an actual cloud-side process, which is not the
-core product here.
+Workers + Durable Objects are enough for local-session relay because the PTY
+lives on the user's machine. Durable Objects are still the right primitive for
+pairing long-lived browser and broker WebSockets, and the hibernation API keeps
+idle control sockets cheap.
+
+Cloud `mc` sessions add a controlled Cloudflare Sandbox runtime as another
+session source. The sandbox does not expose its terminal directly to the
+browser. It boots `mc`, starts/uses the same broker bridge, and advertises the
+resulting session to the same source registry as local machines.
 
 References:
 
@@ -124,6 +144,58 @@ References:
 - https://developers.cloudflare.com/sandbox/guides/browser-terminals/
 - https://developers.cloudflare.com/durable-objects/best-practices/websockets/
 - https://developers.cloudflare.com/workers/platform/pricing/
+
+## Session source model
+
+`broker` must not mean "the user's current laptop". It means "a runtime that
+owns one or more `mc` sessions for this user". A user can have many sources live
+at once:
+
+```
+source: local:macbook       kind=local  name="MacBook Pro"
+source: local:studio        kind=local  name="Studio Mac"
+source: cloud:cld_abc123    kind=cloud  name="Memoro Cloud"
+```
+
+Every advertised session is scoped to a source:
+
+```json
+{
+  "source_id": "cloud:cld_abc123",
+  "source_kind": "cloud",
+  "source_name": "Memoro Cloud",
+  "machine_id": "memoro-cloud-cld_abc123",
+  "cloud_session_id": "cld_abc123",
+  "coding_session_id": "sess_x",
+  "name": "cloud-coordinator",
+  "repo": "memoro",
+  "branch": "sess/cloud-coordinator",
+  "tool": "codex",
+  "state": "idle",
+  "attachable": true
+}
+```
+
+Attach must be source-aware. `coding_session_id` alone is not enough once the
+same user has multiple machines and cloud sessions connected. The preferred
+route shape is:
+
+```
+POST /api/mc/sources/:source_id/sessions/:coding_session_id/attach
+```
+
+The existing unscoped attach route may remain as a compatibility shim only when
+the session id resolves unambiguously to one live source.
+
+For cloud sessions, the source is created by Memoro before the broker appears:
+
+1. Browser calls the cloud start API.
+2. `McCloudSession` DO allocates/boots a sandbox.
+3. Sandbox logs in with a short-lived runtime token.
+4. Sandbox runs controlled `mc new ...`.
+5. The sandbox-local `mc broker connect` advertises source
+   `cloud:<cloud_session_id>`.
+6. The booting row is reconciled with the broker-advertised live session.
 
 ## Local broker model
 
@@ -265,6 +337,9 @@ Broker -> cloud:
   "protocol": 1,
   "machine_id": "martins-mbp",
   "device_name": "Martins MacBook Pro",
+  "source_kind": "local",
+  "source_id": "local:martins-mbp",
+  "cloud_session_id": null,
   "mc_version": "0.7.0",
   "capabilities": ["pty-stream-v1", "resize-v1", "screen-snapshot-v1"]
 }
@@ -275,6 +350,8 @@ Broker -> cloud:
   "type": "sessions",
   "sessions": [
     {
+      "source_id": "local:martins-mbp",
+      "source_kind": "local",
       "coding_session_id": "sess_x",
       "name": "billing-fix",
       "repo": "memoro",
@@ -295,6 +372,7 @@ Cloud -> broker:
 {
   "type": "attach_request",
   "attach_id": "att_x",
+  "source_id": "local:martins-mbp",
   "coding_session_id": "sess_x",
   "broker_ws_url": "wss://meetmemoro.app/api/mc/pty/att_x/broker",
   "token": "short-lived-broker-side-token",
@@ -310,6 +388,7 @@ Broker -> cloud:
 {
   "type": "attach_accepted",
   "attach_id": "att_x",
+  "source_id": "local:martins-mbp",
   "coding_session_id": "sess_x"
 }
 ```
@@ -370,17 +449,20 @@ but must not kill the broker.
 
 The UI should feel like a chat workspace with terminal fidelity:
 
-- Session list is the cockpit: name, repo, branch, tool, machine, state,
+- Session list is the cockpit: source, name, repo, branch, tool, machine, state,
   awaiting-user/open-question, last activity, attachability.
+- The list groups by source so a user can see local machines and Memoro Cloud
+  side by side.
+- A cloud start action is a typed `mc` action, not a command field.
 - Attach opens a full live session view with a compact header:
-  `billing-fix · claude · martin-mbp · memoro · idle 3m`.
+  `billing-fix · claude · MacBook Pro · memoro · idle 3m`.
 - The main pane is xterm.js rendering the live TUI.
 - Input has two modes:
   - **Terminal mode:** focused xterm sends raw key events directly.
   - **Compose mode:** a chat-like multi-line prompt box sends the composed text
     plus submit keystroke into the PTY. This is a convenience layer, not a
     replacement for terminal attach.
-- Detach returns to the list immediately and never exits the local session.
+- Detach returns to the list immediately and never exits the owning session.
 
 ## Server endpoints
 
@@ -388,53 +470,102 @@ Minimum server/API surface:
 
 ```
 GET  /api/mc/sessions
+GET  /api/mc/sources
 WS   /api/mc/broker/ws
-POST /api/mc/sessions/:coding_session_id/attach
+POST /api/mc/sources/:source_id/sessions/:coding_session_id/attach
+POST /api/mc/sessions/:coding_session_id/attach        # compatibility only
 WS   /api/mc/pty/:attach_id/browser
 WS   /api/mc/pty/:attach_id/broker
 POST /api/mc/sessions/:coding_session_id/writer
 POST /api/mc/sessions/:coding_session_id/detach
+POST /api/mc/cloud-sessions
+GET  /api/mc/cloud-sessions/:cloud_session_id
+POST /api/mc/cloud-sessions/:cloud_session_id/stop
 ```
 
 `GET /api/mc/sessions` can initially merge existing heartbeat data from
 `/api/coding-sessions/active` with broker-advertised attachability. Long-term it
-should be the single browser source of truth.
+should be the single browser source of truth. The public shape must include
+source metadata for every attachable row.
+
+`POST /api/mc/cloud-sessions` accepts only structured `mc` launch fields:
+
+```json
+{
+  "name": "cloud-coordinator",
+  "task": "Analyse the Cloudflare hosted mc MVP",
+  "tool": "codex",
+  "policy": "workspace-write",
+  "repo_ref": "memoro"
+}
+```
+
+It must reject all free-command fields:
+
+```json
+{
+  "cmd": "bash",
+  "shell": "/bin/zsh",
+  "cwd": "/tmp",
+  "env": { "X": "Y" },
+  "args": ["--anything"]
+}
+```
 
 Durable Object split:
 
-- `UserOrchestratorDO` keyed by user id: browser list clients, broker control
-  sockets, machine/session registry, attach-token minting.
+- `UserOrchestratorDO` keyed by user id: browser list clients, broker/source
+  control sockets, source/session registry, attach-token minting, unscoped
+  attach compatibility checks.
 - `PtyStreamDO` keyed by attach id or session id: pairs one browser stream and
   one broker stream, relays frames, enforces byte caps/backpressure, records
   attach/detach audit metadata.
+- `McCloudSessionDO` keyed by user id + cloud session id: owns cloud `mc`
+  lifecycle, sandbox allocation, repo/workspace bootstrap, runtime-token
+  materialisation, controlled `mc new` launch, and status reconciliation with
+  the source registry.
 
 ## Security model
 
 - Browser auth uses the Memoro web session, then receives a short-lived attach
-  token scoped to `{ user_id, coding_session_id, attach_id, side: browser }`.
-- Broker auth uses the existing device token from the local keychain, then
-  receives a short-lived attach token scoped to `{ user_id, machine_id,
-  coding_session_id, attach_id, side: broker }`.
+  token scoped to `{ user_id, source_id, coding_session_id, attach_id, side:
+  browser }`.
+- Local broker auth uses the existing device token from the local keychain, then
+  receives a short-lived attach token scoped to `{ user_id, source_id,
+  machine_id, coding_session_id, attach_id, side: broker }`.
+- Cloud broker auth uses a short-lived runtime token minted by Memoro for the
+  `McCloudSessionDO`. It should have a narrow scope such as `mc.cloud` covering
+  lens read, session/broker write, and nothing user-visible beyond that cloud
+  runtime.
 - Attach tokens expire quickly and cannot list sessions or start new streams.
-- Server persists audit metadata only: attach/detach, user, machine, session,
-  timestamps, writer-transfer events. It does not persist terminal bytes.
+- Server persists audit metadata only: attach/detach, user, source, machine,
+  cloud session, coding session, timestamps, writer-transfer events. It does not
+  persist terminal bytes.
 - Relay sees bytes in v1 unless/until browser-to-broker E2E encryption is added.
   That must be explicit in the product/security story.
-- Local hooks still rule because actual execution happens inside the local PTY.
-- The cloud surface cannot execute arbitrary commands. The only data-plane
-  ability is to write bytes into an already-authorized local coding-session PTY.
+- Local hooks still rule for local sources because actual execution happens
+  inside the local PTY.
+- Cloud sources enforce policy through sandbox restrictions, adapter flags, PATH
+  guards, and allowed runtime configuration. Prompt text is not the security
+  boundary.
+- The cloud surface cannot execute arbitrary commands. The only process-launch
+  ability is the typed cloud-session create path that starts `mc`; the data
+  plane can only write bytes into an already-authorized `mc` coding-session PTY.
 
 ## Cost controls
 
 - Use Durable Object WebSocket hibernation for quiet control sockets. Avoid
   `setInterval` / alarms in DOs that need to hibernate.
-- Do not use Cloudflare Sandbox/Containers for v1 unless there is a concrete
-  need for a cloud process. The local broker is the execution plane.
+- Local relay does not need Cloudflare Sandbox/Containers.
+- Cloud `mc` sessions do use Sandbox/Containers, but only behind the typed
+  cloud-session API and with per-user/session limits.
 - Coalesce PTY output in the broker over small windows, for example 5-16 ms.
 - Cap per-attach buffered output. If a browser falls too far behind, detach it
   with a clear error rather than buffering unboundedly.
 - Meter bytes per user/session for product visibility and denial-of-wallet
   protection.
+- Meter cloud runtime minutes, concurrent cloud sessions, and sandbox boot
+  failures separately from relay bytes.
 
 ## Build phases
 
@@ -522,9 +653,9 @@ Status:
   sessions through `handleMcRoutes`, requests attach through the user
   orchestrator, verifies attach-token storage, and exposes `mc_version` in the
   public broker session shape.
-- **Next:** run the real browser/manual E2E smoke: Memoro browser UI -> Memoro
-  `/api/mc/*` control/PTY stream -> `mc broker connect` -> local broker-owned
-  PTY. Then harden screen restore/reconnect quality before public release.
+- **Next:** make the Memoro `/api/mc` registry and browser attach flow
+  source-aware, so multiple local machines and Memoro Cloud can coexist without
+  ambiguous `coding_session_id` routing.
 
 Scope:
 
@@ -545,13 +676,14 @@ Acceptance:
 
 ### Phase 3: Broker cloud control plane
 
-Goal: Memoro can see attachable local sessions and request an attach stream.
+Goal: Memoro can see attachable sessions from connected sources and request an
+attach stream to the source that owns the selected session.
 
 Scope:
 
 - Add `src/mc/broker/cloud.js`.
 - Broker opens `WS /api/mc/broker/ws`.
-- Broker advertises sessions and updates.
+- Broker advertises sessions and updates with source identity.
 - Server mints attach ids/tokens and sends `attach_request`.
 - Broker can connect the broker side of a stream and send snapshot/replay.
 
@@ -580,89 +712,151 @@ Status:
 - Server route smoke shipped in the Memoro repo 2026-06-08: `/api/mc/sessions`
   and `/api/mc/sessions/:id/attach` are covered through real auth + orchestrator
   stubs, and public sessions include `mc_version`.
-- Remaining gate: a real browser/manual E2E smoke across both repos, not another
-  protocol design pass.
+- Remaining gate: source-aware attach routing across both repos, followed by a
+  real browser/manual E2E smoke.
 
-### Phase 4: Browser live attach UI
+### Phase 4: Source-aware browser attach
 
-Goal: real browser attach to one local session.
+Goal: browser attach works correctly when one user has multiple live sources:
+local laptop, local desktop, and later Memoro Cloud.
 
 Scope:
 
-- Session list in Memoro app.
-- xterm.js live attach.
-- Resize forwarding.
-- Detach button.
-- Terminal mode and compose mode.
-- Multi-attach terminal input without read-only/control-transfer UI.
+- Add/standardize source identity in broker `hello` and session advertisements:
+  `source_id`, `source_kind`, `source_name`, optional `cloud_session_id`.
+- Update Memoro `UserOrchestratorDO` to store brokers by `source_id`, not only
+  by machine id or first matching session id.
+- Add source-scoped attach route:
+  `POST /api/mc/sources/:source_id/sessions/:coding_session_id/attach`.
+- Keep the old unscoped attach route only as an ambiguity-checked compatibility
+  path.
+- Update `GET /api/mc/sessions` and browser UI rows to show source metadata.
+- Group the Coding app list by source and attach to the selected source.
+- Preserve existing local broker and PTY stream behavior.
 
 Acceptance:
 
-- `list -> attach -> type -> see response -> detach -> list` works end to end.
-- Page refresh reconnects to the same session and restores current screen.
-- Detach does not kill the local session.
+- Two fake brokers for one user can advertise sessions with the same or similar
+  names without attach ambiguity.
+- Browser attach to source A never sends `attach_request` to source B.
+- Local-only manual smoke still works:
+  `mc broker connect -> browser list -> attach -> type -> detach`.
+- UI shows source name/kind clearly and exposes no free command field.
 
-### Phase 5: Product hardening
+### Phase 5: Cloud `mc` session create MVP
+
+Goal: a signed-in Memoro user can start a cloud-owned `mc` session without any
+local broker being online.
 
 Scope:
 
+- Add `POST /api/mc/cloud-sessions` and `McCloudSessionDO`.
+- Validate a narrow create payload: `name`, `task`, `tool`, `policy`, optional
+  repo/workspace selector. Reject `cmd`, `shell`, `cwd`, `env`, and arbitrary
+  args.
+- Add a Cloudflare Sandbox image for `mc`: Node, git, pinned memoro-cli, chosen
+  LLM tool, and no runtime package-install requirement.
+- Bootstrap a git repo/workspace because `mc new` requires a repo cwd.
+- Mint a short-lived runtime token with a narrow `mc.cloud`-style scope.
+- Materialise the token inside the sandbox via `MEMORO_TOKEN=... memoro-cli
+  login`, then run controlled `mc new <name> <task> --tool <tool>`.
+- Start/ensure sandbox-local `mc broker connect` so the session advertises as
+  `source_kind=cloud` with `source_id=cloud:<cloud_session_id>`.
+- Reconcile the booting cloud-session row with the broker-advertised live
+  session.
+
+Acceptance:
+
+- Browser can start a cloud `mc` session while no local user broker is
+  connected.
+- The cloud session appears in `GET /api/mc/sessions` under source "Memoro
+  Cloud".
+- Browser attach streams to the cloud-owned PTY through the same `PtyStreamDO`
+  path as local sessions.
+- Invalid create payloads containing shell/command/env fields are rejected in
+  route tests.
+- Cloud runtime token is never sent to the browser.
+
+### Phase 6: Cloud start UI and product hardening
+
+Scope:
+
+- Add the browser "Start mc session" flow: name, task/focus, tool, policy,
+  repo/workspace selector. No command field.
+- Auto-attach when a newly started cloud session becomes attachable, or keep a
+  clear booting/live state if auto-attach is deferred.
 - Screen-state quality gate.
 - Backpressure and slow-client detach.
-- Writer takeover UX.
-- Cross-machine polish.
+- Cross-machine/source polish.
 - E2E encryption design and implementation.
 - Audit/event viewer.
+- Cloud runtime metering, max concurrent sessions, stop/reap behavior, and
+  failure visibility.
 
 Acceptance:
 
-- A normal user can work for an hour from browser without noticing the relay.
+- A normal user can move between local and cloud `mc` sessions from the browser
+  without thinking about brokers.
 - Local and browser attach never fight for input silently.
-- Security story is documentable without caveats beyond explicit v1 relay-trust.
+- Security story is documentable without caveats beyond explicit v1 relay-trust
+  and explicit cloud sandbox policy.
 
-## First implementation brief
+## Next implementation brief
 
-Start with Phase 1 only.
+Start with Phase 4, not cloud boot.
 
 Build brief:
 
 ```
-You are implementing Phase 1 of docs/plans/hosted-live-session-workspace.md.
-Work in this repo. Do not build the broker daemon, cloud protocol, or browser UI.
+You are implementing Phase 4 of docs/plans/hosted-live-session-workspace.md:
+source-aware browser attach.
 
 Goal:
-- Extract the PTY ownership logic from src/bin-mc.js runWrap into a reusable,
-  injectable PtySession module under src/mc/broker/.
-- Preserve current behavior exactly: local stdin/stdout still attach directly,
-  heartbeat still posts excerpts, dispatch_message still writes to the PTY,
-  cleanup still kills the PTY when current runWrap exits.
+- Make local and future cloud brokers first-class session sources.
+- Attach must route to the selected source, not to the first matching
+  coding_session_id.
 
 In scope:
-- src/mc/broker/pty-session.js
-- src/mc/broker/ring-buffer.js
-- focused unit tests under tests/mc/broker/
-- minimal edits to src/bin-mc.js to use the new module
+- memoro-cli:
+  - allow CloudBrokerClient / `mc broker connect` to advertise source identity
+    from explicit options or env (`MC_SOURCE_ID`, `MC_SOURCE_KIND`,
+    `MC_SOURCE_NAME`, `MC_CLOUD_SESSION_ID`).
+  - include source fields in broker `hello` and session advertisement payloads.
+  - tests for default local identity and explicit cloud identity.
+- memoro server:
+  - store brokers/sessions by `source_id`.
+  - return source metadata from `GET /api/mc/sessions`.
+  - add source-scoped attach route.
+  - keep unscoped attach only when exactly one source owns the session id.
+  - tests with two brokers for one user.
+- browser UI:
+  - group/show sessions by source.
+  - attach using source-scoped route.
+  - no cloud start form yet unless the source-aware attach slice is complete.
 
 Not in scope:
-- broker daemon
-- cloud endpoints
-- browser UI
-- changing mc new/resume process model
-- changing session ids, registry schema, or server API
+- Cloudflare Sandbox launch.
+- Cloud `mc` Docker image.
+- Provider-token provisioning.
+- New free terminal or arbitrary command APIs.
 
 Gates:
-- npm test
-- add tests for ring truncation, output broadcast, writer/write behavior where
-  applicable, resize forwarding, and exit notification using a fake ptyFactory.
+- memoro-cli `npm test`.
+- memoro targeted `/api/mc` route tests and Coding app static/unit tests.
+- Manual local smoke with one broker; fake multi-source route test for two
+  brokers.
 ```
 
-## Open decisions before Phase 2
+## Open decisions before Phase 5
 
-- Should local terminal close detach by default, or should explicit `/exit` from
-  the tool remain the only way to end a session? Lean: close detaches; tool exit
-  ends.
-- How visible should remote takeover be in the local terminal? Lean: visible
-  banner plus input-paused state.
-- What exact screen-state dependency should be used? Lean: a headless xterm.js
-  state layer if it can serialize the current screen reliably.
-- Should `mc attach` accept `coding_session_id` directly, or only registry name
-  for local attach? Lean: both, matching current `mc sessions send/read`.
+- Cloud repo bootstrap: fixed prepared repo for dogfood, user-selected repo
+  clone, or empty coordinator repo. Lean: fixed prepared repo for the first
+  dogfood path, then user-selected repo.
+- Cloud provider auth: user-vault materialisation, Memoro-managed provider
+  key, or tool-specific OAuth. Lean: one supported adapter first, with explicit
+  product/security choice before public use.
+- Runtime token scope: add a narrow `mc.cloud`/`coding.session` scope rather
+  than using `full`.
+- Sandbox terminal persistence: do not depend on Cloudflare's browser-terminal
+  SDK for product attach until verified. The preferred MVP path remains
+  sandbox-local `mc broker connect` plus existing `PtyStreamDO`.

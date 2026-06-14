@@ -118,23 +118,18 @@ tool state intact.
   → `docs/plans/map-reconciliation.md`
 - **Hosted live-session workspace** — `active · M · now`
   Memoro gets a browser-native coding workspace where cloud exposes only a
-  constrained `mc` orchestrator surface, and `mc attach <session>` is a real live
-  PTY viewport into local AI coding sessions via a local `mc broker`. Phase 1
-  shipped the no-behavior-change PTY extraction (`PtySession` + byte ring buffer);
-  Phase 2a shipped the local broker supervisor (`mc broker start/status/stop`)
-  with a Unix-socket control plane; Phase 2b added the in-memory broker session
-  manager; Phase 2c/2d shipped the broker runtime session protocol plus a real
-  local attach stream (`mc attach <session_id>`) over the broker socket; Phase
-  2e moved wrap-mode sidecars into broker-owned launch and switched `mc new` /
-  `mc resume` to launch through the broker and attach as clients; Phase 2f added
-  the local writer lease (`mc attach --read-only`, one writer/many viewers);
+  constrained `mc` orchestrator surface, not a free shell. The browser is a real
+  PTY viewport into `mc` sessions owned by explicit sources: local machine
+  brokers today, and Memoro Cloud sandboxes next. Phase 1 shipped PTY extraction;
+  Phase 2 shipped broker-owned local launch/attach plus multi-attach input;
   Phase 3a shipped the CLI-side cloud bridge (`mc broker connect`,
-  `/api/mc/broker/ws` control, session inventory, `attach_request` → local
-  attach stream bridge). Current follow-up makes broker-owned launches
-  best-effort start the cloud bridge, and `mc resume` re-attaches to live local
-  broker sessions without a fresh prompt before falling back to promptless
-  relaunch. Next build is the Memoro Worker/Durable Object stream endpoints
-  plus the hosted browser terminal UI.
+  `/api/mc/broker/ws` control, session inventory, `attach_request` → broker
+  attach stream bridge). Current design update makes the source model
+  first-class: attach routes and UI must target `{source_id, coding_session_id}`
+  so multiple computers and cloud sessions can coexist. Next build is
+  source-aware list/attach, then `POST /api/mc/cloud-sessions` +
+  `McCloudSessionDO` to start a sandbox-owned `mc new` without requiring any
+  local broker online.
   → `docs/plans/hosted-live-session-workspace.md`
 - **Ensemble & hierarchy** — `later · M · —`
   Multi-model ensembles and recursive mid-agents, layered on the spine. → §10b/§10c
