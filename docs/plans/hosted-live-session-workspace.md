@@ -762,6 +762,15 @@ Status:
 Goal: a signed-in Memoro user can start a cloud-owned `mc` session without any
 local broker being online.
 
+Status:
+
+- **Phase 5a in PR:** Memoro PR #6915 adds `POST /api/mc/cloud-sessions`,
+  `McCloudSessionDO`, strict reject-list validation, booting cloud rows in
+  `/api/mc/sessions`, and Coding app pending status.
+- **Phase 5a in PR:** memoro-cli PR #81 adds the internal typed
+  `mc cloud-session start` runtime entrypoint, headless broker launch, cloud
+  source advertisement, and explicit workspace policy rendering.
+
 Scope:
 
 - Add `POST /api/mc/cloud-sessions` and `McCloudSessionDO`.
@@ -817,25 +826,32 @@ Acceptance:
 
 ## Next implementation brief
 
-Start with Phase 5, not a broader shell.
+Continue Phase 5, not a broader shell.
 
 Next build brief:
 
 ```
-You are implementing Phase 5 of docs/plans/hosted-live-session-workspace.md:
-cloud mc session create MVP.
+You are implementing Phase 5b of docs/plans/hosted-live-session-workspace.md:
+cloud mc sandbox bootstrap.
 
 Goal:
-- A signed-in Memoro user can start a cloud-owned `mc` session from the browser
-  without any local broker online.
+- A cloud-session create request provisions a sandbox-owned `mc` runtime and
+  turns the booting row into an attachable broker-advertised cloud session.
 - The cloud surface is a typed mc-launch surface, not a shell or command box.
 
 In scope:
 - memoro server:
-  - add `POST /api/mc/cloud-sessions` with a narrow structured payload.
-  - add `McCloudSessionDO` to own sandbox boot/lifecycle.
-  - reject `cmd`, `shell`, arbitrary args/env, and user-chosen raw cwd.
-  - mint a narrow runtime token and start controlled `mc new`.
+  - add/choose a Cloudflare Sandbox image/runtime that contains pinned
+    memoro-cli plus the first supported coding tool.
+  - make `McCloudSessionDO` start a background sandbox process through the
+    Sandbox SDK process API, not `exec` as a blocking shell.
+  - bootstrap the repo/workspace selected by the typed create payload.
+  - mint/materialise a narrow runtime token, never sending it to the browser.
+  - invoke `mc cloud-session start --cloud-session-id <id> ... --json`.
+  - record process/status/error metadata and keep `GET /api/mc/cloud-sessions`
+    honest while booting/failing/stopping.
+  - reconcile the pending row with the broker-advertised `{source_id,
+    coding_session_id}` once the sandbox-local broker connects.
 - browser UI:
   - add a typed cloud start action/form.
   - show booting/running/error states in the existing source-aware list.
@@ -847,7 +863,10 @@ Not in scope:
 - Full provider-token/vault UX beyond the minimal runtime token path.
 
 Gates:
-- Route/DO tests for create, reject-list, lifecycle state, and limits.
+- Route/DO tests for sandbox start success/failure, no-token-leak payloads, and
+  booting-to-broker reconciliation.
+- Sandbox command-builder tests proving only typed launch fields become the
+  runtime command.
 - Coding app tests for typed start UI and no free command field.
 - Manual browser smoke: start cloud session, see it under source "Memoro Cloud",
   attach, type, detach.
