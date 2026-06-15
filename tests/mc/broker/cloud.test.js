@@ -73,6 +73,24 @@ describe('cloud broker URL helpers', () => {
     );
   });
 
+  test('buildBrokerWsUrl carries source identity query params when present', () => {
+    const url = new URL(buildBrokerWsUrl('https://meetmemoro.test', {
+      token: 'tok',
+      machineId: 'm1',
+      sourceId: 'cloud:cloud_sess_123',
+      sourceKind: 'cloud',
+      sourceName: 'Cloud worker',
+      cloudSessionId: 'cloud_sess_123',
+    }));
+
+    assert.equal(url.searchParams.get('token'), 'tok');
+    assert.equal(url.searchParams.get('machine_id'), 'm1');
+    assert.equal(url.searchParams.get('source_id'), 'cloud:cloud_sess_123');
+    assert.equal(url.searchParams.get('source_kind'), 'cloud');
+    assert.equal(url.searchParams.get('source_name'), 'Cloud worker');
+    assert.equal(url.searchParams.get('cloud_session_id'), 'cloud_sess_123');
+  });
+
   test('appendToken adds the broker-side attach token', () => {
     assert.equal(
       appendToken('wss://example.test/api/mc/pty/att_x/broker?x=1', 'tok'),
@@ -153,6 +171,11 @@ describe('CloudBrokerClient', () => {
     const control = FakeWebSocket.instances[0];
     assert.match(control.url, /\/api\/mc\/broker\/ws/);
     assert.equal(control.binaryType, 'arraybuffer');
+    const controlUrl = new URL(control.url);
+    assert.equal(controlUrl.searchParams.get('machine_id'), 'machine');
+    assert.equal(controlUrl.searchParams.get('source_id'), 'local:machine');
+    assert.equal(controlUrl.searchParams.get('source_kind'), 'local');
+    assert.equal(controlUrl.searchParams.get('source_name'), 'machine');
     control.open();
     await new Promise((resolve) => setImmediate(resolve));
 
@@ -162,11 +185,17 @@ describe('CloudBrokerClient', () => {
         machine_id: 'machine',
         device_name: 'machine',
         mc_version: '0.7.6',
+        source_id: 'local:machine',
+        source_kind: 'local',
+        source_name: 'machine',
         capabilities: ['pty-stream-v1', 'resize-v1', 'screen-replay-v1'],
       },
       {
         type: 'sessions',
         machine_id: 'machine',
+        source_id: 'local:machine',
+        source_kind: 'local',
+        source_name: 'machine',
         sessions: [{ id: 'sess_a' }],
       },
     ]);
@@ -202,6 +231,12 @@ describe('CloudBrokerClient', () => {
 
     client.start();
     const control = FakeWebSocket.instances[0];
+    const controlUrl = new URL(control.url);
+    assert.equal(controlUrl.searchParams.get('machine_id'), 'machine');
+    assert.equal(controlUrl.searchParams.get('source_id'), 'local:machine');
+    assert.equal(controlUrl.searchParams.get('source_kind'), 'local');
+    assert.equal(controlUrl.searchParams.get('source_name'), 'machine');
+    assert.equal(controlUrl.searchParams.get('cloud_session_id'), null);
     control.open();
     await new Promise((resolve) => setImmediate(resolve));
 
@@ -209,6 +244,9 @@ describe('CloudBrokerClient', () => {
     assert.deepEqual(JSON.parse(control.sent.at(-1)), {
       type: 'sessions',
       machine_id: 'machine',
+      source_id: 'local:machine',
+      source_kind: 'local',
+      source_name: 'machine',
       sessions: [{ id: 'sess_old' }],
     });
 
@@ -216,6 +254,9 @@ describe('CloudBrokerClient', () => {
     assert.deepEqual(JSON.parse(control.sent.at(-1)), {
       type: 'sessions',
       machine_id: 'machine',
+      source_id: 'local:machine',
+      source_kind: 'local',
+      source_name: 'machine',
       sessions: [{ id: 'sess_current' }],
     });
 
@@ -246,6 +287,99 @@ describe('CloudBrokerClient', () => {
 
     assert.equal(JSON.parse(control.sent[0]).type, 'hello');
     assert.equal(JSON.parse(control.sent[1]).type, 'sessions');
+    client.stop();
+  });
+
+  test('advertises explicit cloud source identity on hello and sessions payloads', async () => {
+    resetFakeWs();
+    const client = new CloudBrokerClient({
+      apiUrl: 'https://memoro.test',
+      token: 'tok',
+      machineId: 'local-machine',
+      deviceName: 'Local Machine',
+      sourceId: 'cloud:cloud_sess_123',
+      sourceKind: 'cloud',
+      sourceName: 'Cloud sandbox',
+      cloudSessionId: 'cloud_sess_123',
+      WebSocketImpl: FakeWebSocket,
+      request: async () => ({ ok: true, sessions: [{ id: 'sess_cloud' }] }),
+      sleepImpl: async () => {},
+    });
+
+    client.start();
+    const control = FakeWebSocket.instances[0];
+    const controlUrl = new URL(control.url);
+    assert.equal(controlUrl.searchParams.get('machine_id'), 'local-machine');
+    assert.equal(controlUrl.searchParams.get('source_id'), 'cloud:cloud_sess_123');
+    assert.equal(controlUrl.searchParams.get('source_kind'), 'cloud');
+    assert.equal(controlUrl.searchParams.get('source_name'), 'Cloud sandbox');
+    assert.equal(controlUrl.searchParams.get('cloud_session_id'), 'cloud_sess_123');
+    control.open();
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const messages = control.sent.map((s) => JSON.parse(s));
+    assert.deepEqual(messages[0], {
+      type: 'hello',
+      machine_id: 'local-machine',
+      device_name: 'Local Machine',
+      source_id: 'cloud:cloud_sess_123',
+      source_kind: 'cloud',
+      source_name: 'Cloud sandbox',
+      cloud_session_id: 'cloud_sess_123',
+      capabilities: ['pty-stream-v1', 'resize-v1', 'screen-replay-v1'],
+    });
+    assert.deepEqual(messages[1], {
+      type: 'sessions',
+      machine_id: 'local-machine',
+      source_id: 'cloud:cloud_sess_123',
+      source_kind: 'cloud',
+      source_name: 'Cloud sandbox',
+      cloud_session_id: 'cloud_sess_123',
+      sessions: [{ id: 'sess_cloud' }],
+    });
+    client.stop();
+  });
+
+  test('advertises env source identity on hello and sessions payloads', async () => {
+    resetFakeWs();
+    const client = new CloudBrokerClient({
+      apiUrl: 'https://memoro.test',
+      token: 'tok',
+      machineId: 'machine',
+      deviceName: 'Device',
+      env: {
+        MC_SOURCE_ID: 'cloud:env_src',
+        MC_SOURCE_KIND: 'cloud',
+        MC_SOURCE_NAME: 'Env source',
+        MC_CLOUD_SESSION_ID: 'env_cloud_session',
+      },
+      WebSocketImpl: FakeWebSocket,
+      request: async () => ({ ok: true, sessions: [{ id: 'sess_env' }] }),
+      sleepImpl: async () => {},
+    });
+
+    client.start();
+    const control = FakeWebSocket.instances[0];
+    const controlUrl = new URL(control.url);
+    assert.equal(controlUrl.searchParams.get('source_id'), 'cloud:env_src');
+    assert.equal(controlUrl.searchParams.get('source_kind'), 'cloud');
+    assert.equal(controlUrl.searchParams.get('source_name'), 'Env source');
+    assert.equal(controlUrl.searchParams.get('cloud_session_id'), 'env_cloud_session');
+    control.open();
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const [hello, sessions] = control.sent.map((s) => JSON.parse(s));
+    assert.equal(hello.type, 'hello');
+    assert.equal(hello.source_id, 'cloud:env_src');
+    assert.equal(hello.source_kind, 'cloud');
+    assert.equal(hello.source_name, 'Env source');
+    assert.equal(hello.cloud_session_id, 'env_cloud_session');
+    assert.equal(sessions.type, 'sessions');
+    assert.equal(sessions.source_id, 'cloud:env_src');
+    assert.equal(sessions.source_kind, 'cloud');
+    assert.equal(sessions.source_name, 'Env source');
+    assert.equal(sessions.cloud_session_id, 'env_cloud_session');
+    assert.deepEqual(sessions.sessions, [{ id: 'sess_env' }]);
     client.stop();
   });
 
@@ -490,6 +624,42 @@ describe('CloudBrokerClient', () => {
     client.stop();
   });
 
+  test('uses command tool hint as transcript source when transcript path is explicit', async () => {
+    resetFakeWs();
+    const factoryCalls = [];
+    const client = new CloudBrokerClient({
+      apiUrl: 'https://memoro.test',
+      token: 'tok',
+      machineId: 'machine',
+      WebSocketImpl: FakeWebSocket,
+      request: async () => ({ ok: true, sessions: [] }),
+      fetchTranscriptHandlerFactory: (opts) => {
+        factoryCalls.push(opts);
+        return async () => ({ source: opts.source, messages: [] });
+      },
+      sessionRefreshIntervalMs: 0,
+      sleepImpl: async () => {},
+    });
+
+    client.start();
+    const control = FakeWebSocket.instances[0];
+    control.open();
+    await new Promise((resolve) => setImmediate(resolve));
+    control.message(JSON.stringify({
+      type: 'command',
+      command_id: 'cmd_fetch_tool_hint',
+      coding_session_id: 'sess_a',
+      tool: 'codex',
+      kind: 'fetch_transcript',
+      args: { transcript_path: '/tmp/session.jsonl' },
+    }));
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.deepEqual(factoryCalls, [{ transcriptPath: '/tmp/session.jsonl', source: 'codex' }]);
+    assert.equal(JSON.parse(control.sent.at(-1)).data.source, 'codex');
+    client.stop();
+  });
+
   test('falls back to broker recent output when fetch_transcript has no transcript path', async () => {
     resetFakeWs();
     const requests = [];
@@ -551,6 +721,48 @@ describe('CloudBrokerClient', () => {
         fallback: 'broker_recent_output',
       },
     });
+    client.stop();
+  });
+
+  test('derives recent-output transcript source from broker session tool when command omits source', async () => {
+    resetFakeWs();
+    const client = new CloudBrokerClient({
+      apiUrl: 'https://memoro.test',
+      token: 'tok',
+      machineId: 'machine',
+      WebSocketImpl: FakeWebSocket,
+      request: async (msg) => {
+        if (msg.type === 'sessions') return { ok: true, sessions: [] };
+        if (msg.type === 'fetch_session_output') {
+          return {
+            ok: true,
+            output: 'codex screen',
+            session: { id: 'sess_a', tool: 'codex', cwd: '/repo' },
+          };
+        }
+        return { ok: false, error: `unexpected ${msg.type}` };
+      },
+      sessionRefreshIntervalMs: 0,
+      sleepImpl: async () => {},
+    });
+
+    client.start();
+    const control = FakeWebSocket.instances[0];
+    control.open();
+    await new Promise((resolve) => setImmediate(resolve));
+    control.message(JSON.stringify({
+      type: 'command',
+      command_id: 'cmd_fetch_tool_from_session',
+      coding_session_id: 'sess_a',
+      kind: 'fetch_transcript',
+      args: {},
+    }));
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const result = JSON.parse(control.sent.at(-1));
+    assert.equal(result.ok, true);
+    assert.equal(result.data.source, 'codex');
+    assert.deepEqual(result.data.messages, [{ role: 'assistant', text: 'codex screen' }]);
     client.stop();
   });
 

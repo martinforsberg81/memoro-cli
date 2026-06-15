@@ -19,6 +19,7 @@ import { requestBroker } from './client.js';
 import { attachBrokerSession } from './attach-client.js';
 import { renderIntro } from '../session-intro.js';
 import { ensureBrokerRunning } from './supervisor.js';
+import { ensureCloudBrokerConnected } from './cloud-supervisor.js';
 
 export async function launchBrokerOwnedSession({
   cwd,
@@ -28,9 +29,11 @@ export async function launchBrokerOwnedSession({
   sessionName = null,
   argv = [],
   apiArgv = [],
+  sendStartupMessage = true,
   request = requestBroker,
   attach = attachBrokerSession,
   ensureBroker = ensureBrokerRunning,
+  ensureCloudBroker = ensureCloudBrokerConnected,
   stdout = process.stdout,
   stderr = process.stderr,
   env = process.env,
@@ -78,7 +81,7 @@ export async function launchBrokerOwnedSession({
       adapter: launch.adapter,
       focus,
     });
-    groundingLaunchMessage = res.message || null;
+    groundingLaunchMessage = sendStartupMessage ? (res.message || null) : null;
     if (!res.ok && res.reason) {
       stderr.write(`mc: grounding skipped (${res.reason}); continuing\n`);
     }
@@ -188,6 +191,11 @@ export async function launchBrokerOwnedSession({
   if (!launchRes.ok) {
     stderr.write(`mc: broker launch failed (${launchRes.error || launchRes.reason || 'unknown'})\n`);
     return { code: 1 };
+  }
+
+  const cloud = await ensureCloudBroker().catch((err) => ({ ok: false, error: err.message || String(err) }));
+  if (!cloud?.ok) {
+    stderr.write(`mc: broker cloud bridge not started (${cloud?.error || 'unknown'}); continuing with local broker only\n`);
   }
 
   if (typeof onLaunched === 'function') {

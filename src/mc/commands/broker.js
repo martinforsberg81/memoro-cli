@@ -1,7 +1,10 @@
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { dirname } from 'node:path';
+
 import { requestBroker } from '../broker/client.js';
 import { CloudBrokerClient } from '../broker/cloud.js';
 import { runBrokerDaemon } from '../broker/daemon.js';
-import { brokerPidPath, brokerSocketPath } from '../broker/paths.js';
+import { brokerCloudPidPath, brokerPidPath, brokerSocketPath } from '../broker/paths.js';
 import {
   ensureBrokerRunning,
   spawnBrokerDaemon,
@@ -119,41 +122,81 @@ export async function runBrokerWith(opts, deps) {
 
 async function runCloudConnection(opts, io = {}) {
   const stdout = io.stdout || process.stdout;
-  const config = await readConfig();
-  const apiUrl = getApiUrl(opts.rawArgv || []) || config.apiUrl;
-  const token = await getSecret(ACCOUNTS.TOKEN);
-  if (!token) return { ok: false, error: 'no Memoro token' };
-  const mcVersion = await getPackageVersion().catch(() => null);
-  const client = new CloudBrokerClient({ apiUrl, token, mcVersion });
-  const ready = waitForCloudOpen(client, CONNECT_READY_TIMEOUT_MS);
-  client.start();
-  const opened = await ready.catch((err) => ({ ok: false, error: err.message || String(err) }));
-  if (opened?.ok === false) {
-    client.stop();
-    return opened;
-  }
-  if (opts.once) {
-    let sessions = [];
-    let sessionsError = null;
-    try {
-      sessions = await client.refreshSessions();
-    } catch (err) {
-      sessionsError = err.message || String(err);
+  const unregisterPid = opts.once ? null : registerCloudConnectorPid();
+  try {
+    const config = await readConfig();
+    const apiUrl = getApiUrl(opts.rawArgv || []) || config.apiUrl;
+    const token = await getSecret(ACCOUNTS.TOKEN);
+    if (!token) {
+      unregisterPid?.();
+      return { ok: false, error: 'no Memoro token' };
     }
-    client.stop();
-    return {
-      ok: true,
-      once: true,
-      machine_id: client.machineId,
-      sessions_count: sessions.length,
-      ...(sessionsError ? { sessions_error: sessionsError } : {}),
-    };
+    const mcVersion = await getPackageVersion().catch(() => null);
+    const client = new CloudBrokerClient({
+      apiUrl,
+      token,
+      mcVersion,
+      sourceId: opts.sourceId,
+      sourceKind: opts.sourceKind,
+      sourceName: opts.sourceName,
+      cloudSessionId: opts.cloudSessionId,
+    });
+    const ready = waitForCloudOpen(client, CONNECT_READY_TIMEOUT_MS);
+    client.start();
+    const opened = await ready.catch((err) => ({ ok: false, error: err.message || String(err) }));
+    if (opened?.ok === false) {
+      client.stop();
+      unregisterPid?.();
+      return opened;
+    }
+    if (opts.once) {
+      let sessions = [];
+      let sessionsError = null;
+      try {
+        sessions = await client.refreshSessions();
+      } catch (err) {
+        sessionsError = err.message || String(err);
+      }
+      client.stop();
+      return {
+        ok: true,
+        once: true,
+        machine_id: client.machineId,
+        sessions_count: sessions.length,
+        ...(sessionsError ? { sessions_error: sessionsError } : {}),
+      };
+    }
+    const connected = { ok: true, machine_id: client.machineId };
+    if (opts.json) stdout.write(JSON.stringify(connected, null, 2) + '\n');
+    else stdout.write(`mc broker: connected to cloud (${client.machineId || 'unknown machine'})\n`);
+    await new Promise(() => {});
+    return connected;
+  } catch (err) {
+    unregisterPid?.();
+    throw err;
   }
-  const connected = { ok: true, machine_id: client.machineId };
-  if (opts.json) stdout.write(JSON.stringify(connected, null, 2) + '\n');
-  else stdout.write(`mc broker: connected to cloud (${client.machineId || 'unknown machine'})\n`);
-  await new Promise(() => {});
-  return connected;
+}
+
+function registerCloudConnectorPid({
+  pidPath = brokerCloudPidPath(),
+  pid = process.pid,
+  processImpl = process,
+} = {}) {
+  try {
+    mkdirSync(dirname(pidPath), { recursive: true, mode: 0o700 });
+    writeFileSync(pidPath, String(pid), { mode: 0o600 });
+  } catch {
+    return null;
+  }
+  const cleanup = () => {
+    try {
+      if (String(readFileSync(pidPath, 'utf8') || '').trim() === String(pid)) {
+        rmSync(pidPath, { force: true });
+      }
+    } catch {}
+  };
+  processImpl.once?.('exit', cleanup);
+  return cleanup;
 }
 
 function waitForCloudOpen(client, timeoutMs) {
@@ -202,7 +245,8 @@ USAGE
   mc broker start [--json]
   mc broker status [--json]
   mc broker stop [--json]
-  mc broker connect [--json]
+  mc broker connect [--json] [--source-id <id>] [--source-kind <kind>]
+                    [--source-name <name>] [--cloud-session-id <id>]
 
 Normal session commands auto-start the broker when needed.
 
@@ -212,7 +256,19 @@ Internal:
 }
 
 export function parseArgs(argv) {
-  const opts = { verb: null, json: false, daemon: false, help: false, readyFile: null, once: false, rawArgv: argv };
+  const opts = {
+    verb: null,
+    json: false,
+    daemon: false,
+    help: false,
+    readyFile: null,
+    once: false,
+    sourceId: null,
+    sourceKind: null,
+    sourceName: null,
+    cloudSessionId: null,
+    rawArgv: argv,
+  };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--help' || a === '-h') { opts.help = true; continue; }
@@ -220,6 +276,30 @@ export function parseArgs(argv) {
     if (a === '--once') { opts.once = true; continue; }
     if (a === '--daemon') { opts.daemon = true; opts.verb = opts.verb || 'daemon'; continue; }
     if (a === '--ready-file') { opts.readyFile = argv[++i]; continue; }
+    if (a === '--source-id') {
+      const next = argv[++i];
+      if (!next || next.startsWith('--')) return { ...opts, error: '--source-id requires a value' };
+      opts.sourceId = next;
+      continue;
+    }
+    if (a === '--source-kind') {
+      const next = argv[++i];
+      if (!next || next.startsWith('--')) return { ...opts, error: '--source-kind requires a value' };
+      opts.sourceKind = next;
+      continue;
+    }
+    if (a === '--source-name') {
+      const next = argv[++i];
+      if (!next || next.startsWith('--')) return { ...opts, error: '--source-name requires a value' };
+      opts.sourceName = next;
+      continue;
+    }
+    if (a === '--cloud-session-id') {
+      const next = argv[++i];
+      if (!next || next.startsWith('--')) return { ...opts, error: '--cloud-session-id requires a value' };
+      opts.cloudSessionId = next;
+      continue;
+    }
     if (a.startsWith('--')) return { ...opts, error: `unknown flag: ${a}` };
     if (opts.verb) return { ...opts, error: `unexpected arg: ${a}` };
     opts.verb = a;
@@ -227,4 +307,4 @@ export function parseArgs(argv) {
   return opts;
 }
 
-export const __test__ = { formatDuration, formatStatus, START_POLL_MS, POLL_INTERVAL_MS, CONNECT_READY_TIMEOUT_MS };
+export const __test__ = { formatDuration, formatStatus, START_POLL_MS, POLL_INTERVAL_MS, CONNECT_READY_TIMEOUT_MS, registerCloudConnectorPid };

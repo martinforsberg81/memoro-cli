@@ -120,7 +120,7 @@ export function renderActiveSelectionMessage(session) {
   const suffix = where ? ` on ${where}` : '';
   return [
     `"${label}" is already active${suffix}.`,
-    'mc cannot attach a second local terminal to that running session yet.',
+    'No matching live session was found in the local broker attach path.',
     `Send a message with: mc sessions send ${id} "<message>"`,
     `Read recent output with: mc sessions read ${id}`,
     '',
