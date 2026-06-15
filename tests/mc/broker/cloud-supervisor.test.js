@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import test, { describe } from 'node:test';
 
 import {
+  brokerConnectArgs,
   ensureCloudBrokerConnected,
   isProcessAlive,
   resolveMcBinPath,
@@ -59,6 +60,31 @@ describe('ensureCloudBrokerConnected', () => {
     }
   });
 
+  test('passes source identity to a newly spawned connector', () => {
+    let spawnOpts = null;
+    const res = ensureCloudBrokerConnected({
+      pidPath: '/tmp/mc-cloud.pid',
+      logPath: '/tmp/mc-cloud.log',
+      readFile: () => { throw new Error('missing'); },
+      writeFile: () => {},
+      isAlive: () => false,
+      sourceId: 'cloud:cld_123456',
+      sourceKind: 'cloud',
+      sourceName: 'Memoro Cloud',
+      cloudSessionId: 'cld_123456',
+      spawnConnector: (opts) => {
+        spawnOpts = opts;
+        return { ok: true, pid: 456 };
+      },
+    });
+
+    assert.equal(res.ok, true);
+    assert.equal(spawnOpts.sourceId, 'cloud:cld_123456');
+    assert.equal(spawnOpts.sourceKind, 'cloud');
+    assert.equal(spawnOpts.sourceName, 'Memoro Cloud');
+    assert.equal(spawnOpts.cloudSessionId, 'cld_123456');
+  });
+
   test('stops spawned connector when pid registration fails', () => {
     const dir = mkdtempSync(join(tmpdir(), 'mc-cloud-supervisor-'));
     try {
@@ -98,5 +124,27 @@ describe('resolveMcBinPath', () => {
 
   test('uses the current CLI script path when present', () => {
     assert.equal(resolveMcBinPath(['node', '/tmp/mc']), '/tmp/mc');
+  });
+});
+
+describe('brokerConnectArgs', () => {
+  test('renders source identity flags for cloud brokers', () => {
+    assert.deepEqual(brokerConnectArgs({
+      sourceId: 'cloud:cld_123456',
+      sourceKind: 'cloud',
+      sourceName: 'Memoro Cloud',
+      cloudSessionId: 'cld_123456',
+    }), [
+      'broker',
+      'connect',
+      '--source-id',
+      'cloud:cld_123456',
+      '--source-kind',
+      'cloud',
+      '--source-name',
+      'Memoro Cloud',
+      '--cloud-session-id',
+      'cld_123456',
+    ]);
   });
 });

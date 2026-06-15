@@ -116,6 +116,68 @@ describe('launchBrokerOwnedSession', () => {
     assert.equal(streams.err(), '');
   });
 
+  test('can launch headlessly for cloud-owned sessions', async () => {
+    const streams = makeStreams();
+    const requests = [];
+    let attachCalled = false;
+    let cloudArgs = null;
+
+    const res = await launchBrokerOwnedSession({
+      cwd: '/repo',
+      sessionName: 'cloud-coordinator',
+      focus: 'cloud work',
+      tool: 'claude',
+      attachAfterLaunch: false,
+      cloudBroker: {
+        sourceId: 'cloud:cld_123456',
+        sourceKind: 'cloud',
+        sourceName: 'Memoro Cloud',
+        cloudSessionId: 'cld_123456',
+      },
+      stdout: streams.stdout,
+      stderr: streams.stderr,
+      env: { TERM: 'xterm-256color' },
+      now: () => 10_000,
+      ensureBroker: async () => ({ ok: true, broker: { pid: 42 } }),
+      ensureCloudBroker: async (args) => {
+        cloudArgs = args;
+        return { ok: true, started: true, pid: 43 };
+      },
+      request: async (message) => {
+        requests.push(message);
+        return { ok: true, session: { id: message.session.id } };
+      },
+      attach: async () => {
+        attachCalled = true;
+        return 0;
+      },
+      deps: {
+        getRepoContext: async () => ({ remoteUrl: 'git@example.com:org/repo.git', branch: 'main', toplevel: '/repo' }),
+        readConfig: async () => ({ apiUrl: 'https://memoro.test' }),
+        getApiUrl: () => null,
+        getSecret: async () => 'tok',
+        groundSession: async () => ({ ok: true }),
+        ensureCoordinatorSlashCommand: async () => {},
+        installUpdateCommand: async () => {},
+        hostname: () => 'cloud-runner',
+        lookupOrMint: async () => 'sess_cloud',
+        getPackageVersion: async () => '0.test',
+      },
+    });
+
+    assert.equal(res.code, 0);
+    assert.equal(res.codingSessionId, 'sess_cloud');
+    assert.equal(res.attached, false);
+    assert.equal(attachCalled, false);
+    assert.deepEqual(cloudArgs, {
+      sourceId: 'cloud:cld_123456',
+      sourceKind: 'cloud',
+      sourceName: 'Memoro Cloud',
+      cloudSessionId: 'cld_123456',
+    });
+    assert.equal(requests[0].session.name, 'cloud-coordinator');
+  });
+
   test('repairs headless terminal env for Claude broker launches too', async () => {
     const streams = makeStreams();
     const requests = [];
