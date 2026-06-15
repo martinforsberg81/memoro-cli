@@ -58,6 +58,29 @@ describe('ensureCloudBrokerConnected', () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  test('stops spawned connector when pid registration fails', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mc-cloud-supervisor-'));
+    try {
+      const pidPath = join(dir, 'broker-cloud.pid');
+      const logPath = join(dir, 'broker-cloud.log');
+      let stopped = 0;
+      const res = ensureCloudBrokerConnected({
+        pidPath,
+        logPath,
+        readFile: () => { throw new Error('missing'); },
+        writeFile: () => { throw new Error('permission denied'); },
+        isAlive: () => false,
+        spawnConnector: () => ({ ok: true, pid: 456, stop: () => { stopped += 1; } }),
+      });
+
+      assert.equal(res.ok, false);
+      assert.match(res.error, /pid write failed/);
+      assert.equal(stopped, 1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('isProcessAlive', () => {

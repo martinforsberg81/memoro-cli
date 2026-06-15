@@ -13,6 +13,7 @@ export function ensureCloudBrokerConnected({
   removeFile = rmSync,
   isAlive = isProcessAlive,
   spawnConnector = spawnCloudBrokerConnector,
+  stopConnector = stopSpawnedConnector,
   now = () => Date.now(),
 } = {}) {
   const existingPid = readPid(pidPath, { readFile });
@@ -29,6 +30,7 @@ export function ensureCloudBrokerConnected({
     mkdirSync(dirname(pidPath), { recursive: true, mode: 0o700 });
     writeFile(pidPath, String(spawned.pid), { mode: 0o600 });
   } catch (err) {
+    stopConnector(spawned);
     return { ok: false, error: `cloud connector pid write failed (${err.message || String(err)})` };
   }
   return {
@@ -56,7 +58,7 @@ export function spawnCloudBrokerConnector({
       env: process.env,
     });
     child.unref();
-    return { ok: true, pid: child.pid, log_path: logPath };
+    return { ok: true, pid: child.pid, log_path: logPath, stop: () => child.kill('SIGTERM') };
   } catch (err) {
     return { ok: false, error: err.message || String(err) };
   }
@@ -77,6 +79,17 @@ export function isProcessAlive(pid) {
     return true;
   } catch (err) {
     return err?.code === 'EPERM';
+  }
+}
+
+function stopSpawnedConnector(spawned) {
+  if (!spawned) return;
+  if (typeof spawned.stop === 'function') {
+    try { spawned.stop(); } catch {}
+    return;
+  }
+  if (Number.isInteger(spawned.pid) && spawned.pid > 0) {
+    try { process.kill(spawned.pid, 'SIGTERM'); } catch {}
   }
 }
 

@@ -6,6 +6,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { createFetchTranscriptHandler } from '../../commands/handlers/fetch-transcript.js';
 import { requestBroker } from './client.js';
 import { brokerSocketPath } from './paths.js';
+import { sourceForTool } from './session-sidecars.js';
 
 const INITIAL_BACKOFF_MS = 1_000;
 const MAX_BACKOFF_MS = 30_000;
@@ -202,19 +203,21 @@ export class CloudBrokerClient extends EventEmitter {
       return result;
     }
     if (kind === 'fetch_transcript') {
-      const source = stringOrDefault(args.source, stringOrDefault(msg.source, 'claude-code'));
+      const sourceHint = stringOrDefault(args.source, stringOrDefault(msg.source, ''));
+      const toolHint = stringOrDefault(args.tool, stringOrDefault(msg.tool, ''));
       const transcriptPath = args.transcript_path || args.transcriptPath;
       if (!transcriptPath) {
         const sessionId = requiredString(msg.coding_session_id || msg.session_id, 'coding_session_id');
-        return this._fetchSessionOutputTranscript({ sessionId, source });
+        return this._fetchSessionOutputTranscript({ sessionId, sourceHint, toolHint });
       }
+      const source = transcriptSource({ sourceHint, toolHint });
       const handler = this.fetchTranscriptHandlerFactory({ transcriptPath, source });
       return handler(args);
     }
     throw new Error(`No handler for kind '${kind}'`);
   }
 
-  async _fetchSessionOutputTranscript({ sessionId, source }) {
+  async _fetchSessionOutputTranscript({ sessionId, sourceHint = '', toolHint = '' }) {
     const result = await this.request({
       type: 'fetch_session_output',
       id: sessionId,
@@ -222,16 +225,17 @@ export class CloudBrokerClient extends EventEmitter {
     if (!result?.ok) {
       return this._transcriptFromSessionOutput({
         sessionId,
-        source,
+        source: transcriptSource({ sourceHint, toolHint }),
         session: {},
         output: '',
         fallback: 'broker_recent_output_unavailable',
       });
     }
+    const session = result.session && typeof result.session === 'object' ? result.session : {};
     return this._transcriptFromSessionOutput({
       sessionId,
-      source,
-      session: result.session && typeof result.session === 'object' ? result.session : {},
+      source: transcriptSource({ sourceHint, toolHint, sessionTool: session.tool }),
+      session,
       output: typeof result.output === 'string' ? result.output : '',
       fallback: 'broker_recent_output',
     });
@@ -610,6 +614,13 @@ function requiredString(value, label) {
 
 function stringOrDefault(value, fallback) {
   return typeof value === 'string' && value.length > 0 ? value : fallback;
+}
+
+function transcriptSource({ sourceHint = '', toolHint = '', sessionTool = '' } = {}) {
+  return stringOrDefault(
+    sourceHint,
+    sourceForTool(toolHint) || sourceForTool(sessionTool) || 'claude-code',
+  );
 }
 
 function sourceIdentityPayload(identity) {

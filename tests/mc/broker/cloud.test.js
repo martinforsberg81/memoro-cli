@@ -624,6 +624,42 @@ describe('CloudBrokerClient', () => {
     client.stop();
   });
 
+  test('uses command tool hint as transcript source when transcript path is explicit', async () => {
+    resetFakeWs();
+    const factoryCalls = [];
+    const client = new CloudBrokerClient({
+      apiUrl: 'https://memoro.test',
+      token: 'tok',
+      machineId: 'machine',
+      WebSocketImpl: FakeWebSocket,
+      request: async () => ({ ok: true, sessions: [] }),
+      fetchTranscriptHandlerFactory: (opts) => {
+        factoryCalls.push(opts);
+        return async () => ({ source: opts.source, messages: [] });
+      },
+      sessionRefreshIntervalMs: 0,
+      sleepImpl: async () => {},
+    });
+
+    client.start();
+    const control = FakeWebSocket.instances[0];
+    control.open();
+    await new Promise((resolve) => setImmediate(resolve));
+    control.message(JSON.stringify({
+      type: 'command',
+      command_id: 'cmd_fetch_tool_hint',
+      coding_session_id: 'sess_a',
+      tool: 'codex',
+      kind: 'fetch_transcript',
+      args: { transcript_path: '/tmp/session.jsonl' },
+    }));
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.deepEqual(factoryCalls, [{ transcriptPath: '/tmp/session.jsonl', source: 'codex' }]);
+    assert.equal(JSON.parse(control.sent.at(-1)).data.source, 'codex');
+    client.stop();
+  });
+
   test('falls back to broker recent output when fetch_transcript has no transcript path', async () => {
     resetFakeWs();
     const requests = [];
@@ -685,6 +721,48 @@ describe('CloudBrokerClient', () => {
         fallback: 'broker_recent_output',
       },
     });
+    client.stop();
+  });
+
+  test('derives recent-output transcript source from broker session tool when command omits source', async () => {
+    resetFakeWs();
+    const client = new CloudBrokerClient({
+      apiUrl: 'https://memoro.test',
+      token: 'tok',
+      machineId: 'machine',
+      WebSocketImpl: FakeWebSocket,
+      request: async (msg) => {
+        if (msg.type === 'sessions') return { ok: true, sessions: [] };
+        if (msg.type === 'fetch_session_output') {
+          return {
+            ok: true,
+            output: 'codex screen',
+            session: { id: 'sess_a', tool: 'codex', cwd: '/repo' },
+          };
+        }
+        return { ok: false, error: `unexpected ${msg.type}` };
+      },
+      sessionRefreshIntervalMs: 0,
+      sleepImpl: async () => {},
+    });
+
+    client.start();
+    const control = FakeWebSocket.instances[0];
+    control.open();
+    await new Promise((resolve) => setImmediate(resolve));
+    control.message(JSON.stringify({
+      type: 'command',
+      command_id: 'cmd_fetch_tool_from_session',
+      coding_session_id: 'sess_a',
+      kind: 'fetch_transcript',
+      args: {},
+    }));
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const result = JSON.parse(control.sent.at(-1));
+    assert.equal(result.ok, true);
+    assert.equal(result.data.source, 'codex');
+    assert.deepEqual(result.data.messages, [{ role: 'assistant', text: 'codex screen' }]);
     client.stop();
   });
 
