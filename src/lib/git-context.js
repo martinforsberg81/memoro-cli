@@ -47,6 +47,40 @@ export function deriveRepoName(context) {
   return 'unknown';
 }
 
+/**
+ * Return a credential-free repo reference that can be shown to Memoro Cloud.
+ * GitHub remotes use owner/repo shorthand; generic http(s) remotes keep the
+ * URL with username/password stripped. Local-only and unparseable remotes
+ * intentionally return null.
+ */
+export function derivePublicRepoRef(context) {
+  if (!context) return null;
+  const remote = typeof context.remoteUrl === 'string' ? context.remoteUrl.trim() : '';
+  if (!remote || remote === context.toplevel) return null;
+
+  const githubSsh = remote.match(/^git@github\.com:([^/]+\/[^/]+?)(?:\.git)?$/i);
+  if (githubSsh) return stripGitSuffix(githubSsh[1]);
+
+  try {
+    const url = new URL(remote);
+    url.username = '';
+    url.password = '';
+    if (url.hostname.toLowerCase() === 'github.com') {
+      const parts = url.pathname.split('/').filter(Boolean);
+      if (parts.length >= 2) return `${parts[0]}/${stripGitSuffix(parts[1])}`;
+    }
+    if (url.protocol === 'http:' || url.protocol === 'https:') {
+      return stripGitSuffix(url.toString());
+    }
+  } catch {}
+
+  return null;
+}
+
+function stripGitSuffix(value) {
+  return String(value || '').replace(/\.git$/i, '');
+}
+
 function runGit(args, cwd) {
   return new Promise((resolve) => {
     let stdout = '';

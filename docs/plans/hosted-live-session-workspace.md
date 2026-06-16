@@ -34,8 +34,12 @@ owning session.
   - cloud source: execution happens inside a Memoro-owned Cloudflare Sandbox
     with a prepared repo/workspace and a constrained `mc` launch path.
 - Cloud start accepts only structured fields (`name`, `task`, `tool`, `policy`,
-  optional repo/workspace selector). It must reject `cmd`, `shell`, `cwd`, `env`,
-  arbitrary args, and package-install style escape hatches.
+  server-issued `repo_id`). The browser must not send a raw `repo_ref`, Git URL,
+  workspace path, `cmd`, `shell`, `cwd`, `env`, arbitrary args, or package-install
+  style escape hatch.
+- A session may use secrets only through Memoro-controlled capabilities. Raw
+  secret bytes must not be visible to the LLM/tool session through prompt text,
+  env, argv, git remotes, files, transcripts, logs, or browser responses.
 - The browser is allowed to be a real terminal viewport while attached. "Only
   `mc` in cloud" means Memoro does not expose arbitrary process launch; it does
   not mean the attached TUI cannot receive raw terminal input for the running
@@ -479,6 +483,7 @@ WS   /api/mc/pty/:attach_id/broker
 POST /api/mc/sessions/:coding_session_id/writer
 POST /api/mc/sessions/:coding_session_id/detach
 POST /api/mc/cloud-sessions
+GET  /api/mc/repos
 GET  /api/mc/cloud-sessions/:cloud_session_id
 POST /api/mc/cloud-sessions/:cloud_session_id/stop
 ```
@@ -496,9 +501,14 @@ source metadata for every attachable row.
   "task": "Analyse the Cloudflare hosted mc MVP",
   "tool": "codex",
   "policy": "workspace-write",
-  "repo_ref": "memoro"
+  "repo_id": "repo_abc123"
 }
 ```
+
+The `repo_id` must come from `GET /api/mc/repos`. That route is a server-known
+repo catalog assembled from broker/session metadata and, later, explicit repo
+grants. It may return public repo refs for display and clone bootstrap, but the
+browser create path never accepts raw repo strings.
 
 It must reject all free-command fields:
 
@@ -777,22 +787,27 @@ Status:
   stop-time process kill + token revoke. memoro-cli PR #81 now lets cloud
   broker auth use `MEMORO_TOKEN` from the sandbox env before falling back to
   local keychain.
+- **Phase 5c security/product correction:** the browser create flow uses
+  `repo_id` selected from a server repo catalog, not free `repo_ref`/Git URL
+  text. Broker sessions advertise a credential-scrubbed public `repo_ref` for
+  catalog use. The LLM child env is scrubbed of `MEMORO_TOKEN`; remaining
+  hardening is to move runtime auth and private repo access fully behind
+  out-of-session capabilities.
 
 Scope:
 
 - Add `POST /api/mc/cloud-sessions` and `McCloudSessionDO`.
-- Validate a narrow create payload: `name`, `task`, `tool`, `policy`, optional
-  repo/workspace selector. Reject `cmd`, `shell`, `cwd`, `env`, and arbitrary
-  args.
+- Validate a narrow create payload: `name`, `task`, `tool`, `policy`, and
+  `repo_id` from the server catalog. Reject `repo_ref`, raw Git URLs, `cmd`,
+  `shell`, `cwd`, `env`, and arbitrary args.
 - Add a Cloudflare Sandbox image for `mc`: Node, git, pinned memoro-cli, chosen
   LLM tool, and no runtime package-install requirement.
 - Bootstrap a git repo/workspace because `mc cloud-session start` still needs a
   repo/workspace cwd before public dogfood.
-- Mint a runtime token for the sandbox. Current PR uses an unlisted
-  one-day `sessions.write` token; later hardening should add a narrower
-  `mc.cloud`-style scope and shorter TTL.
-- Materialise the token only into the sandbox process env as `MEMORO_TOKEN`,
-  then invoke controlled `mc cloud-session start --cloud-session-id <id> ...`.
+- Mint a runtime capability for the sandbox. The current MVP still uses an
+  unlisted one-day `sessions.write` token for the launcher; the LLM child env is
+  scrubbed, and the next security gate is replacing that launcher env with a
+  true out-of-session control-plane capability and a narrower `mc.cloud` scope.
 - Let the sandbox-local broker advertise as `source_kind=cloud` with
   `source_id=cloud:<cloud_session_id>`.
 - Reconcile the booting cloud-session row with the broker-advertised live
@@ -809,13 +824,17 @@ Acceptance:
 - Invalid create payloads containing shell/command/env fields are rejected in
   route tests.
 - Cloud runtime token is never sent to the browser.
+- Raw secret values are never sent to the LLM child env, command argv, public DTO,
+  or stored session record. Private repo clone/fetch remains blocked until the
+  clone/fetch action runs in a trusted sidecar/control plane outside the session.
 
 ### Phase 6: Cloud start UI and product hardening
 
 Scope:
 
-- Add the browser "Start mc session" flow: name, task/focus, tool, policy,
-  repo/workspace selector. No command field.
+- Add the browser "Start mc session" flow: name, task/focus, tool, policy, and
+  repo select-list loaded from `GET /api/mc/repos`. No command field and no raw
+  repo text field.
 - Auto-attach when a newly started cloud session becomes attachable, or keep a
   clear booting/live state if auto-attach is deferred.
 - Screen-state quality gate.
@@ -856,10 +875,11 @@ In scope:
     `memoro-cli` version and first supported coding tool.
   - prove the `MC_CLOUD_RUNTIME` binding can build/provision in local/staging
     Wrangler.
-  - bootstrap the repo/workspace selected by the typed create payload before
-    the typed launcher runs.
-  - tighten the runtime token from one-day `sessions.write` to a narrower
-    runtime-only scope when the server auth surface supports it.
+  - bootstrap the repo/workspace selected by `repo_id` before the typed launcher
+    runs.
+  - move runtime auth and private repo git access behind an out-of-session
+    capability/sidecar; then tighten the token from one-day `sessions.write` to
+    a narrower runtime-only scope when the server auth surface supports it.
   - reconcile the pending row with the broker-advertised `{source_id,
     coding_session_id}` once the sandbox-local broker connects.
 - browser UI:
@@ -871,21 +891,24 @@ Not in scope:
 - General terminal.
 - Arbitrary command execution API.
 - Full provider-token/vault UX beyond the minimal runtime token path.
+- Private repo clone/fetch/push using secrets inside the session env/files.
 
 Gates:
 - Staging/manual smoke: start cloud session, see `MC_CLOUD_RUNTIME` process,
   broker connects as `source_kind=cloud`, attach, type, detach.
 - Route/DO tests for booting-to-broker reconciliation.
 - Coding app tests for typed start UI and no free command field.
-- Regression tests keep proving no token leaks and only typed launch fields
-  become the runtime command.
+- Regression tests keep proving no raw repo refs from browser, no credentialed
+  Git URLs in runtime commands, no visible session env token, and only typed
+  launch fields become the runtime command.
 ```
 
 ## Open decisions before Phase 5
 
-- Cloud repo bootstrap: fixed prepared repo for dogfood, user-selected repo
-  clone, or empty coordinator repo. Lean: fixed prepared repo for the first
-  dogfood path, then user-selected repo.
+- Cloud repo bootstrap: server catalog `repo_id` is the product path. Public
+  clone refs can bootstrap dogfood; private repo access needs a trusted
+  capability/sidecar that consumes secrets without exposing values to the
+  session.
 - Cloud provider auth: user-vault materialisation, Memoro-managed provider
   key, or tool-specific OAuth. Lean: one supported adapter first, with explicit
   product/security choice before public use.

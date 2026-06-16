@@ -67,7 +67,7 @@ describe('launchBrokerOwnedSession', () => {
         launched = event;
       },
       deps: {
-        getRepoContext: async () => ({ remoteUrl: 'git@example.com:org/repo.git', branch: 'main', toplevel: '/repo' }),
+        getRepoContext: async () => ({ remoteUrl: 'https://token:secret@github.com/org/repo.git', branch: 'main', toplevel: '/repo' }),
         ensureCoordinatorSlashCommand: async () => {},
         installUpdateCommand: async () => {},
         readConfig: async () => ({ apiUrl: 'https://memoro.test' }),
@@ -80,7 +80,7 @@ describe('launchBrokerOwnedSession', () => {
         },
         hostname: () => 'machine',
         lookupOrMint: async (identity) => {
-          assert.equal(identity.repoIdentity, 'git@example.com:org/repo.git');
+          assert.equal(identity.repoIdentity, 'https://token:secret@github.com/org/repo.git');
           assert.equal(identity.machineId, 'machine');
           assert.match(identity.llmSessionId, /^mc-10000-/);
           return 'sess_abc';
@@ -109,6 +109,7 @@ describe('launchBrokerOwnedSession', () => {
     assert.equal(msg.session.sidecars.machineId, 'machine');
     assert.equal(msg.session.sidecars.source, 'claude-code');
     assert.equal(msg.session.sidecars.repo, 'repo');
+    assert.equal(msg.session.sidecars.repoRef, 'org/repo');
     assert.equal(msg.session.sidecars.branch, 'main');
     assert.match(msg.session.sidecars.sockPath, /sess_abc\.sock$/);
     assert.match(msg.session.sidecars.metaPath, /sess_abc\.json$/);
@@ -182,7 +183,7 @@ describe('launchBrokerOwnedSession', () => {
     });
     assert.equal(requests[0].session.name, 'cloud-coordinator');
     assert.equal(requests[0].session.sidecars.token, 'env_tok');
-    assert.equal(requests[0].session.env.MEMORO_TOKEN, 'env_tok');
+    assert.equal(requests[0].session.env.MEMORO_TOKEN, undefined);
   });
 
   test('repairs headless terminal env for Claude broker launches too', async () => {
