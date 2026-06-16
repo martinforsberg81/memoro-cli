@@ -123,14 +123,15 @@ tool state intact.
   brokers today, and Memoro Cloud sandboxes next. Phase 1 shipped PTY extraction;
   Phase 2 shipped broker-owned local launch/attach plus multi-attach input;
   Phase 3a shipped the CLI-side cloud bridge; Phase 4 source-aware list/attach
-  is live across memoro-cli + Memoro. Phase 5a/5b is in PR: Memoro has the
-  typed `/api/mc/cloud-sessions` lifecycle/booting-row contract plus a separate
-  `MC_CLOUD_RUNTIME` Sandbox image/binding that mints an unlisted runtime token,
-  starts the typed `mc cloud-session start` process, records runtime status, and
-  stops/revokes on lifecycle stop; memoro-cli has the internal headless launcher
-  and cloud broker env-token auth. Next build is the live proof: pin/publish the
-  sandbox image inputs, deploy, and reconcile the pending row when the cloud
-  broker advertises the live session.
+  is live across memoro-cli + Memoro. Phase 5a/5b shipped the typed
+  `/api/mc/cloud-sessions` lifecycle, `MC_CLOUD_RUNTIME` Sandbox launcher,
+  booting/runtime status, and stop-time token revoke. Phase 5c now tightens the
+  product/security contract: cloud start uses a server repo catalog (`repo_id`),
+  not browser-entered repo strings; broker sessions advertise credential-scrubbed
+  repo refs; and the LLM child env is scrubbed of the runtime token. Next gate is
+  the real capability boundary for runtime auth plus private repo clone/fetch:
+  secrets must be consumed by a control-plane/sidecar, never exposed to the
+  session env, argv, files, prompt, transcript, or browser.
   → `docs/plans/hosted-live-session-workspace.md`
 - **Ensemble & hierarchy** — `later · M · —`
   Multi-model ensembles and recursive mid-agents, layered on the spine. → §10b/§10c

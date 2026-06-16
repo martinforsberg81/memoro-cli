@@ -324,6 +324,7 @@ function buildSessionMetadata({ id, name, cwd, sidecars } = {}) {
   );
   return {
     repo: stringOrNull(plainSidecars.repo) || fromCwd.repo,
+    repo_ref: stringOrNull(plainSidecars.repo_ref) || stringOrNull(plainSidecars.repoRef),
     branch: stringOrNull(plainSidecars.branch),
     label: stringOrNull(plainSidecars.label),
     worktree_name: worktreeName && worktreeName !== id ? worktreeName : fromCwd.worktree_name,

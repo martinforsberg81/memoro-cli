@@ -82,6 +82,7 @@ export class BrokerSessionSidecars {
       label: this.coding.label || null,
       sock_path: this.coding.sockPath || null,
       repo: this.coding.repo || null,
+      repo_ref: this.coding.repoRef || this.coding.repo_ref || null,
       branch: this.coding.branch || null,
       cwd: this.session.cwd,
       started_at: new Date(this.now()).toISOString(),

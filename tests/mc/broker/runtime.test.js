@@ -182,6 +182,7 @@ describe('BrokerRuntime', () => {
         cwd: '/Users/me/.memoro/mc/worktrees/memoro-cli/alpha',
         sidecars: {
           repo: 'memoro-cli',
+          repoRef: 'martinforsberg81/memoro-cli',
           branch: 'sess/alpha',
           worktreeName: 'alpha',
         },
@@ -191,6 +192,7 @@ describe('BrokerRuntime', () => {
     const [session] = runtime.handle({ type: 'sessions' }).sessions;
     assert.equal(session.name, 'alpha');
     assert.equal(session.repo, 'memoro-cli');
+    assert.equal(session.repo_ref, 'martinforsberg81/memoro-cli');
     assert.equal(session.branch, 'sess/alpha');
     assert.equal(session.worktree_name, 'alpha');
   });

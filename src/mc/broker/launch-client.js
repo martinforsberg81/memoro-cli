@@ -6,7 +6,7 @@ import { installUpdateCommand } from '../../adapters/claude-code.js';
 import { getSecret } from '../../lib/keychain.js';
 import { ACCOUNTS } from '../../commands/auth.js';
 import { DEFAULT_TOOL, readConfig, getApiUrl } from '../../lib/config.js';
-import { getRepoContext, deriveRepoName } from '../../lib/git-context.js';
+import { getRepoContext, deriveRepoName, derivePublicRepoRef } from '../../lib/git-context.js';
 import { lookupOrMint } from '../../lib/coding-session.js';
 import { getPackageVersion } from '../../lib/version.js';
 import { ensureCoordinatorSlashCommand } from '../coordinator-command.js';
@@ -100,6 +100,7 @@ export async function launchBrokerOwnedSession({
     machineId,
     llmSessionId,
   });
+  const repoRef = derivePublicRepoRef(repoContext);
   const paths = brokerSessionPaths(codingSessionId);
 
   stdout.write(renderIntro({
@@ -126,6 +127,7 @@ export async function launchBrokerOwnedSession({
     ...env,
     MEMORO_MC_PARENT: '1',
   };
+  scrubInteractiveSecrets(spawnEnv);
   if (launch.id === 'codex') {
     try {
       const { prepareCloudflareGuardEnv } = await import('../cloudflare-guard.js');
@@ -187,6 +189,7 @@ export async function launchBrokerOwnedSession({
         machineId,
         source: launch.spec.heartbeatSource,
         repo: deriveRepoName(repoContext),
+        repoRef,
         branch: repoContext.branch,
         worktreeName: sessionName || null,
         tool: launch.shortName,
@@ -237,6 +240,10 @@ function isCloudBrokerLaunch(cloudBroker) {
   return cloudBroker?.sourceKind === 'cloud'
     || typeof cloudBroker?.cloudSessionId === 'string'
     || typeof cloudBroker?.sourceId === 'string';
+}
+
+function scrubInteractiveSecrets(env) {
+  delete env.MEMORO_TOKEN;
 }
 
 export { ensureBrokerRunning } from './supervisor.js';

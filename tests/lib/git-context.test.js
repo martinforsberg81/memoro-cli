@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 
-import { getRepoContext, deriveRepoName } from '../../src/lib/git-context.js';
+import { getRepoContext, deriveRepoName, derivePublicRepoRef } from '../../src/lib/git-context.js';
 
 function gitInit(dir) {
   spawnSync('git', ['init', '-q', '-b', 'main'], { cwd: dir });
@@ -113,5 +113,39 @@ describe('deriveRepoName', () => {
   test('returns "unknown" for empty input', () => {
     assert.equal(deriveRepoName(null), 'unknown');
     assert.equal(deriveRepoName({}), 'unknown');
+  });
+});
+
+describe('derivePublicRepoRef', () => {
+  test('uses GitHub owner/repo shorthand for SSH remotes', () => {
+    assert.equal(
+      derivePublicRepoRef({ remoteUrl: 'git@github.com:acme/widgets.git', toplevel: '/tmp/wat' }),
+      'acme/widgets',
+    );
+  });
+
+  test('uses GitHub owner/repo shorthand for HTTPS remotes', () => {
+    assert.equal(
+      derivePublicRepoRef({ remoteUrl: 'https://github.com/acme/widgets.git', toplevel: '/tmp/wat' }),
+      'acme/widgets',
+    );
+  });
+
+  test('strips credentials from generic HTTPS remotes', () => {
+    assert.equal(
+      derivePublicRepoRef({ remoteUrl: 'https://user:secret@git.example.com/team/widgets.git', toplevel: '/tmp/wat' }),
+      'https://git.example.com/team/widgets',
+    );
+  });
+
+  test('returns null for local-only repos and unparseable remotes', () => {
+    assert.equal(
+      derivePublicRepoRef({ remoteUrl: '/tmp/local-only-repo', toplevel: '/tmp/local-only-repo' }),
+      null,
+    );
+    assert.equal(
+      derivePublicRepoRef({ remoteUrl: 'not a clone url', toplevel: '/tmp/wat' }),
+      null,
+    );
   });
 });
