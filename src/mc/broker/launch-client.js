@@ -202,7 +202,8 @@ export async function launchBrokerOwnedSession({
     return { code: 1 };
   }
 
-  const cloud = await ensureCloudBroker(cloudBroker).catch((err) => ({ ok: false, error: err.message || String(err) }));
+  const cloud = await Promise.resolve(ensureCloudBroker(cloudBroker))
+    .catch((err) => ({ ok: false, error: err.message || String(err) }));
   if (!cloud?.ok) {
     stderr.write(`mc: broker cloud bridge not started (${cloud?.error || 'unknown'}); continuing with local broker only\n`);
   }
