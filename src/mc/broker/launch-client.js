@@ -21,6 +21,8 @@ import { renderIntro } from '../session-intro.js';
 import { ensureBrokerRunning } from './supervisor.js';
 import { ensureCloudBrokerConnected } from './cloud-supervisor.js';
 
+const CLOUD_BROKER_START_TIMEOUT_MS = 10_000;
+
 export async function launchBrokerOwnedSession({
   cwd,
   label = null,
@@ -109,7 +111,12 @@ export async function launchBrokerOwnedSession({
     tool: launch.spec.label,
   }));
 
-  const broker = await ensureBroker({ request, stderr, deps });
+  const broker = await ensureBroker({
+    request,
+    stderr,
+    deps,
+    ...(isCloudBrokerLaunch(cloudBroker) ? { timeoutMs: CLOUD_BROKER_START_TIMEOUT_MS } : {}),
+  });
   if (!broker.ok) {
     stderr.write(`mc: broker start failed (${broker.error || 'unknown'})\n`);
     return { code: 1 };
@@ -225,8 +232,15 @@ async function resolveLaunchAuthToken({ env = process.env, getSecretFn = getSecr
   return getSecretFn(ACCOUNTS.TOKEN);
 }
 
+function isCloudBrokerLaunch(cloudBroker) {
+  return cloudBroker?.sourceKind === 'cloud'
+    || typeof cloudBroker?.cloudSessionId === 'string'
+    || typeof cloudBroker?.sourceId === 'string';
+}
+
 export { ensureBrokerRunning } from './supervisor.js';
 
 export const __test__ = {
   resolveLaunchAuthToken,
+  isCloudBrokerLaunch,
 };

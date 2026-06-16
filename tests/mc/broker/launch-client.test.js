@@ -121,6 +121,7 @@ describe('launchBrokerOwnedSession', () => {
     const requests = [];
     let attachCalled = false;
     let cloudArgs = null;
+    let brokerArgs = null;
 
     const res = await launchBrokerOwnedSession({
       cwd: '/repo',
@@ -138,7 +139,10 @@ describe('launchBrokerOwnedSession', () => {
       stderr: streams.stderr,
       env: { TERM: 'xterm-256color', MEMORO_TOKEN: 'env_tok' },
       now: () => 10_000,
-      ensureBroker: async () => ({ ok: true, broker: { pid: 42 } }),
+      ensureBroker: async (args) => {
+        brokerArgs = args;
+        return { ok: true, broker: { pid: 42 } };
+      },
       ensureCloudBroker: async (args) => {
         cloudArgs = args;
         return { ok: true, started: true, pid: 43 };
@@ -169,6 +173,7 @@ describe('launchBrokerOwnedSession', () => {
     assert.equal(res.codingSessionId, 'sess_cloud');
     assert.equal(res.attached, false);
     assert.equal(attachCalled, false);
+    assert.equal(brokerArgs.timeoutMs, 10_000);
     assert.deepEqual(cloudArgs, {
       sourceId: 'cloud:cld_123456',
       sourceKind: 'cloud',
