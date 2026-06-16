@@ -143,7 +143,7 @@ describe('launchBrokerOwnedSession', () => {
         brokerArgs = args;
         return { ok: true, broker: { pid: 42 } };
       },
-      ensureCloudBroker: async (args) => {
+      ensureCloudBroker: (args) => {
         cloudArgs = args;
         return { ok: true, started: true, pid: 43 };
       },
