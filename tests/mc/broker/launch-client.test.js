@@ -136,7 +136,7 @@ describe('launchBrokerOwnedSession', () => {
       },
       stdout: streams.stdout,
       stderr: streams.stderr,
-      env: { TERM: 'xterm-256color' },
+      env: { TERM: 'xterm-256color', MEMORO_TOKEN: 'env_tok' },
       now: () => 10_000,
       ensureBroker: async () => ({ ok: true, broker: { pid: 42 } }),
       ensureCloudBroker: async (args) => {
@@ -155,7 +155,7 @@ describe('launchBrokerOwnedSession', () => {
         getRepoContext: async () => ({ remoteUrl: 'git@example.com:org/repo.git', branch: 'main', toplevel: '/repo' }),
         readConfig: async () => ({ apiUrl: 'https://memoro.test' }),
         getApiUrl: () => null,
-        getSecret: async () => 'tok',
+        getSecret: async () => assert.fail('env MEMORO_TOKEN should avoid keychain lookup'),
         groundSession: async () => ({ ok: true }),
         ensureCoordinatorSlashCommand: async () => {},
         installUpdateCommand: async () => {},
@@ -176,6 +176,8 @@ describe('launchBrokerOwnedSession', () => {
       cloudSessionId: 'cld_123456',
     });
     assert.equal(requests[0].session.name, 'cloud-coordinator');
+    assert.equal(requests[0].session.sidecars.token, 'env_tok');
+    assert.equal(requests[0].session.env.MEMORO_TOKEN, 'env_tok');
   });
 
   test('repairs headless terminal env for Claude broker launches too', async () => {
