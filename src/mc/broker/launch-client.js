@@ -30,6 +30,8 @@ export async function launchBrokerOwnedSession({
   argv = [],
   apiArgv = [],
   sendStartupMessage = true,
+  attachAfterLaunch = true,
+  cloudBroker = {},
   request = requestBroker,
   attach = attachBrokerSession,
   ensureBroker = ensureBrokerRunning,
@@ -193,7 +195,7 @@ export async function launchBrokerOwnedSession({
     return { code: 1 };
   }
 
-  const cloud = await ensureCloudBroker().catch((err) => ({ ok: false, error: err.message || String(err) }));
+  const cloud = await ensureCloudBroker(cloudBroker).catch((err) => ({ ok: false, error: err.message || String(err) }));
   if (!cloud?.ok) {
     stderr.write(`mc: broker cloud bridge not started (${cloud?.error || 'unknown'}); continuing with local broker only\n`);
   }
@@ -202,8 +204,12 @@ export async function launchBrokerOwnedSession({
     await onLaunched({ codingSessionId, launch: launchRes });
   }
 
+  if (!attachAfterLaunch) {
+    return { code: 0, codingSessionId, broker: broker.broker || null, attached: false };
+  }
+
   const code = await attach({ id: codingSessionId });
-  return { code, codingSessionId, broker: broker.broker || null };
+  return { code, codingSessionId, broker: broker.broker || null, attached: true };
 }
 
 export function brokerSessionPaths(codingSessionId) {

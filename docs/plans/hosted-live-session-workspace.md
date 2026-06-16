@@ -762,6 +762,22 @@ Status:
 Goal: a signed-in Memoro user can start a cloud-owned `mc` session without any
 local broker being online.
 
+Status:
+
+- **Phase 5a in PR:** Memoro PR #6915 adds `POST /api/mc/cloud-sessions`,
+  `McCloudSessionDO`, strict reject-list validation, booting cloud rows in
+  `/api/mc/sessions`, and Coding app pending status.
+- **Phase 5a in PR:** memoro-cli PR #81 adds the internal typed
+  `mc cloud-session start` runtime entrypoint, headless broker launch, cloud
+  source advertisement, and explicit workspace policy rendering.
+- **Phase 5b in PR:** Memoro PR #6915 now has a separate
+  `MC_CLOUD_RUNTIME` Sandbox image/binding, a pure command/env builder for
+  typed `mc cloud-session start`, runtime process metadata, unlisted
+  sessions.write runtime tokens that are never sent to the browser, and
+  stop-time process kill + token revoke. memoro-cli PR #81 now lets cloud
+  broker auth use `MEMORO_TOKEN` from the sandbox env before falling back to
+  local keychain.
+
 Scope:
 
 - Add `POST /api/mc/cloud-sessions` and `McCloudSessionDO`.
@@ -770,12 +786,15 @@ Scope:
   args.
 - Add a Cloudflare Sandbox image for `mc`: Node, git, pinned memoro-cli, chosen
   LLM tool, and no runtime package-install requirement.
-- Bootstrap a git repo/workspace because `mc new` requires a repo cwd.
-- Mint a short-lived runtime token with a narrow `mc.cloud`-style scope.
-- Materialise the token inside the sandbox via `MEMORO_TOKEN=... memoro-cli
-  login`, then run controlled `mc new <name> <task> --tool <tool>`.
-- Start/ensure sandbox-local `mc broker connect` so the session advertises as
-  `source_kind=cloud` with `source_id=cloud:<cloud_session_id>`.
+- Bootstrap a git repo/workspace because `mc cloud-session start` still needs a
+  repo/workspace cwd before public dogfood.
+- Mint a runtime token for the sandbox. Current PR uses an unlisted
+  one-day `sessions.write` token; later hardening should add a narrower
+  `mc.cloud`-style scope and shorter TTL.
+- Materialise the token only into the sandbox process env as `MEMORO_TOKEN`,
+  then invoke controlled `mc cloud-session start --cloud-session-id <id> ...`.
+- Let the sandbox-local broker advertise as `source_kind=cloud` with
+  `source_id=cloud:<cloud_session_id>`.
 - Reconcile the booting cloud-session row with the broker-advertised live
   session.
 
@@ -817,25 +836,32 @@ Acceptance:
 
 ## Next implementation brief
 
-Start with Phase 5, not a broader shell.
+Continue Phase 5 live proof, not a broader shell.
 
 Next build brief:
 
 ```
-You are implementing Phase 5 of docs/plans/hosted-live-session-workspace.md:
-cloud mc session create MVP.
+You are implementing the next Phase 5 live-proof slice of
+docs/plans/hosted-live-session-workspace.md: cloud mc sandbox bootstrap after
+the server/runtime seam.
 
 Goal:
-- A signed-in Memoro user can start a cloud-owned `mc` session from the browser
-  without any local broker online.
+- A cloud-session create request provisions a sandbox-owned `mc` runtime and
+  turns the booting row into an attachable broker-advertised cloud session.
 - The cloud surface is a typed mc-launch surface, not a shell or command box.
 
 In scope:
-- memoro server:
-  - add `POST /api/mc/cloud-sessions` with a narrow structured payload.
-  - add `McCloudSessionDO` to own sandbox boot/lifecycle.
-  - reject `cmd`, `shell`, arbitrary args/env, and user-chosen raw cwd.
-  - mint a narrow runtime token and start controlled `mc new`.
+- memoro server/deploy:
+  - pin the `Dockerfile.mc-sandbox` build args to the PR/published
+    `memoro-cli` version and first supported coding tool.
+  - prove the `MC_CLOUD_RUNTIME` binding can build/provision in local/staging
+    Wrangler.
+  - bootstrap the repo/workspace selected by the typed create payload before
+    the typed launcher runs.
+  - tighten the runtime token from one-day `sessions.write` to a narrower
+    runtime-only scope when the server auth surface supports it.
+  - reconcile the pending row with the broker-advertised `{source_id,
+    coding_session_id}` once the sandbox-local broker connects.
 - browser UI:
   - add a typed cloud start action/form.
   - show booting/running/error states in the existing source-aware list.
@@ -847,10 +873,12 @@ Not in scope:
 - Full provider-token/vault UX beyond the minimal runtime token path.
 
 Gates:
-- Route/DO tests for create, reject-list, lifecycle state, and limits.
+- Staging/manual smoke: start cloud session, see `MC_CLOUD_RUNTIME` process,
+  broker connects as `source_kind=cloud`, attach, type, detach.
+- Route/DO tests for booting-to-broker reconciliation.
 - Coding app tests for typed start UI and no free command field.
-- Manual browser smoke: start cloud session, see it under source "Memoro Cloud",
-  attach, type, detach.
+- Regression tests keep proving no token leaks and only typed launch fields
+  become the runtime command.
 ```
 
 ## Open decisions before Phase 5

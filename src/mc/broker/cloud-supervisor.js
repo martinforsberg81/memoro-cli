@@ -8,6 +8,10 @@ import { brokerCloudLogPath, brokerCloudPidPath } from './paths.js';
 export function ensureCloudBrokerConnected({
   pidPath = brokerCloudPidPath(),
   logPath = brokerCloudLogPath(),
+  sourceId = null,
+  sourceKind = null,
+  sourceName = null,
+  cloudSessionId = null,
   readFile = readFileSync,
   writeFile = writeFileSync,
   removeFile = rmSync,
@@ -24,7 +28,7 @@ export function ensureCloudBrokerConnected({
     try { removeFile(pidPath, { force: true }); } catch {}
   }
 
-  const spawned = spawnConnector({ logPath });
+  const spawned = spawnConnector({ logPath, sourceId, sourceKind, sourceName, cloudSessionId });
   if (!spawned.ok) return spawned;
   try {
     mkdirSync(dirname(pidPath), { recursive: true, mode: 0o700 });
@@ -46,12 +50,21 @@ export function ensureCloudBrokerConnected({
 export function spawnCloudBrokerConnector({
   logPath = brokerCloudLogPath(),
   mcBin = resolveMcBinPath(),
+  sourceId = null,
+  sourceKind = null,
+  sourceName = null,
+  cloudSessionId = null,
 } = {}) {
   try {
     mkdirSync(dirname(logPath), { recursive: true, mode: 0o700 });
     const out = openSync(logPath, 'a');
     const err = openSync(logPath, 'a');
-    const child = spawn(process.execPath, [mcBin, 'broker', 'connect'], {
+    const child = spawn(process.execPath, [mcBin, ...brokerConnectArgs({
+      sourceId,
+      sourceKind,
+      sourceName,
+      cloudSessionId,
+    })], {
       detached: true,
       stdio: ['ignore', out, err],
       cwd: process.cwd(),
@@ -70,6 +83,20 @@ export function defaultMcBinPath() {
 
 export function resolveMcBinPath(argv = process.argv) {
   return argv[1] || defaultMcBinPath();
+}
+
+export function brokerConnectArgs({
+  sourceId = null,
+  sourceKind = null,
+  sourceName = null,
+  cloudSessionId = null,
+} = {}) {
+  const args = ['broker', 'connect'];
+  addFlag(args, '--source-id', sourceId);
+  addFlag(args, '--source-kind', sourceKind);
+  addFlag(args, '--source-name', sourceName);
+  addFlag(args, '--cloud-session-id', cloudSessionId);
+  return args;
 }
 
 export function isProcessAlive(pid) {
@@ -100,5 +127,11 @@ function readPid(path, { readFile = readFileSync } = {}) {
     return Number.isInteger(pid) && pid > 0 ? pid : null;
   } catch {
     return null;
+  }
+}
+
+function addFlag(args, flag, value) {
+  if (typeof value === 'string' && value.length > 0) {
+    args.push(flag, value);
   }
 }

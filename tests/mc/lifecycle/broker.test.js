@@ -237,4 +237,27 @@ describe('mc broker command', () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  test('broker cloud auth prefers MEMORO_TOKEN env for sandbox runtimes', async () => {
+    let keychainRead = false;
+    const auth = await __test__.resolveBrokerAuthToken({
+      env: { MEMORO_TOKEN: '  mem_runtime_token  ' },
+      getSecretFn: async () => {
+        keychainRead = true;
+        return 'mem_keychain_token';
+      },
+    });
+
+    assert.deepEqual(auth, { token: 'mem_runtime_token', source: 'env' });
+    assert.equal(keychainRead, false);
+  });
+
+  test('broker cloud auth falls back to keychain when env token is absent', async () => {
+    const auth = await __test__.resolveBrokerAuthToken({
+      env: {},
+      getSecretFn: async () => 'mem_keychain_token',
+    });
+
+    assert.deepEqual(auth, { token: 'mem_keychain_token', source: 'keychain' });
+  });
 });

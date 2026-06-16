@@ -122,15 +122,15 @@ tool state intact.
   PTY viewport into `mc` sessions owned by explicit sources: local machine
   brokers today, and Memoro Cloud sandboxes next. Phase 1 shipped PTY extraction;
   Phase 2 shipped broker-owned local launch/attach plus multi-attach input;
-  Phase 3a shipped the CLI-side cloud bridge (`mc broker connect`,
-  `/api/mc/broker/ws` control, session inventory, `attach_request` → broker
-  attach stream bridge). Phase 4 source-aware list/attach is implemented in the
-  current memoro-cli + Memoro branches: broker connect carries source identity
-  in the control WS + `hello`/sessions payloads, Memoro stores/lists/attaches by
-  `{source_id, coding_session_id}`, and the Coding app groups sessions by
-  source without exposing a free command field. Next build is
-  `POST /api/mc/cloud-sessions` + `McCloudSessionDO` to start a sandbox-owned
-  `mc new` without requiring any local broker online.
+  Phase 3a shipped the CLI-side cloud bridge; Phase 4 source-aware list/attach
+  is live across memoro-cli + Memoro. Phase 5a/5b is in PR: Memoro has the
+  typed `/api/mc/cloud-sessions` lifecycle/booting-row contract plus a separate
+  `MC_CLOUD_RUNTIME` Sandbox image/binding that mints an unlisted runtime token,
+  starts the typed `mc cloud-session start` process, records runtime status, and
+  stops/revokes on lifecycle stop; memoro-cli has the internal headless launcher
+  and cloud broker env-token auth. Next build is the live proof: pin/publish the
+  sandbox image inputs, deploy, and reconcile the pending row when the cloud
+  broker advertises the live session.
   → `docs/plans/hosted-live-session-workspace.md`
 - **Ensemble & hierarchy** — `later · M · —`
   Multi-model ensembles and recursive mid-agents, layered on the spine. → §10b/§10c

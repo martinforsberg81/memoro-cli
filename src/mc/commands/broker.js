@@ -126,7 +126,7 @@ async function runCloudConnection(opts, io = {}) {
   try {
     const config = await readConfig();
     const apiUrl = getApiUrl(opts.rawArgv || []) || config.apiUrl;
-    const token = await getSecret(ACCOUNTS.TOKEN);
+    const { token } = await resolveBrokerAuthToken();
     if (!token) {
       unregisterPid?.();
       return { ok: false, error: 'no Memoro token' };
@@ -307,4 +307,22 @@ export function parseArgs(argv) {
   return opts;
 }
 
-export const __test__ = { formatDuration, formatStatus, START_POLL_MS, POLL_INTERVAL_MS, CONNECT_READY_TIMEOUT_MS, registerCloudConnectorPid };
+async function resolveBrokerAuthToken({
+  env = process.env,
+  getSecretFn = getSecret,
+} = {}) {
+  const envToken = typeof env?.MEMORO_TOKEN === 'string' ? env.MEMORO_TOKEN.trim() : '';
+  if (envToken) return { token: envToken, source: 'env' };
+  const token = await getSecretFn(ACCOUNTS.TOKEN);
+  return { token, source: token ? 'keychain' : null };
+}
+
+export const __test__ = {
+  formatDuration,
+  formatStatus,
+  START_POLL_MS,
+  POLL_INTERVAL_MS,
+  CONNECT_READY_TIMEOUT_MS,
+  registerCloudConnectorPid,
+  resolveBrokerAuthToken,
+};
