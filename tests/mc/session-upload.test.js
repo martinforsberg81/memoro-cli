@@ -75,36 +75,44 @@ describe('mc session upload scheduler', () => {
 
   test('scheduleSessionUpload spawns a detached upload child in the repo cwd', async () => {
     const calls = [];
-    const result = await scheduleSessionUpload({
-      source: 'claude-code',
-      cwd: '/repo',
-      repoHint: 'repo',
-      deps: {
-        binJs: '/pkg/src/bin.js',
-        logPath: '/tmp/memoro-test-hook.log',
-        findLatestClaudeSession: async () => ({ path: '/tmp/t.jsonl', cwd: '/repo' }),
-        openSync: () => 99,
-        spawn: (bin, args, opts) => {
-          calls.push({ bin, args, opts });
-          return { pid: 123, unref() { calls.push({ unref: true }); } };
+    const previousToken = process.env.MEMORO_TOKEN;
+    process.env.MEMORO_TOKEN = 'mem_runtime_secret';
+    try {
+      const result = await scheduleSessionUpload({
+        source: 'claude-code',
+        cwd: '/repo',
+        repoHint: 'repo',
+        deps: {
+          binJs: '/pkg/src/bin.js',
+          logPath: '/tmp/memoro-test-hook.log',
+          findLatestClaudeSession: async () => ({ path: '/tmp/t.jsonl', cwd: '/repo' }),
+          openSync: () => 99,
+          spawn: (bin, args, opts) => {
+            calls.push({ bin, args, opts });
+            return { pid: 123, unref() { calls.push({ unref: true }); } };
+          },
         },
-      },
-    });
+      });
 
-    assert.equal(result.ok, true);
-    assert.equal(result.transcriptPath, '/tmp/t.jsonl');
-    assert.equal(calls[0].bin, process.execPath);
-    assert.deepEqual(calls[0].args.slice(0, 7), [
-      '/pkg/src/bin.js',
-      'session',
-      'upload',
-      '/tmp/t.jsonl',
-      '--tool',
-      'claude-code',
-      '--yes',
-    ]);
-    assert.equal(calls[0].opts.detached, true);
-    assert.equal(calls[0].opts.cwd, '/repo');
-    assert.equal(calls[1].unref, true);
+      assert.equal(result.ok, true);
+      assert.equal(result.transcriptPath, '/tmp/t.jsonl');
+      assert.equal(calls[0].bin, process.execPath);
+      assert.deepEqual(calls[0].args.slice(0, 7), [
+        '/pkg/src/bin.js',
+        'session',
+        'upload',
+        '/tmp/t.jsonl',
+        '--tool',
+        'claude-code',
+        '--yes',
+      ]);
+      assert.equal(calls[0].opts.detached, true);
+      assert.equal(calls[0].opts.cwd, '/repo');
+      assert.equal(calls[0].opts.env.MEMORO_TOKEN, undefined);
+      assert.equal(calls[1].unref, true);
+    } finally {
+      if (previousToken === undefined) delete process.env.MEMORO_TOKEN;
+      else process.env.MEMORO_TOKEN = previousToken;
+    }
   });
 });
