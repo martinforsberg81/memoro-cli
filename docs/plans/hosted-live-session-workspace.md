@@ -793,6 +793,15 @@ Status:
   catalog use. The LLM child env is scrubbed of `MEMORO_TOKEN`; remaining
   hardening is to move runtime auth and private repo access fully behind
   out-of-session capabilities.
+- **Phase 5d foundation:** Memoro now has a non-user-facing `mc.cloud` token
+  scope accepted only on runtime/broker/lens/session-ingest boundaries, while
+  user cloud-start APIs still require `sessions.write`. The repo catalog is now
+  built from repo grants, with broker sessions as one grant source and explicit
+  grants ready for GitHub/private access. Cloud records carry explicit
+  `lifecycle_state`, and memoro-cli stops broker-daemon/upload children from
+  inheriting raw Memoro tokens. The known remaining gap is cloud connector auth:
+  it still needs an out-of-session sidecar/capability so the token is not
+  delivered by process env or WebSocket query params.
 
 Scope:
 
@@ -804,10 +813,11 @@ Scope:
   LLM tool, and no runtime package-install requirement.
 - Bootstrap a git repo/workspace because `mc cloud-session start` still needs a
   repo/workspace cwd before public dogfood.
-- Mint a runtime capability for the sandbox. The current MVP still uses an
-  unlisted one-day `sessions.write` token for the launcher; the LLM child env is
-  scrubbed, and the next security gate is replacing that launcher env with a
-  true out-of-session control-plane capability and a narrower `mc.cloud` scope.
+- Mint a runtime capability for the sandbox. The current MVP uses an unlisted
+  one-day `mc.cloud` token for runtime/broker/session/lens calls; the LLM child
+  env and non-auth child processes are scrubbed, and the next security gate is
+  replacing token delivery through process env / WS query params with a true
+  out-of-session control-plane capability.
 - Let the sandbox-local broker advertise as `source_kind=cloud` with
   `source_id=cloud:<cloud_session_id>`.
 - Reconcile the booting cloud-session row with the broker-advertised live
@@ -912,8 +922,10 @@ Gates:
 - Cloud provider auth: user-vault materialisation, Memoro-managed provider
   key, or tool-specific OAuth. Lean: one supported adapter first, with explicit
   product/security choice before public use.
-- Runtime token scope: add a narrow `mc.cloud`/`coding.session` scope rather
-  than using `full`.
+- Runtime token delivery: `mc.cloud` now exists as the narrow internal runtime
+  scope; the remaining decision is how the cloud broker connector receives a
+  capability without raw token bytes in env, argv, files, prompts, logs, or WS
+  query strings.
 - Sandbox terminal persistence: do not depend on Cloudflare's browser-terminal
   SDK for product attach until verified. The preferred MVP path remains
   sandbox-local `mc broker connect` plus existing `PtyStreamDO`.

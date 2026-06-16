@@ -128,10 +128,13 @@ tool state intact.
   booting/runtime status, and stop-time token revoke. Phase 5c now tightens the
   product/security contract: cloud start uses a server repo catalog (`repo_id`),
   not browser-entered repo strings; broker sessions advertise credential-scrubbed
-  repo refs; and the LLM child env is scrubbed of the runtime token. Next gate is
-  the real capability boundary for runtime auth plus private repo clone/fetch:
-  secrets must be consumed by a control-plane/sidecar, never exposed to the
-  session env, argv, files, prompt, transcript, or browser.
+  repo refs; and the LLM child env is scrubbed of the runtime token. The current
+  foundation slice adds a non-user-facing `mc.cloud` runtime scope, factors the
+  server repo catalog into repo grants, adds explicit cloud lifecycle state, and
+  stops broker-daemon/upload children from inheriting raw Memoro tokens. Next
+  gate is the real capability boundary for cloud connector auth plus private
+  repo clone/fetch: secrets must be consumed by a control-plane/sidecar, never
+  exposed to the session env, argv, files, prompt, transcript, or browser.
   → `docs/plans/hosted-live-session-workspace.md`
 - **Ensemble & hierarchy** — `later · M · —`
   Multi-model ensembles and recursive mid-agents, layered on the spine. → §10b/§10c

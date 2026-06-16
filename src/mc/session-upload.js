@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { CONFIG_DIR } from '../lib/config.js';
 import { findLatestClaudeSession } from '../lib/claude.js';
 import { findLatestCodexSession } from '../lib/codex.js';
+import { scrubRuntimeSecretsFromEnv } from './runtime-secrets.js';
 
 export async function findLatestTranscriptForTool({
   source,
@@ -56,7 +57,7 @@ export async function scheduleSessionUpload({
     stdio: ['ignore', out, err],
     cwd: transcript.cwd || cwd || process.cwd(),
     env: {
-      ...process.env,
+      ...scrubRuntimeSecretsFromEnv(process.env),
       MEMORO_NO_UPDATE_CHECK: '1',
     },
   });

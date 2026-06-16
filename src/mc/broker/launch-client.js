@@ -20,6 +20,7 @@ import { attachBrokerSession } from './attach-client.js';
 import { renderIntro } from '../session-intro.js';
 import { ensureBrokerRunning } from './supervisor.js';
 import { ensureCloudBrokerConnected } from './cloud-supervisor.js';
+import { scrubRuntimeSecretsInPlace } from '../runtime-secrets.js';
 
 const CLOUD_BROKER_START_TIMEOUT_MS = 10_000;
 
@@ -127,7 +128,7 @@ export async function launchBrokerOwnedSession({
     ...env,
     MEMORO_MC_PARENT: '1',
   };
-  scrubInteractiveSecrets(spawnEnv);
+  scrubRuntimeSecretsInPlace(spawnEnv);
   if (launch.id === 'codex') {
     try {
       const { prepareCloudflareGuardEnv } = await import('../cloudflare-guard.js');
@@ -240,10 +241,6 @@ function isCloudBrokerLaunch(cloudBroker) {
   return cloudBroker?.sourceKind === 'cloud'
     || typeof cloudBroker?.cloudSessionId === 'string'
     || typeof cloudBroker?.sourceId === 'string';
-}
-
-function scrubInteractiveSecrets(env) {
-  delete env.MEMORO_TOKEN;
 }
 
 export { ensureBrokerRunning } from './supervisor.js';

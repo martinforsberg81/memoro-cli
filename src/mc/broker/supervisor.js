@@ -5,6 +5,7 @@ import { dirname } from 'node:path';
 import { requestBroker } from './client.js';
 import { brokerLogPath } from './paths.js';
 import { BROKER_PROTOCOL_VERSION } from './daemon.js';
+import { scrubRuntimeSecretsFromEnv } from '../runtime-secrets.js';
 
 export const START_POLL_MS = 1_500;
 export const POLL_INTERVAL_MS = 100;
@@ -95,19 +96,26 @@ async function stopExistingBroker({ request, sleep, timeoutMs, intervalMs }) {
   return { ok: false, error: 'stale broker did not stop in time' };
 }
 
-export function spawnBrokerDaemon({ readyFile = null } = {}) {
-  const logPath = brokerLogPath();
+export function spawnBrokerDaemon({
+  readyFile = null,
+  logPath = brokerLogPath(),
+  env = process.env,
+  argv = process.argv,
+  cwd = process.cwd(),
+  spawnImpl = spawn,
+  openSyncImpl = openSync,
+} = {}) {
   try {
     mkdirSync(dirname(logPath), { recursive: true, mode: 0o700 });
-    const out = openSync(logPath, 'a');
-    const err = openSync(logPath, 'a');
-    const args = [process.execPath, process.argv[1], 'broker', '--daemon'];
+    const out = openSyncImpl(logPath, 'a');
+    const err = openSyncImpl(logPath, 'a');
+    const args = [process.execPath, argv[1], 'broker', '--daemon'];
     if (readyFile) args.push('--ready-file', readyFile);
-    const child = spawn(args[0], args.slice(1), {
+    const child = spawnImpl(args[0], args.slice(1), {
       detached: true,
       stdio: ['ignore', out, err],
-      cwd: process.cwd(),
-      env: process.env,
+      cwd,
+      env: scrubRuntimeSecretsFromEnv(env),
     });
     child.unref();
     return { ok: true, pid: child.pid };

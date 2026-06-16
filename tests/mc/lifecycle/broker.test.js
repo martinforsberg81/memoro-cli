@@ -6,6 +6,7 @@ import test, { describe } from 'node:test';
 
 import { __test__, parseArgs, runBrokerWith } from '../../../src/mc/commands/broker.js';
 import { BROKER_PROTOCOL_VERSION } from '../../../src/mc/broker/daemon.js';
+import { spawnBrokerDaemon } from '../../../src/mc/broker/supervisor.js';
 
 function io() {
   let stdout = '';
@@ -148,6 +149,31 @@ describe('mc broker command', () => {
     assert.equal(out.started, true);
     assert.equal(out.broker.pid, 77);
     assert.equal(requests >= 2, true);
+  });
+
+  test('spawnBrokerDaemon does not pass runtime secrets to the daemon env', () => {
+    const calls = [];
+    const dir = mkdtempSync(join(tmpdir(), 'mc-broker-daemon-'));
+    try {
+      const res = spawnBrokerDaemon({
+        logPath: join(dir, 'broker.log'),
+        argv: ['/node', '/pkg/src/bin-mc.js'],
+        cwd: '/repo',
+        env: { MEMORO_TOKEN: 'mem_secret', PATH: '/bin' },
+        openSyncImpl: () => 99,
+        spawnImpl: (bin, args, opts) => {
+          calls.push({ bin, args, opts });
+          return { pid: 123, unref() { calls.push({ unref: true }); } };
+        },
+      });
+
+      assert.equal(res.ok, true);
+      assert.equal(calls[0].opts.env.MEMORO_TOKEN, undefined);
+      assert.equal(calls[0].opts.env.PATH, '/bin');
+      assert.equal(calls[1].unref, true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   test('stop sends the stop command', async () => {
