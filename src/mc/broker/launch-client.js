@@ -62,7 +62,7 @@ export async function launchBrokerOwnedSession({
 
   const config = await (deps.readConfig || readConfig)();
   const apiUrl = (deps.getApiUrl || getApiUrl)(apiArgv) || config.apiUrl;
-  const token = await (deps.getSecret || getSecret)(ACCOUNTS.TOKEN);
+  const token = await resolveLaunchAuthToken({ env, getSecretFn: deps.getSecret || getSecret });
   if (!token) {
     stderr.write('mc: no Memoro token. Run `mc` on a real TTY to start the device flow, or `memoro-cli login` for CI.\n');
     return { code: 1 };
@@ -219,4 +219,14 @@ export function brokerSessionPaths(codingSessionId) {
   };
 }
 
+async function resolveLaunchAuthToken({ env = process.env, getSecretFn = getSecret } = {}) {
+  const envToken = typeof env?.MEMORO_TOKEN === 'string' ? env.MEMORO_TOKEN.trim() : '';
+  if (envToken) return envToken;
+  return getSecretFn(ACCOUNTS.TOKEN);
+}
+
 export { ensureBrokerRunning } from './supervisor.js';
+
+export const __test__ = {
+  resolveLaunchAuthToken,
+};
