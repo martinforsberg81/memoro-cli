@@ -80,18 +80,20 @@ export async function launchBrokerOwnedSession({
     deps,
   });
   let groundingLaunchMessage = null;
-  try {
-    const res = await (deps.groundSession || groundSession)({
-      cwd,
-      adapter: launch.adapter,
-      focus,
-    });
-    groundingLaunchMessage = sendStartupMessage ? (res.message || null) : null;
-    if (!res.ok && res.reason) {
-      stderr.write(`mc: grounding skipped (${res.reason}); continuing\n`);
+  if (sendStartupMessage) {
+    try {
+      const res = await (deps.groundSession || groundSession)({
+        cwd,
+        adapter: launch.adapter,
+        focus,
+      });
+      groundingLaunchMessage = res.message || null;
+      if (!res.ok && res.reason) {
+        stderr.write(`mc: grounding skipped (${res.reason}); continuing\n`);
+      }
+    } catch (err) {
+      stderr.write(`mc: grounding failed (${err.message}); continuing without it\n`);
     }
-  } catch (err) {
-    stderr.write(`mc: grounding failed (${err.message}); continuing without it\n`);
   }
 
   const machineId = (deps.hostname || hostname)();
