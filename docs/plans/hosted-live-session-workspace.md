@@ -808,6 +808,13 @@ Status:
   broker-owned PTY launch path, so the differences are explicit and testable:
   new sessions get startup grounding, resume relaunches suppress a fresh
   prompt, and cloud sessions are headless source-scoped launches.
+- **Phase 5f MVP constraint:** Cloud now follows the local worktree mental
+  model, but deliberately with one active cloud worktree/session per user. The
+  server resolves a selected launch target, the runtime prepares the sandbox
+  worktree, then `mc` starts inside that worktree and launches the LLM tool
+  through the normal session-intent path. `mc` stays thin: it carries session
+  identity, source metadata, policy, task, and cwd; repo/bootstrap access stays
+  in the trusted runtime/control plane.
 
 Scope:
 
@@ -817,8 +824,12 @@ Scope:
   `shell`, `cwd`, `env`, and arbitrary args.
 - Add a Cloudflare Sandbox image for `mc`: Node, git, pinned memoro-cli, chosen
   LLM tool, and no runtime package-install requirement.
-- Bootstrap a git repo/workspace because `mc cloud-session start` still needs a
-  repo/workspace cwd before public dogfood.
+- Enforce one active cloud session/worktree per user for the MVP. A second
+  create request must return or reject against the existing active session until
+  the user explicitly stops/replaces it.
+- Bootstrap a sandbox worktree for the selected launch target before
+  `mc cloud-session start` runs. The initial implementation may clone a public
+  Git ref; private repo clone/fetch waits for the trusted capability/sidecar.
 - Mint a runtime capability for the sandbox. The current MVP uses an unlisted
   one-day `mc.cloud` token for runtime/broker/session/lens calls; the LLM child
   env and non-auth child processes are scrubbed, and the next security gate is
@@ -837,6 +848,9 @@ Acceptance:
 
 - Browser can start a cloud `mc` session while no local user broker is
   connected.
+- Creating another cloud session while one is booting/running returns the active
+  cloud session or requires explicit stop/replace; it never silently creates a
+  parallel cloud worktree.
 - The cloud session appears in `GET /api/mc/sessions` under source "Memoro
   Cloud".
 - Browser attach streams to the cloud-owned PTY through the same `PtyStreamDO`
@@ -895,8 +909,9 @@ In scope:
     `memoro-cli` version and first supported coding tool.
   - prove the `MC_CLOUD_RUNTIME` binding can build/provision in local/staging
     Wrangler.
-  - bootstrap the repo/workspace selected by `repo_id` before the typed launcher
-    runs.
+  - enforce one active cloud worktree/session per user for the MVP.
+  - bootstrap the sandbox worktree selected by `repo_id` before the typed
+    launcher runs.
   - move runtime auth and private repo git access behind an out-of-session
     capability/sidecar; then tighten the token from one-day `sessions.write` to
     a narrower runtime-only scope when the server auth surface supports it.
@@ -910,6 +925,8 @@ In scope:
 Not in scope:
 - General terminal.
 - Arbitrary command execution API.
+- Parallel cloud sessions/worktrees per user.
+- Mirroring local dirty/uncommitted work into cloud.
 - Full provider-token/vault UX beyond the minimal runtime token path.
 - Private repo clone/fetch/push using secrets inside the session env/files.
 
@@ -923,12 +940,12 @@ Gates:
   launch fields become the runtime command.
 ```
 
-## Open decisions before Phase 5
+## Open decisions before broad cloud use
 
-- Cloud repo bootstrap: server catalog `repo_id` is the product path. Public
-  clone refs can bootstrap dogfood; private repo access needs a trusted
-  capability/sidecar that consumes secrets without exposing values to the
-  session.
+- Cloud worktree bootstrap: server catalog `repo_id` is the product path. Public
+  clone refs can bootstrap dogfood in the single-worktree MVP; private repo
+  access needs a trusted capability/sidecar that consumes secrets without
+  exposing values to the session.
 - Cloud provider auth: user-vault materialisation, Memoro-managed provider
   key, or tool-specific OAuth. Lean: one supported adapter first, with explicit
   product/security choice before public use.
