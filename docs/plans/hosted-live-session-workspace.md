@@ -802,6 +802,12 @@ Status:
   inheriting raw Memoro tokens. The known remaining gap is cloud connector auth:
   it still needs an out-of-session sidecar/capability so the token is not
   delivered by process env or WebSocket query params.
+- **Phase 5e integration:** Cloud mc now shares the same memoro-cli launch
+  contract as ordinary mc. `mc new`, `mc resume`, and internal
+  `mc cloud-session start` render through `session-intent` before calling the
+  broker-owned PTY launch path, so the differences are explicit and testable:
+  new sessions get startup grounding, resume relaunches suppress a fresh
+  prompt, and cloud sessions are headless source-scoped launches.
 
 Scope:
 
@@ -818,6 +824,10 @@ Scope:
   env and non-auth child processes are scrubbed, and the next security gate is
   replacing token delivery through process env / WS query params with a true
   out-of-session control-plane capability.
+- Keep cloud start as a mode of ordinary mc session launch, not a parallel
+  launcher. The CLI owns adapter selection, grounding/startup prompt behavior,
+  broker launch, sidecars, source metadata, and policy rendering through the
+  shared session-intent seam.
 - Let the sandbox-local broker advertise as `source_kind=cloud` with
   `source_id=cloud:<cloud_session_id>`.
 - Reconcile the booting cloud-session row with the broker-advertised live

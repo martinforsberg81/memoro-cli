@@ -1,10 +1,15 @@
 import { resolveToolInput } from '../../adapters/index.js';
 import { DEFAULT_TOOL } from '../../lib/config.js';
 import { launchBrokerOwnedSession } from '../broker/launch-client.js';
-import { resolveEffectivePolicy } from '../policy.js';
+import {
+  buildCloudSessionLaunchIntent,
+  DEFAULT_CLOUD_SOURCE_NAME,
+} from '../session-intent.js';
+
+export { cloudPolicyForLaunch } from '../session-intent.js';
 
 const DEFAULT_POLICY = 'workspace-write';
-const DEFAULT_SOURCE_NAME = 'Memoro Cloud';
+const DEFAULT_SOURCE_NAME = DEFAULT_CLOUD_SOURCE_NAME;
 const CLOUD_SESSION_ID_RE = /^cld_[a-zA-Z0-9_-]{6,}$/;
 const SOURCE_ID_RE = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/;
 const NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/;
@@ -65,40 +70,22 @@ export async function runCloudSessionWith(opts, deps = {}) {
   const sourceName = cloud.sourceName || DEFAULT_SOURCE_NAME;
   const sourceId = cloud.sourceId || `cloud:${cloud.cloudSessionId}`;
   const baseEnv = deps.env || process.env;
-  const launchEnv = {
-    ...baseEnv,
-    MC_SOURCE_ID: sourceId,
-    MC_SOURCE_KIND: 'cloud',
-    MC_SOURCE_NAME: sourceName,
-    MC_CLOUD_SESSION_ID: cloud.cloudSessionId,
-    MC_CLOUD_SESSION_POLICY: cloud.policy,
-  };
+  const launchIntent = buildCloudSessionLaunchIntent({
+    cloud: { ...cloud, sourceId, sourceName },
+    cwd: (deps.cwd || (() => process.cwd()))(),
+    env: baseEnv,
+  });
   const launchStdout = opts.json
     ? quietLaunchStdout(stdout)
     : stdout;
   const launch = deps.launchBrokerOwnedSession || launchBrokerOwnedSession;
   const result = await launch({
-    cwd: (deps.cwd || (() => process.cwd()))(),
-    sessionName: cloud.name,
-    label: null,
-    focus: cloud.task,
-    tool: cloud.launchTool,
-    argv: [],
-    apiArgv: [],
-    sendStartupMessage: true,
-    attachAfterLaunch: false,
-    cloudBroker: {
-      sourceId,
-      sourceKind: 'cloud',
-      sourceName,
-      cloudSessionId: cloud.cloudSessionId,
-    },
+    ...launchIntent,
     stdout: launchStdout,
     stderr,
-    env: launchEnv,
     deps: {
       ...(deps.launchDeps || {}),
-      resolvePolicyForWrap: ({ tool }) => cloudPolicyForLaunch(cloud.policy, tool || cloud.tool),
+      ...(launchIntent.deps || {}),
     },
   });
 
@@ -210,18 +197,6 @@ export function validateCloudSessionOptions(opts) {
       workspaceRef: stringOrNull(opts.workspaceRef),
     },
   };
-}
-
-export function cloudPolicyForLaunch(policy, tool) {
-  const workspace = policy === 'read-only' ? 'read-only' : 'worktree';
-  return resolveEffectivePolicy({
-    tool,
-    entry: {
-      policy: {
-        permissions: { workspace },
-      },
-    },
-  });
 }
 
 function valueAfter(argv, index) {

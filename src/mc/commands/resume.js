@@ -18,6 +18,7 @@ import { DEFAULT_TOOL } from '../../lib/config.js';
 import { launchBrokerOwnedSession } from '../broker/launch-client.js';
 import { attachBrokerSession } from '../broker/attach-client.js';
 import { requestBroker } from '../broker/client.js';
+import { buildResumeSessionLaunchIntent } from '../session-intent.js';
 import {
   buildSessionListView,
   fetchActiveCodingSessions,
@@ -148,15 +149,12 @@ export async function launchResumeSession({
 
   const launch = deps.launchBrokerOwnedSession || launchBrokerOwnedSession;
   const result = await launch({
-    cwd: entry.worktree_path,
-    sessionName: entry.name,
-    label: entry.label || null,
-    focus: entry.label || null,
-    tool: launchTool?.id || entry.tool || DEFAULT_TOOL,
-    argv: ['--resume'],
-    apiArgv,
-    sendStartupMessage: false,
-    env,
+    ...buildResumeSessionLaunchIntent({
+      entry,
+      launchTool,
+      apiArgv,
+      env,
+    }),
     stderr,
     onLaunched: ({ codingSessionId }) => {
       const upsert = deps.upsertEntry || upsertEntry;

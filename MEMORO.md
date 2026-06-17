@@ -131,10 +131,13 @@ tool state intact.
   repo refs; and the LLM child env is scrubbed of the runtime token. The current
   foundation slice adds a non-user-facing `mc.cloud` runtime scope, factors the
   server repo catalog into repo grants, adds explicit cloud lifecycle state, and
-  stops broker-daemon/upload children from inheriting raw Memoro tokens. Next
-  gate is the real capability boundary for cloud connector auth plus private
-  repo clone/fetch: secrets must be consumed by a control-plane/sidecar, never
-  exposed to the session env, argv, files, prompt, transcript, or browser.
+  stops broker-daemon/upload children from inheriting raw Memoro tokens. The
+  launch contract is now unified in memoro-cli: local `mc new`, `mc resume`, and
+  internal `mc cloud-session start` all render through one session-intent seam
+  before reaching the broker-owned PTY runtime. Next gate is the real capability
+  boundary for cloud connector auth plus private repo clone/fetch: secrets must
+  be consumed by a control-plane/sidecar, never exposed to the session env,
+  argv, files, prompt, transcript, or browser.
   → `docs/plans/hosted-live-session-workspace.md`
 - **Ensemble & hierarchy** — `later · M · —`
   Multi-model ensembles and recursive mid-agents, layered on the spine. → §10b/§10c

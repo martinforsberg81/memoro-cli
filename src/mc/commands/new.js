@@ -28,6 +28,7 @@ import { resolveToolInput } from '../../adapters/index.js';
 import { DEFAULT_TOOL, readConfig } from '../../lib/config.js';
 import { launchBrokerOwnedSession } from '../broker/launch-client.js';
 import { readRepoLocalConfig, readRepoPolicyConfig, resolveEffectiveConfig } from '../config-model.js';
+import { buildNewSessionLaunchIntent } from '../session-intent.js';
 
 const FALLBACK_TOOL_SHORT = 'codex';
 
@@ -260,14 +261,14 @@ export async function launchNewSession({
 
   const launch = deps.launchBrokerOwnedSession || launchBrokerOwnedSession;
   const result = await launch({
-    cwd: worktreePath,
-    sessionName: entry.name,
-    label: null,
-    focus,
-    tool: launchTool?.id || entry.tool || DEFAULT_TOOL,
-    argv: [],
-    apiArgv,
-    env,
+    ...buildNewSessionLaunchIntent({
+      entry,
+      worktreePath,
+      focus,
+      launchTool,
+      apiArgv,
+      env,
+    }),
     stderr,
     onLaunched: ({ codingSessionId }) => {
       const upsert = deps.upsertEntry || upsertEntry;
