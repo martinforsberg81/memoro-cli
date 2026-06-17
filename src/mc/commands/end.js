@@ -43,11 +43,13 @@ function unprivateMac(p) {
   return p;
 }
 
-export async function run(rawArgv) {
+export async function run(rawArgv, runOpts = {}) {
+  const stdout = runOpts.stdout || process.stdout;
+  const stderr = runOpts.stderr || process.stderr;
   const { args: argv, enabled: emitDirectives } = parseDirectiveFlag(rawArgv);
   const opts = parseArgs(argv);
   if (opts.error) {
-    console.error(`mc: ${opts.error}`);
+    stderr.write(`mc: ${opts.error}\n`);
     return 2;
   }
 
@@ -56,7 +58,7 @@ export async function run(rawArgv) {
   // the existing tests. Defer to a follow-up.
 
   if (opts.names.length === 0) {
-    console.error('mc: usage — `mc end <name> [<name>…] [--force] [--keep-branch] [--dry-run]`');
+    stderr.write('mc: usage — `mc end <name> [<name>…] [--force] [--keep-branch] [--dry-run]`\n');
     return 2;
   }
 
@@ -64,14 +66,14 @@ export async function run(rawArgv) {
   for (const name of opts.names) {
     const entry = findEntry(name);
     if (!entry) {
-      console.error(`mc: unknown session "${name}"`);
+      stderr.write(`mc: unknown session "${name}"\n`);
       return 1;
     }
     targets.push(entry);
   }
 
   // Resolve primary worktree once. All targets are in the same repo.
-  const cwd = process.cwd();
+  const cwd = runOpts.cwd || process.cwd();
   const primary = primaryWorktree(cwd) || primaryWorktree(targets[0].worktree_path) || cwd;
 
   // For each target compute the verdict first (so dry-run gets it cheap
@@ -92,10 +94,10 @@ export async function run(rawArgv) {
         reason: verdict.reason,
       })),
     };
-    if (opts.json) console.log(JSON.stringify(out, null, 2));
+    if (opts.json) stdout.write(`${JSON.stringify(out, null, 2)}\n`);
     else {
       for (const t of out.targets) {
-        process.stdout.write(`${t.name.padEnd(20)} → ${t.verdict}${t.reason ? `  (${t.reason})` : ''}\n`);
+        stdout.write(`${t.name.padEnd(20)} → ${t.verdict}${t.reason ? `  (${t.reason})` : ''}\n`);
       }
     }
     return 0;
@@ -108,12 +110,20 @@ export async function run(rawArgv) {
     if (verdict.value === 'SAFE_TO_END' || verdict.value === 'IS_SQUASH_PHANTOM') continue;
     if (opts.force) continue;
     if (verdict.value === 'IS_ACTIVE_NOW') {
-      console.error(`mc: "${entry.name}" is live — pass --force to end anyway`);
+      const confirmed = await confirmActiveEnd({
+        entry,
+        opts,
+        stdin: runOpts.stdin || process.stdin,
+        stdout,
+        stderr,
+        deps: runOpts.deps || {},
+      });
+      if (confirmed) continue;
       return 1;
     }
     if (verdict.value === 'NEEDS_REVIEW' || verdict.value === 'HAS_UNMERGED_WORK') {
       const why = verdict.reason || 'unsafe';
-      console.error(`mc: "${entry.name}" not safe to end (${why}) — pass --force to override`);
+      stderr.write(`mc: "${entry.name}" not safe to end (${why}) — pass --force to override\n`);
       return 1;
     }
   }
@@ -167,21 +177,57 @@ export async function run(rawArgv) {
       verdict: r0.verdict || plans[0].verdict.value,
       ...(r0.error ? { error: r0.error } : {}),
     };
-    if (opts.json) console.log(JSON.stringify(single, null, 2));
-    else process.stdout.write(`mc: ended ${r0.name}\n`);
+    if (opts.json) stdout.write(`${JSON.stringify(single, null, 2)}\n`);
+    else stdout.write(`mc: ended ${r0.name}\n`);
     return r0.ok ? 0 : 1;
   }
 
   // Bulk
   const allOk = results.every((r) => r.ok);
   if (opts.json) {
-    console.log(JSON.stringify({ ok: allOk, results }, null, 2));
+    stdout.write(`${JSON.stringify({ ok: allOk, results }, null, 2)}\n`);
   } else {
     for (const r of results) {
-      process.stdout.write(`${r.ok ? '✓' : '✗'} ${r.name}${r.error ? ` — ${r.error}` : ''}\n`);
+      stdout.write(`${r.ok ? '✓' : '✗'} ${r.name}${r.error ? ` — ${r.error}` : ''}\n`);
     }
   }
   return allOk ? 0 : 1;
+}
+
+async function confirmActiveEnd({
+  entry,
+  opts,
+  stdin = process.stdin,
+  stdout = process.stdout,
+  stderr = process.stderr,
+  deps = {},
+} = {}) {
+  const isInteractive = deps.isTTY ?? (stdin?.isTTY && stdout?.isTTY);
+  if (opts?.json || !isInteractive) {
+    stderr.write(`mc: "${entry.name}" is live — pass --force to end anyway\n`);
+    return false;
+  }
+  const answer = await promptYesNo({
+    prompt: 'Sessionen är aktiv. Vill du avsluta ändå? y/n ',
+    stdin,
+    stdout,
+    deps,
+  });
+  return answer.trim().toLowerCase() === 'y';
+}
+
+async function promptYesNo({ prompt, stdin, stdout, deps = {} } = {}) {
+  if (typeof deps.readLine === 'function') {
+    stdout.write(prompt);
+    return deps.readLine({ stdin, stdout, prompt });
+  }
+  const { createInterface } = await import('node:readline/promises');
+  const rl = createInterface({ input: stdin, output: stdout });
+  try {
+    return await rl.question(prompt);
+  } finally {
+    rl.close();
+  }
 }
 
 async function computeVerdict(entry, primary) {
