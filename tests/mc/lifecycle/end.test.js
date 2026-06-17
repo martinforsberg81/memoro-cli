@@ -5,7 +5,7 @@
  *   - `mc end <name>` removes a worktree; deletes the bootstrap branch
  *     only if it's merged (cs heuristic preserved).
  *   - `mc end .` auto-detects the current worktree.
- *   - Refuses when session is live without `--force`.
+ *   - Confirms before ending a live session without `--force` in a TTY.
  *   - `--keep-branch` retains the branch regardless.
  *   - Bulk: `mc end a b c` operates sequentially.
  *   - `--dry-run` prints one line per target with verdict, no side effects.
@@ -29,6 +29,7 @@ import {
   makeTempRepo, git, makeBranchWithCommit, makeSquashPhantom, addWorktree,
 } from '../_helpers/git-fixture.js';
 import { writeRegistry, makeEntry } from '../_helpers/registry-fixture.js';
+import { run as runEnd } from '../../../src/mc/commands/end.js';
 
 describe('mc end', () => {
   let repo;
@@ -80,6 +81,43 @@ describe('mc end', () => {
     });
     assert.notEqual(r.status, 0);
     assert.match(r.stderr + r.stdout, /live|active|force/i);
+  });
+
+  test('asks before ending an active session and keeps it when declined', async () => {
+    makeBranchWithCommit(repo.dir, 'sess/live-decline', 'tmp.txt');
+    const wtPath = join(repo.mcHome, 'worktrees', 'repo', 'live-decline');
+    addWorktree(repo.dir, wtPath, 'sess/live-decline');
+    writeRegistry(repo.mcHome, [makeEntry({
+      name: 'live-decline', branch: 'sess/live-decline',
+      worktree_path: wtPath, session_state: 'live',
+      safety_verdict: 'IS_ACTIVE_NOW',
+    })]);
+
+    const { result, stdout } = await runEndInProcess(repo, ['live-decline'], 'n');
+
+    assert.equal(result, 1);
+    assert.match(stdout, /Sessionen är aktiv\. Vill du avsluta ändå\? y\/n/);
+    const wts = git(repo.dir, 'worktree list --porcelain');
+    assert.match(wts, /live-decline/);
+  });
+
+  test('asks before ending an active session and ends it when confirmed', async () => {
+    git(repo.dir, 'branch sess/live-confirm main');
+    const wtPath = join(repo.mcHome, 'worktrees', 'repo', 'live-confirm');
+    addWorktree(repo.dir, wtPath, 'sess/live-confirm');
+    writeRegistry(repo.mcHome, [makeEntry({
+      name: 'live-confirm', branch: 'sess/live-confirm',
+      worktree_path: wtPath, session_state: 'live',
+      safety_verdict: 'IS_ACTIVE_NOW',
+    })]);
+
+    const { result, stdout } = await runEndInProcess(repo, ['live-confirm'], 'y');
+
+    assert.equal(result, 0);
+    assert.match(stdout, /Sessionen är aktiv\. Vill du avsluta ändå\? y\/n/);
+    assert.match(stdout, /mc: ended live-confirm/);
+    const wts = git(repo.dir, 'worktree list --porcelain');
+    assert.ok(!wts.includes('live-confirm'), `worktree should be gone; got:\n${wts}`);
   });
 
   test('successfully ends a clean, merged worktree (§2)', () => {
@@ -209,3 +247,29 @@ describe('mc end', () => {
     }
   });
 });
+
+async function runEndInProcess(repo, argv, answer) {
+  const oldMcHome = process.env.MC_HOME;
+  let stdout = '';
+  let stderr = '';
+  const streams = {
+    stdout: { isTTY: true, write: (s) => { stdout += s; } },
+    stderr: { write: (s) => { stderr += s; } },
+  };
+  process.env.MC_HOME = repo.mcHome;
+  try {
+    const result = await runEnd(argv, {
+      cwd: repo.dir,
+      stdout: streams.stdout,
+      stderr: streams.stderr,
+      deps: {
+        isTTY: true,
+        readLine: async () => answer,
+      },
+    });
+    return { result, stdout, stderr };
+  } finally {
+    if (oldMcHome === undefined) delete process.env.MC_HOME;
+    else process.env.MC_HOME = oldMcHome;
+  }
+}
