@@ -265,7 +265,7 @@ describe('launchBrokerOwnedSession', () => {
     assert.match(streams.err(), /continuing with local broker only/);
   });
 
-  test('can suppress startup message delivery for resume relaunches', async () => {
+  test('skips startup grounding for resume relaunches', async () => {
     const streams = makeStreams();
     const requests = [];
     let grounded = false;
@@ -302,7 +302,7 @@ describe('launchBrokerOwnedSession', () => {
     });
 
     assert.equal(res.code, 0);
-    assert.equal(grounded, true);
+    assert.equal(grounded, false);
     assert.equal(requests[0].session.launch_options.startupMessage, null);
   });
 
