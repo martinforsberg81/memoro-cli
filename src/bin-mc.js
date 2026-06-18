@@ -265,10 +265,11 @@ START OPTIONS
   mc resume <name> --claude       Use Claude Code if resume must relaunch
 
 SETUP
-  mc setup [--json]               Check installation, auth, shell wrapper
+  mc                              First run signs in to Memoro with browser device auth
+  mc setup [--json]               Verify local setup after sign-in
   mc install-shell                Install auto-cd support for zsh/bash
   mc auth status [--json]         Check Memoro + coding-tool auth
-  mc auth memoro                  Log in to Memoro
+  mc auth memoro                  Token login/logout for CI or headless setup
   mc auth devices                 List/revoke Memoro device tokens
   mc auth <claude|codex|gemini>   Re-check one coding tool
   mc tool-switch <tool>           Set the default tool for future sessions
@@ -305,11 +306,19 @@ FLEET / ADVANCED
   mc wrap <label> [args...]       Start an in-place labelled wrapper session
 
 COMMAND SURFACES
-  Run \`mc ...\` commands in your terminal. Inside a launched LLM session,
-  use in-session instructions such as \`/mc map\` for session-local habits.
-  The primary workflow stays the same across Codex, Claude Code, and other
-  adapters; tool-specific slash commands are adapter conveniences, not the
-  main path.
+  Terminal commands manage machines and sessions: setup, auth, new, resume,
+  end, broker, vault, and repo/worktree lifecycle.
+
+  Inside a launched LLM session, use session-local habits such as \`/mc map\`.
+  Do not treat terminal setup/lifecycle commands as in-session instructions.
+  The workflow stays the same across Codex, Claude Code, and future adapters;
+  tool-specific slash commands are conveniences, not the main path.
+
+NEW USER FLOW
+  1. Install: \`npm install -g memoro-cli\`
+  2. Sign in: run \`mc\` and approve the browser device flow
+  3. Verify: \`mc setup\` prints only the remaining local steps
+  4. Start: from a git repo, run \`mc new <name> [focus]\`
 
 WHAT HAPPENS ON START
   Fresh starts (\`mc\`, \`mc new\`) inject project grounding before the

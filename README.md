@@ -22,15 +22,17 @@ Node 22 or later. macOS or Linux. The `mc` coordinator (below) uses `node-pty` f
 ## Quick start
 
 ```sh
+npm install -g memoro-cli
+mc
 mc setup
 ```
 
-`mc setup` reads every probe needed to get you running and prints a numbered checklist of *only* the missing steps — each step is a single command you can paste. Re-run it whenever; once everything is green it just confirms.
+On first run, `mc` signs this machine in to Memoro with browser device auth and stores the token in the OS keychain. Then `mc setup` reads every local probe needed to get you running and prints a numbered checklist of *only* the missing steps — each step is a single command you can paste. Re-run it whenever; once everything is green it just confirms.
 
 Then a typical day:
 
 ```sh
-mc new my-experiment      # branch + worktree + Claude Code launches in it
+mc new my-experiment      # branch + worktree + your default coding tool launches in it
 # ... work, /exit when done ...
 mc end my-experiment      # close the worktree, hand the branch back
 ```
@@ -62,9 +64,10 @@ Under the hood: `mc` runs the tool in a PTY it owns, with your terminal piped tr
 
 | Command | Purpose |
 |---|---|
-| `mc setup` | Self-verifying setup checklist (§11b) |
+| `mc` | First run signs in to Memoro with browser device auth |
+| `mc setup` | Self-verifying local setup checklist (§11b) |
 | `mc auth status [--json]` | Single-screen health check |
-| `mc auth memoro [--logout]` | Alias for `memoro-cli login/logout` |
+| `mc auth memoro [--logout]` | Token login/logout for CI or headless setup |
 | `mc auth <claude\|codex\|gemini>` | Re-check one tool's status + fix hint |
 | `mc new <name> [--from <ref>] [--tool <id>]` | Create worktree + launch tool |
 | `mc list [--rich\|--awaiting\|--safe-to-end\|--orphans]` | List sessions with filters |
@@ -94,7 +97,7 @@ Under the hood: `mc` runs the tool in a PTY it owns, with your terminal piped tr
 | `memoro-cli hook install [--tool ...]` | Legacy raw-tool integration; not required for `mc` |
 | `memoro-cli hook uninstall [--tool ...]` | Remove legacy raw-tool hooks/shims |
 
-Most users only ever see `mc setup`, `mc auth memoro`, and `mc new` / `mc resume`.
+Most users only ever see `mc`, `mc setup`, and `mc new` / `mc resume`.
 
 ## Supported tools
 

@@ -58,7 +58,7 @@ describe('first-run.js — sentinel + token cross-check', () => {
     const { freshInstallHintText } = await import('../../src/mc/first-run.js?p=' + Math.random());
     assert.equal(
       freshInstallHintText(),
-      'Looks like a fresh install. Run `mc setup` to get started.',
+      'New to mc? Run `mc` to sign in, then `mc setup` to finish local setup.',
     );
   });
 

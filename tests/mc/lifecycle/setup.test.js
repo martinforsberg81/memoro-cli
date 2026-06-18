@@ -40,9 +40,10 @@ describe('mc setup — checklist (red path)', () => {
       env: { MC_HOME: repo.mcHome, MC_ORPHAN_PID_DIR: pidDir, HOME: repo.root },
     });
     assert.equal(r.status, 1, r.stderr);
-    assert.match(r.stdout, /mc setup —/);
+    assert.match(r.stdout, /mc setup — \d+ local setup step/);
     assert.match(r.stdout, /1\. Sign in to Memoro/);
-    assert.match(r.stdout, /run:\s+mc auth memoro/);
+    assert.match(r.stdout, /run:\s+mc/);
+    assert.match(r.stdout, /browser device sign-in/);
     assert.match(r.stdout, /Install Codex CLI/);
     assert.match(r.stdout, /Install the shell wrapper/);
     assert.match(r.stdout, /run:\s+mc install-shell/);
@@ -62,7 +63,7 @@ describe('mc setup — checklist (red path)', () => {
     assert.ok(j.missing_steps.length >= 1);
     // First step on a fresh install must be Memoro login.
     assert.equal(j.missing_steps[0].id, 'memoro-login');
-    assert.equal(j.missing_steps[0].command, 'mc auth memoro');
+    assert.equal(j.missing_steps[0].command, 'mc');
     // Sentinel path is exposed even on red so callers can preview.
     assert.match(j.sentinel_path, /\.setup-done-v1$/);
   });
@@ -78,7 +79,7 @@ describe('mc setup — checklist (red path)', () => {
     // implemented" leakage.
     for (const s of j.missing_steps) {
       if (!s.command) continue;
-      const ok = /^(mc |npm install|claude\b)/.test(s.command);
+      const ok = /^(mc($| )|npm install|claude\b)/.test(s.command);
       assert.ok(ok, `step ${s.id} command must be runnable, got: ${s.command}`);
     }
   });

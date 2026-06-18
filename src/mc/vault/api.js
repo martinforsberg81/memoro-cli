@@ -21,7 +21,7 @@ function portalOrDefault(p) {
   if (!p) throw new Error('vault api: portal {apiUrl, token} required');
   const memoroFetch = p.memoroFetch || DEFAULT_PORTAL.memoroFetch;
   if (!p.apiUrl) throw new Error('vault api: apiUrl missing');
-  if (!p.token) throw new Error('vault api: token missing (mc auth memoro first)');
+  if (!p.token) throw new Error('vault api: token missing (run mc to sign in first)');
   return { ...p, memoroFetch };
 }
 

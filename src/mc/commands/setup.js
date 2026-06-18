@@ -8,8 +8,8 @@
  *                  `${MC_HOME}/.setup-done-v1` sentinel, exits 0.
  *   - otherwise  → prints a numbered checklist of *only* the missing
  *                  steps with the EXACT command to fix each. Each
- *                  command is a real mc verb (`mc auth memoro`,
- *                  `mc auth codex`, `mc install-shell`) so the user
+ *                  command is a real mc entry (`mc`, `mc auth codex`,
+ *                  `mc install-shell`) so the user
  *                  just copies the line.
  *
  * Idempotent. Re-run it whenever — if a step has been completed
@@ -87,8 +87,8 @@ export function missingSteps(report) {
     steps.push({
       id: 'memoro-login',
       title: 'Sign in to Memoro',
-      command: 'mc auth memoro',
-      note: 'Stores your Memoro token in the OS keychain.',
+      command: 'mc',
+      note: 'Starts browser device sign-in and stores your token in the OS keychain. Use `mc auth memoro` for CI/headless token login.',
     });
   }
 
@@ -180,11 +180,11 @@ function printAllSet(report) {
   if (optionalReady.length) {
     process.stdout.write(`  ✓ Optional: ${optionalReady.map(labelFor).join(', ')} available\n`);
   }
-  process.stdout.write(`\nRun \`mc new <name>\` to start a session.\n`);
+  process.stdout.write(`\nNext: from a git repo, run \`mc new <name> [focus]\` to start a session.\n`);
 }
 
 function printChecklist(steps) {
-  process.stdout.write(`mc setup — ${steps.length} step${steps.length === 1 ? '' : 's'} left:\n\n`);
+  process.stdout.write(`mc setup — ${steps.length} local setup step${steps.length === 1 ? '' : 's'} left:\n\n`);
   for (let i = 0; i < steps.length; i++) {
     const s = steps[i];
     process.stdout.write(`  ${i + 1}. ${s.title}\n`);

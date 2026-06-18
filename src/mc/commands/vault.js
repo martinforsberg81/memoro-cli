@@ -140,7 +140,7 @@ MASTER PASSWORD
   a 15-minute TTL so subsequent commands don't re-prompt.
 
 PRECONDITIONS
-  - Run \`mc auth memoro\` first to store your Memoro API token.
+  - Run \`mc\` first to sign in and store your Memoro API token.
   - Run \`mc vault setup\` once per Memoro account to create the vault.
 `);
 }
@@ -1256,7 +1256,7 @@ async function loadPortal(opts = {}) {
   const apiUrl = getApiUrl([]) || config.apiUrl;
   const token = await keychainGet(ACCOUNTS.TOKEN);
   if (!token) {
-    throw new Error('no Memoro token. Run `mc auth memoro` first.');
+    throw new Error('no Memoro token. Run `mc` to sign in first.');
   }
   return { apiUrl, token };
 }

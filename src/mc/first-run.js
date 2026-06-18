@@ -24,7 +24,7 @@ import { getSecret } from '../lib/keychain.js';
 import { ACCOUNTS } from '../commands/auth.js';
 
 const SENTINEL_NAME = '.setup-done-v1';
-const HINT_TEXT = 'Looks like a fresh install. Run `mc setup` to get started.';
+const HINT_TEXT = 'New to mc? Run `mc` to sign in, then `mc setup` to finish local setup.';
 
 export function sentinelPath() {
   return join(mcHome(), SENTINEL_NAME);

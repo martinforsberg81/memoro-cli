@@ -283,7 +283,7 @@ export async function materialiseForSession({
     return {
       ok: false, reason: 'no-memoro-token',
       materialised: [], skipped,
-      hint: 'vault locked — tokens not materialised for this session; run `mc auth memoro` first',
+      hint: 'vault locked — tokens not materialised for this session; run `mc` to sign in first',
     };
   }
 

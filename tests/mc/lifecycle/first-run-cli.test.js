@@ -28,7 +28,7 @@ import { tmpdir } from 'node:os';
 import { runMc, parseJsonOrNull } from '../_helpers/cli.js';
 import { makeTempRepo } from '../_helpers/git-fixture.js';
 
-const HINT = /Looks like a fresh install\. Run `mc setup` to get started\./;
+const HINT = /New to mc\? Run `mc` to sign in, then `mc setup` to finish local setup\./;
 
 describe('mc list — first-run hint on stderr', () => {
   let repo;
