@@ -399,7 +399,7 @@ export async function runDeviceFlow(deps = {}) {
       if (tokenPrefix) stderr.write(`  Prefix:  ${tokenPrefix}\n`);
       if (expiryLine)  stderr.write(`  Expires: ${expiryLine}\n`);
       stderr.write(`\n`);
-      stderr.write(`Run your original \`mc\` command again to continue.\n`);
+      stderr.write(`Next: run \`mc setup\` to finish local setup.\n`);
       exitCode = 0;
       break;
     }

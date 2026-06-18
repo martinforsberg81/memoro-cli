@@ -1,20 +1,24 @@
 # Onboarding `mc`
 
 The README's [Quick start](../README.md#quick-start) covers the
-two-command path: `npm install -g memoro-cli` then `mc setup`. This
-file is the longer story — useful when something doesn't line up,
-when you're moving to a second machine, or when you want to know
-exactly which tools mc will try to integrate with.
+normal path: install, run `mc` once to sign in, then run `mc setup`
+to verify the local machine. This file is the longer story — useful
+when something doesn't line up, when you're moving to a second machine,
+or when you want to know exactly which tools mc will try to integrate
+with.
 
-## The setup flow in one paragraph
+## The first-run flow in one paragraph
 
-`mc setup` runs every probe `mc auth status` exposes (Memoro keychain,
-LLM tools, shell wrapper, workspace) and prints a numbered checklist
-of *only* the missing steps. Each step is a real `mc` verb you can
-paste — `mc auth memoro`, `mc auth codex`, `mc install-shell`, or
-the canonical `npm install -g …` line for a tool you don't have. When
-everything passes, it writes `${MC_HOME}/.setup-done-v1` and exits 0.
-Re-run it any time; it's idempotent.
+Run `mc` first. If this machine has no Memoro token, `mc` starts the
+browser device-auth flow, stores the resulting token in the OS keychain,
+and asks you to run `mc setup`. `mc setup` then runs every probe
+`mc auth status` exposes (Memoro keychain, LLM tools, shell wrapper,
+workspace) and prints a numbered checklist of *only* the missing local
+steps. Each step is a real command you can paste — `mc`, `mc auth codex`,
+`mc install-shell`, or the canonical `npm install -g …` line for a tool
+you don't have. When everything passes, it writes
+`${MC_HOME}/.setup-done-v1` and exits 0. Re-run it any time; it's
+idempotent.
 
 ## Why install commands are not duplicated here
 
@@ -26,6 +30,7 @@ adapters is the bug pattern we're avoiding. To see the exact command
 for any tool on your machine, run:
 
 ```sh
+mc
 mc setup
 ```
 
@@ -37,13 +42,15 @@ mc auth codex      # or claude / gemini
 
 ## What `mc setup` checks, step by step
 
-1. **Memoro token in the OS keychain.** Stored by `mc auth memoro`
-   (which is a thin alias for `memoro-cli login`). The token check is
-   existence-only; `mc setup` does no network round-trip in the hot
-   path. Create a token at <https://meetmemoro.app/app/settings> →
-   **API tokens**. Pick **Full access** for the default flow, or
-   split into `sessions.write` + `lens.read` if you want a narrower
-   blast radius.
+1. **Memoro token in the OS keychain.** Normally stored by running
+   plain `mc`, which starts browser device auth when no token exists.
+   The token check is existence-only; `mc setup` does no network
+   round-trip in the hot path. `mc auth memoro` remains available as
+   the explicit token-login path for CI/headless machines. For that
+   path, create a token at <https://meetmemoro.app/app/settings> →
+   **API tokens**. Pick **Full access** for the default flow, or split
+   into `sessions.write` + `lens.read` if you want a narrower blast
+   radius.
 
 2. **The default LLM tool is installed and usable.** Fresh installs use
    Codex by default. Claude Code is supported when selected with
@@ -75,12 +82,12 @@ action required.
 
 ## Multi-machine
 
-`mc auth memoro` is per-machine. The keychain entry doesn't
-synchronise across hosts, so on each new laptop / server / VM you'll
-run:
+Memoro sign-in is per-machine. The keychain entry doesn't synchronise
+across hosts, so on each new laptop / server / VM you'll run:
 
 ```sh
 npm install -g memoro-cli
+mc
 mc setup
 ```
 

@@ -1252,8 +1252,9 @@ parallel agents" use case and is the de-risk point.
 §2 + §9 assume mc is already authenticated and the user knows where
 to point it. For an early-adopter friend or a fresh machine, that's a
 silent friction wall. The onboarding surface makes the first 10
-minutes obvious: log in to Memoro, verify LLM tools, install the
-shell wrapper, ready to `mc new`.
+minutes obvious: run `mc` to sign in to Memoro with browser device
+auth, run `mc setup` to verify local readiness, install/sign in coding
+tools only when the checklist says so, ready to `mc new`.
 
 Non-goal: re-implementing each tool's auth. Claude Code, Codex CLI,
 and Gemini CLI each own their own login flows. mc orchestrates
@@ -1301,36 +1302,44 @@ exports `getStatus({ binPath?: string })`):
 The probe must never spawn an interactive TUI — `mc auth status`
 should complete in <500ms.
 
-#### 11b. `mc setup` — interactive first-run wizard
+#### 11b. `mc setup` — self-verifying local setup checklist
 
 ```
-mc setup [--non-interactive]
+mc setup [--json]
 ```
 
-Walks the user through onboarding in order:
+`mc setup` is non-interactive and self-verifying. It does not own the
+browser device flow; plain `mc` auto-triggers Memoro sign-in on a TTY
+when no token exists. Setup reads the same local probes as `mc auth
+status`, then prints only the missing steps with exact commands the
+user can paste.
 
 1. **Memoro account.**
-   - If keychain has a token, validate it (HEAD `/api/me`); skip if OK.
-   - Else: open browser at `meetmemoro.app/login?source=mc-setup&device=<hostname>`
-     and poll for token via the existing `memoro-cli login` flow.
+   - If keychain has a token, skip.
+   - Else print `mc` as the normal command, because that starts browser
+     device auth and stores the token in the OS keychain.
+   - `mc auth memoro` remains the explicit CI/headless token login path.
 2. **Primary LLM tool.**
-   - Default: Claude Code.
-   - Detect installation; if missing, print exact install command
-     (`npm install -g @anthropic-ai/claude-code` or equivalent) and
-     wait for retry.
-   - Verify auth by running `claude --help` and inspecting
-     `~/.claude/config.json` for an active subscription.
-3. **Optional secondary tools.** Yes/no prompts for Codex / Gemini.
-   Same install + verify pattern.
-4. **Shell wrapper.** Run `mc install-shell` (idempotent).
-5. **Verification.** Run `mc auth status` and show its output.
+   - Required primary today: Codex CLI, matching mc's default tool.
+   - Detect installation; if missing, print the exact install command
+     from the tool probe and leave the run to the human.
+   - If installed but explicitly unauthenticated, print `mc auth codex`
+     or the adapter's concrete verification command.
+   - Optional tools (Claude Code, Gemini) are reported by status and
+     shown as bonus ready lines when present; they are not first-run
+     blockers.
+3. **Shell wrapper.**
+   - If missing, print `mc install-shell`.
+   - Setup never edits shell rc files by itself.
+4. **Verification.**
+   - When all required checks pass, write
+     `${MC_HOME}/.setup-done-v1` so first-run hints stay quiet.
+   - Print the next action: from a git repo, run
+     `mc new <name> [focus]`.
 
-Each step is independently re-runnable — `mc setup` resumes from the
-first unticked checkbox so the user can quit and come back.
-
-`--non-interactive` mode skips browser flows and prompts; useful for
-CI / scripted bootstraps. Fails on first missing dependency with
-exit code and machine-readable error.
+`--json` returns `{ ok, report, missing_steps, sentinel_path }` for
+tests and scripted bootstraps. Missing dependencies exit 1; all green
+exits 0 and writes the sentinel.
 
 #### 11c. `mc auth memoro` and `mc auth <tool>` — per-target helpers
 
@@ -1348,15 +1357,17 @@ from `mc auth status`.
 
 #### 11d. First-run friendliness in existing commands
 
-Today `mc new` and `mc list` assume auth is in place; they fail with
-opaque errors otherwise. Wrap each command's first call with a
-"have we run setup?" check:
+`mc new` and `mc list` should not fail cryptically on a fresh install.
+Wrap each command's first call with a "have we run setup?" check:
 
 - If the registry hasn't been touched and Memoro keychain is empty,
-  print: *"Looks like a fresh install. Run `mc setup` to get
-  started, or `mc setup --help` for the long version."* and exit 1.
+  print: *"New to mc? Run `mc` to sign in, then `mc setup` to finish
+  local setup."*
+- `mc new` exits 1 before touching git on this path.
+- `mc list` prints the hint to stderr but keeps stdout parseable for
+  JSON callers.
 - Once setup has been completed once (sentinel file at
-  `${MC_HOME}/.setup-done`), commands skip the check.
+  `${MC_HOME}/.setup-done-v1`), commands skip the check.
 
 #### 11e. README + docs/onboarding.md
 
@@ -1364,8 +1375,9 @@ The README's current "Requirements" section assumes the reader is
 already running multiple LLM CLIs. Replace with:
 
 1. One-liner install of mc itself.
-2. `mc setup` — single command bootstrap.
-3. First-day flow: `mc new my-experiment` → claude opens → work →
+2. `mc` — browser device sign-in to Memoro.
+3. `mc setup` — self-verifying local setup checklist.
+4. First-day flow: `mc new my-experiment` → default coding tool opens → work →
    `/exit` → `mc end my-experiment`.
 
 A separate `docs/onboarding.md` covers the long story (per-tool
@@ -1387,6 +1399,11 @@ zsh/bash/fish, machine identity for multi-machine users).
   `${MC_HOME}/.setup-done-v1` sentinel when everything is green.
   Idempotent + self-verifying. (Decided 2026-05-28 with drev 2.)
 
+- **Plain `mc` is the normal Memoro sign-in entry.** A new interactive
+  user should not need to know about `mc auth memoro` first. That verb
+  stays for CI/headless token login and explicit re-auth. (Amended
+  2026-06-19.)
+
 #### 11f.5. Deferred from drev 2
 
 - **`mc reconcile` category 3 — file-overlap heuristic.** The plan §9e
@@ -1401,8 +1418,8 @@ zsh/bash/fish, machine identity for multi-machine users).
 
 - **Token format and rotation.** Memoro tokens currently live in
   keychain under `ACCOUNTS.TOKEN`. Multi-machine users today log in
-  separately on each. Should `mc setup` offer a QR code or short
-  code link from an already-authed machine ("trust this machine
+  separately on each. Should the device-auth flow offer a QR code or
+  short code link from an already-authed machine ("trust this machine
   from your phone")? Probably not in v1 — defer.
 - **Should `mc setup` install Claude Code automatically?** npm
   installs surprise users. Default: detect-and-instruct only;
