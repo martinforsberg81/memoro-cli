@@ -15,6 +15,7 @@ import { getSecret } from '../../lib/keychain.js';
 import { ACCOUNTS } from '../../commands/auth.js';
 import { readConfig, getApiUrl } from '../../lib/config.js';
 import { getPackageVersion } from '../../lib/version.js';
+import { listLocalRepoCatalog } from '../repo-catalog.js';
 
 const CONNECT_READY_TIMEOUT_MS = 10_000;
 
@@ -140,6 +141,7 @@ async function runCloudConnection(opts, io = {}) {
       sourceKind: opts.sourceKind,
       sourceName: opts.sourceName,
       cloudSessionId: opts.cloudSessionId,
+      repoCatalogProvider: listLocalRepoCatalog,
     });
     const ready = waitForCloudOpen(client, CONNECT_READY_TIMEOUT_MS);
     client.start();
@@ -151,11 +153,18 @@ async function runCloudConnection(opts, io = {}) {
     }
     if (opts.once) {
       let sessions = [];
+      let repos = [];
       let sessionsError = null;
+      let reposError = null;
       try {
-        sessions = await client.refreshSessions();
+        sessions = await client.refreshSessions({ refreshRepos: false });
       } catch (err) {
         sessionsError = err.message || String(err);
+      }
+      try {
+        repos = await client.refreshRepos();
+      } catch (err) {
+        reposError = err.message || String(err);
       }
       client.stop();
       return {
@@ -163,7 +172,9 @@ async function runCloudConnection(opts, io = {}) {
         once: true,
         machine_id: client.machineId,
         sessions_count: sessions.length,
+        repos_count: repos.length,
         ...(sessionsError ? { sessions_error: sessionsError } : {}),
+        ...(reposError ? { repos_error: reposError } : {}),
       };
     }
     const connected = { ok: true, machine_id: client.machineId };
