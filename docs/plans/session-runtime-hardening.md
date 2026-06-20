@@ -20,15 +20,15 @@ looks like continuity but loses the existing Codex/Claude screen and history.
    the live PTY cannot be found, it must not silently create a new tool session
    in the same worktree.
 
-3. **Cold resume is explicit.**
-   If the live PTY is gone, `mc` may resume a native tool session only when it
-   can do so against a stable, stored tool-session identity. Otherwise it must
-   stop with an explicit diagnostic and require an explicit replacement path.
+3. **Cold restart is confirmed.**
+   If the live PTY is gone, interactive `mc resume <name>` must ask whether to
+   start a new grounded tool session in the same worktree. Non-interactive
+   callers stop with an explicit diagnostic.
 
 4. **Tool switching does not affect live sessions.**
-   `mc resume <name> --codex/--claude` may change the stored relaunch tool only
-   when no live broker PTY is attachable. If a live PTY exists, resume attaches
-   to it as-is.
+   `mc resume <name> --codex/--claude` may change the stored restart tool only
+   when no live broker PTY is attachable and the user confirms a new session.
+   If a live PTY exists, resume attaches to it as-is.
 
 5. **Cloud follows the same model.**
    A cloud session is a source-scoped mc session with a broker-owned PTY in a
@@ -42,7 +42,8 @@ looks like continuity but loses the existing Codex/Claude screen and history.
 - **Tool session:** Claude/Codex internal conversation state, when the tool
   exposes one.
 - **Source:** local machine broker or Memoro Cloud sandbox.
-- **Resume:** attach to the same live broker PTY, or explicitly fail/replace.
+- **Resume:** attach to the same live broker PTY, or explicitly ask before
+  starting a new session in the same worktree.
 
 The registry name and worktree path are not enough to prove continuity. They can
 identify the workspace, but only a live broker PTY or a stable native tool
@@ -53,12 +54,12 @@ session identity proves the user is entering the same session.
 - Resume never sends startup grounding.
 - Resume never sends the missing-map first prompt.
 - Resume never starts a new broker PTY silently.
-- A failed live attach must be visible as a failed resume, not hidden behind a
-  relaunch.
+- A failed live attach must be visible as a prompt/diagnostic, not hidden behind
+  a silent relaunch.
 - Live attach matching prefers `coding_session_id`, then exact worktree path,
   then session name/source only as a fallback.
-- A live session with a different tool than the requested flag still wins; the
-  user can replace only after explicitly stopping or replacing it.
+- A live session with a different tool than the requested flag still wins; tool
+  flags only apply to a confirmed restart when no live PTY can be attached.
 - Terminal commands (`mc new`, `mc resume`, `mc end`, `mc broker`, `mc vault`)
   remain separate from in-session habits (`/mc map`).
 - Runtime grounding is delivered through adapters without dirtying repo-owned
@@ -75,7 +76,9 @@ Add failing tests that lock the visible behavior before changing runtime code:
 - picker resume behaves the same as direct resume
 - tool flags do not override an attachable live PTY
 - when no broker PTY is attachable, resume does not silently relaunch by default
-- explicit replacement/relaunch, if added, is a separate flag/path
+- interactive missing-live resume asks before starting a new session in the same
+  worktree
+- non-interactive missing-live resume fails with a diagnostic
 - cloud session launch keeps using the same session-intent seam
 
 ### Slice 2 — broker/session audit
@@ -91,27 +94,27 @@ Audit and harden the full broker chain:
 
 ### Slice 3 — live resume fix
 
-Make live attach the only default resume behavior. If no attachable broker PTY
-is found, print a clear diagnostic with the stored session name, worktree,
-expected coding session id, and next explicit command.
+Make live attach the only automatic resume behavior. If no attachable broker PTY
+is found, ask an interactive user whether to start a new grounded tool session
+in the same worktree. Non-interactive callers get a clear diagnostic with the
+stored session name, worktree, expected coding session id, and next step.
 
 Do not add native cold resume until the relevant tool identity can be stored and
 verified. A loud stop is safer than a fake resume.
 
-### Slice 4 — explicit replacement path
+### Slice 4 — interactive restart prompt
 
-Add a deliberate path for starting over in the same worktree, likely
-`mc resume <name> --replace` or a similarly explicit verb/flag. Replacement gets
-fresh grounding because it is a new tool session. It must update registry state
-so future resume attaches to the replacement PTY.
+Add the deliberate y/n path for starting over in the same worktree. Confirmed
+restart gets fresh grounding because it is a new tool session. It must update
+registry state so future resume attaches to the new PTY.
 
 ### Slice 5 — intro/help/status cleanup
 
 The user-facing surfaces must say which path fired:
 
 - attached existing live session
-- live session missing; no relaunch performed
-- explicit replacement started
+- live session missing; restart declined or unavailable
+- confirmed restart started in the same worktree
 - cloud/local source identity
 
 `mc --help` should describe resume as re-entry, not relaunch. The launch intro
@@ -121,13 +124,15 @@ should remain compact but expose mode/source when useful.
 
 Verify that cloud sessions obey the same contract with one active cloud
 worktree/session per user for the MVP. Cloud create may return the existing
-active session or require stop/replace, but it must not spawn hidden duplicates.
+active session or require stop/confirmed restart, but it must not spawn hidden
+duplicates.
 
 ## Acceptance
 
 - A real `mc resume <name>` returns to the same Codex/Claude screen when the
   broker PTY is alive.
-- If the live PTY is gone, `mc resume <name>` does not pretend continuity.
+- If the live PTY is gone, `mc resume <name>` asks before starting anew or fails
+  non-interactively.
 - Tests prove no startup prompt/grounding is sent on resume.
 - Tool flags on resume cannot fork a live session by accident.
 - Help, intro, and diagnostics match the actual control flow.

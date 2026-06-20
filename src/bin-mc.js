@@ -261,8 +261,8 @@ START OPTIONS
   mc new <name> [focus] --claude  Start the new session under Claude Code
   mc new <name> [focus] --tool <claude|codex|gemini>
   mc new <name> --from <ref>      Branch from a ref other than HEAD
-  mc resume <name> --codex        Use Codex if resume must relaunch
-  mc resume <name> --claude       Use Claude Code if resume must relaunch
+  mc resume <name> --codex        Use Codex only if prompted to start anew
+  mc resume <name> --claude       Use Claude Code only if prompted to start anew
 
 SETUP
   mc                              First run signs in to Memoro with browser device auth
@@ -330,15 +330,14 @@ WHAT HAPPENS ON START
 
   \`mc resume\` first attaches to a live broker-owned PTY when one exists,
   preserving that session surface without sending a new prompt. If no
-  local live PTY is attachable, resume may relaunch the stored tool
-  without a startup prompt.
+  local live PTY is attachable, mc asks before starting a new grounded
+  tool session in the same worktree.
 
 TOOL SELECTION
   \`mc tool-switch <tool>\` changes the default for future bare \`mc\` and
-  \`mc new\` starts. It does not change a running session. To change an
-  existing session's relaunch tool, make sure no live broker PTY is
-  attachable for that session, then run
-  \`mc resume <name> --codex\` or \`mc resume <name> --claude\`.
+  \`mc new\` starts. It does not change a running session. Tool flags on
+  \`mc resume <name>\` are used only if the previous live session cannot be
+  attached and you confirm starting a new session in the same worktree.
 
   When a live broker PTY exists, \`mc resume <name>\` and its tool-flag
   variants attach to that running session as-is instead of starting a
@@ -346,7 +345,7 @@ TOOL SELECTION
 
   \`mc resume\` lists mc's own registry sessions across tools. It does not
   use Claude or Codex native resume pickers, so sessions started under one
-  tool remain visible after changing the relaunch tool.
+  tool remain visible after changing the configured restart tool.
 
 SESSION NAMES
   \`mc new <name>\` creates a local session name. Use that same name with

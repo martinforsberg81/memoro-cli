@@ -5,7 +5,7 @@
  *   mc resume <name>
  *     cd to worktree, then attach to the broker-owned PTY when it is live.
  *     If the PTY is gone, do not silently relaunch a new tool session in the
- *     same worktree. A replacement/cold relaunch must be explicit.
+ *     same worktree. Interactive restart must be confirmed.
  *
  * Per §2b, `mc resume` emits a `cd <worktree>` directive on fd 3
  * *before* launching the tool (so the launched tool's cwd is correct).
@@ -24,6 +24,7 @@ import { runMc, parseJsonOrNull } from '../_helpers/cli.js';
 import { makeTempRepo, git, addWorktree } from '../_helpers/git-fixture.js';
 import { writeRegistry, makeEntry, REGISTRY_REL_PATH } from '../_helpers/registry-fixture.js';
 import {
+  launchRestartSession,
   launchResumeSession,
   parseArgs,
   run as runResume,
@@ -327,7 +328,7 @@ describe('mc resume <name>', () => {
     }
   });
 
-  test('direct resume refuses to create a fake new session when the stored live PTY is missing', async () => {
+  test('direct resume refuses to prompt-start a new session when non-interactive', async () => {
     const old = process.env.MC_TEST_MODE;
     delete process.env.MC_TEST_MODE;
     let launched = false;
@@ -354,9 +355,96 @@ describe('mc resume <name>', () => {
 
       assert.equal(status, 1);
       assert.equal(launched, false);
-      assert.match(stderr.join(''), /live broker session/i);
+      assert.match(stderr.join(''), /tidigare sessionen kan inte startas/i);
       assert.match(stderr.join(''), /sess_data/);
-      assert.match(stderr.join(''), /same worktree/i);
+      assert.match(stderr.join(''), /interactive terminal/i);
+    } finally {
+      if (old === undefined) delete process.env.MC_TEST_MODE;
+      else process.env.MC_TEST_MODE = old;
+    }
+  });
+
+  test('direct resume asks before starting a new session in the same worktree and honours no', async () => {
+    const old = process.env.MC_TEST_MODE;
+    delete process.env.MC_TEST_MODE;
+    let launched = false;
+    const stdout = [];
+    try {
+      const status = await runResume(['data'], {
+        stdin: { isTTY: true },
+        stdout: { isTTY: true, write: (s) => stdout.push(s) },
+        stderr: { write() {} },
+        isTTY: true,
+        readLine: async () => 'n',
+        findEntry: () => makeEntry({
+          name: 'data',
+          branch: 'sess/data',
+          worktree_path: '/tmp/data',
+          coding_session_id: 'sess_data',
+          session_state: 'live',
+          tool: 'codex',
+        }),
+        requestBroker: async () => ({ ok: true, sessions: [] }),
+        fetchActiveSessions: async () => ({ ok: true, sessions: [] }),
+        launchRestartSession: () => {
+          launched = true;
+          return 0;
+        },
+      });
+
+      assert.equal(status, 1);
+      assert.equal(launched, false);
+      assert.match(stdout.join(''), /Den tidigare sessionen kan inte startas/);
+      assert.match(stdout.join(''), /Vill du starta en ny session i samma worktree\? y\/n/);
+    } finally {
+      if (old === undefined) delete process.env.MC_TEST_MODE;
+      else process.env.MC_TEST_MODE = old;
+    }
+  });
+
+  test('direct resume starts a new session in the same worktree after yes', async () => {
+    const old = process.env.MC_TEST_MODE;
+    delete process.env.MC_TEST_MODE;
+    const launched = [];
+    const upserts = [];
+    try {
+      const status = await runResume(['data', '--codex'], {
+        stdin: { isTTY: true },
+        stdout: { isTTY: true, write() {} },
+        stderr: { write() {} },
+        isTTY: true,
+        readLine: async () => 'y',
+        findEntry: () => makeEntry({
+          name: 'data',
+          branch: 'sess/data',
+          worktree_path: '/tmp/data',
+          coding_session_id: 'sess_data',
+          session_state: 'live',
+          tool: 'claude',
+        }),
+        requestBroker: async () => ({ ok: true, sessions: [] }),
+        fetchActiveSessions: async () => ({ ok: true, sessions: [] }),
+        launchRestartSession: ({ entry, apiArgv }) => {
+          launched.push({ entry, apiArgv });
+          return 0;
+        },
+        upsertEntry: (entry) => {
+          upserts.push(entry);
+          return makeEntry({
+            name: entry.name,
+            branch: 'sess/data',
+            worktree_path: '/tmp/data',
+            coding_session_id: 'sess_data',
+            tool: entry.tool,
+          });
+        },
+      });
+
+      assert.equal(status, 0);
+      assert.equal(launched.length, 1);
+      assert.equal(launched[0].entry.tool, 'codex');
+      assert.deepEqual(launched[0].apiArgv, ['data', '--codex']);
+      assert.deepEqual(upserts, [{ name: 'data', tool: 'codex' }]);
     } finally {
       if (old === undefined) delete process.env.MC_TEST_MODE;
       else process.env.MC_TEST_MODE = old;
@@ -398,6 +486,38 @@ describe('mc resume <name>', () => {
     assert.equal(upserted, false);
     assert.equal(attached.length, 1);
     assert.equal(attached[0].tool, 'claude');
+  });
+
+  test('picker resume can start a new session in the same worktree after yes', async () => {
+    const launched = [];
+    const stdout = [];
+    const status = await resumeSelectedChoice(makeEntry({
+      name: 'data',
+      branch: 'sess/data',
+      worktree_path: '/tmp/data',
+      coding_session_id: 'sess_data',
+      session_state: 'live',
+      tool: 'codex',
+    }), {
+      opts: { noLaunch: false },
+      stdin: { isTTY: true },
+      stdout: { isTTY: true, write: (s) => stdout.push(s) },
+      stderr: { write() {} },
+      attachLiveBrokerSession: async () => ({ attached: false }),
+      launchRestartSession: ({ entry }) => {
+        launched.push(entry);
+        return 0;
+      },
+      deps: {
+        isTTY: true,
+        readLine: async () => 'y',
+      },
+    });
+
+    assert.equal(status, 0);
+    assert.equal(launched.length, 1);
+    assert.equal(launched[0].name, 'data');
+    assert.match(stdout.join(''), /Vill du starta en ny session i samma worktree/);
   });
 
   test('live broker session matching falls back from id to cwd and name', () => {
@@ -453,7 +573,7 @@ describe('mc resume <name>', () => {
     assert.equal(j.worktree_path, wt);
   });
 
-  test('--codex updates the stored session tool before relaunch', () => {
+  test('--codex updates the stored session tool before confirmed restart', () => {
     git(repo.dir, 'branch sess/r main');
     const wt = join(repo.mcHome, 'worktrees', 'repo', 'r');
     addWorktree(repo.dir, wt, 'sess/r');
@@ -558,5 +678,55 @@ describe('mc resume <name>', () => {
     assert.equal(launchCalls[0].tool, 'codex');
     assert.deepEqual(launchCalls[0].argv, ['--resume']);
     assert.equal(launchCalls[0].sendStartupMessage, false);
+  });
+
+  test('restart launch starts a fresh grounded tool session in the same worktree', async () => {
+    const materialiseCalls = [];
+    const launchCalls = [];
+    const upserts = [];
+    const status = await launchRestartSession({
+      entry: {
+        name: 'data',
+        tool: 'codex',
+        label: 'identity cleanup',
+        worktree_path: '/tmp/memoro-resume-data',
+      },
+      env: { PATH: '/bin' },
+      stderr: { write() {} },
+      deps: {
+        materialiseVaultBeforeLaunch: async (arg) => {
+          materialiseCalls.push(arg);
+          return { ok: true, materialised: [], skipped: [] };
+        },
+        launchBrokerOwnedSession: async (arg) => {
+          launchCalls.push(arg);
+          await arg.onLaunched?.({ codingSessionId: 'sess_restart_data' });
+          return { code: 0 };
+        },
+        upsertEntry: (entry) => {
+          upserts.push(entry);
+          return entry;
+        },
+      },
+    });
+
+    assert.equal(status, 0);
+    assert.equal(materialiseCalls.length, 1);
+    assert.equal(materialiseCalls[0].sessionId, 'data');
+    assert.equal(materialiseCalls[0].worktreePath, '/tmp/memoro-resume-data');
+    assert.deepEqual(materialiseCalls[0].adapters, [codexAdapter]);
+
+    assert.equal(launchCalls.length, 1);
+    assert.equal(launchCalls[0].cwd, '/tmp/memoro-resume-data');
+    assert.equal(launchCalls[0].sessionName, 'data');
+    assert.equal(launchCalls[0].tool, 'codex');
+    assert.equal(launchCalls[0].focus, 'identity cleanup');
+    assert.deepEqual(launchCalls[0].argv, []);
+    assert.equal(launchCalls[0].sendStartupMessage, true);
+    assert.deepEqual(upserts, [{
+      name: 'data',
+      coding_session_id: 'sess_restart_data',
+      session_state: 'live',
+    }]);
   });
 });

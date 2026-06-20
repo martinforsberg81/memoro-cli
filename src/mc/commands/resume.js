@@ -8,8 +8,8 @@
  *
  * Resume is not `mc new` with another label. If the broker still owns a live
  * PTY for this registry entry, resume attaches to it and sends no new prompt.
- * If the old PTY is gone, resume refuses to silently create a new tool session
- * in the same worktree. A replacement/cold relaunch must be explicit.
+ * If the old PTY is gone, resume asks before starting a new tool session in
+ * the same worktree.
  */
 import { findEntry, readRegistry, upsertEntry } from '../registry.js';
 import { emitCd, parseDirectiveFlag } from '../shell-directives.js';
@@ -18,7 +18,10 @@ import { DEFAULT_TOOL } from '../../lib/config.js';
 import { launchBrokerOwnedSession } from '../broker/launch-client.js';
 import { attachBrokerSession } from '../broker/attach-client.js';
 import { requestBroker } from '../broker/client.js';
-import { buildResumeSessionLaunchIntent } from '../session-intent.js';
+import {
+  buildNewSessionLaunchIntent,
+  buildResumeSessionLaunchIntent,
+} from '../session-intent.js';
 import {
   buildSessionListView,
   fetchActiveCodingSessions,
@@ -62,6 +65,7 @@ export async function run(rawArgv, deps = {}) {
     stderr.write(`mc: no such session "${opts.name}"\n`);
     return 1;
   }
+  let restartInSameWorktree = false;
 
   const toolValidation = validateToolFlag(opts.tool);
   if (toolValidation.error) {
@@ -85,8 +89,16 @@ export async function run(rawArgv, deps = {}) {
       return 0;
     }
     if (hasStoredToolSession(entry)) {
-      stderr.write(renderMissingLiveSessionMessage(entry));
-      return 1;
+      const confirmed = await confirmRestartInWorktree({
+        entry,
+        opts,
+        stdin,
+        stdout,
+        stderr,
+        deps,
+      });
+      if (!confirmed) return 1;
+      restartInSameWorktree = true;
     }
   }
 
@@ -123,7 +135,9 @@ export async function run(rawArgv, deps = {}) {
   // Broker-owned process model: resume starts through the broker and the
   // local terminal attaches as a client. Closing this terminal detaches
   // without killing the LLM session.
-  const launch = deps.launchResumeSession || launchResumeSession;
+  const launch = restartInSameWorktree
+    ? (deps.launchRestartSession || launchRestartSession)
+    : (deps.launchResumeSession || launchResumeSession);
   return launch({ entry, apiArgv: argv, stderr, env: process.env });
 }
 
@@ -135,21 +149,7 @@ export async function launchResumeSession({
   deps = {},
 } = {}) {
   const launchTool = entry?.tool ? resolveToolInput(entry.tool) : null;
-  const materialise = deps.materialiseVaultBeforeLaunch
-    || (await import('../vault/startup.js')).materialiseVaultBeforeLaunch;
-
-  try {
-    const res = await materialise({
-      sessionId: entry.name,
-      worktreePath: entry.worktree_path || undefined,
-      adapters: launchTool?.adapter ? [launchTool.adapter] : undefined,
-    });
-    if (!res.ok && res.hint) {
-      stderr.write(`mc: ${res.hint}\n`);
-    }
-  } catch (err) {
-    stderr.write(`mc: vault materialise failed (${err.message}); continuing without tokens\n`);
-  }
+  await materialiseVaultForLaunch({ entry, launchTool, stderr, deps });
 
   const launch = deps.launchBrokerOwnedSession || launchBrokerOwnedSession;
   const result = await launch({
@@ -172,6 +172,64 @@ export async function launchResumeSession({
   });
   if (typeof result === 'number') return result;
   return result?.code ?? 0;
+}
+
+export async function launchRestartSession({
+  entry,
+  apiArgv = [],
+  env = process.env,
+  stderr = process.stderr,
+  deps = {},
+} = {}) {
+  const launchTool = entry?.tool ? resolveToolInput(entry.tool) : null;
+  await materialiseVaultForLaunch({ entry, launchTool, stderr, deps });
+
+  const launch = deps.launchBrokerOwnedSession || launchBrokerOwnedSession;
+  const result = await launch({
+    ...buildNewSessionLaunchIntent({
+      entry,
+      worktreePath: entry.worktree_path,
+      focus: entry.label || null,
+      launchTool,
+      apiArgv,
+      env,
+    }),
+    stderr,
+    onLaunched: ({ codingSessionId }) => {
+      const upsert = deps.upsertEntry || upsertEntry;
+      upsert({
+        name: entry.name,
+        coding_session_id: codingSessionId,
+        session_state: 'live',
+      });
+    },
+    deps: deps.launchDeps || {},
+  });
+  if (typeof result === 'number') return result;
+  return result?.code ?? 0;
+}
+
+async function materialiseVaultForLaunch({
+  entry,
+  launchTool,
+  stderr = process.stderr,
+  deps = {},
+} = {}) {
+  const materialise = deps.materialiseVaultBeforeLaunch
+    || (await import('../vault/startup.js')).materialiseVaultBeforeLaunch;
+
+  try {
+    const res = await materialise({
+      sessionId: entry.name,
+      worktreePath: entry.worktree_path || undefined,
+      adapters: launchTool?.adapter ? [launchTool.adapter] : undefined,
+    });
+    if (!res.ok && res.hint) {
+      stderr.write(`mc: ${res.hint}\n`);
+    }
+  } catch (err) {
+    stderr.write(`mc: vault materialise failed (${err.message}); continuing without tokens\n`);
+  }
 }
 
 export function parseArgs(argv) {
@@ -230,6 +288,7 @@ export async function runResumePicker({
   const loadRegistry = deps.readRegistry || readRegistry;
   const fetchActive = deps.fetchActiveSessions || ((args) => fetchActiveCodingSessions({ argv: args }));
   const launch = deps.launchResumeSession || launchResumeSession;
+  const restart = deps.launchRestartSession || launchRestartSession;
   const attachLive = deps.attachLiveBrokerSession || attachLiveBrokerSession;
   const upsert = deps.upsertEntry || upsertEntry;
   const entries = resumableEntries(loadRegistry());
@@ -242,7 +301,7 @@ export async function runResumePicker({
   if (opts.json) {
     stdout.write(JSON.stringify({
       entries,
-      hint: 'Run `mc resume <name>` to re-enter a session, or `mc resume <name> --codex/--claude` to relaunch it under another tool.',
+      hint: 'Run `mc resume <name>` to re-enter a session. Tool flags apply only if mc asks to start a new session in the same worktree.',
     }, null, 2) + '\n');
     return 0;
   }
@@ -284,9 +343,11 @@ export async function runResumePicker({
     stdout,
     stderr,
     launchResumeSession: launch,
+    launchRestartSession: restart,
     attachLiveBrokerSession: attachLive,
     upsertEntry: upsert,
     resolvedTool: toolValidation.resolved,
+    deps,
   });
 }
 
@@ -297,9 +358,11 @@ export async function resumeSelectedChoice(choice, {
   stdout = process.stdout,
   stderr = process.stderr,
   launchResumeSession: launch = launchResumeSession,
+  launchRestartSession: restart = launchRestartSession,
   attachLiveBrokerSession: attachLive = attachLiveBrokerSession,
   upsertEntry: upsert = upsertEntry,
   resolvedTool = null,
+  deps = {},
 } = {}) {
   if (!choice) return 2;
   if (choice.type === 'active') {
@@ -313,12 +376,21 @@ export async function resumeSelectedChoice(choice, {
   }
 
   let entry = choice;
+  let restartInSameWorktree = false;
   if (!opts.noLaunch && process.env.MC_TEST_MODE !== '1') {
     const attached = await attachLive(entry, { stdin, stdout, stderr });
     if (attached?.attached) return attached.code ?? 0;
     if (hasStoredToolSession(entry)) {
-      stderr.write(renderMissingLiveSessionMessage(entry));
-      return 1;
+      const confirmed = await confirmRestartInWorktree({
+        entry,
+        opts,
+        stdin,
+        stdout,
+        stderr,
+        deps,
+      });
+      if (!confirmed) return 1;
+      restartInSameWorktree = true;
     }
   }
 
@@ -335,7 +407,7 @@ export async function resumeSelectedChoice(choice, {
     emitCd(entry.worktree_path, { enabled: emitDirectives || undefined });
   }
   if (opts.noLaunch || process.env.MC_TEST_MODE === '1') return 0;
-  return launch({ entry });
+  return restartInSameWorktree ? restart({ entry }) : launch({ entry });
 }
 
 export async function attachLiveBrokerSession(entry, {
@@ -398,6 +470,28 @@ function hasStoredToolSession(entry) {
   return !!nonEmpty(entry?.coding_session_id);
 }
 
+async function confirmRestartInWorktree({
+  entry,
+  opts,
+  stdin = process.stdin,
+  stdout = process.stdout,
+  stderr = process.stderr,
+  deps = {},
+} = {}) {
+  const isInteractive = deps.isTTY ?? (stdin?.isTTY && stdout?.isTTY);
+  if (opts?.json || !isInteractive) {
+    stderr.write(renderMissingLiveSessionMessage(entry));
+    return false;
+  }
+  const answer = await promptYesNo({
+    prompt: 'Den tidigare sessionen kan inte startas. Vill du starta en ny session i samma worktree? y/n ',
+    stdin,
+    stdout,
+    deps,
+  });
+  return answer.trim().toLowerCase() === 'y';
+}
+
 function normalizePathForMatch(value) {
   const text = nonEmpty(value);
   if (!text) return null;
@@ -413,10 +507,9 @@ function renderMissingLiveSessionMessage(entry = {}) {
   const id = nonEmpty(entry.coding_session_id) || '<unknown>';
   const worktree = nonEmpty(entry.worktree_path) || '<unknown>';
   return [
-    `mc: session "${name}" has no attachable live broker session.`,
+    `mc: den tidigare sessionen kan inte startas (${name}).`,
     `mc: expected coding session ${id} in ${worktree}.`,
-    'mc: refusing to create a new Codex/Claude session in the same worktree.',
-    'mc: stop/end the stale session or use an explicit replacement path when available.',
+    'mc: run `mc resume <name>` in an interactive terminal to choose whether to start a new session in the same worktree.',
     '',
   ].join('\n');
 }
@@ -451,6 +544,20 @@ function applyToolOverride(entry, tool, { upsert = upsertEntry, resolved = null 
 
 async function promptForChoice({ stdin, stdout, deps = {} } = {}) {
   const prompt = 'Select a session number: ';
+  if (typeof deps.readLine === 'function') {
+    stdout.write(prompt);
+    return deps.readLine({ stdin, stdout, prompt });
+  }
+  const { createInterface } = await import('node:readline/promises');
+  const rl = createInterface({ input: stdin, output: stdout });
+  try {
+    return await rl.question(prompt);
+  } finally {
+    rl.close();
+  }
+}
+
+async function promptYesNo({ prompt, stdin, stdout, deps = {} } = {}) {
   if (typeof deps.readLine === 'function') {
     stdout.write(prompt);
     return deps.readLine({ stdin, stdout, prompt });

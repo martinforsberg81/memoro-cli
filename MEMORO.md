@@ -41,10 +41,9 @@ A session must be handed the right context *before the user types*. Today
   (grounding block stripped before the wrapper byte-compare). Phase 3 shipped
   tool-switching: the launcher is adapter-routed (no longer claude-hardcoded),
   codex has writeGrounding/removeGrounding parity into AGENTS.md, `mc new
-  --codex`/`--claude` sugar over `--tool`, and existing sessions switch tool
-  only on relaunch via `mc resume <name> --codex/--claude`. `mc tool-switch`
-  sets the default for future bare `mc` / `mc new`; it does not mutate a live
-  TUI session. Drift-strip now covers BOTH adapters' markers. Phase 4 made lens auto-injection first-class
+  --codex`/`--claude` sugar over `--tool`, and resume tool flags never mutate a
+  live TUI session. `mc tool-switch` sets the default for future bare `mc` /
+  `mc new` starts. Drift-strip now covers BOTH adapters' markers. Phase 4 made lens auto-injection first-class
   (the whole `portrait-coding` response is pulled in one call, no manual `lens
   pull`) and derives the session's render language from the lens/user_state →
   a "respond in <language>" directive, English default. Language is SERVER-
@@ -95,7 +94,7 @@ tool state intact.
   same broker-owned Codex/Claude PTY when it is live, and must never silently
   create a fake new session in the same worktree. The immediate work is to lock
   the runtime contract with tests, harden broker attach/matching, make cold
-  relaunch explicit, and keep cloud/local launch paths on the same
+  restart interactive/confirmed, and keep cloud/local launch paths on the same
   session-intent seam. → `docs/plans/session-runtime-hardening.md`
 - **Main/worktree hygiene** — `active · M · now`
   `mc` must be stricter than `cs` about git/session order: primary `main` is a
