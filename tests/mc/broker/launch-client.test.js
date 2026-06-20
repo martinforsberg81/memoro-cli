@@ -117,6 +117,58 @@ describe('launchBrokerOwnedSession', () => {
     assert.equal(streams.err(), '');
   });
 
+  test('uses the broker-returned session id when launch is deduplicated', async () => {
+    const streams = makeStreams();
+    let attached = null;
+    let launched = null;
+
+    const res = await launchBrokerOwnedSession({
+      cwd: '/repo',
+      tool: 'claude',
+      stdout: streams.stdout,
+      stderr: streams.stderr,
+      env: { TERM: 'xterm-256color' },
+      now: () => 10_000,
+      ensureBroker: async () => ({ ok: true, broker: { pid: 42 } }),
+      ensureCloudBroker: async () => ({ ok: true }),
+      request: async (message) => ({
+        ok: true,
+        reused: true,
+        session: { id: 'sess_existing', cwd: message.session.cwd },
+      }),
+      attach: async (opts) => {
+        attached = opts;
+        return 0;
+      },
+      onLaunched: async (event) => {
+        launched = event;
+      },
+      deps: {
+        getRepoContext: async () => ({
+          remoteUrl: 'git@example.com:org/repo.git',
+          branch: 'main',
+          toplevel: '/repo',
+        }),
+        ensureCoordinatorSlashCommand: async () => {},
+        installUpdateCommand: async () => {},
+        readConfig: async () => ({ apiUrl: 'https://memoro.test' }),
+        getApiUrl: () => null,
+        getSecret: async () => 'tok',
+        groundSession: async () => ({ ok: true }),
+        hostname: () => 'machine',
+        lookupOrMint: async () => 'sess_new',
+        getPackageVersion: async () => '0.test',
+      },
+    });
+
+    assert.equal(res.code, 0);
+    assert.equal(res.codingSessionId, 'sess_existing');
+    assert.deepEqual(attached, { id: 'sess_existing' });
+    assert.equal(launched.codingSessionId, 'sess_existing');
+    assert.match(streams.out(), /sess_existing/);
+    assert.doesNotMatch(streams.out(), /sess_new/);
+  });
+
   test('can launch headlessly for cloud-owned sessions', async () => {
     const streams = makeStreams();
     const requests = [];

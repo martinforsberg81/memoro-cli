@@ -4,10 +4,8 @@
  * Per the plan §2:
  *   mc resume <name>
  *     cd to worktree, then attach to the broker-owned PTY when it is live.
- *     If the PTY is gone, relaunch the stored tool without sending a fresh
- *     startup prompt. Claude gets its native --resume flag; Codex must not,
- *     because an empty Codex launch can open Codex's own resume picker
- *     instead of the mc worktree session.
+ *     If the PTY is gone, do not silently relaunch a new tool session in the
+ *     same worktree. A replacement/cold relaunch must be explicit.
  *
  * Per §2b, `mc resume` emits a `cd <worktree>` directive on fd 3
  * *before* launching the tool (so the launched tool's cwd is correct).
@@ -30,6 +28,7 @@ import {
   parseArgs,
   run as runResume,
   runResumePicker,
+  resumeSelectedChoice,
   selectLiveBrokerSessionForEntry,
   resumableEntries,
 } from '../../../src/mc/commands/resume.js';
@@ -328,6 +327,79 @@ describe('mc resume <name>', () => {
     }
   });
 
+  test('direct resume refuses to create a fake new session when the stored live PTY is missing', async () => {
+    const old = process.env.MC_TEST_MODE;
+    delete process.env.MC_TEST_MODE;
+    let launched = false;
+    const stderr = [];
+    try {
+      const status = await runResume(['data'], {
+        stdout: { write() {} },
+        stderr: { write: (s) => stderr.push(s) },
+        findEntry: () => makeEntry({
+          name: 'data',
+          branch: 'sess/data',
+          worktree_path: '/tmp/data',
+          coding_session_id: 'sess_data',
+          session_state: 'live',
+          tool: 'codex',
+        }),
+        requestBroker: async () => ({ ok: true, sessions: [] }),
+        fetchActiveSessions: async () => ({ ok: true, sessions: [] }),
+        launchResumeSession: () => {
+          launched = true;
+          return 0;
+        },
+      });
+
+      assert.equal(status, 1);
+      assert.equal(launched, false);
+      assert.match(stderr.join(''), /live broker session/i);
+      assert.match(stderr.join(''), /sess_data/);
+      assert.match(stderr.join(''), /same worktree/i);
+    } finally {
+      if (old === undefined) delete process.env.MC_TEST_MODE;
+      else process.env.MC_TEST_MODE = old;
+    }
+  });
+
+  test('picker resume attaches a live local session before applying a tool override', async () => {
+    const attached = [];
+    let launched = false;
+    let upserted = false;
+    const status = await resumeSelectedChoice(makeEntry({
+      name: 'data',
+      branch: 'sess/data',
+      worktree_path: '/tmp/data',
+      coding_session_id: 'sess_data',
+      session_state: 'live',
+      tool: 'claude',
+    }), {
+      opts: { tool: 'codex', noLaunch: false },
+      stdout: { write() {} },
+      stderr: { write() {} },
+      attachLiveBrokerSession: async (entry) => {
+        attached.push(entry);
+        return { attached: true, code: 0, id: entry.coding_session_id };
+      },
+      launchResumeSession: () => {
+        launched = true;
+        return 0;
+      },
+      upsertEntry: () => {
+        upserted = true;
+        return makeEntry({ name: 'data', tool: 'codex' });
+      },
+      resolvedTool: { shortName: 'codex' },
+    });
+
+    assert.equal(status, 0);
+    assert.equal(launched, false);
+    assert.equal(upserted, false);
+    assert.equal(attached.length, 1);
+    assert.equal(attached[0].tool, 'claude');
+  });
+
   test('live broker session matching falls back from id to cwd and name', () => {
     const sessions = [
       { id: 'dead', name: 'data', cwd: '/tmp/data', session_state: 'dead' },
@@ -342,6 +414,17 @@ describe('mc resume <name>', () => {
     assert.equal(selectLiveBrokerSessionForEntry({
       name: 'data',
     }, sessions).id, 'by-name');
+  });
+
+  test('live broker session matching normalizes cwd variants', () => {
+    const sessions = [
+      { id: 'by-cwd', cwd: '/tmp/data/', session_state: 'live', attachable: true },
+    ];
+
+    assert.equal(selectLiveBrokerSessionForEntry({
+      name: 'data',
+      worktree_path: '/tmp/data',
+    }, sessions).id, 'by-cwd');
   });
 
   test('rejects unknown name', () => {

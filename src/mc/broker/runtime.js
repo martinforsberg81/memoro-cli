@@ -85,6 +85,15 @@ export class BrokerRuntime {
   _launch(input) {
     const id = requiredString(input?.id, 'session id');
     const cwd = stringOrDefault(input.cwd, this._cwd());
+    const existing = this._findReusableLiveSession({ id, cwd, name: input.name });
+    if (existing) {
+      return {
+        ok: true,
+        reused: true,
+        session: this._withAttachStatus(existing),
+      };
+    }
+
     const toolInput = stringOrDefault(input.tool, this.env.MC_GROUNDING_TOOL || DEFAULT_TOOL);
     const argv = arrayOfStrings(input.argv, 'argv');
     const launchOptions = plainObject(input.launch_options) ? input.launch_options : {};
@@ -134,6 +143,25 @@ export class BrokerRuntime {
 
     const sidecars = this._startSidecars(id, input.sidecars);
     return { ok: true, session: this._withAttachStatus(session), ...(sidecars ? { sidecars } : {}) };
+  }
+
+  _findReusableLiveSession({ id, cwd, name } = {}) {
+    const normalizedCwd = normalizePathForMatch(cwd);
+    const wantedName = stringOrNull(name);
+    for (const session of this.manager.list()) {
+      if (!isReusableLiveSession(session)) continue;
+      if (session.id === id) return session;
+      if (normalizedCwd && normalizePathForMatch(session.cwd) === normalizedCwd) return session;
+      if (
+        wantedName
+        && stringOrNull(session.name) === wantedName
+        && normalizedCwd
+        && normalizePathForMatch(session.cwd) === normalizedCwd
+      ) {
+        return session;
+      }
+    }
+    return null;
   }
 
   _status(id) {
@@ -377,6 +405,23 @@ function positiveInteger(value, fallback, label) {
 
 function plainObject(value) {
   return value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function isReusableLiveSession(session) {
+  return !!session?.id
+    && session?.attachable !== false
+    && session?.session_state !== 'dead'
+    && !session?.exit;
+}
+
+function normalizePathForMatch(value) {
+  const text = stringOrNull(value);
+  if (!text) return null;
+  let out = text.replace(/[/\\]+$/, '');
+  if (process.platform === 'darwin' && out.startsWith('/private/')) {
+    out = out.slice('/private'.length);
+  }
+  return out;
 }
 
 function makeAttachId() {

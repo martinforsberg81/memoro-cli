@@ -106,15 +106,6 @@ export async function launchBrokerOwnedSession({
   const repoRef = derivePublicRepoRef(repoContext);
   const paths = brokerSessionPaths(codingSessionId);
 
-  stdout.write(renderIntro({
-    version: await (deps.getPackageVersion || getPackageVersion)(),
-    codingSessionId,
-    repo: deriveRepoName(repoContext),
-    branch: repoContext.branch,
-    label,
-    tool: launch.spec.label,
-  }));
-
   const broker = await ensureBroker({
     request,
     stderr,
@@ -207,6 +198,16 @@ export async function launchBrokerOwnedSession({
     stderr.write(`mc: broker launch failed (${launchRes.error || launchRes.reason || 'unknown'})\n`);
     return { code: 1 };
   }
+  const effectiveCodingSessionId = launchRes.session?.id || codingSessionId;
+
+  stdout.write(renderIntro({
+    version: await (deps.getPackageVersion || getPackageVersion)(),
+    codingSessionId: effectiveCodingSessionId,
+    repo: deriveRepoName(repoContext),
+    branch: repoContext.branch,
+    label,
+    tool: launch.spec.label,
+  }));
 
   const cloud = await Promise.resolve(ensureCloudBroker(cloudBroker))
     .catch((err) => ({ ok: false, error: err.message || String(err) }));
@@ -215,15 +216,15 @@ export async function launchBrokerOwnedSession({
   }
 
   if (typeof onLaunched === 'function') {
-    await onLaunched({ codingSessionId, launch: launchRes });
+    await onLaunched({ codingSessionId: effectiveCodingSessionId, launch: launchRes });
   }
 
   if (!attachAfterLaunch) {
-    return { code: 0, codingSessionId, broker: broker.broker || null, attached: false };
+    return { code: 0, codingSessionId: effectiveCodingSessionId, broker: broker.broker || null, attached: false };
   }
 
-  const code = await attach({ id: codingSessionId });
-  return { code, codingSessionId, broker: broker.broker || null, attached: true };
+  const code = await attach({ id: effectiveCodingSessionId });
+  return { code, codingSessionId: effectiveCodingSessionId, broker: broker.broker || null, attached: true };
 }
 
 export function brokerSessionPaths(codingSessionId) {
