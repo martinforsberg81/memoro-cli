@@ -24,7 +24,7 @@ import { runMc, parseJsonOrNull } from '../_helpers/cli.js';
 import { makeTempRepo, git, addWorktree } from '../_helpers/git-fixture.js';
 import { writeRegistry, makeEntry, REGISTRY_REL_PATH } from '../_helpers/registry-fixture.js';
 import {
-  launchRestartSession,
+  launchFreshSession,
   launchResumeSession,
   parseArgs,
   run as runResume,
@@ -98,10 +98,11 @@ describe('mc resume <name>', () => {
     ]);
   });
 
-  test('interactive picker launches a selected local stopped session', async () => {
+  test('interactive picker fresh-starts a selected local session that has never launched', async () => {
     const stdout = [];
     const stderr = [];
-    const launched = [];
+    const freshLaunched = [];
+    let resumed = false;
     const status = await runResumePicker({
       opts: { name: null, tool: null, noLaunch: false, json: false },
       stdin: { isTTY: true },
@@ -121,16 +122,21 @@ describe('mc resume <name>', () => {
         readLine: async () => '1',
         attachLiveBrokerSession: async () => ({ attached: false }),
         launchResumeSession: ({ entry }) => {
-          launched.push(entry);
+          resumed = true;
+          return 0;
+        },
+        launchFreshSession: ({ entry }) => {
+          freshLaunched.push(entry);
           return 0;
         },
       },
     });
     assert.equal(status, 0);
+    assert.equal(resumed, false);
     assert.equal(stderr.join(''), '');
     assert.match(stdout.join(''), /Select a session number/);
-    assert.equal(launched.length, 1);
-    assert.equal(launched[0].name, 'local-dead');
+    assert.equal(freshLaunched.length, 1);
+    assert.equal(freshLaunched[0].name, 'local-dead');
   });
 
   test('interactive picker selection of an active session explains send/read instead of launching', async () => {
@@ -322,6 +328,47 @@ describe('mc resume <name>', () => {
       assert.equal(fetchedActive, false);
       assert.equal(attached.length, 1);
       assert.equal(attached[0].id, 'sess_data');
+    } finally {
+      if (old === undefined) delete process.env.MC_TEST_MODE;
+      else process.env.MC_TEST_MODE = old;
+    }
+  });
+
+  test('direct resume fresh-starts an idle tracked session that has never launched', async () => {
+    const old = process.env.MC_TEST_MODE;
+    delete process.env.MC_TEST_MODE;
+    let resumed = false;
+    const freshLaunched = [];
+    try {
+      const status = await runResume(['i18n'], {
+        stdout: { write() {} },
+        stderr: { write() {} },
+        findEntry: () => makeEntry({
+          name: 'i18n',
+          branch: 'sess/i18n',
+          worktree_path: '/tmp/i18n',
+          session_state: 'no-session-yet',
+          focus: 'French UI locale',
+          tool: 'codex',
+        }),
+        requestBroker: async () => ({ ok: true, sessions: [] }),
+        fetchActiveSessions: async () => ({ ok: true, sessions: [] }),
+        launchResumeSession: () => {
+          resumed = true;
+          return 0;
+        },
+        launchFreshSession: ({ entry, apiArgv }) => {
+          freshLaunched.push({ entry, apiArgv });
+          return 0;
+        },
+      });
+
+      assert.equal(status, 0);
+      assert.equal(resumed, false);
+      assert.equal(freshLaunched.length, 1);
+      assert.equal(freshLaunched[0].entry.name, 'i18n');
+      assert.equal(freshLaunched[0].entry.focus, 'French UI locale');
+      assert.deepEqual(freshLaunched[0].apiArgv, ['i18n']);
     } finally {
       if (old === undefined) delete process.env.MC_TEST_MODE;
       else process.env.MC_TEST_MODE = old;
@@ -680,15 +727,16 @@ describe('mc resume <name>', () => {
     assert.equal(launchCalls[0].sendStartupMessage, false);
   });
 
-  test('restart launch starts a fresh grounded tool session in the same worktree', async () => {
+  test('fresh launch starts a grounded tool session in the same worktree', async () => {
     const materialiseCalls = [];
     const launchCalls = [];
     const upserts = [];
-    const status = await launchRestartSession({
+    const status = await launchFreshSession({
       entry: {
         name: 'data',
         tool: 'codex',
         label: 'identity cleanup',
+        focus: 'project focus',
         worktree_path: '/tmp/memoro-resume-data',
       },
       env: { PATH: '/bin' },
@@ -720,7 +768,7 @@ describe('mc resume <name>', () => {
     assert.equal(launchCalls[0].cwd, '/tmp/memoro-resume-data');
     assert.equal(launchCalls[0].sessionName, 'data');
     assert.equal(launchCalls[0].tool, 'codex');
-    assert.equal(launchCalls[0].focus, 'identity cleanup');
+    assert.equal(launchCalls[0].focus, 'project focus');
     assert.deepEqual(launchCalls[0].argv, []);
     assert.equal(launchCalls[0].sendStartupMessage, true);
     assert.deepEqual(upserts, [{

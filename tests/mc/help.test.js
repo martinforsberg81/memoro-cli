@@ -25,6 +25,7 @@ describe('mc --help', () => {
     assert.match(r.stdout, /live broker-owned PTY/);
     assert.match(r.stdout, /without sending a new prompt/);
     assert.match(r.stdout, /asks before starting a new grounded\s+tool session in the same worktree/);
+    assert.match(r.stdout, /Idle tracked sessions that have never\s+launched start as fresh grounded sessions on first resume/);
     assert.match(r.stdout, /tool-flag\s+variants attach to that running session as-is/);
   });
 

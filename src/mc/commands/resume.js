@@ -9,7 +9,8 @@
  * Resume is not `mc new` with another label. If the broker still owns a live
  * PTY for this registry entry, resume attaches to it and sends no new prompt.
  * If the old PTY is gone, resume asks before starting a new tool session in
- * the same worktree.
+ * the same worktree. If the entry has never had a tool session, resume is the
+ * first fresh grounded start for that tracked worktree.
  */
 import { findEntry, readRegistry, upsertEntry } from '../registry.js';
 import { emitCd, parseDirectiveFlag } from '../shell-directives.js';
@@ -65,7 +66,7 @@ export async function run(rawArgv, deps = {}) {
     stderr.write(`mc: no such session "${opts.name}"\n`);
     return 1;
   }
-  let restartInSameWorktree = false;
+  let freshStartInSameWorktree = !hasStoredToolSession(entry);
 
   const toolValidation = validateToolFlag(opts.tool);
   if (toolValidation.error) {
@@ -98,7 +99,7 @@ export async function run(rawArgv, deps = {}) {
         deps,
       });
       if (!confirmed) return 1;
-      restartInSameWorktree = true;
+      freshStartInSameWorktree = true;
     }
   }
 
@@ -135,8 +136,8 @@ export async function run(rawArgv, deps = {}) {
   // Broker-owned process model: resume starts through the broker and the
   // local terminal attaches as a client. Closing this terminal detaches
   // without killing the LLM session.
-  const launch = restartInSameWorktree
-    ? (deps.launchRestartSession || launchRestartSession)
+  const launch = freshStartInSameWorktree
+    ? freshLaunchDependency(deps)
     : (deps.launchResumeSession || launchResumeSession);
   return launch({ entry, apiArgv: argv, stderr, env: process.env });
 }
@@ -174,7 +175,7 @@ export async function launchResumeSession({
   return result?.code ?? 0;
 }
 
-export async function launchRestartSession({
+export async function launchFreshSession({
   entry,
   apiArgv = [],
   env = process.env,
@@ -189,7 +190,7 @@ export async function launchRestartSession({
     ...buildNewSessionLaunchIntent({
       entry,
       worktreePath: entry.worktree_path,
-      focus: entry.label || null,
+      focus: freshLaunchFocus(entry),
       launchTool,
       apiArgv,
       env,
@@ -208,6 +209,8 @@ export async function launchRestartSession({
   if (typeof result === 'number') return result;
   return result?.code ?? 0;
 }
+
+export const launchRestartSession = launchFreshSession;
 
 async function materialiseVaultForLaunch({
   entry,
@@ -270,6 +273,7 @@ export function resumableEntries(reg = readRegistry()) {
       worktree_path: e.worktree_path || null,
       kind: e.kind || 'work',
       label: e.label || null,
+      focus: e.focus || null,
       coding_session_id: e.coding_session_id || null,
       repo_slug: e.repo_slug || null,
     }))
@@ -288,7 +292,7 @@ export async function runResumePicker({
   const loadRegistry = deps.readRegistry || readRegistry;
   const fetchActive = deps.fetchActiveSessions || ((args) => fetchActiveCodingSessions({ argv: args }));
   const launch = deps.launchResumeSession || launchResumeSession;
-  const restart = deps.launchRestartSession || launchRestartSession;
+  const freshLaunch = freshLaunchDependency(deps);
   const attachLive = deps.attachLiveBrokerSession || attachLiveBrokerSession;
   const upsert = deps.upsertEntry || upsertEntry;
   const entries = resumableEntries(loadRegistry());
@@ -343,7 +347,7 @@ export async function runResumePicker({
     stdout,
     stderr,
     launchResumeSession: launch,
-    launchRestartSession: restart,
+    launchFreshSession: freshLaunch,
     attachLiveBrokerSession: attachLive,
     upsertEntry: upsert,
     resolvedTool: toolValidation.resolved,
@@ -358,7 +362,8 @@ export async function resumeSelectedChoice(choice, {
   stdout = process.stdout,
   stderr = process.stderr,
   launchResumeSession: launch = launchResumeSession,
-  launchRestartSession: restart = launchRestartSession,
+  launchFreshSession: freshLaunchOverride,
+  launchRestartSession: restartLaunch,
   attachLiveBrokerSession: attachLive = attachLiveBrokerSession,
   upsertEntry: upsert = upsertEntry,
   resolvedTool = null,
@@ -376,7 +381,11 @@ export async function resumeSelectedChoice(choice, {
   }
 
   let entry = choice;
-  let restartInSameWorktree = false;
+  let freshStartInSameWorktree = !hasStoredToolSession(entry);
+  const freshLaunch = freshLaunchDependency({
+    launchFreshSession: freshLaunchOverride,
+    launchRestartSession: restartLaunch,
+  });
   if (!opts.noLaunch && process.env.MC_TEST_MODE !== '1') {
     const attached = await attachLive(entry, { stdin, stdout, stderr });
     if (attached?.attached) return attached.code ?? 0;
@@ -390,7 +399,7 @@ export async function resumeSelectedChoice(choice, {
         deps,
       });
       if (!confirmed) return 1;
-      restartInSameWorktree = true;
+      freshStartInSameWorktree = true;
     }
   }
 
@@ -407,7 +416,7 @@ export async function resumeSelectedChoice(choice, {
     emitCd(entry.worktree_path, { enabled: emitDirectives || undefined });
   }
   if (opts.noLaunch || process.env.MC_TEST_MODE === '1') return 0;
-  return restartInSameWorktree ? restart({ entry }) : launch({ entry });
+  return freshStartInSameWorktree ? freshLaunch({ entry }) : launch({ entry });
 }
 
 export async function attachLiveBrokerSession(entry, {
@@ -468,6 +477,14 @@ function brokerSessionId(session) {
 
 function hasStoredToolSession(entry) {
   return !!nonEmpty(entry?.coding_session_id);
+}
+
+function freshLaunchDependency(deps = {}) {
+  return deps.launchFreshSession || deps.launchRestartSession || launchFreshSession;
+}
+
+function freshLaunchFocus(entry = {}) {
+  return nonEmpty(entry.focus) || nonEmpty(entry.label);
 }
 
 async function confirmRestartInWorktree({
