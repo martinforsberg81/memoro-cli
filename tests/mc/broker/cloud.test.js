@@ -264,6 +264,66 @@ describe('CloudBrokerClient', () => {
     assert.ok(cleared);
   });
 
+  test('advertises local repo catalog as a separate source frame', async () => {
+    resetFakeWs();
+    const client = new CloudBrokerClient({
+      apiUrl: 'https://memoro.test',
+      token: 'tok',
+      machineId: 'machine',
+      WebSocketImpl: FakeWebSocket,
+      request: async () => ({ ok: true, sessions: [] }),
+      repoCatalogProvider: async () => [{
+        repo: 'memoro',
+        repo_ref: 'martinforsberg81/memoro',
+        branch: 'main',
+        workspace_ref: 'main',
+      }],
+      sessionRefreshIntervalMs: 0,
+      sleepImpl: async () => {},
+    });
+
+    client.start();
+    const control = FakeWebSocket.instances[0];
+    control.open();
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.deepEqual(JSON.parse(control.sent.at(-1)), {
+      type: 'repos',
+      machine_id: 'machine',
+      source_id: 'local:machine',
+      source_kind: 'local',
+      source_name: 'machine',
+      repos: [{
+        repo: 'memoro',
+        repo_ref: 'martinforsberg81/memoro',
+        branch: 'main',
+        workspace_ref: 'main',
+      }],
+    });
+    client.stop();
+  });
+
+  test('can suppress background repo refresh for deterministic one-shot connect', async () => {
+    let repoCalls = 0;
+    const client = new CloudBrokerClient({
+      apiUrl: 'https://memoro.test',
+      token: 'tok',
+      machineId: 'machine',
+      request: async () => ({ ok: true, sessions: [] }),
+      repoCatalogProvider: async () => {
+        repoCalls += 1;
+        return [{ repo_ref: 'owner/repo' }];
+      },
+      sleepImpl: async () => {},
+    });
+
+    await client.refreshSessions({ refreshRepos: false });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.equal(repoCalls, 0);
+  });
+
   test('sends control frames when websocket readyState is absent', async () => {
     resetFakeWs();
     const client = new CloudBrokerClient({

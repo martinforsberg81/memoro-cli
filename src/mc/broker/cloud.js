@@ -42,6 +42,7 @@ export class CloudBrokerClient extends EventEmitter {
     sleepImpl = sleep,
     localTranscriptReadMs = LOCAL_TRANSCRIPT_READ_MS,
     fetchTranscriptHandlerFactory = createFetchTranscriptHandler,
+    repoCatalogProvider = null,
     logger = silentLogger(),
   } = {}) {
     super();
@@ -73,6 +74,7 @@ export class CloudBrokerClient extends EventEmitter {
     this.sleep = sleepImpl;
     this.localTranscriptReadMs = localTranscriptReadMs;
     this.fetchTranscriptHandlerFactory = fetchTranscriptHandlerFactory;
+    this.repoCatalogProvider = repoCatalogProvider;
     this.logger = logger;
     this.ws = null;
     this.alive = false;
@@ -101,7 +103,7 @@ export class CloudBrokerClient extends EventEmitter {
     this.attaches.clear();
   }
 
-  async refreshSessions() {
+  async refreshSessions({ refreshRepos = true } = {}) {
     const sessions = await listLocalBrokerSessions({ request: this.request });
     this._send({
       type: 'sessions',
@@ -110,7 +112,21 @@ export class CloudBrokerClient extends EventEmitter {
       sessions,
     });
     this.emit('sessions', sessions);
+    if (refreshRepos) void this.refreshRepos();
     return sessions;
+  }
+
+  async refreshRepos() {
+    const repos = await this._localReposSafe();
+    if (!repos.length) return repos;
+    this._send({
+      type: 'repos',
+      machine_id: this.machineId,
+      ...sourceIdentityPayload(this.sourceIdentity),
+      repos,
+    });
+    this.emit('repos', repos);
+    return repos;
   }
 
   _connectControl() {
@@ -371,6 +387,17 @@ export class CloudBrokerClient extends EventEmitter {
       this.refreshInFlight = null;
     });
     return this.refreshInFlight;
+  }
+
+  async _localReposSafe() {
+    if (typeof this.repoCatalogProvider !== 'function') return [];
+    try {
+      const repos = await this.repoCatalogProvider();
+      return Array.isArray(repos) ? repos : [];
+    } catch (err) {
+      this.logger.warn(`[broker-cloud] repo catalog failed: ${err.message || String(err)}`);
+      return [];
+    }
   }
 
   async _scheduleReconnect() {
