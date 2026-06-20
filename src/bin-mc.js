@@ -331,7 +331,8 @@ WHAT HAPPENS ON START
   \`mc resume\` first attaches to a live broker-owned PTY when one exists,
   preserving that session surface without sending a new prompt. If no
   local live PTY is attachable, mc asks before starting a new grounded
-  tool session in the same worktree.
+  tool session in the same worktree. Idle tracked sessions that have never
+  launched start as fresh grounded sessions on first resume.
 
 TOOL SELECTION
   \`mc tool-switch <tool>\` changes the default for future bare \`mc\` and

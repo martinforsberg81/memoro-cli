@@ -20,17 +20,22 @@ looks like continuity but loses the existing Codex/Claude screen and history.
    the live PTY cannot be found, it must not silently create a new tool session
    in the same worktree.
 
-3. **Cold restart is confirmed.**
+3. **Idle tracked sessions start fresh.**
+   A session created by `mc spawn` / fanout may have a worktree and brief but no
+   prior tool session. Its first `mc resume <name>` is a fresh grounded start,
+   not a native tool resume.
+
+4. **Cold restart is confirmed.**
    If the live PTY is gone, interactive `mc resume <name>` must ask whether to
    start a new grounded tool session in the same worktree. Non-interactive
    callers stop with an explicit diagnostic.
 
-4. **Tool switching does not affect live sessions.**
+5. **Tool switching does not affect live sessions.**
    `mc resume <name> --codex/--claude` may change the stored restart tool only
    when no live broker PTY is attachable and the user confirms a new session.
    If a live PTY exists, resume attaches to it as-is.
 
-5. **Cloud follows the same model.**
+6. **Cloud follows the same model.**
    A cloud session is a source-scoped mc session with a broker-owned PTY in a
    sandbox worktree. It is not a free terminal and not a parallel launcher.
 
@@ -51,9 +56,11 @@ session identity proves the user is entering the same session.
 
 ## Non-negotiable invariants
 
-- Resume never sends startup grounding.
-- Resume never sends the missing-map first prompt.
+- True resume of a prior tool session never sends startup grounding.
+- True resume of a prior tool session never sends the missing-map first prompt.
 - Resume never starts a new broker PTY silently.
+- A never-launched tracked session is not a resume; it starts with fresh
+  grounding on first `mc resume`.
 - A failed live attach must be visible as a prompt/diagnostic, not hidden behind
   a silent relaunch.
 - Live attach matching prefers `coding_session_id`, then exact worktree path,
@@ -76,6 +83,7 @@ Add failing tests that lock the visible behavior before changing runtime code:
 - picker resume behaves the same as direct resume
 - tool flags do not override an attachable live PTY
 - when no broker PTY is attachable, resume does not silently relaunch by default
+- never-launched tracked sessions fresh-start with startup grounding
 - interactive missing-live resume asks before starting a new session in the same
   worktree
 - non-interactive missing-live resume fails with a diagnostic
