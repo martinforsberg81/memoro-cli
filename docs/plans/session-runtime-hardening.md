@@ -1,0 +1,134 @@
+# Session runtime hardening
+
+**Status:** active · 2026-06-20 · serves G2, G3
+
+`mc` must make a named work session feel durable. A session is not just a
+worktree: it is the tuple of registry entry, worktree/branch, broker-owned PTY,
+tool session, source, policy, grounding state, and transcript/status sidecars.
+The current high-risk bug is resume: when the live broker PTY is not found,
+`mc resume <name>` can fall through to a new launch in the same worktree. That
+looks like continuity but loses the existing Codex/Claude screen and history.
+
+## Product contract
+
+1. **`mc new <name>` creates a durable work session.**
+   It creates a branch/worktree, records the session, starts the selected tool
+   through the broker, and sends fresh startup grounding.
+
+2. **`mc resume <name>` is re-entry, not creation.**
+   It must first attach to the exact live broker PTY for the stored session. If
+   the live PTY cannot be found, it must not silently create a new tool session
+   in the same worktree.
+
+3. **Cold resume is explicit.**
+   If the live PTY is gone, `mc` may resume a native tool session only when it
+   can do so against a stable, stored tool-session identity. Otherwise it must
+   stop with an explicit diagnostic and require an explicit replacement path.
+
+4. **Tool switching does not affect live sessions.**
+   `mc resume <name> --codex/--claude` may change the stored relaunch tool only
+   when no live broker PTY is attachable. If a live PTY exists, resume attaches
+   to it as-is.
+
+5. **Cloud follows the same model.**
+   A cloud session is a source-scoped mc session with a broker-owned PTY in a
+   sandbox worktree. It is not a free terminal and not a parallel launcher.
+
+## Runtime model
+
+- **Registry entry:** durable local record keyed by mc session name.
+- **Worktree:** filesystem checkout where the work happens.
+- **Broker PTY:** live terminal process owned by the local/cloud broker.
+- **Tool session:** Claude/Codex internal conversation state, when the tool
+  exposes one.
+- **Source:** local machine broker or Memoro Cloud sandbox.
+- **Resume:** attach to the same live broker PTY, or explicitly fail/replace.
+
+The registry name and worktree path are not enough to prove continuity. They can
+identify the workspace, but only a live broker PTY or a stable native tool
+session identity proves the user is entering the same session.
+
+## Non-negotiable invariants
+
+- Resume never sends startup grounding.
+- Resume never sends the missing-map first prompt.
+- Resume never starts a new broker PTY silently.
+- A failed live attach must be visible as a failed resume, not hidden behind a
+  relaunch.
+- Live attach matching prefers `coding_session_id`, then exact worktree path,
+  then session name/source only as a fallback.
+- A live session with a different tool than the requested flag still wins; the
+  user can replace only after explicitly stopping or replacing it.
+- Terminal commands (`mc new`, `mc resume`, `mc end`, `mc broker`, `mc vault`)
+  remain separate from in-session habits (`/mc map`).
+- Runtime grounding is delivered through adapters without dirtying repo-owned
+  instruction files.
+
+## Work slices
+
+### Slice 1 — contract tests
+
+Add failing tests that lock the visible behavior before changing runtime code:
+
+- direct `mc resume <name>` attaches to the stored live broker PTY and does not
+  call launch
+- picker resume behaves the same as direct resume
+- tool flags do not override an attachable live PTY
+- when no broker PTY is attachable, resume does not silently relaunch by default
+- explicit replacement/relaunch, if added, is a separate flag/path
+- cloud session launch keeps using the same session-intent seam
+
+### Slice 2 — broker/session audit
+
+Audit and harden the full broker chain:
+
+- `launch-client` writes the right registry identity after launch
+- `BrokerRuntime.listSessions()` exposes enough stable fields for matching
+- `BrokerSessionManager.status()` includes `id`, `name`, `cwd`, `tool`, and
+  live/dead/attachable status
+- attach uses the same id that launch registered
+- broker restart/death is distinguishable from an ended tool session
+
+### Slice 3 — live resume fix
+
+Make live attach the only default resume behavior. If no attachable broker PTY
+is found, print a clear diagnostic with the stored session name, worktree,
+expected coding session id, and next explicit command.
+
+Do not add native cold resume until the relevant tool identity can be stored and
+verified. A loud stop is safer than a fake resume.
+
+### Slice 4 — explicit replacement path
+
+Add a deliberate path for starting over in the same worktree, likely
+`mc resume <name> --replace` or a similarly explicit verb/flag. Replacement gets
+fresh grounding because it is a new tool session. It must update registry state
+so future resume attaches to the replacement PTY.
+
+### Slice 5 — intro/help/status cleanup
+
+The user-facing surfaces must say which path fired:
+
+- attached existing live session
+- live session missing; no relaunch performed
+- explicit replacement started
+- cloud/local source identity
+
+`mc --help` should describe resume as re-entry, not relaunch. The launch intro
+should remain compact but expose mode/source when useful.
+
+### Slice 6 — cloud parity
+
+Verify that cloud sessions obey the same contract with one active cloud
+worktree/session per user for the MVP. Cloud create may return the existing
+active session or require stop/replace, but it must not spawn hidden duplicates.
+
+## Acceptance
+
+- A real `mc resume <name>` returns to the same Codex/Claude screen when the
+  broker PTY is alive.
+- If the live PTY is gone, `mc resume <name>` does not pretend continuity.
+- Tests prove no startup prompt/grounding is sent on resume.
+- Tool flags on resume cannot fork a live session by accident.
+- Help, intro, and diagnostics match the actual control flow.
+- Cloud and local launch paths use the same session-intent contract.

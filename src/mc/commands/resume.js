@@ -8,8 +8,8 @@
  *
  * Resume is not `mc new` with another label. If the broker still owns a live
  * PTY for this registry entry, resume attaches to it and sends no new prompt.
- * If the old PTY is gone, resume may relaunch the stored tool, but suppresses
- * startup-message delivery so Codex is not fed a fresh user prompt.
+ * If the old PTY is gone, resume refuses to silently create a new tool session
+ * in the same worktree. A replacement/cold relaunch must be explicit.
  */
 import { findEntry, readRegistry, upsertEntry } from '../registry.js';
 import { emitCd, parseDirectiveFlag } from '../shell-directives.js';
@@ -83,6 +83,10 @@ export async function run(rawArgv, deps = {}) {
     if (active) {
       stdout.write(renderActiveSelectionMessage(active));
       return 0;
+    }
+    if (hasStoredToolSession(entry)) {
+      stderr.write(renderMissingLiveSessionMessage(entry));
+      return 1;
     }
   }
 
@@ -309,6 +313,15 @@ export async function resumeSelectedChoice(choice, {
   }
 
   let entry = choice;
+  if (!opts.noLaunch && process.env.MC_TEST_MODE !== '1') {
+    const attached = await attachLive(entry, { stdin, stdout, stderr });
+    if (attached?.attached) return attached.code ?? 0;
+    if (hasStoredToolSession(entry)) {
+      stderr.write(renderMissingLiveSessionMessage(entry));
+      return 1;
+    }
+  }
+
   if (opts.tool) {
     const res = applyToolOverride(entry, opts.tool, { upsert, resolved: resolvedTool });
     if (res.error) {
@@ -322,8 +335,6 @@ export async function resumeSelectedChoice(choice, {
     emitCd(entry.worktree_path, { enabled: emitDirectives || undefined });
   }
   if (opts.noLaunch || process.env.MC_TEST_MODE === '1') return 0;
-  const attached = await attachLive(entry, { stdin, stdout, stderr });
-  if (attached?.attached) return attached.code ?? 0;
   return launch({ entry });
 }
 
@@ -354,7 +365,10 @@ export function selectLiveBrokerSessionForEntry(entry, sessions = []) {
 
   const worktreePath = nonEmpty(entry.worktree_path);
   if (worktreePath) {
-    const byCwd = live.find((session) => nonEmpty(session.cwd) === worktreePath);
+    const normalizedWorktreePath = normalizePathForMatch(worktreePath);
+    const byCwd = live.find(
+      (session) => normalizePathForMatch(session.cwd) === normalizedWorktreePath,
+    );
     if (byCwd) return byCwd;
   }
 
@@ -378,6 +392,33 @@ function isLiveBrokerSession(session) {
 
 function brokerSessionId(session) {
   return nonEmpty(session?.id) || nonEmpty(session?.coding_session_id);
+}
+
+function hasStoredToolSession(entry) {
+  return !!nonEmpty(entry?.coding_session_id);
+}
+
+function normalizePathForMatch(value) {
+  const text = nonEmpty(value);
+  if (!text) return null;
+  let out = text.replace(/[/\\]+$/, '');
+  if (process.platform === 'darwin' && out.startsWith('/private/')) {
+    out = out.slice('/private'.length);
+  }
+  return out;
+}
+
+function renderMissingLiveSessionMessage(entry = {}) {
+  const name = nonEmpty(entry.name) || '<unknown>';
+  const id = nonEmpty(entry.coding_session_id) || '<unknown>';
+  const worktree = nonEmpty(entry.worktree_path) || '<unknown>';
+  return [
+    `mc: session "${name}" has no attachable live broker session.`,
+    `mc: expected coding session ${id} in ${worktree}.`,
+    'mc: refusing to create a new Codex/Claude session in the same worktree.',
+    'mc: stop/end the stale session or use an explicit replacement path when available.',
+    '',
+  ].join('\n');
 }
 
 function nonEmpty(value) {

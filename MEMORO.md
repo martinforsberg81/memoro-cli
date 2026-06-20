@@ -90,6 +90,13 @@ tool state intact.
   spine, PM-ish map verbs, and resume-by-intent machinery remain rejected for
   now: keep the start state excellent and let the coordinator session do the
   orchestration. → `docs/plans/fanout-spine.md`
+- **Session runtime hardening** — `active · M · now`
+  A named mc session must be more than a worktree: resume must re-enter the
+  same broker-owned Codex/Claude PTY when it is live, and must never silently
+  create a fake new session in the same worktree. The immediate work is to lock
+  the runtime contract with tests, harden broker attach/matching, make cold
+  relaunch explicit, and keep cloud/local launch paths on the same
+  session-intent seam. → `docs/plans/session-runtime-hardening.md`
 - **Main/worktree hygiene** — `active · M · now`
   `mc` must be stricter than `cs` about git/session order: primary `main` is a
   clean baseline, while real work lives in named session worktrees and branches.

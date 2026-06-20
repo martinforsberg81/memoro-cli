@@ -122,6 +122,37 @@ describe('BrokerRuntime', () => {
     assert.equal(fake.calls[0].options.env.MEMORO_MC_PARENT, '1');
   });
 
+  test('launch_session reuses an existing live session for the same cwd', () => {
+    const { runtime, fake } = makeRuntime();
+
+    const first = runtime.handle({
+      type: 'launch_session',
+      session: {
+        id: 'sess_a',
+        name: 'alpha',
+        cwd: '/repo/a',
+        tool: 'codex',
+      },
+    });
+    const second = runtime.handle({
+      type: 'launch_session',
+      session: {
+        id: 'sess_b',
+        name: 'alpha',
+        cwd: '/repo/a/',
+        tool: 'claude',
+      },
+    });
+
+    assert.equal(first.ok, true);
+    assert.equal(second.ok, true);
+    assert.equal(second.reused, true);
+    assert.equal(second.session.id, 'sess_a');
+    assert.equal(second.session.cwd, '/repo/a');
+    assert.equal(fake.calls.length, 1);
+    assert.deepEqual(runtime.handle({ type: 'sessions' }).sessions.map((s) => s.id), ['sess_a']);
+  });
+
   test('launch_session defaults tool, cwd, terminal size, and argv', () => {
     const { runtime, fake, resolver } = makeRuntime();
 
