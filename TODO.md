@@ -8,6 +8,7 @@
 - [ ] Reconcile stale registry session states after a machine shutdown: `mc list`, `mc status`, and `mc resume` should not present old sessions as live when the broker has no attachable PTYs.
 - [ ] Add server/cloud tombstone support for stale coding sessions when the broker machine is offline. `mc sessions stop/remove` can now control connected brokers, but cloud also needs an explicit expire/delete path for entries whose machine will not reconnect.
 - [ ] Add an explicit cloud-initiated worktree cleanup flow that maps to `mc end <name>` safety semantics. It must be separate from broker `remove_session`, surface dirty/ahead/live verdicts, and require confirmation before deleting a worktree or branch.
+- [ ] Make `mc end` and `mc gc` resolve the primary worktree per target/repo during bulk cleanup, and recompute live disk/broker safety signals instead of trusting stale registry fields.
 - [ ] Detect registry entries whose worktree path no longer exists, and offer a safe repair/relink flow instead of reporting them as resumable live sessions.
 - [ ] Add a one-command recovery path for interrupted multi-worktree days that reports dirty worktrees, stale broker sessions, missing dependencies, and the exact `mc resume <name>` commands needed to restart.
 - [ ] Cover broker startup dependency checks and stale-session recovery with tests so users do not need ad hoc filesystem or log inspection after a crash.
