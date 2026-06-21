@@ -4,7 +4,56 @@ import assert from 'node:assert/strict';
 import {
   controlLocalBrokerSession,
   dispatchLocalBrokerSession,
+  mergeSessionsForList,
+  normalizeLocalBrokerSessionForList,
 } from '../../../src/bin-mc.js';
+
+describe('mc sessions list local broker view', () => {
+  test('normalizes live local broker sessions for sessions list', () => {
+    const session = normalizeLocalBrokerSessionForList({
+      id: 'sess_local',
+      name: 'trip-v2',
+      tool: 'codex',
+      repo: 'memoro',
+      branch: 'sess/trip-v2',
+      cwd: '/Users/me/.memoro/mc/worktrees/memoro/trip-v2',
+      last_output_at: '2026-06-21T07:32:09.000Z',
+      session_state: 'live',
+      attachable: true,
+    });
+
+    assert.equal(session.coding_session_id, 'sess_local');
+    assert.equal(session.label, 'trip-v2');
+    assert.equal(session.source, 'codex');
+    assert.equal(session.machine_id, 'local');
+    assert.equal(session._mc_list_origin, 'local-broker');
+  });
+
+  test('local broker sessions are included and deduplicate cloud sessions', () => {
+    const local = normalizeLocalBrokerSessionForList({
+      id: 'sess_same',
+      name: 'native',
+      tool: 'codex',
+      repo: 'memoro',
+      branch: 'sess/native',
+      session_state: 'live',
+      attachable: true,
+    });
+
+    const sessions = mergeSessionsForList({
+      localSessions: [local],
+      cloudSessions: [{
+        coding_session_id: 'sess_same',
+        label: 'native-cloud',
+        source: 'codex',
+      }],
+    });
+
+    assert.equal(sessions.length, 1);
+    assert.equal(sessions[0].label, 'native');
+    assert.equal(sessions[0]._mc_list_origin, 'local-broker');
+  });
+});
 
 describe('mc sessions send local broker dispatch', () => {
   test('resolves local session names before dispatching', async () => {
