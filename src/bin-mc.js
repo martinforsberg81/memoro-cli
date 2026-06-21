@@ -781,24 +781,40 @@ async function runWrap(argv, { label = null } = {}) {
 // `mc sessions list`
 // ─────────────────────────────────────────────────────────────────────────────
 
-async function runSessionsList(_argv) {
+async function runSessionsList(_argv, deps = {}) {
+  const request = deps.requestBroker || requestBroker;
+  const localRes = await fetchLocalBrokerSessionsForList({ request });
+
   const config = await readConfig();
   const apiUrl = getApiUrl(_argv) || config.apiUrl;
   const token = await getSecret(ACCOUNTS.TOKEN);
-  if (!token) {
+  if (!token && localRes.sessions.length === 0) {
     console.error('mc: no Memoro token. Run `memoro-cli login` first.');
     return 1;
   }
 
-  let res;
-  try {
-    res = await memoroFetch(apiUrl, '/api/coding-sessions/active', { token });
-  } catch (err) {
-    console.error(`mc: failed to list sessions: ${err.message}`);
-    return 1;
+  let cloudSessions = [];
+  if (token) {
+    try {
+      const res = await memoroFetch(apiUrl, '/api/coding-sessions/active', { token });
+      cloudSessions = Array.isArray(res?.sessions) ? res.sessions : [];
+    } catch (err) {
+      if (localRes.sessions.length === 0) {
+        console.error(`mc: failed to list sessions: ${err.message}`);
+        return 1;
+      }
+      console.error(`mc: warning — cloud active sessions unavailable (${err.message}); showing local broker sessions`);
+    }
   }
 
-  const sessions = res?.sessions ?? [];
+  if (localRes.warning && cloudSessions.length === 0) {
+    console.error(`mc: warning — ${localRes.warning}`);
+  }
+
+  const sessions = mergeSessionsForList({
+    localSessions: localRes.sessions,
+    cloudSessions,
+  });
   if (sessions.length === 0) {
     console.log('No active coding sessions.');
     return 0;
@@ -814,6 +830,78 @@ async function runSessionsList(_argv) {
     if (excerpt) console.log(`    ${excerpt}`);
   }
   return 0;
+}
+
+async function fetchLocalBrokerSessionsForList({ request = requestBroker } = {}) {
+  const res = await request({ type: 'sessions' }).catch((err) => ({
+    ok: false,
+    error: err.message || String(err),
+  }));
+  if (!res?.ok || !Array.isArray(res.sessions)) {
+    return { sessions: [], warning: res?.error || 'local broker unavailable' };
+  }
+  return {
+    sessions: res.sessions
+      .filter(isLiveLocalBrokerSession)
+      .map(normalizeLocalBrokerSessionForList),
+    warning: null,
+  };
+}
+
+function isLiveLocalBrokerSession(session) {
+  return !!(session?.coding_session_id || session?.id)
+    && session?.attachable !== false
+    && session?.session_state !== 'dead'
+    && session?.state !== 'dead'
+    && !session?.exit;
+}
+
+export function normalizeLocalBrokerSessionForList(session = {}) {
+  const id = session.coding_session_id || session.id || null;
+  const label = nonEmpty(session.label)
+    || nonEmpty(session.name)
+    || nonEmpty(session.worktree_name)
+    || localWorktreeName(session.cwd)
+    || id;
+  const receivedAt = nonEmpty(session.last_output_at || session.lastOutputAt)
+    || nonEmpty(session.started_at || session.startedAt);
+  return {
+    ...session,
+    coding_session_id: id,
+    label,
+    repo: nonEmpty(session.repo),
+    branch: nonEmpty(session.branch),
+    machine_id: nonEmpty(session.machine_id) || 'local',
+    source: nonEmpty(session.source) || nonEmpty(session.tool) || 'local-broker',
+    idle_seconds: ageSeconds(receivedAt),
+    received_at: receivedAt,
+    _mc_list_origin: 'local-broker',
+  };
+}
+
+export function mergeSessionsForList({ localSessions = [], cloudSessions = [] } = {}) {
+  const byId = new Map();
+  for (const session of Array.isArray(cloudSessions) ? cloudSessions : []) {
+    const id = session?.coding_session_id || session?.id;
+    if (id) byId.set(id, session);
+  }
+  for (const session of Array.isArray(localSessions) ? localSessions : []) {
+    const id = session?.coding_session_id || session?.id;
+    if (id) byId.set(id, session);
+  }
+  return [...byId.values()].sort(compareSessionsForList);
+}
+
+function compareSessionsForList(a, b) {
+  const aLocal = a?._mc_list_origin === 'local-broker' ? 0 : 1;
+  const bLocal = b?._mc_list_origin === 'local-broker' ? 0 : 1;
+  return aLocal - bLocal
+    || String(a?.label || a?.coding_session_id || '').localeCompare(String(b?.label || b?.coding_session_id || ''))
+    || String(a?.coding_session_id || '').localeCompare(String(b?.coding_session_id || ''));
+}
+
+function nonEmpty(value) {
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
 
 /**
