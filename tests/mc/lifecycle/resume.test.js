@@ -375,15 +375,14 @@ describe('mc resume <name>', () => {
     }
   });
 
-  test('direct resume refuses to prompt-start a new session when non-interactive', async () => {
+  test('direct resume launches provider-native resume when the broker PTY is gone', async () => {
     const old = process.env.MC_TEST_MODE;
     delete process.env.MC_TEST_MODE;
-    let launched = false;
-    const stderr = [];
+    const resumed = [];
     try {
       const status = await runResume(['data'], {
         stdout: { write() {} },
-        stderr: { write: (s) => stderr.push(s) },
+        stderr: { write() {} },
         findEntry: () => makeEntry({
           name: 'data',
           branch: 'sess/data',
@@ -394,35 +393,33 @@ describe('mc resume <name>', () => {
         }),
         requestBroker: async () => ({ ok: true, sessions: [] }),
         fetchActiveSessions: async () => ({ ok: true, sessions: [] }),
-        launchResumeSession: () => {
-          launched = true;
+        launchResumeSession: ({ entry, apiArgv }) => {
+          resumed.push({ entry, apiArgv });
           return 0;
         },
       });
 
-      assert.equal(status, 1);
-      assert.equal(launched, false);
-      assert.match(stderr.join(''), /tidigare sessionen kan inte startas/i);
-      assert.match(stderr.join(''), /sess_data/);
-      assert.match(stderr.join(''), /interactive terminal/i);
+      assert.equal(status, 0);
+      assert.equal(resumed.length, 1);
+      assert.equal(resumed[0].entry.name, 'data');
+      assert.deepEqual(resumed[0].apiArgv, ['data']);
     } finally {
       if (old === undefined) delete process.env.MC_TEST_MODE;
       else process.env.MC_TEST_MODE = old;
     }
   });
 
-  test('direct resume asks before starting a new session in the same worktree and honours no', async () => {
+  test('direct resume does not ask before native provider resume', async () => {
     const old = process.env.MC_TEST_MODE;
     delete process.env.MC_TEST_MODE;
-    let launched = false;
-    const stdout = [];
+    const resumed = [];
     try {
       const status = await runResume(['data'], {
         stdin: { isTTY: true },
-        stdout: { isTTY: true, write: (s) => stdout.push(s) },
+        stdout: { isTTY: true, write() {} },
         stderr: { write() {} },
         isTTY: true,
-        readLine: async () => 'n',
+        readLine: async () => assert.fail('resume must not ask to start a replacement session'),
         findEntry: () => makeEntry({
           name: 'data',
           branch: 'sess/data',
@@ -433,23 +430,22 @@ describe('mc resume <name>', () => {
         }),
         requestBroker: async () => ({ ok: true, sessions: [] }),
         fetchActiveSessions: async () => ({ ok: true, sessions: [] }),
-        launchRestartSession: () => {
-          launched = true;
+        launchResumeSession: ({ entry }) => {
+          resumed.push(entry);
           return 0;
         },
       });
 
-      assert.equal(status, 1);
-      assert.equal(launched, false);
-      assert.match(stdout.join(''), /Den tidigare sessionen kan inte startas/);
-      assert.match(stdout.join(''), /Vill du starta en ny session i samma worktree\? y\/n/);
+      assert.equal(status, 0);
+      assert.equal(resumed.length, 1);
+      assert.equal(resumed[0].name, 'data');
     } finally {
       if (old === undefined) delete process.env.MC_TEST_MODE;
       else process.env.MC_TEST_MODE = old;
     }
   });
 
-  test('direct resume starts a new session in the same worktree after yes', async () => {
+  test('direct resume rejects switching provider for an existing provider session', async () => {
     const old = process.env.MC_TEST_MODE;
     delete process.env.MC_TEST_MODE;
     const launched = [];
@@ -458,9 +454,9 @@ describe('mc resume <name>', () => {
       const status = await runResume(['data', '--codex'], {
         stdin: { isTTY: true },
         stdout: { isTTY: true, write() {} },
-        stderr: { write() {} },
+        stderr: { write: (s) => launched.push({ stderr: s }) },
         isTTY: true,
-        readLine: async () => 'y',
+        readLine: async () => assert.fail('resume must not ask to start a replacement session'),
         findEntry: () => makeEntry({
           name: 'data',
           branch: 'sess/data',
@@ -471,7 +467,7 @@ describe('mc resume <name>', () => {
         }),
         requestBroker: async () => ({ ok: true, sessions: [] }),
         fetchActiveSessions: async () => ({ ok: true, sessions: [] }),
-        launchRestartSession: ({ entry, apiArgv }) => {
+        launchResumeSession: ({ entry, apiArgv }) => {
           launched.push({ entry, apiArgv });
           return 0;
         },
@@ -487,11 +483,10 @@ describe('mc resume <name>', () => {
         },
       });
 
-      assert.equal(status, 0);
-      assert.equal(launched.length, 1);
-      assert.equal(launched[0].entry.tool, 'codex');
-      assert.deepEqual(launched[0].apiArgv, ['data', '--codex']);
-      assert.deepEqual(upserts, [{ name: 'data', tool: 'codex' }]);
+      assert.equal(status, 2);
+      assert.equal(launched.some((entry) => entry.entry), false);
+      assert.deepEqual(upserts, []);
+      assert.match(launched.map((entry) => entry.stderr || '').join(''), /different tool/);
     } finally {
       if (old === undefined) delete process.env.MC_TEST_MODE;
       else process.env.MC_TEST_MODE = old;
@@ -535,9 +530,8 @@ describe('mc resume <name>', () => {
     assert.equal(attached[0].tool, 'claude');
   });
 
-  test('picker resume can start a new session in the same worktree after yes', async () => {
-    const launched = [];
-    const stdout = [];
+  test('picker resume launches native provider resume when local broker PTY is gone', async () => {
+    const resumed = [];
     const status = await resumeSelectedChoice(makeEntry({
       name: 'data',
       branch: 'sess/data',
@@ -548,23 +542,22 @@ describe('mc resume <name>', () => {
     }), {
       opts: { noLaunch: false },
       stdin: { isTTY: true },
-      stdout: { isTTY: true, write: (s) => stdout.push(s) },
+      stdout: { isTTY: true, write() {} },
       stderr: { write() {} },
       attachLiveBrokerSession: async () => ({ attached: false }),
-      launchRestartSession: ({ entry }) => {
-        launched.push(entry);
+      launchResumeSession: ({ entry }) => {
+        resumed.push(entry);
         return 0;
       },
       deps: {
         isTTY: true,
-        readLine: async () => 'y',
+        readLine: async () => assert.fail('resume must not ask to start a replacement session'),
       },
     });
 
     assert.equal(status, 0);
-    assert.equal(launched.length, 1);
-    assert.equal(launched[0].name, 'data');
-    assert.match(stdout.join(''), /Vill du starta en ny session i samma worktree/);
+    assert.equal(resumed.length, 1);
+    assert.equal(resumed[0].name, 'data');
   });
 
   test('live broker session matching falls back from id to cwd and name', () => {
@@ -620,7 +613,7 @@ describe('mc resume <name>', () => {
     assert.equal(j.worktree_path, wt);
   });
 
-  test('--codex updates the stored session tool before confirmed restart', () => {
+  test('--codex updates the stored session tool before first launch', () => {
     git(repo.dir, 'branch sess/r main');
     const wt = join(repo.mcHome, 'worktrees', 'repo', 'r');
     addWorktree(repo.dir, wt, 'sess/r');
@@ -661,6 +654,13 @@ describe('mc resume <name>', () => {
           materialiseCalls.push(arg);
           return { ok: true, materialised: [], skipped: [] };
         },
+        resolveToolSessionForResume: async ({ entry, launchTool }) => ({
+          ok: true,
+          source: launchTool.id,
+          sessionId: 'cl_provider_data',
+          transcriptPath: '/tmp/claude.jsonl',
+          entry,
+        }),
         launchBrokerOwnedSession: async (arg) => {
           launchCalls.push(arg);
           await arg.onLaunched?.({ codingSessionId: 'sess_resume_data' });
@@ -686,13 +686,16 @@ describe('mc resume <name>', () => {
     assert.equal(launchCalls[0].tool, 'claude-code');
     assert.equal(launchCalls[0].label, 'identity cleanup');
     assert.equal(launchCalls[0].focus, 'identity cleanup');
-    assert.deepEqual(launchCalls[0].argv, ['--resume']);
+    assert.deepEqual(launchCalls[0].argv, ['--resume', 'cl_provider_data']);
     assert.equal(launchCalls[0].sendStartupMessage, false);
     assert.deepEqual(launchCalls[0].env, { PATH: '/bin', MC_GROUNDING_TOOL: 'codex' });
     assert.deepEqual(upserts, [{
       name: 'data',
       coding_session_id: 'sess_resume_data',
       session_state: 'live',
+      tool_session_id: 'cl_provider_data',
+      tool_session_source: 'claude-code',
+      tool_transcript_path: '/tmp/claude.jsonl',
     }]);
   });
 
@@ -713,6 +716,12 @@ describe('mc resume <name>', () => {
           materialiseCalls.push(arg);
           return { ok: true, materialised: [], skipped: [] };
         },
+        resolveToolSessionForResume: async () => ({
+          ok: true,
+          source: 'codex',
+          sessionId: 'cx_provider_data',
+          transcriptPath: '/tmp/codex.jsonl',
+        }),
         launchBrokerOwnedSession: async (arg) => {
           launchCalls.push(arg);
           return { code: 0 };
@@ -723,8 +732,39 @@ describe('mc resume <name>', () => {
     assert.equal(status, 0);
     assert.deepEqual(materialiseCalls[0].adapters, [codexAdapter]);
     assert.equal(launchCalls[0].tool, 'codex');
-    assert.deepEqual(launchCalls[0].argv, ['--resume']);
+    assert.deepEqual(launchCalls[0].argv, ['resume', 'cx_provider_data']);
     assert.equal(launchCalls[0].sendStartupMessage, false);
+  });
+
+  test('prelaunch refuses to start when provider session id cannot be found', async () => {
+    let launched = false;
+    const stderr = [];
+    const status = await launchResumeSession({
+      entry: {
+        name: 'data',
+        tool: 'codex',
+        worktree_path: '/tmp/memoro-resume-data',
+      },
+      stderr: { write: (s) => stderr.push(s) },
+      deps: {
+        materialiseVaultBeforeLaunch: async () => ({ ok: true, materialised: [], skipped: [] }),
+        resolveToolSessionForResume: async () => ({
+          ok: false,
+          reason: 'no-tool-session-id',
+          source: 'codex',
+          transcriptPath: null,
+        }),
+        launchBrokerOwnedSession: async () => {
+          launched = true;
+          return { code: 0 };
+        },
+      },
+    });
+
+    assert.equal(status, 1);
+    assert.equal(launched, false);
+    assert.match(stderr.join(''), /no provider-native session id/);
+    assert.match(stderr.join(''), /refusing to start a contextless replacement session/);
   });
 
   test('fresh launch starts a grounded tool session in the same worktree', async () => {

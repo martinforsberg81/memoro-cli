@@ -333,6 +333,11 @@ export function launchSpec() {
   };
 }
 
+export function resumeArgs({ sessionId } = {}) {
+  if (!sessionId || typeof sessionId !== 'string') return null;
+  return ['--resume', sessionId];
+}
+
 // ─────────────────────────────────────────────────────────────
 // `mc auth status` adapter contract (§11a)
 //

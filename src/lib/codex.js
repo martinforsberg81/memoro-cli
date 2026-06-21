@@ -1,4 +1,4 @@
-import { readFile, readdir, stat, writeFile } from 'node:fs/promises';
+import { open, readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join, dirname, basename } from 'node:path';
 import { homedir } from 'node:os';
@@ -83,8 +83,7 @@ export async function findLatestCodexSession({ cwd = null, newerThanMs = 0, sess
 
 export async function readCodexSessionMeta(path) {
   try {
-    const raw = await readFile(path, 'utf8');
-    const firstLine = raw.split('\n').find(line => line.trim());
+    const firstLine = await readFirstNonEmptyLine(path);
     if (!firstLine) return null;
     const entry = JSON.parse(firstLine);
     if (entry?.type !== 'session_meta' || !entry.payload) return null;
@@ -96,6 +95,19 @@ export async function readCodexSessionMeta(path) {
     };
   } catch {
     return null;
+  }
+}
+
+async function readFirstNonEmptyLine(path, { maxBytes = 64 * 1024 } = {}) {
+  const handle = await open(path, 'r');
+  try {
+    const buffer = Buffer.alloc(maxBytes);
+    const { bytesRead } = await handle.read(buffer, 0, maxBytes, 0);
+    if (bytesRead <= 0) return null;
+    const raw = buffer.subarray(0, bytesRead).toString('utf8');
+    return raw.split('\n').find(line => line.trim()) || null;
+  } finally {
+    await handle.close();
   }
 }
 

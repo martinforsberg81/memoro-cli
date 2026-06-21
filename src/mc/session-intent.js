@@ -36,6 +36,7 @@ export function buildNewSessionLaunchIntent({
 export function buildResumeSessionLaunchIntent({
   entry,
   launchTool = null,
+  resumeArgv = ['--resume'],
   apiArgv = [],
   env = process.env,
 } = {}) {
@@ -46,7 +47,7 @@ export function buildResumeSessionLaunchIntent({
     label: entry?.label || null,
     focus: entry?.label || null,
     tool: launchTool?.id || entry?.tool || DEFAULT_TOOL,
-    argv: ['--resume'],
+    argv: Array.isArray(resumeArgv) ? resumeArgv : ['--resume'],
     apiArgv,
     sendStartupMessage: false,
     attachAfterLaunch: true,

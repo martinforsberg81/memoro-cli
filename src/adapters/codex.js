@@ -156,11 +156,10 @@ export function instructionsFile() {
 // `bin` is null — the launcher fails high with the install hint rather
 // than spawning nothing (soft-degrade is NOT silent here, per §5).
 //
-// NOTE: codex has a native `resume` picker, but mc resume must re-enter the
-// mc worktree session directly. We strip mc's internal Claude-only
-// `--resume [id]` signal. Grounding is delivered later through the owned PTY,
-// not as argv, so Codex Apps/MCP startup can finish before the first prompt is
-// submitted.
+// Grounding is delivered later through the owned PTY, not as argv, so Codex
+// Apps/MCP startup can finish before the first prompt is submitted. Native
+// resume is represented by the `codex resume <session-id>` subcommand and is
+// built by `resumeArgs()` below.
 // ─────────────────────────────────────────────────────────────
 export function launchSpec({ resolveBinary = resolveRealCodexBinary } = {}) {
   let bin = null;
@@ -168,7 +167,7 @@ export function launchSpec({ resolveBinary = resolveRealCodexBinary } = {}) {
   return {
     bin,
     args: (argv = [], { startupMessage = null, effectivePolicy = null } = {}) => {
-      const base = stripInternalResumeArgs(argv);
+      const base = [...argv];
       const policyArgs = renderPolicy(effectivePolicy).launchArgs;
       void startupMessage;
       return [...base, ...policyArgs];
@@ -180,6 +179,11 @@ export function launchSpec({ resolveBinary = resolveRealCodexBinary } = {}) {
     submitEnterCount: 2,
     submitEnterDelayMs: 150,
   };
+}
+
+export function resumeArgs({ sessionId } = {}) {
+  if (!sessionId || typeof sessionId !== 'string') return null;
+  return ['resume', sessionId];
 }
 
 export function renderPolicy(policy = null) {
@@ -229,20 +233,6 @@ function codexApprovalForPolicy(approval) {
   if (approval === 'on-request') return 'on-request';
   if (approval === 'never') return 'never';
   return null;
-}
-
-function stripInternalResumeArgs(argv = []) {
-  const out = [];
-  for (let i = 0; i < argv.length; i += 1) {
-    const arg = argv[i];
-    if (arg !== '--resume') {
-      out.push(arg);
-      continue;
-    }
-    const next = argv[i + 1];
-    if (next && !String(next).startsWith('-')) i += 1;
-  }
-  return out;
 }
 
 // ─────────────────────────────────────────────────────────────

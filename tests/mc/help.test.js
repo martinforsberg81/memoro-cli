@@ -15,7 +15,7 @@ describe('mc --help', () => {
     assert.match(r.stdout, /NEW USER FLOW/);
     assert.match(r.stdout, /WHAT HAPPENS ON START/);
     assert.match(r.stdout, /TOOL SELECTION/);
-    assert.match(r.stdout, /mc resume <name> --codex\s+Use Codex only if prompted to start anew/);
+    assert.match(r.stdout, /mc resume <name> --codex\s+Use Codex only before first launch or for Codex sessions/);
     assert.match(r.stdout, /Terminal commands manage machines and sessions/);
     assert.match(r.stdout, /Inside a launched LLM session/);
     assert.match(r.stdout, /same across Codex, Claude Code/);
@@ -24,9 +24,12 @@ describe('mc --help', () => {
     assert.match(r.stdout, /vault is locked/);
     assert.match(r.stdout, /live broker-owned PTY/);
     assert.match(r.stdout, /without sending a new prompt/);
-    assert.match(r.stdout, /asks before starting a new grounded\s+tool session in the same worktree/);
+    assert.match(r.stdout, /relaunches the same provider-native\s+session by id/);
+    assert.match(r.stdout, /refuses to\s+start a contextless replacement/);
     assert.match(r.stdout, /Idle tracked sessions that have never\s+launched start as fresh grounded sessions on first resume/);
-    assert.match(r.stdout, /tool-flag\s+variants attach to that running session as-is/);
+    assert.match(r.stdout, /cannot switch provider for an existing provider\s+session/);
+    assert.doesNotMatch(r.stdout, /prompted to start anew/);
+    assert.doesNotMatch(r.stdout, /asks before starting a new grounded/);
   });
 
   it('does not expose internal plan-section shorthand', () => {

@@ -27,6 +27,9 @@ const DEFAULTS = {
   safety_verdict: 'SAFE_TO_END',
   label: null,
   coding_session_id: null,
+  tool_session_id: null,
+  tool_session_source: null,
+  tool_transcript_path: null,
 };
 
 export function readRegistry() {

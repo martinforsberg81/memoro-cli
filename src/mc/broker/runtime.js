@@ -211,6 +211,10 @@ export class BrokerRuntime {
   _remove(id) {
     const sessionId = requiredString(id, 'session id');
     this._stopSidecars(sessionId);
+    const session = this.manager.get(sessionId);
+    if (session && !session.status?.().exit) {
+      try { this.manager.stop(sessionId, 'SIGTERM'); } catch {}
+    }
     this.sessionMetadata.delete(sessionId);
     return { ok: true, removed: this.manager.remove(sessionId) };
   }

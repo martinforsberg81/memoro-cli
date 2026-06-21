@@ -230,6 +230,19 @@ export class CloudBrokerClient extends EventEmitter {
       const handler = this.fetchTranscriptHandlerFactory({ transcriptPath, source });
       return handler(args);
     }
+    if (kind === 'stop_session') {
+      const sessionId = requiredString(msg.coding_session_id || msg.session_id, 'coding_session_id');
+      const signal = stringOrDefault(args.signal, 'SIGTERM');
+      const result = await this.request({ type: 'stop_session', id: sessionId, signal });
+      if (result?.ok) await this._refreshSessionsSafe();
+      return result;
+    }
+    if (kind === 'remove_session') {
+      const sessionId = requiredString(msg.coding_session_id || msg.session_id, 'coding_session_id');
+      const result = await this.request({ type: 'remove_session', id: sessionId });
+      if (result?.ok) await this._refreshSessionsSafe();
+      return result;
+    }
     throw new Error(`No handler for kind '${kind}'`);
   }
 

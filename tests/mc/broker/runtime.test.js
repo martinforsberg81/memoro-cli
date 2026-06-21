@@ -259,6 +259,7 @@ describe('BrokerRuntime', () => {
 
     const removed = runtime.handle({ type: 'remove_session', id: 'sess_a' });
     assert.deepEqual(removed, { ok: true, removed: true });
+    assert.deepEqual(fake.ptys[0].kills, ['SIGHUP', 'SIGTERM']);
     assert.deepEqual(runtime.handle({ type: 'sessions' }), { ok: true, sessions: [] });
   });
 

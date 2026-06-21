@@ -142,6 +142,39 @@ describe('mc end', () => {
       `worktree should be gone; got:\n${wts}`);
   });
 
+  test('ending a worktree removes the matching broker session first', async () => {
+    git(repo.dir, 'branch sess/broker-clean main');
+    const wtPath = join(repo.mcHome, 'worktrees', 'repo', 'broker-clean');
+    addWorktree(repo.dir, wtPath, 'sess/broker-clean');
+    writeRegistry(repo.mcHome, [makeEntry({
+      name: 'broker-clean',
+      branch: 'sess/broker-clean',
+      worktree_path: wtPath,
+      coding_session_id: 'sess_broker_clean',
+      safety_verdict: 'SAFE_TO_END',
+    })]);
+    const requests = [];
+
+    const { result } = await runEndInProcess(repo, ['broker-clean'], 'y', {
+      requestBroker: async (message) => {
+        requests.push(message);
+        if (message.type === 'sessions') {
+          return { ok: true, sessions: [{ id: 'sess_broker_clean', cwd: wtPath, session_state: 'live' }] };
+        }
+        if (message.type === 'remove_session') return { ok: true, removed: true };
+        throw new Error(`unexpected broker request: ${message.type}`);
+      },
+    });
+
+    assert.equal(result, 0);
+    assert.deepEqual(requests, [
+      { type: 'sessions' },
+      { type: 'remove_session', id: 'sess_broker_clean' },
+    ]);
+    const wts = git(repo.dir, 'worktree list --porcelain');
+    assert.ok(!wts.includes('broker-clean'), `worktree should be gone; got:\n${wts}`);
+  });
+
   test('--keep-branch retains the bootstrap branch after end', () => {
     git(repo.dir, 'branch sess/keep main');
     const wtPath = join(repo.mcHome, 'worktrees', 'repo', 'keep');
@@ -248,7 +281,7 @@ describe('mc end', () => {
   });
 });
 
-async function runEndInProcess(repo, argv, answer) {
+async function runEndInProcess(repo, argv, answer, extraDeps = {}) {
   const oldMcHome = process.env.MC_HOME;
   let stdout = '';
   let stderr = '';
@@ -265,6 +298,7 @@ async function runEndInProcess(repo, argv, answer) {
       deps: {
         isTTY: true,
         readLine: async () => answer,
+        ...extraDeps,
       },
     });
     return { result, stdout, stderr };
