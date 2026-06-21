@@ -2,6 +2,7 @@ import { getSecret } from '../lib/keychain.js';
 import { ACCOUNTS } from '../commands/auth.js';
 import { readConfig, getApiUrl } from '../lib/config.js';
 import { memoroFetch } from '../lib/api.js';
+import { requestBroker } from './broker/client.js';
 
 const ACTIVE_PATH = '/api/coding-sessions/active';
 
@@ -40,6 +41,100 @@ export async function fetchActiveCodingSessions({
       warning: `active sessions unavailable: ${err?.message || 'request failed'}`,
     };
   }
+}
+
+export async function fetchActiveCodingSessionsWithLocalBroker({
+  argv = [],
+  deps = {},
+} = {}) {
+  const localRes = await fetchLocalBrokerCodingSessions({ deps });
+  const cloudRes = await fetchActiveCodingSessions({ argv, deps });
+  const sessions = mergeActiveCodingSessions({
+    localSessions: localRes.sessions,
+    cloudSessions: cloudRes.sessions,
+  });
+
+  if (cloudRes.ok) {
+    return { ok: true, sessions, warning: null };
+  }
+  if (sessions.length > 0) {
+    return { ok: true, sessions, warning: null };
+  }
+  return {
+    ok: false,
+    sessions: [],
+    warning: cloudRes.warning || localRes.warning || 'active sessions unavailable',
+  };
+}
+
+export async function fetchLocalBrokerCodingSessions({ deps = {} } = {}) {
+  const request = deps.requestBroker || requestBroker;
+  const res = await request({ type: 'sessions' }).catch((err) => ({
+    ok: false,
+    error: err.message || String(err),
+  }));
+  if (!res?.ok || !Array.isArray(res.sessions)) {
+    return { ok: false, sessions: [], warning: res?.error || 'local broker unavailable' };
+  }
+  return {
+    ok: true,
+    sessions: res.sessions
+      .filter(isLiveLocalBrokerSession)
+      .map(normalizeLocalBrokerSessionForList),
+    warning: null,
+  };
+}
+
+function isLiveLocalBrokerSession(session) {
+  return !!(session?.coding_session_id || session?.id)
+    && session?.attachable !== false
+    && session?.session_state !== 'dead'
+    && session?.state !== 'dead'
+    && !session?.exit;
+}
+
+export function normalizeLocalBrokerSessionForList(session = {}) {
+  const id = session.coding_session_id || session.id || null;
+  const label = nonEmpty(session.label)
+    || nonEmpty(session.name)
+    || nonEmpty(session.worktree_name)
+    || localWorktreeName(session.cwd)
+    || id;
+  const receivedAt = nonEmpty(session.last_output_at || session.lastOutputAt)
+    || nonEmpty(session.started_at || session.startedAt);
+  return {
+    ...session,
+    coding_session_id: id,
+    label,
+    repo: nonEmpty(session.repo),
+    branch: nonEmpty(session.branch),
+    machine_id: nonEmpty(session.machine_id) || 'local',
+    source: nonEmpty(session.source) || nonEmpty(session.tool) || 'local-broker',
+    idle_seconds: ageSeconds(receivedAt),
+    received_at: receivedAt,
+    _mc_list_origin: 'local-broker',
+  };
+}
+
+export function mergeActiveCodingSessions({ localSessions = [], cloudSessions = [] } = {}) {
+  const byId = new Map();
+  for (const session of Array.isArray(cloudSessions) ? cloudSessions : []) {
+    const id = session?.coding_session_id || session?.id;
+    if (id) byId.set(id, session);
+  }
+  for (const session of Array.isArray(localSessions) ? localSessions : []) {
+    const id = session?.coding_session_id || session?.id;
+    if (id) byId.set(id, session);
+  }
+  return [...byId.values()].sort(compareSessionsForList);
+}
+
+function compareSessionsForList(a, b) {
+  const aLocal = a?._mc_list_origin === 'local-broker' ? 0 : 1;
+  const bLocal = b?._mc_list_origin === 'local-broker' ? 0 : 1;
+  return aLocal - bLocal
+    || String(a?.label || a?.coding_session_id || '').localeCompare(String(b?.label || b?.coding_session_id || ''))
+    || String(a?.coding_session_id || '').localeCompare(String(b?.coding_session_id || ''));
 }
 
 export function buildSessionListView({
@@ -240,6 +335,13 @@ function formatAge(isoString) {
   return `${Math.floor(seconds / 86400)}d ago`;
 }
 
+function ageSeconds(isoString) {
+  if (!isoString) return null;
+  const t = Date.parse(isoString);
+  if (!Number.isFinite(t)) return null;
+  return Math.max(0, Math.floor((Date.now() - t) / 1000));
+}
+
 function cleanExcerpt(value) {
   return String(value || '')
     .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')
@@ -259,6 +361,12 @@ function nonEmpty(value) {
 function normaliseRepo(value) {
   const s = nonEmpty(value);
   return s ? s.toLowerCase() : null;
+}
+
+function localWorktreeName(cwd) {
+  if (!cwd) return null;
+  const parts = String(cwd).split(/[\\/]+/).filter(Boolean);
+  return parts.at(-1) || null;
 }
 
 function fixed(value, width) {

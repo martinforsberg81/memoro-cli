@@ -7,7 +7,7 @@ import { scanDaemons } from '../orphan-daemons.js';
 import { checkAndPrintFreshInstall } from '../first-run.js';
 import {
   buildSessionListView,
-  fetchActiveCodingSessions,
+  fetchActiveCodingSessionsWithLocalBroker,
   renderSessionListHuman,
 } from '../session-list.js';
 
@@ -19,7 +19,8 @@ export async function run(argv, deps = {}) {
   const stderr = deps.stderr || process.stderr;
   const loadRegistry = deps.readRegistry || readRegistry;
   const checkFreshInstall = deps.checkAndPrintFreshInstall || checkAndPrintFreshInstall;
-  const fetchActive = deps.fetchActiveSessions || ((args) => fetchActiveCodingSessions({ argv: args }));
+  const fetchActive = deps.fetchActiveSessions
+    || ((args) => fetchActiveCodingSessionsWithLocalBroker({ argv: args, deps }));
   const scan = deps.scanDaemons || scanDaemons;
   const opts = parseArgs(argv);
   if (opts.error) {
