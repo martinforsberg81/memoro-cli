@@ -74,6 +74,7 @@ import { writeToPty } from './mc/pty-write.js';
 import { requestBroker } from './mc/broker/client.js';
 import { normalizeInteractivePtyEnv } from './mc/interactive-env.js';
 import { renderIntro as renderSessionIntro } from './mc/session-intro.js';
+import { buildSessionListView, renderSessionListHuman } from './mc/session-list.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constants
@@ -820,16 +821,19 @@ async function runSessionsList(_argv, deps = {}) {
     return 0;
   }
 
-  for (const s of sessions) {
-    const ageSec = ageSeconds(s.received_at);
-    const ageLabel = ageSec == null ? '?' : humanAge(ageSec);
-    const statusLabel = formatStatus(s.idle_seconds);
-    const excerpt = (s.last_user_excerpt || s.last_assistant_excerpt || '').replace(/\s+/g, ' ').slice(0, 80);
-    const identifier = s.label || s.coding_session_id;
-    console.log(`[${identifier}] ${s.repo}  ${s.branch}  ${s.machine_id}  ${statusLabel}  ${ageLabel}`);
-    if (excerpt) console.log(`    ${excerpt}`);
-  }
+  process.stdout.write(renderSessionsListForList(sessions));
   return 0;
+}
+
+export function renderSessionsListForList(sessions = []) {
+  const view = buildSessionListView({
+    activeSessions: sessions,
+    localEntries: [],
+  });
+  return renderSessionListHuman({
+    view,
+    title: 'mc sessions:',
+  });
 }
 
 async function fetchLocalBrokerSessionsForList({ request = requestBroker } = {}) {
