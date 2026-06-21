@@ -6,6 +6,7 @@ import {
   dispatchLocalBrokerSession,
   mergeSessionsForList,
   normalizeLocalBrokerSessionForList,
+  renderSessionsListForList,
 } from '../../../src/bin-mc.js';
 
 describe('mc sessions list local broker view', () => {
@@ -52,6 +53,25 @@ describe('mc sessions list local broker view', () => {
     assert.equal(sessions.length, 1);
     assert.equal(sessions[0].label, 'native');
     assert.equal(sessions[0]._mc_list_origin, 'local-broker');
+  });
+
+  test('renders sessions list with the shared numbered table formatting', () => {
+    const session = normalizeLocalBrokerSessionForList({
+      id: 'sess_trip',
+      name: 'trip-v2',
+      tool: 'codex',
+      repo: 'memoro',
+      branch: 'fix/trip-detail-next-polish',
+      last_output_at: new Date(Date.now() - 6 * 60_000).toISOString(),
+      session_state: 'live',
+      attachable: true,
+    });
+
+    const out = renderSessionsListForList([session]);
+
+    assert.match(out, /^mc sessions:\n\nActive sessions/m);
+    assert.match(out, /1\. trip-v2\s+active\s+codex\s+memoro\s+fix\/trip-detail-next-polish\s+idle 6m\s+id=sess_trip/);
+    assert.doesNotMatch(out, /^\[trip-v2\]/m);
   });
 });
 
