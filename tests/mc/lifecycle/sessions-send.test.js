@@ -4,10 +4,12 @@ import assert from 'node:assert/strict';
 import {
   controlLocalBrokerSession,
   dispatchLocalBrokerSession,
-  mergeSessionsForList,
-  normalizeLocalBrokerSessionForList,
   renderSessionsListForList,
 } from '../../../src/bin-mc.js';
+import {
+  mergeActiveCodingSessions,
+  normalizeLocalBrokerSessionForList,
+} from '../../../src/mc/session-list.js';
 
 describe('mc sessions list local broker view', () => {
   test('normalizes live local broker sessions for sessions list', () => {
@@ -41,7 +43,7 @@ describe('mc sessions list local broker view', () => {
       attachable: true,
     });
 
-    const sessions = mergeSessionsForList({
+    const sessions = mergeActiveCodingSessions({
       localSessions: [local],
       cloudSessions: [{
         coding_session_id: 'sess_same',

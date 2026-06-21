@@ -23,7 +23,11 @@ import { join } from 'node:path';
 import { runMc, parseJsonOrNull } from '../_helpers/cli.js';
 import { writeRegistry, makeEntry } from '../_helpers/registry-fixture.js';
 import { run as runList } from '../../../src/mc/commands/list.js';
-import { buildSessionListView, renderSessionListHuman } from '../../../src/mc/session-list.js';
+import {
+  buildSessionListView,
+  fetchActiveCodingSessionsWithLocalBroker,
+  renderSessionListHuman,
+} from '../../../src/mc/session-list.js';
 
 function isoMinutesAgo(min) {
   return new Date(Date.now() - min * 60_000).toISOString();
@@ -200,6 +204,82 @@ describe('mc list', () => {
     assert.match(out, /Active sessions/);
     assert.match(out, /\(none\)/);
     assert.match(out, /1\. local-dead\s+local\s+claude/);
+  });
+
+  test('default human output lists local broker sessions as active', async () => {
+    const stdout = [];
+    const stderr = [];
+    const status = await runList([], {
+      stdout: { write: (s) => stdout.push(s) },
+      stderr: { write: (s) => stderr.push(s) },
+      checkAndPrintFreshInstall: async () => false,
+      scanDaemons: () => ({ orphan: [], stale: [] }),
+      readConfig: async () => ({ apiUrl: 'https://memoro.test' }),
+      getSecret: async () => 'token',
+      memoroFetch: async () => ({ sessions: [] }),
+      requestBroker: async (message) => {
+        assert.deepEqual(message, { type: 'sessions' });
+        return {
+          ok: true,
+          sessions: [{
+            id: 'sess_action',
+            name: 'action-v2',
+            tool: 'codex',
+            repo: 'memoro',
+            branch: 'sess/action-v2',
+            cwd: '/Users/me/.memoro/mc/worktrees/memoro/action-v2',
+            last_output_at: new Date(Date.now() - 10_000).toISOString(),
+            session_state: 'live',
+            attachable: true,
+          }],
+        };
+      },
+      readRegistry: () => ({ entries: [
+        makeEntry({
+          name: 'action-v2',
+          branch: 'sess/action-v2',
+          repo_slug: 'memoro',
+          coding_session_id: 'sess_action',
+          tool: 'codex',
+          session_state: 'live',
+        }),
+      ] }),
+    });
+
+    assert.equal(status, 0);
+    assert.equal(stderr.join(''), '');
+    const out = stdout.join('');
+    assert.match(out, /Active sessions/);
+    assert.match(out, /1\. action-v2\s+active\s+codex\s+memoro\s+sess\/action-v2/);
+    assert.match(out, /Local sessions[\s\S]*\(none\)/);
+  });
+
+  test('active lookup merges local broker sessions when cloud has none', async () => {
+    const res = await fetchActiveCodingSessionsWithLocalBroker({
+      deps: {
+        readConfig: async () => ({ apiUrl: 'https://memoro.test' }),
+        getSecret: async () => 'token',
+        memoroFetch: async () => ({ sessions: [] }),
+        requestBroker: async () => ({
+          ok: true,
+          sessions: [{
+            id: 'sess_trip',
+            name: 'trip-v2',
+            tool: 'codex',
+            repo: 'memoro',
+            branch: 'sess/trip-v2',
+            session_state: 'live',
+            attachable: true,
+          }],
+        }),
+      },
+    });
+
+    assert.equal(res.ok, true);
+    assert.equal(res.warning, null);
+    assert.equal(res.sessions.length, 1);
+    assert.equal(res.sessions[0].coding_session_id, 'sess_trip');
+    assert.equal(res.sessions[0].label, 'trip-v2');
   });
 
   test('active/local dedupe does not hide a same-label session from another repo', () => {
