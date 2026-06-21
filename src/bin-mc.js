@@ -15,6 +15,8 @@
  *                                 (lands as if the user typed it there).
  *   mc sessions read <id>       # fetch the recent transcript of another
  *                                 session.
+ *   mc sessions stop <id>       # stop a broker-owned LLM process.
+ *   mc sessions remove <id>     # remove a broker session from inventory.
  *
  * The wrapper holds:
  *   - a node-pty child running the selected coding tool, piped transparently
@@ -172,6 +174,8 @@ async function main() {
     }
     if (sub === 'send')        return runSessionsSend(rest);
     if (sub === 'read')        return runSessionsRead(rest);
+    if (sub === 'stop')        return runSessionsStop(rest);
+    if (sub === 'remove' || sub === 'rm') return runSessionsRemove(rest);
     console.error(`Unknown sessions subcommand: ${sub ?? '<missing>'}`);
     printHelp();
     return 2;
@@ -261,8 +265,8 @@ START OPTIONS
   mc new <name> [focus] --claude  Start the new session under Claude Code
   mc new <name> [focus] --tool <claude|codex|gemini>
   mc new <name> --from <ref>      Branch from a ref other than HEAD
-  mc resume <name> --codex        Use Codex only if prompted to start anew
-  mc resume <name> --claude       Use Claude Code only if prompted to start anew
+  mc resume <name> --codex        Use Codex only before first launch or for Codex sessions
+  mc resume <name> --claude       Use Claude Code only before first launch or for Claude sessions
 
 SETUP
   mc                              First run signs in to Memoro with browser device auth
@@ -295,6 +299,8 @@ FLEET / ADVANCED
   mc sessions send <label|id> <msg>
                                   Dispatch a message into another session
   mc sessions read <label|id>     Fetch another session's recent transcript
+  mc sessions stop <label|id>     Stop a broker-owned session
+  mc sessions remove <label|id>   Remove a broker session from inventory
   mc reconcile [--apply]          Detect sessions shipped elsewhere
   mc gc [--dry-run]               Reap dead, merged, or clean worktrees
   mc broker start/status/stop     Local PTY broker admin
@@ -330,23 +336,24 @@ WHAT HAPPENS ON START
 
   \`mc resume\` first attaches to a live broker-owned PTY when one exists,
   preserving that session surface without sending a new prompt. If no
-  local live PTY is attachable, mc asks before starting a new grounded
-  tool session in the same worktree. Idle tracked sessions that have never
+  local live PTY is attachable, mc relaunches the same provider-native
+  session by id. If mc cannot find that provider session id, it refuses to
+  start a contextless replacement. Idle tracked sessions that have never
   launched start as fresh grounded sessions on first resume.
 
 TOOL SELECTION
   \`mc tool-switch <tool>\` changes the default for future bare \`mc\` and
   \`mc new\` starts. It does not change a running session. Tool flags on
-  \`mc resume <name>\` are used only if the previous live session cannot be
-  attached and you confirm starting a new session in the same worktree.
+  \`mc resume <name>\` cannot switch provider for an existing provider
+  session; use \`mc new\` for a new tool conversation.
 
   When a live broker PTY exists, \`mc resume <name>\` and its tool-flag
   variants attach to that running session as-is instead of starting a
   duplicate.
 
-  \`mc resume\` lists mc's own registry sessions across tools. It does not
-  use Claude or Codex native resume pickers, so sessions started under one
-  tool remain visible after changing the configured restart tool.
+  \`mc resume\` lists mc's own registry sessions across tools and then calls
+  the selected tool's native resume-by-id path directly, without opening
+  Claude or Codex pickers.
 
 SESSION NAMES
   \`mc new <name>\` creates a local session name. Use that same name with
@@ -1037,6 +1044,123 @@ async function runSessionsRead(argv) {
   }
   console.error(`mc: read failed: ${result?.error || result?.status || 'no result'}`);
   return 1;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// `mc sessions stop/remove <id>`
+// ─────────────────────────────────────────────────────────────────────────────
+
+async function runSessionsStop(argv) {
+  const opts = parseSessionsControlArgs(argv);
+  if (opts.error || !opts.identifier) {
+    console.error(opts.error || 'Usage: mc sessions stop <label_or_session_id> [--signal SIGTERM]');
+    return 2;
+  }
+  return runSessionsControl({
+    identifier: opts.identifier,
+    kind: 'stop_session',
+    localAction: 'stop',
+    signal: opts.signal,
+  });
+}
+
+async function runSessionsRemove(argv) {
+  const opts = parseSessionsControlArgs(argv);
+  if (opts.error || !opts.identifier) {
+    console.error(opts.error || 'Usage: mc sessions remove <label_or_session_id>');
+    return 2;
+  }
+  return runSessionsControl({
+    identifier: opts.identifier,
+    kind: 'remove_session',
+    localAction: 'remove',
+    signal: opts.signal,
+  });
+}
+
+async function runSessionsControl({ identifier, kind, localAction, signal }) {
+  const local = await controlLocalBrokerSession(identifier, { action: localAction, signal }).catch(() => null);
+  if (local?.ok) {
+    console.log(`✓ ${localAction === 'stop' ? 'stopped' : 'removed'} ${local.id} via local broker`);
+    return 0;
+  }
+
+  const config = await readConfig();
+  const apiUrl = getApiUrl([]) || config.apiUrl;
+  const token = await getSecret(ACCOUNTS.TOKEN);
+  if (!token) {
+    console.error('mc: no Memoro token. Run `memoro-cli login` first.');
+    return 1;
+  }
+
+  const sid = await resolveIdentifierToId(apiUrl, token, identifier);
+  if (!sid) return 1;
+
+  const body = { kind, args: signal ? { signal } : {} };
+  const enqueue = await memoroFetch(apiUrl, `/api/coding-sessions/${encodeURIComponent(sid)}/commands`, {
+    token,
+    method: 'POST',
+    body,
+  }).catch(err => { console.error(`mc: ${err.message}`); return null; });
+  if (!enqueue?.command_id) return 1;
+
+  const result = await pollCommandResult(apiUrl, token, enqueue.command_id);
+  if (result?.status === 'done') {
+    console.log(`✓ ${localAction === 'stop' ? 'stopped' : 'removed'} ${sid}`);
+    return 0;
+  }
+  console.error(`mc: ${localAction} failed: ${result?.error || result?.status || 'no result'}`);
+  return 1;
+}
+
+export async function controlLocalBrokerSession(identifier, {
+  action,
+  signal = 'SIGTERM',
+  request = requestBroker,
+} = {}) {
+  if (!identifier || !action) return { ok: false, skipped: true, error: 'identifier and action are required' };
+  const inventory = await request({ type: 'sessions' }).catch(() => null);
+  if (!inventory?.ok || !Array.isArray(inventory.sessions)) {
+    return { ok: false, skipped: true, error: 'local broker unavailable' };
+  }
+  const session = inventory.sessions.find((item) => localSessionMatches(item, identifier));
+  if (!session) return { ok: false, skipped: true, error: 'local session not found' };
+  const sid = session.id || session.coding_session_id || identifier;
+
+  if (action === 'stop') {
+    const stopped = await request({ type: 'stop_session', id: sid, signal }).catch((err) => ({
+      ok: false,
+      error: err.message || String(err),
+    }));
+    return stopped?.ok ? { ok: true, id: sid, action } : { ok: false, id: sid, error: stopped?.error || 'stop failed' };
+  }
+
+  if (action === 'remove') {
+    const removed = await request({ type: 'remove_session', id: sid }).catch((err) => ({
+      ok: false,
+      error: err.message || String(err),
+    }));
+    return removed?.ok ? { ok: true, id: sid, action, removed: !!removed.removed } : { ok: false, id: sid, error: removed?.error || 'remove failed' };
+  }
+
+  return { ok: false, id: sid, error: `unknown action: ${action}` };
+}
+
+function parseSessionsControlArgs(argv) {
+  const opts = { identifier: null, signal: 'SIGTERM' };
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
+    if (arg === '--signal') {
+      const next = argv[++i];
+      if (!next || next.startsWith('--')) return { ...opts, error: '--signal requires a value' };
+      opts.signal = next;
+      continue;
+    }
+    if (arg.startsWith('--')) return { ...opts, error: `unknown flag: ${arg}` };
+    if (opts.identifier) return { ...opts, error: `unexpected arg: ${arg}` };
+    opts.identifier = arg;
+  }
+  return opts;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

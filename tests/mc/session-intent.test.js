@@ -56,6 +56,22 @@ describe('mc session launch intents', () => {
     assert.equal(intent.attachAfterLaunch, true);
   });
 
+  test('resume sessions can carry adapter-native resume argv', () => {
+    const intent = buildResumeSessionLaunchIntent({
+      entry: {
+        name: 'data',
+        tool: 'codex',
+        worktree_path: '/repo-data',
+      },
+      launchTool: { id: 'codex' },
+      resumeArgv: ['resume', 'cx_123'],
+    });
+
+    assert.equal(intent.mode, MC_SESSION_LAUNCH_MODES.RESUME);
+    assert.deepEqual(intent.argv, ['resume', 'cx_123']);
+    assert.equal(intent.sendStartupMessage, false);
+  });
+
   test('cloud sessions are headless broker launches with explicit source identity', () => {
     const intent = buildCloudSessionLaunchIntent({
       cwd: '/workspace/repo',

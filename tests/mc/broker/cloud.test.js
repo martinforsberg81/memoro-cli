@@ -204,6 +204,68 @@ describe('CloudBrokerClient', () => {
     client.stop();
   });
 
+  test('executes cloud stop/remove commands against the local broker', async () => {
+    resetFakeWs();
+    const requests = [];
+    const client = new CloudBrokerClient({
+      apiUrl: 'https://memoro.test',
+      token: 'tok',
+      machineId: 'machine',
+      WebSocketImpl: FakeWebSocket,
+      request: async (msg) => {
+        requests.push(msg);
+        if (msg.type === 'sessions') return { ok: true, sessions: [] };
+        if (msg.type === 'stop_session') return { ok: true, stopped: true };
+        if (msg.type === 'remove_session') return { ok: true, removed: true };
+        throw new Error(`unexpected request: ${msg.type}`);
+      },
+      sleepImpl: async () => {},
+      sessionRefreshIntervalMs: null,
+    });
+
+    client.start();
+    const control = FakeWebSocket.instances[0];
+    control.open();
+    await new Promise((resolve) => setImmediate(resolve));
+    control.sent = [];
+
+    control.message(JSON.stringify({
+      type: 'command',
+      command_id: 'cmd_stop',
+      kind: 'stop_session',
+      coding_session_id: 'sess_a',
+      args: { signal: 'SIGHUP' },
+    }));
+    control.message(JSON.stringify({
+      type: 'command',
+      command_id: 'cmd_remove',
+      kind: 'remove_session',
+      coding_session_id: 'sess_a',
+      args: {},
+    }));
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.deepEqual(requests.filter((msg) => msg.type !== 'sessions').slice(-2), [
+      { type: 'stop_session', id: 'sess_a', signal: 'SIGHUP' },
+      { type: 'remove_session', id: 'sess_a' },
+    ]);
+    assert.deepEqual(control.sent.map((s) => JSON.parse(s)).filter((msg) => msg.type === 'result'), [
+      {
+        type: 'result',
+        command_id: 'cmd_stop',
+        ok: true,
+        data: { ok: true, stopped: true },
+      },
+      {
+        type: 'result',
+        command_id: 'cmd_remove',
+        ok: true,
+        data: { ok: true, removed: true },
+      },
+    ]);
+    client.stop();
+  });
+
   test('refreshes session inventory periodically while connected', async () => {
     resetFakeWs();
     let tick = null;

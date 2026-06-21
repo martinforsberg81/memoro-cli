@@ -85,14 +85,13 @@ describe('codex launchSpec — binary resolution', () => {
     assert.equal(spec.bin, '/usr/local/bin/codex');
   });
 
-  it('args() drops the wrapper-injected --resume and leaves startup message for PTY delivery', () => {
+  it('args() preserves native resume subcommands and leaves startup message for PTY delivery', () => {
     const spec = codex.launchSpec({ resolveBinary: () => '/x/codex' });
-    assert.deepEqual(spec.args(['--resume', '--foo'], { startupMessage: 'grounding' }), ['--foo']);
+    assert.deepEqual(spec.args(['resume', 'cx_123'], { startupMessage: 'grounding' }), ['resume', 'cx_123']);
   });
 
-  it('args() drops an optional --resume value defensively', () => {
-    const spec = codex.launchSpec({ resolveBinary: () => '/x/codex' });
-    assert.deepEqual(spec.args(['--resume', 'DATA'], { startupMessage: 'grounding' }), []);
+  it('resumeArgs uses Codex native resume by id', () => {
+    assert.deepEqual(codex.resumeArgs({ sessionId: 'cx_123' }), ['resume', 'cx_123']);
   });
 
   it('args() allows empty launches; grounding is delivered through the owned PTY', () => {
@@ -115,10 +114,12 @@ describe('codex launchSpec — binary resolution', () => {
         policy: { permissions: { workspace: 'worktree', approval: 'never' } },
       },
     });
-    assert.deepEqual(spec.args(['--resume', 'DATA'], {
+    assert.deepEqual(spec.args(['resume', 'cx_123'], {
       startupMessage: 'grounding',
       effectivePolicy,
     }), [
+      'resume',
+      'cx_123',
       '--sandbox',
       'workspace-write',
       '--ask-for-approval',
@@ -172,5 +173,9 @@ describe('claude-code launchSpec — grounding args', () => {
       'grounding',
     ]);
     assert.equal(spec.startupMessageDelivery, 'launch-args');
+  });
+
+  it('resumeArgs uses Claude native resume by id', () => {
+    assert.deepEqual(claudeCode.resumeArgs({ sessionId: 'cl_123' }), ['--resume', 'cl_123']);
   });
 });

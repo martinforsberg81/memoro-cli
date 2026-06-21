@@ -16,6 +16,7 @@ import { existsSync } from 'node:fs';
 import { readRegistry, removeEntry } from '../registry.js';
 import { git, tryGit, primaryWorktree, branchExists } from '../git.js';
 import { scanDaemons, reapOrphans, DEFAULT_MIN_AGE_MS } from '../orphan-daemons.js';
+import { removeBrokerSessionForEntry } from '../broker/session-cleanup.js';
 
 export async function run(argv) {
   const opts = parseArgs(argv);
@@ -55,6 +56,7 @@ export async function run(argv) {
   const errors = [];
   for (const c of candidates) {
     try {
+      await removeBrokerSessionForEntry(c);
       if (c.worktree_path && existsSync(c.worktree_path)) {
         git(primary, ['worktree', 'remove', '--force', c.worktree_path]);
       } else {

@@ -8,8 +8,8 @@
  *
  * Resume is not `mc new` with another label. If the broker still owns a live
  * PTY for this registry entry, resume attaches to it and sends no new prompt.
- * If the old PTY is gone, resume asks before starting a new tool session in
- * the same worktree. If the entry has never had a tool session, resume is the
+ * If the old PTY is gone, resume relaunches the same provider-native tool
+ * session by id. If the entry has never had a tool session, resume is the
  * first fresh grounded start for that tracked worktree.
  */
 import { findEntry, readRegistry, upsertEntry } from '../registry.js';
@@ -23,6 +23,10 @@ import {
   buildNewSessionLaunchIntent,
   buildResumeSessionLaunchIntent,
 } from '../session-intent.js';
+import {
+  buildNativeResumeArgv,
+  resolveToolSessionForResume,
+} from '../tool-session.js';
 import {
   buildSessionListView,
   fetchActiveCodingSessions,
@@ -66,7 +70,7 @@ export async function run(rawArgv, deps = {}) {
     stderr.write(`mc: no such session "${opts.name}"\n`);
     return 1;
   }
-  let freshStartInSameWorktree = !hasStoredToolSession(entry);
+  const firstLaunchInWorktree = !hasStoredToolSession(entry);
 
   const toolValidation = validateToolFlag(opts.tool);
   if (toolValidation.error) {
@@ -89,21 +93,14 @@ export async function run(rawArgv, deps = {}) {
       stdout.write(renderActiveSelectionMessage(active));
       return 0;
     }
-    if (hasStoredToolSession(entry)) {
-      const confirmed = await confirmRestartInWorktree({
-        entry,
-        opts,
-        stdin,
-        stdout,
-        stderr,
-        deps,
-      });
-      if (!confirmed) return 1;
-      freshStartInSameWorktree = true;
-    }
   }
 
   if (opts.tool) {
+    const compatibility = validateResumeToolOverride(entry, toolValidation.resolved);
+    if (compatibility.error) {
+      stderr.write(`mc: ${compatibility.error}\n`);
+      return 2;
+    }
     const res = applyToolOverride(entry, opts.tool, {
       upsert: deps.upsertEntry || upsertEntry,
       resolved: toolValidation.resolved,
@@ -136,7 +133,7 @@ export async function run(rawArgv, deps = {}) {
   // Broker-owned process model: resume starts through the broker and the
   // local terminal attaches as a client. Closing this terminal detaches
   // without killing the LLM session.
-  const launch = freshStartInSameWorktree
+  const launch = firstLaunchInWorktree
     ? freshLaunchDependency(deps)
     : (deps.launchResumeSession || launchResumeSession);
   return launch({ entry, apiArgv: argv, stderr, env: process.env });
@@ -149,14 +146,34 @@ export async function launchResumeSession({
   stderr = process.stderr,
   deps = {},
 } = {}) {
-  const launchTool = entry?.tool ? resolveToolInput(entry.tool) : null;
+  const launchTool = resolveToolInput(entry?.tool || DEFAULT_TOOL);
   await materialiseVaultForLaunch({ entry, launchTool, stderr, deps });
+
+  const toolSession = await (deps.resolveToolSessionForResume || resolveToolSessionForResume)({
+    entry,
+    launchTool,
+    deps: deps.toolSessionDeps || deps,
+  });
+  if (!toolSession?.ok) {
+    stderr.write(renderCannotResumeSameToolSession(entry, toolSession));
+    return 1;
+  }
+  const resumeArgv = buildNativeResumeArgv({
+    entry,
+    launchTool,
+    sessionId: toolSession.sessionId,
+  });
+  if (!resumeArgv.ok) {
+    stderr.write(renderUnsupportedNativeResume(entry, resumeArgv));
+    return 1;
+  }
 
   const launch = deps.launchBrokerOwnedSession || launchBrokerOwnedSession;
   const result = await launch({
     ...buildResumeSessionLaunchIntent({
       entry,
       launchTool,
+      resumeArgv: resumeArgv.argv,
       apiArgv,
       env,
     }),
@@ -167,6 +184,9 @@ export async function launchResumeSession({
         name: entry.name,
         coding_session_id: codingSessionId,
         session_state: 'live',
+        tool_session_id: toolSession.sessionId,
+        tool_session_source: toolSession.source,
+        tool_transcript_path: toolSession.transcriptPath || null,
       });
     },
     deps: deps.launchDeps || {},
@@ -182,7 +202,7 @@ export async function launchFreshSession({
   stderr = process.stderr,
   deps = {},
 } = {}) {
-  const launchTool = entry?.tool ? resolveToolInput(entry.tool) : null;
+  const launchTool = resolveToolInput(entry?.tool || DEFAULT_TOOL);
   await materialiseVaultForLaunch({ entry, launchTool, stderr, deps });
 
   const launch = deps.launchBrokerOwnedSession || launchBrokerOwnedSession;
@@ -209,8 +229,6 @@ export async function launchFreshSession({
   if (typeof result === 'number') return result;
   return result?.code ?? 0;
 }
-
-export const launchRestartSession = launchFreshSession;
 
 async function materialiseVaultForLaunch({
   entry,
@@ -305,7 +323,7 @@ export async function runResumePicker({
   if (opts.json) {
     stdout.write(JSON.stringify({
       entries,
-      hint: 'Run `mc resume <name>` to re-enter a session. Tool flags apply only if mc asks to start a new session in the same worktree.',
+      hint: 'Run `mc resume <name>` to re-enter a session. Tool flags cannot switch provider for an existing provider session.',
     }, null, 2) + '\n');
     return 0;
   }
@@ -363,7 +381,6 @@ export async function resumeSelectedChoice(choice, {
   stderr = process.stderr,
   launchResumeSession: launch = launchResumeSession,
   launchFreshSession: freshLaunchOverride,
-  launchRestartSession: restartLaunch,
   attachLiveBrokerSession: attachLive = attachLiveBrokerSession,
   upsertEntry: upsert = upsertEntry,
   resolvedTool = null,
@@ -381,29 +398,21 @@ export async function resumeSelectedChoice(choice, {
   }
 
   let entry = choice;
-  let freshStartInSameWorktree = !hasStoredToolSession(entry);
+  const firstLaunchInWorktree = !hasStoredToolSession(entry);
   const freshLaunch = freshLaunchDependency({
     launchFreshSession: freshLaunchOverride,
-    launchRestartSession: restartLaunch,
   });
   if (!opts.noLaunch && process.env.MC_TEST_MODE !== '1') {
     const attached = await attachLive(entry, { stdin, stdout, stderr });
     if (attached?.attached) return attached.code ?? 0;
-    if (hasStoredToolSession(entry)) {
-      const confirmed = await confirmRestartInWorktree({
-        entry,
-        opts,
-        stdin,
-        stdout,
-        stderr,
-        deps,
-      });
-      if (!confirmed) return 1;
-      freshStartInSameWorktree = true;
-    }
   }
 
   if (opts.tool) {
+    const compatibility = validateResumeToolOverride(entry, resolvedTool);
+    if (compatibility.error) {
+      stderr.write(`mc: ${compatibility.error}\n`);
+      return 2;
+    }
     const res = applyToolOverride(entry, opts.tool, { upsert, resolved: resolvedTool });
     if (res.error) {
       stderr.write(`mc: ${res.error}\n`);
@@ -416,7 +425,7 @@ export async function resumeSelectedChoice(choice, {
     emitCd(entry.worktree_path, { enabled: emitDirectives || undefined });
   }
   if (opts.noLaunch || process.env.MC_TEST_MODE === '1') return 0;
-  return freshStartInSameWorktree ? freshLaunch({ entry }) : launch({ entry });
+  return firstLaunchInWorktree ? freshLaunch({ entry }) : launch({ entry });
 }
 
 export async function attachLiveBrokerSession(entry, {
@@ -476,37 +485,20 @@ function brokerSessionId(session) {
 }
 
 function hasStoredToolSession(entry) {
-  return !!nonEmpty(entry?.coding_session_id);
+  return !!(
+    nonEmpty(entry?.coding_session_id)
+    || nonEmpty(entry?.tool_session_id)
+    || nonEmpty(entry?.provider_session_id)
+    || nonEmpty(entry?.llm_session_id)
+  );
 }
 
 function freshLaunchDependency(deps = {}) {
-  return deps.launchFreshSession || deps.launchRestartSession || launchFreshSession;
+  return deps.launchFreshSession || launchFreshSession;
 }
 
 function freshLaunchFocus(entry = {}) {
   return nonEmpty(entry.focus) || nonEmpty(entry.label);
-}
-
-async function confirmRestartInWorktree({
-  entry,
-  opts,
-  stdin = process.stdin,
-  stdout = process.stdout,
-  stderr = process.stderr,
-  deps = {},
-} = {}) {
-  const isInteractive = deps.isTTY ?? (stdin?.isTTY && stdout?.isTTY);
-  if (opts?.json || !isInteractive) {
-    stderr.write(renderMissingLiveSessionMessage(entry));
-    return false;
-  }
-  const answer = await promptYesNo({
-    prompt: 'Den tidigare sessionen kan inte startas. Vill du starta en ny session i samma worktree? y/n ',
-    stdin,
-    stdout,
-    deps,
-  });
-  return answer.trim().toLowerCase() === 'y';
 }
 
 function normalizePathForMatch(value) {
@@ -519,14 +511,23 @@ function normalizePathForMatch(value) {
   return out;
 }
 
-function renderMissingLiveSessionMessage(entry = {}) {
+function renderCannotResumeSameToolSession(entry = {}, resolved = {}) {
   const name = nonEmpty(entry.name) || '<unknown>';
-  const id = nonEmpty(entry.coding_session_id) || '<unknown>';
   const worktree = nonEmpty(entry.worktree_path) || '<unknown>';
+  const source = nonEmpty(resolved?.source) || nonEmpty(entry.tool) || '<unknown>';
   return [
-    `mc: den tidigare sessionen kan inte startas (${name}).`,
-    `mc: expected coding session ${id} in ${worktree}.`,
-    'mc: run `mc resume <name>` in an interactive terminal to choose whether to start a new session in the same worktree.',
+    `mc: kan inte resume:a samma provider-session för "${name}".`,
+    `mc: no provider-native session id found for ${source} in ${worktree}.`,
+    'mc: refusing to start a contextless replacement session.',
+    '',
+  ].join('\n');
+}
+
+function renderUnsupportedNativeResume(entry = {}, resolved = {}) {
+  const tool = nonEmpty(resolved?.tool) || nonEmpty(entry.tool) || '<unknown>';
+  return [
+    `mc: ${tool} adapter saknar native resume-kontrakt.`,
+    'mc: refusing to start a contextless replacement session.',
     '',
   ].join('\n');
 }
@@ -551,6 +552,15 @@ function validateToolFlag(tool) {
   return { resolved };
 }
 
+function validateResumeToolOverride(entry, resolvedTool = null) {
+  if (!hasStoredToolSession(entry) || !resolvedTool) return {};
+  const current = resolveToolInput(entry?.tool || DEFAULT_TOOL);
+  if (!current || current.id === resolvedTool.id) return {};
+  return {
+    error: `cannot resume provider session with a different tool (${current.shortName} -> ${resolvedTool.shortName})`,
+  };
+}
+
 function applyToolOverride(entry, tool, { upsert = upsertEntry, resolved = null } = {}) {
   const resolvedTool = resolved || validateToolFlag(tool).resolved;
   if (!resolvedTool) {
@@ -561,20 +571,6 @@ function applyToolOverride(entry, tool, { upsert = upsertEntry, resolved = null 
 
 async function promptForChoice({ stdin, stdout, deps = {} } = {}) {
   const prompt = 'Select a session number: ';
-  if (typeof deps.readLine === 'function') {
-    stdout.write(prompt);
-    return deps.readLine({ stdin, stdout, prompt });
-  }
-  const { createInterface } = await import('node:readline/promises');
-  const rl = createInterface({ input: stdin, output: stdout });
-  try {
-    return await rl.question(prompt);
-  } finally {
-    rl.close();
-  }
-}
-
-async function promptYesNo({ prompt, stdin, stdout, deps = {} } = {}) {
   if (typeof deps.readLine === 'function') {
     stdout.write(prompt);
     return deps.readLine({ stdin, stdout, prompt });

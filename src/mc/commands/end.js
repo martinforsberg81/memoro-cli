@@ -22,6 +22,7 @@ import { findEntry, removeEntry } from '../registry.js';
 import { git, tryGit, primaryWorktree, isDirty, branchExists, commitsAhead } from '../git.js';
 import { emitCd, parseDirectiveFlag } from '../shell-directives.js';
 import { detectSquashPhantom } from '../squash-phantom.js';
+import { removeBrokerSessionForEntry } from '../broker/session-cleanup.js';
 
 function safeRealpath(p) {
   try { return realpathSync(p); } catch { return p; }
@@ -145,6 +146,12 @@ export async function run(rawArgv, runOpts = {}) {
   const results = [];
   for (const { entry, verdict } of plans) {
     try {
+      const brokerCleanup = await removeBrokerSessionForEntry(entry, {
+        requestBroker: runOpts.deps?.requestBroker,
+      });
+      if (!brokerCleanup.ok && !brokerCleanup.skipped) {
+        stderr.write(`mc: warning — broker cleanup for "${entry.name}" failed (${brokerCleanup.error || brokerCleanup.reason})\n`);
+      }
       // §12d: shred any materialised vault tokens for this session
       // BEFORE removing the worktree. Best-effort: failures here are
       // logged via the result but don't block worktree teardown. If

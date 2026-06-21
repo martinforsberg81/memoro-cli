@@ -1,7 +1,10 @@
 import test, { describe } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { dispatchLocalBrokerSession } from '../../../src/bin-mc.js';
+import {
+  controlLocalBrokerSession,
+  dispatchLocalBrokerSession,
+} from '../../../src/bin-mc.js';
 
 describe('mc sessions send local broker dispatch', () => {
   test('resolves local session names before dispatching', async () => {
@@ -93,5 +96,59 @@ describe('mc sessions send local broker dispatch', () => {
     assert.equal(result.skipped, true);
     assert.match(result.error, /not found/);
     assert.deepEqual(requests, [{ type: 'sessions' }]);
+  });
+});
+
+describe('mc sessions local broker cleanup', () => {
+  test('stops a local broker session by name', async () => {
+    const requests = [];
+    const result = await controlLocalBrokerSession('legal', {
+      action: 'stop',
+      signal: 'SIGHUP',
+      request: async (message) => {
+        requests.push(message);
+        if (message.type === 'sessions') return { ok: true, sessions: [{ id: 'sess_a', name: 'legal' }] };
+        if (message.type === 'stop_session') return { ok: true };
+        throw new Error(`unexpected request: ${message.type}`);
+      },
+    });
+
+    assert.deepEqual(result, { ok: true, id: 'sess_a', action: 'stop' });
+    assert.deepEqual(requests, [
+      { type: 'sessions' },
+      { type: 'stop_session', id: 'sess_a', signal: 'SIGHUP' },
+    ]);
+  });
+
+  test('removes a local broker session by worktree name', async () => {
+    const requests = [];
+    const result = await controlLocalBrokerSession('scoped-session-action', {
+      action: 'remove',
+      request: async (message) => {
+        requests.push(message);
+        if (message.type === 'sessions') {
+          return {
+            ok: true,
+            sessions: [{
+              id: 'sess_b',
+              cwd: '/Users/me/.memoro/mc/worktrees/memoro/scoped-session-action',
+            }],
+          };
+        }
+        if (message.type === 'remove_session') return { ok: true, removed: true };
+        throw new Error(`unexpected request: ${message.type}`);
+      },
+    });
+
+    assert.deepEqual(result, {
+      ok: true,
+      id: 'sess_b',
+      action: 'remove',
+      removed: true,
+    });
+    assert.deepEqual(requests, [
+      { type: 'sessions' },
+      { type: 'remove_session', id: 'sess_b' },
+    ]);
   });
 });
