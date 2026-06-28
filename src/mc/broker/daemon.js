@@ -50,6 +50,7 @@ export async function startBrokerServer({
   const server = createServerImpl((conn) => {
     let raw = Buffer.alloc(0);
     let handledInitialFrame = false;
+    conn.on?.('error', () => {});
     const handleFrame = (frame, initialInput = Buffer.alloc(0)) => {
       if (handledInitialFrame) return;
       handledInitialFrame = true;
@@ -62,7 +63,7 @@ export async function startBrokerServer({
         handled.attach(conn, initialInput);
         return;
       }
-      conn.end(JSON.stringify(handled.response) + '\n');
+      safeEnd(conn, JSON.stringify(handled.response) + '\n');
       if (handled.stop) {
         setImmediate(() => {
           stopBrokerServer({ server, socketPath, pidPath })
@@ -115,6 +116,23 @@ export async function startBrokerServer({
     status,
     stop: () => stopBrokerServer({ server, socketPath, pidPath }),
   };
+}
+
+function safeEnd(conn, data = undefined) {
+  try {
+    if (data === undefined) conn.end();
+    else conn.end(data);
+    return true;
+  } catch (err) {
+    if (isBrokenPipeError(err)) return false;
+    throw err;
+  }
+}
+
+function isBrokenPipeError(err) {
+  return err?.code === 'EPIPE'
+    || err?.code === 'ECONNRESET'
+    || err?.code === 'ERR_STREAM_DESTROYED';
 }
 
 export async function stopBrokerServer({ server, socketPath = brokerSocketPath(), pidPath = brokerPidPath() } = {}) {

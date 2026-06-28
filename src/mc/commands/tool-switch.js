@@ -3,7 +3,7 @@
  *
  * Make a different coding tool the default for future bare `mc` / `mc new`
  * invocations. Existing sessions keep their stored tool until the user
- * relaunches them explicitly with `mc resume <name> --codex/--claude`.
+ * relaunches them explicitly with `mc open <name> --codex/--claude`.
  *
  * Five phases per §13d:
  *   1. Resolve the target adapter (`claude-code` | `codex` | `gemini-cli`).
@@ -90,8 +90,8 @@ the target instruction file unless you pass --force.
 
 This does not touch existing sessions. To relaunch one existing session with
 a different tool, exit the current tool completely and run:
-  mc resume <name> --codex
-  mc resume <name> --claude
+  mc open <name> --codex
+  mc open <name> --claude
 
 EXIT CODES
   0   success (or dry-run with no blockers)

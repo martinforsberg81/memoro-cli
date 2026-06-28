@@ -15,7 +15,7 @@ describe('mc --help', () => {
     assert.match(r.stdout, /NEW USER FLOW/);
     assert.match(r.stdout, /WHAT HAPPENS ON START/);
     assert.match(r.stdout, /TOOL SELECTION/);
-    assert.match(r.stdout, /mc resume <name> --codex\s+Use Codex only before first launch or for Codex sessions/);
+    assert.match(r.stdout, /mc open <name> --codex\s+Use Codex only before first launch or for Codex sessions/);
     assert.match(r.stdout, /Terminal commands manage machines and sessions/);
     assert.match(r.stdout, /Inside a launched LLM session/);
     assert.match(r.stdout, /same across Codex, Claude Code/);
@@ -26,7 +26,7 @@ describe('mc --help', () => {
     assert.match(r.stdout, /without sending a new prompt/);
     assert.match(r.stdout, /relaunches the same provider-native\s+session by id/);
     assert.match(r.stdout, /refuses to\s+start a contextless replacement/);
-    assert.match(r.stdout, /Idle tracked sessions that have never\s+launched start as fresh grounded sessions on first resume/);
+    assert.match(r.stdout, /Idle tracked sessions that have never\s+launched start as fresh grounded sessions on first open/);
     assert.match(r.stdout, /cannot switch provider for an existing provider\s+session/);
     assert.doesNotMatch(r.stdout, /prompted to start anew/);
     assert.doesNotMatch(r.stdout, /asks before starting a new grounded/);

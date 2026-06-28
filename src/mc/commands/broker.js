@@ -46,7 +46,11 @@ export async function runBrokerWith(opts, deps) {
   const ensureBroker = deps.ensureBroker || ensureBrokerRunning;
 
   if (opts.daemon) {
-    await deps.runDaemon({ readyFile: opts.readyFile || null });
+    await deps.runDaemon({
+      readyFile: opts.readyFile || null,
+      socketPath: opts.socketPath || undefined,
+      pidPath: opts.pidPath || undefined,
+    });
     return 0;
   }
 
@@ -287,6 +291,18 @@ export function parseArgs(argv) {
     if (a === '--once') { opts.once = true; continue; }
     if (a === '--daemon') { opts.daemon = true; opts.verb = opts.verb || 'daemon'; continue; }
     if (a === '--ready-file') { opts.readyFile = argv[++i]; continue; }
+    if (a === '--socket-path') {
+      const next = argv[++i];
+      if (!next || next.startsWith('--')) return { ...opts, error: '--socket-path requires a value' };
+      opts.socketPath = next;
+      continue;
+    }
+    if (a === '--pid-path') {
+      const next = argv[++i];
+      if (!next || next.startsWith('--')) return { ...opts, error: '--pid-path requires a value' };
+      opts.pidPath = next;
+      continue;
+    }
     if (a === '--source-id') {
       const next = argv[++i];
       if (!next || next.startsWith('--')) return { ...opts, error: '--source-id requires a value' };

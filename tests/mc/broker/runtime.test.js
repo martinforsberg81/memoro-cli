@@ -360,6 +360,28 @@ describe('BrokerRuntime', () => {
     assert.deepEqual(fake.ptys[0].writes, ['yes', 'no', 'again']);
   });
 
+  test('attachConnection cleans up when the client socket is already gone', () => {
+    const { runtime } = makeRuntime();
+    const conn = {
+      handlers: new Map(),
+      write() {
+        const err = new Error('write EPIPE');
+        err.code = 'EPIPE';
+        throw err;
+      },
+      end() {},
+      on(event, handler) { this.handlers.set(event, handler); },
+      off(event, handler) {
+        if (this.handlers.get(event) === handler) this.handlers.delete(event);
+      },
+    };
+
+    runtime.handle({ type: 'launch_session', session: { id: 'sess_a' } });
+
+    assert.deepEqual(runtime.attachConnection({ id: 'sess_a', attach_id: 'att_dead' }, conn), { ok: true });
+    assert.deepEqual(runtime.listSessions()[0].attached, []);
+  });
+
   test('launch_session starts and stops sidecars when requested', () => {
     const { runtime, sidecars } = makeRuntime();
 

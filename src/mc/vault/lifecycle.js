@@ -292,7 +292,7 @@ export async function materialiseForSession({
     return {
       ok: false, reason: 'vault-locked',
       materialised: [], skipped,
-      hint: `vault locked — tokens not materialised for this session; run \`mc vault unlock\` then \`mc resume ${sessionId}\``,
+      hint: `vault locked — tokens not materialised for this session; run \`mc vault unlock\` then \`mc open ${sessionId}\``,
     };
   }
   await ensureUnlocked({ portal, authHash: resolved.authHash });

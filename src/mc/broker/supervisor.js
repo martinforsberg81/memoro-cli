@@ -98,6 +98,8 @@ async function stopExistingBroker({ request, sleep, timeoutMs, intervalMs }) {
 
 export function spawnBrokerDaemon({
   readyFile = null,
+  socketPath = null,
+  pidPath = null,
   logPath = brokerLogPath(),
   env = process.env,
   argv = process.argv,
@@ -111,6 +113,8 @@ export function spawnBrokerDaemon({
     const err = openSyncImpl(logPath, 'a');
     const args = [process.execPath, argv[1], 'broker', '--daemon'];
     if (readyFile) args.push('--ready-file', readyFile);
+    if (socketPath) args.push('--socket-path', socketPath);
+    if (pidPath) args.push('--pid-path', pidPath);
     const child = spawnImpl(args[0], args.slice(1), {
       detached: true,
       stdio: ['ignore', out, err],

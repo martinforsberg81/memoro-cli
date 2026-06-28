@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test, { describe } from 'node:test';
 
 import {
+  __test__ as launchClientTest,
   brokerSessionPaths,
   ensureBrokerRunning,
   launchBrokerOwnedSession,
@@ -26,6 +27,43 @@ function makeStreams() {
 }
 
 describe('launchBrokerOwnedSession', () => {
+  test('routes new launches through a per-session host broker when enabled', async () => {
+    const requests = [];
+    const stderr = makeStreams().stderr;
+    const res = await launchClientTest.resolveLaunchBroker({
+      codingSessionId: 'sess_hosted',
+      request: async (message, options) => {
+        requests.push({ message, options });
+        return { ok: true };
+      },
+      ensureBroker: async () => assert.fail('global broker should not be used'),
+      cloudBroker: {},
+      stderr,
+      deps: {
+        useSessionHost: true,
+        ensureSessionHost: async ({ sessionId }) => {
+          assert.equal(sessionId, 'sess_hosted');
+          return {
+            ok: true,
+            socketPath: '/tmp/mc-hosted.sock',
+            broker: { pid: 123 },
+          };
+        },
+      },
+    });
+
+    assert.equal(res.ok, true);
+    assert.equal(res.hostKind, 'session');
+    assert.equal(res.socketPath, '/tmp/mc-hosted.sock');
+    assert.deepEqual(res.broker, { pid: 123 });
+
+    await res.request({ type: 'launch_session', session: { id: 'sess_hosted' } });
+    assert.deepEqual(requests, [{
+      message: { type: 'launch_session', session: { id: 'sess_hosted' } },
+      options: { socketPath: '/tmp/mc-hosted.sock' },
+    }]);
+  });
+
   test('prepares sidecars, launches through broker, then attaches', async () => {
     const streams = makeStreams();
     const sequence = [];

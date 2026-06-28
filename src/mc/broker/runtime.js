@@ -46,6 +46,7 @@ export class BrokerRuntime {
     this.sidecars = new Map();
     this.sessionMetadata = new Map();
     this.attaches = new Map();
+    this.manager.setMaxListeners?.(Math.max(this.manager.getMaxListeners?.() || 10, 100));
     this.manager.on('exit', ({ id }) => this._stopSidecars(id));
   }
 
@@ -77,7 +78,7 @@ export class BrokerRuntime {
     try {
       return this._attachConnection(message, conn, initialInput);
     } catch (err) {
-      conn.end(JSON.stringify({ ok: false, error: err.message || String(err) }) + '\n');
+      safeEnd(conn, JSON.stringify({ ok: false, error: err.message || String(err) }) + '\n');
       return { ok: false };
     }
   }
@@ -223,6 +224,7 @@ export class BrokerRuntime {
     const id = requiredString(message?.id || message?.session_id, 'session id');
     const session = this.manager.get(id);
     if (!session) throw new Error(`unknown broker session: ${id}`);
+    conn.on?.('error', () => {});
 
     if (message.cols != null || message.rows != null) {
       this.manager.resize(
@@ -243,15 +245,6 @@ export class BrokerRuntime {
     };
     this.attaches.set(attachId, attach);
 
-    conn.write(JSON.stringify({
-      ok: true,
-      attach,
-      writer: true,
-      session: this._withAttachStatus(this.manager.status(id)),
-    }) + '\n');
-    const snapshot = typeof session.recentOutput === 'function' ? session.recentOutput() : '';
-    if (snapshot) conn.write(snapshot);
-
     const decoder = new StringDecoder('utf8');
     let closed = false;
     const writeInput = (chunk) => {
@@ -260,12 +253,12 @@ export class BrokerRuntime {
       if (data) session.write(data);
     };
     const onSessionData = (event) => {
-      if (!closed && event?.id === id) conn.write(event.data);
+      if (!closed && event?.id === id && !safeWrite(conn, event.data)) cleanup();
     };
     const onSessionExit = (event) => {
       if (event?.id !== id) return;
       cleanup();
-      conn.end();
+      safeEnd(conn);
     };
     const cleanup = () => {
       if (closed) return;
@@ -289,6 +282,19 @@ export class BrokerRuntime {
     conn.on?.('end', cleanup);
     conn.on?.('close', cleanup);
     conn.on?.('error', cleanup);
+
+    const wroteAck = safeWrite(conn, JSON.stringify({
+      ok: true,
+      attach,
+      writer: true,
+      session: this._withAttachStatus(this.manager.status(id)),
+    }) + '\n');
+    const snapshot = typeof session.recentOutput === 'function' ? session.recentOutput() : '';
+    const wroteSnapshot = !snapshot || safeWrite(conn, snapshot);
+    if (!wroteAck || !wroteSnapshot) {
+      cleanup();
+      return { ok: true };
+    }
 
     if (initialInput?.length) writeInput(initialInput);
     return { ok: true };
@@ -430,4 +436,31 @@ function normalizePathForMatch(value) {
 
 function makeAttachId() {
   return `att_${randomBytes(6).toString('base64url')}`;
+}
+
+function safeWrite(conn, data) {
+  try {
+    conn.write(data);
+    return true;
+  } catch (err) {
+    if (isBrokenPipeError(err)) return false;
+    throw err;
+  }
+}
+
+function safeEnd(conn, data = undefined) {
+  try {
+    if (data === undefined) conn.end();
+    else conn.end(data);
+    return true;
+  } catch (err) {
+    if (isBrokenPipeError(err)) return false;
+    throw err;
+  }
+}
+
+function isBrokenPipeError(err) {
+  return err?.code === 'EPIPE'
+    || err?.code === 'ECONNRESET'
+    || err?.code === 'ERR_STREAM_DESTROYED';
 }

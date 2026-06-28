@@ -38,7 +38,7 @@ export async function materialiseVaultBeforeLaunch({
     return {
       ...first,
       unlockAttempted: true,
-      hint: `vault unlock failed; ${first.hint || `run \`mc vault unlock\` then \`mc resume ${sessionId}\``}`,
+      hint: `vault unlock failed; ${first.hint || `run \`mc vault unlock\` then \`mc open ${sessionId}\``}`,
     };
   }
 

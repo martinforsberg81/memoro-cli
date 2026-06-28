@@ -270,13 +270,16 @@ export async function launchNewSession({
       env,
     }),
     stderr,
-    onLaunched: ({ codingSessionId }) => {
+    onLaunched: ({ codingSessionId, brokerSocketPath = null, hostKind = null }) => {
       const upsert = deps.upsertEntry || upsertEntry;
-      upsert({
+      const patch = {
         name: entry.name,
         coding_session_id: codingSessionId,
         session_state: 'live',
-      });
+      };
+      if (brokerSocketPath) patch.broker_socket_path = brokerSocketPath;
+      if (hostKind) patch.host_kind = hostKind;
+      upsert(patch);
     },
     deps: deps.launchDeps || {},
   });

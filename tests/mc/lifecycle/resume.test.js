@@ -41,6 +41,24 @@ describe('mc resume <name>', () => {
   beforeEach(() => { repo = makeTempRepo({ name: 'resume' }); });
   after(() => { repo?.cleanup(); });
 
+  test('mc open is the primary session-opening surface', () => {
+    writeRegistry(repo.mcHome, [
+      makeEntry({
+        name: 'from-codex',
+        branch: 'sess/from-codex',
+        tool: 'codex',
+        worktree_path: '/tmp/from-codex',
+      }),
+    ]);
+    const r = runMc(['open'], {
+      cwd: repo.dir, env: { MC_HOME: repo.mcHome },
+    });
+    assert.equal(r.status, 0, `stderr:${r.stderr}`);
+    assert.match(r.stdout, /mc sessions available to open/);
+    assert.match(r.stdout, /from-codex/);
+    assert.match(r.stdout, /mc open <name>/);
+  });
+
   test('without a name lists mc sessions across tools instead of opening a tool-native picker', () => {
     writeRegistry(repo.mcHome, [
       makeEntry({
@@ -611,6 +629,32 @@ describe('mc resume <name>', () => {
     assert.equal(j.name, 'r');
     assert.equal(j.tool, 'claude');
     assert.equal(j.worktree_path, wt);
+  });
+
+  test('mc open observes branch drift without overwriting the session branch', () => {
+    git(repo.dir, 'branch sess/r main');
+    const wt = join(repo.mcHome, 'worktrees', 'repo', 'r');
+    addWorktree(repo.dir, wt, 'sess/r');
+    git(wt, 'checkout -q -b scratch/from-tool');
+    writeRegistry(repo.mcHome, [makeEntry({
+      name: 'r', branch: 'sess/r', worktree_path: wt, tool: 'codex',
+    })]);
+
+    const r = runMc(['open', 'r', '--no-launch', '--json'], {
+      cwd: repo.dir, env: { MC_HOME: repo.mcHome },
+    });
+
+    assert.equal(r.status, 0, `stderr:${r.stderr}`);
+    const j = parseJsonOrNull(r.stdout);
+    assert.equal(j.current_branch, 'scratch/from-tool');
+    assert.equal(j.original_branch, 'sess/r');
+
+    const reg = JSON.parse(readFileSync(join(repo.mcHome, REGISTRY_REL_PATH), 'utf8'));
+    const entry = reg.entries.find((e) => e.name === 'r');
+    assert.equal(entry.branch, 'sess/r');
+    assert.equal(entry.current_branch, 'scratch/from-tool');
+    assert.equal(entry.original_branch, 'sess/r');
+    assert.match(entry.observed_head, /^[a-f0-9]{40}$/);
   });
 
   test('--codex updates the stored session tool before first launch', () => {

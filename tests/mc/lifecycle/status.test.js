@@ -27,6 +27,7 @@ import { join } from 'node:path';
 
 import { runMc, parseJsonOrNull } from '../_helpers/cli.js';
 import { writeRegistry, makeEntry } from '../_helpers/registry-fixture.js';
+import { makeTempRepo, git, addWorktree } from '../_helpers/git-fixture.js';
 import { run as runStatus } from '../../../src/mc/commands/status.js';
 
 describe('mc status <name>', () => {
@@ -265,7 +266,7 @@ describe('mc status <name>', () => {
     const j = parseJsonOrNull(r.stdout);
     assert.ok(j);
     assert.equal(j.tool, 'codex');
-    assert.equal(j.relaunch_command, 'mc resume codex-session');
+    assert.equal(j.relaunch_command, 'mc open codex-session');
     assert.equal(j.effective_policy.permissions.rendered_for, 'codex');
     assert.equal(j.effective_policy.adapter_support.tool, 'codex');
     assert.equal(j.effective_policy.adapter_support.permissions.workspace, 'supported');
@@ -280,9 +281,35 @@ describe('mc status <name>', () => {
     const r = runMc(['status', 'codex-session'], { env: { MC_HOME: mcHome } });
     assert.equal(r.status, 0, `stderr:${r.stderr}`);
     assert.match(r.stdout, /tool\s+codex/);
-    assert.match(r.stdout, /relaunch\s+mc resume codex-session/);
+    assert.match(r.stdout, /relaunch\s+mc open codex-session/);
     assert.match(r.stdout, /policy\s+codex: native auth owned by tool; no vault target/);
     assert.match(r.stdout, /permissions unsupported: profile, network, secrets/);
+  });
+
+  test('status observes branch drift without overwriting the session branch', () => {
+    const repo = makeTempRepo({ name: 'status-observe' });
+    try {
+      git(repo.dir, 'branch sess/observe main');
+      const wt = join(repo.mcHome, 'worktrees', 'repo', 'observe');
+      addWorktree(repo.dir, wt, 'sess/observe');
+      git(wt, 'checkout -q -b scratch/status');
+      writeRegistry(repo.mcHome, [makeEntry({
+        name: 'observe',
+        branch: 'sess/observe',
+        worktree_path: wt,
+        tool: 'codex',
+      })]);
+
+      const r = runMc(['status', 'observe', '--json'], { env: { MC_HOME: repo.mcHome } });
+      assert.equal(r.status, 0, `stderr:${r.stderr}`);
+      const j = parseJsonOrNull(r.stdout);
+      assert.equal(j.branch, 'scratch/status');
+      assert.equal(j.session_branch, 'sess/observe');
+      assert.equal(j.current_branch, 'scratch/status');
+      assert.equal(j.original_branch, 'sess/observe');
+    } finally {
+      repo.cleanup();
+    }
   });
 
   test('Claude status reports legacy Anthropic vault target', () => {

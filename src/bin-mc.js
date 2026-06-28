@@ -72,6 +72,10 @@ import { createWrapWsHandlers } from './mc/wrap-ws.js';
 import { scheduleSessionUpload } from './mc/session-upload.js';
 import { writeToPty } from './mc/pty-write.js';
 import { requestBroker } from './mc/broker/client.js';
+import {
+  listLocalBrokerAndHostSessions,
+  requestForSession,
+} from './mc/broker/session-hosts.js';
 import { normalizeInteractivePtyEnv } from './mc/interactive-env.js';
 import { renderIntro as renderSessionIntro } from './mc/session-intro.js';
 import {
@@ -113,6 +117,7 @@ const LIFECYCLE = {
   end:           () => import('./mc/commands/end.js'),
   rename:        () => import('./mc/commands/rename.js'),
   cd:            () => import('./mc/commands/cd.js'),
+  open:          () => import('./mc/commands/open.js'),
   resume:        () => import('./mc/commands/resume.js'),
   gc:            () => import('./mc/commands/gc.js'),
   status:        () => import('./mc/commands/status.js'),
@@ -254,8 +259,8 @@ USAGE
   mc                              Start the default grounded coding tool here
   mc new <name> [focus]           Create worktree + branch + start a session
   mc spawn <name> "<brief>"       Create an idle tracked project session
-  mc resume                       List mc sessions available to resume
-  mc resume <name>                Re-enter an existing session
+  mc open                         List mc sessions available to open
+  mc open <name>                  Open an existing session
 
 COMMON
   mc list [--rich|--awaiting]     Show local sessions
@@ -270,8 +275,8 @@ START OPTIONS
   mc new <name> [focus] --claude  Start the new session under Claude Code
   mc new <name> [focus] --tool <claude|codex|gemini>
   mc new <name> --from <ref>      Branch from a ref other than HEAD
-  mc resume <name> --codex        Use Codex only before first launch or for Codex sessions
-  mc resume <name> --claude       Use Claude Code only before first launch or for Claude sessions
+  mc open <name> --codex          Use Codex only before first launch or for Codex sessions
+  mc open <name> --claude         Use Claude Code only before first launch or for Claude sessions
 
 SETUP
   mc                              First run signs in to Memoro with browser device auth
@@ -317,7 +322,7 @@ FLEET / ADVANCED
   mc wrap <label> [args...]       Start an in-place labelled wrapper session
 
 COMMAND SURFACES
-  Terminal commands manage machines and sessions: setup, auth, new, resume,
+  Terminal commands manage machines and sessions: setup, auth, new, open,
   end, broker, vault, and repo/worktree lifecycle.
 
   Inside a launched LLM session, use session-local habits such as \`/mc map\`.
@@ -339,30 +344,32 @@ WHAT HAPPENS ON START
   the vault is locked, mc can offer to unlock it before launch so tokens
   materialise for the tool.
 
-  \`mc resume\` first attaches to a live broker-owned PTY when one exists,
+  \`mc open\` first attaches to a live broker-owned PTY when one exists,
   preserving that session surface without sending a new prompt. If no
   local live PTY is attachable, mc relaunches the same provider-native
   session by id. If mc cannot find that provider session id, it refuses to
   start a contextless replacement. Idle tracked sessions that have never
-  launched start as fresh grounded sessions on first resume.
+  launched start as fresh grounded sessions on first open.
 
 TOOL SELECTION
   \`mc tool-switch <tool>\` changes the default for future bare \`mc\` and
   \`mc new\` starts. It does not change a running session. Tool flags on
-  \`mc resume <name>\` cannot switch provider for an existing provider
+  \`mc open <name>\` cannot switch provider for an existing provider
   session; use \`mc new\` for a new tool conversation.
 
-  When a live broker PTY exists, \`mc resume <name>\` and its tool-flag
+  When a live broker PTY exists, \`mc open <name>\` and its tool-flag
   variants attach to that running session as-is instead of starting a
   duplicate.
 
-  \`mc resume\` lists mc's own registry sessions across tools and then calls
+  \`mc open\` lists mc's own registry sessions across tools and then calls
   the selected tool's native resume-by-id path directly, without opening
   Claude or Codex pickers.
 
+  \`mc resume\` remains as a compatibility alias for existing scripts.
+
 SESSION NAMES
   \`mc new <name>\` creates a local session name. Use that same name with
-  \`mc resume\`, \`mc status\`, \`mc cd\`, \`mc rename\`, and \`mc end\`.
+  \`mc open\`, \`mc status\`, \`mc cd\`, \`mc rename\`, and \`mc end\`.
 
 REQUIREMENTS
   - Run inside a git repository.
@@ -394,7 +401,7 @@ async function runWrap(argv, { label = null } = {}) {
   const config = await readConfig();
 
   // ─── Resolve the tool to launch (adapter-routed) ─────────────────────
-  // Default is Codex; `mc new --tool` and `mc resume --tool` thread
+  // Default is Codex; `mc new --tool` and `mc open --tool` thread
   // the chosen tool across the wrap-mode re-exec via MC_GROUNDING_TOOL.
   // The launch spec carries the
   // binary to spawn, how to map argv, and the heartbeat source. Unknown /
@@ -449,7 +456,7 @@ async function runWrap(argv, { label = null } = {}) {
   })) {
     console.error('mc: refusing to start a coding session in the primary worktree.');
     console.error('mc: use `mc new <name> [focus] --codex` to create an isolated worktree,');
-    console.error('mc: or `mc resume <name> --codex` to re-enter an existing session.');
+    console.error('mc: or `mc open <name> --codex` to open an existing session.');
     process.exit(1);
   }
 
@@ -927,7 +934,9 @@ async function runSessionsSend(argv) {
 export async function dispatchLocalBrokerSession(identifier, message, { request = requestBroker, wait = sleep } = {}) {
   if (!identifier || !message) return { ok: false, skipped: true, error: 'identifier and message are required' };
 
-  const inventory = await request({ type: 'sessions' }).catch(() => null);
+  const inventory = await listLocalBrokerAndHostSessions({ request })
+    .then((sessions) => ({ ok: true, sessions }))
+    .catch(() => request({ type: 'sessions' }).catch(() => null));
   let sid = identifier;
   let matched = false;
   let session = null;
@@ -938,9 +947,10 @@ export async function dispatchLocalBrokerSession(identifier, message, { request 
     sid = session.id || session.coding_session_id || identifier;
     matched = true;
   }
+  const sessionRequest = requestForSession(session, { request });
 
   const raw = await writeLocalDispatchedInput({
-    request,
+    request: sessionRequest,
     wait,
     sessionId: sid,
     message,
@@ -956,7 +966,7 @@ export async function dispatchLocalBrokerSession(identifier, message, { request 
   }
   if (raw?.partial) return { ...raw, id: sid, matched };
 
-  const dispatched = await request({ type: 'dispatch_session', id: sid, message }).catch((err) => ({
+  const dispatched = await sessionRequest({ type: 'dispatch_session', id: sid, message }).catch((err) => ({
     ok: false,
     error: err.message || String(err),
   }));
@@ -1119,16 +1129,19 @@ export async function controlLocalBrokerSession(identifier, {
   request = requestBroker,
 } = {}) {
   if (!identifier || !action) return { ok: false, skipped: true, error: 'identifier and action are required' };
-  const inventory = await request({ type: 'sessions' }).catch(() => null);
+  const inventory = await listLocalBrokerAndHostSessions({ request })
+    .then((sessions) => ({ ok: true, sessions }))
+    .catch(() => request({ type: 'sessions' }).catch(() => null));
   if (!inventory?.ok || !Array.isArray(inventory.sessions)) {
     return { ok: false, skipped: true, error: 'local broker unavailable' };
   }
   const session = inventory.sessions.find((item) => localSessionMatches(item, identifier));
   if (!session) return { ok: false, skipped: true, error: 'local session not found' };
   const sid = session.id || session.coding_session_id || identifier;
+  const sessionRequest = requestForSession(session, { request });
 
   if (action === 'stop') {
-    const stopped = await request({ type: 'stop_session', id: sid, signal }).catch((err) => ({
+    const stopped = await sessionRequest({ type: 'stop_session', id: sid, signal }).catch((err) => ({
       ok: false,
       error: err.message || String(err),
     }));
@@ -1136,7 +1149,7 @@ export async function controlLocalBrokerSession(identifier, {
   }
 
   if (action === 'remove') {
-    const removed = await request({ type: 'remove_session', id: sid }).catch((err) => ({
+    const removed = await sessionRequest({ type: 'remove_session', id: sid }).catch((err) => ({
       ok: false,
       error: err.message || String(err),
     }));
