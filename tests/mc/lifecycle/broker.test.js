@@ -225,6 +225,47 @@ describe('mc broker command', () => {
     assert.equal(JSON.parse(streams.out()).machine_id, 'machine');
   });
 
+  test('reconnect restarts the background cloud connector', async () => {
+    const streams = io();
+    let ensured = false;
+    let reconnect = null;
+    const code = await runBrokerWith({
+      verb: 'reconnect',
+      json: true,
+      sourceId: 'cloud:cld_123456',
+      sourceKind: 'cloud',
+      sourceName: 'Cloud runner',
+      cloudSessionId: 'cld_123456',
+    }, {
+      request: async () => assert.fail('must not request directly'),
+      spawnDaemon: () => assert.fail('must not spawn'),
+      ensureBroker: async () => {
+        ensured = true;
+        return { ok: true, broker: { pid: 11 } };
+      },
+      ensureCloudBroker: async (opts) => {
+        reconnect = opts;
+        return { ok: true, restarted: true, previous_pid: 22, pid: 33 };
+      },
+      runDaemon: () => assert.fail('must not daemon'),
+      connectCloud: async () => assert.fail('must not foreground-connect cloud'),
+      sleep: async () => {},
+      stdout: streams.stdout,
+      stderr: streams.stderr,
+    });
+
+    assert.equal(code, 0);
+    assert.equal(ensured, true);
+    assert.deepEqual(reconnect, {
+      forceRestart: true,
+      sourceId: 'cloud:cld_123456',
+      sourceKind: 'cloud',
+      sourceName: 'Cloud runner',
+      cloudSessionId: 'cld_123456',
+    });
+    assert.equal(JSON.parse(streams.out()).pid, 33);
+  });
+
   test('connect fails before cloud connector when broker cannot start', async () => {
     const streams = io();
     const code = await runBrokerWith({ verb: 'connect', json: true, once: true }, {

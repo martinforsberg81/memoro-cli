@@ -19,10 +19,14 @@ export function ensureCloudBrokerConnected({
   spawnConnector = spawnCloudBrokerConnector,
   stopConnector = stopSpawnedConnector,
   now = () => Date.now(),
+  forceRestart = false,
 } = {}) {
   const existingPid = readPid(pidPath, { readFile });
-  if (existingPid && isAlive(existingPid)) {
+  if (existingPid && isAlive(existingPid) && !forceRestart) {
     return { ok: true, alreadyRunning: true, pid: existingPid, pid_path: pidPath, log_path: logPath };
+  }
+  if (existingPid && isAlive(existingPid) && forceRestart) {
+    stopConnector({ pid: existingPid });
   }
   if (existingPid) {
     try { removeFile(pidPath, { force: true }); } catch {}
@@ -40,6 +44,7 @@ export function ensureCloudBrokerConnected({
   return {
     ok: true,
     started: true,
+    ...(forceRestart && existingPid ? { restarted: true, previous_pid: existingPid } : {}),
     pid: spawned.pid,
     pid_path: pidPath,
     log_path: logPath,

@@ -3,6 +3,7 @@ import { dirname } from 'node:path';
 
 import { requestBroker } from '../broker/client.js';
 import { CloudBrokerClient } from '../broker/cloud.js';
+import { ensureCloudBrokerConnected } from '../broker/cloud-supervisor.js';
 import { runBrokerDaemon } from '../broker/daemon.js';
 import { brokerCloudPidPath, brokerPidPath, brokerSocketPath } from '../broker/paths.js';
 import {
@@ -36,6 +37,7 @@ export async function run(argv) {
     spawnDaemon: spawnBrokerDaemon,
     runDaemon: runBrokerDaemon,
     connectCloud: runCloudConnection,
+    ensureCloudBroker: ensureCloudBrokerConnected,
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     stdout: process.stdout,
     stderr: process.stderr,
@@ -93,6 +95,32 @@ export async function runBrokerWith(opts, deps) {
       deps.stdout.write(`mc broker: connected to cloud (${res.machine_id || 'unknown machine'})\n`);
     } else {
       deps.stderr.write(`mc: broker cloud connect failed (${res.error || 'unknown'})\n`);
+    }
+    return res.ok ? 0 : 1;
+  }
+
+  if (opts.verb === 'reconnect') {
+    const broker = await ensureBroker({ request: deps.request, spawnDaemon: deps.spawnDaemon, sleep: deps.sleep });
+    if (!broker.ok) {
+      const out = { ok: false, error: `broker start failed (${broker.error || 'unknown'})` };
+      if (opts.json) deps.stdout.write(JSON.stringify(out, null, 2) + '\n');
+      else deps.stderr.write(`mc: ${out.error}\n`);
+      return 1;
+    }
+    const ensureCloudBroker = deps.ensureCloudBroker || ensureCloudBrokerConnected;
+    const res = await Promise.resolve(ensureCloudBroker({
+      forceRestart: true,
+      sourceId: opts.sourceId,
+      sourceKind: opts.sourceKind,
+      sourceName: opts.sourceName,
+      cloudSessionId: opts.cloudSessionId,
+    })).catch((err) => ({ ok: false, error: err.message || String(err) }));
+    if (opts.json) {
+      deps.stdout.write(JSON.stringify(res, null, 2) + '\n');
+    } else if (res.ok) {
+      deps.stdout.write(`mc broker: reconnected cloud bridge (pid ${res.pid ?? '?'})\n`);
+    } else {
+      deps.stderr.write(`mc: broker cloud reconnect failed (${res.error || 'unknown'})\n`);
     }
     return res.ok ? 0 : 1;
   }
@@ -262,6 +290,8 @@ USAGE
   mc broker stop [--json]
   mc broker connect [--json] [--source-id <id>] [--source-kind <kind>]
                     [--source-name <name>] [--cloud-session-id <id>]
+  mc broker reconnect [--json] [--source-id <id>] [--source-kind <kind>]
+                      [--source-name <name>] [--cloud-session-id <id>]
 
 Normal session commands auto-start the broker when needed.
 
