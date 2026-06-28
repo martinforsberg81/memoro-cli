@@ -60,6 +60,32 @@ describe('ensureCloudBrokerConnected', () => {
     }
   });
 
+  test('forceRestart stops an existing live connector before spawning', () => {
+    const stopped = [];
+    const removed = [];
+    const writes = [];
+    const res = ensureCloudBrokerConnected({
+      pidPath: '/tmp/mc-cloud.pid',
+      logPath: '/tmp/mc-cloud.log',
+      readFile: () => '123',
+      removeFile: (path) => { removed.push(path); },
+      writeFile: (path, value, opts) => { writes.push({ path, value, opts }); },
+      isAlive: (pid) => pid === 123,
+      stopConnector: (spawned) => { stopped.push(spawned.pid); },
+      spawnConnector: () => ({ ok: true, pid: 456 }),
+      forceRestart: true,
+    });
+
+    assert.equal(res.ok, true);
+    assert.equal(res.started, true);
+    assert.equal(res.restarted, true);
+    assert.equal(res.previous_pid, 123);
+    assert.equal(res.pid, 456);
+    assert.deepEqual(stopped, [123]);
+    assert.deepEqual(removed, ['/tmp/mc-cloud.pid']);
+    assert.deepEqual(writes, [{ path: '/tmp/mc-cloud.pid', value: '456', opts: { mode: 0o600 } }]);
+  });
+
   test('passes source identity to a newly spawned connector', () => {
     let spawnOpts = null;
     const res = ensureCloudBrokerConnected({
