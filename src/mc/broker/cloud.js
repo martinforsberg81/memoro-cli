@@ -7,6 +7,10 @@ import { createFetchTranscriptHandler } from '../../commands/handlers/fetch-tran
 import { requestBroker } from './client.js';
 import { brokerSocketPath } from './paths.js';
 import { sourceForTool } from './session-sidecars.js';
+import {
+  listLocalBrokerAndHostSessions,
+  requestForSession,
+} from './session-hosts.js';
 
 const INITIAL_BACKOFF_MS = 1_000;
 const MAX_BACKOFF_MS = 30_000;
@@ -109,7 +113,7 @@ export class CloudBrokerClient extends EventEmitter {
       type: 'sessions',
       machine_id: this.machineId,
       ...sourceIdentityPayload(this.sourceIdentity),
-      sessions,
+      sessions: sessions.map(publicSessionForCloud),
     });
     this.emit('sessions', sessions);
     if (refreshRepos) void this.refreshRepos();
@@ -212,7 +216,8 @@ export class CloudBrokerClient extends EventEmitter {
     if (kind === 'dispatch_message') {
       const sessionId = requiredString(msg.coding_session_id || msg.session_id, 'coding_session_id');
       const message = requiredString(args.message, 'message');
-      const result = await this._dispatchMessage({ sessionId, message, toolHint: args.tool || msg.tool || msg.source });
+      const request = await this._requestForSessionId(sessionId);
+      const result = await this._dispatchMessage({ sessionId, message, toolHint: args.tool || msg.tool || msg.source, request });
       if (!result?.ok) {
         throw new Error(result?.error || `dispatch failed for broker session: ${sessionId}`);
       }
@@ -224,7 +229,8 @@ export class CloudBrokerClient extends EventEmitter {
       const transcriptPath = args.transcript_path || args.transcriptPath;
       if (!transcriptPath) {
         const sessionId = requiredString(msg.coding_session_id || msg.session_id, 'coding_session_id');
-        return this._fetchSessionOutputTranscript({ sessionId, sourceHint, toolHint });
+        const request = await this._requestForSessionId(sessionId);
+        return this._fetchSessionOutputTranscript({ sessionId, sourceHint, toolHint, request });
       }
       const source = transcriptSource({ sourceHint, toolHint });
       const handler = this.fetchTranscriptHandlerFactory({ transcriptPath, source });
@@ -233,21 +239,23 @@ export class CloudBrokerClient extends EventEmitter {
     if (kind === 'stop_session') {
       const sessionId = requiredString(msg.coding_session_id || msg.session_id, 'coding_session_id');
       const signal = stringOrDefault(args.signal, 'SIGTERM');
-      const result = await this.request({ type: 'stop_session', id: sessionId, signal });
+      const request = await this._requestForSessionId(sessionId);
+      const result = await request({ type: 'stop_session', id: sessionId, signal });
       if (result?.ok) await this._refreshSessionsSafe();
       return result;
     }
     if (kind === 'remove_session') {
       const sessionId = requiredString(msg.coding_session_id || msg.session_id, 'coding_session_id');
-      const result = await this.request({ type: 'remove_session', id: sessionId });
+      const request = await this._requestForSessionId(sessionId);
+      const result = await request({ type: 'remove_session', id: sessionId });
       if (result?.ok) await this._refreshSessionsSafe();
       return result;
     }
     throw new Error(`No handler for kind '${kind}'`);
   }
 
-  async _fetchSessionOutputTranscript({ sessionId, sourceHint = '', toolHint = '' }) {
-    const result = await this.request({
+  async _fetchSessionOutputTranscript({ sessionId, sourceHint = '', toolHint = '', request = this.request }) {
+    const result = await request({
       type: 'fetch_session_output',
       id: sessionId,
     });
@@ -270,18 +278,18 @@ export class CloudBrokerClient extends EventEmitter {
     });
   }
 
-  async _dispatchMessage({ sessionId, message, toolHint = null }) {
-    const status = await this.request({ type: 'session_status', id: sessionId }).catch(() => null);
+  async _dispatchMessage({ sessionId, message, toolHint = null, request = this.request }) {
+    const status = await request({ type: 'session_status', id: sessionId }).catch(() => null);
     const session = status?.ok && status.session && typeof status.session === 'object'
       ? status.session
       : {};
     const tool = stringOrDefault(session.tool, stringOrDefault(toolHint, ''));
-    const raw = await this._writeDispatchedInput({ sessionId, message, tool });
+    const raw = await this._writeDispatchedInput({ sessionId, message, tool, request });
     if (raw?.ok) {
       return { ok: true, transport: 'write_session', session };
     }
     if (raw?.partial) return raw;
-    const fallback = await this.request({ type: 'dispatch_session', id: sessionId, message }).catch((err) => ({
+    const fallback = await request({ type: 'dispatch_session', id: sessionId, message }).catch((err) => ({
       ok: false,
       error: err.message || String(err),
     }));
@@ -289,9 +297,9 @@ export class CloudBrokerClient extends EventEmitter {
     return { ...fallback, transport: fallback.transport || 'dispatch_session' };
   }
 
-  async _writeDispatchedInput({ sessionId, message, tool }) {
+  async _writeDispatchedInput({ sessionId, message, tool, request = this.request }) {
     const submitEnterCount = submitEnterCountForTool(tool);
-    const first = await this.request({ type: 'write_session', id: sessionId, data: `${message}\r` }).catch((err) => ({
+    const first = await request({ type: 'write_session', id: sessionId, data: `${message}\r` }).catch((err) => ({
       ok: false,
       error: err.message || String(err),
     }));
@@ -299,7 +307,7 @@ export class CloudBrokerClient extends EventEmitter {
 
     for (let i = 1; i < submitEnterCount; i += 1) {
       await this.sleep(SUBMIT_ENTER_DELAY_MS);
-      const next = await this.request({ type: 'write_session', id: sessionId, data: '\r' }).catch((err) => ({
+      const next = await request({ type: 'write_session', id: sessionId, data: '\r' }).catch((err) => ({
         ok: false,
         error: err.message || String(err),
       }));
@@ -330,6 +338,12 @@ export class CloudBrokerClient extends EventEmitter {
     });
   }
 
+  async _requestForSessionId(sessionId) {
+    const sessions = await listLocalBrokerSessions({ request: this.request }).catch(() => []);
+    const session = sessions.find((item) => sessionMatchesId(item, sessionId));
+    return requestForSession(session, { request: this.request });
+  }
+
   _sendResult({ command_id, ok, data, error }) {
     const payload = { type: 'result', command_id, ok };
     if (ok) payload.data = data;
@@ -341,6 +355,9 @@ export class CloudBrokerClient extends EventEmitter {
     const attachId = requiredString(msg.attach_id, 'attach_id');
     const sessionId = requiredString(msg.coding_session_id || msg.session_id, 'coding_session_id');
     const brokerWsUrl = requiredString(msg.broker_ws_url || msg.ws_url, 'broker_ws_url');
+    const sessions = await listLocalBrokerSessions({ request: this.request }).catch(() => []);
+    const session = sessions.find((item) => sessionMatchesId(item, sessionId));
+    const request = requestForSession(session, { request: this.request });
 
     const bridge = createAttachBridge({
       attachId,
@@ -349,10 +366,10 @@ export class CloudBrokerClient extends EventEmitter {
       token: msg.token || null,
       cols: msg.cols || 80,
       rows: msg.rows || 24,
-      request: this.request,
+      request,
       connect: this.connect,
       WebSocketImpl: this.WebSocketImpl,
-      brokerSocket: this.brokerSocket,
+      brokerSocket: session?.broker_socket_path || this.brokerSocket,
       onClose: () => this.attaches.delete(attachId),
     });
     this.attaches.set(attachId, bridge);
@@ -559,11 +576,9 @@ export function createAttachBridge({
 }
 
 export async function listLocalBrokerSessions({ request = requestBroker } = {}) {
-  const res = await request({ type: 'sessions' }).catch((err) => ({ ok: false, error: err.message || String(err) }));
-  if (res?.ok && Array.isArray(res.sessions)) return res.sessions;
-  const status = await request({ type: 'status' }).catch((err) => ({ ok: false, error: err.message || String(err) }));
-  if (status?.ok && Array.isArray(status.sessions)) return status.sessions;
-  throw new Error(res?.error || status?.error || 'broker did not return sessions');
+  const sessions = await listLocalBrokerAndHostSessions({ request });
+  if (Array.isArray(sessions)) return sessions;
+  throw new Error('broker did not return sessions');
 }
 
 export function buildBrokerWsUrl(apiUrl, {
@@ -681,6 +696,25 @@ function setOptionalQueryParam(url, key, value) {
 
 function plainObject(value) {
   return value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function sessionMatchesId(session, sessionId) {
+  return !!session && !!sessionId && (
+    session.id === sessionId
+    || session.coding_session_id === sessionId
+  );
+}
+
+function publicSessionForCloud(session = {}) {
+  const {
+    broker_socket_path,
+    broker_pid_path,
+    broker_log_path,
+    host_kind,
+    host_session_id,
+    ...publicSession
+  } = session;
+  return publicSession;
 }
 
 function submitEnterCountForTool(tool) {

@@ -29,6 +29,37 @@ export function isInsideRepo(cwd) {
   return tryGit(cwd, ['rev-parse', '--is-inside-work-tree']) === 'true';
 }
 
+export function observeWorktree(worktreePath, { now = () => new Date().toISOString() } = {}) {
+  if (typeof worktreePath !== 'string' || !worktreePath.trim()) {
+    return { ok: false, reason: 'missing-worktree-path' };
+  }
+  if (!isInsideRepo(worktreePath)) {
+    return { ok: false, reason: 'not-a-git-worktree', worktree_path: worktreePath };
+  }
+
+  const branch = tryGit(worktreePath, ['branch', '--show-current']) || null;
+  const head = tryGit(worktreePath, ['rev-parse', 'HEAD']) || null;
+  const gitRoot = tryGit(worktreePath, ['rev-parse', '--show-toplevel']) || worktreePath;
+  const porcelain = tryGit(worktreePath, ['status', '--porcelain']);
+  const upstream = tryGit(worktreePath, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{upstream}']);
+  const aheadBehind = upstream
+    ? parseAheadBehind(tryGit(worktreePath, ['rev-list', '--left-right', '--count', `${upstream}...HEAD`]))
+    : { ahead: null, behind: null };
+
+  return {
+    ok: true,
+    worktree_path: worktreePath,
+    git_root: gitRoot,
+    current_branch: branch,
+    detached: !branch,
+    head,
+    dirty_files: countPorcelainFiles(porcelain),
+    ahead: aheadBehind.ahead,
+    behind: aheadBehind.behind,
+    observed_at: now(),
+  };
+}
+
 /**
  * Return the primary worktree's path. From inside a worktree, git's
  * `worktree list --porcelain` lists the primary first.
@@ -69,4 +100,20 @@ export function commitsAhead(repoDir, branch, mainRef = 'origin/main') {
   if (r === null) return 0;
   const n = Number(r);
   return Number.isFinite(n) ? n : 0;
+}
+
+function countPorcelainFiles(value) {
+  if (typeof value !== 'string' || !value.trim()) return 0;
+  return value.split('\n').filter(Boolean).length;
+}
+
+function parseAheadBehind(value) {
+  if (typeof value !== 'string') return { ahead: null, behind: null };
+  const [behindRaw, aheadRaw] = value.trim().split(/\s+/);
+  const behind = Number(behindRaw);
+  const ahead = Number(aheadRaw);
+  return {
+    ahead: Number.isFinite(ahead) ? ahead : null,
+    behind: Number.isFinite(behind) ? behind : null,
+  };
 }

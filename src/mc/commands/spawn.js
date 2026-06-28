@@ -4,7 +4,7 @@
  * Creates a durable project session under the current coordinator session.
  * This is not an agent runner: it creates the same worktree/branch/registry
  * substrate as `mc new`, writes the brief to `.mc/brief.md`, and leaves the
- * session idle for `mc resume <name>` or `mc sessions send <name> ...`.
+ * session idle for `mc open <name>` or `mc sessions send <name> ...`.
  */
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -137,7 +137,7 @@ export async function run(argv) {
     if (parent) process.stdout.write(`parent: ${parent}\n`);
     if (opts.node) process.stdout.write(`MEMORO node: ${opts.node}\n`);
     process.stdout.write(`brief: ${briefPath}\n`);
-    process.stdout.write(`next:  mc resume ${opts.name}\n`);
+    process.stdout.write(`next:  mc open ${opts.name}\n`);
   }
 
   if (!opts.launch || process.env.MC_TEST_MODE === '1') return 0;

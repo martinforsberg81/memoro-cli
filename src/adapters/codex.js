@@ -105,7 +105,7 @@ export async function installHooks({
   return {
     skipped: true,
     configPath: shimPath,
-    reason: 'Codex is no longer wrapped at the raw `codex` command. Use `mc new --codex` or `mc resume <name> --codex` for Memoro sessions.',
+    reason: 'Codex is no longer wrapped at the raw `codex` command. Use `mc new --codex` or `mc open <name> --codex` for Memoro sessions.',
     legacyCleanupHint: `Run \`memoro-cli hook uninstall --tool codex\` to remove an old ${launcherPath} shim.`,
   };
 }

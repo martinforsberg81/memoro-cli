@@ -21,6 +21,7 @@ import { renderIntro } from '../session-intro.js';
 import { ensureBrokerRunning } from './supervisor.js';
 import { ensureCloudBrokerConnected } from './cloud-supervisor.js';
 import { scrubRuntimeSecretsInPlace } from '../runtime-secrets.js';
+import { ensureSessionHostRunning } from './session-hosts.js';
 
 const CLOUD_BROKER_START_TIMEOUT_MS = 10_000;
 
@@ -105,17 +106,17 @@ export async function launchBrokerOwnedSession({
   });
   const repoRef = derivePublicRepoRef(repoContext);
   const paths = brokerSessionPaths(codingSessionId);
-
-  const broker = await ensureBroker({
+  const sessionHost = await resolveLaunchBroker({
+    codingSessionId,
     request,
+    ensureBroker,
+    cloudBroker,
     stderr,
     deps,
-    ...(isCloudBrokerLaunch(cloudBroker) ? { timeoutMs: CLOUD_BROKER_START_TIMEOUT_MS } : {}),
   });
-  if (!broker.ok) {
-    stderr.write(`mc: broker start failed (${broker.error || 'unknown'})\n`);
-    return { code: 1 };
-  }
+  if (!sessionHost.ok) return { code: 1 };
+  const launchRequest = sessionHost.request || request;
+  const attachSocketPath = sessionHost.socketPath || null;
 
   let spawnEnv = {
     ...env,
@@ -159,7 +160,7 @@ export async function launchBrokerOwnedSession({
   });
   spawnEnv = interactiveEnv.env;
 
-  const launchRes = await request({
+  const launchRes = await launchRequest({
     type: 'launch_session',
     session: {
       id: codingSessionId,
@@ -216,15 +217,23 @@ export async function launchBrokerOwnedSession({
   }
 
   if (typeof onLaunched === 'function') {
-    await onLaunched({ codingSessionId: effectiveCodingSessionId, launch: launchRes });
+    await onLaunched({
+      codingSessionId: effectiveCodingSessionId,
+      launch: launchRes,
+      brokerSocketPath: attachSocketPath,
+      hostKind: sessionHost.hostKind || 'global-broker',
+    });
   }
 
   if (!attachAfterLaunch) {
-    return { code: 0, codingSessionId: effectiveCodingSessionId, broker: broker.broker || null, attached: false };
+    return { code: 0, codingSessionId: effectiveCodingSessionId, broker: sessionHost.broker || null, attached: false };
   }
 
-  const code = await attach({ id: effectiveCodingSessionId });
-  return { code, codingSessionId: effectiveCodingSessionId, broker: broker.broker || null, attached: true };
+  const code = await attach({
+    id: effectiveCodingSessionId,
+    ...(attachSocketPath ? { socketPath: attachSocketPath } : {}),
+  });
+  return { code, codingSessionId: effectiveCodingSessionId, broker: sessionHost.broker || null, attached: true };
 }
 
 export function brokerSessionPaths(codingSessionId) {
@@ -246,9 +255,58 @@ function isCloudBrokerLaunch(cloudBroker) {
     || typeof cloudBroker?.sourceId === 'string';
 }
 
+async function resolveLaunchBroker({
+  codingSessionId,
+  request,
+  ensureBroker,
+  cloudBroker,
+  stderr,
+  deps = {},
+} = {}) {
+  const useSessionHost = deps.useSessionHost === true
+    || (deps.useSessionHost !== false && ensureBroker === ensureBrokerRunning);
+  if (useSessionHost) {
+    const ensureSessionHost = deps.ensureSessionHost || ensureSessionHostRunning;
+    const host = await ensureSessionHost({
+      sessionId: codingSessionId,
+      request,
+      spawnDaemon: deps.spawnBrokerDaemon,
+    });
+    if (!host.ok) {
+      stderr.write(`mc: session host start failed (${host.error || 'unknown'})\n`);
+      return { ok: false };
+    }
+    return {
+      ok: true,
+      hostKind: 'session',
+      socketPath: host.socketPath,
+      broker: host.broker || null,
+      request: (message) => request(message, { socketPath: host.socketPath }),
+    };
+  }
+
+  const broker = await ensureBroker({
+    request,
+    stderr,
+    deps,
+    ...(isCloudBrokerLaunch(cloudBroker) ? { timeoutMs: CLOUD_BROKER_START_TIMEOUT_MS } : {}),
+  });
+  if (!broker.ok) {
+    stderr.write(`mc: broker start failed (${broker.error || 'unknown'})\n`);
+    return { ok: false };
+  }
+  return {
+    ok: true,
+    hostKind: 'global-broker',
+    broker: broker.broker || null,
+    request,
+  };
+}
+
 export { ensureBrokerRunning } from './supervisor.js';
 
 export const __test__ = {
   resolveLaunchAuthToken,
   isCloudBrokerLaunch,
+  resolveLaunchBroker,
 };

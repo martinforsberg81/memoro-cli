@@ -3,6 +3,7 @@ import { ACCOUNTS } from '../commands/auth.js';
 import { readConfig, getApiUrl } from '../lib/config.js';
 import { memoroFetch } from '../lib/api.js';
 import { requestBroker } from './broker/client.js';
+import { listLocalBrokerAndHostSessions } from './broker/session-hosts.js';
 
 const ACTIVE_PATH = '/api/coding-sessions/active';
 
@@ -69,16 +70,26 @@ export async function fetchActiveCodingSessionsWithLocalBroker({
 
 export async function fetchLocalBrokerCodingSessions({ deps = {} } = {}) {
   const request = deps.requestBroker || requestBroker;
-  const res = await request({ type: 'sessions' }).catch((err) => ({
-    ok: false,
-    error: err.message || String(err),
-  }));
-  if (!res?.ok || !Array.isArray(res.sessions)) {
-    return { ok: false, sessions: [], warning: res?.error || 'local broker unavailable' };
+  let sessions = null;
+  let hostWarning = null;
+  try {
+    sessions = await (deps.listLocalBrokerAndHostSessions || listLocalBrokerAndHostSessions)({ request });
+  } catch (err) {
+    hostWarning = err?.message || 'local broker unavailable';
+  }
+  if (!Array.isArray(sessions)) {
+    const res = await request({ type: 'sessions' }).catch((err) => ({
+      ok: false,
+      error: err.message || String(err),
+    }));
+    if (!res?.ok || !Array.isArray(res.sessions)) {
+      return { ok: false, sessions: [], warning: res?.error || hostWarning || 'local broker unavailable' };
+    }
+    sessions = res.sessions;
   }
   return {
     ok: true,
-    sessions: res.sessions
+    sessions: sessions
       .filter(isLiveLocalBrokerSession)
       .map(normalizeLocalBrokerSessionForList),
     warning: null,
@@ -197,7 +208,7 @@ export function renderSessionListHuman({
     }
   }
   out.push('');
-  out.push('Local sessions (start with `mc resume <name>`):');
+  out.push('Local sessions (start with `mc open <name>`):');
   if (!view?.local?.length) {
     out.push('  (none)');
     if (emptyLocalHint) out.push(`  ${emptyLocalHint}`);

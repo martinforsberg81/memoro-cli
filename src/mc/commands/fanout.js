@@ -15,7 +15,7 @@
  *
  * Out of scope and intentionally NOT in this file:
  *   - launching the agent tool — sessions are idle,
- *     user attaches via `mc resume <session-name>` (follow-up: feed
+ *     user attaches via `mc open <session-name>` (follow-up: feed
  *     the brief to the tool on resume)
  *
  * Engineering shape:
@@ -284,7 +284,7 @@ function emitSuccess(opts, { planSlug, phases, fromRef }) {
   }
   process.stdout.write(`\nNext:\n`);
   process.stdout.write(`  mc list                              # track session status\n`);
-  process.stdout.write(`  mc resume <session-name>             # attach to a phase\n`);
+  process.stdout.write(`  mc open <session-name>               # attach to a phase\n`);
   process.stdout.write(`  mc gather ${planSlug}                # collect PRs once phases land\n`);
   return 0;
 }

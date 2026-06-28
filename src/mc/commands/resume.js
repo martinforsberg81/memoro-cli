@@ -19,6 +19,7 @@ import { DEFAULT_TOOL } from '../../lib/config.js';
 import { launchBrokerOwnedSession } from '../broker/launch-client.js';
 import { attachBrokerSession } from '../broker/attach-client.js';
 import { requestBroker } from '../broker/client.js';
+import { listLocalBrokerAndHostSessions } from '../broker/session-hosts.js';
 import {
   buildNewSessionLaunchIntent,
   buildResumeSessionLaunchIntent,
@@ -36,6 +37,7 @@ import {
   renderActiveSelectionMessage,
   renderSessionListHuman,
 } from '../session-list.js';
+import { observeEntryWorktree } from '../session-observation.js';
 
 export const TOOL_SUGAR = {
   '--claude': 'claude',
@@ -47,6 +49,7 @@ export async function run(rawArgv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
   const stderr = deps.stderr || process.stderr;
   const stdin = deps.stdin || process.stdin;
+  const commandName = deps.commandName || 'resume';
   const { args: argv, enabled: emitDirectives } = parseDirectiveFlag(rawArgv);
   const opts = parseArgs(argv);
   if (opts.error) {
@@ -61,6 +64,7 @@ export async function run(rawArgv, deps = {}) {
       stdout,
       stderr,
       emitDirectives,
+      commandName,
       deps,
     });
   }
@@ -70,6 +74,7 @@ export async function run(rawArgv, deps = {}) {
     stderr.write(`mc: no such session "${opts.name}"\n`);
     return 1;
   }
+  entry = maybeObserveEntry(entry, deps);
   const firstLaunchInWorktree = !hasStoredToolSession(entry);
 
   const toolValidation = validateToolFlag(opts.tool);
@@ -85,6 +90,7 @@ export async function run(rawArgv, deps = {}) {
       stderr,
       request: deps.requestBroker || requestBroker,
       attach: deps.attachBrokerSession || attachBrokerSession,
+      deps,
     });
     if (attached?.attached) return attached.code ?? 0;
 
@@ -122,6 +128,10 @@ export async function run(rawArgv, deps = {}) {
       tool: entry.tool || DEFAULT_TOOL,
       worktree_path: entry.worktree_path || null,
       coding_session_id: entry.coding_session_id || null,
+      current_branch: entry.current_branch || null,
+      original_branch: entry.original_branch || entry.branch || null,
+      observed_head: entry.observed_head || null,
+      last_observed_at: entry.last_observed_at || null,
     }, null, 2) + '\n');
     return 0;
   }
@@ -178,16 +188,19 @@ export async function launchResumeSession({
       env,
     }),
     stderr,
-    onLaunched: ({ codingSessionId }) => {
+    onLaunched: ({ codingSessionId, brokerSocketPath = null, hostKind = null }) => {
       const upsert = deps.upsertEntry || upsertEntry;
-      upsert({
+      const patch = {
         name: entry.name,
         coding_session_id: codingSessionId,
         session_state: 'live',
         tool_session_id: toolSession.sessionId,
         tool_session_source: toolSession.source,
         tool_transcript_path: toolSession.transcriptPath || null,
-      });
+      };
+      if (brokerSocketPath) patch.broker_socket_path = brokerSocketPath;
+      if (hostKind) patch.host_kind = hostKind;
+      upsert(patch);
     },
     deps: deps.launchDeps || {},
   });
@@ -216,13 +229,16 @@ export async function launchFreshSession({
       env,
     }),
     stderr,
-    onLaunched: ({ codingSessionId }) => {
+    onLaunched: ({ codingSessionId, brokerSocketPath = null, hostKind = null }) => {
       const upsert = deps.upsertEntry || upsertEntry;
-      upsert({
+      const patch = {
         name: entry.name,
         coding_session_id: codingSessionId,
         session_state: 'live',
-      });
+      };
+      if (brokerSocketPath) patch.broker_socket_path = brokerSocketPath;
+      if (hostKind) patch.host_kind = hostKind;
+      upsert(patch);
     },
     deps: deps.launchDeps || {},
   });
@@ -294,6 +310,10 @@ export function resumableEntries(reg = readRegistry()) {
       focus: e.focus || null,
       coding_session_id: e.coding_session_id || null,
       repo_slug: e.repo_slug || null,
+      original_branch: e.original_branch || e.branch || null,
+      current_branch: e.current_branch || null,
+      observed_head: e.observed_head || null,
+      last_observed_at: e.last_observed_at || null,
     }))
     .sort((a, b) => a.name.localeCompare(b.name));
 }
@@ -305,6 +325,7 @@ export async function runResumePicker({
   stdout = process.stdout,
   stderr = process.stderr,
   emitDirectives = false,
+  commandName = 'resume',
   deps = {},
 } = {}) {
   const loadRegistry = deps.readRegistry || readRegistry;
@@ -323,7 +344,7 @@ export async function runResumePicker({
   if (opts.json) {
     stdout.write(JSON.stringify({
       entries,
-      hint: 'Run `mc resume <name>` to re-enter a session. Tool flags cannot switch provider for an existing provider session.',
+      hint: `Run \`mc ${commandName} <name>\` to open a session. Tool flags cannot switch provider for an existing provider session.`,
     }, null, 2) + '\n');
     return 0;
   }
@@ -336,7 +357,7 @@ export async function runResumePicker({
   });
   stdout.write(renderSessionListHuman({
     view,
-    title: 'mc sessions available to resume:',
+    title: `mc sessions available to ${commandName}:`,
     emptyLocalHint: 'Create one with `mc new <name> [focus] --codex`.',
   }));
 
@@ -346,9 +367,9 @@ export async function runResumePicker({
   const isInteractive = deps.isTTY ?? (stdin?.isTTY && stdout?.isTTY);
   if (!isInteractive) {
     const toolHint = opts.tool
-      ? `mc resume <name> --${opts.tool === 'claude' ? 'claude' : opts.tool}`
-      : 'mc resume <name>';
-    stdout.write(`Run \`${toolHint}\` to re-enter a local session.\n`);
+      ? `mc ${commandName} <name> --${opts.tool === 'claude' ? 'claude' : opts.tool}`
+      : `mc ${commandName} <name>`;
+    stdout.write(`Run \`${toolHint}\` to open a local session.\n`);
     return 0;
   }
 
@@ -391,19 +412,19 @@ export async function resumeSelectedChoice(choice, {
     const attached = await attachLive({
       name: choice.label || choice.name || null,
       coding_session_id: choice.coding_session_id || choice.id || null,
-    }, { stdin, stdout, stderr });
+    }, { stdin, stdout, stderr, deps });
     if (attached?.attached) return attached.code ?? 0;
     stdout.write(renderActiveSelectionMessage(choice));
     return 0;
   }
 
-  let entry = choice;
+  let entry = maybeObserveEntry(choice, deps);
   const firstLaunchInWorktree = !hasStoredToolSession(entry);
   const freshLaunch = freshLaunchDependency({
     launchFreshSession: freshLaunchOverride,
   });
   if (!opts.noLaunch && process.env.MC_TEST_MODE !== '1') {
-    const attached = await attachLive(entry, { stdin, stdout, stderr });
+    const attached = await attachLive(entry, { stdin, stdout, stderr, deps });
     if (attached?.attached) return attached.code ?? 0;
   }
 
@@ -428,18 +449,39 @@ export async function resumeSelectedChoice(choice, {
   return firstLaunchInWorktree ? freshLaunch({ entry }) : launch({ entry });
 }
 
+function maybeObserveEntry(entry, deps = {}) {
+  const observer = deps.observeEntryWorktree || (!deps.findEntry ? observeEntryWorktree : null);
+  if (!observer) return entry;
+  try {
+    return observer(entry, {
+      upsert: deps.upsertEntry || upsertEntry,
+    })?.entry || entry;
+  } catch {
+    return entry;
+  }
+}
+
 export async function attachLiveBrokerSession(entry, {
   request = requestBroker,
   attach = attachBrokerSession,
   stdin = process.stdin,
   stdout = process.stdout,
   stderr = process.stderr,
+  deps = {},
 } = {}) {
   const listed = await request({ type: 'sessions' }).catch(() => null);
-  const target = selectLiveBrokerSessionForEntry(entry, listed?.sessions || []);
+  const sessions = await (deps.listLocalBrokerAndHostSessions || listLocalBrokerAndHostSessions)({ request })
+    .catch(() => listed?.sessions || []);
+  const target = selectLiveBrokerSessionForEntry(entry, sessions || listed?.sessions || []);
   const id = brokerSessionId(target);
   if (!id) return { attached: false };
-  const code = await attach({ id, stdin, stdout, stderr });
+  const code = await attach({
+    id,
+    ...(target?.broker_socket_path ? { socketPath: target.broker_socket_path } : {}),
+    stdin,
+    stdout,
+    stderr,
+  });
   return { attached: true, code, id };
 }
 

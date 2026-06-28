@@ -5,13 +5,15 @@
  * `last_assistant_text` (heuristic-only), and returns the entry with
  * the safety verdict and derived fields.
  */
-import { findEntry } from '../registry.js';
+import { findEntry, upsertEntry } from '../registry.js';
 import { detectOpenQuestion } from '../open-question.js';
 import { DEFAULT_TOOL, readConfig } from '../../lib/config.js';
 import { formatPolicySummary, readRepoPolicy, resolveEffectivePolicy } from '../policy.js';
 import { readRepoLocalConfig, resolveEffectiveConfig } from '../config-model.js';
 import { fetchActiveCodingSessions, findActiveForLocalEntry } from '../session-list.js';
 import { requestBroker } from '../broker/client.js';
+import { listLocalBrokerAndHostSessions } from '../broker/session-hosts.js';
+import { observeEntryWorktree } from '../session-observation.js';
 
 export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
@@ -27,11 +29,12 @@ export async function run(argv, deps = {}) {
   }
 
   const lookupEntry = deps.findEntry || findEntry;
-  const entry = lookupEntry(opts.name);
+  let entry = lookupEntry(opts.name);
   if (!entry) {
     stderr.write(`mc: no such session "${opts.name}"\n`);
     return 1;
   }
+  entry = maybeObserveEntry(entry, deps);
 
   const open_question = entry.open_question ?? detectOpenQuestion(entry.last_assistant_text || '');
   let config = {};
@@ -54,7 +57,13 @@ export async function run(argv, deps = {}) {
 
   const out = {
     name: entry.name,
-    branch: entry.branch,
+    branch: entry.current_branch || entry.branch,
+    session_branch: entry.branch || null,
+    current_branch: entry.current_branch || null,
+    original_branch: entry.original_branch || entry.branch || null,
+    observed_head: entry.observed_head || null,
+    observed_worktree_path: entry.observed_worktree_path || entry.worktree_path || null,
+    last_observed_at: entry.last_observed_at || null,
     kind: entry.kind || 'work',
     safety_verdict,
     session_state: live.session_state,
@@ -70,7 +79,7 @@ export async function run(argv, deps = {}) {
     tool: entry.tool ?? null,
     model_chain: entry.model_chain ?? [],
     worktree_path: entry.worktree_path ?? null,
-    relaunch_command: `mc resume ${entry.name}`,
+    relaunch_command: `mc open ${entry.name}`,
     effective_policy,
     effective_config,
   };
@@ -82,6 +91,9 @@ export async function run(argv, deps = {}) {
 
   // Human-readable
   stdout.write(`${out.name}  ${out.branch}\n`);
+  if (out.current_branch && out.session_branch && out.current_branch !== out.session_branch) {
+    stdout.write(`  session branch ${out.session_branch}\n`);
+  }
   stdout.write(`  tool          ${out.tool || DEFAULT_TOOL}\n`);
   stdout.write(`  relaunch      ${out.relaunch_command}\n`);
   stdout.write(`  policy        ${formatPolicySummary(out.effective_policy)}\n`);
@@ -95,6 +107,18 @@ export async function run(argv, deps = {}) {
     stdout.write(`  asst: ${out.last_assistant_text.slice(0, 200).replace(/\n+/g, ' ')}\n`);
   }
   return 0;
+}
+
+function maybeObserveEntry(entry, deps = {}) {
+  const observer = deps.observeEntryWorktree || (!deps.findEntry ? observeEntryWorktree : null);
+  if (!observer) return entry;
+  try {
+    return observer(entry, {
+      upsert: deps.upsertEntry || upsertEntry,
+    })?.entry || entry;
+  } catch {
+    return entry;
+  }
 }
 
 async function resolveReachability(entry, { argv = [], deps = {} } = {}) {
@@ -162,7 +186,12 @@ async function resolveBrokerReachability(entry, { deps = {} } = {}) {
     return { authoritative: false };
   }
 
-  const res = await fetchBrokerStatus().catch(() => null);
+  let sessions = null;
+  if (!deps.fetchBrokerStatus) {
+    sessions = await (deps.listLocalBrokerAndHostSessions || listLocalBrokerAndHostSessions)({ request: requestBroker })
+      .catch(() => null);
+  }
+  const res = sessions ? { ok: true, sessions } : await fetchBrokerStatus().catch(() => null);
   if (!res?.ok || !Array.isArray(res.sessions)) return { authoritative: false };
   const live = findBrokerSessionForEntry(entry, res.sessions, { liveOnly: true });
   if (live) {

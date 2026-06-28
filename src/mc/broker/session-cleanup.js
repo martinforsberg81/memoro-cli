@@ -1,13 +1,19 @@
 import { requestBroker as defaultRequestBroker } from './client.js';
+import {
+  listLocalBrokerAndHostSessions,
+  requestForSession,
+} from './session-hosts.js';
 
 export async function removeBrokerSessionForEntry(entry, {
   requestBroker = defaultRequestBroker,
 } = {}) {
   if (!entry) return { ok: false, skipped: true, reason: 'entry-required' };
-  const inventory = await requestBroker({ type: 'sessions' }).catch((err) => ({
-    ok: false,
-    error: err.message || String(err),
-  }));
+  const inventory = await listLocalBrokerAndHostSessions({ request: requestBroker })
+    .then((sessions) => ({ ok: true, sessions }))
+    .catch(async (err) => requestBroker({ type: 'sessions' }).catch(() => ({
+      ok: false,
+      error: err.message || String(err),
+    })));
   if (!inventory?.ok || !Array.isArray(inventory.sessions)) {
     return {
       ok: false,
@@ -20,8 +26,9 @@ export async function removeBrokerSessionForEntry(entry, {
   const session = inventory.sessions.find((item) => brokerSessionMatchesEntry(item, entry));
   const id = brokerSessionId(session);
   if (!id) return { ok: false, skipped: true, reason: 'not-found' };
+  const request = requestForSession(session, { request: requestBroker });
 
-  const removed = await requestBroker({ type: 'remove_session', id }).catch((err) => ({
+  const removed = await request({ type: 'remove_session', id }).catch((err) => ({
     ok: false,
     error: err.message || String(err),
   }));

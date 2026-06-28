@@ -209,6 +209,27 @@ describe('broker daemon lifecycle', () => {
     assert.equal(attached.initialInput, 'queued-input');
   });
 
+  test('client disconnect during command response does not crash the broker', async () => {
+    const p = paths();
+    state = await startBrokerServer({
+      ...p,
+      createServerImpl: fakeCreateServer,
+    });
+    const conn = new EventEmitter();
+    conn.on = conn.on.bind(conn);
+    conn.end = () => {
+      const err = new Error('write EPIPE');
+      err.code = 'EPIPE';
+      throw err;
+    };
+
+    state.server.handler(conn);
+
+    assert.doesNotThrow(() => {
+      conn.emit('data', Buffer.from('{"type":"status"}\n'));
+    });
+  });
+
   test('stop closes injected server and removes broker files', async () => {
     const p = paths();
     state = await startBrokerServer({

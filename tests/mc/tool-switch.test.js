@@ -66,7 +66,7 @@ describe('parseArgs', () => {
     assert.match(r.error, /unknown flag/);
   });
 
-  it('rejects --here; existing sessions switch tool via mc resume <name> --codex', () => {
+  it('rejects --here; existing sessions switch tool via mc open <name> --codex', () => {
     const r = parseArgs(['codex', '--here']);
     assert.match(r.error, /unknown flag: --here/);
   });
@@ -561,7 +561,7 @@ describe('mc tool-switch — subprocess wiring', () => {
     assert.match(r.stdout, /mc tool-switch/);
     assert.match(r.stdout, /USAGE/);
     assert.doesNotMatch(r.stdout, /--here/);
-    assert.match(r.stdout, /mc resume <name> --codex/);
+    assert.match(r.stdout, /mc open <name> --codex/);
   });
 
   it('`mc tool-switch` (no positional) exits 2 with friendly error', () => {

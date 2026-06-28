@@ -535,7 +535,7 @@ describe('CloudBrokerClient', () => {
       cols: 120,
       rows: 40,
     }));
-    await Promise.resolve();
+    await new Promise((resolve) => setImmediate(resolve));
 
     const stream = FakeWebSocket.instances[1];
     assert.equal(stream.url, 'wss://memoro.test/api/mc/pty/att_a/broker?token=stream-token');
