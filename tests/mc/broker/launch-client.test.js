@@ -155,6 +155,182 @@ describe('launchBrokerOwnedSession', () => {
     assert.equal(streams.err(), '');
   });
 
+  test('uses an explicit coding session id without minting a new one', async () => {
+    const streams = makeStreams();
+    const requests = [];
+    let attached = null;
+
+    const res = await launchBrokerOwnedSession({
+      cwd: '/repo',
+      codingSessionId: 'sess_server123',
+      sessionName: 'cloud-coordinator',
+      focus: 'cloud task',
+      tool: 'claude',
+      attachAfterLaunch: false,
+      cloudBroker: {
+        sourceId: 'cloud:cld_123456',
+        sourceKind: 'cloud',
+        sourceName: 'Memoro Cloud',
+        cloudSessionId: 'cld_123456',
+      },
+      stdout: streams.stdout,
+      stderr: streams.stderr,
+      now: () => 10_000,
+      request: async (message) => {
+        requests.push(message);
+        return { ok: true, session: { id: message.session.id } };
+      },
+      ensureBroker: async () => ({ ok: true, broker: { pid: 42 } }),
+      ensureCloudBroker: async () => ({ ok: true }),
+      attach: async (opts) => {
+        attached = opts;
+        return 0;
+      },
+      deps: {
+        useSessionHost: false,
+        getRepoContext: async () => ({ remoteUrl: 'git@example.com:org/repo.git', branch: 'main', toplevel: '/repo' }),
+        ensureCoordinatorSlashCommand: async () => {},
+        installUpdateCommand: async () => {},
+        readConfig: async () => ({ apiUrl: 'https://memoro.test' }),
+        getApiUrl: () => null,
+        getSecret: async () => 'tok',
+        groundSession: async () => ({ ok: true }),
+        hostname: () => 'cloud-runner',
+        lookupOrMint: async () => assert.fail('explicit codingSessionId should avoid lookupOrMint'),
+        getPackageVersion: async () => '0.test',
+      },
+    });
+
+    assert.equal(res.code, 0);
+    assert.equal(res.codingSessionId, 'sess_server123');
+    assert.equal(res.attached, false);
+    assert.equal(attached, null);
+    assert.equal(requests[0].session.id, 'sess_server123');
+    assert.equal(requests[0].session.sidecars.codingSessionId, 'sess_server123');
+    assert.match(requests[0].session.sidecars.sockPath, /sess_server123\.sock$/);
+    assert.match(streams.out(), /sess_server123/);
+  });
+
+  test('lets cloud Codex reach interactive login without auto-submitting grounding', async () => {
+    const streams = makeStreams();
+    const requests = [];
+    let ensuredBroker = false;
+    let grounded = false;
+
+    const res = await launchBrokerOwnedSession({
+      cwd: '/repo',
+      codingSessionId: 'sess_cloudcodex',
+      sessionName: 'cloud-codex',
+      focus: 'cloud task',
+      tool: 'codex',
+      attachAfterLaunch: false,
+      cloudBroker: {
+        sourceId: 'cloud:cld_123456',
+        sourceKind: 'cloud',
+        sourceName: 'Memoro Cloud',
+        cloudSessionId: 'cld_123456',
+      },
+      stdout: streams.stdout,
+      stderr: streams.stderr,
+      now: () => 10_000,
+      request: async (message) => {
+        requests.push(message);
+        return { ok: true, session: { id: message.session.id } };
+      },
+      ensureBroker: async () => {
+        ensuredBroker = true;
+        return { ok: true, broker: { pid: 42 } };
+      },
+      ensureCloudBroker: async () => ({ ok: true }),
+      deps: {
+        getRepoContext: async () => ({ remoteUrl: 'git@example.com:org/repo.git', branch: 'main', toplevel: '/repo' }),
+        readConfig: async () => ({ apiUrl: 'https://memoro.test' }),
+        getApiUrl: () => null,
+        getSecret: async () => 'tok',
+        groundSession: async () => {
+          grounded = true;
+          return { ok: true, message: 'cloud task grounding' };
+        },
+        hostname: () => 'cloud-runner',
+        getPackageVersion: async () => '0.test',
+        prepareCloudCodexAuth: async () => ({
+          ok: true,
+          source: 'interactive-login',
+          startupMessageSafe: false,
+        }),
+        readRepoPolicyConfig: () => ({ config: {}, warnings: [] }),
+        readRepoLocalConfig: () => ({ config: {}, warnings: [] }),
+        resolveEffectiveConfig: ({ globalConfig }) => globalConfig,
+        prepareCloudflareGuardEnv: ({ baseEnv }) => ({ env: baseEnv }),
+      },
+    });
+
+    assert.equal(res.code, 0);
+    assert.equal(res.codingSessionId, 'sess_cloudcodex');
+    assert.equal(ensuredBroker, true);
+    assert.equal(grounded, true);
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].session.tool, 'codex');
+    assert.equal(requests[0].session.launch_options.startupMessage, null);
+  });
+
+  test('prepares cloud Codex auth and passes scrubbed env to broker launch', async () => {
+    const streams = makeStreams();
+    const requests = [];
+
+    const res = await launchBrokerOwnedSession({
+      cwd: '/repo',
+      codingSessionId: 'sess_cloudcodex',
+      sessionName: 'cloud-codex',
+      focus: 'cloud task',
+      tool: 'codex',
+      attachAfterLaunch: false,
+      cloudBroker: {
+        sourceId: 'cloud:cld_123456',
+        sourceKind: 'cloud',
+        sourceName: 'Memoro Cloud',
+        cloudSessionId: 'cld_123456',
+      },
+      stdout: streams.stdout,
+      stderr: streams.stderr,
+      env: {
+        TERM: 'xterm-256color',
+        MC_CODEX_API_KEY: 'sk-cloud',
+      },
+      now: () => 10_000,
+      request: async (message) => {
+        requests.push(message);
+        return { ok: true, session: { id: message.session.id } };
+      },
+      ensureBroker: async () => ({ ok: true, broker: { pid: 42 } }),
+      ensureCloudBroker: async () => ({ ok: true }),
+      deps: {
+        getRepoContext: async () => ({ remoteUrl: 'git@example.com:org/repo.git', branch: 'main', toplevel: '/repo' }),
+        readConfig: async () => ({ apiUrl: 'https://memoro.test' }),
+        getApiUrl: () => null,
+        getSecret: async () => 'tok',
+        groundSession: async () => ({ ok: true }),
+        hostname: () => 'cloud-runner',
+        getPackageVersion: async () => '0.test',
+        prepareCloudCodexAuth: async ({ env }) => {
+          env.CODEX_HOME = '/workspace/.codex-cloud';
+          delete env.MC_CODEX_API_KEY;
+          return { ok: true };
+        },
+        readRepoPolicyConfig: () => ({ config: {}, warnings: [] }),
+        readRepoLocalConfig: () => ({ config: {}, warnings: [] }),
+        resolveEffectiveConfig: ({ globalConfig }) => globalConfig,
+        prepareCloudflareGuardEnv: ({ baseEnv }) => ({ env: baseEnv }),
+      },
+    });
+
+    assert.equal(res.code, 0);
+    assert.equal(res.codingSessionId, 'sess_cloudcodex');
+    assert.equal(requests[0].session.tool, 'codex');
+    assert.equal(requests[0].session.env.CODEX_HOME, '/workspace/.codex-cloud');
+    assert.equal(requests[0].session.env.MC_CODEX_API_KEY, undefined);
+  });
+
   test('uses the broker-returned session id when launch is deduplicated', async () => {
     const streams = makeStreams();
     let attached = null;

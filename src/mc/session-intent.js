@@ -63,9 +63,11 @@ export function buildCloudSessionLaunchIntent({
   const sourceName = cloud?.sourceName || DEFAULT_CLOUD_SOURCE_NAME;
   const sourceId = cloud?.sourceId || `cloud:${cloud?.cloudSessionId || 'unknown'}`;
   const cloudSessionId = cloud?.cloudSessionId || null;
+  const codingSessionId = cloud?.codingSessionId || null;
   return {
     mode: MC_SESSION_LAUNCH_MODES.CLOUD,
     cwd,
+    codingSessionId,
     sessionName: cloud?.name || null,
     label: null,
     focus: cloud?.task || null,
@@ -99,6 +101,7 @@ export function buildCloudSessionEnv(baseEnv = process.env, cloud = {}) {
     MC_SOURCE_KIND: 'cloud',
     MC_SOURCE_NAME: cloud.sourceName || DEFAULT_CLOUD_SOURCE_NAME,
     MC_CLOUD_SESSION_ID: cloud.cloudSessionId,
+    ...(cloud.codingSessionId ? { MC_CODING_SESSION_ID: cloud.codingSessionId } : {}),
     MC_CLOUD_SESSION_POLICY: cloud.policy || DEFAULT_POLICY,
   };
 }

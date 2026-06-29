@@ -78,6 +78,7 @@ describe('mc session launch intents', () => {
       env: { PATH: '/bin', MEMORO_TOKEN: 'mem_runtime' },
       cloud: {
         cloudSessionId: 'cld_123456',
+        codingSessionId: 'sess_server123',
         name: 'cloud_coord',
         task: 'Analyse cloud mc',
         tool: 'codex',
@@ -88,6 +89,7 @@ describe('mc session launch intents', () => {
 
     assert.equal(intent.mode, MC_SESSION_LAUNCH_MODES.CLOUD);
     assert.equal(intent.cwd, '/workspace/repo');
+    assert.equal(intent.codingSessionId, 'sess_server123');
     assert.equal(intent.sessionName, 'cloud_coord');
     assert.equal(intent.focus, 'Analyse cloud mc');
     assert.equal(intent.tool, 'codex');
@@ -105,6 +107,7 @@ describe('mc session launch intents', () => {
     assert.equal(intent.env.MC_SOURCE_KIND, 'cloud');
     assert.equal(intent.env.MC_SOURCE_NAME, 'Memoro Cloud');
     assert.equal(intent.env.MC_CLOUD_SESSION_ID, 'cld_123456');
+    assert.equal(intent.env.MC_CODING_SESSION_ID, 'sess_server123');
     assert.equal(intent.env.MC_CLOUD_SESSION_POLICY, 'read-only');
     assert.equal(intent.env.MEMORO_TOKEN, 'mem_runtime');
 
@@ -118,6 +121,7 @@ describe('mc session launch intents', () => {
       sourceId: 'cloud:cld_abcdef',
       sourceName: 'Cloud Source',
       cloudSessionId: 'cld_abcdef',
+      codingSessionId: 'sess_env123',
       policy: 'workspace-write',
     });
 
@@ -128,6 +132,7 @@ describe('mc session launch intents', () => {
       MC_SOURCE_KIND: 'cloud',
       MC_SOURCE_NAME: 'Cloud Source',
       MC_CLOUD_SESSION_ID: 'cld_abcdef',
+      MC_CODING_SESSION_ID: 'sess_env123',
       MC_CLOUD_SESSION_POLICY: 'workspace-write',
     });
   });

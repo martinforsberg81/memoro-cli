@@ -11,6 +11,7 @@ export { cloudPolicyForLaunch } from '../session-intent.js';
 const DEFAULT_POLICY = 'workspace-write';
 const DEFAULT_SOURCE_NAME = DEFAULT_CLOUD_SOURCE_NAME;
 const CLOUD_SESSION_ID_RE = /^cld_[a-zA-Z0-9_-]{6,}$/;
+const CODING_SESSION_ID_RE = /^sess_[a-zA-Z0-9_-]{6,}$/;
 const SOURCE_ID_RE = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/;
 const NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/;
 const POLICIES = new Set(['read-only', 'workspace-write']);
@@ -60,7 +61,11 @@ export async function runCloudSessionWith(opts, deps = {}) {
     return 2;
   }
 
-  const validation = validateCloudSessionOptions(opts);
+  const baseEnv = deps.env || process.env;
+  const validation = validateCloudSessionOptions({
+    ...opts,
+    codingSessionId: opts.codingSessionId || stringOrNull(baseEnv.MC_CODING_SESSION_ID),
+  });
   if (!validation.ok) {
     stderr.write(`mc: ${validation.error}\n`);
     if (opts.json) writeJson(stdout, { ok: false, error: validation.error });
@@ -69,7 +74,6 @@ export async function runCloudSessionWith(opts, deps = {}) {
   const cloud = validation.cloud;
   const sourceName = cloud.sourceName || DEFAULT_SOURCE_NAME;
   const sourceId = cloud.sourceId || `cloud:${cloud.cloudSessionId}`;
-  const baseEnv = deps.env || process.env;
   const launchIntent = buildCloudSessionLaunchIntent({
     cloud: { ...cloud, sourceId, sourceName },
     cwd: (deps.cwd || (() => process.cwd()))(),
@@ -91,7 +95,12 @@ export async function runCloudSessionWith(opts, deps = {}) {
 
   const code = Number.isInteger(result?.code) ? result.code : 0;
   if (code !== 0) {
-    if (opts.json) writeJson(stdout, { ok: false, error: 'cloud session launch failed', code });
+    if (opts.json) writeJson(stdout, {
+      ok: false,
+      error: result?.error || 'cloud session launch failed',
+      reason: result?.reason || null,
+      code,
+    });
     return code;
   }
 
@@ -133,6 +142,7 @@ export function parseArgs(argv) {
     sourceId: null,
     sourceName: null,
     cloudSessionId: null,
+    codingSessionId: null,
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -157,6 +167,7 @@ export function parseArgs(argv) {
     if (a === '--source-id') { opts.sourceId = valueAfter(argv, ++i, a); if (isMissing(opts.sourceId)) return missingValue(opts, a); continue; }
     if (a === '--source-name') { opts.sourceName = valueAfter(argv, ++i, a); if (isMissing(opts.sourceName)) return missingValue(opts, a); continue; }
     if (a === '--cloud-session-id') { opts.cloudSessionId = valueAfter(argv, ++i, a); if (isMissing(opts.cloudSessionId)) return missingValue(opts, a); continue; }
+    if (a === '--coding-session-id') { opts.codingSessionId = valueAfter(argv, ++i, a); if (isMissing(opts.codingSessionId)) return missingValue(opts, a); continue; }
     if (a.startsWith('--')) return { ...opts, error: `unknown flag: ${a}` };
     if (opts.verb) return { ...opts, error: `unexpected arg: ${a}` };
     opts.verb = a;
@@ -170,6 +181,9 @@ export function validateCloudSessionOptions(opts) {
   }
   if (opts.sourceId && !SOURCE_ID_RE.test(opts.sourceId)) {
     return { ok: false, error: 'source id must be 1-128 chars and contain only letters, numbers, dot, underscore, colon, or dash' };
+  }
+  if (opts.codingSessionId && !CODING_SESSION_ID_RE.test(opts.codingSessionId)) {
+    return { ok: false, error: 'coding session id must match /^sess_[a-zA-Z0-9_-]{6,}$/' };
   }
   if (opts.policy && !POLICIES.has(opts.policy)) {
     return { ok: false, error: 'policy must be read-only or workspace-write' };
@@ -186,6 +200,7 @@ export function validateCloudSessionOptions(opts) {
     ok: true,
     cloud: {
       cloudSessionId: opts.cloudSessionId,
+      codingSessionId: opts.codingSessionId || null,
       sourceId: opts.sourceId || null,
       sourceName: opts.sourceName || DEFAULT_SOURCE_NAME,
       name,
@@ -237,7 +252,7 @@ function printUsage(stream = process.stdout) {
   stream.write(`mc cloud-session — internal typed cloud mc runtime
 
 USAGE
-  mc cloud-session start --cloud-session-id <cld_id> [--name <name>]
+  mc cloud-session start --cloud-session-id <cld_id> [--coding-session-id <sess_id>] [--name <name>]
                    [--task <focus>] [--tool claude|codex|gemini]
                    [--policy read-only|workspace-write] [--json]
 
