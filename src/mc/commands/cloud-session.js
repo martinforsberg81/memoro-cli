@@ -95,7 +95,12 @@ export async function runCloudSessionWith(opts, deps = {}) {
 
   const code = Number.isInteger(result?.code) ? result.code : 0;
   if (code !== 0) {
-    if (opts.json) writeJson(stdout, { ok: false, error: 'cloud session launch failed', code });
+    if (opts.json) writeJson(stdout, {
+      ok: false,
+      error: result?.error || 'cloud session launch failed',
+      reason: result?.reason || null,
+      code,
+    });
     return code;
   }
 

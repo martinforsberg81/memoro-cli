@@ -211,6 +211,116 @@ describe('launchBrokerOwnedSession', () => {
     assert.match(streams.out(), /sess_server123/);
   });
 
+  test('blocks cloud Codex before broker launch when headless auth is missing', async () => {
+    const streams = makeStreams();
+    let requested = false;
+    let ensuredBroker = false;
+
+    const res = await launchBrokerOwnedSession({
+      cwd: '/repo',
+      codingSessionId: 'sess_cloudcodex',
+      sessionName: 'cloud-codex',
+      focus: 'cloud task',
+      tool: 'codex',
+      attachAfterLaunch: false,
+      cloudBroker: {
+        sourceId: 'cloud:cld_123456',
+        sourceKind: 'cloud',
+        sourceName: 'Memoro Cloud',
+        cloudSessionId: 'cld_123456',
+      },
+      stdout: streams.stdout,
+      stderr: streams.stderr,
+      now: () => 10_000,
+      request: async () => {
+        requested = true;
+        return { ok: true };
+      },
+      ensureBroker: async () => {
+        ensuredBroker = true;
+        return { ok: true };
+      },
+      ensureCloudBroker: async () => ({ ok: true }),
+      deps: {
+        getRepoContext: async () => ({ remoteUrl: 'git@example.com:org/repo.git', branch: 'main', toplevel: '/repo' }),
+        readConfig: async () => ({ apiUrl: 'https://memoro.test' }),
+        getApiUrl: () => null,
+        getSecret: async () => 'tok',
+        groundSession: async () => ({ ok: true }),
+        hostname: () => 'cloud-runner',
+        getPackageVersion: async () => '0.test',
+        prepareCloudCodexAuth: async () => ({
+          ok: false,
+          reason: 'cloud-codex-auth-missing',
+          error: 'Codex cloud auth missing',
+        }),
+      },
+    });
+
+    assert.equal(res.code, 1);
+    assert.equal(res.reason, 'cloud-codex-auth-missing');
+    assert.equal(requested, false);
+    assert.equal(ensuredBroker, false);
+    assert.match(streams.err(), /Codex cloud auth missing/);
+  });
+
+  test('prepares cloud Codex auth and passes scrubbed env to broker launch', async () => {
+    const streams = makeStreams();
+    const requests = [];
+
+    const res = await launchBrokerOwnedSession({
+      cwd: '/repo',
+      codingSessionId: 'sess_cloudcodex',
+      sessionName: 'cloud-codex',
+      focus: 'cloud task',
+      tool: 'codex',
+      attachAfterLaunch: false,
+      cloudBroker: {
+        sourceId: 'cloud:cld_123456',
+        sourceKind: 'cloud',
+        sourceName: 'Memoro Cloud',
+        cloudSessionId: 'cld_123456',
+      },
+      stdout: streams.stdout,
+      stderr: streams.stderr,
+      env: {
+        TERM: 'xterm-256color',
+        MC_CODEX_API_KEY: 'sk-cloud',
+      },
+      now: () => 10_000,
+      request: async (message) => {
+        requests.push(message);
+        return { ok: true, session: { id: message.session.id } };
+      },
+      ensureBroker: async () => ({ ok: true, broker: { pid: 42 } }),
+      ensureCloudBroker: async () => ({ ok: true }),
+      deps: {
+        getRepoContext: async () => ({ remoteUrl: 'git@example.com:org/repo.git', branch: 'main', toplevel: '/repo' }),
+        readConfig: async () => ({ apiUrl: 'https://memoro.test' }),
+        getApiUrl: () => null,
+        getSecret: async () => 'tok',
+        groundSession: async () => ({ ok: true }),
+        hostname: () => 'cloud-runner',
+        getPackageVersion: async () => '0.test',
+        prepareCloudCodexAuth: async ({ env }) => {
+          env.CODEX_HOME = '/workspace/.codex-cloud';
+          delete env.MC_CODEX_API_KEY;
+          return { ok: true };
+        },
+        readRepoPolicyConfig: () => ({ config: {}, warnings: [] }),
+        readRepoLocalConfig: () => ({ config: {}, warnings: [] }),
+        resolveEffectiveConfig: ({ globalConfig }) => globalConfig,
+        prepareCloudflareGuardEnv: ({ baseEnv }) => ({ env: baseEnv }),
+      },
+    });
+
+    assert.equal(res.code, 0);
+    assert.equal(res.codingSessionId, 'sess_cloudcodex');
+    assert.equal(requests[0].session.tool, 'codex');
+    assert.equal(requests[0].session.env.CODEX_HOME, '/workspace/.codex-cloud');
+    assert.equal(requests[0].session.env.MC_CODEX_API_KEY, undefined);
+  });
+
   test('uses the broker-returned session id when launch is deduplicated', async () => {
     const streams = makeStreams();
     let attached = null;

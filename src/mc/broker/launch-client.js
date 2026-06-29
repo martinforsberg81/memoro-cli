@@ -22,6 +22,7 @@ import { ensureBrokerRunning } from './supervisor.js';
 import { ensureCloudBrokerConnected } from './cloud-supervisor.js';
 import { scrubRuntimeSecretsInPlace } from '../runtime-secrets.js';
 import { ensureSessionHostRunning } from './session-hosts.js';
+import { prepareCloudCodexAuth } from '../cloud-codex-auth.js';
 
 const CLOUD_BROKER_START_TIMEOUT_MS = 10_000;
 
@@ -106,6 +107,23 @@ export async function launchBrokerOwnedSession({
     llmSessionId,
   });
   const repoRef = derivePublicRepoRef(repoContext);
+  let spawnEnv = {
+    ...env,
+    MEMORO_MC_PARENT: '1',
+  };
+  if (launch.id === 'codex' && isCloudBrokerLaunch(cloudBroker)) {
+    const prepareAuth = deps.prepareCloudCodexAuth || prepareCloudCodexAuth;
+    const auth = await prepareAuth({
+      codingSessionId,
+      env: spawnEnv,
+      deps: deps.cloudCodexAuthDeps || {},
+    }).catch((err) => ({ ok: false, error: err.message || String(err) }));
+    if (!auth?.ok) {
+      const error = auth?.error || 'Codex cloud auth failed';
+      stderr.write(`mc: ${error}\n`);
+      return { code: 1, error, reason: auth?.reason || 'cloud-codex-auth-failed' };
+    }
+  }
   const paths = brokerSessionPaths(codingSessionId);
   const sessionHost = await resolveLaunchBroker({
     codingSessionId,
@@ -119,10 +137,6 @@ export async function launchBrokerOwnedSession({
   const launchRequest = sessionHost.request || request;
   const attachSocketPath = sessionHost.socketPath || null;
 
-  let spawnEnv = {
-    ...env,
-    MEMORO_MC_PARENT: '1',
-  };
   scrubRuntimeSecretsInPlace(spawnEnv);
   if (launch.id === 'codex') {
     try {
