@@ -30,6 +30,7 @@ export async function launchBrokerOwnedSession({
   label = null,
   focus = null,
   tool = DEFAULT_TOOL,
+  codingSessionId: requestedCodingSessionId = null,
   sessionName = null,
   argv = [],
   apiArgv = [],
@@ -99,7 +100,7 @@ export async function launchBrokerOwnedSession({
 
   const machineId = (deps.hostname || hostname)();
   const llmSessionId = `mc-${now()}-${process.pid}`;
-  const codingSessionId = await (deps.lookupOrMint || lookupOrMint)({
+  const codingSessionId = requestedCodingSessionId || await (deps.lookupOrMint || lookupOrMint)({
     repoIdentity: repoContext.remoteUrl,
     machineId,
     llmSessionId,

@@ -155,6 +155,62 @@ describe('launchBrokerOwnedSession', () => {
     assert.equal(streams.err(), '');
   });
 
+  test('uses an explicit coding session id without minting a new one', async () => {
+    const streams = makeStreams();
+    const requests = [];
+    let attached = null;
+
+    const res = await launchBrokerOwnedSession({
+      cwd: '/repo',
+      codingSessionId: 'sess_server123',
+      sessionName: 'cloud-coordinator',
+      focus: 'cloud task',
+      tool: 'claude',
+      attachAfterLaunch: false,
+      cloudBroker: {
+        sourceId: 'cloud:cld_123456',
+        sourceKind: 'cloud',
+        sourceName: 'Memoro Cloud',
+        cloudSessionId: 'cld_123456',
+      },
+      stdout: streams.stdout,
+      stderr: streams.stderr,
+      now: () => 10_000,
+      request: async (message) => {
+        requests.push(message);
+        return { ok: true, session: { id: message.session.id } };
+      },
+      ensureBroker: async () => ({ ok: true, broker: { pid: 42 } }),
+      ensureCloudBroker: async () => ({ ok: true }),
+      attach: async (opts) => {
+        attached = opts;
+        return 0;
+      },
+      deps: {
+        useSessionHost: false,
+        getRepoContext: async () => ({ remoteUrl: 'git@example.com:org/repo.git', branch: 'main', toplevel: '/repo' }),
+        ensureCoordinatorSlashCommand: async () => {},
+        installUpdateCommand: async () => {},
+        readConfig: async () => ({ apiUrl: 'https://memoro.test' }),
+        getApiUrl: () => null,
+        getSecret: async () => 'tok',
+        groundSession: async () => ({ ok: true }),
+        hostname: () => 'cloud-runner',
+        lookupOrMint: async () => assert.fail('explicit codingSessionId should avoid lookupOrMint'),
+        getPackageVersion: async () => '0.test',
+      },
+    });
+
+    assert.equal(res.code, 0);
+    assert.equal(res.codingSessionId, 'sess_server123');
+    assert.equal(res.attached, false);
+    assert.equal(attached, null);
+    assert.equal(requests[0].session.id, 'sess_server123');
+    assert.equal(requests[0].session.sidecars.codingSessionId, 'sess_server123');
+    assert.match(requests[0].session.sidecars.sockPath, /sess_server123\.sock$/);
+    assert.match(streams.out(), /sess_server123/);
+  });
+
   test('uses the broker-returned session id when launch is deduplicated', async () => {
     const streams = makeStreams();
     let attached = null;

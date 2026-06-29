@@ -31,6 +31,8 @@ describe('mc cloud-session parseArgs', () => {
       'start',
       '--cloud-session-id',
       'cld_123456',
+      '--coding-session-id',
+      'sess_server123',
       '--name',
       'cloud_coord',
       '--task',
@@ -48,6 +50,7 @@ describe('mc cloud-session parseArgs', () => {
 
     assert.equal(opts.verb, 'start');
     assert.equal(opts.cloudSessionId, 'cld_123456');
+    assert.equal(opts.codingSessionId, 'sess_server123');
     assert.equal(opts.name, 'cloud_coord');
     assert.equal(opts.task, 'Analyse cloud mc');
     assert.equal(opts.tool, 'codex');
@@ -73,6 +76,10 @@ describe('mc cloud-session validation', () => {
       validateCloudSessionOptions(parseArgs(['start', '--cloud-session-id', 'cld_123456', '--policy', 'danger-full-access'])).error,
       /policy must be/,
     );
+    assert.match(
+      validateCloudSessionOptions(parseArgs(['start', '--cloud-session-id', 'cld_123456', '--coding-session-id', 'not_a_session'])).error,
+      /coding session id/,
+    );
   });
 
   test('builds explicit policy for adapter launch rendering', () => {
@@ -95,6 +102,8 @@ describe('mc cloud-session start', () => {
       'start',
       '--cloud-session-id',
       'cld_123456',
+      '--coding-session-id',
+      'sess_server123',
       '--name',
       'cloud_coord',
       '--task',
@@ -134,6 +143,7 @@ describe('mc cloud-session start', () => {
     assert.equal(out.attached, false);
 
     assert.equal(launchArgs.cwd, '/workspace/memoro');
+    assert.equal(launchArgs.codingSessionId, 'sess_server123');
     assert.equal(launchArgs.sessionName, 'cloud_coord');
     assert.equal(launchArgs.focus, 'Analyse cloud mc');
     assert.equal(launchArgs.tool, 'codex');
@@ -153,5 +163,45 @@ describe('mc cloud-session start', () => {
     const policy = launchArgs.deps.resolvePolicyForWrap({ tool: 'codex' });
     assert.equal(policy.permissions.workspace, 'worktree');
     assert.deepEqual(policy.explicit_permissions, ['workspace']);
+  });
+
+  test('uses MC_CODING_SESSION_ID as the cloud runtime session id', async () => {
+    const streams = io();
+    let launchArgs = null;
+
+    const code = await runCloudSessionWith(parseArgs([
+      'start',
+      '--cloud-session-id',
+      'cld_123456',
+      '--name',
+      'cloud_coord',
+      '--tool',
+      'codex',
+      '--json',
+    ]), {
+      cwd: () => '/workspace/memoro',
+      env: {
+        PATH: '/bin',
+        TERM: 'xterm-256color',
+        MC_CODING_SESSION_ID: 'sess_env123',
+      },
+      stdout: streams.stdout,
+      stderr: streams.stderr,
+      launchBrokerOwnedSession: async (args) => {
+        launchArgs = args;
+        return {
+          code: 0,
+          codingSessionId: args.codingSessionId,
+          broker: { pid: 42 },
+          attached: false,
+        };
+      },
+    });
+
+    assert.equal(code, 0);
+    assert.equal(streams.err(), '');
+    assert.equal(launchArgs.codingSessionId, 'sess_env123');
+    const out = JSON.parse(streams.out());
+    assert.equal(out.coding_session_id, 'sess_env123');
   });
 });
