@@ -6,6 +6,7 @@ import * as codexAdapter from '../adapters/codex.js';
 import { mcHome } from './paths.js';
 
 export const CLOUD_CODEX_AUTH_MISSING = 'cloud-codex-auth-missing';
+export const CLOUD_CODEX_AUTH_INTERACTIVE_LOGIN = 'cloud-codex-interactive-login';
 
 const AUTH_ENV_NAMES = Object.freeze([
   'MC_CODEX_API_KEY',
@@ -34,9 +35,12 @@ export async function prepareCloudCodexAuth({
 
   if (!token) {
     return {
-      ok: false,
-      reason: CLOUD_CODEX_AUTH_MISSING,
-      error: 'Codex cloud auth missing. Browser login cannot run inside an mc cloud runtime; provide MC_CODEX_API_KEY for the cloud runtime.',
+      ok: true,
+      source: 'interactive-login',
+      reason: CLOUD_CODEX_AUTH_INTERACTIVE_LOGIN,
+      interactiveLogin: true,
+      startupMessageSafe: false,
+      hint: 'Codex will show its login URL in the terminal. Copy it into a local browser tab to finish sign-in.',
     };
   }
 
@@ -68,6 +72,8 @@ export async function prepareCloudCodexAuth({
   return {
     ok: true,
     source: token.source,
+    interactiveLogin: false,
+    startupMessageSafe: true,
     codexHome,
     materializedPath: materialized.materializedPath || location.path,
   };

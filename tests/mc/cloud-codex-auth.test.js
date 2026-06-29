@@ -3,13 +3,13 @@ import { describe, test } from 'node:test';
 import { join } from 'node:path';
 
 import {
-  CLOUD_CODEX_AUTH_MISSING,
+  CLOUD_CODEX_AUTH_INTERACTIVE_LOGIN,
   codexAuthPath,
   prepareCloudCodexAuth,
 } from '../../src/mc/cloud-codex-auth.js';
 
 describe('cloud Codex auth preflight', () => {
-  test('fails clearly when no headless cloud auth exists', async () => {
+  test('falls back to interactive login when no headless cloud auth exists', async () => {
     const env = {};
     const res = await prepareCloudCodexAuth({
       codingSessionId: 'sess_cloud',
@@ -19,9 +19,12 @@ describe('cloud Codex auth preflight', () => {
       },
     });
 
-    assert.equal(res.ok, false);
-    assert.equal(res.reason, CLOUD_CODEX_AUTH_MISSING);
-    assert.match(res.error, /Browser login cannot run inside an mc cloud runtime/);
+    assert.equal(res.ok, true);
+    assert.equal(res.source, 'interactive-login');
+    assert.equal(res.reason, CLOUD_CODEX_AUTH_INTERACTIVE_LOGIN);
+    assert.equal(res.interactiveLogin, true);
+    assert.equal(res.startupMessageSafe, false);
+    assert.match(res.hint, /login URL/);
   });
 
   test('accepts an existing Codex auth file without materialising a token', async () => {

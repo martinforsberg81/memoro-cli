@@ -211,10 +211,11 @@ describe('launchBrokerOwnedSession', () => {
     assert.match(streams.out(), /sess_server123/);
   });
 
-  test('blocks cloud Codex before broker launch when headless auth is missing', async () => {
+  test('lets cloud Codex reach interactive login without auto-submitting grounding', async () => {
     const streams = makeStreams();
-    let requested = false;
+    const requests = [];
     let ensuredBroker = false;
+    let grounded = false;
 
     const res = await launchBrokerOwnedSession({
       cwd: '/repo',
@@ -232,13 +233,13 @@ describe('launchBrokerOwnedSession', () => {
       stdout: streams.stdout,
       stderr: streams.stderr,
       now: () => 10_000,
-      request: async () => {
-        requested = true;
-        return { ok: true };
+      request: async (message) => {
+        requests.push(message);
+        return { ok: true, session: { id: message.session.id } };
       },
       ensureBroker: async () => {
         ensuredBroker = true;
-        return { ok: true };
+        return { ok: true, broker: { pid: 42 } };
       },
       ensureCloudBroker: async () => ({ ok: true }),
       deps: {
@@ -246,22 +247,31 @@ describe('launchBrokerOwnedSession', () => {
         readConfig: async () => ({ apiUrl: 'https://memoro.test' }),
         getApiUrl: () => null,
         getSecret: async () => 'tok',
-        groundSession: async () => ({ ok: true }),
+        groundSession: async () => {
+          grounded = true;
+          return { ok: true, message: 'cloud task grounding' };
+        },
         hostname: () => 'cloud-runner',
         getPackageVersion: async () => '0.test',
         prepareCloudCodexAuth: async () => ({
-          ok: false,
-          reason: 'cloud-codex-auth-missing',
-          error: 'Codex cloud auth missing',
+          ok: true,
+          source: 'interactive-login',
+          startupMessageSafe: false,
         }),
+        readRepoPolicyConfig: () => ({ config: {}, warnings: [] }),
+        readRepoLocalConfig: () => ({ config: {}, warnings: [] }),
+        resolveEffectiveConfig: ({ globalConfig }) => globalConfig,
+        prepareCloudflareGuardEnv: ({ baseEnv }) => ({ env: baseEnv }),
       },
     });
 
-    assert.equal(res.code, 1);
-    assert.equal(res.reason, 'cloud-codex-auth-missing');
-    assert.equal(requested, false);
-    assert.equal(ensuredBroker, false);
-    assert.match(streams.err(), /Codex cloud auth missing/);
+    assert.equal(res.code, 0);
+    assert.equal(res.codingSessionId, 'sess_cloudcodex');
+    assert.equal(ensuredBroker, true);
+    assert.equal(grounded, true);
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].session.tool, 'codex');
+    assert.equal(requests[0].session.launch_options.startupMessage, null);
   });
 
   test('prepares cloud Codex auth and passes scrubbed env to broker launch', async () => {

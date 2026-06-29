@@ -123,6 +123,9 @@ export async function launchBrokerOwnedSession({
       stderr.write(`mc: ${error}\n`);
       return { code: 1, error, reason: auth?.reason || 'cloud-codex-auth-failed' };
     }
+    if (auth.startupMessageSafe === false) {
+      groundingLaunchMessage = null;
+    }
   }
   const paths = brokerSessionPaths(codingSessionId);
   const sessionHost = await resolveLaunchBroker({
