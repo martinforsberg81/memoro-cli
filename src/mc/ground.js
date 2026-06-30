@@ -1,11 +1,11 @@
 /**
  * Session grounding (Phase 1 — Grounding MVP).
  *
- * Every entry into an mc session should hand the LLM the right context
- * *before the user types*. The bundle:
+ * Every entry into an mc session should hand the LLM the right structural
+ * context *before the user types*. The bundle:
  *
  *   { map    — MEMORO.md from cwd, the repo's intent (read-only)
- *     role   — orchestrator framing + its purpose
+ *     role   — optional role framing for legacy/coordinator workflows
  *     lens   — who the user is, from Memoro (governs language + prefs)
  *     focus  — a soft, mutable pointer ("currently on X") }
  *
@@ -16,7 +16,7 @@
  *     markdown body for a managed block. No I/O. Empty parts degrade
  *     softly (a missing map / lens / focus is simply omitted).
  *   - `groundSession({ cwd, ... })` — impure orchestration. Reads the
- *     map off disk, pulls the role + (optional) lens through injectable
+ *     map off disk, pulls the optional role + lens through injectable
  *     dep-portals, assembles the bundle, and materialises it into the
  *     cwd's tool instruction file at the pre-launch slot. Every external
  *     dependency is injectable and soft-degrades on failure: no Memoro →
@@ -43,6 +43,13 @@ const PREAMBLE =
   'You are waking into an mc session. The context below was injected ' +
   'before the user typed — read it so you start grounded in the whole, ' +
   'not from a blank slate. It is standing context, not a task.';
+
+const DEFAULT_GROUNDING = Object.freeze({
+  includeRoadmap: true,
+  includeCoordinatorRole: false,
+  includeMapLifecycle: false,
+  includeLens: true,
+});
 
 // ─────────────────────────────────────────────────────────────
 // Pure: language resolution (Phase 4)
@@ -705,16 +712,24 @@ export async function groundSession({ cwd, adapter, focus = null, deps = {} } = 
     fetchLensDataImpl = () => fetchLensData(deps.lensDeps || {}),
     pullLensImpl = null,
     repoName = basename(cwd),
+    grounding = DEFAULT_GROUNDING,
   } = deps;
 
-  const map = await safe(() => readMapImpl(cwd), null);
-  const role = await safe(() => buildRoleImpl(cwd), null);
+  const groundingConfig = normalizeGroundingConfig(grounding);
+  const map = groundingConfig.includeRoadmap
+    ? await safe(() => readMapImpl(cwd), null)
+    : null;
+  const role = groundingConfig.includeCoordinatorRole
+    ? await safe(() => buildRoleImpl(cwd), null)
+    : null;
 
   // Lens auto-injection + language. Soft-degrade everywhere: a null lens
   // response → no lens section + (absent a MEMORO.md setting) English default.
   let lens = null;
   let lensResp = null;
-  if (pullLensImpl) {
+  if (!groundingConfig.includeLens) {
+    lens = null;
+  } else if (pullLensImpl) {
     // Legacy markdown-only path (Phase 1/2 tests inject this). No lens
     // response object → no server locale to resolve from; the MEMORO.md
     // setting still drives the language below.
@@ -737,7 +752,9 @@ export async function groundSession({ cwd, adapter, focus = null, deps = {} } = 
   // MEMORO.md lifecycle guidance (Phase 2). PURE + read-only on mc's side:
   // it only adds instructions for the grounded agent to keep the living map
   // current as work lands. safe() so a surprise never blocks the launch.
-  const lifecycle = safeSync(() => lifecycleGuidance({ map: mapProse, repoName }), null);
+  const lifecycle = groundingConfig.includeRoadmap && groundingConfig.includeMapLifecycle
+    ? safeSync(() => lifecycleGuidance({ map: mapProse, repoName }), null)
+    : null;
 
   const parts = { map: mapProse, role, lens, focus, lifecycle, language };
   const markdown = assembleBundle(parts);
@@ -758,6 +775,16 @@ export async function groundSession({ cwd, adapter, focus = null, deps = {} } = 
   } catch (err) {
     return { ok: false, reason: err?.message || 'write failed', parts, markdown };
   }
+}
+
+function normalizeGroundingConfig(config) {
+  const input = isObj(config) ? config : {};
+  return {
+    includeRoadmap: input.includeRoadmap !== false,
+    includeCoordinatorRole: input.includeCoordinatorRole === true,
+    includeMapLifecycle: input.includeMapLifecycle === true || input.includeCoordinatorRole === true,
+    includeLens: input.includeLens !== false,
+  };
 }
 
 async function safe(fn, fallback) {

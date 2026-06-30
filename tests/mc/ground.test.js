@@ -211,7 +211,7 @@ describe('groundSession', () => {
     };
   }
 
-  it('assembles all parts and materialises via the adapter', async () => {
+  it('assembles structural parts and materialises via the adapter', async () => {
     const adapter = fakeAdapter();
     const res = await groundSession({
       cwd: dir,
@@ -226,10 +226,29 @@ describe('groundSession', () => {
     assert.equal(res.ok, true);
     assert.match(res.path, /CLAUDE\.md$/);
     assert.match(adapter.written.markdown, /## The map/);
-    assert.match(adapter.written.markdown, /## Your role/);
+    assert.doesNotMatch(adapter.written.markdown, /## Your role/);
+    assert.doesNotMatch(adapter.written.markdown, /## Keeping the map current/);
     assert.match(adapter.written.markdown, /## Who you are working with/);
     assert.match(adapter.written.markdown, /on grounding/);
     assert.equal(adapter.written.cwd, dir);
+  });
+
+  it('can opt into coordinator role and map lifecycle grounding', async () => {
+    const adapter = fakeAdapter();
+    const res = await groundSession({
+      cwd: dir,
+      adapter,
+      deps: {
+        readMapImpl: async () => '# MEMORO.md\nmap',
+        buildRoleImpl: () => 'role',
+        pullLensImpl: async () => null,
+        grounding: { includeCoordinatorRole: true },
+      },
+    });
+    assert.equal(res.ok, true);
+    assert.match(adapter.written.markdown, /## Your role/);
+    assert.match(adapter.written.markdown, /role/);
+    assert.match(adapter.written.markdown, /## Keeping the map current/);
   });
 
   it('supports adapters that deliver grounding as a startup message', async () => {
@@ -268,7 +287,9 @@ describe('groundSession', () => {
     });
     assert.equal(res.ok, true);
     assert.ok(!/## The map/.test(adapter.written.markdown));
-    assert.match(adapter.written.markdown, /## Your role/);
+    assert.doesNotMatch(adapter.written.markdown, /## Your role/);
+    assert.doesNotMatch(adapter.written.markdown, /## Keeping the map current/);
+    assert.match(adapter.written.markdown, /## Who you are working with/);
   });
 
   it('soft-degrades when Memoro unavailable — bundle without lens', async () => {
@@ -334,6 +355,7 @@ describe('groundSession', () => {
         buildRoleImpl: () => 'role',
         pullLensImpl: async () => null,
         repoName: 'acme-cli',
+        grounding: { includeMapLifecycle: true },
       },
     });
     assert.match(adapter.written.markdown, /Keeping the map current/);
@@ -352,6 +374,7 @@ describe('groundSession', () => {
         readMapImpl: async () => '- **Live node** — `active · L · now`',
         buildRoleImpl: () => 'role',
         pullLensImpl: async () => null,
+        grounding: { includeMapLifecycle: true },
       },
     });
     assert.match(adapter.written.markdown, /Keeping the map current/);

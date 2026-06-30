@@ -6,7 +6,8 @@ export const PACKAGE_DEFAULTS = Object.freeze({
   defaultTool: DEFAULT_TOOL,
   grounding: Object.freeze({
     includeRoadmap: true,
-    includeCoordinatorRole: true,
+    includeCoordinatorRole: false,
+    includeMapLifecycle: false,
     includeLens: true,
   }),
   permissions: Object.freeze({
@@ -42,6 +43,7 @@ const PREFERENCE_PATHS = Object.freeze([
   'worktreeRoot',
   'grounding.includeRoadmap',
   'grounding.includeCoordinatorRole',
+  'grounding.includeMapLifecycle',
   'grounding.includeLens',
   'permissions.profile',
   'dataAccess.cloudflare.approvedScripts',
@@ -138,6 +140,7 @@ export function effectiveConfigValues(effectiveConfig = {}) {
   copyValue(out, effectiveConfig, 'worktreeRoot');
   copyValue(out, effectiveConfig, 'grounding.includeRoadmap');
   copyValue(out, effectiveConfig, 'grounding.includeCoordinatorRole');
+  copyValue(out, effectiveConfig, 'grounding.includeMapLifecycle');
   copyValue(out, effectiveConfig, 'grounding.includeLens');
   copyValue(out, effectiveConfig, 'permissions.profile');
   copyValue(out, effectiveConfig, 'permissions.workspace');

@@ -89,6 +89,7 @@ export async function launchBrokerOwnedSession({
         cwd,
         adapter: launch.adapter,
         focus,
+        deps: { grounding: config.grounding },
       });
       groundingLaunchMessage = res.message || null;
       if (!res.ok && res.reason) {
