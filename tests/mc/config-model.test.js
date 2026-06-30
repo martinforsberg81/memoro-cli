@@ -130,7 +130,8 @@ describe('resolveEffectiveConfig', () => {
       defaultTool: 'codex',
       grounding: {
         includeRoadmap: true,
-        includeCoordinatorRole: true,
+        includeCoordinatorRole: false,
+        includeMapLifecycle: false,
         includeLens: true,
       },
       permissions: {

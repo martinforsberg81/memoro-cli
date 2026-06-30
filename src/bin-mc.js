@@ -338,8 +338,9 @@ NEW USER FLOW
 
 WHAT HAPPENS ON START
   Fresh starts (\`mc\`, \`mc new\`) inject project grounding before the
-  coding tool wakes: MEMORO.md when present, the coordinator role, your
-  Memoro lens, and the focus. If MEMORO.md is missing, mc sends the
+  coding tool wakes: MEMORO.md when present, your Memoro lens, and the
+  focus. The old coordinator role and map-lifecycle prompt are opt-in via
+  grounding config. If MEMORO.md is missing and map-lifecycle is enabled, mc sends the
   launched agent a first user message asking whether to create it. If
   the vault is locked, mc can offer to unlock it before launch so tokens
   materialise for the tool.
@@ -541,7 +542,7 @@ async function runWrap(argv, { label = null } = {}) {
     // This is the SAME seam bare `mc`, `mc new`, and `mc resume` share
     // (new/resume re-exec into this runWrap), so entry-parity is one path.
     const focus = resolveWrapFocus({ label, env: process.env });
-    const res = await groundSession({ cwd, adapter, focus });
+    const res = await groundSession({ cwd, adapter, focus, deps: { grounding: config.grounding } });
     groundingLaunchMessage = res.message || null;
     startupMessage = startupMessageFromGroundingParts(res.parts);
     if (!res.ok && res.reason) {
