@@ -306,6 +306,7 @@ export async function runDeviceFlow(deps = {}) {
   stderr.write(`\n`);
   stderr.write(`  Code:    ${init.user_code}\n`);
   stderr.write(`  Open:    ${completeUrl}\n`);
+  stderr.write(`  Keep this terminal open until the token is saved.\n`);
   stderr.write(`\n`);
 
   let opened = false;

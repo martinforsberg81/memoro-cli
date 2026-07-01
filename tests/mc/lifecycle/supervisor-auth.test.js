@@ -118,6 +118,7 @@ describe('mc supervisor scoped auth', () => {
     assert.equal(calls[0].audience, SUPERVISOR_AUDIENCE);
     assert.equal(calls[0].initPath, '/api/mc/supervisor/device/init');
     assert.equal(calls[0].pollPath, '/api/mc/supervisor/device/poll');
+    assert.equal(calls[0].nextMessage, 'Starting mc supervisor.');
   });
 
   test('logout revokes supervisor token and removes the local secret', async () => {
