@@ -227,6 +227,27 @@ describe('openBrowser', () => {
     setImmediate(() => fakeChild.emit('close', 1));
     assert.equal(await ok, false);
   });
+
+  test('keeps the fallback timer refed until opener settles', async () => {
+    const fakeChild = makeFakeChild();
+    let timerUnrefCalled = false;
+    let clearedTimer = null;
+    const fakeTimer = {
+      unref() { timerUnrefCalled = true; },
+    };
+
+    const ok = openBrowser('https://example.com/x', {
+      platform: () => 'darwin',
+      spawnFn: () => fakeChild,
+      setTimeoutFn: () => fakeTimer,
+      clearTimeoutFn: (timer) => { clearedTimer = timer; },
+    });
+
+    setImmediate(() => fakeChild.emit('close', 0));
+    assert.equal(await ok, true);
+    assert.equal(timerUnrefCalled, false);
+    assert.equal(clearedTimer, fakeTimer);
+  });
 });
 
 function makeFakeChild() {
