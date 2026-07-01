@@ -27,6 +27,14 @@ const DEFAULT_OUTPUT_TIMEOUT_MS = 750;
 const MAX_SUPERVISOR_TOOL_ROUNDS = 3;
 const MAX_TOOL_RESULT_CHARS = 6000;
 const DEFAULT_READ_TOOL_CHARS = 4000;
+const DEFAULT_WATCH_INTERVAL_SECONDS = 20;
+const MIN_WATCH_INTERVAL_SECONDS = 5;
+const MAX_WATCH_INTERVAL_SECONDS = 300;
+const DEFAULT_WATCH_TIMEOUT_MINUTES = 30;
+const MAX_WATCH_TIMEOUT_MINUTES = 240;
+const MAX_SUPERVISOR_WATCHES = 10;
+const WATCH_TRIGGER_DISPOSITIONS = new Set(['awaiting_reply', 'review_suggested', 'idle', 'stale_idle', 'dead']);
+const WATCH_CONDITIONS = new Set(['done_or_review', 'state_change', 'new_output_matching', 'idle_after_work']);
 const DISPOSITIONS = ['awaiting_reply', 'review_suggested', 'working', 'idle', 'stale_idle', 'dead'];
 const ONLY_ALIASES = {
   actionable: ['awaiting_reply', 'review_suggested'],
@@ -72,11 +80,19 @@ export async function run(argv, deps = {}) {
   }
 
   const rl = createInterface({ input, output: stdout, terminal: true });
+  let watchManager = null;
   try {
     const interactiveContext = {
       ...context,
       confirm: deps.confirm || ((question) => askConfirmation(rl, question)),
+      interactive: true,
     };
+    watchManager = deps.watchManager || createSupervisorWatchManager(interactiveContext, {
+      setTimeoutFn: deps.setTimeoutFn,
+      clearTimeoutFn: deps.clearTimeoutFn,
+      disableTimers: deps.disableWatchTimers === true,
+    });
+    interactiveContext.watchManager = watchManager;
     stdout.write('mc supervisor\n');
     stdout.write('session control plane\n\n');
     const conversation = await loadSupervisorConversation(interactiveContext);
@@ -92,6 +108,7 @@ export async function run(argv, deps = {}) {
       if (result.exit) return result.code ?? 0;
     }
   } finally {
+    watchManager?.close?.();
     rl.close();
   }
 }
@@ -160,7 +177,9 @@ export async function handleSupervisorLine(line, context) {
     context.stdout.write(renderSupervisorHelp());
     return { exit: false, code: 0 };
   }
-  if (['list', 'ls', 'watch', 'status'].includes(command)) return writeSnapshot(context);
+  if (['list', 'ls', 'status'].includes(command)) return writeSnapshot(context);
+  if (['watch', 'watches'].includes(command)) return listWatches(rest, context);
+  if (['unwatch', 'cancel-watch'].includes(command)) return cancelWatch(rest, context);
   if (['read', 'tail'].includes(command)) return readSession(rest, context);
   if (command === 'send') return sendSession(rest, context);
   if (['stop', 'kill'].includes(command)) return controlSession('stop', rest, context);
@@ -275,13 +294,15 @@ export function renderSupervisorHelp() {
 Control prompt for running mc coding sessions.
 
 Commands
-  list | watch | status          Refresh the session snapshot
+  list | status                  Refresh the session snapshot
+  watch | watches                List active supervisor watches
+  unwatch <id|all>               Cancel active supervisor watches
   read <label|id>                Print recent output from one local session
   send <label|id> <message>      Send a message into one local session
   ask <instruction>              Ask the synced supervisor LLM to steer sessions
   stop <label|id> [--yes]        Stop a broker-owned session
   remove <label|id> [--yes]      Remove a broker session from inventory
-  <natural language>             Same as ask; the supervisor may list/read/send
+  <natural language>             Same as ask; the supervisor may list/read/send/watch
   help                           Show this help
   quit                           Exit supervisor
 
@@ -316,6 +337,7 @@ function createSupervisorContext({ opts, deps, stdout, stderr, supervisorAuth = 
     appendMessage: deps.appendMessage || defaultAppendSupervisorMessage,
     getConversation: deps.getConversation || defaultGetSupervisorConversation,
     runSupervisorTurn: deps.runSupervisorTurn || defaultRunSupervisorTurn,
+    watchManager: deps.watchManager || null,
     supervisorAuth,
   };
 }
@@ -325,6 +347,35 @@ async function writeSnapshot(context) {
   await syncSupervisorSnapshot(snapshot, context);
   context.stdout.write(renderSupervisorSnapshot(snapshot));
   return { exit: false, code: snapshot.ok === false ? 1 : 0 };
+}
+
+async function listWatches(_rest, context) {
+  const watches = context.watchManager?.list?.() || [];
+  if (!watches.length) {
+    writeUiBlock(context, 'watches', 'no active watches');
+    return { exit: false, code: 0 };
+  }
+  writeUiBlock(context, 'watches', watches.map((watch) => (
+    `${watch.id}  ${watch.session_name || watch.session}  ${watch.condition}  every ${watch.interval_seconds}s  expires ${formatRemaining(watch.expires_at, context.now)}`
+  )));
+  return { exit: false, code: 0 };
+}
+
+async function cancelWatch(rest, context) {
+  const target = String(rest || '').trim();
+  if (!target) {
+    context.stderr.write('mc: usage: unwatch <id|all>\n');
+    return { exit: false, code: 2 };
+  }
+  if (!context.watchManager) {
+    writeUiBlock(context, 'watches', 'no active watches');
+    return { exit: false, code: 0 };
+  }
+  const cancelled = context.watchManager.cancel(target);
+  writeUiBlock(context, 'watches', cancelled.length
+    ? cancelled.map((watch) => `cancelled ${watch.id} ${watch.session_name || watch.session}`)
+    : `no matching watch: ${target}`);
+  return { exit: false, code: cancelled.length ? 0 : 1 };
 }
 
 async function runSupervisorPrompt(prompt, context) {
@@ -348,10 +399,15 @@ async function runSupervisorPrompt(prompt, context) {
       client_message_id: newSupervisorClientMessageId(),
     },
   };
+
+  return runSupervisorTurnLoop(nextTurn, runContext);
+}
+
+async function runSupervisorTurnLoop(nextTurn, context) {
   let hadToolCalls = false;
 
   for (let round = 0; round < MAX_SUPERVISOR_TOOL_ROUNDS; round += 1) {
-    const result = await runContext.runSupervisorTurn(nextTurn, { auth: runContext.supervisorAuth }).catch((err) => ({
+    const result = await context.runSupervisorTurn(nextTurn, { auth: context.supervisorAuth }).catch((err) => ({
       ok: false,
       error: err.message || String(err),
     }));
@@ -369,10 +425,10 @@ async function runSupervisorPrompt(prompt, context) {
     hadToolCalls = true;
     const toolResults = [];
     for (const call of run.tool_calls) {
-      toolResults.push(await executeSupervisorToolCall(call, runContext));
+      toolResults.push(await executeSupervisorToolCall(call, context));
     }
 
-    const appended = await appendSupervisorToolResults(toolResults, runContext);
+    const appended = await appendSupervisorToolResults(toolResults, context);
     if (!appended) return { exit: false, code: 1 };
     nextTurn = { continue: true };
   }
@@ -385,10 +441,24 @@ async function runSupervisorPrompt(prompt, context) {
 
 function renderSupervisorRun(run, context) {
   if (run.response) {
-    context.stdout.write(`supervisor: ${run.response}\n`);
+    writeUiBlock(context, 'supervisor', run.response);
   } else if (run.tool_calls.length) {
-    context.stdout.write(`supervisor: executing ${run.tool_calls.length} tool call${run.tool_calls.length === 1 ? '' : 's'}\n`);
+    writeUiBlock(context, 'supervisor', `executing ${run.tool_calls.length} tool call${run.tool_calls.length === 1 ? '' : 's'}`);
   }
+}
+
+function writeUiBlock(context, title, body, { async = context.asyncOutput === true } = {}) {
+  const lines = Array.isArray(body)
+    ? body.map((line) => String(line || ''))
+    : String(body || '').split('\n');
+  if (async && context.interactive) context.stdout.write('\n');
+  context.stdout.write(`${title}\n`);
+  for (const line of lines) {
+    const text = line || '';
+    context.stdout.write(`  ${text}\n`);
+  }
+  context.stdout.write('\n');
+  if (async && context.interactive) context.stdout.write('mc supervisor> ');
 }
 
 async function executeSupervisorToolCall(call, context) {
@@ -396,7 +466,7 @@ async function executeSupervisorToolCall(call, context) {
     const snapshot = await collectSupervisorSnapshot(context);
     await syncSupervisorSnapshot(snapshot, context);
     const compact = compactSnapshotForSupervisorSync(snapshot);
-    context.stdout.write(`tool sessions.list -> ${compact.sessions.length} sessions\n`);
+    writeUiBlock(context, 'tools', `list sessions    ok ${compact.sessions.length} sessions`);
     return {
       call_id: call.id,
       tool: call.tool,
@@ -413,7 +483,7 @@ async function executeSupervisorToolCall(call, context) {
       error: err.message || String(err),
     }));
     if (!resolved.ok) {
-      context.stderr.write(`tool sessions.read -> ${resolved.error}\n`);
+      writeUiBlock(context, 'tools', `read ${call.args.session}    failed ${resolved.error}`);
       return {
         call_id: call.id,
         tool: call.tool,
@@ -426,7 +496,7 @@ async function executeSupervisorToolCall(call, context) {
       return { __error: err.message || String(err) };
     });
     if (output && typeof output === 'object' && output.__error) {
-      context.stderr.write(`tool sessions.read -> ${output.__error}\n`);
+      writeUiBlock(context, 'tools', `read ${call.args.session}    failed ${output.__error}`);
       return {
         call_id: call.id,
         tool: call.tool,
@@ -437,7 +507,7 @@ async function executeSupervisorToolCall(call, context) {
       };
     }
     const label = resolved.session.name || resolved.session.label || resolved.id;
-    context.stdout.write(`tool sessions.read -> ${label} (${resolved.id})\n`);
+    writeUiBlock(context, 'tools', `read ${label}    ok ${resolved.id}`);
     return {
       call_id: call.id,
       tool: call.tool,
@@ -454,7 +524,7 @@ async function executeSupervisorToolCall(call, context) {
       error: err.message || String(err),
     }));
     if (!result?.ok) {
-      context.stderr.write(`tool sessions.send -> ${result?.error || 'local dispatch failed'}\n`);
+      writeUiBlock(context, 'tools', `send ${call.args.session}    failed ${result?.error || 'local dispatch failed'}`);
       return {
         call_id: call.id,
         tool: call.tool,
@@ -463,7 +533,7 @@ async function executeSupervisorToolCall(call, context) {
         error: result?.error || 'local dispatch failed',
       };
     }
-    context.stdout.write(`tool sessions.send -> sent to ${result.id}\n`);
+    writeUiBlock(context, 'tools', `send ${call.args.session}    sent ${result.id}`);
     return {
       call_id: call.id,
       tool: call.tool,
@@ -471,6 +541,49 @@ async function executeSupervisorToolCall(call, context) {
       session: call.args.session,
       session_id: result.id,
       message_length: call.args.message.length,
+    };
+  }
+
+  if (call.tool === 'sessions.watch') {
+    if (!context.watchManager) {
+      writeUiBlock(context, 'tools', `watch ${call.args.session}    failed interactive supervisor required`);
+      return {
+        call_id: call.id,
+        tool: call.tool,
+        ok: false,
+        session: call.args.session,
+        error: 'watching requires an interactive supervisor terminal',
+      };
+    }
+    const result = await context.watchManager.add(call.args).catch((err) => ({
+      ok: false,
+      error: err.message || String(err),
+    }));
+    if (!result?.ok) {
+      writeUiBlock(context, 'tools', `watch ${call.args.session}    failed ${result?.error || 'watch failed'}`);
+      return {
+        call_id: call.id,
+        tool: call.tool,
+        ok: false,
+        session: call.args.session,
+        error: result?.error || 'watch failed',
+      };
+    }
+    writeUiBlock(
+      context,
+      'tools',
+      `watch ${result.watch.session_name || result.watch.session}    every ${result.watch.interval_seconds}s, timeout ${result.watch.timeout_minutes}m`,
+    );
+    return {
+      call_id: call.id,
+      tool: call.tool,
+      ok: true,
+      watch_id: result.watch.id,
+      session: result.watch.session,
+      session_id: result.watch.session_id,
+      condition: result.watch.condition,
+      interval_seconds: result.watch.interval_seconds,
+      timeout_minutes: result.watch.timeout_minutes,
     };
   }
 
@@ -493,6 +606,333 @@ async function appendSupervisorToolResults(results, context) {
     return false;
   }
   return true;
+}
+
+export function createSupervisorWatchManager(context, {
+  setTimeoutFn = setTimeout,
+  clearTimeoutFn = clearTimeout,
+  disableTimers = false,
+} = {}) {
+  const watches = new Map();
+
+  function list() {
+    return Array.from(watches.values()).map(publicWatch);
+  }
+
+  function close() {
+    for (const watch of watches.values()) {
+      if (watch.timer) clearTimeoutFn(watch.timer);
+    }
+    watches.clear();
+  }
+
+  function cancel(target) {
+    const key = String(target || '').trim();
+    const cancelled = [];
+    for (const watch of watches.values()) {
+      if (
+        key === 'all'
+        || watch.id === key
+        || watch.session === key
+        || watch.session_id === key
+        || watch.session_name === key
+      ) {
+        if (watch.timer) clearTimeoutFn(watch.timer);
+        watches.delete(watch.id);
+        cancelled.push(publicWatch(watch));
+      }
+    }
+    return cancelled;
+  }
+
+  async function add(rawArgs = {}) {
+    if (watches.size >= MAX_SUPERVISOR_WATCHES) {
+      return { ok: false, error: `too many active watches; max ${MAX_SUPERVISOR_WATCHES}` };
+    }
+    const args = normalizeWatchArgs(rawArgs);
+    if (!args.ok) return args;
+
+    const sample = await readSupervisorWatchSample(args.value, context).catch((err) => ({
+      ok: false,
+      error: err.message || String(err),
+    }));
+    if (!sample.ok) return { ok: false, error: sample.error || 'session unavailable' };
+
+    const now = resolveNow(context.now || Date.now);
+    const watch = {
+      id: newSupervisorWatchId(),
+      session: args.value.session,
+      session_id: sample.session.id || null,
+      session_name: sample.session.name || args.value.session,
+      condition: args.value.condition,
+      description: args.value.description,
+      interval_seconds: args.value.interval_seconds,
+      timeout_minutes: args.value.timeout_minutes,
+      created_at: new Date(now).toISOString(),
+      expires_at: new Date(now + args.value.timeout_minutes * 60_000).toISOString(),
+      last_state: sample.session.state || null,
+      last_disposition: sample.session.disposition || null,
+      last_output: sample.output || '',
+      seen_working: sample.session.disposition === 'working',
+      timer: null,
+    };
+    watches.set(watch.id, watch);
+    schedule(watch);
+    return { ok: true, watch: publicWatch(watch) };
+  }
+
+  function schedule(watch) {
+    if (disableTimers || !watches.has(watch.id)) return;
+    watch.timer = setTimeoutFn(() => {
+      tick(watch.id).catch((err) => {
+        context.stderr?.write?.(`mc: watch ${watch.id} failed: ${err.message || String(err)}\n`);
+      });
+    }, watch.interval_seconds * 1000);
+    if (typeof watch.timer?.unref === 'function') watch.timer.unref();
+  }
+
+  async function tick(id) {
+    const watch = watches.get(id);
+    if (!watch) return { ok: false, error: 'watch not found' };
+    if (watch.timer) {
+      clearTimeoutFn(watch.timer);
+      watch.timer = null;
+    }
+
+    const now = resolveNow(context.now || Date.now);
+    if (now >= Date.parse(watch.expires_at)) {
+      watches.delete(watch.id);
+      const event = buildWatchEvent(watch, {
+        type: 'expired',
+        reason: 'timeout',
+        atMs: now,
+      });
+      await handleSupervisorWatchEvent(event, context);
+      return { ok: true, event };
+    }
+
+    const sample = await readSupervisorWatchSample(watch, context).catch((err) => ({
+      ok: false,
+      error: err.message || String(err),
+    }));
+    if (!sample.ok) {
+      watches.delete(watch.id);
+      const event = buildWatchEvent(watch, {
+        type: 'failed',
+        reason: sample.error || 'session unavailable',
+        atMs: now,
+      });
+      await handleSupervisorWatchEvent(event, context);
+      return { ok: false, event, error: event.reason };
+    }
+
+    const event = evaluateSupervisorWatch(watch, sample, now);
+    updateWatchBaseline(watch, sample);
+    if (event) {
+      watches.delete(watch.id);
+      await handleSupervisorWatchEvent(event, context);
+      return { ok: true, event };
+    }
+
+    schedule(watch);
+    return { ok: true, event: null };
+  }
+
+  return { add, cancel, close, list, tick };
+}
+
+async function handleSupervisorWatchEvent(event, context) {
+  const eventContext = { ...context, asyncOutput: true };
+  writeUiBlock(eventContext, `watch ${event.session_name || event.session || event.watch_id}`, [
+    `${event.type}: ${event.reason || event.condition}`,
+    event.disposition ? `disposition: ${event.disposition}` : '',
+    event.excerpt ? `excerpt: ${oneLine(event.excerpt, 220)}` : '',
+  ].filter(Boolean));
+
+  const synced = await context.appendMessage({
+    role: 'system',
+    content: serializeSupervisorWatchEvent(event),
+  }, { auth: context.supervisorAuth }).catch((err) => ({
+    ok: false,
+    error: err.message || String(err),
+  }));
+  if (!synced?.ok) {
+    context.stderr?.write?.(`mc: supervisor watch event sync failed (${synced?.error || 'unknown error'})\n`);
+    return;
+  }
+
+  await runSupervisorTurnLoop({ continue: true }, eventContext);
+}
+
+function normalizeWatchArgs(rawArgs = {}) {
+  const session = typeof rawArgs.session === 'string' ? rawArgs.session.trim() : '';
+  if (!session) return { ok: false, error: 'watch session is required' };
+  const condition = typeof rawArgs.condition === 'string' ? rawArgs.condition.trim() : '';
+  if (!WATCH_CONDITIONS.has(condition)) {
+    return { ok: false, error: `watch condition must be one of: ${Array.from(WATCH_CONDITIONS).join(', ')}` };
+  }
+  return {
+    ok: true,
+    value: {
+      session,
+      condition,
+      description: oneLine(rawArgs.description || condition, 1000),
+      interval_seconds: clampInteger(
+        rawArgs.interval_seconds,
+        MIN_WATCH_INTERVAL_SECONDS,
+        MAX_WATCH_INTERVAL_SECONDS,
+        DEFAULT_WATCH_INTERVAL_SECONDS,
+      ),
+      timeout_minutes: clampInteger(
+        rawArgs.timeout_minutes,
+        1,
+        MAX_WATCH_TIMEOUT_MINUTES,
+        DEFAULT_WATCH_TIMEOUT_MINUTES,
+      ),
+    },
+  };
+}
+
+async function readSupervisorWatchSample(watch, context) {
+  const resolved = await resolveLocalSupervisorSession(watch.session, { request: context.request });
+  if (!resolved?.ok) return { ok: false, error: resolved?.error || 'session unavailable' };
+  const shouldReadOutput = watch.condition !== 'state_change';
+  const output = shouldReadOutput
+    ? await context.readOutput(resolved.id, resolved.session).catch(() => '')
+    : '';
+  const snapshot = buildWatchSnapshot({
+    sessions: [resolved.session],
+    outputs: new Map([[resolved.id, output]]),
+    includeDead: true,
+    excludeWorktreeNames: [],
+    onlyDispositions: [],
+    now: resolveNow(context.now || Date.now),
+  });
+  const session = snapshot.sessions?.[0] || {
+    id: resolved.id,
+    name: resolved.session.name || resolved.session.label || null,
+    state: resolved.session.state || resolved.session.session_state || null,
+    disposition: null,
+  };
+  return {
+    ok: true,
+    session,
+    output: truncateToolText(output || '', DEFAULT_READ_TOOL_CHARS),
+  };
+}
+
+function evaluateSupervisorWatch(watch, sample, nowMs) {
+  const session = sample.session || {};
+  const disposition = session.disposition || null;
+  const state = session.state || null;
+  const output = sample.output || '';
+  const outputChanged = !!output && output !== watch.last_output;
+  const stateChanged = state !== watch.last_state || disposition !== watch.last_disposition;
+  const seenWorking = watch.seen_working || watch.last_disposition === 'working' || disposition === 'working';
+  const triggerLikeDone = WATCH_TRIGGER_DISPOSITIONS.has(disposition);
+
+  if (watch.condition === 'done_or_review' && triggerLikeDone) {
+    return buildWatchEvent(watch, {
+      type: 'triggered',
+      reason: stateChanged ? 'session status changed' : 'session is done or needs review',
+      atMs: nowMs,
+      sample,
+    });
+  }
+
+  if (watch.condition === 'state_change' && stateChanged) {
+    return buildWatchEvent(watch, {
+      type: 'triggered',
+      reason: 'session state changed',
+      atMs: nowMs,
+      sample,
+    });
+  }
+
+  if (watch.condition === 'new_output_matching' && outputChanged) {
+    return buildWatchEvent(watch, {
+      type: 'triggered',
+      reason: 'new matching output observed',
+      atMs: nowMs,
+      sample,
+    });
+  }
+
+  if (watch.condition === 'idle_after_work' && seenWorking && triggerLikeDone) {
+    return buildWatchEvent(watch, {
+      type: 'triggered',
+      reason: 'session became idle after working',
+      atMs: nowMs,
+      sample,
+    });
+  }
+
+  return null;
+}
+
+function updateWatchBaseline(watch, sample) {
+  const session = sample.session || {};
+  watch.last_state = session.state || null;
+  watch.last_disposition = session.disposition || null;
+  watch.last_output = sample.output || '';
+  if (session.disposition === 'working') watch.seen_working = true;
+}
+
+function buildWatchEvent(watch, {
+  type,
+  reason,
+  atMs,
+  sample = null,
+} = {}) {
+  const session = sample?.session || {};
+  return {
+    id: newSupervisorWatchEventId(),
+    watch_id: watch.id,
+    type,
+    reason,
+    condition: watch.condition,
+    description: watch.description,
+    session: watch.session,
+    session_id: session.id || watch.session_id || null,
+    session_name: session.name || watch.session_name || watch.session,
+    disposition: session.disposition || watch.last_disposition || null,
+    state: session.state || watch.last_state || null,
+    triggered_at: new Date(atMs || Date.now()).toISOString(),
+    excerpt: sample?.output ? truncateToolText(sample.output, 1000) : '',
+  };
+}
+
+function serializeSupervisorWatchEvent(event) {
+  return `mc watch event\n${JSON.stringify({
+    id: event.id,
+    watch_id: event.watch_id,
+    type: event.type,
+    reason: event.reason,
+    condition: event.condition,
+    description: event.description,
+    session: event.session,
+    session_id: event.session_id,
+    session_name: event.session_name,
+    disposition: event.disposition,
+    state: event.state,
+    triggered_at: event.triggered_at,
+    excerpt: event.excerpt ? truncateToolText(event.excerpt, 1000) : '',
+  })}`;
+}
+
+function publicWatch(watch) {
+  return {
+    id: watch.id,
+    session: watch.session,
+    session_id: watch.session_id,
+    session_name: watch.session_name,
+    condition: watch.condition,
+    description: watch.description,
+    interval_seconds: watch.interval_seconds,
+    timeout_minutes: watch.timeout_minutes,
+    created_at: watch.created_at,
+    expires_at: watch.expires_at,
+  };
 }
 
 async function syncSupervisorSnapshot(snapshot, context) {
@@ -521,12 +961,15 @@ function normalizeSupervisorRun(run = {}) {
 function normalizeSupervisorToolCall(call) {
   if (!call || typeof call !== 'object') return null;
   const tool = String(call.tool || '');
-  if (!['sessions.list', 'sessions.read', 'sessions.send'].includes(tool)) return null;
+  if (!['sessions.list', 'sessions.read', 'sessions.send', 'sessions.watch'].includes(tool)) return null;
   const args = call.args && typeof call.args === 'object' ? call.args : {};
   const session = typeof args.session === 'string' ? args.session.trim() : '';
   const message = typeof args.message === 'string' ? args.message.trim() : '';
-  if ((tool === 'sessions.read' || tool === 'sessions.send') && !session) return null;
+  const condition = typeof args.condition === 'string' ? args.condition.trim() : '';
+  const description = typeof args.description === 'string' ? args.description.trim() : '';
+  if ((tool === 'sessions.read' || tool === 'sessions.send' || tool === 'sessions.watch') && !session) return null;
   if (tool === 'sessions.send' && !message) return null;
+  if (tool === 'sessions.watch' && !WATCH_CONDITIONS.has(condition)) return null;
   return {
     id: typeof call.id === 'string' && call.id.trim() ? call.id.trim() : `call_${Date.now().toString(36)}`,
     tool,
@@ -535,6 +978,14 @@ function normalizeSupervisorToolCall(call) {
       message: tool === 'sessions.send' ? message : null,
       max_output_chars: Number.isFinite(Number(args.max_output_chars))
         ? Math.max(500, Math.min(12000, Math.round(Number(args.max_output_chars))))
+        : null,
+      condition: tool === 'sessions.watch' ? condition : null,
+      description: tool === 'sessions.watch' ? description : null,
+      interval_seconds: tool === 'sessions.watch'
+        ? clampInteger(args.interval_seconds, MIN_WATCH_INTERVAL_SECONDS, MAX_WATCH_INTERVAL_SECONDS, DEFAULT_WATCH_INTERVAL_SECONDS)
+        : null,
+      timeout_minutes: tool === 'sessions.watch'
+        ? clampInteger(args.timeout_minutes, 1, MAX_WATCH_TIMEOUT_MINUTES, DEFAULT_WATCH_TIMEOUT_MINUTES)
         : null,
     },
     reason: typeof call.reason === 'string' ? oneLine(call.reason, 500) : '',
@@ -570,8 +1021,22 @@ function truncateToolText(value, max) {
   return `${text.slice(0, Math.max(0, max - 1))}…`;
 }
 
+function clampInteger(value, min, max, fallback) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return fallback;
+  return Math.max(min, Math.min(max, Math.round(number)));
+}
+
 function newSupervisorClientMessageId() {
   return `terminal:${Date.now().toString(36)}:${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function newSupervisorWatchId() {
+  return `watch_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function newSupervisorWatchEventId() {
+  return `watch_evt_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
 async function loadSupervisorConversation(context) {
@@ -673,6 +1138,16 @@ function formatAge(seconds) {
   if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
   if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
   return `${Math.floor(seconds / 86400)}d ago`;
+}
+
+function formatRemaining(isoTime, now = Date.now) {
+  const timestamp = Date.parse(isoTime);
+  if (!Number.isFinite(timestamp)) return '-';
+  const remainingSeconds = Math.max(0, Math.round((timestamp - resolveNow(now)) / 1000));
+  if (remainingSeconds < 60) return `${remainingSeconds}s`;
+  if (remainingSeconds < 3600) return `${Math.floor(remainingSeconds / 60)}m`;
+  if (remainingSeconds < 86400) return `${Math.floor(remainingSeconds / 3600)}h`;
+  return `${Math.floor(remainingSeconds / 86400)}d`;
 }
 
 function truncateCell(value, width) {

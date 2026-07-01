@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import {
   compactSnapshotForSupervisorSync,
   collectSupervisorSnapshot,
+  createSupervisorWatchManager,
   handleSupervisorLine,
   parseSupervisorArgs,
   renderSupervisorHelp,
@@ -364,9 +365,201 @@ describe('mc supervisor', () => {
     assert.equal(appended[0].role, 'system');
     assert.match(appended[0].content, /mc tool results/);
     assert.match(appended[0].content, /"tool":"sessions.send"/);
-    assert.match(io.out(), /supervisor: Jag skickar det till legal/);
-    assert.match(io.out(), /tool sessions.send -> sent to sess_a/);
-    assert.match(io.out(), /supervisor: Skickat/);
+    assert.match(io.out(), /supervisor\n  Jag skickar det till legal/);
+    assert.match(io.out(), /tools\n  send legal\s+sent sess_a/);
+    assert.match(io.out(), /supervisor\n  Skickat/);
+    assert.equal(io.err(), '');
+  });
+
+  test('supervisor watch tool creates a local watch and continues cleanly', async () => {
+    const io = streams();
+    const turns = [];
+    const watchAdds = [];
+    const appended = [];
+    const result = await handleSupervisorLine('säg till när legal är klar', {
+      stdout: io.stdout,
+      stderr: io.stderr,
+      opts: parseSupervisorArgs([]),
+      supervisorAuth: { token: 'mem_supervisor', apiUrl: 'https://meetmemoro.test' },
+      request: async (message) => {
+        assert.deepEqual(message, { type: 'sessions' });
+        return {
+          ok: true,
+          sessions: [{
+            id: 'sess_a',
+            name: 'legal',
+            session_state: 'live',
+            attachable: true,
+            last_output_at: '2026-06-22T07:59:30.000Z',
+          }],
+        };
+      },
+      readOutput: async () => 'Working(4s - esc to interrupt)',
+      syncSnapshot: async () => ({ ok: true }),
+      watchManager: {
+        add: async (args) => {
+          watchAdds.push(args);
+          return {
+            ok: true,
+            watch: {
+              id: 'watch_1',
+              session: 'legal',
+              session_id: 'sess_a',
+              session_name: 'legal',
+              condition: 'done_or_review',
+              interval_seconds: 20,
+              timeout_minutes: 30,
+            },
+          };
+        },
+      },
+      runSupervisorTurn: async (turn) => {
+        turns.push(turn);
+        if (turn.message) {
+          return {
+            ok: true,
+            run: {
+              id: 'run_1',
+              status: 'requires_tool_results',
+              response: 'Jag sätter en bevakning.',
+              tool_calls: [{
+                id: 'call_watch',
+                tool: 'sessions.watch',
+                args: {
+                  session: 'legal',
+                  message: null,
+                  max_output_chars: null,
+                  condition: 'done_or_review',
+                  description: 'Säg till när legal är klar eller behöver review.',
+                  interval_seconds: 20,
+                  timeout_minutes: 30,
+                },
+                reason: 'User asked for a later notification.',
+              }],
+            },
+          };
+        }
+        return {
+          ok: true,
+          run: {
+            id: 'run_2',
+            status: 'completed',
+            response: 'Jag säger till när den är klar.',
+            tool_calls: [],
+          },
+        };
+      },
+      appendMessage: async (message) => {
+        appended.push(message);
+        return { ok: true };
+      },
+    });
+
+    assert.equal(result.code, 0);
+    assert.equal(watchAdds.length, 1);
+    assert.equal(watchAdds[0].condition, 'done_or_review');
+    assert.equal(turns.length, 2);
+    assert.match(appended[0].content, /"tool":"sessions.watch"/);
+    assert.match(io.out(), /tools\n  watch legal\s+every 20s, timeout 30m/);
+    assert.match(io.out(), /supervisor\n  Jag säger till när den är klar/);
+    assert.equal(io.err(), '');
+  });
+
+  test('local watch manager triggers a follow-up supervisor run when a session becomes idle', async () => {
+    const io = streams();
+    const appended = [];
+    const turns = [];
+    let now = NOW;
+    let output = 'Working(4s - esc to interrupt)';
+    const session = {
+      id: 'sess_a',
+      name: 'legal',
+      session_state: 'live',
+      attachable: true,
+      last_output_at: '2026-06-22T07:59:30.000Z',
+    };
+    const context = {
+      stdout: io.stdout,
+      stderr: io.stderr,
+      opts: parseSupervisorArgs([]),
+      supervisorAuth: { token: 'mem_supervisor', apiUrl: 'https://meetmemoro.test' },
+      interactive: true,
+      now: () => now,
+      request: async (message) => {
+        assert.deepEqual(message, { type: 'sessions' });
+        return { ok: true, sessions: [session] };
+      },
+      readOutput: async () => output,
+      appendMessage: async (message) => {
+        appended.push(message);
+        return { ok: true };
+      },
+      runSupervisorTurn: async (turn) => {
+        turns.push(turn);
+        return {
+          ok: true,
+          run: {
+            id: 'run_followup',
+            status: 'completed',
+            response: 'Legal är klar och redo för review.',
+            tool_calls: [],
+          },
+        };
+      },
+    };
+    const manager = createSupervisorWatchManager(context, { disableTimers: true });
+    const added = await manager.add({
+      session: 'legal',
+      condition: 'idle_after_work',
+      description: 'Säg till när legal är klar.',
+      interval_seconds: 5,
+      timeout_minutes: 30,
+    });
+    assert.equal(added.ok, true);
+
+    now += 5000;
+    output = 'Done. Tests passed. Ready for review.';
+    await manager.tick(added.watch.id);
+
+    assert.equal(manager.list().length, 0);
+    assert.equal(appended.length, 1);
+    assert.match(appended[0].content, /mc watch event/);
+    assert.match(appended[0].content, /idle_after_work/);
+    assert.deepEqual(turns, [{ continue: true }]);
+    assert.match(io.out(), /watch legal/);
+    assert.match(io.out(), /triggered:/);
+    assert.match(io.out(), /supervisor\n  Legal är klar och redo för review/);
+    assert.equal(io.err(), '');
+  });
+
+  test('local watch manager refuses missing sessions', async () => {
+    const io = streams();
+    const manager = createSupervisorWatchManager({
+      stdout: io.stdout,
+      stderr: io.stderr,
+      opts: parseSupervisorArgs([]),
+      request: async (message) => {
+        assert.deepEqual(message, { type: 'sessions' });
+        return { ok: true, sessions: [] };
+      },
+      readOutput: async () => {
+        throw new Error('readOutput should not be called');
+      },
+      now: () => NOW,
+    }, { disableTimers: true });
+
+    const added = await manager.add({
+      session: 'missing',
+      condition: 'done_or_review',
+      description: 'Säg till när missing är klar.',
+      interval_seconds: 5,
+      timeout_minutes: 30,
+    });
+
+    assert.equal(added.ok, false);
+    assert.match(added.error, /local session not found: missing/);
+    assert.equal(manager.list().length, 0);
+    assert.equal(io.out(), '');
     assert.equal(io.err(), '');
   });
 

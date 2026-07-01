@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import test, { describe } from 'node:test';
 
 import {
+  ensureSessionHostRunning,
   listLocalBrokerAndHostSessions,
   requestForSession,
 } from '../../../src/mc/broker/session-hosts.js';
@@ -115,6 +116,45 @@ describe('session broker hosts', () => {
       assert.equal(sessions.length, 1);
       assert.equal(sessions[0].cwd, '/repo/hosted');
       assert.equal(sessions[0].broker_socket_path, host.socket_path);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('returns recent broker log lines when a host never becomes ready', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'mc-session-hosts-timeout-'));
+    try {
+      const dir = join(root, 'sess_timeout');
+      mkdirSync(dir, { recursive: true });
+      const paths = {
+        dir,
+        socketPath: join(dir, 'broker.sock'),
+        pidPath: join(dir, 'broker.pid'),
+        logPath: join(dir, 'broker.log'),
+        manifestPath: join(dir, 'host.json'),
+      };
+
+      const result = await ensureSessionHostRunning({
+        sessionId: 'sess_timeout',
+        paths,
+        timeoutMs: 0,
+        request: async () => {
+          throw new Error('socket unavailable');
+        },
+        spawnDaemon: ({ logPath }) => {
+          writeFileSync(logPath, [
+            'older line',
+            "Error [ERR_MODULE_NOT_FOUND]: Cannot find package 'node-pty'",
+            'Node.js v24.10.0',
+          ].join('\n'));
+          return { ok: true, pid: 123 };
+        },
+      });
+
+      assert.equal(result.ok, false);
+      assert.match(result.error, /session host did not become ready in time/);
+      assert.match(result.error, /Cannot find package 'node-pty'/);
+      assert.equal(result.logPath, paths.logPath);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
