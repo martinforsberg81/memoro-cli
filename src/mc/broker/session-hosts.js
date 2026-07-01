@@ -6,8 +6,12 @@ import { BROKER_PROTOCOL_VERSION } from './daemon.js';
 import { sessionHostPaths, sessionHostsDir } from './paths.js';
 import { spawnBrokerDaemon, START_POLL_MS, POLL_INTERVAL_MS, checkBrokerCompatibility } from './supervisor.js';
 
+const HOST_START_LOG_TAIL_CHARS = 4000;
+const HOST_START_ERROR_CHARS = 1200;
+
 export async function ensureSessionHostRunning({
   sessionId,
+  paths = sessionHostPaths(sessionId),
   request = requestBroker,
   spawnDaemon = spawnBrokerDaemon,
   sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
@@ -17,7 +21,6 @@ export async function ensureSessionHostRunning({
   now = () => new Date().toISOString(),
 } = {}) {
   if (!sessionId) return { ok: false, error: 'sessionId required' };
-  const paths = sessionHostPaths(sessionId);
   const hostRequest = (message) => request(message, { socketPath: paths.socketPath });
   const existing = await hostRequest({ type: 'status' }).catch(() => null);
   if (existing?.ok) {
@@ -45,7 +48,7 @@ export async function ensureSessionHostRunning({
     }
     await sleep(intervalMs);
   }
-  return { ok: false, error: 'session host did not become ready in time', ...paths };
+  return { ok: false, error: sessionHostStartError(paths), ...paths };
 }
 
 export async function listSessionHostSessions({
@@ -121,6 +124,33 @@ function writeSessionHostManifest({ sessionId, paths, broker = {}, now = () => n
 function cleanupSessionHostFiles(paths) {
   for (const path of [paths.socketPath, paths.pidPath]) {
     try { rmSync(path, { force: true }); } catch {}
+  }
+}
+
+function sessionHostStartError(paths) {
+  const logTail = readSessionHostLogTail(paths.logPath);
+  if (!logTail) return 'session host did not become ready in time';
+  return `session host did not become ready in time; recent log: ${logTail}`;
+}
+
+function readSessionHostLogTail(logPath) {
+  if (!logPath) return '';
+  try {
+    const raw = readFileSync(logPath, 'utf8');
+    const text = String(raw || '')
+      .replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, '')
+      .trim();
+    if (!text) return '';
+    return text
+      .slice(-HOST_START_LOG_TAIL_CHARS)
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .slice(-12)
+      .join(' | ')
+      .slice(0, HOST_START_ERROR_CHARS);
+  } catch {
+    return '';
   }
 }
 
