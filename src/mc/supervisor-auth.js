@@ -120,6 +120,24 @@ export async function appendSupervisorMessage(message, {
   });
 }
 
+export async function runSupervisorTurn(turn, {
+  auth,
+  apiUrl = auth?.apiUrl,
+  token = auth?.token,
+  supervisorFetchFn = supervisorFetch,
+  client = defaultSupervisorClient(),
+} = {}) {
+  if (!apiUrl || !token) return { ok: false, error: 'supervisor auth is required' };
+  return supervisorFetchFn(apiUrl, '/api/mc/supervisor/runs', {
+    token,
+    method: 'POST',
+    body: {
+      client,
+      ...turn,
+    },
+  });
+}
+
 export async function logoutSupervisor({
   argv = [],
   getSecret = defaultGetSecret,

@@ -6,6 +6,7 @@ import {
   ensureSupervisorAuth,
   isSupervisorApiPath,
   logoutSupervisor,
+  runSupervisorTurn,
   runSupervisorDeviceFlow,
   supervisorFetch,
   SUPERVISOR_AUDIENCE,
@@ -99,6 +100,27 @@ describe('mc supervisor scoped auth', () => {
       }),
       /non-supervisor endpoint/,
     );
+  });
+
+  test('posts supervisor turns only to the supervisor run endpoint', async () => {
+    const calls = [];
+    const result = await runSupervisorTurn({ message: 'styr sessionerna' }, {
+      auth: { apiUrl: 'https://meetmemoro.test', token: 'mem_supervisor_token' },
+      supervisorFetchFn: async (apiUrl, path, opts) => {
+        calls.push({ apiUrl, path, opts });
+        return { ok: true, run: { status: 'completed', response: 'klart', tool_calls: [] } };
+      },
+      client: { name: 'test-client' },
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(calls[0].apiUrl, 'https://meetmemoro.test');
+    assert.equal(calls[0].path, '/api/mc/supervisor/runs');
+    assert.equal(calls[0].opts.method, 'POST');
+    assert.deepEqual(calls[0].opts.body, {
+      client: { name: 'test-client' },
+      message: 'styr sessionerna',
+    });
   });
 
   test('runs supervisor device flow against supervisor-specific endpoints with audience', async () => {
