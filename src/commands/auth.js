@@ -10,10 +10,14 @@ import { getPackageVersion } from '../lib/version.js';
 import { detectStaleness, formatStaleStatusLine } from '../lib/staleness.js';
 import { readInstalledHookVersion } from '../adapters/claude-code.js';
 
-const TOKEN_ACCOUNT = 'memoro-api-token';
+// Historical keychain account. It can hold either a pasted user API token or
+// the CLI's server-issued device/session token, so callers should treat it as
+// the primary Memoro auth token rather than assume a specific scope.
+const PRIMARY_AUTH_TOKEN_ACCOUNT = 'memoro-api-token';
+const SUPERVISOR_TOKEN_ACCOUNT = 'memoro-mc-supervisor-token';
 
 export async function login(argv) {
-  const existing = await getSecret(TOKEN_ACCOUNT);
+  const existing = await getSecret(PRIMARY_AUTH_TOKEN_ACCOUNT);
   if (existing) {
     console.log('A Memoro token is already stored. Run `memoro-cli logout` to remove it first.');
     return 1;
@@ -40,18 +44,18 @@ export async function login(argv) {
     console.error('Invalid token format — must start with "mem_" and be the full token copied from settings.');
     return 1;
   }
-  const stored = await setSecret(TOKEN_ACCOUNT, token);
+  const stored = await setSecret(PRIMARY_AUTH_TOKEN_ACCOUNT, token);
   console.log(`✓ Token saved (${stored === 'keychain' ? 'OS keychain' : 'file fallback'}).`);
   return 0;
 }
 
 export async function logout(_argv) {
-  const existed = await getSecret(TOKEN_ACCOUNT);
+  const existed = await getSecret(PRIMARY_AUTH_TOKEN_ACCOUNT);
   if (!existed) {
     console.log('No token to remove.');
     return 0;
   }
-  await deleteSecret(TOKEN_ACCOUNT);
+  await deleteSecret(PRIMARY_AUTH_TOKEN_ACCOUNT);
   console.log('✓ Token removed.');
   return 0;
 }
@@ -59,7 +63,7 @@ export async function logout(_argv) {
 export async function status(argv) {
   const config = await readConfig();
   const apiUrl = getApiUrl(argv) || config.apiUrl;
-  const token = await getSecret(TOKEN_ACCOUNT);
+  const token = await getSecret(PRIMARY_AUTH_TOKEN_ACCOUNT);
 
   console.log(`Memoro API:            ${apiUrl}`);
   console.log(`Memoro token:          ${token ? '✓ stored' : '✗ not logged in'}`);
@@ -107,5 +111,7 @@ export async function status(argv) {
 
 // Exposed for other commands
 export const ACCOUNTS = {
-  TOKEN: TOKEN_ACCOUNT,
+  TOKEN: PRIMARY_AUTH_TOKEN_ACCOUNT,
+  PRIMARY_AUTH_TOKEN: PRIMARY_AUTH_TOKEN_ACCOUNT,
+  SUPERVISOR_TOKEN: SUPERVISOR_TOKEN_ACCOUNT,
 };

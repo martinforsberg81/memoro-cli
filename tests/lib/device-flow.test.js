@@ -31,6 +31,8 @@ import {
   formatExpiresAt,
   runDeviceFlow,
   defaultSleep,
+  authorizedResponseIncludesScope,
+  authorizedResponseIncludesAudience,
 } from '../../src/lib/device-flow.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -75,6 +77,11 @@ describe('shouldTriggerDeviceFlow', () => {
   test('bypasses --version / -v', () => {
     assert.equal(shouldTriggerDeviceFlow({ ...base, argv: ['--version'] }), false);
     assert.equal(shouldTriggerDeviceFlow({ ...base, argv: ['-v'] }), false);
+  });
+
+  test('bypasses primary auth for mc supervisor because it owns scoped auth', () => {
+    assert.equal(shouldTriggerDeviceFlow({ ...base, argv: ['supervisor'] }), false);
+    assert.equal(shouldTriggerDeviceFlow({ ...base, argv: ['supervisor', '--json'] }), false);
   });
 
   test('bypasses `mc auth memoro <...>` so login alias still works without a token', () => {
@@ -393,6 +400,178 @@ describe('runDeviceFlow — happy path', () => {
     assert.equal(stderr.text.includes(DEVICE_CODE), false, 'stderr leaked device_code');
     assert.equal(stdout.text.includes('mem_realtoken'), false, 'stdout leaked raw token');
     assert.equal(stderr.text.includes('mem_realtoken'), false, 'stderr leaked raw token');
+  });
+
+  test('stores scoped device tokens in the requested account only after scope proof', async () => {
+    const stored = {};
+    const initBodies = [];
+    const stderr = makeFakeWritable();
+
+    const code = await runDeviceFlow({
+      apiUrl: 'http://test',
+      account: 'memoro-mc-supervisor-token',
+      scope: 'mc.supervisor',
+      audience: 'mc.supervisor',
+      client: 'mc-supervisor',
+      initPath: '/api/mc/supervisor/device/init',
+      pollPath: '/api/mc/supervisor/device/poll',
+      successLabel: 'Supervisor',
+      nextMessage: 'Next: run `mc supervisor`.',
+      memoroFetchAnon: async (_apiUrl, path, opts) => {
+        if (path === '/api/mc/supervisor/device/init') {
+          initBodies.push(opts.body);
+          return {
+            ok: true,
+            user_code: 'SUPV-1234',
+            device_code: 'scoped-device-code',
+            verification_url: 'https://example.com/auth/device',
+            expires_in: 600,
+            interval: 1,
+          };
+        }
+        return {
+          ok: true,
+          status: 'authorized',
+          token: 'mem_supervisor_scoped_token',
+          token_prefix: 'mem_sup…',
+          scope: 'mc.supervisor',
+          audience: 'mc.supervisor',
+        };
+      },
+      setSecret: async (acct, val) => { stored[acct] = val; return 'keychain'; },
+      openBrowserFn: async () => false,
+      deriveIdentity: () => ({ deviceName: 'h', deviceOs: 'o' }),
+      sleep: async () => {},
+      now: () => 1000,
+      rand: () => 0,
+      stderr,
+      onSigint: () => () => {},
+      sigintFlag: { cancelled: false },
+    });
+
+    assert.equal(code, 0);
+    assert.deepEqual(initBodies, [{
+      device_name: 'h',
+      device_os: 'o',
+      scope: 'mc.supervisor',
+      audience: 'mc.supervisor',
+      client: 'mc-supervisor',
+    }]);
+    assert.deepEqual(stored, {
+      'memoro-mc-supervisor-token': 'mem_supervisor_scoped_token',
+    });
+    assert.match(stderr.text, /Supervisor authorized/);
+    assert.match(stderr.text, /Next: run `mc supervisor`\./);
+  });
+
+  test('refuses to store a scoped token when the server omits scope proof', async () => {
+    const stored = {};
+    const stderr = makeFakeWritable();
+
+    const code = await runDeviceFlow({
+      apiUrl: 'http://test',
+      account: 'memoro-mc-supervisor-token',
+      scope: 'mc.supervisor',
+      audience: 'mc.supervisor',
+      memoroFetchAnon: async (_apiUrl, path) => {
+        if (path === '/api/auth/device/init') {
+          return {
+            ok: true,
+            user_code: 'SUPV-1234',
+            device_code: 'scoped-device-code',
+            verification_url: 'https://example.com/auth/device',
+            expires_in: 600,
+            interval: 1,
+          };
+        }
+        return {
+          ok: true,
+          status: 'authorized',
+          token: 'mem_wrong_scope_token',
+        };
+      },
+      setSecret: async (acct, val) => { stored[acct] = val; return 'keychain'; },
+      openBrowserFn: async () => false,
+      deriveIdentity: () => ({ deviceName: 'h', deviceOs: 'o' }),
+      sleep: async () => {},
+      now: () => 1000,
+      rand: () => 0,
+      stderr,
+      onSigint: () => () => {},
+      sigintFlag: { cancelled: false },
+    });
+
+    assert.equal(code, 1);
+    assert.deepEqual(stored, {});
+    assert.match(stderr.text, /missing required scope "mc\.supervisor"/);
+  });
+
+  test('refuses to store a scoped token when the server omits audience proof', async () => {
+    const stored = {};
+    const stderr = makeFakeWritable();
+
+    const code = await runDeviceFlow({
+      apiUrl: 'http://test',
+      account: 'memoro-mc-supervisor-token',
+      scope: 'mc.supervisor',
+      audience: 'mc.supervisor',
+      memoroFetchAnon: async (_apiUrl, path) => {
+        if (path === '/api/auth/device/init') {
+          return {
+            ok: true,
+            user_code: 'SUPV-1234',
+            device_code: 'scoped-device-code',
+            verification_url: 'https://example.com/auth/device',
+            expires_in: 600,
+            interval: 1,
+          };
+        }
+        return {
+          ok: true,
+          status: 'authorized',
+          token: 'mem_wrong_audience_token',
+          scope: 'mc.supervisor',
+        };
+      },
+      setSecret: async (acct, val) => { stored[acct] = val; return 'keychain'; },
+      openBrowserFn: async () => false,
+      deriveIdentity: () => ({ deviceName: 'h', deviceOs: 'o' }),
+      sleep: async () => {},
+      now: () => 1000,
+      rand: () => 0,
+      stderr,
+      onSigint: () => () => {},
+      sigintFlag: { cancelled: false },
+    });
+
+    assert.equal(code, 1);
+    assert.deepEqual(stored, {});
+    assert.match(stderr.text, /missing required audience "mc\.supervisor"/);
+  });
+});
+
+describe('authorizedResponseIncludesScope', () => {
+  test('accepts scope strings and scope arrays', () => {
+    assert.equal(authorizedResponseIncludesScope({ scope: 'mc.supervisor' }, 'mc.supervisor'), true);
+    assert.equal(authorizedResponseIncludesScope({ scope: 'profile.read mc.supervisor' }, 'mc.supervisor'), true);
+    assert.equal(authorizedResponseIncludesScope({ scopes: ['profile.read', 'mc.supervisor'] }, 'mc.supervisor'), true);
+  });
+
+  test('rejects missing or wrong scopes', () => {
+    assert.equal(authorizedResponseIncludesScope({}, 'mc.supervisor'), false);
+    assert.equal(authorizedResponseIncludesScope({ scope: 'profile.read' }, 'mc.supervisor'), false);
+  });
+});
+
+describe('authorizedResponseIncludesAudience', () => {
+  test('accepts audience strings and arrays', () => {
+    assert.equal(authorizedResponseIncludesAudience({ audience: 'mc.supervisor' }, 'mc.supervisor'), true);
+    assert.equal(authorizedResponseIncludesAudience({ audiences: ['mc.supervisor'] }, 'mc.supervisor'), true);
+  });
+
+  test('rejects missing or wrong audience', () => {
+    assert.equal(authorizedResponseIncludesAudience({}, 'mc.supervisor'), false);
+    assert.equal(authorizedResponseIncludesAudience({ audience: 'other' }, 'mc.supervisor'), false);
   });
 });
 

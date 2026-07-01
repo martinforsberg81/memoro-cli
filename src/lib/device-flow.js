@@ -55,6 +55,9 @@ const DEFAULT_API_URL = 'https://meetmemoro.app';
 const AUTH_BYPASS_FIRST_ARGS = new Set([
   '--help', '-h', 'help',
   '--version', '-v',
+  // `mc supervisor` owns a narrower scoped device-flow and must not receive
+  // the primary Memoro auth token used by ordinary coding/session verbs.
+  'supervisor',
 ]);
 
 // `mc auth memoro <...>` should also bypass: the user is opting into the
@@ -250,6 +253,14 @@ export async function runDeviceFlow(deps = {}) {
     stdout = process.stdout,
     stderr = process.stderr,
     onSigint = installSigintHandler,
+    account = ACCOUNTS.TOKEN,
+    scope = null,
+    audience = null,
+    client = null,
+    successLabel = 'Device',
+    nextMessage = 'Next: run `mc setup` to finish local setup.',
+    initPath = '/api/auth/device/init',
+    pollPath = '/api/auth/device/poll',
     // For tests: a pre-set AbortController-style flag to interrupt the loop.
     sigintFlag = { cancelled: false },
   } = deps;
@@ -259,9 +270,15 @@ export async function runDeviceFlow(deps = {}) {
   // ── init ───────────────────────────────────────────────────────────────
   let init;
   try {
-    init = await memoroFetchAnon(apiUrl, '/api/auth/device/init', {
+    init = await memoroFetchAnon(apiUrl, initPath, {
       method: 'POST',
-      body: { device_name: identity.deviceName, device_os: identity.deviceOs },
+      body: {
+        device_name: identity.deviceName,
+        device_os: identity.deviceOs,
+        ...(scope ? { scope } : {}),
+        ...(audience ? { audience } : {}),
+        ...(client ? { client } : {}),
+      },
     });
   } catch (err) {
     stderr.write(`mc: failed to start device authorization: ${err.message}\n`);
@@ -339,7 +356,7 @@ export async function runDeviceFlow(deps = {}) {
 
       let poll;
       try {
-        poll = await memoroFetchAnon(apiUrl, '/api/auth/device/poll', {
+        poll = await memoroFetchAnon(apiUrl, pollPath, {
           method: 'POST',
           body: { device_code: init.device_code },
         });
@@ -386,8 +403,18 @@ export async function runDeviceFlow(deps = {}) {
         exitCode = 1;
         break;
       }
+      if (scope && !authorizedResponseIncludesScope(poll, scope)) {
+        stderr.write(`\nmc: device authorization response missing required scope "${scope}". No token stored.\n`);
+        exitCode = 1;
+        break;
+      }
+      if (audience && !authorizedResponseIncludesAudience(poll, audience)) {
+        stderr.write(`\nmc: device authorization response missing required audience "${audience}". No token stored.\n`);
+        exitCode = 1;
+        break;
+      }
       try {
-        await setSecret(ACCOUNTS.TOKEN, token);
+        await setSecret(account, token);
       } catch (err) {
         stderr.write(`\nmc: failed to store token: ${err.message}\n`);
         exitCode = 1;
@@ -395,11 +422,11 @@ export async function runDeviceFlow(deps = {}) {
       }
       stderr.write('\n\n');
       const expiryLine = formatExpiresAt(expiresAt);
-      stderr.write(`✓ Device authorized. Token saved to keychain.\n`);
+      stderr.write(`✓ ${successLabel} authorized. Token saved to keychain.\n`);
       if (tokenPrefix) stderr.write(`  Prefix:  ${tokenPrefix}\n`);
       if (expiryLine)  stderr.write(`  Expires: ${expiryLine}\n`);
       stderr.write(`\n`);
-      stderr.write(`Next: run \`mc setup\` to finish local setup.\n`);
+      if (nextMessage) stderr.write(`${nextMessage}\n`);
       exitCode = 0;
       break;
     }
@@ -407,6 +434,35 @@ export async function runDeviceFlow(deps = {}) {
     try { restoreSigint(); } catch {}
   }
   return exitCode;
+}
+
+export function authorizedResponseIncludesScope(response, requiredScope) {
+  if (!requiredScope) return true;
+  const scopes = new Set();
+  if (typeof response?.scope === 'string') {
+    for (const value of response.scope.split(/[,\s]+/)) {
+      if (value.trim()) scopes.add(value.trim());
+    }
+  }
+  if (Array.isArray(response?.scopes)) {
+    for (const value of response.scopes) {
+      if (typeof value === 'string' && value.trim()) scopes.add(value.trim());
+    }
+  }
+  return scopes.has(requiredScope);
+}
+
+export function authorizedResponseIncludesAudience(response, requiredAudience) {
+  if (!requiredAudience) return true;
+  if (typeof response?.audience === 'string' && response.audience.trim() === requiredAudience) {
+    return true;
+  }
+  if (Array.isArray(response?.audiences)) {
+    return response.audiences.some((value) => (
+      typeof value === 'string' && value.trim() === requiredAudience
+    ));
+  }
+  return false;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

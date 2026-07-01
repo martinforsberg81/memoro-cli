@@ -8,19 +8,20 @@ grounds in this file at session start and keeps it current as work lands.
 
 ## North star
 
-Make **one human able to run a grounded coordinator session** — across any tool,
-model, repo, and machine — that sees the whole, writes strong briefs, sends work
-to the agent tools already available, and returns to the project map without
-becoming a PM system.
+Make **one human able to run grounded coding work** — across any tool, model,
+repo, and machine — through a structural control plane that keeps map, sessions,
+tools, branches, and memory coherent without depending on a fragile
+"orchestrator" prompt persona.
 
 ## Long-term goals
 
 - **G1 — Roadmap and end-goal awareness.** The session always sees the
   project's north star, active roadmap, and why the current work matters before
   it starts touching details.
-- **G2 — Orchestrator-role discipline.** The LLM stays in the high-altitude
-  coordinator role: plan, brief, delegate, review, and only drop into
-  implementation when the user explicitly asks or the task is trivial.
+- **G2 — Structural control-plane discipline.** mc keeps the session topology,
+  map, tool choice, worktree state, and dispatch/read/control actions explicit;
+  any LLM surface may use that frame, but mc should not rely on an
+  orchestrator prompt role to function.
 - **G3 — Cross-session work-project order.** Work projects stay coherent across
   sessions, tools, branches, and days through a small committed `MEMORO.md` map
   plus reliable session/worktree/tool continuity.
@@ -65,10 +66,10 @@ A session must be handed the right context *before the user types*. Today
   → `docs/plans/mc-new-grounding.md`
 
 ### Orchestration — minimal coordinator runtime   · serves G2, G3
-mc should not become an agent-runner or PM system. The LLM session itself writes
-the prompt, sends work through the available agent tools, and asks review agents
-when useful; mc's job is to make that session wake with the map, role, repo, and
-tool state intact.
+mc should not become a PM system. Its job is to expose a reliable structural
+frame around coding tools: map, sessions, worktrees, broker state, transcript
+tails, dispatch, and cleanup. LLM surfaces can sit above that frame, but the
+frame itself must work as terminal commands first.
 
 - **Session Fabric: tracked project sessions** — `active · M · now`
   The endgame is one coordinator session plus several durable project sessions
@@ -77,7 +78,13 @@ tool state intact.
   topology: parent/child, worktree, branch, focus, policy, transcript/status,
   and MEMORO.md reconciliation. First slices shipped in 0.7.6: `mc spawn`
   creates tracked project sessions with briefs, and `mc list --tree` exposes
-  the coordinator/project shape. → `docs/plans/session-fabric.md`
+  the coordinator/project shape. The current slice adds `mc supervisor` as the
+  terminal entrypoint for a single online-synced supervisor conversation backed
+  by separate scoped Memoro device auth (`mc.supervisor`), never the primary
+  Memoro auth token. Supervisor tokens live in their own keychain account,
+  require server scope+audience proof before storage, and are client-guarded
+  to supervisor API paths; local broker controls underneath cover snapshot,
+  read, send, stop, and remove. → `docs/plans/session-fabric.md`
 - **Continuity: resume work in a new session** — `active · S · now`
   mc is a **continuity layer**, not an agent-runner: the engine (agents, spawn,
   parallelism) comes free from the underlying model/tool; mc adds grounding +

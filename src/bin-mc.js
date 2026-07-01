@@ -133,6 +133,7 @@ const LIFECYCLE = {
   broker:        () => import('./mc/commands/broker.js'),
   attach:        () => import('./mc/commands/attach.js'),
   'cloud-session': () => import('./mc/commands/cloud-session.js'),
+  supervisor:    () => import('./mc/commands/supervisor.js'),
   fanout:        () => import('./mc/commands/fanout.js'),
   gather:        () => import('./mc/commands/gather.js'),
 };
@@ -304,6 +305,7 @@ FLEET / ADVANCED
   mc spawn <name> "<brief>"       Create durable child project session
   mc fanout <plan.md>             Create one idle session per plan phase
   mc gather <plan-slug>           Merge phase PRs into a summary branch
+  mc supervisor                   Open supervisor control prompt
   mc sessions list                List active sessions seen by Memoro
   mc sessions watch               Summarize local broker sessions for orchestration
   mc sessions send <label|id> <msg>
