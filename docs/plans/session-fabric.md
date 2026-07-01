@@ -73,6 +73,20 @@ coordinator gathers those reports and proposes one concrete map patch. mc can
 surface tripwires, but the LLM session still writes and reviews the actual patch
 with user approval.
 
+## Phase 5 — Supervisor control prompt
+
+`mc supervisor` is the terminal client for one online-synced supervisor
+conversation, shared later with CodingApp. It is not a coding session and must
+not use the primary Memoro auth token. It gets a separate scoped device token
+(`mc.supervisor`) stored under its own keychain account, accepted only after the
+server proves matching scope and audience, and client-side calls are allowlisted
+to supervisor API paths.
+
+The supervisor can summarize local broker sessions and dispatch explicit user
+commands (`read`, `send`, `stop`, `remove`). Broader memory access is out of
+scope except a deliberately small user-context payload designed for this
+surface.
+
 ## Acceptance
 
 - A coordinator can spawn four project sessions and see them in one tree.
@@ -81,3 +95,6 @@ with user approval.
 - Each project session receives a brief artefact and a focus/node pointer.
 - `mc end`, `mc status`, `mc gc`, and existing registry operations continue to
   work because spawned projects are ordinary sessions with extra metadata.
+- `mc supervisor` cannot call non-supervisor Memoro endpoints with its scoped
+  token, the primary Memoro auth token is never stored or used as supervisor
+  auth, and `mc supervisor logout` can revoke/remove the supervisor token.
