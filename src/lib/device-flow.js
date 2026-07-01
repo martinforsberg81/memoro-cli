@@ -167,6 +167,9 @@ export function openCommandFor(p) {
 export function openBrowser(url, {
   platform: platFn = platform,
   spawnFn = spawn,
+  setTimeoutFn = setTimeout,
+  clearTimeoutFn = clearTimeout,
+  fallbackMs = 1500,
 } = {}) {
   return new Promise((resolve) => {
     let p;
@@ -183,7 +186,15 @@ export function openBrowser(url, {
       return resolve(false);
     }
     let settled = false;
-    const done = (ok) => { if (settled) return; settled = true; resolve(ok); };
+    let fallbackTimer = null;
+    const done = (ok) => {
+      if (settled) return;
+      settled = true;
+      if (fallbackTimer) {
+        try { clearTimeoutFn(fallbackTimer); } catch {}
+      }
+      resolve(ok);
+    };
     child.on('error', () => done(false));
     child.on('close', (code) => done(code === 0));
     // Belt-and-braces: detach so a missing tool doesn't keep the loop
@@ -192,7 +203,7 @@ export function openBrowser(url, {
     // If for some reason the child never fires close/error, fall through
     // after a short window — the polling loop continues regardless of
     // browser-open outcome (best-effort per §14 brief).
-    setTimeout(() => done(false), 1500).unref();
+    fallbackTimer = setTimeoutFn(() => done(false), fallbackMs);
   });
 }
 
