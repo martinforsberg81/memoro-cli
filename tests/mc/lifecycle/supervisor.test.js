@@ -7,6 +7,7 @@ import {
   handleSupervisorLine,
   parseSupervisorArgs,
   renderSupervisorHelp,
+  renderSupervisorSnapshot,
   run as runSupervisor,
 } from '../../../src/mc/commands/supervisor.js';
 
@@ -133,6 +134,51 @@ describe('mc supervisor', () => {
     assert.equal(io.err(), '');
     const parsed = JSON.parse(io.out());
     assert.equal(parsed.sessions[0].id, 'sess_a');
+  });
+
+  test('renders supervisor snapshot as grouped control board', () => {
+    const output = renderSupervisorSnapshot({
+      ok: true,
+      generated_at: '2026-07-01T14:12:26.575Z',
+      counts: { review_suggested: 1, working: 1, stale_idle: 1 },
+      sessions: [
+        {
+          id: 'sess_review',
+          name: 'app-name',
+          disposition: 'review_suggested',
+          state: 'live',
+          last_output_age_seconds: 10,
+          latest_text: 'Svara inte Apple om att saken är löst ännu. Om Till svarar med konkret registrering eller invändning, hantera det då.',
+          command: 'mc sessions send sess_review "<message>"',
+        },
+        {
+          id: 'sess_work',
+          name: 'chat-mobil',
+          disposition: 'working',
+          state: 'live',
+          last_output_age_seconds: 1,
+          latest_text: 'Working(13m 59s - esc to interrupt) dropdowns are being checked.',
+        },
+        {
+          id: 'sess_stale',
+          name: 'planning',
+          disposition: 'stale_idle',
+          state: 'live',
+          last_output_age_seconds: 7200,
+          latest_text: 'Rekommenderad ordning nu: färdigställ hero-kontraktet och scroll/active-beteendet.',
+        },
+      ],
+    });
+
+    assert.match(output, /^mc supervisor sessions/m);
+    assert.match(output, /summary review_suggested=1 working=1 stale_idle=1/);
+    assert.match(output, /Review suggested \(1\)/);
+    assert.match(output, /Working \(1\)/);
+    assert.match(output, /Stale idle \(1\)/);
+    assert.match(output, /app-name\s+10s ago\s+live\s+Svara inte Apple/);
+    assert.match(output, /Commands\n  read <session>/);
+    assert.doesNotMatch(output, /send: mc sessions send/);
+    assert.ok(output.split('\n').every((line) => line.length <= 128), output);
   });
 
   test('logout subcommand delegates to supervisor logout without auth or broker reads', async () => {

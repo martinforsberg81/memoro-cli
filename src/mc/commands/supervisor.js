@@ -13,7 +13,6 @@ import {
 } from '../broker/session-hosts.js';
 import {
   buildWatchSnapshot,
-  renderWatchSnapshot,
 } from './sessions-watch.js';
 import {
   appendSupervisorMessage as defaultAppendSupervisorMessage,
@@ -235,7 +234,37 @@ export async function resolveLocalSupervisorSession(identifier, {
 }
 
 export function renderSupervisorSnapshot(snapshot) {
-  return renderWatchSnapshot(snapshot).replace(/^mc sessions watch/m, 'mc supervisor');
+  const out = [];
+  out.push('mc supervisor sessions');
+  out.push(`generated ${snapshot.generated_at}`);
+  const counts = formatSupervisorCounts(snapshot.counts || {});
+  if (counts) out.push(`summary ${counts}`);
+  out.push('');
+
+  const sessions = Array.isArray(snapshot.sessions) ? snapshot.sessions : [];
+  if (!sessions.length) {
+    out.push('(no local broker sessions)');
+    out.push('');
+    return out.join('\n');
+  }
+
+  for (const section of supervisorSections(sessions)) {
+    if (!section.sessions.length) continue;
+    out.push(`${section.title} (${section.sessions.length})`);
+    out.push('  session                 age       state    note');
+    out.push('  ----------------------  --------  -------  ------------------------------');
+    for (const session of section.sessions) {
+      out.push(formatSupervisorSessionRow(session));
+    }
+    out.push('');
+  }
+
+  out.push('Commands');
+  out.push('  read <session>                 show recent output');
+  out.push('  send <session> <message>       send a message');
+  out.push('  stop <session> --yes           stop a session');
+  out.push('  list                           refresh this view');
+  return out.join('\n') + '\n';
 }
 
 export function renderSupervisorHelp() {
@@ -377,6 +406,56 @@ function compactSupervisorSession(session) {
 function oneLine(value, max) {
   const text = String(value || '').replace(/\s+/g, ' ').trim();
   return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+}
+
+function supervisorSections(sessions) {
+  const sections = [
+    { title: 'Needs reply', dispositions: ['awaiting_reply'] },
+    { title: 'Review suggested', dispositions: ['review_suggested'] },
+    { title: 'Working', dispositions: ['working'] },
+    { title: 'Idle', dispositions: ['idle'] },
+    { title: 'Stale idle', dispositions: ['stale_idle'] },
+    { title: 'Dead', dispositions: ['dead'] },
+  ];
+  return sections.map((section) => ({
+    ...section,
+    sessions: sessions.filter((session) => section.dispositions.includes(session.disposition)),
+  }));
+}
+
+function formatSupervisorSessionRow(session) {
+  const name = truncateCell(session.name || session.id || 'session', 22);
+  const age = truncateCell(formatAge(session.last_output_age_seconds) || '-', 8);
+  const state = truncateCell(session.state || '-', 7);
+  const note = oneLine(session.recommended_reply || session.latest_text || '', 78) || '-';
+  return `  ${padRight(name, 22)}  ${padRight(age, 8)}  ${padRight(state, 7)}  ${note}`;
+}
+
+function formatSupervisorCounts(counts) {
+  const order = ['awaiting_reply', 'review_suggested', 'working', 'idle', 'stale_idle', 'dead'];
+  return order
+    .filter((key) => counts[key])
+    .map((key) => `${key}=${counts[key]}`)
+    .join(' ');
+}
+
+function formatAge(seconds) {
+  if (typeof seconds !== 'number') return null;
+  if (seconds < 60) return `${seconds}s ago`;
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
+  return `${Math.floor(seconds / 86400)}d ago`;
+}
+
+function truncateCell(value, width) {
+  const text = oneLine(value, width);
+  if (text.length <= width) return text;
+  return `${text.slice(0, Math.max(0, width - 1))}…`;
+}
+
+function padRight(value, width) {
+  const text = String(value || '');
+  return text.length >= width ? text : text + ' '.repeat(width - text.length);
 }
 
 async function readSession(rest, context) {
