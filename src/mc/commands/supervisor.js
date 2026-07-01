@@ -19,10 +19,14 @@ import {
   ensureSupervisorAuth as defaultEnsureSupervisorAuth,
   getSupervisorConversation as defaultGetSupervisorConversation,
   logoutSupervisor as defaultLogoutSupervisor,
+  runSupervisorTurn as defaultRunSupervisorTurn,
   syncSupervisorSnapshot as defaultSyncSupervisorSnapshot,
 } from '../supervisor-auth.js';
 
 const DEFAULT_OUTPUT_TIMEOUT_MS = 750;
+const MAX_SUPERVISOR_TOOL_ROUNDS = 3;
+const MAX_TOOL_RESULT_CHARS = 6000;
+const DEFAULT_READ_TOOL_CHARS = 4000;
 const DISPOSITIONS = ['awaiting_reply', 'review_suggested', 'working', 'idle', 'stale_idle', 'dead'];
 const ONLY_ALIASES = {
   actionable: ['awaiting_reply', 'review_suggested'],
@@ -84,7 +88,6 @@ export async function run(argv, deps = {}) {
 
     for (;;) {
       const line = await rl.question('mc supervisor> ');
-      await syncSupervisorMessage(line, interactiveContext);
       const result = await handleSupervisorLine(line, interactiveContext);
       if (result.exit) return result.code ?? 0;
     }
@@ -162,10 +165,9 @@ export async function handleSupervisorLine(line, context) {
   if (command === 'send') return sendSession(rest, context);
   if (['stop', 'kill'].includes(command)) return controlSession('stop', rest, context);
   if (['remove', 'rm'].includes(command)) return controlSession('remove', rest, context);
+  if (['ask', 'run'].includes(command)) return runSupervisorPrompt(rest, context);
 
-  context.stderr.write(`mc: unknown supervisor command: ${command}\n`);
-  context.stderr.write('Run `help` for commands.\n');
-  return { exit: false, code: 2 };
+  return runSupervisorPrompt(trimmed, context);
 }
 
 export async function collectSupervisorSnapshot({
@@ -276,8 +278,10 @@ Commands
   list | watch | status          Refresh the session snapshot
   read <label|id>                Print recent output from one local session
   send <label|id> <message>      Send a message into one local session
+  ask <instruction>              Ask the synced supervisor LLM to steer sessions
   stop <label|id> [--yes]        Stop a broker-owned session
   remove <label|id> [--yes]      Remove a broker session from inventory
+  <natural language>             Same as ask; the supervisor may list/read/send
   help                           Show this help
   quit                           Exit supervisor
 
@@ -311,6 +315,7 @@ function createSupervisorContext({ opts, deps, stdout, stderr, supervisorAuth = 
     syncSnapshot: deps.syncSnapshot || defaultSyncSupervisorSnapshot,
     appendMessage: deps.appendMessage || defaultAppendSupervisorMessage,
     getConversation: deps.getConversation || defaultGetSupervisorConversation,
+    runSupervisorTurn: deps.runSupervisorTurn || defaultRunSupervisorTurn,
     supervisorAuth,
   };
 }
@@ -320,6 +325,174 @@ async function writeSnapshot(context) {
   await syncSupervisorSnapshot(snapshot, context);
   context.stdout.write(renderSupervisorSnapshot(snapshot));
   return { exit: false, code: snapshot.ok === false ? 1 : 0 };
+}
+
+async function runSupervisorPrompt(prompt, context) {
+  const content = String(prompt || '').trim();
+  if (!content) {
+    context.stderr.write('mc: usage: ask <instruction>\n');
+    return { exit: false, code: 2 };
+  }
+  if (!context.supervisorAuth || context.opts?.local) {
+    context.stderr.write('mc: supervisor LLM requires online supervisor sync. Run without --local.\n');
+    return { exit: false, code: 1 };
+  }
+
+  const runContext = { ...context, opts: context.opts || parseSupervisorArgs([]) };
+  const snapshot = await collectSupervisorSnapshot(runContext);
+  await syncSupervisorSnapshot(snapshot, runContext);
+
+  let nextTurn = {
+    message: {
+      content,
+      client_message_id: newSupervisorClientMessageId(),
+    },
+  };
+  let hadToolCalls = false;
+
+  for (let round = 0; round < MAX_SUPERVISOR_TOOL_ROUNDS; round += 1) {
+    const result = await runContext.runSupervisorTurn(nextTurn, { auth: runContext.supervisorAuth }).catch((err) => ({
+      ok: false,
+      error: err.message || String(err),
+    }));
+    if (!result?.ok) {
+      context.stderr.write(`mc: supervisor run failed (${result?.error || 'unknown error'})\n`);
+      return { exit: false, code: 1 };
+    }
+
+    const run = normalizeSupervisorRun(result.run);
+    renderSupervisorRun(run, context);
+    if (!run.tool_calls.length) {
+      return { exit: false, code: 0 };
+    }
+
+    hadToolCalls = true;
+    const toolResults = [];
+    for (const call of run.tool_calls) {
+      toolResults.push(await executeSupervisorToolCall(call, runContext));
+    }
+
+    const appended = await appendSupervisorToolResults(toolResults, runContext);
+    if (!appended) return { exit: false, code: 1 };
+    nextTurn = { continue: true };
+  }
+
+  if (hadToolCalls) {
+    context.stderr.write(`mc: supervisor stopped after ${MAX_SUPERVISOR_TOOL_ROUNDS} tool rounds; ask again to continue.\n`);
+  }
+  return { exit: false, code: hadToolCalls ? 1 : 0 };
+}
+
+function renderSupervisorRun(run, context) {
+  if (run.response) {
+    context.stdout.write(`supervisor: ${run.response}\n`);
+  } else if (run.tool_calls.length) {
+    context.stdout.write(`supervisor: executing ${run.tool_calls.length} tool call${run.tool_calls.length === 1 ? '' : 's'}\n`);
+  }
+}
+
+async function executeSupervisorToolCall(call, context) {
+  if (call.tool === 'sessions.list') {
+    const snapshot = await collectSupervisorSnapshot(context);
+    await syncSupervisorSnapshot(snapshot, context);
+    const compact = compactSnapshotForSupervisorSync(snapshot);
+    context.stdout.write(`tool sessions.list -> ${compact.sessions.length} sessions\n`);
+    return {
+      call_id: call.id,
+      tool: call.tool,
+      ok: snapshot.ok !== false,
+      counts: compact.counts || {},
+      sessions: compact.sessions,
+      error: snapshot.ok === false ? snapshot.error || 'snapshot failed' : null,
+    };
+  }
+
+  if (call.tool === 'sessions.read') {
+    const resolved = await resolveLocalSupervisorSession(call.args.session, { request: context.request }).catch((err) => ({
+      ok: false,
+      error: err.message || String(err),
+    }));
+    if (!resolved.ok) {
+      context.stderr.write(`tool sessions.read -> ${resolved.error}\n`);
+      return {
+        call_id: call.id,
+        tool: call.tool,
+        ok: false,
+        session: call.args.session,
+        error: resolved.error,
+      };
+    }
+    const output = await context.readOutput(resolved.id, resolved.session).catch((err) => {
+      return { __error: err.message || String(err) };
+    });
+    if (output && typeof output === 'object' && output.__error) {
+      context.stderr.write(`tool sessions.read -> ${output.__error}\n`);
+      return {
+        call_id: call.id,
+        tool: call.tool,
+        ok: false,
+        session: call.args.session,
+        session_id: resolved.id,
+        error: output.__error,
+      };
+    }
+    const label = resolved.session.name || resolved.session.label || resolved.id;
+    context.stdout.write(`tool sessions.read -> ${label} (${resolved.id})\n`);
+    return {
+      call_id: call.id,
+      tool: call.tool,
+      ok: true,
+      session: call.args.session,
+      session_id: resolved.id,
+      output: truncateToolText(output || '', call.args.max_output_chars || DEFAULT_READ_TOOL_CHARS),
+    };
+  }
+
+  if (call.tool === 'sessions.send') {
+    const result = await context.dispatch(call.args.session, call.args.message).catch((err) => ({
+      ok: false,
+      error: err.message || String(err),
+    }));
+    if (!result?.ok) {
+      context.stderr.write(`tool sessions.send -> ${result?.error || 'local dispatch failed'}\n`);
+      return {
+        call_id: call.id,
+        tool: call.tool,
+        ok: false,
+        session: call.args.session,
+        error: result?.error || 'local dispatch failed',
+      };
+    }
+    context.stdout.write(`tool sessions.send -> sent to ${result.id}\n`);
+    return {
+      call_id: call.id,
+      tool: call.tool,
+      ok: true,
+      session: call.args.session,
+      session_id: result.id,
+      message_length: call.args.message.length,
+    };
+  }
+
+  return {
+    call_id: call.id,
+    tool: call.tool,
+    ok: false,
+    error: `unsupported tool: ${call.tool}`,
+  };
+}
+
+async function appendSupervisorToolResults(results, context) {
+  const content = serializeSupervisorToolResults(results);
+  const result = await context.appendMessage({ role: 'system', content }, { auth: context.supervisorAuth }).catch((err) => ({
+    ok: false,
+    error: err.message || String(err),
+  }));
+  if (!result?.ok) {
+    context.stderr.write(`mc: supervisor tool result sync failed (${result?.error || 'unknown error'})\n`);
+    return false;
+  }
+  return true;
 }
 
 async function syncSupervisorSnapshot(snapshot, context) {
@@ -334,16 +507,71 @@ async function syncSupervisorSnapshot(snapshot, context) {
   }
 }
 
-async function syncSupervisorMessage(line, context) {
-  const content = String(line || '').trim();
-  if (!content || !context.supervisorAuth || context.opts.local) return;
-  const result = await context.appendMessage({ role: 'user', content }, { auth: context.supervisorAuth }).catch((err) => ({
-    ok: false,
-    error: err.message || String(err),
-  }));
-  if (!result?.ok) {
-    context.stderr.write(`mc: supervisor message sync failed (${result?.error || 'unknown error'})\n`);
-  }
+function normalizeSupervisorRun(run = {}) {
+  return {
+    id: typeof run.id === 'string' ? run.id : null,
+    status: typeof run.status === 'string' ? run.status : 'completed',
+    response: oneLine(run.response || '', 2000),
+    tool_calls: Array.isArray(run.tool_calls)
+      ? run.tool_calls.map(normalizeSupervisorToolCall).filter(Boolean)
+      : [],
+  };
+}
+
+function normalizeSupervisorToolCall(call) {
+  if (!call || typeof call !== 'object') return null;
+  const tool = String(call.tool || '');
+  if (!['sessions.list', 'sessions.read', 'sessions.send'].includes(tool)) return null;
+  const args = call.args && typeof call.args === 'object' ? call.args : {};
+  const session = typeof args.session === 'string' ? args.session.trim() : '';
+  const message = typeof args.message === 'string' ? args.message.trim() : '';
+  if ((tool === 'sessions.read' || tool === 'sessions.send') && !session) return null;
+  if (tool === 'sessions.send' && !message) return null;
+  return {
+    id: typeof call.id === 'string' && call.id.trim() ? call.id.trim() : `call_${Date.now().toString(36)}`,
+    tool,
+    args: {
+      session: tool === 'sessions.list' ? null : session,
+      message: tool === 'sessions.send' ? message : null,
+      max_output_chars: Number.isFinite(Number(args.max_output_chars))
+        ? Math.max(500, Math.min(12000, Math.round(Number(args.max_output_chars))))
+        : null,
+    },
+    reason: typeof call.reason === 'string' ? oneLine(call.reason, 500) : '',
+  };
+}
+
+function serializeSupervisorToolResults(results = []) {
+  const compact = results.map((result) => {
+    if (!result?.output) return result;
+    return {
+      ...result,
+      output: truncateToolText(result.output, 3000),
+    };
+  });
+  let content = `mc tool results\n${JSON.stringify({
+    generated_at: new Date().toISOString(),
+    results: compact,
+  })}`;
+  if (content.length <= MAX_TOOL_RESULT_CHARS) return content;
+  const reduced = compact.map((result) => (
+    result?.output ? { ...result, output: truncateToolText(result.output, 1000) } : result
+  ));
+  content = `mc tool results\n${JSON.stringify({
+    generated_at: new Date().toISOString(),
+    results: reduced,
+  })}`;
+  return truncateToolText(content, MAX_TOOL_RESULT_CHARS);
+}
+
+function truncateToolText(value, max) {
+  const text = String(value || '').trim();
+  if (!text || text.length <= max) return text;
+  return `${text.slice(0, Math.max(0, max - 1))}…`;
+}
+
+function newSupervisorClientMessageId() {
+  return `terminal:${Date.now().toString(36)}:${Math.random().toString(36).slice(2, 10)}`;
 }
 
 async function loadSupervisorConversation(context) {

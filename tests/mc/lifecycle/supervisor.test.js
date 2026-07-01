@@ -285,6 +285,91 @@ describe('mc supervisor', () => {
     assert.equal(io.err(), '');
   });
 
+  test('natural language prompt runs the synced supervisor and executes session sends', async () => {
+    const io = streams();
+    const dispatches = [];
+    const turns = [];
+    const appended = [];
+    const result = await handleSupervisorLine('be legal fortsätta med Apple-svaret', {
+      stdout: io.stdout,
+      stderr: io.stderr,
+      opts: parseSupervisorArgs([]),
+      supervisorAuth: { token: 'mem_supervisor', apiUrl: 'https://meetmemoro.test' },
+      request: async (message) => {
+        assert.deepEqual(message, { type: 'sessions' });
+        return {
+          ok: true,
+          sessions: [{
+            id: 'sess_a',
+            name: 'legal',
+            session_state: 'live',
+            attachable: true,
+            last_output_at: '2026-06-22T07:59:30.000Z',
+          }],
+        };
+      },
+      readOutput: async () => 'Idle.',
+      syncSnapshot: async () => ({ ok: true }),
+      runSupervisorTurn: async (turn) => {
+        turns.push(turn);
+        if (turn.message) {
+          assert.equal(turn.message.content, 'be legal fortsätta med Apple-svaret');
+          return {
+            ok: true,
+            run: {
+              id: 'run_1',
+              status: 'requires_tool_results',
+              response: 'Jag skickar det till legal.',
+              tool_calls: [{
+                id: 'call_1',
+                tool: 'sessions.send',
+                args: {
+                  session: 'legal',
+                  message: 'Fortsätt med Apple-svaret enligt användarens senaste riktning.',
+                  max_output_chars: null,
+                },
+                reason: 'Steer the legal session.',
+              }],
+            },
+          };
+        }
+        assert.deepEqual(turn, { continue: true });
+        return {
+          ok: true,
+          run: {
+            id: 'run_2',
+            status: 'completed',
+            response: 'Skickat.',
+            tool_calls: [],
+          },
+        };
+      },
+      dispatch: async (identifier, message) => {
+        dispatches.push({ identifier, message });
+        return { ok: true, id: 'sess_a' };
+      },
+      appendMessage: async (message) => {
+        appended.push(message);
+        return { ok: true };
+      },
+    });
+
+    assert.equal(result.code, 0);
+    assert.equal(turns.length, 2);
+    assert.deepEqual(dispatches, [{
+      identifier: 'legal',
+      message: 'Fortsätt med Apple-svaret enligt användarens senaste riktning.',
+    }]);
+    assert.equal(appended.length, 1);
+    assert.equal(appended[0].role, 'system');
+    assert.match(appended[0].content, /mc tool results/);
+    assert.match(appended[0].content, /"tool":"sessions.send"/);
+    assert.match(io.out(), /supervisor: Jag skickar det till legal/);
+    assert.match(io.out(), /tool sessions.send -> sent to sess_a/);
+    assert.match(io.out(), /supervisor: Skickat/);
+    assert.equal(io.err(), '');
+  });
+
   test('read command resolves a session name and prints recent output', async () => {
     const io = streams();
     const result = await handleSupervisorLine('read legal', {
