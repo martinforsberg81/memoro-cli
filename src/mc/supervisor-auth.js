@@ -70,7 +70,7 @@ export async function runSupervisorDeviceFlow({
     initPath: '/api/mc/supervisor/device/init',
     pollPath: '/api/mc/supervisor/device/poll',
     successLabel: 'Supervisor',
-    nextMessage: 'Next: run `mc supervisor` to open the synced control prompt.',
+    nextMessage: 'Starting mc supervisor.',
   });
 }
 
