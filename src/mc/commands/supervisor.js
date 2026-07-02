@@ -469,7 +469,7 @@ async function runSupervisorTurnLoop(nextTurn, context) {
       error: err.message || String(err),
     }));
     if (!result?.ok) {
-      runContext.stderr.write(`mc: supervisor run failed (${result?.error || 'unknown error'})\n`);
+      runContext.stderr.write(formatSupervisorRunFailure(result));
       return { exit: false, code: 1 };
     }
 
@@ -500,6 +500,16 @@ function renderSupervisorRun(run, context) {
   } else if (run.tool_calls.length) {
     writeUiBlock(context, 'supervisor', `executing ${run.tool_calls.length} tool call${run.tool_calls.length === 1 ? '' : 's'}`);
   }
+}
+
+function formatSupervisorRunFailure(result = {}) {
+  const code = result.code || result.error || 'MC_SUPERVISOR_RUN_FAILED';
+  const message = result.message && result.message !== code
+    ? `\n  ${result.message}`
+    : '';
+  const retry = result.retryable === true ? '\n  Try again. If it keeps failing, share this error code.' : '';
+  const cause = result.cause_code ? `\n  cause: ${result.cause_code}` : '';
+  return `mc: ${code}${message}${retry}${cause}\n`;
 }
 
 function writeUiBlock(context, title, body, { async = context.asyncOutput === true } = {}) {

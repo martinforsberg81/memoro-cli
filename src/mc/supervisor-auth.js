@@ -128,14 +128,21 @@ export async function runSupervisorTurn(turn, {
   client = defaultSupervisorClient(),
 } = {}) {
   if (!apiUrl || !token) return { ok: false, error: 'supervisor auth is required' };
-  return supervisorFetchFn(apiUrl, '/api/mc/supervisor/runs', {
-    token,
-    method: 'POST',
-    body: {
-      client,
-      ...turn,
-    },
-  });
+  try {
+    return await supervisorFetchFn(apiUrl, '/api/mc/supervisor/runs', {
+      token,
+      method: 'POST',
+      body: {
+        client,
+        ...turn,
+      },
+    });
+  } catch (err) {
+    return {
+      ok: false,
+      ...normalizeSupervisorApiError(err),
+    };
+  }
 }
 
 export async function logoutSupervisor({
@@ -182,6 +189,19 @@ export function isSupervisorApiPath(path) {
   ));
 }
 
+export function normalizeSupervisorApiError(err) {
+  const data = err?.data && typeof err.data === 'object' ? err.data : {};
+  const code = stringOrNull(data.code || data.error || err?.code) || 'MC_SUPERVISOR_REQUEST_FAILED';
+  return {
+    error: code,
+    code,
+    message: stringOrNull(data.message) || err?.message || 'Supervisor request failed.',
+    status: Number.isFinite(Number(err?.status)) ? Number(err.status) : null,
+    retryable: data.retryable === true,
+    cause_code: stringOrNull(data.cause_code),
+  };
+}
+
 async function resolveSupervisorApiUrl(argv = []) {
   const config = await readConfig();
   return getApiUrl(argv) || config.apiUrl;
@@ -193,4 +213,8 @@ function defaultSupervisorClient() {
     version: process.env.npm_package_version || null,
     platform: process.platform,
   };
+}
+
+function stringOrNull(value) {
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
