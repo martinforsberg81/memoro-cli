@@ -867,9 +867,12 @@ describe('mc supervisor', () => {
     await manager.tick(added.watch.id);
 
     assert.equal(manager.list().length, 0);
-    assert.equal(appended.length, 1);
+    assert.equal(appended.length, 2);
     assert.match(appended[0].content, /mc watch event/);
     assert.match(appended[0].content, /idle_after_work/);
+    assert.match(appended[1].content, /mc tool results/);
+    assert.match(appended[1].content, /"source":"watch_event"/);
+    assert.match(appended[1].content, /Ready for review/);
     assert.deepEqual(turns, [{ continue: true }]);
     assert.match(io.out(), /watch legal/);
     assert.match(io.out(), /triggered:/);

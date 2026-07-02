@@ -13,6 +13,7 @@ import {
 } from '../broker/session-hosts.js';
 import {
   buildWatchSnapshot,
+  cleanSessionOutput,
 } from './sessions-watch.js';
 import { readRegistry as defaultReadRegistry } from '../registry.js';
 import {
@@ -584,9 +585,10 @@ async function executeSupervisorToolCall(call, context) {
         error: output.__error,
       };
     }
+    const cleanedOutput = cleanSessionOutput(output || '');
     const label = resolved.session.name || resolved.session.label || resolved.id;
     writeUiBlock(context, 'tools', `read ${label}    ok ${resolved.id}`);
-    const decision = buildSupervisorReadDecision(resolved, output || '', context);
+    const decision = buildSupervisorReadDecision(resolved, cleanedOutput, context);
     const result = {
       call_id: call.id,
       tool: call.tool,
@@ -595,7 +597,7 @@ async function executeSupervisorToolCall(call, context) {
       session_id: resolved.id,
       decision,
       evidence_excerpt: decision.latest_signal || null,
-      output: truncateToolText(output || '', call.args.max_output_chars || DEFAULT_READ_TOOL_CHARS),
+      output: truncateToolText(cleanedOutput, call.args.max_output_chars || DEFAULT_READ_TOOL_CHARS),
     };
     cacheSupervisorToolResult(context, cacheKey, result);
     return result;
@@ -900,6 +902,9 @@ async function handleSupervisorWatchEvent(event, context) {
     return;
   }
 
+  const appended = await appendSupervisorToolResults([supervisorWatchEventToolResult(event)], eventContext);
+  if (!appended) return;
+
   await runSupervisorTurnLoop({ continue: true }, eventContext);
 }
 
@@ -939,9 +944,10 @@ async function readSupervisorWatchSample(watch, context) {
   const output = shouldReadOutput
     ? await context.readOutput(resolved.id, resolved.session).catch(() => '')
     : '';
+  const cleanedOutput = cleanSessionOutput(output || '');
   const snapshot = buildWatchSnapshot({
     sessions: [resolved.session],
-    outputs: new Map([[resolved.id, output]]),
+    outputs: new Map([[resolved.id, cleanedOutput]]),
     includeDead: true,
     excludeWorktreeNames: [],
     onlyDispositions: [],
@@ -956,7 +962,7 @@ async function readSupervisorWatchSample(watch, context) {
   return {
     ok: true,
     session,
-    output: truncateToolText(output || '', DEFAULT_READ_TOOL_CHARS),
+    output: truncateToolText(cleanedOutput, DEFAULT_READ_TOOL_CHARS),
   };
 }
 
@@ -1024,6 +1030,7 @@ function buildWatchEvent(watch, {
   sample = null,
 } = {}) {
   const session = sample?.session || {};
+  const decision = buildSupervisorDecisionCard(session, { includeEvidence: true });
   return {
     id: newSupervisorWatchEventId(),
     watch_id: watch.id,
@@ -1037,7 +1044,9 @@ function buildWatchEvent(watch, {
     disposition: session.disposition || watch.last_disposition || null,
     state: session.state || watch.last_state || null,
     triggered_at: new Date(atMs || Date.now()).toISOString(),
-    excerpt: sample?.output ? truncateToolText(sample.output, 1000) : '',
+    decision,
+    evidence_excerpt: decision.latest_signal || null,
+    excerpt: sample?.output ? truncateToolText(cleanSessionOutput(sample.output), 1000) : '',
   };
 }
 
@@ -1055,8 +1064,26 @@ function serializeSupervisorWatchEvent(event) {
     disposition: event.disposition,
     state: event.state,
     triggered_at: event.triggered_at,
+    decision: event.decision || null,
+    evidence_excerpt: event.evidence_excerpt || null,
     excerpt: event.excerpt ? truncateToolText(event.excerpt, 1000) : '',
   })}`;
+}
+
+function supervisorWatchEventToolResult(event = {}) {
+  return {
+    call_id: event.id || newSupervisorWatchEventId(),
+    tool: 'sessions.read',
+    ok: true,
+    session: event.session || event.session_name || null,
+    session_id: event.session_id || null,
+    decision: event.decision || null,
+    evidence_excerpt: event.evidence_excerpt || null,
+    output: truncateToolText(cleanSessionOutput(event.excerpt || ''), DEFAULT_READ_TOOL_CHARS),
+    source: 'watch_event',
+    watch_id: event.watch_id || null,
+    watch_condition: event.condition || null,
+  };
 }
 
 function publicWatch(watch) {

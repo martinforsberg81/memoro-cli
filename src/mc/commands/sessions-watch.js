@@ -124,7 +124,7 @@ export function summarizeSession(session = {}, output = '', now = Date.now()) {
   const id = session.coding_session_id || session.id || null;
   const cwd = stringOrNull(session.cwd);
   const disposition = classifySession({ session, output, now });
-  const excerpt = cleanExcerpt(output).slice(-EXCERPT_CHARS);
+  const excerpt = cleanSessionOutput(output).slice(-EXCERPT_CHARS);
   return {
     id,
     name: stringOrNull(session.name) || deriveWorktreeName(cwd) || id,
@@ -145,7 +145,7 @@ export function summarizeSession(session = {}, output = '', now = Date.now()) {
 
 export function classifySession({ session = {}, output = '', now = Date.now() } = {}) {
   if (session.exit || session.session_state === 'dead' || session.state === 'dead') return 'dead';
-  const tail = cleanExcerpt(output).slice(-1200);
+  const tail = cleanSessionOutput(output).slice(-1200);
   if (/\bWorking\(/i.test(tail)) return 'working';
   if (extractRecommendedReply(tail) || looksLikeOpenQuestion(tail)) return 'awaiting_reply';
   if (looksLikeReviewSuggestion(tail)) return 'review_suggested';
@@ -332,10 +332,11 @@ function looksLikeReviewSuggestion(text) {
   return /(Jag skulle|Min rekommendation|Föreslagen rewrite|Så min reviderade plan|I would|Recommended plan|I recommend)/i.test(tail);
 }
 
-function cleanExcerpt(value) {
+export function cleanSessionOutput(value) {
   return String(value || '')
     .replace(/\x1b\][\s\S]*?(?:\x07|\x1b\\)/g, '')
     .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')
+    .replace(/\[(?:\d{1,3};)*\d{1,3}[A-Za-z]/g, '')
     .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '')
     .replace(/\r/g, '\n')
     .split('\n')
@@ -349,7 +350,7 @@ function cleanExcerpt(value) {
 
 function stripCodexRedrawNoise(line) {
   const value = String(line || '');
-  const matches = [...value.matchAll(/W{1,2}o|Wor|Worki?|Workin|Working|orking|rking|ingngg|ngg/gi)];
+  const matches = [...value.matchAll(CODEX_REDRAW_TOKEN_RE)];
   for (const match of matches) {
     const index = match.index ?? 0;
     const suffix = value.slice(index);
@@ -360,13 +361,15 @@ function stripCodexRedrawNoise(line) {
 
 function isCodexRedrawNoise(value) {
   const text = String(value || '');
-  const tokens = text.match(/W{1,2}o|Wor|Worki?|Workin|Working|orking|rking|ingngg|ngg/gi) || [];
+  const tokens = text.match(CODEX_REDRAW_TOKEN_RE) || [];
   if (tokens.length < 5) return false;
   const letters = text.replace(/[^A-Za-z]/g, '');
   if (!letters) return false;
-  const spinnerLetters = letters.match(/W|o|r|k|i|n|g|e|s|c|t|u|p/g) || [];
-  return spinnerLetters.length / letters.length > 0.85;
+  const tokenLetters = tokens.join('').replace(/[^A-Za-z]/g, '');
+  return tokenLetters.length / letters.length > 0.55;
 }
+
+const CODEX_REDRAW_TOKEN_RE = /W{1,2}o|Wor|Worki?|Workin|Working|orking|rking|Reviewi?|Reviewin|Reviewing|eviewing|viewing|iewing|approval|approv[a-z]*|request|reques[a-z]*|ingngg|ngg/gi;
 
 function oneLine(value, max) {
   const s = String(value || '').replace(/\s+/g, ' ').trim();
