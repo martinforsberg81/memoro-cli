@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import {
   buildWatchSnapshot,
+  cleanSessionOutput,
   diffWatchSnapshots,
   extractRecommendedReply,
   renderWatchEvents,
@@ -13,6 +14,18 @@ import {
 const NOW = Date.parse('2026-06-09T12:00:00.000Z');
 
 describe('mc sessions watch', () => {
+  test('cleans terminal redraw noise from session output', () => {
+    const cleaned = cleanSessionOutput(
+      '\u001b[49mReviewReviewi••Reviewing••Reviewing eviewing aviewing ap••iewing appewing approval request\nDone. Ready for review.',
+    );
+    const cleanedFragment = cleanSessionOutput(
+      '[49mReviewReviewi••Reviewing••Reviewing eviewing aviewing ap••iewing appewing approval request\nDone.',
+    );
+
+    assert.equal(cleaned, 'Done. Ready for review.');
+    assert.equal(cleanedFragment, 'Done.');
+  });
+
   test('classifies local broker sessions and extracts recommended replies', () => {
     const snapshot = buildWatchSnapshot({
       now: NOW,
