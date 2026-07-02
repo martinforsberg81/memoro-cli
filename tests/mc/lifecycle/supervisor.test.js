@@ -398,6 +398,37 @@ describe('mc supervisor', () => {
     assert.equal(io.err(), '');
   });
 
+  test('supervisor prints readable run error codes', async () => {
+    const io = streams();
+    const result = await handleSupervisorLine('har du fått svar?', {
+      stdout: io.stdout,
+      stderr: io.stderr,
+      opts: parseSupervisorArgs([]),
+      supervisorAuth: { token: 'mem_supervisor', apiUrl: 'https://meetmemoro.test' },
+      request: async (message) => {
+        assert.deepEqual(message, { type: 'sessions' });
+        return { ok: true, sessions: [] };
+      },
+      syncSnapshot: async () => ({ ok: true }),
+      runSupervisorTurn: async () => ({
+        ok: false,
+        error: 'MC_SUPERVISOR_AI_RUN_FAILED',
+        code: 'MC_SUPERVISOR_AI_RUN_FAILED',
+        message: 'Supervisor AI could not complete this request. Try again.',
+        retryable: true,
+        cause_code: 'PROVIDER_SCHEMA_FAILURE',
+      }),
+    });
+
+    assert.equal(result.code, 1);
+    assert.equal(io.out(), '');
+    assert.match(io.err(), /mc: MC_SUPERVISOR_AI_RUN_FAILED/);
+    assert.match(io.err(), /Supervisor AI could not complete this request/);
+    assert.match(io.err(), /Try again\. If it keeps failing, share this error code\./);
+    assert.match(io.err(), /cause: PROVIDER_SCHEMA_FAILURE/);
+    assert.doesNotMatch(io.err(), /Memoro 502/);
+  });
+
   test('collects local broker snapshots with injected output readers', async () => {
     const snapshot = await collectSupervisorSnapshot({
       opts: parseSupervisorArgs([]),

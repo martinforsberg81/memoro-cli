@@ -123,6 +123,34 @@ describe('mc supervisor scoped auth', () => {
     });
   });
 
+  test('runSupervisorTurn preserves readable Memoro supervisor error codes', async () => {
+    const err = new Error('Memoro 502: MC_SUPERVISOR_AI_RUN_FAILED');
+    err.status = 502;
+    err.data = {
+      ok: false,
+      error: 'MC_SUPERVISOR_AI_RUN_FAILED',
+      code: 'MC_SUPERVISOR_AI_RUN_FAILED',
+      message: 'Supervisor AI could not complete this request. Try again.',
+      retryable: true,
+      cause_code: 'PROVIDER_SCHEMA_FAILURE',
+    };
+
+    const result = await runSupervisorTurn({ message: 'status' }, {
+      auth: { apiUrl: 'https://meetmemoro.test', token: 'mem_supervisor_token' },
+      supervisorFetchFn: async () => { throw err; },
+    });
+
+    assert.deepEqual(result, {
+      ok: false,
+      error: 'MC_SUPERVISOR_AI_RUN_FAILED',
+      code: 'MC_SUPERVISOR_AI_RUN_FAILED',
+      message: 'Supervisor AI could not complete this request. Try again.',
+      status: 502,
+      retryable: true,
+      cause_code: 'PROVIDER_SCHEMA_FAILURE',
+    });
+  });
+
   test('runs supervisor device flow against supervisor-specific endpoints with audience', async () => {
     const calls = [];
     const code = await runSupervisorDeviceFlow({
