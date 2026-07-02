@@ -137,6 +137,58 @@ describe('mc supervisor', () => {
     assert.equal(parsed.sessions[0].id, 'sess_a');
   });
 
+  test('interactive prompt exits cleanly on Ctrl+C', async () => {
+    const io = streams();
+    const abort = new Error('Aborted with Ctrl+C');
+    abort.name = 'AbortError';
+    abort.code = 'ABORT_ERR';
+    let closed = false;
+
+    const code = await runSupervisor(['--local'], {
+      stdout: io.stdout,
+      stderr: io.stderr,
+      isInteractive: true,
+      createInterface: () => ({
+        question: async () => { throw abort; },
+        close: () => { closed = true; },
+      }),
+      requestBroker: async (message) => {
+        assert.deepEqual(message, { type: 'sessions' });
+        return { ok: true, sessions: [] };
+      },
+    });
+
+    assert.equal(code, 130);
+    assert.equal(closed, true);
+    assert.match(io.out(), /Type `help` for commands\./);
+    assert.doesNotMatch(io.out(), /AbortError/);
+    assert.equal(io.err(), '');
+  });
+
+  test('interactive prompt exits cleanly on Ctrl+D / EOF', async () => {
+    const io = streams();
+    let closed = false;
+
+    const code = await runSupervisor(['--local'], {
+      stdout: io.stdout,
+      stderr: io.stderr,
+      isInteractive: true,
+      createInterface: () => ({
+        question: async () => undefined,
+        close: () => { closed = true; },
+      }),
+      requestBroker: async (message) => {
+        assert.deepEqual(message, { type: 'sessions' });
+        return { ok: true, sessions: [] };
+      },
+    });
+
+    assert.equal(code, 0);
+    assert.equal(closed, true);
+    assert.match(io.out(), /Type `help` for commands\./);
+    assert.equal(io.err(), '');
+  });
+
   test('renders supervisor snapshot as grouped control board', () => {
     const output = renderSupervisorSnapshot({
       ok: true,
@@ -220,6 +272,8 @@ describe('mc supervisor', () => {
         disposition: 'awaiting_reply',
         latest_text: 'do not sync transcript tails',
         recommended_reply: 'do not sync recommended replies',
+        current_branch: 'feature/legal',
+        dirty_files: 2,
       }],
     });
 
@@ -238,8 +292,110 @@ describe('mc supervisor', () => {
         last_output_at: null,
         last_input_at: null,
         last_output_age_seconds: null,
+        current_branch: 'feature/legal',
+        dirty_files: 2,
+        ahead: null,
+        behind: null,
+        open_question: false,
+        safety_verdict: null,
+        decision: {
+          status: 'needs_user_reply',
+          priority: 'high',
+          priority_rank: 100,
+          needs_user: true,
+          action: 'answer_or_delegate',
+          next_step: 'Answer the open question or send a concrete instruction to the session.',
+          confidence: 'low',
+          git: {
+            branch: 'feature/legal',
+            dirty_files: 2,
+            ahead: null,
+            behind: null,
+            safety_verdict: null,
+          },
+        },
       }],
     });
+    assert.doesNotMatch(JSON.stringify(compact), /do not sync/);
+  });
+
+  test('supervisor list tool returns prioritized decision cards', async () => {
+    const io = streams();
+    const appended = [];
+    const turns = [];
+    const outputs = new Map([
+      ['sess_question', 'Should I merge this?'],
+      ['sess_review', 'Min rekommendation: skapa PR och mergea efter grön CI.'],
+      ['sess_working', 'Working(4s - esc to interrupt)'],
+    ]);
+    const result = await handleSupervisorLine('vad är viktigast nu?', {
+      stdout: io.stdout,
+      stderr: io.stderr,
+      opts: parseSupervisorArgs([]),
+      supervisorAuth: { token: 'mem_supervisor', apiUrl: 'https://meetmemoro.test' },
+      request: async (message) => {
+        assert.deepEqual(message, { type: 'sessions' });
+        return {
+          ok: true,
+          sessions: [
+            { id: 'sess_question', name: 'legal', session_state: 'live', attachable: true },
+            { id: 'sess_review', name: 'planning', session_state: 'live', attachable: true },
+            { id: 'sess_working', name: 'automation', session_state: 'live', attachable: true },
+          ],
+        };
+      },
+      readOutput: async (id) => outputs.get(id) || '',
+      syncSnapshot: async () => ({ ok: true }),
+      runSupervisorTurn: async (turn) => {
+        turns.push(turn);
+        if (turns.length === 1) {
+          return {
+            ok: true,
+            run: {
+              id: 'run_1',
+              status: 'requires_tool_results',
+              response: 'Jag läser sessionslistan.',
+              tool_calls: [{
+                id: 'call_list',
+                tool: 'sessions.list',
+                args: { session: null, message: null, max_output_chars: null },
+              }],
+            },
+          };
+        }
+
+        const payload = JSON.parse(appended[0].content.replace(/^mc tool results\n/, ''));
+        const toolResult = payload.results[0];
+        assert.equal(toolResult.tool, 'sessions.list');
+        assert.equal(toolResult.sessions.length, 3);
+        assert.equal(toolResult.sessions[0].name, 'legal');
+        assert.equal(toolResult.sessions[0].decision.status, 'needs_user_reply');
+        assert.equal(toolResult.sessions[0].decision.priority, 'high');
+        assert.equal(toolResult.sessions[0].latest_signal, 'Should I merge this?');
+        assert.equal(toolResult.sessions[1].decision.status, 'review_suggested');
+        assert.equal(toolResult.sessions[2].decision.status, 'working');
+
+        return {
+          ok: true,
+          run: {
+            id: 'run_final',
+            status: 'completed',
+            response: 'Prioritet: legal först, planning därefter.',
+            tool_calls: [],
+          },
+        };
+      },
+      appendMessage: async (message) => {
+        appended.push(message);
+        return { ok: true };
+      },
+    });
+
+    assert.equal(result.code, 0);
+    assert.equal(turns.length, 2);
+    assert.match(io.out(), /tools\n  list sessions\s+ok 3 sessions/);
+    assert.match(io.out(), /supervisor\n  Prioritet: legal först/);
+    assert.equal(io.err(), '');
   });
 
   test('collects local broker snapshots with injected output readers', async () => {
@@ -379,7 +535,7 @@ describe('mc supervisor', () => {
     const result = await handleSupervisorLine('säg till när legal är klar', {
       stdout: io.stdout,
       stderr: io.stderr,
-      opts: parseSupervisorArgs([]),
+      opts: parseSupervisorArgs(['--no-output']),
       supervisorAuth: { token: 'mem_supervisor', apiUrl: 'https://meetmemoro.test' },
       request: async (message) => {
         assert.deepEqual(message, { type: 'sessions' });
@@ -463,6 +619,164 @@ describe('mc supervisor', () => {
     assert.match(io.out(), /tools\n  watch legal\s+every 20s, timeout 30m/);
     assert.match(io.out(), /supervisor\n  Jag säger till när den är klar/);
     assert.equal(io.err(), '');
+  });
+
+  test('supervisor reuses duplicate read results within one prompt', async () => {
+    const io = streams();
+    const turns = [];
+    const appended = [];
+    let readCount = 0;
+    const result = await handleSupervisorLine('kolla legal', {
+      stdout: io.stdout,
+      stderr: io.stderr,
+      opts: parseSupervisorArgs(['--no-output']),
+      supervisorAuth: { token: 'mem_supervisor', apiUrl: 'https://meetmemoro.test' },
+      request: async (message) => {
+        assert.deepEqual(message, { type: 'sessions' });
+        return {
+          ok: true,
+          sessions: [{
+            id: 'sess_a',
+            name: 'legal',
+            session_state: 'live',
+            attachable: true,
+            last_output_at: '2026-06-22T07:59:30.000Z',
+          }],
+        };
+      },
+      readOutput: async () => {
+        readCount += 1;
+        return 'Ready for review.';
+      },
+      syncSnapshot: async () => ({ ok: true }),
+      runSupervisorTurn: async (turn) => {
+        turns.push(turn);
+        if (turns.length <= 2) {
+          return {
+            ok: true,
+            run: {
+              id: `run_${turns.length}`,
+              status: 'requires_tool_results',
+              response: turns.length === 1 ? 'Jag läser legal.' : 'Jag läser legal igen.',
+              tool_calls: [{
+                id: `call_${turns.length}`,
+                tool: 'sessions.read',
+                args: {
+                  session: 'legal',
+                  message: null,
+                  max_output_chars: null,
+                },
+              }],
+            },
+          };
+        }
+        return {
+          ok: true,
+          run: {
+            id: 'run_final',
+            status: 'completed',
+            response: 'Legal är redo för review.',
+            tool_calls: [],
+          },
+        };
+      },
+      appendMessage: async (message) => {
+        appended.push(message);
+        return { ok: true };
+      },
+    });
+
+    assert.equal(result.code, 0);
+    assert.equal(readCount, 1);
+    assert.equal(turns.length, 3);
+    {
+      const payload = JSON.parse(appended[0].content.replace(/^mc tool results\n/, ''));
+      const toolResult = payload.results[0];
+      assert.equal(toolResult.tool, 'sessions.read');
+      assert.equal(toolResult.decision.status, 'ready_to_review');
+      assert.equal(toolResult.decision.action, 'review_decide');
+      assert.equal(toolResult.evidence_excerpt, 'Ready for review.');
+    }
+    assert.match(appended[1].content, /"cached":true/);
+    assert.match(io.out(), /tools\n  read legal\s+cached sess_a/);
+    assert.match(io.out(), /supervisor\n  Legal är redo för review/);
+    assert.equal(io.err(), '');
+  });
+
+  test('supervisor finalizes instead of failing when tool rounds are exhausted', async () => {
+    const io = streams();
+    const turns = [];
+    const appended = [];
+    const result = await handleSupervisorLine('vad är viktigast nu?', {
+      stdout: io.stdout,
+      stderr: io.stderr,
+      opts: parseSupervisorArgs([]),
+      supervisorAuth: { token: 'mem_supervisor', apiUrl: 'https://meetmemoro.test' },
+      request: async (message) => {
+        assert.deepEqual(message, { type: 'sessions' });
+        return {
+          ok: true,
+          sessions: [
+            { id: 'sess_a', name: 'legal', session_state: 'live', attachable: true },
+            { id: 'sess_b', name: 'planning', session_state: 'live', attachable: true },
+            { id: 'sess_c', name: 'automation', session_state: 'live', attachable: true },
+          ],
+        };
+      },
+      readOutput: async (_id, session) => `${session.name} status`,
+      syncSnapshot: async () => ({ ok: true }),
+      runSupervisorTurn: async (turn) => {
+        turns.push(turn);
+        if (turns.length <= 3) {
+          const session = ['legal', 'planning', 'automation'][turns.length - 1];
+          return {
+            ok: true,
+            run: {
+              id: `run_${turns.length}`,
+              status: 'requires_tool_results',
+              response: `Jag läser ${session}.`,
+              tool_calls: [{
+                id: `call_${turns.length}`,
+                tool: 'sessions.read',
+                args: {
+                  session,
+                  message: null,
+                  max_output_chars: null,
+                },
+              }],
+            },
+          };
+        }
+        assert.deepEqual(turn, { continue: true });
+        return {
+          ok: true,
+          run: {
+            id: 'run_final',
+            status: 'requires_tool_results',
+            response: 'Prioritet: legal först, planning därefter, automation sist.',
+            tool_calls: [{
+              id: 'call_ignored',
+              tool: 'sessions.read',
+              args: {
+                session: 'legal',
+                message: null,
+                max_output_chars: null,
+              },
+            }],
+          },
+        };
+      },
+      appendMessage: async (message) => {
+        appended.push(message);
+        return { ok: true };
+      },
+    });
+
+    assert.equal(result.code, 0);
+    assert.equal(turns.length, 4);
+    assert.match(appended.at(-1).content, /tool budget/);
+    assert.match(io.out(), /supervisor\n  Prioritet: legal först/);
+    assert.doesNotMatch(io.err(), /stopped after/);
   });
 
   test('local watch manager triggers a follow-up supervisor run when a session becomes idle', async () => {
