@@ -298,28 +298,119 @@ describe('mc supervisor', () => {
         behind: null,
         open_question: false,
         safety_verdict: null,
-        decision: {
-          status: 'needs_user_reply',
-          priority: 'high',
-          priority_rank: 100,
-          needs_user: true,
-          action: 'answer_or_delegate',
-          next_step: 'Answer the open question or send a concrete instruction to the session.',
-          confidence: 'low',
-          git: {
-            branch: 'feature/legal',
-            dirty_files: 2,
-            ahead: null,
-            behind: null,
-            safety_verdict: null,
-          },
+        lifecycle: {
+          state: 'live',
+          disposition: 'awaiting_reply',
+          attachable: true,
+          close_readiness: 'unknown',
+          safety_verdict: null,
+          last_output_age_seconds: null,
         },
       }],
     });
     assert.doesNotMatch(JSON.stringify(compact), /do not sync/);
   });
 
-  test('supervisor list tool returns prioritized decision cards', async () => {
+  test('neutral snapshots do not treat SAFE_TO_END as merge approval', () => {
+    const compact = compactSnapshotForSupervisorSync({
+      ok: true,
+      generated_at: '2026-07-01T10:00:00.000Z',
+      counts: { review_suggested: 1 },
+      sessions: [{
+        id: 'sess_a',
+        name: 'automations-v2',
+        tool: 'codex',
+        state: 'live',
+        attachable: true,
+        disposition: 'review_suggested',
+        safety_verdict: 'SAFE_TO_END',
+        dirty_files: 0,
+      }],
+    });
+
+    const session = compact.sessions[0];
+    assert.equal(session.decision, undefined);
+    assert.equal(session.lifecycle.close_readiness, 'safe_to_end_after_user_decision');
+  });
+
+  test('supervisor inspect tool separates lifecycle close readiness from delivery approval', async () => {
+    const io = streams();
+    const appended = [];
+    const turns = [];
+    const result = await handleSupervisorLine('bedöm automations-v2', {
+      stdout: io.stdout,
+      stderr: io.stderr,
+      opts: parseSupervisorArgs([]),
+      supervisorAuth: { token: 'mem_supervisor', apiUrl: 'https://meetmemoro.test' },
+      request: async (message) => {
+        assert.deepEqual(message, { type: 'sessions' });
+        return {
+          ok: true,
+          sessions: [{
+            id: 'sess_auto',
+            name: 'automations-v2',
+            session_state: 'live',
+            attachable: true,
+          }],
+        };
+      },
+      readOutput: async () => 'Ready for review. Tests passed.',
+      syncSnapshot: async () => ({ ok: true }),
+      readRegistry: () => ({
+        entries: [{
+          name: 'automations-v2',
+          coding_session_id: 'sess_auto',
+          current_branch: 'codex/automations',
+          dirty_files: 0,
+          ahead: 0,
+          behind: 0,
+          safety_verdict: 'SAFE_TO_END',
+        }],
+      }),
+      runSupervisorTurn: async () => {
+        turns.push(true);
+        if (turns.length === 1) {
+          return {
+            ok: true,
+            run: {
+              id: 'run_1',
+              status: 'requires_tool_results',
+              response: 'Jag inspekterar automations-v2.',
+              tool_calls: [{
+                id: 'call_inspect',
+                tool: 'sessions.inspect',
+                args: { session: 'automations-v2', message: null, max_output_chars: null },
+              }],
+            },
+          };
+        }
+        return {
+          ok: true,
+          run: {
+            id: 'run_final',
+            status: 'completed',
+            response: 'Den kan stängas lokalt efter beslut, men merge kräver content/PR-granskning.',
+            tool_calls: [],
+          },
+        };
+      },
+      appendMessage: async (message) => {
+        appended.push(message);
+        return { ok: true };
+      },
+    });
+
+    assert.equal(result.code, 0);
+    const payload = JSON.parse(appended[0].content.replace(/^mc tool results\n/, ''));
+    const toolResult = payload.results[0];
+    assert.equal(toolResult.tool, 'sessions.inspect');
+    assert.equal(toolResult.inspect.lifecycle.close_readiness, 'safe_to_end_after_user_decision');
+    assert.equal(toolResult.inspect.delivery.merge_readiness, 'needs_pr_or_ci_check');
+    assert.match(toolResult.inspect.delivery.cannot_conclude_from.join(' '), /SAFE_TO_END/);
+    assert.equal(toolResult.inspect.evidence.output_excerpt, 'Ready for review. Tests passed.');
+  });
+
+  test('supervisor triage tool prioritizes without delivery approval', async () => {
     const io = streams();
     const appended = [];
     const turns = [];
@@ -354,10 +445,10 @@ describe('mc supervisor', () => {
             run: {
               id: 'run_1',
               status: 'requires_tool_results',
-              response: 'Jag läser sessionslistan.',
+              response: 'Jag prioriterar sessionerna.',
               tool_calls: [{
-                id: 'call_list',
-                tool: 'sessions.list',
+                id: 'call_triage',
+                tool: 'sessions.triage',
                 args: { session: null, message: null, max_output_chars: null },
               }],
             },
@@ -366,14 +457,17 @@ describe('mc supervisor', () => {
 
         const payload = JSON.parse(appended[0].content.replace(/^mc tool results\n/, ''));
         const toolResult = payload.results[0];
-        assert.equal(toolResult.tool, 'sessions.list');
+        assert.equal(toolResult.tool, 'sessions.triage');
         assert.equal(toolResult.sessions.length, 3);
         assert.equal(toolResult.sessions[0].name, 'legal');
-        assert.equal(toolResult.sessions[0].decision.status, 'needs_user_reply');
-        assert.equal(toolResult.sessions[0].decision.priority, 'high');
+        assert.equal(toolResult.sessions[0].triage.status, 'needs_user_reply');
+        assert.equal(toolResult.sessions[0].triage.priority, 'high');
         assert.equal(toolResult.sessions[0].latest_signal, 'Should I merge this?');
-        assert.equal(toolResult.sessions[1].decision.status, 'review_suggested');
-        assert.equal(toolResult.sessions[2].decision.status, 'working');
+        assert.equal(toolResult.sessions[0].triage.not_a_delivery_decision, true);
+        assert.equal(toolResult.sessions[1].triage.status, 'review_suggested');
+        assert.equal(toolResult.sessions[1].triage.not_a_delivery_decision, true);
+        assert.equal(toolResult.sessions[2].triage.status, 'working');
+        assert.equal(toolResult.contract.next_tool_for_decisions, 'sessions.inspect');
 
         return {
           ok: true,
@@ -393,7 +487,7 @@ describe('mc supervisor', () => {
 
     assert.equal(result.code, 0);
     assert.equal(turns.length, 2);
-    assert.match(io.out(), /tools\n  list sessions\s+ok 3 sessions/);
+    assert.match(io.out(), /tools\n  triage sessions\s+ok 3 sessions/);
     assert.match(io.out(), /supervisor\n  Prioritet: legal först/);
     assert.equal(io.err(), '');
   });
@@ -724,9 +818,9 @@ describe('mc supervisor', () => {
       const payload = JSON.parse(appended[0].content.replace(/^mc tool results\n/, ''));
       const toolResult = payload.results[0];
       assert.equal(toolResult.tool, 'sessions.read');
-      assert.equal(toolResult.decision.status, 'ready_to_review');
-      assert.equal(toolResult.decision.action, 'review_decide');
-      assert.equal(toolResult.evidence_excerpt, 'Ready for review.');
+      assert.equal(toolResult.decision, undefined);
+      assert.equal(toolResult.contract.next_tool_for_decisions, 'sessions.inspect');
+      assert.equal(toolResult.output, 'Ready for review.');
     }
     assert.match(appended[1].content, /"cached":true/);
     assert.match(io.out(), /tools\n  read legal\s+cached sess_a/);
@@ -871,6 +965,7 @@ describe('mc supervisor', () => {
     assert.match(appended[0].content, /mc watch event/);
     assert.match(appended[0].content, /idle_after_work/);
     assert.match(appended[1].content, /mc tool results/);
+    assert.match(appended[1].content, /"tool":"sessions.inspect"/);
     assert.match(appended[1].content, /"source":"watch_event"/);
     assert.match(appended[1].content, /Ready for review/);
     assert.deepEqual(turns, [{ continue: true }]);
