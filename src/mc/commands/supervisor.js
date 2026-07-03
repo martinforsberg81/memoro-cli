@@ -356,7 +356,7 @@ Commands
   ask <instruction>              Ask the synced supervisor LLM to steer sessions
   stop <label|id> [--yes]        Stop a broker-owned session
   remove <label|id> [--yes]      Remove a broker session from inventory
-  <natural language>             Same as ask; the supervisor may list/read/send/watch
+  <natural language>             Same as ask; the supervisor may list/triage/inspect/read/send/watch
   help                           Show this help
   quit                           Exit supervisor
 
@@ -542,7 +542,7 @@ async function executeSupervisorToolCall(call, context) {
   if (call.tool === 'sessions.list') {
     const snapshot = await collectSupervisorSnapshot(context);
     await syncSupervisorSnapshot(snapshot, context);
-    const compact = buildSupervisorDecisionSnapshot(snapshot);
+    const compact = compactSnapshotForSupervisorSync(snapshot);
     writeUiBlock(context, 'tools', `list sessions    ok ${compact.sessions.length} sessions`);
     const result = {
       call_id: call.id,
@@ -550,6 +550,27 @@ async function executeSupervisorToolCall(call, context) {
       ok: snapshot.ok !== false,
       counts: compact.counts || {},
       sessions: compact.sessions,
+      error: snapshot.ok === false ? snapshot.error || 'snapshot failed' : null,
+    };
+    cacheSupervisorToolResult(context, cacheKey, result);
+    return result;
+  }
+
+  if (call.tool === 'sessions.triage') {
+    const snapshot = await collectSupervisorSnapshot(context);
+    await syncSupervisorSnapshot(snapshot, context);
+    const triage = buildSupervisorTriageSnapshot(snapshot);
+    writeUiBlock(context, 'tools', `triage sessions    ok ${triage.sessions.length} sessions`);
+    const result = {
+      call_id: call.id,
+      tool: call.tool,
+      ok: snapshot.ok !== false,
+      counts: triage.counts || {},
+      sessions: triage.sessions,
+      contract: {
+        purpose: 'prioritize attention; not approval, merge, or deploy evidence',
+        next_tool_for_decisions: 'sessions.inspect',
+      },
       error: snapshot.ok === false ? snapshot.error || 'snapshot failed' : null,
     };
     cacheSupervisorToolResult(context, cacheKey, result);
@@ -588,16 +609,64 @@ async function executeSupervisorToolCall(call, context) {
     const cleanedOutput = cleanSessionOutput(output || '');
     const label = resolved.session.name || resolved.session.label || resolved.id;
     writeUiBlock(context, 'tools', `read ${label}    ok ${resolved.id}`);
-    const decision = buildSupervisorReadDecision(resolved, cleanedOutput, context);
     const result = {
       call_id: call.id,
       tool: call.tool,
       ok: true,
       session: call.args.session,
       session_id: resolved.id,
-      decision,
-      evidence_excerpt: decision.latest_signal || null,
+      contract: {
+        purpose: 'transcript/output read only; not a delivery decision',
+        next_tool_for_decisions: 'sessions.inspect',
+      },
       output: truncateToolText(cleanedOutput, call.args.max_output_chars || DEFAULT_READ_TOOL_CHARS),
+    };
+    cacheSupervisorToolResult(context, cacheKey, result);
+    return result;
+  }
+
+  if (call.tool === 'sessions.inspect') {
+    const resolved = await resolveLocalSupervisorSession(call.args.session, { request: context.request }).catch((err) => ({
+      ok: false,
+      error: err.message || String(err),
+    }));
+    if (!resolved.ok) {
+      writeUiBlock(context, 'tools', `inspect ${call.args.session}    failed ${resolved.error}`);
+      return {
+        call_id: call.id,
+        tool: call.tool,
+        ok: false,
+        session: call.args.session,
+        error: resolved.error,
+      };
+    }
+    const output = await context.readOutput(resolved.id, resolved.session).catch((err) => {
+      return { __error: err.message || String(err) };
+    });
+    if (output && typeof output === 'object' && output.__error) {
+      writeUiBlock(context, 'tools', `inspect ${call.args.session}    failed ${output.__error}`);
+      return {
+        call_id: call.id,
+        tool: call.tool,
+        ok: false,
+        session: call.args.session,
+        session_id: resolved.id,
+        error: output.__error,
+      };
+    }
+    const cleanedOutput = cleanSessionOutput(output || '');
+    const label = resolved.session.name || resolved.session.label || resolved.id;
+    writeUiBlock(context, 'tools', `inspect ${label}    ok ${resolved.id}`);
+    const packet = buildSupervisorInspectPacket(resolved, cleanedOutput, context, {
+      maxOutputChars: call.args.max_output_chars || DEFAULT_READ_TOOL_CHARS,
+    });
+    const result = {
+      call_id: call.id,
+      tool: call.tool,
+      ok: true,
+      session: call.args.session,
+      session_id: resolved.id,
+      inspect: packet,
     };
     cacheSupervisorToolResult(context, cacheKey, result);
     return result;
@@ -687,7 +756,7 @@ async function requestSupervisorFinalAnswer(context) {
       'mc supervisor control',
       `The local terminal reached the ${MAX_SUPERVISOR_TOOL_ROUNDS}-round tool budget for this user request.`,
       'Do not request more tools in the next response.',
-      'Answer now from the available session list/read/send/watch results in recent conversation.',
+      'Answer now from the available session list/triage/inspect/read/send/watch results in recent conversation.',
       'If evidence is incomplete, say so briefly and give the next concrete action.',
     ].join('\n'),
   }, { auth: context.supervisorAuth }).catch((err) => ({
@@ -715,8 +784,12 @@ async function requestSupervisorFinalAnswer(context) {
 
 function supervisorToolCacheKey(call) {
   if (call.tool === 'sessions.list') return 'sessions.list';
+  if (call.tool === 'sessions.triage') return 'sessions.triage';
   if (call.tool === 'sessions.read') {
     return `sessions.read:${call.args.session}:${call.args.max_output_chars || DEFAULT_READ_TOOL_CHARS}`;
+  }
+  if (call.tool === 'sessions.inspect') {
+    return `sessions.inspect:${call.args.session}:${call.args.max_output_chars || DEFAULT_READ_TOOL_CHARS}`;
   }
   return null;
 }
@@ -729,6 +802,12 @@ function cacheSupervisorToolResult(context, cacheKey, result) {
 function cachedToolResultLine(call, result) {
   if (call.tool === 'sessions.list') {
     return `list sessions    cached ${Array.isArray(result.sessions) ? result.sessions.length : 0} sessions`;
+  }
+  if (call.tool === 'sessions.triage') {
+    return `triage sessions    cached ${Array.isArray(result.sessions) ? result.sessions.length : 0} sessions`;
+  }
+  if (call.tool === 'sessions.inspect') {
+    return `inspect ${call.args.session}    cached ${result.session_id || ''}`.trimEnd();
   }
   if (call.tool === 'sessions.read') {
     return `read ${call.args.session}    cached ${result.session_id || ''}`.trimEnd();
@@ -1030,7 +1109,12 @@ function buildWatchEvent(watch, {
   sample = null,
 } = {}) {
   const session = sample?.session || {};
-  const decision = buildSupervisorDecisionCard(session, { includeEvidence: true });
+  const output = cleanSessionOutput(sample?.output || '');
+  const signal = supervisorLatestSignal({ ...session, latest_text: output || session.latest_text }, 260);
+  const triage = buildSupervisorTriageCard({ ...session, latest_text: output || session.latest_text }, signal);
+  const inspect = buildSupervisorInspectPacketFromSession({ ...session, latest_text: output || session.latest_text }, output, {
+    maxOutputChars: 1000,
+  });
   return {
     id: newSupervisorWatchEventId(),
     watch_id: watch.id,
@@ -1044,9 +1128,10 @@ function buildWatchEvent(watch, {
     disposition: session.disposition || watch.last_disposition || null,
     state: session.state || watch.last_state || null,
     triggered_at: new Date(atMs || Date.now()).toISOString(),
-    decision,
-    evidence_excerpt: decision.latest_signal || null,
-    excerpt: sample?.output ? truncateToolText(cleanSessionOutput(sample.output), 1000) : '',
+    triage,
+    inspect,
+    evidence_excerpt: inspect.work.latest_signal || null,
+    excerpt: output ? truncateToolText(output, 1000) : '',
   };
 }
 
@@ -1064,7 +1149,7 @@ function serializeSupervisorWatchEvent(event) {
     disposition: event.disposition,
     state: event.state,
     triggered_at: event.triggered_at,
-    decision: event.decision || null,
+    triage: event.triage || null,
     evidence_excerpt: event.evidence_excerpt || null,
     excerpt: event.excerpt ? truncateToolText(event.excerpt, 1000) : '',
   })}`;
@@ -1073,13 +1158,12 @@ function serializeSupervisorWatchEvent(event) {
 function supervisorWatchEventToolResult(event = {}) {
   return {
     call_id: event.id || newSupervisorWatchEventId(),
-    tool: 'sessions.read',
+    tool: 'sessions.inspect',
     ok: true,
     session: event.session || event.session_name || null,
     session_id: event.session_id || null,
-    decision: event.decision || null,
+    inspect: event.inspect || null,
     evidence_excerpt: event.evidence_excerpt || null,
-    output: truncateToolText(cleanSessionOutput(event.excerpt || ''), DEFAULT_READ_TOOL_CHARS),
     source: 'watch_event',
     watch_id: event.watch_id || null,
     watch_condition: event.condition || null,
@@ -1127,20 +1211,20 @@ function normalizeSupervisorRun(run = {}) {
 function normalizeSupervisorToolCall(call) {
   if (!call || typeof call !== 'object') return null;
   const tool = String(call.tool || '');
-  if (!['sessions.list', 'sessions.read', 'sessions.send', 'sessions.watch'].includes(tool)) return null;
+  if (!['sessions.list', 'sessions.triage', 'sessions.inspect', 'sessions.read', 'sessions.send', 'sessions.watch'].includes(tool)) return null;
   const args = call.args && typeof call.args === 'object' ? call.args : {};
   const session = typeof args.session === 'string' ? args.session.trim() : '';
   const message = typeof args.message === 'string' ? args.message.trim() : '';
   const condition = typeof args.condition === 'string' ? args.condition.trim() : '';
   const description = typeof args.description === 'string' ? args.description.trim() : '';
-  if ((tool === 'sessions.read' || tool === 'sessions.send' || tool === 'sessions.watch') && !session) return null;
+  if ((tool === 'sessions.inspect' || tool === 'sessions.read' || tool === 'sessions.send' || tool === 'sessions.watch') && !session) return null;
   if (tool === 'sessions.send' && !message) return null;
   if (tool === 'sessions.watch' && !WATCH_CONDITIONS.has(condition)) return null;
   return {
     id: typeof call.id === 'string' && call.id.trim() ? call.id.trim() : `call_${Date.now().toString(36)}`,
     tool,
     args: {
-      session: tool === 'sessions.list' ? null : session,
+      session: (tool === 'sessions.list' || tool === 'sessions.triage') ? null : session,
       message: tool === 'sessions.send' ? message : null,
       max_output_chars: Number.isFinite(Number(args.max_output_chars))
         ? Math.max(500, Math.min(12000, Math.round(Number(args.max_output_chars))))
@@ -1246,11 +1330,11 @@ export function compactSnapshotForSupervisorSync(snapshot = {}) {
   };
 }
 
-function buildSupervisorDecisionSnapshot(snapshot = {}) {
+function buildSupervisorTriageSnapshot(snapshot = {}) {
   return {
     ...compactSnapshotForSupervisorSync(snapshot),
     sessions: Array.isArray(snapshot.sessions)
-      ? snapshot.sessions.map((session) => compactSupervisorDecisionSession(session)).filter(Boolean)
+      ? snapshot.sessions.map((session) => compactSupervisorTriageSession(session)).filter(Boolean)
       : [],
   };
 }
@@ -1274,21 +1358,22 @@ function compactSupervisorSession(session) {
     behind: finiteNumber(session.behind),
     open_question: session.open_question === true,
     safety_verdict: session.safety_verdict || null,
-    decision: buildSupervisorDecisionCard(session, { includeEvidence: false }),
+    lifecycle: buildSupervisorLifecycle(session),
   };
 }
 
-function compactSupervisorDecisionSession(session) {
+function compactSupervisorTriageSession(session) {
   const compact = compactSupervisorSession(session);
   if (!compact) return null;
+  const signal = supervisorLatestSignal(session, 260);
   return {
     ...compact,
-    latest_signal: supervisorLatestSignal(session, 260),
-    decision: buildSupervisorDecisionCard(session, { includeEvidence: true }),
+    latest_signal: signal,
+    triage: buildSupervisorTriageCard(session, signal),
   };
 }
 
-function buildSupervisorReadDecision(resolved, output, context) {
+function buildSupervisorInspectPacket(resolved, output, context, { maxOutputChars = DEFAULT_READ_TOOL_CHARS } = {}) {
   const snapshot = buildWatchSnapshot({
     sessions: [resolved.session],
     outputs: new Map([[resolved.id, output || '']]),
@@ -1305,32 +1390,88 @@ function buildSupervisorReadDecision(resolved, output, context) {
     disposition: null,
     latest_text: output || '',
   }, registryEntries);
-  return buildSupervisorDecisionCard(session, { includeEvidence: true });
+  return buildSupervisorInspectPacketFromSession(session, output, { maxOutputChars });
 }
 
-function buildSupervisorDecisionCard(session = {}, { includeEvidence = false } = {}) {
-  const disposition = session.disposition || 'unknown';
-  const signal = includeEvidence ? supervisorLatestSignal(session, 260) : '';
-  const status = supervisorDecisionStatus(session, signal);
+function buildSupervisorInspectPacketFromSession(session = {}, output = '', { maxOutputChars = DEFAULT_READ_TOOL_CHARS } = {}) {
+  const signal = supervisorLatestSignal(session, 500);
+  const status = supervisorWorkStatus(session, signal);
+  return {
+    contract: {
+      purpose: 'decision packet for one session',
+      list_is_inventory_only: true,
+      triage_is_priority_only: true,
+      lifecycle_is_not_approval: true,
+    },
+    session: compactSupervisorSession(session),
+    lifecycle: buildSupervisorLifecycle(session),
+    work: {
+      status,
+      needs_user: session.open_question === true
+        || session.disposition === 'awaiting_reply'
+        || session.disposition === 'review_suggested',
+      open_question: session.open_question === true,
+      latest_signal: signal || null,
+      suggested_user_reply: session.recommended_reply ? oneLine(session.recommended_reply, 500) : null,
+      blocker_or_failure: looksLikeFailureSignal(signal),
+    },
+    delivery: buildSupervisorDeliveryAssessment(session, signal),
+    git: compactSupervisorGitState(session),
+    evidence: {
+      level: output ? 'session_output_excerpt' : 'status_only',
+      source: 'local_session_output',
+      output_excerpt: truncateToolText(output || '', maxOutputChars),
+    },
+    limits: supervisorDecisionLimits(session, signal),
+  };
+}
+
+function buildSupervisorLifecycle(session = {}) {
+  return {
+    state: session.state || session.session_state || null,
+    disposition: session.disposition || null,
+    attachable: session.attachable === true,
+    close_readiness: supervisorSessionCloseReadiness(session),
+    safety_verdict: session.safety_verdict || null,
+    last_output_age_seconds: session.last_output_age_seconds ?? null,
+  };
+}
+
+function buildSupervisorTriageCard(session = {}, signal = '') {
+  const status = supervisorWorkStatus(session, signal);
   const rank = supervisorPriorityRank(session, signal);
-  const action = supervisorDecisionAction(session, status, signal);
-  const card = {
+  return {
     status,
     priority: priorityLabel(rank),
     priority_rank: rank,
     needs_user: session.open_question === true
-      || disposition === 'awaiting_reply'
-      || disposition === 'review_suggested',
-    action,
-    next_step: supervisorNextStep(includeEvidence ? session : { ...session, recommended_reply: null }, action, signal),
+      || session.disposition === 'awaiting_reply'
+      || session.disposition === 'review_suggested',
+    focus_reason: supervisorFocusReason(session, status, signal),
+    next_probe: supervisorNextProbe(session, status, signal),
     confidence: signal ? 'medium' : 'low',
-    git: compactSupervisorGitState(session),
+    evidence_level: signal ? 'session_output_excerpt' : 'status_only',
+    not_a_delivery_decision: true,
   };
-  if (includeEvidence) card.latest_signal = signal || null;
-  return card;
 }
 
-function supervisorDecisionStatus(session, signal = '') {
+function buildSupervisorDeliveryAssessment(session = {}, signal = '') {
+  return {
+    status: supervisorDeliveryStatus(session, signal),
+    merge_readiness: supervisorMergeReadiness(session, signal),
+    approval_evidence: supervisorApprovalEvidence(signal),
+    exact_next_action: supervisorDeliveryNextAction(session, signal),
+    cannot_conclude_from: [
+      'SAFE_TO_END',
+      'dirty_files',
+      'idle_or_stale_state',
+      'safety_verdict',
+      'absence_of_known_blockers',
+    ],
+  };
+}
+
+function supervisorWorkStatus(session, signal = '') {
   if (session.open_question === true || session.disposition === 'awaiting_reply') return 'needs_user_reply';
   if (session.disposition === 'review_suggested') return 'review_suggested';
   if (session.disposition === 'working') return 'working';
@@ -1345,7 +1486,7 @@ function supervisorDecisionStatus(session, signal = '') {
 }
 
 function supervisorPriorityRank(session, signal = '') {
-  const status = supervisorDecisionStatus(session, signal);
+  const status = supervisorWorkStatus(session, signal);
   if (status === 'needs_user_reply') return 100;
   if (status === 'review_suggested' || status === 'needs_review') return 90;
   if (status === 'blocked_or_failed') return 85;
@@ -1358,27 +1499,71 @@ function supervisorPriorityRank(session, signal = '') {
   return 20;
 }
 
-function supervisorDecisionAction(session, status, signal = '') {
-  if (status === 'needs_user_reply') return 'answer_or_delegate';
-  if (status === 'review_suggested' || status === 'needs_review' || status === 'ready_to_review') return 'review_decide';
-  if (status === 'blocked_or_failed') return 'unblock_or_fix';
-  if (status === 'has_unmerged_work') return 'review_merge_or_cleanup';
-  if (status === 'working') return 'wait_or_watch';
-  if (status === 'stale_idle') return 'inspect_or_close';
-  if (looksLikePrSignal(signal)) return 'check_pr_or_merge';
-  return 'inspect_if_relevant';
+function supervisorFocusReason(session, status, signal = '') {
+  if (status === 'needs_user_reply') return 'session is waiting for a user answer';
+  if (status === 'review_suggested' || status === 'needs_review') return 'session produced review-worthy output';
+  if (status === 'blocked_or_failed') return 'latest output looks blocked or failed';
+  if (status === 'has_unmerged_work') return 'registry reports unmerged work';
+  if (status === 'ready_to_review') return 'latest output claims completion or review readiness';
+  if (status === 'working') return 'session is actively working';
+  if (status === 'stale_idle') return 'session has been idle long enough to inspect or close';
+  if (looksLikePrSignal(signal)) return 'latest output mentions PR or CI state';
+  return 'session may be relevant but has no strong triage signal';
 }
 
-function supervisorNextStep(session, action, signal = '') {
-  if (session.recommended_reply) return `Respond with or adapt recommended reply: ${oneLine(session.recommended_reply, 180)}`;
-  if (action === 'review_decide') return 'Review the session output, then decide PR/merge/deploy or send a correction.';
-  if (action === 'answer_or_delegate') return 'Answer the open question or send a concrete instruction to the session.';
-  if (action === 'unblock_or_fix') return 'Read the failing evidence, identify blocker, then send a fix instruction or take over.';
-  if (action === 'review_merge_or_cleanup') return 'Check branch/PR state, then merge, deploy, or clean up the session.';
-  if (action === 'wait_or_watch') return 'Let it keep working or create a watch if you need a callback.';
-  if (action === 'inspect_or_close') return 'Inspect whether it still matters; close or refresh if stale.';
-  if (looksLikePrSignal(signal)) return 'Check PR/check status and merge if ready.';
-  return 'Inspect only if this session is relevant to the current goal.';
+function supervisorNextProbe(session, status, signal = '') {
+  if (session.recommended_reply) return 'answer_or_delegate';
+  if (status === 'working') return 'watch_or_wait';
+  if (status === 'stale_idle') return 'inspect_then_close_or_refresh';
+  if (status === 'needs_user_reply') return 'inspect_or_answer';
+  if (status === 'blocked_or_failed') return 'inspect_then_unblock';
+  if (looksLikePrSignal(signal)) return 'inspect_then_check_pr_ci';
+  return 'inspect';
+}
+
+function supervisorDeliveryStatus(session = {}, signal = '') {
+  if (looksLikeFailureSignal(signal)) return 'blocked_or_failed';
+  if (looksLikePrSignal(signal)) return 'mentions_pr_or_ci';
+  if (looksLikeCompletionSignal(signal) || session.disposition === 'review_suggested') return 'needs_content_review';
+  return 'not_assessed';
+}
+
+function supervisorMergeReadiness(session = {}, signal = '') {
+  if (looksLikePrSignal(signal) || session.safety_verdict === 'HAS_UNMERGED_WORK') return 'needs_pr_or_ci_check';
+  if (looksLikeCompletionSignal(signal) || session.disposition === 'review_suggested') return 'needs_content_review';
+  return 'not_assessed';
+}
+
+function supervisorApprovalEvidence(signal = '') {
+  if (!signal) return 'none';
+  if (looksLikePrSignal(signal)) return 'session_output_mentions_pr_or_ci';
+  if (looksLikeCompletionSignal(signal)) return 'session_output_claims_completion';
+  return 'session_output_excerpt';
+}
+
+function supervisorDeliveryNextAction(session = {}, signal = '') {
+  if (!signal) return 'inspect latest output before recommending approval or merge';
+  if (looksLikeFailureSignal(signal)) return 'send a concrete unblock/fix instruction or take over';
+  if (looksLikePrSignal(signal)) return 'check PR and CI state before recommending merge/deploy';
+  if (looksLikeCompletionSignal(signal) || session.disposition === 'review_suggested') {
+    return 'review output against the original goal; then approve, close, or send a correction';
+  }
+  return 'read enough context to decide whether this matters';
+}
+
+function supervisorSessionCloseReadiness(session = {}) {
+  if (session.safety_verdict === 'SAFE_TO_END') return 'safe_to_end_after_user_decision';
+  if (session.safety_verdict === 'HAS_UNMERGED_WORK') return 'has_unmerged_work';
+  if (session.safety_verdict === 'NEEDS_REVIEW') return 'needs_review';
+  return 'unknown';
+}
+
+function supervisorDecisionLimits(session = {}, signal = '') {
+  const limits = [];
+  if (!signal) limits.push('no_recent_output_evidence');
+  limits.push('status_dirty_files_and_safety_verdict_are_not_merge_approval');
+  if (session.safety_verdict === 'SAFE_TO_END') limits.push('safe_to_end_is_not_merge_ready');
+  return limits;
 }
 
 function compactSupervisorGitState(session = {}) {
