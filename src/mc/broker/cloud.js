@@ -527,6 +527,8 @@ export function createAttachBridge({
           id: sessionId,
           cols: control.cols,
           rows: control.rows,
+          side: 'cloud',
+          attach_id: attachId,
         }).catch(() => {});
         return;
       }

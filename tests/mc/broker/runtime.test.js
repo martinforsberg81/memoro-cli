@@ -88,6 +88,24 @@ function makeRuntime(opts = {}) {
   };
 }
 
+function makeConn() {
+  const writes = [];
+  return {
+    writes,
+    handlers: new Map(),
+    write(data) { writes.push(String(data)); },
+    end() {
+      this.ended = true;
+      this.handlers.get('end')?.();
+    },
+    on(event, handler) { this.handlers.set(event, handler); },
+    off(event, handler) {
+      if (this.handlers.get(event) === handler) this.handlers.delete(event);
+    },
+    emit(event, value) { this.handlers.get(event)?.(value); },
+  };
+}
+
 describe('BrokerRuntime', () => {
   test('launch_session resolves the tool locally and creates an owned PTY session', () => {
     const { runtime, fake, resolver } = makeRuntime();
@@ -281,20 +299,7 @@ describe('BrokerRuntime', () => {
 
   test('attachConnection bridges a raw socket to an owned PTY session', () => {
     const { runtime, fake } = makeRuntime();
-    const writes = [];
-    const conn = {
-      handlers: new Map(),
-      write(data) { writes.push(String(data)); },
-      end() {
-        this.ended = true;
-        this.handlers.get('end')?.();
-      },
-      on(event, handler) { this.handlers.set(event, handler); },
-      off(event, handler) {
-        if (this.handlers.get(event) === handler) this.handlers.delete(event);
-      },
-      emit(event, value) { this.handlers.get(event)?.(value); },
-    };
+    const conn = makeConn();
 
     runtime.handle({ type: 'launch_session', session: { id: 'sess_a' } });
     fake.ptys[0].emitData('snapshot');
@@ -302,18 +307,74 @@ describe('BrokerRuntime', () => {
     const res = runtime.attachConnection({ id: 'sess_a', cols: 100, rows: 40 }, conn, Buffer.from('first'));
 
     assert.equal(res.ok, true);
-    assert.equal(JSON.parse(writes[0]).ok, true);
-    assert.equal(writes[1], 'snapshot');
+    assert.equal(JSON.parse(conn.writes[0]).ok, true);
+    assert.equal(conn.writes[1], 'snapshot');
     assert.deepEqual(fake.ptys[0].resizes, [{ cols: 100, rows: 40 }]);
     assert.deepEqual(fake.ptys[0].writes, ['first']);
 
     conn.emit('data', Buffer.from('input'));
     fake.ptys[0].emitData('output');
     assert.deepEqual(fake.ptys[0].writes, ['first', 'input']);
-    assert.equal(writes.at(-1), 'output');
+    assert.equal(conn.writes.at(-1), 'output');
 
     fake.ptys[0].emitExit({ exitCode: 0, signal: null });
     assert.equal(conn.ended, true);
+  });
+
+  test('cloud attaches cannot narrow the PTY while a local attach is active', () => {
+    const { runtime, fake } = makeRuntime();
+
+    runtime.handle({ type: 'launch_session', session: { id: 'sess_a' } });
+    const local = makeConn();
+    const cloud = makeConn();
+
+    runtime.attachConnection({
+      id: 'sess_a',
+      attach_id: 'att_local',
+      side: 'local',
+      cols: 120,
+      rows: 40,
+    }, local);
+    runtime.attachConnection({
+      id: 'sess_a',
+      attach_id: 'att_cloud',
+      side: 'cloud',
+      cols: 42,
+      rows: 20,
+    }, cloud);
+
+    assert.deepEqual(fake.ptys[0].resizes, [{ cols: 120, rows: 40 }]);
+    assert.deepEqual(runtime.handle({
+      type: 'resize_session',
+      id: 'sess_a',
+      cols: 44,
+      rows: 22,
+      side: 'cloud',
+      attach_id: 'att_cloud',
+    }), { ok: true, applied: false });
+    assert.deepEqual(fake.ptys[0].resizes, [{ cols: 120, rows: 40 }]);
+
+    assert.deepEqual(runtime.handle({
+      type: 'resize_session',
+      id: 'sess_a',
+      cols: 132,
+      rows: 44,
+    }), { ok: true, applied: true });
+    assert.deepEqual(fake.ptys[0].resizes, [
+      { cols: 120, rows: 40 },
+      { cols: 132, rows: 44 },
+    ]);
+
+    local.emit('end');
+    assert.deepEqual(runtime.handle({
+      type: 'resize_session',
+      id: 'sess_a',
+      cols: 52,
+      rows: 24,
+      side: 'cloud',
+      attach_id: 'att_cloud',
+    }), { ok: true, applied: true });
+    assert.deepEqual(fake.ptys[0].resizes.at(-1), { cols: 52, rows: 24 });
   });
 
   test('attachConnection lets parallel attaches write to the same PTY', () => {

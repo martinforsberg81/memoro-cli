@@ -65,7 +65,7 @@ export class BrokerRuntime {
       if (type === 'write_session') return this._write(message.id, message.data);
       if (type === 'dispatch_session') return this._dispatch(message.id, message.message);
       if (type === 'fetch_session_output') return this._fetchOutput(message.id);
-      if (type === 'resize_session') return this._resize(message.id, message.cols, message.rows);
+      if (type === 'resize_session') return this._resize(message.id, message.cols, message.rows, message);
       if (type === 'stop_session') return this._stop(message.id, message.signal);
       if (type === 'remove_session') return this._remove(message.id);
     } catch (err) {
@@ -194,13 +194,16 @@ export class BrokerRuntime {
     };
   }
 
-  _resize(id, cols, rows) {
-    this.manager.resize(
-      requiredString(id, 'session id'),
-      positiveInteger(cols, null, 'cols'),
-      positiveInteger(rows, null, 'rows'),
-    );
-    return { ok: true };
+  _resize(id, cols, rows, context = {}) {
+    const sessionId = requiredString(id, 'session id');
+    const nextCols = positiveInteger(cols, null, 'cols');
+    const nextRows = positiveInteger(rows, null, 'rows');
+    const applied = this._shouldApplyResize({
+      sessionId,
+      side: context?.side,
+    });
+    if (applied) this.manager.resize(sessionId, nextCols, nextRows);
+    return { ok: true, applied };
   }
 
   _stop(id, signal) {
@@ -226,7 +229,12 @@ export class BrokerRuntime {
     if (!session) throw new Error(`unknown broker session: ${id}`);
     conn.on?.('error', () => {});
 
-    if (message.cols != null || message.rows != null) {
+    const attachId = stringOrDefault(message.attach_id, makeAttachId());
+    const attachSide = stringOrDefault(message.side, 'local');
+    if (
+      (message.cols != null || message.rows != null)
+      && this._shouldApplyResize({ sessionId: id, side: attachSide })
+    ) {
       this.manager.resize(
         id,
         positiveInteger(message.cols, null, 'cols'),
@@ -234,11 +242,10 @@ export class BrokerRuntime {
       );
     }
 
-    const attachId = stringOrDefault(message.attach_id, makeAttachId());
     const attach = {
       attach_id: attachId,
       session_id: id,
-      side: stringOrDefault(message.side, 'local'),
+      side: attachSide,
       mode: 'write',
       writer: true,
       connected_at: new Date().toISOString(),
@@ -348,6 +355,18 @@ export class BrokerRuntime {
       writer_attach_id: null,
     };
   }
+
+  _shouldApplyResize({ sessionId, side } = {}) {
+    if (!isRemoteAttachSide(side)) return true;
+    return !this._hasLocalAttach(sessionId);
+  }
+
+  _hasLocalAttach(sessionId) {
+    for (const attach of this.attaches.values()) {
+      if (attach.session_id === sessionId && !isRemoteAttachSide(attach.side)) return true;
+    }
+    return false;
+  }
 }
 
 function buildSessionMetadata({ id, name, cwd, sidecars } = {}) {
@@ -422,6 +441,10 @@ function isReusableLiveSession(session) {
     && session?.attachable !== false
     && session?.session_state !== 'dead'
     && !session?.exit;
+}
+
+function isRemoteAttachSide(side) {
+  return side === 'cloud' || side === 'browser' || side === 'remote';
 }
 
 function normalizePathForMatch(value) {

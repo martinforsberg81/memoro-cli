@@ -112,6 +112,7 @@ export async function launchBrokerOwnedSession({
     ...env,
     MEMORO_MC_PARENT: '1',
   };
+  let codexDeviceAuthBeforeLaunch = false;
   if (launch.id === 'codex' && isCloudBrokerLaunch(cloudBroker)) {
     const prepareAuth = deps.prepareCloudCodexAuth || prepareCloudCodexAuth;
     const auth = await prepareAuth({
@@ -126,6 +127,9 @@ export async function launchBrokerOwnedSession({
     }
     if (auth.startupMessageSafe === false) {
       groundingLaunchMessage = null;
+    }
+    if (auth.interactiveLogin === true) {
+      codexDeviceAuthBeforeLaunch = true;
     }
   }
   const paths = brokerSessionPaths(codingSessionId);
@@ -190,6 +194,7 @@ export async function launchBrokerOwnedSession({
       launch_options: {
         startupMessage: groundingLaunchMessage,
         effectivePolicy,
+        ...(codexDeviceAuthBeforeLaunch ? { codexDeviceAuthBeforeLaunch } : {}),
       },
       cols: stdout.columns || 80,
       rows: stdout.rows || 24,

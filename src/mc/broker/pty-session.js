@@ -72,7 +72,11 @@ export class PtySession extends EventEmitter {
       ? { ...this.launchOptions, startupMessage: null }
       : this.launchOptions;
 
-    this.pty = this.ptyFactory.spawn(this.launchSpec.bin, this.launchSpec.args(this.argv, spawnOptions), {
+    const spawnPlan = typeof this.launchSpec.spawn === 'function'
+      ? this.launchSpec.spawn(this.argv, spawnOptions)
+      : { bin: this.launchSpec.bin, args: this.launchSpec.args(this.argv, spawnOptions) };
+
+    this.pty = this.ptyFactory.spawn(spawnPlan.bin, spawnPlan.args, {
       name: this.termName,
       cols: this.cols,
       rows: this.rows,

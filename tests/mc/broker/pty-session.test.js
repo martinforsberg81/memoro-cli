@@ -125,6 +125,38 @@ describe('PtySession', () => {
     assert.equal(session.status().started_at, new Date(1_000).toISOString());
   });
 
+  test('uses launchSpec.spawn when an adapter needs to override the process plan', () => {
+    const { session, fake } = makeSession({
+      launchSpec: {
+        bin: '/x/codex',
+        args: () => assert.fail('spawn override should own args rendering'),
+        spawn: (argv, opts) => {
+          assert.deepEqual(argv, ['--foo']);
+          assert.equal(opts.codexDeviceAuthBeforeLaunch, true);
+          return {
+            bin: '/bin/sh',
+            args: ['-c', 'login then exec', 'mc-codex', '/x/codex', ...argv],
+          };
+        },
+      },
+      launchOptions: { codexDeviceAuthBeforeLaunch: true },
+    });
+
+    session.start();
+
+    assert.deepEqual(fake.calls[0], {
+      bin: '/bin/sh',
+      args: ['-c', 'login then exec', 'mc-codex', '/x/codex', '--foo'],
+      options: {
+        name: 'xterm-test',
+        cols: 100,
+        rows: 40,
+        cwd: '/repo',
+        env: { TEST_ENV: '1' },
+      },
+    });
+  });
+
   test('captures PTY output and broadcasts data events', () => {
     const { session, fake, tick } = makeSession();
     const seen = [];

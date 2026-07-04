@@ -164,13 +164,30 @@ export function instructionsFile() {
 export function launchSpec({ resolveBinary = resolveRealCodexBinary } = {}) {
   let bin = null;
   try { bin = resolveBinary(); } catch { bin = null; }
+  const buildArgs = (argv = [], { startupMessage = null, effectivePolicy = null } = {}) => {
+    const base = [...argv];
+    const policyArgs = renderPolicy(effectivePolicy).launchArgs;
+    void startupMessage;
+    return [...base, ...policyArgs];
+  };
   return {
     bin,
-    args: (argv = [], { startupMessage = null, effectivePolicy = null } = {}) => {
-      const base = [...argv];
-      const policyArgs = renderPolicy(effectivePolicy).launchArgs;
-      void startupMessage;
-      return [...base, ...policyArgs];
+    args: buildArgs,
+    spawn: (argv = [], options = {}) => {
+      const args = buildArgs(argv, options);
+      if (!options?.codexDeviceAuthBeforeLaunch) {
+        return { bin, args };
+      }
+      return {
+        bin: '/bin/sh',
+        args: [
+          '-c',
+          CODEX_DEVICE_AUTH_BOOTSTRAP,
+          'mc-codex-device-auth',
+          bin,
+          ...args,
+        ],
+      };
     },
     heartbeatSource: 'codex',
     label: LABEL,
@@ -180,6 +197,16 @@ export function launchSpec({ resolveBinary = resolveRealCodexBinary } = {}) {
     submitEnterDelayMs: 150,
   };
 }
+
+const CODEX_DEVICE_AUTH_BOOTSTRAP = [
+  'set -eu',
+  'codex_bin=$1',
+  'shift',
+  'printf "%s\\n" "mc cloud: Codex needs ChatGPT authorization. Starting Codex device login."',
+  'printf "%s\\n" "Complete the device login shown below; Codex will start automatically after approval."',
+  '"$codex_bin" login --device-auth',
+  'exec "$codex_bin" "$@"',
+].join('\n');
 
 export function resumeArgs({ sessionId } = {}) {
   if (!sessionId || typeof sessionId !== 'string') return null;
