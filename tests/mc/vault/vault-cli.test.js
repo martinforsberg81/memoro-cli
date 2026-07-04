@@ -32,7 +32,7 @@ describe('mc vault — subprocess wiring', () => {
     assert.match(res.stdout, /mc vault/);
     assert.match(res.stdout, /VERBS/);
     // The help must include every shipped verb name.
-    for (const verb of ['setup', 'unlock', 'lock', 'scan', 'import', 'list', 'get', 'set', 'rm', 'rotate', 'status', 'change-password']) {
+    for (const verb of ['setup', 'unlock', 'lock', 'scan', 'import', 'bindings', 'bind', 'list', 'get', 'set', 'rm', 'rotate', 'status', 'change-password']) {
       assert.ok(res.stdout.includes(verb), `help missing verb: ${verb}`);
     }
   });
@@ -168,6 +168,31 @@ describe('mc vault — subprocess wiring', () => {
     const parsed = JSON.parse(res.stdout);
     assert.equal(parsed.ok, false);
     assert.match(parsed.error, /requires --no-confirm/);
+  });
+
+  it('`mc vault bind --dry-run --json` previews a value-free repo binding without login', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mc-vault-bind-cli-'));
+    const res = runMc([
+      'vault',
+      'bind',
+      'wrangler:memoro:OPENAI_API_KEY',
+      'OPENAI_API_KEY',
+      '--file',
+      '.dev.vars',
+      '--dry-run',
+      '--json',
+    ], { cwd: dir });
+    assert.equal(res.status, 0, res.stderr);
+    assert.equal(res.stderr, '');
+
+    const parsed = JSON.parse(res.stdout);
+    assert.equal(parsed.ok, true);
+    assert.equal(parsed.dry_run, true);
+    assert.equal(parsed.label, 'wrangler:memoro:OPENAI_API_KEY');
+    assert.equal(parsed.key, 'OPENAI_API_KEY');
+    assert.equal(parsed.file, '.dev.vars');
+    assert.deepEqual(parsed.writes, [{ path: '.mc/secrets.json', action: 'created' }]);
+    assert.ok(!res.stdout.includes('sk-'), `bind preview leaked a token-like value: ${res.stdout}`);
   });
 });
 

@@ -80,6 +80,18 @@ Manual creation remains explicit about scope:
 This lets a user keep shared/global tokens in the vault while choosing separate
 OpenAI/Anthropic/etc bindings per repo.
 
+### `mc vault bind <label> <ENV_KEY> [--bind-file <path>]`
+
+Attach an existing vault label to the current repo without re-entering the
+secret value. The command verifies that the encrypted label exists, then writes
+or updates the value-free `.mc/secrets.json` binding. `--dry-run` previews the
+binding without looking up the vault or writing files.
+
+### `mc vault bindings [--json]`
+
+Show the current repo's value-free binding file: source files, env keys, and
+vault labels only. Never print secret values.
+
 ### `mc vault import <file> --move`
 
 After import succeeds, rewrite the source file so secrets are no longer stored
@@ -208,6 +220,9 @@ Shipped:
     in the bound files, are included in the per-session vault manifest, are
     covered by the same LLM read-blocking hook, and are shredded by `mc end`.
     Existing keys outside the mc-managed block are never overwritten.
+14. `mc vault bind <label> <ENV_KEY>` attaches an existing encrypted vault
+    secret to the current repo without re-entering the value, and
+    `mc vault bindings` shows what the repo will materialise.
 
 No source-file rewrite path exists yet.
 

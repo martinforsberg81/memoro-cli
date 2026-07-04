@@ -259,6 +259,109 @@ describe('mc vault — full lifecycle (in-process)', () => {
     assert.equal(list.secrets[0].account, 'manual-repo');
   });
 
+  it('bind attaches an existing secret to the current repo without re-entering the value', async () => {
+    await vaultRun(['setup', '--json'], { portal });
+    const dir = mkdtempSync(join(tmpdir(), 'mc-vault-bind-existing-'));
+    const label = 'wrangler:memoro:OPENAI_API_KEY';
+    cap.restore(); cap = captureConsole();
+    await vaultRun(
+      ['set', label, '--type', 'api_token', '--provider', 'wrangler', '--account', 'memoro', '--json', '--no-confirm'],
+      { portal, cwd: dir },
+    );
+    cap.restore(); cap = captureConsole();
+
+    const rc = await vaultRun(
+      ['bind', label, 'OPENAI_API_KEY', '--bind-file', '.dev.vars', '--json'],
+      { portal, cwd: dir },
+    );
+    cap.restore();
+
+    assert.equal(rc, 0, `bind failed: ${JSON.stringify({ out: cap.out, err: cap.err })}`);
+    const out = JSON.parse(cap.out.join('\n'));
+    assert.equal(out.label, label);
+    assert.equal(out.key, 'OPENAI_API_KEY');
+    assert.equal(out.file, '.dev.vars');
+    assert.deepEqual(out.writes, [{ path: '.mc/secrets.json', action: 'created' }]);
+    assert.ok(!JSON.stringify(out).includes(PW), 'bind JSON must not leak the secret value');
+
+    const bindingsBody = readFileSync(join(dir, '.mc', 'secrets.json'), 'utf8');
+    assert.ok(!bindingsBody.includes(PW), 'binding file must not contain the secret value');
+    assert.deepEqual(JSON.parse(bindingsBody), {
+      version: 1,
+      sources: [
+        {
+          file: '.dev.vars',
+          format: 'dotenv',
+          keys: {
+            OPENAI_API_KEY: label,
+          },
+          materialise: 'file',
+        },
+      ],
+    });
+  });
+
+  it('bind dry-run plans a repo binding without vault lookup or file writes', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mc-vault-bind-dry-run-'));
+    cap.restore(); cap = captureConsole();
+
+    const rc = await vaultRun(
+      ['bind', 'BRAVE_SEARCH_API_KEY', 'BRAVE_SEARCH_API_KEY', '--file', '.dev.vars', '--dry-run', '--json'],
+      { cwd: dir },
+    );
+    cap.restore();
+
+    assert.equal(rc, 0, `bind dry-run failed: ${JSON.stringify({ out: cap.out, err: cap.err })}`);
+    const out = JSON.parse(cap.out.join('\n'));
+    assert.equal(out.dry_run, true);
+    assert.equal(out.binding.sources[0].file, '.dev.vars');
+    assert.equal(out.binding.sources[0].keys.BRAVE_SEARCH_API_KEY, 'BRAVE_SEARCH_API_KEY');
+    assert.deepEqual(out.writes, [{ path: '.mc/secrets.json', action: 'created' }]);
+    assert.equal(existsSync(join(dir, '.mc', 'secrets.json')), false);
+  });
+
+  it('bindings lists repo-local bindings without secret values', async () => {
+    await vaultRun(['setup', '--json'], { portal });
+    const dir = mkdtempSync(join(tmpdir(), 'mc-vault-bindings-list-'));
+    const label = 'wrangler:memoro:ADMIN_TOKEN';
+    await vaultRun(
+      ['set', label, '--type', 'api_token', '--provider', 'wrangler', '--account', 'memoro', '--json', '--no-confirm'],
+      { portal, cwd: dir },
+    );
+    await vaultRun(
+      ['bind', label, 'ADMIN_TOKEN', '--bind-file', '.dev.vars', '--json'],
+      { portal, cwd: dir },
+    );
+    cap.restore(); cap = captureConsole();
+
+    const rc = await vaultRun(['bindings', '--json'], { portal, cwd: dir });
+    cap.restore();
+
+    assert.equal(rc, 0);
+    const out = JSON.parse(cap.out.join('\n'));
+    assert.equal(out.exists, true);
+    assert.equal(out.count, 1);
+    assert.equal(out.sources[0].keys.ADMIN_TOKEN, label);
+    assert.ok(!JSON.stringify(out).includes(PW), 'bindings JSON must not leak the secret value');
+  });
+
+  it('bind refuses to attach a missing label', async () => {
+    await vaultRun(['setup', '--json'], { portal });
+    const dir = mkdtempSync(join(tmpdir(), 'mc-vault-bind-missing-'));
+    cap.restore(); cap = captureConsole();
+
+    const rc = await vaultRun(
+      ['bind', 'missing-label', 'OPENAI_API_KEY', '--json'],
+      { portal, cwd: dir },
+    );
+    cap.restore();
+
+    assert.equal(rc, 1);
+    const out = JSON.parse(cap.out.join('\n'));
+    assert.match(out.error, /no secret with label/);
+    assert.equal(existsSync(join(dir, '.mc', 'secrets.json')), false);
+  });
+
   it('set refuses duplicate labels with a pointer at rotate', async () => {
     await vaultRun(['setup', '--json'], { portal });
     cap.restore(); cap = captureConsole();

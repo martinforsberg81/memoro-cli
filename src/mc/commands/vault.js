@@ -62,6 +62,7 @@ import {
   buildDotenvSecretBinding,
   persistSecretBindingPlan,
   planSecretBindingPersistence,
+  readSecretBindings,
 } from '../vault/bindings.js';
 
 const PASSPHRASE_ENV = 'MC_VAULT_PASSPHRASE';
@@ -77,6 +78,8 @@ const VERBS = {
   status:            { handler: cmdStatus,           help: 'Show vault setup + unlock state' },
   scan:              { handler: cmdScan,             help: 'Scan local dotenv files for import candidates (no values)' },
   import:            { handler: cmdImport,           help: 'Import dotenv secrets into the vault (use --dry-run to preview)' },
+  bindings:          { handler: cmdBindings,         help: 'Show repo-local secret bindings (no values)' },
+  bind:              { handler: cmdBind,             help: 'Attach an existing vault secret to this repo' },
   list:              { handler: cmdList,             help: 'List secret labels (no values)' },
   get:               { handler: cmdGet,              help: 'Print a secret (prompts for confirmation)' },
   set:               { handler: cmdSet,              help: 'Store a new secret (use --bind KEY to attach it to this repo)' },
@@ -129,6 +132,7 @@ COMMON OPTIONS
   --dry-run           Preview planned writes without mutating vault/files
   --no-confirm        Skip confirmation prompts (use with care)
   --bind <ENV_KEY>    For \`set\`: attach this secret to the current repo
+  --bind-file <path>  For \`set\` and \`bind\`: materialise into this file (default .env)
   --type <kind>       For \`set\` and \`list\`: ${MC_SECRET_KINDS.join(' | ')}
 
 MASTER PASSWORD
@@ -421,6 +425,152 @@ function printImportResult(result) {
   } else {
     console.log('\nNo files changed.');
   }
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// Verb: bindings
+// ────────────────────────────────────────────────────────────────────────
+
+async function cmdBindings(argv, opts = {}) {
+  const flags = parseFlags(argv);
+  if (flags.positional.length) {
+    emit(flags.json, { ok: false, error: 'usage: mc vault bindings [--json]' });
+    return 2;
+  }
+
+  const cwd = opts.cwd || process.cwd();
+  let bindings;
+  try {
+    bindings = await readSecretBindings({ cwd });
+  } catch (err) {
+    emit(flags.json, { ok: false, error: err.message });
+    return 1;
+  }
+
+  const sources = bindings?.sources || [];
+  const count = sources.reduce((n, source) => n + Object.keys(source.keys || {}).length, 0);
+  const result = {
+    ok: true,
+    path: SECRET_BINDINGS_RELATIVE_PATH,
+    exists: !!bindings,
+    count,
+    sources,
+  };
+  if (flags.json) {
+    console.log(JSON.stringify(result, null, 2));
+  } else {
+    printBindings(result);
+  }
+  return 0;
+}
+
+function printBindings(result) {
+  if (!result.exists || !result.count) {
+    console.log(`No repo secret bindings in ${SECRET_BINDINGS_RELATIVE_PATH}.`);
+    console.log(`Run \`mc vault bind <label> <ENV_KEY> --bind-file .dev.vars\` to attach an existing secret to this repo.`);
+    return;
+  }
+
+  console.log(`mc vault bindings — ${result.count} key${result.count === 1 ? '' : 's'} in ${result.path}:\n`);
+  for (const source of result.sources) {
+    console.log(source.file);
+    const entries = Object.entries(source.keys || {});
+    const width = Math.max(8, ...entries.map(([key]) => key.length));
+    for (const [key, label] of entries) {
+      console.log(`  ${key.padEnd(width)}  -> ${label}`);
+    }
+    console.log('');
+  }
+  console.log('Values stay encrypted in mc vault and materialise only for sessions launched in this repo.');
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// Verb: bind
+// ────────────────────────────────────────────────────────────────────────
+
+async function cmdBind(argv, opts = {}) {
+  const flags = parseFlags(argv);
+  const label = flags.positional[0];
+  const key = flags.positional[1] || flags.bind;
+  if (!label || !key) {
+    emit(flags.json, { ok: false, error: 'usage: mc vault bind <label> <ENV_KEY> [--bind-file .env] [--dry-run] [--json]' });
+    return 2;
+  }
+  if (flags.positional.length > 2) {
+    emit(flags.json, { ok: false, error: `unexpected arg: ${flags.positional[2]}` });
+    return 2;
+  }
+
+  const cwd = opts.cwd || process.cwd();
+  const file = flags.bindFile || '.env';
+  const binding = buildDotenvSecretBinding({ file, key, label });
+  const bindingPlan = await planSecretBindingPersistence(binding, { cwd });
+  const preview = {
+    ok: true,
+    dry_run: !!flags.dryRun,
+    label,
+    key,
+    file,
+    binding,
+    binding_file: {
+      path: SECRET_BINDINGS_RELATIVE_PATH,
+      action: bindingPlan.changed ? (bindingPlan.existing ? 'updated' : 'created') : 'unchanged',
+      changed: bindingPlan.changed,
+    },
+    writes: bindingPlan.changed ? [{
+      path: SECRET_BINDINGS_RELATIVE_PATH,
+      action: bindingPlan.existing ? 'updated' : 'created',
+    }] : [],
+  };
+
+  if (flags.dryRun) {
+    if (flags.json) console.log(JSON.stringify(preview, null, 2));
+    else printBindResult(preview);
+    return 0;
+  }
+
+  const portal = await loadPortal(opts);
+  const config = await requireSetup(portal);
+  if (!config) return 1;
+  const got = await getUnlockedVaultKey({ portal, config, flags, opts });
+  if (!got) return 1;
+  const found = await findSecretByLabel(portal, got.vaultKey, label);
+  if (!found) {
+    emit(flags.json, { ok: false, error: `no secret with label ${JSON.stringify(label)}. Run \`mc vault list\` to see labels.` });
+    return 1;
+  }
+
+  const bindingFile = await persistSecretBindingPlan(bindingPlan);
+  const result = {
+    ...preview,
+    dry_run: false,
+    binding_file: bindingFile,
+    writes: bindingFile.changed ? [{ path: bindingFile.path, action: bindingFile.action }] : [],
+  };
+  if (flags.json) console.log(JSON.stringify(result, null, 2));
+  else printBindResult(result);
+  return 0;
+}
+
+function printBindResult(result) {
+  const target = `${result.file}:${result.key}`;
+  if (result.dry_run) {
+    console.log(`Would bind "${result.label}" to ${target}.`);
+    console.log(result.writes.length
+      ? `Would ${result.writes[0].action} ${result.writes[0].path}.`
+      : `${SECRET_BINDINGS_RELATIVE_PATH} is already up to date.`);
+    console.log('Dry-run only: no vault lookup and no files changed.');
+    return;
+  }
+
+  console.log(`Bound "${result.label}" to ${target}.`);
+  if (result.binding_file?.changed) {
+    const verb = result.binding_file.action === 'created' ? 'Created' : 'Updated';
+    console.log(`${verb} ${result.binding_file.path}.`);
+  } else {
+    console.log(`Repo bindings already up to date in ${result.binding_file?.path || SECRET_BINDINGS_RELATIVE_PATH}.`);
+  }
+  console.log('It will materialise for sessions launched in this repo.');
 }
 
 function readDotenvValueMap(file, { cwd }) {
@@ -1394,6 +1544,7 @@ function bytesToBase64(bytes) {
  *   --stdin
  *   --bind <ENV_KEY>
  *   --bind-file <path>
+ *   --file <path>         alias for --bind-file
  *   --type <kind>
  *   --provider <name>
  *   --account <name>
@@ -1431,6 +1582,7 @@ function parseFlags(argv) {
     else if (a === '--stdin') out.stdin = true;
     else if (a === '--bind') out.bind = argv[++i];
     else if (a === '--bind-file') out.bindFile = argv[++i];
+    else if (a === '--file') out.bindFile = argv[++i];
     else if (a === '--type') out.type = argv[++i];
     else if (a === '--provider') out.provider = argv[++i];
     else if (a === '--account') out.account = argv[++i];

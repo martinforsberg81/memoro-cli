@@ -7,6 +7,9 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- `mc vault bind <label> <ENV_KEY>` attaches existing vault secrets to a repo
+  without re-entering values, and `mc vault bindings` shows the repo's
+  value-free materialisation map.
 - `npm run smoke:mc` runs a release/global-install smoke gate against a selected
   `mc` binary, checking Codex defaults, help text, tool-switch dry-run,
   no-launch session creation, explicit Claude resume, and fanout defaults in an
