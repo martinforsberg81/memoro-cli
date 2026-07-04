@@ -211,7 +211,7 @@ describe('launchBrokerOwnedSession', () => {
     assert.match(streams.out(), /sess_server123/);
   });
 
-  test('lets cloud Codex reach interactive login without auto-submitting grounding', async () => {
+  test('routes cloud Codex interactive login through device auth without auto-submitting grounding', async () => {
     const streams = makeStreams();
     const requests = [];
     let ensuredBroker = false;
@@ -256,6 +256,7 @@ describe('launchBrokerOwnedSession', () => {
         prepareCloudCodexAuth: async () => ({
           ok: true,
           source: 'interactive-login',
+          interactiveLogin: true,
           startupMessageSafe: false,
         }),
         readRepoPolicyConfig: () => ({ config: {}, warnings: [] }),
@@ -272,6 +273,7 @@ describe('launchBrokerOwnedSession', () => {
     assert.equal(requests.length, 1);
     assert.equal(requests[0].session.tool, 'codex');
     assert.equal(requests[0].session.launch_options.startupMessage, null);
+    assert.equal(requests[0].session.launch_options.codexDeviceAuthBeforeLaunch, true);
   });
 
   test('prepares cloud Codex auth and passes scrubbed env to broker launch', async () => {

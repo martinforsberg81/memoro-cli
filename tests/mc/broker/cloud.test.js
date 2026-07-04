@@ -569,6 +569,8 @@ describe('CloudBrokerClient', () => {
       id: 'sess_a',
       cols: 90,
       rows: 25,
+      side: 'cloud',
+      attach_id: 'att_a',
     });
 
     client.stop();

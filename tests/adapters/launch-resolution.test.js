@@ -127,6 +127,50 @@ describe('codex launchSpec — binary resolution', () => {
     ]);
   });
 
+  it('spawn() defaults to the resolved binary and rendered args', () => {
+    const spec = codex.launchSpec({ resolveBinary: () => '/x/codex' });
+    const effectivePolicy = resolveEffectivePolicy({
+      entry: {
+        tool: 'codex',
+        policy: { permissions: { workspace: 'read-only' } },
+      },
+    });
+
+    assert.deepEqual(spec.spawn(['resume', 'cx_123'], { effectivePolicy }), {
+      bin: '/x/codex',
+      args: ['resume', 'cx_123', '--sandbox', 'read-only'],
+    });
+  });
+
+  it('spawn() can bootstrap cloud Codex through device auth before TUI launch', () => {
+    const spec = codex.launchSpec({ resolveBinary: () => '/x/codex' });
+    const effectivePolicy = resolveEffectivePolicy({
+      entry: {
+        tool: 'codex',
+        policy: { permissions: { workspace: 'worktree', approval: 'never' } },
+      },
+    });
+
+    const plan = spec.spawn(['resume', 'cx_123'], {
+      effectivePolicy,
+      codexDeviceAuthBeforeLaunch: true,
+    });
+
+    assert.equal(plan.bin, '/bin/sh');
+    assert.equal(plan.args[0], '-c');
+    assert.match(plan.args[1], /login --device-auth/);
+    assert.equal(plan.args[2], 'mc-codex-device-auth');
+    assert.equal(plan.args[3], '/x/codex');
+    assert.deepEqual(plan.args.slice(4), [
+      'resume',
+      'cx_123',
+      '--sandbox',
+      'workspace-write',
+      '--ask-for-approval',
+      'never',
+    ]);
+  });
+
   it('does not throw when the resolver throws (fails to bin=null)', () => {
     const spec = codex.launchSpec({ resolveBinary: () => { throw new Error('boom'); } });
     assert.equal(spec.bin, null);
