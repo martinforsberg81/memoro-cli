@@ -1,5 +1,5 @@
 /**
- * `mc auth memoro` and `mc auth <tool>` per-target helpers (§11c).
+ * `mc auth memoro`, `mc auth github`, and `mc auth <tool>` per-target helpers (§11c).
  *
  * Shape contract:
  *   - `mc auth memoro`           — shells out to `memoro-cli login`
@@ -7,6 +7,7 @@
  *   - `mc auth memoro --status`  — prints just the Memoro section
  *   - `mc auth <tool> [--status]` — prints just that tool's row + hint
  *   - `mc auth gemini`           — surfaces the planned-tool stub
+ *   - `mc auth github`           — checks host gh auth without printing tokens
  *
  * Memoro alias is exercised via the keychain fallback (MEMORO_API_URL
  * pointing at a closed port → API check fails but keychain write
@@ -24,7 +25,7 @@ import { existsSync } from 'node:fs';
 
 import { runMc, parseJsonOrNull } from '../_helpers/cli.js';
 import { makeTempRepo } from '../_helpers/git-fixture.js';
-import { parseMemoroArgs, resolveMemoroBin } from '../../../src/mc/commands/auth.js';
+import { parseMemoroArgs, probeGitHub, resolveMemoroBin } from '../../../src/mc/commands/auth.js';
 
 describe('mc auth memoro', () => {
   let repo;
@@ -94,6 +95,74 @@ describe('mc auth memoro', () => {
     assert.match(r.stderr, /mutually exclusive/);
   });
 
+});
+
+describe('mc auth github', () => {
+  let repo;
+  let pidDir;
+
+  beforeEach(() => {
+    repo = makeTempRepo({ name: 'auth-github' });
+    pidDir = mkdtempSync(join(tmpdir(), 'mc-auth-pid-'));
+  });
+  afterEach(() => {
+    repo.cleanup();
+    try { rmSync(pidDir, { recursive: true, force: true }); } catch {}
+  });
+
+  test('--json shape: just the github key', () => {
+    const r = runMc(['auth', 'github', '--json'], {
+      cwd: repo.dir,
+      env: { MC_HOME: repo.mcHome, MC_ORPHAN_PID_DIR: pidDir, HOME: repo.root },
+    });
+    const j = parseJsonOrNull(r.stdout);
+    assert.ok(j, r.stdout);
+    assert.ok(j.github);
+    assert.equal(typeof j.github.installed, 'boolean');
+    assert.equal(j.github.token_exposed, false);
+    assert.ok(!j.tools, 'tools section must be omitted');
+  });
+
+  test('probeGitHub parses host gh auth without invoking token export', () => {
+    const calls = [];
+    const fakeSpawn = (cmd, args) => {
+      calls.push([cmd, args]);
+      if (cmd === 'which' && args[0] === 'gh') {
+        return { status: 0, stdout: '/usr/local/bin/gh\n', stderr: '' };
+      }
+      if (cmd === 'gh' && args[0] === '--version') {
+        return { status: 0, stdout: 'gh version 2.95.0 (2026-06-17)\n', stderr: '' };
+      }
+      if (cmd === 'gh' && args[0] === 'auth' && args[1] === 'status') {
+        return {
+          status: 0,
+          stdout: JSON.stringify({
+            hosts: {
+              'github.com': [{
+                state: 'success',
+                active: true,
+                login: 'martinforsberg81',
+                tokenSource: 'keyring',
+                scopes: 'gist, read:org, repo',
+              }],
+            },
+          }),
+          stderr: '',
+        };
+      }
+      return { status: 1, stdout: '', stderr: 'unexpected command' };
+    };
+
+    const s = probeGitHub({ spawnSyncFn: fakeSpawn });
+    assert.equal(s.authenticated, true);
+    assert.equal(s.login, 'martinforsberg81');
+    assert.equal(s.token_source, 'keyring');
+    assert.equal(s.token_exposed, false);
+    assert.equal(s.capabilities.pull_requests, true);
+    assert.equal(s.capabilities.merge, true);
+    assert.equal(calls.some(([cmd, args]) => cmd === 'gh' && args.includes('token')), false);
+    assert.equal(calls.some(([cmd, args]) => cmd === 'gh' && args.includes('--show-token')), false);
+  });
 });
 
 describe('mc auth <tool>', () => {
