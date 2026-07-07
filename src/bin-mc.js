@@ -286,6 +286,7 @@ SETUP
   mc auth status [--json]         Check Memoro + coding-tool auth
   mc auth memoro                  Token login/logout for CI or headless setup
   mc auth devices                 List/revoke Memoro device tokens
+  mc auth github [--json]         Check host GitHub CLI auth for PR/merge work
   mc auth <claude|codex|gemini>   Re-check one coding tool
   mc tool-switch <tool>           Set the default tool for future sessions
 

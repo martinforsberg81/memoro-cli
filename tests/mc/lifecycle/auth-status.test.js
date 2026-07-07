@@ -1,8 +1,8 @@
 /**
  * `mc auth status` integration spec (§11a).
  *
- * The four-section layout: Memoro account, LLM tools, Shell wrapper,
- * Workspace. We assert on `--json` so test stability doesn't ride on
+ * The five-section layout: Memoro account, LLM tools, GitHub CLI,
+ * Shell wrapper, Workspace. We assert on `--json` so test stability doesn't ride on
  * exact text spacing.
  *
  * Real keychain reads + real `which` checks are unavoidable here (the
@@ -34,7 +34,7 @@ describe('mc auth status', () => {
     try { rmSync(pidDir, { recursive: true, force: true }); } catch {}
   });
 
-  test('--json shape: memoro + tools + shell_wrapper + workspace', () => {
+  test('--json shape: memoro + tools + github + shell_wrapper + workspace', () => {
     const r = runMc(['auth', 'status', '--json'], {
       cwd: repo.dir,
       env: { MC_HOME: repo.mcHome, MC_ORPHAN_PID_DIR: pidDir, HOME: repo.root },
@@ -47,6 +47,9 @@ describe('mc auth status', () => {
     const ids = j.tools.map((t) => t.id).sort();
     assert.deepEqual(ids, ['claude-code', 'codex', 'gemini-cli']);
     assert.ok(j.shell_wrapper);
+    assert.ok(j.github);
+    assert.equal(j.github.token_exposed, false);
+    assert.equal(typeof j.github.capabilities.merge, 'boolean');
     assert.ok(j.workspace);
     assert.ok(j.policy);
     assert.equal(j.policy.default_tool, 'codex');
@@ -142,13 +145,14 @@ describe('mc auth status', () => {
     assert.match(j.shell_wrapper.rc, /\.zshrc$/);
   });
 
-  test('human output renders all four sections', () => {
+  test('human output renders all five sections', () => {
     const r = runMc(['auth', 'status'], {
       cwd: repo.dir,
       env: { MC_HOME: repo.mcHome, MC_ORPHAN_PID_DIR: pidDir, HOME: repo.root },
     });
     assert.match(r.stdout, /Memoro account:/);
     assert.match(r.stdout, /LLM tools on this machine:/);
+    assert.match(r.stdout, /GitHub CLI:/);
     assert.match(r.stdout, /Shell wrapper:/);
     assert.match(r.stdout, /Policy:/);
     assert.match(r.stdout, /codex: native auth owned by tool; no vault target/);
