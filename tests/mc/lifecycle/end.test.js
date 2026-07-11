@@ -165,6 +165,44 @@ describe('mc end', () => {
     assert.ok(!wts.includes('/current'), `worktree should be gone; got:\n${wts}`);
   });
 
+  test('bare `mc end` from primary repo ends the last opened session for that repo', () => {
+    git(repo.dir, 'branch sess/older main');
+    git(repo.dir, 'branch sess/latest main');
+    const oldWt = join(repo.mcHome, 'worktrees', 'repo', 'older');
+    const latestWt = join(repo.mcHome, 'worktrees', 'repo', 'latest');
+    addWorktree(repo.dir, oldWt, 'sess/older');
+    addWorktree(repo.dir, latestWt, 'sess/latest');
+    writeRegistry(repo.mcHome, [
+      makeEntry({
+        name: 'older',
+        branch: 'sess/older',
+        worktree_path: oldWt,
+        primary_worktree: repo.dir,
+        last_opened_at: '2026-07-10T10:00:00.000Z',
+        safety_verdict: 'SAFE_TO_END',
+      }),
+      makeEntry({
+        name: 'latest',
+        branch: 'sess/latest',
+        worktree_path: latestWt,
+        primary_worktree: repo.dir,
+        last_opened_at: '2026-07-11T10:00:00.000Z',
+        safety_verdict: 'SAFE_TO_END',
+      }),
+    ]);
+
+    const r = runMc(['end', '--json'], {
+      cwd: repo.dir, env: { MC_HOME: repo.mcHome },
+    });
+    assert.equal(r.status, 0, `stderr:${r.stderr} stdout:${r.stdout}`);
+    const j = parseJsonOrNull(r.stdout);
+    assert.equal(j?.ok, true);
+    assert.equal(j.name, 'latest');
+    const wts = git(repo.dir, 'worktree list --porcelain');
+    assert.match(wts, /older/);
+    assert.doesNotMatch(wts, /latest/);
+  });
+
   test('`mc end .` auto-detects the current registered worktree', () => {
     git(repo.dir, 'branch sess/dot main');
     const wtPath = join(repo.mcHome, 'worktrees', 'repo', 'dot');

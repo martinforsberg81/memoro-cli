@@ -254,7 +254,7 @@ describe('mc resume <name>', () => {
     delete process.env.MC_TEST_MODE;
     const stdout = [];
     let launched = false;
-    let upserted = false;
+    const upserts = [];
     try {
       const status = await runResume(['data', '--codex'], {
         stdout: { write: (s) => stdout.push(s) },
@@ -282,14 +282,18 @@ describe('mc resume <name>', () => {
           launched = true;
           return 0;
         },
-        upsertEntry: () => {
-          upserted = true;
-          return makeEntry({ name: 'data', tool: 'codex' });
+        upsertEntry: (entry) => {
+          upserts.push(entry);
+          return entry;
         },
+        now: () => '2026-07-11T10:00:00.000Z',
       });
       assert.equal(status, 0);
       assert.equal(launched, false);
-      assert.equal(upserted, false);
+      assert.deepEqual(upserts, [{
+        name: 'data',
+        last_opened_at: '2026-07-11T10:00:00.000Z',
+      }]);
       assert.match(stdout.join(''), /already active/);
     } finally {
       if (old === undefined) delete process.env.MC_TEST_MODE;
@@ -514,7 +518,7 @@ describe('mc resume <name>', () => {
   test('picker resume attaches a live local session before applying a tool override', async () => {
     const attached = [];
     let launched = false;
-    let upserted = false;
+    const upserts = [];
     const status = await resumeSelectedChoice(makeEntry({
       name: 'data',
       branch: 'sess/data',
@@ -534,16 +538,20 @@ describe('mc resume <name>', () => {
         launched = true;
         return 0;
       },
-      upsertEntry: () => {
-        upserted = true;
-        return makeEntry({ name: 'data', tool: 'codex' });
+      upsertEntry: (entry) => {
+        upserts.push(entry);
+        return entry;
       },
+      deps: { now: () => '2026-07-11T11:00:00.000Z' },
       resolvedTool: { shortName: 'codex' },
     });
 
     assert.equal(status, 0);
     assert.equal(launched, false);
-    assert.equal(upserted, false);
+    assert.deepEqual(upserts, [{
+      name: 'data',
+      last_opened_at: '2026-07-11T11:00:00.000Z',
+    }]);
     assert.equal(attached.length, 1);
     assert.equal(attached[0].tool, 'claude');
   });

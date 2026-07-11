@@ -61,11 +61,11 @@ export async function run(rawArgv, runOpts = {}) {
   const targets = [];
   for (const name of names) {
     const entry = name === '.'
-      ? findEntryForCwd(reg.entries, cwd)
+      ? resolveImplicitEntry(reg.entries, cwd)
       : reg.entries.find((e) => e.name === name) || null;
     if (!entry) {
       if (name === '.') {
-        stderr.write('mc: not inside a registered session worktree\n');
+        stderr.write('mc: could not infer which session to end from this directory\n');
         stderr.write('mc: usage — `mc end <name> [<name>…] [--force] [--keep-branch] [--dry-run]`\n');
         return 2;
       }
@@ -214,6 +214,36 @@ function findEntryForCwd(entries, cwd) {
     .sort((a, b) => b.worktreeReal.length - a.worktreeReal.length)[0]?.entry || null;
 }
 
+function resolveImplicitEntry(entries, cwd) {
+  const current = findEntryForCwd(entries, cwd);
+  if (current) return current;
+
+  const primary = primaryWorktree(cwd);
+  if (!primary) return null;
+
+  const primaryReal = safeRealpath(primary);
+  const candidates = (entries || [])
+    .filter((entry) => entry && entry.worktree_path)
+    .filter((entry) => entryMatchesPrimary(entry, primaryReal))
+    .map((entry) => ({ entry, openedAt: timestampMs(entry.last_opened_at) }))
+    .filter((item) => Number.isFinite(item.openedAt))
+    .sort((a, b) => b.openedAt - a.openedAt);
+
+  return candidates[0]?.entry || null;
+}
+
+function entryMatchesPrimary(entry, primaryReal) {
+  if (!entry || !primaryReal) return false;
+  if (entry.primary_worktree && samePath(safeRealpath(entry.primary_worktree), primaryReal)) {
+    return true;
+  }
+  if (entry.worktree_path && existsSync(entry.worktree_path)) {
+    const entryPrimary = primaryWorktree(entry.worktree_path);
+    return entryPrimary ? samePath(safeRealpath(entryPrimary), primaryReal) : false;
+  }
+  return false;
+}
+
 function isInsidePath(candidate, parent) {
   if (!candidate || !parent) return false;
   const rel = relative(parent, candidate);
@@ -254,6 +284,11 @@ function worktreeBelongsToPrimary(primary, worktreePathValue) {
 
 function samePath(a, b) {
   return a === b || isInsidePath(a, b) && isInsidePath(b, a);
+}
+
+function timestampMs(value) {
+  const ms = Date.parse(value || '');
+  return Number.isFinite(ms) ? ms : NaN;
 }
 
 async function confirmActiveEnd({

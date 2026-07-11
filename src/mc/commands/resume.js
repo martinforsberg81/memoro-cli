@@ -82,7 +82,6 @@ export async function run(rawArgv, deps = {}) {
     stderr.write(`mc: ${toolValidation.error}\n`);
     return 2;
   }
-
   if (!opts.json && !opts.noLaunch && process.env.MC_TEST_MODE !== '1') {
     const attached = await attachLiveBrokerSession(entry, {
       stdin,
@@ -92,10 +91,20 @@ export async function run(rawArgv, deps = {}) {
       attach: deps.attachBrokerSession || attachBrokerSession,
       deps,
     });
-    if (attached?.attached) return attached.code ?? 0;
+    if (attached?.attached) {
+      markEntryOpened(entry, {
+        upsert: deps.upsertEntry || upsertEntry,
+        now: deps.now,
+      });
+      return attached.code ?? 0;
+    }
 
     const active = await activeMatchForEntry(entry, { argv, deps });
     if (active) {
+      markEntryOpened(entry, {
+        upsert: deps.upsertEntry || upsertEntry,
+        now: deps.now,
+      });
       stdout.write(renderActiveSelectionMessage(active));
       return 0;
     }
@@ -116,6 +125,13 @@ export async function run(rawArgv, deps = {}) {
       return 2;
     }
     entry = res.entry;
+  }
+
+  if (!opts.json) {
+    entry = markEntryOpened(entry, {
+      upsert: deps.upsertEntry || upsertEntry,
+      now: deps.now,
+    });
   }
 
   if (entry.worktree_path) {
@@ -425,7 +441,13 @@ export async function resumeSelectedChoice(choice, {
   });
   if (!opts.noLaunch && process.env.MC_TEST_MODE !== '1') {
     const attached = await attachLive(entry, { stdin, stdout, stderr, deps });
-    if (attached?.attached) return attached.code ?? 0;
+    if (attached?.attached) {
+      markEntryOpened(entry, {
+        upsert,
+        now: deps.now,
+      });
+      return attached.code ?? 0;
+    }
   }
 
   if (opts.tool) {
@@ -441,6 +463,11 @@ export async function resumeSelectedChoice(choice, {
     }
     entry = res.entry;
   }
+
+  entry = markEntryOpened(entry, {
+    upsert,
+    now: deps.now,
+  });
 
   if (entry.worktree_path) {
     emitCd(entry.worktree_path, { enabled: emitDirectives || undefined });
@@ -458,6 +485,17 @@ function maybeObserveEntry(entry, deps = {}) {
     })?.entry || entry;
   } catch {
     return entry;
+  }
+}
+
+function markEntryOpened(entry, { upsert = upsertEntry, now = () => new Date().toISOString() } = {}) {
+  if (!entry?.name) return entry;
+  const openedAt = typeof now === 'function' ? now() : new Date().toISOString();
+  try {
+    upsert({ name: entry.name, last_opened_at: openedAt });
+    return { ...entry, last_opened_at: openedAt };
+  } catch {
+    return { ...entry, last_opened_at: openedAt };
   }
 }
 

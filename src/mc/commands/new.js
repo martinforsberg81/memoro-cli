@@ -191,6 +191,7 @@ export async function run(rawArgv) {
     model_chain: [],
     session_state: 'no-session-yet',
     safety_verdict: 'SAFE_TO_END',
+    last_opened_at: new Date().toISOString(),
   });
 
   emitCd(wt, { enabled: emitDirectives || undefined });
