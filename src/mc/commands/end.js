@@ -18,7 +18,8 @@
  * target verdict without acting.
  */
 import { existsSync, realpathSync } from 'node:fs';
-import { findEntry, removeEntry } from '../registry.js';
+import { isAbsolute, relative } from 'node:path';
+import { readRegistry, removeEntry } from '../registry.js';
 import { git, tryGit, primaryWorktree, isDirty, branchExists, commitsAhead } from '../git.js';
 import { emitCd, parseDirectiveFlag } from '../shell-directives.js';
 import { detectSquashPhantom } from '../squash-phantom.js';
@@ -54,35 +55,37 @@ export async function run(rawArgv, runOpts = {}) {
     return 2;
   }
 
-  // Auto-detect `.` and bare `mc end` (inside-a-worktree resolution) —
-  // foundation scope keeps these explicit-name only; that's covered by
-  // the existing tests. Defer to a follow-up.
-
-  if (opts.names.length === 0) {
-    stderr.write('mc: usage — `mc end <name> [<name>…] [--force] [--keep-branch] [--dry-run]`\n');
-    return 2;
-  }
-
+  const cwd = runOpts.cwd || process.cwd();
+  const reg = readRegistry();
+  const names = opts.names.length > 0 ? opts.names : ['.'];
   const targets = [];
-  for (const name of opts.names) {
-    const entry = findEntry(name);
+  for (const name of names) {
+    const entry = name === '.'
+      ? findEntryForCwd(reg.entries, cwd)
+      : reg.entries.find((e) => e.name === name) || null;
     if (!entry) {
+      if (name === '.') {
+        stderr.write('mc: not inside a registered session worktree\n');
+        stderr.write('mc: usage — `mc end <name> [<name>…] [--force] [--keep-branch] [--dry-run]`\n');
+        return 2;
+      }
       stderr.write(`mc: unknown session "${name}"\n`);
       return 1;
     }
     targets.push(entry);
   }
 
-  // Resolve primary worktree once. All targets are in the same repo.
-  const cwd = runOpts.cwd || process.cwd();
-  const primary = primaryWorktree(cwd) || primaryWorktree(targets[0].worktree_path) || cwd;
-
   // For each target compute the verdict first (so dry-run gets it cheap
   // and the real run can short-circuit phantoms).
   const plans = [];
   for (const entry of targets) {
+    const primary = resolvePrimaryForEntry(entry, cwd);
+    if (!primary) {
+      stderr.write(`mc: "${entry.name}" has no resolvable primary worktree\n`);
+      return 1;
+    }
     const verdict = await computeVerdict(entry, primary);
-    plans.push({ entry, verdict });
+    plans.push({ entry, primary, verdict });
   }
 
   if (opts.dryRun) {
@@ -136,15 +139,15 @@ export async function run(rawArgv, runOpts = {}) {
   // and a naive startsWith() comparison misses inside-the-worktree.
   const cwdReal = safeRealpath(cwd);
   const insideTarget = plans.find(({ entry }) =>
-    entry.worktree_path && cwdReal.startsWith(safeRealpath(entry.worktree_path)),
+    entry.worktree_path && isInsidePath(cwdReal, safeRealpath(entry.worktree_path)),
   );
   if (insideTarget) {
     // Emit the path-as-the-user-knows-it, not git's realpath'd form.
-    emitCd(unprivateMac(primary), { enabled: emitDirectives || undefined });
+    emitCd(unprivateMac(insideTarget.primary), { enabled: emitDirectives || undefined });
   }
 
   const results = [];
-  for (const { entry, verdict } of plans) {
+  for (const { entry, primary, verdict } of plans) {
     try {
       const brokerCleanup = await removeBrokerSessionForEntry(entry, {
         requestBroker: runOpts.deps?.requestBroker,
@@ -185,7 +188,8 @@ export async function run(rawArgv, runOpts = {}) {
       ...(r0.error ? { error: r0.error } : {}),
     };
     if (opts.json) stdout.write(`${JSON.stringify(single, null, 2)}\n`);
-    else stdout.write(`mc: ended ${r0.name}\n`);
+    else if (r0.ok) stdout.write(`mc: ended ${r0.name}\n`);
+    else stderr.write(`mc: failed to end ${r0.name}: ${r0.error}\n`);
     return r0.ok ? 0 : 1;
   }
 
@@ -199,6 +203,57 @@ export async function run(rawArgv, runOpts = {}) {
     }
   }
   return allOk ? 0 : 1;
+}
+
+function findEntryForCwd(entries, cwd) {
+  const cwdReal = safeRealpath(cwd);
+  return (entries || [])
+    .filter((entry) => entry?.worktree_path)
+    .map((entry) => ({ entry, worktreeReal: safeRealpath(entry.worktree_path) }))
+    .filter(({ worktreeReal }) => isInsidePath(cwdReal, worktreeReal))
+    .sort((a, b) => b.worktreeReal.length - a.worktreeReal.length)[0]?.entry || null;
+}
+
+function isInsidePath(candidate, parent) {
+  if (!candidate || !parent) return false;
+  const rel = relative(parent, candidate);
+  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
+}
+
+function resolvePrimaryForEntry(entry, cwd) {
+  if (entry?.primary_worktree) {
+    const primary = primaryWorktree(entry.primary_worktree);
+    if (primary) return primary;
+  }
+
+  if (entry?.worktree_path && existsSync(entry.worktree_path)) {
+    const primary = primaryWorktree(entry.worktree_path);
+    if (primary) return primary;
+  }
+
+  const cwdPrimary = primaryWorktree(cwd);
+  if (cwdPrimary && (!entry?.worktree_path || worktreeBelongsToPrimary(cwdPrimary, entry.worktree_path))) {
+    return cwdPrimary;
+  }
+
+  return null;
+}
+
+function worktreeBelongsToPrimary(primary, worktreePathValue) {
+  if (!primary || !worktreePathValue) return false;
+  const out = tryGit(primary, ['worktree', 'list', '--porcelain']);
+  if (!out) return false;
+  const needle = safeRealpath(worktreePathValue);
+  return out
+    .split('\n\n')
+    .some((block) => {
+      const m = block.match(/^worktree\s+(.+)$/m);
+      return m && samePath(safeRealpath(m[1].trim()), needle);
+    });
+}
+
+function samePath(a, b) {
+  return a === b || isInsidePath(a, b) && isInsidePath(b, a);
 }
 
 async function confirmActiveEnd({

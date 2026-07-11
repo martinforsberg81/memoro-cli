@@ -142,6 +142,101 @@ describe('mc end', () => {
       `worktree should be gone; got:\n${wts}`);
   });
 
+  test('bare `mc end` auto-detects the current registered worktree', () => {
+    git(repo.dir, 'branch sess/current main');
+    const wtPath = join(repo.mcHome, 'worktrees', 'repo', 'current');
+    addWorktree(repo.dir, wtPath, 'sess/current');
+    writeRegistry(repo.mcHome, [makeEntry({
+      name: 'current',
+      branch: 'sess/current',
+      worktree_path: wtPath,
+      primary_worktree: repo.dir,
+      safety_verdict: 'SAFE_TO_END',
+    })]);
+
+    const r = runMc(['end', '--json'], {
+      cwd: wtPath, env: { MC_HOME: repo.mcHome },
+    });
+    assert.equal(r.status, 0, `stderr:${r.stderr}`);
+    const j = parseJsonOrNull(r.stdout);
+    assert.equal(j?.ok, true);
+    assert.equal(j.name, 'current');
+    const wts = git(repo.dir, 'worktree list --porcelain');
+    assert.ok(!wts.includes('/current'), `worktree should be gone; got:\n${wts}`);
+  });
+
+  test('`mc end .` auto-detects the current registered worktree', () => {
+    git(repo.dir, 'branch sess/dot main');
+    const wtPath = join(repo.mcHome, 'worktrees', 'repo', 'dot');
+    addWorktree(repo.dir, wtPath, 'sess/dot');
+    writeRegistry(repo.mcHome, [makeEntry({
+      name: 'dot',
+      branch: 'sess/dot',
+      worktree_path: wtPath,
+      primary_worktree: repo.dir,
+      safety_verdict: 'SAFE_TO_END',
+    })]);
+
+    const r = runMc(['end', '.', '--json'], {
+      cwd: wtPath, env: { MC_HOME: repo.mcHome },
+    });
+    assert.equal(r.status, 0, `stderr:${r.stderr}`);
+    const j = parseJsonOrNull(r.stdout);
+    assert.equal(j?.ok, true);
+    assert.equal(j.name, 'dot');
+    const wts = git(repo.dir, 'worktree list --porcelain');
+    assert.ok(!wts.includes('/dot'), `worktree should be gone; got:\n${wts}`);
+  });
+
+  test('uses the target primary worktree when cwd belongs to another repo', () => {
+    const other = makeTempRepo({ name: 'end-other' });
+    try {
+      git(other.dir, 'branch sess/cross main');
+      const wtPath = join(repo.mcHome, 'worktrees', 'other', 'cross');
+      addWorktree(other.dir, wtPath, 'sess/cross');
+      writeRegistry(repo.mcHome, [makeEntry({
+        name: 'cross',
+        branch: 'sess/cross',
+        repo_slug: 'other',
+        worktree_path: wtPath,
+        primary_worktree: other.dir,
+        safety_verdict: 'SAFE_TO_END',
+      })]);
+
+      const r = runMc(['end', 'cross', '--json'], {
+        cwd: repo.dir, env: { MC_HOME: repo.mcHome },
+      });
+      assert.equal(r.status, 0, `stderr:${r.stderr} stdout:${r.stdout}`);
+      const j = parseJsonOrNull(r.stdout);
+      assert.equal(j?.ok, true);
+      const wts = git(other.dir, 'worktree list --porcelain');
+      assert.ok(!wts.includes('/cross'), `other repo worktree should be gone; got:\n${wts}`);
+    } finally {
+      other.cleanup();
+    }
+  });
+
+  test('single-target human output reports teardown failure instead of success', () => {
+    makeBranchWithCommit(repo.dir, 'sess/unmerged', 'unmerged.txt');
+    const wtPath = join(repo.mcHome, 'worktrees', 'repo', 'unmerged');
+    addWorktree(repo.dir, wtPath, 'sess/unmerged');
+    writeRegistry(repo.mcHome, [makeEntry({
+      name: 'unmerged',
+      branch: 'sess/unmerged',
+      worktree_path: wtPath,
+      primary_worktree: repo.dir,
+      ahead: 1,
+      safety_verdict: 'HAS_UNMERGED_WORK',
+    })]);
+
+    const r = runMc(['end', 'unmerged', '--force'], {
+      cwd: repo.dir, env: { MC_HOME: repo.mcHome },
+    });
+    assert.notEqual(r.status, 0);
+    assert.doesNotMatch(r.stdout, /mc: ended unmerged/);
+    assert.match(r.stderr, /failed to end unmerged/i);
+  });
+
   test('ending a worktree removes the matching broker session first', async () => {
     git(repo.dir, 'branch sess/broker-clean main');
     const wtPath = join(repo.mcHome, 'worktrees', 'repo', 'broker-clean');

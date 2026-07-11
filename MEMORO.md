@@ -107,9 +107,12 @@ frame itself must work as terminal commands first.
 - **Main/worktree hygiene** — `active · M · now`
   `mc` must be stricter than `cs` about git/session order: primary `main` is a
   clean baseline, while real work lives in named session worktrees and branches.
-  Next work should make `mc status`, `mc list`, `mc end`, and `mc reconcile`
-  expose dirty primary drift, local/remote divergence, squash-merged session
-  branches, and safe cleanup paths without hidden resets or PM behavior.
+  `mc end` now resolves the current session from bare/`.` invocations and tears
+  down targets through each entry's own primary worktree, so cross-repo registry
+  cleanup does not pretend success while leaving sessions listed. Next work
+  should make `mc status`, `mc list`, and `mc reconcile` expose dirty primary
+  drift, local/remote divergence, squash-merged session branches, and safe bulk
+  cleanup paths without hidden resets or PM behavior.
   → `docs/plans/main-worktree-hygiene.md`
 - **Coordinator wake-up quality** — `active · M · now`
   The next quality bar is not more CLI verbs; it is a sharper first minute. A
