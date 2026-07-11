@@ -268,7 +268,7 @@ COMMON
   mc list --tree                  Show coordinator/project session tree
   mc status <name>                Show one session's state
   mc cd <name>                    cd into a session worktree
-  mc end <name> [<name>...]       End and clean up sessions
+  mc end [<name>...]              End last-opened/current session or named sessions
   mc rename <old> <new>           Rename branch + worktree + registry entry
 
 START OPTIONS

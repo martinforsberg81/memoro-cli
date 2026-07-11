@@ -66,7 +66,7 @@ export async function run(rawArgv, runOpts = {}) {
     if (!entry) {
       if (name === '.') {
         stderr.write('mc: could not infer which session to end from this directory\n');
-        stderr.write('mc: usage — `mc end <name> [<name>…] [--force] [--keep-branch] [--dry-run]`\n');
+        stderr.write('mc: usage — `mc end [<name>…] [--force] [--keep-branch] [--dry-run]`\n');
         return 2;
       }
       stderr.write(`mc: unknown session "${name}"\n`);
