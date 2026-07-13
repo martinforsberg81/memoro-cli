@@ -154,7 +154,7 @@ export async function runCloudRuntimeWith(opts, deps = {}) {
     phase: CLOUD_LIFECYCLE.WAKING,
     runtime_state: 'preparing_workspace',
     process_status: 'running',
-    events: [{ type: 'workspace.prepare_started', data: { cwd: workspaceDir } }],
+    events: [{ type: 'workspace.prepare.started', data: { cwd: workspaceDir } }],
   });
 
   const workspace = await prepareWorkspace(manifest, {
@@ -169,7 +169,7 @@ export async function runCloudRuntimeWith(opts, deps = {}) {
       process_status: 'exited',
       error_code: workspace.code || 'workspace_prepare_failed',
       error: workspace.error || 'workspace prepare failed',
-      events: [{ type: 'workspace.prepare_failed', data: workspace }],
+      events: [{ type: 'workspace.prepare.failed', data: workspace }],
       readiness: readinessFromWorkspace(manifest, workspace),
     });
     stderr.write(`mc: ${workspace.error || 'workspace prepare failed'}\n`);
@@ -181,7 +181,7 @@ export async function runCloudRuntimeWith(opts, deps = {}) {
     phase: CLOUD_LIFECYCLE.WAKING,
     runtime_state: 'workspace_ready',
     process_status: 'running',
-    events: [{ type: 'workspace.ready', data: workspace }],
+    events: [{ type: 'workspace.prepare.finished', data: workspace }],
     readiness: readinessFromWorkspace(manifest, workspace),
   });
 
@@ -200,20 +200,38 @@ export async function runCloudRuntimeWith(opts, deps = {}) {
     reason: err.message || String(err),
   }));
   const toolAuthStatus = publicToolAuthResult(toolAuth);
+  const workspaceReadiness = readinessFromWorkspace(manifest, workspace);
+  const readyToolAuth = toolAuthReadiness(toolAuthStatus);
   await runtime.record({
     phase: CLOUD_LIFECYCLE.WAKING,
     runtime_state: 'tool_auth_ready',
     process_status: 'running',
     events: [{ type: 'tool.auth_hydrate.finished', data: toolAuthStatus }],
     readiness: {
-      ...readinessFromWorkspace(manifest, workspace),
-      tool_auth: toolAuthReadiness(toolAuthStatus),
+      ...workspaceReadiness,
+      tool_auth: readyToolAuth,
     },
   });
 
   const launchEnv = providerLaunchEnv({
     ...env,
     ...(toolAuth.env || {}),
+  });
+  await runtime.record({
+    phase: CLOUD_LIFECYCLE.WAKING,
+    runtime_state: 'provider_launching',
+    process_status: 'running',
+    events: [{
+      type: 'provider.launch.started',
+      data: {
+        tool: manifest.launch?.tool || 'codex',
+        auth_ready: toolAuthStatus.hydrated === true && toolAuthStatus.repair_required !== true,
+      },
+    }],
+    readiness: {
+      ...workspaceReadiness,
+      tool_auth: readyToolAuth,
+    },
   });
   const launch = await launchCloudSessionFromManifest(manifest, {
     deps,
@@ -230,7 +248,7 @@ export async function runCloudRuntimeWith(opts, deps = {}) {
       exit_code: launch.code,
       error_code: launch.error ? 'cloud_session_launch_failed' : null,
       error: launch.error || 'cloud session launch failed',
-      events: [{ type: 'cloud_session.launch_failed', data: { code: launch.code, error: launch.error || null } }],
+      events: [{ type: 'provider.launch.failed', data: { code: launch.code, error: launch.error || null } }],
     });
     if (opts.json) writeJson(stdout, { ok: false, error: launch.error || 'cloud session launch failed', code: launch.code });
     return launch.code || 1;
@@ -240,17 +258,21 @@ export async function runCloudRuntimeWith(opts, deps = {}) {
     phase: CLOUD_LIFECYCLE.BROKER_CONNECTING,
     runtime_state: 'broker_connecting',
     process_status: 'running',
-    events: [{
-      type: 'cloud_session.launched',
-      data: {
-        coding_session_id: launch.payload?.coding_session_id || manifest.coding_session_id || null,
-        source_id: runtimeSource(manifest).id,
+    events: [
+      {
+        type: 'provider.launch.finished',
+        data: {
+          coding_session_id: launch.payload?.coding_session_id || manifest.coding_session_id || null,
+          source_id: runtimeSource(manifest).id,
+        },
       },
-    }],
+      { type: 'broker.connecting', data: { source_id: runtimeSource(manifest).id } },
+    ],
     readiness: {
-      ...readinessFromWorkspace(manifest, workspace),
+      ...workspaceReadiness,
       ready: true,
       broker: { connecting: true },
+      tool_auth: readyToolAuth,
     },
   });
 
@@ -269,7 +291,7 @@ export async function runCloudRuntimeWith(opts, deps = {}) {
         process_status: 'running',
         events: [{ type: 'tool.auth_persist.finished', data: status }],
         readiness: {
-          ...readinessFromWorkspace(manifest, workspace),
+          ...workspaceReadiness,
           ready: true,
           broker: { connecting: true },
           tool_auth: toolAuthReadiness(status),
@@ -718,6 +740,7 @@ function runtimeSource(manifest) {
 }
 
 function initialReadiness(manifest, { tokenPresent }) {
+  const git = gitAuthReadiness(manifest, {}, {});
   return sanitizeRuntimeData({
     ok: tokenPresent,
     ready: false,
@@ -728,9 +751,12 @@ function initialReadiness(manifest, { tokenPresent }) {
       access: manifest.repo?.access || null,
       credential_source: manifest.repo?.credential_source || null,
     },
+    git,
+    vault: vaultReadiness(manifest),
     tool_auth: {
       tool: manifest.launch?.tool || 'codex',
       mode: 'vault',
+      ready: false,
       hydrated: false,
       repair_required: false,
       secret_boundary: 'status_only',
@@ -739,6 +765,7 @@ function initialReadiness(manifest, { tokenPresent }) {
 }
 
 function readinessFromWorkspace(manifest, workspace) {
+  const git = workspace.git_auth || gitAuthReadiness(manifest, {}, {});
   return sanitizeRuntimeData({
     ok: workspace.ok === true,
     ready: workspace.ok === true,
@@ -751,10 +778,13 @@ function readinessFromWorkspace(manifest, workspace) {
       initialized_empty: workspace.initialized_empty === true,
       clone_failed: workspace.clone_failed === true,
     },
-    git_auth: workspace.git_auth || gitAuthReadiness(manifest, {}, {}),
+    git,
+    git_auth: git,
+    vault: vaultReadiness(manifest),
     tool_auth: {
       tool: manifest.launch?.tool || 'codex',
       mode: 'vault',
+      ready: false,
       hydrated: false,
       repair_required: false,
       secret_boundary: 'status_only',
@@ -763,17 +793,31 @@ function readinessFromWorkspace(manifest, workspace) {
 }
 
 function toolAuthReadiness(status = {}) {
+  const repairRequired = status.repair_required === true;
+  const hydrated = status.hydrated === true;
   return sanitizeRuntimeData({
     tool: status.tool || null,
     label: status.label || null,
     mode: 'vault',
     present: status.present === true,
-    hydrated: status.hydrated === true,
+    ready: hydrated && !repairRequired,
+    hydrated,
     persisted: status.persisted === true,
-    repair_required: status.repair_required === true,
+    repair_required: repairRequired,
     repair_action: status.repair_action || null,
     reason: status.reason || null,
     secret_boundary: 'status_only',
+  });
+}
+
+function vaultReadiness(manifest) {
+  return sanitizeRuntimeData({
+    mode: 'mc vault',
+    ready: true,
+    git_credential_source: manifest?.repo?.credential_source || manifest?.repo?.git_auth?.credential_source || null,
+    tool_auth_profile: manifest?.launch?.tool ? `tool_auth.${manifest.launch.tool}` : null,
+    exposes_secrets_to_llm: false,
+    secret_boundary: 'runtime_only',
   });
 }
 
@@ -823,13 +867,21 @@ function sanitizeRuntimeData(value, depth = 0) {
   if (!value || typeof value !== 'object') return value;
   const out = {};
   for (const [key, child] of Object.entries(value)) {
-    if (key !== 'credential_source' && /(token|secret|password|passphrase|private.?key|access.?key|refresh|auth.?json|api.?key|credential(?!_source)|capability)/i.test(key)) {
+    if (!isSafeRuntimeMetadataKey(key) && /(token|secret|password|passphrase|private.?key|access.?key|refresh|auth.?json|api.?key|credential(?!_source)|capability)/i.test(key)) {
       out[key] = '[redacted]';
       continue;
     }
     out[key] = sanitizeRuntimeData(child, depth + 1);
   }
   return out;
+}
+
+function isSafeRuntimeMetadataKey(key) {
+  return [
+    'credential_source',
+    'secret_boundary',
+    'exposes_secrets_to_llm',
+  ].includes(key);
 }
 
 function safeRuntimeRepoRef(value) {
