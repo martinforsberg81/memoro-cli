@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events';
+import { readFileSync } from 'node:fs';
 import { createConnection } from 'node:net';
 import { hostname } from 'node:os';
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -17,11 +18,18 @@ const MAX_BACKOFF_MS = 30_000;
 const SESSION_REFRESH_INTERVAL_MS = 5_000;
 const LOCAL_TRANSCRIPT_READ_MS = 1_000;
 const SUBMIT_ENTER_DELAY_MS = 150;
+const DEFAULT_RUNTIME_DIR = '/workspace/mc-runtime';
 const DEFAULT_CAPABILITIES = [
   'pty-stream-v1',
   'resize-v1',
   'screen-replay-v1',
+  'environment-status-v1',
 ];
+const SAFE_SECRET_STATUS_KEYS = new Set([
+  'credential_source',
+  'exposes_secrets_to_llm',
+  'secret_boundary',
+]);
 
 export class CloudBrokerClient extends EventEmitter {
   constructor({
@@ -67,6 +75,7 @@ export class CloudBrokerClient extends EventEmitter {
       machineId,
       deviceName,
     });
+    this.env = env;
     this.request = request;
     this.connect = connect;
     this.WebSocketImpl = WebSocketImpl;
@@ -236,6 +245,10 @@ export class CloudBrokerClient extends EventEmitter {
       const handler = this.fetchTranscriptHandlerFactory({ transcriptPath, source });
       return handler(args);
     }
+    if (kind === 'fetch_environment_status') {
+      const sessionId = stringOrDefault(msg.coding_session_id || msg.session_id, '');
+      return this._fetchEnvironmentStatus({ sessionId, scope: args.scope });
+    }
     if (kind === 'stop_session') {
       const sessionId = requiredString(msg.coding_session_id || msg.session_id, 'coding_session_id');
       const signal = stringOrDefault(args.signal, 'SIGTERM');
@@ -295,6 +308,22 @@ export class CloudBrokerClient extends EventEmitter {
     }));
     if (!fallback?.ok) return fallback;
     return { ...fallback, transport: fallback.transport || 'dispatch_session' };
+  }
+
+  async _fetchEnvironmentStatus({ sessionId = '', scope = 'all' } = {}) {
+    let session = {};
+    if (sessionId) {
+      const request = await this._requestForSessionId(sessionId).catch(() => this.request);
+      const status = await request({ type: 'session_status', id: sessionId }).catch(() => null);
+      session = status?.ok && status.session && typeof status.session === 'object' ? status.session : {};
+    }
+    return buildEnvironmentStatusResult({
+      scope,
+      env: this.env,
+      sourceIdentity: this.sourceIdentity,
+      sessionId,
+      session,
+    });
   }
 
   async _writeDispatchedInput({ sessionId, message, tool, request = this.request }) {
@@ -678,6 +707,141 @@ function transcriptSource({ sourceHint = '', toolHint = '', sessionTool = '' } =
     sourceHint,
     sourceForTool(toolHint) || sourceForTool(sessionTool) || 'claude-code',
   );
+}
+
+function buildEnvironmentStatusResult({
+  scope = 'all',
+  env = process.env,
+  sourceIdentity = {},
+  sessionId = '',
+  session = {},
+} = {}) {
+  const paths = runtimeStatusPaths(env);
+  const manifest = sanitizeStatusData(readJsonFile(paths.manifest) || {});
+  const status = sanitizeStatusData(readJsonFile(paths.status) || {});
+  const readiness = sanitizeStatusData(readJsonFile(paths.readiness) || status.readiness || null);
+  const phase = stringOrDefault(status.phase, stringOrDefault(status.runtime_state, 'ready'));
+  const stopped = phase === 'stopped';
+  const failed = phase === 'failed';
+  const sleeping = phase === 'sleeping';
+  const live = !stopped && !failed && !sleeping;
+  const tool = stringOrDefault(session.tool, stringOrDefault(manifest.launch?.tool, 'codex'));
+  const repo = manifest.repo || {};
+  const repoReadiness = readiness?.repo || {};
+  const gitAuth = readiness?.git_auth || repo.git_auth || {};
+  const toolAuth = readiness?.tool_auth || {};
+  const continueAction = live ? 'live' : (sleeping ? 'wake' : (stopped || failed ? null : 'wait'));
+  return sanitizeStatusData({
+    ok: true,
+    scope: stringOrDefault(scope, 'all'),
+    runtime: {
+      contract_version: status.contract_version || manifest.contract_version || null,
+      phase,
+      live,
+      wakeable: continueAction === 'wake',
+      can_continue: !stopped && !failed,
+      continue_action: continueAction,
+      needs_repair: failed || toolAuth.repair_required === true || gitAuth.repair_required === true,
+      stopped,
+      failed,
+      process_status: status.process_status || null,
+      exit_code: Number.isInteger(status.exit_code) ? status.exit_code : null,
+      updated_at: status.updated_at || null,
+      last_active_at: status.last_active_at || status.updated_at || null,
+    },
+    commands: {
+      status: true,
+      transcript: live,
+      message: live,
+    },
+    repo: {
+      id: stringOrDefault(repo.id, null),
+      ref: safeRepoRef(repoReadiness.ref || repo.ref),
+      workspace_ref: stringOrDefault(repoReadiness.workspace_ref, stringOrDefault(repo.workspace_ref, null)),
+      access: stringOrDefault(gitAuth.access, stringOrDefault(repo.access, null)),
+      grant_kind: stringOrDefault(gitAuth.grant_kind, stringOrDefault(repo.grant_kind, null)),
+      credential_source: stringOrDefault(gitAuth.credential_source, stringOrDefault(repo.credential_source, null)),
+      ready: repoReadiness.ready === true || gitAuth.ready === true || repo.access === 'public_clone',
+      repair_required: gitAuth.repair_required === true || repoReadiness.clone_failed === true,
+      secret_boundary: stringOrDefault(gitAuth.secret_boundary, 'status_only'),
+    },
+    vault: {
+      mode: 'mc vault',
+      secret_boundary: 'runtime_only',
+      git_credential_source: stringOrDefault(gitAuth.credential_source, stringOrDefault(repo.credential_source, null)),
+      exposes_secrets_to_llm: false,
+    },
+    tool_auth: {
+      tool,
+      mode: 'vault',
+      ready: toolAuth.ready === true || toolAuth.hydrated === true || toolAuth.present === true,
+      repair_required: toolAuth.repair_required === true,
+      repair_action: stringOrDefault(toolAuth.repair_action, null),
+      secret_boundary: 'status_only',
+    },
+    readiness,
+    cloud_session: {
+      id: stringOrDefault(manifest.cloud_session_id, sourceIdentity.cloud_session_id || null),
+      coding_session_id: stringOrDefault(manifest.coding_session_id, stringOrDefault(session.coding_session_id, stringOrDefault(sessionId, null))),
+      source_id: stringOrDefault(sourceIdentity.source_id, manifest.cloud_session_id ? `cloud:${manifest.cloud_session_id}` : null),
+      name: stringOrDefault(session.name, stringOrDefault(manifest.launch?.name, null)),
+      policy: stringOrDefault(session.policy, stringOrDefault(manifest.launch?.policy, null)),
+    },
+    summary: environmentStatusSummary({ live, stopped, failed, continueAction, phase }),
+  });
+}
+
+function runtimeStatusPaths(env = {}) {
+  return {
+    manifest: stringOrDefault(env.MC_CLOUD_RUNTIME_MANIFEST, `${DEFAULT_RUNTIME_DIR}/manifest.json`),
+    status: stringOrDefault(env.MC_CLOUD_RUNTIME_STATUS, `${DEFAULT_RUNTIME_DIR}/status.json`),
+    readiness: stringOrDefault(env.MC_CLOUD_RUNTIME_READINESS, `${DEFAULT_RUNTIME_DIR}/readiness.json`),
+  };
+}
+
+function readJsonFile(path) {
+  if (!path) return null;
+  try {
+    const raw = readFileSync(path, 'utf8');
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+function safeRepoRef(value) {
+  const repoRef = stringOrDefault(value, null);
+  if (!repoRef || !/^https?:\/\//i.test(repoRef)) return repoRef;
+  try {
+    const url = new URL(repoRef);
+    if (url.username || url.password) return null;
+    return repoRef;
+  } catch {
+    return null;
+  }
+}
+
+function environmentStatusSummary({ live, stopped, failed, continueAction, phase }) {
+  if (stopped) return 'Cloud runtime is stopped. Start a new session to continue.';
+  if (failed) return 'Cloud runtime needs repair before transcript or messages are available.';
+  if (live) return 'Cloud runtime is live. Transcript and messages are available.';
+  if (continueAction === 'wake') return 'Cloud runtime is sleeping and can be continued.';
+  return `Cloud runtime is ${phase || 'pending'}. Waiting for readiness.`;
+}
+
+function sanitizeStatusData(value, depth = 0) {
+  if (depth > 8) return '[truncated]';
+  if (Array.isArray(value)) return value.slice(0, 100).map((item) => sanitizeStatusData(item, depth + 1));
+  if (!value || typeof value !== 'object') return value;
+  const out = {};
+  for (const [key, child] of Object.entries(value)) {
+    if (!SAFE_SECRET_STATUS_KEYS.has(key) && /(token|secret|password|passphrase|private.?key|access.?key|refresh|auth.?json|api.?key|credential(?!_source)|capability)/i.test(key)) {
+      out[key] = '[redacted]';
+      continue;
+    }
+    out[key] = sanitizeStatusData(child, depth + 1);
+  }
+  return out;
 }
 
 function sourceIdentityPayload(identity) {
