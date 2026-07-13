@@ -128,6 +128,7 @@ const LIFECYCLE = {
   setup:         () => import('./mc/commands/setup.js'),
   reconcile:     () => import('./mc/commands/reconcile.js'),
   vault:         () => import('./mc/commands/vault.js'),
+  'tool-auth':   () => import('./mc/commands/tool-auth.js'),
   adapter:       () => import('./mc/commands/adapter.js'),
   'tool-switch': () => import('./mc/commands/tool-switch.js'),
   broker:        () => import('./mc/commands/broker.js'),
@@ -302,6 +303,7 @@ SECRETS
   mc vault list                   List secret labels, never values
   mc vault get <label>            Print a secret value, with confirmation
   mc vault rm|rotate|lock         Manage stored secrets
+  mc tool-auth hydrate|persist    Internal cloud tool auth vault bridge
 
 FLEET / ADVANCED
   mc spawn <name> "<brief>"       Create durable child project session

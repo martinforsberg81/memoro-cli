@@ -19,6 +19,11 @@ import {
   parseArgs as parseCloudSessionArgs,
   runCloudSessionWith,
 } from './cloud-session.js';
+import {
+  hydrateToolAuth,
+  publicToolAuthResult,
+  startToolAuthPersistWatcher,
+} from '../tool-auth.js';
 
 export const CLOUD_RUNTIME_CONTRACT_VERSION = 'mc-cloud-runtime-v1';
 
@@ -43,6 +48,7 @@ const SECRET_ENV_NAMES_AFTER_WORKSPACE = Object.freeze([
   'MC_CLOUD_GIT_SECRET_CAPABILITY',
   'MC_GIT_CLONE_TOKEN',
   'GITHUB_TOKEN',
+  'MC_CODEX_API_KEY',
   'OPENAI_API_KEY',
   'CODEX_ACCESS_TOKEN',
 ]);
@@ -179,7 +185,36 @@ export async function runCloudRuntimeWith(opts, deps = {}) {
     readiness: readinessFromWorkspace(manifest, workspace),
   });
 
-  const launchEnv = providerLaunchEnv(env);
+  const toolAuthHydrate = deps.hydrateToolAuth || hydrateToolAuth;
+  const toolAuth = await toolAuthHydrate({
+    tool: manifest.launch?.tool || 'codex',
+    cloudSessionId,
+    env,
+    deps: deps.toolAuthDeps || deps,
+  }).catch((err) => ({
+    ok: true,
+    tool: manifest.launch?.tool || 'codex',
+    hydrated: false,
+    repair_required: true,
+    repair_action: 'retry',
+    reason: err.message || String(err),
+  }));
+  const toolAuthStatus = publicToolAuthResult(toolAuth);
+  await runtime.record({
+    phase: CLOUD_LIFECYCLE.WAKING,
+    runtime_state: 'tool_auth_ready',
+    process_status: 'running',
+    events: [{ type: 'tool.auth_hydrate.finished', data: toolAuthStatus }],
+    readiness: {
+      ...readinessFromWorkspace(manifest, workspace),
+      tool_auth: toolAuthReadiness(toolAuthStatus),
+    },
+  });
+
+  const launchEnv = providerLaunchEnv({
+    ...env,
+    ...(toolAuth.env || {}),
+  });
   const launch = await launchCloudSessionFromManifest(manifest, {
     deps,
     env: launchEnv,
@@ -219,15 +254,45 @@ export async function runCloudRuntimeWith(opts, deps = {}) {
     },
   });
 
-  const connectBroker = deps.connectBroker || connectBrokerInForeground;
-  const brokerCode = await connectBroker({
-    manifest,
+  const startPersistWatcher = deps.startToolAuthPersistWatcher || startToolAuthPersistWatcher;
+  const stopToolAuthWatcher = startPersistWatcher({
+    tool: manifest.launch?.tool || 'codex',
+    cloudSessionId,
     env: launchEnv,
-    cwd: workspaceDir,
-    json: opts.json,
-    stdout,
-    stderr,
+    deps: deps.toolAuthDeps || deps,
+    intervalMs: deps.toolAuthPersistIntervalMs,
+    onResult: async (result) => {
+      const status = publicToolAuthResult(result);
+      await runtime.record({
+        phase: CLOUD_LIFECYCLE.BROKER_CONNECTING,
+        runtime_state: 'broker_connecting',
+        process_status: 'running',
+        events: [{ type: 'tool.auth_persist.finished', data: status }],
+        readiness: {
+          ...readinessFromWorkspace(manifest, workspace),
+          ready: true,
+          broker: { connecting: true },
+          tool_auth: toolAuthReadiness(status),
+        },
+      });
+    },
   });
+  const connectBroker = deps.connectBroker || connectBrokerInForeground;
+  let brokerCode;
+  try {
+    brokerCode = await connectBroker({
+      manifest,
+      env: launchEnv,
+      cwd: workspaceDir,
+      json: opts.json,
+      stdout,
+      stderr,
+    });
+  } finally {
+    if (typeof stopToolAuthWatcher === 'function') {
+      await stopToolAuthWatcher({ flush: true }).catch(() => null);
+    }
+  }
   const code = Number.isInteger(brokerCode) ? brokerCode : 0;
   await runtime.record({
     phase: code === 0 ? CLOUD_LIFECYCLE.STOPPED : CLOUD_LIFECYCLE.FAILED,
@@ -694,6 +759,21 @@ function readinessFromWorkspace(manifest, workspace) {
       repair_required: false,
       secret_boundary: 'status_only',
     },
+  });
+}
+
+function toolAuthReadiness(status = {}) {
+  return sanitizeRuntimeData({
+    tool: status.tool || null,
+    label: status.label || null,
+    mode: 'vault',
+    present: status.present === true,
+    hydrated: status.hydrated === true,
+    persisted: status.persisted === true,
+    repair_required: status.repair_required === true,
+    repair_action: status.repair_action || null,
+    reason: status.reason || null,
+    secret_boundary: 'status_only',
   });
 }
 

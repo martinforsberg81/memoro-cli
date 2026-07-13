@@ -157,6 +157,7 @@ describe('mc cloud-runtime run', () => {
     const launchCalls = [];
     const brokerCalls = [];
     const gitCalls = [];
+    const persistWatchers = [];
 
     const code = await runCloudRuntimeWith(parseArgs([
       'run',
@@ -171,6 +172,7 @@ describe('mc cloud-runtime run', () => {
       env: {
         MEMORO_TOKEN: 'mem_runtime_secret',
         MC_CLOUD_GIT_TOKEN: 'ghp_private_secret',
+        MC_CODEX_API_KEY: 'sk_codex_private_secret',
         OPENAI_API_KEY: 'sk_product_secret',
       },
       now: () => '2026-07-13T12:00:00.000Z',
@@ -193,6 +195,19 @@ describe('mc cloud-runtime run', () => {
         brokerCalls.push(args);
         return 0;
       },
+      hydrateToolAuth: async () => ({
+        ok: true,
+        tool: 'codex',
+        label: 'tool_auth.codex',
+        present: true,
+        hydrated: true,
+        repair_required: false,
+        env: { CODEX_HOME: '/tmp/mc-cloud-codex-home' },
+      }),
+      startToolAuthPersistWatcher: (args) => {
+        persistWatchers.push(args);
+        return async () => null;
+      },
     });
 
     assert.equal(code, 0);
@@ -201,9 +216,13 @@ describe('mc cloud-runtime run', () => {
     assert.equal(JSON.stringify(gitCalls[0].args).includes('ghp_private_secret'), false);
     assert.equal(launchCalls.length, 1);
     assert.equal(launchCalls[0].deps.env.MEMORO_TOKEN, 'mem_runtime_secret');
+    assert.equal(launchCalls[0].deps.env.CODEX_HOME, '/tmp/mc-cloud-codex-home');
     assert.equal(launchCalls[0].deps.env.MC_CLOUD_GIT_TOKEN, undefined);
+    assert.equal(launchCalls[0].deps.env.MC_CODEX_API_KEY, undefined);
     assert.equal(launchCalls[0].deps.env.OPENAI_API_KEY, undefined);
     assert.equal(brokerCalls.length, 1);
+    assert.equal(persistWatchers.length, 1);
+    assert.equal(persistWatchers[0].env.CODEX_HOME, '/tmp/mc-cloud-codex-home');
     assert.equal(brokerCalls[0].manifest.cloud_session_id, m.cloud_session_id);
     assert.ok(reports.length >= 4);
     assert.equal(reports.at(-1).cloudSessionId, m.cloud_session_id);
