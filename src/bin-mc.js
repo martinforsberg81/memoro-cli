@@ -128,11 +128,13 @@ const LIFECYCLE = {
   setup:         () => import('./mc/commands/setup.js'),
   reconcile:     () => import('./mc/commands/reconcile.js'),
   vault:         () => import('./mc/commands/vault.js'),
+  'tool-auth':   () => import('./mc/commands/tool-auth.js'),
   adapter:       () => import('./mc/commands/adapter.js'),
   'tool-switch': () => import('./mc/commands/tool-switch.js'),
   broker:        () => import('./mc/commands/broker.js'),
   attach:        () => import('./mc/commands/attach.js'),
   'cloud-session': () => import('./mc/commands/cloud-session.js'),
+  'cloud-runtime': () => import('./mc/commands/cloud-runtime.js'),
   supervisor:    () => import('./mc/commands/supervisor.js'),
   fanout:        () => import('./mc/commands/fanout.js'),
   gather:        () => import('./mc/commands/gather.js'),
@@ -301,6 +303,7 @@ SECRETS
   mc vault list                   List secret labels, never values
   mc vault get <label>            Print a secret value, with confirmation
   mc vault rm|rotate|lock         Manage stored secrets
+  mc tool-auth hydrate|persist    Internal cloud tool auth vault bridge
 
 FLEET / ADVANCED
   mc spawn <name> "<brief>"       Create durable child project session
@@ -320,6 +323,7 @@ FLEET / ADVANCED
   mc broker connect               Connect local broker to Memoro cloud
   mc attach <session_id>          Attach to a broker-owned local session
   mc cloud-session start          Internal typed cloud mc runtime
+  mc cloud-runtime run            Internal cloud sandbox runtime supervisor
   mc adapter sync                 Refresh tool instruction wrappers
   mc adapter materialise          Copy mc's coordinator canon into this repo
   mc wrap <label> [args...]       Start an in-place labelled wrapper session

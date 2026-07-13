@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import test, { describe } from 'node:test';
 
 import {
@@ -188,7 +191,7 @@ describe('CloudBrokerClient', () => {
         source_id: 'local:machine',
         source_kind: 'local',
         source_name: 'machine',
-        capabilities: ['pty-stream-v1', 'resize-v1', 'screen-replay-v1'],
+        capabilities: ['pty-stream-v1', 'resize-v1', 'screen-replay-v1', 'environment-status-v1'],
       },
       {
         type: 'sessions',
@@ -448,7 +451,7 @@ describe('CloudBrokerClient', () => {
       source_kind: 'cloud',
       source_name: 'Cloud sandbox',
       cloud_session_id: 'cloud_sess_123',
-      capabilities: ['pty-stream-v1', 'resize-v1', 'screen-replay-v1'],
+      capabilities: ['pty-stream-v1', 'resize-v1', 'screen-replay-v1', 'environment-status-v1'],
     });
     assert.deepEqual(messages[1], {
       type: 'sessions',
@@ -888,6 +891,108 @@ describe('CloudBrokerClient', () => {
     assert.equal(result.data.source, 'codex');
     assert.deepEqual(result.data.messages, [{ role: 'assistant', text: 'codex screen' }]);
     client.stop();
+  });
+
+  test('handles fetch_environment_status from runtime status files without exposing secrets', async () => {
+    resetFakeWs();
+    const dir = mkdtempSync(join(tmpdir(), 'mc-cloud-status-'));
+    const manifestPath = join(dir, 'manifest.json');
+    const statusPath = join(dir, 'status.json');
+    const readinessPath = join(dir, 'readiness.json');
+    writeFileSync(manifestPath, JSON.stringify({
+      contract_version: 'mc-cloud-runtime-v1',
+      cloud_session_id: 'cld_status123',
+      coding_session_id: 'sess_a',
+      source: { id: 'cloud:cld_status123', name: 'Cloud sandbox' },
+      repo: {
+        id: 'repo_1',
+        ref: 'https://github.com/example/repo.git',
+        workspace_ref: 'main',
+        access: 'private',
+        credential_source: 'repo_grant',
+        token: 'secret-token',
+      },
+      launch: { tool: 'codex', policy: 'workspace-write', name: 'Status check' },
+    }));
+    writeFileSync(statusPath, JSON.stringify({
+      phase: 'ready',
+      runtime_state: 'ready',
+      process_status: 'running',
+      access_token: 'secret-status-token',
+    }));
+    writeFileSync(readinessPath, JSON.stringify({
+      ready: true,
+      repo: { ready: true, cwd: '/workspace/repo' },
+      git_auth: {
+        ready: true,
+        access: 'private',
+        grant_kind: 'github_oauth',
+        credential_source: 'repo_grant',
+        credential: 'secret-credential',
+      },
+      tool_auth: {
+        tool: 'codex',
+        mode: 'vault',
+        hydrated: true,
+        auth_json: 'secret-auth-json',
+      },
+    }));
+    const client = new CloudBrokerClient({
+      apiUrl: 'https://memoro.test',
+      token: 'tok',
+      machineId: 'machine',
+      sourceId: 'cloud:cld_status123',
+      sourceKind: 'cloud',
+      sourceName: 'Cloud sandbox',
+      cloudSessionId: 'cld_status123',
+      WebSocketImpl: FakeWebSocket,
+      env: {
+        MC_CLOUD_RUNTIME_MANIFEST: manifestPath,
+        MC_CLOUD_RUNTIME_STATUS: statusPath,
+        MC_CLOUD_RUNTIME_READINESS: readinessPath,
+      },
+      request: async (msg) => {
+        if (msg.type === 'sessions') return { ok: true, sessions: [] };
+        if (msg.type === 'session_status') {
+          return { ok: true, session: { id: 'sess_a', tool: 'codex', cwd: '/workspace/repo' } };
+        }
+        return { ok: false, error: `unexpected ${msg.type}` };
+      },
+      sessionRefreshIntervalMs: 0,
+      sleepImpl: async () => {},
+    });
+
+    try {
+      client.start();
+      const control = FakeWebSocket.instances[0];
+      control.open();
+      await new Promise((resolve) => setImmediate(resolve));
+      control.message(JSON.stringify({
+        type: 'command',
+        command_id: 'cmd_env',
+        coding_session_id: 'sess_a',
+        kind: 'fetch_environment_status',
+        args: { scope: 'all' },
+      }));
+      await new Promise((resolve) => setImmediate(resolve));
+
+      const result = JSON.parse(control.sent.at(-1));
+      assert.equal(result.type, 'result');
+      assert.equal(result.command_id, 'cmd_env');
+      assert.equal(result.ok, true);
+      assert.equal(result.data.runtime.live, true);
+      assert.equal(result.data.commands.status, true);
+      assert.equal(result.data.commands.transcript, true);
+      assert.equal(result.data.repo.ready, true);
+      assert.equal(result.data.repo.credential_source, 'repo_grant');
+      assert.equal(result.data.vault.exposes_secrets_to_llm, false);
+      assert.equal(result.data.tool_auth.ready, true);
+      assert.equal(result.data.cloud_session.id, 'cld_status123');
+      assert.doesNotMatch(JSON.stringify(result.data), /secret-/);
+    } finally {
+      client.stop();
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   test('does not open a monitor attach when broker recent output is unavailable', async () => {
