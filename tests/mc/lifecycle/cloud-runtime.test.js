@@ -230,11 +230,21 @@ describe('mc cloud-runtime run', () => {
     const status = JSON.parse(readFileSync(m.runtime.paths.status, 'utf8'));
     const events = readFileSync(m.runtime.paths.events, 'utf8');
     const readiness = JSON.parse(readFileSync(m.runtime.paths.readiness, 'utf8'));
+    const eventTypes = events.trim().split('\n').map((line) => JSON.parse(line).type);
     const rendered = JSON.stringify({ status, events, readiness });
     assert.equal(rendered.includes('mem_runtime_secret'), false);
     assert.equal(rendered.includes('ghp_private_secret'), false);
     assert.equal(rendered.includes('sk_product_secret'), false);
     assert.equal(readiness.repo.cloned, true);
+    assert.equal(readiness.git.ready, true);
+    assert.equal(readiness.git_auth.ready, true);
+    assert.equal(readiness.vault.exposes_secrets_to_llm, false);
+    assert.equal(readiness.tool_auth.ready, true);
+    assert.ok(eventTypes.includes('workspace.prepare.started'));
+    assert.ok(eventTypes.includes('workspace.prepare.finished'));
+    assert.ok(eventTypes.includes('provider.launch.started'));
+    assert.ok(eventTypes.includes('provider.launch.finished'));
+    assert.ok(eventTypes.includes('broker.connecting'));
   });
 
   test('fails before launch when the runtime token is missing', async () => {
