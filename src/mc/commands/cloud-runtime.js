@@ -297,6 +297,7 @@ export async function runCloudRuntimeWith(opts, deps = {}) {
     if (opts.json) writeJson(stdout, { ok: false, error: launch.error || 'cloud session launch failed', code: launch.code });
     return launch.code || 1;
   }
+  const launchedCodingSessionId = launch.payload?.coding_session_id || manifest.coding_session_id || null;
 
   await runtime.record({
     phase: CLOUD_LIFECYCLE.BROKER_CONNECTING,
@@ -306,7 +307,7 @@ export async function runCloudRuntimeWith(opts, deps = {}) {
       {
         type: 'provider.launch.finished',
         data: {
-          coding_session_id: launch.payload?.coding_session_id || manifest.coding_session_id || null,
+          coding_session_id: launchedCodingSessionId,
           source_id: runtimeSource(manifest).id,
         },
       },
@@ -320,6 +321,29 @@ export async function runCloudRuntimeWith(opts, deps = {}) {
     },
   });
 
+  let brokerReady = false;
+  let currentToolAuthReadiness = readyToolAuth;
+  const brokerReadiness = () => (brokerReady ? { connected: true } : { connecting: true });
+  const recordBrokerReady = async () => {
+    if (brokerReady) return;
+    brokerReady = true;
+    await runtime.record({
+      phase: CLOUD_LIFECYCLE.READY,
+      runtime_state: 'ready',
+      process_status: 'running',
+      events: [
+        { type: 'broker.connected', data: { source_id: runtimeSource(manifest).id } },
+        { type: 'runtime.ready', data: { coding_session_id: launchedCodingSessionId, source_id: runtimeSource(manifest).id } },
+      ],
+      readiness: {
+        ...workspaceReadiness,
+        ready: true,
+        broker: brokerReadiness(),
+        tool_auth: currentToolAuthReadiness,
+      },
+    });
+  };
+
   const startPersistWatcher = deps.startToolAuthPersistWatcher || startToolAuthPersistWatcher;
   const stopToolAuthWatcher = startPersistWatcher({
     tool: manifest.launch?.tool || 'codex',
@@ -329,16 +353,17 @@ export async function runCloudRuntimeWith(opts, deps = {}) {
     intervalMs: deps.toolAuthPersistIntervalMs,
     onResult: async (result) => {
       const status = publicToolAuthResult(result);
+      currentToolAuthReadiness = toolAuthReadiness(status);
       await runtime.record({
-        phase: CLOUD_LIFECYCLE.BROKER_CONNECTING,
-        runtime_state: 'broker_connecting',
+        phase: brokerReady ? CLOUD_LIFECYCLE.READY : CLOUD_LIFECYCLE.BROKER_CONNECTING,
+        runtime_state: brokerReady ? 'ready' : 'broker_connecting',
         process_status: 'running',
         events: [{ type: 'tool.auth_persist.finished', data: status }],
         readiness: {
           ...workspaceReadiness,
           ready: true,
-          broker: { connecting: true },
-          tool_auth: toolAuthReadiness(status),
+          broker: brokerReadiness(),
+          tool_auth: currentToolAuthReadiness,
         },
       });
     },
@@ -404,6 +429,7 @@ export async function runCloudRuntimeWith(opts, deps = {}) {
       json: opts.json,
       stdout,
       stderr,
+      onConnected: recordBrokerReady,
     });
   } finally {
     shutdownHandlers.uninstall();
@@ -429,7 +455,7 @@ export async function runCloudRuntimeWith(opts, deps = {}) {
     writeJson(stdout, {
       ok: code === 0,
       cloud_session_id: cloudSessionId,
-      coding_session_id: launch.payload?.coding_session_id || manifest.coding_session_id || null,
+      coding_session_id: launchedCodingSessionId,
       broker_exit_code: code,
     });
   }
@@ -630,6 +656,7 @@ function connectBrokerInForeground({
   json = false,
   stdout = process.stdout,
   stderr = process.stderr,
+  onConnected = null,
 } = {}) {
   const source = runtimeSource(manifest);
   const args = brokerConnectArgs({
@@ -640,19 +667,43 @@ function connectBrokerInForeground({
   });
   if (json) args.push('--json');
   return new Promise((resolve) => {
+    let connectedPromise = null;
+    const notifyConnected = () => {
+      if (connectedPromise || typeof onConnected !== 'function') return connectedPromise;
+      connectedPromise = Promise.resolve(onConnected()).catch(() => null);
+      return connectedPromise;
+    };
     const child = spawn(process.execPath, [resolveMcBinPath(), ...args], {
       cwd,
       env,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
-    child.stdout.on('data', (chunk) => stdout.write(chunk));
+    child.stdout.on('data', (chunk) => {
+      stdout.write(chunk);
+      if (brokerConnectOutputIndicatesReady(chunk)) void notifyConnected();
+    });
     child.stderr.on('data', (chunk) => stderr.write(chunk));
     child.on('error', (err) => {
       stderr.write(`mc: broker connect spawn failed (${safeError(err)})\n`);
       resolve(1);
     });
-    child.on('close', (code) => resolve(Number.isInteger(code) ? code : 1));
+    child.on('close', async (code) => {
+      if (connectedPromise) await connectedPromise;
+      resolve(Number.isInteger(code) ? code : 1);
+    });
   });
+}
+
+export function brokerConnectOutputIndicatesReady(chunk) {
+  const text = String(chunk || '');
+  if (/connected to cloud/i.test(text)) return true;
+  for (const line of text.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || !trimmed.startsWith('{')) continue;
+    const parsed = parseJsonSafe(trimmed);
+    if (parsed?.ok === true && parsed.machine_id) return true;
+  }
+  return false;
 }
 
 function createRuntimeRecorder({
