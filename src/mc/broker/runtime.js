@@ -88,6 +88,7 @@ export class BrokerRuntime {
     const toolInput = stringOrDefault(input.tool, this.env.MC_GROUNDING_TOOL || DEFAULT_TOOL);
     const argv = arrayOfStrings(input.argv, 'argv');
     const launchOptions = plainObject(input.launch_options) ? input.launch_options : {};
+    const envUnset = arrayOfStrings(input.env_unset, 'env_unset');
     const cols = positiveInteger(input.cols, 80, 'cols');
     const rows = positiveInteger(input.rows, 24, 'rows');
     const launch = this.launchResolver(toolInput);
@@ -99,11 +100,14 @@ export class BrokerRuntime {
       };
     }
 
+    const baseEnv = {
+      ...this.env,
+      ...(plainObject(input.env) ? input.env : {}),
+    };
+    for (const key of envUnset) delete baseEnv[key];
+
     const interactiveEnv = normalizeInteractivePtyEnv({
-      baseEnv: {
-        ...this.env,
-        ...(plainObject(input.env) ? input.env : {}),
-      },
+      baseEnv,
       termName: stringOrDefault(input.term_name, this.termName),
     });
 

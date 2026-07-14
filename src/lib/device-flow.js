@@ -55,6 +55,7 @@ const DEFAULT_API_URL = 'https://meetmemoro.app';
 const AUTH_BYPASS_FIRST_ARGS = new Set([
   '--help', '-h', 'help',
   '--version', '-v',
+  'cloud-runtime',
 ]);
 
 // `mc auth memoro <...>` should also bypass: the user is opting into the

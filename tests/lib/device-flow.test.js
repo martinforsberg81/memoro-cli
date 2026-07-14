@@ -87,6 +87,10 @@ describe('shouldTriggerDeviceFlow', () => {
     assert.equal(shouldTriggerDeviceFlow({ ...base, argv: ['auth', 'devices', 'list'] }), false);
   });
 
+  test('bypasses internal cloud-runtime supervisor commands', () => {
+    assert.equal(shouldTriggerDeviceFlow({ ...base, argv: ['cloud-runtime', 'run'] }), false);
+  });
+
   test('does NOT bypass `mc auth status` — auth-less status invocation should auto-trigger', () => {
     // Surprising but intentional: a brand-new user typing `mc auth status`
     // expects to land in the auth flow, not see a static "no token" line.
