@@ -10,6 +10,7 @@ import {
 describe('cloud runtime contract', () => {
   test('exposes the v1 contract version and lifecycle constants', () => {
     assert.equal(CLOUD_RUNTIME_CONTRACT_VERSION, 'mc-cloud-runtime-v1');
+    assert.equal(CLOUD_LIFECYCLE.RUNTIME_PENDING, 'runtime_pending');
     assert.equal(CLOUD_LIFECYCLE.READY, 'ready');
     assert.equal(CLOUD_LIFECYCLE.SLEEPING, 'sleeping');
   });
