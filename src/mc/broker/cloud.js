@@ -8,6 +8,7 @@ import { createFetchTranscriptHandler } from '../../commands/handlers/fetch-tran
 import { requestBroker } from './client.js';
 import { brokerSocketPath } from './paths.js';
 import { sourceForTool } from './session-sidecars.js';
+import { cloudRuntimePhaseSemantics } from '../cloud-runtime-contract.js';
 import {
   listLocalBrokerAndHostSessions,
   requestForSession,
@@ -721,7 +722,7 @@ function buildEnvironmentStatusResult({
   const status = sanitizeStatusData(readJsonFile(paths.status) || {});
   const readiness = sanitizeStatusData(readJsonFile(paths.readiness) || status.readiness || null);
   const phase = stringOrDefault(status.phase, stringOrDefault(status.runtime_state, 'ready'));
-  const phaseState = runtimePhaseSemantics(phase);
+  const phaseState = cloudRuntimePhaseSemantics(phase);
   const tool = stringOrDefault(session.tool, stringOrDefault(manifest.launch?.tool, 'codex'));
   const repo = manifest.repo || {};
   const repoReadiness = readiness?.repo || {};
@@ -787,25 +788,6 @@ function buildEnvironmentStatusResult({
     },
     summary: environmentStatusSummary({ ...phaseState, phase }),
   });
-}
-
-function runtimePhaseSemantics(phase) {
-  const normalized = stringOrDefault(phase, 'ready');
-  const stopped = normalized === 'stopped';
-  const failed = normalized === 'failed';
-  const sleeping = normalized === 'sleeping';
-  const live = normalized === 'ready';
-  const wakeable = normalized === 'runtime_pending' || sleeping;
-  const continueAction = live ? 'live' : (wakeable ? 'wake' : (stopped || failed ? null : 'wait'));
-  return {
-    live,
-    wakeable,
-    canContinue: !stopped && !failed,
-    continueAction,
-    stopped,
-    failed,
-    sleeping,
-  };
 }
 
 function buildCodingBinEnvironmentStatus({ manifest = {}, status = {}, readiness = {} } = {}) {
