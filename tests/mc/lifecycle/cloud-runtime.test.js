@@ -5,14 +5,16 @@ import { join } from 'node:path';
 import test, { describe } from 'node:test';
 
 import {
-  captureCodingBinSnapshot,
   CLOUD_RUNTIME_CONTRACT_VERSION,
   parseArgs,
   prepareWorkspace,
-  restoreCodingBinSnapshot,
   runCloudRuntimeWith,
   validateCloudRuntimeOptions,
 } from '../../../src/mc/commands/cloud-runtime.js';
+import {
+  captureCodingBinSnapshot,
+  restoreCodingBinSnapshot,
+} from '../../../src/mc/cloud-runtime-snapshot.js';
 
 function io() {
   let stdout = '';
