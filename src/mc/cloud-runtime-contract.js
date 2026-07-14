@@ -2,6 +2,7 @@ export const CLOUD_RUNTIME_CONTRACT_VERSION = 'mc-cloud-runtime-v1';
 
 export const CLOUD_LIFECYCLE = Object.freeze({
   REQUESTED: 'requested',
+  RUNTIME_PENDING: 'runtime_pending',
   RUNTIME_TOKEN_MINTED: 'runtime_token_minted',
   WAKING: 'waking',
   BROKER_CONNECTING: 'broker_connecting',
@@ -17,7 +18,7 @@ export function cloudRuntimePhaseSemantics(phase) {
   const failed = normalized === CLOUD_LIFECYCLE.FAILED;
   const sleeping = normalized === CLOUD_LIFECYCLE.SLEEPING;
   const live = normalized === CLOUD_LIFECYCLE.READY;
-  const wakeable = normalized === 'runtime_pending' || sleeping;
+  const wakeable = normalized === CLOUD_LIFECYCLE.RUNTIME_PENDING || sleeping;
   const continueAction = live
     ? 'live'
     : wakeable
