@@ -7,7 +7,11 @@ import { join } from 'node:path';
 import { parseArgs, run as runCommand } from '../../src/mc/commands/cloud-runtime.js';
 import { runCloudRuntimeSupervisor } from '../../src/mc/cloud-runtime/supervisor.js';
 import { prepareCloudRuntimeRepo, repoCloneUrl } from '../../src/mc/cloud-runtime/repo.js';
-import { captureCodingBinSnapshot } from '../../src/mc/cloud-runtime/snapshot.js';
+import {
+  SNAPSHOT_MANIFEST_PATH,
+  captureCodingBinSnapshot,
+  restoreCodingBinSnapshot,
+} from '../../src/mc/cloud-runtime/snapshot.js';
 
 describe('mc cloud-runtime command', () => {
   test('parses run arguments', () => {
@@ -345,6 +349,7 @@ describe('coding bin snapshot capture', () => {
     const tempDir = join(dir, 'tmp');
     const uploaded = [];
     let listedFiles = [];
+    let snapshotManifest = null;
     try {
       await mkdir(join(repoRoot, 'src'), { recursive: true });
       await mkdir(join(repoRoot, '.codex'), { recursive: true });
@@ -376,17 +381,17 @@ describe('coding bin snapshot capture', () => {
         tempDir,
         now: () => '2026-07-14T12:00:00.000Z',
         makeSnapshotId: () => 'cbsnap_capture123',
+        spawn: (_cmd, args) => {
+          if (args.join(' ') === 'rev-parse --abbrev-ref HEAD') return { status: 0, stdout: 'main\n', stderr: '' };
+          if (args.join(' ') === 'rev-parse HEAD') return { status: 0, stdout: 'abc123\n', stderr: '' };
+          if (args.join(' ') === 'ls-files -d -z') return { status: 0, stdout: 'src/deleted.js\0src/token-deleted.txt\0', stderr: '' };
+          return { status: 1, stdout: '', stderr: 'unexpected' };
+        },
         createArchive: async ({ archivePath, listPath }) => {
           listedFiles = String(await readFile(listPath, 'utf8')).split('\0').filter(Boolean);
+          snapshotManifest = JSON.parse(await readFile(join(repoRoot, SNAPSHOT_MANIFEST_PATH), 'utf8'));
           await writeFile(archivePath, 'archive-bytes', 'utf8');
-          return {
-            ok: true,
-            spawn: (_cmd, args) => {
-              if (args.join(' ') === 'rev-parse --abbrev-ref HEAD') return { status: 0, stdout: 'main\n', stderr: '' };
-              if (args.join(' ') === 'rev-parse HEAD') return { status: 0, stdout: 'abc123\n', stderr: '' };
-              return { status: 1, stdout: '', stderr: 'unexpected' };
-            },
-          };
+          return { ok: true };
         },
         fetchImpl: async (url, options) => {
           uploaded.push({ url, options });
@@ -397,12 +402,17 @@ describe('coding bin snapshot capture', () => {
       assert.equal(result.ok, true);
       assert.equal(result.uploaded, true);
       assert.equal(result.snapshot_id, 'cbsnap_capture123');
-      assert.deepEqual(listedFiles, ['README.md', 'src/app.js']);
+      assert.deepEqual(listedFiles, ['README.md', 'src/app.js', SNAPSHOT_MANIFEST_PATH]);
       assert.equal(result.file_count, 2);
       assert.equal(result.skipped_count, 4);
       assert.equal(result.byte_count, Buffer.byteLength('archive-bytes'));
       assert.equal(result.base_ref, 'main');
       assert.equal(result.head_ref, 'abc123');
+      assert.equal(result.manifest_version, 2);
+      assert.equal(result.deleted_count, 1);
+      assert.equal(snapshotManifest.manifest_version, 2);
+      assert.deepEqual(snapshotManifest.files.map((file) => file.path), ['README.md', 'src/app.js']);
+      assert.deepEqual(snapshotManifest.deleted_paths, ['src/deleted.js']);
       assert.equal(uploaded.length, 1);
       assert.equal(uploaded[0].url, 'https://memoro.test/api/mc/cloud-sessions/cld/coding-bin-snapshots/cbsnap_capture123/payload');
       assert.equal(uploaded[0].options.method, 'PUT');
@@ -412,6 +422,48 @@ describe('coding bin snapshot capture', () => {
       assert.equal(uploaded[0].options.headers['X-MC-Snapshot-Skipped-Count'], '4');
       assert.equal(uploaded[0].options.headers['X-MC-Snapshot-Base-Ref'], 'main');
       assert.equal(uploaded[0].options.headers['X-MC-Snapshot-Head-Ref'], 'abc123');
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('restore applies snapshot manifest deletions and removes the manifest file', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'mc-cloud-runtime-restore-'));
+    const repoRoot = join(dir, 'repo');
+    const tempDir = join(dir, 'tmp');
+    const deletedPath = join(repoRoot, 'src/deleted.js');
+    try {
+      await mkdir(join(repoRoot, 'src'), { recursive: true });
+      await mkdir(tempDir, { recursive: true });
+      await writeFile(deletedPath, 'stale', 'utf8');
+
+      const result = await restoreCodingBinSnapshot({
+        id: 'cbsnap_restore123',
+        payload: { method: 'GET', url: 'https://memoro.test/snapshot', content_type: 'application/zstd' },
+      }, {
+        root: repoRoot,
+        token: 'mem_runtime_secret_123456789',
+        tempDir,
+        fetchImpl: async () => ({
+          ok: true,
+          status: 200,
+          arrayBuffer: async () => Buffer.from('archive-bytes'),
+        }),
+        extractArchive: async () => {
+          await writeFile(join(repoRoot, SNAPSHOT_MANIFEST_PATH), JSON.stringify({
+            manifest_version: 2,
+            deleted_paths: ['src/deleted.js', '.env', '.codex/auth.json'],
+          }), 'utf8');
+          return { ok: true };
+        },
+      });
+
+      assert.equal(result.ok, true);
+      assert.equal(result.restored, true);
+      assert.equal(result.manifest_version, 2);
+      assert.equal(result.deleted_count, 1);
+      await assert.rejects(readFile(deletedPath, 'utf8'), /ENOENT/);
+      await assert.rejects(readFile(join(repoRoot, SNAPSHOT_MANIFEST_PATH), 'utf8'), /ENOENT/);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

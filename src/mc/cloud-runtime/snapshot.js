@@ -8,6 +8,8 @@ import { tmpdir } from 'node:os';
 const DEFAULT_MAX_BYTES = 64 * 1024 * 1024;
 const DEFAULT_MAX_FILES = 20_000;
 const SNAPSHOT_ID_RE = /^cbsnap_[a-z0-9_-]{6,}$/i;
+export const SNAPSHOT_MANIFEST_PATH = '.mc-coding-bin-snapshot.json';
+export const SNAPSHOT_MANIFEST_VERSION = 2;
 
 export async function restoreCodingBinSnapshot(snapshot, {
   root,
@@ -44,11 +46,18 @@ export async function restoreCodingBinSnapshot(snapshot, {
   try {
     const extracted = await extractArchive({ archivePath: path, root });
     if (!extracted?.ok) return { ok: false, error: extracted?.error || 'snapshot extract failed' };
+    const applied = await applySnapshotManifest(root, {
+      rmImpl: extracted.rmImpl || rm,
+      readFileImpl: extracted.readFileImpl || readFile,
+    });
+    if (!applied.ok) return { ok: false, error: applied.error || 'snapshot manifest apply failed' };
     return {
       ok: true,
       restored: true,
       snapshot_id: snapshot.id || null,
       byte_count: bytes.byteLength,
+      manifest_version: applied.manifest_version,
+      deleted_count: applied.deleted_count,
       started_at: startedAt,
       restored_at: now(),
     };
@@ -73,6 +82,7 @@ export async function captureCodingBinSnapshot(policy, {
   tempDir = tmpdir(),
   now = () => new Date().toISOString(),
   makeSnapshotId = defaultSnapshotId,
+  spawn = spawnSync,
 } = {}) {
   if (!policy?.enabled) return { ok: true, skipped: true, reason: 'snapshot_disabled' };
   const upload = policy.upload && typeof policy.upload === 'object' ? policy.upload : null;
@@ -95,11 +105,23 @@ export async function captureCodingBinSnapshot(policy, {
     await mkdir(tempDir, { recursive: true });
     const listed = await collectFiles(root, { policy, maxFiles });
     if (!listed.ok) return { ok: false, snapshot_id: snapshotId, error: listed.error || 'snapshot file collection failed' };
-    if (listed.files.length === 0) {
+    const refs = await readGitSnapshotState(root, { policy, spawn });
+    if (listed.files.length === 0 && refs.deleted_paths.length === 0) {
       return { ok: true, skipped: true, reason: 'no_snapshot_files', snapshot_id: snapshotId };
     }
 
-    await writeFile(listPath, Buffer.from(listed.files.join('\0') + '\0', 'utf8'), { mode: 0o600 });
+    const manifest = buildSnapshotManifest({
+      snapshotId,
+      root,
+      policy,
+      files: listed.file_entries || listed.files.map((path) => ({ path })),
+      skippedCount: listed.skipped_count,
+      refs,
+      capturedAt: startedAt,
+    });
+    await writeFile(join(root, SNAPSHOT_MANIFEST_PATH), JSON.stringify(manifest, null, 2) + '\n', { mode: 0o600 });
+    const archiveFiles = [...listed.files, SNAPSHOT_MANIFEST_PATH];
+    await writeFile(listPath, Buffer.from(archiveFiles.join('\0') + '\0', 'utf8'), { mode: 0o600 });
     const archived = await createArchive({ root, archivePath, listPath });
     if (!archived?.ok) return { ok: false, snapshot_id: snapshotId, error: archived?.error || 'snapshot archive failed' };
 
@@ -117,7 +139,6 @@ export async function captureCodingBinSnapshot(policy, {
     }
 
     const archive = await readFile(archivePath);
-    const refs = await readGitRefs(root, { spawn: archived.spawn || spawnSync });
     const uploadUrl = urlTemplate.replace('{snapshot_id}', encodeURIComponent(snapshotId));
     const headers = {
       Authorization: `Bearer ${token}`,
@@ -156,10 +177,13 @@ export async function captureCodingBinSnapshot(policy, {
       skipped_count: listed.skipped_count,
       base_ref: refs.base_ref,
       head_ref: refs.head_ref,
+      manifest_version: SNAPSHOT_MANIFEST_VERSION,
+      deleted_count: refs.deleted_paths.length,
       started_at: startedAt,
       uploaded_at: now(),
     };
   } finally {
+    await rm(join(root || '', SNAPSHOT_MANIFEST_PATH), { force: true }).catch(() => {});
     await rm(archivePath, { force: true }).catch(() => {});
     await rm(listPath, { force: true }).catch(() => {});
   }
@@ -213,7 +237,14 @@ export async function collectCodingBinSnapshotFiles(root, {
 
   const walked = await walk('');
   if (!walked.ok) return walked;
-  return { ok: true, files, skipped_count: skipped };
+  const fileEntries = await Promise.all(files.map(async (path) => {
+    const info = await stat(join(root, path)).catch(() => null);
+    return {
+      path,
+      size: info?.isFile?.() ? info.size : null,
+    };
+  }));
+  return { ok: true, files, file_entries: fileEntries, skipped_count: skipped };
 }
 
 export async function createTarZstdArchive({ archivePath, root, listPath, spawn = spawnSync } = {}) {
@@ -248,10 +279,12 @@ export async function extractTarZstdArchive({ archivePath, root, spawn = spawnSy
   return { ok: true };
 }
 
-async function readGitRefs(root, { spawn = spawnSync } = {}) {
+async function readGitSnapshotState(root, { policy = {}, spawn = spawnSync } = {}) {
+  const excludes = buildExcludeMatcher(policy.exclude);
   return {
     base_ref: gitOutput(root, ['rev-parse', '--abbrev-ref', 'HEAD'], spawn),
     head_ref: gitOutput(root, ['rev-parse', 'HEAD'], spawn),
+    deleted_paths: gitDeletedPaths(root, spawn).filter((path) => !excludes(path, false)),
   };
 }
 
@@ -264,6 +297,88 @@ function gitOutput(root, args, spawn) {
   if (res.status !== 0) return null;
   const out = String(res.stdout || '').trim();
   return out && out !== 'HEAD' ? out.slice(0, 256) : out || null;
+}
+
+function gitDeletedPaths(root, spawn) {
+  const res = spawn('git', ['ls-files', '-d', '-z'], {
+    cwd: root,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  if (res.status !== 0) return [];
+  return String(res.stdout || '')
+    .split('\0')
+    .map(normalizeRelativePath)
+    .filter(Boolean)
+    .filter(isSafeSnapshotPath);
+}
+
+function buildSnapshotManifest({
+  snapshotId,
+  policy,
+  files,
+  skippedCount,
+  refs,
+  capturedAt,
+} = {}) {
+  return {
+    manifest_version: SNAPSHOT_MANIFEST_VERSION,
+    snapshot_id: snapshotId,
+    format: 'tar.zst',
+    captured_at: capturedAt || null,
+    git: {
+      base_ref: refs?.base_ref || null,
+      head_ref: refs?.head_ref || null,
+    },
+    files: (Array.isArray(files) ? files : [])
+      .map((file) => ({
+        path: normalizeRelativePath(file?.path),
+        size: Number.isInteger(file?.size) && file.size >= 0 ? file.size : null,
+      }))
+      .filter((file) => file.path && isSafeSnapshotPath(file.path)),
+    deleted_paths: (Array.isArray(refs?.deleted_paths) ? refs.deleted_paths : [])
+      .map(normalizeRelativePath)
+      .filter(Boolean)
+      .filter((path) => isSafeSnapshotPath(path) && !buildExcludeMatcher(policy?.exclude)(path, false)),
+    skipped_count: Number.isInteger(skippedCount) && skippedCount >= 0 ? skippedCount : 0,
+  };
+}
+
+async function applySnapshotManifest(root, {
+  readFileImpl = readFile,
+  rmImpl = rm,
+} = {}) {
+  const manifestPath = join(root, SNAPSHOT_MANIFEST_PATH);
+  let manifest = null;
+  let raw = null;
+  try {
+    raw = await readFileImpl(manifestPath, 'utf8');
+  } catch {
+    return { ok: true, skipped: true, reason: 'manifest_missing', manifest_version: null, deleted_count: 0 };
+  }
+  try {
+    manifest = JSON.parse(raw);
+  } catch {
+    await rmImpl(manifestPath, { force: true }).catch(() => {});
+    return { ok: false, error: 'snapshot manifest is invalid JSON' };
+  }
+
+  const version = Number.isInteger(manifest?.manifest_version) ? manifest.manifest_version : null;
+  const deletedPaths = Array.isArray(manifest?.deleted_paths) ? manifest.deleted_paths : [];
+  let deletedCount = 0;
+  for (const path of deletedPaths) {
+    const relative = normalizeRelativePath(path);
+    if (!isSafeSnapshotDeletionPath(relative)) continue;
+    await rmImpl(join(root, relative), { force: true }).then(() => {
+      deletedCount += 1;
+    }).catch(() => {});
+  }
+  await rmImpl(manifestPath, { force: true }).catch(() => {});
+  return {
+    ok: true,
+    manifest_version: version,
+    deleted_count: deletedCount,
+  };
 }
 
 function buildExcludeMatcher(exclude = {}) {
@@ -316,6 +431,25 @@ function normalizeRelativePath(value) {
     .split('/')
     .filter((part) => part && part !== '.')
     .join('/');
+}
+
+function isSafeSnapshotPath(relative) {
+  const rel = normalizeRelativePath(relative);
+  if (!rel || rel.includes('..')) return false;
+  if (rel === '.git' || rel.startsWith('.git/')) return false;
+  return true;
+}
+
+function isSafeSnapshotDeletionPath(relative) {
+  const rel = normalizeRelativePath(relative);
+  if (!isSafeSnapshotPath(rel)) return false;
+  const parts = rel.split('/');
+  if (['.memoro', '.mc', '.codex', '.claude'].includes(parts[0])) return false;
+  if (parts.some((part) => /^\.env(?:\.|$)/.test(part))) return false;
+  if (parts.some((part) => /token|secret|credential/i.test(part))) return false;
+  if (/auth.*\.json$/i.test(parts.at(-1) || '')) return false;
+  if (['id_rsa', 'id_ed25519'].includes(parts.at(-1) || '')) return false;
+  return true;
 }
 
 function positiveInteger(value, fallback) {
