@@ -721,30 +721,26 @@ function buildEnvironmentStatusResult({
   const status = sanitizeStatusData(readJsonFile(paths.status) || {});
   const readiness = sanitizeStatusData(readJsonFile(paths.readiness) || status.readiness || null);
   const phase = stringOrDefault(status.phase, stringOrDefault(status.runtime_state, 'ready'));
-  const stopped = phase === 'stopped';
-  const failed = phase === 'failed';
-  const sleeping = phase === 'sleeping';
-  const live = !stopped && !failed && !sleeping;
+  const phaseState = runtimePhaseSemantics(phase);
   const tool = stringOrDefault(session.tool, stringOrDefault(manifest.launch?.tool, 'codex'));
   const repo = manifest.repo || {};
   const repoReadiness = readiness?.repo || {};
   const gitAuth = readiness?.git_auth || repo.git_auth || {};
   const toolAuth = readiness?.tool_auth || {};
   const codingBin = buildCodingBinEnvironmentStatus({ manifest, status, readiness });
-  const continueAction = live ? 'live' : (sleeping ? 'wake' : (stopped || failed ? null : 'wait'));
   return sanitizeStatusData({
     ok: true,
     scope: stringOrDefault(scope, 'all'),
     runtime: {
       contract_version: status.contract_version || manifest.contract_version || null,
       phase,
-      live,
-      wakeable: continueAction === 'wake',
-      can_continue: !stopped && !failed,
-      continue_action: continueAction,
-      needs_repair: failed || toolAuth.repair_required === true || gitAuth.repair_required === true,
-      stopped,
-      failed,
+      live: phaseState.live,
+      wakeable: phaseState.wakeable,
+      can_continue: phaseState.canContinue,
+      continue_action: phaseState.continueAction,
+      needs_repair: phaseState.failed || toolAuth.repair_required === true || gitAuth.repair_required === true,
+      stopped: phaseState.stopped,
+      failed: phaseState.failed,
       process_status: status.process_status || null,
       exit_code: Number.isInteger(status.exit_code) ? status.exit_code : null,
       updated_at: status.updated_at || null,
@@ -752,8 +748,8 @@ function buildEnvironmentStatusResult({
     },
     commands: {
       status: true,
-      transcript: live,
-      message: live,
+      transcript: phaseState.live,
+      message: phaseState.live,
     },
     repo: {
       id: stringOrDefault(repo.id, null),
@@ -789,8 +785,27 @@ function buildEnvironmentStatusResult({
       name: stringOrDefault(session.name, stringOrDefault(manifest.launch?.name, null)),
       policy: stringOrDefault(session.policy, stringOrDefault(manifest.launch?.policy, null)),
     },
-    summary: environmentStatusSummary({ live, stopped, failed, continueAction, phase }),
+    summary: environmentStatusSummary({ ...phaseState, phase }),
   });
+}
+
+function runtimePhaseSemantics(phase) {
+  const normalized = stringOrDefault(phase, 'ready');
+  const stopped = normalized === 'stopped';
+  const failed = normalized === 'failed';
+  const sleeping = normalized === 'sleeping';
+  const live = normalized === 'ready';
+  const wakeable = normalized === 'runtime_pending' || sleeping;
+  const continueAction = live ? 'live' : (wakeable ? 'wake' : (stopped || failed ? null : 'wait'));
+  return {
+    live,
+    wakeable,
+    canContinue: !stopped && !failed,
+    continueAction,
+    stopped,
+    failed,
+    sleeping,
+  };
 }
 
 function buildCodingBinEnvironmentStatus({ manifest = {}, status = {}, readiness = {} } = {}) {
@@ -865,7 +880,11 @@ function environmentStatusSummary({ live, stopped, failed, continueAction, phase
   if (stopped) return 'Cloud runtime is stopped. Start a new session to continue.';
   if (failed) return 'Cloud runtime needs repair before transcript or messages are available.';
   if (live) return 'Cloud runtime is live. Transcript and messages are available.';
-  if (continueAction === 'wake') return 'Cloud runtime is sleeping and can be continued.';
+  if (continueAction === 'wake') {
+    return phase === 'sleeping'
+      ? 'Cloud runtime is sleeping and can be continued.'
+      : 'Cloud runtime is not live. Continue will wake it.';
+  }
   return `Cloud runtime is ${phase || 'pending'}. Waiting for readiness.`;
 }
 
