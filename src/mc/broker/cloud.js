@@ -730,6 +730,7 @@ function buildEnvironmentStatusResult({
   const repoReadiness = readiness?.repo || {};
   const gitAuth = readiness?.git_auth || repo.git_auth || {};
   const toolAuth = readiness?.tool_auth || {};
+  const codingBin = buildCodingBinEnvironmentStatus({ manifest, status, readiness });
   const continueAction = live ? 'live' : (sleeping ? 'wake' : (stopped || failed ? null : 'wait'));
   return sanitizeStatusData({
     ok: true,
@@ -779,6 +780,7 @@ function buildEnvironmentStatusResult({
       repair_action: stringOrDefault(toolAuth.repair_action, null),
       secret_boundary: 'status_only',
     },
+    coding_bin: codingBin,
     readiness,
     cloud_session: {
       id: stringOrDefault(manifest.cloud_session_id, sourceIdentity.cloud_session_id || null),
@@ -788,6 +790,44 @@ function buildEnvironmentStatusResult({
       policy: stringOrDefault(session.policy, stringOrDefault(manifest.launch?.policy, null)),
     },
     summary: environmentStatusSummary({ live, stopped, failed, continueAction, phase }),
+  });
+}
+
+function buildCodingBinEnvironmentStatus({ manifest = {}, status = {}, readiness = {} } = {}) {
+  const manifestBin = manifest.coding_bin && typeof manifest.coding_bin === 'object' && !Array.isArray(manifest.coding_bin)
+    ? manifest.coding_bin
+    : {};
+  const readinessBin = readiness?.coding_bin && typeof readiness.coding_bin === 'object' && !Array.isArray(readiness.coding_bin)
+    ? readiness.coding_bin
+    : {};
+  const snapshot = status?.coding_bin_snapshot && typeof status.coding_bin_snapshot === 'object' && !Array.isArray(status.coding_bin_snapshot)
+    ? status.coding_bin_snapshot
+    : {};
+  const latest = manifestBin.latest_snapshot && typeof manifestBin.latest_snapshot === 'object' && !Array.isArray(manifestBin.latest_snapshot)
+    ? manifestBin.latest_snapshot
+    : {};
+  const snapshotStatus = stringOrDefault(snapshot.status, stringOrDefault(readinessBin.snapshot_status, null));
+  const failed = snapshotStatus === 'failed' || readinessBin.warning === 'snapshot_capture_failed' || readinessBin.warning === 'snapshot_restore_failed';
+  const restored = snapshotStatus === 'restored' || readinessBin.restored === true;
+  const ready = snapshotStatus === 'ready' || restored || readinessBin.ready === true;
+  return sanitizeStatusData({
+    id: stringOrDefault(readinessBin.id, stringOrDefault(status.coding_bin_id, stringOrDefault(manifest.coding_bin_id, stringOrDefault(manifestBin.id, null)))),
+    root: stringOrDefault(readinessBin.root, stringOrDefault(manifestBin.root, null)),
+    snapshot_policy_enabled: readinessBin.snapshot_policy_enabled === true || manifestBin.snapshot?.enabled === true,
+    latest_snapshot_id: stringOrDefault(
+      readinessBin.latest_snapshot_id,
+      stringOrDefault(status.coding_bin_snapshot_id, stringOrDefault(snapshot.id, stringOrDefault(latest.id, null))),
+    ),
+    snapshot_status: snapshotStatus,
+    snapshot_ready: ready && !failed,
+    snapshot_restored: restored,
+    snapshot_failed: failed,
+    file_count: Number.isInteger(snapshot.fileCount) ? snapshot.fileCount : Number.isInteger(latest.file_count) ? latest.file_count : 0,
+    byte_count: Number.isInteger(snapshot.byteCount) ? snapshot.byteCount : Number.isInteger(latest.byte_count) ? latest.byte_count : 0,
+    skipped_count: Number.isInteger(snapshot.skippedCount) ? snapshot.skippedCount : Number.isInteger(latest.skipped_count) ? latest.skipped_count : 0,
+    repair_required: readinessBin.repair_required === true || failed,
+    warning: stringOrDefault(readinessBin.warning, failed ? 'snapshot_failed' : null),
+    secret_boundary: 'status_only',
   });
 }
 
