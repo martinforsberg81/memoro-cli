@@ -117,6 +117,7 @@ const LIFECYCLE = {
   vault:         () => import('./mc/commands/vault.js'),
   adapter:       () => import('./mc/commands/adapter.js'),
   'tool-switch': () => import('./mc/commands/tool-switch.js'),
+  'cloud-runtime': () => import('./mc/commands/cloud-runtime.js'),
   broker:        () => import('./mc/commands/broker.js'),
   attach:        () => import('./mc/commands/attach.js'),
   fanout:        () => import('./mc/commands/fanout.js'),
@@ -296,6 +297,7 @@ FLEET / ADVANCED
   mc gc [--dry-run]               Reap dead, merged, or clean worktrees
   mc broker start/status/stop     Local PTY broker admin
   mc broker connect               Connect local broker to Memoro cloud
+  mc cloud-runtime run            Hosted coding runtime supervisor
   mc attach <session_id>          Attach to a broker-owned local session
   mc adapter sync                 Refresh tool instruction wrappers
   mc adapter materialise          Copy mc's coordinator canon into this repo

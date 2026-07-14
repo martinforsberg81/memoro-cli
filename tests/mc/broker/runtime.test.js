@@ -159,6 +159,28 @@ describe('BrokerRuntime', () => {
     assert.equal(fake.calls[0].options.env.COLORTERM, 'truecolor');
   });
 
+  test('launch_session can unset runtime-only secrets before spawning the provider', () => {
+    const { runtime, fake } = makeRuntime();
+
+    const res = runtime.handle({
+      type: 'launch_session',
+      session: {
+        id: 'sess_a',
+        env: {
+          MEMORO_TOKEN: 'mem_runtime_secret_123456789',
+          OPENAI_API_KEY: 'sk-secretvalue123456789',
+          SAFE_VISIBLE: '1',
+        },
+        env_unset: ['MEMORO_TOKEN', 'OPENAI_API_KEY'],
+      },
+    });
+
+    assert.equal(res.ok, true);
+    assert.equal(fake.calls[0].options.env.MEMORO_TOKEN, undefined);
+    assert.equal(fake.calls[0].options.env.OPENAI_API_KEY, undefined);
+    assert.equal(fake.calls[0].options.env.SAFE_VISIBLE, '1');
+  });
+
   test('list and status expose live broker sessions', () => {
     const { runtime } = makeRuntime();
 
