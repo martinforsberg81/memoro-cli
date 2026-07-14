@@ -1,10 +1,12 @@
 import { spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import {
   appendFileSync,
   existsSync,
   mkdirSync,
   readFileSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -43,6 +45,9 @@ const DEFAULT_RUNTIME_DIR = '/workspace/mc-runtime';
 const DEFAULT_REPO_CWD = '/workspace/repo';
 const DEFAULT_API_URL = 'https://meetmemoro.app';
 const GITHUB_SHORTHAND_RE = /^[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+$/;
+const CODING_BIN_SNAPSHOT_ID_RE = /^cbsnap_[a-zA-Z0-9_-]{6,}$/;
+const DEFAULT_SNAPSHOT_MAX_BYTES = 64 * 1024 * 1024;
+const DEFAULT_SNAPSHOT_MAX_FILES = 5000;
 const SECRET_ENV_NAMES_AFTER_WORKSPACE = Object.freeze([
   'MC_CLOUD_GIT_TOKEN',
   'MC_CLOUD_GIT_SECRET_CAPABILITY',
@@ -185,6 +190,45 @@ export async function runCloudRuntimeWith(opts, deps = {}) {
     readiness: readinessFromWorkspace(manifest, workspace),
   });
 
+  const restore = await restoreCodingBinSnapshot(manifest, {
+    env,
+    deps,
+    token,
+    cwd: workspaceDir,
+    paths,
+  });
+  if (!restore.ok) {
+    await runtime.record({
+      phase: CLOUD_LIFECYCLE.FAILED,
+      runtime_state: 'failed',
+      process_status: 'exited',
+      error_code: restore.code || 'coding_bin_restore_failed',
+      error: restore.error || 'coding bin restore failed',
+      events: [{ type: 'coding_bin.restore.failed', data: restore }],
+      readiness: {
+        ...readinessFromWorkspace(manifest, workspace),
+        coding_bin: codingBinReadiness(manifest, { restore }),
+      },
+    });
+    stderr.write(`mc: ${restore.error || 'coding bin restore failed'}\n`);
+    if (opts.json) writeJson(stdout, { ok: false, error: restore.error || 'coding bin restore failed' });
+    return 1;
+  }
+  if (restore.restored) {
+    await runtime.record({
+      phase: CLOUD_LIFECYCLE.WAKING,
+      runtime_state: 'coding_bin_restored',
+      process_status: 'running',
+      coding_bin_snapshot_id: restore.snapshot?.id || null,
+      coding_bin_snapshot: restore.snapshot || null,
+      events: [{ type: 'coding_bin.restore.finished', data: restore }],
+      readiness: {
+        ...readinessFromWorkspace(manifest, workspace),
+        coding_bin: codingBinReadiness(manifest, { restore }),
+      },
+    });
+  }
+
   const toolAuthHydrate = deps.hydrateToolAuth || hydrateToolAuth;
   const toolAuth = await toolAuthHydrate({
     tool: manifest.launch?.tool || 'codex',
@@ -301,6 +345,57 @@ export async function runCloudRuntimeWith(opts, deps = {}) {
   });
   const connectBroker = deps.connectBroker || connectBrokerInForeground;
   let brokerCode;
+  let shutdownHandled = false;
+  const handleRuntimeShutdown = async (signal) => {
+    if (shutdownHandled) return 0;
+    shutdownHandled = true;
+    if (typeof stopToolAuthWatcher === 'function') {
+      await stopToolAuthWatcher({ flush: true }).catch(() => null);
+    }
+    await runtime.record({
+      phase: CLOUD_LIFECYCLE.SLEEPING,
+      runtime_state: 'snapshotting',
+      process_status: 'stopping',
+      events: [{ type: 'coding_bin.snapshot.started', data: { signal } }],
+      readiness: {
+        ...workspaceReadiness,
+        ready: false,
+        broker: { stopping: true },
+        tool_auth: readyToolAuth,
+        coding_bin: codingBinReadiness(manifest, { snapshotting: true }),
+      },
+    });
+    const captured = await captureCodingBinSnapshot(manifest, {
+      env: launchEnv,
+      deps,
+      token,
+      cwd: workspaceDir,
+      paths,
+      trigger: signal || 'runtime_shutdown',
+    });
+    const eventType = captured.ok ? 'coding_bin.snapshot.finished' : 'coding_bin.snapshot.failed';
+    await runtime.record({
+      phase: CLOUD_LIFECYCLE.SLEEPING,
+      runtime_state: 'sleeping',
+      process_status: 'exited',
+      exit_code: 0,
+      coding_bin_snapshot_id: captured.snapshot?.id || null,
+      coding_bin_snapshot: captured.snapshot || null,
+      events: [
+        { type: eventType, data: captured },
+        { type: 'runtime.sleeping', data: { signal, snapshot_id: captured.snapshot?.id || null } },
+      ],
+      readiness: {
+        ...workspaceReadiness,
+        ready: false,
+        broker: { connected: false },
+        tool_auth: readyToolAuth,
+        coding_bin: codingBinReadiness(manifest, { capture: captured }),
+      },
+    });
+    return 0;
+  };
+  const shutdownHandlers = installRuntimeShutdownHandlers(deps, handleRuntimeShutdown);
   try {
     brokerCode = await connectBroker({
       manifest,
@@ -311,9 +406,14 @@ export async function runCloudRuntimeWith(opts, deps = {}) {
       stderr,
     });
   } finally {
+    shutdownHandlers.uninstall();
     if (typeof stopToolAuthWatcher === 'function') {
       await stopToolAuthWatcher({ flush: true }).catch(() => null);
     }
+  }
+  if (shutdownHandled) {
+    await shutdownHandlers.wait();
+    return 0;
   }
   const code = Number.isInteger(brokerCode) ? brokerCode : 0;
   await runtime.record({
@@ -573,6 +673,9 @@ function createRuntimeRecorder({
         exit_code: Number.isInteger(report.exit_code) ? report.exit_code : null,
         error_code: report.error_code || null,
         error: report.error ? safeError(report.error) : null,
+        coding_bin_id: report.coding_bin_id || manifest.coding_bin_id || manifest.coding_bin?.id || null,
+        coding_bin_snapshot_id: report.coding_bin_snapshot_id || report.coding_bin_snapshot?.id || null,
+        coding_bin_snapshot: report.coding_bin_snapshot || null,
         readiness: report.readiness || null,
         events: (report.events || []).map((event) => runtimeEvent(manifest, event.type, {
           at: now,
@@ -616,6 +719,9 @@ function runtimeStatusFile(report) {
     exit_code: report.exit_code,
     error_code: report.error_code,
     error: report.error,
+    coding_bin_id: report.coding_bin_id,
+    coding_bin_snapshot_id: report.coding_bin_snapshot_id,
+    coding_bin_snapshot: report.coding_bin_snapshot,
     readiness: report.readiness,
     updated_at: isoNow({}),
   });
@@ -666,6 +772,476 @@ function runProcessDefault(cmd, args, options = {}) {
     child.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
     child.on('error', (err) => resolve({ code: 1, error: err.message || String(err), stdout, stderr }));
     child.on('close', (code) => resolve({ code: Number.isInteger(code) ? code : 1, stdout, stderr }));
+  });
+}
+
+export async function restoreCodingBinSnapshot(manifest, {
+  env = process.env,
+  deps = {},
+  token = null,
+  cwd = runtimeWorkspaceDir(manifest),
+  paths = runtimePaths(manifest, env),
+} = {}) {
+  const latest = manifest?.coding_bin?.latest_snapshot || null;
+  const payload = latest?.payload || null;
+  const url = stringOrNull(payload?.url);
+  if (!latest || !url) {
+    return { ok: true, restored: false, skipped: true, reason: 'no_latest_snapshot' };
+  }
+  const snapshotId = normalizeCodingBinSnapshotId(latest.id);
+  if (!snapshotId) {
+    return { ok: false, restored: false, code: 'invalid_coding_bin_snapshot_id', error: 'invalid coding bin snapshot id' };
+  }
+  const runtimeToken = token || stringOrNull(env.MEMORO_TOKEN);
+  if (!runtimeToken) {
+    return { ok: false, restored: false, code: 'runtime_token_missing', error: 'runtime token missing for snapshot restore' };
+  }
+  const mkdir = deps.mkdir || mkdirSync;
+  const writeFile = deps.writeFile || writeFileSync;
+  const archivePath = join(paths.dir || DEFAULT_RUNTIME_DIR, `${snapshotId}.restore.tar.zst`);
+  mkdir(dirname(archivePath), { recursive: true, mode: 0o700 });
+
+  const downloaded = await downloadSnapshotPayload(url, {
+    token: runtimeToken,
+    maxBytes: snapshotMaxBytes(manifest),
+    deps,
+  });
+  if (!downloaded.ok) {
+    return { ok: false, restored: false, code: downloaded.code || 'snapshot_download_failed', error: downloaded.error || 'snapshot download failed' };
+  }
+  writeFile(archivePath, downloaded.body, { mode: 0o600 });
+
+  const listed = await listTarArchive(archivePath, { deps, cwd });
+  if (!listed.ok) {
+    return { ok: false, restored: false, code: 'snapshot_archive_invalid', error: listed.error || 'snapshot archive invalid' };
+  }
+  const unsafe = listed.entries.find((entry) => !isSafeSnapshotPath(entry));
+  if (unsafe) {
+    return { ok: false, restored: false, code: 'snapshot_archive_unsafe_path', error: `snapshot archive contains unsafe path: ${unsafe}` };
+  }
+
+  const extracted = await extractTarArchive(archivePath, cwd, { deps });
+  if (!extracted.ok) {
+    return { ok: false, restored: false, code: 'snapshot_extract_failed', error: extracted.error || 'snapshot extract failed' };
+  }
+
+  return {
+    ok: true,
+    restored: true,
+    archive_path: archivePath,
+    byte_count: downloaded.byteCount,
+    file_count: Number.isInteger(latest.file_count) ? latest.file_count : listed.entries.length,
+    snapshot: codingBinSnapshotMetadata(manifest, {
+      id: snapshotId,
+      status: 'restored',
+      source: latest.source || 'payload_restore',
+      baseRef: latest.base_ref,
+      headRef: latest.head_ref,
+      fileCount: Number.isInteger(latest.file_count) ? latest.file_count : listed.entries.length,
+      byteCount: downloaded.byteCount,
+      skippedCount: Number.isInteger(latest.skipped_count) ? latest.skipped_count : 0,
+    }),
+  };
+}
+
+export async function captureCodingBinSnapshot(manifest, {
+  env = process.env,
+  deps = {},
+  token = null,
+  cwd = runtimeWorkspaceDir(manifest),
+  paths = runtimePaths(manifest, env),
+  trigger = 'runtime_shutdown',
+} = {}) {
+  const policy = manifest?.coding_bin?.snapshot || null;
+  const upload = policy?.upload || null;
+  const urlTemplate = stringOrNull(upload?.url_template);
+  if (!policy?.enabled || !urlTemplate) {
+    return { ok: true, captured: false, skipped: true, reason: 'snapshot_policy_disabled' };
+  }
+  const runtimeToken = token || stringOrNull(env.MEMORO_TOKEN);
+  if (!runtimeToken) {
+    return snapshotCaptureFailure(manifest, {
+      code: 'runtime_token_missing',
+      error: 'runtime token missing for snapshot upload',
+      trigger,
+    });
+  }
+
+  const snapshotId = newCodingBinSnapshotId(deps);
+  const archivePath = join(paths.dir || DEFAULT_RUNTIME_DIR, `${snapshotId}.tar.zst`);
+  const fileListPath = join(paths.dir || DEFAULT_RUNTIME_DIR, `${snapshotId}.files`);
+  const mkdir = deps.mkdir || mkdirSync;
+  const writeFile = deps.writeFile || writeFileSync;
+  mkdir(dirname(archivePath), { recursive: true, mode: 0o700 });
+
+  const candidates = await collectSnapshotFileList(cwd, manifest, { deps });
+  if (!candidates.ok) {
+    return snapshotCaptureFailure(manifest, {
+      id: snapshotId,
+      code: candidates.code || 'snapshot_file_list_failed',
+      error: candidates.error || 'snapshot file list failed',
+      trigger,
+    });
+  }
+  writeFile(fileListPath, candidates.files.join('\n') + (candidates.files.length ? '\n' : ''), { mode: 0o600 });
+
+  const created = await createTarArchive(archivePath, cwd, fileListPath, { deps });
+  if (!created.ok) {
+    return snapshotCaptureFailure(manifest, {
+      id: snapshotId,
+      code: 'snapshot_archive_create_failed',
+      error: created.error || 'snapshot archive create failed',
+      trigger,
+    });
+  }
+
+  const stat = deps.stat || statSync;
+  const size = Number(stat(archivePath)?.size) || 0;
+  const maxBytes = snapshotMaxBytes(manifest);
+  if (size <= 0) {
+    return snapshotCaptureFailure(manifest, {
+      id: snapshotId,
+      code: 'snapshot_archive_empty',
+      error: 'snapshot archive is empty',
+      trigger,
+    });
+  }
+  if (size > maxBytes) {
+    return snapshotCaptureFailure(manifest, {
+      id: snapshotId,
+      code: 'snapshot_archive_too_large',
+      error: `snapshot archive exceeds ${maxBytes} bytes`,
+      trigger,
+      byteCount: size,
+      fileCount: candidates.files.length,
+      skippedCount: candidates.skippedCount,
+    });
+  }
+
+  const refs = await snapshotGitRefs(cwd, { deps });
+  const readFile = deps.readFile || readFileSync;
+  const body = readFile(archivePath);
+  const uploadUrl = urlTemplate.replace('{snapshot_id}', encodeURIComponent(snapshotId));
+  const uploaded = await uploadSnapshotPayload(uploadUrl, body, {
+    token: runtimeToken,
+    contentType: upload.content_type || 'application/zstd',
+    fileCount: candidates.files.length,
+    skippedCount: candidates.skippedCount,
+    baseRef: refs.baseRef,
+    headRef: refs.headRef,
+    deps,
+  });
+  if (!uploaded.ok) {
+    return snapshotCaptureFailure(manifest, {
+      id: snapshotId,
+      code: uploaded.code || 'snapshot_upload_failed',
+      error: uploaded.error || 'snapshot upload failed',
+      trigger,
+      byteCount: size,
+      fileCount: candidates.files.length,
+      skippedCount: candidates.skippedCount,
+      baseRef: refs.baseRef,
+      headRef: refs.headRef,
+    });
+  }
+
+  return {
+    ok: true,
+    captured: true,
+    archive_path: archivePath,
+    file_count: candidates.files.length,
+    byte_count: size,
+    skipped_count: candidates.skippedCount,
+    snapshot: codingBinSnapshotMetadata(manifest, {
+      id: snapshotId,
+      status: 'ready',
+      source: 'runtime_sleep',
+      baseRef: refs.baseRef,
+      headRef: refs.headRef,
+      fileCount: candidates.files.length,
+      byteCount: size,
+      skippedCount: candidates.skippedCount,
+    }),
+  };
+}
+
+function installRuntimeShutdownHandlers(deps = {}, onShutdown) {
+  const proc = deps.process || process;
+  if (!proc || typeof proc.once !== 'function' || typeof onShutdown !== 'function') {
+    return { uninstall() {}, wait: async () => null };
+  }
+  let handled = false;
+  let shutdownPromise = null;
+  const handler = (signal) => {
+    if (handled) return;
+    handled = true;
+    shutdownPromise = Promise.resolve()
+      .then(() => onShutdown(signal))
+      .then((code) => {
+        if (typeof proc.exit === 'function') proc.exit(Number.isInteger(code) ? code : 0);
+        return code;
+      })
+      .catch(() => {
+        if (typeof proc.exit === 'function') proc.exit(1);
+        return 1;
+      });
+  };
+  proc.once('SIGTERM', handler);
+  proc.once('SIGINT', handler);
+  return {
+    uninstall() {
+      if (typeof proc.off === 'function') {
+        proc.off('SIGTERM', handler);
+        proc.off('SIGINT', handler);
+      } else if (typeof proc.removeListener === 'function') {
+        proc.removeListener('SIGTERM', handler);
+        proc.removeListener('SIGINT', handler);
+      }
+    },
+    wait: async () => shutdownPromise,
+  };
+}
+
+async function downloadSnapshotPayload(url, { token, maxBytes, deps = {} } = {}) {
+  try {
+    const res = await runtimeFetch(url, {
+      token,
+      method: 'GET',
+      deps,
+      timeoutMs: deps.snapshotDownloadTimeoutMs || 120_000,
+    });
+    if (!res.ok) return res;
+    const length = Number(res.headers?.get?.('content-length'));
+    if (Number.isFinite(length) && length > maxBytes) {
+      return { ok: false, code: 'snapshot_payload_too_large', error: `snapshot payload exceeds ${maxBytes} bytes` };
+    }
+    const buffer = Buffer.from(await res.response.arrayBuffer());
+    if (buffer.byteLength > maxBytes) {
+      return { ok: false, code: 'snapshot_payload_too_large', error: `snapshot payload exceeds ${maxBytes} bytes` };
+    }
+    return { ok: true, body: buffer, byteCount: buffer.byteLength };
+  } catch (err) {
+    return { ok: false, code: 'snapshot_download_failed', error: safeError(err) };
+  }
+}
+
+async function uploadSnapshotPayload(url, body, {
+  token,
+  contentType,
+  fileCount,
+  skippedCount,
+  baseRef,
+  headRef,
+  deps = {},
+} = {}) {
+  try {
+    const res = await runtimeFetch(url, {
+      token,
+      method: 'PUT',
+      body,
+      deps,
+      timeoutMs: deps.snapshotUploadTimeoutMs || 120_000,
+      headers: {
+        'Content-Type': contentType || 'application/zstd',
+        'Content-Length': String(body.byteLength ?? body.length ?? 0),
+        'X-MC-Snapshot-File-Count': String(Math.max(0, fileCount || 0)),
+        'X-MC-Snapshot-Skipped-Count': String(Math.max(0, skippedCount || 0)),
+        'X-MC-Snapshot-Base-Ref': baseRef || 'unknown',
+        'X-MC-Snapshot-Head-Ref': headRef || 'unknown',
+      },
+    });
+    return res.ok ? { ok: true } : res;
+  } catch (err) {
+    return { ok: false, code: 'snapshot_upload_failed', error: safeError(err) };
+  }
+}
+
+async function runtimeFetch(url, {
+  token,
+  method = 'GET',
+  body = null,
+  headers = {},
+  timeoutMs = 120_000,
+  deps = {},
+} = {}) {
+  if (!token) return { ok: false, code: 'runtime_token_missing', error: 'runtime token missing' };
+  const fetchImpl = deps.fetchImpl || globalThis.fetch;
+  if (typeof fetchImpl !== 'function') {
+    return { ok: false, code: 'fetch_unavailable', error: 'fetch is unavailable' };
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetchImpl(url, {
+      method,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        ...headers,
+      },
+      body,
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      let text = '';
+      try { text = await response.text(); } catch {}
+      return { ok: false, status: response.status, code: `http_${response.status}`, error: text || `HTTP ${response.status}` };
+    }
+    return { ok: true, response, headers: response.headers };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function collectSnapshotFileList(cwd, manifest, { deps = {} } = {}) {
+  const maxFiles = snapshotMaxFiles(manifest);
+  const runProcess = deps.runProcess || runProcessDefault;
+  let res = await runProcess('git', ['-C', cwd, 'ls-files', '-z', '--cached', '--modified', '--others', '--exclude-standard'], {
+    cwd,
+    env: deps.env || process.env,
+  });
+  if (!res || res.code !== 0) {
+    res = await runProcess('find', ['.', '-type', 'f', '-print0'], {
+      cwd,
+      env: deps.env || process.env,
+    });
+  }
+  if (!res || res.code !== 0) {
+    return { ok: false, code: 'snapshot_file_list_failed', error: res?.stderr || res?.error || `file list exited ${res?.code ?? 'unknown'}` };
+  }
+  const raw = String(res.stdout || '');
+  const paths = raw.split('\0')
+    .map((item) => normalizeSnapshotPath(item))
+    .filter(Boolean);
+  const files = [];
+  let skippedCount = 0;
+  const seen = new Set();
+  for (const path of paths) {
+    if (seen.has(path)) continue;
+    seen.add(path);
+    if (!isSafeSnapshotPath(path) || isSnapshotPathExcluded(path, manifest)) {
+      skippedCount += 1;
+      continue;
+    }
+    if (files.length >= maxFiles) {
+      skippedCount += 1;
+      continue;
+    }
+    files.push(path);
+  }
+  return { ok: true, files, skippedCount };
+}
+
+async function createTarArchive(archivePath, cwd, fileListPath, { deps = {} } = {}) {
+  return runTarVariants([
+    ['--zstd', '-cf', archivePath, '-C', cwd, '-T', fileListPath],
+    ['-I', 'zstd', '-cf', archivePath, '-C', cwd, '-T', fileListPath],
+  ], { deps });
+}
+
+async function listTarArchive(archivePath, { deps = {}, cwd = process.cwd() } = {}) {
+  const listed = await runTarVariants([
+    ['--zstd', '-tf', archivePath],
+    ['-I', 'zstd', '-tf', archivePath],
+  ], { deps, cwd });
+  if (!listed.ok) return listed;
+  const entries = String(listed.stdout || '')
+    .split(/\r?\n/)
+    .map((line) => normalizeSnapshotPath(line))
+    .filter(Boolean);
+  return { ok: true, entries };
+}
+
+async function extractTarArchive(archivePath, cwd, { deps = {} } = {}) {
+  return runTarVariants([
+    ['--zstd', '-xf', archivePath, '-C', cwd],
+    ['-I', 'zstd', '-xf', archivePath, '-C', cwd],
+  ], { deps, cwd });
+}
+
+async function runTarVariants(variants, { deps = {}, cwd = process.cwd() } = {}) {
+  const runProcess = deps.runProcess || runProcessDefault;
+  let last = null;
+  for (const args of variants) {
+    const res = await runProcess('tar', args, {
+      cwd,
+      env: deps.env || process.env,
+    });
+    if (res?.code === 0) return { ok: true, stdout: res.stdout || '', stderr: res.stderr || '', args };
+    last = res;
+  }
+  return { ok: false, code: last?.code, error: last?.stderr || last?.error || `tar exited ${last?.code ?? 'unknown'}` };
+}
+
+async function snapshotGitRefs(cwd, { deps = {} } = {}) {
+  const runProcess = deps.runProcess || runProcessDefault;
+  const branch = await runProcess('git', ['-C', cwd, 'rev-parse', '--abbrev-ref', 'HEAD'], {
+    cwd,
+    env: deps.env || process.env,
+  }).catch(() => null);
+  const head = await runProcess('git', ['-C', cwd, 'rev-parse', 'HEAD'], {
+    cwd,
+    env: deps.env || process.env,
+  }).catch(() => null);
+  return {
+    baseRef: cleanHeaderText(branch?.code === 0 ? branch.stdout : null) || 'unknown',
+    headRef: cleanHeaderText(head?.code === 0 ? head.stdout : null) || 'unknown',
+  };
+}
+
+function snapshotCaptureFailure(manifest, {
+  id = null,
+  code,
+  error,
+  trigger,
+  byteCount = 0,
+  fileCount = 0,
+  skippedCount = 0,
+  baseRef = null,
+  headRef = null,
+} = {}) {
+  const snapshotId = normalizeCodingBinSnapshotId(id) || newCodingBinSnapshotId({});
+  const snapshot = codingBinSnapshotMetadata(manifest, {
+    id: snapshotId,
+    status: 'failed',
+    source: trigger || 'runtime_shutdown',
+    baseRef,
+    headRef,
+    fileCount,
+    byteCount,
+    skippedCount,
+    errorCode: code || 'snapshot_failed',
+    error: error || 'snapshot failed',
+  });
+  return { ok: false, captured: false, code: code || 'snapshot_failed', error: error || 'snapshot failed', snapshot };
+}
+
+function codingBinSnapshotMetadata(manifest, {
+  id,
+  status,
+  source,
+  baseRef = null,
+  headRef = null,
+  fileCount = 0,
+  byteCount = 0,
+  skippedCount = 0,
+  errorCode = null,
+  error = null,
+} = {}) {
+  return sanitizeRuntimeData({
+    id,
+    status,
+    storageProvider: null,
+    storageBucket: null,
+    storageKey: null,
+    source,
+    baseRef,
+    headRef,
+    fileCount: Math.max(0, Number(fileCount) || 0),
+    byteCount: Math.max(0, Number(byteCount) || 0),
+    skippedCount: Math.max(0, Number(skippedCount) || 0),
+    errorCode,
+    error,
+    codingBinId: manifest?.coding_bin_id || manifest?.coding_bin?.id || null,
   });
 }
 
@@ -810,6 +1386,31 @@ function toolAuthReadiness(status = {}) {
   });
 }
 
+function codingBinReadiness(manifest, {
+  restore = null,
+  capture = null,
+  snapshotting = false,
+} = {}) {
+  const latest = manifest?.coding_bin?.latest_snapshot || null;
+  const policy = manifest?.coding_bin?.snapshot || null;
+  const restoreFailed = restore?.ok === false;
+  const captureFailed = capture?.ok === false;
+  return sanitizeRuntimeData({
+    id: manifest?.coding_bin_id || manifest?.coding_bin?.id || null,
+    root: manifest?.coding_bin?.root || runtimeWorkspaceDir(manifest),
+    snapshot_policy_enabled: policy?.enabled === true,
+    latest_snapshot_id: latest?.id || null,
+    snapshotting: snapshotting === true,
+    restored: restore?.restored === true,
+    captured: capture?.captured === true,
+    ready: !restoreFailed && !captureFailed && snapshotting !== true,
+    repair_required: restoreFailed || captureFailed,
+    repair_action: restoreFailed ? 'retry_wake' : captureFailed ? 'retry_sleep' : null,
+    warning: restoreFailed ? 'snapshot_restore_failed' : captureFailed ? 'snapshot_capture_failed' : null,
+    secret_boundary: 'status_only',
+  });
+}
+
 function vaultReadiness(manifest) {
   return sanitizeRuntimeData({
     mode: 'mc vault',
@@ -926,6 +1527,78 @@ function isGitHubCloneRef(repoRef) {
 function isSafeRuntimeRmPath(path) {
   const p = String(path || '').replace(/\/+$/, '');
   return p.startsWith('/workspace/') || p.startsWith('/tmp/') || p.startsWith('/private/tmp/');
+}
+
+function normalizeCodingBinSnapshotId(value) {
+  const id = stringOrNull(value);
+  return id && CODING_BIN_SNAPSHOT_ID_RE.test(id) ? id : null;
+}
+
+function newCodingBinSnapshotId(deps = {}) {
+  const random = deps.randomUUID || randomUUID;
+  return `cbsnap_${String(random()).replace(/-/g, '').slice(0, 24)}`;
+}
+
+function snapshotMaxBytes(manifest) {
+  const value = Number(manifest?.coding_bin?.snapshot?.max_bytes);
+  return Number.isFinite(value) && value > 0
+    ? Math.min(Math.floor(value), DEFAULT_SNAPSHOT_MAX_BYTES)
+    : DEFAULT_SNAPSHOT_MAX_BYTES;
+}
+
+function snapshotMaxFiles(manifest) {
+  const value = Number(manifest?.coding_bin?.snapshot?.max_files);
+  return Number.isFinite(value) && value > 0
+    ? Math.min(Math.floor(value), DEFAULT_SNAPSHOT_MAX_FILES)
+    : DEFAULT_SNAPSHOT_MAX_FILES;
+}
+
+function normalizeSnapshotPath(value) {
+  let path = String(value || '').replace(/\0/g, '').trim();
+  if (!path) return null;
+  path = path.replace(/\\/g, '/').replace(/^\.\/+/, '').replace(/\/+/g, '/');
+  return path || null;
+}
+
+function isSafeSnapshotPath(value) {
+  const path = normalizeSnapshotPath(value);
+  if (!path) return false;
+  if (path.startsWith('/') || path.includes('\n') || path.includes('\r')) return false;
+  return !path.split('/').some((part) => part === '..' || part === '');
+}
+
+function isSnapshotPathExcluded(path, manifest) {
+  const normalized = normalizeSnapshotPath(path);
+  if (!normalized) return true;
+  const segments = normalized.split('/');
+  const pathRules = manifest?.coding_bin?.snapshot?.exclude?.paths || [];
+  const globRules = manifest?.coding_bin?.snapshot?.exclude?.globs || [];
+  for (const rule of pathRules) {
+    const clean = normalizeSnapshotPath(rule);
+    if (!clean) continue;
+    if (normalized === clean || normalized.startsWith(`${clean}/`) || segments.includes(clean)) return true;
+  }
+  const lower = normalized.toLowerCase();
+  for (const rule of globRules) {
+    const clean = String(rule || '').toLowerCase();
+    if (!clean) continue;
+    if (clean === '**/.env' && segments.at(-1) === '.env') return true;
+    if (clean === '**/.env.*' && segments.at(-1)?.startsWith('.env.')) return true;
+    if (clean === '**/*token*' && lower.includes('token')) return true;
+    if (clean === '**/*secret*' && lower.includes('secret')) return true;
+    if (clean === '**/*credential*' && lower.includes('credential')) return true;
+    if (clean === '**/*auth*.json' && /auth.*\.json$/i.test(normalized)) return true;
+    if (clean === '**/id_rsa' && segments.at(-1) === 'id_rsa') return true;
+    if (clean === '**/id_ed25519' && segments.at(-1) === 'id_ed25519') return true;
+  }
+  return false;
+}
+
+function cleanHeaderText(value) {
+  return String(value || '')
+    .replace(/[\r\n]+/g, ' ')
+    .trim()
+    .slice(0, 256);
 }
 
 function defaultLaunchName(manifest) {

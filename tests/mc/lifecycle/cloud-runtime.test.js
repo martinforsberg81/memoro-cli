@@ -5,9 +5,11 @@ import { join } from 'node:path';
 import test, { describe } from 'node:test';
 
 import {
+  captureCodingBinSnapshot,
   CLOUD_RUNTIME_CONTRACT_VERSION,
   parseArgs,
   prepareWorkspace,
+  restoreCodingBinSnapshot,
   runCloudRuntimeWith,
   validateCloudRuntimeOptions,
 } from '../../../src/mc/commands/cloud-runtime.js';
@@ -148,6 +150,146 @@ describe('mc cloud-runtime workspace', () => {
   });
 });
 
+describe('mc cloud-runtime coding bin snapshots', () => {
+  test('restores a latest coding bin snapshot payload before provider launch', async () => {
+    const m = manifest({
+      coding_bin_id: 'cbin_runtime1',
+      coding_bin: {
+        id: 'cbin_runtime1',
+        root: null,
+        snapshot: { enabled: true, max_bytes: 1024 * 1024, max_files: 100 },
+        latest_snapshot: {
+          id: 'cbsnap_restore123',
+          status: 'ready',
+          payload: {
+            method: 'GET',
+            url: 'https://meetmemoro.test/api/mc/cloud-sessions/cld_runtime1/coding-bin-snapshots/cbsnap_restore123/payload',
+            content_type: 'application/zstd',
+          },
+          file_count: 1,
+          byte_count: 12,
+          skipped_count: 0,
+          base_ref: 'main',
+          head_ref: 'abc123',
+        },
+      },
+    });
+    const calls = [];
+
+    const res = await restoreCodingBinSnapshot(m, {
+      token: 'mem_runtime_secret',
+      cwd: m.runtime.cwd,
+      paths: m.runtime.paths,
+      deps: {
+        fetchImpl: async (url, opts) => {
+          assert.equal(url, m.coding_bin.latest_snapshot.payload.url);
+          assert.equal(opts.headers.Authorization, 'Bearer mem_runtime_secret');
+          return new Response(Buffer.from('archive bytes'), {
+            status: 200,
+            headers: { 'Content-Length': '13' },
+          });
+        },
+        runProcess: async (cmd, args) => {
+          calls.push({ cmd, args });
+          if (cmd === 'tar' && args.includes('-tf')) return { code: 0, stdout: 'src/index.js\n', stderr: '' };
+          if (cmd === 'tar' && args.includes('-xf')) return { code: 0, stdout: '', stderr: '' };
+          return { code: 1, stderr: 'unexpected command' };
+        },
+      },
+    });
+
+    assert.equal(res.ok, true);
+    assert.equal(res.restored, true);
+    assert.equal(res.snapshot.id, 'cbsnap_restore123');
+    assert.equal(res.snapshot.status, 'restored');
+    assert.equal(calls.some((call) => call.cmd === 'tar' && call.args.includes('-xf')), true);
+  });
+
+  test('captures and uploads a filtered coding bin snapshot without token-bearing argv', async () => {
+    const m = manifest({
+      coding_bin_id: 'cbin_runtime1',
+      coding_bin: {
+        id: 'cbin_runtime1',
+        root: null,
+        snapshot: {
+          enabled: true,
+          format: 'tar.zst',
+          root: null,
+          max_bytes: 1024 * 1024,
+          max_files: 10,
+          upload: {
+            method: 'PUT',
+            url_template: 'https://meetmemoro.test/api/mc/cloud-sessions/cld_runtime1/coding-bin-snapshots/{snapshot_id}/payload',
+            content_type: 'application/zstd',
+          },
+          exclude: {
+            paths: ['.git', '.env', 'node_modules'],
+            globs: ['**/*token*', '**/*secret*', '**/*auth*.json'],
+          },
+        },
+        latest_snapshot: null,
+      },
+    });
+    const writes = [];
+    const calls = [];
+    const uploads = [];
+
+    const res = await captureCodingBinSnapshot(m, {
+      token: 'mem_runtime_secret',
+      cwd: m.runtime.cwd,
+      paths: m.runtime.paths,
+      deps: {
+        randomUUID: () => '12345678-1234-1234-1234-123456789abc',
+        writeFile: (path, value) => { writes.push({ path, value: String(value) }); },
+        readFile: () => Buffer.from('archive bytes'),
+        stat: () => ({ size: 13 }),
+        fetchImpl: async (url, opts) => {
+          uploads.push({ url, opts });
+          return new Response(JSON.stringify({ ok: true }), { status: 201 });
+        },
+        runProcess: async (cmd, args) => {
+          calls.push({ cmd, args });
+          if (cmd === 'git' && args.includes('ls-files')) {
+            return {
+              code: 0,
+              stdout: ['src/app.js', '.env', 'node_modules/pkg/index.js', 'notes-token.txt', 'docs/spec.md'].join('\0'),
+              stderr: '',
+            };
+          }
+          if (cmd === 'tar') return { code: 0, stdout: '', stderr: '' };
+          if (cmd === 'git' && args.includes('--abbrev-ref')) return { code: 0, stdout: 'main\n', stderr: '' };
+          if (cmd === 'git' && args.at(-1) === 'HEAD') return { code: 0, stdout: 'abc123\n', stderr: '' };
+          return { code: 1, stderr: 'unexpected command' };
+        },
+      },
+    });
+
+    assert.equal(res.ok, true);
+    assert.equal(res.captured, true);
+    assert.equal(res.snapshot.id, 'cbsnap_123456781234123412341234');
+    assert.equal(res.snapshot.status, 'ready');
+    assert.equal(res.file_count, 2);
+    assert.equal(res.skipped_count, 3);
+
+    const fileList = writes.find((entry) => entry.path.endsWith('.files'));
+    assert.ok(fileList);
+    assert.equal(fileList.value.includes('src/app.js'), true);
+    assert.equal(fileList.value.includes('docs/spec.md'), true);
+    assert.equal(fileList.value.includes('.env'), false);
+    assert.equal(fileList.value.includes('node_modules'), false);
+    assert.equal(fileList.value.includes('notes-token.txt'), false);
+
+    const allArgs = JSON.stringify(calls.map((call) => call.args));
+    assert.equal(allArgs.includes('mem_runtime_secret'), false);
+    assert.equal(uploads.length, 1);
+    assert.equal(uploads[0].url.endsWith('/cbsnap_123456781234123412341234/payload'), true);
+    assert.equal(uploads[0].opts.headers.Authorization, 'Bearer mem_runtime_secret');
+    assert.equal(uploads[0].opts.headers['X-MC-Snapshot-File-Count'], '2');
+    assert.equal(uploads[0].opts.headers['X-MC-Snapshot-Base-Ref'], 'main');
+    assert.equal(uploads[0].opts.headers['X-MC-Snapshot-Head-Ref'], 'abc123');
+  });
+});
+
 describe('mc cloud-runtime run', () => {
   test('prepares workspace, launches typed cloud-session, reports status, then connects broker', async () => {
     const streams = io();
@@ -278,5 +420,107 @@ describe('mc cloud-runtime run', () => {
     const status = JSON.parse(readFileSync(m.runtime.paths.status, 'utf8'));
     assert.equal(status.phase, 'failed');
     assert.equal(JSON.stringify(status).includes('runtime token missing'), true);
+  });
+
+  test('captures a coding bin snapshot and reports sleeping on runtime shutdown', async () => {
+    const streams = io();
+    const m = manifest({
+      coding_bin_id: 'cbin_runtime1',
+      coding_bin: {
+        id: 'cbin_runtime1',
+        root: null,
+        latest_snapshot: null,
+        snapshot: {
+          enabled: true,
+          max_bytes: 1024 * 1024,
+          max_files: 10,
+          upload: {
+            method: 'PUT',
+            url_template: 'https://meetmemoro.test/api/mc/cloud-sessions/cld_runtime1/coding-bin-snapshots/{snapshot_id}/payload',
+            content_type: 'application/zstd',
+          },
+          exclude: { paths: ['.env'], globs: ['**/*token*'] },
+        },
+      },
+    });
+    writeFileSync(m.runtime.paths.manifest, JSON.stringify(m), 'utf8');
+    const reports = [];
+    const signalHandlers = {};
+    const exits = [];
+
+    const code = await runCloudRuntimeWith(parseArgs([
+      'run',
+      '--cloud-session-id',
+      m.cloud_session_id,
+      '--manifest',
+      m.runtime.paths.manifest,
+      '--json',
+    ]), {
+      stdout: streams.stdout,
+      stderr: streams.stderr,
+      env: {
+        MEMORO_TOKEN: 'mem_runtime_secret',
+        MC_CLOUD_GIT_TOKEN: 'ghp_private_secret',
+      },
+      now: () => '2026-07-13T12:00:00.000Z',
+      process: {
+        once: (signal, handler) => { signalHandlers[signal] = handler; },
+        off: () => {},
+        exit: (exitCode) => { exits.push(exitCode); },
+      },
+      reportRuntimeStatus: async (report) => { reports.push(report.report); return { ok: true }; },
+      runProcess: async (cmd, args) => {
+        if (cmd === 'git' && args.includes('ls-files')) {
+          return { code: 0, stdout: ['src/app.js', '.env', 'notes-token.txt'].join('\0'), stderr: '' };
+        }
+        if (cmd === 'git' && args.includes('--abbrev-ref')) return { code: 0, stdout: 'main\n', stderr: '' };
+        if (cmd === 'git' && args.at(-1) === 'HEAD') return { code: 0, stdout: 'abc123\n', stderr: '' };
+        if (cmd === 'git') return { code: 0, stdout: '', stderr: '' };
+        if (cmd === 'tar') return { code: 0, stdout: '', stderr: '' };
+        return { code: 1, stderr: 'unexpected command' };
+      },
+      runCloudSessionWith: async (opts, deps) => {
+        deps.stdout.write(JSON.stringify({
+          ok: true,
+          cloud_session_id: m.cloud_session_id,
+          coding_session_id: 'sess_runtime1',
+          source_id: 'cloud:cld_runtime1',
+        }));
+        return 0;
+      },
+      connectBroker: async () => {
+        signalHandlers.SIGTERM('SIGTERM');
+        return 0;
+      },
+      hydrateToolAuth: async () => ({
+        ok: true,
+        tool: 'codex',
+        label: 'tool_auth.codex',
+        present: true,
+        hydrated: true,
+        repair_required: false,
+        env: { CODEX_HOME: '/tmp/mc-cloud-codex-home' },
+      }),
+      startToolAuthPersistWatcher: () => async () => null,
+      randomUUID: () => '87654321-4321-4321-4321-cba987654321',
+      readFile: (path, enc) => {
+        if (path === m.runtime.paths.manifest) return readFileSync(path, enc);
+        return Buffer.from('archive bytes');
+      },
+      stat: () => ({ size: 13 }),
+      fetchImpl: async () => new Response(JSON.stringify({ ok: true }), { status: 201 }),
+    });
+
+    assert.equal(code, 0);
+    assert.deepEqual(exits, [0]);
+    const sleeping = reports.find((report) => report.phase === 'sleeping' && report.coding_bin_snapshot);
+    assert.ok(sleeping);
+    assert.equal(sleeping.coding_bin_snapshot.id, 'cbsnap_87654321432143214321cba9');
+    assert.equal(sleeping.coding_bin_snapshot.status, 'ready');
+    assert.equal(sleeping.coding_bin_snapshot.fileCount, 1);
+    assert.equal(sleeping.coding_bin_snapshot.skippedCount, 2);
+    const status = JSON.parse(readFileSync(m.runtime.paths.status, 'utf8'));
+    assert.equal(status.phase, 'sleeping');
+    assert.equal(status.coding_bin_snapshot_id, 'cbsnap_87654321432143214321cba9');
   });
 });
