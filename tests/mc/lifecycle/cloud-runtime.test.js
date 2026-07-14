@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import test, { describe } from 'node:test';
 
 import {
+  brokerConnectOutputIndicatesReady,
   CLOUD_RUNTIME_CONTRACT_VERSION,
   parseArgs,
   prepareWorkspace,
@@ -109,6 +110,13 @@ describe('mc cloud-runtime parseArgs', () => {
       /--manifest/,
     );
     assert.match(parseArgs(['run', '--cmd', 'bash']).error, /unknown flag/);
+  });
+
+  test('detects broker-connect ready output without treating arbitrary JSON as ready', () => {
+    assert.equal(brokerConnectOutputIndicatesReady('mc broker: connected to cloud (worker-1)\n'), true);
+    assert.equal(brokerConnectOutputIndicatesReady('{"ok":true,"machine_id":"worker-1"}\n'), true);
+    assert.equal(brokerConnectOutputIndicatesReady('{"ok":true}\n'), false);
+    assert.equal(brokerConnectOutputIndicatesReady('{"ok":false,"machine_id":"worker-1"}\n'), false);
   });
 });
 
@@ -362,6 +370,16 @@ describe('mc cloud-runtime run', () => {
       },
       connectBroker: async (args) => {
         brokerCalls.push(args);
+        await args.onConnected();
+        await persistWatchers[0].onResult({
+          ok: true,
+          tool: 'codex',
+          label: 'tool_auth.codex',
+          present: true,
+          hydrated: true,
+          persisted: true,
+          repair_required: false,
+        });
         return 0;
       },
       hydrateToolAuth: async () => ({
@@ -390,11 +408,22 @@ describe('mc cloud-runtime run', () => {
     assert.equal(launchCalls[0].deps.env.MC_CODEX_API_KEY, undefined);
     assert.equal(launchCalls[0].deps.env.OPENAI_API_KEY, undefined);
     assert.equal(brokerCalls.length, 1);
+    assert.equal(typeof brokerCalls[0].onConnected, 'function');
     assert.equal(persistWatchers.length, 1);
     assert.equal(persistWatchers[0].env.CODEX_HOME, '/tmp/mc-cloud-codex-home');
     assert.equal(brokerCalls[0].manifest.cloud_session_id, m.cloud_session_id);
     assert.ok(reports.length >= 4);
     assert.equal(reports.at(-1).cloudSessionId, m.cloud_session_id);
+    const reportPayloads = reports.map((entry) => entry.report || entry);
+    const readyReport = reportPayloads.find((report) => report.phase === 'ready' && report.runtime_state === 'ready');
+    assert.ok(readyReport);
+    assert.equal(readyReport.readiness.broker.connected, true);
+    const persistReport = reportPayloads.find((report) => (
+      report.phase === 'ready'
+      && report.events?.some((event) => event.type === 'tool.auth_persist.finished')
+    ));
+    assert.ok(persistReport);
+    assert.equal(persistReport.readiness.broker.connected, true);
 
     const status = JSON.parse(readFileSync(m.runtime.paths.status, 'utf8'));
     const events = readFileSync(m.runtime.paths.events, 'utf8');
@@ -409,11 +438,14 @@ describe('mc cloud-runtime run', () => {
     assert.equal(readiness.git_auth.ready, true);
     assert.equal(readiness.vault.exposes_secrets_to_llm, false);
     assert.equal(readiness.tool_auth.ready, true);
+    assert.equal(readiness.broker.connected, true);
     assert.ok(eventTypes.includes('workspace.prepare.started'));
     assert.ok(eventTypes.includes('workspace.prepare.finished'));
     assert.ok(eventTypes.includes('provider.launch.started'));
     assert.ok(eventTypes.includes('provider.launch.finished'));
     assert.ok(eventTypes.includes('broker.connecting'));
+    assert.ok(eventTypes.includes('broker.connected'));
+    assert.ok(eventTypes.includes('runtime.ready'));
   });
 
   test('fails before launch when the runtime token is missing', async () => {
