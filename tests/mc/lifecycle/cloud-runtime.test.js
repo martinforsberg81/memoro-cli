@@ -175,12 +175,21 @@ describe('mc cloud-runtime coding bin snapshots', () => {
       },
     });
     const calls = [];
+    const removed = [];
 
     const res = await restoreCodingBinSnapshot(m, {
       token: 'mem_runtime_secret',
       cwd: m.runtime.cwd,
       paths: m.runtime.paths,
       deps: {
+        existsSync: (path) => path.endsWith('.mc-coding-bin-snapshot.json'),
+        readFile: (path, enc) => {
+          if (path.endsWith('.mc-coding-bin-snapshot.json')) {
+            return JSON.stringify({ schema: 'mc-coding-bin-snapshot-v1', deleted_paths: ['src/removed.js'] });
+          }
+          return readFileSync(path, enc);
+        },
+        rm: (path) => { removed.push(path); },
         fetchImpl: async (url, opts) => {
           assert.equal(url, m.coding_bin.latest_snapshot.payload.url);
           assert.equal(opts.headers.Authorization, 'Bearer mem_runtime_secret');
@@ -191,7 +200,7 @@ describe('mc cloud-runtime coding bin snapshots', () => {
         },
         runProcess: async (cmd, args) => {
           calls.push({ cmd, args });
-          if (cmd === 'tar' && args.includes('-tf')) return { code: 0, stdout: 'src/index.js\n', stderr: '' };
+          if (cmd === 'tar' && args.includes('-tf')) return { code: 0, stdout: '.mc-coding-bin-snapshot.json\nsrc/index.js\n', stderr: '' };
           if (cmd === 'tar' && args.includes('-xf')) return { code: 0, stdout: '', stderr: '' };
           return { code: 1, stderr: 'unexpected command' };
         },
@@ -202,7 +211,12 @@ describe('mc cloud-runtime coding bin snapshots', () => {
     assert.equal(res.restored, true);
     assert.equal(res.snapshot.id, 'cbsnap_restore123');
     assert.equal(res.snapshot.status, 'restored');
+    assert.equal(res.deleted_count, 1);
     assert.equal(calls.some((call) => call.cmd === 'tar' && call.args.includes('-xf')), true);
+    assert.deepEqual(removed, [
+      join(m.runtime.cwd, 'src/removed.js'),
+      join(m.runtime.cwd, '.mc-coding-bin-snapshot.json'),
+    ]);
   });
 
   test('captures and uploads a filtered coding bin snapshot without token-bearing argv', async () => {
@@ -233,6 +247,7 @@ describe('mc cloud-runtime coding bin snapshots', () => {
     const writes = [];
     const calls = [];
     const uploads = [];
+    const removed = [];
 
     const res = await captureCodingBinSnapshot(m, {
       token: 'mem_runtime_secret',
@@ -242,6 +257,7 @@ describe('mc cloud-runtime coding bin snapshots', () => {
         randomUUID: () => '12345678-1234-1234-1234-123456789abc',
         writeFile: (path, value) => { writes.push({ path, value: String(value) }); },
         readFile: () => Buffer.from('archive bytes'),
+        rm: (path) => { removed.push(path); },
         stat: () => ({ size: 13 }),
         fetchImpl: async (url, opts) => {
           uploads.push({ url, opts });
@@ -256,6 +272,9 @@ describe('mc cloud-runtime coding bin snapshots', () => {
               stderr: '',
             };
           }
+          if (cmd === 'git' && args.includes('diff')) {
+            return { code: 0, stdout: ['src/removed.js', '.env'].join('\0'), stderr: '' };
+          }
           if (cmd === 'tar') return { code: 0, stdout: '', stderr: '' };
           if (cmd === 'git' && args.includes('--abbrev-ref')) return { code: 0, stdout: 'main\n', stderr: '' };
           if (cmd === 'git' && args.at(-1) === 'HEAD') return { code: 0, stdout: 'abc123\n', stderr: '' };
@@ -268,23 +287,29 @@ describe('mc cloud-runtime coding bin snapshots', () => {
     assert.equal(res.captured, true);
     assert.equal(res.snapshot.id, 'cbsnap_123456781234123412341234');
     assert.equal(res.snapshot.status, 'ready');
-    assert.equal(res.file_count, 2);
-    assert.equal(res.skipped_count, 3);
+    assert.equal(res.file_count, 3);
+    assert.equal(res.skipped_count, 4);
+    assert.equal(res.deleted_count, 1);
 
     const fileList = writes.find((entry) => entry.path.endsWith('.files'));
+    const snapshotManifest = writes.find((entry) => entry.path.endsWith('.mc-coding-bin-snapshot.json'));
     assert.ok(fileList);
+    assert.ok(snapshotManifest);
     assert.equal(fileList.value.includes('src/app.js'), true);
     assert.equal(fileList.value.includes('docs/spec.md'), true);
+    assert.equal(fileList.value.includes('.mc-coding-bin-snapshot.json'), true);
     assert.equal(fileList.value.includes('.env'), false);
     assert.equal(fileList.value.includes('node_modules'), false);
     assert.equal(fileList.value.includes('notes-token.txt'), false);
+    assert.deepEqual(JSON.parse(snapshotManifest.value).deleted_paths, ['src/removed.js']);
+    assert.deepEqual(removed, [join(m.runtime.cwd, '.mc-coding-bin-snapshot.json')]);
 
     const allArgs = JSON.stringify(calls.map((call) => call.args));
     assert.equal(allArgs.includes('mem_runtime_secret'), false);
     assert.equal(uploads.length, 1);
     assert.equal(uploads[0].url.endsWith('/cbsnap_123456781234123412341234/payload'), true);
     assert.equal(uploads[0].opts.headers.Authorization, 'Bearer mem_runtime_secret');
-    assert.equal(uploads[0].opts.headers['X-MC-Snapshot-File-Count'], '2');
+    assert.equal(uploads[0].opts.headers['X-MC-Snapshot-File-Count'], '3');
     assert.equal(uploads[0].opts.headers['X-MC-Snapshot-Base-Ref'], 'main');
     assert.equal(uploads[0].opts.headers['X-MC-Snapshot-Head-Ref'], 'abc123');
   });

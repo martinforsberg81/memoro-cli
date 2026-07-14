@@ -48,6 +48,7 @@ const GITHUB_SHORTHAND_RE = /^[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+$/;
 const CODING_BIN_SNAPSHOT_ID_RE = /^cbsnap_[a-zA-Z0-9_-]{6,}$/;
 const DEFAULT_SNAPSHOT_MAX_BYTES = 64 * 1024 * 1024;
 const DEFAULT_SNAPSHOT_MAX_FILES = 5000;
+const SNAPSHOT_MANIFEST_FILE = '.mc-coding-bin-snapshot.json';
 const SECRET_ENV_NAMES_AFTER_WORKSPACE = Object.freeze([
   'MC_CLOUD_GIT_TOKEN',
   'MC_CLOUD_GIT_SECRET_CAPABILITY',
@@ -824,6 +825,10 @@ export async function restoreCodingBinSnapshot(manifest, {
   if (!extracted.ok) {
     return { ok: false, restored: false, code: 'snapshot_extract_failed', error: extracted.error || 'snapshot extract failed' };
   }
+  const applied = await applySnapshotManifest(cwd, { deps });
+  if (!applied.ok) {
+    return { ok: false, restored: false, code: applied.code || 'snapshot_manifest_apply_failed', error: applied.error || 'snapshot manifest apply failed' };
+  }
 
   return {
     ok: true,
@@ -831,6 +836,7 @@ export async function restoreCodingBinSnapshot(manifest, {
     archive_path: archivePath,
     byte_count: downloaded.byteCount,
     file_count: Number.isInteger(latest.file_count) ? latest.file_count : listed.entries.length,
+    deleted_count: applied.deletedCount,
     snapshot: codingBinSnapshotMetadata(manifest, {
       id: snapshotId,
       status: 'restored',
@@ -883,9 +889,49 @@ export async function captureCodingBinSnapshot(manifest, {
       trigger,
     });
   }
-  writeFile(fileListPath, candidates.files.join('\n') + (candidates.files.length ? '\n' : ''), { mode: 0o600 });
+  const deleted = await collectDeletedSnapshotPaths(cwd, manifest, { deps });
+  const cleanupPaths = [];
+  if (deleted.paths.length > 0) {
+    const snapshotManifestPath = join(cwd, SNAPSHOT_MANIFEST_FILE);
+    const maxFiles = snapshotMaxFiles(manifest);
+    try {
+      writeFile(snapshotManifestPath, JSON.stringify({
+        schema: 'mc-coding-bin-snapshot-v1',
+        deleted_paths: deleted.paths,
+      }, null, 2), { mode: 0o600 });
+    } catch (err) {
+      return snapshotCaptureFailure(manifest, {
+        id: snapshotId,
+        code: 'snapshot_manifest_write_failed',
+        error: safeError(err),
+        trigger,
+      });
+    }
+    cleanupPaths.push(snapshotManifestPath);
+    if (!candidates.files.includes(SNAPSHOT_MANIFEST_FILE)) {
+      if (candidates.files.length >= maxFiles) {
+        candidates.files.pop();
+        candidates.skippedCount += 1;
+      }
+      candidates.files.push(SNAPSHOT_MANIFEST_FILE);
+    }
+    candidates.skippedCount += deleted.skippedCount;
+  }
+
+  try {
+    writeFile(fileListPath, candidates.files.join('\n') + (candidates.files.length ? '\n' : ''), { mode: 0o600 });
+  } catch (err) {
+    cleanupSnapshotTempFiles(cleanupPaths, deps);
+    return snapshotCaptureFailure(manifest, {
+      id: snapshotId,
+      code: 'snapshot_file_list_write_failed',
+      error: safeError(err),
+      trigger,
+    });
+  }
 
   const created = await createTarArchive(archivePath, cwd, fileListPath, { deps });
+  cleanupSnapshotTempFiles(cleanupPaths, deps);
   if (!created.ok) {
     return snapshotCaptureFailure(manifest, {
       id: snapshotId,
@@ -952,6 +998,7 @@ export async function captureCodingBinSnapshot(manifest, {
     file_count: candidates.files.length,
     byte_count: size,
     skipped_count: candidates.skippedCount,
+    deleted_count: deleted.paths.length,
     snapshot: codingBinSnapshotMetadata(manifest, {
       id: snapshotId,
       status: 'ready',
@@ -1129,6 +1176,68 @@ async function collectSnapshotFileList(cwd, manifest, { deps = {} } = {}) {
     files.push(path);
   }
   return { ok: true, files, skippedCount };
+}
+
+async function collectDeletedSnapshotPaths(cwd, manifest, { deps = {} } = {}) {
+  const runProcess = deps.runProcess || runProcessDefault;
+  const res = await runProcess('git', ['-C', cwd, 'diff', '--name-only', '-z', '--diff-filter=D', 'HEAD', '--'], {
+    cwd,
+    env: deps.env || process.env,
+  }).catch(() => null);
+  if (!res || res.code !== 0) return { paths: [], skippedCount: 0 };
+  const raw = String(res.stdout || '');
+  const paths = [];
+  let skippedCount = 0;
+  const seen = new Set();
+  for (const item of raw.split('\0')) {
+    const path = normalizeSnapshotPath(item);
+    if (!path || seen.has(path)) continue;
+    seen.add(path);
+    if (!isSafeSnapshotPath(path) || isSnapshotPathExcluded(path, manifest)) {
+      skippedCount += 1;
+      continue;
+    }
+    paths.push(path);
+  }
+  return { paths, skippedCount };
+}
+
+async function applySnapshotManifest(cwd, { deps = {} } = {}) {
+  const manifestPath = join(cwd, SNAPSHOT_MANIFEST_FILE);
+  const exists = deps.existsSync || existsSync;
+  const readFile = deps.readFile || readFileSync;
+  const remove = deps.rm || rmSync;
+  if (!exists(manifestPath)) return { ok: true, deletedCount: 0, manifest: false };
+  let parsed;
+  try {
+    parsed = JSON.parse(readFile(manifestPath, 'utf8'));
+  } catch (err) {
+    return { ok: false, code: 'snapshot_manifest_invalid', error: `snapshot manifest invalid (${safeError(err)})` };
+  }
+  const deletedPaths = Array.isArray(parsed?.deleted_paths)
+    ? parsed.deleted_paths.map((item) => normalizeSnapshotPath(item)).filter(Boolean)
+    : [];
+  let deletedCount = 0;
+  for (const path of deletedPaths) {
+    if (!isSafeSnapshotPath(path) || path === SNAPSHOT_MANIFEST_FILE) {
+      return { ok: false, code: 'snapshot_manifest_unsafe_path', error: `snapshot manifest contains unsafe path: ${path || '<empty>'}` };
+    }
+    try {
+      remove(join(cwd, path), { force: true });
+      deletedCount += 1;
+    } catch (err) {
+      return { ok: false, code: 'snapshot_manifest_delete_failed', error: `snapshot delete failed for ${path} (${safeError(err)})` };
+    }
+  }
+  try { remove(manifestPath, { force: true }); } catch {}
+  return { ok: true, deletedCount, manifest: true };
+}
+
+function cleanupSnapshotTempFiles(paths, deps = {}) {
+  const remove = deps.rm || rmSync;
+  for (const path of paths || []) {
+    try { remove(path, { force: true }); } catch {}
+  }
 }
 
 async function createTarArchive(archivePath, cwd, fileListPath, { deps = {} } = {}) {
