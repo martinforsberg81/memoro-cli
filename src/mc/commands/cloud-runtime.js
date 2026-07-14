@@ -29,19 +29,15 @@ import {
   codingBinReadiness,
   restoreCodingBinSnapshot,
 } from '../cloud-runtime-snapshot.js';
+import {
+  CLOUD_LIFECYCLE,
+  CLOUD_RUNTIME_CONTRACT_VERSION,
+} from '../cloud-runtime-contract.js';
 
-export const CLOUD_RUNTIME_CONTRACT_VERSION = 'mc-cloud-runtime-v1';
-
-export const CLOUD_LIFECYCLE = Object.freeze({
-  REQUESTED: 'requested',
-  RUNTIME_TOKEN_MINTED: 'runtime_token_minted',
-  WAKING: 'waking',
-  BROKER_CONNECTING: 'broker_connecting',
-  READY: 'ready',
-  SLEEPING: 'sleeping',
-  FAILED: 'failed',
-  STOPPED: 'stopped',
-});
+export {
+  CLOUD_LIFECYCLE,
+  CLOUD_RUNTIME_CONTRACT_VERSION,
+} from '../cloud-runtime-contract.js';
 
 const CLOUD_SESSION_ID_RE = /^cld_[a-zA-Z0-9_-]{6,}$/;
 const DEFAULT_RUNTIME_DIR = '/workspace/mc-runtime';
