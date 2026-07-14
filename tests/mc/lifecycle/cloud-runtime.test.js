@@ -115,6 +115,8 @@ describe('mc cloud-runtime parseArgs', () => {
   test('detects broker-connect ready output without treating arbitrary JSON as ready', () => {
     assert.equal(brokerConnectOutputIndicatesReady('mc broker: connected to cloud (worker-1)\n'), true);
     assert.equal(brokerConnectOutputIndicatesReady('{"ok":true,"machine_id":"worker-1"}\n'), true);
+    assert.equal(brokerConnectOutputIndicatesReady('{\n  "ok": true,\n  "machine_id": "worker-1"\n}\n'), true);
+    assert.equal(brokerConnectOutputIndicatesReady('prefix\n{\n  "ok": true,\n  "machine_id": "worker-1"\n}\n'), true);
     assert.equal(brokerConnectOutputIndicatesReady('{"ok":true}\n'), false);
     assert.equal(brokerConnectOutputIndicatesReady('{"ok":false,"machine_id":"worker-1"}\n'), false);
   });

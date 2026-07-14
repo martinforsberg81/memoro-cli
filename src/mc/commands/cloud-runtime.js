@@ -664,6 +664,7 @@ function connectBrokerInForeground({
   if (json) args.push('--json');
   return new Promise((resolve) => {
     let connectedPromise = null;
+    let stdoutBuffer = '';
     const notifyConnected = () => {
       if (connectedPromise || typeof onConnected !== 'function') return connectedPromise;
       connectedPromise = Promise.resolve(onConnected()).catch(() => null);
@@ -676,7 +677,8 @@ function connectBrokerInForeground({
     });
     child.stdout.on('data', (chunk) => {
       stdout.write(chunk);
-      if (brokerConnectOutputIndicatesReady(chunk)) void notifyConnected();
+      stdoutBuffer = `${stdoutBuffer}${String(chunk || '')}`.slice(-4096);
+      if (brokerConnectOutputIndicatesReady(stdoutBuffer)) void notifyConnected();
     });
     child.stderr.on('data', (chunk) => stderr.write(chunk));
     child.on('error', (err) => {
@@ -693,6 +695,13 @@ function connectBrokerInForeground({
 export function brokerConnectOutputIndicatesReady(chunk) {
   const text = String(chunk || '');
   if (/connected to cloud/i.test(text)) return true;
+  const candidates = [text.trim()];
+  const objectStart = text.lastIndexOf('{');
+  if (objectStart > 0) candidates.push(text.slice(objectStart).trim());
+  for (const candidate of candidates) {
+    const parsed = parseJsonSafe(candidate);
+    if (parsed?.ok === true && parsed.machine_id) return true;
+  }
   for (const line of text.split(/\r?\n/)) {
     const trimmed = line.trim();
     if (!trimmed || !trimmed.startsWith('{')) continue;
