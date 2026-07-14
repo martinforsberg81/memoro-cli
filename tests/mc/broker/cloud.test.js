@@ -1027,6 +1027,92 @@ describe('CloudBrokerClient', () => {
     }
   });
 
+  test('maps fetch_environment_status commands from runtime phase semantics', async () => {
+    const cases = [
+      { phase: 'ready', live: true, wakeable: false, canContinue: true, action: 'live', commandReady: true },
+      { phase: 'broker_connecting', live: false, wakeable: false, canContinue: true, action: 'wait', commandReady: false },
+      { phase: 'runtime_pending', live: false, wakeable: true, canContinue: true, action: 'wake', commandReady: false },
+      { phase: 'sleeping', live: false, wakeable: true, canContinue: true, action: 'wake', commandReady: false },
+      { phase: 'failed', live: false, wakeable: false, canContinue: false, action: null, commandReady: false },
+    ];
+
+    for (const item of cases) {
+      resetFakeWs();
+      const dir = mkdtempSync(join(tmpdir(), 'mc-cloud-phase-status-'));
+      const manifestPath = join(dir, 'manifest.json');
+      const statusPath = join(dir, 'status.json');
+      const readinessPath = join(dir, 'readiness.json');
+      writeFileSync(manifestPath, JSON.stringify({
+        contract_version: 'mc-cloud-runtime-v1',
+        cloud_session_id: `cld_${item.phase.replace(/[^a-z0-9]/g, '')}1`,
+        coding_session_id: 'sess_phase',
+        repo: { id: 'repo_1', ref: 'example/repo', access: 'public_clone' },
+        launch: { tool: 'codex', policy: 'workspace-write', name: 'Phase check' },
+      }));
+      writeFileSync(statusPath, JSON.stringify({
+        phase: item.phase,
+        runtime_state: item.phase,
+        process_status: item.live ? 'running' : null,
+      }));
+      writeFileSync(readinessPath, JSON.stringify({
+        ready: item.live,
+        repo: { ready: true, cwd: '/workspace/repo' },
+        git_auth: { ready: true, access: 'public_clone', secret_boundary: 'status_only' },
+        tool_auth: { tool: 'codex', mode: 'vault', hydrated: item.live },
+      }));
+      const client = new CloudBrokerClient({
+        apiUrl: 'https://memoro.test',
+        token: 'tok',
+        machineId: 'machine',
+        sourceId: `cloud:${item.phase}`,
+        sourceKind: 'cloud',
+        sourceName: 'Cloud sandbox',
+        cloudSessionId: `cld_${item.phase.replace(/[^a-z0-9]/g, '')}1`,
+        WebSocketImpl: FakeWebSocket,
+        env: {
+          MC_CLOUD_RUNTIME_MANIFEST: manifestPath,
+          MC_CLOUD_RUNTIME_STATUS: statusPath,
+          MC_CLOUD_RUNTIME_READINESS: readinessPath,
+        },
+        request: async (msg) => {
+          if (msg.type === 'sessions') return { ok: true, sessions: [] };
+          if (msg.type === 'session_status') return { ok: true, session: { id: 'sess_phase', tool: 'codex' } };
+          return { ok: false, error: `unexpected ${msg.type}` };
+        },
+        sessionRefreshIntervalMs: 0,
+        sleepImpl: async () => {},
+      });
+
+      try {
+        client.start();
+        const control = FakeWebSocket.instances[0];
+        control.open();
+        await new Promise((resolve) => setImmediate(resolve));
+        control.message(JSON.stringify({
+          type: 'command',
+          command_id: `cmd_${item.phase}`,
+          coding_session_id: 'sess_phase',
+          kind: 'fetch_environment_status',
+          args: { scope: 'all' },
+        }));
+        await new Promise((resolve) => setImmediate(resolve));
+
+        const result = JSON.parse(control.sent.at(-1));
+        assert.equal(result.ok, true, item.phase);
+        assert.equal(result.data.runtime.phase, item.phase);
+        assert.equal(result.data.runtime.live, item.live, item.phase);
+        assert.equal(result.data.runtime.wakeable, item.wakeable, item.phase);
+        assert.equal(result.data.runtime.can_continue, item.canContinue, item.phase);
+        assert.equal(result.data.runtime.continue_action, item.action, item.phase);
+        assert.equal(result.data.commands.transcript, item.commandReady, item.phase);
+        assert.equal(result.data.commands.message, item.commandReady, item.phase);
+      } finally {
+        client.stop();
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+  });
+
   test('does not open a monitor attach when broker recent output is unavailable', async () => {
     resetFakeWs();
     const local = makeLocalSocket();
