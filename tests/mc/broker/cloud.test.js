@@ -913,11 +913,28 @@ describe('CloudBrokerClient', () => {
         token: 'secret-token',
       },
       launch: { tool: 'codex', policy: 'workspace-write', name: 'Status check' },
+      coding_bin_id: 'cbin_status123',
+      coding_bin: {
+        id: 'cbin_status123',
+        root: '/workspace/repo',
+        snapshot: { enabled: true },
+        latest_snapshot: { id: 'cbsnap_ready123', file_count: 2, byte_count: 99, skipped_count: 1 },
+      },
     }));
     writeFileSync(statusPath, JSON.stringify({
       phase: 'ready',
       runtime_state: 'ready',
       process_status: 'running',
+      coding_bin_id: 'cbin_status123',
+      coding_bin_snapshot_id: 'cbsnap_ready123',
+      coding_bin_snapshot: {
+        id: 'cbsnap_ready123',
+        status: 'ready',
+        storageKey: 'secret-storage-key',
+        fileCount: 2,
+        byteCount: 99,
+        skippedCount: 1,
+      },
       access_token: 'secret-status-token',
     }));
     writeFileSync(readinessPath, JSON.stringify({
@@ -935,6 +952,14 @@ describe('CloudBrokerClient', () => {
         mode: 'vault',
         hydrated: true,
         auth_json: 'secret-auth-json',
+      },
+      coding_bin: {
+        id: 'cbin_status123',
+        root: '/workspace/repo',
+        snapshot_policy_enabled: true,
+        latest_snapshot_id: 'cbsnap_ready123',
+        ready: true,
+        secret_boundary: 'status_only',
       },
     }));
     const client = new CloudBrokerClient({
@@ -987,6 +1012,13 @@ describe('CloudBrokerClient', () => {
       assert.equal(result.data.repo.credential_source, 'repo_grant');
       assert.equal(result.data.vault.exposes_secrets_to_llm, false);
       assert.equal(result.data.tool_auth.ready, true);
+      assert.equal(result.data.coding_bin.id, 'cbin_status123');
+      assert.equal(result.data.coding_bin.latest_snapshot_id, 'cbsnap_ready123');
+      assert.equal(result.data.coding_bin.snapshot_policy_enabled, true);
+      assert.equal(result.data.coding_bin.snapshot_status, 'ready');
+      assert.equal(result.data.coding_bin.snapshot_ready, true);
+      assert.equal(result.data.coding_bin.file_count, 2);
+      assert.equal(result.data.coding_bin.byte_count, 99);
       assert.equal(result.data.cloud_session.id, 'cld_status123');
       assert.doesNotMatch(JSON.stringify(result.data), /secret-/);
     } finally {
