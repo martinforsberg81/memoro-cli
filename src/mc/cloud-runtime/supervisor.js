@@ -10,7 +10,7 @@ import { requestBroker as defaultRequestBroker } from '../broker/client.js';
 import { CloudBrokerClient } from '../broker/cloud.js';
 import { ensureBrokerRunning, spawnBrokerDaemon } from '../broker/supervisor.js';
 import { prepareCloudRuntimeRepo } from './repo.js';
-import { restoreCodingBinSnapshot } from './snapshot.js';
+import { captureCodingBinSnapshot, restoreCodingBinSnapshot } from './snapshot.js';
 
 export const CLOUD_RUNTIME_CONTRACT_VERSION = 'mc-cloud-runtime-v1';
 
@@ -202,7 +202,16 @@ export async function runCloudRuntimeSupervisor(opts = {}, deps = {}) {
       cloud,
     };
     if (opts.json) stdout.write(JSON.stringify(result, null, 2) + '\n');
-    if (!opts.once && typeof cloud.wait === 'function') await cloud.wait();
+    if (!opts.once && typeof cloud.wait === 'function') {
+      const shutdown = createShutdownFinalizer(ctx, events, cloud, deps);
+      const cleanupSignals = installShutdownSignalHandlers(shutdown, deps);
+      try {
+        await cloud.wait();
+        result.sleep = await shutdown('cloud_wait_finished');
+      } finally {
+        cleanupSignals();
+      }
+    }
     return { ...result, exitCode: 0 };
   } catch (err) {
     const error = err?.message || String(err);
@@ -353,6 +362,7 @@ async function buildRuntimeContext({ opts, manifest, env, deps, now }) {
     launchName: stringOrDefault(manifest?.launch?.name, `cloud-${cloudSessionId || 'session'}`),
     repoRoot,
     latestSnapshot: manifest?.coding_bin?.latest_snapshot || null,
+    snapshotPolicy: manifest?.coding_bin?.snapshot || null,
     sandboxId: manifest?.runtime?.sandbox_id || null,
     processId: manifest?.runtime?.process_id || null,
     request,
@@ -419,6 +429,113 @@ async function failRuntime(ctx, events, failure, deps, io) {
   if (io.json) io.stdout.write(JSON.stringify(result, null, 2) + '\n');
   else io.stderr.write(`mc cloud-runtime: ${failure.error}\n`);
   return result;
+}
+
+function createShutdownFinalizer(ctx, events, cloud, deps = {}) {
+  let promise = null;
+  return (reason = 'shutdown') => {
+    if (!promise) {
+      promise = finalizeRuntimeSleep(ctx, events, { reason, cloud }, deps);
+    }
+    return promise;
+  };
+}
+
+async function finalizeRuntimeSleep(ctx, events, { reason, cloud } = {}, deps = {}) {
+  await recordEvent(ctx, events, 'runtime.sleep_requested', { reason }, deps).catch(() => {});
+  const captured = await (deps.captureSnapshot || captureCodingBinSnapshot)(ctx.snapshotPolicy, {
+    root: ctx.repoRoot,
+    token: ctx.token,
+    fetchImpl: deps.fetch || globalThis.fetch,
+    createArchive: deps.createArchive,
+    collectFiles: deps.collectSnapshotFiles,
+    tempDir: deps.tempDir,
+    now: ctx.now,
+    makeSnapshotId: deps.makeSnapshotId,
+  }).catch((err) => ({ ok: false, error: err.message || String(err) }));
+
+  await recordEvent(ctx, events, captured.ok ? 'runtime.coding_bin_snapshot' : 'runtime.coding_bin_snapshot_failed', {
+    coding_bin_snapshot_id: captured.snapshot_id || null,
+    uploaded: captured.uploaded === true,
+    skipped: captured.skipped === true,
+    reason: captured.reason || reason || null,
+    file_count: captured.file_count || 0,
+    byte_count: captured.byte_count || 0,
+    skipped_count: captured.skipped_count || 0,
+    error: captured.ok ? null : captured.error,
+  }, deps).catch(() => {});
+
+  const snapshot = capturedSnapshotReport(captured);
+  const status = buildStatus(ctx, {
+    phase: 'sleeping',
+    runtime_state: 'sleeping',
+    process_status: 'exited',
+    exit_code: 0,
+    now: ctx.now,
+    coding_bin_snapshot: snapshot,
+  });
+  const readiness = buildReadiness(ctx, {
+    ready: false,
+    phase: 'sleeping',
+  });
+
+  await writeRuntimeStatus(ctx.paths, status, deps).catch(() => {});
+  await writeRuntimeReadiness(ctx.paths, readiness, deps).catch(() => {});
+  await reportRuntimeStatus({ ...ctx, status, readiness, events }, deps).catch(() => null);
+  if (typeof cloud?.stop === 'function') {
+    try { cloud.stop(); } catch {}
+  }
+  return { ok: captured.ok !== false, reason, snapshot, capture: captured, status, readiness };
+}
+
+function installShutdownSignalHandlers(shutdown, deps = {}) {
+  const processImpl = deps.process || process;
+  if (!processImpl?.on || !processImpl?.off) return () => {};
+  const signals = ['SIGTERM', 'SIGINT', 'SIGHUP'];
+  const exit = typeof deps.exit === 'function' ? deps.exit : (code) => processImpl.exit?.(code);
+  const handlers = signals.map((signal) => {
+    const handler = () => {
+      shutdown(signal)
+        .catch(() => null)
+        .finally(() => exit?.(0));
+    };
+    processImpl.on(signal, handler);
+    return [signal, handler];
+  });
+  return () => {
+    for (const [signal, handler] of handlers) {
+      try { processImpl.off(signal, handler); } catch {}
+    }
+  };
+}
+
+function capturedSnapshotReport(captured) {
+  if (!captured?.snapshot_id) return null;
+  if (captured.uploaded === true) {
+    return {
+      id: captured.snapshot_id,
+      status: 'ready',
+      source: 'runtime_sleep',
+      base_ref: captured.base_ref || null,
+      head_ref: captured.head_ref || null,
+      file_count: captured.file_count || 0,
+      byte_count: captured.byte_count || 0,
+      skipped_count: captured.skipped_count || 0,
+    };
+  }
+  if (captured.ok === false) {
+    return {
+      id: captured.snapshot_id,
+      status: 'failed',
+      source: 'runtime_sleep',
+      file_count: captured.file_count || 0,
+      byte_count: captured.byte_count || 0,
+      skipped_count: captured.skipped_count || 0,
+      error_code: 'coding_bin_snapshot_failed',
+      error: captured.error || 'coding-bin snapshot failed',
+    };
+  }
+  return null;
 }
 
 function buildStatus(ctx, {

@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { parseArgs, run as runCommand } from '../../src/mc/commands/cloud-runtime.js';
 import { runCloudRuntimeSupervisor } from '../../src/mc/cloud-runtime/supervisor.js';
 import { prepareCloudRuntimeRepo, repoCloneUrl } from '../../src/mc/cloud-runtime/repo.js';
+import { captureCodingBinSnapshot } from '../../src/mc/cloud-runtime/snapshot.js';
 
 describe('mc cloud-runtime command', () => {
   test('parses run arguments', () => {
@@ -196,6 +197,104 @@ describe('runCloudRuntimeSupervisor', () => {
     }
   });
 
+  test('captures and uploads a coding bin snapshot when the cloud bridge exits', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'mc-cloud-runtime-sleep-'));
+    const runtimeDir = join(dir, 'runtime');
+    const repoRoot = join(dir, 'repo');
+    const manifestPath = join(runtimeDir, 'manifest.json');
+    const statusPath = join(runtimeDir, 'status.json');
+    const readinessPath = join(runtimeDir, 'readiness.json');
+    const eventsPath = join(runtimeDir, 'events.jsonl');
+    const manifest = {
+      cloud_session_id: 'cld_sleep123',
+      coding_session_id: 'sess_sleep123',
+      coding_bin_id: 'cbin_sleep123',
+      coding_bin: {
+        root: repoRoot,
+        snapshot: {
+          enabled: true,
+          upload: { method: 'PUT', url_template: 'https://memoro.test/snapshots/{snapshot_id}/payload' },
+        },
+      },
+      runtime: {
+        api_url: 'https://memoro.test',
+        paths: { dir: runtimeDir, status: statusPath, readiness: readinessPath, events: eventsPath },
+      },
+    };
+    const posts = [];
+    let stopped = false;
+
+    try {
+      await mkdir(runtimeDir, { recursive: true });
+      await writeFile(manifestPath, JSON.stringify(manifest), 'utf8');
+
+      const result = await runCloudRuntimeSupervisor({
+        cloudSessionId: 'cld_sleep123',
+        manifest: manifestPath,
+        json: false,
+        once: false,
+      }, {
+        env: { MEMORO_TOKEN: 'mem_runtime_secret_123456789' },
+        readConfig: false,
+        now: () => '2026-07-14T12:00:00.000Z',
+        stdout: { write: () => {} },
+        stderr: { write: () => {} },
+        spawn: () => ({ status: 0, stdout: '', stderr: '' }),
+        fetch: async (url, options) => {
+          posts.push({ url, options, body: JSON.parse(options.body) });
+          return { ok: true, status: 200, text: async () => '{"ok":true}' };
+        },
+        restoreSnapshot: async () => ({ ok: true, skipped: true, reason: 'no_payload_url' }),
+        captureSnapshot: async (policy, opts) => {
+          assert.equal(policy.enabled, true);
+          assert.equal(opts.root, repoRoot);
+          assert.equal(opts.token, 'mem_runtime_secret_123456789');
+          return {
+            ok: true,
+            uploaded: true,
+            snapshot_id: 'cbsnap_sleep123',
+            file_count: 2,
+            byte_count: 99,
+            skipped_count: 1,
+            base_ref: 'main',
+            head_ref: 'abc123',
+          };
+        },
+        ensureBroker: async () => ({ ok: true, started: true, broker: { pid: 1234 } }),
+        request: async (message) => {
+          if (message.type === 'session_status') return { ok: false, error: 'unknown' };
+          if (message.type === 'launch_session') return { ok: true, session: { id: message.session.id, session_state: 'live' } };
+          return { ok: true };
+        },
+        connectCloud: async () => ({
+          ok: true,
+          machine_id: 'cloud-test',
+          wait: async () => {},
+          stop: () => { stopped = true; },
+        }),
+      });
+
+      assert.equal(result.ok, true);
+      assert.equal(result.sleep.status.phase, 'sleeping');
+      assert.equal(result.sleep.status.coding_bin_snapshot.id, 'cbsnap_sleep123');
+      assert.equal(result.sleep.status.coding_bin_snapshot.status, 'ready');
+      assert.equal(stopped, true);
+
+      const status = JSON.parse(await readFile(statusPath, 'utf8'));
+      const events = await readFile(eventsPath, 'utf8');
+      assert.equal(status.phase, 'sleeping');
+      assert.equal(status.coding_bin_snapshot_id, 'cbsnap_sleep123');
+      assert.match(events, /runtime.coding_bin_snapshot/);
+
+      const sleepingPost = posts.at(-1).body;
+      assert.equal(sleepingPost.phase, 'sleeping');
+      assert.equal(sleepingPost.coding_bin_snapshot.id, 'cbsnap_sleep123');
+      assert.equal(JSON.stringify(sleepingPost).includes('mem_runtime_secret_123456789'), false);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   test('fails into status/readiness files when runtime token is missing', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'mc-cloud-runtime-missing-token-'));
     const runtimeDir = join(dir, 'runtime');
@@ -233,6 +332,86 @@ describe('runCloudRuntimeSupervisor', () => {
       assert.equal(status.phase, 'failed');
       assert.equal(status.error_code, 'runtime_token_missing');
       assert.equal(readiness.ready, false);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('coding bin snapshot capture', () => {
+  test('collects filtered files, creates an archive, and uploads with metadata headers', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'mc-cloud-runtime-snapshot-'));
+    const repoRoot = join(dir, 'repo');
+    const tempDir = join(dir, 'tmp');
+    const uploaded = [];
+    let listedFiles = [];
+    try {
+      await mkdir(join(repoRoot, 'src'), { recursive: true });
+      await mkdir(join(repoRoot, '.codex'), { recursive: true });
+      await mkdir(join(repoRoot, 'node_modules/pkg'), { recursive: true });
+      await mkdir(tempDir, { recursive: true });
+      await writeFile(join(repoRoot, 'README.md'), 'ok', 'utf8');
+      await writeFile(join(repoRoot, 'src/app.js'), 'console.log("ok")', 'utf8');
+      await writeFile(join(repoRoot, 'src/token.txt'), 'secret', 'utf8');
+      await writeFile(join(repoRoot, '.env'), 'SECRET=1', 'utf8');
+      await writeFile(join(repoRoot, '.codex/auth.json'), '{}', 'utf8');
+      await writeFile(join(repoRoot, 'node_modules/pkg/index.js'), 'ignored', 'utf8');
+
+      const result = await captureCodingBinSnapshot({
+        enabled: true,
+        max_bytes: 1024,
+        max_files: 10,
+        upload: {
+          method: 'PUT',
+          url_template: 'https://memoro.test/api/mc/cloud-sessions/cld/coding-bin-snapshots/{snapshot_id}/payload',
+          content_type: 'application/zstd',
+        },
+        exclude: {
+          paths: ['.env', '.codex', 'node_modules'],
+          globs: ['**/*token*'],
+        },
+      }, {
+        root: repoRoot,
+        token: 'mem_runtime_secret_123456789',
+        tempDir,
+        now: () => '2026-07-14T12:00:00.000Z',
+        makeSnapshotId: () => 'cbsnap_capture123',
+        createArchive: async ({ archivePath, listPath }) => {
+          listedFiles = String(await readFile(listPath, 'utf8')).split('\0').filter(Boolean);
+          await writeFile(archivePath, 'archive-bytes', 'utf8');
+          return {
+            ok: true,
+            spawn: (_cmd, args) => {
+              if (args.join(' ') === 'rev-parse --abbrev-ref HEAD') return { status: 0, stdout: 'main\n', stderr: '' };
+              if (args.join(' ') === 'rev-parse HEAD') return { status: 0, stdout: 'abc123\n', stderr: '' };
+              return { status: 1, stdout: '', stderr: 'unexpected' };
+            },
+          };
+        },
+        fetchImpl: async (url, options) => {
+          uploaded.push({ url, options });
+          return { ok: true, status: 201, text: async () => '{"ok":true}' };
+        },
+      });
+
+      assert.equal(result.ok, true);
+      assert.equal(result.uploaded, true);
+      assert.equal(result.snapshot_id, 'cbsnap_capture123');
+      assert.deepEqual(listedFiles, ['README.md', 'src/app.js']);
+      assert.equal(result.file_count, 2);
+      assert.equal(result.skipped_count, 4);
+      assert.equal(result.byte_count, Buffer.byteLength('archive-bytes'));
+      assert.equal(result.base_ref, 'main');
+      assert.equal(result.head_ref, 'abc123');
+      assert.equal(uploaded.length, 1);
+      assert.equal(uploaded[0].url, 'https://memoro.test/api/mc/cloud-sessions/cld/coding-bin-snapshots/cbsnap_capture123/payload');
+      assert.equal(uploaded[0].options.method, 'PUT');
+      assert.equal(uploaded[0].options.headers.Authorization, 'Bearer mem_runtime_secret_123456789');
+      assert.equal(uploaded[0].options.headers['Content-Length'], String(Buffer.byteLength('archive-bytes')));
+      assert.equal(uploaded[0].options.headers['X-MC-Snapshot-File-Count'], '2');
+      assert.equal(uploaded[0].options.headers['X-MC-Snapshot-Skipped-Count'], '4');
+      assert.equal(uploaded[0].options.headers['X-MC-Snapshot-Base-Ref'], 'main');
+      assert.equal(uploaded[0].options.headers['X-MC-Snapshot-Head-Ref'], 'abc123');
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
