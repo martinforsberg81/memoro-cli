@@ -6,7 +6,17 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.7.7] — 2026-07-15
+
 ### Added
+- `mc cloud-runtime run` now restores the latest coding-bin snapshot before
+  provider launch and captures/uploads a filtered snapshot when a cloud runtime
+  goes to sleep.
+- Cloud runtime status now exposes broker readiness, coding-bin snapshot state,
+  and pending/ready/sleeping phase semantics through the shared runtime
+  contract.
+- `mc tool-auth hydrate|persist` and the runtime persist watcher support cloud
+  tool login state without exposing secret payloads to the LLM session.
 - `mc vault bind <label> <ENV_KEY>` attaches existing vault secrets to a repo
   without re-entering values, and `mc vault bindings` shows the repo's
   value-free materialisation map.
@@ -25,6 +35,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   not add a terminal `mc map` command or auto-edit the map.
 
 ### Fixed
+- Coding-bin snapshots preserve deletions through a snapshot manifest and filter
+  token-bearing argv/environment paths before upload.
+- Broker connection readiness now handles pretty-printed JSON payloads from the
+  cloud broker connect command.
 - Fresh mc installs now default to Codex instead of falling through to Claude,
   including `mc new`, bare `mc`, `mc setup`, and status policy reporting.
 - Fanout sessions and raw registry upserts now use the shared package default
@@ -332,6 +346,7 @@ Initial public release.
 - `SessionEnd` transcript path now read from stdin JSON for compatibility with
   current Claude Code hook payloads.
 
+[0.7.7]: https://github.com/martinforsberg81/memoro-cli/releases/tag/v0.7.7
 [0.7.6]: https://github.com/martinforsberg81/memoro-cli/releases/tag/v0.7.6
 [0.7.5]: https://github.com/martinforsberg81/memoro-cli/releases/tag/v0.7.5
 [0.7.0]: https://github.com/martinforsberg81/memoro-cli/releases/tag/v0.7.0
