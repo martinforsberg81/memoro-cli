@@ -6,7 +6,8 @@
  *
  *   { context — compact User Profile + Coding Profile from Memoro
  *     role    — optional coordinator framing
- *     focus   — a soft, mutable pointer ("currently on X") }
+ *     focus   — a soft, mutable pointer ("currently on X")
+ *     legacy  — optional MEMORO.md roadmap / portrait-coding lens paths }
  *
  * This module owns two concerns, split so the design questions stay
  * testable in-process:
@@ -15,14 +16,13 @@
  *     markdown body for a managed block. No I/O. Empty parts degrade
  *     softly (a missing context / role / focus is simply omitted).
  *   - `groundSession({ cwd, ... })` — impure orchestration. Pulls the
- *     compact server context and optional role through injectable
- *     dep-portals, assembles the bundle, and materialises it into the
- *     cwd's tool instruction file at the pre-launch slot. Every external
- *     dependency is injectable and soft-degrades on failure: no Memoro →
- *     no context; nothing here ever throws.
+ *     compact server context and optional role/legacy parts through injectable
+ *     dep-portals, assembles the bundle, and materialises it into the cwd's tool
+ *     instruction file at the pre-launch slot. Every external dependency is
+ *     injectable and soft-degrades on failure: no Memoro → no context; nothing
+ *     here ever throws.
  *
- * Materialisation reuses the `writeLens` managed-block pattern
- * (`src/commands/lens.js`), generalised from "just the lens" to the whole
+ * Materialisation reuses the managed-block pattern, generalised to the whole
  * bundle as one block via the adapter's `writeGrounding(markdown, {cwd})`.
  */
 
@@ -144,16 +144,16 @@ function normalizeLocale(locale) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Pure: MEMORO.md `language` setting + precedence (this drev)
+// Pure: legacy MEMORO.md `language` setting + precedence
 //
-// Product decision: code-language ≠ Memoro-locale. A per-repo `language`
-// setting in MEMORO.md un-gates language steering LOCALLY, ahead of the
-// server (whose lens exposes no language field today). Precedence — the
-// MEMORO.md setting WINS:
+// Compatibility note: code-language ≠ Memoro-locale. The normal source is the
+// server-owned profile context. When the optional legacy roadmap path is enabled,
+// a per-repo `language` setting in MEMORO.md can still steer locally.
 //
-//   MEMORO.md language-setting   (primary — explicit per-repo choice)
-//     > Memoro user_state locale  (fallback — unchanged Phase 4 seam)
-//       > English                 (default)
+//   MEMORO.md language-setting   (legacy local override)
+//     > Memoro User Profile locale
+//       > legacy lens locale
+//         > English
 //
 // SYNTAX: a single HTML-comment convention line, anywhere in MEMORO.md:
 //
@@ -174,7 +174,7 @@ function normalizeLocale(locale) {
 const MAP_LANGUAGE_SETTING = /<!--\s*memoro:language:\s*([^>]*?)\s*-->/i;
 
 /**
- * Parse the MEMORO.md `language` setting out of the map text. PURE. Returns a
+ * Parse the legacy MEMORO.md `language` setting out of the map text. PURE. Returns a
  * language LABEL (e.g. "Swedish") or `null` (no setting / English / hostile
  * input). Reuses the lens-path normalisation so locale codes map to labels
  * and English variants collapse to null. Never throws.
@@ -267,17 +267,15 @@ export function languageDirective(language) {
  *
  * Every part is optional. A missing / empty part is omitted entirely
  * rather than rendered as an empty heading, so the soft-degrade paths
- * (no Memoro → no lens, no MEMORO.md → no map) produce clean output.
+ * (no Memoro → no profile context, no opt-in legacy map/lens) produce clean output.
  *
  * @param {object} parts
- * @param {string} [parts.map]       — MEMORO.md contents (the repo's intent-map)
+ * @param {string} [parts.map]       — legacy MEMORO.md contents
  * @param {string} [parts.role]      — orchestrator framing
  * @param {string} [parts.context]   — compact server-owned mc context
- * @param {string} [parts.lens]      — optional dynamic Memoro lens
+ * @param {string} [parts.lens]      — optional legacy dynamic Memoro lens
  * @param {string} [parts.focus]     — soft opening pointer ("currently on X")
- * @param {string} [parts.lifecycle] — MEMORO.md lifecycle guidance
- *   (Phase 2). mc itself only renders guidance; the grounded agent is
- *   expected to keep the living map current when work changes project state.
+ * @param {string} [parts.lifecycle] — optional legacy MEMORO.md lifecycle guidance
  * @param {string} [parts.language]  — the session's render language
  *   (Phase 4), resolved from the lens/user_state. `null`/empty → English
  *   (no directive). Rendered as a single "respond in <language>" line
@@ -299,19 +297,19 @@ export function assembleBundle({ map, role, context, lens, focus, lifecycle, lan
     sections.push(section('Your role', cleanRole));
   }
   if (cleanMap) {
-    sections.push(section('Repo roadmap (MEMORO.md)', cleanMap));
+    sections.push(section('Legacy repo map (MEMORO.md)', cleanMap));
   }
   if (cleanContext) {
     sections.push(section('Memoro profile context', cleanContext));
   }
   if (cleanLens) {
-    sections.push(section('Dynamic Memoro context', cleanLens));
+    sections.push(section('Legacy dynamic Memoro context', cleanLens));
   }
   if (cleanFocus) {
     sections.push(section('Current focus', cleanFocus));
   }
   if (cleanLifecycle) {
-    sections.push(section('MEMORO.md lifecycle', cleanLifecycle));
+    sections.push(section('Legacy MEMORO.md lifecycle', cleanLifecycle));
   }
 
   // The language directive sits right after the preamble — before the
@@ -347,9 +345,8 @@ function nonEmpty(s) {
 // ─────────────────────────────────────────────────────────────
 
 /**
- * Read the repo intent-map (MEMORO.md) from cwd. READ-ONLY in Phase 1 —
- * we never write or seed it here. Returns null when absent (no-MEMORO.md
- * soft-degrade) or unreadable.
+ * Read the legacy repo intent-map (MEMORO.md) from cwd. This path is opt-in and
+ * read-only; normal startup does not read a repo-local MEMORO.md.
  */
 export async function readMap(cwd, { readFileImpl = readFile, exists = existsSync } = {}) {
   const path = join(cwd, 'MEMORO.md');
@@ -362,12 +359,11 @@ export async function readMap(cwd, { readFileImpl = readFile, exists = existsSyn
 }
 
 // ─────────────────────────────────────────────────────────────
-// Pure: MEMORO.md lifecycle (Phase 2) — living-map guidance
+// Pure: legacy MEMORO.md lifecycle — living-map guidance
 //
-// mc itself only reads MEMORO.md during grounding and folds guidance into the
-// bundle. The grounded coding agent may then update the map directly when its
-// work materially changes roadmap state. The guardrail is sparse scope + final
-// summary visibility, not a separate confirmation gate.
+// This is retained for explicit legacy opt-in only. Normal mc startup uses
+// server-owned profile context plus session metadata and never asks the agent to
+// maintain MEMORO.md.
 // ─────────────────────────────────────────────────────────────
 
 /**
@@ -447,7 +443,7 @@ export function detectStale(map) {
 }
 
 /**
- * The MEMORO.md lifecycle guidance block folded into the bundle.
+ * The legacy MEMORO.md lifecycle guidance block folded into the bundle.
  * Pure. mc writes nothing here — this is *instructions to the grounded agent*:
  *
  *   - No map  → include the seed template + create it when project state
@@ -618,16 +614,15 @@ function refLine(key) {
 }
 
 /**
- * Auto-injection portal (Phase 4): fetch the WHOLE Memoro lens response —
- * not just its markdown — so grounding can both render the lens AND derive
- * the session language from the same call. Lens auto-injection is
- * first-class: no manual `lens pull` step precedes this; it fetches
- * directly through the keychain-token + endpoint path.
+ * Legacy dynamic lens portal: fetch the WHOLE Memoro lens response, not just
+ * its markdown, so opt-in grounding can both render the lens and derive the
+ * session language from the same call. Normal startup keeps `includeLens` off
+ * and uses `/api/mc/context` instead.
  *
  * The dependency is injected so tests never hit the network or keychain.
  * The default soft-degrades to `null` on ANY failure (not logged in,
- * Memoro unreachable, no config) — grounding then proceeds with no lens
- * and the English default, never throwing.
+ * Memoro unreachable, no config) — grounding then proceeds with no lens and the
+ * profile/English default, never throwing.
  *
  * @param {object} [arg]
  * @param {() => Promise<*>} [arg.fetchLens] — returns the lens response
@@ -644,14 +639,13 @@ export async function fetchLensData({ fetchLens = defaultFetchLens } = {}) {
 }
 
 /**
- * Pull just the lens *markdown* for inclusion in the bundle. Built on
+ * Pull just the legacy lens *markdown* for inclusion in the bundle. Built on
  * `fetchLensData`; tolerates either the full response object (extracts
  * `.markdown`) or a bare markdown string (back-compat with Phase 1 tests
  * and any caller injecting a plain string). Soft-degrades to null.
  *
- * Note: we read the lens, we do not re-materialise it — the SessionStart
- * `lens pull` hook still owns writing the standalone lens block to the
- * global config. Here it's one part of the grounding bundle.
+ * Note: we read the lens, we do not re-materialise it. The old SessionStart
+ * `lens pull` hook still owns writing the standalone legacy lens block.
  */
 export async function pullLensMarkdown({ fetchLens = defaultFetchLens } = {}) {
   const resp = await fetchLensData({ fetchLens });
@@ -726,7 +720,7 @@ export async function groundSession({
     // Phase 4: fetch the WHOLE lens response once, then derive both the
     // rendered markdown and the session language from it — one Memoro call,
     // not two. `fetchLensDataImpl` is the injectable seam (tests stub it);
-    // `pullLensImpl` is kept for back-compat with callers/tests that only
+    // `pullLensImpl` is kept for the legacy markdown-only path that only
     // care about markdown (it short-circuits the data fetch when given).
     fetchLensDataImpl = () => fetchLensData(deps.lensDeps || {}),
     pullLensImpl = null,
@@ -756,14 +750,14 @@ export async function groundSession({
     : null;
   const context = safeSync(() => renderMcContextMarkdown(mcContext), null);
 
-  // Lens auto-injection + language. Soft-degrade everywhere: a null lens
+  // Legacy lens + language. Soft-degrade everywhere: a null lens
   // response → no lens section + (absent a MEMORO.md setting) English default.
   let lens = null;
   let lensResp = null;
   if (!groundingConfig.includeLens) {
     lens = null;
   } else if (pullLensImpl) {
-    // Legacy markdown-only path (Phase 1/2 tests inject this). No lens
+    // Legacy markdown-only path. No lens
     // response object → no server locale to resolve from; the MEMORO.md
     // setting still drives the language below.
     lens = await safe(() => pullLensImpl(), null);
@@ -786,9 +780,8 @@ export async function groundSession({
   // byte-identical — the pre-drev grounding output is preserved.
   const mapProse = safeSync(() => stripMapSettings(map), map);
 
-  // MEMORO.md lifecycle guidance (Phase 2). PURE + read-only on mc's side:
-  // it only adds instructions for the grounded agent to keep the living map
-  // current as work lands. safe() so a surprise never blocks the launch.
+  // Legacy MEMORO.md lifecycle guidance. PURE + read-only on mc's side and only
+  // rendered when both roadmap flags are explicitly enabled.
   const lifecycle = groundingConfig.includeRoadmap && groundingConfig.includeMapLifecycle
     ? safeSync(() => lifecycleGuidance({ map: mapProse, repoName }), null)
     : null;

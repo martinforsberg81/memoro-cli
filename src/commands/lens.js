@@ -1,8 +1,9 @@
 /**
  * memoro-cli lens pull [--tool <id>] [--repo <name>]
  *
- * Fetches the coding lens from Memoro and writes it as a managed section
- * into the target tool's config file. Default tool = claude-code.
+ * Legacy helper: fetches the old coding lens from Memoro and writes it as a
+ * managed section into the target tool's config file. Normal mc startup uses
+ * User Profile + Coding Profile context through /api/mc/context.
  */
 
 import { getSecret } from '../lib/keychain.js';
@@ -29,7 +30,7 @@ export async function pullLens(argv) {
   const result = await memoroFetch(apiUrl, `/api/lens/portrait-coding${qs}`, { token });
 
   if (!result?.markdown) {
-    console.error('No lens content available yet — Memoro needs more observation data.');
+    console.error('No legacy lens content available yet — Memoro needs more observation data.');
     // Still bust any stale managed block so it doesn't go stale silently.
     await adapter.removeLens({ cwd: process.cwd() });
     return 0;
@@ -43,7 +44,7 @@ export async function pullLens(argv) {
 
   const target = await adapter.writeLens(markdown, { cwd: process.cwd() });
   await updateConfig({ lastLensPullAt: new Date().toISOString() });
-  console.error(`✓ Lens written to ${target}`);
+  console.error(`✓ Legacy lens written to ${target}`);
   console.error(`  Version: ${result.version || 'unknown'} · Generated: ${result.generatedAt || 'now'}`);
   return 0;
 }

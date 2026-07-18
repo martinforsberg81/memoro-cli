@@ -30,10 +30,10 @@ COMMANDS
 
   session upload <transcript>        Clean + POST a coding-session transcript
   lens pull [--tool <id>] [--repo <name>]
-                                     Fetch portrait-coding lens into tool config
+                                     Legacy: refresh old portrait-coding lens block
   codex run [-- <codex args...>]     Legacy manual wrapper; prefer mc new --codex
 
-  show <section> [--repo <name>]     Print one lens section (loose-ends, decisions,
+  show <section> [--repo <name>]     Legacy: print one lens section (loose-ends, decisions,
                                      rules, stack, repos, practices, tool-use)
 
   hook install [--tool claude-code]  Legacy raw-tool integration; not required for mc

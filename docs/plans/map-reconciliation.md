@@ -1,6 +1,11 @@
-# Map Reconciliation Guard
+# Historical: Map Reconciliation Guard
 
-**Status:** active · 2026-06-07 · serves G1, G3
+**Status:** superseded · 2026-07-18 · historical reference only
+
+This document records the old MEMORO.md map model. It is not the active v1 mc
+context model: normal startup uses server-owned User Profile + Coding Profile
+context plus mc session metadata, and no default path asks the agent to update
+`MEMORO.md` or use `/mc map`.
 
 Reading `MEMORO.md` at session start does not make an LLM remember to update it.
 The product needs a reconciliation habit: the coordinator asks the map question

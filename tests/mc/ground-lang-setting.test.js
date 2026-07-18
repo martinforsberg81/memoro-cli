@@ -1,17 +1,17 @@
 /**
  * TDD spec for the MEMORO.md `language` setting (drev: grounding-lang-setting).
  *
- * Phase 4 derived the session render language from the Memoro lens, but the
- * server exposes no language field today, so it always resolves to English.
- * Product decision: code-language ≠ Memoro-locale. A per-repo `language`
- * setting in MEMORO.md un-gates language steering locally, ahead of the
- * server.
+ * This is the legacy per-repo language override path. Normal startup derives
+ * render language from server-owned profile context when available; if optional
+ * roadmap grounding is enabled, a MEMORO.md `language` setting can still steer
+ * locally.
  *
- * Precedence (prescribed — the MEMORO.md setting WINS):
+ * Precedence:
  *
- *   MEMORO.md language-setting   (primary — explicit per-repo choice)
- *     > Memoro user_state locale  (fallback — unchanged Phase 4 seam)
- *       > English                 (default)
+ *   MEMORO.md language-setting   (legacy local override)
+ *     > Memoro User Profile locale
+ *       > legacy lens locale
+ *         > English
  *
  * The setting lives as a single HTML-comment convention line in MEMORO.md:
  *
