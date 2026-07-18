@@ -230,4 +230,94 @@ describe('mc storage / doctor', () => {
     assert.ok(live.last_storage_repair_at);
     assert.ok(missing.last_storage_repair_at);
   });
+
+  test('storage prune-missing --dry-run reports only tombstones older than 7 days', () => {
+    const registryPath = join(repo.mcHome, 'registry.json');
+    const oldIso = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString();
+    const recentIso = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    const repairIso = new Date().toISOString();
+    writeRegistry(repo.mcHome, [
+      makeEntry({
+        name: 'old-missing',
+        branch: 'sess/old-missing',
+        worktree_missing: true,
+        created_at: oldIso,
+        last_storage_repair_at: repairIso,
+      }),
+      makeEntry({
+        name: 'recent-missing',
+        branch: 'sess/recent-missing',
+        worktree_missing: true,
+        created_at: oldIso,
+        last_opened_at: recentIso,
+        last_storage_repair_at: repairIso,
+      }),
+      makeEntry({
+        name: 'present',
+        branch: 'sess/present',
+        worktree_missing: false,
+        created_at: oldIso,
+        last_storage_repair_at: repairIso,
+      }),
+    ]);
+    const before = readFileSync(registryPath, 'utf8');
+
+    const r = runMc(['storage', 'prune-missing', '--dry-run', '--json'], {
+      cwd: repo.dir,
+      env: { MC_HOME: repo.mcHome, MC_ORPHAN_PID_DIR: pidDir },
+    });
+
+    assert.equal(r.status, 0, `stderr:${r.stderr}`);
+    const j = parseJsonOrNull(r.stdout);
+    assert.equal(j.dry_run, true);
+    assert.deepEqual(j.candidates.map((item) => item.name), ['old-missing']);
+    assert.equal(j.candidates[0].retention_anchor_at, oldIso);
+    assert.equal(readFileSync(registryPath, 'utf8'), before);
+  });
+
+  test('storage prune-missing --apply removes matching tombstones only', () => {
+    const oldIso = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString();
+    const recentIso = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    const repairIso = new Date().toISOString();
+    writeRegistry(repo.mcHome, [
+      makeEntry({
+        name: 'old-missing',
+        branch: 'sess/old-missing',
+        worktree_missing: true,
+        created_at: oldIso,
+        last_storage_repair_at: repairIso,
+      }),
+      makeEntry({
+        name: 'recent-missing',
+        branch: 'sess/recent-missing',
+        worktree_missing: true,
+        created_at: oldIso,
+        last_opened_at: recentIso,
+        last_storage_repair_at: repairIso,
+      }),
+      makeEntry({
+        name: 'present',
+        branch: 'sess/present',
+        worktree_missing: false,
+        created_at: oldIso,
+        last_storage_repair_at: repairIso,
+      }),
+    ]);
+
+    const r = runMc(['storage', 'prune-missing', '--apply', '--json'], {
+      cwd: repo.dir,
+      env: { MC_HOME: repo.mcHome, MC_ORPHAN_PID_DIR: pidDir },
+    });
+
+    assert.equal(r.status, 0, `stderr:${r.stderr}`);
+    const j = parseJsonOrNull(r.stdout);
+    assert.equal(j.dry_run, false);
+    assert.deepEqual(j.removed.map((item) => item.name), ['old-missing']);
+
+    const registry = JSON.parse(readFileSync(join(repo.mcHome, 'registry.json'), 'utf8'));
+    assert.deepEqual(registry.entries.map((item) => item.name).sort(), [
+      'present',
+      'recent-missing',
+    ]);
+  });
 });

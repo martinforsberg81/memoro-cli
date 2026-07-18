@@ -357,9 +357,12 @@ FLEET / ADVANCED
                                   Preview/apply safe local metadata repairs
   mc storage repair <name> --provider-backfill --apply
                                   Backfill a provider-native resume id
+  mc storage prune-missing --dry-run|--apply
+                                  Prune missing registry tombstones after 7d
   mc gc [--dry-run]               Reap registry-dead, merged, clean worktrees
   mc gc --runtime                 Reap stale runtime pid/socket sidecars
-  mc gc --stale-worktrees         Reap clean, merged worktrees with no live broker
+  mc gc --stale-worktrees --only <names>
+                                  Reap only named clean, merged worktrees
   mc gc --sidecars                Reap stale hosts/guard-bin runtime sidecars
   mc gc --all-safe --dry-run      Preview runtime + clean merged worktree cleanup
   mc broker start/status/stop     Local PTY broker admin

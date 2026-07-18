@@ -89,6 +89,13 @@ function buildFixture() {
       safety_verdict: 'SAFE_TO_END',
     }),
     makeEntry({
+      name: 'missing-worktree',
+      branch: 'sess/missing-worktree',
+      session_state: 'idle',
+      safety_verdict: 'SAFE_TO_END',
+      worktree_missing: true,
+    }),
+    makeEntry({
       name: 'iso-x',
       branch: 'iso/parent-abc',
       kind: 'isolation',
@@ -114,10 +121,13 @@ describe('mc list', () => {
     assert.ok(j, `expected JSON, got: ${r.stdout}`);
     assert.ok(Array.isArray(j.entries), 'output must have .entries[]');
     // Default `mc list` hides isolation worktrees (§2 "only user-created
-    // work-sessions"). 7 fixture entries → 6 work entries surfaced.
+    // work-sessions") and missing-worktree registry entries. 8 fixture
+    // entries → 6 work entries surfaced.
     const names = j.entries.map(e => e.name);
     assert.ok(!names.includes('iso-x'),
       `iso entries should be hidden by default; got ${names.join(',')}`);
+    assert.ok(!names.includes('missing-worktree'),
+      `missing worktrees should be hidden by default; got ${names.join(',')}`);
     assert.equal(j.entries.length, 6);
     // Every entry must carry at least name + branch + safety_verdict.
     for (const e of j.entries) {
@@ -387,6 +397,8 @@ describe('mc list', () => {
     const iso = j.entries.find(e => e.name === 'iso-x');
     assert.ok(iso, 'iso-x should be present with --all');
     assert.equal(iso.kind, 'isolation');
+    assert.ok(j.entries.find(e => e.name === 'missing-worktree'),
+      'missing worktree entries should be present with --all');
   });
 
   test('--rich exposes the derived fields from §9a', () => {

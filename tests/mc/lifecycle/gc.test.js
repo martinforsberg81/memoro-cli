@@ -179,6 +179,30 @@ describe('mc gc', () => {
     assert.ok(j.candidates.every((item) => item.reason === 'clean-merged-not-live'));
   });
 
+  test('--stale-worktrees --only restricts cleanup to explicit names', () => {
+    const dryRun = runMc(['gc', '--stale-worktrees', '--only', 'gc3,missing', '--dry-run', '--json'], {
+      cwd: repo.dir, env: { MC_HOME: repo.mcHome },
+    });
+
+    assert.equal(dryRun.status, 0, `stderr:${dryRun.stderr}`);
+    const preview = parseJsonOrNull(dryRun.stdout);
+    assert.deepEqual(preview.requested_names, ['gc3', 'missing']);
+    assert.deepEqual(preview.not_candidates, ['missing']);
+    assert.deepEqual(preview.candidates.map((item) => item.name), ['gc3']);
+
+    const applied = runMc(['gc', '--stale-worktrees', '--only', 'gc3', '--apply', '--json'], {
+      cwd: repo.dir, env: { MC_HOME: repo.mcHome },
+    });
+
+    assert.equal(applied.status, 0, `stderr:${applied.stderr}`);
+    const result = parseJsonOrNull(applied.stdout);
+    assert.deepEqual(result.removed.map((item) => item.name), ['gc3']);
+
+    const wts = git(repo.dir, 'worktree list --porcelain');
+    assert.ok(wts.includes('/worktrees/repo/gc1'), 'unrequested cleanup candidate should be preserved');
+    assert.ok(!wts.includes('/worktrees/repo/gc3'), 'requested cleanup candidate should be removed');
+  });
+
   test('--all-safe requires explicit dry-run or apply', () => {
     const r = runMc(['gc', '--all-safe', '--json'], {
       cwd: repo.dir,

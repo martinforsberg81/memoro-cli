@@ -22,11 +22,12 @@
  */
 import test, { describe, after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { runMc, parseJsonOrNull } from '../_helpers/cli.js';
 import { makeTempRepo, git } from '../_helpers/git-fixture.js';
+import { makeEntry, writeRegistry } from '../_helpers/registry-fixture.js';
 import { launchNewSession } from '../../../src/mc/commands/new.js';
 import * as claudeAdapter from '../../../src/adapters/claude-code.js';
 import * as codexAdapter from '../../../src/adapters/codex.js';
@@ -111,6 +112,40 @@ describe('mc new', () => {
     });
     assert.notEqual(r.status, 0);
     assert.match(r.stderr + r.stdout, /exists|duplicate|already/i);
+  });
+
+  test('reuses a missing registry tombstone name', () => {
+    writeRegistry(repo.mcHome, [
+      makeEntry({
+        name: 'reuse',
+        branch: 'sess/reuse',
+        worktree_path: join(repo.mcHome, 'worktrees', 'repo', 'reuse'),
+        session_state: 'idle',
+        coding_session_id: 'sess_old',
+        tool_session_id: 'old-provider-session',
+        dirty_files: 9,
+        worktree_missing: true,
+        last_storage_repair_at: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString(),
+      }),
+    ]);
+
+    const r = runMc(['new', 'reuse', '--no-launch', '--json'], {
+      cwd: repo.dir,
+      env: { MC_HOME: repo.mcHome },
+    });
+
+    assert.equal(r.status, 0, `stderr:${r.stderr}`);
+    const out = parseJsonOrNull(r.stdout);
+    assert.equal(out.name, 'reuse');
+
+    const registry = JSON.parse(readFileSync(join(repo.mcHome, 'registry.json'), 'utf8'));
+    const entry = registry.entries.find((item) => item.name === 'reuse');
+    assert.equal(entry.branch, 'sess/reuse');
+    assert.equal(entry.worktree_missing, false);
+    assert.equal(entry.session_state, 'no-session-yet');
+    assert.equal(entry.coding_session_id, null);
+    assert.equal(entry.tool_session_id, null);
+    assert.equal(entry.dirty_files, 0);
   });
 
   test('--from <ref> roots the new branch at that ref', () => {
