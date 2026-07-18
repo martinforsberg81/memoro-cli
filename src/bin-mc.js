@@ -359,6 +359,8 @@ FLEET / ADVANCED
                                   Backfill a provider-native resume id
   mc storage prune-missing --dry-run|--apply
                                   Prune missing registry tombstones after 7d
+  mc storage prune-deps --dry-run|--apply
+                                  Prune old inactive worktree node_modules
   mc gc [--dry-run]               Reap registry-dead, merged, clean worktrees
   mc gc --runtime                 Reap stale runtime pid/socket sidecars
   mc gc --stale-worktrees --only <names>
