@@ -138,7 +138,8 @@ export async function run(rawArgv) {
     return 1;
   }
 
-  if (findEntry(opts.name)) {
+  const existingEntry = findEntry(opts.name);
+  if (existingEntry && existingEntry.worktree_missing !== true) {
     console.error(`mc: a worktree named "${opts.name}" already exists`);
     return 1;
   }
@@ -190,7 +191,22 @@ export async function run(rawArgv) {
     tool: toolResolution.tool,
     model_chain: [],
     session_state: 'no-session-yet',
+    dirty_files: 0,
+    ahead: 0,
+    behind: 0,
+    open_question: false,
     safety_verdict: 'SAFE_TO_END',
+    coding_session_id: null,
+    tool_session_id: null,
+    tool_session_source: null,
+    tool_transcript_path: null,
+    provider_session_id: null,
+    llm_session_id: null,
+    broker_socket_path: null,
+    host_kind: null,
+    worktree_missing: false,
+    last_storage_repair_at: null,
+    last_storage_repair_reason: null,
     last_opened_at: new Date().toISOString(),
   });
 

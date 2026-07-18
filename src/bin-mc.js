@@ -357,6 +357,8 @@ FLEET / ADVANCED
                                   Preview/apply safe local metadata repairs
   mc storage repair <name> --provider-backfill --apply
                                   Backfill a provider-native resume id
+  mc storage prune-missing --dry-run|--apply
+                                  Prune missing registry tombstones after 7d
   mc gc [--dry-run]               Reap registry-dead, merged, clean worktrees
   mc gc --runtime                 Reap stale runtime pid/socket sidecars
   mc gc --stale-worktrees --only <names>
