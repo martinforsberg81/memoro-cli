@@ -1,16 +1,15 @@
 /**
- * TDD spec for grounding Phase 4 — language resolution + lens auto-injection.
+ * TDD spec for grounding Phase 4 — language resolution + legacy lens support.
  *
- * Phase 4 makes two things first-class:
+ * This legacy lens path keeps two behaviours testable:
  *
- *   1. Lens auto-injection. The lens already flows into the bundle without a
- *      manual `lens pull` (Phase 1's pullLensMarkdown). Phase 4 broadens the
- *      fetch so it surfaces the WHOLE lens response, not just markdown, so a
- *      language preference can be derived from it. `fetchLensData` is the
- *      injectable, soft-degrading portal; `pullLensMarkdown` stays as the
- *      markdown-only convenience built on top.
+ *   1. Legacy lens fetch. When `includeLens` is explicitly enabled, the fetch
+ *      surfaces the WHOLE lens response, not just markdown, so a language
+ *      preference can be derived from it. `fetchLensData` is the injectable,
+ *      soft-degrading portal; `pullLensMarkdown` stays as the markdown-only
+ *      convenience built on top.
  *
- *   2. Language from user_state. The session's render language is DERIVED
+ *   2. Language from profile/user_state-shaped data. The session's render language is DERIVED
  *      from the user's Memoro profile, never a static choice. The default is
  *      English (= no directive). `resolveLanguage(lensResponse)` is the pure
  *      resolver: response object → language label (or null = English).

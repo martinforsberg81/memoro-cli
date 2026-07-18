@@ -80,15 +80,9 @@ export async function materialiseVaultForWrap({
 }
 
 export function startupMessageFromGroundingParts(parts) {
-  if (!parts || typeof parts !== 'object') return null;
-  if (typeof parts.map === 'string' && parts.map.trim()) return null;
-  const lifecycle = typeof parts.lifecycle === 'string' ? parts.lifecycle : '';
-  if (!/no `MEMORO\.md`|no MEMORO\.md/i.test(lifecycle)) return null;
-  return [
-    'This repo is missing `MEMORO.md`.',
-    '',
-    'Before doing any other work, ask me whether you should create it. Do not create or overwrite the file before I explicitly agree.',
-    '',
-    'If I say yes, build the first `MEMORO.md` inside this coding session: inspect the repo evidence first (README, package/manifest files, docs, plans, tests, git status/log where useful), then write a concise first draft using the grounding skeleton. Do not stop at an empty skeleton and do not ask broad discovery questions before making that first evidence-based draft. Use placeholders only for facts the repo does not support, and after writing the file, summarize the assumptions/gaps for me to correct.',
-  ].join('\n');
+  void parts;
+  // PR3 context cleanup: normal startup must not send a missing-MEMORO prompt.
+  // Startup messages remain available for adapter-delivered grounding, but
+  // repo-map lifecycle heuristics are no longer a separate fallback prompt.
+  return null;
 }

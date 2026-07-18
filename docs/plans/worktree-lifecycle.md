@@ -2,6 +2,12 @@
 
 **Status:** proposed • 2026-05-25 (mission-first reframe 2026-06-02)
 
+**2026-07-18 context-model update:** older sections use terms such as
+`MEMORO.md`, `user_state`, `lens`, and `portrait-coding`. The active v1 mc
+startup model is now server-owned User Profile + Coding Profile context from
+`/api/mc/context`, plus mc session metadata. Repo-local MEMORO.md and
+portrait-coding lens paths are legacy/opt-in compatibility only.
+
 ## Mission (north star)
 
 memoro-cli (`mc`) exists to make **one human able to orchestrate a fleet
@@ -2515,6 +2521,11 @@ is independently shippable.
   proactive "store this decision" writes. Out of scope here.
 
 ### 16. The memory loop — Memoro ↔ session, bidirectional (proposed 2026-06-02)
+
+**2026-07-18 update:** this section is historical for the old lens/user_state
+model. New implementation work should use User Profile + Coding Profile via
+`/api/mc/context`; `memoro-cli lens pull` and `/api/lens/portrait-coding` remain
+legacy compatibility paths.
 
 The mission (north star, top of file) names Memoro as the user's personal
 knowledge base and mc as the on-machine bridge. The two form a

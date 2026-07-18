@@ -64,6 +64,7 @@ Examples:
     "includeMcContext": true,
     "includeRoadmap": false,
     "includeCoordinatorRole": false,
+    "includeMapLifecycle": false,
     "includeLens": false
   },
   "permissions": {
@@ -82,6 +83,12 @@ Examples:
   }
 }
 ```
+
+`includeMcContext` is the normal startup path. It pulls compact User Profile,
+Coding Profile, repo metadata, and session identity from Memoro. `includeRoadmap`,
+`includeMapLifecycle`, and `includeLens` are legacy compatibility flags for old
+MEMORO.md / portrait-coding flows; they stay off by default and must not be
+presented as the ordinary mc model.
 
 ### 2. Global User Config
 

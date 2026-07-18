@@ -175,17 +175,12 @@ describe('materialiseVaultForWrap', () => {
 });
 
 describe('startupMessageFromGroundingParts', () => {
-  test('creates a real startup message when MEMORO.md is missing', () => {
+  test('does not synthesize legacy MEMORO.md startup prompts', () => {
     const msg = startupMessageFromGroundingParts({
       map: null,
       lifecycle: 'This repo has no `MEMORO.md` yet',
     });
-    assert.match(msg, /missing `MEMORO\.md`/);
-    assert.match(msg, /ask me whether/i);
-    assert.match(msg, /Do not create or overwrite/i);
-    assert.match(msg, /inspect the repo evidence/i);
-    assert.match(msg, /Do not stop at an empty skeleton/i);
-    assert.match(msg, /first evidence-based draft/i);
+    assert.equal(msg, null);
   });
 
   test('does not send a startup message when a map exists', () => {

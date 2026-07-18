@@ -68,7 +68,7 @@ session identity proves the user is entering the same session.
 - A live session with a different tool than the requested flag still wins; tool
   flags only apply to a confirmed restart when no live PTY can be attached.
 - Terminal commands (`mc new`, `mc resume`, `mc end`, `mc broker`, `mc vault`)
-  remain separate from in-session habits (`/mc map`).
+  remain separate from in-session profile-update dialogue and work reporting.
 - Runtime grounding is delivered through adapters without dirtying repo-owned
   instruction files.
 

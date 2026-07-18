@@ -1,6 +1,12 @@
-# Session grounding at entry (+ MEMORO.md)
+# Historical: Session grounding at entry (+ MEMORO.md)
 
-**Status:** proposed · 2026-06-02 · serves G1, G2 (see `MEMORO.md`)
+**Status:** superseded · 2026-07-18 · historical reference only
+
+This plan describes the earlier MEMORO.md + portrait-coding lens model. The
+active v1 model is server-owned User Profile + Coding Profile context delivered
+through `/api/mc/context`, plus mc session metadata. Repo-local MEMORO.md and
+the portrait-coding lens are legacy/opt-in compatibility paths, not normal
+startup context.
 
 Detailed plan for the MEMORO.md node *"Session grounding at entry"*. The map node
 stays terse; depth lives here.

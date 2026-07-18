@@ -34,8 +34,8 @@ describe('mc spawn — session fabric', () => {
     const r = runMc([
       'spawn',
       'i18n',
-      'Build the locale picker and report MEMORO.md changes',
-      '--node',
+      'Build the locale picker and report status back',
+      '--scope',
       'French UI locale',
       '--codex',
       '--json',
@@ -55,7 +55,7 @@ describe('mc spawn — session fabric', () => {
     assert.equal(payload.kind, 'project');
     assert.equal(payload.role, 'project');
     assert.equal(payload.tool, 'codex');
-    assert.equal(payload.memoro_node, 'French UI locale');
+    assert.equal(payload.scope, 'French UI locale');
     assert.equal(payload.launched, false);
 
     const reg = JSON.parse(readFileSync(join(repo.mcHome, 'registry.json'), 'utf8'));
@@ -63,13 +63,15 @@ describe('mc spawn — session fabric', () => {
     assert.equal(entry.kind, 'project');
     assert.equal(entry.parent, 'coord');
     assert.equal(entry.focus, 'French UI locale');
+    assert.equal(entry.scope, 'French UI locale');
     assert.equal(entry.branch, 'sess/i18n');
     assert.ok(existsSync(entry.worktree_path));
 
     const brief = readFileSync(entry.brief_path, 'utf8');
     assert.match(brief, /Project session brief/);
     assert.match(brief, /Parent coordinator: coord/);
-    assert.match(brief, /MEMORO\.md node: French UI locale/);
+    assert.match(brief, /Focus: French UI locale/);
+    assert.doesNotMatch(brief, /MEMORO\.md/);
     assert.match(brief, /Build the locale picker/);
   });
 
@@ -82,7 +84,7 @@ describe('mc spawn — session fabric', () => {
         parent: 'coord',
         branch: 'sess/i18n',
         tool: 'codex',
-        memoro_node: 'French UI locale',
+        scope: 'French UI locale',
       }),
     ]);
 
@@ -101,6 +103,6 @@ describe('mc spawn — session fabric', () => {
     assert.equal(tree.status, 0, tree.stderr);
     assert.match(tree.stdout, /^coord/m);
     assert.match(tree.stdout, /^  i18n/m);
-    assert.match(tree.stdout, /node=French UI locale/);
+    assert.match(tree.stdout, /scope=French UI locale/);
   });
 });

@@ -90,10 +90,10 @@ Under the hood: `mc` runs the tool in a PTY it owns, with your terminal piped tr
 |---|---|
 | `memoro-cli login` | Save a Memoro API token to the OS keychain |
 | `memoro-cli logout` | Remove the stored token |
-| `memoro-cli status` | Show token info, last session uploaded, last lens pull |
+| `memoro-cli status` | Show token info, last session uploaded, last legacy lens pull |
 | `memoro-cli config set <key> <value>` | Store non-secret CLI config such as `api-url` |
 | `memoro-cli session upload <transcript>` | Clean + POST a session transcript |
-| `memoro-cli lens pull [--tool <id>] [--repo <name>]` | Fetch the coding lens |
+| `memoro-cli lens pull [--tool <id>] [--repo <name>]` | Legacy: refresh the old portrait-coding lens block |
 | `memoro-cli codex run [-- <codex args...>]` | Legacy manual wrapper; prefer `mc new --codex` |
 | `memoro-cli hook install [--tool ...]` | Legacy raw-tool integration; not required for `mc` |
 | `memoro-cli hook uninstall [--tool ...]` | Remove legacy raw-tool hooks/shims |

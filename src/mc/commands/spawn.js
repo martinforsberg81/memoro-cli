@@ -1,5 +1,5 @@
 /**
- * `mc spawn <name> "<brief>" [--node <map-node>] [--tool ...] [--from <ref>]`
+ * `mc spawn <name> "<brief>" [--scope <label>] [--tool ...] [--from <ref>]`
  *
  * Creates a durable project session under the current coordinator session.
  * This is not an agent runner: it creates the same worktree/branch/registry
@@ -29,7 +29,7 @@ export async function run(argv) {
     return 2;
   }
   if (!opts.name || !opts.brief) {
-    console.error('mc: usage — `mc spawn <name> "<brief>" [--node <map-node>]`');
+    console.error('mc: usage — `mc spawn <name> "<brief>" [--scope <label>]`');
     return 2;
   }
   if (!NAME_RE.test(opts.name)) {
@@ -85,12 +85,12 @@ export async function run(argv) {
   }
 
   const parent = opts.parent ?? process.env.MC_SESSION_NAME ?? null;
-  const focus = opts.focus ?? opts.node ?? opts.name;
+  const focus = opts.focus ?? opts.scope ?? opts.name;
   const brief = buildSpawnBrief({
     name: opts.name,
     parent,
     focus,
-    memoroNode: opts.node,
+    scope: opts.scope,
     brief: opts.brief,
   });
   const briefPath = writeBrief(wt, brief);
@@ -105,7 +105,7 @@ export async function run(argv) {
     role: 'project',
     parent,
     focus,
-    memoro_node: opts.node ?? null,
+    scope: opts.scope ?? null,
     brief_path: briefPath,
     tool: toolResolution.tool,
     model_chain: [],
@@ -125,7 +125,7 @@ export async function run(argv) {
     worktree_path: wt,
     tool: entry.tool,
     focus,
-    memoro_node: entry.memoro_node,
+    scope: entry.scope ?? null,
     brief_path: briefPath,
     launched: opts.launch,
   };
@@ -135,7 +135,7 @@ export async function run(argv) {
   } else {
     process.stdout.write(`mc: spawned project session ${opts.name} at ${wt}\n`);
     if (parent) process.stdout.write(`parent: ${parent}\n`);
-    if (opts.node) process.stdout.write(`MEMORO node: ${opts.node}\n`);
+    if (opts.scope) process.stdout.write(`scope: ${opts.scope}\n`);
     process.stdout.write(`brief: ${briefPath}\n`);
     process.stdout.write(`next:  mc open ${opts.name}\n`);
   }
@@ -149,17 +149,17 @@ export async function run(argv) {
   });
 }
 
-export function buildSpawnBrief({ name, parent, focus, memoroNode, brief }) {
+export function buildSpawnBrief({ name, parent, focus, scope, brief }) {
   const lines = [
     `# Project session brief — ${name}`,
     '',
   ];
   if (parent) lines.push(`Parent coordinator: ${parent}`);
   lines.push(`Focus: ${focus || name}`);
-  if (memoroNode) lines.push(`MEMORO.md node: ${memoroNode}`);
+  if (scope && scope !== focus) lines.push(`Scope: ${scope}`);
   lines.push(
     '',
-    'You are a durable mc project session. Stay inside this worktree/branch, report status back to the coordinator, and before finalizing say whether MEMORO.md needs a patch.',
+    'You are a durable mc project session. Stay inside this worktree/branch, use the brief as your task boundary, and report status back to the coordinator.',
     '',
     '## Brief',
     '',
@@ -181,7 +181,7 @@ function parseArgs(argv) {
   const opts = {
     name: null,
     brief: null,
-    node: null,
+    scope: null,
     focus: null,
     parent: undefined,
     from: null,
@@ -192,7 +192,7 @@ function parseArgs(argv) {
   const positionals = [];
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
-    if (a === '--node') { opts.node = argv[++i]; continue; }
+    if (a === '--scope') { opts.scope = argv[++i]; continue; }
     if (a === '--focus') { opts.focus = argv[++i]; continue; }
     if (a === '--parent') { opts.parent = argv[++i] || null; continue; }
     if (a === '--from') { opts.from = argv[++i]; continue; }
@@ -216,6 +216,6 @@ function parseArgs(argv) {
 }
 
 function printUsage() {
-  console.error('Usage: mc spawn <name> "<brief>" [--node <map-node>] [--tool <tool>] [--from <ref>] [--json]');
+  console.error('Usage: mc spawn <name> "<brief>" [--scope <label>] [--tool <tool>] [--from <ref>] [--json]');
   console.error('  Creates an idle, durable project session tracked under the current coordinator.');
 }

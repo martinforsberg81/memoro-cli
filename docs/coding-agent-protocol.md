@@ -10,15 +10,15 @@ this file by `mc adapter sync` (plan §13).
 
 Current product boundary: `mc` is a **minimal grounded coordinator
 runtime**, not a project-management system and not an agent runner. It
-keeps the roadmap/end-goal, coordinator role, and cross-session work
-projects visible; the launched LLM session writes briefs and uses the
-agent tools already available in its host.
+keeps server-owned profile context, repo/session metadata, coordinator
+role, and cross-session work projects visible; the launched LLM session
+writes briefs and uses the agent tools already available in its host.
 
 ## Stack + commands
 
 - Two binaries from one package (`package.json` `bin` field):
-  - `memoro-cli` / `memoro` → `src/bin.js` (low-level: login, lens
-    injection, hook installation, heartbeat daemon)
+  - `memoro-cli` / `memoro` → `src/bin.js` (low-level: login, legacy lens
+    compatibility, hook installation, heartbeat daemon)
   - `mc` → `src/bin-mc.js` (high-level: lifecycle, coordinator,
     fanout, vault, adapter sync)
 - Test: `npm test` (runs `node --test 'tests/**/*.test.js'`,
@@ -65,10 +65,13 @@ patterns established across drev 1–5. Patterns include:
 The instructions and the state probe are identical across tools;
 only the invocation differs.
 
-## Session command: `/mc map`
+## Work Method Updates
 
-When the user writes `/mc map` inside a coordinator session, update
-`MEMORO.md` if needed.
+When the user wants durable changes to how coding agents should work with
+them, use `mc coding-profile read`, `mc coding-profile diff`, and `mc
+coding-profile write` in dialogue with the user. Do not edit generated
+adapter files, `AGENTS.md`, `CLAUDE.md`, or old repo roadmap files as a
+substitute for the server-owned Coding Profile.
 
 ## Code conventions
 
