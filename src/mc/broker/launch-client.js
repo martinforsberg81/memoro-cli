@@ -219,9 +219,10 @@ export async function launchBrokerOwnedSession({
         branch: repoContext.branch,
         worktreeName: sessionName || null,
         tool: launch.shortName,
+        toolSessionId: registryEntry.tool_session_id || null,
         sockPath: paths.sockPath,
         metaPath: paths.metaPath,
-        transcriptPath: null,
+        transcriptPath: registryEntry.tool_transcript_path || null,
       },
     },
   }).catch((err) => ({ ok: false, error: err.message || String(err) }));

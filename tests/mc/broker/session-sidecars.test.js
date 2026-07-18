@@ -66,6 +66,9 @@ describe('BrokerSessionSidecars', () => {
       coding: {
         codingSessionId: 'sess_a',
         label: 'alpha',
+        tool: 'codex',
+        toolSessionId: 'cx_abc',
+        transcriptPath: '/tmp/codex.jsonl',
         repo: 'repo',
         branch: 'main',
         metaPath: paths.metaPath,
@@ -78,8 +81,14 @@ describe('BrokerSessionSidecars', () => {
 
     assert.equal(existsSync(paths.metaPath), true);
     const meta = JSON.parse(readFileSync(paths.metaPath, 'utf8'));
+    assert.equal(meta.runtime_manifest_version, 1);
+    assert.equal(meta.cleanup_owner, 'mc');
     assert.equal(meta.coding_session_id, 'sess_a');
     assert.equal(meta.label, 'alpha');
+    assert.equal(meta.tool, 'codex');
+    assert.equal(meta.source, 'codex');
+    assert.equal(meta.tool_session_id, 'cx_abc');
+    assert.equal(meta.tool_transcript_path, '/tmp/codex.jsonl');
     assert.equal(meta.broker_owned, true);
     assert.equal(sidecars.dispatchServer.path, paths.sockPath);
 

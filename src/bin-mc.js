@@ -127,6 +127,8 @@ const LIFECYCLE = {
   auth:          () => import('./mc/commands/auth.js'),
   setup:         () => import('./mc/commands/setup.js'),
   reconcile:     () => import('./mc/commands/reconcile.js'),
+  doctor:        () => import('./mc/commands/doctor.js'),
+  storage:       () => import('./mc/commands/storage.js'),
   vault:         () => import('./mc/commands/vault.js'),
   'tool-auth':   () => import('./mc/commands/tool-auth.js'),
   adapter:       () => import('./mc/commands/adapter.js'),
@@ -321,7 +323,13 @@ FLEET / ADVANCED
   mc sessions stop <label|id>     Stop a broker-owned session
   mc sessions remove <label|id>   Remove a broker session from inventory
   mc reconcile [--apply]          Detect sessions shipped elsewhere
-  mc gc [--dry-run]               Reap dead, merged, or clean worktrees
+  mc doctor                       Diagnose local mc memory/storage state
+  mc storage status|candidates    Inspect local runtime/worktree storage
+  mc gc [--dry-run]               Reap registry-dead, merged, clean worktrees
+  mc gc --runtime                 Reap stale runtime pid/socket sidecars
+  mc gc --stale-worktrees         Reap clean, merged worktrees with no live broker
+  mc gc --sidecars                Reap stale hosts/guard-bin runtime sidecars
+  mc gc --all-safe --dry-run      Preview runtime + clean merged worktree cleanup
   mc broker start/status/stop     Local PTY broker admin
   mc broker connect               Connect local broker to Memoro cloud
   mc attach <session_id>          Attach to a broker-owned local session
@@ -531,6 +539,10 @@ async function runWrap(argv, { label = null } = {}) {
     repoContext,
     cwd,
     pid: process.pid,
+    tool: launch.shortName,
+    source: launchSpec.heartbeatSource,
+    toolSessionId: registryEntry?.tool_session_id || null,
+    transcriptPath: registryEntry?.tool_transcript_path || null,
   }), null, 2), { mode: 0o600 });
 
   // ─── Grounding (Phase 1) — pre-launch slot ──────────────────────────────
@@ -1319,7 +1331,12 @@ export const __test__ = {
 // Only run main() when invoked as a script — not when imported by tests.
 // Compare via realpath because npm installs the bin as a symlink.
 if (isEntryScript()) {
-  main().then(code => { process.exit(code ?? 0); });
+  main()
+    .then(code => { process.exitCode = code ?? 0; })
+    .catch((err) => {
+      console.error(err?.stack || err?.message || String(err));
+      process.exitCode = 1;
+    });
 }
 
 function isEntryScript() {
