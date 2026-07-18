@@ -7,7 +7,7 @@ Command-line glue between external coding tools (Claude Code, Cursor, Codex, Win
 Two directions, one binary:
 
 - **Sessions → Memoro.** At the end of a coding session, the CLI cleans the transcript locally into a tool-agnostic conversation payload, attaches deterministic metadata (`coding_context`, `repo_manifest`), and POSTs it to Memoro. Server-side AI processing happens inside Memoro. Raw tool outputs and code bodies are still stripped client-side before upload.
-- **Memoro → tools.** Before a coding session starts, the CLI pulls your personal context lens from Memoro and writes a managed section into the tool's config file (`~/.claude/CLAUDE.md`, `.cursorrules`, `AGENTS.md`, etc.) — identity, writing voice, cross-repo rules, and in-flight threads from recent work.
+- **Memoro → tools.** Before a coding session starts, the CLI pulls compact User Profile and Coding Profile context from Memoro and writes a managed section into the tool's config file (`~/.claude/CLAUDE.md`, `.cursorrules`, `AGENTS.md`, etc.) — stable identity, preferred agent workflow, and current session metadata.
 
 The result: every coding tool you use feels like it remembers you.
 
@@ -69,6 +69,7 @@ Under the hood: `mc` runs the tool in a PTY it owns, with your terminal piped tr
 | `mc auth status [--json]` | Single-screen health check |
 | `mc auth memoro [--logout]` | Token login/logout for CI or headless setup |
 | `mc auth <claude\|codex\|gemini>` | Re-check one tool's status + fix hint |
+| `mc coding-profile read\|diff\|write` | LLM-callable read, compare, and full-replacement update flow for your Coding Profile |
 | `mc new <name> [--from <ref>] [--tool <id>]` | Create worktree + launch tool |
 | `mc list [--rich\|--awaiting\|--safe-to-end\|--orphans]` | List sessions with filters |
 | `mc status <name>` | Per-session derived status |

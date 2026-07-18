@@ -129,10 +129,11 @@ describe('resolveEffectiveConfig', () => {
     assert.deepEqual(effectiveConfigValues(effective), {
       defaultTool: 'codex',
       grounding: {
-        includeRoadmap: true,
+        includeMcContext: true,
+        includeRoadmap: false,
         includeCoordinatorRole: false,
         includeMapLifecycle: false,
-        includeLens: true,
+        includeLens: false,
       },
       permissions: {
         profile: 'default',

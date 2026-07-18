@@ -5,10 +5,11 @@ import { DEFAULT_TOOL } from '../lib/config.js';
 export const PACKAGE_DEFAULTS = Object.freeze({
   defaultTool: DEFAULT_TOOL,
   grounding: Object.freeze({
-    includeRoadmap: true,
+    includeMcContext: true,
+    includeRoadmap: false,
     includeCoordinatorRole: false,
     includeMapLifecycle: false,
-    includeLens: true,
+    includeLens: false,
   }),
   permissions: Object.freeze({
     profile: 'default',
@@ -41,6 +42,7 @@ const PREFERENCE_PATHS = Object.freeze([
   'defaultTool',
   'language',
   'worktreeRoot',
+  'grounding.includeMcContext',
   'grounding.includeRoadmap',
   'grounding.includeCoordinatorRole',
   'grounding.includeMapLifecycle',
@@ -138,6 +140,7 @@ export function effectiveConfigValues(effectiveConfig = {}) {
   copyValue(out, effectiveConfig, 'defaultTool');
   copyValue(out, effectiveConfig, 'language');
   copyValue(out, effectiveConfig, 'worktreeRoot');
+  copyValue(out, effectiveConfig, 'grounding.includeMcContext');
   copyValue(out, effectiveConfig, 'grounding.includeRoadmap');
   copyValue(out, effectiveConfig, 'grounding.includeCoordinatorRole');
   copyValue(out, effectiveConfig, 'grounding.includeMapLifecycle');

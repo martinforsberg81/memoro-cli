@@ -89,7 +89,13 @@ export async function launchBrokerOwnedSession({
         cwd,
         adapter: launch.adapter,
         focus,
-        deps: { grounding: config.grounding },
+        repoContext,
+        tool: launch.shortName,
+        sessionName,
+        deps: {
+          grounding: config.grounding,
+          mcContextDeps: { apiUrl, token },
+        },
       });
       groundingLaunchMessage = res.message || null;
       if (!res.ok && res.reason) {
