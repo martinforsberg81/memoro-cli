@@ -61,7 +61,7 @@ export async function uploadSession(argv) {
   }
 
   if (!transcriptPath) {
-    console.error('Usage: memoro-cli session upload <transcript-path> [--repo <name>] [--tool-version <v>] [--dry-run] [--background]');
+    console.error('Usage: memoro-cli session upload <transcript-path> [--repo <name>] [--coding-session-id <id>] [--tool-version <v>] [--dry-run] [--background]');
     return 2;
   }
   if (!existsSync(transcriptPath)) {
@@ -97,6 +97,7 @@ export async function uploadSession(argv) {
     repoHint: flags.repo,
     toolVersion: flags.toolVersion,
     source,
+    codingSessionId: flags.codingSessionId || process.env.MC_CODING_SESSION_ID || null,
   });
 
   // Attach deterministic client-side annotations — languages, frameworks,
@@ -151,6 +152,7 @@ function parseFlags(argv) {
     repo: null,
     tool: null,
     toolVersion: null,
+    codingSessionId: null,
     dryRun: false,
     yes: false,
     background: false,
@@ -163,6 +165,7 @@ function parseFlags(argv) {
     if (a === '--repo' && argv[i + 1])            { flags.repo = argv[++i]; continue; }
     if (a === '--tool' && argv[i + 1])            { flags.tool = argv[++i]; continue; }
     if (a === '--tool-version' && argv[i + 1])    { flags.toolVersion = argv[++i]; continue; }
+    if (a === '--coding-session-id' && argv[i + 1]) { flags.codingSessionId = argv[++i]; continue; }
     if (a === '--dry-run')                        { flags.dryRun = true; continue; }
     if (a === '--yes' || a === '-y')              { flags.yes = true; continue; }
     if (a === '--background' || a === '-b')       { flags.background = true; continue; }

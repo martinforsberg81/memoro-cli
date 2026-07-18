@@ -701,6 +701,7 @@ async function defaultFetchLens() {
  * @param {string} [arg.focus]      — soft opening pointer
  * @param {object} [arg.repoContext] — git repo metadata for server context
  * @param {string} [arg.tool]       — selected coding tool
+ * @param {string} [arg.codingSessionId] — stable mc coding session id
  * @param {string} [arg.sessionName] — mc session label/name
  * @param {object} [arg.deps]       — injection for tests
  * @returns {Promise<{ ok: boolean, path?: string, parts: object, reason?: string }>}
@@ -711,6 +712,7 @@ export async function groundSession({
   focus = null,
   repoContext = null,
   tool = null,
+  codingSessionId = null,
   sessionName = null,
   deps = {},
 } = {}) {
@@ -746,6 +748,7 @@ export async function groundSession({
         repoContext,
         repoName,
         tool,
+        codingSessionId,
         sessionName,
         branch: repoContext?.branch,
         deps: deps.mcContextDeps || {},

@@ -42,6 +42,7 @@ describe('mc session upload scheduler', () => {
       transcriptPath: '/tmp/t.jsonl',
       source: 'claude-code',
       repoHint: 'repo',
+      codingSessionId: 'sess_upload1',
       toolVersion: '1.2.3',
     }), [
       '/pkg/src/bin.js',
@@ -53,6 +54,8 @@ describe('mc session upload scheduler', () => {
       '--yes',
       '--repo',
       'repo',
+      '--coding-session-id',
+      'sess_upload1',
       '--tool-version',
       '1.2.3',
     ]);
@@ -82,6 +85,7 @@ describe('mc session upload scheduler', () => {
         source: 'claude-code',
         cwd: '/repo',
         repoHint: 'repo',
+        codingSessionId: 'sess_upload1',
         deps: {
           binJs: '/pkg/src/bin.js',
           logPath: '/tmp/memoro-test-hook.log',
@@ -108,6 +112,8 @@ describe('mc session upload scheduler', () => {
       ]);
       assert.equal(calls[0].opts.detached, true);
       assert.equal(calls[0].opts.cwd, '/repo');
+      assert.ok(calls[0].args.includes('--coding-session-id'));
+      assert.equal(calls[0].args[calls[0].args.indexOf('--coding-session-id') + 1], 'sess_upload1');
       assert.equal(calls[0].opts.env.MEMORO_TOKEN, undefined);
       assert.equal(calls[1].unref, true);
     } finally {

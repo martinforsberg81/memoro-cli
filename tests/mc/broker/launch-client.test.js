@@ -111,9 +111,10 @@ describe('launchBrokerOwnedSession', () => {
         readConfig: async () => ({ apiUrl: 'https://memoro.test' }),
         getApiUrl: () => null,
         getSecret: async () => 'tok',
-        groundSession: async ({ cwd, focus }) => {
+        groundSession: async ({ cwd, focus, codingSessionId }) => {
           assert.equal(cwd, '/repo');
           assert.equal(focus, 'fix tests');
+          assert.equal(codingSessionId, 'sess_abc');
           return { ok: true };
         },
         hostname: () => 'machine',
@@ -194,7 +195,10 @@ describe('launchBrokerOwnedSession', () => {
         readConfig: async () => ({ apiUrl: 'https://memoro.test' }),
         getApiUrl: () => null,
         getSecret: async () => 'tok',
-        groundSession: async () => ({ ok: true }),
+        groundSession: async ({ codingSessionId }) => {
+          assert.equal(codingSessionId, 'sess_server123');
+          return { ok: true };
+        },
         hostname: () => 'cloud-runner',
         lookupOrMint: async () => assert.fail('explicit codingSessionId should avoid lookupOrMint'),
         getPackageVersion: async () => '0.test',

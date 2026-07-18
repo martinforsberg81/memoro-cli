@@ -27,6 +27,7 @@ export async function scheduleSessionUpload({
   source,
   cwd,
   repoHint = null,
+  codingSessionId = null,
   newerThanMs = 0,
   transcriptPath = null,
   toolVersion = null,
@@ -46,6 +47,7 @@ export async function scheduleSessionUpload({
     transcriptPath: transcript.path,
     source,
     repoHint,
+    codingSessionId,
     toolVersion: transcript.toolVersion || toolVersion,
   });
   const logPath = deps.logPath || join(CONFIG_DIR, 'hook.log');
@@ -75,10 +77,12 @@ export function buildSessionUploadArgs({
   transcriptPath,
   source,
   repoHint = null,
+  codingSessionId = null,
   toolVersion = null,
 } = {}) {
   const args = [binJs, 'session', 'upload', transcriptPath, '--tool', source, '--yes'];
   if (repoHint) args.push('--repo', repoHint);
+  if (codingSessionId) args.push('--coding-session-id', codingSessionId);
   if (toolVersion) args.push('--tool-version', toolVersion);
   return args;
 }

@@ -193,6 +193,7 @@ export class BrokerSessionSidecars {
         source: this._codingSource(),
         cwd: this.session.cwd,
         repoHint: this.coding.repo || null,
+        codingSessionId: this.coding.codingSessionId,
         newerThanMs: startedAt,
       });
     } catch (err) {

@@ -85,12 +85,21 @@ export function parseTranscript(raw, { tool = 'claude-code' } = {}) {
  * Build the external-session payload Memoro expects now: a cleaned
  * conversation stream plus deterministic metadata.
  */
-export function buildSessionPayload({ parsed, repoHint = null, toolVersion = null, source = 'claude-code' }) {
+export function buildSessionPayload({
+  parsed,
+  repoHint = null,
+  toolVersion = null,
+  source = 'claude-code',
+  codingSessionId = null,
+}) {
   if (!parsed || !Array.isArray(parsed.messages) || parsed.messages.length === 0) {
     throw new Error('Transcript has no usable messages');
   }
 
-  return {
+  const mcSessionId = typeof codingSessionId === 'string' && codingSessionId.trim()
+    ? codingSessionId.trim()
+    : null;
+  const payload = {
     source,
     session_id: parsed.sessionId || fallbackSessionId(parsed),
     started_at: parsed.startedAt || null,
@@ -99,6 +108,8 @@ export function buildSessionPayload({ parsed, repoHint = null, toolVersion = nul
     repo_hint: repoHint,
     tool_version: toolVersion,
   };
+  if (mcSessionId) payload.coding_session_id = mcSessionId;
+  return payload;
 }
 
 function buildCleanedConversation(parsed) {
