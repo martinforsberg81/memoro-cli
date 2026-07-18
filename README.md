@@ -90,16 +90,31 @@ Under the hood: `mc` runs the tool in a PTY it owns, with your terminal piped tr
 | `mc sessions send <id\|label> <msg>` | Dispatch a message into another session |
 | `mc sessions read <id\|label>` | Fetch a peer session's recent transcript |
 
+### Coding Profile workflow
+
+Durable work-method changes are explicit and dialogue-based. A coding agent
+should read the current profile, discuss the intended change with you, diff the
+candidate profile, then write only after approval.
+
+```sh
+mc coding-profile read --json
+mc coding-profile diff --stdin
+mc coding-profile write --stdin --base-revision <n> --summary "<summary>"
+```
+
+When the profile does not exist yet, `read --json` returns `base_revision: 0`
+and a compact `template_markdown` for revision 1.
+
 ### `memoro-cli` — low-level surface
 
 | Command | Purpose |
 |---|---|
 | `memoro-cli login` | Save a Memoro API token to the OS keychain |
 | `memoro-cli logout` | Remove the stored token |
-| `memoro-cli status` | Show token info, last session uploaded, last lens pull |
+| `memoro-cli status` | Show token info, last session uploaded, last legacy lens pull |
 | `memoro-cli config set <key> <value>` | Store non-secret CLI config such as `api-url` |
 | `memoro-cli session upload <transcript>` | Clean + POST a session transcript |
-| `memoro-cli lens pull [--tool <id>] [--repo <name>]` | Fetch the coding lens |
+| `memoro-cli lens pull [--tool <id>] [--repo <name>]` | Legacy: refresh the old portrait-coding lens block |
 | `memoro-cli codex run [-- <codex args...>]` | Legacy manual wrapper; prefer `mc new --codex` |
 | `memoro-cli hook install [--tool ...]` | Legacy raw-tool integration; not required for `mc` |
 | `memoro-cli hook uninstall [--tool ...]` | Remove legacy raw-tool hooks/shims |

@@ -43,11 +43,11 @@ describe('assembleBundle (pure)', () => {
     assert.match(out, /# Session grounding/);
     assert.match(out, /## Your role/);
     assert.match(out, /You are the orchestrator\./);
-    assert.match(out, /## Repo roadmap/);
+    assert.match(out, /## Legacy repo map/);
     assert.match(out, /north star/);
     assert.match(out, /## Memoro profile context/);
     assert.match(out, /### User Profile/);
-    assert.match(out, /## Dynamic Memoro context/);
+    assert.match(out, /## Legacy dynamic Memoro context/);
     assert.match(out, /User prefers tabs\./);
     assert.match(out, /## Current focus/);
     assert.match(out, /currently on the grounding MVP/);
@@ -55,14 +55,14 @@ describe('assembleBundle (pure)', () => {
 
   it('omits a missing map entirely (no empty heading)', () => {
     const out = assembleBundle({ role: 'role text' });
-    assert.ok(!/## Repo roadmap/.test(out), 'map section should be absent');
+    assert.ok(!/## Legacy repo map/.test(out), 'map section should be absent');
     assert.match(out, /## Your role/);
   });
 
   it('omits empty / whitespace-only parts', () => {
     const out = assembleBundle({ map: '   \n  ', role: 'role', lens: '', focus: '\t' });
-    assert.ok(!/## Repo roadmap/.test(out));
-    assert.ok(!/## Dynamic Memoro context/.test(out));
+    assert.ok(!/## Legacy repo map/.test(out));
+    assert.ok(!/## Legacy dynamic Memoro context/.test(out));
     assert.ok(!/## Current focus/.test(out));
     assert.match(out, /## Your role/);
   });
@@ -262,9 +262,9 @@ describe('groundSession', () => {
     assert.match(res.path, /CLAUDE\.md$/);
     assert.equal(readMapCalled, false);
     assert.equal(lensCalled, false);
-    assert.doesNotMatch(adapter.written.markdown, /## Repo roadmap/);
+    assert.doesNotMatch(adapter.written.markdown, /## Legacy repo map/);
     assert.doesNotMatch(adapter.written.markdown, /## Your role/);
-    assert.doesNotMatch(adapter.written.markdown, /## MEMORO\.md lifecycle/);
+    assert.doesNotMatch(adapter.written.markdown, /## Legacy MEMORO\.md lifecycle/);
     assert.match(adapter.written.markdown, /## Memoro profile context/);
     assert.match(adapter.written.markdown, /### User Profile/);
     assert.match(adapter.written.markdown, /- Name: Martin/);
@@ -292,8 +292,8 @@ describe('groundSession', () => {
     assert.equal(res.ok, true);
     assert.match(adapter.written.markdown, /## Your role/);
     assert.match(adapter.written.markdown, /role/);
-    assert.doesNotMatch(adapter.written.markdown, /## Repo roadmap/);
-    assert.doesNotMatch(adapter.written.markdown, /## MEMORO\.md lifecycle/);
+    assert.doesNotMatch(adapter.written.markdown, /## Legacy repo map/);
+    assert.doesNotMatch(adapter.written.markdown, /## Legacy MEMORO\.md lifecycle/);
   });
 
   it('supports adapters that deliver grounding as a startup message', async () => {
@@ -332,8 +332,8 @@ describe('groundSession', () => {
       },
     });
     assert.equal(res.ok, true);
-    assert.match(adapter.written.markdown, /## Repo roadmap/);
-    assert.match(adapter.written.markdown, /## Dynamic Memoro context/);
+    assert.match(adapter.written.markdown, /## Legacy repo map/);
+    assert.match(adapter.written.markdown, /## Legacy dynamic Memoro context/);
   });
 
   it('soft-degrades when mc context is unavailable', async () => {
@@ -348,7 +348,7 @@ describe('groundSession', () => {
       },
     });
     assert.equal(res.ok, true);
-    assert.ok(!/## Repo roadmap/.test(adapter.written.markdown));
+    assert.ok(!/## Legacy repo map/.test(adapter.written.markdown));
     assert.doesNotMatch(adapter.written.markdown, /## Your role/);
     assert.doesNotMatch(adapter.written.markdown, /## Memoro profile context/);
   });
@@ -366,7 +366,7 @@ describe('groundSession', () => {
       },
     });
     assert.equal(res.ok, true);
-    assert.ok(!/## Dynamic Memoro context/.test(adapter.written.markdown));
+    assert.ok(!/## Legacy dynamic Memoro context/.test(adapter.written.markdown));
   });
 
   it('never throws when a dep-portal throws — returns parts anyway', async () => {
@@ -405,7 +405,7 @@ describe('groundSession', () => {
     assert.match(res.reason, /adapter/);
   });
 
-  // ── Optional MEMORO.md lifecycle folds into the bundle only when enabled ──
+  // ── Optional legacy MEMORO.md lifecycle folds into the bundle only when enabled ──
 
   it('folds a SEED offer into the bundle when MEMORO.md is absent', async () => {
     const adapter = fakeAdapter();
@@ -420,7 +420,7 @@ describe('groundSession', () => {
         grounding: { includeRoadmap: true, includeMapLifecycle: true },
       },
     });
-    assert.match(adapter.written.markdown, /MEMORO\.md lifecycle/);
+    assert.match(adapter.written.markdown, /Legacy MEMORO\.md lifecycle/);
     assert.match(adapter.written.markdown, /seed|create/i);
     assert.match(adapter.written.markdown, /No separate\s+confirmation step is required/i);
     assert.match(adapter.written.markdown, /Inspect repo evidence/i);
@@ -439,7 +439,7 @@ describe('groundSession', () => {
         grounding: { includeRoadmap: true, includeMapLifecycle: true },
       },
     });
-    assert.match(adapter.written.markdown, /MEMORO\.md lifecycle/);
+    assert.match(adapter.written.markdown, /Legacy MEMORO\.md lifecycle/);
     assert.match(adapter.written.markdown, /Live node/);
     assert.match(adapter.written.markdown, /living project state/i);
   });
@@ -477,7 +477,7 @@ describe('groundSession', () => {
         grounding: { includeLens: true },
       },
     });
-    assert.match(adapter.written.markdown, /## Dynamic Memoro context/);
+    assert.match(adapter.written.markdown, /## Legacy dynamic Memoro context/);
     assert.match(adapter.written.markdown, /lens body/);
     assert.match(adapter.written.markdown, /respond to the user in Danish/i);
     assert.equal(res.parts?.language, 'Danish');
@@ -529,7 +529,7 @@ describe('groundSession', () => {
       deps: { buildRoleImpl: () => 'role', pullLensImpl: async () => null },
     });
     assert.equal(res.ok, true);
-    assert.doesNotMatch(adapter.written.markdown, /## Repo roadmap/);
+    assert.doesNotMatch(adapter.written.markdown, /## Legacy repo map/);
     assert.equal(readFileSync(p, 'utf8'), before, 'grounding must not write MEMORO.md');
     rmSync(mapDir, { recursive: true, force: true });
   });

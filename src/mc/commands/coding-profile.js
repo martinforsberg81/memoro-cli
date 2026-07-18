@@ -18,6 +18,33 @@ import { readConfig as defaultReadConfig, getApiUrl as defaultGetApiUrl } from '
 const PROFILE_PATH = '/api/mc/coding-profile';
 const DEFAULT_API_URL = 'https://meetmemoro.app';
 
+export const DEFAULT_CODING_PROFILE_TEMPLATE = `# Coding Profile
+
+## Language
+
+- Preferred collaboration language:
+
+## Planning
+
+- When agents should propose a plan first:
+- How agents should handle uncertainty or multiple options:
+
+## Autonomy
+
+- Changes agents may make without asking:
+- Changes agents must ask before:
+
+## Git And GitHub
+
+- Branch, commit, PR, and merge preferences:
+- Force-push or history rewrite rules:
+
+## Rules
+
+- Checks expected before handoff:
+- Rules that should survive across coding sessions:
+`;
+
 export async function run(argv, deps = {}) {
   const sub = argv[0];
   const rest = argv.slice(1);
@@ -52,7 +79,7 @@ export async function runRead(argv, deps = {}) {
 
   const profile = res?.profile || null;
   if (opts.json) {
-    ctx.stdout.write(JSON.stringify({ ok: true, profile }, null, 2) + '\n');
+    ctx.stdout.write(JSON.stringify(formatReadJson(profile), null, 2) + '\n');
     return 0;
   }
   if (profile?.markdown) ctx.stdout.write(ensureTrailingNewline(profile.markdown));
@@ -258,6 +285,86 @@ export function createUnifiedDiff(oldText, newText, { from = 'server', to = 'can
   return `${out.join('\n')}\n`;
 }
 
+export function formatReadJson(profile) {
+  const normalized = normalizeProfile(profile);
+  if (!normalized.exists) {
+    return {
+      ok: true,
+      exists: false,
+      profile: null,
+      revision: 0,
+      base_revision: 0,
+      markdown: '',
+      updated_at: null,
+      last_update: null,
+      template_markdown: DEFAULT_CODING_PROFILE_TEMPLATE,
+      workflow: profileWorkflow(0),
+    };
+  }
+  return {
+    ok: true,
+    exists: true,
+    profile,
+    revision: normalized.revision,
+    base_revision: normalized.revision,
+    markdown: normalized.markdown,
+    updated_at: normalized.updated_at,
+    last_update: normalized.last_update,
+    workflow: profileWorkflow(normalized.revision),
+  };
+}
+
+function profileWorkflow(baseRevision) {
+  return [
+    'Discuss the desired work-method changes with the user.',
+    'Draft a full replacement Coding Profile from the template or current markdown.',
+    'Run mc coding-profile diff --stdin to review the candidate.',
+    `After user approval, run mc coding-profile write --stdin --base-revision ${baseRevision} --summary "<summary>".`,
+  ];
+}
+
+function normalizeProfile(profile) {
+  if (!profile || typeof profile !== 'object') {
+    return { exists: false };
+  }
+  const revision = Number.isInteger(profile.revision) ? profile.revision : 0;
+  const markdown = normalizeMarkdown(profile.markdown || '');
+  const updated_at =
+    profile.updated_at ||
+    profile.updatedAt ||
+    profile.modified_at ||
+    profile.modifiedAt ||
+    null;
+  const created_at = profile.created_at || profile.createdAt || null;
+  const version_id = profile.version_id || profile.versionId || null;
+  const version_created_at = profile.version_created_at || profile.versionCreatedAt || null;
+  const updated_by = profile.updated_by || profile.updatedBy || null;
+  const change_summary =
+    profile.change_summary ||
+    profile.changeSummary ||
+    profile.summary ||
+    null;
+  const source_session_id =
+    profile.source_session_id ||
+    profile.sourceSessionId ||
+    null;
+  return {
+    exists: true,
+    revision,
+    markdown,
+    updated_at,
+    last_update: {
+      updated_at,
+      created_at,
+      version_id,
+      version_created_at,
+      updated_by,
+      change_summary,
+      source_session_id,
+    },
+  };
+}
+
 function diffOps(oldLines, newLines) {
   const rows = oldLines.length + 1;
   const cols = newLines.length + 1;
@@ -402,6 +509,13 @@ CONTRACT
   read    Prints approved Markdown to stdout by default.
   diff    Compares a candidate profile against the approved server revision.
   write   Replaces the full profile and requires the base revision from read.
+
+WORKFLOW
+  1. Run read --json to get revision, markdown, update metadata, and a first-profile template when empty.
+  2. Discuss the intended durable work-method changes with the user.
+  3. Draft the full replacement profile.
+  4. Run diff on the candidate and show the user the result.
+  5. After approval, run write with the base revision and a short summary.
 
 OPTIONS
   --file <path>          Candidate Markdown file.

@@ -24,7 +24,7 @@ describe('mc --help', () => {
     assert.match(r.stdout, /mc coding-profile write/);
     assert.match(r.stdout, /same across Codex, Claude Code/);
     assert.match(r.stdout, /compact User Profile and Coding Profile context/);
-    assert.match(r.stdout, /does not create or read a repo-local\s+MEMORO\.md/);
+    assert.match(r.stdout, /does\s+not create or read a repo-local\s+MEMORO\.md/);
     assert.match(r.stdout, /vault is locked/);
     assert.match(r.stdout, /live broker-owned PTY/);
     assert.match(r.stdout, /without sending a new prompt/);

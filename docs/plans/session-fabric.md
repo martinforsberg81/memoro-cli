@@ -15,7 +15,7 @@ coord
 The human talks mostly to the coordinator. The coordinator talks to project
 sessions through mc. Each project session is a real mc session with its own
 worktree, branch, registry entry, grounding, vault/policy context, transcript
-status, and MEMORO.md obligations.
+status, and scoped brief.
 
 ## Boundary
 
@@ -34,7 +34,7 @@ worktree and records fabric metadata:
 - `parent: <current mc session when known>`
 - `role: "project"`
 - `focus`
-- optional `memoro_node`
+- optional `scope`
 - brief written to `.mc/brief.md`
 
 The spawned session can be launched immediately or resumed later. It should show
@@ -66,12 +66,12 @@ Harden coordinator-to-project communication:
 Auto-pinging every session by default is deferred; it risks noise and loops. The
 first useful version is manual nudge plus stale visibility.
 
-## Phase 4 — Reconciliation handoff
+## Phase 4 — Status handoff
 
-Project sessions must report whether their MEMORO.md node changed. The
-coordinator gathers those reports and proposes one concrete map patch. mc can
-surface tripwires, but the LLM session still writes and reviews the actual patch
-with user approval.
+Project sessions should report their goal, status, decisions, blockers, branch,
+commits/PR when relevant, and next steps back to the coordinator. That work
+record lives in session metadata/transcripts, not in a user profile and not in a
+repo-local MEMORO.md obligation.
 
 ## Phase 5 — Supervisor control prompt
 
@@ -92,7 +92,7 @@ surface.
 - A coordinator can spawn four project sessions and see them in one tree.
 - Each project session has a worktree/branch and can be resumed under Claude or
   Codex.
-- Each project session receives a brief artefact and a focus/node pointer.
+- Each project session receives a brief artefact and a focus/scope pointer.
 - `mc end`, `mc status`, `mc gc`, and existing registry operations continue to
   work because spawned projects are ordinary sessions with extra metadata.
 - `mc supervisor` cannot call non-supervisor Memoro endpoints with its scoped

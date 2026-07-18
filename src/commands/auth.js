@@ -68,7 +68,7 @@ export async function status(argv) {
   console.log(`Memoro API:            ${apiUrl}`);
   console.log(`Memoro token:          ${token ? '✓ stored' : '✗ not logged in'}`);
   console.log(`Last session upload:   ${config.lastSessionUploadAt || 'never'}`);
-  console.log(`Last lens pull:        ${config.lastLensPullAt || 'never'}`);
+  console.log(`Last legacy lens pull: ${config.lastLensPullAt || 'never'}`);
 
   const hooks = config.installedHooks || {};
   const toolCount = Object.keys(hooks).length;

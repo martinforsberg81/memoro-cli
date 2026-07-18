@@ -1,9 +1,9 @@
 # mc is a continuity layer
 
-**Status:** settled · 2026-06-03 · serves G2, G3 (see `MEMORO.md`)
+**Status:** superseded/refined · 2026-07-18 · serves mc context model
 
-Records where the "fanout" thinking landed. (Filename kept because the MEMORO.md
-node still points here; the conclusion is that there is no "spine" to build.)
+Records where the "fanout" thinking landed. Filename kept for link stability;
+the conclusion is still that there is no "spine" to build.
 
 2026-06-04 update: this conclusion is stronger after live use. The coordinator
 session can write its own brief and send agents through whatever tool surface is
@@ -16,25 +16,26 @@ The engine — agents, spawn, worktree isolation, parallelism, task-tracking —
 comes **free** from the underlying model/tool (Claude Code / Opus, codex). mc does
 **not** reimplement it. mc adds exactly two things:
 
-- **Grounding** — map + role + lens injected at session start. *(Shipped: the
-  grounding MVP.)*
-- **MEMORO.md as living project state** — committed in the repo and kept current
-  as work lands.
+- **Grounding** — server-owned User Profile + Coding Profile context, current
+  repo/session metadata, optional coordinator role, and current focus.
+- **Session fabric** — registry, worktrees, branches, scoped `.mc/brief.md`
+  artefacts for child/fanout sessions, and transcript/upload continuity.
 
 The payoff is the whole point: **resume a piece of work in a new mc session**
-(another day, machine, or tool) because it grounds in the map.
+(another day, machine, or tool) because it grounds in profile context plus
+session/repo state.
 
 ## What mc is not
 
 Do not build these until live work proves a concrete gap that the coordinator
 session cannot solve by writing a better prompt:
 
-- A project-management UI or command family around the map.
-- `mc map status/update/review` verbs.
+- A project-management UI or command family around roadmap files.
+- `mc roadmap status/update/review` verbs.
 - Resume-by-intent search.
 - A fanout/verify/gather state machine.
 - Ensemble or hierarchy machinery.
-- Automatic MEMORO.md rewriting.
+- Automatic roadmap/profile rewriting.
 
 Those are LLM-cruft risks. The thinner product is better: make the session see
 the whole, then let the model coordinate.
@@ -46,7 +47,8 @@ parallel phase decomposition) and **rejected it as premature** — it reinvents 
 worse Agent-tool, and the work we actually do is mostly *dependent, sequential,
 and decided adaptively* (the grounding MVP was a pipeline, not a fan-out). Agents
 are the tool's job. If genuinely independent parallel work appears, spawn
-tool-agents and record the units as map nodes — no special machine.
+tool-agents and record the units as sessions or plan phases — no special
+machine.
 
 ## How we operate (the loop, with borrowed agents)
 
@@ -64,21 +66,23 @@ The orchestrator's leverage is writing **two good prompts** per unit of work
 
 Make the **first minute** of a coordinator session reliable:
 
-1. It sees the map, role, repo, selected tool, and current worktree/session.
+1. It sees profile context, role, repo, selected tool, and current
+   worktree/session.
 2. It understands the boundary: high-altitude coordinator, not heads-down builder
    unless the user explicitly asks or the task is tiny.
 3. It can write a brief and use available agent tools without new mc commands.
-4. If `MEMORO.md` is created in a repo, it is committed so every worktree/session
-   can inherit it.
-5. As work lands, the session offers a concrete map patch for user approval; no
-   silent map edits.
+4. Child/fanout sessions use `.mc/brief.md` only as their scoped task brief, not
+   as general startup context.
+5. As work lands, the session reports status, decisions, blockers, and next
+   steps back to the coordinator; no silent profile or roadmap edits.
 
-The map holds where each project stands; git branch/PR/session state holds the
-rest. Fix concrete resume gaps as they appear in live work.
+The Coding Profile holds durable user work method; repo instructions hold
+project rules; git branch/PR/session state holds the current work. Fix concrete
+resume gaps as they appear in live work.
 
 ## Open (resolve by trying, not by designing)
 
-- How much in-flight state belongs in the map vs git/`focus`? Resume a real
+- How much in-flight state belongs in session metadata vs git/`focus`? Resume a real
   half-done thread in a fresh session and fix whatever was missing.
 - Does the current coordinator grounding make the model delegate early enough,
   or does it still drift into implementation detail? Test by running real work,

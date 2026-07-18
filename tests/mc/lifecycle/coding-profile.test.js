@@ -4,8 +4,11 @@ import { Readable } from 'node:stream';
 
 import {
   createUnifiedDiff,
+  DEFAULT_CODING_PROFILE_TEMPLATE,
+  formatReadJson,
   parseCandidateArgs,
   parseReadArgs,
+  run,
   runDiff,
   runRead,
   runWrite,
@@ -35,6 +38,19 @@ Do not force-push unless explicitly approved.
 `;
 
 describe('mc coding-profile argv parsing', () => {
+  test('help documents the explicit read-diff-write workflow', async () => {
+    const stdout = makeWritable();
+    const code = await run(['--help'], {
+      stdout,
+      stderr: makeWritable(),
+    });
+    assert.equal(code, 0);
+    assert.match(stdout.text, /WORKFLOW/);
+    assert.match(stdout.text, /read --json/);
+    assert.match(stdout.text, /Discuss the intended durable work-method changes/);
+    assert.match(stdout.text, /After approval/);
+  });
+
   test('read accepts --json and --api', () => {
     assert.deepEqual(parseReadArgs(['--json', '--api', 'http://test']), {
       json: true,
@@ -67,6 +83,54 @@ describe('createUnifiedDiff', () => {
     assert.match(diff, /^--- server revision 1\n\+\+\+ candidate\n@@ -1,2 \+1,2 @@/);
     assert.match(diff, /^-b$/m);
     assert.match(diff, /^\+c$/m);
+  });
+});
+
+describe('formatReadJson', () => {
+  test('expands an existing profile into LLM-friendly top-level fields', () => {
+    const body = formatReadJson({
+      revision: 4,
+      markdown: VALID_PROFILE,
+      updated_at: '2026-07-18T10:00:00Z',
+      created_at: '2026-07-17T10:00:00Z',
+      updated_by: 'mc_cli:device',
+      change_summary: 'Initial profile',
+      version_id: 'ver_1',
+      version_created_at: '2026-07-18T10:01:00Z',
+      source_session_id: 'sess_abc',
+    });
+
+    assert.equal(body.ok, true);
+    assert.equal(body.exists, true);
+    assert.equal(body.revision, 4);
+    assert.equal(body.base_revision, 4);
+    assert.equal(body.markdown, VALID_PROFILE);
+    assert.deepEqual(body.last_update, {
+      updated_at: '2026-07-18T10:00:00Z',
+      created_at: '2026-07-17T10:00:00Z',
+      version_id: 'ver_1',
+      version_created_at: '2026-07-18T10:01:00Z',
+      updated_by: 'mc_cli:device',
+      change_summary: 'Initial profile',
+      source_session_id: 'sess_abc',
+    });
+    assert.match(body.workflow.join('\n'), /--base-revision 4/);
+  });
+
+  test('includes a compact first-profile template when no profile exists', () => {
+    const body = formatReadJson(null);
+    assert.equal(body.ok, true);
+    assert.equal(body.exists, false);
+    assert.equal(body.revision, 0);
+    assert.equal(body.base_revision, 0);
+    assert.equal(body.markdown, '');
+    assert.equal(body.profile, null);
+    assert.equal(body.template_markdown, DEFAULT_CODING_PROFILE_TEMPLATE);
+    assert.match(body.template_markdown, /## Language/);
+    assert.match(body.template_markdown, /## Git And GitHub/);
+    assert.match(body.template_markdown, /## Rules/);
+    assert.match(body.workflow.join('\n'), /mc coding-profile diff --stdin/);
+    assert.match(body.workflow.join('\n'), /--base-revision 0/);
   });
 });
 
@@ -113,7 +177,47 @@ describe('mc coding-profile read', () => {
       stderr: makeWritable(),
     });
     assert.equal(code, 0);
-    assert.deepEqual(JSON.parse(stdout.text), { ok: true, profile: null });
+    const body = JSON.parse(stdout.text);
+    assert.equal(body.ok, true);
+    assert.equal(body.profile, null);
+    assert.equal(body.exists, false);
+    assert.equal(body.base_revision, 0);
+    assert.match(body.template_markdown, /# Coding Profile/);
+  });
+
+  test('--json exposes revision, markdown, and last update metadata', async () => {
+    const stdout = makeWritable();
+    const code = await runRead(['--json'], {
+      apiUrl: 'http://test',
+      getSecret: async () => 'mem_token',
+      memoroFetch: async () => ({
+        ok: true,
+        profile: {
+          revision: 9,
+          markdown: VALID_PROFILE,
+          updatedAt: '2026-07-18T11:00:00Z',
+          updatedBy: 'mc_cli:device',
+          versionId: 'ver_9',
+          versionCreatedAt: '2026-07-18T11:01:00Z',
+          changeSummary: 'Clarify autonomy',
+        },
+      }),
+      stdout,
+      stderr: makeWritable(),
+    });
+    assert.equal(code, 0);
+    const body = JSON.parse(stdout.text);
+    assert.equal(body.exists, true);
+    assert.equal(body.revision, 9);
+    assert.equal(body.base_revision, 9);
+    assert.equal(body.markdown, VALID_PROFILE);
+    assert.equal(body.updated_at, '2026-07-18T11:00:00Z');
+    assert.equal(body.last_update.change_summary, 'Clarify autonomy');
+    assert.equal(body.last_update.updated_by, 'mc_cli:device');
+    assert.equal(body.last_update.version_id, 'ver_9');
+    assert.equal(body.last_update.version_created_at, '2026-07-18T11:01:00Z');
+    assert.match(body.workflow.join('\n'), /--base-revision 9/);
+    assert.equal(body.profile.revision, 9);
   });
 });
 

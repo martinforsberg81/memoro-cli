@@ -156,7 +156,7 @@ function projectEntry(e, rich) {
     parent: e.parent ?? null,
     role: e.role ?? null,
     focus: e.focus ?? null,
-    memoro_node: e.memoro_node ?? null,
+    scope: e.scope ?? null,
     coding_session_id: e.coding_session_id ?? null,
     tool: e.tool ?? null,
     repo_slug: e.repo_slug ?? null,
@@ -172,7 +172,7 @@ function projectEntry(e, rich) {
     parent: e.parent ?? null,
     role: e.role ?? null,
     focus: e.focus ?? null,
-    memoro_node: e.memoro_node ?? null,
+    scope: e.scope ?? null,
     brief_path: e.brief_path ?? null,
   };
 }
@@ -213,7 +213,7 @@ function emitTree(entries, opts) {
       entry.tool || '',
       entry.branch || '',
     ].filter(Boolean);
-    const suffix = entry.memoro_node ? `  node=${entry.memoro_node}` : '';
+    const suffix = entry.scope ? `  scope=${entry.scope}` : '';
     process.stdout.write(`${indent}${bits.join('  ')}${suffix}\n`);
     for (const child of byParent.get(entry.name) || []) render(child, depth + 1);
   };

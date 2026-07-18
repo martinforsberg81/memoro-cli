@@ -359,8 +359,8 @@ NEW USER FLOW
 WHAT HAPPENS ON START
   Fresh starts (\`mc\`, \`mc new\`) inject project grounding before the
   coding tool wakes: compact User Profile and Coding Profile context when
-  available, metadata, plus focus. mc does not create or read a repo-local
-  MEMORO.md in the normal startup path. If the
+  available, mc session identity/repo metadata, plus the current focus. mc does
+  not create or read a repo-local MEMORO.md in the normal startup path. If the
   vault is locked, mc can offer to unlock it before launch so tokens materialise
   for the tool.
 
