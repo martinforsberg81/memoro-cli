@@ -351,9 +351,10 @@ NEW USER FLOW
 WHAT HAPPENS ON START
   Fresh starts (\`mc\`, \`mc new\`) inject project grounding before the
   coding tool wakes: compact User Profile and Coding Profile context when
-  available, plus the current focus. mc does not create or read a repo-local
-  MEMORO.md in the normal startup path. If the vault is locked, mc can offer to
-  unlock it before launch so tokens materialise for the tool.
+  available, mc session identity/repo metadata, plus the current focus. mc does
+  not create or read a repo-local MEMORO.md in the normal startup path. If the
+  vault is locked, mc can offer to unlock it before launch so tokens materialise
+  for the tool.
 
   \`mc open\` first attaches to a live broker-owned PTY when one exists,
   preserving that session surface without sending a new prompt. If no
@@ -558,6 +559,7 @@ async function runWrap(argv, { label = null } = {}) {
       focus,
       repoContext,
       tool: launch.shortName,
+      codingSessionId,
       sessionName: runtimeLabel,
       deps: {
         grounding: config.grounding,
@@ -779,6 +781,7 @@ async function runWrap(argv, { label = null } = {}) {
         source: launchSpec.heartbeatSource,
         cwd,
         repoHint: repoName,
+        codingSessionId,
         newerThanMs: uploadStartMs,
       });
     } catch (err) {

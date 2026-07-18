@@ -82,6 +82,14 @@ export async function launchBrokerOwnedSession({
     config,
     deps,
   });
+  const machineId = (deps.hostname || hostname)();
+  const llmSessionId = `mc-${now()}-${process.pid}`;
+  const codingSessionId = requestedCodingSessionId || await (deps.lookupOrMint || lookupOrMint)({
+    repoIdentity: repoContext.remoteUrl,
+    machineId,
+    llmSessionId,
+  });
+  const repoRef = derivePublicRepoRef(repoContext);
   let groundingLaunchMessage = null;
   if (sendStartupMessage) {
     try {
@@ -91,6 +99,7 @@ export async function launchBrokerOwnedSession({
         focus,
         repoContext,
         tool: launch.shortName,
+        codingSessionId,
         sessionName,
         deps: {
           grounding: config.grounding,
@@ -106,14 +115,6 @@ export async function launchBrokerOwnedSession({
     }
   }
 
-  const machineId = (deps.hostname || hostname)();
-  const llmSessionId = `mc-${now()}-${process.pid}`;
-  const codingSessionId = requestedCodingSessionId || await (deps.lookupOrMint || lookupOrMint)({
-    repoIdentity: repoContext.remoteUrl,
-    machineId,
-    llmSessionId,
-  });
-  const repoRef = derivePublicRepoRef(repoContext);
   let spawnEnv = {
     ...env,
     MEMORO_MC_PARENT: '1',

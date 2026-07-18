@@ -13,8 +13,9 @@ rules, or tool-native instruction files.
 mc owns:
 
 - runtime grounding: compact server-owned User Profile and Coding Profile
-  context, current focus, and session/worktree context
-- session continuity: registry, worktrees, selected tool, resume state
+  context, current focus, and repo/session metadata
+- session continuity: stable `coding_session_id`, registry, worktrees, selected
+  tool, local/cloud source, transcript/upload state, and resume state
 - behavior policy: permissions, approvals, data-access guards, vault
   materialisation, safety defaults
 - package-canon for optional coordinator role guidance, shipped with mc and
@@ -41,6 +42,9 @@ Durable personal work-method changes belong in the server-owned Coding
 Profile and are updated explicitly with `mc coding-profile read`, `mc
 coding-profile diff`, and `mc coding-profile write`. Repo-local instruction
 files remain repo truth, not profile truth.
+
+The `mc session` is the work unit for continuing where coding stopped. It is
+not a user profile and does not approve new working-method rules.
 
 ## Configuration Layers
 

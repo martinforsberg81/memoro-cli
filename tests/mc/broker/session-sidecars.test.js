@@ -206,6 +206,7 @@ describe('BrokerSessionSidecars', () => {
     assert.equal(fetchTranscriptCalls[0].source, 'codex');
     assert.equal(heartbeats[0].opts.body.source, 'codex');
     assert.equal(uploads[0].source, 'codex');
+    assert.equal(uploads[0].codingSessionId, 'sess_codex');
   });
 
   test('postHeartbeatWithRetry retries then reports failure', async () => {

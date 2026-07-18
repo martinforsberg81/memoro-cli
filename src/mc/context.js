@@ -21,6 +21,8 @@ export function buildMcContextQuery({
   repoId = null,
   repo = null,
   tool = null,
+  codingSessionId = null,
+  coding_session_id = null,
   sessionName = null,
   branch = null,
 } = {}) {
@@ -28,6 +30,7 @@ export function buildMcContextQuery({
   addParam(params, 'repo_id', repoId);
   addParam(params, 'repo', repo);
   addParam(params, 'tool', tool);
+  addParam(params, 'coding_session_id', codingSessionId || coding_session_id);
   addParam(params, 'session_name', sessionName);
   addParam(params, 'branch', branch);
   return params.toString();
@@ -43,6 +46,8 @@ export async function fetchMcContextData({
   repoName = null,
   repoId = null,
   tool = null,
+  codingSessionId = null,
+  coding_session_id = null,
   sessionName = null,
   branch = null,
   argv = [],
@@ -65,6 +70,7 @@ export async function fetchMcContextData({
       repoId: firstNonEmpty(repoId, repoContext?.repoId, repoContext?.repo_id),
       repo,
       tool,
+      codingSessionId: codingSessionId || coding_session_id,
       sessionName,
       branch: firstNonEmpty(branch, repoContext?.branch),
     });
@@ -130,6 +136,7 @@ function renderRepo(repo) {
 function renderSession(session) {
   if (!isObj(session)) return null;
   const lines = [];
+  addLine(lines, 'Coding session', session.coding_session_id, { code: true });
   addLine(lines, 'Name', session.mc_session_name);
   addLine(lines, 'Branch', session.branch);
   return lines.length ? lines.join('\n') : null;

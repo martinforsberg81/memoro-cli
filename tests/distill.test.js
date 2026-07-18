@@ -137,10 +137,12 @@ describe('buildSessionPayload', () => {
       repoHint: 'memoro',
       toolVersion: '1.2.3',
       source: 'claude-code',
+      codingSessionId: 'sess_payload1',
     });
 
     assert.equal(payload.source, 'claude-code');
     assert.equal(payload.session_id, 's_1');
+    assert.equal(payload.coding_session_id, 'sess_payload1');
     assert.equal(payload.repo_hint, 'memoro');
     assert.equal(payload.tool_version, '1.2.3');
     assert.deepEqual(payload.cleaned_conversation, [

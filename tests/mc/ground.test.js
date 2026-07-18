@@ -231,6 +231,7 @@ describe('groundSession', () => {
         remoteUrl: 'git@github.com:meetmemoro/memoro-cli.git',
       },
       tool: 'codex',
+      codingSessionId: 'sess_ground1',
       sessionName: 'update-memoro',
       deps: {
         readMapImpl: async () => {
@@ -249,7 +250,11 @@ describe('groundSession', () => {
             markdown: '# Coding Profile\n\nPrefer Swedish collaboration.',
           },
           repo: { name: 'memoro-cli', tool: input.tool, selected_docs: [] },
-          session: { mc_session_name: input.sessionName, branch: input.branch },
+          session: {
+            coding_session_id: input.codingSessionId,
+            mc_session_name: input.sessionName,
+            branch: input.branch,
+          },
         }),
       },
     });
@@ -265,6 +270,7 @@ describe('groundSession', () => {
     assert.match(adapter.written.markdown, /- Name: Martin/);
     assert.match(adapter.written.markdown, /Approved revision: 2/);
     assert.match(adapter.written.markdown, /Prefer Swedish collaboration/);
+    assert.match(adapter.written.markdown, /Coding session: `sess_ground1`/);
     assert.match(adapter.written.markdown, /on grounding/);
     assert.match(adapter.written.markdown, /respond to the user in Swedish/i);
     assert.equal(res.parts.language, 'Swedish');

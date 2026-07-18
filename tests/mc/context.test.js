@@ -25,6 +25,7 @@ const VALID_CONTEXT = {
     selected_docs: ['docs/plans/profile.md'],
   },
   session: {
+    coding_session_id: 'sess_context1',
     mc_session_name: 'update-memoro',
     branch: 'agent/mc-context',
   },
@@ -36,6 +37,7 @@ describe('mc context client', () => {
       repoId: 'repo_123',
       repo: 'meetmemoro/memoro',
       tool: 'codex',
+      codingSessionId: 'sess_context1',
       sessionName: 'update-memoro',
       branch: 'agent/mc-context',
     });
@@ -44,6 +46,7 @@ describe('mc context client', () => {
     assert.equal(params.get('repo_id'), 'repo_123');
     assert.equal(params.get('repo'), 'meetmemoro/memoro');
     assert.equal(params.get('tool'), 'codex');
+    assert.equal(params.get('coding_session_id'), 'sess_context1');
     assert.equal(params.get('session_name'), 'update-memoro');
     assert.equal(params.get('branch'), 'agent/mc-context');
     assert.equal(buildMcContextPath({ repo: 'memoro' }), '/api/mc/context?repo=memoro');
@@ -62,6 +65,7 @@ describe('mc context client', () => {
     assert.match(out, /### Repo/);
     assert.match(out, /- Selected docs: `docs\/plans\/profile\.md`/);
     assert.match(out, /### Session/);
+    assert.match(out, /- Coding session: `sess_context1`/);
     assert.doesNotMatch(out, /Brief/);
   });
 
@@ -74,6 +78,7 @@ describe('mc context client', () => {
         remoteUrl: 'git@github.com:meetmemoro/memoro.git',
       },
       tool: 'codex',
+      codingSessionId: 'sess_context1',
       sessionName: 'update-memoro',
       deps: {
         apiUrl: 'https://meetmemoro.test',
@@ -93,6 +98,7 @@ describe('mc context client', () => {
     assert.equal(url.pathname, '/api/mc/context');
     assert.equal(url.searchParams.get('repo'), 'meetmemoro/memoro');
     assert.equal(url.searchParams.get('tool'), 'codex');
+    assert.equal(url.searchParams.get('coding_session_id'), 'sess_context1');
     assert.equal(url.searchParams.get('session_name'), 'update-memoro');
     assert.equal(url.searchParams.get('branch'), 'agent/mc-context');
   });
