@@ -73,6 +73,11 @@ coding-profile write` in dialogue with the user. Do not edit generated
 adapter files, `AGENTS.md`, `CLAUDE.md`, or old repo roadmap files as a
 substitute for the server-owned Coding Profile.
 
+The expected loop is explicit: read the current profile with `--json`, discuss
+the change, draft a full replacement Markdown profile, show the diff, and write
+only after the user approves. When no profile exists, `read --json` returns
+`base_revision: 0` plus `template_markdown` for the first revision.
+
 ## Code conventions
 
 - `src/mc/commands/<name>.js` for new `mc` subcommands (NOT
