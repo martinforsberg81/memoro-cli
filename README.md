@@ -7,7 +7,7 @@ Command-line glue between external coding tools (Claude Code, Cursor, Codex, Win
 Two directions, one binary:
 
 - **Sessions → Memoro.** At the end of a coding session, the CLI cleans the transcript locally into a tool-agnostic conversation payload, attaches deterministic metadata (`coding_context`, `repo_manifest`), and POSTs it to Memoro. Server-side AI processing happens inside Memoro. Raw tool outputs and code bodies are still stripped client-side before upload.
-- **Memoro → tools.** Before a coding session starts, the CLI pulls compact User Profile and Coding Profile context from Memoro and writes a managed section into the tool's config file (`~/.claude/CLAUDE.md`, `.cursorrules`, `AGENTS.md`, etc.) — stable identity, preferred agent workflow, and current session metadata.
+- **Memoro → tools.** Before a coding session starts, the CLI pulls compact User Profile and Coding Profile context from Memoro and injects it through the selected adapter at launch. Repo-owned instruction files such as `CLAUDE.md` and `AGENTS.md` remain static contracts, not copies of the user's profile.
 
 The result: every coding tool you use feels like it remembers you.
 

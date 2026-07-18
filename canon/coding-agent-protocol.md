@@ -3,7 +3,9 @@
 Canonical, tool-agnostic project instructions for any coding agent
 working on this repo. Claude Code reads `CLAUDE.md`, Codex / GPT
 agents read `AGENTS.md`; both are thin wrappers materialised from
-this file by `mc adapter sync` (plan §13).
+this file by `mc adapter sync` (plan §13). Those wrappers are repo
+contracts only; server-owned User Profile and Coding Profile context is
+delivered at session launch and is not copied into repo instruction files.
 
 `memoro-cli` — the terminal coordinator for Memoro. Ships the `mc`,
 `memoro-cli`, and `memoro` binaries. Node 22+, ESM, `node --test`.
@@ -138,7 +140,9 @@ only after the user approves. When no profile exists, `read --json` returns
 - Don't hand-edit `CLAUDE.md` / `AGENTS.md` (or any other file
   declared by an adapter's `instructionsFile()`). They're managed
   by `mc adapter sync`; hand-edits are flagged as drift on the
-  next sync. Edit this file instead.
+  next sync. Edit this file instead for repo conventions, and use
+  `mc coding-profile read|diff|write` for durable user work-method
+  changes.
 
 ## Plan + skill cross-reference
 
@@ -161,7 +165,9 @@ only after the user approves. When no profile exists, `read --json` returns
 | Codex / GPT | `AGENTS.md` (root) | Markdown only; skills and slash commands are read manually via the prompt above |
 | Gemini CLI | none yet | `instructionsFile()` returns null pending verification of Gemini's project-instruction convention |
 
-`mc adapter sync` materialises the wrappers from this file. `mc
+`mc adapter sync` materialises thin repo-contract wrappers from this file; it
+does not materialise the user's Coding Profile into `CLAUDE.md` or `AGENTS.md`.
+`mc
 tool-switch <tool>` swaps the default tool for future bare `mc` / `mc new`
 starts (plan §13d). Existing sessions change tool only when relaunched with
 `mc resume <name> --codex` / `--claude`; a running TUI cannot switch tool

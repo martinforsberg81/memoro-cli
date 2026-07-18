@@ -102,6 +102,23 @@ describe('markdownWrapperFor', () => {
     assert.match(out, /Claude Code/);
   });
 
+  it('labels wrappers as repo contracts, not Coding Profile mirrors', () => {
+    const out = markdownWrapperFor(base);
+    assert.match(out, /Repo-owned instruction contract/);
+    assert.match(out, /not a Coding Profile mirror/);
+    assert.match(out, /mc coding-profile read\|diff\|write/);
+  });
+
+  it('does not embed profile/context content into adapter wrappers', () => {
+    const out = markdownWrapperFor({
+      ...base,
+      canonicalContent: '# protocol\n\n# Coding Profile\n\nSECRET_PROFILE_RULE\n',
+    });
+    assert.doesNotMatch(out, /SECRET_PROFILE_RULE/);
+    assert.doesNotMatch(out, /^# Coding Profile$/m);
+    assert.match(out, /docs\/coding-agent-protocol\.md/);
+  });
+
   it('embeds the 12-char canonical-content stamp in a comment', () => {
     const out = markdownWrapperFor(base);
     const stamp = computeStamp(base.canonicalContent);
