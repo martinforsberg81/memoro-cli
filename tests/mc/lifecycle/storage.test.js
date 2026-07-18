@@ -1,6 +1,6 @@
 import test, { afterEach, beforeEach, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { runMc, parseJsonOrNull } from '../_helpers/cli.js';
@@ -319,5 +319,95 @@ describe('mc storage / doctor', () => {
       'present',
       'recent-missing',
     ]);
+  });
+
+  test('storage prune-deps --dry-run reports old inactive node_modules without mutating', () => {
+    const oldIso = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString();
+    const recentIso = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    for (const n of ['old-deps', 'recent-deps', 'live-deps']) {
+      git(repo.dir, `branch sess/${n} main`);
+      addWorktree(repo.dir, join(repo.mcHome, 'worktrees', 'repo', n), `sess/${n}`);
+      mkdirSync(join(repo.mcHome, 'worktrees', 'repo', n, 'node_modules'), { recursive: true });
+      writeFileSync(join(repo.mcHome, 'worktrees', 'repo', n, 'node_modules', 'dep.bin'), 'x'.repeat(4096));
+    }
+    writeRegistry(repo.mcHome, [
+      makeEntry({
+        name: 'old-deps',
+        branch: 'sess/old-deps',
+        worktree_path: join(repo.mcHome, 'worktrees', 'repo', 'old-deps'),
+        session_state: 'idle',
+        created_at: oldIso,
+      }),
+      makeEntry({
+        name: 'recent-deps',
+        branch: 'sess/recent-deps',
+        worktree_path: join(repo.mcHome, 'worktrees', 'repo', 'recent-deps'),
+        session_state: 'idle',
+        created_at: oldIso,
+        last_opened_at: recentIso,
+      }),
+      makeEntry({
+        name: 'live-deps',
+        branch: 'sess/live-deps',
+        worktree_path: join(repo.mcHome, 'worktrees', 'repo', 'live-deps'),
+        session_state: 'live',
+        created_at: oldIso,
+      }),
+    ]);
+
+    const r = runMc(['storage', 'prune-deps', '--dry-run', '--json'], {
+      cwd: repo.dir,
+      env: { MC_HOME: repo.mcHome, MC_ORPHAN_PID_DIR: pidDir },
+    });
+
+    assert.equal(r.status, 0, `stderr:${r.stderr}`);
+    const j = parseJsonOrNull(r.stdout);
+    assert.equal(j.dry_run, true);
+    assert.deepEqual(j.candidates.map((item) => item.name), ['old-deps']);
+    assert.equal(j.candidates[0].kind, 'node_modules');
+    assert.equal(j.candidates[0].retention_anchor_at, oldIso);
+    assert.ok(j.candidates[0].reclaimable_bytes > 0);
+    assert.equal(existsSync(join(repo.mcHome, 'worktrees', 'repo', 'old-deps', 'node_modules')), true);
+  });
+
+  test('storage prune-deps --apply removes only matching dependency directories', () => {
+    const oldIso = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString();
+    const recentIso = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    for (const n of ['old-deps', 'recent-deps']) {
+      git(repo.dir, `branch sess/${n} main`);
+      addWorktree(repo.dir, join(repo.mcHome, 'worktrees', 'repo', n), `sess/${n}`);
+      mkdirSync(join(repo.mcHome, 'worktrees', 'repo', n, 'node_modules'), { recursive: true });
+      writeFileSync(join(repo.mcHome, 'worktrees', 'repo', n, 'node_modules', 'dep.bin'), 'x'.repeat(4096));
+    }
+    writeRegistry(repo.mcHome, [
+      makeEntry({
+        name: 'old-deps',
+        branch: 'sess/old-deps',
+        worktree_path: join(repo.mcHome, 'worktrees', 'repo', 'old-deps'),
+        session_state: 'idle',
+        created_at: oldIso,
+      }),
+      makeEntry({
+        name: 'recent-deps',
+        branch: 'sess/recent-deps',
+        worktree_path: join(repo.mcHome, 'worktrees', 'repo', 'recent-deps'),
+        session_state: 'idle',
+        created_at: oldIso,
+        last_activity: recentIso,
+      }),
+    ]);
+
+    const r = runMc(['storage', 'prune-deps', '--apply', '--json'], {
+      cwd: repo.dir,
+      env: { MC_HOME: repo.mcHome, MC_ORPHAN_PID_DIR: pidDir },
+    });
+
+    assert.equal(r.status, 0, `stderr:${r.stderr}`);
+    const j = parseJsonOrNull(r.stdout);
+    assert.equal(j.dry_run, false);
+    assert.deepEqual(j.removed.map((item) => item.name), ['old-deps']);
+    assert.deepEqual(j.failed, []);
+    assert.equal(existsSync(join(repo.mcHome, 'worktrees', 'repo', 'old-deps', 'node_modules')), false);
+    assert.equal(existsSync(join(repo.mcHome, 'worktrees', 'repo', 'recent-deps', 'node_modules')), true);
   });
 });

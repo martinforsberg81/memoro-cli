@@ -1,6 +1,10 @@
 /**
  * `mc storage` exposes local memory/disk hygiene without mutating state.
  */
+import { spawnSync } from 'node:child_process';
+import { existsSync, lstatSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+
 import {
   buildStorageSnapshot,
   explainSessionStorage,
@@ -13,6 +17,8 @@ import { parseDurationMs } from '../storage-policy.js';
 import { readRegistry, writeRegistry } from '../registry.js';
 
 const DEFAULT_MISSING_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+const DEFAULT_DEPS_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+const DEPENDENCY_DIRS = ['node_modules'];
 
 export async function run(argv) {
   const opts = parseArgs(argv);
@@ -71,6 +77,27 @@ export async function run(argv) {
     return result.ok ? 0 : 1;
   }
 
+  if (opts.verb === 'prune-deps') {
+    const snapshot = await buildStorageSnapshot({
+      minAgeMs: opts.minAgeMs,
+      includeDisk: false,
+    });
+    const plan = buildDependencyPrunePlan(snapshot, {
+      olderThanMs: opts.olderThanMs,
+    });
+    if (opts.dryRun) {
+      const out = { dry_run: true, ...plan };
+      if (opts.json) console.log(JSON.stringify(out, null, 2));
+      else printPruneDeps(out);
+      return 0;
+    }
+    const result = applyDependencyPrunePlan(plan);
+    const out = { dry_run: false, ...result };
+    if (opts.json) console.log(JSON.stringify(out, null, 2));
+    else printPruneDeps(out);
+    return result.ok ? 0 : 1;
+  }
+
   const snapshot = await buildStorageSnapshot({ minAgeMs: opts.minAgeMs });
   if (opts.verb === 'candidates') {
     const out = {
@@ -103,8 +130,8 @@ function parseArgs(argv) {
   if (args[0] && !args[0].startsWith('-')) {
     opts.verb = args.shift();
   }
-  if (!['status', 'candidates', 'explain', 'repair', 'prune-missing'].includes(opts.verb)) {
-    return { error: 'usage: mc storage [status|candidates|explain <name>|repair [name]|prune-missing] [--json]' };
+  if (!['status', 'candidates', 'explain', 'repair', 'prune-missing', 'prune-deps'].includes(opts.verb)) {
+    return { error: 'usage: mc storage [status|candidates|explain <name>|repair [name]|prune-missing|prune-deps] [--json]' };
   }
   if (opts.verb === 'explain') {
     const name = args.shift();
@@ -136,18 +163,19 @@ function parseArgs(argv) {
     return { error: `unknown flag: ${a}` };
   }
   if (opts.dryRun && opts.apply) return { error: '--dry-run and --apply cannot be combined' };
-  if (['repair', 'prune-missing'].includes(opts.verb) && !opts.dryRun && !opts.apply) {
+  if (['repair', 'prune-missing', 'prune-deps'].includes(opts.verb) && !opts.dryRun && !opts.apply) {
     return { error: `mc storage ${opts.verb} requires --dry-run or --apply` };
   }
-  if (!['repair', 'prune-missing'].includes(opts.verb) && (opts.dryRun || opts.apply)) {
-    return { error: '--dry-run and --apply are only valid with mc storage repair or prune-missing' };
+  if (!['repair', 'prune-missing', 'prune-deps'].includes(opts.verb) && (opts.dryRun || opts.apply)) {
+    return { error: '--dry-run and --apply are only valid with mc storage repair, prune-missing, or prune-deps' };
   }
   if (opts.verb !== 'repair' && opts.providerBackfill) {
     return { error: '--provider-backfill is only valid with mc storage repair' };
   }
-  if (opts.verb !== 'prune-missing' && opts.olderThanSet) {
-    return { error: '--older-than is only valid with mc storage prune-missing' };
+  if (!['prune-missing', 'prune-deps'].includes(opts.verb) && opts.olderThanSet) {
+    return { error: '--older-than is only valid with mc storage prune-missing or prune-deps' };
   }
+  if (opts.verb === 'prune-deps' && !opts.olderThanSet) opts.olderThanMs = DEFAULT_DEPS_RETENTION_MS;
   return opts;
 }
 
@@ -159,7 +187,7 @@ function buildMissingPrunePlan(registry, {
   const candidates = [];
   for (const entry of registry?.entries || []) {
     if (entry?.worktree_missing !== true) continue;
-    const anchorMs = missingRetentionAnchorMs(entry);
+    const anchorMs = entryRetentionAnchorMs(entry);
     const ageMs = Number.isFinite(anchorMs) ? Math.max(0, nowMs - anchorMs) : Infinity;
     if (ageMs < olderThanMs) continue;
     candidates.push({
@@ -195,7 +223,88 @@ function applyMissingPrunePlan(registry, plan, {
   };
 }
 
-function missingRetentionAnchorMs(entry) {
+function buildDependencyPrunePlan(snapshot, {
+  olderThanMs = DEFAULT_DEPS_RETENTION_MS,
+  now = Date.now(),
+} = {}) {
+  const nowMs = resolveNowMs(now);
+  const candidates = [];
+  for (const item of snapshot?.worktrees || []) {
+    const entry = item?.entry || {};
+    const worktreePath = nonEmpty(item?.git?.worktree_path || entry.worktree_path);
+    if (!worktreePath || !item?.git?.exists) continue;
+    if (entry?.worktree_missing === true) continue;
+    if (isProtectedDependencyEntry(entry, item)) continue;
+
+    const anchorMs = entryRetentionAnchorMs(entry);
+    const ageMs = Number.isFinite(anchorMs) ? Math.max(0, nowMs - anchorMs) : Infinity;
+    if (ageMs < olderThanMs) continue;
+
+    for (const dirName of DEPENDENCY_DIRS) {
+      const path = join(worktreePath, dirName);
+      if (!isDependencyPruneTarget(path)) continue;
+      const bytes = duBytes(path);
+      candidates.push({
+        name: entry.name || null,
+        branch: entry.branch || item?.git?.current_branch || null,
+        worktree_path: worktreePath,
+        path,
+        kind: dirName,
+        retention_anchor_at: Number.isFinite(anchorMs) ? new Date(anchorMs).toISOString() : null,
+        age_ms: Number.isFinite(ageMs) ? ageMs : null,
+        disk_bytes: bytes,
+        reclaimable_bytes: bytes,
+      });
+    }
+  }
+  candidates.sort(compareDependencyCandidates);
+  return {
+    ok: true,
+    generated_at: new Date(nowMs).toISOString(),
+    older_than_ms: olderThanMs,
+    candidates,
+    counts: {
+      total: candidates.length,
+      reclaimable_bytes: sumBytes(candidates),
+    },
+  };
+}
+
+function applyDependencyPrunePlan(plan, {
+  rm = rmSync,
+} = {}) {
+  const removed = [];
+  const failed = [];
+  for (const candidate of plan?.candidates || []) {
+    try {
+      rm(candidate.path, { recursive: true, force: true });
+      removed.push(candidate);
+    } catch (err) {
+      failed.push({
+        ...candidate,
+        error: err.message || String(err),
+      });
+    }
+  }
+  return {
+    ok: failed.length === 0,
+    removed,
+    failed,
+    counts: {
+      total: removed.length,
+      failed: failed.length,
+      reclaimable_bytes: sumBytes(removed),
+    },
+  };
+}
+
+function isProtectedDependencyEntry(entry, item) {
+  if (item?.live) return true;
+  const state = typeof entry?.session_state === 'string' ? entry.session_state.trim().toLowerCase() : '';
+  return state === 'live' || state === 'active';
+}
+
+function entryRetentionAnchorMs(entry) {
   let latest = null;
   for (const value of [
     entry?.last_opened_at,
@@ -210,6 +319,37 @@ function missingRetentionAnchorMs(entry) {
     if (latest == null || parsed > latest) latest = parsed;
   }
   return latest;
+}
+
+function isDependencyPruneTarget(path) {
+  try {
+    const stat = lstatSync(path);
+    return stat.isDirectory() || stat.isSymbolicLink();
+  } catch {
+    return false;
+  }
+}
+
+function duBytes(path) {
+  if (!path || !existsSync(path)) return 0;
+  const r = spawnSync('du', ['-sk', path], { encoding: 'utf8' });
+  if (r.status !== 0) return null;
+  const n = Number((r.stdout || '').trim().split(/\s+/)[0]);
+  return Number.isFinite(n) ? n * 1024 : null;
+}
+
+function compareDependencyCandidates(a, b) {
+  const reclaimA = Number.isFinite(Number(a?.reclaimable_bytes)) ? Number(a.reclaimable_bytes) : 0;
+  const reclaimB = Number.isFinite(Number(b?.reclaimable_bytes)) ? Number(b.reclaimable_bytes) : 0;
+  if (reclaimA !== reclaimB) return reclaimB - reclaimA;
+  return String(a?.name || '').localeCompare(String(b?.name || ''));
+}
+
+function sumBytes(items) {
+  return (items || []).reduce((sum, item) => {
+    const n = Number(item?.reclaimable_bytes);
+    return Number.isFinite(n) ? sum + n : sum;
+  }, 0);
 }
 
 function resolveNowMs(now) {
@@ -274,6 +414,23 @@ function printPruneMissing(out) {
   }
 }
 
+function printPruneDeps(out) {
+  const candidates = out.candidates || out.removed || [];
+  if (!candidates.length) {
+    process.stdout.write('(no dependency directories to prune)\n');
+    return;
+  }
+  const status = out.dry_run ? 'would prune' : 'pruned';
+  for (const item of candidates) {
+    process.stdout.write(`${status}  ${item.name || '-'}  ${item.kind}  ${formatBytes(item.reclaimable_bytes)}\n`);
+  }
+  if (out.failed?.length) {
+    for (const item of out.failed) {
+      process.stdout.write(`failed  ${item.name || '-'}  ${item.kind}  ${item.error}\n`);
+    }
+  }
+}
+
 function printExplain(detail) {
   process.stdout.write(`mc storage explain ${detail.entry.name}\n`);
   process.stdout.write(`  state        ${detail.entry.session_state}\n`);
@@ -283,6 +440,10 @@ function printExplain(detail) {
   process.stdout.write(`  worktree     ${detail.git.exists ? detail.git.worktree_path : 'missing'}\n`);
   process.stdout.write(`  dirty/ahead  ${detail.git.dirty_files ?? '-'}/${detail.git.ahead ?? '-'}\n`);
   process.stdout.write(`  cleanup      ${detail.cleanup_candidate ? detail.cleanup_reason : 'not-a-candidate'}\n`);
+}
+
+function nonEmpty(value) {
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
 
 function formatBytes(value) {
