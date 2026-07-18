@@ -18,7 +18,9 @@ import { readRegistry, writeRegistry } from '../registry.js';
 
 const DEFAULT_MISSING_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 const DEFAULT_DEPS_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+const DEFAULT_GENERATED_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 const DEPENDENCY_DIRS = ['node_modules'];
+const GENERATED_DIRS = ['.cache', '.next', '.turbo', '.vite', 'coverage', 'playwright-report', 'test-results'];
 
 export async function run(argv) {
   const opts = parseArgs(argv);
@@ -98,6 +100,27 @@ export async function run(argv) {
     return result.ok ? 0 : 1;
   }
 
+  if (opts.verb === 'prune-generated') {
+    const snapshot = await buildStorageSnapshot({
+      minAgeMs: opts.minAgeMs,
+      includeDisk: false,
+    });
+    const plan = buildGeneratedPrunePlan(snapshot, {
+      olderThanMs: opts.olderThanMs,
+    });
+    if (opts.dryRun) {
+      const out = { dry_run: true, ...plan };
+      if (opts.json) console.log(JSON.stringify(out, null, 2));
+      else printPruneGenerated(out);
+      return 0;
+    }
+    const result = applyDirectoryPrunePlan(plan);
+    const out = { dry_run: false, ...result };
+    if (opts.json) console.log(JSON.stringify(out, null, 2));
+    else printPruneGenerated(out);
+    return result.ok ? 0 : 1;
+  }
+
   const snapshot = await buildStorageSnapshot({ minAgeMs: opts.minAgeMs });
   if (opts.verb === 'candidates') {
     const out = {
@@ -130,8 +153,8 @@ function parseArgs(argv) {
   if (args[0] && !args[0].startsWith('-')) {
     opts.verb = args.shift();
   }
-  if (!['status', 'candidates', 'explain', 'repair', 'prune-missing', 'prune-deps'].includes(opts.verb)) {
-    return { error: 'usage: mc storage [status|candidates|explain <name>|repair [name]|prune-missing|prune-deps] [--json]' };
+  if (!['status', 'candidates', 'explain', 'repair', 'prune-missing', 'prune-deps', 'prune-generated'].includes(opts.verb)) {
+    return { error: 'usage: mc storage [status|candidates|explain <name>|repair [name]|prune-missing|prune-deps|prune-generated] [--json]' };
   }
   if (opts.verb === 'explain') {
     const name = args.shift();
@@ -163,19 +186,20 @@ function parseArgs(argv) {
     return { error: `unknown flag: ${a}` };
   }
   if (opts.dryRun && opts.apply) return { error: '--dry-run and --apply cannot be combined' };
-  if (['repair', 'prune-missing', 'prune-deps'].includes(opts.verb) && !opts.dryRun && !opts.apply) {
+  if (['repair', 'prune-missing', 'prune-deps', 'prune-generated'].includes(opts.verb) && !opts.dryRun && !opts.apply) {
     return { error: `mc storage ${opts.verb} requires --dry-run or --apply` };
   }
-  if (!['repair', 'prune-missing', 'prune-deps'].includes(opts.verb) && (opts.dryRun || opts.apply)) {
-    return { error: '--dry-run and --apply are only valid with mc storage repair, prune-missing, or prune-deps' };
+  if (!['repair', 'prune-missing', 'prune-deps', 'prune-generated'].includes(opts.verb) && (opts.dryRun || opts.apply)) {
+    return { error: '--dry-run and --apply are only valid with mc storage repair, prune-missing, prune-deps, or prune-generated' };
   }
   if (opts.verb !== 'repair' && opts.providerBackfill) {
     return { error: '--provider-backfill is only valid with mc storage repair' };
   }
-  if (!['prune-missing', 'prune-deps'].includes(opts.verb) && opts.olderThanSet) {
-    return { error: '--older-than is only valid with mc storage prune-missing or prune-deps' };
+  if (!['prune-missing', 'prune-deps', 'prune-generated'].includes(opts.verb) && opts.olderThanSet) {
+    return { error: '--older-than is only valid with mc storage prune-missing, prune-deps, or prune-generated' };
   }
   if (opts.verb === 'prune-deps' && !opts.olderThanSet) opts.olderThanMs = DEFAULT_DEPS_RETENTION_MS;
+  if (opts.verb === 'prune-generated' && !opts.olderThanSet) opts.olderThanMs = DEFAULT_GENERATED_RETENTION_MS;
   return opts;
 }
 
@@ -227,6 +251,32 @@ function buildDependencyPrunePlan(snapshot, {
   olderThanMs = DEFAULT_DEPS_RETENTION_MS,
   now = Date.now(),
 } = {}) {
+  return buildDirectoryPrunePlan(snapshot, {
+    olderThanMs,
+    now,
+    dirs: DEPENDENCY_DIRS,
+    requireIgnored: false,
+  });
+}
+
+function buildGeneratedPrunePlan(snapshot, {
+  olderThanMs = DEFAULT_GENERATED_RETENTION_MS,
+  now = Date.now(),
+} = {}) {
+  return buildDirectoryPrunePlan(snapshot, {
+    olderThanMs,
+    now,
+    dirs: GENERATED_DIRS,
+    requireIgnored: true,
+  });
+}
+
+function buildDirectoryPrunePlan(snapshot, {
+  olderThanMs,
+  now,
+  dirs,
+  requireIgnored,
+} = {}) {
   const nowMs = resolveNowMs(now);
   const candidates = [];
   for (const item of snapshot?.worktrees || []) {
@@ -240,9 +290,10 @@ function buildDependencyPrunePlan(snapshot, {
     const ageMs = Number.isFinite(anchorMs) ? Math.max(0, nowMs - anchorMs) : Infinity;
     if (ageMs < olderThanMs) continue;
 
-    for (const dirName of DEPENDENCY_DIRS) {
+    for (const dirName of dirs || []) {
       const path = join(worktreePath, dirName);
       if (!isDependencyPruneTarget(path)) continue;
+      if (requireIgnored && !isGitIgnored(worktreePath, dirName)) continue;
       const bytes = duBytes(path);
       candidates.push({
         name: entry.name || null,
@@ -250,6 +301,7 @@ function buildDependencyPrunePlan(snapshot, {
         worktree_path: worktreePath,
         path,
         kind: dirName,
+        git_ignored: requireIgnored ? true : null,
         retention_anchor_at: Number.isFinite(anchorMs) ? new Date(anchorMs).toISOString() : null,
         age_ms: Number.isFinite(ageMs) ? ageMs : null,
         disk_bytes: bytes,
@@ -271,6 +323,12 @@ function buildDependencyPrunePlan(snapshot, {
 }
 
 function applyDependencyPrunePlan(plan, {
+  rm = rmSync,
+} = {}) {
+  return applyDirectoryPrunePlan(plan, { rm });
+}
+
+function applyDirectoryPrunePlan(plan, {
   rm = rmSync,
 } = {}) {
   const removed = [];
@@ -328,6 +386,13 @@ function isDependencyPruneTarget(path) {
   } catch {
     return false;
   }
+}
+
+function isGitIgnored(worktreePath, relativePath) {
+  const r = spawnSync('git', ['-C', worktreePath, 'check-ignore', '-q', '--', relativePath], {
+    encoding: 'utf8',
+  });
+  return r.status === 0;
 }
 
 function duBytes(path) {
@@ -418,6 +483,23 @@ function printPruneDeps(out) {
   const candidates = out.candidates || out.removed || [];
   if (!candidates.length) {
     process.stdout.write('(no dependency directories to prune)\n');
+    return;
+  }
+  const status = out.dry_run ? 'would prune' : 'pruned';
+  for (const item of candidates) {
+    process.stdout.write(`${status}  ${item.name || '-'}  ${item.kind}  ${formatBytes(item.reclaimable_bytes)}\n`);
+  }
+  if (out.failed?.length) {
+    for (const item of out.failed) {
+      process.stdout.write(`failed  ${item.name || '-'}  ${item.kind}  ${item.error}\n`);
+    }
+  }
+}
+
+function printPruneGenerated(out) {
+  const candidates = out.candidates || out.removed || [];
+  if (!candidates.length) {
+    process.stdout.write('(no generated directories to prune)\n');
     return;
   }
   const status = out.dry_run ? 'would prune' : 'pruned';

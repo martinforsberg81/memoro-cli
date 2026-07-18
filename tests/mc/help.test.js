@@ -17,6 +17,7 @@ describe('mc --help', () => {
     assert.match(r.stdout, /TOOL SELECTION/);
     assert.match(r.stdout, /mc open <name> --codex\s+Use Codex only before first launch or for Codex sessions/);
     assert.match(r.stdout, /mc coding-profile read\|diff\|write/);
+    assert.match(r.stdout, /mc storage prune-generated --dry-run\|--apply/);
     assert.match(r.stdout, /Terminal commands manage machines and sessions/);
     assert.match(r.stdout, /Inside a launched LLM session/);
     assert.match(r.stdout, /mc coding-profile read/);
