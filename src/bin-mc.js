@@ -361,6 +361,8 @@ FLEET / ADVANCED
                                   Prune missing registry tombstones after 7d
   mc storage prune-deps --dry-run|--apply
                                   Prune old inactive worktree node_modules
+  mc storage prune-generated --dry-run|--apply
+                                  Prune old ignored build/cache directories
   mc gc [--dry-run]               Reap registry-dead, merged, clean worktrees
   mc gc --runtime                 Reap stale runtime pid/socket sidecars
   mc gc --stale-worktrees --only <names>

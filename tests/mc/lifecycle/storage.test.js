@@ -410,4 +410,130 @@ describe('mc storage / doctor', () => {
     assert.equal(existsSync(join(repo.mcHome, 'worktrees', 'repo', 'old-deps', 'node_modules')), false);
     assert.equal(existsSync(join(repo.mcHome, 'worktrees', 'repo', 'recent-deps', 'node_modules')), true);
   });
+
+  test('storage prune-generated --dry-run reports old ignored generated directories only', () => {
+    writeFileSync(join(repo.dir, '.gitignore'), '.next\n');
+    git(repo.dir, 'add .gitignore');
+    git(repo.dir, 'commit -q -m "Ignore generated cache"');
+
+    const oldIso = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString();
+    const recentIso = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    for (const n of ['old-generated', 'recent-generated', 'live-generated', 'unignored-generated']) {
+      git(repo.dir, `branch sess/${n} main`);
+      addWorktree(repo.dir, join(repo.mcHome, 'worktrees', 'repo', n), `sess/${n}`);
+    }
+    mkdirSync(join(repo.mcHome, 'worktrees', 'repo', 'old-generated', '.next'), { recursive: true });
+    writeFileSync(join(repo.mcHome, 'worktrees', 'repo', 'old-generated', '.next', 'cache.bin'), 'x'.repeat(4096));
+    mkdirSync(join(repo.mcHome, 'worktrees', 'repo', 'recent-generated', '.next'), { recursive: true });
+    writeFileSync(join(repo.mcHome, 'worktrees', 'repo', 'recent-generated', '.next', 'cache.bin'), 'x'.repeat(4096));
+    mkdirSync(join(repo.mcHome, 'worktrees', 'repo', 'live-generated', '.next'), { recursive: true });
+    writeFileSync(join(repo.mcHome, 'worktrees', 'repo', 'live-generated', '.next', 'cache.bin'), 'x'.repeat(4096));
+    mkdirSync(join(repo.mcHome, 'worktrees', 'repo', 'unignored-generated', 'coverage'), { recursive: true });
+    writeFileSync(join(repo.mcHome, 'worktrees', 'repo', 'unignored-generated', 'coverage', 'index.html'), 'coverage\n');
+
+    writeRegistry(repo.mcHome, [
+      makeEntry({
+        name: 'old-generated',
+        branch: 'sess/old-generated',
+        worktree_path: join(repo.mcHome, 'worktrees', 'repo', 'old-generated'),
+        session_state: 'idle',
+        created_at: oldIso,
+      }),
+      makeEntry({
+        name: 'recent-generated',
+        branch: 'sess/recent-generated',
+        worktree_path: join(repo.mcHome, 'worktrees', 'repo', 'recent-generated'),
+        session_state: 'idle',
+        created_at: oldIso,
+        last_opened_at: recentIso,
+      }),
+      makeEntry({
+        name: 'live-generated',
+        branch: 'sess/live-generated',
+        worktree_path: join(repo.mcHome, 'worktrees', 'repo', 'live-generated'),
+        session_state: 'live',
+        created_at: oldIso,
+      }),
+      makeEntry({
+        name: 'unignored-generated',
+        branch: 'sess/unignored-generated',
+        worktree_path: join(repo.mcHome, 'worktrees', 'repo', 'unignored-generated'),
+        session_state: 'idle',
+        created_at: oldIso,
+      }),
+    ]);
+
+    const r = runMc(['storage', 'prune-generated', '--dry-run', '--json'], {
+      cwd: repo.dir,
+      env: { MC_HOME: repo.mcHome, MC_ORPHAN_PID_DIR: pidDir },
+    });
+
+    assert.equal(r.status, 0, `stderr:${r.stderr}`);
+    const j = parseJsonOrNull(r.stdout);
+    assert.equal(j.dry_run, true);
+    assert.deepEqual(j.candidates.map((item) => item.name), ['old-generated']);
+    assert.equal(j.candidates[0].kind, '.next');
+    assert.equal(j.candidates[0].git_ignored, true);
+    assert.ok(j.candidates[0].reclaimable_bytes > 0);
+    assert.equal(existsSync(join(repo.mcHome, 'worktrees', 'repo', 'old-generated', '.next')), true);
+    assert.equal(existsSync(join(repo.mcHome, 'worktrees', 'repo', 'unignored-generated', 'coverage')), true);
+  });
+
+  test('storage prune-generated --apply removes matching ignored directories only', () => {
+    writeFileSync(join(repo.dir, '.gitignore'), '.next\n');
+    git(repo.dir, 'add .gitignore');
+    git(repo.dir, 'commit -q -m "Ignore generated cache"');
+
+    const oldIso = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString();
+    const recentIso = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    for (const n of ['old-generated', 'recent-generated', 'unignored-generated']) {
+      git(repo.dir, `branch sess/${n} main`);
+      addWorktree(repo.dir, join(repo.mcHome, 'worktrees', 'repo', n), `sess/${n}`);
+    }
+    mkdirSync(join(repo.mcHome, 'worktrees', 'repo', 'old-generated', '.next'), { recursive: true });
+    writeFileSync(join(repo.mcHome, 'worktrees', 'repo', 'old-generated', '.next', 'cache.bin'), 'x'.repeat(4096));
+    mkdirSync(join(repo.mcHome, 'worktrees', 'repo', 'recent-generated', '.next'), { recursive: true });
+    writeFileSync(join(repo.mcHome, 'worktrees', 'repo', 'recent-generated', '.next', 'cache.bin'), 'x'.repeat(4096));
+    mkdirSync(join(repo.mcHome, 'worktrees', 'repo', 'unignored-generated', 'coverage'), { recursive: true });
+    writeFileSync(join(repo.mcHome, 'worktrees', 'repo', 'unignored-generated', 'coverage', 'index.html'), 'coverage\n');
+
+    writeRegistry(repo.mcHome, [
+      makeEntry({
+        name: 'old-generated',
+        branch: 'sess/old-generated',
+        worktree_path: join(repo.mcHome, 'worktrees', 'repo', 'old-generated'),
+        session_state: 'idle',
+        created_at: oldIso,
+      }),
+      makeEntry({
+        name: 'recent-generated',
+        branch: 'sess/recent-generated',
+        worktree_path: join(repo.mcHome, 'worktrees', 'repo', 'recent-generated'),
+        session_state: 'idle',
+        created_at: oldIso,
+        last_activity: recentIso,
+      }),
+      makeEntry({
+        name: 'unignored-generated',
+        branch: 'sess/unignored-generated',
+        worktree_path: join(repo.mcHome, 'worktrees', 'repo', 'unignored-generated'),
+        session_state: 'idle',
+        created_at: oldIso,
+      }),
+    ]);
+
+    const r = runMc(['storage', 'prune-generated', '--apply', '--json'], {
+      cwd: repo.dir,
+      env: { MC_HOME: repo.mcHome, MC_ORPHAN_PID_DIR: pidDir },
+    });
+
+    assert.equal(r.status, 0, `stderr:${r.stderr}`);
+    const j = parseJsonOrNull(r.stdout);
+    assert.equal(j.dry_run, false);
+    assert.deepEqual(j.removed.map((item) => item.name), ['old-generated']);
+    assert.deepEqual(j.failed, []);
+    assert.equal(existsSync(join(repo.mcHome, 'worktrees', 'repo', 'old-generated', '.next')), false);
+    assert.equal(existsSync(join(repo.mcHome, 'worktrees', 'repo', 'recent-generated', '.next')), true);
+    assert.equal(existsSync(join(repo.mcHome, 'worktrees', 'repo', 'unignored-generated', 'coverage')), true);
+  });
 });

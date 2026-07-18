@@ -80,6 +80,7 @@ Under the hood: `mc` runs the tool in a PTY it owns, with your terminal piped tr
 | `mc doctor [--json]` | Diagnose local mc memory/storage state |
 | `mc storage status\|candidates\|explain` | Inspect runtime/worktree storage without mutating |
 | `mc storage prune-deps --dry-run\|--apply` | Prune old inactive worktree `node_modules` directories |
+| `mc storage prune-generated --dry-run\|--apply` | Prune old ignored worktree build/cache directories |
 | `mc gc [--dry-run]` | Reap registry-dead + merged + clean worktrees |
 | `mc gc --runtime [--dry-run]` | Reap stale runtime pid/socket sidecars |
 | `mc gc --stale-worktrees [--dry-run]` | Reap clean + merged worktrees with no live broker |
