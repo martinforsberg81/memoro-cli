@@ -1,6 +1,6 @@
 import test, { afterEach, beforeEach, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { runMc, parseJsonOrNull } from '../_helpers/cli.js';
@@ -67,6 +67,41 @@ describe('mc storage / doctor', () => {
   });
 
   test('storage candidates exposes the same stale worktree policy as gc', () => {
+    writeFileSync(join(repo.dir, 'large.bin'), 'x'.repeat(128 * 1024));
+    git(repo.dir, 'add large.bin');
+    git(repo.dir, 'commit -q -m "Large base file"');
+    git(repo.dir, 'branch sess/big main');
+    const bigPath = join(repo.mcHome, 'worktrees', 'repo', 'big');
+    addWorktree(repo.dir, bigPath, 'sess/big');
+    writeRegistry(repo.mcHome, [
+      makeEntry({
+        name: 'done',
+        branch: 'sess/done',
+        worktree_path: join(repo.mcHome, 'worktrees', 'repo', 'done'),
+        session_state: 'idle',
+        coding_session_id: 'sess_done',
+        tool: 'codex',
+        tool_session_id: 'cx_done',
+      }),
+      makeEntry({
+        name: 'dirty',
+        branch: 'sess/dirty',
+        worktree_path: join(repo.mcHome, 'worktrees', 'repo', 'dirty'),
+        session_state: 'live',
+        coding_session_id: 'sess_dirty',
+        tool: 'codex',
+      }),
+      makeEntry({
+        name: 'big',
+        branch: 'sess/big',
+        worktree_path: bigPath,
+        session_state: 'idle',
+        coding_session_id: 'sess_big',
+        tool: 'codex',
+        tool_session_id: 'cx_big',
+      }),
+    ]);
+
     const r = runMc(['storage', 'candidates', '--json', '--min-age', '0s'], {
       cwd: repo.dir,
       env: { MC_HOME: repo.mcHome, MC_ORPHAN_PID_DIR: pidDir },
@@ -74,7 +109,9 @@ describe('mc storage / doctor', () => {
 
     assert.equal(r.status, 0, `stderr:${r.stderr}`);
     const j = parseJsonOrNull(r.stdout);
-    assert.deepEqual(j.stale_worktrees.map((item) => item.name), ['done']);
+    assert.deepEqual(j.stale_worktrees.map((item) => item.name), ['big', 'done']);
+    assert.ok(j.stale_worktrees[0].reclaimable_bytes > j.stale_worktrees[1].reclaimable_bytes);
+    assert.equal(typeof j.stale_worktrees[0].disk_bytes, 'number');
     assert.equal(j.runtime.sidecars.candidates.length, 1);
   });
 
@@ -105,5 +142,92 @@ describe('mc storage / doctor', () => {
     assert.ok(j.issues.some((issue) => issue.code === 'stale-runtime'));
     assert.ok(j.issues.some((issue) => issue.code === 'stale-worktrees'));
     assert.ok(j.issues.some((issue) => issue.code === 'provider-native-id-missing'));
+  });
+
+  test('storage repair --dry-run plans metadata repairs without mutating registry', () => {
+    const registryPath = join(repo.mcHome, 'registry.json');
+    const donePath = join(repo.mcHome, 'worktrees', 'repo', 'done');
+    const missingPath = join(repo.mcHome, 'worktrees', 'repo', 'missing');
+    writeRegistry(repo.mcHome, [
+      makeEntry({
+        name: 'live-stale',
+        branch: 'sess/done',
+        worktree_path: donePath,
+        session_state: 'live',
+        coding_session_id: 'sess_live_stale',
+        tool: 'codex',
+        tool_session_id: 'cx_live_stale',
+      }),
+      makeEntry({
+        name: 'missing',
+        branch: 'sess/missing',
+        worktree_path: missingPath,
+        session_state: 'idle',
+        coding_session_id: 'sess_missing',
+        tool: 'codex',
+        tool_session_id: 'cx_missing',
+      }),
+    ]);
+    const before = readFileSync(registryPath, 'utf8');
+
+    const r = runMc(['storage', 'repair', '--dry-run', '--json'], {
+      cwd: repo.dir,
+      env: { MC_HOME: repo.mcHome, MC_ORPHAN_PID_DIR: pidDir },
+    });
+
+    assert.equal(r.status, 0, `stderr:${r.stderr}`);
+    const j = parseJsonOrNull(r.stdout);
+    assert.equal(j.dry_run, true);
+    assert.deepEqual(j.actions.map((action) => action.type).sort(), [
+      'mark-idle',
+      'mark-worktree-missing',
+    ]);
+    assert.equal(readFileSync(registryPath, 'utf8'), before);
+  });
+
+  test('storage repair --apply writes safe registry metadata repairs', () => {
+    const donePath = join(repo.mcHome, 'worktrees', 'repo', 'done');
+    const missingPath = join(repo.mcHome, 'worktrees', 'repo', 'missing');
+    writeRegistry(repo.mcHome, [
+      makeEntry({
+        name: 'live-stale',
+        branch: 'sess/done',
+        worktree_path: donePath,
+        session_state: 'live',
+        coding_session_id: 'sess_live_stale',
+        tool: 'codex',
+        tool_session_id: 'cx_live_stale',
+      }),
+      makeEntry({
+        name: 'missing',
+        branch: 'sess/missing',
+        worktree_path: missingPath,
+        session_state: 'idle',
+        coding_session_id: 'sess_missing',
+        tool: 'codex',
+        tool_session_id: 'cx_missing',
+      }),
+    ]);
+
+    const r = runMc(['storage', 'repair', '--apply', '--json'], {
+      cwd: repo.dir,
+      env: { MC_HOME: repo.mcHome, MC_ORPHAN_PID_DIR: pidDir },
+    });
+
+    assert.equal(r.status, 0, `stderr:${r.stderr}`);
+    const j = parseJsonOrNull(r.stdout);
+    assert.equal(j.dry_run, false);
+    assert.deepEqual(j.applied.map((action) => action.type).sort(), [
+      'mark-idle',
+      'mark-worktree-missing',
+    ]);
+
+    const reg = JSON.parse(readFileSync(join(repo.mcHome, 'registry.json'), 'utf8'));
+    const live = reg.entries.find((entry) => entry.name === 'live-stale');
+    const missing = reg.entries.find((entry) => entry.name === 'missing');
+    assert.equal(live.session_state, 'idle');
+    assert.equal(missing.worktree_missing, true);
+    assert.ok(live.last_storage_repair_at);
+    assert.ok(missing.last_storage_repair_at);
   });
 });

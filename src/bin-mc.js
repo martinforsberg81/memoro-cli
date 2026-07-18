@@ -180,6 +180,8 @@ async function main() {
     return runDeviceFlow({ apiUrl });
   }
 
+  await maybeRunStartupRuntimeGc(argv);
+
   if (argv[0] === 'sessions') {
     const sub = argv[1];
     const rest = argv.slice(2);
@@ -258,6 +260,32 @@ export function shouldRefuseBareMcInPrimaryWorktree({
   return current === root || current.startsWith(`${root}/`);
 }
 
+export function shouldRunStartupRuntimeGc(argv = []) {
+  const cmd = argv[0] || null;
+  if (!cmd) return true;
+  return cmd === 'wrap' || ['new', 'open', 'resume', 'attach'].includes(cmd);
+}
+
+async function maybeRunStartupRuntimeGc(argv) {
+  if (!shouldRunStartupRuntimeGc(argv)) return;
+  try {
+    const [
+      { maybeRunAutomaticRuntimeGc },
+      { resolveStoragePolicy },
+    ] = await Promise.all([
+      import('./mc/storage-runtime-gc.js'),
+      import('./mc/storage-policy.js'),
+    ]);
+    const config = await readConfig();
+    await maybeRunAutomaticRuntimeGc({
+      policy: resolveStoragePolicy({ config }),
+    });
+  } catch {
+    // Startup cleanup is opportunistic. Explicit `mc storage` / `mc gc`
+    // commands surface details when the user wants diagnostics.
+  }
+}
+
 function printHelp() {
   console.log(`mc — grounded coding sessions
 
@@ -325,6 +353,10 @@ FLEET / ADVANCED
   mc reconcile [--apply]          Detect sessions shipped elsewhere
   mc doctor                       Diagnose local mc memory/storage state
   mc storage status|candidates    Inspect local runtime/worktree storage
+  mc storage repair [name] --dry-run|--apply
+                                  Preview/apply safe local metadata repairs
+  mc storage repair <name> --provider-backfill --apply
+                                  Backfill a provider-native resume id
   mc gc [--dry-run]               Reap registry-dead, merged, clean worktrees
   mc gc --runtime                 Reap stale runtime pid/socket sidecars
   mc gc --stale-worktrees         Reap clean, merged worktrees with no live broker

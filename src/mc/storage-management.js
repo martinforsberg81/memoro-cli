@@ -5,9 +5,10 @@ import { join } from 'node:path';
 import { mcHome } from './paths.js';
 import { readRegistry } from './registry.js';
 import { tryGit, primaryWorktree, branchExists } from './git.js';
-import { scanDaemons, DEFAULT_MIN_AGE_MS } from './orphan-daemons.js';
+import { scanDaemons, reapOrphans, DEFAULT_MIN_AGE_MS } from './orphan-daemons.js';
 import {
   DEFAULT_SIDECAR_MIN_AGE_MS,
+  reapRuntimeSidecars,
   scanRuntimeSidecars,
 } from './sidecar-cleanup.js';
 import { listLocalBrokerAndHostSessions } from './broker/session-hosts.js';
@@ -35,7 +36,8 @@ export async function buildStorageSnapshot({
   const worktrees = entries.map((entry) => classifyWorktreeEntry(entry, { liveIds }));
   const staleWorktrees = worktrees
     .filter((item) => item.cleanup_candidate)
-    .map((item) => item.entry);
+    .map((item) => enrichWorktreeCandidate(item.entry))
+    .sort(compareReclaimableCandidates);
 
   return {
     mc_home: mcDir,
@@ -83,6 +85,22 @@ export async function scanRuntimeCleanup({
   };
 }
 
+export function reapRuntimeCleanup(scan, {
+  reapDaemons = reapOrphans,
+  reapSidecars = reapRuntimeSidecars,
+} = {}) {
+  const daemons = reapDaemons(scan.daemons);
+  const sidecars = reapSidecars(scan.sidecars);
+  const daemonsOk = daemons.reaped.every((r) => r.signaled)
+    && daemons.unlinked.every((u) => u.removed);
+  return {
+    ok: daemonsOk && sidecars.ok,
+    daemons,
+    sidecars,
+    counts: scan.counts,
+  };
+}
+
 export async function staleWorktreeCandidates(registry = readRegistry(), {
   listSessions = listLocalBrokerAndHostSessions,
 } = {}) {
@@ -94,7 +112,7 @@ export async function staleWorktreeCandidates(registry = readRegistry(), {
     const candidate = staleWorktreeCandidate(entry, { liveIds });
     if (candidate) out.push(candidate);
   }
-  return out;
+  return out.sort(compareReclaimableCandidates);
 }
 
 export function staleWorktreeCandidate(entry, { liveIds = new Set() } = {}) {
@@ -105,6 +123,7 @@ export function staleWorktreeCandidate(entry, { liveIds = new Set() } = {}) {
     dirty_files: classified.git.dirty_files,
     ahead: classified.git.ahead,
     reason: classified.cleanup_reason,
+    ...worktreeReclaimEstimate(entry),
   };
 }
 
@@ -366,6 +385,28 @@ function duBytes(path) {
   return Number.isFinite(n) ? n * 1024 : null;
 }
 
+function enrichWorktreeCandidate(entry) {
+  return {
+    ...entry,
+    ...worktreeReclaimEstimate(entry),
+  };
+}
+
+function worktreeReclaimEstimate(entry) {
+  const diskBytes = duBytes(entry?.worktree_path);
+  return {
+    disk_bytes: diskBytes,
+    reclaimable_bytes: diskBytes,
+  };
+}
+
+function compareReclaimableCandidates(a, b) {
+  const reclaimA = Number.isFinite(Number(a?.reclaimable_bytes)) ? Number(a.reclaimable_bytes) : 0;
+  const reclaimB = Number.isFinite(Number(b?.reclaimable_bytes)) ? Number(b.reclaimable_bytes) : 0;
+  if (reclaimA !== reclaimB) return reclaimB - reclaimA;
+  return String(a?.name || '').localeCompare(String(b?.name || ''));
+}
+
 function sidecarPathState(mcDir, sessionId) {
   const host = sessionHostPaths(sessionId);
   const guardDir = join(mcDir, 'guard-bin', sessionId);
@@ -383,6 +424,8 @@ function toWorktreeCandidateJson(entry) {
     reason: entry.reason || 'clean-merged-not-live',
     dirty_files: entry.dirty_files || 0,
     ahead: entry.ahead || 0,
+    disk_bytes: entry.disk_bytes ?? null,
+    reclaimable_bytes: entry.reclaimable_bytes ?? null,
   };
 }
 

@@ -5,6 +5,12 @@ import {
   buildStorageSnapshot,
   explainSessionStorage,
 } from '../storage-management.js';
+import {
+  applyStorageRepairPlan,
+  buildStorageRepairPlan,
+} from '../storage-repair.js';
+import { parseDurationMs } from '../storage-policy.js';
+import { readRegistry } from '../registry.js';
 
 export async function run(argv) {
   const opts = parseArgs(argv);
@@ -23,6 +29,26 @@ export async function run(argv) {
     if (opts.json) console.log(JSON.stringify({ ok: true, ...detail }, null, 2));
     else printExplain(detail);
     return 0;
+  }
+
+  if (opts.verb === 'repair') {
+    const registry = readRegistry();
+    const plan = await buildStorageRepairPlan({
+      registry,
+      includeProviderBackfill: opts.providerBackfill,
+      names: opts.name ? [opts.name] : null,
+    });
+    if (opts.dryRun) {
+      const out = { dry_run: true, ...plan };
+      if (opts.json) console.log(JSON.stringify(out, null, 2));
+      else printRepair(out);
+      return 0;
+    }
+    const result = applyStorageRepairPlan(registry, plan);
+    const out = { dry_run: false, ...result };
+    if (opts.json) console.log(JSON.stringify(out, null, 2));
+    else printRepair(out);
+    return result.ok ? 0 : 1;
   }
 
   const snapshot = await buildStorageSnapshot({ minAgeMs: opts.minAgeMs });
@@ -47,22 +73,31 @@ function parseArgs(argv) {
     name: null,
     json: false,
     minAgeMs: undefined,
+    dryRun: false,
+    apply: false,
+    providerBackfill: false,
   };
   const args = [...argv];
   if (args[0] && !args[0].startsWith('-')) {
     opts.verb = args.shift();
   }
-  if (!['status', 'candidates', 'explain'].includes(opts.verb)) {
-    return { error: 'usage: mc storage [status|candidates|explain <name>] [--json] [--min-age <duration>]' };
+  if (!['status', 'candidates', 'explain', 'repair'].includes(opts.verb)) {
+    return { error: 'usage: mc storage [status|candidates|explain <name>|repair [name]] [--json] [--min-age <duration>]' };
   }
   if (opts.verb === 'explain') {
     const name = args.shift();
     if (!name || name.startsWith('-')) return { error: 'usage: mc storage explain <name> [--json]' };
     opts.name = name;
   }
+  if (opts.verb === 'repair' && args[0] && !args[0].startsWith('-')) {
+    opts.name = args.shift();
+  }
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a === '--json') { opts.json = true; continue; }
+    if (a === '--dry-run') { opts.dryRun = true; continue; }
+    if (a === '--apply') { opts.apply = true; continue; }
+    if (a === '--provider-backfill') { opts.providerBackfill = true; continue; }
     if (a === '--min-age') {
       const ms = parseDurationMs(args[++i]);
       if (ms == null) return { error: `--min-age expects a duration like 5m / 30s / 1h, got "${args[i]}"` };
@@ -70,6 +105,16 @@ function parseArgs(argv) {
       continue;
     }
     return { error: `unknown flag: ${a}` };
+  }
+  if (opts.dryRun && opts.apply) return { error: '--dry-run and --apply cannot be combined' };
+  if (opts.verb === 'repair' && !opts.dryRun && !opts.apply) {
+    return { error: 'mc storage repair requires --dry-run or --apply' };
+  }
+  if (opts.verb !== 'repair' && (opts.dryRun || opts.apply)) {
+    return { error: '--dry-run and --apply are only valid with mc storage repair' };
+  }
+  if (opts.verb !== 'repair' && opts.providerBackfill) {
+    return { error: '--provider-backfill is only valid with mc storage repair' };
   }
   return opts;
 }
@@ -102,7 +147,19 @@ function printCandidates(out) {
   process.stdout.write(`runtime candidates  ${runtimeCount}\n`);
   process.stdout.write(`stale worktrees     ${out.stale_worktrees.length}\n`);
   for (const item of out.stale_worktrees) {
-    process.stdout.write(`  ${item.name}  ${item.branch}\n`);
+    process.stdout.write(`  ${item.name}  ${item.branch}  ${formatBytes(item.reclaimable_bytes)}\n`);
+  }
+}
+
+function printRepair(out) {
+  const actions = out.actions || out.applied || [];
+  if (!actions.length) {
+    process.stdout.write('(no storage repairs)\n');
+    return;
+  }
+  for (const action of actions) {
+    const status = out.dry_run ? 'would' : 'applied';
+    process.stdout.write(`${status} ${action.type}  ${action.name}  ${action.reason}\n`);
   }
 }
 
@@ -115,19 +172,6 @@ function printExplain(detail) {
   process.stdout.write(`  worktree     ${detail.git.exists ? detail.git.worktree_path : 'missing'}\n`);
   process.stdout.write(`  dirty/ahead  ${detail.git.dirty_files ?? '-'}/${detail.git.ahead ?? '-'}\n`);
   process.stdout.write(`  cleanup      ${detail.cleanup_candidate ? detail.cleanup_reason : 'not-a-candidate'}\n`);
-}
-
-function parseDurationMs(spec) {
-  if (spec == null) return null;
-  const m = String(spec).trim().match(/^(\d+)([smhd])?$/i);
-  if (!m) return null;
-  const n = Number(m[1]);
-  const unit = (m[2] || 's').toLowerCase();
-  if (unit === 's') return n * 1000;
-  if (unit === 'm') return n * 60_000;
-  if (unit === 'h') return n * 3_600_000;
-  if (unit === 'd') return n * 86_400_000;
-  return null;
 }
 
 function formatBytes(value) {
