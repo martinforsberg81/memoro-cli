@@ -159,14 +159,14 @@ function buildMissingPrunePlan(registry, {
   const candidates = [];
   for (const entry of registry?.entries || []) {
     if (entry?.worktree_missing !== true) continue;
-    const markedAtMs = missingMarkedAtMs(entry);
-    const ageMs = Number.isFinite(markedAtMs) ? Math.max(0, nowMs - markedAtMs) : Infinity;
+    const anchorMs = missingRetentionAnchorMs(entry);
+    const ageMs = Number.isFinite(anchorMs) ? Math.max(0, nowMs - anchorMs) : Infinity;
     if (ageMs < olderThanMs) continue;
     candidates.push({
       name: entry.name,
       branch: entry.branch || null,
       worktree_path: entry.worktree_path || null,
-      marked_at: Number.isFinite(markedAtMs) ? new Date(markedAtMs).toISOString() : null,
+      retention_anchor_at: Number.isFinite(anchorMs) ? new Date(anchorMs).toISOString() : null,
       age_ms: Number.isFinite(ageMs) ? ageMs : null,
     });
   }
@@ -195,17 +195,21 @@ function applyMissingPrunePlan(registry, plan, {
   };
 }
 
-function missingMarkedAtMs(entry) {
+function missingRetentionAnchorMs(entry) {
+  let latest = null;
   for (const value of [
-    entry?.last_storage_repair_at,
     entry?.last_opened_at,
+    entry?.last_observed_at,
     entry?.last_activity,
+    entry?.last_exit_at,
+    entry?.last_started_at,
     entry?.created_at,
   ]) {
     const parsed = Date.parse(value);
-    if (Number.isFinite(parsed)) return parsed;
+    if (!Number.isFinite(parsed)) continue;
+    if (latest == null || parsed > latest) latest = parsed;
   }
-  return null;
+  return latest;
 }
 
 function resolveNowMs(now) {

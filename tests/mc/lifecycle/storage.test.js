@@ -235,24 +235,29 @@ describe('mc storage / doctor', () => {
     const registryPath = join(repo.mcHome, 'registry.json');
     const oldIso = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString();
     const recentIso = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    const repairIso = new Date().toISOString();
     writeRegistry(repo.mcHome, [
       makeEntry({
         name: 'old-missing',
         branch: 'sess/old-missing',
         worktree_missing: true,
-        last_storage_repair_at: oldIso,
+        created_at: oldIso,
+        last_storage_repair_at: repairIso,
       }),
       makeEntry({
         name: 'recent-missing',
         branch: 'sess/recent-missing',
         worktree_missing: true,
-        last_storage_repair_at: recentIso,
+        created_at: oldIso,
+        last_opened_at: recentIso,
+        last_storage_repair_at: repairIso,
       }),
       makeEntry({
         name: 'present',
         branch: 'sess/present',
         worktree_missing: false,
-        last_storage_repair_at: oldIso,
+        created_at: oldIso,
+        last_storage_repair_at: repairIso,
       }),
     ]);
     const before = readFileSync(registryPath, 'utf8');
@@ -266,30 +271,36 @@ describe('mc storage / doctor', () => {
     const j = parseJsonOrNull(r.stdout);
     assert.equal(j.dry_run, true);
     assert.deepEqual(j.candidates.map((item) => item.name), ['old-missing']);
+    assert.equal(j.candidates[0].retention_anchor_at, oldIso);
     assert.equal(readFileSync(registryPath, 'utf8'), before);
   });
 
   test('storage prune-missing --apply removes matching tombstones only', () => {
     const oldIso = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString();
     const recentIso = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    const repairIso = new Date().toISOString();
     writeRegistry(repo.mcHome, [
       makeEntry({
         name: 'old-missing',
         branch: 'sess/old-missing',
         worktree_missing: true,
-        last_storage_repair_at: oldIso,
+        created_at: oldIso,
+        last_storage_repair_at: repairIso,
       }),
       makeEntry({
         name: 'recent-missing',
         branch: 'sess/recent-missing',
         worktree_missing: true,
-        last_storage_repair_at: recentIso,
+        created_at: oldIso,
+        last_opened_at: recentIso,
+        last_storage_repair_at: repairIso,
       }),
       makeEntry({
         name: 'present',
         branch: 'sess/present',
         worktree_missing: false,
-        last_storage_repair_at: oldIso,
+        created_at: oldIso,
+        last_storage_repair_at: repairIso,
       }),
     ]);
 
