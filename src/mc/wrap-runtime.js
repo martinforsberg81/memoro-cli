@@ -18,12 +18,22 @@ export function buildSessionMeta({
   repoContext,
   cwd,
   pid,
+  tool = null,
+  source = null,
+  toolSessionId = null,
+  transcriptPath = null,
   now = new Date(),
 } = {}) {
   if (!codingSessionId) throw new Error('buildSessionMeta: codingSessionId required');
   return {
+    runtime_manifest_version: 1,
+    cleanup_owner: 'mc',
     coding_session_id: codingSessionId,
     label,
+    tool,
+    source,
+    tool_session_id: toolSessionId,
+    tool_transcript_path: transcriptPath,
     sock_path: sockPath || null,
     repo: deriveRepoName(repoContext),
     branch: repoContext?.branch || null,

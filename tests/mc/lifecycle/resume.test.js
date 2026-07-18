@@ -431,6 +431,95 @@ describe('mc resume <name>', () => {
     }
   });
 
+  test('direct resume backfills provider-native id from a matching transcript', async () => {
+    const old = process.env.MC_TEST_MODE;
+    delete process.env.MC_TEST_MODE;
+    const resumed = [];
+    const upserts = [];
+    try {
+      const status = await runResume(['data'], {
+        stdout: { write() {} },
+        stderr: { write() {} },
+        findEntry: () => makeEntry({
+          name: 'data',
+          branch: 'sess/data',
+          worktree_path: '/tmp/data',
+          coding_session_id: 'sess_data',
+          session_state: 'live',
+          tool: 'codex',
+        }),
+        requestBroker: async () => ({ ok: true, sessions: [] }),
+        fetchActiveSessions: async () => ({ ok: true, sessions: [] }),
+        resolveToolSessionForResume: async ({ entry, launchTool }) => ({
+          ok: true,
+          from: 'transcript',
+          source: launchTool.id,
+          sessionId: 'cx_discovered',
+          transcriptPath: '/tmp/codex.jsonl',
+          entry,
+        }),
+        launchResumeSession: ({ entry }) => {
+          resumed.push(entry);
+          return 0;
+        },
+        upsertEntry: (patch) => {
+          upserts.push(patch);
+          return patch;
+        },
+      });
+
+      assert.equal(status, 0);
+      assert.equal(resumed.length, 1);
+      assert.equal(resumed[0].tool_session_id, 'cx_discovered');
+      assert.equal(resumed[0].tool_session_source, 'codex');
+      assert.equal(resumed[0].tool_transcript_path, '/tmp/codex.jsonl');
+      assert.deepEqual(upserts[0], {
+        name: 'data',
+        tool_session_id: 'cx_discovered',
+        tool_session_source: 'codex',
+        tool_transcript_path: '/tmp/codex.jsonl',
+      });
+    } finally {
+      if (old === undefined) delete process.env.MC_TEST_MODE;
+      else process.env.MC_TEST_MODE = old;
+    }
+  });
+
+  test('--json includes provider-native id backfilled from transcript', async () => {
+    const stdout = [];
+    const upserts = [];
+    const status = await runResume(['data', '--no-launch', '--json'], {
+      stdout: { write: (s) => stdout.push(s) },
+      stderr: { write() {} },
+      findEntry: () => makeEntry({
+        name: 'data',
+        branch: 'sess/data',
+        worktree_path: '/tmp/data',
+        coding_session_id: 'sess_data',
+        session_state: 'live',
+        tool: 'codex',
+      }),
+      resolveToolSessionForResume: async () => ({
+        ok: true,
+        from: 'transcript',
+        source: 'codex',
+        sessionId: 'cx_discovered',
+        transcriptPath: '/tmp/codex.jsonl',
+      }),
+      upsertEntry: (patch) => {
+        upserts.push(patch);
+        return patch;
+      },
+    });
+
+    assert.equal(status, 0);
+    const j = JSON.parse(stdout.join(''));
+    assert.equal(j.tool_session_id, 'cx_discovered');
+    assert.equal(j.tool_session_source, 'codex');
+    assert.equal(j.tool_transcript_path, '/tmp/codex.jsonl');
+    assert.equal(upserts.length, 1);
+  });
+
   test('direct resume does not ask before native provider resume', async () => {
     const old = process.env.MC_TEST_MODE;
     delete process.env.MC_TEST_MODE;

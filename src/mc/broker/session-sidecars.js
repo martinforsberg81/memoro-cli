@@ -78,8 +78,14 @@ export class BrokerSessionSidecars {
     if (!this.coding.metaPath) return;
     mkdirSync(dirname(this.coding.metaPath), { recursive: true, mode: 0o700 });
     writeFileSync(this.coding.metaPath, JSON.stringify({
+      runtime_manifest_version: 1,
+      cleanup_owner: 'mc',
       coding_session_id: this.coding.codingSessionId,
       label: this.coding.label || null,
+      tool: this.coding.tool || null,
+      source: this._codingSource(),
+      tool_session_id: this.coding.toolSessionId || this.coding.tool_session_id || null,
+      tool_transcript_path: this.coding.transcriptPath || this.coding.tool_transcript_path || null,
       sock_path: this.coding.sockPath || null,
       repo: this.coding.repo || null,
       repo_ref: this.coding.repoRef || this.coding.repo_ref || null,

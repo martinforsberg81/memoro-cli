@@ -75,6 +75,10 @@ export async function run(rawArgv, deps = {}) {
     return 1;
   }
   entry = maybeObserveEntry(entry, deps);
+  entry = await maybeBackfillToolSession(entry, {
+    upsert: deps.upsertEntry || upsertEntry,
+    deps,
+  });
   const firstLaunchInWorktree = !hasStoredToolSession(entry);
 
   const toolValidation = validateToolFlag(opts.tool);
@@ -144,6 +148,9 @@ export async function run(rawArgv, deps = {}) {
       tool: entry.tool || DEFAULT_TOOL,
       worktree_path: entry.worktree_path || null,
       coding_session_id: entry.coding_session_id || null,
+      tool_session_id: entry.tool_session_id || null,
+      tool_session_source: entry.tool_session_source || null,
+      tool_transcript_path: entry.tool_transcript_path || null,
       current_branch: entry.current_branch || null,
       original_branch: entry.original_branch || entry.branch || null,
       observed_head: entry.observed_head || null,
@@ -435,6 +442,14 @@ export async function resumeSelectedChoice(choice, {
   }
 
   let entry = maybeObserveEntry(choice, deps);
+  const backfillDeps = {
+    ...deps,
+    ...(hasInjectedPickerRuntime({ launch, freshLaunchOverride, attachLive, upsert }) ? { __injectedRuntime: true } : {}),
+  };
+  entry = await maybeBackfillToolSession(entry, {
+    upsert,
+    deps: backfillDeps,
+  });
   const firstLaunchInWorktree = !hasStoredToolSession(entry);
   const freshLaunch = freshLaunchDependency({
     launchFreshSession: freshLaunchOverride,
@@ -496,6 +511,43 @@ function markEntryOpened(entry, { upsert = upsertEntry, now = () => new Date().t
     return { ...entry, last_opened_at: openedAt };
   } catch {
     return { ...entry, last_opened_at: openedAt };
+  }
+}
+
+async function maybeBackfillToolSession(entry, {
+  upsert = upsertEntry,
+  deps = {},
+} = {}) {
+  if (!entry?.name || hasProviderToolSession(entry)) return entry;
+  const hasInjectedResolver = hasInjectedToolSessionResolver(deps);
+  if (process.env.MC_TEST_MODE === '1' && !hasInjectedResolver) return entry;
+  if (hasInjectedRuntimeDeps(deps) && !hasInjectedResolver) {
+    return entry;
+  }
+  const launchTool = resolveToolInput(entry?.tool || DEFAULT_TOOL);
+  const resolver = deps.resolveToolSessionForResume || resolveToolSessionForResume;
+  let resolved = null;
+  try {
+    resolved = await resolver({
+      entry,
+      launchTool,
+      deps: deps.toolSessionDeps || deps,
+    });
+  } catch {
+    return entry;
+  }
+  if (!resolved?.ok || !nonEmpty(resolved.sessionId)) return entry;
+  const patch = {
+    name: entry.name,
+    tool_session_id: resolved.sessionId,
+    tool_session_source: resolved.source || null,
+    tool_transcript_path: resolved.transcriptPath || null,
+  };
+  try {
+    const next = upsert(patch);
+    return { ...entry, ...patch, ...(next || {}) };
+  } catch {
+    return { ...entry, ...patch };
   }
 }
 
@@ -571,6 +623,50 @@ function hasStoredToolSession(entry) {
     || nonEmpty(entry?.provider_session_id)
     || nonEmpty(entry?.llm_session_id)
   );
+}
+
+function hasProviderToolSession(entry) {
+  return !!(
+    nonEmpty(entry?.tool_session_id)
+    || nonEmpty(entry?.provider_session_id)
+    || nonEmpty(entry?.llm_session_id)
+  );
+}
+
+function hasInjectedToolSessionResolver(deps = {}) {
+  return !!(
+    deps.resolveToolSessionForResume
+    || deps.findLatestTranscriptForTool
+    || deps.toolSessionDeps?.findLatestTranscriptForTool
+  );
+}
+
+function hasInjectedRuntimeDeps(deps = {}) {
+  if (deps.__injectedRuntime) return true;
+  return [
+    'findEntry',
+    'readRegistry',
+    'fetchActiveSessions',
+    'launchResumeSession',
+    'launchFreshSession',
+    'attachLiveBrokerSession',
+    'requestBroker',
+    'upsertEntry',
+    'listLocalBrokerAndHostSessions',
+    'observeEntryWorktree',
+  ].some((key) => Object.prototype.hasOwnProperty.call(deps, key));
+}
+
+function hasInjectedPickerRuntime({
+  launch,
+  freshLaunchOverride,
+  attachLive,
+  upsert,
+} = {}) {
+  return launch !== launchResumeSession
+    || !!freshLaunchOverride
+    || attachLive !== attachBrokerSession
+    || upsert !== upsertEntry;
 }
 
 function freshLaunchDependency(deps = {}) {

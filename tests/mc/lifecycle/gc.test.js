@@ -15,6 +15,7 @@
  */
 import test, { describe, after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { runMc, parseJsonOrNull } from '../_helpers/cli.js';
@@ -28,6 +29,10 @@ function setupFixture(repo) {
     const wt = join(repo.mcHome, 'worktrees', 'repo', n);
     addWorktree(repo.dir, wt, `sess/${n}`);
   }
+  writeFileSync(join(repo.mcHome, 'worktrees', 'repo', 'gc2', 'dirty.txt'), 'dirty\n');
+  writeFileSync(join(repo.mcHome, 'worktrees', 'repo', 'gc4', 'ahead.txt'), 'ahead\n');
+  git(join(repo.mcHome, 'worktrees', 'repo', 'gc4'), 'add ahead.txt');
+  git(join(repo.mcHome, 'worktrees', 'repo', 'gc4'), 'commit -q -m "Ahead work"');
   writeRegistry(repo.mcHome, [
     makeEntry({
       name: 'gc1', branch: 'sess/gc1',
@@ -103,5 +108,106 @@ describe('mc gc', () => {
       assert.ok(wts.includes(`/worktrees/repo/${n}`),
         `worktree ${n} should be preserved`);
     }
+  });
+
+  test('--sidecars --dry-run reports stale runtime sidecars without removing them', () => {
+    const hostDir = join(repo.mcHome, 'hosts', 'sess_stale_host');
+    const guardDir = join(repo.mcHome, 'guard-bin', 'sess_stale_guard');
+    mkdirSync(hostDir, { recursive: true });
+    mkdirSync(guardDir, { recursive: true });
+
+    const r = runMc(['gc', '--sidecars', '--dry-run', '--json', '--min-age', '0s'], {
+      cwd: repo.dir, env: { MC_HOME: repo.mcHome },
+    });
+
+    assert.equal(r.status, 0, `stderr:${r.stderr}`);
+    const j = parseJsonOrNull(r.stdout);
+    assert.equal(j.dry_run, true);
+    assert.deepEqual(j.candidates.map((item) => [item.kind, item.session_id]).sort(), [
+      ['guard-bin', 'sess_stale_guard'],
+      ['host', 'sess_stale_host'],
+    ]);
+    assert.equal(existsSync(hostDir), true);
+    assert.equal(existsSync(guardDir), true);
+  });
+
+  test('--sidecars --dry-run --json flushes payloads larger than a pipe buffer', () => {
+    const hostRoot = join(repo.mcHome, 'hosts');
+    for (let i = 0; i < 450; i++) {
+      mkdirSync(join(hostRoot, `sess_bulk_${String(i).padStart(3, '0')}`), { recursive: true });
+    }
+
+    const r = runMc(['gc', '--sidecars', '--dry-run', '--json', '--min-age', '0s'], {
+      cwd: repo.dir,
+      env: { MC_HOME: repo.mcHome },
+      timeoutMs: 20_000,
+    });
+
+    assert.equal(r.status, 0, `stderr:${r.stderr}`);
+    const j = parseJsonOrNull(r.stdout);
+    assert.ok(j, `expected complete JSON, got ${r.stdout.length} bytes ending with ${JSON.stringify(r.stdout.slice(-80))}`);
+    assert.equal(j.candidates.length, 450);
+  });
+
+  test('--runtime --dry-run reports stale sidecars and stale daemon pidfiles', () => {
+    const pidDir = join(repo.root, 'pids');
+    mkdirSync(pidDir, { recursive: true });
+    writeFileSync(join(pidDir, 'heartbeat-llm_stale.pid'), '99999999\n');
+    const hostDir = join(repo.mcHome, 'hosts', 'sess_runtime_stale');
+    mkdirSync(hostDir, { recursive: true });
+
+    const r = runMc(['gc', '--runtime', '--dry-run', '--json', '--min-age', '0s'], {
+      cwd: repo.dir,
+      env: { MC_HOME: repo.mcHome, MC_ORPHAN_PID_DIR: pidDir },
+    });
+
+    assert.equal(r.status, 0, `stderr:${r.stderr}`);
+    const j = parseJsonOrNull(r.stdout);
+    assert.equal(j.dry_run, true);
+    assert.equal(j.runtime.daemons.stale.length, 1);
+    assert.equal(j.runtime.sidecars.candidates.length, 1);
+  });
+
+  test('--stale-worktrees derives clean merged candidates from actual git state', () => {
+    const r = runMc(['gc', '--stale-worktrees', '--dry-run', '--json'], {
+      cwd: repo.dir, env: { MC_HOME: repo.mcHome },
+    });
+
+    assert.equal(r.status, 0, `stderr:${r.stderr}`);
+    const j = parseJsonOrNull(r.stdout);
+    assert.deepEqual(j.candidates.map((item) => item.name).sort(), ['gc1', 'gc3']);
+    assert.ok(j.candidates.every((item) => item.reason === 'clean-merged-not-live'));
+  });
+
+  test('--all-safe requires explicit dry-run or apply', () => {
+    const r = runMc(['gc', '--all-safe', '--json'], {
+      cwd: repo.dir,
+      env: { MC_HOME: repo.mcHome, MC_ORPHAN_PID_DIR: join(repo.root, 'pids') },
+    });
+    assert.equal(r.status, 2);
+    assert.match(r.stderr, /--all-safe requires --dry-run or --apply/);
+  });
+
+  test('--all-safe --apply reaps runtime and clean merged non-live worktrees only', () => {
+    const pidDir = join(repo.root, 'pids');
+    mkdirSync(pidDir, { recursive: true });
+    const hostDir = join(repo.mcHome, 'hosts', 'sess_runtime_stale');
+    mkdirSync(hostDir, { recursive: true });
+
+    const r = runMc(['gc', '--all-safe', '--apply', '--json', '--min-age', '0s'], {
+      cwd: repo.dir,
+      env: { MC_HOME: repo.mcHome, MC_ORPHAN_PID_DIR: pidDir },
+      timeoutMs: 20_000,
+    });
+
+    assert.equal(r.status, 0, `stderr:${r.stderr}`);
+    const j = parseJsonOrNull(r.stdout);
+    assert.equal(j.ok, true);
+    assert.deepEqual(j.worktrees.removed.map((item) => item.name).sort(), ['gc1', 'gc3']);
+    assert.equal(existsSync(hostDir), false);
+
+    const wts = git(repo.dir, 'worktree list --porcelain');
+    assert.ok(wts.includes('/worktrees/repo/gc2'), 'dirty worktree should be preserved');
+    assert.ok(wts.includes('/worktrees/repo/gc4'), 'ahead worktree should be preserved');
   });
 });
