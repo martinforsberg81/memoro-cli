@@ -10,10 +10,6 @@
  *                                                       — analyse + suggest
  *                                                         next step per
  *                                                         session
- *   mc.md                          /mc map               — run the /mc map
- *                                                         reconciliation
- *                                                         habit in-session
- *
  * All files carry the same `<!-- memoro:managed:command -->` marker the
  * existing adapter uses, so `memoro-cli hook uninstall` cleans them up.
  */
@@ -60,8 +56,7 @@ Where:
 
 - **label** appears if set; otherwise the \`sess_xxx\` id
 - **status** is one of: ACTIVE (output in last few seconds), \`idle Nm\`
-  (no output for N minutes, likely awaiting input), or \`unknown\` for
-  legacy sessions
+  (no output for N minutes, likely awaiting input), or \`unknown\`
 - **one-line summary** is plain English from the excerpt — what the
   session looks like it's working on. If the excerpt shows an obvious
   paused prompt (menu, question, choice), call it out explicitly with
@@ -90,8 +85,9 @@ Skip your own session in the list (or mark it as "(this session)").
   back unless asked.
 - If the user wants per-session **suggestions for next step**, recommend
   they run \`/memoro-coordinator-suggest\` — that command is built for it.
-- If the user wants to reconcile the roadmap after shipped or redirected
-  work, recommend \`/mc map\`.
+- If the user wants to change their durable coding-agent work method, recommend
+  \`mc coding-profile read\`, then \`mc coding-profile diff\`, then
+  \`mc coding-profile write\`.
 
 You are the user's project lead across their parallel work. Be concise
 and decisive.
@@ -146,19 +142,6 @@ Be concise. The user has many sessions and limited attention.
 `;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// /mc map — in-session MEMORO.md reconciliation habit
-// ─────────────────────────────────────────────────────────────────────────────
-
-const COMMAND_BODY_MAP = `---
-description: Update MEMORO.md if needed
----
-
-${COMMAND_MARKER}
-
-Update \`MEMORO.md\` if needed.
-`;
-
-// ─────────────────────────────────────────────────────────────────────────────
 // Installer
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -198,30 +181,16 @@ async function removeManagedFile(name) {
   }
 }
 
-async function isManagedFile(name) {
-  const path = join(COMMANDS_DIR(), name);
-  try {
-    if (!existsSync(path)) return false;
-    const existing = await readFile(path, 'utf8');
-    return existing.includes(COMMAND_MARKER);
-  } catch {
-    return false;
-  }
-}
-
 export async function ensureCoordinatorSlashCommand() {
   await ensureFile('memoro-coordinator.md', COMMAND_BODY);
   await ensureFile('memoro-coordinator-suggest.md', COMMAND_BODY_SUGGEST);
-  await ensureFile('mc.md', COMMAND_BODY_MAP);
-  if (await isManagedFile('mc.md')) {
-    await removeManagedFile('memoro-map.md');
-  }
+  await removeManagedFile('mc.md');
+  await removeManagedFile('memoro-map.md');
 }
 
 // Exported for tests.
 export const __test__ = {
   COMMAND_BODY,
   COMMAND_BODY_SUGGEST,
-  COMMAND_BODY_MAP,
   COMMAND_MARKER,
 };

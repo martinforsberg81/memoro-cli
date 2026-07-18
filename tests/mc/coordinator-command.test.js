@@ -33,8 +33,11 @@ describe('coordinator slash command body', () => {
     assert.match(__test__.COMMAND_BODY, /\/memoro-coordinator-suggest/);
   });
 
-  test('points users at /mc map for map reconciliation', () => {
-    assert.match(__test__.COMMAND_BODY, /\/mc map/);
+  test('points durable work-method changes at mc coding-profile', () => {
+    assert.match(__test__.COMMAND_BODY, /mc coding-profile read/);
+    assert.match(__test__.COMMAND_BODY, /mc coding-profile diff/);
+    assert.match(__test__.COMMAND_BODY, /mc coding-profile write/);
+    assert.doesNotMatch(__test__.COMMAND_BODY, /\/mc map/);
     assert.doesNotMatch(__test__.COMMAND_BODY, /\/memoro-map/);
   });
 
@@ -71,63 +74,43 @@ describe('coordinator-suggest slash command body', () => {
   });
 });
 
-describe('/mc map slash command body', () => {
-  test('carries the managed marker and frontmatter', () => {
-    assert.ok(__test__.COMMAND_BODY_MAP.includes(__test__.COMMAND_MARKER));
-    assert.match(__test__.COMMAND_BODY_MAP, /^---\ndescription:/);
-  });
-
-  test('implements the /mc map in-session habit', () => {
-    assert.match(__test__.COMMAND_BODY_MAP, /Update `MEMORO\.md` if needed\./);
-  });
-
-  test('keeps the command prompt concise', () => {
-    assert.doesNotMatch(__test__.COMMAND_BODY_MAP, /\$ARGUMENTS/);
-    assert.doesNotMatch(__test__.COMMAND_BODY_MAP, /!\s*git status/);
-    assert.doesNotMatch(__test__.COMMAND_BODY_MAP, /Gather Bounded Evidence/);
-    assert.doesNotMatch(__test__.COMMAND_BODY_MAP, /focused unified diff/);
-    assert.doesNotMatch(__test__.COMMAND_BODY_MAP, /No map change/);
-    assert.doesNotMatch(__test__.COMMAND_BODY_MAP, /Do not scan secrets/);
-    assert.doesNotMatch(__test__.COMMAND_BODY_MAP, /\.env/);
-    assert.doesNotMatch(__test__.COMMAND_BODY_MAP, /broad transcripts/);
-    assert.doesNotMatch(__test__.COMMAND_BODY_MAP, /mc end/);
-  });
-});
-
 describe('coordinator slash command installer', () => {
-  test('installs the managed /mc command alongside coordinator commands', async () => {
+  test('installs coordinator commands without a managed /mc map command', async () => {
     const sandbox = mkdtempSync(join(tmpdir(), 'mc-coord-commands-'));
     const oldHome = process.env.HOME;
     process.env.HOME = sandbox;
     try {
       await ensureCoordinatorSlashCommand();
-      const mapCommand = readFileSync(join(sandbox, '.claude', 'commands', 'mc.md'), 'utf8');
-      assert.match(mapCommand, /Update `MEMORO\.md` if needed\./);
-      assert.match(mapCommand, /memoro:managed:command/);
+      const coordinatorCommand = readFileSync(join(sandbox, '.claude', 'commands', 'memoro-coordinator.md'), 'utf8');
+      assert.match(coordinatorCommand, /memoro:managed:command/);
+      assert.equal(existsSync(join(sandbox, '.claude', 'commands', 'memoro-coordinator-suggest.md')), true);
+      assert.equal(existsSync(join(sandbox, '.claude', 'commands', 'mc.md')), false);
     } finally {
       process.env.HOME = oldHome;
       rmSync(sandbox, { recursive: true, force: true });
     }
   });
 
-  test('removes the legacy managed /memoro-map command', async () => {
+  test('removes old managed map commands', async () => {
     const sandbox = mkdtempSync(join(tmpdir(), 'mc-coord-commands-'));
     const oldHome = process.env.HOME;
     process.env.HOME = sandbox;
     try {
       mkdirSync(join(sandbox, '.claude', 'commands'), { recursive: true });
       const legacyPath = join(sandbox, '.claude', 'commands', 'memoro-map.md');
+      const mcPath = join(sandbox, '.claude', 'commands', 'mc.md');
       writeFileSync(legacyPath, `${__test__.COMMAND_MARKER}\nlegacy`, { mode: 0o644 });
+      writeFileSync(mcPath, `${__test__.COMMAND_MARKER}\nlegacy`, { mode: 0o644 });
       await ensureCoordinatorSlashCommand();
       assert.equal(existsSync(legacyPath), false);
-      assert.equal(existsSync(join(sandbox, '.claude', 'commands', 'mc.md')), true);
+      assert.equal(existsSync(mcPath), false);
     } finally {
       process.env.HOME = oldHome;
       rmSync(sandbox, { recursive: true, force: true });
     }
   });
 
-  test('does not remove a hand-authored legacy command', async () => {
+  test('does not remove a hand-authored old map command', async () => {
     const sandbox = mkdtempSync(join(tmpdir(), 'mc-coord-commands-'));
     const oldHome = process.env.HOME;
     process.env.HOME = sandbox;
@@ -159,7 +142,7 @@ describe('coordinator slash command installer', () => {
     }
   });
 
-  test('keeps legacy managed command when /mc is user-owned', async () => {
+  test('keeps user-owned /mc while removing old managed map command', async () => {
     const sandbox = mkdtempSync(join(tmpdir(), 'mc-coord-commands-'));
     const oldHome = process.env.HOME;
     process.env.HOME = sandbox;
@@ -171,7 +154,7 @@ describe('coordinator slash command installer', () => {
       writeFileSync(legacyPath, `${__test__.COMMAND_MARKER}\nlegacy`, { mode: 0o644 });
       await ensureCoordinatorSlashCommand();
       assert.equal(readFileSync(mcPath, 'utf8'), 'user-owned mc command');
-      assert.equal(existsSync(legacyPath), true);
+      assert.equal(existsSync(legacyPath), false);
     } finally {
       process.env.HOME = oldHome;
       rmSync(sandbox, { recursive: true, force: true });

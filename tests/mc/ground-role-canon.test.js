@@ -39,8 +39,10 @@ describe('buildRole — universal (package canon)', () => {
     assert.match(out, /altitude/i);
     assert.match(out, /context/i);        // purpose 1: protect context
     assert.match(out, /brief/i);          // purpose 2: brief-as-quality
-    assert.match(out, /\/mc map/);
-    assert.match(out, /update `MEMORO\.md` if needed/i);
+    assert.match(out, /mc coding-profile read/);
+    assert.match(out, /mc coding-profile diff/);
+    assert.match(out, /mc coding-profile write/);
+    assert.match(out, /Do not treat adapter files or repo roadmap files as profile truth/);
     assert.doesNotMatch(out, /No map change/);
     assert.doesNotMatch(out, /avoid secrets/);
     assert.doesNotMatch(out, /terminal `mc map` workflow/);

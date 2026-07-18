@@ -192,7 +192,12 @@ describe('byte-identity invariant (no setting + no server locale → English)', 
     const withSeam = fakeAdapter();
     await groundSession({
       cwd: dir, adapter: withSeam,
-      deps: { buildRoleImpl: () => 'role', fetchLensDataImpl: async () => ({ ok: true, markdown: '' }) },
+      deps: {
+        buildRoleImpl: () => 'role',
+        fetchMcContextDataImpl: async () => null,
+        fetchLensDataImpl: async () => ({ ok: true, markdown: '' }),
+        grounding: { includeRoadmap: true, includeLens: true },
+      },
     });
 
     // Reference run: an injected lens that carries NOTHING (legacy markdown
@@ -200,7 +205,12 @@ describe('byte-identity invariant (no setting + no server locale → English)', 
     const reference = fakeAdapter();
     await groundSession({
       cwd: dir, adapter: reference,
-      deps: { buildRoleImpl: () => 'role', pullLensImpl: async () => null },
+      deps: {
+        buildRoleImpl: () => 'role',
+        fetchMcContextDataImpl: async () => null,
+        pullLensImpl: async () => null,
+        grounding: { includeRoadmap: true, includeLens: true },
+      },
     });
 
     assert.ok(!/respond in/i.test(withSeam.written.markdown), 'no directive when nothing steers language');
@@ -234,7 +244,12 @@ describe('groundSession honours the MEMORO.md language setting', () => {
     const res = await groundSession({
       cwd: dir, adapter,
       // Server says German; the MEMORO.md setting (Swedish) must win.
-      deps: { buildRoleImpl: () => 'role', fetchLensDataImpl: async () => ({ ok: true, markdown: 'lens', locale: 'de' }) },
+      deps: {
+        buildRoleImpl: () => 'role',
+        fetchMcContextDataImpl: async () => null,
+        fetchLensDataImpl: async () => ({ ok: true, markdown: 'lens', locale: 'de' }),
+        grounding: { includeRoadmap: true, includeLens: true },
+      },
     });
     assert.equal(res.ok, true);
     assert.equal(res.parts.language, 'Swedish');
@@ -254,7 +269,12 @@ describe('groundSession honours the MEMORO.md language setting', () => {
     const adapter = fakeAdapter();
     const res = await groundSession({
       cwd: dir, adapter,
-      deps: { buildRoleImpl: () => 'role', fetchLensDataImpl: async () => ({ ok: true, markdown: 'lens', locale: 'de' }) },
+      deps: {
+        buildRoleImpl: () => 'role',
+        fetchMcContextDataImpl: async () => null,
+        fetchLensDataImpl: async () => ({ ok: true, markdown: 'lens', locale: 'de' }),
+        grounding: { includeRoadmap: true, includeLens: true },
+      },
     });
     assert.equal(res.parts.language, 'German');
     assert.match(adapter.written.markdown, /German/);

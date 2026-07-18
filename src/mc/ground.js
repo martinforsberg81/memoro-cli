@@ -4,23 +4,22 @@
  * Every entry into an mc session should hand the LLM the right structural
  * context *before the user types*. The bundle:
  *
- *   { map    — MEMORO.md from cwd, the repo's intent (read-only)
- *     role   — optional role framing for legacy/coordinator workflows
- *     lens   — who the user is, from Memoro (governs language + prefs)
- *     focus  — a soft, mutable pointer ("currently on X") }
+ *   { context — compact User Profile + Coding Profile from Memoro
+ *     role    — optional coordinator framing
+ *     focus   — a soft, mutable pointer ("currently on X") }
  *
  * This module owns two concerns, split so the design questions stay
  * testable in-process:
  *
- *   - `assembleBundle(parts)` — PURE. Renders the four parts into one
+ *   - `assembleBundle(parts)` — PURE. Renders the parts into one
  *     markdown body for a managed block. No I/O. Empty parts degrade
- *     softly (a missing map / lens / focus is simply omitted).
- *   - `groundSession({ cwd, ... })` — impure orchestration. Reads the
- *     map off disk, pulls the optional role + lens through injectable
+ *     softly (a missing context / role / focus is simply omitted).
+ *   - `groundSession({ cwd, ... })` — impure orchestration. Pulls the
+ *     compact server context and optional role through injectable
  *     dep-portals, assembles the bundle, and materialises it into the
  *     cwd's tool instruction file at the pre-launch slot. Every external
  *     dependency is injectable and soft-degrades on failure: no Memoro →
- *     no lens; no MEMORO.md → no map; nothing here ever throws.
+ *     no context; nothing here ever throws.
  *
  * Materialisation reuses the `writeLens` managed-block pattern
  * (`src/commands/lens.js`), generalised from "just the lens" to the whole
@@ -32,6 +31,7 @@ import { existsSync } from 'node:fs';
 import { join, basename } from 'node:path';
 
 import { readPackageCanon } from './canon.js';
+import { fetchMcContextData, renderMcContextMarkdown } from './context.js';
 
 // ─────────────────────────────────────────────────────────────
 // Pure: bundle assembly
@@ -45,10 +45,11 @@ const PREAMBLE =
   'not from a blank slate. It is standing context, not a task.';
 
 const DEFAULT_GROUNDING = Object.freeze({
-  includeRoadmap: true,
+  includeMcContext: true,
+  includeRoadmap: false,
   includeCoordinatorRole: false,
   includeMapLifecycle: false,
-  includeLens: true,
+  includeLens: false,
 });
 
 // ─────────────────────────────────────────────────────────────
@@ -271,7 +272,8 @@ export function languageDirective(language) {
  * @param {object} parts
  * @param {string} [parts.map]       — MEMORO.md contents (the repo's intent-map)
  * @param {string} [parts.role]      — orchestrator framing
- * @param {string} [parts.lens]      — Memoro coding lens (who the user is)
+ * @param {string} [parts.context]   — compact server-owned mc context
+ * @param {string} [parts.lens]      — optional dynamic Memoro lens
  * @param {string} [parts.focus]     — soft opening pointer ("currently on X")
  * @param {string} [parts.lifecycle] — MEMORO.md lifecycle guidance
  *   (Phase 2). mc itself only renders guidance; the grounded agent is
@@ -282,11 +284,12 @@ export function languageDirective(language) {
  *   right after the preamble so it governs the whole session.
  * @returns {string} markdown body for the managed block
  */
-export function assembleBundle({ map, role, lens, focus, lifecycle, language } = {}) {
+export function assembleBundle({ map, role, context, lens, focus, lifecycle, language } = {}) {
   const sections = [];
 
   const cleanMap = nonEmpty(map);
   const cleanRole = nonEmpty(role);
+  const cleanContext = nonEmpty(context);
   const cleanLens = nonEmpty(lens);
   const cleanFocus = nonEmpty(focus);
   const cleanLifecycle = nonEmpty(lifecycle);
@@ -296,16 +299,19 @@ export function assembleBundle({ map, role, lens, focus, lifecycle, language } =
     sections.push(section('Your role', cleanRole));
   }
   if (cleanMap) {
-    sections.push(section('The map — what we are building (MEMORO.md)', cleanMap));
+    sections.push(section('Repo roadmap (MEMORO.md)', cleanMap));
+  }
+  if (cleanContext) {
+    sections.push(section('Memoro profile context', cleanContext));
   }
   if (cleanLens) {
-    sections.push(section('Who you are working with (lens)', cleanLens));
+    sections.push(section('Dynamic Memoro context', cleanLens));
   }
   if (cleanFocus) {
     sections.push(section('Current focus', cleanFocus));
   }
   if (cleanLifecycle) {
-    sections.push(section('Keeping the map current (MEMORO.md)', cleanLifecycle));
+    sections.push(section('MEMORO.md lifecycle', cleanLifecycle));
   }
 
   // The language directive sits right after the preamble — before the
@@ -566,7 +572,7 @@ export function buildRole(cwd, { exists = existsSync, canon = readPackageCanon }
       'nodes, and why the current work matters in view before acting.',
     '- **Orchestrator-role discipline.** Plan, brief, delegate, and review by ' +
       'default; only implement here when the user explicitly asks or the task is tiny.',
-    '- **Cross-session work-project order.** Treat `MEMORO.md`, session state, ' +
+    '- **Cross-session work-project order.** Treat server profile context, session state, ' +
       'worktrees, branches, and tool choice as one continuity system so work ' +
       'projects survive across sessions and days.',
     '',
@@ -580,8 +586,8 @@ export function buildRole(cwd, { exists = existsSync, canon = readPackageCanon }
       'critical distance a single heads-down stream loses. A worse-but-examined ' +
       'design beats a faster-but-unexamined one.',
     '',
-    'Session command habit:',
-    '- When the user writes `/mc map`, update `MEMORO.md` if needed.',
+    'Work-method updates:',
+    '- Use `mc coding-profile read`, `mc coding-profile diff`, and `mc coding-profile write` for approved user work-method changes. Do not treat adapter files or repo roadmap files as profile truth.',
   ];
   if (repoRefs.length) {
     lines.push('', 'Repo-local coordinator sources available to read:');
@@ -693,10 +699,21 @@ async function defaultFetchLens() {
  * @param {string} arg.cwd          — the session's working directory
  * @param {object} arg.adapter      — tool adapter exposing writeGrounding({cwd})
  * @param {string} [arg.focus]      — soft opening pointer
+ * @param {object} [arg.repoContext] — git repo metadata for server context
+ * @param {string} [arg.tool]       — selected coding tool
+ * @param {string} [arg.sessionName] — mc session label/name
  * @param {object} [arg.deps]       — injection for tests
  * @returns {Promise<{ ok: boolean, path?: string, parts: object, reason?: string }>}
  */
-export async function groundSession({ cwd, adapter, focus = null, deps = {} } = {}) {
+export async function groundSession({
+  cwd,
+  adapter,
+  focus = null,
+  repoContext = null,
+  tool = null,
+  sessionName = null,
+  deps = {},
+} = {}) {
   if (!cwd || !adapter || typeof adapter.writeGrounding !== 'function') {
     return { ok: false, reason: 'cwd + adapter with writeGrounding required', parts: {} };
   }
@@ -711,6 +728,7 @@ export async function groundSession({ cwd, adapter, focus = null, deps = {} } = 
     // care about markdown (it short-circuits the data fetch when given).
     fetchLensDataImpl = () => fetchLensData(deps.lensDeps || {}),
     pullLensImpl = null,
+    fetchMcContextDataImpl = (input) => fetchMcContextData(input),
     repoName = basename(cwd),
     grounding = DEFAULT_GROUNDING,
   } = deps;
@@ -722,6 +740,18 @@ export async function groundSession({ cwd, adapter, focus = null, deps = {} } = 
   const role = groundingConfig.includeCoordinatorRole
     ? await safe(() => buildRoleImpl(cwd), null)
     : null;
+
+  const mcContext = groundingConfig.includeMcContext
+    ? await safe(() => fetchMcContextDataImpl({
+        repoContext,
+        repoName,
+        tool,
+        sessionName,
+        branch: repoContext?.branch,
+        deps: deps.mcContextDeps || {},
+      }), null)
+    : null;
+  const context = safeSync(() => renderMcContextMarkdown(mcContext), null);
 
   // Lens auto-injection + language. Soft-degrade everywhere: a null lens
   // response → no lens section + (absent a MEMORO.md setting) English default.
@@ -739,10 +769,14 @@ export async function groundSession({ cwd, adapter, focus = null, deps = {} } = 
     lens = lensMarkdownOf(lensResp);
   }
 
-  // Language precedence (this drev): MEMORO.md `language` setting WINS over
-  // the server locale, which wins over English. Resolved from the SAME map
-  // we read above + the lens response. Pure + soft-degrading.
-  const language = safeSync(() => resolveSessionLanguage({ map, lensResponse: lensResp }), null);
+  // Language precedence: explicit MEMORO.md language setting when that optional
+  // roadmap path is enabled, otherwise the approved User Profile locale from
+  // mc context, then an explicitly enabled dynamic lens, then English.
+  const languageCarrier = safeSync(() => {
+    const profileLanguage = resolveLanguage(mcContext?.user_profile);
+    return profileLanguage ? { language: profileLanguage } : lensResp;
+  }, lensResp);
+  const language = safeSync(() => resolveSessionLanguage({ map, lensResponse: languageCarrier }), null);
 
   // Strip mc settings (the language convention line) out of the map prose so
   // the setting never renders as text in the bundle. A map with no setting is
@@ -756,7 +790,7 @@ export async function groundSession({ cwd, adapter, focus = null, deps = {} } = 
     ? safeSync(() => lifecycleGuidance({ map: mapProse, repoName }), null)
     : null;
 
-  const parts = { map: mapProse, role, lens, focus, lifecycle, language };
+  const parts = { map: mapProse, role, context, lens, focus, lifecycle, language };
   const markdown = assembleBundle(parts);
 
   try {
@@ -780,10 +814,11 @@ export async function groundSession({ cwd, adapter, focus = null, deps = {} } = 
 function normalizeGroundingConfig(config) {
   const input = isObj(config) ? config : {};
   return {
-    includeRoadmap: input.includeRoadmap !== false,
+    includeMcContext: input.includeMcContext !== false,
+    includeRoadmap: input.includeRoadmap === true,
     includeCoordinatorRole: input.includeCoordinatorRole === true,
-    includeMapLifecycle: input.includeMapLifecycle === true || input.includeCoordinatorRole === true,
-    includeLens: input.includeLens !== false,
+    includeMapLifecycle: input.includeMapLifecycle === true,
+    includeLens: input.includeLens === true,
   };
 }
 

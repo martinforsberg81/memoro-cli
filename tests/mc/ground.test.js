@@ -2,15 +2,15 @@
  * TDD spec for session grounding (Phase 1 — Grounding MVP).
  *
  * Two layers:
- *   1. `assembleBundle(parts)` — PURE. Renders { map + role + lens + focus }
+ *   1. `assembleBundle(parts)` — PURE. Renders { context + role + focus }
  *      into one markdown body. Soft-degrade: missing parts are omitted.
  *   2. `groundSession({ cwd, adapter, ... })` — impure orchestration with
  *      injectable dep-portals. Never throws; soft-degrades every external
  *      dependency. Materialises via the adapter's writeGrounding.
  *
- * Also covers `readMap` (read-only MEMORO.md), `buildRole` (role framing
- * that references existing repo .claude sources), and `pullLensMarkdown`
- * (lens via injected fetch, null on any failure).
+ * Also covers `readMap` (read-only optional MEMORO.md), `buildRole` (role
+ * framing that references existing repo .claude sources), and
+ * `pullLensMarkdown` (optional dynamic lens via injected fetch).
  */
 
 import { describe, it, after, before } from 'node:test';
@@ -32,19 +32,22 @@ import {
 // ─────────────────────────────────────────────────────────────
 
 describe('assembleBundle (pure)', () => {
-  it('renders all four parts as labelled sections', () => {
+  it('renders structural parts as labelled sections', () => {
     const out = assembleBundle({
       map: '# MEMORO.md\nnorth star',
       role: 'You are the orchestrator.',
+      context: '### User Profile\n\n- Name: Martin',
       lens: 'User prefers tabs.',
       focus: 'currently on the grounding MVP',
     });
     assert.match(out, /# Session grounding/);
     assert.match(out, /## Your role/);
     assert.match(out, /You are the orchestrator\./);
-    assert.match(out, /## The map/);
+    assert.match(out, /## Repo roadmap/);
     assert.match(out, /north star/);
-    assert.match(out, /## Who you are working with/);
+    assert.match(out, /## Memoro profile context/);
+    assert.match(out, /### User Profile/);
+    assert.match(out, /## Dynamic Memoro context/);
     assert.match(out, /User prefers tabs\./);
     assert.match(out, /## Current focus/);
     assert.match(out, /currently on the grounding MVP/);
@@ -52,14 +55,14 @@ describe('assembleBundle (pure)', () => {
 
   it('omits a missing map entirely (no empty heading)', () => {
     const out = assembleBundle({ role: 'role text' });
-    assert.ok(!/## The map/.test(out), 'map section should be absent');
+    assert.ok(!/## Repo roadmap/.test(out), 'map section should be absent');
     assert.match(out, /## Your role/);
   });
 
   it('omits empty / whitespace-only parts', () => {
     const out = assembleBundle({ map: '   \n  ', role: 'role', lens: '', focus: '\t' });
-    assert.ok(!/## The map/.test(out));
-    assert.ok(!/## Who you are working with/.test(out));
+    assert.ok(!/## Repo roadmap/.test(out));
+    assert.ok(!/## Dynamic Memoro context/.test(out));
     assert.ok(!/## Current focus/.test(out));
     assert.match(out, /## Your role/);
   });
@@ -145,7 +148,10 @@ describe('buildRole', () => {
     assert.match(out, /Orchestrator-role discipline/);
     assert.match(out, /Cross-session work-project order/);
     assert.match(out, /plan, brief, delegate, and review/i);
-    assert.match(out, /MEMORO\.md.*session state.*worktrees.*branches.*tool choice/s);
+    assert.match(out, /server profile context.*session state.*worktrees.*branches.*tool choice/s);
+    assert.match(out, /mc coding-profile read/);
+    assert.match(out, /mc coding-profile diff/);
+    assert.match(out, /mc coding-profile write/);
   });
 
   it('references repo .claude sources when present', () => {
@@ -213,27 +219,59 @@ describe('groundSession', () => {
 
   it('assembles structural parts and materialises via the adapter', async () => {
     const adapter = fakeAdapter();
+    let readMapCalled = false;
+    let lensCalled = false;
     const res = await groundSession({
       cwd: dir,
       adapter,
       focus: 'on grounding',
+      repoContext: {
+        toplevel: dir,
+        branch: 'agent/mc-profile',
+        remoteUrl: 'git@github.com:meetmemoro/memoro-cli.git',
+      },
+      tool: 'codex',
+      sessionName: 'update-memoro',
       deps: {
-        readMapImpl: async () => '# MEMORO.md\nmap',
+        readMapImpl: async () => {
+          readMapCalled = true;
+          return '# MEMORO.md\nmap';
+        },
         buildRoleImpl: () => 'role',
-        pullLensImpl: async () => 'lens',
+        fetchLensDataImpl: async () => {
+          lensCalled = true;
+          return { markdown: 'lens' };
+        },
+        fetchMcContextDataImpl: async (input) => ({
+          user_profile: { display_name: 'Martin', locale: 'sv-SE' },
+          coding_profile: {
+            revision: 2,
+            markdown: '# Coding Profile\n\nPrefer Swedish collaboration.',
+          },
+          repo: { name: 'memoro-cli', tool: input.tool, selected_docs: [] },
+          session: { mc_session_name: input.sessionName, branch: input.branch },
+        }),
       },
     });
     assert.equal(res.ok, true);
     assert.match(res.path, /CLAUDE\.md$/);
-    assert.match(adapter.written.markdown, /## The map/);
+    assert.equal(readMapCalled, false);
+    assert.equal(lensCalled, false);
+    assert.doesNotMatch(adapter.written.markdown, /## Repo roadmap/);
     assert.doesNotMatch(adapter.written.markdown, /## Your role/);
-    assert.doesNotMatch(adapter.written.markdown, /## Keeping the map current/);
-    assert.match(adapter.written.markdown, /## Who you are working with/);
+    assert.doesNotMatch(adapter.written.markdown, /## MEMORO\.md lifecycle/);
+    assert.match(adapter.written.markdown, /## Memoro profile context/);
+    assert.match(adapter.written.markdown, /### User Profile/);
+    assert.match(adapter.written.markdown, /- Name: Martin/);
+    assert.match(adapter.written.markdown, /Approved revision: 2/);
+    assert.match(adapter.written.markdown, /Prefer Swedish collaboration/);
     assert.match(adapter.written.markdown, /on grounding/);
+    assert.match(adapter.written.markdown, /respond to the user in Swedish/i);
+    assert.equal(res.parts.language, 'Swedish');
     assert.equal(adapter.written.cwd, dir);
   });
 
-  it('can opt into coordinator role and map lifecycle grounding', async () => {
+  it('can opt into coordinator role without roadmap lifecycle grounding', async () => {
     const adapter = fakeAdapter();
     const res = await groundSession({
       cwd: dir,
@@ -248,7 +286,8 @@ describe('groundSession', () => {
     assert.equal(res.ok, true);
     assert.match(adapter.written.markdown, /## Your role/);
     assert.match(adapter.written.markdown, /role/);
-    assert.match(adapter.written.markdown, /## Keeping the map current/);
+    assert.doesNotMatch(adapter.written.markdown, /## Repo roadmap/);
+    assert.doesNotMatch(adapter.written.markdown, /## MEMORO\.md lifecycle/);
   });
 
   it('supports adapters that deliver grounding as a startup message', async () => {
@@ -274,25 +313,41 @@ describe('groundSession', () => {
     assert.match(res.message, /startup delivery/);
   });
 
-  it('soft-degrades when MEMORO.md missing — bundle without map', async () => {
+  it('can opt into optional roadmap and dynamic lens grounding', async () => {
     const adapter = fakeAdapter();
     const res = await groundSession({
       cwd: dir,
       adapter,
       deps: {
-        readMapImpl: async () => null,
+        readMapImpl: async () => '# MEMORO.md\nmap',
         buildRoleImpl: () => 'role',
         pullLensImpl: async () => 'lens',
+        grounding: { includeRoadmap: true, includeLens: true },
       },
     });
     assert.equal(res.ok, true);
-    assert.ok(!/## The map/.test(adapter.written.markdown));
-    assert.doesNotMatch(adapter.written.markdown, /## Your role/);
-    assert.doesNotMatch(adapter.written.markdown, /## Keeping the map current/);
-    assert.match(adapter.written.markdown, /## Who you are working with/);
+    assert.match(adapter.written.markdown, /## Repo roadmap/);
+    assert.match(adapter.written.markdown, /## Dynamic Memoro context/);
   });
 
-  it('soft-degrades when Memoro unavailable — bundle without lens', async () => {
+  it('soft-degrades when mc context is unavailable', async () => {
+    const adapter = fakeAdapter();
+    const res = await groundSession({
+      cwd: dir,
+      adapter,
+      deps: {
+        readMapImpl: async () => { throw new Error('must not read map by default'); },
+        buildRoleImpl: () => 'role',
+        fetchMcContextDataImpl: async () => null,
+      },
+    });
+    assert.equal(res.ok, true);
+    assert.ok(!/## Repo roadmap/.test(adapter.written.markdown));
+    assert.doesNotMatch(adapter.written.markdown, /## Your role/);
+    assert.doesNotMatch(adapter.written.markdown, /## Memoro profile context/);
+  });
+
+  it('soft-degrades when optional dynamic lens is unavailable', async () => {
     const adapter = fakeAdapter();
     const res = await groundSession({
       cwd: dir,
@@ -301,10 +356,11 @@ describe('groundSession', () => {
         readMapImpl: async () => 'map',
         buildRoleImpl: () => 'role',
         pullLensImpl: async () => null,
+        grounding: { includeLens: true },
       },
     });
     assert.equal(res.ok, true);
-    assert.ok(!/## Who you are working with/.test(adapter.written.markdown));
+    assert.ok(!/## Dynamic Memoro context/.test(adapter.written.markdown));
   });
 
   it('never throws when a dep-portal throws — returns parts anyway', async () => {
@@ -343,7 +399,7 @@ describe('groundSession', () => {
     assert.match(res.reason, /adapter/);
   });
 
-  // ── Phase 2: MEMORO.md lifecycle folds into the bundle ──
+  // ── Optional MEMORO.md lifecycle folds into the bundle only when enabled ──
 
   it('folds a SEED offer into the bundle when MEMORO.md is absent', async () => {
     const adapter = fakeAdapter();
@@ -355,10 +411,10 @@ describe('groundSession', () => {
         buildRoleImpl: () => 'role',
         pullLensImpl: async () => null,
         repoName: 'acme-cli',
-        grounding: { includeMapLifecycle: true },
+        grounding: { includeRoadmap: true, includeMapLifecycle: true },
       },
     });
-    assert.match(adapter.written.markdown, /Keeping the map current/);
+    assert.match(adapter.written.markdown, /MEMORO\.md lifecycle/);
     assert.match(adapter.written.markdown, /seed|create/i);
     assert.match(adapter.written.markdown, /No separate\s+confirmation step is required/i);
     assert.match(adapter.written.markdown, /Inspect repo evidence/i);
@@ -374,17 +430,17 @@ describe('groundSession', () => {
         readMapImpl: async () => '- **Live node** — `active · L · now`',
         buildRoleImpl: () => 'role',
         pullLensImpl: async () => null,
-        grounding: { includeMapLifecycle: true },
+        grounding: { includeRoadmap: true, includeMapLifecycle: true },
       },
     });
-    assert.match(adapter.written.markdown, /Keeping the map current/);
+    assert.match(adapter.written.markdown, /MEMORO\.md lifecycle/);
     assert.match(adapter.written.markdown, /Live node/);
     assert.match(adapter.written.markdown, /living project state/i);
   });
 
-  // ── Phase 4: language resolved from the lens response governs the bundle ──
+  // ── Language resolved from mc context governs the bundle ──
 
-  it('resolves language from the lens response and renders a directive', async () => {
+  it('resolves language from mc context and renders a directive', async () => {
     const adapter = fakeAdapter();
     const res = await groundSession({
       cwd: dir,
@@ -392,18 +448,17 @@ describe('groundSession', () => {
       deps: {
         readMapImpl: async () => null,
         buildRoleImpl: () => 'role',
-        // Phase 4: grounding pulls the WHOLE lens response, not just markdown.
-        fetchLensDataImpl: async () => ({ ok: true, markdown: 'lens body', language: 'Swedish' }),
+        fetchMcContextDataImpl: async () => ({
+          user_profile: { display_name: 'Martin', locale: 'sv-SE' },
+        }),
       },
     });
-    assert.match(adapter.written.markdown, /## Who you are working with/);
-    assert.match(adapter.written.markdown, /lens body/);
     assert.match(adapter.written.markdown, /Swedish/);
     assert.match(adapter.written.markdown, /respond/i);
     assert.equal(res.parts?.language, 'Swedish');
   });
 
-  it('defaults to English (no directive) when the lens carries no language', async () => {
+  it('can resolve language from an explicitly enabled dynamic lens', async () => {
     const adapter = fakeAdapter();
     const res = await groundSession({
       cwd: dir,
@@ -411,14 +466,33 @@ describe('groundSession', () => {
       deps: {
         readMapImpl: async () => null,
         buildRoleImpl: () => 'role',
-        fetchLensDataImpl: async () => ({ ok: true, markdown: 'lens body' }),
+        fetchMcContextDataImpl: async () => null,
+        fetchLensDataImpl: async () => ({ ok: true, markdown: 'lens body', language: 'Danish' }),
+        grounding: { includeLens: true },
+      },
+    });
+    assert.match(adapter.written.markdown, /## Dynamic Memoro context/);
+    assert.match(adapter.written.markdown, /lens body/);
+    assert.match(adapter.written.markdown, /respond to the user in Danish/i);
+    assert.equal(res.parts?.language, 'Danish');
+  });
+
+  it('defaults to English (no directive) when context carries no language', async () => {
+    const adapter = fakeAdapter();
+    const res = await groundSession({
+      cwd: dir,
+      adapter,
+      deps: {
+        readMapImpl: async () => null,
+        buildRoleImpl: () => 'role',
+        fetchMcContextDataImpl: async () => ({ user_profile: {} }),
       },
     });
     assert.ok(!/respond in/i.test(adapter.written.markdown), 'English default → no directive');
     assert.equal(res.parts.language, null);
   });
 
-  it('soft-degrades to English + no lens when Memoro is unreachable', async () => {
+  it('soft-degrades to English + no context when Memoro is unreachable', async () => {
     const adapter = fakeAdapter();
     const res = await groundSession({
       cwd: dir,
@@ -426,16 +500,16 @@ describe('groundSession', () => {
       deps: {
         readMapImpl: async () => 'map',
         buildRoleImpl: () => 'role',
-        fetchLensDataImpl: async () => { throw new Error('unreachable'); },
+        fetchMcContextDataImpl: async () => { throw new Error('unreachable'); },
       },
     });
     assert.equal(res.ok, true);
-    assert.ok(!/## Who you are working with/.test(adapter.written.markdown));
+    assert.ok(!/## Memoro profile context/.test(adapter.written.markdown));
     assert.ok(!/respond in/i.test(adapter.written.markdown));
     assert.equal(res.parts.language, null);
   });
 
-  it('default grounding NEVER mutates MEMORO.md on disk (load-bearing)', async () => {
+  it('default grounding does not read or mutate MEMORO.md on disk', async () => {
     // A real MEMORO.md on disk; ground through the real readMap path.
     const mapDir = mkdtempSync(join(tmpdir(), 'mc-ground-readonly-'));
     const p = join(mapDir, 'MEMORO.md');
@@ -449,8 +523,7 @@ describe('groundSession', () => {
       deps: { buildRoleImpl: () => 'role', pullLensImpl: async () => null },
     });
     assert.equal(res.ok, true);
-    // The bundle read the map (it appears) but the file is byte-identical.
-    assert.match(adapter.written.markdown, /## The map/);
+    assert.doesNotMatch(adapter.written.markdown, /## Repo roadmap/);
     assert.equal(readFileSync(p, 'utf8'), before, 'grounding must not write MEMORO.md');
     rmSync(mapDir, { recursive: true, force: true });
   });

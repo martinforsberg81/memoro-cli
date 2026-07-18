@@ -12,13 +12,13 @@ rules, or tool-native instruction files.
 
 mc owns:
 
-- runtime grounding: roadmap, coordinator role, lens, focus, session/worktree
-  context
+- runtime grounding: compact server-owned User Profile and Coding Profile
+  context, current focus, and session/worktree context
 - session continuity: registry, worktrees, selected tool, resume state
 - behavior policy: permissions, approvals, data-access guards, vault
   materialisation, safety defaults
-- package-canon for the coordinator role, shipped with mc and injected at
-  session start
+- package-canon for optional coordinator role guidance, shipped with mc and
+  injected only when that mode is enabled
 
 The repo owner owns:
 
@@ -37,6 +37,11 @@ Repo instructions change what coding agents know about the project.
 Do not put project instructions in mc config. Do not silently replace project
 instructions with mc's own canon.
 
+Durable personal work-method changes belong in the server-owned Coding
+Profile and are updated explicitly with `mc coding-profile read`, `mc
+coding-profile diff`, and `mc coding-profile write`. Repo-local instruction
+files remain repo truth, not profile truth.
+
 ## Configuration Layers
 
 Configuration is layered, but not every field uses simple last-writer-wins
@@ -52,9 +57,10 @@ Examples:
 ```json
 {
   "grounding": {
-    "includeRoadmap": true,
-    "includeCoordinatorRole": true,
-    "includeLens": true
+    "includeMcContext": true,
+    "includeRoadmap": false,
+    "includeCoordinatorRole": false,
+    "includeLens": false
   },
   "permissions": {
     "workspace": "worktree",

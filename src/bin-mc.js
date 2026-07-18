@@ -131,6 +131,7 @@ const LIFECYCLE = {
   'tool-auth':   () => import('./mc/commands/tool-auth.js'),
   adapter:       () => import('./mc/commands/adapter.js'),
   'tool-switch': () => import('./mc/commands/tool-switch.js'),
+  'coding-profile': () => import('./mc/commands/coding-profile.js'),
   broker:        () => import('./mc/commands/broker.js'),
   attach:        () => import('./mc/commands/attach.js'),
   'cloud-session': () => import('./mc/commands/cloud-session.js'),
@@ -291,6 +292,8 @@ SETUP
   mc auth github [--json]         Check host GitHub CLI auth for PR/merge work
   mc auth <claude|codex|gemini>   Re-check one coding tool
   mc tool-switch <tool>           Set the default tool for future sessions
+  mc coding-profile read|diff|write
+                                  Read, compare, or update your Coding Profile
 
 SECRETS
   mc vault status                 Show vault setup + lock state
@@ -332,7 +335,9 @@ COMMAND SURFACES
   Terminal commands manage machines and sessions: setup, auth, new, open,
   end, broker, vault, and repo/worktree lifecycle.
 
-  Inside a launched LLM session, use session-local habits such as \`/mc map\`.
+  Inside a launched LLM session, use explicit mc commands for durable working
+  method updates, such as \`mc coding-profile read\`, \`mc coding-profile diff\`,
+  and \`mc coding-profile write\`.
   Do not treat terminal setup/lifecycle commands as in-session instructions.
   The workflow stays the same across Codex, Claude Code, and future adapters;
   tool-specific slash commands are conveniences, not the main path.
@@ -345,12 +350,10 @@ NEW USER FLOW
 
 WHAT HAPPENS ON START
   Fresh starts (\`mc\`, \`mc new\`) inject project grounding before the
-  coding tool wakes: MEMORO.md when present, your Memoro lens, and the
-  focus. The old coordinator role and map-lifecycle prompt are opt-in via
-  grounding config. If MEMORO.md is missing and map-lifecycle is enabled, mc sends the
-  launched agent a first user message asking whether to create it. If
-  the vault is locked, mc can offer to unlock it before launch so tokens
-  materialise for the tool.
+  coding tool wakes: compact User Profile and Coding Profile context when
+  available, plus the current focus. mc does not create or read a repo-local
+  MEMORO.md in the normal startup path. If the vault is locked, mc can offer to
+  unlock it before launch so tokens materialise for the tool.
 
   \`mc open\` first attaches to a live broker-owned PTY when one exists,
   preserving that session surface without sending a new prompt. If no
@@ -531,7 +534,7 @@ async function runWrap(argv, { label = null } = {}) {
 
   // ─── Grounding (Phase 1) — pre-launch slot ──────────────────────────────
   // Ground the session BEFORE spawning the tool: assemble
-  // { map + role + lens + focus } and hand it to the selected adapter.
+  // { profile context + optional role/focus } and hand it to the selected adapter.
   // Adapters deliver it without mutating tracked project wrappers:
   // Claude via launch args, Codex as the initial prompt. Soft-degrade:
   // any failure prints a one-line hint and continues — grounding must
@@ -549,7 +552,18 @@ async function runWrap(argv, { label = null } = {}) {
     // This is the SAME seam bare `mc`, `mc new`, and `mc resume` share
     // (new/resume re-exec into this runWrap), so entry-parity is one path.
     const focus = resolveWrapFocus({ label, env: process.env });
-    const res = await groundSession({ cwd, adapter, focus, deps: { grounding: config.grounding } });
+    const res = await groundSession({
+      cwd,
+      adapter,
+      focus,
+      repoContext,
+      tool: launch.shortName,
+      sessionName: runtimeLabel,
+      deps: {
+        grounding: config.grounding,
+        mcContextDeps: { apiUrl, token },
+      },
+    });
     groundingLaunchMessage = res.message || null;
     startupMessage = startupMessageFromGroundingParts(res.parts);
     if (!res.ok && res.reason) {

@@ -13,7 +13,7 @@ export function renderIntro({ version, codingSessionId, repo, branch, label = nu
     `  \x1b[36mmc --help\x1b[0m           cli reference`,
     '',
     `  \x1b[2mLLM session\x1b[0m`,
-    `  \x1b[36m/mc map\x1b[0m             reconcile MEMORO.md from here`,
+    `  \x1b[36mmc coding-profile read\x1b[0m  inspect your approved work method`,
     '',
     '',
   ].join('\n');

@@ -85,7 +85,8 @@ describe('renderIntro', () => {
     assert.match(plain, /mc sessions watch/);
     assert.match(plain, /mc --help/);
     assert.match(plain, /LLM session/);
-    assert.match(plain, /\/mc map/);
+    assert.match(plain, /mc coding-profile read/);
+    assert.doesNotMatch(plain, /\/mc map/);
     assert.doesNotMatch(plain, /\/memoro-map/);
     assert.doesNotMatch(plain, /\/memoro-coordinator/);
   });
@@ -93,13 +94,15 @@ describe('renderIntro', () => {
   test('keeps the same primary actions when launching Claude Code', () => {
     const plain = stripAnsi(renderIntro({ ...ctx, tool: 'Claude Code' }));
     assert.match(plain, /mc sessions watch/);
-    assert.match(plain, /\/mc map/);
+    assert.match(plain, /mc coding-profile read/);
+    assert.doesNotMatch(plain, /\/mc map/);
     assert.doesNotMatch(plain, /\/memoro-coordinator/);
   });
 
-  test('uses the same /mc map convention for Codex launches', () => {
+  test('uses the same coding-profile cue for Codex launches', () => {
     const plain = stripAnsi(renderIntro({ ...ctx, tool: 'Codex CLI' }));
-    assert.match(plain, /\/mc map/);
+    assert.match(plain, /mc coding-profile read/);
+    assert.doesNotMatch(plain, /\/mc map/);
     assert.doesNotMatch(plain, /\/memoro-map/);
     assert.match(plain, /mc sessions watch/);
     assert.doesNotMatch(plain, /\/memoro-coordinator/);
