@@ -39,8 +39,12 @@ export async function run(argv, deps = {}) {
   const reg = loadRegistry();
   let entries = reg.entries.slice();
 
-  // Default scope: user-facing sessions. --all expands to internal/legacy
-  // orchestration entries too (fanout phases, isolation fixtures, etc.).
+  // Default scope: user-facing sessions with present worktrees. --all expands
+  // to internal/legacy/missing entries too (fanout phases, isolation fixtures,
+  // registry entries whose worktree was already removed, etc.).
+  if (!opts.all) {
+    entries = entries.filter((e) => e.worktree_missing !== true);
+  }
   if (!opts.all && !opts.tree) {
     entries = entries.filter((e) => ['work', 'project'].includes(e.kind || 'work'));
   }

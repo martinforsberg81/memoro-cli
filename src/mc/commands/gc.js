@@ -52,13 +52,24 @@ export async function run(argv) {
   }
 
   const reg = readRegistry();
-  const candidates = opts.staleWorktrees
+  let candidates = opts.staleWorktrees
     ? await staleWorktreeCandidates(reg)
     : reg.entries.filter(isEligible);
+  const requestedNames = opts.onlyNames;
+  const notCandidates = [];
+  if (requestedNames.length) {
+    const byName = new Set(candidates.map((candidate) => candidate.name));
+    for (const name of requestedNames) {
+      if (!byName.has(name)) notCandidates.push(name);
+    }
+    const requested = new Set(requestedNames);
+    candidates = candidates.filter((candidate) => requested.has(candidate.name));
+  }
 
   if (opts.dryRun) {
     const out = {
       dry_run: true,
+      ...(requestedNames.length ? { requested_names: requestedNames, not_candidates: notCandidates } : {}),
       candidates: candidates.map((c) => ({
         name: c.name,
         branch: c.branch,
@@ -81,6 +92,10 @@ export async function run(argv) {
   }
 
   const result = await reapWorktrees(candidates);
+  if (requestedNames.length) {
+    result.requested_names = requestedNames;
+    result.not_candidates = notCandidates;
+  }
   emitWorktreeResult(result, opts);
   return result.ok ? 0 : 1;
 }
@@ -139,6 +154,7 @@ function parseArgs(argv) {
     allSafe: false,
     apply: false,
     minAgeMs: DEFAULT_MIN_AGE_MS,
+    onlyNames: [],
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -169,15 +185,32 @@ function parseArgs(argv) {
       opts.minAgeMs = ms;
       continue;
     }
+    if (a === '--only') {
+      const v = argv[++i];
+      const names = parseNameList(v);
+      if (!names.length) return { error: '--only expects one or more comma-separated session names' };
+      opts.onlyNames.push(...names);
+      continue;
+    }
     return { error: `unknown flag: ${a}` };
   }
   if (opts.dryRun && opts.apply) return { error: '--dry-run and --apply cannot be combined' };
   const modes = [opts.reapOrphans, opts.sidecars, opts.staleWorktrees, opts.runtime, opts.allSafe].filter(Boolean).length;
   if (modes > 1) return { error: '--reap-orphans, --sidecars, --runtime, --stale-worktrees, and --all-safe cannot be combined' };
+  if (opts.onlyNames.length && !opts.staleWorktrees) {
+    return { error: '--only can only be used with --stale-worktrees' };
+  }
   if (opts.allSafe && !opts.dryRun && !opts.apply) {
     return { error: '--all-safe requires --dry-run or --apply' };
   }
   return opts;
+}
+
+function parseNameList(value) {
+  return String(value || '')
+    .split(',')
+    .map((name) => name.trim())
+    .filter(Boolean);
 }
 
 function parseDurationMs(spec) {
