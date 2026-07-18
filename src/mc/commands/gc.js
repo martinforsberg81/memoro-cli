@@ -23,6 +23,7 @@ import {
   scanRuntimeSidecars,
 } from '../sidecar-cleanup.js';
 import {
+  reapRuntimeCleanup,
   scanRuntimeCleanup,
   staleWorktreeCandidates,
 } from '../storage-management.js';
@@ -65,6 +66,8 @@ export async function run(argv) {
         reason: c.reason || null,
         dirty_files: c.dirty_files || 0,
         ahead: c.ahead || 0,
+        disk_bytes: c.disk_bytes ?? null,
+        reclaimable_bytes: c.reclaimable_bytes ?? null,
       })),
     };
     if (opts.json) console.log(JSON.stringify(out, null, 2));
@@ -264,7 +267,7 @@ async function runRuntime(opts) {
     return 0;
   }
 
-  const outcome = reapRuntime(scan);
+  const outcome = reapRuntimeCleanup(scan);
   if (opts.json) console.log(JSON.stringify({ ok: outcome.ok, runtime: outcome }, null, 2));
   else printRuntimeScan(scan, { outcome });
   return outcome.ok ? 0 : 1;
@@ -289,7 +292,7 @@ async function runAllSafe(opts) {
     return 0;
   }
 
-  const runtimeOutcome = reapRuntime(runtime);
+  const runtimeOutcome = reapRuntimeCleanup(runtime);
   const worktreeOutcome = await reapWorktrees(worktreeCandidates);
   const result = {
     ok: runtimeOutcome.ok && worktreeOutcome.ok,
@@ -302,19 +305,6 @@ async function runAllSafe(opts) {
     emitWorktreeResult(worktreeOutcome, opts);
   }
   return result.ok ? 0 : 1;
-}
-
-function reapRuntime(scan) {
-  const daemons = reapOrphans(scan.daemons);
-  const sidecars = reapRuntimeSidecars(scan.sidecars);
-  const daemonsOk = daemons.reaped.every((r) => r.signaled)
-    && daemons.unlinked.every((u) => u.removed);
-  return {
-    ok: daemonsOk && sidecars.ok,
-    daemons,
-    sidecars,
-    counts: scan.counts,
-  };
 }
 
 function runtimeDryRunJson(scan) {
@@ -340,6 +330,8 @@ function toWorktreeCandidateJson(c) {
     reason: c.reason || null,
     dirty_files: c.dirty_files || 0,
     ahead: c.ahead || 0,
+    disk_bytes: c.disk_bytes ?? null,
+    reclaimable_bytes: c.reclaimable_bytes ?? null,
   };
 }
 
