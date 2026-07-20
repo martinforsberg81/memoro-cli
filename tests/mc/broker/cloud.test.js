@@ -811,6 +811,7 @@ describe('CloudBrokerClient', () => {
         }
         return { ok: false, error: `unexpected ${msg.type}` };
       },
+      transcriptFinder: async () => null,
       sessionRefreshIntervalMs: 0,
       sleepImpl: async () => {},
     });
@@ -869,6 +870,7 @@ describe('CloudBrokerClient', () => {
         }
         return { ok: false, error: `unexpected ${msg.type}` };
       },
+      transcriptFinder: async () => null,
       sessionRefreshIntervalMs: 0,
       sleepImpl: async () => {},
     });
@@ -890,6 +892,88 @@ describe('CloudBrokerClient', () => {
     assert.equal(result.ok, true);
     assert.equal(result.data.source, 'codex');
     assert.deepEqual(result.data.messages, [{ role: 'assistant', text: 'codex screen' }]);
+    client.stop();
+  });
+
+  test('discovers and parses the current tool transcript before using recent PTY output', async () => {
+    resetFakeWs();
+    const findCalls = [];
+    const factoryCalls = [];
+    const handlerCalls = [];
+    const client = new CloudBrokerClient({
+      apiUrl: 'https://memoro.test',
+      token: 'tok',
+      machineId: 'machine',
+      WebSocketImpl: FakeWebSocket,
+      request: async (msg) => {
+        if (msg.type === 'sessions') return { ok: true, sessions: [] };
+        if (msg.type === 'fetch_session_output') {
+          return {
+            ok: true,
+            output: 'raw terminal fallback',
+            session: { id: 'sess_a', tool: 'codex', cwd: '/repo' },
+          };
+        }
+        return { ok: false, error: `unexpected ${msg.type}` };
+      },
+      transcriptFinder: async (query) => {
+        findCalls.push(query);
+        return { path: '/tmp/discovered-codex.jsonl' };
+      },
+      fetchTranscriptHandlerFactory: (opts) => {
+        factoryCalls.push(opts);
+        return async (args) => {
+          handlerCalls.push(args);
+          return {
+            source: opts.source,
+            messages: [
+              { role: 'user', content: 'Review this' },
+              { role: 'assistant', content: 'Done' },
+            ],
+          };
+        };
+      },
+      sessionRefreshIntervalMs: 0,
+      sleepImpl: async () => {},
+    });
+
+    client.start();
+    const control = FakeWebSocket.instances[0];
+    control.open();
+    await new Promise((resolve) => setImmediate(resolve));
+    control.message(JSON.stringify({
+      type: 'command',
+      command_id: 'cmd_fetch_discovered',
+      coding_session_id: 'sess_a',
+      kind: 'fetch_transcript',
+      args: { limit: 24 },
+    }));
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.deepEqual(findCalls, [{ source: 'codex', cwd: '/repo' }]);
+    assert.deepEqual(factoryCalls, [{
+      transcriptPath: '/tmp/discovered-codex.jsonl',
+      source: 'codex',
+    }]);
+    assert.deepEqual(handlerCalls, [{ limit: 24 }]);
+    const result = JSON.parse(control.sent.at(-1));
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.data.messages, [
+      { role: 'user', content: 'Review this' },
+      { role: 'assistant', content: 'Done' },
+    ]);
+    assert.equal(result.data.fallback, undefined);
+
+    control.message(JSON.stringify({
+      type: 'command',
+      command_id: 'cmd_fetch_discovered_again',
+      coding_session_id: 'sess_a',
+      kind: 'fetch_transcript',
+      args: { limit: 24 },
+    }));
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(findCalls.length, 1);
+    assert.equal(factoryCalls.length, 1);
     client.stop();
   });
 

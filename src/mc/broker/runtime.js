@@ -384,6 +384,12 @@ function buildSessionMetadata({ id, name, cwd, sidecars } = {}) {
     repo_ref: stringOrNull(plainSidecars.repo_ref) || stringOrNull(plainSidecars.repoRef),
     branch: stringOrNull(plainSidecars.branch),
     label: stringOrNull(plainSidecars.label),
+    transcript_path: stringOrNull(
+      plainSidecars.transcript_path
+        || plainSidecars.transcriptPath
+        || plainSidecars.tool_transcript_path
+        || plainSidecars.toolTranscriptPath,
+    ),
     worktree_name: worktreeName && worktreeName !== id ? worktreeName : fromCwd.worktree_name,
   };
 }

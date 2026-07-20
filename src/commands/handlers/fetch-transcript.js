@@ -11,7 +11,7 @@
  * short KV cache.
  */
 
-import { readFile } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 
 import { parseTranscript } from '../../lib/distill.js';
@@ -22,6 +22,9 @@ import { parseTranscript } from '../../lib/distill.js';
  * heartbeat-loop owns the path and the WS client just calls the function.
  */
 export function createFetchTranscriptHandler({ transcriptPath, source = 'claude-code' }) {
+  let cachedSignature = '';
+  let cachedResult = null;
+
   return async function fetchTranscript(_args) {
     if (!transcriptPath) {
       throw new Error('transcript_path was not supplied at session start');
@@ -30,10 +33,13 @@ export function createFetchTranscriptHandler({ transcriptPath, source = 'claude-
       throw new Error(`transcript file not found at ${transcriptPath}`);
     }
 
+    const info = await stat(transcriptPath);
+    const signature = `${info.size}:${info.mtimeMs}`;
+    if (cachedResult && signature === cachedSignature) return cachedResult;
+
     const raw = await readFile(transcriptPath, 'utf8');
     const parsed = parseTranscript(raw, { tool: source });
-
-    return {
+    cachedResult = {
       source,
       session_id: parsed.sessionId ?? null,
       cwd: parsed.cwd ?? null,
@@ -43,5 +49,7 @@ export function createFetchTranscriptHandler({ transcriptPath, source = 'claude-
       messages: parsed.messages ?? [],
       activities: parsed.activities ?? [],
     };
+    cachedSignature = signature;
+    return cachedResult;
   };
 }
