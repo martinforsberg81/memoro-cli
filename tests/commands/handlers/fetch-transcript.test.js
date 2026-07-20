@@ -62,6 +62,28 @@ describe('createFetchTranscriptHandler', () => {
     }
   });
 
+  test('reuses parsed output while the transcript file is unchanged', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'memoro-cli-tx-cache-'));
+    try {
+      const file = join(dir, 't.jsonl');
+      await writeFile(file, SAMPLE_CC_JSONL);
+      const handler = createFetchTranscriptHandler({ transcriptPath: file });
+      const first = await handler({});
+      const second = await handler({});
+      assert.equal(second, first);
+
+      await writeFile(file, [
+        SAMPLE_CC_JSONL,
+        JSON.stringify({ type: 'user', message: { role: 'user', content: 'one more' } }),
+      ].join('\n'));
+      const changed = await handler({});
+      assert.notEqual(changed, first);
+      assert.equal(changed.messages.at(-1).content, 'one more');
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   test('returns null metadata fields when transcript lacks them', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'memoro-cli-tx-bare-'));
     try {

@@ -9,6 +9,7 @@ import { requestBroker } from './client.js';
 import { brokerSocketPath } from './paths.js';
 import { sourceForTool } from './session-sidecars.js';
 import { cloudRuntimePhaseSemantics } from '../cloud-runtime-contract.js';
+import { findLatestTranscriptForTool } from '../session-upload.js';
 import {
   listLocalBrokerAndHostSessions,
   requestForSession,
@@ -55,6 +56,7 @@ export class CloudBrokerClient extends EventEmitter {
     sleepImpl = sleep,
     localTranscriptReadMs = LOCAL_TRANSCRIPT_READ_MS,
     fetchTranscriptHandlerFactory = createFetchTranscriptHandler,
+    transcriptFinder = findLatestTranscriptForTool,
     repoCatalogProvider = null,
     logger = silentLogger(),
   } = {}) {
@@ -88,8 +90,11 @@ export class CloudBrokerClient extends EventEmitter {
     this.sleep = sleepImpl;
     this.localTranscriptReadMs = localTranscriptReadMs;
     this.fetchTranscriptHandlerFactory = fetchTranscriptHandlerFactory;
+    this.transcriptFinder = transcriptFinder;
     this.repoCatalogProvider = repoCatalogProvider;
     this.logger = logger;
+    this.transcriptPaths = new Map();
+    this.transcriptHandlers = new Map();
     this.ws = null;
     this.alive = false;
     this.backoffMs = INITIAL_BACKOFF_MS;
@@ -240,11 +245,21 @@ export class CloudBrokerClient extends EventEmitter {
       if (!transcriptPath) {
         const sessionId = requiredString(msg.coding_session_id || msg.session_id, 'coding_session_id');
         const request = await this._requestForSessionId(sessionId);
-        return this._fetchSessionOutputTranscript({ sessionId, sourceHint, toolHint, request });
+        return this._fetchSessionOutputTranscript({
+          sessionId,
+          sourceHint,
+          toolHint,
+          request,
+          args,
+        });
       }
       const source = transcriptSource({ sourceHint, toolHint });
-      const handler = this.fetchTranscriptHandlerFactory({ transcriptPath, source });
-      return handler(args);
+      return this._fetchTranscriptFromPath({
+        sessionId: stringOrDefault(msg.coding_session_id || msg.session_id, transcriptPath),
+        transcriptPath,
+        source,
+        args,
+      });
     }
     if (kind === 'fetch_environment_status') {
       const sessionId = stringOrDefault(msg.coding_session_id || msg.session_id, '');
@@ -268,7 +283,13 @@ export class CloudBrokerClient extends EventEmitter {
     throw new Error(`No handler for kind '${kind}'`);
   }
 
-  async _fetchSessionOutputTranscript({ sessionId, sourceHint = '', toolHint = '', request = this.request }) {
+  async _fetchSessionOutputTranscript({
+    sessionId,
+    sourceHint = '',
+    toolHint = '',
+    request = this.request,
+    args = {},
+  }) {
     const result = await request({
       type: 'fetch_session_output',
       id: sessionId,
@@ -283,13 +304,63 @@ export class CloudBrokerClient extends EventEmitter {
       });
     }
     const session = result.session && typeof result.session === 'object' ? result.session : {};
+    const source = transcriptSource({ sourceHint, toolHint, sessionTool: session.tool });
+    const structured = await this._fetchDiscoveredTranscript({
+      sessionId,
+      source,
+      cwd: session.cwd,
+      args,
+    });
+    if (structured) return structured;
     return this._transcriptFromSessionOutput({
       sessionId,
-      source: transcriptSource({ sourceHint, toolHint, sessionTool: session.tool }),
+      source,
       session,
       output: typeof result.output === 'string' ? result.output : '',
       fallback: 'broker_recent_output',
     });
+  }
+
+  async _fetchDiscoveredTranscript({ sessionId, source, cwd, args = {} } = {}) {
+    if (!sessionId || !source || !cwd) return null;
+    let transcriptPath = this.transcriptPaths.get(sessionId) || null;
+    try {
+      if (!transcriptPath) {
+        if (typeof this.transcriptFinder !== 'function') return null;
+        const transcript = await this.transcriptFinder({ source, cwd });
+        transcriptPath = transcript?.path || null;
+        if (!transcriptPath) return null;
+        this.transcriptPaths.set(sessionId, transcriptPath);
+      }
+      return await this._fetchTranscriptFromPath({
+        sessionId,
+        transcriptPath,
+        source,
+        args,
+      });
+    } catch (err) {
+      this.transcriptPaths.delete(sessionId);
+      this.logger.warn?.(`mc broker transcript discovery failed: ${err.message || String(err)}`);
+      return null;
+    }
+  }
+
+  async _fetchTranscriptFromPath({ sessionId, transcriptPath, source, args = {} } = {}) {
+    const key = sessionId || transcriptPath;
+    const cached = this.transcriptHandlers.get(key);
+    let handler = cached?.transcriptPath === transcriptPath && cached?.source === source
+      ? cached.handler
+      : null;
+    if (!handler) {
+      handler = this.fetchTranscriptHandlerFactory({ transcriptPath, source });
+      this.transcriptHandlers.set(key, { transcriptPath, source, handler });
+    }
+    try {
+      return await handler(args);
+    } catch (err) {
+      this.transcriptHandlers.delete(key);
+      throw err;
+    }
   }
 
   async _dispatchMessage({ sessionId, message, toolHint = null, request = this.request }) {
