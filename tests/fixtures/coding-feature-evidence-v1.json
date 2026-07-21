@@ -1,0 +1,103 @@
+{
+  "contract_version": "coding-feature-evidence-v1",
+  "detector_version": "coding-features-v1",
+  "features": {
+    "cloudflare.durable_objects.websocket_hibernation": {
+      "evidence_codes": [
+        "api:acceptWebSocket",
+        "api:deserializeAttachment",
+        "api:getWebSockets",
+        "api:serializeAttachment",
+        "config:durable_objects"
+      ],
+      "high_signal_codes": [
+        "api:acceptWebSocket",
+        "api:deserializeAttachment",
+        "api:getWebSockets",
+        "api:serializeAttachment"
+      ]
+    },
+    "cloudflare.workers.queues_delivery": {
+      "evidence_codes": [
+        "api:message.ack",
+        "api:message.retry",
+        "api:queue.send",
+        "api:queue.sendBatch",
+        "config:queues",
+        "handler:queue"
+      ],
+      "high_signal_codes": [
+        "api:message.ack",
+        "api:message.retry",
+        "api:queue.send",
+        "api:queue.sendBatch",
+        "handler:queue"
+      ]
+    },
+    "cloudflare.workers.service_bindings": {
+      "evidence_codes": [
+        "api:rpc.entrypoint",
+        "api:service.fetch",
+        "config:services"
+      ],
+      "high_signal_codes": [
+        "api:rpc.entrypoint",
+        "api:service.fetch"
+      ]
+    },
+    "node.worker_threads": {
+      "evidence_codes": [
+        "api:MessageChannel",
+        "api:new_Worker",
+        "api:parentPort",
+        "api:workerData",
+        "import:node_worker_threads"
+      ],
+      "high_signal_codes": [
+        "api:MessageChannel",
+        "api:new_Worker",
+        "api:parentPort",
+        "api:workerData"
+      ]
+    },
+    "postgres.row_level_security": {
+      "evidence_codes": [
+        "config:row_security",
+        "sql:create_policy",
+        "sql:enable_row_level_security",
+        "sql:force_row_level_security"
+      ],
+      "high_signal_codes": [
+        "sql:create_policy",
+        "sql:enable_row_level_security",
+        "sql:force_row_level_security"
+      ]
+    },
+    "sqlite.fts5_search": {
+      "evidence_codes": [
+        "api:fts5_highlight",
+        "api:fts5_rank_bm25",
+        "sql:create_virtual_table_fts5",
+        "sql:match_query"
+      ],
+      "high_signal_codes": [
+        "sql:create_virtual_table_fts5",
+        "sql:match_query"
+      ]
+    },
+    "web.abort_signal_composition": {
+      "evidence_codes": [
+        "api:AbortController.abort",
+        "api:AbortSignal.any",
+        "api:AbortSignal.timeout",
+        "api:signal.throwIfAborted"
+      ],
+      "high_signal_codes": [
+        "api:AbortController.abort",
+        "api:AbortSignal.any",
+        "api:AbortSignal.timeout",
+        "api:signal.throwIfAborted"
+      ]
+    }
+  }
+}

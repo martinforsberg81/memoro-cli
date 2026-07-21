@@ -334,4 +334,17 @@ describe('buildAnnotations', () => {
     const out = buildAnnotations({ raw, parsed: {}, cwd: null });
     assert.equal(out.coding_context.primary_languages[0].lang, 'typescript');
   });
+
+  test('runs normalized feature detection inside the existing annotation pass', () => {
+    const raw = JSON.stringify(toolUseEntry('Edit', {
+      file_path: 'src/request.ts',
+      new_string: 'const signal = AbortSignal.any([AbortSignal.timeout(5000), parent]);',
+    }));
+    const out = buildAnnotations({ raw, parsed: {}, cwd: null });
+    assert.deepEqual(out.coding_features, [{
+      feature_id: 'web.abort_signal_composition',
+      evidence_codes: ['api:AbortSignal.any', 'api:AbortSignal.timeout'],
+      files_observed: 1,
+    }]);
+  });
 });
