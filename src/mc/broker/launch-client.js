@@ -153,6 +153,18 @@ export async function launchBrokerOwnedSession({
   const attachSocketPath = sessionHost.socketPath || null;
 
   scrubRuntimeSecretsInPlace(spawnEnv);
+  try {
+    const { prepareLocalResourceGuardEnv } = await import('../local-resource-guard.js');
+    spawnEnv = (deps.prepareLocalResourceGuardEnv || prepareLocalResourceGuardEnv)({
+      baseEnv: spawnEnv,
+      config,
+      mcDir: mcHome(),
+      codingSessionId,
+    }).env;
+  } catch (err) {
+    stderr.write(`mc: failed to install local resource guard (${err.message}); refusing to launch\n`);
+    return { code: 1 };
+  }
   if (launch.id === 'codex') {
     try {
       const { prepareCloudflareGuardEnv } = await import('../cloudflare-guard.js');

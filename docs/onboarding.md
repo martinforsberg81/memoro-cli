@@ -18,7 +18,10 @@ steps. Each step is a real command you can paste — `mc`, `mc auth codex`,
 `mc install-shell`, or the canonical `npm install -g …` line for a tool
 you don't have. When everything passes, it writes
 `${MC_HOME}/.setup-done-v1` and exits 0. Re-run it any time; it's
-idempotent.
+idempotent. On an interactive terminal, setup also offers a resource profile
+for local image and motion generation. Pressing Enter keeps the current
+selection; on a fresh install that is `unlimited`, so existing behaviour does
+not change automatically.
 
 ## Why install commands are not duplicated here
 
@@ -68,7 +71,29 @@ mc auth codex      # or claude / gemini
    supported by `install-shell` (it's tracked in plan §11f); fish
    users can paste the equivalent function manually.
 
-When all three pass, `mc setup` writes the `${MC_HOME}/.setup-done-v1`
+4. **Optional local heavy-job limits.** The profile controls recognised local
+   Python image/motion workloads launched inside future mc sessions. It does
+   not affect ordinary Python commands or provider-hosted image generation.
+   Setup recommends a profile from physical memory but never selects it for
+   you:
+
+   - `unlimited` (default) adds no wrapper or limit.
+   - `balanced` allows one heavy job, limits numerical libraries to four
+     threads, and stops that job if its process tree passes 4096 MB RSS.
+   - `conservative` targets 8 GB-class machines: one job, two threads, a
+     2560 MB RSS watchdog, and stricter disk/swap preflight checks.
+   - `custom` asks for concurrency, thread, memory, swap, and free-disk
+     thresholds.
+
+   Automation never gets a prompt. Select a named profile explicitly with
+   `mc setup --resource-profile conservative --json`; custom values use the
+   `--heavy-max-*` flags shown by `mc --help`. The choice is stored globally in
+   `~/.memoro/config.json` and takes effect only for newly launched or
+   relaunched mc sessions. The memory threshold is an active watchdog rather
+   than an operating-system hard cap: it terminates only the recognised job
+   when the process tree crosses the configured threshold.
+
+When all required checks pass, `mc setup` writes the `${MC_HOME}/.setup-done-v1`
 sentinel so the friendly first-run hint in `mc new` / `mc list`
 silences itself for that machine.
 

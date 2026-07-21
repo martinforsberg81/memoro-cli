@@ -1,8 +1,7 @@
 /**
- * `mc setup [--json]` (§11b).
+ * `mc setup [--json] [--resource-profile <name>]` (§11b).
  *
- * Non-interactive on purpose — runs every health probe `mc auth status`
- * already exposes, then either:
+ * Runs every health probe `mc auth status` already exposes, then either:
  *
  *   - all green  → prints a one-line confirmation, writes the
  *                  `${MC_HOME}/.setup-done-v1` sentinel, exits 0.
@@ -11,6 +10,11 @@
  *                  command is a real mc entry (`mc`, `mc auth codex`,
  *                  `mc install-shell`) so the user
  *                  just copies the line.
+ *
+ * On a TTY, setup also offers an optional local heavy-job resource profile.
+ * The default is `unlimited`, preserving mc's historical behaviour. JSON and
+ * non-TTY runs never prompt; automation can select a profile explicitly with
+ * `--resource-profile`.
  *
  * Idempotent. Re-run it whenever — if a step has been completed
  * externally, the next run skips it. The sentinel is for first-run
@@ -26,10 +30,21 @@ import {
   probeShellWrapper,
   probeWorkspace,
 } from './auth.js';
+import { promptLine } from '../../lib/prompt.js';
+import { readConfig, writeConfig } from '../../lib/config.js';
 import {
   sentinelPath as freshInstallSentinelPath,
   ensureSentinel as freshInstallEnsureSentinel,
 } from '../first-run.js';
+import {
+  LOCAL_RESOURCE_PROFILE_NAMES,
+  buildLocalResourceProfile,
+  customResourceLimits,
+  describeLocalResourceProfile,
+  recommendLocalResourceProfile,
+  resolveLocalResourceProfile,
+  withLocalResourceProfile,
+} from '../local-resource-profile.js';
 
 // Required tools — at least one of these must be ready for setup to consider
 // the machine usable. Codex is the default mc tool; its auth probe can be
@@ -37,24 +52,57 @@ import {
 const REQUIRED_TOOLS = ['codex'];
 const OPTIONAL_TOOLS = ['claude', 'gemini'];
 
-export async function run(argv) {
+export async function run(argv, deps = {}) {
   const opts = parseArgs(argv);
   if (opts.error) { console.error(`mc: ${opts.error}`); return 2; }
 
+  const readConfigFn = deps.readConfig || readConfig;
+  const writeConfigFn = deps.writeConfig || writeConfig;
+  let config = await readConfigFn();
+  let resourceProfile = resolveLocalResourceProfile(config);
+  const recommendedProfile = recommendLocalResourceProfile({
+    totalMemoryBytes: deps.totalMemoryBytes,
+  });
+
+  try {
+    if (opts.resourceProfile) {
+      resourceProfile = profileFromOptions(opts);
+      config = withLocalResourceProfile(config, resourceProfile);
+      await writeConfigFn(config);
+    } else if (!opts.json && (deps.stdinIsTTY ?? process.stdin.isTTY)) {
+      resourceProfile = await promptLocalResourceProfile({
+        current: resourceProfile,
+        recommended: recommendedProfile,
+        ask: deps.promptLine || promptLine,
+        stdout: deps.stdout || process.stdout,
+      });
+      config = withLocalResourceProfile(config, resourceProfile);
+      await writeConfigFn(config);
+    }
+  } catch (err) {
+    console.error(`mc: ${err.message}`);
+    return 2;
+  }
+
   const report = await buildReport();
   const steps = missingSteps(report);
+  const resourceReport = {
+    ...resourceProfile,
+    recommended: recommendedProfile,
+  };
 
   if (opts.json) {
     console.log(JSON.stringify({
       ok: steps.length === 0,
       report,
+      resource_profile: resourceReport,
       missing_steps: steps,
       sentinel_path: sentinelPath(),
     }, null, 2));
   } else if (steps.length === 0) {
-    printAllSet(report);
+    printAllSet(report, resourceReport);
   } else {
-    printChecklist(steps);
+    printChecklist(steps, resourceReport);
   }
 
   if (steps.length === 0) writeSentinel();
@@ -162,7 +210,7 @@ function extractCommand(hint) {
   return m ? m[1] : null;
 }
 
-function printAllSet(report) {
+function printAllSet(report, resourceReport) {
   process.stdout.write(`mc setup — all set up.\n`);
   process.stdout.write(`  ✓ Memoro signed in\n`);
   for (const t of REQUIRED_TOOLS) {
@@ -180,10 +228,11 @@ function printAllSet(report) {
   if (optionalReady.length) {
     process.stdout.write(`  ✓ Optional: ${optionalReady.map(labelFor).join(', ')} available\n`);
   }
+  printResourceProfile(resourceReport);
   process.stdout.write(`\nNext: from a git repo, run \`mc new <name> [focus]\` to start a session.\n`);
 }
 
-function printChecklist(steps) {
+function printChecklist(steps, resourceReport) {
   process.stdout.write(`mc setup — ${steps.length} local setup step${steps.length === 1 ? '' : 's'} left:\n\n`);
   for (let i = 0; i < steps.length; i++) {
     const s = steps[i];
@@ -192,7 +241,92 @@ function printChecklist(steps) {
     if (s.note)    process.stdout.write(`       ${s.note}\n`);
     process.stdout.write(`\n`);
   }
+  printResourceProfile(resourceReport);
   process.stdout.write(`Re-run \`mc setup\` when done to verify.\n`);
+}
+
+function printResourceProfile(resourceReport) {
+  process.stdout.write(`  ✓ Local heavy jobs: ${describeLocalResourceProfile(resourceReport)}\n`);
+  if (resourceReport.profile !== resourceReport.recommended) {
+    process.stdout.write(`    Suggested for this machine: ${resourceReport.recommended} (not selected automatically)\n`);
+  }
+}
+
+export async function promptLocalResourceProfile({
+  current = { profile: 'unlimited' },
+  recommended = 'unlimited',
+  ask = promptLine,
+  stdout = process.stdout,
+} = {}) {
+  const currentProfile = resolveProfileValue(current);
+  const choices = [
+    ['unlimited', 'No limits; preserves current mc behaviour'],
+    ['balanced', '1 job, 4 compute threads, 4096 MB memory guard'],
+    ['conservative', '1 job, 2 compute threads, 2560 MB memory guard'],
+    ['custom', 'Choose concurrency, thread and safety thresholds'],
+  ];
+  const defaultIndex = Math.max(0, choices.findIndex(([name]) => name === currentProfile.profile));
+
+  stdout.write('\nLocal image/motion resource profile:\n');
+  choices.forEach(([name, description], index) => {
+    const recommendation = name === recommended ? ' — recommended for this machine' : '';
+    const selected = name === currentProfile.profile ? ' (current)' : '';
+    stdout.write(`  ${index + 1}. ${title(name)}${selected}: ${description}${recommendation}\n`);
+  });
+  const answer = String(await ask(`Choose [${defaultIndex + 1}]: `) || '').trim().toLowerCase();
+  const selected = answer
+    ? choices[Number(answer) - 1]?.[0] || choices.find(([name]) => name === answer)?.[0]
+    : choices[defaultIndex][0];
+  if (!selected) throw new Error(`unknown resource profile choice: ${answer}`);
+  if (selected !== 'custom') return buildLocalResourceProfile(selected);
+
+  const defaults = currentProfile.profile === 'custom'
+    ? currentProfile
+    : buildLocalResourceProfile('conservative');
+  const limits = customResourceLimits();
+  const custom = {};
+  for (const field of Object.keys(limits)) {
+    custom[field] = await promptInteger({
+      label: customFieldLabel(field),
+      current: defaults[field],
+      limits: limits[field],
+      ask,
+    });
+  }
+  return buildLocalResourceProfile('custom', custom);
+}
+
+function profileFromOptions(opts) {
+  if (opts.resourceProfile !== 'custom') return buildLocalResourceProfile(opts.resourceProfile);
+  return buildLocalResourceProfile('custom', opts.custom);
+}
+
+function resolveProfileValue(value) {
+  return value?.enabled !== undefined
+    ? value
+    : buildLocalResourceProfile(value?.profile || value || 'unlimited', value);
+}
+
+async function promptInteger({ label, current, limits, ask }) {
+  for (;;) {
+    const answer = String(await ask(`${label} [${current}]: `) || '').trim();
+    const value = answer ? Number(answer) : current;
+    if (Number.isInteger(value) && value >= limits.min && value <= limits.max) return value;
+  }
+}
+
+function customFieldLabel(field) {
+  return {
+    maxConcurrent: 'Maximum concurrent heavy jobs',
+    maxThreads: 'Maximum compute threads per job',
+    maxRssMb: 'Stop job above resident memory (MB)',
+    maxSwapMb: 'Block/stop when swap exceeds (MB)',
+    minFreeDiskGb: 'Require free disk space (GB)',
+  }[field] || field;
+}
+
+function title(value) {
+  return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
 // Sentinel reads/writes live in src/mc/first-run.js so `mc new`,
@@ -201,11 +335,36 @@ function printChecklist(steps) {
 export const sentinelPath = freshInstallSentinelPath;
 export const writeSentinel = freshInstallEnsureSentinel;
 
-function parseArgs(argv) {
-  const opts = { json: false };
-  for (const a of argv) {
+export function parseArgs(argv) {
+  const opts = { json: false, resourceProfile: null, custom: {} };
+  const customFlags = {
+    '--heavy-max-concurrent': 'maxConcurrent',
+    '--heavy-max-threads': 'maxThreads',
+    '--heavy-max-rss-mb': 'maxRssMb',
+    '--heavy-max-swap-mb': 'maxSwapMb',
+    '--heavy-min-free-disk-gb': 'minFreeDiskGb',
+  };
+  for (let i = 0; i < argv.length; i += 1) {
+    const a = argv[i];
     if (a === '--json') { opts.json = true; continue; }
+    if (a === '--resource-profile') {
+      const value = String(argv[++i] || '').toLowerCase();
+      if (!LOCAL_RESOURCE_PROFILE_NAMES.includes(value)) {
+        return { error: `--resource-profile must be one of: ${LOCAL_RESOURCE_PROFILE_NAMES.join(', ')}` };
+      }
+      opts.resourceProfile = value;
+      continue;
+    }
+    if (customFlags[a]) {
+      const value = argv[++i];
+      if (value == null || String(value).startsWith('--')) return { error: `${a} requires a value` };
+      opts.custom[customFlags[a]] = Number(value);
+      continue;
+    }
     return { error: `unknown flag: ${a}` };
+  }
+  if (Object.keys(opts.custom).length && opts.resourceProfile !== 'custom') {
+    return { error: 'custom heavy-job limits require --resource-profile custom' };
   }
   return opts;
 }

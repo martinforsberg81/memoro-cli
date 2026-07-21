@@ -7,6 +7,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- `mc setup` now offers opt-in local image/motion resource profiles. The
+  default remains unlimited; balanced, conservative, and custom profiles add
+  cross-session concurrency, compute-thread, disk/swap, background-scheduling,
+  and process-tree memory safeguards for recognised local Python workloads.
 - `mc cloud-runtime run` now restores the latest coding-bin snapshot before
   provider launch and captures/uploads a filtered snapshot when a cloud runtime
   goes to sleep.
