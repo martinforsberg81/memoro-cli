@@ -2,9 +2,11 @@ import assert from 'node:assert/strict';
 import test, { describe } from 'node:test';
 
 import {
+  CODEX_SQLITE_RETRY_DELAYS_MS,
   __test__ as launchClientTest,
   brokerSessionPaths,
   ensureBrokerRunning,
+  isRetryableCodexSqliteStartupFailure,
   launchBrokerOwnedSession,
 } from '../../../src/mc/broker/launch-client.js';
 import { BROKER_PROTOCOL_VERSION } from '../../../src/mc/broker/daemon.js';
@@ -26,7 +28,171 @@ function makeStreams() {
   };
 }
 
+const CODEX_SQLITE_LOCK_OUTPUT = `Codex couldn't start because another Codex process is using its local data.
+Technical details:
+  Cause: failed to initialize state runtime at /Users/test/.codex: failed to open log DB at /Users/test/.codex/logs_2.sqlite: error returned from database: (code: 5) database is locked
+ERROR: failed to initialize sqlite local db at /Users/test/.codex/state_5.sqlite`;
+
+function earlyCodexExit() {
+  return {
+    id: 'sess_retry',
+    tool: 'codex',
+    started_at: '2026-07-21T15:36:51.000Z',
+    exit: { code: 1, signal: 0, at: '2026-07-21T15:36:57.000Z' },
+    session_state: 'dead',
+    attachable: false,
+  };
+}
+
+function launchCodexWithMocks({ request, attach, streams, sleepFn = async () => {} }) {
+  return launchBrokerOwnedSession({
+    cwd: '/repo',
+    codingSessionId: 'sess_retry',
+    sessionName: 'retry',
+    tool: 'codex',
+    sendStartupMessage: false,
+    stdout: streams.stdout,
+    stderr: streams.stderr,
+    env: { TERM: 'xterm-256color', MEMORO_TOKEN: 'tok' },
+    ensureBroker: async () => ({ ok: true, broker: { pid: 42 } }),
+    ensureCloudBroker: async () => ({ ok: true }),
+    request,
+    attach,
+    deps: {
+      useSessionHost: false,
+      getRepoContext: async () => ({ remoteUrl: 'git@example.com:org/repo.git', branch: 'main', toplevel: '/repo' }),
+      readConfig: async () => ({ apiUrl: 'https://memoro.test' }),
+      getApiUrl: () => null,
+      getSecret: async () => assert.fail('env token should avoid keychain lookup'),
+      findEntry: () => ({}),
+      resolvePolicyForWrap: () => ({}),
+      hostname: () => 'machine',
+      getPackageVersion: async () => '0.test',
+      prepareLocalResourceGuardEnv: ({ baseEnv }) => ({ env: baseEnv }),
+      readRepoPolicyConfig: () => ({ config: {}, warnings: [] }),
+      readRepoLocalConfig: () => ({ config: {}, warnings: [] }),
+      resolveEffectiveConfig: ({ globalConfig }) => globalConfig,
+      prepareCloudflareGuardEnv: ({ baseEnv }) => ({ env: baseEnv }),
+      sleep: sleepFn,
+    },
+  });
+}
+
 describe('launchBrokerOwnedSession', () => {
+  test('classifies only the exact early Codex SQLite startup failure', () => {
+    assert.equal(isRetryableCodexSqliteStartupFailure({
+      output: CODEX_SQLITE_LOCK_OUTPUT,
+      session: earlyCodexExit(),
+    }), true);
+    assert.equal(isRetryableCodexSqliteStartupFailure({
+      output: CODEX_SQLITE_LOCK_OUTPUT,
+      session: {
+        ...earlyCodexExit(),
+        exit: { code: 1, signal: 0, at: '2026-07-21T15:37:12.000Z' },
+      },
+    }), false, 'established sessions must never be retried');
+    assert.equal(isRetryableCodexSqliteStartupFailure({
+      output: 'database is locked',
+      session: earlyCodexExit(),
+    }), false, 'generic SQLite text is not specific enough');
+    assert.equal(isRetryableCodexSqliteStartupFailure({
+      output: CODEX_SQLITE_LOCK_OUTPUT,
+      session: { ...earlyCodexExit(), tool: 'claude' },
+    }), false, 'other tools are outside the retry policy');
+    assert.equal(isRetryableCodexSqliteStartupFailure({
+      output: CODEX_SQLITE_LOCK_OUTPUT,
+      session: { ...earlyCodexExit(), exit: { ...earlyCodexExit().exit, code: 0 } },
+    }), false, 'successful Codex exits must never be retried');
+  });
+
+  test('retries an early Codex SQLite lock and attaches to the successful relaunch', async () => {
+    const streams = makeStreams();
+    const requestTypes = [];
+    const sleeps = [];
+    const attachCodes = [0, 0];
+    let outputFetches = 0;
+    const res = await launchCodexWithMocks({
+      streams,
+      request: async (message) => {
+        requestTypes.push(message.type);
+        if (message.type === 'launch_session') return { ok: true, session: { id: 'sess_retry' } };
+        if (message.type === 'fetch_session_output') {
+          outputFetches += 1;
+          if (outputFetches === 2) {
+            return {
+              ok: true,
+              session: { ...earlyCodexExit(), exit: { ...earlyCodexExit().exit, code: 0 } },
+              output: 'Goodbye.',
+            };
+          }
+          return { ok: true, session: earlyCodexExit(), output: CODEX_SQLITE_LOCK_OUTPUT };
+        }
+        if (message.type === 'remove_session') return { ok: true, removed: true };
+        assert.fail(`unexpected broker request: ${message.type}`);
+      },
+      attach: async () => attachCodes.shift(),
+      sleepFn: async (delayMs) => { sleeps.push(delayMs); },
+    });
+
+    assert.equal(res.code, 0);
+    assert.deepEqual(requestTypes, [
+      'launch_session',
+      'fetch_session_output',
+      'remove_session',
+      'launch_session',
+      'fetch_session_output',
+    ]);
+    assert.deepEqual(sleeps, [CODEX_SQLITE_RETRY_DELAYS_MS[0]]);
+    assert.match(streams.err(), /retrying startup in 2s \(1\/2\)/);
+  });
+
+  test('bounds repeated Codex SQLite startup retries to two', async () => {
+    const streams = makeStreams();
+    const requestTypes = [];
+    const sleeps = [];
+    const res = await launchCodexWithMocks({
+      streams,
+      request: async (message) => {
+        requestTypes.push(message.type);
+        if (message.type === 'launch_session') return { ok: true, session: { id: 'sess_retry' } };
+        if (message.type === 'fetch_session_output') {
+          return { ok: true, session: earlyCodexExit(), output: CODEX_SQLITE_LOCK_OUTPUT };
+        }
+        if (message.type === 'remove_session') return { ok: true, removed: true };
+        assert.fail(`unexpected broker request: ${message.type}`);
+      },
+      attach: async () => 0,
+      sleepFn: async (delayMs) => { sleeps.push(delayMs); },
+    });
+
+    assert.equal(res.code, 0);
+    assert.equal(requestTypes.filter((type) => type === 'launch_session').length, 3);
+    assert.equal(requestTypes.filter((type) => type === 'remove_session').length, 2);
+    assert.deepEqual(sleeps, [...CODEX_SQLITE_RETRY_DELAYS_MS]);
+    assert.match(streams.err(), /retrying startup in 4s \(2\/2\)/);
+  });
+
+  test('does not retry other Codex startup failures', async () => {
+    const streams = makeStreams();
+    const requestTypes = [];
+    const res = await launchCodexWithMocks({
+      streams,
+      request: async (message) => {
+        requestTypes.push(message.type);
+        if (message.type === 'launch_session') return { ok: true, session: { id: 'sess_retry' } };
+        if (message.type === 'fetch_session_output') {
+          return { ok: true, session: earlyCodexExit(), output: 'Authentication failed.' };
+        }
+        assert.fail(`unexpected broker request: ${message.type}`);
+      },
+      attach: async () => 0,
+    });
+
+    assert.equal(res.code, 0);
+    assert.deepEqual(requestTypes, ['launch_session', 'fetch_session_output']);
+    assert.doesNotMatch(streams.err(), /retrying startup/);
+  });
+
   test('routes new launches through a per-session host broker when enabled', async () => {
     const requests = [];
     const stderr = makeStreams().stderr;
