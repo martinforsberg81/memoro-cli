@@ -1311,14 +1311,16 @@ should complete in <500ms.
 #### 11b. `mc setup` — self-verifying local setup checklist
 
 ```
-mc setup [--json]
+mc setup [--json] [--resource-profile <unlimited|balanced|conservative|custom>]
 ```
 
-`mc setup` is non-interactive and self-verifying. It does not own the
-browser device flow; plain `mc` auto-triggers Memoro sign-in on a TTY
-when no token exists. Setup reads the same local probes as `mc auth
-status`, then prints only the missing steps with exact commands the
-user can paste.
+`mc setup` is self-verifying. It does not own the browser device flow;
+plain `mc` auto-triggers Memoro sign-in on a TTY when no token exists.
+Setup reads the same local probes as `mc auth status`, then prints only
+the missing steps with exact commands the user can paste. On a TTY it
+also offers an optional local image/motion resource profile; Enter keeps
+the current value and a fresh install defaults to `unlimited`. JSON and
+non-TTY calls remain non-interactive.
 
 1. **Memoro account.**
    - If keychain has a token, skip.
@@ -1342,10 +1344,24 @@ user can paste.
      `${MC_HOME}/.setup-done-v1` so first-run hints stay quiet.
    - Print the next action: from a git repo, run
      `mc new <name> [focus]`.
+5. **Local heavy-job resource profile.**
+   - `unlimited` preserves historical behaviour and installs no guard.
+   - `balanced` and `conservative` cap recognised jobs at one concurrent
+     process tree, constrain numerical-library threads, apply background
+     scheduling, require safe disk/swap headroom, and stop only the guarded
+     job when its RSS watchdog threshold is crossed.
+   - `conservative` is recommended (never auto-selected) for 8 GB-class
+     machines and uses one job, two threads, and a 2560 MB RSS watchdog.
+   - `custom` exposes concurrency, thread, RSS, swap, and free-disk values.
+   - The global choice lives in `~/.memoro/config.json` and applies only to
+     future/relaunched mc sessions. Ordinary Python commands and remote image
+     generation are outside the guard.
 
-`--json` returns `{ ok, report, missing_steps, sentinel_path }` for
-tests and scripted bootstraps. Missing dependencies exit 1; all green
-exits 0 and writes the sentinel.
+`--json` returns `{ ok, report, resource_profile, missing_steps,
+sentinel_path }` for tests and scripted bootstraps. Automation can set a
+profile explicitly with `--resource-profile`; custom limits use the
+`--heavy-max-*` flags. Missing dependencies exit 1; all green exits 0
+and writes the sentinel.
 
 #### 11c. `mc auth memoro` and `mc auth <tool>` — per-target helpers
 
@@ -1399,11 +1415,12 @@ zsh/bash/fish, machine identity for multi-machine users).
   @anthropic-ai/claude-code`) and leaves the run to the human. Same
   policy for Codex / Gemini. (Decided 2026-05-28 with drev 2.)
 
-- **`mc setup` is non-interactive.** No prompts, no `--non-interactive`
-  flag (that would be redundant). The verb is: read auth status,
-  print only the missing steps with exact commands, write the
-  `${MC_HOME}/.setup-done-v1` sentinel when everything is green.
-  Idempotent + self-verifying. (Decided 2026-05-28 with drev 2.)
+- **`mc setup` is non-interactive for JSON, pipes, and automation.** On a
+  TTY it may ask only for the optional local image/motion resource profile;
+  Enter preserves the current selection and fresh installs remain
+  `unlimited`. The recommendation is informational and never auto-selected.
+  The readiness checklist itself remains idempotent and self-verifying.
+  (Decided 2026-05-28 with drev 2; amended 2026-07-21.)
 
 - **Plain `mc` is the normal Memoro sign-in entry.** A new interactive
   user should not need to know about `mc auth memoro` first. That verb

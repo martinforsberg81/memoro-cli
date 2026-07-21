@@ -16,7 +16,7 @@
  */
 import test, { describe, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, existsSync, writeFileSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, rmSync, existsSync, writeFileSync, mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -66,6 +66,29 @@ describe('mc setup — checklist (red path)', () => {
     assert.equal(j.missing_steps[0].command, 'mc');
     // Sentinel path is exposed even on red so callers can preview.
     assert.match(j.sentinel_path, /\.setup-done-v1$/);
+    assert.equal(j.resource_profile.profile, 'unlimited');
+    assert.equal(j.resource_profile.enabled, false);
+    assert.match(j.resource_profile.recommended, /^(unlimited|balanced|conservative)$/);
+  });
+
+  test('--resource-profile is scriptable and persists globally', () => {
+    const r = runMc(['setup', '--json', '--resource-profile', 'conservative'], {
+      cwd: repo.dir,
+      env: { MC_HOME: repo.mcHome, MC_ORPHAN_PID_DIR: pidDir, HOME: repo.root },
+    });
+    const j = parseJsonOrNull(r.stdout);
+    assert.ok(j, r.stdout);
+    assert.equal(j.resource_profile.profile, 'conservative');
+    assert.equal(j.resource_profile.maxThreads, 2);
+
+    const stored = JSON.parse(readFileSync(join(repo.root, '.memoro', 'config.json'), 'utf8'));
+    assert.deepEqual(stored.resources.localHeavyJobs, { profile: 'conservative' });
+
+    const rerun = runMc(['setup', '--json'], {
+      cwd: repo.dir,
+      env: { MC_HOME: repo.mcHome, MC_ORPHAN_PID_DIR: pidDir, HOME: repo.root },
+    });
+    assert.equal(parseJsonOrNull(rerun.stdout).resource_profile.profile, 'conservative');
   });
 
   test('checklist commands are real mc verbs the user can paste', () => {
@@ -95,6 +118,53 @@ describe('mc setup — checklist (red path)', () => {
 });
 
 describe('mc setup — pure helpers (in-process)', () => {
+  test('interactive profile prompt keeps unlimited on Enter and does not auto-select recommendation', async () => {
+    const { promptLocalResourceProfile } = await import('../../../src/mc/commands/setup.js');
+    let output = '';
+    const selected = await promptLocalResourceProfile({
+      current: { profile: 'unlimited', enabled: false },
+      recommended: 'conservative',
+      ask: async () => '',
+      stdout: { write: (chunk) => { output += chunk; } },
+    });
+    assert.equal(selected.profile, 'unlimited');
+    assert.equal(selected.enabled, false);
+    assert.match(output, /Conservative.*recommended for this machine/);
+  });
+
+  test('interactive custom profile collects and validates every limit', async () => {
+    const { promptLocalResourceProfile } = await import('../../../src/mc/commands/setup.js');
+    const answers = ['custom', '2', '3', '3072', '768', '12'];
+    const selected = await promptLocalResourceProfile({
+      current: { profile: 'unlimited', enabled: false },
+      recommended: 'conservative',
+      ask: async () => answers.shift(),
+      stdout: { write: () => {} },
+    });
+    assert.deepEqual(selected, {
+      profile: 'custom',
+      enabled: true,
+      maxConcurrent: 2,
+      maxThreads: 3,
+      maxRssMb: 3072,
+      maxSwapMb: 768,
+      minFreeDiskGb: 12,
+    });
+  });
+
+  test('custom CLI limits require the custom profile', async () => {
+    const { parseArgs } = await import('../../../src/mc/commands/setup.js');
+    assert.match(parseArgs(['--heavy-max-threads', '2']).error, /require --resource-profile custom/);
+    assert.equal(parseArgs([
+      '--resource-profile', 'custom',
+      '--heavy-max-concurrent', '1',
+      '--heavy-max-threads', '2',
+      '--heavy-max-rss-mb', '2560',
+      '--heavy-max-swap-mb', '512',
+      '--heavy-min-free-disk-gb', '20',
+    ]).resourceProfile, 'custom');
+  });
+
   test('missingSteps([] when report is all green) returns []', async () => {
     const { missingSteps } = await import('../../../src/mc/commands/setup.js');
     const greenReport = {

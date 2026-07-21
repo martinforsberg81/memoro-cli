@@ -27,7 +27,7 @@ mc
 mc setup
 ```
 
-On first run, `mc` signs this machine in to Memoro with browser device auth and stores the token in the OS keychain. Then `mc setup` reads every local probe needed to get you running and prints a numbered checklist of *only* the missing steps — each step is a single command you can paste. Re-run it whenever; once everything is green it just confirms.
+On first run, `mc` signs this machine in to Memoro with browser device auth and stores the token in the OS keychain. Then `mc setup` reads every local probe needed to get you running and prints a numbered checklist of *only* the missing steps — each step is a single command you can paste. On a terminal it also offers optional resource profiles for local image/motion jobs; pressing Enter keeps the current profile, and fresh installs default to no limits. Re-run setup whenever; once everything is green it just confirms.
 
 Then a typical day:
 
@@ -44,7 +44,7 @@ See [`docs/onboarding.md`](docs/onboarding.md) for the long story — per-tool i
 `mc` is a Memoro-aware wrapper around your coding tool of choice. It owns a worktree per session, registers each session with Memoro so peer sessions on the same account can see and dispatch to each other, and gives you the shell ergonomics that drop the manual `git worktree` / `git branch` ceremony.
 
 ```sh
-mc setup                  # idempotent self-check; prints what's left to do
+mc setup                  # self-check + optional local heavy-job limits
 mc auth status            # single-screen health check
 mc new <name>             # create worktree + branch + launch the tool
 mc list                   # show your sessions, filters per §9d of the plan
@@ -65,7 +65,7 @@ Under the hood: `mc` runs the tool in a PTY it owns, with your terminal piped tr
 | Command | Purpose |
 |---|---|
 | `mc` | First run signs in to Memoro with browser device auth |
-| `mc setup` | Self-verifying local setup checklist (§11b) |
+| `mc setup [--resource-profile <name>]` | Setup checklist and optional local image/motion resource profile (§11b) |
 | `mc auth status [--json]` | Single-screen health check |
 | `mc auth memoro [--logout]` | Token login/logout for CI or headless setup |
 | `mc auth <claude\|codex\|gemini>` | Re-check one tool's status + fix hint |

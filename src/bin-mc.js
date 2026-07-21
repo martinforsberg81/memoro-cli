@@ -314,7 +314,13 @@ START OPTIONS
 
 SETUP
   mc                              First run signs in to Memoro with browser device auth
-  mc setup [--json]               Verify local setup after sign-in
+  mc setup [--json]               Verify setup; choose local heavy-job limits on a TTY
+  mc setup --resource-profile <unlimited|balanced|conservative|custom>
+                                  Configure image/motion resource protection
+  mc setup --resource-profile custom --heavy-max-concurrent <n>
+           --heavy-max-threads <n> --heavy-max-rss-mb <n>
+           --heavy-max-swap-mb <n> --heavy-min-free-disk-gb <n>
+                                  Configure every custom safeguard
   mc install-shell                Install auto-cd support for zsh/bash
   mc auth status [--json]         Check Memoro + coding-tool auth
   mc auth memoro                  Token login/logout for CI or headless setup
@@ -392,7 +398,7 @@ COMMAND SURFACES
 NEW USER FLOW
   1. Install: \`npm install -g memoro-cli\`
   2. Sign in: run \`mc\` and approve the browser device flow
-  3. Verify: \`mc setup\` prints only the remaining local steps
+  3. Verify: \`mc setup\` checks readiness and offers optional resource limits
   4. Start: from a git repo, run \`mc new <name> [focus]\`
 
 WHAT HAPPENS ON START
@@ -652,6 +658,18 @@ async function runWrap(argv, { label = null } = {}) {
     ...process.env,
     MEMORO_MC_PARENT: '1',  // hooks see this and no-op their heartbeat-loop
   };
+  try {
+    const { prepareLocalResourceGuardEnv } = await import('./mc/local-resource-guard.js');
+    spawnEnv = prepareLocalResourceGuardEnv({
+      baseEnv: spawnEnv,
+      config,
+      mcDir: MC_DIR,
+      codingSessionId,
+    }).env;
+  } catch (err) {
+    console.error(`mc: failed to install local resource guard (${err.message}); refusing to launch`);
+    process.exit(1);
+  }
   if (launchToolId === 'codex') {
     try {
       const { prepareCloudflareGuardEnv } = await import('./mc/cloudflare-guard.js');

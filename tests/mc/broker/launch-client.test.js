@@ -124,6 +124,11 @@ describe('launchBrokerOwnedSession', () => {
           assert.match(identity.llmSessionId, /^mc-10000-/);
           return 'sess_abc';
         },
+        prepareLocalResourceGuardEnv: ({ baseEnv, config, codingSessionId }) => {
+          assert.equal(config.apiUrl, 'https://memoro.test');
+          assert.equal(codingSessionId, 'sess_abc');
+          return { env: { ...baseEnv, MC_LOCAL_RESOURCE_PROFILE: 'conservative' } };
+        },
         getPackageVersion: async () => '0.test',
       },
     });
@@ -142,6 +147,7 @@ describe('launchBrokerOwnedSession', () => {
     assert.deepEqual(msg.session.argv, ['--resume']);
     assert.equal(msg.session.cols, 100);
     assert.equal(msg.session.rows, 30);
+    assert.equal(msg.session.env.MC_LOCAL_RESOURCE_PROFILE, 'conservative');
     assert.equal(msg.session.sidecars.codingSessionId, 'sess_abc');
     assert.equal(msg.session.sidecars.apiUrl, 'https://memoro.test');
     assert.equal(msg.session.sidecars.token, 'tok');
