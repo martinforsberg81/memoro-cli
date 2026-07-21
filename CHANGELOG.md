@@ -37,6 +37,9 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   not add a terminal `mc map` command or auto-edit the map.
 
 ### Fixed
+- Broker-owned Codex launches now retry twice when Codex exits during startup
+  with its specific transient SQLite state/log database lock error. Other
+  startup failures and established sessions are not retried.
 - Coding-bin snapshots preserve deletions through a snapshot manifest and filter
   token-bearing argv/environment paths before upload.
 - Broker connection readiness now handles pretty-printed JSON payloads from the
