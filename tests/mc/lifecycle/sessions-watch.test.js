@@ -88,6 +88,13 @@ describe('mc sessions watch', () => {
     assert.equal(snapshot.sessions[0].recommended_reply, 'Ja, använd den formuleringen.');
     assert.equal(snapshot.sessions[1].disposition, 'review_suggested');
     assert.equal(snapshot.sessions[2].disposition, 'working');
+    assert.equal(snapshot.sessions[0].work_status.status, 'needs_attention');
+    assert.deepEqual(snapshot.work_status_counts, {
+      needs_attention: 2,
+      active: 1,
+      resting: 1,
+      completed: 0,
+    });
   });
 
   test('can exclude the current orchestrator worktree by name', () => {
@@ -135,6 +142,7 @@ describe('mc sessions watch', () => {
     assert.equal(parsed.ok, true);
     assert.equal(parsed.sessions[0].id, 'sess_a');
     assert.equal(parsed.sessions[0].disposition, 'awaiting_reply');
+    assert.equal(parsed.sessions[0].work_status.status, 'needs_attention');
   });
 
   test('run can filter snapshots to active dispositions', async () => {

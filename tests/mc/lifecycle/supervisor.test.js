@@ -547,6 +547,12 @@ describe('mc supervisor', () => {
 
     assert.deepEqual(snapshot.sessions.map((session) => session.id), ['sess_working', 'sess_idle']);
     assert.deepEqual(snapshot.counts, { working: 1, idle: 1 });
+    assert.deepEqual(snapshot.work_status_counts, {
+      needs_attention: 0,
+      active: 1,
+      resting: 1,
+      completed: 0,
+    });
   });
 
   test('send command dispatches through the injected local dispatcher', async () => {

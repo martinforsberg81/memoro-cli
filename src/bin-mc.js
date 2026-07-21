@@ -78,6 +78,7 @@ import {
 } from './mc/broker/session-hosts.js';
 import { normalizeInteractivePtyEnv } from './mc/interactive-env.js';
 import { renderIntro as renderSessionIntro } from './mc/session-intro.js';
+import { SessionProjectionTracker } from './mc/session-projector.js';
 import {
   buildSessionListView,
   fetchActiveCodingSessionsWithLocalBroker,
@@ -707,7 +708,8 @@ async function runWrap(argv, { label = null } = {}) {
   });
   spawnEnv = interactiveEnv.env;
 
-  const uploadStartMs = Date.now() - 1000;
+  const runtimeStartedAt = Date.now();
+  const uploadStartMs = runtimeStartedAt - 1000;
   const ptyProcess = pty.spawn(launchSpec.bin, spawnArgs, {
     name: interactiveEnv.termName,
     cols: process.stdout.columns || 80,
@@ -723,8 +725,10 @@ async function runWrap(argv, { label = null } = {}) {
   //     stripped excerpt of what Claude is currently showing (lets a peer
   //     coordinator spot e.g. "How should I proceed?" prompts at a
   //     glance, not just "session B has been idle 2m")
-  let lastOutputAt = Date.now();
+  let lastOutputAt = runtimeStartedAt;
+  let lastInputAt = null;
   let outputBuffer = '';
+  const projectionTracker = new SessionProjectionTracker({ cwd });
   const startupMessageController = createStartupMessageController({
     message: startupMessage,
     delayMs: STARTUP_MESSAGE_IDLE_MS,
@@ -751,6 +755,7 @@ async function runWrap(argv, { label = null } = {}) {
   process.stdin.resume();
   process.stdin.setEncoding('utf8');
   process.stdin.on('data', (data) => {
+    lastInputAt = Date.now();
     ptyProcess.write(data);
   });
 
@@ -768,6 +773,7 @@ async function runWrap(argv, { label = null } = {}) {
   }
   const server = createDispatchSocketServer({
     deliver: (message) => {
+      lastInputAt = Date.now();
       writeToPty(ptyProcess, message, launchSpec);
     },
   });
@@ -784,6 +790,7 @@ async function runWrap(argv, { label = null } = {}) {
       transcriptPath: null,
       source: launchSpec.heartbeatSource,
       deliver: (message) => {
+        lastInputAt = Date.now();
         writeToPty(ptyProcess, message, launchSpec);
       },
     }),
@@ -812,6 +819,17 @@ async function runWrap(argv, { label = null } = {}) {
           now,
           excerptMax: EXCERPT_MAX_CHARS,
           extractExcerpt,
+          sessionProjection: projectionTracker.runtime({
+            session: {
+              session_state: 'live',
+              attachable: true,
+              started_at: new Date(runtimeStartedAt).toISOString(),
+              last_output_at: new Date(lastOutputAt).toISOString(),
+              last_input_at: lastInputAt ? new Date(lastInputAt).toISOString() : null,
+            },
+            output: outputBuffer,
+            now,
+          }),
         }),
       });
       if (!alive) break;

@@ -71,6 +71,18 @@ function makeRuntime(opts = {}) {
         stopped: false,
         start() { this.started = true; },
         stop() { this.stopped = true; },
+        currentProjection() {
+          return {
+            contract_version: 'mc-session-projection-v1',
+            status: 'active',
+            reason_code: 'recent_output',
+            observed_at: '2026-07-21T08:00:00.000Z',
+            classifier_version: 'mc-session-projector-v1',
+            classification_basis: 'runtime_fallback',
+            runtime: null,
+            git: null,
+          };
+        },
       };
       sidecars.push(sidecar);
       return sidecar;
@@ -466,6 +478,8 @@ describe('BrokerRuntime', () => {
     assert.equal(sidecars[0].started, true);
     assert.equal(sidecars[0].spec.session.id, 'sess_a');
     assert.equal(sidecars[0].spec.coding.codingSessionId, 'sess_real');
+    assert.equal(res.session.session_projection.status, 'active');
+    assert.equal(runtime.listSessions()[0].session_projection.reason_code, 'recent_output');
 
     runtime.handle({ type: 'remove_session', id: 'sess_a' });
     assert.equal(sidecars[0].stopped, true);

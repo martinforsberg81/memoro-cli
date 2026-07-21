@@ -1,6 +1,13 @@
 import { requestBroker } from '../broker/client.js';
 import { readLocalSessionOutput } from '../broker/cloud.js';
+import {
+  cleanSessionOutput,
+  projectRuntimeSession,
+  sessionWorkStatusCounts,
+} from '../session-projector.js';
 import { setTimeout as sleep } from 'node:timers/promises';
+
+export { cleanSessionOutput } from '../session-projector.js';
 
 const DEFAULT_OUTPUT_TIMEOUT_MS = 750;
 const DEFAULT_FOLLOW_INTERVAL_MS = 5_000;
@@ -117,6 +124,7 @@ export function buildWatchSnapshot({
     generated_at: new Date(now).toISOString(),
     sessions: items,
     counts: countByDisposition(items),
+    work_status_counts: sessionWorkStatusCounts(items),
   };
 }
 
@@ -134,6 +142,7 @@ export function summarizeSession(session = {}, output = '', now = Date.now()) {
     state: stringOrNull(session.session_state || session.state) || 'unknown',
     attachable: session.attachable !== false,
     disposition,
+    work_status: projectRuntimeSession({ session, output, now }),
     last_output_at: stringOrNull(session.last_output_at || session.lastOutputAt),
     last_input_at: stringOrNull(session.last_input_at || session.lastInputAt),
     last_output_age_seconds: ageSeconds(session.last_output_at || session.lastOutputAt, now),
@@ -332,45 +341,6 @@ function looksLikeReviewSuggestion(text) {
   return /(Jag skulle|Min rekommendation|Föreslagen rewrite|Så min reviderade plan|I would|Recommended plan|I recommend)/i.test(tail);
 }
 
-export function cleanSessionOutput(value) {
-  return String(value || '')
-    .replace(/\x1b\][\s\S]*?(?:\x07|\x1b\\)/g, '')
-    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')
-    .replace(/\[(?:\d{1,3};)*\d{1,3}[A-Za-z]/g, '')
-    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '')
-    .replace(/\r/g, '\n')
-    .split('\n')
-    .map(stripCodexRedrawNoise)
-    .filter((line) => line.trim() || !isCodexRedrawNoise(line))
-    .join('\n')
-    .replace(/[ \t]+/g, ' ')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
-}
-
-function stripCodexRedrawNoise(line) {
-  const value = String(line || '');
-  const matches = [...value.matchAll(CODEX_REDRAW_TOKEN_RE)];
-  for (const match of matches) {
-    const index = match.index ?? 0;
-    const suffix = value.slice(index);
-    if (isCodexRedrawNoise(suffix)) return value.slice(0, index).trimEnd();
-  }
-  return value;
-}
-
-function isCodexRedrawNoise(value) {
-  const text = String(value || '');
-  const tokens = text.match(CODEX_REDRAW_TOKEN_RE) || [];
-  if (tokens.length < 5) return false;
-  const letters = text.replace(/[^A-Za-z]/g, '');
-  if (!letters) return false;
-  const tokenLetters = tokens.join('').replace(/[^A-Za-z]/g, '');
-  return tokenLetters.length / letters.length > 0.55;
-}
-
-const CODEX_REDRAW_TOKEN_RE = /W{1,2}o|Wor|Worki?|Workin|Working|orking|rking|Reviewi?|Reviewin|Reviewing|eviewing|viewing|iewing|approval|approv[a-z]*|request|reques[a-z]*|ingngg|ngg/gi;
-
 function oneLine(value, max) {
   const s = String(value || '').replace(/\s+/g, ' ').trim();
   return s.length > max ? `${s.slice(0, max - 1)}…` : s;
@@ -418,6 +388,8 @@ function compareWatchItems(a, b) {
 function watchSignature(session) {
   return JSON.stringify({
     disposition: session?.disposition || null,
+    work_status: session?.work_status?.status || null,
+    work_reason: session?.work_status?.reason_code || null,
     recommended_reply: session?.recommended_reply || null,
     latest_text: shouldTrackLatestText(session) ? oneLine(session?.latest_text || '', 240) : null,
     state: session?.state || null,
