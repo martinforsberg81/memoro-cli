@@ -1,5 +1,6 @@
 import { join } from 'node:path';
 import { hostname } from 'node:os';
+import { setTimeout as sleep } from 'node:timers/promises';
 
 import { resolveLaunch } from '../../adapters/index.js';
 import { installUpdateCommand } from '../../adapters/claude-code.js';
@@ -26,6 +27,8 @@ import { prepareCloudCodexAuth } from '../cloud-codex-auth.js';
 import { resolveSessionSourceIdentity } from '../session-projector.js';
 
 const CLOUD_BROKER_START_TIMEOUT_MS = 10_000;
+const CODEX_SQLITE_STARTUP_WINDOW_MS = 20_000;
+export const CODEX_SQLITE_RETRY_DELAYS_MS = Object.freeze([2_000, 4_000]);
 
 export async function launchBrokerOwnedSession({
   cwd,
@@ -211,7 +214,7 @@ export async function launchBrokerOwnedSession({
   });
   spawnEnv = interactiveEnv.env;
 
-  const launchRes = await launchRequest({
+  const launchMessage = {
     type: 'launch_session',
     session: {
       id: codingSessionId,
@@ -247,7 +250,9 @@ export async function launchBrokerOwnedSession({
         transcriptPath: registryEntry.tool_transcript_path || null,
       },
     },
-  }).catch((err) => ({ ok: false, error: err.message || String(err) }));
+  };
+  const launchRes = await launchRequest(launchMessage)
+    .catch((err) => ({ ok: false, error: err.message || String(err) }));
 
   if (!launchRes.ok) {
     stderr.write(`mc: broker launch failed (${launchRes.error || launchRes.reason || 'unknown'})\n`);
@@ -283,11 +288,95 @@ export async function launchBrokerOwnedSession({
     return { code: 0, codingSessionId: effectiveCodingSessionId, broker: sessionHost.broker || null, attached: false };
   }
 
-  const code = await attach({
+  const attachOptions = {
     id: effectiveCodingSessionId,
     ...(attachSocketPath ? { socketPath: attachSocketPath } : {}),
-  });
+  };
+  let code = await attach(attachOptions);
+  if (launch.id === 'codex') {
+    code = await retryCodexSqliteStartup({
+      code,
+      codingSessionId: effectiveCodingSessionId,
+      launchMessage: {
+        ...launchMessage,
+        session: { ...launchMessage.session, id: effectiveCodingSessionId },
+      },
+      launchRequest,
+      attach,
+      attachOptions,
+      stderr,
+      sleepFn: deps.sleep || sleep,
+      retryDelaysMs: deps.codexSqliteRetryDelaysMs || CODEX_SQLITE_RETRY_DELAYS_MS,
+    });
+  }
   return { code, codingSessionId: effectiveCodingSessionId, broker: sessionHost.broker || null, attached: true };
+}
+
+export function isRetryableCodexSqliteStartupFailure({ output, session } = {}) {
+  if (session?.tool !== 'codex' || !session?.exit || session.exit.code === 0) return false;
+  const startedAt = Date.parse(session.started_at || '');
+  const exitedAt = Date.parse(session.exit.at || '');
+  const elapsedMs = exitedAt - startedAt;
+  if (!Number.isFinite(elapsedMs) || elapsedMs < 0 || elapsedMs > CODEX_SQLITE_STARTUP_WINDOW_MS) {
+    return false;
+  }
+
+  const text = String(output || '');
+  const isSqliteLock = /database is locked/i.test(text);
+  const isCodexStateInitialization = /(?:failed to initialize sqlite local db|failed to open log DB at .*logs_\d+\.sqlite)/i.test(text);
+  return isSqliteLock && isCodexStateInitialization;
+}
+
+async function retryCodexSqliteStartup({
+  code,
+  codingSessionId,
+  launchMessage,
+  launchRequest,
+  attach,
+  attachOptions,
+  stderr,
+  sleepFn,
+  retryDelaysMs,
+}) {
+  let currentCode = code;
+  for (let index = 0; index < retryDelaysMs.length; index += 1) {
+    const snapshot = await launchRequest({
+      type: 'fetch_session_output',
+      id: codingSessionId,
+    }).catch(() => null);
+    if (!snapshot?.ok || !isRetryableCodexSqliteStartupFailure({
+      output: snapshot.output,
+      session: snapshot.session,
+    })) {
+      break;
+    }
+
+    const removed = await launchRequest({
+      type: 'remove_session',
+      id: codingSessionId,
+    }).catch((err) => ({ ok: false, error: err.message || String(err) }));
+    if (!removed?.ok) {
+      stderr.write(`mc: Codex SQLite startup retry could not remove the failed broker session (${removed?.error || 'unknown'}).\n`);
+      break;
+    }
+
+    const delayMs = retryDelaysMs[index];
+    stderr.write(`mc: Codex state database was briefly locked; retrying startup in ${formatRetryDelay(delayMs)} (${index + 1}/${retryDelaysMs.length}).\n`);
+    await sleepFn(delayMs);
+
+    const relaunched = await launchRequest(launchMessage)
+      .catch((err) => ({ ok: false, error: err.message || String(err) }));
+    if (!relaunched?.ok) {
+      stderr.write(`mc: Codex SQLite startup retry failed to relaunch (${relaunched?.error || relaunched?.reason || 'unknown'}).\n`);
+      return 1;
+    }
+    currentCode = await attach(attachOptions);
+  }
+  return currentCode;
+}
+
+function formatRetryDelay(delayMs) {
+  return Number.isInteger(delayMs / 1_000) ? `${delayMs / 1_000}s` : `${delayMs}ms`;
 }
 
 export function brokerSessionPaths(codingSessionId) {
@@ -363,4 +452,5 @@ export const __test__ = {
   resolveLaunchAuthToken,
   isCloudBrokerLaunch,
   resolveLaunchBroker,
+  retryCodexSqliteStartup,
 };
