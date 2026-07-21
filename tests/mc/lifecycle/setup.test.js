@@ -1,7 +1,8 @@
 /**
  * `mc setup` integration spec (§11b).
  *
- * Non-interactive, self-verifying. The verb is contract-bound:
+ * Self-verifying. These subprocess cases run without a TTY; the verb is
+ * contract-bound:
  *   - missing pieces → exit 1 + numbered checklist + exact commands
  *   - all green       → exit 0 + write ${MC_HOME}/.setup-done-v1
  *
@@ -51,7 +52,7 @@ describe('mc setup — checklist (red path)', () => {
     assert.ok(!existsSync(join(repo.mcHome, '.setup-done-v1')));
   });
 
-  test('--json shape: { ok, report, missing_steps, sentinel_path }', () => {
+  test('--json shape includes readiness, resource profile, steps, and sentinel', () => {
     const r = runMc(['setup', '--json'], {
       cwd: repo.dir,
       env: { MC_HOME: repo.mcHome, MC_ORPHAN_PID_DIR: pidDir, HOME: repo.root },
