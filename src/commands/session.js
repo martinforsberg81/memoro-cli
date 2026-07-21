@@ -8,7 +8,7 @@
 import { readFile, writeFile, mkdir, rm } from 'node:fs/promises';
 import { existsSync, openSync } from 'node:fs';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
+import { hostname, tmpdir } from 'node:os';
 import { spawn } from 'node:child_process';
 import { getSecret } from '../lib/keychain.js';
 import { readConfig, updateConfig, getApiUrl, CONFIG_DIR } from '../lib/config.js';
@@ -19,6 +19,10 @@ import { confirm } from '../lib/prompt.js';
 import { readHookEvent, parseHookEvent } from '../lib/hook-event.js';
 import { buildAnnotations } from '../lib/annotate.js';
 import { findLatestCodexSession } from '../lib/codex.js';
+import {
+  resolveSessionSourceIdentity,
+  SessionProjectionTracker,
+} from '../mc/session-projector.js';
 
 export async function uploadSession(argv) {
   const { flags, positional } = parseFlags(argv);
@@ -99,6 +103,12 @@ export async function uploadSession(argv) {
     source,
     codingSessionId: flags.codingSessionId || process.env.MC_CODING_SESSION_ID || null,
   });
+  attachAutomaticSessionProjection(payload, {
+    parsed,
+    sessionCwd,
+    machineId: hostname(),
+    env: process.env,
+  });
 
   // Attach deterministic client-side annotations — languages, frameworks,
   // tool-use stats, repo manifest. Zero LLM, zero privacy surface beyond
@@ -145,6 +155,26 @@ export async function uploadSession(argv) {
     console.error(`  View: ${apiUrl.replace(/\/$/, '')}/app/library`);
   }
   return 0;
+}
+
+export function attachAutomaticSessionProjection(payload, {
+  parsed,
+  sessionCwd,
+  machineId,
+  env = process.env,
+  projectionTracker = null,
+} = {}) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return payload;
+  const sourceIdentity = resolveSessionSourceIdentity({ machineId, env });
+  Object.assign(payload, sourceIdentity);
+  if (!payload.coding_session_id) return payload;
+  const tracker = projectionTracker || new SessionProjectionTracker({ cwd: sessionCwd });
+  payload.session_projection = tracker.transcript({
+    parsed,
+    runtimeLifecycle: 'stopped',
+    terminal: true,
+  });
+  return payload;
 }
 
 function parseFlags(argv) {

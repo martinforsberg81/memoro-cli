@@ -8,6 +8,10 @@ import { createFetchTranscriptHandler } from '../../commands/handlers/fetch-tran
 import { memoroFetch } from '../../lib/api.js';
 import { DEFAULT_TOOL } from '../../lib/config.js';
 import { extractExcerpt } from '../session-excerpt.js';
+import {
+  resolveSessionSourceIdentity,
+  SessionProjectionTracker,
+} from '../session-projector.js';
 import { scheduleSessionUpload } from '../session-upload.js';
 
 const TICK_INTERVAL_MS = 60_000;
@@ -30,6 +34,7 @@ export class BrokerSessionSidecars {
     maxAttempts = MAX_ATTEMPTS,
     excerptMaxChars = EXCERPT_MAX_CHARS,
     sessionUploadScheduler = scheduleSessionUpload,
+    projectionTracker = null,
     logger = silentLogger(),
   } = {}) {
     if (!session) throw new TypeError('session is required');
@@ -47,6 +52,17 @@ export class BrokerSessionSidecars {
     this.maxAttempts = maxAttempts;
     this.excerptMaxChars = excerptMaxChars;
     this.sessionUploadScheduler = sessionUploadScheduler;
+    this.sourceIdentity = resolveSessionSourceIdentity({
+      sourceId: coding.sourceId || coding.source_id,
+      sourceKind: coding.sourceKind || coding.source_kind,
+      sourceName: coding.sourceName || coding.source_name,
+      cloudSessionId: coding.cloudSessionId || coding.cloud_session_id,
+      machineId: coding.machineId,
+    });
+    this.projectionTracker = projectionTracker || new SessionProjectionTracker({
+      cwd: session.cwd,
+      now,
+    });
     this.logger = logger;
 
     this.dispatchServer = null;
@@ -84,6 +100,7 @@ export class BrokerSessionSidecars {
       label: this.coding.label || null,
       tool: this.coding.tool || null,
       source: this._codingSource(),
+      ...this.sourceIdentity,
       tool_session_id: this.coding.toolSessionId || this.coding.tool_session_id || null,
       tool_transcript_path: this.coding.transcriptPath || this.coding.tool_transcript_path || null,
       sock_path: this.coding.sockPath || null,
@@ -165,6 +182,7 @@ export class BrokerSessionSidecars {
         payload: {
           coding_session_id: this.coding.codingSessionId,
           machine_id: this.coding.machineId || null,
+          ...this.sourceIdentity,
           source: this._codingSource(),
           repo: this.coding.repo || null,
           branch: this.coding.branch || null,
@@ -173,6 +191,7 @@ export class BrokerSessionSidecars {
           last_assistant_excerpt: extractExcerpt(this.session.recentOutput(), this.excerptMaxChars),
           idle_seconds: Math.max(0, Math.floor((now - (this.session.lastOutputAt || now)) / 1000)),
           at: new Date(now).toISOString(),
+          session_projection: this.currentProjection({ now }),
           ...(this.coding.label ? { label: this.coding.label } : {}),
         },
         memoroFetchImpl: this.memoroFetch,
@@ -188,6 +207,26 @@ export class BrokerSessionSidecars {
   _unlink(path) {
     if (!path) return;
     try { unlinkSync(path); } catch {}
+  }
+
+  currentProjection({ now = this.now() } = {}) {
+    const status = typeof this.session.status === 'function'
+      ? this.session.status()
+      : {
+          started_at: this.session.startedAt ? new Date(this.session.startedAt).toISOString() : null,
+          last_output_at: this.session.lastOutputAt ? new Date(this.session.lastOutputAt).toISOString() : null,
+          last_input_at: this.session.lastInputAt ? new Date(this.session.lastInputAt).toISOString() : null,
+          exit: this.session.exit || null,
+        };
+    return this.projectionTracker.runtime({
+      session: {
+        ...status,
+        session_state: status.exit ? 'dead' : 'live',
+        attachable: !status.exit,
+      },
+      output: this.session.recentOutput(),
+      now,
+    });
   }
 
   async _scheduleUpload() {

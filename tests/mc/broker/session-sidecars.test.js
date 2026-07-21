@@ -157,8 +157,11 @@ describe('BrokerSessionSidecars', () => {
     assert.equal(heartbeats[0].opts.token, 'tok');
     assert.equal(heartbeats[0].opts.body.coding_session_id, 'sess_a');
     assert.equal(heartbeats[0].opts.body.machine_id, 'machine');
+    assert.equal(heartbeats[0].opts.body.source_id, 'local:machine');
     assert.equal(heartbeats[0].opts.body.last_assistant_excerpt, 'ready\n');
     assert.equal(heartbeats[0].opts.body.idle_seconds, 1);
+    assert.equal(heartbeats[0].opts.body.session_projection.contract_version, 'mc-session-projection-v1');
+    assert.equal(Object.hasOwn(heartbeats[0].opts.body.session_projection, 'raw_output'), false);
 
     sidecars.stop();
     assert.equal(wsClients[0].stopped, true);

@@ -14,6 +14,10 @@ import { fetchActiveCodingSessions, findActiveForLocalEntry } from '../session-l
 import { requestBroker } from '../broker/client.js';
 import { listLocalBrokerAndHostSessions } from '../broker/session-hosts.js';
 import { observeEntryWorktree } from '../session-observation.js';
+import {
+  projectRuntimeSession,
+  projectTranscriptSession,
+} from '../session-projector.js';
 
 export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
@@ -54,6 +58,7 @@ export async function run(argv, deps = {}) {
   const safety_verdict = live.stale && entry.safety_verdict === 'IS_ACTIVE_NOW'
     ? 'SAFE_TO_END'
     : entry.safety_verdict || 'SAFE_TO_END';
+  const work_status = projectStatusWorkStatus(entry, live, { safety_verdict });
 
   const out = {
     name: entry.name,
@@ -66,6 +71,7 @@ export async function run(argv, deps = {}) {
     last_observed_at: entry.last_observed_at || null,
     kind: entry.kind || 'work',
     safety_verdict,
+    work_status,
     session_state: live.session_state,
     reachability: live.reachability,
     active_session: live.active_session,
@@ -98,6 +104,7 @@ export async function run(argv, deps = {}) {
   stdout.write(`  relaunch      ${out.relaunch_command}\n`);
   stdout.write(`  policy        ${formatPolicySummary(out.effective_policy)}\n`);
   stdout.write(`  verdict       ${out.safety_verdict}\n`);
+  stdout.write(`  work status   ${out.work_status.status} (${out.work_status.reason_code})\n`);
   stdout.write(`  session       ${out.session_state}\n`);
   stdout.write(`  reachability  ${out.reachability}\n`);
   stdout.write(`  dirty files   ${out.dirty_files}\n`);
@@ -164,6 +171,7 @@ async function resolveReachability(entry, { argv = [], deps = {} } = {}) {
         machine_id: active.machine_id || null,
         idle_seconds: active.idle_seconds,
         status: active.status || null,
+        session_projection: active.session_projection || null,
       },
       stale: false,
     };
@@ -255,7 +263,57 @@ function brokerSessionSummary(session) {
     machine_id: session?.machine_id || null,
     idle_seconds: typeof session?.idle_seconds === 'number' ? session.idle_seconds : null,
     status: session?.session_state || null,
+    session_projection: session?.session_projection || null,
   };
+}
+
+function projectStatusWorkStatus(entry, live, { safety_verdict } = {}) {
+  const active = live?.active_session;
+  if (active?.session_projection) {
+    return projectRuntimeSession({
+      session: {
+        ...active,
+        session_state: live.session_state,
+        attachable: live.reachability === 'reachable',
+      },
+    });
+  }
+
+  const git = {
+    current_branch: entry.current_branch || entry.branch || null,
+    dirty_files: entry.dirty_files ?? entry.observed_dirty_files ?? null,
+    ahead: entry.ahead ?? entry.observed_ahead ?? null,
+    behind: entry.behind ?? entry.observed_behind ?? null,
+    safety_verdict: safety_verdict || entry.safety_verdict || null,
+    observed_at: entry.last_observed_at || entry.last_activity || null,
+  };
+  if (entry.last_assistant_text && live?.session_state !== 'live') {
+    const messages = [];
+    if (entry.last_user_msg) {
+      messages.push({ role: 'user', content: entry.last_user_msg, at: entry.last_activity || null });
+    }
+    messages.push({
+      role: 'assistant',
+      content: entry.last_assistant_text,
+      at: entry.last_activity || null,
+    });
+    return projectTranscriptSession({
+      parsed: { messages, endedAt: entry.last_activity || null },
+      git,
+      runtimeLifecycle: live?.session_state === 'live' ? 'live' : 'stopped',
+    });
+  }
+  return projectRuntimeSession({
+    session: {
+      ...entry,
+      ...active,
+      session_state: live?.session_state || entry.session_state,
+      attachable: live?.reachability === 'reachable',
+      last_output_at: active?.last_output_at || entry.last_activity || null,
+    },
+    output: entry.last_assistant_text || '',
+    git,
+  });
 }
 
 function staleOrMissingReachability(storedState) {

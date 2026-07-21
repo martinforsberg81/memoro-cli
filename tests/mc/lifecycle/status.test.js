@@ -160,7 +160,7 @@ describe('mc status <name>', () => {
     for (const k of [
       'name', 'branch', 'safety_verdict', 'dirty_files', 'ahead',
       'last_activity', 'session_state', 'tool', 'relaunch_command',
-      'effective_policy',
+      'effective_policy', 'work_status',
     ]) {
       assert.ok(k in j, `field ${k} missing from status output`);
     }
@@ -191,6 +191,7 @@ describe('mc status <name>', () => {
     assert.equal(j.reachability, 'stale');
     assert.equal(j.safety_verdict, 'SAFE_TO_END');
     assert.equal(j.active_session, null);
+    assert.equal(j.work_status.status, 'resting');
   });
 
   test('active lookup can mark an idle registry entry as reachable', async () => {
@@ -224,6 +225,7 @@ describe('mc status <name>', () => {
     assert.equal(j.session_state, 'live');
     assert.equal(j.reachability, 'reachable');
     assert.equal(j.active_session.coding_session_id, 'sess_reachable1');
+    assert.equal(j.work_status.status, 'active');
   });
 
   test('local broker reachability wins before cloud active lookup', async () => {

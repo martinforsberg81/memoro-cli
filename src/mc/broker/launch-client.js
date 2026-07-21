@@ -24,6 +24,7 @@ import { ensureCloudBrokerConnected } from './cloud-supervisor.js';
 import { scrubRuntimeSecretsInPlace } from '../runtime-secrets.js';
 import { ensureSessionHostRunning } from './session-hosts.js';
 import { prepareCloudCodexAuth } from '../cloud-codex-auth.js';
+import { resolveSessionSourceIdentity } from '../session-projector.js';
 
 const CLOUD_BROKER_START_TIMEOUT_MS = 10_000;
 const CODEX_SQLITE_STARTUP_WINDOW_MS = 20_000;
@@ -86,6 +87,14 @@ export async function launchBrokerOwnedSession({
     deps,
   });
   const machineId = (deps.hostname || hostname)();
+  const sourceIdentity = resolveSessionSourceIdentity({
+    sourceId: cloudBroker.sourceId || cloudBroker.source_id,
+    sourceKind: cloudBroker.sourceKind || cloudBroker.source_kind,
+    sourceName: cloudBroker.sourceName || cloudBroker.source_name,
+    cloudSessionId: cloudBroker.cloudSessionId || cloudBroker.cloud_session_id,
+    machineId,
+    env,
+  });
   const llmSessionId = `mc-${now()}-${process.pid}`;
   const codingSessionId = requestedCodingSessionId || await (deps.lookupOrMint || lookupOrMint)({
     repoIdentity: repoContext.remoteUrl,
@@ -228,6 +237,7 @@ export async function launchBrokerOwnedSession({
         apiUrl,
         token,
         machineId,
+        ...sourceIdentity,
         source: launch.spec.heartbeatSource,
         repo: deriveRepoName(repoContext),
         repoRef,
