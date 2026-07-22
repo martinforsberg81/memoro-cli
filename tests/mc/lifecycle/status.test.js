@@ -166,6 +166,39 @@ describe('mc status <name>', () => {
     }
   });
 
+  test('includes dev servers owned by the session worktree', async () => {
+    const stdout = [];
+    const code = await runStatus(['with-dev', '--json'], {
+      stdout: { write: (s) => stdout.push(s) },
+      stderr: { write: () => {} },
+      findEntry: () => makeEntry({
+        name: 'with-dev',
+        worktree_path: '/tmp/with-dev',
+        session_state: 'idle',
+      }),
+      readConfig: async () => ({}),
+      fetchBrokerStatus: async () => ({ ok: true, sessions: [] }),
+      fetchActiveSessions: async () => ({ ok: true, sessions: [] }),
+      listDevServers: async () => [{
+        instance_id: 'dev-with-dev',
+        session_name: 'with-dev',
+        worktree_path: '/tmp/with-dev',
+        state: 'ready',
+      }],
+    });
+
+    assert.equal(code, 0);
+    assert.deepEqual(parseJsonOrNull(stdout.join('')).dev_servers, {
+      summary: { total: 1, ready: 1, starting: 0, unhealthy: 0, orphan: 0 },
+      servers: [{
+        instance_id: 'dev-with-dev',
+        session_name: 'with-dev',
+        worktree_path: '/tmp/with-dev',
+        state: 'ready',
+      }],
+    });
+  });
+
   test('stale live registry state is downgraded when active lookup succeeds', async () => {
     const stdout = [];
     const stderr = [];

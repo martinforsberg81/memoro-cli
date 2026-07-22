@@ -18,6 +18,7 @@ import {
   projectRuntimeSession,
   projectTranscriptSession,
 } from '../session-projector.js';
+import { listDevServers, summarizeDevServers } from '../dev-servers.js';
 
 export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
@@ -59,6 +60,7 @@ export async function run(argv, deps = {}) {
     ? 'SAFE_TO_END'
     : entry.safety_verdict || 'SAFE_TO_END';
   const work_status = projectStatusWorkStatus(entry, live, { safety_verdict });
+  const dev_servers = await resolveDevServers(entry, deps);
 
   const out = {
     name: entry.name,
@@ -88,6 +90,7 @@ export async function run(argv, deps = {}) {
     relaunch_command: `mc open ${entry.name}`,
     effective_policy,
     effective_config,
+    dev_servers,
   };
 
   if (opts.json) {
@@ -109,11 +112,30 @@ export async function run(argv, deps = {}) {
   stdout.write(`  reachability  ${out.reachability}\n`);
   stdout.write(`  dirty files   ${out.dirty_files}\n`);
   stdout.write(`  ahead         ${out.ahead}\n`);
+  stdout.write(`  dev servers   ${out.dev_servers.summary.total}`);
+  if (out.dev_servers.summary.unhealthy || out.dev_servers.summary.orphan) {
+    stdout.write(` (${out.dev_servers.summary.unhealthy} unhealthy, ${out.dev_servers.summary.orphan} orphan)`);
+  }
+  stdout.write(`\n`);
   if (out.open_question) stdout.write(`  PAUSED — awaiting answer\n`);
   if (out.last_assistant_text) {
     stdout.write(`  asst: ${out.last_assistant_text.slice(0, 200).replace(/\n+/g, ' ')}\n`);
   }
   return 0;
+}
+
+async function resolveDevServers(entry, deps = {}) {
+  const list = deps.listDevServers || listDevServers;
+  try {
+    const all = await list();
+    const servers = all.filter((server) => (
+      server.session_name === entry.name
+      || (entry.worktree_path && server.worktree_path === entry.worktree_path)
+    ));
+    return { summary: summarizeDevServers(servers), servers };
+  } catch {
+    return { summary: summarizeDevServers([]), servers: [] };
+  }
 }
 
 function maybeObserveEntry(entry, deps = {}) {

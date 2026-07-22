@@ -122,6 +122,7 @@ const LIFECYCLE = {
   resume:        () => import('./mc/commands/resume.js'),
   gc:            () => import('./mc/commands/gc.js'),
   status:        () => import('./mc/commands/status.js'),
+  dev:           () => import('./mc/commands/dev.js'),
   dispatch:      () => import('./mc/commands/dispatch.js'),
   read:          () => import('./mc/commands/read.js'),
   'install-shell': () => import('./mc/commands/install-shell.js'),
@@ -301,6 +302,9 @@ COMMON
   mc list [--rich|--awaiting]     Show local sessions
   mc list --tree                  Show coordinator/project session tree
   mc status <name>                Show one session's state
+  mc dev list [--json]            Show machine-local dev servers
+  mc dev status|logs <session>    Inspect one session's dev server
+  mc dev stop|restart <session>   Run verified project-owned controls
   mc cd <name>                    cd into a session worktree
   mc end [<name>...]              End last-opened/current session or named sessions
   mc rename <old> <new>           Rename branch + worktree + registry entry
