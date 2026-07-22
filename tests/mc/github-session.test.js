@@ -138,7 +138,7 @@ describe('GitHub session capability boundary', () => {
         operation: 'pull_request.view',
         params: { pull_number: 42 },
       },
-      options: { socketPath: '/tmp/session.sock' },
+      options: { socketPath: '/tmp/session.sock', timeoutMs: 30_000 },
     }]);
     assert.equal('repository' in calls[0].message, false);
     assert.equal('source_id' in calls[0].message, false);

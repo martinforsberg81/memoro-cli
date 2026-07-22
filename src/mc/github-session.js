@@ -35,6 +35,7 @@ export const GITHUB_CREDENTIAL_ENV_NAMES = Object.freeze([
 ]);
 
 const SHIM_MODULE = fileURLToPath(new URL('./github-shim.js', import.meta.url));
+const GITHUB_BROKER_TIMEOUT_MS = 30_000;
 
 export async function fetchGitHubSessionCapabilities({
   apiUrl,
@@ -163,7 +164,10 @@ export async function executeGitHubSessionOperation({
   const socketPath = stringOrNull(env?.[MC_GITHUB_BROKER_SOCKET_ENV]);
   if (!socketPath) return safeOperationFailure(encoded.request_id, 'unavailable');
   try {
-    const raw = await request(encoded, { socketPath });
+    const raw = await request(encoded, {
+      socketPath,
+      timeoutMs: GITHUB_BROKER_TIMEOUT_MS,
+    });
     const decoded = decodeGitHubOperationResponse(raw);
     if (decoded.request_id !== encoded.request_id) {
       return safeOperationFailure(encoded.request_id, 'unavailable');
@@ -243,7 +247,7 @@ function safeOperationFailure(requestId, code) {
 }
 
 function makeRequestId() {
-  return `ghr_${randomBytes(12).toString('hex')}`;
+  return `mcr_${randomBytes(12).toString('hex')}`;
 }
 
 function validRequestId(value) {

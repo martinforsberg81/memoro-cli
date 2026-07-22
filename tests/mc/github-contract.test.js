@@ -183,7 +183,7 @@ describe('github-op-v1 codecs', () => {
     const cases = [
       ['connection.status', {}, {}],
       ['repository.metadata', {}, {}],
-      ['pull_request.list', {}, { state: 'open', author: null, limit: 30 }],
+      ['pull_request.list', {}, {}],
       ['pull_request.list', { state: 'all', author: 'octocat', limit: 50 }, { state: 'all', author: 'octocat', limit: 50 }],
       ['pull_request.view', { pull_number: 42 }, { pull_number: 42 }],
       ['checks.list', { pull_number: 42 }, { pull_number: 42 }],
@@ -203,6 +203,23 @@ describe('github-op-v1 codecs', () => {
         params: expectedParams,
       });
     }
+  });
+
+  test('omits absent PR-list options while preserving an explicit author', () => {
+    const withoutAuthor = encodeGitHubOperationRequest({
+      requestId: 'request_list_without_author',
+      operation: 'pull_request.list',
+      params: { state: 'open', limit: 2 },
+    });
+    assert.deepEqual(withoutAuthor.params, { state: 'open', limit: 2 });
+    assert.equal(Object.hasOwn(withoutAuthor.params, 'author'), false);
+
+    const withAuthor = encodeGitHubOperationRequest({
+      requestId: 'request_list_with_author',
+      operation: 'pull_request.list',
+      params: { author: 'octocat' },
+    });
+    assert.deepEqual(withAuthor.params, { author: 'octocat' });
   });
 
   test('refuses repository/source/session selection, unknown operations, and credential fields', () => {

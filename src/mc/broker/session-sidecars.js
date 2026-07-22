@@ -24,7 +24,7 @@ export class BrokerSessionSidecars {
   constructor({
     session,
     coding,
-    createServerImpl = createServer,
+    createServerImpl = (handler) => createServer({ allowHalfOpen: true }, handler),
     wsClientFactory = (opts) => new CliWsClient(opts),
     fetchTranscriptHandlerFactory = createFetchTranscriptHandler,
     memoroFetchImpl = memoroFetch,
@@ -124,6 +124,7 @@ export class BrokerSessionSidecars {
 
     const server = this.createServerImpl((conn) => {
       let buf = '';
+      conn.on('error', () => {});
       conn.on('data', (chunk) => { buf += chunk.toString('utf8'); });
       conn.on('end', async () => {
         let payload;

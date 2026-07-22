@@ -1,11 +1,16 @@
 import assert from 'node:assert/strict';
-import { EventEmitter } from 'node:events';
+import { EventEmitter, once } from 'node:events';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { setTimeout as sleep } from 'node:timers/promises';
 import test, { afterEach, describe } from 'node:test';
 
 import { BrokerSessionSidecars, postHeartbeatWithRetry } from '../../../src/mc/broker/session-sidecars.js';
+import {
+  MC_GITHUB_BROKER_SOCKET_ENV,
+  executeGitHubSessionOperation,
+} from '../../../src/mc/github-session.js';
 
 let tmp = null;
 
@@ -57,7 +62,87 @@ function fakeConn() {
   return conn;
 }
 
+async function startRealGitHubSidecar({ paths, memoroFetchImpl }) {
+  const sidecars = new BrokerSessionSidecars({
+    session: makeSession(),
+    coding: {
+      codingSessionId: 'sess_abcdef',
+      apiUrl: 'https://memoro.test',
+      token: 'memoro-secret-sentinel',
+      sourceId: 'local:mac',
+      sourceKind: 'local',
+      sockPath: paths.sockPath,
+      metaPath: paths.metaPath,
+      heartbeat: false,
+      upload: false,
+    },
+    wsClientFactory: () => ({ start() {}, stop() {} }),
+    memoroFetchImpl,
+  }).start();
+  if (!sidecars.dispatchServer.listening) await once(sidecars.dispatchServer, 'listening');
+  return sidecars;
+}
+
 describe('BrokerSessionSidecars', () => {
+  test('default GitHub request IDs reach trusted execution over the real session socket', async (t) => {
+    const paths = tempPaths();
+    const requests = [];
+    const sidecars = await startRealGitHubSidecar({
+      paths,
+      memoroFetchImpl: async (_apiUrl, _path, options) => {
+        requests.push(options.body);
+        return {
+          ok: true,
+          request_id: options.body.request_id,
+          data: { id: 301, full_name: 'acme/widgets' },
+        };
+      },
+    });
+    t.after(() => sidecars.stop());
+
+    const response = await executeGitHubSessionOperation({
+      operation: 'repository.metadata',
+      env: { [MC_GITHUB_BROKER_SOCKET_ENV]: paths.sockPath },
+    });
+
+    assert.equal(requests.length, 1);
+    assert.equal(response.ok, true);
+    assert.match(response.request_id, /^mcr_[a-f0-9]{24}$/);
+    assert.equal(requests[0].request_id, response.request_id);
+  });
+
+  test('real session socket awaits a bounded asynchronous control-plane response', async (t) => {
+    const paths = tempPaths();
+    const requests = [];
+    const sidecars = await startRealGitHubSidecar({
+      paths,
+      memoroFetchImpl: async (_apiUrl, _path, options) => {
+        await sleep(1_100);
+        requests.push(options.body);
+        return {
+          ok: true,
+          request_id: options.body.request_id,
+          data: { number: 42, title: 'Delayed but bounded' },
+        };
+      },
+    });
+    t.after(() => sidecars.stop());
+
+    const response = await executeGitHubSessionOperation({
+      operation: 'pull_request.view',
+      params: { pull_number: 42 },
+      requestId: 'request_delayed',
+      env: { [MC_GITHUB_BROKER_SOCKET_ENV]: paths.sockPath },
+    });
+
+    assert.equal(requests.length, 1);
+    assert.deepEqual(response, {
+      ok: true,
+      request_id: 'request_delayed',
+      data: { number: 42, title: 'Delayed but bounded' },
+    });
+  });
+
   test('executes canonical GitHub operations outside the child with server-bound identity', async () => {
     const paths = tempPaths();
     const requests = [];

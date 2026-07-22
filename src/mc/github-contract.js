@@ -348,20 +348,25 @@ function operationParams(operation, params) {
     exactObject(params, ['state', 'author', 'limit'], 'GitHub pull request list params', {
       optional: ['state', 'author', 'limit'],
     });
-    const state = params.state === undefined ? 'open' : params.state;
-    const author = params.author === undefined || params.author === null
-      ? null
-      : boundedString(params.author, 255);
-    const limit = params.limit === undefined ? 30 : params.limit;
-    if (!['open', 'closed', 'all'].includes(state)) invalid('GitHub pull request state is invalid.');
-    if (params.author !== undefined && params.author !== null
-        && (!author || !/^[a-zA-Z0-9-]+$/.test(author))) {
-      invalid('GitHub pull request author is invalid.');
+    const normalized = {};
+    if (params.state !== undefined) {
+      if (!['open', 'closed', 'all'].includes(params.state)) invalid('GitHub pull request state is invalid.');
+      normalized.state = params.state;
     }
-    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 50) {
-      invalid('GitHub pull request limit is invalid.');
+    if (params.author !== undefined && params.author !== null) {
+      const author = boundedString(params.author, 255);
+      if (!author || !/^[a-zA-Z0-9-]+$/.test(author)) {
+        invalid('GitHub pull request author is invalid.');
+      }
+      normalized.author = author;
     }
-    return { state, author, limit };
+    if (params.limit !== undefined) {
+      if (!Number.isSafeInteger(params.limit) || params.limit < 1 || params.limit > 50) {
+        invalid('GitHub pull request limit is invalid.');
+      }
+      normalized.limit = params.limit;
+    }
+    return normalized;
   }
   exactObject(params, ['pull_number'], 'GitHub pull request params');
   if (!Number.isSafeInteger(params.pull_number) || params.pull_number < 1) {
