@@ -1,8 +1,9 @@
 import test, { afterEach, beforeEach, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { spawnSync } from 'node:child_process';
 
 import { runMc, parseJsonOrNull } from '../_helpers/cli.js';
 
@@ -86,5 +87,67 @@ describe('mc dev CLI', () => {
     assert.match(result.stdout, /health=unknown/);
     assert.match(result.stdout, /worktree=.*worktree/);
     assert.match(result.stdout, /log=.*dev\.log/);
+  });
+
+  test('plan validates and prints the selected worktree-local dev profile without side effects', () => {
+    mkdirSync(join(worktree, '.mc'), { recursive: true });
+    writeFileSync(join(worktree, '.mc', 'dev.json'), JSON.stringify({
+      schema_version: 1,
+      default_service: 'web',
+      services: {
+        web: {
+          default_profile: 'agent',
+          profiles: {
+            agent: {
+              start: { argv: ['npm', 'run', 'dev', '--', '--skip-containers'] },
+              readiness: { kind: 'runtime-manifest', path: '.runtime/mc-dev.json', timeout_ms: 90_000 },
+              resource_class: 'standard',
+            },
+            full: {
+              start: { argv: ['npm', 'run', 'dev'] },
+              readiness: { kind: 'runtime-manifest', path: '.runtime/mc-dev.json', timeout_ms: 120_000 },
+              resource_class: 'heavy',
+            },
+          },
+          dependencies: {
+            manager: 'npm',
+            fingerprint_files: ['package.json', 'package-lock.json'],
+            install: { argv: ['npm', 'ci'] },
+          },
+          managed_argv_prefixes: [['npm', 'run', 'dev']],
+        },
+      },
+    }));
+    writeFileSync(join(worktree, '.mc', 'local.json'), JSON.stringify({ dev: { profile: 'full' } }));
+    const git = spawnSync('git', ['init', '-q'], { cwd: worktree, encoding: 'utf8' });
+    assert.equal(git.status, 0, git.stderr);
+
+    const json = runMc(['dev', 'plan', '--json'], { cwd: worktree, env: { MC_HOME: mcHome } });
+    assert.equal(json.status, 0, json.stderr);
+    const plan = parseJsonOrNull(json.stdout);
+    assert.deepEqual(plan.profile, { name: 'full', source: '.mc/local.json' });
+    assert.deepEqual(plan.start.argv, ['npm', 'run', 'dev']);
+    assert.equal(plan.worktree_path, realpathSync(worktree));
+    assert.match(plan.definition_fingerprint, /^sha256:[a-f0-9]{64}$/);
+
+    const human = runMc(['dev', 'plan', 'web', '--profile', 'agent'], {
+      cwd: worktree,
+      env: { MC_HOME: mcHome },
+    });
+    assert.equal(human.status, 0, human.stderr);
+    assert.match(human.stdout, /web\/agent/);
+    assert.match(human.stdout, /npm run dev -- --skip-containers/);
+    assert.match(human.stdout, /source=cli/);
+  });
+
+  test('plan reports malformed definitions and never falls through to runtime inventory', () => {
+    mkdirSync(join(worktree, '.mc'), { recursive: true });
+    writeFileSync(join(worktree, '.mc', 'dev.json'), '{bad json');
+    const git = spawnSync('git', ['init', '-q'], { cwd: worktree, encoding: 'utf8' });
+    assert.equal(git.status, 0, git.stderr);
+
+    const result = runMc(['dev', 'plan'], { cwd: worktree, env: { MC_HOME: mcHome } });
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /\.mc\/dev\.json contains invalid JSON/);
   });
 });

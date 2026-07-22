@@ -14,9 +14,9 @@ import {
 describe('resolveEffectiveConfig', () => {
   test('preference fields use CLI/env/session/local/repo/global/default precedence shape', () => {
     const effective = resolveEffectiveConfig({
-      globalConfig: { defaultTool: 'claude-code', language: 'English' },
+      globalConfig: { defaultTool: 'claude-code', language: 'English', dev: { profile: 'full' } },
       repoPolicy: { defaultTool: 'claude-code', language: 'Spanish' },
-      localConfig: { defaultTool: 'codex' },
+      localConfig: { defaultTool: 'codex', dev: { profile: 'agent' } },
       cliConfig: { language: 'Swedish' },
     });
     assert.deepEqual(effective.defaultTool, {
@@ -26,6 +26,10 @@ describe('resolveEffectiveConfig', () => {
     assert.deepEqual(effective.language, {
       value: 'Swedish',
       source: 'cli',
+    });
+    assert.deepEqual(effective.dev.profile, {
+      value: 'agent',
+      source: '.mc/local.json',
     });
   });
 
@@ -124,7 +128,7 @@ describe('resolveEffectiveConfig', () => {
   test('returns plain effective values for callers that need a value-only shape', () => {
     const effective = resolveEffectiveConfig({
       globalConfig: { defaultTool: 'codex' },
-      repoPolicy: { permissions: { workspace: 'read-only' } },
+      repoPolicy: { permissions: { workspace: 'read-only' }, dev: { profile: 'agent' } },
     });
     assert.deepEqual(effectiveConfigValues(effective), {
       defaultTool: 'codex',
@@ -150,6 +154,7 @@ describe('resolveEffectiveConfig', () => {
         },
       },
       instructions: { mode: 'preserve' },
+      dev: { profile: 'agent' },
     });
   });
 

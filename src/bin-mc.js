@@ -303,6 +303,8 @@ COMMON
   mc list [--rich|--awaiting]     Show local sessions
   mc list --tree                  Show coordinator/project session tree
   mc status <name>                Show one session's state
+  mc dev plan [service] [--profile <name>]
+                                  Validate and show this worktree's dev plan
   mc dev list [--json]            Show machine-local dev servers
   mc dev status|logs <session>    Inspect one session's dev server
   mc dev stop|restart <session>   Run verified project-owned controls
@@ -664,9 +666,17 @@ async function runWrap(argv, { label = null } = {}) {
     groundingLaunchMessage,
     fallbackStartupMessage: startupMessage,
   });
+  const { resolveDevSessionEnvironment } = await import('./mc/dev-definition.js');
+  const devEnvironment = await resolveDevSessionEnvironment({
+    worktreePath: repoContext.toplevel,
+    globalConfig: config,
+  });
   let spawnEnv = {
     ...process.env,
     MEMORO_MC_PARENT: '1',  // hooks see this and no-op their heartbeat-loop
+    MC_CODING_SESSION_ID: codingSessionId,
+    ...(runtimeLabel ? { MC_SESSION_NAME: runtimeLabel } : {}),
+    ...devEnvironment,
   };
   try {
     const { prepareLocalResourceGuardEnv } = await import('./mc/local-resource-guard.js');

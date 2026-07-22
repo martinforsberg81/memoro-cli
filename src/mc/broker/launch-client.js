@@ -25,6 +25,7 @@ import { scrubRuntimeSecretsInPlace } from '../runtime-secrets.js';
 import { ensureSessionHostRunning } from './session-hosts.js';
 import { prepareCloudCodexAuth } from '../cloud-codex-auth.js';
 import { resolveSessionSourceIdentity } from '../session-projector.js';
+import { resolveDevPlan, resolveDevSessionEnvironment } from '../dev-definition.js';
 
 const CLOUD_BROKER_START_TIMEOUT_MS = 10_000;
 const CODEX_SQLITE_STARTUP_WINDOW_MS = 20_000;
@@ -127,9 +128,18 @@ export async function launchBrokerOwnedSession({
     }
   }
 
+  const devEnvironment = await resolveDevSessionEnvironment({
+    worktreePath: repoContext.toplevel,
+    globalConfig: config,
+    stderr,
+    resolvePlan: deps.resolveDevPlan || resolveDevPlan,
+  });
   let spawnEnv = {
     ...env,
     MEMORO_MC_PARENT: '1',
+    MC_CODING_SESSION_ID: codingSessionId,
+    ...((sessionName || label) ? { MC_SESSION_NAME: sessionName || label } : {}),
+    ...devEnvironment,
   };
   let codexDeviceAuthBeforeLaunch = false;
   if (launch.id === 'codex' && isCloudBrokerLaunch(cloudBroker)) {
