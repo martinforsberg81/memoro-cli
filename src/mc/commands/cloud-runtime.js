@@ -635,6 +635,9 @@ async function launchCloudSessionFromManifest(manifest, {
     stderr,
     launchBrokerOwnedSession: async (launchArgs) => launchFn({
       ...launchArgs,
+      // The runtime supervisor owns the foreground broker connection. Attaching
+      // here would block on the provider session before that bridge can start.
+      attachAfterLaunch: false,
       ensureCloudBroker: async () => ({ ok: true, skipped: true, supervisor_managed: true }),
     }),
   });
