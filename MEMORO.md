@@ -158,9 +158,11 @@ frame itself must work as terminal commands first.
   resolves a server-approved launch target, prepares a sandbox worktree, starts
   `mc` inside it, and returns the existing active cloud session unless the user
   explicitly stops/replaces it. Next gate is the real capability boundary for
-  cloud connector auth plus private repo clone/fetch: secrets must be consumed
-  by a control-plane/sidecar, never exposed to the session env, argv, files,
-  prompt, transcript, or browser.
+  GitHub interaction and private repo clone/fetch. The accepted architecture is
+  one central Memoro GitHub App plus the same typed broker capability for local
+  and cloud; secrets are consumed only by the control plane/trusted executor,
+  never exposed to the session env, argv, files, prompt, transcript, or browser.
+  → `docs/plans/github-app-capability.md`
   → `docs/plans/hosted-live-session-workspace.md`
 - **Ensemble & hierarchy** — `later · M · —`
   Multi-model ensembles and recursive mid-agents, layered on the spine. → §10b/§10c
