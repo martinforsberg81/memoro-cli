@@ -214,6 +214,24 @@ describe('mc cloud-runtime workspace', () => {
     assert.ok(Date.now() - started < 1_000, 'the inherited pipe should not delay timeout completion');
   });
 
+  test('terminates a subprocess when an outer watchdog aborts it', {
+    skip: process.platform === 'win32',
+  }, async () => {
+    const controller = new AbortController();
+    const started = Date.now();
+    const pending = runProcessDefault(process.execPath, [
+      '-e',
+      'setTimeout(() => {}, 3000)',
+    ], { timeoutMs: 3_000, signal: controller.signal });
+    setTimeout(() => controller.abort(), 20);
+
+    const result = await pending;
+
+    assert.equal(result.code, 124);
+    assert.equal(result.timedOut, true);
+    assert.ok(Date.now() - started < 1_000, 'abort should not wait for the subprocess timeout');
+  });
+
   test('reuses an existing git workspace instead of replacing it', async () => {
     const m = manifest();
     const result = await prepareWorkspace(m, {
@@ -394,6 +412,40 @@ describe('mc cloud-runtime coding bin snapshots', () => {
 });
 
 describe('mc cloud-runtime run', () => {
+  test('fails explicitly when workspace preparation never settles', async () => {
+    const streams = io();
+    const m = manifest();
+    writeFileSync(m.runtime.paths.manifest, JSON.stringify(m), 'utf8');
+    const reports = [];
+    const started = Date.now();
+
+    const code = await runCloudRuntimeWith(parseArgs([
+      'run',
+      '--cloud-session-id',
+      m.cloud_session_id,
+      '--manifest',
+      m.runtime.paths.manifest,
+      '--json',
+    ]), {
+      stdout: streams.stdout,
+      stderr: streams.stderr,
+      env: { MEMORO_TOKEN: 'mem_runtime_secret' },
+      workspacePrepareTimeoutMs: 20,
+      prepareWorkspace: async () => new Promise(() => {}),
+      reportRuntimeStatus: async (report) => { reports.push(report); return { ok: true }; },
+    });
+
+    assert.equal(code, 1);
+    assert.ok(Date.now() - started < 1_000);
+    assert.match(streams.err(), /workspace prepare timed out/);
+    const failed = reports.map((entry) => entry.report || entry).find((report) => (
+      report.error_code === 'workspace_prepare_timeout'
+    ));
+    assert.ok(failed);
+    assert.equal(failed.process_status, 'exited');
+    assert.equal(failed.events[0].type, 'workspace.prepare.failed');
+  });
+
   test('prepares workspace, launches typed cloud-session, reports status, then connects broker', async () => {
     const streams = io();
     const m = manifest();
@@ -520,6 +572,9 @@ describe('mc cloud-runtime run', () => {
     assert.equal(readiness.tool_auth.ready, true);
     assert.equal(readiness.broker.connected, true);
     assert.ok(eventTypes.includes('workspace.prepare.started'));
+    assert.ok(eventTypes.includes('workspace.prepare.inspecting'));
+    assert.ok(eventTypes.includes('workspace.clone.started'));
+    assert.ok(eventTypes.includes('workspace.clone.finished'));
     assert.ok(eventTypes.includes('workspace.prepare.finished'));
     assert.ok(eventTypes.includes('provider.launch.started'));
     assert.ok(eventTypes.includes('provider.launch.finished'));
