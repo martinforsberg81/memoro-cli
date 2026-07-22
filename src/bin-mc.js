@@ -123,6 +123,7 @@ const LIFECYCLE = {
   gc:            () => import('./mc/commands/gc.js'),
   status:        () => import('./mc/commands/status.js'),
   dev:           () => import('./mc/commands/dev.js'),
+  deps:          () => import('./mc/commands/deps.js'),
   dispatch:      () => import('./mc/commands/dispatch.js'),
   read:          () => import('./mc/commands/read.js'),
   'install-shell': () => import('./mc/commands/install-shell.js'),
@@ -307,6 +308,8 @@ COMMON
   mc dev list [--json]            Show machine-local dev servers
   mc dev status|logs <session>    Inspect one session's dev server
   mc dev stop|restart <session>   Run verified project-owned controls
+  mc deps status|hydrate [service]
+                                  Inspect or explicitly hydrate dependencies
   mc cd <name>                    cd into a session worktree
   mc end [<name>...]              End last-opened/current session or named sessions
   mc rename <old> <new>           Rename branch + worktree + registry entry
@@ -328,6 +331,8 @@ SETUP
            --heavy-max-threads <n> --heavy-max-rss-mb <n>
            --heavy-max-swap-mb <n> --heavy-min-free-disk-gb <n>
                                   Configure every custom safeguard
+  mc setup --dependency-mode <auto|isolated|off>
+                                  Choose snapshot reuse, worktree-only, or off
   mc install-shell                Install auto-cd support for zsh/bash
   mc auth status [--json]         Check Memoro + coding-tool auth
   mc auth memoro                  Token login/logout for CI or headless setup

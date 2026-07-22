@@ -139,6 +139,9 @@ function printPlan(plan, stdout) {
   stdout.write(`  readiness     ${plan.readiness.kind} ${plan.readiness.path} (${plan.readiness.timeout_ms}ms)\n`);
   stdout.write(`  resource      ${plan.resource_class}\n`);
   stdout.write(`  dependencies  ${plan.dependencies.manager}: ${renderArgv(plan.dependencies.install.argv)}\n`);
+  if (plan.dependency_mode) {
+    stdout.write(`  deps mode     ${plan.dependency_mode.name} (source=${plan.dependency_mode.source})\n`);
+  }
   stdout.write(`  definition    ${plan.definition_path} (${plan.definition_fingerprint})\n`);
   for (const warning of plan.warnings || []) {
     stdout.write(`  warning       ${warning.code}${warning.path ? ` (${warning.path})` : ''}\n`);

@@ -85,6 +85,54 @@ describe('mc new', () => {
       `worktree should be under MC_HOME (${repo.mcHome}); got ${j.worktree_path}`);
   });
 
+  test('does not install dependencies while creating a worktree with a dev definition', () => {
+    mkdirSync(join(repo.dir, '.mc'), { recursive: true });
+    writeFileSync(join(repo.dir, 'package.json'), JSON.stringify({
+      name: 'new-no-install',
+      version: '1.0.0',
+      scripts: { postinstall: 'touch INSTALL_RAN' },
+    }));
+    writeFileSync(join(repo.dir, 'package-lock.json'), JSON.stringify({
+      name: 'new-no-install',
+      version: '1.0.0',
+      lockfileVersion: 3,
+      packages: { '': { name: 'new-no-install', version: '1.0.0' } },
+    }));
+    writeFileSync(join(repo.dir, '.mc', 'dev.json'), JSON.stringify({
+      schema_version: 1,
+      default_service: 'web',
+      services: {
+        web: {
+          default_profile: 'agent',
+          profiles: {
+            agent: {
+              start: { argv: ['npm', 'run', 'dev'] },
+              readiness: { kind: 'runtime-manifest', path: '.runtime/mc-dev.json', timeout_ms: 90_000 },
+              resource_class: 'standard',
+            },
+          },
+          dependencies: {
+            manager: 'npm',
+            fingerprint_files: ['package.json', 'package-lock.json'],
+            install: { argv: ['npm', 'ci'] },
+          },
+          managed_argv_prefixes: [['npm', 'run', 'dev']],
+        },
+      },
+    }));
+    git(repo.dir, 'add package.json package-lock.json .mc/dev.json');
+    git(repo.dir, 'commit -q -m "Add dev definition"');
+
+    const r = runMc(['new', 'no-auto-install', '--no-launch', '--json'], {
+      cwd: repo.dir,
+      env: { MC_HOME: repo.mcHome },
+    });
+    assert.equal(r.status, 0, r.stderr);
+    const created = parseJsonOrNull(r.stdout);
+    assert.equal(existsSync(join(created.worktree_path, 'node_modules')), false);
+    assert.equal(existsSync(join(created.worktree_path, 'INSTALL_RAN')), false);
+  });
+
   test('side effect: git worktree list shows the new worktree', () => {
     runMc(['new', 'feat-y', '--no-launch'], {
       cwd: repo.dir, env: { MC_HOME: repo.mcHome },

@@ -61,6 +61,40 @@ inspect the selected plan. The profile preference order is command line,
 `.mc/local.json`, `~/.memoro/config.json`, then the service's `default_profile`.
 Planning is read-only: it does not install dependencies or start a service.
 
+## Dependency snapshots
+
+`mc deps status [service] [--profile <name>] [--json]` calculates a dependency
+fingerprint and reports both the current worktree copy and the machine-local
+snapshot. The fingerprint includes every declared fingerprint file (normally
+`package.json` and `package-lock.json`), the exact install argv, Node ABI,
+operating system, architecture, and npm version.
+
+`mc deps hydrate [service] [--profile <name>] [--json]` is the explicit
+mutation boundary. It behaves according to the user's dependency mode:
+
+- `auto` reuses a matching immutable snapshot, or runs the declared `npm ci`
+  recipe on a cache miss and then publishes a snapshot.
+- `isolated` runs the recipe in the current worktree and never reads or writes
+  snapshots.
+- `off` refuses to install dependencies.
+
+Choose the global default with
+`mc setup --dependency-mode <auto|isolated|off>`. A repository-local
+`.mc/local.json` may override it under `dev.dependencies.mode`. The default is
+`auto`, but neither `mc new` nor session launch hydrates automatically. A later
+`mc dev ensure` invocation is the intended automatic consumer.
+
+Snapshot publication and worktree hydration use exclusive, crash-recoverable
+lock files and atomic directory renames. On APFS, mc asks `cp` for clone-on-write
+copies; other filesystems get an ordinary recursive copy. mc never symlinks a
+live `node_modules` directory between worktrees. Existing unmarked
+`node_modules` is left untouched unless `--replace` is explicit.
+
+On a cache miss, npm receives `npm_config_prefer_offline=true`: cached packages
+are preferred and npm retains its normal network fallback for missing content.
+`npm ci` may execute package lifecycle scripts, which is why hydrate is an
+explicit command and never part of `mc new`.
+
 Launched coding sessions receive `MC_SESSION_NAME`, `MC_CODING_SESSION_ID`, and,
 when the definition is valid, `MC_DEV_SERVICE`, `MC_DEV_PROFILE`, and
 `MC_DEV_DEFINITION_FINGERPRINT`. Repositories without `.mc/dev.json` continue to
@@ -137,6 +171,8 @@ declared command; it does not signal the process group itself.
 
 ```sh
 mc dev plan [service] [--profile <name>] [--json]
+mc deps status [service] [--profile <name>] [--json]
+mc deps hydrate [service] [--profile <name>] [--replace] [--json]
 mc dev list [--json]
 mc dev status <session-or-instance> [--json]
 mc dev logs <session-or-instance> [--lines N]

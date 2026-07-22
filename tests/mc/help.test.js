@@ -21,6 +21,8 @@ describe('mc --help', () => {
     assert.match(r.stdout, /--heavy-max-rss-mb/);
     assert.match(r.stdout, /mc storage prune-generated --dry-run\|--apply/);
     assert.match(r.stdout, /mc dev plan \[service\] \[--profile <name>\]/);
+    assert.match(r.stdout, /mc deps status\|hydrate \[service\]/);
+    assert.match(r.stdout, /--dependency-mode <auto\|isolated\|off>/);
     assert.match(r.stdout, /Terminal commands manage machines and sessions/);
     assert.match(r.stdout, /Inside a launched LLM session/);
     assert.match(r.stdout, /mc coding-profile read/);
