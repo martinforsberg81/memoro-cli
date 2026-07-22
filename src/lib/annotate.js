@@ -2,9 +2,7 @@
  * Client-side observation annotations.
  *
  * Deterministic enrichment built during every session upload. Zero LLM.
- * Feature detectors may inspect structured code/tool artifacts locally, but
- * return allowlisted codes and counts only; raw artifacts are never returned.
- * Purpose: give server-side consumers sharper signal than prose alone can carry.
+ * Purpose: add bounded diagnostics to the explicit uploaded session record.
  *
  * See docs/plans/coding-profile.md.
  */
@@ -12,7 +10,6 @@
 import { readFileSync, existsSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseCodexFunctionArgs } from './codex.js';
-import { detectCodingFeaturesSafely } from './coding-feature-evidence.js';
 
 // ─────────────────────────────────────────────────────────────
 // Public API
@@ -33,7 +30,6 @@ export function buildAnnotations({ raw, parsed, cwd }) {
   return {
     coding_context: buildCodingContext(entries, parsed),
     repo_manifest: cwd ? readRepoManifest(cwd) : null,
-    coding_features: detectCodingFeaturesSafely(entries),
   };
 }
 
