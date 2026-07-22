@@ -10,6 +10,7 @@ import {
   parseArgs,
   prepareWorkspace,
   runCloudRuntimeWith,
+  runProcessDefault,
   validateCloudRuntimeOptions,
 } from '../../../src/mc/commands/cloud-runtime.js';
 import {
@@ -143,9 +144,56 @@ describe('mc cloud-runtime workspace', () => {
     assert.equal(result.cloned, true);
     assert.equal(calls.length, 1);
     assert.equal(calls[0].cmd, 'git');
+    assert.deepEqual(calls[0].args.slice(0, 10), [
+      '-c',
+      'credential.helper=!f() { test "$1" = get || exit 0; echo username=x-access-token; echo password=$MC_CLOUD_GIT_TOKEN; }; f',
+      '-c',
+      'protocol.version=2',
+      'clone',
+      '--depth',
+      '1',
+      '--filter=blob:none',
+      '--single-branch',
+      '--no-tags',
+    ]);
     assert.deepEqual(calls[0].args.slice(-2), ['https://github.com/martinforsberg81/memoro.git', m.runtime.cwd]);
     assert.equal(JSON.stringify(calls[0].args).includes('ghp_private_secret'), false);
     assert.equal(calls[0].options.env.MC_CLOUD_GIT_TOKEN, 'ghp_private_secret');
+    assert.equal(calls[0].options.env.GIT_LFS_SKIP_SMUDGE, '1');
+    assert.equal(calls[0].options.timeoutMs, 90_000);
+  });
+
+  test('fails explicitly instead of launching against an empty repo after clone timeout', async () => {
+    const calls = [];
+    const m = manifest();
+    const result = await prepareWorkspace(m, {
+      deps: {
+        workspaceCloneTimeoutMs: 25,
+        runProcess: async (cmd, args, options) => {
+          calls.push({ cmd, args, options });
+          return { code: 124, timedOut: true, error: 'process timed out' };
+        },
+      },
+    });
+
+    assert.equal(result.ok, false);
+    assert.equal(result.code, 'workspace_clone_timeout');
+    assert.equal(result.clone_failed, true);
+    assert.equal(result.initialized_empty, false);
+    assert.match(result.error, /timed out after 1s/);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].options.timeoutMs, 25);
+  });
+
+  test('terminates subprocesses that exceed their timeout', async () => {
+    const result = await runProcessDefault(process.execPath, [
+      '-e',
+      'setTimeout(() => {}, 1000)',
+    ], { timeoutMs: 20 });
+
+    assert.equal(result.code, 124);
+    assert.equal(result.timedOut, true);
+    assert.match(result.error, /timed out/);
   });
 
   test('reuses an existing git workspace instead of replacing it', async () => {
