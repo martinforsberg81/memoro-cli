@@ -239,6 +239,7 @@ describe('launchBrokerOwnedSession', () => {
 
     const res = await launchBrokerOwnedSession({
       cwd: '/repo',
+      sessionName: 'feature',
       label: null,
       focus: 'fix tests',
       tool: 'claude',
@@ -295,6 +296,11 @@ describe('launchBrokerOwnedSession', () => {
           assert.equal(codingSessionId, 'sess_abc');
           return { env: { ...baseEnv, MC_LOCAL_RESOURCE_PROFILE: 'conservative' } };
         },
+        resolveDevPlan: async () => ({
+          service: { name: 'web', source: '.mc/dev.json' },
+          profile: { name: 'agent', source: '.mc/dev.json' },
+          definition_fingerprint: 'sha256:abc123',
+        }),
         getPackageVersion: async () => '0.test',
       },
     });
@@ -314,6 +320,11 @@ describe('launchBrokerOwnedSession', () => {
     assert.equal(msg.session.cols, 100);
     assert.equal(msg.session.rows, 30);
     assert.equal(msg.session.env.MC_LOCAL_RESOURCE_PROFILE, 'conservative');
+    assert.equal(msg.session.env.MC_SESSION_NAME, 'feature');
+    assert.equal(msg.session.env.MC_CODING_SESSION_ID, 'sess_abc');
+    assert.equal(msg.session.env.MC_DEV_SERVICE, 'web');
+    assert.equal(msg.session.env.MC_DEV_PROFILE, 'agent');
+    assert.equal(msg.session.env.MC_DEV_DEFINITION_FINGERPRINT, 'sha256:abc123');
     assert.equal(msg.session.sidecars.codingSessionId, 'sess_abc');
     assert.equal(msg.session.sidecars.apiUrl, 'https://memoro.test');
     assert.equal(msg.session.sidecars.token, 'tok');

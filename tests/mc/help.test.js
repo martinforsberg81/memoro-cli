@@ -20,6 +20,7 @@ describe('mc --help', () => {
     assert.match(r.stdout, /mc setup --resource-profile <unlimited\|balanced\|conservative\|custom>/);
     assert.match(r.stdout, /--heavy-max-rss-mb/);
     assert.match(r.stdout, /mc storage prune-generated --dry-run\|--apply/);
+    assert.match(r.stdout, /mc dev plan \[service\] \[--profile <name>\]/);
     assert.match(r.stdout, /Terminal commands manage machines and sessions/);
     assert.match(r.stdout, /Inside a launched LLM session/);
     assert.match(r.stdout, /mc coding-profile read/);

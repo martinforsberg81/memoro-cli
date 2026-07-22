@@ -8,6 +8,7 @@ import {
   summarizeDevServers,
   unregisterDevServerManifest,
 } from '../dev-servers.js';
+import { resolveDevPlan } from '../dev-definition.js';
 
 export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
@@ -19,6 +20,16 @@ export async function run(argv, deps = {}) {
   }
 
   try {
+    if (opts.verb === 'plan') {
+      const resolvePlan = deps.resolveDevPlan || resolveDevPlan;
+      const plan = await resolvePlan({
+        cwd: deps.cwd || process.cwd(),
+        serviceName: opts.selector,
+        profileName: opts.profile,
+      });
+      emitResult(plan, { json: opts.json, stdout }, () => printPlan(plan, stdout));
+      return 0;
+    }
     if (opts.verb === 'register') {
       const register = deps.registerManifest || registerDevServerManifest;
       const registered = register(opts.selector);
@@ -84,12 +95,12 @@ export async function run(argv, deps = {}) {
     return 1;
   }
 
-  stderr.write('mc: usage — `mc dev list|status|logs|stop|restart ...`\n');
+  stderr.write('mc: usage — `mc dev plan|list|status|logs|stop|restart ...`\n');
   return 2;
 }
 
 function parseArgs(argv) {
-  const opts = { verb: null, selector: null, json: false, lines: 100 };
+  const opts = { verb: null, selector: null, json: false, lines: 100, profile: null };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === '--json') { opts.json = true; continue; }
@@ -101,18 +112,43 @@ function parseArgs(argv) {
       opts.lines = value;
       continue;
     }
+    if (arg === '--profile') {
+      const value = argv[++i];
+      if (!value || value.startsWith('--')) return { error: '--profile requires a name' };
+      opts.profile = value;
+      continue;
+    }
     if (arg.startsWith('--')) return { error: `unknown flag: ${arg}` };
     if (!opts.verb) { opts.verb = arg; continue; }
     if (!opts.selector) { opts.selector = arg; continue; }
     return { error: `unexpected arg: ${arg}` };
   }
 
-  const valid = new Set(['list', 'status', 'logs', 'stop', 'restart', 'register', 'unregister']);
+  const valid = new Set(['plan', 'list', 'status', 'logs', 'stop', 'restart', 'register', 'unregister']);
   if (!valid.has(opts.verb)) return { error: `unknown or missing dev verb: ${opts.verb || '<missing>'}` };
   if (opts.verb === 'list' && opts.selector) return { error: 'mc dev list does not take a selector' };
-  if (opts.verb !== 'list' && !opts.selector) return { error: `mc dev ${opts.verb} requires a selector` };
+  if (!['list', 'plan'].includes(opts.verb) && !opts.selector) return { error: `mc dev ${opts.verb} requires a selector` };
   if (opts.verb !== 'logs' && opts.lines !== 100) return { error: '--lines is only valid with mc dev logs' };
+  if (opts.verb !== 'plan' && opts.profile) return { error: '--profile is only valid with mc dev plan' };
   return opts;
+}
+
+function printPlan(plan, stdout) {
+  stdout.write(`mc dev plan — ${plan.service.name}/${plan.profile.name} (source=${plan.profile.source})\n`);
+  stdout.write(`  start         ${renderArgv(plan.start.argv)}\n`);
+  stdout.write(`  readiness     ${plan.readiness.kind} ${plan.readiness.path} (${plan.readiness.timeout_ms}ms)\n`);
+  stdout.write(`  resource      ${plan.resource_class}\n`);
+  stdout.write(`  dependencies  ${plan.dependencies.manager}: ${renderArgv(plan.dependencies.install.argv)}\n`);
+  stdout.write(`  definition    ${plan.definition_path} (${plan.definition_fingerprint})\n`);
+  for (const warning of plan.warnings || []) {
+    stdout.write(`  warning       ${warning.code}${warning.path ? ` (${warning.path})` : ''}\n`);
+  }
+}
+
+function renderArgv(argv) {
+  return argv.map((arg) => (/^[a-zA-Z0-9_./:@%+=,-]+$/.test(arg)
+    ? arg
+    : `'${arg.replaceAll("'", "'\\''")}'`)).join(' ');
 }
 
 function printList({ summary, servers }, stdout) {

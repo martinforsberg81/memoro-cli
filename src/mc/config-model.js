@@ -51,6 +51,7 @@ const PREFERENCE_PATHS = Object.freeze([
   'dataAccess.cloudflare.approvedScripts',
   'dataAccess.cloudflare.allowLocalWeakening',
   'instructions.mode',
+  'dev.profile',
 ]);
 
 const SAFETY_SPECS = Object.freeze({
@@ -154,6 +155,7 @@ export function effectiveConfigValues(effectiveConfig = {}) {
   copyValue(out, effectiveConfig, 'dataAccess.cloudflare.approvedScripts');
   copyValue(out, effectiveConfig, 'dataAccess.cloudflare.allowLocalWeakening');
   copyValue(out, effectiveConfig, 'instructions.mode');
+  copyValue(out, effectiveConfig, 'dev.profile');
   return out;
 }
 
