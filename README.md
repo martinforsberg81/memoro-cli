@@ -73,6 +73,9 @@ Under the hood: `mc` runs the tool in a PTY it owns, with your terminal piped tr
 | `mc new <name> [--from <ref>] [--tool <id>]` | Create worktree + launch tool |
 | `mc list [--rich\|--awaiting\|--safe-to-end\|--orphans]` | List sessions with filters |
 | `mc status <name>` | Per-session derived status |
+| `mc dev list [--json]` | Show machine-local dev servers and their health |
+| `mc dev status\|logs <session>` | Inspect a session's registered dev server |
+| `mc dev stop\|restart <session>` | Run identity-verified project controls |
 | `mc resume <name>` | cd into worktree + relaunch tool |
 | `mc end <name> [<name>...]` | End worktrees (bulk + `--dry-run`) |
 | `mc rename <old> <new>` | Branch + dir + registry rename in one verb |

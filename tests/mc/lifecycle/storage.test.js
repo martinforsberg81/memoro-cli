@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { runMc, parseJsonOrNull } from '../_helpers/cli.js';
 import { makeTempRepo, git, addWorktree } from '../_helpers/git-fixture.js';
 import { writeRegistry, makeEntry } from '../_helpers/registry-fixture.js';
+import { run as runDoctor } from '../../../src/mc/commands/doctor.js';
 
 function setupStorageFixture(repo) {
   for (const n of ['done', 'dirty']) {
@@ -142,6 +143,35 @@ describe('mc storage / doctor', () => {
     assert.ok(j.issues.some((issue) => issue.code === 'stale-runtime'));
     assert.ok(j.issues.some((issue) => issue.code === 'stale-worktrees'));
     assert.ok(j.issues.some((issue) => issue.code === 'provider-native-id-missing'));
+  });
+
+  test('doctor includes unhealthy and orphaned dev servers', async () => {
+    const stdout = [];
+    const code = await runDoctor(['--json'], {
+      stdout: { write: (value) => stdout.push(value) },
+      stderr: { write: () => {} },
+      buildStorageSnapshot: async () => ({ summary: { registry_entries: 0 }, issues: [] }),
+      listDevServers: async () => [
+        { instance_id: 'ready', state: 'ready' },
+        { instance_id: 'bad', state: 'unhealthy' },
+        { instance_id: 'gone', state: 'orphan' },
+      ],
+    });
+
+    assert.equal(code, 0);
+    const result = JSON.parse(stdout.join(''));
+    assert.equal(result.ok, false);
+    assert.deepEqual(result.summary.dev_servers, {
+      total: 3,
+      ready: 1,
+      starting: 0,
+      unhealthy: 1,
+      orphan: 1,
+    });
+    assert.deepEqual(result.issues.slice(-2).map((issue) => issue.code), [
+      'dev-servers-unhealthy',
+      'dev-servers-orphan',
+    ]);
   });
 
   test('storage repair --dry-run plans metadata repairs without mutating registry', () => {
