@@ -178,6 +178,66 @@ describe('mc github status', () => {
   });
 });
 
+describe('mc github read operations', () => {
+  test('maps PR list, view, and checks to the session broker without authority fields', async () => {
+    const portal = deps();
+    const calls = [];
+    portal.executeGitHubOperation = async ({ operation, params }) => {
+      calls.push({ operation, params });
+      return {
+        ok: true,
+        request_id: `request_${calls.length}abcdef`,
+        data: operation === 'pull_request.list'
+          ? { pull_requests: [] }
+          : (operation === 'checks.list'
+            ? { pull_number: 7, checks: [], statuses: [] }
+            : { number: 7, title: 'Seven' }),
+      };
+    };
+
+    assert.equal(await runGitHub(['pr', 'list', '--state', 'all', '--limit', '5', '--json'], portal), 0);
+    assert.equal(await runGitHub(['pr', 'view', '7', '--json'], portal), 0);
+    assert.equal(await runGitHub(['pr', 'checks', '7', '--json'], portal), 0);
+    assert.deepEqual(calls, [
+      { operation: 'pull_request.list', params: { state: 'all', limit: 5 } },
+      { operation: 'pull_request.view', params: { pull_number: 7 } },
+      { operation: 'checks.list', params: { pull_number: 7 } },
+    ]);
+    assert.doesNotMatch(portal.stdoutText, /source_id|coding_session_id|installation_id|access_token/);
+  });
+
+  test('rejects write, repository selection, and unknown flags before broker access', async () => {
+    const cases = [
+      ['pr', 'create'],
+      ['pr', 'merge', '7'],
+      ['pr', 'list', '--repo', 'acme/other'],
+      ['pr', 'view'],
+      ['pr', 'checks', '7', '--watch'],
+    ];
+    for (const argv of cases) {
+      const portal = deps();
+      let calls = 0;
+      portal.executeGitHubOperation = async () => { calls += 1; };
+      assert.equal(await runGitHub(argv, portal), 2, argv.join(' '));
+      assert.equal(calls, 0, argv.join(' '));
+      assert.match(portal.stderrText, /mc github/i, argv.join(' '));
+    }
+  });
+
+  test('renders stable broker failures without suggesting native login or a token', async () => {
+    const portal = deps();
+    portal.executeGitHubOperation = async () => ({
+      ok: false,
+      request_id: 'request_abcdefgh',
+      error: { code: 'unavailable', message: 'Hostile secret detail', repair_action: 'retry' },
+    });
+    assert.equal(await runGitHub(['pr', 'view', '7'], portal), 1);
+    assert.equal(portal.stdoutText, '');
+    assert.match(portal.stderrText, /mc github status/);
+    assert.doesNotMatch(portal.stderrText, /Hostile secret detail|gh auth login|token/i);
+  });
+});
+
 describe('mc github connect/repos and auth alias', () => {
   const connectResponse = {
     ok: true,

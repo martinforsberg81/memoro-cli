@@ -343,6 +343,10 @@ SETUP
   mc github status [--json]       Check this repo via the Memoro GitHub App
   mc github connect [--json]      Start the central GitHub connection flow
   mc github repos [--json]        List selected GitHub repositories
+  mc github pr list [--json]      List pull requests through the session broker
+  mc github pr view <n> [--json]  View one pull request through the session broker
+  mc github pr checks <n> [--json]
+                                  List checks through the session broker
   mc auth github [--json]         Alias for mc github status
   mc auth <claude|codex|gemini>   Re-check one coding tool
   mc tool-switch <tool>           Set the default tool for future sessions

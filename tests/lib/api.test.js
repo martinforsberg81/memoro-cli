@@ -62,6 +62,28 @@ describe('memoro HTTP client', () => {
     assert.deepEqual(result, { ok: true, revision: 1 });
   });
 
+  test('adds only a validated Memoro source identity header', async () => {
+    const calls = [];
+    const fetchImpl = async (url, init) => {
+      calls.push({ url, init });
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    };
+    await memoroFetch('https://meetmemoro.app', '/api/mc/github/test', {
+      token: 'mem_secret_token',
+      sourceId: 'cloud:cld_123456',
+      fetchImpl,
+    });
+    await memoroFetch('https://meetmemoro.app', '/api/mc/github/test', {
+      token: 'mem_secret_token',
+      sourceId: 'invalid source\r\nX-Evil: yes',
+      fetchImpl,
+    });
+
+    assert.equal(calls[0].init.headers['X-Memoro-Source-Id'], 'cloud:cld_123456');
+    assert.equal(calls[1].init.headers['X-Memoro-Source-Id'], undefined);
+    assert.equal(calls[0].init.headers.Authorization, 'Bearer mem_secret_token');
+  });
+
   test('maps curl fallback HTTP errors like fetch HTTP errors', async () => {
     await assert.rejects(
       () => memoroFetchAnon('https://meetmemoro.app', '/api/auth/device/poll', {
