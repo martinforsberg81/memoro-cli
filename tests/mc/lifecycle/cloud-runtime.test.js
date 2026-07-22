@@ -334,6 +334,7 @@ describe('mc cloud-runtime run', () => {
     writeFileSync(m.runtime.paths.manifest, JSON.stringify(m), 'utf8');
     const reports = [];
     const launchCalls = [];
+    const providerLaunches = [];
     const brokerCalls = [];
     const gitCalls = [];
     const persistWatchers = [];
@@ -362,6 +363,10 @@ describe('mc cloud-runtime run', () => {
       },
       runCloudSessionWith: async (opts, deps) => {
         launchCalls.push({ opts, deps });
+        await deps.launchBrokerOwnedSession({
+          attachAfterLaunch: true,
+          cloudBroker: { sourceKind: 'cloud' },
+        });
         deps.stdout.write(JSON.stringify({
           ok: true,
           cloud_session_id: m.cloud_session_id,
@@ -369,6 +374,10 @@ describe('mc cloud-runtime run', () => {
           source_id: 'cloud:cld_runtime1',
         }));
         return 0;
+      },
+      launchBrokerOwnedSession: async (args) => {
+        providerLaunches.push(args);
+        return { code: 0, codingSessionId: 'sess_runtime1', attached: false };
       },
       connectBroker: async (args) => {
         brokerCalls.push(args);
@@ -409,6 +418,9 @@ describe('mc cloud-runtime run', () => {
     assert.equal(launchCalls[0].deps.env.MC_CLOUD_GIT_TOKEN, undefined);
     assert.equal(launchCalls[0].deps.env.MC_CODEX_API_KEY, undefined);
     assert.equal(launchCalls[0].deps.env.OPENAI_API_KEY, undefined);
+    assert.equal(providerLaunches.length, 1);
+    assert.equal(providerLaunches[0].attachAfterLaunch, false);
+    assert.equal((await providerLaunches[0].ensureCloudBroker()).supervisor_managed, true);
     assert.equal(brokerCalls.length, 1);
     assert.equal(typeof brokerCalls[0].onConnected, 'function');
     assert.equal(persistWatchers.length, 1);

@@ -128,6 +128,7 @@ const LIFECYCLE = {
   read:          () => import('./mc/commands/read.js'),
   'install-shell': () => import('./mc/commands/install-shell.js'),
   auth:          () => import('./mc/commands/auth.js'),
+  github:        () => import('./mc/commands/github.js'),
   setup:         () => import('./mc/commands/setup.js'),
   reconcile:     () => import('./mc/commands/reconcile.js'),
   doctor:        () => import('./mc/commands/doctor.js'),
@@ -339,7 +340,10 @@ SETUP
   mc auth status [--json]         Check Memoro + coding-tool auth
   mc auth memoro                  Token login/logout for CI or headless setup
   mc auth devices                 List/revoke Memoro device tokens
-  mc auth github [--json]         Check host GitHub CLI auth for PR/merge work
+  mc github status [--json]       Check this repo via the Memoro GitHub App
+  mc github connect [--json]      Start the central GitHub connection flow
+  mc github repos [--json]        List selected GitHub repositories
+  mc auth github [--json]         Alias for mc github status
   mc auth <claude|codex|gemini>   Re-check one coding tool
   mc tool-switch <tool>           Set the default tool for future sessions
   mc coding-profile read|diff|write
@@ -412,8 +416,9 @@ COMMAND SURFACES
 NEW USER FLOW
   1. Install: \`npm install -g memoro-cli\`
   2. Sign in: run \`mc\` and approve the browser device flow
-  3. Verify: \`mc setup\` checks readiness and offers optional resource limits
-  4. Start: from a git repo, run \`mc new <name> [focus]\`
+  3. Connect GitHub: \`mc github connect\` uses the central Memoro GitHub App
+  4. Verify: \`mc setup\` checks readiness and offers optional resource limits
+  5. Start: from a git repo, run \`mc new <name> [focus]\`
 
 WHAT HAPPENS ON START
   Fresh starts (\`mc\`, \`mc new\`) inject project grounding before the
