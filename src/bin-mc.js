@@ -385,10 +385,12 @@ FLEET / ADVANCED
                                   Prune old ignored build/cache directories
   mc gc [--dry-run]               Reap registry-dead, merged, clean worktrees
   mc gc --runtime                 Reap stale runtime pid/socket sidecars
+  mc gc --dependency-snapshots --dry-run
+                                  Preview dependency snapshot cache cleanup
   mc gc --stale-worktrees --only <names>
                                   Reap only named clean, merged worktrees
   mc gc --sidecars                Reap stale hosts/guard-bin runtime sidecars
-  mc gc --all-safe --dry-run      Preview runtime + clean merged worktree cleanup
+  mc gc --all-safe --dry-run      Preview runtime + snapshot + clean merged worktree cleanup
   mc broker start/status/stop     Local PTY broker admin
   mc broker connect               Connect local broker to Memoro cloud
   mc attach <session_id>          Attach to a broker-owned local session
@@ -690,6 +692,18 @@ async function runWrap(argv, { label = null } = {}) {
     }).env;
   } catch (err) {
     console.error(`mc: failed to install local resource guard (${err.message}); refusing to launch`);
+    process.exit(1);
+  }
+  try {
+    const { prepareDevCommandGuardEnv } = await import('./mc/dev-command-guard.js');
+    spawnEnv = prepareDevCommandGuardEnv({
+      baseEnv: spawnEnv,
+      worktreePath: repoContext.toplevel,
+      mcDir: MC_DIR,
+      codingSessionId,
+    }).env;
+  } catch (err) {
+    console.error(`mc: failed to install dev command guard (${err.message}); refusing to launch`);
     process.exit(1);
   }
   if (launchToolId === 'codex') {

@@ -211,6 +211,7 @@ export async function hydrateDependencies(plan, {
           if (error?.code === 'DEPENDENCY_INPUTS_CHANGED') return dependencyInputsChanged(status);
           throw error;
         }
+        touchSnapshotMetadata(status.snapshot.path, fingerprint.value, { now: deps.now });
         status = await dependencyStatus(plan, { mcDir, fingerprint });
         return {
           ok: true,
@@ -382,13 +383,15 @@ async function publishSnapshot(plan, fingerprint, { mcDir, deps, fingerprintOpti
     if (!await dependencyInputsMatch(plan, fingerprint, fingerprintOptions)) {
       throw dependencyInputsChangedError();
     }
+    const timestamp = isoNow(deps.now);
     writeFileSync(join(temp, 'metadata.json'), JSON.stringify({
       schema_version: DEPENDENCY_SCHEMA_VERSION,
       fingerprint: fingerprint.value,
       manager: fingerprint.manager,
       runtime: fingerprint.runtime,
       files: fingerprint.files,
-      created_at: isoNow(deps.now),
+      created_at: timestamp,
+      last_used_at: timestamp,
     }, null, 2), { mode: 0o600 });
     renameSync(temp, target);
     return cloned;
@@ -398,6 +401,25 @@ async function publishSnapshot(plan, fingerprint, { mcDir, deps, fingerprintOpti
       return { method: 'existing' };
     }
     throw error;
+  }
+}
+
+function touchSnapshotMetadata(snapshotPath, fingerprint, { now } = {}) {
+  const path = join(snapshotPath, 'metadata.json');
+  const metadata = readJson(path);
+  if (metadata?.schema_version !== DEPENDENCY_SCHEMA_VERSION
+    || metadata?.fingerprint !== fingerprint) return false;
+  const temp = `${path}.tmp-${process.pid}`;
+  try {
+    writeFileSync(temp, JSON.stringify({
+      ...metadata,
+      last_used_at: isoNow(now),
+    }, null, 2), { mode: 0o600 });
+    renameSync(temp, path);
+    return true;
+  } catch {
+    try { unlinkSync(temp); } catch {}
+    return false;
   }
 }
 

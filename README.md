@@ -89,9 +89,10 @@ Under the hood: `mc` runs the tool in a PTY it owns, with your terminal piped tr
 | `mc storage prune-generated --dry-run\|--apply` | Prune old ignored worktree build/cache directories |
 | `mc gc [--dry-run]` | Reap registry-dead + merged + clean worktrees |
 | `mc gc --runtime [--dry-run]` | Reap stale runtime pid/socket sidecars |
+| `mc gc --dependency-snapshots --dry-run\|--apply` | Preview or remove old unlocked dependency snapshots |
 | `mc gc --stale-worktrees [--dry-run]` | Reap clean + merged worktrees with no live broker |
 | `mc gc --sidecars [--dry-run]` | Reap stale `hosts/` and `guard-bin/` runtime sidecars |
-| `mc gc --all-safe --dry-run\|--apply` | Runtime cleanup plus clean + merged worktrees |
+| `mc gc --all-safe --dry-run\|--apply` | Runtime and dependency-cache cleanup plus clean + merged worktrees |
 | `mc gc --reap-orphans` | SIGTERM orphan heartbeat daemons |
 | `mc install-shell` | Install the zsh/bash wrapper |
 | `mc sessions list` | List active sessions across machines |

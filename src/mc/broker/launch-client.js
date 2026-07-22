@@ -187,6 +187,18 @@ export async function launchBrokerOwnedSession({
     stderr.write(`mc: failed to install local resource guard (${err.message}); refusing to launch\n`);
     return { code: 1 };
   }
+  try {
+    const { prepareDevCommandGuardEnv } = await import('../dev-command-guard.js');
+    spawnEnv = (deps.prepareDevCommandGuardEnv || prepareDevCommandGuardEnv)({
+      baseEnv: spawnEnv,
+      worktreePath: repoContext.toplevel,
+      mcDir: mcHome(),
+      codingSessionId,
+    }).env;
+  } catch (err) {
+    stderr.write(`mc: failed to install dev command guard (${err.message}); refusing to launch\n`);
+    return { code: 1 };
+  }
   if (launch.id === 'codex') {
     try {
       const { prepareCloudflareGuardEnv } = await import('../cloudflare-guard.js');

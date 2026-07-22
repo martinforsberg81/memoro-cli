@@ -118,6 +118,14 @@ name, or merely compatible URL is not enough. Session grounding tells coding
 agents to use `mc dev ensure` instead of invoking a repository start command
 directly.
 
+For repositories with a valid definition, mc also places a worktree-scoped
+PATH guard in launched Codex and Claude sessions. Commands matching
+`managed_argv_prefixes` (including `npm run dev:*` when `npm run dev` is
+declared) are refused inside that worktree with guidance to use
+`mc dev ensure`. Other commands and repositories without a definition pass
+through unchanged. Only the exact child launched by `mc dev ensure` receives
+the internal bypass variable.
+
 Launched coding sessions receive `MC_SESSION_NAME`, `MC_CODING_SESSION_ID`, and,
 when the definition is valid, `MC_DEV_SERVICE`, `MC_DEV_PROFILE`, and
 `MC_DEV_DEFINITION_FINGERPRINT`. Repositories without `.mc/dev.json` continue to
@@ -204,6 +212,8 @@ mc dev plan [service] [--profile <name>] [--json]
 mc dev ensure [service] [--profile <name>] [--restart] [--json]
 mc deps status [service] [--profile <name>] [--json]
 mc deps hydrate [service] [--profile <name>] [--replace] [--json]
+mc storage status [--json]
+mc gc --dependency-snapshots --dry-run|--apply [--min-age 30d]
 mc dev list [--json]
 mc dev status <session-or-instance> [--json]
 mc dev logs <session-or-instance> [--lines N]
