@@ -163,6 +163,22 @@ describe('mc cloud-runtime workspace', () => {
     assert.equal(calls[0].options.timeoutMs, 90_000);
   });
 
+  test('resolves the function-shaped cwd supplied by the CLI entrypoint', async () => {
+    const calls = [];
+    const result = await prepareWorkspace(manifest(), {
+      deps: {
+        cwd: () => '/workspace/runtime',
+        runProcess: async (cmd, args, options) => {
+          calls.push({ cmd, args, options });
+          return { code: 0, stdout: '', stderr: '' };
+        },
+      },
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(calls[0].options.cwd, '/workspace/runtime');
+  });
+
   test('fails explicitly instead of launching against an empty repo after clone timeout', async () => {
     const calls = [];
     const m = manifest();
