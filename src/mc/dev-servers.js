@@ -174,6 +174,8 @@ export async function controlDevServer(manifest, action, deps = {}) {
       ...process.env,
       MC_DEV_CONTROLLED_BY: 'mc',
       MC_DEV_INSTANCE_ID: manifest.instance_id,
+      MC_SESSION_NAME: manifest.session_name,
+      ...(manifest.coding_session_id ? { MC_CODING_SESSION_ID: manifest.coding_session_id } : {}),
     },
     shell: false,
   };

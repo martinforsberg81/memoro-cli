@@ -153,6 +153,8 @@ describe('mc dev server registry', () => {
     assert.deepEqual(calls[0].args, ['run', 'dev', '--', '--stop']);
     assert.equal(calls[0].options.cwd, realpathSync(worktree));
     assert.equal(calls[0].options.shell, false);
+    assert.equal(calls[0].options.env.MC_SESSION_NAME, 'home-actions-v4');
+    assert.equal(calls[0].options.env.MC_CODING_SESSION_ID, 'sess_example');
   });
 
   test('resolves exact instance ids and rejects ambiguous session selectors', () => {
