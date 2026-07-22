@@ -1,7 +1,7 @@
 /**
  * `mc auth status` integration spec (§11a).
  *
- * The five-section layout: Memoro account, LLM tools, GitHub CLI,
+ * The five-section layout: Memoro account, LLM tools, Memoro GitHub App,
  * Shell wrapper, Workspace. We assert on `--json` so test stability doesn't ride on
  * exact text spacing.
  *
@@ -48,8 +48,10 @@ describe('mc auth status', () => {
     assert.deepEqual(ids, ['claude-code', 'codex', 'gemini-cli']);
     assert.ok(j.shell_wrapper);
     assert.ok(j.github);
-    assert.equal(j.github.token_exposed, false);
-    assert.equal(typeof j.github.capabilities.merge, 'boolean');
+    assert.equal(j.github.schema, 1);
+    assert.equal(j.github.state, 'unavailable');
+    assert.equal(JSON.stringify(j.github).includes('token'), false);
+    assert.equal(JSON.stringify(j.github).includes('credential'), false);
     assert.ok(j.workspace);
     assert.ok(j.policy);
     assert.equal(j.policy.default_tool, 'codex');
@@ -152,7 +154,8 @@ describe('mc auth status', () => {
     });
     assert.match(r.stdout, /Memoro account:/);
     assert.match(r.stdout, /LLM tools on this machine:/);
-    assert.match(r.stdout, /GitHub CLI:/);
+    assert.match(r.stdout, /GitHub \(Memoro App\):/);
+    assert.doesNotMatch(r.stdout, /gh auth|keyring/);
     assert.match(r.stdout, /Shell wrapper:/);
     assert.match(r.stdout, /Policy:/);
     assert.match(r.stdout, /codex: native auth owned by tool; no vault target/);

@@ -5,7 +5,7 @@
  *   1. Memoro keychain — token present?
  *   2. LLM tools — per-adapter getStatus() (Claude deep, Codex shallow,
  *      Gemini surfaced as planned)
- *   3. GitHub CLI — host keyring readiness for PR/merge work
+ *   3. GitHub — central Memoro GitHub App readiness for this repository
  *   4. Shell wrapper — managed block present in zshrc/bashrc?
  *   5. Workspace — MC_HOME + registry + orphan-daemon counts
  *
@@ -15,7 +15,8 @@
  *   - `mc auth memoro --status`      — print just the Memoro section
  *   - `mc auth <tool> [--status]`    — re-run that tool's probe + fix hint
  *
- * GitHub auth is deliberately host-owned: no GH token is read or printed.
+ * GitHub auth is deliberately control-plane-owned: mc reads token-free
+ * connection metadata and never probes or imports a host `gh` login.
  * `mc auth` (no sub) defaults to `mc auth status` so the muscle-memory
  * `mc auth` works without ceremony.
  */
@@ -36,6 +37,8 @@ import { scanDaemons } from '../orphan-daemons.js';
 import { inspectCachedVaultKey } from '../vault/key-cache.js';
 import { formatPolicySummary, readRepoPolicy, resolveEffectivePolicy } from '../policy.js';
 import { readRepoLocalConfig, resolveEffectiveConfig } from '../config-model.js';
+import { readGitHubConnectionStatus } from './github.js';
+import { repairForGitHubState } from '../github-contract.js';
 
 const TOOL_ADAPTERS = {
   claude: { adapter: claudeCode, label: 'claude' },
@@ -48,13 +51,13 @@ const PLANNED_TOOLS = new Set(['gemini']);
 
 const SHELL_WRAPPER_MARK = '# >>> memoro mc shell wrapper >>>';
 
-export async function run(argv) {
+export async function run(argv, deps = {}) {
   const sub = argv[0];
   const rest = argv.slice(1);
-  if (!sub || sub === 'status') return runStatus(rest);
+  if (!sub || sub === 'status') return runStatus(rest, deps.github || deps);
   if (sub === 'memoro')                          return runAuthMemoro(rest);
   if (sub === 'devices')                         return runAuthDevices(rest);
-  if (sub === 'github')                          return runAuthGitHub(rest);
+  if (sub === 'github')                          return runAuthGitHub(rest, deps.github || deps);
   if (Object.prototype.hasOwnProperty.call(TOOL_ADAPTERS, sub)) return runAuthTool(sub, rest);
   if (PLANNED_TOOLS.has(sub))                    return runAuthTool(sub, rest);
   console.error(`mc: unknown auth subcommand "${sub}". Try \`mc auth status\`.`);
@@ -135,28 +138,9 @@ export function parseMemoroArgs(argv) {
 // `mc auth github [--status] [--json]`
 // ─────────────────────────────────────────────────────────────
 
-async function runAuthGitHub(argv) {
-  const opts = parseToolArgs(argv);
-  if (opts.error) { console.error(`mc: ${opts.error}`); return 2; }
-
-  const github = probeGitHub();
-  if (opts.json) {
-    console.log(JSON.stringify({ github }, null, 2));
-    return githubExitCode(github);
-  }
-
-  printGitHubSection(github);
-  return githubExitCode(github);
-}
-
-function githubExitCode(status) {
-  if (!status.installed) return 1;
-  return status.authenticated === true ? 0 : 1;
-}
-
-function printGitHubSection(status) {
-  process.stdout.write(`GitHub CLI:\n`);
-  printGitHubStatus(status, '  ');
+async function runAuthGitHub(argv, deps = {}) {
+  const mod = await import('./github.js');
+  return mod.run(['status', ...argv.filter((arg) => arg !== '--status')], deps);
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -222,7 +206,7 @@ function parseToolArgs(argv) {
   return opts;
 }
 
-async function runStatus(argv) {
+async function runStatus(argv, githubDeps = {}) {
   const opts = parseStatusArgs(argv);
   if (opts.error) { console.error(`mc: ${opts.error}`); return 2; }
 
@@ -231,7 +215,7 @@ async function runStatus(argv) {
     safeStatus(claudeCode),
     safeStatus(codex),
     plannedGeminiStatus(),
-    probeGitHub(),
+    safeGitHubConnectionStatus(githubDeps),
     probeShellWrapper(),
     probeWorkspace(),
     probeVault(),
@@ -296,8 +280,8 @@ function printHuman(r) {
     process.stdout.write(`  ${mark} ${t.label.padEnd(10)}${statusBits.join(' · ')}\n`);
     if (t.hint) process.stdout.write(`    → ${t.hint}\n`);
   }
-  process.stdout.write(`\nGitHub CLI:\n`);
-  printGitHubStatus(r.github, '  ');
+  process.stdout.write(`\nGitHub (Memoro App):\n`);
+  printGitHubConnectionStatus(r.github, '  ');
   process.stdout.write(`\nShell wrapper:\n`);
   process.stdout.write(`  ${tick(r.shell_wrapper.installed)} ${r.shell_wrapper.installed ? `installed in ${r.shell_wrapper.rc}` : 'not installed'}\n`);
   if (r.shell_wrapper.hint) process.stdout.write(`    → ${r.shell_wrapper.hint}\n`);
@@ -441,145 +425,33 @@ export async function probeVault() {
   }
 }
 
-export function probeGitHub({ spawnSyncFn = spawnSync, env = process.env } = {}) {
-  const base = {
-    installed: false,
-    version: null,
-    authenticated: null,
-    host: 'github.com',
-    login: null,
-    token_source: null,
-    token_exposed: false,
-    capabilities: {
-      pull_requests: false,
-      merge: false,
-      push: false,
-    },
-    hint: null,
-    detailLines: [],
-  };
-
+export async function safeGitHubConnectionStatus(deps = {}) {
   try {
-    const which = spawnSyncFn('which', ['gh'], { encoding: 'utf8', env });
-    const bin = which.status === 0 ? firstLine(which.stdout) : null;
-    if (!bin) {
-      return {
-        ...base,
-        hint: 'Install GitHub CLI and run `gh auth login`; PR/merge work uses host gh/git approvals',
-      };
-    }
-
-    const versionProbe = spawnSyncFn('gh', ['--version'], { encoding: 'utf8', env });
-    const version = parseGhVersion(versionProbe.stdout);
-    const authProbe = spawnSyncFn('gh', [
-      'auth',
-      'status',
-      '--hostname',
-      'github.com',
-      '--active',
-      '--json',
-      'hosts',
-    ], { encoding: 'utf8', env });
-
-    if (authProbe.error) {
-      return {
-        ...base,
-        installed: true,
-        version,
-        hint: `GitHub CLI auth probe failed: ${authProbe.error.message}`,
-        detailLines: [`bin: ${bin}`],
-      };
-    }
-
-    const parsed = parseJson(authProbe.stdout);
-    const record = activeGitHubHostRecord(parsed);
-    const tokenSource = record?.tokenSource || record?.token_source || null;
-    const scopes = normalizeScopes(record?.scopes);
-    const authed = record?.state === 'success';
-    const detailLines = [`bin: ${bin}`];
-    if (record?.login) detailLines.push(`account: ${record.login}`);
-    if (tokenSource) detailLines.push(`source: ${tokenSource}`);
-    if (scopes.length > 0) detailLines.push(`scopes: ${scopes.join(', ')}`);
-    if (authed) detailLines.push('PR/merge: ready via approved host gh/git commands');
-
-    let hint = null;
-    if (!record) {
-      hint = firstLine(authProbe.stderr) || 'Run `gh auth login --hostname github.com` in your host shell';
-    } else if (!authed) {
-      hint = record.message || firstLine(authProbe.stderr) || 'Run `gh auth login --hostname github.com` in your host shell';
-    } else if (tokenSource && !/keyring|oauth/i.test(tokenSource)) {
-      hint = `Authenticated via ${tokenSource}; prefer host keyring auth so tokens are not materialised into sessions`;
-    }
-
+    return (await readGitHubConnectionStatus(deps)).github;
+  } catch {
     return {
-      ...base,
-      installed: true,
-      version,
-      authenticated: authed,
-      login: record?.login || null,
-      token_source: tokenSource,
-      capabilities: {
-        pull_requests: authed,
-        merge: authed,
-        push: authed,
-      },
-      hint,
-      detailLines,
-    };
-  } catch (err) {
-    return {
-      ...base,
-      hint: `GitHub CLI probe failed: ${err.message}`,
+      schema: 1,
+      state: 'unavailable',
+      repair_action: 'retry',
+      actor: { type: 'installation', login: 'memoro[bot]' },
+      accounts: [],
+      repository: null,
+      repositories: [],
+      operations: [],
+      approval_mode: 'prompt',
     };
   }
 }
 
-function printGitHubStatus(status, indent = '') {
-  const bits = [];
-  bits.push(status.installed ? (status.version || 'installed') : 'not installed');
-  if (status.installed) {
-    if (status.authenticated === true) bits.push('authenticated');
-    else if (status.authenticated === false) bits.push('NOT authenticated');
-    else bits.push('auth: unknown');
+function printGitHubConnectionStatus(status, indent = '') {
+  if (status.state === 'ready') {
+    const target = status.repository ? ` for ${status.repository.full_name}` : '';
+    process.stdout.write(`${indent}✓ connected${target}\n`);
+    return;
   }
-  const mark = status.installed && status.authenticated === true ? '✓' : (status.installed ? '·' : '✗');
-  process.stdout.write(`${indent}${mark} gh         ${bits.join(' · ')}\n`);
-  if (status.hint) process.stdout.write(`${indent}  → ${status.hint}\n`);
-  for (const detail of status.detailLines || []) {
-    process.stdout.write(`${indent}  ${detail}\n`);
-  }
-  if (status.authenticated === true) {
-    process.stdout.write(`${indent}  capabilities: pr, merge, push\n`);
-  }
-  process.stdout.write(`${indent}  token: not exposed to session\n`);
-}
-
-function parseGhVersion(stdout) {
-  const line = firstLine(stdout);
-  const match = line.match(/^gh version\s+([^\s]+)/i);
-  return match ? `gh ${match[1]}` : (line || null);
-}
-
-function parseJson(text) {
-  try { return JSON.parse(text || '{}'); } catch { return null; }
-}
-
-function activeGitHubHostRecord(parsed) {
-  const hosts = parsed?.hosts;
-  const records = hosts?.['github.com'];
-  if (Array.isArray(records)) return records.find((r) => r.active) || records[0] || null;
-  if (records && typeof records === 'object') return records;
-  return null;
-}
-
-function normalizeScopes(scopes) {
-  if (Array.isArray(scopes)) return scopes.filter(Boolean);
-  if (typeof scopes === 'string') return scopes.split(',').map((s) => s.trim()).filter(Boolean);
-  return [];
-}
-
-function firstLine(text) {
-  return String(text || '').split(/\r?\n/).map((s) => s.trim()).find(Boolean) || null;
+  process.stdout.write(`${indent}✗ ${status.state.replaceAll('_', ' ')}\n`);
+  const repair = repairForGitHubState(status.state);
+  if (repair) process.stdout.write(`${indent}  → ${repair.message} Run \`${repair.command}\`.\n`);
 }
 
 export function probeShellWrapper() {

@@ -24,6 +24,18 @@ import { tmpdir } from 'node:os';
 import { runMc, parseJsonOrNull } from '../_helpers/cli.js';
 import { makeTempRepo } from '../_helpers/git-fixture.js';
 
+const READY_GITHUB = Object.freeze({
+  schema: 1,
+  state: 'ready',
+  repair_action: null,
+  actor: { type: 'installation', login: 'memoro[bot]' },
+  accounts: [{ login: 'acme', type: 'Organization' }],
+  repository: null,
+  repositories: [],
+  operations: [],
+  approval_mode: 'prompt',
+});
+
 describe('mc setup — checklist (red path)', () => {
   let repo, pidDir;
   beforeEach(() => {
@@ -41,7 +53,7 @@ describe('mc setup — checklist (red path)', () => {
       env: { MC_HOME: repo.mcHome, MC_ORPHAN_PID_DIR: pidDir, HOME: repo.root },
     });
     assert.equal(r.status, 1, r.stderr);
-    assert.match(r.stdout, /mc setup — \d+ local setup step/);
+    assert.match(r.stdout, /mc setup — \d+ setup step/);
     assert.match(r.stdout, /1\. Sign in to Memoro/);
     assert.match(r.stdout, /run:\s+mc/);
     assert.match(r.stdout, /browser device sign-in/);
@@ -179,6 +191,7 @@ describe('mc setup — pure helpers (in-process)', () => {
         gemini: { installed: false, version: null, authenticated: null,
                   hint: 'planned', detailLines: [] },
       },
+      github: READY_GITHUB,
       shell_wrapper: { installed: true, rc: '/fake/.zshrc', hint: null },
       workspace: { mc_home: '/tmp', mc_home_exists: true, session_count: 0,
                    orphan_daemon_count: 0, stale_pidfile_count: 0 },
@@ -198,6 +211,7 @@ describe('mc setup — pure helpers (in-process)', () => {
         gemini: { installed: false, version: null, authenticated: null,
                   hint: 'planned', detailLines: [] },
       },
+      github: READY_GITHUB,
       shell_wrapper: { installed: true, rc: '/fake', hint: null },
       workspace: {},
     };
@@ -222,10 +236,44 @@ describe('mc setup — pure helpers (in-process)', () => {
         gemini: { installed: false, version: null, authenticated: null,
                   hint: 'planned', detailLines: [] },
       },
+      github: READY_GITHUB,
       shell_wrapper: { installed: true, rc: '/fake', hint: null },
       workspace: {},
     };
     assert.deepEqual(missingSteps(report), []);
+  });
+
+  test('missingSteps maps every GitHub onboarding repair action to canonical mc verbs', async () => {
+    const { missingSteps } = await import('../../../src/mc/commands/setup.js');
+    const base = {
+      memoro: { authenticated: true, hint: null },
+      tools: {
+        codex: { installed: true, version: '0.137.0', authenticated: null, hint: null, detailLines: [] },
+        claude: { installed: false, version: null, authenticated: null, hint: null, detailLines: [] },
+        gemini: { installed: false, version: null, authenticated: null, hint: null, detailLines: [] },
+      },
+      shell_wrapper: { installed: true, rc: '/fake', hint: null },
+      workspace: {},
+    };
+    const cases = [
+      ['disconnected', 'connect', 'mc github connect'],
+      ['connecting', 'continue_connect', 'mc github connect'],
+      ['repo_not_installed', 'select_repository', 'mc github connect'],
+      ['permission_missing', 'update_installation', 'mc github connect'],
+      ['suspended', 'resume_installation', 'mc github connect'],
+      ['revoked', 'reconnect', 'mc github connect'],
+      ['unavailable', 'retry', 'mc github status'],
+    ];
+    for (const [state, action, command] of cases) {
+      const steps = missingSteps({
+        ...base,
+        github: { ...READY_GITHUB, state, repair_action: action },
+      });
+      assert.equal(steps.length, 1, state);
+      assert.equal(steps[0].id, `github-${action}`, state);
+      assert.equal(steps[0].command, command, state);
+      assert.doesNotMatch(steps[0].note, /gh auth|keyring|Claude|Codex/, state);
+    }
   });
 
   test('writeSentinel + sentinelPath write to MC_HOME on green', async () => {
