@@ -1,11 +1,14 @@
 import test, { afterEach, beforeEach, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { createServer } from 'node:http';
 
 import { runMc, parseJsonOrNull } from '../_helpers/cli.js';
+import { computeDependencyFingerprint } from '../../../src/mc/dependencies.js';
+import { resolveDevPlan } from '../../../src/mc/dev-definition.js';
 
 describe('mc dev CLI', () => {
   let root;
@@ -139,6 +142,14 @@ describe('mc dev CLI', () => {
     assert.match(human.stdout, /npm run dev -- --skip-containers/);
     assert.match(human.stdout, /source=cli/);
     assert.match(human.stdout, /deps mode\s+auto \(source=package-defaults\)/);
+
+    const ensure = runMc(['dev', 'ensure', 'web', '--profile', 'agent', '--json'], {
+      cwd: worktree,
+      env: { MC_HOME: mcHome },
+    });
+    assert.equal(ensure.status, 1, ensure.stderr);
+    assert.equal(parseJsonOrNull(ensure.stdout).reason, 'missing-session-identity');
+    assert.equal(existsSync(join(worktree, 'node_modules')), false);
   });
 
   test('plan reports malformed definitions and never falls through to runtime inventory', () => {
@@ -151,4 +162,149 @@ describe('mc dev CLI', () => {
     assert.equal(result.status, 1);
     assert.match(result.stderr, /\.mc\/dev\.json contains invalid JSON/);
   });
+
+  test('ensure starts exact argv and waits for a verified healthy runtime manifest', async (t) => {
+    if (!await supportsLoopbackListen()) {
+      t.skip('loopback listeners are unavailable in this sandbox');
+      return;
+    }
+    const runtimeDir = join(worktree, '.runtime');
+    const definitionDir = join(worktree, '.mc');
+    const startScript = join(worktree, 'start-fixture.mjs');
+    const manifestPath = join(runtimeDir, 'mc-dev.json');
+    let launchedPid = null;
+    mkdirSync(definitionDir, { recursive: true });
+    writeFileSync(join(worktree, 'package.json'), JSON.stringify({ name: 'dev-ensure-fixture', version: '1.0.0' }));
+    writeFileSync(join(worktree, 'package-lock.json'), JSON.stringify({
+      name: 'dev-ensure-fixture',
+      version: '1.0.0',
+      lockfileVersion: 3,
+      packages: { '': { name: 'dev-ensure-fixture', version: '1.0.0' } },
+    }));
+    writeFileSync(startScript, `
+import { createServer } from 'node:http';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+
+const manifestPath = process.env.MC_DEV_MANIFEST_PATH;
+const server = createServer((_request, response) => {
+  response.writeHead(200, { 'content-type': 'application/json' });
+  response.end(JSON.stringify({ ok: true }));
 });
+server.listen(0, '127.0.0.1', () => {
+  const port = server.address().port;
+  mkdirSync(dirname(manifestPath), { recursive: true });
+  writeFileSync(join(dirname(manifestPath), 'fixture.log'), 'ready\\n');
+  writeFileSync(join(dirname(manifestPath), 'fixture.pid'), String(process.pid));
+  writeFileSync(manifestPath, JSON.stringify({
+    schema_version: 1,
+    instance_id: 'dev-e2e-' + process.pid,
+    service: process.env.MC_DEV_SERVICE,
+    profile: process.env.MC_DEV_PROFILE,
+    definition_fingerprint: process.env.MC_DEV_DEFINITION_FINGERPRINT,
+    start_argv: JSON.parse(process.env.MC_DEV_START_ARGV_JSON),
+    resource_class: process.env.MC_DEV_RESOURCE_CLASS,
+    session_name: process.env.MC_SESSION_NAME,
+    coding_session_id: process.env.MC_CODING_SESSION_ID,
+    worktree_path: process.cwd(),
+    pid: process.pid,
+    process_group_id: process.pid,
+    url: 'http://127.0.0.1:' + port,
+    port,
+    health_url: 'http://127.0.0.1:' + port + '/health',
+    log_path: join(dirname(manifestPath), 'fixture.log'),
+    started_at: new Date().toISOString(),
+    control: {
+      stop: { argv: [process.execPath, '-e', 'process.exit(0)'] },
+      restart: { argv: [process.execPath, '-e', 'process.exit(0)'], detached: true }
+    }
+  }, null, 2));
+});
+`);
+    writeFileSync(join(definitionDir, 'dev.json'), JSON.stringify({
+      schema_version: 1,
+      default_service: 'web',
+      services: {
+        web: {
+          default_profile: 'agent',
+          profiles: {
+            agent: {
+              start: { argv: [process.execPath, startScript] },
+              readiness: { kind: 'runtime-manifest', path: '.runtime/mc-dev.json', timeout_ms: 10_000 },
+              resource_class: 'standard',
+            },
+          },
+          dependencies: {
+            manager: 'npm',
+            fingerprint_files: ['package.json', 'package-lock.json'],
+            install: { argv: ['npm', 'ci'] },
+          },
+          managed_argv_prefixes: [[process.execPath, startScript]],
+        },
+      },
+    }));
+    const git = spawnSync('git', ['init', '-q'], { cwd: worktree, encoding: 'utf8' });
+    assert.equal(git.status, 0, git.stderr);
+
+    const plan = await resolveDevPlan({ worktreePath: realpathSync(worktree), globalConfig: {} });
+    const fingerprint = await computeDependencyFingerprint(plan);
+    mkdirSync(join(worktree, 'node_modules'), { recursive: true });
+    writeFileSync(join(worktree, 'node_modules', '.mc-dependency-snapshot.json'), JSON.stringify({
+      schema_version: 1,
+      fingerprint: fingerprint.value,
+    }));
+
+    try {
+      const ensured = runMc(['dev', 'ensure', '--json'], {
+        cwd: worktree,
+        timeoutMs: 15_000,
+        env: {
+          MC_HOME: mcHome,
+          MC_SESSION_NAME: 'e2e-session',
+          MC_CODING_SESSION_ID: 'sess_e2e',
+          PATH: process.env.PATH,
+        },
+      });
+      const launchLog = join(runtimeDir, 'mc-dev-ensure.log');
+      const failureDetail = [
+        ensured.stderr || ensured.stdout,
+        existsSync(launchLog) ? readFileSync(launchLog, 'utf8') : '',
+      ].filter(Boolean).join('\n');
+      assert.equal(ensured.status, 0, failureDetail);
+      const result = parseJsonOrNull(ensured.stdout);
+      assert.equal(result.action, 'started');
+      assert.equal(result.server.state, 'ready');
+      assert.equal(result.server.health.status, 'healthy');
+      assert.equal(result.launch.shell, false);
+      assert.deepEqual(result.launch.argv, [process.execPath, startScript]);
+      launchedPid = Number(readFileSync(join(runtimeDir, 'fixture.pid'), 'utf8'));
+
+      const reused = runMc(['dev', 'ensure', '--json'], {
+        cwd: worktree,
+        timeoutMs: 10_000,
+        env: {
+          MC_HOME: mcHome,
+          MC_SESSION_NAME: 'another-session',
+          PATH: process.env.PATH,
+        },
+      });
+      assert.equal(reused.status, 0, reused.stderr);
+      assert.equal(parseJsonOrNull(reused.stdout).action, 'reused');
+    } finally {
+      if (existsSync(manifestPath)) {
+        runMc(['dev', 'unregister', manifestPath], { env: { MC_HOME: mcHome } });
+      }
+      if (Number.isInteger(launchedPid) && launchedPid > 0) {
+        try { process.kill(launchedPid, 'SIGTERM'); } catch {}
+      }
+    }
+  });
+});
+
+function supportsLoopbackListen() {
+  return new Promise((resolve) => {
+    const server = createServer();
+    server.once('error', () => resolve(false));
+    server.listen(0, '127.0.0.1', () => server.close(() => resolve(true)));
+  });
+}

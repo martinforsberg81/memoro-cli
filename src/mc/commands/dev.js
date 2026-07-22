@@ -9,6 +9,7 @@ import {
   unregisterDevServerManifest,
 } from '../dev-servers.js';
 import { resolveDevPlan } from '../dev-definition.js';
+import { ensureDevServer } from '../dev-ensure.js';
 
 export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
@@ -20,14 +21,32 @@ export async function run(argv, deps = {}) {
   }
 
   try {
-    if (opts.verb === 'plan') {
+    if (opts.verb === 'plan' || opts.verb === 'ensure') {
       const resolvePlan = deps.resolveDevPlan || resolveDevPlan;
       const plan = await resolvePlan({
         cwd: deps.cwd || process.cwd(),
         serviceName: opts.selector,
         profileName: opts.profile,
       });
-      emitResult(plan, { json: opts.json, stdout }, () => printPlan(plan, stdout));
+      if (opts.verb === 'plan') {
+        emitResult(plan, { json: opts.json, stdout }, () => printPlan(plan, stdout));
+        return 0;
+      }
+      const ensure = deps.ensureDevServer || ensureDevServer;
+      const result = await ensure(plan, {
+        restart: opts.restart,
+        ...(deps.ensureOptions || {}),
+        deps: {
+          ...(deps.ensureOptions?.deps || {}),
+          onDependencyOutput: (_stream, chunk) => stderr.write(chunk),
+        },
+      });
+      if (!result.ok) {
+        if (opts.json) stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+        else printEnsureFailure(result, stderr);
+        return 1;
+      }
+      emitResult(result, { json: opts.json, stdout }, () => printEnsure(result, stdout));
       return 0;
     }
     if (opts.verb === 'register') {
@@ -95,15 +114,23 @@ export async function run(argv, deps = {}) {
     return 1;
   }
 
-  stderr.write('mc: usage — `mc dev plan|list|status|logs|stop|restart ...`\n');
+  stderr.write('mc: usage — `mc dev plan|ensure|list|status|logs|stop|restart ...`\n');
   return 2;
 }
 
 function parseArgs(argv) {
-  const opts = { verb: null, selector: null, json: false, lines: 100, profile: null };
+  const opts = {
+    verb: null,
+    selector: null,
+    json: false,
+    lines: 100,
+    profile: null,
+    restart: false,
+  };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === '--json') { opts.json = true; continue; }
+    if (arg === '--restart') { opts.restart = true; continue; }
     if (arg === '--lines') {
       const value = Number(argv[++i]);
       if (!Number.isInteger(value) || value < 1 || value > 1_000) {
@@ -124,13 +151,34 @@ function parseArgs(argv) {
     return { error: `unexpected arg: ${arg}` };
   }
 
-  const valid = new Set(['plan', 'list', 'status', 'logs', 'stop', 'restart', 'register', 'unregister']);
+  const valid = new Set(['plan', 'ensure', 'list', 'status', 'logs', 'stop', 'restart', 'register', 'unregister']);
   if (!valid.has(opts.verb)) return { error: `unknown or missing dev verb: ${opts.verb || '<missing>'}` };
   if (opts.verb === 'list' && opts.selector) return { error: 'mc dev list does not take a selector' };
-  if (!['list', 'plan'].includes(opts.verb) && !opts.selector) return { error: `mc dev ${opts.verb} requires a selector` };
+  if (!['list', 'plan', 'ensure'].includes(opts.verb) && !opts.selector) return { error: `mc dev ${opts.verb} requires a selector` };
   if (opts.verb !== 'logs' && opts.lines !== 100) return { error: '--lines is only valid with mc dev logs' };
-  if (opts.verb !== 'plan' && opts.profile) return { error: '--profile is only valid with mc dev plan' };
+  if (!['plan', 'ensure'].includes(opts.verb) && opts.profile) return { error: '--profile is only valid with mc dev plan or ensure' };
+  if (opts.verb !== 'ensure' && opts.restart) return { error: '--restart is only valid with mc dev ensure' };
   return opts;
+}
+
+function printEnsure(result, stdout) {
+  stdout.write(`mc dev ensure — ${result.action} ${result.server.service}/${result.server.profile || 'legacy'}\n`);
+  stdout.write(`  url           ${result.server.url}\n`);
+  stdout.write(`  worktree      ${result.server.worktree_path}\n`);
+  stdout.write(`  instance      ${result.server.instance_id}\n`);
+  stdout.write(`  dependencies  ${result.dependencies?.action || 'unchanged'}\n`);
+  if (result.resource_gate) {
+    stdout.write(`  resources     ${result.resource_gate.resource_class}/${result.resource_gate.profile}\n`);
+  }
+}
+
+function printEnsureFailure(result, stderr) {
+  stderr.write(`mc: dev ensure refused (${result.reason || 'unknown'}): ${result.error || 'unknown error'}\n`);
+  if (result.reason === 'server-plan-mismatch' || result.reason === 'server-not-ready') {
+    stderr.write('mc: re-run with --restart only if replacing this verified worktree server is intended.\n');
+  }
+  if (result.dependencies?.hint) stderr.write(`mc: ${result.dependencies.hint}\n`);
+  if (result.launch?.log_path) stderr.write(`mc: startup log: ${result.launch.log_path}\n`);
 }
 
 function printPlan(plan, stdout) {
@@ -161,18 +209,21 @@ function printList({ summary, servers }, stdout) {
     return;
   }
   for (const server of servers) {
-    stdout.write(`  ${server.state.padEnd(9)} ${server.session_name}/${server.service}  ${server.url}  pid=${server.pid}  age=${formatAge(server.age_seconds)}  health=${server.health?.status || 'unknown'}\n`);
+    const profile = server.profile ? `/${server.profile}` : '';
+    stdout.write(`  ${server.state.padEnd(9)} ${server.session_name}/${server.service}${profile}  ${server.url}  pid=${server.pid}  age=${formatAge(server.age_seconds)}  health=${server.health?.status || 'unknown'}\n`);
     stdout.write(`             worktree=${server.worktree_path}  log=${server.log_path}\n`);
   }
 }
 
 function printStatus(server, stdout) {
-  stdout.write(`${server.session_name}/${server.service}  ${server.state}\n`);
+  stdout.write(`${server.session_name}/${server.service}${server.profile ? `/${server.profile}` : ''}  ${server.state}\n`);
   stdout.write(`  instance    ${server.instance_id}\n`);
   stdout.write(`  url         ${server.url}\n`);
   stdout.write(`  pid / pgid  ${server.pid} / ${server.process_group_id}\n`);
   stdout.write(`  identity    ${server.identity?.status || 'unknown'}${server.identity?.reason ? ` (${server.identity.reason})` : ''}\n`);
   stdout.write(`  health      ${server.health?.status || 'unknown'}${server.health?.error ? ` (${server.health.error})` : ''}\n`);
+  if (server.definition_fingerprint) stdout.write(`  definition  ${server.definition_fingerprint}\n`);
+  if (server.start_argv) stdout.write(`  start argv  ${renderArgv(server.start_argv)}\n`);
   stdout.write(`  age         ${formatAge(server.age_seconds)}\n`);
   stdout.write(`  worktree    ${server.worktree_path}\n`);
   stdout.write(`  log         ${server.log_path}\n`);

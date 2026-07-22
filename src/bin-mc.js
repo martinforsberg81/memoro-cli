@@ -305,6 +305,8 @@ COMMON
   mc status <name>                Show one session's state
   mc dev plan [service] [--profile <name>]
                                   Validate and show this worktree's dev plan
+  mc dev ensure [service] [--profile <name>] [--restart]
+                                  Safely prepare and ensure its dev server
   mc dev list [--json]            Show machine-local dev servers
   mc dev status|logs <session>    Inspect one session's dev server
   mc dev stop|restart <session>   Run verified project-owned controls
