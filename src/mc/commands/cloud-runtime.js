@@ -43,6 +43,8 @@ const CLOUD_SESSION_ID_RE = /^cld_[a-zA-Z0-9_-]{6,}$/;
 const DEFAULT_RUNTIME_DIR = '/workspace/mc-runtime';
 const DEFAULT_REPO_CWD = '/workspace/repo';
 const DEFAULT_API_URL = 'https://meetmemoro.app';
+const DEFAULT_WORKSPACE_CLONE_TIMEOUT_MS = 90_000;
+const PROCESS_FORCE_KILL_GRACE_MS = 2_000;
 const GITHUB_SHORTHAND_RE = /^[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+$/;
 const SECRET_ENV_NAMES_AFTER_WORKSPACE = Object.freeze([
   'MC_CLOUD_GIT_TOKEN',
@@ -155,7 +157,15 @@ export async function runCloudRuntimeWith(opts, deps = {}) {
     phase: CLOUD_LIFECYCLE.WAKING,
     runtime_state: 'preparing_workspace',
     process_status: 'running',
-    events: [{ type: 'workspace.prepare.started', data: { cwd: workspaceDir } }],
+    events: [{
+      type: 'workspace.prepare.started',
+      data: {
+        cwd: workspaceDir,
+        repo_ref: safeRuntimeRepoRef(manifest.repo?.ref),
+        workspace_ref: stringOrNull(manifest.repo?.workspace_ref),
+        strategy: repoCloneUrl(safeRuntimeRepoRef(manifest.repo?.ref)) ? 'partial_clone' : 'empty_init',
+      },
+    }],
   });
 
   const workspace = await prepareWorkspace(manifest, {
@@ -536,7 +546,17 @@ export async function prepareWorkspace(manifest, {
   mkdir(dirname(cwd), { recursive: true, mode: 0o700 });
 
   if (cloneUrl) {
-    const cloneArgs = ['clone', '--depth', '1'];
+    const cloneTimeoutMs = workspaceCloneTimeoutMs(deps.workspaceCloneTimeoutMs);
+    const cloneArgs = [
+      '-c',
+      'protocol.version=2',
+      'clone',
+      '--depth',
+      '1',
+      '--filter=blob:none',
+      '--single-branch',
+      '--no-tags',
+    ];
     if (branch) cloneArgs.push('--branch', branch);
     cloneArgs.push(cloneUrl, cwd);
     const clone = await runGit(cloneArgs, {
@@ -544,6 +564,7 @@ export async function prepareWorkspace(manifest, {
       deps,
       runProcess,
       credentialHelper: gitCredentialHelper(manifest, env),
+      timeoutMs: cloneTimeoutMs,
     });
     if (clone.ok) {
       return {
@@ -558,11 +579,20 @@ export async function prepareWorkspace(manifest, {
       };
     }
     if (isSafeRuntimeRmPath(cwd)) remove(cwd, { recursive: true, force: true });
-    const fallback = await initEmptyWorkspace({ cwd, repoRef, branch, env, deps, runProcess, mkdir });
     return {
-      ...fallback,
+      ok: false,
+      code: clone.timedOut ? 'workspace_clone_timeout' : 'workspace_clone_failed',
+      error: clone.timedOut
+        ? `repo clone timed out after ${Math.ceil(cloneTimeoutMs / 1000)}s`
+        : `repo clone failed: ${boundedProcessError(clone.error)}`,
+      cwd,
+      reused_existing: false,
+      cloned: false,
+      initialized_empty: false,
+      repo_ref: repoRef,
+      workspace_ref: branch,
       clone_failed: true,
-      clone_error: clone.error || null,
+      clone_error: boundedProcessError(clone.error),
       git_auth: gitAuthReadiness(manifest, env, { usedCredential: clone.usedCredential, cloneFailed: true }),
     };
   }
@@ -795,7 +825,13 @@ async function reportRuntimeStatus({ apiUrl, token, cloudSessionId, report }) {
   });
 }
 
-function runGit(args, { env, deps = {}, runProcess, credentialHelper = null }) {
+function runGit(args, {
+  env,
+  deps = {},
+  runProcess,
+  credentialHelper = null,
+  timeoutMs = null,
+}) {
   const finalArgs = credentialHelper
     ? ['-c', `credential.helper=${credentialHelper}`, ...args]
     : args;
@@ -807,18 +843,21 @@ function runGit(args, { env, deps = {}, runProcess, credentialHelper = null }) {
     env: {
       ...gitEnv,
       GIT_TERMINAL_PROMPT: '0',
+      GIT_LFS_SKIP_SMUDGE: gitEnv.GIT_LFS_SKIP_SMUDGE || '1',
       GIT_SSH_COMMAND: gitEnv.GIT_SSH_COMMAND || 'ssh -o BatchMode=yes',
     },
     cwd: deps.cwd || process.cwd(),
+    timeoutMs,
   }).then((res) => ({
     ok: res?.code === 0,
     code: res?.code,
+    timedOut: res?.timedOut === true,
     error: res?.code === 0 ? null : (res?.stderr || res?.error || `git exited ${res?.code ?? 'unknown'}`),
     usedCredential: !!credentialHelper,
   }));
 }
 
-function runProcessDefault(cmd, args, options = {}) {
+export function runProcessDefault(cmd, args, options = {}) {
   return new Promise((resolve) => {
     const child = spawn(cmd, args, {
       cwd: options.cwd || process.cwd(),
@@ -827,10 +866,33 @@ function runProcessDefault(cmd, args, options = {}) {
     });
     let stdout = '';
     let stderr = '';
+    let settled = false;
+    let timedOut = false;
+    let timeoutTimer = null;
+    let forceKillTimer = null;
+    const timeoutMs = positiveTimeoutMs(options.timeoutMs);
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      if (timeoutTimer) clearTimeout(timeoutTimer);
+      if (forceKillTimer) clearTimeout(forceKillTimer);
+      resolve({ ...result, stdout, stderr, timedOut });
+    };
     child.stdout.on('data', (chunk) => { stdout += chunk.toString(); });
     child.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
-    child.on('error', (err) => resolve({ code: 1, error: err.message || String(err), stdout, stderr }));
-    child.on('close', (code) => resolve({ code: Number.isInteger(code) ? code : 1, stdout, stderr }));
+    child.on('error', (err) => finish({ code: 1, error: err.message || String(err) }));
+    child.on('close', (code, signal) => finish({
+      code: timedOut ? 124 : (Number.isInteger(code) ? code : 1),
+      error: timedOut ? `process timed out after ${Math.ceil(timeoutMs / 1000)}s` : null,
+      signal: signal || null,
+    }));
+    timeoutTimer = timeoutMs ? setTimeout(() => {
+      timedOut = true;
+      child.kill('SIGTERM');
+      forceKillTimer = setTimeout(() => child.kill('SIGKILL'), PROCESS_FORCE_KILL_GRACE_MS);
+      forceKillTimer.unref?.();
+    }, timeoutMs) : null;
+    timeoutTimer?.unref?.();
   });
 }
 
@@ -1197,6 +1259,19 @@ function safeUrl(value) {
 
 function safeError(err) {
   return String(err?.message || err || 'unknown').slice(0, 500);
+}
+
+function boundedProcessError(error) {
+  return stringOrNull(error)?.replace(/\s+/g, ' ').slice(0, 500) || 'unknown git error';
+}
+
+function positiveTimeoutMs(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : null;
+}
+
+function workspaceCloneTimeoutMs(value) {
+  return positiveTimeoutMs(value) || DEFAULT_WORKSPACE_CLONE_TIMEOUT_MS;
 }
 
 function stringOrNull(value) {
