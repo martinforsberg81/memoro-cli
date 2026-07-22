@@ -29,7 +29,9 @@ import {
   getToolStatus,
   probeShellWrapper,
   probeWorkspace,
+  safeGitHubConnectionStatus,
 } from './auth.js';
+import { repairForGitHubState } from '../github-contract.js';
 import { promptLine } from '../../lib/prompt.js';
 import { readConfig, writeConfig } from '../../lib/config.js';
 import {
@@ -109,7 +111,7 @@ export async function run(argv, deps = {}) {
     return 2;
   }
 
-  const report = await buildReport();
+  const report = await buildReport(deps.github || deps);
   const steps = missingSteps(report);
   const resourceReport = {
     ...resourceProfile,
@@ -135,7 +137,7 @@ export async function run(argv, deps = {}) {
   return steps.length === 0 ? 0 : 1;
 }
 
-async function buildReport() {
+async function buildReport(githubDeps = {}) {
   const memoro = await probeMemoro();
   const tools = {};
   for (const t of [...REQUIRED_TOOLS, ...OPTIONAL_TOOLS]) {
@@ -144,6 +146,7 @@ async function buildReport() {
   return {
     memoro,
     tools,
+    github: await safeGitHubConnectionStatus(githubDeps),
     shell_wrapper: probeShellWrapper(),
     workspace: probeWorkspace(),
   };
@@ -204,6 +207,20 @@ export function missingSteps(report) {
     }
   }
 
+  // GitHub belongs to the central Memoro onboarding, after Memoro sign-in.
+  // `mc github connect` owns the connect side effect; setup only points at
+  // that canonical verb and therefore remains safe to re-run.
+  if (report.memoro.authenticated && report.github?.state !== 'ready') {
+    const state = report.github?.state || 'unavailable';
+    const repair = repairForGitHubState(state);
+    steps.push({
+      id: `github-${repair.action}`,
+      title: 'Connect GitHub through Memoro',
+      command: repair.command,
+      note: repair.message,
+    });
+  }
+
   if (!report.shell_wrapper.installed) {
     steps.push({
       id: 'install-shell',
@@ -249,6 +266,10 @@ function printAllSet(report, resourceReport, dependencyMode) {
   if (report.shell_wrapper.installed) {
     process.stdout.write(`  ✓ Shell wrapper installed (${report.shell_wrapper.rc})\n`);
   }
+  if (report.github?.state === 'ready') {
+    const target = report.github.repository ? ` for ${report.github.repository.full_name}` : '';
+    process.stdout.write(`  ✓ Memoro GitHub App connected${target}\n`);
+  }
   // Surface optional tools that ARE installed as a bonus line.
   const optionalReady = OPTIONAL_TOOLS.filter((t) => report.tools[t]?.installed);
   if (optionalReady.length) {
@@ -260,7 +281,7 @@ function printAllSet(report, resourceReport, dependencyMode) {
 }
 
 function printChecklist(steps, resourceReport, dependencyMode) {
-  process.stdout.write(`mc setup — ${steps.length} local setup step${steps.length === 1 ? '' : 's'} left:\n\n`);
+  process.stdout.write(`mc setup — ${steps.length} setup step${steps.length === 1 ? '' : 's'} left:\n\n`);
   for (let i = 0; i < steps.length; i++) {
     const s = steps[i];
     process.stdout.write(`  ${i + 1}. ${s.title}\n`);
