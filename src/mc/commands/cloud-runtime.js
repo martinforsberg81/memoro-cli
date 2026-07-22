@@ -45,6 +45,7 @@ const DEFAULT_REPO_CWD = '/workspace/repo';
 const DEFAULT_API_URL = 'https://meetmemoro.app';
 const DEFAULT_WORKSPACE_CLONE_TIMEOUT_MS = 90_000;
 const PROCESS_FORCE_KILL_GRACE_MS = 2_000;
+const PROCESS_FORCE_RESOLVE_GRACE_MS = 250;
 const GITHUB_SHORTHAND_RE = /^[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+$/;
 const SECRET_ENV_NAMES_AFTER_WORKSPACE = Object.freeze([
   'MC_CLOUD_GIT_TOKEN',
@@ -859,10 +860,13 @@ function runGit(args, {
 
 export function runProcessDefault(cmd, args, options = {}) {
   return new Promise((resolve) => {
+    const timeoutMs = positiveTimeoutMs(options.timeoutMs);
+    const ownsProcessGroup = timeoutMs !== null && process.platform !== 'win32';
     const child = spawn(cmd, args, {
       cwd: options.cwd || process.cwd(),
       env: options.env || process.env,
       stdio: ['ignore', 'pipe', 'pipe'],
+      detached: ownsProcessGroup,
     });
     let stdout = '';
     let stderr = '';
@@ -870,13 +874,29 @@ export function runProcessDefault(cmd, args, options = {}) {
     let timedOut = false;
     let timeoutTimer = null;
     let forceKillTimer = null;
-    const timeoutMs = positiveTimeoutMs(options.timeoutMs);
+    let forceResolveTimer = null;
     const finish = (result) => {
       if (settled) return;
       settled = true;
       if (timeoutTimer) clearTimeout(timeoutTimer);
       if (forceKillTimer) clearTimeout(forceKillTimer);
+      if (forceResolveTimer) clearTimeout(forceResolveTimer);
       resolve({ ...result, stdout, stderr, timedOut });
+    };
+    const killOwnedProcess = (signal) => {
+      if (ownsProcessGroup && Number.isInteger(child.pid)) {
+        try {
+          process.kill(-child.pid, signal);
+          return;
+        } catch {
+          // The group may already be gone; fall through to the direct child.
+        }
+      }
+      try {
+        child.kill(signal);
+      } catch {
+        // A concurrent process exit is completed by the close handler.
+      }
     };
     child.stdout.on('data', (chunk) => { stdout += chunk.toString(); });
     child.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
@@ -888,8 +908,16 @@ export function runProcessDefault(cmd, args, options = {}) {
     }));
     timeoutTimer = timeoutMs ? setTimeout(() => {
       timedOut = true;
-      child.kill('SIGTERM');
-      forceKillTimer = setTimeout(() => child.kill('SIGKILL'), PROCESS_FORCE_KILL_GRACE_MS);
+      killOwnedProcess('SIGTERM');
+      forceKillTimer = setTimeout(() => {
+        killOwnedProcess('SIGKILL');
+        forceResolveTimer = setTimeout(() => finish({
+          code: 124,
+          error: `process timed out after ${Math.ceil(timeoutMs / 1000)}s`,
+          signal: 'SIGKILL',
+        }), PROCESS_FORCE_RESOLVE_GRACE_MS);
+        forceResolveTimer.unref?.();
+      }, PROCESS_FORCE_KILL_GRACE_MS);
       forceKillTimer.unref?.();
     }, timeoutMs) : null;
     timeoutTimer?.unref?.();

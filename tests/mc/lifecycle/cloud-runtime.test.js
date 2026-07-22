@@ -196,6 +196,24 @@ describe('mc cloud-runtime workspace', () => {
     assert.match(result.error, /timed out/);
   });
 
+  test('terminates descendant processes that keep inherited pipes open', {
+    skip: process.platform === 'win32',
+  }, async () => {
+    const started = Date.now();
+    const result = await runProcessDefault(process.execPath, [
+      '-e',
+      [
+        "const { spawn } = require('node:child_process');",
+        "spawn(process.execPath, ['-e', 'setTimeout(() => {}, 3000)'], { stdio: ['ignore', 'inherit', 'inherit'] });",
+        'setTimeout(() => {}, 3000);',
+      ].join(' '),
+    ], { timeoutMs: 20 });
+
+    assert.equal(result.code, 124);
+    assert.equal(result.timedOut, true);
+    assert.ok(Date.now() - started < 1_000, 'the inherited pipe should not delay timeout completion');
+  });
+
   test('reuses an existing git workspace instead of replacing it', async () => {
     const m = manifest();
     const result = await prepareWorkspace(m, {
