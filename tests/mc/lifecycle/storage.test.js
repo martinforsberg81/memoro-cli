@@ -53,6 +53,14 @@ describe('mc storage / doctor', () => {
   });
 
   test('storage status reports registry, runtime, provider, and cleanup summaries', () => {
+    const digest = 'a'.repeat(64);
+    const snapshotPath = join(repo.mcHome, 'dependency-snapshots', 'v1', 'npm', digest);
+    mkdirSync(join(snapshotPath, 'node_modules'), { recursive: true });
+    writeFileSync(join(snapshotPath, 'metadata.json'), JSON.stringify({
+      schema_version: 1,
+      fingerprint: `sha256:${digest}`,
+      created_at: new Date().toISOString(),
+    }));
     const r = runMc(['storage', 'status', '--json', '--min-age', '0s'], {
       cwd: repo.dir,
       env: { MC_HOME: repo.mcHome, MC_ORPHAN_PID_DIR: pidDir },
@@ -65,6 +73,9 @@ describe('mc storage / doctor', () => {
     assert.equal(j.summary.worktrees.dirty, 1);
     assert.equal(j.summary.provider.missing_native_id, 1);
     assert.equal(j.summary.runtime.sidecar_candidates, 1);
+    assert.equal(j.summary.dependency_snapshots.ready, 1);
+    assert.equal(j.summary.dependency_snapshots.candidates, 0);
+    assert.equal(j.disk.dependency_snapshots > 0, true);
   });
 
   test('storage candidates exposes the same stale worktree policy as gc', () => {

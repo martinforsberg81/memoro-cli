@@ -296,6 +296,11 @@ describe('launchBrokerOwnedSession', () => {
           assert.equal(codingSessionId, 'sess_abc');
           return { env: { ...baseEnv, MC_LOCAL_RESOURCE_PROFILE: 'conservative' } };
         },
+        prepareDevCommandGuardEnv: ({ baseEnv, worktreePath, codingSessionId }) => {
+          assert.equal(worktreePath, '/repo');
+          assert.equal(codingSessionId, 'sess_abc');
+          return { env: { ...baseEnv, MC_DEV_COMMAND_GUARD: 'sha256:abc123' } };
+        },
         resolveDevPlan: async () => ({
           service: { name: 'web', source: '.mc/dev.json' },
           profile: { name: 'agent', source: '.mc/dev.json' },
@@ -320,6 +325,7 @@ describe('launchBrokerOwnedSession', () => {
     assert.equal(msg.session.cols, 100);
     assert.equal(msg.session.rows, 30);
     assert.equal(msg.session.env.MC_LOCAL_RESOURCE_PROFILE, 'conservative');
+    assert.equal(msg.session.env.MC_DEV_COMMAND_GUARD, 'sha256:abc123');
     assert.equal(msg.session.env.MC_SESSION_NAME, 'feature');
     assert.equal(msg.session.env.MC_CODING_SESSION_ID, 'sess_abc');
     assert.equal(msg.session.env.MC_DEV_SERVICE, 'web');

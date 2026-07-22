@@ -125,6 +125,7 @@ export async function run(argv) {
   if (opts.verb === 'candidates') {
     const out = {
       runtime: snapshot.runtime,
+      dependency_snapshots: snapshot.dependency_snapshots,
       stale_worktrees: snapshot.stale_worktrees,
     };
     if (opts.json) console.log(JSON.stringify(out, null, 2));
@@ -429,6 +430,7 @@ function printStatus(snapshot) {
   process.stdout.write(`  home                 ${snapshot.mc_home}\n`);
   process.stdout.write(`  total                ${formatBytes(snapshot.disk?.total)}\n`);
   process.stdout.write(`  worktrees            ${formatBytes(snapshot.disk?.worktrees)}\n`);
+  process.stdout.write(`  dependency snapshots ${formatBytes(snapshot.disk?.dependency_snapshots)} (${s.dependency_snapshots.total}, ${s.dependency_snapshots.candidates} stale)\n`);
   process.stdout.write(`  registry entries     ${s.registry_entries}\n`);
   process.stdout.write(`  stale runtime        ${s.runtime.orphan_daemons + s.runtime.stale_pidfiles + s.runtime.sidecar_candidates}\n`);
   process.stdout.write(`  stale worktrees      ${s.worktrees.stale_candidates}\n`);
@@ -450,6 +452,7 @@ function printCandidates(out) {
     + out.runtime.counts.sidecar_candidates;
   process.stdout.write(`runtime candidates  ${runtimeCount}\n`);
   process.stdout.write(`stale worktrees     ${out.stale_worktrees.length}\n`);
+  process.stdout.write(`stale dep snapshots ${out.dependency_snapshots.counts.candidates}\n`);
   for (const item of out.stale_worktrees) {
     process.stdout.write(`  ${item.name}  ${item.branch}  ${formatBytes(item.reclaimable_bytes)}\n`);
   }

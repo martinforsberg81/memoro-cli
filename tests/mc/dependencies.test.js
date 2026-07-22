@@ -101,7 +101,7 @@ describe('dependency snapshots', () => {
       const first = await hydrateDependencies(makePlan(firstRoot), {
         mcDir,
         fingerprintOptions: runtime,
-        deps: { runProcess: runInstall, platform: 'linux' },
+        deps: { runProcess: runInstall, platform: 'linux', now: () => Date.parse('2026-01-01T00:00:00.000Z') },
       });
       assert.equal(first.ok, true);
       assert.equal(first.source, 'install');
@@ -117,6 +117,7 @@ describe('dependency snapshots', () => {
         deps: {
           runProcess: async () => assert.fail('cache hit must not run npm ci'),
           platform: 'linux',
+          now: () => Date.parse('2026-02-01T00:00:00.000Z'),
         },
       });
       assert.equal(second.ok, true);
@@ -124,6 +125,9 @@ describe('dependency snapshots', () => {
       assert.equal(readFileSync(join(secondRoot, 'node_modules', 'fixture', 'index.js'), 'utf8'), 'export default 1;\n');
       assert.equal(lstatSync(join(secondRoot, 'node_modules')).isSymbolicLink(), false);
       assert.notEqual(lstatSync(join(firstRoot, 'node_modules')).ino, lstatSync(join(secondRoot, 'node_modules')).ino);
+      const metadata = JSON.parse(readFileSync(join(second.status.snapshot.path, 'metadata.json'), 'utf8'));
+      assert.equal(metadata.created_at, '2026-01-01T00:00:00.000Z');
+      assert.equal(metadata.last_used_at, '2026-02-01T00:00:00.000Z');
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

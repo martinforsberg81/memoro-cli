@@ -12,6 +12,7 @@ import { DEPENDENCY_MODES } from './dependency-mode.js';
 
 export const DEV_DEFINITION_RELATIVE_PATH = '.mc/dev.json';
 export const DEV_DEFINITION_NOT_FOUND = 'DEV_DEFINITION_NOT_FOUND';
+export const DEV_DEFINITION_INVALID = 'DEV_DEFINITION_INVALID';
 
 const NAME_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/;
 const RESOURCE_CLASSES = new Set(['standard', 'heavy']);
@@ -321,6 +322,6 @@ function stableStringify(value) {
 
 function definitionError(message) {
   const error = new Error(`${DEV_DEFINITION_RELATIVE_PATH} ${message}`);
-  error.code = 'DEV_DEFINITION_INVALID';
+  error.code = DEV_DEFINITION_INVALID;
   return error;
 }

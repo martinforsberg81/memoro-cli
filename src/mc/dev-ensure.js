@@ -271,6 +271,7 @@ export function devEnsureEnvironment(plan, {
   const manifestPath = join(plan.worktree_path, plan.readiness.path);
   return {
     ...baseEnv,
+    MC_DEV_ENSURE_LAUNCH: '1',
     MC_DEV_CONTROLLED_BY: 'mc',
     MC_DEV_MANIFEST_PATH: manifestPath,
     MC_DEV_SERVICE: plan.service.name,
