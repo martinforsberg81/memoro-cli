@@ -694,18 +694,6 @@ async function runWrap(argv, { label = null } = {}) {
     console.error(`mc: failed to install local resource guard (${err.message}); refusing to launch`);
     process.exit(1);
   }
-  try {
-    const { prepareDevCommandGuardEnv } = await import('./mc/dev-command-guard.js');
-    spawnEnv = prepareDevCommandGuardEnv({
-      baseEnv: spawnEnv,
-      worktreePath: repoContext.toplevel,
-      mcDir: MC_DIR,
-      codingSessionId,
-    }).env;
-  } catch (err) {
-    console.error(`mc: failed to install dev command guard (${err.message}); refusing to launch`);
-    process.exit(1);
-  }
   if (launchToolId === 'codex') {
     try {
       const { prepareCloudflareGuardEnv } = await import('./mc/cloudflare-guard.js');
@@ -736,6 +724,18 @@ async function runWrap(argv, { label = null } = {}) {
       console.error(`mc: failed to install Codex Cloudflare guard (${err.message}); refusing to launch`);
       process.exit(1);
     }
+  }
+  try {
+    const { prepareDevCommandGuardEnv } = await import('./mc/dev-command-guard.js');
+    spawnEnv = prepareDevCommandGuardEnv({
+      baseEnv: spawnEnv,
+      worktreePath: repoContext.toplevel,
+      mcDir: MC_DIR,
+      codingSessionId,
+    }).env;
+  } catch (err) {
+    console.error(`mc: failed to install dev command guard (${err.message}); refusing to launch`);
+    process.exit(1);
   }
   const interactiveEnv = normalizeInteractivePtyEnv({
     baseEnv: spawnEnv,

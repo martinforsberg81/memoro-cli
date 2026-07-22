@@ -16,6 +16,7 @@ import {
   isManagedDevCommand,
   prepareDevCommandGuardEnv,
 } from '../../src/mc/dev-command-guard.js';
+import { prepareCloudflareGuardEnv } from '../../src/mc/cloudflare-guard.js';
 
 const prefixes = [
   ['npm', 'run', 'dev'],
@@ -106,6 +107,40 @@ describe('dev command guard installation and runtime', () => {
       });
       assert.equal(outside.status, 42);
       assert.equal(prepared.env.PATH, `${prepared.dir}${delimiter}${realBin}`);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('composes behind the Codex Cloudflare guard without losing dev enforcement', () => {
+    const root = mkdtempSync(join(tmpdir(), 'mc-dev-guard-chain-'));
+    const worktree = join(root, 'repo');
+    const realBin = join(root, 'real-bin');
+    mkdirSync(join(worktree, '.mc'), { recursive: true });
+    mkdirSync(realBin, { recursive: true });
+    writeFileSync(join(worktree, '.mc', 'dev.json'), JSON.stringify(definition()));
+    const npx = join(realBin, 'npx');
+    writeFileSync(npx, '#!/bin/sh\nexit 42\n');
+    chmodSync(npx, 0o700);
+    try {
+      const cloudflare = prepareCloudflareGuardEnv({
+        baseEnv: { ...process.env, PATH: realBin },
+        mcDir: join(root, 'home'),
+        codingSessionId: 'sess_chain',
+      });
+      const dev = prepareDevCommandGuardEnv({
+        worktreePath: worktree,
+        mcDir: join(root, 'home'),
+        codingSessionId: 'sess_chain',
+        baseEnv: cloudflare.env,
+      });
+      const result = spawnSync(join(dev.dir, 'npx'), ['wrangler', 'dev'], {
+        cwd: worktree,
+        env: dev.env,
+        encoding: 'utf8',
+      });
+      assert.equal(result.status, 75, result.stderr);
+      assert.match(result.stderr, /use `mc dev ensure`/);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
