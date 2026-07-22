@@ -1,5 +1,5 @@
 /**
- * `mc setup [--json] [--resource-profile <name>]` (§11b).
+ * `mc setup [--json] [--resource-profile <name>] [--dependency-mode <mode>]` (§11b).
  *
  * Runs every health probe `mc auth status` already exposes, then either:
  *
@@ -47,6 +47,12 @@ import {
   resolveLocalResourceProfile,
   withLocalResourceProfile,
 } from '../local-resource-profile.js';
+import {
+  DEPENDENCY_MODES,
+  describeDependencyMode,
+  resolveDependencyMode,
+  withDependencyMode,
+} from '../dependency-mode.js';
 
 // Required tools — at least one of these must be ready for setup to consider
 // the machine usable. Codex is the default mc tool; its auth probe can be
@@ -62,16 +68,19 @@ export async function run(argv, deps = {}) {
   const writeConfigFn = deps.writeConfig || writeConfig;
   let config = await readConfigFn();
   let resourceProfile = resolveLocalResourceProfile(config);
+  let dependencyMode = resolveDependencyMode(config);
   const recommendedProfile = recommendLocalResourceProfile({
     totalMemoryBytes: deps.totalMemoryBytes,
   });
+  const interactive = !opts.json && (deps.stdinIsTTY ?? process.stdin.isTTY);
 
   try {
+    let configChanged = false;
     if (opts.resourceProfile) {
       resourceProfile = profileFromOptions(opts);
       config = withLocalResourceProfile(config, resourceProfile);
-      await writeConfigFn(config);
-    } else if (!opts.json && (deps.stdinIsTTY ?? process.stdin.isTTY)) {
+      configChanged = true;
+    } else if (interactive) {
       resourceProfile = await promptLocalResourceProfile({
         current: resourceProfile,
         recommended: recommendedProfile,
@@ -79,6 +88,22 @@ export async function run(argv, deps = {}) {
         stdout: deps.stdout || process.stdout,
       });
       config = withLocalResourceProfile(config, resourceProfile);
+      configChanged = true;
+    }
+    if (opts.dependencyMode) {
+      dependencyMode = opts.dependencyMode;
+      config = withDependencyMode(config, dependencyMode);
+      configChanged = true;
+    } else if (interactive) {
+      dependencyMode = await promptDependencyMode({
+        current: dependencyMode,
+        ask: deps.promptLine || promptLine,
+        stdout: deps.stdout || process.stdout,
+      });
+      config = withDependencyMode(config, dependencyMode);
+      configChanged = true;
+    }
+    if (configChanged) {
       await writeConfigFn(config);
     }
   } catch (err) {
@@ -98,13 +123,14 @@ export async function run(argv, deps = {}) {
       ok: steps.length === 0,
       report,
       resource_profile: resourceReport,
+      dependency_mode: dependencyMode,
       missing_steps: steps,
       sentinel_path: sentinelPath(),
     }, null, 2));
   } else if (steps.length === 0) {
-    printAllSet(report, resourceReport);
+    printAllSet(report, resourceReport, dependencyMode);
   } else {
-    printChecklist(steps, resourceReport);
+    printChecklist(steps, resourceReport, dependencyMode);
   }
 
   if (steps.length === 0) writeSentinel();
@@ -227,7 +253,7 @@ function extractCommand(hint) {
   return m ? m[1] : null;
 }
 
-function printAllSet(report, resourceReport) {
+function printAllSet(report, resourceReport, dependencyMode) {
   process.stdout.write(`mc setup — all set up.\n`);
   process.stdout.write(`  ✓ Memoro signed in\n`);
   for (const t of REQUIRED_TOOLS) {
@@ -250,10 +276,11 @@ function printAllSet(report, resourceReport) {
     process.stdout.write(`  ✓ Optional: ${optionalReady.map(labelFor).join(', ')} available\n`);
   }
   printResourceProfile(resourceReport);
+  printDependencyMode(dependencyMode);
   process.stdout.write(`\nNext: from a git repo, run \`mc new <name> [focus]\` to start a session.\n`);
 }
 
-function printChecklist(steps, resourceReport) {
+function printChecklist(steps, resourceReport, dependencyMode) {
   process.stdout.write(`mc setup — ${steps.length} setup step${steps.length === 1 ? '' : 's'} left:\n\n`);
   for (let i = 0; i < steps.length; i++) {
     const s = steps[i];
@@ -263,6 +290,7 @@ function printChecklist(steps, resourceReport) {
     process.stdout.write(`\n`);
   }
   printResourceProfile(resourceReport);
+  printDependencyMode(dependencyMode);
   process.stdout.write(`Re-run \`mc setup\` when done to verify.\n`);
 }
 
@@ -271,6 +299,35 @@ function printResourceProfile(resourceReport) {
   if (resourceReport.profile !== resourceReport.recommended) {
     process.stdout.write(`    Suggested for this machine: ${resourceReport.recommended} (not selected automatically)\n`);
   }
+}
+
+function printDependencyMode(mode) {
+  process.stdout.write(`  ✓ Project dependencies: ${describeDependencyMode(mode)}\n`);
+}
+
+export async function promptDependencyMode({
+  current = 'auto',
+  ask = promptLine,
+  stdout = process.stdout,
+} = {}) {
+  const selectedCurrent = DEPENDENCY_MODES.includes(current) ? current : 'auto';
+  const choices = [
+    ['auto', 'Reuse immutable local snapshots; install on an explicit hydrate cache miss'],
+    ['isolated', 'Install only inside each worktree; never read or write snapshots'],
+    ['off', 'mc never installs project dependencies'],
+  ];
+  const defaultIndex = choices.findIndex(([name]) => name === selectedCurrent);
+  stdout.write('\nProject dependency mode:\n');
+  choices.forEach(([name, description], index) => {
+    const selected = name === selectedCurrent ? ' (current)' : '';
+    stdout.write(`  ${index + 1}. ${title(name)}${selected}: ${description}\n`);
+  });
+  const answer = String(await ask(`Choose [${defaultIndex + 1}]: `) || '').trim().toLowerCase();
+  const selected = answer
+    ? choices[Number(answer) - 1]?.[0] || choices.find(([name]) => name === answer)?.[0]
+    : choices[defaultIndex][0];
+  if (!selected) throw new Error(`unknown dependency mode choice: ${answer}`);
+  return selected;
 }
 
 export async function promptLocalResourceProfile({
@@ -357,7 +414,7 @@ export const sentinelPath = freshInstallSentinelPath;
 export const writeSentinel = freshInstallEnsureSentinel;
 
 export function parseArgs(argv) {
-  const opts = { json: false, resourceProfile: null, custom: {} };
+  const opts = { json: false, resourceProfile: null, dependencyMode: null, custom: {} };
   const customFlags = {
     '--heavy-max-concurrent': 'maxConcurrent',
     '--heavy-max-threads': 'maxThreads',
@@ -374,6 +431,14 @@ export function parseArgs(argv) {
         return { error: `--resource-profile must be one of: ${LOCAL_RESOURCE_PROFILE_NAMES.join(', ')}` };
       }
       opts.resourceProfile = value;
+      continue;
+    }
+    if (a === '--dependency-mode') {
+      const value = String(argv[++i] || '').toLowerCase();
+      if (!DEPENDENCY_MODES.includes(value)) {
+        return { error: `--dependency-mode must be one of: ${DEPENDENCY_MODES.join(', ')}` };
+      }
+      opts.dependencyMode = value;
       continue;
     }
     if (customFlags[a]) {

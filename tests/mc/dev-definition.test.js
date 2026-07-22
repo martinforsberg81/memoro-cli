@@ -110,6 +110,36 @@ describe('dev definition', () => {
         }),
         /argv must be an array/,
       ],
+      [
+        validDefinition({
+          services: {
+            ...validDefinition().services,
+            web: {
+              ...validDefinition().services.web,
+              dependencies: {
+                ...validDefinition().services.web.dependencies,
+                install: { argv: ['npm', 'install'] },
+              },
+            },
+          },
+        }),
+        /install\.argv must start with \["npm", "ci"\]/,
+      ],
+      [
+        validDefinition({
+          services: {
+            ...validDefinition().services,
+            web: {
+              ...validDefinition().services.web,
+              dependencies: {
+                ...validDefinition().services.web.dependencies,
+                fingerprint_files: ['package.json'],
+              },
+            },
+          },
+        }),
+        /must include package-lock\.json or npm-shrinkwrap\.json/,
+      ],
     ];
 
     for (const [definition, expected] of cases) {
@@ -176,6 +206,14 @@ describe('dev definition', () => {
     await assert.rejects(
       resolveDevPlan({ worktreePath: '/repo', profileName: 'turbo', deps }),
       /profile "turbo" is not declared for service "web"/,
+    );
+    await assert.rejects(
+      resolveDevPlan({
+        worktreePath: '/repo',
+        localConfig: { dev: { dependencies: { mode: 'shared' } } },
+        deps,
+      }),
+      /dependency mode "shared".*auto, isolated, off/,
     );
   });
 

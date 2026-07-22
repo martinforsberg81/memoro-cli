@@ -64,7 +64,7 @@ describe('mc setup — checklist (red path)', () => {
     assert.ok(!existsSync(join(repo.mcHome, '.setup-done-v1')));
   });
 
-  test('--json shape includes readiness, resource profile, steps, and sentinel', () => {
+  test('--json shape includes readiness, resource profile, dependency mode, steps, and sentinel', () => {
     const r = runMc(['setup', '--json'], {
       cwd: repo.dir,
       env: { MC_HOME: repo.mcHome, MC_ORPHAN_PID_DIR: pidDir, HOME: repo.root },
@@ -82,6 +82,7 @@ describe('mc setup — checklist (red path)', () => {
     assert.equal(j.resource_profile.profile, 'unlimited');
     assert.equal(j.resource_profile.enabled, false);
     assert.match(j.resource_profile.recommended, /^(unlimited|balanced|conservative)$/);
+    assert.equal(j.dependency_mode, 'auto');
   });
 
   test('--resource-profile is scriptable and persists globally', () => {
@@ -102,6 +103,25 @@ describe('mc setup — checklist (red path)', () => {
       env: { MC_HOME: repo.mcHome, MC_ORPHAN_PID_DIR: pidDir, HOME: repo.root },
     });
     assert.equal(parseJsonOrNull(rerun.stdout).resource_profile.profile, 'conservative');
+  });
+
+  test('--dependency-mode is scriptable and persists globally', () => {
+    const r = runMc(['setup', '--json', '--dependency-mode', 'isolated'], {
+      cwd: repo.dir,
+      env: { MC_HOME: repo.mcHome, MC_ORPHAN_PID_DIR: pidDir, HOME: repo.root },
+    });
+    const j = parseJsonOrNull(r.stdout);
+    assert.ok(j, r.stdout);
+    assert.equal(j.dependency_mode, 'isolated');
+
+    const stored = JSON.parse(readFileSync(join(repo.root, '.memoro', 'config.json'), 'utf8'));
+    assert.equal(stored.dev.dependencies.mode, 'isolated');
+
+    const rerun = runMc(['setup', '--json'], {
+      cwd: repo.dir,
+      env: { MC_HOME: repo.mcHome, MC_ORPHAN_PID_DIR: pidDir, HOME: repo.root },
+    });
+    assert.equal(parseJsonOrNull(rerun.stdout).dependency_mode, 'isolated');
   });
 
   test('checklist commands are real mc verbs the user can paste', () => {
@@ -165,6 +185,20 @@ describe('mc setup — pure helpers (in-process)', () => {
     });
   });
 
+  test('interactive dependency prompt keeps the current mode on Enter', async () => {
+    const { promptDependencyMode } = await import('../../../src/mc/commands/setup.js');
+    let output = '';
+    const selected = await promptDependencyMode({
+      current: 'isolated',
+      ask: async () => '',
+      stdout: { write: (chunk) => { output += chunk; } },
+    });
+    assert.equal(selected, 'isolated');
+    assert.match(output, /Auto:/);
+    assert.match(output, /Isolated \(current\)/);
+    assert.match(output, /Off:/);
+  });
+
   test('custom CLI limits require the custom profile', async () => {
     const { parseArgs } = await import('../../../src/mc/commands/setup.js');
     assert.match(parseArgs(['--heavy-max-threads', '2']).error, /require --resource-profile custom/);
@@ -176,6 +210,8 @@ describe('mc setup — pure helpers (in-process)', () => {
       '--heavy-max-swap-mb', '512',
       '--heavy-min-free-disk-gb', '20',
     ]).resourceProfile, 'custom');
+    assert.equal(parseArgs(['--dependency-mode', 'off']).dependencyMode, 'off');
+    assert.match(parseArgs(['--dependency-mode', 'shared']).error, /auto, isolated, off/);
   });
 
   test('missingSteps([] when report is all green) returns []', async () => {

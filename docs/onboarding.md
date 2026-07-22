@@ -19,9 +19,9 @@ steps. Each step is a real command you can paste — `mc`, `mc auth codex`,
 you don't have. When everything passes, it writes
 `${MC_HOME}/.setup-done-v1` and exits 0. Re-run it any time; it's
 idempotent. On an interactive terminal, setup also offers a resource profile
-for local image and motion generation. Pressing Enter keeps the current
-selection; on a fresh install that is `unlimited`, so existing behaviour does
-not change automatically.
+for local image and motion generation and a project-dependency mode. Pressing
+Enter keeps each current selection. Fresh installs use `unlimited` for heavy
+jobs and `auto` for dependency snapshot reuse.
 
 ## Why install commands are not duplicated here
 
@@ -92,6 +92,23 @@ mc auth codex      # or claude / gemini
    relaunched mc sessions. The memory threshold is an active watchdog rather
    than an operating-system hard cap: it terminates only the recognised job
    when the process tree crosses the configured threshold.
+
+5. **Project dependency mode.** This controls what an explicit
+   `mc deps hydrate` (and later `mc dev ensure`) may do:
+
+   - `auto` (default) reuses an immutable machine-local snapshot with an APFS
+     clone-on-write copy when possible. A cache miss runs the repository's
+     declared `npm ci` recipe and publishes a snapshot.
+   - `isolated` runs the recipe only in the current worktree and never accesses
+     snapshots.
+   - `off` prevents mc from installing project dependencies.
+
+   Select it non-interactively with
+   `mc setup --dependency-mode <auto|isolated|off> --json`. mc never shares a
+   mutable `node_modules` symlink between worktrees, never replaces an
+   unmarked directory without `mc deps hydrate --replace`, and never installs
+   dependencies during `mc new`. Hydration is an explicit code-execution
+   boundary because npm lifecycle scripts may run.
 
 When all required checks pass, `mc setup` writes the `${MC_HOME}/.setup-done-v1`
 sentinel so the friendly first-run hint in `mc new` / `mc list`

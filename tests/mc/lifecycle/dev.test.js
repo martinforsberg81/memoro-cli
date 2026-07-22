@@ -138,6 +138,7 @@ describe('mc dev CLI', () => {
     assert.match(human.stdout, /web\/agent/);
     assert.match(human.stdout, /npm run dev -- --skip-containers/);
     assert.match(human.stdout, /source=cli/);
+    assert.match(human.stdout, /deps mode\s+auto \(source=package-defaults\)/);
   });
 
   test('plan reports malformed definitions and never falls through to runtime inventory', () => {

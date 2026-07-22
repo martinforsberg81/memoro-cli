@@ -8,6 +8,7 @@ import {
   readRepoLocalConfig,
   resolveEffectiveConfig,
 } from './config-model.js';
+import { DEPENDENCY_MODES } from './dependency-mode.js';
 
 export const DEV_DEFINITION_RELATIVE_PATH = '.mc/dev.json';
 export const DEV_DEFINITION_NOT_FOUND = 'DEV_DEFINITION_NOT_FOUND';
@@ -88,6 +89,11 @@ export async function resolveDevPlan({
   if (!profile) {
     throw definitionError(`profile "${selectedProfileName}" is not declared for service "${selectedServiceName}"`);
   }
+  const configuredDependencyMode = effective.dev?.dependencies?.mode || null;
+  const selectedDependencyMode = configuredDependencyMode?.value || 'auto';
+  if (!DEPENDENCY_MODES.includes(selectedDependencyMode)) {
+    throw new Error(`dependency mode "${selectedDependencyMode}" from ${configuredDependencyMode?.source || 'config'} must be one of: ${DEPENDENCY_MODES.join(', ')}`);
+  }
 
   return {
     schema_version: loaded.definition.schema_version,
@@ -101,6 +107,10 @@ export async function resolveDevPlan({
     profile: {
       name: selectedProfileName,
       source: configuredProfile?.source || DEV_DEFINITION_RELATIVE_PATH,
+    },
+    dependency_mode: {
+      name: selectedDependencyMode,
+      source: configuredDependencyMode?.source || 'package-defaults',
     },
     start: profile.start,
     readiness: profile.readiness,
@@ -235,12 +245,25 @@ function validateDependencies(value, path) {
     assertSafeRelativePath(file, `${path}.fingerprint_files[${index}]`);
     return file;
   });
+  if (new Set(fingerprintFiles).size !== fingerprintFiles.length) {
+    throw definitionError(`${path}.fingerprint_files must not contain duplicates`);
+  }
+  if (!fingerprintFiles.includes('package.json')) {
+    throw definitionError(`${path}.fingerprint_files must include package.json`);
+  }
+  if (!fingerprintFiles.some((file) => ['package-lock.json', 'npm-shrinkwrap.json'].includes(file))) {
+    throw definitionError(`${path}.fingerprint_files must include package-lock.json or npm-shrinkwrap.json`);
+  }
   assertObject(value.install, `${path}.install`);
   assertKnownFields(value.install, ['argv'], `${path}.install`);
+  const installArgv = validateArgv(value.install.argv, `${path}.install`);
+  if (installArgv[0] !== 'npm' || installArgv[1] !== 'ci') {
+    throw definitionError(`${path}.install.argv must start with ["npm", "ci"]`);
+  }
   return {
     manager: 'npm',
     fingerprint_files: fingerprintFiles,
-    install: { argv: validateArgv(value.install.argv, `${path}.install`) },
+    install: { argv: installArgv },
   };
 }
 
