@@ -900,6 +900,7 @@ function runGit(args, {
   if (!gitEnv.MC_CLOUD_GIT_TOKEN) {
     gitEnv.MC_CLOUD_GIT_TOKEN = stringOrNull(gitEnv.MC_GIT_CLONE_TOKEN) || stringOrNull(gitEnv.GITHUB_TOKEN) || '';
   }
+  const processCwd = typeof deps.cwd === 'function' ? deps.cwd() : deps.cwd;
   return runProcess('git', finalArgs, {
     env: {
       ...gitEnv,
@@ -907,7 +908,7 @@ function runGit(args, {
       GIT_LFS_SKIP_SMUDGE: gitEnv.GIT_LFS_SKIP_SMUDGE || '1',
       GIT_SSH_COMMAND: gitEnv.GIT_SSH_COMMAND || 'ssh -o BatchMode=yes',
     },
-    cwd: deps.cwd || process.cwd(),
+    cwd: processCwd || process.cwd(),
     timeoutMs,
     signal: deps.workspaceAbortSignal,
   }).then((res) => ({
