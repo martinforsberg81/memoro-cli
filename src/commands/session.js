@@ -7,7 +7,7 @@
 
 import { readFile, writeFile, mkdir, rm } from 'node:fs/promises';
 import { existsSync, openSync } from 'node:fs';
-import { basename, join } from 'node:path';
+import { join } from 'node:path';
 import { hostname, tmpdir } from 'node:os';
 import { spawn } from 'node:child_process';
 import { getSecret } from '../lib/keychain.js';
@@ -18,10 +18,6 @@ import { memoroFetch } from '../lib/api.js';
 import { confirm } from '../lib/prompt.js';
 import { readHookEvent, parseHookEvent } from '../lib/hook-event.js';
 import { buildAnnotations } from '../lib/annotate.js';
-import {
-  buildCodingFeatureEvidenceRecords,
-  publishCodingFeatureEvidence,
-} from '../lib/coding-feature-evidence.js';
 import { findLatestCodexSession } from '../lib/codex.js';
 import {
   resolveSessionSourceIdentity,
@@ -114,18 +110,12 @@ export async function uploadSession(argv) {
     env: process.env,
   });
 
-  // Attach deterministic client-side annotations — languages, frameworks,
-  // tool-use stats, repo manifest. Zero LLM, zero privacy surface beyond
-  // the cleaned transcript already being uploaded. The server-side coding
-  // extractor uses these to sharpen its prompt without forcing the client
-  // to infer durable claims.
+  // Attach deterministic transcript diagnostics — languages, frameworks,
+  // tool-use stats, and repo manifest. These remain part of the explicit
+  // session record and do not produce observations, profile state, or cards.
   const annotations = buildAnnotations({ raw, parsed, cwd: sessionCwd });
   payload.coding_context = annotations.coding_context;
   if (annotations.repo_manifest) payload.repo_manifest = annotations.repo_manifest;
-  const codingFeatureEvidence = buildSessionFeatureEvidence(payload, annotations, {
-    sessionCwd,
-    observedAt: parsed.endedAt,
-  });
 
   // First-session trust moment: dry-run preview + confirmation.
   const isFirst = !config.lastSessionUploadAt;
@@ -136,11 +126,6 @@ export async function uploadSession(argv) {
     console.error('── Session payload ──────────────────────────────────────');
     console.error(JSON.stringify(payload, null, 2));
     console.error('─────────────────────────────────────────────────────────');
-    if (codingFeatureEvidence.length > 0) {
-      console.error('Coding feature evidence (normalized; sent separately):');
-      console.error(JSON.stringify(codingFeatureEvidence, null, 2));
-      console.error('─────────────────────────────────────────────────────────');
-    }
     console.error(`Preview written to ${previewPath}`);
     if (flags.dryRun) {
       console.error('(dry-run; nothing uploaded)');
@@ -167,47 +152,7 @@ export async function uploadSession(argv) {
     console.error(`✓ Session uploaded as ${result.contentId}.`);
     console.error(`  View: ${apiUrl.replace(/\/$/, '')}/app/library`);
   }
-  let evidenceSummary;
-  try {
-    evidenceSummary = await publishCodingFeatureEvidence(codingFeatureEvidence, {
-      apiUrl,
-      token,
-      request: memoroFetch,
-    });
-  } catch {
-    evidenceSummary = {
-      attempted: codingFeatureEvidence.length,
-      accepted: 0,
-      rejected: codingFeatureEvidence.length,
-    };
-  }
-  if (evidenceSummary.rejected > 0) {
-    console.error(`  Coding feature evidence skipped: ${evidenceSummary.rejected}/${evidenceSummary.attempted} record(s).`);
-  } else if (evidenceSummary.accepted > 0) {
-    console.error(`  Coding feature evidence: ${evidenceSummary.accepted} normalized record(s).`);
-  }
   return 0;
-}
-
-export function buildSessionFeatureEvidence(payload, annotations, {
-  sessionCwd = null,
-  observedAt = null,
-} = {}) {
-  try {
-    return buildCodingFeatureEvidenceRecords({
-      detections: annotations?.coding_features,
-      sourceId: payload?.source_id,
-      codingSessionId: payload?.coding_session_id || payload?.session_id,
-      repoCandidates: [
-        payload?.repo_hint,
-        annotations?.repo_manifest?.name,
-        sessionCwd ? basename(sessionCwd) : null,
-      ],
-      observedAt: observedAt || new Date().toISOString(),
-    });
-  } catch {
-    return [];
-  }
 }
 
 export function attachAutomaticSessionProjection(payload, {
