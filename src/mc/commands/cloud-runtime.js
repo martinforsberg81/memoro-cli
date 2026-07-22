@@ -44,6 +44,7 @@ const DEFAULT_RUNTIME_DIR = '/workspace/mc-runtime';
 const DEFAULT_REPO_CWD = '/workspace/repo';
 const DEFAULT_API_URL = 'https://meetmemoro.app';
 const DEFAULT_WORKSPACE_CLONE_TIMEOUT_MS = 90_000;
+const WORKSPACE_PREPARE_WATCHDOG_GRACE_MS = 15_000;
 const PROCESS_FORCE_KILL_GRACE_MS = 2_000;
 const PROCESS_FORCE_RESOLVE_GRACE_MS = 250;
 const GITHUB_SHORTHAND_RE = /^[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+$/;
@@ -169,11 +170,49 @@ export async function runCloudRuntimeWith(opts, deps = {}) {
     }],
   });
 
-  const workspace = await prepareWorkspace(manifest, {
-    env,
-    deps,
-    cwd: workspaceDir,
-  });
+  const workspaceAbortController = new AbortController();
+  const cloneTimeoutMs = workspaceCloneTimeoutMs(deps.workspaceCloneTimeoutMs);
+  const workspaceTimeoutMs = workspacePrepareTimeoutMs(
+    deps.workspacePrepareTimeoutMs,
+    cloneTimeoutMs,
+  );
+  const prepareWorkspaceFn = deps.prepareWorkspace || prepareWorkspace;
+  const workspaceOperation = Promise.resolve()
+    .then(() => prepareWorkspaceFn(manifest, {
+      env,
+      cwd: workspaceDir,
+      deps: {
+        ...deps,
+        workspaceCloneTimeoutMs: cloneTimeoutMs,
+        workspaceAbortSignal: workspaceAbortController.signal,
+        onWorkspaceProgress: async ({ type, data }) => {
+          await runtime.record({
+            phase: CLOUD_LIFECYCLE.WAKING,
+            runtime_state: 'preparing_workspace',
+            process_status: 'running',
+            events: [{ type, data }],
+          });
+        },
+      },
+    }))
+    .catch((err) => ({
+      ok: false,
+      code: 'workspace_prepare_failed',
+      error: `workspace prepare failed: ${safeError(err)}`,
+      cwd: workspaceDir,
+      repo_ref: safeRuntimeRepoRef(manifest.repo?.ref),
+      workspace_ref: stringOrNull(manifest.repo?.workspace_ref),
+    }));
+  const workspace = await withWorkspacePrepareWatchdog(
+    workspaceOperation,
+    {
+      timeoutMs: workspaceTimeoutMs,
+      abortController: workspaceAbortController,
+      cwd: workspaceDir,
+      repoRef: safeRuntimeRepoRef(manifest.repo?.ref),
+      workspaceRef: stringOrNull(manifest.repo?.workspace_ref),
+    },
+  );
   if (!workspace.ok) {
     await runtime.record({
       phase: CLOUD_LIFECYCLE.FAILED,
@@ -521,6 +560,12 @@ export async function prepareWorkspace(manifest, {
   const mkdir = deps.mkdir || mkdirSync;
   const remove = deps.rm || rmSync;
 
+  await reportWorkspaceProgress(deps, 'workspace.prepare.inspecting', {
+    cwd,
+    repo_ref: repoRef,
+    workspace_ref: branch,
+  });
+
   if (existing(join(cwd, '.git'))) {
     return {
       ok: true,
@@ -560,12 +605,27 @@ export async function prepareWorkspace(manifest, {
     ];
     if (branch) cloneArgs.push('--branch', branch);
     cloneArgs.push(cloneUrl, cwd);
+    await reportWorkspaceProgress(deps, 'workspace.clone.started', {
+      cwd,
+      repo_ref: repoRef,
+      workspace_ref: branch,
+      timeout_ms: cloneTimeoutMs,
+      strategy: 'partial_clone',
+    });
     const clone = await runGit(cloneArgs, {
       env,
       deps,
       runProcess,
       credentialHelper: gitCredentialHelper(manifest, env),
       timeoutMs: cloneTimeoutMs,
+    });
+    await reportWorkspaceProgress(deps, 'workspace.clone.finished', {
+      cwd,
+      repo_ref: repoRef,
+      workspace_ref: branch,
+      ok: clone.ok,
+      exit_code: Number.isInteger(clone.code) ? clone.code : null,
+      timed_out: clone.timedOut === true,
     });
     if (clone.ok) {
       return {
@@ -849,6 +909,7 @@ function runGit(args, {
     },
     cwd: deps.cwd || process.cwd(),
     timeoutMs,
+    signal: deps.workspaceAbortSignal,
   }).then((res) => ({
     ok: res?.code === 0,
     code: res?.code,
@@ -861,6 +922,7 @@ function runGit(args, {
 export function runProcessDefault(cmd, args, options = {}) {
   return new Promise((resolve) => {
     const timeoutMs = positiveTimeoutMs(options.timeoutMs);
+    const abortSignal = options.signal;
     const ownsProcessGroup = timeoutMs !== null && process.platform !== 'win32';
     const child = spawn(cmd, args, {
       cwd: options.cwd || process.cwd(),
@@ -875,12 +937,16 @@ export function runProcessDefault(cmd, args, options = {}) {
     let timeoutTimer = null;
     let forceKillTimer = null;
     let forceResolveTimer = null;
+    let abortListener = null;
     const finish = (result) => {
       if (settled) return;
       settled = true;
       if (timeoutTimer) clearTimeout(timeoutTimer);
       if (forceKillTimer) clearTimeout(forceKillTimer);
       if (forceResolveTimer) clearTimeout(forceResolveTimer);
+      if (abortSignal && abortListener) {
+        abortSignal.removeEventListener('abort', abortListener);
+      }
       resolve({ ...result, stdout, stderr, timedOut });
     };
     const killOwnedProcess = (signal) => {
@@ -906,7 +972,8 @@ export function runProcessDefault(cmd, args, options = {}) {
       error: timedOut ? `process timed out after ${Math.ceil(timeoutMs / 1000)}s` : null,
       signal: signal || null,
     }));
-    timeoutTimer = timeoutMs ? setTimeout(() => {
+    const terminateForTimeout = () => {
+      if (settled || timedOut) return;
       timedOut = true;
       killOwnedProcess('SIGTERM');
       forceKillTimer = setTimeout(() => {
@@ -916,11 +983,17 @@ export function runProcessDefault(cmd, args, options = {}) {
           error: `process timed out after ${Math.ceil(timeoutMs / 1000)}s`,
           signal: 'SIGKILL',
         }), PROCESS_FORCE_RESOLVE_GRACE_MS);
-        forceResolveTimer.unref?.();
       }, PROCESS_FORCE_KILL_GRACE_MS);
-      forceKillTimer.unref?.();
-    }, timeoutMs) : null;
-    timeoutTimer?.unref?.();
+    };
+    timeoutTimer = timeoutMs ? setTimeout(terminateForTimeout, timeoutMs) : null;
+    if (abortSignal) {
+      abortListener = terminateForTimeout;
+      if (abortSignal.aborted) {
+        queueMicrotask(terminateForTimeout);
+      } else {
+        abortSignal.addEventListener('abort', abortListener, { once: true });
+      }
+    }
   });
 }
 
@@ -1300,6 +1373,45 @@ function positiveTimeoutMs(value) {
 
 function workspaceCloneTimeoutMs(value) {
   return positiveTimeoutMs(value) || DEFAULT_WORKSPACE_CLONE_TIMEOUT_MS;
+}
+
+function workspacePrepareTimeoutMs(value, cloneTimeoutMs) {
+  return positiveTimeoutMs(value)
+    || cloneTimeoutMs + WORKSPACE_PREPARE_WATCHDOG_GRACE_MS;
+}
+
+async function withWorkspacePrepareWatchdog(workspacePromise, {
+  timeoutMs,
+  abortController,
+  cwd,
+  repoRef,
+  workspaceRef,
+}) {
+  let timer = null;
+  const timeout = new Promise((resolve) => {
+    timer = setTimeout(() => {
+      abortController.abort();
+      resolve({
+        ok: false,
+        code: 'workspace_prepare_timeout',
+        error: `workspace prepare timed out after ${Math.ceil(timeoutMs / 1000)}s`,
+        cwd,
+        repo_ref: repoRef,
+        workspace_ref: workspaceRef,
+        timed_out: true,
+      });
+    }, timeoutMs);
+  });
+  try {
+    return await Promise.race([workspacePromise, timeout]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+async function reportWorkspaceProgress(deps, type, data) {
+  if (typeof deps.onWorkspaceProgress !== 'function') return;
+  await Promise.resolve(deps.onWorkspaceProgress({ type, data })).catch(() => null);
 }
 
 function stringOrNull(value) {
