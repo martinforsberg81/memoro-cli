@@ -94,7 +94,7 @@ mc auth codex      # or claude / gemini
    when the process tree crosses the configured threshold.
 
 5. **Project dependency mode.** This controls what an explicit
-   `mc deps hydrate` (and later `mc dev ensure`) may do:
+   `mc deps hydrate` and `mc dev ensure` may do:
 
    - `auto` (default) reuses an immutable machine-local snapshot with an APFS
      clone-on-write copy when possible. A cache miss runs the repository's

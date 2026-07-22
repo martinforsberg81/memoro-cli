@@ -75,6 +75,7 @@ Under the hood: `mc` runs the tool in a PTY it owns, with your terminal piped tr
 | `mc status <name>` | Per-session derived status |
 | `mc dev list [--json]` | Show machine-local dev servers and their health |
 | `mc dev plan [service] [--profile <name>]` | Validate and show the worktree's declarative dev plan |
+| `mc dev ensure [service] [--profile <name>] [--restart]` | Prepare dependencies and ensure the exact worktree-local server is healthy |
 | `mc dev status\|logs <session>` | Inspect a session's registered dev server |
 | `mc dev stop\|restart <session>` | Run identity-verified project controls |
 | `mc deps status\|hydrate [service]` | Inspect or explicitly hydrate isolated worktree dependencies |

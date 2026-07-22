@@ -284,6 +284,12 @@ function normalizeManifest(raw, { sourcePath }) {
   }
   const instanceId = requiredIdentifier(raw.instance_id, 'instance_id');
   const service = requiredText(raw.service, 'service');
+  const profile = optionalIdentifier(raw.profile, 'profile');
+  const definitionFingerprint = optionalFingerprint(raw.definition_fingerprint);
+  const startArgv = raw.start_argv == null
+    ? null
+    : normalizeArgv(raw.start_argv, 'start_argv');
+  const resourceClass = optionalResourceClass(raw.resource_class);
   const sessionName = requiredText(raw.session_name, 'session_name');
   const worktreePath = canonicalDirectory(raw.worktree_path, 'worktree_path');
   assertInside(worktreePath, sourcePath, 'manifest path');
@@ -302,6 +308,10 @@ function normalizeManifest(raw, { sourcePath }) {
     schema_version: SCHEMA_VERSION,
     instance_id: instanceId,
     service,
+    profile,
+    definition_fingerprint: definitionFingerprint,
+    start_argv: startArgv,
+    resource_class: resourceClass,
     session_name: sessionName,
     coding_session_id: optionalText(raw.coding_session_id),
     worktree_path: worktreePath,
@@ -328,15 +338,8 @@ function normalizeControls(raw) {
 }
 
 function normalizeControl(raw, label, { allowDetached }) {
-  if (!raw || typeof raw !== 'object' || !Array.isArray(raw.argv) || raw.argv.length < 1 || raw.argv.length > 64) {
-    throw new Error(`${label}.argv must contain 1 to 64 arguments`);
-  }
-  const argv = raw.argv.map((part) => {
-    if (typeof part !== 'string' || !part || part.length > 4096 || part.includes('\0')) {
-      throw new Error(`${label}.argv contains an invalid argument`);
-    }
-    return part;
-  });
+  if (!raw || typeof raw !== 'object') throw new Error(`${label} must be an object`);
+  const argv = normalizeArgv(raw.argv, `${label}.argv`);
   const detached = raw.detached === true;
   if (detached && !allowDetached) throw new Error(`${label} cannot be detached`);
   const timeout = raw.timeout_ms == null ? undefined : positiveInteger(raw.timeout_ms, `${label}.timeout_ms`);
@@ -350,6 +353,10 @@ function sourceManifestMatches(source, registered) {
   return source?.schema_version === registered.schema_version
     && source?.instance_id === registered.instance_id
     && source?.service === registered.service
+    && (source?.profile || null) === (registered.profile || null)
+    && (source?.definition_fingerprint || null) === (registered.definition_fingerprint || null)
+    && JSON.stringify(source?.start_argv || null) === JSON.stringify(registered.start_argv || null)
+    && (source?.resource_class || null) === (registered.resource_class || null)
     && source?.session_name === registered.session_name
     && source?.coding_session_id === registered.coding_session_id
     && Number(source?.pid) === Number(registered.pid)
@@ -486,6 +493,39 @@ function requiredIdentifier(value, label) {
     throw new Error(`${label} contains unsupported characters`);
   }
   return text;
+}
+
+function optionalIdentifier(value, label) {
+  if (value == null || value === '') return null;
+  return requiredIdentifier(value, label);
+}
+
+function optionalFingerprint(value) {
+  if (value == null || value === '') return null;
+  if (typeof value !== 'string' || !/^sha256:[a-f0-9]{64}$/.test(value)) {
+    throw new Error('definition_fingerprint must be a sha256 fingerprint');
+  }
+  return value;
+}
+
+function optionalResourceClass(value) {
+  if (value == null || value === '') return null;
+  if (value !== 'standard' && value !== 'heavy') {
+    throw new Error('resource_class must be "standard" or "heavy"');
+  }
+  return value;
+}
+
+function normalizeArgv(value, label) {
+  if (!Array.isArray(value) || value.length < 1 || value.length > 64) {
+    throw new Error(`${label} must contain 1 to 64 arguments`);
+  }
+  return value.map((part) => {
+    if (typeof part !== 'string' || !part || part.length > 4096 || part.includes('\0')) {
+      throw new Error(`${label} contains an invalid argument`);
+    }
+    return part;
+  });
 }
 
 function requiredText(value, label) {

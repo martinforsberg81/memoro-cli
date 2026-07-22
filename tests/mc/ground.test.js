@@ -25,6 +25,7 @@ import {
   readMap,
   buildRole,
   pullLensMarkdown,
+  renderDevGrounding,
 } from '../../src/mc/ground.js';
 
 // ─────────────────────────────────────────────────────────────
@@ -37,6 +38,7 @@ describe('assembleBundle (pure)', () => {
       map: '# MEMORO.md\nnorth star',
       role: 'You are the orchestrator.',
       context: '### User Profile\n\n- Name: Martin',
+      dev: 'Use `mc dev ensure`.',
       lens: 'User prefers tabs.',
       focus: 'currently on the grounding MVP',
     });
@@ -47,6 +49,8 @@ describe('assembleBundle (pure)', () => {
     assert.match(out, /north star/);
     assert.match(out, /## Memoro profile context/);
     assert.match(out, /### User Profile/);
+    assert.match(out, /## Development runtime/);
+    assert.match(out, /mc dev ensure/);
     assert.match(out, /## Legacy dynamic Memoro context/);
     assert.match(out, /User prefers tabs\./);
     assert.match(out, /## Current focus/);
@@ -57,6 +61,16 @@ describe('assembleBundle (pure)', () => {
     const out = assembleBundle({ role: 'role text' });
     assert.ok(!/## Legacy repo map/.test(out), 'map section should be absent');
     assert.match(out, /## Your role/);
+  });
+
+  it('renders concise agent guidance from a selected development plan', () => {
+    const guidance = renderDevGrounding({
+      service: { name: 'web' },
+      profile: { name: 'agent' },
+    });
+    assert.match(guidance, /service `web` with profile `agent`/);
+    assert.match(guidance, /mc dev ensure/);
+    assert.match(guidance, /--restart/);
   });
 
   it('omits empty / whitespace-only parts', () => {
@@ -294,6 +308,25 @@ describe('groundSession', () => {
     assert.match(adapter.written.markdown, /role/);
     assert.doesNotMatch(adapter.written.markdown, /## Legacy repo map/);
     assert.doesNotMatch(adapter.written.markdown, /## Legacy MEMORO\.md lifecycle/);
+  });
+
+  it('grounds agents to the selected worktree-local dev plan', async () => {
+    const adapter = fakeAdapter();
+    const res = await groundSession({
+      cwd: dir,
+      adapter,
+      deps: {
+        fetchMcContextDataImpl: async () => null,
+        resolveDevPlanImpl: async () => ({
+          service: { name: 'web' },
+          profile: { name: 'agent' },
+        }),
+      },
+    });
+    assert.equal(res.ok, true);
+    assert.match(res.parts.dev, /mc dev ensure/);
+    assert.match(adapter.written.markdown, /## Development runtime/);
+    assert.match(adapter.written.markdown, /service `web` with profile `agent`/);
   });
 
   it('supports adapters that deliver grounding as a startup message', async () => {

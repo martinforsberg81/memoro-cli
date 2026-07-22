@@ -32,6 +32,7 @@ import { join, basename } from 'node:path';
 
 import { readPackageCanon } from './canon.js';
 import { fetchMcContextData, renderMcContextMarkdown } from './context.js';
+import { resolveDevPlan } from './dev-definition.js';
 
 // ─────────────────────────────────────────────────────────────
 // Pure: bundle assembly
@@ -273,6 +274,7 @@ export function languageDirective(language) {
  * @param {string} [parts.map]       — legacy MEMORO.md contents
  * @param {string} [parts.role]      — orchestrator framing
  * @param {string} [parts.context]   — compact server-owned mc context
+ * @param {string} [parts.dev]       — worktree-local development runtime guidance
  * @param {string} [parts.lens]      — optional legacy dynamic Memoro lens
  * @param {string} [parts.focus]     — soft opening pointer ("currently on X")
  * @param {string} [parts.lifecycle] — optional legacy MEMORO.md lifecycle guidance
@@ -282,12 +284,13 @@ export function languageDirective(language) {
  *   right after the preamble so it governs the whole session.
  * @returns {string} markdown body for the managed block
  */
-export function assembleBundle({ map, role, context, lens, focus, lifecycle, language } = {}) {
+export function assembleBundle({ map, role, context, dev, lens, focus, lifecycle, language } = {}) {
   const sections = [];
 
   const cleanMap = nonEmpty(map);
   const cleanRole = nonEmpty(role);
   const cleanContext = nonEmpty(context);
+  const cleanDev = nonEmpty(dev);
   const cleanLens = nonEmpty(lens);
   const cleanFocus = nonEmpty(focus);
   const cleanLifecycle = nonEmpty(lifecycle);
@@ -301,6 +304,9 @@ export function assembleBundle({ map, role, context, lens, focus, lifecycle, lan
   }
   if (cleanContext) {
     sections.push(section('Memoro profile context', cleanContext));
+  }
+  if (cleanDev) {
+    sections.push(section('Development runtime', cleanDev));
   }
   if (cleanLens) {
     sections.push(section('Legacy dynamic Memoro context', cleanLens));
@@ -318,6 +324,16 @@ export function assembleBundle({ map, role, context, lens, focus, lifecycle, lan
   const head = directive ? [`${HEADER}`, '', PREAMBLE, '', directive, ''] : [`${HEADER}`, '', PREAMBLE, ''];
   const body = [...head, ...interleave(sections)].join('\n');
   return body.replace(/\n{3,}/g, '\n\n').trimEnd() + '\n';
+}
+
+export function renderDevGrounding(plan) {
+  if (!plan?.service?.name || !plan?.profile?.name) return null;
+  return [
+    `This worktree declares development service \`${plan.service.name}\` with profile \`${plan.profile.name}\`.`,
+    'Use `mc dev ensure` to prepare dependencies, start or safely reuse the exact worktree-local server, and wait for its declared health check.',
+    'Do not run the underlying start command directly or reuse a server from another worktree.',
+    'Use `mc dev ensure --restart` only when replacing a verified mismatched or unhealthy server is intended.',
+  ].join(' ');
 }
 
 function section(title, content) {
@@ -725,6 +741,7 @@ export async function groundSession({
     fetchLensDataImpl = () => fetchLensData(deps.lensDeps || {}),
     pullLensImpl = null,
     fetchMcContextDataImpl = (input) => fetchMcContextData(input),
+    resolveDevPlanImpl = (input) => resolveDevPlan(input),
     repoName = basename(cwd),
     grounding = DEFAULT_GROUNDING,
   } = deps;
@@ -749,6 +766,8 @@ export async function groundSession({
       }), null)
     : null;
   const context = safeSync(() => renderMcContextMarkdown(mcContext), null);
+  const devPlan = await safe(() => resolveDevPlanImpl({ worktreePath: cwd }), null);
+  const dev = safeSync(() => renderDevGrounding(devPlan), null);
 
   // Legacy lens + language. Soft-degrade everywhere: a null lens
   // response → no lens section + (absent a MEMORO.md setting) English default.
@@ -786,7 +805,7 @@ export async function groundSession({
     ? safeSync(() => lifecycleGuidance({ map: mapProse, repoName }), null)
     : null;
 
-  const parts = { map: mapProse, role, context, lens, focus, lifecycle, language };
+  const parts = { map: mapProse, role, context, dev, lens, focus, lifecycle, language };
   const markdown = assembleBundle(parts);
 
   try {

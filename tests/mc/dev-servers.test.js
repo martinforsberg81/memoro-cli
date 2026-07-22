@@ -62,6 +62,23 @@ describe('mc dev server registry', () => {
     );
   });
 
+  test('preserves declarative plan identity used by exact ensure reuse', () => {
+    const definitionFingerprint = `sha256:${'b'.repeat(64)}`;
+    writeSourceManifest({
+      worktree,
+      sourcePath,
+      profile: 'agent',
+      definition_fingerprint: definitionFingerprint,
+      start_argv: ['npm', 'run', 'dev', '--', '--skip-containers'],
+      resource_class: 'standard',
+    });
+    const registered = registerDevServerManifest(sourcePath);
+    assert.equal(registered.profile, 'agent');
+    assert.equal(registered.definition_fingerprint, definitionFingerprint);
+    assert.deepEqual(registered.start_argv, ['npm', 'run', 'dev', '--', '--skip-containers']);
+    assert.equal(registered.resource_class, 'standard');
+  });
+
   test('classifies verified healthy, unhealthy, and orphaned servers', async () => {
     writeSourceManifest({ worktree, sourcePath });
     const manifest = registerDevServerManifest(sourcePath);

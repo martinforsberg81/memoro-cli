@@ -95,6 +95,29 @@ are preferred and npm retains its normal network fallback for missing content.
 `npm ci` may execute package lifecycle scripts, which is why hydrate is an
 explicit command and never part of `mc new`.
 
+## Ensuring a worktree server
+
+`mc dev ensure [service] [--profile <name>]` is the agent-facing entry point.
+It serializes callers per worktree and service, then:
+
+1. Reuses a healthy server only when its worktree, service, profile,
+   definition fingerprint, start argv, and resource class exactly match.
+2. Otherwise refuses a live mismatched or unhealthy server. Replacing one
+   requires the explicit `--restart` flag and a successful identity-verified
+   project stop command.
+3. Prepares dependencies according to the selected dependency mode. A running
+   reused server is never hydrated underneath.
+4. Applies the user's local resource preflight to `heavy` profiles and respects
+   the configured heavy-server concurrency limit.
+5. Starts the declared argv directly with `shell: false`, registers the
+   worktree runtime manifest, and waits for both verified process identity and
+   the declared HTTP health check.
+
+Servers in another worktree are never reuse candidates. A PID, port, process
+name, or merely compatible URL is not enough. Session grounding tells coding
+agents to use `mc dev ensure` instead of invoking a repository start command
+directly.
+
 Launched coding sessions receive `MC_SESSION_NAME`, `MC_CODING_SESSION_ID`, and,
 when the definition is valid, `MC_DEV_SERVICE`, `MC_DEV_PROFILE`, and
 `MC_DEV_DEFINITION_FINGERPRINT`. Repositories without `.mc/dev.json` continue to
@@ -126,6 +149,10 @@ Schema version 1:
   "schema_version": 1,
   "instance_id": "dev-unique-instance-id",
   "service": "project-worker",
+  "profile": "agent",
+  "definition_fingerprint": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+  "start_argv": ["npm", "run", "dev", "--", "--skip-containers"],
+  "resource_class": "standard",
   "session_name": "feature-session",
   "coding_session_id": "sess_optional",
   "worktree_path": "/absolute/worktree",
@@ -149,6 +176,9 @@ Schema version 1:
 }
 ```
 
+The plan identity fields (`profile`, `definition_fingerprint`, `start_argv`,
+and `resource_class`) are required for `mc dev ensure` reuse; older manifests
+without them remain visible but never count as an exact match.
 `coding_session_id` is optional. URLs must target loopback, and the source
 manifest and log must stay inside `worktree_path`. Control commands are argv
 arrays and are run without a shell.
@@ -171,6 +201,7 @@ declared command; it does not signal the process group itself.
 
 ```sh
 mc dev plan [service] [--profile <name>] [--json]
+mc dev ensure [service] [--profile <name>] [--restart] [--json]
 mc deps status [service] [--profile <name>] [--json]
 mc deps hydrate [service] [--profile <name>] [--replace] [--json]
 mc dev list [--json]
