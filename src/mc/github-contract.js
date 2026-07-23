@@ -34,13 +34,19 @@ export const GITHUB_REPAIR_ACTIONS = Object.freeze([
   'retry',
 ]);
 
-export const GITHUB_READ_OPERATIONS = Object.freeze([
-  'connection.status',
-  'repository.metadata',
-  'pull_request.list',
-  'pull_request.view',
-  'checks.list',
-]);
+export const GITHUB_OPERATION_EFFECTS = Object.freeze({
+  'connection.status': 'read',
+  'repository.metadata': 'read',
+  'pull_request.list': 'read',
+  'pull_request.view': 'read',
+  'checks.list': 'read',
+});
+
+export const GITHUB_READ_OPERATIONS = Object.freeze(
+  Object.entries(GITHUB_OPERATION_EFFECTS)
+    .filter(([, effect]) => effect === 'read')
+    .map(([operation]) => operation),
+);
 
 export const GITHUB_STABLE_ERRORS = Object.freeze([
   'not_connected',
@@ -48,8 +54,6 @@ export const GITHUB_STABLE_ERRORS = Object.freeze([
   'permission_missing',
   'operation_not_allowed',
   'invalid_params',
-  'approval_required',
-  'approval_expired',
   'rate_limited',
   'conflict',
   'stale_head',
@@ -59,7 +63,7 @@ export const GITHUB_STABLE_ERRORS = Object.freeze([
 
 const CONNECTION_STATE_SET = new Set(GITHUB_CONNECTION_STATES);
 const REPAIR_ACTION_SET = new Set(GITHUB_REPAIR_ACTIONS);
-const READ_OPERATION_SET = new Set(GITHUB_READ_OPERATIONS);
+const OPERATION_SET = new Set(Object.keys(GITHUB_OPERATION_EFFECTS));
 const STABLE_ERROR_SET = new Set(GITHUB_STABLE_ERRORS);
 const REQUEST_ID_RE = /^[a-zA-Z0-9][a-zA-Z0-9_-]{7,127}$/;
 const CONNECT_STATE_RE = /^gha_[a-zA-Z0-9_-]{8,200}$/;
@@ -85,6 +89,10 @@ export class GitHubContractError extends Error {
     this.name = 'GitHubContractError';
     this.code = code;
   }
+}
+
+export function githubOperationEffect(operation) {
+  return GITHUB_OPERATION_EFFECTS[operation] || null;
 }
 
 /** Decode the exact GET /api/mc/github/status envelope. */
@@ -153,7 +161,7 @@ export function decodeConnectionDescriptor(value) {
     'repositories',
     'operations',
     'approval_mode',
-  ], 'GitHub connection descriptor');
+  ], 'GitHub connection descriptor', { optional: ['approval_mode'] });
   if (value.schema !== GITHUB_CONNECTION_SCHEMA) invalid('GitHub connection descriptor schema is invalid.');
   const state = connectionState(value.state);
   const repairAction = connectionRepairAction(state, value.repair_action);
@@ -162,7 +170,9 @@ export function decodeConnectionDescriptor(value) {
   const repository = value.repository === null ? null : githubRepository(value.repository);
   const repositories = repositoryList(value.repositories);
   const operations = operationList(value.operations);
-  if (value.approval_mode !== 'prompt') invalid('GitHub approval mode is invalid.');
+  if (value.approval_mode !== undefined && value.approval_mode !== 'prompt') {
+    invalid('Legacy GitHub approval metadata is invalid.');
+  }
   if (state !== 'ready' && repository !== null) invalid('An unready GitHub connection cannot bind a repository.');
   return {
     schema: GITHUB_CONNECTION_SCHEMA,
@@ -173,7 +183,6 @@ export function decodeConnectionDescriptor(value) {
     repository,
     repositories,
     operations: state === 'ready' ? operations : [],
-    approval_mode: 'prompt',
   };
 }
 
@@ -196,7 +205,6 @@ export function buildSessionCapabilities(connection) {
       account,
       repository: decoded.repository,
       operations: state === 'ready' ? decoded.operations : [],
-      approval_mode: 'prompt',
     },
   };
 }
@@ -212,12 +220,10 @@ export function decodeSessionCapabilities(value) {
     'account',
     'repository',
     'operations',
-    'approval_mode',
   ], 'GitHub session capability');
   const state = connectionState(value.github.state);
   if (value.github.transport !== GITHUB_SESSION_TRANSPORT
-      || value.github.actor !== 'installation'
-      || value.github.approval_mode !== 'prompt') {
+      || value.github.actor !== 'installation') {
     invalid('GitHub session capability is invalid.');
   }
   const account = value.github.account === null ? null : boundedString(value.github.account, 255);
@@ -241,7 +247,6 @@ export function decodeSessionCapabilities(value) {
       account,
       repository,
       operations,
-      approval_mode: 'prompt',
     },
   };
 }
@@ -265,7 +270,7 @@ export function decodeGitHubOperationRequest(value) {
   const requestId = boundedString(value.request_id, 128);
   if (!requestId || !REQUEST_ID_RE.test(requestId)) invalid('GitHub operation request_id is invalid.');
   const operation = boundedString(value.operation, 128);
-  if (!operation || !READ_OPERATION_SET.has(operation)) {
+  if (!operation || !OPERATION_SET.has(operation)) {
     throw new GitHubContractError('operation_not_allowed', 'GitHub operation is not allowed.');
   }
   if (!isPlainObject(value.params)) invalid('GitHub operation params must be an object.');
@@ -296,24 +301,18 @@ export function decodeGitHubOperationResponse(value) {
     'code',
     'message',
     'repair_action',
-    'approval_id',
     'retry_after_seconds',
-  ], 'GitHub operation error', { optional: ['approval_id', 'retry_after_seconds'] });
+  ], 'GitHub operation error', { optional: ['retry_after_seconds'] });
   const code = boundedString(value.error.code, 64);
   const message = boundedString(value.error.message, 512);
   const repairAction = value.error.repair_action === null
     ? null
     : boundedString(value.error.repair_action, 64);
   if (!code || !STABLE_ERROR_SET.has(code) || !message
-      || (repairAction !== null && !REPAIR_ACTION_SET.has(repairAction) && repairAction !== 'approve')) {
+      || (repairAction !== null && !REPAIR_ACTION_SET.has(repairAction))) {
     invalid('GitHub operation error is invalid.');
   }
   const error = { code, message, repair_action: repairAction };
-  if (value.error.approval_id !== undefined) {
-    const approvalId = boundedString(value.error.approval_id, 128);
-    if (!approvalId) invalid('GitHub approval id is invalid.');
-    error.approval_id = approvalId;
-  }
   if (value.error.retry_after_seconds !== undefined) {
     const retry = value.error.retry_after_seconds;
     if (!Number.isSafeInteger(retry) || retry < 1 || retry > 3600) invalid('GitHub retry interval is invalid.');
@@ -416,12 +415,12 @@ function githubRepository(value) {
 }
 
 function operationList(value) {
-  if (!Array.isArray(value) || value.length > GITHUB_READ_OPERATIONS.length) {
+  if (!Array.isArray(value) || value.length > OPERATION_SET.size) {
     invalid('GitHub operations are invalid.');
   }
   const operations = [];
   for (const item of value) {
-    if (typeof item !== 'string' || !READ_OPERATION_SET.has(item) || operations.includes(item)) {
+    if (typeof item !== 'string' || !OPERATION_SET.has(item) || operations.includes(item)) {
       invalid('GitHub operations are invalid.');
     }
     operations.push(item);

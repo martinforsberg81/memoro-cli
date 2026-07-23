@@ -50,7 +50,6 @@ const SESSION_CAPABILITIES = Object.freeze({
       account: 'acme',
     },
     operations: ['connection.status', 'repository.metadata', 'pull_request.list', 'pull_request.view', 'checks.list'],
-    approval_mode: 'prompt',
   },
 });
 

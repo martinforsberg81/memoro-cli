@@ -267,7 +267,6 @@ describe('groundSession', () => {
             account: 'meetmemoro',
           },
           operations: ['pull_request.list'],
-          approval_mode: 'prompt',
         },
       },
       deps: {

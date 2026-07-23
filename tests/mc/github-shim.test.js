@@ -49,7 +49,6 @@ describe('session-scoped gh compatibility shim', () => {
           actor: { type: 'installation', login: 'memoro[bot]' },
           repository: { id: 301, full_name: 'acme/widgets' },
           operations: ['connection.status'],
-          approval_mode: 'prompt',
         },
       },
     });

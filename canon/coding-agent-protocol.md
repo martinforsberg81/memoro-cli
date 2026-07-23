@@ -112,7 +112,9 @@ only after the user approves. When no profile exists, `read --json` returns
   argv, files, prompt, transcript, logs, browser payloads, or session records.
 - GitHub behavior belongs to mc core and its source/session broker, not an LLM
   adapter. All tools get the same token-free capability descriptor, operations,
-  approvals, errors, and compatibility surface.
+  hard operation policy, errors, and compatibility surface. The coding-tool
+  host applies the user's native approval settings to mutating invocations; mc
+  does not store, override, or duplicate that preference.
 - `mc github` is canonical. A session-scoped `gh` compatibility shim may map
   only allowlisted commands to typed broker operations. Never invoke or expose
   `gh auth token`, `gh auth status --show-token`, arbitrary `gh api`, GraphQL,
