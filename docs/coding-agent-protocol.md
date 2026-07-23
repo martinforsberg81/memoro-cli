@@ -103,9 +103,16 @@ only after the user approves. When no profile exists, `read --json` returns
 
 ## GitHub interaction in coding sessions
 
+- `docs/plans/connected-capabilities.md` is the normative foundation for every
+  external connection. GitHub, Cloudflare, LLM tools, and future providers
+  share one connection registry, token-free descriptors, readiness/repair
+  vocabulary, source/session binding, and short-lived broker-grant model.
+  Provider commands, adapters, brokers, and executors must not import Keychain
+  or mc vault code; only the common identity service may read the first-party
+  local Memoro device identity.
 - `docs/plans/github-app-capability.md` is the normative product and security
-  contract. The target is one central Memoro GitHub App and the same typed mc
-  broker operations for local and cloud sessions.
+  provider contract. The target is one central Memoro GitHub App and the same
+  typed mc broker operations for local and cloud sessions.
 - GitHub credentials are not mc vault material. App private keys and durable
   connection authority stay in the Memoro control plane; short-lived
   installation credentials must never enter the coding-tool child environment,
