@@ -2,22 +2,37 @@
  * `mc doctor` gives a non-mutating health view over local mc storage.
  */
 import { buildStorageSnapshot } from '../storage-management.js';
+import { listDevServers, summarizeDevServers } from '../dev-servers.js';
 
-export async function run(argv) {
+export async function run(argv, deps = {}) {
+  const stdout = deps.stdout || process.stdout;
+  const stderr = deps.stderr || process.stderr;
   const opts = parseArgs(argv);
   if (opts.error) {
-    console.error(`mc: ${opts.error}`);
+    stderr.write(`mc: ${opts.error}\n`);
     return 2;
   }
 
-  const snapshot = await buildStorageSnapshot({ minAgeMs: opts.minAgeMs });
+  const buildSnapshot = deps.buildStorageSnapshot || buildStorageSnapshot;
+  const list = deps.listDevServers || listDevServers;
+  const snapshot = await buildSnapshot({ minAgeMs: opts.minAgeMs });
+  const devServers = await Promise.resolve().then(() => list()).catch(() => []);
+  const devSummary = summarizeDevServers(devServers);
+  const devIssues = [];
+  if (devSummary.unhealthy) {
+    devIssues.push({ severity: 'warning', code: 'dev-servers-unhealthy', count: devSummary.unhealthy });
+  }
+  if (devSummary.orphan) {
+    devIssues.push({ severity: 'warning', code: 'dev-servers-orphan', count: devSummary.orphan });
+  }
+  const issues = [...snapshot.issues, ...devIssues];
   const out = {
-    ok: snapshot.issues.length === 0,
-    summary: snapshot.summary,
-    issues: snapshot.issues,
+    ok: issues.length === 0,
+    summary: { ...snapshot.summary, dev_servers: devSummary },
+    issues,
   };
-  if (opts.json) console.log(JSON.stringify(out, null, 2));
-  else printHuman(out);
+  if (opts.json) stdout.write(`${JSON.stringify(out, null, 2)}\n`);
+  else printHuman(out, stdout);
   return 0;
 }
 
@@ -37,14 +52,14 @@ function parseArgs(argv) {
   return opts;
 }
 
-function printHuman(out) {
-  process.stdout.write(`mc doctor — ${out.ok ? 'ok' : 'issues found'}\n`);
+function printHuman(out, stdout = process.stdout) {
+  stdout.write(`mc doctor — ${out.ok ? 'ok' : 'issues found'}\n`);
   for (const issue of out.issues) {
-    process.stdout.write(`  ${issue.severity}  ${issue.code}`);
-    if (issue.count != null) process.stdout.write(`  count=${issue.count}`);
-    process.stdout.write(`\n`);
+    stdout.write(`  ${issue.severity}  ${issue.code}`);
+    if (issue.count != null) stdout.write(`  count=${issue.count}`);
+    stdout.write(`\n`);
   }
-  if (!out.issues.length) process.stdout.write(`  no local storage issues detected\n`);
+  if (!out.issues.length) stdout.write(`  no local storage or dev-server issues detected\n`);
 }
 
 function parseDurationMs(spec) {

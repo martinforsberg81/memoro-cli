@@ -38,6 +38,10 @@ import { getRepoContext, deriveRepoName } from '../lib/git-context.js';
 import { lookupOrMint } from '../lib/coding-session.js';
 import { CliWsClient } from './ws-client.js';
 import { createFetchTranscriptHandler } from './handlers/fetch-transcript.js';
+import {
+  resolveSessionSourceIdentity,
+  SessionProjectionTracker,
+} from '../mc/session-projector.js';
 
 const TICK_INTERVAL_MS = 60_000;
 const RETRY_INTERVAL_MS = 5 * 60 * 1000;
@@ -107,6 +111,13 @@ export async function heartbeatLoop(argv) {
 
   const source = flags.tool || 'claude-code';
   const repo = deriveRepoName(repoContext);
+  const startedAt = Date.now();
+  const sourceIdentity = resolveSessionSourceIdentity({ machineId, env: process.env });
+  const projectionTracker = new SessionProjectionTracker({ cwd });
+  const transcriptReader = createFetchTranscriptHandler({
+    transcriptPath: event?.transcript_path,
+    source,
+  });
 
   // Open the WS command channel in parallel with the heartbeat ticker.
   // The CLI reads its local transcript on demand when the dashboard's
@@ -117,10 +128,7 @@ export async function heartbeatLoop(argv) {
     token,
     codingSessionId,
     handlers: {
-      fetch_transcript: createFetchTranscriptHandler({
-        transcriptPath: event?.transcript_path,
-        source,
-      }),
+      fetch_transcript: transcriptReader,
     },
     logger: wsLogger,
     // Server tells us our session was replaced or is invalid (4003).
@@ -139,19 +147,27 @@ export async function heartbeatLoop(argv) {
   process.on('SIGINT', stopWs);
 
   while (alive) {
+    const now = Date.now();
     await postHeartbeatWithRetry({
       apiUrl,
       token,
       payload: {
         coding_session_id: codingSessionId,
         machine_id: machineId,
+        ...sourceIdentity,
         source,
         repo,
         branch: repoContext.branch,
         files_touched_since_last: [],
         last_user_excerpt: '',
         last_assistant_excerpt: '',
-        at: new Date().toISOString(),
+        at: new Date(now).toISOString(),
+        session_projection: await projectHeartbeatOnlySession({
+          projectionTracker,
+          transcriptReader,
+          startedAt,
+          now,
+        }),
       },
     });
     if (!alive) break;
@@ -163,6 +179,39 @@ export async function heartbeatLoop(argv) {
   wsClient.stop();
   await cleanupPidFile(pidFile);
   return 0;
+}
+
+export async function projectHeartbeatOnlySession({
+  projectionTracker,
+  transcriptReader = null,
+  startedAt = Date.now(),
+  now = Date.now(),
+} = {}) {
+  if (!projectionTracker) throw new TypeError('projectionTracker is required');
+  if (typeof transcriptReader === 'function') {
+    try {
+      const parsed = await transcriptReader();
+      const hasEvidence = (Array.isArray(parsed?.messages) && parsed.messages.length > 0)
+        || (Array.isArray(parsed?.activities) && parsed.activities.length > 0);
+      if (hasEvidence) {
+        return projectionTracker.transcript({
+          parsed,
+          runtimeLifecycle: 'live',
+          now,
+        });
+      }
+    } catch {
+      // Transcript availability is best-effort; runtime remains a safe fallback.
+    }
+  }
+  return projectionTracker.runtime({
+    session: {
+      session_state: 'live',
+      attachable: true,
+      started_at: new Date(startedAt).toISOString(),
+    },
+    now,
+  });
 }
 
 /**

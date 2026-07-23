@@ -1,5 +1,9 @@
 export const RUNTIME_SECRET_ENV_NAMES = Object.freeze([
   'MEMORO_TOKEN',
+  'GH_TOKEN',
+  'GITHUB_TOKEN',
+  'GH_ENTERPRISE_TOKEN',
+  'GITHUB_ENTERPRISE_TOKEN',
 ]);
 
 export function scrubRuntimeSecretsFromEnv(env = process.env) {

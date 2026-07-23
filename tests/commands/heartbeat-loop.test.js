@@ -3,7 +3,12 @@ import test, { describe } from 'node:test';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 
-import { pidFilePath, __test__ } from '../../src/commands/heartbeat-loop.js';
+import {
+  pidFilePath,
+  projectHeartbeatOnlySession,
+  __test__,
+} from '../../src/commands/heartbeat-loop.js';
+import { SessionProjectionTracker } from '../../src/mc/session-projector.js';
 
 describe('pidFilePath', () => {
   test('sanitizes the llm session id for filesystem safety', () => {
@@ -64,5 +69,39 @@ describe('parseFlags', () => {
   test('skips unknown bare positional args', () => {
     const { flags } = __test__.parseFlags(['random', '--tool', 'codex']);
     assert.equal(flags.tool, 'codex');
+  });
+});
+
+describe('heartbeat-only session projection', () => {
+  test('uses changed local transcript evidence without publishing its text', async () => {
+    const projection = await projectHeartbeatOnlySession({
+      projectionTracker: new SessionProjectionTracker({
+        cwd: null,
+        now: () => Date.parse('2026-07-21T08:02:00.000Z'),
+      }),
+      transcriptReader: async () => ({
+        messages: [{
+          role: 'assistant',
+          content: 'Should I apply the secret migration?',
+          at: '2026-07-21T08:01:00.000Z',
+        }],
+        activities: [],
+      }),
+      startedAt: Date.parse('2026-07-21T08:00:00.000Z'),
+      now: Date.parse('2026-07-21T08:02:00.000Z'),
+    });
+    assert.deepEqual([projection.status, projection.reason_code], ['needs_attention', 'awaiting_reply']);
+    assert.doesNotMatch(JSON.stringify(projection), /secret migration/);
+  });
+
+  test('falls back conservatively when no transcript is available', async () => {
+    const now = Date.parse('2026-07-21T08:10:00.000Z');
+    const projection = await projectHeartbeatOnlySession({
+      projectionTracker: new SessionProjectionTracker({ cwd: null, now: () => now }),
+      transcriptReader: async () => { throw new Error('not ready'); },
+      startedAt: Date.parse('2026-07-21T08:00:00.000Z'),
+      now,
+    });
+    assert.equal(projection.status, 'resting');
   });
 });

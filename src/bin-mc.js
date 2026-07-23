@@ -78,6 +78,7 @@ import {
 } from './mc/broker/session-hosts.js';
 import { normalizeInteractivePtyEnv } from './mc/interactive-env.js';
 import { renderIntro as renderSessionIntro } from './mc/session-intro.js';
+import { SessionProjectionTracker } from './mc/session-projector.js';
 import {
   buildSessionListView,
   fetchActiveCodingSessionsWithLocalBroker,
@@ -121,10 +122,14 @@ const LIFECYCLE = {
   resume:        () => import('./mc/commands/resume.js'),
   gc:            () => import('./mc/commands/gc.js'),
   status:        () => import('./mc/commands/status.js'),
+  dev:           () => import('./mc/commands/dev.js'),
+  deps:          () => import('./mc/commands/deps.js'),
   dispatch:      () => import('./mc/commands/dispatch.js'),
   read:          () => import('./mc/commands/read.js'),
   'install-shell': () => import('./mc/commands/install-shell.js'),
   auth:          () => import('./mc/commands/auth.js'),
+  connections:   () => import('./mc/commands/connections.js'),
+  github:        () => import('./mc/commands/github.js'),
   setup:         () => import('./mc/commands/setup.js'),
   reconcile:     () => import('./mc/commands/reconcile.js'),
   doctor:        () => import('./mc/commands/doctor.js'),
@@ -300,6 +305,15 @@ COMMON
   mc list [--rich|--awaiting]     Show local sessions
   mc list --tree                  Show coordinator/project session tree
   mc status <name>                Show one session's state
+  mc dev plan [service] [--profile <name>]
+                                  Validate and show this worktree's dev plan
+  mc dev ensure [service] [--profile <name>] [--restart]
+                                  Safely prepare and ensure its dev server
+  mc dev list [--json]            Show machine-local dev servers
+  mc dev status|logs <session>    Inspect one session's dev server
+  mc dev stop|restart <session>   Run verified project-owned controls
+  mc deps status|hydrate [service]
+                                  Inspect or explicitly hydrate dependencies
   mc cd <name>                    cd into a session worktree
   mc end [<name>...]              Confirm and permanently remove local session artifacts
   mc rename <old> <new>           Rename branch + worktree + registry entry
@@ -321,11 +335,24 @@ SETUP
            --heavy-max-threads <n> --heavy-max-rss-mb <n>
            --heavy-max-swap-mb <n> --heavy-min-free-disk-gb <n>
                                   Configure every custom safeguard
+  mc setup --dependency-mode <auto|isolated|off>
+                                  Choose snapshot reuse, worktree-only, or off
   mc install-shell                Install auto-cd support for zsh/bash
   mc auth status [--json]         Check Memoro + coding-tool auth
   mc auth memoro                  Token login/logout for CI or headless setup
   mc auth devices                 List/revoke Memoro device tokens
-  mc auth github [--json]         Check host GitHub CLI auth for PR/merge work
+  mc github status [--json]       Check this repo via the Memoro GitHub App
+  mc github connect [--json]      Start the central GitHub connection flow
+  mc github repos [--json]        List selected GitHub repositories
+  mc github pr list [--json]      List pull requests through the session broker
+  mc github pr view <n> [--json]  View one pull request through the session broker
+  mc github pr checks <n> [--json]
+                                  List checks through the session broker
+  mc github pr create --title <text> --body <text> [--base <branch>] [--draft] [--json]
+                                  Create a PR from the server-bound session branch
+  mc github pr update <n> [--title <text>] [--body <text>] [--json]
+                                  Update a PR with exact current-state checks
+  mc auth github [--json]         Alias for mc github status
   mc auth <claude|codex|gemini>   Re-check one coding tool
   mc tool-switch <tool>           Set the default tool for future sessions
   mc coding-profile read|diff|write
@@ -371,10 +398,12 @@ FLEET / ADVANCED
                                   Prune old ignored build/cache directories
   mc gc [--dry-run]               Reap registry-dead, merged, clean worktrees
   mc gc --runtime                 Reap stale runtime pid/socket sidecars
+  mc gc --dependency-snapshots --dry-run
+                                  Preview dependency snapshot cache cleanup
   mc gc --stale-worktrees --only <names>
                                   Reap only named clean, merged worktrees
   mc gc --sidecars                Reap stale hosts/guard-bin runtime sidecars
-  mc gc --all-safe --dry-run      Preview runtime + clean merged worktree cleanup
+  mc gc --all-safe --dry-run      Preview runtime + snapshot + clean merged worktree cleanup
   mc broker start/status/stop     Local PTY broker admin
   mc broker connect               Connect local broker to Memoro cloud
   mc attach <session_id>          Attach to a broker-owned local session
@@ -398,8 +427,9 @@ COMMAND SURFACES
 NEW USER FLOW
   1. Install: \`npm install -g memoro-cli\`
   2. Sign in: run \`mc\` and approve the browser device flow
-  3. Verify: \`mc setup\` checks readiness and offers optional resource limits
-  4. Start: from a git repo, run \`mc new <name> [focus]\`
+  3. Connect services: \`mc connections\` uses the shared provider registry
+  4. Verify: \`mc setup\` checks readiness and offers optional resource limits
+  5. Start: from a git repo, run \`mc new <name> [focus]\`
 
 WHAT HAPPENS ON START
   Fresh starts (\`mc\`, \`mc new\`) inject project grounding before the
@@ -654,9 +684,17 @@ async function runWrap(argv, { label = null } = {}) {
     groundingLaunchMessage,
     fallbackStartupMessage: startupMessage,
   });
+  const { resolveDevSessionEnvironment } = await import('./mc/dev-definition.js');
+  const devEnvironment = await resolveDevSessionEnvironment({
+    worktreePath: repoContext.toplevel,
+    globalConfig: config,
+  });
   let spawnEnv = {
     ...process.env,
     MEMORO_MC_PARENT: '1',  // hooks see this and no-op their heartbeat-loop
+    MC_CODING_SESSION_ID: codingSessionId,
+    ...(runtimeLabel ? { MC_SESSION_NAME: runtimeLabel } : {}),
+    ...devEnvironment,
   };
   try {
     const { prepareLocalResourceGuardEnv } = await import('./mc/local-resource-guard.js');
@@ -701,13 +739,26 @@ async function runWrap(argv, { label = null } = {}) {
       process.exit(1);
     }
   }
+  try {
+    const { prepareDevCommandGuardEnv } = await import('./mc/dev-command-guard.js');
+    spawnEnv = prepareDevCommandGuardEnv({
+      baseEnv: spawnEnv,
+      worktreePath: repoContext.toplevel,
+      mcDir: MC_DIR,
+      codingSessionId,
+    }).env;
+  } catch (err) {
+    console.error(`mc: failed to install dev command guard (${err.message}); refusing to launch`);
+    process.exit(1);
+  }
   const interactiveEnv = normalizeInteractivePtyEnv({
     baseEnv: spawnEnv,
     termName: process.env.TERM,
   });
   spawnEnv = interactiveEnv.env;
 
-  const uploadStartMs = Date.now() - 1000;
+  const runtimeStartedAt = Date.now();
+  const uploadStartMs = runtimeStartedAt - 1000;
   const ptyProcess = pty.spawn(launchSpec.bin, spawnArgs, {
     name: interactiveEnv.termName,
     cols: process.stdout.columns || 80,
@@ -723,8 +774,10 @@ async function runWrap(argv, { label = null } = {}) {
   //     stripped excerpt of what Claude is currently showing (lets a peer
   //     coordinator spot e.g. "How should I proceed?" prompts at a
   //     glance, not just "session B has been idle 2m")
-  let lastOutputAt = Date.now();
+  let lastOutputAt = runtimeStartedAt;
+  let lastInputAt = null;
   let outputBuffer = '';
+  const projectionTracker = new SessionProjectionTracker({ cwd });
   const startupMessageController = createStartupMessageController({
     message: startupMessage,
     delayMs: STARTUP_MESSAGE_IDLE_MS,
@@ -751,6 +804,7 @@ async function runWrap(argv, { label = null } = {}) {
   process.stdin.resume();
   process.stdin.setEncoding('utf8');
   process.stdin.on('data', (data) => {
+    lastInputAt = Date.now();
     ptyProcess.write(data);
   });
 
@@ -768,6 +822,7 @@ async function runWrap(argv, { label = null } = {}) {
   }
   const server = createDispatchSocketServer({
     deliver: (message) => {
+      lastInputAt = Date.now();
       writeToPty(ptyProcess, message, launchSpec);
     },
   });
@@ -784,6 +839,7 @@ async function runWrap(argv, { label = null } = {}) {
       transcriptPath: null,
       source: launchSpec.heartbeatSource,
       deliver: (message) => {
+        lastInputAt = Date.now();
         writeToPty(ptyProcess, message, launchSpec);
       },
     }),
@@ -812,6 +868,17 @@ async function runWrap(argv, { label = null } = {}) {
           now,
           excerptMax: EXCERPT_MAX_CHARS,
           extractExcerpt,
+          sessionProjection: projectionTracker.runtime({
+            session: {
+              session_state: 'live',
+              attachable: true,
+              started_at: new Date(runtimeStartedAt).toISOString(),
+              last_output_at: new Date(lastOutputAt).toISOString(),
+              last_input_at: lastInputAt ? new Date(lastInputAt).toISOString() : null,
+            },
+            output: outputBuffer,
+            now,
+          }),
         }),
       });
       if (!alive) break;

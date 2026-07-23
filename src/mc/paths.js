@@ -26,6 +26,10 @@ export function worktreesRoot() {
   return join(mcHome(), 'worktrees');
 }
 
+export function devServersRoot() {
+  return join(mcHome(), 'dev-servers');
+}
+
 /**
  * Slug for a repo, derived from the basename of its primary worktree path.
  *

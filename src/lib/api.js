@@ -11,6 +11,7 @@ export async function memoroFetch(apiUrl, path, {
   token,
   method = 'GET',
   body = null,
+  sourceId = null,
   timeoutMs = DEFAULT_TIMEOUT_MS,
   fetchImpl = globalThis.fetch,
   curlImpl = runCurlRequest,
@@ -24,6 +25,9 @@ export async function memoroFetch(apiUrl, path, {
     'Authorization': `Bearer ${token}`,
     'User-Agent': `memoro-cli/${await pkgVersion()}`,
   };
+  if (typeof sourceId === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/.test(sourceId)) {
+    headers['X-Memoro-Source-Id'] = sourceId;
+  }
   if (body != null) headers['Content-Type'] = 'application/json';
 
   return _doFetch(url, { method, headers, body, timeoutMs, fetchImpl, curlImpl, curlFallback });

@@ -101,6 +101,36 @@ only after the user approves. When no profile exists, `read --json` returns
   `tests/adapters/get-status-contract.test.js` (status surface) and
   `tests/adapters/materialise.test.js` (file-write helper).
 
+## GitHub interaction in coding sessions
+
+- `docs/plans/connected-capabilities.md` is the normative foundation for every
+  external connection. GitHub, Cloudflare, LLM tools, and future providers
+  share one connection registry, token-free descriptors, readiness/repair
+  vocabulary, source/session binding, and short-lived broker-grant model.
+  Provider commands, adapters, brokers, and executors must not import Keychain
+  or mc vault code; only the common identity service may read the first-party
+  local Memoro device identity.
+- `docs/plans/github-app-capability.md` is the normative product and security
+  provider contract. The target is one central Memoro GitHub App and the same
+  typed mc broker operations for local and cloud sessions.
+- GitHub credentials are not mc vault material. App private keys and durable
+  connection authority stay in the Memoro control plane; short-lived
+  installation credentials must never enter the coding-tool child environment,
+  argv, files, prompt, transcript, logs, browser payloads, or session records.
+- GitHub behavior belongs to mc core and its source/session broker, not an LLM
+  adapter. All tools get the same token-free capability descriptor, operations,
+  hard operation policy, errors, and compatibility surface. The coding-tool
+  host applies the user's native approval settings to mutating invocations; mc
+  does not store, override, or duplicate that preference.
+- `mc github` is canonical. A session-scoped `gh` compatibility shim may map
+  only allowlisted commands to typed broker operations. Never invoke or expose
+  `gh auth token`, `gh auth status --show-token`, arbitrary `gh api`, GraphQL,
+  extensions, or real-CLI passthrough inside the managed capability.
+- The local host-keyring/preflight prototype is transitional and superseded by
+  the central-App contract. Do not expand it or treat `MC_HOST_CAPABILITIES` or
+  `MC_HOST_GH_BIN` as public interfaces. Cloud must work with the local machine
+  offline, and neither source may fall back implicitly to a local `gh` login.
+
 ## Critical paths — extra care
 
 - `src/commands/auth.js` — Memoro keychain accounts, browser OAuth

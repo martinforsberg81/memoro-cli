@@ -1,6 +1,10 @@
 import { join } from 'node:path';
 
 import { deriveRepoName } from '../lib/git-context.js';
+import {
+  resolveSessionSourceIdentity,
+  sanitizeSessionProjection,
+} from './session-projector.js';
 
 export function wrapRuntimePaths({ mcDir, codingSessionId } = {}) {
   if (!mcDir) throw new Error('wrapRuntimePaths: mcDir required');
@@ -49,11 +53,14 @@ export function buildHeartbeatBase({
   heartbeatSource,
   repoContext,
   label = null,
+  sourceIdentity = null,
 } = {}) {
   if (!codingSessionId) throw new Error('buildHeartbeatBase: codingSessionId required');
+  const identity = sourceIdentity || resolveSessionSourceIdentity({ machineId });
   return {
     coding_session_id: codingSessionId,
     machine_id: machineId || null,
+    ...identity,
     source: heartbeatSource || null,
     repo: deriveRepoName(repoContext),
     branch: repoContext?.branch || null,
@@ -70,6 +77,7 @@ export function buildHeartbeatPayload({
   now = Date.now(),
   excerptMax,
   extractExcerpt,
+  sessionProjection = null,
 } = {}) {
   if (!base || typeof base !== 'object') {
     throw new Error('buildHeartbeatPayload: base required');
@@ -79,11 +87,13 @@ export function buildHeartbeatPayload({
   }
   const nowMs = timestampMs(now);
   const lastMs = timestampMs(lastOutputAt ?? nowMs);
+  const projection = sanitizeSessionProjection(sessionProjection);
   return {
     ...base,
     last_assistant_excerpt: extractExcerpt(outputBuffer, excerptMax),
     idle_seconds: Math.max(0, Math.floor((nowMs - lastMs) / 1000)),
     at: new Date(nowMs).toISOString(),
+    ...(projection ? { session_projection: projection } : {}),
   };
 }
 

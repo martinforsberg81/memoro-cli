@@ -7,6 +7,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- `mc dev list|status|logs|stop|restart` provides a machine-local development
+  server inventory backed by project-owned manifests. Controls require matching
+  manifest, worktree, and process-group identity; `mc status` and `mc doctor`
+  now surface unhealthy and orphaned dev services.
 - `mc setup` now offers opt-in local image/motion resource profiles. The
   default remains unlimited; balanced, conservative, and custom profiles add
   cross-session concurrency, compute-thread, disk/swap, background-scheduling,

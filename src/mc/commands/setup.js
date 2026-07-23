@@ -1,5 +1,5 @@
 /**
- * `mc setup [--json] [--resource-profile <name>]` (§11b).
+ * `mc setup [--json] [--resource-profile <name>] [--dependency-mode <mode>]` (§11b).
  *
  * Runs every health probe `mc auth status` already exposes, then either:
  *
@@ -30,6 +30,7 @@ import {
   probeShellWrapper,
   probeWorkspace,
 } from './auth.js';
+import { createConnectionClient } from '../connections/client.js';
 import { promptLine } from '../../lib/prompt.js';
 import { readConfig, writeConfig } from '../../lib/config.js';
 import {
@@ -45,6 +46,12 @@ import {
   resolveLocalResourceProfile,
   withLocalResourceProfile,
 } from '../local-resource-profile.js';
+import {
+  DEPENDENCY_MODES,
+  describeDependencyMode,
+  resolveDependencyMode,
+  withDependencyMode,
+} from '../dependency-mode.js';
 
 // Required tools — at least one of these must be ready for setup to consider
 // the machine usable. Codex is the default mc tool; its auth probe can be
@@ -60,16 +67,19 @@ export async function run(argv, deps = {}) {
   const writeConfigFn = deps.writeConfig || writeConfig;
   let config = await readConfigFn();
   let resourceProfile = resolveLocalResourceProfile(config);
+  let dependencyMode = resolveDependencyMode(config);
   const recommendedProfile = recommendLocalResourceProfile({
     totalMemoryBytes: deps.totalMemoryBytes,
   });
+  const interactive = !opts.json && (deps.stdinIsTTY ?? process.stdin.isTTY);
 
   try {
+    let configChanged = false;
     if (opts.resourceProfile) {
       resourceProfile = profileFromOptions(opts);
       config = withLocalResourceProfile(config, resourceProfile);
-      await writeConfigFn(config);
-    } else if (!opts.json && (deps.stdinIsTTY ?? process.stdin.isTTY)) {
+      configChanged = true;
+    } else if (interactive) {
       resourceProfile = await promptLocalResourceProfile({
         current: resourceProfile,
         recommended: recommendedProfile,
@@ -77,6 +87,22 @@ export async function run(argv, deps = {}) {
         stdout: deps.stdout || process.stdout,
       });
       config = withLocalResourceProfile(config, resourceProfile);
+      configChanged = true;
+    }
+    if (opts.dependencyMode) {
+      dependencyMode = opts.dependencyMode;
+      config = withDependencyMode(config, dependencyMode);
+      configChanged = true;
+    } else if (interactive) {
+      dependencyMode = await promptDependencyMode({
+        current: dependencyMode,
+        ask: deps.promptLine || promptLine,
+        stdout: deps.stdout || process.stdout,
+      });
+      config = withDependencyMode(config, dependencyMode);
+      configChanged = true;
+    }
+    if (configChanged) {
       await writeConfigFn(config);
     }
   } catch (err) {
@@ -84,7 +110,7 @@ export async function run(argv, deps = {}) {
     return 2;
   }
 
-  const report = await buildReport();
+  const report = await buildReport(deps);
   const steps = missingSteps(report);
   const resourceReport = {
     ...resourceProfile,
@@ -96,28 +122,48 @@ export async function run(argv, deps = {}) {
       ok: steps.length === 0,
       report,
       resource_profile: resourceReport,
+      dependency_mode: dependencyMode,
       missing_steps: steps,
       sentinel_path: sentinelPath(),
     }, null, 2));
   } else if (steps.length === 0) {
-    printAllSet(report, resourceReport);
+    printAllSet(report, resourceReport, dependencyMode);
   } else {
-    printChecklist(steps, resourceReport);
+    printChecklist(steps, resourceReport, dependencyMode);
   }
 
   if (steps.length === 0) writeSentinel();
   return steps.length === 0 ? 0 : 1;
 }
 
-async function buildReport() {
+async function buildReport(deps = {}) {
   const memoro = await probeMemoro();
   const tools = {};
   for (const t of [...REQUIRED_TOOLS, ...OPTIONAL_TOOLS]) {
     tools[t] = await getToolStatus(t);
   }
+  const connectionClient = deps.connectionClient || createConnectionClient(deps);
+  const connections = [];
+  for (const provider of connectionClient.providers().filter((item) => item.onboarding)) {
+    try {
+      connections.push(await connectionClient.status(provider.id));
+    } catch {
+      connections.push({
+        schema: 1,
+        provider: { id: provider.id, label: provider.label, custody: provider.custody },
+        state: 'unavailable',
+        repair_action: 'retry',
+        account: null,
+        resources: [],
+        sources: { local: 'unavailable', cloud: 'unavailable' },
+        capabilities: [],
+      });
+    }
+  }
   return {
     memoro,
     tools,
+    connections,
     shell_wrapper: probeShellWrapper(),
     workspace: probeWorkspace(),
   };
@@ -178,6 +224,21 @@ export function missingSteps(report) {
     }
   }
 
+  for (const connection of report.memoro.authenticated ? (report.connections || []) : []) {
+    if (connection.state === 'ready') continue;
+    const provider = connection.provider;
+    const action = connection.repair_action || 'retry';
+    const command = ['retry', 'contact_admin'].includes(action)
+      ? `mc connections status ${provider.id}`
+      : `mc connections repair ${provider.id}`;
+    steps.push({
+      id: `connection-${provider.id}-${action}`,
+      title: `Connect ${provider.label}`,
+      command,
+      note: `Connection state: ${connection.state}. Repair action: ${action}.`,
+    });
+  }
+
   if (!report.shell_wrapper.installed) {
     steps.push({
       id: 'install-shell',
@@ -210,7 +271,7 @@ function extractCommand(hint) {
   return m ? m[1] : null;
 }
 
-function printAllSet(report, resourceReport) {
+function printAllSet(report, resourceReport, dependencyMode) {
   process.stdout.write(`mc setup — all set up.\n`);
   process.stdout.write(`  ✓ Memoro signed in\n`);
   for (const t of REQUIRED_TOOLS) {
@@ -223,17 +284,23 @@ function printAllSet(report, resourceReport) {
   if (report.shell_wrapper.installed) {
     process.stdout.write(`  ✓ Shell wrapper installed (${report.shell_wrapper.rc})\n`);
   }
+  for (const connection of report.connections || []) {
+    if (connection.state === 'ready') {
+      process.stdout.write(`  ✓ ${connection.provider.label} connected\n`);
+    }
+  }
   // Surface optional tools that ARE installed as a bonus line.
   const optionalReady = OPTIONAL_TOOLS.filter((t) => report.tools[t]?.installed);
   if (optionalReady.length) {
     process.stdout.write(`  ✓ Optional: ${optionalReady.map(labelFor).join(', ')} available\n`);
   }
   printResourceProfile(resourceReport);
+  printDependencyMode(dependencyMode);
   process.stdout.write(`\nNext: from a git repo, run \`mc new <name> [focus]\` to start a session.\n`);
 }
 
-function printChecklist(steps, resourceReport) {
-  process.stdout.write(`mc setup — ${steps.length} local setup step${steps.length === 1 ? '' : 's'} left:\n\n`);
+function printChecklist(steps, resourceReport, dependencyMode) {
+  process.stdout.write(`mc setup — ${steps.length} setup step${steps.length === 1 ? '' : 's'} left:\n\n`);
   for (let i = 0; i < steps.length; i++) {
     const s = steps[i];
     process.stdout.write(`  ${i + 1}. ${s.title}\n`);
@@ -242,6 +309,7 @@ function printChecklist(steps, resourceReport) {
     process.stdout.write(`\n`);
   }
   printResourceProfile(resourceReport);
+  printDependencyMode(dependencyMode);
   process.stdout.write(`Re-run \`mc setup\` when done to verify.\n`);
 }
 
@@ -250,6 +318,35 @@ function printResourceProfile(resourceReport) {
   if (resourceReport.profile !== resourceReport.recommended) {
     process.stdout.write(`    Suggested for this machine: ${resourceReport.recommended} (not selected automatically)\n`);
   }
+}
+
+function printDependencyMode(mode) {
+  process.stdout.write(`  ✓ Project dependencies: ${describeDependencyMode(mode)}\n`);
+}
+
+export async function promptDependencyMode({
+  current = 'auto',
+  ask = promptLine,
+  stdout = process.stdout,
+} = {}) {
+  const selectedCurrent = DEPENDENCY_MODES.includes(current) ? current : 'auto';
+  const choices = [
+    ['auto', 'Reuse immutable local snapshots; install on an explicit hydrate cache miss'],
+    ['isolated', 'Install only inside each worktree; never read or write snapshots'],
+    ['off', 'mc never installs project dependencies'],
+  ];
+  const defaultIndex = choices.findIndex(([name]) => name === selectedCurrent);
+  stdout.write('\nProject dependency mode:\n');
+  choices.forEach(([name, description], index) => {
+    const selected = name === selectedCurrent ? ' (current)' : '';
+    stdout.write(`  ${index + 1}. ${title(name)}${selected}: ${description}\n`);
+  });
+  const answer = String(await ask(`Choose [${defaultIndex + 1}]: `) || '').trim().toLowerCase();
+  const selected = answer
+    ? choices[Number(answer) - 1]?.[0] || choices.find(([name]) => name === answer)?.[0]
+    : choices[defaultIndex][0];
+  if (!selected) throw new Error(`unknown dependency mode choice: ${answer}`);
+  return selected;
 }
 
 export async function promptLocalResourceProfile({
@@ -336,7 +433,7 @@ export const sentinelPath = freshInstallSentinelPath;
 export const writeSentinel = freshInstallEnsureSentinel;
 
 export function parseArgs(argv) {
-  const opts = { json: false, resourceProfile: null, custom: {} };
+  const opts = { json: false, resourceProfile: null, dependencyMode: null, custom: {} };
   const customFlags = {
     '--heavy-max-concurrent': 'maxConcurrent',
     '--heavy-max-threads': 'maxThreads',
@@ -353,6 +450,14 @@ export function parseArgs(argv) {
         return { error: `--resource-profile must be one of: ${LOCAL_RESOURCE_PROFILE_NAMES.join(', ')}` };
       }
       opts.resourceProfile = value;
+      continue;
+    }
+    if (a === '--dependency-mode') {
+      const value = String(argv[++i] || '').toLowerCase();
+      if (!DEPENDENCY_MODES.includes(value)) {
+        return { error: `--dependency-mode must be one of: ${DEPENDENCY_MODES.join(', ')}` };
+      }
+      opts.dependencyMode = value;
       continue;
     }
     if (customFlags[a]) {
