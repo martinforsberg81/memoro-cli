@@ -160,10 +160,43 @@ describe('mc status <name>', () => {
     for (const k of [
       'name', 'branch', 'safety_verdict', 'dirty_files', 'ahead',
       'last_activity', 'session_state', 'tool', 'relaunch_command',
-      'effective_policy',
+      'effective_policy', 'work_status',
     ]) {
       assert.ok(k in j, `field ${k} missing from status output`);
     }
+  });
+
+  test('includes dev servers owned by the session worktree', async () => {
+    const stdout = [];
+    const code = await runStatus(['with-dev', '--json'], {
+      stdout: { write: (s) => stdout.push(s) },
+      stderr: { write: () => {} },
+      findEntry: () => makeEntry({
+        name: 'with-dev',
+        worktree_path: '/tmp/with-dev',
+        session_state: 'idle',
+      }),
+      readConfig: async () => ({}),
+      fetchBrokerStatus: async () => ({ ok: true, sessions: [] }),
+      fetchActiveSessions: async () => ({ ok: true, sessions: [] }),
+      listDevServers: async () => [{
+        instance_id: 'dev-with-dev',
+        session_name: 'with-dev',
+        worktree_path: '/tmp/with-dev',
+        state: 'ready',
+      }],
+    });
+
+    assert.equal(code, 0);
+    assert.deepEqual(parseJsonOrNull(stdout.join('')).dev_servers, {
+      summary: { total: 1, ready: 1, starting: 0, unhealthy: 0, orphan: 0 },
+      servers: [{
+        instance_id: 'dev-with-dev',
+        session_name: 'with-dev',
+        worktree_path: '/tmp/with-dev',
+        state: 'ready',
+      }],
+    });
   });
 
   test('stale live registry state is downgraded when active lookup succeeds', async () => {
@@ -191,6 +224,7 @@ describe('mc status <name>', () => {
     assert.equal(j.reachability, 'stale');
     assert.equal(j.safety_verdict, 'SAFE_TO_END');
     assert.equal(j.active_session, null);
+    assert.equal(j.work_status.status, 'resting');
   });
 
   test('active lookup can mark an idle registry entry as reachable', async () => {
@@ -224,6 +258,7 @@ describe('mc status <name>', () => {
     assert.equal(j.session_state, 'live');
     assert.equal(j.reachability, 'reachable');
     assert.equal(j.active_session.coding_session_id, 'sess_reachable1');
+    assert.equal(j.work_status.status, 'active');
   });
 
   test('local broker reachability wins before cloud active lookup', async () => {

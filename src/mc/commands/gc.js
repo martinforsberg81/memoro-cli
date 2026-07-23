@@ -27,6 +27,12 @@ import {
   scanRuntimeCleanup,
   staleWorktreeCandidates,
 } from '../storage-management.js';
+import {
+  DEFAULT_DEPENDENCY_SNAPSHOT_MIN_AGE_MS,
+  dependencySnapshotScanJson,
+  reapDependencySnapshots,
+  scanDependencySnapshots,
+} from '../dependency-snapshot-storage.js';
 
 export async function run(argv) {
   const opts = parseArgs(argv);
@@ -41,6 +47,10 @@ export async function run(argv) {
 
   if (opts.runtime) {
     return runRuntime(opts);
+  }
+
+  if (opts.dependencySnapshots) {
+    return runDependencySnapshots(opts);
   }
 
   if (opts.sidecars) {
@@ -151,9 +161,11 @@ function parseArgs(argv) {
     sidecars: false,
     staleWorktrees: false,
     runtime: false,
+    dependencySnapshots: false,
     allSafe: false,
     apply: false,
     minAgeMs: DEFAULT_MIN_AGE_MS,
+    minAgeSet: false,
     onlyNames: [],
   };
   for (let i = 0; i < argv.length; i++) {
@@ -166,6 +178,10 @@ function parseArgs(argv) {
     if (a === '--runtime') {
       opts.runtime = true;
       if (opts.minAgeMs === DEFAULT_MIN_AGE_MS) opts.minAgeMs = DEFAULT_SIDECAR_MIN_AGE_MS;
+      continue;
+    }
+    if (a === '--dependency-snapshots' || a === '--snapshots') {
+      opts.dependencySnapshots = true;
       continue;
     }
     if (a === '--all-safe') {
@@ -183,6 +199,7 @@ function parseArgs(argv) {
       const ms = parseDurationMs(v);
       if (ms == null) return { error: `--min-age expects a duration like 5m / 30s / 1h, got "${v}"` };
       opts.minAgeMs = ms;
+      opts.minAgeSet = true;
       continue;
     }
     if (a === '--only') {
@@ -195,13 +212,16 @@ function parseArgs(argv) {
     return { error: `unknown flag: ${a}` };
   }
   if (opts.dryRun && opts.apply) return { error: '--dry-run and --apply cannot be combined' };
-  const modes = [opts.reapOrphans, opts.sidecars, opts.staleWorktrees, opts.runtime, opts.allSafe].filter(Boolean).length;
-  if (modes > 1) return { error: '--reap-orphans, --sidecars, --runtime, --stale-worktrees, and --all-safe cannot be combined' };
+  const modes = [opts.reapOrphans, opts.sidecars, opts.staleWorktrees, opts.runtime, opts.dependencySnapshots, opts.allSafe].filter(Boolean).length;
+  if (modes > 1) return { error: '--reap-orphans, --sidecars, --runtime, --dependency-snapshots, --stale-worktrees, and --all-safe cannot be combined' };
   if (opts.onlyNames.length && !opts.staleWorktrees) {
     return { error: '--only can only be used with --stale-worktrees' };
   }
   if (opts.allSafe && !opts.dryRun && !opts.apply) {
     return { error: '--all-safe requires --dry-run or --apply' };
+  }
+  if (opts.dependencySnapshots && !opts.dryRun && !opts.apply) {
+    return { error: '--dependency-snapshots requires --dry-run or --apply' };
   }
   return opts;
 }
@@ -306,20 +326,39 @@ async function runRuntime(opts) {
   return outcome.ok ? 0 : 1;
 }
 
+function runDependencySnapshots(opts) {
+  const scan = scanDependencySnapshots({
+    minAgeMs: snapshotMinAge(opts),
+  });
+  if (opts.dryRun) {
+    const out = { dry_run: true, dependency_snapshots: dependencySnapshotScanJson(scan) };
+    if (opts.json) console.log(JSON.stringify(out, null, 2));
+    else printDependencySnapshots(scan, null);
+    return 0;
+  }
+  const outcome = reapDependencySnapshots(scan);
+  if (opts.json) console.log(JSON.stringify({ ok: outcome.ok, dependency_snapshots: outcome }, null, 2));
+  else printDependencySnapshots(scan, outcome);
+  return outcome.ok ? 0 : 1;
+}
+
 async function runAllSafe(opts) {
   const reg = readRegistry();
   const runtime = await scanRuntimeCleanup({ minAgeMs: opts.minAgeMs, registry: reg });
   const worktreeCandidates = await staleWorktreeCandidates(reg);
+  const dependencySnapshots = scanDependencySnapshots({ minAgeMs: snapshotMinAge(opts) });
 
   if (opts.dryRun) {
     const out = {
       dry_run: true,
       runtime: runtimeDryRunJson(runtime),
+      dependency_snapshots: dependencySnapshotScanJson(dependencySnapshots),
       stale_worktrees: worktreeCandidates.map(toWorktreeCandidateJson),
     };
     if (opts.json) console.log(JSON.stringify(out, null, 2));
     else {
       printRuntimeScan(runtime, { outcome: null });
+      printDependencySnapshots(dependencySnapshots, null);
       printWorktreeCandidates(worktreeCandidates);
     }
     return 0;
@@ -327,17 +366,24 @@ async function runAllSafe(opts) {
 
   const runtimeOutcome = reapRuntimeCleanup(runtime);
   const worktreeOutcome = await reapWorktrees(worktreeCandidates);
+  const dependencySnapshotOutcome = reapDependencySnapshots(dependencySnapshots);
   const result = {
-    ok: runtimeOutcome.ok && worktreeOutcome.ok,
+    ok: runtimeOutcome.ok && worktreeOutcome.ok && dependencySnapshotOutcome.ok,
     runtime: runtimeOutcome,
+    dependency_snapshots: dependencySnapshotOutcome,
     worktrees: worktreeOutcome,
   };
   if (opts.json) console.log(JSON.stringify(result, null, 2));
   else {
     printRuntimeScan(runtime, { outcome: runtimeOutcome });
+    printDependencySnapshots(dependencySnapshots, dependencySnapshotOutcome);
     emitWorktreeResult(worktreeOutcome, opts);
   }
   return result.ok ? 0 : 1;
+}
+
+function snapshotMinAge(opts) {
+  return opts.minAgeSet ? opts.minAgeMs : DEFAULT_DEPENDENCY_SNAPSHOT_MIN_AGE_MS;
 }
 
 function runtimeDryRunJson(scan) {
@@ -418,5 +464,20 @@ function printWorktreeCandidates(candidates) {
   }
   for (const c of candidates) {
     process.stdout.write(`worktree  ${c.name}  ${c.branch}  (would remove)\n`);
+  }
+}
+
+function printDependencySnapshots(scan, outcome) {
+  const items = outcome?.removed || scan.candidates;
+  if (!items.length) {
+    process.stdout.write('(no stale dependency snapshots)\n');
+    return;
+  }
+  for (const item of items) {
+    const status = outcome ? '✓ removed' : '(would remove)';
+    process.stdout.write(`dependency-snapshot  ${item.digest.slice(0, 12)}  ${item.state}  ${status}\n`);
+  }
+  for (const item of outcome?.skipped || []) {
+    process.stdout.write(`dependency-snapshot  ${item.digest.slice(0, 12)}  skipped (${item.reason})\n`);
   }
 }

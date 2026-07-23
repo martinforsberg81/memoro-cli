@@ -207,6 +207,46 @@ describe('CloudBrokerClient', () => {
     client.stop();
   });
 
+  test('forwards only validated session projection metadata to cloud inventory', async () => {
+    resetFakeWs();
+    const projection = {
+      contract_version: 'mc-session-projection-v1',
+      status: 'active',
+      reason_code: 'tool_activity',
+      observed_at: '2026-07-21T08:00:00.000Z',
+      classifier_version: 'mc-session-projector-v1',
+      classification_basis: 'structured_event',
+      runtime: { lifecycle: 'live', observed_at: '2026-07-21T08:00:00.000Z' },
+      git: null,
+    };
+    const client = new CloudBrokerClient({
+      apiUrl: 'https://memoro.test',
+      token: 'tok',
+      machineId: 'machine',
+      WebSocketImpl: FakeWebSocket,
+      request: async () => ({
+        ok: true,
+        sessions: [
+          { id: 'sess_valid', session_projection: projection },
+          { id: 'sess_invalid', session_projection: { ...projection, raw_output: 'secret' } },
+        ],
+      }),
+      sleepImpl: async () => {},
+    });
+
+    client.start();
+    const control = FakeWebSocket.instances[0];
+    control.open();
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const inventory = control.sent.map((value) => JSON.parse(value))
+      .find((message) => message.type === 'sessions');
+    assert.deepEqual(inventory.sessions[0].session_projection, projection);
+    assert.equal(Object.hasOwn(inventory.sessions[1], 'session_projection'), false);
+    assert.doesNotMatch(JSON.stringify(inventory), /secret/);
+    client.stop();
+  });
+
   test('executes cloud stop/remove commands against the local broker', async () => {
     resetFakeWs();
     const requests = [];

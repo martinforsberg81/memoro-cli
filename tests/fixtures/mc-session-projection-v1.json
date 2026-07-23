@@ -1,0 +1,105 @@
+{
+  "contract_version": "mc-session-projection-v1",
+  "valid": [
+    {
+      "name": "active_tool_activity",
+      "projection": {
+        "contract_version": "mc-session-projection-v1",
+        "status": "active",
+        "reason_code": "tool_activity",
+        "observed_at": "2026-07-21T08:00:00.000Z",
+        "classifier_version": "mc-session-projector-v1",
+        "classification_basis": "structured_event",
+        "runtime": {
+          "lifecycle": "live",
+          "observed_at": "2026-07-21T08:00:00.000Z"
+        },
+        "git": null
+      }
+    },
+    {
+      "name": "attention_question",
+      "projection": {
+        "contract_version": "mc-session-projection-v1",
+        "status": "needs_attention",
+        "reason_code": "awaiting_reply",
+        "observed_at": "2026-07-21T08:00:00.000Z",
+        "classifier_version": "mc-session-projector-v1",
+        "classification_basis": "deterministic_final_turn",
+        "runtime": {
+          "lifecycle": "live",
+          "observed_at": "2026-07-21T08:00:00.000Z"
+        },
+        "git": null
+      }
+    },
+    {
+      "name": "resting_without_conclusion",
+      "projection": {
+        "contract_version": "mc-session-projection-v1",
+        "status": "resting",
+        "reason_code": "stopped_without_conclusion",
+        "observed_at": "2026-07-21T08:00:00.000Z",
+        "classifier_version": "mc-session-projector-v1",
+        "classification_basis": "runtime_fallback",
+        "runtime": {
+          "lifecycle": "stopped",
+          "observed_at": "2026-07-21T08:00:00.000Z"
+        },
+        "git": null
+      }
+    },
+    {
+      "name": "completed_agent_conclusion",
+      "projection": {
+        "contract_version": "mc-session-projection-v1",
+        "status": "completed",
+        "reason_code": "agent_concluded",
+        "observed_at": "2026-07-21T08:00:00.000Z",
+        "classifier_version": "mc-session-projector-v1",
+        "classification_basis": "deterministic_final_turn",
+        "runtime": {
+          "lifecycle": "stopped",
+          "observed_at": "2026-07-21T08:00:00.000Z"
+        },
+        "git": {
+          "current_branch": "main",
+          "dirty_files": 0,
+          "ahead": 0,
+          "behind": 0,
+          "safety_verdict": "SAFE_TO_END",
+          "observed_at": "2026-07-21T08:00:00.000Z"
+        }
+      }
+    }
+  ],
+  "invalid": [
+    {
+      "name": "completion_from_runtime_fallback",
+      "projection": {
+        "contract_version": "mc-session-projection-v1",
+        "status": "completed",
+        "reason_code": "agent_concluded",
+        "observed_at": "2026-07-21T08:00:00.000Z",
+        "classifier_version": "mc-session-projector-v1",
+        "classification_basis": "runtime_fallback",
+        "runtime": null,
+        "git": null
+      }
+    },
+    {
+      "name": "raw_output_field",
+      "projection": {
+        "contract_version": "mc-session-projection-v1",
+        "status": "active",
+        "reason_code": "recent_output",
+        "observed_at": "2026-07-21T08:00:00.000Z",
+        "classifier_version": "mc-session-projector-v1",
+        "classification_basis": "runtime_fallback",
+        "runtime": null,
+        "git": null,
+        "raw_output": "must never cross the boundary"
+      }
+    }
+  ]
+}

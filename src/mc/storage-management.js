@@ -13,6 +13,11 @@ import {
 } from './sidecar-cleanup.js';
 import { listLocalBrokerAndHostSessions } from './broker/session-hosts.js';
 import { sessionHostPaths } from './broker/paths.js';
+import {
+  DEFAULT_DEPENDENCY_SNAPSHOT_MIN_AGE_MS,
+  dependencySnapshotScanJson,
+  scanDependencySnapshots,
+} from './dependency-snapshot-storage.js';
 
 export const DEFAULT_RUNTIME_MIN_AGE_MS = Math.min(DEFAULT_MIN_AGE_MS, DEFAULT_SIDECAR_MIN_AGE_MS);
 
@@ -20,6 +25,7 @@ export async function buildStorageSnapshot({
   mcDir = mcHome(),
   registry = readRegistry(),
   minAgeMs = DEFAULT_RUNTIME_MIN_AGE_MS,
+  dependencySnapshotMinAgeMs = DEFAULT_DEPENDENCY_SNAPSHOT_MIN_AGE_MS,
   now = Date.now(),
   includeDisk = true,
   listSessions = listLocalBrokerAndHostSessions,
@@ -38,16 +44,22 @@ export async function buildStorageSnapshot({
     .filter((item) => item.cleanup_candidate)
     .map((item) => enrichWorktreeCandidate(item.entry))
     .sort(compareReclaimableCandidates);
+  const dependencySnapshots = scanDependencySnapshots({
+    mcDir,
+    minAgeMs: dependencySnapshotMinAgeMs,
+    now,
+  });
 
   return {
     mc_home: mcDir,
     generated_at: new Date(now).toISOString(),
-    summary: summarizeStorage({ entries, worktrees, runtime }),
+    summary: summarizeStorage({ entries, worktrees, runtime, dependencySnapshots }),
     disk: includeDisk ? diskUsageSnapshot(mcDir) : null,
     runtime: runtimeToJson(runtime),
+    dependency_snapshots: dependencySnapshotScanJson(dependencySnapshots),
     worktrees,
     stale_worktrees: staleWorktrees.map(toWorktreeCandidateJson),
-    issues: buildIssues({ entries, worktrees, runtime }),
+    issues: buildIssues({ entries, worktrees, runtime, dependencySnapshots }),
   };
 }
 
@@ -238,7 +250,7 @@ function commitsAheadMain(primary, branch) {
   return Number.isFinite(ahead) ? ahead : null;
 }
 
-function summarizeStorage({ entries, worktrees, runtime }) {
+function summarizeStorage({ entries, worktrees, runtime, dependencySnapshots }) {
   const byState = {};
   for (const entry of entries) {
     const state = entry?.session_state || 'no-session-yet';
@@ -267,10 +279,15 @@ function summarizeStorage({ entries, worktrees, runtime }) {
       stale_pidfiles: runtime.counts.stale_pidfiles,
       sidecar_candidates: runtime.counts.sidecar_candidates,
     },
+    dependency_snapshots: {
+      ...dependencySnapshots.counts,
+      disk_bytes: dependencySnapshots.disk_bytes,
+      reclaimable_bytes: dependencySnapshots.reclaimable_bytes,
+    },
   };
 }
 
-function buildIssues({ entries, worktrees, runtime }) {
+function buildIssues({ entries, worktrees, runtime, dependencySnapshots }) {
   const issues = [];
   const providerMissing = worktrees.filter((item) => item.provider.needs_backfill);
   if (providerMissing.length) {
@@ -315,6 +332,14 @@ function buildIssues({ entries, worktrees, runtime }) {
       code: 'stale-worktrees',
       count: stale.length,
       names: stale.map((item) => item.name).filter(Boolean),
+    });
+  }
+  if (dependencySnapshots.counts.candidates) {
+    issues.push({
+      severity: 'cleanup',
+      code: 'stale-dependency-snapshots',
+      count: dependencySnapshots.counts.candidates,
+      reclaimable_bytes: dependencySnapshots.reclaimable_bytes,
     });
   }
   if (!entries.length) {
@@ -366,6 +391,7 @@ function diskUsageSnapshot(mcDir) {
     worktrees: duBytes(join(mcDir, 'worktrees')),
     hosts: duBytes(join(mcDir, 'hosts')),
     guard_bin: duBytes(join(mcDir, 'guard-bin')),
+    dependency_snapshots: duBytes(join(mcDir, 'dependency-snapshots')),
     registry: duBytes(join(mcDir, 'registry.json')),
   };
 }

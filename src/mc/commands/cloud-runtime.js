@@ -43,6 +43,10 @@ const CLOUD_SESSION_ID_RE = /^cld_[a-zA-Z0-9_-]{6,}$/;
 const DEFAULT_RUNTIME_DIR = '/workspace/mc-runtime';
 const DEFAULT_REPO_CWD = '/workspace/repo';
 const DEFAULT_API_URL = 'https://meetmemoro.app';
+const DEFAULT_WORKSPACE_CLONE_TIMEOUT_MS = 90_000;
+const WORKSPACE_PREPARE_WATCHDOG_GRACE_MS = 15_000;
+const PROCESS_FORCE_KILL_GRACE_MS = 2_000;
+const PROCESS_FORCE_RESOLVE_GRACE_MS = 250;
 const GITHUB_SHORTHAND_RE = /^[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+$/;
 const SECRET_ENV_NAMES_AFTER_WORKSPACE = Object.freeze([
   'MC_CLOUD_GIT_TOKEN',
@@ -155,14 +159,60 @@ export async function runCloudRuntimeWith(opts, deps = {}) {
     phase: CLOUD_LIFECYCLE.WAKING,
     runtime_state: 'preparing_workspace',
     process_status: 'running',
-    events: [{ type: 'workspace.prepare.started', data: { cwd: workspaceDir } }],
+    events: [{
+      type: 'workspace.prepare.started',
+      data: {
+        cwd: workspaceDir,
+        repo_ref: safeRuntimeRepoRef(manifest.repo?.ref),
+        workspace_ref: stringOrNull(manifest.repo?.workspace_ref),
+        strategy: repoCloneUrl(safeRuntimeRepoRef(manifest.repo?.ref)) ? 'partial_clone' : 'empty_init',
+      },
+    }],
   });
 
-  const workspace = await prepareWorkspace(manifest, {
-    env,
-    deps,
-    cwd: workspaceDir,
-  });
+  const workspaceAbortController = new AbortController();
+  const cloneTimeoutMs = workspaceCloneTimeoutMs(deps.workspaceCloneTimeoutMs);
+  const workspaceTimeoutMs = workspacePrepareTimeoutMs(
+    deps.workspacePrepareTimeoutMs,
+    cloneTimeoutMs,
+  );
+  const prepareWorkspaceFn = deps.prepareWorkspace || prepareWorkspace;
+  const workspaceOperation = Promise.resolve()
+    .then(() => prepareWorkspaceFn(manifest, {
+      env,
+      cwd: workspaceDir,
+      deps: {
+        ...deps,
+        workspaceCloneTimeoutMs: cloneTimeoutMs,
+        workspaceAbortSignal: workspaceAbortController.signal,
+        onWorkspaceProgress: async ({ type, data }) => {
+          await runtime.record({
+            phase: CLOUD_LIFECYCLE.WAKING,
+            runtime_state: 'preparing_workspace',
+            process_status: 'running',
+            events: [{ type, data }],
+          });
+        },
+      },
+    }))
+    .catch((err) => ({
+      ok: false,
+      code: 'workspace_prepare_failed',
+      error: `workspace prepare failed: ${safeError(err)}`,
+      cwd: workspaceDir,
+      repo_ref: safeRuntimeRepoRef(manifest.repo?.ref),
+      workspace_ref: stringOrNull(manifest.repo?.workspace_ref),
+    }));
+  const workspace = await withWorkspacePrepareWatchdog(
+    workspaceOperation,
+    {
+      timeoutMs: workspaceTimeoutMs,
+      abortController: workspaceAbortController,
+      cwd: workspaceDir,
+      repoRef: safeRuntimeRepoRef(manifest.repo?.ref),
+      workspaceRef: stringOrNull(manifest.repo?.workspace_ref),
+    },
+  );
   if (!workspace.ok) {
     await runtime.record({
       phase: CLOUD_LIFECYCLE.FAILED,
@@ -510,6 +560,12 @@ export async function prepareWorkspace(manifest, {
   const mkdir = deps.mkdir || mkdirSync;
   const remove = deps.rm || rmSync;
 
+  await reportWorkspaceProgress(deps, 'workspace.prepare.inspecting', {
+    cwd,
+    repo_ref: repoRef,
+    workspace_ref: branch,
+  });
+
   if (existing(join(cwd, '.git'))) {
     return {
       ok: true,
@@ -536,14 +592,40 @@ export async function prepareWorkspace(manifest, {
   mkdir(dirname(cwd), { recursive: true, mode: 0o700 });
 
   if (cloneUrl) {
-    const cloneArgs = ['clone', '--depth', '1'];
+    const cloneTimeoutMs = workspaceCloneTimeoutMs(deps.workspaceCloneTimeoutMs);
+    const cloneArgs = [
+      '-c',
+      'protocol.version=2',
+      'clone',
+      '--depth',
+      '1',
+      '--filter=blob:none',
+      '--single-branch',
+      '--no-tags',
+    ];
     if (branch) cloneArgs.push('--branch', branch);
     cloneArgs.push(cloneUrl, cwd);
+    await reportWorkspaceProgress(deps, 'workspace.clone.started', {
+      cwd,
+      repo_ref: repoRef,
+      workspace_ref: branch,
+      timeout_ms: cloneTimeoutMs,
+      strategy: 'partial_clone',
+    });
     const clone = await runGit(cloneArgs, {
       env,
       deps,
       runProcess,
       credentialHelper: gitCredentialHelper(manifest, env),
+      timeoutMs: cloneTimeoutMs,
+    });
+    await reportWorkspaceProgress(deps, 'workspace.clone.finished', {
+      cwd,
+      repo_ref: repoRef,
+      workspace_ref: branch,
+      ok: clone.ok,
+      exit_code: Number.isInteger(clone.code) ? clone.code : null,
+      timed_out: clone.timedOut === true,
     });
     if (clone.ok) {
       return {
@@ -558,11 +640,20 @@ export async function prepareWorkspace(manifest, {
       };
     }
     if (isSafeRuntimeRmPath(cwd)) remove(cwd, { recursive: true, force: true });
-    const fallback = await initEmptyWorkspace({ cwd, repoRef, branch, env, deps, runProcess, mkdir });
     return {
-      ...fallback,
+      ok: false,
+      code: clone.timedOut ? 'workspace_clone_timeout' : 'workspace_clone_failed',
+      error: clone.timedOut
+        ? `repo clone timed out after ${Math.ceil(cloneTimeoutMs / 1000)}s`
+        : `repo clone failed: ${boundedProcessError(clone.error)}`,
+      cwd,
+      reused_existing: false,
+      cloned: false,
+      initialized_empty: false,
+      repo_ref: repoRef,
+      workspace_ref: branch,
       clone_failed: true,
-      clone_error: clone.error || null,
+      clone_error: boundedProcessError(clone.error),
       git_auth: gitAuthReadiness(manifest, env, { usedCredential: clone.usedCredential, cloneFailed: true }),
     };
   }
@@ -635,6 +726,9 @@ async function launchCloudSessionFromManifest(manifest, {
     stderr,
     launchBrokerOwnedSession: async (launchArgs) => launchFn({
       ...launchArgs,
+      // The runtime supervisor owns the foreground broker connection. Attaching
+      // here would block on the provider session before that bridge can start.
+      attachAfterLaunch: false,
       ensureCloudBroker: async () => ({ ok: true, skipped: true, supervisor_managed: true }),
     }),
   });
@@ -792,7 +886,13 @@ async function reportRuntimeStatus({ apiUrl, token, cloudSessionId, report }) {
   });
 }
 
-function runGit(args, { env, deps = {}, runProcess, credentialHelper = null }) {
+function runGit(args, {
+  env,
+  deps = {},
+  runProcess,
+  credentialHelper = null,
+  timeoutMs = null,
+}) {
   const finalArgs = credentialHelper
     ? ['-c', `credential.helper=${credentialHelper}`, ...args]
     : args;
@@ -800,34 +900,101 @@ function runGit(args, { env, deps = {}, runProcess, credentialHelper = null }) {
   if (!gitEnv.MC_CLOUD_GIT_TOKEN) {
     gitEnv.MC_CLOUD_GIT_TOKEN = stringOrNull(gitEnv.MC_GIT_CLONE_TOKEN) || stringOrNull(gitEnv.GITHUB_TOKEN) || '';
   }
+  const processCwd = typeof deps.cwd === 'function' ? deps.cwd() : deps.cwd;
   return runProcess('git', finalArgs, {
     env: {
       ...gitEnv,
       GIT_TERMINAL_PROMPT: '0',
+      GIT_LFS_SKIP_SMUDGE: gitEnv.GIT_LFS_SKIP_SMUDGE || '1',
       GIT_SSH_COMMAND: gitEnv.GIT_SSH_COMMAND || 'ssh -o BatchMode=yes',
     },
-    cwd: deps.cwd || process.cwd(),
+    cwd: processCwd || process.cwd(),
+    timeoutMs,
+    signal: deps.workspaceAbortSignal,
   }).then((res) => ({
     ok: res?.code === 0,
     code: res?.code,
+    timedOut: res?.timedOut === true,
     error: res?.code === 0 ? null : (res?.stderr || res?.error || `git exited ${res?.code ?? 'unknown'}`),
     usedCredential: !!credentialHelper,
   }));
 }
 
-function runProcessDefault(cmd, args, options = {}) {
+export function runProcessDefault(cmd, args, options = {}) {
   return new Promise((resolve) => {
+    const timeoutMs = positiveTimeoutMs(options.timeoutMs);
+    const abortSignal = options.signal;
+    const ownsProcessGroup = timeoutMs !== null && process.platform !== 'win32';
     const child = spawn(cmd, args, {
       cwd: options.cwd || process.cwd(),
       env: options.env || process.env,
       stdio: ['ignore', 'pipe', 'pipe'],
+      detached: ownsProcessGroup,
     });
     let stdout = '';
     let stderr = '';
+    let settled = false;
+    let timedOut = false;
+    let timeoutTimer = null;
+    let forceKillTimer = null;
+    let forceResolveTimer = null;
+    let abortListener = null;
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      if (timeoutTimer) clearTimeout(timeoutTimer);
+      if (forceKillTimer) clearTimeout(forceKillTimer);
+      if (forceResolveTimer) clearTimeout(forceResolveTimer);
+      if (abortSignal && abortListener) {
+        abortSignal.removeEventListener('abort', abortListener);
+      }
+      resolve({ ...result, stdout, stderr, timedOut });
+    };
+    const killOwnedProcess = (signal) => {
+      if (ownsProcessGroup && Number.isInteger(child.pid)) {
+        try {
+          process.kill(-child.pid, signal);
+          return;
+        } catch {
+          // The group may already be gone; fall through to the direct child.
+        }
+      }
+      try {
+        child.kill(signal);
+      } catch {
+        // A concurrent process exit is completed by the close handler.
+      }
+    };
     child.stdout.on('data', (chunk) => { stdout += chunk.toString(); });
     child.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
-    child.on('error', (err) => resolve({ code: 1, error: err.message || String(err), stdout, stderr }));
-    child.on('close', (code) => resolve({ code: Number.isInteger(code) ? code : 1, stdout, stderr }));
+    child.on('error', (err) => finish({ code: 1, error: err.message || String(err) }));
+    child.on('close', (code, signal) => finish({
+      code: timedOut ? 124 : (Number.isInteger(code) ? code : 1),
+      error: timedOut ? `process timed out after ${Math.ceil(timeoutMs / 1000)}s` : null,
+      signal: signal || null,
+    }));
+    const terminateForTimeout = () => {
+      if (settled || timedOut) return;
+      timedOut = true;
+      killOwnedProcess('SIGTERM');
+      forceKillTimer = setTimeout(() => {
+        killOwnedProcess('SIGKILL');
+        forceResolveTimer = setTimeout(() => finish({
+          code: 124,
+          error: `process timed out after ${Math.ceil(timeoutMs / 1000)}s`,
+          signal: 'SIGKILL',
+        }), PROCESS_FORCE_RESOLVE_GRACE_MS);
+      }, PROCESS_FORCE_KILL_GRACE_MS);
+    };
+    timeoutTimer = timeoutMs ? setTimeout(terminateForTimeout, timeoutMs) : null;
+    if (abortSignal) {
+      abortListener = terminateForTimeout;
+      if (abortSignal.aborted) {
+        queueMicrotask(terminateForTimeout);
+      } else {
+        abortSignal.addEventListener('abort', abortListener, { once: true });
+      }
+    }
   });
 }
 
@@ -1194,6 +1361,58 @@ function safeUrl(value) {
 
 function safeError(err) {
   return String(err?.message || err || 'unknown').slice(0, 500);
+}
+
+function boundedProcessError(error) {
+  return stringOrNull(error)?.replace(/\s+/g, ' ').slice(0, 500) || 'unknown git error';
+}
+
+function positiveTimeoutMs(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : null;
+}
+
+function workspaceCloneTimeoutMs(value) {
+  return positiveTimeoutMs(value) || DEFAULT_WORKSPACE_CLONE_TIMEOUT_MS;
+}
+
+function workspacePrepareTimeoutMs(value, cloneTimeoutMs) {
+  return positiveTimeoutMs(value)
+    || cloneTimeoutMs + WORKSPACE_PREPARE_WATCHDOG_GRACE_MS;
+}
+
+async function withWorkspacePrepareWatchdog(workspacePromise, {
+  timeoutMs,
+  abortController,
+  cwd,
+  repoRef,
+  workspaceRef,
+}) {
+  let timer = null;
+  const timeout = new Promise((resolve) => {
+    timer = setTimeout(() => {
+      abortController.abort();
+      resolve({
+        ok: false,
+        code: 'workspace_prepare_timeout',
+        error: `workspace prepare timed out after ${Math.ceil(timeoutMs / 1000)}s`,
+        cwd,
+        repo_ref: repoRef,
+        workspace_ref: workspaceRef,
+        timed_out: true,
+      });
+    }, timeoutMs);
+  });
+  try {
+    return await Promise.race([workspacePromise, timeout]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+async function reportWorkspaceProgress(deps, type, data) {
+  if (typeof deps.onWorkspaceProgress !== 'function') return;
+  await Promise.resolve(deps.onWorkspaceProgress({ type, data })).catch(() => null);
 }
 
 function stringOrNull(value) {

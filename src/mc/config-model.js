@@ -28,6 +28,11 @@ export const PACKAGE_DEFAULTS = Object.freeze({
   instructions: Object.freeze({
     mode: 'preserve',
   }),
+  dev: Object.freeze({
+    dependencies: Object.freeze({
+      mode: 'auto',
+    }),
+  }),
 });
 
 const SOURCE_PACKAGE = 'package-defaults';
@@ -51,6 +56,8 @@ const PREFERENCE_PATHS = Object.freeze([
   'dataAccess.cloudflare.approvedScripts',
   'dataAccess.cloudflare.allowLocalWeakening',
   'instructions.mode',
+  'dev.profile',
+  'dev.dependencies.mode',
 ]);
 
 const SAFETY_SPECS = Object.freeze({
@@ -154,6 +161,8 @@ export function effectiveConfigValues(effectiveConfig = {}) {
   copyValue(out, effectiveConfig, 'dataAccess.cloudflare.approvedScripts');
   copyValue(out, effectiveConfig, 'dataAccess.cloudflare.allowLocalWeakening');
   copyValue(out, effectiveConfig, 'instructions.mode');
+  copyValue(out, effectiveConfig, 'dev.profile');
+  copyValue(out, effectiveConfig, 'dev.dependencies.mode');
   return out;
 }
 

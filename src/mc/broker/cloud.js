@@ -10,6 +10,7 @@ import { brokerSocketPath } from './paths.js';
 import { sourceForTool } from './session-sidecars.js';
 import { cloudRuntimePhaseSemantics } from '../cloud-runtime-contract.js';
 import { findLatestTranscriptForTool } from '../session-upload.js';
+import { sanitizeSessionProjection } from '../session-projector.js';
 import {
   listLocalBrokerAndHostSessions,
   requestForSession,
@@ -990,9 +991,14 @@ function publicSessionForCloud(session = {}) {
     broker_log_path,
     host_kind,
     host_session_id,
+    session_projection: sessionProjection,
     ...publicSession
   } = session;
-  return publicSession;
+  const projection = sanitizeSessionProjection(sessionProjection);
+  return {
+    ...publicSession,
+    ...(projection ? { session_projection: projection } : {}),
+  };
 }
 
 function submitEnterCountForTool(tool) {

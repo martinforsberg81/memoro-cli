@@ -212,11 +212,52 @@ describe('mc gc', () => {
     assert.match(r.stderr, /--all-safe requires --dry-run or --apply/);
   });
 
+  test('--dependency-snapshots previews old unlocked cache entries only', () => {
+    const oldDigest = 'c'.repeat(64);
+    const lockedDigest = 'd'.repeat(64);
+    for (const digest of [oldDigest, lockedDigest]) {
+      const path = join(repo.mcHome, 'dependency-snapshots', 'v1', 'npm', digest);
+      mkdirSync(join(path, 'node_modules'), { recursive: true });
+      writeFileSync(join(path, 'metadata.json'), JSON.stringify({
+        schema_version: 1,
+        fingerprint: `sha256:${digest}`,
+        created_at: new Date().toISOString(),
+      }));
+    }
+    const locks = join(repo.mcHome, 'dependency-snapshots', 'v1', 'locks');
+    mkdirSync(locks, { recursive: true });
+    writeFileSync(join(locks, `${lockedDigest}.lock`), '{}');
+
+    const missingMode = runMc(['gc', '--dependency-snapshots', '--json'], {
+      cwd: repo.dir,
+      env: { MC_HOME: repo.mcHome },
+    });
+    assert.equal(missingMode.status, 2);
+    assert.match(missingMode.stderr, /requires --dry-run or --apply/);
+
+    const preview = runMc(['gc', '--dependency-snapshots', '--dry-run', '--json', '--min-age', '0s'], {
+      cwd: repo.dir,
+      env: { MC_HOME: repo.mcHome },
+    });
+    assert.equal(preview.status, 0, `stderr:${preview.stderr}`);
+    const json = parseJsonOrNull(preview.stdout);
+    assert.deepEqual(json.dependency_snapshots.candidates.map((item) => item.digest), [oldDigest]);
+    assert.equal(existsSync(join(repo.mcHome, 'dependency-snapshots', 'v1', 'npm', oldDigest)), true);
+  });
+
   test('--all-safe --apply reaps runtime and clean merged non-live worktrees only', () => {
     const pidDir = join(repo.root, 'pids');
     mkdirSync(pidDir, { recursive: true });
     const hostDir = join(repo.mcHome, 'hosts', 'sess_runtime_stale');
     mkdirSync(hostDir, { recursive: true });
+    const digest = 'a'.repeat(64);
+    const snapshotPath = join(repo.mcHome, 'dependency-snapshots', 'v1', 'npm', digest);
+    mkdirSync(join(snapshotPath, 'node_modules'), { recursive: true });
+    writeFileSync(join(snapshotPath, 'metadata.json'), JSON.stringify({
+      schema_version: 1,
+      fingerprint: `sha256:${digest}`,
+      created_at: new Date().toISOString(),
+    }));
 
     const r = runMc(['gc', '--all-safe', '--apply', '--json', '--min-age', '0s'], {
       cwd: repo.dir,
@@ -227,6 +268,8 @@ describe('mc gc', () => {
     assert.equal(r.status, 0, `stderr:${r.stderr}`);
     const j = parseJsonOrNull(r.stdout);
     assert.equal(j.ok, true);
+    assert.equal(j.dependency_snapshots.removed.length, 1);
+    assert.equal(existsSync(snapshotPath), false);
     assert.deepEqual(j.worktrees.removed.map((item) => item.name).sort(), ['gc1', 'gc3']);
     assert.equal(existsSync(hostDir), false);
 
