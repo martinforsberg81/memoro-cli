@@ -1,13 +1,11 @@
 import {
   lstat,
   open,
-  readdir,
   realpath,
 } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import {
   basename,
-  dirname,
   isAbsolute,
   join,
   normalize,
@@ -31,8 +29,6 @@ export function defaultToolArtifactRoots({
         join(codexHome, 'sessions'),
         join(codexHome, 'archived_sessions'),
       ],
-      generated_images_root: join(codexHome, 'generated_images'),
-      shell_snapshots_root: join(codexHome, 'shell_snapshots'),
     },
     'claude-code': {
       transcript_roots: [join(claudeHome, 'projects')],
@@ -125,11 +121,11 @@ export function classifyToolArtifactAuthority(entry, {
 }
 
 /**
- * Resolve and verify all provider-native paths owned by one registry entry.
+ * Resolve and verify the exact provider transcript owned by one registry entry.
  *
  * This function never deletes. Its result is intentionally shaped so a later
- * teardown command can show counts and pass only verified `artifacts[].path`
- * values to its own injected filesystem portal.
+ * teardown command can show its size and pass only the verified
+ * `artifacts[].path` value to its own injected filesystem portal.
  */
 export async function inspectOwnedToolArtifacts(entry, {
   roots = defaultToolArtifactRoots(),
@@ -152,36 +148,13 @@ export async function inspectOwnedToolArtifacts(entry, {
     return unsafeResult(authority, transcript.issue);
   }
 
-  const candidates = await derivedArtifactCandidates(authority, roots, fs);
-  const artifacts = [transcript.artifact];
-  const issues = [];
-  for (const candidate of candidates) {
-    const inspected = await inspectArtifact(candidate, fs);
-    if (inspected.missing) continue;
-    if (!inspected.ok) {
-      issues.push(inspected.issue);
-      continue;
-    }
-    artifacts.push(inspected.artifact);
-  }
-  if (issues.length) {
-    return {
-      ...authority,
-      state: 'unverified',
-      safe_to_delete: false,
-      artifacts,
-      totals: summarizeArtifacts(artifacts),
-      issues,
-    };
-  }
-  return ownedResult(authority, artifacts);
+  return ownedResult(authority, [transcript.artifact]);
 }
 
 export function nodeFsPortal() {
   return {
     lstat,
     realpath,
-    readdir,
     readHead: readHeadDefault,
   };
 }
@@ -227,72 +200,7 @@ async function inspectTranscript(authority, fs) {
   return inspected;
 }
 
-async function derivedArtifactCandidates(authority, roots, fs) {
-  if (authority.source === 'claude-code') {
-    return [{
-      kind: 'claude-session-data',
-      path: join(dirname(authority.transcript_path), authority.session_id),
-      root: authority.transcript_root,
-      expected: 'directory',
-    }];
-  }
-
-  const sourceRoots = roots.codex;
-  const candidates = [];
-  if (nonEmpty(sourceRoots?.generated_images_root)) {
-    candidates.push({
-      kind: 'codex-generated-images',
-      path: join(sourceRoots.generated_images_root, authority.session_id),
-      root: sourceRoots.generated_images_root,
-      expected: 'directory',
-    });
-  }
-  if (nonEmpty(sourceRoots?.shell_snapshots_root)) {
-    let entries = [];
-    try {
-      const rootStat = await fs.lstat(sourceRoots.shell_snapshots_root);
-      if (rootStat.isSymbolicLink() || !rootStat.isDirectory()) {
-        candidates.push({
-          expected: 'invalid',
-          issue: {
-            code: rootStat.isSymbolicLink()
-              ? 'symlink-not-allowed'
-              : 'artifact-root-not-directory',
-            path: sourceRoots.shell_snapshots_root,
-          },
-        });
-        return candidates;
-      }
-      entries = await fs.readdir(sourceRoots.shell_snapshots_root, { withFileTypes: true });
-    } catch (err) {
-      if (!isMissing(err)) {
-        candidates.push({
-          expected: 'invalid',
-          issue: fsIssue(
-            'artifact-root-read-failed',
-            sourceRoots.shell_snapshots_root,
-            err,
-          ),
-        });
-      }
-      return candidates;
-    }
-    const prefix = `${authority.session_id}.`;
-    for (const entry of entries) {
-      if (!entry.name.startsWith(prefix) || !entry.name.endsWith('.sh')) continue;
-      candidates.push({
-        kind: 'codex-shell-snapshot',
-        path: join(sourceRoots.shell_snapshots_root, entry.name),
-        root: sourceRoots.shell_snapshots_root,
-        expected: 'file',
-      });
-    }
-  }
-  return candidates;
-}
-
 async function inspectArtifact(candidate, fs) {
-  if (candidate.expected === 'invalid') return { ok: false, issue: candidate.issue };
   try {
     const rootStat = await fs.lstat(candidate.root);
     if (rootStat.isSymbolicLink()) {
@@ -317,12 +225,7 @@ async function inspectArtifact(candidate, fs) {
     return unsafeArtifact('artifact-stat-failed', candidate.path, err);
   }
   if (stat.isSymbolicLink()) return unsafeArtifact('symlink-not-allowed', candidate.path);
-  if (candidate.expected === 'file' && !stat.isFile()) {
-    return unsafeArtifact('artifact-not-file', candidate.path);
-  }
-  if (candidate.expected === 'directory' && !stat.isDirectory()) {
-    return unsafeArtifact('artifact-not-directory', candidate.path);
-  }
+  if (!stat.isFile()) return unsafeArtifact('artifact-not-file', candidate.path);
 
   try {
     const rootReal = await fs.realpath(candidate.root);
@@ -334,16 +237,14 @@ async function inspectArtifact(candidate, fs) {
     return unsafeArtifact('artifact-realpath-failed', candidate.path, err);
   }
 
-  const measured = await measurePath(candidate.path, stat, fs);
-  if (!measured.ok) return measured;
   return {
     ok: true,
     artifact: {
       kind: candidate.kind,
       path: candidate.path,
-      type: candidate.expected,
-      bytes: measured.bytes,
-      file_count: measured.file_count,
+      type: 'file',
+      bytes: stat.size,
+      file_count: 1,
       ownership: 'verified',
     },
   };
@@ -366,37 +267,6 @@ async function verifyPathChain(root, path, fs) {
     }
   }
   return null;
-}
-
-async function measurePath(path, stat, fs) {
-  if (stat.isFile()) {
-    return { ok: true, bytes: stat.size, file_count: 1 };
-  }
-  if (!stat.isDirectory()) return unsafeArtifact('unsupported-artifact-type', path);
-
-  let entries;
-  try {
-    entries = await fs.readdir(path, { withFileTypes: true });
-  } catch (err) {
-    return unsafeArtifact('artifact-read-failed', path, err);
-  }
-  let bytes = 0;
-  let fileCount = 0;
-  for (const entry of entries) {
-    const child = join(path, entry.name);
-    let childStat;
-    try {
-      childStat = await fs.lstat(child);
-    } catch (err) {
-      return unsafeArtifact('artifact-stat-failed', child, err);
-    }
-    if (childStat.isSymbolicLink()) return unsafeArtifact('symlink-not-allowed', child);
-    const measured = await measurePath(child, childStat, fs);
-    if (!measured.ok) return measured;
-    bytes += measured.bytes;
-    fileCount += measured.file_count;
-  }
-  return { ok: true, bytes, file_count: fileCount };
 }
 
 function transcriptSessionId(source, head) {

@@ -33,8 +33,6 @@ function fixtureRoots() {
         join(codexHome, 'sessions'),
         join(codexHome, 'archived_sessions'),
       ],
-      generated_images_root: join(codexHome, 'generated_images'),
-      shell_snapshots_root: join(codexHome, 'shell_snapshots'),
     },
     'claude-code': {
       transcript_roots: [join(claudeHome, 'projects')],
@@ -66,7 +64,7 @@ function claudeEntry(path, id = 'bd7ee52d-bd2d-48e0-90a7-1423e6f92a8c') {
 }
 
 describe('LLM tool artifact ownership', () => {
-  test('verifies a Codex rollout and strictly-derived session artifacts', async () => {
+  test('returns only the exact Codex registry transcript when provider siblings exist', async () => {
     const { roots, codexHome } = fixtureRoots();
     const id = '019f8f5d-9734-7cc0-94f7-d3d406305c1c';
     const transcript = join(
@@ -95,18 +93,22 @@ describe('LLM tool artifact ownership', () => {
 
     assert.equal(result.state, 'owned');
     assert.equal(result.safe_to_delete, true);
-    assert.deepEqual(result.artifacts.map((artifact) => artifact.kind), [
-      'transcript',
-      'codex-generated-images',
-      'codex-shell-snapshot',
-    ]);
-    assert.equal(result.totals.paths, 3);
-    assert.equal(result.totals.files, 3);
-    assert.equal(result.totals.bytes, readFileSync(transcript).byteLength + 5 + 3);
-    assert.equal(result.artifacts.some((artifact) => artifact.path.includes('other-session')), false);
+    assert.deepEqual(result.artifacts, [{
+      kind: 'transcript',
+      path: transcript,
+      type: 'file',
+      bytes: readFileSync(transcript).byteLength,
+      file_count: 1,
+      ownership: 'verified',
+    }]);
+    assert.deepEqual(result.totals, {
+      paths: 1,
+      files: 1,
+      bytes: readFileSync(transcript).byteLength,
+    });
   });
 
-  test('verifies Claude transcript identity and its exact auxiliary directory', async () => {
+  test('returns only the exact Claude registry transcript when its sibling directory exists', async () => {
     const { roots, claudeHome } = fixtureRoots();
     const id = 'bd7ee52d-bd2d-48e0-90a7-1423e6f92a8c';
     const project = join(claudeHome, 'projects', '-Users-me-repo');
@@ -124,11 +126,9 @@ describe('LLM tool artifact ownership', () => {
 
     assert.equal(result.state, 'owned');
     assert.equal(result.safe_to_delete, true);
-    assert.deepEqual(result.artifacts.map((artifact) => artifact.kind), [
-      'transcript',
-      'claude-session-data',
-    ]);
-    assert.equal(result.totals.files, 2);
+    assert.deepEqual(result.artifacts.map((artifact) => artifact.path), [transcript]);
+    assert.equal(result.totals.paths, 1);
+    assert.equal(result.totals.files, 1);
   });
 
   test('rejects a registry tool that does not match its provider source', () => {
@@ -264,24 +264,6 @@ describe('LLM tool artifact ownership', () => {
     assert.equal(result.state, 'unverified');
     assert.equal(result.safe_to_delete, false);
     assert.equal(result.issues[0].code, 'invalid-transcript-path');
-  });
-
-  test('rejects symlinks inside a derived session directory', async () => {
-    const { roots, claudeHome } = fixtureRoots();
-    const id = 'bd7ee52d-bd2d-48e0-90a7-1423e6f92a8c';
-    const project = join(claudeHome, 'projects', '-Users-me-repo');
-    const transcript = join(project, `${id}.jsonl`);
-    mkdirSync(join(project, id), { recursive: true });
-    writeFileSync(transcript, `${JSON.stringify({ type: 'user', sessionId: id })}\n`);
-    const outside = join(tmp, 'outside.txt');
-    writeFileSync(outside, 'outside');
-    symlinkSync(outside, join(project, id, 'linked.txt'));
-
-    const result = await inspectOwnedToolArtifacts(claudeEntry(transcript, id), { roots });
-
-    assert.equal(result.state, 'unverified');
-    assert.equal(result.safe_to_delete, false);
-    assert.equal(result.issues[0].code, 'symlink-not-allowed');
   });
 
   test('recognizes a never-launched registry entry as having no tool artifacts', async () => {
