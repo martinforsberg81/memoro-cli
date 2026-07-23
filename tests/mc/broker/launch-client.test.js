@@ -7,7 +7,7 @@ import {
   brokerSessionPaths,
   ensureBrokerRunning,
   isRetryableCodexSqliteStartupFailure,
-  launchBrokerOwnedSession,
+  launchBrokerOwnedSession as launchBrokerOwnedSessionImpl,
 } from '../../../src/mc/broker/launch-client.js';
 import { BROKER_PROTOCOL_VERSION } from '../../../src/mc/broker/daemon.js';
 
@@ -32,6 +32,51 @@ const CODEX_SQLITE_LOCK_OUTPUT = `Codex couldn't start because another Codex pro
 Technical details:
   Cause: failed to initialize state runtime at /Users/test/.codex: failed to open log DB at /Users/test/.codex/logs_2.sqlite: error returned from database: (code: 5) database is locked
 ERROR: failed to initialize sqlite local db at /Users/test/.codex/state_5.sqlite`;
+
+const SESSION_CAPABILITIES = Object.freeze({
+  schema: 1,
+  github: {
+    state: 'ready',
+    transport: 'mc-broker-v1',
+    actor: 'installation',
+    account: 'acme',
+    repository: {
+      id: 301,
+      full_name: 'acme/widgets',
+      owner: 'acme',
+      name: 'widgets',
+      private: true,
+      archived: false,
+      account: 'acme',
+    },
+    operations: ['connection.status', 'repository.metadata', 'pull_request.list', 'pull_request.view', 'checks.list'],
+    approval_mode: 'prompt',
+  },
+});
+
+function launchBrokerOwnedSession(options) {
+  return launchBrokerOwnedSessionImpl({
+    ...options,
+    deps: {
+      fetchGitHubSessionCapabilities: async () => SESSION_CAPABILITIES,
+      prepareGitHubSessionForLaunch: async ({ baseEnv, capabilities, socketPath }) => ({
+        env: {
+          ...baseEnv,
+          GH_TOKEN: undefined,
+          GITHUB_TOKEN: undefined,
+          GH_ENTERPRISE_TOKEN: undefined,
+          GITHUB_ENTERPRISE_TOKEN: undefined,
+          PATH: `/tmp/mc-github-shim:${baseEnv.PATH || ''}`,
+          MC_SESSION_CAPABILITIES: JSON.stringify(capabilities),
+          MC_GITHUB_BROKER_SOCKET: socketPath,
+        },
+        capabilities,
+        shim_path: '/tmp/mc-github-shim/gh',
+      }),
+      ...(options.deps || {}),
+    },
+  });
+}
 
 function earlyCodexExit() {
   return {
@@ -247,7 +292,11 @@ describe('launchBrokerOwnedSession', () => {
       apiArgv: [],
       stdout: streams.stdout,
       stderr: streams.stderr,
-      env: { TERM: 'xterm-256color' },
+      env: {
+        TERM: 'xterm-256color',
+        GH_TOKEN: 'github-secret-sentinel',
+        GITHUB_TOKEN: 'github-secret-sentinel',
+      },
       now: () => 10_000,
       ensureBroker: async () => {
         sequence.push('ensureBroker');
@@ -278,10 +327,11 @@ describe('launchBrokerOwnedSession', () => {
         readConfig: async () => ({ apiUrl: 'https://memoro.test' }),
         getApiUrl: () => null,
         getSecret: async () => 'tok',
-        groundSession: async ({ cwd, focus, codingSessionId }) => {
+        groundSession: async ({ cwd, focus, codingSessionId, sessionCapabilities }) => {
           assert.equal(cwd, '/repo');
           assert.equal(focus, 'fix tests');
           assert.equal(codingSessionId, 'sess_abc');
+          assert.equal(sessionCapabilities, SESSION_CAPABILITIES);
           return { ok: true };
         },
         hostname: () => 'machine',
@@ -331,6 +381,11 @@ describe('launchBrokerOwnedSession', () => {
     assert.equal(msg.session.env.MC_DEV_SERVICE, 'web');
     assert.equal(msg.session.env.MC_DEV_PROFILE, 'agent');
     assert.equal(msg.session.env.MC_DEV_DEFINITION_FINGERPRINT, 'sha256:abc123');
+    assert.equal(msg.session.env.GH_TOKEN, undefined);
+    assert.equal(msg.session.env.GITHUB_TOKEN, undefined);
+    assert.deepEqual(JSON.parse(msg.session.env.MC_SESSION_CAPABILITIES), SESSION_CAPABILITIES);
+    assert.match(msg.session.env.MC_GITHUB_BROKER_SOCKET, /sess_abc\.sock$/);
+    assert.match(msg.session.env.PATH, /^\/tmp\/mc-github-shim:/);
     assert.equal(msg.session.sidecars.codingSessionId, 'sess_abc');
     assert.equal(msg.session.sidecars.apiUrl, 'https://memoro.test');
     assert.equal(msg.session.sidecars.token, 'tok');
@@ -341,8 +396,49 @@ describe('launchBrokerOwnedSession', () => {
     assert.equal(msg.session.sidecars.branch, 'main');
     assert.match(msg.session.sidecars.sockPath, /sess_abc\.sock$/);
     assert.match(msg.session.sidecars.metaPath, /sess_abc\.json$/);
+    const childObservable = JSON.stringify({
+      env: msg.session.env,
+      argv: msg.session.argv,
+      launch_options: msg.session.launch_options,
+    });
+    assert.equal(childObservable.includes('github-secret-sentinel'), false);
+    assert.doesNotMatch(childObservable, /installation_id|access_token|private_key/);
     assert.match(streams.out(), /sess_abc/);
     assert.equal(streams.err(), '');
+  });
+
+  test('fails closed before child launch when the session gh boundary cannot be installed', async () => {
+    const streams = makeStreams();
+    let launches = 0;
+    const res = await launchBrokerOwnedSession({
+      cwd: '/repo',
+      tool: 'claude',
+      stdout: streams.stdout,
+      stderr: streams.stderr,
+      env: { TERM: 'xterm-256color', PATH: '/bin' },
+      request: async () => { launches += 1; return { ok: true }; },
+      ensureBroker: async () => ({ ok: true, broker: { pid: 42 } }),
+      ensureCloudBroker: async () => ({ ok: true }),
+      attach: async () => 0,
+      deps: {
+        useSessionHost: false,
+        getRepoContext: async () => ({ remoteUrl: 'git@example.com:acme/widgets.git', branch: 'main', toplevel: '/repo' }),
+        readConfig: async () => ({ apiUrl: 'https://memoro.test' }),
+        getApiUrl: () => null,
+        getSecret: async () => 'tok',
+        groundSession: async () => ({ ok: true }),
+        hostname: () => 'machine',
+        lookupOrMint: async () => 'sess_boundary1',
+        prepareGitHubSessionForLaunch: async () => { throw new Error('filesystem unavailable'); },
+        prepareLocalResourceGuardEnv: ({ baseEnv }) => ({ env: baseEnv }),
+        getPackageVersion: async () => '0.test',
+      },
+    });
+
+    assert.equal(res.code, 1);
+    assert.equal(launches, 0);
+    assert.match(streams.err(), /failed to install GitHub session boundary/);
+    assert.doesNotMatch(streams.err(), /token|gh auth login/i);
   });
 
   test('uses an explicit coding session id without minting a new one', async () => {

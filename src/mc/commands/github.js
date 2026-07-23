@@ -1,9 +1,8 @@
 /**
- * `mc github status|connect|repos` — central Memoro GitHub App UX.
+ * `mc github status|connect|repos|pr` — central Memoro GitHub App UX.
  *
- * This command handles token-free connection metadata only. Read operations,
- * the session broker, the `gh` compatibility shim, writes, and git transport
- * belong to later slices.
+ * Connection metadata uses the control plane directly. Read operations use the
+ * session-bound broker and never accept repository or authority input.
  */
 
 import { getSecret } from '../../lib/keychain.js';
@@ -18,6 +17,12 @@ import {
   decodeGitHubRepositoriesResponse,
   repairForGitHubState,
 } from '../github-contract.js';
+import { executeGitHubSessionOperation } from '../github-session.js';
+import {
+  parseGitHubShimArgs,
+  renderGitHubReadResult,
+  safeOperationError,
+} from '../github-shim.js';
 
 const GITHUB_REPOSITORY_RE = /^[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+$/;
 
@@ -33,6 +38,7 @@ export async function run(argv, deps = {}) {
   try {
     if (parsed.subcommand === 'connect') return await runConnect(parsed, deps, { stdout, stderr });
     if (parsed.subcommand === 'repos') return await runRepos(parsed, deps, { stdout, stderr });
+    if (parsed.subcommand === 'operation') return await runReadOperation(parsed, deps, { stdout, stderr });
     return await runStatus(parsed, deps, { stdout, stderr });
   } catch {
     return emitSafeFailure(parsed, { stdout, stderr });
@@ -41,6 +47,13 @@ export async function run(argv, deps = {}) {
 
 export function parseArgs(argv) {
   const values = [...argv];
+  if (values[0] === 'pr') {
+    const operation = parseGitHubShimArgs(values);
+    if (!operation.ok || operation.operation === 'connection.status') {
+      return { error: 'unsupported GitHub command. Try `mc github pr list|view|checks`.' };
+    }
+    return { subcommand: 'operation', ...operation };
+  }
   let subcommand = values[0] || 'status';
   if (subcommand.startsWith('-')) subcommand = 'status';
   else values.shift();
@@ -53,6 +66,18 @@ export function parseArgs(argv) {
     return { error: `unknown flag: ${value}` };
   }
   return { subcommand, json };
+}
+
+async function runReadOperation(opts, deps, io) {
+  const execute = deps.executeGitHubOperation || executeGitHubSessionOperation;
+  const response = await execute({ operation: opts.operation, params: opts.params });
+  if (!response?.ok) {
+    if (opts.json) io.stdout.write(`${JSON.stringify(response, null, 2)}\n`);
+    else io.stderr.write(`${safeOperationError(response?.error?.code)} Run \`mc github status\` to repair.\n`);
+    return 1;
+  }
+  renderGitHubReadResult(opts, response.data, io.stdout);
+  return 0;
 }
 
 export async function readGitHubConnectionStatus(deps = {}) {

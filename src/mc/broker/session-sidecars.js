@@ -13,6 +13,7 @@ import {
   SessionProjectionTracker,
 } from '../session-projector.js';
 import { scheduleSessionUpload } from '../session-upload.js';
+import { executeGitHubControlPlaneOperation } from '../github-session.js';
 
 const TICK_INTERVAL_MS = 60_000;
 const MAX_ATTEMPTS = 3;
@@ -23,7 +24,7 @@ export class BrokerSessionSidecars {
   constructor({
     session,
     coding,
-    createServerImpl = createServer,
+    createServerImpl = (handler) => createServer({ allowHalfOpen: true }, handler),
     wsClientFactory = (opts) => new CliWsClient(opts),
     fetchTranscriptHandlerFactory = createFetchTranscriptHandler,
     memoroFetchImpl = memoroFetch,
@@ -123,11 +124,24 @@ export class BrokerSessionSidecars {
 
     const server = this.createServerImpl((conn) => {
       let buf = '';
+      conn.on('error', () => {});
       conn.on('data', (chunk) => { buf += chunk.toString('utf8'); });
-      conn.on('end', () => {
+      conn.on('end', async () => {
         let payload;
         try { payload = JSON.parse(buf); } catch {
           conn.end(JSON.stringify({ ok: false, error: 'invalid JSON' }) + '\n');
+          return;
+        }
+        if (payload?.type === 'github_operation') {
+          const response = await executeGitHubControlPlaneOperation({
+            apiUrl: this.coding.apiUrl,
+            token: this.coding.token,
+            sourceId: this.sourceIdentity.source_id,
+            codingSessionId: this.coding.codingSessionId,
+            request: payload,
+            memoroFetchImpl: this.memoroFetch,
+          });
+          conn.end(JSON.stringify(response) + '\n');
           return;
         }
         const message = payload?.message;

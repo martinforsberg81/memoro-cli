@@ -26,6 +26,11 @@ import { ensureSessionHostRunning } from './session-hosts.js';
 import { prepareCloudCodexAuth } from '../cloud-codex-auth.js';
 import { resolveSessionSourceIdentity } from '../session-projector.js';
 import { resolveDevPlan, resolveDevSessionEnvironment } from '../dev-definition.js';
+import {
+  fetchGitHubSessionCapabilities,
+  prepareGitHubSessionForLaunch,
+  unavailableGitHubSessionCapabilities,
+} from '../github-session.js';
 
 const CLOUD_BROKER_START_TIMEOUT_MS = 10_000;
 const CODEX_SQLITE_STARTUP_WINDOW_MS = 20_000;
@@ -103,6 +108,17 @@ export async function launchBrokerOwnedSession({
     llmSessionId,
   });
   const repoRef = derivePublicRepoRef(repoContext);
+  const paths = brokerSessionPaths(codingSessionId);
+  let sessionCapabilities = unavailableGitHubSessionCapabilities();
+  try {
+    sessionCapabilities = await (deps.fetchGitHubSessionCapabilities || fetchGitHubSessionCapabilities)({
+      apiUrl,
+      token,
+      repository: repoRef,
+      sourceKind: sourceIdentity.source_kind,
+      memoroFetchImpl: deps.memoroFetch,
+    });
+  } catch {}
   let groundingLaunchMessage = null;
   if (sendStartupMessage) {
     try {
@@ -114,6 +130,7 @@ export async function launchBrokerOwnedSession({
         tool: launch.shortName,
         codingSessionId,
         sessionName,
+        sessionCapabilities,
         deps: {
           grounding: config.grounding,
           mcContextDeps: { apiUrl, token },
@@ -161,7 +178,6 @@ export async function launchBrokerOwnedSession({
       codexDeviceAuthBeforeLaunch = true;
     }
   }
-  const paths = brokerSessionPaths(codingSessionId);
   const sessionHost = await resolveLaunchBroker({
     codingSessionId,
     request,
@@ -235,6 +251,18 @@ export async function launchBrokerOwnedSession({
     termName: env.TERM,
   });
   spawnEnv = interactiveEnv.env;
+  try {
+    const githubRuntime = await (deps.prepareGitHubSessionForLaunch || prepareGitHubSessionForLaunch)({
+      baseEnv: spawnEnv,
+      capabilities: sessionCapabilities,
+      sessionId: codingSessionId,
+      socketPath: paths.sockPath,
+    });
+    spawnEnv = githubRuntime.env;
+  } catch (err) {
+    stderr.write(`mc: failed to install GitHub session boundary (${err.message}); refusing to launch\n`);
+    return { code: 1 };
+  }
 
   const launchMessage = {
     type: 'launch_session',

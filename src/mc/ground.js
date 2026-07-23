@@ -33,6 +33,7 @@ import { join, basename } from 'node:path';
 import { readPackageCanon } from './canon.js';
 import { fetchMcContextData, renderMcContextMarkdown } from './context.js';
 import { resolveDevPlan } from './dev-definition.js';
+import { renderGitHubSessionMarkdown } from './github-session.js';
 
 // ─────────────────────────────────────────────────────────────
 // Pure: bundle assembly
@@ -273,6 +274,7 @@ export function languageDirective(language) {
  * @param {object} parts
  * @param {string} [parts.map]       — legacy MEMORO.md contents
  * @param {string} [parts.role]      — orchestrator framing
+ * @param {string} [parts.github]    — token-free GitHub capability guidance
  * @param {string} [parts.context]   — compact server-owned mc context
  * @param {string} [parts.dev]       — worktree-local development runtime guidance
  * @param {string} [parts.lens]      — optional legacy dynamic Memoro lens
@@ -284,11 +286,12 @@ export function languageDirective(language) {
  *   right after the preamble so it governs the whole session.
  * @returns {string} markdown body for the managed block
  */
-export function assembleBundle({ map, role, context, dev, lens, focus, lifecycle, language } = {}) {
+export function assembleBundle({ map, role, github, context, dev, lens, focus, lifecycle, language } = {}) {
   const sections = [];
 
   const cleanMap = nonEmpty(map);
   const cleanRole = nonEmpty(role);
+  const cleanGitHub = nonEmpty(github);
   const cleanContext = nonEmpty(context);
   const cleanDev = nonEmpty(dev);
   const cleanLens = nonEmpty(lens);
@@ -298,6 +301,9 @@ export function assembleBundle({ map, role, context, dev, lens, focus, lifecycle
 
   if (cleanRole) {
     sections.push(section('Your role', cleanRole));
+  }
+  if (cleanGitHub) {
+    sections.push(section('GitHub capability', cleanGitHub));
   }
   if (cleanMap) {
     sections.push(section('Legacy repo map (MEMORO.md)', cleanMap));
@@ -724,6 +730,7 @@ export async function groundSession({
   tool = null,
   codingSessionId = null,
   sessionName = null,
+  sessionCapabilities = null,
   deps = {},
 } = {}) {
   if (!cwd || !adapter || typeof adapter.writeGrounding !== 'function') {
@@ -805,7 +812,11 @@ export async function groundSession({
     ? safeSync(() => lifecycleGuidance({ map: mapProse, repoName }), null)
     : null;
 
-  const parts = { map: mapProse, role, context, dev, lens, focus, lifecycle, language };
+  const github = safeSync(
+    () => sessionCapabilities ? renderGitHubSessionMarkdown(sessionCapabilities) : null,
+    null,
+  );
+  const parts = { map: mapProse, role, github, context, dev, lens, focus, lifecycle, language };
   const markdown = assembleBundle(parts);
 
   try {
