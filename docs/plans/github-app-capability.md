@@ -553,9 +553,20 @@ release:
 - `github_git_transport_v1`
 - `github_gh_shim_v1`
 
-Recommended rollout: staff installation -> one read-only repository -> local
-read dogfood -> cloud read dogfood -> approved PR create -> local session-branch
-push -> cloud clone/fetch/push -> broader repository selection.
+Recommended rollout is intentionally local-first:
+
+1. staff installation -> one read-only repository -> local read dogfood;
+2. local approved PR create/update -> local session-branch clone/fetch/push;
+3. local default-on cleanup for eligible admin users;
+4. separately reviewed cloud bootstrap -> cloud read/write/clone/fetch/push;
+5. broader repository and user rollout only after the relevant local or cloud
+   completion gate has passed.
+
+Cloudflare Sandbox bootstrap is not an acceptance dependency for the local
+milestone. Cloud implementation begins only after the local trusted executor
+has passed its security and live gates. Protocol schemas and policy evaluation
+remain source-neutral throughout, but source-neutral tests do not substitute
+for a live cloud bootstrap proof.
 
 Metrics use operation names, result codes, latency, source kind, and coarse
 GitHub status. They never contain owner/name for private repositories unless
@@ -657,8 +668,9 @@ native `gh` login, or local-keyring fallback.
 Tests first: state rendering/JSON contract, no credential fields, noninteractive
 behavior, repository mismatch, all onboarding repair actions, adapter parity.
 
-Gate: a new user connects once and both a prospective local and cloud session
-report the same repository readiness metadata.
+Gate: a new user connects once and a prospective local session reports ready.
+The server and shared codecs must also produce the same token-free repository
+descriptor for a prospective cloud source without starting a Sandbox runtime.
 
 ### PR 4 — read-only broker operations and compatibility (`memoro-cli`)
 
@@ -677,12 +689,13 @@ Not in scope: write operations, real-`gh` passthrough, git transport, native
 provider approval hooks, or host-keyring fallback.
 
 Tests first: copied descriptor grants nothing, source/repo spoof fields refused,
-cloud works with local source offline, shim parser rejects every non-allowlisted
-surface, child env/argv/file/log scan contains no credentials, local/cloud
-contract fixtures are byte-equivalent where source is irrelevant.
+shim parser rejects every non-allowlisted surface, child env/argv/file/log scan
+contains no credentials, and local/cloud contract fixtures are byte-equivalent
+where source is irrelevant. Live cloud bootstrap behavior is deferred to PR 10.
 
-Gate: live local and cloud sessions list/view the same PR/check data while the
-host `gh` is logged out or absent.
+Gate: a live local session lists/views PR and check data while host `gh` is
+logged out or absent. The coding-tool child contains no GitHub credential and
+all non-allowlisted shim commands fail closed.
 
 ### PR 5 — write policy, approval, and audit (`memoro` server/browser)
 
@@ -705,8 +718,8 @@ redaction, flag rollback.
 
 External gate: update the App's Pull requests permission to read/write and prove
 the installation-update flow for an existing user. Then deploy and create one
-draft PR from a cloud session after browser approval; denial and expiry must
-leave GitHub unchanged.
+draft PR from a local session after browser approval; denial and expiry must
+leave GitHub unchanged. The equivalent cloud proof is deferred to PR 10.
 
 ### PR 6 — approved PR writes in mc (`memoro-cli`)
 
@@ -725,7 +738,9 @@ approval.
 Tests first: provider parity, normalized approval preview, cancellation,
 disconnect/reconnect, stale approval, idempotent retry, shim flag rejection.
 
-Gate: local and cloud live proof produce equivalent approval and audit behavior.
+Gate: a local live proof covers approve, deny, expiry, disconnect/reconnect, and
+idempotent retry. Source-neutral fixtures must preserve the future cloud
+protocol shape, but no live Sandbox is required for this PR.
 
 ### PR 7 — one-shot git grants (`memoro` server)
 
@@ -747,8 +762,9 @@ Tests first: replay, wrong executor/session/repo/op, expired grant, concurrent
 redemption, log/error/trace redaction, App permission mismatch.
 
 External gate: update the App's Contents permission to read/write and prove the
-installation-update flow. Security review must then approve the local and cloud
-executor channel before either client implementation begins.
+installation-update flow. Security review must approve the local executor
+channel before PR 8 begins. Cloud executor review is a separate PR 10 gate and
+cannot reuse the local approval without examining the Sandbox boundary.
 
 ### PR 8 — local trusted git executor (`memoro-cli`)
 
@@ -771,53 +787,90 @@ cleanup on crash/timeout.
 Gate: live push from a local session with no native `gh`/GitHub keyring login;
 the pushed branch and audit event must name only the registered session target.
 
-### PR 9 — cloud bootstrap and trusted git executor (`memoro` cloud runtime)
+### PR 9 — local migration and default-on cleanup (`memoro-cli`)
 
-Depends on deployed PR 7 and accepted local executor security proof.
-
-In scope:
-
-- sidecar/bootstrap consumption of one-shot clone/fetch/push grants;
-- private repository bootstrap before the coding tool launches;
-- cloud broker route to the same `git.fetch`/`git.push_session_branch` contract;
-- crash/stop cleanup and source-aware audit.
-
-Not in scope: raw token env, general sandbox credential helper, free shell API,
-or local-machine involvement.
-
-Tests first: malicious workspace cannot read/reuse helper path, no credential in
-sandbox command/env/file/log/session response, stop/restart/replay, wrong repo,
-sidecar unavailable, local/cloud protocol fixture parity.
-
-Gate: private repo cloud live proof with the laptop broker offline: clone, read
-PR/checks, create approved draft PR, push session branch, stop, then prove grant
-replay fails.
-
-### PR 10 — migration and default-on cleanup (`memoro-cli`)
-
-Depends on local and cloud live proofs plus server flags in production.
+Depends on the local completion proof plus server flags in production. It does
+not enable or claim cloud support.
 
 In scope:
 
 - enable central capability for eligible users;
 - remove `MC_HOST_GH_BIN`, host-`gh` preflight/delegation, and local-keyring
   architecture;
-- remove client support for legacy GitHub token bridges once cloud runtime no
-  longer sends them;
-- finalize setup/help/release notes and regression matrix.
+- finalize local setup/help/release notes and regression matrix.
 
-Not in scope: migrating GitHub tokens into vault or adding deferred operations.
+Not in scope: migrating GitHub tokens into vault, cloud enablement, removing
+legacy cloud token bridges, or adding deferred operations.
 
 Tests first: upgrade from pre-capability mc, disconnected/revoked repair,
 feature-flag rollback, native `gh` unaffected outside mc, complete forbidden-
 secret scan.
 
-Gate: staged rollout metrics and support runbook show no repeated-login loop and
-no local/cloud behavior divergence.
+Gate: staged local rollout metrics and support runbook show no repeated-login
+loop, no host-`gh` dependency, and no GitHub credential in mc vault or the
+coding-tool child.
+
+### PR 10 — cloud bootstrap and trusted git executor (`memoro` cloud runtime)
+
+This begins a separate cloud delivery project. It depends on deployed PR 7,
+merged PR 8, merged PR 9, and accepted local completion proof.
+
+In scope:
+
+- an explicit bootstrap state machine with independent repository, Git access,
+  coding-provider auth, provider process, and broker readiness;
+- sidecar/bootstrap consumption of one-shot clone/fetch/push grants;
+- private repository bootstrap before the coding tool launches;
+- cloud broker route to the same `git.fetch`/`git.push_session_branch` contract;
+- provider-agnostic cloud coding-auth onboarding and repair states;
+- crash/stop cleanup and source-aware audit.
+
+Not in scope: raw token env, general sandbox credential helper, free shell API,
+or local-machine involvement.
+
+Tests first: malicious workspace cannot read/reuse helper path, no credential in
+sandbox command/env/file/log/session response, public/private clone truthfulness,
+provider-auth missing/expired/repair, stop/restart/replay, wrong repo, sidecar
+unavailable, and local/cloud protocol fixture parity.
+
+Gate: private repo cloud live proof with the laptop broker offline: clone, read
+PR/checks, create approved draft PR, push session branch, stop, then prove grant
+replay fails.
+
+### Cloud rollout follow-up — migration and cleanup (repository-specific PRs)
+
+Depends on PR 10's live proof.
+
+In scope:
+
+- enable the cloud capability for eligible users;
+- remove legacy cloud GitHub token bridges;
+- complete cloud onboarding/help/release notes and the local/cloud regression
+  matrix.
+
+Gate: staged cloud rollout metrics show no repeated-login loop and no
+local/cloud protocol or policy divergence.
 
 ## End-to-end acceptance
 
-The program is complete only when all statements below are true:
+### Local completion milestone
+
+The local program is complete when all statements below are true:
+
+- A new user installs the Memoro GitHub App once, selects a repository, and sees
+  it ready in local mc.
+- Local read/write operations and approval behavior work for every supported
+  LLM provider through the same source-neutral schemas.
+- A local trusted executor can clone/fetch/push the bound session branch without
+  native `gh`, a GitHub keyring login, or a GitHub credential in mc vault.
+- Expired installation tokens renew without user action or session restart.
+- Revoking the installation or repository access denies the next operation in
+  active local sessions.
+- All forbidden shim surfaces and secret-scan requirements below pass.
+
+### Full local-and-cloud program completion
+
+The full program is complete only when all statements below are true:
 
 - A new user installs the Memoro GitHub App once, selects a private repository,
   and sees it ready in both local and cloud mc.
