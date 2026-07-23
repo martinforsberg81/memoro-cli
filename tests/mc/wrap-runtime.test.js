@@ -78,6 +78,10 @@ describe('buildHeartbeatBase', () => {
     assert.deepEqual(base, {
       coding_session_id: 'sess_abc123',
       machine_id: 'host-a',
+      source_id: 'local:host-a',
+      source_kind: 'local',
+      source_name: 'host-a',
+      cloud_session_id: null,
       source: 'codex',
       repo: 'memoro',
       branch: 'main',
@@ -130,6 +134,36 @@ describe('buildHeartbeatPayload', () => {
       extractExcerpt: () => '',
     });
     assert.equal(payload.idle_seconds, 0);
+  });
+
+  test('adds only a validated metadata projection to the heartbeat', () => {
+    const projection = {
+      contract_version: 'mc-session-projection-v1',
+      status: 'active',
+      reason_code: 'recent_output',
+      observed_at: '2026-06-04T10:00:00.000Z',
+      classifier_version: 'mc-session-projector-v1',
+      classification_basis: 'runtime_fallback',
+      runtime: null,
+      git: null,
+    };
+    const payload = buildHeartbeatPayload({
+      base: { coding_session_id: 'sess_abc123' },
+      now: Date.parse('2026-06-04T10:00:00.000Z'),
+      excerptMax: 10,
+      extractExcerpt: () => '',
+      sessionProjection: projection,
+    });
+    assert.deepEqual(payload.session_projection, projection);
+
+    const rejected = buildHeartbeatPayload({
+      base: { coding_session_id: 'sess_abc123' },
+      now: Date.parse('2026-06-04T10:00:00.000Z'),
+      excerptMax: 10,
+      extractExcerpt: () => '',
+      sessionProjection: { ...projection, raw_output: 'secret' },
+    });
+    assert.equal(Object.hasOwn(rejected, 'session_projection'), false);
   });
 });
 

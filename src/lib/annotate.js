@@ -1,10 +1,8 @@
 /**
  * Client-side observation annotations.
  *
- * Deterministic enrichment attached to every session upload. Zero LLM,
- * zero privacy surface (metadata only — no code bodies, no user prose
- * beyond what the cleaned transcript already sends). Purpose: give the server-side
- * coding extractors sharper signal than prose alone can carry.
+ * Deterministic enrichment built during every session upload. Zero LLM.
+ * Purpose: add bounded diagnostics to the explicit uploaded session record.
  *
  * See docs/plans/coding-profile.md.
  */

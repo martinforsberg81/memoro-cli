@@ -25,6 +25,7 @@ import {
   readMap,
   buildRole,
   pullLensMarkdown,
+  renderDevGrounding,
 } from '../../src/mc/ground.js';
 
 // ─────────────────────────────────────────────────────────────
@@ -36,17 +37,23 @@ describe('assembleBundle (pure)', () => {
     const out = assembleBundle({
       map: '# MEMORO.md\nnorth star',
       role: 'You are the orchestrator.',
+      github: '- Use `mc github pr list` for GitHub reads.',
       context: '### User Profile\n\n- Name: Martin',
+      dev: 'Use `mc dev ensure`.',
       lens: 'User prefers tabs.',
       focus: 'currently on the grounding MVP',
     });
     assert.match(out, /# Session grounding/);
     assert.match(out, /## Your role/);
     assert.match(out, /You are the orchestrator\./);
+    assert.match(out, /## GitHub capability/);
+    assert.match(out, /mc github pr list/);
     assert.match(out, /## Legacy repo map/);
     assert.match(out, /north star/);
     assert.match(out, /## Memoro profile context/);
     assert.match(out, /### User Profile/);
+    assert.match(out, /## Development runtime/);
+    assert.match(out, /mc dev ensure/);
     assert.match(out, /## Legacy dynamic Memoro context/);
     assert.match(out, /User prefers tabs\./);
     assert.match(out, /## Current focus/);
@@ -57,6 +64,16 @@ describe('assembleBundle (pure)', () => {
     const out = assembleBundle({ role: 'role text' });
     assert.ok(!/## Legacy repo map/.test(out), 'map section should be absent');
     assert.match(out, /## Your role/);
+  });
+
+  it('renders concise agent guidance from a selected development plan', () => {
+    const guidance = renderDevGrounding({
+      service: { name: 'web' },
+      profile: { name: 'agent' },
+    });
+    assert.match(guidance, /service `web` with profile `agent`/);
+    assert.match(guidance, /mc dev ensure/);
+    assert.match(guidance, /--restart/);
   });
 
   it('omits empty / whitespace-only parts', () => {
@@ -233,6 +250,25 @@ describe('groundSession', () => {
       tool: 'codex',
       codingSessionId: 'sess_ground1',
       sessionName: 'update-memoro',
+      sessionCapabilities: {
+        schema: 1,
+        github: {
+          state: 'ready',
+          transport: 'mc-broker-v1',
+          actor: 'installation',
+          account: 'meetmemoro',
+          repository: {
+            id: 301,
+            full_name: 'meetmemoro/memoro-cli',
+            owner: 'meetmemoro',
+            name: 'memoro-cli',
+            private: true,
+            archived: false,
+            account: 'meetmemoro',
+          },
+          operations: ['pull_request.list'],
+        },
+      },
       deps: {
         readMapImpl: async () => {
           readMapCalled = true;
@@ -272,6 +308,10 @@ describe('groundSession', () => {
     assert.match(adapter.written.markdown, /Prefer Swedish collaboration/);
     assert.match(adapter.written.markdown, /Coding session: `sess_ground1`/);
     assert.match(adapter.written.markdown, /on grounding/);
+    assert.match(adapter.written.markdown, /## GitHub capability/);
+    assert.match(adapter.written.markdown, /brokered through the Memoro GitHub App/);
+    assert.match(adapter.written.markdown, /mc github pr list\|view\|checks/);
+    assert.doesNotMatch(adapter.written.markdown, /gh auth login|github_pat_|ghs_/);
     assert.match(adapter.written.markdown, /respond to the user in Swedish/i);
     assert.equal(res.parts.language, 'Swedish');
     assert.equal(adapter.written.cwd, dir);
@@ -294,6 +334,25 @@ describe('groundSession', () => {
     assert.match(adapter.written.markdown, /role/);
     assert.doesNotMatch(adapter.written.markdown, /## Legacy repo map/);
     assert.doesNotMatch(adapter.written.markdown, /## Legacy MEMORO\.md lifecycle/);
+  });
+
+  it('grounds agents to the selected worktree-local dev plan', async () => {
+    const adapter = fakeAdapter();
+    const res = await groundSession({
+      cwd: dir,
+      adapter,
+      deps: {
+        fetchMcContextDataImpl: async () => null,
+        resolveDevPlanImpl: async () => ({
+          service: { name: 'web' },
+          profile: { name: 'agent' },
+        }),
+      },
+    });
+    assert.equal(res.ok, true);
+    assert.match(res.parts.dev, /mc dev ensure/);
+    assert.match(adapter.written.markdown, /## Development runtime/);
+    assert.match(adapter.written.markdown, /service `web` with profile `agent`/);
   });
 
   it('supports adapters that deliver grounding as a startup message', async () => {

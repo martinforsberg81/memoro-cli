@@ -942,10 +942,14 @@ Gates:
 
 ## Open decisions before broad cloud use
 
-- Cloud worktree bootstrap: server catalog `repo_id` is the product path. Public
-  clone refs can bootstrap dogfood in the single-worktree MVP; private repo
-  access needs a trusted capability/sidecar that consumes secrets without
-  exposing values to the session.
+- Cloud worktree bootstrap: server catalog `repo_id` is the product path. The
+  private-repository decision is resolved by
+  `docs/plans/github-app-capability.md`: one central Memoro GitHub App, a typed
+  local/cloud broker capability, and a trusted git executor that consumes
+  short-lived installation credentials without exposing values to the coding
+  session. The admin-only connection/catalog foundation is deployed; read
+  operations and trusted git executors remain pending. Public clone refs may
+  still bootstrap single-worktree dogfood until those gates land.
 - Cloud provider auth: user-vault materialisation, Memoro-managed provider
   key, or tool-specific OAuth. Lean: one supported adapter first, with explicit
   product/security choice before public use.

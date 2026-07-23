@@ -334,4 +334,5 @@ describe('buildAnnotations', () => {
     const out = buildAnnotations({ raw, parsed: {}, cwd: null });
     assert.equal(out.coding_context.primary_languages[0].lang, 'typescript');
   });
+
 });

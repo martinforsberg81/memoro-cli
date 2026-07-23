@@ -8,7 +8,14 @@ import { createFetchTranscriptHandler } from '../../commands/handlers/fetch-tran
 import { memoroFetch } from '../../lib/api.js';
 import { DEFAULT_TOOL } from '../../lib/config.js';
 import { extractExcerpt } from '../session-excerpt.js';
+import {
+  resolveSessionSourceIdentity,
+  SessionProjectionTracker,
+} from '../session-projector.js';
 import { scheduleSessionUpload } from '../session-upload.js';
+import { executeGitHubControlPlaneOperation } from '../github-session.js';
+import { createConnectionClient } from '../connections/client.js';
+import { createBoundIdentityBroker } from '../connections/identity.js';
 
 const TICK_INTERVAL_MS = 60_000;
 const MAX_ATTEMPTS = 3;
@@ -19,7 +26,7 @@ export class BrokerSessionSidecars {
   constructor({
     session,
     coding,
-    createServerImpl = createServer,
+    createServerImpl = (handler) => createServer({ allowHalfOpen: true }, handler),
     wsClientFactory = (opts) => new CliWsClient(opts),
     fetchTranscriptHandlerFactory = createFetchTranscriptHandler,
     memoroFetchImpl = memoroFetch,
@@ -30,6 +37,8 @@ export class BrokerSessionSidecars {
     maxAttempts = MAX_ATTEMPTS,
     excerptMaxChars = EXCERPT_MAX_CHARS,
     sessionUploadScheduler = scheduleSessionUpload,
+    projectionTracker = null,
+    connectionClient = null,
     logger = silentLogger(),
   } = {}) {
     if (!session) throw new TypeError('session is required');
@@ -40,6 +49,18 @@ export class BrokerSessionSidecars {
     this.wsClientFactory = wsClientFactory;
     this.fetchTranscriptHandlerFactory = fetchTranscriptHandlerFactory;
     this.memoroFetch = memoroFetchImpl;
+    this.connectionClient = connectionClient || (
+      coding.apiUrl && coding.token
+        ? createConnectionClient({
+            identityBroker: createBoundIdentityBroker({
+              token: coding.token,
+              apiUrl: coding.apiUrl,
+              memoroFetch: memoroFetchImpl,
+            }),
+            memoroFetch: memoroFetchImpl,
+          })
+        : null
+    );
     this.sleep = sleepImpl;
     this.now = now;
     this.heartbeatIntervalMs = heartbeatIntervalMs;
@@ -47,6 +68,17 @@ export class BrokerSessionSidecars {
     this.maxAttempts = maxAttempts;
     this.excerptMaxChars = excerptMaxChars;
     this.sessionUploadScheduler = sessionUploadScheduler;
+    this.sourceIdentity = resolveSessionSourceIdentity({
+      sourceId: coding.sourceId || coding.source_id,
+      sourceKind: coding.sourceKind || coding.source_kind,
+      sourceName: coding.sourceName || coding.source_name,
+      cloudSessionId: coding.cloudSessionId || coding.cloud_session_id,
+      machineId: coding.machineId,
+    });
+    this.projectionTracker = projectionTracker || new SessionProjectionTracker({
+      cwd: session.cwd,
+      now,
+    });
     this.logger = logger;
 
     this.dispatchServer = null;
@@ -84,6 +116,7 @@ export class BrokerSessionSidecars {
       label: this.coding.label || null,
       tool: this.coding.tool || null,
       source: this._codingSource(),
+      ...this.sourceIdentity,
       tool_session_id: this.coding.toolSessionId || this.coding.tool_session_id || null,
       tool_transcript_path: this.coding.transcriptPath || this.coding.tool_transcript_path || null,
       sock_path: this.coding.sockPath || null,
@@ -106,11 +139,22 @@ export class BrokerSessionSidecars {
 
     const server = this.createServerImpl((conn) => {
       let buf = '';
+      conn.on('error', () => {});
       conn.on('data', (chunk) => { buf += chunk.toString('utf8'); });
-      conn.on('end', () => {
+      conn.on('end', async () => {
         let payload;
         try { payload = JSON.parse(buf); } catch {
           conn.end(JSON.stringify({ ok: false, error: 'invalid JSON' }) + '\n');
+          return;
+        }
+        if (payload?.type === 'github_operation') {
+          const response = await executeGitHubControlPlaneOperation({
+            connectionClient: this.connectionClient,
+            codingSessionId: this.coding.codingSessionId,
+            request: payload,
+            memoroFetchImpl: this.memoroFetch,
+          });
+          conn.end(JSON.stringify(response) + '\n');
           return;
         }
         const message = payload?.message;
@@ -162,19 +206,19 @@ export class BrokerSessionSidecars {
       await postHeartbeatWithRetry({
         apiUrl: this.coding.apiUrl,
         token: this.coding.token,
-        payload: {
-          coding_session_id: this.coding.codingSessionId,
-          machine_id: this.coding.machineId || null,
+        payload: buildSessionHeartbeatPayload({
+          codingSessionId: this.coding.codingSessionId,
+          machineId: this.coding.machineId || null,
+          sourceIdentity: this.sourceIdentity,
           source: this._codingSource(),
-          repo: this.coding.repo || null,
+          repo: this.coding.repoRef || this.coding.repo_ref || this.coding.repo || null,
           branch: this.coding.branch || null,
-          files_touched_since_last: [],
-          last_user_excerpt: '',
-          last_assistant_excerpt: extractExcerpt(this.session.recentOutput(), this.excerptMaxChars),
-          idle_seconds: Math.max(0, Math.floor((now - (this.session.lastOutputAt || now)) / 1000)),
+          lastAssistantExcerpt: extractExcerpt(this.session.recentOutput(), this.excerptMaxChars),
+          idleSeconds: Math.max(0, Math.floor((now - (this.session.lastOutputAt || now)) / 1000)),
           at: new Date(now).toISOString(),
-          ...(this.coding.label ? { label: this.coding.label } : {}),
-        },
+          sessionProjection: this.currentProjection({ now }),
+          label: this.coding.label || null,
+        }),
         memoroFetchImpl: this.memoroFetch,
         sleepImpl: this.sleep,
         retryIntervalMs: this.retryIntervalMs,
@@ -188,6 +232,26 @@ export class BrokerSessionSidecars {
   _unlink(path) {
     if (!path) return;
     try { unlinkSync(path); } catch {}
+  }
+
+  currentProjection({ now = this.now() } = {}) {
+    const status = typeof this.session.status === 'function'
+      ? this.session.status()
+      : {
+          started_at: this.session.startedAt ? new Date(this.session.startedAt).toISOString() : null,
+          last_output_at: this.session.lastOutputAt ? new Date(this.session.lastOutputAt).toISOString() : null,
+          last_input_at: this.session.lastInputAt ? new Date(this.session.lastInputAt).toISOString() : null,
+          exit: this.session.exit || null,
+        };
+    return this.projectionTracker.runtime({
+      session: {
+        ...status,
+        session_state: status.exit ? 'dead' : 'live',
+        attachable: !status.exit,
+      },
+      output: this.session.recentOutput(),
+      now,
+    });
   }
 
   async _scheduleUpload() {
@@ -212,6 +276,39 @@ export class BrokerSessionSidecars {
       || sourceForTool(this.coding.tool)
       || sourceForTool(DEFAULT_TOOL);
   }
+}
+
+export function buildSessionHeartbeatPayload({
+  codingSessionId,
+  machineId,
+  sourceIdentity = {},
+  source,
+  repo,
+  branch,
+  lastAssistantExcerpt = '',
+  idleSeconds = 0,
+  at,
+  sessionProjection,
+  label = null,
+} = {}) {
+  return {
+    coding_session_id: codingSessionId,
+    machine_id: machineId,
+    source_id: sourceIdentity.source_id,
+    source_kind: sourceIdentity.source_kind,
+    source_name: sourceIdentity.source_name,
+    cloud_session_id: sourceIdentity.cloud_session_id,
+    source,
+    repo,
+    branch,
+    files_touched_since_last: [],
+    last_user_excerpt: '',
+    last_assistant_excerpt: lastAssistantExcerpt,
+    idle_seconds: idleSeconds,
+    at,
+    session_projection: sessionProjection,
+    ...(label ? { label } : {}),
+  };
 }
 
 export function sourceForTool(tool) {

@@ -8,10 +8,22 @@ import {
 
 describe('runtime secret env scrubber', () => {
   test('removes raw Memoro tokens while preserving non-secret env', () => {
-    const env = { MEMORO_TOKEN: 'mem_secret', PATH: '/bin', TERM: 'xterm' };
+    const env = {
+      MEMORO_TOKEN: 'mem_secret',
+      GH_TOKEN: 'gh_secret',
+      GITHUB_TOKEN: 'github_secret',
+      GH_ENTERPRISE_TOKEN: 'ghe_secret',
+      GITHUB_ENTERPRISE_TOKEN: 'github_enterprise_secret',
+      PATH: '/bin',
+      TERM: 'xterm',
+    };
     const scrubbed = scrubRuntimeSecretsFromEnv(env);
 
     assert.equal(scrubbed.MEMORO_TOKEN, undefined);
+    assert.equal(scrubbed.GH_TOKEN, undefined);
+    assert.equal(scrubbed.GITHUB_TOKEN, undefined);
+    assert.equal(scrubbed.GH_ENTERPRISE_TOKEN, undefined);
+    assert.equal(scrubbed.GITHUB_ENTERPRISE_TOKEN, undefined);
     assert.equal(scrubbed.PATH, '/bin');
     assert.equal(env.MEMORO_TOKEN, 'mem_secret');
   });

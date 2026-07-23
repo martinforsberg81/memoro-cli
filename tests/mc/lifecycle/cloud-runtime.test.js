@@ -10,6 +10,7 @@ import {
   parseArgs,
   prepareWorkspace,
   runCloudRuntimeWith,
+  runProcessDefault,
   validateCloudRuntimeOptions,
 } from '../../../src/mc/commands/cloud-runtime.js';
 import {
@@ -143,9 +144,108 @@ describe('mc cloud-runtime workspace', () => {
     assert.equal(result.cloned, true);
     assert.equal(calls.length, 1);
     assert.equal(calls[0].cmd, 'git');
+    assert.deepEqual(calls[0].args.slice(0, 10), [
+      '-c',
+      'credential.helper=!f() { test "$1" = get || exit 0; echo username=x-access-token; echo password=$MC_CLOUD_GIT_TOKEN; }; f',
+      '-c',
+      'protocol.version=2',
+      'clone',
+      '--depth',
+      '1',
+      '--filter=blob:none',
+      '--single-branch',
+      '--no-tags',
+    ]);
     assert.deepEqual(calls[0].args.slice(-2), ['https://github.com/martinforsberg81/memoro.git', m.runtime.cwd]);
     assert.equal(JSON.stringify(calls[0].args).includes('ghp_private_secret'), false);
     assert.equal(calls[0].options.env.MC_CLOUD_GIT_TOKEN, 'ghp_private_secret');
+    assert.equal(calls[0].options.env.GIT_LFS_SKIP_SMUDGE, '1');
+    assert.equal(calls[0].options.timeoutMs, 90_000);
+  });
+
+  test('resolves the function-shaped cwd supplied by the CLI entrypoint', async () => {
+    const calls = [];
+    const result = await prepareWorkspace(manifest(), {
+      deps: {
+        cwd: () => '/workspace/runtime',
+        runProcess: async (cmd, args, options) => {
+          calls.push({ cmd, args, options });
+          return { code: 0, stdout: '', stderr: '' };
+        },
+      },
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(calls[0].options.cwd, '/workspace/runtime');
+  });
+
+  test('fails explicitly instead of launching against an empty repo after clone timeout', async () => {
+    const calls = [];
+    const m = manifest();
+    const result = await prepareWorkspace(m, {
+      deps: {
+        workspaceCloneTimeoutMs: 25,
+        runProcess: async (cmd, args, options) => {
+          calls.push({ cmd, args, options });
+          return { code: 124, timedOut: true, error: 'process timed out' };
+        },
+      },
+    });
+
+    assert.equal(result.ok, false);
+    assert.equal(result.code, 'workspace_clone_timeout');
+    assert.equal(result.clone_failed, true);
+    assert.equal(result.initialized_empty, false);
+    assert.match(result.error, /timed out after 1s/);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].options.timeoutMs, 25);
+  });
+
+  test('terminates subprocesses that exceed their timeout', async () => {
+    const result = await runProcessDefault(process.execPath, [
+      '-e',
+      'setTimeout(() => {}, 1000)',
+    ], { timeoutMs: 20 });
+
+    assert.equal(result.code, 124);
+    assert.equal(result.timedOut, true);
+    assert.match(result.error, /timed out/);
+  });
+
+  test('terminates descendant processes that keep inherited pipes open', {
+    skip: process.platform === 'win32',
+  }, async () => {
+    const started = Date.now();
+    const result = await runProcessDefault(process.execPath, [
+      '-e',
+      [
+        "const { spawn } = require('node:child_process');",
+        "spawn(process.execPath, ['-e', 'setTimeout(() => {}, 3000)'], { stdio: ['ignore', 'inherit', 'inherit'] });",
+        'setTimeout(() => {}, 3000);',
+      ].join(' '),
+    ], { timeoutMs: 20 });
+
+    assert.equal(result.code, 124);
+    assert.equal(result.timedOut, true);
+    assert.ok(Date.now() - started < 1_000, 'the inherited pipe should not delay timeout completion');
+  });
+
+  test('terminates a subprocess when an outer watchdog aborts it', {
+    skip: process.platform === 'win32',
+  }, async () => {
+    const controller = new AbortController();
+    const started = Date.now();
+    const pending = runProcessDefault(process.execPath, [
+      '-e',
+      'setTimeout(() => {}, 3000)',
+    ], { timeoutMs: 3_000, signal: controller.signal });
+    setTimeout(() => controller.abort(), 20);
+
+    const result = await pending;
+
+    assert.equal(result.code, 124);
+    assert.equal(result.timedOut, true);
+    assert.ok(Date.now() - started < 1_000, 'abort should not wait for the subprocess timeout');
   });
 
   test('reuses an existing git workspace instead of replacing it', async () => {
@@ -328,12 +428,47 @@ describe('mc cloud-runtime coding bin snapshots', () => {
 });
 
 describe('mc cloud-runtime run', () => {
+  test('fails explicitly when workspace preparation never settles', async () => {
+    const streams = io();
+    const m = manifest();
+    writeFileSync(m.runtime.paths.manifest, JSON.stringify(m), 'utf8');
+    const reports = [];
+    const started = Date.now();
+
+    const code = await runCloudRuntimeWith(parseArgs([
+      'run',
+      '--cloud-session-id',
+      m.cloud_session_id,
+      '--manifest',
+      m.runtime.paths.manifest,
+      '--json',
+    ]), {
+      stdout: streams.stdout,
+      stderr: streams.stderr,
+      env: { MEMORO_TOKEN: 'mem_runtime_secret' },
+      workspacePrepareTimeoutMs: 20,
+      prepareWorkspace: async () => new Promise(() => {}),
+      reportRuntimeStatus: async (report) => { reports.push(report); return { ok: true }; },
+    });
+
+    assert.equal(code, 1);
+    assert.ok(Date.now() - started < 1_000);
+    assert.match(streams.err(), /workspace prepare timed out/);
+    const failed = reports.map((entry) => entry.report || entry).find((report) => (
+      report.error_code === 'workspace_prepare_timeout'
+    ));
+    assert.ok(failed);
+    assert.equal(failed.process_status, 'exited');
+    assert.equal(failed.events[0].type, 'workspace.prepare.failed');
+  });
+
   test('prepares workspace, launches typed cloud-session, reports status, then connects broker', async () => {
     const streams = io();
     const m = manifest();
     writeFileSync(m.runtime.paths.manifest, JSON.stringify(m), 'utf8');
     const reports = [];
     const launchCalls = [];
+    const providerLaunches = [];
     const brokerCalls = [];
     const gitCalls = [];
     const persistWatchers = [];
@@ -362,6 +497,10 @@ describe('mc cloud-runtime run', () => {
       },
       runCloudSessionWith: async (opts, deps) => {
         launchCalls.push({ opts, deps });
+        await deps.launchBrokerOwnedSession({
+          attachAfterLaunch: true,
+          cloudBroker: { sourceKind: 'cloud' },
+        });
         deps.stdout.write(JSON.stringify({
           ok: true,
           cloud_session_id: m.cloud_session_id,
@@ -369,6 +508,10 @@ describe('mc cloud-runtime run', () => {
           source_id: 'cloud:cld_runtime1',
         }));
         return 0;
+      },
+      launchBrokerOwnedSession: async (args) => {
+        providerLaunches.push(args);
+        return { code: 0, codingSessionId: 'sess_runtime1', attached: false };
       },
       connectBroker: async (args) => {
         brokerCalls.push(args);
@@ -409,6 +552,9 @@ describe('mc cloud-runtime run', () => {
     assert.equal(launchCalls[0].deps.env.MC_CLOUD_GIT_TOKEN, undefined);
     assert.equal(launchCalls[0].deps.env.MC_CODEX_API_KEY, undefined);
     assert.equal(launchCalls[0].deps.env.OPENAI_API_KEY, undefined);
+    assert.equal(providerLaunches.length, 1);
+    assert.equal(providerLaunches[0].attachAfterLaunch, false);
+    assert.equal((await providerLaunches[0].ensureCloudBroker()).supervisor_managed, true);
     assert.equal(brokerCalls.length, 1);
     assert.equal(typeof brokerCalls[0].onConnected, 'function');
     assert.equal(persistWatchers.length, 1);
@@ -442,6 +588,9 @@ describe('mc cloud-runtime run', () => {
     assert.equal(readiness.tool_auth.ready, true);
     assert.equal(readiness.broker.connected, true);
     assert.ok(eventTypes.includes('workspace.prepare.started'));
+    assert.ok(eventTypes.includes('workspace.prepare.inspecting'));
+    assert.ok(eventTypes.includes('workspace.clone.started'));
+    assert.ok(eventTypes.includes('workspace.clone.finished'));
     assert.ok(eventTypes.includes('workspace.prepare.finished'));
     assert.ok(eventTypes.includes('provider.launch.started'));
     assert.ok(eventTypes.includes('provider.launch.finished'));

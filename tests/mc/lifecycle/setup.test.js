@@ -24,6 +24,17 @@ import { tmpdir } from 'node:os';
 import { runMc, parseJsonOrNull } from '../_helpers/cli.js';
 import { makeTempRepo } from '../_helpers/git-fixture.js';
 
+const READY_CONNECTION = Object.freeze({
+  schema: 1,
+  provider: { id: 'github', label: 'GitHub', custody: 'control_plane' },
+  state: 'ready',
+  repair_action: null,
+  account: null,
+  resources: [],
+  sources: { local: 'ready', cloud: 'unavailable' },
+  capabilities: [],
+});
+
 describe('mc setup — checklist (red path)', () => {
   let repo, pidDir;
   beforeEach(() => {
@@ -41,7 +52,7 @@ describe('mc setup — checklist (red path)', () => {
       env: { MC_HOME: repo.mcHome, MC_ORPHAN_PID_DIR: pidDir, HOME: repo.root },
     });
     assert.equal(r.status, 1, r.stderr);
-    assert.match(r.stdout, /mc setup — \d+ local setup step/);
+    assert.match(r.stdout, /mc setup — \d+ setup step/);
     assert.match(r.stdout, /1\. Sign in to Memoro/);
     assert.match(r.stdout, /run:\s+mc/);
     assert.match(r.stdout, /browser device sign-in/);
@@ -52,7 +63,7 @@ describe('mc setup — checklist (red path)', () => {
     assert.ok(!existsSync(join(repo.mcHome, '.setup-done-v1')));
   });
 
-  test('--json shape includes readiness, resource profile, steps, and sentinel', () => {
+  test('--json shape includes readiness, resource profile, dependency mode, steps, and sentinel', () => {
     const r = runMc(['setup', '--json'], {
       cwd: repo.dir,
       env: { MC_HOME: repo.mcHome, MC_ORPHAN_PID_DIR: pidDir, HOME: repo.root },
@@ -70,6 +81,7 @@ describe('mc setup — checklist (red path)', () => {
     assert.equal(j.resource_profile.profile, 'unlimited');
     assert.equal(j.resource_profile.enabled, false);
     assert.match(j.resource_profile.recommended, /^(unlimited|balanced|conservative)$/);
+    assert.equal(j.dependency_mode, 'auto');
   });
 
   test('--resource-profile is scriptable and persists globally', () => {
@@ -90,6 +102,25 @@ describe('mc setup — checklist (red path)', () => {
       env: { MC_HOME: repo.mcHome, MC_ORPHAN_PID_DIR: pidDir, HOME: repo.root },
     });
     assert.equal(parseJsonOrNull(rerun.stdout).resource_profile.profile, 'conservative');
+  });
+
+  test('--dependency-mode is scriptable and persists globally', () => {
+    const r = runMc(['setup', '--json', '--dependency-mode', 'isolated'], {
+      cwd: repo.dir,
+      env: { MC_HOME: repo.mcHome, MC_ORPHAN_PID_DIR: pidDir, HOME: repo.root },
+    });
+    const j = parseJsonOrNull(r.stdout);
+    assert.ok(j, r.stdout);
+    assert.equal(j.dependency_mode, 'isolated');
+
+    const stored = JSON.parse(readFileSync(join(repo.root, '.memoro', 'config.json'), 'utf8'));
+    assert.equal(stored.dev.dependencies.mode, 'isolated');
+
+    const rerun = runMc(['setup', '--json'], {
+      cwd: repo.dir,
+      env: { MC_HOME: repo.mcHome, MC_ORPHAN_PID_DIR: pidDir, HOME: repo.root },
+    });
+    assert.equal(parseJsonOrNull(rerun.stdout).dependency_mode, 'isolated');
   });
 
   test('checklist commands are real mc verbs the user can paste', () => {
@@ -153,6 +184,20 @@ describe('mc setup — pure helpers (in-process)', () => {
     });
   });
 
+  test('interactive dependency prompt keeps the current mode on Enter', async () => {
+    const { promptDependencyMode } = await import('../../../src/mc/commands/setup.js');
+    let output = '';
+    const selected = await promptDependencyMode({
+      current: 'isolated',
+      ask: async () => '',
+      stdout: { write: (chunk) => { output += chunk; } },
+    });
+    assert.equal(selected, 'isolated');
+    assert.match(output, /Auto:/);
+    assert.match(output, /Isolated \(current\)/);
+    assert.match(output, /Off:/);
+  });
+
   test('custom CLI limits require the custom profile', async () => {
     const { parseArgs } = await import('../../../src/mc/commands/setup.js');
     assert.match(parseArgs(['--heavy-max-threads', '2']).error, /require --resource-profile custom/);
@@ -164,6 +209,8 @@ describe('mc setup — pure helpers (in-process)', () => {
       '--heavy-max-swap-mb', '512',
       '--heavy-min-free-disk-gb', '20',
     ]).resourceProfile, 'custom');
+    assert.equal(parseArgs(['--dependency-mode', 'off']).dependencyMode, 'off');
+    assert.match(parseArgs(['--dependency-mode', 'shared']).error, /auto, isolated, off/);
   });
 
   test('missingSteps([] when report is all green) returns []', async () => {
@@ -179,6 +226,7 @@ describe('mc setup — pure helpers (in-process)', () => {
         gemini: { installed: false, version: null, authenticated: null,
                   hint: 'planned', detailLines: [] },
       },
+      connections: [READY_CONNECTION],
       shell_wrapper: { installed: true, rc: '/fake/.zshrc', hint: null },
       workspace: { mc_home: '/tmp', mc_home_exists: true, session_count: 0,
                    orphan_daemon_count: 0, stale_pidfile_count: 0 },
@@ -198,6 +246,7 @@ describe('mc setup — pure helpers (in-process)', () => {
         gemini: { installed: false, version: null, authenticated: null,
                   hint: 'planned', detailLines: [] },
       },
+      connections: [READY_CONNECTION],
       shell_wrapper: { installed: true, rc: '/fake', hint: null },
       workspace: {},
     };
@@ -222,10 +271,45 @@ describe('mc setup — pure helpers (in-process)', () => {
         gemini: { installed: false, version: null, authenticated: null,
                   hint: 'planned', detailLines: [] },
       },
+      connections: [READY_CONNECTION],
       shell_wrapper: { installed: true, rc: '/fake', hint: null },
       workspace: {},
     };
     assert.deepEqual(missingSteps(report), []);
+  });
+
+  test('missingSteps maps common onboarding repair actions without provider branches', async () => {
+    const { missingSteps } = await import('../../../src/mc/commands/setup.js');
+    const base = {
+      memoro: { authenticated: true, hint: null },
+      tools: {
+        codex: { installed: true, version: '0.137.0', authenticated: null, hint: null, detailLines: [] },
+        claude: { installed: false, version: null, authenticated: null, hint: null, detailLines: [] },
+        gemini: { installed: false, version: null, authenticated: null, hint: null, detailLines: [] },
+      },
+      shell_wrapper: { installed: true, rc: '/fake', hint: null },
+      workspace: {},
+    };
+    const cases = [
+      ['disconnected', 'connect', 'mc connections repair github'],
+      ['connecting', 'connect', 'mc connections repair github'],
+      ['resource_not_selected', 'select_resource', 'mc connections repair github'],
+      ['permission_missing', 'accept_permissions', 'mc connections repair github'],
+      ['suspended', 'resume', 'mc connections repair github'],
+      ['revoked', 'reconnect', 'mc connections repair github'],
+      ['unavailable', 'retry', 'mc connections status github'],
+      ['unavailable', 'contact_admin', 'mc connections status github'],
+    ];
+    for (const [state, action, command] of cases) {
+      const steps = missingSteps({
+        ...base,
+        connections: [{ ...READY_CONNECTION, state, repair_action: action }],
+      });
+      assert.equal(steps.length, 1, state);
+      assert.equal(steps[0].id, `connection-github-${action}`, state);
+      assert.equal(steps[0].command, command, state);
+      assert.doesNotMatch(steps[0].note, /gh auth|keyring|Claude|Codex/, state);
+    }
   });
 
   test('writeSentinel + sentinelPath write to MC_HOME on green', async () => {

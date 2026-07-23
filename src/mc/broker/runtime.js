@@ -348,11 +348,13 @@ export class BrokerRuntime {
     const attached = [...this.attaches.values()]
       .filter((attach) => attach.session_id === session.id)
       .map((attach) => ({ ...attach }));
+    const sessionProjection = this.sidecars.get(session.id)?.currentProjection?.() || null;
     return {
       ...session,
       ...metadata,
       attached,
       writer_attach_id: null,
+      ...(sessionProjection ? { session_projection: sessionProjection } : {}),
     };
   }
 
