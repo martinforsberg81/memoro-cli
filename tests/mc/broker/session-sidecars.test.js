@@ -6,7 +6,11 @@ import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import test, { afterEach, describe } from 'node:test';
 
-import { BrokerSessionSidecars, postHeartbeatWithRetry } from '../../../src/mc/broker/session-sidecars.js';
+import {
+  BrokerSessionSidecars,
+  buildSessionHeartbeatPayload,
+  postHeartbeatWithRetry,
+} from '../../../src/mc/broker/session-sidecars.js';
 import {
   MC_GITHUB_BROKER_SOCKET_ENV,
   executeGitHubSessionOperation,
@@ -84,6 +88,50 @@ async function startRealGitHubSidecar({ paths, memoroFetchImpl }) {
 }
 
 describe('BrokerSessionSidecars', () => {
+  test('builds the shared credential-free session heartbeat envelope', () => {
+    const payload = buildSessionHeartbeatPayload({
+      codingSessionId: 'sess_abcdef',
+      machineId: 'machine',
+      sourceIdentity: {
+        source_id: 'local:machine',
+        source_kind: 'local',
+        source_name: 'machine',
+        cloud_session_id: null,
+        token: 'must-not-leak',
+        installation_id: 123,
+      },
+      source: 'codex',
+      repo: 'widgets',
+      branch: 'main',
+      lastAssistantExcerpt: 'bounded',
+      idleSeconds: 3,
+      at: '2026-07-23T10:00:00.000Z',
+      sessionProjection: { contract_version: 'mc-session-projection-v1' },
+      label: 'feature',
+    });
+    assert.equal(JSON.stringify(payload).includes('must-not-leak'), false);
+    assert.equal('installation_id' in payload, false);
+
+    assert.deepEqual(payload, {
+      coding_session_id: 'sess_abcdef',
+      machine_id: 'machine',
+      source_id: 'local:machine',
+      source_kind: 'local',
+      source_name: 'machine',
+      cloud_session_id: null,
+      source: 'codex',
+      repo: 'widgets',
+      branch: 'main',
+      files_touched_since_last: [],
+      last_user_excerpt: '',
+      last_assistant_excerpt: 'bounded',
+      idle_seconds: 3,
+      at: '2026-07-23T10:00:00.000Z',
+      session_projection: { contract_version: 'mc-session-projection-v1' },
+      label: 'feature',
+    });
+  });
+
   test('default GitHub request IDs reach trusted execution over the real session socket', async (t) => {
     const paths = tempPaths();
     const requests = [];
@@ -328,6 +376,7 @@ describe('BrokerSessionSidecars', () => {
         machineId: 'machine',
         source: 'claude-code',
         repo: 'repo',
+        repoRef: 'acme/repo',
         branch: 'main',
         label: 'alpha',
         metaPath: paths.metaPath,
@@ -366,6 +415,7 @@ describe('BrokerSessionSidecars', () => {
     assert.equal(heartbeats[0].opts.body.coding_session_id, 'sess_a');
     assert.equal(heartbeats[0].opts.body.machine_id, 'machine');
     assert.equal(heartbeats[0].opts.body.source_id, 'local:machine');
+    assert.equal(heartbeats[0].opts.body.repo, 'acme/repo');
     assert.equal(heartbeats[0].opts.body.last_assistant_excerpt, 'ready\n');
     assert.equal(heartbeats[0].opts.body.idle_seconds, 1);
     assert.equal(heartbeats[0].opts.body.session_projection.contract_version, 'mc-session-projection-v1');
