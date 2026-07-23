@@ -645,8 +645,8 @@ In scope:
   from the normative contract;
 - preserve mc's hard capability policy, exact write schemas, idempotency,
   preconditions, credential boundary, and audit responsibility;
-- define the compatibility PR 5C, corrective PR 5R, revised local PR 6, and
-  exact new-user acceptance journey.
+- define the compatibility PR 5C, launch-binding PR 5D, corrective PR 5R,
+  revised local PR 6, and exact new-user acceptance journey.
 
 Not in scope: production flag changes, server/browser code, provider settings,
 GitHub App permissions, token handling, git transport, or live writes.
@@ -816,9 +816,50 @@ Gate: install the updated mc build for the admin dogfood user and repeat the
 local read smoke against the still-legacy server response. Reads must remain
 green and the coding-tool child must contain no mc approval mode.
 
+### PR 5D — establish the session repository before child launch (`memoro-cli`)
+
+Live PR 5C dogfood exposed a launch race that the read fixtures did not model:
+the child could receive a ready GitHub descriptor before the first asynchronous
+heartbeat had created the server-known session projection used for numeric
+repository binding.
+
+Depends on deployed PR 5C and ships before PR 5R.
+
+In scope:
+
+- synchronously post one authenticated `runtime_starting` session projection
+  after GitHub readiness is resolved and before grounding or child launch;
+- immediately execute the token-free typed `connection.status` operation from
+  the trusted launch client so the server proves and persists the immutable
+  numeric binding before readiness is exposed;
+- use the exact normalized `owner/repository` public ref already derived by mc
+  rather than an ambiguous repository basename;
+- share one credential-free heartbeat payload builder with the periodic
+  sidecar heartbeat so initial and steady-state identity fields cannot drift;
+- if initial registration fails, replace the child-facing GitHub capability
+  with `unavailable` and continue the coding session without advertising a
+  ready operation surface;
+- treat a missing or ambiguous server binding as registration failure even when
+  the heartbeat transport itself returned success.
+
+Not in scope: accepting repository identity from the coding tool, changing the
+operation schema, server/browser approval changes, writes, provider settings,
+git transport, or making all coding-session startup depend on GitHub.
+
+Tests first: registration-before-grounding/launch order, exact full repository
+hint, no credential or authority fields in the heartbeat body, failure
+downgrade before child env creation, shared periodic payload parity, and local/
+cloud identity parity.
+
+Gate: start a fresh named local session from the installed build and run a
+brokered PR read as its first GitHub operation without waiting for a background
+heartbeat or manually repairing D1. The server must create the immutable
+numeric repository binding and the child descriptor must contain no approval
+mode or credential.
+
 ### PR 5R — remove mc-owned approval and restore safe write execution (`memoro`)
 
-Depends on deployed PR 5C.
+Depends on deployed PR 5D.
 
 In scope:
 

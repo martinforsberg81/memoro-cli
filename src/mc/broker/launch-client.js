@@ -23,14 +23,23 @@ import { ensureBrokerRunning } from './supervisor.js';
 import { ensureCloudBrokerConnected } from './cloud-supervisor.js';
 import { scrubRuntimeSecretsInPlace } from '../runtime-secrets.js';
 import { ensureSessionHostRunning } from './session-hosts.js';
+import {
+  buildSessionHeartbeatPayload,
+  postHeartbeatWithRetry,
+} from './session-sidecars.js';
 import { prepareCloudCodexAuth } from '../cloud-codex-auth.js';
-import { resolveSessionSourceIdentity } from '../session-projector.js';
+import {
+  projectRuntimeSession,
+  resolveSessionSourceIdentity,
+} from '../session-projector.js';
 import { resolveDevPlan, resolveDevSessionEnvironment } from '../dev-definition.js';
 import {
+  executeGitHubControlPlaneOperation,
   fetchGitHubSessionCapabilities,
   prepareGitHubSessionForLaunch,
   unavailableGitHubSessionCapabilities,
 } from '../github-session.js';
+import { encodeGitHubOperationRequest } from '../github-contract.js';
 
 const CLOUD_BROKER_START_TIMEOUT_MS = 10_000;
 const CODEX_SQLITE_STARTUP_WINDOW_MS = 20_000;
@@ -119,6 +128,27 @@ export async function launchBrokerOwnedSession({
       memoroFetchImpl: deps.memoroFetch,
     });
   } catch {}
+  if (sessionCapabilities.github.state === 'ready') {
+    const registered = await (deps.registerGitHubSessionProjection || registerGitHubSessionProjection)({
+      apiUrl,
+      token,
+      codingSessionId,
+      machineId,
+      sourceIdentity,
+      source: launch.spec.heartbeatSource,
+      repo: deriveRepoName(repoContext),
+      repoRef,
+      branch: repoContext.branch,
+      label: sessionName || label,
+      now,
+      postHeartbeat: deps.postHeartbeat,
+      memoroFetchImpl: deps.memoroFetch,
+    });
+    if (!registered) {
+      sessionCapabilities = unavailableGitHubSessionCapabilities();
+      stderr.write('mc: GitHub session registration failed; launching with GitHub unavailable\n');
+    }
+  }
   let groundingLaunchMessage = null;
   if (sendStartupMessage) {
     try {
@@ -434,6 +464,71 @@ export function brokerSessionPaths(codingSessionId) {
     sockPath: join(mcHome(), `${codingSessionId}.sock`),
     metaPath: join(mcHome(), `${codingSessionId}.json`),
   };
+}
+
+export async function registerGitHubSessionProjection({
+  apiUrl,
+  token,
+  codingSessionId,
+  machineId,
+  sourceIdentity,
+  source,
+  repo,
+  repoRef,
+  branch,
+  label = null,
+  now = () => Date.now(),
+  postHeartbeat = postHeartbeatWithRetry,
+  bindSession = executeGitHubControlPlaneOperation,
+  memoroFetchImpl,
+} = {}) {
+  const timestamp = now();
+  const sessionProjection = projectRuntimeSession({
+    session: {
+      started_at: new Date(timestamp).toISOString(),
+      session_state: 'starting',
+      attachable: false,
+    },
+    output: '',
+    now: timestamp,
+    git: null,
+  });
+  try {
+    const registered = await postHeartbeat({
+      apiUrl,
+      token,
+      payload: buildSessionHeartbeatPayload({
+        codingSessionId,
+        machineId,
+        sourceIdentity,
+        source,
+        repo: repoRef || repo,
+        branch,
+        idleSeconds: 0,
+        at: new Date(timestamp).toISOString(),
+        sessionProjection,
+        label,
+      }),
+      maxAttempts: 1,
+      memoroFetchImpl,
+    });
+    if (!registered) return false;
+    const bound = await bindSession({
+      apiUrl,
+      token,
+      sourceId: sourceIdentity?.source_id,
+      codingSessionId,
+      request: encodeGitHubOperationRequest({
+        requestId: `mcr_bind_${timestamp}_${codingSessionId}`.slice(0, 128),
+        operation: 'connection.status',
+        params: {},
+      }),
+      memoroFetchImpl,
+    });
+    return bound?.ok === true && bound?.data?.state === 'ready';
+  } catch {
+    return false;
+  }
 }
 
 async function resolveLaunchAuthToken({ env = process.env, getSecretFn = getSecret } = {}) {

@@ -8,6 +8,7 @@ import {
   ensureBrokerRunning,
   isRetryableCodexSqliteStartupFailure,
   launchBrokerOwnedSession as launchBrokerOwnedSessionImpl,
+  registerGitHubSessionProjection,
 } from '../../../src/mc/broker/launch-client.js';
 import { BROKER_PROTOCOL_VERSION } from '../../../src/mc/broker/daemon.js';
 
@@ -58,6 +59,7 @@ function launchBrokerOwnedSession(options) {
     ...options,
     deps: {
       fetchGitHubSessionCapabilities: async () => SESSION_CAPABILITIES,
+      registerGitHubSessionProjection: async () => true,
       prepareGitHubSessionForLaunch: async ({ baseEnv, capabilities, socketPath }) => ({
         env: {
           ...baseEnv,
@@ -326,6 +328,13 @@ describe('launchBrokerOwnedSession', () => {
         readConfig: async () => ({ apiUrl: 'https://memoro.test' }),
         getApiUrl: () => null,
         getSecret: async () => 'tok',
+        registerGitHubSessionProjection: async (options) => {
+          sequence.push('registerGitHub');
+          assert.equal(options.codingSessionId, 'sess_abc');
+          assert.equal(options.repo, 'repo');
+          assert.equal(options.repoRef, 'org/repo');
+          return true;
+        },
         groundSession: async ({ cwd, focus, codingSessionId, sessionCapabilities }) => {
           assert.equal(cwd, '/repo');
           assert.equal(focus, 'fix tests');
@@ -361,7 +370,7 @@ describe('launchBrokerOwnedSession', () => {
 
     assert.equal(res.code, 0);
     assert.equal(res.codingSessionId, 'sess_abc');
-    assert.deepEqual(sequence, ['ensureBroker', 'request', 'ensureCloudBroker', 'onLaunched', 'attach']);
+    assert.deepEqual(sequence, ['registerGitHub', 'ensureBroker', 'request', 'ensureCloudBroker', 'onLaunched', 'attach']);
     assert.deepEqual(attached, { id: 'sess_abc' });
     assert.equal(launched.codingSessionId, 'sess_abc');
 
@@ -404,6 +413,129 @@ describe('launchBrokerOwnedSession', () => {
     assert.doesNotMatch(childObservable, /installation_id|access_token|private_key/);
     assert.match(streams.out(), /sess_abc/);
     assert.equal(streams.err(), '');
+  });
+
+  test('downgrades GitHub capability before grounding and child launch when initial registration fails', async () => {
+    const streams = makeStreams();
+    let groundedState = null;
+    let launchedCapabilities = null;
+    const res = await launchBrokerOwnedSession({
+      cwd: '/repo',
+      tool: 'codex',
+      attachAfterLaunch: false,
+      stdout: streams.stdout,
+      stderr: streams.stderr,
+      env: { TERM: 'xterm-256color', PATH: '/bin' },
+      request: async (message) => {
+        launchedCapabilities = JSON.parse(message.session.env.MC_SESSION_CAPABILITIES);
+        return { ok: true, session: { id: message.session.id } };
+      },
+      ensureBroker: async () => ({ ok: true, broker: { pid: 42 } }),
+      ensureCloudBroker: async () => ({ ok: true }),
+      deps: {
+        getRepoContext: async () => ({
+          remoteUrl: 'https://github.com/acme/widgets.git',
+          branch: 'main',
+          toplevel: '/repo',
+        }),
+        readConfig: async () => ({ apiUrl: 'https://memoro.test' }),
+        getApiUrl: () => null,
+        getSecret: async () => 'tok',
+        hostname: () => 'machine',
+        lookupOrMint: async () => 'sess_register_fail',
+        registerGitHubSessionProjection: async () => false,
+        groundSession: async ({ sessionCapabilities }) => {
+          groundedState = sessionCapabilities.github.state;
+          return { ok: true };
+        },
+        prepareLocalResourceGuardEnv: ({ baseEnv }) => ({ env: baseEnv }),
+        prepareCloudflareGuardEnv: ({ baseEnv }) => ({ env: baseEnv }),
+        prepareDevCommandGuardEnv: ({ baseEnv }) => ({ env: baseEnv }),
+        getPackageVersion: async () => '0.test',
+      },
+    });
+
+    assert.equal(res.code, 0, streams.err());
+    assert.equal(groundedState, 'unavailable');
+    assert.equal(launchedCapabilities.github.state, 'unavailable');
+    assert.match(streams.err(), /GitHub session registration failed/);
+  });
+
+  test('registers a runtime-starting heartbeat without placing authority or credentials in its body', async () => {
+    let call = null;
+    let binding = null;
+    const ok = await registerGitHubSessionProjection({
+      apiUrl: 'https://memoro.test',
+      token: 'memoro-secret-sentinel',
+      codingSessionId: 'sess_register_ok',
+      machineId: 'machine',
+      sourceIdentity: {
+        source_id: 'local:machine',
+        source_kind: 'local',
+        source_name: 'machine',
+        cloud_session_id: null,
+      },
+      source: 'codex',
+      repo: 'widgets',
+      repoRef: 'acme/widgets',
+      branch: 'main',
+      label: 'feature',
+      now: () => 10_000,
+      postHeartbeat: async (options) => {
+        call = options;
+        return true;
+      },
+      bindSession: async (options) => {
+        binding = options;
+        return { ok: true, data: { state: 'ready' } };
+      },
+    });
+
+    assert.equal(ok, true);
+    assert.equal(call.apiUrl, 'https://memoro.test');
+    assert.equal(call.token, 'memoro-secret-sentinel');
+    assert.equal(call.maxAttempts, 1);
+    assert.equal(call.memoroFetchImpl, undefined);
+    assert.equal(call.payload.coding_session_id, 'sess_register_ok');
+    assert.equal(call.payload.repo, 'acme/widgets');
+    assert.equal(call.payload.branch, 'main');
+    assert.equal(call.payload.session_projection.reason_code, 'runtime_starting');
+    assert.equal(call.payload.session_projection.runtime.lifecycle, 'starting');
+    assert.equal('repo_ref' in call.payload, false);
+    assert.equal(JSON.stringify(call.payload).includes('memoro-secret-sentinel'), false);
+    assert.equal(binding.sourceId, 'local:machine');
+    assert.equal(binding.codingSessionId, 'sess_register_ok');
+    assert.equal(binding.request.operation, 'connection.status');
+    assert.deepEqual(binding.request.params, {});
+    assert.equal(binding.memoroFetchImpl, undefined);
+    assert.equal('repository' in binding.request, false);
+    assert.equal('repo_ref' in binding.request, false);
+  });
+
+  test('keeps GitHub unavailable when the server cannot prove the numeric session binding', async () => {
+    const ok = await registerGitHubSessionProjection({
+      apiUrl: 'https://memoro.test',
+      token: 'tok',
+      codingSessionId: 'sess_bind_missing',
+      machineId: 'machine',
+      sourceIdentity: {
+        source_id: 'local:machine',
+        source_kind: 'local',
+        source_name: 'machine',
+        cloud_session_id: null,
+      },
+      source: 'codex',
+      repoRef: 'acme/widgets',
+      branch: 'main',
+      now: () => 10_000,
+      postHeartbeat: async () => true,
+      bindSession: async () => ({
+        ok: false,
+        error: { code: 'not_found' },
+      }),
+    });
+
+    assert.equal(ok, false);
   });
 
   test('fails closed before child launch when the session gh boundary cannot be installed', async () => {

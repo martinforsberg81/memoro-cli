@@ -193,21 +193,19 @@ export class BrokerSessionSidecars {
       await postHeartbeatWithRetry({
         apiUrl: this.coding.apiUrl,
         token: this.coding.token,
-        payload: {
-          coding_session_id: this.coding.codingSessionId,
-          machine_id: this.coding.machineId || null,
-          ...this.sourceIdentity,
+        payload: buildSessionHeartbeatPayload({
+          codingSessionId: this.coding.codingSessionId,
+          machineId: this.coding.machineId || null,
+          sourceIdentity: this.sourceIdentity,
           source: this._codingSource(),
-          repo: this.coding.repo || null,
+          repo: this.coding.repoRef || this.coding.repo_ref || this.coding.repo || null,
           branch: this.coding.branch || null,
-          files_touched_since_last: [],
-          last_user_excerpt: '',
-          last_assistant_excerpt: extractExcerpt(this.session.recentOutput(), this.excerptMaxChars),
-          idle_seconds: Math.max(0, Math.floor((now - (this.session.lastOutputAt || now)) / 1000)),
+          lastAssistantExcerpt: extractExcerpt(this.session.recentOutput(), this.excerptMaxChars),
+          idleSeconds: Math.max(0, Math.floor((now - (this.session.lastOutputAt || now)) / 1000)),
           at: new Date(now).toISOString(),
-          session_projection: this.currentProjection({ now }),
-          ...(this.coding.label ? { label: this.coding.label } : {}),
-        },
+          sessionProjection: this.currentProjection({ now }),
+          label: this.coding.label || null,
+        }),
         memoroFetchImpl: this.memoroFetch,
         sleepImpl: this.sleep,
         retryIntervalMs: this.retryIntervalMs,
@@ -265,6 +263,39 @@ export class BrokerSessionSidecars {
       || sourceForTool(this.coding.tool)
       || sourceForTool(DEFAULT_TOOL);
   }
+}
+
+export function buildSessionHeartbeatPayload({
+  codingSessionId,
+  machineId,
+  sourceIdentity = {},
+  source,
+  repo,
+  branch,
+  lastAssistantExcerpt = '',
+  idleSeconds = 0,
+  at,
+  sessionProjection,
+  label = null,
+} = {}) {
+  return {
+    coding_session_id: codingSessionId,
+    machine_id: machineId,
+    source_id: sourceIdentity.source_id,
+    source_kind: sourceIdentity.source_kind,
+    source_name: sourceIdentity.source_name,
+    cloud_session_id: sourceIdentity.cloud_session_id,
+    source,
+    repo,
+    branch,
+    files_touched_since_last: [],
+    last_user_excerpt: '',
+    last_assistant_excerpt: lastAssistantExcerpt,
+    idle_seconds: idleSeconds,
+    at,
+    session_projection: sessionProjection,
+    ...(label ? { label } : {}),
+  };
 }
 
 export function sourceForTool(tool) {
