@@ -241,6 +241,169 @@ describe('mc github read operations', () => {
   });
 });
 
+describe('mc github write operations', () => {
+  test('creates a draft PR from locally-derived branch state without authority fields', async () => {
+    const portal = deps();
+    const calls = [];
+    portal.resolveGitHubCreateContext = async ({ base }) => ({
+      head: 'agent/local-write',
+      base,
+      expected_head_sha: 'a'.repeat(40),
+      expected_base_sha: 'b'.repeat(40),
+    });
+    portal.makeRequestId = (() => {
+      let next = 0;
+      return () => `request_local_${++next}abcdef`;
+    })();
+    portal.executeGitHubOperation = async (request) => {
+      calls.push(request);
+      if (request.operation === 'repository.metadata') {
+        return {
+          ok: true,
+          request_id: request.requestId,
+          data: { default_branch: 'main' },
+        };
+      }
+      return {
+        ok: true,
+        request_id: request.requestId,
+        data: {
+          number: 17,
+          title: 'Local draft',
+          state: 'open',
+          draft: true,
+          url: 'https://github.com/acme/widgets/pull/17',
+        },
+      };
+    };
+
+    const code = await runGitHub([
+      'pr', 'create',
+      '--title', 'Local draft',
+      '--body', 'Exact body',
+      '--draft',
+      '--json',
+    ], portal);
+
+    assert.equal(code, 0);
+    assert.equal(portal.stderrText, '');
+    assert.equal(JSON.parse(portal.stdoutText).number, 17);
+    assert.deepEqual(calls[1], {
+      operation: 'pull_request.create',
+      params: {
+        title: 'Local draft',
+        body: 'Exact body',
+        head: 'agent/local-write',
+        base: 'main',
+        draft: true,
+        expected_head_sha: 'a'.repeat(40),
+        expected_base_sha: 'b'.repeat(40),
+      },
+      requestId: 'request_local_2abcdef',
+    });
+    assert.deepEqual(Object.keys(calls[1]).sort(), ['operation', 'params', 'requestId']);
+    assert.doesNotMatch(
+      JSON.stringify(calls[1]),
+      /source_id|coding_session_id|installation_id|access_token|authorization/i,
+    );
+  });
+
+  test('updates a PR from a brokered current-state precondition', async () => {
+    const portal = deps();
+    const calls = [];
+    portal.makeRequestId = (() => {
+      let next = 0;
+      return () => `request_update_${++next}abcdef`;
+    })();
+    portal.executeGitHubOperation = async (request) => {
+      calls.push(request);
+      if (request.operation === 'pull_request.view') {
+        return {
+          ok: true,
+          request_id: request.requestId,
+          data: {
+            number: 7,
+            title: 'Before',
+            head: { ref: 'agent/local-write', sha: 'a'.repeat(40) },
+            updated_at: '2026-07-23T08:00:00.000Z',
+          },
+        };
+      }
+      return {
+        ok: true,
+        request_id: request.requestId,
+        data: { number: 7, title: 'After', state: 'open', draft: true },
+      };
+    };
+
+    const code = await runGitHub([
+      'pr', 'update', '7',
+      '--title', 'After',
+      '--body', 'Updated body',
+      '--json',
+    ], portal);
+
+    assert.equal(code, 0);
+    assert.deepEqual(calls[1], {
+      operation: 'pull_request.update',
+      params: {
+        pull_number: 7,
+        title: 'After',
+        body: 'Updated body',
+        expected_head_sha: 'a'.repeat(40),
+        expected_updated_at: '2026-07-23T08:00:00.000Z',
+      },
+      requestId: 'request_update_2abcdef',
+    });
+  });
+
+  test('fails closed on stale state and never produces browser approval state', async () => {
+    const portal = deps();
+    portal.makeRequestId = () => 'request_stale_abcdefgh';
+    portal.executeGitHubOperation = async (request) => {
+      if (request.operation === 'pull_request.view') {
+        return {
+          ok: true,
+          request_id: request.requestId,
+          data: {
+            number: 7,
+            head: { sha: 'a'.repeat(40) },
+            updated_at: '2026-07-23T08:00:00.000Z',
+          },
+        };
+      }
+      return {
+        ok: false,
+        request_id: request.requestId,
+        error: { code: 'stale_state', message: 'changed', repair_action: 'retry' },
+      };
+    };
+
+    const code = await runGitHub(['pr', 'update', '7', '--title', 'After'], portal);
+    assert.equal(code, 1);
+    assert.match(portal.stderrText, /state changed/i);
+    assert.doesNotMatch(`${portal.stdoutText}${portal.stderrText}`, /approval|browser|https:\/\/meetmemoro/i);
+  });
+
+  test('rejects arbitrary write flags before git or broker access', async () => {
+    for (const argv of [
+      ['pr', 'create', '--title', 'x', '--body', 'y', '--head', 'other'],
+      ['pr', 'create', '--title', 'x', '--body-file', 'secret.txt'],
+      ['pr', 'update', '7', '--state', 'closed'],
+      ['pr', 'update', '7', '--repo', 'acme/other'],
+    ]) {
+      const portal = deps();
+      let brokerCalls = 0;
+      let gitCalls = 0;
+      portal.executeGitHubOperation = async () => { brokerCalls += 1; };
+      portal.resolveGitHubCreateContext = async () => { gitCalls += 1; };
+      assert.equal(await runGitHub(argv, portal), 2, argv.join(' '));
+      assert.equal(brokerCalls, 0);
+      assert.equal(gitCalls, 0);
+    }
+  });
+});
+
 describe('mc github connect/repos and auth alias', () => {
   const connectResponse = {
     ok: true,

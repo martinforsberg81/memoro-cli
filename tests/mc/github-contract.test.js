@@ -6,6 +6,7 @@ import {
   GITHUB_OPERATION_EFFECTS,
   GITHUB_OPERATION_SCHEMA,
   GITHUB_STABLE_ERRORS,
+  GITHUB_WRITE_OPERATIONS,
   buildSessionCapabilities,
   decodeGitHubConnectionResponse,
   decodeGitHubOperationRequest,
@@ -201,7 +202,13 @@ describe('github-op-v1 codecs', () => {
       'pull_request.list': 'read',
       'pull_request.view': 'read',
       'checks.list': 'read',
+      'pull_request.create': 'write',
+      'pull_request.update': 'write',
     });
+    assert.deepEqual(GITHUB_WRITE_OPERATIONS, [
+      'pull_request.create',
+      'pull_request.update',
+    ]);
   });
 
   test('normalizes every read operation to the shared schema', () => {
@@ -227,6 +234,71 @@ describe('github-op-v1 codecs', () => {
         operation,
         params: expectedParams,
       });
+    }
+  });
+
+  test('normalizes exact provider-neutral PR write requests', () => {
+    assert.deepEqual(encodeGitHubOperationRequest({
+      requestId: 'request_create_abcdefgh',
+      operation: 'pull_request.create',
+      params: {
+        title: '  Draft title  ',
+        body: 'Exact body\n',
+        head: 'agent/write',
+        base: 'main',
+        draft: true,
+        expected_head_sha: 'A'.repeat(40),
+        expected_base_sha: 'B'.repeat(40),
+      },
+    }).params, {
+      title: 'Draft title',
+      body: 'Exact body\n',
+      head: 'agent/write',
+      base: 'main',
+      draft: true,
+      expected_head_sha: 'a'.repeat(40),
+      expected_base_sha: 'b'.repeat(40),
+    });
+
+    assert.deepEqual(encodeGitHubOperationRequest({
+      requestId: 'request_update_abcdefgh',
+      operation: 'pull_request.update',
+      params: {
+        pull_number: 7,
+        title: '  Updated title  ',
+        body: '',
+        expected_head_sha: 'A'.repeat(40),
+        expected_updated_at: '2026-07-23T10:00:00+02:00',
+      },
+    }).params, {
+      pull_number: 7,
+      title: 'Updated title',
+      body: '',
+      expected_head_sha: 'a'.repeat(40),
+      expected_updated_at: '2026-07-23T08:00:00.000Z',
+    });
+  });
+
+  test('rejects write authority fields and incomplete preconditions', () => {
+    const base = {
+      requestId: 'request_write_abcdefgh',
+      operation: 'pull_request.create',
+      params: {
+        title: 'Draft',
+        body: '',
+        head: 'agent/write',
+        base: 'main',
+        draft: true,
+        expected_head_sha: 'a'.repeat(40),
+        expected_base_sha: 'b'.repeat(40),
+      },
+    };
+    for (const params of [
+      { ...base.params, repository: 'acme/other' },
+      { ...base.params, head: 'agent/write', expected_head_sha: undefined },
+      { ...base.params, force: true },
+    ]) {
+      assert.throws(() => encodeGitHubOperationRequest({ ...base, params }));
     }
   });
 
@@ -264,7 +336,11 @@ describe('github-op-v1 codecs', () => {
     ]) {
       assert.throws(() => decodeGitHubOperationRequest({ ...base, ...extra }));
     }
-    assert.throws(() => decodeGitHubOperationRequest({ ...base, operation: 'pull_request.create' }));
+    assert.throws(() => decodeGitHubOperationRequest({
+      ...base,
+      operation: 'pull_request.create',
+      params: { repository: 'acme/other' },
+    }));
     assert.throws(() => decodeGitHubOperationRequest({
       ...base,
       operation: 'pull_request.list',

@@ -79,6 +79,85 @@ describe('session-scoped gh compatibility shim', () => {
     ]);
   });
 
+  test('maps narrow gh pr create to one exact typed write with idempotent retry', async () => {
+    const deps = portal();
+    deps.resolveGitHubCreateContext = async ({ base }) => ({
+      head: 'agent/write',
+      base,
+      expected_head_sha: 'a'.repeat(40),
+      expected_base_sha: 'b'.repeat(40),
+    });
+    deps.executeGitHubOperation = async (request) => {
+      deps.calls.push(request);
+      if (request.operation === 'repository.metadata') {
+        return {
+          ok: true,
+          request_id: request.requestId,
+          data: { default_branch: 'main' },
+        };
+      }
+      if (deps.calls.filter((call) => call.operation === 'pull_request.create').length === 1) {
+        return {
+          ok: false,
+          request_id: request.requestId,
+          error: { code: 'unavailable', message: 'lost response', repair_action: 'retry' },
+        };
+      }
+      return {
+        ok: true,
+        request_id: request.requestId,
+        data: {
+          number: 17,
+          title: 'Safe draft',
+          draft: true,
+          url: 'https://github.com/acme/widgets/pull/17',
+        },
+      };
+    };
+    let next = 0;
+    deps.makeRequestId = () => `request_write_${++next}abcdefgh`;
+
+    const code = await runGitHubShim([
+      'pr', 'create',
+      '--title', 'Safe draft',
+      '--body', 'Exact body',
+      '--draft',
+    ], deps);
+
+    assert.equal(code, 0);
+    assert.match(deps.out, /https:\/\/github\.com\/acme\/widgets\/pull\/17/);
+    assert.equal(deps.err, '');
+    assert.equal(deps.calls.length, 3);
+    assert.deepEqual(deps.calls.slice(1), [
+      {
+        operation: 'pull_request.create',
+        params: {
+          title: 'Safe draft',
+          body: 'Exact body',
+          head: 'agent/write',
+          base: 'main',
+          draft: true,
+          expected_head_sha: 'a'.repeat(40),
+          expected_base_sha: 'b'.repeat(40),
+        },
+        requestId: 'request_write_2abcdefgh',
+      },
+      {
+        operation: 'pull_request.create',
+        params: {
+          title: 'Safe draft',
+          body: 'Exact body',
+          head: 'agent/write',
+          base: 'main',
+          draft: true,
+          expected_head_sha: 'a'.repeat(40),
+          expected_base_sha: 'b'.repeat(40),
+        },
+        requestId: 'request_write_2abcdefgh',
+      },
+    ]);
+  });
+
   test('rejects every non-allowlisted surface without invoking or falling through', async () => {
     const cases = [
       ['auth', 'token'],
@@ -86,7 +165,9 @@ describe('session-scoped gh compatibility shim', () => {
       ['api', '/user'],
       ['extension', 'list'],
       ['alias', 'list'],
-      ['pr', 'create'],
+      ['pr', 'create', '--title', 'missing body'],
+      ['pr', 'create', '--title', 'x', '--body', 'y', '--head', 'other'],
+      ['pr', 'create', '--title', 'x', '--body', 'y', '--repo', 'acme/other'],
       ['pr', 'merge', '7'],
       ['pr', 'list', '--repo', 'acme/other'],
       ['pr', 'list', '--unknown'],

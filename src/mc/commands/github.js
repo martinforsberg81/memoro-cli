@@ -1,8 +1,8 @@
 /**
  * `mc github status|connect|repos|pr` — central Memoro GitHub App UX.
  *
- * Connection metadata uses the control plane directly. Read operations use the
- * session-bound broker and never accept repository or authority input.
+ * Connection metadata uses the control plane directly. Repository operations
+ * use the session-bound broker and never accept repository or authority input.
  */
 
 import { getSecret } from '../../lib/keychain.js';
@@ -15,12 +15,14 @@ import {
   decodeGitHubConnectResponse,
   decodeGitHubConnectionResponse,
   decodeGitHubRepositoriesResponse,
+  githubOperationEffect,
   repairForGitHubState,
 } from '../github-contract.js';
 import { executeGitHubSessionOperation } from '../github-session.js';
+import { executeGitHubWriteCommand } from '../github-write-client.js';
 import {
   parseGitHubShimArgs,
-  renderGitHubReadResult,
+  renderGitHubResult,
   safeOperationError,
 } from '../github-shim.js';
 
@@ -38,7 +40,7 @@ export async function run(argv, deps = {}) {
   try {
     if (parsed.subcommand === 'connect') return await runConnect(parsed, deps, { stdout, stderr });
     if (parsed.subcommand === 'repos') return await runRepos(parsed, deps, { stdout, stderr });
-    if (parsed.subcommand === 'operation') return await runReadOperation(parsed, deps, { stdout, stderr });
+    if (parsed.subcommand === 'operation') return await runOperation(parsed, deps, { stdout, stderr });
     return await runStatus(parsed, deps, { stdout, stderr });
   } catch {
     return emitSafeFailure(parsed, { stdout, stderr });
@@ -48,9 +50,9 @@ export async function run(argv, deps = {}) {
 export function parseArgs(argv) {
   const values = [...argv];
   if (values[0] === 'pr') {
-    const operation = parseGitHubShimArgs(values);
+    const operation = parseGitHubShimArgs(values, { allowUpdate: true });
     if (!operation.ok || operation.operation === 'connection.status') {
-      return { error: 'unsupported GitHub command. Try `mc github pr list|view|checks`.' };
+      return { error: 'unsupported GitHub command. Try `mc github pr list|view|checks|create|update`.' };
     }
     return { subcommand: 'operation', ...operation };
   }
@@ -68,15 +70,17 @@ export function parseArgs(argv) {
   return { subcommand, json };
 }
 
-async function runReadOperation(opts, deps, io) {
+async function runOperation(opts, deps, io) {
   const execute = deps.executeGitHubOperation || executeGitHubSessionOperation;
-  const response = await execute({ operation: opts.operation, params: opts.params });
+  const response = githubOperationEffect(opts.operation) === 'write'
+    ? await executeGitHubWriteCommand(opts, { ...deps, executeGitHubOperation: execute })
+    : await execute({ operation: opts.operation, params: opts.params });
   if (!response?.ok) {
     if (opts.json) io.stdout.write(`${JSON.stringify(response, null, 2)}\n`);
     else io.stderr.write(`${safeOperationError(response?.error?.code)} Run \`mc github status\` to repair.\n`);
     return 1;
   }
-  renderGitHubReadResult(opts, response.data, io.stdout);
+  renderGitHubResult(opts, response.data, io.stdout);
   return 0;
 }
 
