@@ -13,7 +13,6 @@
  * automation. It does not weaken transcript ownership checks.
  */
 import { existsSync, realpathSync } from 'node:fs';
-import { unlink } from 'node:fs/promises';
 import { isAbsolute, relative } from 'node:path';
 
 import { resolveToolInput } from '../../adapters/index.js';
@@ -21,7 +20,8 @@ import { DEFAULT_TOOL } from '../../lib/config.js';
 import {
   patchEntriesIfPresent,
   readRegistry,
-  removeEntry,
+  readRegistryStrict,
+  removeEntryIfMatches,
 } from '../registry.js';
 import {
   branchExists,
@@ -36,11 +36,17 @@ import { removeBrokerSessionForEntry } from '../broker/session-cleanup.js';
 import { resolveToolSessionForResume } from '../tool-session.js';
 import {
   classifyToolArtifactAuthority,
+  deleteOwnedToolArtifacts,
   inspectOwnedToolArtifacts,
+  TOOL_ARTIFACT_AUTHORITY_VERSION,
 } from '../tool-artifact-ownership.js';
+import {
+  inspectBrokerSessionAbsence,
+  inspectSessionOwnedMcArtifacts,
+  removeSessionOwnedRuntimeArtifacts,
+} from '../session-owned-artifacts.js';
 
 const CONFIRM_PROMPT = 'Avsluta och ta bort allt sessionsbundet lokalt? y/n ';
-const AUTHORITY_MARKER_VERSION = 1;
 
 function safeRealpath(path) {
   try { return realpathSync(path); } catch { return path; }
@@ -72,7 +78,18 @@ export async function run(rawArgv, runOpts = {}) {
   }
 
   const cwd = runOpts.cwd || process.cwd();
-  const registry = (deps.readRegistry || readRegistry)();
+  let registry;
+  try {
+    registry = (deps.readRegistryStrict || deps.readRegistry || readRegistryStrict)();
+  } catch (err) {
+    return emitFailure({
+      opts,
+      stdout,
+      stderr,
+      error: 'registry-unreadable',
+      message: `registry is unreadable: ${err.message}`,
+    });
+  }
   const selected = selectTargets(registry.entries, opts.names, cwd);
   if (!selected.ok) {
     stderr.write(`mc: ${selected.error}\n`);
@@ -97,6 +114,7 @@ export async function run(rawArgv, runOpts = {}) {
 
     const entry = await synchronizeToolAuthority(originalEntry, { deps });
     const artifacts = await inspectAuthority(entry, { deps });
+    const mcArtifacts = inspectMcAuthority(entry, deps);
     const status = await buildTargetStatus(entry, primary, artifacts, {
       keepBranch: opts.keepBranch,
     });
@@ -105,17 +123,35 @@ export async function run(rawArgv, runOpts = {}) {
       entry,
       primary,
       artifacts,
+      mcArtifacts,
       status,
     });
   }
 
   const unsafe = plans.filter((plan) => !plan.artifacts.safe_to_delete);
+  const unsafeMc = plans.filter((plan) => !plan.mcArtifacts.ok);
   if (opts.dryRun) {
-    return emitDryRun({ opts, plans, unsafe, stdout, stderr });
+    return emitDryRun({
+      opts,
+      plans,
+      unsafe,
+      unsafeMc,
+      stdout,
+      stderr,
+    });
   }
 
   if (unsafe.length > 0) {
     return emitAuthorityFailure({ opts, plans, unsafe, stdout, stderr });
+  }
+  if (unsafeMc.length > 0) {
+    return emitMcAuthorityFailure({
+      opts,
+      plans,
+      unsafe: unsafeMc,
+      stdout,
+      stderr,
+    });
   }
 
   if (!opts.json) printStatuses(plans, stdout);
@@ -147,6 +183,7 @@ export async function run(rawArgv, runOpts = {}) {
     revalidated.push({
       ...plan,
       artifacts,
+      mcArtifacts: inspectMcAuthority(plan.entry, deps),
       status: statusWithArtifacts(plan.status, artifacts),
     });
   }
@@ -156,6 +193,18 @@ export async function run(rawArgv, runOpts = {}) {
       opts,
       plans: revalidated,
       unsafe: changedAuthority,
+      stdout,
+      stderr,
+      phase: 'revalidation',
+      statusesAlreadyPrinted: !opts.json,
+    });
+  }
+  const changedMcAuthority = revalidated.filter((plan) => !plan.mcArtifacts.ok);
+  if (changedMcAuthority.length > 0) {
+    return emitMcAuthorityFailure({
+      opts,
+      plans: revalidated,
+      unsafe: changedMcAuthority,
       stdout,
       stderr,
       phase: 'revalidation',
@@ -195,7 +244,7 @@ export async function run(rawArgv, runOpts = {}) {
         ok: false,
         error: 'not-attempted-after-partial-failure',
         status: plan.status,
-        leftovers: inspectLeftovers(plan, opts, deps),
+        leftovers: await inspectLeftovers(plan, opts, deps),
       });
       continue;
     }
@@ -299,20 +348,17 @@ function conflictsWithStoredAuthority(entry, patch) {
 
 async function inspectAuthority(entry, { deps = {} } = {}) {
   const inspect = deps.inspectOwnedToolArtifacts || inspectOwnedToolArtifacts;
-  const result = await inspect(entry, {
+  const options = {
     roots: deps.toolArtifactRoots,
     ...(deps.toolArtifactFs ? { fs: deps.toolArtifactFs } : {}),
-  });
+    ...(deps.toolArtifactScanPolicy ? { scanPolicy: deps.toolArtifactScanPolicy } : {}),
+  };
+  const result = await inspect(entry, options);
   if (isVerifiedMissingRetry(entry, result, deps.toolArtifactRoots)) {
-    return {
-      ...result,
-      state: 'absent',
-      safe_to_delete: true,
-      artifacts: [],
-      totals: { paths: 0, files: 0, bytes: 0 },
-      issues: [],
-      already_absent: true,
-    };
+    return inspect(entry, {
+      ...options,
+      allowVerifiedMissingTranscript: true,
+    });
   }
   return result;
 }
@@ -323,7 +369,7 @@ function isVerifiedMissingRetry(entry, result, roots) {
   }
   const marker = entry?.tool_artifact_authority_verified;
   const classified = classifyToolArtifactAuthority(entry, { roots });
-  return marker?.version === AUTHORITY_MARKER_VERSION
+  return marker?.version === TOOL_ARTIFACT_AUTHORITY_VERSION
     && marker.source === classified.source
     && marker.session_id === classified.session_id
     && marker.transcript_path === classified.transcript_path
@@ -348,6 +394,7 @@ async function buildTargetStatus(entry, primary, artifacts, { keepBranch = false
     verdict: verdict.value,
     ...(verdict.reason ? { reason: verdict.reason } : {}),
     transcript: transcriptStatus(artifacts),
+    auxiliary: auxiliaryStatus(artifacts),
   };
 }
 
@@ -355,6 +402,7 @@ function statusWithArtifacts(status, artifacts) {
   return {
     ...status,
     transcript: transcriptStatus(artifacts),
+    auxiliary: auxiliaryStatus(artifacts),
   };
 }
 
@@ -383,6 +431,37 @@ function transcriptStatus(artifacts) {
     bytes: 0,
     issues: (artifacts?.issues || []).map((issue) => issue.code),
   };
+}
+
+function auxiliaryStatus(artifacts) {
+  const auxiliary = (artifacts?.artifacts || [])
+    .filter((artifact) => artifact.kind !== 'transcript');
+  const totals = auxiliary.reduce((out, artifact) => ({
+    paths: out.paths + 1,
+    files: out.files + finiteNumber(artifact.file_count),
+    bytes: out.bytes + finiteNumber(artifact.bytes),
+  }), { paths: 0, files: 0, bytes: 0 });
+  return {
+    state: artifacts?.safe_to_delete ? 'verified' : 'unverified',
+    ...totals,
+    bounded: artifacts?.scan?.bounded === true,
+    truncated: artifacts?.scan?.truncated === true,
+    ...(artifacts?.scan?.reason ? { reason: artifacts.scan.reason } : {}),
+  };
+}
+
+function inspectMcAuthority(entry, deps) {
+  const inspect = deps.inspectSessionOwnedMcArtifacts || inspectSessionOwnedMcArtifacts;
+  try {
+    return inspect(entry, deps.mcArtifactDeps || {});
+  } catch {
+    return {
+      ok: false,
+      state: 'unverified',
+      leftovers: [],
+      issues: [{ code: 'mc-artifact-inspection-failed' }],
+    };
+  }
 }
 
 function countDirtyFiles(worktreePath) {
@@ -435,18 +514,37 @@ function printStatuses(plans, stdout) {
     } else {
       stdout.write(`  transcript: ${status.transcript.path} (${formatBytes(status.transcript.bytes)})\n`);
     }
+    if (status.auxiliary.truncated) {
+      stdout.write(`  auxiliary: unknown (bounded scan truncated: ${status.auxiliary.reason})\n`);
+    } else {
+      stdout.write(
+        `  auxiliary: ${status.auxiliary.paths} paths, ${status.auxiliary.files} files`
+        + ` (${formatBytes(status.auxiliary.bytes)})\n`,
+      );
+    }
   }
 }
 
-function emitDryRun({ opts, plans, unsafe, stdout, stderr }) {
+function emitDryRun({
+  opts,
+  plans,
+  unsafe,
+  unsafeMc,
+  stdout,
+  stderr,
+}) {
+  const blocked = unsafe.length > 0 || unsafeMc.length > 0;
   const out = {
-    ok: unsafe.length === 0,
+    ok: !blocked,
     dry_run: true,
     confirmation_required: true,
     targets: plans.map((plan) => plan.status),
     ...(unsafe.length > 0 ? {
       error: 'tool-artifact-authority-unverified',
       unsafe_targets: unsafe.map(authorityFailureShape),
+    } : unsafeMc.length > 0 ? {
+      error: 'mc-artifact-authority-unverified',
+      unsafe_targets: unsafeMc.map(mcAuthorityFailureShape),
     } : {}),
   };
   if (opts.json) stdout.write(`${JSON.stringify(out, null, 2)}\n`);
@@ -454,9 +552,11 @@ function emitDryRun({ opts, plans, unsafe, stdout, stderr }) {
     printStatuses(plans, stdout);
     if (unsafe.length > 0) {
       stderr.write('mc: dry-run blocked — exact tool transcript authority could not be verified\n');
+    } else if (unsafeMc.length > 0) {
+      stderr.write('mc: dry-run blocked — exact mc-owned artifact paths could not be verified\n');
     }
   }
-  return unsafe.length === 0 ? 0 : 1;
+  return blocked ? 1 : 0;
 }
 
 function emitAuthorityFailure({
@@ -493,6 +593,46 @@ function authorityFailureShape(plan) {
   return {
     name: plan.entry.name,
     issues: (plan.artifacts.issues || []).map((issue) => ({
+      code: issue.code,
+      ...(issue.path ? { path: issue.path } : {}),
+    })),
+  };
+}
+
+function emitMcAuthorityFailure({
+  opts,
+  plans,
+  unsafe,
+  stdout,
+  stderr,
+  phase = 'preflight',
+  statusesAlreadyPrinted = false,
+}) {
+  const out = {
+    ok: false,
+    error: 'mc-artifact-authority-unverified',
+    phase,
+    targets: plans.map((plan) => plan.status),
+    unsafe_targets: unsafe.map(mcAuthorityFailureShape),
+  };
+  if (opts.json) {
+    stdout.write(`${JSON.stringify(out, null, 2)}\n`);
+  } else {
+    if (!statusesAlreadyPrinted) printStatuses(plans, stdout);
+    const names = unsafe.map((plan) => `"${plan.entry.name}"`).join(', ');
+    stderr.write(`mc: ${phase} blocked for ${names} — exact mc-owned artifact paths are unverified\n`);
+    for (const plan of unsafe) {
+      const issues = (plan.mcArtifacts.issues || []).map((issue) => issue.code).join(', ');
+      stderr.write(`mc: ${plan.entry.name}: ${issues || 'unknown mc artifact failure'}\n`);
+    }
+  }
+  return 1;
+}
+
+function mcAuthorityFailureShape(plan) {
+  return {
+    name: plan.entry.name,
+    issues: (plan.mcArtifacts.issues || []).map((issue) => ({
       code: issue.code,
       ...(issue.path ? { path: issue.path } : {}),
     })),
@@ -554,7 +694,7 @@ function persistVerifiedAuthorities(plans, { deps = {}, now }) {
     };
     if (authority.state === 'candidate') {
       authorityPatch.tool_artifact_authority_verified = {
-        version: AUTHORITY_MARKER_VERSION,
+        version: TOOL_ARTIFACT_AUTHORITY_VERSION,
         source: authority.source,
         session_id: authority.session_id,
         transcript_path: authority.transcript_path,
@@ -607,6 +747,17 @@ async function teardownOne(plan, { opts, deps }) {
       throw new Error(`broker cleanup failed (${broker?.error || broker?.reason || 'unknown'})`);
     }
 
+    const removeRuntime = deps.removeSessionOwnedRuntimeArtifacts
+      || removeSessionOwnedRuntimeArtifacts;
+    const runtime = await removeRuntime(entry, {
+      ...(deps.mcArtifactDeps || {}),
+      ...(deps.requestBroker ? { requestBroker: deps.requestBroker } : {}),
+    });
+    if (!runtime?.ok) {
+      const reasons = (runtime?.issues || []).map((issue) => issue.code).filter(Boolean);
+      throw new Error(`runtime sidecar cleanup failed${reasons.length ? ` (${reasons.join(', ')})` : ''}`);
+    }
+
     const shred = deps.shredForSession || defaultShredForSession;
     const shredded = await shred({
       sessionId: entry.name,
@@ -618,22 +769,47 @@ async function teardownOne(plan, { opts, deps }) {
       throw new Error(`vault shred failed${reasons.length ? ` (${reasons.join(', ')})` : ''}`);
     }
 
-    await unlinkOwnedTranscript(plan.artifacts, {
-      entry,
-      deps,
+    const removeToolArtifacts = deps.deleteOwnedToolArtifacts || deleteOwnedToolArtifacts;
+    const deleted = await removeToolArtifacts(entry, {
+      roots: deps.toolArtifactRoots,
+      ...(deps.toolArtifactFs ? { fs: deps.toolArtifactFs } : {}),
+      ...(deps.toolArtifactScanPolicy ? { scanPolicy: deps.toolArtifactScanPolicy } : {}),
+      allowVerifiedMissingTranscript: true,
     });
+    if (!deleted?.ok) {
+      const reasons = (deleted?.issues || []).map((issue) => issue.code).filter(Boolean);
+      throw new Error(`tool artifact cleanup failed${reasons.length ? ` (${reasons.join(', ')})` : ''}`);
+    }
 
     removeWorktreeAndBranch(entry, {
       primary,
       keepBranch: opts.keepBranch,
     });
 
-    const remove = deps.removeEntry || removeEntry;
-    remove(entry.name);
-
-    const leftovers = inspectLeftovers(plan, opts, deps);
+    const leftovers = await inspectLeftovers(plan, opts, deps, {
+      includeRegistry: false,
+    });
     if (leftovers.length > 0) {
       throw new Error(`teardown verification failed: ${leftovers.join(', ')}`);
+    }
+
+    const remove = deps.removeEntryIfMatches
+      || (deps.removeEntry
+        ? (name) => ({ ok: deps.removeEntry(name), removed: true })
+        : removeEntryIfMatches);
+    const removed = remove(entry.name, {
+      worktree_path: entry.worktree_path,
+      branch: entry.branch,
+      tool_session_source: entry.tool_session_source,
+      tool_session_id: entry.tool_session_id,
+      tool_transcript_path: entry.tool_transcript_path,
+    });
+    if (!removed?.ok) {
+      throw new Error(`registry removal failed: ${entry.name}`);
+    }
+    const finalLeftovers = await inspectLeftovers(plan, opts, deps);
+    if (finalLeftovers.length > 0) {
+      throw new Error(`teardown verification failed: ${finalLeftovers.join(', ')}`);
     }
     return {
       name: entry.name,
@@ -648,7 +824,7 @@ async function teardownOne(plan, { opts, deps }) {
       ok: false,
       error: err.message,
       status,
-      leftovers: inspectLeftovers(plan, opts, deps),
+      leftovers: await inspectLeftovers(plan, opts, deps),
     };
   }
 }
@@ -667,60 +843,6 @@ async function defaultShredForSession(args) {
   return shredForSession(args);
 }
 
-async function unlinkOwnedTranscript(artifacts, { entry, deps }) {
-  // Broker and vault cleanup can execute arbitrary provider/adapter code.
-  // Re-run the complete lstat/realpath/path-chain/content-ID inspection after
-  // those calls and immediately before unlink. There is still an unavoidable
-  // sub-call TOCTOU window between inspection and unlink, but no unrelated
-  // async work is allowed inside that window.
-  const fresh = await inspectAuthority(entry, { deps });
-  assertSameFinalAuthority(artifacts, fresh, entry);
-  if (fresh.state === 'none' || fresh.state === 'absent') return;
-
-  const transcript = fresh.artifacts?.find((artifact) => artifact.kind === 'transcript');
-  if (!transcript?.path || transcript.path !== entry.tool_transcript_path) {
-    throw new Error('verified transcript path no longer matches registry authority');
-  }
-  const classified = classifyToolArtifactAuthority(entry, {
-    roots: deps.toolArtifactRoots,
-  });
-  if (classified.state !== 'candidate' || classified.transcript_path !== transcript.path) {
-    throw new Error('transcript path failed final allowlist classification');
-  }
-  const unlinkFile = deps.unlinkTranscript || unlink;
-  try {
-    await unlinkFile(transcript.path);
-  } catch (err) {
-    if (err?.code !== 'ENOENT') throw err;
-  }
-  const exists = deps.existsSync || existsSync;
-  if (exists(transcript.path)) {
-    throw new Error(`transcript still exists after unlink: ${transcript.path}`);
-  }
-}
-
-function assertSameFinalAuthority(expected, fresh, entry) {
-  if (!fresh?.safe_to_delete) {
-    const issues = (fresh?.issues || []).map((issue) => issue.code).join(', ');
-    throw new Error(`final transcript authority inspection failed (${issues || 'unverified'})`);
-  }
-  const verifiedBecameAbsent = expected?.state === 'owned' && fresh.state === 'absent';
-  if (expected?.state !== fresh.state && !verifiedBecameAbsent) {
-    throw new Error(`final transcript authority changed (${expected?.state || 'unknown'} -> ${fresh.state})`);
-  }
-  if (fresh.state === 'none') return;
-  if (
-    fresh.source !== expected.source
-    || fresh.session_id !== expected.session_id
-    || fresh.transcript_path !== expected.transcript_path
-    || fresh.source !== entry.tool_session_source
-    || fresh.session_id !== entry.tool_session_id
-    || fresh.transcript_path !== entry.tool_transcript_path
-  ) {
-    throw new Error('final transcript authority no longer matches the verified session');
-  }
-}
-
 function removeWorktreeAndBranch(entry, { primary, keepBranch }) {
   const worktree = entry.worktree_path;
   if (worktree && existsSync(worktree)) {
@@ -733,20 +855,67 @@ function removeWorktreeAndBranch(entry, { primary, keepBranch }) {
   }
 }
 
-function inspectLeftovers(plan, opts, deps) {
+async function inspectLeftovers(plan, opts, deps, { includeRegistry = true } = {}) {
   const leftovers = [];
   const exists = deps.existsSync || existsSync;
-  const transcriptPath = plan.entry.tool_transcript_path;
-  if (transcriptPath && exists(transcriptPath)) leftovers.push(`transcript:${transcriptPath}`);
+  try {
+    const artifacts = await inspectAuthority(plan.entry, { deps });
+    if (!artifacts.safe_to_delete) {
+      const issues = (artifacts.issues || []).map((issue) => issue.code).join('|') || 'unverified';
+      leftovers.push(`tool-artifacts:${issues}`);
+    } else {
+      for (const artifact of artifacts.artifacts || []) {
+        leftovers.push(`tool-artifact:${artifact.kind}:${artifact.path}`);
+      }
+    }
+  } catch {
+    leftovers.push('tool-artifacts:inspection-failed');
+  }
+  const inspectMc = deps.inspectSessionOwnedMcArtifacts || inspectSessionOwnedMcArtifacts;
+  try {
+    const mcArtifacts = inspectMc(plan.entry, deps.mcArtifactDeps || {});
+    if (!mcArtifacts?.ok) {
+      const issues = (mcArtifacts?.issues || []).map((issue) => issue.code).join('|') || 'unverified';
+      leftovers.push(`mc-artifacts:${issues}`);
+    } else {
+      for (const artifact of mcArtifacts.leftovers || []) {
+        leftovers.push(`${artifact.kind}:${artifact.path}`);
+      }
+    }
+  } catch {
+    leftovers.push('mc-artifacts:inspection-failed');
+  }
+  const inspectBroker = deps.inspectBrokerSessionAbsence || inspectBrokerSessionAbsence;
+  try {
+    const broker = await inspectBroker(plan.entry, {
+      requestBroker: deps.requestBroker,
+      ...(deps.mcArtifactDeps || {}),
+    });
+    if (!broker?.ok) {
+      const issues = (broker?.issues || []).map((issue) => issue.code).join('|') || 'unverified';
+      leftovers.push(`broker:${issues}`);
+    }
+  } catch {
+    leftovers.push('broker:inspection-failed');
+  }
   if (plan.entry.worktree_path && exists(plan.entry.worktree_path)) {
     leftovers.push(`worktree:${plan.entry.worktree_path}`);
+  }
+  if (plan.entry.worktree_path && worktreeBelongsToPrimary(plan.primary, plan.entry.worktree_path)) {
+    leftovers.push(`git-worktree:${plan.entry.worktree_path}`);
   }
   if (!opts.keepBranch && plan.entry.branch && branchExists(plan.primary, plan.entry.branch)) {
     leftovers.push(`branch:${plan.entry.branch}`);
   }
-  const registry = (deps.readRegistry || readRegistry)();
-  if (registry.entries.some((entry) => entry.name === plan.entry.name)) {
-    leftovers.push(`registry:${plan.entry.name}`);
+  if (includeRegistry) {
+    try {
+      const registry = (deps.readRegistryStrict || deps.readRegistry || readRegistryStrict)();
+      if (registry.entries.some((entry) => entry.name === plan.entry.name)) {
+        leftovers.push(`registry:${plan.entry.name}`);
+      }
+    } catch {
+      leftovers.push('registry:unverified');
+    }
   }
   return leftovers;
 }

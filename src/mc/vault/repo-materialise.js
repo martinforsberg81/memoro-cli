@@ -85,6 +85,23 @@ export async function shredRepoMaterialisation({ location, deps = {} } = {}) {
   return { ok: true, removed: true };
 }
 
+export async function verifyRepoMaterialisationShredded({ location, deps = {} } = {}) {
+  if (location?.type !== REPO_SECRET_LOCATION_TYPE || !location.path) {
+    return { ok: false, reason: 'not-repo-materialisation' };
+  }
+  const exists = deps.existsSync || existsSync;
+  if (!exists(location.path)) return { ok: true, absent: true };
+  const read = deps.readFile || readFile;
+  try {
+    const body = await read(location.path, 'utf8');
+    return removeManagedBlock(body) === body
+      ? { ok: true, absent: true }
+      : { ok: false, absent: false, reason: 'managed-block-leftover' };
+  } catch (err) {
+    return { ok: false, absent: false, reason: `verification-read-failed: ${err.message}` };
+  }
+}
+
 function groupBindingsByFile(bindings) {
   const grouped = new Map();
   for (const source of bindings.sources || []) {

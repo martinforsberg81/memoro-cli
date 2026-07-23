@@ -1,12 +1,14 @@
 import assert from 'node:assert/strict';
 import test, { afterEach } from 'node:test';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import {
   patchEntriesIfPresent,
   readRegistry,
+  readRegistryStrict,
+  removeEntryIfMatches,
   upsertEntry,
 } from '../../src/mc/registry.js';
 
@@ -51,4 +53,42 @@ test('patchEntriesIfPresent updates atomically without resurrecting missing entr
   ]);
   assert.equal(updated.ok, true);
   assert.equal(readRegistry().entries[0].tool_session_id, 'session_present');
+});
+
+test('strict registry reads reject malformed state instead of returning empty', () => {
+  tempHome = mkdtempSync(join(tmpdir(), 'mc-registry-strict-'));
+  process.env.MC_HOME = tempHome;
+  writeFileSync(join(tempHome, 'registry.json'), '{not-json');
+
+  assert.throws(() => readRegistryStrict(), /JSON/);
+  assert.deepEqual(readRegistry(), { entries: [] });
+});
+
+test('removeEntryIfMatches preserves a concurrently changed teardown recipe', () => {
+  tempHome = mkdtempSync(join(tmpdir(), 'mc-registry-cas-'));
+  process.env.MC_HOME = tempHome;
+  upsertEntry({
+    name: 'target',
+    branch: 'sess/target',
+    worktree_path: '/tmp/target',
+    tool_session_id: 'session-a',
+  });
+
+  const changed = removeEntryIfMatches('target', {
+    branch: 'sess/target',
+    worktree_path: '/tmp/target',
+    tool_session_id: 'session-b',
+  });
+
+  assert.equal(changed.ok, false);
+  assert.equal(changed.reason, 'entry-changed');
+  assert.equal(readRegistryStrict().entries.length, 1);
+
+  const removed = removeEntryIfMatches('target', {
+    branch: 'sess/target',
+    worktree_path: '/tmp/target',
+    tool_session_id: 'session-a',
+  });
+  assert.equal(removed.ok, true);
+  assert.deepEqual(readRegistryStrict().entries, []);
 });

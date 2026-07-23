@@ -122,6 +122,31 @@ trigger is **both** signals missing — see [§11d](./plans/worktree-lifecycle.m
 and the first successful `mc new` writes the sentinel silently. No
 action required.
 
+## Ending a session permanently
+
+`mc end <name>` first prints a compact status: live/idle state, dirty file
+count, commits ahead, branch action, exact transcript, and bounded totals for
+verified auxiliary artifacts. Interactive use asks one `y/n` question for the
+whole requested batch. `n` changes nothing.
+
+`y` is permanent consent. mc removes the broker-owned PTY, exact runtime
+sidecars, vault materialisation and manifest, the content-ID-verified
+Codex/Claude transcript and allowlisted ID-bound auxiliary paths, the worktree,
+the local branch, and finally the registry entry. Dirty files and unmerged
+commits are included in that confirmed deletion. Use `--keep-branch` only when
+the branch should be the one intentional survivor. `--force` means the same
+consent was supplied by non-interactive automation; it never bypasses artifact
+ownership or final-leftover verification.
+
+Provider-wide state is outside this lifecycle. mc does not edit shared Codex
+SQLite/log databases, global history/index/memory/config, Claude global
+history/config/project memory, or another session's sibling paths. Therefore
+the guarantee is that no verified session-owned artifact paths remain—not that
+the provider has erased every shared index or log reference. After successful
+teardown, `mc resume <name>` is no longer possible. A partial failure is
+reported with exact leftovers and keeps the registry repair recipe whenever
+possible so `mc end` can be retried.
+
 ## Multi-machine
 
 Memoro sign-in is per-machine. The keychain entry doesn't synchronise

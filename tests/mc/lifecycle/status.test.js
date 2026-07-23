@@ -270,7 +270,7 @@ describe('mc status <name>', () => {
         name: 'local-broker',
         branch: 'sess/local-broker',
         worktree_path: '/tmp/local-broker-worktree',
-        coding_session_id: 'sess_old_id',
+        coding_session_id: 'sess_local_live',
         session_state: 'live',
       }),
       readConfig: async () => ({}),
@@ -293,6 +293,42 @@ describe('mc status <name>', () => {
     assert.equal(j.session_state, 'live');
     assert.equal(j.reachability, 'reachable');
     assert.equal(j.active_session.coding_session_id, 'sess_local_live');
+  });
+
+  test('local broker status rejects same label when coding IDs and repos differ', async () => {
+    const stdout = [];
+    const code = await runStatus(['identity-mismatch', '--json'], {
+      stdout: { write: (s) => stdout.push(s) },
+      stderr: { write: () => {} },
+      findEntry: () => makeEntry({
+        name: 'identity-mismatch',
+        branch: 'sess/identity-mismatch',
+        worktree_path: '/tmp/target-worktree',
+        coding_session_id: 'sess_target',
+        session_state: 'live',
+        safety_verdict: 'IS_ACTIVE_NOW',
+      }),
+      readConfig: async () => ({}),
+      fetchBrokerStatus: async () => ({
+        ok: true,
+        sessions: [{
+          id: 'sess_other',
+          coding_session_id: 'sess_other',
+          name: 'identity-mismatch',
+          cwd: '/tmp/other-worktree',
+          session_state: 'live',
+          attachable: true,
+          exit: null,
+        }],
+      }),
+      fetchActiveSessions: async () => ({ ok: true, sessions: [] }),
+    });
+
+    assert.equal(code, 0);
+    const body = parseJsonOrNull(stdout.join(''));
+    assert.equal(body.session_state, 'idle');
+    assert.equal(body.reachability, 'stale');
+    assert.equal(body.active_session, null);
   });
 
   test('surfaces session tool + relaunch command in JSON', () => {

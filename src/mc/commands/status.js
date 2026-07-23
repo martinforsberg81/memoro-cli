@@ -12,6 +12,7 @@ import { formatPolicySummary, readRepoPolicy, resolveEffectivePolicy } from '../
 import { readRepoLocalConfig, resolveEffectiveConfig } from '../config-model.js';
 import { fetchActiveCodingSessions, findActiveForLocalEntry } from '../session-list.js';
 import { requestBroker } from '../broker/client.js';
+import { brokerSessionMatchesEntry } from '../broker/session-cleanup.js';
 import { listLocalBrokerAndHostSessions } from '../broker/session-hosts.js';
 import { observeEntryWorktree } from '../session-observation.js';
 import {
@@ -248,20 +249,6 @@ function findBrokerSessionForEntry(entry, sessions, { liveOnly = false } = {}) {
     ? matches.filter((session) => isLiveBrokerSession(session))
     : matches;
   return eligible.sort(compareBrokerSessionsByActivity)[0] || null;
-}
-
-function brokerSessionMatchesEntry(session, entry) {
-  const sessionId = nonEmpty(session?.id || session?.coding_session_id);
-  const entryId = nonEmpty(entry?.coding_session_id || entry?.id);
-  if (sessionId && entryId && sessionId === entryId) return true;
-
-  const sessionCwd = nonEmpty(session?.cwd || session?.worktree_path);
-  const entryWorktree = nonEmpty(entry?.worktree_path);
-  if (sessionCwd && entryWorktree && sessionCwd === entryWorktree) return true;
-
-  const sessionName = nonEmpty(session?.name || session?.label);
-  const entryName = nonEmpty(entry?.name || entry?.label);
-  return Boolean(sessionName && entryName && sessionName === entryName);
 }
 
 function isLiveBrokerSession(session) {

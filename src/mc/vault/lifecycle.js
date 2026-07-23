@@ -38,7 +38,12 @@ import * as VaultApi from './api.js';
 import { normaliseSecretPayload } from './types.js';
 import { installHook, uninstallHook } from './hook.js';
 import { SECRET_BINDINGS_RELATIVE_PATH, collectBoundLabels, readSecretBindings } from './bindings.js';
-import { REPO_SECRET_TOOL, materialiseRepoBoundSecrets, shredRepoMaterialisation } from './repo-materialise.js';
+import {
+  REPO_SECRET_TOOL,
+  materialiseRepoBoundSecrets,
+  shredRepoMaterialisation,
+  verifyRepoMaterialisationShredded,
+} from './repo-materialise.js';
 import { detectInstalled } from '../../adapters/index.js';
 import { getSecret as keychainGet } from '../../lib/keychain.js';
 import { ACCOUNTS } from '../../commands/auth.js';
@@ -468,7 +473,12 @@ export async function shredForSession({
   const exists = deps.existsSync || existsSync;
 
   if (!exists(path)) {
-    return { ok: true, shredded: [], reason: 'no-manifest' };
+    return {
+      ok: true,
+      shredded: [],
+      reason: 'no-manifest',
+      verification: { manifest_path: path, manifest_absent: true, leftovers: [] },
+    };
   }
 
   let manifest;
@@ -506,12 +516,25 @@ export async function shredForSession({
 
   const shredded = [];
   const failures = [];
+  const verificationLeftovers = [];
   for (const m of (manifest.materialised || [])) {
     if (m.tool === REPO_SECRET_TOOL) {
       const res = await shredRepoMaterialisation({ location: m.location, deps })
         .catch((err) => ({ ok: false, reason: err.message }));
       if (res?.ok) {
         shredded.push({ tool: m.tool, location: m.location, removed: !!res.removed });
+        const verified = await verifyRepoMaterialisationShredded({
+          location: m.location,
+          deps,
+        });
+        if (!verified.ok) {
+          failures.push({
+            tool: m.tool,
+            location: m.location,
+            reason: verified.reason || 'shred-verification-failed',
+          });
+          verificationLeftovers.push({ tool: m.tool, location: m.location });
+        }
       } else {
         failures.push({ tool: m.tool, location: m.location, reason: res?.reason || 'shred-failed' });
       }
@@ -533,6 +556,10 @@ export async function shredForSession({
       .catch((err) => ({ ok: false, reason: err.message }));
     if (res?.ok) {
       shredded.push({ tool: m.tool, location, removed: !!res.removed });
+      if (location.type === 'file' && location.path && exists(location.path)) {
+        failures.push({ tool: m.tool, location, reason: 'materialised-file-leftover' });
+        verificationLeftovers.push({ tool: m.tool, location });
+      }
     } else {
       failures.push({ tool: m.tool, location, reason: res?.reason || 'shred-failed' });
     }
@@ -550,5 +577,19 @@ export async function shredForSession({
     }
   }
 
-  return { ok: failures.length === 0, shredded, failures };
+  const manifestAbsent = !exists(path);
+  if (!manifestAbsent && failures.length === 0) {
+    failures.push({ tool: 'manifest', reason: 'manifest-leftover' });
+    verificationLeftovers.push({ tool: 'manifest', location: { type: 'file', path } });
+  }
+  return {
+    ok: failures.length === 0,
+    shredded,
+    failures,
+    verification: {
+      manifest_path: path,
+      manifest_absent: manifestAbsent,
+      leftovers: verificationLeftovers,
+    },
+  };
 }

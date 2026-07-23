@@ -34,12 +34,14 @@ session janitor just because multiple AI tools are involved.
 3. **Landing is a guided transition.**
    After a PR is merged, `mc` should detect the squash-merge relationship,
    fast-forward primary `main` when safe, and mark the session as ready to end.
-   It should never silently discard local changes.
+   It should never silently discard local changes outside an explicitly
+   confirmed permanent `mc end`.
 
 4. **Cleanup is explicit but low-friction.**
-   `mc end <name>` should remove the worktree and stale session registry entry
-   only when the branch is merged/equivalent or the user forces it. Squash-merged
-   branches should not look like unmerged work forever.
+   `mc end <name>` should show the complete local state, ask once, and on `y`
+   permanently remove all verified session-owned local artifacts, including
+   dirty/unmerged work. `--force` is automation consent, not a weaker safety
+   mode; `--keep-branch` is the explicit branch-retention exception.
 
 5. **Diagnostics beat cleverness.**
    When state is messy, `mc status` should say what is dirty, where it is dirty,
@@ -60,8 +62,9 @@ verbs:
   - mark squash-merged/equivalent sessions as `ready-to-end`
   - keep active sessions and local dead sessions separate
 - `mc end`:
-  - treat squash-equivalent branches as merged for safe cleanup
-  - refuse dirty worktrees unless forced
+  - show dirty/ahead/live/provider-artifact state before one confirmation
+  - on confirmation remove dirty worktrees and unmerged local branches too
+  - fail closed on unverified ownership and report retryable leftovers
 - `mc reconcile`:
   - stay optional, but become the bulk cleanup/status helper for old sessions
   - no PM behavior, no map editing, no hidden branch deletion
@@ -94,8 +97,10 @@ are unrelated to session creation, but the warning must be hard to miss.
 
 ### Slice 3 — safe post-merge cleanup
 
-Teach `mc end` and `mc reconcile --apply --only-safe` that squash-equivalent
-branches are safe to end. Preserve dirty worktrees and unmerged branches.
+Teach `mc end` to use squash equivalence as status context, never as a prompt
+bypass. Interactive confirmation authorizes permanent teardown of dirty
+worktrees and unmerged branches; `mc reconcile --apply --only-safe` remains the
+conservative unattended cleanup surface.
 
 ### Slice 4 — release-gate habit
 

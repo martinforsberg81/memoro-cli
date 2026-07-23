@@ -34,7 +34,7 @@ Then a typical day:
 ```sh
 mc new my-experiment      # branch + worktree + your default coding tool launches in it
 # ... work, /exit when done ...
-mc end my-experiment      # close the worktree, hand the branch back
+mc end my-experiment      # review status, then permanently delete the local session
 ```
 
 See [`docs/onboarding.md`](docs/onboarding.md) for the long story — per-tool install details, multi-machine notes, and shell-wrapper specifics.
@@ -48,7 +48,7 @@ mc setup                  # self-check + resource/dependency choices
 mc auth status            # single-screen health check
 mc new <name>             # create worktree + branch + launch the tool
 mc list                   # show your sessions, filters per §9d of the plan
-mc end <name>             # close worktree, deal with the branch
+mc end <name>             # confirm permanent local teardown
 mc resume <name>          # cd back into a worktree, relaunch the tool
 mc sessions list          # active sessions across machines
 mc sessions send <id|label> "<msg>"
@@ -129,6 +129,16 @@ and a compact `template_markdown` for revision 1.
 | `memoro-cli hook uninstall [--tool ...]` | Remove legacy raw-tool hooks/shims |
 
 Most users only ever see `mc`, `mc setup`, and `mc new` / `mc resume`.
+
+`mc end` is permanent. It shows session/worktree/branch state and the exact
+verified provider artifacts, then asks once for the whole batch. Answering `y`
+removes the broker session, vault materialisation, ID-bound Codex/Claude
+transcript and auxiliary paths, worktree, local branch, runtime sidecars, and
+registry entry. `--force` supplies that consent for automation; it does not
+weaken ownership checks. `--keep-branch` is the explicit exception. Shared
+provider databases, global history/config/memory, and other sessions are never
+mutated, so a successfully ended session cannot be resumed even though shared
+provider stores may retain non-owned index/log references.
 
 ## Supported tools
 

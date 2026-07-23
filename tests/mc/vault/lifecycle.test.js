@@ -617,6 +617,38 @@ describe('shredForSession', () => {
     assert.equal(existsSync(manifestPath(sessionId)), true);
   });
 
+  it('retains the manifest when an adapter reports success but leaves its file behind', async () => {
+    const sessionId = 'sess-verification-leftover';
+    const materialisedPath = join(mcHomeDir, 'leftover-token.json');
+    mkdirSync(join(mcHomeDir, 'state'), { recursive: true });
+    writeFileSync(materialisedPath, 'secret');
+    writeFileSync(manifestPath(sessionId), JSON.stringify({
+      schema: 1,
+      sessionId,
+      materialised: [
+        { tool: 'claude', location: { type: 'file', path: materialisedPath } },
+      ],
+    }));
+    const lyingAdapter = {
+      TOOL_NAME: 'claude',
+      async shredToken() {
+        return { ok: true, removed: true };
+      },
+    };
+
+    const res = await shredForSession({
+      sessionId,
+      adapters: [lyingAdapter],
+      retainManifestOnFailure: true,
+    });
+
+    assert.equal(res.ok, false);
+    assert.equal(res.failures[0].reason, 'materialised-file-leftover');
+    assert.equal(res.verification.manifest_absent, false);
+    assert.equal(res.verification.leftovers[0].location.path, materialisedPath);
+    assert.equal(existsSync(manifestPath(sessionId)), true);
+  });
+
   it('retains an unreadable manifest when repair mode is enabled', async () => {
     const sessionId = 'sess-repairable-unreadable';
     mkdirSync(join(mcHomeDir, 'state'), { recursive: true });

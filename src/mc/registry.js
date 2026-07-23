@@ -45,6 +45,21 @@ export function readRegistry() {
   }
 }
 
+/**
+ * Destructive lifecycle commands use the strict reader so malformed or
+ * unreadable registry state can never masquerade as an empty registry.
+ */
+export function readRegistryStrict() {
+  const path = registryPath();
+  if (!existsSync(path)) return { entries: [] };
+  const raw = readFileSync(path, 'utf8');
+  const parsed = JSON.parse(raw);
+  if (!parsed || !Array.isArray(parsed.entries)) {
+    throw new Error('registry entries must be an array');
+  }
+  return parsed;
+}
+
 export function writeRegistry(reg) {
   const path = registryPath();
   mkdirSync(dirname(path), { recursive: true });
@@ -82,6 +97,32 @@ export function removeEntry(name) {
   if (reg.entries.length === before) return false;
   writeRegistry(reg);
   return true;
+}
+
+export function removeEntryIfMatches(name, expected = {}) {
+  const reg = readRegistryStrict();
+  const index = reg.entries.findIndex((entry) => entry.name === name);
+  if (index === -1) return { ok: false, removed: false, reason: 'missing' };
+  const entry = reg.entries[index];
+  for (const key of [
+    'worktree_path',
+    'branch',
+    'tool_session_source',
+    'tool_session_id',
+    'tool_transcript_path',
+  ]) {
+    if (expected[key] !== undefined && entry[key] !== expected[key]) {
+      return {
+        ok: false,
+        removed: false,
+        reason: 'entry-changed',
+        field: key,
+      };
+    }
+  }
+  reg.entries.splice(index, 1);
+  writeRegistry(reg);
+  return { ok: true, removed: true };
 }
 
 /**

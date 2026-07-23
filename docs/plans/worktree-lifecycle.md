@@ -178,11 +178,18 @@ mc end [<name>|.] [--force] [--keep-branch]
    - mc end .         auto-detect: end the worktree you're currently in
    - mc end           if you are inside a worktree, treat as `mc end .`
                       with a confirm prompt; otherwise print usage
-   refuse if session is live without --force; remove worktree; delete
-   bootstrap branch only if merged (cs's heuristic, kept). After end,
-   the shell wrapper auto-cd's back to the primary worktree (see §2b)
-   so you don't have to `cd ..; cd memoro` by hand — the cs friction
-   point the user explicitly called out.
+   print compact session/worktree/branch + exact provider-artifact status,
+   then ask y/n once for the whole batch. n has zero side effects. y is
+   permanent consent: remove broker/PTY, vault materialisation, exact
+   content-ID-verified Codex/Claude transcript + allowlisted ID-bound
+   auxiliary paths, worktree (including dirty state), local branch (including
+   unmerged commits), runtime sidecars, and registry; verify no contracted
+   session-owned path remains. --force supplies the same consent for
+   automation and never weakens ownership checks. --keep-branch is the
+   explicit exception. Shared provider DB/history/memory/config are never
+   mutated. Partial failure reports exact leftovers and retains a retry recipe
+   where possible. After end, the shell wrapper auto-cd's back to the primary
+   worktree (see §2b).
 
 mc cd <name>
    change directory to the worktree (requires shell wrapper, §2b)
@@ -200,6 +207,39 @@ mc dispatch <name> "<message>"
 mc read <name> [--last N]
    today's `mc sessions read`, name-resolved
 ```
+
+**Permanent-end provider artifact contract (amended 2026-07-23).**
+Deletion authority starts with the registry's provider source, session ID, and
+exact transcript path, then verifies that ID from transcript content. Only
+these provider-owned layouts are allowlisted:
+
+- Codex transcript under `~/.codex/sessions/YYYY/MM/DD/` or the exact archived
+  transcript under `~/.codex/archived_sessions/`;
+  `~/.codex/generated_images/<id>/`; and files matching the exact
+  `~/.codex/shell_snapshots/<id>.<digits>.sh` shape.
+- Claude transcript
+  `~/.claude/projects/<encoded-project>/<id>.jsonl`; its exact sibling
+  `<encoded-project>/<id>/`; plus exact global directories
+  `~/.claude/file-history/<id>/`, `~/.claude/session-env/<id>/`, and
+  `~/.claude/tasks/<id>/`.
+
+Every positive path stays under its canonical provider root, rejects symlinks,
+and is revalidated immediately before deletion. Status scans are bounded to
+4,096 entries, depth 8, and a 250 ms checked budget per inventory; a traversal
+limit hit is reported as truncated/unknown and blocks teardown. Summed file
+sizes are display metadata only and never make an otherwise verified session
+impossible to end.
+Real-data validation found matching transcript IDs for every sampled Claude
+project sibling and every Codex image/snapshot session. Claude telemetry,
+debug/jobs/paste cache, and shell snapshots are deferred because their current
+layouts do not prove the same exact ownership.
+
+Provider roots themselves, date/project ancestors, sibling sessions, Codex
+SQLite/log/goal/memory stores and global history/index/config/auth, and Claude
+global history/config/plugins/project memory are negative scope. They are never
+mutated by `mc end`. Consequently, success means no verified session-owned
+artifact **paths** remain; provider-wide shared stores may retain index/log
+references until the provider offers a safe row-level purge.
 
 ### 2a. Source layout + registry path
 
@@ -625,6 +665,9 @@ files on main, and *decide* — every time. With this, end-of-cycle
 cleanup is one command in the common case and explicit about
 uncertainty in the degraded case.
 
+The phantom verdict is status context only. It never bypasses the one permanent
+teardown confirmation and does not weaken provider-artifact ownership checks.
+
 **9c. Bulk `mc end` and `--dry-run`** (extends §2 `mc end`)
 
 ```
@@ -632,17 +675,22 @@ mc end home-status inbox liveapp xero            # bulk, sequential
 mc end --dry-run home-status inbox liveapp xero  # preview only
 ```
 
-`--dry-run` output is one line per target:
+`--dry-run` prints the same compact status blocks as an interactive run,
+including session state, dirty count, branch ahead/action, exact transcript,
+and bounded auxiliary totals, but performs no side effects:
 
 ```
-home-status  → SAFE_TO_END (clean, 0 ahead, branch merged)
-inbox        → SAFE_TO_END (clean, 0 ahead, branch merged)
-liveapp      → SAFE_TO_END (clean, 0 ahead, branch merged)
-xero         → NEEDS_REVIEW (1 dirty file: docs/CHANGELOG.md)
+home-status
+  session: idle
+  worktree: ~/.memoro/mc/worktrees/repo/home-status (dirty: 0)
+  branch: sess/home-status (ahead: 0, delete)
+  transcript: ~/.codex/sessions/.../<id>.jsonl (2.1 MiB)
+  auxiliary: 2 paths, 14 files (31.0 MiB)
 ```
 
-→ Today's "4 separate `cs end` commands + read 4 separate confirmations"
-becomes one paste + one read.
+An interactive bulk run shows every block, then asks once. `y` applies the same
+permanent contract sequentially; a partial failure stops later targets and
+keeps exact retry state.
 
 **9d. `mc list --awaiting` and other status filters** (extends §2 `mc list`)
 
@@ -2645,9 +2693,10 @@ cross-product dependency.
 - One command rename (branch + dir), no manual `git branch -m`.
 - A `mc list --rich` covers the cross-reference workflow that today
   requires bash + jq + `gh pr view` (per §9a).
-- `mc end` recognises squash-merge phantoms without manual
-  intervention (per §9b).
-- Bulk `mc end a b c` and `mc end --dry-run` available (per §9c).
+- `mc end` recognises squash-merge phantoms without manual classification work
+  (per §9b), while still requiring the permanent teardown decision.
+- Bulk `mc end a b c` shows all statuses and asks once; `mc end --dry-run`
+  previews the same bounded artifact inventory (per §9c).
 - `mc list --awaiting / --idle / --safe-to-end` filters available
   (per §9d).
 - A user can pass a plan to `mc fanout` and ship N PRs in parallel

@@ -44,16 +44,16 @@ export async function removeBrokerSessionForEntry(entry, {
   return { ok: true, id, removed: removed.removed !== false };
 }
 
-function brokerSessionMatchesEntry(session, entry) {
+export function brokerSessionMatchesEntry(session, entry) {
   if (!session || !entry) return false;
 
-  const sessionId = brokerSessionId(session);
+  const sessionId = nonEmpty(session.coding_session_id || session.id);
   const entryId = nonEmpty(entry.coding_session_id || entry.id);
-  if (sessionId && entryId && sessionId === entryId) return true;
+  if (sessionId && entryId) return sessionId === entryId;
 
   const sessionCwd = normalizePathForMatch(session.cwd || session.worktree_path);
   const entryWorktree = normalizePathForMatch(entry.worktree_path);
-  if (sessionCwd && entryWorktree && sessionCwd === entryWorktree) return true;
+  if (sessionCwd && entryWorktree) return sessionCwd === entryWorktree;
 
   const sessionName = nonEmpty(session.name || session.label || session.worktree_name);
   const entryName = nonEmpty(entry.name || entry.label);
