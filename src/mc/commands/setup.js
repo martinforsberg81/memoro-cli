@@ -29,9 +29,8 @@ import {
   getToolStatus,
   probeShellWrapper,
   probeWorkspace,
-  safeGitHubConnectionStatus,
 } from './auth.js';
-import { repairForGitHubState } from '../github-contract.js';
+import { createConnectionClient } from '../connections/client.js';
 import { promptLine } from '../../lib/prompt.js';
 import { readConfig, writeConfig } from '../../lib/config.js';
 import {
@@ -111,7 +110,7 @@ export async function run(argv, deps = {}) {
     return 2;
   }
 
-  const report = await buildReport(deps.github || deps);
+  const report = await buildReport(deps);
   const steps = missingSteps(report);
   const resourceReport = {
     ...resourceProfile,
@@ -137,16 +136,34 @@ export async function run(argv, deps = {}) {
   return steps.length === 0 ? 0 : 1;
 }
 
-async function buildReport(githubDeps = {}) {
+async function buildReport(deps = {}) {
   const memoro = await probeMemoro();
   const tools = {};
   for (const t of [...REQUIRED_TOOLS, ...OPTIONAL_TOOLS]) {
     tools[t] = await getToolStatus(t);
   }
+  const connectionClient = deps.connectionClient || createConnectionClient(deps);
+  const connections = [];
+  for (const provider of connectionClient.providers().filter((item) => item.onboarding)) {
+    try {
+      connections.push(await connectionClient.status(provider.id));
+    } catch {
+      connections.push({
+        schema: 1,
+        provider: { id: provider.id, label: provider.label, custody: provider.custody },
+        state: 'unavailable',
+        repair_action: 'retry',
+        account: null,
+        resources: [],
+        sources: { local: 'unavailable', cloud: 'unavailable' },
+        capabilities: [],
+      });
+    }
+  }
   return {
     memoro,
     tools,
-    github: await safeGitHubConnectionStatus(githubDeps),
+    connections,
     shell_wrapper: probeShellWrapper(),
     workspace: probeWorkspace(),
   };
@@ -207,17 +224,18 @@ export function missingSteps(report) {
     }
   }
 
-  // GitHub belongs to the central Memoro onboarding, after Memoro sign-in.
-  // `mc github connect` owns the connect side effect; setup only points at
-  // that canonical verb and therefore remains safe to re-run.
-  if (report.memoro.authenticated && report.github?.state !== 'ready') {
-    const state = report.github?.state || 'unavailable';
-    const repair = repairForGitHubState(state);
+  for (const connection of report.memoro.authenticated ? (report.connections || []) : []) {
+    if (connection.state === 'ready') continue;
+    const provider = connection.provider;
+    const action = connection.repair_action || 'retry';
+    const command = ['retry', 'contact_admin'].includes(action)
+      ? `mc connections status ${provider.id}`
+      : `mc connections repair ${provider.id}`;
     steps.push({
-      id: `github-${repair.action}`,
-      title: 'Connect GitHub through Memoro',
-      command: repair.command,
-      note: repair.message,
+      id: `connection-${provider.id}-${action}`,
+      title: `Connect ${provider.label}`,
+      command,
+      note: `Connection state: ${connection.state}. Repair action: ${action}.`,
     });
   }
 
@@ -266,9 +284,10 @@ function printAllSet(report, resourceReport, dependencyMode) {
   if (report.shell_wrapper.installed) {
     process.stdout.write(`  ✓ Shell wrapper installed (${report.shell_wrapper.rc})\n`);
   }
-  if (report.github?.state === 'ready') {
-    const target = report.github.repository ? ` for ${report.github.repository.full_name}` : '';
-    process.stdout.write(`  ✓ Memoro GitHub App connected${target}\n`);
+  for (const connection of report.connections || []) {
+    if (connection.state === 'ready') {
+      process.stdout.write(`  ✓ ${connection.provider.label} connected\n`);
+    }
   }
   // Surface optional tools that ARE installed as a bonus line.
   const optionalReady = OPTIONAL_TOOLS.filter((t) => report.tools[t]?.installed);

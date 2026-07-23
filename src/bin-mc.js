@@ -128,6 +128,7 @@ const LIFECYCLE = {
   read:          () => import('./mc/commands/read.js'),
   'install-shell': () => import('./mc/commands/install-shell.js'),
   auth:          () => import('./mc/commands/auth.js'),
+  connections:   () => import('./mc/commands/connections.js'),
   github:        () => import('./mc/commands/github.js'),
   setup:         () => import('./mc/commands/setup.js'),
   reconcile:     () => import('./mc/commands/reconcile.js'),
@@ -426,7 +427,7 @@ COMMAND SURFACES
 NEW USER FLOW
   1. Install: \`npm install -g memoro-cli\`
   2. Sign in: run \`mc\` and approve the browser device flow
-  3. Connect GitHub: \`mc github connect\` uses the central Memoro GitHub App
+  3. Connect services: \`mc connections\` uses the shared provider registry
   4. Verify: \`mc setup\` checks readiness and offers optional resource limits
   5. Start: from a git repo, run \`mc new <name> [focus]\`
 
