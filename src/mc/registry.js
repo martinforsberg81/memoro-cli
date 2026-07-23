@@ -84,6 +84,38 @@ export function removeEntry(name) {
   return true;
 }
 
+/**
+ * Patch a set of existing entries in one synchronous registry round-trip.
+ *
+ * Unlike `upsertEntry`, this helper never creates a missing entry. Destructive
+ * lifecycle commands use it after async discovery so a concurrently removed
+ * session cannot be resurrected by a late authority backfill write.
+ */
+export function patchEntriesIfPresent(patches) {
+  const requested = Array.isArray(patches) ? patches : [];
+  const reg = readRegistry();
+  const byName = new Map(requested
+    .filter((patch) => patch && typeof patch.name === 'string')
+    .map((patch) => [patch.name, patch]));
+  const found = new Set();
+  reg.entries = reg.entries.map((entry) => {
+    const patch = byName.get(entry.name);
+    if (!patch) return entry;
+    found.add(entry.name);
+    return { ...entry, ...patch };
+  });
+  const missing = [...byName.keys()].filter((name) => !found.has(name));
+  if (missing.length > 0) {
+    return { ok: false, missing, entries: reg.entries };
+  }
+  if (byName.size > 0) writeRegistry(reg);
+  return {
+    ok: true,
+    missing: [],
+    entries: reg.entries.filter((entry) => byName.has(entry.name)),
+  };
+}
+
 export function renameEntry(oldName, newName, patch = {}) {
   const reg = readRegistry();
   if (reg.entries.some((e) => e.name === newName)) {

@@ -75,13 +75,14 @@ describe('shell-directive emission (§2b)', () => {
     addWorktree(repo.dir, wt, 'sess/done');
     writeRegistry(repo.mcHome, [makeEntry({
       name: 'done', branch: 'sess/done', worktree_path: wt,
+      session_state: 'no-session-yet',
       safety_verdict: 'SAFE_TO_END',
     })]);
 
     // Run `mc end` from *inside* the about-to-be-deleted worktree —
     // the directive is what saves the shell from sitting in a dead dir.
     const r = await runMcCaptureFd3(
-      ['end', 'done', '--emit-shell-directives'],
+      ['end', 'done', '--force', '--emit-shell-directives'],
       { cwd: wt, env: { MC_HOME: repo.mcHome } },
     );
     assert.equal(r.status, 0, `stderr:${r.stderr}`);
