@@ -39,18 +39,38 @@ const SHIM_MODULE = fileURLToPath(new URL('./github-shim.js', import.meta.url));
 const GITHUB_BROKER_TIMEOUT_MS = 30_000;
 
 export async function fetchGitHubSessionCapabilities({
-  apiUrl,
-  token,
+  connectionClient,
   repository = null,
   memoroFetchImpl = memoroFetch,
 } = {}) {
+  const result = await fetchGitHubSessionBootstrap({
+    connectionClient, repository, memoroFetchImpl,
+  });
+  return result.capabilities;
+}
+
+export async function fetchGitHubSessionBootstrap({
+  connectionClient,
+  repository = null,
+  memoroFetchImpl = memoroFetch,
+} = {}) {
+  if (!connectionClient?.withGrant) throw new TypeError('connectionClient is required');
   const expectedRepository = normalizeRepository(repository);
   const path = expectedRepository
     ? `/api/mc/github/status?repository=${encodeURIComponent(expectedRepository)}`
     : '/api/mc/github/status';
-  const raw = await memoroFetchImpl(apiUrl, path, { token });
-  const connection = decodeGitHubConnectionResponse(raw, { expectedRepository });
-  return buildSessionCapabilities(connection.github);
+  return connectionClient.withGrant(
+    'github',
+    { purpose: 'connection' },
+    async ({ token, apiUrl, source }) => {
+      const raw = await memoroFetchImpl(apiUrl, path, { token });
+      const connection = decodeGitHubConnectionResponse(raw, { expectedRepository });
+      return {
+        capabilities: buildSessionCapabilities(connection.github),
+        source: source || null,
+      };
+    },
+  );
 }
 
 export function unavailableGitHubSessionCapabilities() {
@@ -191,9 +211,7 @@ export async function executeGitHubSessionOperation({
 
 /** Trusted sidecar-only control-plane client. */
 export async function executeGitHubControlPlaneOperation({
-  apiUrl,
-  token,
-  sourceId,
+  connectionClient,
   codingSessionId,
   request,
   memoroFetchImpl = memoroFetch,
@@ -207,22 +225,20 @@ export async function executeGitHubControlPlaneOperation({
       error?.code === 'operation_not_allowed' ? 'operation_not_allowed' : 'invalid_params',
     );
   }
-  const source = stringOrNull(sourceId);
   const session = stringOrNull(codingSessionId);
-  if (!source || !/^sess_[a-zA-Z0-9_-]{6,}$/.test(session || '')) {
+  if (!connectionClient?.withGrant || !/^sess_[a-zA-Z0-9_-]{6,}$/.test(session || '')) {
     return safeOperationFailure(decodedRequest.request_id, 'invalid_params');
   }
   let raw;
   try {
-    raw = await memoroFetchImpl(
-      apiUrl,
-      `/api/mc/github/sessions/${encodeURIComponent(session)}/operations`,
-      {
-        token,
-        method: 'POST',
-        body: decodedRequest,
-        sourceId: source,
-      },
+    raw = await connectionClient.withGrant(
+      'github',
+      { purpose: 'session', codingSessionId: session },
+      ({ token, apiUrl }) => memoroFetchImpl(
+        apiUrl,
+        `/api/mc/github/sessions/${encodeURIComponent(session)}/operations`,
+        { token, method: 'POST', body: decodedRequest },
+      ),
     );
   } catch (error) {
     raw = error?.data;

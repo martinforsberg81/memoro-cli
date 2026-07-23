@@ -14,6 +14,8 @@ import {
 } from '../session-projector.js';
 import { scheduleSessionUpload } from '../session-upload.js';
 import { executeGitHubControlPlaneOperation } from '../github-session.js';
+import { createConnectionClient } from '../connections/client.js';
+import { createBoundIdentityBroker } from '../connections/identity.js';
 
 const TICK_INTERVAL_MS = 60_000;
 const MAX_ATTEMPTS = 3;
@@ -36,6 +38,7 @@ export class BrokerSessionSidecars {
     excerptMaxChars = EXCERPT_MAX_CHARS,
     sessionUploadScheduler = scheduleSessionUpload,
     projectionTracker = null,
+    connectionClient = null,
     logger = silentLogger(),
   } = {}) {
     if (!session) throw new TypeError('session is required');
@@ -46,6 +49,18 @@ export class BrokerSessionSidecars {
     this.wsClientFactory = wsClientFactory;
     this.fetchTranscriptHandlerFactory = fetchTranscriptHandlerFactory;
     this.memoroFetch = memoroFetchImpl;
+    this.connectionClient = connectionClient || (
+      coding.apiUrl && coding.token
+        ? createConnectionClient({
+            identityBroker: createBoundIdentityBroker({
+              token: coding.token,
+              apiUrl: coding.apiUrl,
+              memoroFetch: memoroFetchImpl,
+            }),
+            memoroFetch: memoroFetchImpl,
+          })
+        : null
+    );
     this.sleep = sleepImpl;
     this.now = now;
     this.heartbeatIntervalMs = heartbeatIntervalMs;
@@ -134,9 +149,7 @@ export class BrokerSessionSidecars {
         }
         if (payload?.type === 'github_operation') {
           const response = await executeGitHubControlPlaneOperation({
-            apiUrl: this.coding.apiUrl,
-            token: this.coding.token,
-            sourceId: this.sourceIdentity.source_id,
+            connectionClient: this.connectionClient,
             codingSessionId: this.coding.codingSessionId,
             request: payload,
             memoroFetchImpl: this.memoroFetch,

@@ -46,7 +46,7 @@ function controlPlaneGitHub() {
     custody: 'control_plane',
     onboarding: true,
     async status({ grant, apiUrl, memoroFetch }) {
-      const raw = await memoroFetch(apiUrl, '/api/mc/github/status', { token: grant });
+      const raw = await this.legacyStatus({ grant, apiUrl, memoroFetch });
       const decoded = decodeGitHubConnectionResponse(raw);
       const github = decoded.github;
       return descriptor(this, {
@@ -64,6 +64,16 @@ function controlPlaneGitHub() {
           effect: githubOperationEffect(name),
         })),
       });
+    },
+    async legacyStatus({ grant, apiUrl, memoroFetch, params = {} }) {
+      const repository = typeof params.repository === 'string' ? params.repository : null;
+      const path = repository
+        ? `/api/mc/github/status?repository=${encodeURIComponent(repository)}`
+        : '/api/mc/github/status';
+      return memoroFetch(apiUrl, path, { token: grant });
+    },
+    async repositories({ grant, apiUrl, memoroFetch }) {
+      return memoroFetch(apiUrl, '/api/mc/github/repositories', { token: grant });
     },
     async connect({ grant, apiUrl, memoroFetch }) {
       return decodeGitHubConnectResponse(await memoroFetch(

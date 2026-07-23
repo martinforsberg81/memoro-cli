@@ -55,5 +55,14 @@ describe('connected capability codecs', () => {
       const source = readFileSync(file, 'utf8');
       assert.doesNotMatch(source, /lib\/keychain|mc\/vault|\/vault\//, file);
     }
+    for (const file of [
+      'src/mc/commands/github.js',
+      'src/mc/github-session.js',
+      'src/mc/broker/launch-client.js',
+      'src/mc/broker/session-sidecars.js',
+    ]) {
+      const source = readFileSync(file, 'utf8');
+      assert.doesNotMatch(source, /lib\/keychain|mc\/vault|\/vault\/|ACCOUNTS\.TOKEN/, file);
+    }
   });
 });

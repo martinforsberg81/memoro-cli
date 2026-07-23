@@ -4,8 +4,6 @@ import { setTimeout as sleep } from 'node:timers/promises';
 
 import { resolveLaunch } from '../../adapters/index.js';
 import { installUpdateCommand } from '../../adapters/claude-code.js';
-import { getSecret } from '../../lib/keychain.js';
-import { ACCOUNTS } from '../../commands/auth.js';
 import { DEFAULT_TOOL, readConfig, getApiUrl } from '../../lib/config.js';
 import { getRepoContext, deriveRepoName, derivePublicRepoRef } from '../../lib/git-context.js';
 import { lookupOrMint } from '../../lib/coding-session.js';
@@ -34,12 +32,15 @@ import {
 } from '../session-projector.js';
 import { resolveDevPlan, resolveDevSessionEnvironment } from '../dev-definition.js';
 import {
-  executeGitHubControlPlaneOperation,
-  fetchGitHubSessionCapabilities,
+  fetchGitHubSessionBootstrap,
   prepareGitHubSessionForLaunch,
   unavailableGitHubSessionCapabilities,
 } from '../github-session.js';
-import { encodeGitHubOperationRequest } from '../github-contract.js';
+import { createConnectionClient } from '../connections/client.js';
+import {
+  createBoundIdentityBroker,
+  resolveBootstrapIdentity,
+} from '../connections/identity.js';
 
 const CLOUD_BROKER_START_TIMEOUT_MS = 10_000;
 const CODEX_SQLITE_STARTUP_WINDOW_MS = 20_000;
@@ -87,11 +88,16 @@ export async function launchBrokerOwnedSession({
 
   const config = await (deps.readConfig || readConfig)();
   const apiUrl = (deps.getApiUrl || getApiUrl)(apiArgv) || config.apiUrl;
-  const token = await resolveLaunchAuthToken({ env, getSecretFn: deps.getSecret || getSecret });
-  if (!token) {
+  const bootstrapIdentity = await (deps.resolveBootstrapIdentity || resolveBootstrapIdentity)({
+    env,
+    apiUrl,
+    getSecret: deps.getSecret,
+  });
+  if (!bootstrapIdentity) {
     stderr.write('mc: no Memoro token. Run `mc` on a real TTY to start the device flow, or `memoro-cli login` for CI.\n');
     return { code: 1 };
   }
+  const token = bootstrapIdentity.token;
 
   const registryEntry = sessionName ? ((deps.findEntry || findEntry)(sessionName) || {}) : {};
   const effectivePolicy = (deps.resolvePolicyForWrap || resolvePolicyForWrap)({
@@ -102,7 +108,7 @@ export async function launchBrokerOwnedSession({
     deps,
   });
   const machineId = (deps.hostname || hostname)();
-  const sourceIdentity = resolveSessionSourceIdentity({
+  let sourceIdentity = resolveSessionSourceIdentity({
     sourceId: cloudBroker.sourceId || cloudBroker.source_id,
     sourceKind: cloudBroker.sourceKind || cloudBroker.source_kind,
     sourceName: cloudBroker.sourceName || cloudBroker.source_name,
@@ -120,13 +126,29 @@ export async function launchBrokerOwnedSession({
   const paths = brokerSessionPaths(codingSessionId);
   let sessionCapabilities = unavailableGitHubSessionCapabilities();
   try {
-    sessionCapabilities = await (deps.fetchGitHubSessionCapabilities || fetchGitHubSessionCapabilities)({
-      apiUrl,
-      token,
+    const connectionClient = deps.connectionClient || createConnectionClient({
+      identityBroker: createBoundIdentityBroker({
+        token,
+        apiUrl,
+        memoroFetch: deps.memoroFetch,
+      }),
+      memoroFetch: deps.memoroFetch,
+    });
+    const bootstrap = await (deps.fetchGitHubSessionBootstrap || fetchGitHubSessionBootstrap)({
+      connectionClient,
       repository: repoRef,
-      sourceKind: sourceIdentity.source_kind,
       memoroFetchImpl: deps.memoroFetch,
     });
+    sessionCapabilities = bootstrap.capabilities;
+    if (bootstrap.source?.id && bootstrap.source?.kind) {
+      sourceIdentity = resolveSessionSourceIdentity({
+        sourceId: bootstrap.source.id,
+        sourceKind: bootstrap.source.kind,
+        cloudSessionId: sourceIdentity.cloud_session_id,
+        sourceName: sourceIdentity.source_name,
+        machineId,
+      });
+    }
   } catch {}
   if (sessionCapabilities.github.state === 'ready') {
     const registered = await (deps.registerGitHubSessionProjection || registerGitHubSessionProjection)({
@@ -479,7 +501,6 @@ export async function registerGitHubSessionProjection({
   label = null,
   now = () => Date.now(),
   postHeartbeat = postHeartbeatWithRetry,
-  bindSession = executeGitHubControlPlaneOperation,
   memoroFetchImpl,
 } = {}) {
   const timestamp = now();
@@ -494,7 +515,7 @@ export async function registerGitHubSessionProjection({
     git: null,
   });
   try {
-    const registered = await postHeartbeat({
+    return await postHeartbeat({
       apiUrl,
       token,
       payload: buildSessionHeartbeatPayload({
@@ -512,29 +533,9 @@ export async function registerGitHubSessionProjection({
       maxAttempts: 1,
       memoroFetchImpl,
     });
-    if (!registered) return false;
-    const bound = await bindSession({
-      apiUrl,
-      token,
-      sourceId: sourceIdentity?.source_id,
-      codingSessionId,
-      request: encodeGitHubOperationRequest({
-        requestId: `mcr_bind_${timestamp}_${codingSessionId}`.slice(0, 128),
-        operation: 'connection.status',
-        params: {},
-      }),
-      memoroFetchImpl,
-    });
-    return bound?.ok === true && bound?.data?.state === 'ready';
   } catch {
     return false;
   }
-}
-
-async function resolveLaunchAuthToken({ env = process.env, getSecretFn = getSecret } = {}) {
-  const envToken = typeof env?.MEMORO_TOKEN === 'string' ? env.MEMORO_TOKEN.trim() : '';
-  if (envToken) return envToken;
-  return getSecretFn(ACCOUNTS.TOKEN);
 }
 
 function isCloudBrokerLaunch(cloudBroker) {
@@ -594,7 +595,6 @@ async function resolveLaunchBroker({
 export { ensureBrokerRunning } from './supervisor.js';
 
 export const __test__ = {
-  resolveLaunchAuthToken,
   isCloudBrokerLaunch,
   resolveLaunchBroker,
   retryCodexSqliteStartup,

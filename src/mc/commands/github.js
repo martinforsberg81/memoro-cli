@@ -5,12 +5,9 @@
  * use the session-bound broker and never accept repository or authority input.
  */
 
-import { getSecret } from '../../lib/keychain.js';
-import { ACCOUNTS } from '../../commands/auth.js';
-import { readConfig } from '../../lib/config.js';
-import { memoroFetch } from '../../lib/api.js';
 import { getRepoContext, derivePublicRepoRef } from '../../lib/git-context.js';
 import { openBrowser } from '../../lib/device-flow.js';
+import { createConnectionClient } from '../connections/client.js';
 import {
   decodeGitHubConnectResponse,
   decodeGitHubConnectionResponse,
@@ -85,18 +82,10 @@ async function runOperation(opts, deps, io) {
 }
 
 export async function readGitHubConnectionStatus(deps = {}) {
-  const token = await readMemoroToken(deps);
-  if (!token) throw new Error('Memoro authentication is required.');
-  const [config, expectedRepository] = await Promise.all([
-    (deps.readConfig || readConfig)(),
-    deriveCurrentGitHubRepository(deps),
-  ]);
-  const apiUrl = deps.apiUrl || config?.apiUrl;
-  if (!apiUrl) throw new Error('Memoro API URL is unavailable.');
-  const path = expectedRepository
-    ? `/api/mc/github/status?repository=${encodeURIComponent(expectedRepository)}`
-    : '/api/mc/github/status';
-  const response = await (deps.memoroFetch || memoroFetch)(apiUrl, path, { token });
+  const expectedRepository = await deriveCurrentGitHubRepository(deps);
+  const response = await client(deps).call('github', 'legacyStatus', {
+    repository: expectedRepository,
+  });
   return decodeGitHubConnectionResponse(response, { expectedRepository });
 }
 
@@ -111,12 +100,7 @@ async function runStatus(opts, deps, io) {
 }
 
 async function runRepos(opts, deps, io) {
-  const token = await readMemoroToken(deps);
-  if (!token) throw new Error('Memoro authentication is required.');
-  const config = await (deps.readConfig || readConfig)();
-  const apiUrl = deps.apiUrl || config?.apiUrl;
-  if (!apiUrl) throw new Error('Memoro API URL is unavailable.');
-  const raw = await (deps.memoroFetch || memoroFetch)(apiUrl, '/api/mc/github/repositories', { token });
+  const raw = await client(deps).call('github', 'repositories');
   const response = decodeGitHubRepositoriesResponse(raw);
   if (opts.json) {
     io.stdout.write(`${JSON.stringify(response, null, 2)}\n`);
@@ -127,16 +111,7 @@ async function runRepos(opts, deps, io) {
 }
 
 async function runConnect(opts, deps, io) {
-  const token = await readMemoroToken(deps);
-  if (!token) throw new Error('Memoro authentication is required.');
-  const config = await (deps.readConfig || readConfig)();
-  const apiUrl = deps.apiUrl || config?.apiUrl;
-  if (!apiUrl) throw new Error('Memoro API URL is unavailable.');
-  const raw = await (deps.memoroFetch || memoroFetch)(apiUrl, '/api/mc/github/connect', {
-    token,
-    method: 'POST',
-  });
-  const response = decodeGitHubConnectResponse(raw);
+  const response = decodeGitHubConnectResponse(await client(deps).connect('github'));
 
   // JSON is always machine-only. Human non-TTY output is also side-effect
   // free. The explicit interactive `mc github connect` invocation is the one
@@ -207,12 +182,8 @@ function humanState(state) {
   }[state] || 'not ready';
 }
 
-async function readMemoroToken(deps) {
-  try {
-    return await (deps.getSecret || getSecret)(ACCOUNTS.TOKEN);
-  } catch {
-    return null;
-  }
+function client(deps) {
+  return deps.connectionClient || createConnectionClient(deps);
 }
 
 function emitSafeFailure(opts, { stdout, stderr }) {

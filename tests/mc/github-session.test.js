@@ -53,6 +53,19 @@ function readyResponse() {
   };
 }
 
+function grantClient(sourceId = 'local:device:test') {
+  return {
+    withGrant: async (_provider, _request, use) => use({
+      token: 'short-lived-grant-sentinel',
+      apiUrl: 'https://memoro.test',
+      source: {
+        id: sourceId,
+        kind: sourceId.startsWith('cloud:') ? 'cloud' : 'local',
+      },
+    }),
+  };
+}
+
 describe('GitHub session capability boundary', () => {
   test('builds byte-identical token-free descriptors for local and cloud sources', async () => {
     const calls = [];
@@ -61,15 +74,13 @@ describe('GitHub session capability boundary', () => {
       return readyResponse();
     };
     const local = await fetchGitHubSessionCapabilities({
-      apiUrl: 'https://memoro.test',
-      token: 'memoro-secret-sentinel',
+      connectionClient: grantClient('local:device:test'),
       repository: 'acme/widgets',
       sourceKind: 'local',
       memoroFetchImpl: fetch,
     });
     const cloud = await fetchGitHubSessionCapabilities({
-      apiUrl: 'https://memoro.test',
-      token: 'memoro-secret-sentinel',
+      connectionClient: grantClient('cloud:cld_123456'),
       repository: 'acme/widgets',
       sourceKind: 'cloud',
       memoroFetchImpl: fetch,
@@ -81,7 +92,7 @@ describe('GitHub session capability boundary', () => {
     assert.equal(JSON.stringify(local).includes('coding_session_id'), false);
     assert.equal(JSON.stringify(local).includes('approval_mode'), false);
     assert.equal(calls[0].path, '/api/mc/github/status?repository=acme%2Fwidgets');
-    assert.equal(calls[0].options.token, 'memoro-secret-sentinel');
+    assert.equal(calls[0].options.token, 'short-lived-grant-sentinel');
   });
 
   test('legacy server approval metadata never reaches the coding-tool child', async () => {
@@ -89,8 +100,7 @@ describe('GitHub session capability boundary', () => {
     const response = readyResponse();
     response.github.approval_mode = 'prompt';
     const capabilities = await fetchGitHubSessionCapabilities({
-      apiUrl: 'https://memoro.test',
-      token: 'memoro-secret-sentinel',
+      connectionClient: grantClient(),
       repository: 'acme/widgets',
       memoroFetchImpl: async () => response,
     });
@@ -113,8 +123,7 @@ describe('GitHub session capability boundary', () => {
     const response = readyResponse();
     response.github.operations.push('pull_request.create', 'pull_request.update');
     const capabilities = await fetchGitHubSessionCapabilities({
-      apiUrl: 'https://memoro.test',
-      token: 'memoro-secret-sentinel',
+      connectionClient: grantClient(),
       repository: 'acme/widgets',
       memoroFetchImpl: async () => response,
     });
@@ -135,8 +144,7 @@ describe('GitHub session capability boundary', () => {
     const result = await prepareGitHubSessionForLaunch({
       baseEnv: { PATH: '/usr/bin:/bin', KEEP: 'yes', ...secrets },
       capabilities: await fetchGitHubSessionCapabilities({
-        apiUrl: 'https://memoro.test',
-        token: 'memoro-secret-sentinel',
+        connectionClient: grantClient(),
         repository: 'acme/widgets',
         memoroFetchImpl: async () => readyResponse(),
       }),
@@ -218,9 +226,7 @@ describe('GitHub session capability boundary', () => {
 
     for (const sourceId of ['local:mac', 'cloud:cld_123456']) {
       const response = await executeGitHubControlPlaneOperation({
-        apiUrl: 'https://memoro.test',
-        token: 'memoro-secret-sentinel',
-        sourceId,
+        connectionClient: grantClient(sourceId),
         codingSessionId: 'sess_abcdef',
         request,
         memoroFetchImpl: fetch,
@@ -229,7 +235,8 @@ describe('GitHub session capability boundary', () => {
     }
 
     assert.equal(JSON.stringify(calls[0].options.body), JSON.stringify(calls[1].options.body));
-    assert.deepEqual(calls.map((call) => call.options.sourceId), ['local:mac', 'cloud:cld_123456']);
+    assert.ok(calls.every((call) => call.options.sourceId === undefined));
+    assert.ok(calls.every((call) => call.options.token === 'short-lived-grant-sentinel'));
     assert.ok(calls.every((call) => call.path === '/api/mc/github/sessions/sess_abcdef/operations'));
     assert.ok(calls.every((call) => !('source_id' in call.options.body)));
     assert.ok(calls.every((call) => !('coding_session_id' in call.options.body)));
@@ -241,8 +248,7 @@ describe('GitHub session capability boundary', () => {
       operation: 'repository.metadata',
       requestId: 'request_abcdefgh',
       env: { [MC_SESSION_CAPABILITIES_ENV]: JSON.stringify(await fetchGitHubSessionCapabilities({
-        apiUrl: 'https://memoro.test',
-        token: 'memoro-secret-sentinel',
+        connectionClient: grantClient(),
         repository: 'acme/widgets',
         memoroFetchImpl: async () => readyResponse(),
       })) },
