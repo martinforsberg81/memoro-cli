@@ -26,7 +26,6 @@ function statusResponse(state = 'ready', repairAction = null, overrides = {}) {
       repository: state === 'ready' ? REPOSITORY : null,
       repositories: state === 'disconnected' ? [] : [REPOSITORY],
       operations: state === 'ready' ? ['repository.metadata', 'pull_request.list'] : [],
-      approval_mode: 'prompt',
       ...overrides,
     },
   };
@@ -77,7 +76,10 @@ function deps({ response = statusResponse(), interactive = false, calls = [] } =
 describe('mc github status', () => {
   test('renders stable JSON on stdout only and derives repository identity locally', async () => {
     const calls = [];
-    const portal = deps({ calls });
+    const portal = deps({
+      calls,
+      response: statusResponse('ready', null, { approval_mode: 'prompt' }),
+    });
     const code = await runGitHub(['status', '--json'], portal);
 
     assert.equal(code, 0);
@@ -85,6 +87,7 @@ describe('mc github status', () => {
     const body = JSON.parse(portal.stdoutText);
     assert.equal(body.github.state, 'ready');
     assert.equal(body.github.repository.id, 301);
+    assert.equal(Object.hasOwn(body.github, 'approval_mode'), false);
     assert.equal(calls.length, 1);
     assert.equal(calls[0].kind, 'request');
     assert.equal(calls[0].path, '/api/mc/github/status?repository=acme%2Fwidgets');

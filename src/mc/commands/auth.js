@@ -438,7 +438,6 @@ export async function safeGitHubConnectionStatus(deps = {}) {
       repository: null,
       repositories: [],
       operations: [],
-      approval_mode: 'prompt',
     };
   }
 }

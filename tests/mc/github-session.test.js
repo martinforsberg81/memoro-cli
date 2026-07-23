@@ -47,7 +47,6 @@ function readyResponse() {
         'pull_request.view',
         'checks.list',
       ],
-      approval_mode: 'prompt',
     },
   };
 }
@@ -78,8 +77,34 @@ describe('GitHub session capability boundary', () => {
     assert.equal(JSON.stringify(local).includes('memoro-secret-sentinel'), false);
     assert.equal(JSON.stringify(local).includes('source_kind'), false);
     assert.equal(JSON.stringify(local).includes('coding_session_id'), false);
+    assert.equal(JSON.stringify(local).includes('approval_mode'), false);
     assert.equal(calls[0].path, '/api/mc/github/status?repository=acme%2Fwidgets');
     assert.equal(calls[0].options.token, 'memoro-secret-sentinel');
+  });
+
+  test('legacy server approval metadata never reaches the coding-tool child', async () => {
+    tmp = mkdtempSync(join(tmpdir(), 'mc-github-session-'));
+    const response = readyResponse();
+    response.github.approval_mode = 'prompt';
+    const capabilities = await fetchGitHubSessionCapabilities({
+      apiUrl: 'https://memoro.test',
+      token: 'memoro-secret-sentinel',
+      repository: 'acme/widgets',
+      memoroFetchImpl: async () => response,
+    });
+    const result = await prepareGitHubSessionForLaunch({
+      baseEnv: { PATH: '/usr/bin:/bin' },
+      capabilities,
+      sessionId: 'sess_legacy',
+      socketPath: '/tmp/session.sock',
+      mcHomeDir: tmp,
+      deps: {
+        ensureGitHubShim: async () => '/tmp/mc-github-shim/gh',
+      },
+    });
+
+    assert.equal(JSON.stringify(result.capabilities).includes('approval_mode'), false);
+    assert.equal(result.env[MC_SESSION_CAPABILITIES_ENV].includes('approval_mode'), false);
   });
 
   test('installs a session-only shim while scrubbing every inherited GitHub credential', async () => {
@@ -172,5 +197,33 @@ describe('GitHub session capability boundary', () => {
     assert.equal(hostile.ok, false);
     assert.equal(hostile.error.code, 'unavailable');
     assert.equal(JSON.stringify(hostile).includes('ghs_never_echo'), false);
+  });
+
+  test('superseded approval responses fail closed as unavailable', async () => {
+    const response = await executeGitHubSessionOperation({
+      operation: 'repository.metadata',
+      requestId: 'request_abcdefgh',
+      env: { [MC_GITHUB_BROKER_SOCKET_ENV]: '/tmp/session.sock' },
+      request: async () => ({
+        ok: false,
+        request_id: 'request_abcdefgh',
+        error: {
+          code: 'approval_required',
+          message: 'Approval required.',
+          repair_action: 'approve',
+          approval_id: 'ghap_abcdefgh',
+        },
+      }),
+    });
+
+    assert.deepEqual(response, {
+      ok: false,
+      request_id: 'request_abcdefgh',
+      error: {
+        code: 'unavailable',
+        message: 'GitHub is temporarily unavailable through Memoro.',
+        repair_action: 'retry',
+      },
+    });
   });
 });

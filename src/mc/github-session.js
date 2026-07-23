@@ -22,6 +22,7 @@ import {
   decodeGitHubOperationResponse,
   decodeSessionCapabilities,
   encodeGitHubOperationRequest,
+  githubOperationEffect,
 } from './github-contract.js';
 import { mcHome } from './paths.js';
 
@@ -62,7 +63,6 @@ export function unavailableGitHubSessionCapabilities() {
       account: null,
       repository: null,
       operations: [],
-      approval_mode: 'prompt',
     },
   };
 }
@@ -75,8 +75,13 @@ export function renderGitHubSessionMarkdown(capabilities) {
     descriptor = unavailableGitHubSessionCapabilities();
   }
   if (descriptor.github.state === 'ready') {
+    const readsOnly = descriptor.github.operations.every(
+      (operation) => githubOperationEffect(operation) === 'read',
+    );
     return [
-      `- GitHub reads for ${descriptor.github.repository.full_name} are brokered through the Memoro GitHub App.`,
+      readsOnly
+        ? `- GitHub reads for ${descriptor.github.repository.full_name} are brokered through the Memoro GitHub App.`
+        : `- GitHub operations for ${descriptor.github.repository.full_name} are brokered through the Memoro GitHub App.`,
       '- Prefer `mc github pr list|view|checks`; the session-scoped `gh` shim supports only the matching read commands.',
       '- Never run GitHub login, token-export, arbitrary API, extension, merge, or write commands in this session.',
     ].join('\n');

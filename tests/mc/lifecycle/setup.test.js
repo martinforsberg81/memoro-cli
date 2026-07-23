@@ -33,7 +33,6 @@ const READY_GITHUB = Object.freeze({
   repository: null,
   repositories: [],
   operations: [],
-  approval_mode: 'prompt',
 });
 
 describe('mc setup — checklist (red path)', () => {

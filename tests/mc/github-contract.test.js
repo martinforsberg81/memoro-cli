@@ -3,7 +3,9 @@ import { describe, test } from 'node:test';
 
 import {
   GITHUB_CONNECTION_SCHEMA,
+  GITHUB_OPERATION_EFFECTS,
   GITHUB_OPERATION_SCHEMA,
+  GITHUB_STABLE_ERRORS,
   buildSessionCapabilities,
   decodeGitHubConnectionResponse,
   decodeGitHubOperationRequest,
@@ -37,7 +39,6 @@ function readyConnection(overrides = {}) {
       'pull_request.view',
       'checks.list',
     ],
-    approval_mode: 'prompt',
     ...overrides,
   };
 }
@@ -55,6 +56,22 @@ describe('GitHub connection/session descriptors', () => {
     assert.equal(decoded.github.repository.full_name, 'acme/widgets');
     assert.equal(JSON.stringify(decoded).includes('installation_id'), false);
     assert.equal(JSON.stringify(decoded).includes('token'), false);
+  });
+
+  test('accepts and discards the bounded legacy control-plane approval field', () => {
+    const decoded = decodeGitHubConnectionResponse({
+      ok: true,
+      github: readyConnection({ approval_mode: 'prompt' }),
+    });
+
+    assert.equal(Object.hasOwn(decoded.github, 'approval_mode'), false);
+    assert.throws(
+      () => decodeGitHubConnectionResponse({
+        ok: true,
+        github: readyConnection({ approval_mode: 'automatic' }),
+      }),
+      (error) => error?.code === 'invalid_descriptor',
+    );
   });
 
   test('fails closed on unknown fields at every descriptor depth', () => {
@@ -118,7 +135,6 @@ describe('GitHub connection/session descriptors', () => {
         account: 'acme',
         repository: REPOSITORY,
         operations: connection.operations,
-        approval_mode: 'prompt',
       },
     });
     assert.equal('source_id' in localCodex.github, false);
@@ -141,7 +157,6 @@ describe('GitHub connection/session descriptors', () => {
         account: 'acme',
         repository: null,
         operations: [],
-        approval_mode: 'prompt',
       },
     });
   });
@@ -179,6 +194,16 @@ describe('GitHub connection/session descriptors', () => {
 });
 
 describe('github-op-v1 codecs', () => {
+  test('classifies every public operation through one provider-neutral effect registry', () => {
+    assert.deepEqual(GITHUB_OPERATION_EFFECTS, {
+      'connection.status': 'read',
+      'repository.metadata': 'read',
+      'pull_request.list': 'read',
+      'pull_request.view': 'read',
+      'checks.list': 'read',
+    });
+  });
+
   test('normalizes every read operation to the shared schema', () => {
     const cases = [
       ['connection.status', {}, {}],
@@ -284,6 +309,40 @@ describe('github-op-v1 codecs', () => {
       request_id: 'request_abcdefgh',
       error: { code: 'unavailable', message: 'x', repair_action: 'retry', raw: true },
     }), (error) => error?.code === 'invalid_descriptor');
+  });
+
+  test('rejects superseded approval errors and approval payload fields', () => {
+    assert.equal(GITHUB_STABLE_ERRORS.includes('approval_required'), false);
+    assert.equal(GITHUB_STABLE_ERRORS.includes('approval_expired'), false);
+
+    for (const error of [
+      {
+        code: 'approval_required',
+        message: 'Approval required.',
+        repair_action: 'approve',
+        approval_id: 'ghap_abcdefgh',
+      },
+      {
+        code: 'approval_expired',
+        message: 'Approval expired.',
+        repair_action: 'retry',
+      },
+      {
+        code: 'unavailable',
+        message: 'Unavailable.',
+        repair_action: 'retry',
+        approval_id: 'ghap_abcdefgh',
+      },
+    ]) {
+      assert.throws(
+        () => decodeGitHubOperationResponse({
+          ok: false,
+          request_id: 'request_abcdefgh',
+          error,
+        }),
+        (contractError) => contractError?.code === 'invalid_descriptor',
+      );
+    }
   });
 
   test('rejects normalized credential and authority key variants with opaque values', () => {
