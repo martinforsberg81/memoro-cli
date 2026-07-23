@@ -589,6 +589,86 @@ describe('shredForSession', () => {
     assert.equal(existsSync(manifestPath('sess-end')), false);
   });
 
+  it('retains a readable manifest on shred failure when repair mode is enabled', async () => {
+    const sessionId = 'sess-repairable-failure';
+    mkdirSync(join(mcHomeDir, 'state'), { recursive: true });
+    writeFileSync(manifestPath(sessionId), JSON.stringify({
+      schema: 1,
+      sessionId,
+      materialised: [
+        { tool: 'claude', location: { type: 'file', path: '/tmp/repairable-secret' } },
+      ],
+    }));
+    const failingAdapter = {
+      TOOL_NAME: 'claude',
+      async shredToken() {
+        return { ok: false, reason: 'permission-denied' };
+      },
+    };
+
+    const res = await shredForSession({
+      sessionId,
+      adapters: [failingAdapter],
+      retainManifestOnFailure: true,
+    });
+
+    assert.equal(res.ok, false);
+    assert.equal(res.failures[0].reason, 'permission-denied');
+    assert.equal(existsSync(manifestPath(sessionId)), true);
+  });
+
+  it('retains an unreadable manifest when repair mode is enabled', async () => {
+    const sessionId = 'sess-repairable-unreadable';
+    mkdirSync(join(mcHomeDir, 'state'), { recursive: true });
+    writeFileSync(manifestPath(sessionId), '{not-json');
+
+    const res = await shredForSession({
+      sessionId,
+      adapters: [],
+      retainManifestOnFailure: true,
+    });
+
+    assert.equal(res.ok, false);
+    assert.match(res.reason, /manifest-unreadable/);
+    assert.equal(existsSync(manifestPath(sessionId)), true);
+  });
+
+  it('keeps legacy manifest cleanup on failure unless repair mode is requested', async () => {
+    const sessionId = 'sess-legacy-failure-cleanup';
+    mkdirSync(join(mcHomeDir, 'state'), { recursive: true });
+    writeFileSync(manifestPath(sessionId), JSON.stringify({
+      schema: 1,
+      sessionId,
+      materialised: [
+        { tool: 'missing-adapter', location: { type: 'file', path: '/tmp/legacy-secret' } },
+      ],
+    }));
+
+    const res = await shredForSession({ sessionId, adapters: [] });
+
+    assert.equal(res.ok, false);
+    assert.equal(existsSync(manifestPath(sessionId)), false);
+  });
+
+  it('removes the manifest after full success even when repair mode is enabled', async () => {
+    const sessionId = 'sess-repairable-success';
+    mkdirSync(join(mcHomeDir, 'state'), { recursive: true });
+    writeFileSync(manifestPath(sessionId), JSON.stringify({
+      schema: 1,
+      sessionId,
+      materialised: [],
+    }));
+
+    const res = await shredForSession({
+      sessionId,
+      adapters: [],
+      retainManifestOnFailure: true,
+    });
+
+    assert.equal(res.ok, true);
+    assert.equal(existsSync(manifestPath(sessionId)), false);
+  });
+
   it('no-manifest is a no-op with ok:true', async () => {
     const res = await shredForSession({
       sessionId: 'never-existed',

@@ -456,6 +456,7 @@ export async function shredForSession({
   sessionId,
   worktreePath,
   adapters: adaptersOverride,
+  retainManifestOnFailure = false,
   deps = {},
 } = {}) {
   if (!sessionId || typeof sessionId !== 'string') {
@@ -475,9 +476,12 @@ export async function shredForSession({
     const raw = await readManifest(path, 'utf8');
     manifest = JSON.parse(raw);
   } catch (err) {
-    // Manifest unreadable — still try to delete it so we don't keep
-    // dragging it around.
-    try { await unlinkManifest(path); } catch { /* best effort */ }
+    // Compatibility default: historically an unreadable manifest was
+    // discarded. Permanent teardown opts into retaining it so repair/retry
+    // cannot falsely report success while materialised secrets may remain.
+    if (!retainManifestOnFailure) {
+      try { await unlinkManifest(path); } catch { /* best effort */ }
+    }
     return { ok: false, reason: `manifest-unreadable: ${err.message}`, shredded: [] };
   }
 
@@ -534,8 +538,17 @@ export async function shredForSession({
     }
   }
 
-  // Delete the manifest after best-effort shred.
-  try { await unlinkManifest(path); } catch { /* best effort */ }
+  // In repair mode, a failed shred keeps the manifest as the exact retry
+  // recipe. The default preserves the historical best-effort cleanup.
+  if (failures.length === 0 || !retainManifestOnFailure) {
+    try {
+      await unlinkManifest(path);
+    } catch (err) {
+      if (retainManifestOnFailure && err?.code !== 'ENOENT') {
+        failures.push({ tool: 'manifest', reason: `manifest-unlink-failed: ${err.message}` });
+      }
+    }
+  }
 
   return { ok: failures.length === 0, shredded, failures };
 }

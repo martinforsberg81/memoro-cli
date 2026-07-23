@@ -3,6 +3,7 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  rmSync,
   writeFileSync,
 } from 'node:fs';
 import { join } from 'node:path';
@@ -213,6 +214,56 @@ describe('mc end confirmed teardown', () => {
     assert.equal(registryEntries().length, 2);
   });
 
+  test('a transcript replaced after batch revalidation is rejected by the final inspection', async () => {
+    const target = makeTarget('late-swap');
+    const otherSessionId = 'session_other_owner';
+
+    const result = await invoke(['late-swap'], {
+      answer: 'y',
+      entries: [target.entry],
+      roots: target.roots,
+      deps: {
+        shredForSession: async ({ retainManifestOnFailure }) => {
+          assert.equal(retainManifestOnFailure, true);
+          writeFileSync(target.transcript, `${JSON.stringify({
+            type: 'session_meta',
+            payload: { id: otherSessionId, cwd: target.worktree },
+          })}\n`);
+          return { ok: true, shredded: [] };
+        },
+      },
+    });
+
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /transcript.*mismatch|authority|ownership/i);
+    assert.match(result.stderr, /leftovers:.*transcript/i);
+    assert.equal(existsSync(target.transcript), true);
+    assert.match(readFileSync(target.transcript, 'utf8'), new RegExp(otherSessionId));
+    assert.equal(existsSync(target.worktree), true);
+    assert.equal(branchExists('sess/late-swap'), true);
+    assert.equal(registryEntries().length, 1);
+  });
+
+  test('a verified transcript already absent at final inspection remains idempotent', async () => {
+    const target = makeTarget('late-absent');
+
+    const result = await invoke(['late-absent'], {
+      answer: 'y',
+      entries: [target.entry],
+      roots: target.roots,
+      deps: {
+        shredForSession: async () => {
+          rmSync(target.transcript);
+          return { ok: true, shredded: [] };
+        },
+      },
+    });
+
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(existsSync(target.worktree), false);
+    assert.deepEqual(registryEntries(), []);
+  });
+
   test('bulk status is followed by one prompt and one decision for all targets', async () => {
     const a = makeTarget('bulk-a');
     const b = makeTarget('bulk-b');
@@ -326,20 +377,25 @@ describe('mc end confirmed teardown', () => {
 
   test('a teardown failure reports leftovers and preserves the registry for retry', async () => {
     const target = makeTarget('partial');
+    let shredArgs = null;
 
     const result = await invoke(['partial'], {
       answer: 'y',
       entries: [target.entry],
       roots: target.roots,
       deps: {
-        shredForSession: async () => ({
-          ok: false,
-          failures: [{ reason: 'adapter-missing' }],
-        }),
+        shredForSession: async (args) => {
+          shredArgs = args;
+          return {
+            ok: false,
+            failures: [{ reason: 'adapter-missing' }],
+          };
+        },
       },
     });
 
     assert.equal(result.code, 1);
+    assert.equal(shredArgs.retainManifestOnFailure, true);
     assert.match(result.stderr, /failed|misslyckades/i);
     assert.match(result.stderr, /registry|worktree|transcript/i);
     assert.equal(existsSync(target.worktree), true);

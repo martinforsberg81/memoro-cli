@@ -611,6 +611,7 @@ async function teardownOne(plan, { opts, deps }) {
     const shredded = await shred({
       sessionId: entry.name,
       worktreePath: entry.worktree_path || undefined,
+      retainManifestOnFailure: true,
     });
     if (!shredded?.ok) {
       const reasons = (shredded?.failures || []).map((failure) => failure.reason).filter(Boolean);
@@ -667,8 +668,16 @@ async function defaultShredForSession(args) {
 }
 
 async function unlinkOwnedTranscript(artifacts, { entry, deps }) {
-  if (artifacts.state === 'none' || artifacts.state === 'absent') return;
-  const transcript = artifacts.artifacts?.find((artifact) => artifact.kind === 'transcript');
+  // Broker and vault cleanup can execute arbitrary provider/adapter code.
+  // Re-run the complete lstat/realpath/path-chain/content-ID inspection after
+  // those calls and immediately before unlink. There is still an unavoidable
+  // sub-call TOCTOU window between inspection and unlink, but no unrelated
+  // async work is allowed inside that window.
+  const fresh = await inspectAuthority(entry, { deps });
+  assertSameFinalAuthority(artifacts, fresh, entry);
+  if (fresh.state === 'none' || fresh.state === 'absent') return;
+
+  const transcript = fresh.artifacts?.find((artifact) => artifact.kind === 'transcript');
   if (!transcript?.path || transcript.path !== entry.tool_transcript_path) {
     throw new Error('verified transcript path no longer matches registry authority');
   }
@@ -687,6 +696,28 @@ async function unlinkOwnedTranscript(artifacts, { entry, deps }) {
   const exists = deps.existsSync || existsSync;
   if (exists(transcript.path)) {
     throw new Error(`transcript still exists after unlink: ${transcript.path}`);
+  }
+}
+
+function assertSameFinalAuthority(expected, fresh, entry) {
+  if (!fresh?.safe_to_delete) {
+    const issues = (fresh?.issues || []).map((issue) => issue.code).join(', ');
+    throw new Error(`final transcript authority inspection failed (${issues || 'unverified'})`);
+  }
+  const verifiedBecameAbsent = expected?.state === 'owned' && fresh.state === 'absent';
+  if (expected?.state !== fresh.state && !verifiedBecameAbsent) {
+    throw new Error(`final transcript authority changed (${expected?.state || 'unknown'} -> ${fresh.state})`);
+  }
+  if (fresh.state === 'none') return;
+  if (
+    fresh.source !== expected.source
+    || fresh.session_id !== expected.session_id
+    || fresh.transcript_path !== expected.transcript_path
+    || fresh.source !== entry.tool_session_source
+    || fresh.session_id !== entry.tool_session_id
+    || fresh.transcript_path !== entry.tool_transcript_path
+  ) {
+    throw new Error('final transcript authority no longer matches the verified session');
   }
 }
 
