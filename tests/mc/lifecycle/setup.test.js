@@ -24,15 +24,15 @@ import { tmpdir } from 'node:os';
 import { runMc, parseJsonOrNull } from '../_helpers/cli.js';
 import { makeTempRepo } from '../_helpers/git-fixture.js';
 
-const READY_GITHUB = Object.freeze({
+const READY_CONNECTION = Object.freeze({
   schema: 1,
+  provider: { id: 'github', label: 'GitHub', custody: 'control_plane' },
   state: 'ready',
   repair_action: null,
-  actor: { type: 'installation', login: 'memoro[bot]' },
-  accounts: [{ login: 'acme', type: 'Organization' }],
-  repository: null,
-  repositories: [],
-  operations: [],
+  account: null,
+  resources: [],
+  sources: { local: 'ready', cloud: 'unavailable' },
+  capabilities: [],
 });
 
 describe('mc setup — checklist (red path)', () => {
@@ -226,7 +226,7 @@ describe('mc setup — pure helpers (in-process)', () => {
         gemini: { installed: false, version: null, authenticated: null,
                   hint: 'planned', detailLines: [] },
       },
-      github: READY_GITHUB,
+      connections: [READY_CONNECTION],
       shell_wrapper: { installed: true, rc: '/fake/.zshrc', hint: null },
       workspace: { mc_home: '/tmp', mc_home_exists: true, session_count: 0,
                    orphan_daemon_count: 0, stale_pidfile_count: 0 },
@@ -246,7 +246,7 @@ describe('mc setup — pure helpers (in-process)', () => {
         gemini: { installed: false, version: null, authenticated: null,
                   hint: 'planned', detailLines: [] },
       },
-      github: READY_GITHUB,
+      connections: [READY_CONNECTION],
       shell_wrapper: { installed: true, rc: '/fake', hint: null },
       workspace: {},
     };
@@ -271,14 +271,14 @@ describe('mc setup — pure helpers (in-process)', () => {
         gemini: { installed: false, version: null, authenticated: null,
                   hint: 'planned', detailLines: [] },
       },
-      github: READY_GITHUB,
+      connections: [READY_CONNECTION],
       shell_wrapper: { installed: true, rc: '/fake', hint: null },
       workspace: {},
     };
     assert.deepEqual(missingSteps(report), []);
   });
 
-  test('missingSteps maps every GitHub onboarding repair action to canonical mc verbs', async () => {
+  test('missingSteps maps common onboarding repair actions without provider branches', async () => {
     const { missingSteps } = await import('../../../src/mc/commands/setup.js');
     const base = {
       memoro: { authenticated: true, hint: null },
@@ -291,21 +291,22 @@ describe('mc setup — pure helpers (in-process)', () => {
       workspace: {},
     };
     const cases = [
-      ['disconnected', 'connect', 'mc github connect'],
-      ['connecting', 'continue_connect', 'mc github connect'],
-      ['repo_not_installed', 'select_repository', 'mc github connect'],
-      ['permission_missing', 'update_installation', 'mc github connect'],
-      ['suspended', 'resume_installation', 'mc github connect'],
-      ['revoked', 'reconnect', 'mc github connect'],
-      ['unavailable', 'retry', 'mc github status'],
+      ['disconnected', 'connect', 'mc connections repair github'],
+      ['connecting', 'connect', 'mc connections repair github'],
+      ['resource_not_selected', 'select_resource', 'mc connections repair github'],
+      ['permission_missing', 'accept_permissions', 'mc connections repair github'],
+      ['suspended', 'resume', 'mc connections repair github'],
+      ['revoked', 'reconnect', 'mc connections repair github'],
+      ['unavailable', 'retry', 'mc connections status github'],
+      ['unavailable', 'contact_admin', 'mc connections status github'],
     ];
     for (const [state, action, command] of cases) {
       const steps = missingSteps({
         ...base,
-        github: { ...READY_GITHUB, state, repair_action: action },
+        connections: [{ ...READY_CONNECTION, state, repair_action: action }],
       });
       assert.equal(steps.length, 1, state);
-      assert.equal(steps[0].id, `github-${action}`, state);
+      assert.equal(steps[0].id, `connection-github-${action}`, state);
       assert.equal(steps[0].command, command, state);
       assert.doesNotMatch(steps[0].note, /gh auth|keyring|Claude|Codex/, state);
     }
