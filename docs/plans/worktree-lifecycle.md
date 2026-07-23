@@ -225,8 +225,10 @@ these provider-owned layouts are allowlisted:
 
 Every positive path stays under its canonical provider root, rejects symlinks,
 and is revalidated immediately before deletion. Status scans are bounded to
-4,096 entries, depth 8, 16 GiB of summed file metadata, and 250 ms per
-inventory; a limit hit is reported as truncated/unknown and blocks teardown.
+4,096 entries, depth 8, and a 250 ms checked budget per inventory; a traversal
+limit hit is reported as truncated/unknown and blocks teardown. Summed file
+sizes are display metadata only and never make an otherwise verified session
+impossible to end.
 Real-data validation found matching transcript IDs for every sampled Claude
 project sibling and every Codex image/snapshot session. Claude telemetry,
 debug/jobs/paste cache, and shell snapshots are deferred because their current

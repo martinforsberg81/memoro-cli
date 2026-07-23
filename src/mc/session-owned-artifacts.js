@@ -99,7 +99,8 @@ export async function removeSessionOwnedRuntimeArtifacts(entry, {
   mcDir = mcHome(),
   lstat = lstatSync,
   readFile = readFileSync,
-  remove = (path) => rmSync(path, { recursive: true, force: true }),
+  remove = removeExactDirectoryDefault,
+  beforeRemove = null,
   isAlive = defaultIsAlive,
   kill = defaultKill,
   sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
@@ -178,7 +179,36 @@ export async function removeSessionOwnedRuntimeArtifacts(entry, {
           };
         }
       }
-      remove(paths.host_dir);
+      const fresh = inspectOwnedPath(mcDir, paths.host_dir, {
+        lstat,
+        expected: 'directory',
+      });
+      if (!fresh.missing) {
+        if (!fresh.ok || !sameDirectoryIdentity(safe.fingerprint, fresh.fingerprint)) {
+          return {
+            ok: false,
+            removed,
+            issues: [fresh.issue || {
+              code: 'mc-artifact-changed',
+              path: paths.host_dir,
+            }],
+          };
+        }
+        if (beforeRemove) await beforeRemove({ kind: 'broker-host', path: paths.host_dir });
+        try {
+          remove(paths.host_dir, {
+            root: mcDir,
+            expectedFingerprint: fresh.fingerprint,
+            lstat,
+          });
+        } catch (err) {
+          return {
+            ok: false,
+            removed,
+            issues: [removeIssue(paths.host_dir, err)],
+          };
+        }
+      }
       removed.push({ kind: 'broker-host', path: paths.host_dir });
     }
   }
@@ -190,7 +220,20 @@ export async function removeSessionOwnedRuntimeArtifacts(entry, {
     });
     if (!safe.ok && !safe.missing) return { ok: false, removed, issues: [safe.issue] };
     if (!safe.missing) {
-      remove(paths.guard_dir);
+      if (beforeRemove) await beforeRemove({ kind: 'guard-bin', path: paths.guard_dir });
+      try {
+        remove(paths.guard_dir, {
+          root: mcDir,
+          expectedFingerprint: safe.fingerprint,
+          lstat,
+        });
+      } catch (err) {
+        return {
+          ok: false,
+          removed,
+          issues: [removeIssue(paths.guard_dir, err)],
+        };
+      }
       removed.push({ kind: 'guard-bin', path: paths.guard_dir });
     }
   }
@@ -256,6 +299,7 @@ function inspectOwnedPath(root, path, { lstat, expected = null }) {
     return { ok: false, issue: { code: 'mc-artifact-outside-root', path } };
   }
   let current = root;
+  let finalStat = null;
   const parts = rel.split(sep);
   for (let index = -1; index < parts.length; index += 1) {
     if (index >= 0) current = join(current, parts[index]);
@@ -285,8 +329,60 @@ function inspectOwnedPath(root, path, { lstat, expected = null }) {
     if (final && expected === 'file' && !stat.isFile()) {
       return { ok: false, issue: { code: 'mc-artifact-not-file', path: current } };
     }
+    if (final) finalStat = stat;
   }
-  return { ok: true };
+  return { ok: true, fingerprint: fingerprint(finalStat) };
+}
+
+function removeExactDirectoryDefault(path, {
+  root,
+  expectedFingerprint,
+  lstat = lstatSync,
+} = {}) {
+  const fresh = inspectOwnedPath(root, path, {
+    lstat,
+    expected: 'directory',
+  });
+  if (!fresh.ok || !sameFingerprint(fresh.fingerprint, expectedFingerprint)) {
+    const err = new Error('mc-owned artifact changed immediately before deletion');
+    err.code = 'ARTIFACT_CHANGED';
+    err.issue = fresh.issue || null;
+    throw err;
+  }
+  rmSync(path, { recursive: true, force: false });
+}
+
+function fingerprint(stat) {
+  if (!stat) return null;
+  return {
+    dev: Number(stat.dev),
+    ino: Number(stat.ino),
+    mode: Number(stat.mode),
+    size: Number(stat.size),
+  };
+}
+
+function sameFingerprint(a, b) {
+  return a?.dev === b?.dev
+    && a?.ino === b?.ino
+    && a?.mode === b?.mode
+    && a?.size === b?.size;
+}
+
+function sameDirectoryIdentity(a, b) {
+  return a?.dev === b?.dev
+    && a?.ino === b?.ino
+    && a?.mode === b?.mode;
+}
+
+function removeIssue(path, err) {
+  return {
+    code: err?.code === 'ARTIFACT_CHANGED'
+      ? 'mc-artifact-changed'
+      : 'mc-artifact-delete-failed',
+    path: err?.issue?.path || path,
+    ...(err?.code ? { fs_code: err.code } : {}),
+  };
 }
 
 function readPid(path, readFile) {

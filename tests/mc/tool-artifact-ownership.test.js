@@ -216,6 +216,55 @@ describe('LLM tool artifact ownership', () => {
     assert.equal(result.scan.truncated, true);
   });
 
+  test('a legacy byte-cap input never blocks an exact-ID inventory or deletion', async () => {
+    const { roots, codexHome } = fixtureRoots();
+    const id = '019f8f5d-9734-7cc0-94f7-d3d406305c1c';
+    const transcript = join(
+      codexHome,
+      'sessions',
+      '2026',
+      '07',
+      '23',
+      `rollout-2026-07-23T12-00-00-${id}.jsonl`,
+    );
+    const imageDir = join(codexHome, 'generated_images', id);
+    mkdirSync(join(codexHome, 'sessions', '2026', '07', '23'), { recursive: true });
+    mkdirSync(imageDir, { recursive: true });
+    writeFileSync(transcript, `${JSON.stringify({ type: 'session_meta', payload: { id } })}\n`);
+    writeFileSync(join(imageDir, 'large.bin'), 'larger than the deliberately tiny legacy cap');
+    const scanPolicy = {
+      max_entries: 10,
+      max_depth: 8,
+      max_bytes: 1,
+      max_duration_ms: 1_000,
+    };
+    const entry = {
+      ...codexEntry(transcript, id),
+      tool_artifact_authority_verified: {
+        version: TOOL_ARTIFACT_AUTHORITY_VERSION,
+        source: 'codex',
+        session_id: id,
+        transcript_path: transcript,
+      },
+    };
+
+    const inventory = await inspectOwnedToolArtifacts(entry, {
+      roots,
+      scanPolicy,
+    });
+    assert.equal(inventory.safe_to_delete, true);
+    assert.equal(inventory.scan.truncated, false);
+    assert.ok(inventory.totals.bytes > scanPolicy.max_bytes);
+
+    const deleted = await deleteOwnedToolArtifacts(entry, {
+      roots,
+      scanPolicy,
+    });
+    assert.equal(deleted.ok, true);
+    assert.equal(existsSync(transcript), false);
+    assert.equal(existsSync(imageDir), false);
+  });
+
   test('detects a late inode swap immediately before deletion', async () => {
     const { roots, codexHome } = fixtureRoots();
     const id = '019f8f5d-9734-7cc0-94f7-d3d406305c1c';

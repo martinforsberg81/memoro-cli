@@ -118,6 +118,43 @@ describe('session-owned mc artifacts', () => {
     assert.equal(existsSync(host), false);
   });
 
+  test('revalidates host identity immediately before rm after async stop work', async () => {
+    const entry = { name: 'late-swap', coding_session_id: 'sess_late_swap' };
+    const host = join(root, 'hosts', 'sess_late_swap');
+    const outside = join(root, 'outside-late-swap');
+    mkdirSync(host, { recursive: true });
+    mkdirSync(outside);
+    writeFileSync(join(host, 'broker.pid'), '6161');
+    writeFileSync(join(outside, 'keep'), 'keep');
+    let alive = true;
+    const sequence = [];
+
+    const result = await removeSessionOwnedRuntimeArtifacts(entry, {
+      isAlive: () => alive,
+      kill: () => {
+        sequence.push('stop');
+        alive = false;
+        return true;
+      },
+      requestBroker: async () => {
+        sequence.push('status');
+        return { ok: true, broker: { pid: 6161 } };
+      },
+      sleep: async () => {},
+      beforeRemove: async ({ kind, path }) => {
+        if (kind !== 'broker-host') return;
+        sequence.push('swap');
+        rmSync(path, { recursive: true, force: true });
+        symlinkSync(outside, path);
+      },
+    });
+
+    assert.equal(result.ok, false);
+    assert.equal(result.issues[0].code, 'mc-artifact-changed');
+    assert.deepEqual(sequence, ['status', 'stop', 'swap']);
+    assert.equal(existsSync(join(outside, 'keep')), true);
+  });
+
   test('fails closed instead of following a sidecar symlink', async () => {
     const entry = { name: 'linked', coding_session_id: 'sess_linked' };
     const outside = join(root, 'outside');
@@ -184,6 +221,32 @@ describe('session-owned mc artifacts', () => {
     assert.equal(result.ok, false);
     assert.equal(result.state, 'present');
     assert.equal(result.issues[0].code, 'broker-session-leftover');
+  });
+
+  test('same label with a different coding ID and repo is not a target leftover', async () => {
+    const entry = {
+      name: 'brokered',
+      coding_session_id: 'sess_brokered',
+      worktree_path: '/repo/brokered',
+    };
+    const socket = join(root, 'broker.sock');
+    writeFileSync(socket, '');
+
+    const result = await inspectBrokerSessionAbsence(entry, {
+      exists: (path) => path === socket,
+      requestBroker: async () => ({
+        ok: true,
+        sessions: [{
+          id: 'sess_other',
+          coding_session_id: 'sess_other',
+          name: 'brokered',
+          cwd: '/repo/other',
+        }],
+      }),
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.state, 'absent');
   });
 
   test('an unreachable existing broker socket is unverified, not absent', async () => {

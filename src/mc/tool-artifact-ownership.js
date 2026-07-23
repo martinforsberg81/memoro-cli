@@ -25,7 +25,6 @@ export const TOOL_ARTIFACT_AUTHORITY_VERSION = 1;
 export const DEFAULT_TOOL_ARTIFACT_SCAN_POLICY = Object.freeze({
   max_entries: 4_096,
   max_depth: 8,
-  max_bytes: 16 * 1024 * 1024 * 1024,
   max_duration_ms: 250,
 });
 
@@ -497,8 +496,6 @@ async function inspectCodexShellSnapshots(authority, sourceRoots, { fs, scan }) 
       }, fs);
       if (!inspected.ok) return inspected;
       noteScanBytes(scan, inspected.artifact.bytes);
-      const bytesIssue = scanLimitIssue(scan);
-      if (bytesIssue) return { ok: false, issue: bytesIssue };
       artifacts.push(inspected.artifact);
     }
   } catch (err) {
@@ -545,8 +542,6 @@ async function inspectDirectoryArtifact(candidate, fs, scan) {
         totals.files += 1;
         totals.bytes += stat.size;
         noteScanBytes(scan, stat.size);
-        const bytesIssue = scanLimitIssue(scan);
-        if (bytesIssue) return { ok: false, issue: bytesIssue };
       }
     } catch (err) {
       if (isMissing(err)) return { ok: false, missing: true };
@@ -852,7 +847,6 @@ function normalizeScanPolicy(policy) {
   return {
     max_entries: positiveInteger(input.max_entries, DEFAULT_TOOL_ARTIFACT_SCAN_POLICY.max_entries),
     max_depth: positiveInteger(input.max_depth, DEFAULT_TOOL_ARTIFACT_SCAN_POLICY.max_depth),
-    max_bytes: positiveInteger(input.max_bytes, DEFAULT_TOOL_ARTIFACT_SCAN_POLICY.max_bytes),
     max_duration_ms: positiveInteger(
       input.max_duration_ms,
       DEFAULT_TOOL_ARTIFACT_SCAN_POLICY.max_duration_ms,
@@ -887,7 +881,6 @@ function scanLimitIssue(scan) {
   let reason = null;
   if (scan.entries > scan.policy.max_entries) reason = 'max-entries';
   else if (scan.max_depth_seen > scan.policy.max_depth) reason = 'max-depth';
-  else if (scan.bytes > scan.policy.max_bytes) reason = 'max-bytes';
   else if (scan.now() - scan.started_at > scan.policy.max_duration_ms) reason = 'max-duration';
   if (!reason) return null;
   scan.truncated = true;
