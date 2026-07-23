@@ -8,9 +8,11 @@ import {
   GITHUB_CREDENTIAL_ENV_NAMES,
   MC_GITHUB_BROKER_SOCKET_ENV,
   MC_SESSION_CAPABILITIES_ENV,
+  executeGitHubControlPlaneOperation,
   executeGitHubSessionOperation,
   fetchGitHubSessionCapabilities,
   prepareGitHubSessionForLaunch,
+  renderGitHubSessionMarkdown,
 } from '../../src/mc/github-session.js';
 
 const REPOSITORY = Object.freeze({
@@ -107,6 +109,24 @@ describe('GitHub session capability boundary', () => {
     assert.equal(result.env[MC_SESSION_CAPABILITIES_ENV].includes('approval_mode'), false);
   });
 
+  test('write-ready grounding exposes the provider-neutral surface without mc approval state', async () => {
+    const response = readyResponse();
+    response.github.operations.push('pull_request.create', 'pull_request.update');
+    const capabilities = await fetchGitHubSessionCapabilities({
+      apiUrl: 'https://memoro.test',
+      token: 'memoro-secret-sentinel',
+      repository: 'acme/widgets',
+      memoroFetchImpl: async () => response,
+    });
+    const markdown = renderGitHubSessionMarkdown(capabilities);
+
+    assert.match(markdown, /mc github pr list\|view\|checks\|create\|update/);
+    assert.match(markdown, /coding host’s native approval policy/);
+    assert.match(markdown, /gh pr create/);
+    assert.doesNotMatch(markdown, /browser|approval_mode|approval_required|approve exact/i);
+    assert.doesNotMatch(markdown, /access_token|GH_TOKEN|installation_id/i);
+  });
+
   test('installs a session-only shim while scrubbing every inherited GitHub credential', async () => {
     tmp = mkdtempSync(join(tmpdir(), 'mc-github-session-'));
     const secrets = Object.fromEntries(
@@ -168,6 +188,52 @@ describe('GitHub session capability boundary', () => {
     assert.equal('repository' in calls[0].message, false);
     assert.equal('source_id' in calls[0].message, false);
     assert.equal('coding_session_id' in calls[0].message, false);
+  });
+
+  test('trusted local and cloud sidecars send byte-identical write bodies with identity outside the request', async () => {
+    const calls = [];
+    const request = {
+      type: 'github_operation',
+      schema: 1,
+      request_id: 'request_write_abcdefgh',
+      operation: 'pull_request.create',
+      params: {
+        title: 'Safe draft',
+        body: 'Exact body',
+        head: 'agent/write',
+        base: 'main',
+        draft: true,
+        expected_head_sha: 'a'.repeat(40),
+        expected_base_sha: 'b'.repeat(40),
+      },
+    };
+    const fetch = async (_apiUrl, path, options) => {
+      calls.push({ path, options });
+      return {
+        ok: true,
+        request_id: options.body.request_id,
+        data: { number: 17, title: 'Safe draft', draft: true },
+      };
+    };
+
+    for (const sourceId of ['local:mac', 'cloud:cld_123456']) {
+      const response = await executeGitHubControlPlaneOperation({
+        apiUrl: 'https://memoro.test',
+        token: 'memoro-secret-sentinel',
+        sourceId,
+        codingSessionId: 'sess_abcdef',
+        request,
+        memoroFetchImpl: fetch,
+      });
+      assert.equal(response.ok, true);
+    }
+
+    assert.equal(JSON.stringify(calls[0].options.body), JSON.stringify(calls[1].options.body));
+    assert.deepEqual(calls.map((call) => call.options.sourceId), ['local:mac', 'cloud:cld_123456']);
+    assert.ok(calls.every((call) => call.path === '/api/mc/github/sessions/sess_abcdef/operations'));
+    assert.ok(calls.every((call) => !('source_id' in call.options.body)));
+    assert.ok(calls.every((call) => !('coding_session_id' in call.options.body)));
+    assert.ok(calls.every((call) => !('repository' in call.options.body)));
   });
 
   test('missing broker and hostile broker responses fail closed without echoing material', async () => {

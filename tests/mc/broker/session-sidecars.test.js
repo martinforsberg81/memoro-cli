@@ -302,7 +302,7 @@ describe('BrokerSessionSidecars', () => {
       type: 'github_operation',
       schema: 1,
       request_id: 'request_abcdefgh',
-      operation: 'pull_request.create',
+      operation: 'issue.create',
       params: {},
     })));
     unknown.emit('end');

@@ -347,6 +347,10 @@ SETUP
   mc github pr view <n> [--json]  View one pull request through the session broker
   mc github pr checks <n> [--json]
                                   List checks through the session broker
+  mc github pr create --title <text> --body <text> [--base <branch>] [--draft] [--json]
+                                  Create a PR from the server-bound session branch
+  mc github pr update <n> [--title <text>] [--body <text>] [--json]
+                                  Update a PR with exact current-state checks
   mc auth github [--json]         Alias for mc github status
   mc auth <claude|codex|gemini>   Re-check one coding tool
   mc tool-switch <tool>           Set the default tool for future sessions

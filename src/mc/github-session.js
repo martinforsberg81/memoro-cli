@@ -78,12 +78,18 @@ export function renderGitHubSessionMarkdown(capabilities) {
     const readsOnly = descriptor.github.operations.every(
       (operation) => githubOperationEffect(operation) === 'read',
     );
+    if (readsOnly) {
+      return [
+        `- GitHub reads for ${descriptor.github.repository.full_name} are brokered through the Memoro GitHub App.`,
+        '- Prefer `mc github pr list|view|checks`; the session-scoped `gh` shim supports only the matching read commands.',
+        '- Never run GitHub login, token-export, arbitrary API, extension, merge, or write commands in this session.',
+      ].join('\n');
+    }
     return [
-      readsOnly
-        ? `- GitHub reads for ${descriptor.github.repository.full_name} are brokered through the Memoro GitHub App.`
-        : `- GitHub operations for ${descriptor.github.repository.full_name} are brokered through the Memoro GitHub App.`,
-      '- Prefer `mc github pr list|view|checks`; the session-scoped `gh` shim supports only the matching read commands.',
-      '- Never run GitHub login, token-export, arbitrary API, extension, merge, or write commands in this session.',
+      `- GitHub operations for ${descriptor.github.repository.full_name} are brokered through the Memoro GitHub App.`,
+      '- Prefer `mc github pr list|view|checks|create|update`; the session-scoped `gh` shim supports the matching reads and narrow `gh pr create`.',
+      '- Mutating command invocations use the coding host’s native approval policy; mc adds no second prompt.',
+      '- Never run GitHub login, token-export, arbitrary API, extension, merge, force, or unsupported write commands in this session.',
     ].join('\n');
   }
   return [
@@ -156,7 +162,7 @@ export function renderGitHubShim({ execPath, modulePath }) {
 export async function executeGitHubSessionOperation({
   operation,
   params = {},
-  requestId = makeRequestId(),
+  requestId = makeGitHubRequestId(),
   env = process.env,
   request = requestBroker,
 } = {}) {
@@ -251,14 +257,14 @@ function safeOperationFailure(requestId, code) {
   };
 }
 
-function makeRequestId() {
+export function makeGitHubRequestId() {
   return `mcr_${randomBytes(12).toString('hex')}`;
 }
 
 function validRequestId(value) {
   return typeof value === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9_-]{7,127}$/.test(value)
     ? value
-    : makeRequestId();
+    : makeGitHubRequestId();
 }
 
 function normalizeRepository(value) {

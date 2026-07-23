@@ -31,6 +31,7 @@ export const GITHUB_REPAIR_ACTIONS = Object.freeze([
   'update_installation',
   'resume_installation',
   'reconnect',
+  'restart_session',
   'retry',
 ]);
 
@@ -40,11 +41,19 @@ export const GITHUB_OPERATION_EFFECTS = Object.freeze({
   'pull_request.list': 'read',
   'pull_request.view': 'read',
   'checks.list': 'read',
+  'pull_request.create': 'write',
+  'pull_request.update': 'write',
 });
 
 export const GITHUB_READ_OPERATIONS = Object.freeze(
   Object.entries(GITHUB_OPERATION_EFFECTS)
     .filter(([, effect]) => effect === 'read')
+    .map(([operation]) => operation),
+);
+
+export const GITHUB_WRITE_OPERATIONS = Object.freeze(
+  Object.entries(GITHUB_OPERATION_EFFECTS)
+    .filter(([, effect]) => effect === 'write')
     .map(([operation]) => operation),
 );
 
@@ -57,6 +66,7 @@ export const GITHUB_STABLE_ERRORS = Object.freeze([
   'rate_limited',
   'conflict',
   'stale_head',
+  'stale_state',
   'not_found',
   'unavailable',
 ]);
@@ -69,8 +79,11 @@ const REQUEST_ID_RE = /^[a-zA-Z0-9][a-zA-Z0-9_-]{7,127}$/;
 const CONNECT_STATE_RE = /^gha_[a-zA-Z0-9_-]{8,200}$/;
 const FULL_NAME_RE = /^[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+$/;
 const LOGIN_RE = /^[a-zA-Z0-9_.-]+$/;
+const SHA_RE = /^[a-fA-F0-9]{40}$/;
+const REF_RE = /^[a-zA-Z0-9][a-zA-Z0-9._/-]{0,254}$/;
 const FORBIDDEN_CREDENTIAL_VALUE_RE = /(?:github_pat_|gh[opusr]_[a-zA-Z0-9_]+|Bearer\s+[a-zA-Z0-9._~-]+|-----BEGIN [A-Z ]*PRIVATE KEY-----)/i;
 const MAX_RESPONSE_BYTES = 256 * 1024;
+const MAX_PR_BODY_CHARS = 16_000;
 
 const EXPECTED_REPAIR = Object.freeze({
   disconnected: 'connect',
@@ -367,11 +380,106 @@ function operationParams(operation, params) {
     }
     return normalized;
   }
+  if (operation === 'pull_request.create') {
+    exactObject(params, [
+      'title',
+      'body',
+      'head',
+      'base',
+      'draft',
+      'expected_head_sha',
+      'expected_base_sha',
+    ], 'GitHub pull request create params');
+    const title = boundedString(params.title, 512);
+    const body = prBody(params.body);
+    const head = gitRef(params.head);
+    const base = gitRef(params.base);
+    const expectedHead = sha(params.expected_head_sha);
+    const expectedBase = sha(params.expected_base_sha);
+    if (!title || body === null || !head || !base || typeof params.draft !== 'boolean'
+        || !expectedHead || !expectedBase) {
+      invalid('GitHub pull request create params are invalid.');
+    }
+    return {
+      title,
+      body,
+      head,
+      base,
+      draft: params.draft,
+      expected_head_sha: expectedHead,
+      expected_base_sha: expectedBase,
+    };
+  }
+  if (operation === 'pull_request.update') {
+    exactObject(params, [
+      'pull_number',
+      'title',
+      'body',
+      'state',
+      'base',
+      'expected_head_sha',
+      'expected_updated_at',
+    ], 'GitHub pull request update params', {
+      optional: ['title', 'body', 'state', 'base'],
+    });
+    if (!Number.isSafeInteger(params.pull_number) || params.pull_number < 1) {
+      invalid('GitHub pull request number is invalid.');
+    }
+    const expectedHead = sha(params.expected_head_sha);
+    const expectedUpdatedAt = isoTimestamp(params.expected_updated_at);
+    if (!expectedHead || !expectedUpdatedAt) invalid('GitHub pull request update preconditions are invalid.');
+    const normalized = {
+      pull_number: params.pull_number,
+      expected_head_sha: expectedHead,
+      expected_updated_at: expectedUpdatedAt,
+    };
+    let mutations = 0;
+    if (Object.hasOwn(params, 'title')) {
+      normalized.title = boundedString(params.title, 512);
+      if (!normalized.title) invalid('GitHub pull request title is invalid.');
+      mutations += 1;
+    }
+    if (Object.hasOwn(params, 'body')) {
+      normalized.body = prBody(params.body);
+      if (normalized.body === null) invalid('GitHub pull request body is invalid.');
+      mutations += 1;
+    }
+    if (Object.hasOwn(params, 'state')) {
+      if (!['open', 'closed'].includes(params.state)) invalid('GitHub pull request state is invalid.');
+      normalized.state = params.state;
+      mutations += 1;
+    }
+    if (Object.hasOwn(params, 'base')) {
+      normalized.base = gitRef(params.base);
+      if (!normalized.base) invalid('GitHub pull request base is invalid.');
+      mutations += 1;
+    }
+    if (mutations === 0) invalid('GitHub pull request update requires one mutation.');
+    return normalized;
+  }
   exactObject(params, ['pull_number'], 'GitHub pull request params');
   if (!Number.isSafeInteger(params.pull_number) || params.pull_number < 1) {
     invalid('GitHub pull request number is invalid.');
   }
   return { pull_number: params.pull_number };
+}
+
+function gitRef(value) {
+  const normalized = boundedString(value, 255);
+  return normalized && REF_RE.test(normalized)
+    && !normalized.includes('..')
+    && !normalized.endsWith('.lock')
+    ? normalized
+    : null;
+}
+
+function sha(value) {
+  const normalized = boundedString(value, 40)?.toLowerCase();
+  return normalized && SHA_RE.test(normalized) ? normalized : null;
+}
+
+function prBody(value) {
+  return typeof value === 'string' && value.length <= MAX_PR_BODY_CHARS ? value : null;
 }
 
 function installationActor(value) {
