@@ -4,6 +4,19 @@
 approval revision accepted 2026-07-23 · PR 1 production admin dogfood passed
 2026-07-22 · serves G1, G2, G3
 
+This provider contract depends on
+[`connected-capabilities.md`](connected-capabilities.md). That foundation owns
+Memoro identity, short-lived broker grants, common connection lifecycle,
+source readiness, credential custody, and repair states. This document owns the
+GitHub App resource model, permissions, typed operations, and GitHub-specific
+hard policy.
+
+No GitHub command, session broker, sidecar, or executor may read a Memoro or
+GitHub credential from macOS Keychain, another OS credential store, mc vault,
+or a coding-tool process. The common mc identity service is the only component
+allowed to read the first-party local Memoro device identity and exchange it
+for a short-lived, GitHub-scoped broker grant.
+
 Normative product, security, and delivery contract for GitHub interaction from
 an `mc` coding session. This plan resolves the private-repository capability
 decision in `docs/plans/hosted-live-session-workspace.md`.
@@ -112,7 +125,7 @@ coding tool
     | typed github-op-v1 request; no repo or token
     v
 session-bound mc broker (local or cloud)
-    | Memoro-authenticated request + server-known session identity
+    | short-lived scoped broker grant + server-known session identity
     v
 GitHub capability service
     | resolve user + installation + numeric repository id + policy
@@ -130,7 +143,8 @@ transport and not a per-operation approval surface.
    mc vault.
 2. Installation access tokens are minted on demand, narrowed to one repository
    and the minimum permissions for the operation, and never persisted by mc.
-3. A raw GitHub credential must not appear in coding-tool env, argv, cwd files,
+3. A raw GitHub credential, Memoro device credential, or broker grant must not
+   appear in coding-tool env, argv, cwd files,
    Git config, remotes, prompts, transcripts, logs, telemetry, browser payloads,
    session metadata, exception text, or test snapshots.
 4. API operations execute in the control plane. A token leaves the control
@@ -149,7 +163,8 @@ transport and not a per-operation approval surface.
    pull request, push, or mutation.
 9. Repository identity is GitHub's numeric repository id. Owner/name is display
    metadata and may change after a rename or transfer.
-10. Local and cloud brokers use the same schemas and policy evaluator. Source
+10. Local and cloud brokers use the same schemas, scoped broker-grant envelope,
+    and policy evaluator. Source
     kind selects a transport/executor, never an authorization rule.
 11. If authorization, hard policy, request identity, precondition, or token
     minting is uncertain, deny the operation and return a structured repair
@@ -925,6 +940,13 @@ host approval setting, and receive the result without a second mc prompt.
 Repeat with the host set to deny and prove the invocation never reaches mc.
 Source-neutral fixtures preserve the future cloud protocol shape, but no live
 Sandbox is required for this PR.
+
+Post-merge review found a blocking foundation deviation before this gate was
+run: GitHub commands and the local launch broker still read the generic Memoro
+API token through the legacy Keychain path. Writes therefore remain disabled.
+Corrective PRs C1-C5 in `connected-capabilities.md` supersede the immediate live
+gate. PR 6's typed operation, effect, precondition, idempotency, and shim work
+is retained; its authentication plumbing is not accepted as the final model.
 
 ### PR 7 — one-shot git grants (`memoro` server)
 
