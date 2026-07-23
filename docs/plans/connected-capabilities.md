@@ -19,8 +19,9 @@ A user should experience one connection surface:
 1. Sign in to mc once on a device.
 2. `mc connections` shows every supported provider and whether it is ready for
    local and cloud use.
-3. `mc connect <provider>` performs the provider's one-time onboarding or
-   redirects to its native login when the provider must own authentication.
+3. `mc connections connect <provider>` performs the provider's one-time
+   onboarding or redirects to its native login when the provider must own
+   authentication.
 4. Resource selection, permission upgrades, suspension, revocation, and repair
    use the same bounded states and actions for every provider.
 5. A new coding session receives token-free descriptors for the capabilities
@@ -180,10 +181,10 @@ The canonical provider-neutral UX is:
 
 ```text
 mc connections [--json]
-mc connection status <provider> [--json]
-mc connection connect <provider>
-mc connection repair <provider>
-mc connection disconnect <provider>
+mc connections status <provider> [--json]
+mc connections connect <provider>
+mc connections repair <provider>
+mc connections disconnect <provider>
 ```
 
 Provider aliases may add resource-oriented read commands, such as
