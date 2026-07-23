@@ -102,6 +102,18 @@ export async function needsDeviceAuth(deps = {}) {
     isTty = process.stdout?.isTTY === true,
     argv = process.argv.slice(2),
   } = deps;
+  // Evaluate every credential-free gate before consulting local credential
+  // storage. Detached broker daemons and other non-interactive processes must
+  // never block startup on a host keyring they cannot interact with.
+  const eligible = shouldTriggerDeviceFlow({
+    hasToken: false,
+    isTty,
+    mcTestMode: env.MC_TEST_MODE,
+    memoroTokenEnv: env.MEMORO_TOKEN,
+    argv,
+  });
+  if (!eligible) return false;
+
   let hasToken = false;
   try {
     const tok = await getSecret(ACCOUNTS.TOKEN);

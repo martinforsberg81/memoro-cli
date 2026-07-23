@@ -108,6 +108,18 @@ describe('shouldTriggerDeviceFlow', () => {
 });
 
 describe('needsDeviceAuth (deps wiring)', () => {
+  test('returns before credential storage for non-interactive processes', async () => {
+    let reads = 0;
+    const got = await needsDeviceAuth({
+      getSecret: async () => { reads += 1; return 'mem_existing'; },
+      env: {},
+      isTty: false,
+      argv: ['broker', '--daemon'],
+    });
+    assert.equal(got, false);
+    assert.equal(reads, 0);
+  });
+
   test('returns false when keychain throws', async () => {
     const got = await needsDeviceAuth({
       getSecret: async () => { throw new Error('locked'); },
