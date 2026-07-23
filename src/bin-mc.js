@@ -315,7 +315,7 @@ COMMON
   mc deps status|hydrate [service]
                                   Inspect or explicitly hydrate dependencies
   mc cd <name>                    cd into a session worktree
-  mc end [<name>...]              End last-opened/current session or named sessions
+  mc end [<name>...]              Confirm and permanently remove local session artifacts
   mc rename <old> <new>           Rename branch + worktree + registry entry
 
 START OPTIONS

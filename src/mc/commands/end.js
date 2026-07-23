@@ -2,52 +2,68 @@
  * `mc end [<name>...] [--force] [--keep-branch] [--dry-run] [--json]
  *         [--emit-shell-directives]`
  *
- * Plan §2 + §9b + §9c. Per target:
- *   - refuse on uncommitted changes (unless --force or IS_SQUASH_PHANTOM)
- *   - refuse on live session     (unless --force)
- *   - remove the git worktree    (forwards to `git worktree remove`)
- *   - delete the branch if it's merged (or unchanged on main); kept if
- *     --keep-branch
- *   - drop the registry entry
+ * Permanent local teardown has one decision point:
+ *   1. resolve exact provider transcript authority for the whole batch
+ *   2. show every target's current status
+ *   3. ask once (interactive) or require --force (automation)
+ *   4. revalidate the whole batch before the first destructive side effect
+ *   5. remove every known session-owned artifact and verify the leftovers
  *
- * If invoked from inside one of the to-be-removed worktrees, emit a
- * `cd <primary>` directive on fd 3 *before* removing the worktree so the
- * caller's shell doesn't end up in a deleted dir.
- *
- * Bulk: multiple names operate sequentially; --dry-run returns the per-
- * target verdict without acting.
+ * `--force` means "confirmation already supplied" for non-interactive
+ * automation. It does not weaken transcript ownership checks.
  */
 import { existsSync, realpathSync } from 'node:fs';
+import { unlink } from 'node:fs/promises';
 import { isAbsolute, relative } from 'node:path';
-import { readRegistry, removeEntry } from '../registry.js';
-import { git, tryGit, primaryWorktree, isDirty, branchExists, commitsAhead } from '../git.js';
+
+import { resolveToolInput } from '../../adapters/index.js';
+import { DEFAULT_TOOL } from '../../lib/config.js';
+import {
+  patchEntriesIfPresent,
+  readRegistry,
+  removeEntry,
+} from '../registry.js';
+import {
+  branchExists,
+  commitsAhead,
+  git,
+  primaryWorktree,
+  tryGit,
+} from '../git.js';
 import { emitCd, parseDirectiveFlag } from '../shell-directives.js';
 import { detectSquashPhantom } from '../squash-phantom.js';
 import { removeBrokerSessionForEntry } from '../broker/session-cleanup.js';
+import { resolveToolSessionForResume } from '../tool-session.js';
+import {
+  classifyToolArtifactAuthority,
+  inspectOwnedToolArtifacts,
+} from '../tool-artifact-ownership.js';
 
-function safeRealpath(p) {
-  try { return realpathSync(p); } catch { return p; }
+const CONFIRM_PROMPT = 'Avsluta och ta bort allt sessionsbundet lokalt? y/n ';
+const AUTHORITY_MARKER_VERSION = 1;
+
+function safeRealpath(path) {
+  try { return realpathSync(path); } catch { return path; }
 }
 
 /**
  * On macOS, `/var/folders/...` and `/tmp` are symlinks to `/private/...`.
- * `git worktree list --porcelain` reports the realpath form, but the
- * user's shell (and our cd-directive consumers) typically know the path
- * in its non-private form — strip the leading `/private` so the emitted
- * cd lands at the path the user actually navigated to.
+ * Git reports the realpath form while the user's shell normally uses the
+ * shorter form.
  */
-function unprivateMac(p) {
-  if (typeof p !== 'string') return p;
-  if (process.platform !== 'darwin') return p;
-  if (p.startsWith('/private/var/') || p.startsWith('/private/tmp/')) {
-    return p.slice('/private'.length);
+function unprivateMac(path) {
+  if (typeof path !== 'string') return path;
+  if (process.platform !== 'darwin') return path;
+  if (path.startsWith('/private/var/') || path.startsWith('/private/tmp/')) {
+    return path.slice('/private'.length);
   }
-  return p;
+  return path;
 }
 
 export async function run(rawArgv, runOpts = {}) {
   const stdout = runOpts.stdout || process.stdout;
   const stderr = runOpts.stderr || process.stderr;
+  const deps = runOpts.deps || {};
   const { args: argv, enabled: emitDirectives } = parseDirectiveFlag(rawArgv);
   const opts = parseArgs(argv);
   if (opts.error) {
@@ -56,153 +72,754 @@ export async function run(rawArgv, runOpts = {}) {
   }
 
   const cwd = runOpts.cwd || process.cwd();
-  const reg = readRegistry();
-  const names = opts.names.length > 0 ? opts.names : ['.'];
-  const targets = [];
-  for (const name of names) {
-    const entry = name === '.'
-      ? resolveImplicitEntry(reg.entries, cwd)
-      : reg.entries.find((e) => e.name === name) || null;
-    if (!entry) {
-      if (name === '.') {
-        stderr.write('mc: could not infer which session to end from this directory\n');
-        stderr.write('mc: usage — `mc end [<name>…] [--force] [--keep-branch] [--dry-run]`\n');
-        return 2;
-      }
-      stderr.write(`mc: unknown session "${name}"\n`);
-      return 1;
+  const registry = (deps.readRegistry || readRegistry)();
+  const selected = selectTargets(registry.entries, opts.names, cwd);
+  if (!selected.ok) {
+    stderr.write(`mc: ${selected.error}\n`);
+    if (selected.usage) {
+      stderr.write('mc: usage — `mc end [<name>…] [--force] [--keep-branch] [--dry-run]`\n');
     }
-    targets.push(entry);
+    return selected.code;
   }
 
-  // For each target compute the verdict first (so dry-run gets it cheap
-  // and the real run can short-circuit phantoms).
   const plans = [];
-  for (const entry of targets) {
-    const primary = resolvePrimaryForEntry(entry, cwd);
+  for (const originalEntry of selected.entries) {
+    const primary = resolvePrimaryForEntry(originalEntry, cwd);
     if (!primary) {
-      stderr.write(`mc: "${entry.name}" has no resolvable primary worktree\n`);
-      return 1;
-    }
-    const verdict = await computeVerdict(entry, primary);
-    plans.push({ entry, primary, verdict });
-  }
-
-  if (opts.dryRun) {
-    const out = {
-      dry_run: true,
-      targets: plans.map(({ entry, verdict }) => ({
-        name: entry.name,
-        branch: entry.branch,
-        verdict: verdict.value,
-        reason: verdict.reason,
-      })),
-    };
-    if (opts.json) stdout.write(`${JSON.stringify(out, null, 2)}\n`);
-    else {
-      for (const t of out.targets) {
-        stdout.write(`${t.name.padEnd(20)} → ${t.verdict}${t.reason ? `  (${t.reason})` : ''}\n`);
-      }
-    }
-    return 0;
-  }
-
-  // Pre-flight: refuse the whole batch if any target is unsafe (and
-  // --force not set). This matches the bulk-feel the user asked for —
-  // one read, one decision, no half-applied state.
-  for (const { entry, verdict } of plans) {
-    if (verdict.value === 'SAFE_TO_END' || verdict.value === 'IS_SQUASH_PHANTOM') continue;
-    if (opts.force) continue;
-    if (verdict.value === 'IS_ACTIVE_NOW') {
-      const confirmed = await confirmActiveEnd({
-        entry,
+      return emitFailure({
         opts,
-        stdin: runOpts.stdin || process.stdin,
         stdout,
         stderr,
-        deps: runOpts.deps || {},
+        error: 'primary-worktree-unresolved',
+        message: `"${originalEntry.name}" has no resolvable primary worktree`,
       });
-      if (confirmed) continue;
-      return 1;
     }
-    if (verdict.value === 'NEEDS_REVIEW' || verdict.value === 'HAS_UNMERGED_WORK') {
-      const why = verdict.reason || 'unsafe';
-      stderr.write(`mc: "${entry.name}" not safe to end (${why}) — pass --force to override\n`);
+
+    const entry = await synchronizeToolAuthority(originalEntry, { deps });
+    const artifacts = await inspectAuthority(entry, { deps });
+    const status = await buildTargetStatus(entry, primary, artifacts, {
+      keepBranch: opts.keepBranch,
+    });
+    plans.push({
+      originalEntry,
+      entry,
+      primary,
+      artifacts,
+      status,
+    });
+  }
+
+  const unsafe = plans.filter((plan) => !plan.artifacts.safe_to_delete);
+  if (opts.dryRun) {
+    return emitDryRun({ opts, plans, unsafe, stdout, stderr });
+  }
+
+  if (unsafe.length > 0) {
+    return emitAuthorityFailure({ opts, plans, unsafe, stdout, stderr });
+  }
+
+  if (!opts.json) printStatuses(plans, stdout);
+
+  if (!opts.force) {
+    const stdin = runOpts.stdin || process.stdin;
+    const interactive = deps.isTTY ?? Boolean(stdin?.isTTY && stdout?.isTTY);
+    if (opts.json || !interactive) {
+      return emitConfirmationRequired({ opts, plans, stdout, stderr });
+    }
+    const answer = await promptYesNo({
+      prompt: CONFIRM_PROMPT,
+      stdin,
+      stdout,
+      deps,
+    });
+    if (answer.trim().toLowerCase() !== 'y') {
+      stderr.write('mc: avbrutet — ingenting togs bort\n');
       return 1;
     }
   }
 
-  // If cwd is inside one of the to-be-removed worktrees, emit cd back
-  // to the primary worktree *before* removing the worktree, so the
-  // wrapper's eval lands in a directory that still exists. Normalize
-  // both sides via realpath — on macOS, /tmp is a symlink to /private/tmp
-  // and a naive startsWith() comparison misses inside-the-worktree.
-  const cwdReal = safeRealpath(cwd);
-  const insideTarget = plans.find(({ entry }) =>
-    entry.worktree_path && isInsidePath(cwdReal, safeRealpath(entry.worktree_path)),
-  );
-  if (insideTarget) {
-    // Emit the path-as-the-user-knows-it, not git's realpath'd form.
-    emitCd(unprivateMac(insideTarget.primary), { enabled: emitDirectives || undefined });
+  // Revalidate every target immediately before the first destructive side
+  // effect. A failure blocks the whole batch; no broker, vault, transcript,
+  // worktree, or branch operation has happened yet.
+  const revalidated = [];
+  for (const plan of plans) {
+    const artifacts = await inspectAuthority(plan.entry, { deps });
+    revalidated.push({
+      ...plan,
+      artifacts,
+      status: statusWithArtifacts(plan.status, artifacts),
+    });
   }
+  const changedAuthority = revalidated.filter((plan) => !plan.artifacts.safe_to_delete);
+  if (changedAuthority.length > 0) {
+    return emitAuthorityFailure({
+      opts,
+      plans: revalidated,
+      unsafe: changedAuthority,
+      stdout,
+      stderr,
+      phase: 'revalidation',
+      statusesAlreadyPrinted: !opts.json,
+    });
+  }
+
+  // Persist only after confirmation, and only by synchronously patching
+  // entries that still exist. The marker makes a later repair/retry
+  // idempotent if an unexpected failure happens after transcript unlink.
+  const persisted = persistVerifiedAuthorities(revalidated, {
+    deps,
+    now: deps.now || (() => new Date().toISOString()),
+  });
+  if (!persisted.ok) {
+    return emitFailure({
+      opts,
+      stdout,
+      stderr,
+      error: 'registry-authority-sync-failed',
+      message: persisted.message,
+      targets: revalidated.map((plan) => plan.status),
+    });
+  }
+
+  emitCdBeforeTeardown(revalidated, {
+    cwd,
+    emitDirectives,
+  });
 
   const results = [];
-  for (const { entry, primary, verdict } of plans) {
-    try {
-      const brokerCleanup = await removeBrokerSessionForEntry(entry, {
-        requestBroker: runOpts.deps?.requestBroker,
+  let stop = false;
+  for (const plan of revalidated) {
+    if (stop) {
+      results.push({
+        name: plan.entry.name,
+        ok: false,
+        error: 'not-attempted-after-partial-failure',
+        status: plan.status,
+        leftovers: inspectLeftovers(plan, opts, deps),
       });
-      if (!brokerCleanup.ok && !brokerCleanup.skipped) {
-        stderr.write(`mc: warning — broker cleanup for "${entry.name}" failed (${brokerCleanup.error || brokerCleanup.reason})\n`);
+      continue;
+    }
+    const result = await teardownOne(plan, { opts, deps });
+    results.push(result);
+    if (!result.ok) stop = true;
+  }
+
+  return emitResults({ opts, results, stdout, stderr });
+}
+
+function selectTargets(entries, names, cwd) {
+  const requested = names.length > 0 ? names : ['.'];
+  const selected = [];
+  for (const name of requested) {
+    const entry = name === '.'
+      ? resolveImplicitEntry(entries, cwd)
+      : entries.find((candidate) => candidate.name === name) || null;
+    if (!entry) {
+      if (name === '.') {
+        return {
+          ok: false,
+          code: 2,
+          usage: true,
+          error: 'could not infer which session to end from this directory',
+        };
       }
-      // §12d: shred any materialised vault tokens for this session
-      // BEFORE removing the worktree. Best-effort: failures here are
-      // logged via the result but don't block worktree teardown. If
-      // there's no manifest (session never materialised anything),
-      // this is a cheap no-op.
-      try {
-        const { shredForSession } = await import('../vault/lifecycle.js');
-        await shredForSession({
-          sessionId: entry.name,
-          worktreePath: entry.worktree_path || undefined,
-        });
-      } catch (_err) {
-        // Swallow — `mc end` must succeed even if vault module
-        // can't load (e.g. partial dev install).
-      }
-      await endOne(entry, { primary, keepBranch: opts.keepBranch, verdict });
-      removeEntry(entry.name);
-      results.push({ name: entry.name, ok: true, verdict: verdict.value });
-    } catch (err) {
-      results.push({ name: entry.name, ok: false, error: err.message });
+      return {
+        ok: false,
+        code: 1,
+        error: `unknown session "${name}"`,
+      };
+    }
+    selected.push(entry);
+  }
+  return { ok: true, entries: selected };
+}
+
+async function synchronizeToolAuthority(entry, { deps = {} } = {}) {
+  const classified = classifyToolArtifactAuthority(entry, {
+    roots: deps.toolArtifactRoots,
+  });
+  if (classified.state === 'candidate' || classified.state === 'none') return entry;
+  if (!classified.issues?.every((issue) => isBackfillableIssue(issue.code))) return entry;
+
+  const resolver = deps.resolveToolSessionForResume || resolveToolSessionForResume;
+  const launchTool = resolveToolInput(entry?.tool || DEFAULT_TOOL);
+  const discoveryEntry = {
+    ...entry,
+    tool_session_id: null,
+    provider_session_id: null,
+    llm_session_id: null,
+    tool_transcript_path: null,
+    transcript_path: null,
+  };
+  let resolved;
+  try {
+    resolved = await resolver({
+      entry: discoveryEntry,
+      launchTool,
+      deps: deps.toolSessionDeps || deps,
+    });
+  } catch {
+    return entry;
+  }
+  if (!resolved?.ok) return entry;
+
+  const patch = {
+    tool_session_source: nonEmpty(resolved.source),
+    tool_session_id: nonEmpty(resolved.sessionId),
+    tool_transcript_path: nonEmpty(resolved.transcriptPath),
+  };
+  if (!patch.tool_session_source || !patch.tool_session_id || !patch.tool_transcript_path) {
+    return entry;
+  }
+  if (conflictsWithStoredAuthority(entry, patch)) return entry;
+
+  const next = { ...entry, ...patch };
+  return classifyToolArtifactAuthority(next, {
+    roots: deps.toolArtifactRoots,
+  }).state === 'candidate'
+    ? next
+    : entry;
+}
+
+function isBackfillableIssue(code) {
+  return new Set([
+    'missing-tool-session-source',
+    'missing-tool-session-id',
+    'missing-tool-transcript-path',
+  ]).has(code);
+}
+
+function conflictsWithStoredAuthority(entry, patch) {
+  return [
+    ['tool_session_source', patch.tool_session_source],
+    ['tool_session_id', patch.tool_session_id],
+    ['tool_transcript_path', patch.tool_transcript_path],
+  ].some(([key, value]) => nonEmpty(entry?.[key]) && nonEmpty(entry[key]) !== value);
+}
+
+async function inspectAuthority(entry, { deps = {} } = {}) {
+  const inspect = deps.inspectOwnedToolArtifacts || inspectOwnedToolArtifacts;
+  const result = await inspect(entry, {
+    roots: deps.toolArtifactRoots,
+    ...(deps.toolArtifactFs ? { fs: deps.toolArtifactFs } : {}),
+  });
+  if (isVerifiedMissingRetry(entry, result, deps.toolArtifactRoots)) {
+    return {
+      ...result,
+      state: 'absent',
+      safe_to_delete: true,
+      artifacts: [],
+      totals: { paths: 0, files: 0, bytes: 0 },
+      issues: [],
+      already_absent: true,
+    };
+  }
+  return result;
+}
+
+function isVerifiedMissingRetry(entry, result, roots) {
+  if (result?.issues?.length !== 1 || result.issues[0]?.code !== 'transcript-missing') {
+    return false;
+  }
+  const marker = entry?.tool_artifact_authority_verified;
+  const classified = classifyToolArtifactAuthority(entry, { roots });
+  return marker?.version === AUTHORITY_MARKER_VERSION
+    && marker.source === classified.source
+    && marker.session_id === classified.session_id
+    && marker.transcript_path === classified.transcript_path
+    && classified.state === 'candidate';
+}
+
+async function buildTargetStatus(entry, primary, artifacts, { keepBranch = false } = {}) {
+  const dirtyFiles = countDirtyFiles(entry.worktree_path);
+  const ahead = entry.branch
+    ? Math.max(commitsAhead(primary, entry.branch), finiteNumber(entry.ahead))
+    : 0;
+  const verdict = await computeVerdict(entry, primary, { dirtyFiles, ahead });
+  return {
+    name: entry.name,
+    session_state: entry.session_state || 'idle',
+    worktree_path: entry.worktree_path || null,
+    dirty_files: dirtyFiles,
+    branch: entry.branch || null,
+    commits_ahead: ahead,
+    unmerged: ahead > 0,
+    keep_branch: keepBranch,
+    verdict: verdict.value,
+    ...(verdict.reason ? { reason: verdict.reason } : {}),
+    transcript: transcriptStatus(artifacts),
+  };
+}
+
+function statusWithArtifacts(status, artifacts) {
+  return {
+    ...status,
+    transcript: transcriptStatus(artifacts),
+  };
+}
+
+function transcriptStatus(artifacts) {
+  if (artifacts?.state === 'none') {
+    return { state: 'none', path: null, bytes: 0 };
+  }
+  if (artifacts?.state === 'owned') {
+    const transcript = artifacts.artifacts?.find((artifact) => artifact.kind === 'transcript');
+    return {
+      state: 'owned',
+      path: transcript?.path || artifacts.transcript_path || null,
+      bytes: transcript?.bytes || 0,
+    };
+  }
+  if (artifacts?.state === 'absent') {
+    return {
+      state: 'absent',
+      path: artifacts.transcript_path || null,
+      bytes: 0,
+    };
+  }
+  return {
+    state: 'unverified',
+    path: artifacts?.transcript_path || artifacts?.issues?.[0]?.path || null,
+    bytes: 0,
+    issues: (artifacts?.issues || []).map((issue) => issue.code),
+  };
+}
+
+function countDirtyFiles(worktreePath) {
+  if (!worktreePath || !existsSync(worktreePath)) return 0;
+  const porcelain = tryGit(worktreePath, ['status', '--porcelain']);
+  if (!porcelain) return 0;
+  return porcelain.split('\n').filter(Boolean).length;
+}
+
+async function computeVerdict(entry, primary, { dirtyFiles, ahead }) {
+  const stored = entry.safety_verdict;
+  if (entry.session_state === 'live') {
+    return { value: 'IS_ACTIVE_NOW', reason: 'live session' };
+  }
+  if (dirtyFiles > 0) {
+    return { value: 'NEEDS_REVIEW', reason: `${dirtyFiles} uncommitted file(s)` };
+  }
+  if (stored === 'IS_SQUASH_PHANTOM' || ahead > 0) {
+    const phantom = await detectSquashPhantom({
+      repoDir: primary,
+      branch: entry.branch,
+    }).catch(() => ({ isPhantom: false }));
+    if (phantom.isPhantom) {
+      return { value: 'IS_SQUASH_PHANTOM', reason: 'changes already on main' };
     }
   }
-
-  // Single-target convenience: top-level fields mirror the single result.
-  if (results.length === 1) {
-    const r0 = results[0];
-    const single = {
-      ok: r0.ok,
-      name: r0.name,
-      verdict: r0.verdict || plans[0].verdict.value,
-      ...(r0.error ? { error: r0.error } : {}),
+  if (ahead > 0 || stored === 'HAS_UNMERGED_WORK') {
+    return {
+      value: 'HAS_UNMERGED_WORK',
+      reason: `${ahead || finiteNumber(entry.ahead)} commit(s) ahead of main`,
     };
-    if (opts.json) stdout.write(`${JSON.stringify(single, null, 2)}\n`);
-    else if (r0.ok) stdout.write(`mc: ended ${r0.name}\n`);
-    else stderr.write(`mc: failed to end ${r0.name}: ${r0.error}\n`);
-    return r0.ok ? 0 : 1;
   }
+  return { value: 'SAFE_TO_END' };
+}
 
-  // Bulk
-  const allOk = results.every((r) => r.ok);
+function printStatuses(plans, stdout) {
+  for (const { status } of plans) {
+    const branchAction = status.keep_branch ? 'keep' : 'delete';
+    stdout.write(`${status.name}\n`);
+    stdout.write(`  session: ${status.session_state}\n`);
+    stdout.write(`  worktree: ${status.worktree_path || 'none'} (dirty: ${status.dirty_files})\n`);
+    stdout.write(`  branch: ${status.branch || 'none'} (ahead: ${status.commits_ahead}, ${branchAction})\n`);
+    if (status.transcript.state === 'none') {
+      stdout.write('  transcript: none\n');
+    } else if (status.transcript.state === 'unverified') {
+      const issues = status.transcript.issues?.join(', ') || 'unknown';
+      stdout.write(`  transcript: unverified ${status.transcript.path || 'none'} (${issues})\n`);
+    } else if (status.transcript.state === 'absent') {
+      stdout.write(`  transcript: ${status.transcript.path} (already absent)\n`);
+    } else {
+      stdout.write(`  transcript: ${status.transcript.path} (${formatBytes(status.transcript.bytes)})\n`);
+    }
+  }
+}
+
+function emitDryRun({ opts, plans, unsafe, stdout, stderr }) {
+  const out = {
+    ok: unsafe.length === 0,
+    dry_run: true,
+    confirmation_required: true,
+    targets: plans.map((plan) => plan.status),
+    ...(unsafe.length > 0 ? {
+      error: 'tool-artifact-authority-unverified',
+      unsafe_targets: unsafe.map(authorityFailureShape),
+    } : {}),
+  };
+  if (opts.json) stdout.write(`${JSON.stringify(out, null, 2)}\n`);
+  else {
+    printStatuses(plans, stdout);
+    if (unsafe.length > 0) {
+      stderr.write('mc: dry-run blocked — exact tool transcript authority could not be verified\n');
+    }
+  }
+  return unsafe.length === 0 ? 0 : 1;
+}
+
+function emitAuthorityFailure({
+  opts,
+  plans,
+  unsafe,
+  stdout,
+  stderr,
+  phase = 'preflight',
+  statusesAlreadyPrinted = false,
+}) {
+  const out = {
+    ok: false,
+    error: 'tool-artifact-authority-unverified',
+    phase,
+    targets: plans.map((plan) => plan.status),
+    unsafe_targets: unsafe.map(authorityFailureShape),
+  };
   if (opts.json) {
-    stdout.write(`${JSON.stringify({ ok: allOk, results }, null, 2)}\n`);
+    stdout.write(`${JSON.stringify(out, null, 2)}\n`);
   } else {
-    for (const r of results) {
-      stdout.write(`${r.ok ? '✓' : '✗'} ${r.name}${r.error ? ` — ${r.error}` : ''}\n`);
+    if (!statusesAlreadyPrinted) printStatuses(plans, stdout);
+    const names = unsafe.map((plan) => `"${plan.entry.name}"`).join(', ');
+    stderr.write(`mc: ${phase} blocked for ${names} — exact tool transcript ownership/authority is unverified\n`);
+    for (const plan of unsafe) {
+      const issues = (plan.artifacts.issues || []).map((issue) => issue.code).join(', ');
+      stderr.write(`mc: ${plan.entry.name}: ${issues || 'unknown authority failure'}\n`);
+    }
+  }
+  return 1;
+}
+
+function authorityFailureShape(plan) {
+  return {
+    name: plan.entry.name,
+    issues: (plan.artifacts.issues || []).map((issue) => ({
+      code: issue.code,
+      ...(issue.path ? { path: issue.path } : {}),
+    })),
+  };
+}
+
+function emitConfirmationRequired({ opts, plans, stdout, stderr }) {
+  const out = {
+    ok: false,
+    error: 'confirmation-required',
+    confirmation_required: true,
+    hint: 'rerun with --force for explicit non-interactive teardown',
+    targets: plans.map((plan) => plan.status),
+  };
+  if (opts.json) stdout.write(`${JSON.stringify(out, null, 2)}\n`);
+  else {
+    stderr.write('mc: confirmation required — rerun interactively or pass --force for automation\n');
+  }
+  return 1;
+}
+
+function persistVerifiedAuthorities(plans, { deps = {}, now }) {
+  const read = deps.readRegistry || readRegistry;
+  const patch = deps.patchEntriesIfPresent || patchEntriesIfPresent;
+  const current = read();
+  const patches = [];
+  for (const plan of plans) {
+    const latest = current.entries.find((entry) => entry.name === plan.entry.name);
+    if (!latest) {
+      return {
+        ok: false,
+        message: `"${plan.entry.name}" disappeared from the registry before teardown`,
+      };
+    }
+    if (!sameSessionContainer(latest, plan.originalEntry)) {
+      return {
+        ok: false,
+        message: `"${plan.entry.name}" changed in the registry before teardown`,
+      };
+    }
+    if (conflictsWithStoredAuthority(latest, {
+      tool_session_source: plan.entry.tool_session_source,
+      tool_session_id: plan.entry.tool_session_id,
+      tool_transcript_path: plan.entry.tool_transcript_path,
+    })) {
+      return {
+        ok: false,
+        message: `"${plan.entry.name}" tool transcript authority changed before teardown`,
+      };
+    }
+    const authority = classifyToolArtifactAuthority(plan.entry, {
+      roots: deps.toolArtifactRoots,
+    });
+    const authorityPatch = {
+      name: plan.entry.name,
+      tool_session_source: plan.entry.tool_session_source || null,
+      tool_session_id: plan.entry.tool_session_id || null,
+      tool_transcript_path: plan.entry.tool_transcript_path || null,
+    };
+    if (authority.state === 'candidate') {
+      authorityPatch.tool_artifact_authority_verified = {
+        version: AUTHORITY_MARKER_VERSION,
+        source: authority.source,
+        session_id: authority.session_id,
+        transcript_path: authority.transcript_path,
+        verified_at: now(),
+      };
+    }
+    patches.push(authorityPatch);
+  }
+  const result = patch(patches);
+  if (!result?.ok) {
+    return {
+      ok: false,
+      message: `registry entries disappeared before authority sync: ${(result?.missing || []).join(', ')}`,
+    };
+  }
+  for (const plan of plans) {
+    const updated = result.entries?.find((entry) => entry.name === plan.entry.name);
+    if (updated) plan.entry = updated;
+  }
+  return { ok: true };
+}
+
+function sameSessionContainer(current, original) {
+  return current?.name === original?.name
+    && nonEmpty(current?.worktree_path) === nonEmpty(original?.worktree_path)
+    && nonEmpty(current?.branch) === nonEmpty(original?.branch);
+}
+
+function emitCdBeforeTeardown(plans, { cwd, emitDirectives }) {
+  const cwdReal = safeRealpath(cwd);
+  const insideTarget = plans.find(({ entry }) => (
+    entry.worktree_path
+      && isInsidePath(cwdReal, safeRealpath(entry.worktree_path))
+  ));
+  if (insideTarget) {
+    emitCd(unprivateMac(insideTarget.primary), {
+      enabled: emitDirectives || undefined,
+    });
+  }
+}
+
+async function teardownOne(plan, { opts, deps }) {
+  const { entry, primary, status } = plan;
+  try {
+    const removeBroker = deps.removeBrokerSessionForEntry || removeBrokerSessionForEntry;
+    const broker = await removeBroker(entry, {
+      requestBroker: deps.requestBroker,
+    });
+    if (!brokerCleanupIsAcceptable(entry, broker)) {
+      throw new Error(`broker cleanup failed (${broker?.error || broker?.reason || 'unknown'})`);
+    }
+
+    const shred = deps.shredForSession || defaultShredForSession;
+    const shredded = await shred({
+      sessionId: entry.name,
+      worktreePath: entry.worktree_path || undefined,
+      retainManifestOnFailure: true,
+    });
+    if (!shredded?.ok) {
+      const reasons = (shredded?.failures || []).map((failure) => failure.reason).filter(Boolean);
+      throw new Error(`vault shred failed${reasons.length ? ` (${reasons.join(', ')})` : ''}`);
+    }
+
+    await unlinkOwnedTranscript(plan.artifacts, {
+      entry,
+      deps,
+    });
+
+    removeWorktreeAndBranch(entry, {
+      primary,
+      keepBranch: opts.keepBranch,
+    });
+
+    const remove = deps.removeEntry || removeEntry;
+    remove(entry.name);
+
+    const leftovers = inspectLeftovers(plan, opts, deps);
+    if (leftovers.length > 0) {
+      throw new Error(`teardown verification failed: ${leftovers.join(', ')}`);
+    }
+    return {
+      name: entry.name,
+      ok: true,
+      verdict: status.verdict,
+      status,
+      leftovers: [],
+    };
+  } catch (err) {
+    return {
+      name: entry.name,
+      ok: false,
+      error: err.message,
+      status,
+      leftovers: inspectLeftovers(plan, opts, deps),
+    };
+  }
+}
+
+function brokerCleanupIsAcceptable(entry, result) {
+  if (result?.ok) return true;
+  if (result?.reason === 'not-found') return true;
+  if (result?.reason === 'broker-unavailable') {
+    return entry?.session_state !== 'live';
+  }
+  return false;
+}
+
+async function defaultShredForSession(args) {
+  const { shredForSession } = await import('../vault/lifecycle.js');
+  return shredForSession(args);
+}
+
+async function unlinkOwnedTranscript(artifacts, { entry, deps }) {
+  // Broker and vault cleanup can execute arbitrary provider/adapter code.
+  // Re-run the complete lstat/realpath/path-chain/content-ID inspection after
+  // those calls and immediately before unlink. There is still an unavoidable
+  // sub-call TOCTOU window between inspection and unlink, but no unrelated
+  // async work is allowed inside that window.
+  const fresh = await inspectAuthority(entry, { deps });
+  assertSameFinalAuthority(artifacts, fresh, entry);
+  if (fresh.state === 'none' || fresh.state === 'absent') return;
+
+  const transcript = fresh.artifacts?.find((artifact) => artifact.kind === 'transcript');
+  if (!transcript?.path || transcript.path !== entry.tool_transcript_path) {
+    throw new Error('verified transcript path no longer matches registry authority');
+  }
+  const classified = classifyToolArtifactAuthority(entry, {
+    roots: deps.toolArtifactRoots,
+  });
+  if (classified.state !== 'candidate' || classified.transcript_path !== transcript.path) {
+    throw new Error('transcript path failed final allowlist classification');
+  }
+  const unlinkFile = deps.unlinkTranscript || unlink;
+  try {
+    await unlinkFile(transcript.path);
+  } catch (err) {
+    if (err?.code !== 'ENOENT') throw err;
+  }
+  const exists = deps.existsSync || existsSync;
+  if (exists(transcript.path)) {
+    throw new Error(`transcript still exists after unlink: ${transcript.path}`);
+  }
+}
+
+function assertSameFinalAuthority(expected, fresh, entry) {
+  if (!fresh?.safe_to_delete) {
+    const issues = (fresh?.issues || []).map((issue) => issue.code).join(', ');
+    throw new Error(`final transcript authority inspection failed (${issues || 'unverified'})`);
+  }
+  const verifiedBecameAbsent = expected?.state === 'owned' && fresh.state === 'absent';
+  if (expected?.state !== fresh.state && !verifiedBecameAbsent) {
+    throw new Error(`final transcript authority changed (${expected?.state || 'unknown'} -> ${fresh.state})`);
+  }
+  if (fresh.state === 'none') return;
+  if (
+    fresh.source !== expected.source
+    || fresh.session_id !== expected.session_id
+    || fresh.transcript_path !== expected.transcript_path
+    || fresh.source !== entry.tool_session_source
+    || fresh.session_id !== entry.tool_session_id
+    || fresh.transcript_path !== entry.tool_transcript_path
+  ) {
+    throw new Error('final transcript authority no longer matches the verified session');
+  }
+}
+
+function removeWorktreeAndBranch(entry, { primary, keepBranch }) {
+  const worktree = entry.worktree_path;
+  if (worktree && existsSync(worktree)) {
+    git(primary, ['worktree', 'remove', '--force', worktree]);
+  } else {
+    tryGit(primary, ['worktree', 'prune']);
+  }
+  if (!keepBranch && entry.branch && branchExists(primary, entry.branch)) {
+    git(primary, ['branch', '-D', entry.branch]);
+  }
+}
+
+function inspectLeftovers(plan, opts, deps) {
+  const leftovers = [];
+  const exists = deps.existsSync || existsSync;
+  const transcriptPath = plan.entry.tool_transcript_path;
+  if (transcriptPath && exists(transcriptPath)) leftovers.push(`transcript:${transcriptPath}`);
+  if (plan.entry.worktree_path && exists(plan.entry.worktree_path)) {
+    leftovers.push(`worktree:${plan.entry.worktree_path}`);
+  }
+  if (!opts.keepBranch && plan.entry.branch && branchExists(plan.primary, plan.entry.branch)) {
+    leftovers.push(`branch:${plan.entry.branch}`);
+  }
+  const registry = (deps.readRegistry || readRegistry)();
+  if (registry.entries.some((entry) => entry.name === plan.entry.name)) {
+    leftovers.push(`registry:${plan.entry.name}`);
+  }
+  return leftovers;
+}
+
+function emitResults({ opts, results, stdout, stderr }) {
+  const allOk = results.every((result) => result.ok);
+  const out = {
+    ok: allOk,
+    results,
+  };
+  if (results.length === 1) {
+    Object.assign(out, {
+      name: results[0].name,
+      verdict: results[0].verdict || results[0].status?.verdict,
+      ...(results[0].error ? { error: results[0].error } : {}),
+      leftovers: results[0].leftovers,
+    });
+  }
+  if (opts.json) {
+    stdout.write(`${JSON.stringify(out, null, 2)}\n`);
+  } else if (results.length === 1) {
+    const result = results[0];
+    if (result.ok) {
+      stdout.write(`mc: ended ${result.name}\n`);
+    } else {
+      stderr.write(`mc: failed to end ${result.name}: ${result.error}\n`);
+      stderr.write(`mc: leftovers: ${result.leftovers.length ? result.leftovers.join(', ') : 'none detected'}\n`);
+    }
+  } else {
+    for (const result of results) {
+      const suffix = result.error ? ` — ${result.error}` : '';
+      stdout.write(`${result.ok ? '✓' : '✗'} ${result.name}${suffix}\n`);
+      if (!result.ok) {
+        stdout.write(`  leftovers: ${result.leftovers.length ? result.leftovers.join(', ') : 'none detected'}\n`);
+      }
     }
   }
   return allOk ? 0 : 1;
+}
+
+function emitFailure({
+  opts,
+  stdout,
+  stderr,
+  error,
+  message,
+  targets = [],
+}) {
+  if (opts.json) {
+    stdout.write(`${JSON.stringify({
+      ok: false,
+      error,
+      message,
+      targets,
+    }, null, 2)}\n`);
+  } else {
+    stderr.write(`mc: ${message}\n`);
+  }
+  return 1;
+}
+
+async function promptYesNo({ prompt, stdin, stdout, deps = {} } = {}) {
+  if (typeof deps.readLine === 'function') {
+    stdout.write(prompt);
+    return deps.readLine({ stdin, stdout, prompt });
+  }
+  const { createInterface } = await import('node:readline/promises');
+  const rl = createInterface({ input: stdin, output: stdout });
+  try {
+    return await rl.question(prompt);
+  } finally {
+    rl.close();
+  }
 }
 
 function findEntryForCwd(entries, cwd) {
@@ -220,28 +837,56 @@ function resolveImplicitEntry(entries, cwd) {
 
   const primary = primaryWorktree(cwd);
   if (!primary) return null;
-
   const primaryReal = safeRealpath(primary);
-  const candidates = (entries || [])
-    .filter((entry) => entry && entry.worktree_path)
+  return (entries || [])
+    .filter((entry) => entry?.worktree_path)
     .filter((entry) => entryMatchesPrimary(entry, primaryReal))
     .map((entry) => ({ entry, openedAt: timestampMs(entry.last_opened_at) }))
     .filter((item) => Number.isFinite(item.openedAt))
-    .sort((a, b) => b.openedAt - a.openedAt);
-
-  return candidates[0]?.entry || null;
+    .sort((a, b) => b.openedAt - a.openedAt)[0]?.entry || null;
 }
 
 function entryMatchesPrimary(entry, primaryReal) {
-  if (!entry || !primaryReal) return false;
-  if (entry.primary_worktree && samePath(safeRealpath(entry.primary_worktree), primaryReal)) {
+  if (entry.primary_worktree
+    && samePath(safeRealpath(entry.primary_worktree), primaryReal)) {
     return true;
   }
   if (entry.worktree_path && existsSync(entry.worktree_path)) {
     const entryPrimary = primaryWorktree(entry.worktree_path);
-    return entryPrimary ? samePath(safeRealpath(entryPrimary), primaryReal) : false;
+    return entryPrimary
+      ? samePath(safeRealpath(entryPrimary), primaryReal)
+      : false;
   }
   return false;
+}
+
+function resolvePrimaryForEntry(entry, cwd) {
+  if (entry?.primary_worktree) {
+    const primary = primaryWorktree(entry.primary_worktree);
+    if (primary) return primary;
+  }
+  if (entry?.worktree_path && existsSync(entry.worktree_path)) {
+    const primary = primaryWorktree(entry.worktree_path);
+    if (primary) return primary;
+  }
+  const currentPrimary = primaryWorktree(cwd);
+  if (currentPrimary
+    && (!entry?.worktree_path
+      || worktreeBelongsToPrimary(currentPrimary, entry.worktree_path))) {
+    return currentPrimary;
+  }
+  return null;
+}
+
+function worktreeBelongsToPrimary(primary, worktreePath) {
+  if (!primary || !worktreePath) return false;
+  const out = tryGit(primary, ['worktree', 'list', '--porcelain']);
+  if (!out) return false;
+  const needle = safeRealpath(worktreePath);
+  return out.split('\n\n').some((block) => {
+    const match = block.match(/^worktree\s+(.+)$/m);
+    return match && samePath(safeRealpath(match[1].trim()), needle);
+  });
 }
 
 function isInsidePath(candidate, parent) {
@@ -250,40 +895,8 @@ function isInsidePath(candidate, parent) {
   return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
 }
 
-function resolvePrimaryForEntry(entry, cwd) {
-  if (entry?.primary_worktree) {
-    const primary = primaryWorktree(entry.primary_worktree);
-    if (primary) return primary;
-  }
-
-  if (entry?.worktree_path && existsSync(entry.worktree_path)) {
-    const primary = primaryWorktree(entry.worktree_path);
-    if (primary) return primary;
-  }
-
-  const cwdPrimary = primaryWorktree(cwd);
-  if (cwdPrimary && (!entry?.worktree_path || worktreeBelongsToPrimary(cwdPrimary, entry.worktree_path))) {
-    return cwdPrimary;
-  }
-
-  return null;
-}
-
-function worktreeBelongsToPrimary(primary, worktreePathValue) {
-  if (!primary || !worktreePathValue) return false;
-  const out = tryGit(primary, ['worktree', 'list', '--porcelain']);
-  if (!out) return false;
-  const needle = safeRealpath(worktreePathValue);
-  return out
-    .split('\n\n')
-    .some((block) => {
-      const m = block.match(/^worktree\s+(.+)$/m);
-      return m && samePath(safeRealpath(m[1].trim()), needle);
-    });
-}
-
 function samePath(a, b) {
-  return a === b || isInsidePath(a, b) && isInsidePath(b, a);
+  return a === b || (isInsidePath(a, b) && isInsidePath(b, a));
 }
 
 function timestampMs(value) {
@@ -291,124 +904,39 @@ function timestampMs(value) {
   return Number.isFinite(ms) ? ms : NaN;
 }
 
-async function confirmActiveEnd({
-  entry,
-  opts,
-  stdin = process.stdin,
-  stdout = process.stdout,
-  stderr = process.stderr,
-  deps = {},
-} = {}) {
-  const isInteractive = deps.isTTY ?? (stdin?.isTTY && stdout?.isTTY);
-  if (opts?.json || !isInteractive) {
-    stderr.write(`mc: "${entry.name}" is live — pass --force to end anyway\n`);
-    return false;
-  }
-  const answer = await promptYesNo({
-    prompt: 'Sessionen är aktiv. Vill du avsluta ändå? y/n ',
-    stdin,
-    stdout,
-    deps,
-  });
-  return answer.trim().toLowerCase() === 'y';
+function formatBytes(bytes) {
+  const value = finiteNumber(bytes);
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KiB`;
+  return `${(value / (1024 * 1024)).toFixed(1)} MiB`;
 }
 
-async function promptYesNo({ prompt, stdin, stdout, deps = {} } = {}) {
-  if (typeof deps.readLine === 'function') {
-    stdout.write(prompt);
-    return deps.readLine({ stdin, stdout, prompt });
-  }
-  const { createInterface } = await import('node:readline/promises');
-  const rl = createInterface({ input: stdin, output: stdout });
-  try {
-    return await rl.question(prompt);
-  } finally {
-    rl.close();
-  }
+function finiteNumber(value) {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? number : 0;
 }
 
-async function computeVerdict(entry, primary) {
-  // The registry stores a derived verdict — when present, use it as the
-  // primary signal. (A future `mc refresh` recomputes them. Tests + the
-  // base lifecycle commands trust whatever's on disk.)
-  const stored = entry.safety_verdict;
-
-  // Live wins regardless of stored value: a session can become active
-  // between writes to the registry.
-  if (entry.session_state === 'live') {
-    return { value: 'IS_ACTIVE_NOW', reason: 'live session' };
-  }
-
-  // For dirty: trust registry's count first; otherwise probe disk.
-  const dirtyByRegistry = (entry.dirty_files || 0) > 0;
-  const dirtyByDisk = entry.worktree_path && existsSync(entry.worktree_path)
-    && isDirty(entry.worktree_path);
-  if (dirtyByRegistry || dirtyByDisk) {
-    return { value: 'NEEDS_REVIEW', reason: 'uncommitted changes' };
-  }
-
-  // Phantom: if the registry already claims phantom, run the live probe
-  // to confirm (cheap) before letting `mc end` skip the safety prompt.
-  if (stored === 'IS_SQUASH_PHANTOM') {
-    const phantom = await detectSquashPhantom({
-      repoDir: primary,
-      branch: entry.branch,
-    }).catch(() => ({ isPhantom: false }));
-    if (phantom.isPhantom) {
-      return { value: 'IS_SQUASH_PHANTOM', reason: 'changes already on main' };
-    }
-    // Stored said phantom but the live check disagrees — fall through to
-    // the ahead-of-main logic below so we don't silently degrade safety.
-  }
-
-  // Ahead-of-main: a non-phantom ahead branch is unmerged work.
-  const ahead = entry.branch ? commitsAhead(primary, entry.branch) : 0;
-  if (ahead > 0 || stored === 'HAS_UNMERGED_WORK') {
-    const phantom = await detectSquashPhantom({
-      repoDir: primary,
-      branch: entry.branch,
-    }).catch(() => ({ isPhantom: false }));
-    if (phantom.isPhantom) {
-      return { value: 'IS_SQUASH_PHANTOM', reason: 'changes already on main' };
-    }
-    if (ahead > 0) {
-      return { value: 'HAS_UNMERGED_WORK', reason: `${ahead} commit(s) ahead of main` };
-    }
-  }
-
-  return { value: 'SAFE_TO_END' };
-}
-
-async function endOne(entry, { primary, keepBranch, verdict }) {
-  const wt = entry.worktree_path;
-  if (wt && existsSync(wt)) {
-    git(primary, ['worktree', 'remove', '--force', wt]);
-  } else {
-    // Worktree directory already gone; prune so git's index doesn't lie.
-    tryGit(primary, ['worktree', 'prune']);
-  }
-
-  if (!keepBranch && entry.branch && branchExists(primary, entry.branch)) {
-    // Phantoms are "merged" in spirit even though git records the
-    // ahead-by-1. Force-delete in that case so `branch -d` doesn't refuse.
-    const force = verdict?.value === 'IS_SQUASH_PHANTOM';
-    git(primary, ['branch', force ? '-D' : '-d', entry.branch]);
-  }
+function nonEmpty(value) {
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
 
 function parseArgs(argv) {
   const opts = {
-    names: [], force: false, keepBranch: false, dryRun: false, json: false,
+    names: [],
+    force: false,
+    keepBranch: false,
+    dryRun: false,
+    json: false,
   };
-  for (const a of argv) {
-    switch (a) {
+  for (const arg of argv) {
+    switch (arg) {
       case '--force': opts.force = true; break;
       case '--keep-branch': opts.keepBranch = true; break;
       case '--dry-run': opts.dryRun = true; break;
       case '--json': opts.json = true; break;
       default:
-        if (a.startsWith('--')) return { error: `unknown flag: ${a}` };
-        opts.names.push(a);
+        if (arg.startsWith('--')) return { error: `unknown flag: ${arg}` };
+        opts.names.push(arg);
     }
   }
   return opts;

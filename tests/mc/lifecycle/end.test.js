@@ -2,10 +2,9 @@
  * TDD spec for `mc end` (§2 + §9b + §9c).
  *
  * Per the plan:
- *   - `mc end <name>` removes a worktree; deletes the bootstrap branch
- *     only if it's merged (cs heuristic preserved).
+ *   - Confirmed `mc end <name>` removes a worktree and its local branch.
  *   - `mc end .` auto-detects the current worktree.
- *   - Confirms before ending a live session without `--force` in a TTY.
+ *   - Shows status and confirms once before any interactive teardown.
  *   - `--keep-branch` retains the branch regardless.
  *   - Bulk: `mc end a b c` operates sequentially.
  *   - `--dry-run` prints one line per target with verdict, no side effects.
@@ -54,7 +53,7 @@ describe('mc end', () => {
     git(wtPath, 'config user.name "t"');
     // Write an uncommitted file.
     writeFileSync(join(wtPath, 'dirty.txt'), 'uncommitted\n');
-    writeRegistry(repo.mcHome, [makeEntry({
+    writeRegistry(repo.mcHome, [makeEndEntry({
       name: 'dirty', branch: 'sess/dirty',
       worktree_path: wtPath, dirty_files: 1,
       safety_verdict: 'NEEDS_REVIEW',
@@ -71,7 +70,7 @@ describe('mc end', () => {
     makeBranchWithCommit(repo.dir, 'sess/live', 'tmp.txt');
     const wtPath = join(repo.mcHome, 'worktrees', 'repo', 'live');
     addWorktree(repo.dir, wtPath, 'sess/live');
-    writeRegistry(repo.mcHome, [makeEntry({
+    writeRegistry(repo.mcHome, [makeEndEntry({
       name: 'live', branch: 'sess/live',
       worktree_path: wtPath, session_state: 'live',
       safety_verdict: 'IS_ACTIVE_NOW',
@@ -87,7 +86,7 @@ describe('mc end', () => {
     makeBranchWithCommit(repo.dir, 'sess/live-decline', 'tmp.txt');
     const wtPath = join(repo.mcHome, 'worktrees', 'repo', 'live-decline');
     addWorktree(repo.dir, wtPath, 'sess/live-decline');
-    writeRegistry(repo.mcHome, [makeEntry({
+    writeRegistry(repo.mcHome, [makeEndEntry({
       name: 'live-decline', branch: 'sess/live-decline',
       worktree_path: wtPath, session_state: 'live',
       safety_verdict: 'IS_ACTIVE_NOW',
@@ -96,7 +95,7 @@ describe('mc end', () => {
     const { result, stdout } = await runEndInProcess(repo, ['live-decline'], 'n');
 
     assert.equal(result, 1);
-    assert.match(stdout, /Sessionen är aktiv\. Vill du avsluta ändå\? y\/n/);
+    assert.match(stdout, /Avsluta och ta bort allt sessionsbundet lokalt\? y\/n/);
     const wts = git(repo.dir, 'worktree list --porcelain');
     assert.match(wts, /live-decline/);
   });
@@ -105,7 +104,7 @@ describe('mc end', () => {
     git(repo.dir, 'branch sess/live-confirm main');
     const wtPath = join(repo.mcHome, 'worktrees', 'repo', 'live-confirm');
     addWorktree(repo.dir, wtPath, 'sess/live-confirm');
-    writeRegistry(repo.mcHome, [makeEntry({
+    writeRegistry(repo.mcHome, [makeEndEntry({
       name: 'live-confirm', branch: 'sess/live-confirm',
       worktree_path: wtPath, session_state: 'live',
       safety_verdict: 'IS_ACTIVE_NOW',
@@ -114,7 +113,7 @@ describe('mc end', () => {
     const { result, stdout } = await runEndInProcess(repo, ['live-confirm'], 'y');
 
     assert.equal(result, 0);
-    assert.match(stdout, /Sessionen är aktiv\. Vill du avsluta ändå\? y\/n/);
+    assert.match(stdout, /Avsluta och ta bort allt sessionsbundet lokalt\? y\/n/);
     assert.match(stdout, /mc: ended live-confirm/);
     const wts = git(repo.dir, 'worktree list --porcelain');
     assert.ok(!wts.includes('live-confirm'), `worktree should be gone; got:\n${wts}`);
@@ -125,11 +124,11 @@ describe('mc end', () => {
     git(repo.dir, 'branch sess/clean main');
     const wtPath = join(repo.mcHome, 'worktrees', 'repo', 'clean');
     addWorktree(repo.dir, wtPath, 'sess/clean');
-    writeRegistry(repo.mcHome, [makeEntry({
+    writeRegistry(repo.mcHome, [makeEndEntry({
       name: 'clean', branch: 'sess/clean',
       worktree_path: wtPath, safety_verdict: 'SAFE_TO_END',
     })]);
-    const r = runMc(['end', 'clean', '--json'], {
+    const r = runMc(['end', 'clean', '--json', '--force'], {
       cwd: repo.dir, env: { MC_HOME: repo.mcHome },
     });
     assert.equal(r.status, 0, `stderr:${r.stderr}`);
@@ -146,7 +145,7 @@ describe('mc end', () => {
     git(repo.dir, 'branch sess/current main');
     const wtPath = join(repo.mcHome, 'worktrees', 'repo', 'current');
     addWorktree(repo.dir, wtPath, 'sess/current');
-    writeRegistry(repo.mcHome, [makeEntry({
+    writeRegistry(repo.mcHome, [makeEndEntry({
       name: 'current',
       branch: 'sess/current',
       worktree_path: wtPath,
@@ -154,7 +153,7 @@ describe('mc end', () => {
       safety_verdict: 'SAFE_TO_END',
     })]);
 
-    const r = runMc(['end', '--json'], {
+    const r = runMc(['end', '--json', '--force'], {
       cwd: wtPath, env: { MC_HOME: repo.mcHome },
     });
     assert.equal(r.status, 0, `stderr:${r.stderr}`);
@@ -173,7 +172,7 @@ describe('mc end', () => {
     addWorktree(repo.dir, oldWt, 'sess/older');
     addWorktree(repo.dir, latestWt, 'sess/latest');
     writeRegistry(repo.mcHome, [
-      makeEntry({
+      makeEndEntry({
         name: 'older',
         branch: 'sess/older',
         worktree_path: oldWt,
@@ -181,7 +180,7 @@ describe('mc end', () => {
         last_opened_at: '2026-07-10T10:00:00.000Z',
         safety_verdict: 'SAFE_TO_END',
       }),
-      makeEntry({
+      makeEndEntry({
         name: 'latest',
         branch: 'sess/latest',
         worktree_path: latestWt,
@@ -191,7 +190,7 @@ describe('mc end', () => {
       }),
     ]);
 
-    const r = runMc(['end', '--json'], {
+    const r = runMc(['end', '--json', '--force'], {
       cwd: repo.dir, env: { MC_HOME: repo.mcHome },
     });
     assert.equal(r.status, 0, `stderr:${r.stderr} stdout:${r.stdout}`);
@@ -207,7 +206,7 @@ describe('mc end', () => {
     git(repo.dir, 'branch sess/dot main');
     const wtPath = join(repo.mcHome, 'worktrees', 'repo', 'dot');
     addWorktree(repo.dir, wtPath, 'sess/dot');
-    writeRegistry(repo.mcHome, [makeEntry({
+    writeRegistry(repo.mcHome, [makeEndEntry({
       name: 'dot',
       branch: 'sess/dot',
       worktree_path: wtPath,
@@ -215,7 +214,7 @@ describe('mc end', () => {
       safety_verdict: 'SAFE_TO_END',
     })]);
 
-    const r = runMc(['end', '.', '--json'], {
+    const r = runMc(['end', '.', '--json', '--force'], {
       cwd: wtPath, env: { MC_HOME: repo.mcHome },
     });
     assert.equal(r.status, 0, `stderr:${r.stderr}`);
@@ -232,7 +231,7 @@ describe('mc end', () => {
       git(other.dir, 'branch sess/cross main');
       const wtPath = join(repo.mcHome, 'worktrees', 'other', 'cross');
       addWorktree(other.dir, wtPath, 'sess/cross');
-      writeRegistry(repo.mcHome, [makeEntry({
+      writeRegistry(repo.mcHome, [makeEndEntry({
         name: 'cross',
         branch: 'sess/cross',
         repo_slug: 'other',
@@ -241,7 +240,7 @@ describe('mc end', () => {
         safety_verdict: 'SAFE_TO_END',
       })]);
 
-      const r = runMc(['end', 'cross', '--json'], {
+      const r = runMc(['end', 'cross', '--json', '--force'], {
         cwd: repo.dir, env: { MC_HOME: repo.mcHome },
       });
       assert.equal(r.status, 0, `stderr:${r.stderr} stdout:${r.stdout}`);
@@ -254,11 +253,11 @@ describe('mc end', () => {
     }
   });
 
-  test('single-target human output reports teardown failure instead of success', () => {
+  test('--force removes an unmerged branch instead of leaving partial state', () => {
     makeBranchWithCommit(repo.dir, 'sess/unmerged', 'unmerged.txt');
     const wtPath = join(repo.mcHome, 'worktrees', 'repo', 'unmerged');
     addWorktree(repo.dir, wtPath, 'sess/unmerged');
-    writeRegistry(repo.mcHome, [makeEntry({
+    writeRegistry(repo.mcHome, [makeEndEntry({
       name: 'unmerged',
       branch: 'sess/unmerged',
       worktree_path: wtPath,
@@ -270,16 +269,16 @@ describe('mc end', () => {
     const r = runMc(['end', 'unmerged', '--force'], {
       cwd: repo.dir, env: { MC_HOME: repo.mcHome },
     });
-    assert.notEqual(r.status, 0);
-    assert.doesNotMatch(r.stdout, /mc: ended unmerged/);
-    assert.match(r.stderr, /failed to end unmerged/i);
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /mc: ended unmerged/);
+    assert.doesNotMatch(git(repo.dir, 'branch --list'), /sess\/unmerged/);
   });
 
   test('ending a worktree removes the matching broker session first', async () => {
     git(repo.dir, 'branch sess/broker-clean main');
     const wtPath = join(repo.mcHome, 'worktrees', 'repo', 'broker-clean');
     addWorktree(repo.dir, wtPath, 'sess/broker-clean');
-    writeRegistry(repo.mcHome, [makeEntry({
+    writeRegistry(repo.mcHome, [makeEndEntry({
       name: 'broker-clean',
       branch: 'sess/broker-clean',
       worktree_path: wtPath,
@@ -312,11 +311,11 @@ describe('mc end', () => {
     git(repo.dir, 'branch sess/keep main');
     const wtPath = join(repo.mcHome, 'worktrees', 'repo', 'keep');
     addWorktree(repo.dir, wtPath, 'sess/keep');
-    writeRegistry(repo.mcHome, [makeEntry({
+    writeRegistry(repo.mcHome, [makeEndEntry({
       name: 'keep', branch: 'sess/keep',
       worktree_path: wtPath, safety_verdict: 'SAFE_TO_END',
     })]);
-    const r = runMc(['end', 'keep', '--keep-branch'], {
+    const r = runMc(['end', 'keep', '--keep-branch', '--force'], {
       cwd: repo.dir, env: { MC_HOME: repo.mcHome },
     });
     assert.equal(r.status, 0, `stderr:${r.stderr}`);
@@ -327,16 +326,16 @@ describe('mc end', () => {
 
   // §9b: squash-phantom detection ---------------------------------------------
 
-  test('accepts a squash-merge phantom without --force', () => {
+  test('reports a squash-merge phantom while explicit automation tears it down', () => {
     makeSquashPhantom(repo.dir, 'sess/phantom', 'phantom.txt');
     const wtPath = join(repo.mcHome, 'worktrees', 'repo', 'phantom');
     addWorktree(repo.dir, wtPath, 'sess/phantom');
-    writeRegistry(repo.mcHome, [makeEntry({
+    writeRegistry(repo.mcHome, [makeEndEntry({
       name: 'phantom', branch: 'sess/phantom',
       worktree_path: wtPath, ahead: 1,
       safety_verdict: 'IS_SQUASH_PHANTOM',
     })]);
-    const r = runMc(['end', 'phantom', '--json'], {
+    const r = runMc(['end', 'phantom', '--json', '--force'], {
       cwd: repo.dir,
       env: {
         MC_HOME: repo.mcHome,
@@ -361,9 +360,10 @@ describe('mc end', () => {
     const wtB = join(repo.mcHome, 'worktrees', 'repo', 'b');
     addWorktree(repo.dir, wtA, 'sess/a');
     addWorktree(repo.dir, wtB, 'sess/b');
+    writeFileSync(join(wtB, 'dirty.txt'), 'uncommitted\n');
     writeRegistry(repo.mcHome, [
-      makeEntry({ name: 'a', branch: 'sess/a', worktree_path: wtA, safety_verdict: 'SAFE_TO_END' }),
-      makeEntry({ name: 'b', branch: 'sess/b', worktree_path: wtB,
+      makeEndEntry({ name: 'a', branch: 'sess/a', worktree_path: wtA, safety_verdict: 'SAFE_TO_END' }),
+      makeEndEntry({ name: 'b', branch: 'sess/b', worktree_path: wtB,
         safety_verdict: 'NEEDS_REVIEW', dirty_files: 1 }),
     ]);
     const r = runMc(['end', 'a', 'b', '--dry-run', '--json'], {
@@ -389,12 +389,12 @@ describe('mc end', () => {
       const wt = join(repo.mcHome, 'worktrees', 'repo', n);
       addWorktree(repo.dir, wt, `sess/${n}`);
     }
-    writeRegistry(repo.mcHome, ['x', 'y', 'z'].map(n => makeEntry({
+    writeRegistry(repo.mcHome, ['x', 'y', 'z'].map(n => makeEndEntry({
       name: n, branch: `sess/${n}`,
       worktree_path: join(repo.mcHome, 'worktrees', 'repo', n),
       safety_verdict: 'SAFE_TO_END',
     })));
-    const r = runMc(['end', 'x', 'y', 'z', '--json'], {
+    const r = runMc(['end', 'x', 'y', 'z', '--json', '--force'], {
       cwd: repo.dir, env: { MC_HOME: repo.mcHome },
     });
     assert.equal(r.status, 0, `stderr:${r.stderr}`);
@@ -414,6 +414,13 @@ describe('mc end', () => {
   });
 });
 
+function makeEndEntry(patch = {}) {
+  return makeEntry({
+    session_state: 'no-session-yet',
+    ...patch,
+  });
+}
+
 async function runEndInProcess(repo, argv, answer, extraDeps = {}) {
   const oldMcHome = process.env.MC_HOME;
   let stdout = '';
@@ -431,6 +438,18 @@ async function runEndInProcess(repo, argv, answer, extraDeps = {}) {
       deps: {
         isTTY: true,
         readLine: async () => answer,
+        inspectOwnedToolArtifacts: async () => ({
+          state: 'none',
+          safe_to_delete: true,
+          source: null,
+          session_id: null,
+          transcript_path: null,
+          transcript_root: null,
+          artifacts: [],
+          totals: { paths: 0, files: 0, bytes: 0 },
+          issues: [],
+        }),
+        shredForSession: async () => ({ ok: true, shredded: [] }),
         ...extraDeps,
       },
     });

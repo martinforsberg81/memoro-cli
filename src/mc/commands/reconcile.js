@@ -38,7 +38,10 @@ export async function run(argv) {
       return 0;
     }
     if (!opts.json) process.stdout.write(`\n--apply --only-safe: running \`mc end\` on ${names.length} session${names.length === 1 ? '' : 's'}...\n`);
-    return endCmd.run([...names, opts.json ? '--json' : null].filter(Boolean));
+    // `--apply --only-safe` is already the explicit automation consent
+    // boundary. Forward it as `--force` because `mc end` otherwise requires
+    // one interactive confirmation for every mutation batch.
+    return endCmd.run([...names, '--force', opts.json ? '--json' : null].filter(Boolean));
   }
 
   return 0;
