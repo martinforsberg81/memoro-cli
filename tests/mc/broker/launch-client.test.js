@@ -58,7 +58,10 @@ function launchBrokerOwnedSession(options) {
   return launchBrokerOwnedSessionImpl({
     ...options,
     deps: {
-      fetchGitHubSessionCapabilities: async () => SESSION_CAPABILITIES,
+      fetchGitHubSessionBootstrap: async () => ({
+        capabilities: SESSION_CAPABILITIES,
+        source: { id: 'local:device:test', kind: 'local' },
+      }),
       registerGitHubSessionProjection: async () => true,
       prepareGitHubSessionForLaunch: async ({ baseEnv, capabilities, socketPath }) => ({
         env: {
@@ -398,6 +401,8 @@ describe('launchBrokerOwnedSession', () => {
     assert.equal(msg.session.sidecars.apiUrl, 'https://memoro.test');
     assert.equal(msg.session.sidecars.token, 'tok');
     assert.equal(msg.session.sidecars.machineId, 'machine');
+    assert.equal(msg.session.sidecars.source_id, 'local:device:test');
+    assert.equal(msg.session.sidecars.source_kind, 'local');
     assert.equal(msg.session.sidecars.source, 'claude-code');
     assert.equal(msg.session.sidecars.repo, 'repo');
     assert.equal(msg.session.sidecars.repoRef, 'org/repo');
@@ -463,7 +468,6 @@ describe('launchBrokerOwnedSession', () => {
 
   test('registers a runtime-starting heartbeat without placing authority or credentials in its body', async () => {
     let call = null;
-    let binding = null;
     const ok = await registerGitHubSessionProjection({
       apiUrl: 'https://memoro.test',
       token: 'memoro-secret-sentinel',
@@ -485,10 +489,6 @@ describe('launchBrokerOwnedSession', () => {
         call = options;
         return true;
       },
-      bindSession: async (options) => {
-        binding = options;
-        return { ok: true, data: { state: 'ready' } };
-      },
     });
 
     assert.equal(ok, true);
@@ -503,16 +503,9 @@ describe('launchBrokerOwnedSession', () => {
     assert.equal(call.payload.session_projection.runtime.lifecycle, 'starting');
     assert.equal('repo_ref' in call.payload, false);
     assert.equal(JSON.stringify(call.payload).includes('memoro-secret-sentinel'), false);
-    assert.equal(binding.sourceId, 'local:machine');
-    assert.equal(binding.codingSessionId, 'sess_register_ok');
-    assert.equal(binding.request.operation, 'connection.status');
-    assert.deepEqual(binding.request.params, {});
-    assert.equal(binding.memoroFetchImpl, undefined);
-    assert.equal('repository' in binding.request, false);
-    assert.equal('repo_ref' in binding.request, false);
   });
 
-  test('keeps GitHub unavailable when the server cannot prove the numeric session binding', async () => {
+  test('keeps GitHub unavailable when the starting projection cannot be registered', async () => {
     const ok = await registerGitHubSessionProjection({
       apiUrl: 'https://memoro.test',
       token: 'tok',
@@ -528,11 +521,7 @@ describe('launchBrokerOwnedSession', () => {
       repoRef: 'acme/widgets',
       branch: 'main',
       now: () => 10_000,
-      postHeartbeat: async () => true,
-      bindSession: async () => ({
-        ok: false,
-        error: { code: 'not_found' },
-      }),
+      postHeartbeat: async () => false,
     });
 
     assert.equal(ok, false);

@@ -50,7 +50,12 @@ function deps({ response = statusResponse(), interactive = false, calls = [] } =
     cwd: '/repo',
     stdin: { isTTY: interactive },
     isInteractive: interactive,
-    getSecret: async () => 'memoro-token-kept-inside-portal',
+    identityBroker: {
+      withGrant: async (_request, use) => use({
+        token: 'short-lived-grant-kept-inside-portal',
+        apiUrl: 'https://meetmemoro.test',
+      }),
+    },
     readConfig: async () => ({ apiUrl: 'https://meetmemoro.test' }),
     getRepoContext: async () => ({
       toplevel: '/repo',

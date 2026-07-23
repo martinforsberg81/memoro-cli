@@ -43,6 +43,20 @@ function makeSession() {
   };
 }
 
+function grantClient(sourceId = 'local:device:test') {
+  return {
+    withGrant: async (_provider, request, use) => use({
+      token: 'short-lived-grant-sentinel',
+      apiUrl: 'https://memoro.test',
+      source: {
+        id: sourceId,
+        kind: sourceId.startsWith('cloud:') ? 'cloud' : 'local',
+      },
+      codingSessionId: request.codingSessionId,
+    }),
+  };
+}
+
 function fakeCreateServer(handler) {
   const server = new EventEmitter();
   server.handler = handler;
@@ -81,6 +95,7 @@ async function startRealGitHubSidecar({ paths, memoroFetchImpl }) {
       upload: false,
     },
     wsClientFactory: () => ({ start() {}, stop() {} }),
+    connectionClient: grantClient(),
     memoroFetchImpl,
   }).start();
   if (!sidecars.dispatchServer.listening) await once(sidecars.dispatchServer, 'listening');
@@ -210,6 +225,7 @@ describe('BrokerSessionSidecars', () => {
       },
       createServerImpl: fakeCreateServer,
       wsClientFactory: () => ({ start() {}, stop() {} }),
+      connectionClient: grantClient('cloud:cld_123456'),
       memoroFetchImpl: async (apiUrl, path, options) => {
         requests.push({ apiUrl, path, options });
         return {
@@ -234,8 +250,8 @@ describe('BrokerSessionSidecars', () => {
 
     assert.equal(requests.length, 1);
     assert.equal(requests[0].path, '/api/mc/github/sessions/sess_abcdef/operations');
-    assert.equal(requests[0].options.sourceId, 'cloud:cld_123456');
-    assert.equal(requests[0].options.token, 'memoro-secret-sentinel');
+    assert.equal(requests[0].options.sourceId, undefined);
+    assert.equal(requests[0].options.token, 'short-lived-grant-sentinel');
     assert.equal('source_id' in requests[0].options.body, false);
     assert.equal('coding_session_id' in requests[0].options.body, false);
     assert.equal('repository' in requests[0].options.body, false);
@@ -267,6 +283,7 @@ describe('BrokerSessionSidecars', () => {
       },
       createServerImpl: fakeCreateServer,
       wsClientFactory: () => ({ start() {}, stop() {} }),
+      connectionClient: grantClient(),
       memoroFetchImpl: async () => { networkCalls += 1; },
     }).start();
 

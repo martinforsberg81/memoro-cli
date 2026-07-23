@@ -35,6 +35,28 @@ export function createConnectionClient(deps = {}) {
     );
   }
 
+  async function withGrant(id, {
+    purpose = 'connection',
+    codingSessionId = null,
+  } = {}, use) {
+    const provider = requireProvider(id);
+    if (provider.custody !== 'control_plane') {
+      throw new Error(`${provider.label} does not use control-plane grants.`);
+    }
+    return identity.withGrant({ provider: id, purpose, codingSessionId }, use);
+  }
+
+  async function call(id, operation, params = {}) {
+    const provider = requireProvider(id);
+    const invoke = provider[operation];
+    if (typeof invoke !== 'function' || ['status', 'connect', 'disconnect'].includes(operation)) {
+      throw new Error(`Unsupported ${provider.label} connection operation.`);
+    }
+    return withGrant(id, { purpose: 'connection' }, ({ token, apiUrl }) => (
+      invoke.call(provider, { grant: token, apiUrl, memoroFetch: fetch, params })
+    ));
+  }
+
   async function repair(id) {
     const current = await status(id);
     if (current.state === 'ready') return { descriptor: current, action: null };
@@ -57,6 +79,8 @@ export function createConnectionClient(deps = {}) {
     providers: () => listConnectionProviders(registryDeps),
     status,
     connect,
+    call,
+    withGrant,
     repair,
     async disconnect(id) {
       const provider = requireProvider(id);
