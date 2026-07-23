@@ -36,6 +36,16 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   tools the same convention. The flow is a concise in-session prompt; it does
   not add a terminal `mc map` command or auto-edit the map.
 
+### Changed
+
+- `mc end` now shows one compact session/worktree/branch/provider-artifact
+  status and asks once before permanent teardown. Confirmed or automation-
+  consented teardown removes exact ID-verified Codex/Claude transcripts and
+  auxiliary paths, broker/runtime sidecars, vault materialisation, dirty
+  worktrees, local branches, and registry state, then fails if any contracted
+  artifact remains. Shared provider databases/history/memory/config are never
+  mutated; `--keep-branch` is the explicit exception.
+
 ### Fixed
 - Broker-owned Codex launches now retry twice when Codex exits during startup
   with its specific transient SQLite state/log database lock error. Other

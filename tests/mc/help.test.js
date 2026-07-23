@@ -20,6 +20,14 @@ describe('mc --help', () => {
     assert.match(r.stdout, /mc setup --resource-profile <unlimited\|balanced\|conservative\|custom>/);
     assert.match(r.stdout, /--heavy-max-rss-mb/);
     assert.match(r.stdout, /mc storage prune-generated --dry-run\|--apply/);
+    assert.match(r.stdout, /END IS PERMANENT/);
+    assert.match(r.stdout, /asks y\/n once/);
+    assert.match(r.stdout, /provider transcript \+ ID-bound auxiliary paths/);
+    assert.match(r.stdout, /--force supplies automation consent/);
+    assert.match(r.stdout, /--keep-branch is the explicit branch-retention exception/);
+    assert.match(r.stdout, /Shared provider\s+databases, global history\/config\/memory/);
+    assert.match(r.stdout, /It cannot be resumed/);
+    assert.doesNotMatch(r.stdout, /deal with the branch/);
     assert.match(r.stdout, /Terminal commands manage machines and sessions/);
     assert.match(r.stdout, /Inside a launched LLM session/);
     assert.match(r.stdout, /mc coding-profile read/);

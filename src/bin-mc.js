@@ -304,6 +304,15 @@ COMMON
   mc end [<name>...]              Confirm and permanently remove local session artifacts
   mc rename <old> <new>           Rename branch + worktree + registry entry
 
+END IS PERMANENT
+  Interactive end shows session, dirty/ahead branch state, and exact verified
+  Codex/Claude artifacts, then asks y/n once. y removes the broker/PTY, vault
+  materialisation, provider transcript + ID-bound auxiliary paths, worktree,
+  local branch, runtime sidecars, and registry entry. It cannot be resumed.
+  --force supplies automation consent; it never weakens ownership checks.
+  --keep-branch is the explicit branch-retention exception. Shared provider
+  databases, global history/config/memory, and other sessions are untouched.
+
 START OPTIONS
   mc new <name> [focus] --codex   Start the new session under Codex
   mc new <name> [focus] --claude  Start the new session under Claude Code

@@ -4,6 +4,7 @@ import {
   mkdirSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { join } from 'node:path';
@@ -175,6 +176,35 @@ describe('mc end confirmed teardown', () => {
     assert.equal(registryEntries().length, 2);
   });
 
+  test('an unsafe mc-owned sidecar path blocks before broker or teardown side effects', async () => {
+    const target = makeTarget('unsafe-sidecar');
+    target.entry.coding_session_id = 'coding_unsafe_sidecar';
+    const outside = join(repo.root, 'outside-hosts');
+    mkdirSync(join(outside, target.entry.coding_session_id), { recursive: true });
+    symlinkSync(outside, join(repo.mcHome, 'hosts'));
+    let brokerCalls = 0;
+
+    const result = await invoke(['unsafe-sidecar'], {
+      answer: 'y',
+      entries: [target.entry],
+      roots: target.roots,
+      deps: {
+        removeBrokerSessionForEntry: async () => {
+          brokerCalls += 1;
+          return { ok: true };
+        },
+      },
+    });
+
+    assert.equal(result.code, 1);
+    assert.equal(promptCount(result.stdout), 0);
+    assert.match(result.stderr, /mc-owned artifact paths|symlink-not-allowed/i);
+    assert.equal(brokerCalls, 0);
+    assert.equal(existsSync(target.worktree), true);
+    assert.equal(existsSync(target.transcript), true);
+    assert.equal(registryEntries().length, 1);
+  });
+
   test('authority is revalidated for the whole batch before destructive teardown', async () => {
     const first = makeTarget('first');
     const second = makeTarget('second');
@@ -340,6 +370,38 @@ describe('mc end confirmed teardown', () => {
     assert.equal(registryEntries().length, 1);
   });
 
+  test('a bounded status scan reports truncation and blocks teardown without side effects', async () => {
+    const target = makeTarget('bounded-status');
+    const images = join(target.codexHome, 'generated_images', target.sessionId);
+    mkdirSync(images, { recursive: true });
+    writeFileSync(join(images, 'one.png'), 'one');
+    writeFileSync(join(images, 'two.png'), 'two');
+
+    const result = await invoke(['bounded-status', '--dry-run', '--json'], {
+      isTTY: false,
+      entries: [target.entry],
+      roots: target.roots,
+      deps: {
+        toolArtifactScanPolicy: {
+          max_entries: 1,
+          max_depth: 8,
+          max_bytes: 1024,
+          max_duration_ms: 1_000,
+        },
+      },
+    });
+
+    assert.equal(result.code, 1);
+    const body = JSON.parse(result.stdout);
+    assert.equal(body.error, 'tool-artifact-authority-unverified');
+    assert.equal(body.targets[0].auxiliary.bounded, true);
+    assert.equal(body.targets[0].auxiliary.truncated, true);
+    assert.equal(body.targets[0].auxiliary.reason, 'max-entries');
+    assert.equal(existsSync(target.worktree), true);
+    assert.equal(existsSync(target.transcript), true);
+    assert.equal(registryEntries().length, 1);
+  });
+
   test('historical entries receive exact in-memory authority backfill before status', async () => {
     const target = makeTarget('historical');
     const historical = {
@@ -403,6 +465,94 @@ describe('mc end confirmed teardown', () => {
     assert.equal(registryEntries().length, 1);
   });
 
+  test('confirmed teardown removes exact broker sidecars and the vault manifest', async () => {
+    const target = makeTarget('runtime-owned');
+    target.entry.coding_session_id = 'coding_runtime_owned';
+    const host = join(repo.mcHome, 'hosts', target.entry.coding_session_id);
+    const guard = join(repo.mcHome, 'guard-bin', target.entry.coding_session_id);
+    const sibling = join(repo.mcHome, 'hosts', 'coding_other');
+    const manifest = join(repo.mcHome, 'state', 'runtime-owned-materialised.json');
+    mkdirSync(host, { recursive: true });
+    mkdirSync(guard, { recursive: true });
+    mkdirSync(sibling, { recursive: true });
+    mkdirSync(join(repo.mcHome, 'state'), { recursive: true });
+    writeFileSync(join(host, 'host.json'), '{}');
+    writeFileSync(join(guard, 'node'), 'guard');
+    writeFileSync(manifest, JSON.stringify({ materialised: [] }));
+
+    const result = await invoke(['runtime-owned'], {
+      answer: 'y',
+      entries: [target.entry],
+      roots: target.roots,
+      deps: {
+        shredForSession: async () => {
+          rmSync(manifest);
+          return {
+            ok: true,
+            shredded: [],
+            verification: {
+              manifest_path: manifest,
+              manifest_absent: true,
+              leftovers: [],
+            },
+          };
+        },
+      },
+    });
+
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(existsSync(host), false);
+    assert.equal(existsSync(guard), false);
+    assert.equal(existsSync(manifest), false);
+    assert.equal(existsSync(sibling), true);
+  });
+
+  test('a vault manifest leftover fails final verification and keeps the registry retry recipe', async () => {
+    const target = makeTarget('vault-leftover');
+    const manifest = join(repo.mcHome, 'state', 'vault-leftover-materialised.json');
+    mkdirSync(join(repo.mcHome, 'state'), { recursive: true });
+    writeFileSync(manifest, JSON.stringify({ materialised: [] }));
+
+    const result = await invoke(['vault-leftover'], {
+      answer: 'y',
+      entries: [target.entry],
+      roots: target.roots,
+      deps: {
+        shredForSession: async () => ({ ok: true, shredded: [] }),
+      },
+    });
+
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /vault-manifest/);
+    assert.equal(existsSync(manifest), true);
+    assert.equal(registryEntries().length, 1);
+    assert.equal(
+      registryEntries()[0].tool_artifact_authority_verified.transcript_path,
+      target.transcript,
+    );
+  });
+
+  test('a lingering broker row fails final verification and keeps the registry', async () => {
+    const target = makeTarget('broker-leftover');
+
+    const result = await invoke(['broker-leftover'], {
+      answer: 'y',
+      entries: [target.entry],
+      roots: target.roots,
+      deps: {
+        inspectBrokerSessionAbsence: async () => ({
+          ok: false,
+          state: 'present',
+          issues: [{ code: 'broker-session-leftover' }],
+        }),
+      },
+    });
+
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /broker-session-leftover/);
+    assert.equal(registryEntries().length, 1);
+  });
+
   test('a retry accepts an exact transcript already removed after recorded verification', async () => {
     const target = makeTarget('retry');
 
@@ -433,7 +583,39 @@ describe('mc end confirmed teardown', () => {
     assert.deepEqual(registryEntries(), []);
   });
 
-  test('Claude teardown removes only its exact transcript and leaves auxiliary directories', async () => {
+  test('Codex teardown removes verified auxiliary artifacts and leaves siblings and shared DBs', async () => {
+    const target = makeTarget('codex-auxiliary');
+    const imageDir = join(target.codexHome, 'generated_images', target.sessionId);
+    const imageSibling = join(target.codexHome, 'generated_images', 'other-session');
+    const snapshots = join(target.codexHome, 'shell_snapshots');
+    const ownedSnapshot = join(snapshots, `${target.sessionId}.123.sh`);
+    const siblingSnapshot = join(snapshots, 'other-session.123.sh');
+    const sharedDb = join(target.codexHome, 'logs_2.sqlite');
+    mkdirSync(imageDir, { recursive: true });
+    mkdirSync(imageSibling, { recursive: true });
+    mkdirSync(snapshots, { recursive: true });
+    writeFileSync(join(imageDir, 'image.png'), 'owned');
+    writeFileSync(join(imageSibling, 'image.png'), 'sibling');
+    writeFileSync(ownedSnapshot, 'owned');
+    writeFileSync(siblingSnapshot, 'sibling');
+    writeFileSync(sharedDb, 'shared');
+
+    const result = await invoke(['codex-auxiliary'], {
+      answer: 'y',
+      entries: [target.entry],
+      roots: target.roots,
+    });
+
+    assert.equal(result.code, 0, result.stderr);
+    assert.match(result.stdout, /auxiliary: 2 paths, 2 files/);
+    assert.equal(existsSync(imageDir), false);
+    assert.equal(existsSync(ownedSnapshot), false);
+    assert.equal(existsSync(imageSibling), true);
+    assert.equal(existsSync(siblingSnapshot), true);
+    assert.equal(existsSync(sharedDb), true);
+  });
+
+  test('Claude teardown removes its exact transcript and all verified session directories', async () => {
     const name = 'claude-owned';
     const branch = `sess/${name}`;
     git(repo.dir, `branch ${branch} main`);
@@ -443,22 +625,44 @@ describe('mc end confirmed teardown', () => {
     const projectDir = join(repo.root, '.claude', 'projects', '-repo');
     const transcript = join(projectDir, `${sessionId}.jsonl`);
     const auxiliary = join(projectDir, sessionId, 'subagents', 'agent.jsonl');
+    const fileHistory = join(repo.root, '.claude', 'file-history', sessionId);
+    const sessionEnv = join(repo.root, '.claude', 'session-env', sessionId);
+    const tasks = join(repo.root, '.claude', 'tasks', sessionId);
+    const sibling = join(repo.root, '.claude', 'tasks', 'other-session');
+    const sharedMemory = join(projectDir, 'memory');
     mkdirSync(join(projectDir, sessionId, 'subagents'), { recursive: true });
+    mkdirSync(fileHistory, { recursive: true });
+    mkdirSync(sessionEnv, { recursive: true });
+    mkdirSync(tasks, { recursive: true });
+    mkdirSync(sibling, { recursive: true });
+    mkdirSync(sharedMemory, { recursive: true });
     writeFileSync(transcript, `${JSON.stringify({
       type: 'user',
       sessionId,
       message: { role: 'user', content: 'hello' },
     })}\n`);
     writeFileSync(auxiliary, 'provider-owned auxiliary data');
+    writeFileSync(join(fileHistory, 'file@v1'), 'history');
+    writeFileSync(join(sessionEnv, 'env.sh'), 'env');
+    writeFileSync(join(tasks, '1.json'), 'task');
+    writeFileSync(join(sibling, '1.json'), 'sibling');
+    writeFileSync(join(sharedMemory, 'MEMORY.md'), 'shared');
     const roots = {
       codex: {
+        provider_root: join(repo.root, '.codex'),
         transcript_roots: [
           join(repo.root, '.codex', 'sessions'),
           join(repo.root, '.codex', 'archived_sessions'),
         ],
+        generated_images_root: join(repo.root, '.codex', 'generated_images'),
+        shell_snapshots_root: join(repo.root, '.codex', 'shell_snapshots'),
       },
       'claude-code': {
+        provider_root: join(repo.root, '.claude'),
         transcript_roots: [join(repo.root, '.claude', 'projects')],
+        file_history_root: join(repo.root, '.claude', 'file-history'),
+        session_env_root: join(repo.root, '.claude', 'session-env'),
+        tasks_root: join(repo.root, '.claude', 'tasks'),
       },
     };
     const entry = makeEntry({
@@ -481,7 +685,12 @@ describe('mc end confirmed teardown', () => {
 
     assert.equal(result.code, 0, result.stderr);
     assert.equal(existsSync(transcript), false);
-    assert.equal(existsSync(auxiliary), true);
+    assert.equal(existsSync(join(projectDir, sessionId)), false);
+    assert.equal(existsSync(fileHistory), false);
+    assert.equal(existsSync(sessionEnv), false);
+    assert.equal(existsSync(tasks), false);
+    assert.equal(existsSync(sibling), true);
+    assert.equal(existsSync(sharedMemory), true);
   });
 
   function makeTarget(name, {
@@ -516,13 +725,20 @@ describe('mc end confirmed teardown', () => {
 
     const roots = {
       codex: {
+        provider_root: codexHome,
         transcript_roots: [
           join(codexHome, 'sessions'),
           join(codexHome, 'archived_sessions'),
         ],
+        generated_images_root: join(codexHome, 'generated_images'),
+        shell_snapshots_root: join(codexHome, 'shell_snapshots'),
       },
       'claude-code': {
+        provider_root: join(repo.root, '.claude'),
         transcript_roots: [join(repo.root, '.claude', 'projects')],
+        file_history_root: join(repo.root, '.claude', 'file-history'),
+        session_env_root: join(repo.root, '.claude', 'session-env'),
+        tasks_root: join(repo.root, '.claude', 'tasks'),
       },
     };
     return {

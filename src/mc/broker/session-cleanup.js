@@ -44,7 +44,7 @@ export async function removeBrokerSessionForEntry(entry, {
   return { ok: true, id, removed: removed.removed !== false };
 }
 
-function brokerSessionMatchesEntry(session, entry) {
+export function brokerSessionMatchesEntry(session, entry) {
   if (!session || !entry) return false;
 
   const sessionId = brokerSessionId(session);

@@ -8,8 +8,8 @@
  *   - `--keep-branch` retains the branch regardless.
  *   - Bulk: `mc end a b c` operates sequentially.
  *   - `--dry-run` prints one line per target with verdict, no side effects.
- *   - Squash-merge phantoms (§9b) end without prompting — the work is
- *     already on main under a different SHA.
+ *   - Squash-merge phantoms (§9b) affect status only; they never bypass
+ *     permanent-teardown confirmation.
  *
  * Phantom detection mocking: the plan §9b uses `gh pr list --head` to
  * confirm a recent merged PR. Tests can't hit GitHub, so the
@@ -43,7 +43,7 @@ describe('mc end', () => {
     assert.match(r.stderr + r.stdout, /unknown|not.found|no such/i);
   });
 
-  test('refuses to end a worktree with uncommitted changes (no --force)', () => {
+  test('non-interactive dirty teardown requires explicit automation consent', () => {
     // Create a worktree with a dirty file.
     makeBranchWithCommit(repo.dir, 'sess/dirty', 'tmp.txt', 'committed\n');
     const wtPath = join(repo.mcHome, 'worktrees', 'repo', 'dirty');
@@ -66,7 +66,7 @@ describe('mc end', () => {
     assert.match(r.stderr + r.stdout, /dirty|uncommitted|force/i);
   });
 
-  test('refuses to end a live session without --force', () => {
+  test('non-interactive live teardown requires explicit automation consent', () => {
     makeBranchWithCommit(repo.dir, 'sess/live', 'tmp.txt');
     const wtPath = join(repo.mcHome, 'worktrees', 'repo', 'live');
     addWorktree(repo.dir, wtPath, 'sess/live');
@@ -110,9 +110,11 @@ describe('mc end', () => {
       safety_verdict: 'IS_ACTIVE_NOW',
     })]);
 
-    const { result, stdout } = await runEndInProcess(repo, ['live-confirm'], 'y');
+    const { result, stdout, stderr } = await runEndInProcess(repo, ['live-confirm'], 'y', {
+      removeBrokerSessionForEntry: async () => ({ ok: true, removed: true }),
+    });
 
-    assert.equal(result, 0);
+    assert.equal(result, 0, stderr);
     assert.match(stdout, /Avsluta och ta bort allt sessionsbundet lokalt\? y\/n/);
     assert.match(stdout, /mc: ended live-confirm/);
     const wts = git(repo.dir, 'worktree list --porcelain');
@@ -449,6 +451,13 @@ async function runEndInProcess(repo, argv, answer, extraDeps = {}) {
           totals: { paths: 0, files: 0, bytes: 0 },
           issues: [],
         }),
+        deleteOwnedToolArtifacts: async () => ({
+          ok: true,
+          removed: [],
+          leftovers: [],
+          verification: { state: 'none', safe_to_delete: true, artifacts: [] },
+        }),
+        inspectBrokerSessionAbsence: async () => ({ ok: true, state: 'absent', issues: [] }),
         shredForSession: async () => ({ ok: true, shredded: [] }),
         ...extraDeps,
       },
