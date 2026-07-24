@@ -369,6 +369,7 @@ SETUP
 
 SECRETS
   mc vault status                 Show vault setup + lock state
+  mc vault audit [--cleanup]      Audit legacy exposure metadata safely
   mc vault setup                  Create a Memoro-account token vault
   mc vault unlock                 Unlock and cache the vault key briefly
   mc vault scan [file...]         Scan dotenv files for import candidates

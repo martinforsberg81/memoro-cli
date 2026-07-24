@@ -64,6 +64,21 @@ describe('mc vault — subprocess wiring', () => {
     assert.equal(res.status, 0);
   });
 
+  it('`mc vault audit --json` is local, metadata-only, and auth-free', () => {
+    const mcHome = mkdtempSync(join(tmpdir(), 'mc-vault-audit-cli-'));
+    const res = runMc(['vault', 'audit', '--json'], {
+      env: { MC_HOME: mcHome },
+    });
+    assert.equal(res.status, 0, res.stderr);
+    assert.deepEqual(JSON.parse(res.stdout).summary, {
+      manifests: 0,
+      artifacts: 0,
+      leftovers: 0,
+      cleaned_manifests: 0,
+      uncertain: 0,
+    });
+  });
+
   it('`mc vault scan --json` scans local dotenv files without a vault login', () => {
     const dir = mkdtempSync(join(tmpdir(), 'mc-vault-scan-cli-'));
     const secret = 'pancakes-and-syrup-9af237';
