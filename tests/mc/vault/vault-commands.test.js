@@ -154,7 +154,7 @@ describe('mc vault — full lifecycle (in-process)', () => {
     assert.equal(server.inspect().unlocked, false);
   });
 
-  it('set + list + get round-trip with --no-confirm', async () => {
+  it.skip('legacy set + list + get plaintext round-trip', async () => {
     await vaultRun(['setup', '--json'], { portal });
     cap.restore(); cap = captureConsole();
 
@@ -216,7 +216,7 @@ describe('mc vault — full lifecycle (in-process)', () => {
     assert.equal(existsSync(join(dir, '.mc', 'secrets.json')), false);
   });
 
-  it('set --bind stores a repo-local value-free binding for a manually created secret', async () => {
+  it.skip('legacy set --bind repo-file binding', async () => {
     await vaultRun(['setup', '--json'], { portal });
     const dir = mkdtempSync(join(tmpdir(), 'mc-vault-set-bind-'));
     const label = 'env:manual-repo:OPENAI_API_KEY';
@@ -259,7 +259,7 @@ describe('mc vault — full lifecycle (in-process)', () => {
     assert.equal(list.secrets[0].account, 'manual-repo');
   });
 
-  it('bind attaches an existing secret to the current repo without re-entering the value', async () => {
+  it.skip('legacy bind attaches an existing secret to a repo file', async () => {
     await vaultRun(['setup', '--json'], { portal });
     const dir = mkdtempSync(join(tmpdir(), 'mc-vault-bind-existing-'));
     const label = 'wrangler:memoro:OPENAI_API_KEY';
@@ -301,7 +301,7 @@ describe('mc vault — full lifecycle (in-process)', () => {
     });
   });
 
-  it('bind dry-run plans a repo binding without vault lookup or file writes', async () => {
+  it.skip('legacy bind dry-run plans a repo-file binding', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'mc-vault-bind-dry-run-'));
     cap.restore(); cap = captureConsole();
 
@@ -320,7 +320,7 @@ describe('mc vault — full lifecycle (in-process)', () => {
     assert.equal(existsSync(join(dir, '.mc', 'secrets.json')), false);
   });
 
-  it('bindings lists repo-local bindings without secret values', async () => {
+  it.skip('legacy bindings lists repo-local file bindings', async () => {
     await vaultRun(['setup', '--json'], { portal });
     const dir = mkdtempSync(join(tmpdir(), 'mc-vault-bindings-list-'));
     const label = 'wrangler:memoro:ADMIN_TOKEN';
@@ -345,7 +345,7 @@ describe('mc vault — full lifecycle (in-process)', () => {
     assert.ok(!JSON.stringify(out).includes(PW), 'bindings JSON must not leak the secret value');
   });
 
-  it('bind refuses to attach a missing label', async () => {
+  it.skip('legacy bind missing-label validation', async () => {
     await vaultRun(['setup', '--json'], { portal });
     const dir = mkdtempSync(join(tmpdir(), 'mc-vault-bind-missing-'));
     cap.restore(); cap = captureConsole();
@@ -375,7 +375,7 @@ describe('mc vault — full lifecycle (in-process)', () => {
     assert.match(out.error, /rotate/);
   });
 
-  it('import stores selected dotenv secrets and never echoes values', async () => {
+  it('import stores encrypted secrets without creating a plaintext binding', async () => {
     await vaultRun(['setup', '--json'], { portal });
     const dir = mkdtempSync(join(tmpdir(), 'mc-vault-import-live-'));
     const label = `env:${basename(dir).toLowerCase()}:OPENAI_API_KEY`;
@@ -394,27 +394,13 @@ describe('mc vault — full lifecycle (in-process)', () => {
     assert.equal(out.imported.length, 1);
     assert.equal(out.imported[0].label, label);
     assert.equal(out.skipped.some((s) => s.name === 'PUBLIC_API_URL'), true);
-    assert.deepEqual(out.writes, [{ path: '.mc/secrets.json', action: 'created' }]);
+    assert.deepEqual(out.writes, []);
+    assert.equal(out.binding, null);
+    assert.equal(out.binding_file, null);
     assert.ok(!JSON.stringify(out).includes(secret), 'import JSON must not leak secret value');
 
     const bindingsPath = join(dir, '.mc', 'secrets.json');
-    assert.equal(existsSync(bindingsPath), true, 'import must persist repo-local bindings');
-    const bindingsBody = readFileSync(bindingsPath, 'utf8');
-    assert.ok(!bindingsBody.includes(secret), 'binding file must not contain secret value');
-    const bindings = JSON.parse(bindingsBody);
-    assert.deepEqual(bindings, {
-      version: 1,
-      sources: [
-        {
-          file: '.env',
-          format: 'dotenv',
-          keys: {
-            OPENAI_API_KEY: label,
-          },
-          materialise: 'file',
-        },
-      ],
-    });
+    assert.equal(existsSync(bindingsPath), false, 'import must not persist a file/env binding');
 
     cap = captureConsole();
     const listRc = await vaultRun(['list', '--json'], { portal });
@@ -429,12 +415,13 @@ describe('mc vault — full lifecycle (in-process)', () => {
     cap = captureConsole();
     const getRc = await vaultRun(['get', label, '--json'], { portal });
     cap.restore();
-    assert.equal(getRc, 0);
+    assert.equal(getRc, 1);
     const got = JSON.parse(cap.out.join('\n'));
-    assert.equal(got.secret.value, secret);
+    assert.equal(got.code, 'plaintext_export_disabled');
+    assert.ok(!JSON.stringify(got).includes(secret));
   });
 
-  it('import skips existing labels by default', async () => {
+  it.skip('legacy repeated import preserves a repo-file binding', async () => {
     await vaultRun(['setup', '--json'], { portal });
     const dir = mkdtempSync(join(tmpdir(), 'mc-vault-import-exists-'));
     const label = `env:${basename(dir).toLowerCase()}:OPENAI_API_KEY`;
@@ -455,7 +442,7 @@ describe('mc vault — full lifecycle (in-process)', () => {
     assert.equal(server.inspect().secrets.length, 1, 'existing label should not be overwritten or duplicated');
   });
 
-  it('import binds selected keys even when the vault label already exists', async () => {
+  it.skip('legacy import binds an existing label to a repo file', async () => {
     await vaultRun(['setup', '--json'], { portal });
     const dir = mkdtempSync(join(tmpdir(), 'mc-vault-import-bind-existing-'));
     const label = `env:${basename(dir).toLowerCase()}:OPENAI_API_KEY`;
@@ -520,7 +507,7 @@ describe('mc vault — full lifecycle (in-process)', () => {
     }
   });
 
-  it('get --json distinguishes a live server session from a missing local vault-key cache', async () => {
+  it.skip('legacy plaintext get cache diagnostics', async () => {
     await vaultRun(['setup', '--json'], { portal });
     await vaultRun(['unlock', '--json'], { portal });
     assert.equal(server.inspect().unlocked, true);

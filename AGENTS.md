@@ -10,4 +10,4 @@ It is not a Coding Profile mirror; user work-method changes live in
 Memoro and are handled with `mc coding-profile read|diff|write`.
 Hand-edits here will be flagged as drift on the next sync.
 
-<!-- mc-adapter-sync:version=4d08ac5d4efc -->
+<!-- mc-adapter-sync:version=aa466d8ac684 -->

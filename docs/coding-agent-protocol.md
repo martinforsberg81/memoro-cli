@@ -99,10 +99,17 @@ only after the user approves. When no profile exists, `read --json` returns
 
   The shape is gated by two contract tests:
   `tests/adapters/get-status-contract.test.js` (status surface) and
-  `tests/adapters/materialise.test.js` (file-write helper).
+  `tests/adapters/materialise.test.js` (credential-blind refusal).
 
 ## GitHub interaction in coding sessions
 
+- `docs/plans/credential-blind-capabilities.md` is the normative
+  confidentiality and provider-execution contract. No mc vault secret may be
+  exposed in plaintext to an LLM-controlled process, command, file,
+  environment, argv, output, log, transcript, browser payload, credential
+  helper, or inspectable peer process. Vault secrets back typed capabilities;
+  they are never materialised for Codex, Claude, generic adapters, or repo
+  dotenv files.
 - `docs/plans/connected-capabilities.md` is the normative foundation for every
   external connection. GitHub, Cloudflare, LLM tools, and future providers
   share one connection registry, token-free descriptors, readiness/repair

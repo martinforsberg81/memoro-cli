@@ -72,8 +72,9 @@ describe('mc auth status', () => {
     assert.equal(codex.adapter_support.permissions.workspace, 'supported');
     assert.equal(codex.adapter_support.permissions.network, 'unsupported');
     assert.equal(codex.adapter_support.permissions.approval, 'supported');
-    assert.equal(claude.secrets.vault_required, true);
-    assert.equal(claude.secrets.materialisation_targets[0].provider, 'anthropic');
+    assert.equal(claude.secrets.vault_required, false);
+    assert.equal(claude.secrets.native_auth_owned_by_tool, true);
+    assert.deepEqual(claude.secrets.materialisation_targets, []);
   });
 
   test('--json policy section honours repo .mc/policy.json', () => {

@@ -33,6 +33,7 @@ import {
   shredForSession,
   manifestPath,
 } from '../../../src/mc/vault/lifecycle.js';
+import { materialiseRepoBoundSecrets } from '../../../src/mc/vault/repo-materialise.js';
 import {
   deriveVaultKeys,
   encryptSecretPayload,
@@ -142,7 +143,7 @@ function writeRepoBindings(worktree, keys, file = '.env') {
   }, null, 2));
 }
 
-describe('materialiseForSession', () => {
+describe.skip('legacy materialiseForSession behavior (credential-blind containment)', () => {
   let mcHomeDir;
   before(() => {
     mcHomeDir = mkdtempSync(join(tmpdir(), 'mc-vault-lifecycle-'));
@@ -546,6 +547,73 @@ describe('materialiseForSession', () => {
     const serialised = JSON.stringify(res);
     assert.ok(!serialised.includes(TOKEN_CLAUDE),
       `materialiseForSession return leaked: ${serialised}`);
+  });
+});
+
+describe('credential-blind materialiseForSession', () => {
+  it('returns before vault, adapter, repo, manifest, or hook side effects', async () => {
+    const forbidden = () => {
+      throw new Error('credential-bearing dependency must not be called');
+    };
+    const adapter = {
+      TOOL_NAME: 'generic',
+      tokenLocations: forbidden,
+      materializeToken: forbidden,
+    };
+    const result = await materialiseForSession({
+      sessionId: 'credential-blind',
+      worktreePath: '/must-not-be-read',
+      portal: new Proxy({}, { get: forbidden }),
+      adapters: [adapter],
+      deps: {
+        mkdir: forbidden,
+        writeFile: forbidden,
+        readFile: forbidden,
+        cacheDeps: new Proxy({}, { get: forbidden }),
+      },
+    });
+
+    assert.deepEqual(result, {
+      ok: true,
+      policy: 'credential-blind-v1',
+      materialised: [],
+      skipped: [{ reason: 'plaintext-materialisation-disabled' }],
+    });
+  });
+
+  it('repo dotenv materialisation refuses a decrypted value without filesystem access', async () => {
+    const forbidden = () => {
+      throw new Error('filesystem dependency must not be called');
+    };
+    const result = await materialiseRepoBoundSecrets({
+      bindings: {
+        version: 1,
+        sources: [{
+          file: '.env',
+          format: 'dotenv',
+          materialise: 'file',
+          keys: { API_TOKEN: 'provider-secret' },
+        }],
+      },
+      matches: [{
+        label: 'provider-secret',
+        payload: { token: 'sentinel-must-not-be-written' },
+      }],
+      worktreePath: '/must-not-be-written',
+      sessionId: 'credential-blind',
+      deps: {
+        existsSync: forbidden,
+        readFile: forbidden,
+        writeFile: forbidden,
+        mkdir: forbidden,
+      },
+    });
+
+    assert.deepEqual(result, {
+      materialised: [],
+      skipped: [{ tool: 'repo', reason: 'plaintext-materialisation-disabled' }],
+    });
+    assert.doesNotMatch(JSON.stringify(result), /sentinel-must-not-be-written/);
   });
 });
 

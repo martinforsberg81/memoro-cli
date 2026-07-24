@@ -383,18 +383,14 @@ describe('mc status <name>', () => {
     }
   });
 
-  test('Claude status reports legacy Anthropic vault target', () => {
+  test('Claude status reports native auth with no vault target', () => {
     const r = runMc(['status', 'safe', '--json'], { env: { MC_HOME: mcHome } });
     assert.equal(r.status, 0, `stderr:${r.stderr}`);
     const j = parseJsonOrNull(r.stdout);
     assert.equal(j.effective_policy.permissions.rendered_for, 'claude');
-    assert.equal(j.effective_policy.secrets.vault_required, true);
-    assert.deepEqual(j.effective_policy.secrets.materialisation_targets, [{
-      tool: 'claude',
-      provider: 'anthropic',
-      source: 'legacy-provider-mapping',
-      target_auth_mode: 'api_key',
-    }]);
+    assert.equal(j.effective_policy.secrets.vault_required, false);
+    assert.equal(j.effective_policy.secrets.native_auth_owned_by_tool, true);
+    assert.deepEqual(j.effective_policy.secrets.materialisation_targets, []);
   });
 
   test('status reads repo policy from the session worktree', () => {

@@ -114,13 +114,13 @@ function missingValue(opts, flag) {
 }
 
 function printUsage(stream = process.stdout) {
-  stream.write(`mc tool-auth — cloud tool login hydration and persistence
+  stream.write(`mc tool-auth — disabled legacy vault-to-tool auth bridge
 
 USAGE
   mc tool-auth hydrate --tool <codex|claude> [--cloud-session-id <cld_id>] [--json]
   mc tool-auth persist --tool <codex|claude> [--cloud-session-id <cld_id>] [--json]
 
-The command reports only readiness metadata. It never prints provider auth JSON,
-tokens, refresh tokens, or decrypted vault payloads.
+Vault-backed hydrate/persist is disabled by the credential-blind capability
+contract. Complete native tool login or use a typed provider capability.
 `);
 }

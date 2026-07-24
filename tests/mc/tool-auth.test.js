@@ -98,7 +98,7 @@ describe('tool auth specs', () => {
   });
 });
 
-describe('hydrateToolAuth', () => {
+describe.skip('legacy vault-backed hydrateToolAuth', () => {
   test('hydrates codex auth JSON from vault without exposing the artifact', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'mc-tool-auth-hydrate-'));
     const { portal, vaultKey, vaultKeyBytes } = await bootstrapVault();
@@ -143,7 +143,7 @@ describe('hydrateToolAuth', () => {
   });
 });
 
-describe('persistToolAuth', () => {
+describe.skip('legacy vault-backed persistToolAuth', () => {
   test('creates tool_auth.codex from a runtime Codex auth file', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'mc-tool-auth-persist-'));
     const codexHome = join(dir, 'codex-home');
@@ -201,4 +201,36 @@ describe('persistToolAuth', () => {
     assert.equal(res.changed, false);
     assert.equal(res.reason, 'unchanged');
   });
+});
+
+describe('credential-blind tool auth containment', () => {
+  for (const [verb, invoke] of [
+    ['hydrate', hydrateToolAuth],
+    ['persist', persistToolAuth],
+  ]) {
+    test(`${verb} never reads vault or native auth files`, async () => {
+      const forbidden = () => {
+        throw new Error('credential-bearing dependency must not be called');
+      };
+      const result = await invoke({
+        tool: 'codex',
+        cloudSessionId: 'cld_runtime1',
+        env: { MC_HOME: '/runtime/mc' },
+        portal: new Proxy({}, { get: forbidden }),
+        deps: {
+          readAuthFile: forbidden,
+          writeAuthFile: forbidden,
+          cacheDeps: new Proxy({}, { get: forbidden }),
+        },
+      });
+
+      assert.equal(result.ok, true);
+      assert.equal(result.reason, 'vault-tool-auth-disabled');
+      assert.equal(result.repair_action, 'complete_tool_login');
+      assert.equal(result.repair_required, true);
+      assert.equal(result.hydrated || false, false);
+      assert.equal(result.persisted || false, false);
+      assert.doesNotMatch(JSON.stringify(publicToolAuthResult(result)), /token|authPath/i);
+    });
+  }
 });
