@@ -15,52 +15,10 @@ export async function materialiseRepoBoundSecrets({
   sessionId,
   deps = {},
 } = {}) {
-  if (!bindings || !worktreePath) return { materialised: [], skipped: [] };
-
-  const byLabel = new Map((matches || []).map((m) => [m.label, m]));
-  const grouped = groupBindingsByFile(bindings);
-  const materialised = [];
-  const skipped = [];
-
-  for (const [sourceFile, keys] of grouped) {
-    const target = resolveBoundPath(worktreePath, sourceFile);
-    if (!target.ok) {
-      skipped.push({ tool: REPO_SECRET_TOOL, source: sourceFile, reason: target.reason });
-      continue;
-    }
-
-    const values = [];
-    for (const [key, label] of Object.entries(keys)) {
-      const match = byLabel.get(label);
-      if (!match?.payload?.token) {
-        skipped.push({ tool: REPO_SECRET_TOOL, source: sourceFile, key, label, reason: 'bound-secret-missing' });
-        continue;
-      }
-      values.push({ key, label, value: match.payload.token });
-    }
-    if (values.length !== Object.keys(keys).length) continue;
-
-    const plan = await planDotenvWrite(target.path, values, { deps });
-    if (!plan.ok) {
-      skipped.push(...plan.skipped.map((s) => ({ tool: REPO_SECRET_TOOL, source: sourceFile, ...s })));
-      continue;
-    }
-    await writeDotenvPlan(plan, { deps });
-    materialised.push({
-      tool: REPO_SECRET_TOOL,
-      label: `repo:${sourceFile}`,
-      location: {
-        type: REPO_SECRET_LOCATION_TYPE,
-        path: target.path,
-        source: sourceFile,
-        keys: values.map((v) => v.key),
-        labels: values.map((v) => v.label),
-      },
-      materializedPath: target.path,
-    });
-  }
-
-  return { materialised, skipped };
+  return {
+    materialised: [],
+    skipped: [{ tool: REPO_SECRET_TOOL, reason: 'plaintext-materialisation-disabled' }],
+  };
 }
 
 export async function shredRepoMaterialisation({ location, deps = {} } = {}) {

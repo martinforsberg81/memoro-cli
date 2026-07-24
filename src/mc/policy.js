@@ -11,12 +11,6 @@ import { POLICY_SUPPORT as CLAUDE_POLICY_SUPPORT } from '../adapters/claude-code
 import { POLICY_SUPPORT as CODEX_POLICY_SUPPORT } from '../adapters/codex.js';
 import { DEFAULT_TOOL } from '../lib/config.js';
 
-const LEGACY_PROVIDER_TARGETS = Object.freeze({
-  claude: [{ provider: 'anthropic', source: 'legacy-provider-mapping', target_auth_mode: 'api_key' }],
-  codex: [],
-  gemini: [],
-});
-
 const DEFAULT_PERMISSIONS = Object.freeze({
   profile: 'default',
   workspace: 'worktree',
@@ -43,11 +37,7 @@ export function resolveEffectivePolicy({ entry = {}, tool = null, repoPolicy = n
     Object.prototype.hasOwnProperty.call(selectedPermissions, field)
   ));
 
-  const legacyTargets = LEGACY_PROVIDER_TARGETS[selectedTool] || [];
-  const materialisationTargets = legacyTargets.map((target) => ({
-    tool: selectedTool,
-    ...target,
-  }));
+  const materialisationTargets = [];
 
   return {
     permissions,
@@ -58,7 +48,7 @@ export function resolveEffectivePolicy({ entry = {}, tool = null, repoPolicy = n
     },
     secrets: {
       vault_required: materialisationTargets.length > 0,
-      native_auth_owned_by_tool: materialisationTargets.length === 0,
+      native_auth_owned_by_tool: true,
       materialisation_targets: materialisationTargets,
     },
   };

@@ -427,18 +427,9 @@ export async function getStatus({
 // disk shape (confirmed in drev 3) is
 //   { "anthropic": { "apiKey": "<token>" } }
 // We materialise that exactly, mode 0600. The model running inside
-// Claude Code never needs to *read* this file — only the tool process
-// does. Phase 3 of the plan will install a PreToolUse hook that denies
-// model reads of this path; phase 2 just gets the materialisation +
-// shred lifecycle right.
-//
-// `env` location is declared but not directly writable by the mc
-// parent — child processes get their env from `spawn` calls, and
-// `mc new` doesn't currently spawn the tool with custom env (it re-
-// execs into wrap mode, which spawns claude with parent env). We
-// return `{ ok: false, reason: 'env-only' }` for env locations so the
-// caller can surface a "set this env var manually" hint without
-// failing the whole flow.
+// Native Claude auth remains owned by Claude. mc never converts a vault secret
+// into ~/.claude/.credentials.json or an environment variable. The shred
+// function remains only for cleanup of artifacts created by older mc versions.
 // ─────────────────────────────────────────────────────────────
 
 /**
@@ -446,14 +437,7 @@ export async function getStatus({
  * location known".
  */
 export function tokenLocations() {
-  return [
-    {
-      type: 'file',
-      path: join(claudeDir(), '.credentials.json'),
-      format: 'json',
-      shape: 'anthropic-credentials-v1',
-    },
-  ];
+  return [];
 }
 
 /**
@@ -471,24 +455,7 @@ export function tokenLocations() {
  * @param {object} [arg.deps]      - test injection for writeProtectedFile
  */
 export async function materializeToken({ token, location, sessionId, deps = {} } = {}) {
-  if (!token || typeof token !== 'string') {
-    return { ok: false, reason: 'token required' };
-  }
-  if (!location || typeof location !== 'object') {
-    return { ok: false, reason: 'location required' };
-  }
-  if (location.type === 'env') {
-    return { ok: false, reason: 'env-only', envName: location.name || null };
-  }
-  if (location.type !== 'file') {
-    return { ok: false, reason: `unsupported location type: ${location.type}` };
-  }
-  // Shape decision lives here — keep it tight. The body must NEVER be
-  // logged or echoed by writeProtectedFile (verified by the
-  // no-token-leak tests in tests/mc/vault/vault-cli.test.js).
-  const body = JSON.stringify({ anthropic: { apiKey: token } });
-  const path = await writeProtectedFile(location.path, body, { deps });
-  return { ok: true, materializedPath: path };
+  return { ok: false, reason: 'plaintext-materialisation-disabled' };
 }
 
 /**

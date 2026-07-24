@@ -87,68 +87,15 @@ export async function hydrateToolAuth({
   const spec = resolveToolAuthSpec({ tool, cloudSessionId, env });
   if (!spec.ok) return publicResult({ ok: false, ...spec });
 
-  const context = await resolveVaultContext({ portal, env, deps });
-  if (!context.ok) {
-    return publicResult({
-      ok: true,
-      tool: spec.tool,
-      label: spec.label,
-      present: false,
-      hydrated: false,
-      repair_required: true,
-      repair_action: context.repair_action || 'unlock_vault',
-      reason: context.reason,
-      env: spec.launchEnv,
-    });
-  }
-
-  const found = await findToolAuthSecret({
-    portal: context.portal,
-    vaultKey: context.vaultKey,
-    label: spec.label,
-  });
-  if (!found) {
-    return publicResult({
-      ok: true,
-      tool: spec.tool,
-      label: spec.label,
-      present: false,
-      hydrated: false,
-      repair_required: true,
-      repair_action: 'complete_tool_login',
-      reason: 'profile-missing',
-      env: spec.launchEnv,
-    });
-  }
-
-  const payload = normaliseSecretPayload(found.data);
-  const raw = payload?.token;
-  const normalized = normalizeAuthArtifact(raw, spec);
-  if (!normalized.ok) {
-    return publicResult({
-      ok: true,
-      tool: spec.tool,
-      label: spec.label,
-      present: true,
-      hydrated: false,
-      repair_required: true,
-      repair_action: 'reauthorize_tool',
-      reason: normalized.reason,
-      env: spec.launchEnv,
-    });
-  }
-
-  const write = deps.writeAuthFile || writeAuthFile;
-  await write(spec.authPath, normalized.body, deps);
   return publicResult({
     ok: true,
     tool: spec.tool,
     label: spec.label,
-    present: true,
-    hydrated: true,
-    repair_required: false,
-    repair_action: null,
-    reason: null,
+    present: false,
+    hydrated: false,
+    repair_required: true,
+    repair_action: 'complete_tool_login',
+    reason: 'vault-tool-auth-disabled',
     env: spec.launchEnv,
   });
 }
@@ -163,106 +110,16 @@ export async function persistToolAuth({
   const spec = resolveToolAuthSpec({ tool, cloudSessionId, env });
   if (!spec.ok) return publicResult({ ok: false, ...spec });
 
-  const read = deps.readAuthFile || readAuthFile;
-  const artifact = await read(spec.authPath, spec, deps);
-  if (!artifact.exists) {
-    return publicResult({
-      ok: true,
-      tool: spec.tool,
-      label: spec.label,
-      present: false,
-      persisted: false,
-      changed: false,
-      repair_required: false,
-      repair_action: 'complete_tool_login',
-      reason: 'auth-file-missing',
-      env: spec.launchEnv,
-    });
-  }
-  if (!artifact.ok) {
-    return publicResult({
-      ok: true,
-      tool: spec.tool,
-      label: spec.label,
-      present: true,
-      persisted: false,
-      changed: false,
-      repair_required: true,
-      repair_action: 'reauthorize_tool',
-      reason: artifact.reason,
-      env: spec.launchEnv,
-    });
-  }
-
-  const context = await resolveVaultContext({ portal, env, deps });
-  if (!context.ok) {
-    return publicResult({
-      ok: true,
-      tool: spec.tool,
-      label: spec.label,
-      present: true,
-      persisted: false,
-      changed: false,
-      repair_required: true,
-      repair_action: context.repair_action || 'unlock_vault',
-      reason: context.reason,
-      env: spec.launchEnv,
-    });
-  }
-
-  const found = await findToolAuthSecret({
-    portal: context.portal,
-    vaultKey: context.vaultKey,
-    label: spec.label,
-  });
-  const nextPayload = toolAuthPayload(spec, artifact.body);
-  if (found) {
-    const existing = normaliseSecretPayload(found.data);
-    const existingArtifact = normalizeAuthArtifact(existing?.token, spec);
-    if (existingArtifact.ok && existingArtifact.body === artifact.body) {
-      return publicResult({
-        ok: true,
-        tool: spec.tool,
-        label: spec.label,
-        present: true,
-        persisted: true,
-        changed: false,
-        repair_required: false,
-        repair_action: null,
-        reason: 'unchanged',
-        env: spec.launchEnv,
-      });
-    }
-    const enc = await encryptSecretPayload(context.vaultKey, spec.label, nextPayload);
-    await VaultApi.updateSecret(context.portal, found.id, vaultWriteBody(enc));
-    return publicResult({
-      ok: true,
-      tool: spec.tool,
-      label: spec.label,
-      present: true,
-      persisted: true,
-      changed: true,
-      action: 'updated',
-      repair_required: false,
-      repair_action: null,
-      reason: null,
-      env: spec.launchEnv,
-    });
-  }
-
-  const enc = await encryptSecretPayload(context.vaultKey, spec.label, nextPayload);
-  await VaultApi.createSecret(context.portal, vaultWriteBody(enc));
   return publicResult({
     ok: true,
     tool: spec.tool,
     label: spec.label,
-    present: true,
-    persisted: true,
-    changed: true,
-    action: 'created',
-    repair_required: false,
-    repair_action: null,
-    reason: null,
+    present: false,
+    persisted: false,
+    changed: false,
+    repair_required: true,
+    repair_action: 'complete_tool_login',
+    reason: 'vault-tool-auth-disabled',
     env: spec.launchEnv,
   });
 }

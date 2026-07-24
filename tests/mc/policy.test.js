@@ -32,17 +32,12 @@ describe('resolveEffectivePolicy', () => {
     assert.deepEqual(policy.secrets.materialisation_targets, []);
   });
 
-  test('Claude reports the current legacy Anthropic provider mapping', () => {
+  test('Claude owns native auth and has no vault materialisation target', () => {
     const policy = resolveEffectivePolicy({ entry: { tool: 'claude' } });
     assert.equal(policy.permissions.rendered_for, 'claude');
-    assert.equal(policy.secrets.vault_required, true);
-    assert.equal(policy.secrets.native_auth_owned_by_tool, false);
-    assert.deepEqual(policy.secrets.materialisation_targets, [{
-      tool: 'claude',
-      provider: 'anthropic',
-      source: 'legacy-provider-mapping',
-      target_auth_mode: 'api_key',
-    }]);
+    assert.equal(policy.secrets.vault_required, false);
+    assert.equal(policy.secrets.native_auth_owned_by_tool, true);
+    assert.deepEqual(policy.secrets.materialisation_targets, []);
   });
 
   test('policy source precedence is session > repo > global > default', () => {

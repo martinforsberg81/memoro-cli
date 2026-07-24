@@ -373,12 +373,12 @@ SECRETS
   mc vault unlock                 Unlock and cache the vault key briefly
   mc vault scan [file...]         Scan dotenv files for import candidates
   mc vault import <file>           Import dotenv secrets into the vault
-  mc vault import <file> --dry-run Preview value-free import bindings
+  mc vault import <file> --dry-run Preview encrypted import candidates
   mc vault set <label>            Store a secret
   mc vault list                   List secret labels, never values
-  mc vault get <label>            Print a secret value, with confirmation
+  mc vault get <label>            Disabled: plaintext export is forbidden
   mc vault rm|rotate|lock         Manage stored secrets
-  mc tool-auth hydrate|persist    Internal cloud tool auth vault bridge
+  mc tool-auth hydrate|persist    Disabled legacy vault-to-tool bridge
 
 FLEET / ADVANCED
   mc spawn <name> "<brief>"       Create durable child project session
@@ -444,9 +444,9 @@ WHAT HAPPENS ON START
   Fresh starts (\`mc\`, \`mc new\`) inject project grounding before the
   coding tool wakes: compact User Profile and Coding Profile context when
   available, mc session identity/repo metadata, plus the current focus. mc does
-  not create or read a repo-local MEMORO.md in the normal startup path. If the
-  vault is locked, mc can offer to unlock it before launch so tokens materialise
-  for the tool.
+  not create or read a repo-local MEMORO.md in the normal startup path. Vault
+  plaintext is never materialised for the coding tool; provider access uses
+  token-free typed capabilities.
 
   \`mc open\` first attaches to a live broker-owned PTY when one exists,
   preserving that session surface without sending a new prompt. If no

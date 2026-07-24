@@ -18,7 +18,7 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
@@ -84,7 +84,7 @@ describe('mc vault — subprocess wiring', () => {
     ]);
   });
 
-  it('`mc vault import --dry-run --json` previews bindings without a vault login or secret leak', () => {
+  it('`mc vault import --dry-run --json` previews encrypted import without bindings or secret leak', () => {
     const dir = mkdtempSync(join(tmpdir(), 'mc-vault-import-cli-'));
     const secret = 'pancakes-and-syrup-9af237';
     writeFileSync(join(dir, '.env'), `OPENAI_API_KEY=${secret}\nPUBLIC_API_URL=http://localhost:8787\n`);
@@ -96,12 +96,13 @@ describe('mc vault — subprocess wiring', () => {
 
     const parsed = JSON.parse(res.stdout);
     assert.equal(parsed.ok, true);
+    assert.equal(parsed.binding, null);
+    assert.equal(parsed.binding_disabled, true);
     assert.equal(parsed.dry_run, true);
     assert.deepEqual(parsed.candidates.map((k) => [k.name, k.selected]), [
       ['OPENAI_API_KEY', true],
       ['PUBLIC_API_URL', false],
     ]);
-    assert.equal(parsed.binding.sources[0].keys.OPENAI_API_KEY.endsWith(':OPENAI_API_KEY'), true);
     assert.deepEqual(parsed.writes, []);
   });
 
@@ -153,7 +154,7 @@ describe('mc vault — subprocess wiring', () => {
     });
     assert.equal(res.status, 1, res.stderr);
     assert.match(res.stdout, /Vault import preview: \.env/);
-    assert.match(res.stdout, /write\s+vault entries \+ \.mc\/secrets\.json after confirmation; source file unchanged/);
+    assert.match(res.stdout, /write\s+encrypted vault entries after confirmation; source file unchanged/);
     assert.match(res.stdout, /No changes yet\. Confirm to import selected secrets into mc vault\./);
     assert.doesNotMatch(res.stdout, /write\s+nothing \(dry-run\)/);
     assert.ok(!res.stdout.includes(secret), `human import preview leaked secret value: ${res.stdout}`);
@@ -170,7 +171,7 @@ describe('mc vault — subprocess wiring', () => {
     assert.match(parsed.error, /requires --no-confirm/);
   });
 
-  it('`mc vault bind --dry-run --json` previews a value-free repo binding without login', () => {
+  it('`mc vault bind` fails closed before login or file writes', () => {
     const dir = mkdtempSync(join(tmpdir(), 'mc-vault-bind-cli-'));
     const res = runMc([
       'vault',
@@ -182,17 +183,30 @@ describe('mc vault — subprocess wiring', () => {
       '--dry-run',
       '--json',
     ], { cwd: dir });
-    assert.equal(res.status, 0, res.stderr);
+    assert.equal(res.status, 1, res.stderr);
     assert.equal(res.stderr, '');
 
     const parsed = JSON.parse(res.stdout);
-    assert.equal(parsed.ok, true);
-    assert.equal(parsed.dry_run, true);
-    assert.equal(parsed.label, 'wrangler:memoro:OPENAI_API_KEY');
-    assert.equal(parsed.key, 'OPENAI_API_KEY');
-    assert.equal(parsed.file, '.dev.vars');
-    assert.deepEqual(parsed.writes, [{ path: '.mc/secrets.json', action: 'created' }]);
+    assert.equal(parsed.ok, false);
+    assert.equal(parsed.code, 'plaintext_binding_disabled');
+    assert.equal(existsSync(join(dir, '.mc', 'secrets.json')), false);
     assert.ok(!res.stdout.includes('sk-'), `bind preview leaked a token-like value: ${res.stdout}`);
+  });
+
+  it('plaintext export and set --bind fail closed before vault access', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mc-vault-containment-cli-'));
+    const probes = [
+      ['vault', 'get', 'provider-secret', '--json', '--no-confirm'],
+      ['vault', 'set', 'provider-secret', '--bind', 'API_TOKEN', '--json', '--no-confirm'],
+    ];
+    for (const argv of probes) {
+      const res = runMc(argv, { cwd: dir });
+      assert.equal(res.status, 1, `${argv.join(' ')}\n${res.stderr}`);
+      const parsed = JSON.parse(res.stdout);
+      assert.equal(parsed.ok, false);
+      assert.match(parsed.code, /^plaintext_(export|binding)_disabled$/);
+    }
+    assert.equal(existsSync(join(dir, '.mc', 'secrets.json')), false);
   });
 });
 

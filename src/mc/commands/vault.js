@@ -79,10 +79,10 @@ const VERBS = {
   scan:              { handler: cmdScan,             help: 'Scan local dotenv files for import candidates (no values)' },
   import:            { handler: cmdImport,           help: 'Import dotenv secrets into the vault (use --dry-run to preview)' },
   bindings:          { handler: cmdBindings,         help: 'Show repo-local secret bindings (no values)' },
-  bind:              { handler: cmdBind,             help: 'Attach an existing vault secret to this repo' },
+  bind:              { handler: cmdBind,             help: 'Legacy file/env bindings are disabled' },
   list:              { handler: cmdList,             help: 'List secret labels (no values)' },
-  get:               { handler: cmdGet,              help: 'Print a secret (prompts for confirmation)' },
-  set:               { handler: cmdSet,              help: 'Store a new secret (use --bind KEY to attach it to this repo)' },
+  get:               { handler: cmdGet,              help: 'Secret plaintext export is disabled' },
+  set:               { handler: cmdSet,              help: 'Store a new encrypted secret' },
   rm:                { handler: cmdRm,               help: 'Delete a secret' },
   rotate:            { handler: cmdRotate,           help: 'Replace a secret, keeping the old as <label>-prev' },
   'change-password': { handler: cmdChangePassword,   help: 'Change the master password (re-encrypts auth hash)' },
@@ -204,10 +204,11 @@ async function cmdImport(argv, opts = {}) {
 
   const plan = buildVaultImportDryRun(flags.positional[0], { cwd: opts.cwd || process.cwd() });
   if (flags.dryRun) {
+    const safePlan = { ...plan, binding: null, binding_disabled: true };
     if (flags.json) {
-      console.log(JSON.stringify(plan));
+      console.log(JSON.stringify(safePlan));
     } else {
-      printImportPreview(plan, { dryRun: true });
+      printImportPreview(safePlan, { dryRun: true });
     }
     return plan.ok ? 0 : 1;
   }
@@ -259,7 +260,7 @@ function printImportPreview(plan, { dryRun = true } = {}) {
   console.log(`  skip   ${skipped.length} key${skipped.length === 1 ? '' : 's'}`);
   console.log(dryRun
     ? '  write  nothing (dry-run)\n'
-    : `  write  vault entries + ${SECRET_BINDINGS_RELATIVE_PATH} after confirmation; source file unchanged\n`);
+    : '  write  encrypted vault entries after confirmation; source file unchanged\n');
 
   if (plan.warnings?.length) {
     console.log('Warnings');
@@ -294,16 +295,8 @@ function printImportPreview(plan, { dryRun = true } = {}) {
     console.log('');
   }
 
-  console.log('Binding Preview');
-  const bindings = Object.entries(plan.binding?.sources?.[0]?.keys || {});
-  if (!bindings.length) {
-    console.log('  no bindings would be written');
-  } else {
-    const width = Math.max(8, ...bindings.map(([key]) => key.length));
-    for (const [key, label] of bindings) {
-      console.log(`  ${key.padEnd(width)}  -> ${label}`);
-    }
-  }
+  console.log('Bindings');
+  console.log('  disabled — import stores encrypted values only');
   console.log(dryRun
     ? '\nNo changes made. Use --json for the exact machine-readable plan.'
     : '\nNo changes yet. Confirm to import selected secrets into mc vault.');
@@ -311,7 +304,6 @@ function printImportPreview(plan, { dryRun = true } = {}) {
 
 async function importSelectedSecrets({ file, plan, flags, opts }) {
   const cwd = opts.cwd || process.cwd();
-  await planSecretBindingPersistence(plan.binding, { cwd });
 
   const portal = await loadPortal(opts);
   const config = await requireSetup(portal);
@@ -325,8 +317,6 @@ async function importSelectedSecrets({ file, plan, flags, opts }) {
   const existingLabels = await listVaultLabels(portal, vaultKey);
   const imported = [];
   const skipped = [];
-  const bindableLabels = new Set();
-
   for (const candidate of plan.candidates) {
     if (!candidate.selected) {
       skipped.push({ name: candidate.name, label: candidate.label, reason: candidate.decision });
@@ -334,7 +324,6 @@ async function importSelectedSecrets({ file, plan, flags, opts }) {
     }
     if (existingLabels.has(candidate.label)) {
       skipped.push({ name: candidate.name, label: candidate.label, reason: 'label already exists' });
-      bindableLabels.add(candidate.label);
       continue;
     }
     const token = values.get(candidate.name);
@@ -367,29 +356,17 @@ async function importSelectedSecrets({ file, plan, flags, opts }) {
       return 1;
     }
     existingLabels.add(candidate.label);
-    bindableLabels.add(candidate.label);
     imported.push({ name: candidate.name, label: candidate.label, id: res.secret?.id || null });
   }
-
-  const binding = bindingForLabels(plan.binding, bindableLabels);
-  const bindingPlan = bindableLabels.size
-    ? await planSecretBindingPersistence(binding, { cwd })
-    : null;
-  const bindingFile = bindingPlan
-    ? await persistSecretBindingPlan(bindingPlan)
-    : null;
-  const writes = bindingFile?.changed
-    ? [{ path: bindingFile.path, action: bindingFile.action }]
-    : [];
 
   const result = {
     ok: true,
     imported,
     skipped,
     warnings: plan.warnings,
-    binding,
-    binding_file: bindingFile,
-    writes,
+    binding: null,
+    binding_file: null,
+    writes: [],
   };
 
   if (flags.json) {
@@ -467,7 +444,7 @@ async function cmdBindings(argv, opts = {}) {
 function printBindings(result) {
   if (!result.exists || !result.count) {
     console.log(`No repo secret bindings in ${SECRET_BINDINGS_RELATIVE_PATH}.`);
-    console.log(`Run \`mc vault bind <label> <ENV_KEY> --bind-file .dev.vars\` to attach an existing secret to this repo.`);
+    console.log('New file/env bindings are disabled; use typed provider capabilities.');
     return;
   }
 
@@ -481,7 +458,7 @@ function printBindings(result) {
     }
     console.log('');
   }
-  console.log('Values stay encrypted in mc vault and materialise only for sessions launched in this repo.');
+  console.log('Legacy bindings are metadata-only and are never executed.');
 }
 
 // ────────────────────────────────────────────────────────────────────────
@@ -490,66 +467,12 @@ function printBindings(result) {
 
 async function cmdBind(argv, opts = {}) {
   const flags = parseFlags(argv);
-  const label = flags.positional[0];
-  const key = flags.positional[1] || flags.bind;
-  if (!label || !key) {
-    emit(flags.json, { ok: false, error: 'usage: mc vault bind <label> <ENV_KEY> [--bind-file .env] [--dry-run] [--json]' });
-    return 2;
-  }
-  if (flags.positional.length > 2) {
-    emit(flags.json, { ok: false, error: `unexpected arg: ${flags.positional[2]}` });
-    return 2;
-  }
-
-  const cwd = opts.cwd || process.cwd();
-  const file = flags.bindFile || '.env';
-  const binding = buildDotenvSecretBinding({ file, key, label });
-  const bindingPlan = await planSecretBindingPersistence(binding, { cwd });
-  const preview = {
-    ok: true,
-    dry_run: !!flags.dryRun,
-    label,
-    key,
-    file,
-    binding,
-    binding_file: {
-      path: SECRET_BINDINGS_RELATIVE_PATH,
-      action: bindingPlan.changed ? (bindingPlan.existing ? 'updated' : 'created') : 'unchanged',
-      changed: bindingPlan.changed,
-    },
-    writes: bindingPlan.changed ? [{
-      path: SECRET_BINDINGS_RELATIVE_PATH,
-      action: bindingPlan.existing ? 'updated' : 'created',
-    }] : [],
-  };
-
-  if (flags.dryRun) {
-    if (flags.json) console.log(JSON.stringify(preview, null, 2));
-    else printBindResult(preview);
-    return 0;
-  }
-
-  const portal = await loadPortal(opts);
-  const config = await requireSetup(portal);
-  if (!config) return 1;
-  const got = await getUnlockedVaultKey({ portal, config, flags, opts });
-  if (!got) return 1;
-  const found = await findSecretByLabel(portal, got.vaultKey, label);
-  if (!found) {
-    emit(flags.json, { ok: false, error: `no secret with label ${JSON.stringify(label)}. Run \`mc vault list\` to see labels.` });
-    return 1;
-  }
-
-  const bindingFile = await persistSecretBindingPlan(bindingPlan);
-  const result = {
-    ...preview,
-    dry_run: false,
-    binding_file: bindingFile,
-    writes: bindingFile.changed ? [{ path: bindingFile.path, action: bindingFile.action }] : [],
-  };
-  if (flags.json) console.log(JSON.stringify(result, null, 2));
-  else printBindResult(result);
-  return 0;
+  emit(flags.json, {
+    ok: false,
+    error: 'plaintext file/env bindings are disabled; use a typed provider capability',
+    code: 'plaintext_binding_disabled',
+  });
+  return 1;
 }
 
 function printBindResult(result) {
@@ -879,81 +802,12 @@ async function cmdList(argv, opts = {}) {
 
 async function cmdGet(argv, opts = {}) {
   const flags = parseFlags(argv);
-  const label = flags.positional[0];
-  if (!label) {
-    emit(flags.json, { ok: false, error: 'label required: `mc vault get <label>`' });
-    return 2;
-  }
-
-  const portal = await loadPortal(opts);
-  const config = await requireSetup(portal);
-  if (!config) return 1;
-
-  const got = await getUnlockedVaultKey({ portal, config, flags, opts });
-  if (!got) return 1;
-  const { vaultKey } = got;
-
-  const found = await findSecretByLabel(portal, vaultKey, label);
-  if (!found) {
-    emit(flags.json, { ok: false, error: `no secret with label ${JSON.stringify(label)}` });
-    return 1;
-  }
-  const payload = normaliseSecretPayload(found.data) || { kind: 'api_token', token: '', provider: null };
-  if (!payload.token) {
-    emit(flags.json, { ok: false, error: 'secret has no token field' });
-    return 1;
-  }
-
-  // HARD CONFIRMATION before echoing a secret. --no-confirm for scripts;
-  // --json implies non-interactive ⇒ also bypasses confirmation. Even
-  // then, the secret value is segregated under `.value` so callers that
-  // only need metadata can still avoid touching it.
-  if (!flags.noConfirm && !flags.json) {
-    const ok = await confirm(`About to print the secret value for "${label}" to your terminal. Continue?`, { defaultYes: false });
-    if (!ok) {
-      console.log('Cancelled.');
-      return 1;
-    }
-  }
-
-  if (flags.field) {
-    const fieldVal = payload[flags.field] ?? found.data?.[flags.field];
-    if (fieldVal == null) {
-      emit(flags.json, { ok: false, error: `secret has no field ${JSON.stringify(flags.field)}` });
-      return 1;
-    }
-    if (flags.json) {
-      console.log(JSON.stringify({ ok: true, value: String(fieldVal) }));
-    } else {
-      // Field output: NO trailing newline-only metadata, so a shell pipe
-      // gets just the value. Caller asked for the field — give them the field.
-      process.stdout.write(String(fieldVal));
-      if (process.stdout.isTTY) process.stdout.write('\n');
-    }
-    return 0;
-  }
-
-  if (flags.json) {
-    console.log(JSON.stringify({
-      ok: true,
-      secret: {
-        id: found.id,
-        label: found.label,
-        kind: payload.kind,
-        provider: payload.provider,
-        account: payload.account,
-        scopes: payload.scopes,
-        expires_at: payload.expires_at,
-        target_tool: payload.target_tool,
-        target_auth_mode: payload.target_auth_mode,
-        target_location: payload.target_location,
-        value: payload.token,
-      },
-    }));
-  } else {
-    console.log(payload.token);
-  }
-  return 0;
+  emit(flags.json, {
+    ok: false,
+    error: 'vault plaintext export is disabled; invoke a typed provider capability instead',
+    code: 'plaintext_export_disabled',
+  });
+  return 1;
 }
 
 // ────────────────────────────────────────────────────────────────────────
@@ -968,13 +822,17 @@ async function cmdSet(argv, opts = {}) {
     return 2;
   }
   const kind = parseTypeFlag(flags.type) || 'api_token';
+  if (flags.bind || flags.bindFile) {
+    emit(flags.json, {
+      ok: false,
+      error: 'plaintext file/env bindings are disabled; store the secret without --bind',
+      code: 'plaintext_binding_disabled',
+    });
+    return 1;
+  }
   const cwd = opts.cwd || process.cwd();
-  const binding = flags.bind
-    ? buildDotenvSecretBinding({ file: flags.bindFile || '.env', key: flags.bind, label })
-    : null;
-  const bindingPlan = binding
-    ? await planSecretBindingPersistence(binding, { cwd })
-    : null;
+  const binding = null;
+  const bindingPlan = null;
 
   const portal = await loadPortal(opts);
   const config = await requireSetup(portal);
@@ -1049,7 +907,7 @@ async function cmdSet(argv, opts = {}) {
 }
 
 function formatSetResult(label, kind, bindingFile) {
-  const lines = [`Stored "${label}" (${kind}). Use \`mc vault list\` to verify, \`mc vault get ${label}\` to read.`];
+  const lines = [`Stored "${label}" (${kind}). Use \`mc vault list\` to verify metadata; plaintext export is disabled.`];
   if (bindingFile?.changed) {
     const verb = bindingFile.action === 'created' ? 'Created' : 'Updated';
     lines.push(`${verb} ${bindingFile.path}.`);

@@ -99,13 +99,27 @@ only after the user approves. When no profile exists, `read --json` returns
 
   The shape is gated by two contract tests:
   `tests/adapters/get-status-contract.test.js` (status surface) and
-  `tests/adapters/materialise.test.js` (file-write helper).
+  `tests/adapters/materialise.test.js` (credential-blind refusal).
 
 ## GitHub interaction in coding sessions
 
+- `docs/plans/credential-blind-capabilities.md` is the normative
+  confidentiality and provider-execution contract. No mc vault secret may be
+  exposed in plaintext to an LLM-controlled process, command, file,
+  environment, argv, output, log, transcript, browser payload, credential
+  helper, or inspectable peer process. Vault secrets back typed capabilities;
+  they are never materialised for Codex, Claude, generic adapters, or repo
+  dotenv files.
+- `docs/plans/connected-capabilities.md` is the normative foundation for every
+  external connection. GitHub, Cloudflare, LLM tools, and future providers
+  share one connection registry, token-free descriptors, readiness/repair
+  vocabulary, source/session binding, and short-lived broker-grant model.
+  Provider commands, adapters, brokers, and executors must not import Keychain
+  or mc vault code; only the common identity service may read the first-party
+  local Memoro device identity.
 - `docs/plans/github-app-capability.md` is the normative product and security
-  contract. The target is one central Memoro GitHub App and the same typed mc
-  broker operations for local and cloud sessions.
+  provider contract. The target is one central Memoro GitHub App and the same
+  typed mc broker operations for local and cloud sessions.
 - GitHub credentials are not mc vault material. App private keys and durable
   connection authority stay in the Memoro control plane; short-lived
   installation credentials must never enter the coding-tool child environment,

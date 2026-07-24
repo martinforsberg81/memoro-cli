@@ -1,11 +1,13 @@
 /**
- * Vault → lifecycle glue (§12d).
+ * Legacy vault lifecycle cleanup plus credential-blind startup containment.
  *
- * `mc new` / `mc resume` pull tokens from the vault and materialise
- * them where each installed adapter expects to read them. `mc end`
- * reverses the materialisation.
+ * `mc new` / `mc open` / `mc resume` never decrypt or materialise vault
+ * plaintext. `mc end` retains the old manifest/shred path so artifacts created
+ * by older mc versions can still be removed.
  *
- * Phase-2 boundary: this module is responsible for
+ * The unreachable legacy implementation is retained until the metadata audit
+ * and migration in credential-blind-capabilities S2/S5. It must not be
+ * re-enabled. Historically this module was responsible for
  *   (a) deciding *which* secrets feed *which* adapter,
  *   (b) calling the adapter's materializeToken / shredToken,
  *   (c) persisting a per-session manifest at
@@ -222,6 +224,17 @@ export async function materialiseForSession({
   if (!sessionId || typeof sessionId !== 'string') {
     return { ok: false, reason: 'sessionId-required', materialised: [], hint: 'internal: sessionId missing' };
   }
+
+  // Credential-blind containment boundary. Do not resolve a vault key, fetch
+  // ciphertext, decrypt a payload, inspect adapter locations, or create a
+  // materialisation manifest. Legacy manifests remain readable by
+  // shredForSession so already-owned artifacts can still be cleaned up.
+  return {
+    ok: true,
+    policy: 'credential-blind-v1',
+    materialised: [],
+    skipped: [{ reason: 'plaintext-materialisation-disabled' }],
+  };
 
   // Exit-before-side-effect: don't even build a portal if state dir
   // can't be created. Throws here propagate to callers as "abort

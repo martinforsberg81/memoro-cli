@@ -24,7 +24,7 @@ import * as codex from '../../src/adapters/codex.js';
 
 const SENTINEL_TOKEN = 'sk-test-token-zzz-must-never-leak-aaa-9af237';
 
-describe('claude-code adapter — materializeToken / shredToken', () => {
+describe.skip('legacy claude-code materialisation (credential-blind containment)', () => {
   let dir;
   before(() => { dir = mkdtempSync(join(tmpdir(), 'mc-vault-materialise-')); });
   after(() => { try { rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ } });
@@ -101,7 +101,7 @@ describe('claude-code adapter — materializeToken / shredToken', () => {
   });
 });
 
-describe('codex adapter — materializeToken / shredToken', () => {
+describe.skip('legacy codex materialisation (credential-blind containment)', () => {
   let dir;
   before(() => { dir = mkdtempSync(join(tmpdir(), 'mc-vault-codex-')); });
   after(() => { try { rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ } });
@@ -133,7 +133,7 @@ describe('codex adapter — materializeToken / shredToken', () => {
   });
 });
 
-describe('materializeToken — argument validation', () => {
+describe.skip('legacy materializeToken argument validation', () => {
   it('refuses empty token', async () => {
     const res = await claudeCode.materializeToken({
       token: '',
@@ -155,4 +155,28 @@ describe('materializeToken — argument validation', () => {
     assert.equal(res.ok, false);
     assert.match(res.reason, /unsupported/);
   });
+});
+
+describe('credential-blind adapter contract', () => {
+  for (const [name, adapter] of [['claude', claudeCode], ['codex', codex]]) {
+    it(`${name} advertises no vault token destinations`, () => {
+      assert.deepEqual(adapter.tokenLocations(), []);
+    });
+
+    it(`${name} rejects file and env materialisation without writing`, async () => {
+      const file = join(tmpdir(), `mc-${name}-must-not-exist-${Date.now()}`);
+      for (const location of [{ type: 'file', path: file }, { type: 'env', name: 'SECRET' }]) {
+        const result = await adapter.materializeToken({
+          token: SENTINEL_TOKEN,
+          location,
+        });
+        assert.deepEqual(result, {
+          ok: false,
+          reason: 'plaintext-materialisation-disabled',
+        });
+        assert.equal(existsSync(file), false);
+        assert.doesNotMatch(JSON.stringify(result), new RegExp(SENTINEL_TOKEN));
+      }
+    });
+  }
 });
