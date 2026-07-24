@@ -79,30 +79,44 @@ export async function run(rawArgv, deps = {}) {
     upsert: deps.upsertEntry || upsertEntry,
     deps,
   });
-  const firstLaunchInWorktree = !hasStoredToolSession(entry);
+  let firstLaunchInWorktree = !hasStoredToolSession(entry);
 
   const toolValidation = validateToolFlag(opts.tool);
   if (toolValidation.error) {
     stderr.write(`mc: ${toolValidation.error}\n`);
     return 2;
   }
+  // Switching a session to a different tool starts a FRESH grounded session
+  // in the same worktree: a provider's native transcript can't be handed to
+  // another tool, but work continuity lives in the worktree and in server-side
+  // continuity keyed by coding_session_id (which we rebind on the fresh start).
+  const switchingTool = isToolSwitch(entry, toolValidation.resolved);
+  if (switchingTool) firstLaunchInWorktree = true;
+
   if (!opts.json && !opts.noLaunch && process.env.MC_TEST_MODE !== '1') {
-    const attached = await attachLiveBrokerSession(entry, {
-      stdin,
-      stdout,
-      stderr,
-      request: deps.requestBroker || requestBroker,
-      attach: deps.attachBrokerSession || attachBrokerSession,
-      deps,
-    });
-    if (attached?.attached) {
-      markEntryOpened(entry, {
-        upsert: deps.upsertEntry || upsertEntry,
-        now: deps.now,
+    // A tool switch never reattaches the OLD tool's live local PTY — that
+    // would silently reopen the previous provider instead of switching.
+    if (!switchingTool) {
+      const attached = await attachLiveBrokerSession(entry, {
+        stdin,
+        stdout,
+        stderr,
+        request: deps.requestBroker || requestBroker,
+        attach: deps.attachBrokerSession || attachBrokerSession,
+        deps,
       });
-      return attached.code ?? 0;
+      if (attached?.attached) {
+        markEntryOpened(entry, {
+          upsert: deps.upsertEntry || upsertEntry,
+          now: deps.now,
+        });
+        return attached.code ?? 0;
+      }
     }
 
+    // The active-server-match idempotency check runs even for a switch: we
+    // never spawn a duplicate of a session that is already live (consistent
+    // with "a running TUI cannot switch tool in place" — end it first).
     const active = await activeMatchForEntry(entry, { argv, deps });
     if (active) {
       markEntryOpened(entry, {
@@ -115,20 +129,21 @@ export async function run(rawArgv, deps = {}) {
   }
 
   if (opts.tool) {
-    const compatibility = validateResumeToolOverride(entry, toolValidation.resolved);
-    if (compatibility.error) {
-      stderr.write(`mc: ${compatibility.error}\n`);
-      return 2;
+    if (switchingTool) {
+      entry = applyToolSwitch(entry, toolValidation.resolved, {
+        upsert: deps.upsertEntry || upsertEntry,
+      });
+    } else {
+      const res = applyToolOverride(entry, opts.tool, {
+        upsert: deps.upsertEntry || upsertEntry,
+        resolved: toolValidation.resolved,
+      });
+      if (res.error) {
+        stderr.write(`mc: ${res.error}\n`);
+        return 2;
+      }
+      entry = res.entry;
     }
-    const res = applyToolOverride(entry, opts.tool, {
-      upsert: deps.upsertEntry || upsertEntry,
-      resolved: toolValidation.resolved,
-    });
-    if (res.error) {
-      stderr.write(`mc: ${res.error}\n`);
-      return 2;
-    }
-    entry = res.entry;
   }
 
   if (!opts.json) {
@@ -248,6 +263,10 @@ export async function launchFreshSession({
       worktreePath: entry.worktree_path,
       focus: freshLaunchFocus(entry),
       launchTool,
+      // Preserve an existing coding_session_id so a fresh launch (e.g. after
+      // a tool switch) stays on the same Memoro coding session; null for a
+      // genuinely first launch lets the launcher mint one.
+      codingSessionId: entry.coding_session_id || null,
       apiArgv,
       env,
     }),
@@ -450,11 +469,12 @@ export async function resumeSelectedChoice(choice, {
     upsert,
     deps: backfillDeps,
   });
-  const firstLaunchInWorktree = !hasStoredToolSession(entry);
+  const switchingTool = isToolSwitch(entry, resolvedTool);
+  const firstLaunchInWorktree = switchingTool || !hasStoredToolSession(entry);
   const freshLaunch = freshLaunchDependency({
     launchFreshSession: freshLaunchOverride,
   });
-  if (!opts.noLaunch && process.env.MC_TEST_MODE !== '1') {
+  if (!switchingTool && !opts.noLaunch && process.env.MC_TEST_MODE !== '1') {
     const attached = await attachLive(entry, { stdin, stdout, stderr, deps });
     if (attached?.attached) {
       markEntryOpened(entry, {
@@ -466,17 +486,16 @@ export async function resumeSelectedChoice(choice, {
   }
 
   if (opts.tool) {
-    const compatibility = validateResumeToolOverride(entry, resolvedTool);
-    if (compatibility.error) {
-      stderr.write(`mc: ${compatibility.error}\n`);
-      return 2;
+    if (switchingTool) {
+      entry = applyToolSwitch(entry, resolvedTool, { upsert });
+    } else {
+      const res = applyToolOverride(entry, opts.tool, { upsert, resolved: resolvedTool });
+      if (res.error) {
+        stderr.write(`mc: ${res.error}\n`);
+        return 2;
+      }
+      entry = res.entry;
     }
-    const res = applyToolOverride(entry, opts.tool, { upsert, resolved: resolvedTool });
-    if (res.error) {
-      stderr.write(`mc: ${res.error}\n`);
-      return 2;
-    }
-    entry = res.entry;
   }
 
   entry = markEntryOpened(entry, {
@@ -728,13 +747,34 @@ function validateToolFlag(tool) {
   return { resolved };
 }
 
-function validateResumeToolOverride(entry, resolvedTool = null) {
-  if (!hasStoredToolSession(entry) || !resolvedTool) return {};
+/**
+ * True when a tool flag asks to run an EXISTING session under a different
+ * provider than it's stored with. Only meaningful once the session has a
+ * stored session to preserve/rebind; a never-launched entry simply takes the
+ * flag as its initial provider via applyToolOverride.
+ */
+function isToolSwitch(entry, resolvedTool = null) {
+  if (!resolvedTool || !hasStoredToolSession(entry)) return false;
   const current = resolveToolInput(entry?.tool || DEFAULT_TOOL);
-  if (!current || current.id === resolvedTool.id) return {};
-  return {
-    error: `cannot resume provider session with a different tool (${current.shortName} -> ${resolvedTool.shortName})`,
+  return !!current && current.id !== resolvedTool.id;
+}
+
+/**
+ * Flip an existing session to a new provider. Clears the previous tool's
+ * native-transcript pointers (they can't be resumed under the new tool) but
+ * PRESERVES coding_session_id — the continuity binding that carries the prior
+ * work's server-side context into the fresh, grounded session.
+ */
+function applyToolSwitch(entry, resolvedTool, { upsert = upsertEntry } = {}) {
+  const patch = {
+    name: entry.name,
+    tool: resolvedTool.shortName,
+    tool_session_id: null,
+    tool_session_source: null,
+    tool_transcript_path: null,
   };
+  const next = upsert(patch);
+  return { ...entry, ...patch, ...(next || {}) };
 }
 
 function applyToolOverride(entry, tool, { upsert = upsertEntry, resolved = null } = {}) {

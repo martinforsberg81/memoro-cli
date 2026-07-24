@@ -556,32 +556,34 @@ describe('mc resume <name>', () => {
     }
   });
 
-  test('direct resume rejects switching provider for an existing provider session', async () => {
+  test('direct resume switches provider via a fresh grounded launch on the same coding session', async () => {
     const old = process.env.MC_TEST_MODE;
     delete process.env.MC_TEST_MODE;
-    const launched = [];
+    const stderr = [];
+    const resumed = [];
+    const freshLaunched = [];
     const upserts = [];
     try {
       const status = await runResume(['data', '--codex'], {
         stdin: { isTTY: true },
         stdout: { isTTY: true, write() {} },
-        stderr: { write: (s) => launched.push({ stderr: s }) },
+        stderr: { write: (s) => stderr.push(s) },
         isTTY: true,
-        readLine: async () => assert.fail('resume must not ask to start a replacement session'),
+        readLine: async () => assert.fail('switch must not prompt for a replacement session'),
         findEntry: () => makeEntry({
           name: 'data',
           branch: 'sess/data',
           worktree_path: '/tmp/data',
           coding_session_id: 'sess_data',
+          // Stale provider-native transcript from the previous (Claude) tool.
+          tool_session_id: 'claude_native_xyz',
           session_state: 'live',
           tool: 'claude',
         }),
         requestBroker: async () => ({ ok: true, sessions: [] }),
         fetchActiveSessions: async () => ({ ok: true, sessions: [] }),
-        launchResumeSession: ({ entry, apiArgv }) => {
-          launched.push({ entry, apiArgv });
-          return 0;
-        },
+        launchResumeSession: ({ entry }) => { resumed.push(entry); return 0; },
+        launchFreshSession: ({ entry }) => { freshLaunched.push(entry); return 0; },
         upsertEntry: (entry) => {
           upserts.push(entry);
           return makeEntry({
@@ -589,22 +591,31 @@ describe('mc resume <name>', () => {
             branch: 'sess/data',
             worktree_path: '/tmp/data',
             coding_session_id: 'sess_data',
-            tool: entry.tool,
+            ...entry,
           });
         },
       });
 
-      assert.equal(status, 2);
-      assert.equal(launched.some((entry) => entry.entry), false);
-      assert.deepEqual(upserts, []);
-      assert.match(launched.map((entry) => entry.stderr || '').join(''), /different tool/);
+      assert.equal(status, 0);
+      // Fresh grounded launch — never a provider-native resume of the old tool.
+      assert.equal(resumed.length, 0, 'must not resume the old provider transcript');
+      assert.equal(freshLaunched.length, 1);
+      assert.equal(freshLaunched[0].tool, 'codex');
+      assert.equal(freshLaunched[0].coding_session_id, 'sess_data', 'coding_session_id preserved');
+      assert.equal(freshLaunched[0].tool_session_id ?? null, null, 'stale native transcript cleared');
+      // Registry flipped tool + cleared the old native-transcript pointers.
+      const switchPatch = upserts.find((u) => u.tool === 'codex');
+      assert.ok(switchPatch, 'tool flipped to codex in registry');
+      assert.equal(switchPatch.tool_session_id, null);
+      assert.equal(switchPatch.tool_transcript_path, null);
+      assert.doesNotMatch(stderr.join(''), /different tool/);
     } finally {
       if (old === undefined) delete process.env.MC_TEST_MODE;
       else process.env.MC_TEST_MODE = old;
     }
   });
 
-  test('picker resume attaches a live local session before applying a tool override', async () => {
+  test('picker resume attaches a live local session before any tool write (same tool)', async () => {
     const attached = [];
     let launched = false;
     const upserts = [];
@@ -616,7 +627,8 @@ describe('mc resume <name>', () => {
       session_state: 'live',
       tool: 'claude',
     }), {
-      opts: { tool: 'codex', noLaunch: false },
+      // Same tool as the entry → not a switch → a live session still attaches.
+      opts: { tool: 'claude', noLaunch: false },
       stdout: { write() {} },
       stderr: { write() {} },
       attachLiveBrokerSession: async (entry) => {
@@ -632,7 +644,7 @@ describe('mc resume <name>', () => {
         return entry;
       },
       deps: { now: () => '2026-07-11T11:00:00.000Z' },
-      resolvedTool: { shortName: 'codex' },
+      resolvedTool: { id: 'claude-code', shortName: 'claude' },
     });
 
     assert.equal(status, 0);
@@ -643,6 +655,45 @@ describe('mc resume <name>', () => {
     }]);
     assert.equal(attached.length, 1);
     assert.equal(attached[0].tool, 'claude');
+  });
+
+  test('picker resume switches provider with a fresh grounded launch (skips old-tool attach)', async () => {
+    const attached = [];
+    const freshLaunched = [];
+    const upserts = [];
+    const status = await resumeSelectedChoice(makeEntry({
+      name: 'data',
+      branch: 'sess/data',
+      worktree_path: '/tmp/data',
+      coding_session_id: 'sess_data',
+      tool_session_id: 'claude_native_xyz',
+      session_state: 'live',
+      tool: 'claude',
+    }), {
+      opts: { tool: 'codex', noLaunch: false },
+      stdout: { write() {} },
+      stderr: { write() {} },
+      attachLiveBrokerSession: async (entry) => {
+        attached.push(entry);
+        return { attached: true, code: 0, id: entry.coding_session_id };
+      },
+      launchFreshSession: ({ entry }) => { freshLaunched.push(entry); return 0; },
+      launchResumeSession: () => assert.fail('switch must not resume the old provider'),
+      upsertEntry: (entry) => {
+        upserts.push(entry);
+        return { ...entry };
+      },
+      deps: { now: () => '2026-07-11T11:00:00.000Z' },
+      resolvedTool: { id: 'codex', shortName: 'codex' },
+    });
+
+    assert.equal(status, 0);
+    assert.equal(attached.length, 0, 'switch skips attaching the old tool');
+    assert.equal(freshLaunched.length, 1);
+    assert.equal(freshLaunched[0].tool, 'codex');
+    const switchPatch = upserts.find((u) => u.tool === 'codex');
+    assert.ok(switchPatch, 'tool flipped to codex');
+    assert.equal(switchPatch.tool_session_id, null, 'stale native transcript cleared');
   });
 
   test('picker resume launches native provider resume when local broker PTY is gone', async () => {
