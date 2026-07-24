@@ -121,6 +121,46 @@ describe('claude-code adapter — auth signal via credentials file existence', (
   });
 });
 
+describe('claude-code adapter — credentials presence resolver (file OR macOS Keychain)', () => {
+  test('file present → true regardless of platform/keychain', () => {
+    const present = claudeCode.resolveCredentialsPresence({
+      fileExists: true,
+      platform: 'linux',
+      keychainProbe: () => false,
+    });
+    assert.equal(present, true);
+  });
+
+  test('no file, macOS, Keychain item present → true (the reported bug)', () => {
+    const present = claudeCode.resolveCredentialsPresence({
+      fileExists: false,
+      platform: 'darwin',
+      keychainProbe: (p) => p === 'darwin',
+    });
+    assert.equal(present, true);
+  });
+
+  test('no file, macOS, Keychain empty → false', () => {
+    const present = claudeCode.resolveCredentialsPresence({
+      fileExists: false,
+      platform: 'darwin',
+      keychainProbe: () => false,
+    });
+    assert.equal(present, false);
+  });
+
+  test('no file, non-macOS → false (Keychain probe not consulted)', () => {
+    let probed = false;
+    const present = claudeCode.resolveCredentialsPresence({
+      fileExists: false,
+      platform: 'linux',
+      keychainProbe: () => { probed = true; return true; },
+    });
+    assert.equal(present, false);
+    assert.equal(probed, false, 'keychain probe must short-circuit on non-file+non-darwin via platform guard');
+  });
+});
+
 describe('codex adapter — shallow probe with friendly hint', () => {
   test('installed → authenticated:null + friendly action hint', async () => {
     const s = await codex.getStatus({

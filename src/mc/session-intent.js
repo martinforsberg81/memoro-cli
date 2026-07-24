@@ -15,12 +15,18 @@ export function buildNewSessionLaunchIntent({
   worktreePath,
   focus = null,
   launchTool = null,
+  codingSessionId = null,
   apiArgv = [],
   env = process.env,
 } = {}) {
   return {
     mode: MC_SESSION_LAUNCH_MODES.NEW,
     cwd: worktreePath,
+    // A bound coding_session_id keeps a fresh tool session on the same
+    // Memoro coding session (e.g. switching Codex→Claude in one worktree),
+    // so server-side continuity for that id flows into grounding. Null →
+    // the launcher mints a new id for a genuinely new session.
+    codingSessionId: codingSessionId || null,
     sessionName: entry?.name || null,
     label: null,
     focus: focus || null,

@@ -98,6 +98,9 @@ export function renderMcContextMarkdown(context) {
   const session = renderSession(context.session);
   if (session) sections.push(section('Session', session));
 
+  const continuity = renderSessionContinuity(context.session_continuity);
+  if (continuity) sections.push(section('Prior work', continuity));
+
   return sections.length ? sections.join('\n\n') : null;
 }
 
@@ -140,6 +143,40 @@ function renderSession(session) {
   addLine(lines, 'Name', session.mc_session_name);
   addLine(lines, 'Branch', session.branch);
   return lines.length ? lines.join('\n') : null;
+}
+
+/**
+ * Render prior-session continuity (server `session_continuity`): the raw,
+ * distilled work this coding session already did under a previous tool. The
+ * excerpt is blockquoted so its own markdown (## / ``` from the transcript
+ * render) can't collide with the grounding bundle's structure. The launched
+ * model reads and summarizes it as needed — no pre-chewed server summary.
+ */
+function renderSessionContinuity(items) {
+  if (!Array.isArray(items) || items.length === 0) return null;
+  const blocks = [];
+  for (const item of items) {
+    if (!isObj(item)) continue;
+    const meta = [];
+    const source = nonEmpty(item.source);
+    const endedAt = nonEmpty(item.ended_at);
+    if (source) meta.push(source);
+    if (endedAt) meta.push(`ended ${endedAt}`);
+    const brief = firstNonEmpty(item.brief, item.coding_session_id) || 'Prior session';
+    const header = meta.length ? `**${brief}** (${meta.join(', ')})` : `**${brief}**`;
+    const excerpt = nonEmpty(item.excerpt);
+    blocks.push(excerpt ? `${header}\n\n${blockquote(excerpt)}` : header);
+  }
+  if (blocks.length === 0) return null;
+  const intro = 'Earlier work on this coding session (raw transcript excerpt — summarize as needed):';
+  return `${intro}\n\n${blocks.join('\n\n')}`;
+}
+
+function blockquote(text) {
+  return text
+    .split('\n')
+    .map((line) => (line ? `> ${line}` : '>'))
+    .join('\n');
 }
 
 async function resolveToken(deps) {

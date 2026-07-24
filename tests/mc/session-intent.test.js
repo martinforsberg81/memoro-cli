@@ -31,6 +31,19 @@ describe('mc session launch intents', () => {
     assert.equal(intent.sendStartupMessage, true);
     assert.equal(intent.attachAfterLaunch, true);
     assert.deepEqual(intent.env, { PATH: '/bin' });
+    // No bound id by default → launcher mints a fresh coding session.
+    assert.equal(intent.codingSessionId, null);
+  });
+
+  test('new intent carries a bound coding_session_id (tool switch keeps continuity)', () => {
+    const intent = buildNewSessionLaunchIntent({
+      entry: { name: 'data', tool: 'claude' },
+      worktreePath: '/repo-data',
+      launchTool: { id: 'claude-code' },
+      codingSessionId: 'sess_keepme',
+    });
+    assert.equal(intent.mode, MC_SESSION_LAUNCH_MODES.NEW);
+    assert.equal(intent.codingSessionId, 'sess_keepme');
   });
 
   test('resume sessions are the same broker launch with resume argv and no startup prompt', () => {
