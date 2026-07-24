@@ -64,6 +64,7 @@ import {
   planSecretBindingPersistence,
   readSecretBindings,
 } from '../vault/bindings.js';
+import { auditVaultExposure } from '../vault/audit.js';
 
 const PASSPHRASE_ENV = 'MC_VAULT_PASSPHRASE';
 
@@ -76,6 +77,7 @@ const VERBS = {
   unlock:            { handler: cmdUnlock,           help: 'Validate the master password (phase 1: no-op cache)' },
   lock:              { handler: cmdLock,             help: 'End the server-side vault session' },
   status:            { handler: cmdStatus,           help: 'Show vault setup + unlock state' },
+  audit:             { handler: cmdAudit,            help: 'Audit legacy exposure metadata without reading values' },
   scan:              { handler: cmdScan,             help: 'Scan local dotenv files for import candidates (no values)' },
   import:            { handler: cmdImport,           help: 'Import dotenv secrets into the vault (use --dry-run to preview)' },
   bindings:          { handler: cmdBindings,         help: 'Show repo-local secret bindings (no values)' },
@@ -131,6 +133,7 @@ COMMON OPTIONS
   --json              Machine-readable output
   --dry-run           Preview planned writes without mutating vault/files
   --no-confirm        Skip confirmation prompts (use with care)
+  --cleanup           Remove stale manifests only when every destination is absent
   --bind <ENV_KEY>    For \`set\`: attach this secret to the current repo
   --bind-file <path>  For \`set\` and \`bind\`: materialise into this file (default .env)
   --type <kind>       For \`set\` and \`list\`: ${MC_SECRET_KINDS.join(' | ')}
@@ -152,6 +155,31 @@ PRECONDITIONS
 // ────────────────────────────────────────────────────────────────────────
 // Verb: scan
 // ────────────────────────────────────────────────────────────────────────
+
+async function cmdAudit(argv, opts = {}) {
+  const flags = parseFlags(argv);
+  if (flags.positional.length) {
+    emit(flags.json, { ok: false, error: 'usage: mc vault audit [--cleanup] [--json]' });
+    return 2;
+  }
+  const result = await auditVaultExposure({
+    cleanup: flags.cleanup,
+    deps: opts.auditDeps || {},
+  });
+  if (flags.json) {
+    console.log(JSON.stringify(result, null, 2));
+  } else {
+    console.log(`Vault exposure audit: ${result.summary.manifests} manifest(s), ${result.summary.leftovers} leftover(s).`);
+    for (const manifest of result.manifests) {
+      console.log(`${manifest.session_id || manifest.manifest}: ${manifest.cleanup_state}`);
+      for (const artifact of manifest.artifacts) {
+        console.log(`  ${artifact.kind}  ${artifact.state}  ${artifact.destination || '(unknown destination)'}`);
+      }
+    }
+    if (result.summary.uncertain) console.log('Uncertain artifacts were not opened or removed.');
+  }
+  return result.ok ? 0 : 1;
+}
 
 async function cmdScan(argv, opts = {}) {
   const flags = parseFlags(argv);
@@ -1420,6 +1448,7 @@ function parseFlags(argv) {
     dryRun: false,
     noConfirm: false,
     stdin: false,
+    cleanup: false,
     bind: null,
     bindFile: null,
     type: null,
@@ -1438,6 +1467,7 @@ function parseFlags(argv) {
     else if (a === '--dry-run') out.dryRun = true;
     else if (a === '--no-confirm') out.noConfirm = true;
     else if (a === '--stdin') out.stdin = true;
+    else if (a === '--cleanup') out.cleanup = true;
     else if (a === '--bind') out.bind = argv[++i];
     else if (a === '--bind-file') out.bindFile = argv[++i];
     else if (a === '--file') out.bindFile = argv[++i];
