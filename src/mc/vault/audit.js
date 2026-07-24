@@ -131,6 +131,9 @@ async function destinationsStillAbsent(artifacts, inspect) {
 
 async function inspectArtifact(metadata, inspect) {
   if (!metadata.destination) return { ...metadata, state: 'unknown' };
+  if (metadata.binding_type === 'env' || metadata.kind === 'hook-settings') {
+    return { ...metadata, state: 'unknown' };
+  }
   try {
     const info = await inspect(metadata.destination);
     return { ...metadata, state: info.isSymbolicLink() ? 'symlink' : 'leftover' };

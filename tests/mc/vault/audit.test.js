@@ -148,4 +148,34 @@ describe('metadata-only vault exposure audit', () => {
     assert.equal(result.errors[0].code, 'manifest-symlink');
     assert.doesNotMatch(JSON.stringify(result), new RegExp(sentinel));
   });
+
+  it('does not interpret env names or settings files as credential paths', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mc-vault-audit-nonfiles-'));
+    writeManifest(dir, 'sess-nonfiles', [{
+      tool: 'generic',
+      label: 'provider-token',
+      location: { type: 'env', name: 'PROVIDER_TOKEN' },
+    }], {
+      hookScriptPath: join(dir, 'absent-hook.sh'),
+      installedSettingsPath: join(dir, 'settings.json'),
+      settingsCreated: false,
+    });
+    writeFileSync(join(dir, 'settings.json'), '{}');
+    const inspected = [];
+
+    const result = await auditVaultExposure({
+      deps: {
+        stateDir: dir,
+        lstat: async (path) => {
+          inspected.push(path);
+          return lstat(path);
+        },
+      },
+    });
+
+    assert.equal(result.manifests[0].artifacts.find((a) => a.binding_type === 'env').state, 'unknown');
+    assert.equal(result.manifests[0].artifacts.find((a) => a.kind === 'hook-settings').state, 'unknown');
+    assert.equal(inspected.includes('PROVIDER_TOKEN'), false);
+    assert.equal(inspected.includes(join(dir, 'settings.json')), false);
+  });
 });
