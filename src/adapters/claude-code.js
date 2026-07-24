@@ -357,6 +357,9 @@ export const STATUS_TIMEOUT_MS = 500;
 
 const CLAUDE_BIN = 'claude';
 const CREDENTIALS_FILE = () => join(claudeDir(), '.credentials.json');
+// macOS stores Claude Code credentials in the login Keychain, not in
+// `~/.claude/.credentials.json`. The service name is the stable lookup key.
+const KEYCHAIN_SERVICE = 'Claude Code-credentials';
 
 function defaultWhich(bin) {
   const r = spawnSync('which', [bin], { encoding: 'utf8' });
@@ -376,9 +379,46 @@ function defaultVersionProbe(binPath, timeoutMs) {
   return m ? m[1] : (out || null);
 }
 
+/**
+ * Existence-only Keychain probe (macOS). `security find-generic-password`
+ * without `-g` reports whether an item exists WITHOUT decrypting the secret,
+ * so it never triggers a Keychain unlock prompt and never reads the body.
+ * Returns false on any non-macOS platform or probe error.
+ */
+function defaultKeychainHasCredentials(platform = process.platform) {
+  if (platform !== 'darwin') return false;
+  try {
+    const r = spawnSync('security', ['find-generic-password', '-s', KEYCHAIN_SERVICE], {
+      encoding: 'utf8',
+      timeout: 1000,
+    });
+    return r.status === 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Pure resolver: credentials are present if the on-disk file exists OR (on
+ * macOS) the Keychain item exists. Kept pure + exported so the Keychain
+ * branch is unit-testable without spawning `security`.
+ */
+export function resolveCredentialsPresence({
+  fileExists = false,
+  platform = process.platform,
+  keychainProbe = defaultKeychainHasCredentials,
+} = {}) {
+  if (fileExists) return true;
+  // Keychain fallback is macOS-only; other platforms rely on the file.
+  if (platform !== 'darwin') return false;
+  return keychainProbe(platform) === true;
+}
+
 function defaultCredentialsExist() {
-  // Existence-only probe — never reads the credentials body.
-  return existsSync(CREDENTIALS_FILE());
+  // Existence-only probe — never reads the credentials body. Checks the
+  // legacy JSON file first, then falls back to the macOS Keychain (where
+  // modern Claude Code installs actually store auth).
+  return resolveCredentialsPresence({ fileExists: existsSync(CREDENTIALS_FILE()) });
 }
 
 /**
