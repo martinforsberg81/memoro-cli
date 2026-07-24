@@ -69,6 +69,34 @@ describe('mc context client', () => {
     assert.doesNotMatch(out, /Brief/);
   });
 
+  it('omits the Prior work section when there is no session_continuity', () => {
+    const out = renderMcContextMarkdown(VALID_CONTEXT);
+    assert.doesNotMatch(out, /### Prior work/);
+  });
+
+  it('renders prior-session continuity as a blockquoted, summarizable excerpt', () => {
+    const out = renderMcContextMarkdown({
+      ...VALID_CONTEXT,
+      session_continuity: [
+        {
+          coding_session_id: 'sess_context1',
+          source: 'codex',
+          ended_at: '2026-07-24T10:30:00.000Z',
+          brief: 'Fix the auth probe',
+          excerpt: '## Conversation\n\n### User\n\nfix the macOS keychain probe',
+        },
+      ],
+    });
+
+    assert.match(out, /### Prior work/);
+    assert.match(out, /summarize as needed/);
+    assert.match(out, /\*\*Fix the auth probe\*\* \(codex, ended 2026-07-24T10:30:00\.000Z\)/);
+    // The excerpt's own markdown is blockquoted so it can't collide with the
+    // grounding bundle's heading structure.
+    assert.match(out, /> ## Conversation/);
+    assert.match(out, /> fix the macOS keychain probe/);
+  });
+
   it('fetches context with token, API URL, and safe repo metadata', async () => {
     const calls = [];
     const context = await fetchMcContextData({
