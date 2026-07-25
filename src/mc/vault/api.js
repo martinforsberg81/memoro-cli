@@ -107,10 +107,30 @@ export async function deleteSecret(portal, id) {
   });
 }
 
-export async function changePassword(portal, { currentAuthHash, newAuthHash, newSalt }) {
+export async function changePassword(portal, { currentAuthHash, newAuthHash, newSalt, wrappedCrk = null, crkIv = null }) {
   const p = portalOrDefault(portal);
   return p.memoroFetch(p.apiUrl, '/api/vault/change-password', {
-    token: p.token, method: 'POST', body: { currentAuthHash, newAuthHash, newSalt },
+    token: p.token, method: 'POST',
+    body: {
+      currentAuthHash, newAuthHash, newSalt,
+      ...(wrappedCrk ? { wrappedCrk, crkIv } : {}),
+    },
+  });
+}
+
+export async function setRecoveryKey(portal, { wrappedCrkRecovery, recoveryIv, recoverySalt, recoveryAuthHash }) {
+  const p = portalOrDefault(portal);
+  return p.memoroFetch(p.apiUrl, '/api/vault/recovery-key', {
+    token: p.token, method: 'POST',
+    body: { wrappedCrkRecovery, recoveryIv, recoverySalt, recoveryAuthHash },
+  });
+}
+
+export async function recoverVault(portal, { recoveryAuthHash, newAuthHash, newSalt, wrappedCrk, crkIv }) {
+  const p = portalOrDefault(portal);
+  return p.memoroFetch(p.apiUrl, '/api/vault/recover', {
+    token: p.token, method: 'POST',
+    body: { recoveryAuthHash, newAuthHash, newSalt, wrappedCrk, crkIv },
   });
 }
 

@@ -31,8 +31,12 @@ import {
   importVaultKey,
 } from '../vault/client-crypto.js';
 import {
+  CRK_RECOVERY_AAD,
   decryptEnvelopeSecret,
+  generateRecoveryCode,
   isEnvelopeSecret,
+  unwrapCustodyRootBytes,
+  wrapCustodyRootBytes,
 } from '../vault/custody-crypto.js';
 import { ensureCustodyRoot, encryptForWrite } from '../vault/custody-session.js';
 import { captureToolAuth, hydrateToolAuth, resolveToolAuthSpec } from '../vault/tool-auth.js';
@@ -99,7 +103,9 @@ const VERBS = {
   hydrate:           { handler: cmdHydrate,          help: 'Sign this device in from custody (claude | codex) [--force]' },
   devices:           { handler: cmdDevices,          help: 'List devices holding a durable unlock' },
   'revoke-device':   { handler: cmdRevokeDevice,     help: 'Refuse a device\'s future unlocks' },
-  'change-password': { handler: cmdChangePassword,   help: 'Change the master password (re-encrypts auth hash)' },
+  'change-password': { handler: cmdChangePassword,   help: 'Change the master password (re-wraps the custody root)' },
+  recovery:          { handler: cmdRecovery,         help: 'Create a recovery code (shown once) for a lost password' },
+  recover:           { handler: cmdRecover,          help: 'Reset the master password with your recovery code' },
   'destroy-forgotten': { handler: cmdDestroyForgotten, help: 'Wipe the vault when the master password is lost (requires fresh login)' },
 };
 
@@ -1188,16 +1194,12 @@ async function cmdChangePassword(argv, opts = {}) {
   // Step 2 + 3: pull, decrypt + re-encrypt to an in-memory staging list.
   const listRes = await VaultApi.listSecrets(portal);
   const wire = listRes?.secrets || [];
-  if (wire.some((s) => isEnvelopeSecret(s))) {
-    emit(flags.json, {
-      ok: false,
-      error: 'this vault uses the custody envelope; passphrase change will re-wrap the '
-        + 'root key in a later release (S4 of docs/plans/mc-custody.md). Aborting — vault is unchanged.',
-    });
-    return 1;
-  }
+  // Envelope rows are untouched by rotation: their DEKs are wrapped by the
+  // CRK, and only the CRK's passphrase wrap changes — that is the payoff of
+  // the envelope (S4). Legacy rows still re-encrypt under the new key.
   const restaged = [];
   for (const s of wire) {
+    if (isEnvelopeSecret(s)) continue;
     try {
       const { label, data } = await decryptSecretPayload(vaultKey, s);
       const enc = await encryptSecretPayload(newVaultKey, label, data);
@@ -1211,10 +1213,30 @@ async function cmdChangePassword(argv, opts = {}) {
     }
   }
 
+  // Re-wrap the CRK under the new passphrase-derived key, applied by the
+  // server atomically with the auth-hash change. Unwrap fails closed: a
+  // rotation must never orphan the envelope.
+  let newCrkWrap = null;
+  if (unlock.wrapped_crk && unlock.crk_iv) {
+    try {
+      const crkBytes = await unwrapCustodyRootBytes(vaultKey, unlock.wrapped_crk, unlock.crk_iv);
+      const { wrapped, iv } = await wrapCustodyRootBytes(newVaultKey, crkBytes);
+      crkBytes.fill(0);
+      newCrkWrap = { wrappedCrk: wrapped, crkIv: iv };
+    } catch {
+      emit(flags.json, {
+        ok: false,
+        error: 'could not re-wrap the custody root key with the current password. Aborting — vault is unchanged.',
+      });
+      return 1;
+    }
+  }
+
   // Step 4: commit auth-hash rotation. Past this point the OLD password
   // no longer works.
   const cp = await VaultApi.changePassword(portal, {
     currentAuthHash, newAuthHash, newSalt: newSaltB64,
+    ...(newCrkWrap || {}),
   });
   if (!cp?.ok) {
     emit(flags.json, { ok: false, error: cp?.error || 'change-password failed' });
@@ -1224,6 +1246,15 @@ async function cmdChangePassword(argv, opts = {}) {
   // Re-unlock with the new auth hash before mutating secrets — the
   // change-password call may have invalidated the session.
   await VaultApi.unlockVault(portal, { authHash: newAuthHash }).catch(() => {});
+  // Refresh this device's durable entry — the old cached key is now stale.
+  {
+    const prior = await readCachedVaultKey({ deps: opts.cacheDeps }).catch(() => null);
+    await cacheVaultKey(newVaultKeyBytes, {
+      authHash: newAuthHash, durable: true,
+      deviceId: prior?.deviceId || globalThis.crypto.randomUUID(),
+      deps: opts.cacheDeps,
+    }).catch(() => {});
+  }
 
   // Step 5: push re-encrypted blobs.
   const failures = [];
@@ -1467,6 +1498,134 @@ async function cmdMigrate(argv, opts = {}) {
       : `Migrated ${migrated}, ${failed} failed (already migrated: ${alreadyEnvelope}). Re-run 'mc vault migrate' to retry.`,
   );
   return failed === 0 ? 0 : 1;
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// Verbs: recovery / recover — lost-password path (mc-custody S4)
+// ────────────────────────────────────────────────────────────────────────
+
+async function cmdRecovery(argv, opts = {}) {
+  const flags = parseFlags(argv);
+  const portal = await loadPortal(opts);
+  const config = await requireSetup(portal);
+  if (!config) return 1;
+  const got = await getUnlockedVaultKey({ portal, config, flags, opts });
+  if (!got) return 1;
+  const { vaultKey, crk } = got;
+  if (!crk) {
+    emit(flags.json, { ok: false, error: 'custody root unavailable — run `mc vault unlock` to adopt the envelope first' });
+    return 1;
+  }
+
+  // Fetch the current CRK wrap and reopen it as raw bytes for re-wrapping.
+  const status = await VaultApi.getStatus(portal);
+  if (!status?.vault?.wrapped_crk) {
+    emit(flags.json, { ok: false, error: 'no custody root on the server — run `mc vault unlock` first' });
+    return 1;
+  }
+  let crkBytes;
+  try {
+    crkBytes = await unwrapCustodyRootBytes(vaultKey, status.vault.wrapped_crk, status.vault.crk_iv);
+  } catch {
+    emit(flags.json, { ok: false, error: 'could not open the custody root with this password' });
+    return 1;
+  }
+
+  // The recovery code is a second master password to the KDF: same split,
+  // its own salt. Its auth-hash half is the server-side verifier.
+  const code = generateRecoveryCode();
+  const saltBytes = globalThis.crypto.getRandomValues(new Uint8Array(32));
+  const recoverySalt = bytesToBase64(saltBytes);
+  const { vaultKey: ruk, authHash: recoveryAuthHash } =
+    await deriveVaultKeys(code, recoverySalt, config.iterations);
+  const { wrapped, iv } = await wrapCustodyRootBytes(ruk, crkBytes, CRK_RECOVERY_AAD);
+  crkBytes.fill(0);
+
+  const res = await VaultApi.setRecoveryKey(portal, {
+    wrappedCrkRecovery: wrapped, recoveryIv: iv, recoverySalt, recoveryAuthHash,
+  });
+  if (!res?.ok) {
+    emit(flags.json, { ok: false, error: res?.error || 'storing the recovery wrap failed' });
+    return 1;
+  }
+  if (flags.json) {
+    emit(true, { ok: true, recovery_code: code, replaced: !!status.vault.recovery_set });
+  } else {
+    console.log('');
+    console.log('  Recovery code (shown ONCE — store it somewhere safe, offline):');
+    console.log('');
+    console.log(`      ${code}`);
+    console.log('');
+    console.log('  Anyone with this code and your Memoro sign-in can reset the vault');
+    console.log('  password. Memoro cannot recover a lost password without it.');
+    if (status.vault.recovery_set) console.log('  Your previous recovery code is now invalid.');
+  }
+  return 0;
+}
+
+async function cmdRecover(argv, opts = {}) {
+  const flags = parseFlags(argv);
+  const portal = await loadPortal(opts);
+  const config = await requireSetup(portal);
+  if (!config) return 1;
+  const status = await VaultApi.getStatus(portal);
+  if (!status?.vault?.wrapped_crk_recovery || !status?.vault?.recovery_salt) {
+    emit(flags.json, { ok: false, error: 'no recovery code is set for this vault' });
+    return 1;
+  }
+
+  const code = (await readMasterPassword('Recovery code:                  ', opts)).trim().toUpperCase();
+  const newPassword = await readMasterPassword('New master password (min 12):   ', opts);
+  const confirmPwd  = await readMasterPassword('Confirm new password:           ', opts);
+  if (newPassword !== confirmPwd) {
+    emit(flags.json, { ok: false, error: 'new passwords do not match' });
+    return 1;
+  }
+  if (newPassword.length < 12) {
+    emit(flags.json, { ok: false, error: 'new password must be at least 12 characters' });
+    return 1;
+  }
+
+  // Derive the recovery pair; unwrap the CRK with the code-derived key.
+  const { vaultKey: ruk, authHash: recoveryAuthHash } =
+    await deriveVaultKeys(code, status.vault.recovery_salt, config.iterations);
+  let crkBytes;
+  try {
+    crkBytes = await unwrapCustodyRootBytes(
+      ruk, status.vault.wrapped_crk_recovery, status.vault.recovery_iv, CRK_RECOVERY_AAD,
+    );
+  } catch {
+    emit(flags.json, { ok: false, error: 'that recovery code does not open this vault' });
+    return 1;
+  }
+
+  const saltBytes = globalThis.crypto.getRandomValues(new Uint8Array(32));
+  const newSalt = bytesToBase64(saltBytes);
+  const { authHash: newAuthHash, vaultKeyBytes: newVaultKeyBytes } =
+    await deriveVaultKeys(newPassword, newSalt, config.iterations);
+  const { wrapped, iv } = await wrapCustodyRootBytes(await importVaultKey(newVaultKeyBytes), crkBytes);
+  crkBytes.fill(0);
+
+  const res = await VaultApi.recoverVault(portal, {
+    recoveryAuthHash, newAuthHash, newSalt, wrappedCrk: wrapped, crkIv: iv,
+  });
+  if (!res?.ok) {
+    emit(flags.json, { ok: false, error: res?.error || 'recovery failed' });
+    return 1;
+  }
+
+  // Sign this device in under the new password.
+  await VaultApi.unlockVault(portal, { authHash: newAuthHash }).catch(() => {});
+  const prior = await readCachedVaultKey({ deps: opts.cacheDeps }).catch(() => null);
+  await cacheVaultKey(newVaultKeyBytes, {
+    authHash: newAuthHash, durable: true,
+    deviceId: prior?.deviceId || globalThis.crypto.randomUUID(),
+    deps: opts.cacheDeps,
+  }).catch(() => {});
+
+  emit(flags.json, { ok: true },
+    'Vault password reset. Your envelope secrets are intact, and the same recovery code remains valid.');
+  return 0;
 }
 
 // ────────────────────────────────────────────────────────────────────────

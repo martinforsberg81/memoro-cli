@@ -43,6 +43,7 @@ const IV_LENGTH = 12;
 const KEY_LENGTH = 32;
 
 export const CRK_AAD = 'mc-custody:crk:v1';
+export const CRK_RECOVERY_AAD = 'mc-custody:crk-recovery:v1';
 export const DEK_AAD_PREFIX = 'mc-custody:dek:v1:';
 export const ENVELOPE_SCHEMA_VERSION = 2;
 export const SECRET_CLASSES = Object.freeze(['secret', 'tool-auth']);
@@ -116,6 +117,39 @@ export async function mintCustodyRoot(kuk) {
 export async function unwrapCustodyRoot(kuk, wrappedCrkBase64, crkIvBase64) {
   const crkBytes = await unwrapRawKey(kuk, wrappedCrkBase64, crkIvBase64, CRK_AAD);
   return importVaultKey(crkBytes);
+}
+
+/**
+ * Unwrap the CRK to raw bytes — needed by rotation/recovery, which re-wrap
+ * the same CRK under a different KEK. Callers must drop the bytes promptly.
+ */
+export async function unwrapCustodyRootBytes(kek, wrappedBase64, ivBase64, aad = CRK_AAD) {
+  return unwrapRawKey(kek, wrappedBase64, ivBase64, aad);
+}
+
+/**
+ * Wrap existing CRK bytes under a KEK (rotation → CRK_AAD under the new
+ * passphrase key; recovery → CRK_RECOVERY_AAD under the code-derived key).
+ */
+export async function wrapCustodyRootBytes(kek, crkBytes, aad = CRK_AAD) {
+  return wrapRawKey(kek, crkBytes, aad);
+}
+
+const RECOVERY_ALPHABET = 'ABCDEFGHJKMNPQRSTVWXYZ23456789'; // no 0/O/1/I/L/U
+
+/**
+ * Generate a human-typable recovery code: 8 groups of 4 from a 30-char
+ * alphabet (~157 bits). Shown once at creation; treated exactly like a
+ * second master password by the KDF split.
+ */
+export function generateRecoveryCode() {
+  const bytes = globalThis.crypto.getRandomValues(new Uint8Array(32));
+  let out = '';
+  for (let i = 0; i < 32; i++) {
+    out += RECOVERY_ALPHABET[bytes[i] % RECOVERY_ALPHABET.length];
+    if (i % 4 === 3 && i < 31) out += '-';
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------

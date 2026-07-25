@@ -11,6 +11,10 @@ import assert from 'node:assert/strict';
 import { importVaultKey } from '../../../src/mc/vault/client-crypto.js';
 import {
   CRK_AAD,
+  CRK_RECOVERY_AAD,
+  generateRecoveryCode,
+  unwrapCustodyRootBytes,
+  wrapCustodyRootBytes,
   ENVELOPE_SCHEMA_VERSION,
   decryptEnvelopeSecret,
   encryptEnvelopeSecret,
@@ -119,6 +123,37 @@ describe('custody envelope crypto', () => {
     assert.equal(ivB64, 'AwMDAwMDAwMDAwMD');
     const back = await unwrapRawKey(kek, wrapped, ivB64, CRK_AAD);
     assert.deepEqual([...back], [...raw]);
+  });
+
+  test('rotation and recovery re-wrap the SAME CRK — old envelopes stay readable', async () => {
+    const oldKuk = await fixedKek(1);
+    const newKuk = await fixedKek(2);
+    const { crkBytes, wrapped_crk, crk_iv } = await mintCustodyRoot(oldKuk);
+    const envelope = await encryptEnvelopeSecret(await importVaultKey(crkBytes), {
+      label: 'gh', data: { v: 1 },
+    });
+
+    // Rotation: unwrap with the old KUK, wrap under the new one.
+    const reopened = await unwrapCustodyRootBytes(oldKuk, wrapped_crk, crk_iv);
+    const rotated = await wrapCustodyRootBytes(newKuk, reopened);
+    const crkAfter = await unwrapCustodyRoot(newKuk, rotated.wrapped, rotated.iv);
+    const out = await decryptEnvelopeSecret(crkAfter, asWireRow(envelope));
+    assert.deepEqual(out, { label: 'gh', data: { v: 1 } });
+
+    // Recovery wrap: distinct AAD — a recovery blob cannot pose as the
+    // passphrase wrap, and vice versa.
+    const ruk = await fixedKek(3);
+    const recovery = await wrapCustodyRootBytes(ruk, reopened, CRK_RECOVERY_AAD);
+    const viaRecovery = await unwrapCustodyRootBytes(ruk, recovery.wrapped, recovery.iv, CRK_RECOVERY_AAD);
+    assert.deepEqual([...viaRecovery], [...reopened]);
+    await assert.rejects(() => unwrapCustodyRootBytes(ruk, recovery.wrapped, recovery.iv, CRK_AAD));
+  });
+
+  test('recovery codes are typable, grouped, and high-entropy', () => {
+    const a = generateRecoveryCode();
+    const b = generateRecoveryCode();
+    assert.match(a, /^([A-HJ-NP-TV-Z2-9]{4}-){7}[A-HJ-NP-TV-Z2-9]{4}$/);
+    assert.notEqual(a, b);
   });
 
   test('legacy rows (no wrapped_dek) are not envelope secrets', () => {
