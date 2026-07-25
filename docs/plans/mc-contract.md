@@ -8,6 +8,8 @@ security-first by construction: the trust model comes first, and every other
 part is derived from it. Existing plans are implementation detail **under** this
 contract, not alongside it:
 
+- [`mc-custody.md`](mc-custody.md) — **Phase 1 of V1**: the account-custody
+  design (envelope encryption, unlock, tool-auth adoption).
 - [`connected-capabilities.md`](connected-capabilities.md) — the connection /
   identity / broker-grant foundation.
 - [`credential-blind-capabilities.md`](credential-blind-capabilities.md) — the
@@ -71,8 +73,10 @@ these are binding:
    installation grants) over storing the ultimate key. Raw-secret custody is
    actively minimised.
 3. **Envelope encryption — Memoro cannot bulk-decrypt at rest.** Secrets are
-   encrypted under keys unlocked only by your authenticated identity, rooted in
-   a KMS/HSM. A database breach yields ciphertext.
+   encrypted under keys rooted in a **user-held factor** (zero-knowledge: the
+   unlock key never reaches Memoro), unlocked only through your authenticated
+   identity. A database breach yields ciphertext — and Memoro could not decrypt
+   even if compelled. Design: [`mc-custody.md`](mc-custody.md).
 4. **Scoped, expiring unlock for headless runs.** Invariant 3 would block a
    cloud session that runs while you are away. Resolution: you **pre-authorise**
    a session with a **scoped, time-boxed unlock grant**. Memoro may decrypt only
@@ -107,11 +111,12 @@ JIT injection**. Two access forms sit on the same custody:
   `.credentials.json`). Fetched from custody, materialised JIT to the tool's
   path, shredded at end.
 
-**The device-local vault is retired as a secret store and becomes the
-account-custody backend.** One model, not two. A coding tool's provider
-credential (Anthropic / OpenAI account auth) lives in this custody, which is what
-makes tools seamlessly portable across devices — the deliberate, accepted trust
-posture, made safe only by §2.
+**The existing vault — already zero-knowledge and account-backed — is upgraded
+into this custody** (envelope hierarchy, per-device unlock, recovery, tool-auth
+adoption; see [`mc-custody.md`](mc-custody.md)). One model, not two. A coding
+tool's provider credential (Anthropic / OpenAI account auth) lives in this
+custody, which is what makes tools seamlessly portable across devices — the
+deliberate, accepted trust posture, made safe only by §2.
 
 ---
 
