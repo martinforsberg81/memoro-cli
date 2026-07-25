@@ -31,6 +31,7 @@ import {
   probeWorkspace,
 } from './auth.js';
 import { createConnectionClient } from '../connections/client.js';
+import { installPlanFor, hydratePlanFor, installTool } from '../bootstrap.js';
 import { promptLine } from '../../lib/prompt.js';
 import { readConfig, writeConfig } from '../../lib/config.js';
 import {
@@ -108,6 +109,29 @@ export async function run(argv, deps = {}) {
   } catch (err) {
     console.error(`mc: ${err.message}`);
     return 2;
+  }
+
+  // Bootstrap phase (mc-contract §7): with explicit consent via
+  // --bootstrap, install missing tools and sign them in from custody, then
+  // fall through to the normal report against the NEW state.
+  if (opts.bootstrap) {
+    const pre = await buildReport(deps);
+    for (const item of installPlanFor(pre.tools)) {
+      process.stdout.write(`mc setup: installing ${item.label} (${item.command})…\n`);
+      const res = await (deps.installTool || installTool)(item, deps);
+      process.stdout.write(res.ok
+        ? `mc setup: ${item.label} installed.\n`
+        : `mc setup: ${item.label} install failed (${res.error}); continuing.\n`);
+    }
+    const post = await buildReport(deps);
+    for (const item of hydratePlanFor(post.tools)) {
+      process.stdout.write(`mc setup: signing ${item.label} in from custody…\n`);
+      const vaultRun = deps.vaultRun || (await import('./vault.js')).run;
+      const code = await vaultRun(['hydrate', item.tool], deps.vaultOpts || {});
+      if (code !== 0) {
+        process.stdout.write(`mc setup: could not hydrate ${item.label} — run \`mc vault hydrate ${item.tool}\` after \`mc vault unlock\`.\n`);
+      }
+    }
   }
 
   const report = await buildReport(deps);
@@ -205,7 +229,7 @@ export function missingSteps(report) {
         // canonical install command; surface it verbatim.
         command: installCommand || '',
         note: installCommand
-          ? 'mc setup will not auto-install — review the command before running.'
+          ? 'Run `mc setup --bootstrap` to install it for you, or run the command yourself.'
           : (s?.hint || 'Install the tool, then re-run setup.'),
       });
       steps.push({
@@ -433,7 +457,7 @@ export const sentinelPath = freshInstallSentinelPath;
 export const writeSentinel = freshInstallEnsureSentinel;
 
 export function parseArgs(argv) {
-  const opts = { json: false, resourceProfile: null, dependencyMode: null, custom: {} };
+  const opts = { json: false, bootstrap: false, resourceProfile: null, dependencyMode: null, custom: {} };
   const customFlags = {
     '--heavy-max-concurrent': 'maxConcurrent',
     '--heavy-max-threads': 'maxThreads',
@@ -444,6 +468,7 @@ export function parseArgs(argv) {
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
     if (a === '--json') { opts.json = true; continue; }
+    if (a === '--bootstrap') { opts.bootstrap = true; continue; }
     if (a === '--resource-profile') {
       const value = String(argv[++i] || '').toLowerCase();
       if (!LOCAL_RESOURCE_PROFILE_NAMES.includes(value)) {

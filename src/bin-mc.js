@@ -338,6 +338,7 @@ START OPTIONS
 SETUP
   mc                              First run signs in to Memoro with browser device auth
   mc setup [--json]               Verify setup; choose local heavy-job limits on a TTY
+  mc setup --bootstrap            Install missing coding tools and sign them in from custody
   mc setup --resource-profile <unlimited|balanced|conservative|custom>
                                   Configure image/motion resource protection
   mc setup --resource-profile custom --heavy-max-concurrent <n>
