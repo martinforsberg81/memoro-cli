@@ -35,6 +35,7 @@ import {
   isEnvelopeSecret,
 } from '../vault/custody-crypto.js';
 import { ensureCustodyRoot, encryptForWrite } from '../vault/custody-session.js';
+import { captureToolAuth, hydrateToolAuth, resolveToolAuthSpec } from '../vault/tool-auth.js';
 import {
   buildSecretPayload,
   normaliseSecretPayload,
@@ -94,6 +95,8 @@ const VERBS = {
   rm:                { handler: cmdRm,               help: 'Delete a secret' },
   rotate:            { handler: cmdRotate,           help: 'Replace a secret, keeping the old as <label>-prev' },
   migrate:           { handler: cmdMigrate,          help: 'Re-encrypt legacy secrets under the custody envelope' },
+  adopt:             { handler: cmdAdopt,            help: 'Capture a coding tool\'s sign-in into custody (claude | codex)' },
+  hydrate:           { handler: cmdHydrate,          help: 'Sign this device in from custody (claude | codex) [--force]' },
   devices:           { handler: cmdDevices,          help: 'List devices holding a durable unlock' },
   'revoke-device':   { handler: cmdRevokeDevice,     help: 'Refuse a device\'s future unlocks' },
   'change-password': { handler: cmdChangePassword,   help: 'Change the master password (re-encrypts auth hash)' },
@@ -1466,6 +1469,97 @@ async function cmdMigrate(argv, opts = {}) {
   return failed === 0 ? 0 : 1;
 }
 
+// ────────────────────────────────────────────────────────────────────────
+// Verbs: adopt / hydrate — portable tool sign-in (mc-custody S3)
+// ────────────────────────────────────────────────────────────────────────
+
+async function cmdAdopt(argv, opts = {}) {
+  const flags = parseFlags(argv);
+  const tool = flags.positional[0];
+  const spec = tool ? resolveToolAuthSpec(tool) : null;
+  if (!spec) {
+    emit(flags.json, { ok: false, error: 'usage: mc vault adopt <claude|codex>' });
+    return 2;
+  }
+  const portal = await loadPortal(opts);
+  const config = await requireSetup(portal);
+  if (!config) return 1;
+  const got = await getUnlockedVaultKey({ portal, config, flags, opts });
+  if (!got) return 1;
+  const { vaultKey, crk } = got;
+  if (!crk) {
+    emit(flags.json, { ok: false, error: 'custody root unavailable — run `mc vault unlock` to adopt the envelope first' });
+    return 1;
+  }
+
+  // Explicit consent: this copies the tool's own sign-in into account
+  // custody (encrypted client-side; the value is never shown or logged).
+  if (!flags.noConfirm && typeof opts.promptStub !== 'function') {
+    const yes = await confirm(
+      `Store your ${spec.id} sign-in in Memoro custody (encrypted on this device, portable to your other devices)? [y/N] `,
+    );
+    if (!yes) { emit(flags.json, { ok: false, error: 'aborted' }); return 1; }
+  }
+
+  const captured = captureToolAuth(spec.id, opts.toolAuthDeps || {});
+  if (!captured.ok) {
+    emit(flags.json, { ok: false, error: captured.reason });
+    return 1;
+  }
+
+  const enc = await encryptForWrite({
+    vaultKey, crk, label: captured.label, data: captured.payload, secretClass: 'tool-auth',
+  });
+  const existing = await findSecretByLabel(portal, vaultKey, captured.label, crk);
+  const res = existing
+    ? await VaultApi.updateSecret(portal, existing.id, { secretType: WIRE_SECRET_TYPE, ...enc })
+    : await VaultApi.createSecret(portal, { secretType: WIRE_SECRET_TYPE, ...enc });
+  if (!res?.ok) {
+    emit(flags.json, { ok: false, error: res?.error || 'store failed' });
+    return 1;
+  }
+  emit(flags.json,
+    { ok: true, adopted: spec.id, label: captured.label, source: captured.payload.source, updated: !!existing },
+    `Adopted ${spec.id} sign-in into custody (${captured.payload.source}). Hydrate on another device with \`mc vault hydrate ${tool}\`.`,
+  );
+  return 0;
+}
+
+async function cmdHydrate(argv, opts = {}) {
+  const flags = parseFlags(argv);
+  const tool = flags.positional[0];
+  const spec = tool ? resolveToolAuthSpec(tool) : null;
+  if (!spec) {
+    emit(flags.json, { ok: false, error: 'usage: mc vault hydrate <claude|codex> [--force]' });
+    return 2;
+  }
+  const portal = await loadPortal(opts);
+  const config = await requireSetup(portal);
+  if (!config) return 1;
+  const got = await getUnlockedVaultKey({ portal, config, flags, opts });
+  if (!got) return 1;
+  const { vaultKey, crk } = got;
+
+  const found = await findSecretByLabel(portal, vaultKey, spec.label, crk);
+  if (!found) {
+    emit(flags.json, { ok: false, error: `no adopted ${spec.id} sign-in in custody — run \`mc vault adopt ${tool}\` on a signed-in device` });
+    return 1;
+  }
+  const hydrated = hydrateToolAuth(found.data, { force: flags.force, ...(opts.toolAuthDeps || {}) });
+  if (!hydrated.ok) {
+    const error = hydrated.reason === 'already-signed-in'
+      ? `${spec.id} is already signed in on this device — pass --force to replace its login`
+      : hydrated.reason;
+    emit(flags.json, { ok: false, error });
+    return 1;
+  }
+  emit(flags.json,
+    { ok: true, hydrated: spec.id, path: hydrated.path },
+    `Hydrated ${spec.id} sign-in from custody. The tool is ready on this device.`,
+  );
+  return 0;
+}
+
 async function cmdDevices(argv, opts = {}) {
   const flags = parseFlags(argv);
   const portal = await loadPortal(opts);
@@ -1586,6 +1680,7 @@ function parseFlags(argv) {
     positional: [],
     json: false,
     dryRun: false,
+    force: false,
     noConfirm: false,
     stdin: false,
     cleanup: false,
@@ -1605,6 +1700,7 @@ function parseFlags(argv) {
     const a = argv[i];
     if (a === '--json') out.json = true;
     else if (a === '--dry-run') out.dryRun = true;
+    else if (a === '--force') out.force = true;
     else if (a === '--no-confirm') out.noConfirm = true;
     else if (a === '--stdin') out.stdin = true;
     else if (a === '--cleanup') out.cleanup = true;
