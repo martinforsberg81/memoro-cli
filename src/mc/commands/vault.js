@@ -681,7 +681,13 @@ async function cmdUnlock(argv, opts = {}) {
   // a cache failure is *not* an unlock failure — the verb still
   // succeeded server-side, we just lose the no-prompt UX for
   // subsequent calls. tests + CI pass via opts.cacheDeps.
-  const cacheStored = await cacheVaultKey(vaultKeyBytes, { deps: opts.cacheDeps });
+  // Durable device entry (mc-custody S2): one passphrase prompt per device,
+  // ever. The cached authHash re-opens the server vault session silently.
+  const priorDevice = await readCachedVaultKey({ deps: opts.cacheDeps }).catch(() => null);
+  const deviceId = priorDevice?.deviceId || globalThis.crypto.randomUUID();
+  const cacheStored = await cacheVaultKey(vaultKeyBytes, {
+    authHash, durable: true, deviceId, deps: opts.cacheDeps,
+  });
   // Custody envelope (docs/plans/mc-custody.md): unwrap the CRK, or adopt the
   // envelope for a pre-envelope vault (mint + store, set-if-absent). Best-
   // effort — a failure leaves the vault fully usable in legacy mode.
@@ -696,7 +702,7 @@ async function cmdUnlock(argv, opts = {}) {
       cache: { stored: cacheStored, ttl_ms: cacheStored ? 15 * 60 * 1000 : 0 },
       custody: { ready: !!custody?.ok, adopted: !!custody?.adopted } },
     cacheStored
-      ? 'Vault unlocked. Key cached for 15 min — subsequent commands won\'t re-prompt.'
+      ? 'Vault unlocked for this device — subsequent commands won\'t re-prompt. Revoke with `mc vault lock`.'
       : 'Vault unlocked, but the local key cache could not be written. This session is live, but commands that decrypt secrets may need `mc vault unlock` again.',
   );
   return 0;

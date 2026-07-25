@@ -71,6 +71,9 @@ export function cacheAccountFor(identity = null) {
 export async function cacheVaultKey(vaultKeyBytes, {
   ttlMs = TTL_MS,
   identity = null,
+  authHash = null,
+  durable = false,
+  deviceId = null,
   deps = {},
 } = {}) {
   const setSecret = deps.setSecret || defaultSetSecret;
@@ -78,9 +81,15 @@ export async function cacheVaultKey(vaultKeyBytes, {
   if (!(vaultKeyBytes instanceof Uint8Array) || vaultKeyBytes.length !== 32) {
     throw new Error('cacheVaultKey: vaultKeyBytes must be a 32-byte Uint8Array');
   }
+  // Durable device entry (mc-custody S2): no expiry — the OS keychain,
+  // behind the OS user's own auth, IS the device trust boundary. The
+  // cached authHash lets later commands re-open the server vault session
+  // without a prompt ("one prompt per device, ever").
   const value = JSON.stringify({
     vaultKeyB64: bytesToBase64(vaultKeyBytes),
-    expiresAt: new Date(now + ttlMs).toISOString(),
+    ...(authHash ? { authHash } : {}),
+    ...(deviceId ? { deviceId } : {}),
+    expiresAt: durable ? null : new Date(now + ttlMs).toISOString(),
   });
   try {
     await setSecret(cacheAccountFor(identity), value);
@@ -122,7 +131,14 @@ export async function readCachedVaultKey({
     await clearCachedVaultKey({ identity, deps }).catch(() => {});
     return null;
   }
-  return { vaultKey, vaultKeyBytes: parsed.vaultKeyBytes, expiresAt: parsed.expiresAt };
+  return {
+    vaultKey,
+    vaultKeyBytes: parsed.vaultKeyBytes,
+    expiresAt: parsed.expiresAt,
+    authHash: parsed.authHash || null,
+    deviceId: parsed.deviceId || null,
+    durable: parsed.durable === true,
+  };
 }
 
 /**
@@ -173,35 +189,43 @@ function parseCacheRecord(raw, now) {
   try { parsed = JSON.parse(raw); }
   catch { return { present: false, expiresAt: null, expiresInMs: 0, reason: 'invalid-json', clear: true }; }
 
+  const durable = parsed?.expiresAt === null;
   const expiresAt = typeof parsed?.expiresAt === 'string' ? parsed.expiresAt : null;
-  const expiresMs = Date.parse(expiresAt);
-  if (!Number.isFinite(expiresMs)) {
-    return { present: false, expiresAt, expiresInMs: 0, reason: 'invalid-expires-at', clear: true };
-  }
-  if (expiresMs <= now) {
-    return { present: false, expiresAt, expiresInMs: 0, reason: 'expired', clear: true };
+  let expiresInMs = Infinity;
+  if (!durable) {
+    const expiresMs = Date.parse(expiresAt);
+    if (!Number.isFinite(expiresMs)) {
+      return { present: false, expiresAt, expiresInMs: 0, reason: 'invalid-expires-at', clear: true };
+    }
+    if (expiresMs <= now) {
+      return { present: false, expiresAt, expiresInMs: 0, reason: 'expired', clear: true };
+    }
+    expiresInMs = expiresMs - now;
   }
 
   if (typeof parsed?.vaultKeyB64 !== 'string') {
-    return { present: false, expiresAt, expiresInMs: expiresMs - now, reason: 'missing-vault-key', clear: true };
+    return { present: false, expiresAt, expiresInMs, reason: 'missing-vault-key', clear: true };
   }
 
   let vaultKeyBytes;
   try {
     vaultKeyBytes = base64ToBytes(parsed.vaultKeyB64);
   } catch {
-    return { present: false, expiresAt, expiresInMs: expiresMs - now, reason: 'invalid-vault-key', clear: true };
+    return { present: false, expiresAt, expiresInMs, reason: 'invalid-vault-key', clear: true };
   }
   if (vaultKeyBytes.length !== 32) {
-    return { present: false, expiresAt, expiresInMs: expiresMs - now, reason: 'invalid-vault-key', clear: true };
+    return { present: false, expiresAt, expiresInMs, reason: 'invalid-vault-key', clear: true };
   }
 
   return {
     present: true,
     expiresAt,
-    expiresInMs: expiresMs - now,
+    expiresInMs,
     reason: 'ok',
     clear: false,
     vaultKeyBytes,
+    authHash: typeof parsed.authHash === 'string' ? parsed.authHash : null,
+    deviceId: typeof parsed.deviceId === 'string' ? parsed.deviceId : null,
+    durable,
   };
 }

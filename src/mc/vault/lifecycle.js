@@ -107,7 +107,7 @@ export async function resolveVaultKeyForLifecycle({ portal, deps = {} } = {}) {
   const cached = await readCachedVaultKey({ deps: deps.cacheDeps }).catch(() => null);
   if (cached) {
     const crk = await resolveCustodyRoot({ portal, vaultKey: cached.vaultKey, deps });
-    return { vaultKey: cached.vaultKey, crk, authHash: null, source: 'cache' };
+    return { vaultKey: cached.vaultKey, crk, authHash: cached.authHash || null, source: 'cache' };
   }
 
   // 2. MC_VAULT_PASSPHRASE → derive against the server's salt.
@@ -171,14 +171,22 @@ export async function loadDefaultPortal() {
  * Matching to adapters happens after decrypt so explicit `target_tool`
  * can win over legacy provider matching.
  */
-async function pullMatchingSecrets({ portal, vaultKey, crk = null }) {
+async function pullMatchingSecrets({ portal, vaultKey, crk = null, authHash = null }) {
   // Need an unlocked server-side session to list secrets. The cache
   // tells us the user already unlocked at some point, so re-unlock
   // here using the same authHash (we don't have it from cache → we
   // have to skip this when cache-derived). For the env path we DO
   // have authHash. For the cache path, attempt the list and trust
   // the server to error helpfully if the session expired.
-  const listRes = await VaultApi.listSecrets(portal).catch((err) => ({ ok: false, error: err.message }));
+  let listRes = await VaultApi.listSecrets(portal).catch((err) => ({ ok: false, error: err.message }));
+  if (!listRes?.ok && authHash) {
+    // The server-side vault session expired but this device holds the
+    // authHash (S2 durable entry): re-open the session and retry once.
+    const unlocked = await VaultApi.unlockVault(portal, { authHash }).catch(() => null);
+    if (unlocked?.ok) {
+      listRes = await VaultApi.listSecrets(portal).catch((err) => ({ ok: false, error: err.message }));
+    }
+  }
   if (!listRes?.ok) {
     return { ok: false, reason: 'list-failed', error: listRes?.error || 'unknown', matches: [] };
   }
@@ -351,6 +359,7 @@ export async function materialiseForSession({
 
   const pull = await pullMatchingSecrets({
     portal, vaultKey: resolved.vaultKey, crk: resolved.crk || null,
+    authHash: resolved.authHash || null,
   });
   if (!pull.ok) {
     return {
