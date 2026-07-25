@@ -37,10 +37,26 @@ export async function setupVault(portal, { authHash }) {
   });
 }
 
-export async function unlockVault(portal, { authHash }) {
+export async function unlockVault(portal, { authHash, deviceId = null, deviceName = null, devicePlatform = null }) {
   const p = portalOrDefault(portal);
   return p.memoroFetch(p.apiUrl, '/api/vault/unlock', {
-    token: p.token, method: 'POST', body: { authHash },
+    token: p.token, method: 'POST',
+    body: {
+      authHash,
+      ...(deviceId ? { deviceId, deviceName, devicePlatform } : {}),
+    },
+  });
+}
+
+export async function listDevices(portal) {
+  const p = portalOrDefault(portal);
+  return p.memoroFetch(p.apiUrl, '/api/vault/devices', { token: p.token });
+}
+
+export async function revokeDevice(portal, { deviceId }) {
+  const p = portalOrDefault(portal);
+  return p.memoroFetch(p.apiUrl, '/api/vault/devices/revoke', {
+    token: p.token, method: 'POST', body: { deviceId },
   });
 }
 

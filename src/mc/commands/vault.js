@@ -94,6 +94,8 @@ const VERBS = {
   rm:                { handler: cmdRm,               help: 'Delete a secret' },
   rotate:            { handler: cmdRotate,           help: 'Replace a secret, keeping the old as <label>-prev' },
   migrate:           { handler: cmdMigrate,          help: 'Re-encrypt legacy secrets under the custody envelope' },
+  devices:           { handler: cmdDevices,          help: 'List devices holding a durable unlock' },
+  'revoke-device':   { handler: cmdRevokeDevice,     help: 'Refuse a device\'s future unlocks' },
   'change-password': { handler: cmdChangePassword,   help: 'Change the master password (re-encrypts auth hash)' },
   'destroy-forgotten': { handler: cmdDestroyForgotten, help: 'Wipe the vault when the master password is lost (requires fresh login)' },
 };
@@ -672,8 +674,19 @@ async function cmdUnlock(argv, opts = {}) {
   // the OS keychain so subsequent mc commands (and `mc new` / `mc
   // resume` materialisation) don't re-derive PBKDF2.
   const { authHash, vaultKeyBytes } = await deriveVaultKeys(password, config.salt, config.iterations);
-  const res = await VaultApi.unlockVault(portal, { authHash });
+  const priorDevice = await readCachedVaultKey({ deps: opts.cacheDeps }).catch(() => null);
+  const deviceId = priorDevice?.deviceId || globalThis.crypto.randomUUID();
+  const res = await VaultApi.unlockVault(portal, {
+    authHash, deviceId,
+    deviceName: (await import('node:os')).hostname(),
+    devicePlatform: process.platform,
+  });
   if (!res?.ok) {
+    if (res?.code === 'DEVICE_REVOKED') {
+      await clearCachedVaultKey({ deps: opts.cacheDeps }).catch(() => {});
+      emit(flags.json, { ok: false, error: 'this device has been revoked; local unlock cache cleared' });
+      return 1;
+    }
     emit(flags.json, { ok: false, error: res?.error || 'unlock failed' });
     return 1;
   }
@@ -683,8 +696,6 @@ async function cmdUnlock(argv, opts = {}) {
   // subsequent calls. tests + CI pass via opts.cacheDeps.
   // Durable device entry (mc-custody S2): one passphrase prompt per device,
   // ever. The cached authHash re-opens the server vault session silently.
-  const priorDevice = await readCachedVaultKey({ deps: opts.cacheDeps }).catch(() => null);
-  const deviceId = priorDevice?.deviceId || globalThis.crypto.randomUUID();
   const cacheStored = await cacheVaultKey(vaultKeyBytes, {
     authHash, durable: true, deviceId, deps: opts.cacheDeps,
   });
@@ -1453,6 +1464,45 @@ async function cmdMigrate(argv, opts = {}) {
       : `Migrated ${migrated}, ${failed} failed (already migrated: ${alreadyEnvelope}). Re-run 'mc vault migrate' to retry.`,
   );
   return failed === 0 ? 0 : 1;
+}
+
+async function cmdDevices(argv, opts = {}) {
+  const flags = parseFlags(argv);
+  const portal = await loadPortal(opts);
+  const config = await requireSetup(portal);
+  if (!config) return 1;
+  if (!(await getUnlockedVaultKey({ portal, config, flags, opts }))) return 1;
+  const res = await VaultApi.listDevices(portal);
+  if (!res?.ok) { emit(flags.json, { ok: false, error: res?.error || 'list failed' }); return 1; }
+  const local = await readCachedVaultKey({ deps: opts.cacheDeps }).catch(() => null);
+  if (flags.json) {
+    emit(true, { ok: true, devices: res.devices, this_device: local?.deviceId || null });
+  } else {
+    for (const d of res.devices) {
+      const marks = [d.device_id === local?.deviceId ? 'this device' : null, d.revoked_at ? 'REVOKED' : null]
+        .filter(Boolean).join(', ');
+      console.log(`${d.device_id}  ${d.name || '-'}  ${d.platform || '-'}  last seen ${d.last_seen_at}${marks ? `  (${marks})` : ''}`);
+    }
+    if (!res.devices.length) console.log('No registered devices yet — run `mc vault unlock`.');
+  }
+  return 0;
+}
+
+async function cmdRevokeDevice(argv, opts = {}) {
+  const flags = parseFlags(argv);
+  const deviceId = flags.positional[0];
+  if (!deviceId) { emit(flags.json, { ok: false, error: 'usage: mc vault revoke-device <device-id>' }); return 2; }
+  const portal = await loadPortal(opts);
+  const config = await requireSetup(portal);
+  if (!config) return 1;
+  if (!(await getUnlockedVaultKey({ portal, config, flags, opts }))) return 1;
+  const res = await VaultApi.revokeDevice(portal, { deviceId });
+  if (!res?.ok) { emit(flags.json, { ok: false, error: res?.error || 'revoke failed' }); return 1; }
+  const local = await readCachedVaultKey({ deps: opts.cacheDeps }).catch(() => null);
+  if (local?.deviceId === deviceId) await clearCachedVaultKey({ deps: opts.cacheDeps }).catch(() => {});
+  emit(flags.json, { ok: true, revoked: deviceId },
+    `Device ${deviceId} revoked — its next unlock is refused (sessions lapse within 15 min).`);
+  return 0;
 }
 
 async function findSecretByLabel(portal, vaultKey, label, crk = null) {
