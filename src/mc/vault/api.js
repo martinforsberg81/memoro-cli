@@ -97,3 +97,10 @@ export async function changePassword(portal, { currentAuthHash, newAuthHash, new
     token: p.token, method: 'POST', body: { currentAuthHash, newAuthHash, newSalt },
   });
 }
+
+export async function setCustodyKey(portal, { wrappedCrk, crkIv }) {
+  const p = portalOrDefault(portal);
+  return p.memoroFetch(p.apiUrl, '/api/vault/custody-key', {
+    token: p.token, method: 'POST', body: { wrappedCrk, crkIv },
+  });
+}

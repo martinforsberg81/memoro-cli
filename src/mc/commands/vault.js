@@ -28,7 +28,13 @@ import {
   deriveVaultKeys,
   encryptSecretPayload,
   decryptSecretPayload,
+  importVaultKey,
 } from '../vault/client-crypto.js';
+import {
+  decryptEnvelopeSecret,
+  isEnvelopeSecret,
+} from '../vault/custody-crypto.js';
+import { ensureCustodyRoot, encryptForWrite } from '../vault/custody-session.js';
 import {
   buildSecretPayload,
   normaliseSecretPayload,
@@ -87,6 +93,7 @@ const VERBS = {
   set:               { handler: cmdSet,              help: 'Store a new encrypted secret' },
   rm:                { handler: cmdRm,               help: 'Delete a secret' },
   rotate:            { handler: cmdRotate,           help: 'Replace a secret, keeping the old as <label>-prev' },
+  migrate:           { handler: cmdMigrate,          help: 'Re-encrypt legacy secrets under the custody envelope' },
   'change-password': { handler: cmdChangePassword,   help: 'Change the master password (re-encrypts auth hash)' },
   'destroy-forgotten': { handler: cmdDestroyForgotten, help: 'Wipe the vault when the master password is lost (requires fresh login)' },
 };
@@ -339,10 +346,10 @@ async function importSelectedSecrets({ file, plan, flags, opts }) {
 
   const got = await getUnlockedVaultKey({ portal, config, flags, opts });
   if (!got) return 1;
-  const { vaultKey } = got;
+  const { vaultKey, crk } = got;
 
   const values = readDotenvValueMap(file, { cwd });
-  const existingLabels = await listVaultLabels(portal, vaultKey);
+  const existingLabels = await listVaultLabels(portal, vaultKey, crk);
   const imported = [];
   const skipped = [];
   for (const candidate of plan.candidates) {
@@ -371,13 +378,10 @@ async function importSelectedSecrets({ file, plan, flags, opts }) {
         env_key: candidate.name,
       },
     });
-    const enc = await encryptSecretPayload(vaultKey, candidate.label, payloadData);
+    const enc = await encryptForWrite({ vaultKey, crk, label: candidate.label, data: payloadData });
     const res = await VaultApi.createSecret(portal, {
       secretType: WIRE_SECRET_TYPE,
-      encryptedLabel: enc.encryptedLabel,
-      encryptedData: enc.encryptedData,
-      iv: enc.iv,
-      labelIv: enc.labelIv,
+      ...enc,
     });
     if (!res?.ok) {
       emit(flags.json, { ok: false, error: res?.error || `create failed for ${candidate.label}` });
@@ -536,13 +540,15 @@ function readDotenvValueMap(file, { cwd }) {
   return values;
 }
 
-async function listVaultLabels(portal, vaultKey) {
+async function listVaultLabels(portal, vaultKey, crk = null) {
   const listRes = await VaultApi.listSecrets(portal);
   const wire = listRes?.secrets || [];
   const labels = new Set();
   for (const s of wire) {
     try {
-      const { label } = await decryptSecretPayload(vaultKey, s);
+      const { label } = isEnvelopeSecret(s)
+        ? await decryptEnvelopeSecret(crk, s)
+        : await decryptSecretPayload(vaultKey, s);
       labels.add(label);
     } catch { /* skip undecryptable */ }
   }
@@ -676,8 +682,19 @@ async function cmdUnlock(argv, opts = {}) {
   // succeeded server-side, we just lose the no-prompt UX for
   // subsequent calls. tests + CI pass via opts.cacheDeps.
   const cacheStored = await cacheVaultKey(vaultKeyBytes, { deps: opts.cacheDeps });
+  // Custody envelope (docs/plans/mc-custody.md): unwrap the CRK, or adopt the
+  // envelope for a pre-envelope vault (mint + store, set-if-absent). Best-
+  // effort — a failure leaves the vault fully usable in legacy mode.
+  const custody = await ensureCustodyRoot({
+    portal,
+    vaultKey: await importVaultKey(vaultKeyBytes),
+    vaultInfo: res,
+    deps: opts.custodyDeps || {},
+  }).catch(() => ({ ok: false, reason: 'unexpected' }));
   emit(flags.json,
-    { ok: true, cache: { stored: cacheStored, ttl_ms: cacheStored ? 15 * 60 * 1000 : 0 } },
+    { ok: true,
+      cache: { stored: cacheStored, ttl_ms: cacheStored ? 15 * 60 * 1000 : 0 },
+      custody: { ready: !!custody?.ok, adopted: !!custody?.adopted } },
     cacheStored
       ? 'Vault unlocked. Key cached for 15 min — subsequent commands won\'t re-prompt.'
       : 'Vault unlocked, but the local key cache could not be written. This session is live, but commands that decrypt secrets may need `mc vault unlock` again.',
@@ -775,7 +792,7 @@ async function cmdList(argv, opts = {}) {
 
   const got = await getUnlockedVaultKey({ portal, config, flags, opts });
   if (!got) return 1;
-  const { vaultKey } = got;
+  const { vaultKey, crk } = got;
 
   const listRes = await VaultApi.listSecrets(portal);
   const wire = listRes?.secrets || [];
@@ -785,7 +802,9 @@ async function cmdList(argv, opts = {}) {
   const decrypted = [];
   for (const s of wire) {
     try {
-      const { label, data } = await decryptSecretPayload(vaultKey, s);
+      const { label, data } = isEnvelopeSecret(s)
+        ? await decryptEnvelopeSecret(crk, s)
+        : await decryptSecretPayload(vaultKey, s);
       const norm = normaliseSecretPayload(data) || { kind: 'api_token' };
       if (typeFilter && norm.kind !== typeFilter) continue;
       decrypted.push({
@@ -899,22 +918,19 @@ async function cmdSet(argv, opts = {}) {
 
   const got = await getUnlockedVaultKey({ portal, config, flags, opts });
   if (!got) return 1;
-  const { vaultKey } = got;
+  const { vaultKey, crk } = got;
 
   // Reject duplicate labels — silent overwrite would be surprising.
-  const existing = await findSecretByLabel(portal, vaultKey, label);
+  const existing = await findSecretByLabel(portal, vaultKey, label, crk);
   if (existing) {
     emit(flags.json, { ok: false, error: `label ${JSON.stringify(label)} already exists. Use \`mc vault rotate ${label}\` to replace.` });
     return 1;
   }
 
-  const enc = await encryptSecretPayload(vaultKey, label, payloadData);
+  const enc = await encryptForWrite({ vaultKey, crk, label, data: payloadData });
   const res = await VaultApi.createSecret(portal, {
     secretType: WIRE_SECRET_TYPE,
-    encryptedLabel: enc.encryptedLabel,
-    encryptedData: enc.encryptedData,
-    iv: enc.iv,
-    labelIv: enc.labelIv,
+    ...enc,
   });
   if (!res?.ok) {
     emit(flags.json, { ok: false, error: res?.error || 'create failed' });
@@ -962,9 +978,9 @@ async function cmdRm(argv, opts = {}) {
 
   const got = await getUnlockedVaultKey({ portal, config, flags, opts });
   if (!got) return 1;
-  const { vaultKey } = got;
+  const { vaultKey, crk } = got;
 
-  const found = await findSecretByLabel(portal, vaultKey, label);
+  const found = await findSecretByLabel(portal, vaultKey, label, crk);
   if (!found) {
     emit(flags.json, { ok: false, error: `no secret with label ${JSON.stringify(label)}` });
     return 1;
@@ -1020,9 +1036,9 @@ async function cmdRotate(argv, opts = {}) {
 
   const got = await getUnlockedVaultKey({ portal, config, flags, opts });
   if (!got) return 1;
-  const { vaultKey } = got;
+  const { vaultKey, crk } = got;
 
-  const existing = await findSecretByLabel(portal, vaultKey, label);
+  const existing = await findSecretByLabel(portal, vaultKey, label, crk);
   if (!existing) {
     emit(flags.json, { ok: false, error: `no secret with label ${JSON.stringify(label)} to rotate. Use \`mc vault set\` to create.` });
     return 1;
@@ -1047,19 +1063,19 @@ async function cmdRotate(argv, opts = {}) {
   // <label>-prev` once the new token is confirmed working. The
   // command output makes this explicit; documented as a follow-up.
   const prevLabel = `${label}-prev`;
-  const prevExisting = await findSecretByLabel(portal, vaultKey, prevLabel);
+  const prevExisting = await findSecretByLabel(portal, vaultKey, prevLabel, crk);
   if (prevExisting) {
     // Replace any stale -prev silently — its presence means the user
     // rotated before and never cleaned up; the new rotation supersedes.
     await VaultApi.deleteSecret(portal, prevExisting.id).catch(() => {});
   }
-  const prevEnc = await encryptSecretPayload(vaultKey, prevLabel, normaliseSecretPayload(existing.data) || existing.data);
+  const prevEnc = await encryptForWrite({
+    vaultKey, crk, label: prevLabel,
+    data: normaliseSecretPayload(existing.data) || existing.data,
+  });
   const prevRes = await VaultApi.createSecret(portal, {
     secretType: WIRE_SECRET_TYPE,
-    encryptedLabel: prevEnc.encryptedLabel,
-    encryptedData: prevEnc.encryptedData,
-    iv: prevEnc.iv,
-    labelIv: prevEnc.labelIv,
+    ...prevEnc,
   });
   if (!prevRes?.ok) {
     emit(flags.json, { ok: false, error: `failed to stash previous as "${prevLabel}": ${prevRes?.error || 'unknown'}` });
@@ -1067,13 +1083,10 @@ async function cmdRotate(argv, opts = {}) {
   }
 
   // Step 2: overwrite the original with the new value.
-  const newEnc = await encryptSecretPayload(vaultKey, label, newPayload);
+  const newEnc = await encryptForWrite({ vaultKey, crk, label, data: newPayload });
   const updRes = await VaultApi.updateSecret(portal, existing.id, {
     secretType: WIRE_SECRET_TYPE,
-    encryptedLabel: newEnc.encryptedLabel,
-    encryptedData: newEnc.encryptedData,
-    iv: newEnc.iv,
-    labelIv: newEnc.labelIv,
+    ...newEnc,
   });
   if (!updRes?.ok) {
     emit(flags.json, { ok: false, error: `failed to update "${label}": ${updRes?.error || 'unknown'}` });
@@ -1155,6 +1168,14 @@ async function cmdChangePassword(argv, opts = {}) {
   // Step 2 + 3: pull, decrypt + re-encrypt to an in-memory staging list.
   const listRes = await VaultApi.listSecrets(portal);
   const wire = listRes?.secrets || [];
+  if (wire.some((s) => isEnvelopeSecret(s))) {
+    emit(flags.json, {
+      ok: false,
+      error: 'this vault uses the custody envelope; passphrase change will re-wrap the '
+        + 'root key in a later release (S4 of docs/plans/mc-custody.md). Aborting — vault is unchanged.',
+    });
+    return 1;
+  }
   const restaged = [];
   for (const s of wire) {
     try {
@@ -1332,7 +1353,8 @@ async function getUnlockedVaultKey({ portal, config, flags, opts }) {
   // 1. Cache hit?
   const cached = await readCachedVaultKey({ deps: opts.cacheDeps }).catch(() => null);
   if (cached) {
-    return { vaultKey: cached.vaultKey };
+    const crk = await resolveWriteCrk({ portal, vaultKey: cached.vaultKey, opts });
+    return { vaultKey: cached.vaultKey, crk };
   }
 
   if (!canPromptForVaultKey({ flags, opts })) {
@@ -1359,7 +1381,21 @@ async function getUnlockedVaultKey({ portal, config, flags, opts }) {
   // Cache for the next call. Best-effort — failure here just means
   // the next verb will re-prompt.
   await cacheVaultKey(vaultKeyBytes, { deps: opts.cacheDeps });
-  return { vaultKey };
+  const crk = await resolveWriteCrk({ portal, vaultKey, opts });
+  return { vaultKey, crk };
+}
+
+/**
+ * CRK for read/write verbs: unwrap when present, adopt when the vault
+ * predates the envelope (the session is unlocked here, so adoption is
+ * allowed — unlike the launch path, which stays read-only). Null degrades
+ * to legacy v1 behavior.
+ */
+async function resolveWriteCrk({ portal, vaultKey, opts = {} }) {
+  const res = await ensureCustodyRoot({
+    portal, vaultKey, deps: opts.custodyDeps || {},
+  }).catch(() => null);
+  return res?.ok ? res.crk : null;
 }
 
 function canPromptForVaultKey({ flags = {}, opts = {} } = {}) {
@@ -1369,12 +1405,60 @@ function canPromptForVaultKey({ flags = {}, opts = {} } = {}) {
   return process.stdin.isTTY === true;
 }
 
-async function findSecretByLabel(portal, vaultKey, label) {
+// ────────────────────────────────────────────────────────────────────────
+// Verb: migrate — lazy envelope migration (docs/plans/mc-custody.md S1)
+// ────────────────────────────────────────────────────────────────────────
+
+async function cmdMigrate(argv, opts = {}) {
+  const flags = parseFlags(argv);
+  const portal = await loadPortal(opts);
+  const config = await requireSetup(portal);
+  if (!config) return 1;
+  const got = await getUnlockedVaultKey({ portal, config, flags, opts });
+  if (!got) return 1;
+  const { vaultKey, crk } = got;
+  if (!crk) {
+    emit(flags.json, { ok: false, error: 'custody root unavailable — run `mc vault unlock` to adopt the envelope first' });
+    return 1;
+  }
+
+  const listRes = await VaultApi.listSecrets(portal);
+  const wire = listRes?.secrets || [];
+  let migrated = 0;
+  let alreadyEnvelope = 0;
+  let failed = 0;
+  for (const s of wire) {
+    if (isEnvelopeSecret(s)) { alreadyEnvelope += 1; continue; }
+    try {
+      const { label, data } = await decryptSecretPayload(vaultKey, s);
+      const enc = await encryptForWrite({ vaultKey, crk, label, data });
+      const res = await VaultApi.updateSecret(portal, s.id, {
+        secretType: s.secret_type || WIRE_SECRET_TYPE,
+        ...enc,
+      });
+      if (res?.ok) migrated += 1; else failed += 1;
+    } catch { failed += 1; }
+  }
+
+  emit(flags.json,
+    { ok: failed === 0, migrated, already_envelope: alreadyEnvelope, failed },
+    failed === 0
+      ? `Migrated ${migrated} secret(s) to the custody envelope (${alreadyEnvelope} already migrated).`
+      : `Migrated ${migrated}, ${failed} failed (already migrated: ${alreadyEnvelope}). Re-run 'mc vault migrate' to retry.`,
+  );
+  return failed === 0 ? 0 : 1;
+}
+
+async function findSecretByLabel(portal, vaultKey, label, crk = null) {
   const listRes = await VaultApi.listSecrets(portal);
   const wire = listRes?.secrets || [];
   for (const s of wire) {
     try {
-      const { label: l, data } = await decryptSecretPayload(vaultKey, s);
+      // Envelope rows decrypt under their DEK (via the CRK); legacy rows
+      // under the vault key. A missing CRK throws into the skip path.
+      const { label: l, data } = isEnvelopeSecret(s)
+        ? await decryptEnvelopeSecret(crk, s)
+        : await decryptSecretPayload(vaultKey, s);
       if (l === label) {
         return { id: s.id, label: l, data, raw: s };
       }

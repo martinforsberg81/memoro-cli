@@ -36,6 +36,11 @@ import { join } from 'node:path';
 import { mcHome } from '../paths.js';
 import { readCachedVaultKey } from './key-cache.js';
 import { deriveVaultKeys, decryptSecretPayload } from './client-crypto.js';
+import {
+  decryptEnvelopeSecret,
+  isEnvelopeSecret,
+  unwrapCustodyRoot,
+} from './custody-crypto.js';
 import * as VaultApi from './api.js';
 import { normaliseSecretPayload } from './types.js';
 import { installHook, uninstallHook } from './hook.js';
@@ -101,7 +106,8 @@ export async function resolveVaultKeyForLifecycle({ portal, deps = {} } = {}) {
   // 1. Try the keychain cache first.
   const cached = await readCachedVaultKey({ deps: deps.cacheDeps }).catch(() => null);
   if (cached) {
-    return { vaultKey: cached.vaultKey, authHash: null, source: 'cache' };
+    const crk = await resolveCustodyRoot({ portal, vaultKey: cached.vaultKey, deps });
+    return { vaultKey: cached.vaultKey, crk, authHash: null, source: 'cache' };
   }
 
   // 2. MC_VAULT_PASSPHRASE → derive against the server's salt.
@@ -113,9 +119,33 @@ export async function resolveVaultKeyForLifecycle({ portal, deps = {} } = {}) {
     const { vaultKey, authHash } = await deriveVaultKeys(
       passphrase, status.vault.salt, status.vault.iterations || 600_000,
     );
-    return { vaultKey, authHash, source: 'env' };
+    const crk = await resolveCustodyRoot({
+      portal, vaultKey, vaultInfo: status.vault, deps,
+    });
+    return { vaultKey, crk, authHash, source: 'env' };
   }
   return null;
+}
+
+/**
+ * Read-only CRK resolution for the lifecycle: unwrap when the vault has an
+ * envelope, null otherwise. Adoption (minting a CRK) is a user-facing act
+ * that lives in `mc vault setup/unlock` — the launch path never mutates
+ * custody state. Null degrades to legacy-only decryption.
+ */
+async function resolveCustodyRoot({ portal, vaultKey, vaultInfo = null, deps = {} }) {
+  try {
+    let info = vaultInfo;
+    if (!info?.wrapped_crk) {
+      if (!portal) return null;
+      const status = await VaultApi.getStatus(portal).catch(() => null);
+      info = status?.vault || null;
+    }
+    if (!info?.wrapped_crk || !info?.crk_iv) return null;
+    return await unwrapCustodyRoot(vaultKey, info.wrapped_crk, info.crk_iv);
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -141,7 +171,7 @@ export async function loadDefaultPortal() {
  * Matching to adapters happens after decrypt so explicit `target_tool`
  * can win over legacy provider matching.
  */
-async function pullMatchingSecrets({ portal, vaultKey }) {
+async function pullMatchingSecrets({ portal, vaultKey, crk = null }) {
   // Need an unlocked server-side session to list secrets. The cache
   // tells us the user already unlocked at some point, so re-unlock
   // here using the same authHash (we don't have it from cache → we
@@ -155,7 +185,11 @@ async function pullMatchingSecrets({ portal, vaultKey }) {
   const matches = [];
   for (const wire of (listRes.secrets || [])) {
     try {
-      const { label, data } = await decryptSecretPayload(vaultKey, wire);
+      // Envelope rows need the CRK; without one the throw lands in this
+      // catch and the row is skipped (legacy-only degradation).
+      const { label, data } = isEnvelopeSecret(wire)
+        ? await decryptEnvelopeSecret(crk, wire)
+        : await decryptSecretPayload(vaultKey, wire);
       const norm = normaliseSecretPayload(data);
       if (!norm) continue;
       if (norm.kind !== 'api_token' && norm.kind !== 'oauth_token') continue;
@@ -316,7 +350,7 @@ export async function materialiseForSession({
   await ensureUnlocked({ portal, authHash: resolved.authHash });
 
   const pull = await pullMatchingSecrets({
-    portal, vaultKey: resolved.vaultKey,
+    portal, vaultKey: resolved.vaultKey, crk: resolved.crk || null,
   });
   if (!pull.ok) {
     return {
