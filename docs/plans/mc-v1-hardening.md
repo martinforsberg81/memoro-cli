@@ -88,6 +88,10 @@ confirmed by measurement, not assumed):
 - context/grounding fetches on launch: cache what is stable per session
 - test suite wall-clock (resume.test.js alone ≈ 85 s — likely real sleeps;
   inject timers so CI and local runs stay fast)
+- test suite flakes under parallelism: `tool-artifact-ownership.test.js`
+  ("returns exact Claude project and global session directories…") fails in
+  a full run but passes in isolation — likely shared fixture/HOME
+  interference between concurrent test files; fix the isolation
 
 Deliverable: a small before/after table in this doc; no optimisation
 without a number.
