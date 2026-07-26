@@ -117,6 +117,9 @@ FLEET / ADVANCED
                                   Prune old inactive worktree node_modules
   mc storage prune-generated --dry-run|--apply
                                   Prune old ignored build/cache directories
+  mc storage prune-transcripts --dry-run|--apply [--older-than 7d]
+                                  Prune orphaned codex/claude transcripts
+                                  (keeps resumable, live, and recent sessions)
   mc gc [--dry-run]               Reap registry-dead, merged, clean worktrees
   mc gc --runtime                 Reap stale runtime pid/socket sidecars
   mc gc --dependency-snapshots --dry-run
