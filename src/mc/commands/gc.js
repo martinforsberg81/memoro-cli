@@ -24,6 +24,10 @@ import {
   scanRuntimeSidecars,
 } from '../sidecar-cleanup.js';
 import {
+  listDevServers,
+  removeDevServerRegistryManifest,
+} from '../dev-servers.js';
+import {
   reapRuntimeCleanup,
   scanRuntimeCleanup,
   staleWorktreeCandidates,
@@ -294,33 +298,53 @@ function runReapOrphans(opts) {
 
 async function runSidecars(opts) {
   const scan = await scanRuntimeSidecars({ minAgeMs: opts.minAgeMs });
+  // Orphan dev-server manifests are bookkeeping for processes that are
+  // gone or replaced — removing them never touches a process.
+  const orphanDevManifests = (await listDevServers().catch(() => []))
+    .filter((server) => server.state === 'orphan');
 
   if (opts.dryRun) {
     const out = {
       dry_run: true,
       candidates: scan.candidates,
       zombie_hosts: scan.zombie_hosts,
+      orphan_dev_manifests: orphanDevManifests.map(devManifestJson),
       counts: scan.counts,
     };
     if (opts.json) {
       console.log(JSON.stringify(out, null, 2));
     } else {
       printSidecarScan(scan, null);
+      printOrphanDevManifests(orphanDevManifests, null);
       printZombieHosts(scan, null, opts);
     }
     return 0;
   }
 
   const outcome = reapRuntimeSidecars(scan);
+  const devOutcome = { removed: [], errors: [] };
+  for (const server of orphanDevManifests) {
+    try {
+      removeDevServerRegistryManifest(server.instance_id);
+      devOutcome.removed.push(devManifestJson(server));
+    } catch (err) {
+      devOutcome.errors.push({ ...devManifestJson(server), error: err?.message || String(err) });
+    }
+  }
   // Zombie hosts hold living processes; reaping them is opt-in only.
   const zombieOutcome = opts.reapZombieHosts
     ? await reapZombieHosts(scan.zombie_hosts)
     : null;
+  const ok = outcome.ok
+    && (zombieOutcome ? zombieOutcome.ok : true)
+    && devOutcome.errors.length === 0;
   if (opts.json) {
     console.log(JSON.stringify({
-      ok: outcome.ok && (zombieOutcome ? zombieOutcome.ok : true),
+      ok,
       removed: outcome.removed,
       ...(outcome.errors ? { errors: outcome.errors } : {}),
+      orphan_dev_manifests_removed: devOutcome.removed,
+      ...(devOutcome.errors.length ? { orphan_dev_manifest_errors: devOutcome.errors } : {}),
       ...(zombieOutcome
         ? {
           zombie_hosts_removed: zombieOutcome.removed,
@@ -331,9 +355,35 @@ async function runSidecars(opts) {
     }, null, 2));
   } else {
     printSidecarScan(scan, outcome);
+    printOrphanDevManifests(orphanDevManifests, devOutcome);
     printZombieHosts(scan, zombieOutcome, opts);
   }
-  return outcome.ok && (zombieOutcome ? zombieOutcome.ok : true) ? 0 : 1;
+  return ok ? 0 : 1;
+}
+
+function devManifestJson(server) {
+  return {
+    instance_id: server.instance_id,
+    service: server.service || null,
+    session_name: server.session_name || null,
+    worktree_path: server.worktree_path || null,
+  };
+}
+
+function printOrphanDevManifests(orphans, outcome) {
+  if (!orphans.length) return;
+  if (outcome) {
+    for (const item of outcome.removed) {
+      process.stdout.write(`removed orphan dev manifest  ${item.service || item.instance_id}  (${item.session_name || 'unknown session'})\n`);
+    }
+    for (const item of outcome.errors) {
+      process.stdout.write(`orphan dev manifest failed  ${item.instance_id}  ${item.error}\n`);
+    }
+    return;
+  }
+  for (const server of orphans) {
+    process.stdout.write(`orphan dev manifest  ${server.service || server.instance_id}  (${server.session_name || 'unknown session'}, would remove)\n`);
+  }
 }
 
 function printZombieHosts(scan, outcome, opts) {

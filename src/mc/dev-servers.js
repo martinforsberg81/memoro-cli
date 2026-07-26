@@ -64,6 +64,60 @@ export function unregisterDevServerManifest(sourcePath) {
   return true;
 }
 
+/**
+ * Remove a registered manifest by instance id, without requiring the
+ * source manifest to still exist. Teardown and orphan reaping need this:
+ * an ended session's worktree (and its source manifest) is often already
+ * gone. This removes bookkeeping only — never a process.
+ */
+export function removeDevServerRegistryManifest(instanceId) {
+  const id = requiredIdentifier(instanceId, 'instance_id');
+  const target = registryManifestPath(id);
+  if (!existsSync(target)) return false;
+  rmSync(target, { force: true });
+  return true;
+}
+
+/**
+ * Stop and unregister every dev server owned by a session (matched by
+ * session name or worktree path) as part of `mc end` teardown. Verified
+ * running servers get their declared stop control; manifests whose
+ * identity no longer verifies (process already gone or replaced) are
+ * unregistered without touching any process. Other sessions' servers are
+ * never touched.
+ */
+export async function teardownSessionDevServers({ sessionName, worktreePath }, deps = {}) {
+  const read = deps.readManifests || readDevServerManifests;
+  const results = [];
+  for (const manifest of read()) {
+    const ownedByName = Boolean(sessionName && manifest.session_name === sessionName);
+    const ownedByPath = Boolean(
+      worktreePath
+      && manifest.worktree_path
+      && canonicalPath(manifest.worktree_path) === canonicalPath(worktreePath),
+    );
+    if (!ownedByName && !ownedByPath) continue;
+    const identity = verifyDevServerIdentity(manifest, deps);
+    let stop = null;
+    if (identity.ok) {
+      stop = await controlDevServer(manifest, 'stop', deps);
+    }
+    const unregistered = (deps.removeManifest || removeDevServerRegistryManifest)(manifest.instance_id);
+    results.push({
+      instance_id: manifest.instance_id,
+      service: manifest.service || null,
+      stopped: stop?.ok === true,
+      was_running: identity.ok,
+      unregistered,
+      ...(stop && !stop.ok ? { stop_error: stop.error || stop.reason || 'stop failed' } : {}),
+    });
+  }
+  return {
+    ok: results.every((item) => item.unregistered && (!item.was_running || item.stopped)),
+    results,
+  };
+}
+
 export function readDevServerManifests() {
   const root = devServersRoot();
   if (!existsSync(root)) return [];

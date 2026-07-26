@@ -10,8 +10,10 @@ import {
   readDevServerLog,
   readDevServerManifests,
   registerDevServerManifest,
+  removeDevServerRegistryManifest,
   resolveDevServer,
   summarizeDevServers,
+  teardownSessionDevServers,
   unregisterDevServerManifest,
   verifyDevServerIdentity,
 } from '../../src/mc/dev-servers.js';
@@ -200,6 +202,94 @@ describe('mc dev server registry', () => {
     registerDevServerManifest(sourcePath);
     assert.equal(unregisterDevServerManifest(sourcePath), true);
     assert.deepEqual(readDevServerManifests(), []);
+  });
+});
+
+describe('mc dev server session teardown', () => {
+  let root;
+  let worktree;
+  let sourcePath;
+  let previousHome;
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), 'mc-dev-teardown-'));
+    worktree = join(root, 'worktree');
+    mkdirSync(join(worktree, '.runtime'), { recursive: true });
+    sourcePath = join(worktree, '.runtime', 'mc-dev.json');
+    previousHome = process.env.MC_HOME;
+    process.env.MC_HOME = join(root, 'mc-home');
+  });
+
+  afterEach(() => {
+    if (previousHome === undefined) delete process.env.MC_HOME;
+    else process.env.MC_HOME = previousHome;
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  test('removeDevServerRegistryManifest works without the source manifest', () => {
+    writeSourceManifest({ worktree, sourcePath });
+    const registered = registerDevServerManifest(sourcePath);
+    rmSync(sourcePath);
+    assert.equal(removeDevServerRegistryManifest(registered.instance_id), true);
+    assert.deepEqual(readDevServerManifests(), []);
+    assert.equal(removeDevServerRegistryManifest(registered.instance_id), false);
+  });
+
+  test('teardown stops a verified running server and unregisters it', async () => {
+    writeSourceManifest({ worktree, sourcePath });
+    registerDevServerManifest(sourcePath);
+    const controls = [];
+    const result = await teardownSessionDevServers({
+      sessionName: 'home-actions-v4',
+      worktreePath: null,
+    }, {
+      isAlive: () => true,
+      processInfo: () => ({ cwd: worktree, process_group_id: 4242 }),
+      spawnSync: (command, args) => {
+        controls.push([command, ...args]);
+        return { status: 0, stdout: '', stderr: '' };
+      },
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.results.length, 1);
+    assert.equal(result.results[0].stopped, true);
+    assert.equal(result.results[0].unregistered, true);
+    assert.deepEqual(controls, [['npm', 'run', 'dev', '--', '--stop']]);
+    assert.deepEqual(readDevServerManifests(), []);
+  });
+
+  test('teardown unregisters a dead server without running any control', async () => {
+    writeSourceManifest({ worktree, sourcePath });
+    registerDevServerManifest(sourcePath);
+    const result = await teardownSessionDevServers({
+      sessionName: null,
+      worktreePath: worktree,
+    }, {
+      isAlive: () => false,
+      spawnSync: () => { throw new Error('must not run controls for dead servers'); },
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.results[0].was_running, false);
+    assert.equal(result.results[0].stopped, false);
+    assert.equal(result.results[0].unregistered, true);
+    assert.deepEqual(readDevServerManifests(), []);
+  });
+
+  test('teardown never touches another session\'s server', async () => {
+    writeSourceManifest({ worktree, sourcePath });
+    registerDevServerManifest(sourcePath);
+    const result = await teardownSessionDevServers({
+      sessionName: 'some-other-session',
+      worktreePath: join(root, 'elsewhere'),
+    }, {
+      isAlive: () => true,
+    });
+
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.results, []);
+    assert.equal(readDevServerManifests().length, 1);
   });
 });
 

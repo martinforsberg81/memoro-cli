@@ -17,6 +17,7 @@ import { isAbsolute, relative } from 'node:path';
 
 import { resolveToolInput } from '../../adapters/index.js';
 import { DEFAULT_TOOL } from '../../lib/config.js';
+import { teardownSessionDevServers } from '../dev-servers.js';
 import {
   patchEntriesIfPresent,
   readRegistry,
@@ -782,6 +783,21 @@ async function teardownOne(plan, { opts, deps }) {
     });
     if (!brokerCleanupIsAcceptable(entry, broker)) {
       throw new Error(`broker cleanup failed (${broker?.error || broker?.reason || 'unknown'})`);
+    }
+
+    // Stop and unregister the session's dev servers before the worktree
+    // they run in disappears; leaving them orphans the processes and the
+    // manifests both.
+    const teardownDev = deps.teardownSessionDevServers || teardownSessionDevServers;
+    const devServers = await teardownDev({
+      sessionName: entry.name,
+      worktreePath: entry.worktree_path || null,
+    });
+    if (!devServers?.ok) {
+      const failed = (devServers?.results || [])
+        .filter((item) => !item.unregistered || (item.was_running && !item.stopped))
+        .map((item) => `${item.service || item.instance_id}: ${item.stop_error || 'unregister failed'}`);
+      throw new Error(`dev server teardown failed${failed.length ? ` (${failed.join(', ')})` : ''}`);
     }
 
     const removeRuntime = deps.removeSessionOwnedRuntimeArtifacts
