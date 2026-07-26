@@ -235,17 +235,34 @@ function buildMissingPrunePlan(registry, {
 function applyMissingPrunePlan(registry, plan, {
   write = writeRegistry,
 } = {}) {
-  const names = new Set((plan?.candidates || []).map((candidate) => candidate.name));
-  const next = {
-    ...(registry || {}),
-    entries: (registry?.entries || []).filter((entry) => !names.has(entry.name)),
-  };
-  write(next);
+  // Match planned candidates exactly (name + branch + worktree_path) and
+  // re-check the tombstone predicate. Filtering by name alone once removed
+  // 81 entries from an 8-candidate dry-run: historic same-named entries —
+  // including ones whose worktrees existed — shared names with tombstones.
+  // Apply must remove precisely what dry-run showed.
+  const keys = new Set((plan?.candidates || []).map(missingPruneKey));
+  const removed = [];
+  const entries = (registry?.entries || []).filter((entry) => {
+    const match = entry?.worktree_missing === true && keys.has(missingPruneKey(entry));
+    if (match) {
+      removed.push({
+        name: entry.name,
+        branch: entry.branch || null,
+        worktree_path: entry.worktree_path || null,
+      });
+    }
+    return !match;
+  });
+  write({ ...(registry || {}), entries });
   return {
     ok: true,
-    removed: plan?.candidates || [],
-    counts: { total: names.size },
+    removed,
+    counts: { total: removed.length },
   };
+}
+
+function missingPruneKey(value) {
+  return [value?.name || '', value?.branch || '', value?.worktree_path || ''].join('\n');
 }
 
 function buildDependencyPrunePlan(snapshot, {

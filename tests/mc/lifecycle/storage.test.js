@@ -362,6 +362,51 @@ describe('mc storage / doctor', () => {
     ]);
   });
 
+  test('storage prune-missing --apply never removes a same-named entry that is not the planned tombstone', () => {
+    // Historic registries carry duplicate names: an aged tombstone and a
+    // current entry can share a name. Name-keyed filtering once removed 81
+    // entries from an 8-candidate dry-run. Apply must match the exact
+    // planned entries only.
+    const oldIso = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString();
+    writeRegistry(repo.mcHome, [
+      makeEntry({
+        name: 'dup',
+        branch: 'sess/dup-old',
+        worktree_path: '/tmp/dup-old',
+        worktree_missing: true,
+        created_at: oldIso,
+      }),
+      makeEntry({
+        name: 'dup',
+        branch: 'sess/dup-current',
+        worktree_path: '/tmp/dup-current',
+        worktree_missing: false,
+        created_at: oldIso,
+      }),
+      makeEntry({
+        name: 'dup',
+        branch: 'sess/dup-fresh-tombstone',
+        worktree_path: '/tmp/dup-fresh',
+        worktree_missing: true,
+        created_at: new Date().toISOString(),
+      }),
+    ]);
+
+    const r = runMc(['storage', 'prune-missing', '--apply', '--json'], {
+      cwd: repo.dir,
+      env: { MC_HOME: repo.mcHome, MC_ORPHAN_PID_DIR: pidDir },
+    });
+
+    assert.equal(r.status, 0, `stderr:${r.stderr}`);
+    const j = parseJsonOrNull(r.stdout);
+    assert.deepEqual(j.removed.map((item) => item.branch), ['sess/dup-old']);
+    const registry = JSON.parse(readFileSync(join(repo.mcHome, 'registry.json'), 'utf8'));
+    assert.deepEqual(registry.entries.map((item) => item.branch).sort(), [
+      'sess/dup-current',
+      'sess/dup-fresh-tombstone',
+    ]);
+  });
+
   test('storage prune-deps --dry-run reports old inactive node_modules without mutating', () => {
     const oldIso = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString();
     const recentIso = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
