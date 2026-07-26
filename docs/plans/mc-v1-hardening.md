@@ -60,17 +60,25 @@ Verified live on this machine with a probe session (`mc new h1-probe`):
   `stale` with escalate-only verdicts (fixed in this branch);
   `mc storage repair --apply` reconciled them to idle.
 
-Found and deferred to H2 (both reproduced live):
+Found live; first two FIXED on this branch (H2 head start):
 
-- ❌ `mc end --force` on a session with no provider transcript
-  (`missing-tool-session-source`) fails closed on the ENTIRE teardown —
-  the session can never be ended. Fail closed on provider-artifact
-  deletion only; worktree/branch/registry/host teardown must proceed.
-  Live stuck specimen: `h1-probe`.
-- ❌ zombie session hosts: daemon pid alive but socket not enumerable —
-  `mc list` correctly shows `stale`, but `mc storage repair`'s pid-alive
-  fallback counts them as live (no repair), and nothing reaps them.
-  Repair should probe the socket; `mc gc --runtime` should reap.
+- ✅ `mc end --force` on a session with no provider transcript
+  (`missing-tool-session-source`) failed closed on the ENTIRE teardown —
+  the session could never be ended. Now: after fresh discovery confirms
+  there is nothing to name provider-side, teardown proceeds with the
+  provider surface untouched. Verified live: h1-probe ended with zero
+  residue (worktree, branch, host dir, sidecars, daemon, registry).
+- ✅ removing the last session on a dedicated host left the empty daemon
+  running, which sidecar cleanup then refused (broker-host-still-running)
+  — teardown failed. Now the host is retired after its last session and
+  the teardown waits for the pid to exit. Also: tool-artifact scan budget
+  raised 250ms → 2s (wall-clock; blew the deadline under load ~50,
+  failing teardown closed).
+- ❌ still open for H2 — zombie session hosts: daemon pid alive but
+  socket not enumerable. `mc list` correctly shows `stale`, but
+  `mc storage repair`'s pid-alive fallback counts them as live (no
+  repair), and nothing reaps them. Repair should probe the socket;
+  `mc gc --runtime` should reap. Three live specimens on this machine.
 
 ## H2 — `mc end`: complete, residue-free teardown
 
