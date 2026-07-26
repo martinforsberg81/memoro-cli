@@ -12,6 +12,8 @@
  * session by id. If the entry has never had a tool session, resume is the
  * first fresh grounded start for that tracked worktree.
  */
+import { hostname } from 'node:os';
+
 import { findEntry, readRegistry, upsertEntry } from '../registry.js';
 import { emitCd, parseDirectiveFlag } from '../shell-directives.js';
 import { resolveToolInput } from '../../adapters/index.js';
@@ -112,13 +114,27 @@ export async function run(rawArgv, deps = {}) {
         });
         return attached.code ?? 0;
       }
+    } else {
+      // A running TUI cannot switch tool in place: a live LOCAL PTY refuses
+      // the switch with the exact way out.
+      const live = await (deps.findLiveBrokerSessionForEntry || findLiveBrokerSessionForEntry)(
+        entry, { request: deps.requestBroker || requestBroker, deps },
+      );
+      if (live) {
+        stderr.write(`mc: "${entry.name}" is running here — exit it (Ctrl+D) or \`mc end ${entry.name}\` before switching tools.\n`);
+        return 1;
+      }
     }
 
-    // The active-server-match idempotency check runs even for a switch: we
-    // never spawn a duplicate of a session that is already live (consistent
-    // with "a running TUI cannot switch tool in place" — end it first).
+    // Active-server-match idempotency: never spawn a duplicate of a session
+    // live somewhere else. For a SWITCH on this machine, the local broker is
+    // the authority — no live PTY here means the server record is a stale
+    // heartbeat (Ctrl+D moments ago), so the switch proceeds.
     const active = await activeMatchForEntry(entry, { argv, deps });
-    if (active) {
+    const staleSameMachine = switchingTool
+      && active?.machine_id
+      && active.machine_id === (deps.hostname || hostname)();
+    if (active && !staleSameMachine) {
       markEntryOpened(entry, {
         upsert: deps.upsertEntry || upsertEntry,
         now: deps.now,
@@ -570,6 +586,16 @@ async function maybeBackfillToolSession(entry, {
   }
 }
 
+export async function findLiveBrokerSessionForEntry(entry, {
+  request = requestBroker,
+  deps = {},
+} = {}) {
+  const listed = await request({ type: 'sessions' }).catch(() => null);
+  const sessions = await (deps.listLocalBrokerAndHostSessions || listLocalBrokerAndHostSessions)({ request })
+    .catch(() => listed?.sessions || []);
+  return selectLiveBrokerSessionForEntry(entry, sessions || listed?.sessions || []);
+}
+
 export async function attachLiveBrokerSession(entry, {
   request = requestBroker,
   attach = attachBrokerSession,
@@ -578,10 +604,7 @@ export async function attachLiveBrokerSession(entry, {
   stderr = process.stderr,
   deps = {},
 } = {}) {
-  const listed = await request({ type: 'sessions' }).catch(() => null);
-  const sessions = await (deps.listLocalBrokerAndHostSessions || listLocalBrokerAndHostSessions)({ request })
-    .catch(() => listed?.sessions || []);
-  const target = selectLiveBrokerSessionForEntry(entry, sessions || listed?.sessions || []);
+  const target = await findLiveBrokerSessionForEntry(entry, { request, deps });
   const id = brokerSessionId(target);
   if (!id) return { attached: false };
   const code = await attach({

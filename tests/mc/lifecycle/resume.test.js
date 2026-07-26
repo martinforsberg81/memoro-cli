@@ -615,6 +615,96 @@ describe('mc resume <name>', () => {
     }
   });
 
+  test('switch refuses while the session is live locally, with the exact way out', async () => {
+    const old = process.env.MC_TEST_MODE;
+    delete process.env.MC_TEST_MODE;
+    const stderrOut = [];
+    try {
+      const status = await runResume(['data', '--codex'], {
+        stdin: { isTTY: true },
+        stdout: { isTTY: true, write() {} },
+        stderr: { write: (t) => stderrOut.push(t) },
+        findEntry: () => makeEntry({
+          name: 'data', branch: 'sess/data', worktree_path: '/tmp/data',
+          coding_session_id: 'sess_data', session_state: 'live', tool: 'claude',
+        }),
+        findLiveBrokerSessionForEntry: async () => ({ id: 'sess_data', attachable: true }),
+        fetchActiveSessions: async () => ({ ok: true, sessions: [] }),
+        launchResumeSession: () => assert.fail('must not launch'),
+        launchFreshSession: () => assert.fail('must not launch'),
+        upsertEntry: (e) => e,
+      });
+      assert.equal(status, 1);
+      assert.match(stderrOut.join(''), /running here.*Ctrl\+D.*mc end data/s);
+    } finally {
+      if (old === undefined) delete process.env.MC_TEST_MODE;
+      else process.env.MC_TEST_MODE = old;
+    }
+  });
+
+  test('switch proceeds past a stale same-machine server record when no local PTY is live', async () => {
+    const old = process.env.MC_TEST_MODE;
+    delete process.env.MC_TEST_MODE;
+    const freshLaunched = [];
+    try {
+      const status = await runResume(['data', '--codex'], {
+        stdin: { isTTY: true },
+        stdout: { isTTY: true, write() {} },
+        stderr: { write() {} },
+        findEntry: () => makeEntry({
+          name: 'data', branch: 'sess/data', worktree_path: '/tmp/data',
+          coding_session_id: 'sess_data', session_state: 'live', tool: 'claude',
+        }),
+        findLiveBrokerSessionForEntry: async () => null,
+        fetchActiveSessions: async () => ({
+          ok: true,
+          sessions: [{ coding_session_id: 'sess_data', label: 'data', machine_id: 'this-host' }],
+        }),
+        hostname: () => 'this-host',
+        launchResumeSession: () => assert.fail('switch must not resume the old provider'),
+        launchFreshSession: ({ entry }) => { freshLaunched.push(entry); return 0; },
+        upsertEntry: (e) => ({ ...makeEntry({ name: e.name, branch: 'sess/data', worktree_path: '/tmp/data', coding_session_id: 'sess_data' }), ...e }),
+      });
+      assert.equal(status, 0);
+      assert.equal(freshLaunched.length, 1);
+      assert.equal(freshLaunched[0].tool, 'codex');
+    } finally {
+      if (old === undefined) delete process.env.MC_TEST_MODE;
+      else process.env.MC_TEST_MODE = old;
+    }
+  });
+
+  test('switch stays blocked when the session is active on another machine', async () => {
+    const old = process.env.MC_TEST_MODE;
+    delete process.env.MC_TEST_MODE;
+    const stdoutOut = [];
+    try {
+      const status = await runResume(['data', '--codex'], {
+        stdin: { isTTY: true },
+        stdout: { isTTY: true, write: (t) => stdoutOut.push(t) },
+        stderr: { write() {} },
+        findEntry: () => makeEntry({
+          name: 'data', branch: 'sess/data', worktree_path: '/tmp/data',
+          coding_session_id: 'sess_data', session_state: 'live', tool: 'claude',
+        }),
+        findLiveBrokerSessionForEntry: async () => null,
+        fetchActiveSessions: async () => ({
+          ok: true,
+          sessions: [{ coding_session_id: 'sess_data', label: 'data', machine_id: 'other-host' }],
+        }),
+        hostname: () => 'this-host',
+        launchResumeSession: () => assert.fail('must not launch'),
+        launchFreshSession: () => assert.fail('must not launch'),
+        upsertEntry: (e) => e,
+      });
+      assert.equal(status, 0);
+      assert.match(stdoutOut.join(''), /active/i);
+    } finally {
+      if (old === undefined) delete process.env.MC_TEST_MODE;
+      else process.env.MC_TEST_MODE = old;
+    }
+  });
+
   test('picker resume attaches a live local session before any tool write (same tool)', async () => {
     const attached = [];
     let launched = false;
