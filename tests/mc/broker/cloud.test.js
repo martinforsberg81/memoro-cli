@@ -94,6 +94,17 @@ describe('cloud broker URL helpers', () => {
     assert.equal(url.searchParams.get('cloud_session_id'), 'cloud_sess_123');
   });
 
+  test('buildBrokerWsUrl carries the runtime authorization binding when present', () => {
+    const url = new URL(buildBrokerWsUrl('https://meetmemoro.test', {
+      token: 'tok',
+      runtimeGeneration: 'rtg_0123456789abcdef',
+      authorizationDigest: 'a'.repeat(64),
+    }));
+
+    assert.equal(url.searchParams.get('runtime_generation'), 'rtg_0123456789abcdef');
+    assert.equal(url.searchParams.get('authorization_digest'), 'a'.repeat(64));
+  });
+
   test('appendToken adds the broker-side attach token', () => {
     assert.equal(
       appendToken('wss://example.test/api/mc/pty/att_x/broker?x=1', 'tok'),
@@ -1076,6 +1087,7 @@ describe('CloudBrokerClient', () => {
         mode: 'vault',
         hydrated: true,
         auth_json: 'secret-auth-json',
+        error: 'provider returned Bearer opaque-broker-canary-123',
       },
       coding_bin: {
         id: 'cbin_status123',
@@ -1145,6 +1157,7 @@ describe('CloudBrokerClient', () => {
       assert.equal(result.data.coding_bin.byte_count, 99);
       assert.equal(result.data.cloud_session.id, 'cld_status123');
       assert.doesNotMatch(JSON.stringify(result.data), /secret-/);
+      assert.doesNotMatch(JSON.stringify(result.data), /opaque-broker-canary-123/);
     } finally {
       client.stop();
       rmSync(dir, { recursive: true, force: true });

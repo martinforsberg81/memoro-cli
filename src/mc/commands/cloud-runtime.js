@@ -9,12 +9,13 @@ import {
 } from 'node:fs';
 import { dirname, join } from 'node:path';
 
-import { ACCOUNTS } from '../../commands/auth.js';
 import { memoroFetch } from '../../lib/api.js';
 import { readConfig } from '../../lib/config.js';
-import { getSecret } from '../../lib/keychain.js';
 import { brokerConnectArgs, resolveMcBinPath } from '../broker/cloud-supervisor.js';
 import { launchBrokerOwnedSession } from '../broker/launch-client.js';
+import { redactCredentialText } from '../runtime-redaction.js';
+import { scrubRuntimeSecretsFromEnv } from '../runtime-secrets.js';
+import { prepareCloudCodexAuth } from '../cloud-codex-auth.js';
 import {
   parseArgs as parseCloudSessionArgs,
   runCloudSessionWith,
@@ -48,10 +49,16 @@ const WORKSPACE_PREPARE_WATCHDOG_GRACE_MS = 15_000;
 const PROCESS_FORCE_KILL_GRACE_MS = 2_000;
 const PROCESS_FORCE_RESOLVE_GRACE_MS = 250;
 const GITHUB_SHORTHAND_RE = /^[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+$/;
+const RUNTIME_GENERATION_RE = /^rtg_[a-z0-9]{16}$/;
+const AUTHORIZATION_DIGEST_RE = /^[a-f0-9]{64}$/;
 const SECRET_ENV_NAMES_AFTER_WORKSPACE = Object.freeze([
+  'MEMORO_TOKEN',
+  'MEMORO_BROKER_TOKEN',
   'MC_CLOUD_GIT_TOKEN',
   'MC_CLOUD_GIT_SECRET_CAPABILITY',
   'MC_GIT_CLONE_TOKEN',
+  'MC_CLOUD_RUNTIME_GENERATION',
+  'MC_CLOUD_AUTHORIZATION_DIGEST',
   'GITHUB_TOKEN',
   'MC_CODEX_API_KEY',
   'OPENAI_API_KEY',
@@ -111,22 +118,30 @@ export async function runCloudRuntimeWith(opts, deps = {}) {
   }
 
   const env = { ...(deps.env || process.env) };
+  const runtimeAuthorization = validateRuntimeAuthorization(manifest, env);
+  if (!runtimeAuthorization.ok) {
+    stderr.write(`mc: ${runtimeAuthorization.error}\n`);
+    if (opts.json) writeJson(stdout, { ok: false, error: runtimeAuthorization.error });
+    return 2;
+  }
   const cloudSessionId = opts.cloudSessionId || manifest.cloud_session_id;
   const paths = runtimePaths(manifest, env, opts.manifestPath);
-  const token = await resolveRuntimeToken({ env, deps });
+  const runtimeToken = await resolveRuntimeToken({ env, deps });
+  const brokerToken = resolveBrokerToken({ env });
   const apiUrl = await resolveRuntimeApiUrl({ manifest, env, deps });
   const runtime = createRuntimeRecorder({
     cloudSessionId,
     manifest,
     paths,
-    token,
+    token: runtimeToken,
     apiUrl,
+    runtimeAuthorization,
     deps,
   });
 
   await runtime.record({
     phase: CLOUD_LIFECYCLE.RUNTIME_TOKEN_MINTED,
-    runtime_state: token ? 'starting' : 'runtime_token_missing',
+    runtime_state: runtimeToken ? 'starting' : 'runtime_token_missing',
     process_status: 'running',
     events: [{
       type: 'runtime.supervisor_started',
@@ -136,10 +151,10 @@ export async function runCloudRuntimeWith(opts, deps = {}) {
         tool: manifest.launch?.tool || null,
       },
     }],
-    readiness: initialReadiness(manifest, { tokenPresent: !!token }),
+    readiness: initialReadiness(manifest, { tokenPresent: !!runtimeToken }),
   });
 
-  if (!token) {
+  if (!runtimeToken) {
     const error = 'runtime token missing';
     await runtime.record({
       phase: CLOUD_LIFECYCLE.FAILED,
@@ -152,6 +167,49 @@ export async function runCloudRuntimeWith(opts, deps = {}) {
     stderr.write(`mc: ${error}\n`);
     if (opts.json) writeJson(stdout, { ok: false, error });
     return 1;
+  }
+
+  // The broker WebSocket has its own cloud-scoped credential. In particular,
+  // never borrow the runtime-status/snapshot token when this token is absent.
+  // Failing before workspace or tool launch keeps a partial runtime from being
+  // presented as a connected coding session.
+  if (!brokerToken) {
+    const error = 'broker token missing';
+    await runtime.record({
+      phase: CLOUD_LIFECYCLE.FAILED,
+      runtime_state: 'failed',
+      process_status: 'exited',
+      error_code: 'broker_token_missing',
+      error,
+      events: [{ type: 'runtime.failed', data: { reason: 'broker_token_missing' } }],
+    });
+    stderr.write(`mc: ${error}\n`);
+    if (opts.json) writeJson(stdout, { ok: false, error });
+    return 1;
+  }
+
+  if ((manifest.launch?.tool || 'codex') === 'codex') {
+    const codexPreflight = await prepareCloudCodexAuth({
+      codingSessionId: manifest.coding_session_id,
+      env,
+    });
+    if (!codexPreflight.ok) {
+      await runtime.record({
+        phase: CLOUD_LIFECYCLE.FAILED,
+        runtime_state: 'failed',
+        process_status: 'exited',
+        error_code: codexPreflight.reason || 'cloud_codex_auth_preflight_failed',
+        error: codexPreflight.error || 'Codex cloud auth preflight failed',
+        events: [{ type: 'provider.launch.failed', data: { reason: codexPreflight.reason || null } }],
+        readiness: {
+          ...initialReadiness(manifest, { tokenPresent: true }),
+          tool_auth: { ready: false, repair_required: true, repair_action: 'contact_support' },
+        },
+      });
+      stderr.write(`mc: ${codexPreflight.error || 'Codex cloud auth preflight failed'}\n`);
+      if (opts.json) writeJson(stdout, { ok: false, error: codexPreflight.error || 'Codex cloud auth preflight failed' });
+      return 1;
+    }
   }
 
   const workspaceDir = runtimeWorkspaceDir(manifest);
@@ -239,9 +297,11 @@ export async function runCloudRuntimeWith(opts, deps = {}) {
   const restore = await restoreCodingBinSnapshot(manifest, {
     env,
     deps,
-    token,
+    token: runtimeToken,
     cwd: workspaceDir,
     paths,
+    runtimeGeneration: runtimeAuthorization.runtimeGeneration,
+    authorizationDigest: runtimeAuthorization.authorizationDigest,
   });
   if (!restore.ok) {
     await runtime.record({
@@ -279,7 +339,7 @@ export async function runCloudRuntimeWith(opts, deps = {}) {
   const toolAuth = await toolAuthHydrate({
     tool: manifest.launch?.tool || 'codex',
     cloudSessionId,
-    env,
+    env: providerLaunchEnv(env),
     deps: deps.toolAuthDeps || deps,
   }).catch((err) => ({
     ok: true,
@@ -439,9 +499,11 @@ export async function runCloudRuntimeWith(opts, deps = {}) {
     const captured = await captureCodingBinSnapshot(manifest, {
       env: launchEnv,
       deps,
-      token,
+      token: runtimeToken,
       cwd: workspaceDir,
       paths,
+      runtimeGeneration: runtimeAuthorization.runtimeGeneration,
+      authorizationDigest: runtimeAuthorization.authorizationDigest,
       trigger: signal || 'runtime_shutdown',
     });
     const eventType = captured.ok ? 'coding_bin.snapshot.finished' : 'coding_bin.snapshot.failed';
@@ -470,7 +532,8 @@ export async function runCloudRuntimeWith(opts, deps = {}) {
   try {
     brokerCode = await connectBroker({
       manifest,
-      env: launchEnv,
+      runtimeAuthorization,
+      env: brokerConnectEnvironment(env, brokerToken),
       cwd: workspaceDir,
       json: opts.json,
       stdout,
@@ -566,6 +629,24 @@ export async function prepareWorkspace(manifest, {
     workspace_ref: branch,
   });
 
+  // A cloud session that names a repository must never degrade into an
+  // initialized-but-empty workspace when its repository reference is absent
+  // or malformed. That would let the runtime report ready for the wrong
+  // project after an authorization or manifest error.
+  if (requiresRepositoryCheckout(manifest) && !cloneUrl) {
+    return {
+      ok: false,
+      code: 'repository_clone_target_missing',
+      error: 'repository checkout requires a valid clone target',
+      cwd,
+      repo_ref: repoRef,
+      workspace_ref: branch,
+      initialized_empty: false,
+      clone_failed: false,
+      git_auth: gitAuthReadiness(manifest, env, { cloneFailed: true }),
+    };
+  }
+
   if (existing(join(cwd, '.git'))) {
     return {
       ok: true,
@@ -616,7 +697,6 @@ export async function prepareWorkspace(manifest, {
       env,
       deps,
       runProcess,
-      credentialHelper: gitCredentialHelper(manifest, env),
       timeoutMs: cloneTimeoutMs,
     });
     await reportWorkspaceProgress(deps, 'workspace.clone.finished', {
@@ -741,6 +821,7 @@ async function launchCloudSessionFromManifest(manifest, {
 
 function connectBrokerInForeground({
   manifest,
+  runtimeAuthorization = null,
   env = process.env,
   cwd = process.cwd(),
   json = false,
@@ -754,6 +835,9 @@ function connectBrokerInForeground({
     sourceKind: source.kind,
     sourceName: source.name,
     cloudSessionId: manifest.cloud_session_id,
+    cloudRuntime: true,
+    runtimeGeneration: runtimeAuthorization?.runtimeGeneration || manifest.authorization?.runtime_generation,
+    authorizationDigest: runtimeAuthorization?.authorizationDigest || manifest.authorization?.authorization_digest,
   });
   if (json) args.push('--json');
   return new Promise((resolve) => {
@@ -811,6 +895,7 @@ function createRuntimeRecorder({
   paths,
   token,
   apiUrl,
+  runtimeAuthorization,
   deps = {},
 }) {
   return {
@@ -840,6 +925,8 @@ function createRuntimeRecorder({
           token,
           cloudSessionId,
           report: normalized,
+          runtimeGeneration: runtimeAuthorization.runtimeGeneration,
+          authorizationDigest: runtimeAuthorization.authorizationDigest,
         }).catch(() => null);
       }
     },
@@ -877,11 +964,12 @@ function runtimeStatusFile(report) {
   });
 }
 
-async function reportRuntimeStatus({ apiUrl, token, cloudSessionId, report }) {
+async function reportRuntimeStatus({ apiUrl, token, cloudSessionId, report, runtimeGeneration, authorizationDigest }) {
   return memoroFetch(apiUrl, `/api/mc/cloud-sessions/${encodeURIComponent(cloudSessionId)}/runtime-status`, {
     token,
     method: 'POST',
     body: sanitizeRuntimeData(report),
+    requestHeaders: runtimeAuthorizationHeaders({ runtimeGeneration, authorizationDigest }),
     timeoutMs: 10_000,
   });
 }
@@ -890,23 +978,29 @@ function runGit(args, {
   env,
   deps = {},
   runProcess,
-  credentialHelper = null,
   timeoutMs = null,
 }) {
-  const finalArgs = credentialHelper
-    ? ['-c', `credential.helper=${credentialHelper}`, ...args]
-    : args;
-  const gitEnv = { ...env };
-  if (!gitEnv.MC_CLOUD_GIT_TOKEN) {
-    gitEnv.MC_CLOUD_GIT_TOKEN = stringOrNull(gitEnv.MC_GIT_CLONE_TOKEN) || stringOrNull(gitEnv.GITHUB_TOKEN) || '';
-  }
+  // Cloud runtime accepts only the credential-free HTTPS transport. Do not
+  // inherit Git configuration, hooks, askpass, SSH agent, proxy, or GitHub CLI
+  // state: private access belongs to a future typed pre-launch operation, not
+  // to a generic git child process.
+  const finalArgs = [
+    '-c', 'credential.helper=',
+    '-c', 'core.hooksPath=/dev/null',
+    '-c', 'init.templateDir=',
+    '-c', 'http.proxy=',
+    '-c', 'http.sslVerify=true',
+    '-c', 'protocol.file.allow=never',
+    '-c', 'protocol.ext.allow=never',
+    ...args,
+  ];
+  const gitEnv = isolatedGitEnvironment(env);
   const processCwd = typeof deps.cwd === 'function' ? deps.cwd() : deps.cwd;
   return runProcess('git', finalArgs, {
     env: {
       ...gitEnv,
       GIT_TERMINAL_PROMPT: '0',
-      GIT_LFS_SKIP_SMUDGE: gitEnv.GIT_LFS_SKIP_SMUDGE || '1',
-      GIT_SSH_COMMAND: gitEnv.GIT_SSH_COMMAND || 'ssh -o BatchMode=yes',
+      GIT_LFS_SKIP_SMUDGE: '1',
     },
     cwd: processCwd || process.cwd(),
     timeoutMs,
@@ -916,7 +1010,7 @@ function runGit(args, {
     code: res?.code,
     timedOut: res?.timedOut === true,
     error: res?.code === 0 ? null : (res?.stderr || res?.error || `git exited ${res?.code ?? 'unknown'}`),
-    usedCredential: !!credentialHelper,
+    usedCredential: false,
   }));
 }
 
@@ -1044,7 +1138,7 @@ function validateManifest(manifest, opts) {
   if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)) {
     return { ok: false, error: 'manifest must be a JSON object' };
   }
-  if (manifest.contract_version && manifest.contract_version !== CLOUD_RUNTIME_CONTRACT_VERSION) {
+  if (manifest.contract_version !== CLOUD_RUNTIME_CONTRACT_VERSION) {
     return { ok: false, error: `unsupported manifest contract: ${manifest.contract_version}` };
   }
   if (!CLOUD_SESSION_ID_RE.test(manifest.cloud_session_id || '')) {
@@ -1053,7 +1147,38 @@ function validateManifest(manifest, opts) {
   if (opts.cloudSessionId && manifest.cloud_session_id !== opts.cloudSessionId) {
     return { ok: false, error: 'manifest cloud_session_id does not match --cloud-session-id' };
   }
+  const authorization = manifest.authorization || {};
+  if (!RUNTIME_GENERATION_RE.test(stringOrNull(authorization.runtime_generation) || '')) {
+    return { ok: false, error: 'manifest runtime authorization generation is invalid' };
+  }
+  if (!AUTHORIZATION_DIGEST_RE.test(stringOrNull(authorization.authorization_digest) || '')) {
+    return { ok: false, error: 'manifest runtime authorization digest is invalid' };
+  }
   return { ok: true };
+}
+
+function validateRuntimeAuthorization(manifest, env = {}) {
+  const runtimeGeneration = stringOrNull(manifest?.authorization?.runtime_generation);
+  const authorizationDigest = stringOrNull(manifest?.authorization?.authorization_digest);
+  if (!RUNTIME_GENERATION_RE.test(runtimeGeneration || '') || !AUTHORIZATION_DIGEST_RE.test(authorizationDigest || '')) {
+    return { ok: false, error: 'manifest runtime authorization metadata is invalid' };
+  }
+  const envGeneration = stringOrNull(env.MC_CLOUD_RUNTIME_GENERATION);
+  const envDigest = stringOrNull(env.MC_CLOUD_AUTHORIZATION_DIGEST);
+  if (!envGeneration || !envDigest) {
+    return { ok: false, error: 'runtime authorization metadata is missing from supervisor environment' };
+  }
+  if (envGeneration !== runtimeGeneration || envDigest !== authorizationDigest) {
+    return { ok: false, error: 'runtime authorization metadata does not match supervisor environment' };
+  }
+  return { ok: true, runtimeGeneration, authorizationDigest };
+}
+
+function runtimeAuthorizationHeaders({ runtimeGeneration, authorizationDigest } = {}) {
+  return {
+    'X-MC-Runtime-Generation': runtimeGeneration,
+    'X-MC-Authorization-Digest': authorizationDigest,
+  };
 }
 
 function runtimePaths(manifest, env = {}, manifestPath = null) {
@@ -1075,10 +1200,7 @@ function runtimeWorkspaceDir(manifest) {
 }
 
 async function resolveRuntimeToken({ env = process.env, deps = {} }) {
-  const envToken = stringOrNull(env.MEMORO_TOKEN);
-  if (envToken) return envToken;
-  const getSecretFn = deps.getSecret || getSecret;
-  return getSecretFn(ACCOUNTS.TOKEN);
+  return stringOrNull(env.MEMORO_TOKEN);
 }
 
 async function resolveRuntimeApiUrl({ manifest, env = process.env, deps = {} }) {
@@ -1092,9 +1214,23 @@ async function resolveRuntimeApiUrl({ manifest, env = process.env, deps = {} }) 
 }
 
 function providerLaunchEnv(env = {}) {
-  const next = { ...(env || {}) };
+  const next = scrubRuntimeSecretsFromEnv(env);
   for (const name of SECRET_ENV_NAMES_AFTER_WORKSPACE) delete next[name];
   return next;
+}
+
+function brokerConnectEnvironment(env = {}, brokerToken = null) {
+  const next = { ...(env || {}) };
+  delete next.MEMORO_TOKEN;
+  delete next.MEMORO_BROKER_TOKEN;
+  delete next.MC_CLOUD_RUNTIME_GENERATION;
+  delete next.MC_CLOUD_AUTHORIZATION_DIGEST;
+  if (brokerToken) next.MEMORO_BROKER_TOKEN = brokerToken;
+  return next;
+}
+
+function resolveBrokerToken({ env = process.env } = {}) {
+  return stringOrNull(env.MEMORO_BROKER_TOKEN);
 }
 
 function runtimeSource(manifest) {
@@ -1194,25 +1330,52 @@ function gitAuthReadiness(manifest, env = {}, {
   const auth = manifest?.repo?.git_auth || {};
   const credentialSource = stringOrNull(auth.credential_source || manifest?.repo?.credential_source);
   const privateAccess = /private|capability/i.test(String(auth.access || manifest?.repo?.access || ''));
-  const hasRuntimeCredential = !!gitCredentialHelper(manifest, env);
   return sanitizeRuntimeData({
     access: auth.access || manifest?.repo?.access || null,
     grant_kind: auth.grant_kind || manifest?.repo?.grant_kind || null,
     credential_source: credentialSource,
-    ready: !privateAccess || usedCredential || auth.ready === true || hasRuntimeCredential,
-    repair_required: (privateAccess && !usedCredential && !hasRuntimeCredential && auth.ready !== true) || cloneFailed,
+    // `ready` is control-plane descriptor metadata, not a local credential
+    // source. The runtime never upgrades it from an ambient token.
+    ready: !privateAccess || usedCredential || auth.ready === true,
+    repair_required: (privateAccess && !usedCredential && auth.ready !== true) || cloneFailed,
     secret_boundary: auth.secret_boundary || 'status_only',
   });
 }
 
-function gitCredentialHelper(manifest, env = {}) {
-  const repoRef = safeRuntimeRepoRef(manifest?.repo?.ref);
-  if (!isGitHubCloneRef(repoRef)) return null;
-  const source = stringOrNull(manifest?.repo?.credential_source || manifest?.repo?.git_auth?.credential_source);
-  if (source === 'public_clone' || source === 'none') return null;
-  const token = stringOrNull(env.MC_CLOUD_GIT_TOKEN) || stringOrNull(env.MC_GIT_CLONE_TOKEN) || stringOrNull(env.GITHUB_TOKEN);
-  if (!token) return null;
-  return '!f() { test "$1" = get || exit 0; echo username=x-access-token; echo password=$MC_CLOUD_GIT_TOKEN; }; f';
+function isolatedGitEnvironment(env = {}) {
+  const gitEnv = { ...env };
+  for (const name of Object.keys(gitEnv)) {
+    if (
+      name.startsWith('GIT_')
+      || name.startsWith('GH_')
+      || name.startsWith('GITHUB_')
+      || name === 'MC_CLOUD_GIT_TOKEN'
+      || name === 'MC_CLOUD_GIT_SECRET_CAPABILITY'
+      || name === 'MC_GIT_CLONE_TOKEN'
+      || name === 'SSH_AUTH_SOCK'
+      || name === 'SSH_AGENT_PID'
+      || name === 'SSH_ASKPASS'
+      || name === 'SSH_ASKPASS_REQUIRE'
+      || /^(?:ALL|HTTP|HTTPS|NO)_PROXY$/i.test(name)
+    ) {
+      delete gitEnv[name];
+    }
+  }
+  // These explicit values disable system/global config and interactive Git
+  // prompts even when the sandbox image happens to contain user state. A
+  // non-directory home also prevents ambient netrc/XDG credential discovery.
+  gitEnv.GIT_CONFIG_NOSYSTEM = '1';
+  gitEnv.GIT_CONFIG_GLOBAL = '/dev/null';
+  gitEnv.HOME = '/dev/null';
+  gitEnv.XDG_CONFIG_HOME = '/dev/null';
+  return gitEnv;
+}
+
+function requiresRepositoryCheckout(manifest) {
+  const repo = manifest?.repo || {};
+  return repo.required === true
+    || Boolean(stringOrNull(repo.id))
+    || Boolean(stringOrNull(repo.ref));
 }
 
 function runtimeEvent(manifest, type, { at, data = {} } = {}) {
@@ -1230,6 +1393,7 @@ function runtimeEvent(manifest, type, { at, data = {} } = {}) {
 function sanitizeRuntimeData(value, depth = 0) {
   if (depth > 6) return '[truncated]';
   if (Array.isArray(value)) return value.slice(0, 50).map((item) => sanitizeRuntimeData(item, depth + 1));
+  if (typeof value === 'string') return redactCredentialText(value);
   if (!value || typeof value !== 'object') return value;
   const out = {};
   for (const [key, child] of Object.entries(value)) {
@@ -1265,28 +1429,20 @@ function safeRuntimeRepoRef(value) {
 function repoCloneUrl(repoRef) {
   const value = stringOrNull(repoRef);
   if (!value) return null;
-  if (/^https?:\/\//i.test(value)) {
+  if (/^https:\/\//i.test(value)) {
     try {
       const url = new URL(value);
-      if (url.username || url.password) return null;
+      if (url.username || url.password || url.search || url.hash) return null;
       return value;
     } catch {
       return null;
     }
   }
-  if (/^(ssh:\/\/|git@)/i.test(value)) return value;
+  // SSH can implicitly consult agents, known-host configuration, command
+  // wrappers, and key files. It is not a supported cloud-runtime transport.
+  if (/^(ssh:\/\/|git@)/i.test(value)) return null;
   if (GITHUB_SHORTHAND_RE.test(value)) return `https://github.com/${value.replace(/\.git$/, '')}.git`;
   return null;
-}
-
-function isGitHubCloneRef(repoRef) {
-  const cloneUrl = repoCloneUrl(repoRef);
-  if (!cloneUrl || !/^https?:\/\//i.test(cloneUrl)) return false;
-  try {
-    return new URL(cloneUrl).hostname.toLowerCase() === 'github.com';
-  } catch {
-    return false;
-  }
 }
 
 function isSafeRuntimeRmPath(path) {

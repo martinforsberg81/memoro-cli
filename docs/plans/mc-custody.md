@@ -6,10 +6,12 @@ from this; build it first.
 
 ## Purpose
 
-One account-owned custody for every injected secret — raw API keys, dotenv
-secrets, and the coding tools' own provider auth (Claude Code, Codex) — with the
-contract's invariants enforced by construction: credential-blindness, envelope
-encryption with **no bulk decrypt**, per-device unlock, audit, revocation.
+One account-owned custody for raw API keys and coding-tool provider auth
+(Claude Code, Codex), with the contract's invariants enforced by construction:
+credential-blindness, envelope encryption with **no bulk decrypt**, per-device
+unlock, audit, and revocation. Custody records are not injected into dotenv,
+repo files, generic environments, or model-directed tools. They are consumed
+only by a supported isolated credential domain or immutable typed adapter.
 Brokered providers (GitHub App) do not pass through custody at all; their
 authority stays in the control plane (contract §2.2).
 
@@ -25,15 +27,17 @@ the contract assumed:
   sees plaintext — this already realises "Memoro cannot bulk-decrypt", in the
   strongest form: the unlock factor is user-held, so Memoro *cannot* decrypt at
   all, breach or not.
-- **JIT materialisation + shred.** Adapter contract `tokenLocations()` /
-  `materializeToken()` / `shredToken()` (e.g. Claude's `.credentials.json`,
-  0600) and `materialiseVaultBeforeLaunch` in the launch paths; shred at
-  session end.
-- **Model-read blocking.** The PreToolUse hook (`block-secret-reads`) denies the
-  model reads of credential-shaped paths — axiom-1 enforcement that exists and
-  is active today.
-- **Repo bindings + audit.** `mc vault bind <label> <ENV_KEY>` (value-free,
-  per-repo) and an audit layer (`vault/audit.js`).
+- **Legacy materialisation code and shred hooks.** Historic adapter seams
+  (`tokenLocations()`, `materializeToken()`, `shredToken()`) and the
+  `materialiseVaultBeforeLaunch` path are retained only for audit/migration;
+  managed plaintext materialisation is disabled. A `0600` tool-auth file is not
+  a compliant session boundary.
+- **Read-block hook.** The PreToolUse `block-secret-reads` hook is useful
+  defence in depth, but it cannot enforce axiom 1 when the credential owner and
+  model-directed commands share a readable namespace or OS principal.
+- **Legacy repo bindings + audit.** `mc vault bind <label> <ENV_KEY>` bindings
+  are audit/migration metadata only. They cannot authorise or cause a secret to
+  be written into a repository or environment.
 
 **Contract correction:** the contract's "vault is retired as a device-local
 store" was inaccurate — the vault is already account-backed. What Phase 1 does
@@ -87,7 +91,8 @@ Recovery Code  ──KDF──► RUK ──────────────
   device-bound. One prompt per device, ever.
 - **Daily use:** the trusted identity service (the only Keychain-reading module,
   per `connected-capabilities.md`) reads the cached CRK; sessions unlock
-  passwordlessly. The model cannot reach the keychain (hook-enforced).
+  passwordlessly. The credential domain, not a hook, must be outside the model
+  executor's principal, namespace, mounts, process inspection, and IPC surface.
 - **Device revocation:** server tracks device registrations; revoking a device
   deletes its registration and the next sync instructs key-cache purge. True
   cryptographic revocation = CRK rotation (re-wrap + re-encrypt DEK wraps), a
@@ -100,9 +105,9 @@ Recovery Code  ──KDF──► RUK ──────────────
 - `custody_secrets` (evolves the existing secret rows): `class`, encrypted
   label, `wrapped_dek`, ciphertext + IV, integrity metadata (AAD binds class +
   binding scope so a row cannot be repurposed), timestamps.
-- Secret **classes**: `tool-auth` (claude-code, codex — well-known schemas
-  matching each adapter's `tokenLocations()`), `secret` (API keys / dotenv),
-  extensible.
+- Secret **classes**: `tool-auth` (claude-code, codex — only for a supported
+  isolated tool topology), `secret` (API keys consumed through typed adapters),
+  extensible. `dotenv` and generic environment injection are not custody uses.
 - The server keeps: ciphertext, wrapped keys, verifiers, audit — never
   plaintext, never unwrapped keys.
 
@@ -111,8 +116,10 @@ Recovery Code  ──KDF──► RUK ──────────────
 `mc vault adopt <tool>` — with explicit user confirmation, the **trusted
 runtime** (never the model; never logged) reads the tool's local auth (e.g.
 Claude keychain entry / `.credentials.json`, Codex `auth.json`), encrypts it
-client-side, and stores it as `tool-auth`. On any other device, bootstrap
-materialises it and the tool is signed in.
+client-side, and stores it as `tool-auth`. On another device it is usable only
+when that tool's approved topology keeps it inside the credential/provider
+domain; bootstrap must fail closed rather than writing it to a tool home
+directory visible to model-directed commands.
 
 This deliberately supersedes the older `connected-capabilities.md` clause "mc
 never reads or copies the tool's access token": the contract decision (§4) is
@@ -123,25 +130,33 @@ client-side encrypted before it leaves the process.
 Prefer-revocable still applies (§2.2): where a tool later offers a revocable
 grant flow, custody switches to holding that instead of the raw file.
 
-## Materialisation contract (session start/end)
+## Credential-blind session-use contract
 
-1. Session launch (existing `materialiseVaultBeforeLaunch` seam) → broker
-   resolves what this session gets:
-   - `tool-auth` for the session's tool: materialised automatically.
-   - `secret` class: **default-deny** — only labels the user bound to this repo
-     (`mc vault bind`) materialise. Unbound secrets never leave custody.
-2. Client-side decrypt (CRK from keychain → DEK → plaintext in broker memory) →
-   adapter `materializeToken()` writes the tool-expected path, 0600.
-3. Enforcement stack: file modes + PreToolUse read-block hook + env scrub — the
-   model never sees the value (axiom 1).
-4. Session end (or `mc end`): `shredToken()` removes materialised files; broker
-   memory dropped. Audit records fetch + materialise + shred per session.
+1. A session receives an immutable, user-authorised policy that selects exact
+   opaque custody records and bounded typed uses. A repo file, label, command,
+   or model request cannot select another record or broaden that policy.
+2. Client-side decrypt (CRK → DEK → plaintext) happens only in the trusted
+   custody/credential domain. A raw secret, DEK, CRK, login artifact, or
+   recovery material never crosses into the LLM domain.
+3. A `tool-auth` record is usable only through a documented supported topology
+   with an enforced separation between provider process and model-directed
+   command executor. A raw `secret` record is usable only by an immutable,
+   signed, policy-bound typed adapter. Arbitrary project code cannot receive a
+   secret, even in a separate process, because it can print, return, or
+   exfiltrate it.
+4. `0600`, hooks, environment scrubbing, redaction, TTLs, and shredding are
+   defence in depth. They do not replace principal, namespace, mount, process,
+   socket, IPC, and egress isolation.
+5. On end, revoke session grants, terminate the credential domain, and have an
+   external host/control-plane authority confirm process, mount, socket, and
+   sandbox cleanup. A compromised runtime cannot attest to its own cleanup.
+   Audit records contain only sanitised metadata.
 
 ## Threats → mechanisms
 
 | Threat (contract §1) | Mechanism |
 |---|---|
-| Model exfiltrates a credential | Never in model-reachable surfaces; read-block hook; env scrub; 0600 broker-owned files; shred at end |
+| Model exfiltrates a credential | Enforced credential-domain separation; immutable typed adapters; bounded/redacted IPC and egress. Hooks, scrubbing, 0600, and shredding are defence in depth only. |
 | Memoro breach → bulk credentials | Zero-knowledge: server holds ciphertext + wrapped keys only; unlock factor is user-held |
 | Stolen device | Keychain-bound CRK cache behind OS user auth; device revocation + CRK rotation |
 | Lost passphrase | Recovery code (second CRK wrap); otherwise data is unrecoverable **by design** |
@@ -151,12 +166,14 @@ grant flow, custody switches to holding that instead of the raw file.
 ## V2 hook (design now, build later)
 
 Headless cloud cannot read a device keychain. The scoped unlock grant
-(contract §2.4) becomes: at pre-authorisation, the **user's client re-wraps the
-specific DEKs** the session may use to the sandbox's ephemeral session public
-key (HPKE-style), with expiry. Memoro still never holds an unwrapping key; the
-sandbox can decrypt exactly those secrets, for that session, until expiry.
-The per-secret DEK layer above exists precisely so this is possible without
-touching CRK.
+(contract §2.4) becomes: after user presence, the **user's client re-wraps the
+specific DEKs** the session may use to an attested sandbox credential-domain
+ephemeral public key, using the standard JWE envelope defined by
+`mc-v2-cloud.md`, with expiry. The user signature binds the canonical
+authorisation statement and exact grant commitment; Memoro stores only opaque
+ciphertext and never holds an unwrapping key. The sandbox can decrypt exactly
+those secrets, for that session, until expiry. The per-secret DEK layer above
+exists precisely so this is possible without touching CRK.
 
 ## Migration & compatibility
 
@@ -174,9 +191,9 @@ touching CRK.
 |---|---|---|
 | S1 | memoro + memoro-cli | Envelope hierarchy: CRK/DEK client crypto + wrapped-key storage + lazy migration + port-verification tests |
 | S2 | memoro-cli | Device unlock cache (OS keychain via identity service) + device registry + revocation |
-| S3 | memoro-cli (+ memoro) | `mc vault adopt <tool>` + tool-auth class + bootstrap materialisation (claude-code, codex) |
+| S3 | memoro-cli (+ memoro) | `mc vault adopt <tool>` + tool-auth class + supported isolated provider topology; unsupported tools fail closed |
 | S4 | memoro + memoro-cli | Recovery code + passphrase/CRK rotation |
-| S5 | both | Acceptance: fresh second device → sign in → unlock once → tools signed in, repo secrets materialise by binding — safely (hook/scrub verified) |
+| S5 | both | Acceptance: fresh second device → sign in → unlock once → supported tools and immutable typed adapters work without exposing a credential to the LLM domain |
 
 Slices land in order; S1 gates everything. No production flag flips before S5
 passes.

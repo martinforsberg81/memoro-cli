@@ -9,6 +9,7 @@ import { requestBroker } from './client.js';
 import { brokerSocketPath } from './paths.js';
 import { sourceForTool } from './session-sidecars.js';
 import { cloudRuntimePhaseSemantics } from '../cloud-runtime-contract.js';
+import { redactCredentialText } from '../runtime-redaction.js';
 import { findLatestTranscriptForTool } from '../session-upload.js';
 import { sanitizeSessionProjection } from '../session-projector.js';
 import {
@@ -45,6 +46,8 @@ export class CloudBrokerClient extends EventEmitter {
     sourceKind = null,
     sourceName = null,
     cloudSessionId = null,
+    runtimeGeneration = null,
+    authorizationDigest = null,
     env = process.env,
     request = requestBroker,
     connect = createConnection,
@@ -75,6 +78,8 @@ export class CloudBrokerClient extends EventEmitter {
       sourceKind,
       sourceName,
       cloudSessionId,
+      runtimeGeneration,
+      authorizationDigest,
       env,
       machineId,
       deviceName,
@@ -692,10 +697,14 @@ export function buildBrokerWsUrl(apiUrl, {
   sourceKind,
   sourceName,
   cloudSessionId,
+  runtimeGeneration,
+  authorizationDigest,
   source_id,
   source_kind,
   source_name,
   cloud_session_id,
+  runtime_generation,
+  authorization_digest,
 } = {}) {
   const wsBase = apiUrl.replace(/^http(s?):\/\//i, (_, s) => (s === 's' ? 'wss://' : 'ws://'));
   const url = new URL('/api/mc/broker/ws', wsBase);
@@ -705,6 +714,8 @@ export function buildBrokerWsUrl(apiUrl, {
   setOptionalQueryParam(url, 'source_kind', stringOrDefault(sourceKind, source_kind));
   setOptionalQueryParam(url, 'source_name', stringOrDefault(sourceName, source_name));
   setOptionalQueryParam(url, 'cloud_session_id', stringOrDefault(cloudSessionId, cloud_session_id));
+  setOptionalQueryParam(url, 'runtime_generation', stringOrDefault(runtimeGeneration, runtime_generation));
+  setOptionalQueryParam(url, 'authorization_digest', stringOrDefault(authorizationDigest, authorization_digest));
   return url.toString();
 }
 
@@ -720,6 +731,8 @@ export function resolveSourceIdentity({
   sourceKind = null,
   sourceName = null,
   cloudSessionId = null,
+  runtimeGeneration = null,
+  authorizationDigest = null,
   env = process.env,
   machineId = hostname(),
   deviceName = machineId,
@@ -730,6 +743,8 @@ export function resolveSourceIdentity({
     source_kind: kind,
     source_name: stringOrDefault(sourceName, stringOrDefault(env?.MC_SOURCE_NAME, deviceName)),
     cloud_session_id: stringOrDefault(cloudSessionId, stringOrDefault(env?.MC_CLOUD_SESSION_ID, null)),
+    runtime_generation: stringOrDefault(runtimeGeneration, stringOrDefault(env?.MC_CLOUD_RUNTIME_GENERATION, null)),
+    authorization_digest: stringOrDefault(authorizationDigest, stringOrDefault(env?.MC_CLOUD_AUTHORIZATION_DIGEST, null)),
   };
 }
 
@@ -945,6 +960,7 @@ function environmentStatusSummary({ live, stopped, failed, continueAction, phase
 function sanitizeStatusData(value, depth = 0) {
   if (depth > 8) return '[truncated]';
   if (Array.isArray(value)) return value.slice(0, 100).map((item) => sanitizeStatusData(item, depth + 1));
+  if (typeof value === 'string') return redactCredentialText(value);
   if (!value || typeof value !== 'object') return value;
   const out = {};
   for (const [key, child] of Object.entries(value)) {

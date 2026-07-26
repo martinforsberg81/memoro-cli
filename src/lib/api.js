@@ -12,6 +12,7 @@ export async function memoroFetch(apiUrl, path, {
   method = 'GET',
   body = null,
   sourceId = null,
+  requestHeaders = null,
   timeoutMs = DEFAULT_TIMEOUT_MS,
   fetchImpl = globalThis.fetch,
   curlImpl = runCurlRequest,
@@ -27,6 +28,13 @@ export async function memoroFetch(apiUrl, path, {
   };
   if (typeof sourceId === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/.test(sourceId)) {
     headers['X-Memoro-Source-Id'] = sourceId;
+  }
+  if (requestHeaders && typeof requestHeaders === 'object') {
+    for (const [name, value] of Object.entries(requestHeaders)) {
+      if (typeof name === 'string' && typeof value === 'string' && name.startsWith('X-')) {
+        headers[name] = value;
+      }
+    }
   }
   if (body != null) headers['Content-Type'] = 'application/json';
 

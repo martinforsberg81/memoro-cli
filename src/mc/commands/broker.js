@@ -114,6 +114,8 @@ export async function runBrokerWith(opts, deps) {
       sourceKind: opts.sourceKind,
       sourceName: opts.sourceName,
       cloudSessionId: opts.cloudSessionId,
+      ...(opts.runtimeGeneration ? { runtimeGeneration: opts.runtimeGeneration } : {}),
+      ...(opts.authorizationDigest ? { authorizationDigest: opts.authorizationDigest } : {}),
     })).catch((err) => ({ ok: false, error: err.message || String(err) }));
     if (opts.json) {
       deps.stdout.write(JSON.stringify(res, null, 2) + '\n');
@@ -159,10 +161,10 @@ async function runCloudConnection(opts, io = {}) {
   try {
     const config = await readConfig();
     const apiUrl = getApiUrl(opts.rawArgv || []) || config.apiUrl;
-    const { token } = await resolveBrokerAuthToken();
+    const { token } = await resolveBrokerAuthToken({ requireBrokerToken: opts.cloudRuntime === true });
     if (!token) {
       unregisterPid?.();
-      return { ok: false, error: 'no Memoro token' };
+      return { ok: false, error: opts.cloudRuntime ? 'cloud broker token missing' : 'no Memoro token' };
     }
     const mcVersion = await getPackageVersion().catch(() => null);
     const client = new CloudBrokerClient({
@@ -173,6 +175,8 @@ async function runCloudConnection(opts, io = {}) {
       sourceKind: opts.sourceKind,
       sourceName: opts.sourceName,
       cloudSessionId: opts.cloudSessionId,
+      runtimeGeneration: opts.runtimeGeneration,
+      authorizationDigest: opts.authorizationDigest,
       repoCatalogProvider: listLocalRepoCatalog,
     });
     const ready = waitForCloudOpen(client, CONNECT_READY_TIMEOUT_MS);
@@ -308,10 +312,13 @@ export function parseArgs(argv) {
     help: false,
     readyFile: null,
     once: false,
+    cloudRuntime: false,
     sourceId: null,
     sourceKind: null,
     sourceName: null,
     cloudSessionId: null,
+    runtimeGeneration: null,
+    authorizationDigest: null,
     rawArgv: argv,
   };
   for (let i = 0; i < argv.length; i++) {
@@ -319,6 +326,7 @@ export function parseArgs(argv) {
     if (a === '--help' || a === '-h') { opts.help = true; continue; }
     if (a === '--json') { opts.json = true; continue; }
     if (a === '--once') { opts.once = true; continue; }
+    if (a === '--cloud-runtime') { opts.cloudRuntime = true; continue; }
     if (a === '--daemon') { opts.daemon = true; opts.verb = opts.verb || 'daemon'; continue; }
     if (a === '--ready-file') { opts.readyFile = argv[++i]; continue; }
     if (a === '--socket-path') {
@@ -357,6 +365,18 @@ export function parseArgs(argv) {
       opts.cloudSessionId = next;
       continue;
     }
+    if (a === '--runtime-generation') {
+      const next = argv[++i];
+      if (!next || next.startsWith('--')) return { ...opts, error: '--runtime-generation requires a value' };
+      opts.runtimeGeneration = next;
+      continue;
+    }
+    if (a === '--authorization-digest') {
+      const next = argv[++i];
+      if (!next || next.startsWith('--')) return { ...opts, error: '--authorization-digest requires a value' };
+      opts.authorizationDigest = next;
+      continue;
+    }
     if (a.startsWith('--')) return { ...opts, error: `unknown flag: ${a}` };
     if (opts.verb) return { ...opts, error: `unexpected arg: ${a}` };
     opts.verb = a;
@@ -367,7 +387,11 @@ export function parseArgs(argv) {
 async function resolveBrokerAuthToken({
   env = process.env,
   getSecretFn = getSecret,
+  requireBrokerToken = false,
 } = {}) {
+  const brokerToken = typeof env?.MEMORO_BROKER_TOKEN === 'string' ? env.MEMORO_BROKER_TOKEN.trim() : '';
+  if (brokerToken) return { token: brokerToken, source: 'broker_env' };
+  if (requireBrokerToken) return { token: null, source: null };
   const envToken = typeof env?.MEMORO_TOKEN === 'string' ? env.MEMORO_TOKEN.trim() : '';
   if (envToken) return { token: envToken, source: 'env' };
   const token = await getSecretFn(ACCOUNTS.TOKEN);

@@ -28,6 +28,9 @@ writes briefs and uses the agent tools already available in its host.
 - Plan: `docs/plans/worktree-lifecycle.md` is the long-running plan
   for the whole mc design. Read it (or at least the §-sections in
   scope) before starting any drev.
+- Cloud workload changes: read
+  [`docs/plans/mc-v2-workload-allowlist.md`](plans/mc-v2-workload-allowlist.md)
+  first. No route outside that fail-closed table is permitted.
 
 ## Working on this codebase as a coding agent
 
@@ -102,6 +105,39 @@ only after the user approves. When no profile exists, `read --json` returns
   `tests/adapters/materialise.test.js` (credential-blind refusal).
 
 ## GitHub interaction in coding sessions
+
+### Credential boundary (normative)
+
+Treat the coding agent and every model-directed surface as adversarial. The LLM
+domain includes the model context and tool results; commands and child processes
+it directs; their files, mounts, environment, argv, standard streams, and
+history; process, socket, and `/proc` inspection; PTY output; logs, errors,
+status, audit, transcripts, snapshots, and browser payloads; plus any helper or
+endpoint the agent can repurpose as a credential proxy.
+
+- No raw secret, login artifact, provider token, CRK, DEK, recovery material, or
+  reusable credential authority may enter the LLM domain. Do not add a command,
+  debug surface, test fixture, adapter, environment variable, repo file, or
+  project-service path that makes one available there.
+- `mc vault`, custody administration, device/keychain access, broker grant
+  consumption, and provider transports are trusted subsystems outside the LLM
+  domain. The model may receive only opaque handles, bounded typed operations,
+  and redacted results. It must not be able to choose an arbitrary secret,
+  destination, command, or request body through those operations.
+- `0600`, hooks, redaction, environment scrubbing, TTLs, and shredding are
+  defence in depth, never the isolation boundary. A compliant design requires
+  enforced separation of principals, namespaces, mounts, process inspection,
+  sockets, IPC, and egress between the credential owner and model-directed
+  execution.
+- Never pass a managed credential to arbitrary project code, even in a separate
+  process. Such code is LLM-editable and can become a credential oracle. Use
+  only immutable, signed, policy-bound typed adapters with a narrow schema and
+  redacted output.
+- If a coding tool or integration cannot keep its login/provider credential out
+  of the model-directed executor and cannot prevent its transport from becoming
+  an unrestricted proxy, it is unsupported for managed portable bootstrap and
+  must fail closed. Do not fall back to interactive login, a tool-home auth file,
+  a generic environment token, dotenv, or a legacy binding.
 
 - `docs/plans/credential-blind-capabilities.md` is the normative
   confidentiality and provider-execution contract. No mc vault secret may be

@@ -84,6 +84,26 @@ describe('memoro HTTP client', () => {
     assert.equal(calls[0].init.headers.Authorization, 'Bearer mem_secret_token');
   });
 
+  test('carries caller-supplied X- headers without replacing bearer authentication', async () => {
+    let request = null;
+    await memoroFetch('https://meetmemoro.app', '/api/mc/cloud-sessions/cld_123456/runtime-status', {
+      token: 'mem_secret_token',
+      requestHeaders: {
+        'X-MC-Runtime-Generation': 'rtg_0123456789abcdef',
+        'X-MC-Authorization-Digest': 'a'.repeat(64),
+        Authorization: 'Bearer replacement-attempt',
+      },
+      fetchImpl: async (_url, init) => {
+        request = init;
+        return new Response(JSON.stringify({ ok: true }), { status: 200 });
+      },
+    });
+
+    assert.equal(request.headers.Authorization, 'Bearer mem_secret_token');
+    assert.equal(request.headers['X-MC-Runtime-Generation'], 'rtg_0123456789abcdef');
+    assert.equal(request.headers['X-MC-Authorization-Digest'], 'a'.repeat(64));
+  });
+
   test('maps curl fallback HTTP errors like fetch HTTP errors', async () => {
     await assert.rejects(
       () => memoroFetchAnon('https://meetmemoro.app', '/api/auth/device/poll', {

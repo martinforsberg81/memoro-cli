@@ -3,31 +3,25 @@ import { describe, test } from 'node:test';
 import { join } from 'node:path';
 
 import {
-  CLOUD_CODEX_AUTH_INTERACTIVE_LOGIN,
+  CLOUD_CODEX_AUTH_ISOLATION_UNAVAILABLE,
   codexAuthPath,
   prepareCloudCodexAuth,
 } from '../../src/mc/cloud-codex-auth.js';
 
 describe('cloud Codex auth preflight', () => {
-  test('falls back to interactive login when no headless cloud auth exists', async () => {
+  test('fails closed when no isolated credential domain exists', async () => {
     const env = {};
     const res = await prepareCloudCodexAuth({
       codingSessionId: 'sess_cloud',
       env,
-      deps: {
-        existsSync: () => false,
-      },
     });
 
-    assert.equal(res.ok, true);
-    assert.equal(res.source, 'interactive-login');
-    assert.equal(res.reason, CLOUD_CODEX_AUTH_INTERACTIVE_LOGIN);
-    assert.equal(res.interactiveLogin, true);
-    assert.equal(res.startupMessageSafe, false);
-    assert.match(res.hint, /login URL/);
+    assert.equal(res.ok, false);
+    assert.equal(res.reason, CLOUD_CODEX_AUTH_ISOLATION_UNAVAILABLE);
+    assert.match(res.error, /disabled until provider credentials are isolated/);
   });
 
-  test('accepts an existing Codex auth file without materialising a token', async () => {
+  test('does not trust an auth file inside the cloud runtime', async () => {
     let materialized = false;
     const env = { CODEX_HOME: '/workspace/codex-home' };
     const res = await prepareCloudCodexAuth({
@@ -42,45 +36,39 @@ describe('cloud Codex auth preflight', () => {
       },
     });
 
-    assert.equal(res.ok, true);
-    assert.equal(res.source, 'existing-auth-file');
-    assert.equal(res.codexHome, '/workspace/codex-home');
+    assert.equal(res.ok, false);
+    assert.equal(res.reason, CLOUD_CODEX_AUTH_ISOLATION_UNAVAILABLE);
     assert.equal(materialized, false);
   });
 
-  test('materialises MC_CODEX_API_KEY into an isolated CODEX_HOME and scrubs auth env', async () => {
-    const previousMcHome = process.env.MC_HOME;
-    process.env.MC_HOME = '/tmp/mc-test-home';
-    try {
-      const calls = [];
-      const env = {
-        MC_CODEX_API_KEY: 'sk-cloud',
-        OPENAI_API_KEY: 'sk-ambient',
-      };
+  test('scrubs raw auth env without invoking materialisation', async () => {
+    const canary = 'sk-cloud-canary';
+    let materialized = false;
+    const env = {
+      MC_CODEX_API_KEY: canary,
+      OPENAI_API_KEY: 'sk-ambient-canary',
+    };
 
-      const res = await prepareCloudCodexAuth({
-        codingSessionId: 'sess_cloud',
-        env,
-        deps: {
-          existsSync: () => false,
-          materializeToken: async (call) => {
-            calls.push(call);
-            return { ok: true, materializedPath: call.location.path };
-          },
+    const res = await prepareCloudCodexAuth({
+      codingSessionId: 'sess_cloud',
+      env,
+      deps: {
+        materializeToken: async () => {
+          materialized = true;
+          return { ok: true };
         },
-      });
+      },
+    });
 
-      assert.equal(res.ok, true);
-      assert.equal(res.source, 'MC_CODEX_API_KEY');
-      assert.equal(env.MC_CODEX_API_KEY, undefined);
-      assert.equal(env.OPENAI_API_KEY, undefined);
-      assert.equal(env.CODEX_HOME, join('/tmp/mc-test-home', 'codex', 'sess_cloud'));
-      assert.equal(calls.length, 1);
-      assert.equal(calls[0].token, 'sk-cloud');
-      assert.equal(calls[0].location.path, codexAuthPath(env.CODEX_HOME));
-    } finally {
-      if (previousMcHome === undefined) delete process.env.MC_HOME;
-      else process.env.MC_HOME = previousMcHome;
-    }
+    assert.equal(res.ok, false);
+    assert.equal(res.reason, CLOUD_CODEX_AUTH_ISOLATION_UNAVAILABLE);
+    assert.equal(env.MC_CODEX_API_KEY, undefined);
+    assert.equal(env.OPENAI_API_KEY, undefined);
+    assert.equal(materialized, false);
+    assert.equal(JSON.stringify(res).includes(canary), false);
+  });
+
+  test('keeps auth path calculation as metadata-only compatibility', () => {
+    assert.equal(codexAuthPath('/runtime/codex'), join('/runtime/codex', 'auth.json'));
   });
 });

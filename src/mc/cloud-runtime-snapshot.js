@@ -10,6 +10,8 @@ import {
 } from 'node:fs';
 import { dirname, join } from 'node:path';
 
+import { redactCredentialText } from './runtime-redaction.js';
+
 const DEFAULT_RUNTIME_DIR = '/workspace/mc-runtime';
 const DEFAULT_REPO_CWD = '/workspace/repo';
 const CODING_BIN_SNAPSHOT_ID_RE = /^cbsnap_[a-zA-Z0-9_-]{6,}$/;
@@ -23,6 +25,8 @@ export async function restoreCodingBinSnapshot(manifest, {
   token = null,
   cwd = runtimeWorkspaceDir(manifest),
   paths = runtimePaths(manifest, env),
+  runtimeGeneration = null,
+  authorizationDigest = null,
 } = {}) {
   const latest = manifest?.coding_bin?.latest_snapshot || null;
   const payload = latest?.payload || null;
@@ -46,6 +50,8 @@ export async function restoreCodingBinSnapshot(manifest, {
   const downloaded = await downloadSnapshotPayload(url, {
     token: runtimeToken,
     maxBytes: snapshotMaxBytes(manifest),
+    runtimeGeneration,
+    authorizationDigest,
     deps,
   });
   if (!downloaded.ok) {
@@ -98,6 +104,8 @@ export async function captureCodingBinSnapshot(manifest, {
   cwd = runtimeWorkspaceDir(manifest),
   paths = runtimePaths(manifest, env),
   trigger = 'runtime_shutdown',
+  runtimeGeneration = null,
+  authorizationDigest = null,
 } = {}) {
   const policy = manifest?.coding_bin?.snapshot || null;
   const upload = policy?.upload || null;
@@ -216,6 +224,8 @@ export async function captureCodingBinSnapshot(manifest, {
     skippedCount: candidates.skippedCount,
     baseRef: refs.baseRef,
     headRef: refs.headRef,
+    runtimeGeneration,
+    authorizationDigest,
     deps,
   });
   if (!uploaded.ok) {
@@ -278,13 +288,20 @@ export function codingBinReadiness(manifest, {
   });
 }
 
-async function downloadSnapshotPayload(url, { token, maxBytes, deps = {} } = {}) {
+async function downloadSnapshotPayload(url, {
+  token,
+  maxBytes,
+  runtimeGeneration = null,
+  authorizationDigest = null,
+  deps = {},
+} = {}) {
   try {
     const res = await runtimeFetch(url, {
       token,
       method: 'GET',
       deps,
       timeoutMs: deps.snapshotDownloadTimeoutMs || 120_000,
+      headers: runtimeAuthorizationHeaders(runtimeGeneration, authorizationDigest),
     });
     if (!res.ok) return res;
     const length = Number(res.headers?.get?.('content-length'));
@@ -308,6 +325,8 @@ async function uploadSnapshotPayload(url, body, {
   skippedCount,
   baseRef,
   headRef,
+  runtimeGeneration = null,
+  authorizationDigest = null,
   deps = {},
 } = {}) {
   try {
@@ -324,12 +343,21 @@ async function uploadSnapshotPayload(url, body, {
         'X-MC-Snapshot-Skipped-Count': String(Math.max(0, skippedCount || 0)),
         'X-MC-Snapshot-Base-Ref': baseRef || 'unknown',
         'X-MC-Snapshot-Head-Ref': headRef || 'unknown',
+        ...runtimeAuthorizationHeaders(runtimeGeneration, authorizationDigest),
       },
     });
     return res.ok ? { ok: true } : res;
   } catch (err) {
     return { ok: false, code: 'snapshot_upload_failed', error: safeError(err) };
   }
+}
+
+function runtimeAuthorizationHeaders(runtimeGeneration, authorizationDigest) {
+  if (!runtimeGeneration || !authorizationDigest) return {};
+  return {
+    'X-MC-Runtime-Generation': runtimeGeneration,
+    'X-MC-Authorization-Digest': authorizationDigest,
+  };
 }
 
 async function runtimeFetch(url, {
@@ -692,6 +720,7 @@ function cleanHeaderText(value) {
 function sanitizeRuntimeData(value, depth = 0) {
   if (depth > 6) return '[truncated]';
   if (Array.isArray(value)) return value.slice(0, 50).map((item) => sanitizeRuntimeData(item, depth + 1));
+  if (typeof value === 'string') return redactCredentialText(value);
   if (!value || typeof value !== 'object') return value;
   const out = {};
   for (const [key, child] of Object.entries(value)) {
@@ -713,7 +742,7 @@ function isSafeRuntimeMetadataKey(key) {
 }
 
 function safeError(err) {
-  return String(err?.message || err || 'unknown').slice(0, 500);
+  return redactCredentialText(err?.message || err || 'unknown', 500);
 }
 
 function stringOrNull(value) {
