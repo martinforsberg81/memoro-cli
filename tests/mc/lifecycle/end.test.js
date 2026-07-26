@@ -143,6 +143,32 @@ describe('mc end', () => {
       `worktree should be gone; got:\n${wts}`);
   });
 
+  test('ends a launched session that recorded no provider artifacts at all', () => {
+    // A session can launch with provider transcripts disabled (e.g. the
+    // child-session marker) and record no tool_session_* fields. There is
+    // nothing identifiable to delete provider-side — teardown must proceed
+    // with the provider surface untouched, not dead-end forever.
+    git(repo.dir, 'branch sess/providerless main');
+    const wtPath = join(repo.mcHome, 'worktrees', 'repo', 'providerless');
+    addWorktree(repo.dir, wtPath, 'sess/providerless');
+    writeRegistry(repo.mcHome, [makeEndEntry({
+      name: 'providerless', branch: 'sess/providerless',
+      worktree_path: wtPath, safety_verdict: 'SAFE_TO_END',
+      session_state: 'idle',
+      coding_session_id: 'sess_providerless1',
+      tool: 'claude',
+    })]);
+    const r = runMc(['end', 'providerless', '--json', '--force'], {
+      cwd: repo.dir, env: { MC_HOME: repo.mcHome },
+    });
+    assert.equal(r.status, 0, `stderr:${r.stderr}`);
+    const j = parseJsonOrNull(r.stdout);
+    assert.equal(j?.ok, true);
+    const wts = git(repo.dir, 'worktree list --porcelain');
+    assert.ok(!wts.includes('providerless'),
+      `worktree should be gone; got:\n${wts}`);
+  });
+
   test('bare `mc end` auto-detects the current registered worktree', () => {
     git(repo.dir, 'branch sess/current main');
     const wtPath = join(repo.mcHome, 'worktrees', 'repo', 'current');

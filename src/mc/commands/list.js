@@ -6,8 +6,14 @@ import { readRegistry } from '../registry.js';
 import { scanDaemons } from '../orphan-daemons.js';
 import { checkAndPrintFreshInstall } from '../first-run.js';
 import {
+  countStaleDemotions,
+  normalizeEntryTruth,
+  staleDemotionHint,
+} from '../session-truth.js';
+import {
   buildSessionListView,
   fetchActiveCodingSessionsWithLocalBroker,
+  fetchLocalBrokerCodingSessions,
   renderSessionListHuman,
 } from '../session-list.js';
 
@@ -19,8 +25,13 @@ export async function run(argv, deps = {}) {
   const stderr = deps.stderr || process.stderr;
   const loadRegistry = deps.readRegistry || readRegistry;
   const checkFreshInstall = deps.checkAndPrintFreshInstall || checkAndPrintFreshInstall;
+  let localLiveResult = null;
   const fetchActive = deps.fetchActiveSessions
-    || ((args) => fetchActiveCodingSessionsWithLocalBroker({ argv: args, deps }));
+    || ((args) => fetchActiveCodingSessionsWithLocalBroker({
+      argv: args,
+      deps,
+      localRes: localLiveResult,
+    }));
   const scan = deps.scanDaemons || scanDaemons;
   const opts = parseArgs(argv);
   if (opts.error) {
@@ -37,7 +48,22 @@ export async function run(argv, deps = {}) {
   await checkFreshInstall();
 
   const reg = loadRegistry();
-  let entries = reg.entries.slice();
+
+  // Registry session_state goes stale when PTYs die out from under it
+  // (crash, shutdown, broker restart). One local broker+host probe per
+  // invocation is the truth check: a stored "live" without a live local
+  // session renders as "stale" so no consumer — human or --json — sees a
+  // dead session presented as attachable. Repair stays explicit
+  // (`mc storage repair --apply`); list never mutates the registry.
+  const fetchLocalLive = deps.fetchLocalBrokerSessions
+    || (() => fetchLocalBrokerCodingSessions({ deps }));
+  localLiveResult = await fetchLocalLive();
+  const liveIds = new Set(
+    (localLiveResult?.sessions || []).map((s) => s.coding_session_id).filter(Boolean),
+  );
+  let entries = reg.entries.slice().map((e) => normalizeEntryTruth(e, liveIds));
+  const demoted = countStaleDemotions(entries);
+  if (demoted > 0) stderr.write(staleDemotionHint(demoted));
 
   // Default scope: user-facing sessions with present worktrees. --all expands
   // to internal/legacy/missing entries too (fanout phases, isolation fixtures,

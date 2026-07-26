@@ -47,8 +47,9 @@ export async function fetchActiveCodingSessions({
 export async function fetchActiveCodingSessionsWithLocalBroker({
   argv = [],
   deps = {},
+  localRes: precomputedLocalRes = null,
 } = {}) {
-  const localRes = await fetchLocalBrokerCodingSessions({ deps });
+  const localRes = precomputedLocalRes || await fetchLocalBrokerCodingSessions({ deps });
   const cloudRes = await fetchActiveCodingSessions({ argv, deps });
   const sessions = mergeActiveCodingSessions({
     localSessions: localRes.sessions,

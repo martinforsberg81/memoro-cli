@@ -113,7 +113,7 @@ export async function run(rawArgv, runOpts = {}) {
     }
 
     const entry = await synchronizeToolAuthority(originalEntry, { deps });
-    const artifacts = await inspectAuthority(entry, { deps });
+    const artifacts = withProviderlessDowngrade(entry, await inspectAuthority(entry, { deps }));
     const mcArtifacts = inspectMcAuthority(entry, deps);
     const status = await buildTargetStatus(entry, primary, artifacts, {
       keepBranch: opts.keepBranch,
@@ -179,7 +179,10 @@ export async function run(rawArgv, runOpts = {}) {
   // worktree, or branch operation has happened yet.
   const revalidated = [];
   for (const plan of plans) {
-    const artifacts = await inspectAuthority(plan.entry, { deps });
+    const artifacts = withProviderlessDowngrade(
+      plan.entry,
+      await inspectAuthority(plan.entry, { deps }),
+    );
     revalidated.push({
       ...plan,
       artifacts,
@@ -330,6 +333,33 @@ async function synchronizeToolAuthority(entry, { deps = {} } = {}) {
     : entry;
 }
 
+/**
+ * A launched session can have NO identifiable provider artifacts at all —
+ * e.g. the provider ran with transcripts disabled (child-session marker),
+ * or exited before recording anything. After a fresh discovery attempt
+ * (synchronizeToolAuthority) has confirmed there is nothing to name, there
+ * is nothing to protect on the provider surface: proceed with an empty
+ * provider-artifact set (delete nothing provider-side) instead of blocking
+ * the whole teardown forever. Any real unnamed artifacts are left in place.
+ */
+function withProviderlessDowngrade(entry, artifacts) {
+  const providerless = artifacts?.state === 'unverified'
+    && (artifacts.issues || []).length === 1
+    && artifacts.issues[0]?.code === 'missing-tool-session-source'
+    && !nonEmpty(entry?.tool_session_source)
+    && !nonEmpty(entry?.tool_session_id)
+    && !nonEmpty(entry?.tool_transcript_path);
+  if (!providerless) return artifacts;
+  return {
+    ...artifacts,
+    state: 'none',
+    safe_to_delete: true,
+    provider_untouched: true,
+    artifacts: [],
+    totals: { paths: 0, files: 0, bytes: 0 },
+  };
+}
+
 function isBackfillableIssue(code) {
   return new Set([
     'missing-tool-session-source',
@@ -408,7 +438,12 @@ function statusWithArtifacts(status, artifacts) {
 
 function transcriptStatus(artifacts) {
   if (artifacts?.state === 'none') {
-    return { state: 'none', path: null, bytes: 0 };
+    return {
+      state: 'none',
+      path: null,
+      bytes: 0,
+      ...(artifacts.provider_untouched ? { provider_untouched: true } : {}),
+    };
   }
   if (artifacts?.state === 'owned') {
     const transcript = artifacts.artifacts?.find((artifact) => artifact.kind === 'transcript');
@@ -505,7 +540,9 @@ function printStatuses(plans, stdout) {
     stdout.write(`  worktree: ${status.worktree_path || 'none'} (dirty: ${status.dirty_files})\n`);
     stdout.write(`  branch: ${status.branch || 'none'} (ahead: ${status.commits_ahead}, ${branchAction})\n`);
     if (status.transcript.state === 'none') {
-      stdout.write('  transcript: none\n');
+      stdout.write(status.transcript.provider_untouched
+        ? '  transcript: none identifiable — provider artifacts left untouched\n'
+        : '  transcript: none\n');
     } else if (status.transcript.state === 'unverified') {
       const issues = status.transcript.issues?.join(', ') || 'unknown';
       stdout.write(`  transcript: unverified ${status.transcript.path || 'none'} (${issues})\n`);
@@ -769,16 +806,21 @@ async function teardownOne(plan, { opts, deps }) {
       throw new Error(`vault shred failed${reasons.length ? ` (${reasons.join(', ')})` : ''}`);
     }
 
-    const removeToolArtifacts = deps.deleteOwnedToolArtifacts || deleteOwnedToolArtifacts;
-    const deleted = await removeToolArtifacts(entry, {
-      roots: deps.toolArtifactRoots,
-      ...(deps.toolArtifactFs ? { fs: deps.toolArtifactFs } : {}),
-      ...(deps.toolArtifactScanPolicy ? { scanPolicy: deps.toolArtifactScanPolicy } : {}),
-      allowVerifiedMissingTranscript: true,
-    });
-    if (!deleted?.ok) {
-      const reasons = (deleted?.issues || []).map((issue) => issue.code).filter(Boolean);
-      throw new Error(`tool artifact cleanup failed${reasons.length ? ` (${reasons.join(', ')})` : ''}`);
+    // Providerless sessions have nothing identifiable to delete on the
+    // provider surface (see withProviderlessDowngrade) — skip rather than
+    // let the deleter's own inspection fail closed on the whole teardown.
+    if (!plan.artifacts?.provider_untouched) {
+      const removeToolArtifacts = deps.deleteOwnedToolArtifacts || deleteOwnedToolArtifacts;
+      const deleted = await removeToolArtifacts(entry, {
+        roots: deps.toolArtifactRoots,
+        ...(deps.toolArtifactFs ? { fs: deps.toolArtifactFs } : {}),
+        ...(deps.toolArtifactScanPolicy ? { scanPolicy: deps.toolArtifactScanPolicy } : {}),
+        allowVerifiedMissingTranscript: true,
+      });
+      if (!deleted?.ok) {
+        const reasons = (deleted?.issues || []).map((issue) => issue.code).filter(Boolean);
+        throw new Error(`tool artifact cleanup failed${reasons.length ? ` (${reasons.join(', ')})` : ''}`);
+      }
     }
 
     removeWorktreeAndBranch(entry, {
@@ -859,7 +901,10 @@ async function inspectLeftovers(plan, opts, deps, { includeRegistry = true } = {
   const leftovers = [];
   const exists = deps.existsSync || existsSync;
   try {
-    const artifacts = await inspectAuthority(plan.entry, { deps });
+    const artifacts = withProviderlessDowngrade(
+      plan.entry,
+      await inspectAuthority(plan.entry, { deps }),
+    );
     if (!artifacts.safe_to_delete) {
       const issues = (artifacts.issues || []).map((issue) => issue.code).join('|') || 'unverified';
       leftovers.push(`tool-artifacts:${issues}`);

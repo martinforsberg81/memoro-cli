@@ -39,6 +39,47 @@ server-owned, so the fallback is *grounded* and *announced*; the spirit
 Deliverable: every row above passes live; every fix lands with a
 regression test; TODO.md broker/recovery bullets closed or re-homed here.
 
+### H1 live results (2026-07-26)
+
+Verified live on this machine with a probe session (`mc new h1-probe`):
+
+- ✅ `mc new` (claude): worktree + branch + registry + host-daemon PTY +
+  grounding, one command; broker-confirmed live.
+- ✅ client death ≠ session death: SIGHUP on the mc client leaves the
+  detached session host and the tool process running; session stays
+  attachable.
+- ✅ resume fallback: with no provider-native id (child-session marker
+  disables transcripts), `mc open` announces and starts a fresh grounded
+  session on the SAME coding session.
+- ✅ re-`open` attaches to the live PTY (screen replay, no new prompt).
+- ✅ provider switch on a running session refuses with an actionable
+  message (exit it or `mc end` first), exit 1; `mc tool-switch --dry-run`
+  clean.
+- ✅ stale-registry truth: 19 of 23 "live" entries had no live local
+  session after the last reboot; list/status/picker now render them
+  `stale` with escalate-only verdicts (fixed in this branch);
+  `mc storage repair --apply` reconciled them to idle.
+
+Found live; first two FIXED on this branch (H2 head start):
+
+- ✅ `mc end --force` on a session with no provider transcript
+  (`missing-tool-session-source`) failed closed on the ENTIRE teardown —
+  the session could never be ended. Now: after fresh discovery confirms
+  there is nothing to name provider-side, teardown proceeds with the
+  provider surface untouched. Verified live: h1-probe ended with zero
+  residue (worktree, branch, host dir, sidecars, daemon, registry).
+- ✅ removing the last session on a dedicated host left the empty daemon
+  running, which sidecar cleanup then refused (broker-host-still-running)
+  — teardown failed. Now the host is retired after its last session and
+  the teardown waits for the pid to exit. Also: tool-artifact scan budget
+  raised 250ms → 2s (wall-clock; blew the deadline under load ~50,
+  failing teardown closed).
+- ❌ still open for H2 — zombie session hosts: daemon pid alive but
+  socket not enumerable. `mc list` correctly shows `stale`, but
+  `mc storage repair`'s pid-alive fallback counts them as live (no
+  repair), and nothing reaps them. Repair should probe the socket;
+  `mc gc --runtime` should reap. Three live specimens on this machine.
+
 ## H2 — `mc end`: complete, residue-free teardown
 
 `mc end` claims teardown but leaves residue. Known/suspected leaks to

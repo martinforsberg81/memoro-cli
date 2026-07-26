@@ -7,6 +7,7 @@
  */
 import { findEntry, upsertEntry } from '../registry.js';
 import { detectOpenQuestion } from '../open-question.js';
+import { escalateSafetyVerdict } from '../safety-verdict.js';
 import { DEFAULT_TOOL, readConfig } from '../../lib/config.js';
 import { formatPolicySummary, readRepoPolicy, resolveEffectivePolicy } from '../policy.js';
 import { readRepoLocalConfig, resolveEffectiveConfig } from '../config-model.js';
@@ -57,9 +58,16 @@ export async function run(argv, deps = {}) {
     warnings: repoLocal.warnings,
   });
   const live = await resolveReachability(entry, { argv, deps });
-  const safety_verdict = live.stale && entry.safety_verdict === 'IS_ACTIVE_NOW'
-    ? 'SAFE_TO_END'
-    : entry.safety_verdict || 'SAFE_TO_END';
+  // A stale session cannot be active now; otherwise trust the stored
+  // verdict only as far as fresh git facts allow (escalate-only).
+  const storedVerdict = live.stale && entry.safety_verdict === 'IS_ACTIVE_NOW'
+    ? null
+    : entry.safety_verdict || null;
+  const safety_verdict = escalateSafetyVerdict({
+    stored: storedVerdict,
+    dirtyFiles: entry.dirty_files ?? null,
+    ahead: entry.ahead ?? null,
+  });
   const work_status = projectStatusWorkStatus(entry, live, { safety_verdict });
   const dev_servers = await resolveDevServers(entry, deps);
 

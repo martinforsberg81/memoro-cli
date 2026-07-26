@@ -25,7 +25,11 @@ export const TOOL_ARTIFACT_AUTHORITY_VERSION = 1;
 export const DEFAULT_TOOL_ARTIFACT_SCAN_POLICY = Object.freeze({
   max_entries: 4_096,
   max_depth: 8,
-  max_duration_ms: 250,
+  // Wall-clock budget, not CPU: on a loaded machine a tiny tree can blow
+  // a sub-second deadline, and truncation fails closed (blocks teardown).
+  // The scan runs interactively and rarely — a generous budget costs
+  // nothing and keeps `mc end` usable under load.
+  max_duration_ms: 2_000,
 });
 
 export function defaultToolArtifactRoots({

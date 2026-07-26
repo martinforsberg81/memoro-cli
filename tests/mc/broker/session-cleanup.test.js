@@ -79,6 +79,81 @@ describe('broker session identity matching', () => {
     assert.equal(requests.some((message) => message.type === 'remove_session'), false);
   });
 
+  test('removing the last session on a dedicated host retires the host daemon', async () => {
+    const hostRequests = [];
+    let removed = false;
+    const result = await removeBrokerSessionForEntry({
+      name: 'target',
+      coding_session_id: 'sess_target',
+      worktree_path: '/repo/target',
+    }, {
+      requestBroker: async (message, opts = {}) => {
+        if (opts.socketPath) hostRequests.push(message.type);
+        if (message.type === 'sessions') {
+          return {
+            ok: true,
+            sessions: removed ? [] : [{
+              id: 'sess_target',
+              coding_session_id: 'sess_target',
+              name: 'target',
+              cwd: '/repo/target',
+              broker_socket_path: '/tmp/hosts/sess_target/broker.sock',
+            }],
+          };
+        }
+        if (message.type === 'remove_session') {
+          removed = true;
+          return { ok: true, removed: true };
+        }
+        if (message.type === 'stop') return { ok: true };
+        // status after stop: the daemon is gone.
+        if (message.type === 'status') return { ok: false };
+        return { ok: true };
+      },
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.host_stopped, true);
+    assert.deepEqual(hostRequests, ['remove_session', 'sessions', 'stop', 'status']);
+  });
+
+  test('a host with other sessions left is not stopped', async () => {
+    const hostRequests = [];
+    const result = await removeBrokerSessionForEntry({
+      name: 'target',
+      coding_session_id: 'sess_target',
+      worktree_path: '/repo/target',
+    }, {
+      requestBroker: async (message, opts = {}) => {
+        if (opts.socketPath) hostRequests.push(message.type);
+        if (message.type === 'sessions') {
+          return {
+            ok: true,
+            sessions: [{
+              id: 'sess_target',
+              coding_session_id: 'sess_target',
+              name: 'target',
+              cwd: '/repo/target',
+              broker_socket_path: '/tmp/hosts/sess_target/broker.sock',
+            }, {
+              id: 'sess_second',
+              coding_session_id: 'sess_second',
+              name: 'second',
+              cwd: '/repo/second',
+              broker_socket_path: '/tmp/hosts/sess_target/broker.sock',
+            }],
+          };
+        }
+        if (message.type === 'remove_session') return { ok: true, removed: true };
+        return { ok: true };
+      },
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.host_stopped, false);
+    assert.equal(hostRequests.includes('stop'), false);
+  });
+
   test('exact coding ID is removed despite weaker field mismatches', async () => {
     const requests = [];
     const result = await removeBrokerSessionForEntry({
