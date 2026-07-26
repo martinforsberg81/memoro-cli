@@ -74,11 +74,31 @@ Found live; first two FIXED on this branch (H2 head start):
   the teardown waits for the pid to exit. Also: tool-artifact scan budget
   raised 250ms → 2s (wall-clock; blew the deadline under load ~50,
   failing teardown closed).
-- ❌ still open for H2 — zombie session hosts: daemon pid alive but
-  socket not enumerable. `mc list` correctly shows `stale`, but
-  `mc storage repair`'s pid-alive fallback counts them as live (no
-  repair), and nothing reaps them. Repair should probe the socket;
-  `mc gc --runtime` should reap. Three live specimens on this machine.
+- ✅ (fixed in the follow-up slice) "zombie" hosts were mostly
+  misdiagnosis in both directions: busy daemons (active tool streaming)
+  missed the serial 1s enumeration probe and rendered live sessions
+  stale; repair's pid-alive fallback kept genuinely socketless hosts
+  live forever. Enumeration now probes concurrently with a 3s deadline
+  and reports timeouts as busy-live; repair probes the socket, not the
+  pid. One genuinely socketless host remains on this machine
+  (chess-practice — daemon + claude alive, socket file gone; only an
+  explicit reap can help it).
+
+### H2 remaining — gc is not yet trustworthy (found live, 2026-07-26)
+
+- ❌ **`mc gc --all-safe --dry-run` offered to remove the worktree of a
+  LIVE session** (this coordinator's own `mc-fixes-v2`, active and
+  cloud-visible) — gc consults only local broker liveness, not
+  cloud-active sessions, before calling a worktree reclaimable. Also
+  offered `home-actions-v4`, which `mc list` had just reported with 3
+  dirty files. gc must recompute dirty/ahead and check cloud-active
+  liveness at decision time. DO NOT run `mc gc --apply` until fixed.
+- ❌ `mc gc --sidecars` reports "(no stale sidecars)" while ~60 dead
+  host dirs sit in `~/.memoro/mc/hosts/` — the hosts dir is not in its
+  scan. Registry is ~130 KB with the same dead weight.
+- ❌ socketless-but-running hosts (chess-practice specimen) need an
+  explicit, confirmed reap path (`mc gc --reap-zombie-hosts` or doctor
+  offer): kill daemon + tool process, clean sidecars, mark registry.
 
 ## H2 — `mc end`: complete, residue-free teardown
 
