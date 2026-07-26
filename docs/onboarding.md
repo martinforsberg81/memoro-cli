@@ -114,6 +114,27 @@ When all required checks pass, `mc setup` writes the `${MC_HOME}/.setup-done-v1`
 sentinel so the friendly first-run hint in `mc new` / `mc list`
 silences itself for that machine.
 
+## The dev-server loop in one screenful
+
+A session that needs its project running uses exactly one command:
+
+```
+mc dev ensure                # validate the plan, prepare deps, start (or reuse) the server
+```
+
+- The plan comes from the repo's `.mc/dev.json` (`mc dev plan` shows it
+  without starting anything). Profiles: `mc dev ensure --profile <name>`.
+- Ensure is idempotent: a healthy server with the same definition
+  fingerprint is reused, not restarted. `--restart` forces a restart.
+- Ownership is per session: `mc dev list` shows every machine-local
+  server with health; `mc dev stop|restart <session>` runs only the
+  project's own declared controls, and only after the server's identity
+  (pid + process group + worktree + source manifest) verifies.
+- Teardown is automatic: `mc end` stops and unregisters the session's
+  dev servers before removing the worktree. Manifests left behind by
+  crashed processes are reported by `mc gc --sidecars` as orphan dev
+  manifests and removed on reap — manifests only, never processes.
+
 ## Migrating from `memoro-cli login`
 
 If you already ran `memoro-cli login` before `mc setup` existed, you

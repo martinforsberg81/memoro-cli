@@ -150,6 +150,21 @@ dev-servers). Make it *effective*:
 Acceptance: a fresh session can go `mc new` → `mc dev ensure` → work →
 `mc end` and leave the machine exactly as found.
 
+### H3 status (2026-07-26)
+
+- ✅ `mc end` now stops and unregisters the session's dev servers before
+  the worktree disappears (identity-verified stop; dead servers are
+  unregistered without touching any process; other sessions' servers
+  never touched).
+- ✅ orphan dev manifests (all 14 on this machine — every registered
+  server was an orphan) are reported and reaped by `mc gc --sidecars`;
+  manifests only, never processes. `mc dev list` is clean again.
+- ✅ ownership-across-restarts was already on main
+  (sess/dev-server-management landed earlier); `mc dev plan` validates
+  cleanly in a live worktree; loop documented in onboarding.
+- Deferred to H4: ensure-loop wall-clock measurement (a live `ensure`
+  spins a real dev server — measure as part of the perf round).
+
 ## H4 — Performance round
 
 Measure first, then fix the top offenders. Candidate hot spots (to be
