@@ -52,11 +52,12 @@ export async function ensureSessionHostRunning({
 }
 
 // A host whose daemon is busy (an active tool streaming PTY output hogs
-// its event loop) can take well over the client's 1s default to answer.
-// Classifying it dead makes a genuinely live session render as stale, so
-// enumeration probes with a more patient deadline — and concurrently,
-// so sweeping the hosts dir costs one slow probe, not their sum.
-const HOST_PROBE_TIMEOUT_MS = 3_000;
+// its event loop) may miss this deadline entirely — and that is fine:
+// a timeout classifies the host as busy-live from its manifest (see
+// below), so the deadline only bounds how long enumeration waits for
+// full row details. Total sweep wall-clock ≈ one deadline, so keep it
+// short; correctness never depends on it.
+const HOST_PROBE_TIMEOUT_MS = 600;
 const HOST_PROBE_CONCURRENCY = 16;
 
 export async function listSessionHostSessions({

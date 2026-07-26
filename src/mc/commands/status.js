@@ -57,7 +57,12 @@ export async function run(argv, deps = {}) {
     entry,
     warnings: repoLocal.warnings,
   });
-  const live = await resolveReachability(entry, { argv, deps });
+  // Reachability (broker sweep + active lookup) and dev-server health
+  // probes are independent — overlap them instead of paying both waits.
+  const [live, dev_servers] = await Promise.all([
+    resolveReachability(entry, { argv, deps }),
+    resolveDevServers(entry, deps),
+  ]);
   // A stale session cannot be active now; otherwise trust the stored
   // verdict only as far as fresh git facts allow (escalate-only).
   const storedVerdict = live.stale && entry.safety_verdict === 'IS_ACTIVE_NOW'
@@ -69,7 +74,6 @@ export async function run(argv, deps = {}) {
     ahead: entry.ahead ?? null,
   });
   const work_status = projectStatusWorkStatus(entry, live, { safety_verdict });
-  const dev_servers = await resolveDevServers(entry, deps);
 
   const out = {
     name: entry.name,
