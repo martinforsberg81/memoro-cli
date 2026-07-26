@@ -41,7 +41,30 @@ export async function removeBrokerSessionForEntry(entry, {
       error: removed?.error || 'remove_session failed',
     };
   }
-  return { ok: true, id, removed: removed.removed !== false };
+
+  // A session on its own dedicated host leaves an empty daemon behind once
+  // its PTY is removed; that lingering process blocks sidecar cleanup
+  // (broker-host-still-running). Retire the host — but only when it
+  // confirms it has no sessions left.
+  let hostStopped = false;
+  if (nonEmpty(session?.broker_socket_path || session?.brokerSocketPath)) {
+    const remaining = await request({ type: 'sessions' }).catch(() => null);
+    if (remaining?.ok && Array.isArray(remaining.sessions) && remaining.sessions.length === 0) {
+      const stop = await request({ type: 'stop' }).catch(() => null);
+      if (stop?.ok) {
+        // The sidecar cleanup that follows checks the host pid; wait for
+        // the daemon to actually exit so the check does not race it.
+        const deadline = Date.now() + 2_000;
+        hostStopped = true;
+        while (Date.now() < deadline) {
+          const res = await request({ type: 'status' }).catch(() => null);
+          if (!res?.ok) break;
+          await new Promise((resolve) => setTimeout(resolve, 50));
+        }
+      }
+    }
+  }
+  return { ok: true, id, removed: removed.removed !== false, host_stopped: hostStopped };
 }
 
 export function brokerSessionMatchesEntry(session, entry) {
