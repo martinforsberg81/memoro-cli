@@ -11,13 +11,13 @@ import {
 import { makeEntry } from './_helpers/registry-fixture.js';
 
 describe('storage repair planning', () => {
-  test('preserves registry-live sessions when the host pid is still alive', async () => {
+  test('preserves registry-live sessions when the host socket answers', async () => {
     const root = mkdtempSync(join(tmpdir(), 'mc-storage-repair-'));
     const previousMcHome = process.env.MC_HOME;
     process.env.MC_HOME = root;
     try {
       mkdirSync(join(root, 'hosts', 'sess_live'), { recursive: true });
-      writeFileSync(join(root, 'hosts', 'sess_live', 'broker.pid'), `${process.pid}\n`);
+      writeFileSync(join(root, 'hosts', 'sess_live', 'broker.sock'), '');
       const registry = {
         entries: [
           makeEntry({
@@ -34,9 +34,49 @@ describe('storage repair planning', () => {
       const plan = await buildStorageRepairPlan({
         registry,
         listSessions: async () => [],
+        request: async (message) => (message.type === 'status' ? { ok: true } : { ok: false }),
       });
 
       assert.equal(plan.counts.total, 0);
+    } finally {
+      if (previousMcHome == null) delete process.env.MC_HOME;
+      else process.env.MC_HOME = previousMcHome;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('marks live entries idle when the host pid lingers without a socket', async () => {
+    // A daemon pid alive with a missing (or dead) socket is unattachable —
+    // trusting pids kept such sessions marked live forever while mc list
+    // correctly showed them stale.
+    const root = mkdtempSync(join(tmpdir(), 'mc-storage-repair-'));
+    const previousMcHome = process.env.MC_HOME;
+    process.env.MC_HOME = root;
+    try {
+      mkdirSync(join(root, 'hosts', 'sess_zombie'), { recursive: true });
+      writeFileSync(join(root, 'hosts', 'sess_zombie', 'broker.pid'), `${process.pid}\n`);
+      const registry = {
+        entries: [
+          makeEntry({
+            name: 'zombie-host',
+            worktree_path: null,
+            session_state: 'live',
+            coding_session_id: 'sess_zombie',
+            tool: 'claude',
+            tool_session_id: 'cl_zombie',
+          }),
+        ],
+      };
+
+      const plan = await buildStorageRepairPlan({
+        registry,
+        listSessions: async () => [],
+        request: async () => { throw new Error('no socket'); },
+      });
+
+      assert.equal(plan.counts.total, 1);
+      assert.equal(plan.actions[0].type, 'mark-idle');
+      assert.equal(plan.actions[0].name, 'zombie-host');
     } finally {
       if (previousMcHome == null) delete process.env.MC_HOME;
       else process.env.MC_HOME = previousMcHome;

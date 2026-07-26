@@ -73,6 +73,41 @@ describe('session broker hosts', () => {
     }
   });
 
+  test('a host that times out is reported busy-live, a refused host drops out', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'mc-session-hosts-'));
+    try {
+      const hostsDir = join(root, 'hosts');
+      const busy = makeHostManifest({ hostsDir, sessionId: 'sess_busy' });
+      makeHostManifest({ hostsDir, sessionId: 'sess_dead' });
+      const request = async (message, options) => {
+        if (options?.socketPath === busy.socket_path) {
+          throw new Error('broker request timed out after 3000ms');
+        }
+        if (options?.socketPath) {
+          throw new Error('connect ECONNREFUSED');
+        }
+        return { ok: true, sessions: [] };
+      };
+
+      const sessions = await listLocalBrokerAndHostSessions({
+        request,
+        includeHosts: true,
+        hostsDir,
+      });
+
+      // Timeout means the daemon's event loop is busy (active tool
+      // streaming), not dead — dropping it would present a live session
+      // as stale. Refused/missing sockets stay dropped.
+      assert.equal(sessions.length, 1);
+      assert.equal(sessions[0].coding_session_id, 'sess_busy');
+      assert.equal(sessions[0].session_state, 'live');
+      assert.equal(sessions[0].attachable, true);
+      assert.equal(sessions[0].host_busy, true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test('does not scan session-host manifests for injected requests unless requested', async () => {
     const root = mkdtempSync(join(tmpdir(), 'mc-session-hosts-skip-'));
     try {

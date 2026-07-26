@@ -1,8 +1,9 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 
 import { resolveToolInput } from '../adapters/index.js';
 import { DEFAULT_TOOL } from '../lib/config.js';
 import { readRegistry, writeRegistry } from './registry.js';
+import { requestBroker } from './broker/client.js';
 import { listLocalBrokerAndHostSessions } from './broker/session-hosts.js';
 import { sessionHostPaths } from './broker/paths.js';
 import { resolveToolSessionForResume } from './tool-session.js';
@@ -15,7 +16,9 @@ export async function buildStorageRepairPlan({
   resolveTool = resolveToolInput,
   includeProviderBackfill = false,
   names = null,
+  request = requestBroker,
 } = {}) {
+  const probeRequest = request;
   const nowIso = new Date(resolveNowMs(now)).toISOString();
   const liveIds = await listSessions()
     .then((sessions) => new Set((sessions || []).map(sessionIdForLiveRow).filter(Boolean)))
@@ -30,7 +33,12 @@ export async function buildStorageRepairPlan({
     const sessionId = nonEmpty(entry?.coding_session_id);
     const worktreePath = nonEmpty(entry?.worktree_path);
     const worktreeExists = Boolean(worktreePath && existsSync(worktreePath));
-    const live = Boolean(sessionId && (liveIds.has(sessionId) || hostBrokerPidAlive(sessionId)));
+    // Live means attachable: the enumeration (or a direct, patient socket
+    // probe) must confirm it. A daemon pid alive with a dead or missing
+    // socket is NOT live — trusting pids left unattachable sessions marked
+    // live forever while `mc list` correctly showed them stale.
+    const live = Boolean(sessionId
+      && (liveIds.has(sessionId) || await hostSocketAlive(sessionId, { request: probeRequest })));
 
     if (entry?.session_state === 'live' && !live) {
       actions.push(registryPatchAction({
@@ -99,21 +107,16 @@ function needsProviderBackfill(entry) {
   );
 }
 
-function hostBrokerPidAlive(sessionId) {
-  const pidPath = sessionHostPaths(sessionId).pidPath;
-  let pid = null;
-  try {
-    const parsed = Number(readFileSync(pidPath, 'utf8').trim());
-    if (Number.isInteger(parsed) && parsed > 0) pid = parsed;
-  } catch {
-    return false;
-  }
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (err) {
-    return err?.code === 'EPERM';
-  }
+const HOST_SOCKET_PROBE_TIMEOUT_MS = 5_000;
+
+async function hostSocketAlive(sessionId, { request = requestBroker } = {}) {
+  const socketPath = sessionHostPaths(sessionId).socketPath;
+  if (!existsSync(socketPath)) return false;
+  const res = await request({ type: 'status' }, {
+    socketPath,
+    timeoutMs: HOST_SOCKET_PROBE_TIMEOUT_MS,
+  }).catch(() => null);
+  return res?.ok === true;
 }
 
 export function applyStorageRepairPlan(registry, plan, {
