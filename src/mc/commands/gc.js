@@ -62,9 +62,16 @@ export async function run(argv) {
   }
 
   const reg = readRegistry();
-  let candidates = opts.staleWorktrees
-    ? await staleWorktreeCandidates(reg)
-    : reg.entries.filter(isEligible);
+  let candidates;
+  if (opts.staleWorktrees) {
+    const stale = await staleWorktreeCandidates(reg, {
+      includeUnlaunched: opts.onlyNames.length > 0,
+    });
+    if (stale.warning) console.error(`mc: ${stale.warning}`);
+    candidates = stale.candidates;
+  } else {
+    candidates = reg.entries.filter(isEligible);
+  }
   const requestedNames = opts.onlyNames;
   const notCandidates = [];
   if (requestedNames.length) {
@@ -345,7 +352,9 @@ function runDependencySnapshots(opts) {
 async function runAllSafe(opts) {
   const reg = readRegistry();
   const runtime = await scanRuntimeCleanup({ minAgeMs: opts.minAgeMs, registry: reg });
-  const worktreeCandidates = await staleWorktreeCandidates(reg);
+  const stale = await staleWorktreeCandidates(reg);
+  if (stale.warning) console.error(`mc: ${stale.warning}`);
+  const worktreeCandidates = stale.candidates;
   const dependencySnapshots = scanDependencySnapshots({ minAgeMs: snapshotMinAge(opts) });
 
   if (opts.dryRun) {

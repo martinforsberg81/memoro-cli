@@ -12,6 +12,7 @@ import {
   scanRuntimeSidecars,
 } from './sidecar-cleanup.js';
 import { listLocalBrokerAndHostSessions } from './broker/session-hosts.js';
+import { fetchActiveCodingSessions } from './session-list.js';
 import { sessionHostPaths } from './broker/paths.js';
 import {
   DEFAULT_DEPENDENCY_SNAPSHOT_MIN_AGE_MS,
@@ -113,22 +114,66 @@ export function reapRuntimeCleanup(scan, {
   };
 }
 
+/**
+ * Reclaiming a worktree is destructive, and "live" is bigger than the
+ * local broker: a session can be attached from anywhere via the cloud
+ * (this machine's coordinator included). Candidates are offered only
+ * with the FULL liveness picture — if either the local enumeration or
+ * the cloud-active lookup fails, offer nothing and say why.
+ */
 export async function staleWorktreeCandidates(registry = readRegistry(), {
   listSessions = listLocalBrokerAndHostSessions,
+  // MC_TEST_MODE keeps spawned-CLI tests off the network (the established
+  // test gate); unit tests inject fetchCloudActive to cover the real path.
+  fetchCloudActive = process.env.MC_TEST_MODE === '1'
+    ? async () => ({ ok: true, sessions: [] })
+    : fetchActiveCodingSessions,
+  // Auto-reclaim covers only what mc itself launched. A worktree with a
+  // registry entry but no coding session (created out-of-band, e.g. by
+  // other worktree tooling) may be in active use by something mc cannot
+  // see — it is offered only when explicitly named (`--only`).
+  includeUnlaunched = false,
 } = {}) {
-  const liveIds = await listSessions()
-    .then((sessions) => new Set((sessions || []).map(sessionIdForLiveRow).filter(Boolean)))
-    .catch(() => new Set());
+  const local = await listSessions()
+    .then((sessions) => ({ ok: true, sessions: sessions || [] }))
+    .catch((err) => ({ ok: false, error: err?.message || 'local broker enumeration failed' }));
+  const cloud = await fetchCloudActive({}).catch((err) => ({
+    ok: false,
+    warning: err?.message || 'cloud active-session lookup failed',
+  }));
+  if (!local.ok || !cloud.ok) {
+    return {
+      candidates: [],
+      warning: `worktree reclaim skipped — incomplete liveness picture (${
+        [!local.ok ? (local.error || 'local') : null, !cloud.ok ? (cloud.warning || 'cloud') : null]
+          .filter(Boolean).join('; ')
+      })`,
+    };
+  }
+
+  // Match by id AND by cwd/repo+branch: a session that was never linked
+  // into the registry (coding_session_id null) must still protect the
+  // worktree it runs in.
+  const liveSessions = [...local.sessions, ...(cloud.sessions || [])];
+  const liveIds = new Set(liveSessions
+    .map((session) => sessionIdForLiveRow(session) || nonEmpty(session?.coding_session_id))
+    .filter(Boolean));
   const out = [];
   for (const entry of registry?.entries || []) {
-    const candidate = staleWorktreeCandidate(entry, { liveIds });
+    if (!includeUnlaunched && !entryWasMcLaunched(entry)) continue;
+    const candidate = staleWorktreeCandidate(entry, { liveIds, liveSessions });
     if (candidate) out.push(candidate);
   }
-  return out.sort(compareReclaimableCandidates);
+  return { candidates: out.sort(compareReclaimableCandidates), warning: null };
 }
 
-export function staleWorktreeCandidate(entry, { liveIds = new Set() } = {}) {
-  const classified = classifyWorktreeEntry(entry, { liveIds });
+function entryWasMcLaunched(entry) {
+  return Boolean(nonEmpty(entry?.coding_session_id))
+    || (entry?.session_state || 'no-session-yet') !== 'no-session-yet';
+}
+
+export function staleWorktreeCandidate(entry, { liveIds = new Set(), liveSessions = [] } = {}) {
+  const classified = classifyWorktreeEntry(entry, { liveIds, liveSessions });
   if (!classified.cleanup_candidate) return null;
   return {
     ...entry,
@@ -162,10 +207,13 @@ export async function explainSessionStorage(name, {
   };
 }
 
-export function classifyWorktreeEntry(entry, { liveIds = new Set() } = {}) {
+export function classifyWorktreeEntry(entry, { liveIds = new Set(), liveSessions = [] } = {}) {
   const sessionId = nonEmpty(entry?.coding_session_id);
   const worktreePath = nonEmpty(entry?.worktree_path);
-  const live = Boolean(sessionId && (liveIds.has(sessionId) || hostBrokerPidAlive(sessionId)));
+  const live = Boolean(
+    (sessionId && (liveIds.has(sessionId) || hostBrokerPidAlive(sessionId)))
+    || liveSessions.some((session) => liveSessionProtectsEntry(session, entry)),
+  );
   const gitState = observeGitForCleanup(entry);
   const provider = providerState(entry);
   const cleanupCandidate = Boolean(
@@ -472,6 +520,33 @@ function toOrphanJson(e) {
 
 function toStaleJson(e) {
   return { pid_file: e.pidFile, llm_session_id: e.llmSessionId, pid: e.pid, reason: e.reason };
+}
+
+/**
+ * Permissive on purpose — the strict removal matcher
+ * (brokerSessionMatchesEntry) rejects on id mismatch even when the cwd
+ * matches, which is right for deleting and wrong for protecting: any
+ * live session working in the entry's worktree protects it, ids or not.
+ */
+function liveSessionProtectsEntry(session, entry) {
+  const sessionId = nonEmpty(session?.coding_session_id || session?.id);
+  const entryId = nonEmpty(entry?.coding_session_id);
+  if (sessionId && entryId && sessionId === entryId) return true;
+  const cwd = normalizeWorktreePathForMatch(session?.cwd || session?.worktree_path);
+  const worktree = normalizeWorktreePathForMatch(entry?.worktree_path);
+  if (cwd && worktree && cwd === worktree) return true;
+  const label = nonEmpty(session?.label || session?.name);
+  return Boolean(label && nonEmpty(entry?.name) && label === entry.name);
+}
+
+function normalizeWorktreePathForMatch(value) {
+  const text = nonEmpty(value);
+  if (!text) return null;
+  let out = text.replace(/[/\\]+$/, '');
+  if (process.platform === 'darwin' && out.startsWith('/private/')) {
+    out = out.slice('/private'.length);
+  }
+  return out;
 }
 
 function sessionIdForLiveRow(session) {
