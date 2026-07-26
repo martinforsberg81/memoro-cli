@@ -51,29 +51,79 @@ export async function ensureSessionHostRunning({
   return { ok: false, error: sessionHostStartError(paths), ...paths };
 }
 
+// A host whose daemon is busy (an active tool streaming PTY output hogs
+// its event loop) can take well over the client's 1s default to answer.
+// Classifying it dead makes a genuinely live session render as stale, so
+// enumeration probes with a more patient deadline — and concurrently,
+// so sweeping the hosts dir costs one slow probe, not their sum.
+const HOST_PROBE_TIMEOUT_MS = 3_000;
+const HOST_PROBE_CONCURRENCY = 16;
+
 export async function listSessionHostSessions({
   request = requestBroker,
   hostsDir = sessionHostsDir(),
+  probeTimeoutMs = HOST_PROBE_TIMEOUT_MS,
 } = {}) {
-  const manifests = readSessionHostManifests({ hostsDir });
+  const manifests = readSessionHostManifests({ hostsDir })
+    .filter((manifest) => manifest.socket_path || manifest.socketPath);
+  const results = new Array(manifests.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < manifests.length) {
+      const index = next++;
+      const manifest = manifests[index];
+      const socketPath = manifest.socket_path || manifest.socketPath;
+      results[index] = await request({ type: 'sessions' }, { socketPath, timeoutMs: probeTimeoutMs })
+        .then((res) => ({ manifest, socketPath, res }))
+        .catch((err) => ({ manifest, socketPath, res: null, timedOut: isTimeoutError(err) }));
+    }
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(HOST_PROBE_CONCURRENCY, manifests.length) }, worker),
+  );
+
   const sessions = [];
-  for (const manifest of manifests) {
-    const socketPath = manifest.socket_path || manifest.socketPath;
-    if (!socketPath) continue;
-    const res = await request({ type: 'sessions' }, { socketPath }).catch(() => null);
+  for (const { manifest, socketPath, res, timedOut } of results) {
+    const hostMeta = {
+      broker_socket_path: socketPath,
+      broker_pid_path: manifest.pid_path || manifest.pidPath || null,
+      broker_log_path: manifest.log_path || manifest.logPath || null,
+      host_kind: 'session',
+    };
+    if (!res && timedOut) {
+      // The socket accepted but never answered inside the deadline: the
+      // daemon's event loop is busy (an active tool streaming output), not
+      // dead. Losing the row would present a live session as stale, so
+      // report what the manifest knows. Dead sockets (refused / missing)
+      // still drop out here.
+      const sessionId = manifest.session_id || manifest.sessionId || null;
+      if (sessionId) {
+        sessions.push({
+          id: sessionId,
+          coding_session_id: sessionId,
+          session_state: 'live',
+          attachable: true,
+          host_busy: true,
+          host_session_id: sessionId,
+          ...hostMeta,
+        });
+      }
+      continue;
+    }
     const rows = res?.ok && Array.isArray(res.sessions) ? res.sessions : [];
     for (const row of rows) {
       sessions.push({
         ...row,
-        broker_socket_path: socketPath,
-        broker_pid_path: manifest.pid_path || manifest.pidPath || null,
-        broker_log_path: manifest.log_path || manifest.logPath || null,
+        ...hostMeta,
         host_session_id: manifest.session_id || manifest.sessionId || row.id || row.coding_session_id || null,
-        host_kind: 'session',
       });
     }
   }
   return sessions;
+}
+
+function isTimeoutError(err) {
+  return /timed out/i.test(err?.message || '');
 }
 
 export async function listLocalBrokerAndHostSessions({
