@@ -39,12 +39,13 @@ describe('mc --help', () => {
     assert.match(r.stdout, /same across Codex, Claude Code/);
     assert.match(r.stdout, /compact User Profile and Coding Profile context/);
     assert.match(r.stdout, /does\s+not create or read a repo-local\s+MEMORO\.md/);
-    assert.match(r.stdout, /vault is locked/);
+    assert.match(r.stdout, /Vault\s+plaintext is never materialised for the coding tool/);
     assert.match(r.stdout, /live broker-owned PTY/);
     assert.match(r.stdout, /without sending a new prompt/);
     assert.match(r.stdout, /relaunches the same provider-native\s+session by id/);
-    assert.match(r.stdout, /refuses to\s+start a contextless replacement/);
-    assert.match(r.stdout, /Idle tracked sessions that have never\s+launched start as fresh grounded sessions on first open/);
+    assert.match(r.stdout, /announces\s+the gap and starts a fresh grounded session on the same coding session/);
+    assert.doesNotMatch(r.stdout, /refuses to\s+start a contextless replacement/);
+    assert.match(r.stdout, /Idle tracked sessions that have\s+never launched start as fresh grounded sessions on first open/);
     assert.match(r.stdout, /cannot switch provider for an existing provider\s+session/);
     assert.doesNotMatch(r.stdout, /\/mc map/);
     assert.doesNotMatch(r.stdout, /MEMORO\.md is missing/);

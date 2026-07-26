@@ -1050,14 +1050,15 @@ describe('mc resume <name>', () => {
     assert.equal(launchCalls[0].sendStartupMessage, false);
   });
 
-  test('prelaunch refuses to start when provider session id cannot be found', async () => {
-    let launched = false;
+  test('prelaunch falls back to a fresh grounded launch when no provider session exists', async () => {
+    const freshLaunched = [];
     const stderr = [];
     const status = await launchResumeSession({
       entry: {
         name: 'data',
         tool: 'codex',
         worktree_path: '/tmp/memoro-resume-data',
+        coding_session_id: 'sess_keepme01',
       },
       stderr: { write: (s) => stderr.push(s) },
       deps: {
@@ -1068,17 +1069,20 @@ describe('mc resume <name>', () => {
           source: 'codex',
           transcriptPath: null,
         }),
+        launchFreshSession: async ({ entry }) => { freshLaunched.push(entry); return 0; },
         launchBrokerOwnedSession: async () => {
-          launched = true;
-          return { code: 0 };
+          assert.fail('must go through the fresh grounded path, not a raw resume launch');
         },
       },
     });
 
-    assert.equal(status, 1);
-    assert.equal(launched, false);
-    assert.match(stderr.join(''), /no provider-native session id/);
-    assert.match(stderr.join(''), /refusing to start a contextless replacement session/);
+    // Announced, never silent — and the fresh launch keeps the same coding
+    // session so server continuity grounds the replacement.
+    assert.equal(status, 0);
+    assert.equal(freshLaunched.length, 1);
+    assert.equal(freshLaunched[0].coding_session_id, 'sess_keepme01');
+    assert.match(stderr.join(''), /no codex-native session to resume/);
+    assert.match(stderr.join(''), /fresh grounded session on the same coding session/);
   });
 
   test('fresh launch starts a grounded tool session in the same worktree', async () => {

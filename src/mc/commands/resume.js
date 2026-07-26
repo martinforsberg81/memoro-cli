@@ -220,8 +220,12 @@ export async function launchResumeSession({
     deps: deps.toolSessionDeps || deps,
   });
   if (!toolSession?.ok) {
-    stderr.write(renderCannotResumeSameToolSession(entry, toolSession));
-    return 1;
+    // No provider-native session to resume (e.g. the tool exited before any
+    // message created a transcript). Under the contract, continuity is
+    // server-owned — a fresh grounded launch on the SAME coding session is
+    // strictly better than a dead end, and it is announced, never silent.
+    stderr.write(`mc: no ${launchTool?.shortName || 'provider'}-native session to resume for "${entry.name}" — starting a fresh grounded session on the same coding session.\n`);
+    return (deps.launchFreshSession || launchFreshSession)({ entry, apiArgv, env, stderr, deps });
   }
   const resumeArgv = buildNativeResumeArgv({
     entry,
