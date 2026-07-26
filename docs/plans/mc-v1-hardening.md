@@ -1,9 +1,11 @@
 # mc V1 hardening — test, fix, dev loop, performance
 
-**Status:** proposed · 2026-07-26 · the gate before V2
-([`mc-v2-cloud.md`](mc-v2-cloud.md)). V1 custody (S1–S4) is code-complete;
-this plan takes V1 from code-complete to *trusted daily driver*, then V2
-starts.
+**Status:** shipped (round 1) — PRs #179–#187, all merged 2026-07-26 ·
+the gate before V2 ([`mc-v2-cloud.md`](mc-v2-cloud.md)). H1 ✅ H2 ✅
+H3 ✅ H4 ✅ (first measured round). Remaining follow-ups are listed in
+each phase's status section (cloud tombstones on end is server-side and
+lives with the memoro repo; deeper perf items are candidates for a later
+round). V2 C1 is unblocked once H1–H4 acceptance holds in daily use.
 
 Related: [`session-runtime-hardening.md`](session-runtime-hardening.md)
 (resume contract), [`mc-hardening.md`](mc-hardening.md) (launch seams),
