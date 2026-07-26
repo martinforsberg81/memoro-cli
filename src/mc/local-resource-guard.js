@@ -15,6 +15,11 @@ import { mcHome as defaultMcHome } from './paths.js';
 import { resolveLocalResourceProfile } from './local-resource-profile.js';
 
 export const LOCAL_RESOURCE_GUARD_ENV = 'MC_LOCAL_RESOURCE_PROFILE';
+// Set in a protected job's environment so nested guarded commands (npm test
+// spawning node --test, python spawning python) don't take a second slot —
+// with maxConcurrent 1 that would deadlock the job against itself.
+export const LOCAL_HEAVY_JOB_ACTIVE_ENV = 'MC_LOCAL_HEAVY_JOB_ACTIVE';
+export const LOCAL_HEAVY_JOB_THREADS_ENV = 'MC_LOCAL_RESOURCE_MAX_THREADS';
 export const GUARDED_PYTHON_COMMANDS = Object.freeze([
   'python',
   'python3',
@@ -25,6 +30,20 @@ export const GUARDED_PYTHON_COMMANDS = Object.freeze([
   'python3.13',
   'python3.14',
 ]);
+export const GUARDED_NODE_COMMANDS = Object.freeze([
+  'node',
+  'npm',
+]);
+const GUARDED_COMMANDS = Object.freeze([
+  ...GUARDED_PYTHON_COMMANDS,
+  ...GUARDED_NODE_COMMANDS,
+]);
+
+// How long a queued test run waits for a protected slot before giving up.
+// A full suite here runs ~7 minutes; two queued suites fit comfortably.
+const HEAVY_SLOT_WAIT_MS = 20 * 60 * 1000;
+const HEAVY_SLOT_POLL_MS = 2_000;
+const HEAVY_SLOT_NAG_MS = 30_000;
 
 const HEAVY_COMMAND_RE = /(?:liveportrait|portrait[-_]?motion|avatar[._-]motion|stable[-_]?diffusion|txt2img|img2img|comfyui)/i;
 const WATCH_INTERVAL_MS = 1_000;
@@ -53,7 +72,7 @@ export function prepareLocalResourceGuardEnv({
   });
 
   mkdir(dir, { recursive: true, mode: 0o700 });
-  for (const command of GUARDED_PYTHON_COMMANDS) {
+  for (const command of GUARDED_COMMANDS) {
     const target = join(dir, command);
     writeFile(target, script, { mode: 0o700 });
     try { chmod(target, 0o700); } catch { /* best effort on non-posix fs */ }
@@ -92,7 +111,7 @@ export async function runLocalResourceGuardShim({
 } = {}) {
   const invoked = basename(invokedPath || '');
   const selfDir = resolve(dirname(invokedPath || '.'));
-  if (!GUARDED_PYTHON_COMMANDS.includes(invoked)) {
+  if (!GUARDED_COMMANDS.includes(invoked)) {
     stderr.write('mc: local resource guard invoked under an unexpected command name.\n');
     return 127;
   }
@@ -104,7 +123,23 @@ export async function runLocalResourceGuardShim({
   }
 
   const childEnv = { ...env, PATH: pathWithoutSelfDir(env.PATH || '', selfDir) };
-  if (!isLocalHeavyPythonCommand(argv)) {
+
+  // Nested guarded command inside an already-protected job: never take a
+  // second slot (deadlock against ourselves at maxConcurrent 1). Priority
+  // and thread env are inherited; for a direct nested `node --test`, still
+  // cap the runner's worker count.
+  if (env[LOCAL_HEAVY_JOB_ACTIVE_ENV] === '1') {
+    const nestedArgv = invoked === 'node'
+      ? withTestConcurrencyCap(argv, env[LOCAL_HEAVY_JOB_THREADS_ENV])
+      : argv;
+    return passThrough(real, nestedArgv, { cwd, env: childEnv, stderr, spawnSyncFn: deps.spawnSync || spawnSync });
+  }
+
+  const nodeInvocation = GUARDED_NODE_COMMANDS.includes(invoked);
+  const heavy = nodeInvocation
+    ? isLocalHeavyNodeCommand(invoked, argv)
+    : isLocalHeavyPythonCommand(argv);
+  if (!heavy) {
     return passThrough(real, argv, { cwd, env: childEnv, stderr, spawnSyncFn: deps.spawnSync || spawnSync });
   }
 
@@ -115,27 +150,106 @@ export async function runLocalResourceGuardShim({
     return 75;
   }
 
-  const lock = (deps.acquireHeavyJobSlot || acquireHeavyJobSlot)({
-    lockRoot,
-    maxConcurrent: profile.maxConcurrent,
-    codingSessionId,
-  });
+  // Test runs queue for a slot instead of failing outright — sessions
+  // should serialise, not break. Python heavy jobs keep the original
+  // fail-fast contract (they are typically retried by an orchestrator).
+  const lock = nodeInvocation
+    ? await (deps.waitForHeavyJobSlot || waitForHeavyJobSlot)({
+      lockRoot,
+      maxConcurrent: profile.maxConcurrent,
+      codingSessionId,
+      stderr,
+      deps,
+    })
+    : (deps.acquireHeavyJobSlot || acquireHeavyJobSlot)({
+      lockRoot,
+      maxConcurrent: profile.maxConcurrent,
+      codingSessionId,
+    });
   if (!lock) {
     stderr.write(`mc: blocked local heavy job because ${profile.maxConcurrent} protected job${profile.maxConcurrent === 1 ? ' is' : 's are'} already running.\n`);
     return 75;
   }
 
   stderr.write(`mc: local heavy-job guard active (${profile.profile}: ${profile.maxThreads} threads, ${profile.maxRssMb} MB memory guard).\n`);
+  const protectedArgv = invoked === 'node'
+    ? withTestConcurrencyCap(argv, profile.maxThreads)
+    : argv;
   try {
-    return await runProtectedChild(real, argv, {
+    return await runProtectedChild(real, protectedArgv, {
       cwd,
-      env: applyThreadLimits(childEnv, profile.maxThreads),
+      env: {
+        ...applyThreadLimits(childEnv, profile.maxThreads),
+        UV_THREADPOOL_SIZE: String(Math.max(1, Number(profile.maxThreads) || 1)),
+        [LOCAL_HEAVY_JOB_ACTIVE_ENV]: '1',
+        [LOCAL_HEAVY_JOB_THREADS_ENV]: String(Math.max(1, Number(profile.maxThreads) || 1)),
+      },
       profile,
       stderr,
       deps,
     });
   } finally {
     (deps.releaseHeavyJobSlot || releaseHeavyJobSlot)(lock);
+  }
+}
+
+/**
+ * Heavy Node work = test runs. `node --test` fans out one worker per CPU
+ * by default, and parallel sessions each doing that is exactly what
+ * drowns the machine. Regular `node script.js`, `npm ci`, `npm run dev`
+ * etc. pass through untouched.
+ */
+export function isLocalHeavyNodeCommand(invoked, argv = []) {
+  const args = argv.map((arg) => String(arg));
+  if (invoked === 'node') {
+    return args.includes('--test');
+  }
+  if (invoked === 'npm') {
+    const words = args.filter((arg) => !arg.startsWith('-'));
+    const sub = words[0] || '';
+    if (sub === 'test' || sub === 't' || sub === 'tst') return true;
+    if (sub === 'run' || sub === 'run-script') return /test/i.test(words[1] || '');
+    return false;
+  }
+  return false;
+}
+
+function withTestConcurrencyCap(argv, maxThreads) {
+  const cap = Math.max(1, Number(maxThreads) || 1);
+  const args = argv.map((arg) => String(arg));
+  if (!args.includes('--test')) return argv;
+  if (args.some((arg) => arg === '--test-concurrency' || arg.startsWith('--test-concurrency='))) {
+    return argv;
+  }
+  const index = args.indexOf('--test');
+  return [...args.slice(0, index + 1), `--test-concurrency=${cap}`, ...args.slice(index + 1)];
+}
+
+export async function waitForHeavyJobSlot({
+  lockRoot,
+  maxConcurrent = 1,
+  codingSessionId = 'session',
+  stderr = process.stderr,
+  waitMs = HEAVY_SLOT_WAIT_MS,
+  pollMs = HEAVY_SLOT_POLL_MS,
+  nagMs = HEAVY_SLOT_NAG_MS,
+  deps = {},
+} = {}) {
+  const acquire = deps.acquireHeavyJobSlot || acquireHeavyJobSlot;
+  const sleep = deps.sleep || ((ms) => new Promise((resolveSleep) => setTimeout(resolveSleep, ms)));
+  const now = deps.now || Date.now;
+  const started = now();
+  let lastNag = 0;
+  for (;;) {
+    const lock = acquire({ lockRoot, maxConcurrent, codingSessionId });
+    if (lock) return lock;
+    const elapsed = now() - started;
+    if (elapsed >= waitMs) return null;
+    if (elapsed - lastNag >= nagMs) {
+      lastNag = elapsed;
+      stderr.write(`mc: waiting for a protected job slot (${maxConcurrent} allowed, queued ${Math.round(elapsed / 1000)}s)...\n`);
+    }
+    await sleep(pollMs);
   }
 }
 

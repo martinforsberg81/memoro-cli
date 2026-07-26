@@ -15,16 +15,20 @@ import { spawnSync } from 'node:child_process';
 import test, { describe } from 'node:test';
 
 import {
+  LOCAL_HEAVY_JOB_ACTIVE_ENV,
+  LOCAL_HEAVY_JOB_THREADS_ENV,
   LOCAL_RESOURCE_GUARD_ENV,
   acquireHeavyJobSlot,
   applyThreadLimits,
   evaluateLocalHeavyJobPreflight,
   evaluateLocalHeavyJobRuntime,
+  isLocalHeavyNodeCommand,
   isLocalHeavyPythonCommand,
   prepareLocalResourceGuardEnv,
   processTreeRssMb,
   releaseHeavyJobSlot,
   runLocalResourceGuardShim,
+  waitForHeavyJobSlot,
 } from '../../src/mc/local-resource-guard.js';
 import { buildLocalResourceProfile } from '../../src/mc/local-resource-profile.js';
 
@@ -126,6 +130,145 @@ describe('local resource guard installation and runtime', () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  test('node test runs are heavy; ordinary node and npm work is not', () => {
+    assert.equal(isLocalHeavyNodeCommand('node', ['--test', 'tests/']), true);
+    assert.equal(isLocalHeavyNodeCommand('node', ['script.js']), false);
+    assert.equal(isLocalHeavyNodeCommand('npm', ['test']), true);
+    assert.equal(isLocalHeavyNodeCommand('npm', ['t']), true);
+    assert.equal(isLocalHeavyNodeCommand('npm', ['run', 'test:live']), true);
+    assert.equal(isLocalHeavyNodeCommand('npm', ['run', 'css:build']), false);
+    assert.equal(isLocalHeavyNodeCommand('npm', ['ci']), false);
+    assert.equal(isLocalHeavyNodeCommand('npm', ['run', 'dev']), false);
+  });
+
+  test('a protected npm test queues for the slot and marks the child environment', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'mc-resource-node-'));
+    const realBin = join(root, 'real-bin');
+    mkdirSync(realBin, { recursive: true });
+    writeFileSync(join(realBin, 'npm'), '#!/bin/sh\nexit 0\n');
+    chmodSync(join(realBin, 'npm'), 0o700);
+    try {
+      const profile = buildLocalResourceProfile('conservative');
+      const waits = [];
+      let spawnedEnv = null;
+      const code = await runLocalResourceGuardShim({
+        invokedPath: join(root, 'guard', 'npm'),
+        argv: ['test'],
+        profile,
+        lockRoot: join(root, 'locks'),
+        codingSessionId: 'sess_node',
+        env: { PATH: `${realBin}${delimiter}/usr/bin` },
+        stderr: { write: () => {} },
+        deps: {
+          existsSync: (path) => path === join(realBin, 'npm') || existsSync(path),
+          waitForHeavyJobSlot: async (options) => {
+            waits.push(options.maxConcurrent);
+            return { path: join(root, 'locks', 'slot-1'), token: 't' };
+          },
+          releaseHeavyJobSlot: () => true,
+          spawn: (bin, args, options) => {
+            spawnedEnv = options.env;
+            const child = new EventEmitter();
+            child.pid = 4242;
+            setImmediate(() => child.emit('close', 0, null));
+            return child;
+          },
+          collectHostMetrics: () => ({ freeDiskGb: 100, swapUsedMb: 0 }),
+          processTreeRssMb: () => 10,
+        },
+      });
+
+      assert.equal(code, 0);
+      assert.deepEqual(waits, [1]);
+      assert.equal(spawnedEnv[LOCAL_HEAVY_JOB_ACTIVE_ENV], '1');
+      assert.equal(spawnedEnv[LOCAL_HEAVY_JOB_THREADS_ENV], '2');
+      assert.equal(spawnedEnv.UV_THREADPOOL_SIZE, '2');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('a nested guarded command inside a protected job passes through without a second slot', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'mc-resource-nested-'));
+    const realBin = join(root, 'real-bin');
+    mkdirSync(realBin, { recursive: true });
+    writeFileSync(join(realBin, 'node'), '#!/bin/sh\nexit 0\n');
+    chmodSync(join(realBin, 'node'), 0o700);
+    try {
+      const profile = buildLocalResourceProfile('conservative');
+      let acquired = 0;
+      let passArgs = null;
+      const code = await runLocalResourceGuardShim({
+        invokedPath: join(root, 'guard', 'node'),
+        argv: ['--test', 'tests/'],
+        profile,
+        lockRoot: join(root, 'locks'),
+        codingSessionId: 'sess_nested',
+        env: {
+          PATH: `${realBin}${delimiter}/usr/bin`,
+          [LOCAL_HEAVY_JOB_ACTIVE_ENV]: '1',
+          [LOCAL_HEAVY_JOB_THREADS_ENV]: '2',
+        },
+        stderr: { write: () => {} },
+        deps: {
+          existsSync: (path) => path === join(realBin, 'node') || existsSync(path),
+          acquireHeavyJobSlot: () => { acquired += 1; return null; },
+          waitForHeavyJobSlot: async () => { acquired += 1; return null; },
+          spawnSync: (bin, args) => {
+            passArgs = args;
+            return { status: 0 };
+          },
+        },
+      });
+
+      assert.equal(code, 0);
+      assert.equal(acquired, 0);
+      // The nested test runner still gets its worker count capped.
+      assert.deepEqual(passArgs, ['--test', '--test-concurrency=2', 'tests/']);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('waitForHeavyJobSlot polls until a slot frees and nags while queued', async () => {
+    let clock = 0;
+    let free = false;
+    const nags = [];
+    const lock = await waitForHeavyJobSlot({
+      lockRoot: '/tmp/none',
+      maxConcurrent: 1,
+      stderr: { write: (line) => nags.push(line) },
+      waitMs: 100_000,
+      pollMs: 1_000,
+      nagMs: 30_000,
+      deps: {
+        acquireHeavyJobSlot: () => (free ? { path: '/tmp/none/slot-1', token: 't' } : null),
+        sleep: async () => { clock += 1_000; if (clock >= 65_000) free = true; },
+        now: () => clock,
+      },
+    });
+    assert.ok(lock);
+    assert.equal(nags.length, 2);
+    assert.match(nags[0], /waiting for a protected job slot/);
+  });
+
+  test('waitForHeavyJobSlot gives up at the deadline', async () => {
+    let clock = 0;
+    const lock = await waitForHeavyJobSlot({
+      lockRoot: '/tmp/none',
+      maxConcurrent: 1,
+      stderr: { write: () => {} },
+      waitMs: 10_000,
+      pollMs: 1_000,
+      deps: {
+        acquireHeavyJobSlot: () => null,
+        sleep: async () => { clock += 1_000; },
+        now: () => clock,
+      },
+    });
+    assert.equal(lock, null);
   });
 
   test('global slots enforce concurrency and recover stale owners', () => {
