@@ -225,7 +225,25 @@ async function main() {
     return runWrap(rest, { label });
   }
 
-  // Default: wrap the configured coding tool (no label, current cwd).
+  // A bare word that is not a known command is a typo, not a session
+  // request — starting a grounded session on `mc devices` (meaning
+  // `mc vault devices`) would be a surprising, expensive mistake. Flags
+  // still fall through: the wrap launcher passes argv verbatim to the
+  // coding tool (e.g. `mc --resume <id>`).
+  if (argv[0] && !argv[0].startsWith('-')) {
+    const word = argv[0];
+    const vaultVerbs = [
+      'unlock', 'lock', 'devices', 'revoke-device', 'adopt', 'hydrate',
+      'migrate', 'recovery', 'recover', 'import', 'bind', 'bindings',
+    ];
+    const suggestion = vaultVerbs.includes(word)
+      ? ` Did you mean \`mc vault ${word}\`?`
+      : '';
+    console.error(`mc: unknown command "${word}".${suggestion} Run \`mc --help\` for the command list, or plain \`mc\` to start a session here.`);
+    return 2;
+  }
+
+  // Default: wrap the configured coding tool (no args, or tool flags only).
   return runWrap(argv);
 }
 
