@@ -39,6 +39,39 @@ server-owned, so the fallback is *grounded* and *announced*; the spirit
 Deliverable: every row above passes live; every fix lands with a
 regression test; TODO.md broker/recovery bullets closed or re-homed here.
 
+### H1 live results (2026-07-26)
+
+Verified live on this machine with a probe session (`mc new h1-probe`):
+
+- ✅ `mc new` (claude): worktree + branch + registry + host-daemon PTY +
+  grounding, one command; broker-confirmed live.
+- ✅ client death ≠ session death: SIGHUP on the mc client leaves the
+  detached session host and the tool process running; session stays
+  attachable.
+- ✅ resume fallback: with no provider-native id (child-session marker
+  disables transcripts), `mc open` announces and starts a fresh grounded
+  session on the SAME coding session.
+- ✅ re-`open` attaches to the live PTY (screen replay, no new prompt).
+- ✅ provider switch on a running session refuses with an actionable
+  message (exit it or `mc end` first), exit 1; `mc tool-switch --dry-run`
+  clean.
+- ✅ stale-registry truth: 19 of 23 "live" entries had no live local
+  session after the last reboot; list/status/picker now render them
+  `stale` with escalate-only verdicts (fixed in this branch);
+  `mc storage repair --apply` reconciled them to idle.
+
+Found and deferred to H2 (both reproduced live):
+
+- ❌ `mc end --force` on a session with no provider transcript
+  (`missing-tool-session-source`) fails closed on the ENTIRE teardown —
+  the session can never be ended. Fail closed on provider-artifact
+  deletion only; worktree/branch/registry/host teardown must proceed.
+  Live stuck specimen: `h1-probe`.
+- ❌ zombie session hosts: daemon pid alive but socket not enumerable —
+  `mc list` correctly shows `stale`, but `mc storage repair`'s pid-alive
+  fallback counts them as live (no repair), and nothing reaps them.
+  Repair should probe the socket; `mc gc --runtime` should reap.
+
 ## H2 — `mc end`: complete, residue-free teardown
 
 `mc end` claims teardown but leaves residue. Known/suspected leaks to
