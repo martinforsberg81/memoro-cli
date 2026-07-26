@@ -491,13 +491,21 @@ function installationActor(value) {
 
 function accountList(value) {
   if (!Array.isArray(value) || value.length > 1000) invalid('GitHub accounts are invalid.');
-  return value.map((account) => {
+  const seen = new Set();
+  const out = [];
+  for (const account of value) {
     exactObject(account, ['login', 'type'], 'GitHub account');
     const login = boundedString(account.login, 255);
     const type = boundedString(account.type, 64);
     if (!login || !LOGIN_RE.test(login) || !type) invalid('GitHub account is invalid.');
-    return { login, type };
-  });
+    // The server can report the same installation account once per
+    // selected repository; the account list is a set, not a tally.
+    const key = `${login}\n${type}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ login, type });
+  }
+  return out;
 }
 
 function repositoryList(value) {

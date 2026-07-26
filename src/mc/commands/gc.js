@@ -20,6 +20,7 @@ import { removeBrokerSessionForEntry } from '../broker/session-cleanup.js';
 import {
   DEFAULT_SIDECAR_MIN_AGE_MS,
   reapRuntimeSidecars,
+  reapZombieHosts,
   scanRuntimeSidecars,
 } from '../sidecar-cleanup.js';
 import {
@@ -166,6 +167,7 @@ function parseArgs(argv) {
     json: false,
     reapOrphans: false,
     sidecars: false,
+    reapZombieHosts: false,
     staleWorktrees: false,
     runtime: false,
     dependencySnapshots: false,
@@ -201,6 +203,10 @@ function parseArgs(argv) {
       if (opts.minAgeMs === DEFAULT_MIN_AGE_MS) opts.minAgeMs = DEFAULT_SIDECAR_MIN_AGE_MS;
       continue;
     }
+    if (a === '--reap-zombie-hosts') {
+      opts.reapZombieHosts = true;
+      continue;
+    }
     if (a === '--min-age') {
       const v = argv[++i];
       const ms = parseDurationMs(v);
@@ -223,6 +229,9 @@ function parseArgs(argv) {
   if (modes > 1) return { error: '--reap-orphans, --sidecars, --runtime, --dependency-snapshots, --stale-worktrees, and --all-safe cannot be combined' };
   if (opts.onlyNames.length && !opts.staleWorktrees) {
     return { error: '--only can only be used with --stale-worktrees' };
+  }
+  if (opts.reapZombieHosts && !opts.sidecars) {
+    return { error: '--reap-zombie-hosts can only be used with --sidecars' };
   }
   if (opts.allSafe && !opts.dryRun && !opts.apply) {
     return { error: '--all-safe requires --dry-run or --apply' };
@@ -290,28 +299,61 @@ async function runSidecars(opts) {
     const out = {
       dry_run: true,
       candidates: scan.candidates,
+      zombie_hosts: scan.zombie_hosts,
       counts: scan.counts,
     };
     if (opts.json) {
       console.log(JSON.stringify(out, null, 2));
     } else {
       printSidecarScan(scan, null);
+      printZombieHosts(scan, null, opts);
     }
     return 0;
   }
 
   const outcome = reapRuntimeSidecars(scan);
+  // Zombie hosts hold living processes; reaping them is opt-in only.
+  const zombieOutcome = opts.reapZombieHosts
+    ? await reapZombieHosts(scan.zombie_hosts)
+    : null;
   if (opts.json) {
     console.log(JSON.stringify({
-      ok: outcome.ok,
+      ok: outcome.ok && (zombieOutcome ? zombieOutcome.ok : true),
       removed: outcome.removed,
       ...(outcome.errors ? { errors: outcome.errors } : {}),
+      ...(zombieOutcome
+        ? {
+          zombie_hosts_removed: zombieOutcome.removed,
+          ...(zombieOutcome.errors ? { zombie_host_errors: zombieOutcome.errors } : {}),
+        }
+        : { zombie_hosts: scan.zombie_hosts }),
       counts: scan.counts,
     }, null, 2));
   } else {
     printSidecarScan(scan, outcome);
+    printZombieHosts(scan, zombieOutcome, opts);
   }
-  return outcome.ok ? 0 : 1;
+  return outcome.ok && (zombieOutcome ? zombieOutcome.ok : true) ? 0 : 1;
+}
+
+function printZombieHosts(scan, outcome, opts) {
+  const zombies = scan.zombie_hosts || [];
+  if (zombies.length === 0) return;
+  if (outcome) {
+    for (const item of outcome.removed) {
+      process.stdout.write(`reaped zombie host  ${item.session_id}  pid=${item.pid ?? '?'}\n`);
+    }
+    for (const item of outcome.errors || []) {
+      process.stdout.write(`zombie host failed  ${item.session_id}  ${item.error}\n`);
+    }
+    return;
+  }
+  for (const item of zombies) {
+    process.stdout.write(`zombie host  ${item.session_id}  pid=${item.pid ?? '?'}  (daemon alive, session unreachable)\n`);
+  }
+  if (!opts.reapZombieHosts) {
+    process.stdout.write('⚠  reaping kills the daemon AND its tool process — rerun with `mc gc --sidecars --reap-zombie-hosts` to remove them\n');
+  }
 }
 
 async function runRuntime(opts) {
