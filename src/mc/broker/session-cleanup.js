@@ -1,3 +1,5 @@
+import { existsSync } from 'node:fs';
+
 import { requestBroker as defaultRequestBroker } from './client.js';
 import {
   listLocalBrokerAndHostSessions,
@@ -47,18 +49,22 @@ export async function removeBrokerSessionForEntry(entry, {
   // (broker-host-still-running). Retire the host — but only when it
   // confirms it has no sessions left.
   let hostStopped = false;
-  if (nonEmpty(session?.broker_socket_path || session?.brokerSocketPath)) {
+  const hostSocketPath = nonEmpty(session?.broker_socket_path || session?.brokerSocketPath);
+  if (hostSocketPath) {
     const remaining = await request({ type: 'sessions' }).catch(() => null);
     if (remaining?.ok && Array.isArray(remaining.sessions) && remaining.sessions.length === 0) {
       const stop = await request({ type: 'stop' }).catch(() => null);
       if (stop?.ok) {
-        // The sidecar cleanup that follows checks the host pid; wait for
-        // the daemon to actually exit so the check does not race it.
+        // The sidecar cleanup that follows verifies the host by pid file
+        // AND socket file. The daemon stops answering before it unlinks
+        // its socket, so waiting only for a dead status leaves a window
+        // where a dead socket without a pid reads as "unverified" and
+        // fails the teardown. Wait for the socket file to be gone too.
         const deadline = Date.now() + 2_000;
         hostStopped = true;
         while (Date.now() < deadline) {
           const res = await request({ type: 'status' }).catch(() => null);
-          if (!res?.ok) break;
+          if (!res?.ok && !socketFileExists(hostSocketPath)) break;
           await new Promise((resolve) => setTimeout(resolve, 50));
         }
       }
@@ -81,6 +87,14 @@ export function brokerSessionMatchesEntry(session, entry) {
   const sessionName = nonEmpty(session.name || session.label || session.worktree_name);
   const entryName = nonEmpty(entry.name || entry.label);
   return Boolean(sessionName && entryName && sessionName === entryName);
+}
+
+function socketFileExists(path) {
+  try {
+    return existsSync(path);
+  } catch {
+    return false;
+  }
 }
 
 function brokerSessionId(session) {
