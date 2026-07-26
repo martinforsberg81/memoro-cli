@@ -254,7 +254,10 @@ describe('GitHub session capability boundary', () => {
       })) },
     });
     assert.equal(missing.ok, false);
-    assert.equal(missing.error.code, 'unavailable');
+    // Local-only code: no session broker in this environment is not a
+    // transient failure, and the message must name no material.
+    assert.equal(missing.error.code, 'no_session_broker');
+    assert.match(missing.error.message, /session-scoped/);
 
     const hostile = await executeGitHubSessionOperation({
       operation: 'repository.metadata',

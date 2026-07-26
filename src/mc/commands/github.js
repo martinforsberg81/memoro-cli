@@ -74,7 +74,12 @@ async function runOperation(opts, deps, io) {
     : await execute({ operation: opts.operation, params: opts.params });
   if (!response?.ok) {
     if (opts.json) io.stdout.write(`${JSON.stringify(response, null, 2)}\n`);
-    else io.stderr.write(`${safeOperationError(response?.error?.code)} Run \`mc github status\` to repair.\n`);
+    else {
+      const repairHint = response?.error?.code === 'no_session_broker'
+        ? ''
+        : ' Run `mc github status` to repair.';
+      io.stderr.write(`${safeOperationError(response?.error?.code)}${repairHint}\n`);
+    }
     return 1;
   }
   renderGitHubResult(opts, response.data, io.stdout);

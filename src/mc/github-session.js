@@ -193,7 +193,21 @@ export async function executeGitHubSessionOperation({
     return safeOperationFailure(requestId, 'invalid_params');
   }
   const socketPath = stringOrNull(env?.[MC_GITHUB_BROKER_SOCKET_ENV]);
-  if (!socketPath) return safeOperationFailure(encoded.request_id, 'unavailable');
+  if (!socketPath) {
+    // Not a transient failure: there is no session GitHub broker in this
+    // environment at all. Saying "temporarily unavailable — retry" here
+    // sent users retrying something that can never succeed. The code is
+    // local-only by construction — the wire decode rejects it.
+    return {
+      ok: false,
+      request_id: encoded.request_id,
+      error: {
+        code: 'no_session_broker',
+        message: 'GitHub commands are session-scoped — run this inside an mc session (`mc open <name>` or `mc new <name>`).',
+        repair_action: null,
+      },
+    };
+  }
   try {
     const raw = await request(encoded, {
       socketPath,

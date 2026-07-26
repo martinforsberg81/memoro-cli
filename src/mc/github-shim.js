@@ -224,6 +224,9 @@ export function safeOperationError(code) {
     stale_head: 'mc github: the Git branch state changed before execution.',
     stale_state: 'mc github: the pull request state changed before execution.',
     not_found: 'mc github: the requested item was not found.',
+    // Local-only code (the wire's STABLE_ERROR_SET rejects it): there is
+    // no session GitHub broker in this environment, so retrying is futile.
+    no_session_broker: 'mc github: GitHub commands are session-scoped — run this inside an mc session (`mc open <name>` or `mc new <name>`).',
   }[code] || 'mc github: GitHub is temporarily unavailable through Memoro.';
 }
 
