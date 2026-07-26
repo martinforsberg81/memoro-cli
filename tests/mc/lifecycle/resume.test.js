@@ -615,6 +615,38 @@ describe('mc resume <name>', () => {
     }
   });
 
+  test('plain open proceeds past a stale same-machine record with a native resume', async () => {
+    const old = process.env.MC_TEST_MODE;
+    delete process.env.MC_TEST_MODE;
+    const resumed = [];
+    try {
+      const status = await runResume(['data'], {
+        stdin: { isTTY: true },
+        stdout: { isTTY: true, write() {} },
+        stderr: { write() {} },
+        findEntry: () => makeEntry({
+          name: 'data', branch: 'sess/data', worktree_path: '/tmp/data',
+          coding_session_id: 'sess_data', tool_session_id: 'native_abc',
+          session_state: 'live', tool: 'claude',
+        }),
+        requestBroker: async () => ({ ok: true, sessions: [] }),
+        fetchActiveSessions: async () => ({
+          ok: true,
+          sessions: [{ coding_session_id: 'sess_data', label: 'data', machine_id: 'this-host' }],
+        }),
+        hostname: () => 'this-host',
+        launchResumeSession: ({ entry }) => { resumed.push(entry); return 0; },
+        launchFreshSession: () => assert.fail('has a native session — must resume, not restart'),
+        upsertEntry: (e) => e,
+      });
+      assert.equal(status, 0);
+      assert.equal(resumed.length, 1, 'stale same-machine record must not block the relaunch');
+    } finally {
+      if (old === undefined) delete process.env.MC_TEST_MODE;
+      else process.env.MC_TEST_MODE = old;
+    }
+  });
+
   test('switch refuses while the session is live locally, with the exact way out', async () => {
     const old = process.env.MC_TEST_MODE;
     delete process.env.MC_TEST_MODE;

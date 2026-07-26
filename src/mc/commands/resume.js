@@ -127,12 +127,13 @@ export async function run(rawArgv, deps = {}) {
     }
 
     // Active-server-match idempotency: never spawn a duplicate of a session
-    // live somewhere else. For a SWITCH on this machine, the local broker is
-    // the authority — no live PTY here means the server record is a stale
-    // heartbeat (Ctrl+D moments ago), so the switch proceeds.
+    // live somewhere else. Both branches above established that no LOCAL PTY
+    // is live, and the local broker is the authority for this machine — a
+    // server record naming THIS machine is a stale heartbeat (Ctrl+D moments
+    // ago), so open/switch proceeds. A record for ANOTHER machine is a
+    // genuine duplicate risk and still blocks.
     const active = await activeMatchForEntry(entry, { argv, deps });
-    const staleSameMachine = switchingTool
-      && active?.machine_id
+    const staleSameMachine = active?.machine_id
       && active.machine_id === (deps.hostname || hostname)();
     if (active && !staleSameMachine) {
       markEntryOpened(entry, {
