@@ -3,6 +3,7 @@
  */
 import { buildStorageSnapshot } from '../storage-management.js';
 import { listDevServers, summarizeDevServers } from '../dev-servers.js';
+import { buildTranscriptPrunePlan } from '../transcript-prune.js';
 
 export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
@@ -25,10 +26,33 @@ export async function run(argv, deps = {}) {
   if (devSummary.orphan) {
     devIssues.push({ severity: 'warning', code: 'dev-servers-orphan', count: devSummary.orphan });
   }
-  const issues = [...snapshot.issues, ...devIssues];
+  // Provider transcripts accumulate invisibly when sessions end outside
+  // mc (closed tabs, crashes, side sessions) — surface the orphaned bulk
+  // so it never silently eats the disk again.
+  const transcriptIssues = [];
+  let transcriptSummary = null;
+  try {
+    const plan = (deps.buildTranscriptPrunePlan || buildTranscriptPrunePlan)();
+    transcriptSummary = plan.counts;
+    if (plan.counts.total > 0) {
+      transcriptIssues.push({
+        severity: 'cleanup',
+        code: 'orphan-transcripts',
+        count: plan.counts.total,
+        mb: Math.round(plan.counts.bytes / (1024 * 1024)),
+        hint: 'mc storage prune-transcripts --dry-run',
+      });
+    }
+  } catch { /* doctor stays best-effort */ }
+
+  const issues = [...snapshot.issues, ...devIssues, ...transcriptIssues];
   const out = {
     ok: issues.length === 0,
-    summary: { ...snapshot.summary, dev_servers: devSummary },
+    summary: {
+      ...snapshot.summary,
+      dev_servers: devSummary,
+      ...(transcriptSummary ? { provider_transcripts: transcriptSummary } : {}),
+    },
     issues,
   };
   if (opts.json) stdout.write(`${JSON.stringify(out, null, 2)}\n`);
@@ -57,6 +81,8 @@ function printHuman(out, stdout = process.stdout) {
   for (const issue of out.issues) {
     stdout.write(`  ${issue.severity}  ${issue.code}`);
     if (issue.count != null) stdout.write(`  count=${issue.count}`);
+    if (issue.mb != null) stdout.write(`  size=${issue.mb}MB`);
+    if (issue.hint) stdout.write(`  → ${issue.hint}`);
     stdout.write(`\n`);
   }
   if (!out.issues.length) stdout.write(`  no local storage or dev-server issues detected\n`);

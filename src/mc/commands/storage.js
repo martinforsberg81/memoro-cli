@@ -15,6 +15,10 @@ import {
 } from '../storage-repair.js';
 import { parseDurationMs } from '../storage-policy.js';
 import { readRegistry, writeRegistry } from '../registry.js';
+import {
+  applyTranscriptPrunePlan,
+  buildTranscriptPrunePlan,
+} from '../transcript-prune.js';
 
 const DEFAULT_MISSING_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 const DEFAULT_DEPS_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
@@ -76,6 +80,23 @@ export async function run(argv) {
     const out = { dry_run: false, ...result };
     if (opts.json) console.log(JSON.stringify(out, null, 2));
     else printPruneMissing(out);
+    return result.ok ? 0 : 1;
+  }
+
+  if (opts.verb === 'prune-transcripts') {
+    const plan = buildTranscriptPrunePlan({
+      olderThanMs: opts.olderThanMs,
+    });
+    if (opts.dryRun) {
+      const out = { dry_run: true, ...plan };
+      if (opts.json) console.log(JSON.stringify(out, null, 2));
+      else printPruneTranscripts(out, null);
+      return 0;
+    }
+    const result = applyTranscriptPrunePlan(plan);
+    const out = { dry_run: false, ...plan, result };
+    if (opts.json) console.log(JSON.stringify({ dry_run: false, ...result }, null, 2));
+    else printPruneTranscripts(out, result);
     return result.ok ? 0 : 1;
   }
 
@@ -154,8 +175,8 @@ function parseArgs(argv) {
   if (args[0] && !args[0].startsWith('-')) {
     opts.verb = args.shift();
   }
-  if (!['status', 'candidates', 'explain', 'repair', 'prune-missing', 'prune-deps', 'prune-generated'].includes(opts.verb)) {
-    return { error: 'usage: mc storage [status|candidates|explain <name>|repair [name]|prune-missing|prune-deps|prune-generated] [--json]' };
+  if (!['status', 'candidates', 'explain', 'repair', 'prune-missing', 'prune-deps', 'prune-generated', 'prune-transcripts'].includes(opts.verb)) {
+    return { error: 'usage: mc storage [status|candidates|explain <name>|repair [name]|prune-missing|prune-deps|prune-generated|prune-transcripts] [--json]' };
   }
   if (opts.verb === 'explain') {
     const name = args.shift();
@@ -187,16 +208,16 @@ function parseArgs(argv) {
     return { error: `unknown flag: ${a}` };
   }
   if (opts.dryRun && opts.apply) return { error: '--dry-run and --apply cannot be combined' };
-  if (['repair', 'prune-missing', 'prune-deps', 'prune-generated'].includes(opts.verb) && !opts.dryRun && !opts.apply) {
+  if (['repair', 'prune-missing', 'prune-deps', 'prune-generated', 'prune-transcripts'].includes(opts.verb) && !opts.dryRun && !opts.apply) {
     return { error: `mc storage ${opts.verb} requires --dry-run or --apply` };
   }
-  if (!['repair', 'prune-missing', 'prune-deps', 'prune-generated'].includes(opts.verb) && (opts.dryRun || opts.apply)) {
-    return { error: '--dry-run and --apply are only valid with mc storage repair, prune-missing, prune-deps, or prune-generated' };
+  if (!['repair', 'prune-missing', 'prune-deps', 'prune-generated', 'prune-transcripts'].includes(opts.verb) && (opts.dryRun || opts.apply)) {
+    return { error: '--dry-run and --apply are only valid with mc storage repair, prune-missing, prune-deps, prune-generated, or prune-transcripts' };
   }
   if (opts.verb !== 'repair' && opts.providerBackfill) {
     return { error: '--provider-backfill is only valid with mc storage repair' };
   }
-  if (!['prune-missing', 'prune-deps', 'prune-generated'].includes(opts.verb) && opts.olderThanSet) {
+  if (!['prune-missing', 'prune-deps', 'prune-generated', 'prune-transcripts'].includes(opts.verb) && opts.olderThanSet) {
     return { error: '--older-than is only valid with mc storage prune-missing, prune-deps, or prune-generated' };
   }
   if (opts.verb === 'prune-deps' && !opts.olderThanSet) opts.olderThanMs = DEFAULT_DEPS_RETENTION_MS;
@@ -497,6 +518,36 @@ function printPruneMissing(out) {
   for (const item of candidates) {
     process.stdout.write(`${status}  ${item.name}  ${item.branch || '-'}\n`);
   }
+}
+
+function printPruneTranscripts(out, result) {
+  const plan = out;
+  const candidates = plan.candidates || [];
+  const kept = plan.counts?.kept || {};
+  if (!candidates.length) {
+    process.stdout.write(`(no orphaned provider transcripts to prune — ${kept.protected ?? 0} protected, ${kept.recent ?? 0} recent)\n`);
+    return;
+  }
+  const bySource = { codex: { n: 0, bytes: 0 }, claude: { n: 0, bytes: 0 } };
+  for (const item of candidates) {
+    const bucket = bySource[item.source] || (bySource[item.source] = { n: 0, bytes: 0 });
+    bucket.n += 1;
+    bucket.bytes += item.bytes;
+  }
+  const status = result ? 'pruned' : 'would prune';
+  for (const [source, stats] of Object.entries(bySource)) {
+    if (!stats.n) continue;
+    process.stdout.write(`${status}  ${source}: ${stats.n} transcript${stats.n === 1 ? '' : 's'}  (${formatMb(stats.bytes)})\n`);
+  }
+  process.stdout.write(`kept: ${kept.protected ?? 0} protected (resumable or live), ${kept.recent ?? 0} recent\n`);
+  if (result?.errors?.length) {
+    for (const err of result.errors) process.stdout.write(`failed  ${err.path}  ${err.error}\n`);
+  }
+}
+
+function formatMb(bytes) {
+  const mb = bytes / (1024 * 1024);
+  return mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${Math.round(mb)} MB`;
 }
 
 function printPruneDeps(out) {
