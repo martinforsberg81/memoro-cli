@@ -10,6 +10,8 @@ contract, not alongside it:
 
 - [`mc-custody.md`](mc-custody.md) — **Phase 1 of V1**: the account-custody
   design (envelope encryption, unlock, tool-auth adoption).
+- [`mc-v2-cloud.md`](mc-v2-cloud.md) — **V2**: cloud host parity via scoped,
+  expiring DEK re-wrap grants.
 - [`connected-capabilities.md`](connected-capabilities.md) — the connection /
   identity / broker-grant foundation.
 - [`credential-blind-capabilities.md`](credential-blind-capabilities.md) — the
