@@ -169,9 +169,23 @@ trust-bundle, signer rotation, emergency revocation, rollback, and
 platform-derived identity contract is
 [`mc-v2-release-trust.md`](mc-v2-release-trust.md).
 
-Its verifier is not implemented. Until it is, no candidate topology in this
-record may register a custody recipient, receive a DEK grant, or claim the S0
-gate. A runtime self-report of image/version is not an acceptable substitute.
+The release-verifier core and pre-token gates now exist in both the CLI and
+server paths and fail closed when their required trusted inputs are absent.
+They are not production evidence: no independently pinned trust-bundle and
+delivery channel, installed-artifact-byte verification, platform attestation,
+or signer rotation/revocation integration is live. Until those controls and
+the required recipient ordering exist, no candidate topology in this record may
+register a custody recipient, receive a DEK grant, or claim the S0 gate. A
+runtime self-report of image/version is not an acceptable substitute.
+
+The cloud broker transport is deliberately narrower than credential delivery:
+it uses an opaque single-use ticket, atomic consume, queryless WebSocket
+upgrade, and a versioned, 64 KiB-bounded control wire. It does not create an
+isolated credential domain. Recipient/grant routes remain absent, provider
+startup still precedes recipient registration, and the attach token remains in
+a control payload and URL. Cloudflare same-sandbox execution likewise remains
+outside the approved isolation topology; external image/instance attestation
+is not yet available.
 
 ## 5. Adversarial harness
 

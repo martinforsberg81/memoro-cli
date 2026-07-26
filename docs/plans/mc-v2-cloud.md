@@ -21,6 +21,22 @@ complete. The current code contains important foundations, but the full local
 golden path, executable secret policy, credential isolation, private-repository
 bootstrap, and cross-host work restore are not complete.
 
+## Current S0 implementation status
+
+Cloud workload transport now has a narrow broker-ticket bootstrap: authenticated
+ticket minting binds the active runtime, and a queryless WebSocket upgrade
+atomically consumes an opaque single-use ticket with a versioned, 64 KiB-bounded
+control wire. This is transport hardening only, not approval to carry a
+credential, grant, or recipient key.
+
+S0 remains unpassed. Recipient registration and grant routes are still absent;
+the provider starts before recipient registration; the attach token remains in
+a control payload and URL; and Cloudflare same-sandbox execution is not a
+credential boundary. Release gates fail closed, but trusted production release
+inputs, artifact-byte verification, signed trust-bundle delivery, and external
+platform image/instance attestation are not live. No credential, provider token,
+CRK, DEK, or decryptable grant may enter this runtime.
+
 ## 1. Non-negotiable invariant: credentials never enter the LLM domain
 
 This is gate zero for every slice.

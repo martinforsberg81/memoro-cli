@@ -114,6 +114,7 @@ export async function runBrokerWith(opts, deps) {
       sourceKind: opts.sourceKind,
       sourceName: opts.sourceName,
       cloudSessionId: opts.cloudSessionId,
+      ...(opts.codingSessionId ? { codingSessionId: opts.codingSessionId } : {}),
       ...(opts.runtimeGeneration ? { runtimeGeneration: opts.runtimeGeneration } : {}),
       ...(opts.authorizationDigest ? { authorizationDigest: opts.authorizationDigest } : {}),
     })).catch((err) => ({ ok: false, error: err.message || String(err) }));
@@ -171,12 +172,15 @@ async function runCloudConnection(opts, io = {}) {
       apiUrl,
       token,
       mcVersion,
+      ...(opts.machineId ? { machineId: opts.machineId } : {}),
       sourceId: opts.sourceId,
       sourceKind: opts.sourceKind,
       sourceName: opts.sourceName,
       cloudSessionId: opts.cloudSessionId,
+      codingSessionId: opts.codingSessionId,
       runtimeGeneration: opts.runtimeGeneration,
       authorizationDigest: opts.authorizationDigest,
+      cloudRuntime: opts.cloudRuntime,
       repoCatalogProvider: listLocalRepoCatalog,
     });
     const ready = waitForCloudOpen(client, CONNECT_READY_TIMEOUT_MS);
@@ -256,11 +260,17 @@ function waitForCloudOpen(client, timeoutMs) {
       cleanup();
       resolve(info);
     };
+    const onFatal = (info = {}) => {
+      cleanup();
+      reject(new Error(info.code || 'cloud broker failed'));
+    };
     const cleanup = () => {
       clearTimeout(timer);
       client.off?.('open', onOpen);
+      client.off?.('fatal', onFatal);
     };
     client.once('open', onOpen);
+    client.once('fatal', onFatal);
   });
 }
 
@@ -314,9 +324,11 @@ export function parseArgs(argv) {
     once: false,
     cloudRuntime: false,
     sourceId: null,
+    machineId: null,
     sourceKind: null,
     sourceName: null,
     cloudSessionId: null,
+    codingSessionId: null,
     runtimeGeneration: null,
     authorizationDigest: null,
     rawArgv: argv,
@@ -347,6 +359,12 @@ export function parseArgs(argv) {
       opts.sourceId = next;
       continue;
     }
+    if (a === '--machine-id') {
+      const next = argv[++i];
+      if (!next || next.startsWith('--')) return { ...opts, error: '--machine-id requires a value' };
+      opts.machineId = next;
+      continue;
+    }
     if (a === '--source-kind') {
       const next = argv[++i];
       if (!next || next.startsWith('--')) return { ...opts, error: '--source-kind requires a value' };
@@ -363,6 +381,12 @@ export function parseArgs(argv) {
       const next = argv[++i];
       if (!next || next.startsWith('--')) return { ...opts, error: '--cloud-session-id requires a value' };
       opts.cloudSessionId = next;
+      continue;
+    }
+    if (a === '--coding-session-id') {
+      const next = argv[++i];
+      if (!next || next.startsWith('--')) return { ...opts, error: '--coding-session-id requires a value' };
+      opts.codingSessionId = next;
       continue;
     }
     if (a === '--runtime-generation') {

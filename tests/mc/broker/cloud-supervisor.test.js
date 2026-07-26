@@ -186,18 +186,21 @@ describe('brokerConnectArgs', () => {
     assert.equal(JSON.stringify(args).includes('secret'), false);
   });
 
-  test('carries the runtime authorization binding to the foreground broker query', () => {
+  test('carries the runtime authorization binding and coding session without credentials in argv', () => {
     const args = brokerConnectArgs({
       sourceId: 'cloud:cld_123456',
       cloudSessionId: 'cld_123456',
+      codingSessionId: 'coding_123456',
       cloudRuntime: true,
       runtimeGeneration: 'rtg_0123456789abcdef',
       authorizationDigest: 'a'.repeat(64),
     });
 
-    assert.deepEqual(args.slice(-4), [
+    assert.deepEqual(args.slice(-6), [
+      '--coding-session-id', 'coding_123456',
       '--runtime-generation', 'rtg_0123456789abcdef',
       '--authorization-digest', 'a'.repeat(64),
     ]);
+    assert.equal(JSON.stringify(args).includes('token'), false);
   });
 });

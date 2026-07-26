@@ -5,6 +5,7 @@ import { hostname } from 'node:os';
 import { setTimeout as sleep } from 'node:timers/promises';
 
 import { createFetchTranscriptHandler } from '../../commands/handlers/fetch-transcript.js';
+import { memoroFetch } from '../../lib/api.js';
 import { requestBroker } from './client.js';
 import { brokerSocketPath } from './paths.js';
 import { sourceForTool } from './session-sidecars.js';
@@ -29,6 +30,30 @@ const DEFAULT_CAPABILITIES = [
   'screen-replay-v1',
   'environment-status-v1',
 ];
+export const CONTROL_PROTOCOL_VERSION = 'mc-broker-control-v1';
+export const BROKER_SUBPROTOCOL = 'mc-broker-v1';
+export const BOOTSTRAP_SUBPROTOCOL_PREFIX = 'mc-bootstrap-v1.';
+export const BOOTSTRAP_TICKET_PROTOCOL_VERSION = 'mc-broker-bootstrap-v1';
+export const MAX_BOOTSTRAP_TICKET_BYTES = 512;
+export const MAX_CONTROL_FRAME_BYTES = 64 * 1024;
+const CLOUD_CONTROL_INBOUND_TYPES = new Set([
+  'ack',
+  'refresh_sessions',
+  'list_sessions',
+  'attach_request',
+  'command',
+]);
+const CLOUD_CONTROL_OUTBOUND_TYPES = new Set([
+  'hello',
+  'sessions',
+  'repos',
+  'sessions_error',
+  'attach_connecting',
+  'attach_accepted',
+  'attach_failed',
+  'result',
+  'command_result',
+]);
 const SAFE_SECRET_STATUS_KEYS = new Set([
   'credential_source',
   'exposes_secrets_to_llm',
@@ -46,8 +71,11 @@ export class CloudBrokerClient extends EventEmitter {
     sourceKind = null,
     sourceName = null,
     cloudSessionId = null,
+    codingSessionId = null,
     runtimeGeneration = null,
     authorizationDigest = null,
+    cloudRuntime = false,
+    bootstrapTicketProvider = null,
     env = process.env,
     request = requestBroker,
     connect = createConnection,
@@ -70,6 +98,7 @@ export class CloudBrokerClient extends EventEmitter {
     if (typeof WebSocketImpl !== 'function') throw new TypeError('WebSocket implementation is required');
     this.apiUrl = apiUrl;
     this.token = token;
+    this.cloudRuntime = cloudRuntime === true;
     this.machineId = machineId;
     this.deviceName = deviceName;
     this.mcVersion = mcVersion;
@@ -84,6 +113,7 @@ export class CloudBrokerClient extends EventEmitter {
       machineId,
       deviceName,
     });
+    this.codingSessionId = stringOrDefault(codingSessionId, stringOrDefault(env?.MC_CODING_SESSION_ID, null));
     this.env = env;
     this.request = request;
     this.connect = connect;
@@ -99,6 +129,15 @@ export class CloudBrokerClient extends EventEmitter {
     this.transcriptFinder = transcriptFinder;
     this.repoCatalogProvider = repoCatalogProvider;
     this.logger = logger;
+    this.bootstrapTicketProvider = bootstrapTicketProvider || (this.cloudRuntime
+      ? createCloudBootstrapTicketProvider({
+        apiUrl,
+        token,
+        sourceIdentity: this.sourceIdentity,
+        codingSessionId: this.codingSessionId,
+        machineId,
+      })
+      : null);
     this.transcriptPaths = new Map();
     this.transcriptHandlers = new Map();
     this.ws = null;
@@ -107,12 +146,14 @@ export class CloudBrokerClient extends EventEmitter {
     this.attaches = new Map();
     this.refreshTimer = null;
     this.refreshInFlight = null;
+    this.permanentlyFailed = false;
+    this.connecting = false;
   }
 
   start() {
-    if (this.alive) return;
+    if (this.alive || this.permanentlyFailed) return;
     this.alive = true;
-    this._connectControl();
+    void this._connectControl();
   }
 
   stop() {
@@ -154,20 +195,42 @@ export class CloudBrokerClient extends EventEmitter {
     return repos;
   }
 
-  _connectControl() {
-    if (!this.alive) return;
+  async _connectControl() {
+    if (!this.alive || this.permanentlyFailed || this.connecting) return;
+    this.connecting = true;
     let ws;
     try {
+      let options;
+      let protocols;
+      if (this.cloudRuntime) {
+        const ticket = await this._getBootstrapTicket();
+        // The ticket mint binds every cloud identity field. The upgrade itself
+        // is intentionally queryless so proxies and access logs see no binding
+        // metadata or credentials.
+        options = {};
+        protocols = buildCloudBrokerSubprotocols(ticket);
+      } else {
+        options = {
+          token: this.token,
+          machineId: this.machineId,
+          ...sourceIdentityPayload(this.sourceIdentity),
+        };
+      }
+      if (!this.alive || this.permanentlyFailed) return;
       ws = new this.WebSocketImpl(buildBrokerWsUrl(this.apiUrl, {
-        token: this.token,
-        machineId: this.machineId,
-        ...sourceIdentityPayload(this.sourceIdentity),
-      }));
+        ...options,
+      }), protocols);
       preferArrayBufferFrames(ws);
     } catch (err) {
-      this.logger.warn(`[broker-cloud] control websocket failed: ${err.message}`);
-      this._scheduleReconnect();
+      if (err?.permanent === true) {
+        this._failClosed(err.code || 'cloud_broker_bootstrap_failed');
+      } else {
+        this.logger.warn('[broker-cloud] control websocket connection failed');
+        void this._scheduleReconnect();
+      }
       return;
+    } finally {
+      this.connecting = false;
     }
     this.ws = ws;
 
@@ -176,6 +239,7 @@ export class CloudBrokerClient extends EventEmitter {
       this.emit('open', { machine_id: this.machineId });
       this._send({
         type: 'hello',
+        ...(this.cloudRuntime ? { protocol_version: CONTROL_PROTOCOL_VERSION } : {}),
         machine_id: this.machineId,
         device_name: this.deviceName,
         ...(this.mcVersion ? { mc_version: this.mcVersion } : {}),
@@ -204,8 +268,23 @@ export class CloudBrokerClient extends EventEmitter {
   }
 
   async _onControlMessage(raw) {
+    if (this.cloudRuntime && frameByteLength(raw) > MAX_CONTROL_FRAME_BYTES) {
+      this._failClosed('cloud_broker_frame_too_large');
+      return;
+    }
     const msg = parseJsonMessage(raw);
-    if (!msg || typeof msg.type !== 'string') return;
+    if (!msg || !plainObject(msg) || typeof msg.type !== 'string') {
+      if (this.cloudRuntime) this._failClosed('cloud_broker_frame_invalid');
+      return;
+    }
+    if (this.cloudRuntime && msg.protocol_version !== CONTROL_PROTOCOL_VERSION) {
+      this._failClosed('cloud_broker_protocol_version_invalid');
+      return;
+    }
+    if (this.cloudRuntime && !CLOUD_CONTROL_INBOUND_TYPES.has(msg.type)) {
+      this._failClosed('cloud_broker_control_type_invalid');
+      return;
+    }
     if (msg.type === 'ack') return;
     if (msg.type === 'refresh_sessions' || msg.type === 'list_sessions') {
       await this._refreshSessionsSafe();
@@ -492,10 +571,22 @@ export class CloudBrokerClient extends EventEmitter {
   _send(message) {
     if (!this.ws) return false;
     if (!isUsableWebSocket(this.ws)) return false;
+    if (this.cloudRuntime && !CLOUD_CONTROL_OUTBOUND_TYPES.has(message?.type)) {
+      this._failClosed('cloud_broker_control_type_invalid');
+      return false;
+    }
     try {
-      this.ws.send(JSON.stringify(message));
+      const frame = JSON.stringify(this.cloudRuntime
+        ? { ...message, protocol_version: CONTROL_PROTOCOL_VERSION }
+        : message);
+      if (this.cloudRuntime && Buffer.byteLength(frame, 'utf8') > MAX_CONTROL_FRAME_BYTES) {
+        this._failClosed('cloud_broker_outbound_frame_too_large');
+        return false;
+      }
+      this.ws.send(frame);
       return true;
     } catch {
+      if (this.cloudRuntime) this._failClosed('cloud_broker_outbound_frame_invalid');
       return false;
     }
   }
@@ -538,11 +629,45 @@ export class CloudBrokerClient extends EventEmitter {
   }
 
   async _scheduleReconnect() {
-    if (!this.alive) return;
+    if (!this.alive || this.permanentlyFailed) return;
     const delay = this.backoffMs;
     this.backoffMs = nextBackoff(this.backoffMs);
     try { await this.sleep(delay); } catch {}
-    if (this.alive) this._connectControl();
+    if (this.alive && !this.permanentlyFailed) void this._connectControl();
+  }
+
+  async _getBootstrapTicket() {
+    if (typeof this.bootstrapTicketProvider !== 'function') {
+      throw permanentCloudBrokerError('cloud_broker_bootstrap_unavailable');
+    }
+    let result;
+    try {
+      result = await this.bootstrapTicketProvider({
+        machineId: this.machineId,
+        sourceIdentity: this.sourceIdentity,
+        codingSessionId: this.codingSessionId,
+      });
+    } catch (err) {
+      throw err;
+    }
+    const ticket = typeof result === 'string' ? result : result?.ticket;
+    try {
+      validateBootstrapTicket(ticket);
+    } catch {
+      throw permanentCloudBrokerError('cloud_broker_bootstrap_ticket_invalid');
+    }
+    return ticket;
+  }
+
+  _failClosed(code) {
+    if (this.permanentlyFailed) return;
+    this.permanentlyFailed = true;
+    this.alive = false;
+    this._stopSessionRefreshLoop();
+    try { this.ws?.close?.(1008, 'cloud broker rejected'); } catch {}
+    this.ws = null;
+    this.emit('fatal', { code });
+    this.logger.warn(`[broker-cloud] ${code}`);
   }
 }
 
@@ -719,6 +844,86 @@ export function buildBrokerWsUrl(apiUrl, {
   return url.toString();
 }
 
+/**
+ * Creates a fresh, single-use bootstrap-ticket request for each cloud control
+ * WebSocket attempt. The broker bearer credential is deliberately only ever
+ * used in this HTTPS Authorization header; it is never serialised into the
+ * URL, process arguments, or control frames. The separate opaque ticket is
+ * intentionally represented in the WebSocket subprotocol offer.
+ */
+export function createCloudBootstrapTicketProvider({
+  apiUrl,
+  token,
+  sourceIdentity,
+  codingSessionId,
+  machineId,
+  memoroFetchImpl = memoroFetch,
+} = {}) {
+  return async ({
+    sourceIdentity: currentIdentity = sourceIdentity,
+    codingSessionId: currentCodingSessionId = codingSessionId,
+    machineId: currentMachineId = machineId,
+  } = {}) => {
+    const identity = currentIdentity || {};
+    const binding = cloudBootstrapBinding({
+      machineId: currentMachineId,
+      sourceIdentity: identity,
+      codingSessionId: currentCodingSessionId,
+    });
+    if (!binding) throw permanentCloudBrokerError('cloud_broker_bootstrap_binding_invalid');
+    let result;
+    try {
+      result = await memoroFetchImpl(
+        apiUrl,
+        `/api/mc/cloud-sessions/${encodeURIComponent(binding.cloud_session_id)}/broker-ticket`,
+        {
+        token,
+        method: 'POST',
+        requestHeaders: {
+          'X-MC-Runtime-Generation': identity.runtime_generation,
+          'X-MC-Authorization-Digest': identity.authorization_digest,
+        },
+        body: {
+          protocol_version: BOOTSTRAP_TICKET_PROTOCOL_VERSION,
+          machine_id: binding.machine_id,
+          source_id: binding.source_id,
+          source_kind: binding.source_kind,
+          source_name: binding.source_name,
+          cloud_session_id: binding.cloud_session_id,
+          coding_session_id: binding.coding_session_id,
+        },
+        },
+      );
+    } catch (err) {
+      const status = err?.status;
+      if (!Number.isInteger(status) || status >= 500 || [408, 425, 429].includes(status)) throw err;
+      throw permanentCloudBrokerError('cloud_broker_bootstrap_request_failed');
+    }
+    const ticket = result?.ticket || result?.bootstrap_ticket;
+    try {
+      validateBootstrapTicket(ticket);
+    } catch {
+      throw permanentCloudBrokerError('cloud_broker_bootstrap_ticket_invalid');
+    }
+    return { ticket };
+  };
+}
+
+export function buildCloudBrokerSubprotocols(ticket) {
+  validateBootstrapTicket(ticket);
+  return [BROKER_SUBPROTOCOL, `${BOOTSTRAP_SUBPROTOCOL_PREFIX}${ticket}`];
+}
+
+export function validateBootstrapTicket(ticket) {
+  if (typeof ticket !== 'string'
+    || Buffer.byteLength(ticket, 'utf8') > MAX_BOOTSTRAP_TICKET_BYTES
+    || !/^[A-Za-z0-9_-]+$/.test(ticket)
+    || ticket.length % 4 === 1) {
+    throw new TypeError('invalid cloud broker bootstrap ticket');
+  }
+  return ticket;
+}
+
 export function appendToken(urlString, token) {
   if (!token) return urlString;
   const url = new URL(urlString);
@@ -765,6 +970,38 @@ function parseJsonMessage(raw) {
   const text = typeof raw === 'string' ? raw : raw?.toString?.('utf8') || '';
   if (!text) return null;
   try { return JSON.parse(text); } catch { return null; }
+}
+
+function cloudBootstrapBinding({ machineId, sourceIdentity, codingSessionId } = {}) {
+  const identity = sourceIdentity || {};
+  const required = {
+    machine_id: machineId,
+    source_id: identity.source_id,
+    source_kind: identity.source_kind,
+    source_name: identity.source_name,
+    cloud_session_id: identity.cloud_session_id,
+    coding_session_id: codingSessionId,
+    runtime_generation: identity.runtime_generation,
+    authorization_digest: identity.authorization_digest,
+  };
+  return Object.values(required).every((value) => typeof value === 'string' && value.length > 0)
+    ? required
+    : null;
+}
+
+function permanentCloudBrokerError(code) {
+  const error = new Error(code);
+  error.code = code;
+  error.permanent = true;
+  return error;
+}
+
+function frameByteLength(raw) {
+  if (typeof raw === 'string') return Buffer.byteLength(raw, 'utf8');
+  if (Buffer.isBuffer(raw)) return raw.length;
+  if (raw instanceof ArrayBuffer) return raw.byteLength;
+  if (ArrayBuffer.isView(raw)) return raw.byteLength;
+  return Buffer.byteLength(String(raw || ''), 'utf8');
 }
 
 function decodeWsFrame(frame) {
@@ -1061,4 +1298,6 @@ export const __test__ = {
   INITIAL_BACKOFF_MS,
   MAX_BACKOFF_MS,
   DEFAULT_CAPABILITIES,
+  CONTROL_PROTOCOL_VERSION,
+  MAX_CONTROL_FRAME_BYTES,
 };

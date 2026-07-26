@@ -1,15 +1,26 @@
 # mc V2 S0 — release and platform trust contract
 
-**Status:** design only · verifier not implemented · 2026-07-26.
+**Status:** partial fail-closed verifier and startup gates · 2026-07-26. The
+pure verifier and pre-token CLI/server gates exist, but trusted production
+inputs, installed-byte verification, platform attestation and rotation remain
+unavailable; credential-bearing startup therefore still fails closed.
+
+The current supervisor still starts the provider before the broker recipient
+registration. Reordering that sequence to recipient-before-provider is a
+separate required S0 integration step; this scaffold does not claim to close it.
 
 This is the fail-closed trust contract for a cloud recipient key, custody grant,
 and model launch. It complements
 [mc-v2-credential-boundary.md](mc-v2-credential-boundary.md): an OS boundary is
 insufficient if the image, broker, or trusted adapter can be substituted.
 
-No signing key, trust bundle, platform-attestation integration, verifier, or
-release manifest described here is live. S0 is therefore not passed. Until the
-verifier exists, credential-bearing managed cloud startup must fail closed.
+The pure release-verifier contract and pre-token gates are implemented in the
+CLI and server startup paths. They fail closed when genuine trusted platform
+inputs are unavailable, and do not make a runtime self-report trustworthy.
+The production trust bundle and its pinned delivery, signed release manifest
+delivery, installed-artifact-byte verification, platform-attestation
+integration, and signer rotation/revocation path are not live. S0 is therefore
+not passed; credential-bearing managed cloud startup must remain fail closed.
 
 ## 1. Required security properties
 
@@ -179,9 +190,13 @@ these stable codes:
 
 ## 8. S0 gate
 
-This is an implementation contract, not evidence of deployed controls. S0
-remains in-flight until both repositories implement the verifier, trust-bundle
-delivery, platform identity integration, artifact checks, rotation/revocation,
-and adversarial tests on production-equivalent hosts. Until then, absence of the
-verifier blocks recipient registration, custody grants, and model launch for a
-credential-bearing managed cloud session.
+This is an implementation contract, not evidence of deployed controls. The
+implemented gates are necessary but insufficient: S0 remains in-flight until
+the genuine trust-bundle delivery, signed release inputs, installed-artifact
+checks, platform identity integration, rotation/revocation, recipient/grant
+routes and ordering, and adversarial tests on production-equivalent hosts are
+complete. The current supervisor still starts the provider before recipient
+registration, and Cloudflare same-sandbox execution does not supply the
+required credential boundary. Until that work is complete, no credential-
+bearing managed cloud session may register a recipient, receive a custody grant,
+or launch a model-directed executor.

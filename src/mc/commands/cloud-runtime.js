@@ -14,6 +14,7 @@ import { readConfig } from '../../lib/config.js';
 import { brokerConnectArgs, resolveMcBinPath } from '../broker/cloud-supervisor.js';
 import { launchBrokerOwnedSession } from '../broker/launch-client.js';
 import { redactCredentialText } from '../runtime-redaction.js';
+import { RELEASE_TRUST_CODES, verifyReleaseTrust } from '../release-trust.js';
 import { scrubRuntimeSecretsFromEnv } from '../runtime-secrets.js';
 import { prepareCloudCodexAuth } from '../cloud-codex-auth.js';
 import {
@@ -124,9 +125,27 @@ export async function runCloudRuntimeWith(opts, deps = {}) {
     if (opts.json) writeJson(stdout, { ok: false, error: runtimeAuthorization.error });
     return 2;
   }
+  const releaseGate = deps.verifyRuntimeRelease || verifyRuntimeRelease;
+  let releaseVerification;
+  try {
+    releaseVerification = await releaseGate({
+      manifest,
+      runtimeAuthorization,
+      deps,
+    });
+  } catch {
+    releaseVerification = { ok: false, code: 'platform_identity_unavailable' };
+  }
+  if (!releaseVerification?.ok) {
+    const code = stableReleaseGateCode(releaseVerification?.code);
+    const error = 'release verification blocked';
+    stderr.write(`mc: ${error} (${code})\n`);
+    if (opts.json) writeJson(stdout, { ok: false, error, code });
+    return 1;
+  }
   const cloudSessionId = opts.cloudSessionId || manifest.cloud_session_id;
   const paths = runtimePaths(manifest, env, opts.manifestPath);
-  const runtimeToken = await resolveRuntimeToken({ env, deps });
+  const runtimeToken = await (deps.resolveRuntimeToken || resolveRuntimeToken)({ env, deps });
   const brokerToken = resolveBrokerToken({ env });
   const apiUrl = await resolveRuntimeApiUrl({ manifest, env, deps });
   const runtime = createRuntimeRecorder({
@@ -571,6 +590,105 @@ export async function runCloudRuntimeWith(opts, deps = {}) {
   return code;
 }
 
+// The production gate intentionally has no manifest/env/self-report fallback.
+// A platform/control-plane integration must supply opaque, trusted inputs and
+// a real installed-byte verifier before a credential-bearing runtime can start.
+export async function verifyRuntimeRelease({
+  manifest,
+  runtimeAuthorization,
+  deps = {},
+} = {}) {
+  const loadTrustedReleaseInputs = deps.loadTrustedReleaseInputs;
+  const commitTrustedReleaseState = deps.commitTrustedReleaseState;
+  if (typeof loadTrustedReleaseInputs !== 'function' || typeof commitTrustedReleaseState !== 'function') {
+    return { ok: false, code: 'platform_identity_unavailable' };
+  }
+  let trusted;
+  const binding = runtimeReleaseBinding(manifest, runtimeAuthorization);
+  if (!binding) return { ok: false, code: 'platform_identity_unavailable' };
+  try {
+    trusted = await loadTrustedReleaseInputs({
+      ...binding,
+    });
+  } catch {
+    return { ok: false, code: 'platform_identity_unavailable' };
+  }
+  if (!trusted || typeof trusted !== 'object' || !trusted.release_trust_inputs) {
+    return { ok: false, code: 'platform_identity_unavailable' };
+  }
+  let verified;
+  try {
+    const now = typeof deps.now === 'function' ? deps.now() : Date.now();
+    if (!Number.isSafeInteger(now)) return { ok: false, code: 'platform_identity_unavailable' };
+    verified = await (deps.verifyReleaseTrust || verifyReleaseTrust)({
+      ...trusted.release_trust_inputs,
+      now_ms: now,
+      expected_platform: binding,
+    });
+  } catch {
+    return { ok: false, code: 'platform_identity_unavailable' };
+  }
+  if (!verified?.ok) {
+    return { ok: false, code: stableReleaseGateCode(verified?.code) };
+  }
+  if (!verified.next_state || typeof verified.next_state !== 'object' || Array.isArray(verified.next_state)) {
+    return { ok: false, code: 'platform_identity_unavailable' };
+  }
+  let artifacts;
+  try {
+    artifacts = await (deps.verifyInstalledReleaseArtifacts || verifyInstalledReleaseArtifacts)({
+      manifest,
+      runtimeAuthorization,
+      binding,
+      verified_release: verified,
+      artifact_verification: trusted.artifact_verification || null,
+    });
+  } catch {
+    return { ok: false, code: 'release_artifact_mismatch' };
+  }
+  if (!artifacts?.ok) return { ok: false, code: 'release_artifact_mismatch' };
+  try {
+    const committed = await commitTrustedReleaseState({
+      binding,
+      next_state: verified.next_state,
+    });
+    if (committed !== true && committed?.ok !== true) return { ok: false, code: 'platform_identity_unavailable' };
+  } catch {
+    return { ok: false, code: 'platform_identity_unavailable' };
+  }
+  return {
+    ok: true,
+    release_id: typeof verified.release_id === 'string' ? verified.release_id : null,
+    release_epoch: Number.isSafeInteger(verified.release_epoch) ? verified.release_epoch : null,
+  };
+}
+
+export function runtimeReleaseBinding(manifest, runtimeAuthorization) {
+  const accountId = stringOrNull(manifest?.account_id);
+  const authorizationDigest = runtimeAuthorization?.authorizationDigest;
+  if (!validManifestAccountId(accountId) || !AUTHORIZATION_DIGEST_RE.test(authorizationDigest || '')) return null;
+  return {
+    account_id: accountId,
+    cloud_session_id: manifest?.cloud_session_id,
+    coding_session_id: manifest?.coding_session_id,
+    runtime_generation: runtimeAuthorization?.runtimeGeneration,
+    authorization_digest: authorizationDigest,
+    nonce: authorizationDigest,
+  };
+}
+
+// Deliberately fail closed until the next step supplies the signed descriptor
+// and hashes every installed executable tree before model launch.
+export async function verifyInstalledReleaseArtifacts() {
+  return { ok: false };
+}
+
+function stableReleaseGateCode(code) {
+  return Object.values(RELEASE_TRUST_CODES).includes(code)
+    ? code
+    : 'platform_identity_unavailable';
+}
+
 export function parseArgs(argv) {
   const opts = {
     verb: null,
@@ -832,9 +950,11 @@ function connectBrokerInForeground({
   const source = runtimeSource(manifest);
   const args = brokerConnectArgs({
     sourceId: source.id,
+    machineId: source.machineId,
     sourceKind: source.kind,
     sourceName: source.name,
     cloudSessionId: manifest.cloud_session_id,
+    codingSessionId: manifest.coding_session_id,
     cloudRuntime: true,
     runtimeGeneration: runtimeAuthorization?.runtimeGeneration || manifest.authorization?.runtime_generation,
     authorizationDigest: runtimeAuthorization?.authorizationDigest || manifest.authorization?.authorization_digest,
@@ -1144,6 +1264,9 @@ function validateManifest(manifest, opts) {
   if (!CLOUD_SESSION_ID_RE.test(manifest.cloud_session_id || '')) {
     return { ok: false, error: 'manifest cloud_session_id is invalid' };
   }
+  if (!validManifestAccountId(manifest.account_id)) {
+    return { ok: false, error: 'manifest account_id is invalid' };
+  }
   if (opts.cloudSessionId && manifest.cloud_session_id !== opts.cloudSessionId) {
     return { ok: false, error: 'manifest cloud_session_id does not match --cloud-session-id' };
   }
@@ -1172,6 +1295,10 @@ function validateRuntimeAuthorization(manifest, env = {}) {
     return { ok: false, error: 'runtime authorization metadata does not match supervisor environment' };
   }
   return { ok: true, runtimeGeneration, authorizationDigest };
+}
+
+function validManifestAccountId(value) {
+  return typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value);
 }
 
 function runtimeAuthorizationHeaders({ runtimeGeneration, authorizationDigest } = {}) {
@@ -1238,6 +1365,7 @@ function runtimeSource(manifest) {
     id: stringOrNull(manifest?.source?.id) || `cloud:${manifest?.cloud_session_id || 'unknown'}`,
     kind: 'cloud',
     name: stringOrNull(manifest?.source?.name) || 'Memoro Cloud',
+    machineId: stringOrNull(manifest?.source?.machine_id) || `memoro-cloud-${manifest?.cloud_session_id || 'unknown'}`,
   };
 }
 

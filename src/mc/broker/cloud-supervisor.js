@@ -9,9 +9,11 @@ export function ensureCloudBrokerConnected({
   pidPath = brokerCloudPidPath(),
   logPath = brokerCloudLogPath(),
   sourceId = null,
+  machineId = null,
   sourceKind = null,
   sourceName = null,
   cloudSessionId = null,
+  codingSessionId = null,
   runtimeGeneration = null,
   authorizationDigest = null,
   readFile = readFileSync,
@@ -37,9 +39,11 @@ export function ensureCloudBrokerConnected({
   const spawned = spawnConnector({
     logPath,
     sourceId,
+    machineId,
     sourceKind,
     sourceName,
     cloudSessionId,
+    codingSessionId,
     runtimeGeneration,
     authorizationDigest,
   });
@@ -66,9 +70,11 @@ export function spawnCloudBrokerConnector({
   logPath = brokerCloudLogPath(),
   mcBin = resolveMcBinPath(),
   sourceId = null,
+  machineId = null,
   sourceKind = null,
   sourceName = null,
   cloudSessionId = null,
+  codingSessionId = null,
   runtimeGeneration = null,
   authorizationDigest = null,
 } = {}) {
@@ -78,9 +84,11 @@ export function spawnCloudBrokerConnector({
     const err = openSync(logPath, 'a');
     const child = spawn(process.execPath, [mcBin, ...brokerConnectArgs({
       sourceId,
+      machineId,
       sourceKind,
       sourceName,
       cloudSessionId,
+      codingSessionId,
       runtimeGeneration,
       authorizationDigest,
     })], {
@@ -106,19 +114,23 @@ export function resolveMcBinPath(argv = process.argv) {
 
 export function brokerConnectArgs({
   sourceId = null,
+  machineId = null,
   sourceKind = null,
   sourceName = null,
   cloudSessionId = null,
+  codingSessionId = null,
   cloudRuntime = false,
   runtimeGeneration = null,
   authorizationDigest = null,
 } = {}) {
   const args = ['broker', 'connect'];
   if (cloudRuntime === true) args.push('--cloud-runtime');
+  addFlag(args, '--machine-id', machineId);
   addFlag(args, '--source-id', sourceId);
   addFlag(args, '--source-kind', sourceKind);
   addFlag(args, '--source-name', sourceName);
   addFlag(args, '--cloud-session-id', cloudSessionId);
+  addFlag(args, '--coding-session-id', codingSessionId);
   addFlag(args, '--runtime-generation', runtimeGeneration);
   addFlag(args, '--authorization-digest', authorizationDigest);
   return args;

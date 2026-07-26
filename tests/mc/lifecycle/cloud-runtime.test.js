@@ -9,9 +9,10 @@ import {
   CLOUD_RUNTIME_CONTRACT_VERSION,
   parseArgs,
   prepareWorkspace,
-  runCloudRuntimeWith,
+  runCloudRuntimeWith as runCloudRuntimeWithDefault,
   runProcessDefault,
   validateCloudRuntimeOptions,
+  verifyRuntimeRelease,
 } from '../../../src/mc/commands/cloud-runtime.js';
 import {
   captureCodingBinSnapshot,
@@ -39,6 +40,7 @@ function manifest(overrides = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'mc-cloud-runtime-'));
   return {
     contract_version: CLOUD_RUNTIME_CONTRACT_VERSION,
+    account_id: 'usr_runtime1',
     cloud_session_id: 'cld_runtime1',
     coding_session_id: 'sess_runtime1',
     source: {
@@ -96,6 +98,15 @@ function runtimeEnv(m, overrides = {}) {
     MC_CLOUD_AUTHORIZATION_DIGEST: m.authorization.authorization_digest,
     ...overrides,
   };
+}
+
+// Later lifecycle tests explicitly opt into a synthetic, approved release
+// gate. Production uses the default fail-closed gate.
+function runCloudRuntimeWith(opts, deps = {}) {
+  return runCloudRuntimeWithDefault(opts, {
+    ...deps,
+    verifyRuntimeRelease: deps.verifyRuntimeRelease || (async () => ({ ok: true })),
+  });
 }
 
 describe('mc cloud-runtime parseArgs', () => {
@@ -534,6 +545,163 @@ describe('mc cloud-runtime coding bin snapshots', () => {
 });
 
 describe('mc cloud-runtime run', () => {
+  test('fails closed before every credential or runtime side effect without trusted release inputs', async () => {
+    const streams = io();
+    const m = manifest();
+    writeFileSync(m.runtime.paths.manifest, JSON.stringify(m), 'utf8');
+    const calls = [];
+    const code = await runCloudRuntimeWithDefault(parseArgs([
+      'run', '--cloud-session-id', m.cloud_session_id, '--manifest', m.runtime.paths.manifest, '--json',
+    ]), {
+      stdout: streams.stdout,
+      stderr: streams.stderr,
+      env: runtimeEnv(m, { MEMORO_TOKEN: 'mem_runtime_secret', MEMORO_BROKER_TOKEN: 'mem_broker_secret' }),
+      resolveRuntimeToken: async () => { calls.push('token'); return 'must-not-resolve'; },
+      getSecret: async () => { calls.push('secret'); return 'must-not-read'; },
+      reportRuntimeStatus: async () => { calls.push('status'); return { ok: true }; },
+      prepareWorkspace: async () => { calls.push('workspace'); return { ok: true }; },
+      hydrateToolAuth: async () => { calls.push('hydrate'); return { ok: true }; },
+      connectBroker: async () => { calls.push('broker'); return 0; },
+      runCloudSessionWith: async () => { calls.push('provider'); return 0; },
+    });
+
+    assert.equal(code, 1);
+    assert.deepEqual(calls, []);
+    const rendered = `${streams.out()}${streams.err()}`;
+    assert.match(rendered, /release verification blocked/);
+    assert.match(rendered, /platform_identity_unavailable/);
+    assert.equal(rendered.includes('mem_runtime_secret'), false);
+    assert.equal(rendered.includes('mem_broker_secret'), false);
+  });
+
+  test('maps a missing installed-byte verifier result to release_artifact_mismatch', async () => {
+    const result = await verifyRuntimeRelease({
+      manifest: manifest(),
+      runtimeAuthorization: {
+        runtimeGeneration: 'rtg_0123456789abcdef',
+        authorizationDigest: 'a'.repeat(64),
+      },
+      deps: {
+        loadTrustedReleaseInputs: async () => ({ release_trust_inputs: { opaque: true } }),
+        verifyReleaseTrust: async () => ({ ok: true, release_id: 'rel_1', release_epoch: 1, next_state: {} }),
+        verifyInstalledReleaseArtifacts: async () => ({ ok: false }),
+        commitTrustedReleaseState: async () => true,
+      },
+    });
+    assert.deepEqual(result, { ok: false, code: 'release_artifact_mismatch' });
+  });
+
+  test('builds release identity and nonce from the local manifest and supervisor authorization', async () => {
+    const m = manifest();
+    const calls = [];
+    const result = await verifyRuntimeRelease({
+      manifest: m,
+      runtimeAuthorization: {
+        runtimeGeneration: m.authorization.runtime_generation,
+        authorizationDigest: m.authorization.authorization_digest,
+      },
+      deps: {
+        now: () => Date.parse('2026-07-26T12:00:00Z'),
+        loadTrustedReleaseInputs: async (binding) => {
+          calls.push(['load', binding]);
+          return { release_trust_inputs: { now_ms: 0, expected_platform: {} } };
+        },
+        verifyReleaseTrust: async (input) => {
+          calls.push(['verify', input]);
+          assert.equal(input.now_ms, Date.parse('2026-07-26T12:00:00Z'));
+          assert.deepEqual(input.expected_platform, {
+            account_id: m.account_id,
+            cloud_session_id: m.cloud_session_id,
+            coding_session_id: m.coding_session_id,
+            runtime_generation: m.authorization.runtime_generation,
+            authorization_digest: m.authorization.authorization_digest,
+            nonce: m.authorization.authorization_digest,
+          });
+          return { ok: true, release_id: 'rel_1', release_epoch: 1, artifact_descriptor: {}, next_state: { release_epochs: { stable: 1 } } };
+        },
+        verifyInstalledReleaseArtifacts: async (input) => {
+          calls.push(['artifacts', input]);
+          return { ok: true };
+        },
+        commitTrustedReleaseState: async (input) => {
+          calls.push(['commit', input]);
+          assert.deepEqual(input, {
+            binding: {
+              account_id: m.account_id,
+              cloud_session_id: m.cloud_session_id,
+              coding_session_id: m.coding_session_id,
+              runtime_generation: m.authorization.runtime_generation,
+              authorization_digest: m.authorization.authorization_digest,
+              nonce: m.authorization.authorization_digest,
+            },
+            next_state: { release_epochs: { stable: 1 } },
+          });
+          return { ok: true };
+        },
+      },
+    });
+    assert.deepEqual(result, { ok: true, release_id: 'rel_1', release_epoch: 1 });
+    assert.deepEqual(calls.map(([name]) => name), ['load', 'verify', 'artifacts', 'commit']);
+  });
+
+  test('requires an atomic trusted watermark commit before token or runtime side effects', async () => {
+    const streams = io();
+    const m = manifest();
+    writeFileSync(m.runtime.paths.manifest, JSON.stringify(m), 'utf8');
+    const calls = [];
+    const code = await runCloudRuntimeWithDefault(parseArgs([
+      'run', '--cloud-session-id', m.cloud_session_id, '--manifest', m.runtime.paths.manifest,
+    ]), {
+      stdout: streams.stdout,
+      stderr: streams.stderr,
+      env: runtimeEnv(m, { MEMORO_TOKEN: 'mem_runtime_secret', MEMORO_BROKER_TOKEN: 'mem_broker_secret' }),
+      loadTrustedReleaseInputs: async () => ({ release_trust_inputs: {} }),
+      verifyReleaseTrust: async () => ({ ok: true, release_id: 'rel_1', release_epoch: 1, next_state: { release_epochs: { stable: 1 } } }),
+      verifyInstalledReleaseArtifacts: async () => ({ ok: true }),
+      resolveRuntimeToken: async () => { calls.push('token'); return 'must-not-resolve'; },
+      prepareWorkspace: async () => { calls.push('workspace'); return { ok: true }; },
+    });
+    assert.equal(code, 1);
+    assert.deepEqual(calls, []);
+    assert.match(streams.err(), /platform_identity_unavailable/);
+  });
+
+  test('maps rejected or throwing trusted watermark commits to the stable blocked code', async () => {
+    for (const commitTrustedReleaseState of [async () => false, async () => { throw new Error('commit canary'); }]) {
+      const result = await verifyRuntimeRelease({
+        manifest: manifest(),
+        runtimeAuthorization: { runtimeGeneration: 'rtg_0123456789abcdef', authorizationDigest: 'a'.repeat(64) },
+        deps: {
+          loadTrustedReleaseInputs: async () => ({ release_trust_inputs: {} }),
+          verifyReleaseTrust: async () => ({ ok: true, release_id: 'rel_1', release_epoch: 1, next_state: {} }),
+          verifyInstalledReleaseArtifacts: async () => ({ ok: true }),
+          commitTrustedReleaseState,
+        },
+      });
+      assert.deepEqual(result, { ok: false, code: 'platform_identity_unavailable' });
+    }
+  });
+
+  test('does not expose trusted-loader errors at the release gate', async () => {
+    const streams = io();
+    const m = manifest();
+    writeFileSync(m.runtime.paths.manifest, JSON.stringify(m), 'utf8');
+    const canary = 'Bearer mem_release_loader_canary_0123456789';
+    const code = await runCloudRuntimeWithDefault(parseArgs([
+      'run', '--cloud-session-id', m.cloud_session_id, '--manifest', m.runtime.paths.manifest, '--json',
+    ]), {
+      stdout: streams.stdout,
+      stderr: streams.stderr,
+      env: runtimeEnv(m),
+      loadTrustedReleaseInputs: async () => { throw new Error(canary); },
+    });
+    const rendered = `${streams.out()}${streams.err()}`;
+    assert.equal(code, 1);
+    assert.match(rendered, /platform_identity_unavailable/);
+    assert.equal(rendered.includes('loader_canary'), false);
+    assert.equal(rendered.includes('Bearer'), false);
+  });
+
   test('rejects missing or unknown manifest contract before token or workspace side effects', async () => {
     for (const contractVersion of [undefined, 'mc-cloud-runtime-v0']) {
       const streams = io();
