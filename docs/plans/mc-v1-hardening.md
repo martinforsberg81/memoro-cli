@@ -84,21 +84,35 @@ Found live; first two FIXED on this branch (H2 head start):
   (chess-practice — daemon + claude alive, socket file gone; only an
   explicit reap can help it).
 
-### H2 remaining — gc is not yet trustworthy (found live, 2026-07-26)
+### H2 gc-trust round (fixed 2026-07-26, PR #182)
 
-- ❌ **`mc gc --all-safe --dry-run` offered to remove the worktree of a
-  LIVE session** (this coordinator's own `mc-fixes-v2`, active and
-  cloud-visible) — gc consults only local broker liveness, not
-  cloud-active sessions, before calling a worktree reclaimable. Also
-  offered `home-actions-v4`, which `mc list` had just reported with 3
-  dirty files. gc must recompute dirty/ahead and check cloud-active
-  liveness at decision time. DO NOT run `mc gc --apply` until fixed.
-- ❌ `mc gc --sidecars` reports "(no stale sidecars)" while ~60 dead
-  host dirs sit in `~/.memoro/mc/hosts/` — the hosts dir is not in its
-  scan. Registry is ~130 KB with the same dead weight.
+- ✅ gc offered to remove a LIVE coordinator worktree. Three-layer fix:
+  full local+cloud liveness picture (either source failing ⇒ no
+  candidates, with warning), a permissive protection matcher (cwd/label,
+  distinct from the strict removal matcher), and auto-reclaim restricted
+  to worktrees mc itself launched (`--only` for the rest). The dirty
+  counts it showed were stale-pessimistic registry values; gc's live
+  recompute was already correct.
+- ✅ hosts residue was registry-driven, not a scan gap: dead registry
+  entries keep their host dirs "registered". `mc storage prune-missing
+  --apply` took the registry from 112 entries / 130 KB to 31 / 45 KB;
+  all live sessions verified intact after.
+
+### H2 remaining
+
+- ❌ `mc storage prune-missing --dry-run` predicted 8 prunes but
+  `--apply` pruned 81 — dry-run must predict apply exactly.
+- ❌ cloud session records outlive `mc end` (the ended h1-probe still
+  listed cloud-active an hour later) — end should tombstone the cloud
+  record; needs the memoro server side (TODO.md bullet).
 - ❌ socketless-but-running hosts (chess-practice specimen) need an
-  explicit, confirmed reap path (`mc gc --reap-zombie-hosts` or doctor
-  offer): kill daemon + tool process, clean sidecars, mark registry.
+  explicit, confirmed reap path: kill daemon + tool process, clean
+  sidecars, mark registry.
+- ❌ doctor reports 72 provider-native-id-missing (backfillable via
+  `mc storage repair --provider-backfill`) and 14 orphan dev servers
+  (H3 will own dev-server lifecycle).
+- Pending user confirmation: `mc gc --stale-worktrees --apply` for the
+  ~10 verified clean/merged/dead candidates.
 
 ## H2 — `mc end`: complete, residue-free teardown
 
