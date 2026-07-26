@@ -157,6 +157,48 @@ describe('mc resume <name>', () => {
     assert.equal(freshLaunched[0].name, 'local-dead');
   });
 
+  test('picker renders registry-live sessions with no live local session as stale', async () => {
+    const stdout = [];
+    const stderr = [];
+    const status = await runResumePicker({
+      opts: { name: null, tool: null, noLaunch: false, json: false },
+      stdin: { isTTY: false },
+      stdout: { isTTY: false, write: (s) => stdout.push(s) },
+      stderr: { write: (s) => stderr.push(s) },
+      deps: {
+        readRegistry: () => ({ entries: [
+          makeEntry({
+            name: 'ghost',
+            branch: 'sess/ghost',
+            tool: 'codex',
+            coding_session_id: 'sess_ghost',
+            session_state: 'live',
+            worktree_path: '/tmp/ghost',
+          }),
+          makeEntry({
+            name: 'truly-live',
+            branch: 'sess/truly-live',
+            tool: 'codex',
+            coding_session_id: 'sess_truly',
+            session_state: 'live',
+            worktree_path: '/tmp/truly-live',
+          }),
+        ] }),
+        fetchLocalBrokerSessions: async () => ({
+          ok: true,
+          sessions: [{ coding_session_id: 'sess_truly' }],
+          warning: null,
+        }),
+        fetchActiveSessions: async () => ({ ok: true, sessions: [] }),
+      },
+    });
+    assert.equal(status, 0);
+    const out = stdout.join('');
+    assert.match(out, /ghost\s+.*stale/);
+    assert.match(out, /truly-live\s+.*live/);
+    assert.match(stderr.join(''), /1 session\(s\) marked live in the registry/);
+  });
+
   test('interactive picker selection of an active session explains send/read instead of launching', async () => {
     const stdout = [];
     let launched = false;

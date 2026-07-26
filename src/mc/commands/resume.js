@@ -40,6 +40,12 @@ import {
   renderSessionListHuman,
 } from '../session-list.js';
 import { observeEntryWorktree } from '../session-observation.js';
+import {
+  countStaleDemotions,
+  fetchLiveLocalSessionIds,
+  normalizeEntryTruth,
+  staleDemotionHint,
+} from '../session-truth.js';
 
 export const TOOL_SUGAR = {
   '--claude': 'claude',
@@ -397,12 +403,17 @@ export async function runResumePicker({
   const freshLaunch = freshLaunchDependency(deps);
   const attachLive = deps.attachLiveBrokerSession || attachLiveBrokerSession;
   const upsert = deps.upsertEntry || upsertEntry;
-  const entries = resumableEntries(loadRegistry());
   const toolValidation = validateToolFlag(opts.tool);
   if (toolValidation.error) {
     stderr.write(`mc: ${toolValidation.error}\n`);
     return 2;
   }
+  // Same truth check as `mc list`: never offer a dead session as live.
+  const liveIds = await fetchLiveLocalSessionIds({ deps });
+  const entries = resumableEntries(loadRegistry())
+    .map((e) => normalizeEntryTruth(e, liveIds, { withVerdict: false }));
+  const demoted = countStaleDemotions(entries);
+  if (demoted > 0) stderr.write(staleDemotionHint(demoted));
 
   if (opts.json) {
     stdout.write(JSON.stringify({

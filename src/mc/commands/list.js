@@ -5,7 +5,11 @@
 import { readRegistry } from '../registry.js';
 import { scanDaemons } from '../orphan-daemons.js';
 import { checkAndPrintFreshInstall } from '../first-run.js';
-import { escalateSafetyVerdict } from '../safety-verdict.js';
+import {
+  countStaleDemotions,
+  normalizeEntryTruth,
+  staleDemotionHint,
+} from '../session-truth.js';
 import {
   buildSessionListView,
   fetchActiveCodingSessionsWithLocalBroker,
@@ -57,11 +61,9 @@ export async function run(argv, deps = {}) {
   const liveIds = new Set(
     (localLiveResult?.sessions || []).map((s) => s.coding_session_id).filter(Boolean),
   );
-  let entries = reg.entries.slice().map((e) => normalizeEntry(e, liveIds));
-  const demoted = entries.filter((e) => e.session_state === 'stale').length;
-  if (demoted > 0) {
-    stderr.write(`mc: ${demoted} session(s) marked live in the registry have no live local session — shown as stale; run \`mc storage repair --apply\` to reconcile\n`);
-  }
+  let entries = reg.entries.slice().map((e) => normalizeEntryTruth(e, liveIds));
+  const demoted = countStaleDemotions(entries);
+  if (demoted > 0) stderr.write(staleDemotionHint(demoted));
 
   // Default scope: user-facing sessions with present worktrees. --all expands
   // to internal/legacy/missing entries too (fanout phases, isolation fixtures,
@@ -168,25 +170,6 @@ function runOrphans(opts, { stdout, scanDaemons: scan }) {
     stdout.write(`stale   ${e.reason}  ${e.llmSessionId}\n`);
   }
   return 0;
-}
-
-function normalizeEntry(e, liveIds) {
-  const storedState = e.session_state || 'no-session-yet';
-  const isStale = storedState === 'live' && !liveIds.has(e.coding_session_id);
-  // A stale session cannot be active now; drop the stored claim so the
-  // verdict re-derives from git facts (escalate-only, fail-safe).
-  const storedVerdict = isStale && e.safety_verdict === 'IS_ACTIVE_NOW'
-    ? null
-    : e.safety_verdict || null;
-  return {
-    ...e,
-    session_state: isStale ? 'stale' : storedState,
-    safety_verdict: escalateSafetyVerdict({
-      stored: storedVerdict,
-      dirtyFiles: e.dirty_files ?? null,
-      ahead: e.ahead ?? null,
-    }),
-  };
 }
 
 function projectEntry(e, rich) {
