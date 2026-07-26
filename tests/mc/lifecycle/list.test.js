@@ -161,6 +161,11 @@ describe('mc list', () => {
           session_state: 'dead',
         }),
       ] }),
+      fetchLocalBrokerSessions: async () => ({
+        ok: true,
+        sessions: [{ coding_session_id: 'sess_active' }],
+        warning: null,
+      }),
       fetchActiveSessions: async () => ({
         ok: true,
         sessions: [{
@@ -184,6 +189,78 @@ describe('mc list', () => {
     assert.match(out, /2\. local-dead\s+local\s+claude/);
     const localSection = out.split('Local sessions')[1];
     assert.doesNotMatch(localSection, /active-local/);
+  });
+
+  test('--json demotes registry-live sessions with no live local session to stale', async () => {
+    const stdout = [];
+    const stderr = [];
+    const status = await runList(['--json'], {
+      stdout: { write: (s) => stdout.push(s) },
+      stderr: { write: (s) => stderr.push(s) },
+      checkAndPrintFreshInstall: async () => false,
+      readRegistry: () => ({ entries: [
+        makeEntry({
+          name: 'ghost',
+          coding_session_id: 'sess_ghost',
+          session_state: 'live',
+          safety_verdict: 'IS_ACTIVE_NOW',
+        }),
+        makeEntry({
+          name: 'alive',
+          coding_session_id: 'sess_alive',
+          session_state: 'live',
+          safety_verdict: 'IS_ACTIVE_NOW',
+        }),
+      ] }),
+      fetchLocalBrokerSessions: async () => ({
+        ok: true,
+        sessions: [{ coding_session_id: 'sess_alive' }],
+        warning: null,
+      }),
+    });
+    assert.equal(status, 0);
+    const j = parseJsonOrNull(stdout.join(''));
+    const ghost = j.entries.find((e) => e.name === 'ghost');
+    const alive = j.entries.find((e) => e.name === 'alive');
+    // Dead PTY: never presented as live, and IS_ACTIVE_NOW cannot stand.
+    assert.equal(ghost.session_state, 'stale');
+    assert.equal(ghost.safety_verdict, 'SAFE_TO_END');
+    // Broker-confirmed session keeps its stored state and verdict.
+    assert.equal(alive.session_state, 'live');
+    assert.equal(alive.safety_verdict, 'IS_ACTIVE_NOW');
+    assert.match(stderr.join(''), /1 session\(s\) marked live in the registry/);
+    assert.match(stderr.join(''), /mc storage repair --apply/);
+  });
+
+  test('--json escalates a stored SAFE_TO_END that fresh git facts contradict', async () => {
+    const stdout = [];
+    const stderr = [];
+    const status = await runList(['--json'], {
+      stdout: { write: (s) => stdout.push(s) },
+      stderr: { write: (s) => stderr.push(s) },
+      checkAndPrintFreshInstall: async () => false,
+      readRegistry: () => ({ entries: [
+        makeEntry({
+          name: 'dirty-safe',
+          session_state: 'idle',
+          safety_verdict: 'SAFE_TO_END',
+          dirty_files: 300,
+          ahead: 0,
+        }),
+        makeEntry({
+          name: 'ahead-safe',
+          session_state: 'idle',
+          safety_verdict: 'SAFE_TO_END',
+          dirty_files: 0,
+          ahead: 2,
+        }),
+      ] }),
+      fetchLocalBrokerSessions: async () => ({ ok: true, sessions: [], warning: null }),
+    });
+    assert.equal(status, 0);
+    const j = parseJsonOrNull(stdout.join(''));
+    assert.equal(j.entries.find((e) => e.name === 'dirty-safe').safety_verdict, 'NEEDS_REVIEW');
+    assert.equal(j.entries.find((e) => e.name === 'ahead-safe').safety_verdict, 'HAS_UNMERGED_WORK');
   });
 
   test('human output soft-degrades when active-session fetch fails', async () => {
@@ -431,7 +508,10 @@ describe('mc list', () => {
     assert.equal(r.status, 0, `stderr:${r.stderr}`);
     const j = parseJsonOrNull(r.stdout);
     const names = j.entries.map(e => e.name).sort();
-    assert.deepEqual(names, ['really-idle', 'safe']);
+    // active-now qualifies: its registry "live" has no broker session
+    // (stale), and its git facts are clean — same demotion mc status
+    // already applied to stale IS_ACTIVE_NOW.
+    assert.deepEqual(names, ['active-now', 'really-idle', 'safe']);
   });
 
   test('--has-unmerged returns ahead-and-not-phantom only', () => {
@@ -482,6 +562,6 @@ describe('mc list', () => {
     const r = runMc(['list', '--safe-to-end', '--names'], { env: { MC_HOME: mcHome } });
     assert.equal(r.status, 0, `stderr:${r.stderr}`);
     const lines = r.stdout.split('\n').map(l => l.trim()).filter(Boolean).sort();
-    assert.deepEqual(lines, ['really-idle', 'safe']);
+    assert.deepEqual(lines, ['active-now', 'really-idle', 'safe']);
   });
 });

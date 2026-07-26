@@ -227,6 +227,31 @@ describe('mc status <name>', () => {
     assert.equal(j.work_status.status, 'resting');
   });
 
+  test('a stored SAFE_TO_END never survives observed dirty files', async () => {
+    const stdout = [];
+    const stderr = [];
+    const code = await runStatus(['dirty-safe', '--json'], {
+      stdout: { write: (s) => stdout.push(s) },
+      stderr: { write: (s) => stderr.push(s) },
+      findEntry: () => makeEntry({
+        name: 'dirty-safe',
+        branch: 'sess/dirty-safe',
+        session_state: 'idle',
+        safety_verdict: 'SAFE_TO_END',
+        dirty_files: 287,
+        ahead: 0,
+      }),
+      readConfig: async () => ({}),
+      fetchBrokerStatus: async () => ({ ok: true, sessions: [] }),
+      fetchActiveSessions: async () => ({ ok: true, sessions: [] }),
+    });
+
+    assert.equal(code, 0);
+    const j = parseJsonOrNull(stdout.join(''));
+    assert.equal(j.dirty_files, 287);
+    assert.equal(j.safety_verdict, 'NEEDS_REVIEW');
+  });
+
   test('active lookup can mark an idle registry entry as reachable', async () => {
     const stdout = [];
     const code = await runStatus(['reachable', '--json'], {

@@ -5,9 +5,11 @@
 import { readRegistry } from '../registry.js';
 import { scanDaemons } from '../orphan-daemons.js';
 import { checkAndPrintFreshInstall } from '../first-run.js';
+import { escalateSafetyVerdict } from '../safety-verdict.js';
 import {
   buildSessionListView,
   fetchActiveCodingSessionsWithLocalBroker,
+  fetchLocalBrokerCodingSessions,
   renderSessionListHuman,
 } from '../session-list.js';
 
@@ -19,8 +21,13 @@ export async function run(argv, deps = {}) {
   const stderr = deps.stderr || process.stderr;
   const loadRegistry = deps.readRegistry || readRegistry;
   const checkFreshInstall = deps.checkAndPrintFreshInstall || checkAndPrintFreshInstall;
+  let localLiveResult = null;
   const fetchActive = deps.fetchActiveSessions
-    || ((args) => fetchActiveCodingSessionsWithLocalBroker({ argv: args, deps }));
+    || ((args) => fetchActiveCodingSessionsWithLocalBroker({
+      argv: args,
+      deps,
+      localRes: localLiveResult,
+    }));
   const scan = deps.scanDaemons || scanDaemons;
   const opts = parseArgs(argv);
   if (opts.error) {
@@ -37,7 +44,24 @@ export async function run(argv, deps = {}) {
   await checkFreshInstall();
 
   const reg = loadRegistry();
-  let entries = reg.entries.slice();
+
+  // Registry session_state goes stale when PTYs die out from under it
+  // (crash, shutdown, broker restart). One local broker+host probe per
+  // invocation is the truth check: a stored "live" without a live local
+  // session renders as "stale" so no consumer — human or --json — sees a
+  // dead session presented as attachable. Repair stays explicit
+  // (`mc storage repair --apply`); list never mutates the registry.
+  const fetchLocalLive = deps.fetchLocalBrokerSessions
+    || (() => fetchLocalBrokerCodingSessions({ deps }));
+  localLiveResult = await fetchLocalLive();
+  const liveIds = new Set(
+    (localLiveResult?.sessions || []).map((s) => s.coding_session_id).filter(Boolean),
+  );
+  let entries = reg.entries.slice().map((e) => normalizeEntry(e, liveIds));
+  const demoted = entries.filter((e) => e.session_state === 'stale').length;
+  if (demoted > 0) {
+    stderr.write(`mc: ${demoted} session(s) marked live in the registry have no live local session — shown as stale; run \`mc storage repair --apply\` to reconcile\n`);
+  }
 
   // Default scope: user-facing sessions with present worktrees. --all expands
   // to internal/legacy/missing entries too (fanout phases, isolation fixtures,
@@ -144,6 +168,25 @@ function runOrphans(opts, { stdout, scanDaemons: scan }) {
     stdout.write(`stale   ${e.reason}  ${e.llmSessionId}\n`);
   }
   return 0;
+}
+
+function normalizeEntry(e, liveIds) {
+  const storedState = e.session_state || 'no-session-yet';
+  const isStale = storedState === 'live' && !liveIds.has(e.coding_session_id);
+  // A stale session cannot be active now; drop the stored claim so the
+  // verdict re-derives from git facts (escalate-only, fail-safe).
+  const storedVerdict = isStale && e.safety_verdict === 'IS_ACTIVE_NOW'
+    ? null
+    : e.safety_verdict || null;
+  return {
+    ...e,
+    session_state: isStale ? 'stale' : storedState,
+    safety_verdict: escalateSafetyVerdict({
+      stored: storedVerdict,
+      dirtyFiles: e.dirty_files ?? null,
+      ahead: e.ahead ?? null,
+    }),
+  };
 }
 
 function projectEntry(e, rich) {
