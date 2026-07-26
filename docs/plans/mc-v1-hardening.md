@@ -186,6 +186,24 @@ confirmed by measurement, not assumed):
 Deliverable: a small before/after table in this doc; no optimisation
 without a number.
 
+### H4 round 1 (2026-07-26) — measured on this machine
+
+| Command | Before | After | Change |
+|---|---|---|---|
+| `mc --help` | 1.42 s | 0.21 s | thin CLI entry answers help without loading the command graph |
+| `mc list --json` | 4.24 s | 1.93 s | host-probe deadline 3 s → 600 ms (safe now that timeout ⇒ busy-live, not dropped) |
+| `mc status <name>` | 5.19 s | ~3.2 s | reachability and dev-server health probes overlap (`Promise.all`) |
+
+Breakdown that drove the fixes: bare node startup 0.47 s; full CLI
+import graph ≈ 0.9 s (paid by every spawned command, including every
+`runMc` in the test suite); host sweep = one slowest-probe deadline.
+
+Still open for a later round: lazy-load the ~20 eager imports in
+bin-mc.js (would cut ~0.9 s from every command and minutes from the
+spawn-heavy test suite); status's remaining cloud fetch; inject fake
+timers into resume.test.js (≈85 s of real sleeps); doctor's provider
+scans (>2 min with repair + backfill probing).
+
 ## Order and gate
 
 H1 → H2 → H3 → H4, merge after each slice (standing instruction). H3/H4
