@@ -106,6 +106,25 @@ describe('handleBrokerMessage', () => {
     });
   });
 
+  test('preserves asynchronous runtime cleanup responses for the socket handler', async () => {
+    const out = handleBrokerMessage('{"type":"remove_session","id":"sess_a"}', {
+      status: () => ({ ok: true }),
+      runtime: {
+        handle: async () => ({
+          ok: true,
+          removed: true,
+          credential_cleanup: 'confirmed',
+        }),
+      },
+    });
+
+    assert.deepEqual(await out.response, {
+      ok: true,
+      removed: true,
+      credential_cleanup: 'confirmed',
+    });
+  });
+
   test('returns structured errors when runtime delegation fails', () => {
     const runtime = {
       handle() {
@@ -242,6 +261,30 @@ describe('broker daemon lifecycle', () => {
     assert.equal(state.server.listening, false);
     assert.equal(existsSync(p.pidPath), false);
     assert.equal(existsSync(p.socketPath), false);
+    state = null;
+  });
+
+  test('stop waits for managed credential shutdown before removing broker files', async () => {
+    const p = paths();
+    let finishShutdown;
+    state = await startBrokerServer({
+      ...p,
+      createServerImpl: fakeCreateServer,
+      runtime: {
+        listSessions: () => [],
+        shutdown: () => new Promise((resolve) => { finishShutdown = resolve; }),
+      },
+    });
+
+    const stopping = state.stop();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(state.server.listening, true);
+    assert.equal(existsSync(p.pidPath), true);
+
+    finishShutdown({ ok: true, credential_cleanup: 'confirmed' });
+    await stopping;
+    assert.equal(state.server.listening, false);
+    assert.equal(existsSync(p.pidPath), false);
     state = null;
   });
 });

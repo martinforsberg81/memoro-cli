@@ -7,7 +7,7 @@ import { BrokerRuntime } from './runtime.js';
 import { brokerPidPath, brokerSocketPath } from './paths.js';
 import { getPackageVersion } from '../../lib/version.js';
 
-export const BROKER_PROTOCOL_VERSION = 'mc-broker-pty-v2';
+export const BROKER_PROTOCOL_VERSION = 'mc-broker-pty-v3';
 
 export async function startBrokerServer({
   socketPath = brokerSocketPath(),
@@ -51,7 +51,7 @@ export async function startBrokerServer({
     let raw = Buffer.alloc(0);
     let handledInitialFrame = false;
     conn.on?.('error', () => {});
-    const handleFrame = (frame, initialInput = Buffer.alloc(0)) => {
+    const handleFrame = async (frame, initialInput = Buffer.alloc(0)) => {
       if (handledInitialFrame) return;
       handledInitialFrame = true;
       const handled = handleBrokerMessage(frame.toString('utf8'), {
@@ -63,18 +63,25 @@ export async function startBrokerServer({
         handled.attach(conn, initialInput);
         return;
       }
-      safeEnd(conn, JSON.stringify(handled.response) + '\n');
+      const response = await Promise.resolve(handled.response)
+        .catch(() => ({ ok: false, error: 'broker command failed' }));
+      safeEnd(conn, JSON.stringify(response) + '\n');
       if (handled.stop) {
-        setImmediate(() => {
-          stopBrokerServer({ server, socketPath, pidPath })
-            .then(() => {
-              if (typeof onStop === 'function') onStop();
-              if (exitOnStop) process.exit(0);
-            })
-            .catch(() => {
-              if (typeof onStop === 'function') onStop();
-              if (exitOnStop) process.exit(1);
-            });
+        setImmediate(async () => {
+          try {
+            const shutdown = await shutdownRuntime(runtime);
+            if (!shutdown.ok) {
+              stopping = false;
+              return;
+            }
+            await stopBrokerServer({ server, socketPath, pidPath });
+            if (typeof onStop === 'function') onStop();
+            if (exitOnStop) process.exit(0);
+          } catch {
+            stopping = false;
+            if (typeof onStop === 'function') onStop();
+            if (exitOnStop) process.exit(1);
+          }
         });
       }
     };
@@ -86,10 +93,10 @@ export async function startBrokerServer({
       if (newline === -1) return;
       const frame = raw.subarray(0, newline);
       const initialInput = raw.subarray(newline + 1);
-      handleFrame(frame, initialInput);
+      void handleFrame(frame, initialInput);
     });
     conn.on('end', () => {
-      if (!handledInitialFrame) handleFrame(raw);
+      if (!handledInitialFrame) void handleFrame(raw);
     });
   });
 
@@ -114,7 +121,13 @@ export async function startBrokerServer({
     socketPath,
     pidPath,
     status,
-    stop: () => stopBrokerServer({ server, socketPath, pidPath }),
+    stop: async () => {
+      const shutdown = await shutdownRuntime(runtime);
+      if (!shutdown.ok) {
+        throw new Error(shutdown.reason || 'managed credential cleanup was not confirmed');
+      }
+      return stopBrokerServer({ server, socketPath, pidPath });
+    },
   };
 }
 
@@ -154,8 +167,10 @@ export async function runBrokerDaemon(opts = {}) {
     runtime,
     exitOnStop: opts.exitOnStop ?? true,
   });
-  const cleanup = () => {
-    stopBrokerServer(state).finally(() => process.exit(0));
+  const cleanup = async () => {
+    const shutdown = await shutdownRuntime(runtime).catch(() => ({ ok: false }));
+    await stopBrokerServer(state).catch(() => {});
+    process.exit(shutdown.ok ? 0 : 1);
   };
   process.once('SIGTERM', cleanup);
   process.once('SIGINT', cleanup);
@@ -167,6 +182,15 @@ export async function runBrokerDaemon(opts = {}) {
   }
 
   return new Promise(() => {});
+}
+
+async function shutdownRuntime(runtime) {
+  if (typeof runtime?.shutdown !== 'function') return { ok: true };
+  const result = await runtime.shutdown();
+  return result?.ok ? result : {
+    ok: false,
+    reason: result?.reason || 'managed credential cleanup was not confirmed',
+  };
 }
 
 export function brokerFilesExist({ socketPath = brokerSocketPath(), pidPath = brokerPidPath() } = {}) {

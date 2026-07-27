@@ -4,7 +4,6 @@ import { describe, test } from 'node:test';
 import {
   LOCAL_AUTH_MODES,
   LOCAL_AUTH_STATES,
-  LOCAL_MANAGED_UNAVAILABLE_REASON,
   evaluateLocalAuthMode,
   resolveLocalAuthMode,
   resolveLocalAuthModeFromArgv,
@@ -21,16 +20,16 @@ describe('local auth mode', () => {
     });
   });
 
-  test('managed portable is explicit and remains fail closed', () => {
+  test('managed portable is explicit but remains uncertified until launch preflight', () => {
     const mode = resolveLocalAuthMode({ managedPortable: true });
     const result = evaluateLocalAuthMode(mode);
 
     assert.equal(mode, LOCAL_AUTH_MODES.MANAGED_PORTABLE);
-    assert.equal(result.ok, false);
-    assert.equal(result.state, LOCAL_AUTH_STATES.MANAGED_UNAVAILABLE);
+    assert.equal(result.ok, true);
+    assert.equal(result.state, LOCAL_AUTH_STATES.MANAGED_REQUESTED);
     assert.equal(result.portable, false);
-    assert.equal(result.reason, LOCAL_MANAGED_UNAVAILABLE_REASON);
-    assert.match(result.error, /credential boundary is not certified/);
+    assert.equal(result.certified, false);
+    assert.equal(result.reason, undefined);
   });
 
   test('repo, config, and inherited environment cannot opt in', () => {

@@ -6,6 +6,8 @@ import { DEFAULT_TOOL } from '../../lib/config.js';
 import { normalizeInteractivePtyEnv } from '../interactive-env.js';
 import { BrokerSessionManager } from './session-manager.js';
 import { BrokerSessionSidecars } from './session-sidecars.js';
+import { resolveManagedCodexLaunch } from '../provider-adapters/codex-managed.js';
+import { closeLocalCodexCredentialDomain } from '../credential-domain/local-codex.js';
 
 const SESSION_COMMANDS = new Set([
   'sessions',
@@ -30,6 +32,8 @@ export class BrokerRuntime {
     clock = Date,
     termName = 'xterm-256color',
     sidecarFactory = (opts) => new BrokerSessionSidecars(opts),
+    managedProviderResolver = resolveManagedCodexLaunch,
+    credentialDomainCloser = closeLocalCodexCredentialDomain,
   } = {}) {
     if (!manager && !ptyFactory?.spawn) {
       throw new TypeError('manager or ptyFactory.spawn is required');
@@ -43,11 +47,20 @@ export class BrokerRuntime {
     this.cwd = cwd;
     this.termName = termName;
     this.sidecarFactory = sidecarFactory;
+    this.managedProviderResolver = managedProviderResolver;
+    this.credentialDomainCloser = credentialDomainCloser;
     this.sidecars = new Map();
     this.sessionMetadata = new Map();
+    this.credentialDomains = new Map();
+    this.credentialDomainClosures = new Map();
+    this.credentialDomainExitWaiters = new Map();
     this.attaches = new Map();
     this.manager.setMaxListeners?.(Math.max(this.manager.getMaxListeners?.() || 10, 100));
-    this.manager.on('exit', ({ id }) => this._stopSidecars(id));
+    this.manager.on('exit', ({ id }) => {
+      this._stopSidecars(id);
+      const closing = this._closeCredentialDomain(id);
+      this._resolveCredentialDomainExit(id, closing);
+    });
   }
 
   listSessions() {
@@ -88,6 +101,13 @@ export class BrokerRuntime {
     const cwd = stringOrDefault(input.cwd, this._cwd());
     const existing = this._findReusableLiveSession({ id, cwd, name: input.name });
     if (existing) {
+      if (input?.credential_domain) {
+        return {
+          ok: false,
+          reason: 'managed-provider-session-conflict',
+          error: 'managed provider cannot reuse an existing broker session',
+        };
+      }
       return {
         ok: true,
         reused: true,
@@ -100,20 +120,34 @@ export class BrokerRuntime {
     const launchOptions = plainObject(input.launch_options) ? input.launch_options : {};
     const cols = positiveInteger(input.cols, 80, 'cols');
     const rows = positiveInteger(input.rows, 24, 'rows');
-    const launch = this.launchResolver(toolInput);
-    if (!launch?.ok) {
+    const resolved = this.launchResolver(toolInput);
+    if (!resolved?.ok) {
       return {
         ok: false,
-        reason: launch?.reason || 'launch-resolution-failed',
-        error: launch?.hint || `cannot launch tool: ${toolInput}`,
+        reason: resolved?.reason || 'launch-resolution-failed',
+        error: resolved?.hint || `cannot launch tool: ${toolInput}`,
       };
     }
+    const provider = this.managedProviderResolver({
+      launch: resolved,
+      input,
+    });
+    if (!provider?.ok) {
+      return {
+        ok: false,
+        reason: provider?.reason || 'managed-provider-unavailable',
+        error: provider?.error || 'managed provider unavailable',
+      };
+    }
+    const launch = provider.launch;
 
     const interactiveEnv = normalizeInteractivePtyEnv({
-      baseEnv: {
-        ...this.env,
-        ...(plainObject(input.env) ? input.env : {}),
-      },
+      baseEnv: provider.environmentMode === 'replace'
+        ? provider.env
+        : {
+            ...this.env,
+            ...(plainObject(input.env) ? input.env : {}),
+          },
       termName: stringOrDefault(input.term_name, this.termName),
     });
 
@@ -123,23 +157,38 @@ export class BrokerRuntime {
       cwd,
       sidecars: input.sidecars,
     });
-    const session = this.manager.launch({
-      id,
-      name: typeof input.name === 'string' ? input.name : null,
-      cwd,
-      tool: launch.shortName || launch.id || toolInput,
-      launchSpec: launch.spec,
-      argv,
-      launchOptions,
-      cols,
-      rows,
-      termName: interactiveEnv.termName,
-      env: {
-        ...interactiveEnv.env,
-        MEMORO_MC_BROKER: '1',
-        MEMORO_MC_PARENT: '1',
-      },
-    });
+    if (provider.descriptor) {
+      this.credentialDomains.set(id, {
+        descriptor: provider.descriptor,
+        portal: {
+          apiUrl: stringOrDefault(input.sidecars?.apiUrl, null),
+          token: stringOrDefault(input.sidecars?.token, null),
+        },
+      });
+    }
+    let session;
+    try {
+      session = this.manager.launch({
+        id,
+        name: typeof input.name === 'string' ? input.name : null,
+        cwd,
+        tool: launch.shortName || launch.id || toolInput,
+        launchSpec: launch.spec,
+        argv,
+        launchOptions,
+        cols,
+        rows,
+        termName: interactiveEnv.termName,
+        env: {
+          ...interactiveEnv.env,
+          MEMORO_MC_BROKER: '1',
+          MEMORO_MC_PARENT: '1',
+        },
+      });
+    } catch (error) {
+      this.credentialDomains.delete(id);
+      throw error;
+    }
     this.sessionMetadata.set(id, sessionMetadata);
 
     const sidecars = this._startSidecars(id, input.sidecars);
@@ -215,8 +264,35 @@ export class BrokerRuntime {
   _remove(id) {
     const sessionId = requiredString(id, 'session id');
     this._stopSidecars(sessionId);
-    const session = this.manager.get(sessionId);
-    if (session && !session.status?.().exit) {
+    const status = this.manager.status(sessionId);
+    const managed = this.credentialDomains.has(sessionId)
+      || this.credentialDomainClosures.has(sessionId);
+    if (managed) {
+      if (status && !status.exit) {
+        try { this.manager.stop(sessionId, 'SIGTERM'); } catch {}
+      } else if (status?.exit) {
+        const closing = this._closeCredentialDomain(sessionId);
+        this._resolveCredentialDomainExit(sessionId, closing);
+      }
+      return this._waitForCredentialDomainExit(sessionId).then((cleanup) => {
+        if (!cleanup?.ok) {
+          return {
+            ok: false,
+            removed: false,
+            reason: cleanup?.reason || 'managed-domain-cleanup-unconfirmed',
+            error: 'managed credential cleanup was not confirmed',
+          };
+        }
+        this.sessionMetadata.delete(sessionId);
+        this.credentialDomainClosures.delete(sessionId);
+        return {
+          ok: true,
+          removed: this.manager.remove(sessionId),
+          credential_cleanup: 'confirmed',
+        };
+      });
+    }
+    if (status && !status.exit) {
       try { this.manager.stop(sessionId, 'SIGTERM'); } catch {}
     }
     this.sessionMetadata.delete(sessionId);
@@ -337,6 +413,76 @@ export class BrokerRuntime {
     if (!sidecars) return;
     this.sidecars.delete(id);
     try { sidecars.stop(); } catch {}
+  }
+
+  _closeCredentialDomain(id) {
+    const existing = this.credentialDomainClosures.get(id);
+    if (existing) return existing;
+    const owned = this.credentialDomains.get(id);
+    if (!owned) return null;
+    const closing = Promise.resolve(this.credentialDomainCloser({
+      descriptor: owned.descriptor,
+      portal: owned.portal,
+    }))
+      .then((result) => {
+        if (result?.ok) this.credentialDomains.delete(id);
+        return result?.ok
+          ? result
+          : {
+              ok: false,
+              reason: result?.reason || 'managed-domain-cleanup-unconfirmed',
+            };
+      })
+      .catch(() => ({
+        ok: false,
+        reason: 'managed-domain-cleanup-unconfirmed',
+      }));
+    this.credentialDomainClosures.set(id, closing);
+    return closing;
+  }
+
+  _waitForCredentialDomainExit(id, timeoutMs = 15_000) {
+    const closing = this.credentialDomainClosures.get(id);
+    if (closing) return closing;
+    if (!this.credentialDomains.has(id)) return Promise.resolve({ ok: true });
+    return new Promise((resolveWait) => {
+      const timer = setTimeout(() => {
+        this.credentialDomainExitWaiters.delete(id);
+        resolveWait({ ok: false, reason: 'managed-provider-exit-unconfirmed' });
+      }, timeoutMs);
+      timer.unref?.();
+      this.credentialDomainExitWaiters.set(id, (result) => {
+        clearTimeout(timer);
+        resolveWait(result);
+      });
+    });
+  }
+
+  _resolveCredentialDomainExit(id, closing) {
+    const waiter = this.credentialDomainExitWaiters.get(id);
+    if (!waiter) return;
+    this.credentialDomainExitWaiters.delete(id);
+    waiter(closing || { ok: false, reason: 'managed-domain-cleanup-unconfirmed' });
+  }
+
+  async shutdown({ timeoutMs = 15_000 } = {}) {
+    const ids = [...this.credentialDomains.keys()];
+    for (const id of ids) {
+      const status = this.manager.status(id);
+      if (status && !status.exit) {
+        try { this.manager.stop(id, 'SIGTERM'); } catch {}
+      } else if (status?.exit) {
+        const closing = this._closeCredentialDomain(id);
+        this._resolveCredentialDomainExit(id, closing);
+      }
+    }
+    const results = await Promise.all(ids.map((id) => (
+      this._waitForCredentialDomainExit(id, timeoutMs)
+    )));
+    const failed = results.find((result) => !result?.ok);
+    return failed
+      ? { ok: false, reason: failed.reason || 'managed-domain-cleanup-unconfirmed' }
+      : { ok: true, credential_cleanup: 'confirmed' };
   }
 
   _withAttachStatus(session) {

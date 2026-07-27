@@ -212,6 +212,8 @@ export async function run(rawArgv) {
     tool_session_id: null,
     tool_session_source: null,
     tool_transcript_path: null,
+    tool_session_provider_adapter: null,
+    tool_session_provider_generation: null,
     provider_session_id: null,
     llm_session_id: null,
     broker_socket_path: null,
@@ -280,20 +282,22 @@ export async function launchNewSession({
   }
 
   const launchTool = entry?.tool ? resolveToolInput(entry.tool) : null;
-  const materialise = deps.materialiseVaultBeforeLaunch
-    || (await import('../vault/startup.js')).materialiseVaultBeforeLaunch;
+  if (localAuthMode === LOCAL_AUTH_MODES.NATIVE) {
+    const materialise = deps.materialiseVaultBeforeLaunch
+      || (await import('../vault/startup.js')).materialiseVaultBeforeLaunch;
 
-  try {
-    const res = await materialise({
-      sessionId: entry.name,
-      worktreePath: worktreePath || undefined,
-      adapters: launchTool?.adapter ? [launchTool.adapter] : undefined,
-    });
-    if (!res.ok && res.hint) {
-      stderr.write(`mc: ${res.hint}\n`);
+    try {
+      const res = await materialise({
+        sessionId: entry.name,
+        worktreePath: worktreePath || undefined,
+        adapters: launchTool?.adapter ? [launchTool.adapter] : undefined,
+      });
+      if (!res.ok && res.hint) {
+        stderr.write(`mc: ${res.hint}\n`);
+      }
+    } catch (err) {
+      stderr.write(`mc: vault materialise failed (${err.message}); continuing without tokens\n`);
     }
-  } catch (err) {
-    stderr.write(`mc: vault materialise failed (${err.message}); continuing without tokens\n`);
   }
 
   const launch = deps.launchBrokerOwnedSession || launchBrokerOwnedSession;

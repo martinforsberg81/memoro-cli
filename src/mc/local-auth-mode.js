@@ -5,6 +5,7 @@ export const LOCAL_AUTH_MODES = Object.freeze({
 
 export const LOCAL_AUTH_STATES = Object.freeze({
   NATIVE_UNMANAGED: 'native-unmanaged',
+  MANAGED_REQUESTED: 'managed-requested',
   MANAGED_UNAVAILABLE: 'managed-unavailable',
 });
 
@@ -40,8 +41,9 @@ export function resolveLocalAuthModeFromArgv(argv = []) {
  * tool auth, or any credential-backed capability.
  *
  * Native mode remains the existing host-owned path. Managed portable mode is
- * intentionally unavailable until the real OS boundary and provider adapter
- * are installed and certified; there is no downgrade to native.
+ * only an explicit request here; the launch owner must still verify the exact
+ * provider release, OS boundary, hostile canary probe, and custody readiness.
+ * No failure in those gates may downgrade to native.
  */
 export function evaluateLocalAuthMode(mode = LOCAL_AUTH_MODES.NATIVE) {
   if (mode === LOCAL_AUTH_MODES.NATIVE) {
@@ -55,12 +57,11 @@ export function evaluateLocalAuthMode(mode = LOCAL_AUTH_MODES.NATIVE) {
 
   if (mode === LOCAL_AUTH_MODES.MANAGED_PORTABLE) {
     return {
-      ok: false,
+      ok: true,
       mode,
-      state: LOCAL_AUTH_STATES.MANAGED_UNAVAILABLE,
+      state: LOCAL_AUTH_STATES.MANAGED_REQUESTED,
       portable: false,
-      reason: LOCAL_MANAGED_UNAVAILABLE_REASON,
-      error: 'managed portable auth is unavailable: the local credential boundary is not certified',
+      certified: false,
     };
   }
 
