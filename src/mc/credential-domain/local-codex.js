@@ -572,6 +572,14 @@ export function renderManagedCodexConfig({
   ];
   const workspaceRoots = [...new Set([executorRoot, workspaceRoot].filter(Boolean))]
     .map((path) => `"${tomlString(path)}" = true`);
+  const projectTrust = workspaceRoot
+    ? [
+      '[projects]',
+      `[projects."${tomlString(workspaceRoot)}"]`,
+      'trust_level = "untrusted"',
+      '',
+    ]
+    : [];
   return [
     `default_permissions = "${MANAGED_CODEX_PROFILE}"`,
     'approval_policy = "never"',
@@ -581,6 +589,7 @@ export function renderManagedCodexConfig({
     'check_for_update_on_startup = false',
     'web_search = "disabled"',
     '',
+    ...projectTrust,
     '[history]',
     'persistence = "save-all"',
     '',
