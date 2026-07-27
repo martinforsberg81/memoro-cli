@@ -60,9 +60,7 @@ describe('mc new', () => {
     assert.match(r.stderr + r.stdout, /invalid|name|character/i);
   });
 
-  test('--managed-portable fails before first-run, branch, worktree, or registry mutation', () => {
-    const sentinel = join(repo.mcHome, '.setup-done-v1');
-    const beforeSentinel = readFileSync(sentinel, 'utf8');
+  test('--managed-portable can prepare a worktree without opening credential custody', () => {
     const r = runMc(['new', 'managed-x', '--managed-portable', '--no-launch'], {
       cwd: repo.dir,
       env: {
@@ -72,12 +70,10 @@ describe('mc new', () => {
       },
     });
 
-    assert.equal(r.status, 1);
-    assert.match(r.stderr, /managed portable auth is unavailable/);
-    assert.equal(git(repo.dir, 'branch --list sess/managed-x'), '');
-    assert.equal(existsSync(join(repo.mcHome, 'worktrees', 'repo', 'managed-x')), false);
-    assert.equal(existsSync(join(repo.mcHome, 'registry.json')), false);
-    assert.equal(readFileSync(sentinel, 'utf8'), beforeSentinel);
+    assert.equal(r.status, 0, `stderr:${r.stderr}`);
+    assert.match(git(repo.dir, 'branch --list sess/managed-x'), /sess\/managed-x$/);
+    assert.equal(existsSync(join(repo.mcHome, 'worktrees', 'repo', 'managed-x')), true);
+    assert.equal(existsSync(join(repo.mcHome, 'credential-domains')), false);
   });
 
   test('refuses to run outside a git repo', () => {
@@ -359,20 +355,25 @@ describe('mc new', () => {
     }]);
   });
 
-  test('managed prelaunch never touches vault startup or the broker', async () => {
-    const stderr = [];
+  test('managed prelaunch skips legacy vault materialisation and delegates boundary setup to the broker launcher', async () => {
+    const launches = [];
     const status = await launchNewSession({
       entry: { name: 'managed', tool: 'codex' },
       worktreePath: '/tmp/memoro-managed',
       localAuthMode: LOCAL_AUTH_MODES.MANAGED_PORTABLE,
-      stderr: { write: (value) => stderr.push(value) },
+      stderr: { write() {} },
       deps: {
         materialiseVaultBeforeLaunch: async () => assert.fail('must not touch vault startup'),
-        launchBrokerOwnedSession: async () => assert.fail('must not launch broker'),
+        launchBrokerOwnedSession: async (options) => {
+          launches.push(options);
+          return { code: 0 };
+        },
       },
     });
 
-    assert.equal(status, 1);
-    assert.match(stderr.join(''), /credential boundary is not certified/);
+    assert.equal(status, 0);
+    assert.equal(launches.length, 1);
+    assert.equal(launches[0].localAuthMode, LOCAL_AUTH_MODES.MANAGED_PORTABLE);
+    assert.equal(launches[0].tool, 'codex');
   });
 });

@@ -129,12 +129,12 @@ function launchCodexWithMocks({ request, attach, streams, sleepFn = async () => 
 }
 
 describe('launchBrokerOwnedSession', () => {
-  test('managed local auth fails before identity, config, repo, broker, or PTY work', async () => {
+  test('managed local auth rejects unsupported tools before identity, config, repo, broker, or PTY work', async () => {
     const streams = makeStreams();
     const fail = (surface) => async () => assert.fail(`must not access ${surface}`);
     const result = await launchBrokerOwnedSession({
       cwd: '/repo',
-      tool: 'codex',
+      tool: 'claude',
       localAuthMode: LOCAL_AUTH_MODES.MANAGED_PORTABLE,
       stdout: streams.stdout,
       stderr: streams.stderr,
@@ -156,10 +156,101 @@ describe('launchBrokerOwnedSession', () => {
     });
 
     assert.equal(result.code, 1);
-    assert.equal(result.reason, 'managed-portable-topology-unavailable');
-    assert.match(streams.err(), /credential boundary is not certified/);
+    assert.equal(result.reason, 'managed-portable-tool-unsupported');
+    assert.match(streams.err(), /supports Codex only/);
     assert.doesNotMatch(streams.err(), /memoro-token-canary/);
     assert.equal(streams.out(), '');
+  });
+
+  test('managed Codex launch sends only the verified descriptor and allowlisted provider env', async () => {
+    const streams = makeStreams();
+    const requests = [];
+    const descriptor = {
+      schema: 'mc-local-codex-credential-domain/v1',
+      provider_adapter: 'codex-managed-local-v1',
+      domain_path: '/credential/domain',
+      codex_home: '/credential/domain/home/.codex',
+      executor_root: '/executor/domain',
+    };
+    const forbidden = (surface) => () => assert.fail(`managed launch must not call ${surface}`);
+    const result = await launchBrokerOwnedSession({
+      cwd: '/repo',
+      codingSessionId: 'sess_managed_launch',
+      tool: 'codex',
+      localAuthMode: LOCAL_AUTH_MODES.MANAGED_PORTABLE,
+      attachAfterLaunch: false,
+      stdout: streams.stdout,
+      stderr: streams.stderr,
+      env: {
+        PATH: '/usr/bin:/bin',
+        TERM: 'xterm-256color',
+        MEMORO_TOKEN: 'memoro-token-canary',
+        OPENAI_API_KEY: 'openai-key-canary',
+        MC_VAULT_PASSPHRASE: 'vault-passphrase-canary',
+      },
+      request: async (message) => {
+        requests.push(message);
+        return { ok: true, session: { id: message.session.id } };
+      },
+      ensureBroker: async () => ({ ok: true, broker: { pid: 42 } }),
+      ensureCloudBroker: async () => ({ ok: true }),
+      deps: {
+        useSessionHost: false,
+        getRepoContext: async () => ({
+          remoteUrl: 'https://github.com/acme/widgets.git',
+          branch: 'main',
+          toplevel: '/repo',
+        }),
+        readConfig: async () => ({ apiUrl: 'https://memoro.test' }),
+        getApiUrl: () => null,
+        findEntry: () => ({}),
+        resolvePolicyForWrap: () => ({ permissions: { workspace: 'full' } }),
+        hostname: () => 'machine',
+        groundSession: async ({ sessionCapabilities }) => {
+          assert.equal(sessionCapabilities.github.state, 'unavailable');
+          return { ok: true, message: 'safe grounding' };
+        },
+        fetchGitHubSessionBootstrap: forbidden('GitHub bootstrap'),
+        registerGitHubSessionProjection: forbidden('GitHub registration'),
+        prepareGitHubSessionForLaunch: forbidden('GitHub child boundary'),
+        resolveDevPlan: forbidden('repo dev environment'),
+        prepareLocalResourceGuardEnv: forbidden('native local guard'),
+        prepareCloudflareGuardEnv: forbidden('native Cloudflare guard'),
+        prepareDevCommandGuardEnv: forbidden('native dev guard'),
+        prepareLocalCodexCredentialDomain: async ({ portal }) => {
+          assert.equal(portal.token, 'memoro-token-canary');
+          return {
+            ok: true,
+            descriptor,
+            env: {
+              PATH: '/managed/bin',
+              HOME: '/credential/domain/home',
+              CODEX_HOME: '/credential/domain/home/.codex',
+              TMPDIR: '/credential/domain/tmp',
+              TERM: 'xterm-256color',
+            },
+          };
+        },
+        getPackageVersion: async () => '0.test',
+      },
+    });
+
+    assert.equal(result.code, 0, streams.err());
+    assert.equal(requests.length, 1);
+    const session = requests[0].session;
+    assert.deepEqual(session.credential_domain, descriptor);
+    assert.equal(session.launch_options.effectivePolicy, null);
+    assert.deepEqual(session.sidecars, { enabled: false });
+    assert.equal(session.env.CODEX_HOME, '/credential/domain/home/.codex');
+    assert.equal(session.env.MEMORO_TOKEN, undefined);
+    assert.equal(session.env.OPENAI_API_KEY, undefined);
+    assert.equal(session.env.MC_VAULT_PASSPHRASE, undefined);
+    assert.equal(session.env.MC_CODING_SESSION_ID, undefined);
+    const brokerRequest = JSON.stringify(requests[0]);
+    assert.doesNotMatch(
+      brokerRequest,
+      /memoro-token-canary|openai-key-canary|vault-passphrase-canary/,
+    );
   });
 
   test('classifies only the exact early Codex SQLite startup failure', () => {

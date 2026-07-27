@@ -1,24 +1,33 @@
 import {
   closeSync,
-  copyFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
   openSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { createServer } from 'node:net';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
+import {
+  compileManagedBoundaryProbe,
+  renderManagedCodexConfig,
+  validateBoundaryReport,
+} from '../../src/mc/credential-domain/local-codex.js';
+import { MANAGED_CODEX_PROFILE } from '../../src/mc/provider-adapters/codex-managed.js';
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(scriptDir, '..', '..');
-const childScript = join(scriptDir, 'credential-boundary-child.mjs');
-const probeTempBase = process.platform === 'win32' ? tmpdir() : '/tmp';
+const hostMcTarget = resolveHostMcTarget();
+const hostMcRoot = hostMcTarget?.entryPath
+  ? resolve(dirname(hostMcTarget.entryPath), '..')
+  : null;
+const probeTempBase = process.platform === 'win32' ? tmpdir() : homedir();
 const GENERATION_COUNT = 2;
 
 export async function runCredentialBoundaryProbe({
@@ -70,7 +79,6 @@ async function runGeneration({ generation, replacement, deps = {} }) {
     exists: deps.existsSync || existsSync,
     makeTemp: deps.mkdtempSync || mkdtempSync,
     makeDir: deps.mkdirSync || mkdirSync,
-    copyFile: deps.copyFileSync || copyFileSync,
     writeFile: deps.writeFileSync || writeFileSync,
     open: deps.openSync || openSync,
     close: deps.closeSync || closeSync,
@@ -78,11 +86,13 @@ async function runGeneration({ generation, replacement, deps = {} }) {
   };
   const tempRoot = fs.makeTemp(join(probeTempBase, 'mccb-'));
   const workspaceDir = join(tempRoot, 'workspace');
-  const isolatedChildScript = join(workspaceDir, 'credential-boundary-child.mjs');
+  const isolatedChild = join(workspaceDir, 'credential-boundary-child');
   const credentialDir = join(tempRoot, 'credential-domain');
   const canaryPath = join(credentialDir, 'canary');
   const socketPath = join(credentialDir, 'broker.sock');
   const codexHome = join(tempRoot, 'codex-home');
+  const executorHome = join(workspaceDir, '.executor-home');
+  const executorTmp = join(workspaceDir, '.executor-tmp');
   const canary = `mc_canary_${randomBytes(24).toString('hex')}`;
   let openCanaryFd = null;
   let server = null;
@@ -94,10 +104,24 @@ async function runGeneration({ generation, replacement, deps = {} }) {
     fs.makeDir(credentialDir, { recursive: true, mode: 0o700 });
     fs.makeDir(codexHome, { recursive: true, mode: 0o700 });
     fs.makeDir(workspaceDir, { recursive: true, mode: 0o700 });
-    fs.copyFile(childScript, isolatedChildScript);
+    fs.makeDir(executorHome, { recursive: true, mode: 0o700 });
+    fs.makeDir(executorTmp, { recursive: true, mode: 0o700 });
+    const compiled = (deps.compileBoundaryProbe || compileManagedBoundaryProbe)({
+      outputPath: isolatedChild,
+      deps: deps.compilerDeps || {},
+    });
+    if (!compiled?.ok) setupCode = 'boundary_probe_compile_failed';
     fs.writeFile(canaryPath, canary, { mode: 0o600 });
     openCanaryFd = fs.open(canaryPath, 'r');
-    writeManagedConfig({ codexHome, credentialDir });
+    writeManagedConfig({
+      codexHome,
+      credentialDir,
+      executorRoot: workspaceDir,
+      workspaceRoot: workspaceDir,
+      executorHome,
+      executorTmp,
+      forbiddenPaths: [homedir(), repoRoot, hostMcRoot].filter(Boolean),
+    });
 
     const baseEnv = {
       PATH: process.env.PATH || '/usr/bin:/bin',
@@ -107,10 +131,17 @@ async function runGeneration({ generation, replacement, deps = {} }) {
       MC_HOME: credentialDir,
       MC_BOUNDARY_CANARY: canary,
     };
-    const childArgs = [isolatedChildScript, canaryPath, socketPath, repoRoot];
+    const childArgs = [
+      isolatedChild,
+      canaryPath,
+      socketPath,
+      hostMcTarget?.binPath || '',
+      hostMcTarget?.nodePath || '',
+      hostMcTarget?.entryPath || '',
+    ];
     // Keep the negative control before sandbox setup: every generation must
     // prove that the canary would have been visible without containment.
-    negative = run(process.execPath, childArgs, baseEnv, { canary, deps });
+    negative = run(isolatedChild, childArgs.slice(1), baseEnv, { canary, deps });
 
     try {
       server = await listenCredentialSocket(socketPath, deps);
@@ -118,20 +149,20 @@ async function runGeneration({ generation, replacement, deps = {} }) {
       setupCode = 'credential_socket_bind_failed';
     }
 
-    if (server) {
+    if (server && compiled?.ok) {
       isolated = run('codex', [
         'sandbox',
         '--include-managed-config',
         '--permission-profile',
-        'mc-credential-boundary',
+        MANAGED_CODEX_PROFILE,
         '--cd',
         workspaceDir,
-        process.execPath,
-        ...childArgs,
+        isolatedChild,
+        ...childArgs.slice(1),
       ], {
         ...baseEnv,
         CODEX_HOME: codexHome,
-      }, { canary, deps });
+      }, { canary, cwd: workspaceDir, deps });
     }
   } finally {
     if (openCanaryFd !== null) {
@@ -143,16 +174,27 @@ async function runGeneration({ generation, replacement, deps = {} }) {
 
   const teardown = verifyTeardown({ tempRoot, credentialDir, socketPath, exists: fs.exists });
   const negativeControlDetected = negative.ok
-    && (negative.value?.file_readable === true || negative.value?.canary_in_environment === true);
-  const isolatedViolations = isolated.ok
-    ? Object.entries(isolated.value || {})
-      .filter(([, value]) => value === true)
+    && validateBoundaryReport(negative.value)
+    && negative.value.file_readable === true
+    && negative.value.canary_in_environment === true
+    && negative.value.vault_admin_via_bin_callable === true
+    && negative.value.vault_admin_via_node_callable === true;
+  const isolatedReportValid = isolated.ok && validateBoundaryReport(isolated.value);
+  const isolatedViolations = isolatedReportValid
+    ? Object.entries(isolated.value)
+      .filter(([key, value]) => key !== 'schema' && value !== false)
       .map(([key]) => key)
     : [setupCode === 'generation_ready' ? 'probe_execution_failed' : setupCode];
   const outputContainsCanary = negative.outputContainsCanary || isolated.outputContainsCanary;
+  const isolatedDiagnostic = isolated.ok
+    ? null
+    : sanitizeDiagnostic(`${isolated.stdout}\n${isolated.stderr}`, {
+        canary,
+        privatePaths: [tempRoot, credentialDir, socketPath, repoRoot],
+      });
   const pass = replacement.verified
     && negativeControlDetected
-    && isolated.ok
+    && isolatedReportValid
     && isolatedViolations.length === 0
     && !outputContainsCanary
     && teardown.removed;
@@ -167,31 +209,56 @@ async function runGeneration({ generation, replacement, deps = {} }) {
     },
     isolated_probe: isolated.value,
     isolated_violations: isolatedViolations,
+    isolated_status: isolated.status,
+    isolated_diagnostic: isolatedDiagnostic,
     output_contains_canary: outputContainsCanary,
     teardown,
     pass,
   };
 }
 
-function writeManagedConfig({ codexHome, credentialDir }) {
-  writeFileSync(join(codexHome, 'config.toml'), `
-approval_policy = "never"
-allow_login_shell = false
+function sanitizeDiagnostic(value, { canary = '', privatePaths = [] } = {}) {
+  let out = String(value || '');
+  for (const secret of [canary, ...privatePaths]) {
+    if (secret) out = out.split(secret).join('<redacted>');
+  }
+  return out.trim().slice(0, 4_000) || null;
+}
 
-[shell_environment_policy]
-inherit = "core"
-exclude = ["MC_BOUNDARY_CANARY", "*TOKEN*", "*SECRET*", "*KEY*"]
+function writeManagedConfig({
+  codexHome,
+  credentialDir,
+  executorRoot,
+  workspaceRoot,
+  executorHome,
+  executorTmp,
+  forbiddenPaths,
+}) {
+  writeFileSync(join(codexHome, 'config.toml'), renderManagedCodexConfig({
+    domainPath: credentialDir,
+    executorRoot,
+    workspaceRoot,
+    executorHome,
+    executorTmp,
+    safePath: process.env.PATH || '/usr/bin:/bin',
+    forbiddenPaths,
+  }), { mode: 0o600 });
+}
 
-[permissions.mc-credential-boundary]
-extends = ":workspace"
-
-[permissions.mc-credential-boundary.filesystem]
-"${tomlString(credentialDir)}" = "deny"
-"${tomlString(repoRoot)}" = "deny"
-
-[permissions.mc-credential-boundary.network]
-enabled = false
-`, { mode: 0o600 });
+function resolveHostMcTarget() {
+  for (const binPath of ['/opt/homebrew/bin/mc', '/usr/local/bin/mc']) {
+    try {
+      const nodePath = join(dirname(binPath), 'node');
+      if (existsSync(binPath) && existsSync(nodePath)) {
+        return {
+          binPath,
+          nodePath: realpathSync(nodePath),
+          entryPath: realpathSync(binPath),
+        };
+      }
+    } catch {}
+  }
+  return null;
 }
 
 function listenCredentialSocket(socketPath, deps = {}) {
@@ -259,10 +326,15 @@ function readCodexVersion() {
   return result.ok ? result.stdout.trim() || null : null;
 }
 
-function run(command, args, env, { parseJson = true, canary = '', deps = {} } = {}) {
+function run(command, args, env, {
+  parseJson = true,
+  canary = '',
+  cwd = repoRoot,
+  deps = {},
+} = {}) {
   const spawn = deps.spawnSync || spawnSync;
   const result = spawn(command, args, {
-    cwd: repoRoot,
+    cwd,
     env,
     encoding: 'utf8',
     timeout: 20_000,
@@ -286,10 +358,6 @@ function run(command, args, env, { parseJson = true, canary = '', deps = {} } = 
 
 function emptyRunResult() {
   return { ok: false, status: null, stdout: '', stderr: '', value: null, outputContainsCanary: false };
-}
-
-function tomlString(value) {
-  return String(value).replaceAll('\\', '\\\\').replaceAll('"', '\\"');
 }
 
 if (fileURLToPath(import.meta.url) === process.argv[1]) {

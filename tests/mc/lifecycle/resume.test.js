@@ -36,6 +36,9 @@ import {
 import * as claudeAdapter from '../../../src/adapters/claude-code.js';
 import * as codexAdapter from '../../../src/adapters/codex.js';
 import { LOCAL_AUTH_MODES } from '../../../src/mc/local-auth-mode.js';
+import { MANAGED_CODEX_PROVIDER_ID } from '../../../src/mc/provider-adapters/codex-managed.js';
+
+const MANAGED_GENERATION = '019dbb46-5772-4493-a627-f8ae48954a64';
 
 describe('mc resume <name>', () => {
   let repo;
@@ -88,11 +91,11 @@ describe('mc resume <name>', () => {
     assert.doesNotMatch(r.stdout + r.stderr, /Codex.*Resume session|Resume session/i);
   });
 
-  test('--managed-portable fails before registry, attach, vault, or launch work', async () => {
+  test('--managed-portable still validates the requested registry entry before launch', async () => {
     const stderr = [];
     const status = await runResume(['missing', '--managed-portable'], {
       stderr: { write: (value) => stderr.push(value) },
-      findEntry: () => assert.fail('must not inspect the registry'),
+      findEntry: () => null,
       attachLiveBrokerSession: async () => assert.fail('must not attach'),
       materialiseVaultBeforeLaunch: async () => assert.fail('must not touch vault startup'),
       launchResumeSession: async () => assert.fail('must not launch'),
@@ -100,7 +103,37 @@ describe('mc resume <name>', () => {
     });
 
     assert.equal(status, 1);
-    assert.match(stderr.join(''), /managed portable auth is unavailable/);
+    assert.match(stderr.join(''), /no such session "missing"/);
+  });
+
+  test('managed resume refuses a live native PTY without attach, custody, or relaunch', async () => {
+    const stderr = [];
+    const entry = {
+      name: 'native-live',
+      tool: 'codex',
+      worktree_path: '/tmp/native-live',
+      coding_session_id: 'sess_native_live',
+      tool_session_id: '019dbb46-5772-7493-a627-f8ae48954a64',
+      tool_session_source: 'codex',
+    };
+    const status = await runResume(['native-live', '--managed-portable'], {
+      stderr: { write: (value) => stderr.push(value) },
+      stdout: { write() {} },
+      stdin: {},
+      findEntry: () => entry,
+      findLiveBrokerSessionForEntry: async () => ({
+        id: 'sess_native_live',
+        session_state: 'live',
+        attachable: true,
+      }),
+      attachBrokerSession: async () => assert.fail('managed mode must not attach'),
+      materialiseVaultBeforeLaunch: async () => assert.fail('managed conflict must not open vault'),
+      launchResumeSession: async () => assert.fail('managed conflict must not resume'),
+      launchFreshSession: async () => assert.fail('managed conflict must not relaunch'),
+    });
+
+    assert.equal(status, 1);
+    assert.match(stderr.join(''), /managed portable launch conflicts/);
   });
 
   test('without a name --json lists all mc sessions across tools', () => {
@@ -1111,33 +1144,61 @@ describe('mc resume <name>', () => {
     assert.equal(launchCalls[0].sendStartupMessage, false);
   });
 
-  test('managed resume and fresh launch stop before vault or provider-session access', async () => {
-    const entry = {
+  test('managed resume and fresh launch skip legacy vault and local provider discovery', async () => {
+    const resumeEntry = {
       name: 'managed',
       tool: 'codex',
       worktree_path: '/tmp/memoro-managed',
+      tool_session_id: 'cx_provider_managed',
+      tool_session_source: 'codex',
+      tool_session_provider_adapter: MANAGED_CODEX_PROVIDER_ID,
+      tool_session_provider_generation: MANAGED_GENERATION,
     };
-    const makeDeps = () => ({
+    const launches = [];
+    const deps = {
       materialiseVaultBeforeLaunch: async () => assert.fail('must not touch vault startup'),
-      resolveToolSessionForResume: async () => assert.fail('must not inspect native tool auth'),
-      launchBrokerOwnedSession: async () => assert.fail('must not launch broker'),
-    });
+      resolveToolSessionForResume: async () => assert.fail('must not inspect local provider state'),
+      launchBrokerOwnedSession: async (options) => {
+        launches.push(options);
+        return { code: 0 };
+      },
+    };
 
     const resumeStatus = await launchResumeSession({
-      entry,
+      entry: resumeEntry,
       localAuthMode: LOCAL_AUTH_MODES.MANAGED_PORTABLE,
       stderr: { write() {} },
-      deps: makeDeps(),
+      deps,
     });
     const freshStatus = await launchFreshSession({
-      entry,
+      entry: {
+        name: 'managed-fresh',
+        tool: 'codex',
+        worktree_path: '/tmp/memoro-managed-fresh',
+      },
       localAuthMode: LOCAL_AUTH_MODES.MANAGED_PORTABLE,
       stderr: { write() {} },
-      deps: makeDeps(),
+      deps,
     });
 
-    assert.equal(resumeStatus, 1);
-    assert.equal(freshStatus, 1);
+    assert.equal(resumeStatus, 0);
+    assert.equal(freshStatus, 0);
+    assert.deepEqual(launches.map((options) => ({
+      mode: options.mode,
+      argv: options.argv,
+      auth: options.localAuthMode,
+    })), [
+      {
+        mode: 'resume',
+        argv: ['resume', 'cx_provider_managed'],
+        auth: LOCAL_AUTH_MODES.MANAGED_PORTABLE,
+      },
+      {
+        mode: 'new',
+        argv: [],
+        auth: LOCAL_AUTH_MODES.MANAGED_PORTABLE,
+      },
+    ]);
   });
 
   test('picker selections preserve managed mode for fresh and provider-native launches', async () => {
@@ -1183,6 +1244,8 @@ describe('mc resume <name>', () => {
       worktree_path: '/tmp/resume',
       tool_session_id: 'cx_provider_resume',
       tool_session_source: 'codex',
+      tool_session_provider_adapter: MANAGED_CODEX_PROVIDER_ID,
+      tool_session_provider_generation: MANAGED_GENERATION,
     }, {
       ...common,
       launchFreshSession: async () => assert.fail('provider choice must resume'),

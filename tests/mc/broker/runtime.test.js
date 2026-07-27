@@ -64,6 +64,8 @@ function makeRuntime(opts = {}) {
     env: { BASE: '1', MC_GROUNDING_TOOL: 'codex' },
     cwd: () => '/fallback',
     clock: () => now,
+    managedProviderResolver: opts.managedProviderResolver,
+    credentialDomainCloser: opts.credentialDomainCloser,
     sidecarFactory: (spec) => {
       const sidecar = {
         spec,
@@ -218,6 +220,158 @@ describe('BrokerRuntime', () => {
     assert.equal(fake.calls[0].options.env.NO_COLOR, undefined);
     assert.equal(fake.calls[0].options.env.CLICOLOR, undefined);
     assert.equal(fake.calls[0].options.env.COLORTERM, 'truecolor');
+  });
+
+  test('managed launch replaces broker env and closes its credential domain on exit', async () => {
+    const closed = [];
+    const descriptor = {
+      schema: 'mc-local-codex-credential-domain/v1',
+      domain_path: '/credential/domain',
+    };
+    const { runtime, fake } = makeRuntime({
+      managedProviderResolver: ({ launch, input }) => ({
+        ok: true,
+        launch: {
+          ...launch,
+          shortName: 'codex',
+          spec: {
+            bin: '/verified/codex',
+            args: () => ['--strict-config'],
+          },
+        },
+        environmentMode: 'replace',
+        env: {
+          PATH: '/usr/bin:/bin',
+          HOME: '/credential/home',
+          CODEX_HOME: '/credential/home/.codex',
+        },
+        descriptor: input.credential_domain,
+      }),
+      credentialDomainCloser: async (input) => {
+        closed.push(input);
+        return { ok: true, persisted: true };
+      },
+    });
+
+    const result = runtime.handle({
+      type: 'launch_session',
+      session: {
+        id: 'sess_managed',
+        tool: 'codex',
+        env: {
+          MEMORO_TOKEN: 'must-not-reach-child',
+          OPENAI_API_KEY: 'must-not-reach-child-either',
+        },
+        sidecars: { enabled: false },
+        credential_domain: descriptor,
+      },
+    });
+
+    assert.equal(result.ok, true);
+    const childEnv = fake.calls[0].options.env;
+    assert.equal(childEnv.BASE, undefined);
+    assert.equal(childEnv.MEMORO_TOKEN, undefined);
+    assert.equal(childEnv.OPENAI_API_KEY, undefined);
+    assert.equal(childEnv.CODEX_HOME, '/credential/home/.codex');
+    assert.equal(childEnv.MEMORO_MC_BROKER, '1');
+
+    fake.ptys[0].emitExit({ exitCode: 0, signal: null });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(closed, [{
+      descriptor,
+      portal: {
+        apiUrl: null,
+        token: null,
+      },
+    }]);
+  });
+
+  test('managed launch never reuses an existing native broker session', () => {
+    const { runtime } = makeRuntime({
+      managedProviderResolver: ({ launch, input }) => {
+        if (input.credential_domain) {
+          assert.fail('conflicting domain must not be opened by broker');
+        }
+        return {
+          ok: true,
+          launch,
+          environmentMode: 'inherit',
+          env: input.env || {},
+        };
+      },
+    });
+    assert.equal(runtime.handle({
+      type: 'launch_session',
+      session: { id: 'sess_existing', cwd: '/repo', tool: 'codex' },
+    }).ok, true);
+
+    const conflict = runtime.handle({
+      type: 'launch_session',
+      session: {
+        id: 'sess_managed_new',
+        cwd: '/repo',
+        tool: 'codex',
+        credential_domain: { schema: 'mc-local-codex-credential-domain/v1' },
+      },
+    });
+
+    assert.equal(conflict.ok, false);
+    assert.equal(conflict.reason, 'managed-provider-session-conflict');
+  });
+
+  test('managed removal waits for provider exit and confirmed credential cleanup', async () => {
+    const descriptor = {
+      schema: 'mc-local-codex-credential-domain/v1',
+      domain_path: '/credential/domain',
+    };
+    const closeCalls = [];
+    let finishClose;
+    const { runtime, fake } = makeRuntime({
+      managedProviderResolver: ({ launch, input }) => ({
+        ok: true,
+        launch,
+        environmentMode: 'replace',
+        env: {
+          PATH: '/usr/bin:/bin',
+          HOME: '/credential/home',
+          CODEX_HOME: '/credential/home/.codex',
+        },
+        descriptor: input.credential_domain,
+      }),
+      credentialDomainCloser: (input) => {
+        closeCalls.push(input);
+        return new Promise((resolve) => { finishClose = resolve; });
+      },
+    });
+    assert.equal(runtime.handle({
+      type: 'launch_session',
+      session: {
+        id: 'sess_managed_remove',
+        tool: 'codex',
+        credential_domain: descriptor,
+      },
+    }).ok, true);
+
+    const removing = runtime.handle({
+      type: 'remove_session',
+      id: 'sess_managed_remove',
+    });
+    assert.equal(typeof removing?.then, 'function');
+    assert.deepEqual(fake.ptys[0].kills, ['SIGTERM']);
+    assert.equal(closeCalls.length, 0, 'custody must not refresh before provider exit');
+
+    fake.ptys[0].emitExit({ exitCode: 0, signal: null });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(closeCalls.length, 1);
+    assert.equal(runtime.handle({ type: 'sessions' }).sessions.length, 1);
+
+    finishClose({ ok: true, persisted: true });
+    assert.deepEqual(await removing, {
+      ok: true,
+      removed: true,
+      credential_cleanup: 'confirmed',
+    });
+    assert.equal(runtime.handle({ type: 'sessions' }).sessions.length, 0);
   });
 
   test('list and status expose live broker sessions', () => {

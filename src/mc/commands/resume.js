@@ -51,6 +51,7 @@ import {
   requireLocalAuthMode,
   resolveLocalAuthMode,
 } from '../local-auth-mode.js';
+import { MANAGED_CODEX_PROVIDER_ID } from '../provider-adapters/codex-managed.js';
 
 export const TOOL_SUGAR = {
   '--claude': 'claude',
@@ -96,10 +97,13 @@ export async function run(rawArgv, deps = {}) {
   }
   entry = maybeObserveEntry(entry, deps);
   entry = await maybeBackfillToolSession(entry, {
+    localAuthMode,
     upsert: deps.upsertEntry || upsertEntry,
     deps,
   });
-  let firstLaunchInWorktree = !hasStoredToolSession(entry);
+  let firstLaunchInWorktree = localAuthMode === LOCAL_AUTH_MODES.MANAGED_PORTABLE
+    ? !hasManagedProviderToolSession(entry)
+    : !hasStoredToolSession(entry);
 
   const toolValidation = validateToolFlag(opts.tool);
   if (toolValidation.error) {
@@ -117,20 +121,30 @@ export async function run(rawArgv, deps = {}) {
     // A tool switch never reattaches the OLD tool's live local PTY — that
     // would silently reopen the previous provider instead of switching.
     if (!switchingTool) {
-      const attached = await attachLiveBrokerSession(entry, {
-        stdin,
-        stdout,
-        stderr,
-        request: deps.requestBroker || requestBroker,
-        attach: deps.attachBrokerSession || attachBrokerSession,
-        deps,
-      });
-      if (attached?.attached) {
-        markEntryOpened(entry, {
-          upsert: deps.upsertEntry || upsertEntry,
-          now: deps.now,
+      if (localAuthMode === LOCAL_AUTH_MODES.MANAGED_PORTABLE) {
+        const live = await (deps.findLiveBrokerSessionForEntry || findLiveBrokerSessionForEntry)(
+          entry, { request: deps.requestBroker || requestBroker, deps },
+        );
+        if (live) {
+          stderr.write('mc: managed portable launch conflicts with an existing local broker session; end it before retrying.\n');
+          return 1;
+        }
+      } else {
+        const attached = await attachLiveBrokerSession(entry, {
+          stdin,
+          stdout,
+          stderr,
+          request: deps.requestBroker || requestBroker,
+          attach: deps.attachBrokerSession || attachBrokerSession,
+          deps,
         });
-        return attached.code ?? 0;
+        if (attached?.attached) {
+          markEntryOpened(entry, {
+            upsert: deps.upsertEntry || upsertEntry,
+            now: deps.now,
+          });
+          return attached.code ?? 0;
+        }
       }
     } else {
       // A running TUI cannot switch tool in place: a live LOCAL PTY refuses
@@ -243,13 +257,15 @@ export async function launchResumeSession({
   }
 
   const launchTool = resolveToolInput(entry?.tool || DEFAULT_TOOL);
-  await materialiseVaultForLaunch({ entry, launchTool, stderr, deps });
+  await materialiseVaultForLaunch({ entry, launchTool, localAuthMode, stderr, deps });
 
-  const toolSession = await (deps.resolveToolSessionForResume || resolveToolSessionForResume)({
-    entry,
-    launchTool,
-    deps: deps.toolSessionDeps || deps,
-  });
+  const toolSession = localAuthMode === LOCAL_AUTH_MODES.MANAGED_PORTABLE
+    ? storedManagedToolSession(entry, launchTool)
+    : await (deps.resolveToolSessionForResume || resolveToolSessionForResume)({
+        entry,
+        launchTool,
+        deps: deps.toolSessionDeps || deps,
+      });
   if (!toolSession?.ok) {
     // No provider-native session to resume (e.g. the tool exited before any
     // message created a transcript). Under the contract, continuity is
@@ -295,6 +311,12 @@ export async function launchResumeSession({
         tool_session_id: toolSession.sessionId,
         tool_session_source: toolSession.source,
         tool_transcript_path: toolSession.transcriptPath || null,
+        ...(localAuthMode === LOCAL_AUTH_MODES.MANAGED_PORTABLE
+          ? {
+              tool_session_provider_adapter: entry.tool_session_provider_adapter,
+              tool_session_provider_generation: entry.tool_session_provider_generation,
+            }
+          : {}),
       };
       if (brokerSocketPath) patch.broker_socket_path = brokerSocketPath;
       if (hostKind) patch.host_kind = hostKind;
@@ -321,7 +343,7 @@ export async function launchFreshSession({
   }
 
   const launchTool = resolveToolInput(entry?.tool || DEFAULT_TOOL);
-  await materialiseVaultForLaunch({ entry, launchTool, stderr, deps });
+  await materialiseVaultForLaunch({ entry, launchTool, localAuthMode, stderr, deps });
 
   const launch = deps.launchBrokerOwnedSession || launchBrokerOwnedSession;
   const result = await launch({
@@ -359,9 +381,11 @@ export async function launchFreshSession({
 async function materialiseVaultForLaunch({
   entry,
   launchTool,
+  localAuthMode = LOCAL_AUTH_MODES.NATIVE,
   stderr = process.stderr,
   deps = {},
 } = {}) {
+  if (localAuthMode !== LOCAL_AUTH_MODES.NATIVE) return;
   const materialise = deps.materialiseVaultBeforeLaunch
     || (await import('../vault/startup.js')).materialiseVaultBeforeLaunch;
 
@@ -549,6 +573,10 @@ export async function resumeSelectedChoice(choice, {
 
   if (!choice) return 2;
   if (choice.type === 'active') {
+    if (localAuthMode === LOCAL_AUTH_MODES.MANAGED_PORTABLE) {
+      stderr.write('mc: managed portable launch cannot attach to an existing active session.\n');
+      return 1;
+    }
     const attached = await attachLive({
       name: choice.label || choice.name || null,
       coding_session_id: choice.coding_session_id || choice.id || null,
@@ -564,22 +592,38 @@ export async function resumeSelectedChoice(choice, {
     ...(hasInjectedPickerRuntime({ launch, freshLaunchOverride, attachLive, upsert }) ? { __injectedRuntime: true } : {}),
   };
   entry = await maybeBackfillToolSession(entry, {
+    localAuthMode,
     upsert,
     deps: backfillDeps,
   });
   const switchingTool = isToolSwitch(entry, resolvedTool);
-  const firstLaunchInWorktree = switchingTool || !hasStoredToolSession(entry);
+  const firstLaunchInWorktree = switchingTool || (
+    localAuthMode === LOCAL_AUTH_MODES.MANAGED_PORTABLE
+      ? !hasManagedProviderToolSession(entry)
+      : !hasStoredToolSession(entry)
+  );
   const freshLaunch = freshLaunchDependency({
     launchFreshSession: freshLaunchOverride,
   });
   if (!switchingTool && !opts.noLaunch && process.env.MC_TEST_MODE !== '1') {
-    const attached = await attachLive(entry, { stdin, stdout, stderr, deps });
-    if (attached?.attached) {
-      markEntryOpened(entry, {
-        upsert,
-        now: deps.now,
-      });
-      return attached.code ?? 0;
+    if (localAuthMode === LOCAL_AUTH_MODES.MANAGED_PORTABLE) {
+      const live = await (deps.findLiveBrokerSessionForEntry || findLiveBrokerSessionForEntry)(
+        entry,
+        { request: deps.requestBroker || requestBroker, deps },
+      );
+      if (live) {
+        stderr.write('mc: managed portable launch conflicts with an existing local broker session; end it before retrying.\n');
+        return 1;
+      }
+    } else {
+      const attached = await attachLive(entry, { stdin, stdout, stderr, deps });
+      if (attached?.attached) {
+        markEntryOpened(entry, {
+          upsert,
+          now: deps.now,
+        });
+        return attached.code ?? 0;
+      }
     }
   }
 
@@ -639,9 +683,11 @@ function markEntryOpened(entry, { upsert = upsertEntry, now = () => new Date().t
 }
 
 async function maybeBackfillToolSession(entry, {
+  localAuthMode = LOCAL_AUTH_MODES.NATIVE,
   upsert = upsertEntry,
   deps = {},
 } = {}) {
+  if (localAuthMode === LOCAL_AUTH_MODES.MANAGED_PORTABLE) return entry;
   if (!entry?.name || hasProviderToolSession(entry)) return entry;
   const hasInjectedResolver = hasInjectedToolSessionResolver(deps);
   if (process.env.MC_TEST_MODE === '1' && !hasInjectedResolver) return entry;
@@ -673,6 +719,43 @@ async function maybeBackfillToolSession(entry, {
   } catch {
     return { ...entry, ...patch };
   }
+}
+
+function storedManagedToolSession(entry, launchTool) {
+  const sessionId = nonEmpty(entry?.tool_session_id);
+  const providerAdapter = nonEmpty(entry?.tool_session_provider_adapter);
+  const providerGeneration = nonEmpty(entry?.tool_session_provider_generation);
+  if (!sessionId
+    || providerAdapter !== MANAGED_CODEX_PROVIDER_ID
+    || !isManagedGeneration(providerGeneration)) {
+    return {
+      ok: false,
+      reason: 'no-managed-provider-session-id',
+      source: launchTool?.shortName || entry?.tool || null,
+      sessionId: null,
+      transcriptPath: null,
+    };
+  }
+  return {
+    ok: true,
+    source: launchTool?.shortName || entry?.tool || null,
+    sessionId,
+    transcriptPath: null,
+    from: 'registry',
+  };
+}
+
+function hasManagedProviderToolSession(entry) {
+  return !!(
+    nonEmpty(entry?.tool_session_id)
+    && nonEmpty(entry?.tool_session_provider_adapter) === MANAGED_CODEX_PROVIDER_ID
+    && isManagedGeneration(nonEmpty(entry?.tool_session_provider_generation))
+  );
+}
+
+function isManagedGeneration(value) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+    .test(value || '');
 }
 
 export async function findLiveBrokerSessionForEntry(entry, {
@@ -884,6 +967,8 @@ function applyToolSwitch(entry, resolvedTool, { upsert = upsertEntry } = {}) {
     tool_session_id: null,
     tool_session_source: null,
     tool_transcript_path: null,
+    tool_session_provider_adapter: null,
+    tool_session_provider_generation: null,
   };
   const next = upsert(patch);
   return { ...entry, ...patch, ...(next || {}) };

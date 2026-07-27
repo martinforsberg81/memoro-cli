@@ -30,6 +30,8 @@ const DEFAULTS = {
   tool_session_id: null,
   tool_session_source: null,
   tool_transcript_path: null,
+  tool_session_provider_adapter: null,
+  tool_session_provider_generation: null,
 };
 
 export function readRegistry() {

@@ -533,6 +533,23 @@ cloud a peer.
 
 **Repos:** primarily `memoro-cli`, with narrow `memoro` identity/custody support.
 
+**Implementation record (2026-07-27):** the explicit local Codex
+`--managed-portable` path now has a per-session custody-backed credential
+domain and verified provider adapter. On macOS arm64 with the checksum-pinned
+official Codex 0.145.0 release, the
+real two-generation harness proves that model-directed commands cannot read the
+credential file, environment/parent canary, Memoro Keychain credential, full
+installed `mc vault` surface, credential socket, or external network, and that
+each generation is removed before replacement. Broker protocol v3 carries only
+a strict metadata descriptor and allowlisted environment; managed requests
+carry no Memoro/provider/vault credential or sidecar token. An exclusive local
+generation lease blocks replacement after crash, refresh failure, or
+unconfirmed cleanup. Native local paths remain unchanged. This completes the
+credential-domain/provider-adapter
+increment only; the complete S2 gate below remains open. Current managed
+limitations and evidence are recorded in
+[`mc-v2-local-codex-containment.md`](mc-v2-local-codex-containment.md).
+
 **Scope:**
 
 - preserve existing bare `mc`, `mc wrap`, and native `mc new/open/resume`

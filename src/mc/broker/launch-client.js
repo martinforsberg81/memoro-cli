@@ -45,6 +45,10 @@ import {
   LOCAL_AUTH_MODES,
   requireLocalAuthMode,
 } from '../local-auth-mode.js';
+import {
+  abortLocalCodexCredentialDomain,
+  prepareLocalCodexCredentialDomain,
+} from '../credential-domain/local-codex.js';
 
 const CLOUD_BROKER_START_TIMEOUT_MS = 10_000;
 const CODEX_SQLITE_STARTUP_WINDOW_MS = 20_000;
@@ -84,11 +88,17 @@ export async function launchBrokerOwnedSession({
       reason: authMode?.reason || 'local-auth-mode-unavailable',
     };
   }
+  const managedPortable = localAuthMode === LOCAL_AUTH_MODES.MANAGED_PORTABLE;
 
   const launch = resolveLaunch(tool);
   if (!launch.ok) {
     stderr.write(`mc: cannot launch "${tool}": ${launch.hint}\n`);
     return { code: 1 };
+  }
+  if (managedPortable && launch.id !== 'codex') {
+    const reason = 'managed-portable-tool-unsupported';
+    stderr.write('mc: managed portable auth currently supports Codex only\n');
+    return { code: 1, reason, error: reason };
   }
 
   const repoContext = await (deps.getRepoContext || getRepoContext)(cwd);
@@ -141,32 +151,34 @@ export async function launchBrokerOwnedSession({
   const repoRef = derivePublicRepoRef(repoContext);
   const paths = brokerSessionPaths(codingSessionId);
   let sessionCapabilities = unavailableGitHubSessionCapabilities();
-  try {
-    const connectionClient = deps.connectionClient || createConnectionClient({
-      identityBroker: createBoundIdentityBroker({
-        token,
-        apiUrl,
+  if (!managedPortable) {
+    try {
+      const connectionClient = deps.connectionClient || createConnectionClient({
+        identityBroker: createBoundIdentityBroker({
+          token,
+          apiUrl,
+          memoroFetch: deps.memoroFetch,
+        }),
         memoroFetch: deps.memoroFetch,
-      }),
-      memoroFetch: deps.memoroFetch,
-    });
-    const bootstrap = await (deps.fetchGitHubSessionBootstrap || fetchGitHubSessionBootstrap)({
-      connectionClient,
-      repository: repoRef,
-      memoroFetchImpl: deps.memoroFetch,
-    });
-    sessionCapabilities = bootstrap.capabilities;
-    if (bootstrap.source?.id && bootstrap.source?.kind) {
-      sourceIdentity = resolveSessionSourceIdentity({
-        sourceId: bootstrap.source.id,
-        sourceKind: bootstrap.source.kind,
-        cloudSessionId: sourceIdentity.cloud_session_id,
-        sourceName: sourceIdentity.source_name,
-        machineId,
       });
-    }
-  } catch {}
-  if (sessionCapabilities.github.state === 'ready') {
+      const bootstrap = await (deps.fetchGitHubSessionBootstrap || fetchGitHubSessionBootstrap)({
+        connectionClient,
+        repository: repoRef,
+        memoroFetchImpl: deps.memoroFetch,
+      });
+      sessionCapabilities = bootstrap.capabilities;
+      if (bootstrap.source?.id && bootstrap.source?.kind) {
+        sourceIdentity = resolveSessionSourceIdentity({
+          sourceId: bootstrap.source.id,
+          sourceKind: bootstrap.source.kind,
+          cloudSessionId: sourceIdentity.cloud_session_id,
+          sourceName: sourceIdentity.source_name,
+          machineId,
+        });
+      }
+    } catch {}
+  }
+  if (!managedPortable && sessionCapabilities.github.state === 'ready') {
     const registered = await (deps.registerGitHubSessionProjection || registerGitHubSessionProjection)({
       apiUrl,
       token,
@@ -213,12 +225,14 @@ export async function launchBrokerOwnedSession({
     }
   }
 
-  const devEnvironment = await resolveDevSessionEnvironment({
-    worktreePath: repoContext.toplevel,
-    globalConfig: config,
-    stderr,
-    resolvePlan: deps.resolveDevPlan || resolveDevPlan,
-  });
+  const devEnvironment = managedPortable
+    ? {}
+    : await resolveDevSessionEnvironment({
+        worktreePath: repoContext.toplevel,
+        globalConfig: config,
+        stderr,
+        resolvePlan: deps.resolveDevPlan || resolveDevPlan,
+      });
   let spawnEnv = {
     ...env,
     MEMORO_MC_PARENT: '1',
@@ -259,77 +273,105 @@ export async function launchBrokerOwnedSession({
   const attachSocketPath = sessionHost.socketPath || null;
 
   scrubRuntimeSecretsInPlace(spawnEnv);
-  try {
-    const { prepareLocalResourceGuardEnv } = await import('../local-resource-guard.js');
-    spawnEnv = (deps.prepareLocalResourceGuardEnv || prepareLocalResourceGuardEnv)({
-      baseEnv: spawnEnv,
-      config,
-      mcDir: mcHome(),
-      codingSessionId,
-    }).env;
-  } catch (err) {
-    stderr.write(`mc: failed to install local resource guard (${err.message}); refusing to launch\n`);
-    return { code: 1 };
-  }
-  if (launch.id === 'codex') {
+  if (!managedPortable) {
     try {
-      const { prepareCloudflareGuardEnv } = await import('../cloudflare-guard.js');
-      const {
-        readRepoLocalConfig,
-        readRepoPolicyConfig,
-        resolveEffectiveConfig,
-      } = await import('../config-model.js');
-      const repoPolicyConfig = (deps.readRepoPolicyConfig || readRepoPolicyConfig)({ cwd });
-      const repoLocalConfig = (deps.readRepoLocalConfig || readRepoLocalConfig)({ cwd });
-      const effectiveConfig = (deps.resolveEffectiveConfig || resolveEffectiveConfig)({
-        globalConfig: config,
-        repoPolicy: repoPolicyConfig.config,
-        localConfig: repoLocalConfig.config,
-        entry: registryEntry,
-        warnings: [
-          ...(repoPolicyConfig.warnings || []),
-          ...(repoLocalConfig.warnings || []),
-        ],
-      });
-      spawnEnv = (deps.prepareCloudflareGuardEnv || prepareCloudflareGuardEnv)({
+      const { prepareLocalResourceGuardEnv } = await import('../local-resource-guard.js');
+      spawnEnv = (deps.prepareLocalResourceGuardEnv || prepareLocalResourceGuardEnv)({
         baseEnv: spawnEnv,
+        config,
         mcDir: mcHome(),
         codingSessionId,
-        effectiveConfig,
       }).env;
     } catch (err) {
-      stderr.write(`mc: failed to install Codex Cloudflare guard (${err.message}); refusing to launch\n`);
+      stderr.write(`mc: failed to install local resource guard (${err.message}); refusing to launch\n`);
       return { code: 1 };
     }
-  }
-  try {
-    const { prepareDevCommandGuardEnv } = await import('../dev-command-guard.js');
-    spawnEnv = (deps.prepareDevCommandGuardEnv || prepareDevCommandGuardEnv)({
-      baseEnv: spawnEnv,
-      worktreePath: repoContext.toplevel,
-      mcDir: mcHome(),
-      codingSessionId,
-    }).env;
-  } catch (err) {
-    stderr.write(`mc: failed to install dev command guard (${err.message}); refusing to launch\n`);
-    return { code: 1 };
+    if (launch.id === 'codex') {
+      try {
+        const { prepareCloudflareGuardEnv } = await import('../cloudflare-guard.js');
+        const {
+          readRepoLocalConfig,
+          readRepoPolicyConfig,
+          resolveEffectiveConfig,
+        } = await import('../config-model.js');
+        const repoPolicyConfig = (deps.readRepoPolicyConfig || readRepoPolicyConfig)({ cwd });
+        const repoLocalConfig = (deps.readRepoLocalConfig || readRepoLocalConfig)({ cwd });
+        const effectiveConfig = (deps.resolveEffectiveConfig || resolveEffectiveConfig)({
+          globalConfig: config,
+          repoPolicy: repoPolicyConfig.config,
+          localConfig: repoLocalConfig.config,
+          entry: registryEntry,
+          warnings: [
+            ...(repoPolicyConfig.warnings || []),
+            ...(repoLocalConfig.warnings || []),
+          ],
+        });
+        spawnEnv = (deps.prepareCloudflareGuardEnv || prepareCloudflareGuardEnv)({
+          baseEnv: spawnEnv,
+          mcDir: mcHome(),
+          codingSessionId,
+          effectiveConfig,
+        }).env;
+      } catch (err) {
+        stderr.write(`mc: failed to install Codex Cloudflare guard (${err.message}); refusing to launch\n`);
+        return { code: 1 };
+      }
+    }
+    try {
+      const { prepareDevCommandGuardEnv } = await import('../dev-command-guard.js');
+      spawnEnv = (deps.prepareDevCommandGuardEnv || prepareDevCommandGuardEnv)({
+        baseEnv: spawnEnv,
+        worktreePath: repoContext.toplevel,
+        mcDir: mcHome(),
+        codingSessionId,
+      }).env;
+    } catch (err) {
+      stderr.write(`mc: failed to install dev command guard (${err.message}); refusing to launch\n`);
+      return { code: 1 };
+    }
   }
   const interactiveEnv = normalizeInteractivePtyEnv({
     baseEnv: spawnEnv,
     termName: env.TERM,
   });
   spawnEnv = interactiveEnv.env;
-  try {
-    const githubRuntime = await (deps.prepareGitHubSessionForLaunch || prepareGitHubSessionForLaunch)({
-      baseEnv: spawnEnv,
-      capabilities: sessionCapabilities,
-      sessionId: codingSessionId,
-      socketPath: paths.sockPath,
-    });
-    spawnEnv = githubRuntime.env;
-  } catch (err) {
-    stderr.write(`mc: failed to install GitHub session boundary (${err.message}); refusing to launch\n`);
-    return { code: 1 };
+  if (!managedPortable) {
+    try {
+      const githubRuntime = await (deps.prepareGitHubSessionForLaunch || prepareGitHubSessionForLaunch)({
+        baseEnv: spawnEnv,
+        capabilities: sessionCapabilities,
+        sessionId: codingSessionId,
+        socketPath: paths.sockPath,
+      });
+      spawnEnv = githubRuntime.env;
+    } catch (err) {
+      stderr.write(`mc: failed to install GitHub session boundary (${err.message}); refusing to launch\n`);
+      return { code: 1 };
+    }
+  }
+
+  let credentialDomain = null;
+  if (managedPortable) {
+    const prepareDomain = deps.prepareLocalCodexCredentialDomain
+      || prepareLocalCodexCredentialDomain;
+    credentialDomain = await prepareDomain({
+      codingSessionId,
+      cwd: repoContext.toplevel,
+      tool: launch.id,
+      portal: {
+        apiUrl,
+        token,
+        ...(deps.memoroFetch ? { memoroFetch: deps.memoroFetch } : {}),
+      },
+      env,
+      deps: deps.localCredentialDomainDeps || {},
+    }).catch(() => null);
+    if (!credentialDomain?.ok) {
+      const reason = credentialDomain?.reason || 'managed-portable-boundary-unavailable';
+      stderr.write('mc: managed portable Codex credential boundary is unavailable\n');
+      return { code: 1, reason, error: reason };
+    }
+    spawnEnv = credentialDomain.env;
   }
 
   const launchMessage = {
@@ -342,37 +384,47 @@ export async function launchBrokerOwnedSession({
       argv,
       launch_options: {
         startupMessage: groundingLaunchMessage,
-        effectivePolicy,
+        effectivePolicy: managedPortable ? null : effectivePolicy,
         ...(codexDeviceAuthBeforeLaunch ? { codexDeviceAuthBeforeLaunch } : {}),
       },
       cols: stdout.columns || 80,
       rows: stdout.rows || 24,
       term_name: interactiveEnv.termName,
       env: spawnEnv,
-      sidecars: {
-        codingSessionId,
-        label,
-        apiUrl,
-        token,
-        machineId,
-        ...sourceIdentity,
-        source: launch.spec.heartbeatSource,
-        repo: deriveRepoName(repoContext),
-        repoRef,
-        branch: repoContext.branch,
-        worktreeName: sessionName || null,
-        tool: launch.shortName,
-        toolSessionId: registryEntry.tool_session_id || null,
-        sockPath: paths.sockPath,
-        metaPath: paths.metaPath,
-        transcriptPath: registryEntry.tool_transcript_path || null,
-      },
+      sidecars: managedPortable
+        ? { enabled: false }
+        : {
+            codingSessionId,
+            label,
+            apiUrl,
+            token,
+            machineId,
+            ...sourceIdentity,
+            source: launch.spec.heartbeatSource,
+            repo: deriveRepoName(repoContext),
+            repoRef,
+            branch: repoContext.branch,
+            worktreeName: sessionName || null,
+            tool: launch.shortName,
+            toolSessionId: registryEntry.tool_session_id || null,
+            sockPath: paths.sockPath,
+            metaPath: paths.metaPath,
+            transcriptPath: registryEntry.tool_transcript_path || null,
+          },
+      ...(credentialDomain?.descriptor
+        ? { credential_domain: credentialDomain.descriptor }
+        : {}),
     },
   };
   const launchRes = await launchRequest(launchMessage)
     .catch((err) => ({ ok: false, error: err.message || String(err) }));
 
   if (!launchRes.ok) {
+    if (credentialDomain?.descriptor) {
+      (deps.abortLocalCodexCredentialDomain || abortLocalCodexCredentialDomain)({
+        descriptor: credentialDomain.descriptor,
+      });
+    }
     stderr.write(`mc: broker launch failed (${launchRes.error || launchRes.reason || 'unknown'})\n`);
     return { code: 1 };
   }
@@ -411,7 +463,7 @@ export async function launchBrokerOwnedSession({
     ...(attachSocketPath ? { socketPath: attachSocketPath } : {}),
   };
   let code = await attach(attachOptions);
-  if (launch.id === 'codex') {
+  if (launch.id === 'codex' && !managedPortable) {
     code = await retryCodexSqliteStartup({
       code,
       codingSessionId: effectiveCodingSessionId,
