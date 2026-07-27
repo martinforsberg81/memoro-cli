@@ -31,6 +31,7 @@ import { makeEntry, writeRegistry } from '../_helpers/registry-fixture.js';
 import { launchNewSession } from '../../../src/mc/commands/new.js';
 import * as claudeAdapter from '../../../src/adapters/claude-code.js';
 import * as codexAdapter from '../../../src/adapters/codex.js';
+import { LOCAL_AUTH_MODES } from '../../../src/mc/local-auth-mode.js';
 
 describe('mc new', () => {
   let repo;
@@ -57,6 +58,26 @@ describe('mc new', () => {
     });
     assert.notEqual(r.status, 0);
     assert.match(r.stderr + r.stdout, /invalid|name|character/i);
+  });
+
+  test('--managed-portable fails before first-run, branch, worktree, or registry mutation', () => {
+    const sentinel = join(repo.mcHome, '.setup-done-v1');
+    const beforeSentinel = readFileSync(sentinel, 'utf8');
+    const r = runMc(['new', 'managed-x', '--managed-portable', '--no-launch'], {
+      cwd: repo.dir,
+      env: {
+        MC_HOME: repo.mcHome,
+        MC_VAULT_STARTUP_DONE: '1',
+        MC_MANAGED_PORTABLE: '1',
+      },
+    });
+
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /managed portable auth is unavailable/);
+    assert.equal(git(repo.dir, 'branch --list sess/managed-x'), '');
+    assert.equal(existsSync(join(repo.mcHome, 'worktrees', 'repo', 'managed-x')), false);
+    assert.equal(existsSync(join(repo.mcHome, 'registry.json')), false);
+    assert.equal(readFileSync(sentinel, 'utf8'), beforeSentinel);
   });
 
   test('refuses to run outside a git repo', () => {
@@ -328,6 +349,7 @@ describe('mc new', () => {
     assert.equal(launchCalls[0].sessionName, 'codex-prelaunch');
     assert.equal(launchCalls[0].tool, 'codex');
     assert.equal(launchCalls[0].focus, 'build the first map');
+    assert.equal(launchCalls[0].localAuthMode, LOCAL_AUTH_MODES.NATIVE);
     assert.deepEqual(launchCalls[0].argv, []);
     assert.deepEqual(launchCalls[0].env, { PATH: '/bin', MC_GROUNDING_TOOL: 'claude-code' });
     assert.deepEqual(upserts, [{
@@ -335,5 +357,22 @@ describe('mc new', () => {
       coding_session_id: 'sess_new_codex',
       session_state: 'live',
     }]);
+  });
+
+  test('managed prelaunch never touches vault startup or the broker', async () => {
+    const stderr = [];
+    const status = await launchNewSession({
+      entry: { name: 'managed', tool: 'codex' },
+      worktreePath: '/tmp/memoro-managed',
+      localAuthMode: LOCAL_AUTH_MODES.MANAGED_PORTABLE,
+      stderr: { write: (value) => stderr.push(value) },
+      deps: {
+        materialiseVaultBeforeLaunch: async () => assert.fail('must not touch vault startup'),
+        launchBrokerOwnedSession: async () => assert.fail('must not launch broker'),
+      },
+    });
+
+    assert.equal(status, 1);
+    assert.match(stderr.join(''), /credential boundary is not certified/);
   });
 });

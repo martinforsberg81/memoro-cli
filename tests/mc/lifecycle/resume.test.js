@@ -35,6 +35,7 @@ import {
 } from '../../../src/mc/commands/resume.js';
 import * as claudeAdapter from '../../../src/adapters/claude-code.js';
 import * as codexAdapter from '../../../src/adapters/codex.js';
+import { LOCAL_AUTH_MODES } from '../../../src/mc/local-auth-mode.js';
 
 describe('mc resume <name>', () => {
   let repo;
@@ -85,6 +86,21 @@ describe('mc resume <name>', () => {
     assert.match(r.stdout, /codex/);
     assert.match(r.stdout, /mc resume <name>/);
     assert.doesNotMatch(r.stdout + r.stderr, /Codex.*Resume session|Resume session/i);
+  });
+
+  test('--managed-portable fails before registry, attach, vault, or launch work', async () => {
+    const stderr = [];
+    const status = await runResume(['missing', '--managed-portable'], {
+      stderr: { write: (value) => stderr.push(value) },
+      findEntry: () => assert.fail('must not inspect the registry'),
+      attachLiveBrokerSession: async () => assert.fail('must not attach'),
+      materialiseVaultBeforeLaunch: async () => assert.fail('must not touch vault startup'),
+      launchResumeSession: async () => assert.fail('must not launch'),
+      launchFreshSession: async () => assert.fail('must not launch'),
+    });
+
+    assert.equal(status, 1);
+    assert.match(stderr.join(''), /managed portable auth is unavailable/);
   });
 
   test('without a name --json lists all mc sessions across tools', () => {
@@ -990,6 +1006,8 @@ describe('mc resume <name>', () => {
   test('tool flags reject conflicts and unknown values', () => {
     assert.match(parseArgs(['r', '--tool', 'claude', '--codex']).error, /conflicting/);
     assert.match(parseArgs(['r', '--tool']).error, /requires a value/);
+    assert.equal(parseArgs(['r']).managedPortable, false);
+    assert.equal(parseArgs(['r', '--managed-portable']).managedPortable, true);
   });
 
   test('prelaunch uses the registry tool adapter and broker resume payload', async () => {
@@ -1044,6 +1062,7 @@ describe('mc resume <name>', () => {
     assert.equal(launchCalls[0].focus, 'identity cleanup');
     assert.deepEqual(launchCalls[0].argv, ['--resume', 'cl_provider_data']);
     assert.equal(launchCalls[0].sendStartupMessage, false);
+    assert.equal(launchCalls[0].localAuthMode, LOCAL_AUTH_MODES.NATIVE);
     assert.deepEqual(launchCalls[0].env, { PATH: '/bin', MC_GROUNDING_TOOL: 'codex' });
     assert.deepEqual(upserts, [{
       name: 'data',
@@ -1090,6 +1109,108 @@ describe('mc resume <name>', () => {
     assert.equal(launchCalls[0].tool, 'codex');
     assert.deepEqual(launchCalls[0].argv, ['resume', 'cx_provider_data']);
     assert.equal(launchCalls[0].sendStartupMessage, false);
+  });
+
+  test('managed resume and fresh launch stop before vault or provider-session access', async () => {
+    const entry = {
+      name: 'managed',
+      tool: 'codex',
+      worktree_path: '/tmp/memoro-managed',
+    };
+    const makeDeps = () => ({
+      materialiseVaultBeforeLaunch: async () => assert.fail('must not touch vault startup'),
+      resolveToolSessionForResume: async () => assert.fail('must not inspect native tool auth'),
+      launchBrokerOwnedSession: async () => assert.fail('must not launch broker'),
+    });
+
+    const resumeStatus = await launchResumeSession({
+      entry,
+      localAuthMode: LOCAL_AUTH_MODES.MANAGED_PORTABLE,
+      stderr: { write() {} },
+      deps: makeDeps(),
+    });
+    const freshStatus = await launchFreshSession({
+      entry,
+      localAuthMode: LOCAL_AUTH_MODES.MANAGED_PORTABLE,
+      stderr: { write() {} },
+      deps: makeDeps(),
+    });
+
+    assert.equal(resumeStatus, 1);
+    assert.equal(freshStatus, 1);
+  });
+
+  test('picker selections preserve managed mode for fresh and provider-native launches', async () => {
+    const managedGate = () => ({
+      ok: true,
+      mode: LOCAL_AUTH_MODES.MANAGED_PORTABLE,
+      state: 'test-ready',
+      portable: true,
+    });
+    const launched = [];
+    const common = {
+      opts: {},
+      apiArgv: ['--api-url', 'https://memoro.test'],
+      env: { PATH: '/bin' },
+      localAuthMode: LOCAL_AUTH_MODES.MANAGED_PORTABLE,
+      stdin: {},
+      stdout: { write() {} },
+      stderr: { write() {} },
+      attachLiveBrokerSession: async () => ({ attached: false }),
+      upsertEntry: (patch) => patch,
+      deps: {
+        requireLocalAuthMode: managedGate,
+      },
+    };
+
+    await resumeSelectedChoice({
+      type: 'local',
+      name: 'fresh',
+      tool: 'codex',
+      worktree_path: '/tmp/fresh',
+    }, {
+      ...common,
+      launchFreshSession: async (options) => {
+        launched.push({ kind: 'fresh', options });
+        return 0;
+      },
+      launchResumeSession: async () => assert.fail('fresh choice must not resume'),
+    });
+    await resumeSelectedChoice({
+      type: 'local',
+      name: 'resume',
+      tool: 'codex',
+      worktree_path: '/tmp/resume',
+      tool_session_id: 'cx_provider_resume',
+      tool_session_source: 'codex',
+    }, {
+      ...common,
+      launchFreshSession: async () => assert.fail('provider choice must resume'),
+      launchResumeSession: async (options) => {
+        launched.push({ kind: 'resume', options });
+        return 0;
+      },
+    });
+
+    assert.deepEqual(launched.map(({ kind, options }) => ({
+      kind,
+      localAuthMode: options.localAuthMode,
+      apiArgv: options.apiArgv,
+      env: options.env,
+    })), [
+      {
+        kind: 'fresh',
+        localAuthMode: LOCAL_AUTH_MODES.MANAGED_PORTABLE,
+        apiArgv: ['--api-url', 'https://memoro.test'],
+        env: { PATH: '/bin' },
+      },
+      {
+        kind: 'resume',
+        localAuthMode: LOCAL_AUTH_MODES.MANAGED_PORTABLE,
+        apiArgv: ['--api-url', 'https://memoro.test'],
+        env: { PATH: '/bin' },
+      },
+    ]);
   });
 
   test('prelaunch falls back to a fresh grounded launch when no provider session exists', async () => {

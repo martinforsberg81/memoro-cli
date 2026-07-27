@@ -7,6 +7,23 @@ prototype and the current local Codex launch paths. It is evidence for the S0
 topology decision, not an implementation authorization and not a claim that a
 current Codex session has portable managed authentication.
 
+## Compatibility constraint and current increment
+
+Existing local development must remain usable throughout S2. Bare `mc`,
+`mc wrap`, and ordinary `mc new/open/resume` therefore remain native,
+host-owned paths until a separately certified managed topology is ready.
+Existing Codex auth, local worktrees, registries, and provider-native session
+IDs are not migrated, replaced, deleted, or relabelled as portable.
+
+The first S2 compatibility increment adds only an explicit
+`--managed-portable` request to `mc new/open/resume`. It is default-off and
+currently returns `managed-portable-topology-unavailable` before first-run
+identity inspection, branch/worktree mutation, registry access, attach,
+vault/tool-auth startup, broker startup, or PTY launch. Repo config, stored
+session state, and inherited environment cannot enable it. There is no native
+fallback. The flag is a fail-closed integration seam, not a working or
+certified managed-auth path, and it is not projected to the server.
+
 ## Finding
 
 The current local Codex integration cannot provide the required credential

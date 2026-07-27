@@ -29,6 +29,11 @@ import { DEFAULT_TOOL, readConfig } from '../../lib/config.js';
 import { launchBrokerOwnedSession } from '../broker/launch-client.js';
 import { readRepoLocalConfig, readRepoPolicyConfig, resolveEffectiveConfig } from '../config-model.js';
 import { buildNewSessionLaunchIntent } from '../session-intent.js';
+import {
+  LOCAL_AUTH_MODES,
+  requireLocalAuthMode,
+  resolveLocalAuthMode,
+} from '../local-auth-mode.js';
 
 const FALLBACK_TOOL_SHORT = 'codex';
 
@@ -116,6 +121,13 @@ export async function run(rawArgv) {
   if (!NAME_RE.test(opts.name)) {
     console.error(`mc: invalid name "${opts.name}" — must match ${NAME_RE}`);
     return 2;
+  }
+
+  const localAuthMode = resolveLocalAuthMode({ managedPortable: opts.managedPortable });
+  const authMode = requireLocalAuthMode(localAuthMode);
+  if (!authMode.ok) {
+    console.error(`mc: ${authMode.error}`);
+    return 1;
   }
 
   // §11d: friendly first-run hint when both sentinel AND keychain
@@ -247,6 +259,7 @@ export async function run(rawArgv) {
     worktreePath: wt,
     focus: opts.task,
     apiArgv: argv,
+    localAuthMode,
   });
 }
 
@@ -256,9 +269,16 @@ export async function launchNewSession({
   focus = null,
   apiArgv = [],
   env = process.env,
+  localAuthMode = LOCAL_AUTH_MODES.NATIVE,
   stderr = process.stderr,
   deps = {},
 } = {}) {
+  const authMode = (deps.requireLocalAuthMode || requireLocalAuthMode)(localAuthMode);
+  if (!authMode?.ok) {
+    stderr.write(`mc: ${authMode?.error || 'local auth mode unavailable'}\n`);
+    return 1;
+  }
+
   const launchTool = entry?.tool ? resolveToolInput(entry.tool) : null;
   const materialise = deps.materialiseVaultBeforeLaunch
     || (await import('../vault/startup.js')).materialiseVaultBeforeLaunch;
@@ -285,6 +305,7 @@ export async function launchNewSession({
       launchTool,
       apiArgv,
       env,
+      localAuthMode,
     }),
     stderr,
     onLaunched: ({ codingSessionId, brokerSocketPath = null, hostKind = null }) => {
@@ -316,7 +337,15 @@ export const TOOL_SUGAR = {
 };
 
 function parseArgs(argv) {
-  const opts = { name: null, task: null, from: null, tool: null, noLaunch: false, json: false };
+  const opts = {
+    name: null,
+    task: null,
+    from: null,
+    tool: null,
+    noLaunch: false,
+    json: false,
+    managedPortable: false,
+  };
   const positionals = [];
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -333,6 +362,7 @@ function parseArgs(argv) {
     }
     if (a === '--no-launch') { opts.noLaunch = true; continue; }
     if (a === '--json') { opts.json = true; continue; }
+    if (a === '--managed-portable') { opts.managedPortable = true; continue; }
     if (a.startsWith('--')) { return { error: `unknown flag: ${a}` }; }
     positionals.push(a);
   }
@@ -346,5 +376,5 @@ function parseArgs(argv) {
 }
 
 function printUsage() {
-  console.error('Usage: mc new <name> [<task>] [--from <ref>] [--tool claude|codex|gemini | --claude | --codex] [--no-launch] [--json]');
+  console.error('Usage: mc new <name> [<task>] [--from <ref>] [--tool claude|codex|gemini | --claude | --codex] [--managed-portable] [--no-launch] [--json]');
 }

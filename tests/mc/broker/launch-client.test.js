@@ -11,6 +11,7 @@ import {
   registerGitHubSessionProjection,
 } from '../../../src/mc/broker/launch-client.js';
 import { BROKER_PROTOCOL_VERSION } from '../../../src/mc/broker/daemon.js';
+import { LOCAL_AUTH_MODES } from '../../../src/mc/local-auth-mode.js';
 
 function makeStreams() {
   let out = '';
@@ -128,6 +129,39 @@ function launchCodexWithMocks({ request, attach, streams, sleepFn = async () => 
 }
 
 describe('launchBrokerOwnedSession', () => {
+  test('managed local auth fails before identity, config, repo, broker, or PTY work', async () => {
+    const streams = makeStreams();
+    const fail = (surface) => async () => assert.fail(`must not access ${surface}`);
+    const result = await launchBrokerOwnedSession({
+      cwd: '/repo',
+      tool: 'codex',
+      localAuthMode: LOCAL_AUTH_MODES.MANAGED_PORTABLE,
+      stdout: streams.stdout,
+      stderr: streams.stderr,
+      env: {
+        MEMORO_TOKEN: 'memoro-token-canary',
+        MC_VAULT_STARTUP_DONE: '1',
+      },
+      ensureBroker: fail('broker'),
+      ensureCloudBroker: fail('cloud broker'),
+      request: fail('broker request'),
+      attach: fail('PTY attach'),
+      deps: {
+        getRepoContext: fail('repo'),
+        readConfig: fail('config'),
+        resolveBootstrapIdentity: fail('device identity'),
+        getSecret: fail('keychain'),
+        fetchGitHubSessionBootstrap: fail('GitHub bootstrap'),
+      },
+    });
+
+    assert.equal(result.code, 1);
+    assert.equal(result.reason, 'managed-portable-topology-unavailable');
+    assert.match(streams.err(), /credential boundary is not certified/);
+    assert.doesNotMatch(streams.err(), /memoro-token-canary/);
+    assert.equal(streams.out(), '');
+  });
+
   test('classifies only the exact early Codex SQLite startup failure', () => {
     assert.equal(isRetryableCodexSqliteStartupFailure({
       output: CODEX_SQLITE_LOCK_OUTPUT,

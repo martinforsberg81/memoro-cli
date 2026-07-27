@@ -1,5 +1,6 @@
 import { DEFAULT_TOOL } from '../lib/config.js';
 import { resolveEffectivePolicy } from './policy.js';
+import { LOCAL_AUTH_MODES } from './local-auth-mode.js';
 
 export const MC_SESSION_LAUNCH_MODES = Object.freeze({
   NEW: 'new',
@@ -18,6 +19,7 @@ export function buildNewSessionLaunchIntent({
   codingSessionId = null,
   apiArgv = [],
   env = process.env,
+  localAuthMode = LOCAL_AUTH_MODES.NATIVE,
 } = {}) {
   return {
     mode: MC_SESSION_LAUNCH_MODES.NEW,
@@ -35,6 +37,7 @@ export function buildNewSessionLaunchIntent({
     apiArgv,
     sendStartupMessage: true,
     attachAfterLaunch: true,
+    localAuthMode,
     env,
   };
 }
@@ -45,6 +48,7 @@ export function buildResumeSessionLaunchIntent({
   resumeArgv = ['--resume'],
   apiArgv = [],
   env = process.env,
+  localAuthMode = LOCAL_AUTH_MODES.NATIVE,
 } = {}) {
   return {
     mode: MC_SESSION_LAUNCH_MODES.RESUME,
@@ -57,6 +61,7 @@ export function buildResumeSessionLaunchIntent({
     apiArgv,
     sendStartupMessage: false,
     attachAfterLaunch: true,
+    localAuthMode,
     env,
   };
 }
