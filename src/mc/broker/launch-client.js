@@ -41,6 +41,10 @@ import {
   createBoundIdentityBroker,
   resolveBootstrapIdentity,
 } from '../connections/identity.js';
+import {
+  LOCAL_AUTH_MODES,
+  requireLocalAuthMode,
+} from '../local-auth-mode.js';
 
 const CLOUD_BROKER_START_TIMEOUT_MS = 10_000;
 const CODEX_SQLITE_STARTUP_WINDOW_MS = 20_000;
@@ -65,10 +69,22 @@ export async function launchBrokerOwnedSession({
   stdout = process.stdout,
   stderr = process.stderr,
   env = process.env,
+  localAuthMode = LOCAL_AUTH_MODES.NATIVE,
   now = () => Date.now(),
   onLaunched = null,
   deps = {},
 } = {}) {
+  const authMode = (deps.requireLocalAuthMode || requireLocalAuthMode)(localAuthMode);
+  if (!authMode?.ok) {
+    const error = authMode?.error || 'local auth mode unavailable';
+    stderr.write(`mc: ${error}\n`);
+    return {
+      code: 1,
+      error,
+      reason: authMode?.reason || 'local-auth-mode-unavailable',
+    };
+  }
+
   const launch = resolveLaunch(tool);
   if (!launch.ok) {
     stderr.write(`mc: cannot launch "${tool}": ${launch.hint}\n`);

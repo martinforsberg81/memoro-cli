@@ -70,6 +70,10 @@ import {
 } from './mc/wrap-runtime.js';
 import { createDispatchSocketServer } from './mc/wrap-dispatch.js';
 import { createWrapWsHandlers } from './mc/wrap-ws.js';
+import {
+  requireLocalAuthMode,
+  resolveLocalAuthModeFromArgv,
+} from './mc/local-auth-mode.js';
 import { scheduleSessionUpload } from './mc/session-upload.js';
 import { writeToPty } from './mc/pty-write.js';
 import { requestBroker } from './mc/broker/client.js';
@@ -173,6 +177,16 @@ export async function main() {
   if (argv[0] === '--version' || argv[0] === '-v') {
     console.log(await packageVersion());
     return 0;
+  }
+
+  // The managed portable request must fail before fresh-install/device auth
+  // can inspect Keychain or any other credential-bearing state. Recognition
+  // is intentionally limited to new/open/resume; bare mc and wrap keep their
+  // native coding-tool argv unchanged.
+  const earlyAuthMode = requireLocalAuthMode(resolveLocalAuthModeFromArgv(argv));
+  if (!earlyAuthMode.ok) {
+    console.error(`mc: ${earlyAuthMode.error}`);
+    return 1;
   }
 
   // §14 — fresh-install path: when no Memoro token is stored AND the user

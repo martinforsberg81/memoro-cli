@@ -9,6 +9,7 @@ import {
   cloudPolicyForLaunch,
   MC_SESSION_LAUNCH_MODES,
 } from '../../src/mc/session-intent.js';
+import { LOCAL_AUTH_MODES } from '../../src/mc/local-auth-mode.js';
 
 describe('mc session launch intents', () => {
   test('new sessions use the normal broker launch shape with startup grounding enabled', () => {
@@ -30,6 +31,7 @@ describe('mc session launch intents', () => {
     assert.deepEqual(intent.apiArgv, ['--api-url', 'https://memoro.test']);
     assert.equal(intent.sendStartupMessage, true);
     assert.equal(intent.attachAfterLaunch, true);
+    assert.equal(intent.localAuthMode, LOCAL_AUTH_MODES.NATIVE);
     assert.deepEqual(intent.env, { PATH: '/bin' });
     // No bound id by default → launcher mints a fresh coding session.
     assert.equal(intent.codingSessionId, null);
@@ -67,6 +69,7 @@ describe('mc session launch intents', () => {
     assert.deepEqual(intent.argv, ['--resume']);
     assert.equal(intent.sendStartupMessage, false);
     assert.equal(intent.attachAfterLaunch, true);
+    assert.equal(intent.localAuthMode, LOCAL_AUTH_MODES.NATIVE);
   });
 
   test('resume sessions can carry adapter-native resume argv', () => {
@@ -83,6 +86,26 @@ describe('mc session launch intents', () => {
     assert.equal(intent.mode, MC_SESSION_LAUNCH_MODES.RESUME);
     assert.deepEqual(intent.argv, ['resume', 'cx_123']);
     assert.equal(intent.sendStartupMessage, false);
+  });
+
+  test('local intents carry an explicit managed request without changing cloud intents', () => {
+    const managedNew = buildNewSessionLaunchIntent({
+      entry: { name: 'data', tool: 'codex' },
+      worktreePath: '/repo-data',
+      localAuthMode: LOCAL_AUTH_MODES.MANAGED_PORTABLE,
+    });
+    const managedResume = buildResumeSessionLaunchIntent({
+      entry: { name: 'data', tool: 'codex', worktree_path: '/repo-data' },
+      localAuthMode: LOCAL_AUTH_MODES.MANAGED_PORTABLE,
+    });
+    const cloud = buildCloudSessionLaunchIntent({
+      cwd: '/workspace/repo',
+      cloud: { cloudSessionId: 'cld_123456', tool: 'codex' },
+    });
+
+    assert.equal(managedNew.localAuthMode, LOCAL_AUTH_MODES.MANAGED_PORTABLE);
+    assert.equal(managedResume.localAuthMode, LOCAL_AUTH_MODES.MANAGED_PORTABLE);
+    assert.equal(Object.hasOwn(cloud, 'localAuthMode'), false);
   });
 
   test('cloud sessions are headless broker launches with explicit source identity', () => {

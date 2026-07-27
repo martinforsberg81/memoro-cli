@@ -535,6 +535,10 @@ cloud a peer.
 
 **Scope:**
 
+- preserve existing bare `mc`, `mc wrap`, and native `mc new/open/resume`
+  behavior throughout delivery; build managed portable startup as a separate,
+  explicit, default-off path with no automatic credential migration, native
+  fallback, or portable readiness claim until its gate passes;
 - implement the approved S0 local topology and prove process, identity,
   namespace, mount, `/proc`, socket, IPC, and egress isolation;
 - add a per-session local credential-domain keypair, canonical authorization

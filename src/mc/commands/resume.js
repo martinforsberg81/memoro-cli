@@ -46,6 +46,11 @@ import {
   normalizeEntryTruth,
   staleDemotionHint,
 } from '../session-truth.js';
+import {
+  LOCAL_AUTH_MODES,
+  requireLocalAuthMode,
+  resolveLocalAuthMode,
+} from '../local-auth-mode.js';
 
 export const TOOL_SUGAR = {
   '--claude': 'claude',
@@ -64,6 +69,12 @@ export async function run(rawArgv, deps = {}) {
     stderr.write(`mc: ${opts.error}\n`);
     return 2;
   }
+  const localAuthMode = resolveLocalAuthMode({ managedPortable: opts.managedPortable });
+  const authMode = requireLocalAuthMode(localAuthMode);
+  if (!authMode.ok) {
+    stderr.write(`mc: ${authMode.error}\n`);
+    return 1;
+  }
   if (!opts.name) {
     return runResumePicker({
       opts,
@@ -73,6 +84,7 @@ export async function run(rawArgv, deps = {}) {
       stderr,
       emitDirectives,
       commandName,
+      localAuthMode,
       deps,
     });
   }
@@ -207,16 +219,29 @@ export async function run(rawArgv, deps = {}) {
   const launch = firstLaunchInWorktree
     ? freshLaunchDependency(deps)
     : (deps.launchResumeSession || launchResumeSession);
-  return launch({ entry, apiArgv: argv, stderr, env: process.env });
+  return launch({
+    entry,
+    apiArgv: argv,
+    stderr,
+    env: process.env,
+    localAuthMode,
+  });
 }
 
 export async function launchResumeSession({
   entry,
   apiArgv = [],
   env = process.env,
+  localAuthMode = LOCAL_AUTH_MODES.NATIVE,
   stderr = process.stderr,
   deps = {},
 } = {}) {
+  const authMode = (deps.requireLocalAuthMode || requireLocalAuthMode)(localAuthMode);
+  if (!authMode?.ok) {
+    stderr.write(`mc: ${authMode?.error || 'local auth mode unavailable'}\n`);
+    return 1;
+  }
+
   const launchTool = resolveToolInput(entry?.tool || DEFAULT_TOOL);
   await materialiseVaultForLaunch({ entry, launchTool, stderr, deps });
 
@@ -231,7 +256,14 @@ export async function launchResumeSession({
     // server-owned — a fresh grounded launch on the SAME coding session is
     // strictly better than a dead end, and it is announced, never silent.
     stderr.write(`mc: no ${launchTool?.shortName || 'provider'}-native session to resume for "${entry.name}" — starting a fresh grounded session on the same coding session.\n`);
-    return (deps.launchFreshSession || launchFreshSession)({ entry, apiArgv, env, stderr, deps });
+    return (deps.launchFreshSession || launchFreshSession)({
+      entry,
+      apiArgv,
+      env,
+      localAuthMode,
+      stderr,
+      deps,
+    });
   }
   const resumeArgv = buildNativeResumeArgv({
     entry,
@@ -251,6 +283,7 @@ export async function launchResumeSession({
       resumeArgv: resumeArgv.argv,
       apiArgv,
       env,
+      localAuthMode,
     }),
     stderr,
     onLaunched: ({ codingSessionId, brokerSocketPath = null, hostKind = null }) => {
@@ -277,9 +310,16 @@ export async function launchFreshSession({
   entry,
   apiArgv = [],
   env = process.env,
+  localAuthMode = LOCAL_AUTH_MODES.NATIVE,
   stderr = process.stderr,
   deps = {},
 } = {}) {
+  const authMode = (deps.requireLocalAuthMode || requireLocalAuthMode)(localAuthMode);
+  if (!authMode?.ok) {
+    stderr.write(`mc: ${authMode?.error || 'local auth mode unavailable'}\n`);
+    return 1;
+  }
+
   const launchTool = resolveToolInput(entry?.tool || DEFAULT_TOOL);
   await materialiseVaultForLaunch({ entry, launchTool, stderr, deps });
 
@@ -296,6 +336,7 @@ export async function launchFreshSession({
       codingSessionId: entry.coding_session_id || null,
       apiArgv,
       env,
+      localAuthMode,
     }),
     stderr,
     onLaunched: ({ codingSessionId, brokerSocketPath = null, hostKind = null }) => {
@@ -339,11 +380,18 @@ async function materialiseVaultForLaunch({
 }
 
 export function parseArgs(argv) {
-  const opts = { name: null, tool: null, noLaunch: false, json: false };
+  const opts = {
+    name: null,
+    tool: null,
+    noLaunch: false,
+    json: false,
+    managedPortable: false,
+  };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--no-launch') { opts.noLaunch = true; continue; }
     if (a === '--json') { opts.json = true; continue; }
+    if (a === '--managed-portable') { opts.managedPortable = true; continue; }
     if (a === '--tool') {
       const next = argv[++i];
       if (!next || next.startsWith('--')) return { error: '--tool requires a value' };
@@ -395,8 +443,15 @@ export async function runResumePicker({
   stderr = process.stderr,
   emitDirectives = false,
   commandName = 'resume',
+  localAuthMode = LOCAL_AUTH_MODES.NATIVE,
   deps = {},
 } = {}) {
+  const authMode = (deps.requireLocalAuthMode || requireLocalAuthMode)(localAuthMode);
+  if (!authMode?.ok) {
+    stderr.write(`mc: ${authMode?.error || 'local auth mode unavailable'}\n`);
+    return 1;
+  }
+
   const loadRegistry = deps.readRegistry || readRegistry;
   const fetchActive = deps.fetchActiveSessions || ((args) => fetchActiveCodingSessions({ argv: args }));
   const launch = deps.launchResumeSession || launchResumeSession;
@@ -455,6 +510,8 @@ export async function runResumePicker({
   }
   return resumeSelectedChoice(parsed.choice, {
     opts,
+    apiArgv: argv,
+    localAuthMode,
     emitDirectives,
     stdin,
     stdout,
@@ -470,6 +527,9 @@ export async function runResumePicker({
 
 export async function resumeSelectedChoice(choice, {
   opts = {},
+  apiArgv = [],
+  env = process.env,
+  localAuthMode = LOCAL_AUTH_MODES.NATIVE,
   emitDirectives = false,
   stdin = process.stdin,
   stdout = process.stdout,
@@ -481,6 +541,12 @@ export async function resumeSelectedChoice(choice, {
   resolvedTool = null,
   deps = {},
 } = {}) {
+  const authMode = (deps.requireLocalAuthMode || requireLocalAuthMode)(localAuthMode);
+  if (!authMode?.ok) {
+    stderr.write(`mc: ${authMode?.error || 'local auth mode unavailable'}\n`);
+    return 1;
+  }
+
   if (!choice) return 2;
   if (choice.type === 'active') {
     const attached = await attachLive({
@@ -539,7 +605,14 @@ export async function resumeSelectedChoice(choice, {
     emitCd(entry.worktree_path, { enabled: emitDirectives || undefined });
   }
   if (opts.noLaunch || process.env.MC_TEST_MODE === '1') return 0;
-  return firstLaunchInWorktree ? freshLaunch({ entry }) : launch({ entry });
+  const launchOptions = {
+    entry,
+    apiArgv,
+    env,
+    localAuthMode,
+    stderr,
+  };
+  return firstLaunchInWorktree ? freshLaunch(launchOptions) : launch(launchOptions);
 }
 
 function maybeObserveEntry(entry, deps = {}) {
