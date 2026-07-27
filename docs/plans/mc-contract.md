@@ -12,6 +12,9 @@ contract, not alongside it:
   design (envelope encryption, unlock, tool-auth adoption).
 - [`mc-v2-cloud.md`](mc-v2-cloud.md) — **V2**: cloud host parity via scoped,
   expiring DEK re-wrap grants.
+- [`mc-v2-workload-allowlist.md`](mc-v2-workload-allowlist.md) — the
+  fail-closed V2 workload transport contract; it is not a credential-runtime
+  launch approval.
 - [`connected-capabilities.md`](connected-capabilities.md) — the connection /
   identity / broker-grant foundation.
 - [`credential-blind-capabilities.md`](credential-blind-capabilities.md) — the
@@ -49,7 +52,7 @@ is trusted and what must never happen.
 | Party | Trust | Rule |
 |---|---|---|
 | **The model** (coding agent) | **Untrusted.** Assume adversarial / prompt-injectable. | A credential must **never** reach the model's context, the tools it drives, its argv, the environment or files it can read, logs, or transcripts. This is axiom 1. |
-| **The host** (local broker / cloud sandbox) | **Ephemerally semi-trusted.** | Holds materialised secrets briefly, in memory or protected paths the model cannot read; shredded at session end. Per-session, per-tenant isolation. |
+| **The host** (local broker / cloud sandbox) | **Ephemerally semi-trusted.** | Its credential domain may hold decrypted material briefly, but only behind an enforced principal/namespace/IPC boundary from model-directed execution. Per-session, per-tenant isolation. |
 | **Memoro control plane** (custody) | **Root of trust — and the highest-value target.** | Must be designed so that a breach yields ciphertext, not credentials (see §2). |
 | **Other users** | **Isolated.** | Strict per-user tenancy; no cross-user access or inference. |
 
@@ -57,6 +60,28 @@ is trusted and what must never happen.
 discloses usable credentials in bulk; one user reaches another's access; a host
 retains a credential past its session; an integration acts beyond what the user
 granted.
+
+### 1.1 LLM-domain boundary (normative)
+
+The **LLM domain** is the model and every surface it can inspect, write, invoke,
+or influence: its context and tool results; model-directed commands and child
+processes; files, mounts, environment, argv, stdin/stdout/stderr; process and
+socket inspection; PTY output; logs, errors, status, audit, transcripts,
+snapshots, and browser payloads; and any helper or endpoint it can repurpose as
+a credential proxy. No raw secret, login artifact, provider token, CRK, DEK,
+recovery material, or equivalent reusable authority may enter that domain.
+
+`mc vault`, custody administration, and credential-provider operations are a
+trusted subsystem outside the LLM domain. The model may receive only opaque
+session handles, bounded typed operations, and redacted results. Raw authority
+is never passed to a model-directed executor or arbitrary project code.
+
+File modes such as `0600`, read-block hooks, environment scrubbing, redaction,
+short lifetimes, and shredding are defence in depth only. They are not an
+isolation boundary where credential-owning and model-directed processes share a
+principal or readable namespace. A tool or integration that cannot preserve
+this boundary must fail closed and is unsupported for managed portable
+credential bootstrap.
 
 ---
 
@@ -66,10 +91,11 @@ Because mc custodies high-value credentials (your LLM-provider account auth,
 GitHub authority, raw API keys) for many developers across devices and cloud,
 these are binding:
 
-1. **Credential-blindness is absolute.** Secrets are materialised just-in-time
-   to a tool's expected path on the host and shredded at session end; they never
-   enter model-reachable surfaces. The GitHub App already proves this shape
-   (tokens never returned to the client); it generalises to every provider.
+1. **Credential-blindness is absolute.** Credentials are consumed only inside a
+   distinct trusted credential domain or by an immutable typed adapter. They are
+   never materialised into a coding tool, shell, generic environment, repo path,
+   or project code the model can direct. The GitHub App already proves this
+   shape (tokens never returned to the client); it generalises to every provider.
 2. **Revocable brokered authority before raw secrets.** Prefer holding authority
    that you or the provider can revoke without Memoro's cooperation (OAuth /
    installation grants) over storing the ultimate key. Raw-secret custody is
@@ -81,10 +107,10 @@ these are binding:
    even if compelled. Design: [`mc-custody.md`](mc-custody.md).
 4. **Scoped, expiring unlock for headless runs.** Invariant 3 would block a
    cloud session that runs while you are away. Resolution: you **pre-authorise**
-   a session with a **scoped, time-boxed unlock grant**. Memoro may decrypt only
-   for that session's scope and lifetime — never in bulk, never durably. The
-   root stays encrypted; a per-session envelope opens under an explicit,
-   expiring, audited, revocable authorisation you gave.
+   an exact session with a **scoped, time-boxed DEK re-wrap grant**. A trusted
+   user client unwraps only selected DEKs and encrypts them to the attested
+   session credential-domain public key. The control plane stores opaque grant
+   ciphertext but never receives an unwrapping key or a bulk-decryption root.
 5. **Short-lived, scoped grants per host/session.** The durable authority never
    leaves the control plane; hosts receive time-boxed use.
 6. **Everything is audited and revocable now.** Every credential use is logged.
@@ -105,13 +131,14 @@ session integrity) is therefore a foundational control, not a convenience.
 ## 4. Custody model (the one model)
 
 All integration and tool access is **account-owned custody + credential-blind
-JIT injection**. Two access forms sit on the same custody:
+typed consumption**. Two access forms sit on the same custody:
 
 - **Brokered operation** — OAuth-style providers (GitHub, and future ones). The
   control plane mints and executes; no token leaves it. Preferred form (§2.2).
-- **Injected secret** — raw keys and a coding tool's own auth (e.g. Claude's
-  `.credentials.json`). Fetched from custody, materialised JIT to the tool's
-  path, shredded at end.
+- **Custody-backed typed use** — raw keys and a coding tool's own auth remain
+  inside the credential/provider domain. They may be used only by a supported
+  isolated tool topology or immutable, policy-bound adapter; they are never
+  written to a model-visible tool path, environment, or project file.
 
 **The existing vault — already zero-knowledge and account-backed — is upgraded
 into this custody** (envelope hierarchy, per-device unlock, recovery, tool-auth
@@ -139,12 +166,13 @@ not a UX nicety:
 
 ## 6. Host parity — local ≡ cloud
 
-One execution contract. The local broker and the cloud sandbox both materialise
+One execution contract. The local broker and the cloud sandbox both reconcile
 the identity-anchored environment (tools + scoped grants + continuity) and run
 the session. A session started in CodingApp behaves as a local one. The cloud
-host must be **as trustworthy as local**: per-session/per-tenant isolation,
-egress control so a compromised session cannot exfiltrate, and verifiable image
-integrity. No implicit fallback to a device-local tool login.
+host must be **as trustworthy as local**: per-session/per-tenant isolation, a
+credential domain outside the model executor, egress control so a compromised
+session cannot exfiltrate, and verifiable image integrity. No implicit fallback
+to a device-local tool login.
 
 ---
 
@@ -170,8 +198,10 @@ host of the same runtime.
 - Sign-in loop: install `memoro-cli` → memoro.me → environment materialises.
 - **Account custody with envelope encryption (§2.3) — the foundation.** Every
   other V1 step materialises from here; build it first.
-- Tool bootstrap: required tools installed and **authenticated via custody**, so
-  a fresh device has a logged-in coding tool with no per-device login.
+- Tool bootstrap: required tools installed and, only when their supported
+  topology preserves §1.1, authenticated through an isolated custody-backed
+  provider domain. Unsupported tools fail closed rather than receiving a raw
+  login artifact.
 - Integrations reachable credential-blind: GitHub + the coding tool at minimum.
 - Consent gate (default-deny writes) and the §2 custody invariants in force.
 - Acceptance: on a second device, install + sign in and the same environment is

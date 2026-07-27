@@ -9,9 +9,13 @@ export function ensureCloudBrokerConnected({
   pidPath = brokerCloudPidPath(),
   logPath = brokerCloudLogPath(),
   sourceId = null,
+  machineId = null,
   sourceKind = null,
   sourceName = null,
   cloudSessionId = null,
+  codingSessionId = null,
+  runtimeGeneration = null,
+  authorizationDigest = null,
   readFile = readFileSync,
   writeFile = writeFileSync,
   removeFile = rmSync,
@@ -32,7 +36,17 @@ export function ensureCloudBrokerConnected({
     try { removeFile(pidPath, { force: true }); } catch {}
   }
 
-  const spawned = spawnConnector({ logPath, sourceId, sourceKind, sourceName, cloudSessionId });
+  const spawned = spawnConnector({
+    logPath,
+    sourceId,
+    machineId,
+    sourceKind,
+    sourceName,
+    cloudSessionId,
+    codingSessionId,
+    runtimeGeneration,
+    authorizationDigest,
+  });
   if (!spawned.ok) return spawned;
   try {
     mkdirSync(dirname(pidPath), { recursive: true, mode: 0o700 });
@@ -56,9 +70,13 @@ export function spawnCloudBrokerConnector({
   logPath = brokerCloudLogPath(),
   mcBin = resolveMcBinPath(),
   sourceId = null,
+  machineId = null,
   sourceKind = null,
   sourceName = null,
   cloudSessionId = null,
+  codingSessionId = null,
+  runtimeGeneration = null,
+  authorizationDigest = null,
 } = {}) {
   try {
     mkdirSync(dirname(logPath), { recursive: true, mode: 0o700 });
@@ -66,9 +84,13 @@ export function spawnCloudBrokerConnector({
     const err = openSync(logPath, 'a');
     const child = spawn(process.execPath, [mcBin, ...brokerConnectArgs({
       sourceId,
+      machineId,
       sourceKind,
       sourceName,
       cloudSessionId,
+      codingSessionId,
+      runtimeGeneration,
+      authorizationDigest,
     })], {
       detached: true,
       stdio: ['ignore', out, err],
@@ -92,15 +114,25 @@ export function resolveMcBinPath(argv = process.argv) {
 
 export function brokerConnectArgs({
   sourceId = null,
+  machineId = null,
   sourceKind = null,
   sourceName = null,
   cloudSessionId = null,
+  codingSessionId = null,
+  cloudRuntime = false,
+  runtimeGeneration = null,
+  authorizationDigest = null,
 } = {}) {
   const args = ['broker', 'connect'];
+  if (cloudRuntime === true) args.push('--cloud-runtime');
+  addFlag(args, '--machine-id', machineId);
   addFlag(args, '--source-id', sourceId);
   addFlag(args, '--source-kind', sourceKind);
   addFlag(args, '--source-name', sourceName);
   addFlag(args, '--cloud-session-id', cloudSessionId);
+  addFlag(args, '--coding-session-id', codingSessionId);
+  addFlag(args, '--runtime-generation', runtimeGeneration);
+  addFlag(args, '--authorization-digest', authorizationDigest);
   return args;
 }
 

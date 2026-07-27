@@ -28,10 +28,15 @@ describe('mc broker parseArgs', () => {
       help: false,
       readyFile: null,
       once: false,
+      cloudRuntime: false,
       sourceId: null,
+      machineId: null,
       sourceKind: null,
       sourceName: null,
       cloudSessionId: null,
+      codingSessionId: null,
+      runtimeGeneration: null,
+      authorizationDigest: null,
       rawArgv: ['status', '--json'],
     });
   });
@@ -43,11 +48,12 @@ describe('mc broker parseArgs', () => {
     assert.equal(opts.readyFile, '/tmp/ready');
   });
 
-  test('parses cloud connect mode', () => {
-    const opts = parseArgs(['connect', '--once', '--json']);
+  test('parses cloud runtime broker mode', () => {
+    const opts = parseArgs(['connect', '--once', '--json', '--cloud-runtime']);
     assert.equal(opts.verb, 'connect');
     assert.equal(opts.once, true);
     assert.equal(opts.json, true);
+    assert.equal(opts.cloudRuntime, true);
   });
 
   test('parses cloud source identity flags', () => {
@@ -236,6 +242,7 @@ describe('mc broker command', () => {
       sourceKind: 'cloud',
       sourceName: 'Cloud runner',
       cloudSessionId: 'cld_123456',
+      codingSessionId: null,
     }, {
       request: async () => assert.fail('must not request directly'),
       spawnDaemon: () => assert.fail('must not spawn'),
@@ -305,17 +312,35 @@ describe('mc broker command', () => {
     }
   });
 
-  test('broker cloud auth prefers MEMORO_TOKEN env for sandbox runtimes', async () => {
+  test('broker cloud auth uses its dedicated broker token before the runtime token', async () => {
     let keychainRead = false;
     const auth = await __test__.resolveBrokerAuthToken({
-      env: { MEMORO_TOKEN: '  mem_runtime_token  ' },
+      env: {
+        MEMORO_TOKEN: '  mem_runtime_token  ',
+        MEMORO_BROKER_TOKEN: '  mem_broker_token  ',
+      },
       getSecretFn: async () => {
         keychainRead = true;
         return 'mem_keychain_token';
       },
     });
 
-    assert.deepEqual(auth, { token: 'mem_runtime_token', source: 'env' });
+    assert.deepEqual(auth, { token: 'mem_broker_token', source: 'broker_env' });
+    assert.equal(keychainRead, false);
+  });
+
+  test('cloud runtime broker auth fails closed instead of falling back to runtime or keychain tokens', async () => {
+    let keychainRead = false;
+    const auth = await __test__.resolveBrokerAuthToken({
+      env: { MEMORO_TOKEN: 'mem_runtime_token' },
+      requireBrokerToken: true,
+      getSecretFn: async () => {
+        keychainRead = true;
+        return 'mem_keychain_token';
+      },
+    });
+
+    assert.deepEqual(auth, { token: null, source: null });
     assert.equal(keychainRead, false);
   });
 

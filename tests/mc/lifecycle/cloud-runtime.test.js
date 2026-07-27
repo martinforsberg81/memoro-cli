@@ -9,9 +9,10 @@ import {
   CLOUD_RUNTIME_CONTRACT_VERSION,
   parseArgs,
   prepareWorkspace,
-  runCloudRuntimeWith,
+  runCloudRuntimeWith as runCloudRuntimeWithDefault,
   runProcessDefault,
   validateCloudRuntimeOptions,
+  verifyRuntimeRelease,
 } from '../../../src/mc/commands/cloud-runtime.js';
 import {
   captureCodingBinSnapshot,
@@ -39,12 +40,17 @@ function manifest(overrides = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'mc-cloud-runtime-'));
   return {
     contract_version: CLOUD_RUNTIME_CONTRACT_VERSION,
+    account_id: 'usr_runtime1',
     cloud_session_id: 'cld_runtime1',
     coding_session_id: 'sess_runtime1',
     source: {
       id: 'cloud:cld_runtime1',
       kind: 'cloud',
       name: 'Memoro Cloud',
+    },
+    authorization: {
+      runtime_generation: 'rtg_0123456789abcdef',
+      authorization_digest: 'a'.repeat(64),
     },
     launch: {
       name: 'cloud-runtime',
@@ -86,6 +92,23 @@ function manifest(overrides = {}) {
   };
 }
 
+function runtimeEnv(m, overrides = {}) {
+  return {
+    MC_CLOUD_RUNTIME_GENERATION: m.authorization.runtime_generation,
+    MC_CLOUD_AUTHORIZATION_DIGEST: m.authorization.authorization_digest,
+    ...overrides,
+  };
+}
+
+// Later lifecycle tests explicitly opt into a synthetic, approved release
+// gate. Production uses the default fail-closed gate.
+function runCloudRuntimeWith(opts, deps = {}) {
+  return runCloudRuntimeWithDefault(opts, {
+    ...deps,
+    verifyRuntimeRelease: deps.verifyRuntimeRelease || (async () => ({ ok: true })),
+  });
+}
+
 describe('mc cloud-runtime parseArgs', () => {
   test('parses run manifest fields', () => {
     const opts = parseArgs([
@@ -124,13 +147,30 @@ describe('mc cloud-runtime parseArgs', () => {
 });
 
 describe('mc cloud-runtime workspace', () => {
-  test('clones GitHub shorthand refs without putting the token in argv', async () => {
+  test('uses an isolated credential-free Git environment for a cloud clone', async () => {
     const calls = [];
     const m = manifest();
     const result = await prepareWorkspace(m, {
       env: {
         MC_CLOUD_GIT_TOKEN: 'ghp_private_secret',
-        MC_CLOUD_GIT_CREDENTIAL_SOURCE: 'runtime_env',
+        MC_CLOUD_GIT_SECRET_CAPABILITY: 'opaque-git-authority',
+        MC_GIT_CLONE_TOKEN: 'clone-secret',
+        GITHUB_TOKEN: 'github-secret',
+        GH_TOKEN: 'gh-secret',
+        GH_CONFIG_DIR: '/private/gh-config',
+        GIT_ASKPASS: '/private/askpass',
+        SSH_ASKPASS: '/private/ssh-askpass',
+        SSH_AUTH_SOCK: '/private/agent.sock',
+        GIT_SSH_COMMAND: 'ssh -F /private/ssh-config',
+        GIT_CONFIG_COUNT: '1',
+        GIT_CONFIG_KEY_0: 'credential.helper',
+        GIT_CONFIG_VALUE_0: '!steal-credentials',
+        GIT_TEMPLATE_DIR: '/private/templates',
+        GIT_PROXY_COMMAND: '/private/git-proxy',
+        HTTPS_PROXY: 'http://proxy.example',
+        NO_PROXY: 'localhost',
+        HOME: '/private/home-with-netrc',
+        XDG_CONFIG_HOME: '/private/xdg-git-config',
       },
       deps: {
         runProcess: async (cmd, args, options) => {
@@ -144,9 +184,21 @@ describe('mc cloud-runtime workspace', () => {
     assert.equal(result.cloned, true);
     assert.equal(calls.length, 1);
     assert.equal(calls[0].cmd, 'git');
-    assert.deepEqual(calls[0].args.slice(0, 10), [
+    assert.deepEqual(calls[0].args.slice(0, 22), [
       '-c',
-      'credential.helper=!f() { test "$1" = get || exit 0; echo username=x-access-token; echo password=$MC_CLOUD_GIT_TOKEN; }; f',
+      'credential.helper=',
+      '-c',
+      'core.hooksPath=/dev/null',
+      '-c',
+      'init.templateDir=',
+      '-c',
+      'http.proxy=',
+      '-c',
+      'http.sslVerify=true',
+      '-c',
+      'protocol.file.allow=never',
+      '-c',
+      'protocol.ext.allow=never',
       '-c',
       'protocol.version=2',
       'clone',
@@ -158,9 +210,66 @@ describe('mc cloud-runtime workspace', () => {
     ]);
     assert.deepEqual(calls[0].args.slice(-2), ['https://github.com/martinforsberg81/memoro.git', m.runtime.cwd]);
     assert.equal(JSON.stringify(calls[0].args).includes('ghp_private_secret'), false);
-    assert.equal(calls[0].options.env.MC_CLOUD_GIT_TOKEN, 'ghp_private_secret');
+    for (const name of [
+      'MC_CLOUD_GIT_TOKEN', 'MC_CLOUD_GIT_SECRET_CAPABILITY', 'MC_GIT_CLONE_TOKEN',
+      'GITHUB_TOKEN', 'GH_TOKEN',
+      'GH_CONFIG_DIR', 'GIT_ASKPASS', 'SSH_ASKPASS', 'SSH_AUTH_SOCK',
+      'GIT_SSH_COMMAND', 'GIT_CONFIG_COUNT', 'GIT_CONFIG_KEY_0',
+      'GIT_CONFIG_VALUE_0', 'GIT_TEMPLATE_DIR', 'GIT_PROXY_COMMAND',
+      'HTTPS_PROXY', 'NO_PROXY',
+    ]) {
+      assert.equal(calls[0].options.env[name], undefined, `${name} must not reach git`);
+    }
+    assert.equal(calls[0].options.env.GIT_CONFIG_NOSYSTEM, '1');
+    assert.equal(calls[0].options.env.GIT_CONFIG_GLOBAL, '/dev/null');
+    assert.equal(calls[0].options.env.HOME, '/dev/null');
+    assert.equal(calls[0].options.env.XDG_CONFIG_HOME, '/dev/null');
+    assert.equal(calls[0].options.env.GIT_TERMINAL_PROMPT, '0');
     assert.equal(calls[0].options.env.GIT_LFS_SKIP_SMUDGE, '1');
     assert.equal(calls[0].options.timeoutMs, 90_000);
+  });
+
+  test('fails a repository-required session with no usable clone target before side effects', async () => {
+    const base = manifest();
+    const m = manifest({
+      repo: {
+        ...base.repo,
+        ref: 'not a clone target',
+      },
+    });
+    const result = await prepareWorkspace(m, {
+      deps: {
+        existsSync: () => assert.fail('must not inspect or replace a workspace'),
+        runProcess: async () => assert.fail('must not initialize an empty workspace'),
+      },
+    });
+
+    assert.equal(result.ok, false);
+    assert.equal(result.code, 'repository_clone_target_missing');
+    assert.equal(result.initialized_empty, false);
+    assert.match(result.error, /valid clone target/);
+  });
+
+  test('rejects SSH and insecure HTTP clone targets before workspace side effects', async () => {
+    const base = manifest();
+    for (const ref of [
+      'git@github.com:martinforsberg81/memoro.git',
+      'http://github.com/martinforsberg81/memoro.git',
+      'https://token@github.com/martinforsberg81/memoro.git',
+      'https://github.com/martinforsberg81/memoro.git?token=secret',
+    ]) {
+      const m = manifest({ repo: { ...base.repo, ref } });
+      const result = await prepareWorkspace(m, {
+        deps: {
+          existsSync: () => assert.fail(`must not inspect workspace for ${ref}`),
+          runProcess: async () => assert.fail(`must not invoke git for ${ref}`),
+        },
+      });
+
+      assert.equal(result.ok, false, ref);
+      assert.equal(result.code, 'repository_clone_target_missing', ref);
+      assert.equal(result.initialized_empty, false, ref);
+    }
   });
 
   test('resolves the function-shaped cwd supplied by the CLI entrypoint', async () => {
@@ -293,6 +402,8 @@ describe('mc cloud-runtime coding bin snapshots', () => {
       token: 'mem_runtime_secret',
       cwd: m.runtime.cwd,
       paths: m.runtime.paths,
+      runtimeGeneration: m.authorization.runtime_generation,
+      authorizationDigest: m.authorization.authorization_digest,
       deps: {
         existsSync: (path) => path.endsWith('.mc-coding-bin-snapshot.json'),
         readFile: (path, enc) => {
@@ -305,6 +416,8 @@ describe('mc cloud-runtime coding bin snapshots', () => {
         fetchImpl: async (url, opts) => {
           assert.equal(url, m.coding_bin.latest_snapshot.payload.url);
           assert.equal(opts.headers.Authorization, 'Bearer mem_runtime_secret');
+          assert.equal(opts.headers['X-MC-Runtime-Generation'], m.authorization.runtime_generation);
+          assert.equal(opts.headers['X-MC-Authorization-Digest'], m.authorization.authorization_digest);
           return new Response(Buffer.from('archive bytes'), {
             status: 200,
             headers: { 'Content-Length': '13' },
@@ -365,6 +478,8 @@ describe('mc cloud-runtime coding bin snapshots', () => {
       token: 'mem_runtime_secret',
       cwd: m.runtime.cwd,
       paths: m.runtime.paths,
+      runtimeGeneration: m.authorization.runtime_generation,
+      authorizationDigest: m.authorization.authorization_digest,
       deps: {
         randomUUID: () => '12345678-1234-1234-1234-123456789abc',
         writeFile: (path, value) => { writes.push({ path, value: String(value) }); },
@@ -424,13 +539,306 @@ describe('mc cloud-runtime coding bin snapshots', () => {
     assert.equal(uploads[0].opts.headers['X-MC-Snapshot-File-Count'], '3');
     assert.equal(uploads[0].opts.headers['X-MC-Snapshot-Base-Ref'], 'main');
     assert.equal(uploads[0].opts.headers['X-MC-Snapshot-Head-Ref'], 'abc123');
+    assert.equal(uploads[0].opts.headers['X-MC-Runtime-Generation'], m.authorization.runtime_generation);
+    assert.equal(uploads[0].opts.headers['X-MC-Authorization-Digest'], m.authorization.authorization_digest);
   });
 });
 
 describe('mc cloud-runtime run', () => {
+  test('fails closed before every credential or runtime side effect without trusted release inputs', async () => {
+    const streams = io();
+    const m = manifest();
+    writeFileSync(m.runtime.paths.manifest, JSON.stringify(m), 'utf8');
+    const calls = [];
+    const code = await runCloudRuntimeWithDefault(parseArgs([
+      'run', '--cloud-session-id', m.cloud_session_id, '--manifest', m.runtime.paths.manifest, '--json',
+    ]), {
+      stdout: streams.stdout,
+      stderr: streams.stderr,
+      env: runtimeEnv(m, { MEMORO_TOKEN: 'mem_runtime_secret', MEMORO_BROKER_TOKEN: 'mem_broker_secret' }),
+      resolveRuntimeToken: async () => { calls.push('token'); return 'must-not-resolve'; },
+      getSecret: async () => { calls.push('secret'); return 'must-not-read'; },
+      reportRuntimeStatus: async () => { calls.push('status'); return { ok: true }; },
+      prepareWorkspace: async () => { calls.push('workspace'); return { ok: true }; },
+      hydrateToolAuth: async () => { calls.push('hydrate'); return { ok: true }; },
+      connectBroker: async () => { calls.push('broker'); return 0; },
+      runCloudSessionWith: async () => { calls.push('provider'); return 0; },
+    });
+
+    assert.equal(code, 1);
+    assert.deepEqual(calls, []);
+    const rendered = `${streams.out()}${streams.err()}`;
+    assert.match(rendered, /release verification blocked/);
+    assert.match(rendered, /platform_identity_unavailable/);
+    assert.equal(rendered.includes('mem_runtime_secret'), false);
+    assert.equal(rendered.includes('mem_broker_secret'), false);
+  });
+
+  test('maps a missing installed-byte verifier result to release_artifact_mismatch', async () => {
+    const result = await verifyRuntimeRelease({
+      manifest: manifest(),
+      runtimeAuthorization: {
+        runtimeGeneration: 'rtg_0123456789abcdef',
+        authorizationDigest: 'a'.repeat(64),
+      },
+      deps: {
+        loadTrustedReleaseInputs: async () => ({ release_trust_inputs: { opaque: true } }),
+        verifyReleaseTrust: async () => ({ ok: true, release_id: 'rel_1', release_epoch: 1, next_state: {} }),
+        verifyInstalledReleaseArtifacts: async () => ({ ok: false }),
+        commitTrustedReleaseState: async () => true,
+      },
+    });
+    assert.deepEqual(result, { ok: false, code: 'release_artifact_mismatch' });
+  });
+
+  test('builds release identity and nonce from the local manifest and supervisor authorization', async () => {
+    const m = manifest();
+    const calls = [];
+    const result = await verifyRuntimeRelease({
+      manifest: m,
+      runtimeAuthorization: {
+        runtimeGeneration: m.authorization.runtime_generation,
+        authorizationDigest: m.authorization.authorization_digest,
+      },
+      deps: {
+        now: () => Date.parse('2026-07-26T12:00:00Z'),
+        loadTrustedReleaseInputs: async (binding) => {
+          calls.push(['load', binding]);
+          return { release_trust_inputs: { now_ms: 0, expected_platform: {} } };
+        },
+        verifyReleaseTrust: async (input) => {
+          calls.push(['verify', input]);
+          assert.equal(input.now_ms, Date.parse('2026-07-26T12:00:00Z'));
+          assert.deepEqual(input.expected_platform, {
+            account_id: m.account_id,
+            cloud_session_id: m.cloud_session_id,
+            coding_session_id: m.coding_session_id,
+            runtime_generation: m.authorization.runtime_generation,
+            authorization_digest: m.authorization.authorization_digest,
+            nonce: m.authorization.authorization_digest,
+          });
+          return { ok: true, release_id: 'rel_1', release_epoch: 1, artifact_descriptor: {}, next_state: { release_epochs: { stable: 1 } } };
+        },
+        verifyInstalledReleaseArtifacts: async (input) => {
+          calls.push(['artifacts', input]);
+          return { ok: true };
+        },
+        commitTrustedReleaseState: async (input) => {
+          calls.push(['commit', input]);
+          assert.deepEqual(input, {
+            binding: {
+              account_id: m.account_id,
+              cloud_session_id: m.cloud_session_id,
+              coding_session_id: m.coding_session_id,
+              runtime_generation: m.authorization.runtime_generation,
+              authorization_digest: m.authorization.authorization_digest,
+              nonce: m.authorization.authorization_digest,
+            },
+            next_state: { release_epochs: { stable: 1 } },
+          });
+          return { ok: true };
+        },
+      },
+    });
+    assert.deepEqual(result, { ok: true, release_id: 'rel_1', release_epoch: 1 });
+    assert.deepEqual(calls.map(([name]) => name), ['load', 'verify', 'artifacts', 'commit']);
+  });
+
+  test('requires an atomic trusted watermark commit before token or runtime side effects', async () => {
+    const streams = io();
+    const m = manifest();
+    writeFileSync(m.runtime.paths.manifest, JSON.stringify(m), 'utf8');
+    const calls = [];
+    const code = await runCloudRuntimeWithDefault(parseArgs([
+      'run', '--cloud-session-id', m.cloud_session_id, '--manifest', m.runtime.paths.manifest,
+    ]), {
+      stdout: streams.stdout,
+      stderr: streams.stderr,
+      env: runtimeEnv(m, { MEMORO_TOKEN: 'mem_runtime_secret', MEMORO_BROKER_TOKEN: 'mem_broker_secret' }),
+      loadTrustedReleaseInputs: async () => ({ release_trust_inputs: {} }),
+      verifyReleaseTrust: async () => ({ ok: true, release_id: 'rel_1', release_epoch: 1, next_state: { release_epochs: { stable: 1 } } }),
+      verifyInstalledReleaseArtifacts: async () => ({ ok: true }),
+      resolveRuntimeToken: async () => { calls.push('token'); return 'must-not-resolve'; },
+      prepareWorkspace: async () => { calls.push('workspace'); return { ok: true }; },
+    });
+    assert.equal(code, 1);
+    assert.deepEqual(calls, []);
+    assert.match(streams.err(), /platform_identity_unavailable/);
+  });
+
+  test('maps rejected or throwing trusted watermark commits to the stable blocked code', async () => {
+    for (const commitTrustedReleaseState of [async () => false, async () => { throw new Error('commit canary'); }]) {
+      const result = await verifyRuntimeRelease({
+        manifest: manifest(),
+        runtimeAuthorization: { runtimeGeneration: 'rtg_0123456789abcdef', authorizationDigest: 'a'.repeat(64) },
+        deps: {
+          loadTrustedReleaseInputs: async () => ({ release_trust_inputs: {} }),
+          verifyReleaseTrust: async () => ({ ok: true, release_id: 'rel_1', release_epoch: 1, next_state: {} }),
+          verifyInstalledReleaseArtifacts: async () => ({ ok: true }),
+          commitTrustedReleaseState,
+        },
+      });
+      assert.deepEqual(result, { ok: false, code: 'platform_identity_unavailable' });
+    }
+  });
+
+  test('does not expose trusted-loader errors at the release gate', async () => {
+    const streams = io();
+    const m = manifest();
+    writeFileSync(m.runtime.paths.manifest, JSON.stringify(m), 'utf8');
+    const canary = 'Bearer mem_release_loader_canary_0123456789';
+    const code = await runCloudRuntimeWithDefault(parseArgs([
+      'run', '--cloud-session-id', m.cloud_session_id, '--manifest', m.runtime.paths.manifest, '--json',
+    ]), {
+      stdout: streams.stdout,
+      stderr: streams.stderr,
+      env: runtimeEnv(m),
+      loadTrustedReleaseInputs: async () => { throw new Error(canary); },
+    });
+    const rendered = `${streams.out()}${streams.err()}`;
+    assert.equal(code, 1);
+    assert.match(rendered, /platform_identity_unavailable/);
+    assert.equal(rendered.includes('loader_canary'), false);
+    assert.equal(rendered.includes('Bearer'), false);
+  });
+
+  test('rejects missing or unknown manifest contract before token or workspace side effects', async () => {
+    for (const contractVersion of [undefined, 'mc-cloud-runtime-v0']) {
+      const streams = io();
+      const m = manifest();
+      if (contractVersion === undefined) delete m.contract_version;
+      else m.contract_version = contractVersion;
+      writeFileSync(m.runtime.paths.manifest, JSON.stringify(m), 'utf8');
+      let keychainRead = false;
+      const code = await runCloudRuntimeWith(parseArgs([
+        'run', '--cloud-session-id', m.cloud_session_id, '--manifest', m.runtime.paths.manifest,
+      ]), {
+        stdout: streams.stdout,
+        stderr: streams.stderr,
+        env: runtimeEnv(m),
+        getSecret: async () => { keychainRead = true; return 'must-not-read'; },
+        runProcess: async () => assert.fail('must not prepare workspace for an invalid manifest contract'),
+        prepareWorkspace: async () => assert.fail('must not prepare workspace for an invalid manifest contract'),
+      });
+
+      assert.equal(code, 2);
+      assert.match(streams.err(), /unsupported manifest contract/);
+      assert.equal(keychainRead, false);
+    }
+  });
+
+  test('requires matching supervisor authorization metadata before token or workspace side effects', async () => {
+    const streams = io();
+    const m = manifest();
+    writeFileSync(m.runtime.paths.manifest, JSON.stringify(m), 'utf8');
+    let keychainRead = false;
+    const code = await runCloudRuntimeWith(parseArgs([
+      'run', '--cloud-session-id', m.cloud_session_id, '--manifest', m.runtime.paths.manifest,
+    ]), {
+      stdout: streams.stdout,
+      stderr: streams.stderr,
+      env: { MEMORO_TOKEN: 'mem_runtime_secret', MEMORO_BROKER_TOKEN: 'mem_broker_secret' },
+      getSecret: async () => { keychainRead = true; return 'must-not-read'; },
+      runProcess: async () => assert.fail('must not prepare workspace without supervisor authorization metadata'),
+      prepareWorkspace: async () => assert.fail('must not prepare workspace without supervisor authorization metadata'),
+      runCloudSessionWith: async () => assert.fail('must not launch without supervisor authorization metadata'),
+      connectBroker: async () => assert.fail('must not connect without supervisor authorization metadata'),
+    });
+
+    assert.equal(code, 2);
+    assert.match(streams.err(), /missing from supervisor environment/);
+    assert.equal(keychainRead, false);
+  });
+
+  test('rejects mismatched supervisor authorization metadata without leaking the digest', async () => {
+    const streams = io();
+    const m = manifest();
+    writeFileSync(m.runtime.paths.manifest, JSON.stringify(m), 'utf8');
+    const code = await runCloudRuntimeWith(parseArgs([
+      'run', '--cloud-session-id', m.cloud_session_id, '--manifest', m.runtime.paths.manifest, '--json',
+    ]), {
+      stdout: streams.stdout,
+      stderr: streams.stderr,
+      env: runtimeEnv(m, {
+        MEMORO_TOKEN: 'mem_runtime_secret',
+        MEMORO_BROKER_TOKEN: 'mem_broker_secret',
+        MC_CLOUD_AUTHORIZATION_DIGEST: 'b'.repeat(64),
+      }),
+      runProcess: async () => assert.fail('must not prepare workspace after authorization mismatch'),
+    });
+
+    const rendered = `${streams.out()}${streams.err()}`;
+    assert.equal(code, 2);
+    assert.match(rendered, /does not match supervisor environment/);
+    assert.equal(rendered.includes(m.authorization.authorization_digest), false);
+    assert.equal(rendered.includes('b'.repeat(64)), false);
+  });
+
+  test('runs the production Codex isolation preflight before workspace, provider, or broker spawn', async () => {
+    const streams = io();
+    const m = manifest();
+    writeFileSync(m.runtime.paths.manifest, JSON.stringify(m), 'utf8');
+    const reports = [];
+    const code = await runCloudRuntimeWith(parseArgs([
+      'run', '--cloud-session-id', m.cloud_session_id, '--manifest', m.runtime.paths.manifest,
+    ]), {
+      stdout: streams.stdout,
+      stderr: streams.stderr,
+      env: runtimeEnv(m, { MEMORO_TOKEN: 'mem_runtime_secret', MEMORO_BROKER_TOKEN: 'mem_broker_secret' }),
+      reportRuntimeStatus: async (report) => { reports.push(report); return { ok: true }; },
+      runProcess: async () => assert.fail('Codex isolation failure must stop before workspace process spawn'),
+      prepareWorkspace: async () => assert.fail('Codex isolation failure must stop before workspace preparation'),
+      runCloudSessionWith: async () => assert.fail('Codex isolation failure must stop before provider spawn'),
+      launchBrokerOwnedSession: async () => assert.fail('Codex isolation failure must stop before provider launch'),
+      connectBroker: async () => assert.fail('Codex isolation failure must stop before broker spawn'),
+    });
+
+    assert.equal(code, 1);
+    assert.match(streams.err(), /disabled until provider credentials are isolated/);
+    assert.ok(reports.some((entry) => entry.report?.error_code === 'cloud-codex-auth-isolation-unavailable'));
+    assert.equal(`${streams.out()}${streams.err()}`.includes(m.authorization.authorization_digest), false);
+  });
+
+  test('never reaches readiness for a repository-required manifest without a clone target', async () => {
+    const streams = io();
+    const m = manifest();
+    m.launch.tool = 'claude';
+    m.repo.ref = 'not a clone target';
+    writeFileSync(m.runtime.paths.manifest, JSON.stringify(m), 'utf8');
+    const reports = [];
+
+    const code = await runCloudRuntimeWith(parseArgs([
+      'run',
+      '--cloud-session-id',
+      m.cloud_session_id,
+      '--manifest',
+      m.runtime.paths.manifest,
+      '--json',
+    ]), {
+      stdout: streams.stdout,
+      stderr: streams.stderr,
+      env: runtimeEnv(m, { MEMORO_TOKEN: 'mem_runtime_secret', MEMORO_BROKER_TOKEN: 'mem_broker_secret' }),
+      reportRuntimeStatus: async (report) => { reports.push(report); return { ok: true }; },
+      runProcess: async () => assert.fail('must not initialize or clone a workspace'),
+      runCloudSessionWith: async () => assert.fail('must not launch a cloud session'),
+      connectBroker: async () => assert.fail('must not connect a broker'),
+    });
+
+    assert.equal(code, 1);
+    assert.match(streams.err(), /valid clone target/);
+    const failed = reports.map((entry) => entry.report || entry).find((report) => (
+      report.error_code === 'repository_clone_target_missing'
+    ));
+    assert.ok(failed);
+    assert.equal(failed.phase, 'failed');
+    assert.equal(failed.process_status, 'exited');
+    assert.equal(JSON.parse(readFileSync(m.runtime.paths.status, 'utf8')).phase, 'failed');
+  });
+
   test('fails explicitly when workspace preparation never settles', async () => {
     const streams = io();
     const m = manifest();
+    m.launch.tool = 'claude';
     writeFileSync(m.runtime.paths.manifest, JSON.stringify(m), 'utf8');
     const reports = [];
     const started = Date.now();
@@ -445,7 +853,7 @@ describe('mc cloud-runtime run', () => {
     ]), {
       stdout: streams.stdout,
       stderr: streams.stderr,
-      env: { MEMORO_TOKEN: 'mem_runtime_secret' },
+      env: runtimeEnv(m, { MEMORO_TOKEN: 'mem_runtime_secret', MEMORO_BROKER_TOKEN: 'mem_broker_secret' }),
       workspacePrepareTimeoutMs: 20,
       prepareWorkspace: async () => new Promise(() => {}),
       reportRuntimeStatus: async (report) => { reports.push(report); return { ok: true }; },
@@ -465,6 +873,7 @@ describe('mc cloud-runtime run', () => {
   test('prepares workspace, launches typed cloud-session, reports status, then connects broker', async () => {
     const streams = io();
     const m = manifest();
+    m.launch.tool = 'claude';
     writeFileSync(m.runtime.paths.manifest, JSON.stringify(m), 'utf8');
     const reports = [];
     const launchCalls = [];
@@ -483,12 +892,13 @@ describe('mc cloud-runtime run', () => {
     ]), {
       stdout: streams.stdout,
       stderr: streams.stderr,
-      env: {
+      env: runtimeEnv(m, {
         MEMORO_TOKEN: 'mem_runtime_secret',
+        MEMORO_BROKER_TOKEN: 'mem_broker_secret',
         MC_CLOUD_GIT_TOKEN: 'ghp_private_secret',
         MC_CODEX_API_KEY: 'sk_codex_private_secret',
         OPENAI_API_KEY: 'sk_product_secret',
-      },
+      }),
       now: () => '2026-07-13T12:00:00.000Z',
       reportRuntimeStatus: async (report) => { reports.push(report); return { ok: true }; },
       runProcess: async (cmd, args, options) => {
@@ -547,20 +957,35 @@ describe('mc cloud-runtime run', () => {
     assert.equal(gitCalls.length, 1);
     assert.equal(JSON.stringify(gitCalls[0].args).includes('ghp_private_secret'), false);
     assert.equal(launchCalls.length, 1);
-    assert.equal(launchCalls[0].deps.env.MEMORO_TOKEN, 'mem_runtime_secret');
+    assert.equal(launchCalls[0].deps.env.MEMORO_TOKEN, undefined);
+    assert.equal(launchCalls[0].deps.env.MEMORO_BROKER_TOKEN, undefined);
     assert.equal(launchCalls[0].deps.env.CODEX_HOME, '/tmp/mc-cloud-codex-home');
     assert.equal(launchCalls[0].deps.env.MC_CLOUD_GIT_TOKEN, undefined);
     assert.equal(launchCalls[0].deps.env.MC_CODEX_API_KEY, undefined);
     assert.equal(launchCalls[0].deps.env.OPENAI_API_KEY, undefined);
+    assert.equal(launchCalls[0].deps.env.MC_CLOUD_RUNTIME_GENERATION, undefined);
+    assert.equal(launchCalls[0].deps.env.MC_CLOUD_AUTHORIZATION_DIGEST, undefined);
     assert.equal(providerLaunches.length, 1);
     assert.equal(providerLaunches[0].attachAfterLaunch, false);
     assert.equal((await providerLaunches[0].ensureCloudBroker()).supervisor_managed, true);
     assert.equal(brokerCalls.length, 1);
+    assert.equal(brokerCalls[0].env.MEMORO_TOKEN, undefined);
+    assert.equal(brokerCalls[0].env.MEMORO_BROKER_TOKEN, 'mem_broker_secret');
+    assert.equal(brokerCalls[0].env.MC_CLOUD_RUNTIME_GENERATION, undefined);
+    assert.equal(brokerCalls[0].env.MC_CLOUD_AUTHORIZATION_DIGEST, undefined);
+    assert.equal(JSON.stringify(launchCalls[0].opts).includes('mem_runtime_secret'), false);
+    assert.equal(JSON.stringify(launchCalls[0].opts).includes('mem_broker_secret'), false);
     assert.equal(typeof brokerCalls[0].onConnected, 'function');
     assert.equal(persistWatchers.length, 1);
     assert.equal(persistWatchers[0].env.CODEX_HOME, '/tmp/mc-cloud-codex-home');
     assert.equal(brokerCalls[0].manifest.cloud_session_id, m.cloud_session_id);
     assert.ok(reports.length >= 4);
+    assert.ok(reports.every((entry) => entry.token === 'mem_runtime_secret'));
+    assert.ok(reports.every((entry) => entry.runtimeGeneration === m.authorization.runtime_generation));
+    assert.ok(reports.every((entry) => entry.authorizationDigest === m.authorization.authorization_digest));
+    assert.equal(reports.some((entry) => JSON.stringify(entry.report).includes('mem_runtime_secret')), false);
+    assert.equal(reports.some((entry) => JSON.stringify(entry.report).includes('mem_broker_secret')), false);
+    assert.equal(reports.some((entry) => JSON.stringify(entry.report).includes(m.authorization.authorization_digest)), false);
     assert.equal(reports.at(-1).cloudSessionId, m.cloud_session_id);
     const reportPayloads = reports.map((entry) => entry.report || entry);
     const readyReport = reportPayloads.find((report) => report.phase === 'ready' && report.runtime_state === 'ready');
@@ -579,8 +1004,10 @@ describe('mc cloud-runtime run', () => {
     const eventTypes = events.trim().split('\n').map((line) => JSON.parse(line).type);
     const rendered = JSON.stringify({ status, events, readiness });
     assert.equal(rendered.includes('mem_runtime_secret'), false);
+    assert.equal(rendered.includes('mem_broker_secret'), false);
     assert.equal(rendered.includes('ghp_private_secret'), false);
     assert.equal(rendered.includes('sk_product_secret'), false);
+    assert.equal(rendered.includes(m.authorization.authorization_digest), false);
     assert.equal(readiness.repo.cloned, true);
     assert.equal(readiness.git.ready, true);
     assert.equal(readiness.git_auth.ready, true);
@@ -604,6 +1031,7 @@ describe('mc cloud-runtime run', () => {
     const m = manifest();
     writeFileSync(m.runtime.paths.manifest, JSON.stringify(m), 'utf8');
     const reports = [];
+    let keychainRead = false;
 
     const code = await runCloudRuntimeWith(parseArgs([
       'run',
@@ -615,8 +1043,8 @@ describe('mc cloud-runtime run', () => {
     ]), {
       stdout: streams.stdout,
       stderr: streams.stderr,
-      env: {},
-      getSecret: async () => null,
+      env: runtimeEnv(m),
+      getSecret: async () => { keychainRead = true; return 'must-not-read'; },
       readConfig: async () => ({ apiUrl: 'https://meetmemoro.test' }),
       reportRuntimeStatus: async (report) => { reports.push(report); return { ok: true }; },
       runProcess: async () => assert.fail('must not prepare workspace without a runtime token'),
@@ -626,10 +1054,46 @@ describe('mc cloud-runtime run', () => {
 
     assert.equal(code, 1);
     assert.match(streams.err(), /runtime token missing/);
+    assert.equal(keychainRead, false);
     assert.equal(reports.length, 0);
     const status = JSON.parse(readFileSync(m.runtime.paths.status, 'utf8'));
     assert.equal(status.phase, 'failed');
     assert.equal(JSON.stringify(status).includes('runtime token missing'), true);
+  });
+
+  test('fails closed when the broker token is absent and never borrows the runtime token', async () => {
+    const streams = io();
+    const m = manifest();
+    writeFileSync(m.runtime.paths.manifest, JSON.stringify(m), 'utf8');
+    const reports = [];
+
+    const code = await runCloudRuntimeWith(parseArgs([
+      'run',
+      '--cloud-session-id',
+      m.cloud_session_id,
+      '--manifest',
+      m.runtime.paths.manifest,
+      '--json',
+    ]), {
+      stdout: streams.stdout,
+      stderr: streams.stderr,
+      env: runtimeEnv(m, { MEMORO_TOKEN: 'mem_runtime_secret' }),
+      reportRuntimeStatus: async (report) => { reports.push(report); return { ok: true }; },
+      runProcess: async () => assert.fail('must not prepare workspace without a broker token'),
+      runCloudSessionWith: async () => assert.fail('must not launch without a broker token'),
+      connectBroker: async () => assert.fail('must not connect with the runtime token'),
+    });
+
+    assert.equal(code, 1);
+    assert.match(streams.err(), /broker token missing/);
+    assert.ok(reports.length >= 2);
+    assert.ok(reports.every((entry) => entry.token === 'mem_runtime_secret'));
+    const status = JSON.parse(readFileSync(m.runtime.paths.status, 'utf8'));
+    const readiness = JSON.parse(readFileSync(m.runtime.paths.readiness, 'utf8'));
+    const rendered = JSON.stringify({ status, readiness, stdout: streams.out(), stderr: streams.err() });
+    assert.equal(status.error_code, 'broker_token_missing');
+    assert.equal(rendered.includes('mem_runtime_secret'), false);
+    assert.equal(rendered.includes('MEMORO_TOKEN'), false);
   });
 
   test('captures a coding bin snapshot and reports sleeping on runtime shutdown', async () => {
@@ -653,6 +1117,7 @@ describe('mc cloud-runtime run', () => {
         },
       },
     });
+    m.launch.tool = 'claude';
     writeFileSync(m.runtime.paths.manifest, JSON.stringify(m), 'utf8');
     const reports = [];
     const signalHandlers = {};
@@ -668,10 +1133,11 @@ describe('mc cloud-runtime run', () => {
     ]), {
       stdout: streams.stdout,
       stderr: streams.stderr,
-      env: {
+      env: runtimeEnv(m, {
         MEMORO_TOKEN: 'mem_runtime_secret',
+        MEMORO_BROKER_TOKEN: 'mem_broker_secret',
         MC_CLOUD_GIT_TOKEN: 'ghp_private_secret',
-      },
+      }),
       now: () => '2026-07-13T12:00:00.000Z',
       process: {
         once: (signal, handler) => { signalHandlers[signal] = handler; },

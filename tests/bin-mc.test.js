@@ -11,11 +11,69 @@ import {
   resolveStartupMessageForLaunch,
   shouldRefuseBareMcInPrimaryWorktree,
   resolveSessionIdentifier,
+  prepareModelPtyEnv,
 } from '../src/bin-mc.js';
 import { writeToPty } from '../src/mc/pty-write.js';
 
 // Strip ANSI escape sequences so we can match on visible text.
 const stripAnsi = (s) => s.replace(/\x1b\[[0-9;]*m/g, '');
+
+describe('prepareModelPtyEnv', () => {
+  test('does not pass raw credentials or ambient authorities into the model PTY', () => {
+    const spawnEnv = prepareModelPtyEnv({
+      baseEnv: {
+        MEMORO_TOKEN: 'memoro-secret',
+        MEMORO_BROKER_TOKEN: 'broker-secret',
+        MC_VAULT_PASSPHRASE: 'vault-secret',
+        MC_CLOUD_GIT_TOKEN: 'managed-git-secret',
+        MC_CLOUD_GIT_SECRET_CAPABILITY: 'managed-git-capability',
+        MC_SESSION_CAPABILITIES: '{"can_manage":true}',
+        MC_GITHUB_BROKER_SOCKET: '/private/tmp/mc-github.sock',
+        ANTHROPIC_API_KEY: 'anthropic-secret',
+        GEMINI_API_KEY: 'gemini-secret',
+        AWS_SECRET_ACCESS_KEY: 'aws-secret',
+        CLOUDFLARE_API_TOKEN: 'cloudflare-secret',
+        SSH_AUTH_SOCK: '/private/tmp/ssh-agent.sock',
+        GIT_ASKPASS: '/private/tmp/git-askpass',
+        PATH: '/usr/bin:/bin',
+        TERM: 'xterm-256color',
+        LANG: 'sv_SE.UTF-8',
+      },
+      codingSessionId: 'sess_safe_terminal',
+      runtimeLabel: 'native-wrap',
+      devEnvironment: {
+        DEV_SERVICE_PORT: '8787',
+        OPENAI_API_KEY: 'dev-injected-secret',
+      },
+    });
+
+    for (const name of [
+      'MEMORO_TOKEN',
+      'MEMORO_BROKER_TOKEN',
+      'MC_VAULT_PASSPHRASE',
+      'MC_CLOUD_GIT_TOKEN',
+      'MC_CLOUD_GIT_SECRET_CAPABILITY',
+      'ANTHROPIC_API_KEY',
+      'GEMINI_API_KEY',
+      'OPENAI_API_KEY',
+      'AWS_SECRET_ACCESS_KEY',
+      'CLOUDFLARE_API_TOKEN',
+      'SSH_AUTH_SOCK',
+      'GIT_ASKPASS',
+    ]) {
+      assert.equal(spawnEnv[name], undefined, `${name} reached the model PTY environment`);
+    }
+    assert.equal(spawnEnv.PATH, '/usr/bin:/bin');
+    assert.equal(spawnEnv.TERM, 'xterm-256color');
+    assert.equal(spawnEnv.LANG, 'sv_SE.UTF-8');
+    assert.equal(spawnEnv.DEV_SERVICE_PORT, '8787');
+    assert.equal(spawnEnv.MC_SESSION_CAPABILITIES, '{"can_manage":true}');
+    assert.equal(spawnEnv.MC_GITHUB_BROKER_SOCKET, '/private/tmp/mc-github.sock');
+    assert.equal(spawnEnv.MEMORO_MC_PARENT, '1');
+    assert.equal(spawnEnv.MC_CODING_SESSION_ID, 'sess_safe_terminal');
+    assert.equal(spawnEnv.MC_SESSION_NAME, 'native-wrap');
+  });
+});
 
 describe('ageSeconds', () => {
   test('returns null for missing / invalid input', () => {

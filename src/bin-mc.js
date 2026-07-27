@@ -78,6 +78,7 @@ import {
   requestForSession,
 } from './mc/broker/session-hosts.js';
 import { normalizeInteractivePtyEnv } from './mc/interactive-env.js';
+import { scrubRuntimeSecretsFromEnv } from './mc/runtime-secrets.js';
 import { renderIntro as renderSessionIntro } from './mc/session-intro.js';
 import { SessionProjectionTracker } from './mc/session-projector.js';
 import {
@@ -525,13 +526,16 @@ async function runWrap(argv, { label = null } = {}) {
     worktreePath: repoContext.toplevel,
     globalConfig: config,
   });
-  let spawnEnv = {
-    ...process.env,
-    MEMORO_MC_PARENT: '1',  // hooks see this and no-op their heartbeat-loop
-    MC_CODING_SESSION_ID: codingSessionId,
-    ...(runtimeLabel ? { MC_SESSION_NAME: runtimeLabel } : {}),
-    ...devEnvironment,
-  };
+  // The legacy local wrapper inherits the user's terminal environment. Scrub
+  // authority before every guard sees it, then once more before PTY spawn.
+  // This is native-only defence in depth, not a portable-auth or containment
+  // boundary for a coding tool running under the same local user.
+  let spawnEnv = prepareModelPtyEnv({
+    baseEnv: process.env,
+    codingSessionId,
+    runtimeLabel,
+    devEnvironment,
+  });
   try {
     const { prepareLocalResourceGuardEnv } = await import('./mc/local-resource-guard.js');
     spawnEnv = prepareLocalResourceGuardEnv({
@@ -591,7 +595,7 @@ async function runWrap(argv, { label = null } = {}) {
     baseEnv: spawnEnv,
     termName: process.env.TERM,
   });
-  spawnEnv = interactiveEnv.env;
+  spawnEnv = scrubRuntimeSecretsFromEnv(interactiveEnv.env);
 
   const runtimeStartedAt = Date.now();
   const uploadStartMs = runtimeStartedAt - 1000;
@@ -1222,6 +1226,31 @@ export function resolveStartupMessageForLaunch({
   if (delivery === 'argv-prompt' || delivery === 'launch-args') return null;
   if (delivery === 'deferred-pty') return groundingLaunchMessage || fallbackStartupMessage || null;
   return fallbackStartupMessage || null;
+}
+
+/**
+ * Build the environment for a locally wrapped coding-model PTY.
+ *
+ * The explicit scrub list is deliberately centralised in runtime-secrets so
+ * cloud and local launch paths cannot drift. This narrows accidental
+ * inheritance only; same-user local execution is not an isolation boundary.
+ */
+export function prepareModelPtyEnv({
+  baseEnv = process.env,
+  codingSessionId,
+  runtimeLabel = null,
+  devEnvironment = {},
+} = {}) {
+  const inherited = scrubRuntimeSecretsFromEnv({
+    ...(baseEnv || {}),
+    ...(devEnvironment || {}),
+  });
+  return {
+    ...inherited,
+    MEMORO_MC_PARENT: '1', // hooks see this and no-op their heartbeat-loop
+    MC_CODING_SESSION_ID: codingSessionId,
+    ...(runtimeLabel ? { MC_SESSION_NAME: runtimeLabel } : {}),
+  };
 }
 
 /**

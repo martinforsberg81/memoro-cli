@@ -7,8 +7,14 @@ import test, { describe } from 'node:test';
 
 import {
   CloudBrokerClient,
+  BOOTSTRAP_SUBPROTOCOL_PREFIX,
+  BROKER_SUBPROTOCOL,
+  CONTROL_PROTOCOL_VERSION,
+  MAX_BOOTSTRAP_TICKET_BYTES,
   appendToken,
   buildBrokerWsUrl,
+  buildCloudBrokerSubprotocols,
+  createCloudBootstrapTicketProvider,
   createAttachBridge,
   listLocalBrokerSessions,
   nextBackoff,
@@ -18,9 +24,10 @@ import {
 class FakeWebSocket extends EventEmitter {
   static instances = [];
 
-  constructor(url) {
+  constructor(url, protocols = undefined) {
     super();
     this.url = url;
+    this.protocols = protocols;
     this.sent = [];
     this.readyState = 0;
     FakeWebSocket.instances.push(this);
@@ -94,6 +101,17 @@ describe('cloud broker URL helpers', () => {
     assert.equal(url.searchParams.get('cloud_session_id'), 'cloud_sess_123');
   });
 
+  test('buildBrokerWsUrl carries the runtime authorization binding when present', () => {
+    const url = new URL(buildBrokerWsUrl('https://meetmemoro.test', {
+      token: 'tok',
+      runtimeGeneration: 'rtg_0123456789abcdef',
+      authorizationDigest: 'a'.repeat(64),
+    }));
+
+    assert.equal(url.searchParams.get('runtime_generation'), 'rtg_0123456789abcdef');
+    assert.equal(url.searchParams.get('authorization_digest'), 'a'.repeat(64));
+  });
+
   test('appendToken adds the broker-side attach token', () => {
     assert.equal(
       appendToken('wss://example.test/api/mc/pty/att_x/broker?x=1', 'tok'),
@@ -104,6 +122,57 @@ describe('cloud broker URL helpers', () => {
   test('nextBackoff doubles up to the cap', () => {
     assert.equal(nextBackoff(1_000), 2_000);
     assert.equal(nextBackoff(30_000), 30_000);
+  });
+
+  test('encodes a strict bootstrap ticket only in the WebSocket subprotocol offer', () => {
+    assert.deepEqual(buildCloudBrokerSubprotocols('abc_DEF-123'), [
+      BROKER_SUBPROTOCOL,
+      `${BOOTSTRAP_SUBPROTOCOL_PREFIX}abc_DEF-123`,
+    ]);
+    assert.throws(() => buildCloudBrokerSubprotocols('has=padding'), /invalid cloud broker bootstrap ticket/);
+    assert.throws(() => buildCloudBrokerSubprotocols('a'.repeat(MAX_BOOTSTRAP_TICKET_BYTES + 1)), /invalid cloud broker bootstrap ticket/);
+  });
+
+  test('requests a bootstrap ticket through Authorization-bound HTTP without serialising the broker token', async () => {
+    let call = null;
+    const provider = createCloudBootstrapTicketProvider({
+      apiUrl: 'https://memoro.test',
+      token: 'broker-secret',
+      machineId: 'machine',
+      codingSessionId: 'coding_123456',
+      sourceIdentity: {
+        source_id: 'cloud:cld_123456',
+        source_kind: 'cloud',
+        source_name: 'Cloud worker',
+        cloud_session_id: 'cld_123456',
+        runtime_generation: 'rtg_0123456789abcdef',
+        authorization_digest: 'a'.repeat(64),
+      },
+      memoroFetchImpl: async (apiUrl, path, options) => {
+        call = { apiUrl, path, options };
+        return { bootstrap_ticket: 'ticket_123' };
+      },
+    });
+
+    assert.deepEqual(await provider(), { ticket: 'ticket_123' });
+    assert.equal(call.apiUrl, 'https://memoro.test');
+    assert.equal(call.path, '/api/mc/cloud-sessions/cld_123456/broker-ticket');
+    assert.equal(call.options.token, 'broker-secret');
+    assert.equal(call.options.method, 'POST');
+    assert.equal(JSON.stringify(call.options.body).includes('broker-secret'), false);
+    assert.deepEqual(call.options.body, {
+      protocol_version: 'mc-broker-bootstrap-v1',
+      machine_id: 'machine',
+      source_id: 'cloud:cld_123456',
+      source_kind: 'cloud',
+      source_name: 'Cloud worker',
+      cloud_session_id: 'cld_123456',
+      coding_session_id: 'coding_123456',
+    });
+    assert.deepEqual(call.options.requestHeaders, {
+      'X-MC-Runtime-Generation': 'rtg_0123456789abcdef',
+      'X-MC-Authorization-Digest': 'a'.repeat(64),
+    });
   });
 });
 
@@ -154,6 +223,176 @@ describe('readLocalSessionOutput', () => {
 });
 
 describe('CloudBrokerClient', () => {
+  test('cloud runtime uses a fresh bootstrap ticket per reconnect and keeps secrets out of URLs and frames', async () => {
+    resetFakeWs();
+    const tickets = ['ticket_one', 'ticket_two'];
+    const warnings = [];
+    const client = new CloudBrokerClient({
+      apiUrl: 'https://memoro.test',
+      token: 'broker-secret',
+      machineId: 'machine',
+      sourceId: 'cloud:cld_123456',
+      sourceKind: 'cloud',
+      sourceName: 'Cloud worker',
+      cloudSessionId: 'cld_123456',
+      codingSessionId: 'coding_123456',
+      runtimeGeneration: 'rtg_0123456789abcdef',
+      authorizationDigest: 'a'.repeat(64),
+      cloudRuntime: true,
+      bootstrapTicketProvider: async () => ({ ticket: tickets.shift() }),
+      WebSocketImpl: FakeWebSocket,
+      request: async () => ({ ok: true, sessions: [] }),
+      sessionRefreshIntervalMs: 0,
+      sleepImpl: async () => {},
+      logger: { warn: (message) => warnings.push(message), info() {}, error() {} },
+    });
+
+    client.start();
+    await new Promise((resolve) => setImmediate(resolve));
+    const first = FakeWebSocket.instances[0];
+    const firstUrl = new URL(first.url);
+    assert.equal(firstUrl.search, '');
+    assert.equal(firstUrl.searchParams.get('token'), null);
+    assert.equal(first.url.includes('broker-secret'), false);
+    assert.deepEqual(first.protocols, [
+      BROKER_SUBPROTOCOL,
+      `${BOOTSTRAP_SUBPROTOCOL_PREFIX}ticket_one`,
+    ]);
+    first.open();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(JSON.stringify(first.sent).includes('broker-secret'), false);
+    assert.equal(JSON.stringify(first.sent).includes('ticket_one'), false);
+    assert.equal(JSON.parse(first.sent[0]).protocol_version, CONTROL_PROTOCOL_VERSION);
+
+    first.close(1006, 'lost');
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
+    const second = FakeWebSocket.instances[1];
+    assert.ok(second);
+    assert.deepEqual(second.protocols, [
+      BROKER_SUBPROTOCOL,
+      `${BOOTSTRAP_SUBPROTOCOL_PREFIX}ticket_two`,
+    ]);
+    assert.equal(second.url.includes('token='), false);
+    assert.equal(JSON.stringify(warnings).includes('broker-secret'), false);
+    assert.equal(JSON.stringify(warnings).includes('ticket_one'), false);
+    client.stop();
+  });
+
+  test('cloud runtime permanent bootstrap failures stop reconnects without leaking the ticket', async () => {
+    resetFakeWs();
+    const warnings = [];
+    const fatal = [];
+    const client = new CloudBrokerClient({
+      apiUrl: 'https://memoro.test',
+      token: 'broker-secret',
+      machineId: 'machine',
+      sourceId: 'cloud:cld_123456',
+      sourceKind: 'cloud',
+      sourceName: 'Cloud worker',
+      cloudSessionId: 'cld_123456',
+      codingSessionId: 'coding_123456',
+      runtimeGeneration: 'rtg_0123456789abcdef',
+      authorizationDigest: 'a'.repeat(64),
+      cloudRuntime: true,
+      bootstrapTicketProvider: async () => ({ ticket: 'x'.repeat(MAX_BOOTSTRAP_TICKET_BYTES + 1) }),
+      WebSocketImpl: FakeWebSocket,
+      sleepImpl: async () => assert.fail('must not retry a permanent bootstrap failure'),
+      logger: { warn: (message) => warnings.push(message), info() {}, error() {} },
+    });
+    client.on('fatal', (event) => fatal.push(event));
+
+    client.start();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(FakeWebSocket.instances.length, 0);
+    assert.deepEqual(fatal, [{ code: 'cloud_broker_bootstrap_ticket_invalid' }]);
+    assert.equal(JSON.stringify(warnings).includes('x'.repeat(16)), false);
+    assert.equal(JSON.stringify(warnings).includes('broker-secret'), false);
+  });
+
+  test('cloud runtime rejects unversioned, malformed, or oversized control frames fail-closed', async () => {
+    resetFakeWs();
+    const fatal = [];
+    const client = new CloudBrokerClient({
+      apiUrl: 'https://memoro.test',
+      token: 'broker-secret',
+      machineId: 'machine',
+      sourceId: 'cloud:cld_123456',
+      sourceKind: 'cloud',
+      sourceName: 'Cloud worker',
+      cloudSessionId: 'cld_123456',
+      codingSessionId: 'coding_123456',
+      runtimeGeneration: 'rtg_0123456789abcdef',
+      authorizationDigest: 'a'.repeat(64),
+      cloudRuntime: true,
+      bootstrapTicketProvider: async () => ({ ticket: 'ticket_one' }),
+      WebSocketImpl: FakeWebSocket,
+      request: async () => ({ ok: true, sessions: [] }),
+      sessionRefreshIntervalMs: 0,
+      sleepImpl: async () => {},
+    });
+    client.on('fatal', (event) => fatal.push(event));
+    client.start();
+    await new Promise((resolve) => setImmediate(resolve));
+    const control = FakeWebSocket.instances[0];
+    control.open();
+    await new Promise((resolve) => setImmediate(resolve));
+    control.message(JSON.stringify({ type: 'ack' }));
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(fatal, [{ code: 'cloud_broker_protocol_version_invalid' }]);
+
+    const oversized = new CloudBrokerClient({
+      apiUrl: 'https://memoro.test', token: 'broker-secret', machineId: 'machine',
+      sourceId: 'cloud:cld_123456', sourceKind: 'cloud', sourceName: 'Cloud worker', cloudSessionId: 'cld_123456', codingSessionId: 'coding_123456',
+      runtimeGeneration: 'rtg_0123456789abcdef', authorizationDigest: 'a'.repeat(64), cloudRuntime: true,
+      bootstrapTicketProvider: async () => ({ ticket: 'ticket_two' }), WebSocketImpl: FakeWebSocket,
+      request: async () => ({ ok: true, sessions: [] }), sessionRefreshIntervalMs: 0, sleepImpl: async () => {},
+    });
+    const oversizedFatal = [];
+    oversized.on('fatal', (event) => oversizedFatal.push(event));
+    oversized.start();
+    await new Promise((resolve) => setImmediate(resolve));
+    const oversizeControl = FakeWebSocket.instances[1];
+    oversizeControl.open();
+    oversizeControl.message('x'.repeat(64 * 1024 + 1));
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(oversizedFatal, [{ code: 'cloud_broker_frame_too_large' }]);
+
+    const malformed = new CloudBrokerClient({
+      apiUrl: 'https://memoro.test', token: 'broker-secret', machineId: 'machine',
+      sourceId: 'cloud:cld_123456', sourceKind: 'cloud', sourceName: 'Cloud worker', cloudSessionId: 'cld_123456', codingSessionId: 'coding_123456',
+      runtimeGeneration: 'rtg_0123456789abcdef', authorizationDigest: 'a'.repeat(64), cloudRuntime: true,
+      bootstrapTicketProvider: async () => ({ ticket: 'ticket_three' }), WebSocketImpl: FakeWebSocket,
+      request: async () => ({ ok: true, sessions: [] }), sessionRefreshIntervalMs: 0, sleepImpl: async () => {},
+    });
+    const malformedFatal = [];
+    malformed.on('fatal', (event) => malformedFatal.push(event));
+    malformed.start();
+    await new Promise((resolve) => setImmediate(resolve));
+    const malformedControl = FakeWebSocket.instances[2];
+    malformedControl.open();
+    malformedControl.message('{not-json');
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(malformedFatal, [{ code: 'cloud_broker_frame_invalid' }]);
+
+    const unknown = new CloudBrokerClient({
+      apiUrl: 'https://memoro.test', token: 'broker-secret', machineId: 'machine',
+      sourceId: 'cloud:cld_123456', sourceKind: 'cloud', sourceName: 'Cloud worker', cloudSessionId: 'cld_123456', codingSessionId: 'coding_123456',
+      runtimeGeneration: 'rtg_0123456789abcdef', authorizationDigest: 'a'.repeat(64), cloudRuntime: true,
+      bootstrapTicketProvider: async () => ({ ticket: 'ticket_four' }), WebSocketImpl: FakeWebSocket,
+      request: async () => ({ ok: true, sessions: [] }), sessionRefreshIntervalMs: 0, sleepImpl: async () => {},
+    });
+    const unknownFatal = [];
+    unknown.on('fatal', (event) => unknownFatal.push(event));
+    unknown.start();
+    await new Promise((resolve) => setImmediate(resolve));
+    const unknownControl = FakeWebSocket.instances[3];
+    unknownControl.open();
+    unknownControl.message(JSON.stringify({ type: 'not_a_cloud_control_type', protocol_version: CONTROL_PROTOCOL_VERSION }));
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(unknownFatal, [{ code: 'cloud_broker_control_type_invalid' }]);
+  });
+
   test('sends hello and session inventory on control websocket open', async () => {
     resetFakeWs();
     const client = new CloudBrokerClient({
@@ -1076,6 +1315,7 @@ describe('CloudBrokerClient', () => {
         mode: 'vault',
         hydrated: true,
         auth_json: 'secret-auth-json',
+        error: 'provider returned Bearer opaque-broker-canary-123',
       },
       coding_bin: {
         id: 'cbin_status123',
@@ -1145,6 +1385,7 @@ describe('CloudBrokerClient', () => {
       assert.equal(result.data.coding_bin.byte_count, 99);
       assert.equal(result.data.cloud_session.id, 'cld_status123');
       assert.doesNotMatch(JSON.stringify(result.data), /secret-/);
+      assert.doesNotMatch(JSON.stringify(result.data), /opaque-broker-canary-123/);
     } finally {
       client.stop();
       rmSync(dir, { recursive: true, force: true });
