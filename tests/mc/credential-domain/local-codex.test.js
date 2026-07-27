@@ -74,6 +74,11 @@ describe('local Codex credential domain', () => {
             calls.push('boundary');
             const config = readFileSync(join(codexHome, 'config.toml'), 'utf8');
             assert.match(config, new RegExp(`default_permissions = "${MANAGED_CODEX_PROFILE}"`));
+            assert.ok(config.includes([
+              `[projects."${cwd}"]`,
+              'trust_level = "untrusted"',
+            ].join('\n')));
+            assert.doesNotMatch(config, /trust_level = "trusted"/);
             assert.doesNotMatch(config, /memoro-canary|codex-managed-auth-canary/);
             return { ok: true };
           },
@@ -295,6 +300,24 @@ describe('local Codex credential domain', () => {
     assert.match(config, /"\/private\/workspace" = true/);
     assert.match(config, /enabled = false/);
     assert.doesNotMatch(config, /\bsandbox_mode\b|danger-full-access/);
+  });
+
+  test('records the managed workspace as untrusted without trusting repository config', () => {
+    const config = renderManagedCodexConfig({
+      domainPath: '/private/credential',
+      executorRoot: '/private/executor',
+      workspaceRoot: '/private/workspace',
+      executorHome: '/private/executor/home',
+      executorTmp: '/private/executor/tmp',
+      safePath: '/usr/bin:/bin',
+    });
+
+    assert.ok(config.includes([
+      '[projects]',
+      '[projects."/private/workspace"]',
+      'trust_level = "untrusted"',
+    ].join('\n')));
+    assert.doesNotMatch(config, /trust_level = "trusted"/);
   });
 
   test('requires the exact hostile boundary report schema', () => {
