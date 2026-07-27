@@ -7,7 +7,10 @@ import { BrokerRuntime } from './runtime.js';
 import { brokerPidPath, brokerSocketPath } from './paths.js';
 import { getPackageVersion } from '../../lib/version.js';
 
-export const BROKER_PROTOCOL_VERSION = 'mc-broker-pty-v3';
+// v4 makes runtime_generation lifecycle ownership mandatory. A v3 broker
+// accepts launch_session but silently ignores that field, so sharing its
+// compatibility identity would permit an unsafe mixed-version launch.
+export const BROKER_PROTOCOL_VERSION = 'mc-broker-pty-v4';
 
 export async function startBrokerServer({
   socketPath = brokerSocketPath(),
@@ -19,6 +22,7 @@ export async function startBrokerServer({
   now = () => Date.now(),
   onStop = null,
   exitOnStop = false,
+  exitProcess = (code) => process.exit(code),
   runtime = null,
 } = {}) {
   const startedAtMs = now();
@@ -76,11 +80,12 @@ export async function startBrokerServer({
             }
             await stopBrokerServer({ server, socketPath, pidPath });
             if (typeof onStop === 'function') onStop();
-            if (exitOnStop) process.exit(0);
+            if (exitOnStop) exitProcess(0);
           } catch {
             stopping = false;
-            if (typeof onStop === 'function') onStop();
-            if (exitOnStop) process.exit(1);
+            // A failed shutdown is not a completed stop. Keep the daemon,
+            // socket and pid in place so the runtime can be inspected or
+            // retried instead of orphaning a live session.
           }
         });
       }
@@ -157,24 +162,43 @@ export async function stopBrokerServer({ server, socketPath = brokerSocketPath()
 }
 
 export async function runBrokerDaemon(opts = {}) {
+  const processRef = opts.processRef || process;
+  const exitProcess = opts.exitProcess || ((code) => processRef.exit(code));
+  const startBrokerServerImpl = opts.startBrokerServerImpl || startBrokerServer;
   const runtime = opts.runtime || await createDefaultRuntime();
   const mcVersion = opts.mcVersion === undefined
     ? await getPackageVersion().catch(() => null)
     : opts.mcVersion;
-  const state = await startBrokerServer({
+  const state = await startBrokerServerImpl({
     ...opts,
     mcVersion,
     runtime,
     exitOnStop: opts.exitOnStop ?? true,
+    exitProcess,
   });
+  let cleaningUp = false;
   const cleanup = async () => {
-    const shutdown = await shutdownRuntime(runtime).catch(() => ({ ok: false }));
-    await stopBrokerServer(state).catch(() => {});
-    process.exit(shutdown.ok ? 0 : 1);
+    if (cleaningUp) return;
+    cleaningUp = true;
+    try {
+      // Do not remove the host socket (or force process termination) while a
+      // PTY's durable exit record or terminal presence is still outstanding.
+      // A failed bounded finalization deliberately leaves the broker alive so
+      // an operator can inspect/retry rather than converting live work into a
+      // silent stale session.
+      const result = await finalizeDaemonSignal({ state, exitProcess });
+      if (!result.ok) throw new Error(result.reason);
+    } catch {
+      cleaningUp = false;
+      processRef.exitCode = 1;
+    }
   };
-  process.once('SIGTERM', cleanup);
-  process.once('SIGINT', cleanup);
-  process.once('SIGHUP', cleanup);
+  // Keep the handlers installed after a failed bounded shutdown. A later
+  // signal must retry finalization rather than falling through to the
+  // platform's default termination while a live PTY still exists.
+  processRef.on('SIGTERM', cleanup);
+  processRef.on('SIGINT', cleanup);
+  processRef.on('SIGHUP', cleanup);
 
   if (opts.readyFile) {
     await writeFile(opts.readyFile, JSON.stringify(state.status()) + '\n', { mode: 0o600 })
@@ -182,6 +206,18 @@ export async function runBrokerDaemon(opts = {}) {
   }
 
   return new Promise(() => {});
+}
+
+// Kept separate from signal wiring so the fail-closed process boundary can be
+// verified without ever sending a signal to the test runner.
+export async function finalizeDaemonSignal({ state, exitProcess = (code) => process.exit(code) } = {}) {
+  try {
+    await state?.stop?.();
+    exitProcess(0);
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, reason: err?.message || 'runtime-finalization-unconfirmed' };
+  }
 }
 
 async function shutdownRuntime(runtime) {

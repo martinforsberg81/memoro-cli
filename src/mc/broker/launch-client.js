@@ -1,5 +1,6 @@
 import { join } from 'node:path';
 import { hostname } from 'node:os';
+import { randomUUID } from 'node:crypto';
 import { setTimeout as sleep } from 'node:timers/promises';
 
 import { resolveLaunch } from '../../adapters/index.js';
@@ -148,9 +149,11 @@ export async function launchBrokerOwnedSession({
     machineId,
     llmSessionId,
   });
+  const runtimeGeneration = (deps.randomUUID || randomUUID)();
   const repoRef = derivePublicRepoRef(repoContext);
   const paths = brokerSessionPaths(codingSessionId);
   let sessionCapabilities = unavailableGitHubSessionCapabilities();
+  let startingPresenceRegistered = false;
   if (!managedPortable) {
     try {
       const connectionClient = deps.connectionClient || createConnectionClient({
@@ -177,27 +180,6 @@ export async function launchBrokerOwnedSession({
         });
       }
     } catch {}
-  }
-  if (!managedPortable && sessionCapabilities.github.state === 'ready') {
-    const registered = await (deps.registerGitHubSessionProjection || registerGitHubSessionProjection)({
-      apiUrl,
-      token,
-      codingSessionId,
-      machineId,
-      sourceIdentity,
-      source: launch.spec.heartbeatSource,
-      repo: deriveRepoName(repoContext),
-      repoRef,
-      branch: repoContext.branch,
-      label: sessionName || label,
-      now,
-      postHeartbeat: deps.postHeartbeat,
-      memoroFetchImpl: deps.memoroFetch,
-    });
-    if (!registered) {
-      sessionCapabilities = unavailableGitHubSessionCapabilities();
-      stderr.write('mc: GitHub session registration failed; launching with GitHub unavailable\n');
-    }
   }
   let groundingLaunchMessage = null;
   if (sendStartupMessage) {
@@ -378,6 +360,7 @@ export async function launchBrokerOwnedSession({
     type: 'launch_session',
     session: {
       id: codingSessionId,
+      runtime_generation: runtimeGeneration,
       name: sessionName || label,
       cwd,
       tool,
@@ -395,6 +378,7 @@ export async function launchBrokerOwnedSession({
         ? { enabled: false }
         : {
             codingSessionId,
+            runtimeGeneration,
             label,
             apiUrl,
             token,
@@ -416,16 +400,93 @@ export async function launchBrokerOwnedSession({
         : {}),
     },
   };
-  const launchRes = await launchRequest(launchMessage)
-    .catch((err) => ({ ok: false, error: err.message || String(err) }));
+  // Register immediately before the broker request. Earlier local setup has
+  // legitimate failure paths; publishing presence only here gives the request
+  // and its compensating terminal event one narrow ownership boundary.
+  if (!managedPortable && sessionCapabilities.github.state === 'ready') {
+    const registered = await (deps.registerGitHubSessionProjection || registerGitHubSessionProjection)({
+      apiUrl,
+      token,
+      codingSessionId,
+      runtimeGeneration,
+      machineId,
+      sourceIdentity,
+      source: launch.spec.heartbeatSource,
+      repo: deriveRepoName(repoContext),
+      repoRef,
+      branch: repoContext.branch,
+      label: sessionName || label,
+      now,
+      postHeartbeat: deps.postHeartbeat,
+      memoroFetchImpl: deps.memoroFetch,
+    });
+    if (!registered) {
+      // Presence registration is advisory for GitHub control-plane capability:
+      // the broker-side boundary was already prepared from an independently
+      // verified bootstrap. Do not mutate the child configuration after it is
+      // built merely because this best-effort projection failed.
+      stderr.write('mc: GitHub session registration failed; continuing without starting presence\n');
+    } else {
+      startingPresenceRegistered = true;
+    }
+  }
+  let launchRes = null;
+  let launchWasAmbiguous = false;
+  try {
+    launchRes = await launchRequest(launchMessage);
+    launchWasAmbiguous = launchRes?.ok !== false
+      && !isExactLaunchedSession(launchRes?.session, { codingSessionId, runtimeGeneration });
+  } catch {
+    launchWasAmbiguous = true;
+  }
 
-  if (!launchRes.ok) {
+  if (launchWasAmbiguous) {
+    const reconciliation = await reconcileAmbiguousBrokerLaunch({
+      launchRequest,
+      codingSessionId,
+      runtimeGeneration,
+    });
+    if (reconciliation.state === 'live') {
+      launchRes = { ok: true, session: reconciliation.session, recovered: true };
+    } else if (reconciliation.state === 'dead') {
+      const removed = await launchRequest({ type: 'remove_session', id: codingSessionId })
+        .catch(() => null);
+      if (removed?.ok) {
+        launchRes = { ok: false, reason: 'broker-session-exited' };
+      } else {
+        return reportUnknownBrokerLaunch({ stderr, codingSessionId });
+      }
+    } else if (reconciliation.state === 'absent') {
+      launchRes = { ok: false, reason: 'broker-session-not-found' };
+    } else {
+      return reportUnknownBrokerLaunch({ stderr, codingSessionId });
+    }
+  }
+
+  if (launchRes?.ok !== true) {
+    if (startingPresenceRegistered) {
+      await terminalizeStartingPresence({
+        apiUrl,
+        token,
+        codingSessionId,
+        runtimeGeneration,
+        machineId,
+        sourceIdentity,
+        source: launch.spec.heartbeatSource,
+        repo: repoRef || deriveRepoName(repoContext),
+        branch: repoContext.branch,
+        label: sessionName || label,
+        now,
+        postHeartbeat: deps.postHeartbeat,
+        memoroFetchImpl: deps.memoroFetch,
+      });
+    }
     if (credentialDomain?.descriptor) {
       (deps.abortLocalCodexCredentialDomain || abortLocalCodexCredentialDomain)({
         descriptor: credentialDomain.descriptor,
       });
     }
-    stderr.write(`mc: broker launch failed (${launchRes.error || launchRes.reason || 'unknown'})\n`);
+    stderr.write(`mc: broker launch failed (${launchRes?.error || launchRes?.reason || 'unknown'})\n`);
     return { code: 1 };
   }
   const effectiveCodingSessionId = launchRes.session?.id || codingSessionId;
@@ -477,9 +538,49 @@ export async function launchBrokerOwnedSession({
       stderr,
       sleepFn: deps.sleep || sleep,
       retryDelaysMs: deps.codexSqliteRetryDelaysMs || CODEX_SQLITE_RETRY_DELAYS_MS,
+      runtimeGenerationFactory: deps.randomUUID || randomUUID,
     });
   }
   return { code, codingSessionId: effectiveCodingSessionId, broker: sessionHost.broker || null, attached: true };
+}
+
+async function reconcileAmbiguousBrokerLaunch({
+  launchRequest,
+  codingSessionId,
+  runtimeGeneration,
+} = {}) {
+  let status;
+  try {
+    status = await launchRequest({ type: 'session_status', id: codingSessionId });
+  } catch {
+    return { state: 'unknown' };
+  }
+  if (status?.ok === false && status.reason === 'session-not-found') {
+    return { state: 'absent' };
+  }
+  if (status?.ok !== true || !status.session) return { state: 'unknown' };
+  const session = status.session;
+  if (session.id !== codingSessionId || session.runtime_generation !== runtimeGeneration) {
+    return { state: 'unknown' };
+  }
+  if (session.exit || session.session_state === 'dead' || session.attachable === false) {
+    return { state: 'dead', session };
+  }
+  return { state: 'live', session };
+}
+
+function reportUnknownBrokerLaunch({ stderr, codingSessionId } = {}) {
+  stderr.write(`mc: broker launch outcome is unknown for ${codingSessionId}; refusing to create or terminalize a duplicate session\n`);
+  return {
+    code: 1,
+    reason: 'broker-launch-unknown',
+    error: 'broker launch outcome is unknown',
+  };
+}
+
+function isExactLaunchedSession(session, { codingSessionId, runtimeGeneration } = {}) {
+  return session?.id === codingSessionId
+    && session?.runtime_generation === runtimeGeneration;
 }
 
 export function isRetryableCodexSqliteStartupFailure({ output, session } = {}) {
@@ -507,8 +608,10 @@ async function retryCodexSqliteStartup({
   stderr,
   sleepFn,
   retryDelaysMs,
+  runtimeGenerationFactory,
 }) {
   let currentCode = code;
+  let currentLaunchMessage = launchMessage;
   for (let index = 0; index < retryDelaysMs.length; index += 1) {
     const snapshot = await launchRequest({
       type: 'fetch_session_output',
@@ -534,15 +637,53 @@ async function retryCodexSqliteStartup({
     stderr.write(`mc: Codex state database was briefly locked; retrying startup in ${formatRetryDelay(delayMs)} (${index + 1}/${retryDelaysMs.length}).\n`);
     await sleepFn(delayMs);
 
-    const relaunched = await launchRequest(launchMessage)
-      .catch((err) => ({ ok: false, error: err.message || String(err) }));
-    if (!relaunched?.ok) {
+    const runtimeGeneration = runtimeGenerationFactory();
+    currentLaunchMessage = withRuntimeGeneration(currentLaunchMessage, runtimeGeneration);
+    let relaunched;
+    let ambiguous = false;
+    try {
+      relaunched = await launchRequest(currentLaunchMessage);
+      ambiguous = relaunched?.ok !== false
+        && !isExactLaunchedSession(relaunched?.session, { codingSessionId, runtimeGeneration });
+    } catch {
+      ambiguous = true;
+    }
+    if (ambiguous) {
+      const reconciliation = await reconcileAmbiguousBrokerLaunch({
+        launchRequest,
+        codingSessionId,
+        runtimeGeneration,
+      });
+      if (reconciliation.state === 'live') {
+        relaunched = { ok: true, session: reconciliation.session, recovered: true };
+      } else {
+        stderr.write('mc: Codex SQLite startup retry launch outcome is unknown; refusing another relaunch.\n');
+        return 1;
+      }
+    }
+    if (relaunched?.ok !== true) {
       stderr.write(`mc: Codex SQLite startup retry failed to relaunch (${relaunched?.error || relaunched?.reason || 'unknown'}).\n`);
       return 1;
     }
     currentCode = await attach(attachOptions);
   }
   return currentCode;
+}
+
+function withRuntimeGeneration(launchMessage, runtimeGeneration) {
+  return {
+    ...launchMessage,
+    session: {
+      ...launchMessage.session,
+      runtime_generation: runtimeGeneration,
+      sidecars: launchMessage.session?.sidecars?.enabled === false
+        ? launchMessage.session.sidecars
+        : {
+            ...launchMessage.session?.sidecars,
+            runtimeGeneration,
+          },
+    },
+  };
 }
 
 function formatRetryDelay(delayMs) {
@@ -560,6 +701,7 @@ export async function registerGitHubSessionProjection({
   apiUrl,
   token,
   codingSessionId,
+  runtimeGeneration = null,
   machineId,
   sourceIdentity,
   source,
@@ -588,6 +730,8 @@ export async function registerGitHubSessionProjection({
       token,
       payload: buildSessionHeartbeatPayload({
         codingSessionId,
+        runtimeGeneration,
+        presenceState: runtimeGeneration ? 'active' : null,
         machineId,
         sourceIdentity,
         source,
@@ -596,6 +740,46 @@ export async function registerGitHubSessionProjection({
         idleSeconds: 0,
         at: new Date(timestamp).toISOString(),
         sessionProjection,
+        label,
+      }),
+      maxAttempts: 1,
+      memoroFetchImpl,
+    });
+  } catch {
+    return false;
+  }
+}
+
+async function terminalizeStartingPresence({
+  apiUrl,
+  token,
+  codingSessionId,
+  runtimeGeneration,
+  machineId,
+  sourceIdentity,
+  source,
+  repo,
+  branch,
+  label = null,
+  now = () => Date.now(),
+  postHeartbeat = postHeartbeatWithRetry,
+  memoroFetchImpl,
+} = {}) {
+  try {
+    return await postHeartbeat({
+      apiUrl,
+      token,
+      payload: buildSessionHeartbeatPayload({
+        codingSessionId,
+        runtimeGeneration,
+        presenceState: 'terminal',
+        machineId,
+        sourceIdentity,
+        source,
+        repo,
+        branch,
+        idleSeconds: 0,
+        at: new Date(now()).toISOString(),
         label,
       }),
       maxAttempts: 1,

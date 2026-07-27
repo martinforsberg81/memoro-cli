@@ -25,6 +25,7 @@ import { writeRegistry, makeEntry } from '../_helpers/registry-fixture.js';
 import { run as runList } from '../../../src/mc/commands/list.js';
 import {
   buildSessionListView,
+  fetchActiveCodingSessions,
   fetchActiveCodingSessionsWithLocalBroker,
   renderSessionListHuman,
 } from '../../../src/mc/session-list.js';
@@ -303,7 +304,7 @@ describe('mc list', () => {
       scanDaemons: () => ({ orphan: [], stale: [] }),
       readConfig: async () => ({ apiUrl: 'https://memoro.test' }),
       getSecret: async () => 'token',
-      memoroFetch: async () => ({ sessions: [] }),
+      memoroFetch: async () => ({ ok: true, sessions: [] }),
       requestBroker: async (message) => {
         assert.deepEqual(message, { type: 'sessions' });
         return {
@@ -346,7 +347,7 @@ describe('mc list', () => {
       deps: {
         readConfig: async () => ({ apiUrl: 'https://memoro.test' }),
         getSecret: async () => 'token',
-        memoroFetch: async () => ({ sessions: [] }),
+        memoroFetch: async () => ({ ok: true, sessions: [] }),
         requestBroker: async () => ({
           ok: true,
           sessions: [{
@@ -367,6 +368,21 @@ describe('mc list', () => {
     assert.equal(res.sessions.length, 1);
     assert.equal(res.sessions[0].coding_session_id, 'sess_trip');
     assert.equal(res.sessions[0].label, 'trip-v2');
+  });
+
+  test('active lookup fails closed on malformed successful HTTP bodies', async () => {
+    const common = {
+      readConfig: async () => ({ apiUrl: 'https://memoro.test' }),
+      getSecret: async () => 'token',
+    };
+    for (const body of [{}, { ok: false }, { ok: true, sessions: null }]) {
+      const result = await fetchActiveCodingSessions({
+        deps: { ...common, memoroFetch: async () => body },
+      });
+      assert.equal(result.ok, false);
+      assert.deepEqual(result.sessions, []);
+      assert.match(result.warning, /invalid Memoro response/);
+    }
   });
 
   test('active/local dedupe does not hide a same-label session from another repo', () => {

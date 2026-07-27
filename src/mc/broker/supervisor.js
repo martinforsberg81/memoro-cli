@@ -27,14 +27,19 @@ export async function ensureBrokerRunning({
     }
 
     const liveSessions = liveBrokerSessions(existing.sessions);
-    if (liveSessions.length > 0) {
+    if (liveSessions.length > 0 || !Array.isArray(existing.sessions)) {
       return {
         ok: false,
         stale: true,
-        reason: compatibility.reason,
+        reason: liveSessions.length > 0
+          ? 'broker-protocol-incompatible-live'
+          : 'broker-protocol-incompatible-unknown',
+        compatibility_reason: compatibility.reason,
         broker: existing.broker,
         live_sessions: liveSessions,
-        error: `running broker is stale (${compatibility.reason}) with ${liveSessions.length} live session(s); end them or run \`mc broker stop\` before starting a new broker`,
+        error: liveSessions.length > 0
+          ? `running broker is incompatible (${compatibility.reason}) with ${liveSessions.length} live session(s); end them with the previous mc version before starting a new broker`
+          : `running broker is incompatible (${compatibility.reason}) and its session inventory is unavailable; refusing to replace it`,
       };
     }
 
@@ -48,10 +53,34 @@ export async function ensureBrokerRunning({
   const started = Date.now();
   while (Date.now() - started < timeoutMs) {
     const res = await request({ type: 'status' }).catch(() => null);
-    if (res?.ok) return { ok: true, started: true, broker: res.broker };
+    if (res?.ok) {
+      const compatibility = checkBrokerCompatibility(res, { expectedProtocolVersion });
+      if (compatibility.ok) return { ok: true, started: true, broker: res.broker };
+      return incompatibleBrokerResult(res, compatibility);
+    }
     await sleep(intervalMs);
   }
   return { ok: false, error: 'broker did not become ready in time' };
+}
+
+function incompatibleBrokerResult(status, compatibility) {
+  const liveSessions = liveBrokerSessions(status?.sessions);
+  const inventoryKnown = Array.isArray(status?.sessions);
+  return {
+    ok: false,
+    stale: true,
+    reason: liveSessions.length > 0
+      ? 'broker-protocol-incompatible-live'
+      : 'broker-protocol-incompatible-unknown',
+    compatibility_reason: compatibility.reason,
+    broker: status?.broker || null,
+    live_sessions: liveSessions,
+    error: liveSessions.length > 0
+      ? `running broker is incompatible (${compatibility.reason}) with ${liveSessions.length} live session(s); end them with the previous mc version before starting a new broker`
+      : inventoryKnown
+        ? `running broker is incompatible (${compatibility.reason}); refusing to launch through it`
+        : `running broker is incompatible (${compatibility.reason}) and its session inventory is unavailable; refusing to replace it`,
+  };
 }
 
 export function checkBrokerCompatibility(status, {
@@ -81,7 +110,7 @@ export function liveBrokerSessions(sessions = []) {
     }));
 }
 
-async function stopExistingBroker({ request, sleep, timeoutMs, intervalMs }) {
+export async function stopExistingBroker({ request, sleep, timeoutMs, intervalMs }) {
   const stopped = await request({ type: 'stop' }).catch((err) => ({ ok: false, error: err.message || String(err) }));
   if (!stopped?.ok) {
     return { ok: false, error: `stale broker stop failed (${stopped?.error || 'unknown'})` };

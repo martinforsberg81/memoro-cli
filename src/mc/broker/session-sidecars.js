@@ -84,12 +84,15 @@ export class BrokerSessionSidecars {
     this.dispatchServer = null;
     this.wsClient = null;
     this.alive = false;
+    this.stopped = false;
     this.heartbeatPromise = null;
+    this.finalizationPromise = null;
     this.uploadScheduled = false;
   }
 
   start() {
     this.alive = true;
+    this.stopped = false;
     this._writeMetadata();
     this._startDispatchSocket();
     this._startWsClient();
@@ -97,13 +100,18 @@ export class BrokerSessionSidecars {
     return this;
   }
 
-  stop() {
+  stop({ terminal = false } = {}) {
+    if (this.stopped) return this.finalizationPromise || Promise.resolve(true);
+    this.stopped = true;
     this.alive = false;
     try { this.wsClient?.stop?.(); } catch {}
     try { this.dispatchServer?.close?.(); } catch {}
     this._unlink(this.coding.sockPath);
     this._unlink(this.coding.metaPath);
-    void this._scheduleUpload();
+    this.finalizationPromise = Promise.resolve(
+      terminal ? this._publishTerminalPresence() : true,
+    ).finally(() => this._scheduleUpload());
+    return this.finalizationPromise;
   }
 
   _writeMetadata() {
@@ -117,6 +125,7 @@ export class BrokerSessionSidecars {
       tool: this.coding.tool || null,
       source: this._codingSource(),
       ...this.sourceIdentity,
+      runtime_generation: this.coding.runtimeGeneration || this.coding.runtime_generation || null,
       tool_session_id: this.coding.toolSessionId || this.coding.tool_session_id || null,
       tool_transcript_path: this.coding.transcriptPath || this.coding.tool_transcript_path || null,
       sock_path: this.coding.sockPath || null,
@@ -208,6 +217,8 @@ export class BrokerSessionSidecars {
         token: this.coding.token,
         payload: buildSessionHeartbeatPayload({
           codingSessionId: this.coding.codingSessionId,
+          runtimeGeneration: this.coding.runtimeGeneration || this.coding.runtime_generation || null,
+          presenceState: 'active',
           machineId: this.coding.machineId || null,
           sourceIdentity: this.sourceIdentity,
           source: this._codingSource(),
@@ -223,6 +234,7 @@ export class BrokerSessionSidecars {
         sleepImpl: this.sleep,
         retryIntervalMs: this.retryIntervalMs,
         maxAttempts: this.maxAttempts,
+        shouldContinue: () => this.alive,
       });
       if (!this.alive || this.heartbeatIntervalMs == null) break;
       try { await this.sleep(this.heartbeatIntervalMs); } catch {}
@@ -254,6 +266,40 @@ export class BrokerSessionSidecars {
     });
   }
 
+  async _publishTerminalPresence() {
+    const runtimeGeneration = this.coding.runtimeGeneration || this.coding.runtime_generation || null;
+    if (
+      !this.coding.apiUrl
+      || !this.coding.token
+      || this.coding.heartbeat === false
+      || !runtimeGeneration
+    ) {
+      return false;
+    }
+    const now = this.now();
+    return postHeartbeatWithRetry({
+      apiUrl: this.coding.apiUrl,
+      token: this.coding.token,
+      payload: buildSessionHeartbeatPayload({
+        codingSessionId: this.coding.codingSessionId,
+        runtimeGeneration,
+        presenceState: 'terminal',
+        machineId: this.coding.machineId || null,
+        sourceIdentity: this.sourceIdentity,
+        source: this._codingSource(),
+        repo: this.coding.repoRef || this.coding.repo_ref || this.coding.repo || null,
+        branch: this.coding.branch || null,
+        idleSeconds: 0,
+        at: new Date(now).toISOString(),
+        label: this.coding.label || null,
+      }),
+      memoroFetchImpl: this.memoroFetch,
+      sleepImpl: this.sleep,
+      retryIntervalMs: this.retryIntervalMs,
+      maxAttempts: 1,
+    });
+  }
+
   async _scheduleUpload() {
     if (this.uploadScheduled || this.coding.upload === false) return;
     this.uploadScheduled = true;
@@ -280,6 +326,8 @@ export class BrokerSessionSidecars {
 
 export function buildSessionHeartbeatPayload({
   codingSessionId,
+  runtimeGeneration = null,
+  presenceState = null,
   machineId,
   sourceIdentity = {},
   source,
@@ -291,8 +339,11 @@ export function buildSessionHeartbeatPayload({
   sessionProjection,
   label = null,
 } = {}) {
-  return {
+  const terminal = presenceState === 'terminal';
+  const metadata = {
     coding_session_id: codingSessionId,
+    ...(runtimeGeneration ? { runtime_generation: runtimeGeneration } : {}),
+    ...(presenceState ? { presence_state: presenceState } : {}),
     machine_id: machineId,
     source_id: sourceIdentity.source_id,
     source_kind: sourceIdentity.source_kind,
@@ -301,13 +352,17 @@ export function buildSessionHeartbeatPayload({
     source,
     repo,
     branch,
+    idle_seconds: terminal ? 0 : idleSeconds,
+    at,
+    ...(label ? { label } : {}),
+  };
+  if (terminal) return metadata;
+  return {
+    ...metadata,
     files_touched_since_last: [],
     last_user_excerpt: '',
     last_assistant_excerpt: lastAssistantExcerpt,
-    idle_seconds: idleSeconds,
-    at,
     session_projection: sessionProjection,
-    ...(label ? { label } : {}),
   };
 }
 
@@ -333,8 +388,10 @@ export async function postHeartbeatWithRetry({
   sleepImpl = sleep,
   retryIntervalMs = RETRY_INTERVAL_MS,
   maxAttempts = MAX_ATTEMPTS,
+  shouldContinue = () => true,
 }) {
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    if (!shouldContinue()) return false;
     try {
       await memoroFetchImpl(apiUrl, '/api/sessions/heartbeat', {
         token, method: 'POST', body: payload,
@@ -343,6 +400,7 @@ export async function postHeartbeatWithRetry({
     } catch {
       if (attempt < maxAttempts - 1) {
         try { await sleepImpl(retryIntervalMs); } catch {}
+        if (!shouldContinue()) return false;
       }
     }
   }

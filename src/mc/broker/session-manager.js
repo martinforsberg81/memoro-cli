@@ -14,7 +14,7 @@ export class BrokerSessionManager extends EventEmitter {
     this.sessions = new Map();
   }
 
-  launch(spec) {
+  launch(spec, { beforeStart = null } = {}) {
     if (!spec?.id) throw new TypeError('session id is required');
     if (this.sessions.has(spec.id)) {
       throw new Error(`broker session already exists: ${spec.id}`);
@@ -23,8 +23,12 @@ export class BrokerSessionManager extends EventEmitter {
     const session = this._makeSession(spec);
     this.sessions.set(spec.id, session);
     session.on('data', (data) => this.emit('data', { id: spec.id, data }));
-    session.on('exit', (event) => this.emit('exit', { id: spec.id, event }));
+    session.on('exit', (event) => this.emit('exit', { id: spec.id, event, session }));
     try {
+      // The owner must be able to observe a synchronous PTY exit.  In
+      // particular, node-pty can report an immediately failed spawn before
+      // `launch()` returns.
+      beforeStart?.(session);
       session.start();
     } catch (err) {
       this.sessions.delete(spec.id);

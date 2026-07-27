@@ -9,6 +9,7 @@ import {
   listLocalBrokerAndHostSessions,
   requestForSession,
 } from '../../../src/mc/broker/session-hosts.js';
+import { BROKER_PROTOCOL_VERSION } from '../../../src/mc/broker/daemon.js';
 
 function makeHostManifest({ hostsDir, sessionId = 'sess_a' }) {
   const dir = join(hostsDir, sessionId);
@@ -124,6 +125,88 @@ describe('session broker hosts', () => {
 
       assert.deepEqual(sessions, [{ id: 'sess_global' }]);
       assert.deepEqual(seen, [{ message: { type: 'sessions' }, options: undefined }]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('refuses to replace an incompatible session host with a live PTY', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'mc-session-hosts-legacy-'));
+    try {
+      const paths = {
+        socketPath: join(root, 'broker.sock'),
+        pidPath: join(root, 'broker.pid'),
+        logPath: join(root, 'broker.log'),
+        manifestPath: join(root, 'host.json'),
+      };
+      let spawned = false;
+      const result = await ensureSessionHostRunning({
+        sessionId: 'sess_legacy',
+        paths,
+        request: async () => ({
+          ok: true,
+          broker: { pid: 1, protocol_version: 'mc-broker-pty-v3' },
+          sessions: [{ id: 'sess_legacy', session_state: 'live', tool: 'codex' }],
+        }),
+        spawnDaemon: () => { spawned = true; return { ok: true }; },
+      });
+
+      assert.equal(result.ok, false);
+      assert.equal(result.reason, 'broker-protocol-incompatible-live');
+      assert.equal(spawned, false);
+      assert.match(result.error, /previous mc version/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('stops a verified-empty incompatible host before replacing it', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'mc-session-hosts-upgrade-'));
+    try {
+      const paths = {
+        socketPath: join(root, 'broker.sock'),
+        pidPath: join(root, 'broker.pid'),
+        logPath: join(root, 'broker.log'),
+        manifestPath: join(root, 'host.json'),
+      };
+      const seen = [];
+      let stopped = false;
+      let spawned = false;
+      const result = await ensureSessionHostRunning({
+        sessionId: 'sess_upgrade',
+        paths,
+        request: async (message) => {
+          seen.push(message.type);
+          if (message.type === 'stop') {
+            stopped = true;
+            return { ok: true, stopping: true };
+          }
+          if (!stopped) {
+            return {
+              ok: true,
+              broker: { pid: 1, protocol_version: 'mc-broker-pty-v3' },
+              sessions: [],
+            };
+          }
+          if (!spawned) throw new Error('old host stopped');
+          return {
+            ok: true,
+            broker: { pid: 2, protocol_version: BROKER_PROTOCOL_VERSION },
+            sessions: [],
+          };
+        },
+        spawnDaemon: () => {
+          assert.equal(stopped, true);
+          spawned = true;
+          return { ok: true, pid: 2 };
+        },
+        sleep: async () => {},
+      });
+
+      assert.equal(result.ok, true);
+      assert.equal(result.started, true);
+      assert.equal(spawned, true);
+      assert.deepEqual(seen, ['status', 'stop', 'status', 'status']);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

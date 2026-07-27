@@ -95,13 +95,17 @@ describe('BrokerSessionManager', () => {
     manager.on('exit', (event) => exitEvents.push(event));
 
     manager.launch({ id: 'sess_a', cwd: '/repo', launchSpec: launchSpec() });
+    const session = manager.get('sess_a');
     tick(10);
     fake.ptys[0].emitData('hello');
     tick(10);
     fake.ptys[0].emitExit({ exitCode: 0, signal: null });
 
     assert.deepEqual(dataEvents, [{ id: 'sess_a', data: 'hello' }]);
-    assert.deepEqual(exitEvents, [{ id: 'sess_a', event: { exitCode: 0, signal: null } }]);
+    assert.equal(exitEvents.length, 1);
+    assert.equal(exitEvents[0].id, 'sess_a');
+    assert.deepEqual(exitEvents[0].event, { exitCode: 0, signal: null });
+    assert.equal(exitEvents[0].session, session);
     assert.equal(manager.status('sess_a').session_state, 'dead');
     assert.equal(manager.status('sess_a').attachable, false);
   });

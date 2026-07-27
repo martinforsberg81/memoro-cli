@@ -442,6 +442,68 @@ describe('BrokerSessionSidecars', () => {
     assert.equal(wsClients[0].stopped, true);
   });
 
+  test('publishes one metadata-only terminal presence for the exact runtime generation', async () => {
+    const paths = tempPaths();
+    const session = makeSession();
+    const requests = [];
+    const generation = '4f50f5a1-4c6b-4d6a-8b5c-152c5e6b8701';
+    const sidecars = new BrokerSessionSidecars({
+      session,
+      coding: {
+        codingSessionId: 'sess_terminal',
+        runtimeGeneration: generation,
+        apiUrl: 'https://memoro.test',
+        token: 'memoro-secret-sentinel',
+        machineId: 'machine',
+        sourceId: 'local:machine',
+        sourceKind: 'local',
+        source: 'codex',
+        repoRef: 'acme/repo',
+        branch: 'main',
+        metaPath: paths.metaPath,
+        upload: false,
+      },
+      wsClientFactory: () => ({ start() {}, stop() {} }),
+      memoroFetchImpl: async (_apiUrl, path, options) => {
+        requests.push({ path, options });
+        return { ok: true };
+      },
+      now: () => 2_500,
+      heartbeatIntervalMs: null,
+    }).start();
+
+    await sidecars.heartbeatPromise;
+    session.exit = { code: 0, signal: null, at: '1970-01-01T00:00:02.500Z' };
+    await sidecars.stop({ terminal: true });
+
+    assert.equal(requests.length, 2);
+    assert.equal(requests[0].options.body.presence_state, 'active');
+    assert.equal(requests[0].options.body.runtime_generation, generation);
+    const terminal = requests[1].options.body;
+    assert.deepEqual(Object.keys(terminal).sort(), [
+      'at',
+      'branch',
+      'cloud_session_id',
+      'coding_session_id',
+      'idle_seconds',
+      'machine_id',
+      'presence_state',
+      'repo',
+      'runtime_generation',
+      'source',
+      'source_id',
+      'source_kind',
+      'source_name',
+    ]);
+    assert.equal(terminal.presence_state, 'terminal');
+    assert.equal(terminal.runtime_generation, generation);
+    assert.equal(terminal.coding_session_id, 'sess_terminal');
+    assert.equal(JSON.stringify(terminal).includes('memoro-secret-sentinel'), false);
+    assert.equal(JSON.stringify(terminal).includes('ready'), false);
+    assert.equal('session_projection' in terminal, false);
+    assert.equal('last_assistant_excerpt' in terminal, false);
+  });
+
   test('falls back to Codex source when sidecar source is omitted', async () => {
     const paths = tempPaths();
     const session = makeSession();

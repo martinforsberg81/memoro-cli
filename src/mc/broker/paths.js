@@ -34,6 +34,7 @@ export function sessionHostPaths(sessionId) {
     pidPath: join(dir, 'broker.pid'),
     logPath: join(dir, 'broker.log'),
     manifestPath: join(dir, 'host.json'),
+    lifecyclePath: join(dir, 'lifecycle.json'),
   };
 }
 
