@@ -4,7 +4,14 @@ import { dirname, join } from 'node:path';
 import { requestBroker } from './client.js';
 import { BROKER_PROTOCOL_VERSION } from './daemon.js';
 import { sessionHostPaths, sessionHostsDir } from './paths.js';
-import { spawnBrokerDaemon, START_POLL_MS, POLL_INTERVAL_MS, checkBrokerCompatibility } from './supervisor.js';
+import {
+  spawnBrokerDaemon,
+  START_POLL_MS,
+  POLL_INTERVAL_MS,
+  checkBrokerCompatibility,
+  liveBrokerSessions,
+  stopExistingBroker,
+} from './supervisor.js';
 
 const HOST_START_LOG_TAIL_CHARS = 4000;
 const HOST_START_ERROR_CHARS = 1200;
@@ -29,6 +36,34 @@ export async function ensureSessionHostRunning({
       writeSessionHostManifest({ sessionId, paths, broker: existing.broker, now });
       return { ok: true, alreadyRunning: true, ...paths, broker: existing.broker };
     }
+    const liveSessions = liveBrokerSessions(existing.sessions);
+    if (liveSessions.length > 0 || !Array.isArray(existing.sessions)) {
+      return {
+        ok: false,
+        reason: liveSessions.length > 0
+          ? 'broker-protocol-incompatible-live'
+          : 'broker-protocol-incompatible-unknown',
+        compatibility_reason: compatibility.reason,
+        broker: existing.broker,
+        live_sessions: liveSessions,
+        error: liveSessions.length > 0
+          ? `session host is incompatible (${compatibility.reason}) with ${liveSessions.length} live session(s); end it with the previous mc version before retrying`
+          : `session host is incompatible (${compatibility.reason}) and its session inventory is unavailable; refusing to replace it`,
+      };
+    }
+    const stopped = await stopExistingBroker({
+      request: hostRequest,
+      sleep,
+      timeoutMs,
+      intervalMs,
+    });
+    if (!stopped.ok) {
+      return {
+        ...stopped,
+        reason: 'broker-protocol-replacement-failed',
+        compatibility_reason: compatibility.reason,
+      };
+    }
   }
 
   cleanupSessionHostFiles(paths);
@@ -43,6 +78,23 @@ export async function ensureSessionHostRunning({
   while (Date.now() - started < timeoutMs) {
     const res = await hostRequest({ type: 'status' }).catch(() => null);
     if (res?.ok) {
+      const compatibility = checkBrokerCompatibility(res, { expectedProtocolVersion });
+      if (!compatibility.ok) {
+        const liveSessions = liveBrokerSessions(res.sessions);
+        return {
+          ok: false,
+          reason: liveSessions.length > 0
+            ? 'broker-protocol-incompatible-live'
+            : 'broker-protocol-incompatible-unknown',
+          compatibility_reason: compatibility.reason,
+          broker: res.broker,
+          live_sessions: liveSessions,
+          error: liveSessions.length > 0
+            ? `session host is incompatible (${compatibility.reason}) with ${liveSessions.length} live session(s); refusing to launch through it`
+            : `session host is incompatible (${compatibility.reason}); refusing to launch through it`,
+          ...paths,
+        };
+      }
       writeSessionHostManifest({ sessionId, paths, broker: res.broker, now });
       return { ok: true, started: true, ...paths, broker: res.broker };
     }
@@ -166,6 +218,7 @@ function writeSessionHostManifest({ sessionId, paths, broker = {}, now = () => n
     socket_path: paths.socketPath,
     pid_path: paths.pidPath,
     log_path: paths.logPath,
+    lifecycle_path: paths.lifecyclePath,
     broker_pid: broker?.pid || null,
     protocol_version: broker?.protocol_version || BROKER_PROTOCOL_VERSION,
     updated_at: now(),

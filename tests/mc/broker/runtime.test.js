@@ -3,7 +3,7 @@ import test, { describe } from 'node:test';
 
 import { BrokerRuntime } from '../../../src/mc/broker/runtime.js';
 
-function makeFakePtyFactory() {
+function makeFakePtyFactory({ exitOnExitSubscription = null } = {}) {
   const ptys = [];
   const calls = [];
   const factory = {
@@ -16,7 +16,10 @@ function makeFakePtyFactory() {
         resizes: [],
         kills: [],
         onData(handler) { dataHandler = handler; },
-        onExit(handler) { exitHandler = handler; },
+        onExit(handler) {
+          exitHandler = handler;
+          if (exitOnExitSubscription) handler(exitOnExitSubscription);
+        },
         write(data) { this.writes.push(data); },
         resize(cols, rows) { this.resizes.push({ cols, rows }); },
         kill(signal) { this.kills.push(signal); },
@@ -54,9 +57,10 @@ function makeLaunchResolver({ ok = true } = {}) {
 }
 
 function makeRuntime(opts = {}) {
-  const fake = makeFakePtyFactory();
+  const fake = makeFakePtyFactory(opts.pty || {});
   const resolver = makeLaunchResolver(opts.launch || {});
   const sidecars = [];
+  const lifecycleWrites = [];
   let now = 1_000;
   const runtime = new BrokerRuntime({
     ptyFactory: fake.factory,
@@ -66,13 +70,21 @@ function makeRuntime(opts = {}) {
     clock: () => now,
     managedProviderResolver: opts.managedProviderResolver,
     credentialDomainCloser: opts.credentialDomainCloser,
-    sidecarFactory: (spec) => {
+    lifecycleWriter: (record) => {
+      lifecycleWrites.push(record);
+      return record;
+    },
+    sidecarFactory: opts.sidecarFactory || ((spec) => {
       const sidecar = {
         spec,
         started: false,
         stopped: false,
+        stopOptions: null,
         start() { this.started = true; },
-        stop() { this.stopped = true; },
+        stop(options) {
+          this.stopped = true;
+          this.stopOptions = options;
+        },
         currentProjection() {
           return {
             contract_version: 'mc-session-projection-v1',
@@ -88,13 +100,14 @@ function makeRuntime(opts = {}) {
       };
       sidecars.push(sidecar);
       return sidecar;
-    },
+    }),
   });
   return {
     runtime,
     fake,
     resolver,
     sidecars,
+    lifecycleWrites,
     tick(ms = 1) {
       now += ms;
       return now;
@@ -286,6 +299,101 @@ describe('BrokerRuntime', () => {
     }]);
   });
 
+  test('managed reopen waits for prior credential custody to close before replacing the dead runtime', async () => {
+    const firstDescriptor = {
+      schema: 'mc-local-codex-credential-domain/v1',
+      domain_path: '/credential/first',
+    };
+    const nextDescriptor = {
+      schema: 'mc-local-codex-credential-domain/v1',
+      domain_path: '/credential/next',
+    };
+    const closeCalls = [];
+    let finishFirstClose;
+    const { runtime, fake } = makeRuntime({
+      managedProviderResolver: ({ launch, input }) => ({
+        ok: true,
+        launch,
+        environmentMode: 'replace',
+        env: {
+          PATH: '/usr/bin:/bin',
+          HOME: input.credential_domain.domain_path,
+          CODEX_HOME: `${input.credential_domain.domain_path}/.codex`,
+        },
+        descriptor: input.credential_domain,
+      }),
+      credentialDomainCloser: (input) => {
+        closeCalls.push(input);
+        if (closeCalls.length === 1) {
+          return new Promise((resolve) => { finishFirstClose = resolve; });
+        }
+        return Promise.resolve({ ok: true, persisted: true });
+      },
+    });
+    const launch = (descriptor) => runtime.handle({
+      type: 'launch_session',
+      session: {
+        id: 'sess_managed_reopen',
+        tool: 'codex',
+        credential_domain: descriptor,
+      },
+    });
+
+    assert.equal(launch(firstDescriptor).ok, true);
+    fake.ptys[0].emitExit({ exitCode: 0, signal: null });
+    const reopening = launch(nextDescriptor);
+
+    assert.equal(typeof reopening?.then, 'function');
+    assert.equal(fake.ptys.length, 1, 'replacement must wait for prior custody close');
+    finishFirstClose({ ok: true, persisted: true });
+    const reopened = await reopening;
+
+    assert.equal(reopened.ok, true);
+    assert.equal(fake.ptys.length, 2);
+    assert.equal(fake.calls[1].options.env.CODEX_HOME, '/credential/next/.codex');
+    fake.ptys[1].emitExit({ exitCode: 0, signal: null });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(closeCalls.length, 2);
+    assert.equal(closeCalls[1].descriptor, nextDescriptor);
+  });
+
+  test('a duplicate old managed exit never closes the replacement credential domain', async () => {
+    const firstDescriptor = { schema: 'mc-local-codex-credential-domain/v1', domain_path: '/credential/first' };
+    const nextDescriptor = { schema: 'mc-local-codex-credential-domain/v1', domain_path: '/credential/next' };
+    const closeCalls = [];
+    const { runtime, fake } = makeRuntime({
+      managedProviderResolver: ({ launch, input }) => ({
+        ok: true,
+        launch,
+        environmentMode: 'replace',
+        env: { PATH: '/usr/bin:/bin', HOME: input.credential_domain.domain_path },
+        descriptor: input.credential_domain,
+      }),
+      credentialDomainCloser: async (input) => {
+        closeCalls.push(input.descriptor);
+        return { ok: true, persisted: true };
+      },
+    });
+    const launch = (descriptor) => runtime.handle({
+      type: 'launch_session',
+      session: { id: 'sess_managed_generation_owner', tool: 'codex', credential_domain: descriptor },
+    });
+
+    assert.equal(launch(firstDescriptor).ok, true);
+    fake.ptys[0].emitExit({ exitCode: 0, signal: null });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(closeCalls, [firstDescriptor]);
+
+    assert.equal(launch(nextDescriptor).ok, true);
+    fake.ptys[0].emitExit({ exitCode: 0, signal: null });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(closeCalls, [firstDescriptor]);
+
+    fake.ptys[1].emitExit({ exitCode: 0, signal: null });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(closeCalls, [firstDescriptor, nextDescriptor]);
+  });
+
   test('managed launch never reuses an existing native broker session', () => {
     const { runtime } = makeRuntime({
       managedProviderResolver: ({ launch, input }) => {
@@ -430,7 +538,7 @@ describe('BrokerRuntime', () => {
     assert.equal(session.worktree_name, 'smoke-test');
   });
 
-  test('write, dispatch, resize, stop, and remove forward to the session manager', () => {
+  test('write, dispatch, resize, stop, and remove forward to the session manager', async () => {
     const { runtime, fake } = makeRuntime();
 
     runtime.handle({ type: 'launch_session', session: { id: 'sess_a' } });
@@ -444,8 +552,10 @@ describe('BrokerRuntime', () => {
     assert.deepEqual(fake.ptys[0].kills, ['SIGHUP']);
 
     const removed = runtime.handle({ type: 'remove_session', id: 'sess_a' });
-    assert.deepEqual(removed, { ok: true, removed: true });
+    assert.equal(typeof removed?.then, 'function');
     assert.deepEqual(fake.ptys[0].kills, ['SIGHUP', 'SIGTERM']);
+    fake.ptys[0].emitExit({ exitCode: 0, signal: null });
+    assert.deepEqual(await removed, { ok: true, removed: true });
     assert.deepEqual(runtime.handle({ type: 'sessions' }), { ok: true, sessions: [] });
   });
 
@@ -612,7 +722,7 @@ describe('BrokerRuntime', () => {
   });
 
   test('launch_session starts and stops sidecars when requested', () => {
-    const { runtime, sidecars } = makeRuntime();
+    const { runtime, fake, sidecars } = makeRuntime();
 
     const res = runtime.handle({
       type: 'launch_session',
@@ -636,7 +746,251 @@ describe('BrokerRuntime', () => {
     assert.equal(runtime.listSessions()[0].session_projection.reason_code, 'recent_output');
 
     runtime.handle({ type: 'remove_session', id: 'sess_a' });
+    assert.equal(sidecars[0].stopped, false, 'sidecars stay alive until the PTY confirms exit');
+    fake.ptys[0].emitExit({ exitCode: 0, signal: null });
     assert.equal(sidecars[0].stopped, true);
+    assert.deepEqual(sidecars[0].stopOptions, { terminal: true });
+  });
+
+  test('journals the exact runtime generation before launch and before terminal sidecar cleanup', () => {
+    const generation = '4f50f5a1-4c6b-4d6a-8b5c-152c5e6b8701';
+    const { runtime, fake, sidecars, lifecycleWrites } = makeRuntime();
+    const launched = runtime.handle({
+      type: 'launch_session',
+      session: {
+        id: 'sess_lifecycle',
+        runtime_generation: generation,
+        sidecars: {
+          codingSessionId: 'sess_lifecycle',
+          runtimeGeneration: generation,
+          apiUrl: 'https://memoro.test',
+          token: 'secret-stays-broker-side',
+        },
+      },
+    });
+
+    assert.equal(launched.ok, true);
+    assert.equal(lifecycleWrites.length, 1);
+    assert.equal(lifecycleWrites[0].state, 'live');
+    assert.equal(lifecycleWrites[0].runtimeGeneration, generation);
+    assert.equal(JSON.stringify(lifecycleWrites[0]).includes('secret-stays-broker-side'), false);
+    assert.equal(runtime.listSessions()[0].runtime_generation, generation);
+
+    fake.ptys[0].emitExit({ exitCode: 0, signal: null });
+
+    assert.equal(lifecycleWrites.length, 2);
+    assert.equal(lifecycleWrites[1].state, 'exited');
+    assert.equal(lifecycleWrites[1].runtimeGeneration, generation);
+    assert.equal(lifecycleWrites[1].exitCode, 0);
+    assert.equal(sidecars[0].stopped, true);
+    assert.deepEqual(sidecars[0].stopOptions, { terminal: true });
+  });
+
+  test('replacement waits for the previous PTY exit and a duplicate old exit cannot overwrite it', async () => {
+    const firstGeneration = '4f50f5a1-4c6b-4d6a-8b5c-152c5e6b8701';
+    const nextGeneration = 'd5e6439f-54e2-493b-a10f-5e5e014a2904';
+    const { runtime, fake, sidecars, lifecycleWrites } = makeRuntime();
+    const launch = (runtimeGeneration) => runtime.handle({
+      type: 'launch_session',
+      session: {
+        id: 'sess_replaced',
+        runtime_generation: runtimeGeneration,
+        sidecars: {
+          codingSessionId: 'sess_replaced',
+          runtimeGeneration,
+          apiUrl: 'https://memoro.test',
+          token: 'broker-only',
+        },
+      },
+    });
+
+    assert.equal(launch(firstGeneration).ok, true);
+    const removing = runtime.handle({ type: 'remove_session', id: 'sess_replaced' });
+    assert.equal(typeof removing?.then, 'function');
+    fake.ptys[0].emitExit({ exitCode: 0, signal: null });
+    assert.equal((await removing).ok, true);
+    assert.equal(launch(nextGeneration).ok, true);
+    assert.deepEqual(
+      lifecycleWrites.map((record) => [record.state, record.runtimeGeneration]),
+      [['live', firstGeneration], ['exited', firstGeneration], ['live', nextGeneration]],
+    );
+
+    // Node-pty should only emit once, but a duplicate late notification from
+    // the retired generation must not touch the replacement state.
+    fake.ptys[0].emitExit({ exitCode: 0, signal: null });
+
+    assert.equal(sidecars[0].stopped, true);
+    assert.equal(sidecars[1].stopped, false);
+    assert.deepEqual(
+      lifecycleWrites.map((record) => [record.state, record.runtimeGeneration]),
+      [['live', firstGeneration], ['exited', firstGeneration], ['live', nextGeneration]],
+      'old exit must not overwrite the replacement live journal',
+    );
+
+    fake.ptys[1].emitExit({ exitCode: 0, signal: null });
+    assert.equal(sidecars[1].stopped, true);
+    assert.deepEqual(lifecycleWrites.at(-1), {
+      path: lifecycleWrites.at(-1).path,
+      codingSessionId: 'sess_replaced',
+      runtimeGeneration: nextGeneration,
+      state: 'exited',
+      observedAt: lifecycleWrites.at(-1).observedAt,
+      exitCode: 0,
+    });
+  });
+
+  test('removing a replacement generation never reuses the prior generation finalization', async () => {
+    const firstGeneration = '4f50f5a1-4c6b-4d6a-8b5c-152c5e6b8701';
+    const nextGeneration = 'd5e6439f-54e2-493b-a10f-5e5e014a2904';
+    const { runtime, fake } = makeRuntime();
+    const launch = (runtimeGeneration) => runtime.handle({
+      type: 'launch_session',
+      session: { id: 'sess_generation_owner', runtime_generation: runtimeGeneration },
+    });
+
+    assert.equal(launch(firstGeneration).ok, true);
+    const removeFirst = runtime.handle({ type: 'remove_session', id: 'sess_generation_owner' });
+    fake.ptys[0].emitExit({ exitCode: 0, signal: null });
+    assert.equal((await removeFirst).ok, true);
+    assert.equal(launch(nextGeneration).ok, true);
+
+    const removeSecond = runtime.handle({ type: 'remove_session', id: 'sess_generation_owner' });
+    assert.equal(typeof removeSecond?.then, 'function');
+    assert.equal(runtime.handle({ type: 'session_status', id: 'sess_generation_owner' }).session.session_state, 'live');
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(runtime.handle({ type: 'session_status', id: 'sess_generation_owner' }).session.session_state, 'live');
+
+    fake.ptys[1].emitExit({ exitCode: 0, signal: null });
+    assert.equal((await removeSecond).ok, true);
+  });
+
+  test('synchronous PTY exit owns metadata before launch and never starts sidecars', () => {
+    const generation = '4f50f5a1-4c6b-4d6a-8b5c-152c5e6b8701';
+    const { runtime, sidecars, lifecycleWrites } = makeRuntime({
+      pty: { exitOnExitSubscription: { exitCode: 1, signal: null } },
+    });
+
+    const result = runtime.handle({
+      type: 'launch_session',
+      session: {
+        id: 'sess_immediate_exit',
+        runtime_generation: generation,
+        sidecars: { codingSessionId: 'sess_immediate_exit', runtimeGeneration: generation },
+      },
+    });
+
+    assert.deepEqual(result, {
+      ok: false,
+      reason: 'broker-session-exited',
+      error: 'broker session exited before it could become live',
+    });
+    assert.equal(sidecars.length, 0);
+    assert.deepEqual(lifecycleWrites.map((entry) => [entry.state, entry.runtimeGeneration]), [
+      ['live', generation],
+      ['exited', generation],
+    ]);
+  });
+
+  test('sidecar startup failure stops the runtime and waits for terminal finalization', async () => {
+    let finishTerminal;
+    const { runtime, fake } = makeRuntime({
+      sidecarFactory: () => ({
+        start() { throw new Error('socket bind failed'); },
+        stop() { return new Promise((resolve) => { finishTerminal = resolve; }); },
+      }),
+    });
+
+    const launch = runtime.handle({
+      type: 'launch_session',
+      session: { id: 'sess_sidecar_failure', sidecars: { codingSessionId: 'sess_sidecar_failure' } },
+    });
+    assert.equal(typeof launch?.then, 'function');
+    assert.deepEqual(fake.ptys[0].kills, ['SIGTERM']);
+    fake.ptys[0].emitExit({ exitCode: 1, signal: null });
+    finishTerminal(true);
+    const result = await launch;
+    assert.equal(result.ok, false);
+    assert.equal(result.reason, 'sidecar-start-failed');
+    assert.match(result.error, /socket bind failed/);
+  });
+
+  test('shutdown waits for PTY exit and terminal sidecar finalization', async () => {
+    let finishTerminal;
+    const { runtime, fake } = makeRuntime({
+      sidecarFactory: () => ({
+        start() {},
+        stop() { return new Promise((resolve) => { finishTerminal = resolve; }); },
+      }),
+    });
+    assert.equal(runtime.handle({
+      type: 'launch_session',
+      session: { id: 'sess_shutdown', sidecars: { codingSessionId: 'sess_shutdown' } },
+    }).ok, true);
+
+    const stopping = runtime.shutdown({ timeoutMs: 1_000 });
+    assert.deepEqual(fake.ptys[0].kills, ['SIGTERM']);
+    fake.ptys[0].emitExit({ exitCode: 0, signal: null });
+    await new Promise((resolve) => setImmediate(resolve));
+    finishTerminal(true);
+    assert.deepEqual(await stopping, { ok: true, credential_cleanup: 'confirmed' });
+  });
+
+  test('terminal presence failure is advisory once the exit journal is durable', async () => {
+    const { runtime, fake } = makeRuntime({
+      sidecarFactory: () => ({
+        start() {},
+        stop() { return false; },
+      }),
+    });
+    assert.equal(runtime.handle({
+      type: 'launch_session',
+      session: { id: 'sess_terminal_advisory', sidecars: { codingSessionId: 'sess_terminal_advisory' } },
+    }).ok, true);
+
+    const removing = runtime.handle({ type: 'remove_session', id: 'sess_terminal_advisory' });
+    fake.ptys[0].emitExit({ exitCode: 0, signal: null });
+    assert.deepEqual(await removing, { ok: true, removed: true });
+
+    assert.equal(runtime.handle({
+      type: 'launch_session',
+      session: { id: 'sess_terminal_advisory_shutdown', sidecars: { codingSessionId: 'sess_terminal_advisory_shutdown' } },
+    }).ok, true);
+    const shutdown = runtime.shutdown();
+    fake.ptys[1].emitExit({ exitCode: 0, signal: null });
+    assert.deepEqual(await shutdown, { ok: true, credential_cleanup: 'confirmed' });
+  });
+
+  test('relaunch replaces the retained dead broker row for the same coding session id', () => {
+    const firstGeneration = '4f50f5a1-4c6b-4d6a-8b5c-152c5e6b8701';
+    const nextGeneration = 'd5e6439f-54e2-493b-a10f-5e5e014a2904';
+    const { runtime, fake, lifecycleWrites } = makeRuntime();
+    const launch = (runtimeGeneration) => runtime.handle({
+      type: 'launch_session',
+      session: {
+        id: 'sess_reopen',
+        runtime_generation: runtimeGeneration,
+      },
+    });
+
+    assert.equal(launch(firstGeneration).ok, true);
+    fake.ptys[0].emitExit({ exitCode: 0, signal: null });
+    assert.equal(runtime.listSessions()[0].session_state, 'dead');
+
+    const reopened = launch(nextGeneration);
+
+    assert.equal(reopened.ok, true);
+    assert.equal(fake.ptys.length, 2);
+    assert.equal(runtime.listSessions().length, 1);
+    assert.equal(runtime.listSessions()[0].session_state, 'live');
+    assert.equal(runtime.listSessions()[0].runtime_generation, nextGeneration);
+    assert.deepEqual(
+      lifecycleWrites.map((record) => [record.state, record.runtimeGeneration]),
+      [
+        ['live', firstGeneration],
+        ['exited', firstGeneration],
+        ['live', nextGeneration],
+      ],
+    );
   });
 
   test('returns structured errors for launch failures and invalid payloads', () => {
@@ -653,6 +1007,11 @@ describe('BrokerRuntime', () => {
     const { runtime } = makeRuntime();
     assert.equal(runtime.handle({ type: 'bogus' }), null);
     assert.match(runtime.handle({ type: 'launch_session', session: { id: '' } }).error, /session id/);
+    assert.deepEqual(runtime.handle({ type: 'session_status', id: 'missing' }), {
+      ok: false,
+      reason: 'session-not-found',
+      error: 'unknown broker session: missing',
+    });
     assert.match(runtime.handle({ type: 'write_session', id: 'missing', data: 'x' }).error, /unknown broker session/);
     assert.match(runtime.handle({ type: 'resize_session', id: 'missing', cols: 0, rows: 24 }).error, /cols/);
   });

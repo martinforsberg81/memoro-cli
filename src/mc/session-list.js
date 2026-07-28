@@ -30,9 +30,16 @@ export async function fetchActiveCodingSessions({
 
   try {
     const res = await fetchJson(apiUrl, ACTIVE_PATH, { token });
+    if (res?.ok !== true || !Array.isArray(res.sessions)) {
+      return {
+        ok: false,
+        sessions: [],
+        warning: 'active sessions unavailable: invalid Memoro response',
+      };
+    }
     return {
       ok: true,
-      sessions: Array.isArray(res?.sessions) ? res.sessions : [],
+      sessions: res.sessions,
       warning: null,
     };
   } catch (err) {
@@ -255,6 +262,10 @@ export function normalizeActiveSession(session = {}) {
     repo: nonEmpty(session.repo),
     branch,
     machine_id: nonEmpty(session.machine_id),
+    source_id: nonEmpty(session.source_id),
+    source_kind: nonEmpty(session.source_kind),
+    runtime_generation: nonEmpty(session.runtime_generation),
+    presence_state: nonEmpty(session.presence_state),
     source: nonEmpty(session.source || session.tool),
     idle_seconds: typeof session.idle_seconds === 'number' ? session.idle_seconds : null,
     status: formatStatus(session.idle_seconds),

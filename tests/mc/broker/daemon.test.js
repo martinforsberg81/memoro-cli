@@ -7,7 +7,9 @@ import test, { afterEach, describe } from 'node:test';
 
 import {
   BROKER_PROTOCOL_VERSION,
+  finalizeDaemonSignal,
   handleBrokerMessage,
+  runBrokerDaemon,
   startBrokerServer,
 } from '../../../src/mc/broker/daemon.js';
 
@@ -286,5 +288,111 @@ describe('broker daemon lifecycle', () => {
     assert.equal(state.server.listening, false);
     assert.equal(existsSync(p.pidPath), false);
     state = null;
+  });
+
+  test('stop fails closed and keeps the host available when runtime finalization is unconfirmed', async () => {
+    const p = paths();
+    state = await startBrokerServer({
+      ...p,
+      createServerImpl: fakeCreateServer,
+      runtime: {
+        listSessions: () => [{ id: 'sess_a' }],
+        shutdown: async () => ({ ok: false, reason: 'runtime-finalization-timeout' }),
+      },
+    });
+
+    await assert.rejects(state.stop(), /runtime-finalization-timeout/);
+    assert.equal(state.server.listening, true);
+    assert.equal(existsSync(p.pidPath), true);
+  });
+
+  test('signal finalization does not exit or remove the host before runtime finalization succeeds', async () => {
+    const p = paths();
+    const exits = [];
+    state = await startBrokerServer({
+      ...p,
+      mcVersion: null,
+      createServerImpl: fakeCreateServer,
+      runtime: {
+        listSessions: () => [{ id: 'sess_a' }],
+        shutdown: async () => ({ ok: false, reason: 'runtime-finalization-timeout' }),
+      },
+    });
+    const result = await finalizeDaemonSignal({ state, exitProcess: (code) => exits.push(code) });
+
+    assert.deepEqual(result, { ok: false, reason: 'runtime-finalization-timeout' });
+    assert.deepEqual(exits, []);
+    assert.equal(state.server.listening, true);
+    assert.equal(existsSync(p.pidPath), true);
+  });
+
+  test('socket stop keeps the daemon alive when shutdown throws', async () => {
+    const p = paths();
+    const exits = [];
+    let stopped = false;
+    state = await startBrokerServer({
+      ...p,
+      createServerImpl: fakeCreateServer,
+      exitOnStop: true,
+      exitProcess: (code) => exits.push(code),
+      onStop: () => { stopped = true; },
+      runtime: {
+        listSessions: () => [{ id: 'sess_a' }],
+        shutdown: async () => { throw new Error('runtime finalization failed'); },
+      },
+    });
+    const conn = new EventEmitter();
+    conn.on = conn.on.bind(conn);
+    conn.end = () => {};
+    state.server.handler(conn);
+    conn.emit('data', Buffer.from('{"type":"stop"}\n'));
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.deepEqual(exits, []);
+    assert.equal(stopped, false);
+    assert.equal(state.server.listening, true);
+    assert.equal(existsSync(p.pidPath), true);
+  });
+
+  test('signal handlers retry a failed finalization instead of falling through to default termination', async () => {
+    const processRef = new EventEmitter();
+    processRef.exitCode = 0;
+    const exits = [];
+    let stops = 0;
+    let receivedExitProcess = null;
+    const brokerState = {
+      stop: async () => {
+        stops += 1;
+        if (stops === 1) throw new Error('runtime finalization failed');
+      },
+      status: () => ({ ok: true }),
+    };
+
+    void runBrokerDaemon({
+      processRef,
+      exitProcess: (code) => exits.push(code),
+      mcVersion: null,
+      runtime: {},
+      startBrokerServerImpl: async (options) => {
+        receivedExitProcess = options.exitProcess;
+        return brokerState;
+      },
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    processRef.emit('SIGTERM');
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(stops, 1);
+    assert.equal(processRef.exitCode, 1);
+    assert.deepEqual(exits, []);
+    assert.equal(processRef.listenerCount('SIGTERM'), 1);
+
+    processRef.emit('SIGTERM');
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(stops, 2);
+    assert.deepEqual(exits, [0]);
+    assert.equal(typeof receivedExitProcess, 'function');
+    processRef.removeAllListeners();
   });
 });

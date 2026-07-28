@@ -121,10 +121,13 @@ describe('mc resume <name>', () => {
       stdout: { write() {} },
       stdin: {},
       findEntry: () => entry,
-      findLiveBrokerSessionForEntry: async () => ({
-        id: 'sess_native_live',
-        session_state: 'live',
-        attachable: true,
+      inspectLocalBrokerSessionForEntry: async () => ({
+        verdict: 'live',
+        session: {
+          id: 'sess_native_live',
+          session_state: 'live',
+          attachable: true,
+        },
       }),
       attachBrokerSession: async () => assert.fail('managed mode must not attach'),
       materialiseVaultBeforeLaunch: async () => assert.fail('managed conflict must not open vault'),
@@ -706,10 +709,11 @@ describe('mc resume <name>', () => {
     }
   });
 
-  test('plain open proceeds past a stale same-machine record with a native resume', async () => {
+  test('plain open proceeds only when local evidence proves the exact server generation exited', async () => {
     const old = process.env.MC_TEST_MODE;
     delete process.env.MC_TEST_MODE;
     const resumed = [];
+    const generation = '4f50f5a1-4c6b-4d6a-8b5c-152c5e6b8701';
     try {
       const status = await runResume(['data'], {
         stdin: { isTTY: true },
@@ -720,18 +724,137 @@ describe('mc resume <name>', () => {
           coding_session_id: 'sess_data', tool_session_id: 'native_abc',
           session_state: 'live', tool: 'claude',
         }),
-        requestBroker: async () => ({ ok: true, sessions: [] }),
+        attachLiveBrokerSession: async () => ({
+          attached: false,
+          localPresence: { verdict: 'exited', runtime_generation: generation },
+        }),
         fetchActiveSessions: async () => ({
           ok: true,
-          sessions: [{ coding_session_id: 'sess_data', label: 'data', machine_id: 'this-host' }],
+          sessions: [{
+            coding_session_id: 'sess_data',
+            label: 'data',
+            machine_id: 'this-host',
+            runtime_generation: generation,
+          }],
         }),
-        hostname: () => 'this-host',
         launchResumeSession: ({ entry }) => { resumed.push(entry); return 0; },
         launchFreshSession: () => assert.fail('has a native session — must resume, not restart'),
         upsertEntry: (e) => e,
       });
       assert.equal(status, 0);
-      assert.equal(resumed.length, 1, 'stale same-machine record must not block the relaunch');
+      assert.equal(resumed.length, 1, 'the exited generation must not block the relaunch');
+    } finally {
+      if (old === undefined) delete process.env.MC_TEST_MODE;
+      else process.env.MC_TEST_MODE = old;
+    }
+  });
+
+  test('plain open never treats same-host naming as proof that an unreachable runtime exited', async () => {
+    const old = process.env.MC_TEST_MODE;
+    delete process.env.MC_TEST_MODE;
+    const stdoutOut = [];
+    try {
+      const status = await runResume(['data'], {
+        stdin: { isTTY: true },
+        stdout: { isTTY: true, write: (text) => stdoutOut.push(text) },
+        stderr: { write() {} },
+        findEntry: () => makeEntry({
+          name: 'data', branch: 'sess/data', worktree_path: '/tmp/data',
+          coding_session_id: 'sess_data', tool_session_id: 'native_abc',
+          session_state: 'live', tool: 'claude',
+        }),
+        attachLiveBrokerSession: async () => ({
+          attached: false,
+          localPresence: { verdict: 'unknown' },
+        }),
+        fetchActiveSessions: async () => ({
+          ok: true,
+          sessions: [{
+            coding_session_id: 'sess_data',
+            label: 'data',
+            machine_id: 'this-host',
+            runtime_generation: '4f50f5a1-4c6b-4d6a-8b5c-152c5e6b8701',
+          }],
+        }),
+        hostname: () => 'this-host',
+        launchResumeSession: () => assert.fail('unknown liveness must not launch'),
+        launchFreshSession: () => assert.fail('unknown liveness must not launch'),
+        upsertEntry: (entry) => entry,
+      });
+      assert.equal(status, 0);
+      assert.match(stdoutOut.join(''), /already active/);
+    } finally {
+      if (old === undefined) delete process.env.MC_TEST_MODE;
+      else process.env.MC_TEST_MODE = old;
+    }
+  });
+
+  test('plain open blocks a locally journaled live generation when its broker is unreachable', async () => {
+    const old = process.env.MC_TEST_MODE;
+    delete process.env.MC_TEST_MODE;
+    const stderrOut = [];
+    try {
+      const status = await runResume(['data'], {
+        stdin: { isTTY: true },
+        stdout: { isTTY: true, write() {} },
+        stderr: { write: (text) => stderrOut.push(text) },
+        findEntry: () => makeEntry({
+          name: 'data', branch: 'sess/data', worktree_path: '/tmp/data',
+          coding_session_id: 'sess_data', tool_session_id: 'native_abc',
+          session_state: 'live', tool: 'claude',
+        }),
+        attachLiveBrokerSession: async () => ({
+          attached: false,
+          localPresence: {
+            verdict: 'unreachable',
+            runtime_generation: '4f50f5a1-4c6b-4d6a-8b5c-152c5e6b8701',
+          },
+        }),
+        fetchActiveSessions: async () => ({ ok: true, sessions: [] }),
+        launchResumeSession: () => assert.fail('unreachable live generation must not launch'),
+        launchFreshSession: () => assert.fail('unreachable live generation must not launch'),
+        upsertEntry: (entry) => entry,
+      });
+      assert.equal(status, 1);
+      assert.match(stderrOut.join(''), /locally recorded live runtime.*refusing to start a duplicate/s);
+    } finally {
+      if (old === undefined) delete process.env.MC_TEST_MODE;
+      else process.env.MC_TEST_MODE = old;
+    }
+  });
+
+  test('plain open fails closed when cross-source active presence cannot be verified', async () => {
+    const old = process.env.MC_TEST_MODE;
+    delete process.env.MC_TEST_MODE;
+    const stderrOut = [];
+    try {
+      const status = await runResume(['data'], {
+        stdin: { isTTY: true },
+        stdout: { isTTY: true, write() {} },
+        stderr: { write: (text) => stderrOut.push(text) },
+        findEntry: () => makeEntry({
+          name: 'data', branch: 'sess/data', worktree_path: '/tmp/data',
+          coding_session_id: 'sess_data', tool_session_id: 'native_abc',
+          session_state: 'dead', tool: 'claude',
+        }),
+        attachLiveBrokerSession: async () => ({
+          attached: false,
+          localPresence: {
+            verdict: 'exited',
+            runtime_generation: '4f50f5a1-4c6b-4d6a-8b5c-152c5e6b8701',
+          },
+        }),
+        fetchActiveSessions: async () => ({
+          ok: false,
+          sessions: [],
+          warning: 'control plane unavailable',
+        }),
+        launchResumeSession: () => assert.fail('unverified cross-source state must not launch'),
+        launchFreshSession: () => assert.fail('unverified cross-source state must not launch'),
+        upsertEntry: (entry) => entry,
+      });
+      assert.equal(status, 1);
+      assert.match(stderrOut.join(''), /cannot verify.*another source.*refusing to start a duplicate/s);
     } finally {
       if (old === undefined) delete process.env.MC_TEST_MODE;
       else process.env.MC_TEST_MODE = old;
@@ -751,7 +874,10 @@ describe('mc resume <name>', () => {
           name: 'data', branch: 'sess/data', worktree_path: '/tmp/data',
           coding_session_id: 'sess_data', session_state: 'live', tool: 'claude',
         }),
-        findLiveBrokerSessionForEntry: async () => ({ id: 'sess_data', attachable: true }),
+        inspectLocalBrokerSessionForEntry: async () => ({
+          verdict: 'live',
+          session: { id: 'sess_data', attachable: true },
+        }),
         fetchActiveSessions: async () => ({ ok: true, sessions: [] }),
         launchResumeSession: () => assert.fail('must not launch'),
         launchFreshSession: () => assert.fail('must not launch'),
@@ -765,7 +891,7 @@ describe('mc resume <name>', () => {
     }
   });
 
-  test('switch proceeds past a stale same-machine server record when no local PTY is live', async () => {
+  test('switch proceeds past the exact server generation after positive local exit evidence', async () => {
     const old = process.env.MC_TEST_MODE;
     delete process.env.MC_TEST_MODE;
     const freshLaunched = [];
@@ -778,12 +904,19 @@ describe('mc resume <name>', () => {
           name: 'data', branch: 'sess/data', worktree_path: '/tmp/data',
           coding_session_id: 'sess_data', session_state: 'live', tool: 'claude',
         }),
-        findLiveBrokerSessionForEntry: async () => null,
+        inspectLocalBrokerSessionForEntry: async () => ({
+          verdict: 'exited',
+          runtime_generation: '4f50f5a1-4c6b-4d6a-8b5c-152c5e6b8701',
+        }),
         fetchActiveSessions: async () => ({
           ok: true,
-          sessions: [{ coding_session_id: 'sess_data', label: 'data', machine_id: 'this-host' }],
+          sessions: [{
+            coding_session_id: 'sess_data',
+            label: 'data',
+            machine_id: 'this-host',
+            runtime_generation: '4f50f5a1-4c6b-4d6a-8b5c-152c5e6b8701',
+          }],
         }),
-        hostname: () => 'this-host',
         launchResumeSession: () => assert.fail('switch must not resume the old provider'),
         launchFreshSession: ({ entry }) => { freshLaunched.push(entry); return 0; },
         upsertEntry: (e) => ({ ...makeEntry({ name: e.name, branch: 'sess/data', worktree_path: '/tmp/data', coding_session_id: 'sess_data' }), ...e }),
@@ -810,7 +943,7 @@ describe('mc resume <name>', () => {
           name: 'data', branch: 'sess/data', worktree_path: '/tmp/data',
           coding_session_id: 'sess_data', session_state: 'live', tool: 'claude',
         }),
-        findLiveBrokerSessionForEntry: async () => null,
+        inspectLocalBrokerSessionForEntry: async () => ({ verdict: 'unknown' }),
         fetchActiveSessions: async () => ({
           ok: true,
           sessions: [{ coding_session_id: 'sess_data', label: 'data', machine_id: 'other-host' }],

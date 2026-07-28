@@ -34,6 +34,8 @@ const CODEX_SQLITE_LOCK_OUTPUT = `Codex couldn't start because another Codex pro
 Technical details:
   Cause: failed to initialize state runtime at /Users/test/.codex: failed to open log DB at /Users/test/.codex/logs_2.sqlite: error returned from database: (code: 5) database is locked
 ERROR: failed to initialize sqlite local db at /Users/test/.codex/state_5.sqlite`;
+const RUNTIME_GENERATION = '4f50f5a1-4c6b-4d6a-8b5c-152c5e6b8701';
+const NEXT_RUNTIME_GENERATION = 'd5e6439f-54e2-493b-a10f-5e5e014a2904';
 
 const SESSION_CAPABILITIES = Object.freeze({
   schema: 1,
@@ -94,7 +96,13 @@ function earlyCodexExit() {
   };
 }
 
-function launchCodexWithMocks({ request, attach, streams, sleepFn = async () => {} }) {
+function launchCodexWithMocks({
+  request,
+  attach,
+  streams,
+  sleepFn = async () => {},
+  randomUUID,
+}) {
   return launchBrokerOwnedSession({
     cwd: '/repo',
     codingSessionId: 'sess_retry',
@@ -124,6 +132,7 @@ function launchCodexWithMocks({ request, attach, streams, sleepFn = async () => 
       resolveEffectiveConfig: ({ globalConfig }) => globalConfig,
       prepareCloudflareGuardEnv: ({ baseEnv }) => ({ env: baseEnv }),
       sleep: sleepFn,
+      ...(randomUUID ? { randomUUID } : {}),
     },
   });
 }
@@ -190,7 +199,10 @@ describe('launchBrokerOwnedSession', () => {
       },
       request: async (message) => {
         requests.push(message);
-        return { ok: true, session: { id: message.session.id } };
+        return {
+          ok: true,
+          session: { id: message.session.id, runtime_generation: message.session.runtime_generation },
+        };
       },
       ensureBroker: async () => ({ ok: true, broker: { pid: 42 } }),
       ensureCloudBroker: async () => ({ ok: true }),
@@ -282,14 +294,26 @@ describe('launchBrokerOwnedSession', () => {
   test('retries an early Codex SQLite lock and attaches to the successful relaunch', async () => {
     const streams = makeStreams();
     const requestTypes = [];
+    const launchGenerations = [];
     const sleeps = [];
     const attachCodes = [0, 0];
     let outputFetches = 0;
+    const generations = [RUNTIME_GENERATION, NEXT_RUNTIME_GENERATION];
     const res = await launchCodexWithMocks({
       streams,
       request: async (message) => {
         requestTypes.push(message.type);
-        if (message.type === 'launch_session') return { ok: true, session: { id: 'sess_retry' } };
+        if (message.type === 'launch_session') {
+          launchGenerations.push(message.session.runtime_generation);
+          assert.equal(
+            message.session.sidecars.runtimeGeneration,
+            message.session.runtime_generation,
+          );
+          return {
+            ok: true,
+            session: { id: 'sess_retry', runtime_generation: message.session.runtime_generation },
+          };
+        }
         if (message.type === 'fetch_session_output') {
           outputFetches += 1;
           if (outputFetches === 2) {
@@ -306,6 +330,7 @@ describe('launchBrokerOwnedSession', () => {
       },
       attach: async () => attachCodes.shift(),
       sleepFn: async (delayMs) => { sleeps.push(delayMs); },
+      randomUUID: () => generations.shift(),
     });
 
     assert.equal(res.code, 0);
@@ -316,8 +341,71 @@ describe('launchBrokerOwnedSession', () => {
       'launch_session',
       'fetch_session_output',
     ]);
+    assert.deepEqual(launchGenerations, [RUNTIME_GENERATION, NEXT_RUNTIME_GENERATION]);
     assert.deepEqual(sleeps, [CODEX_SQLITE_RETRY_DELAYS_MS[0]]);
     assert.match(streams.err(), /retrying startup in 2s \(1\/2\)/);
+  });
+
+  test('reconciles an accepted SQLite retry launch before attaching', async () => {
+    const streams = makeStreams();
+    const generations = [RUNTIME_GENERATION, NEXT_RUNTIME_GENERATION];
+    const attachCodes = [1, 0];
+    let launches = 0;
+    let outputFetches = 0;
+    const requestTypes = [];
+    const res = await launchCodexWithMocks({
+      streams,
+      randomUUID: () => generations.shift(),
+      attach: async () => attachCodes.shift(),
+      request: async (message) => {
+        requestTypes.push(message.type);
+        if (message.type === 'launch_session') {
+          launches += 1;
+          if (launches === 2) throw new Error('broker response lost');
+          return {
+            ok: true,
+            session: {
+              id: 'sess_retry',
+              runtime_generation: message.session.runtime_generation,
+            },
+          };
+        }
+        if (message.type === 'session_status') {
+          return {
+            ok: true,
+            session: {
+              id: 'sess_retry',
+              runtime_generation: NEXT_RUNTIME_GENERATION,
+              session_state: 'live',
+              attachable: true,
+            },
+          };
+        }
+        if (message.type === 'fetch_session_output') {
+          outputFetches += 1;
+          return outputFetches === 1
+            ? { ok: true, session: earlyCodexExit(), output: CODEX_SQLITE_LOCK_OUTPUT }
+            : {
+                ok: true,
+                session: { ...earlyCodexExit(), exit: { ...earlyCodexExit().exit, code: 0 } },
+                output: 'Goodbye.',
+              };
+        }
+        if (message.type === 'remove_session') return { ok: true, removed: true };
+        assert.fail(`unexpected broker request: ${message.type}`);
+      },
+    });
+
+    assert.equal(res.code, 0, streams.err());
+    assert.deepEqual(requestTypes, [
+      'launch_session',
+      'fetch_session_output',
+      'remove_session',
+      'launch_session',
+      'session_status',
+      'fetch_session_output',
+    ]);
+    assert.doesNotMatch(streams.err(), /outcome is unknown/);
   });
 
   test('bounds repeated Codex SQLite startup retries to two', async () => {
@@ -328,7 +416,9 @@ describe('launchBrokerOwnedSession', () => {
       streams,
       request: async (message) => {
         requestTypes.push(message.type);
-        if (message.type === 'launch_session') return { ok: true, session: { id: 'sess_retry' } };
+        if (message.type === 'launch_session') {
+          return { ok: true, session: { id: 'sess_retry', runtime_generation: message.session.runtime_generation } };
+        }
         if (message.type === 'fetch_session_output') {
           return { ok: true, session: earlyCodexExit(), output: CODEX_SQLITE_LOCK_OUTPUT };
         }
@@ -353,7 +443,9 @@ describe('launchBrokerOwnedSession', () => {
       streams,
       request: async (message) => {
         requestTypes.push(message.type);
-        if (message.type === 'launch_session') return { ok: true, session: { id: 'sess_retry' } };
+        if (message.type === 'launch_session') {
+          return { ok: true, session: { id: 'sess_retry', runtime_generation: message.session.runtime_generation } };
+        }
         if (message.type === 'fetch_session_output') {
           return { ok: true, session: earlyCodexExit(), output: 'Authentication failed.' };
         }
@@ -438,7 +530,10 @@ describe('launchBrokerOwnedSession', () => {
       request: async (message) => {
         sequence.push('request');
         requests.push(message);
-        return { ok: true, session: { id: message.session.id } };
+        return {
+          ok: true,
+          session: { id: message.session.id, runtime_generation: message.session.runtime_generation },
+        };
       },
       attach: async (opts) => {
         sequence.push('attach');
@@ -459,6 +554,7 @@ describe('launchBrokerOwnedSession', () => {
         registerGitHubSessionProjection: async (options) => {
           sequence.push('registerGitHub');
           assert.equal(options.codingSessionId, 'sess_abc');
+          assert.equal(options.runtimeGeneration, RUNTIME_GENERATION);
           assert.equal(options.repo, 'repo');
           assert.equal(options.repoRef, 'org/repo');
           return true;
@@ -471,6 +567,7 @@ describe('launchBrokerOwnedSession', () => {
           return { ok: true };
         },
         hostname: () => 'machine',
+        randomUUID: () => RUNTIME_GENERATION,
         lookupOrMint: async (identity) => {
           assert.equal(identity.repoIdentity, 'https://token:secret@github.com/org/repo.git');
           assert.equal(identity.machineId, 'machine');
@@ -498,13 +595,14 @@ describe('launchBrokerOwnedSession', () => {
 
     assert.equal(res.code, 0);
     assert.equal(res.codingSessionId, 'sess_abc');
-    assert.deepEqual(sequence, ['registerGitHub', 'ensureBroker', 'request', 'ensureCloudBroker', 'onLaunched', 'attach']);
+    assert.deepEqual(sequence, ['ensureBroker', 'registerGitHub', 'request', 'ensureCloudBroker', 'onLaunched', 'attach']);
     assert.deepEqual(attached, { id: 'sess_abc' });
     assert.equal(launched.codingSessionId, 'sess_abc');
 
     const msg = requests[0];
     assert.equal(msg.type, 'launch_session');
     assert.equal(msg.session.id, 'sess_abc');
+    assert.equal(msg.session.runtime_generation, RUNTIME_GENERATION);
     assert.equal(msg.session.cwd, '/repo');
     assert.equal(msg.session.tool, 'claude');
     assert.deepEqual(msg.session.argv, ['--resume']);
@@ -523,6 +621,7 @@ describe('launchBrokerOwnedSession', () => {
     assert.match(msg.session.env.MC_GITHUB_BROKER_SOCKET, /sess_abc\.sock$/);
     assert.match(msg.session.env.PATH, /^\/tmp\/mc-github-shim:/);
     assert.equal(msg.session.sidecars.codingSessionId, 'sess_abc');
+    assert.equal(msg.session.sidecars.runtimeGeneration, RUNTIME_GENERATION);
     assert.equal(msg.session.sidecars.apiUrl, 'https://memoro.test');
     assert.equal(msg.session.sidecars.token, 'tok');
     assert.equal(msg.session.sidecars.machineId, 'machine');
@@ -545,7 +644,7 @@ describe('launchBrokerOwnedSession', () => {
     assert.equal(streams.err(), '');
   });
 
-  test('downgrades GitHub capability before grounding and child launch when initial registration fails', async () => {
+  test('keeps the verified GitHub boundary when advisory starting presence registration fails', async () => {
     const streams = makeStreams();
     let groundedState = null;
     let launchedCapabilities = null;
@@ -558,7 +657,10 @@ describe('launchBrokerOwnedSession', () => {
       env: { TERM: 'xterm-256color', PATH: '/bin' },
       request: async (message) => {
         launchedCapabilities = JSON.parse(message.session.env.MC_SESSION_CAPABILITIES);
-        return { ok: true, session: { id: message.session.id } };
+        return {
+          ok: true,
+          session: { id: message.session.id, runtime_generation: message.session.runtime_generation },
+        };
       },
       ensureBroker: async () => ({ ok: true, broker: { pid: 42 } }),
       ensureCloudBroker: async () => ({ ok: true }),
@@ -586,8 +688,8 @@ describe('launchBrokerOwnedSession', () => {
     });
 
     assert.equal(res.code, 0, streams.err());
-    assert.equal(groundedState, 'unavailable');
-    assert.equal(launchedCapabilities.github.state, 'unavailable');
+    assert.equal(groundedState, 'ready');
+    assert.equal(launchedCapabilities.github.state, 'ready');
     assert.match(streams.err(), /GitHub session registration failed/);
   });
 
@@ -597,6 +699,7 @@ describe('launchBrokerOwnedSession', () => {
       apiUrl: 'https://memoro.test',
       token: 'memoro-secret-sentinel',
       codingSessionId: 'sess_register_ok',
+      runtimeGeneration: RUNTIME_GENERATION,
       machineId: 'machine',
       sourceIdentity: {
         source_id: 'local:machine',
@@ -622,6 +725,8 @@ describe('launchBrokerOwnedSession', () => {
     assert.equal(call.maxAttempts, 1);
     assert.equal(call.memoroFetchImpl, undefined);
     assert.equal(call.payload.coding_session_id, 'sess_register_ok');
+    assert.equal(call.payload.runtime_generation, RUNTIME_GENERATION);
+    assert.equal(call.payload.presence_state, 'active');
     assert.equal(call.payload.repo, 'acme/widgets');
     assert.equal(call.payload.branch, 'main');
     assert.equal(call.payload.session_projection.reason_code, 'runtime_starting');
@@ -650,6 +755,176 @@ describe('launchBrokerOwnedSession', () => {
     });
 
     assert.equal(ok, false);
+  });
+
+  test('terminalizes a registered starting generation when broker launch fails', async () => {
+    const streams = makeStreams();
+    const terminalCalls = [];
+    const result = await launchBrokerOwnedSession({
+      cwd: '/repo',
+      codingSessionId: 'sess_launch_fail',
+      tool: 'codex',
+      attachAfterLaunch: false,
+      stdout: streams.stdout,
+      stderr: streams.stderr,
+      env: { TERM: 'xterm-256color', PATH: '/bin' },
+      request: async () => ({ ok: false, reason: 'pty-spawn-failed' }),
+      ensureBroker: async () => ({ ok: true, broker: { pid: 42 } }),
+      ensureCloudBroker: async () => ({ ok: true }),
+      deps: {
+        useSessionHost: false,
+        getRepoContext: async () => ({
+          remoteUrl: 'https://github.com/acme/widgets.git',
+          branch: 'main',
+          toplevel: '/repo',
+        }),
+        readConfig: async () => ({ apiUrl: 'https://memoro.test' }),
+        getApiUrl: () => null,
+        getSecret: async () => 'memoro-secret-sentinel',
+        findEntry: () => ({}),
+        resolvePolicyForWrap: () => ({}),
+        groundSession: async () => ({ ok: true }),
+        hostname: () => 'machine',
+        randomUUID: () => RUNTIME_GENERATION,
+        registerGitHubSessionProjection: async () => true,
+        postHeartbeat: async (options) => {
+          terminalCalls.push(options);
+          return true;
+        },
+        prepareLocalResourceGuardEnv: ({ baseEnv }) => ({ env: baseEnv }),
+        readRepoPolicyConfig: () => ({ config: {}, warnings: [] }),
+        readRepoLocalConfig: () => ({ config: {}, warnings: [] }),
+        resolveEffectiveConfig: ({ globalConfig }) => globalConfig,
+        prepareCloudflareGuardEnv: ({ baseEnv }) => ({ env: baseEnv }),
+        prepareDevCommandGuardEnv: ({ baseEnv }) => ({ env: baseEnv }),
+        getPackageVersion: async () => '0.test',
+      },
+    });
+
+    assert.equal(result.code, 1);
+    assert.equal(terminalCalls.length, 1);
+    assert.equal(terminalCalls[0].maxAttempts, 1);
+    assert.equal(terminalCalls[0].payload.presence_state, 'terminal');
+    assert.equal(terminalCalls[0].payload.runtime_generation, RUNTIME_GENERATION);
+    assert.equal(terminalCalls[0].payload.coding_session_id, 'sess_launch_fail');
+    assert.equal(JSON.stringify(terminalCalls[0].payload).includes('memoro-secret-sentinel'), false);
+    assert.equal('last_assistant_excerpt' in terminalCalls[0].payload, false);
+    assert.match(streams.err(), /broker launch failed/);
+  });
+
+  test('reconciles an accepted live launch after transport timeout without terminalizing it', async () => {
+    const streams = makeStreams();
+    const terminalCalls = [];
+    const abortCalls = [];
+    let requestCount = 0;
+    const result = await launchBrokerOwnedSession({
+      cwd: '/repo',
+      codingSessionId: 'sess_transport_live',
+      tool: 'codex',
+      attachAfterLaunch: false,
+      stdout: streams.stdout,
+      stderr: streams.stderr,
+      env: { TERM: 'xterm-256color', PATH: '/bin' },
+      request: async (message) => {
+        requestCount += 1;
+        if (message.type === 'launch_session') throw new Error('broker request timed out after 1000ms');
+        assert.deepEqual(message, { type: 'session_status', id: 'sess_transport_live' });
+        return {
+          ok: true,
+          session: {
+            id: 'sess_transport_live',
+            runtime_generation: RUNTIME_GENERATION,
+            session_state: 'live',
+            attachable: true,
+          },
+        };
+      },
+      ensureBroker: async () => ({ ok: true, broker: { pid: 42 } }),
+      ensureCloudBroker: async () => ({ ok: true }),
+      deps: {
+        useSessionHost: false,
+        getRepoContext: async () => ({ remoteUrl: 'https://github.com/acme/widgets.git', branch: 'main', toplevel: '/repo' }),
+        readConfig: async () => ({ apiUrl: 'https://memoro.test' }),
+        getApiUrl: () => null,
+        getSecret: async () => 'memoro-secret-sentinel',
+        hostname: () => 'machine',
+        randomUUID: () => RUNTIME_GENERATION,
+        registerGitHubSessionProjection: async () => true,
+        postHeartbeat: async (options) => { terminalCalls.push(options); return true; },
+        abortLocalCodexCredentialDomain: (input) => abortCalls.push(input),
+        prepareLocalResourceGuardEnv: ({ baseEnv }) => ({ env: baseEnv }),
+        readRepoPolicyConfig: () => ({ config: {}, warnings: [] }),
+        readRepoLocalConfig: () => ({ config: {}, warnings: [] }),
+        resolveEffectiveConfig: ({ globalConfig }) => globalConfig,
+        prepareCloudflareGuardEnv: ({ baseEnv }) => ({ env: baseEnv }),
+        prepareDevCommandGuardEnv: ({ baseEnv }) => ({ env: baseEnv }),
+        getPackageVersion: async () => '0.test',
+      },
+    });
+
+    assert.equal(result.code, 0, streams.err());
+    assert.equal(requestCount, 2);
+    assert.deepEqual(terminalCalls, []);
+    assert.deepEqual(abortCalls, []);
+    assert.doesNotMatch(streams.err(), /outcome is unknown|broker launch failed/);
+  });
+
+  test('fails closed without terminalizing when an ambiguous launch cannot be reconciled', async () => {
+    const streams = makeStreams();
+    const terminalCalls = [];
+    let registrations = 0;
+    let requestCount = 0;
+    const result = await launchBrokerOwnedSession({
+      cwd: '/repo',
+      codingSessionId: 'sess_transport_unknown',
+      tool: 'codex',
+      attachAfterLaunch: false,
+      stdout: streams.stdout,
+      stderr: streams.stderr,
+      env: { TERM: 'xterm-256color', PATH: '/bin' },
+      request: async () => {
+        requestCount += 1;
+        throw new Error('broker transport unavailable');
+      },
+      ensureBroker: async () => ({ ok: true, broker: { pid: 42 } }),
+      ensureCloudBroker: async () => ({ ok: true }),
+      deps: {
+        useSessionHost: false,
+        getRepoContext: async () => ({
+          remoteUrl: 'https://github.com/acme/widgets.git',
+          branch: 'main',
+          toplevel: '/repo',
+        }),
+        readConfig: async () => ({ apiUrl: 'https://memoro.test' }),
+        getApiUrl: () => null,
+        getSecret: async () => 'memoro-secret-sentinel',
+        hostname: () => 'machine',
+        randomUUID: () => RUNTIME_GENERATION,
+        registerGitHubSessionProjection: async () => {
+          registrations += 1;
+          return true;
+        },
+        postHeartbeat: async (options) => {
+          terminalCalls.push(options);
+          return true;
+        },
+        prepareLocalResourceGuardEnv: ({ baseEnv }) => ({ env: baseEnv }),
+        readRepoPolicyConfig: () => ({ config: {}, warnings: [] }),
+        readRepoLocalConfig: () => ({ config: {}, warnings: [] }),
+        resolveEffectiveConfig: ({ globalConfig }) => globalConfig,
+        prepareCloudflareGuardEnv: ({ baseEnv }) => ({ env: baseEnv }),
+        prepareDevCommandGuardEnv: ({ baseEnv }) => ({ env: baseEnv }),
+        getPackageVersion: async () => '0.test',
+      },
+    });
+
+    assert.equal(result.code, 1);
+    assert.equal(result.reason, 'broker-launch-unknown');
+    assert.equal(requestCount, 2, 'one launch request and one exact-generation status read');
+    assert.equal(registrations, 1);
+    assert.deepEqual(terminalCalls, []);
+    assert.match(streams.err(), /outcome is unknown/);
+    assert.doesNotMatch(streams.err(), /memoro-secret-sentinel/);
   });
 
   test('fails closed before child launch when the session gh boundary cannot be installed', async () => {
@@ -709,7 +984,10 @@ describe('launchBrokerOwnedSession', () => {
       now: () => 10_000,
       request: async (message) => {
         requests.push(message);
-        return { ok: true, session: { id: message.session.id } };
+        return {
+          ok: true,
+          session: { id: message.session.id, runtime_generation: message.session.runtime_generation },
+        };
       },
       ensureBroker: async () => ({ ok: true, broker: { pid: 42 } }),
       ensureCloudBroker: async () => ({ ok: true }),
@@ -769,7 +1047,10 @@ describe('launchBrokerOwnedSession', () => {
       now: () => 10_000,
       request: async (message) => {
         requests.push(message);
-        return { ok: true, session: { id: message.session.id } };
+        return {
+          ok: true,
+          session: { id: message.session.id, runtime_generation: message.session.runtime_generation },
+        };
       },
       ensureBroker: async () => {
         ensuredBroker = true;
@@ -836,7 +1117,10 @@ describe('launchBrokerOwnedSession', () => {
       now: () => 10_000,
       request: async (message) => {
         requests.push(message);
-        return { ok: true, session: { id: message.session.id } };
+        return {
+          ok: true,
+          session: { id: message.session.id, runtime_generation: message.session.runtime_generation },
+        };
       },
       ensureBroker: async () => ({ ok: true, broker: { pid: 42 } }),
       ensureCloudBroker: async () => ({ ok: true }),
@@ -867,7 +1151,7 @@ describe('launchBrokerOwnedSession', () => {
     assert.equal(requests[0].session.env.MC_CODEX_API_KEY, undefined);
   });
 
-  test('uses the broker-returned session id when launch is deduplicated', async () => {
+  test('fails closed when a successful launch response has the wrong runtime generation', async () => {
     const streams = makeStreams();
     let attached = null;
     let launched = null;
@@ -884,7 +1168,11 @@ describe('launchBrokerOwnedSession', () => {
       request: async (message) => ({
         ok: true,
         reused: true,
-        session: { id: 'sess_existing', cwd: message.session.cwd },
+        session: {
+          id: message.session.id,
+          runtime_generation: 'd5e6439f-54e2-493b-a10f-5e5e014a2904',
+          cwd: message.session.cwd,
+        },
       }),
       attach: async (opts) => {
         attached = opts;
@@ -911,12 +1199,12 @@ describe('launchBrokerOwnedSession', () => {
       },
     });
 
-    assert.equal(res.code, 0);
-    assert.equal(res.codingSessionId, 'sess_existing');
-    assert.deepEqual(attached, { id: 'sess_existing' });
-    assert.equal(launched.codingSessionId, 'sess_existing');
-    assert.match(streams.out(), /sess_existing/);
-    assert.doesNotMatch(streams.out(), /sess_new/);
+    assert.equal(res.code, 1);
+    assert.equal(res.reason, 'broker-launch-unknown');
+    assert.equal(attached, null);
+    assert.equal(launched, null);
+    assert.equal(streams.out(), '');
+    assert.match(streams.err(), /outcome is unknown/);
   });
 
   test('can launch headlessly for cloud-owned sessions', async () => {
@@ -952,7 +1240,10 @@ describe('launchBrokerOwnedSession', () => {
       },
       request: async (message) => {
         requests.push(message);
-        return { ok: true, session: { id: message.session.id } };
+        return {
+          ok: true,
+          session: { id: message.session.id, runtime_generation: message.session.runtime_generation },
+        };
       },
       attach: async () => {
         attachCalled = true;
@@ -1008,7 +1299,10 @@ describe('launchBrokerOwnedSession', () => {
       ensureCloudBroker: async () => ({ ok: true, alreadyRunning: true, pid: 43 }),
       request: async (message) => {
         requests.push(message);
-        return { ok: true, session: { id: message.session.id } };
+        return {
+          ok: true,
+          session: { id: message.session.id, runtime_generation: message.session.runtime_generation },
+        };
       },
       attach: async () => 0,
       deps: {
@@ -1046,7 +1340,10 @@ describe('launchBrokerOwnedSession', () => {
       now: () => 10_000,
       ensureBroker: async () => ({ ok: true, broker: { pid: 42 } }),
       ensureCloudBroker: async () => ({ ok: false, error: 'spawn failed' }),
-      request: async (message) => ({ ok: true, session: { id: message.session.id } }),
+      request: async (message) => ({
+        ok: true,
+        session: { id: message.session.id, runtime_generation: message.session.runtime_generation },
+      }),
       attach: async () => 0,
       deps: {
         getRepoContext: async () => ({ remoteUrl: 'git@example.com:org/repo.git', branch: 'main', toplevel: '/repo' }),
@@ -1083,7 +1380,10 @@ describe('launchBrokerOwnedSession', () => {
       ensureCloudBroker: async () => ({ ok: true, alreadyRunning: true, pid: 43 }),
       request: async (message) => {
         requests.push(message);
-        return { ok: true, session: { id: message.session.id } };
+        return {
+          ok: true,
+          session: { id: message.session.id, runtime_generation: message.session.runtime_generation },
+        };
       },
       attach: async () => 0,
       deps: {
@@ -1161,7 +1461,8 @@ describe('ensureBrokerRunning', () => {
 
     assert.equal(res.ok, false);
     assert.equal(res.stale, true);
-    assert.match(res.error, /stale/);
+    assert.equal(res.reason, 'broker-protocol-incompatible-live');
+    assert.match(res.error, /incompatible/);
     assert.deepEqual(res.live_sessions, [{
       id: 'sess_live',
       name: null,
@@ -1169,6 +1470,24 @@ describe('ensureBrokerRunning', () => {
       tool: 'codex',
     }]);
     assert.equal(spawned, false);
+  });
+
+  test('does not launch through an older compatible-looking broker with live PTYs', async () => {
+    let spawned = false;
+    const res = await ensureBrokerRunning({
+      request: async () => ({
+        ok: true,
+        broker: { pid: 1, protocol_version: 'mc-broker-pty-v3' },
+        sessions: [{ id: 'sess_legacy_live', session_state: 'live', cwd: '/repo', tool: 'codex' }],
+      }),
+      spawnDaemon: () => { spawned = true; return { ok: true }; },
+    });
+
+    assert.equal(res.ok, false);
+    assert.equal(res.reason, 'broker-protocol-incompatible-live');
+    assert.equal(res.compatibility_reason, 'protocol_mismatch:mc-broker-pty-v3');
+    assert.equal(spawned, false);
+    assert.match(res.error, /previous mc version/);
   });
 
   test('restarts a stale broker when no live sessions are present', async () => {
@@ -1219,6 +1538,26 @@ describe('ensureBrokerRunning', () => {
     assert.equal(res.ok, true);
     assert.equal(res.started, true);
     assert.equal(requests >= 2, true);
+  });
+
+  test('refuses an incompatible broker discovered after a spawn attempt', async () => {
+    let spawned = false;
+    const res = await ensureBrokerRunning({
+      request: async () => {
+        if (!spawned) throw new Error('offline');
+        return {
+          ok: true,
+          broker: { pid: 2, protocol_version: 'mc-broker-pty-v3' },
+          sessions: [{ id: 'sess_legacy', session_state: 'live' }],
+        };
+      },
+      spawnDaemon: () => { spawned = true; return { ok: true, pid: 2 }; },
+      sleep: async () => {},
+    });
+
+    assert.equal(res.ok, false);
+    assert.equal(res.reason, 'broker-protocol-incompatible-live');
+    assert.match(res.error, /refusing|previous mc version/);
   });
 });
 

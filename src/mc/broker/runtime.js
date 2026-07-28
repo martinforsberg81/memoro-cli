@@ -8,6 +8,12 @@ import { BrokerSessionManager } from './session-manager.js';
 import { BrokerSessionSidecars } from './session-sidecars.js';
 import { resolveManagedCodexLaunch } from '../provider-adapters/codex-managed.js';
 import { closeLocalCodexCredentialDomain } from '../credential-domain/local-codex.js';
+import { sessionHostPaths } from './paths.js';
+import { writeSessionLifecycleSync } from './lifecycle-journal.js';
+
+// Keep this below the generic runtime-finalization bound so a hung advisory
+// network call cannot race the mandatory local cleanup timeout.
+const TERMINAL_PRESENCE_TIMEOUT_MS = 10_000;
 
 const SESSION_COMMANDS = new Set([
   'sessions',
@@ -34,6 +40,7 @@ export class BrokerRuntime {
     sidecarFactory = (opts) => new BrokerSessionSidecars(opts),
     managedProviderResolver = resolveManagedCodexLaunch,
     credentialDomainCloser = closeLocalCodexCredentialDomain,
+    lifecycleWriter = writeSessionLifecycleSync,
   } = {}) {
     if (!manager && !ptyFactory?.spawn) {
       throw new TypeError('manager or ptyFactory.spawn is required');
@@ -49,17 +56,49 @@ export class BrokerRuntime {
     this.sidecarFactory = sidecarFactory;
     this.managedProviderResolver = managedProviderResolver;
     this.credentialDomainCloser = credentialDomainCloser;
+    this.lifecycleWriter = lifecycleWriter;
     this.sidecars = new Map();
+    this.sidecarsBySession = new WeakMap();
+    this.sidecarStartFinalizationsBySession = new WeakMap();
     this.sessionMetadata = new Map();
+    this.sessionMetadataBySession = new WeakMap();
+    this.exitWaitersBySession = new WeakMap();
+    this.exitFinalizationsBySession = new WeakMap();
     this.credentialDomains = new Map();
     this.credentialDomainClosures = new Map();
-    this.credentialDomainExitWaiters = new Map();
+    this.credentialDomainsBySession = new WeakMap();
+    this.credentialDomainClosuresBySession = new WeakMap();
     this.attaches = new Map();
     this.manager.setMaxListeners?.(Math.max(this.manager.getMaxListeners?.() || 10, 100));
-    this.manager.on('exit', ({ id }) => {
-      this._stopSidecars(id);
-      const closing = this._closeCredentialDomain(id);
-      this._resolveCredentialDomainExit(id, closing);
+    this.manager.on('exit', ({ id, event, session }) => {
+      const journaled = this._recordRuntimeExit(id, event, session);
+      const sidecars = this._stopSidecars(id, { terminal: true }, session);
+      const sidecarStartFinalization = session
+        ? this.sidecarStartFinalizationsBySession.get(session)
+        : null;
+      const closing = this._closeCredentialDomain(id, session);
+      const finalization = Promise.all([
+        // Presence is an eventually-consistent projection. It is intentionally
+        // awaited (and bounded), but local exit proof must not depend on a
+        // working network connection.
+        settleAdvisory(
+          Promise.all([Promise.resolve(sidecars), Promise.resolve(sidecarStartFinalization)]),
+          TERMINAL_PRESENCE_TIMEOUT_MS,
+        ),
+        Promise.resolve(closing),
+      ]).then(([, credentialResult]) => ({
+        ok: journaled
+          && (!credentialResult || credentialResult.ok !== false),
+        reason: !journaled
+          ? 'runtime-exit-journal-unconfirmed'
+          : credentialResult?.ok === false
+            ? credentialResult.reason || 'managed-domain-cleanup-unconfirmed'
+            : null,
+      })).catch(() => ({ ok: false, reason: 'runtime-finalization-unconfirmed' }));
+      if (session) {
+        this.exitFinalizationsBySession.set(session, finalization);
+        this._resolveSessionExit(session, finalization);
+      }
     });
   }
 
@@ -98,9 +137,20 @@ export class BrokerRuntime {
 
   _launch(input) {
     const id = requiredString(input?.id, 'session id');
+    const runtimeGeneration = stringOrNull(input?.runtime_generation);
     const cwd = stringOrDefault(input.cwd, this._cwd());
     const existing = this._findReusableLiveSession({ id, cwd, name: input.name });
     if (existing) {
+      const existingGeneration = stringOrNull(
+        this.sessionMetadata.get(existing.id)?.runtime_generation,
+      );
+      if (runtimeGeneration && runtimeGeneration !== existingGeneration) {
+        return {
+          ok: false,
+          reason: 'runtime-generation-conflict',
+          error: 'broker session already exists under a different runtime generation',
+        };
+      }
       if (input?.credential_domain) {
         return {
           ok: false,
@@ -113,6 +163,33 @@ export class BrokerRuntime {
         reused: true,
         session: this._withAttachStatus(existing),
       };
+    }
+    if (input?.credential_domain) {
+      const pendingCleanup = this.credentialDomainClosures.get(id);
+      if (pendingCleanup) {
+        return Promise.resolve(pendingCleanup).then((cleanup) => {
+          if (!cleanup?.ok) {
+            return {
+              ok: false,
+              reason: cleanup?.reason || 'managed-domain-cleanup-unconfirmed',
+              error: 'managed credential cleanup was not confirmed',
+            };
+          }
+          return this._launch(input);
+        });
+      }
+      if (this.credentialDomains.has(id)) {
+        return {
+          ok: false,
+          reason: 'managed-domain-cleanup-unconfirmed',
+          error: 'managed credential cleanup was not confirmed',
+        };
+      }
+    }
+    const priorStatus = this.manager.status(id);
+    if (priorStatus?.exit) {
+      this.manager.remove(id);
+      this.sessionMetadata.delete(id);
     }
 
     const toolInput = stringOrDefault(input.tool, this.env.MC_GROUNDING_TOOL || DEFAULT_TOOL);
@@ -156,18 +233,30 @@ export class BrokerRuntime {
       name: input.name,
       cwd,
       sidecars: input.sidecars,
+      runtimeGeneration,
     });
-    if (provider.descriptor) {
-      this.credentialDomains.set(id, {
-        descriptor: provider.descriptor,
-        portal: {
-          apiUrl: stringOrDefault(input.sidecars?.apiUrl, null),
-          token: stringOrDefault(input.sidecars?.token, null),
-        },
-      });
-    }
+    const credentialDomain = provider.descriptor ? {
+      descriptor: provider.descriptor,
+      portal: {
+        apiUrl: stringOrDefault(input.sidecars?.apiUrl, null),
+        token: stringOrDefault(input.sidecars?.token, null),
+      },
+    } : null;
+    // This has to happen before `manager.launch()`: a provider may report an
+    // exit synchronously from spawn, in which case the exit handler still
+    // needs the exact generation and its finalization waiter.
+    this.sessionMetadata.set(id, sessionMetadata);
     let session;
     try {
+      if (runtimeGeneration) {
+        this.lifecycleWriter({
+          path: sessionHostPaths(id).lifecyclePath,
+          codingSessionId: id,
+          runtimeGeneration,
+          state: 'live',
+          observedAt: runtimeObservedAt(this.clock),
+        });
+      }
       session = this.manager.launch({
         id,
         name: typeof input.name === 'string' ? input.name : null,
@@ -184,14 +273,57 @@ export class BrokerRuntime {
           MEMORO_MC_BROKER: '1',
           MEMORO_MC_PARENT: '1',
         },
+      }, {
+        beforeStart: (ownedSession) => {
+          this.sessionMetadataBySession.set(ownedSession, sessionMetadata);
+          this._prepareSessionExit(ownedSession);
+          if (credentialDomain) {
+            this.credentialDomains.set(id, credentialDomain);
+            this.credentialDomainsBySession.set(ownedSession, credentialDomain);
+          }
+        },
       });
     } catch (error) {
-      this.credentialDomains.delete(id);
+      if (runtimeGeneration) {
+        try {
+          this.lifecycleWriter({
+            path: sessionHostPaths(id).lifecyclePath,
+            codingSessionId: id,
+            runtimeGeneration,
+            state: 'launch_failed',
+            observedAt: runtimeObservedAt(this.clock),
+          });
+        } catch {}
+      }
+      this.sessionMetadata.delete(id);
+      if (credentialDomain && this.credentialDomains.get(id) === credentialDomain) {
+        this.credentialDomains.delete(id);
+      }
       throw error;
     }
-    this.sessionMetadata.set(id, sessionMetadata);
+    const ownedSession = this.manager.get(id);
+    if (!ownedSession || ownedSession.exit) {
+      return {
+        ok: false,
+        reason: 'broker-session-exited',
+        error: 'broker session exited before it could become live',
+      };
+    }
 
     const sidecars = this._startSidecars(id, input.sidecars);
+    if (sidecars?.ok === false) {
+      try { this.manager.stop(id, 'SIGTERM'); } catch {}
+      return Promise.all([
+        this._waitForRuntimeFinalization(id),
+        Promise.resolve(sidecars.finalization),
+      ]).then(([finalization]) => ({
+        ok: false,
+        reason: finalization?.ok === false
+          ? finalization.reason || 'runtime-finalization-unconfirmed'
+          : 'sidecar-start-failed',
+        error: sidecars.error || 'broker sidecar failed to start',
+      }));
+    }
     return { ok: true, session: this._withAttachStatus(session), ...(sidecars ? { sidecars } : {}) };
   }
 
@@ -216,7 +348,13 @@ export class BrokerRuntime {
 
   _status(id) {
     const session = this.manager.status(requiredString(id, 'session id'));
-    if (!session) return { ok: false, error: `unknown broker session: ${id}` };
+    if (!session) {
+      return {
+        ok: false,
+        reason: 'session-not-found',
+        error: `unknown broker session: ${id}`,
+      };
+    }
     return { ok: true, session: this._withAttachStatus(session) };
   }
 
@@ -256,47 +394,35 @@ export class BrokerRuntime {
   }
 
   _stop(id, signal) {
-    this._stopSidecars(id);
     this.manager.stop(requiredString(id, 'session id'), stringOrDefault(signal, 'SIGTERM'));
     return { ok: true };
   }
 
   _remove(id) {
     const sessionId = requiredString(id, 'session id');
-    this._stopSidecars(sessionId);
     const status = this.manager.status(sessionId);
     const managed = this.credentialDomains.has(sessionId)
       || this.credentialDomainClosures.has(sessionId);
-    if (managed) {
-      if (status && !status.exit) {
-        try { this.manager.stop(sessionId, 'SIGTERM'); } catch {}
-      } else if (status?.exit) {
-        const closing = this._closeCredentialDomain(sessionId);
-        this._resolveCredentialDomainExit(sessionId, closing);
-      }
-      return this._waitForCredentialDomainExit(sessionId).then((cleanup) => {
-        if (!cleanup?.ok) {
-          return {
-            ok: false,
-            removed: false,
-            reason: cleanup?.reason || 'managed-domain-cleanup-unconfirmed',
-            error: 'managed credential cleanup was not confirmed',
-          };
-        }
-        this.sessionMetadata.delete(sessionId);
-        this.credentialDomainClosures.delete(sessionId);
-        return {
-          ok: true,
-          removed: this.manager.remove(sessionId),
-          credential_cleanup: 'confirmed',
-        };
-      });
-    }
     if (status && !status.exit) {
       try { this.manager.stop(sessionId, 'SIGTERM'); } catch {}
     }
-    this.sessionMetadata.delete(sessionId);
-    return { ok: true, removed: this.manager.remove(sessionId) };
+    return this._waitForRuntimeFinalization(sessionId).then((finalization) => {
+      if (!finalization.ok) {
+        return {
+          ok: false,
+          removed: false,
+          reason: finalization.reason || 'runtime-finalization-unconfirmed',
+          error: 'broker session finalization was not confirmed',
+        };
+      }
+      this.sessionMetadata.delete(sessionId);
+      this.credentialDomainClosures.delete(sessionId);
+      return {
+        ok: true,
+        removed: this.manager.remove(sessionId),
+        ...(managed ? { credential_cleanup: 'confirmed' } : {}),
+      };
+    });
   }
 
   _attachConnection(message, conn, initialInput) {
@@ -391,8 +517,9 @@ export class BrokerRuntime {
     if (!plainObject(sidecarSpec) || sidecarSpec.enabled === false) return null;
     const session = this.manager.get(id);
     if (!session) return { ok: false, error: `unknown broker session: ${id}` };
+    let sidecars = null;
     try {
-      const sidecars = this.sidecarFactory({
+      sidecars = this.sidecarFactory({
         session,
         coding: {
           ...sidecarSpec,
@@ -402,30 +529,107 @@ export class BrokerRuntime {
       });
       sidecars.start();
       this.sidecars.set(id, sidecars);
+      this.sidecarsBySession.set(session, sidecars);
       return { ok: true };
     } catch (err) {
-      return { ok: false, error: err.message || String(err) };
+      let finalization = Promise.resolve(true);
+      try {
+        // A partially started sidecar may already have registered a socket or
+        // presence.  Finalize it before reporting a failed launch.
+        finalization = Promise.resolve(sidecars?.stop?.({ terminal: true }));
+      } catch {
+        finalization = Promise.resolve(false);
+      }
+      this.sidecarStartFinalizationsBySession.set(session, finalization);
+      return { ok: false, error: err.message || String(err), finalization };
     }
   }
 
-  _stopSidecars(id) {
-    const sidecars = this.sidecars.get(id);
-    if (!sidecars) return;
-    this.sidecars.delete(id);
-    try { sidecars.stop(); } catch {}
+  _stopSidecars(id, options = {}, expectedSession = null) {
+    const sidecars = expectedSession
+      ? this.sidecarsBySession.get(expectedSession)
+      : this.sidecars.get(id);
+    if (!sidecars) return true;
+    if (this.sidecars.get(id) === sidecars) this.sidecars.delete(id);
+    try {
+      return Promise.resolve(sidecars.stop(options)).then(
+        (result) => result !== false,
+        () => false,
+      );
+    } catch {
+      return false;
+    }
   }
 
-  _closeCredentialDomain(id) {
-    const existing = this.credentialDomainClosures.get(id);
-    if (existing) return existing;
-    const owned = this.credentialDomains.get(id);
+  _recordRuntimeExit(id, event = {}, expectedSession = null) {
+    const metadata = (
+      expectedSession ? this.sessionMetadataBySession.get(expectedSession) : null
+    ) || this.sessionMetadata.get(id) || {};
+    const runtimeGeneration = stringOrNull(metadata.runtime_generation);
+    const removedSession = !!expectedSession && this.manager.get(id) !== expectedSession;
+    if (!runtimeGeneration) {
+      if (removedSession && this.sessionMetadata.get(id) === metadata) {
+        this.sessionMetadata.delete(id);
+      }
+      return true;
+    }
+    const currentMetadata = this.sessionMetadata.get(id);
+    const currentGeneration = stringOrNull(currentMetadata?.runtime_generation);
+    if (currentGeneration && currentGeneration !== runtimeGeneration) return true;
+    const exitCode = Number.isInteger(event?.exitCode)
+      && event.exitCode >= 0
+      && event.exitCode <= 255
+      ? event.exitCode
+      : undefined;
+    const signal = exitCode === undefined && typeof event?.signal === 'string'
+      ? event.signal
+      : undefined;
+    try {
+      this.lifecycleWriter({
+        path: sessionHostPaths(id).lifecyclePath,
+        codingSessionId: id,
+        runtimeGeneration,
+        state: 'exited',
+        observedAt: runtimeObservedAt(this.clock),
+        ...(exitCode === undefined ? {} : { exitCode }),
+        ...(signal ? { signal } : {}),
+      });
+      if (removedSession && this.sessionMetadata.get(id) === metadata) {
+        this.sessionMetadata.delete(id);
+      }
+      return true;
+    } catch {
+      if (removedSession && this.sessionMetadata.get(id) === metadata) {
+        this.sessionMetadata.delete(id);
+      }
+      return false;
+    }
+  }
+
+  _closeCredentialDomain(id, expectedSession = null) {
+    const owned = expectedSession
+      ? this.credentialDomainsBySession.get(expectedSession)
+      : this.credentialDomains.get(id);
     if (!owned) return null;
+    const existing = expectedSession
+      ? this.credentialDomainClosuresBySession.get(expectedSession)
+      : this.credentialDomainClosures.get(id);
+    if (existing) return existing;
     const closing = Promise.resolve(this.credentialDomainCloser({
       descriptor: owned.descriptor,
       portal: owned.portal,
     }))
       .then((result) => {
-        if (result?.ok) this.credentialDomains.delete(id);
+        if (result?.ok) {
+          if (expectedSession) this.credentialDomainsBySession.delete(expectedSession);
+          if (this.credentialDomains.get(id) === owned) this.credentialDomains.delete(id);
+          if (expectedSession && this.credentialDomainClosuresBySession.get(expectedSession) === closing) {
+            this.credentialDomainClosuresBySession.delete(expectedSession);
+          }
+          if (this.credentialDomainClosures.get(id) === closing) {
+            this.credentialDomainClosures.delete(id);
+          }
+        }
         return result?.ok
           ? result
           : {
@@ -437,52 +641,51 @@ export class BrokerRuntime {
         ok: false,
         reason: 'managed-domain-cleanup-unconfirmed',
       }));
-    this.credentialDomainClosures.set(id, closing);
+    if (expectedSession) this.credentialDomainClosuresBySession.set(expectedSession, closing);
+    if (this.credentialDomains.get(id) === owned) this.credentialDomainClosures.set(id, closing);
     return closing;
   }
 
-  _waitForCredentialDomainExit(id, timeoutMs = 15_000) {
-    const closing = this.credentialDomainClosures.get(id);
-    if (closing) return closing;
-    if (!this.credentialDomains.has(id)) return Promise.resolve({ ok: true });
-    return new Promise((resolveWait) => {
-      const timer = setTimeout(() => {
-        this.credentialDomainExitWaiters.delete(id);
-        resolveWait({ ok: false, reason: 'managed-provider-exit-unconfirmed' });
-      }, timeoutMs);
-      timer.unref?.();
-      this.credentialDomainExitWaiters.set(id, (result) => {
-        clearTimeout(timer);
-        resolveWait(result);
-      });
-    });
-  }
-
-  _resolveCredentialDomainExit(id, closing) {
-    const waiter = this.credentialDomainExitWaiters.get(id);
-    if (!waiter) return;
-    this.credentialDomainExitWaiters.delete(id);
-    waiter(closing || { ok: false, reason: 'managed-domain-cleanup-unconfirmed' });
-  }
-
   async shutdown({ timeoutMs = 15_000 } = {}) {
-    const ids = [...this.credentialDomains.keys()];
+    const ids = this.manager.list().map((session) => session.id);
     for (const id of ids) {
       const status = this.manager.status(id);
       if (status && !status.exit) {
         try { this.manager.stop(id, 'SIGTERM'); } catch {}
-      } else if (status?.exit) {
-        const closing = this._closeCredentialDomain(id);
-        this._resolveCredentialDomainExit(id, closing);
       }
     }
-    const results = await Promise.all(ids.map((id) => (
-      this._waitForCredentialDomainExit(id, timeoutMs)
-    )));
+    const results = await Promise.all(ids.map((id) => this._waitForRuntimeFinalization(id, timeoutMs)));
     const failed = results.find((result) => !result?.ok);
     return failed
-      ? { ok: false, reason: failed.reason || 'managed-domain-cleanup-unconfirmed' }
+      ? { ok: false, reason: failed.reason || 'runtime-finalization-unconfirmed' }
       : { ok: true, credential_cleanup: 'confirmed' };
+  }
+
+  _prepareSessionExit(session) {
+    if (this.exitWaitersBySession.has(session)) return;
+    let resolveExit;
+    const exited = new Promise((resolve) => { resolveExit = resolve; });
+    this.exitWaitersBySession.set(session, { exited, resolveExit });
+  }
+
+  _resolveSessionExit(session, finalization) {
+    const waiter = this.exitWaitersBySession.get(session);
+    waiter?.resolveExit(finalization);
+  }
+
+  async _waitForRuntimeFinalization(id, timeoutMs = 15_000) {
+    const session = this.manager.get(id);
+    if (!session) return { ok: true };
+    const status = this.manager.status(id);
+    let finalization = this.exitFinalizationsBySession.get(session);
+    if (!finalization && !status?.exit) {
+      const waiter = this.exitWaitersBySession.get(session);
+      finalization = waiter?.exited;
+    }
+    if (!finalization) {
+      return { ok: false, reason: 'runtime-exit-unconfirmed' };
+    }
+    return waitBounded(finalization, timeoutMs, 'runtime-finalization-timeout');
   }
 
   _withAttachStatus(session) {
@@ -517,7 +720,13 @@ export class BrokerRuntime {
   }
 }
 
-function buildSessionMetadata({ id, name, cwd, sidecars } = {}) {
+function buildSessionMetadata({
+  id,
+  name,
+  cwd,
+  sidecars,
+  runtimeGeneration = null,
+} = {}) {
   const fromCwd = deriveMetadataFromCwd(cwd);
   const plainSidecars = plainObject(sidecars) ? sidecars : {};
   const worktreeName = stringOrNull(
@@ -532,6 +741,13 @@ function buildSessionMetadata({ id, name, cwd, sidecars } = {}) {
     repo_ref: stringOrNull(plainSidecars.repo_ref) || stringOrNull(plainSidecars.repoRef),
     branch: stringOrNull(plainSidecars.branch),
     label: stringOrNull(plainSidecars.label),
+    runtime_generation: stringOrNull(runtimeGeneration)
+      || stringOrNull(plainSidecars.runtimeGeneration)
+      || stringOrNull(plainSidecars.runtime_generation),
+    source_id: stringOrNull(plainSidecars.sourceId)
+      || stringOrNull(plainSidecars.source_id),
+    source_kind: stringOrNull(plainSidecars.sourceKind)
+      || stringOrNull(plainSidecars.source_kind),
     transcript_path: stringOrNull(
       plainSidecars.transcript_path
         || plainSidecars.transcriptPath
@@ -609,6 +825,36 @@ function normalizePathForMatch(value) {
     out = out.slice('/private'.length);
   }
   return out;
+}
+
+function runtimeObservedAt(clock) {
+  const value = typeof clock === 'function'
+    ? clock()
+    : (typeof clock?.now === 'function' ? clock.now() : Date.now());
+  return new Date(value).toISOString();
+}
+
+async function waitBounded(promise, timeoutMs, timeoutReason) {
+  const timeout = Number.isFinite(timeoutMs) && timeoutMs >= 0 ? timeoutMs : 15_000;
+  let timer = null;
+  try {
+    return await Promise.race([
+      Promise.resolve(promise),
+      new Promise((resolve) => {
+        timer = setTimeout(() => resolve({ ok: false, reason: timeoutReason }), timeout);
+        timer.unref?.();
+      }),
+    ]);
+  } catch {
+    return { ok: false, reason: 'runtime-finalization-unconfirmed' };
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+async function settleAdvisory(promise, timeoutMs) {
+  await waitBounded(promise, timeoutMs, 'terminal-presence-timeout');
+  return true;
 }
 
 function makeAttachId() {

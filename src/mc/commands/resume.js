@@ -12,8 +12,6 @@
  * session by id. If the entry has never had a tool session, resume is the
  * first fresh grounded start for that tracked worktree.
  */
-import { hostname } from 'node:os';
-
 import { findEntry, readRegistry, upsertEntry } from '../registry.js';
 import { emitCd, parseDirectiveFlag } from '../shell-directives.js';
 import { resolveToolInput } from '../../adapters/index.js';
@@ -22,6 +20,8 @@ import { launchBrokerOwnedSession } from '../broker/launch-client.js';
 import { attachBrokerSession } from '../broker/attach-client.js';
 import { requestBroker } from '../broker/client.js';
 import { listLocalBrokerAndHostSessions } from '../broker/session-hosts.js';
+import { sessionHostPaths } from '../broker/paths.js';
+import { readSessionLifecycle } from '../broker/lifecycle-journal.js';
 import {
   buildNewSessionLaunchIntent,
   buildResumeSessionLaunchIntent,
@@ -118,19 +118,23 @@ export async function run(rawArgv, deps = {}) {
   if (switchingTool) firstLaunchInWorktree = true;
 
   if (!opts.json && !opts.noLaunch && process.env.MC_TEST_MODE !== '1') {
+    let localPresence = { verdict: 'unknown' };
+    const inspectLocal = deps.inspectLocalBrokerSessionForEntry
+      || inspectLocalBrokerSessionForEntry;
     // A tool switch never reattaches the OLD tool's live local PTY — that
     // would silently reopen the previous provider instead of switching.
     if (!switchingTool) {
       if (localAuthMode === LOCAL_AUTH_MODES.MANAGED_PORTABLE) {
-        const live = await (deps.findLiveBrokerSessionForEntry || findLiveBrokerSessionForEntry)(
+        localPresence = await inspectLocal(
           entry, { request: deps.requestBroker || requestBroker, deps },
         );
-        if (live) {
+        if (localPresence.verdict === 'live') {
           stderr.write('mc: managed portable launch conflicts with an existing local broker session; end it before retrying.\n');
           return 1;
         }
       } else {
-        const attached = await attachLiveBrokerSession(entry, {
+        const attachLocal = deps.attachLiveBrokerSession || attachLiveBrokerSession;
+        const attached = await attachLocal(entry, {
           stdin,
           stdout,
           stderr,
@@ -138,6 +142,7 @@ export async function run(rawArgv, deps = {}) {
           attach: deps.attachBrokerSession || attachBrokerSession,
           deps,
         });
+        localPresence = attached?.localPresence || localPresence;
         if (attached?.attached) {
           markEntryOpened(entry, {
             upsert: deps.upsertEntry || upsertEntry,
@@ -149,31 +154,39 @@ export async function run(rawArgv, deps = {}) {
     } else {
       // A running TUI cannot switch tool in place: a live LOCAL PTY refuses
       // the switch with the exact way out.
-      const live = await (deps.findLiveBrokerSessionForEntry || findLiveBrokerSessionForEntry)(
+      localPresence = await inspectLocal(
         entry, { request: deps.requestBroker || requestBroker, deps },
       );
-      if (live) {
+      if (localPresence.verdict === 'live') {
         stderr.write(`mc: "${entry.name}" is running here — exit it (Ctrl+D) or \`mc end ${entry.name}\` before switching tools.\n`);
         return 1;
       }
     }
 
-    // Active-server-match idempotency: never spawn a duplicate of a session
-    // live somewhere else. Both branches above established that no LOCAL PTY
-    // is live, and the local broker is the authority for this machine — a
-    // server record naming THIS machine is a stale heartbeat (Ctrl+D moments
-    // ago), so open/switch proceeds. A record for ANOTHER machine is a
-    // genuine duplicate risk and still blocks.
-    const active = await activeMatchForEntry(entry, { argv, deps });
-    const staleSameMachine = active?.machine_id
-      && active.machine_id === (deps.hostname || hostname)();
-    if (active && !staleSameMachine) {
+    // A server-active record may only be bypassed with positive local proof
+    // that the exact runtime generation exited. Hostname equality is not
+    // proof: a temporarily unreachable local broker may still own a live PTY.
+    const activeCheck = await activeMatchForEntry(entry, { argv, deps });
+    if (!activeCheck.ok && hasStoredToolSession(entry)) {
+      stderr.write(`mc: cannot verify whether "${entry.name}" is active on another source; refusing to start a duplicate.\n`);
+      return 1;
+    }
+    const active = activeCheck.session;
+    const exitedGenerationMatches = active
+      && localPresence.verdict === 'exited'
+      && nonEmpty(active.runtime_generation)
+      && nonEmpty(active.runtime_generation) === nonEmpty(localPresence.runtime_generation);
+    if (active && !exitedGenerationMatches) {
       markEntryOpened(entry, {
         upsert: deps.upsertEntry || upsertEntry,
         now: deps.now,
       });
       stdout.write(renderActiveSelectionMessage(active));
       return 0;
+    }
+    if (!active && localPresence.verdict === 'unreachable') {
+      stderr.write(renderUnreachableLocalRuntime(entry));
+      return 1;
     }
   }
 
@@ -545,6 +558,7 @@ export async function runResumePicker({
     attachLiveBrokerSession: attachLive,
     upsertEntry: upsert,
     resolvedTool: toolValidation.resolved,
+    activePresenceVerified: activeRes?.ok === true,
     deps,
   });
 }
@@ -563,6 +577,7 @@ export async function resumeSelectedChoice(choice, {
   attachLiveBrokerSession: attachLive = attachLiveBrokerSession,
   upsertEntry: upsert = upsertEntry,
   resolvedTool = null,
+  activePresenceVerified = true,
   deps = {},
 } = {}) {
   const authMode = (deps.requireLocalAuthMode || requireLocalAuthMode)(localAuthMode);
@@ -605,18 +620,22 @@ export async function resumeSelectedChoice(choice, {
   const freshLaunch = freshLaunchDependency({
     launchFreshSession: freshLaunchOverride,
   });
+  let localPresence = { verdict: 'unknown' };
   if (!switchingTool && !opts.noLaunch && process.env.MC_TEST_MODE !== '1') {
     if (localAuthMode === LOCAL_AUTH_MODES.MANAGED_PORTABLE) {
-      const live = await (deps.findLiveBrokerSessionForEntry || findLiveBrokerSessionForEntry)(
+      localPresence = await (
+        deps.inspectLocalBrokerSessionForEntry || inspectLocalBrokerSessionForEntry
+      )(
         entry,
         { request: deps.requestBroker || requestBroker, deps },
       );
-      if (live) {
+      if (localPresence.verdict === 'live') {
         stderr.write('mc: managed portable launch conflicts with an existing local broker session; end it before retrying.\n');
         return 1;
       }
     } else {
       const attached = await attachLive(entry, { stdin, stdout, stderr, deps });
+      localPresence = attached?.localPresence || localPresence;
       if (attached?.attached) {
         markEntryOpened(entry, {
           upsert,
@@ -624,6 +643,31 @@ export async function resumeSelectedChoice(choice, {
         });
         return attached.code ?? 0;
       }
+    }
+    if (localPresence.verdict === 'unreachable') {
+      stderr.write(renderUnreachableLocalRuntime(entry));
+      return 1;
+    }
+    if (!activePresenceVerified && hasStoredToolSession(entry)) {
+      stderr.write(`mc: cannot verify whether "${entry.name}" is active on another source; refusing to start a duplicate.\n`);
+      return 1;
+    }
+  }
+  if (switchingTool && !opts.noLaunch && process.env.MC_TEST_MODE !== '1') {
+    localPresence = await (
+      deps.inspectLocalBrokerSessionForEntry || inspectLocalBrokerSessionForEntry
+    )(entry, { request: deps.requestBroker || requestBroker, deps });
+    if (localPresence.verdict === 'live') {
+      stderr.write(`mc: "${entry.name}" is running here — exit it (Ctrl+D) or \`mc end ${entry.name}\` before switching tools.\n`);
+      return 1;
+    }
+    if (localPresence.verdict === 'unreachable') {
+      stderr.write(renderUnreachableLocalRuntime(entry));
+      return 1;
+    }
+    if (!activePresenceVerified && hasStoredToolSession(entry)) {
+      stderr.write(`mc: cannot verify whether "${entry.name}" is active on another source; refusing to start a duplicate.\n`);
+      return 1;
     }
   }
 
@@ -762,10 +806,60 @@ export async function findLiveBrokerSessionForEntry(entry, {
   request = requestBroker,
   deps = {},
 } = {}) {
+  const presence = await inspectLocalBrokerSessionForEntry(entry, { request, deps });
+  return presence.verdict === 'live' ? presence.session : null;
+}
+
+export async function inspectLocalBrokerSessionForEntry(entry, {
+  request = requestBroker,
+  deps = {},
+} = {}) {
   const listed = await request({ type: 'sessions' }).catch(() => null);
   const sessions = await (deps.listLocalBrokerAndHostSessions || listLocalBrokerAndHostSessions)({ request })
     .catch(() => listed?.sessions || []);
-  return selectLiveBrokerSessionForEntry(entry, sessions || listed?.sessions || []);
+  const target = selectBrokerSessionForEntry(entry, sessions || listed?.sessions || []);
+  if (isLiveBrokerSession(target)) {
+    return {
+      verdict: 'live',
+      session: target,
+      runtime_generation: nonEmpty(target.runtime_generation),
+    };
+  }
+  if (isExitedBrokerSession(target)) {
+    return {
+      verdict: 'exited',
+      session: target,
+      runtime_generation: nonEmpty(target.runtime_generation),
+    };
+  }
+
+  const codingSessionId = nonEmpty(entry?.coding_session_id);
+  if (!codingSessionId) return { verdict: 'unknown', session: null };
+  const paths = (deps.sessionHostPaths || sessionHostPaths)(codingSessionId);
+  let lifecycle = null;
+  try {
+    lifecycle = await (deps.readSessionLifecycle || readSessionLifecycle)({
+      path: paths.lifecyclePath,
+      codingSessionId,
+    });
+  } catch {}
+  if (lifecycle?.verdict === 'exited') {
+    return {
+      verdict: 'exited',
+      session: null,
+      runtime_generation: nonEmpty(lifecycle.record?.runtime_generation),
+      lifecycle,
+    };
+  }
+  if (lifecycle?.verdict === 'live') {
+    return {
+      verdict: 'unreachable',
+      session: null,
+      runtime_generation: nonEmpty(lifecycle.record?.runtime_generation),
+      lifecycle,
+    };
+  }
+  return { verdict: 'unknown', session: null, lifecycle };
 }
 
 export async function attachLiveBrokerSession(entry, {
@@ -776,9 +870,10 @@ export async function attachLiveBrokerSession(entry, {
   stderr = process.stderr,
   deps = {},
 } = {}) {
-  const target = await findLiveBrokerSessionForEntry(entry, { request, deps });
+  const localPresence = await inspectLocalBrokerSessionForEntry(entry, { request, deps });
+  const target = localPresence.verdict === 'live' ? localPresence.session : null;
   const id = brokerSessionId(target);
-  if (!id) return { attached: false };
+  if (!id) return { attached: false, localPresence };
   const code = await attach({
     id,
     ...(target?.broker_socket_path ? { socketPath: target.broker_socket_path } : {}),
@@ -786,23 +881,29 @@ export async function attachLiveBrokerSession(entry, {
     stdout,
     stderr,
   });
-  return { attached: true, code, id };
+  return { attached: true, code, id, localPresence };
 }
 
 export function selectLiveBrokerSessionForEntry(entry, sessions = []) {
+  return selectBrokerSessionForEntry(
+    entry,
+    Array.isArray(sessions) ? sessions.filter(isLiveBrokerSession) : [],
+  );
+}
+
+export function selectBrokerSessionForEntry(entry, sessions = []) {
   if (!entry || !Array.isArray(sessions)) return null;
-  const live = sessions.filter(isLiveBrokerSession);
 
   const entryId = nonEmpty(entry.coding_session_id);
   if (entryId) {
-    const direct = live.find((session) => brokerSessionId(session) === entryId);
+    const direct = sessions.find((session) => brokerSessionId(session) === entryId);
     if (direct) return direct;
   }
 
   const worktreePath = nonEmpty(entry.worktree_path);
   if (worktreePath) {
     const normalizedWorktreePath = normalizePathForMatch(worktreePath);
-    const byCwd = live.find(
+    const byCwd = sessions.find(
       (session) => normalizePathForMatch(session.cwd) === normalizedWorktreePath,
     );
     if (byCwd) return byCwd;
@@ -810,7 +911,7 @@ export function selectLiveBrokerSessionForEntry(entry, sessions = []) {
 
   const name = nonEmpty(entry.name);
   if (name) {
-    return live.find((session) => (
+    return sessions.find((session) => (
       nonEmpty(session.name) === name
       || nonEmpty(session.worktree_name) === name
     )) || null;
@@ -824,6 +925,11 @@ function isLiveBrokerSession(session) {
     && session?.attachable !== false
     && session?.session_state !== 'dead'
     && !session?.exit;
+}
+
+function isExitedBrokerSession(session) {
+  return !!brokerSessionId(session)
+    && (session?.session_state === 'dead' || !!session?.exit);
 }
 
 function brokerSessionId(session) {
@@ -922,6 +1028,15 @@ function renderUnsupportedNativeResume(entry = {}, resolved = {}) {
   ].join('\n');
 }
 
+function renderUnreachableLocalRuntime(entry = {}) {
+  const name = nonEmpty(entry.name) || '<unknown>';
+  return [
+    `mc: "${name}" has a locally recorded live runtime, but its broker is unreachable.`,
+    'mc: refusing to start a duplicate provider session; run `mc doctor` and restore the session host before retrying.',
+    '',
+  ].join('\n');
+}
+
 function nonEmpty(value) {
   return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
@@ -929,8 +1044,11 @@ function nonEmpty(value) {
 async function activeMatchForEntry(entry, { argv = [], deps = {} } = {}) {
   const fetchActive = deps.fetchActiveSessions || ((args) => fetchActiveCodingSessions({ argv: args }));
   const activeRes = await fetchActive(argv);
-  if (!activeRes?.ok) return null;
-  return findActiveForLocalEntry(entry, activeRes.sessions || []);
+  if (!activeRes?.ok) return { ok: false, session: null };
+  return {
+    ok: true,
+    session: findActiveForLocalEntry(entry, activeRes.sessions || []),
+  };
 }
 
 function validateToolFlag(tool) {
