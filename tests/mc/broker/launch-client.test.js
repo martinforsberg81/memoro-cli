@@ -61,6 +61,8 @@ function launchBrokerOwnedSession(options) {
   return launchBrokerOwnedSessionImpl({
     ...options,
     deps: {
+      installClaudeArtifactHooks: async () => {},
+      installCodexArtifactHooks: async () => {},
       fetchGitHubSessionBootstrap: async () => ({
         capabilities: SESSION_CAPABILITIES,
         source: { id: 'local:device:test', kind: 'local' },

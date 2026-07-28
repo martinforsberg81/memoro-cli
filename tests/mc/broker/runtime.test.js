@@ -519,7 +519,9 @@ describe('BrokerRuntime', () => {
     assert.equal(session.repo_ref, 'martinforsberg81/memoro-cli');
     assert.equal(session.branch, 'sess/alpha');
     assert.equal(session.worktree_name, 'alpha');
-    assert.equal(session.transcript_path, '/Users/me/.codex/sessions/alpha.jsonl');
+    assert.equal('transcript_path' in session, false);
+    assert.equal('provider_sessions_dir' in session, false);
+    assert.equal('codex_artifact_capture' in session, false);
   });
 
   test('list derives repo and worktree metadata from cwd for older sessions', () => {

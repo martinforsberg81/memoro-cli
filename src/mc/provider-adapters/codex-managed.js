@@ -7,7 +7,8 @@ import {
   statSync,
 } from 'node:fs';
 import { arch, platform } from 'node:os';
-import { isAbsolute, join, relative, resolve } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 export const MANAGED_CODEX_PROVIDER_ID = 'codex-managed-local-v1';
 export const MANAGED_CODEX_DOMAIN_SCHEMA = 'mc-local-codex-credential-domain/v1';
@@ -22,6 +23,8 @@ export const MANAGED_CODEX_RELEASE_PROVENANCE = Object.freeze({
   asset: 'codex-package-aarch64-apple-darwin.tar.gz',
   archive_sha256: 'ece937169d4c9e910d60826a6ea4ae7848a16c089403d122e70e7da4ac41ba34',
 });
+const PACKAGE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
+const MANAGED_HOOK_RUNNER = join(PACKAGE_ROOT, 'src', 'mc', 'provider-artifact-hook-runner.js');
 
 const SAFE_RESUME_ID = /^[a-zA-Z0-9][a-zA-Z0-9_-]{7,127}$/;
 const MANIFEST_KEYS = Object.freeze([
@@ -45,6 +48,14 @@ const MANIFEST_KEYS = Object.freeze([
   'executor_tmp',
   'lease_path',
   'custody_secret_id',
+  'provider_config_path',
+  'provider_config_sha256',
+  'provider_hook_path',
+  'provider_hook_sha256',
+  'provider_hook_node_path',
+  'provider_hook_node_sha256',
+  'provider_hook_runner_path',
+  'provider_hook_runner_sha256',
 ]);
 const DESCRIPTOR_KEYS = Object.freeze([
   ...MANIFEST_KEYS,
@@ -95,10 +106,10 @@ export function resolveManagedCodexLaunch({
   const spec = {
     ...launch.spec,
     bin: checked.nativeBinary,
-    args: () => ['--strict-config', ...argv.argv],
+    args: () => ['--strict-config', '--dangerously-bypass-hook-trust', ...argv.argv],
     spawn: () => ({
       bin: checked.nativeBinary,
-      args: ['--strict-config', ...argv.argv],
+      args: ['--strict-config', '--dangerously-bypass-hook-trust', ...argv.argv],
     }),
   };
 
@@ -128,6 +139,10 @@ export function validateManagedCodexDescriptor(descriptor, {
       .test(descriptor.generation || '')
     || !/^[a-zA-Z0-9_-]{43}$/.test(descriptor.launch_nonce || '')
     || !nonEmptyString(descriptor.custody_secret_id)
+    || !/^[a-f0-9]{64}$/.test(descriptor.provider_config_sha256 || '')
+    || !/^[a-f0-9]{64}$/.test(descriptor.provider_hook_sha256 || '')
+    || !/^[a-f0-9]{64}$/.test(descriptor.provider_hook_node_sha256 || '')
+    || !/^[a-f0-9]{64}$/.test(descriptor.provider_hook_runner_sha256 || '')
     || !/^[a-f0-9]{64}$/.test(descriptor.manifest_sha256 || '')) {
     return managedFailure('managed-provider-descriptor-invalid');
   }
@@ -143,6 +158,10 @@ export function validateManagedCodexDescriptor(descriptor, {
     descriptor.lease_path,
     descriptor.manifest_path,
     descriptor.native_binary,
+    descriptor.provider_config_path,
+    descriptor.provider_hook_path,
+    descriptor.provider_hook_node_path,
+    descriptor.provider_hook_runner_path,
   ];
   if (requiredPaths.some((value) => typeof value !== 'string' || !isAbsolute(value))) {
     return managedFailure('managed-provider-descriptor-invalid');
@@ -151,6 +170,8 @@ export function validateManagedCodexDescriptor(descriptor, {
     || !isPathInside(descriptor.domain_path, descriptor.provider_home)
     || !isPathInside(descriptor.domain_path, descriptor.provider_tmp)
     || !isPathInside(descriptor.domain_path, descriptor.manifest_path)
+    || !isPathInside(descriptor.codex_home, descriptor.provider_config_path)
+    || !isPathInside(descriptor.codex_home, descriptor.provider_hook_path)
     || !isPathInside(descriptor.executor_root, descriptor.executor_home)
     || !isPathInside(descriptor.executor_root, descriptor.executor_tmp)
     || isPathInside(descriptor.domain_path, descriptor.executor_root)
@@ -186,6 +207,8 @@ export function validateManagedCodexDescriptor(descriptor, {
       || descriptor.executor_tmp !== join(descriptor.executor_root, 'tmp')
       || descriptor.provider_home !== join(descriptor.domain_path, 'home')
       || descriptor.codex_home !== join(descriptor.provider_home, '.codex')
+      || descriptor.provider_config_path !== join(descriptor.codex_home, 'config.toml')
+      || descriptor.provider_hook_path !== join(descriptor.codex_home, 'hooks.json')
       || descriptor.lease_path !== expectedLayout.leasePath) {
       return managedFailure('managed-provider-domain-path-invalid');
     }
@@ -210,7 +233,8 @@ export function validateManagedCodexDescriptor(descriptor, {
     const privateFiles = [
       descriptor.manifest_path,
       join(descriptor.codex_home, 'auth.json'),
-      join(descriptor.codex_home, 'config.toml'),
+      descriptor.provider_config_path,
+      descriptor.provider_hook_path,
       descriptor.lease_path,
     ];
     if (privateDirectories.some((path) => !isPrivateOwnedPath(stat(path), { directory: true }))
@@ -241,6 +265,14 @@ export function validateManagedCodexDescriptor(descriptor, {
     executor_tmp: descriptor.executor_tmp,
     lease_path: descriptor.lease_path,
     custody_secret_id: descriptor.custody_secret_id,
+    provider_config_path: descriptor.provider_config_path,
+    provider_config_sha256: descriptor.provider_config_sha256,
+    provider_hook_path: descriptor.provider_hook_path,
+    provider_hook_sha256: descriptor.provider_hook_sha256,
+    provider_hook_node_path: descriptor.provider_hook_node_path,
+    provider_hook_node_sha256: descriptor.provider_hook_node_sha256,
+    provider_hook_runner_path: descriptor.provider_hook_runner_path,
+    provider_hook_runner_sha256: descriptor.provider_hook_runner_sha256,
   };
   for (const [key, value] of Object.entries(expected)) {
     if (manifest?.[key] !== value) {
@@ -251,8 +283,29 @@ export function validateManagedCodexDescriptor(descriptor, {
     || descriptor.codex_team_id !== MANAGED_CODEX_TEAM_ID
     || !/^[a-f0-9]{64}$/.test(descriptor.native_binary_sha256 || '')
     || !existsSync(join(descriptor.codex_home, 'auth.json'))
-    || !existsSync(join(descriptor.codex_home, 'config.toml'))) {
+    || !existsSync(descriptor.provider_config_path)
+    || !existsSync(descriptor.provider_hook_path)) {
     return managedFailure('managed-provider-domain-unavailable');
+  }
+  try {
+    const configBody = readFile(descriptor.provider_config_path, 'utf8');
+    const hookBody = readFile(descriptor.provider_hook_path, 'utf8');
+    const nodePath = realpath(descriptor.provider_hook_node_path);
+    const runnerPath = realpath(descriptor.provider_hook_runner_path);
+    if (sha256(configBody) !== descriptor.provider_config_sha256
+      || sha256(hookBody) !== descriptor.provider_hook_sha256
+      || nodePath !== realpath(process.execPath)
+      || runnerPath !== realpath(MANAGED_HOOK_RUNNER)
+      || sha256(readFile(nodePath)) !== descriptor.provider_hook_node_sha256
+      || sha256(readFile(runnerPath)) !== descriptor.provider_hook_runner_sha256
+      || hookBody !== renderManagedCodexProviderHook({
+        nodePath,
+        runnerPath,
+      })) {
+      return managedFailure('managed-provider-hook-mismatch');
+    }
+  } catch {
+    return managedFailure('managed-provider-hook-mismatch');
   }
   try {
     if (sha256(readFile(nativeBinary)) !== descriptor.native_binary_sha256) {
@@ -341,6 +394,38 @@ export function sanitizeManagedProviderEnv(env = {}, descriptor = {}) {
   return allowed;
 }
 
+/**
+ * The managed CODEX_HOME contains only this generated user hook. The
+ * hash-bound config marks the workspace project layer untrusted, so Codex
+ * does not load repo-local hooks; the one-shot bypass therefore applies only
+ * to the exact hook source verified below.
+ */
+export function renderManagedCodexProviderHook({
+  nodePath = process.execPath,
+  runnerPath = MANAGED_HOOK_RUNNER,
+} = {}) {
+  const command = [
+    shellQuote(resolve(nodePath)),
+    shellQuote(resolve(runnerPath)),
+    '--tool',
+    'codex',
+  ].join(' ');
+  return `${JSON.stringify({
+    description: 'Memoro broker-owned provider artifact capture.',
+    hooks: {
+      SessionStart: [{
+        _memoro: 'memoro-cli',
+        matcher: 'startup|resume',
+        hooks: [{
+          type: 'command',
+          command,
+          timeout: 3,
+        }],
+      }],
+    },
+  }, null, 2)}\n`;
+}
+
 export function managedFailure(reason) {
   return {
     ok: false,
@@ -356,6 +441,10 @@ function isPathInside(parent, child) {
 
 function sha256(value) {
   return createHash('sha256').update(value).digest('hex');
+}
+
+function shellQuote(value) {
+  return `'${String(value).replaceAll("'", "'\"'\"'")}'`;
 }
 
 function isPlainObject(value) {

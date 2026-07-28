@@ -13,6 +13,7 @@ import { runCodex } from './commands/codex.js';
 import { showSection, listSections } from './commands/show.js';
 import { heartbeatLoop } from './commands/heartbeat-loop.js';
 import { heartbeatStop } from './commands/heartbeat-stop.js';
+import { captureProviderArtifact } from './commands/provider-artifact.js';
 import { showUpdateNoticeIfAvailable, spawnBackgroundUpdateCheck } from './lib/update-check.js';
 
 const HELP = `memoro-cli — bridge your coding tools to Memoro
@@ -109,6 +110,9 @@ async function main(argv) {
       case 'heartbeat-stop':
         // Internal — installed by the SessionEnd hook; not in --help.
         return await heartbeatStop(sub ? [sub, ...rest] : rest);
+      case 'provider-artifact':
+        if (sub === 'capture') return await captureProviderArtifact(rest);
+        throw new Error(`Unknown provider-artifact subcommand: ${sub}`);
       default:
         console.error(`Unknown command: ${cmd}`);
         console.error(HELP);

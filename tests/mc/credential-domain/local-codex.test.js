@@ -79,6 +79,7 @@ describe('local Codex credential domain', () => {
               'trust_level = "untrusted"',
             ].join('\n')));
             assert.doesNotMatch(config, /trust_level = "trusted"/);
+            assert.match(config, /hooks = true/);
             assert.doesNotMatch(config, /memoro-canary|codex-managed-auth-canary/);
             return { ok: true };
           },
@@ -96,6 +97,12 @@ describe('local Codex credential domain', () => {
       assert.equal(prepared.env.CODEX_HOME, prepared.descriptor.codex_home);
       assert.equal(prepared.env.MEMORO_TOKEN, undefined);
       assert.equal(JSON.stringify(prepared).includes(AUTH_CANARY), false);
+      assert.equal(
+        createHash('sha256')
+          .update(readFileSync(prepared.descriptor.provider_hook_path, 'utf8'))
+          .digest('hex'),
+        prepared.descriptor.provider_hook_sha256,
+      );
       assert.equal(JSON.parse(readFileSync(
         join(prepared.descriptor.codex_home, 'auth.json'),
         'utf8',
@@ -299,6 +306,7 @@ describe('local Codex credential domain', () => {
     assert.match(config, /"\/private\/credential" = "deny"/);
     assert.match(config, /"\/private\/workspace" = true/);
     assert.match(config, /enabled = false/);
+    assert.match(config, /hooks = true/);
     assert.doesNotMatch(config, /\bsandbox_mode\b|danger-full-access/);
   });
 

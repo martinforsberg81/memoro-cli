@@ -140,6 +140,9 @@ export async function installHooks({ memoroCliBin = 'memoro-cli' } = {}) {
     _memoro_version: version,
     hooks: [
       { type: 'command', command: `${memoroCliBin} lens pull --tool ${ID}` },
+      // The broker binds this event to its exact runtime generation. It is a
+      // no-op for raw Claude sessions and carries metadata only.
+      { type: 'command', command: `${memoroCliBin} provider-artifact capture --tool ${ID}` },
       // Spawn the heartbeat daemon detached — Claude Code reaps its hook
       // process tree on exit, so the daemon needs to survive that.
       { type: 'command', command: `${memoroCliBin} heartbeat-loop --tool ${ID} --background` },

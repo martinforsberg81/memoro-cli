@@ -4,7 +4,8 @@ import { randomUUID } from 'node:crypto';
 import { setTimeout as sleep } from 'node:timers/promises';
 
 import { resolveLaunch } from '../../adapters/index.js';
-import { installUpdateCommand } from '../../adapters/claude-code.js';
+import { installHooks, installUpdateCommand } from '../../adapters/claude-code.js';
+import { installHooks as installCodexHooks } from '../../adapters/codex.js';
 import { DEFAULT_TOOL, readConfig, getApiUrl } from '../../lib/config.js';
 import { getRepoContext, deriveRepoName, derivePublicRepoRef } from '../../lib/git-context.js';
 import { lookupOrMint } from '../../lib/coding-session.js';
@@ -22,6 +23,8 @@ import { ensureBrokerRunning } from './supervisor.js';
 import { ensureCloudBrokerConnected } from './cloud-supervisor.js';
 import { scrubRuntimeSecretsInPlace } from '../runtime-secrets.js';
 import { ensureSessionHostRunning } from './session-hosts.js';
+import { providerArtifactPath } from './paths.js';
+import { readProviderArtifactSync } from './provider-artifact-journal.js';
 import {
   buildSessionHeartbeatPayload,
   postHeartbeatWithRetry,
@@ -77,6 +80,7 @@ export async function launchBrokerOwnedSession({
   localAuthMode = LOCAL_AUTH_MODES.NATIVE,
   now = () => Date.now(),
   onLaunched = null,
+  onExited = null,
   deps = {},
 } = {}) {
   const authMode = (deps.requireLocalAuthMode || requireLocalAuthMode)(localAuthMode);
@@ -111,8 +115,13 @@ export async function launchBrokerOwnedSession({
   if (launch.id === 'claude-code') {
     await (deps.ensureCoordinatorSlashCommand || ensureCoordinatorSlashCommand)();
     await (deps.installUpdateCommand || installUpdateCommand)().catch(() => {});
+    try {
+      await (deps.installClaudeArtifactHooks || installHooks)();
+    } catch (error) {
+      stderr.write(`mc: failed to install Claude provider artifact hook (${error.message}); refusing to launch\n`);
+      return { code: 1, reason: 'claude-provider-artifact-hook-unavailable' };
+    }
   }
-
   const config = await (deps.readConfig || readConfig)();
   const apiUrl = (deps.getApiUrl || getApiUrl)(apiArgv) || config.apiUrl;
   const bootstrapIdentity = await (deps.resolveBootstrapIdentity || resolveBootstrapIdentity)({
@@ -240,6 +249,16 @@ export async function launchBrokerOwnedSession({
     }
     if (auth.interactiveLogin === true) {
       codexDeviceAuthBeforeLaunch = true;
+    }
+  }
+  if (launch.id === 'codex' && !managedPortable) {
+    try {
+      await (deps.installCodexArtifactHooks || installCodexHooks)({
+        ...(spawnEnv.CODEX_HOME ? { codexHome: spawnEnv.CODEX_HOME } : {}),
+      });
+    } catch (error) {
+      stderr.write(`mc: failed to install Codex provider artifact hook (${error.message}); refusing to launch\n`);
+      return { code: 1, reason: 'codex-provider-artifact-hook-unavailable' };
     }
   }
   const sessionHost = await resolveLaunchBroker({
@@ -509,6 +528,7 @@ export async function launchBrokerOwnedSession({
   if (typeof onLaunched === 'function') {
     await onLaunched({
       codingSessionId: effectiveCodingSessionId,
+      runtimeGeneration: launchRes.session?.runtime_generation || runtimeGeneration,
       launch: launchRes,
       brokerSocketPath: attachSocketPath,
       hostKind: sessionHost.hostKind || 'global-broker',
@@ -539,6 +559,24 @@ export async function launchBrokerOwnedSession({
       sleepFn: deps.sleep || sleep,
       retryDelaysMs: deps.codexSqliteRetryDelaysMs || CODEX_SQLITE_RETRY_DELAYS_MS,
       runtimeGenerationFactory: deps.randomUUID || randomUUID,
+    });
+  }
+  if (typeof onExited === 'function') {
+    const ended = await launchRequest({ type: 'session_status', id: effectiveCodingSessionId })
+      .catch(() => null);
+    const status = ended?.ok === true ? ended.session : null;
+    const endedGeneration = status?.runtime_generation || runtimeGeneration;
+    const artifactResult = (deps.readProviderArtifact || readProviderArtifactSync)({
+      path: providerArtifactPath(effectiveCodingSessionId, endedGeneration),
+      codingSessionId: effectiveCodingSessionId,
+      runtimeGeneration: endedGeneration,
+      trustedRoot: mcHome(),
+    });
+    await onExited({
+      codingSessionId: effectiveCodingSessionId,
+      runtimeGeneration: endedGeneration,
+      providerArtifact: artifactResult?.kind === 'present' ? artifactResult.artifact : null,
+      session: status,
     });
   }
   return { code, codingSessionId: effectiveCodingSessionId, broker: sessionHost.broker || null, attached: true };

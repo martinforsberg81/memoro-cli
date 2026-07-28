@@ -43,6 +43,7 @@ import {
   MANAGED_CODEX_RELEASE_SHA256,
   MANAGED_CODEX_TEAM_ID,
   MANAGED_CODEX_VERSION,
+  renderManagedCodexProviderHook,
 } from '../provider-adapters/codex-managed.js';
 
 export const LOCAL_CODEX_BOUNDARY_UNAVAILABLE = 'managed-portable-boundary-unavailable';
@@ -119,6 +120,10 @@ export async function prepareLocalCodexCredentialDomain({
   const executorBin = join(executorRoot, 'bin');
   const probeDir = join(executorRoot, 'probe');
   const manifestPath = join(domainPath, 'manifest.json');
+  const providerConfigPath = join(codexHome, 'config.toml');
+  const providerHookPath = join(codexHome, 'hooks.json');
+  let providerHookNodePath = null;
+  let providerHookRunnerPath = null;
   const safePath = managedSafePath({ executorBin, env });
   const forbiddenPaths = managedForbiddenPaths({ cwd, domainPath, root });
   const configBody = renderManagedCodexConfig({
@@ -135,6 +140,13 @@ export async function prepareLocalCodexCredentialDomain({
   let leaseAcquired = false;
 
   try {
+    providerHookNodePath = realpathSync(process.execPath);
+    providerHookRunnerPath = realpathSync(join(
+      PACKAGE_ROOT,
+      'src',
+      'mc',
+      'provider-artifact-hook-runner.js',
+    ));
     mkdirSync(leaseDir, { recursive: true, mode: 0o700 });
     chmodSync(leaseDir, 0o700);
     try {
@@ -162,7 +174,7 @@ export async function prepareLocalCodexCredentialDomain({
       mkdirSync(path, { recursive: true, mode: 0o700 });
       chmodSync(path, 0o700);
     }
-    writeFileSync(join(codexHome, 'config.toml'), configBody, { mode: 0o600 });
+    writeFileSync(providerConfigPath, configBody, { mode: 0o600 });
     writeRestrictedMcShim(join(executorBin, 'mc'));
 
     const probe = deps.verifyBoundary || verifyManagedCodexBoundary;
@@ -184,6 +196,16 @@ export async function prepareLocalCodexCredentialDomain({
           : {}),
       };
     }
+
+    const providerHookBody = renderManagedCodexProviderHook({
+      nodePath: providerHookNodePath,
+      runnerPath: providerHookRunnerPath,
+    });
+    writeFileSync(providerHookPath, providerHookBody, {
+      encoding: 'utf8',
+      mode: 0o600,
+      flag: 'wx',
+    });
 
     const loadAuth = deps.loadCustodyAuth || loadCustodyCodexAuth;
     custody = await loadAuth({
@@ -222,6 +244,14 @@ export async function prepareLocalCodexCredentialDomain({
       executor_tmp: executorTmp,
       lease_path: leasePath,
       custody_secret_id: custody.secretId,
+      provider_config_path: providerConfigPath,
+      provider_config_sha256: sha256(configBody),
+      provider_hook_path: providerHookPath,
+      provider_hook_sha256: sha256(providerHookBody),
+      provider_hook_node_path: providerHookNodePath,
+      provider_hook_node_sha256: sha256(readFileSync(providerHookNodePath)),
+      provider_hook_runner_path: providerHookRunnerPath,
+      provider_hook_runner_sha256: sha256(readFileSync(providerHookRunnerPath)),
     };
     const manifestBody = `${JSON.stringify(manifest)}\n`;
     writeFileSync(manifestPath, manifestBody, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
@@ -603,7 +633,7 @@ export function renderManagedCodexConfig({
     'apps = false',
     'browser_use = false',
     'computer_use = false',
-    'hooks = false',
+    'hooks = true',
     'image_generation = false',
     'multi_agent = false',
     'network_proxy = false',

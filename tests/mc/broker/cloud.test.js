@@ -466,7 +466,17 @@ describe('CloudBrokerClient', () => {
       request: async () => ({
         ok: true,
         sessions: [
-          { id: 'sess_valid', session_projection: projection },
+          {
+            id: 'sess_valid',
+            transcript_path: '/private/transcript-canary.jsonl',
+            provider_sessions_dir: '/private/provider-sessions-canary',
+            codex_artifact_capture: { cwd: '/private/worktree-canary' },
+            provider_artifact: {
+              provider_session_id: 'provider-id-canary',
+              transcript_path: '/private/provider-artifact-canary.jsonl',
+            },
+            session_projection: projection,
+          },
           { id: 'sess_invalid', session_projection: { ...projection, raw_output: 'secret' } },
         ],
       }),
@@ -482,7 +492,10 @@ describe('CloudBrokerClient', () => {
       .find((message) => message.type === 'sessions');
     assert.deepEqual(inventory.sessions[0].session_projection, projection);
     assert.equal(Object.hasOwn(inventory.sessions[1], 'session_projection'), false);
-    assert.doesNotMatch(JSON.stringify(inventory), /secret/);
+    assert.doesNotMatch(
+      JSON.stringify(inventory),
+      /secret|transcript-canary|provider-sessions-canary|worktree-canary|provider-id-canary|provider-artifact-canary/,
+    );
     client.stop();
   });
 

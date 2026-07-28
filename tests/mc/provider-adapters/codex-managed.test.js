@@ -1,8 +1,12 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import test, { describe } from 'node:test';
 
 import {
@@ -11,6 +15,7 @@ import {
   MANAGED_CODEX_PROVIDER_ID,
   MANAGED_CODEX_TEAM_ID,
   MANAGED_CODEX_VERSION,
+  renderManagedCodexProviderHook,
   resolveManagedCodexLaunch,
   validateManagedCodexArgv,
 } from '../../../src/mc/provider-adapters/codex-managed.js';
@@ -31,6 +36,13 @@ function makeDomain() {
   const executorTmp = join(executor, 'tmp');
   const nativeBinaryPath = join(root, 'codex');
   const manifestPath = join(domain, 'manifest.json');
+  const providerConfigPath = join(codexHome, 'config.toml');
+  const providerHookPath = join(codexHome, 'hooks.json');
+  const providerHookNodePath = realpathSync(process.execPath);
+  const providerHookRunnerPath = realpathSync(fileURLToPath(new URL(
+    '../../../src/mc/provider-artifact-hook-runner.js',
+    import.meta.url,
+  )));
   for (const path of [
     domain, executor, codexHome, providerHome, providerTmp, executorHome, executorTmp,
     join(root, 'credential-domain-leases', 'codex'),
@@ -39,7 +51,13 @@ function makeDomain() {
   writeFileSync(nativeBinaryPath, 'signed-codex-binary', { mode: 0o755 });
   const nativeBinary = realpathSync(nativeBinaryPath);
   writeFileSync(join(codexHome, 'auth.json'), '{"auth_mode":"chatgpt"}', { mode: 0o600 });
-  writeFileSync(join(codexHome, 'config.toml'), 'default_permissions="mc-managed-portable"\n', { mode: 0o600 });
+  const providerConfigBody = 'default_permissions="mc-managed-portable"\n';
+  writeFileSync(providerConfigPath, providerConfigBody, { mode: 0o600 });
+  const providerHookBody = renderManagedCodexProviderHook({
+    nodePath: providerHookNodePath,
+    runnerPath: providerHookRunnerPath,
+  });
+  writeFileSync(providerHookPath, providerHookBody, { mode: 0o600 });
 
   const manifest = {
     schema: MANAGED_CODEX_DOMAIN_SCHEMA,
@@ -62,6 +80,14 @@ function makeDomain() {
     executor_tmp: executorTmp,
     lease_path: leasePath,
     custody_secret_id: 'secret_1',
+    provider_config_path: providerConfigPath,
+    provider_config_sha256: sha256(providerConfigBody),
+    provider_hook_path: providerHookPath,
+    provider_hook_sha256: sha256(providerHookBody),
+    provider_hook_node_path: providerHookNodePath,
+    provider_hook_node_sha256: sha256(readFileSync(providerHookNodePath)),
+    provider_hook_runner_path: providerHookRunnerPath,
+    provider_hook_runner_sha256: sha256(readFileSync(providerHookRunnerPath)),
   };
   const manifestBody = `${JSON.stringify(manifest)}\n`;
   writeFileSync(manifestPath, manifestBody, { mode: 0o600 });
@@ -107,7 +133,10 @@ describe('managed Codex provider adapter', () => {
       assert.equal(result.environmentMode, 'replace');
       assert.equal(result.launch.spec.bin, domain.descriptor.native_binary);
       assert.deepEqual(result.launch.spec.spawn().args, [
-        '--strict-config', 'resume', '019dbb46-5772-7493-a627-f8ae48954a64',
+        '--strict-config',
+        '--dangerously-bypass-hook-trust',
+        'resume',
+        '019dbb46-5772-7493-a627-f8ae48954a64',
       ]);
       assert.equal(result.env.CODEX_HOME, domain.descriptor.codex_home);
       assert.equal(result.env.HOME, domain.descriptor.provider_home);
@@ -141,6 +170,42 @@ describe('managed Codex provider adapter', () => {
       });
       assert.equal(result.ok, false);
       assert.equal(result.reason, 'managed-provider-binary-mismatch');
+    } finally {
+      rmSync(domain.root, { recursive: true, force: true });
+    }
+  });
+
+  test('fails closed on managed provider hook substitution', () => {
+    const domain = makeDomain();
+    try {
+      writeFileSync(domain.descriptor.provider_hook_path, '{"hooks":{}}\n', { mode: 0o600 });
+      const result = resolveManagedCodexLaunch({
+        launch: { ok: true, id: 'codex', shortName: 'codex', spec: {} },
+        input: { argv: [], env: {}, credential_domain: domain.descriptor },
+        inspectRelease: () => ({ ok: true }),
+      });
+      assert.equal(result.ok, false);
+      assert.equal(result.reason, 'managed-provider-hook-mismatch');
+    } finally {
+      rmSync(domain.root, { recursive: true, force: true });
+    }
+  });
+
+  test('fails closed on managed config substitution before hook trust bypass', () => {
+    const domain = makeDomain();
+    try {
+      writeFileSync(
+        domain.descriptor.provider_config_path,
+        'default_permissions="danger-full-access"\n',
+        { mode: 0o600 },
+      );
+      const result = resolveManagedCodexLaunch({
+        launch: { ok: true, id: 'codex', shortName: 'codex', spec: {} },
+        input: { argv: [], env: {}, credential_domain: domain.descriptor },
+        inspectRelease: () => ({ ok: true }),
+      });
+      assert.equal(result.ok, false);
+      assert.equal(result.reason, 'managed-provider-hook-mismatch');
     } finally {
       rmSync(domain.root, { recursive: true, force: true });
     }

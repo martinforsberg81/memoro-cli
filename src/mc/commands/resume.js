@@ -359,10 +359,21 @@ export async function launchResumeSession({
             }
           : {}),
       };
+      // Keep the prior proven generation until SessionStart evidence for this
+      // exact runtime has been committed by the broker.
       patch.provider_sessions = providerPatch.providerSessions;
       if (brokerSocketPath) patch.broker_socket_path = brokerSocketPath;
       if (hostKind) patch.host_kind = hostKind;
       upsert(patch);
+    },
+    onExited: ({ providerArtifact = null }) => {
+      commitNativeProviderArtifact({
+        entry,
+        expectedTool: launchTool?.id,
+        providerArtifact,
+        localAuthMode,
+        upsert: deps.upsertEntry || upsertEntry,
+      });
     },
     deps: deps.launchDeps || {},
   });
@@ -414,10 +425,44 @@ export async function launchFreshSession({
       if (hostKind) patch.host_kind = hostKind;
       upsert(patch);
     },
+    onExited: ({ providerArtifact = null }) => {
+      commitNativeProviderArtifact({
+        entry,
+        expectedTool: launchTool?.id,
+        providerArtifact,
+        localAuthMode,
+        upsert: deps.upsertEntry || upsertEntry,
+      });
+    },
     deps: deps.launchDeps || {},
   });
   if (typeof result === 'number') return result;
   return result?.code ?? 0;
+}
+
+function commitNativeProviderArtifact({
+  entry,
+  expectedTool,
+  providerArtifact,
+  localAuthMode,
+  upsert,
+} = {}) {
+  if (localAuthMode !== LOCAL_AUTH_MODES.NATIVE || !providerArtifact
+    || !expectedTool || providerArtifact.tool !== expectedTool) return false;
+  const providerPatch = withProviderSession(entry, providerArtifact.tool, {
+    session_id: providerArtifact.provider_session_id,
+    transcript_path: providerArtifact.transcript_path,
+    runtime_generation: providerArtifact.runtime_generation,
+  });
+  if (!providerPatch.ok) return false;
+  upsert({
+    name: entry.name,
+    tool_session_id: providerArtifact.provider_session_id,
+    tool_session_source: providerArtifact.tool,
+    tool_transcript_path: providerArtifact.transcript_path,
+    provider_sessions: providerPatch.providerSessions,
+  });
+  return true;
 }
 
 async function materialiseVaultForLaunch({

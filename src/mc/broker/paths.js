@@ -35,7 +35,15 @@ export function sessionHostPaths(sessionId) {
     logPath: join(dir, 'broker.log'),
     manifestPath: join(dir, 'host.json'),
     lifecyclePath: join(dir, 'lifecycle.json'),
+    providerArtifactsDir: join(dir, 'provider-artifacts'),
   };
+}
+
+export function providerArtifactPath(sessionId, runtimeGeneration) {
+  return join(
+    sessionHostPaths(sessionId).providerArtifactsDir,
+    `${sanitizePathPart(runtimeGeneration || 'unknown')}.json`,
+  );
 }
 
 function sanitizePathPart(value) {

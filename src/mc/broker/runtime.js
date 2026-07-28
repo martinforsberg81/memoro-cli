@@ -1,15 +1,23 @@
 import { StringDecoder } from 'node:string_decoder';
 import { randomBytes } from 'node:crypto';
+import { realpathSync } from 'node:fs';
 
 import { resolveLaunch } from '../../adapters/index.js';
 import { DEFAULT_TOOL } from '../../lib/config.js';
 import { normalizeInteractivePtyEnv } from '../interactive-env.js';
+import { mcHome } from '../paths.js';
 import { BrokerSessionManager } from './session-manager.js';
 import { BrokerSessionSidecars } from './session-sidecars.js';
 import { resolveManagedCodexLaunch } from '../provider-adapters/codex-managed.js';
 import { closeLocalCodexCredentialDomain } from '../credential-domain/local-codex.js';
 import { sessionHostPaths } from './paths.js';
 import { writeSessionLifecycleSync } from './lifecycle-journal.js';
+import { providerArtifactPath } from './paths.js';
+import { writeProviderArtifactSync } from './provider-artifact-journal.js';
+import {
+  validateClaudeProviderArtifact,
+  validateCodexProviderArtifact,
+} from './provider-artifacts.js';
 
 // Keep this below the generic runtime-finalization bound so a hung advisory
 // network call cannot race the mandatory local cleanup timeout.
@@ -26,6 +34,7 @@ const SESSION_COMMANDS = new Set([
   'resize_session',
   'stop_session',
   'remove_session',
+  'capture_provider_artifact',
 ]);
 
 export class BrokerRuntime {
@@ -41,6 +50,9 @@ export class BrokerRuntime {
     managedProviderResolver = resolveManagedCodexLaunch,
     credentialDomainCloser = closeLocalCodexCredentialDomain,
     lifecycleWriter = writeSessionLifecycleSync,
+    providerArtifactWriter = writeProviderArtifactSync,
+    validateClaudeArtifact = validateClaudeProviderArtifact,
+    validateCodexArtifact = validateCodexProviderArtifact,
   } = {}) {
     if (!manager && !ptyFactory?.spawn) {
       throw new TypeError('manager or ptyFactory.spawn is required');
@@ -57,6 +69,9 @@ export class BrokerRuntime {
     this.managedProviderResolver = managedProviderResolver;
     this.credentialDomainCloser = credentialDomainCloser;
     this.lifecycleWriter = lifecycleWriter;
+    this.providerArtifactWriter = providerArtifactWriter;
+    this.validateClaudeArtifact = validateClaudeArtifact;
+    this.validateCodexArtifact = validateCodexArtifact;
     this.sidecars = new Map();
     this.sidecarsBySession = new WeakMap();
     this.sidecarStartFinalizationsBySession = new WeakMap();
@@ -120,6 +135,7 @@ export class BrokerRuntime {
       if (type === 'resize_session') return this._resize(message.id, message.cols, message.rows, message);
       if (type === 'stop_session') return this._stop(message.id, message.signal);
       if (type === 'remove_session') return this._remove(message.id);
+      if (type === 'capture_provider_artifact') return this._captureProviderArtifact(message);
     } catch (err) {
       return { ok: false, error: err.message || String(err) };
     }
@@ -234,6 +250,11 @@ export class BrokerRuntime {
       cwd,
       sidecars: input.sidecars,
       runtimeGeneration,
+      providerSessionsDir: codexSessionsDirForLaunch({
+        launch,
+        provider,
+        input,
+      }),
     });
     const credentialDomain = provider.descriptor ? {
       descriptor: provider.descriptor,
@@ -272,6 +293,9 @@ export class BrokerRuntime {
           ...interactiveEnv.env,
           MEMORO_MC_BROKER: '1',
           MEMORO_MC_PARENT: '1',
+          MC_CODING_SESSION_ID: id,
+          ...(runtimeGeneration ? { MC_RUNTIME_GENERATION: runtimeGeneration } : {}),
+          MC_PROVIDER_ARTIFACT_SOCKET: sessionHostPaths(id).socketPath,
         },
       }, {
         beforeStart: (ownedSession) => {
@@ -423,6 +447,72 @@ export class BrokerRuntime {
         ...(managed ? { credential_cleanup: 'confirmed' } : {}),
       };
     });
+  }
+
+  _captureProviderArtifact(input = {}) {
+    const id = requiredString(input.id || input.coding_session_id, 'session id');
+    const session = this.manager.get(id);
+    const status = session ? this.manager.status(id) : null;
+    if (!session || status?.exit) return { ok: false, reason: 'provider-artifact-session-not-live' };
+    const metadata = this.sessionMetadata.get(id) || {};
+    const runtimeGeneration = stringOrNull(metadata.runtime_generation);
+    if (!runtimeGeneration) return { ok: false, reason: 'provider-artifact-generation-missing' };
+    if (input.runtime_generation !== runtimeGeneration) {
+      return { ok: false, reason: 'provider-artifact-generation-mismatch' };
+    }
+    const expectedSessionTool = input.tool === 'claude-code'
+      ? 'claude'
+      : input.tool === 'codex'
+        ? 'codex'
+        : null;
+    if (!expectedSessionTool || session.tool !== expectedSessionTool) {
+      return { ok: false, reason: 'provider-artifact-tool-mismatch' };
+    }
+    const artifactInput = {
+      cwd: input.cwd,
+      providerSessionId: input.provider_session_id,
+      transcriptPath: input.transcript_path,
+    };
+    const checked = input.tool === 'claude-code'
+      ? this.validateClaudeArtifact(artifactInput)
+      : this.validateCodexArtifact(
+          artifactInput,
+          metadata.provider_sessions_dir
+            ? { sessionsDir: metadata.provider_sessions_dir }
+            : undefined,
+        );
+    if (!checked?.ok || !sameWorkspace(checked.workspace, session.cwd)) {
+      return { ok: false, reason: checked?.reason || 'provider-artifact-workspace-mismatch' };
+    }
+    const artifact = {
+      schema: 'mc-provider-artifact-v1',
+      coding_session_id: id,
+      runtime_generation: runtimeGeneration,
+      tool: input.tool,
+      provider_session_id: input.provider_session_id,
+      transcript_path: checked.transcriptPath,
+      captured_at: new Date(runtimeObservedAt(this.clock)).toISOString(),
+    };
+    return this._commitProviderArtifact({ id, metadata, artifact });
+  }
+
+  _commitProviderArtifact({ id, metadata, artifact }) {
+    try {
+      const written = this.providerArtifactWriter({
+        path: providerArtifactPath(id, artifact.runtime_generation),
+        artifact,
+        trustedRoot: mcHome(),
+      });
+      metadata.provider_artifact = written.artifact;
+      this.sessionMetadata.set(id, metadata);
+      return {
+        ok: true,
+        duplicate: written.duplicate === true,
+        artifact: publicProviderArtifact(written.artifact),
+      };
+    } catch {
+      return { ok: false, reason: 'provider-artifact-write-failed' };
+    }
   }
 
   _attachConnection(message, conn, initialInput) {
@@ -690,10 +780,11 @@ export class BrokerRuntime {
 
   _withAttachStatus(session) {
     if (!session) return null;
-    const metadata = {
+    const privateMetadata = {
       ...deriveMetadataFromCwd(session.cwd),
       ...(this.sessionMetadata.get(session.id) || {}),
     };
+    const metadata = publicSessionMetadata(privateMetadata);
     const attached = [...this.attaches.values()]
       .filter((attach) => attach.session_id === session.id)
       .map((attach) => ({ ...attach }));
@@ -704,6 +795,9 @@ export class BrokerRuntime {
       attached,
       writer_attach_id: null,
       ...(sessionProjection ? { session_projection: sessionProjection } : {}),
+      ...(privateMetadata.provider_artifact
+        ? { provider_artifact: publicProviderArtifact(privateMetadata.provider_artifact) }
+        : {}),
     };
   }
 
@@ -726,6 +820,7 @@ function buildSessionMetadata({
   cwd,
   sidecars,
   runtimeGeneration = null,
+  providerSessionsDir = null,
 } = {}) {
   const fromCwd = deriveMetadataFromCwd(cwd);
   const plainSidecars = plainObject(sidecars) ? sidecars : {};
@@ -754,8 +849,45 @@ function buildSessionMetadata({
         || plainSidecars.tool_transcript_path
         || plainSidecars.toolTranscriptPath,
     ),
+    provider_artifact: null,
+    provider_sessions_dir: stringOrNull(providerSessionsDir),
     worktree_name: worktreeName && worktreeName !== id ? worktreeName : fromCwd.worktree_name,
   };
+}
+
+function publicProviderArtifact(value) {
+  if (!value || typeof value !== 'object') return null;
+  return {
+    coding_session_id: value.coding_session_id,
+    runtime_generation: value.runtime_generation,
+    tool: value.tool,
+    captured_at: value.captured_at,
+  };
+}
+
+function publicSessionMetadata(value = {}) {
+  return {
+    repo: stringOrNull(value.repo),
+    repo_ref: stringOrNull(value.repo_ref),
+    branch: stringOrNull(value.branch),
+    label: stringOrNull(value.label),
+    runtime_generation: stringOrNull(value.runtime_generation),
+    source_id: stringOrNull(value.source_id),
+    source_kind: stringOrNull(value.source_kind),
+    worktree_name: stringOrNull(value.worktree_name),
+  };
+}
+
+function codexSessionsDirForLaunch({ launch, provider, input } = {}) {
+  if (launch?.id !== 'codex') return null;
+  const codexHome = stringOrNull(provider?.env?.CODEX_HOME)
+    || stringOrNull(input?.env?.CODEX_HOME)
+    || stringOrNull(process.env.CODEX_HOME);
+  return codexHome ? `${codexHome.replace(/\/+$/, '')}/sessions` : null;
+}
+
+function sameWorkspace(left, right) {
+  try { return realpathSync(left) === realpathSync(right); } catch { return false; }
 }
 
 function deriveMetadataFromCwd(cwd) {

@@ -456,7 +456,7 @@ export class CloudBrokerClient extends EventEmitter {
     const tool = stringOrDefault(session.tool, stringOrDefault(toolHint, ''));
     const raw = await this._writeDispatchedInput({ sessionId, message, tool, request });
     if (raw?.ok) {
-      return { ok: true, transport: 'write_session', session };
+      return { ok: true, transport: 'write_session', session: publicSessionForCloud(session) };
     }
     if (raw?.partial) return raw;
     const fallback = await request({ type: 'dispatch_session', id: sessionId, message }).catch((err) => ({
@@ -472,7 +472,9 @@ export class CloudBrokerClient extends EventEmitter {
     if (sessionId) {
       const request = await this._requestForSessionId(sessionId).catch(() => this.request);
       const status = await request({ type: 'session_status', id: sessionId }).catch(() => null);
-      session = status?.ok && status.session && typeof status.session === 'object' ? status.session : {};
+      session = status?.ok && status.session && typeof status.session === 'object'
+        ? publicSessionForCloud(status.session)
+        : {};
     }
     return buildEnvironmentStatusResult({
       scope,
@@ -1244,6 +1246,11 @@ function publicSessionForCloud(session = {}) {
     broker_log_path,
     host_kind,
     host_session_id,
+    transcript_path,
+    provider_artifact,
+    provider_artifact_failed,
+    provider_sessions_dir,
+    codex_artifact_capture,
     session_projection: sessionProjection,
     ...publicSession
   } = session;
