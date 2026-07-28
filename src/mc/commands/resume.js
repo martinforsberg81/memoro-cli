@@ -12,7 +12,13 @@
  * session by id. If the entry has never had a tool session, resume is the
  * first fresh grounded start for that tracked worktree.
  */
-import { findEntry, readRegistry, upsertEntry } from '../registry.js';
+import {
+  findEntry,
+  normalizeProviderSessions,
+  readRegistry,
+  upsertEntry,
+  withProviderSession,
+} from '../registry.js';
 import { emitCd, parseDirectiveFlag } from '../shell-directives.js';
 import { resolveToolInput } from '../../adapters/index.js';
 import { DEFAULT_TOOL } from '../../lib/config.js';
@@ -101,6 +107,11 @@ export async function run(rawArgv, deps = {}) {
     upsert: deps.upsertEntry || upsertEntry,
     deps,
   });
+  const providerState = normalizeProviderSessions(entry);
+  if (!providerState.ok) {
+    stderr.write(`mc: provider session state is invalid (${providerState.reason}); refusing to launch.\n`);
+    return 1;
+  }
   let firstLaunchInWorktree = localAuthMode === LOCAL_AUTH_MODES.MANAGED_PORTABLE
     ? !hasManagedProviderToolSession(entry)
     : !hasStoredToolSession(entry);
@@ -192,9 +203,14 @@ export async function run(rawArgv, deps = {}) {
 
   if (opts.tool) {
     if (switchingTool) {
-      entry = applyToolSwitch(entry, toolValidation.resolved, {
+      const switched = applyToolSwitch(entry, toolValidation.resolved, {
         upsert: deps.upsertEntry || upsertEntry,
       });
+      if (switched?.error) {
+        stderr.write(`mc: provider session state is invalid (${switched.error}); refusing to launch.\n`);
+        return 1;
+      }
+      entry = switched;
     } else {
       const res = applyToolOverride(entry, opts.tool, {
         upsert: deps.upsertEntry || upsertEntry,
@@ -280,6 +296,10 @@ export async function launchResumeSession({
         deps: deps.toolSessionDeps || deps,
       });
   if (!toolSession?.ok) {
+    if (isProviderSessionStateFailure(toolSession?.reason)) {
+      stderr.write(`mc: provider session state is invalid (${toolSession.reason}); refusing to launch.\n`);
+      return 1;
+    }
     // No provider-native session to resume (e.g. the tool exited before any
     // message created a transcript). Under the contract, continuity is
     // server-owned — a fresh grounded launch on the SAME coding session is
@@ -293,6 +313,14 @@ export async function launchResumeSession({
       stderr,
       deps,
     });
+  }
+  const providerPatch = withProviderSession(entry, toolSession.source, {
+    session_id: toolSession.sessionId,
+    transcript_path: toolSession.transcriptPath || null,
+  });
+  if (!providerPatch.ok) {
+    stderr.write(`mc: provider session state is invalid (${providerPatch.reason}); refusing to launch.\n`);
+    return 1;
   }
   const resumeArgv = buildNativeResumeArgv({
     entry,
@@ -331,6 +359,7 @@ export async function launchResumeSession({
             }
           : {}),
       };
+      patch.provider_sessions = providerPatch.providerSessions;
       if (brokerSocketPath) patch.broker_socket_path = brokerSocketPath;
       if (hostKind) patch.host_kind = hostKind;
       upsert(patch);
@@ -673,7 +702,12 @@ export async function resumeSelectedChoice(choice, {
 
   if (opts.tool) {
     if (switchingTool) {
-      entry = applyToolSwitch(entry, resolvedTool, { upsert });
+      const switched = applyToolSwitch(entry, resolvedTool, { upsert });
+      if (switched?.error) {
+        stderr.write(`mc: provider session state is invalid (${switched.error}); refusing to launch.\n`);
+        return 1;
+      }
+      entry = switched;
     } else {
       const res = applyToolOverride(entry, opts.tool, { upsert, resolved: resolvedTool });
       if (res.error) {
@@ -757,6 +791,12 @@ async function maybeBackfillToolSession(entry, {
     tool_session_source: resolved.source || null,
     tool_transcript_path: resolved.transcriptPath || null,
   };
+  const providerPatch = withProviderSession(entry, resolved.source, {
+    session_id: resolved.sessionId,
+    transcript_path: resolved.transcriptPath || null,
+  });
+  if (!providerPatch.ok) return entry;
+  patch.provider_sessions = providerPatch.providerSessions;
   try {
     const next = upsert(patch);
     return { ...entry, ...patch, ...(next || {}) };
@@ -766,9 +806,9 @@ async function maybeBackfillToolSession(entry, {
 }
 
 function storedManagedToolSession(entry, launchTool) {
-  const sessionId = nonEmpty(entry?.tool_session_id);
-  const providerAdapter = nonEmpty(entry?.tool_session_provider_adapter);
-  const providerGeneration = nonEmpty(entry?.tool_session_provider_generation);
+  const sessionId = exactNonEmpty(entry?.tool_session_id);
+  const providerAdapter = exactNonEmpty(entry?.tool_session_provider_adapter);
+  const providerGeneration = exactNonEmpty(entry?.tool_session_provider_generation);
   if (!sessionId
     || providerAdapter !== MANAGED_CODEX_PROVIDER_ID
     || !isManagedGeneration(providerGeneration)) {
@@ -791,15 +831,29 @@ function storedManagedToolSession(entry, launchTool) {
 
 function hasManagedProviderToolSession(entry) {
   return !!(
-    nonEmpty(entry?.tool_session_id)
-    && nonEmpty(entry?.tool_session_provider_adapter) === MANAGED_CODEX_PROVIDER_ID
-    && isManagedGeneration(nonEmpty(entry?.tool_session_provider_generation))
+    exactNonEmpty(entry?.tool_session_id)
+    && exactNonEmpty(entry?.tool_session_provider_adapter) === MANAGED_CODEX_PROVIDER_ID
+    && isManagedGeneration(exactNonEmpty(entry?.tool_session_provider_generation))
   );
 }
 
 function isManagedGeneration(value) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
     .test(value || '');
+}
+
+function isProviderSessionStateFailure(reason) {
+  return new Set([
+    'provider-sessions-invalid',
+    'legacy-provider-ambiguous',
+    'legacy-provider-invalid',
+    'invalid-provider-session',
+    'unknown-provider',
+  ]).has(reason);
+}
+
+function exactNonEmpty(value) {
+  return typeof value === 'string' && value.length > 0 ? value : null;
 }
 
 export async function findLiveBrokerSessionForEntry(entry, {
@@ -1088,6 +1142,9 @@ function applyToolSwitch(entry, resolvedTool, { upsert = upsertEntry } = {}) {
     tool_session_provider_adapter: null,
     tool_session_provider_generation: null,
   };
+  const migrated = normalizeProviderSessions(entry);
+  if (!migrated.ok) return { error: migrated.reason };
+  patch.provider_sessions = migrated.providerSessions;
   const next = upsert(patch);
   return { ...entry, ...patch, ...(next || {}) };
 }

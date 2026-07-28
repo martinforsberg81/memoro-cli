@@ -104,11 +104,9 @@ const POLL_INTERVAL_MS = 500;
 const POLL_TIMEOUT_MS = 30_000;
 const SUBMIT_ENTER_DELAY_MS = 150;
 
-// Raw PTY bytes kept for excerpt extraction. ANSI escapes typically
-// strip down to ~30–50%, so 4 KiB raw yields plenty of clean text to
-// slice the trailing 500 chars from (server's EXCERPT_MAX).
+// Raw PTY bytes kept only for the local status projector and exit summary.
+// They are never serialized into heartbeat payloads.
 const OUTPUT_BUFFER_BYTES = 4096;
-const EXCERPT_MAX_CHARS = 500;
 const STARTUP_MESSAGE_IDLE_MS = 1500;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -624,10 +622,8 @@ async function runWrap(argv, { label = null } = {}) {
   // Pipe PTY output → user's terminal. Also:
   //   - stamp `lastOutputAt` so the heartbeat ticker can report idle vs
   //     active to peer coordinators
-  //   - keep a rolling raw-output buffer so the heartbeat can carry a
-  //     stripped excerpt of what Claude is currently showing (lets a peer
-  //     coordinator spot e.g. "How should I proceed?" prompts at a
-  //     glance, not just "session B has been idle 2m")
+  //   - keep a rolling raw-output buffer for the local session projector only;
+  //     heartbeat payloads are metadata-only and never carry PTY excerpts
   let lastOutputAt = runtimeStartedAt;
   let lastInputAt = null;
   let outputBuffer = '';
@@ -717,11 +713,8 @@ async function runWrap(argv, { label = null } = {}) {
         apiUrl, token,
         payload: buildHeartbeatPayload({
           base: heartbeatBase,
-          outputBuffer,
           lastOutputAt,
           now,
-          excerptMax: EXCERPT_MAX_CHARS,
-          extractExcerpt,
           sessionProjection: projectionTracker.runtime({
             session: {
               session_state: 'live',
@@ -1220,9 +1213,7 @@ function preflight(bin) {
  * Strip ANSI escapes and control characters from a raw PTY-output buffer,
  * collapse runs of blank lines, and return the trailing `max` characters.
  *
- * Used to feed the heartbeat's `last_assistant_excerpt` so peer
- * coordinators can see what Claude is currently showing (e.g. a paused
- * "Next step?" prompt) instead of just "session B has been idle 2m".
+ * Used only by local presentation paths. Heartbeats never include PTY excerpts.
  *
  * Conservative: we keep readable text + newlines + tabs, drop everything
  * that's screen-positioning, color, or other-noise. If the entire buffer

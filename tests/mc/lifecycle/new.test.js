@@ -294,6 +294,11 @@ describe('mc new', () => {
     assert.ok(j, `expected JSON, got: ${r.stdout}`);
     assert.equal(j.name, 'focus-x', 'first positional is still the name');
     assert.equal(j.focus, 'grab the flaky test', 'remaining positionals form the focus');
+    const registry = JSON.parse(readFileSync(join(repo.mcHome, 'registry.json'), 'utf8'));
+    assert.deepEqual(registry.entries.find((entry) => entry.name === 'focus-x').session_objective, {
+      text: 'grab the flaky test',
+      authority: 'explicit',
+    });
   });
 
   test('focus is null when no <task> is given', () => {
@@ -304,6 +309,8 @@ describe('mc new', () => {
     const j = parseJsonOrNull(r.stdout);
     assert.ok(j);
     assert.equal(j.focus, null);
+    const registry = JSON.parse(readFileSync(join(repo.mcHome, 'registry.json'), 'utf8'));
+    assert.equal(registry.entries.find((entry) => entry.name === 'no-focus').session_objective, null);
   });
 
   test('prelaunch for --codex uses only the codex vault adapter and broker launch payload', async () => {

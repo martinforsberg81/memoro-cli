@@ -572,11 +572,39 @@ describe('mc resume <name>', () => {
         tool_session_id: 'cx_discovered',
         tool_session_source: 'codex',
         tool_transcript_path: '/tmp/codex.jsonl',
+        provider_sessions: {
+          schema: 1,
+          providers: {
+            codex: {
+              session_id: 'cx_discovered', transcript_path: '/tmp/codex.jsonl',
+              runtime_generation: null, last_consumed_handoff_sequence: 0,
+            },
+          },
+        },
       });
     } finally {
       if (old === undefined) delete process.env.MC_TEST_MODE;
       else process.env.MC_TEST_MODE = old;
     }
+  });
+
+  test('invalid provider session state refuses before launch or registry mutation', async () => {
+    const launches = [];
+    const mutations = [];
+    const status = await runResume(['data'], {
+      stdout: { write() {} },
+      stderr: { write() {} },
+      findEntry: () => makeEntry({
+        name: 'data', tool: 'codex', coding_session_id: 'sess_data',
+        provider_sessions: { schema: 2, providers: {} }, tool_session_id: 'cx_legacy',
+      }),
+      upsertEntry: (patch) => { mutations.push(patch); return patch; },
+      launchFreshSession: () => { launches.push('fresh'); return 0; },
+      launchResumeSession: () => { launches.push('resume'); return 0; },
+    });
+    assert.equal(status, 1);
+    assert.deepEqual(launches, []);
+    assert.deepEqual(mutations, []);
   });
 
   test('--json includes provider-native id backfilled from transcript', async () => {
@@ -702,6 +730,8 @@ describe('mc resume <name>', () => {
       assert.ok(switchPatch, 'tool flipped to codex in registry');
       assert.equal(switchPatch.tool_session_id, null);
       assert.equal(switchPatch.tool_transcript_path, null);
+      assert.equal(switchPatch.provider_sessions.providers['claude-code'].session_id, 'claude_native_xyz');
+      assert.equal(switchPatch.provider_sessions.providers['claude-code'].last_consumed_handoff_sequence, 0);
       assert.doesNotMatch(stderr.join(''), /different tool/);
     } finally {
       if (old === undefined) delete process.env.MC_TEST_MODE;
@@ -1040,6 +1070,7 @@ describe('mc resume <name>', () => {
     const switchPatch = upserts.find((u) => u.tool === 'codex');
     assert.ok(switchPatch, 'tool flipped to codex');
     assert.equal(switchPatch.tool_session_id, null, 'stale native transcript cleared');
+    assert.equal(switchPatch.provider_sessions.providers['claude-code'].session_id, 'claude_native_xyz');
   });
 
   test('picker resume launches native provider resume when local broker PTY is gone', async () => {
@@ -1237,6 +1268,15 @@ describe('mc resume <name>', () => {
       tool_session_id: 'cl_provider_data',
       tool_session_source: 'claude-code',
       tool_transcript_path: '/tmp/claude.jsonl',
+      provider_sessions: {
+        schema: 1,
+        providers: {
+          'claude-code': {
+            session_id: 'cl_provider_data', transcript_path: '/tmp/claude.jsonl',
+            runtime_generation: null, last_consumed_handoff_sequence: 0,
+          },
+        },
+      },
     }]);
   });
 
@@ -1332,6 +1372,64 @@ describe('mc resume <name>', () => {
         auth: LOCAL_AUTH_MODES.MANAGED_PORTABLE,
       },
     ]);
+  });
+
+  test('prelaunch rejects padded managed or injected provider identity before broker spawn', async () => {
+    for (const scenario of [
+      {
+        entry: {
+          name: 'managed',
+          tool: 'codex',
+          tool_session_id: ' cx_padded',
+          tool_session_provider_adapter: MANAGED_CODEX_PROVIDER_ID,
+          tool_session_provider_generation: MANAGED_GENERATION,
+          provider_sessions: {
+            schema: 1,
+            providers: {
+              codex: {
+                session_id: 'cx_previous',
+                transcript_path: null,
+                runtime_generation: null,
+                last_consumed_handoff_sequence: 0,
+              },
+            },
+          },
+        },
+        localAuthMode: LOCAL_AUTH_MODES.MANAGED_PORTABLE,
+        deps: {},
+      },
+      {
+        entry: { name: 'native', tool: 'codex' },
+        localAuthMode: LOCAL_AUTH_MODES.NATIVE,
+        deps: {
+          materialiseVaultBeforeLaunch: async () => ({ ok: true, materialised: [], skipped: [] }),
+          resolveToolSessionForResume: async () => ({
+            ok: true,
+            source: 'codex',
+            sessionId: 'cx_valid',
+            transcriptPath: ' relative/transcript.jsonl',
+          }),
+        },
+      },
+    ]) {
+      let launched = false;
+      const stderr = [];
+      const status = await launchResumeSession({
+        entry: scenario.entry,
+        localAuthMode: scenario.localAuthMode,
+        stderr: { write: (value) => stderr.push(value) },
+        deps: {
+          ...scenario.deps,
+          launchBrokerOwnedSession: async () => {
+            launched = true;
+            return { code: 0 };
+          },
+        },
+      });
+      assert.equal(status, 1);
+      assert.equal(launched, false);
+      assert.match(stderr.join(''), /provider session state is invalid/);
+    }
   });
 
   test('picker selections preserve managed mode for fresh and provider-native launches', async () => {

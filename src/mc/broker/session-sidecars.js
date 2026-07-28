@@ -7,7 +7,6 @@ import { CliWsClient } from '../../commands/ws-client.js';
 import { createFetchTranscriptHandler } from '../../commands/handlers/fetch-transcript.js';
 import { memoroFetch } from '../../lib/api.js';
 import { DEFAULT_TOOL } from '../../lib/config.js';
-import { extractExcerpt } from '../session-excerpt.js';
 import {
   resolveSessionSourceIdentity,
   SessionProjectionTracker,
@@ -20,7 +19,6 @@ import { createBoundIdentityBroker } from '../connections/identity.js';
 const TICK_INTERVAL_MS = 60_000;
 const MAX_ATTEMPTS = 3;
 const RETRY_INTERVAL_MS = 5 * 60 * 1000;
-const EXCERPT_MAX_CHARS = 500;
 
 export class BrokerSessionSidecars {
   constructor({
@@ -35,7 +33,6 @@ export class BrokerSessionSidecars {
     heartbeatIntervalMs = TICK_INTERVAL_MS,
     retryIntervalMs = RETRY_INTERVAL_MS,
     maxAttempts = MAX_ATTEMPTS,
-    excerptMaxChars = EXCERPT_MAX_CHARS,
     sessionUploadScheduler = scheduleSessionUpload,
     projectionTracker = null,
     connectionClient = null,
@@ -66,7 +63,6 @@ export class BrokerSessionSidecars {
     this.heartbeatIntervalMs = heartbeatIntervalMs;
     this.retryIntervalMs = retryIntervalMs;
     this.maxAttempts = maxAttempts;
-    this.excerptMaxChars = excerptMaxChars;
     this.sessionUploadScheduler = sessionUploadScheduler;
     this.sourceIdentity = resolveSessionSourceIdentity({
       sourceId: coding.sourceId || coding.source_id,
@@ -224,7 +220,6 @@ export class BrokerSessionSidecars {
           source: this._codingSource(),
           repo: this.coding.repoRef || this.coding.repo_ref || this.coding.repo || null,
           branch: this.coding.branch || null,
-          lastAssistantExcerpt: extractExcerpt(this.session.recentOutput(), this.excerptMaxChars),
           idleSeconds: Math.max(0, Math.floor((now - (this.session.lastOutputAt || now)) / 1000)),
           at: new Date(now).toISOString(),
           sessionProjection: this.currentProjection({ now }),
@@ -333,7 +328,6 @@ export function buildSessionHeartbeatPayload({
   source,
   repo,
   branch,
-  lastAssistantExcerpt = '',
   idleSeconds = 0,
   at,
   sessionProjection,
@@ -359,9 +353,6 @@ export function buildSessionHeartbeatPayload({
   if (terminal) return metadata;
   return {
     ...metadata,
-    files_touched_since_last: [],
-    last_user_excerpt: '',
-    last_assistant_excerpt: lastAssistantExcerpt,
     session_projection: sessionProjection,
   };
 }
@@ -415,5 +406,4 @@ export const __test__ = {
   TICK_INTERVAL_MS,
   RETRY_INTERVAL_MS,
   MAX_ATTEMPTS,
-  EXCERPT_MAX_CHARS,
 };

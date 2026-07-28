@@ -64,33 +64,24 @@ export function buildHeartbeatBase({
     source: heartbeatSource || null,
     repo: deriveRepoName(repoContext),
     branch: repoContext?.branch || null,
-    files_touched_since_last: [],
-    last_user_excerpt: '',
     ...(label ? { label } : {}),
   };
 }
 
 export function buildHeartbeatPayload({
   base,
-  outputBuffer = '',
   lastOutputAt,
   now = Date.now(),
-  excerptMax,
-  extractExcerpt,
   sessionProjection = null,
 } = {}) {
   if (!base || typeof base !== 'object') {
     throw new Error('buildHeartbeatPayload: base required');
-  }
-  if (typeof extractExcerpt !== 'function') {
-    throw new Error('buildHeartbeatPayload: extractExcerpt required');
   }
   const nowMs = timestampMs(now);
   const lastMs = timestampMs(lastOutputAt ?? nowMs);
   const projection = sanitizeSessionProjection(sessionProjection);
   return {
     ...base,
-    last_assistant_excerpt: extractExcerpt(outputBuffer, excerptMax),
     idle_seconds: Math.max(0, Math.floor((nowMs - lastMs) / 1000)),
     at: new Date(nowMs).toISOString(),
     ...(projection ? { session_projection: projection } : {}),

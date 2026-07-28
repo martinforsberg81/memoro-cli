@@ -118,7 +118,6 @@ describe('BrokerSessionSidecars', () => {
       source: 'codex',
       repo: 'widgets',
       branch: 'main',
-      lastAssistantExcerpt: 'bounded',
       idleSeconds: 3,
       at: '2026-07-23T10:00:00.000Z',
       sessionProjection: { contract_version: 'mc-session-projection-v1' },
@@ -137,9 +136,6 @@ describe('BrokerSessionSidecars', () => {
       source: 'codex',
       repo: 'widgets',
       branch: 'main',
-      files_touched_since_last: [],
-      last_user_excerpt: '',
-      last_assistant_excerpt: 'bounded',
       idle_seconds: 3,
       at: '2026-07-23T10:00:00.000Z',
       session_projection: { contract_version: 'mc-session-projection-v1' },
@@ -378,7 +374,7 @@ describe('BrokerSessionSidecars', () => {
     assert.equal(existsSync(paths.sockPath), false);
   });
 
-  test('starts WS dispatch handler and heartbeat loop with current PTY excerpt', async () => {
+  test('starts WS dispatch handler and a metadata-only heartbeat loop', async () => {
     const paths = tempPaths();
     const session = makeSession();
     const wsClients = [];
@@ -433,7 +429,8 @@ describe('BrokerSessionSidecars', () => {
     assert.equal(heartbeats[0].opts.body.machine_id, 'machine');
     assert.equal(heartbeats[0].opts.body.source_id, 'local:machine');
     assert.equal(heartbeats[0].opts.body.repo, 'acme/repo');
-    assert.equal(heartbeats[0].opts.body.last_assistant_excerpt, 'ready\n');
+    assert.equal('last_assistant_excerpt' in heartbeats[0].opts.body, false);
+    assert.equal('last_user_excerpt' in heartbeats[0].opts.body, false);
     assert.equal(heartbeats[0].opts.body.idle_seconds, 1);
     assert.equal(heartbeats[0].opts.body.session_projection.contract_version, 'mc-session-projection-v1');
     assert.equal(Object.hasOwn(heartbeats[0].opts.body.session_projection, 'raw_output'), false);
