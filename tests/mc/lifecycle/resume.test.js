@@ -35,6 +35,7 @@ import {
 } from '../../../src/mc/commands/resume.js';
 import * as claudeAdapter from '../../../src/adapters/claude-code.js';
 import * as codexAdapter from '../../../src/adapters/codex.js';
+import { resolveToolInput } from '../../../src/adapters/index.js';
 import { LOCAL_AUTH_MODES } from '../../../src/mc/local-auth-mode.js';
 import { MANAGED_CODEX_PROVIDER_ID } from '../../../src/mc/provider-adapters/codex-managed.js';
 
@@ -429,6 +430,10 @@ describe('mc resume <name>', () => {
           attached.push(arg);
           return 0;
         },
+        resolveSessionControllerCapability: async () => ({
+          ok: true,
+          capability: 'b'.repeat(64),
+        }),
         fetchActiveSessions: async () => {
           fetchedActive = true;
           return { ok: true, sessions: [] };
@@ -444,6 +449,101 @@ describe('mc resume <name>', () => {
       assert.equal(fetchedActive, false);
       assert.equal(attached.length, 1);
       assert.equal(attached[0].id, 'sess_data');
+      assert.equal(attached[0].controllerCapability, 'b'.repeat(64));
+    } finally {
+      if (old === undefined) delete process.env.MC_TEST_MODE;
+      else process.env.MC_TEST_MODE = old;
+    }
+  });
+
+  test('plain open completes a delivered handoff before attaching the live target provider', async () => {
+    const old = process.env.MC_TEST_MODE;
+    delete process.env.MC_TEST_MODE;
+    const targetGeneration = '9937ac60-46ce-42dd-9302-6533f1c6c38c';
+    const source = makeEntry({
+      name: 'handoff',
+      branch: 'sess/handoff',
+      worktree_path: '/tmp/handoff',
+      coding_session_id: 'sess_handoff',
+      tool: 'claude',
+      tool_session_id: 'claude-native-a',
+      tool_session_source: 'claude-code',
+      tool_transcript_path: '/tmp/claude-a.jsonl',
+      provider_sessions: {
+        schema: 1,
+        providers: {
+          'claude-code': {
+            session_id: 'claude-native-a',
+            transcript_path: '/tmp/claude-a.jsonl',
+            runtime_generation: '4f50f5a1-4c6b-4d6a-8b5c-152c5e6b8701',
+            last_consumed_handoff_sequence: 1,
+          },
+          codex: {
+            session_id: 'codex-native-b',
+            transcript_path: '/tmp/codex-b.jsonl',
+            runtime_generation: targetGeneration,
+            last_consumed_handoff_sequence: 0,
+          },
+        },
+      },
+    });
+    const target = {
+      ...source,
+      tool: 'codex',
+      tool_session_id: null,
+      tool_session_source: null,
+      tool_transcript_path: null,
+      provider_sessions: {
+        ...source.provider_sessions,
+        providers: {
+          ...source.provider_sessions.providers,
+          codex: {
+            ...source.provider_sessions.providers.codex,
+            last_consumed_handoff_sequence: 1,
+          },
+        },
+      },
+    };
+    const attached = [];
+    try {
+      const status = await runResume(['handoff'], {
+        stdin: { isTTY: true },
+        stdout: { isTTY: true, write() {} },
+        stderr: { write() {} },
+        findEntry: () => source,
+        inspectLocalBrokerSessionForEntry: async () => ({
+          verdict: 'live',
+          runtime_generation: targetGeneration,
+          session: {
+            id: 'sess_handoff',
+            tool: 'codex',
+            runtime_generation: targetGeneration,
+            broker_socket_path: '/tmp/handoff-broker.sock',
+          },
+        }),
+        recoverProviderSwitch: async () => ({
+          ok: true,
+          active: true,
+          recoveredDelivery: true,
+          targetTool: resolveToolInput('codex'),
+          brokerSocketPath: '/tmp/handoff-broker.sock',
+          transaction: {
+            transaction_id: '73a85b7e-2ce4-4db0-8b38-16ba08de03bf',
+            target_latest_sequence: 1,
+          },
+        }),
+        commitProviderSwitchDelivery: async () => ({ ok: true, entry: target }),
+        attachLiveBrokerSession: async (entry) => {
+          attached.push(entry);
+          return { attached: true, code: 0 };
+        },
+        launchResumeSession: () => assert.fail('live recovered target must attach'),
+        launchFreshSession: () => assert.fail('live recovered target must not relaunch'),
+        upsertEntry: (patch) => ({ ...target, ...patch }),
+      });
+      assert.equal(status, 0);
+      assert.equal(attached.length, 1);
+      assert.equal(attached[0].tool, 'codex');
     } finally {
       if (old === undefined) delete process.env.MC_TEST_MODE;
       else process.env.MC_TEST_MODE = old;

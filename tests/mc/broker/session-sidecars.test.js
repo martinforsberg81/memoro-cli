@@ -143,6 +143,39 @@ describe('BrokerSessionSidecars', () => {
     });
   });
 
+  test('handoff boundary omits transcript fetch capability from the cloud sidecar', () => {
+    const paths = tempPaths();
+    let wsOptions = null;
+    const sidecars = new BrokerSessionSidecars({
+      session: makeSession(),
+      coding: {
+        codingSessionId: 'sess_handoff',
+        apiUrl: 'https://memoro.test',
+        token: 'memoro-secret-sentinel',
+        source: 'codex',
+        transcriptPath: '/private/source-transcript-canary.jsonl',
+        transcriptAccess: false,
+        sockPath: paths.sockPath,
+        metaPath: paths.metaPath,
+        heartbeat: false,
+        upload: false,
+      },
+      createServerImpl: fakeCreateServer,
+      wsClientFactory: (opts) => {
+        wsOptions = opts;
+        return { start() {}, stop() {} };
+      },
+      fetchTranscriptHandlerFactory: () => {
+        assert.fail('handoff boundary must not construct a transcript reader');
+      },
+      connectionClient: grantClient(),
+    }).start();
+
+    assert.equal('fetch_transcript' in wsOptions.handlers, false);
+    assert.equal(typeof wsOptions.handlers.dispatch_message, 'function');
+    sidecars.stop();
+  });
+
   test('default GitHub request IDs reach trusted execution over the real session socket', async (t) => {
     const paths = tempPaths();
     const requests = [];

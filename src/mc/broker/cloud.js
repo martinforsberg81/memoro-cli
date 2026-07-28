@@ -17,6 +17,7 @@ import {
   listLocalBrokerAndHostSessions,
   requestForSession,
 } from './session-hosts.js';
+import { deriveHandoffControllerRoot } from '../handoff-controller-capability.js';
 
 const INITIAL_BACKOFF_MS = 1_000;
 const MAX_BACKOFF_MS = 30_000;
@@ -520,7 +521,10 @@ export class CloudBrokerClient extends EventEmitter {
 
   _readLocalSessionOutput(sessionId) {
     return readLocalSessionOutput({
-      request: this.request,
+      request: (message) => this.request({
+        ...message,
+        session_controller_capability: this._controllerCapability(sessionId),
+      }),
       sessionId,
       timeoutMs: this.localTranscriptReadMs,
     });
@@ -529,7 +533,21 @@ export class CloudBrokerClient extends EventEmitter {
   async _requestForSessionId(sessionId) {
     const sessions = await listLocalBrokerSessions({ request: this.request }).catch(() => []);
     const session = sessions.find((item) => sessionMatchesId(item, sessionId));
-    return requestForSession(session, { request: this.request });
+    return requestForSession(session, {
+      request: this.request,
+      controllerCapability: this._controllerCapability(sessionId),
+    });
+  }
+
+  _controllerCapability(sessionId) {
+    const capability = deriveHandoffControllerRoot({
+      token: this.token,
+      codingSessionId: sessionId,
+    });
+    if (!capability) {
+      throw new Error('session controller authority is unavailable');
+    }
+    return capability;
   }
 
   _sendResult({ command_id, ok, data, error }) {
@@ -545,7 +563,11 @@ export class CloudBrokerClient extends EventEmitter {
     const brokerWsUrl = requiredString(msg.broker_ws_url || msg.ws_url, 'broker_ws_url');
     const sessions = await listLocalBrokerSessions({ request: this.request }).catch(() => []);
     const session = sessions.find((item) => sessionMatchesId(item, sessionId));
-    const request = requestForSession(session, { request: this.request });
+    const controllerCapability = this._controllerCapability(sessionId);
+    const request = requestForSession(session, {
+      request: this.request,
+      controllerCapability,
+    });
 
     const bridge = createAttachBridge({
       attachId,
@@ -555,6 +577,7 @@ export class CloudBrokerClient extends EventEmitter {
       cols: msg.cols || 80,
       rows: msg.rows || 24,
       request,
+      controllerCapability,
       connect: this.connect,
       WebSocketImpl: this.WebSocketImpl,
       brokerSocket: session?.broker_socket_path || this.brokerSocket,
@@ -678,6 +701,7 @@ export function createAttachBridge({
   sessionId,
   brokerWsUrl,
   token = null,
+  controllerCapability,
   cols = 80,
   rows = 24,
   request = requestBroker,
@@ -689,6 +713,9 @@ export function createAttachBridge({
   if (!attachId) throw new TypeError('attachId is required');
   if (!sessionId) throw new TypeError('sessionId is required');
   if (!brokerWsUrl) throw new TypeError('brokerWsUrl is required');
+  if (!/^[a-f0-9]{64}$/.test(controllerCapability || '')) {
+    throw new TypeError('controllerCapability is required');
+  }
   if (typeof WebSocketImpl !== 'function') throw new TypeError('WebSocket implementation is required');
 
   let local = null;
@@ -759,6 +786,7 @@ export function createAttachBridge({
         request({
           type: 'resize_session',
           id: sessionId,
+          session_controller_capability: controllerCapability,
           cols: control.cols,
           rows: control.rows,
           side: 'cloud',
@@ -787,6 +815,7 @@ export function createAttachBridge({
         local.write(JSON.stringify({
           type: 'attach_session',
           id: sessionId,
+          session_controller_capability: controllerCapability,
           attach_id: attachId,
           side: 'cloud',
           cols,
@@ -1279,7 +1308,10 @@ export function readLocalSessionOutput({
   timeoutMs = LOCAL_TRANSCRIPT_READ_MS,
 } = {}) {
   requiredString(sessionId, 'session id');
-  const requestFn = request || ((message) => requestBroker(message, { timeoutMs }));
+  if (typeof request !== 'function') {
+    throw new TypeError('controller-bound broker request is required');
+  }
+  const requestFn = request;
   return requestFn({
     type: 'fetch_session_output',
     id: sessionId,

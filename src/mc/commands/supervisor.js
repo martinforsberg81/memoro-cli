@@ -12,6 +12,9 @@ import {
   requestForSession,
 } from '../broker/session-hosts.js';
 import {
+  resolveSessionControllerCapability,
+} from '../session-controller-capability.js';
+import {
   buildWatchSnapshot,
   cleanSessionOutput,
 } from './sessions-watch.js';
@@ -372,11 +375,24 @@ Options
 
 function createSupervisorContext({ opts, deps, stdout, stderr, supervisorAuth = null }) {
   const request = deps.requestBroker || defaultRequestBroker;
-  const readOutput = deps.readOutput || ((sessionIdValue, session) => readLocalSessionOutput({
-    request: requestForSession(session, { request }),
-    sessionId: sessionIdValue,
-    timeoutMs: opts.outputTimeoutMs,
-  }));
+  const readOutput = deps.readOutput || (async (sessionIdValue, session) => {
+    const authority = await (
+      deps.resolveSessionControllerCapability
+      || resolveSessionControllerCapability
+    )({
+      codingSessionId: sessionIdValue,
+      deps,
+    });
+    if (!authority?.ok) throw new Error('session controller authority is unavailable');
+    return readLocalSessionOutput({
+      request: requestForSession(session, {
+        request,
+        controllerCapability: authority.capability,
+      }),
+      sessionId: sessionIdValue,
+      timeoutMs: opts.outputTimeoutMs,
+    });
+  });
   return {
     opts,
     request,

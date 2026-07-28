@@ -300,4 +300,53 @@ describe('PtySession', () => {
     timers.fireAll();
     assert.deepEqual(fake.writes, []);
   });
+
+  test('handoff is omitted from adapter argv and acknowledged after PTY delivery', async () => {
+    const timers = makeManualTimers();
+    const { session, fake } = makeSession({
+      launchSpec: {
+        bin: '/x/claude',
+        startupMessageDelivery: 'launch-args',
+        args: (argv, options) => {
+          assert.equal(options.handoffUserMessage, null);
+          return argv;
+        },
+      },
+      argv: ['--resume', 'native-a'],
+      launchOptions: { handoffUserMessage: 'handoff one' },
+      startupMessageDelayMs: 10,
+      startupMessageSetTimeoutFn: timers.setTimeoutFn,
+      startupMessageClearTimeoutFn: timers.clearTimeoutFn,
+    });
+
+    session.start();
+    const delivered = session.waitForHandoffDelivery();
+    assert.deepEqual(fake.calls[0].args, ['--resume', 'native-a']);
+    assert.deepEqual(fake.writes, []);
+    fake.emitData('ready');
+    timers.fireAll();
+
+    assert.deepEqual(fake.writes, ['handoff one\r']);
+    assert.deepEqual(await delivered, { ok: true });
+  });
+
+  test('provider exit before handoff delivery resolves a fail-closed acknowledgement', async () => {
+    const timers = makeManualTimers();
+    const { session, fake } = makeSession({
+      launchOptions: { handoffUserMessage: 'handoff one' },
+      startupMessageSetTimeoutFn: timers.setTimeoutFn,
+      startupMessageClearTimeoutFn: timers.clearTimeoutFn,
+    });
+
+    session.start();
+    const delivered = session.waitForHandoffDelivery();
+    fake.emitData('starting');
+    fake.emitExit({ exitCode: 1 });
+
+    assert.deepEqual(await delivered, {
+      ok: false,
+      reason: 'provider-exited-before-handoff-delivery',
+    });
+    assert.deepEqual(fake.writes, []);
+  });
 });

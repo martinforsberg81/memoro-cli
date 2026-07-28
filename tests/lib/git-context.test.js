@@ -133,7 +133,7 @@ describe('derivePublicRepoRef', () => {
 
   test('strips credentials from generic HTTPS remotes', () => {
     assert.equal(
-      derivePublicRepoRef({ remoteUrl: 'https://user:secret@git.example.com/team/widgets.git', toplevel: '/tmp/wat' }),
+      derivePublicRepoRef({ remoteUrl: 'https://user:secret@git.example.com/team/widgets.git?access_token=secret#fragment', toplevel: '/tmp/wat' }),
       'https://git.example.com/team/widgets',
     );
   });

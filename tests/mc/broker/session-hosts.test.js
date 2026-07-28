@@ -11,6 +11,14 @@ import {
 } from '../../../src/mc/broker/session-hosts.js';
 import { BROKER_PROTOCOL_VERSION } from '../../../src/mc/broker/daemon.js';
 
+function controllerBinding(sessionId) {
+  return {
+    schema: 'mc-broker-controller-bootstrap-v1',
+    session_id: sessionId,
+    session_controller_capability: 'b'.repeat(64),
+  };
+}
+
 function makeHostManifest({ hostsDir, sessionId = 'sess_a' }) {
   const dir = join(hostsDir, sessionId);
   mkdirSync(dir, { recursive: true });
@@ -142,6 +150,7 @@ describe('session broker hosts', () => {
       let spawned = false;
       const result = await ensureSessionHostRunning({
         sessionId: 'sess_legacy',
+        controllerBinding: controllerBinding('sess_legacy'),
         paths,
         request: async () => ({
           ok: true,
@@ -174,6 +183,7 @@ describe('session broker hosts', () => {
       let spawned = false;
       const result = await ensureSessionHostRunning({
         sessionId: 'sess_upgrade',
+        controllerBinding: controllerBinding('sess_upgrade'),
         paths,
         request: async (message) => {
           seen.push(message.type);
@@ -254,6 +264,7 @@ describe('session broker hosts', () => {
 
       const result = await ensureSessionHostRunning({
         sessionId: 'sess_timeout',
+        controllerBinding: controllerBinding('sess_timeout'),
         paths,
         timeoutMs: 0,
         request: async () => {

@@ -20,7 +20,7 @@ export async function captureProviderArtifact(argv, {
   if (event?.hook_event_name !== 'SessionStart'
     || !event?.session_id || !event?.transcript_path || !event?.cwd) return 1;
   const socketPath = env.MC_PROVIDER_ARTIFACT_SOCKET
-    || pathsForSession(env.MC_CODING_SESSION_ID).socketPath;
+    || pathsForSession(env.MC_CODING_SESSION_ID).artifactSocketPath;
   const result = await request({
     type: 'capture_provider_artifact',
     id: env.MC_CODING_SESSION_ID,

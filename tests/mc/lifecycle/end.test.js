@@ -316,6 +316,10 @@ describe('mc end', () => {
     const requests = [];
 
     const { result } = await runEndInProcess(repo, ['broker-clean'], 'y', {
+      resolveSessionControllerCapability: async () => ({
+        ok: true,
+        capability: 'b'.repeat(64),
+      }),
       requestBroker: async (message) => {
         requests.push(message);
         if (message.type === 'sessions') {
@@ -329,7 +333,11 @@ describe('mc end', () => {
     assert.equal(result, 0);
     assert.deepEqual(requests, [
       { type: 'sessions' },
-      { type: 'remove_session', id: 'sess_broker_clean' },
+      {
+        type: 'remove_session',
+        id: 'sess_broker_clean',
+        session_controller_capability: 'b'.repeat(64),
+      },
     ]);
     const wts = git(repo.dir, 'worktree list --porcelain');
     assert.ok(!wts.includes('broker-clean'), `worktree should be gone; got:\n${wts}`);

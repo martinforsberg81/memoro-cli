@@ -179,15 +179,21 @@ export class BrokerSessionSidecars {
 
   _startWsClient() {
     if (!this.coding.apiUrl || !this.coding.token) return;
+    const transcriptAccess = this.coding.transcriptAccess !== false
+      && this.coding.transcript_access !== false;
     this.wsClient = this.wsClientFactory({
       apiUrl: this.coding.apiUrl,
       token: this.coding.token,
       codingSessionId: this.coding.codingSessionId,
       handlers: {
-        fetch_transcript: this.fetchTranscriptHandlerFactory({
-          transcriptPath: this.coding.transcriptPath || null,
-          source: this._codingSource(),
-        }),
+        ...(transcriptAccess
+          ? {
+              fetch_transcript: this.fetchTranscriptHandlerFactory({
+                transcriptPath: this.coding.transcriptPath || null,
+                source: this._codingSource(),
+              }),
+            }
+          : {}),
         dispatch_message: async (args) => {
           const message = typeof args?.message === 'string' ? args.message : null;
           if (!message?.trim()) throw new Error('message required');

@@ -129,6 +129,7 @@ export function spawnBrokerDaemon({
   readyFile = null,
   socketPath = null,
   pidPath = null,
+  controllerBinding = null,
   logPath = brokerLogPath(),
   env = process.env,
   argv = process.argv,
@@ -144,15 +145,47 @@ export function spawnBrokerDaemon({
     if (readyFile) args.push('--ready-file', readyFile);
     if (socketPath) args.push('--socket-path', socketPath);
     if (pidPath) args.push('--pid-path', pidPath);
+    const bootstrap = validateControllerBinding(controllerBinding);
+    if (controllerBinding && !bootstrap) {
+      return { ok: false, error: 'invalid broker controller bootstrap' };
+    }
+    if (bootstrap) args.push('--controller-bootstrap');
     const child = spawnImpl(args[0], args.slice(1), {
       detached: true,
-      stdio: ['ignore', out, err],
+      stdio: [bootstrap ? 'pipe' : 'ignore', out, err],
       cwd,
       env: scrubRuntimeSecretsFromEnv(env),
     });
+    if (bootstrap) {
+      if (!child.stdin?.end) {
+        try { child.kill?.('SIGTERM'); } catch {}
+        return { ok: false, error: 'broker controller bootstrap pipe unavailable' };
+      }
+      child.stdin.on?.('error', () => {});
+      child.stdin.end(`${JSON.stringify(bootstrap)}\n`);
+    }
     child.unref();
     return { ok: true, pid: child.pid };
   } catch (err) {
     return { ok: false, error: err.message || String(err) };
   }
+}
+
+function validateControllerBinding(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)
+    || Object.keys(value).some((key) => ![
+      'schema',
+      'session_id',
+      'session_controller_capability',
+    ].includes(key))
+    || value.schema !== 'mc-broker-controller-bootstrap-v1'
+    || !/^sess_[A-Za-z0-9_-]{6,}$/.test(value.session_id || '')
+    || !/^[a-f0-9]{64}$/.test(value.session_controller_capability || '')) {
+    return null;
+  }
+  return {
+    schema: value.schema,
+    session_id: value.session_id,
+    session_controller_capability: value.session_controller_capability,
+  };
 }

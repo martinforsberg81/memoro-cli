@@ -1,6 +1,9 @@
 import { attachBrokerSession } from '../broker/attach-client.js';
 import { requestBroker } from '../broker/client.js';
 import { ensureBrokerRunning } from '../broker/supervisor.js';
+import {
+  resolveSessionControllerCapability,
+} from '../session-controller-capability.js';
 
 export async function run(argv, deps = {}) {
   const opts = parseArgs(argv);
@@ -25,7 +28,21 @@ export async function run(argv, deps = {}) {
     return 1;
   }
   const attach = deps.attachBrokerSession || attachBrokerSession;
-  return attach({ id: opts.id });
+  const authority = await (
+    deps.resolveSessionControllerCapability
+    || resolveSessionControllerCapability
+  )({
+    codingSessionId: opts.id,
+    deps,
+  });
+  if (!authority?.ok) {
+    stderr.write('mc: session controller authority is unavailable\n');
+    return 1;
+  }
+  return attach({
+    id: opts.id,
+    controllerCapability: authority.capability,
+  });
 }
 
 export function parseArgs(argv) {

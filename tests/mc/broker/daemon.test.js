@@ -9,6 +9,7 @@ import {
   BROKER_PROTOCOL_VERSION,
   finalizeDaemonSignal,
   handleBrokerMessage,
+  handleProviderArtifactMessage,
   runBrokerDaemon,
   startBrokerServer,
 } from '../../../src/mc/broker/daemon.js';
@@ -20,6 +21,7 @@ function paths() {
   tmp = mkdtempSync(join(tmpdir(), 'mc-broker-daemon-'));
   return {
     socketPath: join(tmp, 'broker.sock'),
+    artifactSocketPath: join(tmp, 'provider-artifact.sock'),
     pidPath: join(tmp, 'broker.pid'),
   };
 }
@@ -85,6 +87,21 @@ describe('handleBrokerMessage', () => {
     assert.equal(out.stop, true);
     assert.equal(out.response.ok, true);
     assert.equal(out.response.stopping, true);
+  });
+
+  test('provider cannot stop a broker while it still owns a live session', () => {
+    let stopped = false;
+    const out = handleBrokerMessage('{"type":"stop"}', {
+      status: () => ({ ok: true }),
+      stop: () => { stopped = true; },
+      runtime: {
+        listSessions: () => [{ id: 'sess_live' }],
+      },
+    });
+
+    assert.equal(stopped, false);
+    assert.equal(out.stop, false);
+    assert.equal(out.response.reason, 'broker-sessions-must-be-removed');
   });
 
   test('delegates session commands to an injected runtime', () => {
@@ -169,6 +186,29 @@ describe('handleBrokerMessage', () => {
   });
 });
 
+describe('handleProviderArtifactMessage', () => {
+  test('delegates only provider artifact capture', async () => {
+    const seen = [];
+    const runtime = {
+      handle(message) {
+        seen.push(message);
+        return { ok: true };
+      },
+    };
+    assert.deepEqual(await handleProviderArtifactMessage(JSON.stringify({
+      type: 'capture_provider_artifact',
+      id: 'sess_a',
+    }), { runtime }).response, { ok: true });
+    assert.deepEqual(seen, [{ type: 'capture_provider_artifact', id: 'sess_a' }]);
+
+    for (const type of ['status', 'launch_session', 'handoff_switch_read', 'stop']) {
+      const rejected = handleProviderArtifactMessage(JSON.stringify({ type }), { runtime });
+      assert.equal((await rejected.response).ok, false);
+    }
+    assert.equal(seen.length, 1);
+  });
+});
+
 describe('broker daemon lifecycle', () => {
   test('starts with injected server and writes broker files', async () => {
     const p = paths();
@@ -192,6 +232,7 @@ describe('broker daemon lifecycle', () => {
     assert.equal(res.broker.uptime_ms, 1_500);
     assert.equal(existsSync(p.pidPath), true);
     assert.equal(state.server.listening, true);
+    assert.equal(state.artifactServer.listening, true);
   });
 
   test('status includes sessions when a runtime is attached', async () => {
@@ -261,8 +302,10 @@ describe('broker daemon lifecycle', () => {
     await state.stop();
 
     assert.equal(state.server.listening, false);
+    assert.equal(state.artifactServer.listening, false);
     assert.equal(existsSync(p.pidPath), false);
     assert.equal(existsSync(p.socketPath), false);
+    assert.equal(existsSync(p.artifactSocketPath), false);
     state = null;
   });
 

@@ -65,6 +65,8 @@ export function derivePublicRepoRef(context) {
     const url = new URL(remote);
     url.username = '';
     url.password = '';
+    url.search = '';
+    url.hash = '';
     if (url.hostname.toLowerCase() === 'github.com') {
       const parts = url.pathname.split('/').filter(Boolean);
       if (parts.length >= 2) return `${parts[0]}/${stripGitSuffix(parts[1])}`;

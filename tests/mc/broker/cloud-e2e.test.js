@@ -9,6 +9,9 @@ import { CloudBrokerClient } from '../../../src/mc/broker/cloud.js';
 import { requestBroker } from '../../../src/mc/broker/client.js';
 import { startBrokerServer } from '../../../src/mc/broker/daemon.js';
 import { BrokerRuntime } from '../../../src/mc/broker/runtime.js';
+import {
+  deriveHandoffControllerRoot,
+} from '../../../src/mc/handoff-controller-capability.js';
 
 class FakeWebSocket extends EventEmitter {
   static instances = [];
@@ -82,6 +85,13 @@ function makeRuntime(tmp, fake) {
   return new BrokerRuntime({
     ptyFactory: fake.factory,
     cwd: () => tmp,
+    controllerBindings: [{
+      session_id: 'sess_e2ecloud',
+      session_controller_capability: deriveHandoffControllerRoot({
+        token: 'tok',
+        codingSessionId: 'sess_e2ecloud',
+      }),
+    }],
     launchResolver: (toolInput) => ({
       ok: true,
       id: toolInput,
@@ -191,6 +201,14 @@ describe('cloud broker end-to-end attach smoke', () => {
           name: 'cloud-smoke',
           cwd: tmp,
           tool: 'codex',
+          session_controller_capability: deriveHandoffControllerRoot({
+            token: 'tok',
+            codingSessionId: 'sess_e2ecloud',
+          }),
+          sidecars: {
+            enabled: false,
+            token: 'tok',
+          },
           cols: 80,
           rows: 24,
         },

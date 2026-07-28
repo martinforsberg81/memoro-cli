@@ -20,6 +20,8 @@ export function buildNewSessionLaunchIntent({
   apiArgv = [],
   env = process.env,
   localAuthMode = LOCAL_AUTH_MODES.NATIVE,
+  handoffUserMessage = null,
+  handoffTransaction = null,
 } = {}) {
   return {
     mode: MC_SESSION_LAUNCH_MODES.NEW,
@@ -36,6 +38,8 @@ export function buildNewSessionLaunchIntent({
     argv: [],
     apiArgv,
     sendStartupMessage: true,
+    ...(handoffUserMessage ? { handoffUserMessage } : {}),
+    ...(handoffTransaction ? { handoffTransaction } : {}),
     attachAfterLaunch: true,
     localAuthMode,
     env,
@@ -49,6 +53,8 @@ export function buildResumeSessionLaunchIntent({
   apiArgv = [],
   env = process.env,
   localAuthMode = LOCAL_AUTH_MODES.NATIVE,
+  handoffUserMessage = null,
+  handoffTransaction = null,
 } = {}) {
   return {
     mode: MC_SESSION_LAUNCH_MODES.RESUME,
@@ -60,6 +66,8 @@ export function buildResumeSessionLaunchIntent({
     argv: Array.isArray(resumeArgv) ? resumeArgv : ['--resume'],
     apiArgv,
     sendStartupMessage: false,
+    ...(handoffUserMessage ? { handoffUserMessage } : {}),
+    ...(handoffTransaction ? { handoffTransaction } : {}),
     attachAfterLaunch: true,
     localAuthMode,
     env,

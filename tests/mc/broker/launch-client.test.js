@@ -12,6 +12,9 @@ import {
 } from '../../../src/mc/broker/launch-client.js';
 import { BROKER_PROTOCOL_VERSION } from '../../../src/mc/broker/daemon.js';
 import { LOCAL_AUTH_MODES } from '../../../src/mc/local-auth-mode.js';
+import {
+  deriveHandoffControllerRoot,
+} from '../../../src/mc/handoff-controller-capability.js';
 
 function makeStreams() {
   let out = '';
@@ -217,7 +220,10 @@ describe('launchBrokerOwnedSession', () => {
         }),
         readConfig: async () => ({ apiUrl: 'https://memoro.test' }),
         getApiUrl: () => null,
-        findEntry: () => ({}),
+        findEntry: () => ({
+          tool_session_id: 'claude-source-native-id',
+          tool_transcript_path: '/private/claude-source-transcript.jsonl',
+        }),
         resolvePolicyForWrap: () => ({ permissions: { workspace: 'full' } }),
         hostname: () => 'machine',
         groundSession: async ({ sessionCapabilities }) => {
@@ -598,7 +604,13 @@ describe('launchBrokerOwnedSession', () => {
     assert.equal(res.code, 0);
     assert.equal(res.codingSessionId, 'sess_abc');
     assert.deepEqual(sequence, ['ensureBroker', 'registerGitHub', 'request', 'ensureCloudBroker', 'onLaunched', 'attach']);
-    assert.deepEqual(attached, { id: 'sess_abc' });
+    assert.deepEqual(attached, {
+      id: 'sess_abc',
+      controllerCapability: deriveHandoffControllerRoot({
+        token: 'tok',
+        codingSessionId: 'sess_abc',
+      }),
+    });
     assert.equal(launched.codingSessionId, 'sess_abc');
 
     const msg = requests[0];
@@ -830,7 +842,10 @@ describe('launchBrokerOwnedSession', () => {
       request: async (message) => {
         requestCount += 1;
         if (message.type === 'launch_session') throw new Error('broker request timed out after 1000ms');
-        assert.deepEqual(message, { type: 'session_status', id: 'sess_transport_live' });
+        assert.deepEqual(message, {
+          type: 'session_status',
+          id: 'sess_transport_live',
+        });
         return {
           ok: true,
           session: {
@@ -1329,6 +1344,91 @@ describe('launchBrokerOwnedSession', () => {
     assert.equal(session.env.NO_COLOR, undefined);
     assert.equal(session.env.CLICOLOR, undefined);
     assert.equal(session.env.COLORTERM, 'truecolor');
+  });
+
+  test('routes Claude handoff as one acknowledged user turn, never a system-prompt argument', async () => {
+    const streams = makeStreams();
+    const requests = [];
+    const transactionId = '73a85b7e-2ce4-4db0-8b38-16ba08de03bf';
+    const controllerCapability = 'c'.repeat(64);
+    const result = await launchBrokerOwnedSession({
+      cwd: '/repo',
+      codingSessionId: 'sess_claude_handoff',
+      sessionName: 'claude-handoff',
+      tool: 'claude',
+      handoffUserMessage: 'bounded handoff',
+      handoffTransaction: {
+        transaction_id: transactionId,
+        controller_capability: controllerCapability,
+      },
+      attachAfterLaunch: false,
+      stdout: streams.stdout,
+      stderr: streams.stderr,
+      env: { TERM: 'xterm-256color', MEMORO_TOKEN: 'tok' },
+      ensureBroker: async () => ({ ok: true, broker: { pid: 42 } }),
+      ensureCloudBroker: async () => ({ ok: true }),
+      request: async (message, options) => {
+        requests.push({ message, options });
+        return {
+          ok: true,
+          handoff_delivery: 'confirmed',
+          session: {
+            id: message.session.id,
+            runtime_generation: message.session.runtime_generation,
+          },
+        };
+      },
+      deps: {
+        useSessionHost: false,
+        getRepoContext: async () => ({
+          remoteUrl: 'git@example.com:org/repo.git',
+          branch: 'main',
+          toplevel: '/repo',
+        }),
+        readConfig: async () => ({ apiUrl: 'https://memoro.test' }),
+        getApiUrl: () => null,
+        getSecret: async () => assert.fail('env token should avoid keychain lookup'),
+        findEntry: () => ({}),
+        resolvePolicyForWrap: () => ({}),
+        hostname: () => 'machine',
+        getPackageVersion: async () => '0.test',
+        groundSession: async () => assert.fail('switch must not fetch ordinary transcript grounding'),
+        ensureCoordinatorSlashCommand: async () => {},
+        installUpdateCommand: async () => {},
+        prepareLocalResourceGuardEnv: ({ baseEnv }) => ({ env: baseEnv }),
+        prepareDevCommandGuardEnv: ({ baseEnv }) => ({ env: baseEnv }),
+      },
+    });
+
+    assert.equal(result.code, 0);
+    const launch = requests[0];
+    assert.equal(launch.message.type, 'launch_session');
+    assert.equal(launch.message.session.launch_options.startupMessage, null);
+    assert.equal(
+      launch.message.session.launch_options.handoffUserMessage,
+      'bounded handoff',
+    );
+    assert.deepEqual(launch.message.session.handoff_transaction, {
+      transaction_id: transactionId,
+      controller_capability: controllerCapability,
+    });
+    assert.equal(launch.message.session.sidecars.toolSessionId, null);
+    assert.equal(launch.message.session.sidecars.transcriptPath, null);
+    assert.equal(launch.message.session.sidecars.transcriptAccess, false);
+    assert.equal(launch.message.session.sidecars.upload, false);
+    assert.doesNotMatch(
+      JSON.stringify(launch.message.session.sidecars),
+      /claude-source-native-id|claude-source-transcript/,
+    );
+    assert.equal(launch.options.timeoutMs, 60_000);
+    assert.doesNotMatch(
+      JSON.stringify(launch.message.session.argv),
+      /bounded handoff|append-system-prompt/,
+    );
+    assert.doesNotMatch(
+      JSON.stringify(launch.message.session.env),
+      new RegExp(controllerCapability),
+    );
   });
 
   test('continues local launch when cloud bridge auto-start fails', async () => {

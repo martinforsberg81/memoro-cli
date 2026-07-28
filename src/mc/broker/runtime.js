@@ -1,5 +1,5 @@
 import { StringDecoder } from 'node:string_decoder';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { realpathSync } from 'node:fs';
 
 import { resolveLaunch } from '../../adapters/index.js';
@@ -18,10 +18,25 @@ import {
   validateClaudeProviderArtifact,
   validateCodexProviderArtifact,
 } from './provider-artifacts.js';
+import {
+  advanceHandoffSwitchJournalSync,
+  matchesHandoffSwitchJournalAuthentication,
+  beginHandoffSwitchJournalSync,
+  readHandoffSwitchJournalSync,
+  recordHandoffSwitchDiagnosticSync,
+} from './handoff-switch-journal.js';
+import {
+  deriveHandoffControllerCapability,
+  handoffControllerCapabilityDigest,
+  matchesHandoffControllerCapability,
+  matchesHandoffControllerRoot,
+} from '../handoff-controller-capability.js';
 
 // Keep this below the generic runtime-finalization bound so a hung advisory
 // network call cannot race the mandatory local cleanup timeout.
 const TERMINAL_PRESENCE_TIMEOUT_MS = 10_000;
+const HANDOFF_DELIVERY_TIMEOUT_MS = 45_000;
+const MAX_HANDOFF_MESSAGE_BYTES = 16 * 1024;
 
 const SESSION_COMMANDS = new Set([
   'sessions',
@@ -35,6 +50,19 @@ const SESSION_COMMANDS = new Set([
   'stop_session',
   'remove_session',
   'capture_provider_artifact',
+  'handoff_switch_read',
+  'handoff_switch_begin',
+  'handoff_switch_advance',
+  'handoff_switch_diagnose',
+]);
+const CONTROLLER_SESSION_COMMANDS = new Set([
+  'write_session',
+  'dispatch_session',
+  'fetch_session_output',
+  'resize_session',
+  'stop_session',
+  'remove_session',
+  'handoff_switch_read',
 ]);
 
 export class BrokerRuntime {
@@ -53,6 +81,11 @@ export class BrokerRuntime {
     providerArtifactWriter = writeProviderArtifactSync,
     validateClaudeArtifact = validateClaudeProviderArtifact,
     validateCodexArtifact = validateCodexProviderArtifact,
+    handoffSwitchReader = readHandoffSwitchJournalSync,
+    handoffSwitchBegin = beginHandoffSwitchJournalSync,
+    handoffSwitchAdvance = advanceHandoffSwitchJournalSync,
+    handoffSwitchDiagnose = recordHandoffSwitchDiagnosticSync,
+    controllerBindings = [],
   } = {}) {
     if (!manager && !ptyFactory?.spawn) {
       throw new TypeError('manager or ptyFactory.spawn is required');
@@ -72,6 +105,10 @@ export class BrokerRuntime {
     this.providerArtifactWriter = providerArtifactWriter;
     this.validateClaudeArtifact = validateClaudeArtifact;
     this.validateCodexArtifact = validateCodexArtifact;
+    this.handoffSwitchReader = handoffSwitchReader;
+    this.handoffSwitchBegin = handoffSwitchBegin;
+    this.handoffSwitchAdvance = handoffSwitchAdvance;
+    this.handoffSwitchDiagnose = handoffSwitchDiagnose;
     this.sidecars = new Map();
     this.sidecarsBySession = new WeakMap();
     this.sidecarStartFinalizationsBySession = new WeakMap();
@@ -83,6 +120,15 @@ export class BrokerRuntime {
     this.credentialDomainClosures = new Map();
     this.credentialDomainsBySession = new WeakMap();
     this.credentialDomainClosuresBySession = new WeakMap();
+    this.handoffControllerRoots = new Map();
+    for (const binding of controllerBindings) {
+      const sessionId = stringOrNull(binding?.session_id);
+      const capability = stringOrNull(binding?.session_controller_capability);
+      if (sessionId && matchesHandoffControllerRoot(capability, capability)) {
+        this.handoffControllerRoots.set(sessionId, capability);
+      }
+    }
+    this.handoffJournalWitnesses = new Map();
     this.attaches = new Map();
     this.manager.setMaxListeners?.(Math.max(this.manager.getMaxListeners?.() || 10, 100));
     this.manager.on('exit', ({ id, event, session }) => {
@@ -129,6 +175,13 @@ export class BrokerRuntime {
       if (type === 'sessions' || type === 'list_sessions') return { ok: true, sessions: this.listSessions() };
       if (type === 'launch_session') return this._launch(message.session || message);
       if (type === 'session_status') return this._status(message.id);
+      if (CONTROLLER_SESSION_COMMANDS.has(type)) {
+        const authority = this._requireSessionController(
+          message.id,
+          message.session_controller_capability,
+        );
+        if (!authority.ok) return authority;
+      }
       if (type === 'write_session') return this._write(message.id, message.data);
       if (type === 'dispatch_session') return this._dispatch(message.id, message.message);
       if (type === 'fetch_session_output') return this._fetchOutput(message.id);
@@ -136,6 +189,10 @@ export class BrokerRuntime {
       if (type === 'stop_session') return this._stop(message.id, message.signal);
       if (type === 'remove_session') return this._remove(message.id);
       if (type === 'capture_provider_artifact') return this._captureProviderArtifact(message);
+      if (type === 'handoff_switch_read') return this._readHandoffSwitch(message);
+      if (type === 'handoff_switch_begin') return this._beginHandoffSwitch(message);
+      if (type === 'handoff_switch_advance') return this._advanceHandoffSwitch(message);
+      if (type === 'handoff_switch_diagnose') return this._diagnoseHandoffSwitch(message);
     } catch (err) {
       return { ok: false, error: err.message || String(err) };
     }
@@ -155,8 +212,79 @@ export class BrokerRuntime {
     const id = requiredString(input?.id, 'session id');
     const runtimeGeneration = stringOrNull(input?.runtime_generation);
     const cwd = stringOrDefault(input.cwd, this._cwd());
+    const handoffTransaction = plainObject(input.handoff_transaction)
+      ? input.handoff_transaction
+      : null;
+    const handoffState = this._readHandoffSwitch({ id });
+    if (!handoffState.ok) {
+      return {
+        ok: false,
+        reason: 'handoff-switch-journal-unavailable',
+        error: 'broker handoff state is unavailable',
+      };
+    }
+    if (handoffState.journal
+      && handoffState.journal.phase !== 'complete'
+      && !handoffTransaction) {
+      return {
+        ok: false,
+        reason: 'handoff-transaction-required',
+        error: 'an active provider handoff owns this session launch',
+      };
+    }
+    const suppliedControllerRoot = stringOrNull(
+      input.session_controller_capability,
+    );
+    const existingControllerRoot = this.handoffControllerRoots.get(id) || null;
+    // A completed switch still binds later native resumes to the same mc
+    // controller authority after a host restart. Completion releases the
+    // transaction lease; it does not make provider-originated relaunch valid.
+    const journalControllerRootDigest = handoffState.journal
+      ?.controller_root_digest || null;
+    const controllerAuthorityBound = Boolean(
+      existingControllerRoot
+      || journalControllerRootDigest,
+    );
+    if (!matchesHandoffControllerRoot(
+      suppliedControllerRoot,
+      suppliedControllerRoot,
+    )
+      || (existingControllerRoot
+        && !matchesHandoffControllerRoot(
+          suppliedControllerRoot,
+          existingControllerRoot,
+        ))
+      || (journalControllerRootDigest
+        && !matchesHandoffControllerCapability(
+          suppliedControllerRoot,
+          journalControllerRootDigest,
+        ))
+      || (handoffState.journal
+        && !matchesHandoffSwitchJournalAuthentication(
+          handoffState.journal,
+          suppliedControllerRoot,
+        ))) {
+      return {
+        ok: false,
+        reason: 'session-controller-capability-invalid',
+        error: 'broker controller authority does not match this session host',
+      };
+    }
+    if (!existingControllerRoot && controllerAuthorityBound) {
+      this.handoffControllerRoots.set(id, suppliedControllerRoot);
+    }
+    if (handoffState.journal) {
+      this.handoffJournalWitnesses.set(id, structuredClone(handoffState.journal));
+    }
     const existing = this._findReusableLiveSession({ id, cwd, name: input.name });
     if (existing) {
+      if (handoffTransaction) {
+        return {
+          ok: false,
+          reason: 'handoff-delivery-in-progress',
+          error: 'handoff target runtime is already live',
+        };
+      }
       const existingGeneration = stringOrNull(
         this.sessionMetadata.get(existing.id)?.runtime_generation,
       );
@@ -211,6 +339,14 @@ export class BrokerRuntime {
     const toolInput = stringOrDefault(input.tool, this.env.MC_GROUNDING_TOOL || DEFAULT_TOOL);
     const argv = arrayOfStrings(input.argv, 'argv');
     const launchOptions = plainObject(input.launch_options) ? input.launch_options : {};
+    const handoffUserMessage = boundedHandoffUserMessage(launchOptions.handoffUserMessage);
+    if (launchOptions.handoffUserMessage != null && !handoffUserMessage) {
+      return {
+        ok: false,
+        reason: 'handoff-user-message-invalid',
+        error: 'handoff user message is invalid',
+      };
+    }
     const cols = positiveInteger(input.cols, 80, 'cols');
     const rows = positiveInteger(input.rows, 24, 'rows');
     const resolved = this.launchResolver(toolInput);
@@ -221,9 +357,18 @@ export class BrokerRuntime {
         error: resolved?.hint || `cannot launch tool: ${toolInput}`,
       };
     }
+    // Controller authority is consumed by the broker itself. Provider
+    // adapters receive only launch material and can never accidentally copy a
+    // session or transaction capability into child argv/environment.
+    const {
+      session_controller_capability: _sessionControllerCapability,
+      handoff_transaction: _handoffControllerTransaction,
+      sidecars: _brokerSidecars,
+      ...providerInput
+    } = input;
     const provider = this.managedProviderResolver({
       launch: resolved,
-      input,
+      input: providerInput,
     });
     if (!provider?.ok) {
       return {
@@ -232,7 +377,40 @@ export class BrokerRuntime {
         error: provider?.error || 'managed provider unavailable',
       };
     }
+    // A fresh native launch proves controller authority with the Memoro token
+    // already held by trusted mc. A fresh managed launch may omit that token,
+    // but only its fully validated, session-bound credential descriptor can
+    // establish the initial root. Never accept a caller-chosen root merely
+    // because the broker has not seen this coding session before.
+    if (!controllerAuthorityBound
+      && provider.descriptor?.session_id !== id) {
+      return {
+        ok: false,
+        reason: 'session-controller-capability-invalid',
+        error: 'broker controller authority is not bound to this session',
+      };
+    }
+    if (!existingControllerRoot) {
+      this.handoffControllerRoots.set(id, suppliedControllerRoot);
+    }
     const launch = provider.launch;
+    if (!!handoffUserMessage !== !!handoffTransaction) {
+      return {
+        ok: false,
+        reason: 'handoff-launch-pair-invalid',
+        error: 'broker handoff message and transaction must be paired',
+      };
+    }
+    if (handoffTransaction) {
+      const prepared = this._prepareHandoffTargetLaunch({
+        id,
+        tool: launch.id,
+        runtimeGeneration,
+        transaction: handoffTransaction,
+        handoffUserMessage,
+      });
+      if (!prepared.ok) return prepared;
+    }
 
     const interactiveEnv = normalizeInteractivePtyEnv({
       baseEnv: provider.environmentMode === 'replace'
@@ -295,7 +473,9 @@ export class BrokerRuntime {
           MEMORO_MC_PARENT: '1',
           MC_CODING_SESSION_ID: id,
           ...(runtimeGeneration ? { MC_RUNTIME_GENERATION: runtimeGeneration } : {}),
-          MC_PROVIDER_ARTIFACT_SOCKET: sessionHostPaths(id).socketPath,
+          // This capability endpoint accepts provider-artifact capture only.
+          // The provider must never receive the controller broker socket.
+          MC_PROVIDER_ARTIFACT_SOCKET: sessionHostPaths(id).artifactSocketPath,
         },
       }, {
         beforeStart: (ownedSession) => {
@@ -308,6 +488,11 @@ export class BrokerRuntime {
         },
       });
     } catch (error) {
+      this._noteHandoffFailure({
+        id,
+        transaction: handoffTransaction,
+        code: 'handoff-target-launch-failed',
+      });
       if (runtimeGeneration) {
         try {
           this.lifecycleWriter({
@@ -327,6 +512,11 @@ export class BrokerRuntime {
     }
     const ownedSession = this.manager.get(id);
     if (!ownedSession || ownedSession.exit) {
+      this._noteHandoffFailure({
+        id,
+        transaction: handoffTransaction,
+        code: 'handoff-target-exited-before-live',
+      });
       return {
         ok: false,
         reason: 'broker-session-exited',
@@ -336,6 +526,11 @@ export class BrokerRuntime {
 
     const sidecars = this._startSidecars(id, input.sidecars);
     if (sidecars?.ok === false) {
+      this._noteHandoffFailure({
+        id,
+        transaction: handoffTransaction,
+        code: 'handoff-target-sidecar-failed',
+      });
       try { this.manager.stop(id, 'SIGTERM'); } catch {}
       return Promise.all([
         this._waitForRuntimeFinalization(id),
@@ -348,7 +543,62 @@ export class BrokerRuntime {
         error: sidecars.error || 'broker sidecar failed to start',
       }));
     }
-    return { ok: true, session: this._withAttachStatus(session), ...(sidecars ? { sidecars } : {}) };
+    const launched = {
+      ok: true,
+      session: this._withAttachStatus(session),
+      ...(sidecars ? { sidecars } : {}),
+    };
+    if (!handoffUserMessage) return launched;
+    if (typeof ownedSession.waitForHandoffDelivery !== 'function') {
+      this._noteHandoffFailure({
+        id,
+        transaction: handoffTransaction,
+        code: 'handoff-delivery-unavailable',
+      });
+      try { this.manager.stop(id, 'SIGTERM'); } catch {}
+      return this._waitForRuntimeFinalization(id).then(() => ({
+        ok: false,
+        reason: 'handoff-delivery-unavailable',
+        error: 'broker cannot confirm handoff delivery',
+      }));
+    }
+    return waitBounded(
+      ownedSession.waitForHandoffDelivery(),
+      HANDOFF_DELIVERY_TIMEOUT_MS,
+      'handoff-delivery-timeout',
+    ).then(async (delivery) => {
+      if (delivery?.ok) {
+        const acknowledged = this._acknowledgeHandoffDelivery({
+          id,
+          transaction: handoffTransaction,
+        });
+        if (acknowledged.ok) {
+          return { ...launched, handoff_delivery: 'confirmed' };
+        }
+        this._noteHandoffFailure({
+          id,
+          transaction: handoffTransaction,
+          code: acknowledged.reason || 'handoff-delivery-journal-unconfirmed',
+        });
+        try { this.manager.stop(id, 'SIGTERM'); } catch {}
+        await this._waitForRuntimeFinalization(id);
+        return acknowledged;
+      }
+      this._noteHandoffFailure({
+        id,
+        transaction: handoffTransaction,
+        code: safeDiagnosticCode(delivery?.reason, 'handoff-delivery-unconfirmed'),
+      });
+      try { this.manager.stop(id, 'SIGTERM'); } catch {}
+      const finalization = await this._waitForRuntimeFinalization(id);
+      return {
+        ok: false,
+        reason: finalization?.ok === false
+          ? finalization.reason || 'runtime-finalization-unconfirmed'
+          : delivery?.reason || 'handoff-delivery-unconfirmed',
+        error: 'handoff user message delivery was not confirmed',
+      };
+    });
   }
 
   _findReusableLiveSession({ id, cwd, name } = {}) {
@@ -383,12 +633,18 @@ export class BrokerRuntime {
   }
 
   _write(id, data) {
-    this.manager.write(requiredString(id, 'session id'), requiredString(data, 'data'));
+    const sessionId = requiredString(id, 'session id');
+    const gate = this._handoffInputGate(sessionId);
+    if (!gate.ok) return gate;
+    this.manager.write(sessionId, requiredString(data, 'data'));
     return { ok: true };
   }
 
   _dispatch(id, message) {
-    this.manager.dispatch(requiredString(id, 'session id'), requiredString(message, 'message'));
+    const sessionId = requiredString(id, 'session id');
+    const gate = this._handoffInputGate(sessionId);
+    if (!gate.ok) return gate;
+    this.manager.dispatch(sessionId, requiredString(message, 'message'));
     return { ok: true };
   }
 
@@ -496,6 +752,295 @@ export class BrokerRuntime {
     return this._commitProviderArtifact({ id, metadata, artifact });
   }
 
+  _readHandoffSwitch(input = {}) {
+    const id = requiredString(input.id || input.coding_session_id, 'session id');
+    const witnessed = this.handoffJournalWitnesses.get(id) || null;
+    const result = this.handoffSwitchReader({
+      path: sessionHostPaths(id).handoffSwitchPath,
+      trustedRoot: mcHome(),
+    });
+    if (result.kind === 'absent') {
+      return witnessed
+        ? {
+            ok: false,
+            reason: 'handoff-switch-journal-integrity-lost',
+          }
+        : { ok: true, journal: null };
+    }
+    if (result.kind !== 'present') {
+      return {
+        ok: false,
+        reason: `handoff-switch-journal-${result.reason || 'unknown'}`,
+      };
+    }
+    if (witnessed
+      && !sameHandoffJournal(witnessed, result.journal)) {
+      return {
+        ok: false,
+        reason: 'handoff-switch-journal-integrity-lost',
+      };
+    }
+    const controllerRoot = this.handoffControllerRoots.get(id) || null;
+    if (controllerRoot
+      && !matchesHandoffSwitchJournalAuthentication(
+        result.journal,
+        controllerRoot,
+      )) {
+      return {
+        ok: false,
+        reason: 'handoff-switch-journal-integrity-lost',
+      };
+    }
+    return { ok: true, journal: result.journal };
+  }
+
+  _handoffInputGate(id) {
+    const current = this._readHandoffSwitch({ id });
+    if (!current.ok) {
+      return {
+        ok: false,
+        reason: 'handoff-switch-journal-unavailable',
+        error: 'broker handoff state is unavailable',
+      };
+    }
+    if (current.journal?.phase === 'target_launch_started') {
+      return {
+        ok: false,
+        reason: 'handoff-delivery-in-progress',
+        error: 'external input is blocked until handoff delivery is acknowledged',
+      };
+    }
+    return { ok: true };
+  }
+
+  _requireSessionController(id, capability) {
+    const sessionId = requiredString(id, 'session id');
+    let expectedRoot = this.handoffControllerRoots.get(sessionId) || null;
+    if (!expectedRoot) {
+      const current = this._readHandoffSwitch({ id: sessionId });
+      if (!current.ok
+        || !matchesHandoffControllerCapability(
+          capability,
+          current.journal?.controller_root_digest,
+        )
+        || !matchesHandoffSwitchJournalAuthentication(
+          current.journal,
+          capability,
+        )) {
+        return {
+          ok: false,
+          reason: 'session-controller-capability-invalid',
+          error: 'broker controller capability is required',
+        };
+      }
+      expectedRoot = capability;
+      this.handoffControllerRoots.set(sessionId, expectedRoot);
+    }
+    if (!matchesHandoffControllerRoot(capability, expectedRoot)) {
+      return {
+        ok: false,
+        reason: 'session-controller-capability-invalid',
+        error: 'broker controller capability is required',
+      };
+    }
+    return { ok: true };
+  }
+
+  _beginHandoffSwitch(input = {}) {
+    const id = requiredString(input.id || input.coding_session_id, 'session id');
+    const transactionId = input.journal?.transaction_id;
+    const expectedCapability = deriveHandoffControllerCapability({
+      root: this.handoffControllerRoots.get(id),
+      transactionId,
+    });
+    if (!expectedCapability
+      || !matchesHandoffControllerCapability(
+        input.controller_capability,
+        handoffControllerCapabilityDigest(expectedCapability),
+      )
+      || !matchesHandoffControllerCapability(
+        input.controller_capability,
+        input.journal?.controller_capability_digest,
+      )
+      || !matchesHandoffSwitchJournalAuthentication(
+        input.journal,
+        this.handoffControllerRoots.get(id),
+      )) {
+      return { ok: false, reason: 'handoff-controller-capability-invalid' };
+    }
+    try {
+      const result = this.handoffSwitchBegin({
+        path: sessionHostPaths(id).handoffSwitchPath,
+        journal: input.journal,
+        trustedRoot: mcHome(),
+      });
+      this.handoffJournalWitnesses.set(id, structuredClone(result.journal));
+      return {
+        ok: true,
+        duplicate: result.duplicate === true,
+        journal: result.journal,
+      };
+    } catch {
+      return { ok: false, reason: 'handoff-switch-begin-failed' };
+    }
+  }
+
+  _advanceHandoffSwitch(input = {}) {
+    const id = requiredString(input.id || input.coding_session_id, 'session id');
+    const current = this._readHandoffSwitch({ id });
+    if (!current.ok
+      || current.journal?.transaction_id !== input.transaction_id
+      || !matchesHandoffControllerCapability(
+        input.controller_capability,
+        current.journal?.controller_capability_digest,
+      )) {
+      return { ok: false, reason: 'handoff-controller-capability-invalid' };
+    }
+    try {
+      const result = this.handoffSwitchAdvance({
+        path: sessionHostPaths(id).handoffSwitchPath,
+        trustedRoot: mcHome(),
+        transactionId: input.transaction_id,
+        expectedPhase: input.expected_phase,
+        nextPhase: input.next_phase,
+        patch: plainObject(input.patch) ? input.patch : {},
+        updatedAt: input.updated_at,
+        controllerRoot: this.handoffControllerRoots.get(id),
+      });
+      this.handoffJournalWitnesses.set(id, structuredClone(result.journal));
+      return {
+        ok: true,
+        duplicate: result.duplicate === true,
+        journal: result.journal,
+      };
+    } catch {
+      return { ok: false, reason: 'handoff-switch-advance-failed' };
+    }
+  }
+
+  _diagnoseHandoffSwitch(input = {}) {
+    const id = requiredString(input.id || input.coding_session_id, 'session id');
+    const current = this._readHandoffSwitch({ id });
+    if (!current.ok
+      || current.journal?.transaction_id !== input.transaction_id
+      || !matchesHandoffControllerCapability(
+        input.controller_capability,
+        current.journal?.controller_capability_digest,
+      )) {
+      return { ok: false, reason: 'handoff-controller-capability-invalid' };
+    }
+    try {
+      const result = this.handoffSwitchDiagnose({
+        path: sessionHostPaths(id).handoffSwitchPath,
+        trustedRoot: mcHome(),
+        transactionId: input.transaction_id,
+        code: input.code,
+        observedAt: input.observed_at,
+        controllerRoot: this.handoffControllerRoots.get(id),
+      });
+      this.handoffJournalWitnesses.set(id, structuredClone(result.journal));
+      return {
+        ok: true,
+        duplicate: result.duplicate === true,
+        journal: result.journal,
+      };
+    } catch {
+      return { ok: false, reason: 'handoff-switch-diagnostic-failed' };
+    }
+  }
+
+  _noteHandoffFailure({ id, transaction, code } = {}) {
+    if (!transaction?.transaction_id) return;
+    this._diagnoseHandoffSwitch({
+      id,
+      transaction_id: transaction.transaction_id,
+      controller_capability: transaction.controller_capability,
+      code: safeDiagnosticCode(code, 'handoff-failure'),
+      observed_at: runtimeObservedAt(this.clock),
+    });
+  }
+
+  _prepareHandoffTargetLaunch({
+    id,
+    tool,
+    runtimeGeneration,
+    transaction,
+    handoffUserMessage,
+  } = {}) {
+    if (!runtimeGeneration || !plainObject(transaction)
+      || typeof transaction.transaction_id !== 'string'
+      || typeof handoffUserMessage !== 'string') {
+      return {
+        ok: false,
+        reason: 'handoff-target-launch-invalid',
+        error: 'handoff target launch is invalid',
+      };
+    }
+    const current = this._readHandoffSwitch({ id });
+    if (!current.ok || current.journal?.transaction_id !== transaction.transaction_id
+      || current.journal?.phase !== 'target_launch_started'
+      || current.journal?.target_tool !== tool
+      || !matchesHandoffControllerCapability(
+        transaction.controller_capability,
+        current.journal?.controller_capability_digest,
+      )
+      || current.journal?.target_message_digest !== digestText(handoffUserMessage)) {
+      return {
+        ok: false,
+        reason: 'handoff-target-launch-unbound',
+        error: 'handoff target launch is not bound to the active transaction',
+      };
+    }
+    const advanced = this._advanceHandoffSwitch({
+      id,
+      transaction_id: transaction.transaction_id,
+      controller_capability: transaction.controller_capability,
+      expected_phase: 'target_launch_started',
+      next_phase: 'target_launch_started',
+      patch: { target_runtime_generation: runtimeGeneration },
+      updated_at: runtimeObservedAt(this.clock),
+    });
+    return advanced.ok
+      ? { ok: true }
+      : {
+          ok: false,
+          reason: advanced.reason || 'handoff-target-generation-unconfirmed',
+          error: 'handoff target generation was not journaled',
+        };
+  }
+
+  _acknowledgeHandoffDelivery({ id, transaction } = {}) {
+    const current = this._readHandoffSwitch({ id });
+    const artifact = this.sessionMetadata.get(id)?.provider_artifact || null;
+    if (!current.ok
+      || current.journal?.transaction_id !== transaction?.transaction_id
+      || artifact?.coding_session_id !== id
+      || artifact?.runtime_generation !== current.journal?.target_runtime_generation
+      || artifact?.tool !== current.journal?.target_tool) {
+      return {
+        ok: false,
+        reason: 'handoff-target-artifact-unconfirmed',
+        error: 'handoff target provider artifact was not confirmed',
+      };
+    }
+    const advanced = this._advanceHandoffSwitch({
+      id,
+      transaction_id: transaction?.transaction_id,
+      controller_capability: transaction?.controller_capability,
+      expected_phase: 'target_launch_started',
+      next_phase: 'delivery_acknowledged',
+      patch: {},
+      updated_at: runtimeObservedAt(this.clock),
+    });
+    return advanced.ok
+      ? { ok: true }
+      : {
+          ok: false,
+          reason: 'handoff-delivery-journal-unconfirmed',
+          error: 'handoff delivery journal acknowledgement failed',
+        };
+  }
+
   _commitProviderArtifact({ id, metadata, artifact }) {
     try {
       const written = this.providerArtifactWriter({
@@ -517,6 +1062,13 @@ export class BrokerRuntime {
 
   _attachConnection(message, conn, initialInput) {
     const id = requiredString(message?.id || message?.session_id, 'session id');
+    const authority = this._requireSessionController(
+      id,
+      message?.session_controller_capability,
+    );
+    if (!authority.ok) throw new Error(authority.reason);
+    const gate = this._handoffInputGate(id);
+    if (!gate.ok) throw new Error(gate.reason);
     const session = this.manager.get(id);
     if (!session) throw new Error(`unknown broker session: ${id}`);
     conn.on?.('error', () => {});
@@ -936,6 +1488,26 @@ function positiveInteger(value, fallback, label) {
 
 function plainObject(value) {
   return value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function boundedHandoffUserMessage(value) {
+  if (value === undefined || value === null || value === '') return null;
+  if (typeof value !== 'string' || Buffer.byteLength(value) > MAX_HANDOFF_MESSAGE_BYTES) return null;
+  if (/[\0\x0b\x0c\x0e-\x1f\x7f]/.test(value)) return null;
+  return value;
+}
+
+function digestText(value) {
+  return createHash('sha256').update(String(value), 'utf8').digest('hex');
+}
+
+function sameHandoffJournal(left, right) {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function safeDiagnosticCode(value, fallback) {
+  const code = typeof value === 'string' ? value : '';
+  return /^[a-z][a-z0-9-]{0,79}$/.test(code) ? code : fallback;
 }
 
 function isReusableLiveSession(session) {

@@ -58,6 +58,7 @@ export class PtySession extends EventEmitter {
     this.lastInputAt = null;
     this.exit = null;
     this.startupMessageController = null;
+    this.handoffMessageController = null;
   }
 
   start() {
@@ -68,9 +69,20 @@ export class PtySession extends EventEmitter {
     const startupMessage = this.launchSpec.startupMessageDelivery === 'deferred-pty'
       ? this.launchOptions.startupMessage
       : null;
+    const handoffUserMessage = this.launchOptions.handoffUserMessage;
+    if (startupMessage && handoffUserMessage) {
+      throw new Error('startup and handoff messages must be delivered as one user turn');
+    }
+    const providerLaunchOptions = {
+      ...this.launchOptions,
+      // Handoff is a broker-delivered user turn. It must never reach adapter
+      // argv rendering, process listings, or a provider-specific system-prompt
+      // option.
+      handoffUserMessage: null,
+    };
     const spawnOptions = this.launchSpec.startupMessageDelivery === 'deferred-pty'
-      ? { ...this.launchOptions, startupMessage: null }
-      : this.launchOptions;
+      ? { ...providerLaunchOptions, startupMessage: null }
+      : providerLaunchOptions;
 
     const spawnPlan = typeof this.launchSpec.spawn === 'function'
       ? this.launchSpec.spawn(this.argv, spawnOptions)
@@ -93,16 +105,27 @@ export class PtySession extends EventEmitter {
       setTimeoutFn: this.startupMessageSetTimeoutFn,
       clearTimeoutFn: this.startupMessageClearTimeoutFn,
     });
+    this.handoffMessageController = createStartupMessageController({
+      message: handoffUserMessage,
+      delayMs: this.startupMessageDelayMs,
+      deliver: (message) => {
+        writeToPty(this.pty, message, this.launchSpec);
+      },
+      setTimeoutFn: this.startupMessageSetTimeoutFn,
+      clearTimeoutFn: this.startupMessageClearTimeoutFn,
+    });
 
     this.pty.onData((data) => {
       this.lastOutputAt = this._now();
       this.ring.append(data);
       this.emit('data', data);
       this.startupMessageController?.schedule();
+      this.handoffMessageController?.schedule();
     });
 
     this.pty.onExit((event) => {
       this.startupMessageController?.cancel();
+      this.handoffMessageController?.cancel('provider-exited-before-handoff-delivery');
       this.exit = {
         code: event?.exitCode ?? null,
         signal: event?.signal ?? null,
@@ -124,6 +147,11 @@ export class PtySession extends EventEmitter {
     this._assertStarted();
     this.lastInputAt = this._now();
     writeToPty(this.pty, message, this.launchSpec);
+  }
+
+  waitForHandoffDelivery() {
+    return this.handoffMessageController?.waitForDelivery()
+      || Promise.resolve({ ok: true, skipped: true });
   }
 
   resize(cols, rows) {

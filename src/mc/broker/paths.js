@@ -31,10 +31,12 @@ export function sessionHostPaths(sessionId) {
   return {
     dir,
     socketPath: join(dir, 'broker.sock'),
+    artifactSocketPath: join(dir, 'provider-artifact.sock'),
     pidPath: join(dir, 'broker.pid'),
     logPath: join(dir, 'broker.log'),
     manifestPath: join(dir, 'host.json'),
     lifecyclePath: join(dir, 'lifecycle.json'),
+    handoffSwitchPath: join(dir, 'handoff-switch.json'),
     providerArtifactsDir: join(dir, 'provider-artifacts'),
   };
 }

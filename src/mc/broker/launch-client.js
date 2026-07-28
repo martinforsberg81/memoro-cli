@@ -53,6 +53,7 @@ import {
   abortLocalCodexCredentialDomain,
   prepareLocalCodexCredentialDomain,
 } from '../credential-domain/local-codex.js';
+import { deriveHandoffControllerRoot } from '../handoff-controller-capability.js';
 
 const CLOUD_BROKER_START_TIMEOUT_MS = 10_000;
 const CODEX_SQLITE_STARTUP_WINDOW_MS = 20_000;
@@ -68,6 +69,8 @@ export async function launchBrokerOwnedSession({
   argv = [],
   apiArgv = [],
   sendStartupMessage = true,
+  handoffUserMessage = null,
+  handoffTransaction = null,
   attachAfterLaunch = true,
   cloudBroker = {},
   request = requestBroker,
@@ -94,6 +97,16 @@ export async function launchBrokerOwnedSession({
     };
   }
   const managedPortable = localAuthMode === LOCAL_AUTH_MODES.MANAGED_PORTABLE;
+  const hasHandoffMessage = typeof handoffUserMessage === 'string'
+    && handoffUserMessage.length > 0;
+  const hasHandoffTransaction = typeof handoffTransaction?.transaction_id === 'string'
+    && handoffTransaction.transaction_id.length > 0
+    && /^[a-f0-9]{64}$/.test(handoffTransaction.controller_capability || '');
+  if (hasHandoffMessage !== hasHandoffTransaction) {
+    const reason = 'handoff-launch-pair-invalid';
+    stderr.write('mc: provider handoff launch requires one bound message and transaction\n');
+    return { code: 1, reason, error: reason };
+  }
 
   const launch = resolveLaunch(tool);
   if (!launch.ok) {
@@ -158,6 +171,18 @@ export async function launchBrokerOwnedSession({
     machineId,
     llmSessionId,
   });
+  const sessionControllerCapability = deriveHandoffControllerRoot({
+    token,
+    codingSessionId,
+  });
+  if (!sessionControllerCapability) {
+    stderr.write('mc: session controller authority is unavailable\n');
+    return {
+      code: 1,
+      reason: 'session-controller-capability-unavailable',
+      error: 'session controller authority is unavailable',
+    };
+  }
   const runtimeGeneration = (deps.randomUUID || randomUUID)();
   const repoRef = derivePublicRepoRef(repoContext);
   const paths = brokerSessionPaths(codingSessionId);
@@ -191,7 +216,10 @@ export async function launchBrokerOwnedSession({
     } catch {}
   }
   let groundingLaunchMessage = null;
-  if (sendStartupMessage) {
+  // A provider switch is grounded exclusively by the strict, scanner-approved
+  // handoff projection. Normal grounding may contain transitional raw session
+  // continuity, so it must never be fetched, rendered, or concatenated here.
+  if (sendStartupMessage && !handoffUserMessage) {
     try {
       const res = await (deps.groundSession || groundSession)({
         cwd,
@@ -214,6 +242,12 @@ export async function launchBrokerOwnedSession({
     } catch (err) {
       stderr.write(`mc: grounding failed (${err.message}); continuing without it\n`);
     }
+  }
+  const brokerUserMessage = handoffUserMessage || null;
+  if (brokerUserMessage) {
+    // A switch handoff is one ordinary user turn for every provider. Claude
+    // must not receive any part of it through --append-system-prompt.
+    groundingLaunchMessage = null;
   }
 
   const devEnvironment = managedPortable
@@ -263,6 +297,7 @@ export async function launchBrokerOwnedSession({
   }
   const sessionHost = await resolveLaunchBroker({
     codingSessionId,
+    sessionControllerCapability,
     request,
     ensureBroker,
     cloudBroker,
@@ -271,6 +306,10 @@ export async function launchBrokerOwnedSession({
   });
   if (!sessionHost.ok) return { code: 1 };
   const launchRequest = sessionHost.request || request;
+  const controllerRequest = bindSessionControllerCapability(
+    launchRequest,
+    sessionControllerCapability,
+  );
   const attachSocketPath = sessionHost.socketPath || null;
 
   scrubRuntimeSecretsInPlace(spawnEnv);
@@ -379,6 +418,7 @@ export async function launchBrokerOwnedSession({
     type: 'launch_session',
     session: {
       id: codingSessionId,
+      session_controller_capability: sessionControllerCapability,
       runtime_generation: runtimeGeneration,
       name: sessionName || label,
       cwd,
@@ -386,6 +426,7 @@ export async function launchBrokerOwnedSession({
       argv,
       launch_options: {
         startupMessage: groundingLaunchMessage,
+        ...(brokerUserMessage ? { handoffUserMessage: brokerUserMessage } : {}),
         effectivePolicy: managedPortable ? null : effectivePolicy,
         ...(codexDeviceAuthBeforeLaunch ? { codexDeviceAuthBeforeLaunch } : {}),
       },
@@ -409,13 +450,35 @@ export async function launchBrokerOwnedSession({
             branch: repoContext.branch,
             worktreeName: sessionName || null,
             tool: launch.shortName,
-            toolSessionId: registryEntry.tool_session_id || null,
+            // During a provider switch the persisted registry still names the
+            // source provider until the broker-acknowledged target delivery is
+            // committed. Never let target sidecars inherit source-native
+            // transcript authority from that stale projection.
+            toolSessionId: handoffTransaction
+              ? null
+              : registryEntry.tool_session_id || null,
             sockPath: paths.sockPath,
             metaPath: paths.metaPath,
-            transcriptPath: registryEntry.tool_transcript_path || null,
+            transcriptPath: handoffTransaction
+              ? null
+              : registryEntry.tool_transcript_path || null,
+            ...(handoffTransaction
+              ? {
+                  transcriptAccess: false,
+                  upload: false,
+                }
+              : {}),
           },
       ...(credentialDomain?.descriptor
         ? { credential_domain: credentialDomain.descriptor }
+        : {}),
+      ...(handoffTransaction?.transaction_id
+        ? {
+            handoff_transaction: {
+              transaction_id: handoffTransaction.transaction_id,
+              controller_capability: handoffTransaction.controller_capability,
+            },
+          }
         : {}),
     },
   };
@@ -452,7 +515,10 @@ export async function launchBrokerOwnedSession({
   let launchRes = null;
   let launchWasAmbiguous = false;
   try {
-    launchRes = await launchRequest(launchMessage);
+    launchRes = await controllerRequest(
+      launchMessage,
+      brokerUserMessage ? { timeoutMs: 60_000 } : undefined,
+    );
     launchWasAmbiguous = launchRes?.ok !== false
       && !isExactLaunchedSession(launchRes?.session, { codingSessionId, runtimeGeneration });
   } catch {
@@ -461,14 +527,14 @@ export async function launchBrokerOwnedSession({
 
   if (launchWasAmbiguous) {
     const reconciliation = await reconcileAmbiguousBrokerLaunch({
-      launchRequest,
+      launchRequest: controllerRequest,
       codingSessionId,
       runtimeGeneration,
     });
     if (reconciliation.state === 'live') {
       launchRes = { ok: true, session: reconciliation.session, recovered: true };
     } else if (reconciliation.state === 'dead') {
-      const removed = await launchRequest({ type: 'remove_session', id: codingSessionId })
+      const removed = await controllerRequest({ type: 'remove_session', id: codingSessionId })
         .catch(() => null);
       if (removed?.ok) {
         launchRes = { ok: false, reason: 'broker-session-exited' };
@@ -526,13 +592,32 @@ export async function launchBrokerOwnedSession({
   }
 
   if (typeof onLaunched === 'function') {
-    await onLaunched({
-      codingSessionId: effectiveCodingSessionId,
-      runtimeGeneration: launchRes.session?.runtime_generation || runtimeGeneration,
-      launch: launchRes,
-      brokerSocketPath: attachSocketPath,
-      hostKind: sessionHost.hostKind || 'global-broker',
-    });
+    let callbackResult = null;
+    try {
+      callbackResult = await onLaunched({
+        codingSessionId: effectiveCodingSessionId,
+        runtimeGeneration: launchRes.session?.runtime_generation || runtimeGeneration,
+        launch: launchRes,
+        brokerSocketPath: attachSocketPath,
+        hostKind: sessionHost.hostKind || 'global-broker',
+        sessionControllerCapability,
+      });
+    } catch {
+      callbackResult = { ok: false, code: 'post-launch-commit-failed' };
+    }
+    if (callbackResult?.ok === false) {
+      const removed = await controllerRequest({
+        type: 'remove_session',
+        id: effectiveCodingSessionId,
+      }, { timeoutMs: 20_000 }).catch(() => null);
+      stderr.write(`mc: broker launch rolled back because the local handoff commit failed (${callbackResult.code || callbackResult.reason || 'unknown'}).\n`);
+      return {
+        code: 1,
+        reason: removed?.ok
+          ? callbackResult.code || callbackResult.reason || 'post-launch-commit-failed'
+          : 'post-launch-rollback-unconfirmed',
+      };
+    }
   }
 
   if (!attachAfterLaunch) {
@@ -541,6 +626,7 @@ export async function launchBrokerOwnedSession({
 
   const attachOptions = {
     id: effectiveCodingSessionId,
+    controllerCapability: sessionControllerCapability,
     ...(attachSocketPath ? { socketPath: attachSocketPath } : {}),
   };
   let code = await attach(attachOptions);
@@ -552,7 +638,7 @@ export async function launchBrokerOwnedSession({
         ...launchMessage,
         session: { ...launchMessage.session, id: effectiveCodingSessionId },
       },
-      launchRequest,
+      launchRequest: controllerRequest,
       attach,
       attachOptions,
       stderr,
@@ -562,7 +648,7 @@ export async function launchBrokerOwnedSession({
     });
   }
   if (typeof onExited === 'function') {
-    const ended = await launchRequest({ type: 'session_status', id: effectiveCodingSessionId })
+    const ended = await controllerRequest({ type: 'session_status', id: effectiveCodingSessionId })
       .catch(() => null);
     const status = ended?.ok === true ? ended.session : null;
     const endedGeneration = status?.runtime_generation || runtimeGeneration;
@@ -614,6 +700,23 @@ function reportUnknownBrokerLaunch({ stderr, codingSessionId } = {}) {
     reason: 'broker-launch-unknown',
     error: 'broker launch outcome is unknown',
   };
+}
+
+function bindSessionControllerCapability(request, capability) {
+  return (message, options) => request({
+    ...message,
+    ...([
+      'attach_session',
+      'write_session',
+      'dispatch_session',
+      'fetch_session_output',
+      'resize_session',
+      'stop_session',
+      'remove_session',
+    ].includes(message?.type)
+      ? { session_controller_capability: capability }
+      : {}),
+  }, options);
 }
 
 function isExactLaunchedSession(session, { codingSessionId, runtimeGeneration } = {}) {
@@ -836,6 +939,7 @@ function isCloudBrokerLaunch(cloudBroker) {
 
 async function resolveLaunchBroker({
   codingSessionId,
+  sessionControllerCapability,
   request,
   ensureBroker,
   cloudBroker,
@@ -848,6 +952,11 @@ async function resolveLaunchBroker({
     const ensureSessionHost = deps.ensureSessionHost || ensureSessionHostRunning;
     const host = await ensureSessionHost({
       sessionId: codingSessionId,
+      controllerBinding: {
+        schema: 'mc-broker-controller-bootstrap-v1',
+        session_id: codingSessionId,
+        session_controller_capability: sessionControllerCapability,
+      },
       request,
       spawnDaemon: deps.spawnBrokerDaemon,
     });
@@ -860,7 +969,10 @@ async function resolveLaunchBroker({
       hostKind: 'session',
       socketPath: host.socketPath,
       broker: host.broker || null,
-      request: (message) => request(message, { socketPath: host.socketPath }),
+      request: (message, options = {}) => request(message, {
+        socketPath: host.socketPath,
+        ...options,
+      }),
     };
   }
 

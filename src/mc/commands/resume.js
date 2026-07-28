@@ -15,6 +15,7 @@
 import {
   findEntry,
   normalizeProviderSessions,
+  providerSessionFor,
   readRegistry,
   upsertEntry,
   withProviderSession,
@@ -58,6 +59,14 @@ import {
   resolveLocalAuthMode,
 } from '../local-auth-mode.js';
 import { MANAGED_CODEX_PROVIDER_ID } from '../provider-adapters/codex-managed.js';
+import {
+  commitProviderSwitchDelivery,
+  prepareProviderSwitch,
+  recoverProviderSwitch,
+} from '../provider-switch.js';
+import {
+  resolveSessionControllerCapability,
+} from '../session-controller-capability.js';
 
 export const TOOL_SUGAR = {
   '--claude': 'claude',
@@ -112,24 +121,80 @@ export async function run(rawArgv, deps = {}) {
     stderr.write(`mc: provider session state is invalid (${providerState.reason}); refusing to launch.\n`);
     return 1;
   }
-  let firstLaunchInWorktree = localAuthMode === LOCAL_AUTH_MODES.MANAGED_PORTABLE
-    ? !hasManagedProviderToolSession(entry)
-    : !hasStoredToolSession(entry);
-
   const toolValidation = validateToolFlag(opts.tool);
   if (toolValidation.error) {
     stderr.write(`mc: ${toolValidation.error}\n`);
     return 2;
   }
+  let handoff = null;
+  let recoveredTargetTool = null;
+  let recoveryLocalPresence = null;
+  if (!opts.json && !opts.noLaunch && process.env.MC_TEST_MODE !== '1'
+    && localAuthMode === LOCAL_AUTH_MODES.NATIVE
+    && shouldRunProviderSwitchBoundary(deps)) {
+    recoveryLocalPresence = await (
+      deps.inspectLocalBrokerSessionForEntry || inspectLocalBrokerSessionForEntry
+    )(entry, { request: deps.requestBroker || requestBroker, deps });
+    const recovery = await (deps.recoverProviderSwitch || recoverProviderSwitch)({
+      entry,
+      targetTool: toolValidation.resolved,
+      localPresence: recoveryLocalPresence,
+      apiArgv: argv,
+      env: process.env,
+      deps: deps.providerSwitchDeps || deps,
+    });
+    if (!recovery?.ok) {
+      stderr.write(`mc: provider handoff recovery failed (${recovery?.code || 'handoff-recovery-unavailable'}); refusing to launch.\n`);
+      return 1;
+    }
+    if (recovery.active) {
+      recoveredTargetTool = recovery.targetTool;
+      if (recovery.recoveredDelivery) {
+        const committed = await (deps.commitProviderSwitchDelivery
+          || commitProviderSwitchDelivery)({
+          entry,
+          targetTool: recovery.targetTool,
+          transaction: recovery.transaction,
+          brokerSocketPath: recovery.brokerSocketPath
+            || entry.broker_socket_path
+            || null,
+          deps: deps.providerSwitchDeps || deps,
+        });
+        if (!committed?.ok) {
+          stderr.write(`mc: provider handoff recovery failed (${committed?.code || 'handoff-cursor-commit-failed'}); refusing to launch.\n`);
+          return 1;
+        }
+        entry = committed.entry || entry;
+      } else {
+        handoff = recovery;
+        if (recovery.entry) entry = recovery.entry;
+      }
+    }
+  }
+  const targetTool = toolValidation.resolved || recoveredTargetTool;
+  let firstLaunchInWorktree = localAuthMode === LOCAL_AUTH_MODES.MANAGED_PORTABLE
+    ? !hasManagedProviderToolSession(entry)
+    : !hasStoredToolSession(entry);
   // Switching a session to a different tool starts a FRESH grounded session
   // in the same worktree: a provider's native transcript can't be handed to
   // another tool, but work continuity lives in the worktree and in server-side
   // continuity keyed by coding_session_id (which we rebind on the fresh start).
-  const switchingTool = isToolSwitch(entry, toolValidation.resolved);
-  if (switchingTool) firstLaunchInWorktree = true;
+  const switchingTool = isToolSwitch(entry, targetTool);
+  if (switchingTool && localAuthMode !== LOCAL_AUTH_MODES.NATIVE
+    && !opts.noLaunch && !opts.json) {
+    stderr.write('mc: managed portable provider handoff is not enabled; use native local auth for this switch.\n');
+    return 1;
+  }
+  if (switchingTool) {
+    firstLaunchInWorktree = !providerSessionFor(
+      entry,
+      targetTool?.id,
+    )?.session_id;
+  }
 
+  let switchLocalPresence = null;
   if (!opts.json && !opts.noLaunch && process.env.MC_TEST_MODE !== '1') {
-    let localPresence = { verdict: 'unknown' };
+    let localPresence = recoveryLocalPresence || { verdict: 'unknown' };
     const inspectLocal = deps.inspectLocalBrokerSessionForEntry
       || inspectLocalBrokerSessionForEntry;
     // A tool switch never reattaches the OLD tool's live local PTY — that
@@ -151,6 +216,8 @@ export async function run(rawArgv, deps = {}) {
           stderr,
           request: deps.requestBroker || requestBroker,
           attach: deps.attachBrokerSession || attachBrokerSession,
+          apiArgv: argv,
+          env: process.env,
           deps,
         });
         localPresence = attached?.localPresence || localPresence;
@@ -168,9 +235,52 @@ export async function run(rawArgv, deps = {}) {
       localPresence = await inspectLocal(
         entry, { request: deps.requestBroker || requestBroker, deps },
       );
+      switchLocalPresence = localPresence;
       if (localPresence.verdict === 'live') {
-        stderr.write(`mc: "${entry.name}" is running here — exit it (Ctrl+D) or \`mc end ${entry.name}\` before switching tools.\n`);
-        return 1;
+        const liveTool = sourceForBrokerTool(localPresence.session?.tool);
+        if (liveTool !== targetTool?.id) {
+          stderr.write(`mc: "${entry.name}" is running here — exit it (Ctrl+D) or \`mc end ${entry.name}\` before switching tools.\n`);
+          return 1;
+        }
+        handoff = await (deps.prepareProviderSwitch || prepareProviderSwitch)({
+          entry,
+          targetTool,
+          localPresence,
+          apiArgv: argv,
+          env: process.env,
+          deps: deps.providerSwitchDeps || deps,
+        });
+        if (!handoff?.ok || !handoff.recoveredDelivery) {
+          stderr.write(`mc: provider handoff recovery failed (${handoff?.code || 'handoff-recovery-unavailable'}); refusing to attach.\n`);
+          return 1;
+        }
+        const committed = await (deps.commitProviderSwitchDelivery
+          || commitProviderSwitchDelivery)({
+          entry,
+          targetTool,
+          transaction: handoff.transaction,
+          brokerSocketPath: localPresence.session?.broker_socket_path || null,
+          deps: deps.providerSwitchDeps || deps,
+        });
+        if (!committed?.ok) {
+          stderr.write(`mc: provider handoff recovery failed (${committed?.code || 'handoff-cursor-commit-failed'}); refusing to attach.\n`);
+          return 1;
+        }
+        entry = committed.entry || entry;
+        const attached = await (deps.attachLiveBrokerSession || attachLiveBrokerSession)(
+          entry,
+          {
+            stdin,
+            stdout,
+            stderr,
+            request: deps.requestBroker || requestBroker,
+            attach: deps.attachBrokerSession || attachBrokerSession,
+            apiArgv: argv,
+            env: process.env,
+            deps,
+          },
+        );
+        return attached?.attached ? attached.code ?? 0 : 1;
       }
     }
 
@@ -201,10 +311,31 @@ export async function run(rawArgv, deps = {}) {
     }
   }
 
-  if (opts.tool) {
+  if (switchingTool && !opts.json && !opts.noLaunch
+    && process.env.MC_TEST_MODE !== '1'
+    && shouldRunProviderSwitchBoundary(deps)
+    && !handoff) {
+    handoff = await (deps.prepareProviderSwitch || prepareProviderSwitch)({
+      entry,
+      targetTool,
+      localPresence: switchLocalPresence,
+      apiArgv: argv,
+      env: process.env,
+      deps: deps.providerSwitchDeps || deps,
+    });
+    if (!handoff?.ok || handoff.recoveredDelivery) {
+      stderr.write(`mc: provider handoff failed (${handoff?.code || 'handoff-recovery-required'}); target provider was not started.\n`);
+      return 1;
+    }
+    if (handoff.entry) entry = handoff.entry;
+  }
+
+  if (opts.tool || handoff?.transaction) {
     if (switchingTool) {
-      const switched = applyToolSwitch(entry, toolValidation.resolved, {
-        upsert: deps.upsertEntry || upsertEntry,
+      const switched = applyToolSwitch(entry, targetTool, {
+        upsert: handoff?.transaction
+          ? (patch) => ({ ...entry, ...patch })
+          : deps.upsertEntry || upsertEntry,
       });
       if (switched?.error) {
         stderr.write(`mc: provider session state is invalid (${switched.error}); refusing to launch.\n`);
@@ -214,7 +345,7 @@ export async function run(rawArgv, deps = {}) {
     } else {
       const res = applyToolOverride(entry, opts.tool, {
         upsert: deps.upsertEntry || upsertEntry,
-        resolved: toolValidation.resolved,
+        resolved: targetTool,
       });
       if (res.error) {
         stderr.write(`mc: ${res.error}\n`);
@@ -268,6 +399,7 @@ export async function run(rawArgv, deps = {}) {
     stderr,
     env: process.env,
     localAuthMode,
+    handoff,
   });
 }
 
@@ -277,6 +409,7 @@ export async function launchResumeSession({
   env = process.env,
   localAuthMode = LOCAL_AUTH_MODES.NATIVE,
   stderr = process.stderr,
+  handoff = null,
   deps = {},
 } = {}) {
   const authMode = (deps.requireLocalAuthMode || requireLocalAuthMode)(localAuthMode);
@@ -341,10 +474,38 @@ export async function launchResumeSession({
       apiArgv,
       env,
       localAuthMode,
+      handoffUserMessage: handoff?.message || null,
+      handoffTransaction: handoff?.transaction || null,
     }),
     stderr,
-    onLaunched: ({ codingSessionId, brokerSocketPath = null, hostKind = null }) => {
+    onLaunched: async ({
+      codingSessionId,
+      brokerSocketPath = null,
+      hostKind = null,
+      sessionControllerCapability = null,
+    }) => {
       const upsert = deps.upsertEntry || upsertEntry;
+      let currentEntry = (deps.findEntry || findEntry)(entry.name) || entry;
+      if (handoff?.transaction) {
+        const completed = await (deps.commitProviderSwitchDelivery
+          || commitProviderSwitchDelivery)({
+          entry: currentEntry,
+          targetTool: launchTool,
+          transaction: handoff.transaction,
+          sessionControllerCapability,
+          brokerSocketPath,
+          deps: deps.providerSwitchDeps || deps,
+        });
+        if (!completed?.ok) return completed;
+        currentEntry = completed.entry || currentEntry;
+      }
+      const currentProviderPatch = withProviderSession(currentEntry, toolSession.source, {
+        session_id: toolSession.sessionId,
+        transcript_path: toolSession.transcriptPath || null,
+      });
+      if (!currentProviderPatch.ok) {
+        return { ok: false, code: currentProviderPatch.reason };
+      }
       const patch = {
         name: entry.name,
         coding_session_id: codingSessionId,
@@ -361,14 +522,15 @@ export async function launchResumeSession({
       };
       // Keep the prior proven generation until SessionStart evidence for this
       // exact runtime has been committed by the broker.
-      patch.provider_sessions = providerPatch.providerSessions;
+      patch.provider_sessions = currentProviderPatch.providerSessions;
       if (brokerSocketPath) patch.broker_socket_path = brokerSocketPath;
       if (hostKind) patch.host_kind = hostKind;
       upsert(patch);
+      return { ok: true };
     },
     onExited: ({ providerArtifact = null }) => {
       commitNativeProviderArtifact({
-        entry,
+        entry: (deps.findEntry || findEntry)(entry.name) || entry,
         expectedTool: launchTool?.id,
         providerArtifact,
         localAuthMode,
@@ -387,6 +549,7 @@ export async function launchFreshSession({
   env = process.env,
   localAuthMode = LOCAL_AUTH_MODES.NATIVE,
   stderr = process.stderr,
+  handoff = null,
   deps = {},
 } = {}) {
   const authMode = (deps.requireLocalAuthMode || requireLocalAuthMode)(localAuthMode);
@@ -412,10 +575,31 @@ export async function launchFreshSession({
       apiArgv,
       env,
       localAuthMode,
+      handoffUserMessage: handoff?.message || null,
+      handoffTransaction: handoff?.transaction || null,
     }),
     stderr,
-    onLaunched: ({ codingSessionId, brokerSocketPath = null, hostKind = null }) => {
+    onLaunched: async ({
+      codingSessionId,
+      brokerSocketPath = null,
+      hostKind = null,
+      sessionControllerCapability = null,
+    }) => {
       const upsert = deps.upsertEntry || upsertEntry;
+      let currentEntry = (deps.findEntry || findEntry)(entry.name) || entry;
+      if (handoff?.transaction) {
+        const completed = await (deps.commitProviderSwitchDelivery
+          || commitProviderSwitchDelivery)({
+          entry: currentEntry,
+          targetTool: launchTool,
+          transaction: handoff.transaction,
+          sessionControllerCapability,
+          brokerSocketPath,
+          deps: deps.providerSwitchDeps || deps,
+        });
+        if (!completed?.ok) return completed;
+        currentEntry = completed.entry || currentEntry;
+      }
       const patch = {
         name: entry.name,
         coding_session_id: codingSessionId,
@@ -424,10 +608,11 @@ export async function launchFreshSession({
       if (brokerSocketPath) patch.broker_socket_path = brokerSocketPath;
       if (hostKind) patch.host_kind = hostKind;
       upsert(patch);
+      return { ok: true };
     },
     onExited: ({ providerArtifact = null }) => {
       commitNativeProviderArtifact({
-        entry,
+        entry: (deps.findEntry || findEntry)(entry.name) || entry,
         expectedTool: launchTool?.id,
         providerArtifact,
         localAuthMode,
@@ -669,7 +854,14 @@ export async function resumeSelectedChoice(choice, {
     const attached = await attachLive({
       name: choice.label || choice.name || null,
       coding_session_id: choice.coding_session_id || choice.id || null,
-    }, { stdin, stdout, stderr, deps });
+    }, {
+      stdin,
+      stdout,
+      stderr,
+      apiArgv,
+      env,
+      deps,
+    });
     if (attached?.attached) return attached.code ?? 0;
     stdout.write(renderActiveSelectionMessage(choice));
     return 0;
@@ -685,16 +877,68 @@ export async function resumeSelectedChoice(choice, {
     upsert,
     deps: backfillDeps,
   });
-  const switchingTool = isToolSwitch(entry, resolvedTool);
-  const firstLaunchInWorktree = switchingTool || (
-    localAuthMode === LOCAL_AUTH_MODES.MANAGED_PORTABLE
-      ? !hasManagedProviderToolSession(entry)
-      : !hasStoredToolSession(entry)
-  );
+  let handoff = null;
+  let effectiveTargetTool = resolvedTool;
+  let recoveryLocalPresence = null;
+  if (!opts.noLaunch && process.env.MC_TEST_MODE !== '1'
+    && localAuthMode === LOCAL_AUTH_MODES.NATIVE
+    && shouldRunProviderSwitchBoundary(backfillDeps)) {
+    recoveryLocalPresence = await (
+      deps.inspectLocalBrokerSessionForEntry || inspectLocalBrokerSessionForEntry
+    )(entry, { request: deps.requestBroker || requestBroker, deps });
+    const recovery = await (deps.recoverProviderSwitch || recoverProviderSwitch)({
+      entry,
+      targetTool: resolvedTool,
+      localPresence: recoveryLocalPresence,
+      apiArgv,
+      env,
+      deps: deps.providerSwitchDeps || deps,
+    });
+    if (!recovery?.ok) {
+      stderr.write(`mc: provider handoff recovery failed (${recovery?.code || 'handoff-recovery-unavailable'}); refusing to launch.\n`);
+      return 1;
+    }
+    if (recovery.active) {
+      effectiveTargetTool = recovery.targetTool;
+      if (recovery.recoveredDelivery) {
+        const committed = await (deps.commitProviderSwitchDelivery
+          || commitProviderSwitchDelivery)({
+          entry,
+          targetTool: recovery.targetTool,
+          transaction: recovery.transaction,
+          brokerSocketPath: recovery.brokerSocketPath
+            || entry.broker_socket_path
+            || null,
+          deps: deps.providerSwitchDeps || deps,
+        });
+        if (!committed?.ok) {
+          stderr.write(`mc: provider handoff recovery failed (${committed?.code || 'handoff-cursor-commit-failed'}); refusing to launch.\n`);
+          return 1;
+        }
+        entry = committed.entry || entry;
+      } else {
+        handoff = recovery;
+        if (recovery.entry) entry = recovery.entry;
+      }
+    }
+  }
+  const switchingTool = isToolSwitch(entry, effectiveTargetTool);
+  if (switchingTool && localAuthMode !== LOCAL_AUTH_MODES.NATIVE
+    && !opts.noLaunch) {
+    stderr.write('mc: managed portable provider handoff is not enabled; use native local auth for this switch.\n');
+    return 1;
+  }
+  const firstLaunchInWorktree = switchingTool
+    ? !providerSessionFor(entry, effectiveTargetTool?.id)?.session_id
+    : (
+        localAuthMode === LOCAL_AUTH_MODES.MANAGED_PORTABLE
+          ? !hasManagedProviderToolSession(entry)
+          : !hasStoredToolSession(entry)
+      );
   const freshLaunch = freshLaunchDependency({
     launchFreshSession: freshLaunchOverride,
   });
-  let localPresence = { verdict: 'unknown' };
+  let localPresence = recoveryLocalPresence || { verdict: 'unknown' };
   if (!switchingTool && !opts.noLaunch && process.env.MC_TEST_MODE !== '1') {
     if (localAuthMode === LOCAL_AUTH_MODES.MANAGED_PORTABLE) {
       localPresence = await (
@@ -745,16 +989,40 @@ export async function resumeSelectedChoice(choice, {
     }
   }
 
-  if (opts.tool) {
+  if (switchingTool && !opts.noLaunch && process.env.MC_TEST_MODE !== '1'
+    && shouldRunProviderSwitchBoundary(backfillDeps) && !handoff) {
+    handoff = await (deps.prepareProviderSwitch || prepareProviderSwitch)({
+      entry,
+      targetTool: effectiveTargetTool,
+      localPresence,
+      apiArgv,
+      env,
+      deps: deps.providerSwitchDeps || deps,
+    });
+    if (!handoff?.ok || handoff.recoveredDelivery) {
+      stderr.write(`mc: provider handoff failed (${handoff?.code || 'handoff-recovery-required'}); target provider was not started.\n`);
+      return 1;
+    }
+    if (handoff.entry) entry = handoff.entry;
+  }
+
+  if (opts.tool || handoff?.transaction) {
     if (switchingTool) {
-      const switched = applyToolSwitch(entry, resolvedTool, { upsert });
+      const switched = applyToolSwitch(entry, effectiveTargetTool, {
+        upsert: handoff?.transaction
+          ? (patch) => ({ ...entry, ...patch })
+          : upsert,
+      });
       if (switched?.error) {
         stderr.write(`mc: provider session state is invalid (${switched.error}); refusing to launch.\n`);
         return 1;
       }
       entry = switched;
     } else {
-      const res = applyToolOverride(entry, opts.tool, { upsert, resolved: resolvedTool });
+      const res = applyToolOverride(entry, opts.tool, {
+        upsert,
+        resolved: effectiveTargetTool,
+      });
       if (res.error) {
         stderr.write(`mc: ${res.error}\n`);
         return 2;
@@ -778,6 +1046,7 @@ export async function resumeSelectedChoice(choice, {
     env,
     localAuthMode,
     stderr,
+    handoff,
   };
   return firstLaunchInWorktree ? freshLaunch(launchOptions) : launch(launchOptions);
 }
@@ -967,14 +1236,42 @@ export async function attachLiveBrokerSession(entry, {
   stdin = process.stdin,
   stdout = process.stdout,
   stderr = process.stderr,
+  apiArgv = [],
+  env = process.env,
   deps = {},
 } = {}) {
   const localPresence = await inspectLocalBrokerSessionForEntry(entry, { request, deps });
   const target = localPresence.verdict === 'live' ? localPresence.session : null;
   const id = brokerSessionId(target);
   if (!id) return { attached: false, localPresence };
+  const expectedTool = resolveToolInput(entry?.tool || DEFAULT_TOOL)?.id || null;
+  const actualTool = sourceForBrokerTool(target?.tool);
+  if (expectedTool && actualTool && expectedTool !== actualTool) {
+    return {
+      attached: false,
+      providerMismatch: true,
+      localPresence,
+    };
+  }
+  const authority = await (
+    deps.resolveSessionControllerCapability
+    || resolveSessionControllerCapability
+  )({
+    codingSessionId: id,
+    apiArgv,
+    env,
+    deps,
+  });
+  if (!authority?.ok) {
+    return {
+      attached: false,
+      controllerUnavailable: true,
+      localPresence,
+    };
+  }
   const code = await attach({
     id,
+    controllerCapability: authority.capability,
     ...(target?.broker_socket_path ? { socketPath: target.broker_socket_path } : {}),
     stdin,
     stdout,
@@ -1076,6 +1373,12 @@ function hasInjectedRuntimeDeps(deps = {}) {
   ].some((key) => Object.prototype.hasOwnProperty.call(deps, key));
 }
 
+function shouldRunProviderSwitchBoundary(deps = {}) {
+  return typeof deps.recoverProviderSwitch === 'function'
+    || typeof deps.prepareProviderSwitch === 'function'
+    || !hasInjectedRuntimeDeps(deps);
+}
+
 function hasInjectedPickerRuntime({
   launch,
   freshLaunchOverride,
@@ -1157,6 +1460,10 @@ function validateToolFlag(tool) {
     return { error: `unknown tool: ${tool}. Try: claude | codex | gemini` };
   }
   return { resolved };
+}
+
+function sourceForBrokerTool(tool) {
+  return resolveToolInput(tool)?.id || null;
 }
 
 /**

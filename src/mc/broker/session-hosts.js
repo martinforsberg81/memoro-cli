@@ -15,9 +15,20 @@ import {
 
 const HOST_START_LOG_TAIL_CHARS = 4000;
 const HOST_START_ERROR_CHARS = 1200;
+const CONTROLLER_REQUEST_TYPES = new Set([
+  'attach_session',
+  'write_session',
+  'dispatch_session',
+  'fetch_session_output',
+  'resize_session',
+  'stop_session',
+  'remove_session',
+  'handoff_switch_read',
+]);
 
 export async function ensureSessionHostRunning({
   sessionId,
+  controllerBinding = null,
   paths = sessionHostPaths(sessionId),
   request = requestBroker,
   spawnDaemon = spawnBrokerDaemon,
@@ -67,10 +78,19 @@ export async function ensureSessionHostRunning({
   }
 
   cleanupSessionHostFiles(paths);
+  if (!validControllerBinding(controllerBinding, sessionId)) {
+    return {
+      ok: false,
+      reason: 'session-controller-bootstrap-required',
+      error: 'session controller bootstrap is required to start the host',
+      ...paths,
+    };
+  }
   const spawned = spawnDaemon({
     socketPath: paths.socketPath,
     pidPath: paths.pidPath,
     logPath: paths.logPath,
+    controllerBinding,
   });
   if (!spawned.ok) return spawned;
 
@@ -101,6 +121,12 @@ export async function ensureSessionHostRunning({
     await sleep(intervalMs);
   }
   return { ok: false, error: sessionHostStartError(paths), ...paths };
+}
+
+function validControllerBinding(value, sessionId) {
+  return value?.schema === 'mc-broker-controller-bootstrap-v1'
+    && value.session_id === sessionId
+    && /^[a-f0-9]{64}$/.test(value.session_controller_capability || '');
 }
 
 // A host whose daemon is busy (an active tool streaming PTY output hogs
@@ -193,9 +219,15 @@ export async function listLocalBrokerAndHostSessions({
 
 export function requestForSession(session, {
   request = requestBroker,
+  controllerCapability = null,
 } = {}) {
   const socketPath = session?.broker_socket_path || session?.brokerSocketPath || null;
-  return (message) => request(message, socketPath ? { socketPath } : undefined);
+  return (message) => request({
+    ...message,
+    ...(controllerCapability && CONTROLLER_REQUEST_TYPES.has(message?.type)
+      ? { session_controller_capability: controllerCapability }
+      : {}),
+  }, socketPath ? { socketPath } : undefined);
 }
 
 export function readSessionHostManifests({ hostsDir = sessionHostsDir() } = {}) {
@@ -226,7 +258,7 @@ function writeSessionHostManifest({ sessionId, paths, broker = {}, now = () => n
 }
 
 function cleanupSessionHostFiles(paths) {
-  for (const path of [paths.socketPath, paths.pidPath]) {
+  for (const path of [paths.socketPath, paths.artifactSocketPath, paths.pidPath]) {
     try { rmSync(path, { force: true }); } catch {}
   }
 }

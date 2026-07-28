@@ -2,6 +2,31 @@ import assert from 'node:assert/strict';
 import test, { describe } from 'node:test';
 
 import { BrokerRuntime } from '../../../src/mc/broker/runtime.js';
+import { authenticateHandoffSwitchJournal } from '../../../src/mc/broker/handoff-switch-journal.js';
+import {
+  deriveHandoffControllerCapability,
+  deriveHandoffControllerRoot,
+  handoffControllerCapabilityDigest,
+} from '../../../src/mc/handoff-controller-capability.js';
+
+const handoffControllerCapability = 'c'.repeat(64);
+const handoffControllerDigest = handoffControllerCapabilityDigest(
+  handoffControllerCapability,
+);
+const sessionControllerCapability = 'b'.repeat(64);
+const testControllerToken = 'test-runtime-controller-token';
+
+function authenticatedJournal(journal, controllerRoot) {
+  const unsigned = { ...journal };
+  delete unsigned.authentication_digest;
+  return {
+    ...unsigned,
+    authentication_digest: authenticateHandoffSwitchJournal(
+      unsigned,
+      controllerRoot,
+    ),
+  };
+}
 
 function makeFakePtyFactory({ exitOnExitSubscription = null } = {}) {
   const ptys = [];
@@ -74,6 +99,10 @@ function makeRuntime(opts = {}) {
       lifecycleWrites.push(record);
       return record;
     },
+    handoffSwitchReader: opts.handoffSwitchReader,
+    handoffSwitchBegin: opts.handoffSwitchBegin,
+    handoffSwitchAdvance: opts.handoffSwitchAdvance,
+    controllerBindings: opts.controllerBindings,
     sidecarFactory: opts.sidecarFactory || ((spec) => {
       const sidecar = {
         spec,
@@ -102,6 +131,58 @@ function makeRuntime(opts = {}) {
       return sidecar;
     }),
   });
+  const controllerCapabilities = new Map();
+  const rawHandle = runtime.handle.bind(runtime);
+  runtime.handle = (message) => {
+    if (message?.type === 'launch_session' && message.session) {
+      const id = message.session.id;
+      const supplied = message.session.session_controller_capability;
+      const hasExplicitCapability = Object.hasOwn(
+        message.session,
+        'session_controller_capability',
+      );
+      const session = message.session;
+      const capability = hasExplicitCapability
+        ? supplied
+        : deriveHandoffControllerRoot({
+            token: testControllerToken,
+            codingSessionId: id,
+          }) || controllerCapabilities.get(id) || sessionControllerCapability;
+      if (capability) {
+        controllerCapabilities.set(id, capability);
+        if (!hasExplicitCapability && !session.credential_domain) {
+          runtime.handoffControllerRoots.set(id, capability);
+        }
+      }
+      return rawHandle({
+        ...message,
+        session: {
+          ...session,
+          session_controller_capability: capability,
+        },
+      });
+    }
+    if (message && !Object.hasOwn(message, 'session_controller_capability')) {
+      return rawHandle({
+        ...message,
+        session_controller_capability: controllerCapabilities.get(message.id)
+          || sessionControllerCapability,
+      });
+    }
+    return rawHandle(message);
+  };
+  const rawAttachConnection = runtime.attachConnection.bind(runtime);
+  runtime.attachConnection = (message, ...args) => rawAttachConnection(
+    Object.hasOwn(message || {}, 'session_controller_capability')
+      ? message
+      : {
+          ...message,
+          session_controller_capability: controllerCapabilities.get(
+            message?.id || message?.session_id,
+          ) || sessionControllerCapability,
+        },
+    ...args,
+  );
   return {
     runtime,
     fake,
@@ -209,6 +290,14 @@ describe('BrokerRuntime', () => {
     assert.equal(fake.calls[0].options.cols, 80);
     assert.equal(fake.calls[0].options.rows, 24);
     assert.deepEqual(fake.calls[0].args, ['--wrapped']);
+    assert.match(
+      fake.calls[0].options.env.MC_PROVIDER_ARTIFACT_SOCKET,
+      /provider-artifact\.sock$/,
+    );
+    assert.doesNotMatch(
+      fake.calls[0].options.env.MC_PROVIDER_ARTIFACT_SOCKET,
+      /broker\.sock$/,
+    );
   });
 
   test('launch_session repairs headless terminal env before spawning the PTY', () => {
@@ -235,10 +324,531 @@ describe('BrokerRuntime', () => {
     assert.equal(fake.calls[0].options.env.COLORTERM, 'truecolor');
   });
 
+  test('handoff launch binds the target generation and journals delivery before success', async () => {
+    const codingSessionId = 'sess_handoff_runtime';
+    const root = deriveHandoffControllerRoot({
+      token: testControllerToken,
+      codingSessionId,
+    });
+    const transactionId = '73a85b7e-2ce4-4db0-8b38-16ba08de03bf';
+    const runtimeGeneration = '9937ac60-46ce-42dd-9302-6533f1c6c38c';
+    let journal = {
+      transaction_id: transactionId,
+      phase: 'target_launch_started',
+      target_tool: 'claude-code',
+      controller_capability_digest: handoffControllerDigest,
+      target_latest_sequence: 2,
+      target_message_digest: '7a62bca86c85e878c0682777149684546b6416d5c29cc16851401d4959cf37cf',
+      target_runtime_generation: null,
+    };
+    const advances = [];
+    const { runtime, fake } = makeRuntime({
+      handoffSwitchReader: () => ({
+        kind: 'present',
+        journal: authenticatedJournal(journal, root),
+      }),
+      handoffSwitchAdvance: (input) => {
+        advances.push(input);
+        assert.equal(journal.phase, input.expectedPhase);
+        journal = {
+          ...journal,
+          ...input.patch,
+          phase: input.nextPhase,
+        };
+        return { ok: true, journal: authenticatedJournal(journal, root) };
+      },
+    });
+
+    const launching = runtime.handle({
+      type: 'launch_session',
+      session: {
+        id: codingSessionId,
+        tool: 'claude',
+        runtime_generation: runtimeGeneration,
+        launch_options: { handoffUserMessage: 'bounded handoff' },
+        handoff_transaction: {
+          transaction_id: transactionId,
+          controller_capability: handoffControllerCapability,
+        },
+      },
+    });
+    assert.equal(typeof launching?.then, 'function');
+    assert.equal(runtime.handle({
+      type: 'write_session',
+      id: 'sess_handoff_runtime',
+      data: 'provider-originated bypass',
+    }).reason, 'handoff-delivery-in-progress');
+    assert.equal(runtime.handle({
+      type: 'dispatch_session',
+      id: 'sess_handoff_runtime',
+      message: 'provider-originated bypass',
+    }).reason, 'handoff-delivery-in-progress');
+    runtime.sessionMetadata.get('sess_handoff_runtime').provider_artifact = {
+      coding_session_id: 'sess_handoff_runtime',
+      runtime_generation: runtimeGeneration,
+      tool: 'claude-code',
+    };
+    runtime.manager.get('sess_handoff_runtime').handoffMessageController.sendNow();
+    const result = await launching;
+
+    assert.equal(result.ok, true);
+    assert.equal(result.handoff_delivery, 'confirmed');
+    assert.equal(advances.length, 2);
+    assert.deepEqual(advances[0].patch, {
+      target_runtime_generation: runtimeGeneration,
+    });
+    assert.equal(advances[1].nextPhase, 'delivery_acknowledged');
+    assert.deepEqual(fake.calls[0].args, ['--wrapped']);
+    assert.deepEqual(fake.ptys[0].writes, ['bounded handoff\r']);
+  });
+
+  test('handoff launch rejects message bytes not bound by the journal digest', () => {
+    const codingSessionId = 'sess_handoff_wrong_message';
+    const root = deriveHandoffControllerRoot({
+      token: testControllerToken,
+      codingSessionId,
+    });
+    const transactionId = '73a85b7e-2ce4-4db0-8b38-16ba08de03bf';
+    const { runtime, fake } = makeRuntime({
+      handoffSwitchReader: () => ({
+        kind: 'present',
+        journal: authenticatedJournal({
+          transaction_id: transactionId,
+          phase: 'target_launch_started',
+          target_tool: 'codex',
+          controller_capability_digest: handoffControllerDigest,
+          target_message_digest: 'f'.repeat(64),
+        }, root),
+      }),
+    });
+    const unbound = runtime.handle({
+      type: 'launch_session',
+      session: {
+        id: codingSessionId,
+        tool: 'codex',
+        runtime_generation: '9937ac60-46ce-42dd-9302-6533f1c6c38c',
+      },
+    });
+    assert.equal(unbound.ok, false);
+    assert.equal(unbound.reason, 'handoff-transaction-required');
+    const result = runtime.handle({
+      type: 'launch_session',
+      session: {
+        id: codingSessionId,
+        tool: 'codex',
+        runtime_generation: '9937ac60-46ce-42dd-9302-6533f1c6c38c',
+        launch_options: { handoffUserMessage: 'attacker-selected message' },
+        handoff_transaction: {
+          transaction_id: transactionId,
+          controller_capability: handoffControllerCapability,
+        },
+      },
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.reason, 'handoff-target-launch-unbound');
+    assert.equal(fake.calls.length, 0);
+  });
+
+  test('handoff delivery is not acknowledged before the exact target artifact exists', async () => {
+    const codingSessionId = 'sess_handoff_missing_artifact';
+    const root = deriveHandoffControllerRoot({
+      token: testControllerToken,
+      codingSessionId,
+    });
+    const transactionId = '73a85b7e-2ce4-4db0-8b38-16ba08de03bf';
+    const runtimeGeneration = '9937ac60-46ce-42dd-9302-6533f1c6c38c';
+    let journal = {
+      transaction_id: transactionId,
+      phase: 'target_launch_started',
+      target_tool: 'claude-code',
+      controller_capability_digest: handoffControllerDigest,
+      target_message_digest: '7a62bca86c85e878c0682777149684546b6416d5c29cc16851401d4959cf37cf',
+      target_runtime_generation: null,
+    };
+    const { runtime, fake } = makeRuntime({
+      handoffSwitchReader: () => ({
+        kind: 'present',
+        journal: authenticatedJournal(journal, root),
+      }),
+      handoffSwitchAdvance: (input) => {
+        journal = {
+          ...journal,
+          ...input.patch,
+          phase: input.nextPhase,
+        };
+        return { ok: true, journal: authenticatedJournal(journal, root) };
+      },
+    });
+
+    const launching = runtime.handle({
+      type: 'launch_session',
+      session: {
+        id: codingSessionId,
+        tool: 'claude',
+        runtime_generation: runtimeGeneration,
+        launch_options: { handoffUserMessage: 'bounded handoff' },
+        handoff_transaction: {
+          transaction_id: transactionId,
+          controller_capability: handoffControllerCapability,
+        },
+      },
+    });
+    runtime.manager.get(
+      codingSessionId,
+    ).handoffMessageController.sendNow();
+    setImmediate(() => fake.ptys[0].emitExit({ exitCode: 1, signal: 15 }));
+    const result = await launching;
+
+    assert.equal(result.ok, false);
+    assert.equal(result.reason, 'handoff-target-artifact-unconfirmed');
+    assert.equal(journal.phase, 'target_launch_started');
+    assert.deepEqual(fake.ptys[0].kills, ['SIGTERM']);
+  });
+
+  test('handoff journal mutation requires controller authority never inherited by the provider', () => {
+    const codingSessionId = 'sess_handoff_authority';
+    const transactionId = '73a85b7e-2ce4-4db0-8b38-16ba08de03bf';
+    const root = deriveHandoffControllerRoot({
+      token: 'memoro-controller-token-canary',
+      codingSessionId,
+    });
+    const capability = deriveHandoffControllerCapability({ root, transactionId });
+    const journal = authenticatedJournal({
+      transaction_id: transactionId,
+      controller_capability_digest: handoffControllerCapabilityDigest(capability),
+    }, root);
+    let begun = 0;
+    let advanced = 0;
+    let journalVisible = false;
+    let providerInput = null;
+    const { runtime, fake } = makeRuntime({
+      controllerBindings: [{
+        session_id: codingSessionId,
+        session_controller_capability: root,
+      }],
+      handoffSwitchBegin: ({ journal: received }) => {
+        begun += 1;
+        return { ok: true, duplicate: false, journal: received };
+      },
+      handoffSwitchReader: () => journalVisible
+        ? { kind: 'present', journal }
+        : { kind: 'absent' },
+      handoffSwitchAdvance: () => {
+        advanced += 1;
+        return { ok: true, duplicate: false, journal };
+      },
+      managedProviderResolver: ({ launch, input }) => {
+        providerInput = input;
+        return {
+          ok: true,
+          launch,
+          environmentMode: 'inherit',
+          env: input.env || {},
+        };
+      },
+    });
+    const launched = runtime.handle({
+      type: 'launch_session',
+      session: {
+        id: codingSessionId,
+        tool: 'claude',
+        session_controller_capability: root,
+        sidecars: {
+          enabled: false,
+          token: 'memoro-controller-token-canary',
+        },
+      },
+    });
+    assert.equal(launched.ok, true);
+    journalVisible = true;
+    assert.equal(
+      JSON.stringify(fake.calls[0].options.env).includes('memoro-controller-token-canary'),
+      false,
+    );
+    assert.doesNotMatch(
+      JSON.stringify(providerInput),
+      /memoro-controller-token-canary/,
+    );
+    assert.equal(Object.hasOwn(providerInput, 'sidecars'), false);
+
+    const denied = runtime.handle({
+      type: 'handoff_switch_begin',
+      id: codingSessionId,
+      journal,
+      controller_capability: 'a'.repeat(64),
+    });
+    assert.deepEqual(denied, {
+      ok: false,
+      reason: 'handoff-controller-capability-invalid',
+    });
+    assert.equal(begun, 0);
+
+    const accepted = runtime.handle({
+      type: 'handoff_switch_begin',
+      id: codingSessionId,
+      journal,
+      controller_capability: capability,
+    });
+    assert.equal(accepted.ok, true);
+    assert.equal(begun, 1);
+
+    const mutationDenied = runtime.handle({
+      type: 'handoff_switch_advance',
+      id: codingSessionId,
+      transaction_id: transactionId,
+      controller_capability: 'a'.repeat(64),
+      expected_phase: 'prepared',
+      next_phase: 'source_terminal_confirmed',
+      updated_at: '2026-07-28T12:00:00.000Z',
+    });
+    assert.deepEqual(mutationDenied, {
+      ok: false,
+      reason: 'handoff-controller-capability-invalid',
+    });
+    assert.equal(advanced, 0);
+  });
+
+  test('provider-originated controller socket calls cannot read or control PTY state', () => {
+    let providerInput = null;
+    const { runtime, fake } = makeRuntime({
+      managedProviderResolver: ({ launch, input }) => {
+        providerInput = input;
+        return {
+          ok: true,
+          launch,
+          environmentMode: 'inherit',
+          env: input.env || {},
+        };
+      },
+    });
+    assert.equal(runtime.handle({
+      type: 'launch_session',
+      session: {
+        id: 'sess_controller_boundary',
+        tool: 'claude',
+      },
+    }).ok, true);
+    fake.ptys[0].emitData('private-pty-output-canary');
+    assert.doesNotMatch(
+      JSON.stringify(fake.calls[0]),
+      new RegExp(sessionControllerCapability),
+    );
+    assert.equal(
+      Object.hasOwn(providerInput, 'session_controller_capability'),
+      false,
+    );
+    assert.equal(Object.hasOwn(providerInput, 'handoff_transaction'), false);
+    assert.equal(Object.hasOwn(providerInput, 'sidecars'), false);
+
+    for (const message of [
+      {
+        type: 'fetch_session_output',
+        id: 'sess_controller_boundary',
+      },
+      {
+        type: 'handoff_switch_read',
+        id: 'sess_controller_boundary',
+      },
+      {
+        type: 'write_session',
+        id: 'sess_controller_boundary',
+        data: 'provider-input-canary',
+      },
+      {
+        type: 'dispatch_session',
+        id: 'sess_controller_boundary',
+        message: 'provider-dispatch-canary',
+      },
+      {
+        type: 'resize_session',
+        id: 'sess_controller_boundary',
+        cols: 100,
+        rows: 40,
+      },
+      {
+        type: 'stop_session',
+        id: 'sess_controller_boundary',
+      },
+      {
+        type: 'remove_session',
+        id: 'sess_controller_boundary',
+      },
+    ]) {
+      const denied = runtime.handle({
+        ...message,
+        session_controller_capability: null,
+      });
+      assert.equal(denied.ok, false);
+      assert.equal(denied.reason, 'session-controller-capability-invalid');
+      assert.doesNotMatch(JSON.stringify(denied), /private-pty-output-canary/);
+    }
+    assert.deepEqual(fake.ptys[0].writes, []);
+    assert.deepEqual(fake.ptys[0].kills, []);
+
+    const conn = makeConn();
+    runtime.attachConnection({
+      type: 'attach_session',
+      id: 'sess_controller_boundary',
+      session_controller_capability: null,
+    }, conn);
+    assert.equal(conn.ended, true);
+    assert.doesNotMatch(conn.writes.join(''), /private-pty-output-canary/);
+
+    const launchDenied = runtime.handle({
+      type: 'launch_session',
+      session: {
+        id: 'sess_provider_relaunch',
+        tool: 'codex',
+        session_controller_capability: null,
+      },
+    });
+    assert.equal(launchDenied.reason, 'session-controller-capability-invalid');
+    assert.equal(fake.calls.length, 1);
+  });
+
+  test('a fresh unbound session cannot choose its own controller root', () => {
+    const attackerChosenRoot = 'e'.repeat(64);
+    const { runtime, fake } = makeRuntime();
+
+    const denied = runtime.handle({
+      type: 'launch_session',
+      session: {
+        id: 'sess_unbound_controller',
+        tool: 'claude',
+        session_controller_capability: attackerChosenRoot,
+        sidecars: {
+          enabled: false,
+          token: 'attacker-selected-token',
+        },
+      },
+    });
+
+    assert.deepEqual(denied, {
+      ok: false,
+      reason: 'session-controller-capability-invalid',
+      error: 'broker controller authority is not bound to this session',
+    });
+    assert.equal(fake.calls.length, 0);
+  });
+
+  test('live broker fails closed if its witnessed handoff journal disappears or changes', () => {
+    const codingSessionId = 'sess_handoff_witness';
+    const root = deriveHandoffControllerRoot({
+      token: testControllerToken,
+      codingSessionId,
+    });
+    const originalJournal = authenticatedJournal({
+      transaction_id: '73a85b7e-2ce4-4db0-8b38-16ba08de03bf',
+      phase: 'complete',
+      controller_root_digest: handoffControllerCapabilityDigest(root),
+    }, root);
+    let journalResult = { kind: 'present', journal: originalJournal };
+    const { runtime, fake } = makeRuntime({
+      handoffSwitchReader: () => journalResult,
+    });
+
+    assert.equal(runtime.handle({
+      type: 'launch_session',
+      session: {
+        id: codingSessionId,
+        tool: 'claude',
+        sidecars: {
+          enabled: false,
+          token: testControllerToken,
+        },
+      },
+    }).ok, true);
+
+    journalResult = { kind: 'absent' };
+    assert.deepEqual(runtime.handle({
+      type: 'handoff_switch_read',
+      id: codingSessionId,
+    }), {
+      ok: false,
+      reason: 'handoff-switch-journal-integrity-lost',
+    });
+    assert.equal(runtime.handle({
+      type: 'write_session',
+      id: codingSessionId,
+      data: 'must-not-reach-provider',
+    }).reason, 'handoff-switch-journal-unavailable');
+    assert.deepEqual(fake.ptys[0].writes, []);
+
+    journalResult = {
+      kind: 'present',
+      journal: {
+        ...originalJournal,
+        phase: 'prepared',
+      },
+    };
+    assert.equal(runtime.handle({
+      type: 'handoff_switch_read',
+      id: codingSessionId,
+    }).reason, 'handoff-switch-journal-integrity-lost');
+    assert.equal(runtime.handle({
+      type: 'launch_session',
+      session: {
+        id: codingSessionId,
+        tool: 'claude',
+        sidecars: {
+          enabled: false,
+          token: testControllerToken,
+        },
+      },
+    }).reason, 'handoff-switch-journal-unavailable');
+    assert.equal(fake.calls.length, 1);
+  });
+
+  test('a restarted broker rejects a structurally plausible journal with a stale HMAC', () => {
+    const codingSessionId = 'sess_handoff_restart_tamper';
+    const root = deriveHandoffControllerRoot({
+      token: testControllerToken,
+      codingSessionId,
+    });
+    const authenticated = authenticatedJournal({
+      transaction_id: '73a85b7e-2ce4-4db0-8b38-16ba08de03bf',
+      phase: 'complete',
+      controller_root_digest: handoffControllerCapabilityDigest(root),
+    }, root);
+    const tampered = {
+      ...authenticated,
+      phase: 'prepared',
+    };
+    const { runtime, fake } = makeRuntime({
+      controllerBindings: [{
+        session_id: codingSessionId,
+        session_controller_capability: root,
+      }],
+      handoffSwitchReader: () => ({
+        kind: 'present',
+        journal: tampered,
+      }),
+    });
+
+    assert.deepEqual(runtime.handle({
+      type: 'handoff_switch_read',
+      id: codingSessionId,
+      session_controller_capability: root,
+    }), {
+      ok: false,
+      reason: 'handoff-switch-journal-integrity-lost',
+    });
+    assert.equal(runtime.handle({
+      type: 'launch_session',
+      session: {
+        id: codingSessionId,
+        tool: 'claude',
+        session_controller_capability: root,
+      },
+    }).reason, 'handoff-switch-journal-unavailable');
+    assert.equal(fake.calls.length, 0);
+  });
+
   test('managed launch replaces broker env and closes its credential domain on exit', async () => {
     const closed = [];
     const descriptor = {
       schema: 'mc-local-codex-credential-domain/v1',
+      session_id: 'sess_managed',
       domain_path: '/credential/domain',
     };
     const { runtime, fake } = makeRuntime({
@@ -302,10 +912,12 @@ describe('BrokerRuntime', () => {
   test('managed reopen waits for prior credential custody to close before replacing the dead runtime', async () => {
     const firstDescriptor = {
       schema: 'mc-local-codex-credential-domain/v1',
+      session_id: 'sess_managed_reopen',
       domain_path: '/credential/first',
     };
     const nextDescriptor = {
       schema: 'mc-local-codex-credential-domain/v1',
+      session_id: 'sess_managed_reopen',
       domain_path: '/credential/next',
     };
     const closeCalls = [];
@@ -358,8 +970,16 @@ describe('BrokerRuntime', () => {
   });
 
   test('a duplicate old managed exit never closes the replacement credential domain', async () => {
-    const firstDescriptor = { schema: 'mc-local-codex-credential-domain/v1', domain_path: '/credential/first' };
-    const nextDescriptor = { schema: 'mc-local-codex-credential-domain/v1', domain_path: '/credential/next' };
+    const firstDescriptor = {
+      schema: 'mc-local-codex-credential-domain/v1',
+      session_id: 'sess_managed_generation_owner',
+      domain_path: '/credential/first',
+    };
+    const nextDescriptor = {
+      schema: 'mc-local-codex-credential-domain/v1',
+      session_id: 'sess_managed_generation_owner',
+      domain_path: '/credential/next',
+    };
     const closeCalls = [];
     const { runtime, fake } = makeRuntime({
       managedProviderResolver: ({ launch, input }) => ({
@@ -430,6 +1050,7 @@ describe('BrokerRuntime', () => {
   test('managed removal waits for provider exit and confirmed credential cleanup', async () => {
     const descriptor = {
       schema: 'mc-local-codex-credential-domain/v1',
+      session_id: 'sess_managed_remove',
       domain_path: '/credential/domain',
     };
     const closeCalls = [];
@@ -1014,7 +1635,30 @@ describe('BrokerRuntime', () => {
       reason: 'session-not-found',
       error: 'unknown broker session: missing',
     });
-    assert.match(runtime.handle({ type: 'write_session', id: 'missing', data: 'x' }).error, /unknown broker session/);
-    assert.match(runtime.handle({ type: 'resize_session', id: 'missing', cols: 0, rows: 24 }).error, /cols/);
+    assert.match(
+      runtime.handle({ type: 'write_session', id: 'missing', data: 'x' }).error,
+      /controller capability/,
+    );
+    assert.equal(runtime.handle({
+      type: 'launch_session',
+      session: { id: 'sess_validation' },
+    }).ok, true);
+    assert.match(runtime.handle({
+      type: 'resize_session',
+      id: 'sess_validation',
+      cols: 0,
+      rows: 24,
+    }).error, /cols/);
+    assert.equal(runtime.handle({
+      type: 'launch_session',
+      session: {
+        id: 'sess_unpaired_handoff',
+        cwd: '/repo/unpaired-handoff',
+        runtime_generation: '9937ac60-46ce-42dd-9302-6533f1c6c38c',
+        handoff_transaction: {
+          transaction_id: '73a85b7e-2ce4-4db0-8b38-16ba08de03bf',
+        },
+      },
+    }).reason, 'handoff-launch-pair-invalid');
   });
 });

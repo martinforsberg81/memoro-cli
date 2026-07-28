@@ -5,9 +5,16 @@ import {
   listLocalBrokerAndHostSessions,
   requestForSession,
 } from './session-hosts.js';
+import {
+  resolveSessionControllerCapability,
+} from '../session-controller-capability.js';
 
 export async function removeBrokerSessionForEntry(entry, {
   requestBroker = defaultRequestBroker,
+  controllerCapability = null,
+  apiArgv = [],
+  env = process.env,
+  deps = {},
 } = {}) {
   if (!entry) return { ok: false, skipped: true, reason: 'entry-required' };
   const inventory = await listLocalBrokerAndHostSessions({ request: requestBroker })
@@ -28,7 +35,28 @@ export async function removeBrokerSessionForEntry(entry, {
   const session = inventory.sessions.find((item) => brokerSessionMatchesEntry(item, entry));
   const id = brokerSessionId(session);
   if (!id) return { ok: false, skipped: true, reason: 'not-found' };
-  const request = requestForSession(session, { request: requestBroker });
+  const authority = controllerCapability
+    ? { ok: true, capability: controllerCapability }
+    : await (deps.resolveSessionControllerCapability
+      || resolveSessionControllerCapability)({
+      codingSessionId: id,
+      apiArgv,
+      env,
+      deps,
+    });
+  if (!authority?.ok) {
+    return {
+      ok: false,
+      id,
+      skipped: false,
+      reason: authority?.reason || 'session-controller-capability-unavailable',
+      error: 'session controller authority is unavailable',
+    };
+  }
+  const request = requestForSession(session, {
+    request: requestBroker,
+    controllerCapability: authority.capability,
+  });
 
   const removed = await request({ type: 'remove_session', id }).catch((err) => ({
     ok: false,

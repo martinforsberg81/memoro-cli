@@ -168,10 +168,33 @@ terminal transaction; it is not emulated by broadening the workload token.
 **Scope:**
 
 - broker-owned switch journal and single-writer lease;
+- controller-only session and transaction capabilities: session attach/read/
+  write/resize/stop/remove/relaunch and every transaction mutation fail closed
+  without Memoro-derived controller authority; only one-way digests may be
+  journaled, while reusable capabilities remain in trusted mc/broker memory and
+  IPC and are never inherited by a provider;
+- bind a new per-session host to its controller root through a strict
+  anonymous-pipe bootstrap, never through launch input, argv, environment,
+  files, logs, or provider-adapter input;
+- authenticate the complete durable switch journal with that controller root,
+  preserve an in-memory witness while the broker is live, and cross-check a
+  missing post-restart journal against both provider cursors and server
+  continuity before allowing work to proceed; only a zero-history session may
+  create its first journal from an absent state;
 - finalize source identity and handoff before target launch;
 - fresh target launch on first use and native resume on later use;
-- deliver only unconsumed handoffs as a user-level startup turn;
-- crash recovery for every journal phase;
+- deliver only unconsumed handoffs as one handoff-only user turn, bound byte for
+  byte to the journal and never combined with raw continuity grounding;
+- withhold delivery acknowledgement until the exact target generation has
+  captured its provider-native artifact;
+- disable transcript fetch/upload authority on the target sidecar while the
+  registry still names the source provider;
+- crash recovery for every unambiguous journal phase, including session-host
+  restart from the trusted local journal; an interrupted PTY write remains
+  explicitly fail-closed rather than replayed;
+- bounded, sanitized diagnostic events in the private transaction journal,
+  without raw exception text, transcript data, credentials, environment, or
+  launch arguments;
 - Claude A → Codex B → Claude A → Codex B regression coverage.
 
 **Gate:** the exact native IDs A and B are reused, one coding-session ID and
@@ -241,3 +264,8 @@ production-image gate.
 - Using a server-side LLM to compact raw transcripts for handoff.
 - Enabling managed Claude before the hostile boundary harness passes.
 - Claiming cloud Claude support from a local macOS result.
+- Treating an unsandboxed native provider running as the same OS user as a
+  hostile filesystem/process boundary. H3 prevents accidental or unprivileged
+  protocol mutation; resistance to a same-UID provider that kills or
+  impersonates mc itself requires the managed executor isolation gated by C1
+  and C2.

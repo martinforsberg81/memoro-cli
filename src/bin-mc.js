@@ -81,6 +81,9 @@ import {
   listLocalBrokerAndHostSessions,
   requestForSession,
 } from './mc/broker/session-hosts.js';
+import {
+  resolveSessionControllerCapability,
+} from './mc/session-controller-capability.js';
 import { normalizeInteractivePtyEnv } from './mc/interactive-env.js';
 import { scrubRuntimeSecretsFromEnv } from './mc/runtime-secrets.js';
 import { renderIntro as renderSessionIntro } from './mc/session-intro.js';
@@ -939,7 +942,12 @@ async function runSessionsSend(argv) {
   return 1;
 }
 
-export async function dispatchLocalBrokerSession(identifier, message, { request = requestBroker, wait = sleep } = {}) {
+export async function dispatchLocalBrokerSession(identifier, message, {
+  request = requestBroker,
+  wait = sleep,
+  controllerCapability = null,
+  resolveControllerCapability = resolveSessionControllerCapability,
+} = {}) {
   if (!identifier || !message) return { ok: false, skipped: true, error: 'identifier and message are required' };
 
   const inventory = await listLocalBrokerAndHostSessions({ request })
@@ -955,7 +963,21 @@ export async function dispatchLocalBrokerSession(identifier, message, { request 
     sid = session.id || session.coding_session_id || identifier;
     matched = true;
   }
-  const sessionRequest = requestForSession(session, { request });
+  const authority = controllerCapability
+    ? { ok: true, capability: controllerCapability }
+    : await resolveControllerCapability({ codingSessionId: sid });
+  if (!authority?.ok) {
+    return {
+      ok: false,
+      skipped: true,
+      id: sid,
+      error: 'session controller authority is unavailable',
+    };
+  }
+  const sessionRequest = requestForSession(session, {
+    request,
+    controllerCapability: authority.capability,
+  });
 
   const raw = await writeLocalDispatchedInput({
     request: sessionRequest,
@@ -1135,6 +1157,8 @@ export async function controlLocalBrokerSession(identifier, {
   action,
   signal = 'SIGTERM',
   request = requestBroker,
+  controllerCapability = null,
+  resolveControllerCapability = resolveSessionControllerCapability,
 } = {}) {
   if (!identifier || !action) return { ok: false, skipped: true, error: 'identifier and action are required' };
   const inventory = await listLocalBrokerAndHostSessions({ request })
@@ -1146,7 +1170,20 @@ export async function controlLocalBrokerSession(identifier, {
   const session = inventory.sessions.find((item) => localSessionMatches(item, identifier));
   if (!session) return { ok: false, skipped: true, error: 'local session not found' };
   const sid = session.id || session.coding_session_id || identifier;
-  const sessionRequest = requestForSession(session, { request });
+  const authority = controllerCapability
+    ? { ok: true, capability: controllerCapability }
+    : await resolveControllerCapability({ codingSessionId: sid });
+  if (!authority?.ok) {
+    return {
+      ok: false,
+      id: sid,
+      error: 'session controller authority is unavailable',
+    };
+  }
+  const sessionRequest = requestForSession(session, {
+    request,
+    controllerCapability: authority.capability,
+  });
 
   if (action === 'stop') {
     const stopped = await sessionRequest({ type: 'stop_session', id: sid, signal }).catch((err) => ({
