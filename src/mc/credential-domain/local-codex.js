@@ -62,19 +62,20 @@ const BOUNDARY_CHILD_SOURCE = join(
   'security',
   'credential-boundary-child.c',
 );
-const BOUNDARY_CHILD_SOURCE_SHA256 = 'e0e3f521b38e32d6242e7111d584f9778738f5f27513c24199de1e8d0ac05f03';
+const BOUNDARY_CHILD_SOURCE_SHA256 =
+  'ecef0cd17044be75c78944a3e6f7e138ac57dbf4676aa389c8b71a039facc6ec';
 const BOUNDARY_REPORT_KEYS = Object.freeze([
   'schema',
   'file_readable',
   'canary_in_environment',
   'canary_in_argv',
   'parent_process_exposes_canary',
+  'detached_boundary_reachable',
   'credential_socket_reachable',
   'external_network_reachable',
   'workspace_write_blocked',
   'vault_admin_via_bin_callable',
   'vault_admin_via_node_callable',
-  'memoro_keychain_secret_readable',
 ]);
 
 /**
@@ -763,6 +764,7 @@ export async function verifyManagedCodexBoundary({
     const negativeReport = parseBoundaryReport(negative);
     if (!negativeReport?.file_readable
       || !negativeReport.canary_in_environment
+      || !negativeReport.detached_boundary_reachable
       || !negativeReport.vault_admin_via_bin_callable
       || !negativeReport.vault_admin_via_node_callable
       || negative.output.includes(canary)) {

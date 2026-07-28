@@ -3,15 +3,19 @@ import { existsSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { dirname, join } from 'node:path';
 
-import { BrokerRuntime } from './runtime.js';
+import {
+  BrokerRuntime,
+  claudeC1StatusResponse,
+  isExactClaudeC1Request,
+} from './runtime.js';
 import { brokerPidPath, brokerSocketPath } from './paths.js';
+import { runClaudeC1BrokerOperation } from './c1-runner.js';
 import { getPackageVersion } from '../../lib/version.js';
 
-// v8 additionally capability-binds every controller-only PTY operation.
-// Provider children can reach only the reduced provider-artifact socket and
-// cannot attach, read, write, resize, stop, remove, or relaunch a session by
-// guessing the controller socket path.
-export const BROKER_PROTOCOL_VERSION = 'mc-broker-pty-v8';
+// v9 adds the controller-authenticated fixed Claude C1 operation. Provider
+// children still reach only the reduced provider-artifact socket and cannot
+// invoke C1 or attach, read, write, resize, stop, remove, or relaunch a session.
+export const BROKER_PROTOCOL_VERSION = 'mc-broker-pty-v9';
 const MAX_PROVIDER_ARTIFACT_FRAME_BYTES = 20 * 1024;
 
 export async function startBrokerServer({
@@ -308,7 +312,11 @@ export function brokerFilesExist({ socketPath = brokerSocketPath(), pidPath = br
 export async function createDefaultRuntime({ controllerBindings = [] } = {}) {
   const ptyModule = await import('node-pty');
   const ptyFactory = ptyModule.default || ptyModule;
-  return new BrokerRuntime({ ptyFactory, controllerBindings });
+  return new BrokerRuntime({
+    ptyFactory,
+    controllerBindings,
+    c1Runner: runClaudeC1BrokerOperation,
+  });
 }
 
 export function handleBrokerMessage(raw, { status, stop, runtime } = {}) {
@@ -344,6 +352,20 @@ export function handleBrokerMessage(raw, { status, stop, runtime } = {}) {
       attach: (conn, initialInput) => runtime.attachConnection(message, conn, initialInput),
     };
   }
+  if (type === 'run_claude_c1') {
+    if (!isExactClaudeC1Request(message)) {
+      return { response: claudeC1StatusResponse('failed'), stop: false };
+    }
+    try {
+      const response = runtime?.handle ? runtime.handle(message) : null;
+      return {
+        response: normalizeClaudeC1Response(response),
+        stop: false,
+      };
+    } catch {
+      return { response: claudeC1StatusResponse('failed'), stop: false };
+    }
+  }
   let runtimeResponse = null;
   try {
     runtimeResponse = runtime?.handle ? runtime.handle(message) : null;
@@ -374,6 +396,11 @@ export function handleProviderArtifactMessage(raw, { runtime } = {}) {
   } catch {
     return { response: { ok: false, error: 'invalid JSON' } };
   }
+  // Provider children inherit this socket. C1 is a controller-host operation,
+  // never a provider capability, even when a provider guesses the command.
+  if (message?.type === 'run_claude_c1') {
+    return { response: claudeC1StatusResponse('failed') };
+  }
   if (message?.type !== 'capture_provider_artifact') {
     return { response: { ok: false, error: 'provider artifact command required' } };
   }
@@ -385,4 +412,13 @@ export function handleProviderArtifactMessage(raw, { runtime } = {}) {
   } catch {
     return { response: { ok: false, error: 'provider artifact capture failed' } };
   }
+}
+
+function normalizeClaudeC1Response(response) {
+  if (response && typeof response.then === 'function') {
+    return Promise.resolve(response)
+      .then((value) => claudeC1StatusResponse(value?.status))
+      .catch(() => claudeC1StatusResponse('failed'));
+  }
+  return claudeC1StatusResponse(response?.status);
 }

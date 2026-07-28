@@ -135,6 +135,8 @@ FLEET / ADVANCED
   mc cloud-runtime run            Internal cloud sandbox runtime supervisor
   mc adapter sync                 Refresh tool instruction wrappers
   mc adapter materialise          Copy mc's coordinator canon into this repo
+  mc security claude-c1 <label|id> [--json]
+                                  Run the external Claude C1 boundary check after the LLM exits
   mc wrap <label> [args...]       Start an in-place labelled wrapper session
 
 COMMAND SURFACES

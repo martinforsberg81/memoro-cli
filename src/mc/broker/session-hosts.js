@@ -24,6 +24,7 @@ const CONTROLLER_REQUEST_TYPES = new Set([
   'stop_session',
   'remove_session',
   'handoff_switch_read',
+  'run_claude_c1',
 ]);
 
 export async function ensureSessionHostRunning({

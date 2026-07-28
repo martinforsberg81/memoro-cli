@@ -153,6 +153,7 @@ const LIFECYCLE = {
   supervisor:    () => import('./mc/commands/supervisor.js'),
   fanout:        () => import('./mc/commands/fanout.js'),
   gather:        () => import('./mc/commands/gather.js'),
+  security:      () => import('./mc/commands/security.js'),
 };
 
 export async function main() {

@@ -138,6 +138,23 @@ static bool workspace_write_blocked(void) {
   return blocked;
 }
 
+static bool detached_boundary_reachable(
+  const char *canary_path,
+  const char *socket_path
+) {
+  pid_t pid = fork();
+  if (pid < 0) return false;
+  if (pid == 0) {
+    if (setsid() < 0) _exit(1);
+    bool reached = access(canary_path, R_OK) == 0
+      || getenv("MC_BOUNDARY_CANARY") != NULL
+      || can_connect_unix(socket_path)
+      || can_connect_external();
+    _exit(reached ? 0 : 1);
+  }
+  return wait_for_child(pid);
+}
+
 static const char *json_bool(bool value) {
   return value ? "true" : "false";
 }
@@ -163,37 +180,28 @@ int main(int argc, char **argv) {
   char *const vault_node_argv[] = {
     (char *)host_node_bin, (char *)host_mc_entry, "vault", "--help", NULL
   };
-  char *const keychain_argv[] = {
-    "/usr/bin/security",
-    "find-generic-password",
-    "-a", "memoro-api-token",
-    "-s", "memoro-cli",
-    "-w",
-    NULL
-  };
-
   printf(
     "{\"schema\":1,"
     "\"file_readable\":%s,"
     "\"canary_in_environment\":%s,"
     "\"canary_in_argv\":%s,"
     "\"parent_process_exposes_canary\":%s,"
+    "\"detached_boundary_reachable\":%s,"
     "\"credential_socket_reachable\":%s,"
     "\"external_network_reachable\":%s,"
     "\"workspace_write_blocked\":%s,"
     "\"vault_admin_via_bin_callable\":%s,"
-    "\"vault_admin_via_node_callable\":%s,"
-    "\"memoro_keychain_secret_readable\":%s}\n",
+    "\"vault_admin_via_node_callable\":%s}\n",
     json_bool(file_readable),
     json_bool(canary_in_environment),
     json_bool(canary_in_argv),
     json_bool(parent_exposes_canary()),
+    json_bool(detached_boundary_reachable(canary_path, socket_path)),
     json_bool(can_connect_unix(socket_path)),
     json_bool(can_connect_external()),
     json_bool(workspace_write_blocked()),
     json_bool(run_quiet(host_mc_bin, vault_bin_argv)),
-    json_bool(run_quiet(host_node_bin, vault_node_argv)),
-    json_bool(run_quiet("/usr/bin/security", keychain_argv))
+    json_bool(run_quiet(host_node_bin, vault_node_argv))
   );
   return 0;
 }

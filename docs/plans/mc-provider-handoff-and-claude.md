@@ -221,22 +221,132 @@ installed CLI completes the round-trip without silent degradation.
 **Purpose:** determine whether a pinned Claude release can provide a real
 credential-blind executor boundary.
 
-Anthropic's current documented candidate controls are native OS sandboxing,
-`sandbox.failIfUnavailable`, `allowUnsandboxedCommands: false`, managed-only
-permission rules, managed read-path control, managed-domain-only network
-policy, and managed hook/plugin restrictions. Documentation is not evidence
-that the complete boundary holds.
+The sole real Claude credential source is the exact
+`tool-auth:claude-code`/`tool-auth` record in `mc vault`. Claude's Keychain and
+credential file are never runtime credential sources. A disposable synthetic
+Keychain exists only as a hostile read canary: the unmanaged negative control
+must read it and the managed candidate must not.
 
-The non-shipping spike must use a disposable home and Keychain plus a synthetic
-credential canary. It must exercise Bash, Read/Edit, hooks, MCP, plugins,
-subagents, nested Claude, Keychain lookup, environment/argv/process inspection,
-Unix and loopback sockets, provider and arbitrary egress, transcripts, debug
-output, and two replacement generations.
+The controller-authenticated broker operation accepts only the session ID and
+its Memoro-derived controller capability. The broker derives the terminal
+runtime generation internally and refuses to open custody until the ordinary
+provider process has exited and terminal cleanup is confirmed. The operation
+does not accept a tool, path, command, environment, secret ID, callback, or
+artifact location, and the provider-artifact socket cannot invoke it.
+Once C1 starts, the broker reserves the dead session. A machine-local,
+cross-broker interlock also makes every provider publish private active
+evidence before spawn, while C1 creates an exclusive lock before scanning that
+evidence. Parallel C1 leases, session removal, and every local provider
+relaunch therefore remain blocked until custody and every trusted,
+credential-bearing C1 process are terminally confirmed. Stale evidence is
+never reaped from a PID guess; a broker crash fails closed. An ordinary native
+or otherwise unmanaged provider can leave model-directed descendants outside
+the PTY lifecycle, so its provider marker is never treated as terminal evidence
+and remains a durable C1 barrier. Every package installation atomically mints a
+new private, value-free generation receipt. A separate install epoch records
+that generation combined with the exact containment-release digest and requires
+one later OS boot after every identity transition, including same-version
+reinstall, upgrade, and rollback. A detached provider from older code therefore
+cannot be mistaken for a clean machine. Ordinary provider use remains available
+during that epoch. Only the exact managed Codex descriptor that already passed
+its hostile boundary can become C1-eligible; that boundary includes a real
+fork-plus-`setsid` attack, and its in-memory evidence remains bound to the exact
+session, credential-domain generation, launch nonce, native release hash,
+policy hash, and manifest hash. After PTY exit, confirmed credential-domain
+cleanup removes provider auth while any model-directed descendant remains
+inside the credential-blind OS sandbox inherited by the executor tree. This is
+a credential-safety receipt, not a claim that every OS descendant has exited.
+The public command also refuses while any other local mc provider is live and
+uses a bounded C1-specific wait rather than the broker client's ordinary short
+request timeout.
 
-**Gate:** a negative control demonstrably leaks, while the managed candidate
-allows provider operation and workspace work without any canary byte or
-reusable authority appearing through any model-directed or observable channel.
-Missing or indeterminate coverage fails.
+Before custody opens, the broker verifies the one fixed private artifact root
+for Claude 2.1.220 on Darwin arm64 and Sandbox Runtime 0.0.67. Verification
+binds the signed release manifest and signer fingerprint, binary hash, size,
+version, identifier and team, the known strict-codesign outcome, npm lock
+integrity, exact SRT install-tree hash, ownership, modes, and real paths. The
+fixed child verifies the installation again before reading credential FD 3,
+and the harness re-resolves the same installation before execution. The final
+private Claude copy is hash- and size-checked, and the SRT module is hash-
+checked immediately before its dynamic import and before runtime credential
+FD 3 is read. The broker also pins the source-closure verifier and lease host,
+then hashes the complete generated local ESM closure plus package and native
+probe build inputs. The lease host repeats that closure check before importing
+vault code; the fixed child repeats it before reading credential FD 3. The
+release check rejects a missing edge, digest drift, symlink, ownership drift,
+or group/other-writable source before custody begins.
+
+The vault lease is a fixed no-argument custody operation. It decrypts only
+labels while selecting one unambiguous Claude tool-auth envelope, decrypts the
+payload for that record alone in trusted mc code, and passes only the
+access-token bytes through an anonymous FD 3 to a short-lived fixed child. The
+long-lived broker never imports or executes vault decryption. A short-lived,
+source-pinned lease host owns one process group inherited by every
+credential-bearing descendant; the broker kills and confirms that whole group
+gone before it releases the session reservation. A broker-held empty liveness
+pipe makes broker crash or SIGKILL produce EOF in the lease host, which then
+kills the trusted group. Model-directed descendants receive neither the real
+credential nor the broker's process-group authority. They inherit SRT's
+process-tree restrictions, receive only the revocable provider sentinel in the
+Claude main process, and lose its proxy substitution on SRT reset; both main
+and subagent subprocess probes must prove that even the sentinel was scrubbed.
+Each probe also performs a real fork-plus-`setsid` escape and repeats the
+private-file, credential-socket, loopback, provider-capability, and arbitrary-
+egress checks outside the inherited process group.
+Successful teardown additionally requires the pinned SRT manager to clear its
+sentinel registry and proxy authenticator and for the former loopback proxy port
+to reject a new connection. On the pinned Darwin runtime those proxy servers
+live in the trusted C1 runtime process, and `reset()` awaits their close before
+clearing its references. Even on a failed reset, the trusted runtime and real
+credential remain in the C1 process group, whose terminal proof is required
+before the broker releases the global lock.
+Bounded stdout/stderr is scanned for raw, base64, hex, URI-encoded, and
+JSON-escaped credential forms, mutable buffers are zeroed, and only `passed`,
+`failed`, or `indeterminate` returns.
+
+The token-free activation control must first prove that the exact SessionStart
+hook, MCP server, and plugin are live before candidate blocking can count. The
+real executor then runs with subprocess credential scrubbing and SRT sentinel
+substitution: request policy sees only the fresh generation-scoped sentinel,
+and the real token is substituted only after an allowed decision on verified
+provider TLS egress. The proxy uses a strict allowlist and permits only HTTPS
+to the exact Anthropic host, the two fixed messages routes without query
+parameters, the exact bearer sentinel, an `application/json` content type, and
+a size-bounded messages payload. The real credential, proxy capability, and
+sentinel are all forbidden in model-visible output.
+
+SRT necessarily gives the sandboxed executor an ephemeral local proxy transport
+handle. It is not a Claude or Memoro login and is not accepted by either
+provider; it can only reach the already-authorized typed operation while the
+trusted proxy and current sentinel registry are live. Security therefore does
+not depend on hiding that transport handle from the sandbox. It may never be
+returned in model output, handoff, logs, or broker status, and subprocess probes
+must still prove that the provider sentinel itself is absent.
+
+The two-generation hostile fixture exercises Bash, Read/Edit, hooks, MCP,
+plugins, subagents, nested Claude, mc/vault invocation, synthetic Keychain
+lookup, environment and argv inspection, cross-sandbox process info, signal
+and Mach task-port access, Unix and loopback sockets, provider-path and
+provider-oracle attacks, arbitrary egress, transcripts, debug output,
+replacement, and teardown. It never asks a process in the LLM domain to read a
+real Memoro or Claude Keychain value, even if that output would be discarded.
+The corresponding local Codex boundary probe follows the same rule and no
+longer attempts a real Memoro Keychain read.
+
+**Gate:** the unmanaged negative control demonstrably leaks its synthetic
+canaries, while both managed generations complete a real provider operation and
+public workspace operation without any real credential, sentinel, canary byte,
+private path, or reusable provider authority appearing through a
+model-directed or observable channel. The ephemeral local proxy handle must
+remain confined to the sandbox transport and absent from every observable
+output. The live run is initiated by the user from outside every active LLM
+process and only after the exact installed containment release has observed its
+own required clean boot. The epoch is keyed by the fresh installation generation
+and a digest of the provider-marker, managed-Codex-boundary, and C1 interlock
+implementation, and is atomically replaced whenever either changes. An upgrade,
+downgrade, same-version reinstall, or A→B→A rollback in the same boot therefore
+cannot inherit an older installation's clean-machine proof. Missing, stale,
+malformed, or indeterminate evidence fails closed.
 
 ### C2 — Managed Claude adapter
 
@@ -244,7 +354,7 @@ Missing or indeterminate coverage fails.
 
 **Scope:**
 
-- pin and verify the Claude artifact, signature, architecture, and behavior;
+- acquire and install the C1-pinned artifacts into the fixed private root;
 - add the credential-domain/provider-adapter lifecycle;
 - install an immutable managed policy outside model-writable paths;
 - adopt, launch, refresh, resume, replace, and clean up without exposing the
@@ -263,9 +373,15 @@ production-image gate.
 - Synchronizing native provider IDs or absolute paths between hosts.
 - Using a server-side LLM to compact raw transcripts for handoff.
 - Enabling managed Claude before the hostile boundary harness passes.
+- Treating Claude Keychain or a hydrated Claude credential file as the managed
+  runtime's credential source.
 - Claiming cloud Claude support from a local macOS result.
 - Treating an unsandboxed native provider running as the same OS user as a
   hostile filesystem/process boundary. H3 prevents accidental or unprivileged
   protocol mutation; resistance to a same-UID provider that kills or
   impersonates mc itself requires the managed executor isolation gated by C1
   and C2.
+- Defending against an independently compromised same-UID process that can
+  concurrently rewrite the globally installed, trusted mc package itself.
+  C1 closes model-directed and incomplete-source-chain drift before custody;
+  signed and privileged package installation is a separate host trust concern.

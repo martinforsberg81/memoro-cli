@@ -28,11 +28,12 @@ function authenticatedJournal(journal, controllerRoot) {
   };
 }
 
-function makeFakePtyFactory({ exitOnExitSubscription = null } = {}) {
+function makeFakePtyFactory({ exitOnExitSubscription = null, throwOnSpawn = false } = {}) {
   const ptys = [];
   const calls = [];
   const factory = {
     spawn(bin, args, options) {
+      if (throwOnSpawn) throw new Error('fixture-spawn-failed');
       let dataHandler = null;
       let exitHandler = null;
       const pty = {
@@ -86,6 +87,7 @@ function makeRuntime(opts = {}) {
   const resolver = makeLaunchResolver(opts.launch || {});
   const sidecars = [];
   const lifecycleWrites = [];
+  const interlock = opts.c1Interlock || makeInterlockFixture();
   let now = 1_000;
   const runtime = new BrokerRuntime({
     ptyFactory: fake.factory,
@@ -103,6 +105,8 @@ function makeRuntime(opts = {}) {
     handoffSwitchBegin: opts.handoffSwitchBegin,
     handoffSwitchAdvance: opts.handoffSwitchAdvance,
     controllerBindings: opts.controllerBindings,
+    c1Runner: opts.c1Runner,
+    c1Interlock: interlock,
     sidecarFactory: opts.sidecarFactory || ((spec) => {
       const sidecar = {
         spec,
@@ -134,6 +138,7 @@ function makeRuntime(opts = {}) {
   const controllerCapabilities = new Map();
   const rawHandle = runtime.handle.bind(runtime);
   runtime.handle = (message) => {
+    if (message?.type === 'run_claude_c1') return rawHandle(message);
     if (message?.type === 'launch_session' && message.session) {
       const id = message.session.id;
       const supplied = message.session.session_controller_capability;
@@ -196,6 +201,40 @@ function makeRuntime(opts = {}) {
   };
 }
 
+function makeInterlockFixture() {
+  const providers = new Set();
+  let c1 = false;
+  return {
+    acquireProvider() {
+      if (c1) return { ok: false, reason: 'c1-global-lock-active' };
+      const marker = Symbol('provider');
+      providers.add(marker);
+      return {
+        ok: true,
+        lease: {
+          release() {
+            providers.delete(marker);
+            return { ok: true };
+          },
+        },
+      };
+    },
+    acquireC1() {
+      if (c1 || providers.size) return { ok: false, reason: 'provider-marker-active' };
+      c1 = true;
+      return {
+        ok: true,
+        lease: {
+          release() {
+            c1 = false;
+            return { ok: true };
+          },
+        },
+      };
+    },
+  };
+}
+
 function makeConn() {
   const writes = [];
   return {
@@ -214,7 +253,315 @@ function makeConn() {
   };
 }
 
+function markSessionC1Eligible(runtime, sessionId) {
+  const session = runtime.manager.get(sessionId);
+  assert.ok(session, `missing C1 fixture session ${sessionId}`);
+  runtime.c1ProviderBoundariesBySession.set(session, Object.freeze({
+    schema: 'mc-c1-provider-boundary-evidence-v1',
+    provider_adapter: 'codex-managed-local-v1',
+    profile: 'mc-managed-portable',
+    session_id: sessionId,
+    generation: '11111111-1111-4111-8111-111111111111',
+    launch_nonce: 'n'.repeat(43),
+    native_binary_sha256: 'a'.repeat(64),
+    provider_config_sha256: 'b'.repeat(64),
+    manifest_sha256: 'c'.repeat(64),
+    c1_eligible: true,
+  }));
+}
+
+function managedC1Descriptor(sessionId) {
+  return {
+    schema: 'mc-local-codex-credential-domain/v1',
+    provider_adapter: 'codex-managed-local-v1',
+    profile: 'mc-managed-portable',
+    session_id: sessionId,
+    generation: '22222222-2222-4222-8222-222222222222',
+    launch_nonce: 'm'.repeat(43),
+    native_binary_sha256: 'd'.repeat(64),
+    provider_config_sha256: 'e'.repeat(64),
+    manifest_sha256: 'f'.repeat(64),
+  };
+}
+
 describe('BrokerRuntime', () => {
+  test('run_claude_c1 is exact, host-bound, generation-bound, and status-only', async () => {
+    const sessionId = 'sess_c1bound';
+    const runtimeGeneration = '6b7e85d9-b14a-4c17-baf9-7181bb2becae';
+    const controllerRoot = 'a'.repeat(64);
+    const seen = [];
+    const { runtime, fake } = makeRuntime({
+      controllerBindings: [{
+        schema: 'mc-broker-controller-bootstrap-v1',
+        session_id: sessionId,
+        session_controller_capability: controllerRoot,
+      }],
+      c1Runner(context) {
+        seen.push(context);
+        return { status: 'passed', diagnostic: 'must-not-escape' };
+      },
+    });
+
+    assert.equal(runtime.handle({
+      type: 'launch_session',
+      session: {
+        id: sessionId,
+        runtime_generation: runtimeGeneration,
+        session_controller_capability: controllerRoot,
+      },
+    }).ok, true);
+    markSessionC1Eligible(runtime, sessionId);
+
+    assert.deepEqual(await runtime.handle({
+      type: 'run_claude_c1',
+      id: sessionId,
+      session_controller_capability: controllerRoot,
+    }), {
+      ok: false,
+      status: 'failed',
+    }, 'a live ordinary provider must exit before custody can open');
+    assert.equal(seen.length, 0);
+    fake.ptys[0].emitExit({ exitCode: 0, signal: null });
+
+    assert.deepEqual(await runtime.handle({
+      type: 'run_claude_c1',
+      id: sessionId,
+      session_controller_capability: controllerRoot,
+    }), {
+      ok: true,
+      status: 'passed',
+    });
+    assert.deepEqual(seen, [{
+      session_id: sessionId,
+      runtime_generation: runtimeGeneration,
+    }]);
+    assert.equal(Object.isFrozen(seen[0]), true);
+
+    for (const key of [
+      'argv', 'env', 'path', 'secret_id', 'callback', 'tool', 'generation', 'unknown',
+    ]) {
+      assert.deepEqual(await runtime.handle({
+        type: 'run_claude_c1',
+        id: sessionId,
+        session_controller_capability: controllerRoot,
+        [key]: 'attacker-choice',
+      }), {
+        ok: false,
+        status: 'failed',
+      }, key);
+    }
+    assert.equal(seen.length, 1);
+  });
+
+  test('run_claude_c1 fails closed for missing, wrong, or incomplete host authority', async () => {
+    const sessionId = 'sess_c1closed';
+    const runtimeGeneration = 'b00ec72e-f8e5-4608-b4c0-ddd2a27ff0f4';
+    const controllerRoot = 'd'.repeat(64);
+    let calls = 0;
+    const { runtime, fake } = makeRuntime({
+      controllerBindings: [{
+        schema: 'mc-broker-controller-bootstrap-v1',
+        session_id: sessionId,
+        session_controller_capability: controllerRoot,
+      }],
+      c1Runner() { calls += 1; return { status: 'passed' }; },
+    });
+
+    assert.deepEqual(runtime.handle({
+      type: 'run_claude_c1',
+      id: sessionId,
+      session_controller_capability: controllerRoot,
+    }), { ok: false, status: 'failed' });
+    assert.equal(runtime.handle({
+      type: 'launch_session',
+      session: {
+        id: sessionId,
+        runtime_generation: runtimeGeneration,
+        session_controller_capability: controllerRoot,
+      },
+    }).ok, true);
+    markSessionC1Eligible(runtime, sessionId);
+    assert.deepEqual(await runtime.handle({
+      type: 'run_claude_c1',
+      id: sessionId,
+      session_controller_capability: controllerRoot,
+    }), { ok: false, status: 'failed' });
+    fake.ptys[0].emitExit({ exitCode: 0, signal: null });
+    assert.deepEqual(runtime.handle({
+      type: 'run_claude_c1',
+      id: sessionId,
+      session_controller_capability: 'e'.repeat(64),
+    }), { ok: false, status: 'failed' });
+    assert.deepEqual(runtime.handle({
+      type: 'run_claude_c1',
+      id: 'sess_c1wrong',
+      session_controller_capability: controllerRoot,
+    }), { ok: false, status: 'failed' });
+    assert.deepEqual(runtime.handle({
+      type: 'run_claude_c1',
+      id: sessionId,
+    }), { ok: false, status: 'failed' });
+    assert.deepEqual(runtime.handle({
+      type: 'run_claude_c1',
+      session_controller_capability: controllerRoot,
+    }), { ok: false, status: 'failed' });
+    runtime.handoffControllerRoots.set(sessionId, 'e'.repeat(64));
+    assert.deepEqual(runtime.handle({
+      type: 'run_claude_c1',
+      id: sessionId,
+      session_controller_capability: controllerRoot,
+    }), { ok: false, status: 'failed' });
+    assert.equal(calls, 0);
+
+    const withoutRunner = makeRuntime({
+      controllerBindings: [{
+        schema: 'mc-broker-controller-bootstrap-v1',
+        session_id: 'sess_c1norun',
+        session_controller_capability: controllerRoot,
+      }],
+    }).runtime;
+    assert.deepEqual(withoutRunner.handle({
+      type: 'run_claude_c1',
+      id: 'sess_c1norun',
+      session_controller_capability: controllerRoot,
+    }), {
+      ok: false,
+      status: 'failed',
+    });
+  });
+
+  test('run_claude_c1 allows only the three public status values', async () => {
+    const sessionId = 'sess_c1status';
+    const controllerRoot = 'f'.repeat(64);
+    const { runtime, fake } = makeRuntime({
+      controllerBindings: [{
+        schema: 'mc-broker-controller-bootstrap-v1',
+        session_id: sessionId,
+        session_controller_capability: controllerRoot,
+      }],
+      c1Runner: async () => ({ status: 'indeterminate', raw_output: 'not-public' }),
+    });
+    assert.equal(runtime.handle({
+      type: 'launch_session',
+      session: {
+        id: sessionId,
+        runtime_generation: 'adf7a8f0-2a05-4d59-b2f6-30d95314a78d',
+        session_controller_capability: controllerRoot,
+      },
+    }).ok, true);
+    markSessionC1Eligible(runtime, sessionId);
+    fake.ptys[0].emitExit({ exitCode: 0, signal: null });
+    assert.deepEqual(await runtime.handle({
+      type: 'run_claude_c1',
+      id: sessionId,
+      session_controller_capability: controllerRoot,
+    }), {
+      ok: false,
+      status: 'indeterminate',
+    });
+  });
+
+  test('run_claude_c1 never opens custody before terminal cleanup is confirmed', async () => {
+    const sessionId = 'sess_c1cleanup';
+    const controllerRoot = '1'.repeat(64);
+    let calls = 0;
+    const { runtime, fake } = makeRuntime({
+      controllerBindings: [{
+        schema: 'mc-broker-controller-bootstrap-v1',
+        session_id: sessionId,
+        session_controller_capability: controllerRoot,
+      }],
+      c1Runner() {
+        calls += 1;
+        return { status: 'passed' };
+      },
+    });
+    assert.equal(runtime.handle({
+      type: 'launch_session',
+      session: {
+        id: sessionId,
+        runtime_generation: '28989230-bfa0-4a63-894f-f4464e0804e0',
+        session_controller_capability: controllerRoot,
+      },
+    }).ok, true);
+    markSessionC1Eligible(runtime, sessionId);
+    const ownedSession = runtime.manager.get(sessionId);
+    fake.ptys[0].emitExit({ exitCode: 0, signal: null });
+    runtime.exitFinalizationsBySession.set(
+      ownedSession,
+      Promise.resolve({ ok: false, reason: 'fixture-cleanup-unconfirmed' }),
+    );
+
+    assert.deepEqual(await runtime.handle({
+      type: 'run_claude_c1',
+      id: sessionId,
+      session_controller_capability: controllerRoot,
+    }), { ok: false, status: 'failed' });
+    assert.equal(calls, 0);
+  });
+
+  test('run_claude_c1 reserves the dead session until custody teardown completes', async () => {
+    const sessionId = 'sess_c1lease';
+    const controllerRoot = '2'.repeat(64);
+    let resolveRunner;
+    let calls = 0;
+    const runnerResult = new Promise((resolve) => { resolveRunner = resolve; });
+    const { runtime, fake } = makeRuntime({
+      controllerBindings: [{
+        schema: 'mc-broker-controller-bootstrap-v1',
+        session_id: sessionId,
+        session_controller_capability: controllerRoot,
+      }],
+      c1Runner() {
+        calls += 1;
+        return runnerResult;
+      },
+    });
+    const launch = {
+      type: 'launch_session',
+      session: {
+        id: sessionId,
+        runtime_generation: 'f8a23aa8-7544-4c02-9db6-ed185048180e',
+        session_controller_capability: controllerRoot,
+      },
+    };
+    assert.equal(runtime.handle(launch).ok, true);
+    markSessionC1Eligible(runtime, sessionId);
+    fake.ptys[0].emitExit({ exitCode: 0, signal: null });
+
+    const running = runtime.handle({
+      type: 'run_claude_c1',
+      id: sessionId,
+      session_controller_capability: controllerRoot,
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(calls, 1);
+    assert.deepEqual(await runtime.handle({
+      type: 'run_claude_c1',
+      id: sessionId,
+      session_controller_capability: controllerRoot,
+    }), { ok: false, status: 'failed' }, 'parallel custody lease must be refused');
+    assert.deepEqual(runtime.handle(launch), {
+      ok: false,
+      reason: 'c1-security-check-in-progress',
+      error: 'a C1 credential-boundary check owns this session',
+    }, 'the next provider must not start while custody is open');
+    assert.deepEqual(await runtime.handle({
+      type: 'remove_session',
+      id: sessionId,
+      session_controller_capability: controllerRoot,
+    }), {
+      ok: false,
+      removed: false,
+      reason: 'c1-security-check-in-progress',
+      error: 'a C1 credential-boundary check owns this session',
+    }, 'session removal must not make broker shutdown possible during custody');
+
+    resolveRunner({ status: 'passed' });
+    assert.deepEqual(await running, { ok: true, status: 'passed' });
+    assert.equal(runtime.handle(launch).ok, true, 'launch may resume only after runner teardown');
+  });
+
   test('launch_session resolves the tool locally and creates an owned PTY session', () => {
     const { runtime, fake, resolver } = makeRuntime();
 
@@ -907,6 +1254,165 @@ describe('BrokerRuntime', () => {
         token: null,
       },
     }]);
+  });
+
+  test('provider global marker begins before spawn and survives mandatory terminal cleanup', async () => {
+    const events = [];
+    let finishCleanup;
+    const c1Interlock = {
+      acquireProvider() {
+        events.push('marker-acquired');
+        return {
+          ok: true,
+          lease: {
+            release() {
+              events.push('marker-released');
+              return { ok: true };
+            },
+          },
+        };
+      },
+      acquireC1() { return { ok: false, reason: 'fixture-not-used' }; },
+    };
+    const descriptor = {
+      ...managedC1Descriptor('sess_global_marker_cleanup'),
+      domain_path: '/credential/domain',
+    };
+    const { runtime, fake } = makeRuntime({
+      c1Interlock,
+      managedProviderResolver: ({ launch, input }) => ({
+        ok: true,
+        launch,
+        environmentMode: 'replace',
+        env: { PATH: '/usr/bin:/bin', HOME: '/credential/home' },
+        descriptor: input.credential_domain,
+      }),
+      credentialDomainCloser: () => new Promise((resolve) => { finishCleanup = resolve; }),
+    });
+    assert.equal(runtime.handle({
+      type: 'launch_session',
+      session: { id: 'sess_global_marker_cleanup', tool: 'codex', credential_domain: descriptor },
+    }).ok, true);
+    assert.deepEqual(events, ['marker-acquired']);
+    assert.equal(fake.ptys.length, 1, 'marker acquisition precedes PTY spawn');
+
+    fake.ptys[0].emitExit({ exitCode: 0, signal: null });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(events, ['marker-acquired'],
+      'provider marker remains while mandatory credential cleanup is pending');
+    finishCleanup({ ok: true });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(events, ['marker-acquired', 'marker-released']);
+  });
+
+  test('an unmanaged provider exit leaves a durable fail-closed C1 barrier', async () => {
+    const sessionId = 'sess_c1_unmanaged_barrier';
+    const controllerRoot = '9'.repeat(64);
+    let releases = 0;
+    let c1Acquisitions = 0;
+    let runnerCalls = 0;
+    const { runtime, fake } = makeRuntime({
+      controllerBindings: [{
+        schema: 'mc-broker-controller-bootstrap-v1',
+        session_id: sessionId,
+        session_controller_capability: controllerRoot,
+      }],
+      c1Interlock: {
+        acquireProvider() {
+          return {
+            ok: true,
+            lease: {
+              release() {
+                releases += 1;
+                return { ok: true };
+              },
+            },
+          };
+        },
+        acquireC1() {
+          c1Acquisitions += 1;
+          return { ok: true, lease: { release() { return { ok: true }; } } };
+        },
+      },
+      c1Runner() {
+        runnerCalls += 1;
+        return { status: 'passed' };
+      },
+    });
+    assert.equal(runtime.handle({
+      type: 'launch_session',
+      session: {
+        id: sessionId,
+        runtime_generation: '0cc26fdb-6978-4edb-829a-0f1ddb36be08',
+        session_controller_capability: controllerRoot,
+      },
+    }).ok, true);
+    fake.ptys[0].emitExit({ exitCode: 0, signal: null });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.equal(releases, 0, 'PTY exit cannot certify an unmanaged descendant tree');
+    assert.deepEqual(await runtime.handle({
+      type: 'run_claude_c1',
+      id: sessionId,
+      session_controller_capability: controllerRoot,
+    }), { ok: false, status: 'failed' });
+    assert.equal(c1Acquisitions, 0);
+    assert.equal(runnerCalls, 0);
+  });
+
+  test('unconfirmed provider cleanup leaves the global marker fail-closed', async () => {
+    let releases = 0;
+    const c1Interlock = {
+      acquireProvider() {
+        return { ok: true, lease: { release() { releases += 1; return { ok: true }; } } };
+      },
+      acquireC1() { return { ok: false, reason: 'provider-marker-active' }; },
+    };
+    const descriptor = {
+      schema: 'mc-local-codex-credential-domain/v1',
+      provider_adapter: 'codex-managed-local-v1',
+      profile: 'mc-managed-portable',
+      session_id: 'sess_global_marker_failure',
+      domain_path: '/credential/domain',
+    };
+    const { runtime, fake } = makeRuntime({
+      c1Interlock,
+      managedProviderResolver: ({ launch, input }) => ({
+        ok: true,
+        launch,
+        environmentMode: 'replace',
+        env: { PATH: '/usr/bin:/bin', HOME: '/credential/home' },
+        descriptor: input.credential_domain,
+      }),
+      credentialDomainCloser: async () => ({ ok: false, reason: 'fixture-cleanup-unconfirmed' }),
+    });
+    assert.equal(runtime.handle({
+      type: 'launch_session',
+      session: { id: 'sess_global_marker_failure', tool: 'codex', credential_domain: descriptor },
+    }).ok, true);
+    fake.ptys[0].emitExit({ exitCode: 0, signal: null });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(releases, 0,
+      'a failed finalization must remain durable evidence, not be treated as process liveness');
+  });
+
+  test('launch failure before provider start releases its marker', () => {
+    let releases = 0;
+    const c1Interlock = {
+      acquireProvider() {
+        return { ok: true, lease: { release() { releases += 1; return { ok: true }; } } };
+      },
+      acquireC1() { return { ok: false, reason: 'fixture-not-used' }; },
+    };
+    const { runtime } = makeRuntime({
+      pty: { throwOnSpawn: true },
+      c1Interlock,
+    });
+    assert.equal(runtime.handle({
+      type: 'launch_session',
+      session: { id: 'sess_global_marker_spawn_failure', tool: 'claude' },
+    }).ok, false);
+    assert.equal(releases, 1);
   });
 
   test('managed reopen waits for prior credential custody to close before replacing the dead runtime', async () => {

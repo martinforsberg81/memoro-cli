@@ -335,12 +335,12 @@ describe('local Codex credential domain', () => {
       canary_in_environment: false,
       canary_in_argv: false,
       parent_process_exposes_canary: false,
+      detached_boundary_reachable: false,
       credential_socket_reachable: false,
       external_network_reachable: false,
       workspace_write_blocked: false,
       vault_admin_via_bin_callable: false,
       vault_admin_via_node_callable: false,
-      memoro_keychain_secret_readable: false,
     };
     assert.equal(validateBoundaryReport(complete), true);
     assert.equal(validateBoundaryReport({ schema: 1 }), false);

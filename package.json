@@ -23,8 +23,9 @@
   "scripts": {
     "test": "node --test 'tests/**/*.test.js'",
     "security:credential-boundary": "node scripts/security/credential-boundary-probe.mjs",
+    "security:c1-source-closure": "node scripts/security/check-c1-source-closure.mjs",
     "smoke:mc": "node scripts/mc-release-smoke.js",
-    "postinstall": "node scripts/fix-pty-helper.js"
+    "postinstall": "node scripts/postinstall.js"
   },
   "keywords": [
     "memoro",

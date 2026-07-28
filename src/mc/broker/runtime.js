@@ -8,11 +8,17 @@ import { normalizeInteractivePtyEnv } from '../interactive-env.js';
 import { mcHome } from '../paths.js';
 import { BrokerSessionManager } from './session-manager.js';
 import { BrokerSessionSidecars } from './session-sidecars.js';
-import { resolveManagedCodexLaunch } from '../provider-adapters/codex-managed.js';
+import {
+  MANAGED_CODEX_DOMAIN_SCHEMA,
+  MANAGED_CODEX_PROFILE,
+  MANAGED_CODEX_PROVIDER_ID,
+  resolveManagedCodexLaunch,
+} from '../provider-adapters/codex-managed.js';
 import { closeLocalCodexCredentialDomain } from '../credential-domain/local-codex.js';
 import { sessionHostPaths } from './paths.js';
 import { writeSessionLifecycleSync } from './lifecycle-journal.js';
 import { providerArtifactPath } from './paths.js';
+import { createC1GlobalInterlock } from './c1-global-interlock.js';
 import { writeProviderArtifactSync } from './provider-artifact-journal.js';
 import {
   validateClaudeProviderArtifact,
@@ -55,6 +61,24 @@ const SESSION_COMMANDS = new Set([
   'handoff_switch_advance',
   'handoff_switch_diagnose',
 ]);
+const CLAUDE_C1_REQUEST_TYPE = 'run_claude_c1';
+const CLAUDE_C1_STATUSES = new Set(['passed', 'failed', 'indeterminate']);
+
+export function isExactClaudeC1Request(message) {
+  return plainObject(message)
+    && Object.keys(message).length === 3
+    && message.type === CLAUDE_C1_REQUEST_TYPE
+    && typeof message.id === 'string'
+    && typeof message.session_controller_capability === 'string';
+}
+
+export function claudeC1StatusResponse(status) {
+  const normalized = CLAUDE_C1_STATUSES.has(status) ? status : 'failed';
+  return {
+    ok: normalized === 'passed',
+    status: normalized,
+  };
+}
 const CONTROLLER_SESSION_COMMANDS = new Set([
   'write_session',
   'dispatch_session',
@@ -86,6 +110,8 @@ export class BrokerRuntime {
     handoffSwitchAdvance = advanceHandoffSwitchJournalSync,
     handoffSwitchDiagnose = recordHandoffSwitchDiagnosticSync,
     controllerBindings = [],
+    c1Runner = null,
+    c1Interlock = createC1GlobalInterlock(),
   } = {}) {
     if (!manager && !ptyFactory?.spawn) {
       throw new TypeError('manager or ptyFactory.spawn is required');
@@ -120,14 +146,27 @@ export class BrokerRuntime {
     this.credentialDomainClosures = new Map();
     this.credentialDomainsBySession = new WeakMap();
     this.credentialDomainClosuresBySession = new WeakMap();
+    this.c1ProviderBoundariesBySession = new WeakMap();
     this.handoffControllerRoots = new Map();
+    this.c1ControllerBindings = new Map();
+    this.c1Operations = new Map();
     for (const binding of controllerBindings) {
       const sessionId = stringOrNull(binding?.session_id);
       const capability = stringOrNull(binding?.session_controller_capability);
       if (sessionId && matchesHandoffControllerRoot(capability, capability)) {
         this.handoffControllerRoots.set(sessionId, capability);
       }
+      // C1 is intentionally available only to a session host whose authority
+      // arrived through the validated bootstrap binding. The wire can present
+      // that capability as proof, but cannot select an unbound session or
+      // generation.
+      if (isC1ControllerBinding(binding)) {
+        this.c1ControllerBindings.set(binding.session_id, capability);
+      }
     }
+    this.c1Runner = c1Runner;
+    this.c1Interlock = c1Interlock;
+    this.providerInterlocksBySession = new WeakMap();
     this.handoffJournalWitnesses = new Map();
     this.attaches = new Map();
     this.manager.setMaxListeners?.(Math.max(this.manager.getMaxListeners?.() || 10, 100));
@@ -159,6 +198,28 @@ export class BrokerRuntime {
       if (session) {
         this.exitFinalizationsBySession.set(session, finalization);
         this._resolveSessionExit(session, finalization);
+        // The global provider marker is not a liveness hint.  It remains
+        // present through all mandatory terminal cleanup and is released only
+        // by the exact session that created it.  A crash leaves the marker in
+        // place, deliberately blocking later C1 custody rather than guessing
+        // from a PID that it is safe to proceed.
+        const providerInterlock = this.providerInterlocksBySession.get(session);
+        if (providerInterlock) {
+          Promise.resolve(finalization).then((closed) => {
+            // Only the proven managed executor boundary can make a terminal
+            // provider safe for the C1 gate. A native/unmanaged provider may
+            // have detached an uncontained model-directed descendant before
+            // its PTY exited, so its marker is deliberately retained as a
+            // durable fail-closed barrier even when ordinary cleanup succeeds.
+            const boundary = this.c1ProviderBoundariesBySession.get(session);
+            if (closed?.ok === true
+              && boundary?.c1_eligible === true
+              && this.providerInterlocksBySession.get(session) === providerInterlock) {
+              this.providerInterlocksBySession.delete(session);
+              providerInterlock.release();
+            }
+          }).catch(() => {});
+        }
       }
     });
   }
@@ -169,6 +230,7 @@ export class BrokerRuntime {
 
   handle(message) {
     const type = message?.type;
+    if (type === CLAUDE_C1_REQUEST_TYPE) return this._runClaudeC1(message);
     if (!SESSION_COMMANDS.has(type)) return null;
 
     try {
@@ -199,6 +261,106 @@ export class BrokerRuntime {
     return null;
   }
 
+  _runClaudeC1(message) {
+    if (!isExactClaudeC1Request(message) || typeof this.c1Runner !== 'function') {
+      return claudeC1StatusResponse('failed');
+    }
+
+    const sessionId = message.id;
+    const bootstrapCapability = this.c1ControllerBindings.get(sessionId) || null;
+    // The request proves its caller against the bootstrap binding held by this
+    // host. A bare socket request is not authenticated simply because it can
+    // reach a same-UID Unix socket.
+    if (!matchesHandoffControllerRoot(
+      message.session_controller_capability,
+      bootstrapCapability,
+    )) {
+      return claudeC1StatusResponse('failed');
+    }
+    const authority = this._requireSessionController(
+      sessionId,
+      message.session_controller_capability,
+    );
+    if (!authority.ok) {
+      return claudeC1StatusResponse('failed');
+    }
+
+    const ownedSession = this.manager.get(sessionId);
+    const session = this.manager.status(sessionId);
+    const runtimeGeneration = stringOrNull(
+      this.sessionMetadata.get(sessionId)?.runtime_generation,
+    );
+    // The live gate may open custody only after the ordinary provider has
+    // exited. Otherwise an unsandboxed Codex/Claude process under the same OS
+    // principal could inspect the trusted broker while it holds the token.
+    if (!ownedSession || !session?.exit || !runtimeGeneration) {
+      return claudeC1StatusResponse('failed');
+    }
+
+    const finalization = this.exitFinalizationsBySession.get(ownedSession);
+    if (!isThenable(finalization)) return claudeC1StatusResponse('failed');
+    // C1 is a managed-boundary certification, not a way to upgrade a native
+    // provider after it exits. Only an exact descriptor which already passed
+    // the managed Codex hostile boundary may precede the Claude custody run.
+    if (!isC1ProviderBoundaryForSession(
+      this.c1ProviderBoundariesBySession.get(ownedSession),
+      sessionId,
+    )) {
+      return claudeC1StatusResponse('failed');
+    }
+    // Reserve the session synchronously, before the first await. While this
+    // reservation exists no provider may be launched and no second custody
+    // lease may be opened for the same session.
+    if (this.c1Operations.has(sessionId)) return claudeC1StatusResponse('failed');
+    const operation = Object.freeze({
+      session: ownedSession,
+      runtime_generation: runtimeGeneration,
+    });
+    this.c1Operations.set(sessionId, operation);
+    let globalLease = null;
+    return Promise.resolve(finalization)
+      .then((closed) => {
+        const currentSession = this.manager.get(sessionId);
+        const currentStatus = this.manager.status(sessionId);
+        const currentGeneration = stringOrNull(
+          this.sessionMetadata.get(sessionId)?.runtime_generation,
+        );
+        if (closed?.ok !== true
+          || currentSession !== ownedSession
+          || !currentStatus?.exit
+          || currentGeneration !== runtimeGeneration) {
+          return claudeC1StatusResponse('failed');
+        }
+
+        const acquired = this.c1Interlock?.acquireC1?.();
+        if (!acquired?.ok || typeof acquired.lease?.release !== 'function') {
+          return claudeC1StatusResponse('failed');
+        }
+        globalLease = acquired.lease;
+        // This is the complete runner contract. In particular it deliberately
+        // excludes the controller capability, caller input, paths, argv, env
+        // and any credential material.
+        const context = Object.freeze({
+          session_id: sessionId,
+          runtime_generation: runtimeGeneration,
+        });
+        return Promise.resolve()
+          .then(() => this.c1Runner(context))
+          .then((result) => claudeC1StatusResponse(result?.status))
+          .catch(() => claudeC1StatusResponse('failed'));
+      })
+      .catch(() => claudeC1StatusResponse('failed'))
+      .finally(() => {
+        // The C1 lock begins only after ordinary-provider finalization
+        // confirmed and spans the complete runner promise, including failure.
+        // Its release failure intentionally leaves stale evidence behind.
+        globalLease?.release();
+        if (this.c1Operations.get(sessionId) === operation) {
+          this.c1Operations.delete(sessionId);
+        }
+      });
+  }
+
   attachConnection(message, conn, initialInput = Buffer.alloc(0)) {
     try {
       return this._attachConnection(message, conn, initialInput);
@@ -210,6 +372,13 @@ export class BrokerRuntime {
 
   _launch(input) {
     const id = requiredString(input?.id, 'session id');
+    if (this.c1Operations.has(id)) {
+      return {
+        ok: false,
+        reason: 'c1-security-check-in-progress',
+        error: 'a C1 credential-boundary check owns this session',
+      };
+    }
     const runtimeGeneration = stringOrNull(input?.runtime_generation);
     const cwd = stringOrDefault(input.cwd, this._cwd());
     const handoffTransaction = plainObject(input.handoff_transaction)
@@ -445,7 +614,23 @@ export class BrokerRuntime {
     // exit synchronously from spawn, in which case the exit handler still
     // needs the exact generation and its finalization waiter.
     this.sessionMetadata.set(id, sessionMetadata);
+    // This marker is acquired before the lifecycle can reach PTY spawn.  It
+    // is intentionally machine-global: a separate broker/session host cannot
+    // race a C1 check on another local session.
+    const providerInterlock = this.c1Interlock?.acquireProvider?.({
+      sessionId: id,
+      runtimeGeneration: runtimeGeneration || 'runtime-generation-unset',
+    });
+    if (!providerInterlock?.ok || typeof providerInterlock.lease?.release !== 'function') {
+      this.sessionMetadata.delete(id);
+      return {
+        ok: false,
+        reason: providerInterlock?.reason || 'c1-global-interlock-unavailable',
+        error: 'a machine-local C1 credential-boundary operation blocks provider launch',
+      };
+    }
     let session;
+    let ownedSessionForLaunch = null;
     try {
       if (runtimeGeneration) {
         this.lifecycleWriter({
@@ -479,11 +664,17 @@ export class BrokerRuntime {
         },
       }, {
         beforeStart: (ownedSession) => {
+          ownedSessionForLaunch = ownedSession;
           this.sessionMetadataBySession.set(ownedSession, sessionMetadata);
           this._prepareSessionExit(ownedSession);
+          this.providerInterlocksBySession.set(ownedSession, providerInterlock.lease);
           if (credentialDomain) {
             this.credentialDomains.set(id, credentialDomain);
             this.credentialDomainsBySession.set(ownedSession, credentialDomain);
+            const c1Boundary = c1ProviderBoundaryEvidence(credentialDomain.descriptor);
+            if (c1Boundary) {
+              this.c1ProviderBoundariesBySession.set(ownedSession, c1Boundary);
+            }
           }
         },
       });
@@ -505,6 +696,15 @@ export class BrokerRuntime {
         } catch {}
       }
       this.sessionMetadata.delete(id);
+      // `session.start()` can synchronously emit exit and subsequently throw.
+      // In that edge case the manager has removed its row, but the exit
+      // listener still owns terminal finalization and therefore the marker.
+      // Only a launch that never reached observed exit may clean its marker
+      // here; otherwise releasing it would open C1 during cleanup.
+      if (!ownedSessionForLaunch
+        || !this.exitFinalizationsBySession.get(ownedSessionForLaunch)) {
+        providerInterlock.lease.release();
+      }
       if (credentialDomain && this.credentialDomains.get(id) === credentialDomain) {
         this.credentialDomains.delete(id);
       }
@@ -680,6 +880,14 @@ export class BrokerRuntime {
 
   _remove(id) {
     const sessionId = requiredString(id, 'session id');
+    if (this.c1Operations.has(sessionId)) {
+      return Promise.resolve({
+        ok: false,
+        removed: false,
+        reason: 'c1-security-check-in-progress',
+        error: 'a C1 credential-boundary check owns this session',
+      });
+    }
     const status = this.manager.status(sessionId);
     const managed = this.credentialDomains.has(sessionId)
       || this.credentialDomainClosures.has(sessionId);
@@ -1488,6 +1696,63 @@ function positiveInteger(value, fallback, label) {
 
 function plainObject(value) {
   return value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function isC1ControllerBinding(value) {
+  return plainObject(value)
+    && Object.keys(value).length === 3
+    && value.schema === 'mc-broker-controller-bootstrap-v1'
+    && /^sess_[A-Za-z0-9_-]{6,}$/.test(value.session_id || '')
+    && matchesHandoffControllerRoot(
+      value.session_controller_capability,
+      value.session_controller_capability,
+    );
+}
+
+function c1ProviderBoundaryEvidence(descriptor) {
+  if (!plainObject(descriptor)
+    || descriptor.schema !== MANAGED_CODEX_DOMAIN_SCHEMA
+    || descriptor.provider_adapter !== MANAGED_CODEX_PROVIDER_ID
+    || descriptor.profile !== MANAGED_CODEX_PROFILE
+    || typeof descriptor.session_id !== 'string'
+    || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu
+      .test(descriptor.generation || '')
+    || !/^[A-Za-z0-9_-]{43}$/u.test(descriptor.launch_nonce || '')
+    || !/^[a-f0-9]{64}$/u.test(descriptor.native_binary_sha256 || '')
+    || !/^[a-f0-9]{64}$/u.test(descriptor.provider_config_sha256 || '')
+    || !/^[a-f0-9]{64}$/u.test(descriptor.manifest_sha256 || '')) return null;
+  return Object.freeze({
+    schema: 'mc-c1-provider-boundary-evidence-v1',
+    provider_adapter: MANAGED_CODEX_PROVIDER_ID,
+    profile: MANAGED_CODEX_PROFILE,
+    session_id: descriptor.session_id,
+    generation: descriptor.generation,
+    launch_nonce: descriptor.launch_nonce,
+    native_binary_sha256: descriptor.native_binary_sha256,
+    provider_config_sha256: descriptor.provider_config_sha256,
+    manifest_sha256: descriptor.manifest_sha256,
+    c1_eligible: true,
+  });
+}
+
+function isC1ProviderBoundaryForSession(value, sessionId) {
+  return plainObject(value)
+    && Object.keys(value).length === 10
+    && value.schema === 'mc-c1-provider-boundary-evidence-v1'
+    && value.provider_adapter === MANAGED_CODEX_PROVIDER_ID
+    && value.profile === MANAGED_CODEX_PROFILE
+    && value.session_id === sessionId
+    && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu
+      .test(value.generation || '')
+    && /^[A-Za-z0-9_-]{43}$/u.test(value.launch_nonce || '')
+    && /^[a-f0-9]{64}$/u.test(value.native_binary_sha256 || '')
+    && /^[a-f0-9]{64}$/u.test(value.provider_config_sha256 || '')
+    && /^[a-f0-9]{64}$/u.test(value.manifest_sha256 || '')
+    && value.c1_eligible === true;
+}
+
+function isThenable(value) {
+  return value != null && typeof value.then === 'function';
 }
 
 function boundedHandoffUserMessage(value) {

@@ -30,6 +30,7 @@ describe('mc --help', () => {
     assert.doesNotMatch(r.stdout, /deal with the branch/);
     assert.match(r.stdout, /mc dev plan \[service\] \[--profile <name>\]/);
     assert.match(r.stdout, /mc deps status\|hydrate \[service\]/);
+    assert.match(r.stdout, /mc security claude-c1 <label\|id> \[--json\]/);
     assert.match(r.stdout, /--dependency-mode <auto\|isolated\|off>/);
     assert.match(r.stdout, /Terminal commands manage machines and sessions/);
     assert.match(r.stdout, /Inside a launched LLM session/);

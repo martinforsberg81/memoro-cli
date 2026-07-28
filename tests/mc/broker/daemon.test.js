@@ -125,6 +125,42 @@ describe('handleBrokerMessage', () => {
     });
   });
 
+  test('run_claude_c1 requires exactly its controller-bound request and shapes status only', async () => {
+    const seen = [];
+    const runtime = {
+      handle(message) {
+        seen.push(message);
+        return { ok: true, status: 'passed', diagnostic: 'not-public' };
+      },
+    };
+    const request = {
+      type: 'run_claude_c1',
+      id: 'sess_c1daemon',
+      session_controller_capability: 'a'.repeat(64),
+    };
+    const accepted = handleBrokerMessage(JSON.stringify(request), {
+      status: () => ({ ok: true }),
+      runtime,
+    });
+    assert.deepEqual(await accepted.response, { ok: true, status: 'passed' });
+    assert.deepEqual(seen, [request]);
+
+    for (const key of [
+      'argv', 'env', 'path', 'secret_id', 'callback', 'tool', 'generation', 'unknown',
+    ]) {
+      const rejected = handleBrokerMessage(JSON.stringify({ ...request, [key]: 'attacker-choice' }), {
+        status: () => ({ ok: true }),
+        runtime,
+      });
+      assert.deepEqual(await rejected.response, { ok: false, status: 'failed' }, key);
+    }
+    assert.deepEqual(await handleBrokerMessage(JSON.stringify({ type: 'run_claude_c1' }), {
+      status: () => ({ ok: true }),
+      runtime,
+    }).response, { ok: false, status: 'failed' });
+    assert.equal(seen.length, 1);
+  });
+
   test('preserves asynchronous runtime cleanup responses for the socket handler', async () => {
     const out = handleBrokerMessage('{"type":"remove_session","id":"sess_a"}', {
       status: () => ({ ok: true }),
@@ -205,6 +241,11 @@ describe('handleProviderArtifactMessage', () => {
       const rejected = handleProviderArtifactMessage(JSON.stringify({ type }), { runtime });
       assert.equal((await rejected.response).ok, false);
     }
+    assert.deepEqual(await handleProviderArtifactMessage(JSON.stringify({
+      type: 'run_claude_c1',
+      id: 'sess_a',
+      session_controller_capability: 'a'.repeat(64),
+    }), { runtime }).response, { ok: false, status: 'failed' });
     assert.equal(seen.length, 1);
   });
 });

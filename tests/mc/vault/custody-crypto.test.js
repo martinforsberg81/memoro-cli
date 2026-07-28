@@ -16,6 +16,7 @@ import {
   unwrapCustodyRootBytes,
   wrapCustodyRootBytes,
   ENVELOPE_SCHEMA_VERSION,
+  decryptEnvelopeLabel,
   decryptEnvelopeSecret,
   encryptEnvelopeSecret,
   generateRawKey,
@@ -75,6 +76,21 @@ describe('custody envelope crypto', () => {
     const out = await decryptEnvelopeSecret(crk, asWireRow(envelope));
     assert.equal(out.label, 'claude-code');
     assert.deepEqual(out.data, { anthropic: { apiKey: 'sk-test' } });
+  });
+
+  test('label selection does not materialise an unrelated encrypted payload', async () => {
+    const crk = await fixedKek(9);
+    const envelope = await encryptEnvelopeSecret(crk, {
+      secretClass: 'tool-auth',
+      label: 'tool-auth:claude-code',
+      data: { secret: 'must-not-be-opened-during-selection' },
+    });
+    const wire = {
+      ...asWireRow(envelope),
+      encrypted_data: `${envelope.encryptedData.slice(0, -4)}AAAA`,
+    };
+    assert.equal(await decryptEnvelopeLabel(crk, wire), 'tool-auth:claude-code');
+    await assert.rejects(() => decryptEnvelopeSecret(crk, wire));
   });
 
   test('a repurposed class fails authentication (AAD binding)', async () => {

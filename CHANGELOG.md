@@ -7,6 +7,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- `mc security claude-c1 <session>` runs the pinned, broker-owned managed
+  Claude credential-boundary gate only after every local provider has exited.
+  The fixed vault lease passes the Claude access token through an anonymous
+  descriptor to a short-lived trusted runtime; the sandboxed Claude executor
+  receives only a revocable sentinel, and the command returns status only. Each
+  CLI installation gets a private generation receipt, so C1 requires a later
+  clean boot after upgrades, downgrades, and same-version reinstalls.
 - `mc dev list|status|logs|stop|restart` provides a machine-local development
   server inventory backed by project-owned manifests. Controls require matching
   manifest, worktree, and process-group identity; `mc status` and `mc doctor`
