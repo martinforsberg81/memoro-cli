@@ -190,7 +190,10 @@ terminal transaction; it is not emulated by broadening the workload token.
 - disable transcript fetch/upload authority on the target sidecar while the
   registry still names the source provider;
 - crash recovery for every unambiguous journal phase, including session-host
-  restart from the trusted local journal; an interrupted PTY write remains
+  restart from the trusted local journal only after a controller-free status
+  probe proves both definitive socket refusal and `ESRCH` for the recorded host
+  PID, then repeats the socket probe to exclude a concurrent replacement;
+  ambiguous evidence remains blocked, and an interrupted PTY write remains
   explicitly fail-closed rather than replayed;
 - bounded, sanitized diagnostic events in the private transaction journal,
   without raw exception text, transcript data, credentials, environment, or
