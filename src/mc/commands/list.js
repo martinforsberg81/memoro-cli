@@ -23,6 +23,7 @@ const ACTIVE_CUTOFF_MIN = 5;
 export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
   const stderr = deps.stderr || process.stderr;
+  const runtimeEnv = deps.env || process.env;
   const loadRegistry = deps.readRegistry || readRegistry;
   const checkFreshInstall = deps.checkAndPrintFreshInstall || checkAndPrintFreshInstall;
   let localLiveResult = null;
@@ -125,6 +126,9 @@ export async function run(argv, deps = {}) {
   stdout.write(renderSessionListHuman({
     view,
     title: 'mc sessions:',
+    isTTY: stdout?.isTTY === true,
+    terminalWidth: stdout?.columns,
+    useColor: supportsColor(stdout, runtimeEnv),
   }));
 
   // §9j: footer-level annotation for orphan daemons. Scan is best-effort;
@@ -141,6 +145,12 @@ export async function run(argv, deps = {}) {
     }
   } catch { /* best effort */ }
   return 0;
+}
+
+function supportsColor(stdout, env) {
+  return stdout?.isTTY === true
+    && env?.TERM !== 'dumb'
+    && !Object.hasOwn(env || {}, 'NO_COLOR');
 }
 
 function runOrphans(opts, { stdout, scanDaemons: scan }) {

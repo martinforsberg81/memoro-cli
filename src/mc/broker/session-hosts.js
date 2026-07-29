@@ -15,6 +15,7 @@ import {
 
 const HOST_START_LOG_TAIL_CHARS = 4000;
 const HOST_START_ERROR_CHARS = 1200;
+const HOST_RUNTIME_PROBE_TIMEOUT_MS = 600;
 
 export async function ensureSessionHostRunning({
   sessionId,
@@ -198,6 +199,47 @@ export function requestForSession(session, {
   return (message) => request(message, socketPath ? { socketPath } : undefined);
 }
 
+/**
+ * Return positive local evidence about a session host after its inventory
+ * disappeared. A stale socket alone is not enough: only a definitive socket
+ * refusal combined with ESRCH for the recorded broker pid proves that the
+ * broker process exited. Permission errors, timeouts, missing pid evidence,
+ * and a live/reused pid stay unknown so callers continue to fail closed.
+ */
+export async function probeSessionHostRuntime(paths, {
+  request = requestBroker,
+  readFile = readFileSync,
+  signalProcess = process.kill,
+  timeoutMs = HOST_RUNTIME_PROBE_TIMEOUT_MS,
+} = {}) {
+  if (!paths?.socketPath || !paths?.pidPath) {
+    return { verdict: 'unknown', reason: 'host-paths-missing' };
+  }
+
+  const firstSocketProbe = await probeHostSocket(paths.socketPath, { request, timeoutMs });
+  if (firstSocketProbe.verdict !== 'exited') return firstSocketProbe;
+
+  const pid = readPositivePid(paths.pidPath, { readFile });
+  if (pid == null) return { verdict: 'unknown', reason: 'host-pid-unverified' };
+  try {
+    signalProcess(pid, 0);
+    return { verdict: 'live', reason: 'host-pid-live', pid };
+  } catch (error) {
+    if (error?.code === 'EPERM') return { verdict: 'live', reason: 'host-pid-live', pid };
+    if (error?.code === 'ESRCH') {
+      // A replacement host may bind after the first refusal and before the
+      // pid check. Re-probe so a concurrent restart cannot be mistaken for
+      // positive exit evidence.
+      const confirmedSocket = await probeHostSocket(paths.socketPath, { request, timeoutMs });
+      if (confirmedSocket.verdict === 'exited') {
+        return { verdict: 'exited', reason: 'host-process-exited', pid };
+      }
+      return confirmedSocket;
+    }
+    return { verdict: 'unknown', reason: 'host-pid-unverified', pid };
+  }
+}
+
 export function readSessionHostManifests({ hostsDir = sessionHostsDir() } = {}) {
   if (!existsSync(hostsDir)) return [];
   const out = [];
@@ -289,5 +331,37 @@ function safeReaddir(path) {
       .map((entry) => entry.name);
   } catch {
     return [];
+  }
+}
+
+function readPositivePid(path, { readFile = readFileSync } = {}) {
+  try {
+    const parsed = Number(readFile(path, 'utf8').trim());
+    return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function isDefinitiveSocketExit(error) {
+  if (error?.code === 'ENOENT' || error?.code === 'ECONNREFUSED') return true;
+  return /\b(?:ENOENT|ECONNREFUSED)\b/.test(error?.message || '');
+}
+
+async function probeHostSocket(socketPath, {
+  request = requestBroker,
+  timeoutMs = HOST_RUNTIME_PROBE_TIMEOUT_MS,
+} = {}) {
+  try {
+    const response = await request(
+      { type: 'status' },
+      { socketPath, timeoutMs },
+    );
+    if (response?.ok) return { verdict: 'live', reason: 'host-socket-reachable' };
+    return { verdict: 'unknown', reason: 'host-socket-response-unverified' };
+  } catch (error) {
+    return isDefinitiveSocketExit(error)
+      ? { verdict: 'exited', reason: 'host-socket-refused' }
+      : { verdict: 'unknown', reason: 'host-socket-unverified' };
   }
 }
