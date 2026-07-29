@@ -19,7 +19,10 @@ import { DEFAULT_TOOL } from '../../lib/config.js';
 import { launchBrokerOwnedSession } from '../broker/launch-client.js';
 import { attachBrokerSession } from '../broker/attach-client.js';
 import { requestBroker } from '../broker/client.js';
-import { listLocalBrokerAndHostSessions } from '../broker/session-hosts.js';
+import {
+  listLocalBrokerAndHostSessions,
+  probeSessionHostRuntime,
+} from '../broker/session-hosts.js';
 import { sessionHostPaths } from '../broker/paths.js';
 import { readSessionLifecycle } from '../broker/lifecycle-journal.js';
 import {
@@ -525,6 +528,11 @@ export async function runResumePicker({
     view,
     title: `mc sessions available to ${commandName}:`,
     emptyLocalHint: 'Create one with `mc new <name> [focus] --codex`.',
+    isTTY: stdout?.isTTY === true,
+    terminalWidth: stdout?.columns,
+    useColor: stdout?.isTTY === true
+      && (deps.env || process.env)?.TERM !== 'dumb'
+      && !Object.hasOwn(deps.env || process.env, 'NO_COLOR'),
   }));
 
   const choices = listChoices(view);
@@ -852,6 +860,18 @@ export async function inspectLocalBrokerSessionForEntry(entry, {
     };
   }
   if (lifecycle?.verdict === 'live') {
+    const hostRuntime = await (
+      deps.probeSessionHostRuntime || probeSessionHostRuntime
+    )(paths, { request });
+    if (hostRuntime?.verdict === 'exited') {
+      return {
+        verdict: 'exited',
+        session: null,
+        runtime_generation: nonEmpty(lifecycle.record?.runtime_generation),
+        lifecycle,
+        reason: hostRuntime.reason || 'host-process-exited',
+      };
+    }
     return {
       verdict: 'unreachable',
       session: null,
