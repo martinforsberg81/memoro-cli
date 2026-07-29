@@ -245,13 +245,20 @@ credential-bearing C1 process are terminally confirmed. Stale evidence is
 never reaped from a PID guess; a broker crash fails closed. An ordinary native
 or otherwise unmanaged provider can leave model-directed descendants outside
 the PTY lifecycle, so its provider marker is never treated as terminal evidence
-and remains a durable C1 barrier. Every package installation atomically mints a
-new private, value-free generation receipt. A separate install epoch records
-that generation combined with the exact containment-release digest and requires
-one later OS boot after every identity transition, including same-version
-reinstall, upgrade, and rollback. A detached provider from older code therefore
-cannot be mistaken for a clean machine. Ordinary provider use remains available
-during that epoch. Only the exact managed Codex descriptor that already passed
+and remains a durable C1 barrier. Every global package installation atomically
+mints a new private, value-free generation receipt and immediately baselines a
+separate install epoch from that generation and the exact containment-release
+digest. Exactly one later OS boot is required after every identity transition,
+including same-version reinstall, upgrade, and rollback. Provider evidence is
+v2 and bound to that identity: after the clean boot, exact v1 legacy evidence
+and exact v2 evidence from another identity are superseded but never deleted;
+current-identity, malformed, or otherwise ambiguous evidence remains a C1
+barrier. If a receipt cannot safely yield an identity, provider launch retains
+an exact unbound marker while C1 stays disabled; that marker is superseded only
+by a later valid installation baseline and clean boot. Ordinary provider use
+therefore remains available during missing or indeterminate C1 evidence. A
+detached provider from older code cannot be mistaken for a clean machine. Only
+the exact managed Codex descriptor that already passed
 its hostile boundary can become C1-eligible; that boundary includes a real
 fork-plus-`setsid` attack, and its in-memory evidence remains bound to the exact
 session, credential-domain generation, launch nonce, native release hash,

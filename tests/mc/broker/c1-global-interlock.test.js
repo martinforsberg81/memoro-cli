@@ -1,10 +1,23 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import { createC1GlobalInterlockForTesting } from '../../../src/mc/broker/c1-global-interlock.js';
+import {
+  baselineC1InstallEpochFixture,
+  createC1GlobalInterlockForTesting,
+} from '../../../src/mc/broker/c1-global-interlock.js';
 
 const INSTALL_IDENTITY = 'a'.repeat(64);
 
@@ -48,6 +61,7 @@ test('C1 global interlock holds private provider evidence before spawn and exclu
   assert.equal(statSync(markersRoot).mode & 0o777, 0o700);
   assert.equal(statSync(markerPath).mode & 0o777, 0o600);
   assert.deepEqual(Object.keys(JSON.parse(readFileSync(markerPath, 'utf8'))).sort(), [
+    'install_identity',
     'nonce', 'runtime_generation', 'schema', 'session_id',
   ]);
 
@@ -66,7 +80,7 @@ test('C1 global interlock holds private provider evidence before spawn and exclu
   assert.equal(activeC1.lease.release().ok, true);
 });
 
-test('C1 requires one clean boot after its install epoch while providers remain usable', (t) => {
+test('without an installation baseline C1 requires a later clean boot while providers remain unavailable for C1', (t) => {
   const root = mkdtempSync(join(tmpdir(), 'mc-c1-interlock-epoch-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const installedThisBoot = createC1GlobalInterlockForTesting({
@@ -90,7 +104,7 @@ test('C1 requires one clean boot after its install epoch while providers remain 
   assert.equal(afterRestart.acquireC1().ok, true);
 });
 
-test('a missing install receipt disables only C1, not ordinary providers', (t) => {
+test('a missing install receipt disables only C1 and leaves exact unbound provider evidence', (t) => {
   const root = mkdtempSync(join(tmpdir(), 'mc-c1-interlock-no-receipt-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const interlock = createC1GlobalInterlockForTesting({
@@ -100,11 +114,199 @@ test('a missing install receipt disables only C1, not ordinary providers', (t) =
   });
   const providerLease = interlock.acquireProvider(provider);
   assert.equal(providerLease.ok, true);
+  const [marker] = requireEntries(join(root, 'providers'));
+  assert.equal(statSync(join(root, 'providers', marker)).mode & 0o777, 0o600);
+  assert.deepEqual(JSON.parse(readFileSync(join(root, 'providers', marker), 'utf8')), {
+    schema: 'mc-c1-provider-marker-unbound-v1',
+    nonce: marker.slice('provider-'.length, -'.json'.length),
+    session_id: provider.sessionId,
+    runtime_generation: provider.runtimeGeneration,
+  });
   assert.equal(providerLease.lease.release().ok, true);
   assert.deepEqual(interlock.acquireC1(), {
     ok: false,
     reason: 'c1-clean-restart-required',
   });
+});
+
+test('a package-install epoch baseline admits C1 after exactly one later boot', (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'mc-c1-interlock-postinstall-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  assert.deepEqual(baselineC1InstallEpochFixture({
+    root,
+    bootId: 'boot-global-install',
+    installIdentity: INSTALL_IDENTITY,
+  }), {
+    ok: true,
+    code: 'c1-install-epoch-baselined',
+  });
+
+  const sameBoot = createC1GlobalInterlockForTesting({
+    root,
+    bootId: 'boot-global-install',
+    installIdentity: INSTALL_IDENTITY,
+  });
+  assert.deepEqual(sameBoot.acquireC1(), {
+    ok: false,
+    reason: 'c1-clean-restart-required',
+  });
+
+  const afterOneRestart = createC1GlobalInterlockForTesting({
+    root,
+    bootId: 'boot-after-global-install',
+    installIdentity: INSTALL_IDENTITY,
+  });
+  const c1 = afterOneRestart.acquireC1();
+  assert.equal(c1.ok, true);
+  assert.equal(c1.lease.release().ok, true);
+});
+
+test('a package-install baseline fails closed without an exact boot and install identity', (t) => {
+  const cases = [
+    { bootId: null, installIdentity: INSTALL_IDENTITY },
+    { bootId: 'boot-global-install', installIdentity: null },
+    { bootId: 'boot-global-install', installIdentity: 'not-a-sha256' },
+  ];
+  for (const [index, options] of cases.entries()) {
+    const root = mkdtempSync(join(tmpdir(), `mc-c1-interlock-baseline-invalid-${index}-`));
+    t.after(() => rmSync(root, { recursive: true, force: true }));
+    assert.deepEqual(baselineC1InstallEpochFixture({ root, ...options }), {
+      ok: false,
+      reason: 'install-epoch-baseline-unavailable',
+    });
+  }
+});
+
+test('only superseded exact provider evidence is ignored after the clean boot', (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'mc-c1-interlock-marker-migration-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  assert.equal(baselineC1InstallEpochFixture({
+    root,
+    bootId: 'boot-global-install',
+    installIdentity: INSTALL_IDENTITY,
+  }).ok, true);
+  const providersRoot = join(root, 'providers');
+  writeProviderMarker(providersRoot, '1'.repeat(32), {
+    schema: 'mc-c1-provider-marker-v1',
+    nonce: '1'.repeat(32),
+    session_id: 'sess_legacy_marker',
+    runtime_generation: 'legacy-generation',
+  });
+  writeProviderMarker(providersRoot, '2'.repeat(32), {
+    schema: 'mc-c1-provider-marker-v2',
+    nonce: '2'.repeat(32),
+    session_id: 'sess_old_install',
+    runtime_generation: 'old-install-generation',
+    install_identity: 'b'.repeat(64),
+  });
+  writeProviderMarker(providersRoot, 'a'.repeat(32), {
+    schema: 'mc-c1-provider-marker-unbound-v1',
+    nonce: 'a'.repeat(32),
+    session_id: 'sess_unbound_install',
+    runtime_generation: 'unbound-install-generation',
+  });
+
+  const beforeRestart = createC1GlobalInterlockForTesting({
+    root,
+    bootId: 'boot-global-install',
+    installIdentity: INSTALL_IDENTITY,
+  });
+  assert.deepEqual(beforeRestart.acquireC1(), {
+    ok: false,
+    reason: 'c1-clean-restart-required',
+  });
+
+  const afterRestart = createC1GlobalInterlockForTesting({
+    root,
+    bootId: 'boot-after-global-install',
+    installIdentity: INSTALL_IDENTITY,
+  });
+  const c1 = afterRestart.acquireC1();
+  assert.equal(c1.ok, true);
+  assert.equal(c1.lease.release().ok, true);
+
+  writeProviderMarker(providersRoot, '3'.repeat(32), {
+    schema: 'mc-c1-provider-marker-v2',
+    nonce: '3'.repeat(32),
+    session_id: 'sess_current_install',
+    runtime_generation: 'current-install-generation',
+    install_identity: INSTALL_IDENTITY,
+  });
+  assert.deepEqual(afterRestart.acquireC1(), {
+    ok: false,
+    reason: 'provider-marker-active',
+  });
+});
+
+test('unsafe or ambiguous provider evidence remains a C1 barrier', (t) => {
+  const cases = [
+    {
+      name: 'malformed-json',
+      create(providersRoot) {
+        writeFileSync(join(providersRoot, `provider-${'4'.repeat(32)}.json`), '{', { mode: 0o600 });
+      },
+    },
+    {
+      name: 'extra-key',
+      create(providersRoot) {
+        writeProviderMarker(providersRoot, '5'.repeat(32), {
+          schema: 'mc-c1-provider-marker-v1',
+          nonce: '5'.repeat(32),
+          session_id: 'sess_extra_key',
+          runtime_generation: 'legacy-generation',
+          unexpected: true,
+        });
+      },
+    },
+    {
+      name: 'unsafe-mode',
+      create(providersRoot) {
+        const path = writeProviderMarker(providersRoot, '6'.repeat(32), legacyMarker('6'.repeat(32)));
+        chmodSync(path, 0o644);
+      },
+    },
+    {
+      name: 'unreadable',
+      create(providersRoot) {
+        const path = writeProviderMarker(providersRoot, '7'.repeat(32), legacyMarker('7'.repeat(32)));
+        chmodSync(path, 0o000);
+      },
+    },
+    {
+      name: 'symlink',
+      create(providersRoot) {
+        const target = join(providersRoot, '..', 'marker-target.json');
+        writeFileSync(target, JSON.stringify(legacyMarker('8'.repeat(32))), { mode: 0o600 });
+        symlinkSync(target, join(providersRoot, `provider-${'8'.repeat(32)}.json`));
+      },
+    },
+    {
+      name: 'non-file',
+      create(providersRoot) {
+        mkdirSync(join(providersRoot, `provider-${'9'.repeat(32)}.json`), { mode: 0o700 });
+      },
+    },
+  ];
+
+  for (const entry of cases) {
+    const root = mkdtempSync(join(tmpdir(), `mc-c1-interlock-${entry.name}-`));
+    t.after(() => rmSync(root, { recursive: true, force: true }));
+    assert.equal(baselineC1InstallEpochFixture({
+      root,
+      bootId: 'boot-global-install',
+      installIdentity: INSTALL_IDENTITY,
+    }).ok, true);
+    entry.create(join(root, 'providers'));
+    const afterRestart = createC1GlobalInterlockForTesting({
+      root,
+      bootId: 'boot-after-global-install',
+      installIdentity: INSTALL_IDENTITY,
+    });
+    assert.deepEqual(afterRestart.acquireC1(), {
+      ok: false,
+      reason: 'provider-marker-active',
+    }, entry.name);
+  }
 });
 
 test('C1 requires a new clean boot when the installed containment release changes', (t) => {
@@ -228,4 +430,20 @@ function requireEntries(path) {
   // Deliberately use the test runner's normal filesystem observation only;
   // production never enumerates a marker to select a caller-controlled path.
   return readdirSync(path);
+}
+
+function writeProviderMarker(providersRoot, nonce, value) {
+  const path = join(providersRoot, `provider-${nonce}.json`);
+  writeFileSync(path, JSON.stringify(value), { mode: 0o600 });
+  chmodSync(path, 0o600);
+  return path;
+}
+
+function legacyMarker(nonce) {
+  return {
+    schema: 'mc-c1-provider-marker-v1',
+    nonce,
+    session_id: 'sess_legacy_marker',
+    runtime_generation: 'legacy-generation',
+  };
 }

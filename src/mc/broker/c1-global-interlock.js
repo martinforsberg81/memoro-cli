@@ -33,7 +33,9 @@ const ROOT_NAME = 'c1-global-interlock';
 const PROVIDERS_NAME = 'providers';
 const C1_LOCK_NAME = 'claude-c1.lock';
 const INSTALL_EPOCH_NAME = 'install-epoch.json';
-const PROVIDER_SCHEMA = 'mc-c1-provider-marker-v1';
+const PROVIDER_SCHEMA = 'mc-c1-provider-marker-v2';
+const LEGACY_PROVIDER_SCHEMA = 'mc-c1-provider-marker-v1';
+const UNBOUND_PROVIDER_SCHEMA = 'mc-c1-provider-marker-unbound-v1';
 const C1_SCHEMA = 'mc-c1-global-lock-v1';
 const INSTALL_EPOCH_SCHEMA = 'mc-c1-install-epoch-v2';
 const LEGACY_INSTALL_EPOCH_SCHEMA = 'mc-c1-install-epoch-v1';
@@ -59,6 +61,41 @@ const INSTALL_IDENTITY_INPUTS = Object.freeze([
  */
 export function createC1GlobalInterlock() {
   return createC1GlobalInterlockForTesting({ root: join(mcHome(), ROOT_NAME) });
+}
+
+// This is intentionally a fixed-argument production entry point for package
+// installation. The fresh receipt is part of the derived identity, so an
+// install records its own boot as the baseline before any later mc launch.
+export function baselineInstalledC1Epoch() {
+  return baselineC1InstallEpochFixture({
+    root: join(mcHome(), ROOT_NAME),
+    bootId: readBootIdentity(),
+    installIdentity: readC1InstallIdentity(),
+  });
+}
+
+// Exported solely for deterministic package-install lifecycle tests.
+export function baselineC1InstallEpochFixture({
+  root,
+  fs = syncFs,
+  uid = typeof process.getuid === 'function' ? process.getuid() : null,
+  bootId,
+  installIdentity,
+} = {}) {
+  if (typeof root !== 'string' || !root) return failed('install-epoch-root-invalid');
+  const state = ensureRoots({
+    root,
+    providersRoot: join(root, PROVIDERS_NAME),
+    installEpochPath: join(root, INSTALL_EPOCH_NAME),
+    fs,
+    uid,
+    bootId,
+    installIdentity,
+    forceInstallEpochBaseline: true,
+  });
+  return state.ok && state.identityAvailable
+    ? { ok: true, code: 'c1-install-epoch-baselined' }
+    : failed('install-epoch-baseline-unavailable');
 }
 
 export function createC1GlobalInterlockForTesting({
@@ -95,7 +132,8 @@ export function createC1GlobalInterlockForTesting({
     const markerName = `provider-${nonce}.json`;
     const markerPath = join(providersRoot, markerName);
     const marker = JSON.stringify({
-      schema: PROVIDER_SCHEMA,
+      schema: roots.identityAvailable ? PROVIDER_SCHEMA : UNBOUND_PROVIDER_SCHEMA,
+      ...(roots.identityAvailable ? { install_identity: roots.installIdentity } : {}),
       session_id: sessionId,
       runtime_generation: runtimeGeneration,
       nonce,
@@ -151,7 +189,11 @@ export function createC1GlobalInterlockForTesting({
       lease.release();
       return failed('provider-scan-unavailable');
     }
-    if (providerMarkersPresent(providersRoot, fs)) {
+    if (providerMarkersPresent(providersRoot, fs, {
+      installIdentity: roots.installIdentity,
+      cleanBootObserved: roots.cleanBootObserved,
+      uid,
+    })) {
       lease.release();
       return failed('provider-marker-active');
     }
@@ -172,31 +214,46 @@ function ensureRoots({
   uid,
   bootId,
   installIdentity,
+  forceInstallEpochBaseline = false,
 }) {
   try {
     fs.mkdirSync(root, { recursive: true, mode: 0o700 });
     fs.mkdirSync(providersRoot, { recursive: true, mode: 0o700 });
     if (!privateDirectory(root, fs, uid) || !privateDirectory(providersRoot, fs, uid)) {
-      return { ok: false, cleanBootObserved: false };
+      return { ok: false, cleanBootObserved: false, identityAvailable: false };
     }
     if (!boundedIdentifier(bootId)
       || !validInstallIdentity(installIdentity)
       || !installEpochPath) {
-      return { ok: true, cleanBootObserved: false };
+      return { ok: true, cleanBootObserved: false, identityAvailable: false };
     }
-    return installEpochState({
+    const epoch = installEpochState({
       path: installEpochPath,
       bootId,
       installIdentity,
       fs,
       uid,
+      forceInstallEpochBaseline,
     });
+    return {
+      ...epoch,
+      identityAvailable: epoch.ok,
+      bootId,
+      installIdentity,
+    };
   } catch {
-    return { ok: false, cleanBootObserved: false };
+    return { ok: false, cleanBootObserved: false, identityAvailable: false };
   }
 }
 
-function installEpochState({ path, bootId, installIdentity, fs, uid }) {
+function installEpochState({
+  path,
+  bootId,
+  installIdentity,
+  fs,
+  uid,
+  forceInstallEpochBaseline = false,
+}) {
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
       const stat = fs.lstatSync(path);
@@ -214,7 +271,7 @@ function installEpochState({ path, bootId, installIdentity, fs, uid }) {
       if (!current && !legacy) {
         return { ok: false, cleanBootObserved: false };
       }
-      if (current && value.install_identity === installIdentity) {
+      if (current && value.install_identity === installIdentity && !forceInstallEpochBaseline) {
         return { ok: true, cleanBootObserved: value.boot_id !== bootId };
       }
       const replaced = replacePrivateFile({
@@ -331,15 +388,93 @@ function createPrivateFile({ path, content, fs }) {
   }
 }
 
-function providerMarkersPresent(providersRoot, fs) {
+function providerMarkersPresent(providersRoot, fs, {
+  installIdentity,
+  cleanBootObserved,
+  uid,
+} = {}) {
+  if (!cleanBootObserved || !validInstallIdentity(installIdentity)) return true;
   try {
     const entries = fs.readdirSync(providersRoot, { withFileTypes: true });
-    // Any entry, including an unexpected one, blocks C1.  We never treat a
-    // malformed/stale marker as safely removable.
-    return entries.length > 0;
+    for (const entry of entries) {
+      const state = classifyProviderMarker({
+        path: join(providersRoot, entry.name),
+        name: entry.name,
+        fs,
+        uid,
+        installIdentity,
+      });
+      // Superseded evidence is never removed here. It is safe to disregard
+      // only because C1 has already proved a boot later than the current
+      // installation baseline, so an old-release provider cannot survive.
+      if (state !== 'superseded') return true;
+    }
+    return false;
   } catch {
     return true;
   }
+}
+
+function classifyProviderMarker({ path, name, fs, uid, installIdentity }) {
+  const nonce = markerNonceFromName(name);
+  if (!nonce) return 'unsafe';
+  try {
+    const stat = fs.lstatSync(path);
+    if (!privateRegularFile(stat) || (uid !== null && stat.uid !== uid)) return 'unsafe';
+    const raw = fs.readFileSync(path, 'utf8');
+    if (Buffer.byteLength(raw, 'utf8') > 1024) return 'unsafe';
+    const value = JSON.parse(raw);
+    if (isExactProviderMarkerV2(value, nonce)) {
+      return value.install_identity === installIdentity ? 'current' : 'superseded';
+    }
+    // v1 predates the install-identity-bound format; the unbound schema is
+    // used only when an installation could not prove its identity. Since this
+    // scan occurs after a clean boot for a fresh install identity, either can
+    // only describe an older release and is superseded.
+    return isExactProviderMarkerV1(value, nonce) || isExactUnboundProviderMarker(value, nonce)
+      ? 'superseded'
+      : 'unsafe';
+  } catch {
+    return 'unsafe';
+  }
+}
+
+function markerNonceFromName(name) {
+  const match = /^provider-([a-f0-9]{32})\.json$/u.exec(name || '');
+  return match?.[1] || null;
+}
+
+function isExactProviderMarkerV1(value, nonce) {
+  return isExactProviderMarker(value, {
+    schema: LEGACY_PROVIDER_SCHEMA,
+    nonce,
+    keys: ['nonce', 'runtime_generation', 'schema', 'session_id'],
+  });
+}
+
+function isExactProviderMarkerV2(value, nonce) {
+  return isExactProviderMarker(value, {
+    schema: PROVIDER_SCHEMA,
+    nonce,
+    keys: ['install_identity', 'nonce', 'runtime_generation', 'schema', 'session_id'],
+  }) && validInstallIdentity(value.install_identity);
+}
+
+function isExactUnboundProviderMarker(value, nonce) {
+  return isExactProviderMarker(value, {
+    schema: UNBOUND_PROVIDER_SCHEMA,
+    nonce,
+    keys: ['nonce', 'runtime_generation', 'schema', 'session_id'],
+  });
+}
+
+function isExactProviderMarker(value, { schema, nonce, keys }) {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    && Object.keys(value).sort().join('\0') === keys.join('\0')
+    && value.schema === schema
+    && value.nonce === nonce
+    && boundedIdentifier(value.session_id)
+    && boundedIdentifier(value.runtime_generation);
 }
 
 function makeLease({ path, node, fs }) {
