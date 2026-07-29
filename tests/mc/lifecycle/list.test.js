@@ -192,6 +192,77 @@ describe('mc list', () => {
     assert.doesNotMatch(localSection, /active-local/);
   });
 
+  test('TTY human output uses a borderless table with colored headers and ids', async () => {
+    const stdout = [];
+    const status = await runList([], {
+      stdout: {
+        isTTY: true,
+        columns: 120,
+        write: (s) => stdout.push(s),
+      },
+      stderr: { write() {} },
+      env: { TERM: 'xterm-256color' },
+      checkAndPrintFreshInstall: async () => false,
+      scanDaemons: () => ({ orphan: [], stale: [] }),
+      readRegistry: () => ({ entries: [
+        makeEntry({
+          name: 'local-session',
+          branch: 'sess/local-session',
+          tool: 'codex',
+          coding_session_id: 'sess_local',
+          session_state: 'idle',
+        }),
+      ] }),
+      fetchLocalBrokerSessions: async () => ({ ok: true, sessions: [], warning: null }),
+      fetchActiveSessions: async () => ({
+        ok: true,
+        sessions: [{
+          coding_session_id: 'sess_active',
+          label: 'active-session',
+          repo: 'memoro',
+          branch: 'sess/active-session',
+          source: 'codex',
+          idle_seconds: 0,
+        }],
+      }),
+    });
+
+    assert.equal(status, 0);
+    const out = stdout.join('');
+    assert.match(out, /\x1b\[1;33m#\s+Session/);
+    assert.match(out, /\x1b\[2;37m─+/);
+    assert.match(out, /\x1b\[36msess_active/);
+    assert.match(out, /Local sessions[\s\S]*local-session/);
+    assert.doesNotMatch(out, /\|/);
+  });
+
+  test('TTY table adapts to narrow terminals and honors NO_COLOR', () => {
+    const view = buildSessionListView({
+      activeSessions: [{
+        coding_session_id: 'sess_remote_identifier',
+        label: 'a-session-name-that-needs-clipping',
+        repo: 'memoro-cli',
+        branch: 'sess/a-very-long-development-branch',
+        source: 'codex',
+        idle_seconds: 0,
+      }],
+      localEntries: [],
+    });
+    const out = renderSessionListHuman({
+      view,
+      isTTY: true,
+      terminalWidth: 50,
+      useColor: false,
+    });
+
+    assert.doesNotMatch(out, /\x1b/);
+    assert.match(out, /#\s+Session\s+Status\s+mc-id/);
+    assert.match(out, /…/);
+    for (const line of out.split('\n')) {
+      assert.ok(line.length <= 50, `line exceeds terminal width (${line.length}): ${line}`);
+    }
+  });
+
   test('--json demotes registry-live sessions with no live local session to stale', async () => {
     const stdout = [];
     const stderr = [];

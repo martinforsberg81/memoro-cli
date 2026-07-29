@@ -202,7 +202,21 @@ export function renderSessionListHuman({
   title = 'mc sessions:',
   emptyLocalHint = null,
   includeExcerpts = false,
+  isTTY = false,
+  terminalWidth = 80,
+  useColor = false,
 } = {}) {
+  if (isTTY) {
+    return renderSessionListTable({
+      view,
+      title,
+      emptyLocalHint,
+      includeExcerpts,
+      terminalWidth,
+      useColor,
+    });
+  }
+
   const out = [];
   out.push(title);
   out.push('');
@@ -327,6 +341,203 @@ function renderLocalLine(entry) {
   const state = entry.session_state || 'no-session-yet';
   return `  ${entry.number}. ${name} local   ${tool} ${branch} ${state}`.replace(/\s+$/g, '');
 }
+
+function renderSessionListTable({
+  view,
+  title,
+  emptyLocalHint,
+  includeExcerpts,
+  terminalWidth,
+  useColor,
+}) {
+  const width = normalizeTerminalWidth(terminalWidth);
+  const activeHeading = width >= 57
+    ? 'Active sessions (reachable with `mc sessions send/read`):'
+    : 'Active sessions:';
+  const localHeading = width >= 48
+    ? 'Local sessions (start with `mc open <name>`):'
+    : 'Local sessions:';
+  const out = [title, '', activeHeading];
+
+  if (!view?.active?.length) {
+    out.push('  (none)');
+  } else {
+    const rows = view.active.map((session) => ({
+      number: `${session.number}.`,
+      session: session.name || session.coding_session_id || '',
+      tool: session.source || '',
+      repository: session.repo || '',
+      branch: session.branch || '',
+      status: session.status || 'unknown',
+      id: session.coding_session_id || '',
+    }));
+    out.push(...renderBorderlessTable(rows, activeTableColumns(), { width, useColor }));
+    if (includeExcerpts) {
+      for (const session of view.active) {
+        if (session.excerpt) out.push(styleText(`  ${session.number}. ${session.excerpt}`, ANSI.dim, useColor));
+      }
+    }
+  }
+
+  out.push('');
+  out.push(localHeading);
+  if (!view?.local?.length) {
+    out.push('  (none)');
+    if (emptyLocalHint) out.push(`  ${emptyLocalHint}`);
+  } else {
+    const rows = view.local.map((entry) => ({
+      number: `${entry.number}.`,
+      session: entry.name || '',
+      tool: entry.tool || '',
+      branch: entry.branch || '',
+      status: entry.session_state || 'no-session-yet',
+      id: entry.coding_session_id || '',
+    }));
+    out.push(...renderBorderlessTable(rows, localTableColumns(), { width, useColor }));
+  }
+
+  out.push('');
+  return out.join('\n');
+}
+
+function activeTableColumns() {
+  return [
+    tableColumn('number', '#', 3, 3),
+    tableColumn('session', 'Session', 16, 30, { grow: 2 }),
+    tableColumn('tool', 'Tool', 6, 10, { optional: true, dropOrder: 2 }),
+    tableColumn('repository', 'Repository', 10, 14, { optional: true, dropOrder: 1 }),
+    tableColumn('branch', 'Branch', 12, 28, { optional: true, dropOrder: 3, grow: 1 }),
+    tableColumn('status', 'Status', 8, 12),
+    tableColumn('id', 'mc-id', 12, 24, { grow: 3, accent: true }),
+  ];
+}
+
+function localTableColumns() {
+  return [
+    tableColumn('number', '#', 3, 3),
+    tableColumn('session', 'Session', 16, 30, { grow: 2 }),
+    tableColumn('tool', 'Tool', 6, 10, { optional: true, dropOrder: 1 }),
+    tableColumn('branch', 'Branch', 12, 28, { optional: true, dropOrder: 2, grow: 1 }),
+    tableColumn('status', 'Status', 8, 16),
+    tableColumn('id', 'mc-id', 12, 24, { grow: 3, accent: true }),
+  ];
+}
+
+function tableColumn(key, label, minWidth, maxWidth, options = {}) {
+  return {
+    key,
+    label,
+    minWidth,
+    maxWidth,
+    optional: false,
+    dropOrder: Number.POSITIVE_INFINITY,
+    grow: 0,
+    accent: false,
+    ...options,
+  };
+}
+
+function renderBorderlessTable(rows, definitions, { width, useColor }) {
+  const columns = fitTableColumns(definitions, width);
+  const divider = columns
+    .map((column) => '─'.repeat(column.width))
+    .join('  ');
+  const header = columns
+    .map((column) => fixedCell(column.label, column.width))
+    .join('  ');
+  const lines = [
+    styleText(header, ANSI.header, useColor),
+    styleText(divider, ANSI.divider, useColor),
+  ];
+
+  for (const row of rows) {
+    const cells = columns.map((column) => {
+      const raw = String(row[column.key] || '—');
+      const cell = fixedCell(raw, column.width);
+      return column.accent && raw !== '—'
+        ? styleText(cell, ANSI.id, useColor)
+        : cell;
+    });
+    lines.push(cells.join('  '));
+    lines.push(styleText(divider, ANSI.divider, useColor));
+  }
+  return lines;
+}
+
+function fitTableColumns(definitions, availableWidth) {
+  const columns = definitions.map((column) => ({
+    ...column,
+    width: column.minWidth,
+  }));
+  const optional = columns
+    .filter((column) => column.optional)
+    .sort((a, b) => a.dropOrder - b.dropOrder);
+
+  while (tableWidth(columns) > availableWidth && optional.length > 0) {
+    const dropped = optional.shift();
+    columns.splice(columns.indexOf(dropped), 1);
+  }
+
+  let remaining = Math.max(0, availableWidth - tableWidth(columns));
+  const growable = columns
+    .filter((column) => column.maxWidth > column.width)
+    .sort((a, b) => b.grow - a.grow);
+  while (remaining > 0 && growable.some((column) => column.width < column.maxWidth)) {
+    for (const column of growable) {
+      if (remaining === 0) break;
+      if (column.width >= column.maxWidth) continue;
+      column.width += 1;
+      remaining -= 1;
+    }
+  }
+
+  if (tableWidth(columns) > availableWidth) {
+    shrinkColumn(columns, 'session', 8, availableWidth);
+    shrinkColumn(columns, 'id', 8, availableWidth);
+    shrinkColumn(columns, 'status', 6, availableWidth);
+  }
+  return columns;
+}
+
+function shrinkColumn(columns, key, minimum, availableWidth) {
+  const column = columns.find((candidate) => candidate.key === key);
+  while (column && column.width > minimum && tableWidth(columns) > availableWidth) {
+    column.width -= 1;
+  }
+}
+
+function tableWidth(columns) {
+  return columns.reduce((sum, column) => sum + column.width, 0)
+    + Math.max(0, columns.length - 1) * 2;
+}
+
+function fixedCell(value, width) {
+  return clipCell(String(value || ''), width).padEnd(width);
+}
+
+function clipCell(value, width) {
+  if (value.length <= width) return value;
+  if (width <= 1) return value.slice(0, width);
+  return `${value.slice(0, width - 1)}…`;
+}
+
+function normalizeTerminalWidth(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return 80;
+  return Math.max(32, Math.floor(parsed));
+}
+
+function styleText(value, style, enabled) {
+  return enabled ? `${style}${value}${ANSI.reset}` : value;
+}
+
+const ANSI = Object.freeze({
+  reset: '\x1b[0m',
+  header: '\x1b[1;33m',
+  divider: '\x1b[2;37m',
+  id: '\x1b[36m',
+  dim: '\x1b[2m',
+});
 
 function compareActiveSessions(a, b) {
   return String(a.label || a.coding_session_id).localeCompare(String(b.label || b.coding_session_id))

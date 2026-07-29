@@ -7,6 +7,7 @@ import test, { describe } from 'node:test';
 import {
   ensureSessionHostRunning,
   listLocalBrokerAndHostSessions,
+  probeSessionHostRuntime,
   requestForSession,
 } from '../../../src/mc/broker/session-hosts.js';
 import { BROKER_PROTOCOL_VERSION } from '../../../src/mc/broker/daemon.js';
@@ -33,6 +34,109 @@ function makeHostManifest({ hostsDir, sessionId = 'sess_a' }) {
 }
 
 describe('session broker hosts', () => {
+  test('proves a refused session host exited only when its recorded pid is gone', async () => {
+    const connectionError = Object.assign(new Error('connect ECONNREFUSED'), {
+      code: 'ECONNREFUSED',
+    });
+    const processError = Object.assign(new Error('no such process'), {
+      code: 'ESRCH',
+    });
+    let requests = 0;
+    const result = await probeSessionHostRuntime({
+      socketPath: '/tmp/dead-broker.sock',
+      pidPath: '/tmp/dead-broker.pid',
+    }, {
+      request: async (message, options) => {
+        requests += 1;
+        assert.deepEqual(message, { type: 'status' });
+        assert.deepEqual(options, {
+          socketPath: '/tmp/dead-broker.sock',
+          timeoutMs: 600,
+        });
+        assert.equal('session_controller_capability' in message, false);
+        throw connectionError;
+      },
+      readFile: () => '1234\n',
+      signalProcess: () => { throw processError; },
+    });
+
+    assert.equal(requests, 2);
+    assert.deepEqual(result, {
+      verdict: 'exited',
+      reason: 'host-process-exited',
+      pid: 1234,
+    });
+  });
+
+  test('keeps session host state unknown when socket or pid evidence is inconclusive', async () => {
+    const denied = Object.assign(new Error('connect EPERM'), { code: 'EPERM' });
+    const refused = Object.assign(new Error('connect ECONNREFUSED'), {
+      code: 'ECONNREFUSED',
+    });
+    const paths = {
+      socketPath: '/tmp/unknown-broker.sock',
+      pidPath: '/tmp/unknown-broker.pid',
+    };
+
+    const deniedResult = await probeSessionHostRuntime(paths, {
+      request: async () => { throw denied; },
+      readFile: () => '1234\n',
+      signalProcess: () => assert.fail('permission-denied socket is not exit proof'),
+    });
+    const missingPidResult = await probeSessionHostRuntime(paths, {
+      request: async () => { throw refused; },
+      readFile: () => { throw new Error('missing'); },
+      signalProcess: () => assert.fail('missing pid is not exit proof'),
+    });
+
+    assert.equal(deniedResult.verdict, 'unknown');
+    assert.equal(missingPidResult.verdict, 'unknown');
+  });
+
+  test('keeps a refused session host live when the recorded pid still exists', async () => {
+    const refused = Object.assign(new Error('connect ECONNREFUSED'), {
+      code: 'ECONNREFUSED',
+    });
+    const result = await probeSessionHostRuntime({
+      socketPath: '/tmp/live-broker.sock',
+      pidPath: '/tmp/live-broker.pid',
+    }, {
+      request: async () => { throw refused; },
+      readFile: () => '4321\n',
+      signalProcess: (pid, signal) => {
+        assert.equal(pid, 4321);
+        assert.equal(signal, 0);
+      },
+    });
+
+    assert.equal(result.verdict, 'live');
+    assert.equal(result.reason, 'host-pid-live');
+  });
+
+  test('does not report exit when a replacement host appears during the probe', async () => {
+    const refused = Object.assign(new Error('connect ECONNREFUSED'), {
+      code: 'ECONNREFUSED',
+    });
+    const gone = Object.assign(new Error('no such process'), { code: 'ESRCH' });
+    let requests = 0;
+    const result = await probeSessionHostRuntime({
+      socketPath: '/tmp/restarted-broker.sock',
+      pidPath: '/tmp/restarted-broker.pid',
+    }, {
+      request: async () => {
+        requests += 1;
+        if (requests === 1) throw refused;
+        return { ok: true };
+      },
+      readFile: () => '9876\n',
+      signalProcess: () => { throw gone; },
+    });
+
+    assert.equal(requests, 2);
+    assert.equal(result.verdict, 'live');
+    assert.equal(result.reason, 'host-socket-reachable');
+  });
+
   test('lists hosted sessions and routes requests to the host socket', async () => {
     const root = mkdtempSync(join(tmpdir(), 'mc-session-hosts-'));
     try {

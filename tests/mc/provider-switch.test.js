@@ -582,9 +582,18 @@ test('plain recovery restarts a dead session host from its trusted local journal
         assert.equal(trustedRoot, '/private');
         return { kind: 'present', journal };
       },
-      ensureSessionHostRunning: async ({ sessionId, paths }) => {
+      ensureSessionHostRunning: async ({
+        sessionId,
+        controllerBinding,
+        paths,
+      }) => {
         assert.equal(sessionId, entry.coding_session_id);
         assert.equal(paths.socketPath, '/private/hosts/sess_switch1/broker.sock');
+        assert.deepEqual(controllerBinding, {
+          schema: 'mc-broker-controller-bootstrap-v1',
+          session_id: entry.coding_session_id,
+          session_controller_capability: controllerRoot,
+        });
         ensured += 1;
         hostReady = true;
         return { ok: true };

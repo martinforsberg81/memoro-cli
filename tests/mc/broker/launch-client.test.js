@@ -470,8 +470,10 @@ describe('launchBrokerOwnedSession', () => {
   test('routes new launches through a per-session host broker when enabled', async () => {
     const requests = [];
     const stderr = makeStreams().stderr;
+    const sessionControllerCapability = 'c'.repeat(64);
     const res = await launchClientTest.resolveLaunchBroker({
       codingSessionId: 'sess_hosted',
+      sessionControllerCapability,
       request: async (message, options) => {
         requests.push({ message, options });
         return { ok: true };
@@ -481,8 +483,13 @@ describe('launchBrokerOwnedSession', () => {
       stderr,
       deps: {
         useSessionHost: true,
-        ensureSessionHost: async ({ sessionId }) => {
+        ensureSessionHost: async ({ sessionId, controllerBinding }) => {
           assert.equal(sessionId, 'sess_hosted');
+          assert.deepEqual(controllerBinding, {
+            schema: 'mc-broker-controller-bootstrap-v1',
+            session_id: 'sess_hosted',
+            session_controller_capability: sessionControllerCapability,
+          });
           return {
             ok: true,
             socketPath: '/tmp/mc-hosted.sock',

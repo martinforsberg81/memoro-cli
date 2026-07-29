@@ -26,6 +26,7 @@ import { writeRegistry, makeEntry, REGISTRY_REL_PATH } from '../_helpers/registr
 import {
   launchFreshSession,
   launchResumeSession,
+  inspectLocalBrokerSessionForEntry,
   parseArgs,
   run as runResume,
   runResumePicker,
@@ -951,6 +952,65 @@ describe('mc resume <name>', () => {
       if (old === undefined) delete process.env.MC_TEST_MODE;
       else process.env.MC_TEST_MODE = old;
     }
+  });
+
+  test('treats a live journal as exited when the exact session host is proven gone', async () => {
+    const generation = '4f50f5a1-4c6b-4d6a-8b5c-152c5e6b8701';
+    const presence = await inspectLocalBrokerSessionForEntry({
+      name: 'data',
+      coding_session_id: 'sess_data',
+    }, {
+      request: async () => { throw new Error('global broker unavailable'); },
+      deps: {
+        listLocalBrokerAndHostSessions: async () => [],
+        sessionHostPaths: () => ({
+          socketPath: '/tmp/sess_data/broker.sock',
+          pidPath: '/tmp/sess_data/broker.pid',
+          lifecyclePath: '/tmp/sess_data/lifecycle.json',
+        }),
+        readSessionLifecycle: async () => ({
+          verdict: 'live',
+          record: { runtime_generation: generation },
+        }),
+        probeSessionHostRuntime: async () => ({
+          verdict: 'exited',
+          reason: 'host-process-exited',
+        }),
+      },
+    });
+
+    assert.equal(presence.verdict, 'exited');
+    assert.equal(presence.runtime_generation, generation);
+    assert.equal(presence.reason, 'host-process-exited');
+  });
+
+  test('keeps a live journal unreachable when session host exit is not proven', async () => {
+    const presence = await inspectLocalBrokerSessionForEntry({
+      name: 'data',
+      coding_session_id: 'sess_data',
+    }, {
+      request: async () => { throw new Error('global broker unavailable'); },
+      deps: {
+        listLocalBrokerAndHostSessions: async () => [],
+        sessionHostPaths: () => ({
+          socketPath: '/tmp/sess_data/broker.sock',
+          pidPath: '/tmp/sess_data/broker.pid',
+          lifecyclePath: '/tmp/sess_data/lifecycle.json',
+        }),
+        readSessionLifecycle: async () => ({
+          verdict: 'live',
+          record: {
+            runtime_generation: '4f50f5a1-4c6b-4d6a-8b5c-152c5e6b8701',
+          },
+        }),
+        probeSessionHostRuntime: async () => ({
+          verdict: 'unknown',
+          reason: 'host-socket-unverified',
+        }),
+      },
+    });
+
+    assert.equal(presence.verdict, 'unreachable');
   });
 
   test('plain open fails closed when cross-source active presence cannot be verified', async () => {
