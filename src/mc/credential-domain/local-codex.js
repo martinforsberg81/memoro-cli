@@ -1,10 +1,14 @@
 import { spawn, spawnSync } from 'node:child_process';
 import {
   chmodSync,
+  copyFileSync,
+  constants,
   existsSync,
+  lstatSync,
   mkdirSync,
   readFileSync,
   realpathSync,
+  renameSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -55,6 +59,7 @@ const TOOL_AUTH_LABEL = 'tool-auth:codex';
 const LEGACY_TOOL_AUTH_LABEL = 'tool_auth.codex';
 const PROBE_TIMEOUT_MS = 20_000;
 const MAX_AUTH_BYTES = 2 * 1024 * 1024;
+const MANAGED_SESSION_STATE_SCHEMA = 'mc-managed-codex-session-state/v1';
 const PACKAGE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const BOUNDARY_CHILD_SOURCE = join(
   PACKAGE_ROOT,
@@ -84,6 +89,7 @@ const BOUNDARY_REPORT_KEYS = Object.freeze([
  */
 export async function prepareLocalCodexCredentialDomain({
   codingSessionId,
+  providerSessionId = null,
   cwd,
   tool,
   portal,
@@ -174,6 +180,15 @@ export async function prepareLocalCodexCredentialDomain({
     ]) {
       mkdirSync(path, { recursive: true, mode: 0o700 });
       chmodSync(path, 0o700);
+    }
+    const restored = restoreManagedCodexSessionState({
+      root,
+      codingSessionId,
+      providerSessionId,
+      codexHome,
+    });
+    if (!restored.ok) {
+      return safeFailure(restored.reason);
     }
     writeFileSync(providerConfigPath, configBody, { mode: 0o600 });
     writeRestrictedMcShim(join(executorBin, 'mc'));
@@ -290,6 +305,7 @@ export async function prepareLocalCodexCredentialDomain({
  */
 export async function closeLocalCodexCredentialDomain({
   descriptor,
+  providerArtifact = null,
   portal,
   deps = {},
 } = {}) {
@@ -297,7 +313,7 @@ export async function closeLocalCodexCredentialDomain({
   if (!ownedPaths) {
     return { ok: false, persisted: false, reason: 'managed-domain-descriptor-invalid' };
   }
-  const { domainPath, executorRoot, leasePath } = ownedPaths;
+  const { root, domainPath, executorRoot, leasePath } = ownedPaths;
   let persisted = false;
   let reason = 'managed-domain-closed';
   try {
@@ -323,6 +339,19 @@ export async function closeLocalCodexCredentialDomain({
   if (!persisted) {
     return { ok: false, persisted: false, quarantined: true, reason };
   }
+  const sessionState = persistManagedCodexSessionState({
+    root,
+    descriptor,
+    providerArtifact,
+  });
+  if (!sessionState.ok) {
+    return {
+      ok: false,
+      persisted: true,
+      quarantined: true,
+      reason: sessionState.reason,
+    };
+  }
   if (!removeDomainPaths({ domainPath, executorRoot }) || !removeDomainLease(leasePath)) {
     return {
       ok: false,
@@ -331,7 +360,108 @@ export async function closeLocalCodexCredentialDomain({
       reason: 'managed-domain-cleanup-unconfirmed',
     };
   }
-  return { ok: true, persisted: true, quarantined: false, reason };
+  return {
+    ok: true,
+    persisted: true,
+    quarantined: false,
+    reason,
+    provider_session_state: sessionState.state,
+  };
+}
+
+export function persistManagedCodexSessionState({
+  root = mcHome(),
+  descriptor,
+  providerArtifact,
+} = {}) {
+  const checked = managedSessionArtifact({ descriptor, providerArtifact });
+  if (!checked.ok) return checked;
+  const stateRoot = managedSessionStateRoot(root, descriptor.session_id);
+  const transcriptPath = join(stateRoot, checked.relativeTranscriptPath);
+  const manifestPath = join(stateRoot, 'manifest.json');
+  const temporaryTranscript = `${transcriptPath}.${randomUUID()}.tmp`;
+  const temporaryManifest = `${manifestPath}.${randomUUID()}.tmp`;
+  try {
+    ensurePrivateDirectoryChain(root, dirname(transcriptPath));
+    const source = lstatSync(providerArtifact.transcript_path);
+    const realSourcePath = realpathSync(providerArtifact.transcript_path);
+    const realCodexHome = realpathSync(descriptor.codex_home);
+    if (!source.isFile() || source.isSymbolicLink()
+      || !isPathInside(realCodexHome, realSourcePath)) {
+      return safeSessionStateFailure('managed-portable-session-state-invalid');
+    }
+    copyFileSync(
+      providerArtifact.transcript_path,
+      temporaryTranscript,
+      constants.COPYFILE_EXCL,
+    );
+    chmodSync(temporaryTranscript, 0o600);
+    renameSync(temporaryTranscript, transcriptPath);
+    const manifest = {
+      schema: MANAGED_SESSION_STATE_SCHEMA,
+      coding_session_id: descriptor.session_id,
+      provider_session_id: providerArtifact.provider_session_id,
+      relative_transcript_path: checked.relativeTranscriptPath,
+    };
+    writeFileSync(temporaryManifest, `${JSON.stringify(manifest)}\n`, {
+      encoding: 'utf8',
+      mode: 0o600,
+      flag: 'wx',
+    });
+    renameSync(temporaryManifest, manifestPath);
+    return {
+      ok: true,
+      state: {
+        provider_session_id: providerArtifact.provider_session_id,
+        transcript_path: transcriptPath,
+      },
+    };
+  } catch {
+    try { rmSync(temporaryTranscript, { force: true }); } catch {}
+    try { rmSync(temporaryManifest, { force: true }); } catch {}
+    return safeSessionStateFailure('managed-portable-session-state-persist-failed');
+  }
+}
+
+export function restoreManagedCodexSessionState({
+  root = mcHome(),
+  codingSessionId,
+  providerSessionId = null,
+  codexHome,
+} = {}) {
+  if (providerSessionId == null) return { ok: true, restored: false };
+  if (!boundedProviderId(providerSessionId) || !isAbsolute(codexHome || '')) {
+    return safeSessionStateFailure('managed-portable-session-state-invalid');
+  }
+  const stateRoot = managedSessionStateRoot(root, codingSessionId);
+  const manifestPath = join(stateRoot, 'manifest.json');
+  try {
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+    if (!validManagedSessionManifest(manifest)
+      || manifest.coding_session_id !== codingSessionId
+      || manifest.provider_session_id !== providerSessionId) {
+      return safeSessionStateFailure('managed-portable-session-state-mismatch');
+    }
+    const sourcePath = join(stateRoot, manifest.relative_transcript_path);
+    const targetPath = join(codexHome, manifest.relative_transcript_path);
+    const realStateRoot = realpathSync(stateRoot);
+    const realSourcePath = realpathSync(sourcePath);
+    if (!isPathInside(stateRoot, sourcePath)
+      || !isPathInside(codexHome, targetPath)
+      || !isPathInside(realStateRoot, realSourcePath)) {
+      return safeSessionStateFailure('managed-portable-session-state-invalid');
+    }
+    const source = lstatSync(sourcePath);
+    if (!source.isFile() || source.isSymbolicLink() || (source.mode & 0o077) !== 0) {
+      return safeSessionStateFailure('managed-portable-session-state-invalid');
+    }
+    ensurePrivateDirectoryChain(root, dirname(targetPath));
+    copyFileSync(sourcePath, targetPath);
+    chmodSync(targetPath, 0o600);
+    return { ok: true, restored: true, transcript_path: targetPath };
+  } catch {
+    return safeSessionStateFailure('managed-portable-session-state-missing');
+  }
 }
 
 export function abortLocalCodexCredentialDomain({ descriptor } = {}) {
@@ -1086,7 +1216,103 @@ function resolveOwnedDomainPaths(descriptor) {
     || descriptor.executor_tmp !== join(executorRoot, 'tmp')) {
     return null;
   }
-  return { domainPath, executorRoot, leasePath };
+  return { root, domainPath, executorRoot, leasePath };
+}
+
+function managedSessionArtifact({ descriptor, providerArtifact } = {}) {
+  if (!descriptor || !providerArtifact
+    || providerArtifact.coding_session_id !== descriptor.session_id
+    || !boundedProviderId(providerArtifact.provider_session_id)
+    || typeof providerArtifact.transcript_path !== 'string'
+    || !isAbsolute(providerArtifact.transcript_path)) {
+    return safeSessionStateFailure('managed-portable-session-state-unconfirmed');
+  }
+  const sessionsRoot = join(descriptor.codex_home, 'sessions');
+  const archivedRoot = join(descriptor.codex_home, 'archived_sessions');
+  const root = isPathInside(sessionsRoot, providerArtifact.transcript_path)
+    ? sessionsRoot
+    : isPathInside(archivedRoot, providerArtifact.transcript_path)
+      ? archivedRoot
+      : null;
+  if (!root) return safeSessionStateFailure('managed-portable-session-state-invalid');
+  const rootName = root === sessionsRoot ? 'sessions' : 'archived_sessions';
+  const relativePath = relative(root, providerArtifact.transcript_path);
+  if (!relativePath || relativePath.startsWith('..') || isAbsolute(relativePath)
+    || !providerArtifact.transcript_path.endsWith(`-${providerArtifact.provider_session_id}.jsonl`)) {
+    return safeSessionStateFailure('managed-portable-session-state-invalid');
+  }
+  return {
+    ok: true,
+    relativeTranscriptPath: join(rootName, relativePath),
+  };
+}
+
+function managedSessionStateRoot(root, codingSessionId) {
+  return join(
+    root,
+    'provider-session-state',
+    'codex',
+    sessionDirectoryPart(codingSessionId),
+  );
+}
+
+function validManagedSessionManifest(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const keys = Object.keys(value).sort();
+  const expected = [
+    'coding_session_id',
+    'provider_session_id',
+    'relative_transcript_path',
+    'schema',
+  ].sort();
+  return keys.length === expected.length
+    && keys.every((key, index) => key === expected[index])
+    && value.schema === MANAGED_SESSION_STATE_SCHEMA
+    && typeof value.coding_session_id === 'string'
+    && value.coding_session_id.length > 0
+    && boundedProviderId(value.provider_session_id)
+    && /^(sessions|archived_sessions)[/\\].+\.jsonl$/u.test(
+      value.relative_transcript_path || '',
+    )
+    && !value.relative_transcript_path.split(/[\\/]+/u).includes('..');
+}
+
+function boundedProviderId(value) {
+  return typeof value === 'string'
+    && /^[A-Za-z0-9._:-]{1,128}$/u.test(value);
+}
+
+function ensurePrivateDirectoryChain(root, directory) {
+  if (!isAbsolute(root || '') || !isPathInside(root, directory)) {
+    throw new Error('managed session state path is invalid');
+  }
+  mkdirSync(directory, { recursive: true, mode: 0o700 });
+  const canonicalRoot = realpathSync(root);
+  let current = root;
+  assertPrivateOwnedDirectory(current, canonicalRoot);
+  const rel = relative(root, directory);
+  for (const part of rel.split(/[\\/]+/u).filter(Boolean)) {
+    current = join(current, part);
+    assertPrivateOwnedDirectory(
+      current,
+      join(canonicalRoot, relative(root, current)),
+    );
+  }
+}
+
+function assertPrivateOwnedDirectory(path, expectedRealPath) {
+  const info = lstatSync(path);
+  const expectedUid = typeof process.getuid === 'function' ? process.getuid() : null;
+  if (!info.isDirectory() || info.isSymbolicLink()
+    || realpathSync(path) !== expectedRealPath
+    || (Number.isInteger(expectedUid) && info.uid !== expectedUid)) {
+    throw new Error('managed session state directory is unsafe');
+  }
+  chmodSync(path, 0o700);
+}
+
+function safeSessionStateFailure(reason) {
+  return { ok: false, reason };
 }
 
 function safePathPart(value) {

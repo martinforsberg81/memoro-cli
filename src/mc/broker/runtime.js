@@ -1467,6 +1467,9 @@ export class BrokerRuntime {
     if (existing) return existing;
     const closing = Promise.resolve(this.credentialDomainCloser({
       descriptor: owned.descriptor,
+      providerArtifact: this.sessionMetadataBySession.get(expectedSession)?.provider_artifact
+        || this.sessionMetadata.get(id)?.provider_artifact
+        || null,
       portal: owned.portal,
     }))
       .then((result) => {

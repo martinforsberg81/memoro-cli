@@ -1249,6 +1249,7 @@ describe('BrokerRuntime', () => {
     await new Promise((resolve) => setImmediate(resolve));
     assert.deepEqual(closed, [{
       descriptor,
+      providerArtifact: null,
       portal: {
         apiUrl: null,
         token: null,
@@ -1598,6 +1599,7 @@ describe('BrokerRuntime', () => {
     fake.ptys[0].emitExit({ exitCode: 0, signal: null });
     await new Promise((resolve) => setImmediate(resolve));
     assert.equal(closeCalls.length, 1);
+    assert.equal(closeCalls[0].providerArtifact, null);
     assert.equal(runtime.handle({ type: 'sessions' }).sessions.length, 1);
 
     finishClose({ ok: true, persisted: true });

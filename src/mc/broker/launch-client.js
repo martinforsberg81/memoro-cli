@@ -396,6 +396,9 @@ export async function launchBrokerOwnedSession({
       || prepareLocalCodexCredentialDomain;
     credentialDomain = await prepareDomain({
       codingSessionId,
+      providerSessionId: argv[0] === 'resume'
+        ? registryEntry.tool_session_id || null
+        : null,
       cwd: repoContext.toplevel,
       tool: launch.id,
       portal: {

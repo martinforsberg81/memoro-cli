@@ -168,10 +168,11 @@ WHAT HAPPENS ON START
   \`mc open\` first attaches to a live broker-owned PTY when one exists,
   preserving that session surface without sending a new prompt. If no
   local live PTY is attachable, mc relaunches the same provider-native
-  session by id. If mc cannot find that provider session id, it announces
-  the gap and starts a fresh grounded session on the same coding session —
-  never a silent, contextless replacement. Idle tracked sessions that have
-  never launched start as fresh grounded sessions on first open.
+  session by id. If that provider session id or its resumable state is missing,
+  mc fails closed and never creates a replacement conversation under the same
+  mc session. Idle tracked sessions that have never launched start as fresh
+  grounded sessions on first open. A provider selected for the first time in
+  an existing mc session also starts its own first grounded conversation.
 
 TOOL SELECTION
   \`mc tool-switch <tool>\` changes the default for future bare \`mc\` and

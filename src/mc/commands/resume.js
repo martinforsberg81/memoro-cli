@@ -436,19 +436,11 @@ export async function launchResumeSession({
       stderr.write(`mc: provider session state is invalid (${toolSession.reason}); refusing to launch.\n`);
       return 1;
     }
-    // No provider-native session to resume (e.g. the tool exited before any
-    // message created a transcript). Under the contract, continuity is
-    // server-owned — a fresh grounded launch on the SAME coding session is
-    // strictly better than a dead end, and it is announced, never silent.
-    stderr.write(`mc: no ${launchTool?.shortName || 'provider'}-native session to resume for "${entry.name}" — starting a fresh grounded session on the same coding session.\n`);
-    return (deps.launchFreshSession || launchFreshSession)({
-      entry,
-      apiArgv,
-      env,
-      localAuthMode,
-      stderr,
-      deps,
-    });
+    // Reaching the resume path means this provider has already launched for
+    // the mc session. Missing native state is continuity loss, not permission
+    // to create a replacement provider conversation under the same identity.
+    stderr.write(`mc: no ${launchTool?.shortName || 'provider'}-native session to resume for "${entry.name}" — refusing to create a replacement session.\n`);
+    return 1;
   }
   const providerPatch = withProviderSession(entry, toolSession.source, {
     session_id: toolSession.sessionId,
@@ -532,7 +524,7 @@ export async function launchResumeSession({
       return { ok: true };
     },
     onExited: ({ providerArtifact = null }) => {
-      commitNativeProviderArtifact({
+      commitProviderArtifact({
         entry: (deps.findEntry || findEntry)(entry.name) || entry,
         expectedTool: launchTool?.id,
         providerArtifact,
@@ -614,7 +606,7 @@ export async function launchFreshSession({
       return { ok: true };
     },
     onExited: ({ providerArtifact = null }) => {
-      commitNativeProviderArtifact({
+      commitProviderArtifact({
         entry: (deps.findEntry || findEntry)(entry.name) || entry,
         expectedTool: launchTool?.id,
         providerArtifact,
@@ -628,18 +620,19 @@ export async function launchFreshSession({
   return result?.code ?? 0;
 }
 
-function commitNativeProviderArtifact({
+function commitProviderArtifact({
   entry,
   expectedTool,
   providerArtifact,
   localAuthMode,
   upsert,
 } = {}) {
-  if (localAuthMode !== LOCAL_AUTH_MODES.NATIVE || !providerArtifact
-    || !expectedTool || providerArtifact.tool !== expectedTool) return false;
+  if (!providerArtifact || !expectedTool || providerArtifact.tool !== expectedTool) return false;
+  const managed = localAuthMode === LOCAL_AUTH_MODES.MANAGED_PORTABLE;
+  if (!managed && localAuthMode !== LOCAL_AUTH_MODES.NATIVE) return false;
   const providerPatch = withProviderSession(entry, providerArtifact.tool, {
     session_id: providerArtifact.provider_session_id,
-    transcript_path: providerArtifact.transcript_path,
+    transcript_path: managed ? null : providerArtifact.transcript_path,
     runtime_generation: providerArtifact.runtime_generation,
   });
   if (!providerPatch.ok) return false;
@@ -647,7 +640,13 @@ function commitNativeProviderArtifact({
     name: entry.name,
     tool_session_id: providerArtifact.provider_session_id,
     tool_session_source: providerArtifact.tool,
-    tool_transcript_path: providerArtifact.transcript_path,
+    tool_transcript_path: managed ? null : providerArtifact.transcript_path,
+    ...(managed
+      ? {
+          tool_session_provider_adapter: MANAGED_CODEX_PROVIDER_ID,
+          tool_session_provider_generation: providerArtifact.runtime_generation,
+        }
+      : {}),
     provider_sessions: providerPatch.providerSessions,
   });
   return true;
@@ -938,7 +937,8 @@ export async function resumeSelectedChoice(choice, {
   }
   const firstLaunchInWorktree = switchingTool
     ? !providerSessionFor(entry, effectiveTargetTool?.id)?.session_id
-    : (
+    : entry.session_state === 'no-session-yet'
+      && (
         localAuthMode === LOCAL_AUTH_MODES.MANAGED_PORTABLE
           ? !hasManagedProviderToolSession(entry)
           : !hasStoredToolSession(entry)

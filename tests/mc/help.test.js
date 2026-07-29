@@ -44,9 +44,9 @@ describe('mc --help', () => {
     assert.match(r.stdout, /live broker-owned PTY/);
     assert.match(r.stdout, /without sending a new prompt/);
     assert.match(r.stdout, /relaunches the same provider-native\s+session by id/);
-    assert.match(r.stdout, /announces\s+the gap and starts a fresh grounded session on the same coding session/);
+    assert.match(r.stdout, /fails closed and never creates a replacement conversation/);
     assert.doesNotMatch(r.stdout, /refuses to\s+start a contextless replacement/);
-    assert.match(r.stdout, /Idle tracked sessions that have\s+never launched start as fresh grounded sessions on first open/);
+    assert.match(r.stdout, /Idle tracked sessions that have never launched start as fresh\s+grounded sessions on first open/);
     assert.match(r.stdout, /cannot switch provider for an existing provider\s+session/);
     assert.doesNotMatch(r.stdout, /\/mc map/);
     assert.doesNotMatch(r.stdout, /MEMORO\.md is missing/);

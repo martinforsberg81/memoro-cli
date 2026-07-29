@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import {
   existsSync,
   mkdtempSync,
+  mkdirSync,
   realpathSync,
   readdirSync,
   readFileSync,
@@ -10,7 +11,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import test, { describe } from 'node:test';
 
 import {
@@ -107,6 +108,17 @@ describe('local Codex credential domain', () => {
         join(prepared.descriptor.codex_home, 'auth.json'),
         'utf8',
       )).tokens.access_token, AUTH_CANARY);
+      const providerSessionId = '019fade4-e16b-70f0-9e5f-559cf9454cf8';
+      const transcriptPath = join(
+        prepared.descriptor.codex_home,
+        'sessions',
+        '2026',
+        '07',
+        '29',
+        `rollout-2026-07-29T10-00-00-${providerSessionId}.jsonl`,
+      );
+      mkdirSync(dirname(transcriptPath), { recursive: true, mode: 0o700 });
+      writeFileSync(transcriptPath, '{"type":"session_meta"}\n', { mode: 0o600 });
 
       const overlapping = await prepareLocalCodexCredentialDomain({
         codingSessionId: 'sess_managed1',
@@ -131,6 +143,11 @@ describe('local Codex credential domain', () => {
 
       const closed = await closeLocalCodexCredentialDomain({
         descriptor: prepared.descriptor,
+        providerArtifact: {
+          coding_session_id: 'sess_managed1',
+          provider_session_id: providerSessionId,
+          transcript_path: transcriptPath,
+        },
         portal: { apiUrl: 'https://memoro.test', token: 'memoro-canary' },
         deps: {
           persistCustodyAuth: ({ secretId, authBody }) => {
@@ -146,6 +163,49 @@ describe('local Codex credential domain', () => {
       assert.equal(existsSync(prepared.descriptor.domain_path), false);
       assert.equal(existsSync(prepared.descriptor.executor_root), false);
       assert.equal(existsSync(prepared.descriptor.lease_path), false);
+
+      const resumed = await prepareLocalCodexCredentialDomain({
+        codingSessionId: 'sess_managed1',
+        providerSessionId,
+        cwd,
+        tool: 'codex',
+        portal: { apiUrl: 'https://memoro.test', token: 'memoro-canary' },
+        root,
+        deps: {
+          inspectCodexRelease: () => ({
+            ok: true,
+            nativeBinary,
+            version: MANAGED_CODEX_VERSION,
+            teamId: MANAGED_CODEX_TEAM_ID,
+            sha256: 'a'.repeat(64),
+          }),
+          verifyBoundary: ({ codexHome }) => {
+            const restored = join(
+              codexHome,
+              'sessions',
+              '2026',
+              '07',
+              '29',
+              `rollout-2026-07-29T10-00-00-${providerSessionId}.jsonl`,
+            );
+            assert.equal(readFileSync(restored, 'utf8'), '{"type":"session_meta"}\n');
+            return { ok: true };
+          },
+          loadCustodyAuth: () => ({
+            ok: true,
+            secretId: 'secret_1',
+            authBody: AUTH_BODY,
+          }),
+        },
+      });
+      assert.equal(resumed.ok, true);
+      assert.deepEqual(abortLocalCodexCredentialDomain({
+        descriptor: resumed.descriptor,
+      }), {
+        ok: true,
+        quarantined: false,
+        reason: 'managed-domain-aborted',
+      });
     } finally {
       rmSync(root, { recursive: true, force: true });
       rmSync(cwd, { recursive: true, force: true });

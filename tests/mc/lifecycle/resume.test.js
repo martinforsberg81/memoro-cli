@@ -186,7 +186,7 @@ describe('mc resume <name>', () => {
             name: 'local-dead',
             branch: 'sess/local-dead',
             tool: 'codex',
-            session_state: 'dead',
+            session_state: 'no-session-yet',
             worktree_path: '/tmp/local-dead',
           }),
         ] }),
@@ -1620,6 +1620,7 @@ describe('mc resume <name>', () => {
       name: 'fresh',
       tool: 'codex',
       worktree_path: '/tmp/fresh',
+      session_state: 'no-session-yet',
     }, {
       ...common,
       launchFreshSession: async (options) => {
@@ -1667,7 +1668,7 @@ describe('mc resume <name>', () => {
     ]);
   });
 
-  test('prelaunch falls back to a fresh grounded launch when no provider session exists', async () => {
+  test('prelaunch refuses to replace a missing provider-native session', async () => {
     const freshLaunched = [];
     const stderr = [];
     const status = await launchResumeSession({
@@ -1693,13 +1694,10 @@ describe('mc resume <name>', () => {
       },
     });
 
-    // Announced, never silent — and the fresh launch keeps the same coding
-    // session so server continuity grounds the replacement.
-    assert.equal(status, 0);
-    assert.equal(freshLaunched.length, 1);
-    assert.equal(freshLaunched[0].coding_session_id, 'sess_keepme01');
+    assert.equal(status, 1);
+    assert.equal(freshLaunched.length, 0);
     assert.match(stderr.join(''), /no codex-native session to resume/);
-    assert.match(stderr.join(''), /fresh grounded session on the same coding session/);
+    assert.match(stderr.join(''), /refusing to create a replacement session/);
   });
 
   test('fresh launch starts a grounded tool session in the same worktree', async () => {
