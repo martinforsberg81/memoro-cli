@@ -35,6 +35,20 @@ const SAFE_ENV = Object.freeze({
   LANG: 'C',
   LC_ALL: 'C',
 });
+const C1_GPG_CANDIDATES = Object.freeze([
+  Object.freeze({
+    entry: '/opt/homebrew/bin/gpg',
+    targetPrefix: '/opt/homebrew/Cellar/gnupg/',
+  }),
+  Object.freeze({
+    entry: '/usr/local/bin/gpg',
+    targetPrefix: '/usr/local/Cellar/gnupg/',
+  }),
+  Object.freeze({
+    entry: '/usr/bin/gpg',
+    targetPrefix: '/usr/bin/gpg',
+  }),
+]);
 
 /**
  * Verify the single broker-owned C1 artifact location. This API intentionally
@@ -201,19 +215,24 @@ export function verifyClaudeC1Manifest({
   expectedFingerprint,
   spawnSync: run = spawnSync,
   fs = fileDeps(),
+  gpgPath = resolveClaudeC1GpgExecutable(),
 } = {}) {
+  if (!gpgPath) return false;
   let temporaryHome = null;
   try {
     temporaryHome = fs.mkdtemp(join(tmpdir(), 'mc-c1-gpg-'));
-    const imported = run('gpg', [
+    const imported = run(gpgPath, [
       '--batch', '--no-options', '--homedir', temporaryHome, '--status-fd=1', '--import', signingKeyPath,
     ], commandOptions());
-    const verified = run('gpg', [
+    const verified = run(gpgPath, [
       '--batch', '--no-options', '--homedir', temporaryHome, '--status-fd=1', '--verify', signaturePath, manifestPath,
     ], commandOptions());
     const status = `${imported?.stdout || ''}\n${verified?.stdout || ''}`;
-    return imported?.status === 0
-      && verified?.status === 0
+    // GPG may import the public key successfully and then fail to contact a
+    // user agent in a deliberately isolated runtime, returning 2 despite an
+    // exact IMPORT_OK record. The detached signature verification is the
+    // authoritative terminal operation and must still succeed with VALIDSIG.
+    return verified?.status === 0
       && status.includes(`[GNUPG:] IMPORT_OK 1 ${expectedFingerprint}`)
       && status.includes(`[GNUPG:] VALIDSIG ${expectedFingerprint} `);
   } catch {
@@ -221,6 +240,39 @@ export function verifyClaudeC1Manifest({
   } finally {
     if (temporaryHome) try { fs.rm(temporaryHome, { recursive: true, force: true }); } catch {}
   }
+}
+
+/**
+ * C1 never resolves GPG through caller-controlled PATH. The supported macOS
+ * host may provide it through Homebrew, whose launcher is a symlink into a
+ * versioned Cellar path. Resolve that link once and execute only the rebound,
+ * fixed-prefix regular file. GPG is provenance evidence; the runtime still
+ * independently enforces the compiled manifest, binary and tree digests.
+ */
+export function resolveClaudeC1GpgExecutable({
+  candidates = C1_GPG_CANDIDATES,
+  fs = fileDeps(),
+  uid = typeof process.getuid === 'function' ? process.getuid() : null,
+} = {}) {
+  for (const candidate of candidates) {
+    try {
+      const entry = fs.lstat(candidate.entry);
+      if (!entry.isFile?.() && !entry.isSymbolicLink?.()) continue;
+      const target = fs.realpath(candidate.entry);
+      const stat = fs.lstat(target);
+      const prefixMatches = candidate.targetPrefix.endsWith('/')
+        ? target.startsWith(candidate.targetPrefix)
+        : target === candidate.targetPrefix;
+      if (!prefixMatches
+        || !stat.isFile?.()
+        || stat.isSymbolicLink?.()
+        || (stat.mode & 0o022) !== 0
+        || (stat.mode & 0o111) === 0
+        || (Number.isInteger(uid) && stat.uid !== uid && stat.uid !== 0)) continue;
+      return target;
+    } catch {}
+  }
+  return null;
 }
 
 function artifactLayout(artifactRoot) {

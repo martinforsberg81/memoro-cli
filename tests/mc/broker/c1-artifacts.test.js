@@ -18,7 +18,9 @@ import { join } from 'node:path';
 import test from 'node:test';
 
 import {
+  resolveClaudeC1GpgExecutable,
   verifyClaudeC1ArtifactFixture,
+  verifyClaudeC1Manifest,
 } from '../../../src/mc/broker/c1-artifacts.js';
 
 test('C1 fixture verifier rebinds the pinned tree and returns only fixed verified paths', (t) => {
@@ -94,6 +96,75 @@ test('C1 fixture verifier fails closed on an unsupported host before reading the
     arch: () => 'arm64',
   });
   assert.deepEqual(result, { ok: false, code: 'c1-artifact-platform-unsupported' });
+});
+
+test('C1 manifest verification uses a rebound fixed GPG executable, never PATH', (t) => {
+  const fixture = createFixture(t);
+  const calls = [];
+  const gpgPath = '/opt/homebrew/Cellar/gnupg/2.5.18/bin/gpg';
+  const result = verifyClaudeC1Manifest({
+    manifestPath: join(fixture.root, 'manifest.json'),
+    signaturePath: join(fixture.root, 'manifest.json.sig'),
+    signingKeyPath: join(fixture.root, 'claude-code.asc'),
+    expectedFingerprint: fixture.expected.manifestSigningFingerprint,
+    gpgPath,
+    spawnSync(command, args) {
+      calls.push({ command, args });
+      if (args.includes('--import')) {
+        return {
+          status: 2,
+          stdout: `[GNUPG:] IMPORT_OK 1 ${fixture.expected.manifestSigningFingerprint}\n`,
+        };
+      }
+      return {
+        status: 0,
+        stdout: `[GNUPG:] VALIDSIG ${fixture.expected.manifestSigningFingerprint} 2026-07-24 0 4 0 1 10 00 ${fixture.expected.manifestSigningFingerprint}\n`,
+      };
+    },
+  });
+
+  assert.equal(result, true);
+  assert.deepEqual(calls.map(({ command }) => command), [gpgPath, gpgPath]);
+  assert.equal(verifyClaudeC1Manifest({
+    manifestPath: join(fixture.root, 'manifest.json'),
+    signaturePath: join(fixture.root, 'manifest.json.sig'),
+    signingKeyPath: join(fixture.root, 'claude-code.asc'),
+    expectedFingerprint: fixture.expected.manifestSigningFingerprint,
+    gpgPath: null,
+    spawnSync() {
+      assert.fail('missing fixed GPG must fail before spawn');
+    },
+  }), false);
+});
+
+test('C1 GPG resolution accepts only an executable rebound into its fixed prefix', () => {
+  const target = '/opt/homebrew/Cellar/gnupg/2.5.18/bin/gpg';
+  const regular = {
+    uid: 502,
+    mode: 0o100555,
+    isFile: () => true,
+    isSymbolicLink: () => false,
+  };
+  const link = {
+    isFile: () => false,
+    isSymbolicLink: () => true,
+  };
+  const fs = {
+    lstat(path) {
+      if (path === '/opt/homebrew/bin/gpg') return link;
+      if (path === target) return regular;
+      throw new Error('unexpected path');
+    },
+    realpath: () => target,
+  };
+  const candidates = [{
+    entry: '/opt/homebrew/bin/gpg',
+    targetPrefix: '/opt/homebrew/Cellar/gnupg/',
+  }];
+
+  assert.equal(resolveClaudeC1GpgExecutable({ candidates, fs, uid: 502 }), target);
+  regular.mode = 0o100775;
+  assert.equal(resolveClaudeC1GpgExecutable({ candidates, fs, uid: 502 }), null);
 });
 
 function verify(fixture, overrides = {}) {

@@ -31,7 +31,7 @@ export const C1_SOURCE_CLOSURE_SHA256 = Object.freeze({
   'src/lib/config.js': '3afa21f33613baf1838314a35b67e642ed286d55c7acbd5ee45cba4f5347c0cb',
   'src/lib/keychain.js': 'b6445625a9142c60d8915e34255155e277422050f02f3a26eebba7ee69f506e6',
   'src/mc/broker/c1-artifacts.js':
-    '362f9a935c36c0b974c45db1af4dfca1603c5b6a01c41e8e1d2062a328b0fa6b',
+    '2b8e7f84336c1a4d31039e60b96ddb02d553f6c1fd2e8004ce6b1ebf4f535ebc',
   'src/mc/broker/c1-child.js':
     '3a869dc7c3de2e6ec4e084b763d8bf4ac6486691b02269b6da6d567cd8e2c8bb',
   'src/mc/broker/c1-lease-host.js':
