@@ -1,10 +1,12 @@
 import { readRegistry } from './registry.js';
 import { getRepoContext, deriveRepoName, derivePublicRepoRef } from '../lib/git-context.js';
+import { resolveDefaultBranch } from './git.js';
 
 export async function listLocalRepoCatalog({
   cwd = process.cwd,
   registryReader = readRegistry,
   repoContextReader = getRepoContext,
+  defaultBranchResolver = resolveDefaultBranch,
 } = {}) {
   const candidates = candidateRepoDirs({ cwd, registryReader });
   const byRef = new Map();
@@ -13,11 +15,12 @@ export async function listLocalRepoCatalog({
     const context = await repoContextReader(dir).catch(() => null);
     const repoRef = derivePublicRepoRef(context);
     if (!repoRef) continue;
+    const defaultBranch = safeDefaultBranch(defaultBranchResolver, context?.toplevel || dir);
     mergeRepo(byRef, {
       repo: deriveRepoName(context),
       repo_ref: repoRef,
       branch: context.branch || null,
-      workspace_ref: defaultWorkspaceRef(context.branch),
+      workspace_ref: defaultBranch.ok ? defaultBranch.branch : null,
     });
   }
 
@@ -49,8 +52,13 @@ function rankRepo(repo) {
   return repo.workspace_ref ? 2 : repo.branch ? 1 : 0;
 }
 
-function defaultWorkspaceRef(branch) {
-  return branch === 'main' || branch === 'master' ? branch : null;
+function safeDefaultBranch(resolver, dir) {
+  try {
+    const result = resolver(dir);
+    return result?.ok ? result : { ok: false };
+  } catch {
+    return { ok: false };
+  }
 }
 
 function addDir(dirs, dir) {

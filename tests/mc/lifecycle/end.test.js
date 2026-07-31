@@ -419,6 +419,35 @@ describe('mc end', () => {
     assert.ok(wts.includes('/b') || wts.includes('worktrees/repo/b'));
   });
 
+  test('--dry-run refuses a safe classification when the default branch is unknown', () => {
+    git(repo.dir, 'branch sess/unknown main');
+    const wt = join(repo.mcHome, 'worktrees', 'repo', 'unknown');
+    addWorktree(repo.dir, wt, 'sess/unknown');
+    git(repo.dir, 'branch competing main');
+    git(repo.dir, 'push -q origin competing');
+    git(repo.dir, 'fetch -q origin');
+    git(repo.dir, 'remote set-head origin -d');
+    writeRegistry(repo.mcHome, [makeEndEntry({
+      name: 'unknown',
+      branch: 'sess/unknown',
+      worktree_path: wt,
+      safety_verdict: 'SAFE_TO_END',
+    })]);
+
+    const r = runMc(['end', 'unknown', '--dry-run', '--json'], {
+      cwd: repo.dir,
+      env: { MC_HOME: repo.mcHome },
+    });
+
+    assert.equal(r.status, 0, `stderr:${r.stderr}`);
+    const j = parseJsonOrNull(r.stdout);
+    assert.equal(j.targets[0].verdict, 'NEEDS_REVIEW');
+    assert.equal(j.targets[0].commits_ahead, null);
+    assert.equal(j.targets[0].default_branch, null);
+    assert.match(j.targets[0].reason, /refusing merged classification/);
+    assert.match(git(repo.dir, 'worktree list --porcelain'), /unknown/);
+  });
+
   test('bulk `mc end a b c` operates sequentially', () => {
     for (const n of ['x', 'y', 'z']) {
       git(repo.dir, `branch sess/${n} main`);

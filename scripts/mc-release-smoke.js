@@ -161,6 +161,11 @@ function initRepo(cwd) {
   git(cwd, ['init', '-q', '-b', 'main']);
   git(cwd, ['config', 'user.email', 'release-smoke@example.invalid']);
   git(cwd, ['config', 'user.name', 'mc release smoke']);
+  // This fixture is intentionally local-only. Once `mc new` adds a second
+  // branch Git has no remote HEAD from which to recover the default, so record
+  // the fixture's explicit repository metadata instead of relying on a name
+  // convention.
+  git(cwd, ['config', '--local', 'mc.defaultBranch', 'main']);
   writeFileSync(join(cwd, 'README.md'), '# smoke\n');
   git(cwd, ['add', 'README.md']);
   git(cwd, ['commit', '-q', '-m', 'Initial commit']);

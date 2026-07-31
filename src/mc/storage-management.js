@@ -4,7 +4,13 @@ import { join } from 'node:path';
 
 import { mcHome } from './paths.js';
 import { readRegistry } from './registry.js';
-import { tryGit, primaryWorktree, branchExists } from './git.js';
+import {
+  branchExists,
+  commitsAhead,
+  primaryWorktree,
+  resolveDefaultBranch,
+  tryGit,
+} from './git.js';
 import { scanDaemons, reapOrphans, DEFAULT_MIN_AGE_MS } from './orphan-daemons.js';
 import {
   DEFAULT_SIDECAR_MIN_AGE_MS,
@@ -255,6 +261,10 @@ function observeGitForCleanup(entry) {
       branch_exists: false,
       dirty_files: null,
       ahead: null,
+      default_branch: null,
+      default_branch_ref: null,
+      default_branch_source: null,
+      default_branch_reason: 'worktree-path-missing',
       primary_worktree: null,
     };
   }
@@ -267,6 +277,10 @@ function observeGitForCleanup(entry) {
       branch_exists: false,
       dirty_files: null,
       ahead: null,
+      default_branch: null,
+      default_branch_ref: null,
+      default_branch_source: null,
+      default_branch_reason: 'worktree-missing',
       primary_worktree: null,
     };
   }
@@ -277,7 +291,12 @@ function observeGitForCleanup(entry) {
     || nonEmpty(entry.current_branch)
     || nonEmpty(entry.branch);
   const branchKnown = Boolean(primary && branch && branchExists(primary, branch));
-  const ahead = branchKnown ? commitsAheadMain(primary, branch) : null;
+  const defaultBranch = primary
+    ? resolveDefaultBranch(primary)
+    : { ok: false, reason: 'primary-worktree-missing' };
+  const ahead = branchKnown && defaultBranch.ok
+    ? commitsAhead(primary, branch, defaultBranch.ref)
+    : null;
 
   return {
     worktree_path: worktreePath,
@@ -286,16 +305,12 @@ function observeGitForCleanup(entry) {
     branch_exists: branchKnown,
     dirty_files: dirty,
     ahead,
+    default_branch: defaultBranch.ok ? defaultBranch.branch : null,
+    default_branch_ref: defaultBranch.ok ? defaultBranch.ref : null,
+    default_branch_source: defaultBranch.ok ? defaultBranch.source : null,
+    default_branch_reason: defaultBranch.ok ? null : defaultBranch.reason,
     primary_worktree: primary,
   };
-}
-
-function commitsAheadMain(primary, branch) {
-  const baseRef = tryGit(primary, ['rev-parse', '--verify', 'main']) !== null ? 'main' : 'origin/main';
-  const aheadRaw = tryGit(primary, ['rev-list', '--count', `${baseRef}..${branch}`]);
-  if (aheadRaw === null) return null;
-  const ahead = Number(aheadRaw);
-  return Number.isFinite(ahead) ? ahead : null;
 }
 
 function summarizeStorage({ entries, worktrees, runtime, dependencySnapshots }) {

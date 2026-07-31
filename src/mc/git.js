@@ -81,6 +81,66 @@ export function branchExists(cwd, branch) {
 }
 
 /**
+ * Resolve the repository's default branch from explicit local metadata or
+ * unambiguous Git refs. This is deliberately local-only: lifecycle safety
+ * must not depend on network availability, and a missing remote HEAD must not
+ * be replaced with a conventional branch-name guess.
+ *
+ * Repository-local overrides use `mc.defaultBranch` and, when more than one
+ * remote exists, optional `mc.defaultRemote`. Callers may supply the same
+ * values directly when they already own trusted repository metadata.
+ */
+export function resolveDefaultBranch(repoDir, {
+  defaultBranch = null,
+  defaultRemote = null,
+} = {}) {
+  if (!isInsideRepo(repoDir)) return unresolvedDefaultBranch('not-a-git-repository');
+
+  const remotes = lines(tryGit(repoDir, ['remote']));
+  const branch = nonEmpty(defaultBranch)
+    || nonEmpty(tryGit(repoDir, ['config', '--local', '--get', 'mc.defaultBranch']));
+  const remote = nonEmpty(defaultRemote)
+    || nonEmpty(tryGit(repoDir, ['config', '--local', '--get', 'mc.defaultRemote']));
+
+  if (branch && !validBranchName(repoDir, branch)) {
+    return unresolvedDefaultBranch('configured-default-branch-invalid');
+  }
+  if (remote && !remotes.includes(remote)) {
+    return unresolvedDefaultBranch('configured-default-remote-missing');
+  }
+  if (branch) return resolveConfiguredBranch(repoDir, branch, remote, remotes);
+
+  const selectedRemotes = remote ? [remote] : remotes;
+  const remoteHeads = selectedRemotes
+    .map((name) => remoteHeadCandidate(repoDir, name))
+    .filter(Boolean);
+  if (remoteHeads.length === 1) return resolvedDefaultBranch(remoteHeads[0], 'remote-head');
+  if (remoteHeads.length > 1) {
+    return unresolvedDefaultBranch('default-branch-ambiguous', remoteHeads);
+  }
+
+  const remoteBranches = remoteBranchCandidates(repoDir, selectedRemotes);
+  if (remoteBranches.length === 1) {
+    return resolvedDefaultBranch(remoteBranches[0], 'single-remote-branch');
+  }
+  if (remoteBranches.length > 1) {
+    return unresolvedDefaultBranch('default-branch-unknown', remoteBranches);
+  }
+
+  if (remotes.length === 0) {
+    const localBranches = localBranchCandidates(repoDir);
+    if (localBranches.length === 1) {
+      return resolvedDefaultBranch(localBranches[0], 'single-local-branch');
+    }
+    if (localBranches.length > 1) {
+      return unresolvedDefaultBranch('default-branch-unknown', localBranches);
+    }
+  }
+
+  return unresolvedDefaultBranch('default-branch-unknown');
+}
+
+/**
  * True if the worktree at `path` has uncommitted changes (tracked +
  * untracked). Cheap: just `git status --porcelain`.
  */
@@ -91,15 +151,136 @@ export function isDirty(worktreePath) {
 }
 
 /**
- * Count of commits on `branch` not in `mainRef`. 0 means the branch is
- * fully merged (or has been squash-merged so the changes are equivalent
- * but the commits aren't — see squash-phantom.js for that distinction).
+ * Count commits on `branch` that are not in the resolved default branch.
+ * Returns null when the default branch or revision cannot be proven; callers
+ * must not turn that unknown state into a merged/safe classification.
  */
-export function commitsAhead(repoDir, branch, mainRef = 'origin/main') {
-  const r = tryGit(repoDir, ['rev-list', '--count', `${mainRef}..${branch}`]);
-  if (r === null) return 0;
+export function commitsAhead(repoDir, branch, baseRef = null) {
+  const resolved = baseRef
+    ? { ok: true, ref: baseRef }
+    : resolveDefaultBranch(repoDir);
+  if (!resolved.ok) return null;
+  const r = tryGit(repoDir, ['rev-list', '--count', `${resolved.ref}..${branch}`]);
+  if (r === null) return null;
   const n = Number(r);
-  return Number.isFinite(n) ? n : 0;
+  return Number.isFinite(n) ? n : null;
+}
+
+function resolveConfiguredBranch(repoDir, branch, remote, remotes) {
+  if (remote) {
+    const candidate = remoteBranchCandidate(repoDir, remote, branch);
+    return candidate
+      ? resolvedDefaultBranch(candidate, 'configured')
+      : unresolvedDefaultBranch('configured-default-branch-missing');
+  }
+
+  const localRef = `refs/heads/${branch}`;
+  if (refExists(repoDir, localRef)) {
+    const upstream = nonEmpty(tryGit(repoDir, [
+      'for-each-ref', '--format=%(upstream)', localRef,
+    ]));
+    if (upstream && refExists(repoDir, upstream)) {
+      const candidate = preferLocalDefaultRef(repoDir, candidateFromRemoteRef(upstream));
+      if (candidate) return resolvedDefaultBranch(candidate, 'configured');
+    }
+    return resolvedDefaultBranch({ branch, ref: localRef, remote: null }, 'configured');
+  }
+
+  const matches = remotes
+    .map((name) => remoteBranchCandidate(repoDir, name, branch))
+    .filter(Boolean);
+  if (matches.length === 1) return resolvedDefaultBranch(matches[0], 'configured');
+  if (matches.length > 1) return unresolvedDefaultBranch('default-branch-ambiguous', matches);
+  return unresolvedDefaultBranch('configured-default-branch-missing');
+}
+
+function remoteHeadCandidate(repoDir, remote) {
+  const headRef = `refs/remotes/${remote}/HEAD`;
+  const target = nonEmpty(tryGit(repoDir, ['symbolic-ref', '--quiet', headRef]));
+  if (!target || !target.startsWith(`refs/remotes/${remote}/`) || !refExists(repoDir, target)) {
+    return null;
+  }
+  return preferLocalDefaultRef(repoDir, candidateFromRemoteRef(target));
+}
+
+function remoteBranchCandidates(repoDir, remotes) {
+  const allowed = new Set(remotes);
+  return lines(tryGit(repoDir, [
+    'for-each-ref', '--format=%(refname)', 'refs/remotes',
+  ]))
+    .filter((ref) => !ref.endsWith('/HEAD'))
+    .map(candidateFromRemoteRef)
+    .filter((candidate) => candidate && allowed.has(candidate.remote))
+    .map((candidate) => preferLocalDefaultRef(repoDir, candidate));
+}
+
+function localBranchCandidates(repoDir) {
+  return lines(tryGit(repoDir, [
+    'for-each-ref', '--format=%(refname)', 'refs/heads',
+  ])).map((ref) => ({
+    branch: ref.slice('refs/heads/'.length),
+    ref,
+    remote: null,
+  }));
+}
+
+function remoteBranchCandidate(repoDir, remote, branch) {
+  const ref = `refs/remotes/${remote}/${branch}`;
+  return refExists(repoDir, ref)
+    ? preferLocalDefaultRef(repoDir, { branch, ref, remote })
+    : null;
+}
+
+function candidateFromRemoteRef(ref) {
+  const match = String(ref || '').match(/^refs\/remotes\/([^/]+)\/(.+)$/);
+  return match ? { remote: match[1], branch: match[2], ref } : null;
+}
+
+function preferLocalDefaultRef(repoDir, candidate) {
+  if (!candidate) return null;
+  const localRef = `refs/heads/${candidate.branch}`;
+  return refExists(repoDir, localRef)
+    ? { ...candidate, ref: localRef, remote_ref: candidate.ref }
+    : candidate;
+}
+
+function refExists(repoDir, ref) {
+  return tryGit(repoDir, ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`]) !== null;
+}
+
+function validBranchName(repoDir, branch) {
+  return tryGit(repoDir, ['check-ref-format', '--branch', branch]) !== null;
+}
+
+function resolvedDefaultBranch(candidate, source) {
+  return { ok: true, ...candidate, source };
+}
+
+function unresolvedDefaultBranch(reason, candidates = []) {
+  return {
+    ok: false,
+    branch: null,
+    ref: null,
+    remote: null,
+    source: null,
+    reason,
+    candidates: candidates.map(({ branch, ref, remote, remote_ref: remoteRef }) => ({
+      branch,
+      ref,
+      remote,
+      ...(remoteRef ? { remote_ref: remoteRef } : {}),
+    })),
+  };
+}
+
+function lines(value) {
+  return typeof value === 'string'
+    ? value.split('\n').map((item) => item.trim()).filter(Boolean)
+    : [];
+}
+
+function nonEmpty(value) {
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
 
 function countPorcelainFiles(value) {
