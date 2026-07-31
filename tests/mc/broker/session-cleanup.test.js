@@ -52,6 +52,16 @@ describe('broker session identity matching', () => {
     }), true);
   });
 
+  test('modern registry identity disables destructive label fallback', () => {
+    assert.equal(brokerSessionMatchesEntry({
+      name: 'target',
+    }, {
+      session_id: 'mcs_aaaaaaaaaaaaaaaaaaaaaaaa',
+      repository_id: 'repo_bbbbbbbbbbbbbbbbbbbbbbbb',
+      name: 'target',
+    }), false);
+  });
+
   test('same label with a different coding ID and repo is not removed', async () => {
     const requests = [];
     const result = await removeBrokerSessionForEntry({

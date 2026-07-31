@@ -51,6 +51,7 @@ import { installUpdateCommand } from './adapters/claude-code.js';
 import { extractExcerpt } from './mc/session-excerpt.js';
 import { primaryWorktree } from './mc/git.js';
 import { findEntry, upsertEntry } from './mc/registry.js';
+import { resolveRepositoryIdentity } from './mc/repository-identity.js';
 import {
   materialiseVaultForWrap,
   resolvePolicyForWrap,
@@ -421,17 +422,28 @@ async function runWrap(argv, { label = null } = {}) {
   const sessionName = process.env.MC_SESSION_NAME || null;
   const runtimeLabel = sessionName || label;
   const machineId = hostname();
-  const registryEntry = sessionName ? findEntry(sessionName) : null;
+  const repositoryIdentity = resolveRepositoryIdentity(cwd, { createLocal: true });
+  if (!repositoryIdentity.ok) {
+    console.error(`mc: repository identity is unavailable (${repositoryIdentity.reason})`);
+    process.exit(1);
+  }
+  const registryEntry = sessionName ? findEntry(sessionName, { cwd }) : null;
+  if (registryEntry?.repository_id
+    && registryEntry.repository_id !== repositoryIdentity.id) {
+    console.error('mc: registry repository identity does not match the launch repository');
+    process.exit(1);
+  }
   const { codingSessionId } = await resolveCodingSessionIdForWrap({
     sessionName,
     registryEntry,
-    repoIdentity: repoContext.remoteUrl,
+    repoIdentity: registryEntry?.repository_id || repositoryIdentity.id,
     machineId,
     lookupOrMint,
   });
   if (sessionName) {
     try {
       upsertEntry(buildWrapStartRegistryPatch({
+        registryEntry,
         sessionName,
         codingSessionId,
         tool: launch.shortName,
@@ -757,6 +769,7 @@ async function runWrap(argv, { label = null } = {}) {
     if (sessionName) {
       try {
         upsertEntry(buildWrapExitRegistryPatch({
+          registryEntry,
           sessionName,
           codingSessionId,
           exitCode,
@@ -850,13 +863,14 @@ async function resolveIdentifierToId(apiUrl, token, identifier) {
     console.error(`mc: failed to look up "${identifier}": ${err.message}`);
     return null;
   }
-  const { id, matchedBy, collisions } = resolveSessionIdentifier(res?.sessions ?? [], identifier);
+  const { id, collisions } = resolveSessionIdentifier(res?.sessions ?? [], identifier);
+  if (!id && collisions > 1) {
+    console.error(`mc: ${collisions} active sessions share label "${identifier}"; use a session id`);
+    return null;
+  }
   if (!id) {
     console.error(`mc: no active session matches "${identifier}"`);
     return null;
-  }
-  if (matchedBy === 'label' && collisions > 1) {
-    console.error(`mc: warning — ${collisions} active sessions share label "${identifier}"; using most recent (${id})`);
   }
   return id;
 }
@@ -864,8 +878,7 @@ async function resolveIdentifierToId(apiUrl, token, identifier) {
 /**
  * Resolve an identifier (label or coding_session_id) to a coding_session_id
  * by listing active sessions. Returns null if no match. If multiple
- * sessions share a label, prefers the most-recently-received_at one and
- * warns to stderr. Exported for tests.
+ * sessions share a label, refuses to choose one. Exported for tests.
  */
 export function resolveSessionIdentifier(sessions, identifier) {
   if (!identifier || !Array.isArray(sessions)) return { id: null };
@@ -875,8 +888,7 @@ export function resolveSessionIdentifier(sessions, identifier) {
   const matches = sessions.filter(s => s.label === identifier);
   if (matches.length === 0) return { id: null };
   if (matches.length > 1) {
-    matches.sort((a, b) => (b.received_at || '').localeCompare(a.received_at || ''));
-    return { id: matches[0].coding_session_id, matchedBy: 'label', collisions: matches.length };
+    return { id: null, matchedBy: 'label', collisions: matches.length };
   }
   return { id: matches[0].coding_session_id, matchedBy: 'label' };
 }

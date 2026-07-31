@@ -16,9 +16,11 @@ import { setTimeout as sleep } from 'node:timers/promises';
 
 import {
   findEntry,
+  formatEntryResolutionError,
   normalizeProviderSessions,
   providerSessionFor,
   readRegistry,
+  resolveEntry,
   upsertEntry,
   withProviderSession,
 } from '../registry.js';
@@ -123,10 +125,12 @@ export async function run(rawArgv, deps = {}) {
       deps,
     });
   }
-  const lookupEntry = deps.findEntry || findEntry;
-  let entry = lookupEntry(opts.name);
-  if (!entry) {
-    stderr.write(`mc: no such session "${opts.name}"\n`);
+  const resolvedEntry = deps.findEntry
+    ? injectedLookup(opts.name, deps.findEntry)
+    : resolveEntry(opts.name, { cwd: deps.cwd || process.cwd() });
+  let entry = resolvedEntry.entry;
+  if (!resolvedEntry.ok) {
+    stderr.write(`mc: ${formatEntryResolutionError(opts.name, resolvedEntry)}\n`);
     return 1;
   }
   entry = maybeObserveEntry(entry, deps);
@@ -449,6 +453,8 @@ export async function run(rawArgv, deps = {}) {
   if (opts.json) {
     stdout.write(JSON.stringify({
       name: entry.name,
+      session_id: entry.session_id || null,
+      repository_id: entry.repository_id || null,
       tool: entry.tool || DEFAULT_TOOL,
       worktree_path: entry.worktree_path || null,
       coding_session_id: entry.coding_session_id || null,
@@ -557,6 +563,7 @@ export async function launchResumeSession({
       try {
         (deps.upsertEntry || upsertEntry)({
           name: entry.name,
+          ...entryRegistryIdentity(entry),
           coding_session_id: codingSessionId,
         });
         return { ok: true };
@@ -571,7 +578,7 @@ export async function launchResumeSession({
       sessionControllerCapability = null,
     }) => {
       const upsert = deps.upsertEntry || upsertEntry;
-      let currentEntry = (deps.findEntry || findEntry)(entry.name) || entry;
+      let currentEntry = findCurrentEntry(entry, deps);
       if (handoff?.transaction) {
         const completed = await (deps.commitProviderSwitchDelivery
           || commitProviderSwitchDelivery)({
@@ -595,6 +602,7 @@ export async function launchResumeSession({
       }
       const patch = {
         name: entry.name,
+        ...entryRegistryIdentity(entry),
         coding_session_id: codingSessionId,
         session_state: 'live',
         tool_session_id: toolSession.sessionId,
@@ -617,7 +625,7 @@ export async function launchResumeSession({
     },
     onExited: ({ providerArtifact = null }) => {
       commitProviderArtifact({
-        entry: (deps.findEntry || findEntry)(entry.name) || entry,
+        entry: findCurrentEntry(entry, deps),
         expectedTool: launchTool?.id,
         providerArtifact,
         localAuthMode,
@@ -673,6 +681,7 @@ export async function launchFreshSession({
       try {
         (deps.upsertEntry || upsertEntry)({
           name: entry.name,
+          ...entryRegistryIdentity(entry),
           coding_session_id: codingSessionId,
         });
         return { ok: true };
@@ -687,7 +696,7 @@ export async function launchFreshSession({
       sessionControllerCapability = null,
     }) => {
       const upsert = deps.upsertEntry || upsertEntry;
-      let currentEntry = (deps.findEntry || findEntry)(entry.name) || entry;
+      let currentEntry = findCurrentEntry(entry, deps);
       if (handoff?.transaction) {
         const completed = await (deps.commitProviderSwitchDelivery
           || commitProviderSwitchDelivery)({
@@ -704,6 +713,7 @@ export async function launchFreshSession({
       }
       const patch = {
         name: entry.name,
+        ...entryRegistryIdentity(entry),
         coding_session_id: codingSessionId,
         session_state: 'live',
       };
@@ -714,7 +724,7 @@ export async function launchFreshSession({
     },
     onExited: ({ providerArtifact = null }) => {
       commitProviderArtifact({
-        entry: (deps.findEntry || findEntry)(entry.name) || entry,
+        entry: findCurrentEntry(entry, deps),
         expectedTool: launchTool?.id,
         providerArtifact,
         localAuthMode,
@@ -749,6 +759,7 @@ function commitProviderArtifact({
   if (!providerPatch.ok) return false;
   upsert({
     name: entry.name,
+    ...entryRegistryIdentity(entry),
     tool_session_id: providerArtifact.provider_session_id,
     tool_session_source: providerArtifact.tool,
     tool_transcript_path: managed ? null : providerArtifact.transcript_path,
@@ -776,7 +787,7 @@ async function materialiseVaultForLaunch({
 
   try {
     const res = await materialise({
-      sessionId: entry.name,
+      sessionId: entry.legacy_session_key || entry.session_id || entry.name,
       worktreePath: entry.worktree_path || undefined,
       adapters: launchTool?.adapter ? [launchTool.adapter] : undefined,
     });
@@ -829,6 +840,9 @@ export function resumableEntries(reg = readRegistry()) {
     .filter((e) => e && typeof e.name === 'string' && e.name)
     .map((e) => ({
       name: e.name,
+      session_id: e.session_id || null,
+      repository_id: e.repository_id || null,
+      repository_identity: e.repository_identity || null,
       branch: e.branch || '',
       tool: e.tool || DEFAULT_TOOL,
       session_state: e.session_state || 'no-session-yet',
@@ -843,7 +857,10 @@ export function resumableEntries(reg = readRegistry()) {
       observed_head: e.observed_head || null,
       last_observed_at: e.last_observed_at || null,
     }))
-    .sort((a, b) => a.name.localeCompare(b.name));
+    .sort((a, b) => (
+      a.name.localeCompare(b.name)
+      || String(a.repository_id || '').localeCompare(String(b.repository_id || ''))
+    ));
 }
 
 export async function runResumePicker({
@@ -1227,7 +1244,11 @@ async function reconcileManagedOpen(entry, {
 } = {}) {
   const inspectIdentity = deps.inspectManagedSessionIdentity
     || inspectManagedSessionIdentitySync;
-  const identity = inspectIdentity({ sessionName: entry.name });
+  const identity = inspectIdentity({
+    sessionName: entry.name,
+    registrySessionId: entry.session_id || null,
+    legacySessionKey: entry.legacy_session_key || null,
+  });
   if (identity?.kind === 'unknown') {
     stderr.write(`mc: managed session identity is unavailable (${identity.reason || 'unknown'}); refusing to launch.\n`);
     return { ok: false, decision: null };
@@ -1243,6 +1264,7 @@ async function reconcileManagedOpen(entry, {
       try {
         const written = writeEntry({
           name: entry.name,
+          ...entryRegistryIdentity(entry),
           coding_session_id: durableId,
         });
         entry = { ...entry, coding_session_id: durableId, ...(written || {}) };
@@ -1491,6 +1513,7 @@ function projectManagedResumeDecision({
   const writeEntry = upsert || deps.upsertEntry || upsertEntry;
   const patch = {
     name: entry.name,
+    ...entryRegistryIdentity(entry),
     coding_session_id: entry.coding_session_id,
     session_state: 'idle',
     tool_session_id: decision.providerSessionId,
@@ -1532,7 +1555,7 @@ function markEntryOpened(entry, { upsert = upsertEntry, now = () => new Date().t
   if (!entry?.name) return entry;
   const openedAt = typeof now === 'function' ? now() : new Date().toISOString();
   try {
-    upsert({ name: entry.name, last_opened_at: openedAt });
+    upsert({ name: entry.name, ...entryRegistryIdentity(entry), last_opened_at: openedAt });
     return { ...entry, last_opened_at: openedAt };
   } catch {
     return { ...entry, last_opened_at: openedAt };
@@ -1566,6 +1589,7 @@ async function maybeBackfillToolSession(entry, {
   if (!resolved?.ok || !nonEmpty(resolved.sessionId)) return entry;
   const patch = {
     name: entry.name,
+    ...entryRegistryIdentity(entry),
     tool_session_id: resolved.sessionId,
     tool_session_source: resolved.source || null,
     tool_transcript_path: resolved.transcriptPath || null,
@@ -1874,6 +1898,27 @@ function hasInjectedRuntimeDeps(deps = {}) {
   ].some((key) => Object.prototype.hasOwnProperty.call(deps, key));
 }
 
+function injectedLookup(identifier, lookup) {
+  const entry = lookup(identifier);
+  return entry
+    ? { ok: true, entry, source: 'injected' }
+    : { ok: false, entry: null, reason: 'missing' };
+}
+
+function findCurrentEntry(entry, deps = {}) {
+  if (deps.findEntry) return deps.findEntry(entry.name) || entry;
+  return findEntry(entry.session_id || entry.name, {
+    cwd: entry.worktree_path || process.cwd(),
+  }) || entry;
+}
+
+function entryRegistryIdentity(entry) {
+  return {
+    ...(entry?.session_id ? { session_id: entry.session_id } : {}),
+    ...(entry?.repository_id ? { repository_id: entry.repository_id } : {}),
+  };
+}
+
 function shouldRunProviderSwitchBoundary(deps = {}) {
   return typeof deps.recoverProviderSwitch === 'function'
     || typeof deps.prepareProviderSwitch === 'function'
@@ -2042,6 +2087,7 @@ function applyToolSwitch(entry, resolvedTool, {
   }
   const patch = {
     name: entry.name,
+    ...entryRegistryIdentity(entry),
     tool: resolvedTool.shortName,
     tool_session_id: targetSessionId,
     tool_session_source: targetSessionId ? resolvedTool.id : null,
@@ -2067,7 +2113,13 @@ function applyToolOverride(entry, tool, { upsert = upsertEntry, resolved = null 
   if (!resolvedTool) {
     return { error: `unknown tool: ${tool}. Try: claude | codex | gemini` };
   }
-  return { entry: upsert({ name: entry.name, tool: resolvedTool.shortName }) };
+  return {
+    entry: upsert({
+      name: entry.name,
+      ...entryRegistryIdentity(entry),
+      tool: resolvedTool.shortName,
+    }),
+  };
 }
 
 async function promptForChoice({ stdin, stdout, deps = {} } = {}) {

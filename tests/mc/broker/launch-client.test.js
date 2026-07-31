@@ -98,6 +98,12 @@ function launchBrokerOwnedSession(options) {
         source: { id: 'local:device:test', kind: 'local' },
       }),
       registerGitHubSessionProjection: async () => true,
+      resolveRepositoryIdentity: () => ({
+        ok: true,
+        id: 'repo_111111111111111111111111',
+        kind: 'remote',
+        canonical: 'example.test/org/repo',
+      }),
       prepareGitHubSessionForLaunch: async ({ baseEnv, capabilities, socketPath }) => ({
         env: {
           ...baseEnv,
@@ -851,7 +857,8 @@ describe('launchBrokerOwnedSession', () => {
         hostname: () => 'machine',
         randomUUID: () => RUNTIME_GENERATION,
         lookupOrMint: async (identity) => {
-          assert.equal(identity.repoIdentity, 'https://token:secret@github.com/org/repo.git');
+          assert.equal(identity.repoIdentity, 'repo_111111111111111111111111');
+          assert.doesNotMatch(JSON.stringify(identity), /token|secret/u);
           assert.equal(identity.machineId, 'machine');
           assert.match(identity.llmSessionId, /^mc-10000-/);
           return 'sess_abc';

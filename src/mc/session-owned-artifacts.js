@@ -24,6 +24,9 @@ export function sessionOwnedMcArtifactPaths(entry, {
 } = {}) {
   const codingSessionId = nonEmpty(entry?.coding_session_id);
   const sessionName = nonEmpty(entry?.name);
+  const durableSessionKey = nonEmpty(entry?.legacy_session_key)
+    || nonEmpty(entry?.session_id)
+    || sessionName;
   const issues = [];
   if (!isAbsolute(mcDir)) {
     issues.push({ code: 'invalid-mc-home' });
@@ -34,6 +37,9 @@ export function sessionOwnedMcArtifactPaths(entry, {
   if (!sessionName || !SESSION_KEY_RE.test(sessionName)) {
     issues.push({ code: 'invalid-session-name' });
   }
+  if (!durableSessionKey || !SESSION_KEY_RE.test(durableSessionKey)) {
+    issues.push({ code: 'invalid-durable-session-key' });
+  }
   const hostDir = codingSessionId ? join(mcDir, 'hosts', codingSessionId) : null;
   return {
     ok: issues.length === 0,
@@ -43,8 +49,8 @@ export function sessionOwnedMcArtifactPaths(entry, {
     host_socket: hostDir ? join(hostDir, 'broker.sock') : null,
     host_pid: hostDir ? join(hostDir, 'broker.pid') : null,
     guard_dir: codingSessionId ? join(mcDir, 'guard-bin', codingSessionId) : null,
-    vault_manifest: sessionName
-      ? join(mcDir, 'state', `${sessionName}-materialised.json`)
+    vault_manifest: durableSessionKey
+      ? join(mcDir, 'state', `${durableSessionKey}-materialised.json`)
       : null,
   };
 }

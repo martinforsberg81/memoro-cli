@@ -5,11 +5,14 @@
  * dir move fails we attempt to roll back the branch rename so we don't
  * leave the world half-renamed.
  */
-import { existsSync, renameSync, mkdirSync } from 'node:fs';
-import { dirname, join, basename } from 'node:path';
-import { findEntry, renameEntry } from '../registry.js';
+import { existsSync, mkdirSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import {
+  formatEntryResolutionError,
+  renameEntry,
+  resolveEntry,
+} from '../registry.js';
 import { git, primaryWorktree, branchExists } from '../git.js';
-import { worktreePath } from '../paths.js';
 
 const NAME_RE = /^[a-z0-9][a-z0-9_-]*$/i;
 
@@ -28,13 +31,25 @@ export async function run(argv) {
     return 2;
   }
 
-  const entry = findEntry(opts.oldName);
-  if (!entry) {
-    console.error(`mc: no such session "${opts.oldName}"`);
+  const resolved = resolveEntry(opts.oldName);
+  if (!resolved.ok) {
+    console.error(`mc: ${formatEntryResolutionError(opts.oldName, resolved)}`);
     return 1;
   }
-  if (findEntry(opts.newName)) {
+  const entry = resolved.entry;
+  if (!entry.session_id || !entry.repository_id) {
+    console.error(`mc: session "${entry.name}" has unresolved legacy identity; registry state was preserved`);
+    return 1;
+  }
+  const replacement = resolveEntry(opts.newName, {
+    repositoryId: entry.repository_id,
+  });
+  if (replacement.ok) {
     console.error(`mc: a session named "${opts.newName}" already exists`);
+    return 1;
+  }
+  if (['ambiguous-session-name', 'ambiguous-legacy-session'].includes(replacement.reason)) {
+    console.error(`mc: ${formatEntryResolutionError(opts.newName, replacement)}`);
     return 1;
   }
 
@@ -58,9 +73,11 @@ export async function run(argv) {
     git(primary, ['branch', '-m', oldBranch, newBranch]);
   }
 
-  const newWt = worktreePath(primary, opts.newName);
+  const newWt = entry.worktree_path
+    ? join(dirname(entry.worktree_path), opts.newName)
+    : null;
   let dirMoved = false;
-  if (entry.worktree_path && existsSync(entry.worktree_path) && entry.worktree_path !== newWt) {
+  if (newWt && entry.worktree_path && existsSync(entry.worktree_path) && entry.worktree_path !== newWt) {
     try {
       mkdirSync(dirname(newWt), { recursive: true });
       // Use `git worktree move` so git's internal worktree records
@@ -78,7 +95,7 @@ export async function run(argv) {
     }
   }
 
-  renameEntry(opts.oldName, opts.newName, {
+  renameEntry(entry.session_id || opts.oldName, opts.newName, {
     branch: newBranch,
     worktree_path: dirMoved ? newWt : entry.worktree_path,
   });

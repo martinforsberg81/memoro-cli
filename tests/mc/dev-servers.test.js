@@ -291,6 +291,22 @@ describe('mc dev server session teardown', () => {
     assert.deepEqual(result.results, []);
     assert.equal(readDevServerManifests().length, 1);
   });
+
+  test('teardown does not use a shared human name across worktrees', async () => {
+    writeSourceManifest({ worktree, sourcePath });
+    registerDevServerManifest(sourcePath);
+    const result = await teardownSessionDevServers({
+      sessionName: 'home-actions-v4',
+      codingSessionId: 'sess_other',
+      worktreePath: join(root, 'other-repo', 'home-actions-v4'),
+    }, {
+      isAlive: () => true,
+    });
+
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.results, []);
+    assert.equal(readDevServerManifests().length, 1);
+  });
 });
 
 function writeSourceManifest({ worktree, sourcePath, ...overrides }) {

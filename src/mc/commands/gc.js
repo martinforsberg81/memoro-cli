@@ -13,7 +13,13 @@
  * delete with `-d` (refuses if not merged) so we never lose work.
  */
 import { existsSync } from 'node:fs';
-import { readRegistry, removeEntry } from '../registry.js';
+import {
+  formatEntryResolutionError,
+  readRegistry,
+  readRegistryStrict,
+  removeEntryIfMatches,
+  resolveEntry,
+} from '../registry.js';
 import { git, tryGit, primaryWorktree, branchExists } from '../git.js';
 import { scanDaemons, reapOrphans, DEFAULT_MIN_AGE_MS } from '../orphan-daemons.js';
 import { removeBrokerSessionForEntry } from '../broker/session-cleanup.js';
@@ -66,7 +72,7 @@ export async function run(argv) {
     return runReapOrphans(opts);
   }
 
-  const reg = readRegistry();
+  const reg = readRegistry({ persistMigration: !opts.dryRun });
   let candidates;
   if (opts.staleWorktrees) {
     const stale = await staleWorktreeCandidates(reg, {
@@ -80,12 +86,24 @@ export async function run(argv) {
   const requestedNames = opts.onlyNames;
   const notCandidates = [];
   if (requestedNames.length) {
-    const byName = new Set(candidates.map((candidate) => candidate.name));
+    const requestedIds = new Set();
     for (const name of requestedNames) {
-      if (!byName.has(name)) notCandidates.push(name);
+      const resolved = resolveEntry(name, { registry: reg, cwd: process.cwd() });
+      if (!resolved.ok) {
+        if (['ambiguous-session-name', 'ambiguous-legacy-session'].includes(resolved.reason)) {
+          console.error(`mc: ${formatEntryResolutionError(name, resolved)}`);
+          return 1;
+        }
+        notCandidates.push(name);
+        continue;
+      }
+      if (!candidates.some((candidate) => candidate.session_id === resolved.entry.session_id)) {
+        notCandidates.push(name);
+        continue;
+      }
+      requestedIds.add(resolved.entry.session_id);
     }
-    const requested = new Set(requestedNames);
-    candidates = candidates.filter((candidate) => requested.has(candidate.name));
+    candidates = candidates.filter((candidate) => requestedIds.has(candidate.session_id));
   }
 
   if (opts.dryRun) {
@@ -127,6 +145,7 @@ async function reapWorktrees(candidates) {
   const errors = [];
   for (const c of candidates) {
     try {
+      verifyGcCandidateIdentity(c);
       await removeBrokerSessionForEntry(c);
       const primary = c.worktree_path && existsSync(c.worktree_path)
         ? primaryWorktree(c.worktree_path)
@@ -140,7 +159,16 @@ async function reapWorktrees(candidates) {
       if (c.branch && branchExists(primary, c.branch)) {
         tryGit(primary, ['branch', '-d', c.branch]);
       }
-      removeEntry(c.name);
+      const removedEntry = removeEntryIfMatches(c.session_id, {
+        session_id: c.session_id,
+        repository_id: c.repository_id,
+        worktree_path: c.worktree_path,
+        branch: c.branch,
+        tool_session_source: c.tool_session_source,
+        tool_session_id: c.tool_session_id,
+        tool_transcript_path: c.tool_transcript_path,
+      });
+      if (!removedEntry.ok) throw new Error(`registry removal failed (${removedEntry.reason})`);
       removed.push({ name: c.name, branch: c.branch });
     } catch (err) {
       errors.push({ name: c.name, error: err.message });
@@ -148,6 +176,21 @@ async function reapWorktrees(candidates) {
   }
 
   return { ok: errors.length === 0, removed, ...(errors.length ? { errors } : {}) };
+}
+
+function verifyGcCandidateIdentity(candidate) {
+  if (!candidate?.session_id || !candidate?.repository_id) {
+    throw new Error('registry identity unavailable');
+  }
+  const current = readRegistryStrict().entries.find((entry) => (
+    entry.session_id === candidate.session_id
+  ));
+  if (!current
+    || current.repository_id !== candidate.repository_id
+    || current.worktree_path !== candidate.worktree_path
+    || current.branch !== candidate.branch) {
+    throw new Error('registry entry changed before cleanup');
+  }
 }
 
 function emitWorktreeResult(result, opts) {
@@ -442,7 +485,7 @@ function runDependencySnapshots(opts) {
 }
 
 async function runAllSafe(opts) {
-  const reg = readRegistry();
+  const reg = readRegistry({ persistMigration: !opts.dryRun });
   const runtime = await scanRuntimeCleanup({ minAgeMs: opts.minAgeMs, registry: reg });
   const stale = await staleWorktreeCandidates(reg);
   if (stale.warning) console.error(`mc: ${stale.warning}`);

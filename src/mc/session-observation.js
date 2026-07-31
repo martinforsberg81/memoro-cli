@@ -22,6 +22,8 @@ export function observeEntryWorktree(entry, {
 export function observationPatch(entry, observation) {
   const patch = {
     name: entry.name,
+    ...(entry.session_id ? { session_id: entry.session_id } : {}),
+    ...(entry.repository_id ? { repository_id: entry.repository_id } : {}),
     original_branch: entry.original_branch || entry.branch || null,
     current_branch: observation.current_branch || null,
     observed_head: observation.head || null,

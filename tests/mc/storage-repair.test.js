@@ -88,6 +88,8 @@ describe('storage repair planning', () => {
     const registry = {
       entries: [
         makeEntry({
+          session_id: 'mcs_aaaaaaaaaaaaaaaaaaaaaaaa',
+          repository_id: 'repo_bbbbbbbbbbbbbbbbbbbbbbbb',
           name: 'needs-provider',
           worktree_path: null,
           session_state: 'idle',
@@ -116,6 +118,8 @@ describe('storage repair planning', () => {
     const registry = {
       entries: [
         makeEntry({
+          session_id: 'mcs_cccccccccccccccccccccccc',
+          repository_id: 'repo_dddddddddddddddddddddddd',
           name: 'needs-provider',
           worktree_path: null,
           session_state: 'idle',

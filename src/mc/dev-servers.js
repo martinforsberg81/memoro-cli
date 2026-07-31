@@ -79,24 +79,35 @@ export function removeDevServerRegistryManifest(instanceId) {
 }
 
 /**
- * Stop and unregister every dev server owned by a session (matched by
- * session name or worktree path) as part of `mc end` teardown. Verified
+ * Stop and unregister every dev server owned by a session as part of `mc end`
+ * teardown. Modern callers match the exact worktree or coding-session ID;
+ * the human name is retained only for legacy callers. Verified
  * running servers get their declared stop control; manifests whose
  * identity no longer verifies (process already gone or replaced) are
  * unregistered without touching any process. Other sessions' servers are
  * never touched.
  */
-export async function teardownSessionDevServers({ sessionName, worktreePath }, deps = {}) {
+export async function teardownSessionDevServers({ sessionName, codingSessionId, worktreePath }, deps = {}) {
   const read = deps.readManifests || readDevServerManifests;
   const results = [];
   for (const manifest of read()) {
-    const ownedByName = Boolean(sessionName && manifest.session_name === sessionName);
     const ownedByPath = Boolean(
       worktreePath
       && manifest.worktree_path
       && canonicalPath(manifest.worktree_path) === canonicalPath(worktreePath),
     );
-    if (!ownedByName && !ownedByPath) continue;
+    const ownedByCodingId = Boolean(
+      !worktreePath
+      && codingSessionId
+      && manifest.coding_session_id === codingSessionId,
+    );
+    const ownedByLegacyName = Boolean(
+      !worktreePath
+      && !codingSessionId
+      && sessionName
+      && manifest.session_name === sessionName,
+    );
+    if (!ownedByPath && !ownedByCodingId && !ownedByLegacyName) continue;
     const identity = verifyDevServerIdentity(manifest, deps);
     let stop = null;
     if (identity.ok) {

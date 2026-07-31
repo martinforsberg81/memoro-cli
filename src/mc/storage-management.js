@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 
 import { mcHome } from './paths.js';
-import { readRegistry } from './registry.js';
+import { readRegistry, resolveEntry } from './registry.js';
 import {
   branchExists,
   commitsAhead,
@@ -193,10 +193,12 @@ export function staleWorktreeCandidate(entry, { liveIds = new Set(), liveSession
 export async function explainSessionStorage(name, {
   mcDir = mcHome(),
   registry = readRegistry(),
+  cwd = process.cwd(),
   listSessions = listLocalBrokerAndHostSessions,
 } = {}) {
-  const entry = (registry?.entries || []).find((item) => item.name === name);
-  if (!entry) return null;
+  const resolved = resolveEntry(name, { registry, cwd });
+  if (!resolved.ok) return null;
+  const entry = resolved.entry;
   const liveIds = await listSessions()
     .then((sessions) => new Set((sessions || []).map(sessionIdForLiveRow).filter(Boolean)))
     .catch(() => new Set());
@@ -521,6 +523,8 @@ function toWorktreeCandidateJson(entry) {
 function toEntryJson(entry) {
   return {
     name: entry.name,
+    session_id: entry.session_id || null,
+    repository_id: entry.repository_id || null,
     branch: entry.branch || null,
     worktree_path: entry.worktree_path || null,
     coding_session_id: entry.coding_session_id || null,
@@ -550,6 +554,7 @@ function liveSessionProtectsEntry(session, entry) {
   const cwd = normalizeWorktreePathForMatch(session?.cwd || session?.worktree_path);
   const worktree = normalizeWorktreePathForMatch(entry?.worktree_path);
   if (cwd && worktree && cwd === worktree) return true;
+  if (entry?.session_id || entry?.repository_id) return false;
   const label = nonEmpty(session?.label || session?.name);
   return Boolean(label && nonEmpty(entry?.name) && label === entry.name);
 }

@@ -302,12 +302,19 @@ export async function resolveLocalSupervisorSession(identifier, {
     .filter((session) => namedSessionMatch(session, identifier))
     .sort(compareRecentSessions);
   if (!matches.length) return { ok: false, error: `local session not found: ${identifier}` };
+  if (matches.length > 1) {
+    return {
+      ok: false,
+      error: `${matches.length} local sessions match "${identifier}"; use a session id`,
+      collisions: matches.length,
+    };
+  }
   return {
     ok: true,
     session: matches[0],
     id: sessionId(matches[0]),
     matchedBy: 'name',
-    collisions: matches.length > 1 ? matches.length : 0,
+    collisions: 0,
   };
 }
 
@@ -1643,11 +1650,29 @@ function findSupervisorRegistryEntry(session = {}, entries = []) {
   const id = session.id || session.coding_session_id || null;
   const name = session.name || session.label || session.worktree_name || null;
   const worktree = session.worktree_name || localWorktreeName(session.cwd) || null;
-  return entries.find((entry) => (
-    (id && entry.coding_session_id === id)
-    || (name && entry.name === name)
-    || (worktree && entry.name === worktree)
-  )) || null;
+  if (id) {
+    const exactId = entries.filter((entry) => entry.coding_session_id === id);
+    if (exactId.length === 1) return exactId[0];
+    if (exactId.length > 1) return null;
+  }
+  const cwd = normalizeSupervisorPath(session.cwd || session.worktree_path);
+  if (cwd) {
+    const exactPath = entries.filter((entry) => (
+      normalizeSupervisorPath(entry.worktree_path) === cwd
+    ));
+    if (exactPath.length === 1) return exactPath[0];
+    if (exactPath.length > 1) return null;
+  }
+  const names = new Set([name, worktree].filter(Boolean));
+  const named = entries.filter((entry) => (
+    !entry.session_id && !entry.repository_id && names.has(entry.name)
+  ));
+  return named.length === 1 ? named[0] : null;
+}
+
+function normalizeSupervisorPath(value) {
+  if (typeof value !== 'string' || !value.trim()) return null;
+  return value.trim().replace(/[/\\]+$/u, '');
 }
 
 function finiteNumber(value) {

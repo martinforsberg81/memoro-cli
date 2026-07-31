@@ -112,6 +112,7 @@ export function brokerSessionMatchesEntry(session, entry) {
   const entryWorktree = normalizePathForMatch(entry.worktree_path);
   if (sessionCwd && entryWorktree) return sessionCwd === entryWorktree;
 
+  if (entry.session_id || entry.repository_id) return false;
   const sessionName = nonEmpty(session.name || session.label || session.worktree_name);
   const entryName = nonEmpty(entry.name || entry.label);
   return Boolean(sessionName && entryName && sessionName === entryName);

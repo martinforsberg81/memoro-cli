@@ -1,16 +1,21 @@
 import assert from 'node:assert/strict';
 import test, { afterEach } from 'node:test';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import {
+  MC_SESSION_ID_RE,
+  REGISTRY_SCHEMA_VERSION,
+  formatEntryResolutionError,
+  migrateRegistry,
   normalizeProviderSessions,
   patchProviderSessionSequenceIfPresent,
   patchEntriesIfPresent,
   readRegistry,
   readRegistryStrict,
   removeEntryIfMatches,
+  resolveEntry,
   upsertEntry,
 } from '../../src/mc/registry.js';
 
@@ -222,14 +227,17 @@ test('strict registry reads reject malformed state instead of returning empty', 
 test('removeEntryIfMatches preserves a concurrently changed teardown recipe', () => {
   tempHome = mkdtempSync(join(tmpdir(), 'mc-registry-cas-'));
   process.env.MC_HOME = tempHome;
-  upsertEntry({
+  const entry = upsertEntry({
     name: 'target',
     branch: 'sess/target',
     worktree_path: '/tmp/target',
+    primary_worktree: process.cwd(),
     tool_session_id: 'session-a',
   });
 
   const changed = removeEntryIfMatches('target', {
+    session_id: entry.session_id,
+    repository_id: entry.repository_id,
     branch: 'sess/target',
     worktree_path: '/tmp/target',
     tool_session_id: 'session-b',
@@ -240,10 +248,281 @@ test('removeEntryIfMatches preserves a concurrently changed teardown recipe', ()
   assert.equal(readRegistryStrict().entries.length, 1);
 
   const removed = removeEntryIfMatches('target', {
+    session_id: entry.session_id,
+    repository_id: entry.repository_id,
     branch: 'sess/target',
     worktree_path: '/tmp/target',
     tool_session_id: 'session-a',
   });
   assert.equal(removed.ok, true);
   assert.deepEqual(readRegistryStrict().entries, []);
+});
+
+test('migrates a 0.7.10 registry idempotently while preserving every field', () => {
+  const legacy = {
+    future_top_level: { preserved: true },
+    entries: [{
+      name: 'billing',
+      primary_worktree: '/repo/a',
+      future_entry_field: ['preserved'],
+    }],
+  };
+  const resolver = () => ({
+    ok: true,
+    id: 'repo_aaaaaaaaaaaaaaaaaaaaaaaa',
+    kind: 'local',
+    canonical: null,
+  });
+  const first = migrateRegistry(legacy, {
+    repositoryResolver: resolver,
+    sessionIdFactory: () => 'mcs_111111111111111111111111',
+  });
+  assert.equal(first.ok, true);
+  assert.equal(first.changed, true);
+  assert.equal(first.registry.schema_version, REGISTRY_SCHEMA_VERSION);
+  assert.equal(first.registry.future_top_level.preserved, true);
+  assert.deepEqual(first.registry.entries[0].future_entry_field, ['preserved']);
+  assert.equal(first.registry.entries[0].repository_id, 'repo_aaaaaaaaaaaaaaaaaaaaaaaa');
+  assert.equal(first.registry.entries[0].session_id, 'mcs_111111111111111111111111');
+
+  const second = migrateRegistry(first.registry, {
+    repositoryResolver: () => { throw new Error('resolved identities must not be regenerated'); },
+    sessionIdFactory: () => { throw new Error('session ids must not be regenerated'); },
+  });
+  assert.equal(second.ok, true);
+  assert.equal(second.changed, false);
+  assert.deepEqual(second.registry, first.registry);
+});
+
+test('persists the 0.7.10 migration once and keeps subsequent reads byte-stable', () => {
+  tempHome = mkdtempSync(join(tmpdir(), 'mc-registry-v0710-'));
+  process.env.MC_HOME = tempHome;
+  const path = join(tempHome, 'registry.json');
+  writeFileSync(path, JSON.stringify({
+    release_marker: '0.7.10',
+    entries: [{ name: 'legacy-io', primary_worktree: process.cwd(), custom: true }],
+  }, null, 2));
+
+  const first = readRegistryStrict();
+  const afterFirst = readFileSync(path, 'utf8');
+  const second = readRegistryStrict();
+  const afterSecond = readFileSync(path, 'utf8');
+
+  assert.equal(first.schema_version, REGISTRY_SCHEMA_VERSION);
+  assert.equal(first.release_marker, '0.7.10');
+  assert.match(first.entries[0].session_id, MC_SESSION_ID_RE);
+  assert.equal(first.entries[0].custom, true);
+  assert.deepEqual(second, first);
+  assert.equal(afterSecond, afterFirst);
+});
+
+test('preserves ambiguous legacy entries byte-for-byte and reports the ambiguity', () => {
+  const legacy = {
+    entries: [
+      { name: 'same', primary_worktree: '/repo/a', marker: 1 },
+      { name: 'same', primary_worktree: '/repo/a', marker: 2 },
+    ],
+  };
+  const before = JSON.stringify(legacy);
+  const migrated = migrateRegistry(legacy, {
+    repositoryResolver: () => ({
+      ok: true,
+      id: 'repo_aaaaaaaaaaaaaaaaaaaaaaaa',
+      kind: 'local',
+      canonical: null,
+    }),
+    sessionIdFactory: (() => {
+      let next = 0;
+      return () => `mcs_${String(++next).padStart(24, '0')}`;
+    })(),
+  });
+  assert.equal(migrated.ok, false);
+  assert.equal(migrated.reason, 'ambiguous-legacy-session');
+  assert.equal(migrated.changed, false);
+  assert.equal(JSON.stringify(migrated.registry), before);
+
+  const lookup = resolveEntry('same', {
+    registry: legacy,
+    repositoryId: 'repo_aaaaaaaaaaaaaaaaaaaaaaaa',
+  });
+  assert.equal(lookup.ok, false);
+  assert.equal(lookup.reason, 'ambiguous-legacy-session');
+  assert.match(formatEntryResolutionError('same', lookup), /ambiguous|preserved/u);
+});
+
+test('does not create local repository ids before an ambiguous migration is rejected', () => {
+  let createCalls = 0;
+  const migrated = migrateRegistry({
+    entries: [
+      { name: 'same', primary_worktree: '/repo/a', marker: 1 },
+      { name: 'same', primary_worktree: '/repo/a', marker: 2 },
+    ],
+  }, {
+    repositoryResolver: (_path, { createLocal }) => {
+      if (createLocal) createCalls += 1;
+      return createLocal
+        ? {
+            ok: true,
+            id: 'repo_aaaaaaaaaaaaaaaaaaaaaaaa',
+            kind: 'local',
+            canonical: null,
+            root: '/repo/a',
+          }
+        : { ok: false, reason: 'local-repository-id-missing', root: '/repo/a' };
+    },
+  });
+
+  assert.equal(migrated.ok, false);
+  assert.equal(migrated.reason, 'ambiguous-legacy-session');
+  assert.equal(createCalls, 0);
+});
+
+test('rejects a remote projection whose canonical identity does not match its repository id', () => {
+  const migrated = migrateRegistry({
+    schema_version: REGISTRY_SCHEMA_VERSION,
+    entries: [{
+      name: 'mismatch',
+      session_id: 'mcs_aaaaaaaaaaaaaaaaaaaaaaaa',
+      repository_id: 'repo_bbbbbbbbbbbbbbbbbbbbbbbb',
+      repository_identity: {
+        schema: 1,
+        kind: 'remote',
+        canonical: 'github.com/owner/project',
+      },
+    }],
+  });
+  assert.equal(migrated.ok, false);
+  assert.equal(migrated.reason, 'repository-identity-mismatch');
+});
+
+test('preserves same-named legacy entries when their repositories resolve distinctly', () => {
+  const legacy = {
+    entries: [
+      { name: 'shared', primary_worktree: '/repo/a', marker: 'a' },
+      { name: 'shared', primary_worktree: '/repo/b', marker: 'b' },
+    ],
+  };
+  const migrated = migrateRegistry(legacy, {
+    repositoryResolver: (path) => ({
+      ok: true,
+      id: path.endsWith('/a')
+        ? 'repo_aaaaaaaaaaaaaaaaaaaaaaaa'
+        : 'repo_bbbbbbbbbbbbbbbbbbbbbbbb',
+      kind: 'local',
+      canonical: null,
+    }),
+    sessionIdFactory: (() => {
+      let next = 0;
+      return () => `mcs_${String(++next).padStart(24, '0')}`;
+    })(),
+  });
+
+  assert.equal(migrated.ok, true);
+  assert.equal(migrated.registry.entries.length, 2);
+  assert.deepEqual(migrated.registry.entries.map((entry) => entry.marker), ['a', 'b']);
+  assert.equal(new Set(migrated.registry.entries.map((entry) => entry.repository_id)).size, 2);
+  assert.equal(new Set(migrated.registry.entries.map((entry) => entry.session_id)).size, 2);
+});
+
+test('does not rewrite an ambiguous legacy registry during normal reads', () => {
+  tempHome = mkdtempSync(join(tmpdir(), 'mc-registry-ambiguous-'));
+  process.env.MC_HOME = tempHome;
+  const path = join(tempHome, 'registry.json');
+  const raw = JSON.stringify({
+    entries: [
+      { name: 'same', worktree_path: '/missing/a', marker: 1 },
+      { name: 'same', worktree_path: '/missing/b', marker: 2 },
+    ],
+  }, null, 4);
+  writeFileSync(path, raw);
+
+  const registry = readRegistry();
+  const lookup = resolveEntry('same', { registry, cwd: process.cwd() });
+  assert.equal(lookup.reason, 'ambiguous-legacy-session');
+  assert.throws(() => readRegistryStrict(), /ambiguous-legacy-session/u);
+  assert.equal(readFileSync(path, 'utf8'), raw);
+});
+
+test('same session name resolves by repository while opaque id resolves globally', () => {
+  const a = {
+    name: 'billing',
+    session_id: 'mcs_aaaaaaaaaaaaaaaaaaaaaaaa',
+    repository_id: 'repo_aaaaaaaaaaaaaaaaaaaaaaaa',
+  };
+  const b = {
+    name: 'billing',
+    session_id: 'mcs_bbbbbbbbbbbbbbbbbbbbbbbb',
+    repository_id: 'repo_bbbbbbbbbbbbbbbbbbbbbbbb',
+  };
+  const registry = { schema_version: REGISTRY_SCHEMA_VERSION, entries: [a, b] };
+  assert.equal(resolveEntry('billing', {
+    registry,
+    repositoryId: b.repository_id,
+  }).entry, b);
+  assert.equal(resolveEntry(a.session_id, {
+    registry,
+    cwd: '/outside-any-repository',
+  }).entry, a);
+  assert.match(a.session_id, MC_SESSION_ID_RE);
+});
+
+test('upsert preserves an unresolved legacy name in another repository', () => {
+  tempHome = mkdtempSync(join(tmpdir(), 'mc-registry-legacy-preserve-'));
+  process.env.MC_HOME = tempHome;
+  writeFileSync(join(tempHome, 'registry.json'), JSON.stringify({
+    schema_version: REGISTRY_SCHEMA_VERSION,
+    entries: [{
+      name: 'shared',
+      session_id: 'mcs_aaaaaaaaaaaaaaaaaaaaaaaa',
+      marker: 'legacy-preserved',
+    }],
+  }, null, 2));
+
+  const created = upsertEntry({
+    name: 'shared',
+    repository_id: 'repo_bbbbbbbbbbbbbbbbbbbbbbbb',
+    repository_identity: { schema: 1, kind: 'local', canonical: null },
+  });
+
+  const entries = readRegistryStrict().entries;
+  assert.equal(entries.length, 2);
+  assert.equal(entries.find((entry) => entry.marker)?.session_id, 'mcs_aaaaaaaaaaaaaaaaaaaaaaaa');
+  assert.equal(created.repository_id, 'repo_bbbbbbbbbbbbbbbbbbbbbbbb');
+});
+
+test('upsert refuses to resurrect a removed opaque session id', () => {
+  tempHome = mkdtempSync(join(tmpdir(), 'mc-registry-no-resurrection-'));
+  process.env.MC_HOME = tempHome;
+  const entry = upsertEntry({ name: 'gone', primary_worktree: process.cwd() });
+  assert.equal(removeEntryIfMatches(entry.session_id, {
+    session_id: entry.session_id,
+    repository_id: entry.repository_id,
+  }).ok, true);
+
+  assert.throws(() => upsertEntry({
+    name: entry.name,
+    session_id: entry.session_id,
+    repository_id: entry.repository_id,
+    session_state: 'idle',
+  }), /session_id .* not found/u);
+  assert.deepEqual(readRegistryStrict().entries, []);
+});
+
+test('cleanup requires both opaque session and repository expected-id guards', () => {
+  tempHome = mkdtempSync(join(tmpdir(), 'mc-registry-id-guard-'));
+  process.env.MC_HOME = tempHome;
+  const entry = upsertEntry({ name: 'guarded', worktree_path: process.cwd() });
+
+  const unguarded = removeEntryIfMatches(entry.session_id, {});
+  assert.deepEqual(unguarded, {
+    ok: false,
+    removed: false,
+    reason: 'expected-identity-required',
+  });
+  const wrongRepo = removeEntryIfMatches(entry.session_id, {
+    session_id: entry.session_id,
+    repository_id: 'repo_ffffffffffffffffffffffff',
+  });
+  assert.equal(wrongRepo.reason, 'entry-changed');
+  assert.equal(readRegistryStrict().entries.length, 1);
 });

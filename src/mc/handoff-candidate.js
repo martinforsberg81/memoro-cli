@@ -2,6 +2,10 @@ import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
 
 import { derivePublicRepoRef, deriveRepoName, getRepoContext } from '../lib/git-context.js';
+import {
+  canonicalizeRemoteUrl,
+  repositoryIdForCanonicalRemote,
+} from './repository-identity.js';
 import { buildHandoff } from './handoff.js';
 
 const LEGACY_OBJECTIVE = 'Continue the existing mc coding session.';
@@ -34,7 +38,12 @@ export async function buildDeterministicHandoff({
     && /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(publicRepo)
     ? publicRepo
     : null;
-  const repoId = `repo_${sha256(`mc-repo:${publicRepoSlug || repoName}`).slice(0, 24)}`;
+  const canonicalRemote = canonicalizeRemoteUrl(context.remoteUrl);
+  const repoId = validRepositoryId(entry?.repository_id)
+    ? entry.repository_id
+    : canonicalRemote
+      ? repositoryIdForCanonicalRemote(canonicalRemote)
+      : `repo_${sha256(`mc-legacy-repo:${publicRepoSlug || repoName}`).slice(0, 24)}`;
   const branch = safeBranch(context.branch);
   if (!branch) return failure('handoff-workspace-invalid');
   const changedPaths = parsed.paths.slice(0, MAX_CHANGED_PATHS);
@@ -104,6 +113,10 @@ function safeBranch(value) {
     && Buffer.byteLength(value) <= 256 && !/[\0-\x1f\x7f]/.test(value)
     ? value
     : null;
+}
+
+function validRepositoryId(value) {
+  return typeof value === 'string' && /^repo_[a-f0-9]{24}$/u.test(value);
 }
 
 function runGit(args, cwd) {

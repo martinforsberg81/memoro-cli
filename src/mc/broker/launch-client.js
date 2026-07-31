@@ -15,6 +15,7 @@ import { groundSession } from '../ground.js';
 import { normalizeInteractivePtyEnv } from '../interactive-env.js';
 import { mcHome } from '../paths.js';
 import { findEntry } from '../registry.js';
+import { resolveRepositoryIdentity } from '../repository-identity.js';
 import { resolvePolicyForWrap } from '../wrap-start.js';
 import { requestBroker } from './client.js';
 import { attachBrokerSession } from './attach-client.js';
@@ -175,7 +176,23 @@ export async function launchBrokerOwnedSession({
   }
   const token = bootstrapIdentity.token;
 
-  const registryEntry = sessionName ? ((deps.findEntry || findEntry)(sessionName) || {}) : {};
+  const registryEntry = sessionName
+    ? (deps.findEntry
+      ? (deps.findEntry(sessionName) || {})
+      : (findEntry(sessionName, { cwd }) || {}))
+    : {};
+  const repositoryIdentity = (deps.resolveRepositoryIdentity || resolveRepositoryIdentity)(cwd, {
+    createLocal: true,
+  });
+  if (!repositoryIdentity.ok) {
+    stderr.write(`mc: repository identity is unavailable (${repositoryIdentity.reason}); refusing to launch\n`);
+    return { code: 1 };
+  }
+  if (registryEntry.repository_id
+    && registryEntry.repository_id !== repositoryIdentity.id) {
+    stderr.write('mc: registry repository identity does not match the launch repository; refusing to launch\n');
+    return { code: 1 };
+  }
   const effectivePolicy = (deps.resolvePolicyForWrap || resolvePolicyForWrap)({
     sessionName,
     cwd,
@@ -194,7 +211,7 @@ export async function launchBrokerOwnedSession({
   });
   const llmSessionId = `mc-${now()}-${process.pid}`;
   const codingSessionId = requestedCodingSessionId || await (deps.lookupOrMint || lookupOrMint)({
-    repoIdentity: repoContext.remoteUrl,
+    repoIdentity: registryEntry.repository_id || repositoryIdentity.id,
     machineId,
     llmSessionId,
   });
@@ -219,6 +236,7 @@ export async function launchBrokerOwnedSession({
       try {
         identity = (deps.claimManagedSessionIdentity || claimManagedSessionIdentitySync)({
           sessionName,
+          registrySessionId: registryEntry.session_id || null,
           codingSessionId,
           recordedAt: new Date(now()).toISOString(),
         });

@@ -5,7 +5,7 @@
  * prints a one-line tip about the shell wrapper. The user's wrapper
  * sets the flag automatically.
  */
-import { findEntry } from '../registry.js';
+import { formatEntryResolutionError, resolveEntry } from '../registry.js';
 import { emitCd, parseDirectiveFlag } from '../shell-directives.js';
 
 export async function run(rawArgv) {
@@ -19,11 +19,12 @@ export async function run(rawArgv) {
     console.error(`mc: unknown flag: ${name}`);
     return 2;
   }
-  const entry = findEntry(name);
-  if (!entry) {
-    console.error(`mc: no such session "${name}"`);
+  const resolved = resolveEntry(name);
+  if (!resolved.ok) {
+    console.error(`mc: ${formatEntryResolutionError(name, resolved)}`);
     return 1;
   }
+  const entry = resolved.entry;
   if (!entry.worktree_path) {
     console.error(`mc: session "${name}" has no worktree_path on record`);
     return 1;

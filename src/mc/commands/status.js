@@ -5,7 +5,11 @@
  * `last_assistant_text` (heuristic-only), and returns the entry with
  * the safety verdict and derived fields.
  */
-import { findEntry, upsertEntry } from '../registry.js';
+import {
+  formatEntryResolutionError,
+  resolveEntry,
+  upsertEntry,
+} from '../registry.js';
 import { detectOpenQuestion } from '../open-question.js';
 import { escalateSafetyVerdict } from '../safety-verdict.js';
 import { DEFAULT_TOOL, readConfig } from '../../lib/config.js';
@@ -35,10 +39,12 @@ export async function run(argv, deps = {}) {
     return 2;
   }
 
-  const lookupEntry = deps.findEntry || findEntry;
-  let entry = lookupEntry(opts.name);
-  if (!entry) {
-    stderr.write(`mc: no such session "${opts.name}"\n`);
+  const resolvedEntry = deps.findEntry
+    ? injectedLookup(opts.name, deps.findEntry)
+    : resolveEntry(opts.name, { cwd: deps.cwd || process.cwd() });
+  let entry = resolvedEntry.entry;
+  if (!resolvedEntry.ok) {
+    stderr.write(`mc: ${formatEntryResolutionError(opts.name, resolvedEntry)}\n`);
     return 1;
   }
   entry = maybeObserveEntry(entry, deps);
@@ -77,6 +83,8 @@ export async function run(argv, deps = {}) {
 
   const out = {
     name: entry.name,
+    session_id: entry.session_id || null,
+    repository_id: entry.repository_id || null,
     branch: entry.current_branch || entry.branch,
     session_branch: entry.branch || null,
     current_branch: entry.current_branch || null,
@@ -141,10 +149,12 @@ async function resolveDevServers(entry, deps = {}) {
   const list = deps.listDevServers || listDevServers;
   try {
     const all = await list();
-    const servers = all.filter((server) => (
-      server.session_name === entry.name
-      || (entry.worktree_path && server.worktree_path === entry.worktree_path)
-    ));
+    const servers = all.filter((server) => {
+      if (entry.worktree_path) return server.worktree_path === entry.worktree_path;
+      if (entry.coding_session_id) return server.coding_session_id === entry.coding_session_id;
+      if (entry.session_id || entry.repository_id) return false;
+      return server.session_name === entry.name;
+    });
     return { summary: summarizeDevServers(servers), servers };
   } catch {
     return { summary: summarizeDevServers([]), servers: [] };
@@ -348,6 +358,13 @@ function timestampMs(value) {
 
 function nonEmpty(value) {
   return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+function injectedLookup(identifier, lookup) {
+  const entry = lookup(identifier);
+  return entry
+    ? { ok: true, entry, source: 'injected' }
+    : { ok: false, entry: null, reason: 'missing' };
 }
 
 function parseArgs(argv) {

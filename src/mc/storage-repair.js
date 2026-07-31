@@ -29,7 +29,9 @@ export async function buildStorageRepairPlan({
     : null;
 
   for (const entry of registry?.entries || []) {
-    if (selectedNames && !selectedNames.has(entry?.name)) continue;
+    if (selectedNames
+      && !selectedNames.has(entry?.session_id)
+      && !selectedNames.has(entry?.name)) continue;
     const sessionId = nonEmpty(entry?.coding_session_id);
     const worktreePath = nonEmpty(entry?.worktree_path);
     const worktreeExists = Boolean(worktreePath && existsSync(worktreePath));
@@ -123,11 +125,22 @@ export function applyStorageRepairPlan(registry, plan, {
   write = writeRegistry,
 } = {}) {
   const actions = Array.isArray(plan?.actions) ? plan.actions : [];
-  const byName = new Map();
+  const bySessionId = new Map();
   for (const action of actions) {
-    if (!action?.name || !action.patch || typeof action.patch !== 'object') continue;
-    byName.set(action.name, {
-      ...(byName.get(action.name) || {}),
+    if (!action?.session_id || !action?.repository_id
+      || !action.patch || typeof action.patch !== 'object') {
+      return { ok: false, applied: [], reason: 'repair-action-identity-missing' };
+    }
+    const current = (registry?.entries || []).find((entry) => (
+      entry.session_id === action.session_id
+    ));
+    if (!current
+      || current.repository_id !== action.repository_id
+      || (current.worktree_path || null) !== (action.worktree_path || null)) {
+      return { ok: false, applied: [], reason: 'repair-action-identity-changed' };
+    }
+    bySessionId.set(action.session_id, {
+      ...(bySessionId.get(action.session_id) || {}),
       ...action.patch,
     });
   }
@@ -135,7 +148,7 @@ export function applyStorageRepairPlan(registry, plan, {
   const next = {
     ...(registry || {}),
     entries: (registry?.entries || []).map((entry) => {
-      const patch = byName.get(entry.name);
+      const patch = bySessionId.get(entry.session_id);
       return patch ? { ...entry, ...patch } : entry;
     }),
   };
@@ -186,6 +199,8 @@ function registryPatchAction({
   return {
     type,
     name: entry.name,
+    session_id: entry.session_id || null,
+    repository_id: entry.repository_id || null,
     reason,
     worktree_path: entry.worktree_path || null,
     patch: compactPatch(patch),

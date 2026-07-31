@@ -90,16 +90,18 @@ export function managedSessionDirectory({
 export function claimManagedSessionIdentitySync({
   mcHomeDir = mcHome(),
   sessionName,
+  registrySessionId = null,
   codingSessionId,
   recordedAt = new Date().toISOString(),
   fs = syncFs,
   randomBytes: random = randomBytes,
 } = {}) {
   validateSessionName(sessionName);
+  validateRegistrySessionId(registrySessionId);
   assertSessionId(codingSessionId);
   const root = normalizedRoot(mcHomeDir);
   const directory = join(root, 'managed-session-identities');
-  const path = join(directory, `${namePart(sessionName)}.json`);
+  const path = join(directory, `${namePart(registrySessionId || sessionName)}.json`);
   const identity = {
     schema: MANAGED_IDENTITY_SCHEMA,
     version: MANAGED_GENERATION_VERSION,
@@ -149,19 +151,33 @@ export function claimManagedSessionIdentitySync({
 export function inspectManagedSessionIdentitySync({
   mcHomeDir = mcHome(),
   sessionName,
+  registrySessionId = null,
+  legacySessionKey = null,
   fs = syncFs,
 } = {}) {
   try {
     validateSessionName(sessionName);
+    validateRegistrySessionId(registrySessionId);
     const root = normalizedRoot(mcHomeDir);
     const directory = join(root, 'managed-session-identities');
-    const path = join(directory, `${namePart(sessionName)}.json`);
-    const read = readPrivateJson({
+    const path = join(directory, `${namePart(registrySessionId || sessionName)}.json`);
+    let read = readPrivateJson({
       path,
       trustedRoot: root,
       validate: validateManagedSessionIdentity,
       fs,
     });
+    if (read.kind === 'absent'
+      && registrySessionId
+      && legacySessionKey) {
+      validateSessionName(legacySessionKey);
+      read = readPrivateJson({
+        path: join(directory, `${namePart(legacySessionKey)}.json`),
+        trustedRoot: root,
+        validate: validateManagedSessionIdentity,
+        fs,
+      });
+    }
     return read.kind === 'present'
       ? { kind: 'present', identity: read.value }
       : read;
@@ -1067,6 +1083,13 @@ function validateSessionName(value) {
     || Buffer.byteLength(value) > 256
     || /[\0-\x1f\x7f]/u.test(value)) {
     throw new TypeError('invalid managed session name');
+  }
+}
+
+function validateRegistrySessionId(value) {
+  if (value == null) return;
+  if (typeof value !== 'string' || !/^mcs_[a-f0-9]{24}$/u.test(value)) {
+    throw new TypeError('invalid registry session id');
   }
 }
 

@@ -569,7 +569,7 @@ export async function commitProviderSwitchDelivery({
   const commitCursor = deps.patchProviderSessionSequenceIfPresent
     || patchProviderSessionSequenceIfPresent;
   const committed = commitCursor(
-    entry.name,
+    entry.session_id || entry.name,
     targetTool.id,
     transaction.target_latest_sequence,
   );
@@ -611,6 +611,8 @@ export async function commitProviderSwitchDelivery({
   const upsert = deps.upsertEntry || upsertEntry;
   const toolPatch = {
     name: entry.name,
+    ...(entry.session_id ? { session_id: entry.session_id } : {}),
+    ...(entry.repository_id ? { repository_id: entry.repository_id } : {}),
     tool: targetTool.shortName,
     tool_session_id: null,
     tool_session_source: null,
@@ -688,7 +690,7 @@ async function recoverPreparedProviderSwitch({
     }
     const sourceCommitted = (deps.patchProviderSessionSequenceIfPresent
       || patchProviderSessionSequenceIfPresent)(
-      entry.name,
+      entry.session_id || entry.name,
       sourceTool.id,
       journal.persisted.sequence,
     );
@@ -835,7 +837,7 @@ async function continueProviderSwitch({
   const commitCursor = deps.patchProviderSessionSequenceIfPresent
     || patchProviderSessionSequenceIfPresent;
   const sourceCommitted = commitCursor(
-    entry.name,
+    entry.session_id || entry.name,
     sourceTool.id,
     current.persisted.sequence,
   );

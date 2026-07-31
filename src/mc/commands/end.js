@@ -19,10 +19,12 @@ import { resolveToolInput } from '../../adapters/index.js';
 import { DEFAULT_TOOL } from '../../lib/config.js';
 import { teardownSessionDevServers } from '../dev-servers.js';
 import {
+  formatEntryResolutionError,
   patchEntriesIfPresent,
   readRegistry,
   readRegistryStrict,
   removeEntryIfMatches,
+  resolveEntry,
 } from '../registry.js';
 import {
   branchExists,
@@ -82,7 +84,12 @@ export async function run(rawArgv, runOpts = {}) {
   const cwd = runOpts.cwd || process.cwd();
   let registry;
   try {
-    registry = (deps.readRegistryStrict || deps.readRegistry || readRegistryStrict)();
+    const loadRegistry = opts.dryRun
+      ? (deps.readRegistry || deps.readRegistryStrict || readRegistry)
+      : (deps.readRegistryStrict || deps.readRegistry || readRegistryStrict);
+    registry = loadRegistry({
+      persistMigration: !opts.dryRun,
+    });
   } catch (err) {
     return emitFailure({
       opts,
@@ -92,7 +99,9 @@ export async function run(rawArgv, runOpts = {}) {
       message: `registry is unreadable: ${err.message}`,
     });
   }
-  const selected = selectTargets(registry.entries, opts.names, cwd);
+  const selected = selectTargets(registry.entries, opts.names, cwd, {
+    requireIdentity: !opts.dryRun,
+  });
   if (!selected.ok) {
     stderr.write(`mc: ${selected.error}\n`);
     if (selected.usage) {
@@ -261,13 +270,15 @@ export async function run(rawArgv, runOpts = {}) {
   return emitResults({ opts, results, stdout, stderr });
 }
 
-function selectTargets(entries, names, cwd) {
+function selectTargets(entries, names, cwd, { requireIdentity = true } = {}) {
   const requested = names.length > 0 ? names : ['.'];
   const selected = [];
   for (const name of requested) {
-    const entry = name === '.'
-      ? resolveImplicitEntry(entries, cwd)
-      : entries.find((candidate) => candidate.name === name) || null;
+    const implicit = name === '.' ? resolveImplicitEntry(entries, cwd) : null;
+    const resolution = name === '.'
+      ? { ok: Boolean(implicit), entry: implicit, reason: implicit ? null : 'missing' }
+      : resolveEntry(name, { registry: { entries }, cwd });
+    const entry = resolution.entry || null;
     if (!entry) {
       if (name === '.') {
         return {
@@ -280,7 +291,14 @@ function selectTargets(entries, names, cwd) {
       return {
         ok: false,
         code: 1,
-        error: `unknown session "${name}"`,
+        error: formatEntryResolutionError(name, resolution),
+      };
+    }
+    if (requireIdentity && (!entry.session_id || !entry.repository_id)) {
+      return {
+        ok: false,
+        code: 1,
+        error: `session "${entry.name}" has unresolved legacy identity; registry state was preserved`,
       };
     }
     selected.push(entry);
@@ -713,7 +731,7 @@ function persistVerifiedAuthorities(plans, { deps = {}, now }) {
   const current = read();
   const patches = [];
   for (const plan of plans) {
-    const latest = current.entries.find((entry) => entry.name === plan.entry.name);
+    const latest = current.entries.find((entry) => entry.session_id === plan.entry.session_id);
     if (!latest) {
       return {
         ok: false,
@@ -741,6 +759,8 @@ function persistVerifiedAuthorities(plans, { deps = {}, now }) {
     });
     const authorityPatch = {
       name: plan.entry.name,
+      session_id: plan.entry.session_id,
+      repository_id: plan.entry.repository_id,
       tool_session_source: plan.entry.tool_session_source || null,
       tool_session_id: plan.entry.tool_session_id || null,
       tool_transcript_path: plan.entry.tool_transcript_path || null,
@@ -764,14 +784,16 @@ function persistVerifiedAuthorities(plans, { deps = {}, now }) {
     };
   }
   for (const plan of plans) {
-    const updated = result.entries?.find((entry) => entry.name === plan.entry.name);
+    const updated = result.entries?.find((entry) => entry.session_id === plan.entry.session_id);
     if (updated) plan.entry = updated;
   }
   return { ok: true };
 }
 
 function sameSessionContainer(current, original) {
-  return current?.name === original?.name
+  return current?.session_id === original?.session_id
+    && current?.repository_id === original?.repository_id
+    && current?.name === original?.name
     && nonEmpty(current?.worktree_path) === nonEmpty(original?.worktree_path)
     && nonEmpty(current?.branch) === nonEmpty(original?.branch);
 }
@@ -807,6 +829,7 @@ async function teardownOne(plan, { opts, deps }) {
     const teardownDev = deps.teardownSessionDevServers || teardownSessionDevServers;
     const devServers = await teardownDev({
       sessionName: entry.name,
+      codingSessionId: entry.coding_session_id || null,
       worktreePath: entry.worktree_path || null,
     });
     if (!devServers?.ok) {
@@ -829,7 +852,7 @@ async function teardownOne(plan, { opts, deps }) {
 
     const shred = deps.shredForSession || defaultShredForSession;
     const shredded = await shred({
-      sessionId: entry.name,
+      sessionId: entry.legacy_session_key || entry.session_id || entry.name,
       worktreePath: entry.worktree_path || undefined,
       retainManifestOnFailure: true,
     });
@@ -869,9 +892,11 @@ async function teardownOne(plan, { opts, deps }) {
 
     const remove = deps.removeEntryIfMatches
       || (deps.removeEntry
-        ? (name) => ({ ok: deps.removeEntry(name), removed: true })
+        ? () => ({ ok: deps.removeEntry(entry.name), removed: true })
         : removeEntryIfMatches);
-    const removed = remove(entry.name, {
+    const removed = remove(entry.session_id, {
+      session_id: entry.session_id,
+      repository_id: entry.repository_id,
       worktree_path: entry.worktree_path,
       branch: entry.branch,
       tool_session_source: entry.tool_session_source,
@@ -987,7 +1012,7 @@ async function inspectLeftovers(plan, opts, deps, { includeRegistry = true } = {
   if (includeRegistry) {
     try {
       const registry = (deps.readRegistryStrict || deps.readRegistry || readRegistryStrict)();
-      if (registry.entries.some((entry) => entry.name === plan.entry.name)) {
+      if (registry.entries.some((entry) => entry.session_id === plan.entry.session_id)) {
         leftovers.push(`registry:${plan.entry.name}`);
       }
     } catch {

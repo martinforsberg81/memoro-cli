@@ -180,6 +180,11 @@ describe('mc status <name>', () => {
       fetchBrokerStatus: async () => ({ ok: true, sessions: [] }),
       fetchActiveSessions: async () => ({ ok: true, sessions: [] }),
       listDevServers: async () => [{
+        instance_id: 'dev-other-repo',
+        session_name: 'with-dev',
+        worktree_path: '/tmp/other-repo/with-dev',
+        state: 'ready',
+      }, {
         instance_id: 'dev-with-dev',
         session_name: 'with-dev',
         worktree_path: '/tmp/with-dev',
@@ -396,7 +401,10 @@ describe('mc status <name>', () => {
         tool: 'codex',
       })]);
 
-      const r = runMc(['status', 'observe', '--json'], { env: { MC_HOME: repo.mcHome } });
+      const r = runMc(['status', 'observe', '--json'], {
+        cwd: repo.dir,
+        env: { MC_HOME: repo.mcHome },
+      });
       assert.equal(r.status, 0, `stderr:${r.stderr}`);
       const j = parseJsonOrNull(r.stdout);
       assert.equal(j.branch, 'scratch/status');
