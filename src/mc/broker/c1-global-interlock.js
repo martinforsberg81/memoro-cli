@@ -565,10 +565,14 @@ function readC1InstallIdentity() {
       if (!stat.isFile() || stat.isSymbolicLink()) return null;
       hash.update(relativePath);
       hash.update('\0');
-      // Content binds the release; filesystem identity binds an exact
-      // installation even when package scripts were skipped during reinstall.
+      // Content binds the release; inode identity binds an exact installation
+      // even when package scripts were skipped during reinstall. st.dev is
+      // deliberately excluded: macOS assigns volume device numbers in mount
+      // order, so it changes across reboots. Including it made the install
+      // identity differ on every boot, which re-baselined the install epoch
+      // onto the current boot at first use and made the required
+      // one-clean-restart condition permanently unsatisfiable.
       hash.update([
-        stat.dev,
         stat.ino,
         stat.size,
         stat.ctimeMs,
