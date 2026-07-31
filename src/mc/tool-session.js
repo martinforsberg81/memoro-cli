@@ -35,6 +35,14 @@ export async function resolveToolSessionForResume({
       ? firstExplicitProviderValue(providerSession?.transcript_path)
       : firstExplicitProviderValue(entry?.tool_transcript_path, entry?.transcript_path);
     let from = providerSession ? 'provider-sessions' : 'registry';
+    const identity = validateResolvedProviderSession({
+      source,
+      sessionId: stored,
+      transcriptPath: null,
+    });
+    if (!identity.ok) {
+      return { ok: false, reason: identity.reason, source, sessionId: null, transcriptPath: null };
+    }
 
     // Older launches persisted the native provider session ID before the
     // transcript path was available. Repair that incomplete authority record
