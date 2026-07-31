@@ -297,18 +297,15 @@ async function synchronizeToolAuthority(entry, { deps = {} } = {}) {
 
   const resolver = deps.resolveToolSessionForResume || resolveToolSessionForResume;
   const launchTool = resolveToolInput(entry?.tool || DEFAULT_TOOL);
-  const discoveryEntry = {
-    ...entry,
-    tool_session_id: null,
-    provider_session_id: null,
-    llm_session_id: null,
-    tool_transcript_path: null,
-    transcript_path: null,
-  };
   let resolved;
   try {
     resolved = await resolver({
-      entry: discoveryEntry,
+      // Preserve any authority fields that are already known. In particular,
+      // resolveToolSessionForResume can repair a missing transcript path only
+      // when it can match the discovered transcript against the stored native
+      // session ID. The resolver still performs fresh discovery when the ID is
+      // absent.
+      entry,
       launchTool,
       deps: deps.toolSessionDeps || deps,
     });
