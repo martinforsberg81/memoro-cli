@@ -8,9 +8,18 @@
  */
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { findEntry, upsertEntry } from '../registry.js';
-import { worktreePath } from '../paths.js';
+import {
+  formatEntryResolutionError,
+  readRegistry,
+  resolveEntry,
+  upsertEntry,
+} from '../registry.js';
+import { repoSlug, worktreePath } from '../paths.js';
 import { git, isInsideRepo, primaryWorktree, branchExists } from '../git.js';
+import {
+  repositoryIdentityProjection,
+  resolveRepositoryIdentity,
+} from '../repository-identity.js';
 import { checkAndPrintFreshInstall, ensureSentinel } from '../first-run.js';
 import { resolveToolForNew, TOOL_SUGAR } from './new.js';
 import { launchWithPreflight } from './launch-preflight.js';
@@ -50,8 +59,18 @@ export async function run(argv) {
     return 1;
   }
 
-  if (findEntry(opts.name)) {
+  const repository = resolveRepositoryIdentity(primary, { createLocal: true });
+  if (!repository.ok) {
+    console.error(`mc: could not establish repository identity (${repository.reason})`);
+    return 1;
+  }
+  const existing = resolveEntry(opts.name, { repositoryId: repository.id, cwd: primary });
+  if (existing.ok) {
     console.error(`mc: a session named "${opts.name}" already exists`);
+    return 1;
+  }
+  if (['ambiguous-session-name', 'ambiguous-legacy-session'].includes(existing.reason)) {
+    console.error(`mc: ${formatEntryResolutionError(opts.name, existing)}`);
     return 1;
   }
 
@@ -68,7 +87,15 @@ export async function run(argv) {
   }
 
   const fromRef = opts.from || 'HEAD';
-  const wt = worktreePath(primary, opts.name);
+  const registry = readRegistry();
+  const baseSlug = repoSlug(primary);
+  const collide = registry.entries.some((entry) => (
+    entry?.repo_slug === baseSlug
+      && entry?.repository_id
+      && entry.repository_id !== repository.id
+  ));
+  const slug = repoSlug(primary, { collide, repositoryId: repository.id });
+  const wt = worktreePath(primary, opts.name, { collide, repositoryId: repository.id });
   try {
     git(primary, ['branch', branch, fromRef]);
   } catch (err) {
@@ -97,9 +124,11 @@ export async function run(argv) {
 
   const entry = upsertEntry({
     name: opts.name,
+    repository_id: repository.id,
+    repository_identity: repositoryIdentityProjection(repository),
     branch,
     worktree_path: wt,
-    repo_slug: wt.split('/worktrees/')[1]?.split('/')[0] || null,
+    repo_slug: slug,
     primary_worktree: primary,
     kind: 'project',
     role: 'project',
@@ -118,6 +147,8 @@ export async function run(argv) {
   const payload = {
     ok: true,
     name: opts.name,
+    session_id: entry.session_id,
+    repository_id: entry.repository_id,
     parent,
     kind: entry.kind,
     role: entry.role,

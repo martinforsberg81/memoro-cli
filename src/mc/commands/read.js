@@ -5,7 +5,7 @@
  * Foundation scope: arg-parsing + registry-name resolution. The actual
  * transcript fetch reuses `mc sessions read` plumbing in a follow-up.
  */
-import { findEntry } from '../registry.js';
+import { formatEntryResolutionError, resolveEntry } from '../registry.js';
 
 export async function run(argv) {
   const opts = parseArgs(argv);
@@ -18,17 +18,20 @@ export async function run(argv) {
     return 2;
   }
 
-  const entry = findEntry(opts.name);
-  if (!entry) {
-    console.error(`mc: unknown session "${opts.name}"`);
+  const resolved = resolveEntry(opts.name);
+  if (!resolved.ok) {
+    console.error(`mc: ${formatEntryResolutionError(opts.name, resolved)}`);
     return 1;
   }
+  const entry = resolved.entry;
 
   // Live fetch wiring lands when the sessions-read pipe is plumbed
   // through here. For now, signal what we'd do.
   const out = {
     ok: false,
     name: entry.name,
+    session_id: entry.session_id || null,
+    repository_id: entry.repository_id || null,
     coding_session_id: entry.coding_session_id || null,
     last: opts.last,
     note: 'live read not yet wired through `mc read` — use `mc sessions read <id>` for now',

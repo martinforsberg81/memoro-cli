@@ -38,8 +38,12 @@ import { readFileSync, mkdirSync, writeFileSync, existsSync } from 'node:fs';
 import { dirname, join, isAbsolute, resolve } from 'node:path';
 import { parsePhases, planSlugFromFilename } from '../orchestration/plan-parser.js';
 import { buildFanoutBrief } from '../orchestration/brief-template.js';
-import { upsertEntry, findEntry } from '../registry.js';
-import { worktreePath } from '../paths.js';
+import { upsertEntry, findEntry, readRegistry } from '../registry.js';
+import { repoSlug, worktreePath } from '../paths.js';
+import {
+  repositoryIdentityProjection,
+  resolveRepositoryIdentity,
+} from '../repository-identity.js';
 import {
   git as gitShell,
   isInsideRepo,
@@ -61,6 +65,7 @@ export function defaultGit() {
     primaryWorktree,
     branchExists,
     resolveDefaultBranch,
+    resolveRepositoryIdentity,
     createBranch(repoDir, branch, fromRef) {
       gitShell(repoDir, ['branch', branch, fromRef]);
     },
@@ -142,6 +147,23 @@ export async function runWithDeps(opts, { git, fs, cwd }) {
   if (!primary) {
     return emitError(opts, 'could not resolve primary worktree path');
   }
+  const repository = typeof git.resolveRepositoryIdentity === 'function'
+    ? git.resolveRepositoryIdentity(primary, { createLocal: !opts.dryRun })
+    : { ok: false, reason: 'repository-identity-not-injected' };
+  if (!repository.ok && !opts.dryRun && typeof git.resolveRepositoryIdentity === 'function') {
+    return emitError(opts, `could not establish repository identity (${repository.reason})`);
+  }
+  const registry = readRegistry({ persistMigration: !opts.dryRun });
+  const baseSlug = repoSlug(primary);
+  const collide = repository.ok && registry.entries.some((entry) => (
+    entry?.repo_slug === baseSlug
+      && entry?.repository_id
+      && entry.repository_id !== repository.id
+  ));
+  const slug = repoSlug(primary, {
+    collide,
+    repositoryId: repository.ok ? repository.id : null,
+  });
 
   const toolResolution = await resolveToolForNew({
     flagValue: opts.tool,
@@ -167,7 +189,10 @@ export async function runWithDeps(opts, { git, fs, cwd }) {
   const planned = phases.map((p) => {
     const sessionName = `fanout-${planSlug}-phase-${p.n}`;
     const branch = `fan/${planSlug}/phase-${p.n}`;
-    const wt = worktreePath(primary, sessionName);
+    const wt = worktreePath(primary, sessionName, {
+      collide,
+      repositoryId: repository.ok ? repository.id : null,
+    });
     const brief = buildFanoutBrief({
       planSlug,
       phaseN: p.n,
@@ -202,7 +227,10 @@ export async function runWithDeps(opts, { git, fs, cwd }) {
   const spawned = [];
   for (const p of planned) {
     // Collision checks BEFORE any write — exit-before-side-effect.
-    if (findEntry(p.session_name)) {
+    if (findEntry(p.session_name, {
+      cwd,
+      ...(repository.ok ? { repositoryId: repository.id } : {}),
+    })) {
       return emitError(opts, `registry already has a session "${p.session_name}" — \`mc end ${p.session_name}\` or rename it first`);
     }
     if (git.branchExists(primary, p.branch)) {
@@ -231,9 +259,15 @@ export async function runWithDeps(opts, { git, fs, cwd }) {
     }
     upsertEntry({
       name: p.session_name,
+      ...(repository.ok
+        ? {
+            repository_id: repository.id,
+            repository_identity: repositoryIdentityProjection(repository),
+          }
+        : {}),
       branch: p.branch,
       worktree_path: p.worktree_path,
-      repo_slug: p.worktree_path.split('/worktrees/')[1]?.split('/')[0] || null,
+      repo_slug: slug,
       primary_worktree: primary,
       kind: 'fanout-phase',
       parent_plan: planSlug,

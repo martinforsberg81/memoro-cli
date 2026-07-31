@@ -311,6 +311,84 @@ test('one immutable identity claim prevents competing coding session ids', () =>
   }
 });
 
+test('same human name has independent managed identity claims under opaque session ids', () => {
+  const mcHomeDir = temporaryHome();
+  try {
+    const first = claimManagedSessionIdentitySync({
+      mcHomeDir,
+      sessionName: 'billing',
+      registrySessionId: 'mcs_aaaaaaaaaaaaaaaaaaaaaaaa',
+      codingSessionId: 'sess_first',
+      recordedAt: timestamp,
+    });
+    const second = claimManagedSessionIdentitySync({
+      mcHomeDir,
+      sessionName: 'billing',
+      registrySessionId: 'mcs_bbbbbbbbbbbbbbbbbbbbbbbb',
+      codingSessionId: 'sess_second',
+      recordedAt: timestamp,
+    });
+    assert.equal(first.ok, true);
+    assert.equal(second.ok, true);
+    assert.equal(inspectManagedSessionIdentitySync({
+      mcHomeDir,
+      sessionName: 'billing',
+      registrySessionId: 'mcs_aaaaaaaaaaaaaaaaaaaaaaaa',
+    }).identity.coding_session_id, 'sess_first');
+    assert.equal(inspectManagedSessionIdentitySync({
+      mcHomeDir,
+      sessionName: 'billing',
+      registrySessionId: 'mcs_bbbbbbbbbbbbbbbbbbbbbbbb',
+    }).identity.coding_session_id, 'sess_second');
+  } finally {
+    rmSync(mcHomeDir, { recursive: true, force: true });
+  }
+});
+
+test('a uniquely migrated entry can inspect its legacy name-keyed identity', () => {
+  const mcHomeDir = temporaryHome();
+  try {
+    claimManagedSessionIdentitySync({
+      mcHomeDir,
+      sessionName: 'legacy-billing',
+      codingSessionId: 'sess_legacy',
+      recordedAt: timestamp,
+    });
+    const migrated = inspectManagedSessionIdentitySync({
+      mcHomeDir,
+      sessionName: 'legacy-billing',
+      registrySessionId: 'mcs_cccccccccccccccccccccccc',
+      legacySessionKey: 'legacy-billing',
+    });
+    assert.equal(migrated.kind, 'present');
+    assert.equal(migrated.identity.coding_session_id, 'sess_legacy');
+  } finally {
+    rmSync(mcHomeDir, { recursive: true, force: true });
+  }
+});
+
+test('a renamed migrated entry keeps its legacy managed identity claim', () => {
+  const mcHomeDir = temporaryHome();
+  try {
+    claimManagedSessionIdentitySync({
+      mcHomeDir,
+      sessionName: 'legacy-before-rename',
+      codingSessionId: 'sess_legacy_renamed',
+      recordedAt: timestamp,
+    });
+    const migrated = inspectManagedSessionIdentitySync({
+      mcHomeDir,
+      sessionName: 'renamed-session',
+      registrySessionId: 'mcs_dddddddddddddddddddddddd',
+      legacySessionKey: 'legacy-before-rename',
+    });
+    assert.equal(migrated.kind, 'present');
+    assert.equal(migrated.identity.coding_session_id, 'sess_legacy_renamed');
+  } finally {
+    rmSync(mcHomeDir, { recursive: true, force: true });
+  }
+});
+
 test('out-of-order and post-terminal receipts are rejected', () => {
   const mcHomeDir = temporaryHome();
   try {

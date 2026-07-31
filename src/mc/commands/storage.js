@@ -18,8 +18,10 @@ import {
 } from '../storage-repair.js';
 import { parseDurationMs } from '../storage-policy.js';
 import {
+  formatEntryResolutionError,
   readRegistry,
   readRegistryStrict,
+  resolveEntry,
   writeRegistry,
 } from '../registry.js';
 import {
@@ -46,7 +48,15 @@ export async function run(argv, deps = {}) {
   }
 
   if (opts.verb === 'explain') {
-    const detail = await explainSessionStorage(opts.name);
+    const registry = readRegistry();
+    const resolved = resolveEntry(opts.name, { registry, cwd: process.cwd() });
+    if (!resolved.ok) {
+      const message = formatEntryResolutionError(opts.name, resolved);
+      if (opts.json) console.log(JSON.stringify({ ok: false, error: message }, null, 2));
+      else console.error(`mc: ${message}`);
+      return 1;
+    }
+    const detail = await explainSessionStorage(resolved.entry.session_id, { registry });
     if (!detail) {
       if (opts.json) console.log(JSON.stringify({ ok: false, error: `session not found: ${opts.name}` }, null, 2));
       else console.error(`mc: session not found: ${opts.name}`);
@@ -58,16 +68,30 @@ export async function run(argv, deps = {}) {
   }
 
   if (opts.verb === 'repair') {
-    const registry = opts.managedProviderRecovery
-      ? (deps.readRegistryStrict || readRegistryStrict)()
-      : readRegistry();
+    const loadRegistry = opts.dryRun
+      ? (deps.readRegistry || deps.readRegistryStrict || readRegistry)
+      : (deps.readRegistryStrict || deps.readRegistry || readRegistryStrict);
+    const registry = loadRegistry({ persistMigration: !opts.dryRun });
+    const selected = opts.name
+      ? resolveEntry(opts.name, { registry, cwd: process.cwd() })
+      : null;
+    if (selected && !selected.ok) {
+      const out = {
+        ok: false,
+        reason: selected.reason,
+        message: formatEntryResolutionError(opts.name, selected),
+      };
+      if (opts.json) console.log(JSON.stringify(out, null, 2));
+      else console.error(`mc: ${out.message}`);
+      return 1;
+    }
     if (opts.managedProviderRecovery) {
-      const matches = registry.entries.filter((entry) => entry.name === opts.name);
-      if (matches.length !== 1) {
+      const entry = selected?.entry || null;
+      if (!entry) {
         const out = {
           ok: false,
           recoverable: false,
-          reason: matches.length ? 'managed-recovery-entry-ambiguous' : 'managed-recovery-entry-missing',
+          reason: 'managed-recovery-entry-missing',
         };
         if (opts.json) console.log(JSON.stringify(out, null, 2));
         else printManagedRecovery(out, opts.dryRun);
@@ -75,7 +99,7 @@ export async function run(argv, deps = {}) {
       }
       const inspected = await (deps.inspectManagedCodexRecovery
         || inspectManagedCodexRecovery)({
-        entry: matches[0],
+        entry,
         registry,
         deps: deps.managedRecoveryDeps || {},
       });
@@ -117,7 +141,7 @@ export async function run(argv, deps = {}) {
     const plan = await buildStorageRepairPlan({
       registry,
       includeProviderBackfill: opts.providerBackfill,
-      names: opts.name ? [opts.name] : null,
+      names: selected?.entry?.session_id ? [selected.entry.session_id] : null,
     });
     if (opts.dryRun) {
       const out = { dry_run: true, ...plan };
@@ -133,7 +157,7 @@ export async function run(argv, deps = {}) {
   }
 
   if (opts.verb === 'prune-missing') {
-    const registry = readRegistry();
+    const registry = readRegistry({ persistMigration: !opts.dryRun });
     const plan = buildMissingPrunePlan(registry, {
       olderThanMs: opts.olderThanMs,
     });
@@ -152,6 +176,7 @@ export async function run(argv, deps = {}) {
 
   if (opts.verb === 'prune-transcripts') {
     const plan = buildTranscriptPrunePlan({
+      registry: readRegistry({ persistMigration: !opts.dryRun }),
       olderThanMs: opts.olderThanMs,
     });
     if (opts.dryRun) {
@@ -169,6 +194,7 @@ export async function run(argv, deps = {}) {
 
   if (opts.verb === 'prune-deps') {
     const snapshot = await buildStorageSnapshot({
+      registry: readRegistry({ persistMigration: !opts.dryRun }),
       minAgeMs: opts.minAgeMs,
       includeDisk: false,
     });
@@ -190,6 +216,7 @@ export async function run(argv, deps = {}) {
 
   if (opts.verb === 'prune-generated') {
     const snapshot = await buildStorageSnapshot({
+      registry: readRegistry({ persistMigration: !opts.dryRun }),
       minAgeMs: opts.minAgeMs,
       includeDisk: false,
     });
@@ -324,6 +351,8 @@ function buildMissingPrunePlan(registry, {
     const ageMs = Number.isFinite(anchorMs) ? Math.max(0, nowMs - anchorMs) : Infinity;
     if (ageMs < olderThanMs) continue;
     candidates.push({
+      session_id: entry.session_id || null,
+      repository_id: entry.repository_id || null,
       name: entry.name,
       branch: entry.branch || null,
       worktree_path: entry.worktree_path || null,
@@ -343,7 +372,8 @@ function buildMissingPrunePlan(registry, {
 function applyMissingPrunePlan(registry, plan, {
   write = writeRegistry,
 } = {}) {
-  // Match planned candidates exactly (name + branch + worktree_path) and
+  // Match modern candidates by opaque identities and legacy candidates by
+  // their complete historic tuple, then
   // re-check the tombstone predicate. Filtering by name alone once removed
   // 81 entries from an 8-candidate dry-run: historic same-named entries —
   // including ones whose worktrees existed — shared names with tombstones.
@@ -354,6 +384,8 @@ function applyMissingPrunePlan(registry, plan, {
     const match = entry?.worktree_missing === true && keys.has(missingPruneKey(entry));
     if (match) {
       removed.push({
+        session_id: entry.session_id || null,
+        repository_id: entry.repository_id || null,
         name: entry.name,
         branch: entry.branch || null,
         worktree_path: entry.worktree_path || null,
@@ -370,6 +402,9 @@ function applyMissingPrunePlan(registry, plan, {
 }
 
 function missingPruneKey(value) {
+  if (value?.session_id && value?.repository_id) {
+    return `id:${value.repository_id}:${value.session_id}`;
+  }
   return [value?.name || '', value?.branch || '', value?.worktree_path || ''].join('\n');
 }
 

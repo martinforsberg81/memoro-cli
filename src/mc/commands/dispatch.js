@@ -15,7 +15,7 @@
  * the name and `--dry-run` isn't set. That avoids touching the network
  * layer in this PR.
  */
-import { findEntry } from '../registry.js';
+import { formatEntryResolutionError, readRegistry, resolveEntry } from '../registry.js';
 
 export async function run(argv) {
   const opts = parseArgs(argv);
@@ -33,14 +33,18 @@ export async function run(argv) {
   }
 
   const targets = [];
+  const registry = readRegistry({ persistMigration: !opts.dryRun });
   for (const name of opts.names) {
-    const entry = findEntry(name);
-    if (!entry) {
-      console.error(`mc: unknown session "${name}"`);
+    const resolved = resolveEntry(name, { registry });
+    if (!resolved.ok) {
+      console.error(`mc: ${formatEntryResolutionError(name, resolved)}`);
       return 1;
     }
+    const entry = resolved.entry;
     targets.push({
       name: entry.name,
+      session_id: entry.session_id || null,
+      repository_id: entry.repository_id || null,
       coding_session_id: entry.coding_session_id || null,
       session_state: entry.session_state || 'unknown',
     });

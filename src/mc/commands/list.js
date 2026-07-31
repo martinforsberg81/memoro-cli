@@ -55,7 +55,9 @@ export async function run(argv, deps = {}) {
   // invocation is the truth check: a stored "live" without a live local
   // session renders as "stale" so no consumer — human or --json — sees a
   // dead session presented as attachable. Repair stays explicit
-  // (`mc storage repair --apply`); list never mutates the registry.
+  // (`mc storage repair --apply`); list never persists observed runtime
+  // state, although the registry reader may apply an idempotent schema
+  // migration.
   const fetchLocalLive = deps.fetchLocalBrokerSessions
     || (() => fetchLocalBrokerCodingSessions({ deps }));
   localLiveResult = await fetchLocalLive();
@@ -185,6 +187,9 @@ function runOrphans(opts, { stdout, scanDaemons: scan }) {
 function projectEntry(e, rich) {
   const base = {
     name: e.name,
+    session_id: e.session_id ?? null,
+    repository_id: e.repository_id ?? null,
+    repository_identity: e.repository_identity ?? null,
     branch: e.branch,
     kind: e.kind || 'work',
     safety_verdict: e.safety_verdict || 'SAFE_TO_END',
@@ -219,9 +224,9 @@ function projectEntry(e, rich) {
 
 function emitTree(entries, opts) {
   const byParent = new Map();
-  const byName = new Map(entries.map((e) => [e.name, e]));
+  const byName = new Map(entries.map((entry) => [treeNameKey(entry, entry.name), entry]));
   for (const e of entries) {
-    const parent = e.parent || null;
+    const parent = e.parent ? treeNameKey(e, e.parent) : null;
     if (!byParent.has(parent)) byParent.set(parent, []);
     byParent.get(parent).push(e);
   }
@@ -230,8 +235,8 @@ function emitTree(entries, opts) {
   }
 
   const roots = (byParent.get(null) || [])
-    .concat(entries.filter((e) => e.parent && !byName.has(e.parent)))
-    .filter((e, i, arr) => arr.findIndex((x) => x.name === e.name) === i);
+    .concat(entries.filter((e) => e.parent && !byName.has(treeNameKey(e, e.parent))))
+    .filter((e, i, arr) => arr.findIndex((candidate) => treeEntryKey(candidate) === treeEntryKey(e)) === i);
 
   if (opts.json) {
     console.log(JSON.stringify({ entries, roots: roots.map((e) => e.name) }, null, 2));
@@ -244,8 +249,9 @@ function emitTree(entries, opts) {
 
   const seen = new Set();
   const render = (entry, depth = 0) => {
-    if (seen.has(entry.name)) return;
-    seen.add(entry.name);
+    const key = treeEntryKey(entry);
+    if (seen.has(key)) return;
+    seen.add(key);
     const indent = '  '.repeat(depth);
     const bits = [
       entry.name,
@@ -255,10 +261,18 @@ function emitTree(entries, opts) {
     ].filter(Boolean);
     const suffix = entry.scope ? `  scope=${entry.scope}` : '';
     process.stdout.write(`${indent}${bits.join('  ')}${suffix}\n`);
-    for (const child of byParent.get(entry.name) || []) render(child, depth + 1);
+    for (const child of byParent.get(treeNameKey(entry, entry.name)) || []) render(child, depth + 1);
   };
   for (const root of roots) render(root, 0);
   return 0;
+}
+
+function treeNameKey(entry, name) {
+  return `${entry?.repository_id || 'legacy'}\0${name || ''}`;
+}
+
+function treeEntryKey(entry) {
+  return entry?.session_id || treeNameKey(entry, entry?.name);
 }
 
 function isWithinMinutes(isoString, minutes) {

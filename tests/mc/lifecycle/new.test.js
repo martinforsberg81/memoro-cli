@@ -179,11 +179,39 @@ describe('mc new', () => {
     assert.match(r.stderr + r.stdout, /exists|duplicate|already/i);
   });
 
+  test('keeps the same session name distinct in repositories with the same basename', () => {
+    const first = makeTempRepo({ name: 'same-basename-a' });
+    const second = makeTempRepo({ name: 'same-basename-b' });
+    try {
+      for (const candidate of [first, second]) {
+        mkdirSync(first.mcHome, { recursive: true });
+        writeFileSync(join(first.mcHome, '.setup-done-v1'), 'test\n');
+        const created = runMc(['new', 'billing', '--no-launch', '--json'], {
+          cwd: candidate.dir,
+          env: { MC_HOME: first.mcHome },
+        });
+        assert.equal(created.status, 0, created.stderr);
+      }
+
+      const registry = JSON.parse(readFileSync(join(first.mcHome, 'registry.json'), 'utf8'));
+      const entries = registry.entries.filter((entry) => entry.name === 'billing');
+      assert.equal(entries.length, 2);
+      assert.equal(new Set(entries.map((entry) => entry.repository_id)).size, 2);
+      assert.equal(new Set(entries.map((entry) => entry.session_id)).size, 2);
+      assert.equal(new Set(entries.map((entry) => entry.worktree_path)).size, 2);
+      assert.ok(entries.every((entry) => existsSync(entry.worktree_path)));
+    } finally {
+      first.cleanup();
+      second.cleanup();
+    }
+  });
+
   test('reuses a missing registry tombstone name', () => {
     writeRegistry(repo.mcHome, [
       makeEntry({
         name: 'reuse',
         branch: 'sess/reuse',
+        primary_worktree: repo.dir,
         worktree_path: join(repo.mcHome, 'worktrees', 'repo', 'reuse'),
         session_state: 'idle',
         coding_session_id: 'sess_old',
@@ -211,6 +239,30 @@ describe('mc new', () => {
     assert.equal(entry.coding_session_id, null);
     assert.equal(entry.tool_session_id, null);
     assert.equal(entry.dirty_files, 0);
+  });
+
+  test('does not adopt an unresolved legacy tombstone into the current repository', () => {
+    writeRegistry(repo.mcHome, [
+      makeEntry({
+        name: 'legacy-tombstone',
+        session_id: 'mcs_eeeeeeeeeeeeeeeeeeeeeeee',
+        repository_id: null,
+        repository_identity: null,
+        worktree_path: '/missing/legacy-tombstone',
+        worktree_missing: true,
+        marker: 'preserved',
+      }),
+    ]);
+
+    const result = runMc(['new', 'legacy-tombstone', '--no-launch', '--json'], {
+      cwd: repo.dir,
+      env: { MC_HOME: repo.mcHome },
+    });
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /unresolved legacy repository identity/u);
+    const registry = JSON.parse(readFileSync(join(repo.mcHome, 'registry.json'), 'utf8'));
+    assert.equal(registry.entries.length, 1);
+    assert.equal(registry.entries[0].marker, 'preserved');
   });
 
   test('--from <ref> roots the new branch at that ref', () => {

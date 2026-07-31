@@ -429,7 +429,9 @@ export async function recoverUnjournaledManagedCodexResumeDomain({
   const readRegistry = deps.readRegistry || readRegistryStrict;
   const currentRegistry = readRegistry();
   const matches = (currentRegistry?.entries || []).filter(
-    (candidate) => candidate.name === entry.name,
+    (candidate) => entry.session_id
+      ? candidate.session_id === entry.session_id
+      : candidate.name === entry.name,
   );
   if (matches.length !== 1
     || !sameEntryIdentity(matches[0], entryIdentity(entry))
@@ -588,7 +590,9 @@ export async function applyManagedCodexRecovery({
   const readRegistry = deps.readRegistry || readRegistryStrict;
   const registry = readRegistry();
   const matches = (registry?.entries || []).filter(
-    (entry) => entry.name === inspection.name,
+    (entry) => inspection._private.entryIdentity.session_id
+      ? entry.session_id === inspection._private.entryIdentity.session_id
+      : entry.name === inspection.name,
   );
   if (matches.length !== 1
     || !sameEntryIdentity(matches[0], inspection._private.entryIdentity)) {
@@ -838,6 +842,8 @@ function deterministicLegacyGeneration(codingSessionId, providerSessionId) {
 
 function entryIdentity(entry) {
   return {
+    session_id: entry.session_id || null,
+    repository_id: entry.repository_id || null,
     name: entry.name,
     coding_session_id: entry.coding_session_id,
     worktree_path: entry.worktree_path || null,

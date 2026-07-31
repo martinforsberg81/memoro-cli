@@ -38,7 +38,7 @@ export const C1_SOURCE_CLOSURE_SHA256 = Object.freeze({
     '5b01f3295b2956c87f2343b4c2b133e1fb61cb5cd8e35b3ca9fe46574ca40037',
   'src/mc/broker/c1-process-group.js':
     'fdce5abf4749441c3278f192339a226a7bcebe66cdfa7ea15ae2a56a92470357',
-  'src/mc/paths.js': 'cbd3a787ad988bd852074b37af40648aba9c4142319baf2074151177d4f715bd',
+  'src/mc/paths.js': 'f736475313471606f5d5bce11a3453295f27540ea1c7ca10db97e463ad72772f',
   'src/mc/provider-adapters/claude-managed-policy.js':
     '432352bff556ea7d26820d880e95e9be8fffabd73e02113537e1f7349a82daa7',
   'src/mc/vault/api.js': 'c1d88a10e2c2bdcc742f0e98a204d5e23e1e5a8266c4e84c9387aa647addb896',

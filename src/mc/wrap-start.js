@@ -27,7 +27,11 @@ export function resolvePolicyForWrap({
   const lookupEntry = deps.findEntry || findEntry;
   const readPolicy = deps.readRepoPolicy || readRepoPolicy;
   const resolvePolicy = deps.resolveEffectivePolicy || resolveEffectivePolicy;
-  const entry = sessionName ? (lookupEntry(sessionName) || {}) : {};
+  const entry = sessionName
+    ? (deps.findEntry
+      ? (lookupEntry(sessionName) || {})
+      : (lookupEntry(sessionName, { cwd }) || {}))
+    : {};
   const repoPolicy = readPolicy({ worktreePath: cwd, cwd });
   return resolvePolicy({ entry, tool, repoPolicy, config });
 }

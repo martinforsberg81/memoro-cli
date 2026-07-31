@@ -266,14 +266,14 @@ describe('resolveSessionIdentifier', () => {
     assert.equal(r.matchedBy, 'label');
   });
 
-  test('label collision returns most-recent + flags collision count', () => {
+  test('label collision refuses to choose and reports collision count', () => {
     const sessions = [
       make('sess_old', 'audit', '2026-05-24T00:00:00Z'),
       make('sess_new', 'audit', '2026-05-24T01:00:00Z'),
       make('sess_mid', 'audit', '2026-05-24T00:30:00Z'),
     ];
     const r = resolveSessionIdentifier(sessions, 'audit');
-    assert.equal(r.id, 'sess_new');
+    assert.equal(r.id, null);
     assert.equal(r.matchedBy, 'label');
     assert.equal(r.collisions, 3);
   });

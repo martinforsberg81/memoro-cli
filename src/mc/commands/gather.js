@@ -140,7 +140,7 @@ export async function runWithDeps(opts, { gh, git, registry, cwd }) {
   // Resolve the base from stored fanout metadata. Legacy entries may only
   // have from_ref; in that case use the current resolver only when it proves
   // the same branch. Never replace missing metadata with a conventional name.
-  const reg = registry.read();
+  const reg = registry.read({ persistMigration: !opts.dryRun });
   const phaseEntries = (reg?.entries || [])
     .filter((e) => e.parent_plan === planSlug)
     .sort((a, b) => (a.phase_n || 0) - (b.phase_n || 0));

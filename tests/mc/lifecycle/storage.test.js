@@ -7,6 +7,7 @@ import { runMc, parseJsonOrNull } from '../_helpers/cli.js';
 import { makeTempRepo, git, addWorktree } from '../_helpers/git-fixture.js';
 import { writeRegistry, makeEntry } from '../_helpers/registry-fixture.js';
 import { run as runDoctor } from '../../../src/mc/commands/doctor.js';
+import { classifyWorktreeEntry } from '../../../src/mc/storage-management.js';
 
 function setupStorageFixture(repo) {
   for (const n of ['done', 'dirty']) {
@@ -76,6 +77,20 @@ describe('mc storage / doctor', () => {
     assert.equal(j.summary.dependency_snapshots.ready, 1);
     assert.equal(j.summary.dependency_snapshots.candidates, 0);
     assert.equal(j.disk.dependency_snapshots > 0, true);
+  });
+
+  test('modern entries are not protected by a same-named live session in another repo', () => {
+    const classified = classifyWorktreeEntry(makeEntry({
+      session_id: 'mcs_aaaaaaaaaaaaaaaaaaaaaaaa',
+      repository_id: 'repo_bbbbbbbbbbbbbbbbbbbbbbbb',
+      name: 'shared',
+      coding_session_id: null,
+      worktree_path: '/missing/repo-a/shared',
+    }), {
+      liveSessions: [{ name: 'shared', cwd: '/missing/repo-b/shared' }],
+    });
+
+    assert.equal(classified.live, false);
   });
 
   test('storage candidates exposes the same stale worktree policy as gc', () => {
@@ -219,6 +234,7 @@ describe('mc storage / doctor', () => {
     writeRegistry(repo.mcHome, [
       makeEntry({
         name: 'live-stale',
+        primary_worktree: repo.dir,
         branch: 'sess/done',
         worktree_path: donePath,
         session_state: 'live',
@@ -228,6 +244,7 @@ describe('mc storage / doctor', () => {
       }),
       makeEntry({
         name: 'missing',
+        primary_worktree: repo.dir,
         branch: 'sess/missing',
         worktree_path: missingPath,
         session_state: 'idle',
@@ -259,6 +276,7 @@ describe('mc storage / doctor', () => {
     writeRegistry(repo.mcHome, [
       makeEntry({
         name: 'live-stale',
+        primary_worktree: repo.dir,
         branch: 'sess/done',
         worktree_path: donePath,
         session_state: 'live',
@@ -268,6 +286,7 @@ describe('mc storage / doctor', () => {
       }),
       makeEntry({
         name: 'missing',
+        primary_worktree: repo.dir,
         branch: 'sess/missing',
         worktree_path: missingPath,
         session_state: 'idle',
@@ -307,6 +326,7 @@ describe('mc storage / doctor', () => {
     writeRegistry(repo.mcHome, [
       makeEntry({
         name: 'old-missing',
+        primary_worktree: repo.dir,
         branch: 'sess/old-missing',
         worktree_missing: true,
         created_at: oldIso,
@@ -314,6 +334,7 @@ describe('mc storage / doctor', () => {
       }),
       makeEntry({
         name: 'recent-missing',
+        primary_worktree: repo.dir,
         branch: 'sess/recent-missing',
         worktree_missing: true,
         created_at: oldIso,
@@ -322,6 +343,7 @@ describe('mc storage / doctor', () => {
       }),
       makeEntry({
         name: 'present',
+        primary_worktree: repo.dir,
         branch: 'sess/present',
         worktree_missing: false,
         created_at: oldIso,

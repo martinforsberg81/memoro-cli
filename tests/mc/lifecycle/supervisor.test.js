@@ -1012,6 +1012,34 @@ describe('mc supervisor', () => {
     assert.equal(io.err(), '');
   });
 
+  test('local watch manager refuses an ambiguous human session name', async () => {
+    const manager = createSupervisorWatchManager({
+      stdout: streams().stdout,
+      stderr: streams().stderr,
+      opts: parseSupervisorArgs([]),
+      request: async () => ({
+        ok: true,
+        sessions: [
+          { id: 'sess_a', name: 'shared', cwd: '/repo-a/shared' },
+          { id: 'sess_b', name: 'shared', cwd: '/repo-b/shared' },
+        ],
+      }),
+      readOutput: async () => '',
+      now: () => NOW,
+    }, { disableTimers: true });
+
+    const added = await manager.add({
+      session: 'shared',
+      condition: 'done_or_review',
+      description: 'Wait for one session.',
+      interval_seconds: 5,
+      timeout_minutes: 30,
+    });
+
+    assert.equal(added.ok, false);
+    assert.match(added.error, /2 local sessions match "shared"; use a session id/);
+  });
+
   test('read command resolves a session name and prints recent output', async () => {
     const io = streams();
     const result = await handleSupervisorLine('read legal', {

@@ -133,6 +133,7 @@ export function buildWrapLookupIdentity({
 }
 
 export function buildWrapStartRegistryPatch({
+  registryEntry = null,
   sessionName,
   codingSessionId,
   tool,
@@ -148,6 +149,8 @@ export function buildWrapStartRegistryPatch({
   const at = asIso(now);
   const patch = {
     name: sessionName,
+    ...(registryEntry?.session_id ? { session_id: registryEntry.session_id } : {}),
+    ...(registryEntry?.repository_id ? { repository_id: registryEntry.repository_id } : {}),
     coding_session_id: codingSessionId,
     session_state: 'live',
     last_activity: at,
@@ -163,6 +166,7 @@ export function buildWrapStartRegistryPatch({
 }
 
 export function buildWrapExitRegistryPatch({
+  registryEntry = null,
   sessionName,
   codingSessionId,
   exitCode = 0,
@@ -173,6 +177,8 @@ export function buildWrapExitRegistryPatch({
   const at = asIso(now);
   return {
     name: sessionName,
+    ...(registryEntry?.session_id ? { session_id: registryEntry.session_id } : {}),
+    ...(registryEntry?.repository_id ? { repository_id: registryEntry.repository_id } : {}),
     coding_session_id: codingSessionId,
     session_state: exitCode === 0 ? 'idle' : 'dead',
     last_activity: at,

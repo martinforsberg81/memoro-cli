@@ -253,14 +253,18 @@ describe('mc end', () => {
     assert.ok(!wts.includes('/dot'), `worktree should be gone; got:\n${wts}`);
   });
 
-  test('uses the target primary worktree when cwd belongs to another repo', () => {
+  test('uses an opaque id to target another repository without guessing by name', () => {
     const other = makeTempRepo({ name: 'end-other' });
     try {
+      git(other.dir, 'config --local mc.repositoryId repo_cccccccccccccccccccccccc');
       git(other.dir, 'branch sess/cross main');
       const wtPath = join(repo.mcHome, 'worktrees', 'other', 'cross');
       addWorktree(other.dir, wtPath, 'sess/cross');
       writeRegistry(repo.mcHome, [makeEndEntry({
         name: 'cross',
+        session_id: 'mcs_cccccccccccccccccccccccc',
+        repository_id: 'repo_cccccccccccccccccccccccc',
+        repository_identity: { schema: 1, kind: 'local', canonical: null },
         branch: 'sess/cross',
         repo_slug: 'other',
         worktree_path: wtPath,
@@ -268,7 +272,7 @@ describe('mc end', () => {
         safety_verdict: 'SAFE_TO_END',
       })]);
 
-      const r = runMc(['end', 'cross', '--json', '--force'], {
+      const r = runMc(['end', 'mcs_cccccccccccccccccccccccc', '--json', '--force'], {
         cwd: repo.dir, env: { MC_HOME: repo.mcHome },
       });
       assert.equal(r.status, 0, `stderr:${r.stderr} stdout:${r.stdout}`);

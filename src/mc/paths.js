@@ -43,16 +43,18 @@ export function devServersRoot() {
  * The hash is omitted unless `collide=true`. The dispatcher passes `collide`
  * after a registry lookup.
  */
-export function repoSlug(primaryPath, { collide = false } = {}) {
+export function repoSlug(primaryPath, { collide = false, repositoryId = null } = {}) {
   const base = basename(primaryPath || '');
   if (!base) return 'unknown';
   if (!collide) return base;
-  const h = createHash('sha1').update(primaryPath).digest('hex').slice(0, 6);
+  const h = repositoryId && /^repo_[a-f0-9]{24}$/u.test(repositoryId)
+    ? repositoryId.slice(-6)
+    : createHash('sha1').update(primaryPath).digest('hex').slice(0, 6);
   return `${base}-${h}`;
 }
 
-export function worktreePath(primaryPath, name, { collide = false } = {}) {
-  return join(worktreesRoot(), repoSlug(primaryPath, { collide }), name);
+export function worktreePath(primaryPath, name, { collide = false, repositoryId = null } = {}) {
+  return join(worktreesRoot(), repoSlug(primaryPath, { collide, repositoryId }), name);
 }
 
 /**

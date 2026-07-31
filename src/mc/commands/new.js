@@ -19,9 +19,18 @@
  */
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
-import { findEntry, upsertEntry } from '../registry.js';
-import { worktreePath } from '../paths.js';
+import {
+  formatEntryResolutionError,
+  readRegistry,
+  resolveEntry,
+  upsertEntry,
+} from '../registry.js';
+import { repoSlug, worktreePath } from '../paths.js';
 import { git, isInsideRepo, primaryWorktree, branchExists } from '../git.js';
+import {
+  repositoryIdentityProjection,
+  resolveRepositoryIdentity,
+} from '../repository-identity.js';
 import { emitCd, parseDirectiveFlag } from '../shell-directives.js';
 import { checkAndPrintFreshInstall, ensureSentinel } from '../first-run.js';
 import { resolveToolInput } from '../../adapters/index.js';
@@ -150,7 +159,24 @@ export async function run(rawArgv) {
     return 1;
   }
 
-  const existingEntry = findEntry(opts.name);
+  const repository = resolveRepositoryIdentity(primary, { createLocal: true });
+  if (!repository.ok) {
+    console.error(`mc: could not establish repository identity (${repository.reason})`);
+    return 1;
+  }
+  const existing = resolveEntry(opts.name, {
+    cwd: primary,
+    repositoryId: repository.id,
+  });
+  if (!existing.ok && ['ambiguous-session-name', 'ambiguous-legacy-session'].includes(existing.reason)) {
+    console.error(`mc: ${formatEntryResolutionError(opts.name, existing)}`);
+    return 1;
+  }
+  const existingEntry = existing.ok ? existing.entry : null;
+  if (existingEntry && !existingEntry.repository_id) {
+    console.error(`mc: session "${opts.name}" has unresolved legacy repository identity; registry state was preserved`);
+    return 1;
+  }
   if (existingEntry && existingEntry.worktree_missing !== true) {
     console.error(`mc: a worktree named "${opts.name}" already exists`);
     return 1;
@@ -171,7 +197,15 @@ export async function run(rawArgv) {
     return 1;
   }
 
-  const wt = worktreePath(primary, opts.name);
+  const registry = readRegistry();
+  const baseSlug = repoSlug(primary);
+  const collide = registry.entries.some((entry) => (
+    entry?.repo_slug === baseSlug
+      && entry?.repository_id
+      && entry.repository_id !== repository.id
+  ));
+  const slug = repoSlug(primary, { collide, repositoryId: repository.id });
+  const wt = worktreePath(primary, opts.name, { collide, repositoryId: repository.id });
   mkdirSync(dirname(wt), { recursive: true });
   try {
     git(primary, ['worktree', 'add', wt, branch]);
@@ -195,9 +229,12 @@ export async function run(rawArgv) {
 
   const entry = upsertEntry({
     name: opts.name,
+    ...(existingEntry?.session_id ? { session_id: existingEntry.session_id } : {}),
+    repository_id: repository.id,
+    repository_identity: repositoryIdentityProjection(repository),
     branch,
     worktree_path: wt,
-    repo_slug: wt.split('/worktrees/')[1]?.split('/')[0] || null,
+    repo_slug: slug,
     primary_worktree: primary,
     kind: 'work',
     tool: toolResolution.tool,
@@ -240,6 +277,8 @@ export async function run(rawArgv) {
     console.log(JSON.stringify({
       ok: true,
       name: opts.name,
+      session_id: entry.session_id,
+      repository_id: entry.repository_id,
       branch,
       worktree_path: wt,
       tool: entry.tool,
@@ -291,7 +330,7 @@ export async function launchNewSession({
 
     try {
       const res = await materialise({
-        sessionId: entry.name,
+        sessionId: entry.legacy_session_key || entry.session_id || entry.name,
         worktreePath: worktreePath || undefined,
         adapters: launchTool?.adapter ? [launchTool.adapter] : undefined,
       });
@@ -319,6 +358,8 @@ export async function launchNewSession({
       const upsert = deps.upsertEntry || upsertEntry;
       const patch = {
         name: entry.name,
+        ...(entry.session_id ? { session_id: entry.session_id } : {}),
+        ...(entry.repository_id ? { repository_id: entry.repository_id } : {}),
         coding_session_id: codingSessionId,
         session_state: 'live',
       };
