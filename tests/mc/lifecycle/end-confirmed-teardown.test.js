@@ -443,27 +443,25 @@ describe('mc end confirmed teardown', () => {
       ...target.entry,
       tool_transcript_path: null,
     };
-    let resolverEntry = null;
+    let lookup = null;
 
     const result = await invoke(['missing-path'], {
       answer: 'y',
       entries: [incomplete],
       roots: target.roots,
       deps: {
-        resolveToolSessionForResume: async ({ entry }) => {
-          resolverEntry = entry;
+        findTranscriptForToolSession: async (args) => {
+          lookup = args;
           return {
-            ok: true,
-            from: 'transcript-repaired',
-            source: entry.tool_session_source,
-            sessionId: entry.tool_session_id,
-            transcriptPath: target.transcript,
+            path: target.transcript,
+            sessionId: target.sessionId,
           };
         },
       },
     });
 
-    assert.equal(resolverEntry.tool_session_id, target.sessionId);
+    assert.equal(lookup.sessionId, target.sessionId);
+    assert.equal(lookup.source, 'codex');
     assert.equal(result.code, 0, result.stderr);
     assert.match(result.stdout, new RegExp(escapeRegExp(target.transcript)));
     assert.equal(existsSync(target.transcript), false);
