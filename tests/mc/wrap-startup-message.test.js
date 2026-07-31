@@ -100,6 +100,29 @@ describe('createStartupMessageController', () => {
     assert.deepEqual(delivered, ['create MEMORO']);
   });
 
+  test('pause clears a pending timer without cancelling later delivery', () => {
+    const timers = fakeTimers();
+    const delivered = [];
+    const controller = createStartupMessageController({
+      message: 'create MEMORO',
+      delayMs: 25,
+      deliver: (msg) => delivered.push(msg),
+      setTimeoutFn: timers.setTimeoutFn,
+      clearTimeoutFn: timers.clearTimeoutFn,
+    });
+
+    assert.equal(controller.schedule(), true);
+    const [firstId] = timers.ids();
+    assert.equal(controller.pause(), true);
+    assert.equal(timers.fire(firstId), false);
+    assert.deepEqual(delivered, []);
+
+    assert.equal(controller.schedule(), true);
+    const [secondId] = timers.ids();
+    assert.equal(timers.fire(secondId), true);
+    assert.deepEqual(delivered, ['create MEMORO']);
+  });
+
   test('explicit immediate send cancels pending timer and delivers once', () => {
     const timers = fakeTimers();
     const delivered = [];

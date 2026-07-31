@@ -10,17 +10,18 @@ import {
 } from '../../src/mc/local-auth-mode.js';
 
 describe('local auth mode', () => {
-  test('defaults to the existing native unmanaged path', () => {
-    assert.equal(resolveLocalAuthMode(), LOCAL_AUTH_MODES.NATIVE);
+  test('defaults named lifecycle intent to managed custody', () => {
+    assert.equal(resolveLocalAuthMode(), LOCAL_AUTH_MODES.MANAGED_PORTABLE);
     assert.deepEqual(evaluateLocalAuthMode(), {
       ok: true,
-      mode: LOCAL_AUTH_MODES.NATIVE,
-      state: LOCAL_AUTH_STATES.NATIVE_UNMANAGED,
+      mode: LOCAL_AUTH_MODES.MANAGED_PORTABLE,
+      state: LOCAL_AUTH_STATES.MANAGED_REQUESTED,
       portable: false,
+      certified: false,
     });
   });
 
-  test('managed portable is explicit but remains uncertified until launch preflight', () => {
+  test('managed portable remains uncertified until launch preflight', () => {
     const mode = resolveLocalAuthMode({ managedPortable: true });
     const result = evaluateLocalAuthMode(mode);
 
@@ -50,7 +51,7 @@ describe('local auth mode', () => {
     assert.equal(mode, LOCAL_AUTH_MODES.NATIVE);
   });
 
-  test('only the explicit lifecycle flag opts in; bare mc and wrap argv stay native', () => {
+  test('named lifecycle commands default managed while bare mc and wrap stay native', () => {
     assert.equal(
       resolveLocalAuthModeFromArgv(['new', 'work', '--managed-portable']),
       LOCAL_AUTH_MODES.MANAGED_PORTABLE,
@@ -73,7 +74,15 @@ describe('local auth mode', () => {
     );
     assert.equal(
       resolveLocalAuthModeFromArgv(['new', 'work']),
-      LOCAL_AUTH_MODES.NATIVE,
+      LOCAL_AUTH_MODES.MANAGED_PORTABLE,
+    );
+    assert.equal(
+      resolveLocalAuthModeFromArgv(['open', 'work']),
+      LOCAL_AUTH_MODES.MANAGED_PORTABLE,
+    );
+    assert.equal(
+      resolveLocalAuthModeFromArgv(['resume', 'work']),
+      LOCAL_AUTH_MODES.MANAGED_PORTABLE,
     );
   });
 

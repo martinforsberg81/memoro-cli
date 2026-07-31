@@ -85,8 +85,6 @@ describe('buildHeartbeatBase', () => {
       source: 'codex',
       repo: 'memoro',
       branch: 'main',
-      files_touched_since_last: [],
-      last_user_excerpt: '',
       label: 'audit',
     });
   });
@@ -99,26 +97,25 @@ describe('buildHeartbeatBase', () => {
       repoContext,
     });
     assert.equal('label' in base, false);
+    assert.equal('files_touched_since_last' in base, false);
+    assert.equal('last_user_excerpt' in base, false);
+    assert.equal('last_assistant_excerpt' in base, false);
   });
 });
 
 describe('buildHeartbeatPayload', () => {
-  test('adds assistant excerpt, idle seconds, and timestamp to base payload', () => {
+  test('adds only idle seconds and timestamp to metadata heartbeat payload', () => {
     const payload = buildHeartbeatPayload({
       base: {
         coding_session_id: 'sess_abc123',
         machine_id: 'host-a',
       },
-      outputBuffer: 'abcdef',
       lastOutputAt: Date.parse('2026-06-04T10:00:00.000Z'),
       now: Date.parse('2026-06-04T10:00:07.900Z'),
-      excerptMax: 3,
-      extractExcerpt: (text, max) => text.slice(-max),
     });
     assert.deepEqual(payload, {
       coding_session_id: 'sess_abc123',
       machine_id: 'host-a',
-      last_assistant_excerpt: 'def',
       idle_seconds: 7,
       at: '2026-06-04T10:00:07.900Z',
     });
@@ -127,11 +124,8 @@ describe('buildHeartbeatPayload', () => {
   test('clamps negative idle seconds to zero', () => {
     const payload = buildHeartbeatPayload({
       base: { coding_session_id: 'sess_abc123' },
-      outputBuffer: '',
       lastOutputAt: Date.parse('2026-06-04T10:00:10.000Z'),
       now: Date.parse('2026-06-04T10:00:00.000Z'),
-      excerptMax: 10,
-      extractExcerpt: () => '',
     });
     assert.equal(payload.idle_seconds, 0);
   });
@@ -150,8 +144,6 @@ describe('buildHeartbeatPayload', () => {
     const payload = buildHeartbeatPayload({
       base: { coding_session_id: 'sess_abc123' },
       now: Date.parse('2026-06-04T10:00:00.000Z'),
-      excerptMax: 10,
-      extractExcerpt: () => '',
       sessionProjection: projection,
     });
     assert.deepEqual(payload.session_projection, projection);
@@ -159,8 +151,6 @@ describe('buildHeartbeatPayload', () => {
     const rejected = buildHeartbeatPayload({
       base: { coding_session_id: 'sess_abc123' },
       now: Date.parse('2026-06-04T10:00:00.000Z'),
-      excerptMax: 10,
-      extractExcerpt: () => '',
       sessionProjection: { ...projection, raw_output: 'secret' },
     });
     assert.equal(Object.hasOwn(rejected, 'session_projection'), false);

@@ -6,11 +6,11 @@
  * relaunches them explicitly with `mc open <name> --codex/--claude`.
  *
  * Five phases per §13d:
- *   1. Resolve the target adapter (`claude-code` | `codex` | `gemini-cli`).
- *   2. Verify the target is installed + authed via the adapter's own
- *      `getStatus()`. The install/auth hint string is surfaced verbatim —
- *      authority lives in the verbs (pattern 1), so we never re-author
- *      the hint here.
+ *   1. Resolve the target instruction adapter (`claude-code` | `codex` |
+ *      `gemini-cli`).
+ *   2. Ask the central managed-provider registry for strict, metadata-only
+ *      readiness evidence. A tool without one complete managed adapter is
+ *      refused before config or wrapper writes.
  *   3. Persist the new default in `~/.memoro/config.json` under
  *      `defaultTool`.
  *   4. Run `mc adapter sync` for the target tool only by calling
@@ -43,6 +43,9 @@ import {
   resolveCanonicalContent,
   comparableWrapperContent,
 } from './adapter.js';
+import {
+  inspectManagedProviderReadiness,
+} from '../managed-provider-registry.js';
 
 const CANONICAL_PATH = 'docs/coding-agent-protocol.md';
 
@@ -80,7 +83,7 @@ FLAGS
   --json          Machine-readable report
 
 WHAT IT DOES
-  1. Verifies the target tool is installed + authenticated
+  1. Verifies one complete managed adapter, pinned release, and vault auth
   2. Updates the persisted default tool (~/.memoro/config.json)
   3. Runs \`mc adapter sync --tool <tool>\` for the target
   4. Reports drift across all tools at the end
@@ -159,9 +162,13 @@ export function resolveTargetAdapter(name, adapters) {
 }
 
 /**
- * Decide whether the target is "ready enough" to become the default.
+ * Decide whether the target is ready to become the default.
  *
- * Contract — matches the adapter `getStatus()` shape:
+ * The production contract is `mc-managed-provider-readiness/v1`. The legacy
+ * status shape remains accepted here only so older, dependency-injected unit
+ * fixtures keep testing the generic decision rules during the cutover.
+ *
+ * Legacy contract:
  *   - installed: boolean
  *   - authenticated: true | false | null  (null = can't headlessly verify)
  *   - hint: string (install or sign-in command — surfaced verbatim)
@@ -177,6 +184,16 @@ export function resolveTargetAdapter(name, adapters) {
  * Pure: input → decision. The caller emits the message.
  */
 export function evaluateReadiness(status) {
+  if (status?.schema === 'mc-managed-provider-readiness/v1') {
+    return status.ok === true
+      ? { ok: true, managed: true }
+      : {
+          ok: false,
+          managed: true,
+          reason: status.reason || 'managed-provider-not-ready',
+          hint: status.hint ?? null,
+        };
+  }
   if (!status || status.installed === false) {
     return { ok: false, reason: 'not-installed', hint: status?.hint ?? null };
   }
@@ -216,7 +233,7 @@ export function composeSwitchPlan({ target, previous }) {
  *                          instructions}) + module ref via `mod`. The
  *                          adapter modules are imported eagerly so
  *                          `getStatus` is callable.
- *   getStatusFor         — async; (adapterId) → adapter status shape
+ *   inspectReadinessFor  — async; (adapterId) → strict managed readiness
  *   syncDeps             — deps object passed to `runSyncWith` (so tests
  *                          can stub fs + canonical reads without going
  *                          to real disk)
@@ -228,40 +245,12 @@ export function composeSwitchPlan({ target, previous }) {
 export function defaultDeps() {
   return {
     listAdapters: defaultAdaptersWithModules,
-    getStatusFor: async (id) => {
-      const mod = await loadAdapterModule(id);
-      if (!mod?.getStatus) {
-        // Phase-2 stub adapters (e.g. gemini-cli today) don't expose
-        // getStatus. Surface that explicitly rather than masquerading
-        // as "not installed".
-        return {
-          installed: false,
-          version: null,
-          authenticated: null,
-          hint: `${id} adapter is a phase-2 stub — no status probe yet (plan §13f phase 5).`,
-          detailLines: [],
-        };
-      }
-      return mod.getStatus();
-    },
+    inspectReadinessFor: (id) => inspectManagedProviderReadiness({ tool: id }),
     syncDeps: defaultSyncDeps(),
     readDefaultTool: async () => (await readConfig()).defaultTool ?? null,
     writeDefaultTool: async (id) => { await updateConfig({ defaultTool: id }); },
     runSync: (opts, deps) => runSyncWith(opts, deps),
   };
-}
-
-/**
- * Resolve adapter id → adapter module. Centralised so the
- * `defaultAdapterList` (descriptor list) and the live-module loader stay
- * in sync. Returns null for ids we don't know — caller maps to a clean
- * error in that case.
- */
-async function loadAdapterModule(id) {
-  if (id === 'claude-code')  return await import('../../adapters/claude-code.js');
-  if (id === 'codex')        return await import('../../adapters/codex.js');
-  if (id === 'gemini-cli')   return await import('../../adapters/gemini.js');
-  return null;
 }
 
 async function defaultAdaptersWithModules() {
@@ -286,7 +275,11 @@ export async function runSwitchWith(opts, deps) {
   // ── Phase 2: readiness check ─────────────────────────────────────
   let status;
   try {
-    status = await deps.getStatusFor(target.id);
+    const inspectReadiness = deps.inspectReadinessFor || deps.getStatusFor;
+    if (typeof inspectReadiness !== 'function') {
+      throw new TypeError('managed provider readiness dependency is unavailable');
+    }
+    status = await inspectReadiness(target.id);
   } catch (err) {
     return emitError(
       `failed to probe ${target.id}: ${err?.message ?? String(err)}`,
@@ -295,9 +288,11 @@ export async function runSwitchWith(opts, deps) {
   }
   const ready = evaluateReadiness(status);
   if (!ready.ok) {
-    const reasonMsg = ready.reason === 'not-installed'
-      ? `${target.label} is not installed`
-      : `${target.label} is not authenticated`;
+    const reasonMsg = ready.managed
+      ? `${target.label} managed adapter is not ready (${ready.reason})`
+      : ready.reason === 'not-installed'
+        ? `${target.label} is not installed`
+        : `${target.label} is not authenticated`;
     if (opts.json) {
       console.log(JSON.stringify({
         ok: false,

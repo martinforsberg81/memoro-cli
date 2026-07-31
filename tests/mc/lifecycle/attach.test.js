@@ -33,12 +33,19 @@ describe('mc attach command', () => {
         attached = opts;
         return 0;
       },
+      resolveSessionControllerCapability: async () => ({
+        ok: true,
+        capability: 'b'.repeat(64),
+      }),
       stderr: { write: () => {} },
     });
 
     assert.equal(code, 0);
     assert.deepEqual(sequence, ['ensure', 'attach']);
-    assert.deepEqual(attached, { id: 'sess_a' });
+    assert.deepEqual(attached, {
+      id: 'sess_a',
+      controllerCapability: 'b'.repeat(64),
+    });
   });
 
   test('does not attach when broker start fails', async () => {

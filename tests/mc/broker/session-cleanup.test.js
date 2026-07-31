@@ -6,6 +6,8 @@ import {
   removeBrokerSessionForEntry,
 } from '../../../src/mc/broker/session-cleanup.js';
 
+const controllerCapability = 'b'.repeat(64);
+
 describe('broker session identity matching', () => {
   test('a comparable coding ID mismatch rejects weaker cwd and label matches', () => {
     assert.equal(brokerSessionMatchesEntry({
@@ -87,6 +89,7 @@ describe('broker session identity matching', () => {
       coding_session_id: 'sess_target',
       worktree_path: '/repo/target',
     }, {
+      controllerCapability,
       requestBroker: async (message, opts = {}) => {
         if (opts.socketPath) hostRequests.push(message.type);
         if (message.type === 'sessions') {
@@ -124,6 +127,7 @@ describe('broker session identity matching', () => {
       coding_session_id: 'sess_target',
       worktree_path: '/repo/target',
     }, {
+      controllerCapability,
       requestBroker: async (message, opts = {}) => {
         if (opts.socketPath) hostRequests.push(message.type);
         if (message.type === 'sessions') {
@@ -161,6 +165,7 @@ describe('broker session identity matching', () => {
       coding_session_id: 'sess_target',
       worktree_path: '/repo/target',
     }, {
+      controllerCapability,
       requestBroker: async (message) => {
         requests.push(message);
         if (message.type === 'sessions') {
@@ -182,7 +187,11 @@ describe('broker session identity matching', () => {
     assert.equal(result.id, 'pty_target');
     assert.deepEqual(
       requests.find((message) => message.type === 'remove_session'),
-      { type: 'remove_session', id: 'pty_target' },
+      {
+        type: 'remove_session',
+        id: 'pty_target',
+        session_controller_capability: controllerCapability,
+      },
     );
   });
 });

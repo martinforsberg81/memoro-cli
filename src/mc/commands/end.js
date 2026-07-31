@@ -780,6 +780,7 @@ async function teardownOne(plan, { opts, deps }) {
     const removeBroker = deps.removeBrokerSessionForEntry || removeBrokerSessionForEntry;
     const broker = await removeBroker(entry, {
       requestBroker: deps.requestBroker,
+      deps,
     });
     if (!brokerCleanupIsAcceptable(entry, broker)) {
       throw new Error(`broker cleanup failed (${broker?.error || broker?.reason || 'unknown'})`);

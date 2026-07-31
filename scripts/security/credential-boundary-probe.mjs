@@ -20,6 +20,9 @@ import {
   validateBoundaryReport,
 } from '../../src/mc/credential-domain/local-codex.js';
 import { MANAGED_CODEX_PROFILE } from '../../src/mc/provider-adapters/codex-managed.js';
+import {
+  verifyInstalledManagedCodexArtifact,
+} from '../../src/mc/provider-adapters/codex-managed-artifacts.js';
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(scriptDir, '..', '..');
@@ -120,7 +123,14 @@ async function runGeneration({ generation, replacement, deps = {} }) {
       workspaceRoot: workspaceDir,
       executorHome,
       executorTmp,
-      forbiddenPaths: [homedir(), repoRoot, hostMcRoot].filter(Boolean),
+      forbiddenPaths: [
+        homedir(),
+        repoRoot,
+        hostMcRoot,
+        hostMcTarget?.binPath,
+        hostMcTarget?.entryPath,
+      ].filter(Boolean),
+      deniedUnixSocketPaths: [socketPath],
     });
 
     const baseEnv = {
@@ -149,8 +159,14 @@ async function runGeneration({ generation, replacement, deps = {} }) {
       setupCode = 'credential_socket_bind_failed';
     }
 
-    if (server && compiled?.ok) {
-      isolated = run('codex', [
+    const managedCodexBinary = resolveManagedCodexBinary(deps);
+    if (!managedCodexBinary && setupCode === 'generation_ready') {
+      setupCode = 'managed_codex_artifact_unavailable';
+    }
+    if (server && compiled?.ok && managedCodexBinary) {
+      isolated = run(managedCodexBinary, [
+        '--profile',
+        MANAGED_CODEX_PROFILE,
         'sandbox',
         '--include-managed-config',
         '--permission-profile',
@@ -180,9 +196,21 @@ async function runGeneration({ generation, replacement, deps = {} }) {
     && negative.value.vault_admin_via_bin_callable === true
     && negative.value.vault_admin_via_node_callable === true;
   const isolatedReportValid = isolated.ok && validateBoundaryReport(isolated.value);
+  const expectedIsolated = {
+    file_readable: false,
+    canary_in_environment: false,
+    canary_in_argv: false,
+    parent_process_exposes_canary: false,
+    detached_boundary_reachable: false,
+    credential_socket_reachable: false,
+    external_network_reachable: true,
+    workspace_write_blocked: false,
+    vault_admin_via_bin_callable: false,
+    vault_admin_via_node_callable: false,
+  };
   const isolatedViolations = isolatedReportValid
-    ? Object.entries(isolated.value)
-      .filter(([key, value]) => key !== 'schema' && value !== false)
+    ? Object.entries(expectedIsolated)
+      .filter(([key, value]) => isolated.value[key] !== value)
       .map(([key]) => key)
     : [setupCode === 'generation_ready' ? 'probe_execution_failed' : setupCode];
   const outputContainsCanary = negative.outputContainsCanary || isolated.outputContainsCanary;
@@ -233,8 +261,12 @@ function writeManagedConfig({
   executorHome,
   executorTmp,
   forbiddenPaths,
+  deniedUnixSocketPaths,
 }) {
-  writeFileSync(join(codexHome, 'config.toml'), renderManagedCodexConfig({
+  writeFileSync(join(codexHome, 'config.toml'), '', { mode: 0o600 });
+  writeFileSync(
+    join(codexHome, `${MANAGED_CODEX_PROFILE}.config.toml`),
+    renderManagedCodexConfig({
     domainPath: credentialDir,
     executorRoot,
     workspaceRoot,
@@ -242,7 +274,10 @@ function writeManagedConfig({
     executorTmp,
     safePath: process.env.PATH || '/usr/bin:/bin',
     forbiddenPaths,
-  }), { mode: 0o600 });
+    deniedUnixSocketPaths,
+    }),
+    { mode: 0o600 },
+  );
 }
 
 function resolveHostMcTarget() {
@@ -319,11 +354,22 @@ function verifyTeardown({ tempRoot, credentialDir, socketPath, exists }) {
 }
 
 function readCodexVersion() {
-  const result = run('codex', ['--version'], {
+  const binary = resolveManagedCodexBinary({});
+  if (!binary) return null;
+  const result = run(binary, ['--version'], {
     PATH: process.env.PATH || '/usr/bin:/bin',
     HOME: tmpdir(),
   }, { parseJson: false });
   return result.ok ? result.stdout.trim() || null : null;
+}
+
+function resolveManagedCodexBinary(deps) {
+  if (typeof deps?.codexBinary === 'string' && deps.codexBinary.startsWith('/')) {
+    return deps.codexBinary;
+  }
+  const artifact = (deps?.verifyManagedCodexArtifact
+    || verifyInstalledManagedCodexArtifact)();
+  return artifact?.ok ? artifact.nativeBinary : null;
 }
 
 function run(command, args, env, {
@@ -337,7 +383,7 @@ function run(command, args, env, {
     cwd,
     env,
     encoding: 'utf8',
-    timeout: 20_000,
+    timeout: 30_000,
     maxBuffer: 1024 * 1024,
   });
   const stdout = String(result.stdout || '');

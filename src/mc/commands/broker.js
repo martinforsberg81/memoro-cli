@@ -39,6 +39,7 @@ export async function run(argv) {
     connectCloud: runCloudConnection,
     ensureCloudBroker: ensureCloudBrokerConnected,
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    stdin: process.stdin,
     stdout: process.stdout,
     stderr: process.stderr,
   });
@@ -48,10 +49,18 @@ export async function runBrokerWith(opts, deps) {
   const ensureBroker = deps.ensureBroker || ensureBrokerRunning;
 
   if (opts.daemon) {
+    const controllerBinding = opts.controllerBootstrap
+      ? await readControllerBootstrap(deps.stdin)
+      : null;
+    if (opts.controllerBootstrap && !controllerBinding) {
+      deps.stderr?.write?.('mc: broker controller bootstrap unavailable\n');
+      return 1;
+    }
     await deps.runDaemon({
       readyFile: opts.readyFile || null,
       socketPath: opts.socketPath || undefined,
       pidPath: opts.pidPath || undefined,
+      ...(controllerBinding ? { controllerBinding } : {}),
     });
     return 0;
   }
@@ -331,6 +340,7 @@ export function parseArgs(argv) {
     codingSessionId: null,
     runtimeGeneration: null,
     authorizationDigest: null,
+    controllerBootstrap: false,
     rawArgv: argv,
   };
   for (let i = 0; i < argv.length; i++) {
@@ -340,6 +350,7 @@ export function parseArgs(argv) {
     if (a === '--once') { opts.once = true; continue; }
     if (a === '--cloud-runtime') { opts.cloudRuntime = true; continue; }
     if (a === '--daemon') { opts.daemon = true; opts.verb = opts.verb || 'daemon'; continue; }
+    if (a === '--controller-bootstrap') { opts.controllerBootstrap = true; continue; }
     if (a === '--ready-file') { opts.readyFile = argv[++i]; continue; }
     if (a === '--socket-path') {
       const next = argv[++i];
@@ -408,6 +419,55 @@ export function parseArgs(argv) {
   return opts;
 }
 
+async function readControllerBootstrap(stream, {
+  maxBytes = 1024,
+  timeoutMs = 2_000,
+} = {}) {
+  if (!stream?.on) return null;
+  return new Promise((resolve) => {
+    let settled = false;
+    let raw = Buffer.alloc(0);
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      stream.off?.('data', onData);
+      stream.off?.('end', onEnd);
+      stream.off?.('error', onError);
+      resolve(value);
+    };
+    const parse = () => {
+      try {
+        const value = JSON.parse(raw.toString('utf8').trim());
+        const valid = value
+          && typeof value === 'object'
+          && !Array.isArray(value)
+          && Object.keys(value).length === 3
+          && value.schema === 'mc-broker-controller-bootstrap-v1'
+          && /^sess_[A-Za-z0-9_-]{6,}$/.test(value.session_id || '')
+          && /^[a-f0-9]{64}$/.test(value.session_controller_capability || '');
+        finish(valid ? value : null);
+      } catch {
+        finish(null);
+      }
+    };
+    const onData = (chunk) => {
+      raw = Buffer.concat([
+        raw,
+        Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)),
+      ]);
+      if (raw.length > maxBytes) finish(null);
+      else if (raw.includes(10)) parse();
+    };
+    const onEnd = () => parse();
+    const onError = () => finish(null);
+    const timer = setTimeout(() => finish(null), timeoutMs);
+    stream.on('data', onData);
+    stream.on('end', onEnd);
+    stream.on('error', onError);
+  });
+}
+
 async function resolveBrokerAuthToken({
   env = process.env,
   getSecretFn = getSecret,
@@ -429,5 +489,6 @@ export const __test__ = {
   POLL_INTERVAL_MS,
   CONNECT_READY_TIMEOUT_MS,
   registerCloudConnectorPid,
+  readControllerBootstrap,
   resolveBrokerAuthToken,
 };

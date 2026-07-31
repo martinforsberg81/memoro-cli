@@ -18,8 +18,8 @@
  * tick starts fresh. The KV TTL on the server (90 min) absorbs occasional
  * misses without marking the session dead.
  *
- * Adaptive cadence and rich excerpts (UserPromptSubmit hooks) land in a
- * follow-up PR.
+ * Heartbeats are intentionally metadata-only. Transcript reads stay local to
+ * the status projector and are never serialized into the heartbeat payload.
  */
 
 import { readFile, writeFile, mkdir, rm, unlink } from 'node:fs/promises';
@@ -158,9 +158,6 @@ export async function heartbeatLoop(argv) {
         source,
         repo,
         branch: repoContext.branch,
-        files_touched_since_last: [],
-        last_user_excerpt: '',
-        last_assistant_excerpt: '',
         at: new Date(now).toISOString(),
         session_projection: await projectHeartbeatOnlySession({
           projectionTracker,

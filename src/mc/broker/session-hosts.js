@@ -1,8 +1,17 @@
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { dirname, join } from 'node:path';
 
 import { requestBroker } from './client.js';
 import { BROKER_PROTOCOL_VERSION } from './daemon.js';
+import { BROKER_RUNTIME_IDENTITY } from './runtime-identity.js';
 import { sessionHostPaths, sessionHostsDir } from './paths.js';
 import {
   spawnBrokerDaemon,
@@ -10,15 +19,28 @@ import {
   POLL_INTERVAL_MS,
   checkBrokerCompatibility,
   liveBrokerSessions,
+  retireTerminalBrokerSessions,
   stopExistingBroker,
 } from './supervisor.js';
 
 const HOST_START_LOG_TAIL_CHARS = 4000;
 const HOST_START_ERROR_CHARS = 1200;
 const HOST_RUNTIME_PROBE_TIMEOUT_MS = 600;
+const CONTROLLER_REQUEST_TYPES = new Set([
+  'attach_session',
+  'write_session',
+  'dispatch_session',
+  'fetch_session_output',
+  'resize_session',
+  'stop_session',
+  'remove_session',
+  'handoff_switch_read',
+  'run_claude_c1',
+]);
 
 export async function ensureSessionHostRunning({
   sessionId,
+  controllerBinding = null,
   paths = sessionHostPaths(sessionId),
   request = requestBroker,
   spawnDaemon = spawnBrokerDaemon,
@@ -26,13 +48,17 @@ export async function ensureSessionHostRunning({
   timeoutMs = START_POLL_MS,
   intervalMs = POLL_INTERVAL_MS,
   expectedProtocolVersion = BROKER_PROTOCOL_VERSION,
+  expectedRuntimeIdentity = BROKER_RUNTIME_IDENTITY,
   now = () => new Date().toISOString(),
 } = {}) {
   if (!sessionId) return { ok: false, error: 'sessionId required' };
   const hostRequest = (message) => request(message, { socketPath: paths.socketPath });
   const existing = await hostRequest({ type: 'status' }).catch(() => null);
   if (existing?.ok) {
-    const compatibility = checkBrokerCompatibility(existing, { expectedProtocolVersion });
+    const compatibility = checkBrokerCompatibility(existing, {
+      expectedProtocolVersion,
+      expectedRuntimeIdentity,
+    });
     if (compatibility.ok) {
       writeSessionHostManifest({ sessionId, paths, broker: existing.broker, now });
       return { ok: true, alreadyRunning: true, ...paths, broker: existing.broker };
@@ -52,6 +78,20 @@ export async function ensureSessionHostRunning({
           : `session host is incompatible (${compatibility.reason}) and its session inventory is unavailable; refusing to replace it`,
       };
     }
+    const retired = await retireTerminalBrokerSessions({
+      request: hostRequest,
+      sessions: existing.sessions,
+      controllerCapability: validControllerBinding(controllerBinding, sessionId)
+        ? controllerBinding.session_controller_capability
+        : null,
+    });
+    if (!retired.ok) {
+      return {
+        ...retired,
+        reason: 'broker-protocol-replacement-failed',
+        compatibility_reason: compatibility.reason,
+      };
+    }
     const stopped = await stopExistingBroker({
       request: hostRequest,
       sleep,
@@ -68,10 +108,19 @@ export async function ensureSessionHostRunning({
   }
 
   cleanupSessionHostFiles(paths);
+  if (!validControllerBinding(controllerBinding, sessionId)) {
+    return {
+      ok: false,
+      reason: 'session-controller-bootstrap-required',
+      error: 'session controller bootstrap is required to start the host',
+      ...paths,
+    };
+  }
   const spawned = spawnDaemon({
     socketPath: paths.socketPath,
     pidPath: paths.pidPath,
     logPath: paths.logPath,
+    controllerBinding,
   });
   if (!spawned.ok) return spawned;
 
@@ -79,7 +128,10 @@ export async function ensureSessionHostRunning({
   while (Date.now() - started < timeoutMs) {
     const res = await hostRequest({ type: 'status' }).catch(() => null);
     if (res?.ok) {
-      const compatibility = checkBrokerCompatibility(res, { expectedProtocolVersion });
+      const compatibility = checkBrokerCompatibility(res, {
+        expectedProtocolVersion,
+        expectedRuntimeIdentity,
+      });
       if (!compatibility.ok) {
         const liveSessions = liveBrokerSessions(res.sessions);
         return {
@@ -102,6 +154,12 @@ export async function ensureSessionHostRunning({
     await sleep(intervalMs);
   }
   return { ok: false, error: sessionHostStartError(paths), ...paths };
+}
+
+function validControllerBinding(value, sessionId) {
+  return value?.schema === 'mc-broker-controller-bootstrap-v1'
+    && value.session_id === sessionId
+    && /^[a-f0-9]{64}$/.test(value.session_controller_capability || '');
 }
 
 // A host whose daemon is busy (an active tool streaming PTY output hogs
@@ -194,9 +252,15 @@ export async function listLocalBrokerAndHostSessions({
 
 export function requestForSession(session, {
   request = requestBroker,
+  controllerCapability = null,
 } = {}) {
   const socketPath = session?.broker_socket_path || session?.brokerSocketPath || null;
-  return (message) => request(message, socketPath ? { socketPath } : undefined);
+  return (message) => request({
+    ...message,
+    ...(controllerCapability && CONTROLLER_REQUEST_TYPES.has(message?.type)
+      ? { session_controller_capability: controllerCapability }
+      : {}),
+  }, socketPath ? { socketPath } : undefined);
 }
 
 /**
@@ -209,8 +273,11 @@ export function requestForSession(session, {
 export async function probeSessionHostRuntime(paths, {
   request = requestBroker,
   readFile = readFileSync,
+  readManifestFile = readFileSync,
+  lstatFile = lstatSync,
   signalProcess = process.kill,
   timeoutMs = HOST_RUNTIME_PROBE_TIMEOUT_MS,
+  expectedSessionId = null,
 } = {}) {
   if (!paths?.socketPath || !paths?.pidPath) {
     return { verdict: 'unknown', reason: 'host-paths-missing' };
@@ -221,22 +288,87 @@ export async function probeSessionHostRuntime(paths, {
 
   const pid = readPositivePid(paths.pidPath, { readFile });
   if (pid == null) return { verdict: 'unknown', reason: 'host-pid-unverified' };
+  const hostManifest = readBoundHostManifest(paths, {
+    expectedSessionId,
+    expectedPid: pid,
+    readFile: readManifestFile,
+    lstat: lstatFile,
+  });
   try {
     signalProcess(pid, 0);
-    return { verdict: 'live', reason: 'host-pid-live', pid };
+    return {
+      verdict: 'live',
+      reason: 'host-pid-live',
+      pid,
+      ...(hostManifest ? { host_manifest: hostManifest } : {}),
+    };
   } catch (error) {
-    if (error?.code === 'EPERM') return { verdict: 'live', reason: 'host-pid-live', pid };
+    if (error?.code === 'EPERM') {
+      return {
+        verdict: 'live',
+        reason: 'host-pid-live',
+        pid,
+        ...(hostManifest ? { host_manifest: hostManifest } : {}),
+      };
+    }
     if (error?.code === 'ESRCH') {
       // A replacement host may bind after the first refusal and before the
       // pid check. Re-probe so a concurrent restart cannot be mistaken for
       // positive exit evidence.
       const confirmedSocket = await probeHostSocket(paths.socketPath, { request, timeoutMs });
       if (confirmedSocket.verdict === 'exited') {
-        return { verdict: 'exited', reason: 'host-process-exited', pid };
+        return {
+          verdict: 'exited',
+          reason: 'host-process-exited',
+          pid,
+          ...(hostManifest ? { host_manifest: hostManifest } : {}),
+        };
       }
       return confirmedSocket;
     }
     return { verdict: 'unknown', reason: 'host-pid-unverified', pid };
+  }
+}
+
+function readBoundHostManifest(paths, {
+  expectedSessionId,
+  expectedPid,
+  readFile,
+  lstat,
+} = {}) {
+  if (!paths?.manifestPath
+    || typeof expectedSessionId !== 'string'
+    || !expectedSessionId
+    || !Number.isSafeInteger(expectedPid)
+    || expectedPid <= 0) {
+    return null;
+  }
+  try {
+    const stat = lstat(paths.manifestPath);
+    if (!stat.isFile?.() || stat.isSymbolicLink?.() || (stat.mode & 0o077) !== 0) {
+      return null;
+    }
+    const raw = readFile(paths.manifestPath, 'utf8');
+    if (Buffer.byteLength(raw, 'utf8') > 4096) return null;
+    const manifest = JSON.parse(raw);
+    if (!manifest
+      || typeof manifest !== 'object'
+      || Array.isArray(manifest)
+      || manifest.session_id !== expectedSessionId
+      || manifest.socket_path !== paths.socketPath
+      || manifest.pid_path !== paths.pidPath
+      || manifest.lifecycle_path !== paths.lifecyclePath
+      || manifest.broker_pid !== expectedPid
+      || !exactIso(manifest.updated_at)) {
+      return null;
+    }
+    return {
+      session_id: manifest.session_id,
+      broker_pid: manifest.broker_pid,
+      updated_at: manifest.updated_at,
+    };
+  } catch {
+    return null;
   }
 }
 
@@ -263,12 +395,13 @@ function writeSessionHostManifest({ sessionId, paths, broker = {}, now = () => n
     lifecycle_path: paths.lifecyclePath,
     broker_pid: broker?.pid || null,
     protocol_version: broker?.protocol_version || BROKER_PROTOCOL_VERSION,
+    runtime_identity: broker?.runtime_identity || BROKER_RUNTIME_IDENTITY,
     updated_at: now(),
   }, null, 2), { mode: 0o600 });
 }
 
 function cleanupSessionHostFiles(paths) {
-  for (const path of [paths.socketPath, paths.pidPath]) {
+  for (const path of [paths.socketPath, paths.artifactSocketPath, paths.pidPath]) {
     try { rmSync(path, { force: true }); } catch {}
   }
 }
@@ -341,6 +474,12 @@ function readPositivePid(path, { readFile = readFileSync } = {}) {
   } catch {
     return null;
   }
+}
+
+function exactIso(value) {
+  if (typeof value !== 'string') return false;
+  const parsed = new Date(value);
+  return Number.isFinite(parsed.getTime()) && parsed.toISOString() === value;
 }
 
 function isDefinitiveSocketExit(error) {

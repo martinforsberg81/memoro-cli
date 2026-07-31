@@ -8,10 +8,13 @@
  * on an empty launch.
  */
 
-import { readFile, writeFile, rm } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import {
+  chmod, lstat, mkdir, open, readFile, rename, rm, unlink, writeFile,
+} from 'node:fs/promises';
+import { constants, existsSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
-import { join } from 'node:path';
+import { randomBytes } from 'node:crypto';
+import { basename, dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 import { upsertManagedBlock, removeManagedBlock } from '../lib/managed-block.js';
 import {
@@ -19,10 +22,13 @@ import {
   ensureCodexAgentsIgnored,
   resolveRealCodexBinary,
 } from '../lib/codex.js';
+import { stripAnsi } from '../lib/prompt.js';
 import { writeProtectedFile, shredFile } from './_materialise.js';
 
 const DEFAULT_LAUNCHER = join(homedir(), '.local', 'bin', 'codex-memoro');
 const DEFAULT_SHIM = join(homedir(), '.local', 'bin', 'codex');
+const MEMORO_HOOK_ID = 'memoro-cli';
+const CODEX_SESSION_START_MATCHER = 'startup|resume';
 
 export const ID = 'codex';
 export const LABEL = 'Codex CLI';
@@ -99,22 +105,55 @@ export async function removeGrounding({ cwd = process.cwd() } = {}) {
 }
 
 export async function installHooks({
-  launcherPath = DEFAULT_LAUNCHER,
-  shimPath = DEFAULT_SHIM,
+  memoroCliBin = 'memoro-cli',
+  codexHome = CODEX_HOME_DIR(),
+  configPath = codexHooksPath(codexHome),
 } = {}) {
+  const config = await readHooksConfig(configPath);
+  const hooks = config.hooks || (config.hooks = {});
+  if (!plainObject(hooks)) throw new Error('Codex hooks.json hooks must be an object');
+  const sessionStart = Array.isArray(hooks.SessionStart)
+    ? hooks.SessionStart
+    : hooks.SessionStart == null
+      ? []
+      : null;
+  if (!sessionStart) throw new Error('Codex hooks.json hooks.SessionStart must be an array');
+
+  hooks.SessionStart = sessionStart.filter((entry) => !isMemoroCodexHook(entry));
+  hooks.SessionStart.push({
+    _memoro: MEMORO_HOOK_ID,
+    matcher: CODEX_SESSION_START_MATCHER,
+    hooks: [{ type: 'command', command: `${memoroCliBin} provider-artifact capture --tool ${ID}` }],
+  });
+  await writeHooksConfig(configPath, config);
   return {
-    skipped: true,
-    configPath: shimPath,
-    reason: 'Codex is no longer wrapped at the raw `codex` command. Use `mc new --codex` or `mc open <name> --codex` for Memoro sessions.',
-    legacyCleanupHint: `Run \`memoro-cli hook uninstall --tool codex\` to remove an old ${launcherPath} shim.`,
+    configPath,
   };
 }
 
 export async function uninstallHooks({
   launcherPath = DEFAULT_LAUNCHER,
   shimPath = DEFAULT_SHIM,
+  codexHome = CODEX_HOME_DIR(),
+  configPath = codexHooksPath(codexHome),
 } = {}) {
   const removed = [];
+  const config = await readHooksConfig(configPath, { missing: null });
+  if (config) {
+    const hooks = config.hooks;
+    if (!plainObject(hooks)) throw new Error('Codex hooks.json hooks must be an object');
+    if (Array.isArray(hooks.SessionStart)) {
+      const next = hooks.SessionStart.filter((entry) => !isMemoroCodexHook(entry));
+      if (next.length !== hooks.SessionStart.length) {
+        if (next.length) hooks.SessionStart = next;
+        else delete hooks.SessionStart;
+        await writeHooksConfig(configPath, config);
+        removed.push(configPath);
+      }
+    } else if (hooks.SessionStart != null) {
+      throw new Error('Codex hooks.json hooks.SessionStart must be an array');
+    }
+  }
   if (await removeManagedCodexScript(launcherPath, isManagedCodexLauncher)) {
     removed.push(launcherPath);
   }
@@ -122,6 +161,80 @@ export async function uninstallHooks({
     removed.push(shimPath);
   }
   return { path: shimPath, removed };
+}
+
+function codexHooksPath(codexHome = CODEX_HOME_DIR()) {
+  return join(codexHome, 'hooks.json');
+}
+
+async function readHooksConfig(path, { missing = {} } = {}) {
+  try {
+    const parsed = JSON.parse(await readFile(path, 'utf8'));
+    if (!plainObject(parsed)) throw new Error('Codex hooks.json must contain an object');
+    return parsed;
+  } catch (error) {
+    if (error?.code === 'ENOENT') return missing;
+    if (error instanceof SyntaxError) throw new Error(`Codex hooks.json is invalid JSON: ${error.message}`);
+    throw error;
+  }
+}
+
+async function writeHooksConfig(path, config) {
+  const directory = dirname(path);
+  let directoryStat;
+  try {
+    directoryStat = await lstat(directory);
+  } catch (error) {
+    if (error?.code !== 'ENOENT') throw error;
+    await mkdir(directory, { recursive: true, mode: 0o700 });
+    directoryStat = await lstat(directory);
+  }
+  if (!directoryStat.isDirectory() || directoryStat.isSymbolicLink()) {
+    throw new Error('Codex hook directory is unsafe');
+  }
+  await chmod(directory, 0o700);
+  try {
+    const targetStat = await lstat(path);
+    if (!targetStat.isFile() || targetStat.isSymbolicLink()) {
+      throw new Error('Codex hooks.json is unsafe');
+    }
+  } catch (error) {
+    if (error?.code !== 'ENOENT') throw error;
+  }
+
+  const temporary = join(
+    directory,
+    `.${basename(path)}.${randomBytes(12).toString('hex')}.tmp`,
+  );
+  let handle = null;
+  try {
+    handle = await open(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL, 0o600);
+    await handle.writeFile(`${JSON.stringify(config, null, 2)}\n`, 'utf8');
+    await handle.sync();
+    await handle.chmod(0o600);
+    await handle.close();
+    handle = null;
+    await rename(temporary, path);
+    const directoryHandle = await open(directory, constants.O_RDONLY);
+    try { await directoryHandle.sync(); } finally { await directoryHandle.close(); }
+  } finally {
+    if (handle) await handle.close().catch(() => {});
+    await unlink(temporary).catch(() => {});
+  }
+}
+
+function isMemoroCodexHook(entry) {
+  if (!plainObject(entry)) return false;
+  if (entry._memoro === MEMORO_HOOK_ID) return true;
+  return Array.isArray(entry.hooks) && entry.hooks.some((hook) => (
+    typeof hook?.command === 'string'
+      && /\bprovider-artifact\s+capture\s+--tool\s+codex\b/.test(hook.command)
+  ));
+}
+
+function plainObject(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    && (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null);
 }
 
 /**
@@ -193,9 +306,25 @@ export function launchSpec({ resolveBinary = resolveRealCodexBinary } = {}) {
     label: LABEL,
     installHint: 'Install Codex CLI from openai/codex (could not locate the codex binary)',
     startupMessageDelivery: 'deferred-pty',
+    isUserMessagePromptReady: isCodexUserMessagePromptReady,
     submitEnterCount: 2,
     submitEnterDelayMs: 150,
   };
+}
+
+/**
+ * Codex can show native policy dialogs before its composer. Broker-delivered
+ * grounding and handoff messages must wait for the real composer instead of
+ * becoming accidental answers to those dialogs. Managed Codex is pinned, so
+ * its main-screen banner is a stable readiness marker for this boundary.
+ * Comparing the latest relevant markers also pauses an already scheduled
+ * delivery if hook review is redrawn before the idle timer fires.
+ */
+export function isCodexUserMessagePromptReady({ recentOutput = '' } = {}) {
+  const output = stripAnsi(recentOutput);
+  const composerIndex = output.lastIndexOf('OpenAI Codex');
+  const hookReviewIndex = output.lastIndexOf('Hooks need review');
+  return composerIndex >= 0 && composerIndex > hookReviewIndex;
 }
 
 const CODEX_DEVICE_AUTH_BOOTSTRAP = [
@@ -345,7 +474,7 @@ function isManagedCodexShim(body, launcherPath) {
 // into ~/.codex/auth.json or an environment variable.
 // ─────────────────────────────────────────────────────────────
 
-const CODEX_HOME_DIR = () => join(homedir(), '.codex');
+const CODEX_HOME_DIR = () => process.env.CODEX_HOME || join(homedir(), '.codex');
 
 export function tokenLocations() {
   return [];

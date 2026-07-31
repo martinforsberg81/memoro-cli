@@ -1,24 +1,40 @@
 import { chmod, mkdir, rm, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { createServer } from 'node:net';
-import { dirname } from 'node:path';
+import { dirname, join } from 'node:path';
 
-import { BrokerRuntime } from './runtime.js';
+import {
+  BrokerRuntime,
+  claudeC1StatusResponse,
+  isExactClaudeC1Request,
+} from './runtime.js';
 import { brokerPidPath, brokerSocketPath } from './paths.js';
+import { runClaudeC1BrokerOperation } from './c1-runner.js';
 import { getPackageVersion } from '../../lib/version.js';
+import { BROKER_RUNTIME_IDENTITY } from './runtime-identity.js';
 
-// v4 makes runtime_generation lifecycle ownership mandatory. A v3 broker
-// accepts launch_session but silently ignores that field, so sharing its
-// compatibility identity would permit an unsafe mixed-version launch.
-export const BROKER_PROTOCOL_VERSION = 'mc-broker-pty-v4';
+// v12 requires an exact process-bound runtime identity in addition to the
+// protocol contract. This prevents a long-lived daemon from validating a
+// newly generated provider domain with previously loaded adapter or hook code.
+//
+// v11 requires both the append-only managed-generation transaction and
+// half-open request transport for asynchronous terminal receipts. Reusing a
+// v10 session host could silently lose the durable cleanup acknowledgement and
+// reopen the exact crash window these boundaries are designed to remove.
+// Provider children still reach only reduced capability sockets and cannot
+// invoke C1 or attach, read, write, resize, stop, remove, or relaunch a session.
+export const BROKER_PROTOCOL_VERSION = 'mc-broker-pty-v12';
+const MAX_PROVIDER_ARTIFACT_FRAME_BYTES = 20 * 1024;
 
 export async function startBrokerServer({
   socketPath = brokerSocketPath(),
+  artifactSocketPath = join(dirname(socketPath), 'provider-artifact.sock'),
   pidPath = brokerPidPath(),
   createServerImpl = createServer,
   pid = process.pid,
   mcVersion = null,
   protocolVersion = BROKER_PROTOCOL_VERSION,
+  runtimeIdentity = BROKER_RUNTIME_IDENTITY,
   now = () => Date.now(),
   onStop = null,
   exitOnStop = false,
@@ -31,6 +47,7 @@ export async function startBrokerServer({
 
   await mkdir(dirname(socketPath), { recursive: true, mode: 0o700 });
   await rm(socketPath, { force: true });
+  await rm(artifactSocketPath, { force: true });
   await writeFile(pidPath, String(pid), { mode: 0o600 });
 
   const status = () => {
@@ -40,6 +57,7 @@ export async function startBrokerServer({
         pid,
         mc_version: mcVersion,
         protocol_version: protocolVersion,
+        runtime_identity: runtimeIdentity,
         socket_path: socketPath,
         pid_path: pidPath,
         started_at: startedAt,
@@ -51,7 +69,13 @@ export async function startBrokerServer({
     return response;
   };
 
-  const server = createServerImpl((conn) => {
+  // requestBroker() terminates its writable side after the newline-delimited
+  // request frame. Managed cleanup is deliberately asynchronous, so the
+  // server must keep its writable side open until that response is durable and
+  // has been sent. Node's default allowHalfOpen:false would otherwise close
+  // the connection as soon as the client FIN arrives and silently discard the
+  // eventual cleanup receipt.
+  const server = createServerImpl({ allowHalfOpen: true }, (conn) => {
     let raw = Buffer.alloc(0);
     let handledInitialFrame = false;
     conn.on?.('error', () => {});
@@ -78,7 +102,13 @@ export async function startBrokerServer({
               stopping = false;
               return;
             }
-            await stopBrokerServer({ server, socketPath, pidPath });
+            await stopBrokerServer({
+              server,
+              artifactServer,
+              socketPath,
+              artifactSocketPath,
+              pidPath,
+            });
             if (typeof onStop === 'function') onStop();
             if (exitOnStop) exitProcess(0);
           } catch {
@@ -104,26 +134,53 @@ export async function startBrokerServer({
       if (!handledInitialFrame) void handleFrame(raw);
     });
   });
-
-  await new Promise((resolve, reject) => {
-    const onError = (err) => {
-      server.off('listening', onListening);
-      reject(err);
+  const artifactServer = createServerImpl({ allowHalfOpen: true }, (conn) => {
+    let raw = Buffer.alloc(0);
+    let handled = false;
+    conn.on?.('error', () => {});
+    const handle = async (frame) => {
+      if (handled) return;
+      handled = true;
+      const response = await Promise.resolve(
+        handleProviderArtifactMessage(frame.toString('utf8'), { runtime }).response,
+      ).catch(() => ({ ok: false, error: 'provider artifact command failed' }));
+      safeEnd(conn, JSON.stringify(response) + '\n');
     };
-    const onListening = () => {
-      server.off('error', onError);
-      resolve();
-    };
-    server.once('error', onError);
-    server.once('listening', onListening);
-    server.listen(socketPath);
+    conn.on('data', (chunk) => {
+      if (handled) return;
+      raw = Buffer.concat([raw, Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk))]);
+      if (raw.length > MAX_PROVIDER_ARTIFACT_FRAME_BYTES) {
+        handled = true;
+        safeEnd(conn, JSON.stringify({ ok: false, error: 'provider artifact frame too large' }) + '\n');
+        return;
+      }
+      const newline = raw.indexOf(10);
+      if (newline !== -1) void handle(raw.subarray(0, newline));
+    });
+    conn.on('end', () => {
+      if (!handled) void handle(raw);
+    });
   });
 
+  try {
+    await listenServer(server, socketPath);
+    await listenServer(artifactServer, artifactSocketPath);
+  } catch (error) {
+    await closeServer(server);
+    await closeServer(artifactServer);
+    await rm(socketPath, { force: true }).catch(() => {});
+    await rm(artifactSocketPath, { force: true }).catch(() => {});
+    throw error;
+  }
+
   try { await chmod(socketPath, 0o600); } catch {}
+  try { await chmod(artifactSocketPath, 0o600); } catch {}
 
   return {
     server,
+    artifactServer,
     socketPath,
+    artifactSocketPath,
     pidPath,
     status,
     stop: async () => {
@@ -131,7 +188,13 @@ export async function startBrokerServer({
       if (!shutdown.ok) {
         throw new Error(shutdown.reason || 'managed credential cleanup was not confirmed');
       }
-      return stopBrokerServer({ server, socketPath, pidPath });
+      return stopBrokerServer({
+        server,
+        artifactServer,
+        socketPath,
+        artifactSocketPath,
+        pidPath,
+      });
     },
   };
 }
@@ -153,19 +216,48 @@ function isBrokenPipeError(err) {
     || err?.code === 'ERR_STREAM_DESTROYED';
 }
 
-export async function stopBrokerServer({ server, socketPath = brokerSocketPath(), pidPath = brokerPidPath() } = {}) {
-  if (server?.listening) {
-    await new Promise((resolve) => server.close(() => resolve()));
-  }
+export async function stopBrokerServer({
+  server,
+  artifactServer = null,
+  socketPath = brokerSocketPath(),
+  artifactSocketPath = join(dirname(socketPath), 'provider-artifact.sock'),
+  pidPath = brokerPidPath(),
+} = {}) {
+  await closeServer(server);
+  await closeServer(artifactServer);
   await rm(socketPath, { force: true }).catch(() => {});
+  await rm(artifactSocketPath, { force: true }).catch(() => {});
   await rm(pidPath, { force: true }).catch(() => {});
+}
+
+async function listenServer(server, path) {
+  await new Promise((resolve, reject) => {
+    const onError = (err) => {
+      server.off('listening', onListening);
+      reject(err);
+    };
+    const onListening = () => {
+      server.off('error', onError);
+      resolve();
+    };
+    server.once('error', onError);
+    server.once('listening', onListening);
+    server.listen(path);
+  });
+}
+
+async function closeServer(server) {
+  if (!server?.listening) return;
+  await new Promise((resolve) => server.close(() => resolve()));
 }
 
 export async function runBrokerDaemon(opts = {}) {
   const processRef = opts.processRef || process;
   const exitProcess = opts.exitProcess || ((code) => processRef.exit(code));
   const startBrokerServerImpl = opts.startBrokerServerImpl || startBrokerServer;
-  const runtime = opts.runtime || await createDefaultRuntime();
+  const runtime = opts.runtime || await createDefaultRuntime({
+    controllerBindings: opts.controllerBinding ? [opts.controllerBinding] : [],
+  });
   const mcVersion = opts.mcVersion === undefined
     ? await getPackageVersion().catch(() => null)
     : opts.mcVersion;
@@ -233,10 +325,14 @@ export function brokerFilesExist({ socketPath = brokerSocketPath(), pidPath = br
   return { socket: existsSync(socketPath), pid: existsSync(pidPath) };
 }
 
-export async function createDefaultRuntime() {
+export async function createDefaultRuntime({ controllerBindings = [] } = {}) {
   const ptyModule = await import('node-pty');
   const ptyFactory = ptyModule.default || ptyModule;
-  return new BrokerRuntime({ ptyFactory });
+  return new BrokerRuntime({
+    ptyFactory,
+    controllerBindings,
+    c1Runner: runClaudeC1BrokerOperation,
+  });
 }
 
 export function handleBrokerMessage(raw, { status, stop, runtime } = {}) {
@@ -252,6 +348,16 @@ export function handleBrokerMessage(raw, { status, stop, runtime } = {}) {
     return { response: status(), stop: false };
   }
   if (type === 'stop') {
+    if (runtime?.listSessions?.().length > 0) {
+      return {
+        response: {
+          ok: false,
+          reason: 'broker-sessions-must-be-removed',
+          error: 'broker sessions must be removed before the broker can stop',
+        },
+        stop: false,
+      };
+    }
     if (typeof stop === 'function') stop();
     return { response: { ...status(), stopping: true }, stop: true };
   }
@@ -261,6 +367,20 @@ export function handleBrokerMessage(raw, { status, stop, runtime } = {}) {
       stop: false,
       attach: (conn, initialInput) => runtime.attachConnection(message, conn, initialInput),
     };
+  }
+  if (type === 'run_claude_c1') {
+    if (!isExactClaudeC1Request(message)) {
+      return { response: claudeC1StatusResponse('failed'), stop: false };
+    }
+    try {
+      const response = runtime?.handle ? runtime.handle(message) : null;
+      return {
+        response: normalizeClaudeC1Response(response),
+        stop: false,
+      };
+    } catch {
+      return { response: claudeC1StatusResponse('failed'), stop: false };
+    }
   }
   let runtimeResponse = null;
   try {
@@ -278,4 +398,43 @@ export function handleBrokerMessage(raw, { status, stop, runtime } = {}) {
     response: { ok: false, error: `unknown broker command: ${type || '<missing>'}` },
     stop: false,
   };
+}
+
+/**
+ * Capability-reduced endpoint inherited by provider SessionStart hooks.
+ * No status, PTY, launch, handoff-journal, or shutdown command is reachable
+ * through this socket.
+ */
+export function handleProviderArtifactMessage(raw, { runtime } = {}) {
+  let message;
+  try {
+    message = JSON.parse(raw || '{}');
+  } catch {
+    return { response: { ok: false, error: 'invalid JSON' } };
+  }
+  // Provider children inherit this socket. C1 is a controller-host operation,
+  // never a provider capability, even when a provider guesses the command.
+  if (message?.type === 'run_claude_c1') {
+    return { response: claudeC1StatusResponse('failed') };
+  }
+  if (message?.type !== 'capture_provider_artifact') {
+    return { response: { ok: false, error: 'provider artifact command required' } };
+  }
+  try {
+    const response = runtime?.handle ? runtime.handle(message) : null;
+    return {
+      response: response || { ok: false, error: 'provider artifact capture unavailable' },
+    };
+  } catch {
+    return { response: { ok: false, error: 'provider artifact capture failed' } };
+  }
+}
+
+function normalizeClaudeC1Response(response) {
+  if (response && typeof response.then === 'function') {
+    return Promise.resolve(response)
+      .then((value) => claudeC1StatusResponse(value?.status))
+      .catch(() => claudeC1StatusResponse('failed'));
+  }
+  return claudeC1StatusResponse(response?.status);
 }

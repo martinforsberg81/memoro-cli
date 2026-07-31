@@ -81,6 +81,9 @@ import {
   listLocalBrokerAndHostSessions,
   requestForSession,
 } from './mc/broker/session-hosts.js';
+import {
+  resolveSessionControllerCapability,
+} from './mc/session-controller-capability.js';
 import { normalizeInteractivePtyEnv } from './mc/interactive-env.js';
 import { scrubRuntimeSecretsFromEnv } from './mc/runtime-secrets.js';
 import { renderIntro as renderSessionIntro } from './mc/session-intro.js';
@@ -104,11 +107,9 @@ const POLL_INTERVAL_MS = 500;
 const POLL_TIMEOUT_MS = 30_000;
 const SUBMIT_ENTER_DELAY_MS = 150;
 
-// Raw PTY bytes kept for excerpt extraction. ANSI escapes typically
-// strip down to ~30–50%, so 4 KiB raw yields plenty of clean text to
-// slice the trailing 500 chars from (server's EXCERPT_MAX).
+// Raw PTY bytes kept only for the local status projector and exit summary.
+// They are never serialized into heartbeat payloads.
 const OUTPUT_BUFFER_BYTES = 4096;
-const EXCERPT_MAX_CHARS = 500;
 const STARTUP_MESSAGE_IDLE_MS = 1500;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -152,6 +153,7 @@ const LIFECYCLE = {
   supervisor:    () => import('./mc/commands/supervisor.js'),
   fanout:        () => import('./mc/commands/fanout.js'),
   gather:        () => import('./mc/commands/gather.js'),
+  security:      () => import('./mc/commands/security.js'),
 };
 
 export async function main() {
@@ -179,10 +181,10 @@ export async function main() {
     return 0;
   }
 
-  // The managed portable request must fail before fresh-install/device auth
-  // can inspect Keychain or any other credential-bearing state. Recognition
-  // is intentionally limited to new/open/resume; bare mc and wrap keep their
-  // native coding-tool argv unchanged.
+  // Managed lifecycle mode must be fixed before fresh-install/device auth can
+  // inspect Keychain or any other credential-bearing state. Recognition is
+  // intentionally limited to new/open/resume; bare mc and wrap keep their
+  // native coding-tool argv unchanged until their separate cutover.
   const earlyAuthMode = requireLocalAuthMode(resolveLocalAuthModeFromArgv(argv));
   if (!earlyAuthMode.ok) {
     console.error(`mc: ${earlyAuthMode.error}`);
@@ -624,10 +626,8 @@ async function runWrap(argv, { label = null } = {}) {
   // Pipe PTY output → user's terminal. Also:
   //   - stamp `lastOutputAt` so the heartbeat ticker can report idle vs
   //     active to peer coordinators
-  //   - keep a rolling raw-output buffer so the heartbeat can carry a
-  //     stripped excerpt of what Claude is currently showing (lets a peer
-  //     coordinator spot e.g. "How should I proceed?" prompts at a
-  //     glance, not just "session B has been idle 2m")
+  //   - keep a rolling raw-output buffer for the local session projector only;
+  //     heartbeat payloads are metadata-only and never carry PTY excerpts
   let lastOutputAt = runtimeStartedAt;
   let lastInputAt = null;
   let outputBuffer = '';
@@ -717,11 +717,8 @@ async function runWrap(argv, { label = null } = {}) {
         apiUrl, token,
         payload: buildHeartbeatPayload({
           base: heartbeatBase,
-          outputBuffer,
           lastOutputAt,
           now,
-          excerptMax: EXCERPT_MAX_CHARS,
-          extractExcerpt,
           sessionProjection: projectionTracker.runtime({
             session: {
               session_state: 'live',
@@ -946,7 +943,12 @@ async function runSessionsSend(argv) {
   return 1;
 }
 
-export async function dispatchLocalBrokerSession(identifier, message, { request = requestBroker, wait = sleep } = {}) {
+export async function dispatchLocalBrokerSession(identifier, message, {
+  request = requestBroker,
+  wait = sleep,
+  controllerCapability = null,
+  resolveControllerCapability = resolveSessionControllerCapability,
+} = {}) {
   if (!identifier || !message) return { ok: false, skipped: true, error: 'identifier and message are required' };
 
   const inventory = await listLocalBrokerAndHostSessions({ request })
@@ -962,7 +964,21 @@ export async function dispatchLocalBrokerSession(identifier, message, { request 
     sid = session.id || session.coding_session_id || identifier;
     matched = true;
   }
-  const sessionRequest = requestForSession(session, { request });
+  const authority = controllerCapability
+    ? { ok: true, capability: controllerCapability }
+    : await resolveControllerCapability({ codingSessionId: sid });
+  if (!authority?.ok) {
+    return {
+      ok: false,
+      skipped: true,
+      id: sid,
+      error: 'session controller authority is unavailable',
+    };
+  }
+  const sessionRequest = requestForSession(session, {
+    request,
+    controllerCapability: authority.capability,
+  });
 
   const raw = await writeLocalDispatchedInput({
     request: sessionRequest,
@@ -1142,6 +1158,8 @@ export async function controlLocalBrokerSession(identifier, {
   action,
   signal = 'SIGTERM',
   request = requestBroker,
+  controllerCapability = null,
+  resolveControllerCapability = resolveSessionControllerCapability,
 } = {}) {
   if (!identifier || !action) return { ok: false, skipped: true, error: 'identifier and action are required' };
   const inventory = await listLocalBrokerAndHostSessions({ request })
@@ -1153,7 +1171,20 @@ export async function controlLocalBrokerSession(identifier, {
   const session = inventory.sessions.find((item) => localSessionMatches(item, identifier));
   if (!session) return { ok: false, skipped: true, error: 'local session not found' };
   const sid = session.id || session.coding_session_id || identifier;
-  const sessionRequest = requestForSession(session, { request });
+  const authority = controllerCapability
+    ? { ok: true, capability: controllerCapability }
+    : await resolveControllerCapability({ codingSessionId: sid });
+  if (!authority?.ok) {
+    return {
+      ok: false,
+      id: sid,
+      error: 'session controller authority is unavailable',
+    };
+  }
+  const sessionRequest = requestForSession(session, {
+    request,
+    controllerCapability: authority.capability,
+  });
 
   if (action === 'stop') {
     const stopped = await sessionRequest({ type: 'stop_session', id: sid, signal }).catch((err) => ({
@@ -1220,9 +1251,7 @@ function preflight(bin) {
  * Strip ANSI escapes and control characters from a raw PTY-output buffer,
  * collapse runs of blank lines, and return the trailing `max` characters.
  *
- * Used to feed the heartbeat's `last_assistant_excerpt` so peer
- * coordinators can see what Claude is currently showing (e.g. a paused
- * "Next step?" prompt) instead of just "session B has been idle 2m".
+ * Used only by local presentation paths. Heartbeats never include PTY excerpts.
  *
  * Conservative: we keep readable text + newlines + tabs, drop everything
  * that's screen-positioning, color, or other-noise. If the entire buffer

@@ -2,6 +2,11 @@ import { resolveToolInput } from '../adapters/index.js';
 import { DEFAULT_TOOL } from '../lib/config.js';
 import { sourceForTool } from './broker/session-sidecars.js';
 import { findLatestTranscriptForTool } from './session-upload.js';
+import {
+  normalizeProviderSessions,
+  providerSessionFor,
+  withProviderSession,
+} from './registry.js';
 
 export async function resolveToolSessionForResume({
   entry,
@@ -9,18 +14,33 @@ export async function resolveToolSessionForResume({
   deps = {},
 } = {}) {
   const source = toolSessionSource({ entry, launchTool });
-  const stored = firstNonEmpty(
-    entry?.tool_session_id,
-    entry?.provider_session_id,
-    entry?.llm_session_id,
-  );
-  if (stored) {
+  const hasProviderSessions = entry?.provider_sessions != null;
+  const normalized = normalizeProviderSessions(entry);
+  if (!normalized.ok) {
+    return { ok: false, reason: normalized.reason, source, sessionId: null, transcriptPath: null };
+  }
+  const providerSession = hasProviderSessions ? providerSessionFor(entry, source) : null;
+  const stored = hasProviderSessions
+    ? firstExplicitProviderValue(providerSession?.session_id)
+    : firstExplicitProviderValue(
+        entry?.tool_session_id,
+        entry?.provider_session_id,
+        entry?.llm_session_id,
+      );
+  if (stored !== null) {
+    const transcriptPath = hasProviderSessions
+      ? firstExplicitProviderValue(providerSession?.transcript_path)
+      : firstExplicitProviderValue(entry?.tool_transcript_path, entry?.transcript_path);
+    const validated = validateResolvedProviderSession({ source, sessionId: stored, transcriptPath });
+    if (!validated.ok) {
+      return { ok: false, reason: validated.reason, source, sessionId: null, transcriptPath: null };
+    }
     return {
       ok: true,
       source,
       sessionId: stored,
-      transcriptPath: firstNonEmpty(entry?.tool_transcript_path, entry?.transcript_path),
-      from: 'registry',
+      transcriptPath,
+      from: providerSession ? 'provider-sessions' : 'registry',
     };
   }
 
@@ -39,8 +59,8 @@ export async function resolveToolSessionForResume({
     cwd: entry?.worktree_path || null,
     deps,
   });
-  const sessionId = firstNonEmpty(transcript?.sessionId, transcript?.session_id);
-  if (!sessionId) {
+  const sessionId = firstExplicitProviderValue(transcript?.sessionId, transcript?.session_id);
+  if (sessionId === null) {
     return {
       ok: false,
       reason: 'no-tool-session-id',
@@ -50,11 +70,17 @@ export async function resolveToolSessionForResume({
     };
   }
 
+  const transcriptPath = transcript.path || null;
+  const validated = validateResolvedProviderSession({ source, sessionId, transcriptPath });
+  if (!validated.ok) {
+    return { ok: false, reason: validated.reason, source, sessionId: null, transcriptPath: null };
+  }
+
   return {
     ok: true,
     source,
     sessionId,
-    transcriptPath: transcript.path || null,
+    transcriptPath,
     from: 'transcript',
   };
 }
@@ -86,12 +112,16 @@ export function buildNativeResumeArgv({
 }
 
 export function toolSessionSource({ entry, launchTool = null } = {}) {
-  return firstNonEmpty(
-    entry?.tool_session_source,
-    entry?.provider_session_source,
+  const selected = firstNonEmpty(
     sourceForTool(launchTool?.shortName),
     sourceForTool(launchTool?.id),
     sourceForTool(entry?.tool),
+  );
+  if (entry?.provider_sessions != null) return selected;
+  return firstNonEmpty(
+    entry?.tool_session_source,
+    entry?.provider_session_source,
+    selected,
   );
 }
 
@@ -100,4 +130,22 @@ function firstNonEmpty(...values) {
     if (typeof value === 'string' && value.trim()) return value.trim();
   }
   return null;
+}
+
+function firstExplicitProviderValue(...values) {
+  for (const value of values) {
+    if (value != null && value !== '') return value;
+  }
+  return null;
+}
+
+function validateResolvedProviderSession({ source, sessionId, transcriptPath }) {
+  const validated = withProviderSession(
+    { provider_sessions: { schema: 1, providers: {} } },
+    source,
+    { session_id: sessionId, transcript_path: transcriptPath },
+  );
+  return validated.ok
+    ? { ok: true }
+    : { ok: false, reason: validated.reason || 'invalid-provider-session' };
 }

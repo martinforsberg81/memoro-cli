@@ -4,9 +4,10 @@ import { randomUUID } from 'node:crypto';
 import { setTimeout as sleep } from 'node:timers/promises';
 
 import { resolveLaunch } from '../../adapters/index.js';
-import { installUpdateCommand } from '../../adapters/claude-code.js';
+import { installHooks, installUpdateCommand } from '../../adapters/claude-code.js';
+import { installHooks as installCodexHooks } from '../../adapters/codex.js';
 import { DEFAULT_TOOL, readConfig, getApiUrl } from '../../lib/config.js';
-import { getRepoContext, deriveRepoName, derivePublicRepoRef } from '../../lib/git-context.js';
+import { getRepoContext, deriveRepoName, resolvePublicRepoRef } from '../../lib/git-context.js';
 import { lookupOrMint } from '../../lib/coding-session.js';
 import { getPackageVersion } from '../../lib/version.js';
 import { ensureCoordinatorSlashCommand } from '../coordinator-command.js';
@@ -22,6 +23,8 @@ import { ensureBrokerRunning } from './supervisor.js';
 import { ensureCloudBrokerConnected } from './cloud-supervisor.js';
 import { scrubRuntimeSecretsInPlace } from '../runtime-secrets.js';
 import { ensureSessionHostRunning } from './session-hosts.js';
+import { providerArtifactPath } from './paths.js';
+import { readProviderArtifactSync } from './provider-artifact-journal.js';
 import {
   buildSessionHeartbeatPayload,
   postHeartbeatWithRetry,
@@ -47,12 +50,31 @@ import {
   requireLocalAuthMode,
 } from '../local-auth-mode.js';
 import {
-  abortLocalCodexCredentialDomain,
-  prepareLocalCodexCredentialDomain,
-} from '../credential-domain/local-codex.js';
+  abortManagedCredentialDomain,
+  managedProviderAdapterForTool,
+  prepareManagedCredentialDomain,
+} from '../managed-provider-registry.js';
+import { deriveHandoffControllerRoot } from '../handoff-controller-capability.js';
+import {
+  appendManagedGenerationReceiptSync,
+  beginManagedGenerationSync,
+  claimManagedSessionIdentitySync,
+  inspectManagedGenerationSync,
+  managedTransactionFromIntent,
+} from '../managed-generation-journal.js';
 
 const CLOUD_BROKER_START_TIMEOUT_MS = 10_000;
 const CODEX_SQLITE_STARTUP_WINDOW_MS = 20_000;
+const LOCAL_BROKER_LAUNCH_TIMEOUT_MS = 10_000;
+const BROKER_MUTATION_TIMEOUT_MS = 20_000;
+const BROKER_RECONCILE_PROBE_TIMEOUT_MS = 2_000;
+export const AMBIGUOUS_BROKER_RECONCILE_DELAYS_MS = Object.freeze([
+  0,
+  250,
+  750,
+  1_500,
+  3_000,
+]);
 export const CODEX_SQLITE_RETRY_DELAYS_MS = Object.freeze([2_000, 4_000]);
 
 export async function launchBrokerOwnedSession({
@@ -65,6 +87,8 @@ export async function launchBrokerOwnedSession({
   argv = [],
   apiArgv = [],
   sendStartupMessage = true,
+  handoffUserMessage = null,
+  handoffTransaction = null,
   attachAfterLaunch = true,
   cloudBroker = {},
   request = requestBroker,
@@ -76,7 +100,9 @@ export async function launchBrokerOwnedSession({
   env = process.env,
   localAuthMode = LOCAL_AUTH_MODES.NATIVE,
   now = () => Date.now(),
+  onAllocated = null,
   onLaunched = null,
+  onExited = null,
   deps = {},
 } = {}) {
   const authMode = (deps.requireLocalAuthMode || requireLocalAuthMode)(localAuthMode);
@@ -90,15 +116,33 @@ export async function launchBrokerOwnedSession({
     };
   }
   const managedPortable = localAuthMode === LOCAL_AUTH_MODES.MANAGED_PORTABLE;
+  const hasHandoffMessage = typeof handoffUserMessage === 'string'
+    && handoffUserMessage.length > 0;
+  const hasHandoffTransaction = typeof handoffTransaction?.transaction_id === 'string'
+    && handoffTransaction.transaction_id.length > 0
+    && /^[a-f0-9]{64}$/.test(handoffTransaction.controller_capability || '')
+    && (
+      managedPortable
+        ? handoffTransaction.target_custody === 'managed'
+        : ['native', undefined].includes(handoffTransaction.target_custody)
+    );
+  if (hasHandoffMessage !== hasHandoffTransaction) {
+    const reason = 'handoff-launch-pair-invalid';
+    stderr.write('mc: provider handoff launch requires one bound message and transaction\n');
+    return { code: 1, reason, error: reason };
+  }
 
   const launch = resolveLaunch(tool);
   if (!launch.ok) {
     stderr.write(`mc: cannot launch "${tool}": ${launch.hint}\n`);
     return { code: 1 };
   }
-  if (managedPortable && launch.id !== 'codex') {
-    const reason = 'managed-portable-tool-unsupported';
-    stderr.write('mc: managed portable auth currently supports Codex only\n');
+  const managedProviderAdapter = managedPortable
+    ? (deps.managedProviderAdapterForTool || managedProviderAdapterForTool)(launch.id)
+    : null;
+  if (managedPortable && !managedProviderAdapter) {
+    const reason = 'managed-provider-tool-unsupported';
+    stderr.write(`mc: no managed provider adapter is installed for ${launch.id}\n`);
     return { code: 1, reason, error: reason };
   }
 
@@ -108,11 +152,16 @@ export async function launchBrokerOwnedSession({
     return { code: 1 };
   }
 
-  if (launch.id === 'claude-code') {
+  if (!managedPortable && launch.id === 'claude-code') {
     await (deps.ensureCoordinatorSlashCommand || ensureCoordinatorSlashCommand)();
     await (deps.installUpdateCommand || installUpdateCommand)().catch(() => {});
+    try {
+      await (deps.installClaudeArtifactHooks || installHooks)();
+    } catch (error) {
+      stderr.write(`mc: failed to install Claude provider artifact hook (${error.message}); refusing to launch\n`);
+      return { code: 1, reason: 'claude-provider-artifact-hook-unavailable' };
+    }
   }
-
   const config = await (deps.readConfig || readConfig)();
   const apiUrl = (deps.getApiUrl || getApiUrl)(apiArgv) || config.apiUrl;
   const bootstrapIdentity = await (deps.resolveBootstrapIdentity || resolveBootstrapIdentity)({
@@ -149,40 +198,88 @@ export async function launchBrokerOwnedSession({
     machineId,
     llmSessionId,
   });
+  const sessionControllerCapability = deriveHandoffControllerRoot({
+    token,
+    codingSessionId,
+  });
+  if (!sessionControllerCapability) {
+    stderr.write('mc: session controller authority is unavailable\n');
+    return {
+      code: 1,
+      reason: 'session-controller-capability-unavailable',
+      error: 'session controller authority is unavailable',
+    };
+  }
   const runtimeGeneration = (deps.randomUUID || randomUUID)();
-  const repoRef = derivePublicRepoRef(repoContext);
+  let managedIntent = null;
+  let managedTransaction = null;
+  if (managedPortable) {
+    if (sessionName) {
+      let identity;
+      try {
+        identity = (deps.claimManagedSessionIdentity || claimManagedSessionIdentitySync)({
+          sessionName,
+          codingSessionId,
+          recordedAt: new Date(now()).toISOString(),
+        });
+      } catch {
+        identity = { ok: false, reason: 'managed-session-identity-unavailable' };
+      }
+      if (!identity?.ok) {
+        const reason = identity?.reason || 'managed-session-identity-conflict';
+        stderr.write(`mc: managed session identity could not be claimed (${reason})\n`);
+        return { code: 1, reason, error: reason };
+      }
+    }
+    if (typeof onAllocated === 'function') {
+      let allocated = null;
+      try {
+        allocated = await onAllocated({ codingSessionId, runtimeGeneration });
+      } catch {
+        allocated = { ok: false, reason: 'session-identity-commit-failed' };
+      }
+      if (allocated?.ok === false) {
+        const reason = allocated.reason || allocated.code || 'session-identity-commit-failed';
+        stderr.write(`mc: managed session identity could not be committed (${reason})\n`);
+        return { code: 1, reason, error: reason };
+      }
+    }
+  }
+  const repoRef = await (deps.resolvePublicRepoRef || resolvePublicRepoRef)(repoContext);
   const paths = brokerSessionPaths(codingSessionId);
   let sessionCapabilities = unavailableGitHubSessionCapabilities();
   let startingPresenceRegistered = false;
-  if (!managedPortable) {
-    try {
-      const connectionClient = deps.connectionClient || createConnectionClient({
-        identityBroker: createBoundIdentityBroker({
-          token,
-          apiUrl,
-          memoroFetch: deps.memoroFetch,
-        }),
+  try {
+    const connectionClient = deps.connectionClient || createConnectionClient({
+      identityBroker: createBoundIdentityBroker({
+        token,
+        apiUrl,
         memoroFetch: deps.memoroFetch,
+      }),
+      memoroFetch: deps.memoroFetch,
+    });
+    const bootstrap = await (deps.fetchGitHubSessionBootstrap || fetchGitHubSessionBootstrap)({
+      connectionClient,
+      repository: repoRef,
+      memoroFetchImpl: deps.memoroFetch,
+    });
+    sessionCapabilities = bootstrap.capabilities;
+    if (bootstrap.source?.id && bootstrap.source?.kind) {
+      sourceIdentity = resolveSessionSourceIdentity({
+        sourceId: bootstrap.source.id,
+        sourceKind: bootstrap.source.kind,
+        cloudSessionId: sourceIdentity.cloud_session_id,
+        sourceName: sourceIdentity.source_name,
+        machineId,
       });
-      const bootstrap = await (deps.fetchGitHubSessionBootstrap || fetchGitHubSessionBootstrap)({
-        connectionClient,
-        repository: repoRef,
-        memoroFetchImpl: deps.memoroFetch,
-      });
-      sessionCapabilities = bootstrap.capabilities;
-      if (bootstrap.source?.id && bootstrap.source?.kind) {
-        sourceIdentity = resolveSessionSourceIdentity({
-          sourceId: bootstrap.source.id,
-          sourceKind: bootstrap.source.kind,
-          cloudSessionId: sourceIdentity.cloud_session_id,
-          sourceName: sourceIdentity.source_name,
-          machineId,
-        });
-      }
-    } catch {}
-  }
+    }
+  } catch {}
+  const githubReady = sessionCapabilities.github.state === 'ready';
   let groundingLaunchMessage = null;
-  if (sendStartupMessage) {
+  // A provider switch is grounded exclusively by the strict, scanner-approved
+  // handoff projection. Normal grounding may contain transitional raw session
+  // continuity, so it must never be fetched, rendered, or concatenated here.
+  if (sendStartupMessage && !handoffUserMessage) {
     try {
       const res = await (deps.groundSession || groundSession)({
         cwd,
@@ -206,6 +303,12 @@ export async function launchBrokerOwnedSession({
       stderr.write(`mc: grounding failed (${err.message}); continuing without it\n`);
     }
   }
+  const brokerUserMessage = handoffUserMessage || null;
+  if (brokerUserMessage) {
+    // A switch handoff is one ordinary user turn for every provider. Claude
+    // must not receive any part of it through --append-system-prompt.
+    groundingLaunchMessage = null;
+  }
 
   const devEnvironment = managedPortable
     ? {}
@@ -223,7 +326,7 @@ export async function launchBrokerOwnedSession({
     ...devEnvironment,
   };
   let codexDeviceAuthBeforeLaunch = false;
-  if (launch.id === 'codex' && isCloudBrokerLaunch(cloudBroker)) {
+  if (!managedPortable && launch.id === 'codex' && isCloudBrokerLaunch(cloudBroker)) {
     const prepareAuth = deps.prepareCloudCodexAuth || prepareCloudCodexAuth;
     const auth = await prepareAuth({
       codingSessionId,
@@ -242,8 +345,19 @@ export async function launchBrokerOwnedSession({
       codexDeviceAuthBeforeLaunch = true;
     }
   }
+  if (launch.id === 'codex' && !managedPortable) {
+    try {
+      await (deps.installCodexArtifactHooks || installCodexHooks)({
+        ...(spawnEnv.CODEX_HOME ? { codexHome: spawnEnv.CODEX_HOME } : {}),
+      });
+    } catch (error) {
+      stderr.write(`mc: failed to install Codex provider artifact hook (${error.message}); refusing to launch\n`);
+      return { code: 1, reason: 'codex-provider-artifact-hook-unavailable' };
+    }
+  }
   const sessionHost = await resolveLaunchBroker({
     codingSessionId,
+    sessionControllerCapability,
     request,
     ensureBroker,
     cloudBroker,
@@ -252,6 +366,10 @@ export async function launchBrokerOwnedSession({
   });
   if (!sessionHost.ok) return { code: 1 };
   const launchRequest = sessionHost.request || request;
+  const controllerRequest = bindSessionControllerCapability(
+    launchRequest,
+    sessionControllerCapability,
+  );
   const attachSocketPath = sessionHost.socketPath || null;
 
   scrubRuntimeSecretsInPlace(spawnEnv);
@@ -317,29 +435,37 @@ export async function launchBrokerOwnedSession({
     termName: env.TERM,
   });
   spawnEnv = interactiveEnv.env;
-  if (!managedPortable) {
-    try {
-      const githubRuntime = await (deps.prepareGitHubSessionForLaunch || prepareGitHubSessionForLaunch)({
-        baseEnv: spawnEnv,
-        capabilities: sessionCapabilities,
-        sessionId: codingSessionId,
-        socketPath: paths.sockPath,
-      });
-      spawnEnv = githubRuntime.env;
-    } catch (err) {
-      stderr.write(`mc: failed to install GitHub session boundary (${err.message}); refusing to launch\n`);
-      return { code: 1 };
-    }
-  }
-
   let credentialDomain = null;
   if (managedPortable) {
-    const prepareDomain = deps.prepareLocalCodexCredentialDomain
-      || prepareLocalCodexCredentialDomain;
+    try {
+      const started = (deps.beginManagedGeneration || beginManagedGenerationSync)({
+        codingSessionId,
+        runtimeGeneration,
+        mode: argv[0] === 'resume' ? 'resume' : 'fresh',
+        tool: launch.id,
+        resumeProviderSessionId: argv[0] === 'resume'
+          ? registryEntry.tool_session_id || null
+          : null,
+        recordedAt: new Date(now()).toISOString(),
+      });
+      managedIntent = started.intent;
+      managedTransaction = managedTransactionFromIntent(managedIntent);
+    } catch (error) {
+      const reason = 'managed-generation-intent-unavailable';
+      stderr.write(`mc: managed session transaction could not claim its generation (${error?.message || reason})\n`);
+      return { code: 1, reason, error: reason };
+    }
+    const prepareDomain = deps.prepareManagedCredentialDomain
+      || prepareManagedCredentialDomain;
     credentialDomain = await prepareDomain({
       codingSessionId,
+      domainGeneration: runtimeGeneration,
+      providerSessionId: argv[0] === 'resume'
+        ? registryEntry.tool_session_id || null
+        : null,
       cwd: repoContext.toplevel,
       tool: launch.id,
+      githubCapability: githubReady,
       portal: {
         apiUrl,
         token,
@@ -350,16 +476,85 @@ export async function launchBrokerOwnedSession({
     }).catch(() => null);
     if (!credentialDomain?.ok) {
       const reason = credentialDomain?.reason || 'managed-portable-boundary-unavailable';
-      stderr.write('mc: managed portable Codex credential boundary is unavailable\n');
+      const diagnostic = credentialDomain?.diagnostic_code || reason;
+      try {
+        (deps.appendManagedGenerationReceipt || appendManagedGenerationReceiptSync)({
+          phase: 'aborted',
+          codingSessionId,
+          runtimeGeneration,
+          intentDigest: managedIntent.intent_digest,
+          recordedAt: new Date(now()).toISOString(),
+          data: { reason: 'launch-failed-before-provider' },
+        });
+      } catch {}
+      stderr.write(`mc: managed provider credential boundary is unavailable (${diagnostic})\n`);
+      return { code: 1, reason, error: reason };
+    }
+    try {
+      (deps.appendManagedGenerationReceipt || appendManagedGenerationReceiptSync)({
+        phase: 'domain-ready',
+        codingSessionId,
+        runtimeGeneration,
+        intentDigest: managedIntent.intent_digest,
+        recordedAt: new Date(now()).toISOString(),
+        data: {
+          domain_generation: credentialDomain.descriptor.generation,
+          manifest_digest: credentialDomain.descriptor.manifest_sha256,
+        },
+      });
+    } catch (error) {
+      const cleanup = (deps.abortManagedCredentialDomain || abortManagedCredentialDomain)({
+        descriptor: credentialDomain.descriptor,
+      });
+      if (cleanup?.ok) {
+        try {
+          (deps.appendManagedGenerationReceipt || appendManagedGenerationReceiptSync)({
+            phase: 'aborted',
+            codingSessionId,
+            runtimeGeneration,
+            intentDigest: managedIntent.intent_digest,
+            recordedAt: new Date(now()).toISOString(),
+            data: { reason: 'launch-failed-before-provider' },
+          });
+        } catch {}
+      }
+      const reason = 'managed-generation-domain-receipt-unavailable';
+      stderr.write(`mc: managed session transaction could not bind its credential domain (${error?.message || reason})\n`);
       return { code: 1, reason, error: reason };
     }
     spawnEnv = credentialDomain.env;
+  }
+  try {
+    const githubRuntime = await (deps.prepareGitHubSessionForLaunch || prepareGitHubSessionForLaunch)({
+      baseEnv: spawnEnv,
+      capabilities: sessionCapabilities,
+      sessionId: codingSessionId,
+      socketPath: githubReady ? paths.sockPath : null,
+      ...(managedPortable
+        ? { shimDirectory: join(credentialDomain.descriptor.executor_root, 'bin') }
+        : {}),
+    });
+    spawnEnv = githubRuntime.env;
+  } catch (err) {
+    if (managedPortable && credentialDomain?.descriptor) {
+      abortUnacceptedManagedLaunch({
+        codingSessionId,
+        runtimeGeneration,
+        managedIntent,
+        descriptor: credentialDomain.descriptor,
+        now,
+        deps,
+      });
+    }
+    stderr.write(`mc: failed to install GitHub session boundary (${err.message}); refusing to launch\n`);
+    return { code: 1 };
   }
 
   const launchMessage = {
     type: 'launch_session',
     session: {
       id: codingSessionId,
+      session_controller_capability: sessionControllerCapability,
       runtime_generation: runtimeGeneration,
       name: sessionName || label,
       cwd,
@@ -367,6 +562,7 @@ export async function launchBrokerOwnedSession({
       argv,
       launch_options: {
         startupMessage: groundingLaunchMessage,
+        ...(brokerUserMessage ? { handoffUserMessage: brokerUserMessage } : {}),
         effectivePolicy: managedPortable ? null : effectivePolicy,
         ...(codexDeviceAuthBeforeLaunch ? { codexDeviceAuthBeforeLaunch } : {}),
       },
@@ -375,7 +571,26 @@ export async function launchBrokerOwnedSession({
       term_name: interactiveEnv.termName,
       env: spawnEnv,
       sidecars: managedPortable
-        ? { enabled: false }
+        ? {
+            enabled: true,
+            codingSessionId,
+            runtimeGeneration,
+            label: sessionName || label,
+            machineId,
+            ...sourceIdentity,
+            source: launch.spec.heartbeatSource,
+            repo: deriveRepoName(repoContext),
+            repoRef,
+            branch: repoContext.branch,
+            tool: launch.shortName,
+            sockPath: paths.sockPath,
+            metaPath: paths.metaPath,
+            presenceIdentity: 'broker-local',
+            heartbeat: true,
+            upload: false,
+            transcriptAccess: false,
+            githubCapabilities: sessionCapabilities,
+          }
         : {
             codingSessionId,
             runtimeGeneration,
@@ -390,50 +605,86 @@ export async function launchBrokerOwnedSession({
             branch: repoContext.branch,
             worktreeName: sessionName || null,
             tool: launch.shortName,
-            toolSessionId: registryEntry.tool_session_id || null,
+            // During a provider switch the persisted registry still names the
+            // source provider until the broker-acknowledged target delivery is
+            // committed. Never let target sidecars inherit source-native
+            // transcript authority from that stale projection.
+            toolSessionId: handoffTransaction
+              ? null
+              : registryEntry.tool_session_id || null,
             sockPath: paths.sockPath,
             metaPath: paths.metaPath,
-            transcriptPath: registryEntry.tool_transcript_path || null,
+            transcriptPath: handoffTransaction
+              ? null
+              : registryEntry.tool_transcript_path || null,
+            ...(handoffTransaction
+              ? {
+                  transcriptAccess: false,
+                  upload: false,
+                }
+              : {}),
           },
       ...(credentialDomain?.descriptor
         ? { credential_domain: credentialDomain.descriptor }
+        : {}),
+      ...(managedTransaction
+        ? { managed_transaction: managedTransaction }
+        : {}),
+      ...(handoffTransaction?.transaction_id
+        ? {
+            handoff_transaction: {
+              transaction_id: handoffTransaction.transaction_id,
+              controller_capability: handoffTransaction.controller_capability,
+              ...(handoffTransaction.target_custody
+                ? { target_custody: handoffTransaction.target_custody }
+                : {}),
+            },
+          }
         : {}),
     },
   };
   // Register immediately before the broker request. Earlier local setup has
   // legitimate failure paths; publishing presence only here gives the request
   // and its compensating terminal event one narrow ownership boundary.
-  if (!managedPortable && sessionCapabilities.github.state === 'ready') {
-    const registered = await (deps.registerGitHubSessionProjection || registerGitHubSessionProjection)({
-      apiUrl,
-      token,
-      codingSessionId,
-      runtimeGeneration,
-      machineId,
-      sourceIdentity,
-      source: launch.spec.heartbeatSource,
-      repo: deriveRepoName(repoContext),
-      repoRef,
-      branch: repoContext.branch,
-      label: sessionName || label,
-      now,
-      postHeartbeat: deps.postHeartbeat,
-      memoroFetchImpl: deps.memoroFetch,
-    });
-    if (!registered) {
-      // Presence registration is advisory for GitHub control-plane capability:
-      // the broker-side boundary was already prepared from an independently
-      // verified bootstrap. Do not mutate the child configuration after it is
-      // built merely because this best-effort projection failed.
-      stderr.write('mc: GitHub session registration failed; continuing without starting presence\n');
-    } else {
-      startingPresenceRegistered = true;
-    }
+  const registered = await (
+    deps.registerSessionProjection
+    || deps.registerGitHubSessionProjection
+    || registerSessionProjection
+  )({
+    apiUrl,
+    token,
+    codingSessionId,
+    runtimeGeneration,
+    machineId,
+    sourceIdentity,
+    source: launch.spec.heartbeatSource,
+    repo: deriveRepoName(repoContext),
+    repoRef,
+    branch: repoContext.branch,
+    label: sessionName || label,
+    now,
+    postHeartbeat: deps.postHeartbeat,
+    memoroFetchImpl: deps.memoroFetch,
+  });
+  if (!registered) {
+    // The broker owns the recurring presence loop and will retry with its own
+    // trusted local identity. The provider boundary is already prepared and
+    // must not be mutated based on this advisory pre-launch attempt.
+    stderr.write('mc: session starting presence registration failed; broker will retry\n');
+  } else {
+    startingPresenceRegistered = true;
   }
   let launchRes = null;
   let launchWasAmbiguous = false;
   try {
-    launchRes = await launchRequest(launchMessage);
+    launchRes = await controllerRequest(
+      launchMessage,
+      {
+        timeoutMs: (brokerUserMessage || managedPortable)
+          ? 60_000
+          : LOCAL_BROKER_LAUNCH_TIMEOUT_MS,
+      },
+    );
     launchWasAmbiguous = launchRes?.ok !== false
       && !isExactLaunchedSession(launchRes?.session, { codingSessionId, runtimeGeneration });
   } catch {
@@ -442,28 +693,36 @@ export async function launchBrokerOwnedSession({
 
   if (launchWasAmbiguous) {
     const reconciliation = await reconcileAmbiguousBrokerLaunch({
-      launchRequest,
+      launchRequest: controllerRequest,
       codingSessionId,
       runtimeGeneration,
+      sleepFn: deps.sleep || sleep,
+      retryDelaysMs: deps.ambiguousBrokerReconcileDelaysMs
+        || AMBIGUOUS_BROKER_RECONCILE_DELAYS_MS,
     });
     if (reconciliation.state === 'live') {
       launchRes = { ok: true, session: reconciliation.session, recovered: true };
     } else if (reconciliation.state === 'dead') {
-      const removed = await launchRequest({ type: 'remove_session', id: codingSessionId })
-        .catch(() => null);
-      if (removed?.ok) {
+      const removal = await removeExactBrokerSession({
+        launchRequest: controllerRequest,
+        codingSessionId,
+        runtimeGeneration,
+        sleepFn: deps.sleep || sleep,
+        retryDelaysMs: deps.ambiguousBrokerReconcileDelaysMs
+          || AMBIGUOUS_BROKER_RECONCILE_DELAYS_MS,
+      });
+      if (removal.state === 'removed') {
         launchRes = { ok: false, reason: 'broker-session-exited' };
       } else {
         return reportUnknownBrokerLaunch({ stderr, codingSessionId });
       }
-    } else if (reconciliation.state === 'absent') {
-      launchRes = { ok: false, reason: 'broker-session-not-found' };
     } else {
       return reportUnknownBrokerLaunch({ stderr, codingSessionId });
     }
   }
 
   if (launchRes?.ok !== true) {
+    const failureReason = brokerLaunchFailureReason(launchRes);
     if (startingPresenceRegistered) {
       await terminalizeStartingPresence({
         apiUrl,
@@ -482,12 +741,24 @@ export async function launchBrokerOwnedSession({
       });
     }
     if (credentialDomain?.descriptor) {
-      (deps.abortLocalCodexCredentialDomain || abortLocalCodexCredentialDomain)({
-        descriptor: credentialDomain.descriptor,
-      });
+      if (managedTransaction) {
+        abortUnacceptedManagedLaunch({
+          codingSessionId,
+          runtimeGeneration,
+          managedIntent,
+          descriptor: credentialDomain.descriptor,
+          failureReason,
+          now,
+          deps,
+        });
+      } else {
+        (deps.abortManagedCredentialDomain || abortManagedCredentialDomain)({
+          descriptor: credentialDomain.descriptor,
+        });
+      }
     }
-    stderr.write(`mc: broker launch failed (${launchRes?.error || launchRes?.reason || 'unknown'})\n`);
-    return { code: 1 };
+    stderr.write(`mc: broker launch failed (${failureReason})\n`);
+    return { code: 1, reason: failureReason, error: failureReason };
   }
   const effectiveCodingSessionId = launchRes.session?.id || codingSessionId;
 
@@ -507,12 +778,32 @@ export async function launchBrokerOwnedSession({
   }
 
   if (typeof onLaunched === 'function') {
-    await onLaunched({
-      codingSessionId: effectiveCodingSessionId,
-      launch: launchRes,
-      brokerSocketPath: attachSocketPath,
-      hostKind: sessionHost.hostKind || 'global-broker',
-    });
+    let callbackResult = null;
+    try {
+      callbackResult = await onLaunched({
+        codingSessionId: effectiveCodingSessionId,
+        runtimeGeneration: launchRes.session?.runtime_generation || runtimeGeneration,
+        launch: launchRes,
+        brokerSocketPath: attachSocketPath,
+        hostKind: sessionHost.hostKind || 'global-broker',
+        sessionControllerCapability,
+      });
+    } catch {
+      callbackResult = { ok: false, code: 'post-launch-commit-failed' };
+    }
+    if (callbackResult?.ok === false) {
+      const removed = await controllerRequest({
+        type: 'remove_session',
+        id: effectiveCodingSessionId,
+      }, { timeoutMs: 20_000 }).catch(() => null);
+      stderr.write(`mc: broker launch rolled back because the local handoff commit failed (${callbackResult.code || callbackResult.reason || 'unknown'}).\n`);
+      return {
+        code: 1,
+        reason: removed?.ok
+          ? callbackResult.code || callbackResult.reason || 'post-launch-commit-failed'
+          : 'post-launch-rollback-unconfirmed',
+      };
+    }
   }
 
   if (!attachAfterLaunch) {
@@ -521,6 +812,7 @@ export async function launchBrokerOwnedSession({
 
   const attachOptions = {
     id: effectiveCodingSessionId,
+    controllerCapability: sessionControllerCapability,
     ...(attachSocketPath ? { socketPath: attachSocketPath } : {}),
   };
   let code = await attach(attachOptions);
@@ -532,13 +824,33 @@ export async function launchBrokerOwnedSession({
         ...launchMessage,
         session: { ...launchMessage.session, id: effectiveCodingSessionId },
       },
-      launchRequest,
+      launchRequest: controllerRequest,
       attach,
       attachOptions,
       stderr,
       sleepFn: deps.sleep || sleep,
       retryDelaysMs: deps.codexSqliteRetryDelaysMs || CODEX_SQLITE_RETRY_DELAYS_MS,
+      reconcileDelaysMs: deps.ambiguousBrokerReconcileDelaysMs
+        || AMBIGUOUS_BROKER_RECONCILE_DELAYS_MS,
       runtimeGenerationFactory: deps.randomUUID || randomUUID,
+    });
+  }
+  if (typeof onExited === 'function') {
+    const ended = await controllerRequest({ type: 'session_status', id: effectiveCodingSessionId })
+      .catch(() => null);
+    const status = ended?.ok === true ? ended.session : null;
+    const endedGeneration = status?.runtime_generation || runtimeGeneration;
+    const artifactResult = (deps.readProviderArtifact || readProviderArtifactSync)({
+      path: providerArtifactPath(effectiveCodingSessionId, endedGeneration),
+      codingSessionId: effectiveCodingSessionId,
+      runtimeGeneration: endedGeneration,
+      trustedRoot: mcHome(),
+    });
+    await onExited({
+      codingSessionId: effectiveCodingSessionId,
+      runtimeGeneration: endedGeneration,
+      providerArtifact: artifactResult?.kind === 'present' ? artifactResult.artifact : null,
+      session: status,
     });
   }
   return { code, codingSessionId: effectiveCodingSessionId, broker: sessionHost.broker || null, attached: true };
@@ -548,25 +860,90 @@ async function reconcileAmbiguousBrokerLaunch({
   launchRequest,
   codingSessionId,
   runtimeGeneration,
+  sleepFn = sleep,
+  retryDelaysMs = AMBIGUOUS_BROKER_RECONCILE_DELAYS_MS,
 } = {}) {
-  let status;
+  for (const delayMs of normalizeReconcileDelays(retryDelaysMs)) {
+    if (delayMs > 0) await sleepFn(delayMs);
+    let status;
+    try {
+      status = await launchRequest(
+        { type: 'session_status', id: codingSessionId },
+        { timeoutMs: BROKER_RECONCILE_PROBE_TIMEOUT_MS },
+      );
+    } catch {
+      continue;
+    }
+    if (status?.ok === false && status.reason === 'session-not-found') {
+      // An accepted launch can still be queued behind broker-local work. An
+      // empty read is therefore not proof that the timed-out mutation failed.
+      continue;
+    }
+    if (status?.ok !== true || !status.session) continue;
+    const session = status.session;
+    if (session.id !== codingSessionId || session.runtime_generation !== runtimeGeneration) {
+      return { state: 'conflict', session };
+    }
+    if (session.exit || session.session_state === 'dead' || session.attachable === false) {
+      return { state: 'dead', session };
+    }
+    return { state: 'live', session };
+  }
+  return { state: 'unknown' };
+}
+
+async function removeExactBrokerSession({
+  launchRequest,
+  codingSessionId,
+  runtimeGeneration,
+  sleepFn = sleep,
+  retryDelaysMs = AMBIGUOUS_BROKER_RECONCILE_DELAYS_MS,
+} = {}) {
+  let removal;
   try {
-    status = await launchRequest({ type: 'session_status', id: codingSessionId });
+    removal = await launchRequest({
+      type: 'remove_session',
+      id: codingSessionId,
+      expected_runtime_generation: runtimeGeneration,
+    }, { timeoutMs: BROKER_MUTATION_TIMEOUT_MS });
   } catch {
-    return { state: 'unknown' };
+    removal = null;
   }
-  if (status?.ok === false && status.reason === 'session-not-found') {
-    return { state: 'absent' };
+  if (removal?.ok === true) return { state: 'removed', response: removal };
+  if (removal?.reason === 'runtime-generation-mismatch') {
+    return { state: 'conflict', response: removal };
   }
-  if (status?.ok !== true || !status.session) return { state: 'unknown' };
-  const session = status.session;
-  if (session.id !== codingSessionId || session.runtime_generation !== runtimeGeneration) {
-    return { state: 'unknown' };
+
+  for (const delayMs of normalizeReconcileDelays(retryDelaysMs)) {
+    if (delayMs > 0) await sleepFn(delayMs);
+    let status;
+    try {
+      status = await launchRequest(
+        { type: 'session_status', id: codingSessionId },
+        { timeoutMs: BROKER_RECONCILE_PROBE_TIMEOUT_MS },
+      );
+    } catch {
+      continue;
+    }
+    if (status?.ok === false && status.reason === 'session-not-found') {
+      return { state: 'removed', recovered: true };
+    }
+    if (status?.ok !== true || !status.session) continue;
+    if (status.session.id !== codingSessionId
+      || status.session.runtime_generation !== runtimeGeneration) {
+      return { state: 'conflict', session: status.session };
+    }
   }
-  if (session.exit || session.session_state === 'dead' || session.attachable === false) {
-    return { state: 'dead', session };
-  }
-  return { state: 'live', session };
+  return {
+    state: 'unknown',
+    ...(removal ? { response: removal } : {}),
+  };
+}
+
+function normalizeReconcileDelays(value) {
+  if (!Array.isArray(value)) return AMBIGUOUS_BROKER_RECONCILE_DELAYS_MS;
+  const delays = value.filter((delayMs) => Number.isFinite(delayMs) && delayMs >= 0);
+  return delays.length > 0 ? delays : [0];
 }
 
 function reportUnknownBrokerLaunch({ stderr, codingSessionId } = {}) {
@@ -576,6 +953,81 @@ function reportUnknownBrokerLaunch({ stderr, codingSessionId } = {}) {
     reason: 'broker-launch-unknown',
     error: 'broker launch outcome is unknown',
   };
+}
+
+function brokerLaunchFailureReason(result) {
+  if (typeof result?.reason === 'string'
+    && /^[a-z][a-z0-9-]{0,127}$/u.test(result.reason)) {
+    return result.reason;
+  }
+  if (typeof result?.error === 'string'
+    && /^[a-z][a-z0-9-]{0,127}$/u.test(result.error)) {
+    return result.error;
+  }
+  return 'broker-launch-failed';
+}
+
+function abortUnacceptedManagedLaunch({
+  codingSessionId,
+  runtimeGeneration,
+  managedIntent,
+  descriptor,
+  failureReason = null,
+  now,
+  deps,
+} = {}) {
+  let generation;
+  try {
+    generation = (deps.inspectManagedGeneration || inspectManagedGenerationSync)({
+      codingSessionId,
+      runtimeGeneration,
+    });
+  } catch {
+    return { ok: false, reason: 'managed-generation-inspection-failed' };
+  }
+  if (generation?.kind !== 'present' || generation.phase !== 'domain-ready') {
+    return { ok: false, reason: 'managed-generation-may-have-launched' };
+  }
+  const cleanup = (deps.abortManagedCredentialDomain || abortManagedCredentialDomain)({
+    descriptor,
+  });
+  if (!cleanup?.ok) return cleanup;
+  try {
+    (deps.appendManagedGenerationReceipt || appendManagedGenerationReceiptSync)({
+      phase: 'aborted',
+      codingSessionId,
+      runtimeGeneration,
+      intentDigest: managedIntent.intent_digest,
+      recordedAt: new Date(now()).toISOString(),
+      data: {
+        reason: 'launch-not-accepted',
+        ...(typeof failureReason === 'string'
+          && /^[a-z][a-z0-9-]{0,127}$/u.test(failureReason)
+          ? { failure_reason: failureReason }
+          : {}),
+      },
+    });
+    return { ok: true };
+  } catch {
+    return { ok: false, reason: 'managed-generation-abort-receipt-unconfirmed' };
+  }
+}
+
+function bindSessionControllerCapability(request, capability) {
+  return (message, options) => request({
+    ...message,
+    ...([
+      'attach_session',
+      'write_session',
+      'dispatch_session',
+      'fetch_session_output',
+      'resize_session',
+      'stop_session',
+      'remove_session',
+    ].includes(message?.type)
+      ? { session_controller_capability: capability }
+      : {}),
+  }, options);
 }
 
 function isExactLaunchedSession(session, { codingSessionId, runtimeGeneration } = {}) {
@@ -608,6 +1060,7 @@ async function retryCodexSqliteStartup({
   stderr,
   sleepFn,
   retryDelaysMs,
+  reconcileDelaysMs,
   runtimeGenerationFactory,
 }) {
   let currentCode = code;
@@ -624,12 +1077,25 @@ async function retryCodexSqliteStartup({
       break;
     }
 
-    const removed = await launchRequest({
-      type: 'remove_session',
-      id: codingSessionId,
-    }).catch((err) => ({ ok: false, error: err.message || String(err) }));
-    if (!removed?.ok) {
-      stderr.write(`mc: Codex SQLite startup retry could not remove the failed broker session (${removed?.error || 'unknown'}).\n`);
+    const failedRuntimeGeneration = currentLaunchMessage.session?.runtime_generation;
+    if (snapshot.session?.runtime_generation
+      && snapshot.session.runtime_generation !== failedRuntimeGeneration) {
+      stderr.write('mc: Codex SQLite startup retry found a different broker generation; refusing cleanup.\n');
+      break;
+    }
+    const removal = await removeExactBrokerSession({
+      launchRequest,
+      codingSessionId,
+      runtimeGeneration: failedRuntimeGeneration,
+      sleepFn,
+      retryDelaysMs: reconcileDelaysMs,
+    });
+    if (removal.state !== 'removed') {
+      const diagnostic = removal.response?.reason
+        || removal.response?.error
+        || removal.state
+        || 'unknown';
+      stderr.write(`mc: Codex SQLite startup retry could not confirm removal of the failed broker session (${diagnostic}).\n`);
       break;
     }
 
@@ -653,6 +1119,8 @@ async function retryCodexSqliteStartup({
         launchRequest,
         codingSessionId,
         runtimeGeneration,
+        sleepFn,
+        retryDelaysMs: reconcileDelaysMs,
       });
       if (reconciliation.state === 'live') {
         relaunched = { ok: true, session: reconciliation.session, recovered: true };
@@ -697,7 +1165,7 @@ export function brokerSessionPaths(codingSessionId) {
   };
 }
 
-export async function registerGitHubSessionProjection({
+export async function registerSessionProjection({
   apiUrl,
   token,
   codingSessionId,
@@ -750,6 +1218,10 @@ export async function registerGitHubSessionProjection({
   }
 }
 
+// Transitional export for callers/tests from before presence ownership was
+// separated from the GitHub capability.
+export const registerGitHubSessionProjection = registerSessionProjection;
+
 async function terminalizeStartingPresence({
   apiUrl,
   token,
@@ -798,6 +1270,7 @@ function isCloudBrokerLaunch(cloudBroker) {
 
 async function resolveLaunchBroker({
   codingSessionId,
+  sessionControllerCapability,
   request,
   ensureBroker,
   cloudBroker,
@@ -810,6 +1283,11 @@ async function resolveLaunchBroker({
     const ensureSessionHost = deps.ensureSessionHost || ensureSessionHostRunning;
     const host = await ensureSessionHost({
       sessionId: codingSessionId,
+      controllerBinding: {
+        schema: 'mc-broker-controller-bootstrap-v1',
+        session_id: codingSessionId,
+        session_controller_capability: sessionControllerCapability,
+      },
       request,
       spawnDaemon: deps.spawnBrokerDaemon,
     });
@@ -822,7 +1300,10 @@ async function resolveLaunchBroker({
       hostKind: 'session',
       socketPath: host.socketPath,
       broker: host.broker || null,
-      request: (message) => request(message, { socketPath: host.socketPath }),
+      request: (message, options = {}) => request(message, {
+        socketPath: host.socketPath,
+        ...options,
+      }),
     };
   }
 
@@ -847,6 +1328,8 @@ async function resolveLaunchBroker({
 export { ensureBrokerRunning } from './supervisor.js';
 
 export const __test__ = {
+  abortUnacceptedManagedLaunch,
+  brokerLaunchFailureReason,
   isCloudBrokerLaunch,
   resolveLaunchBroker,
   retryCodexSqliteStartup,

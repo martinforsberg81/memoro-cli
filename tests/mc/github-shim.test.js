@@ -158,6 +158,44 @@ describe('session-scoped gh compatibility shim', () => {
     ]);
   });
 
+  test('exposes pr update only through the restricted managed mc wrapper mode', async () => {
+    const denied = portal();
+    assert.equal(await runGitHubShim([
+      'pr', 'update', '17', '--title', 'Updated title',
+    ], denied), 2);
+    assert.equal(denied.calls.length, 0);
+
+    const managed = portal({
+      'pull_request.view': {
+        ok: true,
+        request_id: 'request_view_update',
+        data: {
+          number: 17,
+          head: { sha: 'a'.repeat(40) },
+          updated_at: '2026-07-30T10:00:00.000Z',
+        },
+      },
+      'pull_request.update': {
+        ok: true,
+        request_id: 'request_update',
+        data: { number: 17, title: 'Updated title' },
+      },
+    });
+    let next = 0;
+    managed.makeRequestId = () => `request_update_${++next}abcdefgh`;
+
+    assert.equal(await runGitHubShim([
+      'pr', 'update', '17', '--title', 'Updated title',
+    ], {
+      ...managed,
+      allowUpdate: true,
+    }), 0);
+    assert.deepEqual(managed.calls.map(({ operation }) => operation), [
+      'pull_request.view',
+      'pull_request.update',
+    ]);
+  });
+
   test('rejects every non-allowlisted surface without invoking or falling through', async () => {
     const cases = [
       ['auth', 'token'],

@@ -26,16 +26,26 @@ export function sessionHostsDir() {
   return join(mcHome(), 'hosts');
 }
 
-export function sessionHostPaths(sessionId) {
-  const dir = join(sessionHostsDir(), sanitizePathPart(sessionId || 'unknown'));
+export function sessionHostPaths(sessionId, { root = mcHome() } = {}) {
+  const dir = join(root, 'hosts', sanitizePathPart(sessionId || 'unknown'));
   return {
     dir,
     socketPath: join(dir, 'broker.sock'),
+    artifactSocketPath: join(dir, 'provider-artifact.sock'),
     pidPath: join(dir, 'broker.pid'),
     logPath: join(dir, 'broker.log'),
     manifestPath: join(dir, 'host.json'),
     lifecyclePath: join(dir, 'lifecycle.json'),
+    handoffSwitchPath: join(dir, 'handoff-switch.json'),
+    providerArtifactsDir: join(dir, 'provider-artifacts'),
   };
+}
+
+export function providerArtifactPath(sessionId, runtimeGeneration, options = {}) {
+  return join(
+    sessionHostPaths(sessionId, options).providerArtifactsDir,
+    `${sanitizePathPart(runtimeGeneration || 'unknown')}.json`,
+  );
 }
 
 function sanitizePathPart(value) {

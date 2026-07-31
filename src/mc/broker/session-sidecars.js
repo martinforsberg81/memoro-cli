@@ -7,20 +7,24 @@ import { CliWsClient } from '../../commands/ws-client.js';
 import { createFetchTranscriptHandler } from '../../commands/handlers/fetch-transcript.js';
 import { memoroFetch } from '../../lib/api.js';
 import { DEFAULT_TOOL } from '../../lib/config.js';
-import { extractExcerpt } from '../session-excerpt.js';
 import {
   resolveSessionSourceIdentity,
   SessionProjectionTracker,
 } from '../session-projector.js';
 import { scheduleSessionUpload } from '../session-upload.js';
 import { executeGitHubControlPlaneOperation } from '../github-session.js';
+import { decodeSessionCapabilities } from '../github-contract.js';
 import { createConnectionClient } from '../connections/client.js';
 import { createBoundIdentityBroker } from '../connections/identity.js';
+import {
+  buildSessionHeartbeatPayload,
+  postHeartbeatWithRetry,
+  publishLocalSessionPresence,
+} from '../session-presence.js';
 
 const TICK_INTERVAL_MS = 60_000;
 const MAX_ATTEMPTS = 3;
 const RETRY_INTERVAL_MS = 5 * 60 * 1000;
-const EXCERPT_MAX_CHARS = 500;
 
 export class BrokerSessionSidecars {
   constructor({
@@ -35,10 +39,11 @@ export class BrokerSessionSidecars {
     heartbeatIntervalMs = TICK_INTERVAL_MS,
     retryIntervalMs = RETRY_INTERVAL_MS,
     maxAttempts = MAX_ATTEMPTS,
-    excerptMaxChars = EXCERPT_MAX_CHARS,
     sessionUploadScheduler = scheduleSessionUpload,
     projectionTracker = null,
     connectionClient = null,
+    connectionClientFactory = createConnectionClient,
+    localPresencePublisher = publishLocalSessionPresence,
     logger = silentLogger(),
   } = {}) {
     if (!session) throw new TypeError('session is required');
@@ -49,9 +54,11 @@ export class BrokerSessionSidecars {
     this.wsClientFactory = wsClientFactory;
     this.fetchTranscriptHandlerFactory = fetchTranscriptHandlerFactory;
     this.memoroFetch = memoroFetchImpl;
+    const managedGitHub = managedGitHubCapabilities(coding.githubCapabilities);
+    this.githubCapabilities = managedGitHub;
     this.connectionClient = connectionClient || (
       coding.apiUrl && coding.token
-        ? createConnectionClient({
+        ? connectionClientFactory({
             identityBroker: createBoundIdentityBroker({
               token: coding.token,
               apiUrl: coding.apiUrl,
@@ -59,14 +66,16 @@ export class BrokerSessionSidecars {
             }),
             memoroFetch: memoroFetchImpl,
           })
-        : null
+        : managedGitHub
+          ? connectionClientFactory({ memoroFetch: memoroFetchImpl })
+          : null
     );
+    this.localPresencePublisher = localPresencePublisher;
     this.sleep = sleepImpl;
     this.now = now;
     this.heartbeatIntervalMs = heartbeatIntervalMs;
     this.retryIntervalMs = retryIntervalMs;
     this.maxAttempts = maxAttempts;
-    this.excerptMaxChars = excerptMaxChars;
     this.sessionUploadScheduler = sessionUploadScheduler;
     this.sourceIdentity = resolveSessionSourceIdentity({
       sourceId: coding.sourceId || coding.source_id,
@@ -161,6 +170,7 @@ export class BrokerSessionSidecars {
             connectionClient: this.connectionClient,
             codingSessionId: this.coding.codingSessionId,
             request: payload,
+            allowedOperations: this.githubCapabilities?.github.operations || null,
             memoroFetchImpl: this.memoroFetch,
           });
           conn.end(JSON.stringify(response) + '\n');
@@ -183,15 +193,21 @@ export class BrokerSessionSidecars {
 
   _startWsClient() {
     if (!this.coding.apiUrl || !this.coding.token) return;
+    const transcriptAccess = this.coding.transcriptAccess !== false
+      && this.coding.transcript_access !== false;
     this.wsClient = this.wsClientFactory({
       apiUrl: this.coding.apiUrl,
       token: this.coding.token,
       codingSessionId: this.coding.codingSessionId,
       handlers: {
-        fetch_transcript: this.fetchTranscriptHandlerFactory({
-          transcriptPath: this.coding.transcriptPath || null,
-          source: this._codingSource(),
-        }),
+        ...(transcriptAccess
+          ? {
+              fetch_transcript: this.fetchTranscriptHandlerFactory({
+                transcriptPath: this.coding.transcriptPath || null,
+                source: this._codingSource(),
+              }),
+            }
+          : {}),
         dispatch_message: async (args) => {
           const message = typeof args?.message === 'string' ? args.message : null;
           if (!message?.trim()) throw new Error('message required');
@@ -205,17 +221,14 @@ export class BrokerSessionSidecars {
   }
 
   _startHeartbeat() {
-    if (!this.coding.apiUrl || !this.coding.token || this.coding.heartbeat === false) return;
+    if (this.coding.heartbeat === false || !this._hasPresenceIdentity()) return;
     this.heartbeatPromise = this._runHeartbeat();
   }
 
   async _runHeartbeat() {
     while (this.alive) {
       const now = this.now();
-      await postHeartbeatWithRetry({
-        apiUrl: this.coding.apiUrl,
-        token: this.coding.token,
-        payload: buildSessionHeartbeatPayload({
+      await this._publishPresence(buildSessionHeartbeatPayload({
           codingSessionId: this.coding.codingSessionId,
           runtimeGeneration: this.coding.runtimeGeneration || this.coding.runtime_generation || null,
           presenceState: 'active',
@@ -224,14 +237,11 @@ export class BrokerSessionSidecars {
           source: this._codingSource(),
           repo: this.coding.repoRef || this.coding.repo_ref || this.coding.repo || null,
           branch: this.coding.branch || null,
-          lastAssistantExcerpt: extractExcerpt(this.session.recentOutput(), this.excerptMaxChars),
           idleSeconds: Math.max(0, Math.floor((now - (this.session.lastOutputAt || now)) / 1000)),
           at: new Date(now).toISOString(),
           sessionProjection: this.currentProjection({ now }),
           label: this.coding.label || null,
-        }),
-        memoroFetchImpl: this.memoroFetch,
-        sleepImpl: this.sleep,
+        }), {
         retryIntervalMs: this.retryIntervalMs,
         maxAttempts: this.maxAttempts,
         shouldContinue: () => this.alive,
@@ -269,18 +279,14 @@ export class BrokerSessionSidecars {
   async _publishTerminalPresence() {
     const runtimeGeneration = this.coding.runtimeGeneration || this.coding.runtime_generation || null;
     if (
-      !this.coding.apiUrl
-      || !this.coding.token
-      || this.coding.heartbeat === false
+      this.coding.heartbeat === false
+      || !this._hasPresenceIdentity()
       || !runtimeGeneration
     ) {
       return false;
     }
     const now = this.now();
-    return postHeartbeatWithRetry({
-      apiUrl: this.coding.apiUrl,
-      token: this.coding.token,
-      payload: buildSessionHeartbeatPayload({
+    return this._publishPresence(buildSessionHeartbeatPayload({
         codingSessionId: this.coding.codingSessionId,
         runtimeGeneration,
         presenceState: 'terminal',
@@ -292,11 +298,37 @@ export class BrokerSessionSidecars {
         idleSeconds: 0,
         at: new Date(now).toISOString(),
         label: this.coding.label || null,
-      }),
-      memoroFetchImpl: this.memoroFetch,
-      sleepImpl: this.sleep,
+      }), {
       retryIntervalMs: this.retryIntervalMs,
       maxAttempts: 1,
+    });
+  }
+
+  _hasPresenceIdentity() {
+    return (this.coding.apiUrl && this.coding.token)
+      || this.coding.presenceIdentity === 'broker-local';
+  }
+
+  _publishPresence(payload, options = {}) {
+    if (this.coding.presenceIdentity === 'broker-local') {
+      return this.localPresencePublisher({
+        payload,
+        maxAttempts: options.maxAttempts,
+        retryIntervalMs: options.retryIntervalMs,
+        shouldContinue: options.shouldContinue,
+        deps: {
+          memoroFetch: this.memoroFetch,
+          sleep: this.sleep,
+        },
+      });
+    }
+    return postHeartbeatWithRetry({
+      apiUrl: this.coding.apiUrl,
+      token: this.coding.token,
+      payload,
+      memoroFetchImpl: this.memoroFetch,
+      sleepImpl: this.sleep,
+      ...options,
     });
   }
 
@@ -324,46 +356,10 @@ export class BrokerSessionSidecars {
   }
 }
 
-export function buildSessionHeartbeatPayload({
-  codingSessionId,
-  runtimeGeneration = null,
-  presenceState = null,
-  machineId,
-  sourceIdentity = {},
-  source,
-  repo,
-  branch,
-  lastAssistantExcerpt = '',
-  idleSeconds = 0,
-  at,
-  sessionProjection,
-  label = null,
-} = {}) {
-  const terminal = presenceState === 'terminal';
-  const metadata = {
-    coding_session_id: codingSessionId,
-    ...(runtimeGeneration ? { runtime_generation: runtimeGeneration } : {}),
-    ...(presenceState ? { presence_state: presenceState } : {}),
-    machine_id: machineId,
-    source_id: sourceIdentity.source_id,
-    source_kind: sourceIdentity.source_kind,
-    source_name: sourceIdentity.source_name,
-    cloud_session_id: sourceIdentity.cloud_session_id,
-    source,
-    repo,
-    branch,
-    idle_seconds: terminal ? 0 : idleSeconds,
-    at,
-    ...(label ? { label } : {}),
-  };
-  if (terminal) return metadata;
-  return {
-    ...metadata,
-    files_touched_since_last: [],
-    last_user_excerpt: '',
-    last_assistant_excerpt: lastAssistantExcerpt,
-    session_projection: sessionProjection,
-  };
+function managedGitHubCapabilities(value) {
+  if (value == null) return null;
+  const descriptor = decodeSessionCapabilities(value);
+  return descriptor.github.state === 'ready' ? descriptor : null;
 }
 
 export function sourceForTool(tool) {
@@ -380,33 +376,6 @@ function normaliseCodingSource(value) {
   return trimmed || null;
 }
 
-export async function postHeartbeatWithRetry({
-  apiUrl,
-  token,
-  payload,
-  memoroFetchImpl = memoroFetch,
-  sleepImpl = sleep,
-  retryIntervalMs = RETRY_INTERVAL_MS,
-  maxAttempts = MAX_ATTEMPTS,
-  shouldContinue = () => true,
-}) {
-  for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    if (!shouldContinue()) return false;
-    try {
-      await memoroFetchImpl(apiUrl, '/api/sessions/heartbeat', {
-        token, method: 'POST', body: payload,
-      });
-      return true;
-    } catch {
-      if (attempt < maxAttempts - 1) {
-        try { await sleepImpl(retryIntervalMs); } catch {}
-        if (!shouldContinue()) return false;
-      }
-    }
-  }
-  return false;
-}
-
 function silentLogger() {
   return { info: () => {}, warn: () => {}, error: () => {} };
 }
@@ -415,5 +384,9 @@ export const __test__ = {
   TICK_INTERVAL_MS,
   RETRY_INTERVAL_MS,
   MAX_ATTEMPTS,
-  EXCERPT_MAX_CHARS,
+};
+
+export {
+  buildSessionHeartbeatPayload,
+  postHeartbeatWithRetry,
 };

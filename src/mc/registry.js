@@ -13,6 +13,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync } from '
 import { dirname, join } from 'node:path';
 import { registryPath, mcHome } from './paths.js';
 import { DEFAULT_TOOL } from '../lib/config.js';
+import { resolveToolInput } from '../adapters/index.js';
 
 const DEFAULTS = {
   kind: 'work',          // work | isolation | spawn
@@ -32,7 +33,81 @@ const DEFAULTS = {
   tool_transcript_path: null,
   tool_session_provider_adapter: null,
   tool_session_provider_generation: null,
+  provider_sessions: null,
+  session_objective: null,
 };
+
+const PROVIDER_KEY = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+
+export function normalizeProviderSessions(entry = {}) {
+  const existing = entry?.provider_sessions;
+  if (existing != null && !validProviderSessions(existing)) {
+    return { ok: false, reason: 'provider-sessions-invalid', providerSessions: existing };
+  }
+  const providerSessions = existing ? structuredClone(existing) : { schema: 1, providers: {} };
+  const sessionId = explicitProviderValue(entry?.tool_session_id);
+  if (sessionId === null) return { ok: true, providerSessions, migrated: false };
+  const source = entry?.tool_session_source;
+  const provider = source == null || source === ''
+    ? knownProvider(entry?.tool)
+    : knownProvider(source);
+  if (!provider) return { ok: false, reason: 'legacy-provider-ambiguous', providerSessions };
+  if (!providerSessions.providers[provider]) {
+    providerSessions.providers[provider] = {
+      session_id: sessionId,
+      transcript_path: explicitProviderValue(entry?.tool_transcript_path),
+      // Credential-domain generation is not broker runtime-generation evidence.
+      runtime_generation: null,
+      last_consumed_handoff_sequence: 0,
+    };
+  }
+  if (!validProviderSessions(providerSessions)) {
+    return { ok: false, reason: 'legacy-provider-invalid', providerSessions };
+  }
+  return { ok: true, providerSessions, migrated: true };
+}
+
+export function providerSessionFor(entry, provider) {
+  const normalized = normalizeProviderSessions(entry);
+  if (!normalized.ok) return null;
+  return normalized.providerSessions.providers[canonicalProvider(provider)] || null;
+}
+
+export function withProviderSession(entry, provider, patch = {}) {
+  const normalized = normalizeProviderSessions(entry);
+  if (!normalized.ok) return normalized;
+  const key = canonicalProvider(provider);
+  if (!key) return { ok: false, reason: 'unknown-provider', providerSessions: normalized.providerSessions };
+  const current = normalized.providerSessions.providers[key] || {
+    session_id: null, transcript_path: null, runtime_generation: null, last_consumed_handoff_sequence: 0,
+  };
+  const next = { ...current, ...patch };
+  if (!validProviderSession(next)) return { ok: false, reason: 'invalid-provider-session', providerSessions: normalized.providerSessions };
+  normalized.providerSessions.providers[key] = next;
+  return { ok: true, providerSessions: normalized.providerSessions };
+}
+
+/**
+ * Commit one provider's consumed handoff watermark in a single registry
+ * read/modify/write. This prevents a later local caller from regressing the
+ * provider-specific causal cursor; H3 adds the broker single-writer journal.
+ */
+export function patchProviderSessionSequenceIfPresent(name, provider, sequence) {
+  if (!Number.isSafeInteger(sequence) || sequence < 0) return { ok: false, reason: 'invalid-handoff-sequence' };
+  const reg = readRegistryStrict();
+  const index = reg.entries.findIndex((entry) => entry.name === name);
+  if (index === -1) return { ok: false, reason: 'missing' };
+  const updated = withProviderSession(reg.entries[index], provider, {});
+  if (!updated.ok) return { ok: false, reason: updated.reason };
+  const key = canonicalProvider(provider);
+  const current = updated.providerSessions.providers[key];
+  if (!current) return { ok: false, reason: 'missing-provider-session' };
+  if (sequence < current.last_consumed_handoff_sequence) return { ok: false, reason: 'handoff-sequence-regression' };
+  updated.providerSessions.providers[key] = { ...current, last_consumed_handoff_sequence: sequence };
+  reg.entries[index] = { ...reg.entries[index], provider_sessions: updated.providerSessions };
+  writeRegistry(reg);
+  return { ok: true, entry: reg.entries[index] };
+}
 
 export function readRegistry() {
   const path = registryPath();
@@ -90,6 +165,54 @@ export function upsertEntry(patch) {
   }
   writeRegistry(reg);
   return reg.entries.find((e) => e.name === patch.name);
+}
+
+function canonicalProvider(value) {
+  const known = resolveToolInput(value)?.id;
+  if (known) return known;
+  return typeof value === 'string' && PROVIDER_KEY.test(value) ? value : null;
+}
+
+function knownProvider(value) {
+  return resolveToolInput(value)?.id || null;
+}
+
+function explicitProviderValue(value) {
+  if (value == null || value === '') return null;
+  return value;
+}
+
+function boundedId(value) {
+  return typeof value === 'string' && value.trim() === value
+    && /^[A-Za-z0-9._:-]{1,128}$/.test(value);
+}
+
+function absoluteTranscriptPath(value) {
+  return typeof value === 'string' && value.trim() === value && value.startsWith('/')
+    && Buffer.byteLength(value) <= 4096 && !/[\0-\x1f\x7f]/.test(value);
+}
+
+function validProviderSessions(value) {
+  return value && typeof value === 'object' && !Array.isArray(value) && value.schema === 1
+    && value.providers && typeof value.providers === 'object' && !Array.isArray(value.providers)
+    && Object.entries(value.providers).every(([key, session]) => (
+      PROVIDER_KEY.test(key) && validProviderSession(session)
+    ));
+}
+
+function validProviderSession(value) {
+  const allowedKeys = new Set([
+    'session_id',
+    'transcript_path',
+    'runtime_generation',
+    'last_consumed_handoff_sequence',
+  ]);
+  return value && typeof value === 'object' && !Array.isArray(value)
+    && Object.keys(value).every((key) => allowedKeys.has(key))
+    && (value.session_id === null || boundedId(value.session_id))
+    && (value.transcript_path === null || absoluteTranscriptPath(value.transcript_path))
+    && (value.runtime_generation === null || boundedId(value.runtime_generation))
+    && Number.isSafeInteger(value.last_consumed_handoff_sequence) && value.last_consumed_handoff_sequence >= 0;
 }
 
 export function removeEntry(name) {

@@ -20,6 +20,14 @@ import {
   nextBackoff,
   readLocalSessionOutput,
 } from '../../../src/mc/broker/cloud.js';
+import {
+  deriveHandoffControllerRoot,
+} from '../../../src/mc/handoff-controller-capability.js';
+
+const controllerCapability = deriveHandoffControllerRoot({
+  token: 'tok',
+  codingSessionId: 'sess_a',
+});
 
 class FakeWebSocket extends EventEmitter {
   static instances = [];
@@ -466,7 +474,17 @@ describe('CloudBrokerClient', () => {
       request: async () => ({
         ok: true,
         sessions: [
-          { id: 'sess_valid', session_projection: projection },
+          {
+            id: 'sess_valid',
+            transcript_path: '/private/transcript-canary.jsonl',
+            provider_sessions_dir: '/private/provider-sessions-canary',
+            codex_artifact_capture: { cwd: '/private/worktree-canary' },
+            provider_artifact: {
+              provider_session_id: 'provider-id-canary',
+              transcript_path: '/private/provider-artifact-canary.jsonl',
+            },
+            session_projection: projection,
+          },
           { id: 'sess_invalid', session_projection: { ...projection, raw_output: 'secret' } },
         ],
       }),
@@ -482,7 +500,10 @@ describe('CloudBrokerClient', () => {
       .find((message) => message.type === 'sessions');
     assert.deepEqual(inventory.sessions[0].session_projection, projection);
     assert.equal(Object.hasOwn(inventory.sessions[1], 'session_projection'), false);
-    assert.doesNotMatch(JSON.stringify(inventory), /secret/);
+    assert.doesNotMatch(
+      JSON.stringify(inventory),
+      /secret|transcript-canary|provider-sessions-canary|worktree-canary|provider-id-canary|provider-artifact-canary/,
+    );
     client.stop();
   });
 
@@ -528,8 +549,17 @@ describe('CloudBrokerClient', () => {
     await new Promise((resolve) => setImmediate(resolve));
 
     assert.deepEqual(requests.filter((msg) => msg.type !== 'sessions').slice(-2), [
-      { type: 'stop_session', id: 'sess_a', signal: 'SIGHUP' },
-      { type: 'remove_session', id: 'sess_a' },
+      {
+        type: 'stop_session',
+        id: 'sess_a',
+        signal: 'SIGHUP',
+        session_controller_capability: controllerCapability,
+      },
+      {
+        type: 'remove_session',
+        id: 'sess_a',
+        session_controller_capability: controllerCapability,
+      },
     ]);
     assert.deepEqual(control.sent.map((s) => JSON.parse(s)).filter((msg) => msg.type === 'result'), [
       {
@@ -826,6 +856,7 @@ describe('CloudBrokerClient', () => {
     assert.deepEqual(JSON.parse(local.writes[0]), {
       type: 'attach_session',
       id: 'sess_a',
+      session_controller_capability: controllerCapability,
       attach_id: 'att_a',
       side: 'cloud',
       cols: 120,
@@ -849,6 +880,7 @@ describe('CloudBrokerClient', () => {
     assert.deepEqual(requests.at(-1), {
       type: 'resize_session',
       id: 'sess_a',
+      session_controller_capability: controllerCapability,
       cols: 90,
       rows: 25,
       side: 'cloud',
@@ -892,9 +924,22 @@ describe('CloudBrokerClient', () => {
     await new Promise((resolve) => setImmediate(resolve));
 
     assert.deepEqual(requests.slice(-3), [
-      { type: 'session_status', id: 'sess_a' },
-      { type: 'write_session', id: 'sess_a', data: 'ship it\r' },
-      { type: 'write_session', id: 'sess_a', data: '\r' },
+      {
+        type: 'session_status',
+        id: 'sess_a',
+      },
+      {
+        type: 'write_session',
+        id: 'sess_a',
+        data: 'ship it\r',
+        session_controller_capability: controllerCapability,
+      },
+      {
+        type: 'write_session',
+        id: 'sess_a',
+        data: '\r',
+        session_controller_capability: controllerCapability,
+      },
     ]);
     assert.deepEqual(sleeps, [150]);
     assert.deepEqual(JSON.parse(control.sent.at(-1)), {
@@ -940,8 +985,18 @@ describe('CloudBrokerClient', () => {
     await new Promise((resolve) => setImmediate(resolve));
 
     assert.deepEqual(requests.slice(-2), [
-      { type: 'write_session', id: 'sess_a', data: 'ship it\r' },
-      { type: 'dispatch_session', id: 'sess_a', message: 'ship it' },
+      {
+        type: 'write_session',
+        id: 'sess_a',
+        data: 'ship it\r',
+        session_controller_capability: controllerCapability,
+      },
+      {
+        type: 'dispatch_session',
+        id: 'sess_a',
+        message: 'ship it',
+        session_controller_capability: controllerCapability,
+      },
     ]);
     assert.deepEqual(JSON.parse(control.sent.at(-1)), {
       type: 'result',
@@ -1111,6 +1166,7 @@ describe('CloudBrokerClient', () => {
     assert.deepEqual(requests.at(-1), {
       type: 'fetch_session_output',
       id: 'sess_a',
+      session_controller_capability: controllerCapability,
     });
     assert.deepEqual(JSON.parse(control.sent.at(-1)), {
       type: 'result',
@@ -1540,6 +1596,7 @@ describe('createAttachBridge', () => {
       attachId: 'att_fail',
       sessionId: 'sess_missing',
       brokerWsUrl: 'wss://memoro.test/api/mc/pty/att_fail/broker',
+      controllerCapability,
       WebSocketImpl: FakeWebSocket,
       connect: () => local,
     });
@@ -1564,6 +1621,7 @@ describe('createAttachBridge', () => {
       attachId: 'att_bad',
       sessionId: 'sess_a',
       brokerWsUrl: 'wss://memoro.test/api/mc/pty/att_bad/broker',
+      controllerCapability,
       WebSocketImpl: FakeWebSocket,
       connect: () => local,
     });

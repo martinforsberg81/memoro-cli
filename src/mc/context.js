@@ -25,6 +25,8 @@ export function buildMcContextQuery({
   coding_session_id = null,
   sessionName = null,
   branch = null,
+  consumedHandoffSequence = null,
+  consumed_handoff_sequence = null,
 } = {}) {
   const params = new URLSearchParams();
   addParam(params, 'repo_id', repoId);
@@ -33,6 +35,13 @@ export function buildMcContextQuery({
   addParam(params, 'coding_session_id', codingSessionId || coding_session_id);
   addParam(params, 'session_name', sessionName);
   addParam(params, 'branch', branch);
+  addParam(
+    params,
+    'consumed_handoff_sequence',
+    Number.isSafeInteger(consumedHandoffSequence ?? consumed_handoff_sequence)
+      ? String(consumedHandoffSequence ?? consumed_handoff_sequence)
+      : consumedHandoffSequence ?? consumed_handoff_sequence,
+  );
   return params.toString();
 }
 

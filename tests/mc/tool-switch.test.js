@@ -113,6 +113,34 @@ describe('resolveTargetAdapter', () => {
 });
 
 describe('evaluateReadiness', () => {
+  it('accepts strict managed readiness evidence', () => {
+    const r = evaluateReadiness({
+      schema: 'mc-managed-provider-readiness/v1',
+      ok: true,
+      tool_id: 'codex',
+      provider_adapter_id: 'codex-managed-local-v1',
+      reason: null,
+      hint: null,
+    });
+    assert.equal(r.ok, true);
+    assert.equal(r.managed, true);
+  });
+
+  it('preserves a managed adapter refusal and its repair hint', () => {
+    const r = evaluateReadiness({
+      schema: 'mc-managed-provider-readiness/v1',
+      ok: false,
+      tool_id: 'gemini-cli',
+      provider_adapter_id: null,
+      reason: 'managed-provider-tool-unsupported',
+      hint: 'No complete managed provider adapter is installed for this tool.',
+    });
+    assert.equal(r.ok, false);
+    assert.equal(r.managed, true);
+    assert.equal(r.reason, 'managed-provider-tool-unsupported');
+    assert.match(r.hint, /complete managed provider adapter/);
+  });
+
   it('rejects when not installed', () => {
     const r = evaluateReadiness({ installed: false, authenticated: null, hint: 'Install with: brew install foo' });
     assert.equal(r.ok, false);

@@ -20,6 +20,10 @@ describe('mc --help', () => {
     assert.match(r.stdout, /mc setup --resource-profile <unlimited\|balanced\|conservative\|custom>/);
     assert.match(r.stdout, /--heavy-max-rss-mb/);
     assert.match(r.stdout, /mc storage prune-generated --dry-run\|--apply/);
+    assert.match(
+      r.stdout,
+      /mc storage repair <name> --managed-provider-recovery --dry-run\|--apply/,
+    );
     assert.match(r.stdout, /END IS PERMANENT/);
     assert.match(r.stdout, /asks y\/n once/);
     assert.match(r.stdout, /provider transcript \+ ID-bound auxiliary paths/);
@@ -30,6 +34,7 @@ describe('mc --help', () => {
     assert.doesNotMatch(r.stdout, /deal with the branch/);
     assert.match(r.stdout, /mc dev plan \[service\] \[--profile <name>\]/);
     assert.match(r.stdout, /mc deps status\|hydrate \[service\]/);
+    assert.match(r.stdout, /mc security claude-c1 <label\|id> \[--json\]/);
     assert.match(r.stdout, /--dependency-mode <auto\|isolated\|off>/);
     assert.match(r.stdout, /Terminal commands manage machines and sessions/);
     assert.match(r.stdout, /Inside a launched LLM session/);
@@ -43,9 +48,9 @@ describe('mc --help', () => {
     assert.match(r.stdout, /live broker-owned PTY/);
     assert.match(r.stdout, /without sending a new prompt/);
     assert.match(r.stdout, /relaunches the same provider-native\s+session by id/);
-    assert.match(r.stdout, /announces\s+the gap and starts a fresh grounded session on the same coding session/);
+    assert.match(r.stdout, /fails closed and never creates a replacement conversation/);
     assert.doesNotMatch(r.stdout, /refuses to\s+start a contextless replacement/);
-    assert.match(r.stdout, /Idle tracked sessions that have\s+never launched start as fresh grounded sessions on first open/);
+    assert.match(r.stdout, /Idle tracked sessions that have never launched start as fresh\s+grounded sessions on first open/);
     assert.match(r.stdout, /cannot switch provider for an existing provider\s+session/);
     assert.doesNotMatch(r.stdout, /\/mc map/);
     assert.doesNotMatch(r.stdout, /MEMORO\.md is missing/);

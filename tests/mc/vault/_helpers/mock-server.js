@@ -140,11 +140,78 @@ export function createMockVaultServer({ userId = 'usr_test' } = {}) {
         encrypted_data: body.encryptedData,
         iv: body.iv,
         label_iv: body.labelIv,
+        wrapped_dek: body.wrappedDek ?? null,
+        dek_iv: body.dekIv ?? null,
+        class: body.secretClass ?? 'secret',
+        schema_version: body.schemaVersion ?? 1,
+        revision: 1,
+        refresh_lease_digest: null,
+        refresh_lease_expires_at: null,
         created_at: now,
         updated_at: now,
       };
       secrets.unshift(secret);
-      return { ok: true, secret: { id, secret_type: body.secretType, created_at: now, updated_at: now } };
+      return {
+        ok: true,
+        secret: {
+          id,
+          secret_type: body.secretType,
+          revision: 1,
+          created_at: now,
+          updated_at: now,
+        },
+      };
+    }
+
+    const leaseMatch = path.match(/^\/api\/vault\/secrets\/([^/]+)\/refresh-lease$/);
+    if (leaseMatch && method === 'POST') {
+      if (!unlocked) {
+        const err = new Error('Memoro 403: Vault is locked'); err.status = 403; throw err;
+      }
+      const id = decodeURIComponent(leaseMatch[1]);
+      const s = secrets.find(x => x.id === id);
+      if (!s) {
+        const err = new Error('Memoro 404: Secret not found'); err.status = 404; throw err;
+      }
+      const token = body?.refreshLeaseToken;
+      const digest = typeof token === 'string'
+        ? createHash('sha256').update(token).digest('hex')
+        : null;
+      if (!digest || !['acquire', 'release'].includes(body?.operation)) {
+        const err = new Error('Memoro 400: Refresh lease request is invalid');
+        err.status = 400;
+        err.data = { code: 'VAULT_REFRESH_LEASE_INVALID' };
+        throw err;
+      }
+      if (body.operation === 'release') {
+        if (s.refresh_lease_digest !== digest) {
+          const err = new Error('Memoro 409: Vault secret refresh lease is unavailable');
+          err.status = 409;
+          err.data = { code: 'VAULT_REFRESH_LEASE_LOST' };
+          throw err;
+        }
+        s.refresh_lease_digest = null;
+        s.refresh_lease_expires_at = null;
+        return { ok: true, released: true };
+      }
+      const timestamp = Date.now();
+      if (s.refresh_lease_expires_at > timestamp
+        && s.refresh_lease_digest !== digest) {
+        const err = new Error('Memoro 409: Vault secret refresh lease is held');
+        err.status = 409;
+        err.data = {
+          code: 'VAULT_REFRESH_LEASE_CONFLICT',
+          leaseExpiresAt: s.refresh_lease_expires_at,
+        };
+        throw err;
+      }
+      s.refresh_lease_digest = digest;
+      s.refresh_lease_expires_at = timestamp + 90_000;
+      return {
+        ok: true,
+        acquired: true,
+        leaseExpiresAt: s.refresh_lease_expires_at,
+      };
     }
 
     const putMatch = path.match(/^\/api\/vault\/secrets\/([^/]+)$/);
@@ -157,13 +224,47 @@ export function createMockVaultServer({ userId = 'usr_test' } = {}) {
       if (!s) {
         const err = new Error('Memoro 404: Secret not found'); err.status = 404; throw err;
       }
+      const leaseDigest = typeof body.refreshLeaseToken === 'string'
+        ? createHash('sha256').update(body.refreshLeaseToken).digest('hex')
+        : null;
+      if (s.refresh_lease_expires_at > Date.now()
+        && leaseDigest !== s.refresh_lease_digest) {
+        const err = new Error('Memoro 409: Vault secret refresh lease is held');
+        err.status = 409;
+        err.data = {
+          code: 'VAULT_REFRESH_LEASE_CONFLICT',
+          leaseExpiresAt: s.refresh_lease_expires_at,
+        };
+        throw err;
+      }
+      if (body.expectedRevision !== undefined
+        && body.expectedRevision !== s.revision) {
+        const err = new Error('Memoro 409: Vault secret revision is stale');
+        err.status = 409;
+        err.data = {
+          code: 'VAULT_SECRET_REVISION_CONFLICT',
+          currentRevision: s.revision,
+        };
+        throw err;
+      }
       if (body.encryptedLabel) s.encrypted_label = body.encryptedLabel;
       if (body.encryptedData)  s.encrypted_data  = body.encryptedData;
       if (body.iv)             s.iv              = body.iv;
       if (body.labelIv)        s.label_iv        = body.labelIv;
       if (body.secretType)     s.secret_type     = body.secretType;
+      if (body.wrappedDek)     s.wrapped_dek     = body.wrappedDek;
+      if (body.dekIv)          s.dek_iv           = body.dekIv;
+      if (body.secretClass)    s.class            = body.secretClass;
+      if (body.schemaVersion)  s.schema_version   = body.schemaVersion;
       s.updated_at = `t${++idCounter}`;
-      return { ok: true };
+      s.revision += 1;
+      return {
+        ok: true,
+        secret: {
+          revision: s.revision,
+          updated_at: s.updated_at,
+        },
+      };
     }
     const delMatch = path.match(/^\/api\/vault\/secrets\/([^/]+)$/);
     if (delMatch && method === 'DELETE') {

@@ -214,6 +214,9 @@ export async function run(rawArgv) {
     tool_transcript_path: null,
     tool_session_provider_adapter: null,
     tool_session_provider_generation: null,
+    provider_sessions: null,
+    session_objective: opts.task ? { text: opts.task, authority: 'explicit' } : null,
+    focus: opts.task || null,
     provider_session_id: null,
     llm_session_id: null,
     broker_socket_path: null,
@@ -348,11 +351,22 @@ function parseArgs(argv) {
     tool: null,
     noLaunch: false,
     json: false,
-    managedPortable: false,
+    // Named lifecycle launches use managed custody by default. Keep accepting
+    // --managed-portable as a no-op compatibility spelling for older scripts.
+    managedPortable: true,
   };
   const positionals = [];
+  let positionalOnly = false;
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
+    if (!positionalOnly && a === '--') {
+      positionalOnly = true;
+      continue;
+    }
+    if (positionalOnly) {
+      positionals.push(a);
+      continue;
+    }
     if (a === '--from') { opts.from = argv[++i]; continue; }
     if (a === '--tool') { opts.tool = argv[++i]; continue; }
     if (Object.prototype.hasOwnProperty.call(TOOL_SUGAR, a)) {
@@ -367,7 +381,7 @@ function parseArgs(argv) {
     if (a === '--no-launch') { opts.noLaunch = true; continue; }
     if (a === '--json') { opts.json = true; continue; }
     if (a === '--managed-portable') { opts.managedPortable = true; continue; }
-    if (a.startsWith('--')) { return { error: `unknown flag: ${a}` }; }
+    if (a.startsWith('-')) { return { error: `unknown flag: ${a}` }; }
     positionals.push(a);
   }
   // <name> is the first positional. Any remaining words form the optional
@@ -380,5 +394,5 @@ function parseArgs(argv) {
 }
 
 function printUsage() {
-  console.error('Usage: mc new <name> [<task>] [--from <ref>] [--tool claude|codex|gemini | --claude | --codex] [--managed-portable] [--no-launch] [--json]');
+  console.error('Usage: mc new <name> [<task>] [--from <ref>] [--tool claude|codex|gemini | --claude | --codex] [--no-launch] [--json]');
 }

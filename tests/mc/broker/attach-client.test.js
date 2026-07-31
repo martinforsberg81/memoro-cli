@@ -4,6 +4,8 @@ import test, { describe } from 'node:test';
 
 import { attachBrokerSession } from '../../../src/mc/broker/attach-client.js';
 
+const controllerCapability = 'b'.repeat(64);
+
 function makeSocket() {
   const socket = new EventEmitter();
   socket.writes = [];
@@ -42,6 +44,7 @@ describe('attachBrokerSession', () => {
 
     const promise = attachBrokerSession({
       id: 'sess_a',
+      controllerCapability,
       socketPath: '/tmp/broker.sock',
       connect: (path) => {
         assert.equal(path, '/tmp/broker.sock');
@@ -57,6 +60,7 @@ describe('attachBrokerSession', () => {
     assert.deepEqual(JSON.parse(socket.writes[0]), {
       type: 'attach_session',
       id: 'sess_a',
+      session_controller_capability: controllerCapability,
       writer: true,
       cols: 90,
       rows: 30,
@@ -78,6 +82,7 @@ describe('attachBrokerSession', () => {
     assert.deepEqual(resizeRequests, [{
       type: 'resize_session',
       id: 'sess_a',
+      session_controller_capability: controllerCapability,
       cols: 120,
       rows: 40,
     }]);
@@ -99,6 +104,7 @@ describe('attachBrokerSession', () => {
 
     const promise = attachBrokerSession({
       id: 'sess_a',
+      controllerCapability,
       connect: () => socket,
       stdin,
       stdout,
@@ -121,6 +127,7 @@ describe('attachBrokerSession', () => {
 
     const promise = attachBrokerSession({
       id: 'sess_a',
+      controllerCapability,
       connect: () => socket,
       stdin,
       stdout,

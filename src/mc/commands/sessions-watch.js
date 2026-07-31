@@ -1,5 +1,9 @@
 import { requestBroker } from '../broker/client.js';
 import { readLocalSessionOutput } from '../broker/cloud.js';
+import { requestForSession } from '../broker/session-hosts.js';
+import {
+  resolveSessionControllerCapability,
+} from '../session-controller-capability.js';
 import {
   cleanSessionOutput,
   projectRuntimeSession,
@@ -28,10 +32,24 @@ export async function run(argv, deps = {}) {
   }
 
   const request = deps.requestBroker || requestBroker;
-  const readOutput = deps.readOutput || ((sessionId) => readLocalSessionOutput({
-    sessionId,
-    timeoutMs: opts.outputTimeoutMs,
-  }));
+  const readOutput = deps.readOutput || (async (sessionId, session) => {
+    const authority = await (
+      deps.resolveSessionControllerCapability
+      || resolveSessionControllerCapability
+    )({
+      codingSessionId: sessionId,
+      deps,
+    });
+    if (!authority?.ok) throw new Error('session controller authority is unavailable');
+    return readLocalSessionOutput({
+      request: requestForSession(session, {
+        request,
+        controllerCapability: authority.capability,
+      }),
+      sessionId,
+      timeoutMs: opts.outputTimeoutMs,
+    });
+  });
   const wait = deps.sleep || sleep;
 
   const collectSnapshot = () => collectWatchSnapshot({
@@ -80,7 +98,7 @@ async function collectWatchSnapshot({ request, readOutput, opts, stderr, now }) 
     for (const session of broker.sessions) {
       if (!isReadableSession(session, opts)) continue;
       const id = session.id || session.coding_session_id;
-      const output = await readOutput(id).catch(() => '');
+      const output = await readOutput(id, session).catch(() => '');
       outputs.set(id, output);
     }
   }

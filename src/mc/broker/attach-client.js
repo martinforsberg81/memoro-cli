@@ -5,6 +5,7 @@ import { brokerSocketPath } from './paths.js';
 
 export function attachBrokerSession({
   id,
+  controllerCapability,
   socketPath = brokerSocketPath(),
   connect = createConnection,
   request = requestBroker,
@@ -17,6 +18,10 @@ export function attachBrokerSession({
   if (!id) {
     stderr.write('mc: session id required\n');
     return Promise.resolve(2);
+  }
+  if (!/^[a-f0-9]{64}$/.test(controllerCapability || '')) {
+    stderr.write('mc: session controller authority is unavailable\n');
+    return Promise.resolve(1);
   }
 
   return new Promise((resolve) => {
@@ -48,6 +53,7 @@ export function attachBrokerSession({
       request({
         type: 'resize_session',
         id,
+        session_controller_capability: controllerCapability,
         cols: stdout.columns || cols,
         rows: stdout.rows || rows,
       }).catch(() => {});
@@ -108,6 +114,7 @@ export function attachBrokerSession({
       socket.write(JSON.stringify({
         type: 'attach_session',
         id,
+        session_controller_capability: controllerCapability,
         cols,
         rows,
         writer: true,

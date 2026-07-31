@@ -9,13 +9,14 @@ import { memoroFetch } from '../lib/api.js';
 import { getPackageVersion } from '../lib/version.js';
 import { detectStaleness, formatStaleStatusLine } from '../lib/staleness.js';
 import { readInstalledHookVersion } from '../adapters/claude-code.js';
+import {
+  PRIMARY_AUTH_TOKEN_ACCOUNT,
+} from '../lib/auth-accounts.js';
+export { ACCOUNTS } from '../lib/auth-accounts.js';
 
 // Historical keychain account. It can hold either a pasted user API token or
 // the CLI's server-issued device/session token, so callers should treat it as
 // the primary Memoro auth token rather than assume a specific scope.
-const PRIMARY_AUTH_TOKEN_ACCOUNT = 'memoro-api-token';
-const SUPERVISOR_TOKEN_ACCOUNT = 'memoro-mc-supervisor-token';
-
 export async function login(argv) {
   const existing = await getSecret(PRIMARY_AUTH_TOKEN_ACCOUNT);
   if (existing) {
@@ -108,10 +109,3 @@ export async function status(argv) {
   }
   return 0;
 }
-
-// Exposed for other commands
-export const ACCOUNTS = {
-  TOKEN: PRIMARY_AUTH_TOKEN_ACCOUNT,
-  PRIMARY_AUTH_TOKEN: PRIMARY_AUTH_TOKEN_ACCOUNT,
-  SUPERVISOR_TOKEN: SUPERVISOR_TOKEN_ACCOUNT,
-};

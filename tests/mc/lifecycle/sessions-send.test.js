@@ -11,6 +11,8 @@ import {
   normalizeLocalBrokerSessionForList,
 } from '../../../src/mc/session-list.js';
 
+const controllerCapability = 'b'.repeat(64);
+
 describe('mc sessions list local broker view', () => {
   test('normalizes live local broker sessions for sessions list', () => {
     const session = normalizeLocalBrokerSessionForList({
@@ -81,6 +83,7 @@ describe('mc sessions send local broker dispatch', () => {
   test('resolves local session names before dispatching', async () => {
     const requests = [];
     const result = await dispatchLocalBrokerSession('legal', 'ship it', {
+      controllerCapability,
       request: async (message) => {
         requests.push(message);
         if (message.type === 'sessions') {
@@ -99,7 +102,12 @@ describe('mc sessions send local broker dispatch', () => {
     });
     assert.deepEqual(requests, [
       { type: 'sessions' },
-      { type: 'write_session', id: 'sess_a', data: 'ship it\r' },
+      {
+        type: 'write_session',
+        id: 'sess_a',
+        data: 'ship it\r',
+        session_controller_capability: controllerCapability,
+      },
     ]);
   });
 
@@ -107,6 +115,7 @@ describe('mc sessions send local broker dispatch', () => {
     const writes = [];
     const waits = [];
     const result = await dispatchLocalBrokerSession('scoped-session-action', 'continue', {
+      controllerCapability,
       wait: async (ms) => { waits.push(ms); },
       request: async (message) => {
         if (message.type === 'sessions') {
@@ -128,14 +137,25 @@ describe('mc sessions send local broker dispatch', () => {
     assert.equal(result.id, 'sess_b');
     assert.deepEqual(waits, [150]);
     assert.deepEqual(writes, [
-      { type: 'write_session', id: 'sess_b', data: 'continue\r' },
-      { type: 'write_session', id: 'sess_b', data: '\r' },
+      {
+        type: 'write_session',
+        id: 'sess_b',
+        data: 'continue\r',
+        session_controller_capability: controllerCapability,
+      },
+      {
+        type: 'write_session',
+        id: 'sess_b',
+        data: '\r',
+        session_controller_capability: controllerCapability,
+      },
     ]);
   });
 
   test('falls back to dispatch_session when raw write is unavailable', async () => {
     const requests = [];
     const result = await dispatchLocalBrokerSession('sess_a', 'fallback', {
+      controllerCapability,
       request: async (message) => {
         requests.push(message);
         if (message.type === 'sessions') return { ok: true, sessions: [{ id: 'sess_a' }] };
@@ -149,8 +169,18 @@ describe('mc sessions send local broker dispatch', () => {
     assert.equal(result.transport, 'dispatch_session');
     assert.deepEqual(requests, [
       { type: 'sessions' },
-      { type: 'write_session', id: 'sess_a', data: 'fallback\r' },
-      { type: 'dispatch_session', id: 'sess_a', message: 'fallback' },
+      {
+        type: 'write_session',
+        id: 'sess_a',
+        data: 'fallback\r',
+        session_controller_capability: controllerCapability,
+      },
+      {
+        type: 'dispatch_session',
+        id: 'sess_a',
+        message: 'fallback',
+        session_controller_capability: controllerCapability,
+      },
     ]);
   });
 
@@ -176,6 +206,7 @@ describe('mc sessions local broker cleanup', () => {
     const result = await controlLocalBrokerSession('legal', {
       action: 'stop',
       signal: 'SIGHUP',
+      controllerCapability,
       request: async (message) => {
         requests.push(message);
         if (message.type === 'sessions') return { ok: true, sessions: [{ id: 'sess_a', name: 'legal' }] };
@@ -187,7 +218,12 @@ describe('mc sessions local broker cleanup', () => {
     assert.deepEqual(result, { ok: true, id: 'sess_a', action: 'stop' });
     assert.deepEqual(requests, [
       { type: 'sessions' },
-      { type: 'stop_session', id: 'sess_a', signal: 'SIGHUP' },
+      {
+        type: 'stop_session',
+        id: 'sess_a',
+        signal: 'SIGHUP',
+        session_controller_capability: controllerCapability,
+      },
     ]);
   });
 
@@ -195,6 +231,7 @@ describe('mc sessions local broker cleanup', () => {
     const requests = [];
     const result = await controlLocalBrokerSession('scoped-session-action', {
       action: 'remove',
+      controllerCapability,
       request: async (message) => {
         requests.push(message);
         if (message.type === 'sessions') {
@@ -219,7 +256,11 @@ describe('mc sessions local broker cleanup', () => {
     });
     assert.deepEqual(requests, [
       { type: 'sessions' },
-      { type: 'remove_session', id: 'sess_b' },
+      {
+        type: 'remove_session',
+        id: 'sess_b',
+        session_controller_capability: controllerCapability,
+      },
     ]);
   });
 });

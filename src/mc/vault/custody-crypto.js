@@ -35,6 +35,7 @@ import {
   base64ToBytes,
   importVaultKey,
   encryptSecretPayload,
+  decryptSecret,
   decryptSecretPayload,
 } from './client-crypto.js';
 
@@ -116,7 +117,11 @@ export async function mintCustodyRoot(kuk) {
  */
 export async function unwrapCustodyRoot(kuk, wrappedCrkBase64, crkIvBase64) {
   const crkBytes = await unwrapRawKey(kuk, wrappedCrkBase64, crkIvBase64, CRK_AAD);
-  return importVaultKey(crkBytes);
+  try {
+    return await importVaultKey(crkBytes);
+  } finally {
+    crkBytes.fill(0);
+  }
 }
 
 /**
@@ -173,16 +178,20 @@ export function assertSecretClass(secretClass) {
 export async function encryptEnvelopeSecret(crk, { secretClass = 'secret', label, data }) {
   assertSecretClass(secretClass);
   const dekBytes = generateRawKey();
-  const dek = await importVaultKey(dekBytes);
-  const payload = await encryptSecretPayload(dek, label, data);
-  const { wrapped, iv } = await wrapRawKey(crk, dekBytes, dekAad(secretClass));
-  return {
-    ...payload,
-    wrapped_dek: wrapped,
-    dek_iv: iv,
-    class: secretClass,
-    schema_version: ENVELOPE_SCHEMA_VERSION,
-  };
+  try {
+    const dek = await importVaultKey(dekBytes);
+    const payload = await encryptSecretPayload(dek, label, data);
+    const { wrapped, iv } = await wrapRawKey(crk, dekBytes, dekAad(secretClass));
+    return {
+      ...payload,
+      wrapped_dek: wrapped,
+      dek_iv: iv,
+      class: secretClass,
+      schema_version: ENVELOPE_SCHEMA_VERSION,
+    };
+  } finally {
+    dekBytes.fill(0);
+  }
 }
 
 /**
@@ -192,8 +201,28 @@ export async function decryptEnvelopeSecret(crk, row) {
   const secretClass = row.class || 'secret';
   assertSecretClass(secretClass);
   const dekBytes = await unwrapRawKey(crk, row.wrapped_dek, row.dek_iv, dekAad(secretClass));
-  const dek = await importVaultKey(dekBytes);
-  return decryptSecretPayload(dek, row);
+  try {
+    const dek = await importVaultKey(dekBytes);
+    return await decryptSecretPayload(dek, row);
+  } finally {
+    dekBytes.fill(0);
+  }
+}
+
+/**
+ * Decrypt only an envelope's label. Selectors that need one named record can
+ * use this first without materialising unrelated secret payloads in memory.
+ */
+export async function decryptEnvelopeLabel(crk, row) {
+  const secretClass = row.class || 'secret';
+  assertSecretClass(secretClass);
+  const dekBytes = await unwrapRawKey(crk, row.wrapped_dek, row.dek_iv, dekAad(secretClass));
+  try {
+    const dek = await importVaultKey(dekBytes);
+    return await decryptSecret(dek, row.encrypted_label, row.label_iv);
+  } finally {
+    dekBytes.fill(0);
+  }
 }
 
 /**

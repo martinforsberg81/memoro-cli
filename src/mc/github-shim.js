@@ -9,7 +9,9 @@ import { executeGitHubWriteCommand } from './github-write-client.js';
 export async function runGitHubShim(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
   const stderr = deps.stderr || process.stderr;
-  const parsed = parseGitHubShimArgs(argv);
+  const parsed = parseGitHubShimArgs(argv, {
+    allowUpdate: deps.allowUpdate === true,
+  });
   if (!parsed.ok) {
     stderr.write('mc github: this gh command is not available in a managed session. Use `mc github` instead.\n');
     return 2;
@@ -231,5 +233,9 @@ export function safeOperationError(code) {
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
-  process.exitCode = await runGitHubShim(process.argv.slice(2));
+  const managedMcMode = process.argv[2] === '--mc-session-shim';
+  process.exitCode = await runGitHubShim(
+    process.argv.slice(managedMcMode ? 3 : 2),
+    { allowUpdate: managedMcMode },
+  );
 }

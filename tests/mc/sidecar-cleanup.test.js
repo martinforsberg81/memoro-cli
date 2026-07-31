@@ -103,6 +103,36 @@ describe('runtime sidecar cleanup', () => {
     }
   });
 
+  test('an enumerable terminal row does not keep its pid-alive host live forever', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'mc-sidecars-dead-'));
+    try {
+      const hostDir = mkdir(join(root, 'hosts', 'sess_dead'));
+      writeFileSync(join(hostDir, 'broker.pid'), '123\n');
+
+      const scan = await scanRuntimeSidecars({
+        mcDir: root,
+        registry: {
+          entries: [{ name: 'kept', coding_session_id: 'sess_dead' }],
+        },
+        listSessions: async () => [{
+          id: 'sess_dead',
+          session_state: 'dead',
+          attachable: false,
+          exit: { code: 0 },
+        }],
+        isAlive: (pid) => pid === 123,
+        minAgeMs: 0,
+      });
+
+      assert.deepEqual(scan.candidates, []);
+      assert.equal(scan.zombie_hosts.length, 1);
+      assert.equal(scan.zombie_hosts[0].session_id, 'sess_dead');
+      assert.equal(scan.zombie_hosts[0].pid, 123);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test('reapZombieHosts terminates the process then removes the host dir', async () => {
     const root = mkdtempSync(join(tmpdir(), 'mc-sidecars-reap-'));
     try {

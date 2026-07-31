@@ -58,11 +58,20 @@ try {
   assertEqual(authJson?.policy?.effective_config?.defaultTool?.value, 'codex', 'effective defaultTool is codex');
   ok('auth status default policy');
 
-  const toolSwitch = run(mc, ['tool-switch', 'codex', '--dry-run', '--json'], { cwd: repo, env });
+  const toolSwitch = run(mc, ['tool-switch', 'codex', '--dry-run', '--json'], {
+    cwd: repo,
+    env,
+    allowFailure: true,
+  });
   const switchJson = parseJson(toolSwitch.stdout, 'mc tool-switch codex --dry-run --json');
-  assertEqual(switchJson?.ok, true, 'tool-switch dry-run succeeds');
+  assertEqual(switchJson?.ok, false, 'tool-switch fails closed without a managed artifact');
   assertEqual(switchJson?.tool, 'codex', 'tool-switch target is codex');
-  ok('tool-switch codex dry-run');
+  assertEqual(
+    switchJson?.reason,
+    'managed-codex-artifact-unavailable',
+    'tool-switch reports the missing fixed managed artifact',
+  );
+  ok('tool-switch codex managed boundary');
 
   const created = run(mc, ['new', 'smoke-codex', '--no-launch', '--json'], { cwd: repo, env });
   const newJson = parseJson(created.stdout, 'mc new smoke-codex --no-launch --json');

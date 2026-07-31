@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { PassThrough } from 'node:stream';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -6,6 +7,7 @@ import test, { describe } from 'node:test';
 
 import { __test__, parseArgs, runBrokerWith } from '../../../src/mc/commands/broker.js';
 import { BROKER_PROTOCOL_VERSION } from '../../../src/mc/broker/daemon.js';
+import { BROKER_RUNTIME_IDENTITY } from '../../../src/mc/broker/runtime-identity.js';
 import { spawnBrokerDaemon } from '../../../src/mc/broker/supervisor.js';
 
 function io() {
@@ -37,6 +39,7 @@ describe('mc broker parseArgs', () => {
       codingSessionId: null,
       runtimeGeneration: null,
       authorizationDigest: null,
+      controllerBootstrap: false,
       rawArgv: ['status', '--json'],
     });
   });
@@ -118,7 +121,15 @@ describe('mc broker command', () => {
     const streams = io();
     let spawned = false;
     const code = await runBrokerWith({ verb: 'start', json: true }, {
-      request: async () => ({ ok: true, broker: { pid: 9, uptime_ms: 10, protocol_version: BROKER_PROTOCOL_VERSION } }),
+      request: async () => ({
+        ok: true,
+        broker: {
+          pid: 9,
+          uptime_ms: 10,
+          protocol_version: BROKER_PROTOCOL_VERSION,
+          runtime_identity: BROKER_RUNTIME_IDENTITY,
+        },
+      }),
       spawnDaemon: () => { spawned = true; return { ok: true }; },
       runDaemon: () => assert.fail('must not daemon'),
       sleep: async () => {},
@@ -141,7 +152,15 @@ describe('mc broker command', () => {
       request: async () => {
         requests += 1;
         if (!spawned) throw new Error('not running');
-        return { ok: true, broker: { pid: 77, uptime_ms: 0, protocol_version: BROKER_PROTOCOL_VERSION } };
+        return {
+          ok: true,
+          broker: {
+            pid: 77,
+            uptime_ms: 0,
+            protocol_version: BROKER_PROTOCOL_VERSION,
+            runtime_identity: BROKER_RUNTIME_IDENTITY,
+          },
+        };
       },
       spawnDaemon: () => { spawned = true; return { ok: true, pid: 77 }; },
       runDaemon: () => assert.fail('must not daemon'),
@@ -180,6 +199,95 @@ describe('mc broker command', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  test('session controller bootstrap crosses only the anonymous daemon stdin pipe', () => {
+    const calls = [];
+    const dir = mkdtempSync(join(tmpdir(), 'mc-broker-bootstrap-'));
+    const stdin = new PassThrough();
+    let payload = '';
+    stdin.on('data', (chunk) => { payload += chunk.toString(); });
+    try {
+      const capability = 'b'.repeat(64);
+      const res = spawnBrokerDaemon({
+        controllerBinding: {
+          schema: 'mc-broker-controller-bootstrap-v1',
+          session_id: 'sess_bootstrap',
+          session_controller_capability: capability,
+        },
+        logPath: join(dir, 'broker.log'),
+        argv: ['/node', '/pkg/src/bin-mc.js'],
+        cwd: '/repo',
+        env: { PATH: '/bin' },
+        openSyncImpl: () => 99,
+        spawnImpl: (bin, args, opts) => {
+          calls.push({ bin, args, opts });
+          return {
+            pid: 123,
+            stdin,
+            unref() { calls.push({ unref: true }); },
+          };
+        },
+      });
+
+      assert.equal(res.ok, true);
+      assert.equal(calls[0].opts.stdio[0], 'pipe');
+      assert.equal(calls[0].args.includes('--controller-bootstrap'), true);
+      assert.doesNotMatch(JSON.stringify(calls[0]), new RegExp(capability));
+      assert.deepEqual(JSON.parse(payload), {
+        schema: 'mc-broker-controller-bootstrap-v1',
+        session_id: 'sess_bootstrap',
+        session_controller_capability: capability,
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('daemon bootstrap parser accepts only the strict bounded pipe payload', async () => {
+    const stream = new PassThrough();
+    const reading = __test__.readControllerBootstrap(stream);
+    stream.end(`${JSON.stringify({
+      schema: 'mc-broker-controller-bootstrap-v1',
+      session_id: 'sess_bootstrap',
+      session_controller_capability: 'b'.repeat(64),
+    })}\n`);
+
+    assert.deepEqual(await reading, {
+      schema: 'mc-broker-controller-bootstrap-v1',
+      session_id: 'sess_bootstrap',
+      session_controller_capability: 'b'.repeat(64),
+    });
+  });
+
+  test('daemon mode passes the pipe-bound controller only to the runtime bootstrap', async () => {
+    const streams = io();
+    const stdin = new PassThrough();
+    let daemonOptions = null;
+    const running = runBrokerWith({
+      verb: 'daemon',
+      daemon: true,
+      controllerBootstrap: true,
+    }, {
+      stdin,
+      stdout: streams.stdout,
+      stderr: streams.stderr,
+      runDaemon: async (options) => { daemonOptions = options; },
+    });
+    stdin.end(`${JSON.stringify({
+      schema: 'mc-broker-controller-bootstrap-v1',
+      session_id: 'sess_bootstrap',
+      session_controller_capability: 'b'.repeat(64),
+    })}\n`);
+
+    assert.equal(await running, 0);
+    assert.deepEqual(daemonOptions.controllerBinding, {
+      schema: 'mc-broker-controller-bootstrap-v1',
+      session_id: 'sess_bootstrap',
+      session_controller_capability: 'b'.repeat(64),
+    });
+    assert.equal(streams.out(), '');
+    assert.equal(streams.err(), '');
   });
 
   test('stop sends the stop command', async () => {

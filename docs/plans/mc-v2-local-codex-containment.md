@@ -1,8 +1,9 @@
 # Local Codex managed credential containment
 
-**Status:** implemented candidate for the local Codex S2 slice; the real
-two-generation containment harness passes on macOS with Codex 0.145.0. This is
-not the complete S2 local golden path.
+**Status:** superseded as a general executor-permission contract. Its credential
+custody and provider-isolation work remains applicable, but its broad command,
+filesystem, network, and tool restrictions are replaced by
+[`mc-credential-scope.md`](mc-credential-scope.md).
 
 ## Compatibility contract
 

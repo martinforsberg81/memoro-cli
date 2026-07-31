@@ -11,7 +11,14 @@ import {
   registerGitHubSessionProjection,
 } from '../../../src/mc/broker/launch-client.js';
 import { BROKER_PROTOCOL_VERSION } from '../../../src/mc/broker/daemon.js';
+import { BROKER_RUNTIME_IDENTITY } from '../../../src/mc/broker/runtime-identity.js';
 import { LOCAL_AUTH_MODES } from '../../../src/mc/local-auth-mode.js';
+import {
+  deriveHandoffControllerRoot,
+} from '../../../src/mc/handoff-controller-capability.js';
+import {
+  buildManagedGenerationIntent,
+} from '../../../src/mc/managed-generation-journal.js';
 
 function makeStreams() {
   let out = '';
@@ -57,10 +64,35 @@ const SESSION_CAPABILITIES = Object.freeze({
   },
 });
 
+describe('brokerLaunchFailureReason', () => {
+  test('prefers the stable broker reason over generic adapter error text', () => {
+    assert.equal(
+      launchClientTest.brokerLaunchFailureReason({
+        ok: false,
+        reason: 'managed-provider-version-unsupported',
+        error: 'managed Codex provider boundary is unavailable',
+      }),
+      'managed-provider-version-unsupported',
+    );
+  });
+
+  test('does not render arbitrary broker error text', () => {
+    assert.equal(
+      launchClientTest.brokerLaunchFailureReason({
+        ok: false,
+        error: 'failed while reading /private/path/with user data',
+      }),
+      'broker-launch-failed',
+    );
+  });
+});
+
 function launchBrokerOwnedSession(options) {
   return launchBrokerOwnedSessionImpl({
     ...options,
     deps: {
+      installClaudeArtifactHooks: async () => {},
+      installCodexArtifactHooks: async () => {},
       fetchGitHubSessionBootstrap: async () => ({
         capabilities: SESSION_CAPABILITIES,
         source: { id: 'local:device:test', kind: 'local' },
@@ -102,6 +134,7 @@ function launchCodexWithMocks({
   streams,
   sleepFn = async () => {},
   randomUUID,
+  ambiguousBrokerReconcileDelaysMs,
 }) {
   return launchBrokerOwnedSession({
     cwd: '/repo',
@@ -133,6 +166,9 @@ function launchCodexWithMocks({
       prepareCloudflareGuardEnv: ({ baseEnv }) => ({ env: baseEnv }),
       sleep: sleepFn,
       ...(randomUUID ? { randomUUID } : {}),
+      ...(ambiguousBrokerReconcileDelaysMs
+        ? { ambiguousBrokerReconcileDelaysMs }
+        : {}),
     },
   });
 }
@@ -156,6 +192,7 @@ describe('launchBrokerOwnedSession', () => {
       request: fail('broker request'),
       attach: fail('PTY attach'),
       deps: {
+        managedProviderAdapterForTool: () => null,
         getRepoContext: fail('repo'),
         readConfig: fail('config'),
         resolveBootstrapIdentity: fail('device identity'),
@@ -165,22 +202,85 @@ describe('launchBrokerOwnedSession', () => {
     });
 
     assert.equal(result.code, 1);
-    assert.equal(result.reason, 'managed-portable-tool-unsupported');
-    assert.match(streams.err(), /supports Codex only/);
+    assert.equal(result.reason, 'managed-provider-tool-unsupported');
+    assert.match(streams.err(), /no managed provider adapter is installed/);
     assert.doesNotMatch(streams.err(), /memoro-token-canary/);
     assert.equal(streams.out(), '');
   });
 
-  test('managed Codex launch sends only the verified descriptor and allowlisted provider env', async () => {
+  test('managed providers never install host-global Claude hooks', async () => {
+    const streams = makeStreams();
+    let hookCalls = 0;
+    const result = await launchBrokerOwnedSession({
+      cwd: '/repo',
+      tool: 'claude',
+      localAuthMode: LOCAL_AUTH_MODES.MANAGED_PORTABLE,
+      stdout: streams.stdout,
+      stderr: streams.stderr,
+      env: { TERM: 'xterm-256color' },
+      deps: {
+        managedProviderAdapterForTool: () => ({
+          schema: 'mc-managed-provider-adapter/v2',
+          tool_id: 'claude-code',
+          provider_adapter_id: 'claude-managed-local-v1',
+        }),
+        getRepoContext: async () => ({
+          remoteUrl: 'git@example.com:org/repo.git',
+          branch: 'main',
+          toplevel: '/repo',
+        }),
+        installClaudeArtifactHooks: async () => {
+          hookCalls += 1;
+          throw new Error('host-global hook must not be touched');
+        },
+        readConfig: async () => ({ apiUrl: 'https://memoro.test' }),
+        getApiUrl: () => null,
+        resolveBootstrapIdentity: async () => null,
+      },
+    });
+
+    assert.equal(result.code, 1);
+    assert.equal(hookCalls, 0);
+    assert.match(streams.err(), /no Memoro token/);
+    assert.doesNotMatch(streams.err(), /provider artifact hook/);
+  });
+
+  test('managed handoff rejects a transaction bound to native custody before launch', async () => {
+    const streams = makeStreams();
+    const result = await launchBrokerOwnedSession({
+      cwd: '/repo',
+      tool: 'codex',
+      localAuthMode: LOCAL_AUTH_MODES.MANAGED_PORTABLE,
+      handoffUserMessage: 'bounded handoff',
+      handoffTransaction: {
+        transaction_id: '73a85b7e-2ce4-4db0-8b38-16ba08de03bf',
+        controller_capability: 'c'.repeat(64),
+        target_custody: 'native',
+      },
+      stdout: streams.stdout,
+      stderr: streams.stderr,
+    });
+
+    assert.equal(result.code, 1);
+    assert.equal(result.reason, 'handoff-launch-pair-invalid');
+    assert.match(streams.err(), /requires one bound message and transaction/u);
+  });
+
+  test('managed Codex launch carries a token-free GitHub capability without broker credentials', async () => {
     const streams = makeStreams();
     const requests = [];
     const descriptor = {
       schema: 'mc-local-codex-credential-domain/v1',
       provider_adapter: 'codex-managed-local-v1',
+      generation: '687c338a-1ed4-4c20-9828-1f9a39d37067',
       domain_path: '/credential/domain',
       codex_home: '/credential/domain/home/.codex',
       executor_root: '/executor/domain',
+      manifest_sha256: 'a'.repeat(64),
     };
+    const managedReceipts = [];
+    const managedOrder = [];
+    let preparedGeneration = null;
     const forbidden = (surface) => () => assert.fail(`managed launch must not call ${surface}`);
     const result = await launchBrokerOwnedSession({
       cwd: '/repo',
@@ -188,6 +288,11 @@ describe('launchBrokerOwnedSession', () => {
       tool: 'codex',
       localAuthMode: LOCAL_AUTH_MODES.MANAGED_PORTABLE,
       attachAfterLaunch: false,
+      cloudBroker: {
+        sourceId: 'cloud:managed-test',
+        sourceKind: 'cloud',
+        cloudSessionId: 'cloud-managed-test',
+      },
       stdout: streams.stdout,
       stderr: streams.stderr,
       env: {
@@ -197,7 +302,7 @@ describe('launchBrokerOwnedSession', () => {
         OPENAI_API_KEY: 'openai-key-canary',
         MC_VAULT_PASSPHRASE: 'vault-passphrase-canary',
       },
-      request: async (message) => {
+      request: async (message, options) => {
         requests.push(message);
         return {
           ok: true,
@@ -215,22 +320,30 @@ describe('launchBrokerOwnedSession', () => {
         }),
         readConfig: async () => ({ apiUrl: 'https://memoro.test' }),
         getApiUrl: () => null,
-        findEntry: () => ({}),
+        findEntry: () => ({
+          tool_session_id: 'claude-source-native-id',
+          tool_transcript_path: '/private/claude-source-transcript.jsonl',
+        }),
         resolvePolicyForWrap: () => ({ permissions: { workspace: 'full' } }),
         hostname: () => 'machine',
         groundSession: async ({ sessionCapabilities }) => {
-          assert.equal(sessionCapabilities.github.state, 'unavailable');
+          assert.equal(sessionCapabilities.github.state, 'ready');
           return { ok: true, message: 'safe grounding' };
         },
-        fetchGitHubSessionBootstrap: forbidden('GitHub bootstrap'),
-        registerGitHubSessionProjection: forbidden('GitHub registration'),
-        prepareGitHubSessionForLaunch: forbidden('GitHub child boundary'),
         resolveDevPlan: forbidden('repo dev environment'),
+        prepareCloudCodexAuth: forbidden('native cloud Codex auth'),
         prepareLocalResourceGuardEnv: forbidden('native local guard'),
         prepareCloudflareGuardEnv: forbidden('native Cloudflare guard'),
         prepareDevCommandGuardEnv: forbidden('native dev guard'),
-        prepareLocalCodexCredentialDomain: async ({ portal }) => {
+        prepareManagedCredentialDomain: async ({
+          portal,
+          domainGeneration,
+          githubCapability,
+        }) => {
+          managedOrder.push('prepare-domain');
           assert.equal(portal.token, 'memoro-token-canary');
+          assert.equal(githubCapability, true);
+          preparedGeneration = domainGeneration;
           return {
             ok: true,
             descriptor,
@@ -243,6 +356,22 @@ describe('launchBrokerOwnedSession', () => {
             },
           };
         },
+        beginManagedGeneration: (input) => {
+          managedOrder.push('claim-intent');
+          return {
+            ok: true,
+            intent: buildManagedGenerationIntent({
+              ...input,
+              sequence: 1,
+              tool: 'codex',
+            }),
+          };
+        },
+        appendManagedGenerationReceipt: (input) => {
+          managedOrder.push(input.phase);
+          managedReceipts.push(input);
+          return { ok: true };
+        },
         getPackageVersion: async () => '0.test',
       },
     });
@@ -251,9 +380,39 @@ describe('launchBrokerOwnedSession', () => {
     assert.equal(requests.length, 1);
     const session = requests[0].session;
     assert.deepEqual(session.credential_domain, descriptor);
+    assert.equal(session.managed_transaction.coding_session_id, 'sess_managed_launch');
+    assert.equal(session.managed_transaction.runtime_generation, session.runtime_generation);
+    assert.equal(preparedGeneration, session.runtime_generation);
+    assert.equal(session.managed_transaction.intent_digest.length, 64);
+    assert.deepEqual(managedReceipts.map((receipt) => receipt.phase), ['domain-ready']);
+    assert.deepEqual(managedOrder, [
+      'claim-intent',
+      'prepare-domain',
+      'domain-ready',
+    ]);
     assert.equal(session.launch_options.effectivePolicy, null);
-    assert.deepEqual(session.sidecars, { enabled: false });
+    assert.equal(session.sidecars.enabled, true);
+    assert.equal(session.sidecars.codingSessionId, 'sess_managed_launch');
+    assert.equal(session.sidecars.runtimeGeneration, session.runtime_generation);
+    assert.equal(session.sidecars.heartbeat, true);
+    assert.equal(session.sidecars.presenceIdentity, 'broker-local');
+    assert.equal(session.sidecars.machineId, 'machine');
+    assert.equal(session.sidecars.source_id, 'local:device:test');
+    assert.equal(session.sidecars.source_kind, 'local');
+    assert.equal(session.sidecars.repo, 'widgets');
+    assert.equal(session.sidecars.repoRef, 'acme/widgets');
+    assert.equal(session.sidecars.branch, 'main');
+    assert.equal(session.sidecars.upload, false);
+    assert.equal(session.sidecars.transcriptAccess, false);
+    assert.deepEqual(session.sidecars.githubCapabilities, SESSION_CAPABILITIES);
+    assert.equal(session.sidecars.apiUrl, undefined);
+    assert.equal(session.sidecars.token, undefined);
     assert.equal(session.env.CODEX_HOME, '/credential/domain/home/.codex');
+    assert.deepEqual(
+      JSON.parse(session.env.MC_SESSION_CAPABILITIES),
+      SESSION_CAPABILITIES,
+    );
+    assert.match(session.env.MC_GITHUB_BROKER_SOCKET, /sess_managed_launch\.sock$/);
     assert.equal(session.env.MEMORO_TOKEN, undefined);
     assert.equal(session.env.OPENAI_API_KEY, undefined);
     assert.equal(session.env.MC_VAULT_PASSPHRASE, undefined);
@@ -263,6 +422,56 @@ describe('launchBrokerOwnedSession', () => {
       brokerRequest,
       /memoro-token-canary|openai-key-canary|vault-passphrase-canary/,
     );
+  });
+
+  test('managed launch cleanup is allowed only before durable broker acceptance', () => {
+    const intent = buildManagedGenerationIntent({
+      sequence: 1,
+      codingSessionId: 'sess_managed_reject',
+      runtimeGeneration: RUNTIME_GENERATION,
+      mode: 'fresh',
+      tool: 'codex',
+      recordedAt: '2026-07-29T12:00:00.000Z',
+    });
+    const descriptor = { generation: NEXT_RUNTIME_GENERATION };
+    const aborts = [];
+    const receipts = [];
+    const run = (phase) => launchClientTest.abortUnacceptedManagedLaunch({
+      codingSessionId: intent.coding_session_id,
+      runtimeGeneration: intent.runtime_generation,
+      managedIntent: intent,
+      descriptor,
+      failureReason: 'managed-provider-hook-mismatch',
+      now: () => Date.parse('2026-07-29T12:00:01.000Z'),
+      deps: {
+        inspectManagedGeneration: () => ({ kind: 'present', phase }),
+        abortManagedCredentialDomain: (input) => {
+          aborts.push(input);
+          return { ok: true };
+        },
+        appendManagedGenerationReceipt: (input) => {
+          receipts.push(input);
+          return { ok: true };
+        },
+      },
+    });
+
+    assert.deepEqual(run('broker-accepted'), {
+      ok: false,
+      reason: 'managed-generation-may-have-launched',
+    });
+    assert.deepEqual(aborts, []);
+    assert.deepEqual(receipts, []);
+
+    assert.deepEqual(run('domain-ready'), { ok: true });
+    assert.deepEqual(aborts, [{ descriptor }]);
+    assert.equal(receipts.length, 1);
+    assert.equal(receipts[0].phase, 'aborted');
+    assert.equal(receipts[0].intentDigest, intent.intent_digest);
+    assert.deepEqual(receipts[0].data, {
+      reason: 'launch-not-accepted',
+      failure_reason: 'managed-provider-hook-mismatch',
+    });
   });
 
   test('classifies only the exact early Codex SQLite startup failure', () => {
@@ -301,7 +510,7 @@ describe('launchBrokerOwnedSession', () => {
     const generations = [RUNTIME_GENERATION, NEXT_RUNTIME_GENERATION];
     const res = await launchCodexWithMocks({
       streams,
-      request: async (message) => {
+      request: async (message, options) => {
         requestTypes.push(message.type);
         if (message.type === 'launch_session') {
           launchGenerations.push(message.session.runtime_generation);
@@ -325,7 +534,11 @@ describe('launchBrokerOwnedSession', () => {
           }
           return { ok: true, session: earlyCodexExit(), output: CODEX_SQLITE_LOCK_OUTPUT };
         }
-        if (message.type === 'remove_session') return { ok: true, removed: true };
+        if (message.type === 'remove_session') {
+          assert.equal(message.expected_runtime_generation, RUNTIME_GENERATION);
+          assert.deepEqual(options, { timeoutMs: 20_000 });
+          return { ok: true, removed: true };
+        }
         assert.fail(`unexpected broker request: ${message.type}`);
       },
       attach: async () => attachCodes.shift(),
@@ -344,6 +557,68 @@ describe('launchBrokerOwnedSession', () => {
     assert.deepEqual(launchGenerations, [RUNTIME_GENERATION, NEXT_RUNTIME_GENERATION]);
     assert.deepEqual(sleeps, [CODEX_SQLITE_RETRY_DELAYS_MS[0]]);
     assert.match(streams.err(), /retrying startup in 2s \(1\/2\)/);
+  });
+
+  test('reconciles an accepted SQLite cleanup after its response is lost', async () => {
+    const streams = makeStreams();
+    const generations = [RUNTIME_GENERATION, NEXT_RUNTIME_GENERATION];
+    const attachCodes = [1, 0];
+    const requestTypes = [];
+    let launches = 0;
+    let outputFetches = 0;
+    const res = await launchCodexWithMocks({
+      streams,
+      randomUUID: () => generations.shift(),
+      attach: async () => attachCodes.shift(),
+      request: async (message, options) => {
+        requestTypes.push(message.type);
+        if (message.type === 'launch_session') {
+          launches += 1;
+          return {
+            ok: true,
+            session: {
+              id: 'sess_retry',
+              runtime_generation: message.session.runtime_generation,
+            },
+          };
+        }
+        if (message.type === 'fetch_session_output') {
+          outputFetches += 1;
+          return outputFetches === 1
+            ? { ok: true, session: earlyCodexExit(), output: CODEX_SQLITE_LOCK_OUTPUT }
+            : {
+                ok: true,
+                session: { ...earlyCodexExit(), exit: { ...earlyCodexExit().exit, code: 0 } },
+                output: 'Goodbye.',
+              };
+        }
+        if (message.type === 'remove_session') {
+          assert.equal(message.expected_runtime_generation, RUNTIME_GENERATION);
+          assert.deepEqual(options, { timeoutMs: 20_000 });
+          throw new Error('broker response lost after accepted cleanup');
+        }
+        if (message.type === 'session_status') {
+          return {
+            ok: false,
+            reason: 'session-not-found',
+            error: 'unknown broker session: sess_retry',
+          };
+        }
+        assert.fail(`unexpected broker request: ${message.type}`);
+      },
+    });
+
+    assert.equal(res.code, 0, streams.err());
+    assert.equal(launches, 2);
+    assert.deepEqual(requestTypes, [
+      'launch_session',
+      'fetch_session_output',
+      'remove_session',
+      'session_status',
+      'launch_session',
+      'fetch_session_output',
+    ]);
+    assert.doesNotMatch(streams.err(), /could not confirm removal/);
   });
 
   test('reconciles an accepted SQLite retry launch before attaching', async () => {
@@ -462,8 +737,10 @@ describe('launchBrokerOwnedSession', () => {
   test('routes new launches through a per-session host broker when enabled', async () => {
     const requests = [];
     const stderr = makeStreams().stderr;
+    const sessionControllerCapability = 'c'.repeat(64);
     const res = await launchClientTest.resolveLaunchBroker({
       codingSessionId: 'sess_hosted',
+      sessionControllerCapability,
       request: async (message, options) => {
         requests.push({ message, options });
         return { ok: true };
@@ -473,8 +750,13 @@ describe('launchBrokerOwnedSession', () => {
       stderr,
       deps: {
         useSessionHost: true,
-        ensureSessionHost: async ({ sessionId }) => {
+        ensureSessionHost: async ({ sessionId, controllerBinding }) => {
           assert.equal(sessionId, 'sess_hosted');
+          assert.deepEqual(controllerBinding, {
+            schema: 'mc-broker-controller-bootstrap-v1',
+            session_id: 'sess_hosted',
+            session_controller_capability: sessionControllerCapability,
+          });
           return {
             ok: true,
             socketPath: '/tmp/mc-hosted.sock',
@@ -596,7 +878,13 @@ describe('launchBrokerOwnedSession', () => {
     assert.equal(res.code, 0);
     assert.equal(res.codingSessionId, 'sess_abc');
     assert.deepEqual(sequence, ['ensureBroker', 'registerGitHub', 'request', 'ensureCloudBroker', 'onLaunched', 'attach']);
-    assert.deepEqual(attached, { id: 'sess_abc' });
+    assert.deepEqual(attached, {
+      id: 'sess_abc',
+      controllerCapability: deriveHandoffControllerRoot({
+        token: 'tok',
+        codingSessionId: 'sess_abc',
+      }),
+    });
     assert.equal(launched.codingSessionId, 'sess_abc');
 
     const msg = requests[0];
@@ -690,7 +978,7 @@ describe('launchBrokerOwnedSession', () => {
     assert.equal(res.code, 0, streams.err());
     assert.equal(groundedState, 'ready');
     assert.equal(launchedCapabilities.github.state, 'ready');
-    assert.match(streams.err(), /GitHub session registration failed/);
+    assert.match(streams.err(), /session starting presence registration failed; broker will retry/);
   });
 
   test('registers a runtime-starting heartbeat without placing authority or credentials in its body', async () => {
@@ -828,7 +1116,10 @@ describe('launchBrokerOwnedSession', () => {
       request: async (message) => {
         requestCount += 1;
         if (message.type === 'launch_session') throw new Error('broker request timed out after 1000ms');
-        assert.deepEqual(message, { type: 'session_status', id: 'sess_transport_live' });
+        assert.deepEqual(message, {
+          type: 'session_status',
+          id: 'sess_transport_live',
+        });
         return {
           ok: true,
           session: {
@@ -851,7 +1142,7 @@ describe('launchBrokerOwnedSession', () => {
         randomUUID: () => RUNTIME_GENERATION,
         registerGitHubSessionProjection: async () => true,
         postHeartbeat: async (options) => { terminalCalls.push(options); return true; },
-        abortLocalCodexCredentialDomain: (input) => abortCalls.push(input),
+        abortManagedCredentialDomain: (input) => abortCalls.push(input),
         prepareLocalResourceGuardEnv: ({ baseEnv }) => ({ env: baseEnv }),
         readRepoPolicyConfig: () => ({ config: {}, warnings: [] }),
         readRepoLocalConfig: () => ({ config: {}, warnings: [] }),
@@ -869,7 +1160,79 @@ describe('launchBrokerOwnedSession', () => {
     assert.doesNotMatch(streams.err(), /outcome is unknown|broker launch failed/);
   });
 
-  test('fails closed without terminalizing when an ambiguous launch cannot be reconciled', async () => {
+  test('waits through transient absence before recovering the exact accepted launch', async () => {
+    const streams = makeStreams();
+    const terminalCalls = [];
+    const sleeps = [];
+    const requestTypes = [];
+    let statusReads = 0;
+    const result = await launchBrokerOwnedSession({
+      cwd: '/repo',
+      codingSessionId: 'sess_transport_delayed',
+      tool: 'codex',
+      attachAfterLaunch: false,
+      stdout: streams.stdout,
+      stderr: streams.stderr,
+      env: { TERM: 'xterm-256color', PATH: '/bin' },
+      request: async (message) => {
+        requestTypes.push(message.type);
+        if (message.type === 'launch_session') {
+          throw new Error('broker request timed out after 10000ms');
+        }
+        statusReads += 1;
+        if (statusReads === 1) {
+          return { ok: false, reason: 'session-not-found' };
+        }
+        if (statusReads === 2) {
+          throw new Error('broker status temporarily unavailable');
+        }
+        return {
+          ok: true,
+          session: {
+            id: 'sess_transport_delayed',
+            runtime_generation: RUNTIME_GENERATION,
+            session_state: 'live',
+            attachable: true,
+          },
+        };
+      },
+      ensureBroker: async () => ({ ok: true, broker: { pid: 42 } }),
+      ensureCloudBroker: async () => ({ ok: true }),
+      deps: {
+        useSessionHost: false,
+        getRepoContext: async () => ({ remoteUrl: 'https://github.com/acme/widgets.git', branch: 'main', toplevel: '/repo' }),
+        readConfig: async () => ({ apiUrl: 'https://memoro.test' }),
+        getApiUrl: () => null,
+        getSecret: async () => 'memoro-secret-sentinel',
+        hostname: () => 'machine',
+        randomUUID: () => RUNTIME_GENERATION,
+        registerGitHubSessionProjection: async () => true,
+        postHeartbeat: async (options) => { terminalCalls.push(options); return true; },
+        ambiguousBrokerReconcileDelaysMs: [0, 25, 75],
+        sleep: async (delayMs) => { sleeps.push(delayMs); },
+        prepareLocalResourceGuardEnv: ({ baseEnv }) => ({ env: baseEnv }),
+        readRepoPolicyConfig: () => ({ config: {}, warnings: [] }),
+        readRepoLocalConfig: () => ({ config: {}, warnings: [] }),
+        resolveEffectiveConfig: ({ globalConfig }) => globalConfig,
+        prepareCloudflareGuardEnv: ({ baseEnv }) => ({ env: baseEnv }),
+        prepareDevCommandGuardEnv: ({ baseEnv }) => ({ env: baseEnv }),
+        getPackageVersion: async () => '0.test',
+      },
+    });
+
+    assert.equal(result.code, 0, streams.err());
+    assert.deepEqual(requestTypes, [
+      'launch_session',
+      'session_status',
+      'session_status',
+      'session_status',
+    ]);
+    assert.deepEqual(sleeps, [25, 75]);
+    assert.deepEqual(terminalCalls, []);
+    assert.doesNotMatch(streams.err(), /outcome is unknown|broker launch failed/);
+  });
+
+  test('fails closed without terminalizing when an ambiguous launch remains absent', async () => {
     const streams = makeStreams();
     const terminalCalls = [];
     let registrations = 0;
@@ -882,9 +1245,13 @@ describe('launchBrokerOwnedSession', () => {
       stdout: streams.stdout,
       stderr: streams.stderr,
       env: { TERM: 'xterm-256color', PATH: '/bin' },
-      request: async () => {
+      request: async (message) => {
         requestCount += 1;
-        throw new Error('broker transport unavailable');
+        if (message.type === 'launch_session') {
+          throw new Error('broker transport unavailable');
+        }
+        assert.equal(message.type, 'session_status');
+        return { ok: false, reason: 'session-not-found' };
       },
       ensureBroker: async () => ({ ok: true, broker: { pid: 42 } }),
       ensureCloudBroker: async () => ({ ok: true }),
@@ -914,6 +1281,7 @@ describe('launchBrokerOwnedSession', () => {
         resolveEffectiveConfig: ({ globalConfig }) => globalConfig,
         prepareCloudflareGuardEnv: ({ baseEnv }) => ({ env: baseEnv }),
         prepareDevCommandGuardEnv: ({ baseEnv }) => ({ env: baseEnv }),
+        ambiguousBrokerReconcileDelaysMs: [0],
         getPackageVersion: async () => '0.test',
       },
     });
@@ -1165,15 +1533,29 @@ describe('launchBrokerOwnedSession', () => {
       now: () => 10_000,
       ensureBroker: async () => ({ ok: true, broker: { pid: 42 } }),
       ensureCloudBroker: async () => ({ ok: true }),
-      request: async (message) => ({
-        ok: true,
-        reused: true,
-        session: {
-          id: message.session.id,
-          runtime_generation: 'd5e6439f-54e2-493b-a10f-5e5e014a2904',
-          cwd: message.session.cwd,
-        },
-      }),
+      request: async (message) => {
+        if (message.type === 'launch_session') {
+          return {
+            ok: true,
+            reused: true,
+            session: {
+              id: message.session.id,
+              runtime_generation: 'd5e6439f-54e2-493b-a10f-5e5e014a2904',
+              cwd: message.session.cwd,
+            },
+          };
+        }
+        assert.equal(message.type, 'session_status');
+        return {
+          ok: true,
+          session: {
+            id: 'sess_new',
+            runtime_generation: 'd5e6439f-54e2-493b-a10f-5e5e014a2904',
+            session_state: 'live',
+            attachable: true,
+          },
+        };
+      },
       attach: async (opts) => {
         attached = opts;
         return 0;
@@ -1329,6 +1711,91 @@ describe('launchBrokerOwnedSession', () => {
     assert.equal(session.env.COLORTERM, 'truecolor');
   });
 
+  test('routes Claude handoff as one acknowledged user turn, never a system-prompt argument', async () => {
+    const streams = makeStreams();
+    const requests = [];
+    const transactionId = '73a85b7e-2ce4-4db0-8b38-16ba08de03bf';
+    const controllerCapability = 'c'.repeat(64);
+    const result = await launchBrokerOwnedSession({
+      cwd: '/repo',
+      codingSessionId: 'sess_claude_handoff',
+      sessionName: 'claude-handoff',
+      tool: 'claude',
+      handoffUserMessage: 'bounded handoff',
+      handoffTransaction: {
+        transaction_id: transactionId,
+        controller_capability: controllerCapability,
+      },
+      attachAfterLaunch: false,
+      stdout: streams.stdout,
+      stderr: streams.stderr,
+      env: { TERM: 'xterm-256color', MEMORO_TOKEN: 'tok' },
+      ensureBroker: async () => ({ ok: true, broker: { pid: 42 } }),
+      ensureCloudBroker: async () => ({ ok: true }),
+      request: async (message, options) => {
+        requests.push({ message, options });
+        return {
+          ok: true,
+          handoff_delivery: 'confirmed',
+          session: {
+            id: message.session.id,
+            runtime_generation: message.session.runtime_generation,
+          },
+        };
+      },
+      deps: {
+        useSessionHost: false,
+        getRepoContext: async () => ({
+          remoteUrl: 'git@example.com:org/repo.git',
+          branch: 'main',
+          toplevel: '/repo',
+        }),
+        readConfig: async () => ({ apiUrl: 'https://memoro.test' }),
+        getApiUrl: () => null,
+        getSecret: async () => assert.fail('env token should avoid keychain lookup'),
+        findEntry: () => ({}),
+        resolvePolicyForWrap: () => ({}),
+        hostname: () => 'machine',
+        getPackageVersion: async () => '0.test',
+        groundSession: async () => assert.fail('switch must not fetch ordinary transcript grounding'),
+        ensureCoordinatorSlashCommand: async () => {},
+        installUpdateCommand: async () => {},
+        prepareLocalResourceGuardEnv: ({ baseEnv }) => ({ env: baseEnv }),
+        prepareDevCommandGuardEnv: ({ baseEnv }) => ({ env: baseEnv }),
+      },
+    });
+
+    assert.equal(result.code, 0);
+    const launch = requests[0];
+    assert.equal(launch.message.type, 'launch_session');
+    assert.equal(launch.message.session.launch_options.startupMessage, null);
+    assert.equal(
+      launch.message.session.launch_options.handoffUserMessage,
+      'bounded handoff',
+    );
+    assert.deepEqual(launch.message.session.handoff_transaction, {
+      transaction_id: transactionId,
+      controller_capability: controllerCapability,
+    });
+    assert.equal(launch.message.session.sidecars.toolSessionId, null);
+    assert.equal(launch.message.session.sidecars.transcriptPath, null);
+    assert.equal(launch.message.session.sidecars.transcriptAccess, false);
+    assert.equal(launch.message.session.sidecars.upload, false);
+    assert.doesNotMatch(
+      JSON.stringify(launch.message.session.sidecars),
+      /claude-source-native-id|claude-source-transcript/,
+    );
+    assert.equal(launch.options.timeoutMs, 60_000);
+    assert.doesNotMatch(
+      JSON.stringify(launch.message.session.argv),
+      /bounded handoff|append-system-prompt/,
+    );
+    assert.doesNotMatch(
+      JSON.stringify(launch.message.session.env),
+      new RegExp(controllerCapability),
+    );
+  });
+
   test('continues local launch when cloud bridge auto-start fails', async () => {
     const streams = makeStreams();
     const res = await launchBrokerOwnedSession({
@@ -1439,7 +1906,14 @@ describe('ensureBrokerRunning', () => {
   test('returns immediately when broker already responds', async () => {
     let spawned = false;
     const res = await ensureBrokerRunning({
-      request: async () => ({ ok: true, broker: { pid: 1, protocol_version: BROKER_PROTOCOL_VERSION } }),
+      request: async () => ({
+        ok: true,
+        broker: {
+          pid: 1,
+          protocol_version: BROKER_PROTOCOL_VERSION,
+          runtime_identity: BROKER_RUNTIME_IDENTITY,
+        },
+      }),
       spawnDaemon: () => { spawned = true; return { ok: true }; },
     });
 
@@ -1490,6 +1964,32 @@ describe('ensureBrokerRunning', () => {
     assert.match(res.error, /previous mc version/);
   });
 
+  test('does not reuse a same-protocol broker with a different runtime closure', async () => {
+    let spawned = false;
+    const res = await ensureBrokerRunning({
+      request: async () => ({
+        ok: true,
+        broker: {
+          pid: 1,
+          protocol_version: BROKER_PROTOCOL_VERSION,
+          runtime_identity: 'mc-broker-runtime-identity-v1:'.concat('0'.repeat(64)),
+        },
+        sessions: [{
+          id: 'sess_stale_runtime',
+          session_state: 'live',
+          cwd: '/repo',
+          tool: 'codex',
+        }],
+      }),
+      spawnDaemon: () => { spawned = true; return { ok: true }; },
+    });
+
+    assert.equal(res.ok, false);
+    assert.equal(res.reason, 'broker-protocol-incompatible-live');
+    assert.equal(res.compatibility_reason, 'runtime_identity_mismatch');
+    assert.equal(spawned, false);
+  });
+
   test('restarts a stale broker when no live sessions are present', async () => {
     const seen = [];
     let spawned = false;
@@ -1497,7 +1997,14 @@ describe('ensureBrokerRunning', () => {
       { ok: true, broker: { pid: 1 }, sessions: [] },
       { ok: true, stopping: true },
       null,
-      { ok: true, broker: { pid: 2, protocol_version: BROKER_PROTOCOL_VERSION } },
+      {
+        ok: true,
+        broker: {
+          pid: 2,
+          protocol_version: BROKER_PROTOCOL_VERSION,
+          runtime_identity: BROKER_RUNTIME_IDENTITY,
+        },
+      },
     ];
     const res = await ensureBrokerRunning({
       request: async (msg) => {
@@ -1526,7 +2033,14 @@ describe('ensureBrokerRunning', () => {
       request: async () => {
         requests += 1;
         if (!spawned) throw new Error('offline');
-        return { ok: true, broker: { pid: 2, protocol_version: BROKER_PROTOCOL_VERSION } };
+        return {
+          ok: true,
+          broker: {
+            pid: 2,
+            protocol_version: BROKER_PROTOCOL_VERSION,
+            runtime_identity: BROKER_RUNTIME_IDENTITY,
+          },
+        };
       },
       spawnDaemon: () => {
         spawned = true;
