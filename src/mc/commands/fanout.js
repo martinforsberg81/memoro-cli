@@ -1,9 +1,10 @@
 /**
- * `mc fanout <plan.md> [--from main] [--tool codex] [--dry-run] [--json]`.
+ * `mc fanout <plan.md> [--from <ref>] [--tool codex] [--dry-run] [--json]`.
  *
  * Parses a plan file's `## Phase N: <title>` headings and spawns one
  * idle session per phase. Each session lands in its own worktree on
- * a `fan/<plan-slug>/phase-N` branch rooted at --from (default main),
+ * a `fan/<plan-slug>/phase-N` branch rooted at --from (default repository
+ * branch),
  * with a brief assembled from the plan intro + phase body written to
  * `<worktree>/.mc/brief.md` for the agent to read.
  *
@@ -44,6 +45,7 @@ import {
   isInsideRepo,
   primaryWorktree,
   branchExists,
+  resolveDefaultBranch,
 } from '../git.js';
 import { readEffectiveConfigForNew, resolveToolForNew, TOOL_SUGAR } from './new.js';
 
@@ -58,6 +60,7 @@ export function defaultGit() {
     isInsideRepo,
     primaryWorktree,
     branchExists,
+    resolveDefaultBranch,
     createBranch(repoDir, branch, fromRef) {
       gitShell(repoDir, ['branch', branch, fromRef]);
     },
@@ -148,9 +151,19 @@ export async function runWithDeps(opts, { git, fs, cwd }) {
     return emitError(opts, toolResolution.error);
   }
 
+  const defaultBranch = opts.from ? null : git.resolveDefaultBranch(primary);
+  if (!opts.from && !defaultBranch?.ok) {
+    return emitError(
+      opts,
+      `default branch is unknown (${defaultBranch?.reason || 'unavailable'}); pass --from <ref> or run git config --local mc.defaultBranch <branch>`,
+    );
+  }
+  const fromRef = opts.from || defaultBranch.branch;
+  const fromGitRef = opts.from || defaultBranch.ref;
+  const fromRemote = opts.from ? null : defaultBranch.remote;
+
   // Build the per-phase plan up front so dry-run and live mode share
   // the same shape. Each entry has everything needed to spawn.
-  const fromRef = opts.from || 'main';
   const planned = phases.map((p) => {
     const sessionName = `fanout-${planSlug}-phase-${p.n}`;
     const branch = `fan/${planSlug}/phase-${p.n}`;
@@ -169,6 +182,8 @@ export async function runWithDeps(opts, { git, fs, cwd }) {
       branch,
       worktree_path: wt,
       from: fromRef,
+      from_git_ref: fromGitRef,
+      from_remote: fromRemote,
       tool: toolResolution.tool,
       tool_source: toolResolution.source,
       brief_length: brief.length,
@@ -197,7 +212,7 @@ export async function runWithDeps(opts, { git, fs, cwd }) {
 
   for (const p of planned) {
     try {
-      git.createBranch(primary, p.branch, fromRef);
+      git.createBranch(primary, p.branch, fromGitRef);
     } catch (err) {
       return emitError(opts, `failed to create branch ${p.branch}: ${err.message}`);
     }
@@ -224,6 +239,8 @@ export async function runWithDeps(opts, { git, fs, cwd }) {
       parent_plan: planSlug,
       phase_n: p.phaseN,
       from_ref: fromRef,
+      from_git_ref: fromGitRef,
+      from_remote: fromRemote,
       tool: p.tool,
       model_chain: [],
       session_state: 'no-session-yet',

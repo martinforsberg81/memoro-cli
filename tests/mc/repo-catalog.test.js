@@ -60,6 +60,10 @@ describe('mc local repo catalog', () => {
         ],
       }),
       repoContextReader: async (dir) => contexts.get(dir) || null,
+      defaultBranchResolver: (dir) => ({
+        ok: true,
+        branch: dir === '/repos/web' ? 'develop' : 'main',
+      }),
     });
 
     assert.deepEqual(repos, [
@@ -73,8 +77,27 @@ describe('mc local repo catalog', () => {
         repo: 'web',
         repo_ref: 'acme/web',
         branch: 'develop',
-        workspace_ref: null,
+        workspace_ref: 'develop',
       },
     ]);
+  });
+
+  test('does not infer a workspace ref from the current branch', async () => {
+    const repos = await listLocalRepoCatalog({
+      cwd: () => '/repos/acme',
+      registryReader: () => ({ entries: [] }),
+      repoContextReader: async () => ({
+        toplevel: '/repos/acme',
+        branch: 'main',
+        remoteUrl: 'https://github.com/acme/project.git',
+      }),
+      defaultBranchResolver: () => ({
+        ok: false,
+        reason: 'default-branch-unknown',
+      }),
+    });
+
+    assert.equal(repos[0].branch, 'main');
+    assert.equal(repos[0].workspace_ref, null);
   });
 });

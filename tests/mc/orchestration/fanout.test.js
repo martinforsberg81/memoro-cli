@@ -43,6 +43,13 @@ function makeFakeGit({
     calls,
     isInsideRepo: () => inside,
     primaryWorktree: () => primary,
+    resolveDefaultBranch: () => ({
+      ok: true,
+      branch: 'trunk',
+      ref: 'refs/heads/trunk',
+      remote: 'upstream',
+      source: 'remote-head',
+    }),
     branchExists: (_repo, b) => existingBranches.has(b),
     createBranch(repo, branch, fromRef) {
       calls.createBranch.push({ repo, branch, fromRef });
@@ -218,6 +225,51 @@ describe('mc fanout — happy path', () => {
     assert.equal(git.calls.createBranch.length, 0);
     assert.equal(git.calls.addWorktree.length, 0);
     assert.equal(fs.calls.writeBrief.length, 0);
+  });
+
+  test('uses the resolved custom default branch when --from is omitted', async () => {
+    const plan = '## Phase 1: x\nbody\n';
+    const planPath = join(home.dir, 'custom-default.md');
+    writeFileSync(planPath, plan);
+    const git = makeFakeGit({ primary: home.dir });
+    const fs = makeFakeFs(plan);
+
+    const { status, stdout } = await captureConsole(() =>
+      runWithDeps(
+        { planPath, from: null, dryRun: false, json: true },
+        { git, fs, cwd: home.dir },
+      ),
+    );
+
+    assert.equal(status, 0, stdout);
+    const payload = parseCapturedJson(stdout);
+    assert.equal(payload.from, 'trunk');
+    assert.equal(git.calls.createBranch[0].fromRef, 'refs/heads/trunk');
+    const reg = JSON.parse(readFileSync(join(home.dir, 'registry.json'), 'utf8'));
+    assert.equal(reg.entries[0].from_ref, 'trunk');
+    assert.equal(reg.entries[0].from_git_ref, 'refs/heads/trunk');
+    assert.equal(reg.entries[0].from_remote, 'upstream');
+  });
+
+  test('refuses to guess a default branch before creating anything', async () => {
+    const plan = '## Phase 1: x\nbody\n';
+    const planPath = join(home.dir, 'unknown-default.md');
+    writeFileSync(planPath, plan);
+    const git = makeFakeGit({ primary: home.dir });
+    git.resolveDefaultBranch = () => ({ ok: false, reason: 'default-branch-unknown' });
+    const fs = makeFakeFs(plan);
+
+    const { status, stderr } = await captureConsole(() =>
+      runWithDeps(
+        { planPath, from: null, dryRun: false, json: false },
+        { git, fs, cwd: home.dir },
+      ),
+    );
+
+    assert.equal(status, 1);
+    assert.match(stderr, /default branch is unknown/);
+    assert.equal(git.calls.createBranch.length, 0);
+    assert.equal(git.calls.addWorktree.length, 0);
   });
 
   test('non-JSON dry-run lists phase + branch + worktree on stdout', async () => {

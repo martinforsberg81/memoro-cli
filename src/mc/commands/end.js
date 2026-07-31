@@ -29,6 +29,7 @@ import {
   commitsAhead,
   git,
   primaryWorktree,
+  resolveDefaultBranch,
   tryGit,
 } from '../git.js';
 import { emitCd, parseDirectiveFlag } from '../shell-directives.js';
@@ -409,10 +410,14 @@ function isVerifiedMissingRetry(entry, result, roots) {
 
 async function buildTargetStatus(entry, primary, artifacts, { keepBranch = false } = {}) {
   const dirtyFiles = countDirtyFiles(entry.worktree_path);
-  const ahead = entry.branch
-    ? Math.max(commitsAhead(primary, entry.branch), finiteNumber(entry.ahead))
-    : 0;
-  const verdict = await computeVerdict(entry, primary, { dirtyFiles, ahead });
+  const defaultBranch = resolveDefaultBranch(primary);
+  const observedAhead = entry.branch && defaultBranch.ok
+    ? commitsAhead(primary, entry.branch, defaultBranch.ref)
+    : entry.branch ? null : 0;
+  const ahead = observedAhead === null
+    ? null
+    : Math.max(observedAhead, finiteNumber(entry.ahead));
+  const verdict = await computeVerdict(entry, primary, { dirtyFiles, ahead, defaultBranch });
   return {
     name: entry.name,
     session_state: entry.session_state || 'idle',
@@ -420,7 +425,10 @@ async function buildTargetStatus(entry, primary, artifacts, { keepBranch = false
     dirty_files: dirtyFiles,
     branch: entry.branch || null,
     commits_ahead: ahead,
-    unmerged: ahead > 0,
+    unmerged: ahead === null ? null : ahead > 0,
+    default_branch: defaultBranch.ok ? defaultBranch.branch : null,
+    default_branch_source: defaultBranch.ok ? defaultBranch.source : null,
+    default_branch_reason: defaultBranch.ok ? null : defaultBranch.reason,
     keep_branch: keepBranch,
     verdict: verdict.value,
     ...(verdict.reason ? { reason: verdict.reason } : {}),
@@ -507,7 +515,7 @@ function countDirtyFiles(worktreePath) {
   return porcelain.split('\n').filter(Boolean).length;
 }
 
-async function computeVerdict(entry, primary, { dirtyFiles, ahead }) {
+async function computeVerdict(entry, primary, { dirtyFiles, ahead, defaultBranch }) {
   const stored = entry.safety_verdict;
   if (entry.session_state === 'live') {
     return { value: 'IS_ACTIVE_NOW', reason: 'live session' };
@@ -515,19 +523,28 @@ async function computeVerdict(entry, primary, { dirtyFiles, ahead }) {
   if (dirtyFiles > 0) {
     return { value: 'NEEDS_REVIEW', reason: `${dirtyFiles} uncommitted file(s)` };
   }
+  if (ahead === null) {
+    return {
+      value: 'NEEDS_REVIEW',
+      reason: `default branch is unknown (${defaultBranch.reason}); refusing merged classification`,
+    };
+  }
   if (stored === 'IS_SQUASH_PHANTOM' || ahead > 0) {
     const phantom = await detectSquashPhantom({
       repoDir: primary,
       branch: entry.branch,
     }).catch(() => ({ isPhantom: false }));
     if (phantom.isPhantom) {
-      return { value: 'IS_SQUASH_PHANTOM', reason: 'changes already on main' };
+      return {
+        value: 'IS_SQUASH_PHANTOM',
+        reason: `changes already on ${defaultBranch.branch}`,
+      };
     }
   }
   if (ahead > 0 || stored === 'HAS_UNMERGED_WORK') {
     return {
       value: 'HAS_UNMERGED_WORK',
-      reason: `${ahead || finiteNumber(entry.ahead)} commit(s) ahead of main`,
+      reason: `${ahead || finiteNumber(entry.ahead)} commit(s) ahead of ${defaultBranch.branch}`,
     };
   }
   return { value: 'SAFE_TO_END' };
@@ -539,7 +556,8 @@ function printStatuses(plans, stdout) {
     stdout.write(`${status.name}\n`);
     stdout.write(`  session: ${status.session_state}\n`);
     stdout.write(`  worktree: ${status.worktree_path || 'none'} (dirty: ${status.dirty_files})\n`);
-    stdout.write(`  branch: ${status.branch || 'none'} (ahead: ${status.commits_ahead}, ${branchAction})\n`);
+    const ahead = status.commits_ahead === null ? 'unknown' : status.commits_ahead;
+    stdout.write(`  branch: ${status.branch || 'none'} (ahead: ${ahead}, ${branchAction})\n`);
     if (status.transcript.state === 'none') {
       stdout.write(status.transcript.provider_untouched
         ? '  transcript: none identifiable — provider artifacts left untouched\n'

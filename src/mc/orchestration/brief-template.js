@@ -51,7 +51,7 @@ export function buildFanoutBrief({ planSlug, phaseN, phaseTitle, intro, body }) 
     'choice, stop and ask the parent session — do not guess.',
     '',
     'When done, open your PR against the shared collection branch',
-    `\`wip/${planSlug}\` (NOT main).`,
+    `\`wip/${planSlug}\` (not the repository default branch).`,
     '',
     'Shared context (plan intro):',
     safeIntro,

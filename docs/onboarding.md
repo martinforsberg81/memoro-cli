@@ -143,6 +143,30 @@ trigger is **both** signals missing — see [§11d](./plans/worktree-lifecycle.m
 and the first successful `mc new` writes the sentinel silently. No
 action required.
 
+## How mc finds the default branch
+
+mc resolves the default branch from local Git metadata; it never substitutes
+`main`, `master`, or another conventional name. In order, it accepts:
+
+1. explicit repository-local `mc.defaultBranch` metadata and optional
+   `mc.defaultRemote`;
+2. one configured remote HEAD;
+3. one unambiguous remote branch when remote HEAD metadata is absent; or
+4. one unambiguous branch in a local-only repository.
+
+Conflicting remote HEADs or several branches without a default signal remain
+unknown. Merge/squash classification then reports `NEEDS_REVIEW`, and automatic
+storage cleanup leaves the worktree untouched. Configure an unusual or
+local-only repository explicitly when Git cannot describe it:
+
+```sh
+git config --local mc.defaultBranch trunk
+git config --local mc.defaultRemote upstream  # only when remote choice is ambiguous
+```
+
+These values live in that clone's `.git/config`; they are not committed project
+policy. `mc fanout --from <ref>` remains the explicit one-invocation override.
+
 ## Ending a session permanently
 
 `mc end <name>` first prints a compact status: live/idle state, dirty file

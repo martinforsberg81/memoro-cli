@@ -2,16 +2,17 @@
  * Squash-merge phantom detection (§9b).
  *
  * A branch is a "squash-merge phantom" when its changeset already lives
- * on main under a different SHA (because the PR was squash-merged). The
+ * on the default branch under a different SHA (because the PR was
+ * squash-merged). The
  * branch reads as "N commits ahead" but `mc end` should accept it
  * without prompting.
  *
  * Three-tier detection (soft-degrade per plan §9b):
  *
- *   Tier 0 — `git cherry main <branch>`. Purely local, no network, no
- *     auth. Lines starting with `-` are patch-equivalent on main
+ *   Tier 0 — `git cherry <default> <branch>`. Purely local, no network,
+ *     no auth. Lines starting with `-` are patch-equivalent on the default
  *     (git hashes the patch contents, not the commit object). If
- *     every line is `-`, the branch's work is already on main.
+ *     every line is `-`, the branch's work is already on the default branch.
  *     Catches the common case (single-commit branch squash-merged)
  *     without needing gh.
  *
@@ -30,6 +31,7 @@
  * the gh stub.
  */
 import { spawnSync } from 'node:child_process';
+import { resolveDefaultBranch } from './git.js';
 
 function git(repoDir, args) {
   const r = spawnSync('git', args, { cwd: repoDir, encoding: 'utf8' });
@@ -73,15 +75,23 @@ export async function detectSquashPhantom({ repoDir, branch, gh = defaultGh() } 
     throw new Error('detectSquashPhantom: repoDir and branch required');
   }
 
-  // Determine upstream main ref to diff against. Prefer origin/main; fall
-  // back to main if no remote.
-  const hasOriginMain = git(repoDir, ['rev-parse', '--verify', '--quiet', 'origin/main']) !== null;
-  const mainRef = hasOriginMain ? 'origin/main' : 'main';
+  const defaultBranch = resolveDefaultBranch(repoDir);
+  if (!defaultBranch.ok) {
+    return {
+      isPhantom: false,
+      cherryConfirms: false,
+      hadMergedPr: undefined,
+      diffEmpty: undefined,
+      defaultBranch: null,
+      reason: defaultBranch.reason,
+    };
+  }
+  const baseRef = defaultBranch.ref;
 
   // Tier 0 — git cherry, local-only. If every commit on the branch has
-  // a patch-equivalent on main, the work is represented on main. No
+  // a patch-equivalent on the default branch, the work is represented there. No
   // gh required.
-  const cherry = git(repoDir, ['cherry', mainRef, branch]);
+  const cherry = git(repoDir, ['cherry', baseRef, branch]);
   if (cherry !== null && cherry !== '') {
     const lines = cherry.split('\n').filter(Boolean);
     const allMatched = lines.every((l) => l.startsWith('- '));
@@ -91,6 +101,8 @@ export async function detectSquashPhantom({ repoDir, branch, gh = defaultGh() } 
         cherryConfirms: true,
         hadMergedPr: undefined,
         diffEmpty: undefined,
+        defaultBranch: defaultBranch.branch,
+        reason: null,
       };
     }
   }
@@ -101,7 +113,7 @@ export async function detectSquashPhantom({ repoDir, branch, gh = defaultGh() } 
   const merged = await gh.prListMerged(branch);
   const hadMergedPr = Array.isArray(merged) && merged.length > 0;
 
-  const diff = git(repoDir, ['diff', branch, mainRef, '--name-only']);
+  const diff = git(repoDir, ['diff', branch, baseRef, '--name-only']);
   const diffEmpty = diff === '';
 
   return {
@@ -109,5 +121,7 @@ export async function detectSquashPhantom({ repoDir, branch, gh = defaultGh() } 
     cherryConfirms: false,
     hadMergedPr,
     diffEmpty,
+    defaultBranch: defaultBranch.branch,
+    reason: null,
   };
 }

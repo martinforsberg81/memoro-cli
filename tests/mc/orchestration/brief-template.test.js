@@ -31,10 +31,10 @@ describe('buildFanoutBrief — required structure', () => {
     assert.match(brief, /\.claude\/skills\/agent-coordination\.md/);
   });
 
-  test('directs PRs at the collection branch, not main', () => {
+  test('directs PRs at the collection branch, not the repository default', () => {
     const brief = buildFanoutBrief(base);
     assert.match(brief, /`wip\/onboarding-flow`/);
-    assert.match(brief, /\(NOT main\)/);
+    assert.match(brief, /\(not the repository default branch\)/);
   });
 
   test('asks for the standard PR-body shape', () => {

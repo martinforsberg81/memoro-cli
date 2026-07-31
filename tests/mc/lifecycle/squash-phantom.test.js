@@ -27,6 +27,8 @@
  */
 import test, { describe, after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
+import { writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 import {
   makeTempRepo, git, makeSquashPhantom, makeBranchWithCommit,
@@ -103,5 +105,50 @@ describe('detectSquashPhantom', () => {
     assert.equal(result.isPhantom, false);
     assert.equal(result.cherryConfirms, false);
     assert.equal(result.hadMergedPr, false);
+  });
+
+  test('uses a custom default branch', async () => {
+    git(repo.dir, 'branch -m main trunk');
+    git(repo.root + '/origin.git', 'symbolic-ref HEAD refs/heads/trunk');
+    git(repo.dir, 'push -q origin trunk');
+    git(repo.dir, 'push -q origin --delete main');
+    git(repo.dir, 'fetch -q --prune origin');
+    git(repo.dir, 'symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/trunk');
+    git(repo.dir, 'checkout -q -b sess/custom');
+    writeFileSync(join(repo.dir, 'custom.txt'), 'same\n');
+    git(repo.dir, 'add custom.txt');
+    git(repo.dir, 'commit -q -m "Custom work"');
+    git(repo.dir, 'checkout -q trunk');
+    writeFileSync(join(repo.dir, 'custom.txt'), 'same\n');
+    git(repo.dir, 'add custom.txt');
+    git(repo.dir, 'commit -q -m "Squash custom"');
+
+    const result = await detectSquashPhantom({
+      repoDir: repo.dir,
+      branch: 'sess/custom',
+      gh: { prListMerged: async () => [] },
+    });
+
+    assert.equal(result.isPhantom, true);
+    assert.equal(result.defaultBranch, 'trunk');
+  });
+
+  test('does not query GitHub or guess when the default branch is unknown', async () => {
+    makeBranchWithCommit(repo.dir, 'sess/unknown', 'unknown.txt', 'new\n');
+    git(repo.dir, 'branch competing main');
+    git(repo.dir, 'push -q origin competing');
+    git(repo.dir, 'fetch -q origin');
+    git(repo.dir, 'remote set-head origin -d');
+    let ghCalls = 0;
+
+    const result = await detectSquashPhantom({
+      repoDir: repo.dir,
+      branch: 'sess/unknown',
+      gh: { prListMerged: async () => { ghCalls += 1; return []; } },
+    });
+
+    assert.equal(result.isPhantom, false);
+    assert.equal(result.reason, 'default-branch-unknown');
+    assert.equal(ghCalls, 0);
   });
 });

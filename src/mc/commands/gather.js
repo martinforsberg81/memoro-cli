@@ -6,14 +6,14 @@
  *   1. Looks up open PRs with head branch matching
  *      `fan/<plan-slug>/phase-*` via `gh pr list`.
  *   2. Ensures the local collection branch `wip/<plan-slug>` exists
- *      (creates it from each fanout entry's stored `from_ref`, default
- *      `main`, if missing).
+ *      (creates it from each fanout entry's stored default-branch identity,
+ *      or resolves the repository default when legacy metadata is absent).
  *   3. Attempts to merge each phase PR's head branch into the local
  *      collection branch in phase-number order. On the first merge
  *      conflict, STOP — do not auto-resolve. Surface which files
  *      conflicted between which phases, plus the suggested action.
  *   4. If every phase merges cleanly, push `wip/<plan-slug>` and open
- *      one summary PR `wip/<plan-slug> → main` listing each phase + PR.
+ *      one summary PR `wip/<plan-slug> → <default>` listing each phase + PR.
  *
  * `--dry-run` reports what would be merged + which conflicts would
  *  occur, without writing.
@@ -29,7 +29,7 @@
  */
 import { spawnSync } from 'node:child_process';
 import { readRegistry } from '../registry.js';
-import { git as gitShell, branchExists } from '../git.js';
+import { git as gitShell, branchExists, resolveDefaultBranch } from '../git.js';
 
 /**
  * Default gh portal — matches the soft-degrade shape used by
@@ -75,10 +75,11 @@ export function defaultGh() {
 export function defaultGitPortal() {
   return {
     branchExists,
-    fetch(repoDir, ref) {
-      // Shell out — never throw on a missing remote ref; gather
-      // should still surface the conflict path on local-only branches.
-      const r = spawnSync('git', ['-C', repoDir, 'fetch', 'origin', ref], { encoding: 'utf8' });
+    resolveDefaultBranch,
+    fetch(repoDir, remote, ref) {
+      // Shell out — never throw on a missing remote ref. The caller has
+      // already resolved the exact remote and handles a false result safely.
+      const r = spawnSync('git', ['-C', repoDir, 'fetch', remote, ref], { encoding: 'utf8' });
       return r.status === 0;
     },
     createCollectionBranch(repoDir, branch, fromRef) {
@@ -98,8 +99,8 @@ export function defaultGitPortal() {
       spawnSync('git', ['-C', repoDir, 'merge', '--abort'], { encoding: 'utf8' });
       return { ok: false, conflicts };
     },
-    push(repoDir, branch) {
-      const r = spawnSync('git', ['-C', repoDir, 'push', '-u', 'origin', branch], { encoding: 'utf8' });
+    push(repoDir, remote, branch) {
+      const r = spawnSync('git', ['-C', repoDir, 'push', '-u', remote, branch], { encoding: 'utf8' });
       return r.status === 0;
     },
   };
@@ -136,15 +137,31 @@ export async function run(argv) {
 export async function runWithDeps(opts, { gh, git, registry, cwd }) {
   const planSlug = opts.planSlug;
 
-  // Resolve the from_ref by inspecting registry entries. All phase
-  // entries should agree on `from_ref`; if they disagree (which we
-  // don't expect from MVP fanout), pick the lowest-N entry's value and
-  // surface a warning. Soft default: `main` if no entries match.
+  // Resolve the base from stored fanout metadata. Legacy entries may only
+  // have from_ref; in that case use the current resolver only when it proves
+  // the same branch. Never replace missing metadata with a conventional name.
   const reg = registry.read();
   const phaseEntries = (reg?.entries || [])
     .filter((e) => e.parent_plan === planSlug)
     .sort((a, b) => (a.phase_n || 0) - (b.phase_n || 0));
-  const fromRef = phaseEntries[0]?.from_ref || 'main';
+  const firstPhase = phaseEntries[0] || null;
+  const resolvedDefault = git.resolveDefaultBranch(cwd);
+  const fromRef = nonEmpty(firstPhase?.from_ref)
+    || (resolvedDefault?.ok ? resolvedDefault.branch : null);
+  if (!fromRef) {
+    return emitError(
+      opts,
+      `default branch is unknown (${resolvedDefault?.reason || 'unavailable'}); re-run fanout with --from <ref> or run git config --local mc.defaultBranch <branch>`,
+    );
+  }
+  const storedGitRef = nonEmpty(firstPhase?.from_git_ref);
+  const fromGitRef = storedGitRef
+    || (resolvedDefault?.ok && resolvedDefault.branch === fromRef ? resolvedDefault.ref : fromRef);
+  const remote = nonEmpty(firstPhase?.from_remote)
+    || (resolvedDefault?.ok ? resolvedDefault.remote : null);
+  if (!remote) {
+    return emitError(opts, 'repository remote is unknown; refusing to guess a remote for gather');
+  }
 
   // Find phase PRs. The MVP contract is "open PRs with head matching
   // fan/<slug>/phase-*". If gh is unreachable, gather can't do
@@ -182,12 +199,14 @@ export async function runWithDeps(opts, { gh, git, registry, cwd }) {
   // Ensure the collection branch exists locally. Fetch the from_ref
   // first so we have something to root it on.
   if (!git.branchExists(cwd, collectionBranch)) {
-    git.fetch(cwd, fromRef);
+    if (!git.fetch(cwd, remote, fromRef)) {
+      return emitError(opts, `failed to fetch ${fromRef} from ${remote}; refusing a stale base ref`);
+    }
     try {
-      git.createCollectionBranch(cwd, collectionBranch, `origin/${fromRef}`);
+      git.createCollectionBranch(cwd, collectionBranch, fromGitRef);
     } catch (err) {
-      // Fallback: create from local `fromRef` if origin/<fromRef>
-      // doesn't exist (e.g. brand-new repo with no remote).
+      // A legacy registry may name only the branch. A local branch with that
+      // exact name is an explicit ref, not a guessed default.
       try {
         git.createCollectionBranch(cwd, collectionBranch, fromRef);
       } catch (err2) {
@@ -206,9 +225,14 @@ export async function runWithDeps(opts, { gh, git, registry, cwd }) {
   // Merge each phase in order. Stop on first conflict.
   const merged = [];
   for (const { pr, phaseN } of ordered) {
-    // Make sure we have the latest of the phase branch from origin.
-    git.fetch(cwd, pr.headRefName);
-    const res = git.tryMerge(cwd, `origin/${pr.headRefName}`);
+    // Make sure we have the latest phase branch from the resolved remote.
+    if (!git.fetch(cwd, remote, pr.headRefName)) {
+      return emitError(
+        opts,
+        `failed to fetch ${pr.headRefName} from ${remote}; refusing to merge a stale phase ref`,
+      );
+    }
+    const res = git.tryMerge(cwd, `refs/remotes/${remote}/${pr.headRefName}`);
     if (!res.ok) {
       return emitConflict(opts, {
         planSlug,
@@ -223,7 +247,7 @@ export async function runWithDeps(opts, { gh, git, registry, cwd }) {
   }
 
   // All merged cleanly — push + open summary PR.
-  if (!git.push(cwd, collectionBranch)) {
+  if (!git.push(cwd, remote, collectionBranch)) {
     return emitError(opts, `merged ${merged.length} phases cleanly but failed to push ${collectionBranch}`);
   }
   const summaryBody = buildSummaryBody({ planSlug, merged, fromRef });
@@ -247,6 +271,10 @@ function parsePhaseN(headRef, planSlug) {
   const rest = headRef.slice(prefix.length);
   const n = Number(rest);
   return Number.isInteger(n) && n > 0 ? n : null;
+}
+
+function nonEmpty(value) {
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
 
 function buildSummaryBody({ planSlug, merged, fromRef }) {

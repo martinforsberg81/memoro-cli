@@ -142,6 +142,25 @@ describe('mc storage / doctor', () => {
     assert.equal(j.cleanup_reason, 'clean-merged-not-live');
   });
 
+  test('unknown default branch never becomes a cleanup candidate', () => {
+    git(repo.dir, 'branch competing main');
+    git(repo.dir, 'push -q origin competing');
+    git(repo.dir, 'fetch -q origin');
+    git(repo.dir, 'remote set-head origin -d');
+
+    const r = runMc(['storage', 'explain', 'done', '--json'], {
+      cwd: repo.dir,
+      env: { MC_HOME: repo.mcHome, MC_ORPHAN_PID_DIR: pidDir },
+    });
+
+    assert.equal(r.status, 0, `stderr:${r.stderr}`);
+    const j = parseJsonOrNull(r.stdout);
+    assert.equal(j.cleanup_candidate, false);
+    assert.equal(j.git.ahead, null);
+    assert.equal(j.git.default_branch, null);
+    assert.equal(j.git.default_branch_reason, 'default-branch-unknown');
+  });
+
   test('doctor summarizes storage issues without mutating', () => {
     const r = runMc(['doctor', '--json', '--min-age', '0s'], {
       cwd: repo.dir,
