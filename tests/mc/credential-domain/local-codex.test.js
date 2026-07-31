@@ -33,6 +33,7 @@ import {
   persistCustodyCodexAuth,
   prepareLocalCodexCredentialDomain,
   renderManagedCodexConfig,
+  resolveManagedNpmCachePath,
   validateBoundaryReport,
 } from '../../../src/mc/credential-domain/local-codex.js';
 import {
@@ -256,7 +257,11 @@ describe('local Codex credential domain', () => {
         tool: 'codex',
         portal: { apiUrl: 'https://memoro.test', token: 'memoro-canary' },
         root,
-        env: { PATH: '/usr/bin:/bin', CODEX_HOME: userCodexHome },
+        env: {
+          PATH: '/usr/bin:/bin',
+          CODEX_HOME: userCodexHome,
+          NPM_CONFIG_CACHE: '/Users/test/.npm',
+        },
         deps: {
           inspectCodexRelease: () => {
             calls.push('release');
@@ -298,6 +303,7 @@ describe('local Codex credential domain', () => {
             ].join('\n')));
             assert.doesNotMatch(managedConfig, /trust_level = "trusted"/);
             assert.doesNotMatch(managedConfig, /hooks\s*=/);
+            assert.match(managedConfig, /NPM_CONFIG_CACHE = "\/Users\/test\/\.npm"/);
             assert.deepEqual(
               JSON.parse(readFileSync(join(codexHome, 'hooks.json'), 'utf8')),
               {
@@ -808,7 +814,8 @@ describe('local Codex credential domain', () => {
       executorHome: '/private/executor/home',
       executorTmp: '/private/executor/tmp',
       safePath: '/usr/bin:/bin',
-      forbiddenPaths: ['/Users/test/.memoro', '/Users/test/.codex'],
+      npmCachePath: '/Users/test/.npm',
+      forbiddenPaths: ['/Users/test/.memoro', '/Users/test/.codex', '/Users/test/.npmrc'],
       deniedUnixSocketPaths: ['/tmp/credential.sock'],
       allowedUnixSocketPaths: ['/tmp/github-session.sock'],
     });
@@ -823,6 +830,8 @@ describe('local Codex credential domain', () => {
     assert.doesNotMatch(config, /":minimal"/);
     assert.match(config, /"\/private\/credential" = "deny"/);
     assert.match(config, /"\/Users\/test\/\.memoro" = "deny"/);
+    assert.match(config, /"\/Users\/test\/\.npmrc" = "deny"/);
+    assert.match(config, /NPM_CONFIG_CACHE = "\/Users\/test\/\.npm"/);
     assert.match(config, /"\/" = true/);
     assert.match(config, /"\/private\/workspace" = true/);
     assert.match(config, /enabled = true/);
@@ -842,6 +851,34 @@ describe('local Codex credential domain', () => {
     assert.doesNotMatch(config, /approval_policy|allow_login_shell|web_search/);
     assert.doesNotMatch(config, /multi_agent = false|skill_mcp_dependency_install = false/);
     assert.doesNotMatch(config, /\*\*\/\*secret\*|\*\*\/\.env\*/);
+  });
+
+  test('resolves a stable npm cache without exposing npm configuration', () => {
+    assert.equal(
+      resolveManagedNpmCachePath({ env: {}, hostHome: '/Users/test' }),
+      '/Users/test/.npm',
+    );
+    assert.equal(
+      resolveManagedNpmCachePath({
+        env: { NPM_CONFIG_CACHE: '/private/npm-cache' },
+        hostHome: '/Users/test',
+      }),
+      '/private/npm-cache',
+    );
+    assert.equal(
+      resolveManagedNpmCachePath({
+        env: { npm_config_cache: '/private/lowercase-cache' },
+        hostHome: '/Users/test',
+      }),
+      '/private/lowercase-cache',
+    );
+    assert.equal(
+      resolveManagedNpmCachePath({
+        env: { NPM_CONFIG_CACHE: 'relative-cache' },
+        hostHome: '/Users/test',
+      }),
+      '/Users/test/.npm',
+    );
   });
 
   test('records the managed workspace as untrusted without trusting repository config', () => {

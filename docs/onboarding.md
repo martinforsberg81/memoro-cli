@@ -110,6 +110,12 @@ mc auth codex      # or claude / gemini
    dependencies during `mc new`. Hydration is an explicit code-execution
    boundary because npm lifecycle scripts may run.
 
+   Managed local Codex sessions keep their executor home isolated, but point
+   npm at the operating-system account's normal content-addressed cache. This
+   lets an ordinary `npm ci` reuse integrity-checked package artifacts across
+   sessions without sharing `node_modules` or exposing `.npmrc` and its
+   credentials. Cache misses still require normal registry network access.
+
 When all required checks pass, `mc setup` writes the `${MC_HOME}/.setup-done-v1`
 sentinel so the friendly first-run hint in `mc new` / `mc list`
 silences itself for that machine.

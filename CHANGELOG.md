@@ -58,6 +58,9 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   mutated; `--keep-branch` is the explicit exception.
 
 ### Fixed
+- Managed local Codex sessions now reuse the operating-system account's npm
+  cache, so the isolated executor home no longer causes avoidable registry
+  downloads during `npm ci`; npm credentials remain outside the executor.
 - Broker-owned Codex launches now retry twice when Codex exits during startup
   with its specific transient SQLite state/log database lock error. Other
   startup failures and established sessions are not retried.
