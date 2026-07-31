@@ -6,6 +6,7 @@ import { join } from 'node:path';
 
 import {
   encodeClaudeProjectPath,
+  findClaudeSessionById,
   findLatestClaudeSession,
 } from '../../src/lib/claude.js';
 
@@ -63,5 +64,24 @@ describe('Claude transcript lookup', () => {
     });
 
     assert.equal(found, null);
+  }));
+
+  test('findClaudeSessionById resolves the exact workspace transcript', async () => withTempDir(async (dir) => {
+    const workspace = join(dir, 'repo');
+    const projectsDir = join(dir, 'projects');
+    const projectDir = join(projectsDir, encodeClaudeProjectPath(workspace));
+    mkdirSync(projectDir, { recursive: true });
+    const wanted = join(projectDir, 'cl_wanted.jsonl');
+    writeFileSync(wanted, '{}\n');
+    writeFileSync(join(projectDir, 'cl_other.jsonl'), '{}\n');
+
+    const found = await findClaudeSessionById({
+      sessionId: 'cl_wanted',
+      cwd: workspace,
+      projectsDir,
+    });
+
+    assert.equal(found.sessionId, 'cl_wanted');
+    assert.equal(found.path, wanted);
   }));
 });
