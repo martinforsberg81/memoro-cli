@@ -23,7 +23,7 @@ import {
 } from 'node:fs';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { createServer } from 'node:net';
-import { arch, homedir, platform } from 'node:os';
+import { arch, homedir, platform, userInfo } from 'node:os';
 import {
   dirname,
   isAbsolute,
@@ -216,6 +216,7 @@ export async function prepareLocalCodexCredentialDomain({
     : null;
   const safePath = managedSafePath({ executorBin, env });
   const userCodexHome = resolveUserCodexHome(env);
+  const npmCachePath = resolveManagedNpmCachePath({ env });
   const forbiddenPaths = managedForbiddenPaths({
     cwd,
     domainPath,
@@ -232,6 +233,7 @@ export async function prepareLocalCodexCredentialDomain({
     executorHome,
     executorTmp,
     safePath,
+    npmCachePath,
     forbiddenPaths,
     runtimeReadPaths: githubCapability === true ? MANAGED_GITHUB_RUNTIME_PATHS : [],
     deniedUnixSocketPaths: [boundarySocketPath],
@@ -1384,6 +1386,7 @@ export function renderManagedCodexConfig({
   executorHome,
   executorTmp,
   safePath,
+  npmCachePath = null,
   forbiddenPaths = [],
   runtimeReadPaths = [],
   deniedUnixSocketPaths = [],
@@ -1443,6 +1446,9 @@ export function renderManagedCodexConfig({
     `HOME = "${tomlString(executorHome)}"`,
     `TMPDIR = "${tomlString(executorTmp)}"`,
     `PATH = "${tomlString(safePath)}"`,
+    ...(npmCachePath
+      ? [`NPM_CONFIG_CACHE = "${tomlString(npmCachePath)}"`]
+      : []),
     'LANG = "C.UTF-8"',
     'TERM = "xterm-256color"',
     '',
@@ -1705,6 +1711,32 @@ export function buildManagedCodexProviderEnv({
   };
   if (env.NO_COLOR === '1') out.NO_COLOR = '1';
   return out;
+}
+
+/**
+ * Keep npm's content-addressed cache stable while the managed executor HOME
+ * remains isolated per session. Explicit absolute npm cache configuration wins;
+ * otherwise use the operating-system account home rather than the rewritten
+ * executor HOME inherited by nested managed launches.
+ */
+export function resolveManagedNpmCachePath({
+  env = process.env,
+  hostHome = null,
+} = {}) {
+  for (const name of ['NPM_CONFIG_CACHE', 'npm_config_cache']) {
+    const configured = typeof env?.[name] === 'string' ? env[name].trim() : '';
+    if (configured && isAbsolute(configured)) return resolve(configured);
+  }
+
+  let accountHome = hostHome;
+  if (!accountHome) {
+    try {
+      accountHome = userInfo().homedir;
+    } catch {
+      accountHome = homedir();
+    }
+  }
+  return isAbsolute(accountHome || '') ? join(resolve(accountHome), '.npm') : null;
 }
 
 function runCommand(command, args, env, {
