@@ -49,9 +49,9 @@ describe('mc provider-native tool sessions', () => {
       },
       launchTool: { id: 'codex', shortName: 'codex', adapter: codexAdapter },
       deps: {
-        findLatestTranscriptForTool: async () => ({
+        findTranscriptForToolSession: async ({ sessionId }) => ({
           path: '/tmp/codex.jsonl',
-          sessionId: 'cx_stored',
+          sessionId,
         }),
       },
     });
@@ -75,7 +75,7 @@ describe('mc provider-native tool sessions', () => {
       },
       launchTool: { id: 'codex', shortName: 'codex', adapter: codexAdapter },
       deps: {
-        findLatestTranscriptForTool: async () => ({
+        findTranscriptForToolSession: async () => ({
           path: '/tmp/other.jsonl',
           sessionId: 'cx_other',
         }),
