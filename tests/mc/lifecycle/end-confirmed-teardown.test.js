@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   readFileSync,
@@ -11,6 +12,8 @@ import { join } from 'node:path';
 import test, { afterEach, beforeEach, describe } from 'node:test';
 
 import { run as runEnd } from '../../../src/mc/commands/end.js';
+import { providerArtifactPath } from '../../../src/mc/broker/paths.js';
+import { writeProviderArtifactSync } from '../../../src/mc/broker/provider-artifact-journal.js';
 import { inspectOwnedToolArtifacts } from '../../../src/mc/tool-artifact-ownership.js';
 import { makeTempRepo, git, addWorktree } from '../_helpers/git-fixture.js';
 import { makeEntry, writeRegistry } from '../_helpers/registry-fixture.js';
@@ -71,6 +74,112 @@ describe('mc end confirmed teardown', () => {
     assert.equal(promptCount(result.stdout), 1);
     assert.match(result.stdout, /session: live/);
     assert.equal(existsSync(target.worktree), false);
+  });
+
+  test('a managed live session uses its provider artifact journal for teardown authority', async () => {
+    const managed = makeManagedTarget('managed-live');
+    let brokerCalls = 0;
+
+    const result = await invoke(['managed-live'], {
+      answer: 'y',
+      entries: [managed.entry],
+      roots: managed.target.roots,
+      deps: {
+        removeBrokerSessionForEntry: async () => {
+          brokerCalls += 1;
+          rmSync(managed.credentialDomain, { recursive: true, force: true });
+          return { ok: true, credential_cleanup: 'confirmed' };
+        },
+        deleteOwnedToolArtifacts: async () => assert.fail('managed cleanup belongs to broker'),
+      },
+    });
+
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(brokerCalls, 1);
+    assert.match(result.stdout, new RegExp(escapeRegExp(managed.credentialTranscript)));
+    assert.equal(existsSync(managed.credentialTranscript), false);
+    assert.equal(existsSync(managed.target.worktree), false);
+    assert.deepEqual(registryEntries(), []);
+  });
+
+  test('a managed session stops when credential cleanup is not confirmed', async () => {
+    const managed = makeManagedTarget('managed-unconfirmed');
+
+    const result = await invoke(['managed-unconfirmed'], {
+      answer: 'y',
+      entries: [managed.entry],
+      roots: managed.target.roots,
+      deps: {
+        removeBrokerSessionForEntry: async () => ({ ok: true }),
+        deleteOwnedToolArtifacts: async () => assert.fail('managed cleanup belongs to broker'),
+      },
+    });
+
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /broker cleanup failed/);
+    assert.equal(existsSync(managed.credentialTranscript), true);
+    assert.equal(existsSync(managed.target.worktree), true);
+    assert.equal(registryEntries().length, 1);
+  });
+
+  test('a managed session rejects a provider artifact bound to another native session', async () => {
+    const managed = makeManagedTarget('managed-mismatch');
+    const mismatched = {
+      ...managed.entry,
+      tool_session_id: 'different_provider_session',
+    };
+    let brokerCalls = 0;
+
+    const result = await invoke(['managed-mismatch'], {
+      answer: 'y',
+      entries: [mismatched],
+      roots: managed.target.roots,
+      deps: {
+        removeBrokerSessionForEntry: async () => {
+          brokerCalls += 1;
+          return { ok: true, credential_cleanup: 'confirmed' };
+        },
+      },
+    });
+
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /managed-provider-artifact-identity-mismatch/);
+    assert.equal(brokerCalls, 0);
+    assert.equal(existsSync(managed.credentialTranscript), true);
+    assert.equal(existsSync(managed.target.worktree), true);
+  });
+
+  test('a managed teardown retries after confirmed broker cleanup removed its journal', async () => {
+    const managed = makeManagedTarget('managed-retry');
+    const first = await invoke(['managed-retry'], {
+      answer: 'y',
+      entries: [managed.entry],
+      roots: managed.target.roots,
+      deps: {
+        removeBrokerSessionForEntry: async () => {
+          rmSync(managed.credentialDomain, { recursive: true, force: true });
+          return { ok: true, credential_cleanup: 'confirmed' };
+        },
+        removeEntry: () => false,
+      },
+    });
+
+    assert.equal(first.code, 1);
+    assert.equal(existsSync(managed.credentialTranscript), false);
+    assert.equal(existsSync(managed.artifactPath), false);
+    assert.ok(registryEntries()[0].managed_provider_authority_verified.cleanup_confirmed_at);
+
+    const second = await invoke(['managed-retry', '--force'], {
+      isTTY: false,
+      entries: registryEntries(),
+      roots: managed.target.roots,
+      deps: {
+        removeBrokerSessionForEntry: async () => ({ ok: false, reason: 'not-found' }),
+      },
+    });
+
+    assert.equal(second.code, 0, second.stderr);
+    assert.deepEqual(registryEntries(), []);
   });
 
   test('n aborts the whole operation without side effects', async () => {
@@ -799,6 +908,54 @@ describe('mc end confirmed teardown', () => {
         tool_transcript_path: transcript,
         ...transcriptPatch,
       }),
+    };
+  }
+
+  function makeManagedTarget(name) {
+    const target = makeTarget(name, { session_state: 'live' });
+    rmSync(target.transcript);
+    const codingSessionId = `sess_${name.replaceAll('-', '_')}`;
+    const runtimeGeneration = '0361aa53-f49e-4c8b-900d-93139b731016';
+    const credentialDomain = join(repo.root, 'credential-domains', codingSessionId);
+    const credentialTranscript = join(
+      credentialDomain,
+      runtimeGeneration,
+      'home',
+      '.codex',
+      'sessions',
+      `${target.sessionId}.jsonl`,
+    );
+    mkdirSync(join(credentialTranscript, '..'), { recursive: true });
+    writeFileSync(credentialTranscript, 'managed transcript');
+    const artifactPath = providerArtifactPath(codingSessionId, runtimeGeneration, {
+      root: repo.mcHome,
+    });
+    chmodSync(repo.mcHome, 0o700);
+    writeProviderArtifactSync({
+      path: artifactPath,
+      trustedRoot: repo.mcHome,
+      artifact: {
+        schema: 'mc-provider-artifact-v1',
+        coding_session_id: codingSessionId,
+        runtime_generation: runtimeGeneration,
+        tool: 'codex',
+        provider_session_id: target.sessionId,
+        transcript_path: credentialTranscript,
+        captured_at: '2026-07-31T18:00:00.000Z',
+      },
+    });
+    return {
+      target,
+      credentialDomain,
+      credentialTranscript,
+      artifactPath,
+      entry: {
+        ...target.entry,
+        coding_session_id: codingSessionId,
+        tool_transcript_path: null,
+        tool_session_provider_adapter: 'codex-managed-local-v1',
+        tool_session_provider_generation: runtimeGeneration,
+      },
     };
   }
 

@@ -189,12 +189,17 @@ describe('broker session identity matching', () => {
             }],
           };
         }
-        return { ok: true, removed: true };
+        return {
+          ok: true,
+          removed: true,
+          credential_cleanup: 'confirmed',
+        };
       },
     });
 
     assert.equal(result.ok, true);
     assert.equal(result.id, 'pty_target');
+    assert.equal(result.credential_cleanup, 'confirmed');
     assert.deepEqual(
       requests.find((message) => message.type === 'remove_session'),
       {
