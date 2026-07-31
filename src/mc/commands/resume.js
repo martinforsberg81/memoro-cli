@@ -109,6 +109,11 @@ export async function run(rawArgv, deps = {}) {
     stderr.write(`mc: ${authMode.error}\n`);
     return 1;
   }
+  // Announced, never silent: the weaker container is only ever reached by an
+  // explicit --native, so the user always knows which boundary they got.
+  if (localAuthMode === LOCAL_AUTH_MODES.NATIVE && !opts.json && opts.managedPortable === false) {
+    stderr.write('mc: --native — the tool uses its own sign-in; mc vault custody and the certified credential boundary are not in effect.\n');
+  }
   const targetCustody = localAuthMode === LOCAL_AUTH_MODES.MANAGED_PORTABLE
     ? 'managed'
     : 'native';
@@ -807,6 +812,8 @@ export function parseArgs(argv) {
     json: false,
     // Named lifecycle launches use managed custody by default. Keep accepting
     // --managed-portable as a no-op compatibility spelling for older scripts.
+    // `--native` is the explicit opt-out: the user chooses the weaker
+    // container deliberately; no failed gate may ever select it for them.
     managedPortable: true,
   };
   for (let i = 0; i < argv.length; i++) {
@@ -814,6 +821,7 @@ export function parseArgs(argv) {
     if (a === '--no-launch') { opts.noLaunch = true; continue; }
     if (a === '--json') { opts.json = true; continue; }
     if (a === '--managed-portable') { opts.managedPortable = true; continue; }
+    if (a === '--native') { opts.managedPortable = false; continue; }
     if (a === '--tool') {
       const next = argv[++i];
       if (!next || next.startsWith('--')) return { error: '--tool requires a value' };
