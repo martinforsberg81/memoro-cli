@@ -200,6 +200,9 @@ describe('mc provider-native tool sessions', () => {
     const unsafeLegacy = await resolveToolSessionForResume({
       entry: { tool: 'codex', provider_session_id: '../unsafe' },
       launchTool: { id: 'codex', shortName: 'codex', adapter: codexAdapter },
+      deps: {
+        findTranscriptForToolSession: async () => assert.fail('invalid id must not reach lookup'),
+      },
     });
     assert.equal(unsafeLegacy.ok, false);
     assert.equal(unsafeLegacy.reason, 'invalid-provider-session');
