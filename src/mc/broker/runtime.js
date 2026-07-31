@@ -296,9 +296,17 @@ export class BrokerRuntime {
   }
 
   _runClaudeC1(message) {
-    if (!isExactClaudeC1Request(message) || typeof this.c1Runner !== 'function') {
+    // The wire contract is status-only by design. The refusing gate is written
+    // to this host's local log instead, so an operator can tell an unmet
+    // precondition from a real boundary failure without the response ever
+    // carrying diagnostics. Gate names are fixed literals: no session id,
+    // capability, path, or credential material is logged.
+    const refuse = (gate) => {
+      try { process.stderr.write(`[c1] refused at gate: ${gate}\n`); } catch { /* logging is best effort */ }
       return claudeC1StatusResponse('failed');
-    }
+    };
+    if (!isExactClaudeC1Request(message)) return refuse('request-shape');
+    if (typeof this.c1Runner !== 'function') return refuse('runner-unavailable');
 
     const sessionId = message.id;
     const bootstrapCapability = this.c1ControllerBindings.get(sessionId) || null;
@@ -309,14 +317,16 @@ export class BrokerRuntime {
       message.session_controller_capability,
       bootstrapCapability,
     )) {
-      return claudeC1StatusResponse('failed');
+      return refuse(bootstrapCapability
+        ? 'controller-bootstrap-mismatch'
+        : 'controller-bootstrap-absent');
     }
     const authority = this._requireSessionController(
       sessionId,
       message.session_controller_capability,
     );
     if (!authority.ok) {
-      return claudeC1StatusResponse('failed');
+      return refuse('session-controller-authority');
     }
 
     const ownedSession = this.manager.get(sessionId);
@@ -327,12 +337,12 @@ export class BrokerRuntime {
     // The live gate may open custody only after the ordinary provider has
     // exited. Otherwise an unsandboxed Codex/Claude process under the same OS
     // principal could inspect the trusted broker while it holds the token.
-    if (!ownedSession || !session?.exit || !runtimeGeneration) {
-      return claudeC1StatusResponse('failed');
-    }
+    if (!ownedSession) return refuse('session-not-owned-by-this-host');
+    if (!session?.exit) return refuse('provider-still-live');
+    if (!runtimeGeneration) return refuse('runtime-generation-unknown');
 
     const finalization = this.exitFinalizationsBySession.get(ownedSession);
-    if (!isThenable(finalization)) return claudeC1StatusResponse('failed');
+    if (!isThenable(finalization)) return refuse('exit-finalization-missing');
     // C1 is a managed-boundary certification, not a way to upgrade a native
     // provider after it exits. Only an exact descriptor which already passed
     // the managed Codex hostile boundary may precede the Claude custody run.
@@ -340,12 +350,12 @@ export class BrokerRuntime {
       this.c1ProviderBoundariesBySession.get(ownedSession),
       sessionId,
     )) {
-      return claudeC1StatusResponse('failed');
+      return refuse('managed-provider-boundary-absent');
     }
     // Reserve the session synchronously, before the first await. While this
     // reservation exists no provider may be launched and no second custody
     // lease may be opened for the same session.
-    if (this.c1Operations.has(sessionId)) return claudeC1StatusResponse('failed');
+    if (this.c1Operations.has(sessionId)) return refuse('c1-already-running-for-session');
     const operation = Object.freeze({
       session: ownedSession,
       runtime_generation: runtimeGeneration,
@@ -359,16 +369,14 @@ export class BrokerRuntime {
         const currentGeneration = stringOrNull(
           this.sessionMetadata.get(sessionId)?.runtime_generation,
         );
-        if (closed?.ok !== true
-          || currentSession !== ownedSession
-          || !currentStatus?.exit
-          || currentGeneration !== runtimeGeneration) {
-          return claudeC1StatusResponse('failed');
-        }
+        if (closed?.ok !== true) return refuse(`terminal-cleanup-unconfirmed:${safeDiagnosticCode(closed?.reason, 'unknown')}`);
+        if (currentSession !== ownedSession) return refuse('session-replaced-during-finalization');
+        if (!currentStatus?.exit) return refuse('provider-relaunched-during-finalization');
+        if (currentGeneration !== runtimeGeneration) return refuse('generation-changed-during-finalization');
 
         const acquired = this.c1Interlock?.acquireC1?.();
         if (!acquired?.ok || typeof acquired.lease?.release !== 'function') {
-          return claudeC1StatusResponse('failed');
+          return refuse(`global-interlock:${safeDiagnosticCode(acquired?.reason, 'unavailable')}`);
         }
         globalLease = acquired.lease;
         // This is the complete runner contract. In particular it deliberately
@@ -382,16 +390,17 @@ export class BrokerRuntime {
           .then(() => this.c1Runner(context))
           .then((result) => {
             if (result?.status !== 'passed') {
+              // The hostile run itself reached a verdict: report it as-is.
+              try { process.stderr.write(`[c1] runner verdict: ${safeDiagnosticCode(result?.status, 'failed')}\n`); } catch { /* best effort */ }
               return claudeC1StatusResponse(result?.status);
             }
             const certified = this.c1CertificationWriter?.();
-            return claudeC1StatusResponse(
-              certified?.ok === true ? 'passed' : 'failed',
-            );
+            if (certified?.ok === true) return claudeC1StatusResponse('passed');
+            return refuse(`certification-write:${safeDiagnosticCode(certified?.reason, 'unavailable')}`);
           })
-          .catch(() => claudeC1StatusResponse('failed'));
+          .catch(() => refuse('runner-threw'));
       })
-      .catch(() => claudeC1StatusResponse('failed'))
+      .catch(() => refuse('finalization-threw'))
       .finally(() => {
         // The C1 lock begins only after ordinary-provider finalization
         // confirmed and spans the complete runner promise, including failure.
