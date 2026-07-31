@@ -56,6 +56,28 @@ export async function findLatestClaudeSession({
   };
 }
 
+export async function findClaudeSessionById({
+  sessionId,
+  cwd = null,
+  projectsDir = CLAUDE_PROJECTS_DIR,
+} = {}) {
+  const workspace = cwd ? resolveWorkspaceRoot(cwd) : null;
+  if (!workspace || !sessionId) return null;
+  const path = join(projectsDir, encodeClaudeProjectPath(workspace), `${sessionId}.jsonl`);
+  let info;
+  try {
+    info = await stat(path);
+  } catch {
+    return null;
+  }
+  return {
+    path,
+    mtimeMs: info.mtimeMs,
+    cwd: workspace,
+    sessionId,
+  };
+}
+
 function sessionIdFromPath(path) {
   const name = String(path || '').split('/').pop() || '';
   return name.endsWith('.jsonl') ? name.slice(0, -'.jsonl'.length) : null;
