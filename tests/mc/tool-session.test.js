@@ -37,6 +37,57 @@ describe('mc provider-native tool sessions', () => {
     assert.equal(lookedUp, false);
   });
 
+  test('repairs a stored session whose transcript path was not persisted', async () => {
+    const resolved = await resolveToolSessionForResume({
+      entry: {
+        name: 'data',
+        tool: 'codex',
+        worktree_path: '/repo/data',
+        tool_session_id: 'cx_stored',
+        tool_session_source: 'codex',
+        tool_transcript_path: null,
+      },
+      launchTool: { id: 'codex', shortName: 'codex', adapter: codexAdapter },
+      deps: {
+        findLatestTranscriptForTool: async () => ({
+          path: '/tmp/codex.jsonl',
+          sessionId: 'cx_stored',
+        }),
+      },
+    });
+
+    assert.deepEqual(resolved, {
+      ok: true,
+      source: 'codex',
+      sessionId: 'cx_stored',
+      transcriptPath: '/tmp/codex.jsonl',
+      from: 'transcript-repaired',
+    });
+  });
+
+  test('does not repair from a transcript belonging to another session', async () => {
+    const resolved = await resolveToolSessionForResume({
+      entry: {
+        tool: 'codex',
+        worktree_path: '/repo/data',
+        tool_session_id: 'cx_stored',
+        tool_session_source: 'codex',
+      },
+      launchTool: { id: 'codex', shortName: 'codex', adapter: codexAdapter },
+      deps: {
+        findLatestTranscriptForTool: async () => ({
+          path: '/tmp/other.jsonl',
+          sessionId: 'cx_other',
+        }),
+      },
+    });
+
+    assert.equal(resolved.ok, true);
+    assert.equal(resolved.sessionId, 'cx_stored');
+    assert.equal(resolved.transcriptPath, null);
+    assert.equal(resolved.from, 'registry');
+  });
+
   test('discovers an old provider session id from the latest matching transcript', async () => {
     const calls = [];
     const resolved = await resolveToolSessionForResume({

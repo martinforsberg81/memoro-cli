@@ -28,9 +28,36 @@ export async function resolveToolSessionForResume({
         entry?.llm_session_id,
       );
   if (stored !== null) {
-    const transcriptPath = hasProviderSessions
+    let transcriptPath = hasProviderSessions
       ? firstExplicitProviderValue(providerSession?.transcript_path)
       : firstExplicitProviderValue(entry?.tool_transcript_path, entry?.transcript_path);
+    let from = providerSession ? 'provider-sessions' : 'registry';
+
+    // Older launches persisted the native provider session ID before the
+    // transcript path was available. Repair that incomplete authority record
+    // from the latest transcript, but only when its embedded session ID is an
+    // exact match. Never guess from a path or from recency alone.
+    if (!transcriptPath && source) {
+      let discovered = null;
+      try {
+        discovered = await (deps.findLatestTranscriptForTool || findLatestTranscriptForTool)({
+          source,
+          cwd: entry?.worktree_path || null,
+          deps,
+        });
+      } catch {
+        // Discovery is opportunistic. Preserve the stored identity and let
+        // callers fail closed if the provider root is unavailable.
+      }
+      const discoveredId = firstExplicitProviderValue(
+        discovered?.sessionId,
+        discovered?.session_id,
+      );
+      if (discovered?.path && discoveredId === stored) {
+        transcriptPath = discovered.path;
+        from = 'transcript-repaired';
+      }
+    }
     const validated = validateResolvedProviderSession({ source, sessionId: stored, transcriptPath });
     if (!validated.ok) {
       return { ok: false, reason: validated.reason, source, sessionId: null, transcriptPath: null };
@@ -40,7 +67,7 @@ export async function resolveToolSessionForResume({
       source,
       sessionId: stored,
       transcriptPath,
-      from: providerSession ? 'provider-sessions' : 'registry',
+      from,
     };
   }
 
