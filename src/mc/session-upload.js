@@ -4,8 +4,8 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { CONFIG_DIR } from '../lib/config.js';
-import { findLatestClaudeSession } from '../lib/claude.js';
-import { findLatestCodexSession } from '../lib/codex.js';
+import { findClaudeSessionById, findLatestClaudeSession } from '../lib/claude.js';
+import { findCodexSessionById, findLatestCodexSession } from '../lib/codex.js';
 import { scrubRuntimeSecretsFromEnv } from './runtime-secrets.js';
 
 export async function findLatestTranscriptForTool({
@@ -19,6 +19,21 @@ export async function findLatestTranscriptForTool({
   }
   if (source === 'claude-code') {
     return (deps.findLatestClaudeSession || findLatestClaudeSession)({ cwd, newerThanMs });
+  }
+  return null;
+}
+
+export async function findTranscriptForToolSession({
+  source,
+  sessionId,
+  cwd,
+  deps = {},
+} = {}) {
+  if (source === 'codex') {
+    return (deps.findCodexSessionById || findCodexSessionById)({ sessionId, cwd });
+  }
+  if (source === 'claude-code') {
+    return (deps.findClaudeSessionById || findClaudeSessionById)({ sessionId, cwd });
   }
   return null;
 }

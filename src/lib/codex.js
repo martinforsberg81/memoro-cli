@@ -81,6 +81,36 @@ export async function findLatestCodexSession({ cwd = null, newerThanMs = 0, sess
   return null;
 }
 
+export async function findCodexSessionById({
+  sessionId,
+  cwd = null,
+  sessionsDir = CODEX_SESSIONS_DIR,
+} = {}) {
+  if (!sessionId || !existsSync(sessionsDir)) return null;
+  const workspace = cwd ? resolveWorkspaceRoot(cwd) : null;
+  const files = await listJsonlFiles(sessionsDir);
+  for (const path of files) {
+    const meta = await readCodexSessionMeta(path);
+    if (!meta || meta.sessionId !== sessionId) continue;
+    if (workspace && resolveWorkspaceRoot(meta.cwd || '') !== workspace) continue;
+    let info;
+    try {
+      info = await stat(path);
+    } catch {
+      continue;
+    }
+    return {
+      path,
+      mtimeMs: info.mtimeMs,
+      sessionId: meta.sessionId,
+      cwd: meta.cwd,
+      startedAt: meta.startedAt,
+      toolVersion: meta.toolVersion,
+    };
+  }
+  return null;
+}
+
 export async function readCodexSessionMeta(path) {
   try {
     const firstLine = await readFirstNonEmptyLine(path);
