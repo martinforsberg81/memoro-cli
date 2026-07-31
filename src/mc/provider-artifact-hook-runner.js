@@ -1,20 +1,25 @@
 #!/usr/bin/env node
 /**
- * Minimal provider SessionStart bridge used by the isolated managed Codex
- * domain. Keep this file dependency-free apart from Node built-ins: its exact
- * bytes and interpreter are hash-bound before hook trust is bypassed.
+ * Minimal provider SessionStart bridge used by isolated managed tool domains.
+ * Keep this file dependency-free apart from Node built-ins: its exact bytes
+ * and interpreter are hash-bound before hook trust is bypassed.
  */
 import { createConnection } from 'node:net';
 import { pathToFileURL } from 'node:url';
 
 const MAX_STDIN_BYTES = 16 * 1024;
 const MAX_RESPONSE_BYTES = 4 * 1024;
-const TIMEOUT_MS = 1_000;
+// Provider capture acknowledges only after both the private artifact and the
+// managed-generation receipt are durable. Those fsyncs can legitimately take
+// longer than one second on a busy host, so keep the bridge timeout below the
+// provider hook deadline without treating a slow durable commit as failure.
+const TIMEOUT_MS = 5_000;
 const ID = /^[A-Za-z0-9._:-]{1,128}$/;
+const TOOL_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
 const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export function buildProviderArtifactHookRequest({ tool, env, event } = {}) {
-  if (tool !== 'codex' && tool !== 'claude-code') return null;
+  if (!TOOL_ID.test(tool || '')) return null;
   if (env?.MEMORO_MC_PARENT !== '1'
     || !ID.test(env.MC_CODING_SESSION_ID || '')
     || !UUID_V4.test(env.MC_RUNTIME_GENERATION || '')

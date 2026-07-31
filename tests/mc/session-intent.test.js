@@ -55,6 +55,7 @@ describe('mc session launch intents', () => {
         tool: 'claude',
         label: 'identity cleanup',
         worktree_path: '/repo-data',
+        coding_session_id: 'sess_resume_data',
       },
       launchTool: { id: 'claude-code' },
       env: { PATH: '/bin' },
@@ -62,6 +63,7 @@ describe('mc session launch intents', () => {
 
     assert.equal(intent.mode, MC_SESSION_LAUNCH_MODES.RESUME);
     assert.equal(intent.cwd, '/repo-data');
+    assert.equal(intent.codingSessionId, 'sess_resume_data');
     assert.equal(intent.sessionName, 'data');
     assert.equal(intent.label, 'identity cleanup');
     assert.equal(intent.focus, 'identity cleanup');
@@ -95,7 +97,12 @@ describe('mc session launch intents', () => {
       localAuthMode: LOCAL_AUTH_MODES.MANAGED_PORTABLE,
     });
     const managedResume = buildResumeSessionLaunchIntent({
-      entry: { name: 'data', tool: 'codex', worktree_path: '/repo-data' },
+      entry: {
+        name: 'data',
+        tool: 'codex',
+        worktree_path: '/repo-data',
+        coding_session_id: 'sess_managed_data',
+      },
       localAuthMode: LOCAL_AUTH_MODES.MANAGED_PORTABLE,
     });
     const cloud = buildCloudSessionLaunchIntent({
@@ -105,6 +112,7 @@ describe('mc session launch intents', () => {
 
     assert.equal(managedNew.localAuthMode, LOCAL_AUTH_MODES.MANAGED_PORTABLE);
     assert.equal(managedResume.localAuthMode, LOCAL_AUTH_MODES.MANAGED_PORTABLE);
+    assert.equal(managedResume.codingSessionId, 'sess_managed_data');
     assert.equal(Object.hasOwn(cloud, 'localAuthMode'), false);
   });
 

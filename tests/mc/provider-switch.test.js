@@ -267,6 +267,56 @@ test('A to B seals, persists, advances the source cursor, and prepares one user 
   );
 });
 
+test('managed source handoff uses terminal archive proof instead of a transcript path', async () => {
+  const entry = sourceEntry();
+  entry.tool_session_provider_adapter = 'claude-managed-local-v1';
+  entry.tool_session_provider_generation = sourceGeneration;
+  entry.provider_sessions.providers['claude-code'].transcript_path = null;
+  let inspected = 0;
+
+  const result = await prepareProviderSwitch({
+    entry,
+    targetTool: resolveToolInput('codex'),
+    targetCustody: 'managed',
+    localPresence: { verdict: 'unknown', session: null },
+    deps: {
+      inspectManagedProviderHandoffSource: (input) => {
+        inspected += 1;
+        assert.equal(input.tool, 'claude-code');
+        assert.equal(input.providerSessionId, 'claude-native-a');
+        assert.equal(input.runtimeGeneration, sourceGeneration);
+        return {
+          schema: 'mc-managed-provider-handoff-source/v1',
+          ok: true,
+          tool_id: 'claude-code',
+          provider_adapter_id: 'claude-managed-local-v1',
+          coding_session_id: entry.coding_session_id,
+          provider_session_id: 'claude-native-a',
+          runtime_generation: sourceGeneration,
+          archive_digest: 'a'.repeat(64),
+          reason: null,
+        };
+      },
+      mcHome: () => '/private/mc',
+      brokerRequest: async () => ({ ok: true, journal: null }),
+      readConfig: async () => ({ apiUrl: 'https://meetmemoro.test' }),
+      getApiUrl: () => null,
+      resolveBootstrapIdentity: async () => ({ token: 'token-in-memory' }),
+      getRepoContext: async () => ({
+        toplevel: '/repo',
+        branch: 'sess/handoff',
+        remoteUrl: 'git@github.com:martinforsberg81/memoro.git',
+      }),
+    },
+  });
+
+  assert.equal(inspected, 1);
+  assert.deepEqual(result, {
+    ok: false,
+    code: 'handoff-source-runtime-unconfirmed',
+  });
+});
+
 test('delivery commits only the target cursor after broker acknowledgement', async () => {
   const entry = sourceEntry();
   let registryEntry = entry;
@@ -328,6 +378,82 @@ test('delivery commits only the target cursor after broker acknowledgement', asy
     result.entry.provider_sessions.providers.codex.last_consumed_handoff_sequence,
     2,
   );
+});
+
+test('managed delivery never projects the private target transcript path', async () => {
+  const entry = sourceEntry();
+  entry.provider_sessions.providers['claude-code'].transcript_path = null;
+  entry.provider_sessions.providers['claude-code'].last_consumed_handoff_sequence = 1;
+  const broker = makeBroker();
+  broker.journal = {
+    transaction_id: transactionId,
+    phase: 'delivery_acknowledged',
+    target_tool: 'codex',
+    target_custody: 'managed',
+    controller_root_digest: controllerRootDigest,
+    controller_capability_digest: controllerCapabilityDigest,
+    target_latest_sequence: 1,
+    target_runtime_generation: targetGeneration,
+  };
+  let current = entry;
+  const transaction = {
+    transaction_id: transactionId,
+    target_tool: 'codex',
+    target_custody: 'managed',
+    controller_capability: controllerCapability,
+    target_latest_sequence: 1,
+    require_target_artifact: true,
+  };
+  const deps = {
+    brokerRequest: broker.request,
+    readProviderArtifact: presentTargetArtifact,
+    patchProviderSessionSequenceIfPresent: (_name, provider, sequence) => {
+      const next = structuredClone(current);
+      next.provider_sessions.providers[provider] = {
+        session_id: null,
+        transcript_path: null,
+        runtime_generation: null,
+        last_consumed_handoff_sequence: sequence,
+      };
+      current = next;
+      return { ok: true, entry: next };
+    },
+    upsertEntry: (patch) => {
+      current = { ...current, ...patch };
+      return current;
+    },
+    now: () => '2026-07-28T12:10:00.000Z',
+  };
+
+  const result = await commitProviderSwitchDelivery({
+    entry,
+    targetTool: resolveToolInput('codex'),
+    targetCustody: 'managed',
+    sessionControllerCapability: controllerRoot,
+    transaction,
+    deps,
+  });
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.entry.provider_sessions.providers.codex, {
+    session_id: 'codex-native-b',
+    transcript_path: null,
+    runtime_generation: targetGeneration,
+    last_consumed_handoff_sequence: 1,
+  });
+  assert.doesNotMatch(JSON.stringify(result.entry), /\/private\/transcripts/u);
+
+  const mismatch = await commitProviderSwitchDelivery({
+    entry,
+    targetTool: resolveToolInput('codex'),
+    targetCustody: 'native',
+    sessionControllerCapability: controllerRoot,
+    transaction,
+    deps,
+  });
+  assert.deepEqual(mismatch, {
+    ok: false,
+    code: 'handoff-delivery-commit-input-invalid',
+  });
 });
 
 test('delivery recovery finishes a registry switch after the durable cursor commit', async () => {
@@ -658,6 +784,73 @@ test('missing local journal fails closed when server continuity proves a persist
   assert.deepEqual(result, {
     ok: false,
     code: 'handoff-switch-journal-integrity-lost',
+  });
+});
+
+test('same-provider recovery permits a pre-capability server but a switch does not', async () => {
+  const entry = sourceEntry();
+  const deps = {
+    requestBroker: async () => {
+      throw new Error('dead socket');
+    },
+    sessionHostPaths: () => ({
+      socketPath: '/private/hosts/sess_switch1/broker.sock',
+      handoffSwitchPath: '/private/hosts/sess_switch1/handoff-switch.json',
+    }),
+    mcHome: () => '/private',
+    readHandoffSwitchJournalSync: () => ({ kind: 'absent' }),
+    readConfig: async () => ({ apiUrl: 'https://meetmemoro.test' }),
+    getApiUrl: () => null,
+    resolveBootstrapIdentity: async () => ({
+      token: 'token-in-memory',
+      apiUrl: 'https://meetmemoro.test',
+    }),
+    getRepoContext: async () => ({
+      remoteUrl: 'git@example.com:org/repo.git',
+      branch: 'main',
+      toplevel: '/repo',
+    }),
+    fetchStrictHandoffContext: async () => ({
+      ok: false,
+      code: 'handoff-capability-unavailable',
+    }),
+  };
+  const localPresence = {
+    verdict: 'exited',
+    runtime_generation: sourceGeneration,
+    session: null,
+  };
+
+  assert.deepEqual(await recoverProviderSwitch({
+    entry,
+    targetTool: resolveToolInput('claude'),
+    localPresence,
+    deps,
+  }), {
+    ok: true,
+    active: false,
+    handoffCapability: 'unavailable',
+  });
+
+  assert.deepEqual(await recoverProviderSwitch({
+    entry,
+    targetTool: null,
+    localPresence,
+    deps,
+  }), {
+    ok: true,
+    active: false,
+    handoffCapability: 'unavailable',
+  });
+
+  assert.deepEqual(await recoverProviderSwitch({
+    entry,
+    targetTool: resolveToolInput('codex'),
+    localPresence,
+    deps,
+  }), {
+    ok: false,
+    code: 'handoff-capability-unavailable',
   });
 });
 

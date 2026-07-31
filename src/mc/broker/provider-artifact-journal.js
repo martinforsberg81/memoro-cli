@@ -16,7 +16,7 @@ export const PROVIDER_ARTIFACT_SCHEMA = 'mc-provider-artifact-v1';
 const MAX_BYTES = 4096;
 const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const ID = /^[A-Za-z0-9._:-]{1,128}$/;
-const TOOLS = new Set(['claude-code', 'codex']);
+const TOOL_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
 const READ_NOFOLLOW = constants.O_RDONLY | (constants.O_NOFOLLOW || 0);
 
 export function buildProviderArtifact(input = {}) {
@@ -40,7 +40,7 @@ export function validateProviderArtifact(value) {
   const required = ['schema', 'coding_session_id', 'runtime_generation', 'tool', 'provider_session_id', 'transcript_path', 'captured_at'];
   if (keys.length !== required.length || keys.some((key) => !required.includes(key))) return invalid('unexpected-keys');
   if (value.schema !== PROVIDER_ARTIFACT_SCHEMA || !ID.test(value.coding_session_id || '')
-    || !UUID_V4.test(value.runtime_generation || '') || !TOOLS.has(value.tool)
+    || !UUID_V4.test(value.runtime_generation || '') || !TOOL_ID.test(value.tool || '')
     || !ID.test(value.provider_session_id || '') || !absolutePath(value.transcript_path)
     || !iso(value.captured_at)) return invalid('invalid-fields');
   return { ok: true, value: { ...value } };

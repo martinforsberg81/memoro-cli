@@ -14,9 +14,9 @@
 
 extern char **environ;
 
-static bool wait_for_child(pid_t pid) {
+static bool wait_for_child(pid_t pid, int attempts) {
   int status = 0;
-  for (int attempt = 0; attempt < 20; attempt += 1) {
+  for (int attempt = 0; attempt < attempts; attempt += 1) {
     pid_t result = waitpid(pid, &status, WNOHANG);
     if (result == pid) return WIFEXITED(status) && WEXITSTATUS(status) == 0;
     if (result < 0) return false;
@@ -41,7 +41,12 @@ static bool run_quiet(const char *path, char *const argv[]) {
     execve(path, argv, environ);
     _exit(127);
   }
-  return wait_for_child(pid);
+  /*
+   * A cold Node CLI start can exceed two seconds on a busy developer
+   * machine. This probe checks callability, not latency, so keep a bounded
+   * five-second budget for CLI and curl children.
+   */
+  return wait_for_child(pid, 50);
 }
 
 static bool parent_exposes_canary(void) {
@@ -76,7 +81,7 @@ static bool parent_exposes_canary(void) {
     used += count;
   }
   close(pipefd[0]);
-  bool ok = wait_for_child(pid);
+  bool ok = wait_for_child(pid, 20);
   buffer[used > 0 ? used : 0] = '\0';
   return ok && strstr(buffer, "MC_BOUNDARY_CANARY=") != NULL;
 }
@@ -124,7 +129,24 @@ static bool can_connect_external(void) {
     }
   }
   close(fd);
-  return result == 0;
+  if (result == 0) return true;
+
+  /*
+   * Permission profiles with domain rules intentionally route public traffic
+   * through Codex's sandbox proxy and block raw destination sockets. Use the
+   * platform curl through that injected proxy as the positive egress check.
+   */
+  char *const curl_argv[] = {
+    "/usr/bin/curl",
+    "--silent",
+    "--show-error",
+    "--fail",
+    "--max-time",
+    "5",
+    "https://1.1.1.1/cdn-cgi/trace",
+    NULL
+  };
+  return run_quiet("/usr/bin/curl", curl_argv);
 }
 
 static bool workspace_write_blocked(void) {
@@ -138,6 +160,10 @@ static bool workspace_write_blocked(void) {
   return blocked;
 }
 
+/*
+ * Detachment must not restore credential access. Ordinary network access is
+ * measured separately and remains available in the credential-only profile.
+ */
 static bool detached_boundary_reachable(
   const char *canary_path,
   const char *socket_path
@@ -148,11 +174,10 @@ static bool detached_boundary_reachable(
     if (setsid() < 0) _exit(1);
     bool reached = access(canary_path, R_OK) == 0
       || getenv("MC_BOUNDARY_CANARY") != NULL
-      || can_connect_unix(socket_path)
-      || can_connect_external();
+      || can_connect_unix(socket_path);
     _exit(reached ? 0 : 1);
   }
-  return wait_for_child(pid);
+  return wait_for_child(pid, 20);
 }
 
 static const char *json_bool(bool value) {

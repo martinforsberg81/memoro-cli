@@ -5,9 +5,14 @@ import { dirname } from 'node:path';
 import { requestBroker } from './client.js';
 import { brokerLogPath } from './paths.js';
 import { BROKER_PROTOCOL_VERSION } from './daemon.js';
+import { BROKER_RUNTIME_IDENTITY } from './runtime-identity.js';
 import { scrubRuntimeSecretsFromEnv } from '../runtime-secrets.js';
 
-export const START_POLL_MS = 1_500;
+// A cold global Node CLI start can exceed five seconds on macOS after package
+// replacement, while the detached broker computes and binds its exact runtime
+// identity. Keep startup bounded without reporting failure for a host that
+// becomes healthy moments later.
+export const START_POLL_MS = 15_000;
 export const POLL_INTERVAL_MS = 100;
 
 export async function ensureBrokerRunning({
@@ -18,10 +23,14 @@ export async function ensureBrokerRunning({
   intervalMs = POLL_INTERVAL_MS,
   readyFile = null,
   expectedProtocolVersion = BROKER_PROTOCOL_VERSION,
+  expectedRuntimeIdentity = BROKER_RUNTIME_IDENTITY,
 } = {}) {
   const existing = await request({ type: 'status' }).catch(() => null);
   if (existing?.ok) {
-    const compatibility = checkBrokerCompatibility(existing, { expectedProtocolVersion });
+    const compatibility = checkBrokerCompatibility(existing, {
+      expectedProtocolVersion,
+      expectedRuntimeIdentity,
+    });
     if (compatibility.ok) {
       return { ok: true, alreadyRunning: true, broker: existing.broker };
     }
@@ -54,7 +63,10 @@ export async function ensureBrokerRunning({
   while (Date.now() - started < timeoutMs) {
     const res = await request({ type: 'status' }).catch(() => null);
     if (res?.ok) {
-      const compatibility = checkBrokerCompatibility(res, { expectedProtocolVersion });
+      const compatibility = checkBrokerCompatibility(res, {
+        expectedProtocolVersion,
+        expectedRuntimeIdentity,
+      });
       if (compatibility.ok) return { ok: true, started: true, broker: res.broker };
       return incompatibleBrokerResult(res, compatibility);
     }
@@ -85,6 +97,7 @@ function incompatibleBrokerResult(status, compatibility) {
 
 export function checkBrokerCompatibility(status, {
   expectedProtocolVersion = BROKER_PROTOCOL_VERSION,
+  expectedRuntimeIdentity = BROKER_RUNTIME_IDENTITY,
 } = {}) {
   if (!status?.ok) return { ok: false, reason: 'status_unavailable' };
   const broker = status.broker || {};
@@ -94,6 +107,12 @@ export function checkBrokerCompatibility(status, {
       ok: false,
       reason: `protocol_mismatch:${broker.protocol_version}`,
     };
+  }
+  if (!broker.runtime_identity) {
+    return { ok: false, reason: 'missing_runtime_identity' };
+  }
+  if (broker.runtime_identity !== expectedRuntimeIdentity) {
+    return { ok: false, reason: 'runtime_identity_mismatch' };
   }
   return { ok: true };
 }
@@ -108,6 +127,52 @@ export function liveBrokerSessions(sessions = []) {
       cwd: session.cwd || null,
       tool: session.tool || null,
     }));
+}
+
+export async function retireTerminalBrokerSessions({
+  request,
+  sessions,
+  controllerCapability = null,
+} = {}) {
+  if (typeof request !== 'function' || !Array.isArray(sessions)) {
+    return { ok: false, error: 'terminal broker session inventory is unavailable' };
+  }
+  if (liveBrokerSessions(sessions).length > 0) {
+    return { ok: false, error: 'live broker sessions cannot be retired for replacement' };
+  }
+  for (const session of sessions) {
+    const id = session?.id || session?.coding_session_id || null;
+    if (typeof id !== 'string' || !id) {
+      return { ok: false, error: 'terminal broker session identity is unavailable' };
+    }
+    if (typeof controllerCapability !== 'string' || !controllerCapability) {
+      return { ok: false, error: 'terminal broker session controller is unavailable' };
+    }
+    const removed = await request({
+      type: 'remove_session',
+      id,
+      session_controller_capability: controllerCapability,
+    }).catch((error) => ({
+      ok: false,
+      error: error?.message || String(error),
+    }));
+    if (!removed?.ok) {
+      return {
+        ok: false,
+        error: `terminal broker session removal failed (${removed?.reason || removed?.error || 'unknown'})`,
+      };
+    }
+  }
+  if (sessions.length === 0) return { ok: true, retired: 0 };
+  const verified = await request({ type: 'status' }).catch(() => null);
+  if (!verified?.ok || !Array.isArray(verified.sessions)
+    || verified.sessions.length > 0) {
+    return {
+      ok: false,
+      error: 'terminal broker session removal could not be verified',
+    };
+  }
+  return { ok: true, retired: sessions.length };
 }
 
 export async function stopExistingBroker({ request, sleep, timeoutMs, intervalMs }) {

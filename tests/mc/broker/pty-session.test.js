@@ -278,6 +278,43 @@ describe('PtySession', () => {
     assert.deepEqual(fake.writes, ['grounding\r']);
   });
 
+  test('deferred messages wait for the adapter user-prompt readiness boundary', () => {
+    const timers = makeManualTimers();
+    const { session, fake } = makeSession({
+      launchSpec: {
+        bin: '/x/codex',
+        startupMessageDelivery: 'deferred-pty',
+        isUserMessagePromptReady: ({ recentOutput }) => (
+          recentOutput.lastIndexOf('OpenAI Codex')
+          > recentOutput.lastIndexOf('Hooks need review')
+        ),
+        args: (argv) => argv,
+      },
+      launchOptions: { startupMessage: 'grounding' },
+      startupMessageDelayMs: 10,
+      startupMessageSetTimeoutFn: timers.setTimeoutFn,
+      startupMessageClearTimeoutFn: timers.clearTimeoutFn,
+      ringBytes: 1_024,
+    });
+
+    session.start();
+    fake.emitData('Hooks need review');
+    assert.equal(timers.timers.size, 0);
+    timers.fireAll();
+    assert.deepEqual(fake.writes, []);
+
+    fake.emitData('\nOpenAI Codex (v0.145.0)');
+    assert.equal(timers.timers.size, 1);
+    fake.emitData('\nHooks need review');
+    assert.equal(timers.timers.size, 0);
+    timers.fireAll();
+    assert.deepEqual(fake.writes, []);
+
+    fake.emitData('\nOpenAI Codex (v0.145.0)');
+    timers.fireAll();
+    assert.deepEqual(fake.writes, ['grounding\r']);
+  });
+
   test('exit cancels a pending deferred startup message', () => {
     const timers = makeManualTimers();
     const { session, fake } = makeSession({

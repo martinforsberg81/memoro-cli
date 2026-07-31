@@ -100,6 +100,60 @@ export async function updateSecret(portal, id, body) {
   });
 }
 
+export async function acquireSecretRefreshLease(portal, id, {
+  refreshLeaseToken,
+} = {}) {
+  const p = portalOrDefault(portal);
+  return p.memoroFetch(
+    p.apiUrl,
+    `/api/vault/secrets/${encodeURIComponent(id)}/refresh-lease`,
+    {
+      token: p.token,
+      method: 'POST',
+      body: {
+        operation: 'acquire',
+        refreshLeaseToken,
+      },
+    },
+  );
+}
+
+export async function releaseSecretRefreshLease(portal, id, {
+  refreshLeaseToken,
+} = {}) {
+  const p = portalOrDefault(portal);
+  return p.memoroFetch(
+    p.apiUrl,
+    `/api/vault/secrets/${encodeURIComponent(id)}/refresh-lease`,
+    {
+      token: p.token,
+      method: 'POST',
+      body: {
+        operation: 'release',
+        refreshLeaseToken,
+      },
+    },
+  );
+}
+
+export async function renewSecretRefreshLease(portal, id, {
+  refreshLeaseToken,
+} = {}) {
+  const p = portalOrDefault(portal);
+  return p.memoroFetch(
+    p.apiUrl,
+    `/api/vault/secrets/${encodeURIComponent(id)}/refresh-lease`,
+    {
+      token: p.token,
+      method: 'POST',
+      body: {
+        operation: 'renew',
+        refreshLeaseToken,
+      },
+    },
+  );
+}
+
 export async function deleteSecret(portal, id) {
   const p = portalOrDefault(portal);
   return p.memoroFetch(p.apiUrl, `/api/vault/secrets/${encodeURIComponent(id)}`, {

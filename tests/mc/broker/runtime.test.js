@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
+import { join } from 'node:path';
 import test, { describe } from 'node:test';
 
 import { BrokerRuntime } from '../../../src/mc/broker/runtime.js';
+import { mcHome } from '../../../src/mc/paths.js';
 import { authenticateHandoffSwitchJournal } from '../../../src/mc/broker/handoff-switch-journal.js';
 import {
   deriveHandoffControllerCapability,
@@ -87,6 +90,7 @@ function makeRuntime(opts = {}) {
   const resolver = makeLaunchResolver(opts.launch || {});
   const sidecars = [];
   const lifecycleWrites = [];
+  const managedReceiptWrites = [];
   const interlock = opts.c1Interlock || makeInterlockFixture();
   let now = 1_000;
   const runtime = new BrokerRuntime({
@@ -97,6 +101,52 @@ function makeRuntime(opts = {}) {
     clock: () => now,
     managedProviderResolver: opts.managedProviderResolver,
     credentialDomainCloser: opts.credentialDomainCloser,
+    managedGenerationInspector: opts.managedGenerationInspector
+      || (({
+        codingSessionId,
+        runtimeGeneration,
+        credentialDomain,
+        transaction,
+      }) => ({
+        kind: 'present',
+        phase: 'domain-ready',
+        terminal: false,
+        intent: {
+          sequence: transaction.sequence,
+          intent_digest: transaction.intent_digest,
+        },
+        receipts: {
+          'domain-ready': {
+            data: {
+              domain_generation: credentialDomain.generation,
+              manifest_digest: credentialDomain.manifest_sha256,
+            },
+          },
+        },
+        coding_session_id: codingSessionId,
+        runtime_generation: runtimeGeneration,
+      })),
+    managedReceiptWriter: opts.managedReceiptWriter || ((receipt) => {
+      managedReceiptWrites.push(receipt);
+      return { ok: true, receipt };
+    }),
+    providerArtifactContextBuilder: opts.providerArtifactContextBuilder || (({
+      tool,
+      provider,
+    }) => ({
+      schema: 'mc-test-provider-artifact-context/v1',
+      custody: provider?.descriptor ? 'managed' : 'native-compat',
+      tool,
+      adapter_context: {},
+    })),
+    providerArtifactObserver: opts.providerArtifactObserver || (() => ({
+      ok: false,
+      reason: 'test-provider-artifact-not-observed',
+    })),
+    providerArtifactValidator: opts.providerArtifactValidator || (() => ({
+      ok: false,
+      reason: 'test-provider-artifact-not-configured',
+    })),
     lifecycleWriter: (record) => {
       lifecycleWrites.push(record);
       return record;
@@ -106,6 +156,7 @@ function makeRuntime(opts = {}) {
     handoffSwitchAdvance: opts.handoffSwitchAdvance,
     controllerBindings: opts.controllerBindings,
     c1Runner: opts.c1Runner,
+    c1CertificationWriter: opts.c1CertificationWriter || (() => ({ ok: true })),
     c1Interlock: interlock,
     sidecarFactory: opts.sidecarFactory || ((spec) => {
       const sidecar = {
@@ -194,6 +245,7 @@ function makeRuntime(opts = {}) {
     resolver,
     sidecars,
     lifecycleWrites,
+    managedReceiptWrites,
     tick(ms = 1) {
       now += ms;
       return now;
@@ -257,15 +309,15 @@ function markSessionC1Eligible(runtime, sessionId) {
   const session = runtime.manager.get(sessionId);
   assert.ok(session, `missing C1 fixture session ${sessionId}`);
   runtime.c1ProviderBoundariesBySession.set(session, Object.freeze({
-    schema: 'mc-c1-provider-boundary-evidence-v1',
+    schema: 'mc-managed-credential-boundary-evidence-v1',
     provider_adapter: 'codex-managed-local-v1',
-    profile: 'mc-managed-portable',
+    boundary_profile: 'mc-managed-portable',
     session_id: sessionId,
     generation: '11111111-1111-4111-8111-111111111111',
     launch_nonce: 'n'.repeat(43),
-    native_binary_sha256: 'a'.repeat(64),
-    provider_config_sha256: 'b'.repeat(64),
-    manifest_sha256: 'c'.repeat(64),
+    release_digest: 'a'.repeat(64),
+    policy_digest: 'b'.repeat(64),
+    manifest_digest: 'c'.repeat(64),
     c1_eligible: true,
   }));
 }
@@ -284,12 +336,55 @@ function managedC1Descriptor(sessionId) {
   };
 }
 
+const MANAGED_RUNTIME_GENERATION = '4f50f5a1-4c6b-4d6a-8b5c-152c5e6b8701';
+const NEXT_MANAGED_RUNTIME_GENERATION = 'd5e6439f-54e2-493b-a10f-5e5e014a2904';
+
+function managedDescriptor(sessionId, overrides = {}) {
+  return {
+    schema: 'mc-local-codex-credential-domain/v1',
+    session_id: sessionId,
+    generation: '22222222-2222-4222-8222-222222222222',
+    manifest_sha256: 'f'.repeat(64),
+    ...overrides,
+  };
+}
+
+function managedTransaction(sessionId, runtimeGeneration = MANAGED_RUNTIME_GENERATION) {
+  return {
+    schema: 'mc-managed-generation-transaction',
+    version: 1,
+    sequence: runtimeGeneration === MANAGED_RUNTIME_GENERATION ? 1 : 2,
+    coding_session_id: sessionId,
+    runtime_generation: runtimeGeneration,
+    intent_digest: createHash('sha256')
+      .update(`${sessionId}:${runtimeGeneration}`)
+      .digest('hex'),
+  };
+}
+
+function managedLaunchSession({
+  id,
+  descriptor,
+  runtimeGeneration = MANAGED_RUNTIME_GENERATION,
+  ...session
+}) {
+  return {
+    id,
+    runtime_generation: runtimeGeneration,
+    credential_domain: descriptor,
+    managed_transaction: managedTransaction(id, runtimeGeneration),
+    sidecars: { enabled: false },
+    ...session,
+  };
+}
+
 describe('BrokerRuntime', () => {
   test('run_claude_c1 is exact, host-bound, generation-bound, and status-only', async () => {
     const sessionId = 'sess_c1bound';
     const runtimeGeneration = '6b7e85d9-b14a-4c17-baf9-7181bb2becae';
     const controllerRoot = 'a'.repeat(64);
     const seen = [];
+    let certificationWrites = 0;
     const { runtime, fake } = makeRuntime({
       controllerBindings: [{
         schema: 'mc-broker-controller-bootstrap-v1',
@@ -299,6 +394,10 @@ describe('BrokerRuntime', () => {
       c1Runner(context) {
         seen.push(context);
         return { status: 'passed', diagnostic: 'must-not-escape' };
+      },
+      c1CertificationWriter() {
+        certificationWrites += 1;
+        return { ok: true };
       },
     });
 
@@ -336,6 +435,7 @@ describe('BrokerRuntime', () => {
       runtime_generation: runtimeGeneration,
     }]);
     assert.equal(Object.isFrozen(seen[0]), true);
+    assert.equal(certificationWrites, 1);
 
     for (const key of [
       'argv', 'env', 'path', 'secret_id', 'callback', 'tool', 'generation', 'unknown',
@@ -1193,12 +1293,16 @@ describe('BrokerRuntime', () => {
 
   test('managed launch replaces broker env and closes its credential domain on exit', async () => {
     const closed = [];
-    const descriptor = {
-      schema: 'mc-local-codex-credential-domain/v1',
-      session_id: 'sess_managed',
+    const descriptor = managedDescriptor('sess_managed', {
       domain_path: '/credential/domain',
-    };
-    const { runtime, fake } = makeRuntime({
+    });
+    const {
+      runtime,
+      fake,
+      lifecycleWrites,
+      managedReceiptWrites,
+      sidecars,
+    } = makeRuntime({
       managedProviderResolver: ({ launch, input }) => ({
         ok: true,
         launch: {
@@ -1223,21 +1327,80 @@ describe('BrokerRuntime', () => {
       },
     });
 
-    const result = runtime.handle({
+    const request = {
       type: 'launch_session',
-      session: {
+      session: managedLaunchSession({
         id: 'sess_managed',
+        descriptor,
         tool: 'codex',
         env: {
           MEMORO_TOKEN: 'must-not-reach-child',
           OPENAI_API_KEY: 'must-not-reach-child-either',
         },
-        sidecars: { enabled: false },
-        credential_domain: descriptor,
-      },
-    });
+        sidecars: {
+          enabled: true,
+          codingSessionId: 'sess_managed',
+          runtimeGeneration: MANAGED_RUNTIME_GENERATION,
+          label: 'managed',
+          machineId: 'machine',
+          source_id: 'local:machine',
+          source_kind: 'local',
+          source_name: 'machine',
+          cloud_session_id: null,
+          source: 'codex',
+          repo: 'widgets',
+          repoRef: 'acme/widgets',
+          branch: 'main',
+          tool: 'codex',
+          sockPath: join(mcHome(), 'sess_managed.sock'),
+          metaPath: join(mcHome(), 'sess_managed.json'),
+          presenceIdentity: 'broker-local',
+          heartbeat: true,
+          upload: false,
+          transcriptAccess: false,
+          githubCapabilities: {
+            schema: 1,
+            github: {
+              state: 'ready',
+              transport: 'mc-broker-v1',
+              actor: 'installation',
+              account: 'acme',
+              repository: {
+                id: 301,
+                full_name: 'acme/widgets',
+                owner: 'acme',
+                name: 'widgets',
+                private: true,
+                archived: false,
+                account: 'acme',
+              },
+              operations: ['connection.status', 'repository.metadata'],
+            },
+          },
+        },
+      }),
+    };
+    const result = runtime.handle(request);
 
     assert.equal(result.ok, true);
+    assert.equal(result.session.managed_provider, true);
+    assert.deepEqual(result.sidecars, { ok: true });
+    assert.equal(sidecars.length, 1);
+    assert.equal(sidecars[0].spec.coding.apiUrl, undefined);
+    assert.equal(sidecars[0].spec.coding.token, undefined);
+    assert.equal(sidecars[0].spec.coding.githubCapabilities.github.state, 'ready');
+    assert.deepEqual(
+      managedReceiptWrites.map((receipt) => receipt.phase),
+      ['broker-accepted', 'live'],
+    );
+    assert.deepEqual(
+      lifecycleWrites.map((record) => [record.state, record.runtimeGeneration]),
+      [['live', MANAGED_RUNTIME_GENERATION]],
+    );
+    const retried = runtime.handle(request);
+    assert.equal(retried.ok, true);
+    assert.equal(retried.reused, true);
+    assert.equal(fake.ptys.length, 1);
     const childEnv = fake.calls[0].options.env;
     assert.equal(childEnv.BASE, undefined);
     assert.equal(childEnv.MEMORO_TOKEN, undefined);
@@ -1247,6 +1410,17 @@ describe('BrokerRuntime', () => {
 
     fake.ptys[0].emitExit({ exitCode: 0, signal: null });
     await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(
+      managedReceiptWrites.map((receipt) => receipt.phase),
+      ['broker-accepted', 'live', 'live', 'exited'],
+    );
+    assert.deepEqual(
+      lifecycleWrites.map((record) => [record.state, record.runtimeGeneration]),
+      [
+        ['live', MANAGED_RUNTIME_GENERATION],
+        ['exited', MANAGED_RUNTIME_GENERATION],
+      ],
+    );
     assert.deepEqual(closed, [{
       descriptor,
       providerArtifact: null,
@@ -1254,7 +1428,39 @@ describe('BrokerRuntime', () => {
         apiUrl: null,
         token: null,
       },
+      managedTransaction: managedTransaction('sess_managed'),
     }]);
+  });
+
+  test('managed launch rejects credential-bearing or caller-shaped sidecars before spawn', () => {
+    const descriptor = managedDescriptor('sess_managed_sidecar_reject');
+    const { runtime, fake } = makeRuntime({
+      managedProviderResolver: ({ launch, input }) => ({
+        ok: true,
+        launch,
+        environmentMode: 'replace',
+        env: {},
+        descriptor: input.credential_domain,
+      }),
+    });
+    const result = runtime.handle({
+      type: 'launch_session',
+      session: managedLaunchSession({
+        id: 'sess_managed_sidecar_reject',
+        descriptor,
+        tool: 'codex',
+        sidecars: {
+          enabled: true,
+          token: 'memoro-credential-canary',
+          githubCapabilities: { schema: 1 },
+        },
+      }),
+    });
+
+    assert.equal(result.ok, false);
+    assert.equal(result.reason, 'managed-capability-sidecar-invalid');
+    assert.equal(fake.calls.length, 0);
+    assert.doesNotMatch(JSON.stringify(result), /memoro-credential-canary/);
   });
 
   test('provider global marker begins before spawn and survives mandatory terminal cleanup', async () => {
@@ -1292,7 +1498,11 @@ describe('BrokerRuntime', () => {
     });
     assert.equal(runtime.handle({
       type: 'launch_session',
-      session: { id: 'sess_global_marker_cleanup', tool: 'codex', credential_domain: descriptor },
+      session: managedLaunchSession({
+        id: 'sess_global_marker_cleanup',
+        descriptor,
+        tool: 'codex',
+      }),
     }).ok, true);
     assert.deepEqual(events, ['marker-acquired']);
     assert.equal(fake.ptys.length, 1, 'marker acquisition precedes PTY spawn');
@@ -1369,13 +1579,11 @@ describe('BrokerRuntime', () => {
       },
       acquireC1() { return { ok: false, reason: 'provider-marker-active' }; },
     };
-    const descriptor = {
-      schema: 'mc-local-codex-credential-domain/v1',
+    const descriptor = managedDescriptor('sess_global_marker_failure', {
       provider_adapter: 'codex-managed-local-v1',
       profile: 'mc-managed-portable',
-      session_id: 'sess_global_marker_failure',
       domain_path: '/credential/domain',
-    };
+    });
     const { runtime, fake } = makeRuntime({
       c1Interlock,
       managedProviderResolver: ({ launch, input }) => ({
@@ -1389,7 +1597,11 @@ describe('BrokerRuntime', () => {
     });
     assert.equal(runtime.handle({
       type: 'launch_session',
-      session: { id: 'sess_global_marker_failure', tool: 'codex', credential_domain: descriptor },
+      session: managedLaunchSession({
+        id: 'sess_global_marker_failure',
+        descriptor,
+        tool: 'codex',
+      }),
     }).ok, true);
     fake.ptys[0].emitExit({ exitCode: 0, signal: null });
     await new Promise((resolve) => setImmediate(resolve));
@@ -1417,16 +1629,14 @@ describe('BrokerRuntime', () => {
   });
 
   test('managed reopen waits for prior credential custody to close before replacing the dead runtime', async () => {
-    const firstDescriptor = {
-      schema: 'mc-local-codex-credential-domain/v1',
-      session_id: 'sess_managed_reopen',
+    const firstDescriptor = managedDescriptor('sess_managed_reopen', {
       domain_path: '/credential/first',
-    };
-    const nextDescriptor = {
-      schema: 'mc-local-codex-credential-domain/v1',
-      session_id: 'sess_managed_reopen',
+    });
+    const nextDescriptor = managedDescriptor('sess_managed_reopen', {
+      generation: '33333333-3333-4333-8333-333333333333',
+      manifest_sha256: 'e'.repeat(64),
       domain_path: '/credential/next',
-    };
+    });
     const closeCalls = [];
     let finishFirstClose;
     const { runtime, fake } = makeRuntime({
@@ -1449,18 +1659,19 @@ describe('BrokerRuntime', () => {
         return Promise.resolve({ ok: true, persisted: true });
       },
     });
-    const launch = (descriptor) => runtime.handle({
+    const launch = (descriptor, runtimeGeneration) => runtime.handle({
       type: 'launch_session',
-      session: {
+      session: managedLaunchSession({
         id: 'sess_managed_reopen',
+        descriptor,
+        runtimeGeneration,
         tool: 'codex',
-        credential_domain: descriptor,
-      },
+      }),
     });
 
-    assert.equal(launch(firstDescriptor).ok, true);
+    assert.equal(launch(firstDescriptor, MANAGED_RUNTIME_GENERATION).ok, true);
     fake.ptys[0].emitExit({ exitCode: 0, signal: null });
-    const reopening = launch(nextDescriptor);
+    const reopening = launch(nextDescriptor, NEXT_MANAGED_RUNTIME_GENERATION);
 
     assert.equal(typeof reopening?.then, 'function');
     assert.equal(fake.ptys.length, 1, 'replacement must wait for prior custody close');
@@ -1477,16 +1688,14 @@ describe('BrokerRuntime', () => {
   });
 
   test('a duplicate old managed exit never closes the replacement credential domain', async () => {
-    const firstDescriptor = {
-      schema: 'mc-local-codex-credential-domain/v1',
-      session_id: 'sess_managed_generation_owner',
+    const firstDescriptor = managedDescriptor('sess_managed_generation_owner', {
       domain_path: '/credential/first',
-    };
-    const nextDescriptor = {
-      schema: 'mc-local-codex-credential-domain/v1',
-      session_id: 'sess_managed_generation_owner',
+    });
+    const nextDescriptor = managedDescriptor('sess_managed_generation_owner', {
+      generation: '33333333-3333-4333-8333-333333333333',
+      manifest_sha256: 'e'.repeat(64),
       domain_path: '/credential/next',
-    };
+    });
     const closeCalls = [];
     const { runtime, fake } = makeRuntime({
       managedProviderResolver: ({ launch, input }) => ({
@@ -1501,17 +1710,22 @@ describe('BrokerRuntime', () => {
         return { ok: true, persisted: true };
       },
     });
-    const launch = (descriptor) => runtime.handle({
+    const launch = (descriptor, runtimeGeneration) => runtime.handle({
       type: 'launch_session',
-      session: { id: 'sess_managed_generation_owner', tool: 'codex', credential_domain: descriptor },
+      session: managedLaunchSession({
+        id: 'sess_managed_generation_owner',
+        descriptor,
+        runtimeGeneration,
+        tool: 'codex',
+      }),
     });
 
-    assert.equal(launch(firstDescriptor).ok, true);
+    assert.equal(launch(firstDescriptor, MANAGED_RUNTIME_GENERATION).ok, true);
     fake.ptys[0].emitExit({ exitCode: 0, signal: null });
     await new Promise((resolve) => setImmediate(resolve));
     assert.deepEqual(closeCalls, [firstDescriptor]);
 
-    assert.equal(launch(nextDescriptor).ok, true);
+    assert.equal(launch(nextDescriptor, NEXT_MANAGED_RUNTIME_GENERATION).ok, true);
     fake.ptys[0].emitExit({ exitCode: 0, signal: null });
     await new Promise((resolve) => setImmediate(resolve));
     assert.deepEqual(closeCalls, [firstDescriptor]);
@@ -1546,7 +1760,10 @@ describe('BrokerRuntime', () => {
         id: 'sess_managed_new',
         cwd: '/repo',
         tool: 'codex',
-        credential_domain: { schema: 'mc-local-codex-credential-domain/v1' },
+        ...managedLaunchSession({
+          id: 'sess_managed_new',
+          descriptor: managedDescriptor('sess_managed_new'),
+        }),
       },
     });
 
@@ -1555,11 +1772,9 @@ describe('BrokerRuntime', () => {
   });
 
   test('managed removal waits for provider exit and confirmed credential cleanup', async () => {
-    const descriptor = {
-      schema: 'mc-local-codex-credential-domain/v1',
-      session_id: 'sess_managed_remove',
+    const descriptor = managedDescriptor('sess_managed_remove', {
       domain_path: '/credential/domain',
-    };
+    });
     const closeCalls = [];
     let finishClose;
     const { runtime, fake } = makeRuntime({
@@ -1581,11 +1796,11 @@ describe('BrokerRuntime', () => {
     });
     assert.equal(runtime.handle({
       type: 'launch_session',
-      session: {
+      session: managedLaunchSession({
         id: 'sess_managed_remove',
+        descriptor,
         tool: 'codex',
-        credential_domain: descriptor,
-      },
+      }),
     }).ok, true);
 
     const removing = runtime.handle({
@@ -1993,6 +2208,89 @@ describe('BrokerRuntime', () => {
 
     fake.ptys[1].emitExit({ exitCode: 0, signal: null });
     assert.equal((await removeSecond).ok, true);
+  });
+
+  test('generation-scoped removal cannot stop a replacement runtime', async () => {
+    const retiredGeneration = '4f50f5a1-4c6b-4d6a-8b5c-152c5e6b8701';
+    const liveGeneration = 'd5e6439f-54e2-493b-a10f-5e5e014a2904';
+    const { runtime, fake } = makeRuntime();
+
+    assert.equal(runtime.handle({
+      type: 'launch_session',
+      session: {
+        id: 'sess_generation_scoped_remove',
+        runtime_generation: liveGeneration,
+      },
+    }).ok, true);
+
+    assert.deepEqual(await runtime.handle({
+      type: 'remove_session',
+      id: 'sess_generation_scoped_remove',
+      expected_runtime_generation: retiredGeneration,
+    }), {
+      ok: false,
+      removed: false,
+      reason: 'runtime-generation-mismatch',
+      error: 'broker session belongs to a different runtime generation',
+    });
+    assert.deepEqual(fake.ptys[0].kills, []);
+    assert.equal(
+      runtime.handle({
+        type: 'session_status',
+        id: 'sess_generation_scoped_remove',
+      }).session.runtime_generation,
+      liveGeneration,
+    );
+
+    const removed = runtime.handle({
+      type: 'remove_session',
+      id: 'sess_generation_scoped_remove',
+      expected_runtime_generation: liveGeneration,
+    });
+    fake.ptys[0].emitExit({ exitCode: 0, signal: null });
+    assert.equal((await removed).ok, true);
+  });
+
+  test('late removal finalization cannot delete a replacement runtime', async () => {
+    const retiredGeneration = '4f50f5a1-4c6b-4d6a-8b5c-152c5e6b8701';
+    const liveGeneration = 'd5e6439f-54e2-493b-a10f-5e5e014a2904';
+    const { runtime, fake } = makeRuntime();
+    const launch = (runtimeGeneration) => runtime.handle({
+      type: 'launch_session',
+      session: {
+        id: 'sess_late_remove',
+        runtime_generation: runtimeGeneration,
+      },
+    });
+
+    assert.equal(launch(retiredGeneration).ok, true);
+    const removing = runtime.handle({
+      type: 'remove_session',
+      id: 'sess_late_remove',
+      expected_runtime_generation: retiredGeneration,
+    });
+    fake.ptys[0].emitExit({ exitCode: 0, signal: null });
+
+    // Promise continuations run in the next microtask. A competing controller
+    // can therefore replace the exited row before the old remove continuation.
+    assert.equal(launch(liveGeneration).ok, true);
+    assert.deepEqual(await removing, { ok: true, removed: true });
+    const status = runtime.handle({
+      type: 'session_status',
+      id: 'sess_late_remove',
+    });
+    assert.equal(status.ok, true);
+    assert.equal(status.session.runtime_generation, liveGeneration);
+    assert.equal(status.session.session_state, 'live');
+    assert.deepEqual(fake.ptys[1].kills, []);
+
+    const removeReplacement = runtime.handle({
+      type: 'remove_session',
+      id: 'sess_late_remove',
+      expected_runtime_generation: liveGeneration,
+    });
+    fake.ptys[1].emitExit({ exitCode: 0, signal: null });
+    assert.equal((await removeReplacement).ok, true);
   });
 
   test('synchronous PTY exit owns metadata before launch and never starts sidecars', () => {

@@ -1,6 +1,7 @@
 import { StringDecoder } from 'node:string_decoder';
 import { createHash, randomBytes } from 'node:crypto';
 import { realpathSync } from 'node:fs';
+import { join } from 'node:path';
 
 import { resolveLaunch } from '../../adapters/index.js';
 import { DEFAULT_TOOL } from '../../lib/config.js';
@@ -9,21 +10,23 @@ import { mcHome } from '../paths.js';
 import { BrokerSessionManager } from './session-manager.js';
 import { BrokerSessionSidecars } from './session-sidecars.js';
 import {
-  MANAGED_CODEX_DOMAIN_SCHEMA,
-  MANAGED_CODEX_PROFILE,
-  MANAGED_CODEX_PROVIDER_ID,
-  resolveManagedCodexLaunch,
-} from '../provider-adapters/codex-managed.js';
-import { closeLocalCodexCredentialDomain } from '../credential-domain/local-codex.js';
+  finalizeManagedCredentialDomain,
+  managedCredentialBoundaryEvidence,
+  managedProviderArtifactContextForLaunch,
+  observeManagedProviderArtifact,
+  resolveManagedProviderLaunch,
+  validateManagedProviderArtifact,
+  validateManagedCredentialBoundaryEvidence,
+} from '../managed-provider-registry.js';
 import { sessionHostPaths } from './paths.js';
 import { writeSessionLifecycleSync } from './lifecycle-journal.js';
 import { providerArtifactPath } from './paths.js';
 import { createC1GlobalInterlock } from './c1-global-interlock.js';
 import { writeProviderArtifactSync } from './provider-artifact-journal.js';
 import {
-  validateClaudeProviderArtifact,
-  validateCodexProviderArtifact,
-} from './provider-artifacts.js';
+  providerArtifactContextForLaunch as nativeProviderArtifactContextForLaunch,
+  validateProviderArtifactEvidence as validateNativeProviderArtifactEvidence,
+} from '../provider-artifact-adapters/index.js';
 import {
   advanceHandoffSwitchJournalSync,
   matchesHandoffSwitchJournalAuthentication,
@@ -37,12 +40,23 @@ import {
   matchesHandoffControllerCapability,
   matchesHandoffControllerRoot,
 } from '../handoff-controller-capability.js';
+import {
+  appendManagedGenerationReceiptSync,
+  inspectManagedGenerationSync,
+  validateManagedGenerationTransaction,
+} from '../managed-generation-journal.js';
+import { decodeSessionCapabilities } from '../github-contract.js';
+import {
+  writeManagedClaudeCertificationSync,
+} from '../provider-adapters/claude-managed-certification.js';
 
 // Keep this below the generic runtime-finalization bound so a hung advisory
 // network call cannot race the mandatory local cleanup timeout.
 const TERMINAL_PRESENCE_TIMEOUT_MS = 10_000;
 const HANDOFF_DELIVERY_TIMEOUT_MS = 45_000;
 const MAX_HANDOFF_MESSAGE_BYTES = 16 * 1024;
+const BROKER_PROVIDER_ARTIFACT_CONTEXT_SCHEMA = 'mc-broker-provider-artifact-context/v1';
+const MANAGED_PRESENCE_ID_RE = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/;
 
 const SESSION_COMMANDS = new Set([
   'sessions',
@@ -99,18 +113,23 @@ export class BrokerRuntime {
     clock = Date,
     termName = 'xterm-256color',
     sidecarFactory = (opts) => new BrokerSessionSidecars(opts),
-    managedProviderResolver = resolveManagedCodexLaunch,
-    credentialDomainCloser = closeLocalCodexCredentialDomain,
+    managedProviderResolver = resolveManagedProviderLaunch,
+    credentialDomainCloser = finalizeManagedCredentialDomain,
+    managedBoundaryEvidence = managedCredentialBoundaryEvidence,
     lifecycleWriter = writeSessionLifecycleSync,
     providerArtifactWriter = writeProviderArtifactSync,
-    validateClaudeArtifact = validateClaudeProviderArtifact,
-    validateCodexArtifact = validateCodexProviderArtifact,
+    managedGenerationInspector = inspectManagedGenerationSync,
+    managedReceiptWriter = appendManagedGenerationReceiptSync,
+    providerArtifactContextBuilder = brokerProviderArtifactContextForLaunch,
+    providerArtifactObserver = observeBrokerProviderArtifact,
+    providerArtifactValidator = validateBrokerProviderArtifactEvidence,
     handoffSwitchReader = readHandoffSwitchJournalSync,
     handoffSwitchBegin = beginHandoffSwitchJournalSync,
     handoffSwitchAdvance = advanceHandoffSwitchJournalSync,
     handoffSwitchDiagnose = recordHandoffSwitchDiagnosticSync,
     controllerBindings = [],
     c1Runner = null,
+    c1CertificationWriter = writeManagedClaudeCertificationSync,
     c1Interlock = createC1GlobalInterlock(),
   } = {}) {
     if (!manager && !ptyFactory?.spawn) {
@@ -127,10 +146,14 @@ export class BrokerRuntime {
     this.sidecarFactory = sidecarFactory;
     this.managedProviderResolver = managedProviderResolver;
     this.credentialDomainCloser = credentialDomainCloser;
+    this.managedBoundaryEvidence = managedBoundaryEvidence;
     this.lifecycleWriter = lifecycleWriter;
     this.providerArtifactWriter = providerArtifactWriter;
-    this.validateClaudeArtifact = validateClaudeArtifact;
-    this.validateCodexArtifact = validateCodexArtifact;
+    this.managedGenerationInspector = managedGenerationInspector;
+    this.managedReceiptWriter = managedReceiptWriter;
+    this.providerArtifactContextBuilder = providerArtifactContextBuilder;
+    this.providerArtifactObserver = providerArtifactObserver;
+    this.providerArtifactValidator = providerArtifactValidator;
     this.handoffSwitchReader = handoffSwitchReader;
     this.handoffSwitchBegin = handoffSwitchBegin;
     this.handoffSwitchAdvance = handoffSwitchAdvance;
@@ -165,12 +188,20 @@ export class BrokerRuntime {
       }
     }
     this.c1Runner = c1Runner;
+    this.c1CertificationWriter = c1CertificationWriter;
     this.c1Interlock = c1Interlock;
     this.providerInterlocksBySession = new WeakMap();
     this.handoffJournalWitnesses = new Map();
     this.attaches = new Map();
     this.manager.setMaxListeners?.(Math.max(this.manager.getMaxListeners?.() || 10, 100));
+    this.manager.on('data', ({ id }) => {
+      this._observeProviderArtifact(id);
+    });
     this.manager.on('exit', ({ id, event, session }) => {
+      // A provider may publish its native session file immediately before
+      // exit. Capture it before terminal receipts and credential-domain
+      // cleanup consume the generation outcome.
+      this._observeProviderArtifact(id, session);
       const journaled = this._recordRuntimeExit(id, event, session);
       const sidecars = this._stopSidecars(id, { terminal: true }, session);
       const sidecarStartFinalization = session
@@ -249,7 +280,10 @@ export class BrokerRuntime {
       if (type === 'fetch_session_output') return this._fetchOutput(message.id);
       if (type === 'resize_session') return this._resize(message.id, message.cols, message.rows, message);
       if (type === 'stop_session') return this._stop(message.id, message.signal);
-      if (type === 'remove_session') return this._remove(message.id);
+      if (type === 'remove_session') return this._remove(
+        message.id,
+        message.expected_runtime_generation,
+      );
       if (type === 'capture_provider_artifact') return this._captureProviderArtifact(message);
       if (type === 'handoff_switch_read') return this._readHandoffSwitch(message);
       if (type === 'handoff_switch_begin') return this._beginHandoffSwitch(message);
@@ -346,7 +380,15 @@ export class BrokerRuntime {
         });
         return Promise.resolve()
           .then(() => this.c1Runner(context))
-          .then((result) => claudeC1StatusResponse(result?.status))
+          .then((result) => {
+            if (result?.status !== 'passed') {
+              return claudeC1StatusResponse(result?.status);
+            }
+            const certified = this.c1CertificationWriter?.();
+            return claudeC1StatusResponse(
+              certified?.ok === true ? 'passed' : 'failed',
+            );
+          })
           .catch(() => claudeC1StatusResponse('failed'));
       })
       .catch(() => claudeC1StatusResponse('failed'))
@@ -380,6 +422,14 @@ export class BrokerRuntime {
       };
     }
     const runtimeGeneration = stringOrNull(input?.runtime_generation);
+    const managedLaunch = this._inspectManagedLaunch({
+      id,
+      runtimeGeneration,
+      credentialDomain: input?.credential_domain,
+      transaction: input?.managed_transaction,
+    });
+    if (!managedLaunch.ok) return managedLaunch;
+    const managedTransaction = managedLaunch.transaction;
     const cwd = stringOrDefault(input.cwd, this._cwd());
     const handoffTransaction = plainObject(input.handoff_transaction)
       ? input.handoff_transaction
@@ -457,18 +507,22 @@ export class BrokerRuntime {
       const existingGeneration = stringOrNull(
         this.sessionMetadata.get(existing.id)?.runtime_generation,
       );
+      if (input?.credential_domain
+        && !sameManagedTransaction(
+          this.sessionMetadata.get(existing.id)?.managed_transaction,
+          managedTransaction,
+        )) {
+        return {
+          ok: false,
+          reason: 'managed-provider-session-conflict',
+          error: 'managed provider cannot reuse an existing broker session',
+        };
+      }
       if (runtimeGeneration && runtimeGeneration !== existingGeneration) {
         return {
           ok: false,
           reason: 'runtime-generation-conflict',
           error: 'broker session already exists under a different runtime generation',
-        };
-      }
-      if (input?.credential_domain) {
-        return {
-          ok: false,
-          reason: 'managed-provider-session-conflict',
-          error: 'managed provider cannot reuse an existing broker session',
         };
       }
       return {
@@ -478,6 +532,13 @@ export class BrokerRuntime {
       };
     }
     if (input?.credential_domain) {
+      if (managedLaunch.generation.phase !== 'domain-ready') {
+        return {
+          ok: false,
+          reason: 'managed-generation-launch-indeterminate',
+          error: 'managed generation was already accepted but no exact live runtime is attached',
+        };
+      }
       const pendingCleanup = this.credentialDomainClosures.get(id);
       if (pendingCleanup) {
         return Promise.resolve(pendingCleanup).then((cleanup) => {
@@ -546,6 +607,14 @@ export class BrokerRuntime {
         error: provider?.error || 'managed provider unavailable',
       };
     }
+    const launch = provider.launch;
+    const managedSidecars = validateManagedCapabilitySidecars(input.sidecars, {
+      managed: !!provider.descriptor,
+      codingSessionId: id,
+      runtimeGeneration,
+      tool: launch.shortName || launch.id,
+    });
+    if (!managedSidecars.ok) return managedSidecars;
     // A fresh native launch proves controller authority with the Memoro token
     // already held by trusted mc. A fresh managed launch may omit that token,
     // but only its fully validated, session-bound credential descriptor can
@@ -562,7 +631,6 @@ export class BrokerRuntime {
     if (!existingControllerRoot) {
       this.handoffControllerRoots.set(id, suppliedControllerRoot);
     }
-    const launch = provider.launch;
     if (!!handoffUserMessage !== !!handoffTransaction) {
       return {
         ok: false,
@@ -575,6 +643,7 @@ export class BrokerRuntime {
         id,
         tool: launch.id,
         runtimeGeneration,
+        managed: !!managedTransaction,
         transaction: handoffTransaction,
         handoffUserMessage,
       });
@@ -591,17 +660,28 @@ export class BrokerRuntime {
       termName: stringOrDefault(input.term_name, this.termName),
     });
 
+    const providerArtifactContext = this.providerArtifactContextBuilder({
+      tool: launch.id,
+      launch,
+      provider,
+      input,
+    });
+    if (!plainObject(providerArtifactContext)) {
+      return {
+        ok: false,
+        reason: 'provider-artifact-adapter-unavailable',
+        error: 'provider artifact ownership is unavailable for this launch',
+      };
+    }
     const sessionMetadata = buildSessionMetadata({
       id,
       name: input.name,
       cwd,
       sidecars: input.sidecars,
       runtimeGeneration,
-      providerSessionsDir: codexSessionsDirForLaunch({
-        launch,
-        provider,
-        input,
-      }),
+      providerToolId: launch.id,
+      providerArtifactContext,
+      managedTransaction,
     });
     const credentialDomain = provider.descriptor ? {
       descriptor: provider.descriptor,
@@ -632,7 +712,9 @@ export class BrokerRuntime {
     let session;
     let ownedSessionForLaunch = null;
     try {
-      if (runtimeGeneration) {
+      if (managedTransaction) {
+        this._appendManagedReceipt(sessionMetadata, 'broker-accepted', {});
+      } else if (runtimeGeneration) {
         this.lifecycleWriter({
           path: sessionHostPaths(id).lifecyclePath,
           codingSessionId: id,
@@ -671,7 +753,9 @@ export class BrokerRuntime {
           if (credentialDomain) {
             this.credentialDomains.set(id, credentialDomain);
             this.credentialDomainsBySession.set(ownedSession, credentialDomain);
-            const c1Boundary = c1ProviderBoundaryEvidence(credentialDomain.descriptor);
+            const c1Boundary = this.managedBoundaryEvidence({
+              descriptor: credentialDomain.descriptor,
+            });
             if (c1Boundary) {
               this.c1ProviderBoundariesBySession.set(ownedSession, c1Boundary);
             }
@@ -723,6 +807,30 @@ export class BrokerRuntime {
         error: 'broker session exited before it could become live',
       };
     }
+    if (managedTransaction) {
+      try {
+        this._appendManagedReceipt(sessionMetadata, 'live', {});
+        // Keep the removable host journal on the same exact generation as
+        // the durable receipt chain. If the broker is later lost before its
+        // exit handler runs, reconciliation can combine this binding with
+        // positive host-process absence instead of leaving the session
+        // permanently indeterminate.
+        this.lifecycleWriter({
+          path: sessionHostPaths(id).lifecyclePath,
+          codingSessionId: id,
+          runtimeGeneration,
+          state: 'live',
+          observedAt: runtimeObservedAt(this.clock),
+        });
+      } catch {
+        try { this.manager.stop(id, 'SIGTERM'); } catch {}
+        return this._waitForRuntimeFinalization(id).then(() => ({
+          ok: false,
+          reason: 'managed-generation-live-receipt-unconfirmed',
+          error: 'managed generation live state was not durably recorded',
+        }));
+      }
+    }
 
     const sidecars = this._startSidecars(id, input.sidecars);
     if (sidecars?.ok === false) {
@@ -768,6 +876,10 @@ export class BrokerRuntime {
       'handoff-delivery-timeout',
     ).then(async (delivery) => {
       if (delivery?.ok) {
+        // The idle-delivery window may end after Codex published its session
+        // file without another PTY frame. Observe once at this exact boundary
+        // before requiring the handoff artifact.
+        this._observeProviderArtifact(id, ownedSession);
         const acknowledged = this._acknowledgeHandoffDelivery({
           id,
           transaction: handoffTransaction,
@@ -878,7 +990,7 @@ export class BrokerRuntime {
     return { ok: true };
   }
 
-  _remove(id) {
+  _remove(id, expectedRuntimeGeneration = null) {
     const sessionId = requiredString(id, 'session id');
     if (this.c1Operations.has(sessionId)) {
       return Promise.resolve({
@@ -888,7 +1000,21 @@ export class BrokerRuntime {
         error: 'a C1 credential-boundary check owns this session',
       });
     }
+    const targetSession = this.manager.get(sessionId);
+    const targetMetadata = this.sessionMetadata.get(sessionId) || null;
     const status = this.manager.status(sessionId);
+    const observedRuntimeGeneration = stringOrNull(
+      this.sessionMetadata.get(sessionId)?.runtime_generation,
+    );
+    if (expectedRuntimeGeneration != null
+      && stringOrNull(expectedRuntimeGeneration) !== observedRuntimeGeneration) {
+      return Promise.resolve({
+        ok: false,
+        removed: false,
+        reason: 'runtime-generation-mismatch',
+        error: 'broker session belongs to a different runtime generation',
+      });
+    }
     const managed = this.credentialDomains.has(sessionId)
       || this.credentialDomainClosures.has(sessionId);
     if (status && !status.exit) {
@@ -903,7 +1029,16 @@ export class BrokerRuntime {
           error: 'broker session finalization was not confirmed',
         };
       }
-      this.sessionMetadata.delete(sessionId);
+      const currentSession = this.manager.get(sessionId);
+      if (currentSession !== targetSession) {
+        // A replacement may claim the id after the target PTY exits but before
+        // this asynchronous finalization continuation runs. The old target is
+        // already gone; never let its late cleanup mutate the replacement.
+        return { ok: true, removed: Boolean(targetSession) };
+      }
+      if (this.sessionMetadata.get(sessionId) === targetMetadata) {
+        this.sessionMetadata.delete(sessionId);
+      }
       this.credentialDomainClosures.delete(sessionId);
       return {
         ok: true,
@@ -924,27 +1059,34 @@ export class BrokerRuntime {
     if (input.runtime_generation !== runtimeGeneration) {
       return { ok: false, reason: 'provider-artifact-generation-mismatch' };
     }
-    const expectedSessionTool = input.tool === 'claude-code'
-      ? 'claude'
-      : input.tool === 'codex'
-        ? 'codex'
-        : null;
-    if (!expectedSessionTool || session.tool !== expectedSessionTool) {
+    if (!metadata.provider_tool_id || input.tool !== metadata.provider_tool_id) {
       return { ok: false, reason: 'provider-artifact-tool-mismatch' };
+    }
+    const existing = metadata.provider_artifact;
+    if (existing) {
+      const duplicate = existing.coding_session_id === id
+        && existing.runtime_generation === runtimeGeneration
+        && existing.tool === input.tool
+        && existing.provider_session_id === input.provider_session_id
+        && existing.transcript_path === input.transcript_path;
+      return duplicate
+        ? {
+            ok: true,
+            duplicate: true,
+            artifact: publicProviderArtifact(existing),
+          }
+        : { ok: false, reason: 'provider-artifact-conflict' };
     }
     const artifactInput = {
       cwd: input.cwd,
       providerSessionId: input.provider_session_id,
       transcriptPath: input.transcript_path,
     };
-    const checked = input.tool === 'claude-code'
-      ? this.validateClaudeArtifact(artifactInput)
-      : this.validateCodexArtifact(
-          artifactInput,
-          metadata.provider_sessions_dir
-            ? { sessionsDir: metadata.provider_sessions_dir }
-            : undefined,
-        );
+    const checked = this.providerArtifactValidator({
+      tool: input.tool,
+      evidence: artifactInput,
+      context: metadata.provider_artifact_context,
+    });
     if (!checked?.ok || !sameWorkspace(checked.workspace, session.cwd)) {
       return { ok: false, reason: checked?.reason || 'provider-artifact-workspace-mismatch' };
     }
@@ -954,6 +1096,66 @@ export class BrokerRuntime {
       runtime_generation: runtimeGeneration,
       tool: input.tool,
       provider_session_id: input.provider_session_id,
+      transcript_path: checked.transcriptPath,
+      captured_at: new Date(runtimeObservedAt(this.clock)).toISOString(),
+    };
+    return this._commitProviderArtifact({ id, metadata, artifact });
+  }
+
+  _observeProviderArtifact(id, expectedSession = null) {
+    const session = expectedSession || this.manager.get(id);
+    if (!session) return { ok: false, reason: 'provider-artifact-session-missing' };
+    const metadata = this.sessionMetadataBySession.get(session)
+      || this.sessionMetadata.get(id)
+      || {};
+    if (metadata.provider_artifact) {
+      return {
+        ok: true,
+        duplicate: true,
+        artifact: publicProviderArtifact(metadata.provider_artifact),
+      };
+    }
+    const runtimeGeneration = stringOrNull(metadata.runtime_generation);
+    const tool = stringOrNull(metadata.provider_tool_id);
+    if (!runtimeGeneration || !tool) {
+      return { ok: false, reason: 'provider-artifact-observation-unbound' };
+    }
+    let observed;
+    try {
+      observed = this.providerArtifactObserver({
+        tool,
+        cwd: session.cwd,
+        context: metadata.provider_artifact_context,
+      });
+    } catch {
+      observed = {
+        ok: false,
+        reason: 'provider-artifact-observation-failed',
+      };
+    }
+    if (!observed?.ok || !plainObject(observed.evidence)) {
+      return {
+        ok: false,
+        reason: observed?.reason || 'provider-artifact-not-observed',
+      };
+    }
+    const checked = this.providerArtifactValidator({
+      tool,
+      evidence: observed.evidence,
+      context: metadata.provider_artifact_context,
+    });
+    if (!checked?.ok || !sameWorkspace(checked.workspace, session.cwd)) {
+      return {
+        ok: false,
+        reason: checked?.reason || 'provider-artifact-workspace-mismatch',
+      };
+    }
+    const artifact = {
+      schema: 'mc-provider-artifact-v1',
+      coding_session_id: id,
+      runtime_generation: runtimeGeneration,
+      tool,
+      provider_session_id: observed.evidence.providerSessionId,
       transcript_path: checked.transcriptPath,
       captured_at: new Date(runtimeObservedAt(this.clock)).toISOString(),
     };
@@ -1172,12 +1374,15 @@ export class BrokerRuntime {
     id,
     tool,
     runtimeGeneration,
+    managed = false,
     transaction,
     handoffUserMessage,
   } = {}) {
     if (!runtimeGeneration || !plainObject(transaction)
       || typeof transaction.transaction_id !== 'string'
-      || typeof handoffUserMessage !== 'string') {
+      || typeof handoffUserMessage !== 'string'
+      || (transaction.target_custody || 'native')
+        !== (managed ? 'managed' : 'native')) {
       return {
         ok: false,
         reason: 'handoff-target-launch-invalid',
@@ -1256,6 +1461,15 @@ export class BrokerRuntime {
         artifact,
         trustedRoot: mcHome(),
       });
+      if (metadata.managed_transaction) {
+        this._appendManagedReceipt(metadata, 'provider-artifact', {
+          provider_session_id: written.artifact.provider_session_id,
+          artifact_digest: digestText(JSON.stringify(written.artifact)),
+          tool: written.artifact.tool,
+          transcript_path: written.artifact.transcript_path,
+          captured_at: written.artifact.captured_at,
+        });
+      }
       metadata.provider_artifact = written.artifact;
       this.sessionMetadata.set(id, metadata);
       return {
@@ -1434,6 +1648,20 @@ export class BrokerRuntime {
     const signal = exitCode === undefined && typeof event?.signal === 'string'
       ? event.signal
       : undefined;
+    let managedJournaled = true;
+    if (metadata.managed_transaction) {
+      try {
+        // A PTY may exit synchronously from start(). In that case the observed
+        // exit itself proves the accepted provider reached its live boundary.
+        this._appendManagedReceipt(metadata, 'live', {});
+        this._appendManagedReceipt(metadata, 'exited', {
+          exit_code: exitCode ?? null,
+          signal: signal || null,
+        });
+      } catch {
+        managedJournaled = false;
+      }
+    }
     try {
       this.lifecycleWriter({
         path: sessionHostPaths(id).lifecyclePath,
@@ -1447,7 +1675,7 @@ export class BrokerRuntime {
       if (removedSession && this.sessionMetadata.get(id) === metadata) {
         this.sessionMetadata.delete(id);
       }
-      return true;
+      return managedJournaled;
     } catch {
       if (removedSession && this.sessionMetadata.get(id) === metadata) {
         this.sessionMetadata.delete(id);
@@ -1471,6 +1699,9 @@ export class BrokerRuntime {
         || this.sessionMetadata.get(id)?.provider_artifact
         || null,
       portal: owned.portal,
+      managedTransaction: this.sessionMetadataBySession.get(expectedSession)?.managed_transaction
+        || this.sessionMetadata.get(id)?.managed_transaction
+        || null,
     }))
       .then((result) => {
         if (result?.ok) {
@@ -1557,6 +1788,7 @@ export class BrokerRuntime {
       ...metadata,
       attached,
       writer_attach_id: null,
+      ...(privateMetadata.managed_transaction ? { managed_provider: true } : {}),
       ...(sessionProjection ? { session_projection: sessionProjection } : {}),
       ...(privateMetadata.provider_artifact
         ? { provider_artifact: publicProviderArtifact(privateMetadata.provider_artifact) }
@@ -1575,6 +1807,134 @@ export class BrokerRuntime {
     }
     return false;
   }
+
+  _inspectManagedLaunch({
+    id,
+    runtimeGeneration,
+    credentialDomain,
+    transaction,
+  } = {}) {
+    const hasDomain = plainObject(credentialDomain);
+    const hasTransaction = transaction != null;
+    if (!hasDomain && !hasTransaction) return { ok: true, transaction: null, generation: null };
+    if (!hasDomain || !hasTransaction) {
+      return {
+        ok: false,
+        reason: 'managed-generation-binding-missing',
+        error: 'managed provider launch requires one durable generation binding',
+      };
+    }
+    const checked = validateManagedGenerationTransaction(transaction);
+    if (!checked.ok
+      || checked.value.coding_session_id !== id
+      || checked.value.runtime_generation !== runtimeGeneration
+      || credentialDomain.session_id !== id
+      || credentialDomain.generation == null
+      || credentialDomain.manifest_sha256 == null) {
+      return {
+        ok: false,
+        reason: 'managed-generation-binding-invalid',
+        error: 'managed provider generation binding is invalid',
+      };
+    }
+    let generation;
+    try {
+      generation = this.managedGenerationInspector({
+        codingSessionId: id,
+        runtimeGeneration,
+        credentialDomain,
+        transaction: checked.value,
+      });
+    } catch {
+      generation = null;
+    }
+    const domainReceipt = generation?.receipts?.['domain-ready'];
+    if (generation?.kind !== 'present'
+      || generation.intent?.sequence !== checked.value.sequence
+      || generation.intent?.intent_digest !== checked.value.intent_digest
+      || domainReceipt?.data?.domain_generation !== credentialDomain.generation
+      || domainReceipt?.data?.manifest_digest !== credentialDomain.manifest_sha256) {
+      return {
+        ok: false,
+        reason: 'managed-generation-journal-mismatch',
+        error: 'managed provider generation does not match its durable journal',
+      };
+    }
+    return { ok: true, transaction: checked.value, generation };
+  }
+
+  _appendManagedReceipt(metadata, phase, data) {
+    const transaction = metadata?.managed_transaction;
+    if (!transaction) return null;
+    return this.managedReceiptWriter({
+      phase,
+      codingSessionId: transaction.coding_session_id,
+      runtimeGeneration: transaction.runtime_generation,
+      intentDigest: transaction.intent_digest,
+      recordedAt: runtimeObservedAt(this.clock),
+      data,
+    });
+  }
+}
+
+function brokerProviderArtifactContextForLaunch(input = {}) {
+  const managed = !!input.provider?.descriptor;
+  const adapterContext = managed
+    ? managedProviderArtifactContextForLaunch(input)
+    : nativeProviderArtifactContextForLaunch(input);
+  if (!plainObject(adapterContext)) return null;
+  return Object.freeze({
+    schema: BROKER_PROVIDER_ARTIFACT_CONTEXT_SCHEMA,
+    custody: managed ? 'managed' : 'native-compat',
+    tool: input.tool,
+    adapter_context: structuredClone(adapterContext),
+  });
+}
+
+function validateBrokerProviderArtifactEvidence({
+  tool,
+  evidence,
+  context,
+} = {}) {
+  if (!plainObject(context)
+    || Object.keys(context).length !== 4
+    || context.schema !== BROKER_PROVIDER_ARTIFACT_CONTEXT_SCHEMA
+    || !['managed', 'native-compat'].includes(context.custody)
+    || context.tool !== tool
+    || !plainObject(context.adapter_context)) {
+    return { ok: false, reason: 'provider-artifact-context-invalid' };
+  }
+  const input = {
+    tool,
+    evidence,
+    context: context.adapter_context,
+  };
+  return context.custody === 'managed'
+    ? validateManagedProviderArtifact(input)
+    : validateNativeProviderArtifactEvidence(input);
+}
+
+function observeBrokerProviderArtifact({
+  tool,
+  cwd,
+  context,
+} = {}) {
+  if (!plainObject(context)
+    || Object.keys(context).length !== 4
+    || context.schema !== BROKER_PROVIDER_ARTIFACT_CONTEXT_SCHEMA
+    || !['managed', 'native-compat'].includes(context.custody)
+    || context.tool !== tool
+    || !plainObject(context.adapter_context)) {
+    return { ok: false, reason: 'provider-artifact-context-invalid' };
+  }
+  if (context.custody !== 'managed') {
+    return { ok: false, reason: 'provider-artifact-observation-unsupported' };
+  }
+  return observeManagedProviderArtifact({
+    tool,
+    cwd,
+    context: context.adapter_context,
+  });
 }
 
 function buildSessionMetadata({
@@ -1583,7 +1943,9 @@ function buildSessionMetadata({
   cwd,
   sidecars,
   runtimeGeneration = null,
-  providerSessionsDir = null,
+  providerToolId = null,
+  providerArtifactContext = null,
+  managedTransaction = null,
 } = {}) {
   const fromCwd = deriveMetadataFromCwd(cwd);
   const plainSidecars = plainObject(sidecars) ? sidecars : {};
@@ -1613,8 +1975,105 @@ function buildSessionMetadata({
         || plainSidecars.toolTranscriptPath,
     ),
     provider_artifact: null,
-    provider_sessions_dir: stringOrNull(providerSessionsDir),
+    provider_tool_id: stringOrNull(providerToolId),
+    provider_artifact_context: plainObject(providerArtifactContext)
+      ? structuredClone(providerArtifactContext)
+      : null,
+    managed_transaction: managedTransaction ? { ...managedTransaction } : null,
     worktree_name: worktreeName && worktreeName !== id ? worktreeName : fromCwd.worktree_name,
+  };
+}
+
+function validateManagedCapabilitySidecars(value, {
+  managed,
+  codingSessionId,
+  runtimeGeneration,
+  tool,
+} = {}) {
+  if (!managed) return { ok: true };
+  if (!plainObject(value)) {
+    return managedSidecarFailure();
+  }
+  if (value.enabled === false) {
+    return Object.keys(value).length === 1
+      ? { ok: true }
+      : managedSidecarFailure();
+  }
+  const expectedKeys = [
+    'branch',
+    'cloud_session_id',
+    'codingSessionId',
+    'enabled',
+    'githubCapabilities',
+    'heartbeat',
+    'label',
+    'machineId',
+    'metaPath',
+    'presenceIdentity',
+    'repo',
+    'repoRef',
+    'runtimeGeneration',
+    'sockPath',
+    'source',
+    'source_id',
+    'source_kind',
+    'source_name',
+    'tool',
+    'transcriptAccess',
+    'upload',
+  ].sort();
+  const actualKeys = Object.keys(value).sort();
+  if (actualKeys.length !== expectedKeys.length
+    || !actualKeys.every((key, index) => key === expectedKeys[index])
+    || value.enabled !== true
+    || value.codingSessionId !== codingSessionId
+    || value.runtimeGeneration !== runtimeGeneration
+    || value.presenceIdentity !== 'broker-local'
+    || value.heartbeat !== true
+    || value.upload !== false
+    || value.transcriptAccess !== false
+    || value.sockPath !== join(mcHome(), `${codingSessionId}.sock`)
+    || value.metaPath !== join(mcHome(), `${codingSessionId}.json`)
+    || typeof value.source !== 'string'
+    || !boundedManagedPresenceString(value.source, 128)
+    || typeof value.tool !== 'string'
+    || value.tool !== tool
+    || !boundedManagedPresenceString(value.machineId, 64)
+    || !boundedManagedPresenceString(value.source_id, 128)
+    || !MANAGED_PRESENCE_ID_RE.test(value.source_id)
+    || !boundedManagedPresenceString(value.source_kind, 64)
+    || !boundedManagedPresenceString(value.source_name, 128)
+    || !nullableManagedPresenceString(value.cloud_session_id, 128)
+    || !boundedManagedPresenceString(value.repo, 128)
+    || !nullableManagedPresenceString(value.repoRef, 256)
+    || !boundedManagedPresenceString(value.branch, 256)
+    || !nullableManagedPresenceString(value.label, 64)) {
+    return managedSidecarFailure();
+  }
+  try {
+    const capabilities = decodeSessionCapabilities(value.githubCapabilities);
+    if (!capabilities?.github?.state) return managedSidecarFailure();
+  } catch {
+    return managedSidecarFailure();
+  }
+  return { ok: true };
+}
+
+function boundedManagedPresenceString(value, maxLength) {
+  return typeof value === 'string'
+    && value.length > 0
+    && value.length <= maxLength;
+}
+
+function nullableManagedPresenceString(value, maxLength) {
+  return value === null || boundedManagedPresenceString(value, maxLength);
+}
+
+function managedSidecarFailure() {
+  return {
+    ok: false,
+    reason: 'managed-capability-sidecar-invalid',
+    error: 'managed capability sidecar is invalid',
   };
 }
 
@@ -1641,16 +2100,12 @@ function publicSessionMetadata(value = {}) {
   };
 }
 
-function codexSessionsDirForLaunch({ launch, provider, input } = {}) {
-  if (launch?.id !== 'codex') return null;
-  const codexHome = stringOrNull(provider?.env?.CODEX_HOME)
-    || stringOrNull(input?.env?.CODEX_HOME)
-    || stringOrNull(process.env.CODEX_HOME);
-  return codexHome ? `${codexHome.replace(/\/+$/, '')}/sessions` : null;
-}
-
 function sameWorkspace(left, right) {
   try { return realpathSync(left) === realpathSync(right); } catch { return false; }
+}
+
+function sameManagedTransaction(left, right) {
+  return !!left && !!right && JSON.stringify(left) === JSON.stringify(right);
 }
 
 function deriveMetadataFromCwd(cwd) {
@@ -1712,46 +2167,9 @@ function isC1ControllerBinding(value) {
     );
 }
 
-function c1ProviderBoundaryEvidence(descriptor) {
-  if (!plainObject(descriptor)
-    || descriptor.schema !== MANAGED_CODEX_DOMAIN_SCHEMA
-    || descriptor.provider_adapter !== MANAGED_CODEX_PROVIDER_ID
-    || descriptor.profile !== MANAGED_CODEX_PROFILE
-    || typeof descriptor.session_id !== 'string'
-    || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu
-      .test(descriptor.generation || '')
-    || !/^[A-Za-z0-9_-]{43}$/u.test(descriptor.launch_nonce || '')
-    || !/^[a-f0-9]{64}$/u.test(descriptor.native_binary_sha256 || '')
-    || !/^[a-f0-9]{64}$/u.test(descriptor.provider_config_sha256 || '')
-    || !/^[a-f0-9]{64}$/u.test(descriptor.manifest_sha256 || '')) return null;
-  return Object.freeze({
-    schema: 'mc-c1-provider-boundary-evidence-v1',
-    provider_adapter: MANAGED_CODEX_PROVIDER_ID,
-    profile: MANAGED_CODEX_PROFILE,
-    session_id: descriptor.session_id,
-    generation: descriptor.generation,
-    launch_nonce: descriptor.launch_nonce,
-    native_binary_sha256: descriptor.native_binary_sha256,
-    provider_config_sha256: descriptor.provider_config_sha256,
-    manifest_sha256: descriptor.manifest_sha256,
-    c1_eligible: true,
-  });
-}
-
 function isC1ProviderBoundaryForSession(value, sessionId) {
-  return plainObject(value)
-    && Object.keys(value).length === 10
-    && value.schema === 'mc-c1-provider-boundary-evidence-v1'
-    && value.provider_adapter === MANAGED_CODEX_PROVIDER_ID
-    && value.profile === MANAGED_CODEX_PROFILE
-    && value.session_id === sessionId
-    && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu
-      .test(value.generation || '')
-    && /^[A-Za-z0-9_-]{43}$/u.test(value.launch_nonce || '')
-    && /^[a-f0-9]{64}$/u.test(value.native_binary_sha256 || '')
-    && /^[a-f0-9]{64}$/u.test(value.provider_config_sha256 || '')
-    && /^[a-f0-9]{64}$/u.test(value.manifest_sha256 || '')
-    && value.c1_eligible === true;
+  return validateManagedCredentialBoundaryEvidence(value)
+    && value.session_id === sessionId;
 }
 
 function isThenable(value) {

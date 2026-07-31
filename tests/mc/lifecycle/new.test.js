@@ -60,8 +60,8 @@ describe('mc new', () => {
     assert.match(r.stderr + r.stdout, /invalid|name|character/i);
   });
 
-  test('--managed-portable can prepare a worktree without opening credential custody', () => {
-    const r = runMc(['new', 'managed-x', '--managed-portable', '--no-launch'], {
+  test('managed-by-default new can prepare a worktree without opening credential custody', () => {
+    const r = runMc(['new', 'managed-x', '--no-launch'], {
       cwd: repo.dir,
       env: {
         MC_HOME: repo.mcHome,
@@ -311,6 +311,23 @@ describe('mc new', () => {
     assert.equal(j.focus, null);
     const registry = JSON.parse(readFileSync(join(repo.mcHome, 'registry.json'), 'utf8'));
     assert.equal(registry.entries.find((entry) => entry.name === 'no-focus').session_objective, null);
+  });
+
+  test('rejects a single-dash typo instead of creating the preceding positional as a worktree', () => {
+    const r = runMc(['new', 'open', '-managed-test-2', '--no-launch'], {
+      cwd: repo.dir, env: { MC_HOME: repo.mcHome },
+    });
+    assert.equal(r.status, 2);
+    assert.match(r.stderr, /unknown flag: -managed-test-2/);
+    assert.equal(existsSync(join(repo.mcHome, 'registry.json')), false);
+  });
+
+  test('accepts an intentionally dash-prefixed task only after the option terminator', () => {
+    const r = runMc(['new', 'dash-focus', '--no-launch', '--json', '--', '-leading', 'task'], {
+      cwd: repo.dir, env: { MC_HOME: repo.mcHome },
+    });
+    assert.equal(r.status, 0, `stderr:${r.stderr}`);
+    assert.equal(parseJsonOrNull(r.stdout).focus, '-leading task');
   });
 
   test('prelaunch for --codex uses only the codex vault adapter and broker launch payload', async () => {

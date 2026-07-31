@@ -13,8 +13,14 @@ import {
 } from '../session-projector.js';
 import { scheduleSessionUpload } from '../session-upload.js';
 import { executeGitHubControlPlaneOperation } from '../github-session.js';
+import { decodeSessionCapabilities } from '../github-contract.js';
 import { createConnectionClient } from '../connections/client.js';
 import { createBoundIdentityBroker } from '../connections/identity.js';
+import {
+  buildSessionHeartbeatPayload,
+  postHeartbeatWithRetry,
+  publishLocalSessionPresence,
+} from '../session-presence.js';
 
 const TICK_INTERVAL_MS = 60_000;
 const MAX_ATTEMPTS = 3;
@@ -36,6 +42,8 @@ export class BrokerSessionSidecars {
     sessionUploadScheduler = scheduleSessionUpload,
     projectionTracker = null,
     connectionClient = null,
+    connectionClientFactory = createConnectionClient,
+    localPresencePublisher = publishLocalSessionPresence,
     logger = silentLogger(),
   } = {}) {
     if (!session) throw new TypeError('session is required');
@@ -46,9 +54,11 @@ export class BrokerSessionSidecars {
     this.wsClientFactory = wsClientFactory;
     this.fetchTranscriptHandlerFactory = fetchTranscriptHandlerFactory;
     this.memoroFetch = memoroFetchImpl;
+    const managedGitHub = managedGitHubCapabilities(coding.githubCapabilities);
+    this.githubCapabilities = managedGitHub;
     this.connectionClient = connectionClient || (
       coding.apiUrl && coding.token
-        ? createConnectionClient({
+        ? connectionClientFactory({
             identityBroker: createBoundIdentityBroker({
               token: coding.token,
               apiUrl: coding.apiUrl,
@@ -56,8 +66,11 @@ export class BrokerSessionSidecars {
             }),
             memoroFetch: memoroFetchImpl,
           })
-        : null
+        : managedGitHub
+          ? connectionClientFactory({ memoroFetch: memoroFetchImpl })
+          : null
     );
+    this.localPresencePublisher = localPresencePublisher;
     this.sleep = sleepImpl;
     this.now = now;
     this.heartbeatIntervalMs = heartbeatIntervalMs;
@@ -157,6 +170,7 @@ export class BrokerSessionSidecars {
             connectionClient: this.connectionClient,
             codingSessionId: this.coding.codingSessionId,
             request: payload,
+            allowedOperations: this.githubCapabilities?.github.operations || null,
             memoroFetchImpl: this.memoroFetch,
           });
           conn.end(JSON.stringify(response) + '\n');
@@ -207,17 +221,14 @@ export class BrokerSessionSidecars {
   }
 
   _startHeartbeat() {
-    if (!this.coding.apiUrl || !this.coding.token || this.coding.heartbeat === false) return;
+    if (this.coding.heartbeat === false || !this._hasPresenceIdentity()) return;
     this.heartbeatPromise = this._runHeartbeat();
   }
 
   async _runHeartbeat() {
     while (this.alive) {
       const now = this.now();
-      await postHeartbeatWithRetry({
-        apiUrl: this.coding.apiUrl,
-        token: this.coding.token,
-        payload: buildSessionHeartbeatPayload({
+      await this._publishPresence(buildSessionHeartbeatPayload({
           codingSessionId: this.coding.codingSessionId,
           runtimeGeneration: this.coding.runtimeGeneration || this.coding.runtime_generation || null,
           presenceState: 'active',
@@ -230,9 +241,7 @@ export class BrokerSessionSidecars {
           at: new Date(now).toISOString(),
           sessionProjection: this.currentProjection({ now }),
           label: this.coding.label || null,
-        }),
-        memoroFetchImpl: this.memoroFetch,
-        sleepImpl: this.sleep,
+        }), {
         retryIntervalMs: this.retryIntervalMs,
         maxAttempts: this.maxAttempts,
         shouldContinue: () => this.alive,
@@ -270,18 +279,14 @@ export class BrokerSessionSidecars {
   async _publishTerminalPresence() {
     const runtimeGeneration = this.coding.runtimeGeneration || this.coding.runtime_generation || null;
     if (
-      !this.coding.apiUrl
-      || !this.coding.token
-      || this.coding.heartbeat === false
+      this.coding.heartbeat === false
+      || !this._hasPresenceIdentity()
       || !runtimeGeneration
     ) {
       return false;
     }
     const now = this.now();
-    return postHeartbeatWithRetry({
-      apiUrl: this.coding.apiUrl,
-      token: this.coding.token,
-      payload: buildSessionHeartbeatPayload({
+    return this._publishPresence(buildSessionHeartbeatPayload({
         codingSessionId: this.coding.codingSessionId,
         runtimeGeneration,
         presenceState: 'terminal',
@@ -293,11 +298,37 @@ export class BrokerSessionSidecars {
         idleSeconds: 0,
         at: new Date(now).toISOString(),
         label: this.coding.label || null,
-      }),
-      memoroFetchImpl: this.memoroFetch,
-      sleepImpl: this.sleep,
+      }), {
       retryIntervalMs: this.retryIntervalMs,
       maxAttempts: 1,
+    });
+  }
+
+  _hasPresenceIdentity() {
+    return (this.coding.apiUrl && this.coding.token)
+      || this.coding.presenceIdentity === 'broker-local';
+  }
+
+  _publishPresence(payload, options = {}) {
+    if (this.coding.presenceIdentity === 'broker-local') {
+      return this.localPresencePublisher({
+        payload,
+        maxAttempts: options.maxAttempts,
+        retryIntervalMs: options.retryIntervalMs,
+        shouldContinue: options.shouldContinue,
+        deps: {
+          memoroFetch: this.memoroFetch,
+          sleep: this.sleep,
+        },
+      });
+    }
+    return postHeartbeatWithRetry({
+      apiUrl: this.coding.apiUrl,
+      token: this.coding.token,
+      payload,
+      memoroFetchImpl: this.memoroFetch,
+      sleepImpl: this.sleep,
+      ...options,
     });
   }
 
@@ -325,42 +356,10 @@ export class BrokerSessionSidecars {
   }
 }
 
-export function buildSessionHeartbeatPayload({
-  codingSessionId,
-  runtimeGeneration = null,
-  presenceState = null,
-  machineId,
-  sourceIdentity = {},
-  source,
-  repo,
-  branch,
-  idleSeconds = 0,
-  at,
-  sessionProjection,
-  label = null,
-} = {}) {
-  const terminal = presenceState === 'terminal';
-  const metadata = {
-    coding_session_id: codingSessionId,
-    ...(runtimeGeneration ? { runtime_generation: runtimeGeneration } : {}),
-    ...(presenceState ? { presence_state: presenceState } : {}),
-    machine_id: machineId,
-    source_id: sourceIdentity.source_id,
-    source_kind: sourceIdentity.source_kind,
-    source_name: sourceIdentity.source_name,
-    cloud_session_id: sourceIdentity.cloud_session_id,
-    source,
-    repo,
-    branch,
-    idle_seconds: terminal ? 0 : idleSeconds,
-    at,
-    ...(label ? { label } : {}),
-  };
-  if (terminal) return metadata;
-  return {
-    ...metadata,
-    session_projection: sessionProjection,
-  };
+function managedGitHubCapabilities(value) {
+  if (value == null) return null;
+  const descriptor = decodeSessionCapabilities(value);
+  return descriptor.github.state === 'ready' ? descriptor : null;
 }
 
 export function sourceForTool(tool) {
@@ -377,33 +376,6 @@ function normaliseCodingSource(value) {
   return trimmed || null;
 }
 
-export async function postHeartbeatWithRetry({
-  apiUrl,
-  token,
-  payload,
-  memoroFetchImpl = memoroFetch,
-  sleepImpl = sleep,
-  retryIntervalMs = RETRY_INTERVAL_MS,
-  maxAttempts = MAX_ATTEMPTS,
-  shouldContinue = () => true,
-}) {
-  for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    if (!shouldContinue()) return false;
-    try {
-      await memoroFetchImpl(apiUrl, '/api/sessions/heartbeat', {
-        token, method: 'POST', body: payload,
-      });
-      return true;
-    } catch {
-      if (attempt < maxAttempts - 1) {
-        try { await sleepImpl(retryIntervalMs); } catch {}
-        if (!shouldContinue()) return false;
-      }
-    }
-  }
-  return false;
-}
-
 function silentLogger() {
   return { info: () => {}, warn: () => {}, error: () => {} };
 }
@@ -412,4 +384,9 @@ export const __test__ = {
   TICK_INTERVAL_MS,
   RETRY_INTERVAL_MS,
   MAX_ATTEMPTS,
+};
+
+export {
+  buildSessionHeartbeatPayload,
+  postHeartbeatWithRetry,
 };

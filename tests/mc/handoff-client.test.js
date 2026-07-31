@@ -84,6 +84,33 @@ test('strict context requires a ready contiguous chain after the exact cursor', 
   }).code, 'handoff-continuity-handoff_chain_gap');
 });
 
+test('legacy context without handoff fields reports an unavailable capability', () => {
+  assert.deepEqual(validateHandoffContext({
+    version: 'mc-context-v1',
+    repo: null,
+    session: null,
+    session_continuity: [],
+  }, {
+    codingSessionId: 'sess_context1',
+    consumedSequence: 0,
+  }), {
+    ok: false,
+    code: 'handoff-capability-unavailable',
+  });
+
+  assert.deepEqual(validateHandoffContext({
+    version: 'mc-context-v1',
+    session_continuity: [],
+    continuity: {},
+  }, {
+    codingSessionId: 'sess_context1',
+    consumedSequence: 0,
+  }), {
+    ok: false,
+    code: 'handoff-context-invalid',
+  });
+});
+
 test('strict context client sends the provider cursor and never soft-degrades', async () => {
   const calls = [];
   const result = await fetchStrictHandoffContext({

@@ -5,7 +5,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 
-import { getRepoContext, deriveRepoName, derivePublicRepoRef } from '../../src/lib/git-context.js';
+import {
+  derivePublicRepoRef,
+  deriveRepoName,
+  getRepoContext,
+  resolvePublicRepoRef,
+} from '../../src/lib/git-context.js';
 
 function gitInit(dir) {
   spawnSync('git', ['init', '-q', '-b', 'main'], { cwd: dir });
@@ -147,5 +152,39 @@ describe('derivePublicRepoRef', () => {
       derivePublicRepoRef({ remoteUrl: 'not a clone url', toplevel: '/tmp/wat' }),
       null,
     );
+  });
+});
+
+describe('resolvePublicRepoRef', () => {
+  test('follows a bounded local origin chain to the public GitHub remote', async () => {
+    const seen = [];
+    const ref = await resolvePublicRepoRef({
+      remoteUrl: '/local/primary',
+      toplevel: '/local/worktree',
+    }, {
+      getContext: async (path) => {
+        seen.push(path);
+        return {
+          remoteUrl: 'https://user:secret@github.com/acme/widgets.git',
+          toplevel: path,
+        };
+      },
+    });
+    assert.equal(ref, 'acme/widgets');
+    assert.deepEqual(seen, ['/local/primary']);
+  });
+
+  test('fails closed on a local origin cycle or exhausted chain', async () => {
+    const ref = await resolvePublicRepoRef({
+      remoteUrl: '/local/a',
+      toplevel: '/local/worktree',
+    }, {
+      maxDepth: 4,
+      getContext: async (path) => ({
+        remoteUrl: path === '/local/a' ? '/local/b' : '/local/a',
+        toplevel: path,
+      }),
+    });
+    assert.equal(ref, null);
   });
 });

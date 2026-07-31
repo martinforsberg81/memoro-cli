@@ -174,8 +174,7 @@ static bool workspace_write_blocked(void) {
  */
 static bool detached_boundary_reachable(
   const char *canary_path,
-  const char *socket_path,
-  const char *loopback_port
+  const char *socket_path
 ) {
   pid_t pid = fork();
   if (pid < 0) return false;
@@ -184,9 +183,7 @@ static bool detached_boundary_reachable(
     bool reached = access(canary_path, R_OK) == 0
       || getenv("MC_C1_CANARY") != NULL
       || getenv("CLAUDE_CODE_OAUTH_TOKEN") != NULL
-      || can_connect_unix(socket_path)
-      || can_connect_ipv4("127.0.0.1", atoi(loopback_port))
-      || can_connect_ipv4("1.1.1.1", 443);
+      || can_connect_unix(socket_path);
     _exit(reached ? 0 : 1);
   }
   return wait_for_child(pid);
@@ -306,7 +303,7 @@ int main(int argc, char **argv) {
     json_bool(process_exposes_marker(observer_pid, "MC_C1_OBSERVER_CANARY=")),
     json_bool(observer_task_port_reachable(observer_pid)),
     json_bool(observer_signal_reachable(observer_pid)),
-    json_bool(detached_boundary_reachable(canary_path, socket_path, loopback_port)),
+    json_bool(detached_boundary_reachable(canary_path, socket_path)),
     json_bool(can_connect_unix(socket_path)),
     json_bool(can_connect_ipv4("127.0.0.1", atoi(loopback_port))),
     json_bool(can_connect_ipv4("1.1.1.1", 443)),

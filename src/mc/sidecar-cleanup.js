@@ -185,6 +185,11 @@ async function liveSessionIds({ listSessions }) {
   const sessions = await listSessions().catch(() => []);
   const out = new Set();
   for (const session of sessions || []) {
+    // A reachable per-session host retains its terminal row after the PTY
+    // exits. Reachability of that daemon is not liveness of its provider
+    // session: keeping the dead row here prevents the otherwise safe explicit
+    // zombie-host retirement path forever.
+    if (session?.session_state === 'dead') continue;
     const id = nonEmpty(session?.id || session?.coding_session_id || session?.host_session_id);
     if (id) out.add(id);
   }

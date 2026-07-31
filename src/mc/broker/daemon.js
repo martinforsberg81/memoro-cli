@@ -11,11 +11,19 @@ import {
 import { brokerPidPath, brokerSocketPath } from './paths.js';
 import { runClaudeC1BrokerOperation } from './c1-runner.js';
 import { getPackageVersion } from '../../lib/version.js';
+import { BROKER_RUNTIME_IDENTITY } from './runtime-identity.js';
 
-// v9 adds the controller-authenticated fixed Claude C1 operation. Provider
-// children still reach only the reduced provider-artifact socket and cannot
+// v12 requires an exact process-bound runtime identity in addition to the
+// protocol contract. This prevents a long-lived daemon from validating a
+// newly generated provider domain with previously loaded adapter or hook code.
+//
+// v11 requires both the append-only managed-generation transaction and
+// half-open request transport for asynchronous terminal receipts. Reusing a
+// v10 session host could silently lose the durable cleanup acknowledgement and
+// reopen the exact crash window these boundaries are designed to remove.
+// Provider children still reach only reduced capability sockets and cannot
 // invoke C1 or attach, read, write, resize, stop, remove, or relaunch a session.
-export const BROKER_PROTOCOL_VERSION = 'mc-broker-pty-v9';
+export const BROKER_PROTOCOL_VERSION = 'mc-broker-pty-v12';
 const MAX_PROVIDER_ARTIFACT_FRAME_BYTES = 20 * 1024;
 
 export async function startBrokerServer({
@@ -26,6 +34,7 @@ export async function startBrokerServer({
   pid = process.pid,
   mcVersion = null,
   protocolVersion = BROKER_PROTOCOL_VERSION,
+  runtimeIdentity = BROKER_RUNTIME_IDENTITY,
   now = () => Date.now(),
   onStop = null,
   exitOnStop = false,
@@ -48,6 +57,7 @@ export async function startBrokerServer({
         pid,
         mc_version: mcVersion,
         protocol_version: protocolVersion,
+        runtime_identity: runtimeIdentity,
         socket_path: socketPath,
         pid_path: pidPath,
         started_at: startedAt,
@@ -59,7 +69,13 @@ export async function startBrokerServer({
     return response;
   };
 
-  const server = createServerImpl((conn) => {
+  // requestBroker() terminates its writable side after the newline-delimited
+  // request frame. Managed cleanup is deliberately asynchronous, so the
+  // server must keep its writable side open until that response is durable and
+  // has been sent. Node's default allowHalfOpen:false would otherwise close
+  // the connection as soon as the client FIN arrives and silently discard the
+  // eventual cleanup receipt.
+  const server = createServerImpl({ allowHalfOpen: true }, (conn) => {
     let raw = Buffer.alloc(0);
     let handledInitialFrame = false;
     conn.on?.('error', () => {});
@@ -118,7 +134,7 @@ export async function startBrokerServer({
       if (!handledInitialFrame) void handleFrame(raw);
     });
   });
-  const artifactServer = createServerImpl((conn) => {
+  const artifactServer = createServerImpl({ allowHalfOpen: true }, (conn) => {
     let raw = Buffer.alloc(0);
     let handled = false;
     conn.on?.('error', () => {});

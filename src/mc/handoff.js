@@ -181,7 +181,7 @@ function validParentDigest(value, sequence) {
 
 function canonicalProvider(value) {
   if (value === 'claude') return 'claude-code';
-  return value === 'claude-code' || value === 'codex' ? value : null;
+  return typeof value === 'string' && ID_RE.test(value) ? value : null;
 }
 
 function id(value) {

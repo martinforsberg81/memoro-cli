@@ -181,10 +181,10 @@ export async function main() {
     return 0;
   }
 
-  // The managed portable request must fail before fresh-install/device auth
-  // can inspect Keychain or any other credential-bearing state. Recognition
-  // is intentionally limited to new/open/resume; bare mc and wrap keep their
-  // native coding-tool argv unchanged.
+  // Managed lifecycle mode must be fixed before fresh-install/device auth can
+  // inspect Keychain or any other credential-bearing state. Recognition is
+  // intentionally limited to new/open/resume; bare mc and wrap keep their
+  // native coding-tool argv unchanged until their separate cutover.
   const earlyAuthMode = requireLocalAuthMode(resolveLocalAuthModeFromArgv(argv));
   if (!earlyAuthMode.ok) {
     console.error(`mc: ${earlyAuthMode.error}`);

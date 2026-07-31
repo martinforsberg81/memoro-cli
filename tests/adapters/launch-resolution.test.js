@@ -100,6 +100,26 @@ describe('codex launchSpec — binary resolution', () => {
     assert.equal(spec.startupMessageDelivery, 'deferred-pty');
   });
 
+  it('waits for the Codex composer instead of answering native hook review', () => {
+    const spec = codex.launchSpec({ resolveBinary: () => '/x/codex' });
+    assert.equal(spec.isUserMessagePromptReady({
+      recentOutput: '\u001b[1mHooks need review\u001b[0m\n› 1. Review hooks',
+    }), false);
+    assert.equal(spec.isUserMessagePromptReady({
+      recentOutput: [
+        'Hooks need review',
+        '\u001b[1mOpenAI Codex\u001b[0m (v0.145.0)',
+        '› Run /review on my current changes',
+      ].join('\n'),
+    }), true);
+    assert.equal(spec.isUserMessagePromptReady({
+      recentOutput: [
+        'OpenAI Codex (v0.145.0)',
+        'Hooks need review',
+      ].join('\n'),
+    }), false);
+  });
+
   it('args() does not render default policy placeholders into launch flags', () => {
     const spec = codex.launchSpec({ resolveBinary: () => '/x/codex' });
     const effectivePolicy = resolveEffectivePolicy({ entry: { tool: 'codex' } });

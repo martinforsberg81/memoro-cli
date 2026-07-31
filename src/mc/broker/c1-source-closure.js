@@ -20,18 +20,18 @@ import { fileURLToPath } from 'node:url';
 const PACKAGE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 
 export const C1_SOURCE_CLOSURE_SHA256 = Object.freeze({
-  'package.json': '7a3f43b2b8d7ad8e3490a7e4e892c3165d5ca25496ad90e42bc6aa4a4a4f96cc',
+  'package.json': 'c66ab019dbce88c613eb94911b98e2099987b4e0b181add532b401eba39d611d',
   'scripts/security/managed-claude-c1-harness.mjs':
-    'd56572da0aefa569965d8e8c0a16fbbe917607b293eeadf56bd76978ad2c17d3',
+    '0f426316901ce836bec7a11733d1e537a4e4f7cb0e7de251225eccb2ccb2c10f',
   'scripts/security/managed-claude-c1-probe.c':
-    '17c6977cb4209fcd1adc67b2905f459bf28de12dbe6ec78c89f4f9a5ce0fe3c4',
+    '7ffc83d795a442b2c867687fe75fe2573e5123e0978ea12bb13b4e44d1fd205d',
   'scripts/security/managed-claude-c1-runtime.mjs':
-    '7d4dafaa530f18cc999693be00a27841c020c7c21eb32c82f37da30b53b53c4c',
+    'c492b988a21853b3aec75178181241dabd0bbfe8b31a89b7de64e88217c34982',
   'src/lib/api.js': '3d0ac5d550aea6ff5a8e337f1521c4066e528bc45474bad8b7ab3983e9e0cb0a',
   'src/lib/config.js': '3afa21f33613baf1838314a35b67e642ed286d55c7acbd5ee45cba4f5347c0cb',
   'src/lib/keychain.js': 'b6445625a9142c60d8915e34255155e277422050f02f3a26eebba7ee69f506e6',
   'src/mc/broker/c1-artifacts.js':
-    '2b8e7f84336c1a4d31039e60b96ddb02d553f6c1fd2e8004ce6b1ebf4f535ebc',
+    'd1926846b25d0711e44fbb8276bf75e4a75df48f189e598a8fd7827567ae2b9f',
   'src/mc/broker/c1-child.js':
     '3a869dc7c3de2e6ec4e084b763d8bf4ac6486691b02269b6da6d567cd8e2c8bb',
   'src/mc/broker/c1-lease-host.js':
@@ -39,7 +39,9 @@ export const C1_SOURCE_CLOSURE_SHA256 = Object.freeze({
   'src/mc/broker/c1-process-group.js':
     'fdce5abf4749441c3278f192339a226a7bcebe66cdfa7ea15ae2a56a92470357',
   'src/mc/paths.js': 'cbd3a787ad988bd852074b37af40648aba9c4142319baf2074151177d4f715bd',
-  'src/mc/vault/api.js': '555007dd1d264727f689fdd0619e34f7d66726a0c9c3a13940d6fd1348379942',
+  'src/mc/provider-adapters/claude-managed-policy.js':
+    '432352bff556ea7d26820d880e95e9be8fffabd73e02113537e1f7349a82daa7',
+  'src/mc/vault/api.js': 'c1d88a10e2c2bdcc742f0e98a204d5e23e1e5a8266c4e84c9387aa647addb896',
   'src/mc/vault/c1-claude-lease.js':
     '0daf92045a892b170e5ff5e2a226ef887963106e0e4eb35be8d888a19a4284f5',
   'src/mc/vault/client-crypto.js':

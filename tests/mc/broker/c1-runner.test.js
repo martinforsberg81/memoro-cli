@@ -204,5 +204,6 @@ test('C1 has exactly one detached group leader and waits for terminal group proo
   assert.match(child, /const CREDENTIAL_FD = 3/u);
   assert.match(harness, /detached: false/u);
   assert.match(runtime, /detached: false/u);
-  assert.match(runtime, /stdio: \['ignore', 'pipe', 'pipe'\]/u);
+  assert.match(runtime, /stdio: \['ignore', 'pipe', 'pipe', 'pipe'\]/u);
+  assert.match(runtime, /child\.stdio\[3\]\.end\(sentinel\)/u);
 });

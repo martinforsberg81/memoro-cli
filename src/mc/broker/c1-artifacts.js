@@ -180,7 +180,14 @@ export function verifyClaudeC1ArtifactFixture({ artifactRoot, expected } = {}, d
   if (!Number.isInteger(strict?.status)) return failure('c1-artifact-codesign-strict-unavailable');
   if (strict.status !== 1) return failure('c1-artifact-codesign-strict-unexpected');
 
-  const versionProbe = run(layout.claudeBinary, ['--version'], commandOptions());
+  // A cold, signed 250+ MB Claude artifact can take longer than the generic
+  // metadata probe bound on macOS. This remains a bounded exact-binary check;
+  // it is not a pin bypass or a fallback to PATH.
+  const versionProbe = run(
+    layout.claudeBinary,
+    ['--version'],
+    commandOptions({ timeout: 30_000 }),
+  );
   const version = String(versionProbe?.stdout || '').match(/\b(\d+\.\d+\.\d+)\b/)?.[1] || null;
   if (versionProbe?.status !== 0 || version !== pins.version) {
     return failure('c1-artifact-version-mismatch');
@@ -429,10 +436,10 @@ function fileDeps(deps = {}) {
   };
 }
 
-function commandOptions() {
+function commandOptions({ timeout = 10_000 } = {}) {
   return {
     encoding: 'utf8',
-    timeout: 10_000,
+    timeout,
     env: SAFE_ENV,
     maxBuffer: 1024 * 1024,
   };

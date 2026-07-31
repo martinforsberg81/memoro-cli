@@ -119,8 +119,19 @@ export class PtySession extends EventEmitter {
       this.lastOutputAt = this._now();
       this.ring.append(data);
       this.emit('data', data);
-      this.startupMessageController?.schedule();
-      this.handoffMessageController?.schedule();
+      const promptReady = typeof this.launchSpec.isUserMessagePromptReady === 'function'
+        ? this.launchSpec.isUserMessagePromptReady({
+          recentOutput: this.recentOutput(),
+          latestOutput: data,
+        })
+        : true;
+      if (promptReady) {
+        this.startupMessageController?.schedule();
+        this.handoffMessageController?.schedule();
+      } else {
+        this.startupMessageController?.pause();
+        this.handoffMessageController?.pause();
+      }
     });
 
     this.pty.onExit((event) => {

@@ -39,8 +39,13 @@ import * as codexAdapter from '../../../src/adapters/codex.js';
 import { resolveToolInput } from '../../../src/adapters/index.js';
 import { LOCAL_AUTH_MODES } from '../../../src/mc/local-auth-mode.js';
 import { MANAGED_CODEX_PROVIDER_ID } from '../../../src/mc/provider-adapters/codex-managed.js';
+import { recoverProviderSwitch } from '../../../src/mc/provider-switch.js';
 
 const MANAGED_GENERATION = '019dbb46-5772-4493-a627-f8ae48954a64';
+const runNativeResume = (argv, deps = {}) => runResume(argv, {
+  ...deps,
+  localAuthMode: LOCAL_AUTH_MODES.NATIVE,
+});
 
 describe('mc resume <name>', () => {
   let repo;
@@ -93,9 +98,9 @@ describe('mc resume <name>', () => {
     assert.doesNotMatch(r.stdout + r.stderr, /Codex.*Resume session|Resume session/i);
   });
 
-  test('--managed-portable still validates the requested registry entry before launch', async () => {
+  test('managed-by-default open still validates the requested registry entry before launch', async () => {
     const stderr = [];
-    const status = await runResume(['missing', '--managed-portable'], {
+    const status = await runResume(['missing'], {
       stderr: { write: (value) => stderr.push(value) },
       findEntry: () => null,
       attachLiveBrokerSession: async () => assert.fail('must not attach'),
@@ -138,7 +143,630 @@ describe('mc resume <name>', () => {
     });
 
     assert.equal(status, 1);
-    assert.match(stderr.join(''), /managed portable launch conflicts/);
+    assert.match(stderr.join(''), /managed session reconciliation is blocked/);
+  });
+
+  test('managed named open attaches only after durable reconciliation selects the exact runtime', async () => {
+    const entry = {
+      name: 'managed-live',
+      tool: 'codex',
+      worktree_path: '/tmp/managed-live',
+      coding_session_id: 'sess_managed_live',
+    };
+    let attached = 0;
+    const status = await runResume(['managed-live', '--managed-portable'], {
+      findEntry: () => entry,
+      reconcileManagedSession: async () => ({
+        ok: true,
+        action: 'attach',
+        runtimeGeneration: MANAGED_GENERATION,
+      }),
+      attachLiveBrokerSession: async (candidate) => {
+        attached += 1;
+        assert.equal(candidate.coding_session_id, 'sess_managed_live');
+        return { attached: true, code: 0 };
+      },
+      launchResumeSession: async () => assert.fail('exact live generation must not relaunch'),
+      launchFreshSession: async () => assert.fail('exact live generation must not fresh launch'),
+      upsertEntry: (patch) => ({ ...entry, ...patch }),
+      stderr: { write() {} },
+      stdout: { write() {} },
+    });
+
+    assert.equal(status, 0);
+    assert.equal(attached, 1);
+  });
+
+  test('managed open refuses to attach an incorrect live fresh cutover runtime', async () => {
+    const entry = {
+      name: 'managed-live-cutover',
+      tool: 'codex',
+      worktree_path: '/tmp/managed-live-cutover',
+      coding_session_id: 'sess_managed_live_cutover',
+      tool_session_id: 'provider_old',
+      tool_session_source: 'codex',
+    };
+    const errors = [];
+    const status = await runResume(['managed-live-cutover'], {
+      findEntry: () => entry,
+      fetchActiveSessions: async () => ({ ok: true, sessions: [] }),
+      inspectLocalBrokerSessionForEntry: async () => ({
+        verdict: 'live',
+        runtime_generation: MANAGED_GENERATION,
+      }),
+      importLegacyNativeProviderSession: () => ({
+        ok: true,
+        attempted: true,
+        imported: true,
+        repaired_cutover: true,
+        provider_session_id: 'provider_old',
+        runtime_generation: '77777777-7777-4777-8777-777777777777',
+      }),
+      reconcileManagedSession: async () => assert.fail(
+        'a known-wrong live cutover must be blocked before reconciliation',
+      ),
+      attachLiveBrokerSession: async () => assert.fail(
+        'a known-wrong live cutover must not attach',
+      ),
+      launchResumeSession: async () => assert.fail(
+        'a known-wrong live cutover must not resume in parallel',
+      ),
+      launchFreshSession: async () => assert.fail(
+        'a known-wrong live cutover must not start another provider',
+      ),
+      stderr: { write: (value) => errors.push(value) },
+      stdout: { write() {} },
+    });
+
+    assert.equal(status, 1);
+    assert.match(errors.join(''), /incorrect fresh cutover runtime is still live/);
+  });
+
+  test('managed named open imports exact legacy exit evidence before reconciliation', async () => {
+    const entry = {
+      name: 'managed-legacy',
+      tool: 'codex',
+      worktree_path: '/tmp/managed-legacy',
+      coding_session_id: 'sess_managed_legacy',
+      tool_session_id: 'provider_previous',
+      tool_session_source: 'codex',
+    };
+    const order = [];
+    const errors = [];
+    const status = await runResume(['managed-legacy'], {
+      findEntry: () => entry,
+      fetchActiveSessions: async () => ({ ok: true, sessions: [] }),
+      inspectLocalBrokerSessionForEntry: async () => ({ verdict: 'exited' }),
+      importManagedProviderRecovery: async ({ tool, localPresence }) => {
+        assert.equal(tool, 'codex');
+        assert.equal(localPresence.verdict, 'exited');
+        order.push('import');
+        return { ok: true, attempted: true, imported: true };
+      },
+      reconcileManagedSession: async () => {
+        order.push('reconcile');
+        return {
+          ok: true,
+          action: 'resume',
+          tool: 'codex',
+          providerSessionId: 'provider_recovered',
+          runtimeGeneration: MANAGED_GENERATION,
+        };
+      },
+      launchResumeSession: async ({ entry: projected }) => {
+        order.push('launch');
+        assert.equal(projected.tool_session_id, 'provider_recovered');
+        return 0;
+      },
+      launchFreshSession: async () => assert.fail('recovered provider must resume'),
+      upsertEntry: (patch) => ({ ...entry, ...patch }),
+      stderr: { write: (value) => errors.push(value) },
+      stdout: { write() {} },
+    });
+
+    assert.equal(status, 0, errors.join(''));
+    assert.deepEqual(order, ['import', 'reconcile', 'launch']);
+  });
+
+  test('managed open resumes an imported native provider instead of starting fresh', async () => {
+    const oldProviderSessionId = '019f383d-d5c4-7e90-826e-32ea7b396bd2';
+    const newProviderSessionId = '019fb68b-23e0-78f0-97dd-8354b99f4b38';
+    const oldGeneration = '55555555-5555-4555-8555-555555555555';
+    const entry = {
+      name: 'managed-cutover-repair',
+      tool: 'codex',
+      worktree_path: '/tmp/managed-cutover-repair',
+      coding_session_id: 'sess_managed_cutover_repair',
+      created_at: '2026-07-06T16:23:22.145Z',
+      tool_session_id: newProviderSessionId,
+      tool_session_source: 'codex',
+      tool_session_provider_adapter: MANAGED_CODEX_PROVIDER_ID,
+      tool_session_provider_generation: MANAGED_GENERATION,
+    };
+    let current = entry;
+    const launches = [];
+    const status = await runResume(['managed-cutover-repair'], {
+      findEntry: () => current,
+      fetchActiveSessions: async () => ({ ok: true, sessions: [] }),
+      inspectLocalBrokerSessionForEntry: async () => ({
+        verdict: 'exited',
+        runtime_generation: MANAGED_GENERATION,
+      }),
+      importManagedProviderRecovery: async () => ({ attempted: false }),
+      importLegacyNativeProviderSession: () => ({
+        ok: true,
+        attempted: true,
+        imported: true,
+        repaired_cutover: true,
+        provider_session_id: oldProviderSessionId,
+        runtime_generation: oldGeneration,
+      }),
+      reconcileManagedSession: async () => assert.fail(
+        'the imported provider decision must launch directly',
+      ),
+      launchResumeSession: async (input) => {
+        launches.push(input);
+        assert.equal(input.entry.tool_session_id, oldProviderSessionId);
+        assert.equal(input.entry.tool_session_provider_generation, oldGeneration);
+        return 0;
+      },
+      launchFreshSession: async () => assert.fail(
+        'an imported native provider must never start fresh',
+      ),
+      upsertEntry: (patch) => {
+        current = { ...current, ...patch };
+        return current;
+      },
+      stderr: { write() {} },
+      stdout: { write() {} },
+    });
+
+    assert.equal(status, 0);
+    assert.equal(launches.length, 1);
+    assert.equal(
+      current.provider_sessions.providers.codex.session_id,
+      oldProviderSessionId,
+    );
+  });
+
+  test('managed open discovers a missing legacy provider id before deciding fresh', async () => {
+    const providerSessionId = '019fa771-39a1-73f0-b947-2ff78eb111d2';
+    const providerGeneration = '77777777-7777-4777-8777-777777777777';
+    const transcriptPath = `/user/.codex/sessions/${providerSessionId}.jsonl`;
+    const entry = {
+      name: 'managed-missing-provider-id',
+      tool: 'codex',
+      worktree_path: '/tmp/managed-missing-provider-id',
+      coding_session_id: 'sess_managed_missing_provider_id',
+      session_state: 'idle',
+    };
+    let current = entry;
+    let importedEntry = null;
+    const launches = [];
+    const status = await runResume(['managed-missing-provider-id'], {
+      findEntry: () => current,
+      fetchActiveSessions: async () => ({ ok: true, sessions: [] }),
+      inspectLocalBrokerSessionForEntry: async () => ({ verdict: 'absent' }),
+      importManagedProviderRecovery: async () => ({ attempted: false }),
+      resolveToolSessionForResume: async () => ({
+        ok: true,
+        source: 'codex',
+        sessionId: providerSessionId,
+        transcriptPath,
+        from: 'transcript',
+      }),
+      importLegacyNativeProviderSession: ({ entry: candidate }) => {
+        if (!candidate.tool_session_id) {
+          return {
+            ok: false,
+            attempted: false,
+            reason: 'managed-native-import-provider-id-missing',
+          };
+        }
+        importedEntry = candidate;
+        return {
+          ok: true,
+          attempted: true,
+          imported: true,
+          repaired_cutover: false,
+          provider_session_id: providerSessionId,
+          runtime_generation: providerGeneration,
+        };
+      },
+      reconcileManagedSession: async () => assert.fail(
+        'discovered native continuity must launch directly',
+      ),
+      launchResumeSession: async (input) => {
+        launches.push(input);
+        return 0;
+      },
+      launchFreshSession: async () => assert.fail(
+        'a discovered native provider must never start fresh',
+      ),
+      upsertEntry: (patch) => {
+        current = { ...current, ...patch };
+        return current;
+      },
+      stderr: { write() {} },
+      stdout: { write() {} },
+    });
+
+    assert.equal(status, 0);
+    assert.equal(importedEntry.tool_session_id, providerSessionId);
+    assert.equal(importedEntry.tool_transcript_path, transcriptPath);
+    assert.equal(
+      importedEntry.provider_sessions.providers.codex.session_id,
+      providerSessionId,
+    );
+    assert.equal(launches.length, 1);
+    assert.equal(launches[0].entry.tool_session_id, providerSessionId);
+    assert.equal(
+      launches[0].entry.tool_session_provider_generation,
+      providerGeneration,
+    );
+  });
+
+  test('managed same-provider open resumes when the server predates handoff capability', async () => {
+    const old = process.env.MC_TEST_MODE;
+    delete process.env.MC_TEST_MODE;
+    const entry = makeEntry({
+      name: 'managed-pre-handoff',
+      tool: 'codex',
+      worktree_path: '/tmp/managed-pre-handoff',
+      coding_session_id: 'sess_managed_pre_handoff',
+      session_state: 'live',
+      provider_sessions: {
+        schema: 1,
+        providers: {
+          codex: {
+            session_id: 'codex-managed-native-id',
+            transcript_path: null,
+            runtime_generation: MANAGED_GENERATION,
+            last_consumed_handoff_sequence: 0,
+          },
+        },
+      },
+    });
+    const resumed = [];
+    const errors = [];
+    let current = entry;
+    try {
+      const status = await runResume([
+        'managed-pre-handoff',
+        '--managed-portable',
+        '--codex',
+      ], {
+        findEntry: () => entry,
+        inspectLocalBrokerSessionForEntry: async () => ({
+          verdict: 'exited',
+          runtime_generation: MANAGED_GENERATION,
+          session: null,
+        }),
+        recoverProviderSwitch,
+        providerSwitchDeps: {
+          brokerRequest: async () => ({ ok: true, journal: null }),
+          readConfig: async () => ({ apiUrl: 'https://meetmemoro.test' }),
+          getApiUrl: () => null,
+          resolveBootstrapIdentity: async () => ({
+            token: 'token-in-memory',
+            apiUrl: 'https://meetmemoro.test',
+          }),
+          getRepoContext: async () => ({
+            remoteUrl: 'git@example.com:org/repo.git',
+            branch: 'main',
+            toplevel: '/tmp/managed-pre-handoff',
+          }),
+          fetchStrictHandoffContext: async () => ({
+            ok: false,
+            code: 'handoff-capability-unavailable',
+          }),
+        },
+        inspectManagedSessionIdentity: () => ({ kind: 'absent' }),
+        importManagedProviderRecovery: async () => ({
+          ok: false,
+          attempted: false,
+        }),
+        reconcileManagedSession: async () => ({
+          ok: true,
+          action: 'resume',
+          providerSessionId: 'codex-managed-native-id',
+          runtimeGeneration: MANAGED_GENERATION,
+          tool: 'codex',
+        }),
+        fetchActiveSessions: async () => ({ ok: true, sessions: [] }),
+        launchResumeSession: (input) => {
+          resumed.push(input);
+          return 0;
+        },
+        launchFreshSession: () => assert.fail('existing provider must resume'),
+        upsertEntry: (patch) => {
+          current = { ...current, ...patch };
+          return current;
+        },
+        stderr: { write: (value) => errors.push(value) },
+        stdout: { write() {} },
+      });
+
+      assert.equal(status, 0, errors.join(''));
+      assert.equal(resumed.length, 1);
+      assert.equal(resumed[0].entry.tool_session_id, 'codex-managed-native-id');
+      assert.equal(resumed[0].localAuthMode, LOCAL_AUTH_MODES.MANAGED_PORTABLE);
+    } finally {
+      if (old === undefined) delete process.env.MC_TEST_MODE;
+      else process.env.MC_TEST_MODE = old;
+    }
+  });
+
+  test('managed open repairs a legacy active row only from exact durable exit evidence', async () => {
+    const old = process.env.MC_TEST_MODE;
+    delete process.env.MC_TEST_MODE;
+    const entry = makeEntry({
+      name: 'managed-stale-presence',
+      tool: 'codex',
+      branch: 'sess/managed-stale-presence',
+      worktree_path: '/tmp/managed-stale-presence',
+      coding_session_id: 'sess_managed_stale_presence',
+      session_state: 'idle',
+      tool_session_id: 'codex-managed-native-id',
+      tool_session_source: 'codex',
+      tool_session_provider_adapter: 'codex-managed-local-v1',
+      tool_session_provider_generation: MANAGED_GENERATION,
+      provider_sessions: {
+        schema: 1,
+        providers: {
+          codex: {
+            session_id: 'codex-managed-native-id',
+            transcript_path: null,
+            runtime_generation: MANAGED_GENERATION,
+            last_consumed_handoff_sequence: 0,
+          },
+        },
+      },
+    });
+    const active = {
+      coding_session_id: 'sess_managed_stale_presence',
+      label: 'managed-stale-presence',
+      machine_id: 'machine',
+      source_id: 'local:machine',
+      source_kind: 'local',
+      source: 'codex',
+      repo: 'acme/widgets',
+      branch: 'sess/managed-stale-presence',
+      runtime_generation: null,
+    };
+    const repairs = [];
+    const resumed = [];
+    const resumeSourceGeneration = 'aef78fd9-b0e9-4d32-a2ea-a540fc334e43';
+    let activeReads = 0;
+    let current = entry;
+    try {
+      const status = await runResume([
+        'managed-stale-presence',
+        '--managed-portable',
+      ], {
+        findEntry: () => entry,
+        recoverProviderSwitch: async () => ({ ok: true, active: false }),
+        inspectManagedSessionIdentity: () => ({ kind: 'absent' }),
+        inspectLocalBrokerSessionForEntry: async () => ({
+          verdict: 'exited',
+          runtime_generation: MANAGED_GENERATION,
+          session: null,
+        }),
+        importManagedProviderRecovery: async () => ({
+          ok: false,
+          attempted: false,
+        }),
+        reconcileManagedSession: async () => ({
+          ok: true,
+          action: 'resume',
+          providerSessionId: 'codex-managed-native-id',
+          // Provider custody may have advanced independently. Presence repair
+          // must still use the exact locally exited runtime generation.
+          runtimeGeneration: resumeSourceGeneration,
+          tool: 'codex',
+        }),
+        fetchActiveSessions: async () => {
+          activeReads += 1;
+          return {
+            ok: true,
+            sessions: activeReads === 1 ? [active] : [],
+          };
+        },
+        repairExitedSessionPresence: async (request) => {
+          repairs.push(request);
+          return { ok: true, legacy: true };
+        },
+        presenceRepairRefreshDelaysMs: [0],
+        launchResumeSession: (input) => {
+          resumed.push(input);
+          return 0;
+        },
+        launchFreshSession: () => assert.fail('existing managed provider must resume'),
+        upsertEntry: (patch) => {
+          current = { ...current, ...patch };
+          return current;
+        },
+        stderr: { write() {} },
+        stdout: { write() {} },
+      });
+
+      assert.equal(status, 0);
+      assert.equal(activeReads, 2);
+      assert.equal(repairs.length, 1);
+      assert.equal(repairs[0].runtimeGeneration, MANAGED_GENERATION);
+      assert.equal(repairs[0].active.coding_session_id, entry.coding_session_id);
+      assert.equal(resumed.length, 1);
+      assert.equal(
+        resumed[0].entry.tool_session_provider_generation,
+        resumeSourceGeneration,
+      );
+    } finally {
+      if (old === undefined) delete process.env.MC_TEST_MODE;
+      else process.env.MC_TEST_MODE = old;
+    }
+  });
+
+  test('managed named open switches through central handoff and reuses a prior target session', async () => {
+    const old = process.env.MC_TEST_MODE;
+    delete process.env.MC_TEST_MODE;
+    const sourceGeneration = '4f50f5a1-4c6b-4d6a-8b5c-152c5e6b8701';
+    const targetGeneration = '9937ac60-46ce-42dd-9302-6533f1c6c38c';
+    const entry = makeEntry({
+      name: 'managed-switch',
+      branch: 'sess/managed-switch',
+      worktree_path: '/tmp/managed-switch',
+      coding_session_id: 'sess_managed_switch',
+      session_state: 'idle',
+      tool: 'claude',
+      tool_session_id: 'claude-managed-native-id',
+      tool_session_source: 'claude-code',
+      tool_transcript_path: null,
+      tool_session_provider_adapter: 'claude-managed-local-v1',
+      tool_session_provider_generation: sourceGeneration,
+      provider_sessions: {
+        schema: 1,
+        providers: {
+          'claude-code': {
+            session_id: 'claude-managed-native-id',
+            transcript_path: null,
+            runtime_generation: sourceGeneration,
+            last_consumed_handoff_sequence: 0,
+          },
+          codex: {
+            session_id: 'codex-managed-native-id',
+            transcript_path: null,
+            runtime_generation: targetGeneration,
+            last_consumed_handoff_sequence: 0,
+          },
+        },
+      },
+    });
+    const calls = [];
+    const resumed = [];
+    try {
+      const status = await runResume([
+        'managed-switch',
+        '--codex',
+        '--managed-portable',
+      ], {
+        stdin: { isTTY: true },
+        stdout: { isTTY: true, write() {} },
+        stderr: { write() {} },
+        findEntry: () => entry,
+        inspectManagedSessionIdentity: () => ({ kind: 'absent' }),
+        importManagedProviderRecovery: async () => ({
+          ok: false,
+          attempted: false,
+        }),
+        reconcileManagedSession: async () => ({
+          ok: true,
+          action: 'resume',
+          providerSessionId: 'claude-managed-native-id',
+          runtimeGeneration: sourceGeneration,
+          tool: 'claude-code',
+        }),
+        inspectLocalBrokerSessionForEntry: async () => ({
+          verdict: 'exited',
+          runtime_generation: sourceGeneration,
+          session: {
+            id: 'sess_managed_switch',
+            tool: 'claude',
+            runtime_generation: sourceGeneration,
+            source_id: 'device:laptop',
+            source_kind: 'local',
+          },
+        }),
+        recoverProviderSwitch: async (input) => {
+          calls.push(['recover', input.targetCustody]);
+          return { ok: true, active: false };
+        },
+        inspectManagedProviderReadiness: async ({ tool }) => {
+          calls.push(['readiness', tool]);
+          return { ok: true };
+        },
+        prepareProviderSwitch: async (input) => {
+          calls.push(['prepare', input.targetCustody]);
+          return {
+            ok: true,
+            entry: input.entry,
+            message: 'bounded managed handoff',
+            transaction: {
+              transaction_id: '73a85b7e-2ce4-4db0-8b38-16ba08de03bf',
+              target_tool: 'codex',
+              target_custody: 'managed',
+              target_latest_sequence: 1,
+              controller_capability: 'c'.repeat(64),
+              session_controller_capability: 'd'.repeat(64),
+              require_target_artifact: true,
+            },
+          };
+        },
+        fetchActiveSessions: async () => ({ ok: true, sessions: [] }),
+        launchResumeSession: (input) => {
+          resumed.push(input);
+          return 0;
+        },
+        launchFreshSession: () => assert.fail('prior managed target must be resumed'),
+        upsertEntry: (patch) => ({ ...entry, ...patch }),
+      });
+
+      assert.equal(status, 0);
+      assert.deepEqual(calls, [
+        ['recover', 'managed'],
+        ['readiness', 'codex'],
+        ['prepare', 'managed'],
+      ]);
+      assert.equal(resumed.length, 1);
+      assert.equal(resumed[0].localAuthMode, LOCAL_AUTH_MODES.MANAGED_PORTABLE);
+      assert.equal(resumed[0].handoff.transaction.target_custody, 'managed');
+      assert.equal(resumed[0].entry.coding_session_id, 'sess_managed_switch');
+      assert.equal(resumed[0].entry.tool, 'codex');
+      assert.equal(resumed[0].entry.tool_session_id, 'codex-managed-native-id');
+      assert.equal(
+        resumed[0].entry.tool_session_provider_adapter,
+        'codex-managed-local-v1',
+      );
+      assert.equal(
+        resumed[0].entry.tool_session_provider_generation,
+        targetGeneration,
+      );
+      assert.equal(resumed[0].entry.tool_transcript_path, null);
+    } finally {
+      if (old === undefined) delete process.env.MC_TEST_MODE;
+      else process.env.MC_TEST_MODE = old;
+    }
+  });
+
+  test('managed picker selection uses the same durable reconciler before attaching', async () => {
+    let attached = 0;
+    const status = await resumeSelectedChoice({
+      type: 'local',
+      name: 'managed-picker',
+      tool: 'codex',
+      worktree_path: '/tmp/managed-picker',
+      coding_session_id: 'sess_managed_picker',
+    }, {
+      opts: {},
+      localAuthMode: LOCAL_AUTH_MODES.MANAGED_PORTABLE,
+      activePresenceVerified: true,
+      attachLiveBrokerSession: async () => {
+        attached += 1;
+        return { attached: true, code: 0 };
+      },
+      upsertEntry: (patch) => patch,
+      stderr: { write() {} },
+      stdout: { write() {} },
+      deps: {
+        reconcileManagedSession: async () => ({
+          ok: true,
+          action: 'attach',
+          runtimeGeneration: MANAGED_GENERATION,
+        }),
+      },
+    });
+
+    assert.equal(status, 0);
+    assert.equal(attached, 1);
   });
 
   test('without a name --json lists all mc sessions across tools', () => {
@@ -352,7 +980,7 @@ describe('mc resume <name>', () => {
     let launched = false;
     const upserts = [];
     try {
-      const status = await runResume(['data', '--codex'], {
+      const status = await runNativeResume(['data', '--codex'], {
         stdout: { write: (s) => stdout.push(s) },
         stderr: { write() {} },
         findEntry: () => makeEntry({
@@ -404,7 +1032,7 @@ describe('mc resume <name>', () => {
     let launched = false;
     let fetchedActive = false;
     try {
-      const status = await runResume(['data'], {
+      const status = await runNativeResume(['data'], {
         stdout: { write() {} },
         stderr: { write() {} },
         findEntry: () => makeEntry({
@@ -507,7 +1135,7 @@ describe('mc resume <name>', () => {
     };
     const attached = [];
     try {
-      const status = await runResume(['handoff'], {
+      const status = await runNativeResume(['handoff'], {
         stdin: { isTTY: true },
         stdout: { isTTY: true, write() {} },
         stderr: { write() {} },
@@ -557,7 +1185,7 @@ describe('mc resume <name>', () => {
     let resumed = false;
     const freshLaunched = [];
     try {
-      const status = await runResume(['i18n'], {
+      const status = await runNativeResume(['i18n'], {
         stdout: { write() {} },
         stderr: { write() {} },
         findEntry: () => makeEntry({
@@ -597,7 +1225,7 @@ describe('mc resume <name>', () => {
     delete process.env.MC_TEST_MODE;
     const resumed = [];
     try {
-      const status = await runResume(['data'], {
+      const status = await runNativeResume(['data'], {
         stdout: { write() {} },
         stderr: { write() {} },
         findEntry: () => makeEntry({
@@ -632,7 +1260,7 @@ describe('mc resume <name>', () => {
     const resumed = [];
     const upserts = [];
     try {
-      const status = await runResume(['data'], {
+      const status = await runNativeResume(['data'], {
         stdout: { write() {} },
         stderr: { write() {} },
         findEntry: () => makeEntry({
@@ -692,7 +1320,7 @@ describe('mc resume <name>', () => {
   test('invalid provider session state refuses before launch or registry mutation', async () => {
     const launches = [];
     const mutations = [];
-    const status = await runResume(['data'], {
+    const status = await runNativeResume(['data'], {
       stdout: { write() {} },
       stderr: { write() {} },
       findEntry: () => makeEntry({
@@ -711,7 +1339,7 @@ describe('mc resume <name>', () => {
   test('--json includes provider-native id backfilled from transcript', async () => {
     const stdout = [];
     const upserts = [];
-    const status = await runResume(['data', '--no-launch', '--json'], {
+    const status = await runNativeResume(['data', '--no-launch', '--json'], {
       stdout: { write: (s) => stdout.push(s) },
       stderr: { write() {} },
       findEntry: () => makeEntry({
@@ -748,7 +1376,7 @@ describe('mc resume <name>', () => {
     delete process.env.MC_TEST_MODE;
     const resumed = [];
     try {
-      const status = await runResume(['data'], {
+      const status = await runNativeResume(['data'], {
         stdin: { isTTY: true },
         stdout: { isTTY: true, write() {} },
         stderr: { write() {} },
@@ -787,7 +1415,7 @@ describe('mc resume <name>', () => {
     const freshLaunched = [];
     const upserts = [];
     try {
-      const status = await runResume(['data', '--codex'], {
+      const status = await runNativeResume(['data', '--codex'], {
         stdin: { isTTY: true },
         stdout: { isTTY: true, write() {} },
         stderr: { write: (s) => stderr.push(s) },
@@ -846,7 +1474,7 @@ describe('mc resume <name>', () => {
     const resumed = [];
     const generation = '4f50f5a1-4c6b-4d6a-8b5c-152c5e6b8701';
     try {
-      const status = await runResume(['data'], {
+      const status = await runNativeResume(['data'], {
         stdin: { isTTY: true },
         stdout: { isTTY: true, write() {} },
         stderr: { write() {} },
@@ -885,7 +1513,7 @@ describe('mc resume <name>', () => {
     delete process.env.MC_TEST_MODE;
     const stdoutOut = [];
     try {
-      const status = await runResume(['data'], {
+      const status = await runNativeResume(['data'], {
         stdin: { isTTY: true },
         stdout: { isTTY: true, write: (text) => stdoutOut.push(text) },
         stderr: { write() {} },
@@ -925,7 +1553,7 @@ describe('mc resume <name>', () => {
     delete process.env.MC_TEST_MODE;
     const stderrOut = [];
     try {
-      const status = await runResume(['data'], {
+      const status = await runNativeResume(['data'], {
         stdin: { isTTY: true },
         stdout: { isTTY: true, write() {} },
         stderr: { write: (text) => stderrOut.push(text) },
@@ -984,6 +1612,54 @@ describe('mc resume <name>', () => {
     assert.equal(presence.reason, 'host-process-exited');
   });
 
+  test('preserves dead-host proof when the removable lifecycle still names the prior generation', async () => {
+    const priorGeneration = '4f50f5a1-4c6b-4d6a-8b5c-152c5e6b8701';
+    const presence = await inspectLocalBrokerSessionForEntry({
+      name: 'data',
+      coding_session_id: 'sess_data',
+    }, {
+      request: async () => { throw new Error('global broker unavailable'); },
+      deps: {
+        listLocalBrokerAndHostSessions: async () => [],
+        sessionHostPaths: () => ({
+          socketPath: '/tmp/sess_data/broker.sock',
+          pidPath: '/tmp/sess_data/broker.pid',
+          manifestPath: '/tmp/sess_data/host.json',
+          lifecyclePath: '/tmp/sess_data/lifecycle.json',
+        }),
+        readSessionLifecycle: async () => ({
+          verdict: 'exited',
+          record: {
+            coding_session_id: 'sess_data',
+            runtime_generation: priorGeneration,
+            state: 'exited',
+            observed_at: '2026-07-31T03:58:00.000Z',
+            exit_code: 0,
+          },
+        }),
+        probeSessionHostRuntime: async (paths, options) => {
+          assert.equal(paths.manifestPath, '/tmp/sess_data/host.json');
+          assert.equal(options.expectedSessionId, 'sess_data');
+          return {
+            verdict: 'exited',
+            reason: 'host-process-exited',
+            pid: 2468,
+            host_manifest: {
+              session_id: 'sess_data',
+              broker_pid: 2468,
+              updated_at: '2026-07-31T04:00:00.000Z',
+            },
+          };
+        },
+      },
+    });
+
+    assert.equal(presence.verdict, 'exited');
+    assert.equal(presence.runtime_generation, priorGeneration);
+    assert.equal(presence.host_runtime.verdict, 'exited');
+    assert.equal(presence.host_runtime.host_manifest.broker_pid, 2468);
+  });
+
   test('keeps a live journal unreachable when session host exit is not proven', async () => {
     const presence = await inspectLocalBrokerSessionForEntry({
       name: 'data',
@@ -1018,7 +1694,7 @@ describe('mc resume <name>', () => {
     delete process.env.MC_TEST_MODE;
     const stderrOut = [];
     try {
-      const status = await runResume(['data'], {
+      const status = await runNativeResume(['data'], {
         stdin: { isTTY: true },
         stdout: { isTTY: true, write() {} },
         stderr: { write: (text) => stderrOut.push(text) },
@@ -1056,7 +1732,7 @@ describe('mc resume <name>', () => {
     delete process.env.MC_TEST_MODE;
     const stderrOut = [];
     try {
-      const status = await runResume(['data', '--codex'], {
+      const status = await runNativeResume(['data', '--codex'], {
         stdin: { isTTY: true },
         stdout: { isTTY: true, write() {} },
         stderr: { write: (t) => stderrOut.push(t) },
@@ -1086,7 +1762,7 @@ describe('mc resume <name>', () => {
     delete process.env.MC_TEST_MODE;
     const freshLaunched = [];
     try {
-      const status = await runResume(['data', '--codex'], {
+      const status = await runNativeResume(['data', '--codex'], {
         stdin: { isTTY: true },
         stdout: { isTTY: true, write() {} },
         stderr: { write() {} },
@@ -1125,7 +1801,7 @@ describe('mc resume <name>', () => {
     delete process.env.MC_TEST_MODE;
     const stdoutOut = [];
     try {
-      const status = await runResume(['data', '--codex'], {
+      const status = await runNativeResume(['data', '--codex'], {
         stdin: { isTTY: true },
         stdout: { isTTY: true, write: (t) => stdoutOut.push(t) },
         stderr: { write() {} },
@@ -1363,7 +2039,7 @@ describe('mc resume <name>', () => {
   test('tool flags reject conflicts and unknown values', () => {
     assert.match(parseArgs(['r', '--tool', 'claude', '--codex']).error, /conflicting/);
     assert.match(parseArgs(['r', '--tool']).error, /requires a value/);
-    assert.equal(parseArgs(['r']).managedPortable, false);
+    assert.equal(parseArgs(['r']).managedPortable, true);
     assert.equal(parseArgs(['r', '--managed-portable']).managedPortable, true);
   });
 
@@ -1377,6 +2053,7 @@ describe('mc resume <name>', () => {
         tool: 'claude',
         label: 'identity cleanup',
         worktree_path: '/tmp/memoro-resume-data',
+        coding_session_id: 'sess_resume_data',
       },
       env: { PATH: '/bin', MC_GROUNDING_TOOL: 'codex' },
       stderr: { write() {} },
@@ -1413,6 +2090,7 @@ describe('mc resume <name>', () => {
 
     assert.equal(launchCalls.length, 1);
     assert.equal(launchCalls[0].cwd, '/tmp/memoro-resume-data');
+    assert.equal(launchCalls[0].codingSessionId, 'sess_resume_data');
     assert.equal(launchCalls[0].sessionName, 'data');
     assert.equal(launchCalls[0].tool, 'claude-code');
     assert.equal(launchCalls[0].label, 'identity cleanup');
@@ -1612,6 +2290,25 @@ describe('mc resume <name>', () => {
       upsertEntry: (patch) => patch,
       deps: {
         requireLocalAuthMode: managedGate,
+        inspectManagedSessionIdentity: () => ({ kind: 'missing' }),
+        inspectLocalBrokerSessionForEntry: async () => ({ verdict: 'exited' }),
+        importManagedProviderRecovery: async () => ({ attempted: false }),
+        reconcileManagedSession: async ({ entry }) => (
+          entry.name === 'fresh'
+            ? {
+                ok: true,
+                action: 'fresh',
+                localPresence: { verdict: 'exited' },
+              }
+            : {
+                ok: true,
+                action: 'resume',
+                tool: 'codex',
+                providerSessionId: 'cx_provider_resume',
+                runtimeGeneration: MANAGED_GENERATION,
+                localPresence: { verdict: 'exited' },
+              }
+        ),
       },
     };
 

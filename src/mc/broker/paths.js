@@ -26,8 +26,8 @@ export function sessionHostsDir() {
   return join(mcHome(), 'hosts');
 }
 
-export function sessionHostPaths(sessionId) {
-  const dir = join(sessionHostsDir(), sanitizePathPart(sessionId || 'unknown'));
+export function sessionHostPaths(sessionId, { root = mcHome() } = {}) {
+  const dir = join(root, 'hosts', sanitizePathPart(sessionId || 'unknown'));
   return {
     dir,
     socketPath: join(dir, 'broker.sock'),
@@ -41,9 +41,9 @@ export function sessionHostPaths(sessionId) {
   };
 }
 
-export function providerArtifactPath(sessionId, runtimeGeneration) {
+export function providerArtifactPath(sessionId, runtimeGeneration, options = {}) {
   return join(
-    sessionHostPaths(sessionId).providerArtifactsDir,
+    sessionHostPaths(sessionId, options).providerArtifactsDir,
     `${sanitizePathPart(runtimeGeneration || 'unknown')}.json`,
   );
 }

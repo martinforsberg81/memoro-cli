@@ -12,6 +12,8 @@
  * session by id. If the entry has never had a tool session, resume is the
  * first fresh grounded start for that tracked worktree.
  */
+import { setTimeout as sleep } from 'node:timers/promises';
+
 import {
   findEntry,
   normalizeProviderSessions,
@@ -61,7 +63,14 @@ import {
   requireLocalAuthMode,
   resolveLocalAuthMode,
 } from '../local-auth-mode.js';
-import { MANAGED_CODEX_PROVIDER_ID } from '../provider-adapters/codex-managed.js';
+import {
+  importManagedProviderRecovery,
+  managedProviderAdapterForTool,
+  inspectManagedProviderReadiness,
+} from '../managed-provider-registry.js';
+import {
+  importLegacyNativeCodexSession,
+} from '../managed-codex-recovery.js';
 import {
   commitProviderSwitchDelivery,
   prepareProviderSwitch,
@@ -70,6 +79,9 @@ import {
 import {
   resolveSessionControllerCapability,
 } from '../session-controller-capability.js';
+import { reconcileManagedSession } from '../managed-session-reconciler.js';
+import { inspectManagedSessionIdentitySync } from '../managed-generation-journal.js';
+import { repairExitedSessionPresence } from '../session-presence.js';
 
 export const TOOL_SUGAR = {
   '--claude': 'claude',
@@ -88,12 +100,16 @@ export async function run(rawArgv, deps = {}) {
     stderr.write(`mc: ${opts.error}\n`);
     return 2;
   }
-  const localAuthMode = resolveLocalAuthMode({ managedPortable: opts.managedPortable });
+  const localAuthMode = deps.localAuthMode
+    ?? resolveLocalAuthMode({ managedPortable: opts.managedPortable });
   const authMode = requireLocalAuthMode(localAuthMode);
   if (!authMode.ok) {
     stderr.write(`mc: ${authMode.error}\n`);
     return 1;
   }
+  const targetCustody = localAuthMode === LOCAL_AUTH_MODES.MANAGED_PORTABLE
+    ? 'managed'
+    : 'native';
   if (!opts.name) {
     return runResumePicker({
       opts,
@@ -129,11 +145,11 @@ export async function run(rawArgv, deps = {}) {
     stderr.write(`mc: ${toolValidation.error}\n`);
     return 2;
   }
+  let managedDecision = null;
   let handoff = null;
   let recoveredTargetTool = null;
   let recoveryLocalPresence = null;
   if (!opts.json && !opts.noLaunch && process.env.MC_TEST_MODE !== '1'
-    && localAuthMode === LOCAL_AUTH_MODES.NATIVE
     && shouldRunProviderSwitchBoundary(deps)) {
     recoveryLocalPresence = await (
       deps.inspectLocalBrokerSessionForEntry || inspectLocalBrokerSessionForEntry
@@ -141,6 +157,7 @@ export async function run(rawArgv, deps = {}) {
     const recovery = await (deps.recoverProviderSwitch || recoverProviderSwitch)({
       entry,
       targetTool: toolValidation.resolved,
+      targetCustody,
       localPresence: recoveryLocalPresence,
       apiArgv: argv,
       env: process.env,
@@ -157,6 +174,7 @@ export async function run(rawArgv, deps = {}) {
           || commitProviderSwitchDelivery)({
           entry,
           targetTool: recovery.targetTool,
+          targetCustody,
           transaction: recovery.transaction,
           brokerSocketPath: recovery.brokerSocketPath
             || entry.broker_socket_path
@@ -174,19 +192,51 @@ export async function run(rawArgv, deps = {}) {
       }
     }
   }
+  // An interrupted provider switch owns the logical session before ordinary
+  // managed-generation reconciliation. Commit/recover that transaction first
+  // so a live target generation is never attached while the registry still
+  // names the source provider.
+  if (!opts.json && !opts.noLaunch && process.env.MC_TEST_MODE !== '1'
+    && localAuthMode === LOCAL_AUTH_MODES.MANAGED_PORTABLE) {
+    const reconciled = await reconcileManagedOpen(entry, {
+      apiArgv: argv,
+      env: process.env,
+      stdin,
+      stdout,
+      stderr,
+      deps,
+    });
+    if (!reconciled.ok) return 1;
+    if (reconciled.attached) {
+      markEntryOpened(entry, {
+        upsert: deps.upsertEntry || upsertEntry,
+        now: deps.now,
+      });
+      return reconciled.code ?? 0;
+    }
+    entry = reconciled.entry;
+    managedDecision = {
+      ...reconciled.decision,
+      localPresence: reconciled.localPresence || null,
+    };
+  }
   const targetTool = toolValidation.resolved || recoveredTargetTool;
   let firstLaunchInWorktree = localAuthMode === LOCAL_AUTH_MODES.MANAGED_PORTABLE
-    ? !hasManagedProviderToolSession(entry)
+      ? !hasManagedProviderToolSession(entry)
     : !hasStoredToolSession(entry);
   // Switching a session to a different tool starts a FRESH grounded session
   // in the same worktree: a provider's native transcript can't be handed to
   // another tool, but work continuity lives in the worktree and in server-side
   // continuity keyed by coding_session_id (which we rebind on the fresh start).
   const switchingTool = isToolSwitch(entry, targetTool);
-  if (switchingTool && localAuthMode !== LOCAL_AUTH_MODES.NATIVE
-    && !opts.noLaunch && !opts.json) {
-    stderr.write('mc: managed portable provider handoff is not enabled; use native local auth for this switch.\n');
-    return 1;
+  if (switchingTool && !opts.noLaunch && !opts.json
+    && localAuthMode === LOCAL_AUTH_MODES.MANAGED_PORTABLE) {
+    const ready = await requireManagedSwitchTarget({
+      targetTool,
+      stderr,
+      deps,
+    });
+    if (!ready) return 1;
   }
   if (switchingTool) {
     firstLaunchInWorktree = !providerSessionFor(
@@ -204,13 +254,13 @@ export async function run(rawArgv, deps = {}) {
     // would silently reopen the previous provider instead of switching.
     if (!switchingTool) {
       if (localAuthMode === LOCAL_AUTH_MODES.MANAGED_PORTABLE) {
-        localPresence = await inspectLocal(
-          entry, { request: deps.requestBroker || requestBroker, deps },
-        );
-        if (localPresence.verdict === 'live') {
-          stderr.write('mc: managed portable launch conflicts with an existing local broker session; end it before retrying.\n');
-          return 1;
-        }
+        localPresence = managedDecision?.localPresence
+          || (managedDecision?.action === 'resume'
+            ? {
+                verdict: 'exited',
+                runtime_generation: managedDecision.runtimeGeneration,
+              }
+            : { verdict: 'unknown' });
       } else {
         const attachLocal = deps.attachLiveBrokerSession || attachLiveBrokerSession;
         const attached = await attachLocal(entry, {
@@ -248,6 +298,7 @@ export async function run(rawArgv, deps = {}) {
         handoff = await (deps.prepareProviderSwitch || prepareProviderSwitch)({
           entry,
           targetTool,
+          targetCustody,
           localPresence,
           apiArgv: argv,
           env: process.env,
@@ -261,6 +312,7 @@ export async function run(rawArgv, deps = {}) {
           || commitProviderSwitchDelivery)({
           entry,
           targetTool,
+          targetCustody,
           transaction: handoff.transaction,
           brokerSocketPath: localPresence.session?.broker_socket_path || null,
           deps: deps.providerSwitchDeps || deps,
@@ -295,7 +347,30 @@ export async function run(rawArgv, deps = {}) {
       stderr.write(`mc: cannot verify whether "${entry.name}" is active on another source; refusing to start a duplicate.\n`);
       return 1;
     }
-    const active = activeCheck.session;
+    let active = activeCheck.session;
+    if (localAuthMode === LOCAL_AUTH_MODES.MANAGED_PORTABLE
+      && active
+      && localPresence.verdict === 'exited'
+      && nonEmpty(localPresence.runtime_generation)
+      && (
+        !nonEmpty(active.runtime_generation)
+        || nonEmpty(active.runtime_generation) === nonEmpty(localPresence.runtime_generation)
+      )) {
+      const repair = await (deps.repairExitedSessionPresence
+        || repairExitedSessionPresence)({
+        active,
+        runtimeGeneration: nonEmpty(localPresence.runtime_generation),
+        argv,
+        deps: deps.sessionPresenceDeps || deps,
+      });
+      if (repair?.ok) {
+        const refreshed = await refreshActiveAfterPresenceRepair(entry, {
+          argv,
+          deps,
+        });
+        if (refreshed.ok) active = refreshed.session;
+      }
+    }
     const exitedGenerationMatches = active
       && localPresence.verdict === 'exited'
       && nonEmpty(active.runtime_generation)
@@ -321,6 +396,7 @@ export async function run(rawArgv, deps = {}) {
     handoff = await (deps.prepareProviderSwitch || prepareProviderSwitch)({
       entry,
       targetTool,
+      targetCustody,
       localPresence: switchLocalPresence,
       apiArgv: argv,
       env: process.env,
@@ -336,6 +412,7 @@ export async function run(rawArgv, deps = {}) {
   if (opts.tool || handoff?.transaction) {
     if (switchingTool) {
       const switched = applyToolSwitch(entry, targetTool, {
+        targetCustody,
         upsert: handoff?.transaction
           ? (patch) => ({ ...entry, ...patch })
           : deps.upsertEntry || upsertEntry,
@@ -420,6 +497,9 @@ export async function launchResumeSession({
     stderr.write(`mc: ${authMode?.error || 'local auth mode unavailable'}\n`);
     return 1;
   }
+  const targetCustody = localAuthMode === LOCAL_AUTH_MODES.MANAGED_PORTABLE
+    ? 'managed'
+    : 'native';
 
   const launchTool = resolveToolInput(entry?.tool || DEFAULT_TOOL);
   await materialiseVaultForLaunch({ entry, launchTool, localAuthMode, stderr, deps });
@@ -473,6 +553,17 @@ export async function launchResumeSession({
       handoffTransaction: handoff?.transaction || null,
     }),
     stderr,
+    onAllocated: ({ codingSessionId }) => {
+      try {
+        (deps.upsertEntry || upsertEntry)({
+          name: entry.name,
+          coding_session_id: codingSessionId,
+        });
+        return { ok: true };
+      } catch {
+        return { ok: false, reason: 'session-identity-commit-failed' };
+      }
+    },
     onLaunched: async ({
       codingSessionId,
       brokerSocketPath = null,
@@ -487,6 +578,7 @@ export async function launchResumeSession({
           entry: currentEntry,
           targetTool: launchTool,
           transaction: handoff.transaction,
+          targetCustody,
           sessionControllerCapability,
           brokerSocketPath,
           deps: deps.providerSwitchDeps || deps,
@@ -552,6 +644,9 @@ export async function launchFreshSession({
     stderr.write(`mc: ${authMode?.error || 'local auth mode unavailable'}\n`);
     return 1;
   }
+  const targetCustody = localAuthMode === LOCAL_AUTH_MODES.MANAGED_PORTABLE
+    ? 'managed'
+    : 'native';
 
   const launchTool = resolveToolInput(entry?.tool || DEFAULT_TOOL);
   await materialiseVaultForLaunch({ entry, launchTool, localAuthMode, stderr, deps });
@@ -574,6 +669,17 @@ export async function launchFreshSession({
       handoffTransaction: handoff?.transaction || null,
     }),
     stderr,
+    onAllocated: ({ codingSessionId }) => {
+      try {
+        (deps.upsertEntry || upsertEntry)({
+          name: entry.name,
+          coding_session_id: codingSessionId,
+        });
+        return { ok: true };
+      } catch {
+        return { ok: false, reason: 'session-identity-commit-failed' };
+      }
+    },
     onLaunched: async ({
       codingSessionId,
       brokerSocketPath = null,
@@ -588,6 +694,7 @@ export async function launchFreshSession({
           entry: currentEntry,
           targetTool: launchTool,
           transaction: handoff.transaction,
+          targetCustody,
           sessionControllerCapability,
           brokerSocketPath,
           deps: deps.providerSwitchDeps || deps,
@@ -630,6 +737,10 @@ function commitProviderArtifact({
   if (!providerArtifact || !expectedTool || providerArtifact.tool !== expectedTool) return false;
   const managed = localAuthMode === LOCAL_AUTH_MODES.MANAGED_PORTABLE;
   if (!managed && localAuthMode !== LOCAL_AUTH_MODES.NATIVE) return false;
+  const managedAdapter = managed
+    ? managedProviderAdapterForTool(providerArtifact.tool)
+    : null;
+  if (managed && !managedAdapter) return false;
   const providerPatch = withProviderSession(entry, providerArtifact.tool, {
     session_id: providerArtifact.provider_session_id,
     transcript_path: managed ? null : providerArtifact.transcript_path,
@@ -643,7 +754,7 @@ function commitProviderArtifact({
     tool_transcript_path: managed ? null : providerArtifact.transcript_path,
     ...(managed
       ? {
-          tool_session_provider_adapter: MANAGED_CODEX_PROVIDER_ID,
+          tool_session_provider_adapter: managedAdapter.provider_adapter_id,
           tool_session_provider_generation: providerArtifact.runtime_generation,
         }
       : {}),
@@ -683,7 +794,9 @@ export function parseArgs(argv) {
     tool: null,
     noLaunch: false,
     json: false,
-    managedPortable: false,
+    // Named lifecycle launches use managed custody by default. Keep accepting
+    // --managed-portable as a no-op compatibility spelling for older scripts.
+    managedPortable: true,
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -749,7 +862,6 @@ export async function runResumePicker({
     stderr.write(`mc: ${authMode?.error || 'local auth mode unavailable'}\n`);
     return 1;
   }
-
   const loadRegistry = deps.readRegistry || readRegistry;
   const fetchActive = deps.fetchActiveSessions || ((args) => fetchActiveCodingSessions({ argv: args }));
   const launch = deps.launchResumeSession || launchResumeSession;
@@ -851,11 +963,30 @@ export async function resumeSelectedChoice(choice, {
     stderr.write(`mc: ${authMode?.error || 'local auth mode unavailable'}\n`);
     return 1;
   }
+  const targetCustody = localAuthMode === LOCAL_AUTH_MODES.MANAGED_PORTABLE
+    ? 'managed'
+    : 'native';
 
   if (!choice) return 2;
   if (choice.type === 'active') {
     if (localAuthMode === LOCAL_AUTH_MODES.MANAGED_PORTABLE) {
-      stderr.write('mc: managed portable launch cannot attach to an existing active session.\n');
+      const reconciled = await reconcileManagedOpen({
+        ...choice,
+        name: choice.label || choice.name || null,
+        coding_session_id: choice.coding_session_id || choice.id || null,
+      }, {
+        apiArgv,
+        env,
+        stdin,
+        stdout,
+        stderr,
+        attachLive,
+        upsert,
+        deps,
+      });
+      if (!reconciled.ok) return 1;
+      if (reconciled.attached) return reconciled.code ?? 0;
+      stderr.write('mc: active managed session could not be bound to its exact local runtime.\n');
       return 1;
     }
     const attached = await attachLive({
@@ -884,11 +1015,11 @@ export async function resumeSelectedChoice(choice, {
     upsert,
     deps: backfillDeps,
   });
+  let managedDecision = null;
   let handoff = null;
   let effectiveTargetTool = resolvedTool;
   let recoveryLocalPresence = null;
   if (!opts.noLaunch && process.env.MC_TEST_MODE !== '1'
-    && localAuthMode === LOCAL_AUTH_MODES.NATIVE
     && shouldRunProviderSwitchBoundary(backfillDeps)) {
     recoveryLocalPresence = await (
       deps.inspectLocalBrokerSessionForEntry || inspectLocalBrokerSessionForEntry
@@ -896,6 +1027,7 @@ export async function resumeSelectedChoice(choice, {
     const recovery = await (deps.recoverProviderSwitch || recoverProviderSwitch)({
       entry,
       targetTool: resolvedTool,
+      targetCustody,
       localPresence: recoveryLocalPresence,
       apiArgv,
       env,
@@ -913,6 +1045,7 @@ export async function resumeSelectedChoice(choice, {
           entry,
           targetTool: recovery.targetTool,
           transaction: recovery.transaction,
+          targetCustody,
           brokerSocketPath: recovery.brokerSocketPath
             || entry.broker_socket_path
             || null,
@@ -929,11 +1062,35 @@ export async function resumeSelectedChoice(choice, {
       }
     }
   }
+  if (!opts.noLaunch && process.env.MC_TEST_MODE !== '1'
+    && localAuthMode === LOCAL_AUTH_MODES.MANAGED_PORTABLE) {
+    const reconciled = await reconcileManagedOpen(entry, {
+      apiArgv,
+      env,
+      stdin,
+      stdout,
+      stderr,
+      attachLive,
+      upsert,
+      deps,
+    });
+    if (!reconciled.ok) return 1;
+    if (reconciled.attached) {
+      markEntryOpened(entry, { upsert, now: deps.now });
+      return reconciled.code ?? 0;
+    }
+    entry = reconciled.entry;
+    managedDecision = reconciled.decision;
+  }
   const switchingTool = isToolSwitch(entry, effectiveTargetTool);
-  if (switchingTool && localAuthMode !== LOCAL_AUTH_MODES.NATIVE
-    && !opts.noLaunch) {
-    stderr.write('mc: managed portable provider handoff is not enabled; use native local auth for this switch.\n');
-    return 1;
+  if (switchingTool && !opts.noLaunch
+    && localAuthMode === LOCAL_AUTH_MODES.MANAGED_PORTABLE) {
+    const ready = await requireManagedSwitchTarget({
+      targetTool: effectiveTargetTool,
+      stderr,
+      deps,
+    });
+    if (!ready) return 1;
   }
   const firstLaunchInWorktree = switchingTool
     ? !providerSessionFor(entry, effectiveTargetTool?.id)?.session_id
@@ -949,16 +1106,13 @@ export async function resumeSelectedChoice(choice, {
   let localPresence = recoveryLocalPresence || { verdict: 'unknown' };
   if (!switchingTool && !opts.noLaunch && process.env.MC_TEST_MODE !== '1') {
     if (localAuthMode === LOCAL_AUTH_MODES.MANAGED_PORTABLE) {
-      localPresence = await (
-        deps.inspectLocalBrokerSessionForEntry || inspectLocalBrokerSessionForEntry
-      )(
-        entry,
-        { request: deps.requestBroker || requestBroker, deps },
-      );
-      if (localPresence.verdict === 'live') {
-        stderr.write('mc: managed portable launch conflicts with an existing local broker session; end it before retrying.\n');
-        return 1;
-      }
+      localPresence = managedDecision?.localPresence
+        || (managedDecision?.action === 'resume'
+          ? {
+              verdict: 'exited',
+              runtime_generation: managedDecision.runtimeGeneration,
+            }
+          : { verdict: 'unknown' });
     } else {
       const attached = await attachLive(entry, { stdin, stdout, stderr, deps });
       localPresence = attached?.localPresence || localPresence;
@@ -1002,6 +1156,7 @@ export async function resumeSelectedChoice(choice, {
     handoff = await (deps.prepareProviderSwitch || prepareProviderSwitch)({
       entry,
       targetTool: effectiveTargetTool,
+      targetCustody,
       localPresence,
       apiArgv,
       env,
@@ -1017,6 +1172,7 @@ export async function resumeSelectedChoice(choice, {
   if (opts.tool || handoff?.transaction) {
     if (switchingTool) {
       const switched = applyToolSwitch(entry, effectiveTargetTool, {
+        targetCustody,
         upsert: handoff?.transaction
           ? (patch) => ({ ...entry, ...patch })
           : upsert,
@@ -1057,6 +1213,307 @@ export async function resumeSelectedChoice(choice, {
     handoff,
   };
   return firstLaunchInWorktree ? freshLaunch(launchOptions) : launch(launchOptions);
+}
+
+async function reconcileManagedOpen(entry, {
+  apiArgv = [],
+  env = process.env,
+  stdin = process.stdin,
+  stdout = process.stdout,
+  stderr = process.stderr,
+  attachLive = null,
+  upsert = null,
+  deps = {},
+} = {}) {
+  const inspectIdentity = deps.inspectManagedSessionIdentity
+    || inspectManagedSessionIdentitySync;
+  const identity = inspectIdentity({ sessionName: entry.name });
+  if (identity?.kind === 'unknown') {
+    stderr.write(`mc: managed session identity is unavailable (${identity.reason || 'unknown'}); refusing to launch.\n`);
+    return { ok: false, decision: null };
+  }
+  if (identity?.kind === 'present') {
+    const durableId = identity.identity.coding_session_id;
+    if (entry.coding_session_id && entry.coding_session_id !== durableId) {
+      stderr.write('mc: managed session identity conflicts with the registry; refusing to launch.\n');
+      return { ok: false, decision: null };
+    }
+    if (!entry.coding_session_id) {
+      const writeEntry = upsert || deps.upsertEntry || upsertEntry;
+      try {
+        const written = writeEntry({
+          name: entry.name,
+          coding_session_id: durableId,
+        });
+        entry = { ...entry, coding_session_id: durableId, ...(written || {}) };
+      } catch {
+        stderr.write('mc: managed session identity could not be projected into the registry; refusing to launch.\n');
+        return { ok: false, decision: null };
+      }
+    }
+  }
+  const inspectLocal = deps.inspectLocalBrokerSessionForEntry
+    || inspectLocalBrokerSessionForEntry;
+  const localPresence = await inspectLocal(entry, {
+    request: deps.requestBroker || requestBroker,
+    deps,
+  });
+  if (localPresence?.verdict === 'live'
+    && (
+      typeof deps.importLegacyNativeProviderSession === 'function'
+      || !hasInjectedRuntimeDeps(deps)
+    )) {
+    const liveCutover = (deps.importLegacyNativeProviderSession
+      || importLegacyNativeCodexSession)({
+      entry,
+      deps: deps.managedNativeImportDeps || deps,
+    });
+    if (liveCutover?.imported && liveCutover.repaired_cutover === true) {
+      const decision = {
+        ok: false,
+        action: 'blocked',
+        reason: 'managed-cutover-fresh-runtime-still-live',
+        localPresence,
+      };
+      stderr.write('mc: an incorrect fresh cutover runtime is still live; exit that Codex session before reopening the preserved provider session.\n');
+      return { ok: false, decision };
+    }
+  }
+  if (localPresence?.verdict !== 'live') {
+    const toolId = resolveToolInput(entry?.tool || DEFAULT_TOOL)?.id || null;
+    const imported = await (deps.importManagedProviderRecovery
+      || importManagedProviderRecovery)({
+      tool: toolId,
+      entry,
+      localPresence,
+      registry: { entries: [entry] },
+      deps: deps.managedLegacyImportDeps || deps,
+    });
+    if (imported?.attempted && !imported.ok) {
+      const reason = imported.reason || 'managed-recovery-import-failed';
+      stderr.write(`mc: managed legacy generation import failed (${reason}); refusing to launch.\n`);
+      return { ok: false, decision: null };
+    }
+    const shouldImportNative = !imported?.attempted
+      && (
+        typeof deps.importLegacyNativeProviderSession === 'function'
+        || !hasInjectedRuntimeDeps(deps)
+      );
+    if (shouldImportNative) {
+      const importNative = deps.importLegacyNativeProviderSession
+        || importLegacyNativeCodexSession;
+      let nativeImport = importNative({
+        entry,
+        deps: deps.managedNativeImportDeps || deps,
+      });
+      if (!nativeImport?.attempted
+        && nativeImport?.reason === 'managed-native-import-provider-id-missing'
+        && new Set(['idle', 'live', 'dead']).has(entry?.session_state)) {
+        const continuity = await discoverManagedNativeContinuityEntry({
+          entry,
+          tool: toolId,
+          deps,
+        });
+        if (!continuity.ok) {
+          stderr.write(`mc: managed provider continuity discovery failed (${continuity.reason}); refusing to launch.\n`);
+          return { ok: false, decision: null };
+        }
+        if (continuity.discovered) {
+          nativeImport = importNative({
+            entry: continuity.entry,
+            deps: deps.managedNativeImportDeps || deps,
+          });
+        }
+      }
+      if (nativeImport?.attempted && !nativeImport.ok) {
+        const reason = nativeImport.reason || 'managed-native-import-failed';
+        stderr.write(`mc: managed provider continuity import failed (${reason}); refusing to launch.\n`);
+        return { ok: false, decision: null };
+      }
+      if (nativeImport?.imported) {
+        const decision = {
+          ok: true,
+          action: 'resume',
+          tool: toolId,
+          providerSessionId: nativeImport.provider_session_id,
+          runtimeGeneration: nativeImport.runtime_generation,
+          localPresence,
+          repairedCutover: nativeImport.repaired_cutover === true,
+        };
+        return projectManagedResumeDecision({
+          entry,
+          decision,
+          localPresence,
+          upsert,
+          deps,
+          stderr,
+        });
+      }
+    }
+  }
+  const decision = await (deps.reconcileManagedSession || reconcileManagedSession)({
+    entry,
+    inspectLocalPresence: () => localPresence,
+    deps: deps.managedReconcilerDeps || deps,
+  });
+  if (!decision?.ok || decision.action === 'blocked') {
+    const reason = decision?.reason || 'managed-session-reconciliation-failed';
+    stderr.write(`mc: managed session reconciliation is blocked (${reason}); refusing to start a duplicate provider session.\n`);
+    return { ok: false, decision };
+  }
+  if (decision.action === 'attach') {
+    const attach = attachLive || deps.attachLiveBrokerSession || attachLiveBrokerSession;
+    const attached = await attach(entry, {
+      stdin,
+      stdout,
+      stderr,
+      request: deps.requestBroker || requestBroker,
+      attach: deps.attachBrokerSession || attachBrokerSession,
+      apiArgv,
+      env,
+      deps,
+    });
+    if (!attached?.attached) {
+      stderr.write('mc: the exact managed runtime was live but could not be attached; refusing to relaunch it.\n');
+      return { ok: false, decision };
+    }
+    return {
+      ok: true,
+      attached: true,
+      code: attached.code ?? 0,
+      entry,
+      decision,
+      localPresence,
+    };
+  }
+  if (decision.action !== 'resume') {
+    return {
+      ok: true,
+      attached: false,
+      entry,
+      decision,
+      localPresence,
+    };
+  }
+
+  return projectManagedResumeDecision({
+    entry,
+    decision,
+    localPresence,
+    upsert,
+    deps,
+    stderr,
+  });
+}
+
+async function discoverManagedNativeContinuityEntry({
+  entry,
+  tool,
+  deps = {},
+} = {}) {
+  if (tool !== 'codex') return { ok: true, entry, discovered: false };
+  const existing = providerSessionFor(entry, tool)?.session_id
+    || exactNonEmpty(entry?.tool_session_id);
+  if (existing) return { ok: true, entry, discovered: false };
+
+  const resolver = deps.resolveToolSessionForResume || resolveToolSessionForResume;
+  let resolved;
+  try {
+    resolved = await resolver({
+      entry,
+      launchTool: resolveToolInput(tool),
+      deps: deps.toolSessionDeps || deps,
+    });
+  } catch {
+    return {
+      ok: false,
+      reason: 'managed-native-continuity-discovery-unavailable',
+    };
+  }
+  if (!resolved?.ok) {
+    return new Set([
+      'no-tool-session-id',
+      'unknown-tool-source',
+    ]).has(resolved?.reason)
+      ? { ok: true, entry, discovered: false }
+      : {
+          ok: false,
+          reason: resolved?.reason || 'managed-native-continuity-discovery-failed',
+        };
+  }
+
+  const providerPatch = withProviderSession(entry, tool, {
+    session_id: resolved.sessionId,
+    transcript_path: resolved.transcriptPath || null,
+  });
+  if (!providerPatch.ok) {
+    return {
+      ok: false,
+      reason: providerPatch.reason || 'managed-native-continuity-projection-invalid',
+    };
+  }
+  return {
+    ok: true,
+    discovered: true,
+    entry: {
+      ...entry,
+      tool_session_id: resolved.sessionId,
+      tool_session_source: tool,
+      tool_transcript_path: resolved.transcriptPath || null,
+      provider_sessions: providerPatch.providerSessions,
+    },
+  };
+}
+
+function projectManagedResumeDecision({
+  entry,
+  decision,
+  localPresence,
+  upsert = null,
+  deps = {},
+  stderr = process.stderr,
+} = {}) {
+  const tool = decision.tool;
+  const adapter = managedProviderAdapterForTool(tool);
+  if (!adapter) {
+    stderr.write('mc: managed provider adapter is unavailable; refusing to launch.\n');
+    return { ok: false, decision };
+  }
+  const providerPatch = withProviderSession(entry, tool, {
+    session_id: decision.providerSessionId,
+    transcript_path: null,
+    runtime_generation: decision.runtimeGeneration,
+  });
+  if (!providerPatch.ok) {
+    stderr.write(`mc: managed provider projection is invalid (${providerPatch.reason}); refusing to launch.\n`);
+    return { ok: false, decision };
+  }
+  const writeEntry = upsert || deps.upsertEntry || upsertEntry;
+  const patch = {
+    name: entry.name,
+    coding_session_id: entry.coding_session_id,
+    session_state: 'idle',
+    tool_session_id: decision.providerSessionId,
+    tool_session_source: tool,
+    tool_transcript_path: null,
+    tool_session_provider_adapter: adapter.provider_adapter_id,
+    tool_session_provider_generation: decision.runtimeGeneration,
+    provider_sessions: providerPatch.providerSessions,
+  };
+  let written;
+  try {
+    written = writeEntry(patch);
+  } catch {
+    stderr.write('mc: managed provider projection could not be committed; refusing to launch.\n');
+    return { ok: false, decision };
+  }
+  return {
+    ok: true,
+    attached: false,
+    entry: { ...entry, ...patch, ...(written || {}) },
+    decision,
+    localPresence,
+  };
 }
 
 function maybeObserveEntry(entry, deps = {}) {
@@ -1131,20 +1588,22 @@ function storedManagedToolSession(entry, launchTool) {
   const sessionId = exactNonEmpty(entry?.tool_session_id);
   const providerAdapter = exactNonEmpty(entry?.tool_session_provider_adapter);
   const providerGeneration = exactNonEmpty(entry?.tool_session_provider_generation);
+  const expectedAdapter = managedProviderAdapterForTool(launchTool?.id);
   if (!sessionId
-    || providerAdapter !== MANAGED_CODEX_PROVIDER_ID
+    || !expectedAdapter
+    || providerAdapter !== expectedAdapter.provider_adapter_id
     || !isManagedGeneration(providerGeneration)) {
     return {
       ok: false,
       reason: 'no-managed-provider-session-id',
-      source: launchTool?.shortName || entry?.tool || null,
+      source: launchTool?.id || entry?.tool || null,
       sessionId: null,
       transcriptPath: null,
     };
   }
   return {
     ok: true,
-    source: launchTool?.shortName || entry?.tool || null,
+    source: launchTool?.id || entry?.tool || null,
     sessionId,
     transcriptPath: null,
     from: 'registry',
@@ -1152,9 +1611,12 @@ function storedManagedToolSession(entry, launchTool) {
 }
 
 function hasManagedProviderToolSession(entry) {
+  const tool = resolveToolInput(entry?.tool || DEFAULT_TOOL)?.id || null;
+  const adapter = managedProviderAdapterForTool(tool);
   return !!(
-    exactNonEmpty(entry?.tool_session_id)
-    && exactNonEmpty(entry?.tool_session_provider_adapter) === MANAGED_CODEX_PROVIDER_ID
+    adapter
+    && exactNonEmpty(entry?.tool_session_id)
+    && exactNonEmpty(entry?.tool_session_provider_adapter) === adapter.provider_adapter_id
     && isManagedGeneration(exactNonEmpty(entry?.tool_session_provider_generation))
   );
 }
@@ -1219,24 +1681,32 @@ export async function inspectLocalBrokerSessionForEntry(entry, {
       codingSessionId,
     });
   } catch {}
+  const hostRuntime = await (
+    deps.probeSessionHostRuntime || probeSessionHostRuntime
+  )(paths, {
+    request,
+    expectedSessionId: codingSessionId,
+  });
   if (lifecycle?.verdict === 'exited') {
     return {
       verdict: 'exited',
       session: null,
       runtime_generation: nonEmpty(lifecycle.record?.runtime_generation),
       lifecycle,
+      ...(hostRuntime ? { host_runtime: hostRuntime } : {}),
+      ...(hostRuntime?.verdict === 'exited'
+        ? { reason: hostRuntime.reason || 'host-process-exited' }
+        : {}),
     };
   }
   if (lifecycle?.verdict === 'live') {
-    const hostRuntime = await (
-      deps.probeSessionHostRuntime || probeSessionHostRuntime
-    )(paths, { request });
     if (hostRuntime?.verdict === 'exited') {
       return {
         verdict: 'exited',
         session: null,
         runtime_generation: nonEmpty(lifecycle.record?.runtime_generation),
         lifecycle,
+        host_runtime: hostRuntime,
         reason: hostRuntime.reason || 'host-process-exited',
       };
     }
@@ -1245,6 +1715,17 @@ export async function inspectLocalBrokerSessionForEntry(entry, {
       session: null,
       runtime_generation: nonEmpty(lifecycle.record?.runtime_generation),
       lifecycle,
+      ...(hostRuntime ? { host_runtime: hostRuntime } : {}),
+    };
+  }
+  if (hostRuntime?.verdict === 'exited') {
+    return {
+      verdict: 'exited',
+      session: null,
+      runtime_generation: null,
+      lifecycle,
+      host_runtime: hostRuntime,
+      reason: hostRuntime.reason || 'host-process-exited',
     };
   }
   return { verdict: 'unknown', session: null, lifecycle };
@@ -1399,6 +1880,29 @@ function shouldRunProviderSwitchBoundary(deps = {}) {
     || !hasInjectedRuntimeDeps(deps);
 }
 
+async function requireManagedSwitchTarget({
+  targetTool,
+  stderr,
+  deps = {},
+} = {}) {
+  const inspect = deps.inspectManagedProviderReadiness
+    || inspectManagedProviderReadiness;
+  let readiness;
+  try {
+    readiness = await inspect({
+      tool: targetTool?.id,
+      deps: deps.managedProviderReadinessDeps || {},
+    });
+  } catch {
+    readiness = null;
+  }
+  if (readiness?.ok === true) return true;
+  const reason = readiness?.reason || 'managed-provider-readiness-failed';
+  stderr.write(`mc: managed target provider is not ready (${reason}); target provider was not launched.\n`);
+  if (readiness?.hint) stderr.write(`    → ${readiness.hint}\n`);
+  return false;
+}
+
 function hasInjectedPickerRuntime({
   launch,
   freshLaunchOverride,
@@ -1473,6 +1977,24 @@ async function activeMatchForEntry(entry, { argv = [], deps = {} } = {}) {
   };
 }
 
+async function refreshActiveAfterPresenceRepair(entry, {
+  argv = [],
+  deps = {},
+} = {}) {
+  const delays = Array.isArray(deps.presenceRepairRefreshDelaysMs)
+    ? deps.presenceRepairRefreshDelaysMs
+    : [0, 150, 500];
+  let latest = { ok: false, session: null };
+  for (const delay of delays) {
+    if (delay > 0) {
+      try { await (deps.sleep || sleep)(delay); } catch {}
+    }
+    latest = await activeMatchForEntry(entry, { argv, deps });
+    if (!latest.ok || !latest.session) return latest;
+  }
+  return latest;
+}
+
 function validateToolFlag(tool) {
   if (!tool) return { resolved: null };
   const resolved = resolveToolInput(tool);
@@ -1504,15 +2026,34 @@ function isToolSwitch(entry, resolvedTool = null) {
  * PRESERVES coding_session_id — the continuity binding that carries the prior
  * work's server-side context into the fresh, grounded session.
  */
-function applyToolSwitch(entry, resolvedTool, { upsert = upsertEntry } = {}) {
+function applyToolSwitch(entry, resolvedTool, {
+  targetCustody = 'native',
+  upsert = upsertEntry,
+} = {}) {
+  const targetProvider = providerSessionFor(entry, resolvedTool?.id);
+  const targetSessionId = exactNonEmpty(targetProvider?.session_id);
+  const targetGeneration = exactNonEmpty(targetProvider?.runtime_generation);
+  const targetAdapter = targetCustody === 'managed'
+    ? managedProviderAdapterForTool(resolvedTool?.id)
+    : null;
+  if (targetCustody === 'managed' && targetSessionId
+    && (!targetAdapter || !isManagedGeneration(targetGeneration))) {
+    return { error: 'managed-target-provider-session-unconfirmed' };
+  }
   const patch = {
     name: entry.name,
     tool: resolvedTool.shortName,
-    tool_session_id: null,
-    tool_session_source: null,
-    tool_transcript_path: null,
-    tool_session_provider_adapter: null,
-    tool_session_provider_generation: null,
+    tool_session_id: targetSessionId,
+    tool_session_source: targetSessionId ? resolvedTool.id : null,
+    tool_transcript_path: targetCustody === 'native'
+      ? targetProvider?.transcript_path || null
+      : null,
+    tool_session_provider_adapter: targetCustody === 'managed' && targetSessionId
+      ? targetAdapter.provider_adapter_id
+      : null,
+    tool_session_provider_generation: targetCustody === 'managed' && targetSessionId
+      ? targetGeneration
+      : null,
   };
   const migrated = normalizeProviderSessions(entry);
   if (!migrated.ok) return { error: migrated.reason };

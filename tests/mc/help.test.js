@@ -20,6 +20,10 @@ describe('mc --help', () => {
     assert.match(r.stdout, /mc setup --resource-profile <unlimited\|balanced\|conservative\|custom>/);
     assert.match(r.stdout, /--heavy-max-rss-mb/);
     assert.match(r.stdout, /mc storage prune-generated --dry-run\|--apply/);
+    assert.match(
+      r.stdout,
+      /mc storage repair <name> --managed-provider-recovery --dry-run\|--apply/,
+    );
     assert.match(r.stdout, /END IS PERMANENT/);
     assert.match(r.stdout, /asks y\/n once/);
     assert.match(r.stdout, /provider transcript \+ ID-bound auxiliary paths/);

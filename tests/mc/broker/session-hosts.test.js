@@ -11,6 +11,12 @@ import {
   requestForSession,
 } from '../../../src/mc/broker/session-hosts.js';
 import { BROKER_PROTOCOL_VERSION } from '../../../src/mc/broker/daemon.js';
+import { BROKER_RUNTIME_IDENTITY } from '../../../src/mc/broker/runtime-identity.js';
+import { START_POLL_MS } from '../../../src/mc/broker/supervisor.js';
+
+test('session hosts allow a bounded fifteen-second cold start', () => {
+  assert.equal(START_POLL_MS, 15_000);
+});
 
 function controllerBinding(sessionId) {
   return {
@@ -66,6 +72,53 @@ describe('session broker hosts', () => {
       reason: 'host-process-exited',
       pid: 1234,
     });
+  });
+
+  test('binds dead-host proof to the private session host manifest', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'mc-dead-session-host-'));
+    try {
+      const paths = {
+        socketPath: join(root, 'broker.sock'),
+        pidPath: join(root, 'broker.pid'),
+        lifecyclePath: join(root, 'lifecycle.json'),
+        manifestPath: join(root, 'host.json'),
+      };
+      writeFileSync(paths.pidPath, '2468\n', { mode: 0o600 });
+      writeFileSync(paths.manifestPath, JSON.stringify({
+        session_id: 'sess_bound_host',
+        socket_path: paths.socketPath,
+        pid_path: paths.pidPath,
+        log_path: join(root, 'broker.log'),
+        lifecycle_path: paths.lifecyclePath,
+        broker_pid: 2468,
+        protocol_version: BROKER_PROTOCOL_VERSION,
+        runtime_identity: BROKER_RUNTIME_IDENTITY,
+        updated_at: '2026-07-31T04:00:00.000Z',
+      }), { mode: 0o600 });
+      const refused = Object.assign(new Error('connect ECONNREFUSED'), {
+        code: 'ECONNREFUSED',
+      });
+      const gone = Object.assign(new Error('no such process'), { code: 'ESRCH' });
+
+      const result = await probeSessionHostRuntime(paths, {
+        expectedSessionId: 'sess_bound_host',
+        request: async () => { throw refused; },
+        signalProcess: () => { throw gone; },
+      });
+
+      assert.deepEqual(result, {
+        verdict: 'exited',
+        reason: 'host-process-exited',
+        pid: 2468,
+        host_manifest: {
+          session_id: 'sess_bound_host',
+          broker_pid: 2468,
+          updated_at: '2026-07-31T04:00:00.000Z',
+        },
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   test('keeps session host state unknown when socket or pid evidence is inconclusive', async () => {
@@ -305,7 +358,11 @@ describe('session broker hosts', () => {
           if (!spawned) throw new Error('old host stopped');
           return {
             ok: true,
-            broker: { pid: 2, protocol_version: BROKER_PROTOCOL_VERSION },
+            broker: {
+              pid: 2,
+              protocol_version: BROKER_PROTOCOL_VERSION,
+              runtime_identity: BROKER_RUNTIME_IDENTITY,
+            },
             sessions: [],
           };
         },
@@ -321,6 +378,87 @@ describe('session broker hosts', () => {
       assert.equal(result.started, true);
       assert.equal(spawned, true);
       assert.deepEqual(seen, ['status', 'stop', 'status', 'status']);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('removes a verified-terminal row before replacing its incompatible host', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'mc-session-hosts-terminal-upgrade-'));
+    try {
+      const paths = {
+        socketPath: join(root, 'broker.sock'),
+        pidPath: join(root, 'broker.pid'),
+        logPath: join(root, 'broker.log'),
+        manifestPath: join(root, 'host.json'),
+      };
+      const binding = controllerBinding('sess_terminal_upgrade');
+      const seen = [];
+      let sessions = [{
+        id: 'sess_terminal_upgrade',
+        session_state: 'dead',
+        exit: { code: 0, signal: 0 },
+      }];
+      let stopped = false;
+      let spawned = false;
+      const result = await ensureSessionHostRunning({
+        sessionId: 'sess_terminal_upgrade',
+        controllerBinding: binding,
+        paths,
+        expectedRuntimeIdentity: 'expected-runtime-identity',
+        request: async (message) => {
+          seen.push(message);
+          if (message.type === 'remove_session') {
+            assert.equal(message.id, 'sess_terminal_upgrade');
+            assert.equal(
+              message.session_controller_capability,
+              binding.session_controller_capability,
+            );
+            sessions = [];
+            return { ok: true, removed: true };
+          }
+          if (message.type === 'stop') {
+            assert.deepEqual(sessions, []);
+            stopped = true;
+            return { ok: true, stopping: true };
+          }
+          if (!stopped) {
+            return {
+              ok: true,
+              broker: {
+                pid: 1,
+                protocol_version: BROKER_PROTOCOL_VERSION,
+                runtime_identity: 'stale-runtime-identity',
+              },
+              sessions,
+            };
+          }
+          if (!spawned) throw new Error('old host stopped');
+          return {
+            ok: true,
+            broker: {
+              pid: 2,
+              protocol_version: BROKER_PROTOCOL_VERSION,
+              runtime_identity: 'expected-runtime-identity',
+            },
+            sessions: [],
+          };
+        },
+        spawnDaemon: () => {
+          assert.equal(stopped, true);
+          spawned = true;
+          return { ok: true, pid: 2 };
+        },
+        sleep: async () => {},
+      });
+
+      assert.equal(result.ok, true);
+      assert.equal(result.started, true);
+      assert.equal(spawned, true);
+      assert.deepEqual(
+        seen.map((message) => message.type),
+        ['status', 'remove_session', 'status', 'stop', 'status', 'status'],
+      );
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

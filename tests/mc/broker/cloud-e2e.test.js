@@ -7,6 +7,9 @@ import test, { describe } from 'node:test';
 
 import { CloudBrokerClient } from '../../../src/mc/broker/cloud.js';
 import { requestBroker } from '../../../src/mc/broker/client.js';
+import {
+  createC1GlobalInterlockForTesting,
+} from '../../../src/mc/broker/c1-global-interlock.js';
 import { startBrokerServer } from '../../../src/mc/broker/daemon.js';
 import { BrokerRuntime } from '../../../src/mc/broker/runtime.js';
 import {
@@ -85,6 +88,9 @@ function makeRuntime(tmp, fake) {
   return new BrokerRuntime({
     ptyFactory: fake.factory,
     cwd: () => tmp,
+    c1Interlock: createC1GlobalInterlockForTesting({
+      root: join(tmp, 'c1-global-interlock'),
+    }),
     controllerBindings: [{
       session_id: 'sess_e2ecloud',
       session_controller_capability: deriveHandoffControllerRoot({
@@ -104,7 +110,7 @@ function makeRuntime(tmp, fake) {
   });
 }
 
-function fakeCreateServer(handler) {
+function fakeCreateServer(_options, handler) {
   const server = new EventEmitter();
   server.handler = handler;
   server.listening = false;

@@ -8,6 +8,7 @@
  */
 
 import { spawn } from 'node:child_process';
+import { isAbsolute, resolve } from 'node:path';
 
 /**
  * Return `{ toplevel, branch, remoteUrl }` for `cwd`, or `null` if not in
@@ -79,8 +80,54 @@ export function derivePublicRepoRef(context) {
   return null;
 }
 
+/**
+ * Resolve a credential-free public reference through a bounded chain of local
+ * clone origins. This covers isolated worktrees cloned from a local primary
+ * repo without changing the local origin used for coding-session identity.
+ */
+export async function resolvePublicRepoRef(context, {
+  getContext = getRepoContext,
+  maxDepth = 4,
+} = {}) {
+  if (typeof getContext !== 'function'
+    || !Number.isSafeInteger(maxDepth)
+    || maxDepth < 1
+    || maxDepth > 8) return null;
+  let current = context;
+  const visited = new Set();
+  for (let depth = 0; depth < maxDepth; depth += 1) {
+    const direct = derivePublicRepoRef(current);
+    if (direct) return direct;
+    const localPath = localRemotePath(current);
+    if (!localPath || visited.has(localPath)) return null;
+    visited.add(localPath);
+    current = await getContext(localPath).catch(() => null);
+    if (!current) return null;
+  }
+  return null;
+}
+
 function stripGitSuffix(value) {
   return String(value || '').replace(/\.git$/i, '');
+}
+
+function localRemotePath(context) {
+  const remote = typeof context?.remoteUrl === 'string'
+    ? context.remoteUrl.trim()
+    : '';
+  if (!remote || remote === context?.toplevel) return null;
+  if (isAbsolute(remote)) return resolve(remote);
+  if (remote.startsWith('./') || remote.startsWith('../')) {
+    return typeof context?.toplevel === 'string' && context.toplevel
+      ? resolve(context.toplevel, remote)
+      : null;
+  }
+  try {
+    const url = new URL(remote);
+    return url.protocol === 'file:' ? resolve(decodeURIComponent(url.pathname)) : null;
+  } catch {
+    return null;
+  }
 }
 
 function runGit(args, cwd) {

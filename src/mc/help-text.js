@@ -111,6 +111,8 @@ FLEET / ADVANCED
                                   Preview/apply safe local metadata repairs
   mc storage repair <name> --provider-backfill --apply
                                   Backfill a provider-native resume id
+  mc storage repair <name> --managed-provider-recovery --dry-run|--apply
+                                  Recover one positively exited managed Codex generation
   mc storage prune-missing --dry-run|--apply
                                   Prune missing registry tombstones after 7d
   mc storage prune-deps --dry-run|--apply

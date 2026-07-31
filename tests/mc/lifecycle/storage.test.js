@@ -167,6 +167,14 @@ describe('mc storage / doctor', () => {
         { instance_id: 'bad', state: 'unhealthy' },
         { instance_id: 'gone', state: 'orphan' },
       ],
+      buildTranscriptPrunePlan: () => ({
+        counts: {
+          total: 0,
+          bytes: 0,
+          kept: { recent: 0, protected: 0 },
+          protected_ids: 0,
+        },
+      }),
     });
 
     assert.equal(code, 0);

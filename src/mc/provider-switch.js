@@ -10,6 +10,10 @@ import {
   upsertEntry,
   withProviderSession,
 } from './registry.js';
+import {
+  inspectManagedProviderHandoffSource,
+  MANAGED_PROVIDER_HANDOFF_SOURCE_SCHEMA,
+} from './managed-provider-registry.js';
 import { resolveBootstrapIdentity } from './connections/identity.js';
 import {
   buildSessionHeartbeatPayload,
@@ -55,6 +59,7 @@ const HANDOFF_ALREADY_PERSISTED_PHASES = new Set([
 export async function prepareProviderSwitch({
   entry,
   targetTool,
+  targetCustody = 'native',
   localPresence,
   apiArgv = [],
   env = process.env,
@@ -68,9 +73,17 @@ export async function prepareProviderSwitch({
   if (!codingSessionId) return failure('handoff-source-not-exited');
   const sourceProvider = providerSessionFor(entry, sourceTool.id);
   const sourceGeneration = exact(sourceProvider?.runtime_generation);
-  if (!exact(sourceProvider?.session_id) || !exact(sourceProvider?.transcript_path)
-    || !sourceGeneration) {
+  const sourceProof = await proveProviderSwitchSource({
+    entry,
+    sourceTool,
+    sourceProvider,
+    deps,
+  });
+  if (!sourceProof.ok || !sourceGeneration) {
     return failure('handoff-source-artifact-unconfirmed');
+  }
+  if (!['native', 'managed'].includes(targetCustody)) {
+    return failure('handoff-target-custody-invalid');
   }
   let sourceSession = localPresence.session;
   const sourceCursor = providerCursor(sourceProvider);
@@ -117,6 +130,7 @@ export async function prepareProviderSwitch({
     return recoverProviderSwitch({
       entry,
       targetTool,
+      targetCustody,
       localPresence,
       apiArgv,
       env,
@@ -188,6 +202,7 @@ export async function prepareProviderSwitch({
       codingSessionId,
       phase: 'prepared',
       targetTool: targetTool.id,
+      targetCustody,
       controllerRootDigest,
       controllerCapabilityDigest,
       controllerRoot,
@@ -231,6 +246,7 @@ async function auditMissingSwitchJournal({
   localPresence,
   auth,
   includeContext = false,
+  allowUnavailableCapability = false,
   deps = {},
 } = {}) {
   const sourceTool = resolveToolInput(entry?.tool);
@@ -262,7 +278,18 @@ async function auditMissingSwitchJournal({
     branch: repoContext.branch,
     memoroFetch: deps.memoroFetch,
   });
-  if (!context.ok) return failure('handoff-switch-journal-audit-unavailable');
+  if (!context.ok) {
+    if (context.code === 'handoff-capability-unavailable') {
+      return allowUnavailableCapability
+        ? {
+            ok: true,
+            active: false,
+            handoffCapability: 'unavailable',
+          }
+        : failure('handoff-capability-unavailable');
+    }
+    return failure('handoff-switch-journal-audit-unavailable');
+  }
   if (context.handoffs.length > 0) {
     return failure('handoff-switch-journal-integrity-lost');
   }
@@ -287,6 +314,7 @@ async function auditMissingSwitchJournal({
 export async function recoverProviderSwitch({
   entry,
   targetTool = null,
+  targetCustody = 'native',
   localPresence = null,
   apiArgv = [],
   env = process.env,
@@ -294,6 +322,9 @@ export async function recoverProviderSwitch({
 } = {}) {
   const codingSessionId = exact(entry?.coding_session_id);
   if (!codingSessionId) return { ok: true, active: false };
+  const sourceTool = resolveToolInput(entry?.tool);
+  const sameProviderResume = Boolean(sourceTool)
+    && (!targetTool || targetTool.id === sourceTool.id);
   const auth = await resolveSwitchIdentity({ apiArgv, env, deps });
   if (!auth.ok) return auth;
   const controllerRoot = deriveHandoffControllerRoot({
@@ -314,6 +345,7 @@ export async function recoverProviderSwitch({
       entry,
       localPresence,
       auth,
+      allowUnavailableCapability: sameProviderResume,
       deps,
     });
   }
@@ -325,24 +357,35 @@ export async function recoverProviderSwitch({
       entry,
       localPresence,
       auth,
+      allowUnavailableCapability: sameProviderResume,
       deps,
     });
   }
   if (journal.phase === 'complete') {
     return { ok: true, active: false, journal };
   }
+  const journalTargetCustody = journal.target_custody || 'native';
+  if (!['native', 'managed'].includes(targetCustody)
+    || journalTargetCustody !== targetCustody) {
+    return failure('handoff-target-custody-conflict');
+  }
 
   const recoveredTargetTool = resolveToolInput(journal.target_tool);
-  const sourceTool = resolveToolInput(journal.handoff?.source?.tool);
-  if (!recoveredTargetTool || !sourceTool
-    || recoveredTargetTool.id === sourceTool.id
+  const journalSourceTool = resolveToolInput(journal.handoff?.source?.tool);
+  if (!recoveredTargetTool || !journalSourceTool
+    || recoveredTargetTool.id === journalSourceTool.id
     || (targetTool && targetTool.id !== recoveredTargetTool.id)) {
     return failure('handoff-switch-journal-conflict');
   }
-  const sourceProvider = providerSessionFor(entry, sourceTool.id);
+  const sourceProvider = providerSessionFor(entry, journalSourceTool.id);
   const sourceGeneration = exact(sourceProvider?.runtime_generation);
-  if (!exact(sourceProvider?.session_id) || !exact(sourceProvider?.transcript_path)
-    || !sourceGeneration
+  const sourceProof = await proveProviderSwitchSource({
+    entry,
+    sourceTool: journalSourceTool,
+    sourceProvider,
+    deps,
+  });
+  if (!sourceProof.ok || !sourceGeneration
     || sourceGeneration !== journal.handoff?.source?.runtime_generation) {
     return failure('handoff-source-artifact-unconfirmed');
   }
@@ -435,7 +478,7 @@ export async function recoverProviderSwitch({
   const recovered = await recoverPreparedProviderSwitch({
     entry,
     targetTool: recoveredTargetTool,
-    sourceTool,
+    sourceTool: journalSourceTool,
     sourceSession,
     sourceCursor,
     targetCursor,
@@ -462,6 +505,7 @@ export async function commitProviderSwitchDelivery({
   entry,
   targetTool,
   transaction,
+  targetCustody = transaction?.target_custody || 'native',
   sessionControllerCapability,
   brokerSocketPath = null,
   deps = {},
@@ -473,6 +517,8 @@ export async function commitProviderSwitchDelivery({
     || !handoffControllerCapabilityDigest(transaction.controller_capability)
     || !handoffControllerCapabilityDigest(sessionControllerRoot)
     || transaction.require_target_artifact !== true
+    || (transaction.target_custody || 'native') !== targetCustody
+    || !['native', 'managed'].includes(targetCustody)
     || !Number.isSafeInteger(transaction.target_latest_sequence)) {
     return failure('handoff-delivery-commit-input-invalid');
   }
@@ -490,6 +536,7 @@ export async function commitProviderSwitchDelivery({
   if (current?.ok !== true
     || current.journal?.transaction_id !== transaction.transaction_id
     || current.journal?.target_tool !== targetTool.id
+    || (current.journal?.target_custody || 'native') !== targetCustody
     || !matchesHandoffControllerCapability(
       transaction.controller_capability,
       current.journal?.controller_capability_digest,
@@ -534,7 +581,9 @@ export async function commitProviderSwitchDelivery({
       targetTool.id,
       {
         session_id: artifactResult.artifact.provider_session_id,
-        transcript_path: artifactResult.artifact.transcript_path,
+        transcript_path: targetCustody === 'managed'
+          ? null
+          : artifactResult.artifact.transcript_path,
         runtime_generation: artifactResult.artifact.runtime_generation,
       },
     );
@@ -956,10 +1005,65 @@ function transactionProjection(journal, {
   return {
     transaction_id: journal.transaction_id,
     target_tool: journal.target_tool,
+    target_custody: journal.target_custody || 'native',
     target_latest_sequence: journal.target_latest_sequence,
     controller_capability: controllerCapability,
     session_controller_capability: sessionControllerCapability,
     require_target_artifact: true,
+  };
+}
+
+async function proveProviderSwitchSource({
+  entry,
+  sourceTool,
+  sourceProvider,
+  deps = {},
+} = {}) {
+  const providerSessionId = exact(sourceProvider?.session_id);
+  const runtimeGeneration = exact(sourceProvider?.runtime_generation);
+  if (!providerSessionId || !runtimeGeneration) {
+    return failure('handoff-source-artifact-unconfirmed');
+  }
+  const registryClaimsManaged = exact(entry?.tool_session_provider_adapter) != null
+    && resolveToolInput(entry?.tool)?.id === sourceTool?.id;
+  if (!registryClaimsManaged && exact(sourceProvider?.transcript_path)) {
+    return {
+      ok: true,
+      custody: 'native',
+      providerSessionId,
+      runtimeGeneration,
+    };
+  }
+  const inspect = deps.inspectManagedProviderHandoffSource
+    || inspectManagedProviderHandoffSource;
+  let proof;
+  try {
+    proof = await Promise.resolve(inspect({
+      tool: sourceTool?.id,
+      codingSessionId: entry?.coding_session_id,
+      providerSessionId,
+      runtimeGeneration,
+      root: (deps.mcHome || mcHome)(),
+      deps: deps.managedHandoffSourceDeps || {},
+    }));
+  } catch {
+    proof = null;
+  }
+  if (proof?.schema !== MANAGED_PROVIDER_HANDOFF_SOURCE_SCHEMA
+    || proof.ok !== true
+    || proof.tool_id !== sourceTool?.id
+    || proof.coding_session_id !== entry?.coding_session_id
+    || proof.provider_session_id !== providerSessionId
+    || proof.runtime_generation !== runtimeGeneration
+    || !/^[a-f0-9]{64}$/u.test(proof.archive_digest || '')) {
+    return failure('handoff-source-artifact-unconfirmed');
+  }
+  return {
+    ok: true,
+    custody: 'managed',
+    providerSessionId,
+    runtimeGeneration,
+    archiveDigest: proof.archive_digest,
   };
 }
 

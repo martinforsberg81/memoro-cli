@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { mkdtempSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import test, { afterEach, describe } from 'node:test';
 
 import {
@@ -13,7 +15,13 @@ import {
   runBrokerDaemon,
   startBrokerServer,
 } from '../../../src/mc/broker/daemon.js';
+import { BROKER_RUNTIME_IDENTITY } from '../../../src/mc/broker/runtime-identity.js';
+import { requestBroker } from '../../../src/mc/broker/client.js';
 
+const PROVIDER_HOOK_RUNNER = fileURLToPath(new URL(
+  '../../../src/mc/provider-artifact-hook-runner.js',
+  import.meta.url,
+));
 let tmp = null;
 let state = null;
 
@@ -26,8 +34,9 @@ function paths() {
   };
 }
 
-function fakeCreateServer(handler) {
+function fakeCreateServer(options, handler) {
   const server = new EventEmitter();
+  server.options = options;
   server.handler = handler;
   server.listening = false;
   server.listen = () => {
@@ -268,12 +277,90 @@ describe('broker daemon lifecycle', () => {
     assert.equal(res.broker.pid, 12345);
     assert.equal(res.broker.mc_version, null);
     assert.equal(res.broker.protocol_version, BROKER_PROTOCOL_VERSION);
+    assert.equal(res.broker.runtime_identity, BROKER_RUNTIME_IDENTITY);
     assert.equal(res.broker.socket_path, p.socketPath);
     assert.equal(res.broker.pid_path, p.pidPath);
     assert.equal(res.broker.uptime_ms, 1_500);
     assert.equal(existsSync(p.pidPath), true);
     assert.equal(state.server.listening, true);
     assert.equal(state.artifactServer.listening, true);
+    assert.deepEqual(state.server.options, { allowHalfOpen: true });
+    assert.deepEqual(state.artifactServer.options, { allowHalfOpen: true });
+  });
+
+  test('returns an asynchronous cleanup receipt after the client half-closes its request', async () => {
+    const p = paths();
+    state = await startBrokerServer({
+      ...p,
+      runtime: {
+        listSessions: () => [],
+        handle: async (message) => {
+          assert.equal(message.type, 'remove_session');
+          await new Promise((resolve) => setImmediate(resolve));
+          return {
+            ok: true,
+            removed: true,
+            credential_cleanup: 'confirmed',
+          };
+        },
+      },
+    });
+
+    const response = await requestBroker({
+      type: 'remove_session',
+      id: 'sess_async_cleanup',
+    }, {
+      socketPath: p.socketPath,
+      timeoutMs: 1_000,
+    });
+
+    assert.deepEqual(response, {
+      ok: true,
+      removed: true,
+      credential_cleanup: 'confirmed',
+    });
+  });
+
+  test('provider hook waits beyond one second for its durable broker receipt', async () => {
+    const p = paths();
+    let committed = false;
+    state = await startBrokerServer({
+      ...p,
+      runtime: {
+        listSessions: () => [],
+        handle: async (message) => {
+          assert.equal(message.type, 'capture_provider_artifact');
+          await new Promise((resolve) => setTimeout(resolve, 1_250));
+          committed = true;
+          return { ok: true };
+        },
+      },
+    });
+
+    const child = spawn(process.execPath, [PROVIDER_HOOK_RUNNER, '--tool', 'codex'], {
+      env: {
+        MEMORO_MC_PARENT: '1',
+        MC_CODING_SESSION_ID: 'sess_slow_receipt',
+        MC_RUNTIME_GENERATION: '4f50f5a1-4c6b-4d6a-8b5c-152c5e6b8701',
+        MC_PROVIDER_ARTIFACT_SOCKET: p.artifactSocketPath,
+      },
+      stdio: ['pipe', 'ignore', 'pipe'],
+    });
+    let stderr = '';
+    child.stderr.on('data', (chunk) => { stderr += String(chunk); });
+    child.stdin.end(JSON.stringify({
+      hook_event_name: 'SessionStart',
+      session_id: '019dbb46-5772-7493-a627-f8ae48954a64',
+      transcript_path: '/private/codex.jsonl',
+      cwd: '/private/worktree',
+    }));
+    const code = await new Promise((resolve, reject) => {
+      child.once('error', reject);
+      child.once('close', resolve);
+    });
+
+    assert.equal(code, 0, stderr);
+    assert.equal(committed, true);
   });
 
   test('status includes sessions when a runtime is attached', async () => {

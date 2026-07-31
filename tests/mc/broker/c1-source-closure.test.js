@@ -34,7 +34,7 @@ test('C1 release graph contains every transitive local source edge', () => {
     ['scripts/security/check-c1-source-closure.mjs'],
     { cwd: packageRoot, encoding: 'utf8' },
   );
-  assert.match(output, /^C1 source closure verified \(17 files\)\n$/u);
+  assert.match(output, /^C1 source closure verified \(18 files\)\n$/u);
 });
 
 test('C1 source closure rejects tamper, missing files, symlinks, and writable source paths', () => {

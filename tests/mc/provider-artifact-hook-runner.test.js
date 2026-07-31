@@ -50,3 +50,19 @@ test('minimal hook runner rejects stale, malformed, or non-hook evidence', () =>
     event: { ...event, transcript_path: 'relative.jsonl' },
   }), null);
 });
+
+test('minimal hook protocol accepts a bounded future provider id', () => {
+  assert.equal(
+    buildProviderArtifactHookRequest({
+      tool: 'future-provider-v1',
+      env,
+      event,
+    })?.message.tool,
+    'future-provider-v1',
+  );
+  assert.equal(buildProviderArtifactHookRequest({
+    tool: '../future',
+    env,
+    event,
+  }), null);
+});

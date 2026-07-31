@@ -5,6 +5,9 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, lstatSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 
+import { ACCOUNTS } from '../../commands/auth.js';
+import { getApiUrl, readConfig } from '../../lib/config.js';
+import { getSecret } from '../../lib/keychain.js';
 import {
   buildStorageSnapshot,
   explainSessionStorage,
@@ -14,7 +17,16 @@ import {
   buildStorageRepairPlan,
 } from '../storage-repair.js';
 import { parseDurationMs } from '../storage-policy.js';
-import { readRegistry, writeRegistry } from '../registry.js';
+import {
+  readRegistry,
+  readRegistryStrict,
+  writeRegistry,
+} from '../registry.js';
+import {
+  applyManagedCodexRecovery,
+  inspectManagedCodexRecovery,
+  publicManagedCodexRecovery,
+} from '../managed-codex-recovery.js';
 import {
   applyTranscriptPrunePlan,
   buildTranscriptPrunePlan,
@@ -26,7 +38,7 @@ const DEFAULT_GENERATED_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 const DEPENDENCY_DIRS = ['node_modules'];
 const GENERATED_DIRS = ['.cache', '.next', '.turbo', '.vite', 'coverage', 'playwright-report', 'test-results'];
 
-export async function run(argv) {
+export async function run(argv, deps = {}) {
   const opts = parseArgs(argv);
   if (opts.error) {
     console.error(`mc: ${opts.error}`);
@@ -46,7 +58,62 @@ export async function run(argv) {
   }
 
   if (opts.verb === 'repair') {
-    const registry = readRegistry();
+    const registry = opts.managedProviderRecovery
+      ? (deps.readRegistryStrict || readRegistryStrict)()
+      : readRegistry();
+    if (opts.managedProviderRecovery) {
+      const matches = registry.entries.filter((entry) => entry.name === opts.name);
+      if (matches.length !== 1) {
+        const out = {
+          ok: false,
+          recoverable: false,
+          reason: matches.length ? 'managed-recovery-entry-ambiguous' : 'managed-recovery-entry-missing',
+        };
+        if (opts.json) console.log(JSON.stringify(out, null, 2));
+        else printManagedRecovery(out, opts.dryRun);
+        return 1;
+      }
+      const inspected = await (deps.inspectManagedCodexRecovery
+        || inspectManagedCodexRecovery)({
+        entry: matches[0],
+        registry,
+        deps: deps.managedRecoveryDeps || {},
+      });
+      if (!inspected.ok || opts.dryRun) {
+        const out = {
+          dry_run: opts.dryRun,
+          ...publicManagedCodexRecovery(inspected),
+        };
+        if (opts.json) console.log(JSON.stringify(out, null, 2));
+        else printManagedRecovery(out, opts.dryRun);
+        return inspected.ok ? 0 : 1;
+      }
+      const portal = await (deps.resolveManagedRecoveryPortal
+        || resolveManagedRecoveryPortal)();
+      if (!portal?.ok) {
+        const out = {
+          ok: false,
+          recoverable: false,
+          reason: portal?.reason || 'managed-recovery-memoro-auth-missing',
+        };
+        if (opts.json) console.log(JSON.stringify(out, null, 2));
+        else printManagedRecovery(out, false);
+        return 1;
+      }
+      const applied = await (deps.applyManagedCodexRecovery
+        || applyManagedCodexRecovery)({
+        inspection: inspected,
+        portal: portal.portal,
+        deps: deps.managedRecoveryDeps || {},
+      });
+      const out = {
+        dry_run: false,
+        ...publicManagedCodexRecovery(applied),
+      };
+      if (opts.json) console.log(JSON.stringify(out, null, 2));
+      else printManagedRecovery(out, false);
+      return applied.ok ? 0 : 1;
+    }
     const plan = await buildStorageRepairPlan({
       registry,
       includeProviderBackfill: opts.providerBackfill,
@@ -168,6 +235,7 @@ function parseArgs(argv) {
     dryRun: false,
     apply: false,
     providerBackfill: false,
+    managedProviderRecovery: false,
     olderThanMs: DEFAULT_MISSING_RETENTION_MS,
     olderThanSet: false,
   };
@@ -192,6 +260,7 @@ function parseArgs(argv) {
     if (a === '--dry-run') { opts.dryRun = true; continue; }
     if (a === '--apply') { opts.apply = true; continue; }
     if (a === '--provider-backfill') { opts.providerBackfill = true; continue; }
+    if (a === '--managed-provider-recovery') { opts.managedProviderRecovery = true; continue; }
     if (a === '--older-than') {
       const ms = parseDurationMs(args[++i]);
       if (ms == null) return { error: `--older-than expects a duration like 7d / 1h / 0s, got "${args[i]}"` };
@@ -217,12 +286,30 @@ function parseArgs(argv) {
   if (opts.verb !== 'repair' && opts.providerBackfill) {
     return { error: '--provider-backfill is only valid with mc storage repair' };
   }
+  if (opts.verb !== 'repair' && opts.managedProviderRecovery) {
+    return { error: '--managed-provider-recovery is only valid with mc storage repair' };
+  }
+  if (opts.managedProviderRecovery && !opts.name) {
+    return { error: '--managed-provider-recovery requires one exact repair session name' };
+  }
+  if (opts.managedProviderRecovery && opts.providerBackfill) {
+    return { error: '--managed-provider-recovery cannot be combined with --provider-backfill' };
+  }
   if (!['prune-missing', 'prune-deps', 'prune-generated', 'prune-transcripts'].includes(opts.verb) && opts.olderThanSet) {
     return { error: '--older-than is only valid with mc storage prune-missing, prune-deps, or prune-generated' };
   }
   if (opts.verb === 'prune-deps' && !opts.olderThanSet) opts.olderThanMs = DEFAULT_DEPS_RETENTION_MS;
   if (opts.verb === 'prune-generated' && !opts.olderThanSet) opts.olderThanMs = DEFAULT_GENERATED_RETENTION_MS;
   return opts;
+}
+
+async function resolveManagedRecoveryPortal() {
+  const config = await readConfig();
+  const apiUrl = getApiUrl([]) || config.apiUrl;
+  const token = await getSecret(ACCOUNTS.TOKEN);
+  return apiUrl && token
+    ? { ok: true, portal: { apiUrl, token } }
+    : { ok: false, reason: 'managed-recovery-memoro-auth-missing' };
 }
 
 function buildMissingPrunePlan(registry, {
@@ -506,6 +593,19 @@ function printRepair(out) {
     const status = out.dry_run ? 'would' : 'applied';
     process.stdout.write(`${status} ${action.type}  ${action.name}  ${action.reason}\n`);
   }
+}
+
+function printManagedRecovery(out, dryRun) {
+  if (!out?.ok) {
+    process.stderr.write(`mc: managed provider recovery unavailable (${out?.reason || 'unknown'})\n`);
+    return;
+  }
+  if (dryRun) {
+    process.stdout.write(`would recover managed provider session  ${out.name}  ${out.provider_session_id}\n`);
+    for (const action of out.actions || []) process.stdout.write(`  ${action}\n`);
+    return;
+  }
+  process.stdout.write(`recovered managed provider session  ${out.name}  ${out.provider_session_id}\n`);
 }
 
 function printPruneMissing(out) {

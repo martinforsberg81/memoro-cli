@@ -7,7 +7,7 @@
  */
 import { randomBytes } from 'node:crypto';
 import { chmod, mkdir, writeFile } from 'node:fs/promises';
-import { delimiter, dirname, join } from 'node:path';
+import { delimiter, dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { memoroFetch } from '../lib/api.js';
@@ -124,6 +124,7 @@ export async function prepareGitHubSessionForLaunch({
   capabilities = unavailableGitHubSessionCapabilities(),
   sessionId,
   socketPath,
+  shimDirectory = null,
   mcHomeDir = mcHome(),
   execPath = process.execPath,
   deps = {},
@@ -131,7 +132,13 @@ export async function prepareGitHubSessionForLaunch({
   const descriptor = decodeSessionCapabilities(capabilities);
   const env = scrubGitHubCredentialEnv(baseEnv);
   const ensureShim = deps.ensureGitHubShim || ensureGitHubShim;
-  const shimPath = await ensureShim({ sessionId, mcHomeDir, execPath, deps });
+  const shimPath = await ensureShim({
+    sessionId,
+    shimDirectory,
+    mcHomeDir,
+    execPath,
+    deps,
+  });
   env[MC_SESSION_CAPABILITIES_ENV] = JSON.stringify(descriptor);
   if (typeof socketPath === 'string' && socketPath.trim()) {
     env[MC_GITHUB_BROKER_SOCKET_ENV] = socketPath.trim();
@@ -150,15 +157,20 @@ export function scrubGitHubCredentialEnv(baseEnv = process.env) {
 
 export async function ensureGitHubShim({
   sessionId,
+  shimDirectory = null,
   mcHomeDir = mcHome(),
   execPath = process.execPath,
   deps = {},
 } = {}) {
   const paths = sessionHostPaths(sessionId);
-  const root = mcHomeDir === mcHome()
-    ? paths.dir
-    : join(mcHomeDir, 'hosts', safePathPart(sessionId));
-  const shimPath = join(root, 'tools', 'bin', 'gh');
+  const root = shimDirectory == null
+    ? (
+        mcHomeDir === mcHome()
+          ? join(paths.dir, 'tools', 'bin')
+          : join(mcHomeDir, 'hosts', safePathPart(sessionId), 'tools', 'bin')
+      )
+    : requirePrivateShimDirectory(shimDirectory);
+  const shimPath = join(root, 'gh');
   const makeDir = deps.mkdir || mkdir;
   const write = deps.writeFile || writeFile;
   const setMode = deps.chmod || chmod;
@@ -168,13 +180,44 @@ export async function ensureGitHubShim({
     mode: 0o700,
   });
   await setMode(shimPath, 0o700);
+  if (shimDirectory != null) {
+    const mcShimPath = join(root, 'mc');
+    await write(mcShimPath, renderManagedMcShim({
+      execPath,
+      modulePath: SHIM_MODULE,
+    }), {
+      encoding: 'utf8',
+      mode: 0o700,
+    });
+    await setMode(mcShimPath, 0o700);
+  }
   return shimPath;
+}
+
+function requirePrivateShimDirectory(value) {
+  if (typeof value !== 'string' || !isAbsolute(value)) {
+    throw new TypeError('absolute GitHub shim directory is required');
+  }
+  return resolve(value);
 }
 
 export function renderGitHubShim({ execPath, modulePath }) {
   return [
     '#!/bin/sh',
     `exec ${shellQuote(execPath)} ${shellQuote(modulePath)} "$@"`,
+    '',
+  ].join('\n');
+}
+
+export function renderManagedMcShim({ execPath, modulePath }) {
+  return [
+    '#!/bin/sh',
+    'if [ "$1" != "github" ]; then',
+    '  printf "%s\\n" "mc: only session-scoped GitHub commands are available inside a managed provider" >&2',
+    '  exit 126',
+    'fi',
+    'shift',
+    `exec ${shellQuote(execPath)} ${shellQuote(modulePath)} --mc-session-shim "$@"`,
     '',
   ].join('\n');
 }
@@ -228,6 +271,7 @@ export async function executeGitHubControlPlaneOperation({
   connectionClient,
   codingSessionId,
   request,
+  allowedOperations = null,
   memoroFetchImpl = memoroFetch,
 } = {}) {
   let decodedRequest;
@@ -238,6 +282,15 @@ export async function executeGitHubControlPlaneOperation({
       validRequestId(request?.request_id),
       error?.code === 'operation_not_allowed' ? 'operation_not_allowed' : 'invalid_params',
     );
+  }
+  if (
+    allowedOperations != null
+    && (
+      !Array.isArray(allowedOperations)
+      || !allowedOperations.includes(decodedRequest.operation)
+    )
+  ) {
+    return safeOperationFailure(decodedRequest.request_id, 'operation_not_allowed');
   }
   const session = stringOrNull(codingSessionId);
   if (!connectionClient?.withGrant || !/^sess_[a-zA-Z0-9_-]{6,}$/.test(session || '')) {

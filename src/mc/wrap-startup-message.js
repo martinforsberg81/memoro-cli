@@ -41,6 +41,12 @@ export function createStartupMessageController({
     return true;
   };
 
+  const pause = () => {
+    if (!hasMessage || sent || cancelled || pendingTimer === null) return false;
+    clearPending();
+    return true;
+  };
+
   const cancel = (reason = 'pty-message-delivery-cancelled') => {
     if (cancelled || sent) return;
     cancelled = true;
@@ -52,6 +58,7 @@ export function createStartupMessageController({
 
   return {
     cancel,
+    pause,
     schedule,
     sendNow,
     waitForDelivery: () => delivery,

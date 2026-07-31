@@ -21,7 +21,7 @@ import {
 
 import { buildHandoff } from '../handoff.js';
 
-export const HANDOFF_SWITCH_SCHEMA = 'mc-handoff-switch-journal-v1';
+export const HANDOFF_SWITCH_SCHEMA = 'mc-handoff-switch-journal-v2';
 export const HANDOFF_SWITCH_PHASES = Object.freeze([
   'prepared',
   'source_terminal_confirmed',
@@ -37,7 +37,8 @@ const MAX_DIAGNOSTICS = 24;
 const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const SESSION_ID = /^sess_[A-Za-z0-9_-]{6,}$/;
 const DIGEST = /^[a-f0-9]{64}$/;
-const TOOLS = new Set(['codex', 'claude-code']);
+const PROVIDER_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+const TARGET_CUSTODY = new Set(['native', 'managed']);
 const DIAGNOSTIC_CODE = /^[a-z][a-z0-9-]{0,79}$/;
 const AUTHENTICATION_DOMAIN = 'mc-handoff-switch-journal-authentication-v1';
 const READ_NOFOLLOW = constants.O_RDONLY | (constants.O_NOFOLLOW || 0);
@@ -47,6 +48,7 @@ const JOURNAL_KEYS = [
   'coding_session_id',
   'phase',
   'target_tool',
+  'target_custody',
   'controller_root_digest',
   'controller_capability_digest',
   'source_cursor',
@@ -68,6 +70,7 @@ export function buildHandoffSwitchJournal(input = {}) {
     coding_session_id: input.codingSessionId,
     phase: input.phase,
     target_tool: input.targetTool,
+    target_custody: input.targetCustody || 'native',
     controller_root_digest: input.controllerRootDigest,
     controller_capability_digest: input.controllerCapabilityDigest,
     source_cursor: input.sourceCursor,
@@ -106,7 +109,8 @@ export function validateHandoffSwitchJournal(value) {
     || !UUID_V4.test(value.transaction_id || '')
     || !SESSION_ID.test(value.coding_session_id || '')
     || !HANDOFF_SWITCH_PHASES.includes(value.phase)
-    || !TOOLS.has(value.target_tool)
+    || !PROVIDER_ID.test(value.target_tool || '')
+    || !TARGET_CUSTODY.has(value.target_custody)
     || !DIGEST.test(value.controller_root_digest || '')
     || !DIGEST.test(value.controller_capability_digest || '')
     || !DIGEST.test(value.authentication_digest || '')

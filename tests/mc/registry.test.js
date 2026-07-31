@@ -88,7 +88,7 @@ test('preserves forward provider data and rejects it rather than silently resett
   assert.deepEqual(result, { ok: false, reason: 'provider-sessions-invalid', providerSessions: future });
 });
 
-test('rejects unknown fields in a known provider projection while preserving unknown providers', () => {
+test('every provider uses the same strict provider-session projection', () => {
   const knownExtra = normalizeProviderSessions({
     provider_sessions: {
       schema: 1,
@@ -102,11 +102,25 @@ test('rejects unknown fields in a known provider projection while preserving unk
   });
   assert.equal(knownExtra.ok, false);
 
-  const unknownProvider = normalizeProviderSessions({
+  const invalidFutureProvider = normalizeProviderSessions({
     provider_sessions: { schema: 1, providers: { 'future-provider': { future_field: 'preserved' } } },
   });
-  assert.equal(unknownProvider.ok, true);
-  assert.deepEqual(unknownProvider.providerSessions.providers['future-provider'], { future_field: 'preserved' });
+  assert.equal(invalidFutureProvider.ok, false);
+
+  const futureProvider = normalizeProviderSessions({
+    provider_sessions: {
+      schema: 1,
+      providers: {
+        'future-provider': {
+          session_id: 'future_1',
+          transcript_path: null,
+          runtime_generation: null,
+          last_consumed_handoff_sequence: 0,
+        },
+      },
+    },
+  });
+  assert.equal(futureProvider.ok, true);
 });
 
 test('bounds and fences known provider session values', () => {

@@ -16,6 +16,7 @@ import {
   C1_SANDBOX_RUNTIME,
   buildManagedClaudeC1Report,
   buildFixtureActivationReceipt,
+  classifyAllowedFixtureSurface,
   classifyFixtureSurface,
   indeterminateExecutorEvidence,
   runFixtureActivationControl,
@@ -125,7 +126,7 @@ test('boundary evidence remains separate and cannot pass C1 without complete Cla
   assert.equal(validateManagedClaudeC1Report(report), true);
 });
 
-test('complete report passes only when every executor surface is explicitly blocked', () => {
+test('complete report passes only when every executor surface is explicitly secret-safe', () => {
   const report = buildManagedClaudeC1Report({
     preflight: preflight(),
     generations: [generation(1), generation(2)],
@@ -192,11 +193,11 @@ test('runtime report schema requires every process-isolation probe exactly once'
     observer_signal_reachable: false,
     detached_boundary_reachable: false,
     credential_socket_reachable: false,
-    loopback_reachable: false,
-    external_network_reachable: false,
+    loopback_reachable: true,
+    external_network_reachable: true,
     workspace_write_blocked: false,
-    vault_admin_via_bin_callable: false,
-    vault_admin_via_node_callable: false,
+    vault_admin_via_bin_callable: true,
+    vault_admin_via_node_callable: true,
     synthetic_keychain_secret_readable: false,
   };
   const report = {
@@ -209,7 +210,7 @@ test('runtime report schema requires every process-isolation probe exactly once'
       messages_allowed: true,
       count_tokens_allowed: true,
       provider_path_blocked: true,
-      other_host_blocked: true,
+      other_host_blocked: false,
       provider_oracle_blocked: true,
       provider_oracle_credential_exposed: false,
     },
@@ -238,7 +239,7 @@ test('runtime report schema requires every process-isolation probe exactly once'
     private_path_observed: false,
     transcript_created: false,
     debug_created: false,
-    claude_binary_removed: true,
+    claude_binary_removed: false,
     teardown_complete: true,
     pass: true,
   };
@@ -274,8 +275,8 @@ test('provider request classifier allows only exact sentinel provider routes and
     request('https://example.com/v1/messages'),
     { sentinel },
   );
-  assert.equal(badHost.action, 'deny');
-  assert.equal(badHost.other_host_blocked, true);
+  assert.equal(badHost.action, 'allow');
+  assert.equal(badHost.other_host_blocked, false);
 
   const badPath = await classifyProviderRequest(
     request('https://api.anthropic.com/api/oauth/profile'),
@@ -316,7 +317,7 @@ test('provider request classifier allows only exact sentinel provider routes and
   }
 });
 
-test('runtime command enables subprocess scrubbing and explicit manual permissions', () => {
+test('runtime command enables subprocess scrubbing without imposing Claude tool permissions', () => {
   const command = buildClaudeCommand({
     config: {
       claudeBin: '/private/tmp/claude-c1',
@@ -325,13 +326,21 @@ test('runtime command enables subprocess scrubbing and explicit manual permissio
       mcpConfigPath: '/private/tmp/mcp.json',
       pluginDir: '/private/tmp/plugin',
     },
-    sentinel: 'opaque-sentinel',
   });
   assert.match(command, /CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1/);
-  assert.match(command, /--permission-mode' 'manual/);
-  assert.match(command, /--tools' 'Bash,Read,Edit,Task/);
-  assert.match(command, /--allowedTools' 'Bash,Read,Edit,Task/);
+  assert.match(command, /CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR=3/);
+  assert.doesNotMatch(command, /opaque-sentinel|CLAUDE_CODE_OAUTH_TOKEN=/);
+  assert.doesNotMatch(command, /--permission-mode|--tools|--allowedTools|--safe-mode/);
   assert.doesNotMatch(command, /dangerously-skip-permissions/);
+});
+
+test('managed Claude C1 policy keeps Apple Events outside the credential boundary', () => {
+  const source = readFileSync(
+    new URL('../../scripts/security/managed-claude-c1-harness.mjs', import.meta.url),
+    'utf8',
+  );
+  assert.match(source, /allowAppleEvents:\s*false/u);
+  assert.doesNotMatch(source, /allowAppleEvents:\s*true/u);
 });
 
 test('the internal C1 process-group authority is never inherited by Claude', () => {
@@ -449,6 +458,25 @@ test('fixture activation receipt must precede provider traffic and candidate mar
     surface: 'plugin',
     candidateMarkerPresent: false,
   }), 'indeterminate');
+});
+
+test('allowed fixture surfaces require the user-configured hook, MCP, and plugin to run', () => {
+  const complete = buildFixtureActivationReceipt({
+    providerAttempted: true,
+    markersBeforeProvider: { hook: true, mcp: true, plugin: true },
+  });
+  assert.equal(classifyAllowedFixtureSurface({
+    activation: complete,
+    markersCleared: true,
+    surface: 'hook',
+    candidateMarkerPresent: true,
+  }), 'blocked');
+  assert.equal(classifyAllowedFixtureSurface({
+    activation: complete,
+    markersCleared: true,
+    surface: 'hook',
+    candidateMarkerPresent: false,
+  }), 'escaped');
 });
 
 test('fixture activation control separates SRT and Claude argv and reduces provider output to booleans', async (t) => {

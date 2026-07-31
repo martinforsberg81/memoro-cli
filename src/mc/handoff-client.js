@@ -88,10 +88,15 @@ export function validateHandoffContext(context, {
   consumedSequence,
   scan = createDefenceInDepthScanner(),
 } = {}) {
-  if (!plain(context) || !plain(context.continuity)
-    || !Array.isArray(context.session_handoffs)
-    || !validSessionId(codingSessionId)
+  if (!validSessionId(codingSessionId)
     || !Number.isSafeInteger(consumedSequence) || consumedSequence < 0) {
+    return failure('handoff-context-invalid');
+  }
+  if (legacyContextWithoutHandoffCapability(context)) {
+    return failure('handoff-capability-unavailable');
+  }
+  if (!plain(context) || !plain(context.continuity)
+    || !Array.isArray(context.session_handoffs)) {
     return failure('handoff-context-invalid');
   }
   const continuity = context.continuity;
@@ -137,6 +142,14 @@ export function validateHandoffContext(context, {
     },
     handoffs: rows.map((row) => structuredClone(row)),
   };
+}
+
+function legacyContextWithoutHandoffCapability(context) {
+  return plain(context)
+    && /^mc-context-v[1-9][0-9]*$/u.test(context.version || '')
+    && Array.isArray(context.session_continuity)
+    && !Object.prototype.hasOwnProperty.call(context, 'continuity')
+    && !Object.prototype.hasOwnProperty.call(context, 'session_handoffs');
 }
 
 export function renderHandoffUserMessage(handoffs, {

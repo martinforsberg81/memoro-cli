@@ -17,6 +17,25 @@ import {
 } from '../../../src/mc/github-session.js';
 
 let tmp = null;
+const SESSION_CAPABILITIES = {
+  schema: 1,
+  github: {
+    state: 'ready',
+    transport: 'mc-broker-v1',
+    actor: 'installation',
+    account: 'acme',
+    repository: {
+      id: 301,
+      full_name: 'acme/widgets',
+      owner: 'acme',
+      name: 'widgets',
+      private: true,
+      archived: false,
+      account: 'acme',
+    },
+    operations: ['connection.status', 'repository.metadata', 'pull_request.list'],
+  },
+};
 
 afterEach(() => {
   if (tmp) {
@@ -102,7 +121,176 @@ async function startRealGitHubSidecar({ paths, memoroFetchImpl }) {
   return sidecars;
 }
 
+async function startRealManagedGitHubSidecar({
+  paths,
+  memoroFetchImpl,
+  connectionClient = grantClient(),
+}) {
+  const factoryCalls = [];
+  const sidecars = new BrokerSessionSidecars({
+    session: makeSession(),
+    coding: {
+      codingSessionId: 'sess_managed',
+      githubCapabilities: SESSION_CAPABILITIES,
+      sockPath: paths.sockPath,
+      metaPath: paths.metaPath,
+      heartbeat: false,
+      upload: false,
+    },
+    wsClientFactory: () => ({ start() {}, stop() {} }),
+    connectionClientFactory: (options) => {
+      factoryCalls.push(options);
+      return connectionClient;
+    },
+    memoroFetchImpl,
+  }).start();
+  if (!sidecars.dispatchServer.listening) await once(sidecars.dispatchServer, 'listening');
+  return { sidecars, factoryCalls };
+}
+
 describe('BrokerSessionSidecars', () => {
+  test('managed GitHub capability creates broker-local identity without launch credentials', () => {
+    let factoryOptions = null;
+    const localClient = grantClient();
+    const sidecars = new BrokerSessionSidecars({
+      session: makeSession(),
+      coding: {
+        codingSessionId: 'sess_managed',
+        githubCapabilities: SESSION_CAPABILITIES,
+        heartbeat: false,
+        upload: false,
+      },
+      connectionClientFactory: (options) => {
+        factoryOptions = options;
+        return localClient;
+      },
+    });
+
+    assert.equal(sidecars.connectionClient, localClient);
+    assert.equal(factoryOptions.memoroFetch instanceof Function, true);
+    assert.equal('token' in factoryOptions, false);
+    assert.equal('apiUrl' in factoryOptions, false);
+    assert.doesNotMatch(JSON.stringify(sidecars.coding), /token|credential/i);
+  });
+
+  test('managed presence uses broker-local identity for active and terminal lifecycle writes', async () => {
+    const requests = [];
+    const generation = '4f50f5a1-4c6b-4d6a-8b5c-152c5e6b8701';
+    const sidecars = new BrokerSessionSidecars({
+      session: makeSession(),
+      coding: {
+        codingSessionId: 'sess_managed_presence',
+        runtimeGeneration: generation,
+        label: 'managed',
+        machineId: 'machine',
+        source_id: 'local:machine',
+        source_kind: 'local',
+        source_name: 'machine',
+        cloud_session_id: null,
+        source: 'codex',
+        repo: 'widgets',
+        repoRef: 'acme/widgets',
+        branch: 'main',
+        presenceIdentity: 'broker-local',
+        heartbeat: true,
+        upload: false,
+      },
+      wsClientFactory: () => ({ start() {}, stop() {} }),
+      localPresencePublisher: async (request) => {
+        requests.push(request);
+        return true;
+      },
+      now: () => 2_500,
+      heartbeatIntervalMs: null,
+    }).start();
+
+    await sidecars.heartbeatPromise;
+    await sidecars.stop({ terminal: true });
+
+    assert.equal(requests.length, 2);
+    assert.equal(requests[0].payload.presence_state, 'active');
+    assert.equal(requests[1].payload.presence_state, 'terminal');
+    assert.equal(requests[1].payload.runtime_generation, generation);
+    assert.equal(requests[1].payload.repo, 'acme/widgets');
+    assert.equal(requests[0].maxAttempts, 3);
+    assert.equal(requests[1].maxAttempts, 1);
+    assert.equal('token' in requests[0], false);
+    assert.equal('apiUrl' in requests[0], false);
+    assert.doesNotMatch(JSON.stringify(sidecars.coding), /memoro-secret|apiUrl/i);
+  });
+
+  test('managed capability executes over the real socket with broker-local identity only', async (t) => {
+    const paths = tempPaths();
+    const requests = [];
+    const { sidecars, factoryCalls } = await startRealManagedGitHubSidecar({
+      paths,
+      memoroFetchImpl: async (apiUrl, path, options) => {
+        requests.push({ apiUrl, path, options });
+        return {
+          ok: true,
+          request_id: options.body.request_id,
+          data: { id: 301, full_name: 'acme/widgets' },
+        };
+      },
+    });
+    t.after(() => sidecars.stop());
+
+    const response = await executeGitHubSessionOperation({
+      operation: 'repository.metadata',
+      requestId: 'request_managed',
+      env: { [MC_GITHUB_BROKER_SOCKET_ENV]: paths.sockPath },
+    });
+
+    assert.deepEqual(response, {
+      ok: true,
+      request_id: 'request_managed',
+      data: { id: 301, full_name: 'acme/widgets' },
+    });
+    assert.equal(factoryCalls.length, 1);
+    assert.equal('token' in factoryCalls[0], false);
+    assert.equal('apiUrl' in factoryCalls[0], false);
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].path, '/api/mc/github/sessions/sess_managed/operations');
+    assert.equal(requests[0].options.token, 'short-lived-grant-sentinel');
+    assert.doesNotMatch(JSON.stringify(sidecars.coding), /token|credential|apiUrl/i);
+  });
+
+  test('managed socket rejects operations absent from its exact descriptor before identity use', async (t) => {
+    const paths = tempPaths();
+    let grantCalls = 0;
+    const { sidecars } = await startRealManagedGitHubSidecar({
+      paths,
+      connectionClient: {
+        withGrant: async () => {
+          grantCalls += 1;
+          assert.fail('an unadvertised operation must not reach broker identity');
+        },
+      },
+      memoroFetchImpl: async () => assert.fail('an unadvertised operation must not reach the network'),
+    });
+    t.after(() => sidecars.stop());
+
+    const response = await executeGitHubSessionOperation({
+      operation: 'pull_request.create',
+      params: {
+        title: 'Denied',
+        body: '',
+        head: 'feature',
+        base: 'main',
+        draft: true,
+        expected_head_sha: 'a'.repeat(40),
+        expected_base_sha: 'b'.repeat(40),
+      },
+      requestId: 'request_denied',
+      env: { [MC_GITHUB_BROKER_SOCKET_ENV]: paths.sockPath },
+    });
+
+    assert.equal(response.ok, false);
+    assert.equal(response.request_id, 'request_denied');
+    assert.equal(response.error.code, 'operation_not_allowed');
+    assert.equal(grantCalls, 0);
+  });
+
   test('builds the shared credential-free session heartbeat envelope', () => {
     const payload = buildSessionHeartbeatPayload({
       codingSessionId: 'sess_abcdef',

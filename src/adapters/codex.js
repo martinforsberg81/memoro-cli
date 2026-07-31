@@ -22,6 +22,7 @@ import {
   ensureCodexAgentsIgnored,
   resolveRealCodexBinary,
 } from '../lib/codex.js';
+import { stripAnsi } from '../lib/prompt.js';
 import { writeProtectedFile, shredFile } from './_materialise.js';
 
 const DEFAULT_LAUNCHER = join(homedir(), '.local', 'bin', 'codex-memoro');
@@ -305,9 +306,25 @@ export function launchSpec({ resolveBinary = resolveRealCodexBinary } = {}) {
     label: LABEL,
     installHint: 'Install Codex CLI from openai/codex (could not locate the codex binary)',
     startupMessageDelivery: 'deferred-pty',
+    isUserMessagePromptReady: isCodexUserMessagePromptReady,
     submitEnterCount: 2,
     submitEnterDelayMs: 150,
   };
+}
+
+/**
+ * Codex can show native policy dialogs before its composer. Broker-delivered
+ * grounding and handoff messages must wait for the real composer instead of
+ * becoming accidental answers to those dialogs. Managed Codex is pinned, so
+ * its main-screen banner is a stable readiness marker for this boundary.
+ * Comparing the latest relevant markers also pauses an already scheduled
+ * delivery if hook review is redrawn before the idle timer fires.
+ */
+export function isCodexUserMessagePromptReady({ recentOutput = '' } = {}) {
+  const output = stripAnsi(recentOutput);
+  const composerIndex = output.lastIndexOf('OpenAI Codex');
+  const hookReviewIndex = output.lastIndexOf('Hooks need review');
+  return composerIndex >= 0 && composerIndex > hookReviewIndex;
 }
 
 const CODEX_DEVICE_AUTH_BOOTSTRAP = [

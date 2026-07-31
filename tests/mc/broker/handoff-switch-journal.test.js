@@ -222,3 +222,44 @@ test('validation rejects unknown fields and inconsistent delivery proof', () => 
     target_runtime_generation: null,
   }).ok, false);
 });
+
+test('journal accepts adapter-shaped provider ids and binds managed target custody', () => {
+  const futureHandoff = buildHandoff({
+    codingSessionId: 'sess_journal1',
+    sequence: 1,
+    parentDigest: null,
+    source: {
+      kind: 'local',
+      id: 'device:laptop',
+      tool: 'future-source',
+      runtimeGeneration: sourceGeneration,
+    },
+    workspace: {
+      anchor: {
+        repoId: 'repo_memoro',
+        ref: '1'.repeat(40),
+        branch: 'sess/handoff',
+      },
+      digest: 'c'.repeat(64),
+    },
+    content: { state: 'Continue through a registered provider adapter.' },
+  });
+  assert.equal(futureHandoff.ok, true);
+
+  const built = buildHandoffSwitchJournal({
+    transactionId,
+    codingSessionId: 'sess_journal1',
+    phase: 'prepared',
+    targetTool: 'future-target',
+    targetCustody: 'managed',
+    controllerRootDigest,
+    controllerCapabilityDigest,
+    controllerRoot,
+    sourceCursor: 0,
+    targetCursor: 0,
+    handoff: futureHandoff.handoff,
+    updatedAt: '2026-07-28T12:00:00.000Z',
+  });
+  assert.equal(built.target_tool, 'future-target');
+  assert.equal(built.target_custody, 'managed');
+});

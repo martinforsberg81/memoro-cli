@@ -7,6 +7,7 @@ import test, { describe } from 'node:test';
 
 import { __test__, parseArgs, runBrokerWith } from '../../../src/mc/commands/broker.js';
 import { BROKER_PROTOCOL_VERSION } from '../../../src/mc/broker/daemon.js';
+import { BROKER_RUNTIME_IDENTITY } from '../../../src/mc/broker/runtime-identity.js';
 import { spawnBrokerDaemon } from '../../../src/mc/broker/supervisor.js';
 
 function io() {
@@ -120,7 +121,15 @@ describe('mc broker command', () => {
     const streams = io();
     let spawned = false;
     const code = await runBrokerWith({ verb: 'start', json: true }, {
-      request: async () => ({ ok: true, broker: { pid: 9, uptime_ms: 10, protocol_version: BROKER_PROTOCOL_VERSION } }),
+      request: async () => ({
+        ok: true,
+        broker: {
+          pid: 9,
+          uptime_ms: 10,
+          protocol_version: BROKER_PROTOCOL_VERSION,
+          runtime_identity: BROKER_RUNTIME_IDENTITY,
+        },
+      }),
       spawnDaemon: () => { spawned = true; return { ok: true }; },
       runDaemon: () => assert.fail('must not daemon'),
       sleep: async () => {},
@@ -143,7 +152,15 @@ describe('mc broker command', () => {
       request: async () => {
         requests += 1;
         if (!spawned) throw new Error('not running');
-        return { ok: true, broker: { pid: 77, uptime_ms: 0, protocol_version: BROKER_PROTOCOL_VERSION } };
+        return {
+          ok: true,
+          broker: {
+            pid: 77,
+            uptime_ms: 0,
+            protocol_version: BROKER_PROTOCOL_VERSION,
+            runtime_identity: BROKER_RUNTIME_IDENTITY,
+          },
+        };
       },
       spawnDaemon: () => { spawned = true; return { ok: true, pid: 77 }; },
       runDaemon: () => assert.fail('must not daemon'),

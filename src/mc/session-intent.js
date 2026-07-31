@@ -59,6 +59,10 @@ export function buildResumeSessionLaunchIntent({
   return {
     mode: MC_SESSION_LAUNCH_MODES.RESUME,
     cwd: entry?.worktree_path || null,
+    // Resume must stay on the existing mc identity. Minting a new coding
+    // session here breaks server continuity and makes managed provider state
+    // unreachable because its archive is keyed by this exact id.
+    codingSessionId: entry?.coding_session_id || null,
     sessionName: entry?.name || null,
     label: entry?.label || null,
     focus: entry?.label || null,

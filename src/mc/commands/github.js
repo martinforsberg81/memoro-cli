@@ -5,7 +5,7 @@
  * use the session-bound broker and never accept repository or authority input.
  */
 
-import { getRepoContext, derivePublicRepoRef } from '../../lib/git-context.js';
+import { getRepoContext, resolvePublicRepoRef } from '../../lib/git-context.js';
 import { openBrowser } from '../../lib/device-flow.js';
 import { createConnectionClient } from '../connections/client.js';
 import {
@@ -143,7 +143,7 @@ async function runConnect(opts, deps, io) {
 
 export async function deriveCurrentGitHubRepository(deps = {}) {
   const context = await (deps.getRepoContext || getRepoContext)(deps.cwd || process.cwd());
-  const ref = derivePublicRepoRef(context);
+  const ref = await (deps.resolvePublicRepoRef || resolvePublicRepoRef)(context);
   return typeof ref === 'string' && GITHUB_REPOSITORY_RE.test(ref) ? ref : null;
 }
 

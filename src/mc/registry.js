@@ -13,6 +13,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync } from '
 import { dirname, join } from 'node:path';
 import { registryPath, mcHome } from './paths.js';
 import { DEFAULT_TOOL } from '../lib/config.js';
+import { resolveToolInput } from '../adapters/index.js';
 
 const DEFAULTS = {
   kind: 'work',          // work | isolation | spawn
@@ -36,7 +37,7 @@ const DEFAULTS = {
   session_objective: null,
 };
 
-const PROVIDER_KEYS = new Set(['codex', 'claude-code']);
+const PROVIDER_KEY = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 
 export function normalizeProviderSessions(entry = {}) {
   const existing = entry?.provider_sessions;
@@ -48,8 +49,8 @@ export function normalizeProviderSessions(entry = {}) {
   if (sessionId === null) return { ok: true, providerSessions, migrated: false };
   const source = entry?.tool_session_source;
   const provider = source == null || source === ''
-    ? canonicalProvider(entry?.tool)
-    : canonicalProvider(source);
+    ? knownProvider(entry?.tool)
+    : knownProvider(source);
   if (!provider) return { ok: false, reason: 'legacy-provider-ambiguous', providerSessions };
   if (!providerSessions.providers[provider]) {
     providerSessions.providers[provider] = {
@@ -167,7 +168,13 @@ export function upsertEntry(patch) {
 }
 
 function canonicalProvider(value) {
-  return value === 'claude' ? 'claude-code' : PROVIDER_KEYS.has(value) ? value : null;
+  const known = resolveToolInput(value)?.id;
+  if (known) return known;
+  return typeof value === 'string' && PROVIDER_KEY.test(value) ? value : null;
+}
+
+function knownProvider(value) {
+  return resolveToolInput(value)?.id || null;
 }
 
 function explicitProviderValue(value) {
@@ -188,7 +195,9 @@ function absoluteTranscriptPath(value) {
 function validProviderSessions(value) {
   return value && typeof value === 'object' && !Array.isArray(value) && value.schema === 1
     && value.providers && typeof value.providers === 'object' && !Array.isArray(value.providers)
-    && Object.entries(value.providers).every(([key, session]) => !PROVIDER_KEYS.has(key) || validProviderSession(session));
+    && Object.entries(value.providers).every(([key, session]) => (
+      PROVIDER_KEY.test(key) && validProviderSession(session)
+    ));
 }
 
 function validProviderSession(value) {

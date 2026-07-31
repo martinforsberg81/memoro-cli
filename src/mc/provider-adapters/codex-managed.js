@@ -10,10 +10,17 @@ import { arch, platform } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { decodeSessionCapabilities } from '../github-contract.js';
+
 export const MANAGED_CODEX_PROVIDER_ID = 'codex-managed-local-v1';
 export const MANAGED_CODEX_DOMAIN_SCHEMA = 'mc-local-codex-credential-domain/v1';
 export const MANAGED_CODEX_PROFILE = 'mc-managed-portable';
 export const MANAGED_CODEX_VERSION = '0.145.0';
+// A cold, freshly installed signed binary can spend several seconds in macOS
+// loader/signature setup before printing its version. This remains a bounded
+// identity check, but must not reject the exact pinned artifact under normal
+// host load.
+export const MANAGED_CODEX_VERSION_PROBE_TIMEOUT_MS = 15_000;
 export const MANAGED_CODEX_TEAM_ID = '2DC432GLL2';
 export const MANAGED_CODEX_RELEASE_SHA256 = Object.freeze({
   'darwin-arm64': '1da3f4e0e96028b8a771814293c3033dafd1971f943f6c7e79b0897fe705f590',
@@ -24,7 +31,14 @@ export const MANAGED_CODEX_RELEASE_PROVENANCE = Object.freeze({
   archive_sha256: 'ece937169d4c9e910d60826a6ea4ae7848a16c089403d122e70e7da4ac41ba34',
 });
 const PACKAGE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
-const MANAGED_HOOK_RUNNER = join(PACKAGE_ROOT, 'src', 'mc', 'provider-artifact-hook-runner.js');
+const MANAGED_OBSERVER_SOURCE = join(
+  PACKAGE_ROOT,
+  'src',
+  'mc',
+  'provider-artifact-adapters',
+  'codex.js',
+);
+const MANAGED_OBSERVER_BINDING = 'mc-provider-artifact-observer.json';
 
 const SAFE_RESUME_ID = /^[a-zA-Z0-9][a-zA-Z0-9_-]{7,127}$/;
 const MANIFEST_KEYS = Object.freeze([
@@ -106,18 +120,32 @@ export function resolveManagedCodexLaunch({
   const spec = {
     ...launch.spec,
     bin: checked.nativeBinary,
-    args: () => ['--strict-config', '--dangerously-bypass-hook-trust', ...argv.argv],
+    args: () => [
+      '--strict-config',
+      '--profile',
+      MANAGED_CODEX_PROFILE,
+      ...argv.argv,
+    ],
     spawn: () => ({
       bin: checked.nativeBinary,
-      args: ['--strict-config', '--dangerously-bypass-hook-trust', ...argv.argv],
+      args: [
+        '--strict-config',
+        '--profile',
+        MANAGED_CODEX_PROFILE,
+        ...argv.argv,
+      ],
     }),
   };
 
+  const providerEnv = sanitizeManagedProviderEnv(input?.env, descriptor);
+  if (!providerEnv) {
+    return managedFailure('managed-provider-capability-env-invalid');
+  }
   return {
     ok: true,
     launch: { ...launch, spec },
     environmentMode: 'replace',
-    env: sanitizeManagedProviderEnv(input?.env, descriptor),
+    env: providerEnv,
     descriptor,
   };
 }
@@ -207,8 +235,10 @@ export function validateManagedCodexDescriptor(descriptor, {
       || descriptor.executor_tmp !== join(descriptor.executor_root, 'tmp')
       || descriptor.provider_home !== join(descriptor.domain_path, 'home')
       || descriptor.codex_home !== join(descriptor.provider_home, '.codex')
-      || descriptor.provider_config_path !== join(descriptor.codex_home, 'config.toml')
-      || descriptor.provider_hook_path !== join(descriptor.codex_home, 'hooks.json')
+      || descriptor.provider_config_path
+        !== join(descriptor.codex_home, `${MANAGED_CODEX_PROFILE}.config.toml`)
+      || descriptor.provider_hook_path
+        !== join(descriptor.codex_home, MANAGED_OBSERVER_BINDING)
       || descriptor.lease_path !== expectedLayout.leasePath) {
       return managedFailure('managed-provider-domain-path-invalid');
     }
@@ -289,23 +319,23 @@ export function validateManagedCodexDescriptor(descriptor, {
   }
   try {
     const configBody = readFile(descriptor.provider_config_path, 'utf8');
-    const hookBody = readFile(descriptor.provider_hook_path, 'utf8');
+    const observerBody = readFile(descriptor.provider_hook_path, 'utf8');
     const nodePath = realpath(descriptor.provider_hook_node_path);
-    const runnerPath = realpath(descriptor.provider_hook_runner_path);
+    const observerPath = realpath(descriptor.provider_hook_runner_path);
     if (sha256(configBody) !== descriptor.provider_config_sha256
-      || sha256(hookBody) !== descriptor.provider_hook_sha256
+      || sha256(observerBody) !== descriptor.provider_hook_sha256
       || nodePath !== realpath(process.execPath)
-      || runnerPath !== realpath(MANAGED_HOOK_RUNNER)
+      || observerPath !== realpath(MANAGED_OBSERVER_SOURCE)
       || sha256(readFile(nodePath)) !== descriptor.provider_hook_node_sha256
-      || sha256(readFile(runnerPath)) !== descriptor.provider_hook_runner_sha256
-      || hookBody !== renderManagedCodexProviderHook({
+      || sha256(readFile(observerPath)) !== descriptor.provider_hook_runner_sha256
+      || observerBody !== renderManagedCodexProviderObservationBinding({
         nodePath,
-        runnerPath,
+        observerPath,
       })) {
-      return managedFailure('managed-provider-hook-mismatch');
+      return managedFailure('managed-provider-observer-mismatch');
     }
   } catch {
-    return managedFailure('managed-provider-hook-mismatch');
+    return managedFailure('managed-provider-observer-mismatch');
   }
   try {
     if (sha256(readFile(nativeBinary)) !== descriptor.native_binary_sha256) {
@@ -352,7 +382,7 @@ export function inspectManagedCodexNativeRelease({
   }
   const versionProbe = run(nativeBinary, ['--version'], {
     encoding: 'utf8',
-    timeout: 5_000,
+    timeout: MANAGED_CODEX_VERSION_PROBE_TIMEOUT_MS,
     env: {
       PATH: '/usr/bin:/bin:/usr/sbin:/sbin',
       HOME: '/var/empty',
@@ -388,6 +418,26 @@ export function sanitizeManagedProviderEnv(env = {}, descriptor = {}) {
   for (const name of ['PATH', 'LANG', 'LC_ALL', 'TERM', 'COLORTERM', 'NO_COLOR']) {
     if (typeof env?.[name] === 'string' && env[name]) allowed[name] = env[name];
   }
+  const capabilitiesRaw = env?.MC_SESSION_CAPABILITIES;
+  const githubSocketPath = env?.MC_GITHUB_BROKER_SOCKET;
+  if (capabilitiesRaw != null || githubSocketPath != null) {
+    let capabilities;
+    try {
+      capabilities = decodeSessionCapabilities(JSON.parse(capabilitiesRaw));
+    } catch {
+      return null;
+    }
+    const expectedLayout = expectedManagedLayout(descriptor);
+    if (!expectedLayout) return null;
+    if (capabilities.github.state === 'ready') {
+      const expectedSocket = join(expectedLayout.root, `${descriptor.session_id}.sock`);
+      if (githubSocketPath !== expectedSocket) return null;
+      allowed.MC_GITHUB_BROKER_SOCKET = expectedSocket;
+    } else if (githubSocketPath != null) {
+      return null;
+    }
+    allowed.MC_SESSION_CAPABILITIES = JSON.stringify(capabilities);
+  }
   allowed.HOME = descriptor.provider_home;
   allowed.CODEX_HOME = descriptor.codex_home;
   allowed.TMPDIR = descriptor.provider_tmp;
@@ -395,34 +445,22 @@ export function sanitizeManagedProviderEnv(env = {}, descriptor = {}) {
 }
 
 /**
- * The managed CODEX_HOME contains only this generated user hook. The
- * hash-bound config marks the workspace project layer untrusted, so Codex
- * does not load repo-local hooks; the one-shot bypass therefore applies only
- * to the exact hook source verified below.
+ * Bind the broker-owned observer source into the credential-domain manifest.
+ *
+ * The filename is deliberately not `hooks.json`: Codex must apply its normal
+ * hook policy without any mc hook or process-wide trust bypass. Historical
+ * manifest field names retain `provider_hook_*` until the next descriptor
+ * schema revision, but this JSON is inert provider data and is never executed.
  */
-export function renderManagedCodexProviderHook({
+export function renderManagedCodexProviderObservationBinding({
   nodePath = process.execPath,
-  runnerPath = MANAGED_HOOK_RUNNER,
+  observerPath = MANAGED_OBSERVER_SOURCE,
 } = {}) {
-  const command = [
-    shellQuote(resolve(nodePath)),
-    shellQuote(resolve(runnerPath)),
-    '--tool',
-    'codex',
-  ].join(' ');
   return `${JSON.stringify({
-    description: 'Memoro broker-owned provider artifact capture.',
-    hooks: {
-      SessionStart: [{
-        _memoro: 'memoro-cli',
-        matcher: 'startup|resume',
-        hooks: [{
-          type: 'command',
-          command,
-          timeout: 3,
-        }],
-      }],
-    },
+    schema: 'mc-codex-provider-artifact-observer/v1',
+    description: 'Memoro broker-owned provider artifact observation.',
+    runtime: resolve(nodePath),
+    observer: resolve(observerPath),
   }, null, 2)}\n`;
 }
 
@@ -441,10 +479,6 @@ function isPathInside(parent, child) {
 
 function sha256(value) {
   return createHash('sha256').update(value).digest('hex');
-}
-
-function shellQuote(value) {
-  return `'${String(value).replaceAll("'", "'\"'\"'")}'`;
 }
 
 function isPlainObject(value) {
@@ -478,6 +512,7 @@ function expectedManagedLayout(descriptor) {
     sha256(String(descriptor.session_id)).slice(0, 12)
   }`;
   return {
+    root,
     domainPath: join(
       root,
       'credential-domains',

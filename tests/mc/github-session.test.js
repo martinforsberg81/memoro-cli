@@ -165,6 +165,39 @@ describe('GitHub session capability boundary', () => {
     assert.doesNotMatch(observable, /installation_id|private_key|access_token/);
   });
 
+  test('can place the shim inside a managed executor bin without changing its contract', async () => {
+    tmp = mkdtempSync(join(tmpdir(), 'mc-github-managed-shim-'));
+    const shimDirectory = join(tmp, 'executor', 'bin');
+    const result = await prepareGitHubSessionForLaunch({
+      baseEnv: { PATH: '/usr/bin:/bin' },
+      capabilities: await fetchGitHubSessionCapabilities({
+        connectionClient: grantClient(),
+        repository: 'acme/widgets',
+        memoroFetchImpl: async () => readyResponse(),
+      }),
+      sessionId: 'sess_managed',
+      socketPath: join(tmp, 'sess_managed.sock'),
+      shimDirectory,
+    });
+
+    assert.equal(result.shim_path, join(shimDirectory, 'gh'));
+    assert.equal(result.env.PATH.split(delimiter)[0], shimDirectory);
+    assert.equal(statSync(result.shim_path).mode & 0o777, 0o700);
+    assert.equal(statSync(join(shimDirectory, 'mc')).mode & 0o777, 0o700);
+    assert.match(
+      readFileSync(join(shimDirectory, 'mc'), 'utf8'),
+      /only session-scoped GitHub commands/,
+    );
+    assert.doesNotMatch(
+      JSON.stringify({
+        env: result.env,
+        shim: readFileSync(result.shim_path, 'utf8'),
+        mcShim: readFileSync(join(shimDirectory, 'mc'), 'utf8'),
+      }),
+      /installation_id|private_key|access_token/,
+    );
+  });
+
   test('operation client sends only github-op-v1 over the bound socket and strictly decodes replies', async () => {
     const calls = [];
     const response = await executeGitHubSessionOperation({

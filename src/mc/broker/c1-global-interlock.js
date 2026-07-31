@@ -47,11 +47,18 @@ const INSTALL_IDENTITY_INPUTS = Object.freeze([
   'package.json',
   'scripts/security/credential-boundary-child.c',
   'scripts/security/credential-boundary-probe.mjs',
+  'scripts/security/managed-claude-c1-probe.c',
   'src/mc/broker/c1-global-interlock.js',
   'src/mc/broker/c1-install-receipt.js',
   'src/mc/broker/runtime.js',
+  'src/mc/commands/storage.js',
   'src/mc/credential-domain/local-codex.js',
+  'src/mc/managed-codex-recovery.js',
+  'src/mc/provider-adapters/codex-managed-artifacts.js',
   'src/mc/provider-adapters/codex-managed.js',
+  'src/mc/runtime-secrets.js',
+  'src/mc/session-intent.js',
+  'src/mc/sidecar-cleanup.js',
 ]);
 
 /**

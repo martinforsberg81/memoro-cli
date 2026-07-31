@@ -109,3 +109,8 @@ test('provider artifact validation rejects non-string and invalid timestamps wit
   assert.deepEqual(validateProviderArtifact(artifact({ captured_at: 'not-a-date' })).ok, false);
   assert.deepEqual(validateProviderArtifact(artifact({ provider_session_id: 'x'.repeat(129) })).ok, false);
 });
+
+test('provider artifact journal accepts bounded future provider ids without enumerating tools', () => {
+  assert.equal(validateProviderArtifact(artifact({ tool: 'future-provider-v1' })).ok, true);
+  assert.equal(validateProviderArtifact(artifact({ tool: '../future' })).ok, false);
+});
