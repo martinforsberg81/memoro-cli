@@ -1,7 +1,10 @@
 import { resolveToolInput } from '../adapters/index.js';
 import { DEFAULT_TOOL } from '../lib/config.js';
 import { sourceForTool } from './broker/session-sidecars.js';
-import { findLatestTranscriptForTool } from './session-upload.js';
+import {
+  findLatestTranscriptForTool,
+  findTranscriptForToolSession,
+} from './session-upload.js';
 import {
   normalizeProviderSessions,
   providerSessionFor,
@@ -40,8 +43,11 @@ export async function resolveToolSessionForResume({
     if (!transcriptPath && source) {
       let discovered = null;
       try {
-        discovered = await (deps.findLatestTranscriptForTool || findLatestTranscriptForTool)({
+        discovered = await (
+          deps.findTranscriptForToolSession || findTranscriptForToolSession
+        )({
           source,
+          sessionId: stored,
           cwd: entry?.worktree_path || null,
           deps,
         });
