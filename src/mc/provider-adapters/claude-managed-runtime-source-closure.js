@@ -21,9 +21,9 @@ export const MANAGED_CLAUDE_RUNTIME_SOURCE_SHA256 = Object.freeze({
   'src/lib/config.js': '3afa21f33613baf1838314a35b67e642ed286d55c7acbd5ee45cba4f5347c0cb',
   'src/lib/keychain.js': 'b6445625a9142c60d8915e34255155e277422050f02f3a26eebba7ee69f506e6',
   'src/mc/broker/c1-artifacts.js':
-    'd1926846b25d0711e44fbb8276bf75e4a75df48f189e598a8fd7827567ae2b9f',
+    'b263475d956198f8780aecb01c182021ef7117bdb4ebc877b69be5a1e417fdca',
   'src/mc/broker/c1-source-closure.js':
-    'e45529c62035bf2a5923067c4d99b8db7289e2a983d600cea7f7342009c20e8a',
+    'b21fcb1525ea183d99fdd6b1036bad30e3c0c34eb192f99770929b21a8a37fdd',
   'src/mc/paths.js': 'f736475313471606f5d5bce11a3453295f27540ea1c7ca10db97e463ad72772f',
   'src/mc/provider-adapters/claude-managed-certification.js':
     'b455034ebb46a9b6ac89e3566031c37508f169cf4d79013e720dbf39180c33be',

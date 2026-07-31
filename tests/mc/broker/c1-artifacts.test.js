@@ -75,12 +75,32 @@ test('C1 fixture verifier rejects changed binary, package lock, and installed tr
   assert.equal(verify(tree).code, 'c1-artifact-srt-tree-mismatch');
 });
 
-test('C1 fixture verifier keeps signed-manifest trust primary and rejects unexpected strict success', (t) => {
+test('C1 fixture verifier keeps signed-manifest trust primary and reports the platform observation', (t) => {
   const untrusted = createFixture(t);
   assert.equal(verify(untrusted, { verifyManifest: () => false }).code, 'c1-artifact-manifest-untrusted');
 
-  const strict = createFixture(t);
-  assert.equal(verify(strict, { strictStatus: 0 }).code, 'c1-artifact-codesign-strict-unexpected');
+  // Both real strict outcomes are admissible on a supported host and are
+  // reported exactly as observed. Neither moves the trust root, which stays
+  // the signed manifest plus the pinned bytes.
+  const unverified = verify(createFixture(t), { strictStatus: 1 });
+  assert.equal(unverified.code, 'c1-artifact-verified');
+  assert.equal(unverified.artifacts.manifestSignatureVerified, true);
+  assert.equal(unverified.artifacts.platformSignatureVerified, false);
+
+  const verified = verify(createFixture(t), { strictStatus: 0 });
+  assert.equal(verified.code, 'c1-artifact-verified');
+  assert.equal(verified.artifacts.manifestSignatureVerified, true);
+  assert.equal(verified.artifacts.platformSignatureVerified, true);
+
+  // A status that is not an observation of the binary still fails closed.
+  assert.equal(
+    verify(createFixture(t), { strictStatus: 2 }).code,
+    'c1-artifact-codesign-strict-unexpected',
+  );
+  assert.equal(
+    verify(createFixture(t), { strictStatus: null }).code,
+    'c1-artifact-codesign-strict-unavailable',
+  );
 
   const identity = createFixture(t);
   assert.equal(verify(identity, { signing: 'Identifier=wrong\nTeamIdentifier=Q6L2SF6YDW' }).code, 'c1-artifact-codesign-identity-mismatch');

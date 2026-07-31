@@ -29,6 +29,11 @@ export const CLAUDE_C1_ARTIFACT_PINS = Object.freeze({
 });
 
 const TARGET = `${CLAUDE_C1_ARTIFACT_PINS.platform}-${CLAUDE_C1_ARTIFACT_PINS.arch}`;
+// `codesign --verify --strict` exit codes that represent an actual observation
+// of the pinned binary: 0 verified, 1 did not verify. Any other status means
+// the check itself could not be performed, which must fail closed.
+const CODESIGN_STRICT_VERIFIED = 0;
+const CODESIGN_STRICT_STATUSES = Object.freeze(new Set([CODESIGN_STRICT_VERIFIED, 1]));
 const SAFE_ENV = Object.freeze({
   PATH: '/usr/bin:/bin:/usr/sbin:/sbin',
   HOME: '/var/empty',
@@ -174,11 +179,19 @@ export function verifyClaudeC1ArtifactFixture({ artifactRoot, expected } = {}, d
   const identity = inspectCodesignIdentity(layout.claudeBinary, pins, run);
   if (!identity.ok) return identity;
   const strict = run('codesign', ['--verify', '--strict', layout.claudeBinary], commandOptions());
-  // This exact signed-manifest release is known to have a failing platform
-  // strict verification. A success is unexpected and must not be relabelled as
-  // stronger evidence than the manifest signature.
+  // Platform strict verification is an observation about this host, not the
+  // trust root. The exact bytes are already pinned by size and sha256, and
+  // trust comes from the signed manifest plus the codesign identity checked
+  // above. This release has been observed both verifying and failing to verify
+  // on supported hosts, so both outcomes are admissible and neither is
+  // relabelled as stronger evidence than the manifest signature. Only an
+  // unusable result — codesign absent, killed by a signal, or reporting a
+  // usage error — fails closed, because then nothing was observed at all.
   if (!Number.isInteger(strict?.status)) return failure('c1-artifact-codesign-strict-unavailable');
-  if (strict.status !== 1) return failure('c1-artifact-codesign-strict-unexpected');
+  if (!CODESIGN_STRICT_STATUSES.has(strict.status)) {
+    return failure('c1-artifact-codesign-strict-unexpected');
+  }
+  const platformSignatureVerified = strict.status === CODESIGN_STRICT_VERIFIED;
 
   // A cold, signed 250+ MB Claude artifact can take longer than the generic
   // metadata probe bound on macOS. This remains a bounded exact-binary check;
@@ -210,7 +223,9 @@ export function verifyClaudeC1ArtifactFixture({ artifactRoot, expected } = {}, d
       srtIntegrity: pins.srtIntegrity,
       srtTreeSha256: pins.srtTreeSha256,
       manifestSignatureVerified: true,
-      platformSignatureVerified: false,
+      // Reported exactly as observed on this host, matching the C1 harness
+      // preflight field of the same name. Never the trust root.
+      platformSignatureVerified,
     }),
   });
 }

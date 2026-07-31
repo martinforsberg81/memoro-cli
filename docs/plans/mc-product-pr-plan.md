@@ -72,6 +72,36 @@ remain distinct; relocated worktrees resolve; ambiguous legacy entries are
 reported without mutation; old 0.7.10 registries migrate idempotently; cleanup
 uses expected-id guards.
 
+## PR 2.5 — Restore certified managed Claude operation
+
+**Outcome:** claimed Claude support works for both new and existing managed
+sessions without changing the Memoro session identity or weakening the
+credential boundary.
+
+**Scope:** reproduce and close `managed-claude-certification-missing` for
+`mc new <name> --claude` and `handoff-capability-unavailable` for
+`mc open <name> --claude`; make the pinned Claude adapter, its certification,
+and the provider-handoff capability available in the installed release
+artifact; retain provider-native resume when the session is already on Claude;
+add exact regressions and installed-artifact/live evidence for both paths.
+
+**Non-goals:** Gemini registration, native Claude credential projection,
+uncertified fallback, bypassing provider policy, changing repository/session
+identity, or GitHub App repository routing.
+
+**Acceptance:** a fresh Claude session reaches provider readiness through the
+certified managed adapter; an existing session resumes Claude or performs one
+acknowledged handoff to Claude while preserving `session_id` and
+`coding_session_id`; neither path creates a duplicate provider session;
+interruption removes the credential domain and provider PTY; missing or stale
+artifacts still fail closed with actionable diagnostics; managed Claude source
+closure, credential-boundary, Codex regressions, global release smoke, and the
+exact live new/open journeys pass on the release candidate.
+
+**Migration and rollback:** no registry-schema change. Certification and
+adapter installation are derived release state, so rollback reverts this PR
+without deleting or rewriting sessions.
+
 ## PR 3 — Route GitHub App operations by active repository
 
 **Outcome:** `mc github` works through the Memoro GitHub App for the launch
@@ -199,7 +229,8 @@ combination. The matrix is the source of public support language.
 PR 0 documentation
   -> PR 1 default branch
   -> PR 2 repository/session identity
-       -> PR 3 GitHub App repo routing
+       -> PR 2.5 managed Claude operation
+            -> PR 3 GitHub App repo routing
        -> PR 4 capability-activated guards
        -> PR 5 project adapter extraction
             -> PR 6 provider conformance metadata
@@ -208,9 +239,10 @@ PR 0 documentation
                       -> PR 9 release matrix
 ```
 
-PRs 3–5 may be developed in isolated worktrees after PR 2's identity contract
-is stable, but they merge in the recorded order unless their contracts are
-proven independent. Branches remain owned by the mc session lifecycle.
+PRs 3–5 may be developed in isolated worktrees after PR 2.5's provider
+operability contract is stable, but they merge in the recorded order unless
+their contracts are proven independent. Branches remain owned by the mc
+session lifecycle.
 
 ## Completion condition
 
