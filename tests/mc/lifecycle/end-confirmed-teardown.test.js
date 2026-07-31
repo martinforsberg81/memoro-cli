@@ -437,6 +437,39 @@ describe('mc end confirmed teardown', () => {
     assert.deepEqual(registryEntries(), []);
   });
 
+  test('a missing transcript path is repaired from the exact stored session id', async () => {
+    const target = makeTarget('missing-path');
+    const incomplete = {
+      ...target.entry,
+      tool_transcript_path: null,
+    };
+    let resolverEntry = null;
+
+    const result = await invoke(['missing-path'], {
+      answer: 'y',
+      entries: [incomplete],
+      roots: target.roots,
+      deps: {
+        resolveToolSessionForResume: async ({ entry }) => {
+          resolverEntry = entry;
+          return {
+            ok: true,
+            from: 'transcript-repaired',
+            source: entry.tool_session_source,
+            sessionId: entry.tool_session_id,
+            transcriptPath: target.transcript,
+          };
+        },
+      },
+    });
+
+    assert.equal(resolverEntry.tool_session_id, target.sessionId);
+    assert.equal(result.code, 0, result.stderr);
+    assert.match(result.stdout, new RegExp(escapeRegExp(target.transcript)));
+    assert.equal(existsSync(target.transcript), false);
+    assert.deepEqual(registryEntries(), []);
+  });
+
   test('a teardown failure reports leftovers and preserves the registry for retry', async () => {
     const target = makeTarget('partial');
     let shredArgs = null;
