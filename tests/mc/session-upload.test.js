@@ -4,6 +4,7 @@ import { describe, test } from 'node:test';
 import {
   buildSessionUploadArgs,
   findLatestTranscriptForTool,
+  findTranscriptForToolSession,
   scheduleSessionUpload,
 } from '../../src/mc/session-upload.js';
 
@@ -34,6 +35,20 @@ describe('mc session upload scheduler', () => {
 
     assert.equal(found.path, '/c.jsonl');
     assert.deepEqual(found.args, { cwd: '/repo', newerThanMs: 10 });
+  });
+
+  test('resolves an exact provider session transcript by id', async () => {
+    const found = await findTranscriptForToolSession({
+      source: 'codex',
+      sessionId: 'cx_wanted',
+      cwd: '/repo',
+      deps: {
+        findCodexSessionById: async (args) => ({ path: '/wanted.jsonl', args }),
+      },
+    });
+
+    assert.equal(found.path, '/wanted.jsonl');
+    assert.deepEqual(found.args, { sessionId: 'cx_wanted', cwd: '/repo' });
   });
 
   test('buildSessionUploadArgs targets bin.js directly with --yes', () => {
