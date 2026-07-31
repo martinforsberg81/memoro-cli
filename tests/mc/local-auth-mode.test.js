@@ -86,6 +86,30 @@ describe('local auth mode', () => {
     );
   });
 
+  test('--native is the only route to native custody on new and open', async () => {
+    const { parseArgs: newArgs } = await import('../../src/mc/commands/new.js');
+    const { parseArgs: openArgs } = await import('../../src/mc/commands/resume.js');
+
+    // Absent the explicit flag, both verbs stay on managed custody.
+    for (const argv of [['s'], ['s', '--claude'], ['s', '--managed-portable']]) {
+      assert.equal(openArgs(argv).managedPortable, true);
+      assert.equal(newArgs(argv).managedPortable, true);
+    }
+    // The flag opts out, and only for the invocation that carries it.
+    assert.equal(openArgs(['s', '--claude', '--native']).managedPortable, false);
+    assert.equal(newArgs(['s', '--claude', '--native']).managedPortable, false);
+    assert.equal(
+      resolveLocalAuthMode({ managedPortable: openArgs(['s', '--native']).managedPortable }),
+      LOCAL_AUTH_MODES.NATIVE,
+    );
+    // Native is a valid, non-portable container — never a certified one.
+    const evaluated = evaluateLocalAuthMode(LOCAL_AUTH_MODES.NATIVE);
+    assert.equal(evaluated.ok, true);
+    assert.equal(evaluated.state, LOCAL_AUTH_STATES.NATIVE_UNMANAGED);
+    assert.equal(evaluated.portable, false);
+    assert.notEqual(evaluated.certified, true);
+  });
+
   test('unknown modes fail closed without echoing caller data', () => {
     const canary = 'invalid-mode-secret-canary';
     const result = evaluateLocalAuthMode(canary);
