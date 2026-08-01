@@ -14,7 +14,9 @@ import {
 } from '../../src/mc/provider-artifact-adapters/index.js';
 import {
   captureContext as captureClaudeContext,
+  validate as validateClaudeArtifact,
 } from '../../src/mc/provider-artifact-adapters/claude-code.js';
+import { encodeClaudeProjectPath } from '../../src/lib/claude.js';
 import {
   observe as observeCodexArtifact,
 } from '../../src/mc/provider-artifact-adapters/codex.js';
@@ -164,6 +166,61 @@ test('Codex observation accepts one exact private transcript and rejects ambigui
     });
     assert.equal(resumed.ok, true);
     assert.equal(resumed.evidence.providerSessionId, secondId);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('Claude artifact confirms before the transcript is written and stays path-bound', () => {
+  // Claude Code creates its transcript on the first user turn — after the
+  // SessionStart hook fires. The provider artifact must confirm at launch, so
+  // it cannot require the file to exist yet; it must still bind the exact
+  // constrained path so a hook cannot point the transcript elsewhere.
+  const root = mkdtempSync(join(tmpdir(), 'claude-artifact-'));
+  try {
+    const projectsDir = join(root, 'projects');
+    mkdirSync(projectsDir, { recursive: true });
+    const cwd = join(root, 'work');
+    mkdirSync(cwd, { recursive: true });
+    const sessionId = 'aa11bb22-cc33-dd44-ee55-ff6677889900';
+    const workspace = realpathSync(cwd);
+    const expectedDir = join(realpathSync(projectsDir), encodeClaudeProjectPath(workspace));
+    const expected = join(expectedDir, `${sessionId}.jsonl`);
+
+    // Pending transcript at the exact expected path: accepted.
+    const pending = validateClaudeArtifact(
+      { evidence: { cwd, providerSessionId: sessionId, transcriptPath: expected } },
+      { projectsDir },
+    );
+    assert.equal(pending.ok, true);
+    assert.equal(pending.pending, true);
+    assert.equal(pending.transcriptPath, expected);
+    assert.equal(pending.workspace, workspace);
+
+    // A pending path anywhere else is rejected — the hook cannot redirect it.
+    for (const wrong of [
+      join(root, 'elsewhere', `${sessionId}.jsonl`),
+      join(expectedDir, 'other-session.jsonl'),
+      join(expectedDir, `${sessionId}.jsonl`, 'nested'),
+    ]) {
+      const bad = validateClaudeArtifact(
+        { evidence: { cwd, providerSessionId: sessionId, transcriptPath: wrong } },
+        { projectsDir },
+      );
+      assert.equal(bad.ok, false, `must reject ${wrong}`);
+    }
+
+    // Once the file exists at the expected path, it is confirmed non-pending
+    // and the strict physical check still governs.
+    mkdirSync(expectedDir, { recursive: true });
+    writeFileSync(expected, '{"type":"summary"}\n');
+    const written = validateClaudeArtifact(
+      { evidence: { cwd, providerSessionId: sessionId, transcriptPath: expected } },
+      { projectsDir },
+    );
+    assert.equal(written.ok, true);
+    assert.notEqual(written.pending, true);
+    assert.equal(written.transcriptPath, realpathSync(expected));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
