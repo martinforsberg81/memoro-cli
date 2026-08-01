@@ -37,6 +37,39 @@ const SESSION_CAPABILITIES = {
   },
 };
 
+function sessionCapabilitiesWith(operations) {
+  return {
+    ...SESSION_CAPABILITIES,
+    github: { ...SESSION_CAPABILITIES.github, operations },
+  };
+}
+
+const WIDE_SESSION_CAPABILITIES = sessionCapabilitiesWith([
+  'connection.status',
+  'repository.metadata',
+  'pull_request.list',
+  'pull_request.view',
+  'checks.list',
+  'pull_request.create',
+  'pull_request.update',
+]);
+
+function readyGitHubStatusResponse(operations = ['pull_request.list', 'pull_request.view']) {
+  return {
+    ok: true,
+    github: {
+      schema: 1,
+      state: 'ready',
+      repair_action: null,
+      actor: { type: 'installation', login: 'memoro-app' },
+      accounts: [],
+      repository: SESSION_CAPABILITIES.github.repository,
+      repositories: [],
+      operations,
+    },
+  };
+}
+
 afterEach(() => {
   if (tmp) {
     rmSync(tmp, { recursive: true, force: true });
@@ -99,7 +132,11 @@ function fakeConn() {
   return conn;
 }
 
-async function startRealGitHubSidecar({ paths, memoroFetchImpl }) {
+async function startRealGitHubSidecar({
+  paths,
+  memoroFetchImpl,
+  githubCapabilities = WIDE_SESSION_CAPABILITIES,
+}) {
   const sidecars = new BrokerSessionSidecars({
     session: makeSession(),
     coding: {
@@ -108,6 +145,7 @@ async function startRealGitHubSidecar({ paths, memoroFetchImpl }) {
       token: 'memoro-secret-sentinel',
       sourceId: 'local:mac',
       sourceKind: 'local',
+      ...(githubCapabilities ? { githubCapabilities } : {}),
       sockPath: paths.sockPath,
       metaPath: paths.metaPath,
       heartbeat: false,
@@ -435,6 +473,7 @@ describe('BrokerSessionSidecars', () => {
         sourceId: 'cloud:cld_123456',
         sourceKind: 'cloud',
         cloudSessionId: 'cld_123456',
+        githubCapabilities: SESSION_CAPABILITIES,
         sockPath: paths.sockPath,
         metaPath: paths.metaPath,
         heartbeat: false,
@@ -482,6 +521,134 @@ describe('BrokerSessionSidecars', () => {
     sidecars.stop();
   });
 
+  test('a session launched without GitHub re-bootstraps capabilities on demand', async () => {
+    const paths = tempPaths();
+    const statusCalls = [];
+    const operationCalls = [];
+    const sidecars = new BrokerSessionSidecars({
+      session: makeSession(),
+      coding: {
+        codingSessionId: 'sess_abcdef',
+        apiUrl: 'https://memoro.test',
+        token: 'memoro-secret-sentinel',
+        sourceId: 'local:mac',
+        sourceKind: 'local',
+        repoRef: 'acme/widgets',
+        sockPath: paths.sockPath,
+        metaPath: paths.metaPath,
+        heartbeat: false,
+        upload: false,
+      },
+      createServerImpl: fakeCreateServer,
+      wsClientFactory: () => ({ start() {}, stop() {} }),
+      connectionClient: grantClient(),
+      memoroFetchImpl: async (_apiUrl, path, options) => {
+        if (path.startsWith('/api/mc/github/status')) {
+          statusCalls.push(path);
+          return readyGitHubStatusResponse(['pull_request.list']);
+        }
+        operationCalls.push(path);
+        return {
+          ok: true,
+          request_id: options.body.request_id,
+          data: { pull_requests: [] },
+        };
+      },
+    }).start();
+
+    const send = async (operation, requestId) => {
+      const conn = fakeConn();
+      sidecars.dispatchServer.handler(conn);
+      conn.emit('data', Buffer.from(JSON.stringify({
+        type: 'github_operation',
+        schema: 1,
+        request_id: requestId,
+        operation,
+        params: operation === 'pull_request.view' ? { pull_number: 1 } : {},
+      })));
+      conn.emit('end');
+      await new Promise((resolve) => setImmediate(resolve));
+      return JSON.parse(conn.ended.join(''));
+    };
+
+    const first = await send('pull_request.list', 'request_aaaaaaaa');
+    const second = await send('pull_request.list', 'request_bbbbbbbb');
+    const denied = await send('pull_request.view', 'request_cccccccc');
+
+    assert.equal(first.ok, true);
+    assert.equal(second.ok, true);
+    assert.equal(statusCalls.length, 1, 'ready capabilities are cached after one bootstrap');
+    assert.equal(operationCalls.length, 2);
+    assert.equal(denied.ok, false);
+    assert.equal(denied.error.code, 'operation_not_allowed');
+    sidecars.stop();
+  });
+
+  test('a failed re-bootstrap forwards to the control plane and rate-limits retries', async () => {
+    const paths = tempPaths();
+    let clock = 1_000;
+    let statusAttempts = 0;
+    const operationCalls = [];
+    const sidecars = new BrokerSessionSidecars({
+      session: makeSession(),
+      coding: {
+        codingSessionId: 'sess_abcdef',
+        apiUrl: 'https://memoro.test',
+        token: 'memoro-secret-sentinel',
+        sourceId: 'local:mac',
+        sourceKind: 'local',
+        sockPath: paths.sockPath,
+        metaPath: paths.metaPath,
+        heartbeat: false,
+        upload: false,
+      },
+      createServerImpl: fakeCreateServer,
+      wsClientFactory: () => ({ start() {}, stop() {} }),
+      connectionClient: grantClient(),
+      now: () => clock,
+      memoroFetchImpl: async (_apiUrl, path, options) => {
+        if (path.startsWith('/api/mc/github/status')) {
+          statusAttempts += 1;
+          throw Object.assign(new Error('Memoro 503: down'), { status: 503 });
+        }
+        operationCalls.push(path);
+        return {
+          ok: true,
+          request_id: options.body.request_id,
+          data: { pull_requests: [] },
+        };
+      },
+    }).start();
+
+    const send = async (requestId) => {
+      const conn = fakeConn();
+      sidecars.dispatchServer.handler(conn);
+      conn.emit('data', Buffer.from(JSON.stringify({
+        type: 'github_operation',
+        schema: 1,
+        request_id: requestId,
+        operation: 'pull_request.list',
+        params: {},
+      })));
+      conn.emit('end');
+      await new Promise((resolve) => setImmediate(resolve));
+      return JSON.parse(conn.ended.join(''));
+    };
+
+    const first = await send('request_aaaaaaaa');
+    clock = 2_000;
+    const second = await send('request_bbbbbbbb');
+    clock = 60_000;
+    const third = await send('request_cccccccc');
+
+    assert.equal(first.ok, true, 'a failed bootstrap must not block the control plane');
+    assert.equal(second.ok, true);
+    assert.equal(third.ok, true);
+    assert.equal(statusAttempts, 2, 'retry only after the rate-limit window');
+    assert.equal(operationCalls.length, 3);
+    sidecars.stop();
+  });
+
   test('refuses source/repository/session spoofing before trusted network access', async () => {
     const paths = tempPaths();
     let networkCalls = 0;
@@ -493,6 +660,7 @@ describe('BrokerSessionSidecars', () => {
         token: 'memoro-secret-sentinel',
         sourceId: 'local:mac',
         sourceKind: 'local',
+        githubCapabilities: SESSION_CAPABILITIES,
         sockPath: paths.sockPath,
         metaPath: paths.metaPath,
         heartbeat: false,

@@ -549,7 +549,12 @@ export async function launchBrokerOwnedSession({
       baseEnv: spawnEnv,
       capabilities: sessionCapabilities,
       sessionId: codingSessionId,
-      socketPath: githubReady ? paths.sockPath : null,
+      // Always hand the child the session broker socket. Gating it on the
+      // launch-time bootstrap froze a failed or not-yet-connected GitHub
+      // state for the session's whole life — the sidecar re-bootstraps
+      // capabilities on demand, so a connection repaired mid-session
+      // starts working without a restart.
+      socketPath: paths.sockPath,
       ...(managedPortable
         ? { shimDirectory: join(credentialDomain.descriptor.executor_root, 'bin') }
         : {}),
