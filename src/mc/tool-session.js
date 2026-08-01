@@ -1,5 +1,8 @@
+import { randomUUID } from 'node:crypto';
+
 import { resolveToolInput } from '../adapters/index.js';
 import { DEFAULT_TOOL } from '../lib/config.js';
+import { LOCAL_AUTH_MODES } from './local-auth-mode.js';
 import { sourceForTool } from './broker/session-sidecars.js';
 import {
   findLatestTranscriptForTool,
@@ -150,6 +153,35 @@ export function buildNativeResumeArgv({
     };
   }
   return { ok: true, argv };
+}
+
+/**
+ * Mint the native tool session id at launch time, when the adapter
+ * supports being handed one (`newSessionArgs`). Owning the id from the
+ * start makes new→open→end deterministic; adapters without the hook
+ * (codex) keep the discovery path. Minting is native-custody only —
+ * managed launches and provider-switch handoffs own their identity
+ * through the generation journal and the artifact hook respectively.
+ */
+export function mintToolSessionForLaunch({
+  launchTool = null,
+  localAuthMode = LOCAL_AUTH_MODES.NATIVE,
+  uuid = randomUUID,
+} = {}) {
+  if (localAuthMode !== LOCAL_AUTH_MODES.NATIVE) return null;
+  const mint = launchTool?.adapter?.newSessionArgs;
+  if (typeof mint !== 'function') return null;
+  const sessionId = uuid();
+  const argv = mint({ sessionId });
+  if (!Array.isArray(argv) || argv.length === 0 || !argv.every((arg) => typeof arg === 'string')) {
+    return null;
+  }
+  const source = firstNonEmpty(
+    sourceForTool(launchTool?.shortName),
+    sourceForTool(launchTool?.id),
+  );
+  if (!source) return null;
+  return { sessionId, source, argv };
 }
 
 export function toolSessionSource({ entry, launchTool = null } = {}) {

@@ -38,6 +38,7 @@ import { DEFAULT_TOOL, readConfig } from '../../lib/config.js';
 import { launchBrokerOwnedSession } from '../broker/launch-client.js';
 import { readRepoLocalConfig, readRepoPolicyConfig, resolveEffectiveConfig } from '../config-model.js';
 import { buildNewSessionLaunchIntent } from '../session-intent.js';
+import { mintToolSessionForLaunch } from '../tool-session.js';
 import {
   LOCAL_AUTH_MODES,
   requireLocalAuthMode,
@@ -347,6 +348,15 @@ export async function launchNewSession({
     }
   }
 
+  // Mint the native tool session id up front when the adapter supports
+  // it (claude). The id travels to the tool as launch argv and into the
+  // registry on the launch commit, so open/end never depend on post-hoc
+  // transcript discovery for these sessions.
+  const minted = (deps.mintToolSessionForLaunch || mintToolSessionForLaunch)({
+    launchTool,
+    localAuthMode,
+  });
+
   const launch = deps.launchBrokerOwnedSession || launchBrokerOwnedSession;
   const result = await launch({
     ...buildNewSessionLaunchIntent({
@@ -357,7 +367,9 @@ export async function launchNewSession({
       apiArgv,
       env,
       localAuthMode,
+      argv: minted?.argv || [],
     }),
+    mintedToolSessionId: minted?.sessionId || null,
     stderr,
     onLaunched: ({ codingSessionId, brokerSocketPath = null, hostKind = null }) => {
       const upsert = deps.upsertEntry || upsertEntry;
@@ -367,6 +379,12 @@ export async function launchNewSession({
         ...(entry.repository_id ? { repository_id: entry.repository_id } : {}),
         coding_session_id: codingSessionId,
         session_state: 'live',
+        ...(minted
+          ? {
+              tool_session_id: minted.sessionId,
+              tool_session_source: minted.source,
+            }
+          : {}),
       };
       if (brokerSocketPath) patch.broker_socket_path = brokerSocketPath;
       if (hostKind) patch.host_kind = hostKind;

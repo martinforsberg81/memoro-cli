@@ -431,6 +431,82 @@ describe('mc new', () => {
     }]);
   });
 
+  test('claude prelaunch mints the tool session id, sends it as launch argv, and persists it on the launch commit', async () => {
+    const launchCalls = [];
+    const upserts = [];
+    const mintedId = '3e6fc8d2-1ad9-4428-a351-8f7abfa088a6';
+    const status = await launchNewSession({
+      entry: { name: 'claude-prelaunch', tool: 'claude' },
+      worktreePath: '/tmp/memoro-new-claude',
+      env: { PATH: '/bin' },
+      stderr: { write() {} },
+      deps: {
+        materialiseVaultBeforeLaunch: async () => ({ ok: true, materialised: [], skipped: [] }),
+        mintToolSessionForLaunch: ({ launchTool, localAuthMode }) => {
+          assert.equal(launchTool?.id, 'claude-code');
+          assert.equal(localAuthMode, LOCAL_AUTH_MODES.NATIVE);
+          return {
+            sessionId: mintedId,
+            source: 'claude-code',
+            argv: ['--session-id', mintedId],
+          };
+        },
+        launchBrokerOwnedSession: async (arg) => {
+          launchCalls.push(arg);
+          await arg.onLaunched?.({ codingSessionId: 'sess_new_claude' });
+          return { code: 0 };
+        },
+        upsertEntry: (entry) => {
+          upserts.push(entry);
+          return entry;
+        },
+      },
+    });
+
+    assert.equal(status, 0);
+    assert.equal(launchCalls.length, 1);
+    assert.deepEqual(launchCalls[0].argv, ['--session-id', mintedId]);
+    assert.equal(launchCalls[0].mintedToolSessionId, mintedId);
+    assert.deepEqual(upserts, [{
+      name: 'claude-prelaunch',
+      coding_session_id: 'sess_new_claude',
+      session_state: 'live',
+      tool_session_id: mintedId,
+      tool_session_source: 'claude-code',
+    }]);
+  });
+
+  test('codex prelaunch mints nothing and keeps empty launch argv', async () => {
+    const launchCalls = [];
+    const upserts = [];
+    const status = await launchNewSession({
+      entry: { name: 'codex-no-mint', tool: 'codex' },
+      worktreePath: '/tmp/memoro-new-codex-no-mint',
+      stderr: { write() {} },
+      deps: {
+        materialiseVaultBeforeLaunch: async () => ({ ok: true, materialised: [], skipped: [] }),
+        launchBrokerOwnedSession: async (arg) => {
+          launchCalls.push(arg);
+          await arg.onLaunched?.({ codingSessionId: 'sess_new_codex_no_mint' });
+          return { code: 0 };
+        },
+        upsertEntry: (entry) => {
+          upserts.push(entry);
+          return entry;
+        },
+      },
+    });
+
+    assert.equal(status, 0);
+    assert.deepEqual(launchCalls[0].argv, []);
+    assert.equal(launchCalls[0].mintedToolSessionId, null);
+    assert.deepEqual(upserts, [{
+      name: 'codex-no-mint',
+      coding_session_id: 'sess_new_codex_no_mint',
+      session_state: 'live',
+    }]);
+  });
+
   test('managed prelaunch skips legacy vault materialisation and delegates boundary setup to the broker launcher', async () => {
     const launches = [];
     const status = await launchNewSession({

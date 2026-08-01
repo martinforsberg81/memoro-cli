@@ -242,4 +242,20 @@ describe('claude-code launchSpec — grounding args', () => {
   it('resumeArgs uses Claude native resume by id', () => {
     assert.deepEqual(claudeCode.resumeArgs({ sessionId: 'cl_123' }), ['--resume', 'cl_123']);
   });
+
+  it('newSessionArgs hands Claude a minted UUID session id', () => {
+    const id = '3e6fc8d2-1ad9-4428-a351-8f7abfa088a6';
+    assert.deepEqual(claudeCode.newSessionArgs({ sessionId: id }), ['--session-id', id]);
+  });
+
+  it('newSessionArgs refuses anything that is not a UUID', () => {
+    assert.equal(claudeCode.newSessionArgs({ sessionId: 'not-a-uuid' }), null);
+    assert.equal(claudeCode.newSessionArgs({ sessionId: '' }), null);
+    assert.equal(claudeCode.newSessionArgs({}), null);
+    assert.equal(claudeCode.newSessionArgs(), null);
+  });
+
+  it('codex has no newSessionArgs — its ids stay discovery-owned', () => {
+    assert.equal(typeof codex.newSessionArgs, 'undefined');
+  });
 });

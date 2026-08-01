@@ -5,9 +5,11 @@ import * as codexAdapter from '../../src/adapters/codex.js';
 import * as claudeAdapter from '../../src/adapters/claude-code.js';
 import {
   buildNativeResumeArgv,
+  mintToolSessionForLaunch,
   resolveToolSessionForResume,
   toolSessionSource,
 } from '../../src/mc/tool-session.js';
+import { LOCAL_AUTH_MODES } from '../../src/mc/local-auth-mode.js';
 
 describe('mc provider-native tool sessions', () => {
   test('uses a stored tool_session_id before transcript lookup', async () => {
@@ -268,5 +270,35 @@ describe('mc provider-native tool sessions', () => {
   test('normalizes tool sources for transcript lookup', () => {
     assert.equal(toolSessionSource({ entry: { tool: 'claude' } }), 'claude-code');
     assert.equal(toolSessionSource({ entry: { tool: 'codex' } }), 'codex');
+  });
+
+  test('mints a claude session id with launch argv and source at native launch', () => {
+    const id = '3e6fc8d2-1ad9-4428-a351-8f7abfa088a6';
+    const minted = mintToolSessionForLaunch({
+      launchTool: { id: 'claude-code', shortName: 'claude', adapter: claudeAdapter },
+      localAuthMode: LOCAL_AUTH_MODES.NATIVE,
+      uuid: () => id,
+    });
+    assert.deepEqual(minted, {
+      sessionId: id,
+      source: 'claude-code',
+      argv: ['--session-id', id],
+    });
+  });
+
+  test('does not mint for adapters without newSessionArgs', () => {
+    assert.equal(mintToolSessionForLaunch({
+      launchTool: { id: 'codex', shortName: 'codex', adapter: codexAdapter },
+      localAuthMode: LOCAL_AUTH_MODES.NATIVE,
+    }), null);
+    assert.equal(mintToolSessionForLaunch({ launchTool: null }), null);
+    assert.equal(mintToolSessionForLaunch(), null);
+  });
+
+  test('does not mint outside native custody', () => {
+    assert.equal(mintToolSessionForLaunch({
+      launchTool: { id: 'claude-code', shortName: 'claude', adapter: claudeAdapter },
+      localAuthMode: LOCAL_AUTH_MODES.MANAGED_PORTABLE,
+    }), null);
   });
 });
