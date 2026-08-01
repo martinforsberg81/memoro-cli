@@ -466,6 +466,83 @@ test('same session name resolves by repository while opaque id resolves globally
   assert.match(a.session_id, MC_SESSION_ID_RE);
 });
 
+test('fallbackGlobal resolves a unique name from any repository but keeps ambiguity failing', () => {
+  const a = {
+    name: 'unique-elsewhere',
+    session_id: 'mcs_cccccccccccccccccccccccc',
+    repository_id: 'repo_aaaaaaaaaaaaaaaaaaaaaaaa',
+  };
+  const b = {
+    name: 'billing',
+    session_id: 'mcs_aaaaaaaaaaaaaaaaaaaaaaaa',
+    repository_id: 'repo_aaaaaaaaaaaaaaaaaaaaaaaa',
+  };
+  const c = {
+    name: 'billing',
+    session_id: 'mcs_bbbbbbbbbbbbbbbbbbbbbbbb',
+    repository_id: 'repo_bbbbbbbbbbbbbbbbbbbbbbbb',
+  };
+  const registry = { schema_version: REGISTRY_SCHEMA_VERSION, entries: [a, b, c] };
+
+  // From a repo that is NOT a's: unique name resolves with the fallback…
+  const crossRepo = resolveEntry('unique-elsewhere', {
+    registry,
+    repositoryId: 'repo_bbbbbbbbbbbbbbbbbbbbbbbb',
+    fallbackGlobal: true,
+  });
+  assert.equal(crossRepo.ok, true);
+  assert.equal(crossRepo.entry, a);
+  assert.equal(crossRepo.source, 'unique-global-name');
+
+  // …but without the flag the repo scope still refuses…
+  assert.equal(resolveEntry('unique-elsewhere', {
+    registry,
+    repositoryId: 'repo_bbbbbbbbbbbbbbbbbbbbbbbb',
+  }).ok, false);
+
+  // …and a cross-repo duplicate stays ambiguous even with the fallback.
+  const ambiguous = resolveEntry('billing', {
+    registry,
+    repositoryId: 'repo_cccccccccccccccccccccccc',
+    fallbackGlobal: true,
+  });
+  assert.equal(ambiguous.ok, false);
+  assert.equal(ambiguous.reason, 'repository-mismatch');
+
+  // Outside any repository, a unique repo-scoped name also resolves.
+  const noContext = resolveEntry('unique-elsewhere', {
+    registry,
+    cwd: '/outside-any-repository',
+    fallbackGlobal: true,
+    repositoryResolver: () => null,
+  });
+  assert.equal(noContext.ok, true);
+  assert.equal(noContext.entry, a);
+});
+
+test('resolution errors list every candidate with its opaque session id', () => {
+  const result = {
+    reason: 'ambiguous-session-name',
+    candidates: [
+      {
+        session_id: 'mcs_aaaaaaaaaaaaaaaaaaaaaaaa',
+        repository_identity: { schema: 1, kind: 'remote', canonical: 'github.com/org/repo-a' },
+        session_state: 'idle',
+        worktree_path: '/worktrees/repo-a/billing',
+      },
+      {
+        session_id: 'mcs_bbbbbbbbbbbbbbbbbbbbbbbb',
+        repo_slug: 'repo-b',
+        session_state: 'live',
+        worktree_path: null,
+      },
+    ],
+  };
+  const message = formatEntryResolutionError('billing', result);
+  assert.match(message, /mcs_aaaaaaaaaaaaaaaaaaaaaaaa\s+repo=github\.com\/org\/repo-a\s+state=idle/);
+  assert.match(message, /mcs_bbbbbbbbbbbbbbbbbbbbbbbb\s+repo=repo-b\s+state=live\s+no worktree/);
+});
+
 test('upsert preserves an unresolved legacy name in another repository', () => {
   tempHome = mkdtempSync(join(tmpdir(), 'mc-registry-legacy-preserve-'));
   process.env.MC_HOME = tempHome;

@@ -277,7 +277,7 @@ function selectTargets(entries, names, cwd, { requireIdentity = true } = {}) {
     const implicit = name === '.' ? resolveImplicitEntry(entries, cwd) : null;
     const resolution = name === '.'
       ? { ok: Boolean(implicit), entry: implicit, reason: implicit ? null : 'missing' }
-      : resolveEntry(name, { registry: { entries }, cwd });
+      : resolveEntry(name, { registry: { entries }, cwd, fallbackGlobal: true });
     const entry = resolution.entry || null;
     if (!entry) {
       if (name === '.') {

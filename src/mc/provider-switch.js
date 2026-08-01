@@ -380,7 +380,19 @@ export async function recoverProviderSwitch({
   if (!recoveredTargetTool || !journalSourceTool
     || recoveredTargetTool.id === journalSourceTool.id
     || (targetTool && targetTool.id !== recoveredTargetTool.id)) {
-    return failure('handoff-switch-journal-conflict');
+    return {
+      ...failure('handoff-switch-journal-conflict'),
+      // The refusal must name the recorded target so the caller can
+      // render the exact retry (the journal, not the flag, decides
+      // which tool the interrupted switch continues to).
+      ...(recoveredTargetTool && targetTool
+        && targetTool.id !== recoveredTargetTool.id
+        ? {
+            recordedTargetTool: recoveredTargetTool.shortName,
+            recordedCustody: journalTargetCustody,
+          }
+        : {}),
+    };
   }
   const sourceProvider = providerSessionFor(entry, journalSourceTool.id);
   const sourceGeneration = exact(sourceProvider?.runtime_generation);
