@@ -161,6 +161,36 @@ test('handoff POST accepts only the exact sequence and server digest response', 
   })).code, 'handoff-post-response-invalid');
 });
 
+test('handoff POST separates a server refusal from an unreachable server', async () => {
+  const post = (memoroFetch) => persistSessionHandoff({
+    apiUrl: 'https://meetmemoro.test',
+    token: 'token-in-memory',
+    handoff: { sequence: 1 },
+    memoroFetch,
+  });
+  const refusal = (status, error) => async () => {
+    const err = new Error(`Memoro ${status}: ${error}`);
+    err.status = status;
+    err.data = { ok: false, error };
+    throw err;
+  };
+
+  // The status is what makes a refusal actionable: a wrong token scope, an
+  // unsealed source generation and a rate limit are three different repairs.
+  assert.equal((await post(refusal(403, 'local mc API token required'))).code, 'handoff-post-rejected-403');
+  assert.equal((await post(refusal(403, 'Session source is not a sealed generation'))).code, 'handoff-post-rejected-403');
+  assert.equal((await post(refusal(429, 'Too many requests'))).code, 'handoff-post-rejected-429');
+  assert.equal((await post(refusal(409, 'Session handoff conflicts with current chain'))).code, 'handoff-post-rejected-409');
+
+  // A transport failure carries no status and stays distinguishable.
+  assert.equal((await post(async () => { throw new Error('network down'); })).code, 'handoff-post-unavailable');
+
+  // The code is derived from the status alone: a server message — even one
+  // carrying a credential — never reaches it.
+  const leaked = await post(refusal(403, 'token mem_abcdefghijklmnop rejected'));
+  assert.equal(leaked.code, 'handoff-post-rejected-403');
+});
+
 test('renderer emits only bounded user-level fields and fails closed on credentials', () => {
   const rendered = renderHandoffUserMessage([row(1), row(2)]);
   assert.equal(rendered.ok, true);
