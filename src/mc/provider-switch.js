@@ -180,6 +180,7 @@ export async function prepareProviderSwitch({
     parentDigest: sourceContext.continuity.latestDigest,
     cwd: entry.worktree_path,
     repoContext,
+    auth,
     deps: deps.candidateDeps || deps,
   });
   if (!candidate.ok) return candidate;
