@@ -12,7 +12,10 @@ import {
   SessionProjectionTracker,
 } from '../session-projector.js';
 import { scheduleSessionUpload } from '../session-upload.js';
-import { executeGitHubControlPlaneOperation } from '../github-session.js';
+import {
+  executeGitHubControlPlaneOperation,
+  fetchGitHubSessionCapabilities,
+} from '../github-session.js';
 import { decodeSessionCapabilities } from '../github-contract.js';
 import { createConnectionClient } from '../connections/client.js';
 import { createRefreshingIdentityBroker } from '../connections/identity.js';
@@ -25,6 +28,7 @@ import {
 const TICK_INTERVAL_MS = 60_000;
 const MAX_ATTEMPTS = 3;
 const RETRY_INTERVAL_MS = 5 * 60 * 1000;
+const GITHUB_REBOOTSTRAP_MIN_INTERVAL_MS = 15_000;
 
 export class BrokerSessionSidecars {
   constructor({
@@ -101,6 +105,41 @@ export class BrokerSessionSidecars {
     this.heartbeatPromise = null;
     this.finalizationPromise = null;
     this.uploadScheduled = false;
+    this.githubBootstrapAttemptedAt = null;
+  }
+
+  /**
+   * GitHub capabilities are bootstrapped at launch, but a session must not
+   * stay GitHub-dead for its whole life just because that bootstrap failed
+   * or the connection was repaired after launch. When no ready capabilities
+   * are held, re-bootstrap (rate-limited) before serving an operation. A
+   * failed re-bootstrap resolves to null so the control plane remains the
+   * enforcing authority for the actual connection state.
+   */
+  async _githubOperationAllowlist() {
+    if (this.githubCapabilities?.github?.state === 'ready') {
+      return this.githubCapabilities.github.operations || null;
+    }
+    if (!this.connectionClient) return null;
+    const nowMs = this.now();
+    if (this.githubBootstrapAttemptedAt != null
+      && nowMs - this.githubBootstrapAttemptedAt < GITHUB_REBOOTSTRAP_MIN_INTERVAL_MS) {
+      return null;
+    }
+    this.githubBootstrapAttemptedAt = nowMs;
+    try {
+      const capabilities = await fetchGitHubSessionCapabilities({
+        connectionClient: this.connectionClient,
+        repository: this.coding.repoRef || this.coding.repo_ref || null,
+        memoroFetchImpl: this.memoroFetch,
+      });
+      const descriptor = managedGitHubCapabilities(capabilities);
+      if (descriptor) {
+        this.githubCapabilities = descriptor;
+        return descriptor.github.operations || null;
+      }
+    } catch {}
+    return null;
   }
 
   start() {
@@ -174,7 +213,7 @@ export class BrokerSessionSidecars {
             connectionClient: this.connectionClient,
             codingSessionId: this.coding.codingSessionId,
             request: payload,
-            allowedOperations: this.githubCapabilities?.github.operations || null,
+            allowedOperations: () => this._githubOperationAllowlist(),
             memoroFetchImpl: this.memoroFetch,
           });
           conn.end(JSON.stringify(response) + '\n');

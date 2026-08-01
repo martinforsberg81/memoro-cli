@@ -283,11 +283,24 @@ export async function executeGitHubControlPlaneOperation({
       error?.code === 'operation_not_allowed' ? 'operation_not_allowed' : 'invalid_params',
     );
   }
+  // The allowlist may be provided lazily (a function) so a caller can
+  // re-bootstrap capabilities on demand. It resolves only AFTER the wire
+  // decode above: malformed or spoofed requests must never trigger any
+  // network access. A provider failure resolves to null — the control
+  // plane stays the enforcing authority.
+  let resolvedAllowedOperations = allowedOperations;
+  if (typeof allowedOperations === 'function') {
+    try {
+      resolvedAllowedOperations = await allowedOperations(decodedRequest);
+    } catch {
+      resolvedAllowedOperations = null;
+    }
+  }
   if (
-    allowedOperations != null
+    resolvedAllowedOperations != null
     && (
-      !Array.isArray(allowedOperations)
-      || !allowedOperations.includes(decodedRequest.operation)
+      !Array.isArray(resolvedAllowedOperations)
+      || !resolvedAllowedOperations.includes(decodedRequest.operation)
     )
   ) {
     return safeOperationFailure(decodedRequest.request_id, 'operation_not_allowed');
