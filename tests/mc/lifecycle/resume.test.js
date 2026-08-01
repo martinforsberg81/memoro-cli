@@ -1582,6 +1582,71 @@ describe('mc resume <name>', () => {
     }
   });
 
+  test('native open repairs a stale generationless server record and relaunches', async () => {
+    const old = process.env.MC_TEST_MODE;
+    delete process.env.MC_TEST_MODE;
+    const generation = '4f50f5a1-4c6b-4d6a-8b5c-152c5e6b8701';
+    const repairs = [];
+    const resumed = [];
+    let activeReads = 0;
+    try {
+      const status = await runNativeResume(['data'], {
+        stdin: { isTTY: true },
+        stdout: { isTTY: true, write() {} },
+        stderr: { write() {} },
+        findEntry: () => makeEntry({
+          name: 'data', branch: 'sess/data', worktree_path: '/tmp/data',
+          coding_session_id: 'sess_data', tool_session_id: 'native_abc',
+          session_state: 'live', tool: 'claude',
+        }),
+        attachLiveBrokerSession: async () => ({
+          attached: false,
+          localPresence: {
+            verdict: 'exited',
+            runtime_generation: generation,
+            session: null,
+          },
+        }),
+        fetchActiveSessions: async () => {
+          activeReads += 1;
+          return {
+            ok: true,
+            sessions: activeReads === 1
+              ? [{
+                  coding_session_id: 'sess_data',
+                  machine_id: 'machine.local',
+                  source: 'claude-code',
+                  repo: 'acme/widgets',
+                  branch: 'sess/data',
+                  runtime_generation: null,
+                }]
+              : [],
+          };
+        },
+        repairExitedSessionPresence: async (request) => {
+          repairs.push(request);
+          return { ok: true, legacy: true };
+        },
+        presenceRepairRefreshDelaysMs: [0],
+        launchResumeSession: (input) => {
+          resumed.push(input);
+          return 0;
+        },
+        launchFreshSession: () => assert.fail('stored session must resume, not restart fresh'),
+        upsertEntry: (entry) => entry,
+      });
+
+      assert.equal(status, 0);
+      assert.equal(repairs.length, 1);
+      assert.equal(repairs[0].runtimeGeneration, generation);
+      assert.equal(repairs[0].active.coding_session_id, 'sess_data');
+      assert.equal(resumed.length, 1);
+    } finally {
+      if (old === undefined) delete process.env.MC_TEST_MODE;
+      else process.env.MC_TEST_MODE = old;
+    }
+  });
+
   test('treats a live journal as exited when the exact session host is proven gone', async () => {
     const generation = '4f50f5a1-4c6b-4d6a-8b5c-152c5e6b8701';
     const presence = await inspectLocalBrokerSessionForEntry({
