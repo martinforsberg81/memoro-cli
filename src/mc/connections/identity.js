@@ -40,6 +40,43 @@ export function createBoundIdentityBroker({ token, apiUrl, memoroFetch: fetch = 
   });
 }
 
+/**
+ * Identity broker for a LONG-LIVED trusted runtime (the session sidecar).
+ * A bound launch-time token must not be frozen for the whole session: the
+ * device token can rotate mid-session (re-auth, refresh), after which every
+ * grant mint fails with an auth error until the session restarts — GitHub
+ * capabilities appear "temporarily unavailable" and a new sign-in never
+ * reaches the running session. On an auth failure this broker re-reads the
+ * keychain and retries the MINT once with the current token. Only the grant
+ * mint is retried; the consumer runs exactly once, so operations are never
+ * double-executed by this path.
+ */
+export function createRefreshingIdentityBroker({
+  token,
+  apiUrl,
+  memoroFetch: fetch = memoroFetch,
+  getSecret = keychainGet,
+} = {}) {
+  if (typeof token !== 'string' || !token || typeof apiUrl !== 'string' || !apiUrl) {
+    throw new TypeError('bound Memoro identity and apiUrl are required');
+  }
+  return Object.freeze({
+    async withGrant(request, use) {
+      if (typeof use !== 'function') throw new TypeError('grant consumer is required');
+      let grant;
+      try {
+        grant = await mintGrant({ request, token, apiUrl, fetch });
+      } catch (error) {
+        if (error?.status !== 401 && error?.status !== 403) throw error;
+        const fresh = await getSecret(ACCOUNTS.TOKEN).catch(() => null);
+        if (!fresh || fresh === token) throw error;
+        grant = await mintGrant({ request, token: fresh, apiUrl, fetch });
+      }
+      return use(grant);
+    },
+  });
+}
+
 export async function resolveBootstrapIdentity({
   env = process.env,
   apiUrl,
@@ -53,6 +90,10 @@ export async function resolveBootstrapIdentity({
 
 async function exchange({ request, use, token, apiUrl, fetch }) {
   if (typeof use !== 'function') throw new TypeError('grant consumer is required');
+  return use(await mintGrant({ request, token, apiUrl, fetch }));
+}
+
+async function mintGrant({ request, token, apiUrl, fetch }) {
   const codingSessionId = request.codingSessionId ?? null;
   const raw = await fetch(apiUrl, '/api/mc/capability-grants', {
     token,
@@ -70,5 +111,5 @@ async function exchange({ request, use, token, apiUrl, fetch }) {
     codingSessionId,
   });
   if (!grant) throw new Error('Connected capability grant could not be verified.');
-  return use(Object.freeze({ ...grant, apiUrl }));
+  return Object.freeze({ ...grant, apiUrl });
 }
