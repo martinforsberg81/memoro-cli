@@ -7,6 +7,7 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs';
+import { uptime } from 'node:os';
 import { dirname, join } from 'node:path';
 
 import { requestBroker } from './client.js';
@@ -26,6 +27,7 @@ import {
 const HOST_START_LOG_TAIL_CHARS = 4000;
 const HOST_START_ERROR_CHARS = 1200;
 const HOST_RUNTIME_PROBE_TIMEOUT_MS = 600;
+const BOOT_CLOCK_SLACK_MS = 5_000;
 const CONTROLLER_REQUEST_TYPES = new Set([
   'attach_session',
   'write_session',
@@ -278,13 +280,31 @@ export async function probeSessionHostRuntime(paths, {
   signalProcess = process.kill,
   timeoutMs = HOST_RUNTIME_PROBE_TIMEOUT_MS,
   expectedSessionId = null,
+  bootTimeMs = defaultBootTimeMs,
 } = {}) {
   if (!paths?.socketPath || !paths?.pidPath) {
     return { verdict: 'unknown', reason: 'host-paths-missing' };
   }
 
   const firstSocketProbe = await probeHostSocket(paths.socketPath, { request, timeoutMs });
-  if (firstSocketProbe.verdict !== 'exited') return firstSocketProbe;
+  if (firstSocketProbe.verdict !== 'exited') {
+    // A reachable host owns this session's socket namespace exclusively, so
+    // its session list is authoritative: report whether the expected session
+    // is actually hosted there. A listing failure omits the field so callers
+    // keep failing closed.
+    if (firstSocketProbe.verdict === 'live'
+      && firstSocketProbe.reason === 'host-socket-reachable'
+      && expectedSessionId) {
+      const hosted = await hostSessionPresence(paths.socketPath, expectedSessionId, {
+        request,
+        timeoutMs,
+      });
+      if (hosted !== null) {
+        return { ...firstSocketProbe, hosts_expected_session: hosted };
+      }
+    }
+    return firstSocketProbe;
+  }
 
   const pid = readPositivePid(paths.pidPath, { readFile });
   if (pid == null) return { verdict: 'unknown', reason: 'host-pid-unverified' };
@@ -294,6 +314,23 @@ export async function probeSessionHostRuntime(paths, {
     readFile: readManifestFile,
     lstat: lstatFile,
   });
+  // A pid record written before the current boot cannot name a live broker:
+  // no process survives a reboot, so whatever occupies that pid now is an
+  // unrelated post-boot process and a bare kill(pid, 0) success is not
+  // liveness evidence. Combined with the definitive socket refusal above,
+  // a pre-boot record proves the recorded broker exited.
+  if (pidRecordPredatesBoot(paths.pidPath, { lstat: lstatFile, bootTimeMs })) {
+    const confirmedSocket = await probeHostSocket(paths.socketPath, { request, timeoutMs });
+    if (confirmedSocket.verdict === 'exited') {
+      return {
+        verdict: 'exited',
+        reason: 'host-process-pre-boot',
+        pid,
+        ...(hostManifest ? { host_manifest: hostManifest } : {}),
+      };
+    }
+    return confirmedSocket;
+  }
   try {
     signalProcess(pid, 0);
     return {
@@ -328,6 +365,47 @@ export async function probeSessionHostRuntime(paths, {
     }
     return { verdict: 'unknown', reason: 'host-pid-unverified', pid };
   }
+}
+
+/**
+ * True only when the pid file provably predates the current boot. Any
+ * doubt — missing file, unreadable stat, unavailable uptime, or a
+ * timestamp within clock slack of the boot instant — returns false so the
+ * caller falls back to the fail-closed pid evidence path.
+ */
+function pidRecordPredatesBoot(pidPath, { lstat, bootTimeMs } = {}) {
+  try {
+    const stat = lstat(pidPath);
+    if (!stat?.isFile?.() || stat.isSymbolicLink?.()) return false;
+    const mtimeMs = stat.mtimeMs;
+    const boot = bootTimeMs();
+    return Number.isFinite(mtimeMs)
+      && Number.isFinite(boot)
+      && mtimeMs < boot - BOOT_CLOCK_SLACK_MS;
+  } catch {
+    return false;
+  }
+}
+
+async function hostSessionPresence(socketPath, expectedSessionId, {
+  request = requestBroker,
+  timeoutMs = HOST_RUNTIME_PROBE_TIMEOUT_MS,
+} = {}) {
+  try {
+    const res = await request({ type: 'sessions' }, { socketPath, timeoutMs });
+    if (!res?.ok || !Array.isArray(res.sessions)) return null;
+    return res.sessions.some((row) => row
+      && (row.id === expectedSessionId || row.coding_session_id === expectedSessionId));
+  } catch {
+    return null;
+  }
+}
+
+function defaultBootTimeMs() {
+  const uptimeSeconds = uptime();
+  return Number.isFinite(uptimeSeconds) && uptimeSeconds > 0
+    ? Date.now() - uptimeSeconds * 1000
+    : NaN;
 }
 
 function readBoundHostManifest(paths, {
