@@ -20,7 +20,7 @@
  */
 import test, { describe, after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { runMc, parseJsonOrNull } from '../_helpers/cli.js';
@@ -481,7 +481,81 @@ describe('mc end', () => {
         `worktree ${n} should be removed; got:\n${wts}`);
     }
   });
+
+  test('ends a session whose worktree and primary repo are gone, leaving the branch alone', async () => {
+    writeRegistry(repo.mcHome, [makeEndEntry({
+      name: 'orphan',
+      branch: 'sess/orphan',
+      session_id: `mcs_${'a'.repeat(24)}`,
+      repository_id: `repo_${'b'.repeat(24)}`,
+      worktree_path: join(repo.mcHome, 'worktrees', 'gone-repo', 'orphan'),
+      primary_worktree: join(repo.mcHome, 'gone-primary'),
+    })]);
+
+    const { result, stdout, stderr } = await runEndInProcess(
+      repo,
+      ['orphan', '--force'],
+      'y',
+      { removeBrokerSessionForEntry: async () => ({ ok: true, removed: false }) },
+      { cwd: repo.mcHome },
+    );
+
+    assert.equal(result, 0, stderr);
+    assert.match(stdout, /left in place — primary repo not found/);
+    assert.equal(readRegistryFile(repo.mcHome).entries.length, 0);
+  });
+
+  test('an existing worktree without a resolvable primary still fails closed', async () => {
+    const strandedWorktree = join(repo.mcHome, 'stranded-worktree');
+    mkdirSync(strandedWorktree, { recursive: true });
+    writeRegistry(repo.mcHome, [makeEndEntry({
+      name: 'stranded',
+      branch: 'sess/stranded',
+      session_id: `mcs_${'c'.repeat(24)}`,
+      repository_id: `repo_${'d'.repeat(24)}`,
+      worktree_path: strandedWorktree,
+      primary_worktree: join(repo.mcHome, 'gone-primary'),
+    })]);
+
+    const { result, stderr } = await runEndInProcess(
+      repo,
+      ['stranded', '--force'],
+      'y',
+      {},
+      { cwd: repo.mcHome },
+    );
+
+    assert.equal(result, 1);
+    assert.match(stderr, /no resolvable primary worktree/);
+    assert.equal(readRegistryFile(repo.mcHome).entries.length, 1);
+  });
+
+  test('removes a row that never had a repository_id', async () => {
+    writeRegistry(repo.mcHome, [makeEndEntry({
+      name: 'repoless',
+      branch: null,
+      session_id: `mcs_${'e'.repeat(24)}`,
+      repository_id: null,
+      repo_slug: null,
+      worktree_path: null,
+    })]);
+
+    const { result, stderr } = await runEndInProcess(
+      repo,
+      ['repoless', '--force'],
+      'y',
+      { removeBrokerSessionForEntry: async () => ({ ok: true, removed: false }) },
+      { cwd: repo.mcHome },
+    );
+
+    assert.equal(result, 0, stderr);
+    assert.equal(readRegistryFile(repo.mcHome).entries.length, 0);
+  });
 });
+
+function readRegistryFile(mcHome) {
+  return JSON.parse(readFileSync(join(mcHome, 'registry.json'), 'utf8'));
+}
 
 function makeEndEntry(patch = {}) {
   return makeEntry({
@@ -490,7 +564,7 @@ function makeEndEntry(patch = {}) {
   });
 }
 
-async function runEndInProcess(repo, argv, answer, extraDeps = {}) {
+async function runEndInProcess(repo, argv, answer, extraDeps = {}, { cwd } = {}) {
   const oldMcHome = process.env.MC_HOME;
   let stdout = '';
   let stderr = '';
@@ -501,7 +575,7 @@ async function runEndInProcess(repo, argv, answer, extraDeps = {}) {
   process.env.MC_HOME = repo.mcHome;
   try {
     const result = await runEnd(argv, {
-      cwd: repo.dir,
+      cwd: cwd || repo.dir,
       stdout: streams.stdout,
       stderr: streams.stderr,
       deps: {

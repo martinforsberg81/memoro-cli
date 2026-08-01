@@ -122,7 +122,15 @@ export async function run(rawArgv, runOpts = {}) {
   const plans = [];
   for (const originalEntry of selected.entries) {
     const primary = resolvePrimaryForEntry(originalEntry, cwd);
-    if (!primary) {
+    const worktreePresent = Boolean(
+      originalEntry.worktree_path && existsSync(originalEntry.worktree_path),
+    );
+    // An EXISTING worktree that cannot be mapped to its primary repo is
+    // something to protect — fail as before. A session whose worktree is
+    // already gone (deleted repo, wiped disk, never created) has no git
+    // surface left: tear down what remains and leave any branch alone
+    // instead of refusing forever.
+    if (!primary && worktreePresent) {
       return emitFailure({
         opts,
         stdout,
@@ -131,17 +139,20 @@ export async function run(rawArgv, runOpts = {}) {
         message: `"${originalEntry.name}" has no resolvable primary worktree`,
       });
     }
+    const detached = !primary;
 
     const entry = await synchronizeToolAuthority(originalEntry, { deps });
     const artifacts = withProviderlessDowngrade(entry, await inspectAuthority(entry, { deps }));
     const mcArtifacts = inspectMcAuthority(entry, deps);
     const status = await buildTargetStatus(entry, primary, artifacts, {
       keepBranch: opts.keepBranch,
+      detached,
     });
     plans.push({
       originalEntry,
       entry,
       primary,
+      detached,
       artifacts,
       mcArtifacts,
       status,
@@ -294,7 +305,10 @@ function selectTargets(entries, names, cwd, { requireIdentity = true } = {}) {
         error: formatEntryResolutionError(name, resolution),
       };
     }
-    if (requireIdentity && (!entry.session_id || !entry.repository_id)) {
+    // session_id is the removal anchor and must exist. repository_id may
+    // legitimately be absent (rows created outside any repository); such a
+    // row could otherwise never satisfy the gate and became unremovable.
+    if (requireIdentity && !entry.session_id) {
       return {
         ok: false,
         code: 1,
@@ -501,7 +515,10 @@ function isVerifiedMissingRetry(entry, result, roots) {
     && classified.state === 'candidate';
 }
 
-async function buildTargetStatus(entry, primary, artifacts, { keepBranch = false } = {}) {
+async function buildTargetStatus(entry, primary, artifacts, {
+  keepBranch = false,
+  detached = false,
+} = {}) {
   const dirtyFiles = countDirtyFiles(entry.worktree_path);
   const defaultBranch = resolveDefaultBranch(primary);
   const observedAhead = entry.branch && defaultBranch.ok
@@ -510,7 +527,12 @@ async function buildTargetStatus(entry, primary, artifacts, { keepBranch = false
   const ahead = observedAhead === null
     ? null
     : Math.max(observedAhead, finiteNumber(entry.ahead));
-  const verdict = await computeVerdict(entry, primary, { dirtyFiles, ahead, defaultBranch });
+  const verdict = await computeVerdict(entry, primary, {
+    dirtyFiles,
+    ahead,
+    defaultBranch,
+    detached,
+  });
   return {
     name: entry.name,
     session_state: entry.session_state || 'idle',
@@ -523,6 +545,7 @@ async function buildTargetStatus(entry, primary, artifacts, { keepBranch = false
     default_branch_source: defaultBranch.ok ? defaultBranch.source : null,
     default_branch_reason: defaultBranch.ok ? null : defaultBranch.reason,
     keep_branch: keepBranch,
+    ...(detached ? { detached: true } : {}),
     verdict: verdict.value,
     ...(verdict.reason ? { reason: verdict.reason } : {}),
     transcript: transcriptStatus(artifacts),
@@ -615,13 +638,24 @@ function countDirtyFiles(worktreePath) {
   return porcelain.split('\n').filter(Boolean).length;
 }
 
-async function computeVerdict(entry, primary, { dirtyFiles, ahead, defaultBranch }) {
+async function computeVerdict(entry, primary, { dirtyFiles, ahead, defaultBranch, detached }) {
   const stored = entry.safety_verdict;
   if (entry.session_state === 'live') {
     return { value: 'IS_ACTIVE_NOW', reason: 'live session' };
   }
   if (dirtyFiles > 0) {
     return { value: 'NEEDS_REVIEW', reason: `${dirtyFiles} uncommitted file(s)` };
+  }
+  if (detached) {
+    // No primary repo could be found, so no worktree or branch will be
+    // touched — teardown only removes session-owned artifacts and the
+    // registry row. Any branch (and whatever is on it) stays where it is.
+    return entry.branch
+      ? {
+        value: 'SAFE_TO_END',
+        reason: `primary repo not found; branch ${entry.branch} is left in place`,
+      }
+      : { value: 'SAFE_TO_END', reason: 'primary repo not found; nothing git-side to remove' };
   }
   if (ahead === null) {
     return {
@@ -652,12 +686,16 @@ async function computeVerdict(entry, primary, { dirtyFiles, ahead, defaultBranch
 
 function printStatuses(plans, stdout) {
   for (const { status } of plans) {
-    const branchAction = status.keep_branch ? 'keep' : 'delete';
+    const branchAction = status.detached
+      ? 'left in place — primary repo not found'
+      : status.keep_branch ? 'keep' : 'delete';
     stdout.write(`${status.name}\n`);
     stdout.write(`  session: ${status.session_state}\n`);
     stdout.write(`  worktree: ${status.worktree_path || 'none'} (dirty: ${status.dirty_files})\n`);
     const ahead = status.commits_ahead === null ? 'unknown' : status.commits_ahead;
-    stdout.write(`  branch: ${status.branch || 'none'} (ahead: ${ahead}, ${branchAction})\n`);
+    stdout.write(status.branch
+      ? `  branch: ${status.branch} (ahead: ${ahead}, ${branchAction})\n`
+      : '  branch: none\n');
     if (status.transcript.state === 'none') {
       stdout.write(status.transcript.provider_untouched
         ? '  transcript: none identifiable — provider artifacts left untouched\n'
@@ -1011,10 +1049,12 @@ async function teardownOne(plan, { opts, deps }) {
       }
     }
 
-    removeWorktreeAndBranch(entry, {
-      primary,
-      keepBranch: opts.keepBranch,
-    });
+    if (primary) {
+      removeWorktreeAndBranch(entry, {
+        primary,
+        keepBranch: opts.keepBranch,
+      });
+    }
 
     const leftovers = await inspectLeftovers(plan, opts, deps, {
       includeRegistry: false,
