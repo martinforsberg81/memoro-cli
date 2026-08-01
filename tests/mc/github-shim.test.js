@@ -3,6 +3,46 @@ import { describe, test } from 'node:test';
 
 import { runGitHubShim } from '../../src/mc/github-shim.js';
 
+test('a failure surfaces the wire error detail beside the stable per-code text', async () => {
+  let err = '';
+  const code = await runGitHubShim(['pr', 'list'], {
+    stdout: { write() {} },
+    stderr: { write: (s) => { err += s; } },
+    executeGitHubOperation: async () => ({
+      ok: false,
+      request_id: 'request_abcdefgh',
+      error: {
+        code: 'unavailable',
+        message: 'GitHub authentication could not be prepared.',
+        repair_action: 'retry',
+      },
+    }),
+  });
+
+  assert.equal(code, 1);
+  assert.match(err, /temporarily unavailable through Memoro\. \(GitHub authentication could not be prepared\.\)/);
+});
+
+test('a failure whose message matches the stable text is not duplicated', async () => {
+  let err = '';
+  const code = await runGitHubShim(['pr', 'list'], {
+    stdout: { write() {} },
+    stderr: { write: (s) => { err += s; } },
+    executeGitHubOperation: async () => ({
+      ok: false,
+      request_id: 'request_abcdefgh',
+      error: {
+        code: 'unavailable',
+        message: 'GitHub is temporarily unavailable through Memoro.',
+        repair_action: 'retry',
+      },
+    }),
+  });
+
+  assert.equal(code, 1);
+  assert.doesNotMatch(err, /\(/);
+});
+
 function capture() {
   let stdout = '';
   let stderr = '';
