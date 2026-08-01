@@ -506,6 +506,7 @@ export async function launchBrokerOwnedSession({
         });
       } catch {}
       stderr.write(`mc: managed provider credential boundary is unavailable (${diagnostic})\n`);
+      stderr.write(`${managedBoundaryRemedy({ sessionName, label, codingSessionId })}\n`);
       return { code: 1, reason, error: reason };
     }
     try {
@@ -1051,6 +1052,21 @@ function bindSessionControllerCapability(request, capability) {
 function isExactLaunchedSession(session, { codingSessionId, runtimeGeneration } = {}) {
   return session?.id === codingSessionId
     && session?.runtime_generation === runtimeGeneration;
+}
+
+/**
+ * Never leave a failed managed launch at a dead end. By this point the session
+ * and its worktree exist, so name the one command that opens it. Custody stays
+ * the user's choice — this states the option, it does not take it.
+ *
+ * Pure and exported so the remedy is covered without driving a full launch.
+ */
+export function managedBoundaryRemedy({ sessionName, label, codingSessionId } = {}) {
+  const target = [sessionName, label, codingSessionId]
+    .find((value) => typeof value === 'string' && value.trim());
+  return target
+    ? `mc: run it on the tool's own sign-in instead with \`mc open ${target.trim()} --native\`, or clear the boundary first.`
+    : 'mc: run it on the tool\'s own sign-in instead by adding --native, or clear the boundary first.';
 }
 
 export function isRetryableCodexSqliteStartupFailure({ output, session } = {}) {
