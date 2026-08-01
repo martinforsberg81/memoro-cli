@@ -1660,6 +1660,66 @@ describe('mc resume <name>', () => {
     assert.equal(presence.host_runtime.host_manifest.broker_pid, 2468);
   });
 
+  test('treats a live journal as exited when the reachable host provably lacks the session', async () => {
+    const generation = '4f50f5a1-4c6b-4d6a-8b5c-152c5e6b8701';
+    const presence = await inspectLocalBrokerSessionForEntry({
+      name: 'data',
+      coding_session_id: 'sess_data',
+    }, {
+      request: async () => { throw new Error('global broker unavailable'); },
+      deps: {
+        listLocalBrokerAndHostSessions: async () => [],
+        sessionHostPaths: () => ({
+          socketPath: '/tmp/sess_data/broker.sock',
+          pidPath: '/tmp/sess_data/broker.pid',
+          lifecyclePath: '/tmp/sess_data/lifecycle.json',
+        }),
+        readSessionLifecycle: async () => ({
+          verdict: 'live',
+          record: { runtime_generation: generation },
+        }),
+        probeSessionHostRuntime: async () => ({
+          verdict: 'live',
+          reason: 'host-socket-reachable',
+          hosts_expected_session: false,
+        }),
+      },
+    });
+
+    assert.equal(presence.verdict, 'exited');
+    assert.equal(presence.runtime_generation, generation);
+    assert.equal(presence.reason, 'host-session-absent');
+  });
+
+  test('a reachable host without an authoritative session listing stays unreachable', async () => {
+    const presence = await inspectLocalBrokerSessionForEntry({
+      name: 'data',
+      coding_session_id: 'sess_data',
+    }, {
+      request: async () => { throw new Error('global broker unavailable'); },
+      deps: {
+        listLocalBrokerAndHostSessions: async () => [],
+        sessionHostPaths: () => ({
+          socketPath: '/tmp/sess_data/broker.sock',
+          pidPath: '/tmp/sess_data/broker.pid',
+          lifecyclePath: '/tmp/sess_data/lifecycle.json',
+        }),
+        readSessionLifecycle: async () => ({
+          verdict: 'live',
+          record: {
+            runtime_generation: '4f50f5a1-4c6b-4d6a-8b5c-152c5e6b8701',
+          },
+        }),
+        probeSessionHostRuntime: async () => ({
+          verdict: 'live',
+          reason: 'host-socket-reachable',
+        }),
+      },
+    });
+
+    assert.equal(presence.verdict, 'unreachable');
+  });
+
   test('keeps a live journal unreachable when session host exit is not proven', async () => {
     const presence = await inspectLocalBrokerSessionForEntry({
       name: 'data',

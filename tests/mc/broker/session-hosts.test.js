@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test, { describe } from 'node:test';
@@ -164,6 +164,143 @@ describe('session broker hosts', () => {
 
     assert.equal(result.verdict, 'live');
     assert.equal(result.reason, 'host-pid-live');
+  });
+
+  test('a reachable host reports whether it actually hosts the expected session', async () => {
+    const paths = {
+      socketPath: '/tmp/reachable-broker.sock',
+      pidPath: '/tmp/reachable-broker.pid',
+    };
+    const respond = (sessions) => async (message) => (
+      message.type === 'status' ? { ok: true } : { ok: true, sessions }
+    );
+
+    const absent = await probeSessionHostRuntime(paths, {
+      expectedSessionId: 'sess_gone',
+      request: respond([]),
+    });
+    const present = await probeSessionHostRuntime(paths, {
+      expectedSessionId: 'sess_here',
+      request: respond([{ id: 'sess_here', session_state: 'live' }]),
+    });
+    const unlisted = await probeSessionHostRuntime(paths, {
+      expectedSessionId: 'sess_gone',
+      request: async (message) => {
+        if (message.type === 'status') return { ok: true };
+        throw new Error('listing unavailable');
+      },
+    });
+
+    assert.deepEqual(absent, {
+      verdict: 'live',
+      reason: 'host-socket-reachable',
+      hosts_expected_session: false,
+    });
+    assert.deepEqual(present, {
+      verdict: 'live',
+      reason: 'host-socket-reachable',
+      hosts_expected_session: true,
+    });
+    assert.deepEqual(unlisted, {
+      verdict: 'live',
+      reason: 'host-socket-reachable',
+    });
+  });
+
+  test('a pre-boot pid record proves exit even when the pid is reused after reboot', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'mc-preboot-host-'));
+    try {
+      const paths = {
+        socketPath: join(root, 'broker.sock'),
+        pidPath: join(root, 'broker.pid'),
+      };
+      writeFileSync(paths.pidPath, '4321\n', { mode: 0o600 });
+      const before = Math.floor((Date.now() - 60_000) / 1000);
+      utimesSync(paths.pidPath, before, before);
+      const refused = Object.assign(new Error('connect ECONNREFUSED'), {
+        code: 'ECONNREFUSED',
+      });
+      let requests = 0;
+
+      const result = await probeSessionHostRuntime(paths, {
+        request: async () => {
+          requests += 1;
+          throw refused;
+        },
+        bootTimeMs: () => Date.now() - 30_000,
+        signalProcess: () => assert.fail('a reused post-boot pid is not liveness evidence'),
+      });
+
+      assert.equal(requests, 2);
+      assert.deepEqual(result, {
+        verdict: 'exited',
+        reason: 'host-process-pre-boot',
+        pid: 4321,
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('a same-boot pid record keeps the live-pid verdict', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'mc-sameboot-host-'));
+    try {
+      const paths = {
+        socketPath: join(root, 'broker.sock'),
+        pidPath: join(root, 'broker.pid'),
+      };
+      writeFileSync(paths.pidPath, '4321\n', { mode: 0o600 });
+      const refused = Object.assign(new Error('connect ECONNREFUSED'), {
+        code: 'ECONNREFUSED',
+      });
+
+      const result = await probeSessionHostRuntime(paths, {
+        request: async () => { throw refused; },
+        bootTimeMs: () => Date.now() - 3_600_000,
+        signalProcess: (pid, signal) => {
+          assert.equal(pid, 4321);
+          assert.equal(signal, 0);
+        },
+      });
+
+      assert.equal(result.verdict, 'live');
+      assert.equal(result.reason, 'host-pid-live');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('a replacement host binding during the pre-boot confirm is not exit proof', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'mc-preboot-restart-'));
+    try {
+      const paths = {
+        socketPath: join(root, 'broker.sock'),
+        pidPath: join(root, 'broker.pid'),
+      };
+      writeFileSync(paths.pidPath, '4321\n', { mode: 0o600 });
+      const before = Math.floor((Date.now() - 60_000) / 1000);
+      utimesSync(paths.pidPath, before, before);
+      const refused = Object.assign(new Error('connect ECONNREFUSED'), {
+        code: 'ECONNREFUSED',
+      });
+      let requests = 0;
+
+      const result = await probeSessionHostRuntime(paths, {
+        request: async () => {
+          requests += 1;
+          if (requests === 1) throw refused;
+          return { ok: true };
+        },
+        bootTimeMs: () => Date.now() - 30_000,
+        signalProcess: () => assert.fail('the socket re-probe must settle a concurrent restart'),
+      });
+
+      assert.equal(requests, 2);
+      assert.equal(result.verdict, 'live');
+      assert.equal(result.reason, 'host-socket-reachable');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   test('does not report exit when a replacement host appears during the probe', async () => {

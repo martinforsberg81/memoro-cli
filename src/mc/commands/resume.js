@@ -1748,6 +1748,21 @@ export async function inspectLocalBrokerSessionForEntry(entry, {
         reason: hostRuntime.reason || 'host-process-exited',
       };
     }
+    // A live journal with a REACHABLE host that provably does not host the
+    // session (e.g. the host was restarted after a machine crash) is positive
+    // exit evidence: the host owns this session's socket namespace, so an
+    // authoritative empty listing means the recorded runtime is gone.
+    if (hostRuntime?.verdict === 'live'
+      && hostRuntime.hosts_expected_session === false) {
+      return {
+        verdict: 'exited',
+        session: null,
+        runtime_generation: nonEmpty(lifecycle.record?.runtime_generation),
+        lifecycle,
+        host_runtime: hostRuntime,
+        reason: 'host-session-absent',
+      };
+    }
     return {
       verdict: 'unreachable',
       session: null,
