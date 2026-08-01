@@ -952,6 +952,66 @@ describe('BrokerRuntime', () => {
     assert.deepEqual(fake.ptys[0].kills, ['SIGTERM']);
   });
 
+  test('a provider that publishes its artifact after delivery is still confirmed', async () => {
+    // Claude Code cannot be observed on the filesystem — its artifact adapter
+    // says so outright — so it publishes only from its own SessionStart hook,
+    // which lands after the handoff message. Demanding the artifact at the
+    // exact delivery boundary made every switch to Claude fail closed.
+    const codingSessionId = 'sess_handoff_late_artifact';
+    const root = deriveHandoffControllerRoot({
+      token: testControllerToken,
+      codingSessionId,
+    });
+    const transactionId = '73a85b7e-2ce4-4db0-8b38-16ba08de03bf';
+    const runtimeGeneration = '9937ac60-46ce-42dd-9302-6533f1c6c38c';
+    let journal = {
+      transaction_id: transactionId,
+      phase: 'target_launch_started',
+      target_tool: 'claude-code',
+      controller_capability_digest: handoffControllerDigest,
+      target_message_digest: '7a62bca86c85e878c0682777149684546b6416d5c29cc16851401d4959cf37cf',
+      target_runtime_generation: null,
+    };
+    const { runtime } = makeRuntime({
+      handoffSwitchReader: () => ({
+        kind: 'present',
+        journal: authenticatedJournal(journal, root),
+      }),
+      handoffSwitchAdvance: (input) => {
+        journal = { ...journal, ...input.patch, phase: input.nextPhase };
+        return { ok: true, journal: authenticatedJournal(journal, root) };
+      },
+    });
+
+    const launching = runtime.handle({
+      type: 'launch_session',
+      session: {
+        id: codingSessionId,
+        tool: 'claude',
+        runtime_generation: runtimeGeneration,
+        launch_options: { handoffUserMessage: 'bounded handoff' },
+        handoff_transaction: {
+          transaction_id: transactionId,
+          controller_capability: handoffControllerCapability,
+        },
+      },
+    });
+    runtime.manager.get(codingSessionId).handoffMessageController.sendNow();
+    // The hook publishes only after the delivery boundary has already passed.
+    setTimeout(() => {
+      runtime.sessionMetadata.get(codingSessionId).provider_artifact = {
+        coding_session_id: codingSessionId,
+        runtime_generation: runtimeGeneration,
+        tool: 'claude-code',
+      };
+    }, 400);
+
+    const result = await launching;
+    assert.equal(result.ok, true, 'a late provider artifact must still confirm delivery');
+    assert.equal(result.handoff_delivery, 'confirmed');
+    assert.equal(journal.phase, 'delivery_acknowledged');
+  });
+
   test('handoff journal mutation requires controller authority never inherited by the provider', () => {
     const codingSessionId = 'sess_handoff_authority';
     const transactionId = '73a85b7e-2ce4-4db0-8b38-16ba08de03bf';

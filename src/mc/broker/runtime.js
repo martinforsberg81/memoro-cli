@@ -54,6 +54,13 @@ import {
 // network call cannot race the mandatory local cleanup timeout.
 const TERMINAL_PRESENCE_TIMEOUT_MS = 10_000;
 const HANDOFF_DELIVERY_TIMEOUT_MS = 45_000;
+// How long a provider may take to publish its own artifact after the handoff
+// message lands. Claude Code boots, then runs its SessionStart hooks, so its
+// push arrives seconds after delivery; Codex writes its session file and is
+// picked up by the observer immediately. Bounded so a provider that never
+// publishes still fails closed.
+const HANDOFF_ARTIFACT_WINDOW_MS = 30_000;
+const HANDOFF_ARTIFACT_POLL_MS = 250;
 const MAX_HANDOFF_MESSAGE_BYTES = 16 * 1024;
 const BROKER_PROVIDER_ARTIFACT_CONTEXT_SCHEMA = 'mc-broker-provider-artifact-context/v1';
 const MANAGED_PRESENCE_ID_RE = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/;
@@ -889,8 +896,15 @@ export class BrokerRuntime {
         // file without another PTY frame. Observe once at this exact boundary
         // before requiring the handoff artifact.
         this._observeProviderArtifact(id, ownedSession);
-        const acknowledged = this._acknowledgeHandoffDelivery({
+        // A provider whose artifact adapter cannot observe the filesystem —
+        // Claude Code — publishes only from its own SessionStart hook, which
+        // races the end of the delivery window. Give that push a bounded
+        // window instead of demanding it be already present: this waits for
+        // evidence the provider itself must supply and invents nothing, so a
+        // provider that never publishes still fails closed on the deadline.
+        const acknowledged = await this._awaitHandoffDeliveryAcknowledgement({
           id,
+          ownedSession,
           transaction: handoffTransaction,
         });
         if (acknowledged.ok) {
@@ -1429,6 +1443,29 @@ export class BrokerRuntime {
           reason: advanced.reason || 'handoff-target-generation-unconfirmed',
           error: 'handoff target generation was not journaled',
         };
+  }
+
+  /**
+   * Acknowledge delivery, allowing a bounded window for a provider that
+   * publishes its artifact from its own hook rather than to the filesystem.
+   * Every attempt runs the exact same acknowledgement check, so the deadline
+   * only decides how long we wait for the provider's own evidence — never
+   * what counts as proof.
+   */
+  async _awaitHandoffDeliveryAcknowledgement({ id, ownedSession, transaction } = {}) {
+    const deadline = runtimeNowMs(this.clock) + HANDOFF_ARTIFACT_WINDOW_MS;
+    let acknowledged = this._acknowledgeHandoffDelivery({ id, transaction });
+    while (!acknowledged.ok
+      && acknowledged.reason === 'handoff-target-artifact-unconfirmed'
+      && runtimeNowMs(this.clock) < deadline) {
+      await new Promise((resolve) => { setTimeout(resolve, HANDOFF_ARTIFACT_POLL_MS).unref?.(); });
+      // The session may have exited while we waited; stop rather than hold a
+      // dead session open until the deadline.
+      if (this.manager.get(id) !== ownedSession) break;
+      this._observeProviderArtifact(id, ownedSession);
+      acknowledged = this._acknowledgeHandoffDelivery({ id, transaction });
+    }
+    return acknowledged;
   }
 
   _acknowledgeHandoffDelivery({ id, transaction } = {}) {
@@ -2224,6 +2261,14 @@ function normalizePathForMatch(value) {
     out = out.slice('/private'.length);
   }
   return out;
+}
+
+function runtimeNowMs(clock) {
+  const value = typeof clock === 'function'
+    ? clock()
+    : (typeof clock?.now === 'function' ? clock.now() : Date.now());
+  const parsed = typeof value === 'number' ? value : Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : Date.now();
 }
 
 function runtimeObservedAt(clock) {
