@@ -8,6 +8,7 @@ import {
   ensureBrokerRunning,
   isRetryableCodexSqliteStartupFailure,
   launchBrokerOwnedSession as launchBrokerOwnedSessionImpl,
+  managedBoundaryRemedy,
   registerGitHubSessionProjection,
 } from '../../../src/mc/broker/launch-client.js';
 import { BROKER_PROTOCOL_VERSION } from '../../../src/mc/broker/daemon.js';
@@ -2096,4 +2097,30 @@ describe('brokerSessionPaths', () => {
       else process.env.MC_HOME = old;
     }
   });
+});
+
+test('a refused managed launch always names the command that opens the session', () => {
+  // The session and its worktree already exist when the boundary is refused,
+  // so the user must never be left without a next step.
+  const remedy = managedBoundaryRemedy({
+    sessionName: 'mc-test-claude',
+    codingSessionId: 'sess_abcdef',
+  });
+  assert.match(remedy, /mc open mc-test-claude --native/);
+
+  // Falls back through label to the coding session id, and never renders an
+  // empty or undefined target.
+  assert.match(
+    managedBoundaryRemedy({ label: 'from-label', codingSessionId: 'sess_abcdef' }),
+    /mc open from-label --native/,
+  );
+  assert.match(
+    managedBoundaryRemedy({ codingSessionId: 'sess_abcdef' }),
+    /mc open sess_abcdef --native/,
+  );
+  for (const input of [{}, { sessionName: '   ' }, { sessionName: null, label: '' }]) {
+    const fallback = managedBoundaryRemedy(input);
+    assert.match(fallback, /--native/);
+    assert.doesNotMatch(fallback, /undefined|null|mc open\s+--native/);
+  }
 });
