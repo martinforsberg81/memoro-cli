@@ -318,6 +318,123 @@ test('managed source handoff uses terminal archive proof instead of a transcript
   });
 });
 
+test('a complete journal for the requested target replays the lost flip instead of a new switch', async () => {
+  const entry = sourceEntry();
+  const broker = makeBroker();
+  broker.journal = {
+    transaction_id: transactionId,
+    phase: 'complete',
+    target_tool: 'codex',
+    target_custody: 'native',
+    controller_root_digest: controllerRootDigest,
+  };
+
+  const result = await prepareProviderSwitch({
+    entry,
+    targetTool: resolveToolInput('codex'),
+    localPresence: { verdict: 'exited', session: null },
+    deps: {
+      requestBroker: async (message) => broker.request(message),
+      sessionHostPaths: () => ({
+        socketPath: '/private/hosts/sess_switch1/broker.sock',
+        handoffSwitchPath: '/private/hosts/sess_switch1/handoff-switch.json',
+      }),
+      mcHome: () => '/private',
+      readHandoffSwitchJournalSync: () => ({ kind: 'absent' }),
+      readConfig: async () => ({ apiUrl: 'https://meetmemoro.test' }),
+      getApiUrl: () => null,
+      resolveBootstrapIdentity: async () => ({
+        token: 'token-in-memory',
+        apiUrl: 'https://meetmemoro.test',
+      }),
+      getRepoContext: async () => assert.fail('a completed switch must not re-seal the workspace'),
+      fetchStrictHandoffContext: async () => assert.fail('a completed switch must not refetch context'),
+    },
+  });
+
+  assert.deepEqual(result, { ok: true, alreadyComplete: true });
+});
+
+test('a complete journal with the other custody names the recorded custody instead of replaying', async () => {
+  const entry = sourceEntry();
+  const broker = makeBroker();
+  broker.journal = {
+    transaction_id: transactionId,
+    phase: 'complete',
+    target_tool: 'codex',
+    target_custody: 'managed',
+    controller_root_digest: controllerRootDigest,
+  };
+
+  const result = await prepareProviderSwitch({
+    entry,
+    targetTool: resolveToolInput('codex'),
+    targetCustody: 'native',
+    localPresence: { verdict: 'exited', session: null },
+    deps: {
+      requestBroker: async (message) => broker.request(message),
+      sessionHostPaths: () => ({
+        socketPath: '/private/hosts/sess_switch1/broker.sock',
+        handoffSwitchPath: '/private/hosts/sess_switch1/handoff-switch.json',
+      }),
+      mcHome: () => '/private',
+      readHandoffSwitchJournalSync: () => ({ kind: 'absent' }),
+      readConfig: async () => ({ apiUrl: 'https://meetmemoro.test' }),
+      getApiUrl: () => null,
+      resolveBootstrapIdentity: async () => ({
+        token: 'token-in-memory',
+        apiUrl: 'https://meetmemoro.test',
+      }),
+    },
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.code, 'handoff-target-custody-conflict');
+  assert.equal(result.recordedCustody, 'managed');
+});
+
+test('a complete journal for a different target still requires fresh source proof', async () => {
+  const entry = sourceEntry();
+  entry.tool = 'codex';
+  const broker = makeBroker();
+  broker.journal = {
+    transaction_id: transactionId,
+    phase: 'complete',
+    target_tool: 'codex',
+    target_custody: 'native',
+    controller_root_digest: controllerRootDigest,
+  };
+
+  const result = await prepareProviderSwitch({
+    entry,
+    targetTool: resolveToolInput('claude'),
+    localPresence: { verdict: 'unknown', session: null },
+    deps: {
+      requestBroker: async (message) => broker.request(message),
+      sessionHostPaths: () => ({
+        socketPath: '/private/hosts/sess_switch1/broker.sock',
+        handoffSwitchPath: '/private/hosts/sess_switch1/handoff-switch.json',
+      }),
+      mcHome: () => '/private',
+      readHandoffSwitchJournalSync: () => ({ kind: 'absent' }),
+      readConfig: async () => ({ apiUrl: 'https://meetmemoro.test' }),
+      getApiUrl: () => null,
+      resolveBootstrapIdentity: async () => ({
+        token: 'token-in-memory',
+        apiUrl: 'https://meetmemoro.test',
+      }),
+      getRepoContext: async () => ({
+        toplevel: '/repo',
+        branch: 'sess/handoff',
+        remoteUrl: '/repo',
+      }),
+    },
+  });
+
+  assert.equal(result.ok, false);
+  assert.match(result.code, /^handoff-source-.*-unconfirmed$/);
+});
+
 test('delivery commits only the target cursor after broker acknowledgement', async () => {
   const entry = sourceEntry();
   let registryEntry = entry;

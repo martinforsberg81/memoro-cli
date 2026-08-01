@@ -139,6 +139,24 @@ export async function prepareProviderSwitch({
       deps,
     });
   }
+  if (existing.journal && existing.journal.phase === 'complete'
+    && resolveToolInput(existing.journal.target_tool)?.id === targetTool?.id) {
+    // The switch this open would begin already completed — the journal is
+    // single-writer truth and its recorded target is exactly the requested
+    // tool, so only the registry tool flip was lost (e.g. a crash between
+    // delivery commit and the registry write). There is nothing left to
+    // seal or confirm; demanding fresh source-runtime proof here dead-ends
+    // the session forever. Report completion so the caller persists the
+    // flip and resumes the already-delivered target provider session.
+    const journalCustody = existing.journal.target_custody || 'native';
+    if (journalCustody !== targetCustody) {
+      return {
+        ...failure('handoff-target-custody-conflict'),
+        recordedCustody: journalCustody,
+      };
+    }
+    return { ok: true, alreadyComplete: true };
+  }
   const repoContext = await (deps.getRepoContext || getRepoContext)(entry.worktree_path);
   if (!repoContext) return failure('handoff-workspace-unavailable');
   if (localPresence?.verdict !== 'exited'
