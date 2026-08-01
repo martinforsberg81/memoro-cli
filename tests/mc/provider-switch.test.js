@@ -1307,3 +1307,92 @@ test('Claude A to Codex B to Claude A to Codex B reuses native IDs and delivers 
     3,
   );
 });
+
+test('a stalled switch re-seals the source before every handoff attempt', async () => {
+  // The server proves terminality from a heartbeat with a TTL. A switch that
+  // stalls past it — a refused handoff, a closed laptop — must still recover;
+  // before this, the fence was published only while leaving 'prepared', so the
+  // seal aged out and the switch was wedged permanently.
+  const entry = sourceEntry();
+  entry.tool = 'claude';
+  const journal = {
+    coding_session_id: entry.coding_session_id,
+    transaction_id: transactionId,
+    phase: 'source_terminal_confirmed',
+    target_tool: 'codex',
+    target_custody: 'native',
+    controller_root_digest: controllerRootDigest,
+    controller_capability_digest: controllerCapabilityDigest,
+    source_cursor: 0,
+    target_cursor: 0,
+    handoff: buildHandoff({
+      codingSessionId: entry.coding_session_id,
+      sequence: 1,
+      parentDigest: null,
+      source: {
+        kind: 'local',
+        id: 'device:laptop',
+        tool: 'claude-code',
+        runtimeGeneration: sourceGeneration,
+      },
+      workspace: {
+        anchor: { repoId: 'repo_memoro', ref: '1'.repeat(40), branch: 'sess/handoff' },
+        digest: 'c'.repeat(64),
+      },
+      content: { goal: 'Build the causal provider switch.', state: 'Clean.' },
+    }).handoff,
+    persisted: null,
+    target_latest_sequence: null,
+    target_runtime_generation: null,
+  };
+
+  const order = [];
+  await recoverProviderSwitch({
+    entry,
+    localPresence: { verdict: 'exited', runtime_generation: sourceGeneration, session: null },
+    deps: {
+      requestBroker: async (message) => {
+        if (message.type === 'handoff_switch_advance') {
+          journal.phase = message.next_phase;
+          Object.assign(journal, message.patch || {});
+          return { ok: true, journal };
+        }
+        return { ok: true, journal };
+      },
+      sessionHostPaths: () => ({
+        socketPath: '/private/hosts/sess_switch1/broker.sock',
+        handoffSwitchPath: '/private/hosts/sess_switch1/handoff-switch.json',
+      }),
+      mcHome: () => '/private',
+      readHandoffSwitchJournalSync: () => ({ kind: 'present', journal }),
+      ensureSessionHostRunning: async () => ({ ok: true }),
+      readConfig: async () => ({ apiUrl: 'https://meetmemoro.test' }),
+      getApiUrl: () => null,
+      resolveBootstrapIdentity: async () => ({
+        token: 'token-in-memory',
+        apiUrl: 'https://meetmemoro.test',
+      }),
+      getRepoContext: async () => ({
+        repoId: 'repo_memoro',
+        ref: '1'.repeat(40),
+        branch: 'sess/handoff',
+        remoteUrl: 'git@github.com:martinforsberg81/memoro.git',
+      }),
+      postHeartbeatWithRetry: async ({ payload }) => {
+        order.push(`fence:${payload.presence_state}:${payload.runtime_generation}`);
+        return true;
+      },
+      persistSessionHandoff: async () => {
+        order.push('handoff');
+        return { ok: true, sequence: 1, digest: serverDigest, duplicate: false };
+      },
+    },
+  });
+
+  // Whatever else the recovery does, the seal must be restated and it must
+  // happen before the handoff is offered to the server.
+  const fence = order.indexOf(`fence:terminal:${sourceGeneration}`);
+  const post = order.indexOf('handoff');
+  assert.notEqual(fence, -1, 'the terminal fence must be re-published on a resumed switch');
+  if (post !== -1) assert.ok(fence < post, 'the fence must precede the handoff post');
+});
