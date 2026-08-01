@@ -782,6 +782,7 @@ async function continueProviderSwitch({
   deps,
 }) {
   let current = journal;
+  let fencePublished = false;
   if (current.phase === 'prepared') {
     const removed = await brokerRequest({
       type: 'remove_session',
@@ -797,6 +798,7 @@ async function continueProviderSwitch({
       deps,
     });
     if (!sealed.ok) return sealed;
+    fencePublished = true;
     const advanced = await advance(brokerRequest, {
       id: entry.coding_session_id,
       transactionId: current.transaction_id,
@@ -808,6 +810,25 @@ async function continueProviderSwitch({
     current = advanced.journal;
   }
   if (current.phase === 'source_terminal_confirmed') {
+    // The server proves terminality from a heartbeat that expires. The journal
+    // phase records that we established it once; it cannot keep it true. A
+    // switch that stalls past the heartbeat TTL — a rejected handoff, an
+    // offline laptop — would otherwise be wedged forever, because the fence is
+    // only published while leaving 'prepared' and this phase never returns
+    // there. Re-publish before every attempt: the source generation is already
+    // terminal, so restating it is idempotent and cannot revive the provider.
+    if (!fencePublished) {
+      const resealed = await publishTerminalFence({
+        entry,
+        sourceTool,
+        sourceSession,
+        repoContext,
+        auth,
+        deps,
+      });
+      if (!resealed.ok) return resealed;
+      fencePublished = true;
+    }
     const persisted = await (deps.persistSessionHandoff || persistSessionHandoff)({
       apiUrl: auth.apiUrl,
       token: auth.token,
