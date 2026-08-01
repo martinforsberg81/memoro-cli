@@ -204,11 +204,43 @@ describe('github-op-v1 codecs', () => {
       'checks.list': 'read',
       'pull_request.create': 'write',
       'pull_request.update': 'write',
+      'pull_request.merge': 'write',
     });
     assert.deepEqual(GITHUB_WRITE_OPERATIONS, [
       'pull_request.create',
       'pull_request.update',
+      'pull_request.merge',
     ]);
+  });
+
+  test('normalizes exact provider-neutral PR merge requests', () => {
+    const encoded = encodeGitHubOperationRequest({
+      requestId: 'request_merge_ok',
+      operation: 'pull_request.merge',
+      params: {
+        pull_number: 7,
+        merge_method: 'squash',
+        expected_head_sha: 'C'.repeat(40),
+      },
+    });
+    assert.deepEqual(encoded.params, {
+      pull_number: 7,
+      merge_method: 'squash',
+      expected_head_sha: 'c'.repeat(40),
+    });
+
+    for (const params of [
+      { pull_number: 7, merge_method: 'fast-forward', expected_head_sha: 'c'.repeat(40) },
+      { pull_number: 7, merge_method: 'merge' },
+      { pull_number: 7, merge_method: 'merge', expected_head_sha: 'nope' },
+      { pull_number: 7, merge_method: 'merge', expected_head_sha: 'c'.repeat(40), commit_title: 'x' },
+    ]) {
+      assert.throws(() => encodeGitHubOperationRequest({
+        requestId: 'request_merge_bad',
+        operation: 'pull_request.merge',
+        params,
+      }));
+    }
   });
 
   test('normalizes every read operation to the shared schema', () => {

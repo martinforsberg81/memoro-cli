@@ -75,6 +75,29 @@ export async function executeGitHubWriteCommand(parsed, deps = {}) {
     });
   }
 
+  if (parsed.operation === 'pull_request.merge') {
+    // Bind the merge to the exact head observed NOW; the control plane
+    // forwards it as GitHub's `sha` precondition, so a head that moves in
+    // between fails as stale_head instead of merging the wrong commits.
+    const current = await execute({
+      operation: 'pull_request.view',
+      params: { pull_number: parsed.params.pull_number },
+      requestId: makeRequestId(),
+    });
+    if (!current?.ok) return current || localFailure('unavailable');
+    const expectedHead = sha(current.data?.head?.sha);
+    if (!expectedHead) return localFailure('stale_state');
+    return executeWriteWithRetry(execute, {
+      operation: parsed.operation,
+      params: {
+        pull_number: parsed.params.pull_number,
+        merge_method: parsed.params.merge_method,
+        expected_head_sha: expectedHead,
+      },
+      requestId: makeRequestId(),
+    });
+  }
+
   return localFailure('operation_not_allowed');
 }
 

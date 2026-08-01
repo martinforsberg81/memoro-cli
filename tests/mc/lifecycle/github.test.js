@@ -217,7 +217,7 @@ describe('mc github read operations', () => {
   test('rejects write, repository selection, and unknown flags before broker access', async () => {
     const cases = [
       ['pr', 'create'],
-      ['pr', 'merge', '7'],
+      ['pr', 'merge', '7', '--admin'],
       ['pr', 'list', '--repo', 'acme/other'],
       ['pr', 'view'],
       ['pr', 'checks', '7', '--watch'],

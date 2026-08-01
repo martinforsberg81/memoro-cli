@@ -43,6 +43,7 @@ export const GITHUB_OPERATION_EFFECTS = Object.freeze({
   'checks.list': 'read',
   'pull_request.create': 'write',
   'pull_request.update': 'write',
+  'pull_request.merge': 'write',
 });
 
 export const GITHUB_READ_OPERATIONS = Object.freeze(
@@ -456,6 +457,26 @@ function operationParams(operation, params) {
     }
     if (mutations === 0) invalid('GitHub pull request update requires one mutation.');
     return normalized;
+  }
+  if (operation === 'pull_request.merge') {
+    exactObject(params, [
+      'pull_number',
+      'merge_method',
+      'expected_head_sha',
+    ], 'GitHub pull request merge params');
+    if (!Number.isSafeInteger(params.pull_number) || params.pull_number < 1) {
+      invalid('GitHub pull request number is invalid.');
+    }
+    if (!['merge', 'squash', 'rebase'].includes(params.merge_method)) {
+      invalid('GitHub pull request merge method is invalid.');
+    }
+    const expectedHead = sha(params.expected_head_sha);
+    if (!expectedHead) invalid('GitHub pull request merge preconditions are invalid.');
+    return {
+      pull_number: params.pull_number,
+      merge_method: params.merge_method,
+      expected_head_sha: expectedHead,
+    };
   }
   exactObject(params, ['pull_number'], 'GitHub pull request params');
   if (!Number.isSafeInteger(params.pull_number) || params.pull_number < 1) {
