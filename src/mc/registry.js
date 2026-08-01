@@ -177,6 +177,13 @@ export function resolveEntry(identifier, {
   repositoryId = null,
   registry = readRegistry(),
   repositoryResolver = resolveRepositoryIdentity,
+  // Lifecycle commands that OPERATE ON an existing session (open/end)
+  // pass true: a name that is unique across every repository resolves
+  // even from the wrong cwd — mc list shows all sessions, so acting on
+  // them must not require standing in the right directory. Commands
+  // that CREATE sessions (new) keep the repo-scoped default so the same
+  // name may exist in different repositories.
+  fallbackGlobal = false,
 } = {}) {
   const entries = Array.isArray(registry?.entries) ? registry.entries : [];
   const value = typeof identifier === 'object' && identifier
@@ -208,6 +215,9 @@ export function resolveEntry(identifier, {
       return lookupSuccess(legacy[0], 'unique-legacy-name', { legacy: true });
     }
     if (legacy.length > 0) return lookupFailure('ambiguous-legacy-session', { candidates: byName });
+    if (fallbackGlobal && byName.length === 1) {
+      return lookupSuccess(byName[0], 'unique-global-name', { crossRepository: true });
+    }
     return lookupFailure('repository-mismatch', { candidates: byName });
   }
 
@@ -222,6 +232,9 @@ export function resolveEntry(identifier, {
   if (!byName[0]?.repository_id) {
     return lookupSuccess(byName[0], 'unique-legacy-name', { legacy: true });
   }
+  if (fallbackGlobal) {
+    return lookupSuccess(byName[0], 'unique-global-name', { crossRepository: true });
+  }
   return lookupFailure('repository-context-required', { candidates: byName });
 }
 
@@ -234,16 +247,32 @@ export function formatEntryResolutionError(identifier, result) {
   const quoted = `"${String(identifier)}"`;
   switch (result?.reason) {
     case 'ambiguous-session-name':
-      return `session ${quoted} exists in more than one repository; run the command inside the intended repository or use its opaque session_id`;
+      return `session ${quoted} exists in more than one repository; use its opaque session_id:${formatCandidateLines(result)}`;
     case 'ambiguous-legacy-session':
-      return `legacy session ${quoted} is ambiguous; registry state was preserved and must be qualified before it can be used`;
+      return `legacy session ${quoted} is ambiguous; use its opaque session_id:${formatCandidateLines(result)}`;
     case 'repository-context-required':
-      return `session ${quoted} is repository-scoped; run the command inside its repository or use its opaque session_id`;
+      return `session ${quoted} is repository-scoped; run the command inside its repository or use its opaque session_id${formatCandidateLines(result)}`;
     case 'repository-mismatch':
-      return `no session ${quoted} exists in the current repository`;
+      return `no session ${quoted} exists in the current repository${formatCandidateLines(result)}`;
     default:
       return `no such session ${quoted}`;
   }
+}
+
+/**
+ * An error that says "use the session_id" must SHOW the session_ids —
+ * they appear nowhere else in normal output. One line per candidate.
+ */
+function formatCandidateLines(result) {
+  const candidates = Array.isArray(result?.candidates) ? result.candidates : [];
+  if (candidates.length === 0) return '';
+  return candidates.map((entry) => {
+    const repo = entry?.repository_identity?.canonical
+      || entry?.repo_slug
+      || (entry?.repository_id ? entry.repository_id : 'no repository');
+    const where = entry?.worktree_path || 'no worktree';
+    return `\n  ${entry?.session_id || '(no session_id)'}  repo=${repo}  state=${entry?.session_state || '?'}  ${where}`;
+  }).join('');
 }
 
 export function upsertEntry(patch, { cwd = process.cwd(), repositoryResolver = resolveRepositoryIdentity } = {}) {

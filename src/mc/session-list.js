@@ -389,6 +389,7 @@ function renderSessionListTable({
       number: `${entry.number}.`,
       session: entry.name || '',
       tool: entry.tool || '',
+      repository: localEntryRepo(entry),
       branch: entry.branch || '',
       status: entry.session_state || 'no-session-yet',
       id: entry.coding_session_id || '',
@@ -416,11 +417,26 @@ function localTableColumns() {
   return [
     tableColumn('number', '#', 3, 3),
     tableColumn('session', 'Session', 16, 30, { grow: 2 }),
-    tableColumn('tool', 'Tool', 6, 10, { optional: true, dropOrder: 1 }),
-    tableColumn('branch', 'Branch', 12, 28, { optional: true, dropOrder: 2, grow: 1 }),
+    tableColumn('tool', 'Tool', 6, 10, { optional: true, dropOrder: 2 }),
+    tableColumn('repository', 'Repository', 10, 14, { optional: true, dropOrder: 1 }),
+    tableColumn('branch', 'Branch', 12, 28, { optional: true, dropOrder: 3, grow: 1 }),
     tableColumn('status', 'Status', 8, 16),
     tableColumn('id', 'mc-id', 12, 24, { grow: 3, accent: true }),
   ];
+}
+
+/**
+ * Sessions are repository-scoped, so the list must say WHICH repository
+ * each row belongs to — without it, cross-repo duplicates are
+ * indistinguishable and the "run inside the repository" errors point
+ * nowhere.
+ */
+function localEntryRepo(entry) {
+  const canonical = entry?.repository_identity?.canonical;
+  if (typeof canonical === 'string' && canonical.includes('/')) {
+    return canonical.split('/').pop();
+  }
+  return entry?.repo_slug || (entry?.repository_id ? 'local-repo' : '');
 }
 
 function tableColumn(key, label, minWidth, maxWidth, options = {}) {

@@ -670,9 +670,15 @@ function printPruneTranscripts(out, result) {
     bucket.bytes += item.bytes;
   }
   const status = result ? 'pruned' : 'would prune';
+  // A prune must be reviewable before it is applied: name every file, not
+  // just a count. Sorted largest-first by the plan builder.
+  for (const item of candidates) {
+    const ageDays = Math.floor((item.age_ms || 0) / 86_400_000);
+    process.stdout.write(`${status}  ${formatMb(item.bytes).padStart(8)}  ${String(ageDays).padStart(3)}d  ${item.source.padEnd(6)}  ${item.path}\n`);
+  }
   for (const [source, stats] of Object.entries(bySource)) {
     if (!stats.n) continue;
-    process.stdout.write(`${status}  ${source}: ${stats.n} transcript${stats.n === 1 ? '' : 's'}  (${formatMb(stats.bytes)})\n`);
+    process.stdout.write(`total  ${source}: ${stats.n} transcript${stats.n === 1 ? '' : 's'}  (${formatMb(stats.bytes)})\n`);
   }
   process.stdout.write(`kept: ${kept.protected ?? 0} protected (resumable or live), ${kept.recent ?? 0} recent\n`);
   if (result?.errors?.length) {

@@ -118,6 +118,46 @@ describe('session-owned mc artifacts', () => {
     assert.equal(existsSync(host), false);
   });
 
+  test('removes a dead host whose socket never answers and whose pid file is gone', async () => {
+    const entry = { name: 'dead-socket', coding_session_id: 'sess_dead_socket' };
+    const host = join(root, 'hosts', 'sess_dead_socket');
+    mkdirSync(host, { recursive: true });
+    writeFileSync(join(host, 'broker.sock'), '');
+    let probes = 0;
+
+    const result = await removeSessionOwnedRuntimeArtifacts(entry, {
+      isAlive: () => assert.fail('no pid exists to check'),
+      kill: () => assert.fail('no pid exists to stop'),
+      requestBroker: async () => {
+        probes += 1;
+        throw new Error('connection refused');
+      },
+      sleep: async () => {},
+    });
+
+    assert.equal(result.ok, true, JSON.stringify(result.issues));
+    assert.equal(probes, 2);
+    assert.equal(existsSync(host), false);
+  });
+
+  test('a host that answers without naming its pid stays fail-closed', async () => {
+    const entry = { name: 'coy-host', coding_session_id: 'sess_coy_host' };
+    const host = join(root, 'hosts', 'sess_coy_host');
+    mkdirSync(host, { recursive: true });
+    writeFileSync(join(host, 'broker.sock'), '');
+
+    const result = await removeSessionOwnedRuntimeArtifacts(entry, {
+      isAlive: () => false,
+      kill: () => true,
+      requestBroker: async () => ({ ok: true, broker: {} }),
+      sleep: async () => {},
+    });
+
+    assert.equal(result.ok, false);
+    assert.equal(result.issues[0].code, 'broker-host-pid-unverified');
+    assert.equal(existsSync(host), true);
+  });
+
   test('revalidates host identity immediately before rm after async stop work', async () => {
     const entry = { name: 'late-swap', coding_session_id: 'sess_late_swap' };
     const host = join(root, 'hosts', 'sess_late_swap');

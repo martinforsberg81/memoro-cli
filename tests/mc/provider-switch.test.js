@@ -1069,6 +1069,53 @@ test('an interrupted target write remains explicit and is never replayed automat
   );
 });
 
+test('a journal conflict from the wrong --tool flag names the recorded target', async () => {
+  const entry = sourceEntry();
+  const broker = makeBroker();
+  broker.journal = {
+    transaction_id: transactionId,
+    coding_session_id: entry.coding_session_id,
+    phase: 'target_launch_started',
+    target_tool: 'codex',
+    target_custody: 'native',
+    controller_root_digest: controllerRootDigest,
+    controller_capability_digest: controllerCapabilityDigest,
+    source_cursor: 0,
+    target_cursor: 0,
+    handoff: {
+      source: {
+        kind: 'local',
+        tool: 'claude-code',
+        id: 'device:laptop',
+        runtime_generation: sourceGeneration,
+      },
+    },
+    persisted: { sequence: 1, digest: serverDigest },
+    target_latest_sequence: 1,
+    target_runtime_generation: targetGeneration,
+  };
+  // The user retries with --claude, but the journal's target is codex.
+  const result = await recoverProviderSwitch({
+    entry,
+    targetTool: resolveToolInput('claude'),
+    localPresence: { verdict: 'exited', runtime_generation: sourceGeneration, session: null },
+    deps: {
+      brokerRequest: broker.request,
+      readConfig: async () => ({ apiUrl: 'https://meetmemoro.test' }),
+      getApiUrl: () => null,
+      resolveBootstrapIdentity: async () => ({
+        token: 'token-in-memory',
+        apiUrl: 'https://meetmemoro.test',
+      }),
+    },
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.code, 'handoff-switch-journal-conflict');
+  assert.equal(result.recordedTargetTool, 'codex');
+  assert.equal(result.recordedCustody, 'native');
+});
+
 test('a provably dead, artifact-less target launch re-arms and re-delivers the handoff', async () => {
   const entry = sourceEntry();
   const broker = makeBroker();

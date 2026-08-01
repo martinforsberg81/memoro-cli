@@ -132,7 +132,7 @@ export async function run(rawArgv, deps = {}) {
   }
   const resolvedEntry = deps.findEntry
     ? injectedLookup(opts.name, deps.findEntry)
-    : resolveEntry(opts.name, { cwd: deps.cwd || process.cwd() });
+    : resolveEntry(opts.name, { cwd: deps.cwd || process.cwd(), fallbackGlobal: true });
   let entry = resolvedEntry.entry;
   if (!resolvedEntry.ok) {
     stderr.write(`mc: ${formatEntryResolutionError(opts.name, resolvedEntry)}\n`);
@@ -1998,6 +1998,11 @@ function normalizePathForMatch(value) {
  * the fix is always to retry with the recorded one.
  */
 function handoffRecoveryRemedy(recovery) {
+  if (recovery?.code === 'handoff-switch-journal-conflict'
+    && recovery.recordedTargetTool) {
+    const nativeFlag = recovery.recordedCustody === 'native' ? ' --native' : '';
+    return `mc: the interrupted switch targets ${recovery.recordedTargetTool} — retry with \`--${recovery.recordedTargetTool}${nativeFlag}\`.\n`;
+  }
   if (recovery?.code !== 'handoff-target-custody-conflict') return null;
   if (recovery.recordedCustody === 'native') {
     return 'mc: the interrupted switch targets the tool\'s own sign-in — retry with `--native`.\n';

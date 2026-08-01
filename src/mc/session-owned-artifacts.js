@@ -141,7 +141,9 @@ export async function removeSessionOwnedRuntimeArtifacts(entry, {
       if (!pid && socketPresent) {
         status = await readHostStatus(paths.host_socket, requestBroker);
         pid = verifiedBrokerPid(status);
-        if (!pid) {
+        if (!pid && status?.ok === true) {
+          // The host ANSWERED but would not name its pid — genuinely
+          // ambiguous, stay fail-closed.
           return {
             ok: false,
             removed,
@@ -151,6 +153,27 @@ export async function removeSessionOwnedRuntimeArtifacts(entry, {
               pid: null,
             }],
           };
+        }
+        if (!pid) {
+          // No pid file and a socket that refuses to answer. Probe once
+          // more; a second silent refusal is the same dead-host
+          // conclusion `mc storage repair` draws from its own probe —
+          // there is no live broker to stop, only litter to remove.
+          // (This was the `broker-host-pid-unverified` deadlock from
+          // docs/incidents/2026-07-26.)
+          const retry = await readHostStatus(paths.host_socket, requestBroker);
+          pid = verifiedBrokerPid(retry);
+          if (!pid && retry?.ok === true) {
+            return {
+              ok: false,
+              removed,
+              issues: [{
+                code: 'broker-host-pid-unverified',
+                path: paths.host_dir,
+                pid: null,
+              }],
+            };
+          }
         }
       }
       if (pid && isAlive(pid)) {
