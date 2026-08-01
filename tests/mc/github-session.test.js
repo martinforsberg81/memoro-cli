@@ -13,7 +13,7 @@ import {
   fetchGitHubSessionCapabilities,
   prepareGitHubSessionForLaunch,
   renderGitHubSessionMarkdown,
-} from '../../src/mc/github-session.js';
+} from '../../src/capabilities/github/github-session.js';
 
 const REPOSITORY = Object.freeze({
   id: 301,

@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, test } from 'node:test';
 
-import { resolveGitHubCreateContext } from '../../src/mc/github-write-client.js';
+import { resolveGitHubCreateContext } from '../../src/capabilities/github/github-write-client.js';
 
 describe('GitHub write client local preconditions', () => {
   test('reads exact preconditions from a real session worktree shape', async (t) => {

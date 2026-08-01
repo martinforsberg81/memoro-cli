@@ -20,12 +20,12 @@ import { createServer as createHttpServer } from 'node:http';
 import { createServer as createNetServer } from 'node:net';
 import { fileURLToPath } from 'node:url';
 import { spawn, spawnSync } from 'node:child_process';
-import { verifyInstalledClaudeC1Artifacts } from '../../src/mc/broker/c1-artifacts.js';
+import { verifyInstalledClaudeC1Artifacts } from '../../src/runtime/broker/c1-artifacts.js';
 import {
   C1_INTERNAL_GROUP_ENV,
   currentC1ProcessGroupLeader,
   killCurrentC1ProcessGroup,
-} from '../../src/mc/broker/c1-process-group.js';
+} from '../../src/runtime/broker/c1-process-group.js';
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(scriptDir, '..', '..');

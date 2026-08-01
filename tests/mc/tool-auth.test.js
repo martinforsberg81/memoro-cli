@@ -17,10 +17,10 @@ import {
   decryptSecretPayload,
   deriveVaultKeys,
   encryptSecretPayload,
-} from '../../src/mc/vault/client-crypto.js';
-import { cacheVaultKey } from '../../src/mc/vault/key-cache.js';
-import { buildSecretPayload, normaliseSecretPayload } from '../../src/mc/vault/types.js';
-import { createMockVaultServer, makeTestPortal } from './vault/_helpers/mock-server.js';
+} from '../../src/vault/engine/client-crypto.js';
+import { cacheVaultKey } from '../../src/vault/engine/key-cache.js';
+import { buildSecretPayload, normaliseSecretPayload } from '../../src/vault/engine/types.js';
+import { createMockVaultServer, makeTestPortal } from '../vault/engine/_helpers/mock-server.js';
 
 const PW = 'tool-auth-test-master-password';
 const SECRET_AUTH_JSON = JSON.stringify({

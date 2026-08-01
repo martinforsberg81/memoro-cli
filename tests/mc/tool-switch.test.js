@@ -24,8 +24,8 @@ import {
   evaluateReadiness,
   composeSwitchPlan,
   runSwitchWith,
-} from '../../src/mc/commands/tool-switch.js';
-import { runSyncWith as realRunSyncWith } from '../../src/mc/commands/adapter.js';
+} from '../../src/cli/tool-switch.js';
+import { runSyncWith as realRunSyncWith } from '../../src/cli/adapter.js';
 import { markdownWrapperFor } from '../../src/mc/adapter-sync.js';
 import { runMc } from './_helpers/cli.js';
 

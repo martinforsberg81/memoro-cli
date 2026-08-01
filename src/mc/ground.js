@@ -33,7 +33,7 @@ import { join, basename } from 'node:path';
 import { readPackageCanon } from './canon.js';
 import { fetchMcContextData, renderMcContextMarkdown } from './context.js';
 import { resolveDevPlan } from './dev-definition.js';
-import { renderGitHubSessionMarkdown } from './github-session.js';
+import { renderGitHubSessionMarkdown } from '../capabilities/github/github-session.js';
 
 // ─────────────────────────────────────────────────────────────
 // Pure: bundle assembly

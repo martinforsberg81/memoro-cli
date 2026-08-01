@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { resolveToolInput } from '../adapters/index.js';
 import { DEFAULT_TOOL } from '../lib/config.js';
 import { LOCAL_AUTH_MODES } from './local-auth-mode.js';
-import { sourceForTool } from './broker/session-sidecars.js';
+import { sourceForTool } from '../runtime/broker/session-sidecars.js';
 import {
   findLatestTranscriptForTool,
   findTranscriptForToolSession,

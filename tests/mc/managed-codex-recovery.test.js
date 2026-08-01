@@ -12,7 +12,7 @@ import {
   publicManagedCodexRecovery,
   recoverUnjournaledManagedCodexResumeDomain,
 } from '../../src/mc/managed-codex-recovery.js';
-import { MANAGED_CODEX_PROVIDER_ID } from '../../src/mc/provider-adapters/codex-managed.js';
+import { MANAGED_CODEX_PROVIDER_ID } from '../../src/adapters/managed-runtime/codex-managed.js';
 import { inspectManagedGenerationSync } from '../../src/mc/managed-generation-journal.js';
 
 const ENTRY = Object.freeze({

@@ -3,9 +3,9 @@ import { existsSync } from 'node:fs';
 import { resolveToolInput } from '../adapters/index.js';
 import { DEFAULT_TOOL } from '../lib/config.js';
 import { readRegistry, writeRegistry } from './registry.js';
-import { requestBroker } from './broker/client.js';
-import { listLocalBrokerAndHostSessions } from './broker/session-hosts.js';
-import { sessionHostPaths } from './broker/paths.js';
+import { requestBroker } from '../runtime/broker/client.js';
+import { listLocalBrokerAndHostSessions } from '../runtime/broker/session-hosts.js';
+import { sessionHostPaths } from '../runtime/broker/paths.js';
 import { resolveToolSessionForResume } from './tool-session.js';
 
 export async function buildStorageRepairPlan({

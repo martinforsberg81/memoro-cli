@@ -6,16 +6,16 @@ import { dirname, join } from 'node:path';
 import { ACCOUNTS } from '../commands/auth.js';
 import { getSecret as keychainGet } from '../lib/keychain.js';
 import { readConfig, getApiUrl } from '../lib/config.js';
-import { encryptSecretPayload, decryptSecretPayload } from './vault/client-crypto.js';
-import { readCachedVaultKey } from './vault/key-cache.js';
-import { deriveVaultKeys } from './vault/client-crypto.js';
+import { encryptSecretPayload, decryptSecretPayload } from '../vault/engine/client-crypto.js';
+import { readCachedVaultKey } from '../vault/engine/key-cache.js';
+import { deriveVaultKeys } from '../vault/engine/client-crypto.js';
 import { mcHome } from './paths.js';
-import * as VaultApi from './vault/api.js';
+import * as VaultApi from '../vault/engine/api.js';
 import {
   buildSecretPayload,
   normaliseSecretPayload,
   WIRE_SECRET_TYPE,
-} from './vault/types.js';
+} from '../vault/engine/types.js';
 
 export const TOOL_AUTH_SCHEMA = 'mc-tool-auth-v1';
 export const TOOL_AUTH_MODE = 'native_auth_file';

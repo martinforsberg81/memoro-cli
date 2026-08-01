@@ -11,7 +11,7 @@
 import test, { describe } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { resolveToolForNew } from '../../src/mc/commands/new.js';
+import { resolveToolForNew } from '../../src/cli/new.js';
 import { resolveToolInput } from '../../src/adapters/index.js';
 
 describe('adapters/index — resolveToolInput', () => {

@@ -8,10 +8,10 @@ await import('./fix-pty-helper.js');
 const {
   shouldWriteInstalledC1Receipt,
   writeInstalledC1Receipt,
-} = await import('../src/mc/broker/c1-install-receipt.js');
+} = await import('../src/runtime/broker/c1-install-receipt.js');
 const {
   baselineInstalledC1Epoch,
-} = await import('../src/mc/broker/c1-global-interlock.js');
+} = await import('../src/runtime/broker/c1-global-interlock.js');
 if (shouldWriteInstalledC1Receipt()) {
   const receipt = writeInstalledC1Receipt();
   const baseline = receipt.ok ? baselineInstalledC1Epoch() : null;

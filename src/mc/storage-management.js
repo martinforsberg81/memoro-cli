@@ -17,9 +17,9 @@ import {
   reapRuntimeSidecars,
   scanRuntimeSidecars,
 } from './sidecar-cleanup.js';
-import { listLocalBrokerAndHostSessions } from './broker/session-hosts.js';
+import { listLocalBrokerAndHostSessions } from '../runtime/broker/session-hosts.js';
 import { fetchActiveCodingSessions } from './session-list.js';
-import { sessionHostPaths } from './broker/paths.js';
+import { sessionHostPaths } from '../runtime/broker/paths.js';
 import {
   DEFAULT_DEPENDENCY_SNAPSHOT_MIN_AGE_MS,
   dependencySnapshotScanJson,

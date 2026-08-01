@@ -1,7 +1,7 @@
 import test, { describe } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { run } from '../../src/mc/commands/dev.js';
+import { run } from '../../src/cli/dev.js';
 
 function output() {
   let value = '';

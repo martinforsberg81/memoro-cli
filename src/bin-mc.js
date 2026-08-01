@@ -77,11 +77,11 @@ import {
 } from './mc/local-auth-mode.js';
 import { scheduleSessionUpload } from './mc/session-upload.js';
 import { writeToPty } from './mc/pty-write.js';
-import { requestBroker } from './mc/broker/client.js';
+import { requestBroker } from './runtime/broker/client.js';
 import {
   listLocalBrokerAndHostSessions,
   requestForSession,
-} from './mc/broker/session-hosts.js';
+} from './runtime/broker/session-hosts.js';
 import {
   resolveSessionControllerCapability,
 } from './mc/session-controller-capability.js';
@@ -117,44 +117,44 @@ const STARTUP_MESSAGE_IDLE_MS = 1500;
 // Entry point
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Lifecycle subcommands → src/mc/commands/<name>.js (lazy-loaded so the
+// Lifecycle subcommands → src/cli/<name>.js (lazy-loaded so the
 // hot path of `mc` wrap-mode boot doesn't pay for them).
 const LIFECYCLE = {
-  new:           () => import('./mc/commands/new.js'),
-  spawn:         () => import('./mc/commands/spawn.js'),
-  list:          () => import('./mc/commands/list.js'),
-  end:           () => import('./mc/commands/end.js'),
-  rename:        () => import('./mc/commands/rename.js'),
-  cd:            () => import('./mc/commands/cd.js'),
-  open:          () => import('./mc/commands/open.js'),
-  resume:        () => import('./mc/commands/resume.js'),
-  gc:            () => import('./mc/commands/gc.js'),
-  status:        () => import('./mc/commands/status.js'),
-  dev:           () => import('./mc/commands/dev.js'),
-  deps:          () => import('./mc/commands/deps.js'),
-  dispatch:      () => import('./mc/commands/dispatch.js'),
-  read:          () => import('./mc/commands/read.js'),
-  'install-shell': () => import('./mc/commands/install-shell.js'),
-  auth:          () => import('./mc/commands/auth.js'),
-  connections:   () => import('./mc/commands/connections.js'),
-  github:        () => import('./mc/commands/github.js'),
-  setup:         () => import('./mc/commands/setup.js'),
-  reconcile:     () => import('./mc/commands/reconcile.js'),
-  doctor:        () => import('./mc/commands/doctor.js'),
-  storage:       () => import('./mc/commands/storage.js'),
-  vault:         () => import('./mc/commands/vault.js'),
-  'tool-auth':   () => import('./mc/commands/tool-auth.js'),
-  adapter:       () => import('./mc/commands/adapter.js'),
-  'tool-switch': () => import('./mc/commands/tool-switch.js'),
-  'coding-profile': () => import('./mc/commands/coding-profile.js'),
-  broker:        () => import('./mc/commands/broker.js'),
-  attach:        () => import('./mc/commands/attach.js'),
-  'cloud-session': () => import('./mc/commands/cloud-session.js'),
-  'cloud-runtime': () => import('./mc/commands/cloud-runtime.js'),
-  supervisor:    () => import('./mc/commands/supervisor.js'),
-  fanout:        () => import('./mc/commands/fanout.js'),
-  gather:        () => import('./mc/commands/gather.js'),
-  security:      () => import('./mc/commands/security.js'),
+  new:           () => import('./cli/new.js'),
+  spawn:         () => import('./cli/spawn.js'),
+  list:          () => import('./cli/list.js'),
+  end:           () => import('./cli/end.js'),
+  rename:        () => import('./cli/rename.js'),
+  cd:            () => import('./cli/cd.js'),
+  open:          () => import('./cli/open.js'),
+  resume:        () => import('./cli/resume.js'),
+  gc:            () => import('./cli/gc.js'),
+  status:        () => import('./cli/status.js'),
+  dev:           () => import('./cli/dev.js'),
+  deps:          () => import('./cli/deps.js'),
+  dispatch:      () => import('./cli/dispatch.js'),
+  read:          () => import('./cli/read.js'),
+  'install-shell': () => import('./cli/install-shell.js'),
+  auth:          () => import('./cli/auth.js'),
+  connections:   () => import('./cli/connections.js'),
+  github:        () => import('./cli/github.js'),
+  setup:         () => import('./cli/setup.js'),
+  reconcile:     () => import('./cli/reconcile.js'),
+  doctor:        () => import('./cli/doctor.js'),
+  storage:       () => import('./cli/storage.js'),
+  vault:         () => import('./cli/vault.js'),
+  'tool-auth':   () => import('./cli/tool-auth.js'),
+  adapter:       () => import('./cli/adapter.js'),
+  'tool-switch': () => import('./cli/tool-switch.js'),
+  'coding-profile': () => import('./cli/coding-profile.js'),
+  broker:        () => import('./cli/broker.js'),
+  attach:        () => import('./cli/attach.js'),
+  'cloud-session': () => import('./cli/cloud-session.js'),
+  'cloud-runtime': () => import('./cli/cloud-runtime.js'),
+  supervisor:    () => import('./cli/supervisor.js'),
+  fanout:        () => import('./cli/fanout.js'),
+  gather:        () => import('./cli/gather.js'),
+  security:      () => import('./cli/security.js'),
 };
 
 export async function main() {
@@ -211,7 +211,7 @@ export async function main() {
     const rest = argv.slice(2);
     if (sub === 'list')        return runSessionsList(rest);
     if (sub === 'watch') {
-      const mod = await import('./mc/commands/sessions-watch.js');
+      const mod = await import('./cli/sessions-watch.js');
       return mod.run(rest);
     }
     if (sub === 'send')        return runSessionsSend(rest);
@@ -789,7 +789,7 @@ async function runWrap(argv, { label = null } = {}) {
     }
     if (wrapVault.shouldShredOnExit && wrapVault.sessionId) {
       try {
-        const { shredForSession } = await import('./mc/vault/lifecycle.js');
+        const { shredForSession } = await import('./vault/engine/lifecycle.js');
         await shredForSession({ sessionId: wrapVault.sessionId });
       } catch { /* best effort */ }
     }

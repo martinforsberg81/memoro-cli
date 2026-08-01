@@ -87,8 +87,8 @@ describe('local auth mode', () => {
   });
 
   test('--native is the only route to native custody on new and open', async () => {
-    const { parseArgs: newArgs } = await import('../../src/mc/commands/new.js');
-    const { parseArgs: openArgs } = await import('../../src/mc/commands/resume.js');
+    const { parseArgs: newArgs } = await import('../../src/cli/new.js');
+    const { parseArgs: openArgs } = await import('../../src/cli/resume.js');
 
     // Absent the explicit flag, both verbs stay on managed custody.
     for (const argv of [['s'], ['s', '--claude'], ['s', '--managed-portable']]) {

@@ -21,7 +21,7 @@ import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync, mkdirSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { runWithDeps } from '../../../src/mc/commands/fanout.js';
+import { runWithDeps } from '../../../src/cli/fanout.js';
 import { writeRegistry as fixtureWriteRegistry } from '../_helpers/registry-fixture.js';
 
 // ─── helpers ───────────────────────────────────────────────────────────────

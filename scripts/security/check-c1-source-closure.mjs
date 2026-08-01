@@ -13,14 +13,14 @@ import { readFileSync, realpathSync, statSync } from 'node:fs';
 import { dirname, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { C1_SOURCE_CLOSURE_SHA256 } from '../../src/mc/broker/c1-source-closure.js';
+import { C1_SOURCE_CLOSURE_SHA256 } from '../../src/runtime/broker/c1-source-closure.js';
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const packageRoot = resolve(scriptDir, '..', '..');
-const trustedBootstrap = 'src/mc/broker/c1-source-closure.js';
+const trustedBootstrap = 'src/runtime/broker/c1-source-closure.js';
 const roots = Object.freeze([
-  'src/mc/broker/c1-lease-host.js',
-  'src/mc/broker/c1-child.js',
+  'src/runtime/broker/c1-lease-host.js',
+  'src/runtime/broker/c1-child.js',
   'scripts/security/managed-claude-c1-runtime.mjs',
 ]);
 const explicitInputs = Object.freeze([

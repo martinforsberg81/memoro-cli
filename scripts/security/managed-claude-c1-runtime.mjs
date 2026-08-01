@@ -17,7 +17,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   currentC1ProcessGroupLeader,
   killCurrentC1ProcessGroup,
-} from '../../src/mc/broker/c1-process-group.js';
+} from '../../src/runtime/broker/c1-process-group.js';
 import {
   MANAGED_CLAUDE_API_HOST as API_HOST,
   MANAGED_CLAUDE_CREDENTIAL_FD as CREDENTIAL_FD,
@@ -25,7 +25,7 @@ import {
   buildManagedClaudeSandboxPolicy,
   classifyManagedClaudeProviderRequest,
   managedClaudeExecutorEnvironment,
-} from '../../src/mc/provider-adapters/claude-managed-policy.js';
+} from '../../src/adapters/managed-runtime/claude-managed-policy.js';
 
 const CONFIG_FD = 4;
 const MAX_CONFIG_BYTES = 64 * 1024;

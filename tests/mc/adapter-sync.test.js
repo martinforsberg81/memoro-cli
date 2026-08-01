@@ -33,7 +33,7 @@ import {
   runSyncWith,
   stripGroundingBlock,
   comparableWrapperContent,
-} from '../../src/mc/commands/adapter.js';
+} from '../../src/cli/adapter.js';
 import {
   GROUNDING_BEGIN as CLAUDE_GB,
   GROUNDING_END as CLAUDE_GE,

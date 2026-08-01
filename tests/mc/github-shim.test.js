@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 
-import { parseGitHubShimArgs, runGitHubShim } from '../../src/mc/github-shim.js';
+import { parseGitHubShimArgs, runGitHubShim } from '../../src/capabilities/github/github-shim.js';
 
 test('a failure surfaces the wire error detail beside the stable per-code text', async () => {
   let err = '';

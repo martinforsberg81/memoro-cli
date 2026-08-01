@@ -12,21 +12,21 @@ import {
 import {
   providerArtifactPath,
   sessionHostPaths,
-} from './broker/paths.js';
-import { readSessionLifecycle } from './broker/lifecycle-journal.js';
-import { readProviderArtifactSync } from './broker/provider-artifact-journal.js';
+} from '../runtime/broker/paths.js';
+import { readSessionLifecycle } from '../runtime/broker/lifecycle-journal.js';
+import { readProviderArtifactSync } from '../runtime/broker/provider-artifact-journal.js';
 import {
   closeLocalCodexCredentialDomain,
   inspectLegacyLocalCodexResumeAbsence,
   inspectLocalCodexCredentialDomainPresence,
   inspectQuarantinedLocalCodexCredentialDomain,
   persistManagedCodexSessionState,
-} from './credential-domain/local-codex.js';
-import { MANAGED_CODEX_PROVIDER_ID } from './provider-adapters/codex-managed.js';
+} from '../vault/credential-domain/local-codex.js';
+import { MANAGED_CODEX_PROVIDER_ID } from '../adapters/managed-runtime/codex-managed.js';
 import {
   observe as observeCodexProviderArtifact,
   validate as validateCodexProviderArtifact,
-} from './provider-artifact-adapters/codex.js';
+} from '../adapters/artifacts/codex.js';
 import {
   reapZombieHosts,
   scanRuntimeSidecars,
