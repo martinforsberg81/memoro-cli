@@ -589,13 +589,25 @@ function safeConnectUrl(value) {
   if (!text) return null;
   try {
     const url = new URL(text);
-    if (url.protocol !== 'https:' || url.hostname !== 'github.com' || url.port || url.username || url.password
-        || !/^\/apps\/[a-zA-Z0-9-]+\/installations\/new$/.test(url.pathname)) return null;
-    const keys = [...url.searchParams.keys()];
-    const state = boundedString(url.searchParams.get('state'), 220);
-    if (keys.length !== 1 || keys[0] !== 'state' || !state || !CONNECT_STATE_RE.test(state)) return null;
+    if (url.protocol !== 'https:' || url.hostname !== 'github.com' || url.port || url.username || url.password) {
+      return null;
+    }
     url.hash = '';
-    return url.toString();
+    if (/^\/apps\/[a-zA-Z0-9-]+\/installations\/new$/.test(url.pathname)) {
+      const keys = [...url.searchParams.keys()];
+      const state = boundedString(url.searchParams.get('state'), 220);
+      if (keys.length !== 1 || keys[0] !== 'state' || !state || !CONNECT_STATE_RE.test(state)) return null;
+      return url.toString();
+    }
+    // The permission-approval page for an EXISTING installation (user or
+    // organization scope). No query parameters and no state token: the
+    // acceptance reaches the server through the installation webhook.
+    if ((/^\/settings\/installations\/[0-9]{1,16}$/.test(url.pathname)
+      || /^\/organizations\/[a-zA-Z0-9-]+\/settings\/installations\/[0-9]{1,16}$/.test(url.pathname))
+      && [...url.searchParams.keys()].length === 0) {
+      return url.toString();
+    }
+    return null;
   } catch {
     return null;
   }

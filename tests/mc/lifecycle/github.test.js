@@ -449,6 +449,42 @@ describe('mc github connect/repos and auth alias', () => {
     assert.match(portal.stdoutText, /Opened the Memoro GitHub connection flow/);
   });
 
+  test('connect accepts the installation approval pages for permission repair', async () => {
+    for (const url of [
+      'https://github.com/settings/installations/101',
+      'https://github.com/organizations/acme/settings/installations/101',
+    ]) {
+      const calls = [];
+      const portal = deps({
+        response: { ...connectResponse, connect_url: url },
+        interactive: false,
+        calls,
+      });
+      const code = await runGitHub(['connect'], portal);
+
+      assert.equal(code, 0, url);
+      assert.ok(portal.stdoutText.includes(url), url);
+    }
+
+    for (const url of [
+      'https://github.com/settings/installations/101?tab=permissions',
+      'https://github.com/orgs/acme/settings/installations/101',
+      'https://github.com/settings/installations/notanumber',
+      'https://evil.test/settings/installations/101',
+    ]) {
+      const calls = [];
+      const portal = deps({
+        response: { ...connectResponse, connect_url: url },
+        interactive: true,
+        calls,
+      });
+      const code = await runGitHub(['connect'], portal);
+
+      assert.notEqual(code, 0, url);
+      assert.equal(calls.some((call) => call.kind === 'browser'), false, url);
+    }
+  });
+
   test('an unsafe connect URL fails before browser side effects and is redacted', async () => {
     const secret = 'ghp_never_open_or_render';
     const calls = [];
