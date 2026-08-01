@@ -40,6 +40,11 @@ import { removeBrokerSessionForEntry } from '../broker/session-cleanup.js';
 import { providerArtifactPath } from '../broker/paths.js';
 import { readProviderArtifactSync } from '../broker/provider-artifact-journal.js';
 import { mcHome } from '../paths.js';
+import {
+  applyStorageRepairPlan,
+  buildStorageRepairPlan,
+} from '../storage-repair.js';
+import { runSessionUploadSync } from '../session-upload.js';
 import { resolveToolSessionForResume } from '../tool-session.js';
 import {
   classifyToolArtifactAuthority,
@@ -253,22 +258,13 @@ export async function run(rawArgv, runOpts = {}) {
     emitDirectives,
   });
 
+  // Each target's teardown is independent (per-entry authority, per-entry
+  // artifacts), so one failure must not strand the rest of the batch —
+  // that is how partial failures used to accumulate leftovers across
+  // every later target too.
   const results = [];
-  let stop = false;
   for (const plan of revalidated) {
-    if (stop) {
-      results.push({
-        name: plan.entry.name,
-        ok: false,
-        error: 'not-attempted-after-partial-failure',
-        status: plan.status,
-        leftovers: await inspectLeftovers(plan, opts, deps),
-      });
-      continue;
-    }
-    const result = await teardownOne(plan, { opts, deps });
-    results.push(result);
-    if (!result.ok) stop = true;
+    results.push(await teardownOne(plan, { opts, deps }));
   }
 
   return emitResults({ opts, results, stdout, stderr });
@@ -915,15 +911,40 @@ function emitCdBeforeTeardown(plans, { cwd, emitDirectives }) {
 }
 
 async function teardownOne(plan, { opts, deps }) {
-  const { entry, primary, status } = plan;
+  const { entry: originalEntry, primary, status } = plan;
+  let entry = originalEntry;
+  const repairs = [];
   try {
+    // Distill FIRST, while nothing has been destroyed. The transcript is
+    // the only copy of the session's knowledge; a failed upload leaves
+    // everything intact for a clean retry instead of deleting it unread.
+    const distilled = await distillTranscriptBeforeDelete(plan, { opts, deps });
+    if (!distilled.ok) {
+      throw new Error(
+        `transcript distill failed before deletion (${distilled.reason}); `
+        + 'nothing was deleted — retry when the upload can succeed, or pass --no-distill',
+      );
+    }
+
     const removeBroker = deps.removeBrokerSessionForEntry || removeBrokerSessionForEntry;
     const broker = await removeBroker(entry, {
       requestBroker: deps.requestBroker,
       deps,
     });
     if (!brokerCleanupIsAcceptable(entry, broker)) {
-      throw new Error(`broker cleanup failed (${broker?.error || broker?.reason || 'unknown'})`);
+      // A registry row stuck on `live` with no reachable broker is the
+      // documented deadlock (docs/incidents/2026-07-26): end refused and
+      // pointed at a different command. Run that exact repair inline —
+      // verify the broker is really gone, mark the row idle, continue.
+      const repaired = await repairStaleLiveRegistryState(entry, { broker, deps });
+      if (repaired.ok) {
+        entry = { ...entry, ...repaired.patch };
+        plan = { ...plan, entry };
+        repairs.push(repaired.reason);
+      }
+      if (!repaired.ok || !brokerCleanupIsAcceptable(entry, broker)) {
+        throw new Error(`broker cleanup failed (${broker?.error || broker?.reason || 'unknown'})`);
+      }
     }
     if (plan.artifacts?.provider_managed && !plan.artifacts?.provider_cleanup_confirmed) {
       const confirmed = persistManagedProviderCleanupConfirmation(plan, {
@@ -1028,6 +1049,7 @@ async function teardownOne(plan, { opts, deps }) {
       verdict: status.verdict,
       status,
       leftovers: [],
+      ...(repairs.length ? { repairs } : {}),
     };
   } catch (err) {
     return {
@@ -1036,8 +1058,86 @@ async function teardownOne(plan, { opts, deps }) {
       error: err.message,
       status,
       leftovers: await inspectLeftovers(plan, opts, deps),
+      ...(repairs.length ? { repairs } : {}),
     };
   }
+}
+
+/**
+ * Distill gate for the native transcript that `teardownOne` is about to
+ * delete. Skips (ok) when there is nothing to distill: providerless or
+ * managed targets, no recorded transcript, an already-removed file, or
+ * an explicit `--no-distill`.
+ */
+async function distillTranscriptBeforeDelete(plan, { opts = {}, deps = {} } = {}) {
+  if (opts.noDistill) return { ok: true, skipped: 'opted-out' };
+  const { entry, artifacts } = plan;
+  if (artifacts?.provider_untouched || artifacts?.provider_managed) {
+    return { ok: true, skipped: 'no-native-provider-artifacts' };
+  }
+  // No coding session id → the tool session never launched under mc and
+  // there is no server-side session record to distill into.
+  if (!nonEmpty(entry?.coding_session_id)) return { ok: true, skipped: 'never-launched' };
+  const transcriptPath = nonEmpty(entry?.tool_transcript_path);
+  if (!transcriptPath) return { ok: true, skipped: 'no-transcript-path' };
+  const fileExists = deps.transcriptExists || existsSync;
+  if (!fileExists(transcriptPath)) return { ok: true, skipped: 'transcript-already-absent' };
+  const upload = deps.runSessionUploadSync || runSessionUploadSync;
+  const uploaded = await upload({
+    source: entry.tool_session_source || null,
+    transcriptPath,
+    cwd: entry.worktree_path || null,
+    codingSessionId: entry.coding_session_id || null,
+  });
+  return uploaded?.ok === true
+    ? { ok: true, transcriptPath }
+    : { ok: false, reason: uploaded?.reason || 'upload-failed' };
+}
+
+/**
+ * Inline escape from the `registry-live-without-local-broker` deadlock:
+ * reuse the storage-repair plan (its liveness check probes the host
+ * socket, not just the pid) scoped to this one entry, and apply only the
+ * mark-idle action. Anything still genuinely live keeps failing closed.
+ */
+async function repairStaleLiveRegistryState(entry, { broker = null, deps = {} } = {}) {
+  if (entry?.session_state !== 'live') return { ok: false, reason: 'not-live' };
+  if (entry?.tool_session_provider_adapter) return { ok: false, reason: 'managed-provider' };
+  if (broker && broker.ok !== true && broker.reason !== 'broker-unavailable'
+    && broker.reason !== 'not-found') {
+    return { ok: false, reason: 'broker-failure-not-repairable' };
+  }
+  const read = deps.readRegistry || readRegistry;
+  let registry;
+  try {
+    registry = read();
+  } catch {
+    return { ok: false, reason: 'registry-unreadable' };
+  }
+  let repairPlan;
+  try {
+    repairPlan = await (deps.buildStorageRepairPlan || buildStorageRepairPlan)({
+      registry,
+      names: [entry.session_id || entry.name],
+      ...(deps.requestBroker ? { request: deps.requestBroker } : {}),
+    });
+  } catch {
+    return { ok: false, reason: 'repair-plan-failed' };
+  }
+  const actions = (repairPlan?.actions || []).filter((action) => (
+    action.type === 'mark-idle' && action.session_id === entry.session_id
+  ));
+  if (actions.length === 0) return { ok: false, reason: 'session-still-live' };
+  const applied = (deps.applyStorageRepairPlan || applyStorageRepairPlan)(
+    registry,
+    { actions },
+  );
+  if (!applied?.ok) return { ok: false, reason: applied?.reason || 'repair-apply-failed' };
+  return {
+    ok: true,
+    reason: 'registry-live-without-local-broker',
+    patch: actions[0].patch,
+  };
 }
 
 function brokerCleanupIsAcceptable(entry, result) {
@@ -1353,6 +1453,7 @@ function parseArgs(argv) {
     keepBranch: false,
     dryRun: false,
     json: false,
+    noDistill: false,
   };
   for (const arg of argv) {
     switch (arg) {
@@ -1360,6 +1461,7 @@ function parseArgs(argv) {
       case '--keep-branch': opts.keepBranch = true; break;
       case '--dry-run': opts.dryRun = true; break;
       case '--json': opts.json = true; break;
+      case '--no-distill': opts.noDistill = true; break;
       default:
         if (arg.startsWith('--')) return { error: `unknown flag: ${arg}` };
         opts.names.push(arg);

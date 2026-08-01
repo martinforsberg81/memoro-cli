@@ -987,6 +987,7 @@ describe('mc end confirmed teardown', () => {
             reason: 'not-found',
           }),
           shredForSession: async () => ({ ok: true, shredded: [] }),
+          runSessionUploadSync: async () => ({ ok: true }),
           ...deps,
         },
       });
