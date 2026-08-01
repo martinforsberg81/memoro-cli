@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 
-import { runGitHubShim } from '../../src/mc/github-shim.js';
+import { parseGitHubShimArgs, runGitHubShim } from '../../src/mc/github-shim.js';
 
 test('a failure surfaces the wire error detail beside the stable per-code text', async () => {
   let err = '';
@@ -198,14 +198,8 @@ describe('session-scoped gh compatibility shim', () => {
     ]);
   });
 
-  test('exposes pr update only through the restricted managed mc wrapper mode', async () => {
-    const denied = portal();
-    assert.equal(await runGitHubShim([
-      'pr', 'update', '17', '--title', 'Updated title',
-    ], denied), 2);
-    assert.equal(denied.calls.length, 0);
-
-    const managed = portal({
+  test('pr update executes in every session — no custody-mode gating', async () => {
+    const deps = portal({
       'pull_request.view': {
         ok: true,
         request_id: 'request_view_update',
@@ -222,18 +216,63 @@ describe('session-scoped gh compatibility shim', () => {
       },
     });
     let next = 0;
-    managed.makeRequestId = () => `request_update_${++next}abcdefgh`;
+    deps.makeRequestId = () => `request_update_${++next}abcdefgh`;
 
     assert.equal(await runGitHubShim([
       'pr', 'update', '17', '--title', 'Updated title',
-    ], {
-      ...managed,
-      allowUpdate: true,
-    }), 0);
-    assert.deepEqual(managed.calls.map(({ operation }) => operation), [
+    ], deps), 0);
+    assert.deepEqual(deps.calls.map(({ operation }) => operation), [
       'pull_request.view',
       'pull_request.update',
     ]);
+  });
+
+  test('pr merge binds the observed head and forwards the chosen method', async () => {
+    const deps = portal({
+      'pull_request.view': {
+        ok: true,
+        request_id: 'request_view_merge',
+        data: {
+          number: 7,
+          head: { sha: 'c'.repeat(40) },
+          updated_at: '2026-07-30T10:00:00.000Z',
+        },
+      },
+      'pull_request.merge': {
+        ok: true,
+        request_id: 'request_merge',
+        data: {
+          pull_number: 7,
+          merged: true,
+          sha: 'd'.repeat(40),
+          message: 'Pull Request successfully merged',
+        },
+      },
+    });
+    let next = 0;
+    deps.makeRequestId = () => `request_merge_${++next}abcdefgh`;
+
+    assert.equal(await runGitHubShim(['pr', 'merge', '7', '--squash'], deps), 0);
+    assert.deepEqual(deps.calls.map(({ operation }) => operation), [
+      'pull_request.view',
+      'pull_request.merge',
+    ]);
+    assert.deepEqual(deps.calls[1].params, {
+      pull_number: 7,
+      merge_method: 'squash',
+      expected_head_sha: 'c'.repeat(40),
+    });
+    assert.match(deps.out, /Merged pull request #7 \(d{40}\)/);
+  });
+
+  test('pr merge defaults to the merge method and refuses unknown flags', async () => {
+    const defaulted = parseGitHubShimArgs(['pr', 'merge', '7']);
+    assert.equal(defaulted.ok, true);
+    assert.equal(defaulted.params.merge_method, 'merge');
+
+    assert.equal(parseGitHubShimArgs(['pr', 'merge', '7', '--admin']).ok, false);
+    assert.equal(parseGitHubShimArgs(['pr', 'merge', '7', '--squash', '--rebase']).ok, false);
+    assert.equal(parseGitHubShimArgs(['pr', 'merge']).ok, false);
   });
 
   test('rejects every non-allowlisted surface without invoking or falling through', async () => {
@@ -246,7 +285,7 @@ describe('session-scoped gh compatibility shim', () => {
       ['pr', 'create', '--title', 'missing body'],
       ['pr', 'create', '--title', 'x', '--body', 'y', '--head', 'other'],
       ['pr', 'create', '--title', 'x', '--body', 'y', '--repo', 'acme/other'],
-      ['pr', 'merge', '7'],
+      ['pr', 'merge', '7', '--admin'],
       ['pr', 'list', '--repo', 'acme/other'],
       ['pr', 'list', '--unknown'],
       ['repo', 'view'],

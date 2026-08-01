@@ -9,9 +9,7 @@ import { executeGitHubWriteCommand } from './github-write-client.js';
 export async function runGitHubShim(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
   const stderr = deps.stderr || process.stderr;
-  const parsed = parseGitHubShimArgs(argv, {
-    allowUpdate: deps.allowUpdate === true,
-  });
+  const parsed = parseGitHubShimArgs(argv);
   if (!parsed.ok) {
     stderr.write('mc github: this gh command is not available in a managed session. Use `mc github` instead.\n');
     return 2;
@@ -37,7 +35,11 @@ export async function runGitHubShim(argv, deps = {}) {
   return 0;
 }
 
-export function parseGitHubShimArgs(argv = [], { allowUpdate = false } = {}) {
+// mc provides the infrastructure — which operations a session may run is
+// decided by the user's connection and the control plane's policy, never
+// gated client-side per custody mode. (`pr update` used to require the
+// managed shim flag; that made writes silently dead in native sessions.)
+export function parseGitHubShimArgs(argv = []) {
   const values = [...argv];
   if (values[0] === 'auth' && values[1] === 'status') {
     const rest = values.slice(2);
@@ -52,7 +54,8 @@ export function parseGitHubShimArgs(argv = [], { allowUpdate = false } = {}) {
   if (values[1] === 'view') return parseNumberCommand('pull_request.view', values.slice(2));
   if (values[1] === 'checks') return parseNumberCommand('checks.list', values.slice(2));
   if (values[1] === 'create') return parseCreate(values.slice(2));
-  if (allowUpdate && values[1] === 'update') return parseUpdate(values.slice(2));
+  if (values[1] === 'update') return parseUpdate(values.slice(2));
+  if (values[1] === 'merge') return parseMerge(values.slice(2));
   return denied();
 }
 
@@ -99,6 +102,10 @@ export function renderGitHubResult(parsed, data, stdout) {
   if (parsed.operation === 'pull_request.update') {
     stdout.write(`Updated pull request #${data?.number || ''}${data?.title ? `: ${data.title}` : ''}\n`);
     if (data?.url) stdout.write(`${data.url}\n`);
+    return;
+  }
+  if (parsed.operation === 'pull_request.merge') {
+    stdout.write(`Merged pull request #${data?.pull_number || ''}${data?.sha ? ` (${data.sha})` : ''}\n`);
   }
 }
 
@@ -193,6 +200,25 @@ function parseUpdate(values) {
   return operation('pull_request.update', params, json);
 }
 
+function parseMerge(values) {
+  if (!/^[1-9][0-9]*$/.test(values[0] || '')) return denied();
+  const params = { pull_number: Number(values[0]) };
+  let json = false;
+  let hasMethod = false;
+  for (let index = 1; index < values.length; index += 1) {
+    const value = values[index];
+    if (value === '--json') { json = true; continue; }
+    if (['--merge', '--squash', '--rebase'].includes(value) && !hasMethod) {
+      params.merge_method = value.slice(2);
+      hasMethod = true;
+      continue;
+    }
+    return denied();
+  }
+  if (!hasMethod) params.merge_method = 'merge';
+  return operation('pull_request.merge', params, json);
+}
+
 function validTitle(value) {
   return typeof value === 'string' && value.trim().length > 0 && value.trim().length <= 512;
 }
@@ -243,8 +269,5 @@ export function safeOperationError(code) {
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   const managedMcMode = process.argv[2] === '--mc-session-shim';
-  process.exitCode = await runGitHubShim(
-    process.argv.slice(managedMcMode ? 3 : 2),
-    { allowUpdate: managedMcMode },
-  );
+  process.exitCode = await runGitHubShim(process.argv.slice(managedMcMode ? 3 : 2));
 }

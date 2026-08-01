@@ -47,9 +47,9 @@ export async function run(argv, deps = {}) {
 export function parseArgs(argv) {
   const values = [...argv];
   if (values[0] === 'pr') {
-    const operation = parseGitHubShimArgs(values, { allowUpdate: true });
+    const operation = parseGitHubShimArgs(values);
     if (!operation.ok || operation.operation === 'connection.status') {
-      return { error: 'unsupported GitHub command. Try `mc github pr list|view|checks|create|update`.' };
+      return { error: 'unsupported GitHub command. Try `mc github pr list|view|checks|create|update|merge`.' };
     }
     return { subcommand: 'operation', ...operation };
   }
