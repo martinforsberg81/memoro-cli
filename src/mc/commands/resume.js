@@ -361,8 +361,12 @@ export async function run(rawArgv, deps = {}) {
       return 1;
     }
     let active = activeCheck.session;
-    if (localAuthMode === LOCAL_AUTH_MODES.MANAGED_PORTABLE
-      && active
+    // The repair publishes terminal presence METADATA for a generation the
+    // local journal proves exited — it touches no credentials, so it is
+    // custody-independent. Gating it on managed custody left native sessions
+    // dead-ended on "already active" forever whenever the server record was
+    // stale (especially records with no runtime_generation at all).
+    if (active
       && localPresence.verdict === 'exited'
       && nonEmpty(localPresence.runtime_generation)
       && (
