@@ -22,6 +22,7 @@ export function buildNewSessionLaunchIntent({
   localAuthMode = LOCAL_AUTH_MODES.NATIVE,
   handoffUserMessage = null,
   handoffTransaction = null,
+  argv = [],
 } = {}) {
   return {
     mode: MC_SESSION_LAUNCH_MODES.NEW,
@@ -35,7 +36,7 @@ export function buildNewSessionLaunchIntent({
     label: null,
     focus: focus || null,
     tool: launchTool?.id || entry?.tool || DEFAULT_TOOL,
-    argv: [],
+    argv: Array.isArray(argv) ? argv : [],
     apiArgv,
     sendStartupMessage: true,
     ...(handoffUserMessage ? { handoffUserMessage } : {}),

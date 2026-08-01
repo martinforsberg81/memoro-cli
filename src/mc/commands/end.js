@@ -37,6 +37,14 @@ import {
 import { emitCd, parseDirectiveFlag } from '../shell-directives.js';
 import { detectSquashPhantom } from '../squash-phantom.js';
 import { removeBrokerSessionForEntry } from '../broker/session-cleanup.js';
+import { providerArtifactPath } from '../broker/paths.js';
+import { readProviderArtifactSync } from '../broker/provider-artifact-journal.js';
+import { mcHome } from '../paths.js';
+import {
+  applyStorageRepairPlan,
+  buildStorageRepairPlan,
+} from '../storage-repair.js';
+import { runSessionUploadSync } from '../session-upload.js';
 import { resolveToolSessionForResume } from '../tool-session.js';
 import {
   classifyToolArtifactAuthority,
@@ -51,6 +59,7 @@ import {
 } from '../session-owned-artifacts.js';
 
 const CONFIRM_PROMPT = 'Avsluta och ta bort allt sessionsbundet lokalt? y/n ';
+const MANAGED_PROVIDER_AUTHORITY_VERSION = 1;
 
 function safeRealpath(path) {
   try { return realpathSync(path); } catch { return path; }
@@ -249,22 +258,13 @@ export async function run(rawArgv, runOpts = {}) {
     emitDirectives,
   });
 
+  // Each target's teardown is independent (per-entry authority, per-entry
+  // artifacts), so one failure must not strand the rest of the batch —
+  // that is how partial failures used to accumulate leftovers across
+  // every later target too.
   const results = [];
-  let stop = false;
   for (const plan of revalidated) {
-    if (stop) {
-      results.push({
-        name: plan.entry.name,
-        ok: false,
-        error: 'not-attempted-after-partial-failure',
-        status: plan.status,
-        leftovers: await inspectLeftovers(plan, opts, deps),
-      });
-      continue;
-    }
-    const result = await teardownOne(plan, { opts, deps });
-    results.push(result);
-    if (!result.ok) stop = true;
+    results.push(await teardownOne(plan, { opts, deps }));
   }
 
   return emitResults({ opts, results, stdout, stderr });
@@ -307,6 +307,8 @@ function selectTargets(entries, names, cwd, { requireIdentity = true } = {}) {
 }
 
 async function synchronizeToolAuthority(entry, { deps = {} } = {}) {
+  const managed = inspectManagedToolAuthority(entry, deps);
+  if (managed?.safe_to_delete) return entry;
   const classified = classifyToolArtifactAuthority(entry, {
     roots: deps.toolArtifactRoots,
   });
@@ -394,6 +396,8 @@ function conflictsWithStoredAuthority(entry, patch) {
 }
 
 async function inspectAuthority(entry, { deps = {} } = {}) {
+  const managed = inspectManagedToolAuthority(entry, deps);
+  if (managed) return managed;
   const inspect = deps.inspectOwnedToolArtifacts || inspectOwnedToolArtifacts;
   const options = {
     roots: deps.toolArtifactRoots,
@@ -408,6 +412,80 @@ async function inspectAuthority(entry, { deps = {} } = {}) {
     });
   }
   return result;
+}
+
+function inspectManagedToolAuthority(entry, deps = {}) {
+  const adapter = nonEmpty(entry?.tool_session_provider_adapter);
+  if (!adapter) return null;
+  const codingSessionId = nonEmpty(entry?.coding_session_id);
+  const runtimeGeneration = nonEmpty(entry?.tool_session_provider_generation);
+  const source = nonEmpty(entry?.tool_session_source);
+  const sessionId = nonEmpty(entry?.tool_session_id);
+  if (!codingSessionId || !runtimeGeneration || !source || !sessionId) {
+    return unverifiedManagedAuthority('managed-provider-identity-incomplete');
+  }
+  const root = deps.mcArtifactDeps?.mcDir || deps.mcDir || mcHome();
+  const artifactPath = (deps.providerArtifactPath || providerArtifactPath)(
+    codingSessionId,
+    runtimeGeneration,
+    { root },
+  );
+  const read = deps.readProviderArtifact || readProviderArtifactSync;
+  let result;
+  try {
+    result = read({
+      path: artifactPath,
+      codingSessionId,
+      runtimeGeneration,
+      trustedRoot: root,
+    });
+  } catch {
+    return unverifiedManagedAuthority('managed-provider-artifact-unreadable');
+  }
+  if (result?.kind === 'absent' && managedProviderCleanupMarkerMatches(entry)) {
+    return managedAuthority(entry, {
+      transcriptPath: entry.managed_provider_authority_verified.transcript_path,
+      cleanupConfirmed: true,
+    });
+  }
+  if (result?.kind !== 'present') {
+    return unverifiedManagedAuthority(
+      `managed-provider-artifact-${result?.reason || result?.kind || 'missing'}`,
+    );
+  }
+  const artifact = result.artifact;
+  if (artifact?.tool !== source || artifact?.provider_session_id !== sessionId) {
+    return unverifiedManagedAuthority('managed-provider-artifact-identity-mismatch');
+  }
+  return managedAuthority(entry, { transcriptPath: artifact.transcript_path });
+}
+
+function managedAuthority(entry, { transcriptPath, cleanupConfirmed = false }) {
+  return {
+    state: 'managed',
+    safe_to_delete: true,
+    provider_managed: true,
+    provider_cleanup_confirmed: cleanupConfirmed,
+    source: nonEmpty(entry.tool_session_source),
+    session_id: nonEmpty(entry.tool_session_id),
+    transcript_path: transcriptPath,
+    runtime_generation: nonEmpty(entry.tool_session_provider_generation),
+    coding_session_id: nonEmpty(entry.coding_session_id),
+    artifacts: [],
+    totals: { paths: 0, files: 0, bytes: 0 },
+    issues: [],
+  };
+}
+
+function unverifiedManagedAuthority(code) {
+  return {
+    state: 'unverified',
+    safe_to_delete: false,
+    provider_managed: true,
+    artifacts: [],
+    totals: { paths: 0, files: 0, bytes: 0 },
+    issues: [{ code }],
+  };
 }
 
 function isVerifiedMissingRetry(entry, result, roots) {
@@ -480,6 +558,13 @@ function transcriptStatus(artifacts) {
   if (artifacts?.state === 'absent') {
     return {
       state: 'absent',
+      path: artifacts.transcript_path || null,
+      bytes: 0,
+    };
+  }
+  if (artifacts?.state === 'managed') {
+    return {
+      state: 'managed',
       path: artifacts.transcript_path || null,
       bytes: 0,
     };
@@ -774,6 +859,20 @@ function persistVerifiedAuthorities(plans, { deps = {}, now }) {
         verified_at: now(),
       };
     }
+    if (plan.artifacts?.provider_managed) {
+      authorityPatch.managed_provider_authority_verified = {
+        version: MANAGED_PROVIDER_AUTHORITY_VERSION,
+        adapter: plan.entry.tool_session_provider_adapter,
+        coding_session_id: plan.artifacts.coding_session_id,
+        runtime_generation: plan.artifacts.runtime_generation,
+        source: plan.artifacts.source,
+        session_id: plan.artifacts.session_id,
+        transcript_path: plan.artifacts.transcript_path,
+        cleanup_confirmed_at: plan.artifacts.provider_cleanup_confirmed
+          ? plan.entry.managed_provider_authority_verified?.cleanup_confirmed_at || now()
+          : null,
+      };
+    }
     patches.push(authorityPatch);
   }
   const result = patch(patches);
@@ -812,15 +911,49 @@ function emitCdBeforeTeardown(plans, { cwd, emitDirectives }) {
 }
 
 async function teardownOne(plan, { opts, deps }) {
-  const { entry, primary, status } = plan;
+  const { entry: originalEntry, primary, status } = plan;
+  let entry = originalEntry;
+  const repairs = [];
   try {
+    // Distill FIRST, while nothing has been destroyed. The transcript is
+    // the only copy of the session's knowledge; a failed upload leaves
+    // everything intact for a clean retry instead of deleting it unread.
+    const distilled = await distillTranscriptBeforeDelete(plan, { opts, deps });
+    if (!distilled.ok) {
+      throw new Error(
+        `transcript distill failed before deletion (${distilled.reason}); `
+        + 'nothing was deleted — retry when the upload can succeed, or pass --no-distill',
+      );
+    }
+
     const removeBroker = deps.removeBrokerSessionForEntry || removeBrokerSessionForEntry;
     const broker = await removeBroker(entry, {
       requestBroker: deps.requestBroker,
       deps,
     });
     if (!brokerCleanupIsAcceptable(entry, broker)) {
-      throw new Error(`broker cleanup failed (${broker?.error || broker?.reason || 'unknown'})`);
+      // A registry row stuck on `live` with no reachable broker is the
+      // documented deadlock (docs/incidents/2026-07-26): end refused and
+      // pointed at a different command. Run that exact repair inline —
+      // verify the broker is really gone, mark the row idle, continue.
+      const repaired = await repairStaleLiveRegistryState(entry, { broker, deps });
+      if (repaired.ok) {
+        entry = { ...entry, ...repaired.patch };
+        plan = { ...plan, entry };
+        repairs.push(repaired.reason);
+      }
+      if (!repaired.ok || !brokerCleanupIsAcceptable(entry, broker)) {
+        throw new Error(`broker cleanup failed (${broker?.error || broker?.reason || 'unknown'})`);
+      }
+    }
+    if (plan.artifacts?.provider_managed && !plan.artifacts?.provider_cleanup_confirmed) {
+      const confirmed = persistManagedProviderCleanupConfirmation(plan, {
+        deps,
+        now: deps.now || (() => new Date().toISOString()),
+      });
+      if (!confirmed.ok) {
+        throw new Error(`managed provider cleanup confirmation sync failed (${confirmed.reason})`);
+      }
     }
 
     // Stop and unregister the session's dev servers before the worktree
@@ -864,7 +997,7 @@ async function teardownOne(plan, { opts, deps }) {
     // Providerless sessions have nothing identifiable to delete on the
     // provider surface (see withProviderlessDowngrade) — skip rather than
     // let the deleter's own inspection fail closed on the whole teardown.
-    if (!plan.artifacts?.provider_untouched) {
+    if (!plan.artifacts?.provider_untouched && !plan.artifacts?.provider_managed) {
       const removeToolArtifacts = deps.deleteOwnedToolArtifacts || deleteOwnedToolArtifacts;
       const deleted = await removeToolArtifacts(entry, {
         roots: deps.toolArtifactRoots,
@@ -916,6 +1049,7 @@ async function teardownOne(plan, { opts, deps }) {
       verdict: status.verdict,
       status,
       leftovers: [],
+      ...(repairs.length ? { repairs } : {}),
     };
   } catch (err) {
     return {
@@ -924,17 +1058,136 @@ async function teardownOne(plan, { opts, deps }) {
       error: err.message,
       status,
       leftovers: await inspectLeftovers(plan, opts, deps),
+      ...(repairs.length ? { repairs } : {}),
     };
   }
 }
 
+/**
+ * Distill gate for the native transcript that `teardownOne` is about to
+ * delete. Skips (ok) when there is nothing to distill: providerless or
+ * managed targets, no recorded transcript, an already-removed file, or
+ * an explicit `--no-distill`.
+ */
+async function distillTranscriptBeforeDelete(plan, { opts = {}, deps = {} } = {}) {
+  if (opts.noDistill) return { ok: true, skipped: 'opted-out' };
+  const { entry, artifacts } = plan;
+  if (artifacts?.provider_untouched || artifacts?.provider_managed) {
+    return { ok: true, skipped: 'no-native-provider-artifacts' };
+  }
+  // No coding session id → the tool session never launched under mc and
+  // there is no server-side session record to distill into.
+  if (!nonEmpty(entry?.coding_session_id)) return { ok: true, skipped: 'never-launched' };
+  const transcriptPath = nonEmpty(entry?.tool_transcript_path);
+  if (!transcriptPath) return { ok: true, skipped: 'no-transcript-path' };
+  const fileExists = deps.transcriptExists || existsSync;
+  if (!fileExists(transcriptPath)) return { ok: true, skipped: 'transcript-already-absent' };
+  const upload = deps.runSessionUploadSync || runSessionUploadSync;
+  const uploaded = await upload({
+    source: entry.tool_session_source || null,
+    transcriptPath,
+    cwd: entry.worktree_path || null,
+    codingSessionId: entry.coding_session_id || null,
+  });
+  return uploaded?.ok === true
+    ? { ok: true, transcriptPath }
+    : { ok: false, reason: uploaded?.reason || 'upload-failed' };
+}
+
+/**
+ * Inline escape from the `registry-live-without-local-broker` deadlock:
+ * reuse the storage-repair plan (its liveness check probes the host
+ * socket, not just the pid) scoped to this one entry, and apply only the
+ * mark-idle action. Anything still genuinely live keeps failing closed.
+ */
+async function repairStaleLiveRegistryState(entry, { broker = null, deps = {} } = {}) {
+  if (entry?.session_state !== 'live') return { ok: false, reason: 'not-live' };
+  if (entry?.tool_session_provider_adapter) return { ok: false, reason: 'managed-provider' };
+  if (broker && broker.ok !== true && broker.reason !== 'broker-unavailable'
+    && broker.reason !== 'not-found') {
+    return { ok: false, reason: 'broker-failure-not-repairable' };
+  }
+  const read = deps.readRegistry || readRegistry;
+  let registry;
+  try {
+    registry = read();
+  } catch {
+    return { ok: false, reason: 'registry-unreadable' };
+  }
+  let repairPlan;
+  try {
+    repairPlan = await (deps.buildStorageRepairPlan || buildStorageRepairPlan)({
+      registry,
+      names: [entry.session_id || entry.name],
+      ...(deps.requestBroker ? { request: deps.requestBroker } : {}),
+    });
+  } catch {
+    return { ok: false, reason: 'repair-plan-failed' };
+  }
+  const actions = (repairPlan?.actions || []).filter((action) => (
+    action.type === 'mark-idle' && action.session_id === entry.session_id
+  ));
+  if (actions.length === 0) return { ok: false, reason: 'session-still-live' };
+  const applied = (deps.applyStorageRepairPlan || applyStorageRepairPlan)(
+    registry,
+    { actions },
+  );
+  if (!applied?.ok) return { ok: false, reason: applied?.reason || 'repair-apply-failed' };
+  return {
+    ok: true,
+    reason: 'registry-live-without-local-broker',
+    patch: actions[0].patch,
+  };
+}
+
 function brokerCleanupIsAcceptable(entry, result) {
+  if (entry?.tool_session_provider_adapter) {
+    return (result?.ok === true && result?.credential_cleanup === 'confirmed')
+      || (result?.reason === 'not-found' && managedProviderCleanupMarkerMatches(entry));
+  }
   if (result?.ok) return true;
   if (result?.reason === 'not-found') return true;
   if (result?.reason === 'broker-unavailable') {
     return entry?.session_state !== 'live';
   }
   return false;
+}
+
+function persistManagedProviderCleanupConfirmation(plan, { deps = {}, now }) {
+  const marker = plan.entry?.managed_provider_authority_verified;
+  if (!managedProviderAuthorityMarkerMatches(plan.entry, marker)) {
+    return { ok: false, reason: 'verified-authority-marker-missing' };
+  }
+  const patch = deps.patchEntriesIfPresent || patchEntriesIfPresent;
+  const result = patch([{
+    name: plan.entry.name,
+    session_id: plan.entry.session_id,
+    repository_id: plan.entry.repository_id,
+    managed_provider_authority_verified: {
+      ...marker,
+      cleanup_confirmed_at: now(),
+    },
+  }]);
+  const updated = result?.entries?.find((entry) => entry.session_id === plan.entry.session_id);
+  if (!result?.ok || !updated) return { ok: false, reason: 'registry-entry-missing' };
+  plan.entry = updated;
+  return { ok: true };
+}
+
+function managedProviderCleanupMarkerMatches(entry) {
+  const marker = entry?.managed_provider_authority_verified;
+  return managedProviderAuthorityMarkerMatches(entry, marker)
+    && nonEmpty(marker.cleanup_confirmed_at) != null;
+}
+
+function managedProviderAuthorityMarkerMatches(entry, marker) {
+  return marker?.version === MANAGED_PROVIDER_AUTHORITY_VERSION
+    && marker.adapter === nonEmpty(entry?.tool_session_provider_adapter)
+    && marker.coding_session_id === nonEmpty(entry?.coding_session_id)
+    && marker.runtime_generation === nonEmpty(entry?.tool_session_provider_generation)
+    && marker.source === nonEmpty(entry?.tool_session_source)
+    && marker.session_id === nonEmpty(entry?.tool_session_id)
+    && nonEmpty(marker.transcript_path) != null;
 }
 
 async function defaultShredForSession(args) {
@@ -957,21 +1210,23 @@ function removeWorktreeAndBranch(entry, { primary, keepBranch }) {
 async function inspectLeftovers(plan, opts, deps, { includeRegistry = true } = {}) {
   const leftovers = [];
   const exists = deps.existsSync || existsSync;
-  try {
-    const artifacts = withProviderlessDowngrade(
-      plan.entry,
-      await inspectAuthority(plan.entry, { deps }),
-    );
-    if (!artifacts.safe_to_delete) {
-      const issues = (artifacts.issues || []).map((issue) => issue.code).join('|') || 'unverified';
-      leftovers.push(`tool-artifacts:${issues}`);
-    } else {
-      for (const artifact of artifacts.artifacts || []) {
-        leftovers.push(`tool-artifact:${artifact.kind}:${artifact.path}`);
+  if (!plan.artifacts?.provider_managed) {
+    try {
+      const artifacts = withProviderlessDowngrade(
+        plan.entry,
+        await inspectAuthority(plan.entry, { deps }),
+      );
+      if (!artifacts.safe_to_delete) {
+        const issues = (artifacts.issues || []).map((issue) => issue.code).join('|') || 'unverified';
+        leftovers.push(`tool-artifacts:${issues}`);
+      } else {
+        for (const artifact of artifacts.artifacts || []) {
+          leftovers.push(`tool-artifact:${artifact.kind}:${artifact.path}`);
+        }
       }
+    } catch {
+      leftovers.push('tool-artifacts:inspection-failed');
     }
-  } catch {
-    leftovers.push('tool-artifacts:inspection-failed');
   }
   const inspectMc = deps.inspectSessionOwnedMcArtifacts || inspectSessionOwnedMcArtifacts;
   try {
@@ -1198,6 +1453,7 @@ function parseArgs(argv) {
     keepBranch: false,
     dryRun: false,
     json: false,
+    noDistill: false,
   };
   for (const arg of argv) {
     switch (arg) {
@@ -1205,6 +1461,7 @@ function parseArgs(argv) {
       case '--keep-branch': opts.keepBranch = true; break;
       case '--dry-run': opts.dryRun = true; break;
       case '--json': opts.json = true; break;
+      case '--no-distill': opts.noDistill = true; break;
       default:
         if (arg.startsWith('--')) return { error: `unknown flag: ${arg}` };
         opts.names.push(arg);

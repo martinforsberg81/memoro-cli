@@ -87,6 +87,62 @@ export async function scheduleSessionUpload({
   };
 }
 
+/**
+ * Run the transcript upload in the foreground and report whether it
+ * actually succeeded. `mc end` uses this as its distill gate: the
+ * transcript may only be deleted after the knowledge in it has been
+ * distilled, and a detached fire-and-forget child cannot carry that
+ * guarantee.
+ */
+export async function runSessionUploadSync({
+  source,
+  transcriptPath,
+  cwd = null,
+  repoHint = null,
+  codingSessionId = null,
+  toolVersion = null,
+  timeoutMs = 600_000,
+  deps = {},
+} = {}) {
+  if (!transcriptPath) return { ok: false, reason: 'no-transcript' };
+  const binJs = deps.binJs || defaultMemoroCliBinJs();
+  const args = buildSessionUploadArgs({
+    binJs,
+    transcriptPath,
+    source,
+    repoHint,
+    codingSessionId,
+    toolVersion,
+  });
+  const child = (deps.spawn || spawn)(process.execPath, args, {
+    stdio: ['ignore', 'pipe', 'pipe'],
+    cwd: cwd || process.cwd(),
+    env: {
+      ...scrubRuntimeSecretsFromEnv(process.env),
+      MEMORO_NO_UPDATE_CHECK: '1',
+    },
+  });
+  let output = '';
+  child.stdout?.on('data', (chunk) => { output += chunk; });
+  child.stderr?.on('data', (chunk) => { output += chunk; });
+  return await new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      try { child.kill('SIGKILL'); } catch {}
+      resolve({ ok: false, reason: 'upload-timeout', output: output.slice(-2000) });
+    }, timeoutMs);
+    child.once('error', (err) => {
+      clearTimeout(timer);
+      resolve({ ok: false, reason: err.message || 'spawn-failed', output: output.slice(-2000) });
+    });
+    child.once('exit', (code) => {
+      clearTimeout(timer);
+      resolve(code === 0
+        ? { ok: true, transcriptPath }
+        : { ok: false, reason: `upload-exit-${code}`, output: output.slice(-2000) });
+    });
+  });
+}
+
 export function buildSessionUploadArgs({
   binJs,
   transcriptPath,

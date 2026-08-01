@@ -98,7 +98,13 @@ export async function removeBrokerSessionForEntry(entry, {
       }
     }
   }
-  return { ok: true, id, removed: removed.removed !== false, host_stopped: hostStopped };
+  return {
+    ok: true,
+    id,
+    removed: removed.removed !== false,
+    host_stopped: hostStopped,
+    credential_cleanup: removed.credential_cleanup || null,
+  };
 }
 
 export function brokerSessionMatchesEntry(session, entry) {

@@ -7,6 +7,23 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- `mc new` now mints the native session id at launch for tools that accept one
+  (Claude Code via `--session-id`) and records it in the registry on the launch
+  commit. Claude sessions are resumable by `mc open` from their first moment,
+  with no dependence on post-hoc transcript discovery.
+- `mc end` distills the session transcript (foreground upload) before deleting
+  it. A failed upload aborts that target with everything intact; `--no-distill`
+  opts out explicitly.
+- `mc end` self-heals the `registry-live-without-local-broker` deadlock inline:
+  when broker cleanup reports the broker unavailable for a live-marked row, the
+  scoped storage repair (socket-probe liveness, mark-idle only) runs as part of
+  the teardown instead of requiring a separate `mc storage repair --apply`.
+
+### Fixed
+- `mc end` no longer strands the rest of a batch when one target fails;
+  every target is attempted and reported independently.
+- Managed `mc end` teardown confirms credential cleanup through the provider
+  artifact journal (previously unmerged fix).
 - `mc security claude-c1 <session>` runs the pinned, broker-owned managed
   Claude credential-boundary gate only after every local provider has exited.
   The fixed vault lease passes the Claude access token through an anonymous

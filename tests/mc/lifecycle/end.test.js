@@ -526,6 +526,7 @@ async function runEndInProcess(repo, argv, answer, extraDeps = {}) {
         }),
         inspectBrokerSessionAbsence: async () => ({ ok: true, state: 'absent', issues: [] }),
         shredForSession: async () => ({ ok: true, shredded: [] }),
+        runSessionUploadSync: async () => ({ ok: true }),
         ...extraDeps,
       },
     });

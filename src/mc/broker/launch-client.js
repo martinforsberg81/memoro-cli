@@ -88,6 +88,7 @@ export async function launchBrokerOwnedSession({
   argv = [],
   apiArgv = [],
   sendStartupMessage = true,
+  mintedToolSessionId = null,
   handoffUserMessage = null,
   handoffTransaction = null,
   attachAfterLaunch = true,
@@ -630,7 +631,7 @@ export async function launchBrokerOwnedSession({
             // transcript authority from that stale projection.
             toolSessionId: handoffTransaction
               ? null
-              : registryEntry.tool_session_id || null,
+              : registryEntry.tool_session_id || mintedToolSessionId || null,
             sockPath: paths.sockPath,
             metaPath: paths.metaPath,
             transcriptPath: handoffTransaction

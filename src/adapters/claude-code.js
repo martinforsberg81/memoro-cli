@@ -341,6 +341,21 @@ export function resumeArgs({ sessionId } = {}) {
   return ['--resume', sessionId];
 }
 
+/**
+ * mc mints the session id for a NEW session and hands it to Claude via
+ * `--session-id`, so the registry owns the native id from launch instead
+ * of rediscovering it from transcript files afterwards. Claude requires
+ * a well-formed UUID and refuses ids that are already in use, so the
+ * caller must mint a fresh UUID per launch.
+ */
+export function newSessionArgs({ sessionId } = {}) {
+  if (typeof sessionId !== 'string'
+    || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(sessionId)) {
+    return null;
+  }
+  return ['--session-id', sessionId];
+}
+
 // ─────────────────────────────────────────────────────────────
 // `mc auth status` adapter contract (§11a)
 //
