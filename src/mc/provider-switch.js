@@ -35,6 +35,7 @@ import {
   readHandoffSwitchJournalSync,
 } from './broker/handoff-switch-journal.js';
 import { mcHome } from './paths.js';
+import { resolveSessionSourceIdentity } from './session-projector.js';
 import { buildDeterministicHandoff } from './handoff-candidate.js';
 import {
   fetchStrictHandoffContext,
@@ -85,7 +86,8 @@ export async function prepareProviderSwitch({
   if (!['native', 'managed'].includes(targetCustody)) {
     return failure('handoff-target-custody-invalid');
   }
-  let sourceSession = localPresence.session;
+  let sourceSession = localPresence.session
+    || durableExitedSource({ sourceTool, sourceGeneration, localPresence, deps });
   const sourceCursor = providerCursor(sourceProvider);
   const targetCursor = providerCursor(providerSessionFor(entry, targetTool.id));
   if (sourceCursor === null || targetCursor === null) {
@@ -1225,6 +1227,38 @@ function isoNow(now) {
 
 function safeId(value) {
   return typeof value === 'string' && /^[A-Za-z0-9._:-]{1,128}$/.test(value);
+}
+
+/**
+ * Rebuild the exited source from durable evidence when no live broker session
+ * remains — after a restart, a broker crash, or a host replaced since the
+ * provider ran. The broker writes its lifecycle journal precisely so terminal
+ * state outlives the process that observed it, so a switch must not depend on
+ * that process still being around.
+ *
+ * This weakens nothing. The journal carries a positive `state: exited` for one
+ * exact generation, and the caller still requires that generation to equal the
+ * one the registry recorded for this provider. What is rebuilt is only the
+ * identity of the machine: the source kind is local, which means this host by
+ * definition, and the same value is used for both the terminal fence and the
+ * handoff, so the server's seal stays internally consistent. A cloud source is
+ * never rebuilt this way — its identity belongs to the runtime that held it.
+ */
+function durableExitedSource({ sourceTool, sourceGeneration, localPresence, deps = {} } = {}) {
+  if (localPresence?.verdict !== 'exited' || localPresence.session) return null;
+  const journaled = exact(localPresence.lifecycle?.record?.runtime_generation);
+  if (!journaled || journaled !== sourceGeneration) return null;
+  if (exact(localPresence.lifecycle?.record?.state) !== 'exited') return null;
+  const identity = (deps.resolveSessionSourceIdentity || resolveSessionSourceIdentity)({
+    machineId: (deps.hostname || hostname)(),
+  });
+  if (identity?.source_kind !== 'local' || !safeId(identity.source_id)) return null;
+  return {
+    tool: sourceTool.id,
+    runtime_generation: sourceGeneration,
+    source_id: identity.source_id,
+    source_kind: 'local',
+  };
 }
 
 function exact(value) {

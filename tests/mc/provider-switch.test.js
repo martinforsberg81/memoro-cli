@@ -1396,3 +1396,70 @@ test('a stalled switch re-seals the source before every handoff attempt', async 
   assert.notEqual(fence, -1, 'the terminal fence must be re-published on a resumed switch');
   if (post !== -1) assert.ok(fence < post, 'the fence must precede the handoff post');
 });
+
+test('a switch survives the broker that observed the source exiting', async () => {
+  // After a restart no live broker session remains, but the lifecycle journal
+  // still carries a positive terminal record for the exact generation. Before
+  // this, every existing session became permanently unswitchable at reboot.
+  const entry = sourceEntry();
+  entry.tool = 'claude';
+  const broker = makeBroker();
+  let prepared = null;
+  const result = await prepareProviderSwitch({
+    entry,
+    targetTool: resolveToolInput('codex'),
+    localPresence: {
+      verdict: 'exited',
+      session: null,
+      runtime_generation: sourceGeneration,
+      lifecycle: {
+        verdict: 'exited',
+        record: { runtime_generation: sourceGeneration, state: 'exited' },
+      },
+    },
+    deps: {
+      requestBroker: async (message) => broker.request(message),
+      sessionHostPaths: () => ({
+        socketPath: '/private/hosts/sess_switch1/broker.sock',
+        handoffSwitchPath: '/private/hosts/sess_switch1/handoff-switch.json',
+      }),
+      mcHome: () => '/private',
+      readHandoffSwitchJournalSync: () => ({ kind: 'absent' }),
+      ensureSessionHostRunning: async () => ({ ok: true }),
+      readProviderArtifact: presentTargetArtifact,
+      readConfig: async () => ({ apiUrl: 'https://meetmemoro.test' }),
+      getApiUrl: () => null,
+      resolveBootstrapIdentity: async () => ({
+        token: 'token-in-memory',
+        apiUrl: 'https://meetmemoro.test',
+      }),
+      getRepoContext: async () => ({
+        toplevel: '/repo',
+        branch: 'sess/handoff',
+        remoteUrl: 'git@github.com:martinforsberg81/memoro.git',
+      }),
+      hostname: () => 'test-host',
+      fetchStrictHandoffContext: async () => ({
+        ok: true,
+        continuity: { consumedSequence: 0, latestSequence: 0, latestDigest: null },
+        handoffs: [],
+      }),
+      buildDeterministicHandoff: async (input) => {
+        prepared = input.source;
+        return { ok: false, code: 'stop-after-source-proof' };
+      },
+      postHeartbeatWithRetry: async () => true,
+      randomUUID: () => transactionId,
+      now: () => '2026-07-28T12:00:00.000Z',
+    },
+  });
+
+  // The source proof must be reached at all — that is the regression. It is
+  // rebuilt from the journal and this host, never invented from nothing.
+  assert.notEqual(result.code, 'handoff-source-runtime-unconfirmed');
+  assert.ok(prepared, 'the switch must reach the handoff candidate');
+  assert.equal(prepared.runtimeGeneration, sourceGeneration);
+  assert.equal(prepared.tool, 'claude-code');
+  assert.equal(prepared.kind, 'local');
+  assert.match(prepared.id, /^local:test-host$/);
+});
