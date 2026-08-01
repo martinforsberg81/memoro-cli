@@ -21,7 +21,16 @@ export async function runGitHubShim(argv, deps = {}) {
     ? await executeGitHubWriteCommand(parsed, { ...deps, executeGitHubOperation: execute })
     : await execute({ operation: parsed.operation, params: parsed.params });
   if (!response?.ok) {
-    stderr.write(`${safeOperationError(response?.error?.code)} Run \`mc github status\` to repair.\n`);
+    // The wire error message survived the strict response decode (bounded,
+    // stable contract) — surface it. Collapsing every failure into the
+    // generic per-code text made real causes ("GitHub authentication could
+    // not be prepared.") undiagnosable in the field.
+    const mapped = safeOperationError(response?.error?.code);
+    const message = typeof response?.error?.message === 'string'
+      ? response.error.message.trim()
+      : '';
+    const detail = message && !mapped.includes(message) ? ` (${message})` : '';
+    stderr.write(`${mapped}${detail} Run \`mc github status\` to repair.\n`);
     return 1;
   }
   renderGitHubResult(parsed, response.data, stdout);
