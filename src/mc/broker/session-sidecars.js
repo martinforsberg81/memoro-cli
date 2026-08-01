@@ -15,7 +15,7 @@ import { scheduleSessionUpload } from '../session-upload.js';
 import { executeGitHubControlPlaneOperation } from '../github-session.js';
 import { decodeSessionCapabilities } from '../github-contract.js';
 import { createConnectionClient } from '../connections/client.js';
-import { createBoundIdentityBroker } from '../connections/identity.js';
+import { createRefreshingIdentityBroker } from '../connections/identity.js';
 import {
   buildSessionHeartbeatPayload,
   postHeartbeatWithRetry,
@@ -59,7 +59,11 @@ export class BrokerSessionSidecars {
     this.connectionClient = connectionClient || (
       coding.apiUrl && coding.token
         ? connectionClientFactory({
-            identityBroker: createBoundIdentityBroker({
+            // The sidecar outlives its launch-time token: a refreshing
+            // broker re-mints with the current keychain token on auth
+            // failure so a rotated device identity does not strand the
+            // session's GitHub capabilities until restart.
+            identityBroker: createRefreshingIdentityBroker({
               token: coding.token,
               apiUrl: coding.apiUrl,
               memoroFetch: memoroFetchImpl,
