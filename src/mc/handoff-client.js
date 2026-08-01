@@ -66,8 +66,14 @@ export async function persistSessionHandoff({
       method: 'POST',
       body: handoff,
     });
-  } catch {
-    return failure('handoff-post-unavailable');
+  } catch (error) {
+    // Distinguish a refusal from an unreachable server. Only the numeric HTTP
+    // status is carried, never the server's message: a rejected handoff must
+    // not become a channel for response text. Without this every refusal —
+    // wrong token scope, an unsealed source generation, a rate limit — looked
+    // identical to the network being down.
+    const status = Number.isInteger(error?.status) ? error.status : null;
+    return failure(status ? `handoff-post-rejected-${status}` : 'handoff-post-unavailable');
   }
   if (!plain(response) || response.ok !== true
     || response.sequence !== handoff.sequence

@@ -14,6 +14,19 @@ import { getAdapter } from '../adapters/index.js';
 import { getPackageVersion } from '../lib/version.js';
 import { detectStaleness, formatStaleLensBanner } from '../lib/staleness.js';
 
+/**
+ * Does this fetch failure mean "this account has no external lens" rather
+ * than "the pull went wrong"? Only a 404 does: the route answers it both for
+ * a lens outside the external allowlist and for one the registry does not
+ * mark external. Anything else — auth, rate limit, server fault, transport —
+ * is a real failure and must still surface.
+ *
+ * Pure and exported so the SessionStart contract is directly testable.
+ */
+export function isLensUnavailable(error) {
+  return error?.status === 404;
+}
+
 export async function pullLens(argv) {
   const flags = parseFlags(argv);
   const token = await getSecret(ACCOUNTS.TOKEN);
@@ -27,7 +40,18 @@ export async function pullLens(argv) {
   const adapter = getAdapter(flags.tool);
 
   const qs = flags.repo ? `?repo=${encodeURIComponent(flags.repo)}` : '';
-  const result = await memoroFetch(apiUrl, `/api/lens/portrait-coding${qs}`, { token });
+  let result;
+  try {
+    result = await memoroFetch(apiUrl, `/api/lens/portrait-coding${qs}`, { token });
+  } catch (error) {
+    // 404 is the account answering "there is no external lens for you" — a
+    // settled server-side fact, not a fault. This command is a SessionStart
+    // hook, so treating it as an error made every Claude launch report a
+    // failed hook. Take the same path as an empty lens and say nothing.
+    if (!isLensUnavailable(error)) throw error;
+    await adapter.removeLens({ cwd: process.cwd() });
+    return 0;
+  }
 
   if (!result?.markdown) {
     console.error('No legacy lens content available yet — Memoro needs more observation data.');

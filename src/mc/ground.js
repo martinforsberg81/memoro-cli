@@ -700,7 +700,15 @@ async function defaultFetchLens() {
   const config = await readConfig();
   const apiUrl = getApiUrl([]) || config.apiUrl;
   if (!apiUrl) return null;
-  return memoroFetch(apiUrl, '/api/lens/portrait-coding', { token });
+  try {
+    return await memoroFetch(apiUrl, '/api/lens/portrait-coding', { token });
+  } catch {
+    // memoroFetch throws on any non-2xx, which broke the null contract this
+    // function documents: an account with no external lens available answers
+    // 404, and that surfaced as a SessionStart hook error on every launch.
+    // A lens is optional enrichment — its absence must never be an error.
+    return null;
+  }
 }
 
 /**
