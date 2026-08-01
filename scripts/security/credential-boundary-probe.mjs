@@ -18,11 +18,11 @@ import {
   compileManagedBoundaryProbe,
   renderManagedCodexConfig,
   validateBoundaryReport,
-} from '../../src/mc/credential-domain/local-codex.js';
-import { MANAGED_CODEX_PROFILE } from '../../src/mc/provider-adapters/codex-managed.js';
+} from '../../src/vault/credential-domain/local-codex.js';
+import { MANAGED_CODEX_PROFILE } from '../../src/adapters/managed-runtime/codex-managed.js';
 import {
   verifyInstalledManagedCodexArtifact,
-} from '../../src/mc/provider-adapters/codex-managed-artifacts.js';
+} from '../../src/adapters/managed-runtime/codex-managed-artifacts.js';
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(scriptDir, '..', '..');

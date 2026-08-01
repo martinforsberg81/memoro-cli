@@ -1,5 +1,5 @@
 import { readConfig, getApiUrl } from '../lib/config.js';
-import { resolveBootstrapIdentity } from './connections/identity.js';
+import { resolveBootstrapIdentity } from '../capabilities/connections/identity.js';
 import { deriveHandoffControllerRoot } from './handoff-controller-capability.js';
 
 /**

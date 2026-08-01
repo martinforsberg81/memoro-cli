@@ -13,7 +13,7 @@ import {
   decodeGitHubOperationResponse,
   decodeSessionCapabilities,
   encodeGitHubOperationRequest,
-} from '../../src/mc/github-contract.js';
+} from '../../src/capabilities/github/github-contract.js';
 
 const REPOSITORY = Object.freeze({
   id: 301,

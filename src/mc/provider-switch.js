@@ -14,26 +14,26 @@ import {
   inspectManagedProviderHandoffSource,
   MANAGED_PROVIDER_HANDOFF_SOURCE_SCHEMA,
 } from './managed-provider-registry.js';
-import { resolveBootstrapIdentity } from './connections/identity.js';
+import { resolveBootstrapIdentity } from '../capabilities/connections/identity.js';
 import {
   buildSessionHeartbeatPayload,
   postHeartbeatWithRetry,
   sourceForTool,
-} from './broker/session-sidecars.js';
-import { requestBroker } from './broker/client.js';
+} from '../runtime/broker/session-sidecars.js';
+import { requestBroker } from '../runtime/broker/client.js';
 import {
   ensureSessionHostRunning,
   requestForSession,
-} from './broker/session-hosts.js';
+} from '../runtime/broker/session-hosts.js';
 import {
   providerArtifactPath,
   sessionHostPaths,
-} from './broker/paths.js';
-import { readProviderArtifactSync } from './broker/provider-artifact-journal.js';
+} from '../runtime/broker/paths.js';
+import { readProviderArtifactSync } from '../runtime/broker/provider-artifact-journal.js';
 import {
   buildHandoffSwitchJournal,
   readHandoffSwitchJournalSync,
-} from './broker/handoff-switch-journal.js';
+} from '../runtime/broker/handoff-switch-journal.js';
 import { mcHome } from './paths.js';
 import { resolveSessionSourceIdentity } from './session-projector.js';
 import { buildDeterministicHandoff } from './handoff-candidate.js';

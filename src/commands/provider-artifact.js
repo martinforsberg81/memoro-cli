@@ -1,7 +1,7 @@
 /** Internal Claude SessionStart bridge for broker-owned artifact capture. */
 import { readHookEvent } from '../lib/hook-event.js';
-import { requestBroker } from '../mc/broker/client.js';
-import { sessionHostPaths } from '../mc/broker/paths.js';
+import { requestBroker } from '../runtime/broker/client.js';
+import { sessionHostPaths } from '../runtime/broker/paths.js';
 
 export async function captureProviderArtifact(argv, {
   env = process.env,

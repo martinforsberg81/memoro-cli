@@ -3,7 +3,7 @@ import { basename, join } from 'node:path';
 
 import { mcHome } from './paths.js';
 import { readRegistry } from './registry.js';
-import { listLocalBrokerAndHostSessions } from './broker/session-hosts.js';
+import { listLocalBrokerAndHostSessions } from '../runtime/broker/session-hosts.js';
 
 export const DEFAULT_SIDECAR_MIN_AGE_MS = 5 * 60 * 1000;
 

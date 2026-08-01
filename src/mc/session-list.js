@@ -2,8 +2,8 @@ import { getSecret } from '../lib/keychain.js';
 import { ACCOUNTS } from '../commands/auth.js';
 import { readConfig, getApiUrl } from '../lib/config.js';
 import { memoroFetch } from '../lib/api.js';
-import { requestBroker } from './broker/client.js';
-import { listLocalBrokerAndHostSessions } from './broker/session-hosts.js';
+import { requestBroker } from '../runtime/broker/client.js';
+import { listLocalBrokerAndHostSessions } from '../runtime/broker/session-hosts.js';
 
 const ACTIVE_PATH = '/api/coding-sessions/active';
 

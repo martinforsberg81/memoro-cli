@@ -7,17 +7,17 @@ import { fileURLToPath } from 'node:url';
 
 import {
   MANAGED_CLAUDE_RUNTIME_SOURCE_SHA256,
-} from '../../src/mc/provider-adapters/claude-managed-runtime-source-closure.js';
+} from '../../src/adapters/managed-runtime/claude-managed-runtime-source-closure.js';
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const trustedEntrypoint =
-  'src/mc/provider-adapters/claude-managed-runtime-host.js';
+  'src/adapters/managed-runtime/claude-managed-runtime-host.js';
 const trustedBootstrap =
-  'src/mc/provider-adapters/claude-managed-runtime-source-closure.js';
+  'src/adapters/managed-runtime/claude-managed-runtime-source-closure.js';
 const roots = Object.freeze([trustedEntrypoint]);
 const explicitInputs = Object.freeze(['package.json']);
 const declaredDynamicExternalEdges = Object.freeze({
-  'src/mc/provider-adapters/claude-managed-runtime.js': [
+  'src/adapters/managed-runtime/claude-managed-runtime.js': [
     'import(pathToFileURL(verified.artifacts.srtModule).href)',
   ],
 });

@@ -18,7 +18,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { runWithDeps } from '../../../src/mc/commands/gather.js';
+import { runWithDeps } from '../../../src/cli/gather.js';
 
 function withTempDir() {
   const dir = mkdtempSync(join(tmpdir(), 'gather-test-'));

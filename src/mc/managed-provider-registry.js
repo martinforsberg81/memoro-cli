@@ -7,10 +7,10 @@
  */
 import {
   CODEX_MANAGED_PROVIDER_ADAPTER,
-} from './provider-adapters/codex-managed-registration.js';
+} from '../adapters/managed-runtime/codex-managed-registration.js';
 import {
   CLAUDE_MANAGED_PROVIDER_ADAPTER,
-} from './provider-adapters/claude-managed-registration.js';
+} from '../adapters/managed-runtime/claude-managed-registration.js';
 import { mcHome } from './paths.js';
 import {
   appendManagedGenerationReceiptSync,

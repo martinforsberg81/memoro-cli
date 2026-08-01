@@ -32,7 +32,7 @@ import {
 import {
   parseMaterialiseArgs,
   runMaterialiseWith,
-} from '../../src/mc/commands/adapter.js';
+} from '../../src/cli/adapter.js';
 import { CANON_MANIFEST, readPackageCanon } from '../../src/mc/canon.js';
 import { runMc } from './_helpers/cli.js';
 

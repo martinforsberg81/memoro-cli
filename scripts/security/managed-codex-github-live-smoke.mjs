@@ -14,14 +14,14 @@ import { fileURLToPath } from 'node:url';
 import {
   brokerSessionPaths,
   launchBrokerOwnedSession,
-} from '../../src/mc/broker/launch-client.js';
-import { requestBroker } from '../../src/mc/broker/client.js';
-import { sessionHostPaths } from '../../src/mc/broker/paths.js';
-import { spawnBrokerDaemon } from '../../src/mc/broker/supervisor.js';
+} from '../../src/runtime/broker/launch-client.js';
+import { requestBroker } from '../../src/runtime/broker/client.js';
+import { sessionHostPaths } from '../../src/runtime/broker/paths.js';
+import { spawnBrokerDaemon } from '../../src/runtime/broker/supervisor.js';
 import {
   executeGitHubSessionOperation,
   MC_GITHUB_BROKER_SOCKET_ENV,
-} from '../../src/mc/github-session.js';
+} from '../../src/capabilities/github/github-session.js';
 import { LOCAL_AUTH_MODES } from '../../src/mc/local-auth-mode.js';
 import { inspectManagedGenerationSync } from '../../src/mc/managed-generation-journal.js';
 import {

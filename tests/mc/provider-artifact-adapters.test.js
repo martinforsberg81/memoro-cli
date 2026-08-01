@@ -11,15 +11,15 @@ import {
   createProviderArtifactAdapterRegistry,
   providerArtifactContextForLaunch,
   validateProviderArtifactEvidence,
-} from '../../src/mc/provider-artifact-adapters/index.js';
+} from '../../src/adapters/artifacts/index.js';
 import {
   captureContext as captureClaudeContext,
   validate as validateClaudeArtifact,
-} from '../../src/mc/provider-artifact-adapters/claude-code.js';
+} from '../../src/adapters/artifacts/claude-code.js';
 import { encodeClaudeProjectPath } from '../../src/lib/claude.js';
 import {
   observe as observeCodexArtifact,
-} from '../../src/mc/provider-artifact-adapters/codex.js';
+} from '../../src/adapters/artifacts/codex.js';
 
 function fixtureAdapter({ toolId = 'future-provider-v1', calls = [] } = {}) {
   return {

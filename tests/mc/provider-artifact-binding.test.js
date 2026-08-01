@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { launchFreshSession, launchResumeSession } from '../../src/mc/commands/resume.js';
+import { launchFreshSession, launchResumeSession } from '../../src/cli/resume.js';
 import { LOCAL_AUTH_MODES } from '../../src/mc/local-auth-mode.js';
 
 test('fresh launch binds only a broker-confirmed provider artifact to its provider map', async () => {

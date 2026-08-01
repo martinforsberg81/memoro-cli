@@ -11,10 +11,10 @@ import {
   sep,
 } from 'node:path';
 
-import { requestBroker as defaultRequestBroker } from './broker/client.js';
+import { requestBroker as defaultRequestBroker } from '../runtime/broker/client.js';
 import {
   brokerSessionMatchesEntry,
-} from './broker/session-cleanup.js';
+} from '../runtime/broker/session-cleanup.js';
 import { mcHome } from './paths.js';
 
 const SESSION_KEY_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,159}$/;

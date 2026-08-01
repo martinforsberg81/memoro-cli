@@ -67,7 +67,7 @@ export async function materialiseVaultForWrap({
   }
 
   const materialise = deps.materialiseVaultBeforeLaunch
-    || (await import('./vault/startup.js')).materialiseVaultBeforeLaunch;
+    || (await import('../vault/engine/startup.js')).materialiseVaultBeforeLaunch;
   const res = await materialise({
     sessionId,
     worktreePath: cwd,
