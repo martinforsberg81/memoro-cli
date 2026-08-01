@@ -369,7 +369,10 @@ export async function recoverProviderSwitch({
   const journalTargetCustody = journal.target_custody || 'native';
   if (!['native', 'managed'].includes(targetCustody)
     || journalTargetCustody !== targetCustody) {
-    return failure('handoff-target-custody-conflict');
+    return {
+      ...failure('handoff-target-custody-conflict'),
+      recordedCustody: journalTargetCustody,
+    };
   }
 
   const recoveredTargetTool = resolveToolInput(journal.target_tool);
@@ -459,20 +462,34 @@ export async function recoverProviderSwitch({
     if (!recoveryCursorMatches({ journal, sourceCursor, targetCursor })) {
       return failure('handoff-switch-journal-conflict');
     }
-    const exactLiveTarget = localPresence?.verdict === 'live'
-      && exact(localPresence.runtime_generation) === journal.target_runtime_generation
-      && sourceForTool(localPresence.session?.tool) === recoveredTargetTool.id;
-    const code = exactLiveTarget
-      ? 'handoff-delivery-in-progress'
-      : 'handoff-delivery-ambiguous';
+    if (!targetLaunchProvablyUndelivered({
+      journal,
+      localPresence,
+      codingSessionId: entry.coding_session_id,
+      deps,
+    })) {
+      const exactLiveTarget = localPresence?.verdict === 'live'
+        && exact(localPresence.runtime_generation) === journal.target_runtime_generation
+        && sourceForTool(localPresence.session?.tool) === recoveredTargetTool.id;
+      const code = exactLiveTarget
+        ? 'handoff-delivery-in-progress'
+        : 'handoff-delivery-ambiguous';
+      await recordSwitchDiagnostic({
+        brokerRequest,
+        codingSessionId: entry.coding_session_id,
+        transactionId: journal.transaction_id,
+        code,
+        now: deps.now,
+      });
+      return failure(code);
+    }
     await recordSwitchDiagnostic({
       brokerRequest,
       codingSessionId: entry.coding_session_id,
       transactionId: journal.transaction_id,
-      code,
+      code: 'handoff-dead-target-relaunch',
       now: deps.now,
     });
-    return failure(code);
   }
 
   const repoContext = await (deps.getRepoContext || getRepoContext)(entry.worktree_path);
@@ -650,6 +667,37 @@ export async function commitProviderSwitchDelivery({
   };
 }
 
+/**
+ * A target launch that provably died without delivering the handoff:
+ * the local lifecycle evidence names the EXACT journaled target
+ * generation as exited, and that generation never published a provider
+ * artifact. Delivery is certified only by the artifact's session/
+ * generation/tool binding, so an artifact-less exited generation cannot
+ * have consumed the handoff — relaunching cannot double-deliver. This
+ * is the named way out of `handoff-delivery-ambiguous` for a dead
+ * target; anything live or unproven stays fail-closed.
+ */
+function targetLaunchProvablyUndelivered({
+  journal,
+  localPresence,
+  codingSessionId,
+  deps = {},
+} = {}) {
+  if (localPresence?.verdict !== 'exited') return false;
+  const targetGeneration = exact(journal?.target_runtime_generation);
+  if (!targetGeneration
+    || exact(localPresence.runtime_generation) !== targetGeneration) {
+    return false;
+  }
+  const artifact = (deps.readProviderArtifact || readProviderArtifactSync)({
+    path: providerArtifactPath(codingSessionId, targetGeneration),
+    codingSessionId,
+    runtimeGeneration: targetGeneration,
+    trustedRoot: mcHome(),
+  });
+  return artifact?.kind === 'absent';
+}
+
 async function recoverPreparedProviderSwitch({
   entry,
   targetTool,
@@ -674,7 +722,13 @@ async function recoverPreparedProviderSwitch({
     return failure('handoff-switch-journal-conflict');
   }
   if (journal.phase === 'target_launch_started') {
-    if (journal.target_runtime_generation) {
+    if (journal.target_runtime_generation
+      && !targetLaunchProvablyUndelivered({
+        journal,
+        localPresence,
+        codingSessionId: entry.coding_session_id,
+        deps,
+      })) {
       const exactLiveTarget = localPresence?.verdict === 'live'
         && exact(localPresence.runtime_generation) === journal.target_runtime_generation
         && sourceForTool(localPresence.session?.tool) === targetTool.id;

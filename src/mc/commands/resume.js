@@ -174,6 +174,8 @@ export async function run(rawArgv, deps = {}) {
     });
     if (!recovery?.ok) {
       stderr.write(`mc: provider handoff recovery failed (${recovery?.code || 'handoff-recovery-unavailable'}); refusing to launch.\n`);
+      const remedy = handoffRecoveryRemedy(recovery);
+      if (remedy) stderr.write(remedy);
       return 1;
     }
     if (recovery.active) {
@@ -315,6 +317,8 @@ export async function run(rawArgv, deps = {}) {
         });
         if (!handoff?.ok || !handoff.recoveredDelivery) {
           stderr.write(`mc: provider handoff recovery failed (${handoff?.code || 'handoff-recovery-unavailable'}); refusing to attach.\n`);
+          const remedy = handoffRecoveryRemedy(handoff);
+          if (remedy) stderr.write(remedy);
           return 1;
         }
         const committed = await (deps.commitProviderSwitchDelivery
@@ -1060,6 +1064,8 @@ export async function resumeSelectedChoice(choice, {
     });
     if (!recovery?.ok) {
       stderr.write(`mc: provider handoff recovery failed (${recovery?.code || 'handoff-recovery-unavailable'}); refusing to launch.\n`);
+      const remedy = handoffRecoveryRemedy(recovery);
+      if (remedy) stderr.write(remedy);
       return 1;
     }
     if (recovery.active) {
@@ -1984,6 +1990,22 @@ function normalizePathForMatch(value) {
     out = out.slice('/private'.length);
   }
   return out;
+}
+
+/**
+ * Failure codes must name the way out. A custody conflict means the
+ * interrupted switch journal was begun under the OTHER custody flag —
+ * the fix is always to retry with the recorded one.
+ */
+function handoffRecoveryRemedy(recovery) {
+  if (recovery?.code !== 'handoff-target-custody-conflict') return null;
+  if (recovery.recordedCustody === 'native') {
+    return 'mc: the interrupted switch targets the tool\'s own sign-in — retry with `--native`.\n';
+  }
+  if (recovery.recordedCustody === 'managed') {
+    return 'mc: the interrupted switch targets managed custody — retry without `--native`.\n';
+  }
+  return null;
 }
 
 function renderCannotResumeSameToolSession(entry = {}, resolved = {}) {
