@@ -683,7 +683,11 @@ export function removeEntryIfMatches(identifier, expected = {}, options = {}) {
   const index = reg.entries.findIndex((entry) => entry.session_id === resolved.entry.session_id);
   if (index === -1) return { ok: false, removed: false, reason: 'missing' };
   const entry = reg.entries[index];
-  if (!validSessionId(expected.session_id) || !REPOSITORY_ID_RE.test(expected.repository_id || '')) {
+  // session_id alone uniquely names the row. A repository_id is part of the
+  // expected identity only when the row has one — rows created outside any
+  // repository must still be removable.
+  if (!validSessionId(expected.session_id)
+    || (entry.repository_id && !REPOSITORY_ID_RE.test(expected.repository_id || ''))) {
     return { ok: false, removed: false, reason: 'expected-identity-required' };
   }
   for (const key of [
