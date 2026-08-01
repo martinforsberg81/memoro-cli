@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import test from 'node:test';
 
 import { resolveToolInput } from '../../src/adapters/index.js';
@@ -1066,6 +1067,139 @@ test('an interrupted target write remains explicit and is never replayed automat
     broker.calls.find((call) => call.type === 'handoff_switch_diagnose')?.code,
     'handoff-delivery-ambiguous',
   );
+});
+
+test('a provably dead, artifact-less target launch re-arms and re-delivers the handoff', async () => {
+  const entry = sourceEntry();
+  const broker = makeBroker();
+  const relaunchMessage = 'relaunch handoff message';
+  const relaunchDigest = createHash('sha256')
+    .update(relaunchMessage, 'utf8')
+    .digest('hex');
+  broker.journal = {
+    transaction_id: transactionId,
+    coding_session_id: entry.coding_session_id,
+    phase: 'target_launch_started',
+    target_tool: 'codex',
+    controller_root_digest: controllerRootDigest,
+    controller_capability_digest: controllerCapabilityDigest,
+    source_cursor: 0,
+    target_cursor: 0,
+    handoff: {
+      source: {
+        kind: 'local',
+        tool: 'claude-code',
+        id: 'device:laptop',
+        runtime_generation: sourceGeneration,
+      },
+    },
+    persisted: { sequence: 1, digest: serverDigest },
+    target_latest_sequence: 1,
+    target_message_digest: relaunchDigest,
+    target_runtime_generation: targetGeneration,
+  };
+  const artifactReads = [];
+  const result = await recoverProviderSwitch({
+    entry,
+    targetTool: resolveToolInput('codex'),
+    localPresence: {
+      // The broker lifecycle journal proves this EXACT generation exited.
+      verdict: 'exited',
+      runtime_generation: targetGeneration,
+      session: null,
+    },
+    deps: {
+      brokerRequest: broker.request,
+      readProviderArtifact: (arg) => {
+        artifactReads.push(arg);
+        return { kind: 'absent' };
+      },
+      patchProviderSessionSequenceIfPresent: () => ({ ok: true, entry }),
+      renderHandoffUserMessage: () => ({ ok: true, message: relaunchMessage }),
+      readConfig: async () => ({ apiUrl: 'https://meetmemoro.test' }),
+      getApiUrl: () => null,
+      resolveBootstrapIdentity: async () => ({
+        token: 'token-in-memory',
+        apiUrl: 'https://meetmemoro.test',
+      }),
+      getRepoContext: async () => ({
+        toplevel: '/repo',
+        branch: 'sess/handoff',
+        remoteUrl: 'git@github.com:martinforsberg81/memoro.git',
+      }),
+      fetchStrictHandoffContext: async () => ({
+        ok: true,
+        continuity: {
+          consumedSequence: 0,
+          latestSequence: 1,
+          latestDigest: serverDigest,
+        },
+        handoffs: [{ sequence: 1 }],
+      }),
+    },
+  });
+
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(result.active, true);
+  assert.equal(result.message, relaunchMessage);
+  assert.equal(result.targetTool?.id, 'codex');
+  assert.equal(artifactReads[0]?.runtimeGeneration, targetGeneration);
+  assert.equal(
+    broker.calls.find((call) => call.type === 'handoff_switch_diagnose')?.code,
+    'handoff-dead-target-relaunch',
+  );
+});
+
+test('a dead target WITH a published artifact stays ambiguous — delivery may have happened', async () => {
+  const entry = sourceEntry();
+  const broker = makeBroker();
+  broker.journal = {
+    transaction_id: transactionId,
+    coding_session_id: entry.coding_session_id,
+    phase: 'target_launch_started',
+    target_tool: 'codex',
+    controller_root_digest: controllerRootDigest,
+    controller_capability_digest: controllerCapabilityDigest,
+    source_cursor: 0,
+    target_cursor: 0,
+    handoff: {
+      source: {
+        kind: 'local',
+        tool: 'claude-code',
+        id: 'device:laptop',
+        runtime_generation: sourceGeneration,
+      },
+    },
+    persisted: { sequence: 1, digest: serverDigest },
+    target_latest_sequence: 1,
+    target_runtime_generation: targetGeneration,
+  };
+  const result = await recoverProviderSwitch({
+    entry,
+    targetTool: resolveToolInput('codex'),
+    localPresence: {
+      verdict: 'exited',
+      runtime_generation: targetGeneration,
+      session: null,
+    },
+    deps: {
+      brokerRequest: broker.request,
+      readProviderArtifact: () => presentTargetArtifact(),
+      readConfig: async () => ({ apiUrl: 'https://meetmemoro.test' }),
+      getApiUrl: () => null,
+      resolveBootstrapIdentity: async () => ({
+        token: 'token-in-memory',
+        apiUrl: 'https://meetmemoro.test',
+      }),
+      getRepoContext: async () => ({
+        toplevel: '/repo',
+        branch: 'sess/handoff',
+        remoteUrl: 'git@github.com:martinforsberg81/memoro.git',
+      }),
+    },
+  });
+
+  assert.deepEqual(result, { ok: false, code: 'handoff-delivery-ambiguous' });
 });
 
 test('a live exact target stays fail-closed while broker delivery is still in progress', async () => {

@@ -21,7 +21,7 @@ const SOURCE_CLOSURE_PATH = join(
   'claude-managed-runtime-source-closure.js',
 );
 const SOURCE_CLOSURE_SHA256 =
-  '56f6e2dcb0405dbd6a103ecb5301a9d5a7244d3766ed6b4fca95065e7085d942';
+  '89caf88fcac520bd902753c3029dd4f9cd663ecc474197798036ccb73223556e';
 
 async function main() {
   if (!verifyFixedSourceClosure()) return 1;
