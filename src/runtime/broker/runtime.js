@@ -1392,7 +1392,7 @@ export class BrokerRuntime {
   }
 
   _noteHandoffFailure({ id, transaction, code, session = null } = {}) {
-    this._captureHandoffLaunchTail(id, session);
+    this._captureHandoffLaunchTail(id, session, { code });
     if (!transaction?.transaction_id) return;
     this._diagnoseHandoffSwitch({
       id,
@@ -1416,20 +1416,30 @@ export class BrokerRuntime {
    * overwritten each time, never transmitted. Success paths write
    * nothing.
    */
-  _captureHandoffLaunchTail(id, session) {
-    if (!id || typeof session?.recentOutput !== 'function') return;
-    let tail;
+  _captureHandoffLaunchTail(id, session, { code = null } = {}) {
+    if (!id) return;
+    let raw = '';
     try {
-      tail = stripAnsi(String(session.recentOutput() || '')).slice(-HANDOFF_TAIL_BYTES);
-    } catch {
-      return;
-    }
-    if (!tail) return;
+      raw = typeof session?.recentOutput === 'function'
+        ? String(session.recentOutput() || '')
+        : '';
+    } catch { /* an unreadable ring is itself reported by the header below */ }
+    const tail = stripAnsi(raw).slice(-HANDOFF_TAIL_BYTES);
+    // Written even when there is nothing to show. "The tool drew nothing"
+    // is a finding, not a reason to stay silent — and a file that never
+    // appears must mean the write failed, not that the question is
+    // unanswered.
+    const header = [
+      `# code: ${code || 'unknown'}`,
+      `# prompt_ready_observed: ${session?.promptReadyObserved === true}`,
+      `# pty_bytes: ${raw.length}`,
+    ].join('\n');
     try {
-      writeFileSync(sessionHostPaths(id).handoffLaunchTailPath, `${tail}\n`, {
-        encoding: 'utf8',
-        mode: 0o600,
-      });
+      writeFileSync(
+        sessionHostPaths(id).handoffLaunchTailPath,
+        `${header}\n${tail || '(the tool wrote nothing to its terminal)'}\n`,
+        { encoding: 'utf8', mode: 0o600 },
+      );
     } catch {}
   }
 
