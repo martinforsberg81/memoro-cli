@@ -175,6 +175,96 @@ test('a managed adapter on the OTHER tool never forces managed proof on a native
   assert.notEqual(result.code, 'handoff-source-artifact-unconfirmed');
 });
 
+test('a missed exit-commit is replayed from the artifact journal instead of dead-ending', async () => {
+  // Live case (sql-readiness 2026-08-02): the registry's claude-side
+  // generation is one behind the durable exited runtime, because the
+  // exit-commit crashed on a registry schema bump. The broker's own
+  // artifact journal proves the same provider session at the observed
+  // generation — the switch must replay that commit and pass the
+  // runtime gate, not die with handoff-source-runtime-unconfirmed.
+  const observedGeneration = 'gen-observed-after-crash';
+  const entry = sourceEntry(); // claude side records sourceGeneration (stale)
+  const broker = makeBroker();
+  let hostReady = false;
+  const upserts = [];
+  const result = await prepareProviderSwitch({
+    entry,
+    targetTool: resolveToolInput('codex'),
+    localPresence: {
+      verdict: 'exited',
+      runtime_generation: observedGeneration,
+      session: {
+        id: 'sess_switch1',
+        tool: 'claude',
+        runtime_generation: observedGeneration,
+        source_id: 'device:laptop',
+        source_kind: 'local',
+        broker_socket_path: '/private/broker.sock',
+      },
+    },
+    deps: {
+      readProviderArtifact: ({ runtimeGeneration }) => {
+        assert.equal(runtimeGeneration, observedGeneration);
+        return {
+          kind: 'present',
+          artifact: {
+            tool: 'claude-code',
+            provider_session_id: 'claude-native-a',
+            transcript_path: '/private/transcripts/a.jsonl',
+            runtime_generation: observedGeneration,
+          },
+        };
+      },
+      upsertEntry: (patch) => {
+        upserts.push(patch);
+        return { ...entry, ...patch };
+      },
+      requestBroker: async (message) => {
+        if (!hostReady) throw new Error('dead socket');
+        return broker.request(message);
+      },
+      sessionHostPaths: () => ({
+        socketPath: '/private/hosts/sess_switch1/broker.sock',
+        handoffSwitchPath: '/private/hosts/sess_switch1/handoff-switch.json',
+      }),
+      mcHome: () => '/private',
+      readHandoffSwitchJournalSync: () => ({ kind: 'absent' }),
+      ensureSessionHostRunning: async () => {
+        hostReady = true;
+        return { ok: true };
+      },
+      readConfig: async () => ({ apiUrl: 'https://meetmemoro.test' }),
+      getApiUrl: () => null,
+      resolveBootstrapIdentity: async () => ({
+        token: 'token-in-memory',
+        apiUrl: 'https://meetmemoro.test',
+      }),
+      getRepoContext: async () => ({
+        toplevel: '/repo',
+        branch: 'sess/handoff',
+        remoteUrl: 'git@github.com:martinforsberg81/memoro.git',
+      }),
+      fetchStrictHandoffContext: async () => ({
+        ok: true,
+        continuity: { consumedSequence: 0, latestSequence: 0, latestDigest: null },
+        handoffs: [],
+      }),
+      // The handoff build happens right AFTER the runtime gate — its
+      // deterministic failure code proves the gate accepted the
+      // recovered generation.
+      buildDeterministicHandoff: async () => ({ ok: false, code: 'stop-after-runtime-gate' }),
+    },
+  });
+
+  assert.notEqual(result.code, 'handoff-source-runtime-unconfirmed');
+  assert.equal(result.code, 'stop-after-runtime-gate');
+  assert.equal(upserts.length, 1);
+  assert.equal(
+    upserts[0].tool_sessions.providers['claude-code'].runtime_generation,
+    observedGeneration,
+  );
+});
+
 test('A to B seals, persists, advances the source cursor, and prepares one user turn', async () => {
   const entry = sourceEntry();
   const broker = makeBroker();

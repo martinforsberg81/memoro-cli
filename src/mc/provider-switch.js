@@ -72,7 +72,18 @@ export async function prepareProviderSwitch({
   }
   const codingSessionId = exact(entry?.coding_session_id);
   if (!codingSessionId) return failure('handoff-source-not-exited');
-  const sourceProvider = toolSessionFor(entry, sourceTool.id);
+  let sourceProvider = toolSessionFor(entry, sourceTool.id);
+  const recoveredCommit = recoverMissedSourceCommit({
+    entry,
+    sourceTool,
+    sourceProvider,
+    localPresence,
+    deps,
+  });
+  if (recoveredCommit) {
+    entry = recoveredCommit.entry;
+    sourceProvider = toolSessionFor(entry, sourceTool.id);
+  }
   const sourceGeneration = exact(sourceProvider?.runtime_generation);
   const sourceProof = await proveProviderSwitchSource({
     entry,
@@ -1334,6 +1345,66 @@ function safeId(value) {
  * handoff, so the server's seal stays internally consistent. A cloud source is
  * never rebuilt this way — its identity belongs to the runtime that held it.
  */
+/**
+ * A missed exit-commit leaves the registry's source generation behind the
+ * durable exited runtime on disk (live case: a registry schema bump caught
+ * a long-lived old-code process at logout — its registry write refused, so
+ * sql-readiness kept the previous generation and every switch died at the
+ * runtime gate, 2026-08-02). The broker's provider-artifact journal is its
+ * own receipt of that exit: when it proves the SAME provider session at
+ * the observed generation, the commit is replayed here instead of
+ * dead-ending the switch.
+ */
+function recoverMissedSourceCommit({
+  entry,
+  sourceTool,
+  sourceProvider,
+  localPresence,
+  deps = {},
+} = {}) {
+  const observed = exact(localPresence?.runtime_generation);
+  const recorded = exact(sourceProvider?.runtime_generation);
+  if (!observed || observed === recorded) return null;
+  if (localPresence?.verdict !== 'exited') return null;
+  if (localPresence.session && sourceForTool(localPresence.session.tool) !== sourceTool.id) {
+    return null;
+  }
+  const artifactResult = (deps.readProviderArtifact || readProviderArtifactSync)({
+    path: providerArtifactPath(entry.coding_session_id, observed),
+    codingSessionId: entry.coding_session_id,
+    runtimeGeneration: observed,
+    trustedRoot: (deps.mcHome || mcHome)(),
+  });
+  const artifact = artifactResult?.kind === 'present' ? artifactResult.artifact : null;
+  if (!artifact || artifact.tool !== sourceTool.id) return null;
+  if (exact(artifact.runtime_generation) !== observed) return null;
+  // Recovery replays a commit for the lineage the registry already
+  // names — it must never adopt a different provider session.
+  if (exact(sourceProvider?.session_id)
+    && artifact.provider_session_id !== sourceProvider.session_id) {
+    return null;
+  }
+  const providerPatch = withToolSession(entry, sourceTool.id, {
+    session_id: artifact.provider_session_id,
+    transcript_path: artifact.transcript_path ?? null,
+    runtime_generation: observed,
+  });
+  if (!providerPatch.ok) return null;
+  const upsert = deps.upsertEntry || upsertEntry;
+  try {
+    return {
+      entry: upsert({
+        name: entry.name,
+        ...(entry.session_id ? { session_id: entry.session_id } : {}),
+        ...(entry.repository_id ? { repository_id: entry.repository_id } : {}),
+        tool_sessions: providerPatch.providerSessions,
+      }),
+    };
+  } catch {
+    return null;
+  }
+}
+
 function durableExitedSource({ sourceTool, sourceGeneration, localPresence, deps = {} } = {}) {
   if (localPresence?.verdict !== 'exited' || localPresence.session) return null;
   const journaled = exact(localPresence.lifecycle?.record?.runtime_generation);
