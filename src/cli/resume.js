@@ -37,6 +37,10 @@ import {
   isLiveBrokerSession,
   selectBrokerSessionForEntry,
 } from '../core/liveness/presence.js';
+import {
+  judgeServerActiveRecord,
+  serverActiveRecordRepairable,
+} from '../core/liveness/server-presence.js';
 
 export {
   findLiveBrokerSessionForEntry,
@@ -370,18 +374,11 @@ export async function run(rawArgv, deps = {}) {
       return 1;
     }
     let active = activeCheck.session;
-    // The repair publishes terminal presence METADATA for a generation the
-    // local journal proves exited — it touches no credentials, so it is
-    // custody-independent. Gating it on managed custody left native sessions
-    // dead-ended on "already active" forever whenever the server record was
-    // stale (especially records with no runtime_generation at all).
-    if (active
-      && localPresence.verdict === 'exited'
-      && nonEmpty(localPresence.runtime_generation)
-      && (
-        !nonEmpty(active.runtime_generation)
-        || nonEmpty(active.runtime_generation) === nonEmpty(localPresence.runtime_generation)
-      )) {
+    // The judgment lives in core/liveness — resume only acts on it. The
+    // repair publishes terminal presence METADATA for a generation the
+    // local journal proves exited; it touches no credentials, so it is
+    // custody-independent.
+    if (serverActiveRecordRepairable({ active, localPresence })) {
       const repair = await (deps.repairExitedSessionPresence
         || repairExitedSessionPresence)({
         active,
@@ -397,11 +394,8 @@ export async function run(rawArgv, deps = {}) {
         if (refreshed.ok) active = refreshed.session;
       }
     }
-    const exitedGenerationMatches = active
-      && localPresence.verdict === 'exited'
-      && nonEmpty(active.runtime_generation)
-      && nonEmpty(active.runtime_generation) === nonEmpty(localPresence.runtime_generation);
-    if (active && !exitedGenerationMatches) {
+    const judgment = judgeServerActiveRecord({ active, localPresence });
+    if (active && judgment.decision !== 'exited-match') {
       markEntryOpened(entry, {
         upsert: deps.upsertEntry || upsertEntry,
         now: deps.now,
