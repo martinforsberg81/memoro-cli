@@ -15,6 +15,10 @@ import {
   applyStorageRepairPlan,
   buildStorageRepairPlan,
 } from '../mc/storage-repair.js';
+import {
+  repairDefaultBranchSquatters,
+  scanDefaultBranchSquatters,
+} from '../mc/default-branch-repair.js';
 import { inspectLocalBrokerSessionForEntry } from '../core/liveness/presence.js';
 import { listDevServers, summarizeDevServers } from '../mc/dev-servers.js';
 import { listLocalBrokerAndHostSessions } from '../runtime/broker/session-hosts.js';
@@ -51,6 +55,26 @@ export async function run(argv, deps = {}) {
       }
     }
   } catch { /* doctor stays best-effort; unfixed rows surface as issues below */ }
+
+  // A session worktree holding the repo's default branch leaves the
+  // primary checkout detached (and a symlinked global mc stale). Freed
+  // loss-free by detaching in place; blocked squats surface as issues.
+  const branchIssues = [];
+  try {
+    const squatters = (deps.scanDefaultBranchSquatters || scanDefaultBranchSquatters)();
+    const repaired = (deps.repairDefaultBranchSquatters || repairDefaultBranchSquatters)(
+      squatters,
+      { apply: !opts.dryRun },
+    );
+    for (const item of repaired.fixed) {
+      fixed.push({
+        status: opts.dryRun ? 'would-fix' : 'fixed',
+        code: item.code,
+        name: item.worktree_path,
+      });
+    }
+    branchIssues.push(...repaired.issues);
+  } catch { /* doctor stays best-effort */ }
 
   const snapshot = await buildSnapshot({ minAgeMs: opts.minAgeMs });
   const devServers = await Promise.resolve().then(() => list()).catch(() => []);
@@ -94,7 +118,7 @@ export async function run(argv, deps = {}) {
       })),
   });
 
-  const issues = [...snapshot.issues, ...devIssues, ...transcriptIssues, ...liveness.issues];
+  const issues = [...snapshot.issues, ...branchIssues, ...devIssues, ...transcriptIssues, ...liveness.issues];
   const out = {
     ok: issues.length === 0,
     fixed,
