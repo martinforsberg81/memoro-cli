@@ -15,7 +15,7 @@ describe('mc session upload scheduler', () => {
       cwd: '/repo',
       newerThanMs: 10,
       deps: {
-        findLatestClaudeSession: async (args) => ({ path: '/t.jsonl', args }),
+        transcriptDiscovery: { findLatest: async (args) => ({ path: '/t.jsonl', args }) },
       },
     });
 
@@ -29,7 +29,7 @@ describe('mc session upload scheduler', () => {
       cwd: '/repo',
       newerThanMs: 10,
       deps: {
-        findLatestCodexSession: async (args) => ({ path: '/c.jsonl', args }),
+        transcriptDiscovery: { findLatest: async (args) => ({ path: '/c.jsonl', args }) },
       },
     });
 
@@ -43,7 +43,7 @@ describe('mc session upload scheduler', () => {
       sessionId: 'cx_wanted',
       cwd: '/repo',
       deps: {
-        findCodexSessionById: async (args) => ({ path: '/wanted.jsonl', args }),
+        transcriptDiscovery: { findById: async (args) => ({ path: '/wanted.jsonl', args }) },
       },
     });
 
@@ -104,7 +104,7 @@ describe('mc session upload scheduler', () => {
         deps: {
           binJs: '/pkg/src/bin.js',
           logPath: '/tmp/memoro-test-hook.log',
-          findLatestClaudeSession: async () => ({ path: '/tmp/t.jsonl', cwd: '/repo' }),
+          transcriptDiscovery: { findLatest: async () => ({ path: '/tmp/t.jsonl', cwd: '/repo' }) },
           openSync: () => 99,
           spawn: (bin, args, opts) => {
             calls.push({ bin, args, opts });

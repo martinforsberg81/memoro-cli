@@ -4,8 +4,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { CONFIG_DIR } from '../lib/config.js';
-import { findClaudeSessionById, findLatestClaudeSession } from '../lib/claude.js';
-import { findCodexSessionById, findLatestCodexSession } from '../lib/codex.js';
+import { transcriptDiscoveryFor } from '../adapters/index.js';
 import { scrubRuntimeSecretsFromEnv } from './runtime-secrets.js';
 
 export async function findLatestTranscriptForTool({
@@ -14,13 +13,9 @@ export async function findLatestTranscriptForTool({
   newerThanMs = 0,
   deps = {},
 } = {}) {
-  if (source === 'codex') {
-    return (deps.findLatestCodexSession || findLatestCodexSession)({ cwd, newerThanMs });
-  }
-  if (source === 'claude-code') {
-    return (deps.findLatestClaudeSession || findLatestClaudeSession)({ cwd, newerThanMs });
-  }
-  return null;
+  const discovery = deps.transcriptDiscovery || transcriptDiscoveryFor(source);
+  if (!discovery) return null;
+  return discovery.findLatest({ cwd, newerThanMs });
 }
 
 export async function findTranscriptForToolSession({
@@ -29,13 +24,9 @@ export async function findTranscriptForToolSession({
   cwd,
   deps = {},
 } = {}) {
-  if (source === 'codex') {
-    return (deps.findCodexSessionById || findCodexSessionById)({ sessionId, cwd });
-  }
-  if (source === 'claude-code') {
-    return (deps.findClaudeSessionById || findClaudeSessionById)({ sessionId, cwd });
-  }
-  return null;
+  const discovery = deps.transcriptDiscovery || transcriptDiscoveryFor(source);
+  if (!discovery) return null;
+  return discovery.findById({ sessionId, cwd });
 }
 
 export async function scheduleSessionUpload({

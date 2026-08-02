@@ -178,3 +178,26 @@ export function resolveLaunch(toolInput) {
     spec,
   };
 }
+
+/**
+ * The claude-code dialect shapes double as the generic fallback (its
+ * entry accessors are the least specific), but an unknown tool must
+ * never inherit a provider label.
+ */
+const GENERIC_TRANSCRIPT_DIALECT = Object.freeze({
+  ...claudeCode.TRANSCRIPT_DIALECT,
+  provider: null,
+});
+
+/** The transcript dialect for any tool-name form; generic for unknowns. */
+export function transcriptDialectFor(value) {
+  const id = canonicalToolId(value);
+  const adapter = id ? ADAPTERS[id] : null;
+  return adapter?.TRANSCRIPT_DIALECT || GENERIC_TRANSCRIPT_DIALECT;
+}
+
+/** Transcript discovery for any tool-name form; null when the tool has none. */
+export function transcriptDiscoveryFor(value) {
+  const id = canonicalToolId(value);
+  return (id && ADAPTERS[id]?.TRANSCRIPT_DISCOVERY) || null;
+}

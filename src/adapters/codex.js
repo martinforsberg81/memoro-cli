@@ -8,6 +8,7 @@
  * on an empty launch.
  */
 
+import { findCodexSessionById, findLatestCodexSession } from '../lib/codex.js';
 import {
   chmod, lstat, mkdir, open, readFile, rename, rm, unlink, writeFile,
 } from 'node:fs/promises';
@@ -493,3 +494,60 @@ export async function shredToken({ location, sessionId, deps = {} } = {}) {
   }
   return shredFile(location.path, { deps });
 }
+
+/**
+ * Transcript dialect: Codex rollout JSONL. Metadata arrives in dedicated
+ * session_meta / turn_context records; messages and tool calls are
+ * response_item payloads. Redaction stays central in src/lib/distill.js.
+ */
+export const TRANSCRIPT_DIALECT = Object.freeze({
+  provider: 'openai',
+  meta(entry) {
+    if (entry.type === 'session_meta' && entry.payload) {
+      const payload = entry.payload;
+      return {
+        sessionId: payload.id || null,
+        cwd: payload.cwd || null,
+        toolVersion: payload.cli_version || null,
+        modelProvider: payload.model_provider || null,
+        originator: payload.originator || null,
+        clientSource: payload.source || null,
+      };
+    }
+    if (entry.type === 'turn_context' && entry.payload) {
+      return { modelName: entry.payload.model || null };
+    }
+    return null;
+  },
+  message(entry) {
+    if (entry.type === 'response_item' && entry.payload?.type === 'message') {
+      return { role: entry.payload.role || null, content: entry.payload.content };
+    }
+    return null;
+  },
+  toolCalls(entry) {
+    if (entry.type === 'response_item' && entry.payload?.type === 'function_call') {
+      return [{
+        name: entry.payload.name || 'unknown',
+        input: parseArgumentsJson(entry.payload.arguments),
+      }];
+    }
+    return [];
+  },
+});
+
+function parseArgumentsJson(raw) {
+  if (!raw || typeof raw !== 'string') return {};
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+/** Transcript discovery: where Codex keeps native rollout transcripts. */
+export const TRANSCRIPT_DISCOVERY = Object.freeze({
+  findLatest: (options) => findLatestCodexSession(options),
+  findById: (options) => findCodexSessionById(options),
+});
