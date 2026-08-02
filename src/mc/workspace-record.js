@@ -107,6 +107,8 @@ export function readWorkspaceAssociationSync({
   try { paths = sessionHomePaths({ mcHomeDir, mcSessionId }); } catch {
     return unknown('invalid-private-root');
   }
+  const session = readSessionHomeSync({ mcHomeDir: paths.mcHomeDir, mcSessionId });
+  if (session.kind !== 'present') return unknown(`session-${session.reason || session.kind}`);
   const read = readPrivateJsonSync({
     path: workspaceRecordPath(paths, workspaceId),
     trustedRoot: paths.mcHomeDir,
