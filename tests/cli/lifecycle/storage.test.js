@@ -681,10 +681,65 @@ describe('mc doctor session liveness', () => {
     buildStorageRepairPlan: async () => ({ actions: [] }),
     buildStorageSnapshot: async () => ({ summary: { registry_entries: 3 }, issues: [] }),
     listDevServers: async () => [],
+    scanDefaultBranchSquatters: () => [],
     buildTranscriptPrunePlan: () => ({
       counts: { total: 0, bytes: 0, kept: { recent: 0, protected: 0 }, protected_ids: 0 },
     }),
     ...overrides,
+  });
+
+  test('a default-branch squat is freed and reported as fixed', async () => {
+    const stdout = [];
+    const repairCalls = [];
+    const code = await runDoctor(['--json'], doctorDeps({
+      stdout: { write: (value) => stdout.push(value) },
+      readRegistry: () => ({ entries: [] }),
+      scanDefaultBranchSquatters: () => [{
+        worktree_path: '/mc/worktrees/repo/squat',
+        primary: '/repo',
+        branch: 'main',
+        clean: true,
+        head_reachable: true,
+      }],
+      repairDefaultBranchSquatters: (squatters, { apply }) => {
+        repairCalls.push(apply);
+        return {
+          fixed: [{ code: 'default-branch-freed', worktree_path: squatters[0].worktree_path }],
+          issues: [],
+        };
+      },
+    }));
+
+    assert.equal(code, 0);
+    assert.deepEqual(repairCalls, [true]);
+    const out = JSON.parse(stdout.join(''));
+    assert.deepEqual(out.fixed, [{
+      status: 'fixed',
+      code: 'default-branch-freed',
+      name: '/mc/worktrees/repo/squat',
+    }]);
+  });
+
+  test('a blocked squat surfaces as an issue with the exact state in the way', async () => {
+    const stdout = [];
+    const code = await runDoctor(['--json'], doctorDeps({
+      stdout: { write: (value) => stdout.push(value) },
+      readRegistry: () => ({ entries: [] }),
+      scanDefaultBranchSquatters: () => [{
+        worktree_path: '/mc/worktrees/repo/dirty-squat',
+        primary: '/repo',
+        branch: 'main',
+        clean: false,
+        head_reachable: true,
+      }],
+    }));
+
+    assert.equal(code, 0);
+    const out = JSON.parse(stdout.join(''));
+    const issue = out.issues.find((item) => item.code === 'session-worktree-holds-default-branch');
+    assert.ok(issue, JSON.stringify(out.issues));
+    assert.equal(issue.reason, 'worktree-dirty');
+    assert.match(issue.hint, /commit or stash/);
   });
 
   test('every live row is judged by the engine and each verdict names its remedy', async () => {
