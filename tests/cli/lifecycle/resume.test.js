@@ -26,7 +26,6 @@ import { writeRegistry, makeEntry, REGISTRY_REL_PATH } from '../../mc/_helpers/r
 import {
   launchFreshSession,
   launchResumeSession,
-  inspectLocalBrokerSessionForEntry,
   parseArgs,
   run as runResume,
   runResumePicker,
@@ -34,6 +33,7 @@ import {
   selectLiveBrokerSessionForEntry,
   resumableEntries,
 } from '../../../src/cli/resume.js';
+import { inspectLocalBrokerSessionForEntry } from '../../../src/core/liveness/presence.js';
 import * as claudeAdapter from '../../../src/adapters/claude-code.js';
 import * as codexAdapter from '../../../src/adapters/codex.js';
 import { resolveToolInput } from '../../../src/adapters/index.js';
