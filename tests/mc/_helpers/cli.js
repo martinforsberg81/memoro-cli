@@ -55,7 +55,16 @@ function scrubMcEnv(env) {
   return out;
 }
 
-export function runMc(args, { cwd, env = {}, timeoutMs = 10_000 } = {}) {
+// Spawning a full `mc` process competes with whatever else the machine is
+// running. At 10 s, a loaded developer machine (a fleet of coding sessions
+// is the normal case here) killed dozens of subprocesses mid-run and
+// reported them as assertion failures — `status: null`, empty output —
+// which made a red suite indistinguishable from a real regression. The
+// budget is generous on purpose: a genuinely hung CLI still fails, just
+// later, while ordinary scheduling delay no longer forges failures.
+const DEFAULT_CLI_TIMEOUT_MS = 60_000;
+
+export function runMc(args, { cwd, env = {}, timeoutMs = DEFAULT_CLI_TIMEOUT_MS } = {}) {
   const res = spawnSync(process.execPath, [CLI_PATH, ...args], {
     cwd: cwd ?? process.cwd(),
     env: {
@@ -81,7 +90,7 @@ export function runMc(args, { cwd, env = {}, timeoutMs = 10_000 } = {}) {
  * Run `mc` with fd 3 piped, so we can capture shell-directive emission
  * (§2b). Returns once the child exits.
  */
-export function runMcCaptureFd3(args, { cwd, env = {}, timeoutMs = 10_000 } = {}) {
+export function runMcCaptureFd3(args, { cwd, env = {}, timeoutMs = DEFAULT_CLI_TIMEOUT_MS } = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [CLI_PATH, ...args], {
       cwd: cwd ?? process.cwd(),

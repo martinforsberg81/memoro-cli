@@ -37,6 +37,7 @@ export function sessionHostPaths(sessionId, { root = mcHome() } = {}) {
     manifestPath: join(dir, 'host.json'),
     lifecyclePath: join(dir, 'lifecycle.json'),
     handoffSwitchPath: join(dir, 'handoff-switch.json'),
+    handoffLaunchTailPath: join(dir, 'handoff-launch-tail.txt'),
     providerArtifactsDir: join(dir, 'provider-artifacts'),
   };
 }
