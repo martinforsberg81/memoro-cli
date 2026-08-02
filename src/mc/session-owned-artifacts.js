@@ -4,6 +4,7 @@ import {
   readFileSync,
   rmSync,
 } from 'node:fs';
+import { isDefinitiveSocketExit } from '../core/liveness/host-probe.js';
 import {
   isAbsolute,
   join,
@@ -294,8 +295,13 @@ export async function inspectBrokerSessionAbsence(entry, {
   ].filter((path, index, list) => path && list.indexOf(path) === index && exists(path));
   for (const socketPath of sockets) {
     const result = await requestBroker({ type: 'sessions' }, { socketPath })
-      .catch((err) => ({ ok: false, error: err?.message || String(err) }));
+      .catch((err) => ({ ok: false, error: err?.message || String(err), cause: err }));
     if (!result?.ok || !Array.isArray(result.sessions)) {
+      // A crash leaves the socket FILE behind with nothing listening. A
+      // definitive refusal proves no broker owns this socket — that is
+      // absence evidence, not an inventory outage. Anything short of
+      // definitive (timeout, permission) still fails closed.
+      if (result?.cause && isDefinitiveSocketExit(result.cause)) continue;
       return {
         ok: false,
         state: 'unverified',
