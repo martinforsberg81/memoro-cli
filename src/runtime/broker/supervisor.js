@@ -47,7 +47,7 @@ export async function ensureBrokerRunning({
         broker: existing.broker,
         live_sessions: liveSessions,
         error: liveSessions.length > 0
-          ? `running broker is incompatible (${compatibility.reason}) with ${liveSessions.length} live session(s); end them with the previous mc version before starting a new broker`
+          ? `running broker is incompatible (${compatibility.reason}) with ${liveSessions.length} live session(s); run \`mc restart <name>\` for each — nothing is deleted, the session reopens on the new runtime`
           : `running broker is incompatible (${compatibility.reason}) and its session inventory is unavailable; refusing to replace it`,
       };
     }
@@ -88,7 +88,7 @@ function incompatibleBrokerResult(status, compatibility) {
     broker: status?.broker || null,
     live_sessions: liveSessions,
     error: liveSessions.length > 0
-      ? `running broker is incompatible (${compatibility.reason}) with ${liveSessions.length} live session(s); end them with the previous mc version before starting a new broker`
+      ? `running broker is incompatible (${compatibility.reason}) with ${liveSessions.length} live session(s); run \`mc restart <name>\` for each — nothing is deleted, the session reopens on the new runtime`
       : inventoryKnown
         ? `running broker is incompatible (${compatibility.reason}); refusing to launch through it`
         : `running broker is incompatible (${compatibility.reason}) and its session inventory is unavailable; refusing to replace it`,
