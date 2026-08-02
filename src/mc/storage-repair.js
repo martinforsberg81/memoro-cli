@@ -21,6 +21,12 @@ export async function buildStorageRepairPlan({
 } = {}) {
   const probeRequest = request;
   const nowIso = new Date(resolveNowMs(now)).toISOString();
+  // One broker+host enumeration for the whole plan. The engine would
+  // otherwise re-list (and re-probe every host manifest socket) per
+  // entry — on a registry with many live rows that compounds into
+  // minutes of socket timeouts. Evidence is point-in-time either way.
+  const sharedRows = await listSessions().catch(() => []);
+  const listOnce = async () => sharedRows;
   const actions = [];
   const selectedNames = Array.isArray(names) && names.length
     ? new Set(names.map((name) => String(name)))
@@ -42,7 +48,7 @@ export async function buildStorageRepairPlan({
       // exit proof keeps the row live for the resume-side recovery paths.
       const presence = await inspectPresence(entry, {
         request: probeRequest,
-        deps: { listLocalBrokerAndHostSessions: listSessions },
+        deps: { listLocalBrokerAndHostSessions: listOnce },
       }).catch(() => ({ verdict: 'unknown' }));
       // Attachability standard: an answering host socket keeps the row
       // (host-socket-reachable) — but a lingering daemon pid with a dead

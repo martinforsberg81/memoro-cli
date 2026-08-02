@@ -253,7 +253,7 @@ export function formatEntryResolutionError(identifier, result) {
     case 'repository-context-required':
       return `session ${quoted} is repository-scoped; run the command inside its repository or use its opaque session_id${formatCandidateLines(result)}`;
     case 'repository-mismatch':
-      return `no session ${quoted} exists in the current repository${formatCandidateLines(result)}`;
+      return `no session ${quoted} exists in the current repository; use its opaque session_id:${formatCandidateLines(result)}`;
     default:
       return `no such session ${quoted}`;
   }

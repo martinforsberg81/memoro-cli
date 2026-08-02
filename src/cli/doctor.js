@@ -17,6 +17,7 @@ import {
 } from '../mc/storage-repair.js';
 import { inspectLocalBrokerSessionForEntry } from '../core/liveness/presence.js';
 import { listDevServers, summarizeDevServers } from '../mc/dev-servers.js';
+import { listLocalBrokerAndHostSessions } from '../runtime/broker/session-hosts.js';
 import { buildTranscriptPrunePlan } from '../mc/transcript-prune.js';
 
 export async function run(argv, deps = {}) {
@@ -84,9 +85,13 @@ export async function run(argv, deps = {}) {
   // liveness engine, and each verdict names its exact loss-free remedy.
   // This closes the old dead-end where failure messages said "run mc
   // doctor" and doctor had nothing to say about session hosts.
+  const listOnce = sharedSessionListing();
   const liveness = await collectSessionLivenessIssues({
     readRegistryImpl: deps.readRegistry || readRegistry,
-    inspectPresence: deps.inspectPresence || inspectLocalBrokerSessionForEntry,
+    inspectPresence: deps.inspectPresence
+      || ((entry) => inspectLocalBrokerSessionForEntry(entry, {
+        deps: { listLocalBrokerAndHostSessions: listOnce },
+      })),
   });
 
   const issues = [...snapshot.issues, ...devIssues, ...transcriptIssues, ...liveness.issues];
@@ -104,6 +109,16 @@ export async function run(argv, deps = {}) {
   if (opts.json) stdout.write(`${JSON.stringify(out, null, 2)}\n`);
   else printHuman(out, stdout);
   return 0;
+}
+
+// One broker+host enumeration shared by every per-row probe in a doctor
+// run — re-listing per row compounds socket timeouts into a hang.
+function sharedSessionListing() {
+  let rows = null;
+  return async () => {
+    if (!rows) rows = listLocalBrokerAndHostSessions().catch(() => []);
+    return rows;
+  };
 }
 
 async function collectSessionLivenessIssues({ readRegistryImpl, inspectPresence }) {
