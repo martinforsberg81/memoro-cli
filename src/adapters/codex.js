@@ -551,3 +551,65 @@ export const TRANSCRIPT_DISCOVERY = Object.freeze({
   findLatest: (options) => findLatestCodexSession(options),
   findById: (options) => findCodexSessionById(options),
 });
+
+/**
+ * Declarative artifact-ownership profile: where THIS tool keeps
+ * session-owned artifacts on disk and how its transcript paths encode
+ * the session id. All inspection, scanning, and deletion machinery stays
+ * central in src/mc/tool-artifact-ownership.js — the profile only names
+ * exact locations and shapes.
+ */
+export const ARTIFACT_OWNERSHIP = Object.freeze({
+  homeEnv: 'CODEX_HOME',
+  homeDir: '.codex',
+  layout(providerRoot, { join }) {
+    return {
+      transcript_roots: [
+        join(providerRoot, 'sessions'),
+        join(providerRoot, 'archived_sessions'),
+      ],
+      generated_images_root: join(providerRoot, 'generated_images'),
+      shell_snapshots_root: join(providerRoot, 'shell_snapshots'),
+      negative_roots: [
+        providerRoot,
+        join(providerRoot, 'history.jsonl'),
+        join(providerRoot, 'session_index.jsonl'),
+        join(providerRoot, 'state_5.sqlite'),
+        join(providerRoot, 'logs_2.sqlite'),
+        join(providerRoot, 'goals_1.sqlite'),
+        join(providerRoot, 'memories_1.sqlite'),
+        join(providerRoot, 'memories'),
+        join(providerRoot, 'config.toml'),
+        join(providerRoot, 'auth.json'),
+      ],
+    };
+  },
+  sessionDirectories({ sessionId, roots, join }) {
+    return [{
+      kind: 'codex-generated-images',
+      path: join(roots.generated_images_root, sessionId),
+      root: roots.generated_images_root,
+      providerRoot: roots.provider_root,
+      expected: 'directory',
+    }];
+  },
+  sessionFilePatterns({ sessionId, roots, escapeRegExp }) {
+    return [{
+      kind: 'codex-shell-snapshot',
+      root: roots.shell_snapshots_root,
+      pattern: new RegExp(`^${escapeRegExp(sessionId)}\\.[0-9]+\\.sh$`),
+    }];
+  },
+  transcriptLayoutMatches({ sessionId, parts, transcriptRootName }) {
+    const file = parts.at(-1);
+    if (!file?.startsWith('rollout-') || !file.endsWith(`-${sessionId}.jsonl`)) return false;
+    if (transcriptRootName === 'archived_sessions') return parts.length === 1;
+    return parts.length === 4
+      && /^\d{4}$/.test(parts[0])
+      && /^\d{2}$/.test(parts[1])
+      && /^\d{2}$/.test(parts[2]);
+  },
+  transcriptHeadSessionId(entry) {
+    return entry?.type === 'session_meta' ? entry?.payload?.id || null : null;
+  },
+});
