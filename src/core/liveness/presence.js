@@ -12,10 +12,8 @@
  * bug family behind the 2026-08-01 crash incident and are forbidden.
  */
 import { requestBroker } from '../../runtime/broker/client.js';
-import {
-  listLocalBrokerAndHostSessions,
-  probeSessionHostRuntime,
-} from '../../runtime/broker/session-hosts.js';
+import { listLocalBrokerAndHostSessions } from '../../runtime/broker/session-hosts.js';
+import { probeSessionHostRuntime } from './host-probe.js';
 import { sessionHostPaths } from '../../runtime/broker/paths.js';
 import { readSessionLifecycle } from '../../runtime/broker/lifecycle-journal.js';
 
