@@ -521,6 +521,132 @@ describe('BrokerSessionSidecars', () => {
     sidecars.stop();
   });
 
+  test('a cached ready list that would deny an operation refreshes before deciding', async () => {
+    const paths = tempPaths();
+    const statusCalls = [];
+    const operationCalls = [];
+    let clock = 60_000;
+    const sidecars = new BrokerSessionSidecars({
+      session: makeSession(),
+      coding: {
+        codingSessionId: 'sess_abcdef',
+        apiUrl: 'https://memoro.test',
+        token: 'memoro-secret-sentinel',
+        sourceId: 'local:mac',
+        sourceKind: 'local',
+        repoRef: 'acme/widgets',
+        // Launch-time capabilities predate the merge operation — the exact
+        // stale-cache shape a server deploy leaves behind in a live session.
+        githubCapabilities: sessionCapabilitiesWith(['pull_request.list', 'pull_request.view']),
+        sockPath: paths.sockPath,
+        metaPath: paths.metaPath,
+        heartbeat: false,
+        upload: false,
+      },
+      createServerImpl: fakeCreateServer,
+      wsClientFactory: () => ({ start() {}, stop() {} }),
+      connectionClient: grantClient(),
+      now: () => clock,
+      memoroFetchImpl: async (_apiUrl, path, options) => {
+        if (path.startsWith('/api/mc/github/status')) {
+          statusCalls.push(path);
+          return readyGitHubStatusResponse(['pull_request.list', 'pull_request.view', 'pull_request.merge']);
+        }
+        operationCalls.push(options.body.operation);
+        return {
+          ok: true,
+          request_id: options.body.request_id,
+          data: { pull_number: 7, merged: true },
+        };
+      },
+    }).start();
+
+    const send = async (operation, requestId, params) => {
+      const conn = fakeConn();
+      sidecars.dispatchServer.handler(conn);
+      conn.emit('data', Buffer.from(JSON.stringify({
+        type: 'github_operation',
+        schema: 1,
+        request_id: requestId,
+        operation,
+        params,
+      })));
+      conn.emit('end');
+      await new Promise((resolve) => setImmediate(resolve));
+      return JSON.parse(conn.ended.join(''));
+    };
+
+    const merged = await send('pull_request.merge', 'request_aaaaaaaa', {
+      pull_number: 7,
+      merge_method: 'merge',
+      expected_head_sha: 'a'.repeat(40),
+    });
+    const listed = await send('pull_request.list', 'request_bbbbbbbb', {});
+
+    assert.equal(merged.ok, true, JSON.stringify(merged));
+    assert.equal(listed.ok, true);
+    assert.equal(statusCalls.length, 1, 'one refresh on the denied miss; allowed op uses the cache');
+    assert.deepEqual(operationCalls, ['pull_request.merge', 'pull_request.list']);
+    sidecars.stop();
+  });
+
+  test('a denied operation after a failed refresh keeps the cached allowlist decision', async () => {
+    const paths = tempPaths();
+    let statusAttempts = 0;
+    let clock = 60_000;
+    const sidecars = new BrokerSessionSidecars({
+      session: makeSession(),
+      coding: {
+        codingSessionId: 'sess_abcdef',
+        apiUrl: 'https://memoro.test',
+        token: 'memoro-secret-sentinel',
+        sourceId: 'local:mac',
+        sourceKind: 'local',
+        githubCapabilities: sessionCapabilitiesWith(['pull_request.list']),
+        sockPath: paths.sockPath,
+        metaPath: paths.metaPath,
+        heartbeat: false,
+        upload: false,
+      },
+      createServerImpl: fakeCreateServer,
+      wsClientFactory: () => ({ start() {}, stop() {} }),
+      connectionClient: grantClient(),
+      now: () => clock,
+      memoroFetchImpl: async (_apiUrl, path) => {
+        if (path.startsWith('/api/mc/github/status')) {
+          statusAttempts += 1;
+          throw Object.assign(new Error('Memoro 503: down'), { status: 503 });
+        }
+        return assert.fail('a denied operation must not reach the control plane');
+      },
+    }).start();
+
+    const send = async (requestId) => {
+      const conn = fakeConn();
+      sidecars.dispatchServer.handler(conn);
+      conn.emit('data', Buffer.from(JSON.stringify({
+        type: 'github_operation',
+        schema: 1,
+        request_id: requestId,
+        operation: 'pull_request.view',
+        params: { pull_number: 7 },
+      })));
+      conn.emit('end');
+      await new Promise((resolve) => setImmediate(resolve));
+      return JSON.parse(conn.ended.join(''));
+    };
+
+    const first = await send('request_aaaaaaaa');
+    clock = 65_000;
+    const second = await send('request_bbbbbbbb');
+
+    assert.equal(first.ok, false);
+    assert.equal(first.error.code, 'operation_not_allowed');
+    assert.equal(second.error.code, 'operation_not_allowed');
+    assert.equal(statusAttempts, 1, 'refresh attempts stay rate-limited');
+    sidecars.stop();
+  });
+
   test('a session launched without GitHub re-bootstraps capabilities on demand', async () => {
     const paths = tempPaths();
     const statusCalls = [];
