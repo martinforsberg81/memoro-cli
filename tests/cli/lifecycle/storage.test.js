@@ -196,6 +196,7 @@ describe('mc storage / doctor', () => {
       stdout: { write: (value) => stdout.push(value) },
       stderr: { write: () => {} },
       readRegistry: () => ({ entries: [] }),
+      buildStorageRepairPlan: async () => ({ actions: [] }),
       buildStorageSnapshot: async () => ({ summary: { registry_entries: 0 }, issues: [] }),
       listDevServers: async () => [
         { instance_id: 'ready', state: 'ready' },
@@ -677,6 +678,7 @@ describe('mc storage / doctor', () => {
 describe('mc doctor session liveness', () => {
   const doctorDeps = (overrides = {}) => ({
     stderr: { write: () => {} },
+    buildStorageRepairPlan: async () => ({ actions: [] }),
     buildStorageSnapshot: async () => ({ summary: { registry_entries: 3 }, issues: [] }),
     listDevServers: async () => [],
     buildTranscriptPrunePlan: () => ({
@@ -734,5 +736,79 @@ describe('mc doctor session liveness', () => {
     assert.equal(result.summary.sessions.unknown, 1);
     const issue = result.issues.find((item) => item.code === 'session-liveness-unknown');
     assert.match(issue.hint, /mc storage repair --apply/);
+  });
+});
+
+
+describe('mc doctor repairs before diagnosing', () => {
+  const baseDeps = (overrides = {}) => ({
+    stderr: { write: () => {} },
+    buildStorageSnapshot: async () => ({ summary: { registry_entries: 1 }, issues: [] }),
+    listDevServers: async () => [],
+    buildTranscriptPrunePlan: () => ({
+      counts: { total: 0, bytes: 0, kept: { recent: 0, protected: 0 }, protected_ids: 0 },
+    }),
+    ...overrides,
+  });
+
+  test('loss-free registry repairs are applied and reported as fixed', async () => {
+    const stdout = [];
+    const applied = [];
+    const plan = {
+      actions: [{
+        type: 'mark-idle',
+        name: 'stale-one',
+        session_id: 'mcs_a',
+        repository_id: 'repo_a',
+        reason: 'registry-live-without-local-broker',
+        patch: { session_state: 'idle' },
+      }],
+    };
+    const code = await runDoctor(['--json'], baseDeps({
+      stdout: { write: (value) => stdout.push(value) },
+      readRegistry: () => ({ entries: [] }),
+      buildStorageRepairPlan: async () => plan,
+      applyStorageRepairPlan: (registry, appliedPlan) => {
+        applied.push(appliedPlan);
+        return { ok: true };
+      },
+      inspectPresence: async () => ({ verdict: 'live' }),
+    }));
+
+    assert.equal(code, 0);
+    assert.equal(applied.length, 1);
+    const result = JSON.parse(stdout.join(''));
+    assert.deepEqual(result.fixed, [{
+      status: 'fixed',
+      code: 'registry-live-without-local-broker',
+      name: 'stale-one',
+    }]);
+  });
+
+  test('--dry-run reports would-fix and touches nothing', async () => {
+    const stdout = [];
+    const code = await runDoctor(['--json', '--dry-run'], baseDeps({
+      stdout: { write: (value) => stdout.push(value) },
+      readRegistry: () => ({ entries: [] }),
+      buildStorageRepairPlan: async () => ({
+        actions: [{
+          type: 'mark-worktree-missing',
+          name: 'gone-tree',
+          session_id: 'mcs_b',
+          repository_id: 'repo_b',
+          reason: 'registered-worktree-missing',
+          patch: { worktree_missing: true },
+        }],
+      }),
+      applyStorageRepairPlan: () => { throw new Error('dry-run must not apply'); },
+    }));
+
+    assert.equal(code, 0);
+    const result = JSON.parse(stdout.join(''));
+    assert.deepEqual(result.fixed, [{
+      status: 'would-fix',
+      code: 'registered-worktree-missing',
+      name: 'gone-tree',
+    }]);
   });
 });
