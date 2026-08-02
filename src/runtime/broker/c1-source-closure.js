@@ -31,7 +31,7 @@ export const C1_SOURCE_CLOSURE_SHA256 = Object.freeze({
   'src/runtime/broker/c1-child.js': '3a869dc7c3de2e6ec4e084b763d8bf4ac6486691b02269b6da6d567cd8e2c8bb',
   'src/runtime/broker/c1-lease-host.js': '128126a1a9353ed46c0289d94578cb28cda99ebc22bb222d83abc24380ae6992',
   'src/runtime/broker/c1-process-group.js': 'fdce5abf4749441c3278f192339a226a7bcebe66cdfa7ea15ae2a56a92470357',
-  'src/mc/paths.js': 'f736475313471606f5d5bce11a3453295f27540ea1c7ca10db97e463ad72772f',
+  'src/mc/paths.js': 'da90c4df7c8fcc24b61610002bfb65add5043e37790d3e0a900df959f7c57af2',
   'src/adapters/managed-runtime/claude-managed-policy.js': '432352bff556ea7d26820d880e95e9be8fffabd73e02113537e1f7349a82daa7',
   'src/vault/engine/api.js': 'c1d88a10e2c2bdcc742f0e98a204d5e23e1e5a8266c4e84c9387aa647addb896',
   'src/vault/engine/c1-claude-lease.js': 'f0762a6bd0ce22b578ecb5f11b2964cc61054de67d20763621336c54d54f3fcf',
