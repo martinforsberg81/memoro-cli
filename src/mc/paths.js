@@ -22,6 +22,18 @@ export function registryPath() {
   return join(mcHome(), 'registry.json');
 }
 
+export function sessionsRoot() {
+  return join(mcHome(), 'sessions');
+}
+
+export function sessionNamesRoot() {
+  return join(mcHome(), 'session-names');
+}
+
+export function sessionRunRoot() {
+  return join(mcHome(), 'run', 'sessions');
+}
+
 export function worktreesRoot() {
   return join(mcHome(), 'worktrees');
 }
