@@ -1,8 +1,20 @@
 /**
- * `mc doctor` gives a non-mutating health view over local mc storage.
+ * `mc doctor` — diagnose AND repair.
+ *
+ * mc heals itself first; doctor is the user's second line. Everything
+ * loss-free (registry metadata: stale live rows, worktree-missing flags)
+ * is FIXED by default and reported as fixed — the user is never handed
+ * homework a machine can do. Anything destructive (transcript pruning,
+ * teardown) stays behind its explicit command, and anything requiring a
+ * human hand (exiting a live tool) stays an issue with the exact way out.
+ * `--dry-run` reports without touching anything.
  */
 import { buildStorageSnapshot } from '../mc/storage-management.js';
 import { readRegistry } from '../mc/registry.js';
+import {
+  applyStorageRepairPlan,
+  buildStorageRepairPlan,
+} from '../mc/storage-repair.js';
 import { inspectLocalBrokerSessionForEntry } from '../core/liveness/presence.js';
 import { listDevServers, summarizeDevServers } from '../mc/dev-servers.js';
 import { buildTranscriptPrunePlan } from '../mc/transcript-prune.js';
@@ -18,6 +30,27 @@ export async function run(argv, deps = {}) {
 
   const buildSnapshot = deps.buildStorageSnapshot || buildStorageSnapshot;
   const list = deps.listDevServers || listDevServers;
+
+  // Repair BEFORE diagnosing: loss-free registry fixes are applied first
+  // so the remaining issues are the ones a machine genuinely cannot fix.
+  const fixed = [];
+  try {
+    const registry = (deps.readRegistry || readRegistry)({ persistMigration: !opts.dryRun });
+    const plan = await (deps.buildStorageRepairPlan || buildStorageRepairPlan)({ registry });
+    if (plan.actions.length > 0) {
+      if (!opts.dryRun) {
+        (deps.applyStorageRepairPlan || applyStorageRepairPlan)(registry, plan);
+      }
+      for (const action of plan.actions) {
+        fixed.push({
+          status: opts.dryRun ? 'would-fix' : 'fixed',
+          code: action.reason,
+          name: action.name,
+        });
+      }
+    }
+  } catch { /* doctor stays best-effort; unfixed rows surface as issues below */ }
+
   const snapshot = await buildSnapshot({ minAgeMs: opts.minAgeMs });
   const devServers = await Promise.resolve().then(() => list()).catch(() => []);
   const devSummary = summarizeDevServers(devServers);
@@ -59,6 +92,7 @@ export async function run(argv, deps = {}) {
   const issues = [...snapshot.issues, ...devIssues, ...transcriptIssues, ...liveness.issues];
   const out = {
     ok: issues.length === 0,
+    fixed,
     summary: {
       ...snapshot.summary,
       dev_servers: devSummary,
@@ -119,10 +153,11 @@ async function collectSessionLivenessIssues({ readRegistryImpl, inspectPresence 
 }
 
 function parseArgs(argv) {
-  const opts = { json: false, minAgeMs: undefined };
+  const opts = { json: false, minAgeMs: undefined, dryRun: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--json') { opts.json = true; continue; }
+    if (a === '--dry-run') { opts.dryRun = true; continue; }
     if (a === '--min-age') {
       const ms = parseDurationMs(argv[++i]);
       if (ms == null) return { error: `--min-age expects a duration like 5m / 30s / 1h, got "${argv[i]}"` };
@@ -136,6 +171,11 @@ function parseArgs(argv) {
 
 function printHuman(out, stdout = process.stdout) {
   stdout.write(`mc doctor — ${out.ok ? 'ok' : 'issues found'}\n`);
+  for (const fix of out.fixed || []) {
+    stdout.write(`  ${fix.status}  ${fix.code}`);
+    if (fix.name) stdout.write(`  session=${fix.name}`);
+    stdout.write(`\n`);
+  }
   for (const issue of out.issues) {
     stdout.write(`  ${issue.severity}  ${issue.code}`);
     if (issue.name) stdout.write(`  session=${issue.name}`);
