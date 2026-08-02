@@ -1,10 +1,11 @@
 import { StringDecoder } from 'node:string_decoder';
 import { createHash, randomBytes } from 'node:crypto';
-import { realpathSync } from 'node:fs';
+import { realpathSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { resolveLaunch } from '../../adapters/index.js';
 import { DEFAULT_TOOL } from '../../lib/config.js';
+import { stripAnsi } from '../../lib/prompt.js';
 import { normalizeInteractivePtyEnv } from '../../mc/interactive-env.js';
 import { mcHome } from '../../mc/paths.js';
 import { BrokerSessionManager } from './session-manager.js';
@@ -54,6 +55,8 @@ import {
 // network call cannot race the mandatory local cleanup timeout.
 const TERMINAL_PRESENCE_TIMEOUT_MS = 10_000;
 const HANDOFF_DELIVERY_TIMEOUT_MS = 45_000;
+// Bounded tail of what the tool drew, kept only when a handoff launch fails.
+const HANDOFF_TAIL_BYTES = 8 * 1024;
 // How long a provider may take to publish its own artifact after the handoff
 // message lands. Claude Code boots, then runs its SessionStart hooks, so its
 // push arrives seconds after delivery; Codex writes its session file and is
@@ -878,6 +881,7 @@ export class BrokerRuntime {
         id,
         transaction: handoffTransaction,
         code: 'handoff-delivery-unavailable',
+        session: ownedSession,
       });
       try { this.manager.stop(id, 'SIGTERM'); } catch {}
       return this._waitForRuntimeFinalization(id).then(() => ({
@@ -914,6 +918,7 @@ export class BrokerRuntime {
           id,
           transaction: handoffTransaction,
           code: acknowledged.reason || 'handoff-delivery-journal-unconfirmed',
+          session: ownedSession,
         });
         try { this.manager.stop(id, 'SIGTERM'); } catch {}
         await this._waitForRuntimeFinalization(id);
@@ -926,6 +931,7 @@ export class BrokerRuntime {
           deliveryFailureCode(delivery?.reason, ownedSession),
           'handoff-delivery-unconfirmed',
         ),
+        session: ownedSession,
       });
       try { this.manager.stop(id, 'SIGTERM'); } catch {}
       const finalization = await this._waitForRuntimeFinalization(id);
@@ -1385,7 +1391,8 @@ export class BrokerRuntime {
     }
   }
 
-  _noteHandoffFailure({ id, transaction, code } = {}) {
+  _noteHandoffFailure({ id, transaction, code, session = null } = {}) {
+    this._captureHandoffLaunchTail(id, session);
     if (!transaction?.transaction_id) return;
     this._diagnoseHandoffSwitch({
       id,
@@ -1394,6 +1401,36 @@ export class BrokerRuntime {
       code: safeDiagnosticCode(code, 'handoff-failure'),
       observed_at: runtimeObservedAt(this.clock),
     });
+  }
+
+  /**
+   * What the tool actually drew is the one piece of evidence a failed
+   * handoff launch never left behind: managed credential domains are
+   * torn down on exit, so by the time anyone looks, the terminal is
+   * gone and diagnosis becomes archaeology (sql-readiness, 2026-08-02 —
+   * Codex exited cleanly 36s in, having published its artifact, and
+   * nothing recorded why).
+   *
+   * On failure only, the tail of the PTY ring is written beside the
+   * session's other private host state: bounded, ANSI-stripped,
+   * overwritten each time, never transmitted. Success paths write
+   * nothing.
+   */
+  _captureHandoffLaunchTail(id, session) {
+    if (!id || typeof session?.recentOutput !== 'function') return;
+    let tail;
+    try {
+      tail = stripAnsi(String(session.recentOutput() || '')).slice(-HANDOFF_TAIL_BYTES);
+    } catch {
+      return;
+    }
+    if (!tail) return;
+    try {
+      writeFileSync(sessionHostPaths(id).handoffLaunchTailPath, `${tail}\n`, {
+        encoding: 'utf8',
+        mode: 0o600,
+      });
+    } catch {}
   }
 
   _prepareHandoffTargetLaunch({

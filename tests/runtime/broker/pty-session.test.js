@@ -367,6 +367,31 @@ describe('PtySession', () => {
     assert.deepEqual(await delivered, { ok: true });
   });
 
+  test('prompt readiness is remembered so a timeout can name its own cause', () => {
+    const timers = makeManualTimers();
+    const { session, fake } = makeSession({
+      launchSpec: {
+        bin: '/x/codex',
+        startupMessageDelivery: 'deferred-pty',
+        isUserMessagePromptReady: ({ recentOutput }) => recentOutput.includes('OpenAI Codex'),
+        args: (argv) => argv,
+      },
+      launchOptions: { handoffUserMessage: 'handoff one' },
+      startupMessageDelayMs: 10,
+      startupMessageSetTimeoutFn: timers.setTimeoutFn,
+      startupMessageClearTimeoutFn: timers.clearTimeoutFn,
+      ringBytes: 1_024,
+    });
+
+    session.start();
+    assert.equal(session.promptReadyObserved, false);
+    // Output that is not the tool's composer must not count as readiness.
+    fake.emitData('resuming session…');
+    assert.equal(session.promptReadyObserved, false);
+    fake.emitData('OpenAI Codex');
+    assert.equal(session.promptReadyObserved, true);
+  });
+
   test('provider exit before handoff delivery resolves a fail-closed acknowledgement', async () => {
     const timers = makeManualTimers();
     const { session, fake } = makeSession({
