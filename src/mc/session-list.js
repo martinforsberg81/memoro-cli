@@ -157,12 +157,15 @@ function mergeActiveSessionMetadata(cloud, local) {
     'repo',
     'branch',
     'tool',
-    'source',
     'machine_id',
     'received_at',
   ]) {
     merged[key] = nonEmpty(local?.[key]) || nonEmpty(cloud?.[key]);
   }
+  merged.source = meaningfulTool(local?.source)
+    || nonEmpty(local?.tool)
+    || meaningfulTool(cloud?.source)
+    || nonEmpty(cloud?.tool);
   if (typeof local?.idle_seconds !== 'number') {
     merged.idle_seconds = typeof cloud?.idle_seconds === 'number' ? cloud.idle_seconds : null;
   }
@@ -206,8 +209,7 @@ function enrichActiveSession(session, registryEntries) {
   const registryName = nonEmpty(entry.name) || nonEmpty(entry.label);
   const label = activeLabel || registryName;
   const source = meaningfulTool(session.source)
-    || nonEmpty(entry.tool)
-    || nonEmpty(session.source);
+    || nonEmpty(entry.tool);
   return {
     ...session,
     label,
@@ -429,7 +431,7 @@ function renderSessionListTable({
   const activeCount = view?.active?.length || 0;
   const localCount = view?.local?.length || 0;
   const out = [renderListTitle(title, activeCount, localCount), '', 'Active sessions'];
-  if (width >= 72) {
+  if (width >= 74) {
     out.push(styleText('  Message: mc sessions send <mc-id> "…" · Output: mc sessions read <mc-id>', ANSI.dim, useColor));
   }
 

@@ -62,6 +62,7 @@ describe('mc sessions list local broker view', () => {
   test('sparse busy-host rows preserve richer cloud display metadata', () => {
     const local = normalizeLocalBrokerSessionForList({
       id: 'sess_same',
+      source: 'local-broker',
       session_state: 'live',
       attachable: true,
       host_busy: true,

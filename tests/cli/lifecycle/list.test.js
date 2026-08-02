@@ -289,6 +289,24 @@ describe('mc list', () => {
     }
   });
 
+  test('TTY action hints never exceed their terminal-width threshold', () => {
+    const view = buildSessionListView({ activeSessions: [], localEntries: [] });
+    for (const terminalWidth of [72, 73, 74]) {
+      const out = renderSessionListHuman({
+        view,
+        isTTY: true,
+        terminalWidth,
+        useColor: false,
+      });
+      for (const line of out.split('\n')) {
+        assert.ok(
+          line.length <= terminalWidth,
+          `line exceeds terminal width ${terminalWidth} (${line.length}): ${line}`,
+        );
+      }
+    }
+  });
+
   test('--json demotes registry-live sessions with no live local session to stale', async () => {
     const stdout = [];
     const stderr = [];
