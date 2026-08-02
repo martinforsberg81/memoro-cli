@@ -1,5 +1,11 @@
 # mc product definition
 
+> **Superseded for active implementation:** The repository-scoped session
+> hierarchy in this document has been replaced by
+> [`mc-v1-session-architecture.md`](mc-v1-session-architecture.md). This file
+> remains historical product-analysis input; do not use it as the current
+> session-lifecycle contract.
+
 **Status:** in-flight
 
 This target contract was accepted on 2026-07-31 and defines the intended end

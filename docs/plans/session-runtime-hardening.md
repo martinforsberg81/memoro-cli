@@ -1,5 +1,10 @@
 # Session runtime hardening
 
+> **Superseded for active delivery:** Runtime hardening is now part of the
+> source-owned session and PTY contract in
+> [`mc-v1-session-architecture.md`](mc-v1-session-architecture.md). This file
+> remains historical evidence.
+
 **Status:** active · 2026-06-20 · serves G2, G3
 
 `mc` must make a named work session feel durable. A session is not just a

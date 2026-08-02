@@ -1,5 +1,10 @@
 # mc — the AI-agent orchestration substrate
 
+> **Superseded for session architecture:** A worktree is now an optional
+> workspace resource, not the mc session lifecycle unit. The current contract
+> is [`mc-v1-session-architecture.md`](mc-v1-session-architecture.md). Retain
+> this document as historical implementation context only.
+
 **Status:** proposed • 2026-05-25 (mission-first reframe 2026-06-02)
 
 **2026-07-18 context-model update:** older sections use terms such as

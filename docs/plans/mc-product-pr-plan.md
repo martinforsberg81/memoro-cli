@@ -1,5 +1,9 @@
 # mc product PR plan
 
+> **Superseded:** Delivery now follows
+> [`mc-v1-session-pr-plan.md`](mc-v1-session-pr-plan.md). This plan retains the
+> older repository-scoped product sequence for historical context only.
+
 **Status:** in-flight
 
 This plan turns the accepted
