@@ -304,3 +304,42 @@ describe('session-owned mc artifacts', () => {
     assert.equal(result.issues[0].code, 'broker-inventory-unavailable');
   });
 });
+
+test('a definitively refused dead socket file proves broker absence', async () => {
+  const { inspectBrokerSessionAbsence } = await import('../../src/mc/session-owned-artifacts.js');
+  const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const root = mkdtempSync(join(tmpdir(), 'mc-absence-'));
+  const previous = process.env.MC_HOME;
+  process.env.MC_HOME = root;
+  try {
+    mkdirSync(join(root, 'hosts', 'sess_dead'), { recursive: true });
+    writeFileSync(join(root, 'broker.sock'), '');
+    writeFileSync(join(root, 'hosts', 'sess_dead', 'broker.sock'), '');
+    const entry = {
+      name: 'dead',
+      coding_session_id: 'sess_dead',
+      session_id: `mcs_${'a'.repeat(24)}`,
+    };
+
+    const refused = await inspectBrokerSessionAbsence(entry, {
+      mcDir: root,
+      requestBroker: async () => {
+        throw Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' });
+      },
+    });
+    const undecided = await inspectBrokerSessionAbsence(entry, {
+      mcDir: root,
+      requestBroker: async () => {
+        throw Object.assign(new Error('connect EPERM'), { code: 'EPERM' });
+      },
+    });
+
+    if (refused.state !== 'absent') throw new Error(`refused socket must prove absence, got ${refused.state}`);
+    if (undecided.state !== 'unverified') throw new Error('non-definitive failure must stay unverified');
+  } finally {
+    if (previous == null) delete process.env.MC_HOME; else process.env.MC_HOME = previous;
+    rmSync(root, { recursive: true, force: true });
+  }
+});

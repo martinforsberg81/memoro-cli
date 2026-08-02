@@ -610,3 +610,84 @@ async function runEndInProcess(repo, argv, answer, extraDeps = {}, { cwd } = {})
     else process.env.MC_HOME = oldMcHome;
   }
 }
+
+describe('mc end self-heals crash-dead managed sessions', () => {
+  let repo;
+  beforeEach(() => { repo = makeTempRepo({ name: 'end-managed' }); });
+  after(() => { repo?.cleanup(); });
+
+  const managedEntry = (patch = {}) => makeEndEntry({
+    name: 'crashed-managed',
+    branch: null,
+    session_id: `mcs_${'f'.repeat(24)}`,
+    repository_id: `repo_${'e'.repeat(24)}`,
+    worktree_path: null,
+    session_state: 'idle',
+    coding_session_id: 'sess_crashed_managed',
+    tool: 'codex',
+    tool_session_id: '019f0000-0000-7000-8000-000000000001',
+    tool_session_source: 'codex',
+    tool_session_provider_adapter: 'codex-managed-local-v1',
+    tool_session_provider_generation: '0361aa53-f49e-4c8b-900d-93139b731016',
+    ...patch,
+  });
+
+  test('a not-found broker triggers the open-path reconciliation and teardown completes', async () => {
+    const reconciled = [];
+    writeRegistry(repo.mcHome, [managedEntry()]);
+
+    const { result, stdout, stderr } = await runEndInProcess(
+      repo,
+      ['crashed-managed', '--force', '--no-distill'],
+      'y',
+      {
+        removeBrokerSessionForEntry: async () => ({ ok: false, skipped: true, reason: 'not-found' }),
+        reconcileManagedSession: async ({ entry }) => {
+          reconciled.push(entry.coding_session_id);
+          return { ok: true, action: 'resume' };
+        },
+        readProviderArtifact: () => ({
+          kind: 'present',
+          artifact: {
+            tool: 'codex',
+            provider_session_id: '019f0000-0000-7000-8000-000000000001',
+            transcript_path: '/tmp/managed-transcript.jsonl',
+          },
+        }),
+      },
+      { cwd: repo.mcHome },
+    );
+
+    assert.equal(result, 0, stderr);
+    assert.deepEqual(reconciled, ['sess_crashed_managed']);
+    assert.match(stdout, /ended crashed-managed/);
+    assert.equal(readRegistryFile(repo.mcHome).entries.length, 0);
+  });
+
+  test('a reconciliation the machinery refuses stops the teardown with its reason', async () => {
+    writeRegistry(repo.mcHome, [managedEntry({ name: 'stuck-managed' })]);
+
+    const { result, stderr } = await runEndInProcess(
+      repo,
+      ['stuck-managed', '--force', '--no-distill'],
+      'y',
+      {
+        removeBrokerSessionForEntry: async () => ({ ok: false, skipped: true, reason: 'not-found' }),
+        reconcileManagedSession: async () => ({ ok: false, action: 'blocked', reason: 'managed-live-runtime-unreachable' }),
+        readProviderArtifact: () => ({
+          kind: 'present',
+          artifact: {
+            tool: 'codex',
+            provider_session_id: '019f0000-0000-7000-8000-000000000001',
+            transcript_path: '/tmp/managed-transcript.jsonl',
+          },
+        }),
+      },
+      { cwd: repo.mcHome },
+    );
+
+    assert.equal(result, 1);
+    assert.match(stderr, /managed credential domain could not be finalized \(managed-live-runtime-unreachable\); nothing was deleted/);
+    assert.equal(readRegistryFile(repo.mcHome).entries.length, 1);
+  });
+});

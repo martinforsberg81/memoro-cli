@@ -219,7 +219,7 @@ function exactIso(value) {
   return Number.isFinite(parsed.getTime()) && parsed.toISOString() === value;
 }
 
-function isDefinitiveSocketExit(error) {
+export function isDefinitiveSocketExit(error) {
   if (error?.code === 'ENOENT' || error?.code === 'ECONNREFUSED') return true;
   return /\b(?:ENOENT|ECONNREFUSED)\b/.test(error?.message || '');
 }

@@ -37,6 +37,8 @@ import {
 import { emitCd, parseDirectiveFlag } from '../mc/shell-directives.js';
 import { detectSquashPhantom } from '../mc/squash-phantom.js';
 import { removeBrokerSessionForEntry } from '../runtime/broker/session-cleanup.js';
+import { reconcileManagedSession } from '../mc/managed-session-reconciler.js';
+import { inspectLocalBrokerSessionForEntry } from '../core/liveness/presence.js';
 import { providerArtifactPath } from '../runtime/broker/paths.js';
 import { readProviderArtifactSync } from '../runtime/broker/provider-artifact-journal.js';
 import { mcHome } from '../mc/paths.js';
@@ -981,17 +983,34 @@ async function teardownOne(plan, { opts, deps }) {
         repairs.push(repaired.reason);
       }
       if (!repaired.ok || !brokerCleanupIsAcceptable(entry, broker)) {
-        // A managed session whose runtime crashed before finalization has
-        // an unclosed credential domain and no cleanup marker. The domain
-        // recovery lives in the open/resume path — name that way out
-        // until end closes the domain inline (teardown-primitive work).
+        // Self-healing: a managed runtime that crashed before finalization
+        // left its credential domain unclosed and no cleanup marker. Run
+        // the SAME reconciliation open uses — recover exit receipts,
+        // finalize and close the domain — inline. Only a reconciliation
+        // the machinery itself refuses may stop the teardown.
+        let managedFinalized = false;
         if (entry?.tool_session_provider_adapter && broker?.reason === 'not-found') {
-          throw new Error(
-            'managed credential domain was never finalized (crashed runtime); '
-            + `run \`mc open ${entry.name}\` once to recover it, exit the tool, then retry mc end`,
-          );
+          const reconcile = deps.reconcileManagedSession || reconcileManagedSession;
+          const inspectPresence = deps.inspectLocalBrokerSessionForEntry
+            || inspectLocalBrokerSessionForEntry;
+          const reconciled = await reconcile({
+            entry,
+            inspectLocalPresence: (target) => inspectPresence(target),
+            deps: deps.managedReconcilerDeps || deps,
+          }).catch(() => null);
+          if (reconciled?.ok && ['start', 'resume'].includes(reconciled.action)) {
+            managedFinalized = true;
+            repairs.push('managed-domain-finalized');
+          } else {
+            throw new Error(
+              'managed credential domain could not be finalized '
+              + `(${reconciled?.reason || 'managed-session-reconciliation-failed'}); nothing was deleted`,
+            );
+          }
         }
-        throw new Error(`broker cleanup failed (${broker?.error || broker?.reason || 'unknown'})`);
+        if (!managedFinalized) {
+          throw new Error(`broker cleanup failed (${broker?.error || broker?.reason || 'unknown'})`);
+        }
       }
     }
     if (plan.artifacts?.provider_managed && !plan.artifacts?.provider_cleanup_confirmed) {
