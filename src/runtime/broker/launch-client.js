@@ -4,13 +4,10 @@ import { randomUUID } from 'node:crypto';
 import { setTimeout as sleep } from 'node:timers/promises';
 
 import { resolveLaunch } from '../../adapters/index.js';
-import { installHooks, installUpdateCommand } from '../../adapters/claude-code.js';
-import { installHooks as installCodexHooks } from '../../adapters/codex.js';
 import { DEFAULT_TOOL, readConfig, getApiUrl } from '../../lib/config.js';
 import { getRepoContext, deriveRepoName, resolvePublicRepoRef } from '../../lib/git-context.js';
 import { lookupOrMint } from '../../lib/coding-session.js';
 import { getPackageVersion } from '../../lib/version.js';
-import { ensureCoordinatorSlashCommand } from '../../mc/coordinator-command.js';
 import { groundSession } from '../../mc/ground.js';
 import { normalizeInteractivePtyEnv } from '../../mc/interactive-env.js';
 import { mcHome } from '../../mc/paths.js';
@@ -154,14 +151,13 @@ export async function launchBrokerOwnedSession({
     return { code: 1 };
   }
 
-  if (!managedPortable && launch.id === 'claude-code') {
-    await (deps.ensureCoordinatorSlashCommand || ensureCoordinatorSlashCommand)();
-    await (deps.installUpdateCommand || installUpdateCommand)().catch(() => {});
+  const nativeLaunchHooks = launch.adapter?.NATIVE_LAUNCH_HOOKS || null;
+  if (!managedPortable && nativeLaunchHooks?.prepareEarly) {
     try {
-      await (deps.installClaudeArtifactHooks || installHooks)();
+      await nativeLaunchHooks.prepareEarly({ deps });
     } catch (error) {
-      stderr.write(`mc: failed to install Claude provider artifact hook (${error.message}); refusing to launch\n`);
-      return { code: 1, reason: 'claude-provider-artifact-hook-unavailable' };
+      stderr.write(`mc: failed to install ${nativeLaunchHooks.hookFailureLabel} provider artifact hook (${error.message}); refusing to launch\n`);
+      return { code: 1, reason: nativeLaunchHooks.hookFailureReason };
     }
   }
   const config = await (deps.readConfig || readConfig)();
@@ -345,7 +341,7 @@ export async function launchBrokerOwnedSession({
     ...devEnvironment,
   };
   let codexDeviceAuthBeforeLaunch = false;
-  if (!managedPortable && launch.id === 'codex' && isCloudBrokerLaunch(cloudBroker)) {
+  if (!managedPortable && nativeLaunchHooks?.cloudAuthPrepare && isCloudBrokerLaunch(cloudBroker)) {
     const prepareAuth = deps.prepareCloudCodexAuth || prepareCloudCodexAuth;
     const auth = await prepareAuth({
       codingSessionId,
@@ -364,14 +360,12 @@ export async function launchBrokerOwnedSession({
       codexDeviceAuthBeforeLaunch = true;
     }
   }
-  if (launch.id === 'codex' && !managedPortable) {
+  if (!managedPortable && nativeLaunchHooks?.prepareSpawn) {
     try {
-      await (deps.installCodexArtifactHooks || installCodexHooks)({
-        ...(spawnEnv.CODEX_HOME ? { codexHome: spawnEnv.CODEX_HOME } : {}),
-      });
+      await nativeLaunchHooks.prepareSpawn({ spawnEnv, deps });
     } catch (error) {
-      stderr.write(`mc: failed to install Codex provider artifact hook (${error.message}); refusing to launch\n`);
-      return { code: 1, reason: 'codex-provider-artifact-hook-unavailable' };
+      stderr.write(`mc: failed to install ${nativeLaunchHooks.hookFailureLabel} provider artifact hook (${error.message}); refusing to launch\n`);
+      return { code: 1, reason: nativeLaunchHooks.hookFailureReason };
     }
   }
   const sessionHost = await resolveLaunchBroker({
@@ -405,7 +399,7 @@ export async function launchBrokerOwnedSession({
       stderr.write(`mc: failed to install local resource guard (${err.message}); refusing to launch\n`);
       return { code: 1 };
     }
-    if (launch.id === 'codex') {
+    if (nativeLaunchHooks?.cloudflareGuard) {
       try {
         const { prepareCloudflareGuardEnv } = await import('../../mc/cloudflare-guard.js');
         const {
@@ -841,7 +835,7 @@ export async function launchBrokerOwnedSession({
     ...(attachSocketPath ? { socketPath: attachSocketPath } : {}),
   };
   let code = await attach(attachOptions);
-  if (launch.id === 'codex' && !managedPortable) {
+  if (nativeLaunchHooks?.sqliteStartupRetry && !managedPortable) {
     code = await retryCodexSqliteStartup({
       code,
       codingSessionId: effectiveCodingSessionId,

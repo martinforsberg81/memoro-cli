@@ -15,6 +15,7 @@ import { spawnSync } from 'node:child_process';
 import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { findClaudeSessionById, findLatestClaudeSession } from '../lib/claude.js';
+import { ensureCoordinatorSlashCommand } from '../mc/coordinator-command.js';
 import { upsertManagedBlock, removeManagedBlock } from '../lib/managed-block.js';
 import { getPackageVersion } from '../lib/version.js';
 import { writeProtectedFile, shredFile } from './_materialise.js';
@@ -712,5 +713,22 @@ export const ARTIFACT_OWNERSHIP = Object.freeze({
   },
   transcriptHeadSessionId(entry) {
     return entry?.sessionId || entry?.session_id || null;
+  },
+});
+
+/**
+ * Native-custody launch lifecycle. The launcher invokes these at fixed
+ * points in its flow; the dep-override keys match the launcher's
+ * long-standing test harness names on purpose.
+ */
+export const NATIVE_LAUNCH_HOOKS = Object.freeze({
+  hookFailureReason: 'claude-provider-artifact-hook-unavailable',
+  hookFailureLabel: 'Claude',
+  // Before identity/config resolution: coordinator surface + artifact
+  // hooks. A hook-install failure must refuse the launch.
+  async prepareEarly({ deps = {} } = {}) {
+    await (deps.ensureCoordinatorSlashCommand || ensureCoordinatorSlashCommand)();
+    await (deps.installUpdateCommand || installUpdateCommand)().catch(() => {});
+    await (deps.installClaudeArtifactHooks || installHooks)();
   },
 });

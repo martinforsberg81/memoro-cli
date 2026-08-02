@@ -106,3 +106,20 @@ describe('artifact ownership contract', () => {
     assert.equal(artifactOwnershipFor('mystery-tool'), null);
   });
 });
+
+describe('native launch hooks contract', () => {
+  test('hook-declaring adapters name their failure surface', async () => {
+    const { resolveToolInput } = await import('../../src/adapters/index.js');
+    for (const tool of ['claude-code', 'codex']) {
+      const hooks = resolveToolInput(tool).adapter.NATIVE_LAUNCH_HOOKS;
+      assert.ok(hooks, tool);
+      assert.match(hooks.hookFailureReason, /provider-artifact-hook-unavailable$/, tool);
+      assert.equal(typeof hooks.hookFailureLabel, 'string', tool);
+      assert.ok(typeof hooks.prepareEarly === 'function' || typeof hooks.prepareSpawn === 'function', tool);
+    }
+    const codexHooks = resolveToolInput('codex').adapter.NATIVE_LAUNCH_HOOKS;
+    assert.equal(codexHooks.cloudAuthPrepare, true);
+    assert.equal(codexHooks.cloudflareGuard, true);
+    assert.equal(codexHooks.sqliteStartupRetry, true);
+  });
+});
