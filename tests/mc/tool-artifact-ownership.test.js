@@ -393,7 +393,7 @@ describe('LLM tool artifact ownership', () => {
     assert.deepEqual(result.artifacts, []);
   });
 
-  test('reports a missing exact transcript as unverified and non-deletable', async () => {
+  test('a missing exact transcript with nothing else on disk is absent, not a dead-end', async () => {
     const { roots, codexHome } = fixtureRoots();
     const id = '019f8f5d-9734-7cc0-94f7-d3d406305c1c';
     const transcript = join(
@@ -405,6 +405,31 @@ describe('LLM tool artifact ownership', () => {
       `rollout-2026-07-23T12-00-00-${id}.jsonl`,
     );
     mkdirSync(join(codexHome, 'sessions'), { recursive: true });
+
+    const result = await inspectOwnedToolArtifacts(codexEntry(transcript, id), { roots });
+
+    assert.equal(result.state, 'absent');
+    assert.equal(result.safe_to_delete, true);
+    assert.equal(result.transcript_missing, true);
+    assert.deepEqual(result.artifacts, []);
+  });
+
+  test('a missing transcript with surviving sibling artifacts stays unverified', async () => {
+    const { roots, codexHome } = fixtureRoots();
+    const id = '019f8f5d-9734-7cc0-94f7-d3d406305c1c';
+    const transcript = join(
+      codexHome,
+      'sessions',
+      '2026',
+      '07',
+      '23',
+      `rollout-2026-07-23T12-00-00-${id}.jsonl`,
+    );
+    mkdirSync(join(codexHome, 'sessions'), { recursive: true });
+    // Sibling artifacts cannot be attributed without the transcript's
+    // identity proof — those must keep failing closed.
+    mkdirSync(join(codexHome, 'generated_images', id), { recursive: true });
+    writeFileSync(join(codexHome, 'generated_images', id, 'img.png'), 'x');
 
     const result = await inspectOwnedToolArtifacts(codexEntry(transcript, id), { roots });
 

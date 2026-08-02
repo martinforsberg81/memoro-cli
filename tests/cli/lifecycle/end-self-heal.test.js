@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import test, { afterEach, beforeEach, describe } from 'node:test';
 
@@ -234,6 +234,43 @@ describe('mc end self-heal and loss-free teardown', () => {
     assert.equal(result.code, 0, result.stderr);
     assert.equal(existsSync(target.transcript), false);
     assert.deepEqual(registryEntries(), []);
+  });
+
+  test('a recorded transcript that vanished, with nothing else on disk, no longer dead-ends', async () => {
+    const target = makeTarget('gone-transcript');
+    rmSync(target.transcript);
+
+    const result = await invoke(['gone-transcript'], {
+      answer: 'y',
+      entries: [target.entry],
+      roots: target.roots,
+      deps: {
+        runSessionUploadSync: async () => assert.fail('an absent transcript has nothing to distill'),
+      },
+    });
+
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(existsSync(target.worktree), false);
+    assert.deepEqual(registryEntries(), []);
+  });
+
+  test('a vanished transcript with surviving sibling artifacts still fails closed', async () => {
+    const target = makeTarget('gone-but-siblings');
+    rmSync(target.transcript);
+    const imagesDir = join(target.roots.codex.generated_images_root, target.entry.tool_session_id);
+    mkdirSync(imagesDir, { recursive: true });
+    writeFileSync(join(imagesDir, 'img.png'), 'x');
+
+    const result = await invoke(['gone-but-siblings'], {
+      answer: 'y',
+      entries: [target.entry],
+      roots: target.roots,
+    });
+
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /transcript-missing/);
+    assert.equal(existsSync(imagesDir), true);
+    assert.equal(registryEntries().length, 1);
   });
 
   test('a session that never launched skips the distill gate', async () => {
