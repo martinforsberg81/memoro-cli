@@ -827,6 +827,9 @@ function emitResults({ opts, results, stdout, stderr }) {
     const result = results[0];
     if (result.ok) {
       stdout.write(`mc: ended ${result.name}\n`);
+      if (result.retained?.length) {
+        stdout.write(`mc: retained: ${result.retained.join(', ')}\n`);
+      }
     } else {
       stderr.write(`mc: failed to end ${result.name}: ${result.error}\n`);
       stderr.write(`mc: leftovers: ${result.leftovers.length ? result.leftovers.join(', ') : 'none detected'}\n`);
@@ -835,6 +838,9 @@ function emitResults({ opts, results, stdout, stderr }) {
     for (const result of results) {
       const suffix = result.error ? ` — ${result.error}` : '';
       stdout.write(`${result.ok ? '✓' : '✗'} ${result.name}${suffix}\n`);
+      if (result.ok && result.retained?.length) {
+        stdout.write(`  retained: ${result.retained.join(', ')}\n`);
+      }
       if (!result.ok) {
         stdout.write(`  leftovers: ${result.leftovers.length ? result.leftovers.join(', ') : 'none detected'}\n`);
       }

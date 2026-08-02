@@ -214,6 +214,14 @@ export async function teardownOne(plan, { opts, deps }) {
   const { entry: originalEntry, primary, status } = plan;
   let entry = originalEntry;
   const repairs = [];
+  // Sessions and tool artifacts are not 1:1 — several registry rows can
+  // point at the same transcript (resumed tool sessions, re-registered
+  // worktrees). Resolve sharing up front so every later step, including
+  // leftover verification in the failure path, sees the same answer.
+  const sharedHolders = transcriptSharedWithAnotherSession(originalEntry, deps);
+  if (sharedHolders.length > 0) {
+    plan = { ...plan, shared_transcript_holders: sharedHolders };
+  }
   try {
     // Distill FIRST, while nothing has been destroyed. The transcript is
     // the only copy of the session's knowledge; a failed upload leaves
@@ -221,7 +229,8 @@ export async function teardownOne(plan, { opts, deps }) {
     const distilled = await distillTranscriptBeforeDelete(plan, { opts, deps });
     if (!distilled.ok) {
       throw new Error(
-        `transcript distill failed before deletion (${distilled.reason}); `
+        `transcript distill failed before deletion (${distilled.reason}`
+        + `${distilled.detail ? `: ${distilled.detail}` : ''}); `
         + 'nothing was deleted — retry when the upload can succeed, or pass --no-distill',
       );
     }
@@ -324,7 +333,10 @@ export async function teardownOne(plan, { opts, deps }) {
     // Providerless sessions have nothing identifiable to delete on the
     // provider surface (see withProviderlessDowngrade) — skip rather than
     // let the deleter's own inspection fail closed on the whole teardown.
-    if (!plan.artifacts?.provider_untouched && !plan.artifacts?.provider_managed) {
+    // Shared tool artifacts are retained, not deleted: another registry
+    // row still distills from them, and the last holder out deletes.
+    if (!plan.artifacts?.provider_untouched && !plan.artifacts?.provider_managed
+      && !plan.shared_transcript_holders) {
       const removeToolArtifacts = deps.deleteOwnedToolArtifacts || deleteOwnedToolArtifacts;
       const deleted = await removeToolArtifacts(entry, {
         roots: deps.toolArtifactRoots,
@@ -379,6 +391,9 @@ export async function teardownOne(plan, { opts, deps }) {
       status,
       leftovers: [],
       ...(repairs.length ? { repairs } : {}),
+      ...(plan.shared_transcript_holders
+        ? { retained: plan.shared_transcript_holders.map((name) => `tool-artifacts:shared-with:${name}`) }
+        : {}),
     };
   } catch (err) {
     return {
@@ -418,9 +433,58 @@ async function distillTranscriptBeforeDelete(plan, { opts = {}, deps = {} } = {}
     cwd: entry.worktree_path || null,
     codingSessionId: entry.coding_session_id || null,
   });
-  return uploaded?.ok === true
-    ? { ok: true, transcriptPath }
-    : { ok: false, reason: uploaded?.reason || 'upload-failed' };
+  if (uploaded?.ok === true) return { ok: true, transcriptPath };
+  const detail = extractUploadFailureDetail(uploaded?.output);
+  return {
+    ok: false,
+    reason: uploaded?.reason || 'upload-failed',
+    ...(detail ? { detail } : {}),
+  };
+}
+
+// A bare exit code ("upload-exit-1") sent users hunting; the child
+// process already printed the real error — carry its message along.
+function extractUploadFailureDetail(output) {
+  if (typeof output !== 'string' || !output.trim()) return null;
+  const lines = output.split('\n').map((line) => line.trim()).filter(Boolean);
+  const errorLine = [...lines].reverse()
+    .find((line) => /error/i.test(line) && !line.startsWith('at '));
+  return (errorLine || lines[lines.length - 1]).slice(0, 300);
+}
+
+/**
+ * Names the OTHER registry rows that distill from this entry's tool
+ * artifacts: same transcript path, or same tool session id under the
+ * same tool. Destruction fails closed — an unreadable registry counts
+ * as shared, because deleting what a sibling may still need is the one
+ * mistake this engine must never make.
+ */
+export function transcriptSharedWithAnotherSession(entry, deps = {}) {
+  const transcriptPath = nonEmpty(entry?.tool_transcript_path);
+  const toolSessionId = nonEmpty(entry?.tool_session_id);
+  if (!transcriptPath && !toolSessionId) return [];
+  const read = deps.readRegistry || readRegistry;
+  let registry;
+  try {
+    registry = read();
+  } catch {
+    return ['unknown:registry-unreadable'];
+  }
+  const holders = [];
+  for (const other of registry?.entries || []) {
+    if (!other) continue;
+    if (entry.session_id ? other.session_id === entry.session_id : other.name === entry.name) {
+      continue;
+    }
+    const otherTranscript = nonEmpty(other.tool_transcript_path);
+    const sameTranscript = transcriptPath && otherTranscript
+      && samePath(otherTranscript, transcriptPath);
+    const sameToolSession = toolSessionId
+      && nonEmpty(other.tool_session_id) === toolSessionId
+      && (other.tool_session_source || null) === (entry.tool_session_source || null);
+    if (sameTranscript || sameToolSession) holders.push(other.name || other.session_id);
+  }
+  return holders;
 }
 
 /**
@@ -539,7 +603,9 @@ function removeWorktreeAndBranch(entry, { primary, keepBranch }) {
 async function inspectLeftovers(plan, opts, deps, { includeRegistry = true } = {}) {
   const leftovers = [];
   const exists = deps.existsSync || existsSync;
-  if (!plan.artifacts?.provider_managed) {
+  // Retained-shared artifacts are deliberate, not leftovers: the sibling
+  // rows named in shared_transcript_holders still own them.
+  if (!plan.artifacts?.provider_managed && !plan.shared_transcript_holders) {
     try {
       const artifacts = withProviderlessDowngrade(
         plan.entry,

@@ -93,6 +93,14 @@ export function parseTranscript(raw, { tool = 'claude-code' } = {}) {
 }
 
 /**
+ * Distillation is lossy compression by contract: the payload is shaped
+ * here, newest-first, because the end of a session carries its
+ * conclusions. The server's external-session envelope (512 KB) is a hard
+ * stop with headroom, never the shaping mechanism.
+ */
+export const CLEANED_CONVERSATION_MAX_BYTES = 224 * 1024;
+
+/**
  * Build the external-session payload Memoro expects now: a cleaned
  * conversation stream plus deterministic metadata.
  */
@@ -110,17 +118,60 @@ export function buildSessionPayload({
   const mcSessionId = typeof codingSessionId === 'string' && codingSessionId.trim()
     ? codingSessionId.trim()
     : null;
+  const bounded = boundConversationNewestFirst(buildCleanedConversation(parsed));
   const payload = {
     source,
     session_id: parsed.sessionId || fallbackSessionId(parsed),
     started_at: parsed.startedAt || null,
     ended_at: parsed.endedAt || null,
-    cleaned_conversation: buildCleanedConversation(parsed),
+    cleaned_conversation: bounded.entries,
     repo_hint: repoHint,
     tool_version: toolVersion,
   };
+  if (bounded.dropped) {
+    payload.conversation_truncated = true;
+    payload.conversation_dropped = bounded.dropped;
+  }
   if (mcSessionId) payload.coding_session_id = mcSessionId;
   return payload;
+}
+
+function boundConversationNewestFirst(entries, maxBytes = CLEANED_CONVERSATION_MAX_BYTES) {
+  let used = 2; // JSON array brackets
+  let start = entries.length;
+  while (start > 0) {
+    const size = Buffer.byteLength(JSON.stringify(entries[start - 1]), 'utf8') + 1;
+    if (used + size > maxBytes) break;
+    used += size;
+    start -= 1;
+  }
+  if (start === 0) return { entries, dropped: null };
+
+  let kept = entries.slice(start);
+  if (kept.length === 0) {
+    // Even the newest entry alone exceeds the budget: keep it with its
+    // content cut to fit rather than distilling an empty session.
+    kept = [truncateEntryContent(entries[entries.length - 1], maxBytes - 2048)];
+    start = entries.length - 1;
+  }
+  const droppedEntries = entries.slice(0, start);
+  const droppedMessages = droppedEntries.filter(entry => entry.kind === 'message').length;
+  return {
+    entries: kept,
+    dropped: {
+      messages: droppedMessages,
+      activities: droppedEntries.length - droppedMessages,
+    },
+  };
+}
+
+function truncateEntryContent(entry, maxBytes) {
+  if (typeof entry?.content !== 'string') return entry;
+  let text = entry.content;
+  while (text.length > 0 && Buffer.byteLength(text, 'utf8') > maxBytes) {
+    text = text.slice(0, Math.floor(text.length * 0.9));
+  }
+  return { ...entry, content: `${text}…`, content_truncated: true };
 }
 
 function buildCleanedConversation(parsed) {
