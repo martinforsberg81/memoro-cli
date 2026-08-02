@@ -107,25 +107,38 @@ export class BrokerSessionSidecars {
     this.finalizationPromise = null;
     this.uploadScheduled = false;
     this.githubBootstrapAttemptedAt = null;
+    // Managed sessions run against an EXACT pinned capability descriptor:
+    // an unadvertised operation must be refused before any identity or
+    // network use. Only a sidecar holding its own Memoro identity may
+    // refresh a denying allowlist.
+    this.allowCapabilityRefreshOnDeny = Boolean(coding.apiUrl && coding.token);
   }
 
   /**
    * GitHub capabilities are bootstrapped at launch, but a session must not
-   * stay GitHub-dead for its whole life just because that bootstrap failed
-   * or the connection was repaired after launch. When no ready capabilities
-   * are held, re-bootstrap (rate-limited) before serving an operation. A
-   * failed re-bootstrap resolves to null so the control plane remains the
-   * enforcing authority for the actual connection state.
+   * stay GitHub-dead — or capability-stale — for its whole life. Two
+   * refresh triggers, both rate-limited:
+   *   - no ready capabilities are held (failed launch bootstrap, or a
+   *     connection repaired after launch), and
+   *   - the cached ready list would DENY the requested operation — the
+   *     capability surface may have grown since launch (a server deploy
+   *     adding an operation), so re-bootstrap before deciding.
+   * A failed re-bootstrap keeps the cached list (or null), so the control
+   * plane remains the enforcing authority for the actual state.
    */
-  async _githubOperationAllowlist() {
-    if (this.githubCapabilities?.github?.state === 'ready') {
-      return this.githubCapabilities.github.operations || null;
+  async _githubOperationAllowlist(request = null) {
+    const cached = this.githubCapabilities?.github?.state === 'ready'
+      ? this.githubCapabilities.github.operations || []
+      : null;
+    if (cached && (!request?.operation || cached.includes(request.operation))) {
+      return cached;
     }
-    if (!this.connectionClient) return null;
+    if (cached && !this.allowCapabilityRefreshOnDeny) return cached;
+    if (!this.connectionClient) return cached;
     const nowMs = this.now();
     if (this.githubBootstrapAttemptedAt != null
       && nowMs - this.githubBootstrapAttemptedAt < GITHUB_REBOOTSTRAP_MIN_INTERVAL_MS) {
-      return null;
+      return cached;
     }
     this.githubBootstrapAttemptedAt = nowMs;
     try {
@@ -140,7 +153,7 @@ export class BrokerSessionSidecars {
         return descriptor.github.operations || null;
       }
     } catch {}
-    return null;
+    return cached;
   }
 
   start() {
@@ -214,7 +227,7 @@ export class BrokerSessionSidecars {
             connectionClient: this.connectionClient,
             codingSessionId: this.coding.codingSessionId,
             request: payload,
-            allowedOperations: () => this._githubOperationAllowlist(),
+            allowedOperations: (request) => this._githubOperationAllowlist(request),
             memoroFetchImpl: this.memoroFetch,
           });
           conn.end(JSON.stringify(response) + '\n');
