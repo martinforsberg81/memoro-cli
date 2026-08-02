@@ -128,6 +128,7 @@ const LIFECYCLE = {
   cd:            () => import('./cli/cd.js'),
   open:          () => import('./cli/open.js'),
   resume:        () => import('./cli/resume.js'),
+  restart:       () => import('./cli/restart.js'),
   gc:            () => import('./cli/gc.js'),
   status:        () => import('./cli/status.js'),
   dev:           () => import('./cli/dev.js'),
@@ -305,7 +306,7 @@ export function shouldRefuseBareMcInPrimaryWorktree({
 export function shouldRunStartupRuntimeGc(argv = []) {
   const cmd = argv[0] || null;
   if (!cmd) return true;
-  return cmd === 'wrap' || ['new', 'open', 'resume', 'attach'].includes(cmd);
+  return cmd === 'wrap' || ['new', 'open', 'resume', 'restart', 'attach'].includes(cmd);
 }
 
 async function maybeRunStartupRuntimeGc(argv) {

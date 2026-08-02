@@ -1969,7 +1969,7 @@ describe('ensureBrokerRunning', () => {
     assert.equal(res.reason, 'broker-protocol-incompatible-live');
     assert.equal(res.compatibility_reason, 'protocol_mismatch:mc-broker-pty-v3');
     assert.equal(spawned, false);
-    assert.match(res.error, /previous mc version/);
+    assert.match(res.error, /mc restart/);
   });
 
   test('does not reuse a same-protocol broker with a different runtime closure', async () => {
@@ -2079,7 +2079,7 @@ describe('ensureBrokerRunning', () => {
 
     assert.equal(res.ok, false);
     assert.equal(res.reason, 'broker-protocol-incompatible-live');
-    assert.match(res.error, /refusing|previous mc version/);
+    assert.match(res.error, /refusing|mc restart/);
   });
 });
 
