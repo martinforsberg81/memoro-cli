@@ -7,7 +7,7 @@ import { runMc, parseJsonOrNull } from '../../mc/_helpers/cli.js';
 import { makeTempRepo, git, addWorktree } from '../../mc/_helpers/git-fixture.js';
 import { writeRegistry, makeEntry } from '../../mc/_helpers/registry-fixture.js';
 import { run as runDoctor } from '../../../src/cli/doctor.js';
-import { classifyWorktreeEntry } from '../../../src/mc/storage-management.js';
+import { buildStorageSnapshot, classifyWorktreeEntry } from '../../../src/mc/storage-management.js';
 
 function setupStorageFixture(repo) {
   for (const n of ['done', 'dirty']) {
@@ -176,18 +176,46 @@ describe('mc storage / doctor', () => {
     assert.equal(j.git.default_branch_reason, 'default-branch-unknown');
   });
 
-  test('doctor summarizes storage issues without mutating', () => {
+  test('doctor removes dead runtime bookkeeping and keeps reporting what it cannot fix', () => {
+    const staleSidecar = join(repo.mcHome, 'hosts', 'sess_stale_sidecar');
+    assert.equal(existsSync(staleSidecar), true);
+
     const r = runMc(['doctor', '--json', '--min-age', '0s'], {
       cwd: repo.dir,
       env: { MC_HOME: repo.mcHome, MC_ORPHAN_PID_DIR: pidDir },
+      timeoutMs: 60_000,
     });
 
     assert.equal(r.status, 0, `stderr:${r.stderr}`);
     const j = parseJsonOrNull(r.stdout);
     assert.equal(j.ok, false);
-    assert.ok(j.issues.some((issue) => issue.code === 'stale-runtime'));
+    // Dead bookkeeping is fixed, not homework…
+    assert.ok(j.fixed.some((item) => (
+      item.code === 'stale-sidecar-removed' && item.name === staleSidecar
+    )), JSON.stringify(j.fixed));
+    assert.equal(existsSync(staleSidecar), false);
+    assert.ok(!j.issues.some((issue) => issue.code === 'stale-runtime'));
+    // …while destructive or human-hand work stays reported.
     assert.ok(j.issues.some((issue) => issue.code === 'stale-worktrees'));
     assert.ok(j.issues.some((issue) => issue.code === 'provider-native-id-missing'));
+  });
+
+  test('doctor --dry-run leaves runtime debris in place and reports it', () => {
+    const staleSidecar = join(repo.mcHome, 'hosts', 'sess_stale_sidecar');
+
+    const r = runMc(['doctor', '--json', '--dry-run', '--min-age', '0s'], {
+      cwd: repo.dir,
+      env: { MC_HOME: repo.mcHome, MC_ORPHAN_PID_DIR: pidDir },
+      timeoutMs: 60_000,
+    });
+
+    assert.equal(r.status, 0, `stderr:${r.stderr}`);
+    const j = parseJsonOrNull(r.stdout);
+    assert.ok(j.fixed.some((item) => (
+      item.code === 'stale-sidecar-removed' && item.status === 'would-fix'
+    )), JSON.stringify(j.fixed));
+    assert.equal(existsSync(staleSidecar), true);
+    assert.ok(j.issues.some((issue) => issue.code === 'stale-runtime'));
   });
 
   test('doctor includes unhealthy and orphaned dev servers', async () => {
@@ -682,10 +710,102 @@ describe('mc doctor session liveness', () => {
     buildStorageSnapshot: async () => ({ summary: { registry_entries: 3 }, issues: [] }),
     listDevServers: async () => [],
     scanDefaultBranchSquatters: () => [],
+    scanRuntimeCleanup: async () => ({
+      daemons: { orphan: [], stale: [], live: [] },
+      sidecars: { candidates: [], zombie_hosts: [], counts: {} },
+    }),
     buildTranscriptPrunePlan: () => ({
       counts: { total: 0, bytes: 0, kept: { recent: 0, protected: 0 }, protected_ids: 0 },
     }),
     ...overrides,
+  });
+
+  test('a zombie host surfaces as a snapshot issue with the explicit kill command', async () => {
+    const repo = makeTempRepo({ name: 'zombie-snapshot' });
+    try {
+      // A host dir whose daemon pid is ALIVE (ours) but whose session is
+      // not enumerable anywhere: the definition of a zombie host.
+      const hostDir = join(repo.mcHome, 'hosts', 'sess_zombie');
+      mkdirSync(hostDir, { recursive: true });
+      writeFileSync(join(hostDir, 'broker.pid'), String(process.pid));
+
+      const snapshot = await buildStorageSnapshot({
+        mcDir: repo.mcHome,
+        registry: { entries: [] },
+        listSessions: async () => [],
+        minAgeMs: 0,
+        includeDisk: false,
+      });
+
+      const issue = snapshot.issues.find((item) => item.code === 'zombie-hosts');
+      assert.ok(issue, JSON.stringify(snapshot.issues));
+      assert.equal(issue.count, 1);
+      assert.deepEqual(issue.pids, [process.pid]);
+      assert.match(issue.hint, /--reap-zombie-hosts/);
+      assert.match(issue.hint, /kills the daemon/);
+    } finally {
+      repo.cleanup();
+    }
+  });
+
+  test('dead runtime bookkeeping is removed; living processes are never touched', async () => {
+    const stdout = [];
+    const killed = [];
+    const code = await runDoctor(['--json'], doctorDeps({
+      stdout: { write: (value) => stdout.push(value) },
+      readRegistry: () => ({ entries: [] }),
+      scanRuntimeCleanup: async () => ({
+        daemons: {
+          orphan: [{ pidFile: '/pids/alive.pid', pid: 4242 }],
+          stale: [{ pidFile: '/pids/dead.pid', reason: 'process-gone' }],
+          live: [],
+        },
+        sidecars: {
+          candidates: [{ kind: 'guard-bin', session_id: 'sess_gone', path: '/mc/guard-bin/sess_gone' }],
+          zombie_hosts: [],
+          counts: {},
+        },
+      }),
+      reapRuntimeSidecars: (scan) => ({ ok: true, removed: scan.candidates }),
+      reapOrphans: (scan) => {
+        killed.push(...scan.orphan);
+        return {
+          reaped: [],
+          unlinked: scan.stale.map((item) => ({ pidFile: item.pidFile, removed: true })),
+        };
+      },
+    }));
+
+    assert.equal(code, 0);
+    // The living orphan daemon must never reach the reaper from doctor.
+    assert.deepEqual(killed, []);
+    const out = JSON.parse(stdout.join(''));
+    assert.deepEqual(out.fixed, [
+      { status: 'fixed', code: 'stale-sidecar-removed', name: '/mc/guard-bin/sess_gone' },
+      { status: 'fixed', code: 'stale-pidfile-removed', name: '/pids/dead.pid' },
+    ]);
+  });
+
+  test('--dry-run reports runtime debris as would-fix without reaping', async () => {
+    const stdout = [];
+    const code = await runDoctor(['--json', '--dry-run'], doctorDeps({
+      stdout: { write: (value) => stdout.push(value) },
+      readRegistry: () => ({ entries: [] }),
+      scanRuntimeCleanup: async () => ({
+        daemons: { orphan: [], stale: [{ pidFile: '/pids/dead.pid' }], live: [] },
+        sidecars: {
+          candidates: [{ kind: 'host', session_id: 'sess_gone', path: '/mc/hosts/sess_gone' }],
+          zombie_hosts: [],
+          counts: {},
+        },
+      }),
+      reapRuntimeSidecars: () => assert.fail('--dry-run must not reap sidecars'),
+      reapOrphans: () => assert.fail('--dry-run must not unlink pidfiles'),
+    }));
+
+    assert.equal(code, 0);
+    const out = JSON.parse(stdout.join(''));
+    assert.deepEqual(out.fixed.map((item) => item.status), ['would-fix', 'would-fix']);
   });
 
   test('a default-branch squat is freed and reported as fixed', async () => {

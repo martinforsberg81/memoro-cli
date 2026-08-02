@@ -9,7 +9,9 @@
  * human hand (exiting a live tool) stays an issue with the exact way out.
  * `--dry-run` reports without touching anything.
  */
-import { buildStorageSnapshot } from '../mc/storage-management.js';
+import { buildStorageSnapshot, scanRuntimeCleanup } from '../mc/storage-management.js';
+import { reapOrphans } from '../mc/orphan-daemons.js';
+import { reapRuntimeSidecars } from '../mc/sidecar-cleanup.js';
 import { readRegistry } from '../mc/registry.js';
 import {
   applyStorageRepairPlan,
@@ -76,7 +78,42 @@ export async function run(argv, deps = {}) {
     branchIssues.push(...repaired.issues);
   } catch { /* doctor stays best-effort */ }
 
-  const snapshot = await buildSnapshot({ minAgeMs: opts.minAgeMs });
+  // Runtime debris that is pure bookkeeping — sidecar dirs (broker-host,
+  // guard-bin) whose host process is gone, pidfiles of dead daemons — is
+  // removed here: loss-free, no process is touched. Living processes
+  // (orphan daemons, zombie hosts) stay issues with their explicit
+  // opt-in command; killing is never a side effect of a checkup.
+  const listOnce = sharedSessionListing();
+  try {
+    const runtimeScan = await (deps.scanRuntimeCleanup || scanRuntimeCleanup)({
+      minAgeMs: opts.minAgeMs,
+      listSessions: listOnce,
+    });
+    if (opts.dryRun) {
+      for (const item of runtimeScan.sidecars.candidates) {
+        fixed.push({ status: 'would-fix', code: 'stale-sidecar-removed', name: item.path });
+      }
+      for (const item of runtimeScan.daemons.stale) {
+        fixed.push({ status: 'would-fix', code: 'stale-pidfile-removed', name: item.pidFile });
+      }
+    } else {
+      const sidecars = (deps.reapRuntimeSidecars || reapRuntimeSidecars)(runtimeScan.sidecars);
+      for (const item of sidecars.removed) {
+        fixed.push({ status: 'fixed', code: 'stale-sidecar-removed', name: item.path });
+      }
+      const pidfiles = (deps.reapOrphans || reapOrphans)({
+        orphan: [],
+        stale: runtimeScan.daemons.stale,
+      });
+      for (const item of pidfiles.unlinked) {
+        if (item.removed) {
+          fixed.push({ status: 'fixed', code: 'stale-pidfile-removed', name: item.pidFile });
+        }
+      }
+    }
+  } catch { /* doctor stays best-effort */ }
+
+  const snapshot = await buildSnapshot({ minAgeMs: opts.minAgeMs, listSessions: listOnce });
   const devServers = await Promise.resolve().then(() => list()).catch(() => []);
   const devSummary = summarizeDevServers(devServers);
   const devIssues = [];
@@ -109,7 +146,6 @@ export async function run(argv, deps = {}) {
   // liveness engine, and each verdict names its exact loss-free remedy.
   // This closes the old dead-end where failure messages said "run mc
   // doctor" and doctor had nothing to say about session hosts.
-  const listOnce = sharedSessionListing();
   const liveness = await collectSessionLivenessIssues({
     readRegistryImpl: deps.readRegistry || readRegistry,
     inspectPresence: deps.inspectPresence
