@@ -981,6 +981,16 @@ async function teardownOne(plan, { opts, deps }) {
         repairs.push(repaired.reason);
       }
       if (!repaired.ok || !brokerCleanupIsAcceptable(entry, broker)) {
+        // A managed session whose runtime crashed before finalization has
+        // an unclosed credential domain and no cleanup marker. The domain
+        // recovery lives in the open/resume path — name that way out
+        // until end closes the domain inline (teardown-primitive work).
+        if (entry?.tool_session_provider_adapter && broker?.reason === 'not-found') {
+          throw new Error(
+            'managed credential domain was never finalized (crashed runtime); '
+            + `run \`mc open ${entry.name}\` once to recover it, exit the tool, then retry mc end`,
+          );
+        }
         throw new Error(`broker cleanup failed (${broker?.error || broker?.reason || 'unknown'})`);
       }
     }
