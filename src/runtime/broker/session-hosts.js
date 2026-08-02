@@ -75,8 +75,11 @@ export async function ensureSessionHostRunning({
         compatibility_reason: compatibility.reason,
         broker: existing.broker,
         live_sessions: liveSessions,
+        // "end" is PERMANENT teardown — never the remedy for a runtime
+        // upgrade. The non-destructive way out is exiting the running
+        // tool; the empty incompatible host is then replaced on reopen.
         error: liveSessions.length > 0
-          ? `session host is incompatible (${compatibility.reason}) with ${liveSessions.length} live session(s); end it with the previous mc version before retrying`
+          ? `session host is incompatible (${compatibility.reason}) with ${liveSessions.length} live session(s); exit the running tool in its terminal (Ctrl+D), then retry — nothing is deleted`
           : `session host is incompatible (${compatibility.reason}) and its session inventory is unavailable; refusing to replace it`,
       };
     }
