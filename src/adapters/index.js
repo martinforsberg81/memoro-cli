@@ -201,3 +201,16 @@ export function transcriptDiscoveryFor(value) {
   const id = canonicalToolId(value);
   return (id && ADAPTERS[id]?.TRANSCRIPT_DISCOVERY) || null;
 }
+
+/** The artifact-ownership profile for any tool-name form; null when none. */
+export function artifactOwnershipFor(value) {
+  const id = canonicalToolId(value);
+  return (id && ADAPTERS[id]?.ARTIFACT_OWNERSHIP) || null;
+}
+
+/** Implemented adapters that declare an artifact-ownership profile. */
+export function listArtifactOwnershipProfiles() {
+  return Object.values(ADAPTERS)
+    .filter((adapter) => adapter.ARTIFACT_OWNERSHIP)
+    .map((adapter) => ({ id: adapter.ID, profile: adapter.ARTIFACT_OWNERSHIP }));
+}

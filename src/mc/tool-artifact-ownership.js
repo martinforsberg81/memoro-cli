@@ -6,7 +6,11 @@ import {
   rm,
   unlink,
 } from 'node:fs/promises';
-import { isSameTool } from '../adapters/index.js';
+import {
+  artifactOwnershipFor,
+  isSameTool,
+  listArtifactOwnershipProfiles,
+} from '../adapters/index.js';
 import { homedir } from 'node:os';
 import {
   basename,
@@ -37,28 +41,15 @@ export function defaultToolArtifactRoots({
   home = homedir(),
   env = process.env,
 } = {}) {
-  const codexHome = nonEmpty(env.CODEX_HOME) || join(home, '.codex');
-  const claudeHome = nonEmpty(env.CLAUDE_HOME) || join(home, '.claude');
-  return {
-    codex: {
-      provider_root: codexHome,
-      transcript_roots: [
-        join(codexHome, 'sessions'),
-        join(codexHome, 'archived_sessions'),
-      ],
-      generated_images_root: join(codexHome, 'generated_images'),
-      shell_snapshots_root: join(codexHome, 'shell_snapshots'),
-      negative_roots: codexNegativeRoots(codexHome),
-    },
-    'claude-code': {
-      provider_root: claudeHome,
-      transcript_roots: [join(claudeHome, 'projects')],
-      file_history_root: join(claudeHome, 'file-history'),
-      session_env_root: join(claudeHome, 'session-env'),
-      tasks_root: join(claudeHome, 'tasks'),
-      negative_roots: claudeNegativeRoots(claudeHome),
-    },
-  };
+  const roots = {};
+  for (const { id, profile } of listArtifactOwnershipProfiles()) {
+    const providerRoot = nonEmpty(env[profile.homeEnv]) || join(home, profile.homeDir);
+    roots[id] = {
+      provider_root: providerRoot,
+      ...profile.layout(providerRoot, { join }),
+    };
+  }
+  return roots;
 }
 
 /**
@@ -436,54 +427,36 @@ async function inspectAuxiliaryArtifacts(authority, sourceRoots, { fs, scan }) {
     artifacts.push(inspected.artifact);
   }
 
-  if (authority.source === 'codex') {
-    const snapshots = await inspectCodexShellSnapshots(authority, sourceRoots, { fs, scan });
-    if (!snapshots.ok) return snapshots;
-    artifacts.push(...snapshots.artifacts);
+  const patterns = artifactOwnershipFor(authority.source)?.sessionFilePatterns({
+    sessionId: authority.session_id,
+    roots: sourceRoots,
+    escapeRegExp,
+  }) || [];
+  for (const filePattern of patterns) {
+    const matched = await inspectSessionFilePattern(filePattern, sourceRoots, { fs, scan });
+    if (!matched.ok) return matched;
+    artifacts.push(...matched.artifacts);
   }
   return { ok: true, artifacts: artifacts.sort((a, b) => a.path.localeCompare(b.path)) };
 }
 
 function exactSessionDirectories(authority, sourceRoots) {
-  if (authority.source === 'codex') {
-    return [{
-      kind: 'codex-generated-images',
-      path: join(sourceRoots.generated_images_root, authority.session_id),
-      root: sourceRoots.generated_images_root,
-      providerRoot: sourceRoots.provider_root,
-      expected: 'directory',
-    }];
-  }
-  const projectDir = dirname(authority.transcript_path);
-  return [
-    {
-      kind: 'claude-project-session-data',
-      path: join(projectDir, authority.session_id),
-      root: projectDir,
-      providerRoot: sourceRoots.provider_root,
-      expected: 'directory',
-    },
-    ...[
-      ['claude-file-history', sourceRoots.file_history_root],
-      ['claude-session-env', sourceRoots.session_env_root],
-      ['claude-tasks', sourceRoots.tasks_root],
-    ].map(([kind, root]) => ({
-      kind,
-      path: join(root, authority.session_id),
-      root,
-      providerRoot: sourceRoots.provider_root,
-      expected: 'directory',
-    })),
-  ];
+  const profile = artifactOwnershipFor(authority.source);
+  if (!profile) return [];
+  return profile.sessionDirectories({
+    sessionId: authority.session_id,
+    transcriptPath: authority.transcript_path,
+    roots: sourceRoots,
+    join,
+    dirname,
+  });
 }
 
-async function inspectCodexShellSnapshots(authority, sourceRoots, { fs, scan }) {
-  const root = sourceRoots.shell_snapshots_root;
+async function inspectSessionFilePattern({ kind, root, pattern }, sourceRoots, { fs, scan }) {
   const rootInspection = await inspectRoot(root, sourceRoots.provider_root, fs);
   if (rootInspection.missing) return { ok: true, artifacts: [] };
   if (!rootInspection.ok) return rootInspection;
 
-  const pattern = new RegExp(`^${escapeRegExp(authority.session_id)}\\.[0-9]+\\.sh$`);
   const artifacts = [];
   let entries;
   try {
@@ -493,7 +466,7 @@ async function inspectCodexShellSnapshots(authority, sourceRoots, { fs, scan }) 
       if (limitIssue) return { ok: false, issue: limitIssue };
       if (!pattern.test(entry.name)) continue;
       const inspected = await inspectFileArtifact({
-        kind: 'codex-shell-snapshot',
+        kind,
         path: join(root, entry.name),
         root,
         providerRoot: sourceRoots.provider_root,
@@ -671,22 +644,14 @@ function validateProviderRoots(source, sourceRoots) {
   if (!sourceRoots || !isCanonicalAbsolute(sourceRoots.provider_root)) {
     return 'invalid-provider-artifact-roots';
   }
-  const providerRoot = sourceRoots.provider_root;
-  const expected = source === 'codex'
-    ? {
-        transcript_roots: [join(providerRoot, 'sessions'), join(providerRoot, 'archived_sessions')],
-        generated_images_root: join(providerRoot, 'generated_images'),
-        shell_snapshots_root: join(providerRoot, 'shell_snapshots'),
-      }
-    : source === 'claude-code'
-      ? {
-          transcript_roots: [join(providerRoot, 'projects')],
-          file_history_root: join(providerRoot, 'file-history'),
-          session_env_root: join(providerRoot, 'session-env'),
-          tasks_root: join(providerRoot, 'tasks'),
-        }
-      : null;
-  if (!expected) return 'unsupported-tool-source';
+  const profile = artifactOwnershipFor(source);
+  if (!profile) return 'unsupported-tool-source';
+  // Injected roots must equal the profile's canonical shape exactly —
+  // this guards caller-supplied roots, not just the defaults.
+  const { negative_roots: _negative, ...expected } = profile.layout(
+    sourceRoots.provider_root,
+    { join },
+  );
   if (
     !Array.isArray(sourceRoots.transcript_roots)
     || sourceRoots.transcript_roots.length !== expected.transcript_roots.length
@@ -718,32 +683,20 @@ function transcriptSessionId(source, head) {
     } catch {
       continue;
     }
-    if (source === 'codex') {
-      if (entry?.type === 'session_meta') return nonEmpty(entry?.payload?.id);
-      continue;
-    }
-    const id = nonEmpty(entry?.sessionId) || nonEmpty(entry?.session_id);
+    const id = nonEmpty(artifactOwnershipFor(source)?.transcriptHeadSessionId(entry));
     if (id) return id;
   }
   return null;
 }
 
 function matchesTranscriptLayout({ source, sessionId, transcriptPath, transcriptRoot }) {
-  const rel = relative(transcriptRoot, transcriptPath);
-  const parts = rel.split(sep);
-  if (source === 'claude-code') {
-    return parts.length === 2
-      && parts[0].startsWith('-')
-      && parts[1] === `${sessionId}.jsonl`;
-  }
-  const file = parts.at(-1);
-  if (!file?.startsWith('rollout-') || !file.endsWith(`-${sessionId}.jsonl`)) return false;
-  const rootName = basename(transcriptRoot);
-  if (rootName === 'archived_sessions') return parts.length === 1;
-  return parts.length === 4
-    && /^\d{4}$/.test(parts[0])
-    && /^\d{2}$/.test(parts[1])
-    && /^\d{2}$/.test(parts[2]);
+  const profile = artifactOwnershipFor(source);
+  if (!profile) return false;
+  return profile.transcriptLayoutMatches({
+    sessionId,
+    parts: relative(transcriptRoot, transcriptPath).split(sep),
+    transcriptRootName: basename(transcriptRoot),
+  });
 }
 
 function toolMatchesSource(tool, source) {
@@ -972,31 +925,7 @@ function fsIssue(code, path, err = null) {
   };
 }
 
-function codexNegativeRoots(root) {
-  return [
-    root,
-    join(root, 'history.jsonl'),
-    join(root, 'session_index.jsonl'),
-    join(root, 'state_5.sqlite'),
-    join(root, 'logs_2.sqlite'),
-    join(root, 'goals_1.sqlite'),
-    join(root, 'memories_1.sqlite'),
-    join(root, 'memories'),
-    join(root, 'config.toml'),
-    join(root, 'auth.json'),
-  ];
-}
 
-function claudeNegativeRoots(root) {
-  return [
-    root,
-    join(root, 'history.jsonl'),
-    join(root, 'settings.json'),
-    join(root, 'shell-snapshots'),
-    join(root, 'memory'),
-    join(root, 'plugins'),
-  ];
-}
 
 function isMissing(err) {
   return err?.code === 'ENOENT';

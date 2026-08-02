@@ -655,3 +655,62 @@ export const TRANSCRIPT_DISCOVERY = Object.freeze({
   findLatest: (options) => findLatestClaudeSession(options),
   findById: (options) => findClaudeSessionById(options),
 });
+
+/**
+ * Declarative artifact-ownership profile — see the codex adapter for the
+ * contract shape. Inspection and deletion machinery stays central.
+ */
+export const ARTIFACT_OWNERSHIP = Object.freeze({
+  homeEnv: 'CLAUDE_HOME',
+  homeDir: '.claude',
+  layout(providerRoot, { join }) {
+    return {
+      transcript_roots: [join(providerRoot, 'projects')],
+      file_history_root: join(providerRoot, 'file-history'),
+      session_env_root: join(providerRoot, 'session-env'),
+      tasks_root: join(providerRoot, 'tasks'),
+      negative_roots: [
+        providerRoot,
+        join(providerRoot, 'history.jsonl'),
+        join(providerRoot, 'settings.json'),
+        join(providerRoot, 'shell-snapshots'),
+        join(providerRoot, 'memory'),
+        join(providerRoot, 'plugins'),
+      ],
+    };
+  },
+  sessionDirectories({ sessionId, transcriptPath, roots, join, dirname }) {
+    const projectDir = dirname(transcriptPath);
+    return [
+      {
+        kind: 'claude-project-session-data',
+        path: join(projectDir, sessionId),
+        root: projectDir,
+        providerRoot: roots.provider_root,
+        expected: 'directory',
+      },
+      ...[
+        ['claude-file-history', roots.file_history_root],
+        ['claude-session-env', roots.session_env_root],
+        ['claude-tasks', roots.tasks_root],
+      ].map(([kind, root]) => ({
+        kind,
+        path: join(root, sessionId),
+        root,
+        providerRoot: roots.provider_root,
+        expected: 'directory',
+      })),
+    ];
+  },
+  sessionFilePatterns() {
+    return [];
+  },
+  transcriptLayoutMatches({ sessionId, parts }) {
+    return parts.length === 2
+      && parts[0].startsWith('-')
+      && parts[1] === `${sessionId}.jsonl`;
+  },
+  transcriptHeadSessionId(entry) {
+    return entry?.sessionId || entry?.session_id || null;
+  },
+});

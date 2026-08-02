@@ -71,3 +71,38 @@ describe('transcript contract', () => {
     assert.equal(transcriptDiscoveryFor('mystery-tool'), null);
   });
 });
+
+describe('artifact ownership contract', () => {
+  test('both implemented adapters declare a complete ownership profile', async () => {
+    const { artifactOwnershipFor, listArtifactOwnershipProfiles } = await import('../../src/adapters/index.js');
+    const { join, dirname } = await import('node:path');
+    assert.deepEqual(
+      listArtifactOwnershipProfiles().map(({ id }) => id).sort(),
+      ['claude-code', 'codex'],
+    );
+    for (const tool of ['claude-code', 'codex']) {
+      const profile = artifactOwnershipFor(tool);
+      assert.equal(typeof profile.homeEnv, 'string', tool);
+      assert.equal(typeof profile.homeDir, 'string', tool);
+      const layout = profile.layout('/prov', { join });
+      assert.ok(Array.isArray(layout.transcript_roots) && layout.transcript_roots.length > 0, tool);
+      assert.ok(layout.negative_roots.includes('/prov'), `${tool}: provider root must be negative`);
+      const dirs = profile.sessionDirectories({
+        sessionId: 'abc-123',
+        transcriptPath: '/prov/x/t.jsonl',
+        roots: { provider_root: '/prov', ...layout },
+        join,
+        dirname,
+      });
+      assert.ok(dirs.every((d) => d.kind && d.path && d.root && d.expected === 'directory'), tool);
+      assert.equal(typeof profile.transcriptLayoutMatches, 'function', tool);
+      assert.equal(typeof profile.transcriptHeadSessionId, 'function', tool);
+      assert.ok(Array.isArray(profile.sessionFilePatterns({
+        sessionId: 'abc-123',
+        roots: { provider_root: '/prov', ...layout },
+        escapeRegExp: (v) => v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'),
+      })), tool);
+    }
+    assert.equal(artifactOwnershipFor('mystery-tool'), null);
+  });
+});
