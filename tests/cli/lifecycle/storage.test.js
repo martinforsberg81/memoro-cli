@@ -195,6 +195,7 @@ describe('mc storage / doctor', () => {
     const code = await runDoctor(['--json'], {
       stdout: { write: (value) => stdout.push(value) },
       stderr: { write: () => {} },
+      readRegistry: () => ({ entries: [] }),
       buildStorageSnapshot: async () => ({ summary: { registry_entries: 0 }, issues: [] }),
       listDevServers: async () => [
         { instance_id: 'ready', state: 'ready' },
@@ -670,5 +671,68 @@ describe('mc storage / doctor', () => {
     assert.equal(existsSync(join(repo.mcHome, 'worktrees', 'repo', 'old-generated', '.next')), false);
     assert.equal(existsSync(join(repo.mcHome, 'worktrees', 'repo', 'recent-generated', '.next')), true);
     assert.equal(existsSync(join(repo.mcHome, 'worktrees', 'repo', 'unignored-generated', 'coverage')), true);
+  });
+});
+
+describe('mc doctor session liveness', () => {
+  const doctorDeps = (overrides = {}) => ({
+    stderr: { write: () => {} },
+    buildStorageSnapshot: async () => ({ summary: { registry_entries: 3 }, issues: [] }),
+    listDevServers: async () => [],
+    buildTranscriptPrunePlan: () => ({
+      counts: { total: 0, bytes: 0, kept: { recent: 0, protected: 0 }, protected_ids: 0 },
+    }),
+    ...overrides,
+  });
+
+  test('every live row is judged by the engine and each verdict names its remedy', async () => {
+    const stdout = [];
+    const verdicts = {
+      sess_ok: { verdict: 'live' },
+      sess_gone: { verdict: 'exited' },
+      sess_stuck: { verdict: 'unreachable' },
+    };
+    const code = await runDoctor(['--json'], doctorDeps({
+      stdout: { write: (value) => stdout.push(value) },
+      readRegistry: () => ({
+        entries: [
+          { name: 'healthy', session_state: 'live', coding_session_id: 'sess_ok' },
+          { name: 'gone', session_state: 'live', coding_session_id: 'sess_gone' },
+          { name: 'stuck', session_state: 'live', coding_session_id: 'sess_stuck' },
+          { name: 'idle-row', session_state: 'idle', coding_session_id: 'sess_idle' },
+        ],
+      }),
+      inspectPresence: async (entry) => verdicts[entry.coding_session_id],
+    }));
+
+    assert.equal(code, 0);
+    const result = JSON.parse(stdout.join(''));
+    assert.deepEqual(result.summary.sessions, {
+      live_rows: 3, confirmed_live: 1, exited: 1, unreachable: 1, unknown: 0,
+    });
+    const gone = result.issues.find((issue) => issue.code === 'session-live-row-exited');
+    assert.equal(gone.name, 'gone');
+    assert.match(gone.hint, /mc open gone/);
+    const stuck = result.issues.find((issue) => issue.code === 'session-runtime-unreachable');
+    assert.equal(stuck.name, 'stuck');
+    assert.match(stuck.hint, /exit the running tool.*nothing is deleted/);
+    assert.equal(result.ok, false);
+  });
+
+  test('a failing presence probe degrades to unknown with the repair hint', async () => {
+    const stdout = [];
+    const code = await runDoctor(['--json'], doctorDeps({
+      stdout: { write: (value) => stdout.push(value) },
+      readRegistry: () => ({
+        entries: [{ name: 'mystery', session_state: 'live', coding_session_id: 'sess_x' }],
+      }),
+      inspectPresence: async () => { throw new Error('probe offline'); },
+    }));
+
+    assert.equal(code, 0);
+    const result = JSON.parse(stdout.join(''));
+    assert.equal(result.summary.sessions.unknown, 1);
+    const issue = result.issues.find((item) => item.code === 'session-liveness-unknown');
+    assert.match(issue.hint, /mc storage repair --apply/);
   });
 });
