@@ -172,15 +172,20 @@ export async function inspectOwnedToolArtifacts(entry, {
 
   const transcript = await inspectTranscript(authority, fs);
   let transcriptMissing = false;
+  let transcriptUnverified = false;
   if (!transcript.ok) {
     transcriptMissing = transcript.missing === true;
-    if (
-      !transcriptMissing
-      || !allowVerifiedMissingTranscript
-      || !verifiedAuthorityMarkerMatches(entry, authority)
-    ) {
+    if (!transcriptMissing) {
       return unsafeResult(authority, transcript.issue, scan);
     }
+    // A missing transcript is not judged yet: if nothing else exists on
+    // disk either, the artifact set is empty and deleting nothing needs
+    // no identity proof — refusing forever would make the session
+    // unremovable (the transcript cannot come back). Only sibling
+    // artifacts require the proof (or a marker from a prior verified
+    // run) before they may be attributed and deleted.
+    transcriptUnverified = !allowVerifiedMissingTranscript
+      || !verifiedAuthorityMarkerMatches(entry, authority);
   }
 
   const auxiliary = await inspectAuxiliaryArtifacts(authority, roots[authority.source], {
@@ -195,6 +200,9 @@ export async function inspectOwnedToolArtifacts(entry, {
     ...(transcript.ok ? [transcript.artifact] : []),
     ...auxiliary.artifacts,
   ];
+  if (transcriptUnverified && artifacts.length > 0) {
+    return unsafeResult(authority, transcript.issue, scan);
+  }
   if (transcriptMissing && artifacts.length === 0) {
     return {
       ...authority,
