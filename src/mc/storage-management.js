@@ -388,6 +388,22 @@ function buildIssues({ entries, worktrees, runtime, dependencySnapshots }) {
       orphan_daemons: runtime.counts.orphan_daemons,
       stale_pidfiles: runtime.counts.stale_pidfiles,
       sidecar_candidates: runtime.counts.sidecar_candidates,
+      ...(runtime.counts.orphan_daemons
+        ? { hint: 'mc gc --reap-orphans (signals living daemons — explicit by design)' }
+        : {}),
+    });
+  }
+  // Zombie hosts hold LIVING processes whose session can never be
+  // reattached; reaping kills the daemon and its tool child, so it is
+  // opt-in — but staying invisible is how they linger forever.
+  const zombieHosts = runtime.sidecars?.zombie_hosts || [];
+  if (zombieHosts.length) {
+    issues.push({
+      severity: 'warning',
+      code: 'zombie-hosts',
+      count: zombieHosts.length,
+      pids: zombieHosts.map((item) => item.pid).filter((pid) => pid != null),
+      hint: 'mc gc --sidecars --reap-zombie-hosts (kills the daemon AND its tool process)',
     });
   }
   const stale = worktrees.filter((item) => item.cleanup_candidate);
