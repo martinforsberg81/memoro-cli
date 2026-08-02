@@ -710,14 +710,43 @@ export async function commitProviderSwitchDelivery({
 }
 
 /**
- * A target launch that provably died without delivering the handoff:
- * the local lifecycle evidence names the EXACT journaled target
- * generation as exited, and that generation never published a provider
- * artifact. Delivery is certified only by the artifact's session/
- * generation/tool binding, so an artifact-less exited generation cannot
- * have consumed the handoff — relaunching cannot double-deliver. This
- * is the named way out of `handoff-delivery-ambiguous` for a dead
- * target; anything live or unproven stays fail-closed.
+ * Codes the broker records ONLY on paths where the handoff text was
+ * never written to the target PTY. The delivery promise settles in the
+ * same synchronous block as the write (see createStartupMessageController),
+ * inside the very process that records these codes, so their presence is
+ * positive proof of non-delivery — not an assumption.
+ *
+ * Deliberately excluded: `pty-message-delivery-failed` (the write itself
+ * threw, so a partial write is possible) and
+ * `handoff-delivery-journal-unconfirmed` (delivery happened, only its
+ * receipt is missing). Those stay ambiguous.
+ */
+const PROVEN_UNDELIVERED_DIAGNOSTICS = new Set([
+  'handoff-delivery-timeout',
+  'handoff-delivery-timeout-prompt-never-ready',
+  'handoff-delivery-unavailable',
+  'handoff-target-sidecar-failed',
+  'provider-exited-before-handoff-delivery',
+]);
+
+/**
+ * A target launch that provably died without delivering the handoff.
+ * Two independent proofs, either of which is sufficient once the local
+ * lifecycle evidence names the EXACT journaled target generation as
+ * exited:
+ *
+ *   1. That generation never published a provider artifact. Delivery is
+ *      certified by the artifact's session/generation/tool binding, so
+ *      an artifact-less exited generation cannot have consumed the
+ *      handoff.
+ *   2. The broker that owned the delivery recorded a pre-write failure
+ *      for this transaction. An artifact only proves the tool STARTED;
+ *      it says nothing about whether the handoff text reached it, which
+ *      left a started-then-timed-out target ambiguous forever
+ *      (sql-readiness, 2026-08-02) with no command able to heal it.
+ *
+ * Relaunching after either proof cannot double-deliver. Anything live or
+ * unproven stays fail-closed.
  */
 function targetLaunchProvablyUndelivered({
   journal,
@@ -737,7 +766,15 @@ function targetLaunchProvablyUndelivered({
     runtimeGeneration: targetGeneration,
     trustedRoot: mcHome(),
   });
-  return artifact?.kind === 'absent';
+  if (artifact?.kind === 'absent') return true;
+  // A delivery that succeeded advances the journal past target_launch_started,
+  // so a recorded pre-write failure still sitting in this phase names this
+  // generation's launch and no other.
+  return journal?.phase === 'target_launch_started'
+    && (journal?.diagnostics || []).some((entry) => (
+      PROVEN_UNDELIVERED_DIAGNOSTICS.has(entry?.code)
+      && entry?.phase === 'target_launch_started'
+    ));
 }
 
 async function recoverPreparedProviderSwitch({

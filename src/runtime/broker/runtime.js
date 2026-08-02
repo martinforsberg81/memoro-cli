@@ -922,7 +922,10 @@ export class BrokerRuntime {
       this._noteHandoffFailure({
         id,
         transaction: handoffTransaction,
-        code: safeDiagnosticCode(delivery?.reason, 'handoff-delivery-unconfirmed'),
+        code: safeDiagnosticCode(
+          deliveryFailureCode(delivery?.reason, ownedSession),
+          'handoff-delivery-unconfirmed',
+        ),
       });
       try { this.manager.stop(id, 'SIGTERM'); } catch {}
       const finalization = await this._waitForRuntimeFinalization(id);
@@ -2235,6 +2238,20 @@ function digestText(value) {
 
 function sameHandoffJournal(left, right) {
   return JSON.stringify(left) === JSON.stringify(right);
+}
+
+/**
+ * A delivery timeout has two very different causes: the tool never
+ * showed its message-ready prompt at all, or it did and the delivery
+ * still failed. Both are proof that nothing was written, but only the
+ * distinction says where to look next — so the journal records it
+ * instead of forcing a forensic reconstruction after the runtime's
+ * evidence is gone (sql-readiness, 2026-08-02).
+ */
+function deliveryFailureCode(reason, ownedSession) {
+  return reason === 'handoff-delivery-timeout' && ownedSession?.promptReadyObserved === false
+    ? 'handoff-delivery-timeout-prompt-never-ready'
+    : reason;
 }
 
 function safeDiagnosticCode(value, fallback) {
