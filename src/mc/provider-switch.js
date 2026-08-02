@@ -5,10 +5,10 @@ import { resolveToolInput } from '../adapters/index.js';
 import { readConfig, getApiUrl } from '../lib/config.js';
 import { derivePublicRepoRef, deriveRepoName, getRepoContext } from '../lib/git-context.js';
 import {
-  patchProviderSessionSequenceIfPresent,
-  providerSessionFor,
+  patchToolSessionSequenceIfPresent,
+  toolSessionFor,
   upsertEntry,
-  withProviderSession,
+  withToolSession,
 } from './registry.js';
 import {
   inspectManagedProviderHandoffSource,
@@ -72,7 +72,7 @@ export async function prepareProviderSwitch({
   }
   const codingSessionId = exact(entry?.coding_session_id);
   if (!codingSessionId) return failure('handoff-source-not-exited');
-  const sourceProvider = providerSessionFor(entry, sourceTool.id);
+  const sourceProvider = toolSessionFor(entry, sourceTool.id);
   const sourceGeneration = exact(sourceProvider?.runtime_generation);
   const sourceProof = await proveProviderSwitchSource({
     entry,
@@ -89,7 +89,7 @@ export async function prepareProviderSwitch({
   let sourceSession = localPresence.session
     || durableExitedSource({ sourceTool, sourceGeneration, localPresence, deps });
   const sourceCursor = providerCursor(sourceProvider);
-  const targetCursor = providerCursor(providerSessionFor(entry, targetTool.id));
+  const targetCursor = providerCursor(toolSessionFor(entry, targetTool.id));
   if (sourceCursor === null || targetCursor === null) {
     return failure('handoff-provider-cursor-invalid');
   }
@@ -271,7 +271,7 @@ async function auditMissingSwitchJournal({
   deps = {},
 } = {}) {
   const sourceTool = resolveToolInput(entry?.tool);
-  const sourceProvider = providerSessionFor(entry, sourceTool?.id);
+  const sourceProvider = toolSessionFor(entry, sourceTool?.id);
   const sourceCursor = providerCursor(sourceProvider);
   if (!sourceTool || !exact(sourceProvider?.session_id)
     || !exact(sourceProvider?.runtime_generation) || sourceCursor === null) {
@@ -413,7 +413,7 @@ export async function recoverProviderSwitch({
         : {}),
     };
   }
-  const sourceProvider = providerSessionFor(entry, journalSourceTool.id);
+  const sourceProvider = toolSessionFor(entry, journalSourceTool.id);
   const sourceGeneration = exact(sourceProvider?.runtime_generation);
   const sourceProof = await proveProviderSwitchSource({
     entry,
@@ -426,7 +426,7 @@ export async function recoverProviderSwitch({
     return failure('handoff-source-artifact-unconfirmed');
   }
   const sourceCursor = providerCursor(sourceProvider);
-  const targetCursor = providerCursor(providerSessionFor(entry, recoveredTargetTool.id));
+  const targetCursor = providerCursor(toolSessionFor(entry, recoveredTargetTool.id));
   if (sourceCursor === null || targetCursor === null) {
     return failure('handoff-provider-cursor-invalid');
   }
@@ -616,8 +616,8 @@ export async function commitProviderSwitchDelivery({
   if (artifactResult?.kind !== 'present') {
     return failure('handoff-target-artifact-unconfirmed');
   }
-  const commitCursor = deps.patchProviderSessionSequenceIfPresent
-    || patchProviderSessionSequenceIfPresent;
+  const commitCursor = deps.patchToolSessionSequenceIfPresent
+    || patchToolSessionSequenceIfPresent;
   const committed = commitCursor(
     entry.session_id || entry.name,
     targetTool.id,
@@ -626,7 +626,7 @@ export async function commitProviderSwitchDelivery({
   if (!committed?.ok) return failure(committed?.reason || 'handoff-cursor-commit-failed');
   let committedEntry = committed.entry;
   if (artifactResult?.kind === 'present') {
-    const providerPatch = withProviderSession(
+    const providerPatch = withToolSession(
       committedEntry,
       targetTool.id,
       {
@@ -642,7 +642,7 @@ export async function commitProviderSwitchDelivery({
     }
     committedEntry = {
       ...committedEntry,
-      provider_sessions: providerPatch.providerSessions,
+      tool_sessions: providerPatch.providerSessions,
     };
   }
   let journal = current.journal;
@@ -667,10 +667,10 @@ export async function commitProviderSwitchDelivery({
     tool_session_id: null,
     tool_session_source: null,
     tool_transcript_path: null,
-    tool_session_provider_adapter: null,
-    tool_session_provider_generation: null,
-    ...(committedEntry?.provider_sessions
-      ? { provider_sessions: committedEntry.provider_sessions }
+    tool_session_adapter: null,
+    tool_session_generation: null,
+    ...(committedEntry?.tool_sessions
+      ? { tool_sessions: committedEntry.tool_sessions }
       : {}),
   };
   let switchedEntry;
@@ -775,8 +775,8 @@ async function recoverPreparedProviderSwitch({
       });
       return failure(code);
     }
-    const sourceCommitted = (deps.patchProviderSessionSequenceIfPresent
-      || patchProviderSessionSequenceIfPresent)(
+    const sourceCommitted = (deps.patchToolSessionSequenceIfPresent
+      || patchToolSessionSequenceIfPresent)(
       entry.session_id || entry.name,
       sourceTool.id,
       journal.persisted.sequence,
@@ -942,8 +942,8 @@ async function continueProviderSwitch({
   if (current.phase !== 'handoff_persisted') {
     return failure('handoff-switch-phase-invalid');
   }
-  const commitCursor = deps.patchProviderSessionSequenceIfPresent
-    || patchProviderSessionSequenceIfPresent;
+  const commitCursor = deps.patchToolSessionSequenceIfPresent
+    || patchToolSessionSequenceIfPresent;
   const sourceCommitted = commitCursor(
     entry.session_id || entry.name,
     sourceTool.id,
@@ -1134,7 +1134,7 @@ async function proveProviderSwitchSource({
   if (!providerSessionId || !runtimeGeneration) {
     return failure('handoff-source-artifact-unconfirmed');
   }
-  const registryClaimsManaged = exact(entry?.tool_session_provider_adapter) != null
+  const registryClaimsManaged = exact(entry?.tool_session_adapter) != null
     && resolveToolInput(entry?.tool)?.id === sourceTool?.id;
   if (!registryClaimsManaged && exact(sourceProvider?.transcript_path)) {
     return {

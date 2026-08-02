@@ -42,7 +42,7 @@ function sourceEntry() {
       text: 'Build the causal provider switch.',
       authority: 'explicit',
     },
-    provider_sessions: {
+    tool_sessions: {
       schema: 1,
       providers: {
         'claude-code': {
@@ -237,10 +237,10 @@ test('A to B seals, persists, advances the source cursor, and prepares one user 
           duplicate: false,
         };
       },
-      patchProviderSessionSequenceIfPresent: (name, provider, sequence) => {
+      patchToolSessionSequenceIfPresent: (name, provider, sequence) => {
         cursorCommits.push({ name, provider, sequence });
         const next = structuredClone(entry);
-        next.provider_sessions.providers['claude-code'].last_consumed_handoff_sequence = sequence;
+        next.tool_sessions.providers['claude-code'].last_consumed_handoff_sequence = sequence;
         return { ok: true, entry: next };
       },
       randomUUID: () => '73a85b7e-2ce4-4db0-8b38-16ba08de03bf',
@@ -270,9 +270,9 @@ test('A to B seals, persists, advances the source cursor, and prepares one user 
 
 test('managed source handoff uses terminal archive proof instead of a transcript path', async () => {
   const entry = sourceEntry();
-  entry.tool_session_provider_adapter = 'claude-managed-local-v1';
-  entry.tool_session_provider_generation = sourceGeneration;
-  entry.provider_sessions.providers['claude-code'].transcript_path = null;
+  entry.tool_session_adapter = 'claude-managed-local-v1';
+  entry.tool_session_generation = sourceGeneration;
+  entry.tool_sessions.providers['claude-code'].transcript_path = null;
   let inspected = 0;
 
   const result = await prepareProviderSwitch({
@@ -438,7 +438,7 @@ test('a complete journal for a different target still requires fresh source proo
 test('delivery commits only the target cursor after broker acknowledgement', async () => {
   const entry = sourceEntry();
   let registryEntry = entry;
-  entry.provider_sessions.providers['claude-code'].last_consumed_handoff_sequence = 1;
+  entry.tool_sessions.providers['claude-code'].last_consumed_handoff_sequence = 1;
   const broker = makeBroker();
   broker.journal = {
     transaction_id: '73a85b7e-2ce4-4db0-8b38-16ba08de03bf',
@@ -465,10 +465,10 @@ test('delivery commits only the target cursor after broker acknowledgement', asy
     deps: {
       brokerRequest: broker.request,
       readProviderArtifact: presentTargetArtifact,
-      patchProviderSessionSequenceIfPresent: (name, provider, sequence) => {
+      patchToolSessionSequenceIfPresent: (name, provider, sequence) => {
         commits.push({ name, provider, sequence });
         const next = structuredClone(entry);
-        next.provider_sessions.providers.codex = {
+        next.tool_sessions.providers.codex = {
           session_id: null,
           transcript_path: null,
           runtime_generation: null,
@@ -489,19 +489,19 @@ test('delivery commits only the target cursor after broker acknowledgement', asy
   assert.equal(result.journal.phase, 'complete');
   assert.deepEqual(commits, [{ name: 'handoff', provider: 'codex', sequence: 2 }]);
   assert.equal(
-    result.entry.provider_sessions.providers['claude-code'].last_consumed_handoff_sequence,
+    result.entry.tool_sessions.providers['claude-code'].last_consumed_handoff_sequence,
     1,
   );
   assert.equal(
-    result.entry.provider_sessions.providers.codex.last_consumed_handoff_sequence,
+    result.entry.tool_sessions.providers.codex.last_consumed_handoff_sequence,
     2,
   );
 });
 
 test('managed delivery never projects the private target transcript path', async () => {
   const entry = sourceEntry();
-  entry.provider_sessions.providers['claude-code'].transcript_path = null;
-  entry.provider_sessions.providers['claude-code'].last_consumed_handoff_sequence = 1;
+  entry.tool_sessions.providers['claude-code'].transcript_path = null;
+  entry.tool_sessions.providers['claude-code'].last_consumed_handoff_sequence = 1;
   const broker = makeBroker();
   broker.journal = {
     transaction_id: transactionId,
@@ -525,9 +525,9 @@ test('managed delivery never projects the private target transcript path', async
   const deps = {
     brokerRequest: broker.request,
     readProviderArtifact: presentTargetArtifact,
-    patchProviderSessionSequenceIfPresent: (_name, provider, sequence) => {
+    patchToolSessionSequenceIfPresent: (_name, provider, sequence) => {
       const next = structuredClone(current);
-      next.provider_sessions.providers[provider] = {
+      next.tool_sessions.providers[provider] = {
         session_id: null,
         transcript_path: null,
         runtime_generation: null,
@@ -552,7 +552,7 @@ test('managed delivery never projects the private target transcript path', async
     deps,
   });
   assert.equal(result.ok, true);
-  assert.deepEqual(result.entry.provider_sessions.providers.codex, {
+  assert.deepEqual(result.entry.tool_sessions.providers.codex, {
     session_id: 'codex-native-b',
     transcript_path: null,
     runtime_generation: targetGeneration,
@@ -576,7 +576,7 @@ test('managed delivery never projects the private target transcript path', async
 
 test('delivery recovery finishes a registry switch after the durable cursor commit', async () => {
   const entry = sourceEntry();
-  entry.provider_sessions.providers['claude-code'].last_consumed_handoff_sequence = 1;
+  entry.tool_sessions.providers['claude-code'].last_consumed_handoff_sequence = 1;
   const broker = makeBroker();
   broker.journal = {
     transaction_id: '73a85b7e-2ce4-4db0-8b38-16ba08de03bf',
@@ -592,9 +592,9 @@ test('delivery recovery finishes a registry switch after the durable cursor comm
   const deps = {
     brokerRequest: broker.request,
     readProviderArtifact: presentTargetArtifact,
-    patchProviderSessionSequenceIfPresent: (_name, _provider, sequence) => {
+    patchToolSessionSequenceIfPresent: (_name, _provider, sequence) => {
       current = structuredClone(current);
-      current.provider_sessions.providers.codex = {
+      current.tool_sessions.providers.codex = {
         session_id: 'codex-native-b',
         transcript_path: '/private/transcripts/b.jsonl',
         runtime_generation: targetGeneration,
@@ -667,7 +667,7 @@ test('delivery commit rejects a caller sequence that differs from the journal', 
     },
     deps: {
       brokerRequest: broker.request,
-      patchProviderSessionSequenceIfPresent: () => {
+      patchToolSessionSequenceIfPresent: () => {
         mutated = true;
         return { ok: true, entry };
       },
@@ -681,8 +681,8 @@ test('delivery commit rejects a caller sequence that differs from the journal', 
 test('recovery finds a delivered switch even when the registry already names the target', async () => {
   const entry = sourceEntry();
   entry.tool = 'codex';
-  entry.provider_sessions.providers['claude-code'].last_consumed_handoff_sequence = 1;
-  entry.provider_sessions.providers.codex = {
+  entry.tool_sessions.providers['claude-code'].last_consumed_handoff_sequence = 1;
+  entry.tool_sessions.providers.codex = {
     session_id: 'codex-native-b',
     transcript_path: '/private/transcripts/b.jsonl',
     runtime_generation: targetGeneration,
@@ -974,7 +974,7 @@ test('same-provider recovery permits a pre-capability server but a switch does n
 
 test('missing journal fails closed when the source cursor proves consumed handoff history', async () => {
   const entry = sourceEntry();
-  entry.provider_sessions.providers['claude-code'].last_consumed_handoff_sequence = 1;
+  entry.tool_sessions.providers['claude-code'].last_consumed_handoff_sequence = 1;
   const broker = makeBroker();
   let serverAuditCalled = false;
 
@@ -1065,9 +1065,9 @@ test('delivery recovery binds the exact target artifact before completing the sw
           },
         };
       },
-      patchProviderSessionSequenceIfPresent: (_name, provider, sequence) => {
+      patchToolSessionSequenceIfPresent: (_name, provider, sequence) => {
         const next = structuredClone(current);
-        next.provider_sessions.providers[provider] = {
+        next.tool_sessions.providers[provider] = {
           session_id: null,
           transcript_path: null,
           runtime_generation: null,
@@ -1086,7 +1086,7 @@ test('delivery recovery binds the exact target artifact before completing the sw
 
   assert.equal(result.ok, true);
   assert.equal(result.journal.phase, 'complete');
-  assert.deepEqual(result.entry.provider_sessions.providers.codex, {
+  assert.deepEqual(result.entry.tool_sessions.providers.codex, {
     session_id: 'codex-native-b',
     transcript_path: '/private/transcripts/b.jsonl',
     runtime_generation: targetGeneration,
@@ -1121,7 +1121,7 @@ test('delivery recovery does not mutate the cursor without a required target art
     deps: {
       brokerRequest: broker.request,
       readProviderArtifact: () => ({ kind: 'absent' }),
-      patchProviderSessionSequenceIfPresent: () => {
+      patchToolSessionSequenceIfPresent: () => {
         mutated = true;
         return { ok: true, entry };
       },
@@ -1278,7 +1278,7 @@ test('a provably dead, artifact-less target launch re-arms and re-delivers the h
         artifactReads.push(arg);
         return { kind: 'absent' };
       },
-      patchProviderSessionSequenceIfPresent: () => ({ ok: true, entry }),
+      patchToolSessionSequenceIfPresent: () => ({ ok: true, entry }),
       renderHandoffUserMessage: () => ({ ok: true, message: relaunchMessage }),
       readConfig: async () => ({ apiUrl: 'https://meetmemoro.test' }),
       getApiUrl: () => null,
@@ -1440,17 +1440,17 @@ test('Claude A to Codex B to Claude A to Codex B reuses native IDs and delivers 
   const switchOnce = async (targetName) => {
     const sourceTool = resolveToolInput(current.tool).id;
     const targetTool = resolveToolInput(targetName);
-    const targetBefore = current.provider_sessions.providers[targetTool.id] || null;
+    const targetBefore = current.tool_sessions.providers[targetTool.id] || null;
     const consumedByTarget = [];
     const patchCursor = (_name, provider, sequence) => {
       const next = structuredClone(current);
-      next.provider_sessions.providers[provider] ||= {
+      next.tool_sessions.providers[provider] ||= {
         session_id: null,
         transcript_path: null,
         runtime_generation: null,
         last_consumed_handoff_sequence: 0,
       };
-      next.provider_sessions.providers[provider].last_consumed_handoff_sequence = sequence;
+      next.tool_sessions.providers[provider].last_consumed_handoff_sequence = sequence;
       current = next;
       return { ok: true, entry: next };
     };
@@ -1529,7 +1529,7 @@ test('Claude A to Codex B to Claude A to Codex B reuses native IDs and delivers 
           });
           return { ok: true, sequence, digest: rowDigest, duplicate: false };
         },
-        patchProviderSessionSequenceIfPresent: patchCursor,
+        patchToolSessionSequenceIfPresent: patchCursor,
         randomUUID: () => '73a85b7e-2ce4-4db0-8b38-16ba08de03bf',
         now: () => '2026-07-28T12:00:00.000Z',
       },
@@ -1560,7 +1560,7 @@ test('Claude A to Codex B to Claude A to Codex B reuses native IDs and delivers 
             runtime_generation: generations[targetTool.id],
           },
         }),
-        patchProviderSessionSequenceIfPresent: patchCursor,
+        patchToolSessionSequenceIfPresent: patchCursor,
         upsertEntry: (patch) => {
           current = { ...current, ...patch };
           return current;
@@ -1570,8 +1570,8 @@ test('Claude A to Codex B to Claude A to Codex B reuses native IDs and delivers 
     });
     assert.equal(committed.ok, true);
     current = committed.entry;
-    current.provider_sessions.providers[targetTool.id] = {
-      ...current.provider_sessions.providers[targetTool.id],
+    current.tool_sessions.providers[targetTool.id] = {
+      ...current.tool_sessions.providers[targetTool.id],
       session_id: nativeIds[targetTool.id],
       transcript_path: `/private/transcripts/${targetTool.id}.jsonl`,
       runtime_generation: generations[targetTool.id],
@@ -1579,7 +1579,7 @@ test('Claude A to Codex B to Claude A to Codex B reuses native IDs and delivers 
     return {
       consumedByTarget,
       targetNativeIdBefore: targetBefore?.session_id || null,
-      targetNativeIdAfter: current.provider_sessions.providers[targetTool.id].session_id,
+      targetNativeIdAfter: current.tool_sessions.providers[targetTool.id].session_id,
     };
   };
 
@@ -1597,11 +1597,11 @@ test('Claude A to Codex B to Claude A to Codex B reuses native IDs and delivers 
   assert.equal(third.targetNativeIdBefore, 'codex-native-b');
   assert.equal(third.targetNativeIdAfter, 'codex-native-b');
   assert.equal(
-    current.provider_sessions.providers['claude-code'].last_consumed_handoff_sequence,
+    current.tool_sessions.providers['claude-code'].last_consumed_handoff_sequence,
     3,
   );
   assert.equal(
-    current.provider_sessions.providers.codex.last_consumed_handoff_sequence,
+    current.tool_sessions.providers.codex.last_consumed_handoff_sequence,
     3,
   );
 });

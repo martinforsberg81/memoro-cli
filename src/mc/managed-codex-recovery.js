@@ -6,7 +6,7 @@ import { CODEX_SESSIONS_DIR } from '../lib/codex.js';
 import { mcHome } from './paths.js';
 import {
   readRegistryStrict,
-  withProviderSession,
+  withToolSession,
   writeRegistry,
 } from './registry.js';
 import {
@@ -356,12 +356,12 @@ export async function recoverUnjournaledManagedCodexResumeDomain({
   registry = null,
   deps = {},
 } = {}) {
-  const providerSession = entry?.provider_sessions?.providers?.codex;
+  const providerSession = entry?.tool_sessions?.providers?.codex;
   const providerSessionId = boundedProviderId(entry?.tool_session_id)
     ? entry.tool_session_id
     : null;
-  const providerGeneration = isUuidV4(entry?.tool_session_provider_generation)
-    ? entry.tool_session_provider_generation
+  const providerGeneration = isUuidV4(entry?.tool_session_generation)
+    ? entry.tool_session_generation
     : null;
   if (entry?.tool !== 'codex'
     || typeof entry?.coding_session_id !== 'string'
@@ -436,7 +436,7 @@ export async function recoverUnjournaledManagedCodexResumeDomain({
   if (matches.length !== 1
     || !sameEntryIdentity(matches[0], entryIdentity(entry))
     || matches[0].tool_session_id !== providerSessionId
-    || matches[0].tool_session_provider_generation !== providerGeneration) {
+    || matches[0].tool_session_generation !== providerGeneration) {
     return { ...failed('managed-legacy-prepared-registry-changed'), attempted: true };
   }
 
@@ -621,7 +621,7 @@ export async function applyManagedCodexRecovery({
 
   const current = matches[0];
   const artifact = inspection._private.providerArtifact;
-  const providerPatch = withProviderSession(current, 'codex', {
+  const providerPatch = withToolSession(current, 'codex', {
     session_id: artifact.provider_session_id,
     transcript_path: null,
     runtime_generation: artifact.runtime_generation,
@@ -639,9 +639,9 @@ export async function applyManagedCodexRecovery({
             tool_session_id: artifact.provider_session_id,
             tool_session_source: 'codex',
             tool_transcript_path: null,
-            tool_session_provider_adapter: MANAGED_CODEX_PROVIDER_ID,
-            tool_session_provider_generation: artifact.runtime_generation,
-            provider_sessions: providerPatch.providerSessions,
+            tool_session_adapter: MANAGED_CODEX_PROVIDER_ID,
+            tool_session_generation: artifact.runtime_generation,
+            tool_sessions: providerPatch.providerSessions,
             last_storage_repair_at: nowIso,
             last_storage_repair_reason: 'managed-provider-generation-recovered',
           }
@@ -738,8 +738,8 @@ function hasLegacyRegistryEvidence(entry) {
     || entry?.tool_session_source !== 'codex') return false;
   const transcriptPath = entry?.tool_transcript_path;
   return (typeof transcriptPath === 'string' && transcriptPath.length > 0)
-    || entry?.tool_session_provider_adapter !== MANAGED_CODEX_PROVIDER_ID
-    || !isUuidV4(entry?.tool_session_provider_generation);
+    || entry?.tool_session_adapter !== MANAGED_CODEX_PROVIDER_ID
+    || !isUuidV4(entry?.tool_session_generation);
 }
 
 function listProviderArtifacts({

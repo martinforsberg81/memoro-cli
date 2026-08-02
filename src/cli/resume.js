@@ -17,12 +17,12 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import {
   findEntry,
   formatEntryResolutionError,
-  normalizeProviderSessions,
-  providerSessionFor,
+  normalizeToolSessions,
+  toolSessionFor,
   readRegistry,
   resolveEntry,
   upsertEntry,
-  withProviderSession,
+  withToolSession,
 } from '../mc/registry.js';
 import { emitCd, parseDirectiveFlag } from '../mc/shell-directives.js';
 import { resolveToolInput } from '../adapters/index.js';
@@ -157,7 +157,7 @@ export async function run(rawArgv, deps = {}) {
     upsert: deps.upsertEntry || upsertEntry,
     deps,
   });
-  const providerState = normalizeProviderSessions(entry);
+  const providerState = normalizeToolSessions(entry);
   if (!providerState.ok) {
     stderr.write(`mc: provider session state is invalid (${providerState.reason}); refusing to launch.\n`);
     return 1;
@@ -263,7 +263,7 @@ export async function run(rawArgv, deps = {}) {
     if (!ready) return 1;
   }
   if (switchingTool) {
-    firstLaunchInWorktree = !providerSessionFor(
+    firstLaunchInWorktree = !toolSessionFor(
       entry,
       targetTool?.id,
     )?.session_id;
@@ -544,7 +544,7 @@ export async function launchResumeSession({
     stderr.write(`mc: no ${launchTool?.shortName || 'provider'}-native session to resume for "${entry.name}" — refusing to create a replacement session.\n`);
     return 1;
   }
-  const providerPatch = withProviderSession(entry, toolSession.source, {
+  const providerPatch = withToolSession(entry, toolSession.source, {
     session_id: toolSession.sessionId,
     transcript_path: toolSession.transcriptPath || null,
   });
@@ -609,7 +609,7 @@ export async function launchResumeSession({
         if (!completed?.ok) return completed;
         currentEntry = completed.entry || currentEntry;
       }
-      const currentProviderPatch = withProviderSession(currentEntry, toolSession.source, {
+      const currentProviderPatch = withToolSession(currentEntry, toolSession.source, {
         session_id: toolSession.sessionId,
         transcript_path: toolSession.transcriptPath || null,
       });
@@ -626,14 +626,14 @@ export async function launchResumeSession({
         tool_transcript_path: toolSession.transcriptPath || null,
         ...(localAuthMode === LOCAL_AUTH_MODES.MANAGED_PORTABLE
           ? {
-              tool_session_provider_adapter: entry.tool_session_provider_adapter,
-              tool_session_provider_generation: entry.tool_session_provider_generation,
+              tool_session_adapter: entry.tool_session_adapter,
+              tool_session_generation: entry.tool_session_generation,
             }
           : {}),
       };
       // Keep the prior proven generation until SessionStart evidence for this
       // exact runtime has been committed by the broker.
-      patch.provider_sessions = currentProviderPatch.providerSessions;
+      patch.tool_sessions = currentProviderPatch.providerSessions;
       if (brokerSocketPath) patch.broker_socket_path = brokerSocketPath;
       if (hostKind) patch.host_kind = hostKind;
       upsert(patch);
@@ -767,7 +767,7 @@ function commitProviderArtifact({
     ? managedProviderAdapterForTool(providerArtifact.tool)
     : null;
   if (managed && !managedAdapter) return false;
-  const providerPatch = withProviderSession(entry, providerArtifact.tool, {
+  const providerPatch = withToolSession(entry, providerArtifact.tool, {
     session_id: providerArtifact.provider_session_id,
     transcript_path: managed ? null : providerArtifact.transcript_path,
     runtime_generation: providerArtifact.runtime_generation,
@@ -781,11 +781,11 @@ function commitProviderArtifact({
     tool_transcript_path: managed ? null : providerArtifact.transcript_path,
     ...(managed
       ? {
-          tool_session_provider_adapter: managedAdapter.provider_adapter_id,
-          tool_session_provider_generation: providerArtifact.runtime_generation,
+          tool_session_adapter: managedAdapter.provider_adapter_id,
+          tool_session_generation: providerArtifact.runtime_generation,
         }
       : {}),
-    provider_sessions: providerPatch.providerSessions,
+    tool_sessions: providerPatch.providerSessions,
   });
   return true;
 }
@@ -1131,7 +1131,7 @@ export async function resumeSelectedChoice(choice, {
     if (!ready) return 1;
   }
   const firstLaunchInWorktree = switchingTool
-    ? !providerSessionFor(entry, effectiveTargetTool?.id)?.session_id
+    ? !toolSessionFor(entry, effectiveTargetTool?.id)?.session_id
     : entry.session_state === 'no-session-yet'
       && (
         localAuthMode === LOCAL_AUTH_MODES.MANAGED_PORTABLE
@@ -1455,7 +1455,7 @@ async function discoverManagedNativeContinuityEntry({
   deps = {},
 } = {}) {
   if (tool !== 'codex') return { ok: true, entry, discovered: false };
-  const existing = providerSessionFor(entry, tool)?.session_id
+  const existing = toolSessionFor(entry, tool)?.session_id
     || exactNonEmpty(entry?.tool_session_id);
   if (existing) return { ok: true, entry, discovered: false };
 
@@ -1485,7 +1485,7 @@ async function discoverManagedNativeContinuityEntry({
         };
   }
 
-  const providerPatch = withProviderSession(entry, tool, {
+  const providerPatch = withToolSession(entry, tool, {
     session_id: resolved.sessionId,
     transcript_path: resolved.transcriptPath || null,
   });
@@ -1503,7 +1503,7 @@ async function discoverManagedNativeContinuityEntry({
       tool_session_id: resolved.sessionId,
       tool_session_source: tool,
       tool_transcript_path: resolved.transcriptPath || null,
-      provider_sessions: providerPatch.providerSessions,
+      tool_sessions: providerPatch.providerSessions,
     },
   };
 }
@@ -1522,7 +1522,7 @@ function projectManagedResumeDecision({
     stderr.write('mc: managed provider adapter is unavailable; refusing to launch.\n');
     return { ok: false, decision };
   }
-  const providerPatch = withProviderSession(entry, tool, {
+  const providerPatch = withToolSession(entry, tool, {
     session_id: decision.providerSessionId,
     transcript_path: null,
     runtime_generation: decision.runtimeGeneration,
@@ -1540,9 +1540,9 @@ function projectManagedResumeDecision({
     tool_session_id: decision.providerSessionId,
     tool_session_source: tool,
     tool_transcript_path: null,
-    tool_session_provider_adapter: adapter.provider_adapter_id,
-    tool_session_provider_generation: decision.runtimeGeneration,
-    provider_sessions: providerPatch.providerSessions,
+    tool_session_adapter: adapter.provider_adapter_id,
+    tool_session_generation: decision.runtimeGeneration,
+    tool_sessions: providerPatch.providerSessions,
   };
   let written;
   try {
@@ -1615,12 +1615,12 @@ async function maybeBackfillToolSession(entry, {
     tool_session_source: resolved.source || null,
     tool_transcript_path: resolved.transcriptPath || null,
   };
-  const providerPatch = withProviderSession(entry, resolved.source, {
+  const providerPatch = withToolSession(entry, resolved.source, {
     session_id: resolved.sessionId,
     transcript_path: resolved.transcriptPath || null,
   });
   if (!providerPatch.ok) return entry;
-  patch.provider_sessions = providerPatch.providerSessions;
+  patch.tool_sessions = providerPatch.providerSessions;
   try {
     const next = upsert(patch);
     return { ...entry, ...patch, ...(next || {}) };
@@ -1631,8 +1631,8 @@ async function maybeBackfillToolSession(entry, {
 
 function storedManagedToolSession(entry, launchTool) {
   const sessionId = exactNonEmpty(entry?.tool_session_id);
-  const providerAdapter = exactNonEmpty(entry?.tool_session_provider_adapter);
-  const providerGeneration = exactNonEmpty(entry?.tool_session_provider_generation);
+  const providerAdapter = exactNonEmpty(entry?.tool_session_adapter);
+  const providerGeneration = exactNonEmpty(entry?.tool_session_generation);
   const expectedAdapter = managedProviderAdapterForTool(launchTool?.id);
   if (!sessionId
     || !expectedAdapter
@@ -1661,8 +1661,8 @@ function hasManagedProviderToolSession(entry) {
   return !!(
     adapter
     && exactNonEmpty(entry?.tool_session_id)
-    && exactNonEmpty(entry?.tool_session_provider_adapter) === adapter.provider_adapter_id
-    && isManagedGeneration(exactNonEmpty(entry?.tool_session_provider_generation))
+    && exactNonEmpty(entry?.tool_session_adapter) === adapter.provider_adapter_id
+    && isManagedGeneration(exactNonEmpty(entry?.tool_session_generation))
   );
 }
 
@@ -1981,7 +1981,7 @@ function applyToolSwitch(entry, resolvedTool, {
   targetCustody = 'native',
   upsert = upsertEntry,
 } = {}) {
-  const targetProvider = providerSessionFor(entry, resolvedTool?.id);
+  const targetProvider = toolSessionFor(entry, resolvedTool?.id);
   const targetSessionId = exactNonEmpty(targetProvider?.session_id);
   const targetGeneration = exactNonEmpty(targetProvider?.runtime_generation);
   const targetAdapter = targetCustody === 'managed'
@@ -2000,16 +2000,16 @@ function applyToolSwitch(entry, resolvedTool, {
     tool_transcript_path: targetCustody === 'native'
       ? targetProvider?.transcript_path || null
       : null,
-    tool_session_provider_adapter: targetCustody === 'managed' && targetSessionId
+    tool_session_adapter: targetCustody === 'managed' && targetSessionId
       ? targetAdapter.provider_adapter_id
       : null,
-    tool_session_provider_generation: targetCustody === 'managed' && targetSessionId
+    tool_session_generation: targetCustody === 'managed' && targetSessionId
       ? targetGeneration
       : null,
   };
-  const migrated = normalizeProviderSessions(entry);
+  const migrated = normalizeToolSessions(entry);
   if (!migrated.ok) return { error: migrated.reason };
-  patch.provider_sessions = migrated.providerSessions;
+  patch.tool_sessions = migrated.providerSessions;
   const next = upsert(patch);
   return { ...entry, ...patch, ...(next || {}) };
 }

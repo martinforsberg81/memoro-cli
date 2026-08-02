@@ -627,8 +627,8 @@ describe('mc end self-heals crash-dead managed sessions', () => {
     tool: 'codex',
     tool_session_id: '019f0000-0000-7000-8000-000000000001',
     tool_session_source: 'codex',
-    tool_session_provider_adapter: 'codex-managed-local-v1',
-    tool_session_provider_generation: '0361aa53-f49e-4c8b-900d-93139b731016',
+    tool_session_adapter: 'codex-managed-local-v1',
+    tool_session_generation: '0361aa53-f49e-4c8b-900d-93139b731016',
     ...patch,
   });
 

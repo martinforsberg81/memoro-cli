@@ -22,7 +22,7 @@ import {
   resolveRepositoryIdentity,
 } from './repository-identity.js';
 
-export const REGISTRY_SCHEMA_VERSION = 2;
+export const REGISTRY_SCHEMA_VERSION = 3;
 export const MC_SESSION_ID_RE = /^mcs_[a-f0-9]{24}$/u;
 
 const DEFAULTS = {
@@ -44,16 +44,16 @@ const DEFAULTS = {
   tool_session_id: null,
   tool_session_source: null,
   tool_transcript_path: null,
-  tool_session_provider_adapter: null,
-  tool_session_provider_generation: null,
-  provider_sessions: null,
+  tool_session_adapter: null,
+  tool_session_generation: null,
+  tool_sessions: null,
   session_objective: null,
 };
 
 const PROVIDER_KEY = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 
-export function normalizeProviderSessions(entry = {}) {
-  const existing = entry?.provider_sessions;
+export function normalizeToolSessions(entry = {}) {
+  const existing = entry?.tool_sessions;
   if (existing != null && !validProviderSessions(existing)) {
     return { ok: false, reason: 'provider-sessions-invalid', providerSessions: existing };
   }
@@ -80,14 +80,14 @@ export function normalizeProviderSessions(entry = {}) {
   return { ok: true, providerSessions, migrated: true };
 }
 
-export function providerSessionFor(entry, provider) {
-  const normalized = normalizeProviderSessions(entry);
+export function toolSessionFor(entry, provider) {
+  const normalized = normalizeToolSessions(entry);
   if (!normalized.ok) return null;
   return normalized.providerSessions.providers[canonicalProvider(provider)] || null;
 }
 
-export function withProviderSession(entry, provider, patch = {}) {
-  const normalized = normalizeProviderSessions(entry);
+export function withToolSession(entry, provider, patch = {}) {
+  const normalized = normalizeToolSessions(entry);
   if (!normalized.ok) return normalized;
   const key = canonicalProvider(provider);
   if (!key) return { ok: false, reason: 'unknown-provider', providerSessions: normalized.providerSessions };
@@ -105,21 +105,21 @@ export function withProviderSession(entry, provider, patch = {}) {
  * read/modify/write. This prevents a later local caller from regressing the
  * provider-specific causal cursor; H3 adds the broker single-writer journal.
  */
-export function patchProviderSessionSequenceIfPresent(identifier, provider, sequence) {
+export function patchToolSessionSequenceIfPresent(identifier, provider, sequence) {
   if (!Number.isSafeInteger(sequence) || sequence < 0) return { ok: false, reason: 'invalid-handoff-sequence' };
   const reg = readRegistryStrict();
   const resolved = resolveEntry(identifier, { registry: reg });
   if (!resolved.ok) return { ok: false, reason: resolved.reason };
   const index = reg.entries.findIndex((entry) => entry.session_id === resolved.entry.session_id);
   if (index === -1) return { ok: false, reason: 'missing' };
-  const updated = withProviderSession(reg.entries[index], provider, {});
+  const updated = withToolSession(reg.entries[index], provider, {});
   if (!updated.ok) return { ok: false, reason: updated.reason };
   const key = canonicalProvider(provider);
   const current = updated.providerSessions.providers[key];
   if (!current) return { ok: false, reason: 'missing-provider-session' };
   if (sequence < current.last_consumed_handoff_sequence) return { ok: false, reason: 'handoff-sequence-regression' };
   updated.providerSessions.providers[key] = { ...current, last_consumed_handoff_sequence: sequence };
-  reg.entries[index] = { ...reg.entries[index], provider_sessions: updated.providerSessions };
+  reg.entries[index] = { ...reg.entries[index], tool_sessions: updated.providerSessions };
   writeRegistry(reg);
   return { ok: true, entry: reg.entries[index] };
 }
@@ -491,12 +491,16 @@ export function migrateRegistry(registry, {
   }
   for (const entry of next.entries) {
     if (!entry.session_id) entry.session_id = sessionIdFactory();
-    if (version < REGISTRY_SCHEMA_VERSION
+    // legacy_session_key stamping is v1→v2 semantics only: a v2 registry
+    // deliberately left later rows unstamped, and the v3 bump must not
+    // retroactively hand them legacy keys.
+    if (version < 2
       && typeof entry.name === 'string'
       && legacyNameCounts.get(entry.name) === 1
       && entry.legacy_session_key == null) {
       entry.legacy_session_key = entry.name;
     }
+    renameLegacyProviderFields(entry);
   }
 
   const duplicateQualifiedNames = duplicateKeys(
@@ -529,6 +533,25 @@ export function migrateRegistry(registry, {
   next.schema_version = REGISTRY_SCHEMA_VERSION;
   const changed = JSON.stringify(next) !== JSON.stringify(original);
   return { ok: true, changed, registry: next, issues };
+}
+
+// v2→v3: the per-tool session map and the managed-adapter fields drop
+// the "provider" vocabulary (the adapter seam settled on "tool"). Runs
+// unconditionally so any stray old-name row heals on the next read; the
+// new name wins if both somehow exist.
+const LEGACY_PROVIDER_FIELD_RENAMES = [
+  ['provider_sessions', 'tool_sessions'],
+  ['tool_session_provider_adapter', 'tool_session_adapter'],
+  ['tool_session_provider_generation', 'tool_session_generation'],
+];
+
+function renameLegacyProviderFields(entry) {
+  for (const [from, to] of LEGACY_PROVIDER_FIELD_RENAMES) {
+    if (from in entry) {
+      if (entry[to] === undefined) entry[to] = entry[from];
+      delete entry[from];
+    }
+  }
 }
 
 function migrateLoadedRegistry(parsed, { path, persistMigration = true }) {

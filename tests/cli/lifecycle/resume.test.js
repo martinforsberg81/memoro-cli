@@ -280,8 +280,8 @@ describe('mc resume <name>', () => {
       created_at: '2026-07-06T16:23:22.145Z',
       tool_session_id: newProviderSessionId,
       tool_session_source: 'codex',
-      tool_session_provider_adapter: MANAGED_CODEX_PROVIDER_ID,
-      tool_session_provider_generation: MANAGED_GENERATION,
+      tool_session_adapter: MANAGED_CODEX_PROVIDER_ID,
+      tool_session_generation: MANAGED_GENERATION,
     };
     let current = entry;
     const launches = [];
@@ -307,7 +307,7 @@ describe('mc resume <name>', () => {
       launchResumeSession: async (input) => {
         launches.push(input);
         assert.equal(input.entry.tool_session_id, oldProviderSessionId);
-        assert.equal(input.entry.tool_session_provider_generation, oldGeneration);
+        assert.equal(input.entry.tool_session_generation, oldGeneration);
         return 0;
       },
       launchFreshSession: async () => assert.fail(
@@ -324,7 +324,7 @@ describe('mc resume <name>', () => {
     assert.equal(status, 0);
     assert.equal(launches.length, 1);
     assert.equal(
-      current.provider_sessions.providers.codex.session_id,
+      current.tool_sessions.providers.codex.session_id,
       oldProviderSessionId,
     );
   });
@@ -395,13 +395,13 @@ describe('mc resume <name>', () => {
     assert.equal(importedEntry.tool_session_id, providerSessionId);
     assert.equal(importedEntry.tool_transcript_path, transcriptPath);
     assert.equal(
-      importedEntry.provider_sessions.providers.codex.session_id,
+      importedEntry.tool_sessions.providers.codex.session_id,
       providerSessionId,
     );
     assert.equal(launches.length, 1);
     assert.equal(launches[0].entry.tool_session_id, providerSessionId);
     assert.equal(
-      launches[0].entry.tool_session_provider_generation,
+      launches[0].entry.tool_session_generation,
       providerGeneration,
     );
   });
@@ -415,7 +415,7 @@ describe('mc resume <name>', () => {
       worktree_path: '/tmp/managed-pre-handoff',
       coding_session_id: 'sess_managed_pre_handoff',
       session_state: 'live',
-      provider_sessions: {
+      tool_sessions: {
         schema: 1,
         providers: {
           codex: {
@@ -509,9 +509,9 @@ describe('mc resume <name>', () => {
       session_state: 'idle',
       tool_session_id: 'codex-managed-native-id',
       tool_session_source: 'codex',
-      tool_session_provider_adapter: 'codex-managed-local-v1',
-      tool_session_provider_generation: MANAGED_GENERATION,
-      provider_sessions: {
+      tool_session_adapter: 'codex-managed-local-v1',
+      tool_session_generation: MANAGED_GENERATION,
+      tool_sessions: {
         schema: 1,
         providers: {
           codex: {
@@ -597,7 +597,7 @@ describe('mc resume <name>', () => {
       assert.equal(repairs[0].active.coding_session_id, entry.coding_session_id);
       assert.equal(resumed.length, 1);
       assert.equal(
-        resumed[0].entry.tool_session_provider_generation,
+        resumed[0].entry.tool_session_generation,
         resumeSourceGeneration,
       );
     } finally {
@@ -621,9 +621,9 @@ describe('mc resume <name>', () => {
       tool_session_id: 'claude-managed-native-id',
       tool_session_source: 'claude-code',
       tool_transcript_path: null,
-      tool_session_provider_adapter: 'claude-managed-local-v1',
-      tool_session_provider_generation: sourceGeneration,
-      provider_sessions: {
+      tool_session_adapter: 'claude-managed-local-v1',
+      tool_session_generation: sourceGeneration,
+      tool_sessions: {
         schema: 1,
         providers: {
           'claude-code': {
@@ -723,11 +723,11 @@ describe('mc resume <name>', () => {
       assert.equal(resumed[0].entry.tool, 'codex');
       assert.equal(resumed[0].entry.tool_session_id, 'codex-managed-native-id');
       assert.equal(
-        resumed[0].entry.tool_session_provider_adapter,
+        resumed[0].entry.tool_session_adapter,
         'codex-managed-local-v1',
       );
       assert.equal(
-        resumed[0].entry.tool_session_provider_generation,
+        resumed[0].entry.tool_session_generation,
         targetGeneration,
       );
       assert.equal(resumed[0].entry.tool_transcript_path, null);
@@ -1098,7 +1098,7 @@ describe('mc resume <name>', () => {
       tool_session_id: 'claude-native-a',
       tool_session_source: 'claude-code',
       tool_transcript_path: '/tmp/claude-a.jsonl',
-      provider_sessions: {
+      tool_sessions: {
         schema: 1,
         providers: {
           'claude-code': {
@@ -1122,12 +1122,12 @@ describe('mc resume <name>', () => {
       tool_session_id: null,
       tool_session_source: null,
       tool_transcript_path: null,
-      provider_sessions: {
-        ...source.provider_sessions,
+      tool_sessions: {
+        ...source.tool_sessions,
         providers: {
-          ...source.provider_sessions.providers,
+          ...source.tool_sessions.providers,
           codex: {
-            ...source.provider_sessions.providers.codex,
+            ...source.tool_sessions.providers.codex,
             last_consumed_handoff_sequence: 1,
           },
         },
@@ -1301,7 +1301,7 @@ describe('mc resume <name>', () => {
         tool_session_id: 'cx_discovered',
         tool_session_source: 'codex',
         tool_transcript_path: '/tmp/codex.jsonl',
-        provider_sessions: {
+        tool_sessions: {
           schema: 1,
           providers: {
             codex: {
@@ -1325,7 +1325,7 @@ describe('mc resume <name>', () => {
       stderr: { write() {} },
       findEntry: () => makeEntry({
         name: 'data', tool: 'codex', coding_session_id: 'sess_data',
-        provider_sessions: { schema: 2, providers: {} }, tool_session_id: 'cx_legacy',
+        tool_sessions: { schema: 2, providers: {} }, tool_session_id: 'cx_legacy',
       }),
       upsertEntry: (patch) => { mutations.push(patch); return patch; },
       launchFreshSession: () => { launches.push('fresh'); return 0; },
@@ -1459,8 +1459,8 @@ describe('mc resume <name>', () => {
       assert.ok(switchPatch, 'tool flipped to codex in registry');
       assert.equal(switchPatch.tool_session_id, null);
       assert.equal(switchPatch.tool_transcript_path, null);
-      assert.equal(switchPatch.provider_sessions.providers['claude-code'].session_id, 'claude_native_xyz');
-      assert.equal(switchPatch.provider_sessions.providers['claude-code'].last_consumed_handoff_sequence, 0);
+      assert.equal(switchPatch.tool_sessions.providers['claude-code'].session_id, 'claude_native_xyz');
+      assert.equal(switchPatch.tool_sessions.providers['claude-code'].last_consumed_handoff_sequence, 0);
       assert.doesNotMatch(stderr.join(''), /different tool/);
     } finally {
       if (old === undefined) delete process.env.MC_TEST_MODE;
@@ -2031,7 +2031,7 @@ describe('mc resume <name>', () => {
     const switchPatch = upserts.find((u) => u.tool === 'codex');
     assert.ok(switchPatch, 'tool flipped to codex');
     assert.equal(switchPatch.tool_session_id, null, 'stale native transcript cleared');
-    assert.equal(switchPatch.provider_sessions.providers['claude-code'].session_id, 'claude_native_xyz');
+    assert.equal(switchPatch.tool_sessions.providers['claude-code'].session_id, 'claude_native_xyz');
   });
 
   test('picker resume launches native provider resume when local broker PTY is gone', async () => {
@@ -2231,7 +2231,7 @@ describe('mc resume <name>', () => {
       tool_session_id: 'cl_provider_data',
       tool_session_source: 'claude-code',
       tool_transcript_path: '/tmp/claude.jsonl',
-      provider_sessions: {
+      tool_sessions: {
         schema: 1,
         providers: {
           'claude-code': {
@@ -2287,8 +2287,8 @@ describe('mc resume <name>', () => {
       worktree_path: '/tmp/memoro-managed',
       tool_session_id: 'cx_provider_managed',
       tool_session_source: 'codex',
-      tool_session_provider_adapter: MANAGED_CODEX_PROVIDER_ID,
-      tool_session_provider_generation: MANAGED_GENERATION,
+      tool_session_adapter: MANAGED_CODEX_PROVIDER_ID,
+      tool_session_generation: MANAGED_GENERATION,
     };
     const launches = [];
     const deps = {
@@ -2344,9 +2344,9 @@ describe('mc resume <name>', () => {
           name: 'managed',
           tool: 'codex',
           tool_session_id: ' cx_padded',
-          tool_session_provider_adapter: MANAGED_CODEX_PROVIDER_ID,
-          tool_session_provider_generation: MANAGED_GENERATION,
-          provider_sessions: {
+          tool_session_adapter: MANAGED_CODEX_PROVIDER_ID,
+          tool_session_generation: MANAGED_GENERATION,
+          tool_sessions: {
             schema: 1,
             providers: {
               codex: {
@@ -2458,8 +2458,8 @@ describe('mc resume <name>', () => {
       worktree_path: '/tmp/resume',
       tool_session_id: 'cx_provider_resume',
       tool_session_source: 'codex',
-      tool_session_provider_adapter: MANAGED_CODEX_PROVIDER_ID,
-      tool_session_provider_generation: MANAGED_GENERATION,
+      tool_session_adapter: MANAGED_CODEX_PROVIDER_ID,
+      tool_session_generation: MANAGED_GENERATION,
     }, {
       ...common,
       launchFreshSession: async () => assert.fail('provider choice must resume'),

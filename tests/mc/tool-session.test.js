@@ -124,7 +124,7 @@ describe('mc provider-native tool sessions', () => {
     const resolved = await resolveToolSessionForResume({
       entry: {
         tool: 'claude',
-        provider_sessions: {
+        tool_sessions: {
           schema: 1,
           providers: {
             codex: { session_id: 'cx_a', transcript_path: null, runtime_generation: null, last_consumed_handoff_sequence: 3 },
@@ -145,7 +145,7 @@ describe('mc provider-native tool sessions', () => {
         tool: 'claude',
         tool_session_id: 'cx_legacy',
         tool_session_source: 'codex',
-        provider_sessions: {
+        tool_sessions: {
           schema: 1,
           providers: {
             codex: {
@@ -179,7 +179,7 @@ describe('mc provider-native tool sessions', () => {
       entry: {
         tool: 'claude',
         tool_transcript_path: '/tmp/codex.jsonl',
-        provider_sessions: {
+        tool_sessions: {
           schema: 1,
           providers: {
             'claude-code': {
@@ -245,7 +245,7 @@ describe('mc provider-native tool sessions', () => {
 
   test('invalid provider projections fail closed instead of falling back to legacy ids', async () => {
     const resolved = await resolveToolSessionForResume({
-      entry: { tool: 'codex', tool_session_id: 'cx_legacy', provider_sessions: { schema: 2, providers: {} } },
+      entry: { tool: 'codex', tool_session_id: 'cx_legacy', tool_sessions: { schema: 2, providers: {} } },
       launchTool: { id: 'codex', shortName: 'codex', adapter: codexAdapter },
     });
     assert.deepEqual(resolved, {

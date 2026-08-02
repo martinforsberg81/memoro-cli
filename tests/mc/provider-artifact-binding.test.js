@@ -23,7 +23,7 @@ test('fresh launch binds only a broker-confirmed provider artifact to its provid
     },
   });
   assert.equal(code, 0);
-  const bound = writes.at(-1).provider_sessions.providers.codex;
+  const bound = writes.at(-1).tool_sessions.providers.codex;
   assert.deepEqual(bound, {
     session_id: 'cx_exact', transcript_path: '/private/tmp/cx.jsonl',
     runtime_generation: '4f50f5a1-4c6b-4d6a-8b5c-152c5e6b8701', last_consumed_handoff_sequence: 0,
@@ -65,9 +65,9 @@ test('managed fresh launch binds its provider id without retaining the deleted d
     tool_session_id: 'cx_managed_exact',
     tool_session_source: 'codex',
     tool_transcript_path: null,
-    tool_session_provider_adapter: 'codex-managed-local-v1',
-    tool_session_provider_generation: generation,
-    provider_sessions: {
+    tool_session_adapter: 'codex-managed-local-v1',
+    tool_session_generation: generation,
+    tool_sessions: {
       schema: 1,
       providers: {
         codex: {
@@ -90,7 +90,7 @@ test('native resume binds the new runtime generation only after broker-confirmed
     tool: 'codex',
     worktree_path: '/repo',
     coding_session_id: 'sess_artifact',
-    provider_sessions: {
+    tool_sessions: {
       schema: 1,
       providers: {
         codex: {
@@ -119,7 +119,7 @@ test('native resume binds the new runtime generation only after broker-confirmed
           runtimeGeneration: newGeneration,
         });
         assert.equal(
-          writes.at(-1).provider_sessions.providers.codex.runtime_generation,
+          writes.at(-1).tool_sessions.providers.codex.runtime_generation,
           oldGeneration,
         );
         await arg.onExited({ providerArtifact: {
@@ -135,7 +135,7 @@ test('native resume binds the new runtime generation only after broker-confirmed
   });
   assert.equal(code, 0);
   assert.equal(
-    writes.at(-1).provider_sessions.providers.codex.runtime_generation,
+    writes.at(-1).tool_sessions.providers.codex.runtime_generation,
     newGeneration,
   );
 });
