@@ -194,6 +194,8 @@ export function readOwnedResourceSync({
   try { paths = ownedResourcePaths({ mcHomeDir, mcSessionId, resourceId }); } catch {
     return unknown('invalid-private-root');
   }
+  const session = readSessionHomeSync({ mcHomeDir: paths.mcHomeDir, mcSessionId });
+  if (session.kind !== 'present') return unknown(`session-${session.reason || session.kind}`);
   const safety = inspectPrivateDirectoryChainSync({
     trustedRoot: paths.mcHomeDir,
     directory: paths.resourceHome,
