@@ -9,20 +9,25 @@
  *   session_state=dead  && ahead=0 && dirty_files=0 → eligible
  *   (any other combo)                                → skip
  *
- * Branch deletion is best-effort and follows the same logic as `mc end`:
- * delete with `-d` (refuses if not merged) so we never lose work.
+ * Reaping goes through the same teardown primitive as `mc end`
+ * (core/teardown/engine.js): distill before delete, authority before
+ * destruction, leftover verification, registry row last. Eligibility
+ * (merged + clean) is what makes branch deletion loss-free.
  */
 import { existsSync } from 'node:fs';
 import {
   formatEntryResolutionError,
   readRegistry,
   readRegistryStrict,
-  removeEntryIfMatches,
   resolveEntry,
 } from '../mc/registry.js';
-import { git, tryGit, primaryWorktree, branchExists } from '../mc/git.js';
+import { primaryWorktree } from '../mc/git.js';
+import {
+  inspectAuthority,
+  teardownOne,
+  withProviderlessDowngrade,
+} from '../core/teardown/engine.js';
 import { scanDaemons, reapOrphans, DEFAULT_MIN_AGE_MS } from '../mc/orphan-daemons.js';
-import { removeBrokerSessionForEntry } from '../runtime/broker/session-cleanup.js';
 import {
   DEFAULT_SIDECAR_MIN_AGE_MS,
   reapRuntimeSidecars,
@@ -140,36 +145,43 @@ export async function run(argv) {
   return result.ok ? 0 : 1;
 }
 
+/**
+ * gc reaps through the SAME teardown primitive as `mc end`
+ * (core/teardown/engine.js), so a reaped session gets the full invariant
+ * chain — distill before delete, authority before destruction, leftover
+ * verification, registry row last — instead of the old worktree-only
+ * shortcut that orphaned transcripts and vault material.
+ */
 async function reapWorktrees(candidates) {
   const removed = [];
   const errors = [];
   for (const c of candidates) {
     try {
       verifyGcCandidateIdentity(c);
-      await removeBrokerSessionForEntry(c);
       const primary = c.worktree_path && existsSync(c.worktree_path)
         ? primaryWorktree(c.worktree_path)
         : c.primary_worktree || primaryWorktree(process.cwd());
       if (!primary) throw new Error(`no primary worktree found for ${c.name}`);
-      if (c.worktree_path && existsSync(c.worktree_path)) {
-        git(primary, ['worktree', 'remove', '--force', c.worktree_path]);
-      } else {
-        tryGit(primary, ['worktree', 'prune']);
+      const artifacts = withProviderlessDowngrade(c, await inspectAuthority(c, { deps: {} }));
+      if (!artifacts.safe_to_delete) {
+        const issues = (artifacts.issues || []).map((issue) => issue.code).join('|') || 'unverified';
+        throw new Error(`tool artifact authority unverified (${issues}) — use \`mc end ${c.name}\``);
       }
-      if (c.branch && branchExists(primary, c.branch)) {
-        tryGit(primary, ['branch', '-d', c.branch]);
-      }
-      const removedEntry = removeEntryIfMatches(c.session_id, {
-        session_id: c.session_id,
-        repository_id: c.repository_id,
-        worktree_path: c.worktree_path,
+      const result = await teardownOne(
+        {
+          entry: c,
+          primary,
+          artifacts,
+          status: { verdict: 'gc-stale' },
+        },
+        { opts: { keepBranch: false }, deps: {} },
+      );
+      if (!result.ok) throw new Error(result.error);
+      removed.push({
+        name: c.name,
         branch: c.branch,
-        tool_session_source: c.tool_session_source,
-        tool_session_id: c.tool_session_id,
-        tool_transcript_path: c.tool_transcript_path,
+        ...(result.retained ? { retained: result.retained } : {}),
       });
-      if (!removedEntry.ok) throw new Error(`registry removal failed (${removedEntry.reason})`);
-      removed.push({ name: c.name, branch: c.branch });
     } catch (err) {
       errors.push({ name: c.name, error: err.message });
     }
