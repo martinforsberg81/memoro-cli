@@ -206,7 +206,7 @@ export function replacePrivateJsonSync({
 export function inspectPrivateDirectorySync(path, fs = privateStateFs) {
   try {
     const stat = fs.lstatSync(path);
-    if (!stat.isDirectory?.() || stat.isSymbolicLink?.() || (stat.mode & 0o077) !== 0) {
+    if (!stat.isDirectory?.() || stat.isSymbolicLink?.() || (stat.mode & 0o777) !== 0o700) {
       return invalid('unsafe-directory');
     }
     if (typeof process.getuid === 'function'
@@ -278,7 +278,7 @@ function inspectPrivateFileForReplace(path, fs) {
 function privateRegularFile(stat) {
   return stat?.isFile?.()
     && !stat?.isSymbolicLink?.()
-    && (stat.mode & 0o077) === 0
+    && (stat.mode & 0o777) === 0o600
     && (typeof process.getuid !== 'function'
       || !Number.isInteger(stat.uid)
       || stat.uid === process.getuid());
