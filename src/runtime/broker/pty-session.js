@@ -57,6 +57,11 @@ export class PtySession extends EventEmitter {
     this.lastOutputAt = null;
     this.lastInputAt = null;
     this.exit = null;
+    // Whether the tool ever showed its message-ready prompt. A delivery
+    // that times out without this having fired failed for a different
+    // reason than one that timed out after it — recorded so the next
+    // occurrence is diagnosable from the journal alone.
+    this.promptReadyObserved = false;
     this.startupMessageController = null;
     this.handoffMessageController = null;
   }
@@ -126,6 +131,7 @@ export class PtySession extends EventEmitter {
         })
         : true;
       if (promptReady) {
+        this.promptReadyObserved = true;
         this.startupMessageController?.schedule();
         this.handoffMessageController?.schedule();
       } else {
