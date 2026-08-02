@@ -14,6 +14,7 @@ import { existsSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
+import { findClaudeSessionById, findLatestClaudeSession } from '../lib/claude.js';
 import { upsertManagedBlock, removeManagedBlock } from '../lib/managed-block.js';
 import { getPackageVersion } from '../lib/version.js';
 import { writeProtectedFile, shredFile } from './_materialise.js';
@@ -623,3 +624,34 @@ function isLegacyMemoroHookEntry(entry) {
     return LEGACY_MEMORO_HOOK_RE.test(command);
   });
 }
+
+/**
+ * Transcript dialect: how THIS tool's JSONL transcript maps onto the
+ * provider-neutral distill pipeline. Content redaction and safe-metadata
+ * shaping stay central in src/lib/distill.js — the dialect only locates
+ * roles, content, metadata, and raw tool calls in the entry shapes.
+ */
+export const TRANSCRIPT_DIALECT = Object.freeze({
+  provider: 'anthropic',
+  meta() {
+    return null;
+  },
+  message(entry) {
+    const role = entry.role || entry.message?.role || entry.type || null;
+    const content = entry.content || entry.message?.content || entry.text || null;
+    return role || content ? { role, content } : null;
+  },
+  toolCalls(entry) {
+    const content = entry.content || entry.message?.content;
+    if (!Array.isArray(content)) return [];
+    return content
+      .filter((block) => block && block.type === 'tool_use')
+      .map((block) => ({ name: block.name || 'unknown', input: block.input || {} }));
+  },
+});
+
+/** Transcript discovery: where THIS tool keeps native session transcripts. */
+export const TRANSCRIPT_DISCOVERY = Object.freeze({
+  findLatest: (options) => findLatestClaudeSession(options),
+  findById: (options) => findClaudeSessionById(options),
+});

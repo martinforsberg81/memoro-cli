@@ -47,3 +47,27 @@ describe('canonical tool names', () => {
     assert.equal(isSameTool(null, null), false);
   });
 });
+
+describe('transcript contract', () => {
+  test('both implemented adapters expose a full dialect and discovery', async () => {
+    const { transcriptDialectFor, transcriptDiscoveryFor } = await import('../../src/adapters/index.js');
+    for (const tool of ['claude-code', 'codex']) {
+      const dialect = transcriptDialectFor(tool);
+      assert.equal(typeof dialect.meta, 'function', tool);
+      assert.equal(typeof dialect.message, 'function', tool);
+      assert.equal(typeof dialect.toolCalls, 'function', tool);
+      assert.ok(['anthropic', 'openai'].includes(dialect.provider), tool);
+      const discovery = transcriptDiscoveryFor(tool);
+      assert.equal(typeof discovery.findLatest, 'function', tool);
+      assert.equal(typeof discovery.findById, 'function', tool);
+    }
+  });
+
+  test('unknown tools get the generic dialect without a provider label and no discovery', async () => {
+    const { transcriptDialectFor, transcriptDiscoveryFor } = await import('../../src/adapters/index.js');
+    const dialect = transcriptDialectFor('mystery-tool');
+    assert.equal(dialect.provider, null);
+    assert.equal(typeof dialect.message, 'function');
+    assert.equal(transcriptDiscoveryFor('mystery-tool'), null);
+  });
+});

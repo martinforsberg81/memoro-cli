@@ -42,6 +42,7 @@ const ALLOWED_EDGES = new Set([
   'commands -> lib',
   'commands -> mc',
   'commands -> runtime',
+  'lib -> adapters',
   'lib -> commands',
   'mc -> adapters',
   'mc -> capabilities',

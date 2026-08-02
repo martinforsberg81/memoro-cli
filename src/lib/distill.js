@@ -7,11 +7,16 @@
  * structured activity events for future extraction passes.
  */
 
+import { transcriptDialectFor } from '../adapters/index.js';
+
 /**
  * Parse a coding-tool JSONL transcript into a plain message list plus
- * structured tool activity. Tool output bodies are never uploaded.
+ * structured tool activity. Tool output bodies are never uploaded. The
+ * per-tool entry shapes come from the adapter's TRANSCRIPT_DIALECT;
+ * content normalization and safe-metadata redaction stay here.
  */
 export function parseTranscript(raw, { tool = 'claude-code' } = {}) {
+  const dialect = transcriptDialectFor(tool);
   const lines = raw.split('\n').filter(l => l.trim());
   const messages = [];
   const activities = [];
@@ -29,17 +34,15 @@ export function parseTranscript(raw, { tool = 'claude-code' } = {}) {
     let entry;
     try { entry = JSON.parse(line); } catch { continue; }
 
-    if (tool === 'codex' && entry.type === 'session_meta' && entry.payload) {
-      if (entry.payload.id && !sessionId) sessionId = entry.payload.id;
-      if (entry.payload.cwd && !cwd) cwd = entry.payload.cwd;
-      if (entry.payload.cli_version && !toolVersion) toolVersion = entry.payload.cli_version;
-      if (entry.payload.model_provider && !modelProvider) modelProvider = entry.payload.model_provider;
-      if (entry.payload.originator && !originator) originator = entry.payload.originator;
-      if (entry.payload.source && !clientSource) clientSource = entry.payload.source;
-    }
-
-    if (tool === 'codex' && entry.type === 'turn_context' && entry.payload) {
-      if (entry.payload.model && !modelName) modelName = entry.payload.model;
+    const meta = dialect.meta(entry);
+    if (meta) {
+      if (meta.sessionId && !sessionId) sessionId = meta.sessionId;
+      if (meta.cwd && !cwd) cwd = meta.cwd;
+      if (meta.toolVersion && !toolVersion) toolVersion = meta.toolVersion;
+      if (meta.modelProvider && !modelProvider) modelProvider = meta.modelProvider;
+      if (meta.modelName && !modelName) modelName = meta.modelName;
+      if (meta.originator && !originator) originator = meta.originator;
+      if (meta.clientSource && !clientSource) clientSource = meta.clientSource;
     }
 
     const ts = entry.timestamp || entry.created_at || null;
@@ -50,10 +53,18 @@ export function parseTranscript(raw, { tool = 'claude-code' } = {}) {
     if (entry.session_id && !sessionId) sessionId = entry.session_id;
     if (entry.sessionId && !sessionId) sessionId = entry.sessionId;
 
-    activities.push(...extractActivities(entry, tool, ts));
+    activities.push(...dialect.toolCalls(entry).map(({ name, input }) => ({
+      kind: 'tool_call',
+      actor: 'assistant',
+      tool_name: name || 'unknown',
+      summary: describeToolCall(name, input),
+      safe_metadata: pickSafeToolMetadata(input),
+      at: ts,
+    })));
 
-    const role = extractRole(entry, tool);
-    const content = normalizeContent(extractContent(entry, tool));
+    const message = dialect.message(entry);
+    const role = message?.role || null;
+    const content = normalizeContent(message?.content);
 
     if (!role || !content) continue;
     if (isLocalCommandArtifact(content)) continue;
@@ -64,7 +75,7 @@ export function parseTranscript(raw, { tool = 'claude-code' } = {}) {
     }
   }
 
-  if (!modelProvider) modelProvider = inferProvider(tool);
+  if (!modelProvider) modelProvider = dialect.provider || null;
 
   return {
     messages,
@@ -126,12 +137,6 @@ function buildCleanedConversation(parsed) {
   return entries.sort(compareConversationEntries);
 }
 
-function inferProvider(tool) {
-  if (tool === 'claude-code') return 'anthropic';
-  if (tool === 'codex') return 'openai';
-  return null;
-}
-
 function isLocalCommandArtifact(content) {
   const head = content.slice(0, 32);
   return head.startsWith('<local-command-') || head.startsWith('<command-name>') || head.startsWith('<command-message>');
@@ -155,71 +160,6 @@ function normalizeContent(content) {
     }
   }
   return parts.join('\n').trim();
-}
-
-function extractRole(entry, tool) {
-  if (tool === 'codex') {
-    if (entry.type === 'response_item' && entry.payload?.type === 'message') {
-      return entry.payload.role || null;
-    }
-    return null;
-  }
-  return entry.role || entry.message?.role || entry.type;
-}
-
-function extractContent(entry, tool) {
-  if (tool === 'codex') {
-    if (entry.type === 'response_item' && entry.payload?.type === 'message') {
-      return entry.payload.content;
-    }
-    return null;
-  }
-  return entry.content || entry.message?.content || entry.text;
-}
-
-function extractActivities(entry, tool, at) {
-  const activities = [];
-
-  if (tool === 'codex') {
-    if (entry.type === 'response_item' && entry.payload?.type === 'function_call') {
-      const args = parseCodexArguments(entry.payload.arguments);
-      activities.push({
-        kind: 'tool_call',
-        actor: 'assistant',
-        tool_name: entry.payload.name || 'unknown',
-        summary: describeToolCall(entry.payload.name, args),
-        safe_metadata: pickSafeToolMetadata(args),
-        at,
-      });
-    }
-    return activities;
-  }
-
-  const content = entry.content || entry.message?.content;
-  if (!Array.isArray(content)) return activities;
-  for (const block of content) {
-    if (!block || block.type !== 'tool_use') continue;
-    const input = block.input || {};
-    activities.push({
-      kind: 'tool_call',
-      actor: 'assistant',
-      tool_name: block.name || 'unknown',
-      summary: describeToolCall(block.name, input),
-      safe_metadata: pickSafeToolMetadata(input),
-      at,
-    });
-  }
-  return activities;
-}
-
-function parseCodexArguments(raw) {
-  if (!raw || typeof raw !== 'string') return {};
-  try {
-    const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === 'object' ? parsed : {};
-  } catch {
-    return {};
-  }
 }
 
 function describeToolCall(name, input) {
