@@ -457,7 +457,7 @@ describe('session broker hosts', () => {
       assert.equal(result.ok, false);
       assert.equal(result.reason, 'broker-protocol-incompatible-live');
       assert.equal(spawned, false);
-      assert.match(result.error, /previous mc version/);
+      assert.match(result.error, /exit the running tool.*nothing is deleted/);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
