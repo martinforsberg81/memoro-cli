@@ -1134,8 +1134,13 @@ async function proveProviderSwitchSource({
   if (!providerSessionId || !runtimeGeneration) {
     return failure('handoff-source-artifact-unconfirmed');
   }
+  // The tool_session_adapter/-generation fields describe the tool named
+  // by tool_session_source — NOT entry.tool. Comparing entry.tool with
+  // itself made this always-true, so a session whose OTHER side was
+  // managed demanded a managed proof from a native source and killed
+  // every switch (sql-readiness, 2026-08-02).
   const registryClaimsManaged = exact(entry?.tool_session_adapter) != null
-    && resolveToolInput(entry?.tool)?.id === sourceTool?.id;
+    && resolveToolInput(entry?.tool_session_source)?.id === sourceTool?.id;
   if (!registryClaimsManaged && exact(sourceProvider?.transcript_path)) {
     return {
       ok: true,

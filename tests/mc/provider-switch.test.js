@@ -116,6 +116,65 @@ function makeBroker() {
   };
 }
 
+test('a managed adapter on the OTHER tool never forces managed proof on a native source', async () => {
+  // Live incident (sql-readiness 2026-08-02): the codex SIDE of the
+  // session is managed (tool_session_adapter names it via
+  // tool_session_source), while the switch SOURCE — entry.tool, claude —
+  // is native with its transcript on disk. The old guard compared
+  // entry.tool with itself, demanded a managed proof from the native
+  // source, and killed every switch with
+  // handoff-source-artifact-unconfirmed.
+  const entry = {
+    ...sourceEntry(),
+    tool_session_source: 'codex',
+    tool_session_adapter: 'codex-managed-local-v1',
+    tool_session_generation: 'gen-codex',
+  };
+  const result = await prepareProviderSwitch({
+    entry,
+    targetTool: resolveToolInput('codex'),
+    localPresence: {
+      verdict: 'exited',
+      runtime_generation: sourceGeneration,
+      session: null,
+    },
+    deps: {
+      inspectManagedProviderHandoffSource: () => {
+        throw new Error('a native source must not need a managed proof');
+      },
+      sessionHostPaths: () => ({
+        socketPath: '/private/hosts/sess_switch1/broker.sock',
+        handoffSwitchPath: '/private/hosts/sess_switch1/handoff-switch.json',
+      }),
+      mcHome: () => '/private',
+      readHandoffSwitchJournalSync: () => ({ kind: 'absent' }),
+      ensureSessionHostRunning: async () => ({ ok: false, reason: 'host-start-refused' }),
+      requestBroker: async () => { throw new Error('dead socket'); },
+      readConfig: async () => ({ apiUrl: 'https://meetmemoro.test' }),
+      getApiUrl: () => null,
+      resolveBootstrapIdentity: async () => ({
+        token: 'token-in-memory',
+        apiUrl: 'https://meetmemoro.test',
+      }),
+      readProviderArtifact: presentTargetArtifact,
+      getRepoContext: async () => ({
+        toplevel: '/repo',
+        branch: 'sess/handoff',
+        remoteUrl: 'git@github.com:martinforsberg81/memoro.git',
+      }),
+      fetchStrictHandoffContext: async () => ({
+        ok: true,
+        continuity: { consumedSequence: 0, latestSequence: 0, latestDigest: null },
+        handoffs: [],
+      }),
+    },
+  });
+
+  // The switch may fail further along (the stub host refuses to start) —
+  // what it must NEVER do again is die at the source-proof gate.
+  assert.notEqual(result.code, 'handoff-source-artifact-unconfirmed');
+});
+
 test('A to B seals, persists, advances the source cursor, and prepares one user turn', async () => {
   const entry = sourceEntry();
   const broker = makeBroker();
