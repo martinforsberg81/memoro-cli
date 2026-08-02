@@ -1,4 +1,5 @@
 import { existsSync } from 'node:fs';
+import { toolShortName } from '../adapters/index.js';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -26,9 +27,7 @@ const SUPPORTED_TOOLS = new Set(['codex', 'claude']);
 
 export function normalizeToolAuthTool(tool) {
   const value = String(tool || '').trim().toLowerCase();
-  if (value === 'claude-code') return 'claude';
-  if (value === 'codex-cli') return 'codex';
-  return value;
+  return toolShortName(value) || value;
 }
 
 export function toolAuthProfileLabel(tool) {

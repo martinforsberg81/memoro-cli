@@ -496,9 +496,7 @@ function secretMatchesAdapter(payload, adapter, providers) {
 
 function normaliseTool(tool) {
   if (!tool) return null;
-  if (tool === 'claude-code') return 'claude';
-  if (tool === 'gemini-cli') return 'gemini';
-  return String(tool);
+  return toolShortName(tool) || String(tool);
 }
 
 /**

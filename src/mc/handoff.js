@@ -1,3 +1,5 @@
+import { canonicalToolId } from '../adapters/index.js';
+
 const CONTRACT_VERSION = 'mc-session-handoff-v1';
 const MAX_GOAL_STATE_BYTES = 2048;
 const MAX_LIST_ITEM_BYTES = 512;
@@ -180,7 +182,8 @@ function validParentDigest(value, sequence) {
 }
 
 function canonicalProvider(value) {
-  if (value === 'claude') return 'claude-code';
+  const known = canonicalToolId(value);
+  if (known) return known;
   return typeof value === 'string' && ID_RE.test(value) ? value : null;
 }
 
