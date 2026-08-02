@@ -183,7 +183,6 @@ describe('mc storage / doctor', () => {
     const r = runMc(['doctor', '--json', '--min-age', '0s'], {
       cwd: repo.dir,
       env: { MC_HOME: repo.mcHome, MC_ORPHAN_PID_DIR: pidDir },
-      timeoutMs: 60_000,
     });
 
     assert.equal(r.status, 0, `stderr:${r.stderr}`);
@@ -206,7 +205,6 @@ describe('mc storage / doctor', () => {
     const r = runMc(['doctor', '--json', '--dry-run', '--min-age', '0s'], {
       cwd: repo.dir,
       env: { MC_HOME: repo.mcHome, MC_ORPHAN_PID_DIR: pidDir },
-      timeoutMs: 60_000,
     });
 
     assert.equal(r.status, 0, `stderr:${r.stderr}`);
