@@ -953,8 +953,8 @@ describe('mc end confirmed teardown', () => {
         ...target.entry,
         coding_session_id: codingSessionId,
         tool_transcript_path: null,
-        tool_session_provider_adapter: 'codex-managed-local-v1',
-        tool_session_provider_generation: runtimeGeneration,
+        tool_session_adapter: 'codex-managed-local-v1',
+        tool_session_generation: runtimeGeneration,
       },
     };
   }

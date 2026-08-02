@@ -24,7 +24,7 @@ const ENTRY = Object.freeze({
   tool_session_id: 'cx_old',
   tool_session_source: 'codex',
   tool_transcript_path: '/private/old.jsonl',
-  provider_sessions: {
+  tool_sessions: {
     schema: 1,
     providers: {
       codex: {
@@ -223,8 +223,8 @@ describe('managed Codex recovery', () => {
         created_at: '2026-07-06T16:23:22.145Z',
         tool_session_id: newProviderSessionId,
         tool_session_source: 'codex',
-        tool_session_provider_adapter: MANAGED_CODEX_PROVIDER_ID,
-        tool_session_provider_generation: newArtifact.runtime_generation,
+        tool_session_adapter: MANAGED_CODEX_PROVIDER_ID,
+        tool_session_generation: newArtifact.runtime_generation,
       },
       root: '/private/mc',
       deps: {
@@ -361,8 +361,8 @@ describe('managed Codex recovery', () => {
         tool_session_id: providerSessionId,
         tool_session_source: 'codex',
         tool_transcript_path: null,
-        tool_session_provider_adapter: MANAGED_CODEX_PROVIDER_ID,
-        tool_session_provider_generation: RUNTIME_GENERATION,
+        tool_session_adapter: MANAGED_CODEX_PROVIDER_ID,
+        tool_session_generation: RUNTIME_GENERATION,
       },
       root: '/private/mc',
       deps: {
@@ -427,8 +427,8 @@ describe('managed Codex recovery', () => {
   test('closes an exited pre-journal resume domain only when its restored archive is unchanged', async () => {
     const entry = {
       ...ENTRY,
-      tool_session_provider_generation: PROVIDER_GENERATION,
-      provider_sessions: {
+      tool_session_generation: PROVIDER_GENERATION,
+      tool_sessions: {
         schema: 1,
         providers: {
           codex: {
@@ -631,15 +631,15 @@ describe('managed Codex recovery', () => {
     assert.equal(written.entries[0].tool_session_id, ARTIFACT.provider_session_id);
     assert.equal(written.entries[0].tool_transcript_path, null);
     assert.equal(
-      written.entries[0].tool_session_provider_adapter,
+      written.entries[0].tool_session_adapter,
       MANAGED_CODEX_PROVIDER_ID,
     );
     assert.equal(
-      written.entries[0].tool_session_provider_generation,
+      written.entries[0].tool_session_generation,
       RUNTIME_GENERATION,
     );
     assert.equal(
-      written.entries[0].provider_sessions.providers.codex.session_id,
+      written.entries[0].tool_sessions.providers.codex.session_id,
       ARTIFACT.provider_session_id,
     );
   });

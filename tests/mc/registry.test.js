@@ -9,8 +9,8 @@ import {
   REGISTRY_SCHEMA_VERSION,
   formatEntryResolutionError,
   migrateRegistry,
-  normalizeProviderSessions,
-  patchProviderSessionSequenceIfPresent,
+  normalizeToolSessions,
+  patchToolSessionSequenceIfPresent,
   patchEntriesIfPresent,
   readRegistry,
   readRegistryStrict,
@@ -18,9 +18,10 @@ import {
   resolveEntry,
   upsertEntry,
 } from '../../src/mc/registry.js';
+import { repositoryIdForCanonicalRemote } from '../../src/mc/repository-identity.js';
 
 test('normalizes an unambiguous legacy native session into its canonical provider projection', () => {
-  const result = normalizeProviderSessions({
+  const result = normalizeToolSessions({
     tool: 'codex',
     tool_session_source: 'codex',
     tool_session_id: 'cx_a',
@@ -46,8 +47,8 @@ test('keeps existing provider projections and rejects ambiguous legacy migration
       'claude-code': { session_id: 'cl_b', transcript_path: null, runtime_generation: 'gen-b', last_consumed_handoff_sequence: 2 },
     },
   };
-  const result = normalizeProviderSessions({
-    provider_sessions: existing,
+  const result = normalizeToolSessions({
+    tool_sessions: existing,
     tool: 'unknown-tool', tool_session_id: 'legacy',
   });
   assert.equal(result.ok, false);
@@ -56,7 +57,7 @@ test('keeps existing provider projections and rejects ambiguous legacy migration
 });
 
 test('does not fall back from an unknown legacy source or mistake credential generation for runtime evidence', () => {
-  const ambiguous = normalizeProviderSessions({
+  const ambiguous = normalizeToolSessions({
     tool: 'codex',
     tool_session_source: 'unknown-provider',
     tool_session_id: 'legacy',
@@ -64,10 +65,10 @@ test('does not fall back from an unknown legacy source or mistake credential gen
   assert.equal(ambiguous.ok, false);
   assert.equal(ambiguous.reason, 'legacy-provider-ambiguous');
 
-  const migrated = normalizeProviderSessions({
+  const migrated = normalizeToolSessions({
     tool: 'codex',
     tool_session_id: 'cx_legacy',
-    tool_session_provider_generation: 'credential-domain-generation',
+    tool_session_generation: 'credential-domain-generation',
   });
   assert.equal(migrated.providerSessions.providers.codex.runtime_generation, null);
 });
@@ -81,7 +82,7 @@ test('rejects unsafe legacy provider data during migration', () => {
     { tool: 'codex', tool_session_id: 'cx_safe', tool_transcript_path: ' /tmp/transcript.jsonl' },
     { tool: 'codex', tool_session_id: 'cx_safe', tool_transcript_path: 42 },
   ]) {
-    const result = normalizeProviderSessions(entry);
+    const result = normalizeToolSessions(entry);
     assert.equal(result.ok, false);
     assert.equal(result.reason, 'legacy-provider-invalid');
   }
@@ -89,13 +90,13 @@ test('rejects unsafe legacy provider data during migration', () => {
 
 test('preserves forward provider data and rejects it rather than silently resetting it', () => {
   const future = { schema: 2, providers: { codex: { session_id: 'cx_future' } } };
-  const result = normalizeProviderSessions({ provider_sessions: future, tool: 'codex', tool_session_id: 'cx_legacy' });
+  const result = normalizeToolSessions({ tool_sessions: future, tool: 'codex', tool_session_id: 'cx_legacy' });
   assert.deepEqual(result, { ok: false, reason: 'provider-sessions-invalid', providerSessions: future });
 });
 
 test('every provider uses the same strict provider-session projection', () => {
-  const knownExtra = normalizeProviderSessions({
-    provider_sessions: {
+  const knownExtra = normalizeToolSessions({
+    tool_sessions: {
       schema: 1,
       providers: {
         codex: {
@@ -107,13 +108,13 @@ test('every provider uses the same strict provider-session projection', () => {
   });
   assert.equal(knownExtra.ok, false);
 
-  const invalidFutureProvider = normalizeProviderSessions({
-    provider_sessions: { schema: 1, providers: { 'future-provider': { future_field: 'preserved' } } },
+  const invalidFutureProvider = normalizeToolSessions({
+    tool_sessions: { schema: 1, providers: { 'future-provider': { future_field: 'preserved' } } },
   });
   assert.equal(invalidFutureProvider.ok, false);
 
-  const futureProvider = normalizeProviderSessions({
-    provider_sessions: {
+  const futureProvider = normalizeToolSessions({
+    tool_sessions: {
       schema: 1,
       providers: {
         'future-provider': {
@@ -129,8 +130,8 @@ test('every provider uses the same strict provider-session projection', () => {
 });
 
 test('bounds and fences known provider session values', () => {
-  const projection = (patch) => normalizeProviderSessions({
-    provider_sessions: {
+  const projection = (patch) => normalizeToolSessions({
+    tool_sessions: {
       schema: 1,
       providers: {
         codex: {
@@ -158,7 +159,7 @@ test('patches provider handoff sequences monotonically without touching another 
   process.env.MC_HOME = tempHome;
   upsertEntry({
     name: 'round-trip',
-    provider_sessions: {
+    tool_sessions: {
       schema: 1,
       providers: {
         codex: { session_id: 'cx_a', transcript_path: null, runtime_generation: null, last_consumed_handoff_sequence: 2 },
@@ -166,10 +167,10 @@ test('patches provider handoff sequences monotonically without touching another 
       },
     },
   });
-  assert.equal(patchProviderSessionSequenceIfPresent('round-trip', 'codex', 3).ok, true);
-  assert.equal(readRegistry().entries[0].provider_sessions.providers.codex.last_consumed_handoff_sequence, 3);
-  assert.equal(readRegistry().entries[0].provider_sessions.providers['claude-code'].last_consumed_handoff_sequence, 7);
-  assert.deepEqual(patchProviderSessionSequenceIfPresent('round-trip', 'codex', 1), { ok: false, reason: 'handoff-sequence-regression' });
+  assert.equal(patchToolSessionSequenceIfPresent('round-trip', 'codex', 3).ok, true);
+  assert.equal(readRegistry().entries[0].tool_sessions.providers.codex.last_consumed_handoff_sequence, 3);
+  assert.equal(readRegistry().entries[0].tool_sessions.providers['claude-code'].last_consumed_handoff_sequence, 7);
+  assert.deepEqual(patchToolSessionSequenceIfPresent('round-trip', 'codex', 1), { ok: false, reason: 'handoff-sequence-regression' });
 });
 
 let tempHome = null;
@@ -375,6 +376,45 @@ test('does not create local repository ids before an ambiguous migration is reje
   assert.equal(migrated.ok, false);
   assert.equal(migrated.reason, 'ambiguous-legacy-session');
   assert.equal(createCalls, 0);
+});
+
+test('v2 provider-named fields migrate to tool_* names without re-stamping legacy keys', () => {
+  const v2 = {
+    schema_version: 2,
+    entries: [{
+      name: 'renamed',
+      session_id: 'mcs_cccccccccccccccccccccccc',
+      repository_id: repositoryIdForCanonicalRemote('github.com/owner/project'),
+      repository_identity: {
+        schema: 1,
+        kind: 'remote',
+        canonical: 'github.com/owner/project',
+      },
+      provider_sessions: {
+        schema: 1,
+        providers: { codex: { session_id: 'cx_1' } },
+      },
+      tool_session_provider_adapter: 'codex-managed-local-v1',
+      tool_session_provider_generation: 'gen-1',
+    }],
+  };
+  const migrated = migrateRegistry(v2);
+
+  assert.equal(migrated.ok, true);
+  assert.equal(migrated.changed, true);
+  assert.equal(migrated.registry.schema_version, 3);
+  const entry = migrated.registry.entries[0];
+  assert.deepEqual(entry.tool_sessions, {
+    schema: 1,
+    providers: { codex: { session_id: 'cx_1' } },
+  });
+  assert.equal(entry.tool_session_adapter, 'codex-managed-local-v1');
+  assert.equal(entry.tool_session_generation, 'gen-1');
+  assert.equal('provider_sessions' in entry, false);
+  assert.equal('tool_session_provider_adapter' in entry, false);
+  assert.equal('tool_session_provider_generation' in entry, false);
+  // v1→v2 semantics must not fire again on the v3 bump.
+  assert.equal(entry.legacy_session_key, undefined);
 });
 
 test('rejects a remote projection whose canonical identity does not match its repository id', () => {

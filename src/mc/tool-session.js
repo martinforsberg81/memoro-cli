@@ -9,9 +9,9 @@ import {
   findTranscriptForToolSession,
 } from './session-upload.js';
 import {
-  normalizeProviderSessions,
-  providerSessionFor,
-  withProviderSession,
+  normalizeToolSessions,
+  toolSessionFor,
+  withToolSession,
 } from './registry.js';
 
 export async function resolveToolSessionForResume({
@@ -20,13 +20,13 @@ export async function resolveToolSessionForResume({
   deps = {},
 } = {}) {
   const source = toolSessionSource({ entry, launchTool });
-  const hasProviderSessions = entry?.provider_sessions != null;
-  const normalized = normalizeProviderSessions(entry);
+  const hasToolSessions = entry?.tool_sessions != null;
+  const normalized = normalizeToolSessions(entry);
   if (!normalized.ok) {
     return { ok: false, reason: normalized.reason, source, sessionId: null, transcriptPath: null };
   }
-  const providerSession = hasProviderSessions ? providerSessionFor(entry, source) : null;
-  const stored = hasProviderSessions
+  const providerSession = hasToolSessions ? toolSessionFor(entry, source) : null;
+  const stored = hasToolSessions
     ? firstExplicitProviderValue(providerSession?.session_id)
     : firstExplicitProviderValue(
         entry?.tool_session_id,
@@ -34,7 +34,7 @@ export async function resolveToolSessionForResume({
         entry?.llm_session_id,
       );
   if (stored !== null) {
-    let transcriptPath = hasProviderSessions
+    let transcriptPath = hasToolSessions
       ? firstExplicitProviderValue(providerSession?.transcript_path)
       : firstExplicitProviderValue(entry?.tool_transcript_path, entry?.transcript_path);
     let from = providerSession ? 'provider-sessions' : 'registry';
@@ -190,7 +190,7 @@ export function toolSessionSource({ entry, launchTool = null } = {}) {
     sourceForTool(launchTool?.id),
     sourceForTool(entry?.tool),
   );
-  if (entry?.provider_sessions != null) return selected;
+  if (entry?.tool_sessions != null) return selected;
   return firstNonEmpty(
     entry?.tool_session_source,
     entry?.provider_session_source,
@@ -213,8 +213,8 @@ function firstExplicitProviderValue(...values) {
 }
 
 function validateResolvedProviderSession({ source, sessionId, transcriptPath }) {
-  const validated = withProviderSession(
-    { provider_sessions: { schema: 1, providers: {} } },
+  const validated = withToolSession(
+    { tool_sessions: { schema: 1, providers: {} } },
     source,
     { session_id: sessionId, transcript_path: transcriptPath },
   );

@@ -759,7 +759,7 @@ function persistVerifiedAuthorities(plans, { deps = {}, now }) {
     if (plan.artifacts?.provider_managed) {
       authorityPatch.managed_provider_authority_verified = {
         version: MANAGED_PROVIDER_AUTHORITY_VERSION,
-        adapter: plan.entry.tool_session_provider_adapter,
+        adapter: plan.entry.tool_session_adapter,
         coding_session_id: plan.artifacts.coding_session_id,
         runtime_generation: plan.artifacts.runtime_generation,
         source: plan.artifacts.source,

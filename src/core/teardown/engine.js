@@ -108,10 +108,10 @@ export async function inspectAuthority(entry, { deps = {} } = {}) {
 }
 
 export function inspectManagedToolAuthority(entry, deps = {}) {
-  const adapter = nonEmpty(entry?.tool_session_provider_adapter);
+  const adapter = nonEmpty(entry?.tool_session_adapter);
   if (!adapter) return null;
   const codingSessionId = nonEmpty(entry?.coding_session_id);
-  const runtimeGeneration = nonEmpty(entry?.tool_session_provider_generation);
+  const runtimeGeneration = nonEmpty(entry?.tool_session_generation);
   const source = nonEmpty(entry?.tool_session_source);
   const sessionId = nonEmpty(entry?.tool_session_id);
   if (!codingSessionId || !runtimeGeneration || !source || !sessionId) {
@@ -162,7 +162,7 @@ function managedAuthority(entry, { transcriptPath, cleanupConfirmed = false }) {
     source: nonEmpty(entry.tool_session_source),
     session_id: nonEmpty(entry.tool_session_id),
     transcript_path: transcriptPath,
-    runtime_generation: nonEmpty(entry.tool_session_provider_generation),
+    runtime_generation: nonEmpty(entry.tool_session_generation),
     coding_session_id: nonEmpty(entry.coding_session_id),
     artifacts: [],
     totals: { paths: 0, files: 0, bytes: 0 },
@@ -258,7 +258,7 @@ export async function teardownOne(plan, { opts, deps }) {
         // finalize and close the domain — inline. Only a reconciliation
         // the machinery itself refuses may stop the teardown.
         let managedFinalized = false;
-        if (entry?.tool_session_provider_adapter && broker?.reason === 'not-found') {
+        if (entry?.tool_session_adapter && broker?.reason === 'not-found') {
           const reconcile = deps.reconcileManagedSession || reconcileManagedSession;
           const inspectPresence = deps.inspectLocalBrokerSessionForEntry
             || inspectLocalBrokerSessionForEntry;
@@ -495,7 +495,7 @@ export function transcriptSharedWithAnotherSession(entry, deps = {}) {
  */
 async function repairStaleLiveRegistryState(entry, { broker = null, deps = {} } = {}) {
   if (entry?.session_state !== 'live') return { ok: false, reason: 'not-live' };
-  if (entry?.tool_session_provider_adapter) return { ok: false, reason: 'managed-provider' };
+  if (entry?.tool_session_adapter) return { ok: false, reason: 'managed-provider' };
   if (broker && broker.ok !== true && broker.reason !== 'broker-unavailable'
     && broker.reason !== 'not-found') {
     return { ok: false, reason: 'broker-failure-not-repairable' };
@@ -534,7 +534,7 @@ async function repairStaleLiveRegistryState(entry, { broker = null, deps = {} } 
 }
 
 function brokerCleanupIsAcceptable(entry, result) {
-  if (entry?.tool_session_provider_adapter) {
+  if (entry?.tool_session_adapter) {
     return (result?.ok === true && result?.credential_cleanup === 'confirmed')
       || (result?.reason === 'not-found' && managedProviderCleanupMarkerMatches(entry));
   }
@@ -575,9 +575,9 @@ export function managedProviderCleanupMarkerMatches(entry) {
 
 export function managedProviderAuthorityMarkerMatches(entry, marker) {
   return marker?.version === MANAGED_PROVIDER_AUTHORITY_VERSION
-    && marker.adapter === nonEmpty(entry?.tool_session_provider_adapter)
+    && marker.adapter === nonEmpty(entry?.tool_session_adapter)
     && marker.coding_session_id === nonEmpty(entry?.coding_session_id)
-    && marker.runtime_generation === nonEmpty(entry?.tool_session_provider_generation)
+    && marker.runtime_generation === nonEmpty(entry?.tool_session_generation)
     && marker.source === nonEmpty(entry?.tool_session_source)
     && marker.session_id === nonEmpty(entry?.tool_session_id)
     && nonEmpty(marker.transcript_path) != null;
