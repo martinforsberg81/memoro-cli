@@ -613,3 +613,25 @@ export const ARTIFACT_OWNERSHIP = Object.freeze({
     return entry?.type === 'session_meta' ? entry?.payload?.id || null : null;
   },
 });
+
+/**
+ * Native-custody launch lifecycle — see the claude-code adapter for the
+ * contract shape. Flags declare which launcher-owned machinery applies.
+ */
+export const NATIVE_LAUNCH_HOOKS = Object.freeze({
+  hookFailureReason: 'codex-provider-artifact-hook-unavailable',
+  hookFailureLabel: 'Codex',
+  // Cloud launches must prepare Codex auth (device flow) pre-spawn.
+  cloudAuthPrepare: true,
+  // Codex egress goes through the Cloudflare guard in native custody.
+  cloudflareGuard: true,
+  // Codex occasionally loses the sqlite startup race; the launcher owns
+  // the bounded retry.
+  sqliteStartupRetry: true,
+  // Right before spawn, once the spawn env (CODEX_HOME) is final.
+  async prepareSpawn({ spawnEnv, deps = {} } = {}) {
+    await (deps.installCodexArtifactHooks || installHooks)({
+      ...(spawnEnv?.CODEX_HOME ? { codexHome: spawnEnv.CODEX_HOME } : {}),
+    });
+  },
+});
