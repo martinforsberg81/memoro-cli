@@ -170,6 +170,55 @@ describe('mc end self-heal and loss-free teardown', () => {
     assert.equal(registryEntries().length, 1);
   });
 
+  test('a failed distill surfaces the upload child\'s real error, not just the exit code', async () => {
+    const target = makeTarget('distill-detail');
+
+    const result = await invoke(['distill-detail'], {
+      answer: 'y',
+      entries: [target.entry],
+      roots: target.roots,
+      deps: {
+        runSessionUploadSync: async () => ({
+          ok: false,
+          reason: 'upload-exit-1',
+          output: 'uploading…\nError: Memoro 413: Payload exceeds 32768 bytes\n    at request (file:///x.js:1:1)\n',
+        }),
+      },
+    });
+
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /upload-exit-1: Error: Memoro 413: Payload exceeds 32768 bytes/);
+  });
+
+  test('a transcript shared by two sessions is retained until the last holder ends', async () => {
+    const first = makeTarget('shared-a');
+    const second = makeTarget('shared-b', { shareTranscriptOf: first });
+
+    const result = await invoke(['shared-a'], {
+      answer: 'y',
+      entries: [first.entry, second.entry],
+      roots: first.roots,
+    });
+
+    assert.equal(result.code, 0, result.stderr);
+    assert.match(result.stdout, /retained: tool-artifacts:shared-with:shared-b/);
+    // The sibling still distills from this transcript — it must survive…
+    assert.equal(existsSync(first.transcript), true);
+    // …while the session's own artifacts are fully gone.
+    assert.equal(existsSync(first.worktree), false);
+    assert.deepEqual(registryEntries().map((entry) => entry.name), ['shared-b']);
+
+    // The last holder out deletes the shared transcript.
+    const last = await invoke(['shared-b'], {
+      answer: 'y',
+      entries: registryEntries(),
+      roots: second.roots,
+    });
+    assert.equal(last.code, 0, last.stderr);
+    assert.equal(existsSync(first.transcript), false);
+    assert.deepEqual(registryEntries(), []);
+  });
+
   test('--no-distill skips the upload gate explicitly', async () => {
     const target = makeTarget('distill-optout');
 
@@ -206,6 +255,7 @@ describe('mc end self-heal and loss-free teardown', () => {
   function makeTarget(name, {
     session_state = 'idle',
     coding_session_id = `coding_${name.replaceAll('-', '_')}`,
+    shareTranscriptOf = null,
   } = {}) {
     const branch = `sess/${name}`;
     git(repo.dir, `branch ${branch} main`);
@@ -214,16 +264,19 @@ describe('mc end self-heal and loss-free teardown', () => {
 
     const codexHome = join(repo.root, '.codex');
     const transcriptDir = join(codexHome, 'sessions', '2026', '07', '23');
-    const sessionId = `session_${name.replaceAll('-', '_')}`;
-    const transcript = join(
-      transcriptDir,
-      `rollout-2026-07-23T12-00-00-${sessionId}.jsonl`,
-    );
-    mkdirSync(transcriptDir, { recursive: true });
-    writeFileSync(transcript, `${JSON.stringify({
-      type: 'session_meta',
-      payload: { id: sessionId, cwd: worktree },
-    })}\n`);
+    const sessionId = shareTranscriptOf
+      ? shareTranscriptOf.entry.tool_session_id
+      : `session_${name.replaceAll('-', '_')}`;
+    const transcript = shareTranscriptOf
+      ? shareTranscriptOf.transcript
+      : join(transcriptDir, `rollout-2026-07-23T12-00-00-${sessionId}.jsonl`);
+    if (!shareTranscriptOf) {
+      mkdirSync(transcriptDir, { recursive: true });
+      writeFileSync(transcript, `${JSON.stringify({
+        type: 'session_meta',
+        payload: { id: sessionId, cwd: worktree },
+      })}\n`);
+    }
 
     const roots = {
       codex: {

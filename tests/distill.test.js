@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test, { describe } from 'node:test';
 
 import {
+  CLEANED_CONVERSATION_MAX_BYTES,
   parseTranscript,
   buildSessionPayload,
 } from '../src/lib/distill.js';
@@ -225,5 +226,56 @@ describe('buildSessionPayload', () => {
         at: '2026-04-23T10:00:15Z',
       },
     ]);
+  });
+
+  test('a payload under the byte budget is not marked truncated', () => {
+    const payload = buildSessionPayload({
+      parsed: {
+        messages: [{ role: 'user', content: 'small', at: '2026-04-21T10:00:00Z' }],
+        sessionId: 's_small',
+      },
+    });
+    assert.equal(payload.conversation_truncated, undefined);
+    assert.equal(payload.conversation_dropped, undefined);
+  });
+
+  test('an oversized conversation is bounded newest-first with truncation metadata', () => {
+    const chunk = 'x'.repeat(1024);
+    const messages = Array.from({ length: 600 }, (_, i) => ({
+      role: i % 2 === 0 ? 'user' : 'assistant',
+      content: `${i}:${chunk}`,
+      at: `2026-04-21T10:${String(Math.floor(i / 60)).padStart(2, '0')}:${String(i % 60).padStart(2, '0')}Z`,
+    }));
+    const payload = buildSessionPayload({
+      parsed: { messages, sessionId: 's_big' },
+    });
+
+    const bytes = Buffer.byteLength(JSON.stringify(payload.cleaned_conversation), 'utf8');
+    assert.ok(bytes <= CLEANED_CONVERSATION_MAX_BYTES, `bounded payload is ${bytes} bytes`);
+    assert.equal(payload.conversation_truncated, true);
+    const kept = payload.cleaned_conversation;
+    // Newest entries survive; the oldest are what gets dropped.
+    assert.equal(kept[kept.length - 1].content, messages[messages.length - 1].content);
+    assert.equal(payload.conversation_dropped.messages, messages.length - kept.length);
+    assert.equal(payload.conversation_dropped.activities, 0);
+  });
+
+  test('a single entry larger than the whole budget is cut to fit, not dropped', () => {
+    const payload = buildSessionPayload({
+      parsed: {
+        messages: [
+          { role: 'user', content: 'old context', at: '2026-04-21T10:00:00Z' },
+          { role: 'assistant', content: 'y'.repeat(400 * 1024), at: '2026-04-21T10:00:05Z' },
+        ],
+        sessionId: 's_huge',
+      },
+    });
+
+    assert.equal(payload.cleaned_conversation.length, 1);
+    assert.equal(payload.cleaned_conversation[0].content_truncated, true);
+    const bytes = Buffer.byteLength(JSON.stringify(payload.cleaned_conversation), 'utf8');
+    assert.ok(bytes <= CLEANED_CONVERSATION_MAX_BYTES, `truncated entry payload is ${bytes} bytes`);
+    assert.equal(payload.conversation_truncated, true);
+    assert.equal(payload.conversation_dropped.messages, 1);
   });
 });
