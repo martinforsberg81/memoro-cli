@@ -252,6 +252,21 @@ test('rejects a session catalog below a non-private trusted root', () => {
   ));
 });
 
+test('requires exact private modes for control files and directories', () => {
+  const mcHomeDir = temporaryHome();
+  create(mcHomeDir);
+  const paths = sessionHomePaths({ mcHomeDir, mcSessionId: sessionId(1) });
+
+  chmodSync(paths.identityPath, 0o700);
+  let read = readSessionHomeSync({ mcHomeDir, mcSessionId: sessionId(1) });
+  assert.equal(read.reason, 'identity-unsafe-file');
+  chmodSync(paths.identityPath, 0o600);
+
+  chmodSync(paths.resourcesPath, 0o600);
+  read = readSessionHomeSync({ mcHomeDir, mcSessionId: sessionId(1) });
+  assert.equal(read.reason, 'unsafe-resources-unsafe-directory');
+});
+
 test('atomic replacement preserves the old file when publication is interrupted', () => {
   const mcHomeDir = temporaryHome();
   const directory = join(mcHomeDir, 'state');
