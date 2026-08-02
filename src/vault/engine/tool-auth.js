@@ -22,6 +22,7 @@
  *     sync-back and is deliberately out of S3.
  */
 
+import { canonicalToolId } from '../../adapters/index.js';
 import { spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -46,7 +47,7 @@ export const TOOL_AUTH_SPECS = Object.freeze({
 });
 
 export function resolveToolAuthSpec(tool) {
-  const key = tool === 'claude' ? 'claude-code' : tool;
+  const key = canonicalToolId(tool) || tool;
   return TOOL_AUTH_SPECS[key] ? { id: key, ...TOOL_AUTH_SPECS[key] } : null;
 }
 

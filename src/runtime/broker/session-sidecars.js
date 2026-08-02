@@ -3,6 +3,7 @@ import { chmodSync, existsSync, mkdirSync, unlinkSync, writeFileSync } from 'nod
 import { dirname } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 
+import { canonicalToolId } from '../../adapters/index.js';
 import { CliWsClient } from '../../commands/ws-client.js';
 import { createFetchTranscriptHandler } from '../../commands/handlers/fetch-transcript.js';
 import { memoroFetch } from '../../lib/api.js';
@@ -408,9 +409,7 @@ function managedGitHubCapabilities(value) {
 export function sourceForTool(tool) {
   const value = normaliseCodingSource(tool);
   if (!value) return null;
-  if (value === 'claude') return 'claude-code';
-  if (value === 'gemini') return 'gemini-cli';
-  return value;
+  return canonicalToolId(value) || value;
 }
 
 function normaliseCodingSource(value) {

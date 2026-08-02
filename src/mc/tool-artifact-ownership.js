@@ -6,6 +6,7 @@ import {
   rm,
   unlink,
 } from 'node:fs/promises';
+import { isSameTool } from '../adapters/index.js';
 import { homedir } from 'node:os';
 import {
   basename,
@@ -746,10 +747,7 @@ function matchesTranscriptLayout({ source, sessionId, transcriptPath, transcript
 }
 
 function toolMatchesSource(tool, source) {
-  const value = nonEmpty(tool);
-  if (source === 'codex') return value === 'codex';
-  if (source === 'claude-code') return value === 'claude' || value === 'claude-code';
-  return false;
+  return isSameTool(nonEmpty(tool), source);
 }
 
 function deepestContainingRoot(path, roots) {

@@ -14,7 +14,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync } from '
 import { dirname } from 'node:path';
 import { registryPath } from './paths.js';
 import { DEFAULT_TOOL } from '../lib/config.js';
-import { resolveToolInput } from '../adapters/index.js';
+import { canonicalToolId, resolveToolInput } from '../adapters/index.js';
 import {
   REPOSITORY_ID_RE,
   repositoryIdForCanonicalRemote,
@@ -618,13 +618,13 @@ function lookupFailure(reason, extra = {}) {
 }
 
 function canonicalProvider(value) {
-  const known = resolveToolInput(value)?.id;
+  const known = canonicalToolId(value);
   if (known) return known;
   return typeof value === 'string' && PROVIDER_KEY.test(value) ? value : null;
 }
 
 function knownProvider(value) {
-  return resolveToolInput(value)?.id || null;
+  return canonicalToolId(value);
 }
 
 function explicitProviderValue(value) {

@@ -5,6 +5,7 @@
  * session without writing tool config, changing vault matching, or mutating
  * native auth. Later phases can render this policy into adapters.
  */
+import { toolShortName } from '../adapters/index.js';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { POLICY_SUPPORT as CLAUDE_POLICY_SUPPORT } from '../adapters/claude-code.js';
@@ -105,8 +106,5 @@ function permissionSupportForTool(_tool) {
 }
 
 function normaliseTool(tool) {
-  if (tool === 'claude-code') return 'claude';
-  if (tool === 'gemini-cli') return 'gemini';
-  if (tool === 'codex' || tool === 'claude' || tool === 'gemini') return tool;
-  return String(tool || DEFAULT_TOOL);
+  return toolShortName(tool) || String(tool || DEFAULT_TOOL);
 }

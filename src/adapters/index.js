@@ -82,6 +82,38 @@ export function resolveToolInput(input) {
   return { id, shortName, adapter, planned: !!PLANNED[id] && !adapter };
 }
 
+// Historical aliases that appear in stored data but are not part of the
+// two official name spaces above.
+const TOOL_ID_ALIASES = {
+  'codex-cli': 'codex',
+};
+
+/**
+ * THE canonical tool-name mapping. Accepts a short name, adapter id, or
+ * historical alias in any casing/whitespace and returns the adapter id —
+ * or null when the value names no known tool. Every module that needs to
+ * normalize or compare tool names goes through this (or the helpers
+ * below); local copies of the claude↔claude-code map are forbidden.
+ */
+export function canonicalToolId(value) {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim().toLowerCase();
+  if (!trimmed) return null;
+  return resolveToolInput(TOOL_ID_ALIASES[trimmed] || trimmed)?.id || null;
+}
+
+/** The user-facing short name for any known tool-name form; null when unknown. */
+export function toolShortName(value) {
+  const id = canonicalToolId(value);
+  return id ? resolveToolInput(id).shortName : null;
+}
+
+/** True when both values name the same known tool, in any name form. */
+export function isSameTool(a, b) {
+  const canonical = canonicalToolId(a);
+  return canonical !== null && canonical === canonicalToolId(b);
+}
+
 /**
  * Resolve a tool name (short name OR adapter ID) to everything the
  * wrap-mode launcher needs to spawn it: the live adapter (for grounding)
