@@ -192,7 +192,7 @@ describe('mc list', () => {
     assert.doesNotMatch(localSection, /active-local/);
   });
 
-  test('TTY human output uses a borderless table with colored headers and ids', async () => {
+  test('TTY human output uses framed headers, spaced rows, colored labels, and ids', async () => {
     const stdout = [];
     const status = await runList([], {
       stdout: {
@@ -229,11 +229,37 @@ describe('mc list', () => {
 
     assert.equal(status, 0);
     const out = stdout.join('');
+    const plain = out.replace(/\x1b\[[0-9;]*m/g, '');
+    assert.match(plain, /^mc sessions · 1 active · 1 local/m);
+    assert.match(plain, /Active sessions\n  Message: mc sessions send/);
+    assert.match(plain, /Local sessions\n  Saved locally/);
     assert.match(out, /\x1b\[1;33m#\s+Session/);
     assert.match(out, /\x1b\[2;37m─+/);
     assert.match(out, /\x1b\[36msess_active/);
     assert.match(out, /Local sessions[\s\S]*local-session/);
     assert.doesNotMatch(out, /\|/);
+    assert.doesNotMatch(plain, /─+\s+─+/, 'dividers must be continuous');
+  });
+
+  test('TTY tables use blank rows between entries and only frame the header and list', () => {
+    const view = buildSessionListView({
+      activeSessions: [
+        { coding_session_id: 'sess_a', label: 'alpha', source: 'codex', idle_seconds: 0 },
+        { coding_session_id: 'sess_b', label: 'beta', source: 'claude', idle_seconds: 30 },
+      ],
+      localEntries: [],
+    });
+    const out = renderSessionListHuman({
+      view,
+      isTTY: true,
+      terminalWidth: 100,
+      useColor: false,
+    });
+    const activeTable = out.split('Local sessions')[0];
+    const dividers = activeTable.split('\n').filter((line) => /^─+$/u.test(line));
+
+    assert.equal(dividers.length, 3, 'top, header bottom, and list bottom');
+    assert.match(activeTable, /1\.\s+alpha[^\n]*\n\n2\.\s+beta/);
   });
 
   test('TTY table adapts to narrow terminals and honors NO_COLOR', () => {
@@ -260,6 +286,24 @@ describe('mc list', () => {
     assert.match(out, /…/);
     for (const line of out.split('\n')) {
       assert.ok(line.length <= 50, `line exceeds terminal width (${line.length}): ${line}`);
+    }
+  });
+
+  test('TTY action hints never exceed their terminal-width threshold', () => {
+    const view = buildSessionListView({ activeSessions: [], localEntries: [] });
+    for (const terminalWidth of [72, 73, 74]) {
+      const out = renderSessionListHuman({
+        view,
+        isTTY: true,
+        terminalWidth,
+        useColor: false,
+      });
+      for (const line of out.split('\n')) {
+        assert.ok(
+          line.length <= terminalWidth,
+          `line exceeds terminal width ${terminalWidth} (${line.length}): ${line}`,
+        );
+      }
     }
   });
 
@@ -500,6 +544,64 @@ describe('mc list', () => {
     });
     assert.equal(view.active.length, 1);
     assert.equal(view.local.length, 0);
+  });
+
+  test('broker-only active rows inherit their display metadata from the registry', () => {
+    const view = buildSessionListView({
+      activeSessions: [{
+        coding_session_id: 'sess_runtime',
+        session_state: 'live',
+        attachable: true,
+        host_busy: true,
+        source: 'local-broker',
+      }],
+      localEntries: [
+        makeEntry({
+          name: 'mc-v2',
+          repo_slug: 'memoro-cli',
+          branch: 'sess/mc-v2',
+          coding_session_id: 'sess_runtime',
+          tool: 'codex',
+          session_state: 'live',
+        }),
+      ],
+    });
+
+    assert.equal(view.active.length, 1);
+    assert.equal(view.local.length, 0);
+    assert.deepEqual({
+      name: view.active[0].name,
+      tool: view.active[0].source,
+      repo: view.active[0].repo,
+      branch: view.active[0].branch,
+      status: view.active[0].status,
+    }, {
+      name: 'mc-v2',
+      tool: 'codex',
+      repo: 'memoro-cli',
+      branch: 'sess/mc-v2',
+      status: 'active',
+    });
+  });
+
+  test('TTY local states use human labels', () => {
+    const view = buildSessionListView({
+      activeSessions: [],
+      localEntries: [
+        makeEntry({ name: 'fresh', coding_session_id: null, session_state: 'no-session-yet' }),
+        makeEntry({ name: 'done', coding_session_id: 'sess_done', session_state: 'dead' }),
+      ],
+    });
+    const out = renderSessionListHuman({
+      view,
+      isTTY: true,
+      terminalWidth: 120,
+      useColor: false,
+    });
+
+    assert.match(out, /fresh\s+not started/);
+    assert.match(out, /done\s+stopped/);
+    assert.doesNotMatch(out, /no-session-yet/);
   });
 
   test('active sessions without labels render branch as the display name', () => {

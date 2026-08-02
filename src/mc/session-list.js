@@ -117,8 +117,7 @@ export function normalizeLocalBrokerSessionForList(session = {}) {
   const label = nonEmpty(session.label)
     || nonEmpty(session.name)
     || nonEmpty(session.worktree_name)
-    || localWorktreeName(session.cwd)
-    || id;
+    || localWorktreeName(session.cwd);
   const receivedAt = nonEmpty(session.last_output_at || session.lastOutputAt)
     || nonEmpty(session.started_at || session.startedAt);
   return {
@@ -128,7 +127,7 @@ export function normalizeLocalBrokerSessionForList(session = {}) {
     repo: nonEmpty(session.repo),
     branch: nonEmpty(session.branch),
     machine_id: nonEmpty(session.machine_id) || 'local',
-    source: nonEmpty(session.source) || nonEmpty(session.tool) || 'local-broker',
+    source: nonEmpty(session.tool) || nonEmpty(session.source),
     idle_seconds: ageSeconds(receivedAt),
     received_at: receivedAt,
     _mc_list_origin: 'local-broker',
@@ -143,9 +142,34 @@ export function mergeActiveCodingSessions({ localSessions = [], cloudSessions = 
   }
   for (const session of Array.isArray(localSessions) ? localSessions : []) {
     const id = session?.coding_session_id || session?.id;
-    if (id) byId.set(id, session);
+    if (id) byId.set(id, mergeActiveSessionMetadata(byId.get(id), session));
   }
   return [...byId.values()].sort(compareSessionsForList);
+}
+
+function mergeActiveSessionMetadata(cloud, local) {
+  if (!cloud) return local;
+  const merged = { ...cloud, ...local };
+  for (const key of [
+    'label',
+    'name',
+    'worktree_name',
+    'repo',
+    'branch',
+    'tool',
+    'machine_id',
+    'received_at',
+  ]) {
+    merged[key] = nonEmpty(local?.[key]) || nonEmpty(cloud?.[key]);
+  }
+  merged.source = meaningfulTool(local?.source)
+    || nonEmpty(local?.tool)
+    || meaningfulTool(cloud?.source)
+    || nonEmpty(cloud?.tool);
+  if (typeof local?.idle_seconds !== 'number') {
+    merged.idle_seconds = typeof cloud?.idle_seconds === 'number' ? cloud.idle_seconds : null;
+  }
+  return merged;
 }
 
 function compareSessionsForList(a, b) {
@@ -160,8 +184,12 @@ export function buildSessionListView({
   activeSessions = [],
   localEntries = [],
 } = {}) {
-  const active = normalizeActiveSessions(activeSessions);
-  const local = (Array.isArray(localEntries) ? localEntries : [])
+  const registryEntries = (Array.isArray(localEntries) ? localEntries : [])
+    .filter(Boolean);
+  const active = normalizeActiveSessions(activeSessions)
+    .map((session) => enrichActiveSession(session, registryEntries))
+    .sort(compareActiveSessions);
+  const local = registryEntries
     .filter((entry) => entry && !findActiveForLocalEntry(entry, active))
     .map((entry) => ({ ...entry, type: 'local' }))
     .sort(compareLocalEntries);
@@ -171,6 +199,51 @@ export function buildSessionListView({
     active: active.map((entry) => ({ ...entry, number: number++ })),
     local: local.map((entry) => ({ ...entry, number: number++ })),
   };
+}
+
+function enrichActiveSession(session, registryEntries) {
+  const entry = findRegistryEntryForActive(session, registryEntries);
+  if (!entry) return session;
+
+  const activeLabel = meaningfulActiveLabel(session);
+  const registryName = nonEmpty(entry.name) || nonEmpty(entry.label);
+  const label = activeLabel || registryName;
+  const source = meaningfulTool(session.source)
+    || nonEmpty(entry.tool);
+  return {
+    ...session,
+    label,
+    name: label || session.name,
+    source,
+    repo: session.repo || localEntryRepo(entry),
+    branch: session.branch || nonEmpty(entry.branch),
+    status: session.status === 'unknown' ? 'active' : session.status,
+  };
+}
+
+function findRegistryEntryForActive(active, entries) {
+  const id = nonEmpty(active?.coding_session_id || active?.id);
+  if (id) {
+    const matches = entries.filter((entry) => (
+      nonEmpty(entry?.coding_session_id || entry?.id) === id
+    ));
+    if (matches.length === 1) return matches[0];
+    if (matches.length > 1) return null;
+  }
+
+  const matches = entries.filter((entry) => activeMatchesLocal(active, entry));
+  return matches.length === 1 ? matches[0] : null;
+}
+
+function meaningfulActiveLabel(session) {
+  const label = nonEmpty(session?.label);
+  const id = nonEmpty(session?.coding_session_id || session?.id);
+  return label && label !== id ? label : null;
+}
+
+function meaningfulTool(value) {
+  const tool = nonEmpty(value);
+  return tool && tool !== 'local-broker' ? tool : null;
 }
 
 export function listChoices(view) {
@@ -267,6 +340,8 @@ export function normalizeActiveSession(session = {}) {
   const label = nonEmpty(session.label);
   const branch = nonEmpty(session.branch);
   const receivedAt = nonEmpty(session.received_at || session.at);
+  const idleSeconds = typeof session.idle_seconds === 'number' ? session.idle_seconds : null;
+  const sessionState = nonEmpty(session.session_state || session.state || session.presence_state);
   return {
     type: 'active',
     coding_session_id: codingSessionId,
@@ -280,9 +355,11 @@ export function normalizeActiveSession(session = {}) {
     source_kind: nonEmpty(session.source_kind),
     runtime_generation: nonEmpty(session.runtime_generation),
     presence_state: nonEmpty(session.presence_state),
-    source: nonEmpty(session.source || session.tool),
-    idle_seconds: typeof session.idle_seconds === 'number' ? session.idle_seconds : null,
-    status: formatStatus(session.idle_seconds),
+    session_state: sessionState,
+    host_busy: session.host_busy === true,
+    source: nonEmpty(session.tool) || nonEmpty(session.source),
+    idle_seconds: idleSeconds,
+    status: formatActiveStatus({ idleSeconds, sessionState, attachable: session.attachable }),
     received_at: receivedAt,
     age_label: formatAge(receivedAt),
     excerpt: cleanExcerpt(session.last_user_excerpt || session.last_assistant_excerpt || ''),
@@ -351,15 +428,14 @@ function renderSessionListTable({
   useColor,
 }) {
   const width = normalizeTerminalWidth(terminalWidth);
-  const activeHeading = width >= 57
-    ? 'Active sessions (reachable with `mc sessions send/read`):'
-    : 'Active sessions:';
-  const localHeading = width >= 48
-    ? 'Local sessions (start with `mc open <name>`):'
-    : 'Local sessions:';
-  const out = [title, '', activeHeading];
+  const activeCount = view?.active?.length || 0;
+  const localCount = view?.local?.length || 0;
+  const out = [renderListTitle(title, activeCount, localCount), '', 'Active sessions'];
+  if (width >= 74) {
+    out.push(styleText('  Message: mc sessions send <mc-id> "…" · Output: mc sessions read <mc-id>', ANSI.dim, useColor));
+  }
 
-  if (!view?.active?.length) {
+  if (!activeCount) {
     out.push('  (none)');
   } else {
     const rows = view.active.map((session) => ({
@@ -380,8 +456,11 @@ function renderSessionListTable({
   }
 
   out.push('');
-  out.push(localHeading);
-  if (!view?.local?.length) {
+  out.push('Local sessions');
+  if (width >= 54) {
+    out.push(styleText('  Saved locally · Reopen with mc open <session>', ANSI.dim, useColor));
+  }
+  if (!localCount) {
     out.push('  (none)');
     if (emptyLocalHint) out.push(`  ${emptyLocalHint}`);
   } else {
@@ -391,7 +470,7 @@ function renderSessionListTable({
       tool: entry.tool || '',
       repository: localEntryRepo(entry),
       branch: entry.branch || '',
-      status: entry.session_state || 'no-session-yet',
+      status: formatLocalStatus(entry),
       id: entry.coding_session_id || '',
     }));
     out.push(...renderBorderlessTable(rows, localTableColumns(), { width, useColor }));
@@ -401,14 +480,19 @@ function renderSessionListTable({
   return out.join('\n');
 }
 
+function renderListTitle(title, activeCount, localCount) {
+  const base = String(title || 'mc sessions').replace(/:\s*$/u, '');
+  return `${base} · ${activeCount} active · ${localCount} local`;
+}
+
 function activeTableColumns() {
   return [
     tableColumn('number', '#', 3, 3),
     tableColumn('session', 'Session', 16, 30, { grow: 2 }),
+    tableColumn('status', 'Status', 8, 12),
     tableColumn('tool', 'Tool', 6, 10, { optional: true, dropOrder: 2 }),
     tableColumn('repository', 'Repository', 10, 14, { optional: true, dropOrder: 1 }),
     tableColumn('branch', 'Branch', 12, 28, { optional: true, dropOrder: 3, grow: 1 }),
-    tableColumn('status', 'Status', 8, 12),
     tableColumn('id', 'mc-id', 12, 24, { grow: 3, accent: true }),
   ];
 }
@@ -417,10 +501,10 @@ function localTableColumns() {
   return [
     tableColumn('number', '#', 3, 3),
     tableColumn('session', 'Session', 16, 30, { grow: 2 }),
+    tableColumn('status', 'Status', 8, 16),
     tableColumn('tool', 'Tool', 6, 10, { optional: true, dropOrder: 2 }),
     tableColumn('repository', 'Repository', 10, 14, { optional: true, dropOrder: 1 }),
     tableColumn('branch', 'Branch', 12, 28, { optional: true, dropOrder: 3, grow: 1 }),
-    tableColumn('status', 'Status', 8, 16),
     tableColumn('id', 'mc-id', 12, 24, { grow: 3, accent: true }),
   ];
 }
@@ -436,7 +520,7 @@ function localEntryRepo(entry) {
   if (typeof canonical === 'string' && canonical.includes('/')) {
     return canonical.split('/').pop();
   }
-  return entry?.repo_slug || (entry?.repository_id ? 'local-repo' : '');
+  return nonEmpty(entry?.repo_slug || entry?.repo || entry?.repo_name);
 }
 
 function tableColumn(key, label, minWidth, maxWidth, options = {}) {
@@ -455,18 +539,17 @@ function tableColumn(key, label, minWidth, maxWidth, options = {}) {
 
 function renderBorderlessTable(rows, definitions, { width, useColor }) {
   const columns = fitTableColumns(definitions, width);
-  const divider = columns
-    .map((column) => '─'.repeat(column.width))
-    .join('  ');
+  const divider = '─'.repeat(tableWidth(columns));
   const header = columns
     .map((column) => fixedCell(column.label, column.width))
     .join('  ');
   const lines = [
+    styleText(divider, ANSI.divider, useColor),
     styleText(header, ANSI.header, useColor),
     styleText(divider, ANSI.divider, useColor),
   ];
 
-  for (const row of rows) {
+  rows.forEach((row, index) => {
     const cells = columns.map((column) => {
       const raw = String(row[column.key] || '—');
       const cell = fixedCell(raw, column.width);
@@ -475,8 +558,9 @@ function renderBorderlessTable(rows, definitions, { width, useColor }) {
         : cell;
     });
     lines.push(cells.join('  '));
-    lines.push(styleText(divider, ANSI.divider, useColor));
-  }
+    if (index < rows.length - 1) lines.push('');
+  });
+  lines.push(styleText(divider, ANSI.divider, useColor));
   return lines;
 }
 
@@ -566,12 +650,35 @@ function compareLocalEntries(a, b) {
   return String(a.name || '').localeCompare(String(b.name || ''));
 }
 
-function formatStatus(idleSeconds) {
-  if (typeof idleSeconds !== 'number' || idleSeconds < 0) return 'unknown';
-  if (idleSeconds < 5) return 'ACTIVE';
+function formatActiveStatus({ idleSeconds, sessionState, attachable }) {
+  if (typeof idleSeconds !== 'number' || idleSeconds < 0) {
+    if (attachable === true || ['live', 'active', 'connected'].includes(sessionState)) return 'active';
+    return humanizeState(sessionState) || 'unknown';
+  }
+  if (idleSeconds < 5) return 'active';
   if (idleSeconds < 60) return `idle ${idleSeconds}s`;
   if (idleSeconds < 3600) return `idle ${Math.floor(idleSeconds / 60)}m`;
   return `idle ${Math.floor(idleSeconds / 3600)}h`;
+}
+
+function formatLocalStatus(entry) {
+  const state = nonEmpty(entry?.session_state) || 'no-session-yet';
+  const label = humanizeState(state) || state;
+  if (!['idle', 'stopped'].includes(label)) return label;
+  const age = formatAge(entry?.last_activity)?.replace(/ ago$/u, '');
+  return age ? `${label} ${age}` : label;
+}
+
+function humanizeState(state) {
+  if (!state) return null;
+  return {
+    live: 'active',
+    active: 'active',
+    idle: 'idle',
+    dead: 'stopped',
+    stale: 'stale',
+    'no-session-yet': 'not started',
+  }[state] || state;
 }
 
 function formatAge(isoString) {

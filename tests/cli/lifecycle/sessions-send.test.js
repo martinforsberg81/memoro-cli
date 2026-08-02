@@ -59,6 +59,34 @@ describe('mc sessions list local broker view', () => {
     assert.equal(sessions[0]._mc_list_origin, 'local-broker');
   });
 
+  test('sparse busy-host rows preserve richer cloud display metadata', () => {
+    const local = normalizeLocalBrokerSessionForList({
+      id: 'sess_same',
+      source: 'local-broker',
+      session_state: 'live',
+      attachable: true,
+      host_busy: true,
+    });
+
+    const sessions = mergeActiveCodingSessions({
+      localSessions: [local],
+      cloudSessions: [{
+        coding_session_id: 'sess_same',
+        label: 'native-cloud',
+        source: 'codex',
+        repo: 'memoro',
+        branch: 'sess/native-cloud',
+      }],
+    });
+
+    assert.equal(sessions.length, 1);
+    assert.equal(sessions[0].label, 'native-cloud');
+    assert.equal(sessions[0].source, 'codex');
+    assert.equal(sessions[0].repo, 'memoro');
+    assert.equal(sessions[0].branch, 'sess/native-cloud');
+    assert.equal(sessions[0].host_busy, true);
+  });
+
   test('renders sessions list with the shared numbered table formatting', () => {
     const session = normalizeLocalBrokerSessionForList({
       id: 'sess_trip',
