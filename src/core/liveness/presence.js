@@ -122,7 +122,12 @@ export async function inspectLocalBrokerSessionForEntry(entry, {
       reason: hostRuntime.reason || 'host-process-exited',
     };
   }
-  return { verdict: 'unknown', session: null, lifecycle };
+  return {
+    verdict: 'unknown',
+    session: null,
+    lifecycle,
+    ...(hostRuntime ? { host_runtime: hostRuntime } : {}),
+  };
 }
 
 export function selectBrokerSessionForEntry(entry, sessions = []) {

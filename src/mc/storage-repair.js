@@ -5,7 +5,7 @@ import { DEFAULT_TOOL } from '../lib/config.js';
 import { readRegistry, writeRegistry } from './registry.js';
 import { requestBroker } from '../runtime/broker/client.js';
 import { listLocalBrokerAndHostSessions } from '../runtime/broker/session-hosts.js';
-import { sessionHostPaths } from '../runtime/broker/paths.js';
+import { inspectLocalBrokerSessionForEntry } from '../core/liveness/presence.js';
 import { resolveToolSessionForResume } from './tool-session.js';
 
 export async function buildStorageRepairPlan({
@@ -17,12 +17,10 @@ export async function buildStorageRepairPlan({
   includeProviderBackfill = false,
   names = null,
   request = requestBroker,
+  inspectPresence = inspectLocalBrokerSessionForEntry,
 } = {}) {
   const probeRequest = request;
   const nowIso = new Date(resolveNowMs(now)).toISOString();
-  const liveIds = await listSessions()
-    .then((sessions) => new Set((sessions || []).map(sessionIdForLiveRow).filter(Boolean)))
-    .catch(() => new Set());
   const actions = [];
   const selectedNames = Array.isArray(names) && names.length
     ? new Set(names.map((name) => String(name)))
@@ -32,27 +30,38 @@ export async function buildStorageRepairPlan({
     if (selectedNames
       && !selectedNames.has(entry?.session_id)
       && !selectedNames.has(entry?.name)) continue;
-    const sessionId = nonEmpty(entry?.coding_session_id);
     const worktreePath = nonEmpty(entry?.worktree_path);
     const worktreeExists = Boolean(worktreePath && existsSync(worktreePath));
-    // Live means attachable: the enumeration (or a direct, patient socket
-    // probe) must confirm it. A daemon pid alive with a dead or missing
-    // socket is NOT live — trusting pids left unattachable sessions marked
-    // live forever while `mc list` correctly showed them stale.
-    const live = Boolean(sessionId
-      && (liveIds.has(sessionId) || await hostSocketAlive(sessionId, { request: probeRequest })));
 
-    if (entry?.session_state === 'live' && !live) {
-      actions.push(registryPatchAction({
-        type: 'mark-idle',
-        entry,
-        reason: 'registry-live-without-local-broker',
-        patch: {
-          session_state: 'idle',
-          last_storage_repair_at: nowIso,
-          last_storage_repair_reason: 'registry-live-without-local-broker',
-        },
-      }));
+    if (entry?.session_state === 'live') {
+      // THE liveness engine decides — never a local socket-only check.
+      // A socket that answers while its host holds no session (a restarted
+      // empty host) is not liveness; the engine's hosted-session listing,
+      // lifecycle journal, and boot-time proof catch what a bare probe
+      // cannot. 'unreachable' fails CLOSED here: a live journal without
+      // exit proof keeps the row live for the resume-side recovery paths.
+      const presence = await inspectPresence(entry, {
+        request: probeRequest,
+        deps: { listLocalBrokerAndHostSessions: listSessions },
+      }).catch(() => ({ verdict: 'unknown' }));
+      // Attachability standard: an answering host socket keeps the row
+      // (host-socket-reachable) — but a lingering daemon pid with a dead
+      // socket is NOT attachable and never was (the pre-engine bug this
+      // module fixed once already).
+      const keepUnknown = presence?.verdict === 'unknown'
+        && presence?.host_runtime?.reason === 'host-socket-reachable';
+      if ((presence?.verdict === 'exited' || presence?.verdict === 'unknown') && !keepUnknown) {
+        actions.push(registryPatchAction({
+          type: 'mark-idle',
+          entry,
+          reason: 'registry-live-without-local-broker',
+          patch: {
+            session_state: 'idle',
+            last_storage_repair_at: nowIso,
+            last_storage_repair_reason: 'registry-live-without-local-broker',
+          },
+        }));
+      }
     }
 
     if (worktreePath && !worktreeExists && entry?.worktree_missing !== true) {
@@ -107,18 +116,6 @@ function needsProviderBackfill(entry) {
     || nonEmpty(entry?.provider_session_id)
     || nonEmpty(entry?.llm_session_id)
   );
-}
-
-const HOST_SOCKET_PROBE_TIMEOUT_MS = 5_000;
-
-async function hostSocketAlive(sessionId, { request = requestBroker } = {}) {
-  const socketPath = sessionHostPaths(sessionId).socketPath;
-  if (!existsSync(socketPath)) return false;
-  const res = await request({ type: 'status' }, {
-    socketPath,
-    timeoutMs: HOST_SOCKET_PROBE_TIMEOUT_MS,
-  }).catch(() => null);
-  return res?.ok === true;
 }
 
 export function applyStorageRepairPlan(registry, plan, {
@@ -226,9 +223,6 @@ function summarizeActions(actions) {
   };
 }
 
-function sessionIdForLiveRow(session) {
-  return nonEmpty(session?.id || session?.coding_session_id || session?.host_session_id);
-}
 
 function nonEmpty(value) {
   return typeof value === 'string' && value.trim() ? value.trim() : null;
