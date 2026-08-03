@@ -57,6 +57,7 @@ ${MC_HOME}/sessions/<mc_session_id>/
   generations/
   resources/
   projection.json
+  legacy-references.json  # optional; finite cutover evidence only
 ```
 
 Ephemeral runtime state lives separately under:
@@ -92,6 +93,9 @@ transcript bodies, source code, patches, or PTY output.
   for resources created by mc.
 - `projection.json` is a small, atomically replaced, rebuildable read model for
   commands such as `mc list`.
+- `legacy-references.json`, when present on a migrated session, contains only
+  bounded identifiers, states, and evidence digests that point from retired
+  storage to V1 identity. Fresh sessions never need it.
 
 Sessions are discovered by enumerating bounded session homes. Human names use
 one atomic claim per normalized name so concurrent creation and rename cannot

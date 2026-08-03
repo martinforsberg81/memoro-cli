@@ -19,13 +19,14 @@ export const RUNTIME_RECEIPT_PHASES = Object.freeze([
   'live',
   'exited',
   'completed',
+  'imported',
   'failed',
   'aborted',
 ]);
 
 const ACTIONS = new Set(RUNTIME_ACTIONS);
 const RECEIPT_PHASES = new Set(RUNTIME_RECEIPT_PHASES);
-const TERMINAL_PHASES = new Set(['completed', 'failed', 'aborted']);
+const TERMINAL_PHASES = new Set(['completed', 'imported', 'failed', 'aborted']);
 const TOOL_RE = /^[a-z][a-z0-9_-]{0,63}$/u;
 const CONVERSATION_HANDLE_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/u;
 const SHA256_RE = /^[a-f0-9]{64}$/u;
@@ -277,7 +278,7 @@ export function validateReceiptHistory(intent, receipts) {
 export function runtimeProjectionState(phase) {
   if (phase === 'planned' || phase === 'accepted') return 'starting';
   if (phase === 'live') return 'running';
-  if (phase === 'exited' || phase === 'completed') return 'exited';
+  if (phase === 'exited' || phase === 'completed' || phase === 'imported') return 'exited';
   if (phase === 'failed' || phase === 'aborted') return 'failed';
   throw sessionRuntimeError('unknown-generation-phase');
 }
@@ -375,11 +376,18 @@ function validReceiptData(phase, data) {
     return exactKeys(data, ['conversation_id'])
       && CONVERSATION_ID_RE.test(data.conversation_id || '');
   }
+  if (phase === 'imported') {
+    return exactKeys(data, ['conversation_id', 'legacy_evidence_sha256'])
+      && CONVERSATION_ID_RE.test(data.conversation_id || '')
+      && SHA256_RE.test(data.legacy_evidence_sha256 || '');
+  }
   return exactKeys(data, ['reason']) && validReason(data.reason);
 }
 
 function validPhaseTransition(from, to) {
-  if (from === 'planned') return to === 'accepted' || to === 'failed' || to === 'aborted';
+  if (from === 'planned') {
+    return to === 'accepted' || to === 'imported' || to === 'failed' || to === 'aborted';
+  }
   if (from === 'accepted') return to === 'live' || to === 'failed';
   if (from === 'live') return to === 'exited' || to === 'failed';
   if (from === 'exited') return to === 'completed' || to === 'failed';

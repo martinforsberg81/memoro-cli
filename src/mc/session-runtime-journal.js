@@ -35,6 +35,7 @@ import {
 } from './session-record-ids.js';
 import {
   assertConversationHandle,
+  assertSha256,
   assertRuntimeValid,
   assertTool,
   buildConversationRecord,
@@ -369,6 +370,210 @@ export function bindRuntimeConversationSync(options = {}) {
   });
 }
 
+/**
+ * Publish one bounded historical conversation without pretending that the
+ * migrator launched or observed a new tool process. The `imported` receipt is
+ * terminal and can only be created by this explicit cutover operation.
+ *
+ * Every identifier and timestamp is supplied by the immutable migration plan,
+ * so a crash after any individual immutable write is safely resumable.
+ */
+export function importRuntimeConversationSync(options = {}) {
+  assertOptionKeys(options, [
+    'mcHomeDir',
+    'mcSessionId',
+    'generationId',
+    'conversationId',
+    'action',
+    'tool',
+    'workspaceId',
+    'launchCwd',
+    'previousConversationId',
+    'previousGenerationId',
+    'replacementReason',
+    'handoffSha256',
+    'handle',
+    'legacyEvidenceSha256',
+    'recordedAt',
+    'afterWrite',
+    'random',
+    'isAlive',
+  ]);
+  const {
+    mcHomeDir = mcHome(),
+    mcSessionId,
+    generationId,
+    conversationId,
+    action,
+    tool,
+    workspaceId = null,
+    launchCwd,
+    previousConversationId = null,
+    previousGenerationId = null,
+    replacementReason = null,
+    handoffSha256 = null,
+    handle,
+    legacyEvidenceSha256,
+    recordedAt,
+    afterWrite = null,
+    random = randomBytes,
+    isAlive = processIsAlive,
+  } = options;
+  assertMcSessionId(mcSessionId);
+  assertGenerationId(generationId);
+  assertConversationId(conversationId);
+  assertTool(tool);
+  assertConversationHandle(handle);
+  assertSha256(legacyEvidenceSha256, 'legacy evidence sha256');
+  const timestamp = validateIso(recordedAt);
+  const paths = sessionHomePaths({ mcHomeDir, mcSessionId });
+
+  return withLocksSync([paths.mutationLockPath], {
+    trustedRoot: paths.mcHomeDir,
+    purpose: 'import-runtime-conversation',
+    isAlive,
+    random,
+  }, () => {
+    const session = requireOpenSession(paths.mcHomeDir, mcSessionId);
+    let snapshot = requireRuntimeSnapshot(paths.mcHomeDir, mcSessionId);
+    let generation = snapshot.generations.find(
+      (item) => item.intent.generation_id === generationId,
+    );
+    if (!generation) {
+      if (snapshot.active_generation !== null) {
+        throw sessionRuntimeError('live-generation-claim-conflict');
+      }
+      validateRequestedAction({
+        snapshot,
+        action,
+        tool,
+        resumeConversationId: null,
+        previousConversationId,
+        previousGenerationId,
+        replacementReason,
+        handoffSha256,
+      });
+      if (workspaceId !== null) {
+        const workspace = readWorkspaceAssociationSync({
+          mcHomeDir: paths.mcHomeDir,
+          mcSessionId,
+          workspaceId,
+        });
+        if (workspace.kind !== 'present') {
+          throw sessionRuntimeError(`workspace-${workspace.reason || workspace.kind}`);
+        }
+      }
+      const intent = buildGenerationIntent({
+        generationId,
+        mcSessionId,
+        sequence: snapshot.generations.length + 1,
+        action,
+        tool,
+        workspaceId,
+        launchCwd,
+        resumeConversationId: null,
+        previousConversationId,
+        previousGenerationId,
+        replacementReason,
+        handoffSha256,
+        recordedAt: timestamp,
+      });
+      publishImmutablePrivateJsonSync({
+        path: generationIntentPath(paths, generationId),
+        value: intent,
+        trustedRoot: paths.mcHomeDir,
+        random,
+      });
+      afterWrite?.('intent');
+      snapshot = requireRuntimeSnapshot(paths.mcHomeDir, mcSessionId);
+      generation = findGeneration(snapshot, generationId);
+    }
+
+    const expectedIntent = buildGenerationIntent({
+      generationId,
+      mcSessionId,
+      sequence: generation.intent.sequence,
+      action,
+      tool,
+      workspaceId,
+      launchCwd,
+      resumeConversationId: null,
+      previousConversationId,
+      previousGenerationId,
+      replacementReason,
+      handoffSha256,
+      recordedAt: timestamp,
+    });
+    if (!isDeepStrictEqual(generation.intent, expectedIntent)) {
+      throw sessionRuntimeError('import-generation-conflict');
+    }
+
+    const expectedConversation = buildConversationRecord({
+      conversationId,
+      mcSessionId,
+      tool,
+      handle,
+      originGenerationId: generationId,
+      relation: relationForIntent(expectedIntent),
+      recordedAt: timestamp,
+    });
+    const currentConversation = snapshot.conversations.find(
+      (item) => item.conversation_id === conversationId,
+    );
+    if (currentConversation && !isDeepStrictEqual(currentConversation, expectedConversation)) {
+      throw sessionRuntimeError('import-conversation-conflict');
+    }
+    if (!currentConversation) {
+      const reused = snapshot.conversations.find(
+        (item) => item.tool === tool && item.handle === handle,
+      );
+      if (reused) throw sessionRuntimeError('conversation-handle-conflict');
+      publishImmutablePrivateJsonSync({
+        path: conversationPath(paths, conversationId),
+        value: expectedConversation,
+        trustedRoot: paths.mcHomeDir,
+        random,
+      });
+      afterWrite?.('conversation');
+      snapshot = requireRuntimeSnapshot(paths.mcHomeDir, mcSessionId);
+      generation = findGeneration(snapshot, generationId);
+    }
+
+    const expectedReceipt = buildGenerationReceipt({
+      ordinal: 1,
+      phase: 'imported',
+      generationId,
+      mcSessionId,
+      intentSha256: expectedIntent.intent_sha256,
+      recordedAt: timestamp,
+      data: {
+        conversation_id: conversationId,
+        legacy_evidence_sha256: legacyEvidenceSha256,
+      },
+    });
+    if (generation.receipts.length === 0) {
+      publishImmutablePrivateJsonSync({
+        path: generationReceiptPath(paths, generationId, 1),
+        value: expectedReceipt,
+        trustedRoot: paths.mcHomeDir,
+        random,
+      });
+      afterWrite?.('receipt');
+    } else if (generation.receipts.length !== 1
+      || !isDeepStrictEqual(generation.receipts[0], expectedReceipt)) {
+      throw sessionRuntimeError('import-receipt-conflict');
+    }
+
+    const after = requireRuntimeSnapshot(paths.mcHomeDir, mcSessionId);
+    writeDerivedProjection({ paths, session, snapshot: after, recordedAt: timestamp, random });
+    afterWrite?.('projection');
+    return {
+      generation: findGeneration(after, generationId),
+      conversation: after.conversations.find((item) => item.conversation_id === conversationId),
+    };
+  });
+}
+
 export function inspectSessionRuntimeSync({ mcHomeDir = mcHome(), mcSessionId } = {}) {
   try {
     assertMcSessionId(mcSessionId);
@@ -515,7 +720,7 @@ export function decideSessionRuntimeAction(snapshot, { tool = null } = {}) {
   }
   const latest = snapshot.generations.at(-1) || null;
   if (latest === null) return { action: 'start' };
-  if (latest.phase !== 'completed') {
+  if (latest.phase !== 'completed' && latest.phase !== 'imported') {
     return {
       action: 'explicit-replacement-required',
       previous_generation_id: latest.intent.generation_id,
@@ -523,7 +728,12 @@ export function decideSessionRuntimeAction(snapshot, { tool = null } = {}) {
   }
   const conversationId = latest.receipts.at(-1).data.conversation_id;
   const conversation = snapshot.conversations.find((item) => item.conversation_id === conversationId);
-  if (!conversation) return { action: 'manual-repair', reason: 'completed-conversation-missing' };
+  if (!conversation) return {
+    action: 'manual-repair',
+    reason: latest.phase === 'imported'
+      ? 'imported-conversation-missing'
+      : 'completed-conversation-missing',
+  };
   if (tool !== null && tool !== conversation.tool) {
     return {
       action: 'switch',
@@ -803,11 +1013,14 @@ function validateRuntimeRelationships(conversations, generations) {
       if (!previous
         || previous.intent.sequence >= intent.sequence
         || !isTerminalGenerationPhase(previous.phase)
-        || previous.phase === 'completed') {
+        || previous.phase === 'completed'
+        || previous.phase === 'imported') {
         return invalid('previous-generation-mismatch');
       }
     }
-    const completion = generation.receipts.find((receipt) => receipt.phase === 'completed');
+    const completion = generation.receipts.find(
+      (receipt) => receipt.phase === 'completed' || receipt.phase === 'imported',
+    );
     if (completion) {
       const expected = intent.action === 'resume'
         ? intent.resume_conversation_id
@@ -867,7 +1080,8 @@ function validateRequestedAction({
       (item) => item.intent.generation_id === previousGenerationId,
     );
     if (!generation || !isTerminalGenerationPhase(generation.phase)
-      || generation.phase === 'completed') {
+      || generation.phase === 'completed'
+      || generation.phase === 'imported') {
       throw sessionRuntimeError('replacement-generation-unproven');
     }
     return;
