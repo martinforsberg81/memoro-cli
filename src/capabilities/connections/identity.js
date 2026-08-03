@@ -95,6 +95,8 @@ async function exchange({ request, use, token, apiUrl, fetch }) {
 
 async function mintGrant({ request, token, apiUrl, fetch }) {
   const codingSessionId = request.codingSessionId ?? null;
+  const sourceId = request.sourceId ?? null;
+  const workspaceId = request.workspaceId ?? null;
   const raw = await fetch(apiUrl, '/api/mc/capability-grants', {
     token,
     method: 'POST',
@@ -103,12 +105,16 @@ async function mintGrant({ request, token, apiUrl, fetch }) {
       provider: request.provider,
       purpose: request.purpose,
       ...(codingSessionId ? { coding_session_id: codingSessionId } : {}),
+      ...(sourceId ? { source_id: sourceId } : {}),
+      ...(workspaceId ? { workspace_id: workspaceId } : {}),
     },
   });
   const grant = decodeBrokerGrant(raw, {
     provider: request.provider,
     purpose: request.purpose,
     codingSessionId,
+    sourceId,
+    workspaceId,
   });
   if (!grant) throw new Error('Connected capability grant could not be verified.');
   return Object.freeze({ ...grant, apiUrl });

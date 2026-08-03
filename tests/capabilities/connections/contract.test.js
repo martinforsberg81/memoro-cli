@@ -49,6 +49,38 @@ describe('connected capability codecs', () => {
     assert.equal(Object.hasOwn(decoded, 'deviceToken'), false);
   });
 
+  test('binds V1 grants to the exact local source and workspace', () => {
+    const response = {
+      ok: true,
+      schema: 1,
+      grant: `mcg_${'b'.repeat(64)}`,
+      expires_at: '2026-08-03T15:00:00.000Z',
+      source: { id: 'machine_test', kind: 'local' },
+      provider: 'github',
+      purpose: 'session',
+      coding_session_id: 'mcs_000000000000000000000001',
+      capability_families: ['session.read'],
+      resource: {
+        type: 'github.workspace:mcw_000000000000000000000001',
+        id: '301',
+      },
+    };
+    const expected = {
+      provider: 'github',
+      purpose: 'session',
+      codingSessionId: 'mcs_000000000000000000000001',
+      sourceId: 'machine_test',
+      workspaceId: 'mcw_000000000000000000000001',
+    };
+    assert.equal(decodeBrokerGrant(response, expected).resource.id, '301');
+    assert.equal(decodeBrokerGrant(response, { ...expected, sourceId: 'machine_other' }), null);
+    assert.equal(decodeBrokerGrant(response, {
+      ...expected,
+      workspaceId: 'mcw_000000000000000000000002',
+    }), null);
+    assert.equal(decodeBrokerGrant(response, { ...expected, workspaceId: null }), null);
+  });
+
   test('only the common identity module imports credential storage', () => {
     const files = globSync('src/capabilities/connections/*.js');
     for (const file of files.filter((path) => !path.endsWith('/identity.js'))) {

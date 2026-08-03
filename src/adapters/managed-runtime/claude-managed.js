@@ -82,6 +82,7 @@ const MANAGED_PERMISSION_MODES = new Set([
   'auto',
   'dontAsk',
 ]);
+const SESSION_OWNER_ID_RE = /^(?:sess_[A-Za-z0-9_-]{6,}|mcs_[a-f0-9]{24})$/u;
 const MANAGED_PERMISSION_RULE_KEYS = Object.freeze([
   'allow',
   'ask',
@@ -178,7 +179,7 @@ export function validateManagedClaudeDescriptor(descriptor, {
     || descriptor.srt_tree_sha256 !== CLAUDE_C1_ARTIFACT_PINS.srtTreeSha256
     || descriptor.c1_source_closure_sha256
       !== managedClaudeC1SourceClosureDigest()
-    || !/^sess_[A-Za-z0-9_-]{6,}$/u.test(descriptor.session_id || '')
+    || !SESSION_OWNER_ID_RE.test(descriptor.session_id || '')
     || !uuidV4(descriptor.generation)
     || !/^[A-Za-z0-9_-]{43}$/u.test(descriptor.launch_nonce || '')
     || typeof descriptor.custody_secret_id !== 'string'

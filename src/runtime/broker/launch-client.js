@@ -1055,9 +1055,8 @@ function isExactLaunchedSession(session, { codingSessionId, runtimeGeneration } 
 }
 
 /**
- * Never leave a failed managed launch at a dead end. By this point the session
- * and its worktree exist, so name the one command that opens it. Custody stays
- * the user's choice — this states the option, it does not take it.
+ * Never downgrade a failed certified launch to host credentials. By this point
+ * the session exists, so name the repair and the exact retry command.
  *
  * Pure and exported so the remedy is covered without driving a full launch.
  */
@@ -1065,8 +1064,8 @@ export function managedBoundaryRemedy({ sessionName, label, codingSessionId } = 
   const target = [sessionName, label, codingSessionId]
     .find((value) => typeof value === 'string' && value.trim());
   return target
-    ? `mc: run it on the tool's own sign-in instead with \`mc open ${target.trim()} --native\`, or clear the boundary first.`
-    : 'mc: run it on the tool\'s own sign-in instead by adding --native, or clear the boundary first.';
+    ? `mc: certified execution is unavailable; repair it with \`mc auth status\`, then retry \`mc open ${target.trim()}\`. No fallback launch was attempted.`
+    : 'mc: certified execution is unavailable; repair it with `mc auth status`, then retry. No fallback launch was attempted.';
 }
 
 export function isRetryableCodexSqliteStartupFailure({ output, session } = {}) {

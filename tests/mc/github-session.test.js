@@ -276,6 +276,52 @@ describe('GitHub session capability boundary', () => {
     assert.ok(calls.every((call) => !('repository' in call.options.body)));
   });
 
+  test('routes a V1 session through the exact source and workspace grant', async () => {
+    const calls = [];
+    const mcSessionId = 'mcs_000000000000000000000012';
+    const sourceId = 'machine_test';
+    const workspaceId = 'mcw_000000000000000000000012';
+    const response = await executeGitHubControlPlaneOperation({
+      connectionClient: {
+        async withGrant(provider, grant, use) {
+          calls.push({ provider, grant });
+          return use({ token: 'short-lived-grant-sentinel', apiUrl: 'https://memoro.test' });
+        },
+      },
+      mcSessionId,
+      sourceId,
+      workspaceId,
+      request: {
+        type: 'github_operation',
+        schema: 1,
+        request_id: 'request_v1_abcdefgh',
+        operation: 'repository.metadata',
+        params: {},
+      },
+      memoroFetchImpl: async (_apiUrl, path, options) => {
+        calls.push({ path, options });
+        return { ok: true, request_id: options.body.request_id, data: {} };
+      },
+    });
+
+    assert.equal(response.ok, true);
+    assert.deepEqual(calls[0], {
+      provider: 'github',
+      grant: {
+        purpose: 'session',
+        codingSessionId: mcSessionId,
+        sourceId,
+        workspaceId,
+      },
+    });
+    assert.equal(calls[1].path,
+      `/api/mc/v1/sources/${sourceId}/sessions/${mcSessionId}`
+      + `/workspaces/${workspaceId}/github/operations`);
+    assert.equal('coding_session_id' in calls[1].options.body, false);
+    assert.equal('source_id' in calls[1].options.body, false);
+    assert.equal('workspace_id' in calls[1].options.body, false);
+  });
+
   test('missing broker and hostile broker responses fail closed without echoing material', async () => {
     const missing = await executeGitHubSessionOperation({
       operation: 'repository.metadata',

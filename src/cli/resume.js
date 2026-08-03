@@ -115,17 +115,11 @@ export async function run(rawArgv, deps = {}) {
     stderr.write(`mc: ${opts.error}\n`);
     return 2;
   }
-  const localAuthMode = deps.localAuthMode
-    ?? resolveLocalAuthMode({ managedPortable: opts.managedPortable });
+  const localAuthMode = deps.localAuthMode ?? resolveLocalAuthMode();
   const authMode = requireLocalAuthMode(localAuthMode);
   if (!authMode.ok) {
     stderr.write(`mc: ${authMode.error}\n`);
     return 1;
-  }
-  // Announced, never silent: the weaker container is only ever reached by an
-  // explicit --native, so the user always knows which boundary they got.
-  if (localAuthMode === LOCAL_AUTH_MODES.NATIVE && !opts.json && opts.managedPortable === false) {
-    stderr.write('mc: --native — the tool uses its own sign-in; mc vault custody and the certified credential boundary are not in effect.\n');
   }
   const targetCustody = localAuthMode === LOCAL_AUTH_MODES.MANAGED_PORTABLE
     ? 'managed'
@@ -821,18 +815,11 @@ export function parseArgs(argv) {
     tool: null,
     noLaunch: false,
     json: false,
-    // Named lifecycle launches use managed custody by default. Keep accepting
-    // --managed-portable as a no-op compatibility spelling for older scripts.
-    // `--native` is the explicit opt-out: the user chooses the weaker
-    // container deliberately; no failed gate may ever select it for them.
-    managedPortable: true,
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--no-launch') { opts.noLaunch = true; continue; }
     if (a === '--json') { opts.json = true; continue; }
-    if (a === '--managed-portable') { opts.managedPortable = true; continue; }
-    if (a === '--native') { opts.managedPortable = false; continue; }
     if (a === '--tool') {
       const next = argv[++i];
       if (!next || next.startsWith('--')) return { error: '--tool requires a value' };
@@ -1864,24 +1851,16 @@ function normalizePathForMatch(value) {
 }
 
 /**
- * Failure codes must name the way out. A custody conflict means the
- * interrupted switch journal was begun under the OTHER custody flag —
- * the fix is always to retry with the recorded one.
+ * Legacy custody conflicts cannot select another V1 execution mode. They
+ * require migration or explicit repair before certified execution can run.
  */
 function handoffRecoveryRemedy(recovery) {
   if (recovery?.code === 'handoff-switch-journal-conflict'
     && recovery.recordedTargetTool) {
-    const nativeFlag = recovery.recordedCustody === 'native' ? ' --native' : '';
-    return `mc: the interrupted switch targets ${recovery.recordedTargetTool} — retry with \`--${recovery.recordedTargetTool}${nativeFlag}\`.\n`;
+    return `mc: the interrupted switch targets ${recovery.recordedTargetTool}; migrate or repair the legacy switch record before retrying certified execution.\n`;
   }
   if (recovery?.code !== 'handoff-target-custody-conflict') return null;
-  if (recovery.recordedCustody === 'native') {
-    return 'mc: the interrupted switch targets the tool\'s own sign-in — retry with `--native`.\n';
-  }
-  if (recovery.recordedCustody === 'managed') {
-    return 'mc: the interrupted switch targets managed custody — retry without `--native`.\n';
-  }
-  return null;
+  return 'mc: the interrupted switch uses an incompatible legacy execution record; migrate or repair it before retrying.\n';
 }
 
 function renderCannotResumeSameToolSession(entry = {}, resolved = {}) {

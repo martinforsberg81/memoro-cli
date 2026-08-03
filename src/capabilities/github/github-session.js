@@ -269,7 +269,10 @@ export async function executeGitHubSessionOperation({
 /** Trusted sidecar-only control-plane client. */
 export async function executeGitHubControlPlaneOperation({
   connectionClient,
-  codingSessionId,
+  codingSessionId = null,
+  mcSessionId = null,
+  sourceId = null,
+  workspaceId = null,
   request,
   allowedOperations = null,
   memoroFetchImpl = memoroFetch,
@@ -305,18 +308,44 @@ export async function executeGitHubControlPlaneOperation({
   ) {
     return safeOperationFailure(decodedRequest.request_id, 'operation_not_allowed');
   }
-  const session = stringOrNull(codingSessionId);
-  if (!connectionClient?.withGrant || !/^sess_[a-zA-Z0-9_-]{6,}$/.test(session || '')) {
+  const legacySession = stringOrNull(codingSessionId);
+  const v1Session = stringOrNull(mcSessionId);
+  const v1Source = stringOrNull(sourceId);
+  const v1Workspace = stringOrNull(workspaceId);
+  const legacy = legacySession !== null
+    && /^sess_[a-zA-Z0-9_-]{6,}$/u.test(legacySession)
+    && v1Session === null && v1Source === null && v1Workspace === null;
+  const v1 = v1Session !== null
+    && /^mcs_[a-f0-9]{24}$/u.test(v1Session)
+    && /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/u.test(v1Source || '')
+    && v1Source !== 'memoro-cloud'
+    && /^mcw_[a-f0-9]{24}$/u.test(v1Workspace || '')
+    && legacySession === null;
+  if (!connectionClient?.withGrant || (!legacy && !v1)) {
     return safeOperationFailure(decodedRequest.request_id, 'invalid_params');
   }
+  const session = v1 ? v1Session : legacySession;
+  const grantRequest = v1
+    ? {
+        purpose: 'session',
+        codingSessionId: session,
+        sourceId: v1Source,
+        workspaceId: v1Workspace,
+      }
+    : { purpose: 'session', codingSessionId: session };
+  const operationPath = v1
+    ? `/api/mc/v1/sources/${encodeURIComponent(v1Source)}`
+      + `/sessions/${encodeURIComponent(session)}`
+      + `/workspaces/${encodeURIComponent(v1Workspace)}/github/operations`
+    : `/api/mc/github/sessions/${encodeURIComponent(session)}/operations`;
   let raw;
   try {
     raw = await connectionClient.withGrant(
       'github',
-      { purpose: 'session', codingSessionId: session },
+      grantRequest,
       ({ token, apiUrl }) => memoroFetchImpl(
         apiUrl,
-        `/api/mc/github/sessions/${encodeURIComponent(session)}/operations`,
+        operationPath,
         { token, method: 'POST', body: decodedRequest },
       ),
     );

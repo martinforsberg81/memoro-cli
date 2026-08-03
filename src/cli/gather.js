@@ -4,7 +4,7 @@
  * Counterpart to `mc fanout`. Once phase agents have opened PRs, gather:
  *
  *   1. Looks up open PRs with head branch matching
- *      `fan/<plan-slug>/phase-*` via `gh pr list`.
+ *      `fan/<plan-slug>/phase-*` through the Memoro GitHub App.
  *   2. Ensures the local collection branch `wip/<plan-slug>` exists
  *      (creates it from each fanout entry's stored default-branch identity,
  *      or resolves the repository default when legacy metadata is absent).
@@ -23,45 +23,21 @@
  *   - auto-recovery on phase agent failure
  *   - cross-phase dependency detection
  *
- * Engineering shape: same dep-portal pattern as fanout. Defaults shell
- * out to real `gh` + `git`; tests inject stubs and verify the
- * conflict-surface branch.
+ * Engineering shape: same dep-portal pattern as fanout. Git remains local;
+ * GitHub access must be supplied by the typed Memoro GitHub App portal.
  */
 import { spawnSync } from 'node:child_process';
 import { readRegistry } from '../mc/registry.js';
 import { git as gitShell, branchExists, resolveDefaultBranch } from '../mc/git.js';
 
 /**
- * Default gh portal — matches the soft-degrade shape used by
- * `mc reconcile` (return [] / null on failure, never crash).
+ * No host GitHub authority is a valid fallback. The command fails closed
+ * until its caller supplies the typed Memoro GitHub App portal.
  */
 export function defaultGh() {
   return {
-    async prListByHeadPattern(_pattern) {
-      // gh has no glob on --head; we list all open PRs with the
-      // `--head` filter being a literal prefix that matches the
-      // shared `fan/<slug>/` namespace, then filter client-side.
-      // Use --search "head:fan/<slug>/" to narrow server-side.
-      const r = spawnSync('gh', [
-        'pr', 'list', '--state', 'open',
-        '--search', `head:${_pattern}`,
-        '--json', 'number,headRefName,title,url',
-      ], { encoding: 'utf8' });
-      if (r.status !== 0) return [];
-      try {
-        const arr = JSON.parse(r.stdout || '[]');
-        return Array.isArray(arr) ? arr : [];
-      } catch { return []; }
-    },
-    async createSummaryPr({ head, base, title, body }) {
-      const r = spawnSync('gh', [
-        'pr', 'create',
-        '--head', head, '--base', base,
-        '--title', title, '--body', body,
-      ], { encoding: 'utf8' });
-      if (r.status !== 0) return { ok: false, error: (r.stderr || '').trim() };
-      return { ok: true, url: (r.stdout || '').trim() };
-    },
+    async prListByHeadPattern() { throw githubPortalRequired(); },
+    async createSummaryPr() { throw githubPortalRequired(); },
   };
 }
 
@@ -168,7 +144,12 @@ export async function runWithDeps(opts, { gh, git, registry, cwd }) {
   // anything useful — surface and exit non-zero (don't soft-degrade
   // here; merging without knowing which PRs are open invites mistakes).
   const headPattern = `fan/${planSlug}/phase-`;
-  const prs = await gh.prListByHeadPattern(headPattern);
+  let prs;
+  try {
+    prs = await gh.prListByHeadPattern(headPattern);
+  } catch {
+    return emitError(opts, 'Memoro GitHub App capability is required for gather');
+  }
   if (!prs || prs.length === 0) {
     return emitError(opts, `no open PRs found for plan "${planSlug}" (expected head branches matching ${headPattern}*)`);
   }
@@ -180,7 +161,7 @@ export async function runWithDeps(opts, { gh, git, registry, cwd }) {
     .sort((a, b) => a.phaseN - b.phaseN);
 
   if (ordered.length === 0) {
-    return emitError(opts, `gh returned PRs but none had a parseable phase number for plan "${planSlug}"`);
+    return emitError(opts, `GitHub returned PRs but none had a parseable phase number for plan "${planSlug}"`);
   }
 
   const collectionBranch = `wip/${planSlug}`;
@@ -251,14 +232,19 @@ export async function runWithDeps(opts, { gh, git, registry, cwd }) {
     return emitError(opts, `merged ${merged.length} phases cleanly but failed to push ${collectionBranch}`);
   }
   const summaryBody = buildSummaryBody({ planSlug, merged, fromRef });
-  const create = await gh.createSummaryPr({
-    head: collectionBranch,
-    base: fromRef,
-    title: `Fanout: ${planSlug} (${merged.length} phases)`,
-    body: summaryBody,
-  });
+  let create;
+  try {
+    create = await gh.createSummaryPr({
+      head: collectionBranch,
+      base: fromRef,
+      title: `Fanout: ${planSlug} (${merged.length} phases)`,
+      body: summaryBody,
+    });
+  } catch {
+    return emitError(opts, 'merged + pushed, but the Memoro GitHub App capability is unavailable');
+  }
   if (!create.ok) {
-    return emitError(opts, `merged + pushed, but \`gh pr create\` failed: ${create.error}`);
+    return emitError(opts, `merged + pushed, but GitHub PR creation failed: ${create.error}`);
   }
 
   return emitSuccess(opts, { planSlug, collectionBranch, fromRef, merged, summaryUrl: create.url });
@@ -275,6 +261,12 @@ function parsePhaseN(headRef, planSlug) {
 
 function nonEmpty(value) {
   return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+function githubPortalRequired() {
+  const error = new Error('Memoro GitHub App capability is required');
+  error.code = 'MC_GITHUB_APP_PORTAL_REQUIRED';
+  return error;
 }
 
 function buildSummaryBody({ planSlug, merged, fromRef }) {

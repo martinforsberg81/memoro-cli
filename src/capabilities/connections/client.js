@@ -38,12 +38,20 @@ export function createConnectionClient(deps = {}) {
   async function withGrant(id, {
     purpose = 'connection',
     codingSessionId = null,
+    sourceId = null,
+    workspaceId = null,
   } = {}, use) {
     const provider = requireProvider(id);
     if (provider.custody !== 'control_plane') {
       throw new Error(`${provider.label} does not use control-plane grants.`);
     }
-    return identity.withGrant({ provider: id, purpose, codingSessionId }, use);
+    return identity.withGrant({
+      provider: id,
+      purpose,
+      codingSessionId,
+      sourceId,
+      workspaceId,
+    }, use);
   }
 
   async function call(id, operation, params = {}) {

@@ -37,6 +37,8 @@ export function sessionHomePaths({
       ephemeralRunPath,
       runtimeHostManifestPath: join(ephemeralRunPath, 'host.json'),
       runtimeHostSocketPath: join(ephemeralRunPath, 'terminal.sock'),
+      githubCapabilitySocketPath: join(ephemeralRunPath, 'github.sock'),
+      runtimeToolsBinPath: join(ephemeralRunPath, 'tools', 'bin'),
       workspacesPath: join(home, 'workspaces'),
       conversationsPath: join(home, 'conversations'),
       generationsPath: join(home, 'generations'),

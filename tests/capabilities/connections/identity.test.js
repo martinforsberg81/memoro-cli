@@ -24,6 +24,52 @@ function authError() {
 }
 
 describe('createRefreshingIdentityBroker', () => {
+  test('sends and verifies the exact V1 source and workspace grant identity', async () => {
+    const calls = [];
+    const request = {
+      provider: 'github',
+      purpose: 'session',
+      codingSessionId: 'mcs_000000000000000000000001',
+      sourceId: 'machine_test',
+      workspaceId: 'mcw_000000000000000000000001',
+    };
+    const broker = createRefreshingIdentityBroker({
+      token: 'launch-token',
+      apiUrl: 'https://meetmemoro.test',
+      memoroFetch: async (apiUrl, path, options) => {
+        calls.push({ apiUrl, path, options });
+        return {
+          ok: true,
+          schema: 1,
+          grant: `mcg_${'c'.repeat(64)}`,
+          provider: 'github',
+          purpose: 'session',
+          coding_session_id: request.codingSessionId,
+          expires_at: '2026-08-03T12:05:00.000Z',
+          source: { id: request.sourceId, kind: 'local' },
+          capability_families: ['session.read'],
+          resource: {
+            type: `github.workspace:${request.workspaceId}`,
+            id: '301',
+          },
+        };
+      },
+    });
+
+    const result = await broker.withGrant(request, async (grant) => grant.resource.id);
+
+    assert.equal(result, '301');
+    assert.equal(calls[0].path, '/api/mc/capability-grants');
+    assert.deepEqual(calls[0].options.body, {
+      schema: 1,
+      provider: 'github',
+      purpose: 'session',
+      coding_session_id: request.codingSessionId,
+      source_id: request.sourceId,
+      workspace_id: request.workspaceId,
+    });
+  });
+
   test('mints with the bound token and never touches the keychain on success', async () => {
     const mints = [];
     const broker = createRefreshingIdentityBroker({

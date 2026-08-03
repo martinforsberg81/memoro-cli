@@ -33,7 +33,6 @@
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { spawnSync } from 'node:child_process';
 
 import { detectSquashPhantom } from './squash-phantom.js';
 
@@ -106,36 +105,14 @@ export function defaultReadTranscript(worktreePath, {
 }
 
 /**
- * Default gh portal — same shape as the one in squash-phantom.js,
- * extended with `prInfo(number)` for transcript-mention look-up.
- * Soft-degrades to null / [] on any failure; classifier treats those
- * as "no signal" and skips the bucket.
+ * GitHub evidence is optional for this classifier, but host `gh` is never
+ * authority. Callers may inject the typed Memoro GitHub App portal; without
+ * it the GitHub-derived buckets stay empty.
  */
 export function defaultGh() {
   return {
-    async prListMerged(branch) {
-      const r = spawnSync('gh', [
-        'pr', 'list', '--head', branch, '--state', 'merged',
-        '--json', 'number,mergedAt',
-      ], { encoding: 'utf8' });
-      if (r.status !== 0) return [];
-      try {
-        const arr = JSON.parse(r.stdout || '[]');
-        return Array.isArray(arr) ? arr : [];
-      } catch { return []; }
-    },
-    async prInfo(number) {
-      const r = spawnSync('gh', [
-        'pr', 'view', String(number),
-        '--json', 'number,mergedAt,state,title',
-      ], { encoding: 'utf8' });
-      if (r.status !== 0) return null;
-      try {
-        const obj = JSON.parse(r.stdout || 'null');
-        if (!obj || typeof obj !== 'object') return null;
-        return obj;
-      } catch { return null; }
-    },
+    async prListMerged() { return []; },
+    async prInfo() { return null; },
   };
 }
 

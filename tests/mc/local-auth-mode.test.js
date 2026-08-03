@@ -33,7 +33,7 @@ describe('local auth mode', () => {
     assert.equal(result.reason, undefined);
   });
 
-  test('repo, config, and inherited environment cannot opt in', () => {
+  test('repo, config, and inherited environment cannot select another path', () => {
     const mode = resolveLocalAuthMode({
       managedPortable: false,
       env: {
@@ -48,20 +48,20 @@ describe('local auth mode', () => {
       },
     });
 
-    assert.equal(mode, LOCAL_AUTH_MODES.NATIVE);
+    assert.equal(mode, LOCAL_AUTH_MODES.MANAGED_PORTABLE);
   });
 
   test('named lifecycle commands default managed while bare mc and wrap stay native', () => {
     assert.equal(
-      resolveLocalAuthModeFromArgv(['new', 'work', '--managed-portable']),
+      resolveLocalAuthModeFromArgv(['new', 'work']),
       LOCAL_AUTH_MODES.MANAGED_PORTABLE,
     );
     assert.equal(
-      resolveLocalAuthModeFromArgv(['open', 'work', '--managed-portable']),
+      resolveLocalAuthModeFromArgv(['open', 'work']),
       LOCAL_AUTH_MODES.MANAGED_PORTABLE,
     );
     assert.equal(
-      resolveLocalAuthModeFromArgv(['resume', 'work', '--managed-portable']),
+      resolveLocalAuthModeFromArgv(['resume', 'work']),
       LOCAL_AUTH_MODES.MANAGED_PORTABLE,
     );
     assert.equal(
@@ -86,28 +86,18 @@ describe('local auth mode', () => {
     );
   });
 
-  test('--native is the only route to native custody on new and open', async () => {
+  test('lifecycle parsers reject removed execution-mode flags', async () => {
     const { parseArgs: newArgs } = await import('../../src/cli/new.js');
     const { parseArgs: openArgs } = await import('../../src/cli/resume.js');
 
-    // Absent the explicit flag, both verbs stay on managed custody.
-    for (const argv of [['s'], ['s', '--claude'], ['s', '--managed-portable']]) {
-      assert.equal(openArgs(argv).managedPortable, true);
-      assert.equal(newArgs(argv).managedPortable, true);
+    assert.equal(openArgs(['s']).error, undefined);
+    assert.equal(newArgs(['s']).error, undefined);
+    for (const flag of ['--native', '--managed-portable']) {
+      assert.match(openArgs(['s', flag]).error, /unknown flag/);
+      assert.match(newArgs(['s', flag]).error, /unknown flag/);
     }
-    // The flag opts out, and only for the invocation that carries it.
-    assert.equal(openArgs(['s', '--claude', '--native']).managedPortable, false);
-    assert.equal(newArgs(['s', '--claude', '--native']).managedPortable, false);
-    assert.equal(
-      resolveLocalAuthMode({ managedPortable: openArgs(['s', '--native']).managedPortable }),
-      LOCAL_AUTH_MODES.NATIVE,
-    );
-    // Native is a valid, non-portable container — never a certified one.
-    const evaluated = evaluateLocalAuthMode(LOCAL_AUTH_MODES.NATIVE);
-    assert.equal(evaluated.ok, true);
-    assert.equal(evaluated.state, LOCAL_AUTH_STATES.NATIVE_UNMANAGED);
-    assert.equal(evaluated.portable, false);
-    assert.notEqual(evaluated.certified, true);
+    assert.equal(resolveLocalAuthMode({ managedPortable: false }),
+      LOCAL_AUTH_MODES.MANAGED_PORTABLE);
   });
 
   test('unknown modes fail closed without echoing caller data', () => {

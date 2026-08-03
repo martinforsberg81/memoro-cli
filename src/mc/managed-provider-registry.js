@@ -25,6 +25,7 @@ export const MANAGED_PROVIDER_HANDOFF_SOURCE_SCHEMA =
   'mc-managed-provider-handoff-source/v1';
 
 const PROVIDER_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
+const SESSION_OWNER_ID_RE = /^(?:sess_[A-Za-z0-9_-]{6,}|mcs_[a-f0-9]{24})$/u;
 const REQUIRED_FUNCTIONS = Object.freeze([
   'prepareCredentialDomain',
   'resolveLaunch',
@@ -470,7 +471,7 @@ export function validateManagedCredentialBoundaryEvidence(value) {
     && value.schema === 'mc-managed-credential-boundary-evidence-v1'
     && PROVIDER_ID.test(value.provider_adapter || '')
     && PROVIDER_ID.test(value.boundary_profile || '')
-    && /^sess_[A-Za-z0-9_-]{6,}$/u.test(value.session_id || '')
+    && SESSION_OWNER_ID_RE.test(value.session_id || '')
     && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu
       .test(value.generation || '')
     && /^[A-Za-z0-9_-]{43}$/u.test(value.launch_nonce || '')

@@ -123,7 +123,7 @@ describe('mc resume <name>', () => {
       tool_session_id: '019dbb46-5772-7493-a627-f8ae48954a64',
       tool_session_source: 'codex',
     };
-    const status = await runResume(['native-live', '--managed-portable'], {
+    const status = await runResume(['native-live'], {
       stderr: { write: (value) => stderr.push(value) },
       stdout: { write() {} },
       stdin: {},
@@ -154,7 +154,7 @@ describe('mc resume <name>', () => {
       coding_session_id: 'sess_managed_live',
     };
     let attached = 0;
-    const status = await runResume(['managed-live', '--managed-portable'], {
+    const status = await runResume(['managed-live'], {
       findEntry: () => entry,
       reconcileManagedSession: async () => ({
         ok: true,
@@ -433,7 +433,6 @@ describe('mc resume <name>', () => {
     try {
       const status = await runResume([
         'managed-pre-handoff',
-        '--managed-portable',
         '--codex',
       ], {
         findEntry: () => entry,
@@ -542,7 +541,6 @@ describe('mc resume <name>', () => {
     try {
       const status = await runResume([
         'managed-stale-presence',
-        '--managed-portable',
       ], {
         findEntry: () => entry,
         recoverProviderSwitch: async () => ({ ok: true, active: false }),
@@ -647,7 +645,6 @@ describe('mc resume <name>', () => {
       const status = await runResume([
         'managed-switch',
         '--codex',
-        '--managed-portable',
       ], {
         stdin: { isTTY: true },
         stdout: { isTTY: true, write() {} },
@@ -2164,8 +2161,8 @@ describe('mc resume <name>', () => {
   test('tool flags reject conflicts and unknown values', () => {
     assert.match(parseArgs(['r', '--tool', 'claude', '--codex']).error, /conflicting/);
     assert.match(parseArgs(['r', '--tool']).error, /requires a value/);
-    assert.equal(parseArgs(['r']).managedPortable, true);
-    assert.equal(parseArgs(['r', '--managed-portable']).managedPortable, true);
+    assert.equal(parseArgs(['r']).error, undefined);
+    assert.match(parseArgs(['r', '--managed-portable']).error, /unknown flag/);
   });
 
   test('prelaunch uses the registry tool adapter and broker resume payload', async () => {

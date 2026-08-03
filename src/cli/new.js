@@ -38,7 +38,6 @@ import { DEFAULT_TOOL, readConfig } from '../lib/config.js';
 import { launchBrokerOwnedSession } from '../runtime/broker/launch-client.js';
 import { readRepoLocalConfig, readRepoPolicyConfig, resolveEffectiveConfig } from '../mc/config-model.js';
 import { buildNewSessionLaunchIntent } from '../mc/session-intent.js';
-import { mintToolSessionForLaunch } from '../mc/tool-session.js';
 import {
   LOCAL_AUTH_MODES,
   requireLocalAuthMode,
@@ -133,18 +132,12 @@ export async function run(rawArgv) {
     return 2;
   }
 
-  const localAuthMode = resolveLocalAuthMode({ managedPortable: opts.managedPortable });
+  const localAuthMode = resolveLocalAuthMode();
   const authMode = requireLocalAuthMode(localAuthMode);
   if (!authMode.ok) {
     console.error(`mc: ${authMode.error}`);
     return 1;
   }
-  // Announced, never silent: the weaker container is only ever reached by an
-  // explicit --native, so the user always knows which boundary they got.
-  if (localAuthMode === LOCAL_AUTH_MODES.NATIVE && !opts.json) {
-    console.error('mc: --native — the tool uses its own sign-in; mc vault custody and the certified credential boundary are not in effect.');
-  }
-
   // §11d: friendly first-run hint when both sentinel AND keychain
   // token miss. Runs after arg validation so `mc new --json` and
   // `--help` semantics aren't changed for fresh installs in a
@@ -319,43 +312,17 @@ export async function launchNewSession({
   focus = null,
   apiArgv = [],
   env = process.env,
-  localAuthMode = LOCAL_AUTH_MODES.NATIVE,
+  localAuthMode = LOCAL_AUTH_MODES.MANAGED_PORTABLE,
   stderr = process.stderr,
   deps = {},
 } = {}) {
   const authMode = (deps.requireLocalAuthMode || requireLocalAuthMode)(localAuthMode);
-  if (!authMode?.ok) {
-    stderr.write(`mc: ${authMode?.error || 'local auth mode unavailable'}\n`);
+  if (!authMode?.ok || localAuthMode !== LOCAL_AUTH_MODES.MANAGED_PORTABLE) {
+    stderr.write(`mc: ${authMode?.error || 'certified execution is required'}\n`);
     return 1;
   }
 
   const launchTool = entry?.tool ? resolveToolInput(entry.tool) : null;
-  if (localAuthMode === LOCAL_AUTH_MODES.NATIVE) {
-    const materialise = deps.materialiseVaultBeforeLaunch
-      || (await import('../vault/engine/startup.js')).materialiseVaultBeforeLaunch;
-
-    try {
-      const res = await materialise({
-        sessionId: entry.legacy_session_key || entry.session_id || entry.name,
-        worktreePath: worktreePath || undefined,
-        adapters: launchTool?.adapter ? [launchTool.adapter] : undefined,
-      });
-      if (!res.ok && res.hint) {
-        stderr.write(`mc: ${res.hint}\n`);
-      }
-    } catch (err) {
-      stderr.write(`mc: vault materialise failed (${err.message}); continuing without tokens\n`);
-    }
-  }
-
-  // Mint the native tool session id up front when the adapter supports
-  // it (claude). The id travels to the tool as launch argv and into the
-  // registry on the launch commit, so open/end never depend on post-hoc
-  // transcript discovery for these sessions.
-  const minted = (deps.mintToolSessionForLaunch || mintToolSessionForLaunch)({
-    launchTool,
-    localAuthMode,
-  });
 
   const launch = deps.launchBrokerOwnedSession || launchBrokerOwnedSession;
   const result = await launch({
@@ -367,9 +334,9 @@ export async function launchNewSession({
       apiArgv,
       env,
       localAuthMode,
-      argv: minted?.argv || [],
+      argv: [],
     }),
-    mintedToolSessionId: minted?.sessionId || null,
+    mintedToolSessionId: null,
     stderr,
     onLaunched: ({ codingSessionId, brokerSocketPath = null, hostKind = null }) => {
       const upsert = deps.upsertEntry || upsertEntry;
@@ -379,12 +346,6 @@ export async function launchNewSession({
         ...(entry.repository_id ? { repository_id: entry.repository_id } : {}),
         coding_session_id: codingSessionId,
         session_state: 'live',
-        ...(minted
-          ? {
-              tool_session_id: minted.sessionId,
-              tool_session_source: minted.source,
-            }
-          : {}),
       };
       if (brokerSocketPath) patch.broker_socket_path = brokerSocketPath;
       if (hostKind) patch.host_kind = hostKind;
@@ -415,11 +376,6 @@ export function parseArgs(argv) {
     tool: null,
     noLaunch: false,
     json: false,
-    // Named lifecycle launches use managed custody by default. Keep accepting
-    // --managed-portable as a no-op compatibility spelling for older scripts.
-    // `--native` is the explicit opt-out below: the user chooses the weaker
-    // container deliberately; no failed gate may ever select it for them.
-    managedPortable: true,
   };
   const positionals = [];
   let positionalOnly = false;
@@ -446,8 +402,6 @@ export function parseArgs(argv) {
     }
     if (a === '--no-launch') { opts.noLaunch = true; continue; }
     if (a === '--json') { opts.json = true; continue; }
-    if (a === '--managed-portable') { opts.managedPortable = true; continue; }
-    if (a === '--native') { opts.managedPortable = false; continue; }
     if (a.startsWith('-')) { return { error: `unknown flag: ${a}` }; }
     positionals.push(a);
   }
@@ -461,5 +415,5 @@ export function parseArgs(argv) {
 }
 
 function printUsage() {
-  console.error('Usage: mc new <name> [<task>] [--from <ref>] [--tool claude|codex|gemini | --claude | --codex] [--native] [--no-launch] [--json]');
+  console.error('Usage: mc new <name> [<task>] [--from <ref>] [--tool claude|codex|gemini | --claude | --codex] [--no-launch] [--json]');
 }
