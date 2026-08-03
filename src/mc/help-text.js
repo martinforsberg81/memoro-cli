@@ -44,10 +44,8 @@ START OPTIONS
   mc new <name> --from <ref>      Branch from a ref other than HEAD
   mc open <name> --codex          Use Codex only before first launch or for Codex sessions
   mc open <name> --claude         Use Claude Code only before first launch or for Claude sessions
-  mc new|open <name> --native     Run the tool on its own sign-in instead of mc
-                                  vault custody. The certified credential
-                                  boundary does not apply; mc says so on every
-                                  launch. Managed custody stays the default.
+  All session launches use the certified execution path. If its readiness
+  checks fail, mc stops before starting the coding tool.
 
 SETUP
   mc                              First run signs in to Memoro with browser device auth

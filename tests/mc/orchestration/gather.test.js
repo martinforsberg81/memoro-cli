@@ -434,7 +434,7 @@ describe('mc gather — empty / dry-run / errors', () => {
     assert.equal(git.calls.push.length, 0);
   });
 
-  test('gh pr create failure → error after successful push', async () => {
+  test('GitHub PR creation failure → error after successful push', async () => {
     const prs = [{ number: 11, headRefName: 'fan/p/phase-1', title: 'p1', url: 'u' }];
     const gh = makeFakeGh({ prs, createOk: false });
     const git = makeFakeGit();
@@ -446,6 +446,6 @@ describe('mc gather — empty / dry-run / errors', () => {
       ),
     );
     assert.equal(status, 1);
-    assert.match(stderr, /`gh pr create` failed/);
+    assert.match(stderr, /GitHub PR creation failed/);
   });
 });

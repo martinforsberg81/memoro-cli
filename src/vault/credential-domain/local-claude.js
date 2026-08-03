@@ -70,12 +70,14 @@ const PROVIDER_HOOK_RUNNER = join(
 const TOOL = 'claude-code';
 const LEASE_SCHEMA = 'mc-managed-provider-domain-lease/v1';
 const MAX_USER_SETTINGS_BYTES = 1024 * 1024;
+const SESSION_OWNER_ID_RE = /^(?:sess_[A-Za-z0-9_-]{6,}|mcs_[a-f0-9]{24})$/u;
 
 export async function prepareLocalClaudeCredentialDomain({
   codingSessionId,
   domainGeneration = null,
   providerSessionId = null,
   githubCapability = false,
+  githubSocketPath = null,
   cwd,
   tool,
   portal,
@@ -83,11 +85,19 @@ export async function prepareLocalClaudeCredentialDomain({
   root = mcHome(),
   deps = {},
 } = {}) {
+  const certifiedGitHubSocketPath = join(
+    root || '/',
+    'run',
+    'sessions',
+    codingSessionId || 'invalid',
+    'github.sock',
+  );
   if (tool !== TOOL
-    || !/^sess_[A-Za-z0-9_-]{6,}$/u.test(codingSessionId || '')
+    || !SESSION_OWNER_ID_RE.test(codingSessionId || '')
     || !isAbsolute(cwd || '')
     || !isAbsolute(root || '')
-    || (domainGeneration != null && !uuidV4(domainGeneration))) {
+    || (domainGeneration != null && !uuidV4(domainGeneration))
+    || (githubSocketPath !== null && githubSocketPath !== certifiedGitHubSocketPath)) {
     return failure('managed-claude-request-invalid');
   }
   const certified = (deps.inspectCertification
@@ -151,7 +161,9 @@ export async function prepareLocalClaudeCredentialDomain({
   const deniedWritePaths = [...deniedReadPaths];
   const allowedUnixSocketPaths = [
     sessionHostPaths(codingSessionId, { root }).artifactSocketPath,
-    ...(githubCapability === true ? [join(root, `${codingSessionId}.sock`)] : []),
+    ...(githubCapability === true
+      ? [githubSocketPath || join(root, `${codingSessionId}.sock`)]
+      : []),
   ];
   const launchNonce = randomBytes(32).toString('base64url');
   let leaseAcquired = false;
@@ -407,7 +419,7 @@ export function inspectPreparedLocalClaudeCredentialDomain({
   codingSessionId,
   deps = {},
 } = {}) {
-  if (!isAbsolute(root || '') || !/^sess_[A-Za-z0-9_-]{6,}$/u.test(codingSessionId || '')) {
+  if (!isAbsolute(root || '') || !SESSION_OWNER_ID_RE.test(codingSessionId || '')) {
     return failure('managed-recovery-request-invalid');
   }
   const leasePath = join(
@@ -458,7 +470,7 @@ export function inspectLocalClaudeCredentialDomainPresence({
   codingSessionId,
   deps = {},
 } = {}) {
-  if (!isAbsolute(root || '') || !/^sess_[A-Za-z0-9_-]{6,}$/u.test(codingSessionId || '')) {
+  if (!isAbsolute(root || '') || !SESSION_OWNER_ID_RE.test(codingSessionId || '')) {
     return { kind: 'unknown', reason: 'managed-recovery-request-invalid' };
   }
   const sessionPart = safePart(codingSessionId);
@@ -510,7 +522,7 @@ export function confirmLocalClaudeCredentialDomainAbsent({
   domainGeneration,
 } = {}) {
   if (!isAbsolute(root || '')
-    || !/^sess_[A-Za-z0-9_-]{6,}$/u.test(codingSessionId || '')
+    || !SESSION_OWNER_ID_RE.test(codingSessionId || '')
     || !uuidV4(domainGeneration)) {
     return failure('managed-domain-cleanup-identity-invalid');
   }
@@ -629,7 +641,7 @@ function resolveOwnedPaths(descriptor) {
     || descriptor.schema !== MANAGED_CLAUDE_DOMAIN_SCHEMA
     || descriptor.provider_adapter !== MANAGED_CLAUDE_PROVIDER_ID
     || !uuidV4(descriptor.generation)
-    || !/^sess_[A-Za-z0-9_-]{6,}$/u.test(descriptor.session_id || '')
+    || !SESSION_OWNER_ID_RE.test(descriptor.session_id || '')
     || !isAbsolute(descriptor.domain_path || '')
     || !isAbsolute(descriptor.executor_root || '')
     || !isAbsolute(descriptor.lease_path || '')) return null;

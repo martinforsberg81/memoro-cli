@@ -16,6 +16,38 @@ const DESCRIPTOR = {
 };
 
 describe('common identity and connection client', () => {
+  test('forwards exact V1 grant coordinates through the common client', async () => {
+    const requests = [];
+    const client = createConnectionClient({
+      identityBroker: {
+        withGrant: async (request, use) => {
+          requests.push(request);
+          return use({ token: 'grant', apiUrl: 'https://memoro.test' });
+        },
+      },
+      providers: [{
+        id: 'github',
+        label: 'GitHub',
+        custody: 'control_plane',
+        status: async () => DESCRIPTOR,
+      }],
+    });
+    const result = await client.withGrant('github', {
+      purpose: 'session',
+      codingSessionId: 'mcs_000000000000000000000001',
+      sourceId: 'machine_test',
+      workspaceId: 'mcw_000000000000000000000001',
+    }, ({ token }) => token);
+    assert.equal(result, 'grant');
+    assert.deepEqual(requests, [{
+      provider: 'github',
+      purpose: 'session',
+      codingSessionId: 'mcs_000000000000000000000001',
+      sourceId: 'machine_test',
+      workspaceId: 'mcw_000000000000000000000001',
+    }]);
+  });
+
   test('uses the device identity only for exchange and gives providers only the short grant', async () => {
     const calls = [];
     const identity = createLocalIdentityBroker({

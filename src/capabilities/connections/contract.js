@@ -39,11 +39,29 @@ export function decodeConnectionDescriptor(value, { providerId = null } = {}) {
   return structuredClone(value);
 }
 
-export function decodeBrokerGrant(value, { provider, purpose, codingSessionId = null } = {}) {
+export function decodeBrokerGrant(value, {
+  provider,
+  purpose,
+  codingSessionId = null,
+  sourceId = null,
+  workspaceId = null,
+} = {}) {
+  const expectedWorkspaceType = workspaceId === null
+    ? null
+    : `github.workspace:${workspaceId}`;
   if (!plain(value) || value.ok !== true || value.schema !== 1
       || typeof value.grant !== 'string' || !/^mcg_[a-f0-9]{64}$/.test(value.grant)
       || value.provider !== provider || value.purpose !== purpose
       || (value.coding_session_id ?? null) !== codingSessionId
+      || (sourceId !== null && (
+        value.source?.id !== sourceId || value.source?.kind !== 'local'
+      ))
+      || (workspaceId !== null && (
+        !/^mcw_[a-f0-9]{24}$/u.test(workspaceId)
+          || value.resource?.type !== expectedWorkspaceType
+          || !/^[1-9][0-9]*$/u.test(value.resource?.id || '')
+      ))
+      || ((sourceId === null) !== (workspaceId === null))
       || !Number.isFinite(Date.parse(value.expires_at))
       || !Array.isArray(value.capability_families)
       || !value.capability_families.every((item) => typeof item === 'string')) return null;

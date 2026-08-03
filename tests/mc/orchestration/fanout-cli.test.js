@@ -179,12 +179,12 @@ describe('mc gather — CLI surface', () => {
     assert.match(r.stderr, /unknown flag/);
   });
 
-  test('no PRs (gh missing from PATH → portal returns []) → exit 1 stderr', () => {
+  test('missing typed GitHub portal fails closed before PR discovery', () => {
     const r = runMc(['gather', 'someplan'], {
       cwd: repo.dir,
       env: { MC_HOME: repo.mcHome, MC_ORPHAN_PID_DIR: pidDir, HOME: repo.root },
     });
     assert.equal(r.status, 1);
-    assert.match(r.stderr, /no open PRs found for plan "someplan"/);
+    assert.match(r.stderr, /Memoro GitHub App capability is required for gather/);
   });
 });

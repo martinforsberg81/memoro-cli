@@ -29,8 +29,6 @@ import { runMc, parseJsonOrNull } from '../../mc/_helpers/cli.js';
 import { makeTempRepo, git } from '../../mc/_helpers/git-fixture.js';
 import { makeEntry, writeRegistry } from '../../mc/_helpers/registry-fixture.js';
 import { launchNewSession } from '../../../src/cli/new.js';
-import * as claudeAdapter from '../../../src/adapters/claude-code.js';
-import * as codexAdapter from '../../../src/adapters/codex.js';
 import { LOCAL_AUTH_MODES } from '../../../src/mc/local-auth-mode.js';
 
 describe('mc new', () => {
@@ -382,7 +380,7 @@ describe('mc new', () => {
     assert.equal(parseJsonOrNull(r.stdout).focus, '-leading task');
   });
 
-  test('prelaunch for --codex uses only the codex vault adapter and broker launch payload', async () => {
+  test('certified Codex prelaunch never materialises the legacy vault path', async () => {
     const materialiseCalls = [];
     const launchCalls = [];
     const upserts = [];
@@ -410,18 +408,14 @@ describe('mc new', () => {
     });
 
     assert.equal(status, 0);
-    assert.equal(materialiseCalls.length, 1);
-    assert.equal(materialiseCalls[0].sessionId, 'codex-prelaunch');
-    assert.equal(materialiseCalls[0].worktreePath, '/tmp/memoro-new-codex');
-    assert.deepEqual(materialiseCalls[0].adapters, [codexAdapter]);
-    assert.notDeepEqual(materialiseCalls[0].adapters, [claudeAdapter]);
+    assert.equal(materialiseCalls.length, 0);
 
     assert.equal(launchCalls.length, 1);
     assert.equal(launchCalls[0].cwd, '/tmp/memoro-new-codex');
     assert.equal(launchCalls[0].sessionName, 'codex-prelaunch');
     assert.equal(launchCalls[0].tool, 'codex');
     assert.equal(launchCalls[0].focus, 'build the first map');
-    assert.equal(launchCalls[0].localAuthMode, LOCAL_AUTH_MODES.NATIVE);
+    assert.equal(launchCalls[0].localAuthMode, LOCAL_AUTH_MODES.MANAGED_PORTABLE);
     assert.deepEqual(launchCalls[0].argv, []);
     assert.deepEqual(launchCalls[0].env, { PATH: '/bin', MC_GROUNDING_TOOL: 'claude-code' });
     assert.deepEqual(upserts, [{
@@ -431,10 +425,9 @@ describe('mc new', () => {
     }]);
   });
 
-  test('claude prelaunch mints the tool session id, sends it as launch argv, and persists it on the launch commit', async () => {
+  test('certified Claude prelaunch leaves conversation identity to the adapter contract', async () => {
     const launchCalls = [];
     const upserts = [];
-    const mintedId = '3e6fc8d2-1ad9-4428-a351-8f7abfa088a6';
     const status = await launchNewSession({
       entry: { name: 'claude-prelaunch', tool: 'claude' },
       worktreePath: '/tmp/memoro-new-claude',
@@ -442,15 +435,7 @@ describe('mc new', () => {
       stderr: { write() {} },
       deps: {
         materialiseVaultBeforeLaunch: async () => ({ ok: true, materialised: [], skipped: [] }),
-        mintToolSessionForLaunch: ({ launchTool, localAuthMode }) => {
-          assert.equal(launchTool?.id, 'claude-code');
-          assert.equal(localAuthMode, LOCAL_AUTH_MODES.NATIVE);
-          return {
-            sessionId: mintedId,
-            source: 'claude-code',
-            argv: ['--session-id', mintedId],
-          };
-        },
+        mintToolSessionForLaunch: () => assert.fail('legacy tool-session mint must not run'),
         launchBrokerOwnedSession: async (arg) => {
           launchCalls.push(arg);
           await arg.onLaunched?.({ codingSessionId: 'sess_new_claude' });
@@ -465,14 +450,12 @@ describe('mc new', () => {
 
     assert.equal(status, 0);
     assert.equal(launchCalls.length, 1);
-    assert.deepEqual(launchCalls[0].argv, ['--session-id', mintedId]);
-    assert.equal(launchCalls[0].mintedToolSessionId, mintedId);
+    assert.deepEqual(launchCalls[0].argv, []);
+    assert.equal(launchCalls[0].mintedToolSessionId, null);
     assert.deepEqual(upserts, [{
       name: 'claude-prelaunch',
       coding_session_id: 'sess_new_claude',
       session_state: 'live',
-      tool_session_id: mintedId,
-      tool_session_source: 'claude-code',
     }]);
   });
 

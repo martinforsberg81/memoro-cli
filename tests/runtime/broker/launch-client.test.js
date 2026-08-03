@@ -2099,28 +2099,31 @@ describe('brokerSessionPaths', () => {
   });
 });
 
-test('a refused managed launch always names the command that opens the session', () => {
+test('a refused certified launch names repair and exact retry without fallback', () => {
   // The session and its worktree already exist when the boundary is refused,
   // so the user must never be left without a next step.
   const remedy = managedBoundaryRemedy({
     sessionName: 'mc-test-claude',
     codingSessionId: 'sess_abcdef',
   });
-  assert.match(remedy, /mc open mc-test-claude --native/);
+  assert.match(remedy, /mc auth status/);
+  assert.match(remedy, /mc open mc-test-claude/);
+  assert.match(remedy, /No fallback launch was attempted/);
 
   // Falls back through label to the coding session id, and never renders an
   // empty or undefined target.
   assert.match(
     managedBoundaryRemedy({ label: 'from-label', codingSessionId: 'sess_abcdef' }),
-    /mc open from-label --native/,
+    /mc open from-label/,
   );
   assert.match(
     managedBoundaryRemedy({ codingSessionId: 'sess_abcdef' }),
-    /mc open sess_abcdef --native/,
+    /mc open sess_abcdef/,
   );
   for (const input of [{}, { sessionName: '   ' }, { sessionName: null, label: '' }]) {
     const fallback = managedBoundaryRemedy(input);
-    assert.match(fallback, /--native/);
-    assert.doesNotMatch(fallback, /undefined|null|mc open\s+--native/);
+    assert.match(fallback, /mc auth status/);
+    assert.match(fallback, /No fallback launch was attempted/);
+    assert.doesNotMatch(fallback, /undefined|null/);
   }
 });

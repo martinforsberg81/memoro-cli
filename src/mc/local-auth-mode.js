@@ -17,13 +17,11 @@ const MANAGED_PORTABLE_COMMANDS = new Set(['new', 'open', 'resume']);
  * Repo config, inherited environment, and stored session state are
  * deliberately not inputs to this resolver.
  *
- * `managedPortable: false` remains an internal compatibility input while the
- * old bare-mc/wrap path is retired; lifecycle argv never selects it.
+ * There is no argument, configuration, or environment input that can select a
+ * different lifecycle execution path.
  */
-export function resolveLocalAuthMode({ managedPortable = true } = {}) {
-  return managedPortable === true
-    ? LOCAL_AUTH_MODES.MANAGED_PORTABLE
-    : LOCAL_AUTH_MODES.NATIVE;
+export function resolveLocalAuthMode() {
+  return LOCAL_AUTH_MODES.MANAGED_PORTABLE;
 }
 
 /**

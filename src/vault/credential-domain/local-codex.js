@@ -71,6 +71,7 @@ export const LOCAL_CODEX_RELEASE_UNTRUSTED = 'managed-portable-codex-release-unt
 
 const TOOL_AUTH_LABEL = 'tool-auth:codex';
 const LEGACY_TOOL_AUTH_LABEL = 'tool_auth.codex';
+const SESSION_OWNER_ID_RE = /^(?:sess_[A-Za-z0-9_-]{6,}|mcs_[a-f0-9]{24})$/u;
 const BOUNDARY_CANARY_ENV_NAME = 'MC_BOUNDARY_CANARY';
 const PROBE_TIMEOUT_MS = 30_000;
 const MAX_AUTH_BYTES = 2 * 1024 * 1024;
@@ -156,6 +157,7 @@ export async function prepareLocalCodexCredentialDomain({
   domainGeneration = null,
   providerSessionId = null,
   githubCapability = false,
+  githubSocketPath: requestedGitHubSocketPath = null,
   cwd,
   tool,
   portal,
@@ -163,10 +165,20 @@ export async function prepareLocalCodexCredentialDomain({
   root = mcHome(),
   deps = {},
 } = {}) {
+  const certifiedGitHubSocketPath = join(
+    root,
+    'run',
+    'sessions',
+    codingSessionId || 'invalid',
+    'github.sock',
+  );
   if (tool !== 'codex') {
     return safeFailure('managed-portable-tool-unsupported');
   }
-  if (!/^sess_[A-Za-z0-9_-]{6,}$/.test(codingSessionId || '') || !isAbsolute(cwd || '')) {
+  if (!SESSION_OWNER_ID_RE.test(codingSessionId || '')
+    || !isAbsolute(cwd || '')
+    || (requestedGitHubSocketPath !== null
+      && requestedGitHubSocketPath !== certifiedGitHubSocketPath)) {
     return safeFailure('managed-portable-request-invalid');
   }
   if (domainGeneration != null && !isUuidV4(domainGeneration)) {
@@ -204,7 +216,8 @@ export async function prepareLocalCodexCredentialDomain({
   const executorBin = join(executorRoot, 'bin');
   const probeDir = join(executorRoot, 'probe');
   const boundarySocketPath = managedBoundarySocketPath();
-  const githubSocketPath = managedGitHubSocketPath({ root, codingSessionId });
+  const githubSocketPath = requestedGitHubSocketPath
+    || managedGitHubSocketPath({ root, codingSessionId });
   const manifestPath = join(domainPath, 'manifest.json');
   const providerConfigPath = join(codexHome, `${MANAGED_CODEX_PROFILE}.config.toml`);
   const providerHookPath = join(codexHome, 'mc-provider-artifact-observer.json');
@@ -1639,7 +1652,7 @@ export function managedGitHubSocketPath({
   root = mcHome(),
   codingSessionId,
 } = {}) {
-  if (!/^sess_[A-Za-z0-9_-]{6,}$/.test(codingSessionId || '')) {
+  if (!SESSION_OWNER_ID_RE.test(codingSessionId || '')) {
     throw new TypeError('valid codingSessionId is required');
   }
   return join(root, `${codingSessionId}.sock`);

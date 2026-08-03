@@ -16,13 +16,11 @@
  *     Catches the common case (single-commit branch squash-merged)
  *     without needing gh.
  *
- *   Tier 1 — `gh pr list --head <branch> --state merged` + content
- *     diff. Reached when cherry didn't confirm (multi-commit branch
- *     squash-merged, or any case where patch-ids diverged). Higher
- *     confidence when both signals agree.
+ *   Tier 1 — typed Memoro GitHub App evidence + content diff. Reached when
+ *     cherry didn't confirm. Higher confidence when both signals agree.
  *
  *   Tier 2 — degraded `NEEDS_REVIEW`. When tier 0 says no and tier 1
- *     can't run (gh missing) or returns no PR. Callers (mc end / mc
+ *     isn't supplied or returns no PR. Callers (mc end / mc
  *     status) treat as `NEEDS_REVIEW` and prompt for human judgement.
  *
  * Returns { isPhantom, cherryConfirms, hadMergedPr, diffEmpty }. The
@@ -41,23 +39,7 @@ function git(repoDir, args) {
 
 function defaultGh() {
   return {
-    /** Real gh pr list — returns [] (treated as no merged PR) on any failure. */
-    async prListMerged(branch) {
-      if (process.env.MC_TEST_GH_PHANTOM === '1') {
-        return [{ number: 0, mergedAt: new Date().toISOString() }];
-      }
-      const r = spawnSync('gh', [
-        'pr', 'list', '--head', branch, '--state', 'merged',
-        '--json', 'number,mergedAt',
-      ], { encoding: 'utf8' });
-      if (r.status !== 0) return [];
-      try {
-        const arr = JSON.parse(r.stdout || '[]');
-        return Array.isArray(arr) ? arr : [];
-      } catch {
-        return [];
-      }
-    },
+    async prListMerged() { return []; },
   };
 }
 

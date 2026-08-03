@@ -41,6 +41,7 @@ const MANAGED_OBSERVER_SOURCE = join(
 const MANAGED_OBSERVER_BINDING = 'mc-provider-artifact-observer.json';
 
 const SAFE_RESUME_ID = /^[a-zA-Z0-9][a-zA-Z0-9_-]{7,127}$/;
+const SESSION_OWNER_ID_RE = /^(?:sess_[A-Za-z0-9_-]{6,}|mcs_[a-f0-9]{24})$/u;
 const MANIFEST_KEYS = Object.freeze([
   'schema',
   'provider_adapter',
@@ -162,7 +163,7 @@ export function validateManagedCodexDescriptor(descriptor, {
     || descriptor.provider_adapter !== MANAGED_CODEX_PROVIDER_ID
     || descriptor.profile !== MANAGED_CODEX_PROFILE
     || descriptor.codex_version !== MANAGED_CODEX_VERSION
-    || !nonEmptyString(descriptor.session_id)
+    || !SESSION_OWNER_ID_RE.test(descriptor.session_id || '')
     || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
       .test(descriptor.generation || '')
     || !/^[a-zA-Z0-9_-]{43}$/.test(descriptor.launch_nonce || '')
