@@ -14,13 +14,13 @@ import { fileURLToPath } from 'node:url';
 const PACKAGE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 
 export const MANAGED_CLAUDE_RUNTIME_SOURCE_SHA256 = Object.freeze({
-  'package.json': '79129d42812fd9996beea989dab69f0970c947ba7aa6a0ffe4489d8048a989f2',
+  'package.json': '4801cbbec43087879b8230699a0e73a2f209efd2e85ff20c477532babc76178d',
   'src/lib/api.js': '3d0ac5d550aea6ff5a8e337f1521c4066e528bc45474bad8b7ab3983e9e0cb0a',
   'src/lib/auth-accounts.js': '43cbc941038365733759222bc461bc843f0816535c882c5381a18879bfef4cb7',
   'src/lib/config.js': '3afa21f33613baf1838314a35b67e642ed286d55c7acbd5ee45cba4f5347c0cb',
   'src/lib/keychain.js': 'b6445625a9142c60d8915e34255155e277422050f02f3a26eebba7ee69f506e6',
   'src/runtime/broker/c1-artifacts.js': '27433c19fd05573ab99636f802d4f96b652ebc0c0b22d78f74077c90e2b5200a',
-  'src/runtime/broker/c1-source-closure.js': '3555d9349628044e907c22468825aa074ee3a1596b7753bdaeccaad16ad0c5d8',
+  'src/runtime/broker/c1-source-closure.js': 'b07ad03a5d8f5bad77502fe7f4c9a94faf5de536b062c0c0d10636b8a20d9b4d',
   'src/mc/paths.js': 'da90c4df7c8fcc24b61610002bfb65add5043e37790d3e0a900df959f7c57af2',
   'src/adapters/managed-runtime/claude-managed-certification.js': '5c0267435f63e558b94210946d6423d7b801f78b40d115d14c6b1f233a144ab1',
   'src/adapters/managed-runtime/claude-managed-custody.js': 'c4994e6b8e47fbdc594e68b6c41fee9345c06b26a339674f74a8ac281ac2efa0',

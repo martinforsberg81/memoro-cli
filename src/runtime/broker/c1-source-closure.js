@@ -20,7 +20,7 @@ import { fileURLToPath } from 'node:url';
 const PACKAGE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 
 export const C1_SOURCE_CLOSURE_SHA256 = Object.freeze({
-  'package.json': '79129d42812fd9996beea989dab69f0970c947ba7aa6a0ffe4489d8048a989f2',
+  'package.json': '4801cbbec43087879b8230699a0e73a2f209efd2e85ff20c477532babc76178d',
   'scripts/security/managed-claude-c1-harness.mjs': '5f0368332cc3ae9ae9cf88c3fee3d6661dcb2782ac218c713ecbebe8706ebe3b',
   'scripts/security/managed-claude-c1-probe.c': '7ffc83d795a442b2c867687fe75fe2573e5123e0978ea12bb13b4e44d1fd205d',
   'scripts/security/managed-claude-c1-runtime.mjs': '69a32c075f500b4c5a5eeb901a585d3772da210081a0eafff7aa78b74beae3e3',
