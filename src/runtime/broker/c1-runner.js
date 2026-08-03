@@ -22,7 +22,7 @@ const SOURCE_CLOSURE_PATH = join(PACKAGE_ROOT, 'src', 'runtime', 'broker', 'c1-s
 const C1_LEASE_HOST_SOURCE_SHA256 =
   '128126a1a9353ed46c0289d94578cb28cda99ebc22bb222d83abc24380ae6992';
 const C1_SOURCE_CLOSURE_SOURCE_SHA256 =
-  '6207c05e8f763c4b7d63dcd04cb74c85ad289e8970d52d8c630b08f68197fc9f';
+  '3555d9349628044e907c22468825aa074ee3a1596b7753bdaeccaad16ad0c5d8';
 const C1_LEASE_HOST_SCHEMA = 1;
 const MAX_HOST_OUTPUT_BYTES = 64 * 1024;
 const HOST_TIMEOUT_MS = 10 * 60_000;
@@ -258,56 +258,3 @@ function isC1ProcessGroupAlive(groupLeaderPid) {
   if (!Number.isSafeInteger(groupLeaderPid) || groupLeaderPid < 1 || process.platform === 'win32') return false;
   try {
     process.kill(-groupLeaderPid, 0);
-    return true;
-  } catch (error) {
-    // Only ESRCH is terminal proof. Permission or an unexpected platform
-    // error remains fail-closed as a possibly live group.
-    return error?.code !== 'ESRCH';
-  }
-}
-
-function killC1ProcessGroupByLeader(groupLeaderPid) {
-  if (!Number.isSafeInteger(groupLeaderPid) || groupLeaderPid < 1 || process.platform === 'win32') return false;
-  try {
-    process.kill(-groupLeaderPid, 'SIGKILL');
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function isExactFixture(value) {
-  return isExactRecord(value, ['runLeaseHost', 'verifyArtifacts', 'verifySourceClosure'])
-    && typeof value.verifySourceClosure === 'function'
-    && typeof value.verifyArtifacts === 'function'
-    && typeof value.runLeaseHost === 'function';
-}
-
-function isExactContext(context) {
-  return Boolean(context)
-    && typeof context === 'object'
-    && !Array.isArray(context)
-    && Object.isFrozen(context)
-    && Object.keys(context).length === 2
-    && typeof context.session_id === 'string'
-    && context.session_id.length > 0
-    && typeof context.runtime_generation === 'string'
-    && context.runtime_generation.length > 0;
-}
-
-function isExactStatus(value) {
-  return isExactRecord(value, ['status']) && STATUSES.has(value.status);
-}
-
-function isExactRecord(value, keys) {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
-  const prototype = Object.getPrototypeOf(value);
-  if (prototype !== Object.prototype && prototype !== null) return false;
-  const actual = Object.keys(value).sort();
-  const expected = [...keys].sort();
-  return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
-}
-
-function sha256(value) {
-  return createHash('sha256').update(value).digest('hex');
-}
