@@ -82,6 +82,7 @@ const SESSION_DIRECTORY_NAMES = Object.freeze([
 ]);
 const SESSION_FILE_NAMES = new Set([
   'identity.json',
+  'legacy-references.json',
   'metadata.json',
   'projection.json',
 ]);

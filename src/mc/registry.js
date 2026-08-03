@@ -15,6 +15,7 @@ import { dirname } from 'node:path';
 import { registryPath } from './paths.js';
 import { DEFAULT_TOOL } from '../lib/config.js';
 import { canonicalToolId, resolveToolInput } from '../adapters/index.js';
+import { assertLegacySessionStorageReadableSync } from './session-cutover-interlock.js';
 import {
   REPOSITORY_ID_RE,
   repositoryIdForCanonicalRemote,
@@ -125,6 +126,7 @@ export function patchToolSessionSequenceIfPresent(identifier, provider, sequence
 }
 
 export function readRegistry({ persistMigration = true } = {}) {
+  assertLegacySessionStorageReadableSync();
   const path = registryPath();
   if (!existsSync(path)) return { schema_version: REGISTRY_SCHEMA_VERSION, entries: [] };
   try {
@@ -142,6 +144,7 @@ export function readRegistry({ persistMigration = true } = {}) {
  * unreadable registry state can never masquerade as an empty registry.
  */
 export function readRegistryStrict({ persistMigration = true } = {}) {
+  assertLegacySessionStorageReadableSync();
   const path = registryPath();
   if (!existsSync(path)) return { schema_version: REGISTRY_SCHEMA_VERSION, entries: [] };
   const raw = readFileSync(path, 'utf8');
@@ -163,6 +166,7 @@ export function readRegistryStrict({ persistMigration = true } = {}) {
 }
 
 export function writeRegistry(reg) {
+  assertLegacySessionStorageReadableSync();
   const path = registryPath();
   mkdirSync(dirname(path), { recursive: true });
   // Atomic-ish: write to .tmp, rename.

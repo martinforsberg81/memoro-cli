@@ -164,15 +164,17 @@ journeys on the exact artifact.
 **Scope:** inventory and plan old registry, identity, conversation, generation,
 host, worktree, and projection state; preserve valid `mcs_*`; create bounded
 backup and immutable receipts; resume interrupted migration; refuse live
-incompatible runtimes; block older binaries after completion. The migrator is
-finite and never becomes a runtime fallback.
+incompatible runtimes; reconcile derived liveness from the exact lifecycle
+journal rather than a stale registry projection; block older binaries after
+completion. The migrator is finite and never becomes a runtime fallback.
 
 **Dependencies:** PRs 1–2 and 5–7.
 
 **Validation:** every supported old schema fixture, duplicate and ambiguous
 identity, live-host refusal, interruption at every write boundary, retry,
 rollback before publication, exact backup, no dual writer, old-binary
-interlock, and no legacy read after completion.
+interlock, a registry `live` row whose exact lifecycle journal says `exited`,
+and no legacy read after completion.
 
 ## PR 9 — Cut over the daily lifecycle and session list (`memoro-cli`)
 
@@ -182,14 +184,17 @@ interlock, and no legacy read after completion.
 send/read, and local/cloud presentation; `new` uses the current directory and
 does not create Git resources; `open` attaches or exactly resumes; local list
 enumerates projections without sockets/network; cloud rows come from the V1
-API and remain separately source-owned.
+API and remain separately source-owned. Local attach/send/read route directly
+to the session-owned machine-local runtime host; they do not use the Memoro
+UserSession WebSocket as a runtime command or liveness channel.
 
 **Dependencies:** PRs 4 and 8.
 
 **Validation:** full fresh/new/open/attach/exit/reopen journey; multiple
 workspaces; rename; absent workspace; same names across sources; JSON stability;
 offline local list; 1,000 sessions; busy runtime; cloud reachability; and no
-registry/global-broker imports in active commands.
+registry/global-broker imports or local-runtime UserSession WebSocket traffic
+in active commands.
 
 ## PR 10 — Separate end, delete, and resource cleanup (`memoro-cli`)
 
@@ -214,16 +219,19 @@ half-finished cutover.
 
 **Scope:** delete unreachable registry lifecycle, global broker, old launch and
 resume branches, local GitHub fallback code, legacy environment contracts, and
-superseded active documentation; retain only bounded migration readers and
-non-executable backups; publish the command/support matrix and measured
-performance comparison.
+superseded active documentation; remove the local-runtime heartbeat WebSocket,
+its `runtime_event` path, and the legacy credential-domain double-persist
+recovery branch; retain only bounded migration readers and non-executable
+backups; publish the command/support matrix and measured performance comparison.
 
 **Dependencies:** PR 10 and successful migration/release-candidate journeys.
 
 **Validation:** source-inventory assertions for forbidden imports/vocabulary,
 full test suite, credential/security suites, `npm pack` installation smoke,
 local migration smoke, PTY stress suite, and live Codex/Claude/GitHub App
-journeys.
+journeys. Source inventory also proves that local runtime liveness has no
+UserSession `ping`/`pong` dependency and credential cleanup is receipt-driven
+and idempotent after its source directory is gone.
 
 ## PR 11B — Retire server legacy routes (`memoro`)
 
