@@ -27,13 +27,16 @@ export function sessionHomePaths({
   if (mcSessionId !== null) {
     assertMcSessionId(mcSessionId);
     const home = join(sessionsRoot, mcSessionId);
+    const ephemeralRunPath = join(runRoot, 'sessions', mcSessionId);
     Object.assign(paths, {
       home,
       identityPath: join(home, 'identity.json'),
       metadataPath: join(home, 'metadata.json'),
       projectionPath: join(home, 'projection.json'),
       mutationLockPath: join(runRoot, 'locks', 'sessions', mcSessionId),
-      ephemeralRunPath: join(runRoot, 'sessions', mcSessionId),
+      ephemeralRunPath,
+      runtimeHostManifestPath: join(ephemeralRunPath, 'host.json'),
+      runtimeHostSocketPath: join(ephemeralRunPath, 'terminal.sock'),
       workspacesPath: join(home, 'workspaces'),
       conversationsPath: join(home, 'conversations'),
       generationsPath: join(home, 'generations'),
