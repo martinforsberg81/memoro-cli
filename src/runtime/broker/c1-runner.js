@@ -258,3 +258,56 @@ function isC1ProcessGroupAlive(groupLeaderPid) {
   if (!Number.isSafeInteger(groupLeaderPid) || groupLeaderPid < 1 || process.platform === 'win32') return false;
   try {
     process.kill(-groupLeaderPid, 0);
+    return true;
+  } catch (error) {
+    // Only ESRCH is terminal proof. Permission or an unexpected platform
+    // error remains fail-closed as a possibly live group.
+    return error?.code !== 'ESRCH';
+  }
+}
+
+function killC1ProcessGroupByLeader(groupLeaderPid) {
+  if (!Number.isSafeInteger(groupLeaderPid) || groupLeaderPid < 1 || process.platform === 'win32') return false;
+  try {
+    process.kill(-groupLeaderPid, 'SIGKILL');
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function isExactFixture(value) {
+  return isExactRecord(value, ['runLeaseHost', 'verifyArtifacts', 'verifySourceClosure'])
+    && typeof value.verifySourceClosure === 'function'
+    && typeof value.verifyArtifacts === 'function'
+    && typeof value.runLeaseHost === 'function';
+}
+
+function isExactContext(context) {
+  return Boolean(context)
+    && typeof context === 'object'
+    && !Array.isArray(context)
+    && Object.isFrozen(context)
+    && Object.keys(context).length === 2
+    && typeof context.session_id === 'string'
+    && context.session_id.length > 0
+    && typeof context.runtime_generation === 'string'
+    && context.runtime_generation.length > 0;
+}
+
+function isExactStatus(value) {
+  return isExactRecord(value, ['status']) && STATUSES.has(value.status);
+}
+
+function isExactRecord(value, keys) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) return false;
+  const actual = Object.keys(value).sort();
+  const expected = [...keys].sort();
+  return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
+}
+
+function sha256(value) {
+  return createHash('sha256').update(value).digest('hex');
+}
