@@ -1382,7 +1382,8 @@ if (isEntryScript()) {
   main()
     .then(code => { process.exitCode = code ?? 0; })
     .catch((err) => {
-      console.error(err?.stack || err?.message || String(err));
+      const advice = missingDependencyAdvice(err);
+      console.error(advice ? `mc: ${advice}` : (err?.stack || err?.message || String(err)));
       process.exitCode = 1;
     });
 }
@@ -1395,4 +1396,23 @@ function isEntryScript() {
   } catch {
     return false;
   }
+}
+
+/**
+ * mc's own runtime dependencies are loaded lazily, deep inside a command, so
+ * a missing one used to surface as a raw `ERR_MODULE_NOT_FOUND` stack after
+ * the command had already reported success — `mc new` printed "created local
+ * session", then a Node trace about `@xterm/addon-serialize`. The remedy was
+ * `npm ci` in mc's own directory, which the stack never mentioned.
+ *
+ * This is a real state, not a corrupt install: mc runs from a checkout that
+ * `git pull` can move ahead of its `node_modules`.
+ */
+function missingDependencyAdvice(error) {
+  if (error?.code !== 'ERR_MODULE_NOT_FOUND') return null;
+  const match = /Cannot find package '([^']+)'/u.exec(error.message || '');
+  if (!match) return null;
+  const packageRoot = fileURLToPath(new URL('..', import.meta.url));
+  return `mc's own dependencies are not installed — missing '${match[1]}'\n`
+    + `    run: npm ci --prefix ${packageRoot.replace(/\/$/u, '')}`;
 }
