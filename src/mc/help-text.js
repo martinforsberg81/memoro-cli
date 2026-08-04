@@ -36,6 +36,7 @@ MAINTENANCE
   mc migrate [--dry-run] [--stop-legacy-runtimes]
                                     Move pre-V1 sessions into session homes, once
                                     and explicitly; no other command migrates
+  mc migrate --session <name>       Move one session and leave the rest alone
 
 LISTING
   mc list [--local|--cloud] [--all] [--json|--names]
