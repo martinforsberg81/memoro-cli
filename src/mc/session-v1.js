@@ -6,10 +6,6 @@ import {
   listSessionHomesSync,
   resolveSessionHomeSync,
 } from './session-home.js';
-import {
-  applySessionCutoverSync,
-  createSessionCutoverPlanSync,
-} from './session-cutover.js';
 import { readSessionCutoverCompletionSync } from './session-cutover-interlock.js';
 import { resolveLocalSourceSync } from './local-source.js';
 import {
@@ -19,30 +15,28 @@ import {
 } from './workspace-record.js';
 import { inspectSessionRuntimeSync } from './session-runtime-journal.js';
 
+/**
+ * V1 session storage stands on its own. Creating a session must never depend
+ * on what an older mc left behind: the legacy registry, its hosts, and its
+ * brokers are a separate, finite migration (`mc migrate`), not a precondition.
+ *
+ * This used to run the whole cutover here, so one stale `live` row in an old
+ * registry made `mc new` fail permanently with `live-incompatible-runtimes` —
+ * a machine could no longer create a session because of sessions that had
+ * already exited. Nothing about a new session needs the old ones.
+ *
+ * The completion receipt is still honoured when it exists: a home migrated by
+ * a different machine source is a real conflict, not a stale row.
+ */
 export function ensureV1SessionStorageSync({
   mcHomeDir = mcHome(),
   now = () => new Date().toISOString(),
   random,
-  isAlive,
 } = {}) {
   const source = resolveLocalSourceSync({ mcHomeDir, now, random });
   const completion = readSessionCutoverCompletionSync({ mcHomeDir });
   if (completion.kind === 'unknown') throw sessionV1Error(completion.reason);
-  if (completion.kind === 'absent') {
-    createSessionCutoverPlanSync({
-      mcHomeDir,
-      sourceId: source.source_id,
-      now,
-      ...(random ? { random } : {}),
-      ...(isAlive ? { isAlive } : {}),
-    });
-    applySessionCutoverSync({
-      mcHomeDir,
-      now,
-      ...(random ? { random } : {}),
-      ...(isAlive ? { isAlive } : {}),
-    });
-  } else if (completion.value.source_id !== source.source_id) {
+  if (completion.kind === 'present' && completion.value.source_id !== source.source_id) {
     throw sessionV1Error('cutover-source-conflict');
   }
   return source;

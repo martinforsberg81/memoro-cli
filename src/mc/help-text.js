@@ -33,6 +33,9 @@ MAINTENANCE
   mc storage explain <name>        Explain one session's stored resources
   mc storage repair [--apply]      Plan or apply loss-free storage repairs
   mc gc [--dry-run|--apply]        Remove stale runtime homes; never Git resources
+  mc migrate [--dry-run] [--stop-legacy-runtimes]
+                                    Move pre-V1 sessions into session homes, once
+                                    and explicitly; no other command migrates
 
 LISTING
   mc list [--local|--cloud] [--all] [--json|--names]

@@ -144,6 +144,7 @@ const LIFECYCLE = {
   setup:         () => import('./cli/setup.js'),
   reconcile:     () => import('./cli/reconcile.js'),
   doctor:        () => import('./mc/commands/doctor.js'),
+  migrate:       () => import('./mc/commands/migrate.js'),
   storage:       () => import('./mc/commands/storage.js'),
   vault:         () => import('./cli/vault.js'),
   'tool-auth':   () => import('./cli/tool-auth.js'),
