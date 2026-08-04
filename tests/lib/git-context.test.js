@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test, { describe } from 'node:test';
-import { mkdtemp, rm, writeFile, mkdir } from 'node:fs/promises';
+import { chmod, mkdtemp, readFile, rm, writeFile, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -64,6 +64,33 @@ describe('getRepoContext', () => {
       const expected = join(dir, '.git');
       assert.ok(commonDir.endsWith(expected) || commonDir === expected);
     } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('resolves git common dir through --path-format=absolute --git-common-dir', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'memoro-cli-git-common-cmd-'));
+    const callLog = join(dir, 'git-args.txt');
+    const gitBinary = join(dir, 'git');
+    const originalPath = process.env.PATH;
+    const script = `#!/bin/sh\nprintf '%s\\n' "$@" > ${callLog}\nprintf '%s\\n' .git/common\n`;
+    try {
+      await writeFile(gitBinary, script, { encoding: 'utf8' });
+      await chmod(gitBinary, 0o700);
+      process.env.PATH = `${dir}:${originalPath}`;
+
+      const commonDir = await resolveGitCommonDir(dir);
+
+      assert.equal(commonDir, join(dir, '.git/common'));
+      const captured = await readFile(callLog, 'utf8');
+      const args = captured.trim().split('\n');
+      assert.deepEqual(args, [
+        'rev-parse',
+        '--path-format=absolute',
+        '--git-common-dir',
+      ]);
+    } finally {
+      process.env.PATH = originalPath;
       await rm(dir, { recursive: true, force: true });
     }
   });
