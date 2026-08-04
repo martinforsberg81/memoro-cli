@@ -16,6 +16,7 @@ import {
   inspectSessionRuntimeSync,
 } from '../../mc/session-runtime-journal.js';
 import { assertGenerationId } from '../../mc/session-record-ids.js';
+import { readSessionLegacyReferenceSync } from '../../mc/session-legacy-reference.js';
 import {
   managedProviderArtifactContextForLaunch,
   observeManagedProviderArtifact,
@@ -138,10 +139,20 @@ export async function prepareCertifiedLaunchPlan({
   }
 
   const paths = sessionHomePaths({ mcHomeDir, mcSessionId });
+  // A migrated session's portable provider state was written under the id the
+  // old registry gave it, and renaming the session did not move the bytes on
+  // disk. Resuming under the new `mcs_*` id looked in a directory that has
+  // never existed and reported the transcript missing — for every session that
+  // came through the cutover with a conversation worth resuming.
+  //
+  // The migration recorded that old id precisely so this lookup can find it.
+  // A session created after the cutover has no legacy reference and keys by
+  // its own id; either way one session keeps one key for its whole life.
+  const providerStateKey = legacyProviderStateKey({ mcHomeDir, mcSessionId }) || mcSessionId;
   let boundary = null;
   try {
     boundary = await adapter.prepare_boundary({
-      codingSessionId: mcSessionId,
+      codingSessionId: providerStateKey,
       domainGeneration: uuid(),
       providerSessionId: argv.expected_handle,
       cwd: generation.intent.launch_cwd,
@@ -523,6 +534,17 @@ async function safeAbort(adapter, boundary, deps) {
   } catch {
     return failure('certified-abort-failed');
   }
+}
+
+/**
+ * The coding-session id a migrated session's provider state is stored under,
+ * or null for a session that was created after the cutover.
+ */
+function legacyProviderStateKey({ mcHomeDir, mcSessionId }) {
+  const reference = readSessionLegacyReferenceSync({ mcHomeDir, mcSessionId });
+  if (reference.kind !== 'present') return null;
+  const codingSessionId = reference.value?.registry?.coding_session_id;
+  return typeof codingSessionId === 'string' && codingSessionId ? codingSessionId : null;
 }
 
 function failure(reason) {

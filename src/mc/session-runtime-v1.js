@@ -113,6 +113,7 @@ export async function openLocalSessionRuntime({
     }
   }
 
+  let replacedUnresumableConversation = false;
   let portal = deps.portal || null;
   if (!portal) {
     try {
@@ -121,15 +122,52 @@ export async function openLocalSessionRuntime({
       });
     } catch {}
   }
-  const prepared = await (deps.prepareLaunchPlan || prepareCertifiedLaunchPlan)({
+  const planLaunch = (forGeneration) => (deps.prepareLaunchPlan || prepareCertifiedLaunchPlan)({
     mcHomeDir,
     mcSessionId,
     sessionName: session.metadata.name,
-    generationId: generation.intent.generation_id,
+    generationId: forGeneration.intent.generation_id,
     portal,
     baseEnv: deps.env || process.env,
     deps: deps.certifiedExecution || {},
   });
+  let prepared = await planLaunch(generation);
+  if (!prepared?.ok && UNRESUMABLE_CONVERSATION.has(prepared?.reason)) {
+    // The session records which conversation it was using, but that
+    // conversation's transcript was never written anywhere mc controls — it
+    // belonged to a session that ran before managed execution and lived in the
+    // user's own tool home. There is nothing to resume and nothing a retry can
+    // recover.
+    //
+    // Refusing a replacement exists to stop mc from silently dropping a
+    // conversation that could still be continued. Here there is provably none,
+    // so the refusal protects nothing and only leaves the session unopenable.
+    // mc starts a fresh conversation itself and records why, rather than
+    // reporting a reason code and asking for a flag.
+    markGenerationFailed({
+      deps,
+      mcHomeDir,
+      mcSessionId,
+      generationId: generation.intent.generation_id,
+      reason: prepared.reason,
+    });
+    try {
+      generation = (deps.beginGeneration || beginRuntimeGenerationSync)({
+        mcHomeDir,
+        mcSessionId,
+        action: 'replace',
+        previousGenerationId: generation.intent.generation_id,
+        replacementReason: 'legacy-transcript-unavailable',
+        tool: selectedTool,
+        workspaceId: workspace.workspace_id,
+        launchCwd: workspace.current_path,
+      });
+    } catch (error) {
+      return failure(error?.reason || 'runtime-generation-create-failed');
+    }
+    replacedUnresumableConversation = true;
+    prepared = await planLaunch(generation);
+  }
   if (!prepared?.ok) return failure(prepared?.reason || 'certified-launch-unavailable');
 
   let runtime = null;
@@ -244,9 +282,22 @@ export async function openLocalSessionRuntime({
   }
   try { await runtime.close(); } catch {}
   return attached.ok
-    ? success({ action: generation.intent.action, generation_id: generation.intent.generation_id, code: attached.code })
+    ? success({
+      action: generation.intent.action,
+      generation_id: generation.intent.generation_id,
+      code: attached.code,
+      ...(replacedUnresumableConversation ? { replaced_unresumable_conversation: true } : {}),
+    })
     : failure(attached.reason, attached.code);
 }
+
+// Reasons that mean "the recorded conversation has no transcript to resume",
+// as opposed to a transcript that is present but unreadable — those stay hard
+// failures, because a damaged transcript is not the same as an absent one.
+const UNRESUMABLE_CONVERSATION = new Set([
+  'managed-portable-session-manifest-missing',
+  'managed-portable-session-source-missing',
+]);
 
 function generationIntentFromDecision(decision, snapshot, { tool, workspace }) {
   const common = {
