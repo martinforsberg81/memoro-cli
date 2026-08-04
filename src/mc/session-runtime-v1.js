@@ -7,6 +7,7 @@ import {
   inspectSessionRuntimeSync,
 } from './session-runtime-journal.js';
 import { prepareCertifiedLaunchPlan } from '../runtime/certified-execution/launch-plan.js';
+import { reopenLocalSession } from './session-lifecycle-v1.js';
 import { SessionRuntimeSocketServer } from '../runtime/session-host/server.js';
 import {
   attachLocalSessionTerminal,
@@ -28,6 +29,16 @@ export async function openLocalSessionRuntime({
   deps = {},
 } = {}) {
   const mcSessionId = session.mc_session_id;
+  // Opening an archived session is a request to pick it back up. `end`
+  // archives, `delete` destroys; without this, `end` was a one-way door with
+  // no verb to undo it.
+  if (session.projection?.lifecycle === 'archived') {
+    try {
+      (deps.reopenSession || reopenLocalSession)({ mcHomeDir, mcSessionId, deps: deps.lifecycleDeps || {} });
+    } catch (error) {
+      return failure(error?.reason || 'session-reopen-failed');
+    }
+  }
   let snapshot = (deps.inspectRuntime || inspectSessionRuntimeSync)({ mcHomeDir, mcSessionId });
   if (snapshot.kind !== 'present') return failure(snapshot.reason || 'runtime-state-unavailable');
   let decision = (deps.decideRuntimeAction || decideSessionRuntimeAction)(snapshot, { tool });
@@ -79,6 +90,16 @@ export async function openLocalSessionRuntime({
   if (decision.action === 'switch') {
     return failure('tool-switch-requires-explicit-handoff');
   }
+  // `--replace` is still the only way to abandon a conversation that could
+  // otherwise be resumed. It is now a user override of a working resume,
+  // rather than the price of mc's last failed launch.
+  if (replace && decision.action === 'resume') {
+    decision = {
+      action: 'explicit-replacement-required',
+      previous_generation_id: snapshot.generations.at(-1)?.intent?.generation_id || null,
+      tool: decision.tool,
+    };
+  }
   if (decision.action === 'explicit-replacement-required' && !replace) {
     return failure('explicit-replacement-required');
   }
@@ -87,7 +108,9 @@ export async function openLocalSessionRuntime({
   if (!selectedTool) return failure('tool-unavailable');
   if (noLaunch) {
     return success({
-      action: decision.action === 'explicit-replacement-required' ? 'replace' : decision.action,
+      action: ['explicit-replacement-required', 'replace-failed-generation'].includes(decision.action)
+        ? 'replace'
+        : decision.action,
       tool: selectedTool,
       workspace_id: workspace.workspace_id,
       launch_cwd: workspace.current_path,
@@ -168,7 +191,9 @@ export async function openLocalSessionRuntime({
     replacedUnresumableConversation = true;
     prepared = await planLaunch(generation);
   }
-  if (!prepared?.ok) return failure(prepared?.reason || 'certified-launch-unavailable');
+  if (!prepared?.ok) {
+    return failure(prepared?.reason || 'certified-launch-unavailable', 1, prepared?.diagnostic_code);
+  }
 
   let runtime = null;
   let server = null;
@@ -317,6 +342,14 @@ function generationIntentFromDecision(decision, snapshot, { tool, workspace }) {
       ...common,
     };
   }
+  if (decision.action === 'replace-failed-generation') {
+    return {
+      action: 'replace',
+      previousGenerationId: decision.previous_generation_id,
+      replacementReason: 'previous-generation-failed',
+      ...common,
+    };
+  }
   throw new Error(`unsupported runtime action: ${decision.action}`);
 }
 
@@ -390,6 +423,11 @@ function success(fields) {
   return { ok: true, code: fields.code ?? 0, ...fields };
 }
 
-function failure(reason, code = 1) {
-  return { ok: false, code: Number.isInteger(code) ? code : 1, reason };
+function failure(reason, code = 1, diagnosticCode = null) {
+  return {
+    ok: false,
+    code: Number.isInteger(code) ? code : 1,
+    reason,
+    ...(diagnosticCode ? { diagnostic_code: diagnosticCode } : {}),
+  };
 }

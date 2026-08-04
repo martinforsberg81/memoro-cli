@@ -30,6 +30,9 @@ import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { devServersRoot } from './paths.js';
 import { listSessionHomesSync } from './session-home.js';
 
+// The one non-manifest entry mc creates under the dev-server root itself.
+export const DEV_SERVER_LOCKS_DIRECTORY = 'locks';
+
 const SCHEMA_VERSION = 1;
 const STARTING_GRACE_MS = 30_000;
 const HEALTH_TIMEOUT_MS = 1_500;
@@ -257,6 +260,12 @@ export function readDevServerInventorySync({ mcHomeDir } = {}) {
   }
   for (const name of entries) {
     const path = join(root, name);
+    // mc puts its own dev-server lock files in `dev-servers/locks/`. Reading
+    // that directory as a stray manifest made the whole inventory unsafe,
+    // which made every `mc end` on the machine fail with
+    // `dev-server-cleanup-incomplete` — mc's own bookkeeping blocking mc's own
+    // lifecycle, permanently and for every session.
+    if (name === DEV_SERVER_LOCKS_DIRECTORY) continue;
     if (!name.endsWith('.json')) {
       issues.push({ scope: 'dev-server', entry: name, reason: 'unexpected-dev-server-entry' });
       continue;

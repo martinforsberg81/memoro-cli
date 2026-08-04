@@ -164,7 +164,12 @@ export async function prepareCertifiedLaunchPlan({
       deps: deps.boundary || {},
     });
     if (!boundary?.ok) {
-      return failure(boundary?.reason || 'certified-boundary-unavailable');
+      // The boundary probe knows exactly which check failed. Dropping that on
+      // the way out left one opaque reason for a dozen distinct causes.
+      return failure(
+        boundary?.reason || 'certified-boundary-unavailable',
+        boundary?.diagnostic_code || null,
+      );
     }
     ensurePrivateDirectoryChainSync({
       trustedRoot: paths.mcHomeDir,
@@ -547,6 +552,6 @@ function legacyProviderStateKey({ mcHomeDir, mcSessionId }) {
   return typeof codingSessionId === 'string' && codingSessionId ? codingSessionId : null;
 }
 
-function failure(reason) {
-  return { ok: false, reason };
+function failure(reason, diagnosticCode = null) {
+  return { ok: false, reason, ...(diagnosticCode ? { diagnostic_code: diagnosticCode } : {}) };
 }

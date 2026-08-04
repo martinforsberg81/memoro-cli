@@ -121,9 +121,12 @@ function verifyDevServerTeardown({ mcHomeDir, mcSessionId, deps }) {
       issues: inventory?.issues || [],
     };
   }
-  if (inventory.manifests.some((item) => !/^mcs_[a-f0-9]{24}$/u.test(item?.mc_session_id || ''))) {
-    return { ok: false, reason: 'dev-server-state-unsafe' };
-  }
+  // Whether *this* session still has dev servers registered is the only
+  // question teardown asks. It used to also require every manifest on the
+  // machine to carry a V1 id, so one pre-V1 record — belonging to some other
+  // session entirely — made `mc end` fail for every session, forever. Records
+  // that belong to nobody are real, and `mc doctor` is where they are
+  // reported; they are not this session's exit condition.
   const remaining = inventory.manifests
     .filter((item) => item.mc_session_id === mcSessionId)
     .map((item) => item.instance_id);
@@ -143,6 +146,37 @@ async function waitForTerminalRuntime({ mcHomeDir, mcSessionId, deps }) {
     runtime = inspect({ mcHomeDir, mcSessionId });
   }
   return runtime;
+}
+
+/**
+ * Bring an archived session back to open.
+ *
+ * `mc end` archives; it does not destroy — `mc delete` does. So an archived
+ * session that the user asks to open again is a resting session being picked
+ * back up, not an error. Refusing left the session permanently unusable with
+ * no verb to undo it, which made `end` behave like a delete nobody asked for.
+ */
+export function reopenLocalSession({ mcHomeDir, mcSessionId, now, deps = {} }) {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const current = (deps.readSession || readSessionHomeSync)({ mcHomeDir, mcSessionId });
+    if (current.kind !== 'present') throw lifecycleError(current.reason || current.kind);
+    if (current.projection.lifecycle === 'open') return current;
+    try {
+      return (deps.writeProjection || writeSessionProjectionSync)({
+        mcHomeDir,
+        mcSessionId,
+        expectedRevision: current.projection.revision,
+        lifecycle: 'open',
+        runtimeState: current.projection.runtime_state,
+        activeRuntimeGeneration: current.projection.active_runtime_generation,
+        tool: current.projection.tool,
+        ...(now ? { now } : {}),
+      });
+    } catch (error) {
+      if (error?.reason !== 'projection-revision-conflict' || attempt === 2) throw error;
+    }
+  }
+  throw lifecycleError('projection-revision-conflict');
 }
 
 export function deleteLocalSession({
