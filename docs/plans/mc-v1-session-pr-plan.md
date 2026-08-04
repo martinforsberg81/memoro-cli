@@ -199,6 +199,40 @@ deletion.
 
 **Dependencies:** PR 9.
 
+## PR 10b — Make the migrated machine actually usable (`memoro-cli`) — merged (#279–#283)
+
+**Purpose:** close the gap between "the cutover completed" and "the user can
+open a session", found by walking one machine's real state end to end rather
+than by reading the code.
+
+**Scope, one defect per merge:**
+
+- #279 — a missing package reported a raw `ERR_MODULE_NOT_FOUND` stack after
+  the command had printed success; it now names the package and the exact
+  install command. The cutover also stopped trusting `broker.pid` alone and
+  probes the legacy sockets before quarantining them.
+- #280 — migrated sessions looked for their provider transcript under the new
+  `mcs_*` id instead of the legacy id the migration recorded, so none could
+  resume. Sessions whose conversation predates managed execution have no
+  transcript at all; mc starts a fresh conversation for them and journals
+  `legacy-transcript-unavailable` rather than asking for a flag.
+- #281 — mc's own dev-server lock directory failed its own inventory, and
+  teardown judged one session by every other session's records, so `mc end`
+  failed for all of them. A failed generation demanded `--replace` forever for
+  a conversation that never existed. An archived session could not be reopened.
+  The credential-boundary diagnostic reached the surface for the first time.
+- #282 — `mc delete` carried the same global dev-server gate as `end`.
+- #283 — a session whose workspace is mc's own installation can never build a
+  credential boundary there; mc now moves it to a workspace that works instead
+  of refusing.
+
+**Known and accepted:** `mc doctor` still reports pre-V1 dev-server manifests
+as `dev-server-session-unbound`. They are inert bookkeeping — all 15 on the
+reference machine have dead processes — and no command reaps them yet. Reaping
+belongs with PR 11A's legacy removal, under an explicit verified-dead rule.
+
+**Dependencies:** PRs 8b–10.
+
 ## PR 11A — Remove local legacy implementation (`memoro-cli`)
 
 **Purpose:** leave one comprehensible implementation rather than another
@@ -248,7 +282,7 @@ suite is trustworthy. The appendix below is the input inventory.
 
 ```text
 PR 0
-  ├─> PR 1 ─> PR 2 ─> PR 5 ─> PR 6 ─> PR 7 ─> PR 8 ─> PR 8b ─> PR 9 ─> PR 10 ─> PR 11A ─> PR 12
+  ├─> PR 1 ─> PR 2 ─> PR 5 ─> PR 6 ─> PR 7 ─> PR 8 ─> PR 8b ─> PR 9 ─> PR 10 ─> PR 10b ─> PR 11A ─> PR 12
   └─> PR 3 ─> PR 4 ──────────────────────────────────────────────┘
 
 PR 4 deployed before the V1 CLI release

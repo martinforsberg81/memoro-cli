@@ -237,10 +237,7 @@ export async function prepareLocalCodexCredentialDomain({
   // boundary is unbuildable there and the probe correctly reports vault admin
   // as reachable. Saying so beats a probe violation code the user cannot act
   // on: the answer is to run the session somewhere other than mc's own install.
-  const mcInsideWorkspace = [hostMcRoot, vaultTarget?.binPath, vaultTarget?.entryPath]
-    .filter(Boolean)
-    .some((path) => resolve(path) === resolve(cwd) || isPathInside(cwd, resolve(path)));
-  if (mcInsideWorkspace) {
+  if (workspaceContainsMcInstallSync(cwd)) {
     return safeFailure(LOCAL_CODEX_WORKSPACE_CONTAINS_MC);
   }
   const forbiddenPaths = managedForbiddenPaths({
@@ -1741,6 +1738,25 @@ function parseBoundaryReport(result) {
   } catch {
     return null;
   }
+}
+
+/**
+ * True when a credential boundary cannot be built for this directory because
+ * mc's own installation lives inside it.
+ *
+ * Callers ask before choosing a workspace, not only when a launch has already
+ * failed: a session whose only workspace answers true here can never start,
+ * and knowing that early is what lets mc pick a different one instead of
+ * reporting a sandbox violation.
+ */
+export function workspaceContainsMcInstallSync(cwd) {
+  if (!isAbsolute(cwd || '')) return false;
+  const target = resolveVaultProbeTarget();
+  if (!target) return false;
+  const hostMcRoot = target.entryPath ? resolve(dirname(target.entryPath), '..') : null;
+  return [hostMcRoot, target.binPath, target.entryPath]
+    .filter(Boolean)
+    .some((path) => resolve(path) === resolve(cwd) || isPathInside(cwd, resolve(path)));
 }
 
 function resolveVaultProbeTarget() {
