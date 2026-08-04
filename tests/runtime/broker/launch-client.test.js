@@ -989,6 +989,70 @@ describe('launchBrokerOwnedSession', () => {
     assert.equal(streams.err(), '');
   });
 
+  test('does not install a session-scoped gh shim for native launches', async () => {
+    const streams = makeStreams();
+    const requests = [];
+    let installSessionGitHubShim = null;
+    const pathEnv = '/usr/local/bin:/usr/bin';
+    const res = await launchBrokerOwnedSession({
+      cwd: '/repo',
+      tool: 'codex',
+      attachAfterLaunch: false,
+      stdout: streams.stdout,
+      stderr: streams.stderr,
+      env: { TERM: 'xterm-256color', PATH: pathEnv },
+      request: async (message) => {
+        requests.push(message);
+        return {
+          ok: true,
+          session: { id: message.session.id, runtime_generation: message.session.runtime_generation },
+        };
+      },
+      ensureBroker: async () => ({ ok: true, broker: { pid: 42 } }),
+      ensureCloudBroker: async () => ({ ok: true }),
+      deps: {
+        useSessionHost: false,
+        getRepoContext: async () => ({
+          remoteUrl: 'https://github.com/acme/widgets.git',
+          branch: 'main',
+          toplevel: '/repo',
+        }),
+        resolveRepositoryIdentity: () => ({ ok: true, id: 'repo_111111111111111111111111' }),
+        readConfig: async () => ({ apiUrl: 'https://memoro.test' }),
+        getApiUrl: () => null,
+        getSecret: async () => 'tok',
+        hostname: () => 'machine',
+        lookupOrMint: async () => 'sess_no_shim',
+        registerGitHubSessionProjection: async () => true,
+        groundSession: async () => ({ ok: true }),
+        prepareLocalResourceGuardEnv: ({ baseEnv }) => ({ env: baseEnv }),
+        prepareCloudflareGuardEnv: ({ baseEnv }) => ({ env: baseEnv }),
+        prepareDevCommandGuardEnv: ({ baseEnv }) => ({ env: baseEnv }),
+        prepareGitHubSessionForLaunch: async (input) => {
+          installSessionGitHubShim = input.installSessionGitHubShim;
+          return {
+            env: {
+              ...input.baseEnv,
+              GH_TOKEN: undefined,
+              GITHUB_TOKEN: undefined,
+              GH_ENTERPRISE_TOKEN: undefined,
+              GITHUB_ENTERPRISE_TOKEN: undefined,
+              MC_SESSION_CAPABILITIES: JSON.stringify(input.capabilities),
+              MC_GITHUB_BROKER_SOCKET: input.socketPath,
+            },
+            capabilities: input.capabilities,
+          };
+        },
+        getPackageVersion: async () => '0.test',
+      },
+    });
+
+    assert.equal(res.code, 0);
+    assert.equal(installSessionGitHubShim, false);
+    assert.equal(requests[0].session.env.PATH, pathEnv);
+    assert.equal(streams.err(), '');
+  });
+
   test('keeps the verified GitHub boundary when advisory starting presence registration fails', async () => {
     const streams = makeStreams();
     let groundedState = null;
