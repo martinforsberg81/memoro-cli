@@ -212,11 +212,11 @@ export function deleteLocalSession({
     || (devServerInventory.issues || []).length > 0) {
     return failure('session-dev-server-state-unsafe');
   }
-  if (devServerInventory.manifests.some((item) => (
-    !/^mcs_[a-f0-9]{24}$/u.test(item?.mc_session_id || '')
-  ))) {
-    return failure('session-dev-server-state-unsafe');
-  }
+  // Deleting one session is not the moment to audit every other session's
+  // records. Requiring all of them to carry a V1 id meant a single pre-V1
+  // manifest — owned by somebody else, or by nobody — blocked deletion of
+  // every session on the machine. What matters here is this session's own
+  // dev servers, checked just below.
   if (devServerInventory.manifests.some((item) => item.mc_session_id === mcSessionId)) {
     return failure('session-dev-server-cleanup-required');
   }
