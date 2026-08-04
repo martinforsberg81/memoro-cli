@@ -117,6 +117,8 @@ describe('GitHub session capability boundary', () => {
 
     assert.equal(JSON.stringify(result.capabilities).includes('approval_mode'), false);
     assert.equal(result.env[MC_SESSION_CAPABILITIES_ENV].includes('approval_mode'), false);
+    assert.equal(result.shim_path, undefined);
+    assert.equal(result.env.PATH, '/usr/bin:/bin');
   });
 
   test('write-ready grounding exposes the provider-neutral surface without mc approval state', async () => {
@@ -135,8 +137,8 @@ describe('GitHub session capability boundary', () => {
 
     assert.match(markdown, /mc github pr list\|view\|checks\|create\|update\|merge/);
     assert.match(markdown, /coding host’s native approval policy/);
-    assert.match(markdown, /same App broker/);
-    assert.doesNotMatch(markdown, /Never.*merge/i);
+    assert.match(markdown, /session-scoped `gh` compatibility helper/);
+    assert.match(markdown, /Do not replace or disable your local `gh`/);
     assert.doesNotMatch(markdown, /browser|approval_mode|approval_required|approve exact/i);
     assert.doesNotMatch(markdown, /access_token|GH_TOKEN|installation_id/i);
   });
@@ -156,6 +158,7 @@ describe('GitHub session capability boundary', () => {
       sessionId: 'sess_abcdef',
       socketPath: join(tmp, 'sess.sock'),
       mcHomeDir: tmp,
+      installSessionGitHubShim: true,
     });
 
     assert.equal(result.env.KEEP, 'yes');
@@ -183,6 +186,7 @@ describe('GitHub session capability boundary', () => {
       sessionId: 'sess_managed',
       socketPath: join(tmp, 'sess_managed.sock'),
       shimDirectory,
+      installSessionGitHubShim: true,
     });
 
     assert.equal(result.shim_path, join(shimDirectory, 'gh'));

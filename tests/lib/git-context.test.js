@@ -9,6 +9,7 @@ import {
   derivePublicRepoRef,
   deriveRepoName,
   getRepoContext,
+  resolveGitCommonDir,
   resolvePublicRepoRef,
 } from '../../src/lib/git-context.js';
 
@@ -46,6 +47,22 @@ describe('getRepoContext', () => {
       assert.equal(ctx.branch, 'main');
       // Without origin remote, remoteUrl falls back to toplevel for identity.
       assert.equal(ctx.remoteUrl, ctx.toplevel);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('resolves the absolute common git dir', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'memoro-cli-git-common-'));
+    try {
+      gitInit(dir);
+      await writeFile(join(dir, 'README.md'), '# test\n');
+      spawnSync('git', ['add', '.'], { cwd: dir });
+      spawnSync('git', ['commit', '-q', '-m', 'init'], { cwd: dir });
+
+      const commonDir = await resolveGitCommonDir(dir);
+      const expected = join(dir, '.git');
+      assert.ok(commonDir.endsWith(expected) || commonDir === expected);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

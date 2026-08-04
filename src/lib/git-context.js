@@ -31,6 +31,19 @@ export async function getRepoContext(cwd) {
 }
 
 /**
+ * Return the repository's top-level git directory as an absolute path.
+ * Falls back to null when the command is unavailable or the path is not a repo.
+ */
+export async function resolveGitCommonDir(cwd) {
+  const commonDir = await runGit(
+    ['rev-parse', '--path-format=absolute', '--git-common-dir'],
+    cwd,
+  );
+  if (!commonDir) return null;
+  return isAbsolute(commonDir) ? resolve(commonDir) : resolve(cwd, commonDir);
+}
+
+/**
  * Derive a short, human-readable repo name from a context. Handles common
  * remote-URL shapes (`git@github.com:user/repo.git`, `https://…/repo.git`)
  * and falls back to the toplevel directory basename.

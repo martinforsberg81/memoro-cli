@@ -90,6 +90,14 @@ describe('codex launchSpec — binary resolution', () => {
     assert.deepEqual(spec.args(['resume', 'cx_123'], { startupMessage: 'grounding' }), ['resume', 'cx_123']);
   });
 
+  it('args() appends --add-dir when a common git dir is provided', () => {
+    const spec = codex.launchSpec({ resolveBinary: () => '/usr/local/bin/codex' });
+    assert.deepEqual(
+      spec.args(['resume', 'cx_123'], { gitCommonDir: '/repo/.git' }),
+      ['resume', 'cx_123', '--add-dir', '/repo/.git'],
+    );
+  });
+
   it('resumeArgs uses Codex native resume by id', () => {
     assert.deepEqual(codex.resumeArgs({ sessionId: 'cx_123' }), ['resume', 'cx_123']);
   });

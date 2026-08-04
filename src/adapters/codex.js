@@ -278,11 +278,15 @@ export function instructionsFile() {
 export function launchSpec({ resolveBinary = resolveRealCodexBinary } = {}) {
   let bin = null;
   try { bin = resolveBinary(); } catch { bin = null; }
-  const buildArgs = (argv = [], { startupMessage = null, effectivePolicy = null } = {}) => {
+  const buildArgs = (
+    argv = [],
+    { startupMessage = null, effectivePolicy = null, gitCommonDir = null } = {},
+  ) => {
     const base = [...argv];
     const policyArgs = renderPolicy(effectivePolicy).launchArgs;
     void startupMessage;
-    return [...base, ...policyArgs];
+    const commonDirArg = gitCommonDir ? ['--add-dir', gitCommonDir] : [];
+    return [...base, ...policyArgs, ...commonDirArg];
   };
   return {
     bin,
