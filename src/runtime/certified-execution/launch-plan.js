@@ -160,6 +160,7 @@ export async function prepareCertifiedLaunchPlan({
       capabilities,
       sessionId: mcSessionId,
       socketPath: githubReady ? paths.githubCapabilitySocketPath : null,
+      installSessionGitHubShim: false,
       shimDirectory: paths.runtimeToolsBinPath,
       mcHomeDir: paths.mcHomeDir,
       deps: deps.github || {},

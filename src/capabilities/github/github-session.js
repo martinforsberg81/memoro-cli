@@ -106,13 +106,17 @@ export function renderGitHubSessionMarkdown(capabilities) {
     if (readsOnly) {
       return [
         `- GitHub reads for ${descriptor.github.repository.full_name} are brokered through the Memoro GitHub App.`,
-        `- Prefer \`mc github pr ${prCommands.join('|')}\`; the session-scoped \`gh\` shim maps only matching advertised commands to the same App broker.`,
+        `- Prefer \`mc github pr ${prCommands.join('|')}\` for the brokered path.`,
+        '- A session-scoped `gh` compatibility helper (if enabled) maps only matching advertised commands to the same App broker.',
+        '- Do not replace or disable your local `gh` here; your local credentials remain user-managed.',
         '- Do not run GitHub login, token-export, arbitrary API, extensions, or unsupported write commands in this session.',
       ].join('\n');
     }
     return [
       `- GitHub operations for ${descriptor.github.repository.full_name} are brokered through the Memoro GitHub App.`,
-      `- Prefer \`mc github pr ${prCommands.join('|')}\`; the session-scoped \`gh\` shim maps only matching advertised commands to the same App broker.`,
+      `- Prefer \`mc github pr ${prCommands.join('|')}\` for the brokered path.`,
+      '- A session-scoped `gh` compatibility helper (if enabled) maps only matching advertised commands to the same App broker.',
+      '- Do not replace or disable your local `gh` here; your local credentials remain user-managed.',
       '- Mutating command invocations use the coding host’s native approval policy; mc adds no second prompt.',
       '- Do not run GitHub login, token-export, arbitrary API, extensions, force, or unsupported write commands in this session.',
     ].join('\n');
@@ -130,6 +134,7 @@ export async function prepareGitHubSessionForLaunch({
   sessionId,
   socketPath,
   shimDirectory = null,
+  installSessionGitHubShim = false,
   mcHomeDir = mcHome(),
   execPath = process.execPath,
   deps = {},
@@ -137,21 +142,28 @@ export async function prepareGitHubSessionForLaunch({
   const descriptor = decodeSessionCapabilities(capabilities);
   const env = scrubGitHubCredentialEnv(baseEnv);
   const ensureShim = deps.ensureGitHubShim || ensureGitHubShim;
-  const shimPath = await ensureShim({
-    sessionId,
-    shimDirectory,
-    mcHomeDir,
-    execPath,
-    deps,
-  });
+  let shimPath = null;
+  if (installSessionGitHubShim) {
+    shimPath = await ensureShim({
+      sessionId,
+      shimDirectory,
+      mcHomeDir,
+      execPath,
+      deps,
+    });
+    env.PATH = prependPath(dirname(shimPath), env.PATH);
+  }
   env[MC_SESSION_CAPABILITIES_ENV] = JSON.stringify(descriptor);
   if (typeof socketPath === 'string' && socketPath.trim()) {
     env[MC_GITHUB_BROKER_SOCKET_ENV] = socketPath.trim();
   } else {
     delete env[MC_GITHUB_BROKER_SOCKET_ENV];
   }
-  env.PATH = prependPath(dirname(shimPath), env.PATH);
-  return { env, capabilities: descriptor, shim_path: shimPath };
+  return {
+    env,
+    capabilities: descriptor,
+    ...(shimPath ? { shim_path: shimPath } : {}),
+  };
 }
 
 export function scrubGitHubCredentialEnv(baseEnv = process.env) {

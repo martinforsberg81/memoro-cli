@@ -5,7 +5,12 @@ import { setTimeout as sleep } from 'node:timers/promises';
 
 import { resolveLaunch } from '../../adapters/index.js';
 import { DEFAULT_TOOL, readConfig, getApiUrl } from '../../lib/config.js';
-import { getRepoContext, deriveRepoName, resolvePublicRepoRef } from '../../lib/git-context.js';
+import {
+  getRepoContext,
+  deriveRepoName,
+  resolvePublicRepoRef,
+  resolveGitCommonDir,
+} from '../../lib/git-context.js';
 import { lookupOrMint } from '../../lib/coding-session.js';
 import { getPackageVersion } from '../../lib/version.js';
 import { groundSession } from '../../mc/ground.js';
@@ -150,6 +155,9 @@ export async function launchBrokerOwnedSession({
     stderr.write('mc: not inside a git repository. Coordinator is gated on repos.\n');
     return { code: 1 };
   }
+  const gitCommonDir = await (deps.resolveGitCommonDir || resolveGitCommonDir)(
+    repoContext.toplevel || cwd,
+  );
 
   const nativeLaunchHooks = launch.adapter?.NATIVE_LAUNCH_HOOKS || null;
   if (!managedPortable && nativeLaunchHooks?.prepareEarly) {
@@ -549,6 +557,7 @@ export async function launchBrokerOwnedSession({
       // capabilities on demand, so a connection repaired mid-session
       // starts working without a restart.
       socketPath: paths.sockPath,
+      installSessionGitHubShim: false,
       ...(managedPortable
         ? { shimDirectory: join(credentialDomain.descriptor.executor_root, 'bin') }
         : {}),
@@ -581,6 +590,7 @@ export async function launchBrokerOwnedSession({
       argv,
       launch_options: {
         startupMessage: groundingLaunchMessage,
+        ...(gitCommonDir ? { gitCommonDir } : {}),
         ...(brokerUserMessage ? { handoffUserMessage: brokerUserMessage } : {}),
         effectivePolicy: managedPortable ? null : effectivePolicy,
         ...(codexDeviceAuthBeforeLaunch ? { codexDeviceAuthBeforeLaunch } : {}),
