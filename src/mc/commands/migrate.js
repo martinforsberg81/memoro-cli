@@ -9,6 +9,9 @@
  * When it refuses, it says which runtime is still alive and what to do about
  * it, because "live-incompatible-runtimes" with no subject is a dead end.
  */
+import { readdirSync } from 'node:fs';
+import { connect } from 'node:net';
+import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 
 import {
@@ -18,10 +21,12 @@ import {
   migrateLegacySessionsSync,
 } from '../session-cutover.js';
 import { resolveLocalSourceSync } from '../local-source.js';
+import { mcHome } from '../paths.js';
 import { processIsAlive } from '../session-home-lock.js';
 
 const STOP_GRACE_MS = 3_000;
 const STOP_POLL_MS = 100;
+const SOCKET_PROBE_MS = 300;
 
 export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
@@ -82,6 +87,27 @@ export async function run(argv, deps = {}) {
     } else {
       writeReadiness(stderr, readiness);
       stderr.write('mc: stop them and retry, or run mc migrate --stop-legacy-runtimes\n');
+    }
+    return 1;
+  }
+
+  // A pid file is a claim about a process, and claims go missing: any mc that
+  // rewrites `broker.pid` can leave a running broker unnamed, and the process
+  // check then sees nothing. The socket is the process — if something accepts
+  // a connection on it, quarantining it would pull the floor out from under a
+  // live runtime. This runs only for the full cutover; a selective migration
+  // takes no socket away from anyone.
+  const listening = await probeLegacySockets(deps.mcHomeDir || mcHome(), {
+    connectFn: deps.connectFn || connect,
+    timeoutMs: deps.socketProbeMs ?? SOCKET_PROBE_MS,
+  });
+  if (listening.length > 0) {
+    if (opts.json) {
+      stdout.write(`${JSON.stringify({ ok: false, state: 'blocked', listening }, null, 2)}\n`);
+    } else {
+      stderr.write(`mc: a legacy runtime is still listening on ${listening.length} socket${listening.length === 1 ? '' : 's'}\n`);
+      for (const path of listening) stderr.write(`  ${path}\n`);
+      stderr.write('mc: stop it with mc broker stop, then retry\n');
     }
     return 1;
   }
@@ -177,6 +203,33 @@ function migrateSelected({ stdout, stderr, opts, deps }) {
     stdout.write('mc: the rest of this machine is untouched; run mc migrate to finish\n');
   }
   return result.blocked.length === 0 ? 0 : 1;
+}
+
+async function probeLegacySockets(root, { connectFn, timeoutMs }) {
+  const candidates = [join(root, 'broker.sock'), join(root, 'provider-artifact.sock')];
+  try {
+    for (const name of readdirSync(join(root, 'hosts'))) {
+      candidates.push(join(root, 'hosts', name, 'broker.sock'));
+    }
+  } catch { /* no hosts directory is the migrated-or-never-used case */ }
+  const results = await Promise.all(candidates.map((path) => new Promise((resolve) => {
+    let socket;
+    const finish = (value) => {
+      try { socket?.destroy(); } catch { /* the probe is over either way */ }
+      resolve(value);
+    };
+    try {
+      socket = connectFn(path);
+    } catch {
+      resolve(null);
+      return;
+    }
+    socket.setTimeout?.(timeoutMs);
+    socket.once('connect', () => finish(path));
+    socket.once('error', () => finish(null));
+    socket.once('timeout', () => finish(null));
+  })));
+  return results.filter(Boolean);
 }
 
 async function stopLegacyRuntimes(blocking, { kill, isAlive, graceMs, pollMs }) {
