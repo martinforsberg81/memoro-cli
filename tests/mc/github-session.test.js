@@ -121,7 +121,11 @@ describe('GitHub session capability boundary', () => {
 
   test('write-ready grounding exposes the provider-neutral surface without mc approval state', async () => {
     const response = readyResponse();
-    response.github.operations.push('pull_request.create', 'pull_request.update');
+    response.github.operations.push(
+      'pull_request.create',
+      'pull_request.update',
+      'pull_request.merge',
+    );
     const capabilities = await fetchGitHubSessionCapabilities({
       connectionClient: grantClient(),
       repository: 'acme/widgets',
@@ -129,9 +133,10 @@ describe('GitHub session capability boundary', () => {
     });
     const markdown = renderGitHubSessionMarkdown(capabilities);
 
-    assert.match(markdown, /mc github pr list\|view\|checks\|create\|update/);
+    assert.match(markdown, /mc github pr list\|view\|checks\|create\|update\|merge/);
     assert.match(markdown, /coding host’s native approval policy/);
-    assert.match(markdown, /gh pr create/);
+    assert.match(markdown, /same App broker/);
+    assert.doesNotMatch(markdown, /Never.*merge/i);
     assert.doesNotMatch(markdown, /browser|approval_mode|approval_required|approve exact/i);
     assert.doesNotMatch(markdown, /access_token|GH_TOKEN|installation_id/i);
   });

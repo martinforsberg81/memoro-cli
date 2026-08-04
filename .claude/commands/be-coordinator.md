@@ -1,92 +1,49 @@
 ---
-description: Prime this session as a coordinator for implementation work on this project.
+description: Ground this session for bounded coordination work on this project.
 ---
 
 # Be coordinator
 
-Flip this session into coordinator mode for the coordinator ↔ agent
-loop. See `.claude/skills/agent-coordination.md` for the full protocol.
+Use coordinator mode when work will be delegated across sessions. For a focused
+task, work directly instead of adding a coordinator handoff.
 
-## Instructions
+## Grounding
 
-Do these in order without asking for confirmation:
+1. Read `docs/coding-agent-protocol.md`.
+2. Read `.claude/skills/agent-coordination.md` only when delegation or parallel
+   work is actually needed.
+3. Identify the current plan whose status and scope match the task. Read only
+   the relevant sections. Never default to the superseded
+   `docs/plans/worktree-lifecycle.md`.
+4. Take one read-only state snapshot:
+   - current branch, status, and recent base commits;
+   - `mc github pr list --state open --limit 20`;
+   - one recent PR snapshot when it materially affects ordering.
 
-1. **Read these files:**
-   - `CLAUDE.md` — project instructions + critical paths
-   - `.claude/skills/agent-coordination.md` — the coordinator/agent
-     protocol (read the whole thing). The two sections that govern
-     everything else and must be active in your context before you
-     coordinate: **"Why the orchestrator role exists"** (the two
-     purposes — context protection + brief-as-quality-mechanism) and
-     **"Why this loop mitigates LLM failure modes"**
-   - The current plan: usually `docs/plans/worktree-lifecycle.md` or
-     whichever plan was most recently modified in `docs/plans/`. If
-     several look active, list them and ask which one.
+`mc github` is the canonical App-backed surface. Do not run GitHub login,
+token-export, arbitrary API, or native-credential fallback commands. Do not
+poll unchanged PR or check state.
 
-2. **Run a short state probe (no edits):**
-   - `git log --oneline -5 main` — what's freshly on main
-   - `gh pr list --state open` — what's in flight
-   - `gh pr list --state merged --limit 5` — what just shipped
-   - Identify the latest drev number from PR titles or commit
-     messages
+## Readiness report
 
-3. **Announce coordinator readiness with one tight status report:**
+Report only:
 
-   ```
-   Coordinator mode active.
+```text
+Coordinator mode active.
+Outcome: <current outcome>
+Current plan: <file and status, or none>
+In flight: <relevant PRs/work units>
+Dependencies or overlap: <one line>
+Next bounded action: <one line>
+```
 
-   Targets: keep the roadmap/end-goal visible, preserve the
-   orchestrator role, and keep work projects ordered across sessions.
+Then proceed with the user's requested coordination work. Do not refuse direct
+implementation merely because coordinator mode is active; if the user asks for
+hands-on work, perform it and retain the same scope and publication contract.
 
-   Operating frame: I stay high-altitude (protect this context) and
-   externalise build work into agent briefs (the brief is the quality
-   mechanism). I'll fan detail out, not pull it in.
+## Publication
 
-   Project: <repo>
-   Active plan: <plan file + status line>
-   Last drev shipped: <drev N — short summary>
-   In flight: <0+ open PRs with one-line each>
-   Recent decisions worth remembering: <bullet from latest PRs>
-   ```
-
-   Then a one-line: "Ready for next drev assignment, or a design
-   question, or status check on something in flight."
-
-4. **Wait for user input.** Do not begin implementation work in this
-   session. If asked to code, redirect: "I'm in coordinator mode —
-   spawn an implementation session and I'll write its delegation
-   prompt." If the user insists, comply but flag the role break
-   explicitly.
-
-## Operating reminders
-
-- **Stay high-altitude (the load-bearing reminder).** If you catch
-  yourself reasoning about implementation mechanics — which file, which
-  flag, how an agent is invoked, what the diff says — you've dropped
-  altitude. That detail belongs in a brief for an agent, not in this
-  context. The two purposes in the skill's "Why the orchestrator role
-  exists" govern every reminder below. Re-read them if the loop starts
-  feeling like mechanics.
-- Follow the 7-step loop in the skill verbatim
-- Use **negative requirements** in delegation prompts: state what
-  to build AND what NOT to build AND when to escalate
-- Pair positive scope with explicit "deferred from this drev" list
-- Spot-check 1–2 key files per PR review, not every line — the
-  PR body's judgment-calls section is 80 % of the review
-- Be honest about scope creep + lazy skips when you see them
-- Preserve the **peer dynamic** (not manager, not helper). The
-  worker is a peer with different stakes and a different time
-  budget. Friction between roles is the feature.
-
-## When to break role
-
-You're a coordinator, not a tyrant. Drop the role and act directly when:
-
-- The user explicitly asks for hands-on edits in this session
-- The task is too small to justify spawning a worker (one-line
-  doc fix, README typo, etc.)
-- An incident needs immediate action (broken main, leaked secret,
-  failing prod deploy)
-
-When you break role, say so: "Breaking coordinator role for this
-because <reason>." Resume coordinator mode after.
+Delegated work follows the deterministic GitHub lifecycle in
+`docs/coding-agent-protocol.md`. Creating a PR, observing checks, approving a
+merge, and cleaning a session branch are separate actions; no coordinator
+shortcut overrides those rules.

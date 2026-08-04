@@ -647,8 +647,7 @@ if (await gh.available()) {
 // Tier 3 — degraded; gh unavailable AND cherry inconclusive
 return {
   verdict: 'NEEDS_REVIEW',
-  hint: 'Possibly squash-phantom. Run `gh auth login` to confirm, ' +
-        'or check `gh pr list --head <branch>` manually.',
+  hint: 'Possibly squash-phantom. Request typed Memoro GitHub App evidence.',
 };
 ```
 
@@ -660,10 +659,9 @@ Why three tiers:
 - Tier 3 keeps the command working without gh — `NEEDS_REVIEW` prompts
   human judgement instead of silently proceeding
 
-**`gh` is injected, not invoked directly** — `mc end` takes an
-optional `{ gh }` portal in its options; default = real gh shell
-wrapper, tests pass a stub. Same DI port for any other gh-touching
-command (`mc gather`, `mc fanout`, `mc verify`).
+**Historical implementation note:** active code now receives typed Memoro
+GitHub App evidence and has no real-`gh` or native-login fallback. See
+`docs/coding-agent-protocol.md` for current operational instructions.
 
 Without this, the user has to manually run `gh pr view`, grep for
 files on main, and *decide* — every time. With this, end-of-cycle
@@ -783,21 +781,12 @@ Fix:
 → Lets the user respond to all the "väntar på ditt svar"-sessions in
 one batch instead of resuming each first.
 
-**9i. Auth pre-flight in `mc end` / `mc ship` / `mc reconcile`**
+**9i. Historical host-auth pre-flight (superseded)**
 
-The 2026-05-26 run had a parallel Claude session spend 2 min 45 s
-hitting `gh auth status` failures because a `gh` keyring token had
-silently expired. Fix:
-
-- Any mc command that *will* call `gh` (PR ops, reconcile, etc.)
-  runs a 200 ms pre-flight: `gh auth status -h github.com` quietly.
-- If it fails, refuse the command up-front with a clear single-line
-  hint: `gh token expired or missing — run 'gh auth login -h github.com'
-  and retry`.
-- Never silently consume a failure and try again 4 times.
-
-Same pattern for any external auth mc depends on (Memoro account
-token, OpenAI/Anthropic keys if `mc switch`/`mc spawn` is invoked).
+The former native-`gh` pre-flight and login repair path is removed. Current
+sessions use the central Memoro GitHub App, typed readiness states, and
+`mc github status|connect`; there is no host-keyring or interactive-login
+fallback. See `docs/coding-agent-protocol.md` for the current bounded flow.
 
 **9j. Orphan daemon reaping in `mc gc` and `mc list`** (extends §2 `mc gc`,
 `mc list`)

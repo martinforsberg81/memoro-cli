@@ -95,21 +95,26 @@ export function renderGitHubSessionMarkdown(capabilities) {
     descriptor = unavailableGitHubSessionCapabilities();
   }
   if (descriptor.github.state === 'ready') {
+    const operations = new Set(descriptor.github.operations);
     const readsOnly = descriptor.github.operations.every(
       (operation) => githubOperationEffect(operation) === 'read',
     );
+    const prCommands = ['list', 'view', 'checks'];
+    if (operations.has('pull_request.create')) prCommands.push('create');
+    if (operations.has('pull_request.update')) prCommands.push('update');
+    if (operations.has('pull_request.merge')) prCommands.push('merge');
     if (readsOnly) {
       return [
         `- GitHub reads for ${descriptor.github.repository.full_name} are brokered through the Memoro GitHub App.`,
-        '- Prefer `mc github pr list|view|checks`; the session-scoped `gh` shim supports only the matching read commands.',
-        '- Never run GitHub login, token-export, arbitrary API, extension, merge, or write commands in this session.',
+        `- Prefer \`mc github pr ${prCommands.join('|')}\`; the session-scoped \`gh\` shim maps only matching advertised commands to the same App broker.`,
+        '- Do not run GitHub login, token-export, arbitrary API, extensions, or unsupported write commands in this session.',
       ].join('\n');
     }
     return [
       `- GitHub operations for ${descriptor.github.repository.full_name} are brokered through the Memoro GitHub App.`,
-      '- Prefer `mc github pr list|view|checks|create|update`; the session-scoped `gh` shim supports the matching reads and narrow `gh pr create`.',
+      `- Prefer \`mc github pr ${prCommands.join('|')}\`; the session-scoped \`gh\` shim maps only matching advertised commands to the same App broker.`,
       '- Mutating command invocations use the coding host’s native approval policy; mc adds no second prompt.',
-      '- Never run GitHub login, token-export, arbitrary API, extension, merge, force, or unsupported write commands in this session.',
+      '- Do not run GitHub login, token-export, arbitrary API, extensions, force, or unsupported write commands in this session.',
     ].join('\n');
   }
   return [

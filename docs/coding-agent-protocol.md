@@ -23,40 +23,30 @@ writes briefs and uses the agent tools already available in its host.
     compatibility, hook installation, heartbeat daemon)
   - `mc` → `src/bin-mc.js` (high-level: lifecycle, coordinator,
     fanout, vault, adapter sync)
-- Test: `npm test` (runs `node --test 'tests/**/*.test.js'`,
-  `node:assert/strict`).
-- Plan: `docs/plans/worktree-lifecycle.md` is the long-running plan
-  for the whole mc design. Read it (or at least the §-sections in
-  scope) before starting any drev.
+- Focused tests: run `node --test --import ./tests/_isolate-home.mjs` with the
+  exact relevant test files. `npm test` is the explicit full repository suite,
+  not the default after each small edit.
+- Current V1 session work is governed by
+  [`mc-v1-session-architecture.md`](plans/mc-v1-session-architecture.md) and
+  [`mc-v1-session-pr-plan.md`](plans/mc-v1-session-pr-plan.md). Read only the
+  current sections needed for the task.
+- `docs/plans/worktree-lifecycle.md` is historical context. Do not execute its
+  commands or use it to override current architecture, repository guidance, or
+  live capability descriptors.
 - Cloud workload changes: read
   [`docs/plans/mc-v2-workload-allowlist.md`](plans/mc-v2-workload-allowlist.md)
   first. No route outside that fail-closed table is permitted.
 
 ## Working on this codebase as a coding agent
 
-For multi-PR work, multi-agent coordination, or any task delegated from a
-coordinator session through the host tool's agent surface, **load
-`.claude/skills/agent-coordination.md` first**. The file lives under
-`.claude/` because Claude Code auto-discovers it there, but the
-content is tool-agnostic — Codex / GPT agents read the same file
-directly.
+Load `.claude/skills/agent-coordination.md` only when work is actually
+delegated across sessions or agents. It defines roles and handoffs; it does not
+duplicate repository, testing, or publication rules from this protocol.
 
-It codifies the coordinator ↔ agent loop and the engineering
-patterns established across drev 1–5. Patterns include:
-
-- Authority lives in the verbs (no logic duplication in docs/hints)
-- Injectable dep-portals with soft-degrade
-- Exit-before-side-effect
-- Pure-helper export for in-process tests
-- Defensive `--apply` parsing
-- Subprocess test hygiene: env-scrub + `close` event
-- Ask-vs-guess discipline (zero guesses on design)
-- Negative requirements in delegation prompts
-- Honest uncertainty disclosure (drev 4)
-- Architectural self-upgrades, bounded (drev 4)
-- Parallel agents safe when briefs are disjoint (drev 5)
-- Which-layer-fired verification (drev 5)
-- Tests cover non-JSON error paths too (PR #48)
+For focused work, inspect, implement, verify, and publish directly. For larger
+work, agree on a concise contract covering outcome, scope, non-goals,
+completion criteria, validation, dependencies, and escalation points. Resolve
+uncertainty through read-only inspection before asking or guessing.
 
 **Priming as coordinator** depends on your tool:
 
@@ -67,8 +57,9 @@ patterns established across drev 1–5. Patterns include:
   `.claude/commands/be-coordinator.md`, then follow the priming
   instructions in be-coordinator to enter coordinator mode."*
 
-The instructions and the state probe are identical across tools;
-only the invocation differs.
+The command performs one bounded state snapshot through the App-backed
+`mc github` surface. It does not require a personal `gh` login or repeated
+polling.
 
 ## Work Method Updates
 
@@ -174,6 +165,37 @@ endpoint the agent can repurpose as a credential proxy.
   `MC_HOST_GH_BIN` as public interfaces. Cloud must work with the local machine
   offline, and neither source may fall back implicitly to a local `gh` login.
 
+### Deterministic publication lifecycle
+
+Use one bounded transaction for ordinary commit → PR → main work:
+
+1. Inspect the current branch, complete diff, and base once. Run focused tests
+   proportional to the changed paths and risk. Run the full suite only when the
+   scope or release gate requires it.
+2. Stage only intended files, commit, and freeze the exact local head SHA.
+3. Publish only the registered session branch through the typed Memoro GitHub
+   App operation advertised by the live session. Publication is non-force and
+   expected-head/base guarded. If branch publication is not advertised, stop
+   with the capability repair state; do not fall back to GitHub login, a host
+   credential helper, raw authenticated `git push`, or per-file GitHub object
+   reconstruction.
+4. Create or update the PR through `mc github`. The PR description states what
+   changed, why, user impact, root cause for fixes, validation, and known gaps.
+5. Read one current PR/check/review snapshot for the frozen head. This
+   repository currently has no automatic pull-request workflows; an empty
+   checks result is terminal normal state, not a reason to poll. Never claim a
+   hosted gate ran unless GitHub reports that exact head's run.
+6. Review the final combined diff. After the required explicit merge approval,
+   merge through the App with the exact expected head SHA and the repository's
+   established merge method. Preserve the session branch; lifecycle tooling
+   owns cleanup.
+7. Confirm the merge result once. Re-read or revalidate only when the head,
+   base, diff, review state, or external condition actually changed.
+
+The session-scoped `gh` shim is compatibility syntax for its advertised typed
+operations, not native GitHub authority. `mc github` is the canonical wording
+in instructions and diagnostics.
+
 ## Critical paths — extra care
 
 - `src/commands/auth.js` — Memoro keychain accounts, browser OAuth
@@ -216,19 +238,6 @@ endpoint the agent can repurpose as a credential proxy.
   next sync. Edit this file instead for repo conventions, and use
   `mc coding-profile read|diff|write` for durable user work-method
   changes.
-
-## Plan + skill cross-reference
-
-| Plan section | Skill section | Status |
-|---|---|---|
-| §2 lifecycle commands | step 4 implement | shipped (drev 1) |
-| §9 cleanup tooling | patterns 1, 2, 7 | shipped (drev 2) |
-| §10 orchestration | the whole skill | fanout MVP shipped; verifier + ensemble + hierarchy pending |
-| §11 onboarding | patterns 5, 8 | shipped (drev 2) |
-| §12 token vault | patterns 2, 7, 12 | phases 1–3 shipped (drev 3, 4, 5a) |
-| §13 tool-portability | this file | phases 1–3 shipped; canon materialised into repos (§13c) |
-| §14 device flow | pattern 12 | shipped |
-| §15 memoro-agent MCP | pattern 14 | proposed |
 
 ## Per-tool surface (what each tool reads natively)
 
