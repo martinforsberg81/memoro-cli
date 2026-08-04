@@ -87,6 +87,7 @@ import {
 export const SESSION_CUTOVER_PLAN_SCHEMA = 'mc-session-cutover-plan';
 export const SESSION_CUTOVER_BACKUP_SCHEMA = 'mc-session-cutover-backup';
 export const SESSION_CUTOVER_RECEIPT_SCHEMA = 'mc-session-cutover-receipt';
+export const SESSION_PARTIAL_MIGRATION_SCHEMA = 'mc-session-partial-migration';
 export { SESSION_CUTOVER_ROLLBACK_SCHEMA } from './session-cutover-interlock.js';
 
 const SHA256 = /^[a-f0-9]{64}$/u;
@@ -148,12 +149,17 @@ export function createSessionCutoverPlanSync({
     throw error;
   }
 
+  // Anything a selective `mc migrate --session` already moved keeps its
+  // existing session home. Re-planning it would mint a second identity for
+  // one session and collide on its name claim.
+  const alreadyMigrated = readPartialMigrationsSync(root);
   const names = new Set();
-  const sessions = registry.entries.map((entry, entryIndex) => {
+  const sessions = registry.entries.flatMap((entry, entryIndex) => {
+    if (alreadyMigrated.has(legacyKeyFor(entry))) return [];
     const normalizedName = normalizeSessionName(entry.name);
     if (names.has(normalizedName)) throw cutoverError('duplicate-session-name');
     names.add(normalizedName);
-    return planSession({
+    return [planSession({
       root,
       entry,
       entryIndex,
@@ -163,7 +169,7 @@ export function createSessionCutoverPlanSync({
       legacySessionId: registry.legacy_session_ids?.[entryIndex] ?? entry.session_id,
       lifecycle: lifecycle.bySession.get(entry.coding_session_id) || null,
       random,
-    });
+    })];
   });
   const backupItems = collectBackupItems(sources);
   const unsigned = {
@@ -211,12 +217,181 @@ export function inspectSessionCutoverReadinessSync({
     randomBytes,
   );
   const lifecycle = inspectLegacyLifecycleSync({ mcHomeDir: root, registry, isAlive });
+  const already = readPartialMigrationsSync(root);
+  const blockingIds = new Set(lifecycle.blocking.map((item) => item.id));
+  const pending = (registry.entries || [])
+    .filter((entry) => !already.has(legacyKeyFor(entry)))
+    .map((entry) => ({
+      name: entry.name,
+      blocked: blockingIds.has(legacyKeyFor(entry)) || blockingIds.has(entry.name),
+    }));
   return {
     state: lifecycle.blocking.length > 0 ? 'blocked' : 'ready',
     completion: null,
-    legacy_sessions: (registry.entries || []).length,
+    legacy_sessions: pending.length,
+    migrated_sessions: already.size,
+    pending,
     blocking: lifecycle.blocking,
   };
+}
+
+/**
+ * Migrate named legacy sessions one at a time, ahead of the full cutover.
+ *
+ * The full cutover is all-or-nothing by design: it quarantines the legacy
+ * registry, brokers, and hosts, and publishes a receipt that stops older
+ * binaries. That is the right end state and the wrong first move — it asks a
+ * machine with real work on it to move everything, at once, on faith.
+ *
+ * A selective migration copies chosen sessions into session homes and changes
+ * nothing else. Nothing is quarantined, no completion is published, and the
+ * legacy state stays exactly where it was, so the old binary keeps working
+ * for everything not yet moved. Each migrated session leaves a receipt, and
+ * the full cutover skips what those receipts already claim.
+ *
+ * The cost of that freedom is a divided machine: a session that exists in both
+ * places could be run from both. So a session whose own legacy runtime is
+ * alive is refused here — and the global broker, which the full cutover
+ * refuses over, is not a blocker, because nothing is being taken away from it.
+ */
+export function migrateLegacySessionsSync({
+  mcHomeDir = mcHome(),
+  sourceId,
+  names = [],
+  now = () => new Date().toISOString(),
+  random = randomBytes,
+  isAlive = processIsAlive,
+  afterWrite = null,
+} = {}) {
+  const root = normalizedRoot(mcHomeDir);
+  if (readSessionCutoverCompletionSync({ mcHomeDir: root }).kind !== 'absent') {
+    throw cutoverError('cutover-already-complete');
+  }
+  if (readCutoverPlanSync({ mcHomeDir: root }).kind === 'present') {
+    throw cutoverError('cutover-plan-present');
+  }
+  const requested = [...new Set(names)];
+  if (requested.length === 0) throw cutoverError('no-session-selected');
+
+  assertSourceId(sourceId);
+  const registryTarget = LEGACY_TARGETS.find((target) => target.key === 'registry');
+  const registrySource = snapshotLegacyTargetSync(root, registryTarget);
+  const registry = readLegacyRegistrySync(root, registrySource, random);
+  const lifecycle = inspectLegacyLifecycleSync({ mcHomeDir: root, registry, isAlive });
+  const blockingIds = new Set(
+    lifecycle.blocking
+      .filter((item) => item.reason !== 'global-broker-alive')
+      .map((item) => item.id),
+  );
+  const already = readPartialMigrationsSync(root);
+
+  const byName = new Map();
+  registry.entries.forEach((entry, entryIndex) => {
+    byName.set(normalizeSessionName(entry.name), { entry, entryIndex });
+  });
+
+  const selected = [];
+  const blocked = [];
+  const skipped = [];
+  const unknown = [];
+  for (const name of requested) {
+    const found = byName.get(normalizeSessionName(name));
+    if (!found) { unknown.push(name); continue; }
+    const key = legacyKeyFor(found.entry);
+    if (already.has(key)) { skipped.push({ name: found.entry.name, reason: 'already-migrated' }); continue; }
+    if (blockingIds.has(key) || blockingIds.has(found.entry.name)) {
+      blocked.push({ name: found.entry.name, reason: 'runtime-process-alive' });
+      continue;
+    }
+    selected.push(found);
+  }
+  if (unknown.length > 0) {
+    const error = cutoverError('unknown-legacy-session');
+    error.names = unknown;
+    throw error;
+  }
+  if (selected.length === 0) return { ok: true, migrated: [], blocked, skipped };
+
+  const createdAt = exactIso(now());
+  const sessions = selected.map(({ entry, entryIndex }) => planSession({
+    root,
+    entry,
+    entryIndex,
+    sourceId,
+    createdAt,
+    registrySha256: registrySource.content_sha256,
+    legacySessionId: registry.legacy_session_ids?.[entryIndex] ?? entry.session_id,
+    lifecycle: lifecycle.bySession.get(entry.coding_session_id) || null,
+    random,
+  }));
+  const unsigned = {
+    schema: SESSION_CUTOVER_PLAN_SCHEMA,
+    version: SESSION_CUTOVER_VERSION,
+    source_id: sourceId,
+    created_at: createdAt,
+    sources: [],
+    backup_items: [],
+    sessions,
+  };
+  const plan = { ...unsigned, plan_sha256: digestValue(unsigned) };
+
+  const paths = cutoverPaths(root);
+  ensurePrivateDirectoryChainSync({ trustedRoot: root, directory: paths.partialRoot });
+  const migrated = [];
+  for (let index = 0; index < sessions.length; index += 1) {
+    const session = sessions[index];
+    importPlannedSessionSync({ root, plan, session, random, afterWrite });
+    const entry = selected[index].entry;
+    publishImmutablePrivateJsonSync({
+      path: join(paths.partialRoot, `${session.mc_session_id}.json`),
+      value: {
+        schema: SESSION_PARTIAL_MIGRATION_SCHEMA,
+        version: SESSION_CUTOVER_VERSION,
+        mc_session_id: session.mc_session_id,
+        legacy_key: legacyKeyFor(entry),
+        name: session.name,
+        source_id: sourceId,
+        plan_sha256: plan.plan_sha256,
+        migrated_at: createdAt,
+      },
+      trustedRoot: root,
+      random,
+    });
+    afterWrite?.(`partial:${session.mc_session_id}`);
+    migrated.push({ name: session.name, mc_session_id: session.mc_session_id });
+  }
+  verifyAppliedCutoverSync({ root, plan });
+  return { ok: true, migrated, blocked, skipped };
+}
+
+function legacyKeyFor(entry) {
+  return entry.coding_session_id || entry.session_id || entry.name;
+}
+
+function readPartialMigrationsSync(root) {
+  const byKey = new Map();
+  const partialRoot = cutoverPaths(root).partialRoot;
+  if (!existsNoFollow(partialRoot)) return byKey;
+  if (!isDirectoryNoFollow(partialRoot)) throw cutoverError('unsafe-partial-migration-root');
+  for (const name of readdirSync(partialRoot).sort()) {
+    if (!name.endsWith('.json')) continue;
+    const value = boundedJson(join(partialRoot, name), 4096).value;
+    if (!plain(value)
+      || value.schema !== SESSION_PARTIAL_MIGRATION_SCHEMA
+      || value.version !== SESSION_CUTOVER_VERSION
+      || !SAFE_ID.test(value.legacy_key || '')
+      || !MC_SESSION_ID_RE.test(value.mc_session_id || '')) {
+      throw cutoverError('invalid-partial-migration-receipt');
+    }
+    // A receipt whose session home is gone claims nothing. The legacy entry
+    // is still in the registry, so the full cutover should migrate it again
+    // rather than silently drop it.
+    if (readSessionHomeSync({ mcHomeDir: root, mcSessionId: value.mc_session_id }).kind !== 'present') {
+      continue;
+    }
+    byKey.set(value.legacy_key, value);
+  }
+  return byKey;
 }
 
 export function applySessionCutoverSync({
@@ -1453,6 +1628,7 @@ function cutoverPaths(root) {
     backupFilesRoot: join(cutoverRoot, 'backup', 'files'),
     backupManifestPath: join(cutoverRoot, 'backup', 'manifest.json'),
     receiptsRoot: join(cutoverRoot, 'receipts'),
+    partialRoot: join(cutoverRoot, 'partial'),
     quarantineRoot: join(cutoverRoot, 'quarantine'),
     rollbackSessionsRoot: join(cutoverRoot, 'rollback-sessions'),
   };

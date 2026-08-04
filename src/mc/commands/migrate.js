@@ -1,5 +1,5 @@
 /**
- * `mc migrate [--dry-run] [--stop-legacy-runtimes] [--json]`
+ * `mc migrate [--session <name>]… [--dry-run] [--stop-legacy-runtimes] [--json]`
  *
  * The one-time move from the old global registry to source-owned session
  * homes. It is explicit on purpose: creating, opening, or listing a session
@@ -15,6 +15,7 @@ import {
   applySessionCutoverSync,
   createSessionCutoverPlanSync,
   inspectSessionCutoverReadinessSync,
+  migrateLegacySessionsSync,
 } from '../session-cutover.js';
 import { resolveLocalSourceSync } from '../local-source.js';
 import { processIsAlive } from '../session-home-lock.js';
@@ -28,7 +29,7 @@ export async function run(argv, deps = {}) {
   const opts = parseArgs(argv);
   if (opts.error) {
     stderr.write(`mc: ${opts.error}\n`);
-    stderr.write('usage — mc migrate [--dry-run] [--stop-legacy-runtimes] [--json]\n');
+    stderr.write('usage — mc migrate [--session <name>]… [--dry-run] [--stop-legacy-runtimes] [--json]\n');
     return 2;
   }
 
@@ -44,6 +45,10 @@ export async function run(argv, deps = {}) {
     if (opts.json) stdout.write(`${JSON.stringify({ ok: true, state: 'complete' }, null, 2)}\n`);
     else stdout.write('mc: this machine is already migrated to V1 sessions\n');
     return 0;
+  }
+
+  if (opts.sessions.length > 0) {
+    return migrateSelected({ stdout, stderr, opts, deps });
   }
 
   if (opts.dryRun) {
@@ -104,17 +109,74 @@ export async function run(argv, deps = {}) {
 }
 
 export function parseArgs(argv) {
-  const opts = { dryRun: false, stopLegacyRuntimes: false, json: false };
-  for (const arg of argv) {
+  const opts = { dryRun: false, stopLegacyRuntimes: false, json: false, sessions: [] };
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
     if (arg === '--dry-run') { opts.dryRun = true; continue; }
     if (arg === '--stop-legacy-runtimes') { opts.stopLegacyRuntimes = true; continue; }
     if (arg === '--json') { opts.json = true; continue; }
+    if (arg === '--session') {
+      const value = argv[index + 1];
+      if (!value || value.startsWith('--')) return { ...opts, error: '--session needs a session name' };
+      opts.sessions.push(value);
+      index += 1;
+      continue;
+    }
     return { ...opts, error: `unknown argument: ${arg}` };
   }
   if (opts.dryRun && opts.stopLegacyRuntimes) {
     return { ...opts, error: '--dry-run and --stop-legacy-runtimes are mutually exclusive' };
   }
+  if (opts.sessions.length > 0 && (opts.dryRun || opts.stopLegacyRuntimes)) {
+    return { ...opts, error: '--session cannot be combined with --dry-run or --stop-legacy-runtimes' };
+  }
   return opts;
+}
+
+/**
+ * Move only the named sessions and leave everything else where it is, so a
+ * machine with real work on it can try the migration on something it can
+ * afford to lose first.
+ */
+function migrateSelected({ stdout, stderr, opts, deps }) {
+  let result;
+  try {
+    const source = (deps.resolveLocalSource || resolveLocalSourceSync)({
+      mcHomeDir: deps.mcHomeDir,
+    });
+    result = (deps.migrateSessions || migrateLegacySessionsSync)({
+      mcHomeDir: deps.mcHomeDir,
+      sourceId: source.source_id,
+      names: opts.sessions,
+    });
+  } catch (error) {
+    if (error?.reason === 'unknown-legacy-session') {
+      return emitFailure({
+        stdout,
+        stderr,
+        opts,
+        reason: `no legacy session named ${error.names.map((name) => `"${name}"`).join(', ')}`,
+      });
+    }
+    return emitFailure({ stdout, stderr, opts, reason: error?.reason || error?.message });
+  }
+  if (opts.json) {
+    stdout.write(`${JSON.stringify({ ok: result.blocked.length === 0, ...result }, null, 2)}\n`);
+    return result.blocked.length === 0 ? 0 : 1;
+  }
+  for (const item of result.migrated) {
+    stdout.write(`mc: migrated ${item.name} (${item.mc_session_id})\n`);
+  }
+  for (const item of result.skipped) {
+    stdout.write(`mc: ${item.name} was already migrated\n`);
+  }
+  for (const item of result.blocked) {
+    stderr.write(`mc: ${item.name} was not migrated — ${describe(item.reason)}\n`);
+  }
+  if (result.migrated.length > 0) {
+    stdout.write('mc: the rest of this machine is untouched; run mc migrate to finish\n');
+  }
+  return result.blocked.length === 0 ? 0 : 1;
 }
 
 async function stopLegacyRuntimes(blocking, { kill, isAlive, graceMs, pollMs }) {
@@ -138,13 +200,29 @@ async function stopLegacyRuntimes(blocking, { kill, isAlive, graceMs, pollMs }) 
 }
 
 function writeReadiness(out, readiness) {
+  if (readiness.migrated_sessions) {
+    out.write(`mc: ${readiness.migrated_sessions} session${readiness.migrated_sessions === 1 ? '' : 's'} already migrated one at a time\n`);
+  }
   if (readiness.state === 'ready') {
     out.write(`mc: ready to migrate ${readiness.legacy_sessions} legacy session${readiness.legacy_sessions === 1 ? '' : 's'}\n`);
+    writePending(out, readiness);
     return;
   }
   out.write(`mc: migration is blocked by ${readiness.blocking.length} live legacy runtime${readiness.blocking.length === 1 ? '' : 's'}\n`);
   for (const item of readiness.blocking) {
     out.write(`  ${item.id} — ${describe(item.reason)}${item.pid ? ` (pid ${item.pid})` : ''}\n`);
+  }
+  writePending(out, readiness);
+}
+
+function writePending(out, readiness) {
+  const pending = readiness.pending || [];
+  if (pending.length === 0) return;
+  const free = pending.filter((item) => !item.blocked).map((item) => item.name);
+  out.write(`mc: ${pending.length} legacy session${pending.length === 1 ? '' : 's'} not yet migrated\n`);
+  if (free.length > 0) {
+    out.write(`mc: try one first — mc migrate --session ${free[0]}\n`);
+    out.write(`    available: ${free.join(', ')}\n`);
   }
 }
 

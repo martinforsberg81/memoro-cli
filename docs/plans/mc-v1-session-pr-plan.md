@@ -161,6 +161,12 @@ and let a real machine's history actually migrate.
   bookkeeping; a running broker still refuses.
 - `mc migrate [--dry-run] [--stop-legacy-runtimes] [--json]` reports which
   runtime blocks, why, and with which pid, and can stop them.
+- `mc migrate --session <name>` moves named sessions only, quarantining
+  nothing and publishing no completion, so a machine can rehearse the
+  migration on work it can afford to lose. Receipts under `cutover/partial/`
+  make the full cutover skip what was already moved. A session whose own
+  runtime is alive is refused; the global broker is not a blocker here,
+  because a selective migration takes nothing away from it.
 - Differing provider handles across a session's generations are history, not a
   conflict: the registry handle wins, the latest generation fills a gap.
 - A managed identity left under a reused session name is recorded as stale
