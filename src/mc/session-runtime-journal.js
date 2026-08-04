@@ -721,9 +721,37 @@ export function decideSessionRuntimeAction(snapshot, { tool = null } = {}) {
   const latest = snapshot.generations.at(-1) || null;
   if (latest === null) return { action: 'start' };
   if (latest.phase !== 'completed' && latest.phase !== 'imported') {
+    // A generation that failed or was aborted bound no conversation, so there
+    // is nothing to replace and nothing for the user to decide. Demanding an
+    // explicit `--replace` here turned mc's own failed launch into the user's
+    // homework: a session whose first launch crashed could never be opened
+    // again without a flag, for a conversation that never existed.
+    //
+    // What survives a failed attempt is whatever conversation the session had
+    // before it. Resume that if there is one; otherwise this is a start.
+    const previous = lastBoundConversation(snapshot);
+    if (previous === null) {
+      // A first launch that failed still consumed the session's one `start`,
+      // so the next attempt supersedes that generation instead. It replaces
+      // nothing a user would miss.
+      return {
+        action: 'replace-failed-generation',
+        previous_generation_id: latest.intent.generation_id,
+      };
+    }
+    if (tool !== null && tool !== previous.tool) {
+      return {
+        action: 'switch',
+        previous_conversation_id: previous.conversation_id,
+        source_tool: previous.tool,
+        target_tool: tool,
+        requires_handoff: true,
+      };
+    }
     return {
-      action: 'explicit-replacement-required',
-      previous_generation_id: latest.intent.generation_id,
+      action: 'resume',
+      conversation_id: previous.conversation_id,
+      tool: previous.tool,
     };
   }
   const conversationId = latest.receipts.at(-1).data.conversation_id;
@@ -748,6 +776,14 @@ export function decideSessionRuntimeAction(snapshot, { tool = null } = {}) {
     conversation_id: conversationId,
     tool: conversation.tool,
   };
+}
+
+/**
+ * The most recent conversation this session actually bound, independent of
+ * whether the generation that produced it is the newest one.
+ */
+function lastBoundConversation(snapshot) {
+  return snapshot.conversations.at(-1) || null;
 }
 
 function appendGenerationPhase(options, definition) {

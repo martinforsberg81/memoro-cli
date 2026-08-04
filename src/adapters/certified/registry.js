@@ -88,9 +88,11 @@ function builtinAdapter({ tool, providerTool }) {
         ...options,
         tool: providerTool,
       })).catch(() => null);
-      return result?.ok === true && plain(result.descriptor)
-        ? result
-        : failure(result?.reason || 'certified-boundary-unavailable');
+      if (result?.ok === true && plain(result.descriptor)) return result;
+      return {
+        ...failure(result?.reason || 'certified-boundary-unavailable'),
+        ...(result?.diagnostic_code ? { diagnostic_code: result.diagnostic_code } : {}),
+      };
     },
     resolve_argv({ launch, action, conversationHandle = null, uuid = randomUUID } = {}) {
       if (!launch?.ok || launch.id !== providerTool) return failure('certified-tool-mismatch');

@@ -68,6 +68,7 @@ export const LOCAL_CODEX_BOUNDARY_UNAVAILABLE = 'managed-portable-boundary-unava
 export const LOCAL_CODEX_CUSTODY_LOCKED = 'managed-portable-custody-locked';
 export const LOCAL_CODEX_AUTH_MISSING = 'managed-portable-codex-auth-missing';
 export const LOCAL_CODEX_RELEASE_UNTRUSTED = 'managed-portable-codex-release-untrusted';
+export const LOCAL_CODEX_WORKSPACE_CONTAINS_MC = 'managed-portable-workspace-contains-mc';
 
 const TOOL_AUTH_LABEL = 'tool-auth:codex';
 const LEGACY_TOOL_AUTH_LABEL = 'tool_auth.codex';
@@ -230,6 +231,18 @@ export async function prepareLocalCodexCredentialDomain({
   const safePath = managedSafePath({ executorBin, env });
   const userCodexHome = resolveUserCodexHome(env);
   const npmCachePath = resolveManagedNpmCachePath({ env });
+  // A credential boundary works by denying the sandbox everything that could
+  // reach vault admin — including mc's own binary. A workspace that *contains*
+  // that binary cannot have it denied without denying the workspace, so the
+  // boundary is unbuildable there and the probe correctly reports vault admin
+  // as reachable. Saying so beats a probe violation code the user cannot act
+  // on: the answer is to run the session somewhere other than mc's own install.
+  const mcInsideWorkspace = [hostMcRoot, vaultTarget?.binPath, vaultTarget?.entryPath]
+    .filter(Boolean)
+    .some((path) => resolve(path) === resolve(cwd) || isPathInside(cwd, resolve(path)));
+  if (mcInsideWorkspace) {
+    return safeFailure(LOCAL_CODEX_WORKSPACE_CONTAINS_MC);
+  }
   const forbiddenPaths = managedForbiddenPaths({
     cwd,
     domainPath,

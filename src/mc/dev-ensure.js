@@ -8,6 +8,7 @@ import {
   readFileSync,
 } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
+import { DEV_SERVER_LOCKS_DIRECTORY } from './dev-servers.js';
 import { setTimeout as sleep } from 'node:timers/promises';
 
 import { readConfig } from '../lib/config.js';
@@ -445,11 +446,11 @@ function devEnsureLockPath(plan, { mcDir }) {
   const key = createHash('sha256')
     .update(`${resolve(plan.worktree_path)}\0${plan.service.name}`)
     .digest('hex');
-  return join(mcDir, 'dev-servers', 'locks', `${key}.lock`);
+  return join(mcDir, 'dev-servers', DEV_SERVER_LOCKS_DIRECTORY, `${key}.lock`);
 }
 
 function devHeavyResourceLockPath({ mcDir }) {
-  return join(mcDir, 'dev-servers', 'locks', 'heavy-resource.lock');
+  return join(mcDir, 'dev-servers', DEV_SERVER_LOCKS_DIRECTORY, 'heavy-resource.lock');
 }
 
 function sameArgv(left, right) {

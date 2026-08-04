@@ -83,7 +83,11 @@ export async function run(rawArgv, deps = {}) {
     deps: deps.runtimeDeps || deps,
   });
   if (!result.ok) {
-    stderr.write(`mc: could not open "${session.metadata.name}" (${result.reason})\n`);
+    stderr.write(`mc: could not open "${session.metadata.name}" (${result.reason}${result.diagnostic_code ? `: ${result.diagnostic_code}` : ''})\n`);
+    if (result.reason === 'managed-portable-workspace-contains-mc') {
+      stderr.write('mc: this workspace contains mc\'s own installation, so a credential\n');
+      stderr.write('    boundary cannot exclude it. Run this session from another directory.\n');
+    }
     if (result.reason === 'explicit-replacement-required') {
       stderr.write(`mc: retry with --replace only if you want a new tool conversation\n`);
     }
