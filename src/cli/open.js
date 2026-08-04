@@ -89,6 +89,11 @@ export async function run(rawArgv, deps = {}) {
     }
     return result.code;
   }
+  // Not an instruction — a statement of what mc already did, so a session that
+  // suddenly starts fresh is explained rather than mysterious.
+  if (result.replaced_unresumable_conversation && !opts.json) {
+    stderr.write('mc: the recorded conversation had no transcript to resume; started a new one\n');
+  }
   if (opts.json) {
     stdout.write(`${JSON.stringify({
       ok: true,
