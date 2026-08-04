@@ -1,62 +1,64 @@
-/**
- * `mc read <name> [--last N] [--json]` — name-resolving rename of
- * `mc sessions read`.
- *
- * Foundation scope: arg-parsing + registry-name resolution. The actual
- * transcript fetch reuses `mc sessions read` plumbing in a follow-up.
- */
-import { formatEntryResolutionError, resolveEntry } from '../mc/registry.js';
+import { resolveLocalSessionSync } from '../mc/session-v1.js';
+import { readLocalSessionScreen } from '../runtime/session-host/terminal-client.js';
 
-export async function run(argv) {
+export async function run(argv, deps = {}) {
+  const stdout = deps.stdout || process.stdout;
+  const stderr = deps.stderr || process.stderr;
   const opts = parseArgs(argv);
-  if (opts.error) {
-    console.error(`mc: ${opts.error}`);
+  if (opts.error || !opts.identifier) {
+    stderr.write(`mc: ${opts.error || 'usage — mc read <local-session> [--last N] [--json]'}\n`);
     return 2;
   }
-  if (!opts.name) {
-    console.error('mc: usage — `mc read <name> [--last N]`');
-    return 2;
-  }
-
-  const resolved = resolveEntry(opts.name);
-  if (!resolved.ok) {
-    console.error(`mc: ${formatEntryResolutionError(opts.name, resolved)}`);
+  if (opts.identifier.startsWith('cloud:')) {
+    stderr.write('mc: cloud terminal read is unavailable on the V1 control-plane transport\n');
     return 1;
   }
-  const entry = resolved.entry;
-
-  // Live fetch wiring lands when the sessions-read pipe is plumbed
-  // through here. For now, signal what we'd do.
-  const out = {
-    ok: false,
-    name: entry.name,
-    session_id: entry.session_id || null,
-    repository_id: entry.repository_id || null,
-    coding_session_id: entry.coding_session_id || null,
+  const resolved = (deps.resolveLocalSession || resolveLocalSessionSync)(opts.identifier, {
+    mcHomeDir: deps.mcHomeDir,
+  });
+  if (!resolved.ok) {
+    stderr.write(`mc: local session "${opts.identifier}" was not found (${resolved.reason})\n`);
+    return 1;
+  }
+  const result = await (deps.readScreen || readLocalSessionScreen)({
+    mcHomeDir: deps.mcHomeDir,
+    mcSessionId: resolved.session.mc_session_id,
     last: opts.last,
-    note: 'live read not yet wired through `mc read` — use `mc sessions read <id>` for now',
-  };
-  if (opts.json) console.log(JSON.stringify(out, null, 2));
-  else console.error(`mc: ${out.note}`);
-  return 1;
+  });
+  if (!result.ok) {
+    stderr.write(`mc: could not read "${resolved.session.metadata.name}" (${result.reason})\n`);
+    return 1;
+  }
+  if (opts.json) {
+    stdout.write(`${JSON.stringify({
+      ok: true,
+      source_kind: 'local',
+      name: resolved.session.metadata.name,
+      mc_session_id: result.mc_session_id,
+      generation_id: result.generation_id,
+      text: result.text,
+    }, null, 2)}\n`);
+  } else {
+    stdout.write(result.text);
+    if (result.text && !result.text.endsWith('\n')) stdout.write('\n');
+  }
+  return 0;
 }
 
-function parseArgs(argv) {
-  const opts = { name: null, last: null, json: false };
-  for (let i = 0; i < argv.length; i++) {
-    const a = argv[i];
-    if (a === '--last') {
-      const v = argv[++i];
-      if (!/^\d+$/.test(String(v))) {
-        return { error: `--last expects an integer, got "${v}"` };
-      }
-      opts.last = Number(v);
+export function parseArgs(argv) {
+  const opts = { identifier: null, last: null, json: false };
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === '--json') { opts.json = true; continue; }
+    if (arg === '--last') {
+      const value = argv[++index];
+      if (!/^[1-9]\d*$/u.test(value || '')) return { ...opts, error: '--last requires a positive integer' };
+      opts.last = Number(value);
       continue;
     }
-    if (a === '--json') { opts.json = true; continue; }
-    if (a.startsWith('--')) return { error: `unknown flag: ${a}` };
-    if (opts.name) return { error: `unexpected arg: ${a}` };
-    opts.name = a;
+    if (arg.startsWith('--')) return { ...opts, error: `unknown flag: ${arg}` };
+    if (opts.identifier) return { ...opts, error: `unexpected arg: ${arg}` };
+    opts.identifier = arg;
   }
   return opts;
 }

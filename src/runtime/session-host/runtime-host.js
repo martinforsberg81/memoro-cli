@@ -223,6 +223,16 @@ export class SessionRuntimeHost extends EventEmitter {
     const snapshot = await this.screen.snapshot();
     client.queue.send(this._screenFrame(snapshot));
     client.ready = true;
+    if (this.state === 'exited' && this.exit) {
+      client.queue.send(this._frame('exit', {
+        exit_code: this.exit.exit_code,
+        signal: this.exit.signal,
+      }));
+    } else if (this.state === 'failed') {
+      client.queue.send(this._frame('error', {
+        code: this.fatalReason || 'runtime-exit-unclassified',
+      }));
+    }
     return { client_id: clientId, snapshot };
   }
 
@@ -232,7 +242,7 @@ export class SessionRuntimeHost extends EventEmitter {
     if (frame.type === 'attach') throw runtimeHostError('duplicate-attach');
     const client = this.clients.get(clientId);
     if (!client) throw runtimeHostError('runtime-client-missing');
-    if (frame.type !== 'ping' && frame.type !== 'status'
+    if (frame.type !== 'status'
       && (frame.mc_session_id !== this.mcSessionId
         || frame.generation_id !== this.generationId)) {
       client.queue.close('runtime-identity-mismatch');
@@ -245,8 +255,6 @@ export class SessionRuntimeHost extends EventEmitter {
       await this.resize(frame.cols, frame.rows);
     } else if (frame.type === 'detach') {
       client.queue.close('client-detached');
-    } else if (frame.type === 'ping') {
-      client.queue.send({ v: SESSION_HOST_PROTOCOL_VERSION, type: 'pong' });
     } else if (frame.type === 'status') {
       client.queue.send(this.statusFrame());
     }

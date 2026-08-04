@@ -9,9 +9,11 @@ const root = fileURLToPath(new URL('../../', import.meta.url));
 test('active lifecycle surfaces expose no selectable execution mode', () => {
   const sources = read([
     'src/cli/new.js',
+    'src/cli/open.js',
     'src/cli/resume.js',
     'src/mc/help-text.js',
-    'src/runtime/broker/launch-client.js',
+    'src/mc/session-runtime-v1.js',
+    'src/runtime/certified-execution/launch-plan.js',
   ]);
   assert.equal(sources.includes(`--${'native'}`), false);
   assert.equal(sources.includes(`--${'managed-portable'}`), false);

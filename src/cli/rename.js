@@ -1,128 +1,53 @@
-/**
- * `mc rename <old> <new> [--json]` (§2 + §3).
- *
- * Atomic-from-the-user's-pov: branch + dir + registry update. If the
- * dir move fails we attempt to roll back the branch rename so we don't
- * leave the world half-renamed.
- */
-import { existsSync, mkdirSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import {
-  formatEntryResolutionError,
-  renameEntry,
-  resolveEntry,
-} from '../mc/registry.js';
-import { git, primaryWorktree, branchExists } from '../mc/git.js';
+import { renameSessionHomeSync } from '../mc/session-home.js';
+import { resolveLocalSessionSync } from '../mc/session-v1.js';
 
-const NAME_RE = /^[a-z0-9][a-z0-9_-]*$/i;
-
-export async function run(argv) {
+export async function run(argv, deps = {}) {
+  const stdout = deps.stdout || process.stdout;
+  const stderr = deps.stderr || process.stderr;
   const opts = parseArgs(argv);
-  if (opts.error) {
-    console.error(`mc: ${opts.error}`);
+  if (opts.error || !opts.oldName || !opts.newName) {
+    stderr.write(`mc: ${opts.error || 'usage — mc rename <old> <new>'}\n`);
     return 2;
   }
-  if (!opts.oldName || !opts.newName) {
-    console.error('mc: usage — `mc rename <old> <new>` (two args required)');
-    return 2;
-  }
-  if (!NAME_RE.test(opts.newName)) {
-    console.error(`mc: invalid new name "${opts.newName}"`);
-    return 2;
-  }
-
-  const resolved = resolveEntry(opts.oldName);
+  const resolved = (deps.resolveLocalSession || resolveLocalSessionSync)(opts.oldName, {
+    mcHomeDir: deps.mcHomeDir,
+  });
   if (!resolved.ok) {
-    console.error(`mc: ${formatEntryResolutionError(opts.oldName, resolved)}`);
+    stderr.write(`mc: session "${opts.oldName}" was not found (${resolved.reason})\n`);
     return 1;
   }
-  const entry = resolved.entry;
-  if (!entry.session_id || !entry.repository_id) {
-    console.error(`mc: session "${entry.name}" has unresolved legacy identity; registry state was preserved`);
+  let renamed;
+  try {
+    renamed = (deps.renameSession || renameSessionHomeSync)({
+      mcHomeDir: deps.mcHomeDir,
+      mcSessionId: resolved.session.mc_session_id,
+      expectedRevision: resolved.session.metadata.revision,
+      name: opts.newName,
+    });
+  } catch (error) {
+    stderr.write(`mc: could not rename session (${error?.reason || error?.message || 'unknown'})\n`);
     return 1;
   }
-  const replacement = resolveEntry(opts.newName, {
-    repositoryId: entry.repository_id,
-  });
-  if (replacement.ok) {
-    console.error(`mc: a session named "${opts.newName}" already exists`);
-    return 1;
-  }
-  if (['ambiguous-session-name', 'ambiguous-legacy-session'].includes(replacement.reason)) {
-    console.error(`mc: ${formatEntryResolutionError(opts.newName, replacement)}`);
-    return 1;
-  }
-
-  const primary = primaryWorktree(process.cwd()) || primaryWorktree(entry.worktree_path);
-  if (!primary) {
-    console.error('mc: could not resolve primary worktree');
-    return 1;
-  }
-
-  const oldBranch = entry.branch;
-  // Keep the existing prefix (sess/ → sess/, fix/ → fix/) so power users
-  // who renamed off the default prefix don't get reset.
-  const newBranch = oldBranch && oldBranch.includes('/')
-    ? `${oldBranch.split('/')[0]}/${opts.newName}`
-    : `sess/${opts.newName}`;
-  if (oldBranch && newBranch !== oldBranch) {
-    if (branchExists(primary, newBranch)) {
-      console.error(`mc: branch "${newBranch}" already exists`);
-      return 1;
-    }
-    git(primary, ['branch', '-m', oldBranch, newBranch]);
-  }
-
-  const newWt = entry.worktree_path
-    ? join(dirname(entry.worktree_path), opts.newName)
-    : null;
-  let dirMoved = false;
-  if (newWt && entry.worktree_path && existsSync(entry.worktree_path) && entry.worktree_path !== newWt) {
-    try {
-      mkdirSync(dirname(newWt), { recursive: true });
-      // Use `git worktree move` so git's internal worktree records
-      // follow the rename. `mv` would leave git's admin dir pointing at
-      // the old path.
-      git(primary, ['worktree', 'move', entry.worktree_path, newWt]);
-      dirMoved = true;
-    } catch (err) {
-      // Roll back the branch rename if the dir move failed.
-      if (oldBranch && newBranch !== oldBranch) {
-        try { git(primary, ['branch', '-m', newBranch, oldBranch]); } catch {}
-      }
-      console.error(`mc: failed to move worktree: ${err.message}`);
-      return 1;
-    }
-  }
-
-  renameEntry(entry.session_id || opts.oldName, opts.newName, {
-    branch: newBranch,
-    worktree_path: dirMoved ? newWt : entry.worktree_path,
-  });
-
-  if (opts.json) {
-    console.log(JSON.stringify({
-      ok: true,
-      old_name: opts.oldName,
-      new_name: opts.newName,
-      old_branch: oldBranch,
-      new_branch: newBranch,
-      worktree_path: dirMoved ? newWt : entry.worktree_path,
-    }, null, 2));
-  } else {
-    console.log(`mc: renamed ${opts.oldName} → ${opts.newName}`);
-  }
+  const payload = {
+    ok: true,
+    source_kind: 'local',
+    mc_session_id: renamed.mc_session_id,
+    old_name: resolved.session.metadata.name,
+    new_name: renamed.metadata.name,
+  };
+  if (opts.json) stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+  else stdout.write(`mc: renamed ${payload.old_name} → ${payload.new_name}\n`);
   return 0;
 }
 
-function parseArgs(argv) {
+export function parseArgs(argv) {
   const opts = { oldName: null, newName: null, json: false };
-  for (const a of argv) {
-    if (a === '--json') { opts.json = true; continue; }
-    if (a.startsWith('--')) return { error: `unknown flag: ${a}` };
-    if (!opts.oldName) opts.oldName = a;
-    else if (!opts.newName) opts.newName = a;
-    else return { error: `unexpected arg: ${a}` };
+  for (const arg of argv) {
+    if (arg === '--json') { opts.json = true; continue; }
+    if (arg.startsWith('--')) return { ...opts, error: `unknown flag: ${arg}` };
+    if (!opts.oldName) opts.oldName = arg;
+    else if (!opts.newName) opts.newName = arg;
+    else return { ...opts, error: `unexpected arg: ${arg}` };
   }
   return opts;
 }

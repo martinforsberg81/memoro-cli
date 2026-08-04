@@ -39,7 +39,7 @@ export function makeTempRepo({ name = 'tmprepo' } = {}) {
   const repoDir = join(root, 'repo');
   const mcHome = join(root, '.mc');
   mkdirSync(repoDir, { recursive: true });
-  mkdirSync(mcHome, { recursive: true });
+  mkdirSync(mcHome, { recursive: true, mode: 0o700 });
 
   git(repoDir, 'init -q -b main');
   // Pin local identity so future commits never prompt.

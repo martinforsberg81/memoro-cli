@@ -1,48 +1,59 @@
-/**
- * `mc cd <name>` (§2 + §2b) — emit `cd <worktree>` on fd 3.
- *
- * Without `--emit-shell-directives` the command still succeeds but
- * prints a one-line tip about the shell wrapper. The user's wrapper
- * sets the flag automatically.
- */
-import { formatEntryResolutionError, resolveEntry } from '../mc/registry.js';
+import { existsSync } from 'node:fs';
+
 import { emitCd, parseDirectiveFlag } from '../mc/shell-directives.js';
+import { projectLocalSessionSync, resolveLocalSessionSync } from '../mc/session-v1.js';
 
-export async function run(rawArgv) {
-  const { args: argv, enabled: emitDirectives } = parseDirectiveFlag(rawArgv);
-  const name = argv[0];
-  if (!name) {
-    console.error('mc: usage — `mc cd <name>` (name required)');
+export async function run(rawArgv, deps = {}) {
+  const { args: argv, enabled } = parseDirectiveFlag(rawArgv);
+  const stdout = deps.stdout || process.stdout;
+  const stderr = deps.stderr || process.stderr;
+  const opts = parseArgs(argv);
+  if (opts.error || !opts.name) {
+    stderr.write(`mc: ${opts.error || 'usage — mc cd <name> [--workspace <id>]'}\n`);
     return 2;
   }
-  if (name.startsWith('--')) {
-    console.error(`mc: unknown flag: ${name}`);
-    return 2;
-  }
-  const resolved = resolveEntry(name);
-  if (!resolved.ok) {
-    console.error(`mc: ${formatEntryResolutionError(name, resolved)}`);
-    return 1;
-  }
-  const entry = resolved.entry;
-  if (!entry.worktree_path) {
-    console.error(`mc: session "${name}" has no worktree_path on record`);
-    return 1;
-  }
-
-  // Note: `emitDirectives` from parseDirectiveFlag will always be false
-  // here because bin-mc.js strips the flag before dispatch. emitCd
-  // picks up the dispatcher's MC_EMIT_SHELL_DIRECTIVES env var via its
-  // built-in default. parseDirectiveFlag is still useful in case
-  // someone calls run() directly with the flag in argv (tests).
-  const emitted = emitCd(entry.worktree_path, {
-    enabled: emitDirectives || undefined, // fall through to env-var default when false
-    tipIfDisabled: false, // tip handled below so it's visible on stdout for tests
+  const resolved = (deps.resolveLocalSession || resolveLocalSessionSync)(opts.name, {
+    mcHomeDir: deps.mcHomeDir,
   });
-  if (!emitted) {
-    process.stdout.write(
-      `mc: tip — run \`mc install-shell\` to enable auto-cd via the shell wrapper.\n`,
-    );
+  if (!resolved.ok) {
+    stderr.write(`mc: session "${opts.name}" was not found (${resolved.reason})\n`);
+    return 1;
   }
+  const projection = (deps.projectLocalSession || projectLocalSessionSync)(resolved.session, {
+    mcHomeDir: deps.mcHomeDir,
+  });
+  const workspace = opts.workspace
+    ? projection.workspaces.find((item) => item.workspace_id === opts.workspace)
+    : projection.workspaces.find((item) => item.workspace_id === projection.workspace_id);
+  if (!workspace) {
+    stderr.write(`mc: workspace ${opts.workspace || 'selection'} is not associated with "${projection.name}"\n`);
+    return 1;
+  }
+  if (workspace.path_state === 'missing' || !existsSync(workspace.current_path)) {
+    stderr.write(`mc: workspace is missing: ${workspace.current_path}\n`);
+    return 1;
+  }
+  const emitted = (deps.emitCd || emitCd)(workspace.current_path, {
+    enabled: enabled || deps.emitDirectives || undefined,
+    tipIfDisabled: false,
+  });
+  if (!emitted) stdout.write(`${workspace.current_path}\n`);
   return 0;
+}
+
+export function parseArgs(argv) {
+  const opts = { name: null, workspace: null };
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === '--workspace') {
+      const value = argv[++index];
+      if (!value || value.startsWith('--')) return { ...opts, error: '--workspace requires an id' };
+      opts.workspace = value;
+      continue;
+    }
+    if (arg.startsWith('--')) return { ...opts, error: `unknown flag: ${arg}` };
+    if (opts.name) return { ...opts, error: `unexpected arg: ${arg}` };
+    opts.name = arg;
+  }
+  return opts;
 }

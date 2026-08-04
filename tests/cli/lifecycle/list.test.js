@@ -1,756 +1,194 @@
-/**
- * TDD spec for `mc list` and its filters (§2 + §9a + §9d).
- *
- * The list command surfaces the registry, optionally enriched with
- * derived fields via `--rich`. Tests feed a fixed registry via
- * `${MC_HOME}/registry.json` and assert on the JSON output's shape.
- *
- * Filters covered (§9d):
- *   --awaiting       sessions whose last asst msg is a question
- *   --idle [--since] no activity since N (default 6h)
- *   --safe-to-end    SAFE_TO_END verdict from §9a
- *   --has-unmerged   ahead > 0 and not phantom
- *   --active         live heartbeat or transcript activity < 5m
- *   --names          machine-friendly: one name per line, suitable for
- *                    piping to other mc commands
- */
-import test, { describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { performance } from 'node:perf_hooks';
+import { afterEach, describe, test } from 'node:test';
 
-import { runMc, parseJsonOrNull } from '../../mc/_helpers/cli.js';
-import { writeRegistry, makeEntry } from '../../mc/_helpers/registry-fixture.js';
-import { run as runList } from '../../../src/cli/list.js';
+import { run } from '../../../src/cli/list.js';
+import { writeSessionProjectionSync } from '../../../src/mc/session-home.js';
 import {
-  buildSessionListView,
-  fetchActiveCodingSessions,
-  fetchActiveCodingSessionsWithLocalBroker,
-  renderSessionListHuman,
-} from '../../../src/mc/session-list.js';
+  buildV1SessionListView,
+  renderV1SessionList,
+} from '../../../src/mc/session-v1-list.js';
+import { captureStream, makeV1Fixture } from './v1-fixture.js';
 
-function isoMinutesAgo(min) {
-  return new Date(Date.now() - min * 60_000).toISOString();
-}
+let fixtures = [];
 
-// One fixture used by most tests — covers every state we care about.
-function buildFixture() {
-  return [
-    makeEntry({
-      name: 'awaiting-q',
-      branch: 'sess/awaiting-q',
-      open_question: true,
-      last_assistant_text: 'Want me to proceed with option A or B?',
-      last_activity: isoMinutesAgo(30),
-      session_state: 'idle',
-      safety_verdict: 'NEEDS_REVIEW',
-      dirty_files: 0,
-      ahead: 0,
-    }),
-    makeEntry({
-      name: 'safe',
-      branch: 'sess/safe',
-      open_question: false,
-      last_activity: isoMinutesAgo(60),
-      session_state: 'dead',
-      safety_verdict: 'SAFE_TO_END',
-      dirty_files: 0,
-      ahead: 0,
-    }),
-    makeEntry({
-      name: 'unmerged',
-      branch: 'sess/unmerged',
-      last_activity: isoMinutesAgo(120),
-      session_state: 'idle',
-      safety_verdict: 'HAS_UNMERGED_WORK',
-      dirty_files: 0,
-      ahead: 3,
-    }),
-    makeEntry({
-      name: 'active-now',
-      branch: 'sess/active-now',
-      last_activity: isoMinutesAgo(1),
-      session_state: 'live',
-      safety_verdict: 'IS_ACTIVE_NOW',
-    }),
-    makeEntry({
-      name: 'phantom',
-      branch: 'sess/phantom',
-      last_activity: isoMinutesAgo(240),
-      session_state: 'dead',
-      safety_verdict: 'IS_SQUASH_PHANTOM',
-      ahead: 1,
-    }),
-    makeEntry({
-      name: 'really-idle',
-      branch: 'sess/really-idle',
-      last_activity: isoMinutesAgo(60 * 24), // 1 day ago
-      session_state: 'idle',
-      safety_verdict: 'SAFE_TO_END',
-    }),
-    makeEntry({
-      name: 'missing-worktree',
-      branch: 'sess/missing-worktree',
-      session_state: 'idle',
-      safety_verdict: 'SAFE_TO_END',
-      worktree_missing: true,
-    }),
-    makeEntry({
-      name: 'iso-x',
-      branch: 'iso/parent-abc',
-      kind: 'isolation',
-      parent: 'parent',
-      session_state: 'idle',
-      safety_verdict: 'SAFE_TO_END',
-    }),
-  ];
-}
+afterEach(() => {
+  for (const fixture of fixtures) fixture.cleanup();
+  fixtures = [];
+});
 
-describe('mc list', () => {
-  let mcHome;
-  before(() => {
-    mcHome = mkdtempSync(join(tmpdir(), 'mc-list-'));
-    writeRegistry(mcHome, buildFixture());
-  });
-  after(() => { rmSync(mcHome, { recursive: true, force: true }); });
-
-  test('--json returns an array of entries with stable fields', () => {
-    const r = runMc(['list', '--json'], { env: { MC_HOME: mcHome } });
-    assert.equal(r.status, 0, `stderr:${r.stderr}`);
-    const j = parseJsonOrNull(r.stdout);
-    assert.ok(j, `expected JSON, got: ${r.stdout}`);
-    assert.ok(Array.isArray(j.entries), 'output must have .entries[]');
-    // Default `mc list` hides isolation worktrees (§2 "only user-created
-    // work-sessions") and missing-worktree registry entries. 8 fixture
-    // entries → 6 work entries surfaced.
-    const names = j.entries.map(e => e.name);
-    assert.ok(!names.includes('iso-x'),
-      `iso entries should be hidden by default; got ${names.join(',')}`);
-    assert.ok(!names.includes('missing-worktree'),
-      `missing worktrees should be hidden by default; got ${names.join(',')}`);
-    assert.equal(j.entries.length, 6);
-    // Every entry must carry at least name + branch + safety_verdict.
-    for (const e of j.entries) {
-      assert.ok(typeof e.name === 'string');
-      assert.ok(typeof e.branch === 'string');
-      assert.ok(typeof e.safety_verdict === 'string');
-    }
-  });
-
-  test('human output renders active server sessions first and local stopped sessions second', async () => {
-    const stdout = [];
-    const stderr = [];
-    const status = await runList([], {
-      stdout: { write: (s) => stdout.push(s) },
-      stderr: { write: (s) => stderr.push(s) },
-      checkAndPrintFreshInstall: async () => false,
-      scanDaemons: () => ({ orphan: [], stale: [] }),
-      readRegistry: () => ({ entries: [
-        makeEntry({
-          name: 'active-local',
-          branch: 'sess/active-local',
-          tool: 'codex',
-          coding_session_id: 'sess_active',
-          session_state: 'live',
-        }),
-        makeEntry({
-          name: 'local-dead',
-          branch: 'sess/local-dead',
-          tool: 'claude',
-          coding_session_id: 'sess_dead',
-          session_state: 'dead',
-        }),
-      ] }),
-      fetchLocalBrokerSessions: async () => ({
-        ok: true,
-        sessions: [{ coding_session_id: 'sess_active' }],
-        warning: null,
-      }),
-      fetchActiveSessions: async () => ({
-        ok: true,
-        sessions: [{
-          coding_session_id: 'sess_active',
-          label: 'active-local',
-          repo: 'memoro',
-          branch: 'main',
-          machine_id: 'host-a',
-          source: 'codex',
-          idle_seconds: 0,
-          received_at: new Date().toISOString(),
-        }],
-      }),
-    });
-    assert.equal(status, 0);
-    assert.equal(stderr.join(''), '');
-    const out = stdout.join('');
-    assert.match(out, /Active sessions/);
-    assert.match(out, /1\. active-local\s+active\s+codex/);
-    assert.match(out, /Local sessions/);
-    assert.match(out, /2\. local-dead\s+local\s+claude/);
-    const localSection = out.split('Local sessions')[1];
-    assert.doesNotMatch(localSection, /active-local/);
-  });
-
-  test('TTY human output uses framed headers, spaced rows, colored labels, and ids', async () => {
-    const stdout = [];
-    const status = await runList([], {
-      stdout: {
-        isTTY: true,
-        columns: 120,
-        write: (s) => stdout.push(s),
-      },
-      stderr: { write() {} },
-      env: { TERM: 'xterm-256color' },
-      checkAndPrintFreshInstall: async () => false,
-      scanDaemons: () => ({ orphan: [], stale: [] }),
-      readRegistry: () => ({ entries: [
-        makeEntry({
-          name: 'local-session',
-          branch: 'sess/local-session',
-          tool: 'codex',
-          coding_session_id: 'sess_local',
-          session_state: 'idle',
-        }),
-      ] }),
-      fetchLocalBrokerSessions: async () => ({ ok: true, sessions: [], warning: null }),
-      fetchActiveSessions: async () => ({
-        ok: true,
-        sessions: [{
-          coding_session_id: 'sess_active',
-          label: 'active-session',
-          repo: 'memoro',
-          branch: 'sess/active-session',
-          source: 'codex',
-          idle_seconds: 0,
-        }],
-      }),
-    });
-
-    assert.equal(status, 0);
-    const out = stdout.join('');
-    const plain = out.replace(/\x1b\[[0-9;]*m/g, '');
-    assert.match(plain, /^mc sessions · 1 active · 1 local/m);
-    assert.match(plain, /Active sessions\n  Message: mc sessions send/);
-    assert.match(plain, /Local sessions\n  Saved locally/);
-    assert.match(out, /\x1b\[1;33m#\s+Session/);
-    assert.match(out, /\x1b\[2;37m─+/);
-    assert.match(out, /\x1b\[36msess_active/);
-    assert.match(out, /Local sessions[\s\S]*local-session/);
-    assert.doesNotMatch(out, /\|/);
-    assert.doesNotMatch(plain, /─+\s+─+/, 'dividers must be continuous');
-  });
-
-  test('TTY tables use blank rows between entries and only frame the header and list', () => {
-    const view = buildSessionListView({
-      activeSessions: [
-        { coding_session_id: 'sess_a', label: 'alpha', source: 'codex', idle_seconds: 0 },
-        { coding_session_id: 'sess_b', label: 'beta', source: 'claude', idle_seconds: 30 },
-      ],
-      localEntries: [],
-    });
-    const out = renderSessionListHuman({
-      view,
-      isTTY: true,
-      terminalWidth: 100,
-      useColor: false,
-    });
-    const activeTable = out.split('Local sessions')[0];
-    const dividers = activeTable.split('\n').filter((line) => /^─+$/u.test(line));
-
-    assert.equal(dividers.length, 3, 'top, header bottom, and list bottom');
-    assert.match(activeTable, /1\.\s+alpha[^\n]*\n\n2\.\s+beta/);
-  });
-
-  test('TTY table adapts to narrow terminals and honors NO_COLOR', () => {
-    const view = buildSessionListView({
-      activeSessions: [{
-        coding_session_id: 'sess_remote_identifier',
-        label: 'a-session-name-that-needs-clipping',
-        repo: 'memoro-cli',
-        branch: 'sess/a-very-long-development-branch',
-        source: 'codex',
-        idle_seconds: 0,
-      }],
-      localEntries: [],
-    });
-    const out = renderSessionListHuman({
-      view,
-      isTTY: true,
-      terminalWidth: 50,
-      useColor: false,
-    });
-
-    assert.doesNotMatch(out, /\x1b/);
-    assert.match(out, /#\s+Session\s+Status\s+mc-id/);
-    assert.match(out, /…/);
-    for (const line of out.split('\n')) {
-      assert.ok(line.length <= 50, `line exceeds terminal width (${line.length}): ${line}`);
-    }
-  });
-
-  test('TTY action hints never exceed their terminal-width threshold', () => {
-    const view = buildSessionListView({ activeSessions: [], localEntries: [] });
-    for (const terminalWidth of [72, 73, 74]) {
-      const out = renderSessionListHuman({
-        view,
-        isTTY: true,
-        terminalWidth,
-        useColor: false,
-      });
-      for (const line of out.split('\n')) {
-        assert.ok(
-          line.length <= terminalWidth,
-          `line exceeds terminal width ${terminalWidth} (${line.length}): ${line}`,
-        );
-      }
-    }
-  });
-
-  test('--json demotes registry-live sessions with no live local session to stale', async () => {
-    const stdout = [];
-    const stderr = [];
-    const status = await runList(['--json'], {
-      stdout: { write: (s) => stdout.push(s) },
-      stderr: { write: (s) => stderr.push(s) },
-      checkAndPrintFreshInstall: async () => false,
-      readRegistry: () => ({ entries: [
-        makeEntry({
-          name: 'ghost',
-          coding_session_id: 'sess_ghost',
-          session_state: 'live',
-          safety_verdict: 'IS_ACTIVE_NOW',
-        }),
-        makeEntry({
-          name: 'alive',
-          coding_session_id: 'sess_alive',
-          session_state: 'live',
-          safety_verdict: 'IS_ACTIVE_NOW',
-        }),
-      ] }),
-      fetchLocalBrokerSessions: async () => ({
-        ok: true,
-        sessions: [{ coding_session_id: 'sess_alive' }],
-        warning: null,
-      }),
-    });
-    assert.equal(status, 0);
-    const j = parseJsonOrNull(stdout.join(''));
-    const ghost = j.entries.find((e) => e.name === 'ghost');
-    const alive = j.entries.find((e) => e.name === 'alive');
-    // Dead PTY: never presented as live, and IS_ACTIVE_NOW cannot stand.
-    assert.equal(ghost.session_state, 'stale');
-    assert.equal(ghost.safety_verdict, 'SAFE_TO_END');
-    // Broker-confirmed session keeps its stored state and verdict.
-    assert.equal(alive.session_state, 'live');
-    assert.equal(alive.safety_verdict, 'IS_ACTIVE_NOW');
-    assert.match(stderr.join(''), /1 session\(s\) marked live in the registry/);
-    assert.match(stderr.join(''), /mc storage repair --apply/);
-  });
-
-  test('--json escalates a stored SAFE_TO_END that fresh git facts contradict', async () => {
-    const stdout = [];
-    const stderr = [];
-    const status = await runList(['--json'], {
-      stdout: { write: (s) => stdout.push(s) },
-      stderr: { write: (s) => stderr.push(s) },
-      checkAndPrintFreshInstall: async () => false,
-      readRegistry: () => ({ entries: [
-        makeEntry({
-          name: 'dirty-safe',
-          session_state: 'idle',
-          safety_verdict: 'SAFE_TO_END',
-          dirty_files: 300,
-          ahead: 0,
-        }),
-        makeEntry({
-          name: 'ahead-safe',
-          session_state: 'idle',
-          safety_verdict: 'SAFE_TO_END',
-          dirty_files: 0,
-          ahead: 2,
-        }),
-      ] }),
-      fetchLocalBrokerSessions: async () => ({ ok: true, sessions: [], warning: null }),
-    });
-    assert.equal(status, 0);
-    const j = parseJsonOrNull(stdout.join(''));
-    assert.equal(j.entries.find((e) => e.name === 'dirty-safe').safety_verdict, 'NEEDS_REVIEW');
-    assert.equal(j.entries.find((e) => e.name === 'ahead-safe').safety_verdict, 'HAS_UNMERGED_WORK');
-  });
-
-  test('human output soft-degrades when active-session fetch fails', async () => {
-    const stdout = [];
-    const stderr = [];
-    const status = await runList([], {
-      stdout: { write: (s) => stdout.push(s) },
-      stderr: { write: (s) => stderr.push(s) },
-      checkAndPrintFreshInstall: async () => false,
-      scanDaemons: () => ({ orphan: [], stale: [] }),
-      readRegistry: () => ({ entries: [
-        makeEntry({
-          name: 'local-dead',
-          branch: 'sess/local-dead',
-          tool: 'claude',
-          session_state: 'dead',
-        }),
-      ] }),
-      fetchActiveSessions: async () => ({
-        ok: false,
-        sessions: [],
-        warning: 'active sessions unavailable: offline',
-      }),
-    });
-    assert.equal(status, 0);
-    assert.match(stderr.join(''), /active sessions unavailable: offline/);
-    const out = stdout.join('');
-    assert.match(out, /Active sessions/);
-    assert.match(out, /\(none\)/);
-    assert.match(out, /1\. local-dead\s+local\s+claude/);
-  });
-
-  test('default human output lists local broker sessions as active', async () => {
-    const stdout = [];
-    const stderr = [];
-    const status = await runList([], {
-      stdout: { write: (s) => stdout.push(s) },
-      stderr: { write: (s) => stderr.push(s) },
-      checkAndPrintFreshInstall: async () => false,
-      scanDaemons: () => ({ orphan: [], stale: [] }),
-      readConfig: async () => ({ apiUrl: 'https://memoro.test' }),
-      getSecret: async () => 'token',
-      memoroFetch: async () => ({ ok: true, sessions: [] }),
-      requestBroker: async (message) => {
-        assert.deepEqual(message, { type: 'sessions' });
-        return {
-          ok: true,
-          sessions: [{
-            id: 'sess_action',
-            name: 'action-v2',
-            tool: 'codex',
-            repo: 'memoro',
-            branch: 'sess/action-v2',
-            cwd: '/Users/me/.memoro/mc/worktrees/memoro/action-v2',
-            last_output_at: new Date(Date.now() - 10_000).toISOString(),
-            session_state: 'live',
-            attachable: true,
-          }],
-        };
-      },
-      readRegistry: () => ({ entries: [
-        makeEntry({
-          name: 'action-v2',
-          branch: 'sess/action-v2',
-          repo_slug: 'memoro',
-          coding_session_id: 'sess_action',
-          tool: 'codex',
-          session_state: 'live',
-        }),
-      ] }),
-    });
-
-    assert.equal(status, 0);
-    assert.equal(stderr.join(''), '');
-    const out = stdout.join('');
-    assert.match(out, /Active sessions/);
-    assert.match(out, /1\. action-v2\s+active\s+codex\s+memoro\s+sess\/action-v2/);
-    assert.match(out, /Local sessions[\s\S]*\(none\)/);
-  });
-
-  test('active lookup merges local broker sessions when cloud has none', async () => {
-    const res = await fetchActiveCodingSessionsWithLocalBroker({
-      deps: {
-        readConfig: async () => ({ apiUrl: 'https://memoro.test' }),
-        getSecret: async () => 'token',
-        memoroFetch: async () => ({ ok: true, sessions: [] }),
-        requestBroker: async () => ({
-          ok: true,
-          sessions: [{
-            id: 'sess_trip',
-            name: 'trip-v2',
-            tool: 'codex',
-            repo: 'memoro',
-            branch: 'sess/trip-v2',
-            session_state: 'live',
-            attachable: true,
-          }],
-        }),
-      },
-    });
-
-    assert.equal(res.ok, true);
-    assert.equal(res.warning, null);
-    assert.equal(res.sessions.length, 1);
-    assert.equal(res.sessions[0].coding_session_id, 'sess_trip');
-    assert.equal(res.sessions[0].label, 'trip-v2');
-  });
-
-  test('active lookup fails closed on malformed successful HTTP bodies', async () => {
-    const common = {
-      readConfig: async () => ({ apiUrl: 'https://memoro.test' }),
-      getSecret: async () => 'token',
-    };
-    for (const body of [{}, { ok: false }, { ok: true, sessions: null }]) {
-      const result = await fetchActiveCodingSessions({
-        deps: { ...common, memoroFetch: async () => body },
-      });
-      assert.equal(result.ok, false);
-      assert.deepEqual(result.sessions, []);
-      assert.match(result.warning, /invalid Memoro response/);
-    }
-  });
-
-  test('active/local dedupe does not hide a same-label session from another repo', () => {
-    const view = buildSessionListView({
-      activeSessions: [{
-        coding_session_id: 'sess_remote',
-        label: 'data',
-        repo: 'memoro',
-        branch: 'sess/data',
-        source: 'codex',
-      }],
-      localEntries: [
-        makeEntry({
-          name: 'data',
-          repo_slug: 'memoro-cli',
-          branch: 'sess/data',
-          coding_session_id: null,
-          tool: 'claude',
-        }),
-      ],
-    });
-    assert.equal(view.active.length, 1);
-    assert.equal(view.local.length, 1);
-    assert.equal(view.local[0].name, 'data');
-  });
-
-  test('active/local dedupe matches same repo and branch even when active label is missing', () => {
-    const view = buildSessionListView({
-      activeSessions: [{
-        coding_session_id: 'sess_remote',
-        repo: 'memoro-cli',
-        branch: 'sess/dev',
-        source: 'codex',
-      }],
-      localEntries: [
-        makeEntry({
-          name: 'dev',
-          repo_slug: 'memoro-cli',
-          branch: 'sess/dev',
-          coding_session_id: null,
-          tool: 'codex',
-        }),
-      ],
-    });
-    assert.equal(view.active.length, 1);
-    assert.equal(view.local.length, 0);
-  });
-
-  test('broker-only active rows inherit their display metadata from the registry', () => {
-    const view = buildSessionListView({
-      activeSessions: [{
-        coding_session_id: 'sess_runtime',
-        session_state: 'live',
-        attachable: true,
-        host_busy: true,
-        source: 'local-broker',
-      }],
-      localEntries: [
-        makeEntry({
-          name: 'mc-v2',
-          repo_slug: 'memoro-cli',
-          branch: 'sess/mc-v2',
-          coding_session_id: 'sess_runtime',
-          tool: 'codex',
-          session_state: 'live',
-        }),
-      ],
-    });
-
-    assert.equal(view.active.length, 1);
-    assert.equal(view.local.length, 0);
-    assert.deepEqual({
-      name: view.active[0].name,
-      tool: view.active[0].source,
-      repo: view.active[0].repo,
-      branch: view.active[0].branch,
-      status: view.active[0].status,
-    }, {
-      name: 'mc-v2',
+describe('mc list V1', () => {
+  test('renders source-owned sections with framed headers and blank entry rows', async () => {
+    const fixture = makeFixture();
+    const alpha = fixture.create('alpha');
+    fixture.create('beta', { cwd: fixture.directory('other-workspace') });
+    writeSessionProjectionSync({
+      mcHomeDir: fixture.mcHomeDir,
+      mcSessionId: alpha.session.mc_session_id,
+      expectedRevision: 1,
+      lifecycle: 'open',
+      runtimeState: 'running',
+      activeRuntimeGeneration: 'mcg_000000000000000000000001',
       tool: 'codex',
-      repo: 'memoro-cli',
-      branch: 'sess/mc-v2',
-      status: 'active',
     });
+    const stdout = captureStream({ columns: 110 });
+    const stderr = captureStream();
+    const code = await run([], {
+      mcHomeDir: fixture.mcHomeDir,
+      stdout,
+      stderr,
+      checkAndPrintFreshInstall: async () => false,
+      fetchCloudSessions: async () => ({
+        ok: true,
+        warning: null,
+        sessions: [cloudSession('cloud-one')],
+      }),
+    });
+
+    assert.equal(code, 0, stderr.text());
+    const output = stdout.text();
+    assert.match(output, /^mc sessions · 2 local · 1 cloud$/mu);
+    assert.match(output, /^Local sessions$/mu);
+    assert.match(output, /^Cloud sessions$/mu);
+    assert.match(output, /^─{110}$/mu);
+    assert.match(output, /^#\s+Session\s+Tool\s+Workspace\s+Runtime\s+Source\s+mc-id$/mu);
+    assert.match(output, /alpha.*active.*local.*mcs_/u);
+    assert.match(output, /cloud-one.*cloud.*mcs_/u);
+
+    const lines = output.split('\n');
+    const alphaRow = lines.findIndex((line) => /\balpha\b/u.test(line));
+    const betaRow = lines.findIndex((line) => /\bbeta\b/u.test(line));
+    assert.equal(betaRow - alphaRow, 2);
+    assert.equal(lines[alphaRow + 1], '');
+
+    const localStart = lines.indexOf('Local sessions');
+    const cloudStart = lines.indexOf('Cloud sessions');
+    assert.equal(lines.slice(localStart, cloudStart).filter((line) => /^─+$/u.test(line)).length, 3);
+    assert.equal(lines.slice(cloudStart).filter((line) => /^─+$/u.test(line)).length, 3);
   });
 
-  test('TTY local states use human labels', () => {
-    const view = buildSessionListView({
-      activeSessions: [],
-      localEntries: [
-        makeEntry({ name: 'fresh', coding_session_id: null, session_state: 'no-session-yet' }),
-        makeEntry({ name: 'done', coding_session_id: 'sess_done', session_state: 'dead' }),
-      ],
+  test('returns stable JSON and keeps identical names separate by source', async () => {
+    const fixture = makeFixture();
+    const local = fixture.create('same-name');
+    const stdout = captureStream();
+    const code = await run(['--json'], {
+      mcHomeDir: fixture.mcHomeDir,
+      stdout,
+      stderr: captureStream(),
+      checkAndPrintFreshInstall: async () => false,
+      fetchCloudSessions: async () => ({
+        ok: true,
+        warning: null,
+        sessions: [cloudSession('same-name')],
+      }),
     });
-    const out = renderSessionListHuman({
-      view,
-      isTTY: true,
+
+    assert.equal(code, 0);
+    const payload = JSON.parse(stdout.text());
+    assert.equal(payload.schema, 1);
+    assert.equal(payload.entries.length, 2);
+    assert.deepEqual(payload.entries.map((item) => item.source_kind), ['local', 'cloud']);
+    assert.equal(payload.entries[0].mc_session_id, local.session.mc_session_id);
+    assert.deepEqual(Object.keys(payload.entries[0]), [
+      'source_kind',
+      'source_id',
+      'mc_session_id',
+      'name',
+      'objective',
+      'lifecycle',
+      'runtime_state',
+      'runtime_generation',
+      'tool',
+      'updated_at',
+      'workspace_id',
+      'workspace_path',
+      'workspace_state',
+      'workspace_count',
+    ]);
+  });
+
+  test('--local stays offline and never invokes the cloud client', async () => {
+    const fixture = makeFixture();
+    fixture.create('offline');
+    let cloudCalls = 0;
+    const stdout = captureStream();
+    const code = await run(['--local', '--names'], {
+      mcHomeDir: fixture.mcHomeDir,
+      stdout,
+      stderr: captureStream(),
+      checkAndPrintFreshInstall: async () => false,
+      fetchCloudSessions: async () => { cloudCalls += 1; throw new Error('network forbidden'); },
+    });
+    assert.equal(code, 0);
+    assert.equal(stdout.text(), 'offline\n');
+    assert.equal(cloudCalls, 0);
+  });
+
+  test('renders a 1,000-session bounded projection without runtime probes', () => {
+    const sessions = Array.from({ length: 1000 }, (_, index) => ({
+      source_kind: 'local',
+      source_id: 'machine_test',
+      mc_session_id: `mcs_${index.toString(16).padStart(24, '0')}`,
+      name: `session-${index.toString().padStart(4, '0')}`,
+      lifecycle: 'open',
+      runtime_state: 'none',
+      workspace_path: `/workspace/${index}`,
+      workspace_count: 1,
+    }));
+    const started = performance.now();
+    const output = renderV1SessionList({
+      view: buildV1SessionListView({ localSessions: sessions }),
       terminalWidth: 120,
-      useColor: false,
     });
-
-    assert.match(out, /fresh\s+not started/);
-    assert.match(out, /done\s+stopped/);
-    assert.doesNotMatch(out, /no-session-yet/);
+    assert.equal(output.match(/^\d+\./gmu)?.length, 1000);
+    assert.ok(performance.now() - started < 1000);
   });
 
-  test('active sessions without labels render branch as the display name', () => {
-    const view = buildSessionListView({
-      activeSessions: [{
-        coding_session_id: 'sess_remote',
-        repo: 'memoro-cli',
-        branch: 'sess/dev',
-        source: 'codex',
+  test('keeps adaptive tables within the terminal width', () => {
+    const view = buildV1SessionListView({
+      localSessions: [{
+        source_kind: 'local',
+        source_id: 'machine_test',
+        mc_session_id: `mcs_${'a'.repeat(24)}`,
+        name: 'compact-session-name',
+        lifecycle: 'open',
+        runtime_state: 'running',
+        tool: 'codex',
+        workspace_path: '/workspace/compact-session-name',
+        workspace_count: 1,
       }],
-      localEntries: [],
     });
-    const out = renderSessionListHuman({ view });
-    assert.match(out, /1\. sess\/dev\s+active\s+codex/);
-    assert.match(out, /id=sess_remote/);
-  });
 
-  test('human output hides active-session excerpts by default', () => {
-    const view = buildSessionListView({
-      activeSessions: [{
-        coding_session_id: 'sess_remote',
-        label: 'active-local',
-        repo: 'memoro-cli',
-        branch: 'sess/dev',
-        source: 'codex',
-        last_assistant_excerpt: 'raw \x1b[0 q terminal [0 q chatter',
-      }],
-      localEntries: [],
-    });
-    const out = renderSessionListHuman({ view });
-    assert.match(out, /1\. active-local\s+active\s+codex/);
-    assert.doesNotMatch(out, /terminal/);
-    assert.doesNotMatch(out, /\[0 q/);
-  });
-
-  test('optional active-session excerpts are sanitized before rendering', () => {
-    const view = buildSessionListView({
-      activeSessions: [{
-        coding_session_id: 'sess_remote',
-        label: 'active-local',
-        repo: 'memoro-cli',
-        branch: 'sess/dev',
-        source: 'codex',
-        last_assistant_excerpt: 'Need \x1b[0 q clean [0 q text',
-      }],
-      localEntries: [],
-    });
-    const out = renderSessionListHuman({ view, includeExcerpts: true });
-    assert.match(out, /Need\s+clean\s+text/);
-    assert.doesNotMatch(out, /\x1b/);
-    assert.doesNotMatch(out, /\[0 q/);
-  });
-
-  test('--all includes isolation worktrees with kind flag', () => {
-    const r = runMc(['list', '--all', '--json'], { env: { MC_HOME: mcHome } });
-    assert.equal(r.status, 0, `stderr:${r.stderr}`);
-    const j = parseJsonOrNull(r.stdout);
-    assert.ok(j);
-    const iso = j.entries.find(e => e.name === 'iso-x');
-    assert.ok(iso, 'iso-x should be present with --all');
-    assert.equal(iso.kind, 'isolation');
-    assert.ok(j.entries.find(e => e.name === 'missing-worktree'),
-      'missing worktree entries should be present with --all');
-  });
-
-  test('--rich exposes the derived fields from §9a', () => {
-    const r = runMc(['list', '--rich', '--json'], { env: { MC_HOME: mcHome } });
-    assert.equal(r.status, 0, `stderr:${r.stderr}`);
-    const j = parseJsonOrNull(r.stdout);
-    assert.ok(j);
-    const e = j.entries.find(x => x.name === 'awaiting-q');
-    assert.ok(e);
-    // Required derived fields per §9a.
-    assert.ok('last_user_msg' in e || 'last_assistant_text' in e,
-      'rich entry must include last_user_msg or last_assistant_text');
-    assert.ok('open_question' in e);
-    assert.ok('last_activity' in e);
-    assert.ok('safety_verdict' in e);
-  });
-
-  // §9d filters ----------------------------------------------------------------
-
-  test('--awaiting returns only sessions with an open question', () => {
-    const r = runMc(['list', '--awaiting', '--json'], { env: { MC_HOME: mcHome } });
-    assert.equal(r.status, 0, `stderr:${r.stderr}`);
-    const j = parseJsonOrNull(r.stdout);
-    const names = j.entries.map(e => e.name);
-    assert.deepEqual(names, ['awaiting-q']);
-  });
-
-  test('--safe-to-end returns only SAFE_TO_END verdicts', () => {
-    const r = runMc(['list', '--safe-to-end', '--json'], { env: { MC_HOME: mcHome } });
-    assert.equal(r.status, 0, `stderr:${r.stderr}`);
-    const j = parseJsonOrNull(r.stdout);
-    const names = j.entries.map(e => e.name).sort();
-    // active-now qualifies: its registry "live" has no broker session
-    // (stale), and its git facts are clean — same demotion mc status
-    // already applied to stale IS_ACTIVE_NOW.
-    assert.deepEqual(names, ['active-now', 'really-idle', 'safe']);
-  });
-
-  test('--has-unmerged returns ahead-and-not-phantom only', () => {
-    const r = runMc(['list', '--has-unmerged', '--json'], { env: { MC_HOME: mcHome } });
-    assert.equal(r.status, 0, `stderr:${r.stderr}`);
-    const j = parseJsonOrNull(r.stdout);
-    const names = j.entries.map(e => e.name);
-    assert.deepEqual(names, ['unmerged'],
-      `phantom (also ahead=1) must be excluded; got ${names.join(',')}`);
-  });
-
-  test('--active returns live or recently-active sessions', () => {
-    const r = runMc(['list', '--active', '--json'], { env: { MC_HOME: mcHome } });
-    assert.equal(r.status, 0, `stderr:${r.stderr}`);
-    const j = parseJsonOrNull(r.stdout);
-    const names = j.entries.map(e => e.name);
-    assert.deepEqual(names, ['active-now']);
-  });
-
-  test('--idle defaults to 6h cutoff', () => {
-    const r = runMc(['list', '--idle', '--json'], { env: { MC_HOME: mcHome } });
-    assert.equal(r.status, 0, `stderr:${r.stderr}`);
-    const j = parseJsonOrNull(r.stdout);
-    const names = j.entries.map(e => e.name);
-    // Only `really-idle` is idle ≥ 6h. Others either active or < 6h.
-    assert.ok(names.includes('really-idle'),
-      `really-idle should appear; got ${names.join(',')}`);
-    assert.ok(!names.includes('active-now'),
-      'active-now must not appear');
-  });
-
-  test('--idle --since 30m widens the window', () => {
-    const r = runMc(['list', '--idle', '--since', '30m', '--json'], {
-      env: { MC_HOME: mcHome },
-    });
-    assert.equal(r.status, 0, `stderr:${r.stderr}`);
-    const j = parseJsonOrNull(r.stdout);
-    const names = j.entries.map(e => e.name);
-    // 30m threshold: awaiting-q (30m), safe (60m), unmerged (120m),
-    // phantom (240m), really-idle (1d) → all idle. active-now excluded.
-    assert.ok(!names.includes('active-now'),
-      'active-now must be excluded from --idle');
-    assert.ok(names.includes('really-idle'));
-    assert.ok(names.includes('safe'));
-  });
-
-  test('--names emits one bare name per line (machine-friendly)', () => {
-    const r = runMc(['list', '--safe-to-end', '--names'], { env: { MC_HOME: mcHome } });
-    assert.equal(r.status, 0, `stderr:${r.stderr}`);
-    const lines = r.stdout.split('\n').map(l => l.trim()).filter(Boolean).sort();
-    assert.deepEqual(lines, ['active-now', 'really-idle', 'safe']);
+    for (const width of [41, 60, 72, 73, 88, 89, 109, 110, 120]) {
+      const output = renderV1SessionList({ view, terminalWidth: width });
+      const renderedWidth = Math.max(...output.split('\n').map((line) => line.length));
+      assert.ok(renderedWidth <= width, `${renderedWidth} exceeded ${width}`);
+    }
   });
 });
+
+function cloudSession(name) {
+  return {
+    source_kind: 'cloud',
+    source_id: 'memoro-cloud',
+    mc_session_id: `mcs_${name === 'same-name' ? 'f' : 'e'.repeat(1)}${'0'.repeat(23)}`,
+    name,
+    objective: null,
+    lifecycle: 'open',
+    runtime_state: 'running',
+    runtime_generation: 'mcg_000000000000000000000002',
+    tool: 'claude',
+    updated_at: '2026-08-03T10:00:00.000Z',
+    workspace_id: 'mcw_000000000000000000000001',
+    workspace_path: '/cloud/workspace',
+    workspace_state: 'present',
+    workspace_count: 1,
+    workspaces: [],
+  };
+}
+
+function makeFixture() {
+  const fixture = makeV1Fixture('mc-list-v1-');
+  fixtures.push(fixture);
+  return fixture;
+}
