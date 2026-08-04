@@ -83,6 +83,88 @@ test('prepares an opaque certified plan and launches through the session runtime
   await host.close();
 });
 
+test('captures one exact bounded conversation artifact after runtime claim', async () => {
+  const mcHomeDir = home();
+  planned(mcHomeDir, { action: 'start', tool: 'codex' });
+  const fixture = adapterFixture();
+  const prepared = await prepareCertifiedLaunchPlan({
+    mcHomeDir,
+    mcSessionId,
+    generationId,
+    registry: fixture.registry,
+    deps: {
+      ...dependencies(),
+      captureArtifactContext: () => ({ exact: true }),
+      observeProviderArtifact: ({ context, cwd }) => ({
+        ok: context.exact && cwd === '/workspace/one',
+        evidence: {
+          providerSessionId: 'conversation-exact',
+          transcriptPath: '/bounded/conversation.jsonl',
+        },
+      }),
+      validateProviderArtifact: ({ evidence }) => ({
+        ok: evidence.providerSessionId === 'conversation-exact',
+        transcriptPath: evidence.transcriptPath,
+      }),
+    },
+  });
+  assert.equal(prepared.ok, true);
+  assert.equal(prepared.plan.captureConversationArtifact().reason, 'certified-runtime-not-claimed');
+  const runtime = await prepared.plan.startRuntime({
+    ptyFactory: { spawn: () => new FakePty() },
+    hostPid: 51005,
+    now: clock(),
+  });
+  const captured = prepared.plan.captureConversationArtifact({
+    now: () => '2026-08-03T02:00:20.000Z',
+  });
+  assert.equal(captured.ok, true);
+  assert.equal(captured.handle, 'conversation-exact');
+  assert.deepEqual(captured.artifact, {
+    schema: 'mc-provider-artifact-v1',
+    coding_session_id: mcSessionId,
+    runtime_generation: fixture.calls.find((call) => call.name === 'boundary').options
+      .domainGeneration,
+    tool: 'codex',
+    provider_session_id: 'conversation-exact',
+    transcript_path: '/bounded/conversation.jsonl',
+    captured_at: '2026-08-03T02:00:20.000Z',
+  });
+  assert.equal((await prepared.plan.closeBoundary({ providerArtifact: captured.artifact })).ok, true);
+  await runtime.close();
+});
+
+test('a stopped claimed runtime can abort its exact credential boundary', async () => {
+  const mcHomeDir = home();
+  planned(mcHomeDir, { action: 'start', tool: 'codex' });
+  const fixture = adapterFixture();
+  const prepared = await prepareCertifiedLaunchPlan({
+    mcHomeDir,
+    mcSessionId,
+    generationId,
+    registry: fixture.registry,
+    deps: dependencies(),
+  });
+  const pty = new FakePty();
+  const runtime = await prepared.plan.startRuntime({
+    ptyFactory: { spawn: () => pty },
+    hostPid: 51006,
+    now: clock(),
+  });
+
+  assert.equal((await prepared.plan.abortClaimedRuntime()).reason,
+    'certified-runtime-not-terminal');
+  const exited = new Promise((resolve) => runtime.once('exit', resolve));
+  pty.emitExit({ exitCode: 1, signal: null });
+  await exited;
+  assert.equal((await prepared.plan.abortClaimedRuntime()).ok, true);
+  assert.equal(fixture.calls.at(-1).name, 'abort');
+  assert.equal(prepared.plan.summary().state, 'aborted');
+  assert.equal((await prepared.plan.abortClaimedRuntime()).reason,
+    'certified-runtime-not-claimed');
+  await runtime.close();
+});
+
 test('resume uses the one durable handle and never creates a replacement', async () => {
   const mcHomeDir = home();
   completedConversation(mcHomeDir);
@@ -281,7 +363,7 @@ function adapterFixture({ tool = 'codex', readiness = true } = {}) {
       calls.push({ name: 'boundary', options });
       return {
         ok: true,
-        descriptor: { session_id: mcSessionId },
+        descriptor: { session_id: mcSessionId, generation: options.domainGeneration },
         env: { BOUNDARY: '1' },
       };
     },
@@ -442,6 +524,7 @@ class FakePty extends EventEmitter {
   }
   onData(handler) { this.on('data', handler); }
   onExit(handler) { this.on('exit', handler); }
+  emitExit(event) { this.emit('exit', event); }
   write() {}
   resize() {}
   kill() {}

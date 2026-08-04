@@ -4,9 +4,9 @@
  * The plan §2b lists four commands that should emit `cd` directives on
  * fd 3 when `--emit-shell-directives` is passed:
  *
- *   mc cd <name>      → cd <worktree>          (already covered in cd.test.js)
- *   mc new <name>     → cd <worktree>          (on completion / on exit)
- *   mc resume <name>  → cd <worktree>          (before launching tool)
+ *   mc cd <name>      → cd <workspace>         (already covered in cd.test.js)
+ *   mc new <name>     → cd <current workspace> (before optional launch)
+ *   mc resume <name>  → cd <workspace>         (before launching tool)
  *   mc end <name>     → cd <primary-worktree>  (before removing worktree)
  *
  * This file covers new/resume/end. The contract is:
@@ -15,9 +15,9 @@
  *     emitted (so the shell wrapper doesn't land in a deleted dir).
  *   - The path must NOT appear on stdout (would be re-eval'd / cause noise).
  */
-import test, { describe, after, beforeEach } from 'node:test';
+import test, { describe, afterEach, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, writeFileSync } from 'node:fs';
+import { existsSync, realpathSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { runMcCaptureFd3 } from '../../mc/_helpers/cli.js';
@@ -36,9 +36,9 @@ describe('shell-directive emission (§2b)', () => {
     // These tests exercise shell-directive routing, not first-run onboarding.
     writeFileSync(join(repo.mcHome, '.setup-done-v1'), 'test\n');
   });
-  after(() => { repo?.cleanup(); });
+  afterEach(() => { repo?.cleanup(); });
 
-  test('mc new emits a cd directive to the new worktree', async () => {
+  test('mc new keeps the current directory as its workspace', async () => {
     const r = await runMcCaptureFd3(
       ['new', 'feat-cd', '--no-launch', '--emit-shell-directives'],
       { cwd: repo.dir, env: { MC_HOME: repo.mcHome } },
@@ -46,8 +46,7 @@ describe('shell-directive emission (§2b)', () => {
     assert.equal(r.status, 0, `stderr:${r.stderr}`);
     const target = extractCdTarget(r.fd3);
     assert.ok(target, `expected a cd directive on fd 3; got: ${JSON.stringify(r.fd3)}`);
-    assert.ok(target.startsWith(repo.mcHome),
-      `cd target should be under MC_HOME; got ${target}`);
+    assert.equal(target, realpathSync(repo.dir));
     assert.ok(existsSync(target),
       `cd target dir must exist at emission; got ${target}`);
   });
@@ -89,7 +88,7 @@ describe('shell-directive emission (§2b)', () => {
     const target = extractCdTarget(r.fd3);
     assert.ok(target, `expected cd directive on fd 3; got: ${JSON.stringify(r.fd3)}`);
     // Target must be the primary worktree (repo.dir), not the deleted one.
-    assert.equal(target, repo.dir,
+    assert.equal(realpathSync(target), realpathSync(repo.dir),
       `cd should land at primary worktree ${repo.dir}; got ${target}`);
     assert.ok(existsSync(target), `primary worktree must still exist`);
   });

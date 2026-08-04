@@ -97,13 +97,6 @@ export class SessionRuntimeSocketServer {
       }
       for (const frame of frames) {
         chain = chain.then(async () => {
-          if (frame.type === 'ping' && clientId === null) {
-            socket.write(encodeSessionHostFrame({
-              v: SESSION_HOST_PROTOCOL_VERSION,
-              type: 'pong',
-            }, { direction: 'server' }));
-            return;
-          }
           if (frame.type === 'status' && clientId === null) {
             socket.write(encodeSessionHostFrame(this.host.statusFrame(), { direction: 'server' }));
             return;

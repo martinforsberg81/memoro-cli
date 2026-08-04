@@ -1,62 +1,55 @@
 import assert from 'node:assert/strict';
-import test, { describe } from 'node:test';
+import { afterEach, describe, test } from 'node:test';
 
 import { parseArgs, run } from '../../../src/cli/attach.js';
+import { captureStream, makeV1Fixture } from './v1-fixture.js';
 
-describe('mc attach parseArgs', () => {
-  test('parses a session id', () => {
-    assert.deepEqual(parseArgs(['sess_a']), { id: 'sess_a', help: false });
+let fixtures = [];
+
+afterEach(() => {
+  for (const fixture of fixtures) fixture.cleanup();
+  fixtures = [];
+});
+
+describe('mc attach V1', () => {
+  test('routes only to the exact machine-local session runtime', async () => {
+    const fixture = makeFixture();
+    const created = fixture.create('alpha');
+    const calls = [];
+    const code = await run(['alpha'], {
+      mcHomeDir: fixture.mcHomeDir,
+      stderr: captureStream(),
+      stdin: { name: 'stdin' },
+      stdout: { name: 'stdout' },
+      attachTerminal: async (input) => { calls.push(input); return { ok: true, code: 7 }; },
+    });
+    assert.equal(code, 7);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].mcSessionId, created.session.mc_session_id);
+    assert.equal(calls[0].mcHomeDir, fixture.mcHomeDir);
   });
 
-  test('parses help and rejects extra args', () => {
-    assert.deepEqual(parseArgs(['--help']), { id: null, help: true });
-    assert.match(parseArgs(['sess_a', 'extra']).error, /unexpected arg/);
-    assert.match(parseArgs(['--bad']).error, /unknown flag/);
+  test('does not reinterpret a cloud identifier as local', async () => {
+    const fixture = makeFixture();
+    fixture.create('alpha');
+    const stderr = captureStream();
+    assert.equal(await run(['cloud:alpha'], {
+      mcHomeDir: fixture.mcHomeDir,
+      stderr,
+      attachTerminal: async () => assert.fail('cloud must not reach the local socket'),
+    }), 1);
+    assert.match(stderr.text(), /not found|not-local/iu);
   });
 
-  test('rejects --read-only', () => {
-    assert.match(parseArgs(['sess_a', '--read-only']).error, /unknown flag/);
+  test('parses one bounded session identifier', () => {
+    assert.deepEqual(parseArgs(['alpha']), { identifier: 'alpha' });
+    assert.match(parseArgs(['alpha', 'beta']).error, /unexpected arg/iu);
+    assert.match(parseArgs(['--unknown']).error, /unknown flag/iu);
   });
 });
 
-describe('mc attach command', () => {
-  test('starts broker before attaching', async () => {
-    const sequence = [];
-    let attached = null;
-    const code = await run(['sess_a'], {
-      ensureBrokerRunning: async () => {
-        sequence.push('ensure');
-        return { ok: true, broker: { pid: 42 } };
-      },
-      attachBrokerSession: async (opts) => {
-        sequence.push('attach');
-        attached = opts;
-        return 0;
-      },
-      resolveSessionControllerCapability: async () => ({
-        ok: true,
-        capability: 'b'.repeat(64),
-      }),
-      stderr: { write: () => {} },
-    });
-
-    assert.equal(code, 0);
-    assert.deepEqual(sequence, ['ensure', 'attach']);
-    assert.deepEqual(attached, {
-      id: 'sess_a',
-      controllerCapability: 'b'.repeat(64),
-    });
-  });
-
-  test('does not attach when broker start fails', async () => {
-    let stderr = '';
-    const code = await run(['sess_a'], {
-      ensureBrokerRunning: async () => ({ ok: false, error: 'offline' }),
-      attachBrokerSession: async () => assert.fail('must not attach'),
-      stderr: { write: (s) => { stderr += s; } },
-    });
-
-    assert.equal(code, 1);
-    assert.match(stderr, /broker start failed/);
-  });
-});
+function makeFixture() {
+  const fixture = makeV1Fixture('mc-attach-v1-');
+  fixtures.push(fixture);
+  return fixture;
+}

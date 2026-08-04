@@ -75,7 +75,7 @@ describe('mc spawn — session fabric', () => {
     assert.match(brief, /Build the locale picker/);
   });
 
-  test('project sessions appear in default list and tree view', () => {
+  test('legacy project entries migrate to flat V1 sessions without a tree mode', () => {
     writeRegistry(repo.mcHome, [
       makeEntry({ name: 'coord', kind: 'work', parent: null, branch: 'sess/coord', tool: 'claude' }),
       makeEntry({
@@ -100,9 +100,7 @@ describe('mc spawn — session fabric', () => {
       cwd: repo.dir,
       env: { MC_HOME: repo.mcHome, MC_ORPHAN_PID_DIR: pidDir, HOME: repo.root },
     });
-    assert.equal(tree.status, 0, tree.stderr);
-    assert.match(tree.stdout, /^coord/m);
-    assert.match(tree.stdout, /^  i18n/m);
-    assert.match(tree.stdout, /scope=French UI locale/);
+    assert.equal(tree.status, 2);
+    assert.match(tree.stderr, /unknown flag: --tree/);
   });
 });

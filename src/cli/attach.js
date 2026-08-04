@@ -1,68 +1,36 @@
-import { attachBrokerSession } from '../runtime/broker/attach-client.js';
-import { requestBroker } from '../runtime/broker/client.js';
-import { ensureBrokerRunning } from '../runtime/broker/supervisor.js';
-import {
-  resolveSessionControllerCapability,
-} from '../mc/session-controller-capability.js';
+import { resolveLocalSessionSync } from '../mc/session-v1.js';
+import { attachLocalSessionTerminal } from '../runtime/session-host/terminal-client.js';
 
 export async function run(argv, deps = {}) {
-  const opts = parseArgs(argv);
   const stderr = deps.stderr || process.stderr;
-  if (opts.error) {
-    stderr.write(`mc: ${opts.error}\n`);
-    printUsage();
+  const opts = parseArgs(argv);
+  if (opts.error || !opts.identifier) {
+    stderr.write(`mc: ${opts.error || 'usage — mc attach <local-session>'}\n`);
     return 2;
   }
-  if (opts.help || !opts.id) {
-    printUsage();
-    return opts.help ? 0 : 2;
-  }
-  const ensureBroker = deps.ensureBrokerRunning || ensureBrokerRunning;
-  const broker = await ensureBroker({
-    request: deps.request || requestBroker,
-    spawnDaemon: deps.spawnDaemon,
-    sleep: deps.sleep,
+  const resolved = (deps.resolveLocalSession || resolveLocalSessionSync)(opts.identifier, {
+    mcHomeDir: deps.mcHomeDir,
   });
-  if (!broker.ok) {
-    stderr.write(`mc: broker start failed (${broker.error || 'unknown'})\n`);
+  if (!resolved.ok) {
+    stderr.write(`mc: local session "${opts.identifier}" was not found (${resolved.reason})\n`);
     return 1;
   }
-  const attach = deps.attachBrokerSession || attachBrokerSession;
-  const authority = await (
-    deps.resolveSessionControllerCapability
-    || resolveSessionControllerCapability
-  )({
-    codingSessionId: opts.id,
-    deps,
+  const result = await (deps.attachTerminal || attachLocalSessionTerminal)({
+    mcHomeDir: deps.mcHomeDir,
+    mcSessionId: resolved.session.mc_session_id,
+    stdin: deps.stdin || process.stdin,
+    stdout: deps.stdout || process.stdout,
+    stderr,
   });
-  if (!authority?.ok) {
-    stderr.write('mc: session controller authority is unavailable\n');
-    return 1;
-  }
-  return attach({
-    id: opts.id,
-    controllerCapability: authority.capability,
-  });
+  return result.code;
 }
 
 export function parseArgs(argv) {
-  const opts = { id: null, help: false };
-  for (const a of argv) {
-    if (a === '--help' || a === '-h') {
-      opts.help = true;
-      continue;
-    }
-    if (a.startsWith('--')) return { ...opts, error: `unknown flag: ${a}` };
-    if (opts.id) return { ...opts, error: `unexpected arg: ${a}` };
-    opts.id = a;
+  const opts = { identifier: null };
+  for (const arg of argv) {
+    if (arg.startsWith('--')) return { ...opts, error: `unknown flag: ${arg}` };
+    if (opts.identifier) return { ...opts, error: `unexpected arg: ${arg}` };
+    opts.identifier = arg;
   }
   return opts;
-}
-
-function printUsage() {
-  process.stdout.write(`mc attach — attach to a broker-owned local session
-
-USAGE
-  mc attach <session_id>
-`);
 }

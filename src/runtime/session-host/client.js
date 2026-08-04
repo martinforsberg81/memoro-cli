@@ -32,6 +32,8 @@ export class SessionRuntimeClient extends EventEmitter {
     this.lastSequence = 0;
     this.attached = false;
     this.screenReceived = false;
+    this.exitFrame = null;
+    this.closed = false;
   }
 
   connect() {
@@ -75,6 +77,7 @@ export class SessionRuntimeClient extends EventEmitter {
         }
       });
       socket.on('close', () => {
+        this.closed = true;
         if (!settled) fail(runtimeHostError('runtime-host-closed-before-attach'));
         this.emit('close');
       });
@@ -138,12 +141,11 @@ export class SessionRuntimeClient extends EventEmitter {
       this.rows = frame.rows;
     } else if (frame.type === 'exit') {
       this._assertFrameIdentity(frame);
+      this.exitFrame = frame;
       this.emit('exit', frame);
     } else if (frame.type === 'status') {
       this._assertFrameIdentity(frame);
       this.emit('status', frame);
-    } else if (frame.type === 'pong') {
-      this.emit('pong');
     }
   }
 

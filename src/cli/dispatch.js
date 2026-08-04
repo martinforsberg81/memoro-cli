@@ -1,90 +1,68 @@
-/**
- * `mc dispatch <name> [<name>…] [--message <msg> | "<msg>"] [--dry-run] [--json]`
- *
- * §2: name-resolving rename of `mc sessions send`. Bulk form (§9h) lets
- * you send the same message to several sessions in one shot.
- *
- * Resolution order for the name → coding_session_id mapping:
- *   1. registry entry (preferred — set when we created the session via
- *      `mc new`)
- *   2. fallback to today's label-based resolution (`mc sessions send`)
- *
- * Foundation scope: arg-parsing + dry-run + name-resolution against the
- * registry. The actual API round-trip lives in bin-mc.js's existing
- * `runSessionsSend` and is invoked only when both the registry resolves
- * the name and `--dry-run` isn't set. That avoids touching the network
- * layer in this PR.
- */
-import { formatEntryResolutionError, readRegistry, resolveEntry } from '../mc/registry.js';
+import { resolveLocalSessionSync } from '../mc/session-v1.js';
+import { sendLocalSessionInput } from '../runtime/session-host/terminal-client.js';
 
-export async function run(argv) {
+export async function run(argv, deps = {}) {
+  const stdout = deps.stdout || process.stdout;
+  const stderr = deps.stderr || process.stderr;
   const opts = parseArgs(argv);
-  if (opts.error) {
-    console.error(`mc: ${opts.error}`);
+  if (opts.error || opts.identifiers.length === 0 || !opts.message) {
+    stderr.write(`mc: ${opts.error || 'usage — mc dispatch <session> <message>'}\n`);
     return 2;
   }
-  if (opts.names.length === 0) {
-    console.error('mc: usage — `mc dispatch <name> [<name>…] <message>`');
-    return 2;
-  }
-  if (!opts.message) {
-    console.error('mc: dispatch requires a message — pass `--message <msg>` or as a positional');
-    return 2;
-  }
-
-  const targets = [];
-  const registry = readRegistry({ persistMigration: !opts.dryRun });
-  for (const name of opts.names) {
-    const resolved = resolveEntry(name, { registry });
-    if (!resolved.ok) {
-      console.error(`mc: ${formatEntryResolutionError(name, resolved)}`);
-      return 1;
+  const results = [];
+  for (const identifier of opts.identifiers) {
+    if (identifier.startsWith('cloud:')) {
+      results.push({ identifier, ok: false, reason: 'cloud-v1-terminal-transport-unavailable' });
+      continue;
     }
-    const entry = resolved.entry;
-    targets.push({
-      name: entry.name,
-      session_id: entry.session_id || null,
-      repository_id: entry.repository_id || null,
-      coding_session_id: entry.coding_session_id || null,
-      session_state: entry.session_state || 'unknown',
+    const resolved = (deps.resolveLocalSession || resolveLocalSessionSync)(identifier, {
+      mcHomeDir: deps.mcHomeDir,
+    });
+    if (!resolved.ok) {
+      results.push({ identifier, ok: false, reason: resolved.reason });
+      continue;
+    }
+    const sent = await (deps.sendInput || sendLocalSessionInput)({
+      mcHomeDir: deps.mcHomeDir,
+      mcSessionId: resolved.session.mc_session_id,
+      message: opts.message,
+      tool: resolved.session.projection.tool,
+    });
+    results.push({
+      identifier,
+      name: resolved.session.metadata.name,
+      mc_session_id: resolved.session.mc_session_id,
+      ...sent,
     });
   }
-
-  if (opts.dryRun) {
-    const out = { dry_run: true, message: opts.message, targets };
-    if (opts.json) console.log(JSON.stringify(out, null, 2));
-    else {
-      for (const t of targets) {
-        process.stdout.write(`would dispatch to ${t.name} (${t.coding_session_id || 'no-sid'})\n`);
-      }
+  const ok = results.every((result) => result.ok);
+  if (opts.json) {
+    stdout.write(`${JSON.stringify({ ok, message: opts.message, results }, null, 2)}\n`);
+  } else {
+    for (const result of results) {
+      if (result.ok) stdout.write(`✓ dispatched to ${result.name} (${result.mc_session_id})\n`);
+      else stderr.write(`mc: dispatch to ${result.identifier} failed (${result.reason})\n`);
     }
-    return 0;
   }
-
-  // Real dispatch wiring lands when the bulk send-API is hooked up.
-  // For now, single-target dispatch can still go via `mc sessions send`.
-  console.error('mc: live dispatch is currently routed via `mc sessions send`. ' +
-    'Use that or `mc dispatch … --dry-run` for the plan.');
-  return 1;
+  return ok ? 0 : 1;
 }
 
-function parseArgs(argv) {
-  const opts = { names: [], message: null, dryRun: false, json: false };
-  for (let i = 0; i < argv.length; i++) {
-    const a = argv[i];
-    switch (a) {
-      case '--message': opts.message = argv[++i]; break;
-      case '--dry-run': opts.dryRun = true; break;
-      case '--json': opts.json = true; break;
-      default:
-        if (a.startsWith('--')) return { error: `unknown flag: ${a}` };
-        opts.names.push(a);
+export function parseArgs(argv) {
+  const opts = { identifiers: [], message: null, json: false };
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === '--json') { opts.json = true; continue; }
+    if (arg === '--message') {
+      const value = argv[++index];
+      if (!value || value.startsWith('--')) return { ...opts, error: '--message requires text' };
+      opts.message = value;
+      continue;
     }
+    if (arg.startsWith('--')) return { ...opts, error: `unknown flag: ${arg}` };
+    opts.identifiers.push(arg);
   }
-  // If no --message and the last positional is multi-word, treat it as
-  // the message (matches today's `mc sessions send <id> <msg>` shape).
-  if (!opts.message && opts.names.length >= 2) {
-    opts.message = opts.names.pop();
+  if (!opts.message && opts.identifiers.length >= 2) {
+    opts.message = opts.identifiers.pop();
   }
   return opts;
 }

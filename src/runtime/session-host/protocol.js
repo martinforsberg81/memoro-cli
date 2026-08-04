@@ -7,8 +7,8 @@ import { assertTerminalSize } from './terminal-screen.js';
 export const SESSION_HOST_PROTOCOL_VERSION = 1;
 export const SESSION_HOST_MAX_FRAME_BYTES = 1024 * 1024;
 
-const CLIENT_TYPES = new Set(['attach', 'input', 'resize', 'detach', 'ping', 'status']);
-const SERVER_TYPES = new Set(['attached', 'screen', 'output', 'resized', 'exit', 'status', 'pong', 'error']);
+const CLIENT_TYPES = new Set(['attach', 'input', 'resize', 'detach', 'status']);
+const SERVER_TYPES = new Set(['attached', 'screen', 'output', 'resized', 'exit', 'status', 'error']);
 const BASE64_RE = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u;
 const ERROR_CODE_RE = /^[a-z][a-z0-9-]{0,63}$/u;
 const MAX_SCREEN_PAYLOAD_BYTES = 700 * 1024;
@@ -89,8 +89,6 @@ export function validateServerFrame(value) {
       || !Number.isSafeInteger(value.clients)
       || value.clients < 0
       || !validScreenStatus(value.screen)) return invalid('invalid-status-frame');
-  } else if (value.type === 'pong') {
-    if (!exactKeys(value, ['v', 'type'])) return invalid('invalid-pong-frame');
   } else if (!exactKeys(value, ['v', 'type', 'code'])
     || !ERROR_CODE_RE.test(value.code || '')) {
     return invalid('invalid-error-frame');

@@ -5,6 +5,8 @@
  * release, custody, runtime, refresh, archive-root, and artifact semantics
  * remain behind the adapter boundary.
  */
+import { join } from 'node:path';
+
 import {
   abortLocalClaudeCredentialDomain,
   closeLocalClaudeCredentialDomain,
@@ -31,6 +33,7 @@ import {
 import {
   validate as validateClaudeProviderArtifact,
 } from '../artifacts/claude-code.js';
+import { encodeClaudeProjectPath } from '../../lib/claude.js';
 import {
   inspectManagedProviderAbsence,
 } from '../../mc/managed-provider-archive.js';
@@ -117,23 +120,45 @@ export const CLAUDE_MANAGED_PROVIDER_ADAPTER = Object.freeze({
     };
   },
   importLegacyRecovery: importManagedClaudeRecovery,
-  captureProviderArtifactContext({ provider } = {}) {
+  captureProviderArtifactContext({ provider, input } = {}) {
     const descriptor = provider?.descriptor;
     if (descriptor?.provider_adapter !== MANAGED_CLAUDE_PROVIDER_ID
       || typeof descriptor.claude_config_dir !== 'string'
       || !descriptor.claude_config_dir) return null;
     return {
       projects_dir: `${descriptor.claude_config_dir.replace(/\/+$/u, '')}/projects`,
+      expected_provider_session_id: expectedClaudeSessionId(input?.argv),
     };
   },
-  observeProviderArtifact() {
+  observeProviderArtifact({ context, cwd } = {}) {
+    const providerSessionId = context?.expected_provider_session_id;
+    if (typeof providerSessionId !== 'string' || !providerSessionId
+      || typeof context?.projects_dir !== 'string' || !context.projects_dir
+      || typeof cwd !== 'string' || !cwd) {
+      return { ok: false, reason: 'provider-artifact-observation-context-invalid' };
+    }
     return {
-      ok: false,
-      reason: 'provider-artifact-observation-unsupported',
+      ok: true,
+      evidence: {
+        cwd,
+        providerSessionId,
+        transcriptPath: join(
+          context.projects_dir,
+          encodeClaudeProjectPath(cwd),
+          `${providerSessionId}.jsonl`,
+        ),
+      },
     };
   },
   validateProviderArtifact: validateClaudeProviderArtifact,
 });
+
+function expectedClaudeSessionId(argv = []) {
+  const sessionFlag = argv.indexOf('--session-id');
+  if (sessionFlag >= 0) return argv[sessionFlag + 1] || null;
+  const resumeFlag = argv.indexOf('--resume');
+  return resumeFlag >= 0 ? argv[resumeFlag + 1] || null : null;
+}
 
 function ready() {
   return {

@@ -52,7 +52,7 @@ describe('adapters/index — resolveToolInput', () => {
     assert.equal(r.planned, true);
   });
 
-  test('unknown input returns null (caller decides error vs fallback)', () => {
+  test('unknown input returns null so the caller can fail closed', () => {
     assert.equal(resolveToolInput('nonsense'), null);
     assert.equal(resolveToolInput(''), null);
     assert.equal(resolveToolInput(null), null);
@@ -79,10 +79,10 @@ describe('mc new — resolveToolForNew', () => {
     const configLoader = async () => ({ defaultTool: null });
     const r = await resolveToolForNew({ flagValue: 'nope', configLoader });
     assert.ok(r.error, 'error string set');
-    assert.match(r.error, /unknown tool: nope/);
+    assert.match(r.error, /unknown or uncertified tool: nope/);
   });
 
-  test('falls back to config.defaultTool when flag missing', async () => {
+  test('uses config.defaultTool when the flag is missing', async () => {
     const configLoader = async () => ({ defaultTool: 'codex' });
     const r = await resolveToolForNew({ flagValue: null, configLoader });
     assert.equal(r.tool, 'codex');
@@ -107,38 +107,28 @@ describe('mc new — resolveToolForNew', () => {
     assert.equal(r.source, 'config');
   });
 
-  test('hardcoded fallback is codex when both flag and config are unset', async () => {
+  test('uses the built-in codex default when config is unset', async () => {
     const configLoader = async () => ({ defaultTool: null });
     const r = await resolveToolForNew({ flagValue: null, configLoader });
     assert.equal(r.tool, 'codex');
-    assert.equal(r.source, 'fallback');
+    assert.equal(r.source, 'built-in-default');
   });
 
-  test('unresolvable config value soft-falls-back (does not lock user out)', async () => {
-    // If a user hand-edits config to a value that isn't in the adapter
-    // registry at all, `mc new` should still work — fall back to the
-    // hardcoded default rather than refuse to create the session.
+  test('rejects an unresolvable configured tool instead of substituting another', async () => {
     const configLoader = async () => ({ defaultTool: 'totally-made-up' });
     const r = await resolveToolForNew({ flagValue: null, configLoader });
-    assert.equal(r.tool, 'codex');
-    assert.equal(r.source, 'fallback');
+    assert.match(r.error, /configured tool is not certified: totally-made-up/iu);
   });
 
-  test('planned-but-not-implemented adapter ID in config is honoured', async () => {
-    // Symmetry with the existing `mc new --tool gemini` flag behaviour:
-    // planned adapters can be stored in the registry's tool field even
-    // though the actual launcher will fail downstream. Don't filter at
-    // the resolver — let the launcher handle the not-installed case.
+  test('rejects an uncertified configured adapter', async () => {
     const configLoader = async () => ({ defaultTool: 'cursor' });
     const r = await resolveToolForNew({ flagValue: null, configLoader });
-    assert.equal(r.tool, 'cursor');
-    assert.equal(r.source, 'config');
+    assert.match(r.error, /configured tool is not certified: cursor/iu);
   });
 
-  test('config loader throwing soft-falls-back', async () => {
+  test('fails closed when the tool configuration cannot be read', async () => {
     const configLoader = async () => { throw new Error('disk gone'); };
     const r = await resolveToolForNew({ flagValue: null, configLoader });
-    assert.equal(r.tool, 'codex');
-    assert.equal(r.source, 'fallback');
+    assert.equal(r.error, 'could not read the default tool configuration');
   });
 });

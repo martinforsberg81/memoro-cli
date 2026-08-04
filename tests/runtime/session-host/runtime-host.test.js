@@ -94,6 +94,25 @@ test('owns one journaled PTY generation and reconstructs attach state', async ()
   host.close();
 });
 
+test('delivers exit after the initial screen when the PTY exits during attach', async () => {
+  const mcHomeDir = temporaryHome();
+  const now = clock();
+  preparePlannedGeneration(mcHomeDir);
+  const pty = new FakePty(31005);
+  const screen = attachExitScreen(() => pty.emitExit({ exitCode: 7, signal: null }));
+  const host = createHost({ mcHomeDir, now, pty, screenFactory: () => screen });
+  host.start();
+
+  const socket = new FakeSocket();
+  await host.attach(socket);
+  const frames = decodeFrames(socket.writes);
+  assert.deepEqual(frames.map((frame) => frame.type), ['attached', 'screen', 'exit']);
+  assert.equal(frames.at(-1).exit_code, 7);
+  assert.equal(inspectSessionRuntimeSync({ mcHomeDir, mcSessionId }).active_generation.phase,
+    'exited');
+  host.close();
+});
+
 test('keeps launch arguments, environment, and PTY output out of persisted state', async () => {
   const mcHomeDir = temporaryHome();
   const now = clock();
@@ -393,6 +412,7 @@ function createHost({
     env: {},
   },
   queueFactory,
+  screenFactory,
 }) {
   return new SessionRuntimeHost({
     mcHomeDir,
@@ -403,7 +423,36 @@ function createHost({
     now,
     hostPid: 30001,
     ...(queueFactory ? { queueFactory } : {}),
+    ...(screenFactory ? { screenFactory } : {}),
   });
+}
+
+function attachExitScreen(onSnapshot) {
+  return {
+    append() { return { ok: true, pending_bytes: 0 }; },
+    async snapshot() {
+      onSnapshot();
+      await Promise.resolve();
+      return {
+        ansi: '',
+        through_sequence: 0,
+        cols: 80,
+        rows: 24,
+        scrollback_truncated: false,
+      };
+    },
+    status() {
+      return {
+        cols: 80,
+        rows: 24,
+        parsed_sequence: 0,
+        pending_bytes: 0,
+        pending_operations: 0,
+        scrollback_lines: 0,
+      };
+    },
+    dispose() {},
+  };
 }
 
 function clock() {

@@ -88,7 +88,7 @@ describe('local auth mode', () => {
 
   test('lifecycle parsers reject removed execution-mode flags', async () => {
     const { parseArgs: newArgs } = await import('../../src/cli/new.js');
-    const { parseArgs: openArgs } = await import('../../src/cli/resume.js');
+    const { parseArgs: openArgs } = await import('../../src/cli/open.js');
 
     assert.equal(openArgs(['s']).error, undefined);
     assert.equal(newArgs(['s']).error, undefined);

@@ -1,419 +1,186 @@
-/**
- * `mc new <name> [<task>] [--from <ref>] [--tool …] [--no-launch] [--json]
- *               [--emit-shell-directives]`
- *
- * §2: create worktree at ${MC_HOME}/worktrees/<repo-slug>/<name> with
- * branch `sess/<name>`, register it, launch the chosen tool (unless
- * --no-launch). §2b: emit `cd <worktree>` on fd 3 when the wrapper is
- * attached.
- *
- * Grounding (Phase 2): an optional `<task>` positional is the soft
- * `focus` pointer — standing context only, NOT an opening prompt (the
- * session stays free to switch tracks). The re-exec into wrap mode drops
- * argv, so focus is threaded across the process boundary via the
- * `MC_GROUNDING_FOCUS` env var, which `runWrap` reads at its pre-launch
- * grounding slot — the SAME `groundSession` seam bare `mc` uses.
- *
- * The label-tagging Claude wrap that used to live under `mc new <label>`
- * moved to `mc wrap` — see commands/wrap.js.
- */
-import { mkdirSync } from 'node:fs';
-import { dirname } from 'node:path';
-import {
-  formatEntryResolutionError,
-  readRegistry,
-  resolveEntry,
-  upsertEntry,
-} from '../mc/registry.js';
-import { repoSlug, worktreePath } from '../mc/paths.js';
-import { git, isInsideRepo, primaryWorktree, branchExists } from '../mc/git.js';
-import {
-  repositoryIdentityProjection,
-  resolveRepositoryIdentity,
-} from '../mc/repository-identity.js';
-import { emitCd, parseDirectiveFlag } from '../mc/shell-directives.js';
-import { checkAndPrintFreshInstall, ensureSentinel } from '../mc/first-run.js';
 import { resolveToolInput } from '../adapters/index.js';
 import { DEFAULT_TOOL, readConfig } from '../lib/config.js';
-import { launchBrokerOwnedSession } from '../runtime/broker/launch-client.js';
-import { readRepoLocalConfig, readRepoPolicyConfig, resolveEffectiveConfig } from '../mc/config-model.js';
-import { buildNewSessionLaunchIntent } from '../mc/session-intent.js';
+import { checkAndPrintFreshInstall, ensureSentinel } from '../mc/first-run.js';
+import { emitCd, parseDirectiveFlag } from '../mc/shell-directives.js';
 import {
-  LOCAL_AUTH_MODES,
-  requireLocalAuthMode,
-  resolveLocalAuthMode,
-} from '../mc/local-auth-mode.js';
+  createLocalSessionSync,
+  ensureV1SessionStorageSync,
+} from '../mc/session-v1.js';
 
-const FALLBACK_TOOL_SHORT = 'codex';
+const BUILTIN_DEFAULT_TOOL = 'codex';
+export const TOOL_SUGAR = Object.freeze({
+  '--codex': 'codex',
+  '--claude': 'claude',
+});
+const TOOL_FLAGS = TOOL_SUGAR;
 
-/**
- * Decide which tool the new session runs under. Precedence:
- *   1. explicit `--tool` flag (resolved through `resolveToolInput` so
- *      short names AND adapter IDs are accepted)
- *   2. `config.defaultTool` from `mc tool-switch` (always an adapter ID)
- *   3. the hardcoded fallback short name (`codex`)
- * The return value is always the short-name form (`claude`, `codex`,
- * `gemini`) — that's what the registry has stored historically and what
- * `mc list` expects to render. Adapter IDs are translated here so the
- * outer surface stays uniform.
- *
- * Exported for unit testing. `configLoader` is injectable so tests
- * don't touch real disk.
- */
-export async function resolveToolForNew({ flagValue, configLoader = readConfig } = {}) {
-  if (flagValue) {
-    const resolved = resolveToolInput(flagValue);
-    if (!resolved) {
-      return { error: `unknown tool: ${flagValue}. Try: claude | codex | gemini` };
-    }
-    return { tool: resolved.shortName, source: 'flag' };
-  }
-  let cfg = null;
-  try { cfg = await configLoader(); } catch { /* no config yet — soft fallback */ }
-  const storedField = defaultToolFromConfig(cfg);
-  const stored = storedField.value;
-  if (stored) {
-    const resolved = resolveToolInput(stored);
-    if (resolved) return { tool: resolved.shortName, source: storedField.source };
-    // Config has a value we can't resolve — surface in the registry
-    // entry's tool field via the fallback rather than failing the verb,
-    // so a misconfigured config doesn't lock the user out of `mc new`.
-  }
-  return { tool: FALLBACK_TOOL_SHORT, source: 'fallback' };
-}
-
-export function defaultToolFromConfig(cfg) {
-  const raw = cfg?.defaultTool;
-  if (raw && typeof raw === 'object' && Object.prototype.hasOwnProperty.call(raw, 'value')) {
-    return {
-      value: raw.value ?? null,
-      source: raw.source || 'config',
-    };
-  }
-  return {
-    value: raw ?? null,
-    source: 'config',
-  };
-}
-
-export async function readEffectiveConfigForNew({ primary }) {
-  const globalConfig = await readConfig();
-  const repoPolicy = readRepoPolicyConfig({ worktreePath: primary });
-  const repoLocal = readRepoLocalConfig({ worktreePath: primary });
-  return resolveEffectiveConfig({
-    globalConfig,
-    repoPolicy: repoPolicy.config,
-    localConfig: repoLocal.config,
-    warnings: [
-      ...(repoPolicy.warnings || []),
-      ...(repoLocal.warnings || []),
-    ],
-  });
-}
-
-const NAME_RE = /^[a-z0-9][a-z0-9_-]*$/i;
-
-export async function run(rawArgv) {
+export async function run(rawArgv, deps = {}) {
   const { args: argv, enabled: emitDirectives } = parseDirectiveFlag(rawArgv);
-
   const opts = parseArgs(argv);
+  const stdout = deps.stdout || process.stdout;
+  const stderr = deps.stderr || process.stderr;
   if (opts.error) {
-    console.error(`mc: ${opts.error}`);
-    printUsage();
+    stderr.write(`mc: ${opts.error}\n`);
+    printUsage(stderr);
     return 2;
   }
   if (!opts.name) {
-    console.error('mc: usage — `mc new <name> [--from <ref>] [--tool <tool>]`');
+    printUsage(stderr);
     return 2;
   }
-
-  if (!NAME_RE.test(opts.name)) {
-    console.error(`mc: invalid name "${opts.name}" — must match ${NAME_RE}`);
+  if (opts.json && !opts.noLaunch) {
+    stderr.write('mc: --json requires --no-launch for mc new\n');
     return 2;
   }
-
-  const localAuthMode = resolveLocalAuthMode();
-  const authMode = requireLocalAuthMode(localAuthMode);
-  if (!authMode.ok) {
-    console.error(`mc: ${authMode.error}`);
-    return 1;
-  }
-  // §11d: friendly first-run hint when both sentinel AND keychain
-  // token miss. Runs after arg validation so `mc new --json` and
-  // `--help` semantics aren't changed for fresh installs in a
-  // way that would surprise scripts.
-  if (await checkAndPrintFreshInstall()) {
-    return 1;
-  }
-
-  const cwd = process.cwd();
-  if (!isInsideRepo(cwd)) {
-    console.error('mc: not inside a git repository. `mc new` requires a repo.');
-    return 1;
-  }
-
-  const primary = primaryWorktree(cwd);
-  if (!primary) {
-    console.error('mc: could not resolve primary worktree path');
-    return 1;
-  }
-
-  const repository = resolveRepositoryIdentity(primary, { createLocal: true });
-  if (!repository.ok) {
-    console.error(`mc: could not establish repository identity (${repository.reason})`);
-    return 1;
-  }
-  const existing = resolveEntry(opts.name, {
-    cwd: primary,
-    repositoryId: repository.id,
-  });
-  if (!existing.ok && ['ambiguous-session-name', 'ambiguous-legacy-session'].includes(existing.reason)) {
-    console.error(`mc: ${formatEntryResolutionError(opts.name, existing)}`);
-    return 1;
-  }
-  const existingEntry = existing.ok ? existing.entry : null;
-  if (existingEntry && !existingEntry.repository_id) {
-    console.error(`mc: session "${opts.name}" has unresolved legacy repository identity; registry state was preserved`);
-    return 1;
-  }
-  if (existingEntry && existingEntry.worktree_missing !== true) {
-    console.error(`mc: a worktree named "${opts.name}" already exists`);
-    return 1;
-  }
-
-  const branch = `sess/${opts.name}`;
-  if (branchExists(primary, branch)) {
-    console.error(`mc: branch "${branch}" already exists`);
-    return 1;
-  }
-
-  // Create the branch off --from (or HEAD).
-  const fromRef = opts.from || 'HEAD';
-  try {
-    git(primary, ['branch', branch, fromRef]);
-  } catch (err) {
-    console.error(`mc: failed to create branch ${branch}: ${err.message}`);
-    return 1;
-  }
-
-  const registry = readRegistry();
-  const baseSlug = repoSlug(primary);
-  const collide = registry.entries.some((entry) => (
-    entry?.repo_slug === baseSlug
-      && entry?.repository_id
-      && entry.repository_id !== repository.id
-  ));
-  const slug = repoSlug(primary, { collide, repositoryId: repository.id });
-  const wt = worktreePath(primary, opts.name, { collide, repositoryId: repository.id });
-  mkdirSync(dirname(wt), { recursive: true });
-  try {
-    git(primary, ['worktree', 'add', wt, branch]);
-  } catch (err) {
-    // Best-effort branch rollback so we don't leave dead refs.
-    try { git(primary, ['branch', '-D', branch]); } catch {}
-    console.error(`mc: failed to add worktree: ${err.message}`);
-    return 1;
-  }
-
-  const toolResolution = await resolveToolForNew({
-    flagValue: opts.tool,
-    configLoader: () => readEffectiveConfigForNew({ primary }),
-  });
-  if (toolResolution.error) {
-    console.error(`mc: ${toolResolution.error}`);
-    try { git(primary, ['worktree', 'remove', wt, '--force']); } catch {}
-    try { git(primary, ['branch', '-D', branch]); } catch {}
-    return 2;
-  }
-
-  const entry = upsertEntry({
-    name: opts.name,
-    ...(existingEntry?.session_id ? { session_id: existingEntry.session_id } : {}),
-    repository_id: repository.id,
-    repository_identity: repositoryIdentityProjection(repository),
-    branch,
-    worktree_path: wt,
-    repo_slug: slug,
-    primary_worktree: primary,
-    kind: 'work',
-    tool: toolResolution.tool,
-    model_chain: [],
-    session_state: 'no-session-yet',
-    dirty_files: 0,
-    ahead: 0,
-    behind: 0,
-    open_question: false,
-    safety_verdict: 'SAFE_TO_END',
-    coding_session_id: null,
-    tool_session_id: null,
-    tool_session_source: null,
-    tool_transcript_path: null,
-    tool_session_adapter: null,
-    tool_session_generation: null,
-    tool_sessions: null,
-    session_objective: opts.task ? { text: opts.task, authority: 'explicit' } : null,
-    focus: opts.task || null,
-    provider_session_id: null,
-    llm_session_id: null,
-    broker_socket_path: null,
-    host_kind: null,
-    worktree_missing: false,
-    last_storage_repair_at: null,
-    last_storage_repair_reason: null,
-    last_opened_at: new Date().toISOString(),
-  });
-
-  emitCd(wt, { enabled: emitDirectives || undefined });
-
-  // §11d: on a successful `mc new`, ensure the sentinel exists. For
-  // migrants (token in keychain from `memoro-cli login` before mc
-  // setup existed) this is the silent upgrade path — next call to
-  // any first-run-aware command skips the hint without ever having
-  // shown one.
-  ensureSentinel();
-
-  if (opts.json) {
-    console.log(JSON.stringify({
-      ok: true,
-      name: opts.name,
-      session_id: entry.session_id,
-      repository_id: entry.repository_id,
-      branch,
-      worktree_path: wt,
-      tool: entry.tool,
-      tool_source: toolResolution.source,
-      from: opts.from || null,
-      focus: opts.task || null,
-    }, null, 2));
-    return 0;
-  }
-
-  console.log(`mc: created worktree ${opts.name} at ${wt} (tool: ${entry.tool}, source: ${toolResolution.source})`);
-
-  if (opts.noLaunch || process.env.MC_TEST_MODE === '1') {
-    return 0;
-  }
-
-  // Broker-owned process model: the local terminal becomes an attach
-  // client, while the broker owns the PTY and sidecars. Closing the local
-  // terminal detaches without killing the LLM session.
-  return launchNewSession({
-    entry,
-    worktreePath: wt,
-    focus: opts.task,
-    apiArgv: argv,
-    localAuthMode,
-  });
-}
-
-export async function launchNewSession({
-  entry,
-  worktreePath,
-  focus = null,
-  apiArgv = [],
-  env = process.env,
-  localAuthMode = LOCAL_AUTH_MODES.MANAGED_PORTABLE,
-  stderr = process.stderr,
-  deps = {},
-} = {}) {
-  const authMode = (deps.requireLocalAuthMode || requireLocalAuthMode)(localAuthMode);
-  if (!authMode?.ok || localAuthMode !== LOCAL_AUTH_MODES.MANAGED_PORTABLE) {
-    stderr.write(`mc: ${authMode?.error || 'certified execution is required'}\n`);
-    return 1;
-  }
-
-  const launchTool = entry?.tool ? resolveToolInput(entry.tool) : null;
-
-  const launch = deps.launchBrokerOwnedSession || launchBrokerOwnedSession;
-  const result = await launch({
-    ...buildNewSessionLaunchIntent({
-      entry,
-      worktreePath,
-      focus,
-      launchTool,
-      apiArgv,
-      env,
-      localAuthMode,
-      argv: [],
-    }),
-    mintedToolSessionId: null,
+  return launchNewSession(opts, {
+    ...deps,
+    stdout,
     stderr,
-    onLaunched: ({ codingSessionId, brokerSocketPath = null, hostKind = null }) => {
-      const upsert = deps.upsertEntry || upsertEntry;
-      const patch = {
-        name: entry.name,
-        ...(entry.session_id ? { session_id: entry.session_id } : {}),
-        ...(entry.repository_id ? { repository_id: entry.repository_id } : {}),
-        coding_session_id: codingSessionId,
-        session_state: 'live',
-      };
-      if (brokerSocketPath) patch.broker_socket_path = brokerSocketPath;
-      if (hostKind) patch.host_kind = hostKind;
-      upsert(patch);
-    },
-    deps: deps.launchDeps || {},
+    emitDirectives,
   });
-  if (typeof result === 'number') return result;
-  return result?.code ?? 0;
 }
 
-/**
- * Sugar flags that select a tool without `--tool <x>`. `--tool` is the
- * canonical form; these map 1:1 to short names. Exported so the launcher
- * arg-parsing stays testable in-process (Pattern 4).
- */
-export const TOOL_SUGAR = {
-  '--claude': 'claude',
-  '--codex': 'codex',
-  '--gemini': 'gemini',
-};
+export async function launchNewSession(opts, deps = {}) {
+  const stdout = deps.stdout || process.stdout;
+  const stderr = deps.stderr || process.stderr;
+  const cwd = deps.cwd || process.cwd();
+  if (!opts.noLaunch && await (deps.checkAndPrintFreshInstall || checkAndPrintFreshInstall)()) {
+    return 1;
+  }
+
+  const tool = await resolveToolForNew({
+    flagValue: opts.tool,
+    configLoader: deps.readConfig || readConfig,
+  });
+  if (tool.error) {
+    stderr.write(`mc: ${tool.error}\n`);
+    return 2;
+  }
+
+  let created;
+  try {
+    const source = (deps.ensureV1SessionStorage || ensureV1SessionStorageSync)({
+      mcHomeDir: deps.mcHomeDir,
+    });
+    created = (deps.createLocalSession || createLocalSessionSync)({
+      mcHomeDir: deps.mcHomeDir,
+      sourceId: source.source_id,
+      name: opts.name,
+      objective: opts.task || null,
+      cwd,
+    });
+  } catch (error) {
+    stderr.write(`mc: could not create session "${opts.name}" (${error?.reason || error?.message || 'unknown'})\n`);
+    return 1;
+  }
+
+  (deps.ensureSentinel || ensureSentinel)();
+  emitCd(created.workspace.current_path, {
+    enabled: deps.emitDirectives || undefined,
+    tipIfDisabled: false,
+  });
+  const payload = {
+    ok: true,
+    source_kind: 'local',
+    source_id: created.session.identity.owner.source_id,
+    mc_session_id: created.session.mc_session_id,
+    name: created.session.metadata.name,
+    objective: created.session.metadata.objective,
+    workspace_id: created.workspace.workspace_id,
+    workspace_path: created.workspace.current_path,
+    tool: tool.tool,
+    tool_source: tool.source,
+    launched: !opts.noLaunch,
+  };
+
+  if (opts.noLaunch || deps.testMode || process.env.MC_TEST_MODE === '1') {
+    if (opts.json) stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+    else stdout.write(`mc: created local session ${payload.name} in ${payload.workspace_path}\n`);
+    return 0;
+  }
+
+  if (!opts.json) stdout.write(`mc: created local session ${payload.name}\n`);
+  const open = deps.openSession || (await import('./open.js')).run;
+  return open([
+    created.session.mc_session_id,
+    '--tool', tool.tool,
+    ...(opts.json ? ['--json'] : []),
+  ], deps);
+}
+
+export async function resolveToolForNew({ flagValue, configLoader = readConfig } = {}) {
+  if (flagValue) {
+    const resolved = resolveToolInput(flagValue);
+    if (!resolved || !['codex', 'claude'].includes(resolved.shortName)) {
+      return { error: `unknown or uncertified tool: ${flagValue}. Try: codex | claude` };
+    }
+    return { tool: resolved.shortName, source: 'flag' };
+  }
+  let config = null;
+  try { config = await configLoader(); } catch {
+    return { error: 'could not read the default tool configuration' };
+  }
+  const stored = defaultToolFromConfig(config);
+  if (stored.value) {
+    const resolved = resolveToolInput(stored.value);
+    if (resolved && ['codex', 'claude'].includes(resolved.shortName)) {
+      return { tool: resolved.shortName, source: stored.source };
+    }
+    return {
+      error: `configured tool is not certified: ${stored.value}. Set defaultTool to codex or claude`,
+    };
+  }
+  const builtin = resolveToolInput(DEFAULT_TOOL)?.shortName || BUILTIN_DEFAULT_TOOL;
+  if (!['codex', 'claude'].includes(builtin)) {
+    return { error: 'built-in default tool is not certified' };
+  }
+  return { tool: builtin, source: 'built-in-default' };
+}
+
+export function defaultToolFromConfig(config) {
+  const value = config?.defaultTool;
+  if (value && typeof value === 'object' && Object.hasOwn(value, 'value')) {
+    return { value: value.value ?? null, source: value.source || 'config' };
+  }
+  return { value: value ?? null, source: 'config' };
+}
+
+export async function readEffectiveConfigForNew() {
+  return readConfig();
+}
 
 export function parseArgs(argv) {
-  const opts = {
-    name: null,
-    task: null,
-    from: null,
-    tool: null,
-    noLaunch: false,
-    json: false,
-  };
-  const positionals = [];
-  let positionalOnly = false;
-  for (let i = 0; i < argv.length; i++) {
-    const a = argv[i];
-    if (!positionalOnly && a === '--') {
-      positionalOnly = true;
+  const opts = { name: null, task: null, tool: null, noLaunch: false, json: false };
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === '--no-launch') { opts.noLaunch = true; continue; }
+    if (arg === '--json') { opts.json = true; continue; }
+    if (Object.hasOwn(TOOL_FLAGS, arg)) {
+      if (opts.tool && opts.tool !== TOOL_FLAGS[arg]) return { ...opts, error: 'conflicting tool flags' };
+      opts.tool = TOOL_FLAGS[arg];
       continue;
     }
-    if (positionalOnly) {
-      positionals.push(a);
+    if (arg === '--tool') {
+      const value = argv[++index];
+      if (!value || value.startsWith('--')) return { ...opts, error: '--tool requires a value' };
+      if (opts.tool && opts.tool !== value) return { ...opts, error: 'conflicting tool flags' };
+      opts.tool = value;
       continue;
     }
-    if (a === '--from') { opts.from = argv[++i]; continue; }
-    if (a === '--tool') { opts.tool = argv[++i]; continue; }
-    if (Object.prototype.hasOwnProperty.call(TOOL_SUGAR, a)) {
-      // `--codex` / `--claude` are sugar over `--tool <x>`. Reject a
-      // conflicting explicit `--tool` rather than silently picking one.
-      if (opts.tool && opts.tool !== TOOL_SUGAR[a]) {
-        return { error: `conflicting tool flags: --tool ${opts.tool} and ${a}` };
-      }
-      opts.tool = TOOL_SUGAR[a];
-      continue;
-    }
-    if (a === '--no-launch') { opts.noLaunch = true; continue; }
-    if (a === '--json') { opts.json = true; continue; }
-    if (a.startsWith('-')) { return { error: `unknown flag: ${a}` }; }
-    positionals.push(a);
+    if (arg.startsWith('--')) return { ...opts, error: `unknown flag: ${arg}` };
+    if (!opts.name) { opts.name = arg; continue; }
+    if (!opts.task) { opts.task = arg; continue; }
+    return { ...opts, error: `unexpected arg: ${arg}` };
   }
-  // <name> is the first positional. Any remaining words form the optional
-  // <task> — the soft grounding focus. We join them so `mc new fix-x grab
-  // the flaky test` works without quotes, matching the free-form intent of
-  // a focus pointer (it's never parsed as a flag or a name).
-  opts.name = positionals[0] ?? null;
-  if (positionals.length > 1) opts.task = positionals.slice(1).join(' ');
   return opts;
 }
 
-function printUsage() {
-  console.error('Usage: mc new <name> [<task>] [--from <ref>] [--tool claude|codex|gemini | --claude | --codex] [--no-launch] [--json]');
+function printUsage(stream) {
+  stream.write(`mc new — create a machine-local session in the current directory
+
+USAGE
+  mc new <name> [objective] [--tool codex|claude] [--no-launch] [--json]
+
+This command creates no branch or worktree.
+`);
 }

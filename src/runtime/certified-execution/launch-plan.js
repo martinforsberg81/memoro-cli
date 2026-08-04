@@ -16,6 +16,11 @@ import {
   inspectSessionRuntimeSync,
 } from '../../mc/session-runtime-journal.js';
 import { assertGenerationId } from '../../mc/session-record-ids.js';
+import {
+  managedProviderArtifactContextForLaunch,
+  observeManagedProviderArtifact,
+  validateManagedProviderArtifact,
+} from '../../mc/managed-provider-registry.js';
 import { SessionRuntimeHost } from '../session-host/runtime-host.js';
 import {
   publishCertifiedGitHubProjection,
@@ -174,6 +179,15 @@ export async function prepareCertifiedLaunchPlan({
       await safeAbort(adapter, boundary, deps);
       return failure(processPlan?.reason || 'certified-process-plan-unavailable');
     }
+    const artifactContext = (deps.captureArtifactContext
+      || managedProviderArtifactContextForLaunch)({
+      tool: adapter.provider_tool,
+      provider: { descriptor: boundary.descriptor },
+      input: {
+        argv: [...argv.argv],
+        credential_domain: boundary.descriptor,
+      },
+    });
     return {
       ok: true,
       plan: new CertifiedLaunchPlan({
@@ -182,7 +196,10 @@ export async function prepareCertifiedLaunchPlan({
         generationId,
         action: generation.intent.action,
         tool: adapter.tool,
+        providerTool: adapter.provider_tool,
         expectedHandle: argv.expected_handle,
+        artifactContext,
+        launchCwd: generation.intent.launch_cwd,
         processPlan: { ...processPlan, cwd: generation.intent.launch_cwd },
         boundary,
         adapter,
@@ -207,6 +224,7 @@ export class CertifiedLaunchPlan {
   #boundary;
   #deps;
   #expectedHandle;
+  #artifactContext;
   #generationId;
   #githubCapabilities;
   #githubConnectionClient;
@@ -217,6 +235,7 @@ export class CertifiedLaunchPlan {
   #mcHome;
   #mcSessionId;
   #processPlan;
+  #providerTool;
   #state = 'prepared';
   #tool;
 
@@ -226,7 +245,10 @@ export class CertifiedLaunchPlan {
     generationId,
     action,
     tool,
+    providerTool,
     expectedHandle,
+    artifactContext,
+    launchCwd,
     processPlan,
     boundary,
     adapter,
@@ -243,7 +265,10 @@ export class CertifiedLaunchPlan {
     this.#generationId = generationId;
     this.#action = action;
     this.#tool = tool;
+    this.#providerTool = providerTool;
     this.#expectedHandle = expectedHandle;
+    this.#artifactContext = artifactContext;
+    this.launchCwd = launchCwd;
     this.#processPlan = processPlan;
     this.#boundary = boundary;
     this.#adapter = adapter;
@@ -321,8 +346,75 @@ export class CertifiedLaunchPlan {
     return message;
   }
 
+  captureConversationArtifact({ now = () => new Date().toISOString() } = {}) {
+    if (!['claimed', 'closed'].includes(this.#state)) {
+      return failure('certified-runtime-not-claimed');
+    }
+    if (!this.#artifactContext) return failure('certified-conversation-observation-unavailable');
+    const observed = (this.#deps.observeProviderArtifact
+      || observeManagedProviderArtifact)({
+      tool: this.#providerTool,
+      context: this.#artifactContext,
+      cwd: this.launchCwd,
+      adapterDeps: this.#deps.artifactObserver,
+    });
+    if (!observed?.ok || !observed.evidence) {
+      return failure(observed?.reason || 'certified-conversation-not-observed');
+    }
+    const checked = (this.#deps.validateProviderArtifact
+      || validateManagedProviderArtifact)({
+      tool: this.#providerTool,
+      evidence: observed.evidence,
+      context: this.#artifactContext,
+      adapterDeps: this.#deps.artifactValidator,
+    });
+    if (!checked?.ok) return failure(checked?.reason || 'certified-conversation-invalid');
+    const handle = observed.evidence.providerSessionId;
+    if (this.#expectedHandle && handle !== this.#expectedHandle) {
+      return failure('certified-conversation-handle-conflict');
+    }
+    return {
+      ok: true,
+      handle,
+      artifact: {
+        schema: 'mc-provider-artifact-v1',
+        coding_session_id: this.#mcSessionId,
+        runtime_generation: this.#boundary.descriptor.generation,
+        tool: this.#providerTool,
+        provider_session_id: handle,
+        transcript_path: checked.transcriptPath,
+        captured_at: now(),
+      },
+    };
+  }
+
   async abort() {
     if (this.#state !== 'prepared') return failure('certified-plan-already-claimed');
+    const result = await this.#adapter.abort_boundary({
+      descriptor: this.#boundary.descriptor,
+      deps: this.#deps.boundaryLifecycle || {},
+    });
+    if (result?.ok) this.#state = 'aborted';
+    return result;
+  }
+
+  async abortClaimedRuntime() {
+    if (this.#state !== 'claimed') return failure('certified-runtime-not-claimed');
+    let snapshot;
+    try {
+      snapshot = (this.#deps.inspectRuntime || inspectSessionRuntimeSync)({
+        mcHomeDir: this.#mcHome,
+        mcSessionId: this.#mcSessionId,
+      });
+    } catch {
+      return failure('certified-runtime-state-unavailable');
+    }
+    const generation = snapshot?.kind === 'present'
+      ? snapshot.generations.find((item) => item.intent.generation_id === this.#generationId)
+      : null;
+    if (!generation || !['exited', 'failed'].includes(generation.phase)) {
+      return failure('certified-runtime-not-terminal');
+    }
     const result = await this.#adapter.abort_boundary({
       descriptor: this.#boundary.descriptor,
       deps: this.#deps.boundaryLifecycle || {},
@@ -355,6 +447,9 @@ export class CertifiedRuntimeHandle {
     host.once('exit', () => { void this.#githubHost?.close(); });
     Object.seal(this);
   }
+
+  get mcSessionId() { return this.#host.mcSessionId; }
+  get generationId() { return this.#host.generationId; }
 
   status() { return this.#host.status(); }
   attach(...args) { return this.#host.attach(...args); }
