@@ -8,6 +8,7 @@ import {
   resolveLocalSessionSync,
 } from '../mc/session-v1.js';
 import { openLocalSessionRuntime } from '../mc/session-runtime-v1.js';
+import { workspaceContainsMcInstallSync } from '../vault/credential-domain/local-codex.js';
 
 const TOOL_FLAGS = Object.freeze({ '--codex': 'codex', '--claude': 'claude' });
 
@@ -66,6 +67,30 @@ export async function run(rawArgv, deps = {}) {
     stderr.write(`mc: session "${session.metadata.name}" has no present launch workspace; use --cwd <path>\n`);
     return 1;
   }
+  // A session is not bound to one workspace, and its preferred one may be a
+  // directory no session can run in — mc's own installation, where a
+  // credential boundary cannot exclude the mc binary from the sandbox. When
+  // the user is standing somewhere that does work, use that: associating it
+  // is exactly what a session's several workspaces are for, and the old one
+  // is kept. Telling the user to "run this from another directory" was worse
+  // than useless, because `mc open` had already moved them to the broken one.
+  if (!opts.cwd
+    && (deps.workspaceBlocksBoundary || workspaceContainsMcInstallSync)(workspace.current_path)) {
+    const here = deps.cwd || process.cwd();
+    if (here !== workspace.current_path
+      && !(deps.workspaceBlocksBoundary || workspaceContainsMcInstallSync)(here)) {
+      try {
+        workspace = (deps.associateWorkspace || associateLocalWorkspaceSync)({
+          mcHomeDir: deps.mcHomeDir,
+          session,
+          cwd: realpathSync(here),
+          preferredLaunch: true,
+        });
+        stderr.write(`mc: this session's workspace is mc's own installation, where a credential\n`);
+        stderr.write(`    boundary cannot be built; using ${workspace.current_path} instead\n`);
+      } catch { /* fall through to the launch, which reports the real reason */ }
+    }
+  }
   emitCd(workspace.current_path, {
     enabled: enabled || deps.emitDirectives || undefined,
     tipIfDisabled: false,
@@ -85,8 +110,9 @@ export async function run(rawArgv, deps = {}) {
   if (!result.ok) {
     stderr.write(`mc: could not open "${session.metadata.name}" (${result.reason}${result.diagnostic_code ? `: ${result.diagnostic_code}` : ''})\n`);
     if (result.reason === 'managed-portable-workspace-contains-mc') {
-      stderr.write('mc: this workspace contains mc\'s own installation, so a credential\n');
-      stderr.write('    boundary cannot exclude it. Run this session from another directory.\n');
+      stderr.write('mc: every workspace this session has is inside mc\'s own installation,\n');
+      stderr.write('    where a credential boundary cannot exclude the mc binary. Open it\n');
+      stderr.write('    with --cwd <path> to give the session a directory it can run in.\n');
     }
     if (result.reason === 'explicit-replacement-required') {
       stderr.write(`mc: retry with --replace only if you want a new tool conversation\n`);
