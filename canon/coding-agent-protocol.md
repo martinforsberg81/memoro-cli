@@ -206,8 +206,10 @@ in instructions and diagnostics.
   and macOS keychain access (§14)
 - `src/mc/vault/` — provider-independent secret store (§12);
   client-side crypto + PreToolUse hook
-- `src/mc/commands/end.js` + `src/mc/squash-phantom.js` — destructive
-  worktree + branch operations
+- `src/mc/commands/end.js` + `src/mc/commands/delete.js` — session archival
+  and explicit session-home deletion
+- `src/mc/commands/cleanup.js` + `src/mc/owned-resource-cleanup.js` —
+  destructive worktree, branch, and directory cleanup under exact provenance
 - `src/mc/commands/new.js` + `src/mc/commands/resume.js` — re-exec
   the same mc binary in wrap mode (PR #30); changes here affect
   every "open a tool in a session" path

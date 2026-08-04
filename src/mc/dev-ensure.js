@@ -35,6 +35,7 @@ const POLL_MS = 250;
 export async function ensureDevServer(plan, {
   restart = false,
   sessionName = process.env.MC_SESSION_NAME,
+  mcSessionId = process.env.MC_SESSION_ID,
   codingSessionId = process.env.MC_CODING_SESSION_ID,
   mcDir = mcHome(),
   deps = {},
@@ -156,6 +157,7 @@ export async function ensureDevServer(plan, {
     const launch = deps.launchPlan || launchDevPlan;
     const launched = await launch(plan, {
       sessionName,
+      mcSessionId,
       codingSessionId,
       deps,
     });
@@ -265,6 +267,7 @@ export async function evaluateDevResourceGate(plan, {
 
 export function devEnsureEnvironment(plan, {
   sessionName,
+  mcSessionId = null,
   codingSessionId = null,
   baseEnv = process.env,
 } = {}) {
@@ -280,6 +283,7 @@ export function devEnsureEnvironment(plan, {
     MC_DEV_START_ARGV_JSON: JSON.stringify(plan.start.argv),
     MC_DEV_RESOURCE_CLASS: plan.resource_class,
     MC_SESSION_NAME: sessionName,
+    ...(mcSessionId ? { MC_SESSION_ID: mcSessionId } : {}),
     ...(codingSessionId ? { MC_CODING_SESSION_ID: codingSessionId } : {}),
   };
 }
@@ -311,7 +315,12 @@ async function prepareDependencies(plan, { mcDir, deps }) {
   return { ok: true, dependencies: { action: result.source, result } };
 }
 
-export async function launchDevPlan(plan, { sessionName, codingSessionId, deps = {} }) {
+export async function launchDevPlan(plan, {
+  sessionName,
+  mcSessionId,
+  codingSessionId,
+  deps = {},
+}) {
   const manifestPath = join(plan.worktree_path, plan.readiness.path);
   const runtimeDir = dirname(manifestPath);
   const logPath = join(runtimeDir, 'mc-dev-ensure.log');
@@ -325,7 +334,7 @@ export async function launchDevPlan(plan, { sessionName, codingSessionId, deps =
     fd = open(logPath, 'a', 0o600);
     const child = spawn(plan.start.argv[0], plan.start.argv.slice(1), {
       cwd: plan.worktree_path,
-      env: devEnsureEnvironment(plan, { sessionName, codingSessionId }),
+      env: devEnsureEnvironment(plan, { sessionName, mcSessionId, codingSessionId }),
       detached: true,
       stdio: ['ignore', fd, fd],
       shell: false,

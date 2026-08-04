@@ -12,7 +12,7 @@ import {
   SessionHostFrameDecoder,
   encodeSessionHostFrame,
 } from './protocol.js';
-import { runtimeHostError } from './runtime-host.js';
+import { runtimeHostError } from './errors.js';
 
 export class SessionRuntimeSocketServer {
   constructor({

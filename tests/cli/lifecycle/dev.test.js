@@ -1,6 +1,15 @@
 import test, { afterEach, beforeEach, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -205,6 +214,7 @@ server.listen(0, '127.0.0.1', () => {
     start_argv: JSON.parse(process.env.MC_DEV_START_ARGV_JSON),
     resource_class: process.env.MC_DEV_RESOURCE_CLASS,
     session_name: process.env.MC_SESSION_NAME,
+    mc_session_id: process.env.MC_SESSION_ID,
     coding_session_id: process.env.MC_CODING_SESSION_ID,
     worktree_path: process.cwd(),
     pid: process.pid,
@@ -261,15 +271,36 @@ server.listen(0, '127.0.0.1', () => {
         env: {
           MC_HOME: mcHome,
           MC_SESSION_NAME: 'e2e-session',
+          MC_SESSION_ID: 'mcs_000000000000000000000001',
           MC_CODING_SESSION_ID: 'sess_e2e',
           PATH: process.env.PATH,
         },
       });
       const launchLog = join(runtimeDir, 'mc-dev-ensure.log');
+      const registryDir = join(mcHome, 'dev-servers');
+      const inventory = runMc(['dev', 'list', '--json'], {
+        cwd: worktree,
+        env: { MC_HOME: mcHome, PATH: process.env.PATH },
+      });
+      const inventoryJson = parseJsonOrNull(inventory.stdout);
       const failureDetail = [
         ensured.stderr || ensured.stdout,
+        inventory.stdout || inventory.stderr,
         existsSync(launchLog) ? readFileSync(launchLog, 'utf8') : '',
+        existsSync(manifestPath) ? readFileSync(manifestPath, 'utf8') : '',
+        ...(existsSync(registryDir)
+          ? readdirSync(registryDir)
+            .filter((name) => name.endsWith('.json'))
+            .map((name) => readFileSync(join(registryDir, name), 'utf8'))
+          : []),
       ].filter(Boolean).join('\n');
+      if (ensured.status !== 0 && inventoryJson?.servers?.some((server) => (
+        server.instance_id === `dev-e2e-${ensured.error?.pid || resultPid(ensured.stdout)}`
+        && server.identity?.reason === 'process-uninspectable'
+      ))) {
+        t.skip('process inspection is unavailable in this sandbox');
+        return;
+      }
       assert.equal(ensured.status, 0, failureDetail);
       const result = parseJsonOrNull(ensured.stdout);
       assert.equal(result.action, 'started');
@@ -307,4 +338,8 @@ function supportsLoopbackListen() {
     server.once('error', () => resolve(false));
     server.listen(0, '127.0.0.1', () => server.close(() => resolve(true)));
   });
+}
+
+function resultPid(stdout) {
+  return parseJsonOrNull(stdout)?.launch?.pid || null;
 }

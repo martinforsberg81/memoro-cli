@@ -62,6 +62,12 @@ async function routeV1Command(args) {
     attach: './cli/attach.js',
     dispatch: './cli/dispatch.js',
     read: './cli/read.js',
+    end: './mc/commands/end.js',
+    delete: './mc/commands/delete.js',
+    cleanup: './mc/commands/cleanup.js',
+    gc: './mc/commands/gc.js',
+    storage: './mc/commands/storage.js',
+    doctor: './mc/commands/doctor.js',
   };
   return Object.hasOwn(modules, command)
     ? runModule(modules[command], args.slice(1))

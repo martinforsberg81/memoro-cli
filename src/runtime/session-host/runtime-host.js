@@ -20,6 +20,9 @@ import {
   writeRuntimeHostManifestSync,
 } from './ephemeral-state.js';
 import { TerminalScreen, assertTerminalSize } from './terminal-screen.js';
+import { runtimeHostError } from './errors.js';
+
+export { runtimeHostError } from './errors.js';
 
 const MAX_CLIENTS = 8;
 const MAX_OUTPUT_CHUNK_BYTES = 128 * 1024;
@@ -255,6 +258,8 @@ export class SessionRuntimeHost extends EventEmitter {
       await this.resize(frame.cols, frame.rows);
     } else if (frame.type === 'detach') {
       client.queue.close('client-detached');
+    } else if (frame.type === 'stop') {
+      this.stop(frame.signal);
     } else if (frame.type === 'status') {
       client.queue.send(this.statusFrame());
     }
@@ -560,13 +565,6 @@ export function reconcileRuntimeHostSync({
     });
   }
   return { action: 'attach', generation_id: generation.intent.generation_id };
-}
-
-export function runtimeHostError(reason, cause = null) {
-  const error = new Error(`mc runtime host error (${reason})`, cause ? { cause } : undefined);
-  error.code = 'MC_RUNTIME_HOST_ERROR';
-  error.reason = reason;
-  return error;
 }
 
 function assertSpawnPlan(value) {

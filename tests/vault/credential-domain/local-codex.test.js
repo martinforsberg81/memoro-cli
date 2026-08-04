@@ -527,6 +527,16 @@ describe('local Codex credential domain', () => {
       assert.equal(existsSync(prepared.descriptor.domain_path), false);
       assert.equal(existsSync(prepared.descriptor.executor_root), false);
       assert.equal(existsSync(prepared.descriptor.lease_path), false);
+      const repeatedAfterDomainRemoval = persistManagedCodexSessionState({
+        root,
+        descriptor: prepared.descriptor,
+        providerArtifact,
+      });
+      assert.equal(repeatedAfterDomainRemoval.ok, true);
+      assert.equal(
+        repeatedAfterDomainRemoval.state.archive_digest,
+        archived.state.archive_digest,
+      );
       const finalized = inspectManagedGenerationSync({
         mcHomeDir: root,
         codingSessionId: 'sess_managed1',

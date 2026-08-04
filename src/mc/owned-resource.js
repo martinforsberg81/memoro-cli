@@ -36,6 +36,7 @@ import {
 
 export const RESOURCE_INTENT_SCHEMA = 'mc-owned-resource-intent';
 export const RESOURCE_RECEIPT_SCHEMA = 'mc-owned-resource-creation-receipt';
+export const RESOURCE_CLEANUP_RECEIPT_SCHEMA = 'mc-owned-resource-cleanup-receipt';
 export const OWNED_RESOURCE_VERSION = 1;
 
 const RESOURCE_KINDS = new Set(['directory', 'git-worktree', 'git-branch']);
@@ -76,7 +77,10 @@ export function createOwnedResourceIntentSync({
     isAlive,
     random,
   }, () => {
-    requireSession(paths.mcHomeDir, mcSessionId);
+    const session = requireSession(paths.mcHomeDir, mcSessionId);
+    if (session.projection.lifecycle !== 'open') {
+      throw sessionHomeError('session-archived');
+    }
     if (workspaceId !== null) {
       const workspace = requireWorkspace(paths.mcHomeDir, mcSessionId, workspaceId);
       const targetPath = pathTarget(intent);
@@ -154,6 +158,56 @@ export function recordOwnedResourceCreationSync({
   });
 }
 
+export function recordOwnedResourceCleanupSync({
+  mcHomeDir = mcHome(),
+  mcSessionId,
+  resourceId,
+  result,
+  now = () => new Date().toISOString(),
+  random = randomBytes,
+  isAlive = processIsAlive,
+} = {}) {
+  assertMcSessionId(mcSessionId);
+  assertResourceId(resourceId);
+  if (!['removed', 'already-absent'].includes(result)) {
+    throw new TypeError('invalid resource cleanup result');
+  }
+  const paths = ownedResourcePaths({ mcHomeDir, mcSessionId, resourceId });
+  return withLocksSync([paths.mutationLockPath], {
+    trustedRoot: paths.mcHomeDir,
+    purpose: 'record-resource-cleanup',
+    isAlive,
+    random,
+  }, () => {
+    const resource = requireResource(paths.mcHomeDir, mcSessionId, resourceId);
+    if (resource.creation_receipt === null) throw sessionHomeError('resource-creation-unproven');
+    if (resource.cleanup_receipt !== null) {
+      if (resource.cleanup_receipt.result !== result) {
+        throw sessionHomeError('resource-cleanup-conflict');
+      }
+      return resource;
+    }
+    const receipt = {
+      schema: RESOURCE_CLEANUP_RECEIPT_SCHEMA,
+      version: OWNED_RESOURCE_VERSION,
+      resource_id: resourceId,
+      mc_session_id: mcSessionId,
+      intent_sha256: resourceIntentDigest(resource.intent),
+      creation_receipt_sha256: canonicalDigest(resource.creation_receipt),
+      result,
+      cleaned_at: validateIso(now()),
+    };
+    assertResourceCleanupReceipt(receipt, resource.intent, resource.creation_receipt);
+    publishImmutablePrivateJsonSync({
+      path: paths.cleanupReceiptPath,
+      value: receipt,
+      trustedRoot: paths.mcHomeDir,
+      random,
+    });
+    return requireResource(paths.mcHomeDir, mcSessionId, resourceId);
+  });
+}
+
 export function bindWorkspaceOwnedResourceSync({
   mcHomeDir = mcHome(),
   mcSessionId,
@@ -220,11 +274,29 @@ export function readOwnedResourceSync({
   if (receipt.kind !== 'present' && receipt.kind !== 'absent') {
     return unknown(`receipt-${receipt.reason || receipt.kind}`);
   }
+  const cleanupReceipt = readPrivateJsonSync({
+    path: paths.cleanupReceiptPath,
+    trustedRoot: paths.mcHomeDir,
+    validate: (value) => validateResourceCleanupReceipt(
+      value,
+      intent.value,
+      receipt.kind === 'present' ? receipt.value : null,
+    ),
+  });
+  if (cleanupReceipt.kind !== 'present' && cleanupReceipt.kind !== 'absent') {
+    return unknown(`cleanup-receipt-${cleanupReceipt.reason || cleanupReceipt.kind}`);
+  }
+  if (cleanupReceipt.kind === 'present' && receipt.kind !== 'present') {
+    return unknown('cleanup-receipt-without-creation-receipt');
+  }
   return {
     kind: 'present',
-    state: receipt.kind === 'present' ? 'created' : 'intent-only',
+    state: cleanupReceipt.kind === 'present'
+      ? 'cleaned'
+      : (receipt.kind === 'present' ? 'created' : 'intent-only'),
     intent: intent.value,
     creation_receipt: receipt.kind === 'present' ? receipt.value : null,
+    cleanup_receipt: cleanupReceipt.kind === 'present' ? cleanupReceipt.value : null,
   };
 }
 
@@ -285,6 +357,18 @@ export function planOwnedResourceCleanupSync({
   const read = readOwnedResourceSync({ mcHomeDir, mcSessionId, resourceId });
   if (read.kind !== 'present') return unsafe(read.reason || read.kind);
   if (read.creation_receipt === null) return unsafe('resource-creation-unproven');
+  if (read.cleanup_receipt !== null) {
+    return {
+      ok: true,
+      safe: true,
+      verdict: 'already-cleaned',
+      resource_id: resourceId,
+      resource_kind: read.intent.resource_kind,
+      target: read.intent.target,
+      current_path: currentPath,
+      relocated: false,
+    };
+  }
   let workspace = null;
   if (workspaceId !== null) {
     const workspaceRead = readWorkspaceAssociationSync({ mcHomeDir, mcSessionId, workspaceId });
@@ -399,6 +483,30 @@ export function validateResourceReceipt(value, intent) {
   return { ok: true, value: structuredClone(value) };
 }
 
+export function validateResourceCleanupReceipt(value, intent, creationReceipt) {
+  const checkedIntent = validateResourceIntent(intent);
+  const checkedCreation = validateResourceReceipt(creationReceipt, intent);
+  if (!checkedIntent.ok || !checkedCreation.ok) {
+    return invalid('resource-cleanup-receipt-invalid-authority');
+  }
+  if (!plain(value) || !exactKeys(value, [
+    'schema', 'version', 'resource_id', 'mc_session_id', 'intent_sha256',
+    'creation_receipt_sha256', 'result', 'cleaned_at',
+  ])) return invalid('resource-cleanup-receipt-unexpected-keys');
+  if (value.schema !== RESOURCE_CLEANUP_RECEIPT_SCHEMA
+    || value.version !== OWNED_RESOURCE_VERSION
+    || value.resource_id !== intent.resource_id
+    || value.mc_session_id !== intent.mc_session_id
+    || value.intent_sha256 !== resourceIntentDigest(intent)
+    || value.creation_receipt_sha256 !== canonicalDigest(creationReceipt)
+    || !['removed', 'already-absent'].includes(value.result)
+    || !iso(value.cleaned_at)
+    || Date.parse(value.cleaned_at) < Date.parse(creationReceipt.recorded_at)) {
+    return invalid('resource-cleanup-receipt-invalid-fields');
+  }
+  return { ok: true, value: structuredClone(value) };
+}
+
 export function resourceIntentDigest(intent) {
   return createHash('sha256').update(canonicalJson(intent)).digest('hex');
 }
@@ -411,6 +519,7 @@ function ownedResourcePaths({ mcHomeDir, mcSessionId, resourceId }) {
     resourceHome,
     intentPath: join(resourceHome, 'intent.json'),
     receiptPath: join(resourceHome, 'creation-receipt.json'),
+    cleanupReceiptPath: join(resourceHome, 'cleanup-receipt.json'),
   };
 }
 
@@ -445,8 +554,9 @@ function validateResourceTarget(value, kind) {
       && (value.branch === null || validBranch(value.branch));
   }
   if (kind === 'git-branch') {
-    return exactKeys(value, ['repository_identity', 'ref'])
+    return exactKeys(value, ['repository_identity', 'git_common_dir', 'ref'])
       && validRepositoryIdentity(value.repository_identity)
+      && validAbsolutePath(value.git_common_dir)
       && validGitRef(value.ref);
   }
   return false;
@@ -467,9 +577,12 @@ function validateResourceFingerprint(value, kind) {
       || !validRepositoryIdentity(value.repository_identity)
       || !validAbsolutePath(value.git_dir)) return invalid('invalid-resource-fingerprint');
   } else if (kind === 'git-branch') {
-    if (!exactKeys(value, ['kind', 'repository_identity', 'ref', 'ref_oid'])
+    if (!exactKeys(value, [
+      'kind', 'repository_identity', 'git_common_dir', 'ref', 'ref_oid',
+    ])
       || value.kind !== 'git-ref'
       || !validRepositoryIdentity(value.repository_identity)
+      || !validAbsolutePath(value.git_common_dir)
       || !validGitRef(value.ref)
       || !OID_RE.test(value.ref_oid || '')) return invalid('invalid-resource-fingerprint');
   } else {
@@ -517,6 +630,7 @@ function fingerprintBindsIntent(fingerprint, intent) {
       && fingerprint.git_dir === intent.target.git_dir;
   }
   return fingerprint.repository_identity === intent.target.repository_identity
+    && fingerprint.git_common_dir === intent.target.git_common_dir
     && fingerprint.ref === intent.target.ref;
 }
 
@@ -529,11 +643,19 @@ function pathTarget(intent) {
 function unexpectedResourceEntries(resourceHome) {
   try {
     return readdirSync(resourceHome)
-      .filter((entry) => !['intent.json', 'creation-receipt.json'].includes(entry))
+      .filter((entry) => ![
+        'intent.json',
+        'creation-receipt.json',
+        'cleanup-receipt.json',
+      ].includes(entry))
       .sort();
   } catch {
     return ['<unreadable>'];
   }
+}
+
+function canonicalDigest(value) {
+  return createHash('sha256').update(canonicalJson(value)).digest('hex');
 }
 
 function validFilesystemFingerprint(value) {
@@ -592,6 +714,11 @@ function assertResourceIntent(value) {
 
 function assertResourceReceipt(value, intent) {
   const checked = validateResourceReceipt(value, intent);
+  if (!checked.ok) throw new TypeError(checked.reason);
+}
+
+function assertResourceCleanupReceipt(value, intent, creationReceipt) {
+  const checked = validateResourceCleanupReceipt(value, intent, creationReceipt);
   if (!checked.ok) throw new TypeError(checked.reason);
 }
 

@@ -225,6 +225,7 @@ describe('dev ensure launch and resource contract', () => {
     try {
       const result = await launchDevPlan(plan, {
         sessionName: 'launch-session',
+        mcSessionId: 'mcs_000000000000000000000001',
         codingSessionId: 'sess_launch',
         deps: {
           spawn(command, args, options) {
@@ -246,6 +247,7 @@ describe('dev ensure launch and resource contract', () => {
       assert.equal(calls[0].options.env.MC_DEV_PROFILE, 'agent');
       assert.equal(calls[0].options.env.MC_DEV_DEFINITION_FINGERPRINT, FINGERPRINT);
       assert.equal(calls[0].options.env.MC_SESSION_NAME, 'launch-session');
+      assert.equal(calls[0].options.env.MC_SESSION_ID, 'mcs_000000000000000000000001');
       assert.equal(calls[0].options.env.MC_CODING_SESSION_ID, 'sess_launch');
       assert.equal(existsSync(join(root, '.runtime', 'mc-dev-ensure.log')), true);
     } finally {

@@ -39,6 +39,7 @@ test('prepares an opaque certified plan and launches through the session runtime
   const prepared = await prepareCertifiedLaunchPlan({
     mcHomeDir,
     mcSessionId,
+    sessionName: 'runtime-test',
     generationId,
     registry: fixture.registry,
     portal: { apiUrl: 'https://example.invalid', token: 'portal-secret' },
@@ -70,7 +71,11 @@ test('prepares an opaque certified plan and launches through the session runtime
         assert.equal(command, '/certified-tool');
         assert.deepEqual(args, ['certified']);
         assert.equal(options.cwd, '/workspace/one');
-        assert.deepEqual(options.env, { CERTIFIED: '1' });
+        assert.deepEqual(options.env, {
+          CERTIFIED: '1',
+          MC_SESSION_ID: mcSessionId,
+          MC_SESSION_NAME: 'runtime-test',
+        });
         return pty;
       },
     },

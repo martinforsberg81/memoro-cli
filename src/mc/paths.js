@@ -38,8 +38,8 @@ export function worktreesRoot() {
   return join(mcHome(), 'worktrees');
 }
 
-export function devServersRoot() {
-  return join(mcHome(), 'dev-servers');
+export function devServersRoot(root = mcHome()) {
+  return join(root, 'dev-servers');
 }
 
 /**

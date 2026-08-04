@@ -551,6 +551,60 @@ export function writeSessionProjectionSync({
   });
 }
 
+export function deleteSessionHomeSync({
+  mcHomeDir = mcHome(),
+  mcSessionId,
+  expectedMetadataRevision,
+  expectedProjectionRevision,
+  random = randomBytes,
+  isAlive = processIsAlive,
+} = {}) {
+  assertMcSessionId(mcSessionId);
+  assertExpectedRevision(expectedMetadataRevision);
+  assertExpectedRevision(expectedProjectionRevision);
+  const paths = sessionHomePaths({ mcHomeDir, mcSessionId });
+  const before = requireSession(paths.mcHomeDir, mcSessionId);
+  const namePaths = sessionHomePaths({
+    mcHomeDir: paths.mcHomeDir,
+    normalizedName: before.metadata.normalized_name,
+  });
+  return withLocksSync([paths.mutationLockPath, namePaths.nameLockPath], {
+    trustedRoot: paths.mcHomeDir,
+    purpose: 'delete-session',
+    isAlive,
+    random,
+  }, () => {
+    const current = requireSession(paths.mcHomeDir, mcSessionId);
+    if (current.metadata.revision !== expectedMetadataRevision) {
+      throw sessionHomeError('metadata-revision-conflict');
+    }
+    if (current.projection.revision !== expectedProjectionRevision) {
+      throw sessionHomeError('projection-revision-conflict');
+    }
+    if (current.metadata.normalized_name !== before.metadata.normalized_name) {
+      throw sessionHomeError('session-name-changed');
+    }
+    if (current.projection.lifecycle !== 'archived') {
+      throw sessionHomeError('session-not-archived');
+    }
+    if (['starting', 'running'].includes(current.projection.runtime_state)) {
+      throw sessionHomeError('session-runtime-active');
+    }
+    rmSync(paths.home, { recursive: true, force: false });
+    fsyncDirectorySync(paths.sessionsRoot);
+    removeNameClaimIfOwned(
+      namePaths,
+      mcSessionId,
+      current.metadata.name_revision,
+    );
+    return {
+      ok: true,
+      mc_session_id: mcSessionId,
+      name: current.metadata.name,
+    };
+  });
+}
+
 export function inspectSessionCatalogSync({ mcHomeDir = mcHome() } = {}) {
   const listed = listSessionHomesSync({ mcHomeDir });
   const actions = [];

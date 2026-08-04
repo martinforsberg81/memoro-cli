@@ -7,7 +7,7 @@ import {
   SessionHostFrameDecoder,
   encodeSessionHostFrame,
 } from './protocol.js';
-import { runtimeHostError } from './runtime-host.js';
+import { runtimeHostError } from './errors.js';
 
 export class SessionRuntimeClient extends EventEmitter {
   constructor({
@@ -96,6 +96,11 @@ export class SessionRuntimeClient extends EventEmitter {
     this.cols = cols;
     this.rows = rows;
     this._send(this._identityFrame('resize', { cols, rows }));
+  }
+
+  stop(signal = 'SIGTERM') {
+    this._requireAttached();
+    this._send(this._identityFrame('stop', { signal }));
   }
 
   detach() {

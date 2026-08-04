@@ -113,6 +113,28 @@ test('delivers exit after the initial screen when the PTY exits during attach', 
   host.close();
 });
 
+test('routes an exact stop frame to the owned PTY generation', async () => {
+  const mcHomeDir = temporaryHome();
+  const now = clock();
+  preparePlannedGeneration(mcHomeDir);
+  const pty = new FakePty(31006);
+  const host = createHost({ mcHomeDir, now, pty });
+  host.start();
+  const attached = await host.attach(new FakeSocket());
+
+  await host.handleClientFrame(attached.client_id, {
+    v: 1,
+    type: 'stop',
+    mc_session_id: mcSessionId,
+    generation_id: generationId,
+    signal: 'SIGTERM',
+  });
+
+  assert.deepEqual(pty.kills, ['SIGTERM']);
+  assert.equal(host.status().state, 'live');
+  host.close();
+});
+
 test('keeps launch arguments, environment, and PTY output out of persisted state', async () => {
   const mcHomeDir = temporaryHome();
   const now = clock();
