@@ -144,6 +144,7 @@ export function createSessionCutoverPlanSync({
   if (lifecycle.blockers.length > 0) {
     const error = cutoverError('live-incompatible-runtimes');
     error.sessions = lifecycle.blockers;
+    error.blocking = lifecycle.blocking;
     throw error;
   }
 
@@ -187,6 +188,37 @@ export function createSessionCutoverPlanSync({
   return plan;
 }
 
+/**
+ * Answer "can this machine migrate, and if not, what exactly is in the way"
+ * without writing anything. A refusal the user cannot inspect is
+ * indistinguishable from a broken tool, which is how the old interlock read
+ * from the outside: one error code, no subject, no remedy.
+ */
+export function inspectSessionCutoverReadinessSync({
+  mcHomeDir = mcHome(),
+  isAlive = processIsAlive,
+} = {}) {
+  const root = normalizedRoot(mcHomeDir);
+  const completion = readSessionCutoverCompletionSync({ mcHomeDir: root });
+  if (completion.kind === 'unknown') throw cutoverError(completion.reason);
+  if (completion.kind === 'present') {
+    return { state: 'complete', completion: completion.value, legacy_sessions: 0, blocking: [] };
+  }
+  const registryPath = join(root, 'registry.json');
+  const registry = readLegacyRegistrySync(
+    root,
+    { exists: existsNoFollow(registryPath) },
+    randomBytes,
+  );
+  const lifecycle = inspectLegacyLifecycleSync({ mcHomeDir: root, registry, isAlive });
+  return {
+    state: lifecycle.blocking.length > 0 ? 'blocked' : 'ready',
+    completion: null,
+    legacy_sessions: (registry.entries || []).length,
+    blocking: lifecycle.blocking,
+  };
+}
+
 export function applySessionCutoverSync({
   mcHomeDir = mcHome(),
   now = () => new Date().toISOString(),
@@ -214,6 +246,7 @@ export function applySessionCutoverSync({
     if (lifecycle.blockers.length > 0) {
       const error = cutoverError('live-incompatible-runtimes');
       error.sessions = lifecycle.blockers;
+      error.blocking = lifecycle.blocking;
       throw error;
     }
     verifyLegacySourcesUnchangedSync(root, plan.sources);
@@ -413,24 +446,36 @@ function planSession({
     });
     if (identity.kind === 'unknown') throw cutoverError(`managed-identity-${identity.reason}`);
     if (identity.kind === 'present') {
-      if (identity.identity.coding_session_id !== entry.coding_session_id
-        || identity.identity.session_name !== entry.name) {
-        throw cutoverError('managed-identity-conflict');
-      }
+      // Managed identities are keyed by session name, so reusing a name
+      // leaves the previous session's identity sitting under it. The registry
+      // entry is the current truth; a disagreeing identity is a leftover, and
+      // refusing the whole migration over one of them stranded every other
+      // session on the machine. It is recorded as stale and deliberately not
+      // bound — binding the wrong identity would hand a session another
+      // session's provider credentials, which is the risk actually worth
+      // failing closed on.
+      const bound = identity.identity.coding_session_id === entry.coding_session_id
+        && identity.identity.session_name === entry.name;
       identities.push(reference('managed-identity', entry.coding_session_id, entry.session_id,
-        'bound', digestValue(identity.identity)));
+        bound ? 'bound' : 'stale', digestValue(identity.identity)));
     }
     const managed = inspectManagedSessionSync({ mcHomeDir: root, codingSessionId: entry.coding_session_id });
     if (managed.kind === 'unknown') throw cutoverError(`managed-generation-${managed.reason}`);
+    // A session that was resumed, replaced, or switched tools holds a
+    // different provider conversation in each generation. That is its
+    // history, not a contradiction — treating any disagreement as a conflict
+    // meant an ordinary long-lived session could never be migrated at all.
+    // The registry's own tool_sessions win, because that is the conversation
+    // the session was using when it stopped; a generation only supplies a
+    // handle for a tool the registry never recorded, and the most recent
+    // generation is the one that speaks for it. Every generation is still
+    // preserved individually as a reference below.
+    const generationHandles = new Map();
     for (const generation of managed.generations || []) {
       const artifact = generation.receipts?.['provider-artifact'];
       if (artifact) {
         const artifactTool = canonicalToolId(artifact.data.tool) || artifact.data.tool;
-        const prior = handles.get(artifactTool);
-        if (prior && prior.handle !== artifact.data.provider_session_id) {
-          throw cutoverError('managed-provider-session-conflict');
-        }
-        handles.set(artifactTool, {
+        generationHandles.set(artifactTool, {
           tool: artifactTool,
           handle: artifact.data.provider_session_id,
           evidence_sha256: digestValue(artifact),
@@ -443,6 +488,9 @@ function planSession({
         generation.phase,
         digestValue({ intent: generation.intent, receipts: generation.receipts }),
       ));
+    }
+    for (const [tool, value] of generationHandles) {
+      if (!handles.has(tool)) handles.set(tool, value);
     }
   }
   if (handles.size > 0 && preferredLaunchCwd === null) {
@@ -961,6 +1009,23 @@ function validateStepReceipt(value) {
   return { ok: true, value: structuredClone(value) };
 }
 
+/**
+ * A legacy runtime blocks the cutover when it is *running*, not when some
+ * file says it once was.
+ *
+ * Old mc recorded `state: "live"` in a host journal and `session_state:
+ * "live"` in the registry, and a crashed or force-quit session never got to
+ * correct either one. Treating those rows as evidence of a running process
+ * made the interlock permanent: on a machine with a normal history of exits,
+ * every future migration attempt refused, forever, over sessions whose PTYs
+ * had been gone for weeks.
+ *
+ * So liveness is derived from the process table. A recorded `live` row whose
+ * broker pid is dead is stale bookkeeping — the migration preserves it in the
+ * backup either way. What still refuses is a pid that answers: a host broker
+ * that is running, or the global broker, which owns the PTYs of every legacy
+ * session it started and would be quarantined out from under itself.
+ */
 function inspectLegacyLifecycleSync({
   mcHomeDir,
   registry,
@@ -968,12 +1033,23 @@ function inspectLegacyLifecycleSync({
   tolerateQuarantined = false,
 }) {
   const bySession = new Map();
-  const blockers = new Set();
+  const blockers = new Map();
+  const livePids = new Map();
+  const block = (id, reason, pid = null) => {
+    if (!blockers.has(id)) blockers.set(id, { id, reason, pid });
+  };
   const hostsRoot = join(mcHomeDir, 'hosts');
   if (isDirectoryNoFollow(hostsRoot)) {
     for (const hostName of readdirSync(hostsRoot).sort()) {
       const hostRoot = join(hostsRoot, hostName);
       if (!isDirectoryNoFollow(hostRoot)) continue;
+      const hostPath = join(hostRoot, 'host.json');
+      const host = existsNoFollow(hostPath) ? boundedJson(hostPath, 8192).value : null;
+      const hostSession = safeId(host?.session_id) || `legacy-host:${hostName}`;
+      const pids = [host?.broker_pid, readPid(join(hostRoot, 'broker.pid'))]
+        .filter((pid) => positivePid(pid));
+      const alivePid = pids.find((pid) => isAlive(pid)) ?? null;
+      if (alivePid !== null) livePids.set(hostSession, alivePid);
       const lifecyclePath = join(hostRoot, 'lifecycle.json');
       if (existsNoFollow(lifecyclePath)) {
         const raw = boundedJson(lifecyclePath, 4096);
@@ -982,22 +1058,12 @@ function inspectLegacyLifecycleSync({
         const record = { ...raw.value, source_sha256: raw.sha256 };
         if (bySession.has(record.coding_session_id)) throw cutoverError('duplicate-lifecycle-session');
         bySession.set(record.coding_session_id, record);
-        if (record.state === 'live') blockers.add(record.coding_session_id);
-      }
-      const hostPath = join(hostRoot, 'host.json');
-      if (existsNoFollow(hostPath)) {
-        const host = boundedJson(hostPath, 8192).value;
-        const hostSession = safeId(host.session_id);
-        if (positivePid(host.broker_pid) && isAlive(host.broker_pid)) {
-          blockers.add(hostSession || `legacy-host:${hostName}`);
+        if (alivePid !== null) livePids.set(record.coding_session_id, alivePid);
+        if (record.state === 'live' && alivePid !== null) {
+          block(record.coding_session_id, 'runtime-process-alive', alivePid);
         }
       }
-      const pidPath = join(hostRoot, 'broker.pid');
-      const pid = readPid(pidPath);
-      if (pid && isAlive(pid)) {
-        const hostSession = safeId(boundedJsonIfPresent(hostPath, 8192)?.session_id);
-        blockers.add(hostSession || `legacy-host:${hostName}`);
-      }
+      if (alivePid !== null) block(hostSession, 'runtime-process-alive', alivePid);
     }
   } else if (existsNoFollow(hostsRoot) && !tolerateQuarantined) {
     throw cutoverError('unsafe-legacy-hosts-root');
@@ -1011,24 +1077,27 @@ function inspectLegacyLifecycleSync({
       if (managed.kind === 'unknown') {
         throw cutoverError(`managed-generation-${managed.reason}`);
       }
-      if (managed.active) blockers.add(entry.coding_session_id);
+      // A non-terminal generation is an unfinished journal, not a process. It
+      // blocks only while the runtime that would finish it is still running.
+      const managedPid = livePids.get(entry.coding_session_id) ?? null;
+      if (managed.active && managedPid !== null) {
+        block(entry.coding_session_id, 'managed-generation-active', managedPid);
+      }
     }
     if (entry.session_state !== 'live') continue;
     const id = entry.coding_session_id || entry.session_id || entry.name;
-    if (entry.coding_session_id
-      && bySession.has(entry.coding_session_id)
-      && bySession.get(entry.coding_session_id).state !== 'live') continue;
-    blockers.add(id);
+    const pid = (entry.coding_session_id && livePids.get(entry.coding_session_id)) ?? null;
+    if (pid !== null) block(id, 'runtime-process-alive', pid);
   }
   const globalPid = readPid(join(mcHomeDir, 'broker.pid'));
   if (globalPid && isAlive(globalPid)) {
-    const live = (registry.entries || [])
-      .filter((entry) => entry.session_state === 'live')
-      .map((entry) => entry.coding_session_id || entry.session_id || entry.name);
-    if (live.length === 0) blockers.add('legacy-global-broker');
-    for (const id of live) blockers.add(id);
+    block('legacy-global-broker', 'global-broker-alive', globalPid);
   }
-  return { bySession, blockers: [...blockers].sort() };
+  return {
+    bySession,
+    blockers: [...blockers.keys()].sort(),
+    blocking: [...blockers.values()].sort((a, b) => a.id.localeCompare(b.id)),
+  };
 }
 
 function readLegacyRegistrySync(root, source, random) {
@@ -1412,10 +1481,6 @@ function boundedJson(path, maxBytes) {
   } catch {
     throw cutoverError('corrupt-legacy-json');
   }
-}
-
-function boundedJsonIfPresent(path, maxBytes) {
-  try { return boundedJson(path, maxBytes).value; } catch { return null; }
 }
 
 function readPid(path) {

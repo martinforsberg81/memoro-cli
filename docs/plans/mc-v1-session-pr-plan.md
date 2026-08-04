@@ -145,21 +145,26 @@ completion. The migrator is finite and never becomes a runtime fallback.
 
 **Dependencies:** PRs 1–2 and 5–7.
 
-**Known defect (open):** the interlock treats a recorded `live` lifecycle
-journal or registry row as a live runtime without checking whether the process
-still exists. A machine whose old sessions all exited therefore refuses to
-migrate forever, which is the current "mc is unusable" state. PR 8b below fixes
-it.
+**Known defects:** fixed by PR 8b.
 
-## PR 8b — Derive cutover liveness from real processes (`memoro-cli`)
+## PR 8b — Make migration explicit and survivable (`memoro-cli`) — merged (#277)
 
-**Purpose:** make the interlock refuse only for runtimes that actually exist.
+**Purpose:** stop legacy state from deciding whether a new session can exist,
+and let a real machine's history actually migrate.
 
-**Scope:** in the legacy lifecycle inspection, treat a recorded `live` host
-journal, registry row, or managed generation as blocking only when its exact
-recorded process is alive; keep refusing while the global or cloud broker
-process is alive; report the blocking sessions and the reason each one blocks,
-so the user can act instead of guessing.
+**Scope:**
+
+- `mc new` no longer runs the cutover. Creating, opening, and listing a session
+  depend on session homes alone; migration is the explicit `mc migrate`.
+- Cutover liveness is derived from the process table, not from recorded `live`
+  rows. A journal or registry row whose broker pid is dead is stale
+  bookkeeping; a running broker still refuses.
+- `mc migrate [--dry-run] [--stop-legacy-runtimes] [--json]` reports which
+  runtime blocks, why, and with which pid, and can stop them.
+- Differing provider handles across a session's generations are history, not a
+  conflict: the registry handle wins, the latest generation fills a gap.
+- A managed identity left under a reused session name is recorded as stale
+  rather than aborting the migration, and is deliberately not bound.
 
 **Dependencies:** PR 8.
 
