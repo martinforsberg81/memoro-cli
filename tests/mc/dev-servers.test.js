@@ -1,12 +1,23 @@
 import test, { afterEach, beforeEach, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import {
   controlDevServer,
   inspectDevServer,
+  inspectV1DevServerRegistrySync,
+  readDevServerInventorySync,
   readDevServerLog,
   readDevServerManifests,
   registerDevServerManifest,
@@ -14,6 +25,7 @@ import {
   resolveDevServer,
   summarizeDevServers,
   teardownSessionDevServers,
+  teardownV1SessionDevServers,
   unregisterDevServerManifest,
   verifyDevServerIdentity,
 } from '../../src/mc/dev-servers.js';
@@ -50,6 +62,79 @@ describe('mc dev server registry', () => {
     assert.equal(registered.registered_at, '2026-07-22T10:00:00.000Z');
     assert.deepEqual(readDevServerManifests().map((item) => item.instance_id), [input.instance_id]);
     assert.match(readFileSync(join(process.env.MC_HOME, 'dev-servers', `${input.instance_id}.json`), 'utf8'), /memoro-worker/);
+  });
+
+  test('doctor inventory binds dev servers to exact V1 session homes', () => {
+    writeSourceManifest({ worktree, sourcePath });
+    const manifest = registerDevServerManifest(sourcePath);
+    const known = inspectV1DevServerRegistrySync({
+      mcHomeDir: process.env.MC_HOME,
+      deps: {
+        listSessions: () => ({
+          sessions: [{ mc_session_id: manifest.mc_session_id }],
+          issues: [],
+        }),
+      },
+    });
+    assert.equal(known.ok, true);
+    assert.equal(known.summary.bound, 1);
+    assert.equal(Object.hasOwn(known, 'manifests'), false);
+
+    const absent = inspectV1DevServerRegistrySync({
+      mcHomeDir: process.env.MC_HOME,
+      deps: { listSessions: () => ({ sessions: [], issues: [] }) },
+    });
+    assert.equal(absent.ok, false);
+    assert.equal(absent.issues[0].reason, 'dev-server-session-absent');
+  });
+
+  test('doctor inventory reports corrupt manifests instead of hiding them', () => {
+    mkdirSync(join(process.env.MC_HOME, 'dev-servers'), { recursive: true });
+    writeFileSync(join(process.env.MC_HOME, 'dev-servers', 'broken.json'), '{broken');
+    const inventory = inspectV1DevServerRegistrySync({
+      mcHomeDir: process.env.MC_HOME,
+      deps: { listSessions: () => ({ sessions: [], issues: [] }) },
+    });
+    assert.equal(inventory.ok, false);
+    assert.equal(inventory.issues[0].reason, 'invalid-dev-server-entry');
+  });
+
+  test('inventory binds each manifest identity to its exact registry filename', async () => {
+    const registry = join(process.env.MC_HOME, 'dev-servers');
+    mkdirSync(registry, { recursive: true });
+    writeFileSync(join(registry, 'forged.json'), JSON.stringify({
+      schema_version: 1,
+      instance_id: 'victim',
+      mc_session_id: 'mcs_000000000000000000000001',
+    }));
+    writeFileSync(join(registry, 'victim.json'), JSON.stringify({
+      schema_version: 1,
+      instance_id: 'victim',
+      mc_session_id: 'mcs_000000000000000000000002',
+    }));
+
+    const inventory = readDevServerInventorySync({ mcHomeDir: process.env.MC_HOME });
+    assert.equal(inventory.issues[0].reason, 'invalid-dev-server-entry');
+    const result = await teardownV1SessionDevServers({
+      mcHomeDir: process.env.MC_HOME,
+      mcSessionId: 'mcs_000000000000000000000001',
+    });
+    assert.equal(result.ok, false);
+    assert.equal(existsSync(join(registry, 'victim.json')), true);
+  });
+
+  test('registry removal never follows a manifest symlink', () => {
+    const registry = join(process.env.MC_HOME, 'dev-servers');
+    const outside = join(root, 'outside.json');
+    mkdirSync(registry, { recursive: true });
+    writeFileSync(outside, 'keep');
+    symlinkSync(outside, join(registry, 'linked.json'));
+
+    assert.throws(
+      () => removeDevServerRegistryManifest('linked', { mcHomeDir: process.env.MC_HOME }),
+      /manifest is unsafe/u,
+    );
+    assert.equal(existsSync(outside), true);
   });
 
   test('rejects paths and controls that escape the owning worktree', () => {
@@ -173,6 +258,7 @@ describe('mc dev server registry', () => {
     assert.equal(calls[0].options.cwd, realpathSync(worktree));
     assert.equal(calls[0].options.shell, false);
     assert.equal(calls[0].options.env.MC_SESSION_NAME, 'home-actions-v4');
+    assert.equal(calls[0].options.env.MC_SESSION_ID, 'mcs_000000000000000000000001');
     assert.equal(calls[0].options.env.MC_CODING_SESSION_ID, 'sess_example');
   });
 
@@ -307,6 +393,26 @@ describe('mc dev server session teardown', () => {
     assert.deepEqual(result.results, []);
     assert.equal(readDevServerManifests().length, 1);
   });
+
+  test('V1 teardown selects only the exact mc session id', async () => {
+    writeSourceManifest({ worktree, sourcePath });
+    registerDevServerManifest(sourcePath);
+    const untouched = await teardownV1SessionDevServers({
+      mcSessionId: 'mcs_000000000000000000000002',
+    }, { isAlive: () => true });
+    assert.deepEqual(untouched.results, []);
+    assert.equal(readDevServerManifests().length, 1);
+
+    const removed = await teardownV1SessionDevServers({
+      mcSessionId: 'mcs_000000000000000000000001',
+    }, {
+      isAlive: () => false,
+      spawnSync: () => assert.fail('a dead server must not run controls'),
+    });
+    assert.equal(removed.ok, true);
+    assert.equal(removed.results.length, 1);
+    assert.deepEqual(readDevServerManifests(), []);
+  });
 });
 
 function writeSourceManifest({ worktree, sourcePath, ...overrides }) {
@@ -317,6 +423,7 @@ function writeSourceManifest({ worktree, sourcePath, ...overrides }) {
     instance_id: 'dev-01HZY8Q0M9A2B3C4D5E6F7G8H9',
     service: 'memoro-worker',
     session_name: 'home-actions-v4',
+    mc_session_id: 'mcs_000000000000000000000001',
     coding_session_id: 'sess_example',
     worktree_path: worktree,
     pid: 4242,

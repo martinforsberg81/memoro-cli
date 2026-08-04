@@ -22,6 +22,17 @@ LOCAL SESSIONS
   mc sessions send <name> <text>   Write to the exact live local terminal
   mc sessions read <name> [--last N]
                                     Read its bounded current screen
+  mc end <name>                    Stop and archive; keep every workspace
+  mc cleanup <name> --dry-run|--apply
+                                    Clean only exactly proven mc-owned resources
+  mc delete <name> --force         Delete an archived session home after cleanup
+
+MAINTENANCE
+  mc doctor [--repair] [--json]    Diagnose or safely repair session-home state
+  mc storage status [--json]       Summarize durable and ephemeral session state
+  mc storage explain <name>        Explain one session's stored resources
+  mc storage repair [--apply]      Plan or apply loss-free storage repairs
+  mc gc [--dry-run|--apply]        Remove stale runtime homes; never Git resources
 
 LISTING
   mc list [--local|--cloud] [--all] [--json|--names]

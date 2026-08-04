@@ -17,10 +17,19 @@ const activeSources = [
   'src/cli/attach.js',
   'src/cli/dispatch.js',
   'src/cli/read.js',
+  'src/mc/commands/end.js',
+  'src/mc/commands/delete.js',
+  'src/mc/commands/cleanup.js',
+  'src/mc/commands/gc.js',
+  'src/mc/commands/storage.js',
+  'src/mc/commands/doctor.js',
   'src/mc/local-source.js',
   'src/mc/session-v1.js',
   'src/mc/session-v1-list.js',
   'src/mc/session-runtime-v1.js',
+  'src/mc/session-lifecycle-v1.js',
+  'src/mc/session-maintenance-v1.js',
+  'src/mc/owned-resource-cleanup.js',
   'src/runtime/session-host/terminal-client.js',
 ];
 
@@ -32,6 +41,31 @@ test('active V1 lifecycle commands have no legacy lifecycle transport imports', 
   assert.doesNotMatch(sources, /from ['"][^'"]*wrap-ws\.js['"]/u);
   assert.doesNotMatch(sources, /from ['"][^'"]*local-auth-mode\.js['"]/u);
   assert.doesNotMatch(sources, /CliWsClient|UserSession/iu);
+});
+
+test('both command dispatchers route destructive maintenance through V1 modules', () => {
+  const entrypoint = read(['src/mc-cli.js']);
+  const fallbackDispatcher = read(['src/bin-mc.js']);
+  for (const [command, modulePath] of [
+    ['end', 'mc/commands/end.js'],
+    ['delete', 'mc/commands/delete.js'],
+    ['cleanup', 'mc/commands/cleanup.js'],
+    ['gc', 'mc/commands/gc.js'],
+    ['storage', 'mc/commands/storage.js'],
+    ['doctor', 'mc/commands/doctor.js'],
+  ]) {
+    const escapedModule = modulePath.replaceAll('/', '\\/');
+    assert.match(
+      fallbackDispatcher,
+      new RegExp(`^\\s*${command}:\\s*\\(\\) => import\\('\\./${escapedModule}'\\),$`, 'mu'),
+      `${command} must use ${modulePath} in bin-mc`,
+    );
+    assert.match(
+      entrypoint,
+      new RegExp(`^\\s*${command}:\\s*'\\./${escapedModule}',$`, 'mu'),
+      `${command} must use ${modulePath} in mc-cli`,
+    );
+  }
 });
 
 test('machine-local runtime protocol contains no heartbeat message types', () => {

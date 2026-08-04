@@ -2,12 +2,12 @@ import {
   GENERATION_ID_RE,
 } from '../../mc/session-record-ids.js';
 import { MC_SESSION_ID_RE } from '../../mc/session-home-schema.js';
-import { assertTerminalSize } from './terminal-screen.js';
+import { validTerminalSize } from './terminal-size.js';
 
 export const SESSION_HOST_PROTOCOL_VERSION = 1;
 export const SESSION_HOST_MAX_FRAME_BYTES = 1024 * 1024;
 
-const CLIENT_TYPES = new Set(['attach', 'input', 'resize', 'detach', 'status']);
+const CLIENT_TYPES = new Set(['attach', 'input', 'resize', 'detach', 'stop', 'status']);
 const SERVER_TYPES = new Set(['attached', 'screen', 'output', 'resized', 'exit', 'status', 'error']);
 const BASE64_RE = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u;
 const ERROR_CODE_RE = /^[a-z][a-z0-9-]{0,63}$/u;
@@ -33,6 +33,10 @@ export function validateClientFrame(value) {
   } else if (value.type === 'detach') {
     if (!exactKeys(value, ['v', 'type', 'mc_session_id', 'generation_id'])
       || !validIdentity(value)) return invalid('invalid-detach-frame');
+  } else if (value.type === 'stop') {
+    if (!exactKeys(value, ['v', 'type', 'mc_session_id', 'generation_id', 'signal'])
+      || !validIdentity(value)
+      || !['SIGTERM', 'SIGKILL'].includes(value.signal)) return invalid('invalid-stop-frame');
   } else if (!exactKeys(value, ['v', 'type'])) {
     return invalid(`invalid-${value.type}-frame`);
   }
@@ -158,10 +162,6 @@ export function sessionHostProtocolError(reason) {
 function validIdentity(value) {
   return MC_SESSION_ID_RE.test(value.mc_session_id || '')
     && GENERATION_ID_RE.test(value.generation_id || '');
-}
-
-function validTerminalSize(cols, rows) {
-  try { assertTerminalSize(cols, rows); return true; } catch { return false; }
 }
 
 function validBase64(value, maximumBytes) {

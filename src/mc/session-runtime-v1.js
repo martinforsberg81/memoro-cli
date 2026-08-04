@@ -124,6 +124,7 @@ export async function openLocalSessionRuntime({
   const prepared = await (deps.prepareLaunchPlan || prepareCertifiedLaunchPlan)({
     mcHomeDir,
     mcSessionId,
+    sessionName: session.metadata.name,
     generationId: generation.intent.generation_id,
     portal,
     baseEnv: deps.env || process.env,

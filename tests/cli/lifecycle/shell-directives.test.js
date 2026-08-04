@@ -1,15 +1,16 @@
 /**
  * TDD spec for shell-directive emission across the lifecycle commands (§2b).
  *
- * The plan §2b lists four commands that should emit `cd` directives on
+ * The V1 contract lists three commands that may emit `cd` directives on
  * fd 3 when `--emit-shell-directives` is passed:
  *
  *   mc cd <name>      → cd <workspace>         (already covered in cd.test.js)
  *   mc new <name>     → cd <current workspace> (before optional launch)
  *   mc resume <name>  → cd <workspace>         (before launching tool)
- *   mc end <name>     → cd <primary-worktree>  (before removing worktree)
  *
- * This file covers new/resume/end. The contract is:
+ * `mc end` no longer changes or removes a workspace, so it emits no `cd`.
+ *
+ * This file covers new/resume/end. For navigation commands the contract is:
  *   - With --emit-shell-directives, exactly one `cd <abs-path>` line on fd 3.
  *   - That path must exist as a directory at the moment the directive is
  *     emitted (so the shell wrapper doesn't land in a deleted dir).
@@ -23,6 +24,7 @@ import { join } from 'node:path';
 import { runMcCaptureFd3 } from '../../mc/_helpers/cli.js';
 import { makeTempRepo, git, addWorktree } from '../../mc/_helpers/git-fixture.js';
 import { writeRegistry, makeEntry } from '../../mc/_helpers/registry-fixture.js';
+import { makeV1Fixture } from './v1-fixture.js';
 
 function extractCdTarget(fd3) {
   const m = fd3.match(/^cd\s+(.+?)\s*$/m);
@@ -68,29 +70,20 @@ describe('shell-directive emission (§2b)', () => {
     assert.equal(target, wt, `cd should target the worktree; got ${target}`);
   });
 
-  test('mc end emits a cd directive back to the primary worktree', async () => {
-    git(repo.dir, 'branch sess/done main');
-    const wt = join(repo.mcHome, 'worktrees', 'repo', 'done');
-    addWorktree(repo.dir, wt, 'sess/done');
-    writeRegistry(repo.mcHome, [makeEntry({
-      name: 'done', branch: 'sess/done', worktree_path: wt,
-      session_state: 'no-session-yet',
-      safety_verdict: 'SAFE_TO_END',
-    })]);
-
-    // Run `mc end` from *inside* the about-to-be-deleted worktree —
-    // the directive is what saves the shell from sitting in a dead dir.
-    const r = await runMcCaptureFd3(
-      ['end', 'done', '--force', '--emit-shell-directives'],
-      { cwd: wt, env: { MC_HOME: repo.mcHome } },
-    );
-    assert.equal(r.status, 0, `stderr:${r.stderr}`);
-    const target = extractCdTarget(r.fd3);
-    assert.ok(target, `expected cd directive on fd 3; got: ${JSON.stringify(r.fd3)}`);
-    // Target must be the primary worktree (repo.dir), not the deleted one.
-    assert.equal(realpathSync(target), realpathSync(repo.dir),
-      `cd should land at primary worktree ${repo.dir}; got ${target}`);
-    assert.ok(existsSync(target), `primary worktree must still exist`);
+  test('mc end keeps the workspace and emits no cd directive', async () => {
+    const fixture = makeV1Fixture('mc-v1-end-directive-');
+    try {
+      fixture.create('done');
+      const result = await runMcCaptureFd3(
+        ['end', 'done', '--emit-shell-directives'],
+        { cwd: fixture.workspace, env: { MC_HOME: fixture.mcHomeDir } },
+      );
+      assert.equal(result.status, 0, `stderr:${result.stderr}`);
+      assert.equal(extractCdTarget(result.fd3), null);
+      assert.equal(existsSync(fixture.workspace), true);
+    } finally {
+      fixture.cleanup();
+    }
   });
 
   test('directives never leak onto stdout', async () => {

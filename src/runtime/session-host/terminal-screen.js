@@ -2,6 +2,9 @@ import { StringDecoder } from 'node:string_decoder';
 
 import serializePackage from '@xterm/addon-serialize';
 import headlessPackage from '@xterm/headless';
+import { assertTerminalSize } from './terminal-size.js';
+
+export { assertTerminalSize } from './terminal-size.js';
 
 const { SerializeAddon } = serializePackage;
 const { Terminal } = headlessPackage;
@@ -173,11 +176,6 @@ export class TerminalScreen {
   _assertOpen() {
     if (this.disposed) throw terminalScreenError('terminal-screen-disposed');
   }
-}
-
-export function assertTerminalSize(cols, rows) {
-  assertBoundedInteger(cols, 20, 500, 'cols');
-  assertBoundedInteger(rows, 5, 200, 'rows');
 }
 
 export function terminalScreenError(reason) {

@@ -796,6 +796,30 @@ export function persistManagedCodexSessionState({
   const temporaryProjection = `${projectionPath}.${randomUUID()}.tmp`;
   try {
     ensurePrivateDirectoryChain(root, dirname(transcriptPath));
+    const existingManifest = readPrivateJsonFile(manifestPath, 4096);
+    if (existingManifest.ok) {
+      const manifest = existingManifest.value;
+      if (!validManagedGenerationArchiveManifest(manifest)
+        || manifest.coding_session_id !== descriptor.session_id
+        || manifest.runtime_generation !== providerArtifact.runtime_generation
+        || manifest.provider_session_id !== providerArtifact.provider_session_id
+        || manifest.relative_transcript_path !== checked.relativeTranscriptPath
+        || !isPrivateOwnedPath(transcriptPath, { directory: false })
+        || sha256FileSync(transcriptPath) !== manifest.transcript_sha256) {
+        return safeSessionStateFailure('managed-portable-session-state-conflict');
+      }
+      return publishManagedSessionProjection({
+        root,
+        stateRoot,
+        manifest,
+        manifestPath,
+        projectionPath,
+        temporaryProjection,
+      });
+    }
+    if (existsSync(manifestPath)) {
+      return safeSessionStateFailure('managed-portable-session-state-conflict');
+    }
     const source = lstatSync(providerArtifact.transcript_path);
     const realSourcePath = realpathSync(providerArtifact.transcript_path);
     const realCodexHome = realpathSync(descriptor.codex_home);
@@ -813,90 +837,107 @@ export function persistManagedCodexSessionState({
       transcript_sha256: transcriptSha256,
     };
     const manifestBody = `${JSON.stringify(manifest)}\n`;
-    const archiveDigest = sha256(manifestBody);
-
-    const existingManifest = readPrivateJsonFile(manifestPath, 4096);
-    if (existingManifest.ok) {
-      if (!validManagedGenerationArchiveManifest(existingManifest.value)
-        || JSON.stringify(existingManifest.value) !== JSON.stringify(manifest)
-        || !isPrivateOwnedPath(transcriptPath, { directory: false })
+    if (existsSync(transcriptPath)) {
+      if (!isPrivateOwnedPath(transcriptPath, { directory: false })
         || sha256FileSync(transcriptPath) !== transcriptSha256) {
         return safeSessionStateFailure('managed-portable-session-state-conflict');
       }
     } else {
-      if (existsSync(transcriptPath)) {
-        if (!isPrivateOwnedPath(transcriptPath, { directory: false })
-          || sha256FileSync(transcriptPath) !== transcriptSha256) {
-          return safeSessionStateFailure('managed-portable-session-state-conflict');
-        }
-      } else {
-        copyFileSync(
-          providerArtifact.transcript_path,
-          temporaryTranscript,
-          constants.COPYFILE_EXCL,
-        );
-        chmodSync(temporaryTranscript, 0o600);
-        fsyncFileSync(temporaryTranscript);
-        try {
-          linkSync(temporaryTranscript, transcriptPath);
-        } catch (error) {
-          if (error?.code !== 'EEXIST'
-            || !isPrivateOwnedPath(transcriptPath, { directory: false })
-            || sha256FileSync(transcriptPath) !== transcriptSha256) throw error;
-        }
-        unlinkSync(temporaryTranscript);
-        fsyncDirectorySync(dirname(transcriptPath));
-      }
-      writeFileSync(temporaryManifest, manifestBody, {
-        encoding: 'utf8',
-        mode: 0o600,
-        flag: 'wx',
-      });
-      fsyncFileSync(temporaryManifest);
+      copyFileSync(
+        providerArtifact.transcript_path,
+        temporaryTranscript,
+        constants.COPYFILE_EXCL,
+      );
+      chmodSync(temporaryTranscript, 0o600);
+      fsyncFileSync(temporaryTranscript);
       try {
-        linkSync(temporaryManifest, manifestPath);
+        linkSync(temporaryTranscript, transcriptPath);
       } catch (error) {
-        const raced = readPrivateJsonFile(manifestPath, 4096);
         if (error?.code !== 'EEXIST'
-          || !raced.ok
-          || JSON.stringify(raced.value) !== JSON.stringify(manifest)) throw error;
+          || !isPrivateOwnedPath(transcriptPath, { directory: false })
+          || sha256FileSync(transcriptPath) !== transcriptSha256) throw error;
       }
-      unlinkSync(temporaryManifest);
-      fsyncDirectorySync(dirname(manifestPath));
+      unlinkSync(temporaryTranscript);
+      fsyncDirectorySync(dirname(transcriptPath));
     }
-
-    const projection = {
-      schema: MANAGED_SESSION_PROJECTION_SCHEMA,
-      coding_session_id: descriptor.session_id,
-      runtime_generation: providerArtifact.runtime_generation,
-      provider_session_id: providerArtifact.provider_session_id,
-      relative_manifest_path: relative(stateRoot, manifestPath),
-      archive_digest: archiveDigest,
-    };
-    ensurePrivateDirectoryChain(root, dirname(projectionPath));
-    writeFileSync(temporaryProjection, `${JSON.stringify(projection)}\n`, {
+    writeFileSync(temporaryManifest, manifestBody, {
       encoding: 'utf8',
       mode: 0o600,
       flag: 'wx',
     });
-    fsyncFileSync(temporaryProjection);
-    renameSync(temporaryProjection, projectionPath);
-    fsyncDirectorySync(dirname(projectionPath));
-    return {
-      ok: true,
-      state: {
-        provider_session_id: providerArtifact.provider_session_id,
-        transcript_path: transcriptPath,
-        runtime_generation: providerArtifact.runtime_generation,
-        archive_digest: archiveDigest,
-      },
-    };
-  } catch {
+    fsyncFileSync(temporaryManifest);
+    try {
+      linkSync(temporaryManifest, manifestPath);
+    } catch (error) {
+      const raced = readPrivateJsonFile(manifestPath, 4096);
+      if (error?.code !== 'EEXIST'
+        || !raced.ok
+        || JSON.stringify(raced.value) !== JSON.stringify(manifest)) throw error;
+    }
+    unlinkSync(temporaryManifest);
+    fsyncDirectorySync(dirname(manifestPath));
+
+    return publishManagedSessionProjection({
+      root,
+      stateRoot,
+      manifest,
+      manifestPath,
+      projectionPath,
+      temporaryProjection,
+    });
+  } catch (error) {
     try { rmSync(temporaryTranscript, { force: true }); } catch {}
     try { rmSync(temporaryManifest, { force: true }); } catch {}
     try { rmSync(temporaryProjection, { force: true }); } catch {}
-    return safeSessionStateFailure('managed-portable-session-state-persist-failed');
+    return safeSessionStateFailure(
+      safeManagedSessionStateReason(error)
+        || 'managed-portable-session-state-persist-failed',
+    );
   }
+}
+
+function publishManagedSessionProjection({
+  root,
+  stateRoot,
+  manifest,
+  manifestPath,
+  projectionPath,
+  temporaryProjection,
+}) {
+  const archiveDigest = sha256(`${JSON.stringify(manifest)}\n`);
+  const projection = {
+    schema: MANAGED_SESSION_PROJECTION_SCHEMA,
+    coding_session_id: manifest.coding_session_id,
+    runtime_generation: manifest.runtime_generation,
+    provider_session_id: manifest.provider_session_id,
+    relative_manifest_path: relative(stateRoot, manifestPath),
+    archive_digest: archiveDigest,
+  };
+  ensurePrivateDirectoryChain(root, dirname(projectionPath));
+  writeFileSync(temporaryProjection, `${JSON.stringify(projection)}\n`, {
+    encoding: 'utf8',
+    mode: 0o600,
+    flag: 'wx',
+  });
+  fsyncFileSync(temporaryProjection);
+  renameSync(temporaryProjection, projectionPath);
+  fsyncDirectorySync(dirname(projectionPath));
+  return {
+    ok: true,
+    state: {
+      provider_session_id: manifest.provider_session_id,
+      transcript_path: join(dirname(manifestPath), manifest.relative_transcript_path),
+      runtime_generation: manifest.runtime_generation,
+      archive_digest: archiveDigest,
+    },
+  };
+}
+
+function safeManagedSessionStateReason(error) {
+  return typeof error?.reason === 'string'
+    && /^managed-[a-z0-9-]{1,96}$/u.test(error.reason)
+    ? error.reason
+    : null;
 }
 
 export function restoreManagedCodexSessionState({

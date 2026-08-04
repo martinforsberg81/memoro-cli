@@ -30,6 +30,16 @@ describe('mc --help V1', () => {
     assert.doesNotMatch(result.stdout, /registry\.json|global broker|broker-owned|provider-native/iu);
   });
 
+  it('separates archival, owned-resource cleanup, and session deletion', () => {
+    const result = runMc(['--help']);
+    assert.equal(result.status, 0, `stderr:${result.stderr}`);
+    assert.match(result.stdout, /mc end <name>.*Stop and archive; keep every workspace/iu);
+    assert.match(result.stdout, /mc cleanup <name> --dry-run\|--apply/iu);
+    assert.match(result.stdout, /only exactly proven mc-owned resources/iu);
+    assert.match(result.stdout, /mc delete <name> --force.*Delete an archived session home/iu);
+    assert.match(result.stdout, /mc gc.*never Git resources/iu);
+  });
+
   it('does not expose internal plan shorthand', () => {
     const result = runMc(['--help']);
     assert.equal(result.status, 0, `stderr:${result.stderr}`);

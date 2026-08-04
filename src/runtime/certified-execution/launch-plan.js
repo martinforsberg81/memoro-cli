@@ -11,7 +11,7 @@ import {
 import { decodeSessionCapabilities } from '../../capabilities/github/github-contract.js';
 import { ensurePrivateDirectoryChainSync } from '../../mc/private-state.js';
 import { sessionHomePaths } from '../../mc/session-home-paths.js';
-import { assertMcSessionId } from '../../mc/session-home-schema.js';
+import { SESSION_NAME_RE, assertMcSessionId } from '../../mc/session-home-schema.js';
 import {
   inspectSessionRuntimeSync,
 } from '../../mc/session-runtime-journal.js';
@@ -32,6 +32,7 @@ const MAX_HANDOFF_BYTES = 128 * 1024;
 export async function prepareCertifiedLaunchPlan({
   mcHomeDir,
   mcSessionId,
+  sessionName = null,
   generationId,
   portal,
   githubConnectionClient = null,
@@ -48,6 +49,9 @@ export async function prepareCertifiedLaunchPlan({
     assertGenerationId(generationId);
   } catch {
     return failure('certified-generation-identity-invalid');
+  }
+  if (sessionName !== null && !SESSION_NAME_RE.test(sessionName || '')) {
+    return failure('certified-session-name-invalid');
   }
   let snapshot;
   try {
@@ -201,7 +205,15 @@ export async function prepareCertifiedLaunchPlan({
         expectedHandle: argv.expected_handle,
         artifactContext,
         launchCwd: generation.intent.launch_cwd,
-        processPlan: { ...processPlan, cwd: generation.intent.launch_cwd },
+        processPlan: {
+          ...processPlan,
+          cwd: generation.intent.launch_cwd,
+          env: {
+            ...processPlan.env,
+            MC_SESSION_ID: mcSessionId,
+            ...(sessionName === null ? {} : { MC_SESSION_NAME: sessionName }),
+          },
+        },
         boundary,
         adapter,
         githubCapabilities: capabilities,

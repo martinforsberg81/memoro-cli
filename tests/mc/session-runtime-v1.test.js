@@ -10,7 +10,7 @@ const workspace = {
   workspace_id: 'mcw_000000000000000000000001',
   current_path: '/workspace/alpha',
 };
-const session = { mc_session_id: mcSessionId };
+const session = { mc_session_id: mcSessionId, metadata: { name: 'alpha' } };
 
 test('a live durable generation is probed and attached without starting a process', async () => {
   const calls = [];
@@ -46,18 +46,21 @@ test('fresh launch owns socket, terminal, artifact binding, and completion in or
         return { intent: { generation_id: generationId, action: 'start' } };
       },
       resolvePortal: async () => null,
-      prepareLaunchPlan: async () => ({
-        ok: true,
-        plan: {
-          async startRuntime() { order.push(['runtime']); return runtime; },
-          captureConversationArtifact() {
-            order.push(['capture']);
-            return { ok: true, handle: 'conversation-exact', artifact: { bounded: true } };
+      prepareLaunchPlan: async (input) => {
+        assert.equal(input.sessionName, 'alpha');
+        return {
+          ok: true,
+          plan: {
+            async startRuntime() { order.push(['runtime']); return runtime; },
+            captureConversationArtifact() {
+              order.push(['capture']);
+              return { ok: true, handle: 'conversation-exact', artifact: { bounded: true } };
+            },
+            async closeBoundary() { order.push(['close-boundary']); return { ok: true }; },
+            async abort() { assert.fail('accepted runtime must not abort its boundary'); },
           },
-          async closeBoundary() { order.push(['close-boundary']); return { ok: true }; },
-          async abort() { assert.fail('accepted runtime must not abort its boundary'); },
-        },
-      }),
+        };
+      },
       ptyFactory: {},
       createSocketServer: () => ({
         async start() { order.push(['socket-start']); },

@@ -6,6 +6,7 @@ import {
   attachLocalSessionTerminal,
   readLocalSessionScreen,
   sendLocalSessionInput,
+  stopLocalSessionRuntime,
 } from '../../../src/runtime/session-host/terminal-client.js';
 import { validateClientFrame, validateServerFrame } from '../../../src/runtime/session-host/protocol.js';
 
@@ -101,8 +102,45 @@ test('send and read use the same socket client without a liveness protocol', asy
   assert.equal(validateServerFrame({ v: 1, type: heartbeatRequest }).ok, false);
 });
 
+test('stop terminates the exact attached generation without a heartbeat path', async () => {
+  let client;
+  const result = await stopLocalSessionRuntime({
+    mcSessionId,
+    generationId,
+    termTimeoutMs: 50,
+    clientFactory: (options) => {
+      client = new FakeClient(options, { exitOnStop: true });
+      return client;
+    },
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.stopped, true);
+  assert.deepEqual(client.stops, ['SIGTERM']);
+  assert.equal(client.detached, true);
+  assert.equal(validateClientFrame({
+    v: 1,
+    type: 'stop',
+    mc_session_id: mcSessionId,
+    generation_id: generationId,
+    signal: 'SIGTERM',
+  }).ok, true);
+  assert.equal(validateClientFrame({
+    v: 1,
+    type: 'stop',
+    mc_session_id: mcSessionId,
+    generation_id: generationId,
+    signal: 'SIGUSR1',
+  }).ok, false);
+});
+
 class FakeClient extends EventEmitter {
-  constructor(options, { exitOnConnect = false, exitBeforeResolve = false, screen = null } = {}) {
+  constructor(options, {
+    exitOnConnect = false,
+    exitBeforeResolve = false,
+    exitOnStop = false,
+    screen = null,
+  } = {}) {
     super();
     this.identity = {
       mcSessionId: options.mcSessionId,
@@ -113,11 +151,13 @@ class FakeClient extends EventEmitter {
     this.output = options.output;
     this.exitOnConnect = exitOnConnect;
     this.exitBeforeResolve = exitBeforeResolve;
+    this.exitOnStop = exitOnStop;
     this.exitFrame = null;
     this.closed = false;
     this.screen = screen;
     this.inputs = [];
     this.resizes = [];
+    this.stops = [];
     this.detached = false;
   }
 
@@ -131,6 +171,10 @@ class FakeClient extends EventEmitter {
 
   input(value) { this.inputs.push(value); }
   resize(cols, rows) { this.resizes.push([cols, rows]); }
+  stop(signal) {
+    this.stops.push(signal);
+    if (this.exitOnStop) setImmediate(() => this.emit('exit', { exit_code: null, signal }));
+  }
   detach() { this.detached = true; }
 }
 

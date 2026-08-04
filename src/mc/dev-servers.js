@@ -9,6 +9,7 @@ import {
   closeSync,
   existsSync,
   fstatSync,
+  lstatSync,
   mkdirSync,
   openSync,
   readFileSync,
@@ -19,6 +20,7 @@ import {
   renameSync,
   rmSync,
   statSync,
+  unlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { randomUUID } from 'node:crypto';
@@ -26,6 +28,7 @@ import { spawn as defaultSpawn, spawnSync as defaultSpawnSync } from 'node:child
 import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
 
 import { devServersRoot } from './paths.js';
+import { listSessionHomesSync } from './session-home.js';
 
 const SCHEMA_VERSION = 1;
 const STARTING_GRACE_MS = 30_000;
@@ -70,12 +73,25 @@ export function unregisterDevServerManifest(sourcePath) {
  * an ended session's worktree (and its source manifest) is often already
  * gone. This removes bookkeeping only — never a process.
  */
-export function removeDevServerRegistryManifest(instanceId) {
+export function removeDevServerRegistryManifest(instanceId, { mcHomeDir } = {}) {
   const id = requiredIdentifier(instanceId, 'instance_id');
-  const target = registryManifestPath(id);
-  if (!existsSync(target)) return false;
-  rmSync(target, { force: true });
-  return true;
+  const root = devServersRoot(mcHomeDir);
+  const target = registryManifestPath(id, mcHomeDir);
+  try {
+    const rootStat = lstatSync(root);
+    if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) {
+      throw new Error('dev server registry root is unsafe');
+    }
+    const targetStat = lstatSync(target);
+    if (!targetStat.isFile() || targetStat.isSymbolicLink()) {
+      throw new Error('dev server registry manifest is unsafe');
+    }
+    unlinkSync(target);
+    return true;
+  } catch (error) {
+    if (error?.code === 'ENOENT') return false;
+    throw error;
+  }
 }
 
 /**
@@ -129,17 +145,141 @@ export async function teardownSessionDevServers({ sessionName, codingSessionId, 
   };
 }
 
-export function readDevServerManifests() {
-  const root = devServersRoot();
-  if (!existsSync(root)) return [];
-  const manifests = [];
-  for (const name of readdirSync(root).filter((entry) => entry.endsWith('.json')).sort()) {
-    const parsed = readJsonIfExists(join(root, name));
-    if (parsed && parsed.schema_version === SCHEMA_VERSION && parsed.instance_id) {
-      manifests.push(parsed);
+export async function teardownV1SessionDevServers({ mcHomeDir, mcSessionId }, deps = {}) {
+  if (!/^mcs_[a-f0-9]{24}$/u.test(mcSessionId || '')) {
+    return { ok: false, reason: 'invalid-mc-session-id', results: [] };
+  }
+  const inventory = deps.readManifests
+    ? { manifests: deps.readManifests({ mcHomeDir }), issues: [] }
+    : (deps.readInventory || readDevServerInventorySync)({ mcHomeDir });
+  if (!Array.isArray(inventory?.manifests) || (inventory.issues || []).length > 0) {
+    return {
+      ok: false,
+      reason: 'dev-server-state-unsafe',
+      results: [],
+      issues: inventory?.issues || [],
+    };
+  }
+  const results = [];
+  for (const manifest of inventory.manifests) {
+    if (manifest.mc_session_id !== mcSessionId) continue;
+    const identity = verifyDevServerIdentity(manifest, deps);
+    const stop = identity.ok ? await controlDevServer(manifest, 'stop', deps) : null;
+    let unregistered = false;
+    let unregisterError = null;
+    try {
+      unregistered = (deps.removeManifest || removeDevServerRegistryManifest)(
+        manifest.instance_id,
+        { mcHomeDir },
+      );
+    } catch (error) {
+      unregisterError = error?.reason || 'dev-server-unregister-failed';
+    }
+    results.push({
+      instance_id: manifest.instance_id,
+      service: manifest.service || null,
+      stopped: stop?.ok === true,
+      was_running: identity.ok,
+      unregistered,
+      ...(stop && !stop.ok ? { stop_error: stop.reason || 'stop-failed' } : {}),
+      ...(unregisterError ? { unregister_error: unregisterError } : {}),
+    });
+  }
+  return {
+    ok: results.every((item) => item.unregistered && (!item.was_running || item.stopped)),
+    results,
+  };
+}
+
+export function inspectV1DevServerRegistrySync({ mcHomeDir, deps = {} } = {}) {
+  const inventory = deps.readManifests
+    ? { manifests: deps.readManifests({ mcHomeDir }), issues: [] }
+    : readDevServerInventorySync({ mcHomeDir });
+  const manifests = inventory.manifests;
+  const sessions = (deps.listSessions || listSessionHomesSync)({ mcHomeDir });
+  const known = new Set((sessions.sessions || []).map((item) => item.mc_session_id));
+  const issues = [...inventory.issues];
+  let bound = 0;
+  for (const manifest of manifests) {
+    if (!/^mcs_[a-f0-9]{24}$/u.test(manifest.mc_session_id || '')) {
+      issues.push({
+        scope: 'dev-server',
+        instance_id: manifest.instance_id,
+        reason: 'dev-server-session-unbound',
+      });
+      continue;
+    }
+    bound += 1;
+    if (!known.has(manifest.mc_session_id)) {
+      issues.push({
+        scope: 'dev-server',
+        instance_id: manifest.instance_id,
+        mc_session_id: manifest.mc_session_id,
+        reason: 'dev-server-session-absent',
+      });
     }
   }
-  return manifests;
+  return {
+    ok: issues.length === 0 && (sessions.issues || []).length === 0,
+    summary: {
+      total: manifests.length,
+      bound,
+      unbound: manifests.length - bound,
+      absent_session: issues.filter((item) => item.reason === 'dev-server-session-absent').length,
+    },
+    issues,
+  };
+}
+
+export function readDevServerManifests({ mcHomeDir } = {}) {
+  return readDevServerInventorySync({ mcHomeDir }).manifests;
+}
+
+export function readDevServerInventorySync({ mcHomeDir } = {}) {
+  const root = devServersRoot(mcHomeDir);
+  if (!existsSync(root)) return { manifests: [], issues: [] };
+  try {
+    const rootStat = lstatSync(root);
+    if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) {
+      return { manifests: [], issues: [{ scope: 'dev-server', reason: 'unsafe-dev-server-root' }] };
+    }
+  } catch {
+    return { manifests: [], issues: [{ scope: 'dev-server', reason: 'unreadable-dev-server-root' }] };
+  }
+  const manifests = [];
+  const issues = [];
+  let entries;
+  try { entries = readdirSync(root).sort(); } catch {
+    return { manifests, issues: [{ scope: 'dev-server', reason: 'unreadable-dev-server-root' }] };
+  }
+  if (entries.length > 4096) {
+    return { manifests, issues: [{ scope: 'dev-server', reason: 'dev-server-inventory-oversized' }] };
+  }
+  for (const name of entries) {
+    const path = join(root, name);
+    if (!name.endsWith('.json')) {
+      issues.push({ scope: 'dev-server', entry: name, reason: 'unexpected-dev-server-entry' });
+      continue;
+    }
+    let stat;
+    try { stat = lstatSync(path); } catch { stat = null; }
+    if (!stat?.isFile() || stat.isSymbolicLink() || stat.size > 1024 * 1024) {
+      issues.push({ scope: 'dev-server', entry: name, reason: 'unsafe-dev-server-entry' });
+      continue;
+    }
+    const parsed = readJsonIfExists(path);
+    let instanceId = null;
+    try { instanceId = requiredIdentifier(parsed?.instance_id, 'instance_id'); } catch {}
+    if (parsed
+      && parsed.schema_version === SCHEMA_VERSION
+      && instanceId !== null
+      && name === `${instanceId}.json`) {
+      manifests.push(parsed);
+    } else {
+      issues.push({ scope: 'dev-server', entry: name, reason: 'invalid-dev-server-entry' });
+    }
+  }
+  return { manifests, issues };
 }
 
 export async function listDevServers(deps = {}) {
@@ -240,6 +380,7 @@ export async function controlDevServer(manifest, action, deps = {}) {
       MC_DEV_CONTROLLED_BY: 'mc',
       MC_DEV_INSTANCE_ID: manifest.instance_id,
       MC_SESSION_NAME: manifest.session_name,
+      ...(manifest.mc_session_id ? { MC_SESSION_ID: manifest.mc_session_id } : {}),
       ...(manifest.coding_session_id ? { MC_CODING_SESSION_ID: manifest.coding_session_id } : {}),
     },
     shell: false,
@@ -356,6 +497,7 @@ function normalizeManifest(raw, { sourcePath }) {
     : normalizeArgv(raw.start_argv, 'start_argv');
   const resourceClass = optionalResourceClass(raw.resource_class);
   const sessionName = requiredText(raw.session_name, 'session_name');
+  const mcSessionId = optionalMcSessionId(raw.mc_session_id);
   const worktreePath = canonicalDirectory(raw.worktree_path, 'worktree_path');
   assertInside(worktreePath, sourcePath, 'manifest path');
   const logPath = absolutePath(raw.log_path, 'log_path');
@@ -378,6 +520,7 @@ function normalizeManifest(raw, { sourcePath }) {
     start_argv: startArgv,
     resource_class: resourceClass,
     session_name: sessionName,
+    mc_session_id: mcSessionId,
     coding_session_id: optionalText(raw.coding_session_id),
     worktree_path: worktreePath,
     pid,
@@ -423,6 +566,7 @@ function sourceManifestMatches(source, registered) {
     && JSON.stringify(source?.start_argv || null) === JSON.stringify(registered.start_argv || null)
     && (source?.resource_class || null) === (registered.resource_class || null)
     && source?.session_name === registered.session_name
+    && source?.mc_session_id === registered.mc_session_id
     && source?.coding_session_id === registered.coding_session_id
     && Number(source?.pid) === Number(registered.pid)
     && Number(source?.process_group_id) === Number(registered.process_group_id)
@@ -487,8 +631,8 @@ async function probeHttpHealth(url, { timeoutMs = HEALTH_TIMEOUT_MS } = {}) {
   }
 }
 
-function registryManifestPath(instanceId) {
-  return join(devServersRoot(), `${requiredIdentifier(instanceId, 'instance_id')}.json`);
+function registryManifestPath(instanceId, mcHomeDir) {
+  return join(devServersRoot(mcHomeDir), `${requiredIdentifier(instanceId, 'instance_id')}.json`);
 }
 
 function writeJsonAtomic(path, value) {
@@ -603,6 +747,15 @@ function requiredText(value, label) {
 function optionalText(value) {
   if (value == null || value === '') return null;
   return requiredText(value, 'coding_session_id');
+}
+
+function optionalMcSessionId(value) {
+  if (value == null || value === '') return null;
+  const text = String(value);
+  if (!/^mcs_[a-f0-9]{24}$/u.test(text)) {
+    throw new Error('mc_session_id must be a valid mc session id');
+  }
+  return text;
 }
 
 function positiveInteger(value, label) {
