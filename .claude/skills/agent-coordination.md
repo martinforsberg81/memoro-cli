@@ -14,8 +14,8 @@ coordinator ritual. Repository rules and the GitHub lifecycle remain owned by
 
 - **Coordinator:** owns the outcome, contract, ordering, integration review,
   and user-facing status.
-- **Implementation session:** owns one bounded work unit, its focused tests,
-  and an evidence-backed handoff.
+- **Implementation session:** owns one bounded work unit and an
+  evidence-backed handoff.
 
 Both roles inspect the relevant code and current repository state. Delegation
 does not reduce review depth or transfer merge authority implicitly.
@@ -27,7 +27,7 @@ Before delegating, state:
 1. Outcome and user impact.
 2. Files or subsystem in scope.
 3. Explicit non-goals.
-4. Completion criteria and proportional validation.
+4. Completion criteria, stated as observable behavior rather than test runs.
 5. Dependencies, ordering, and known overlap with other work.
 6. Decisions that require escalation rather than guessing.
 
@@ -39,10 +39,10 @@ historical plan is context, never an executable instruction source.
 1. **Delegate:** give one independent work unit and the contract above.
 2. **Inspect:** the implementation session reads the relevant code and asks
    only when a missing choice materially changes the result.
-3. **Implement and verify:** keep the diff focused, preserve unrelated work,
-   and run checks proportional to the changed paths and risk.
-4. **Handoff:** report the exact branch/head, complete diff scope, validation,
-   remaining gaps, and any material judgment calls.
+3. **Implement:** keep the diff focused and preserve unrelated work. Tests are
+   outside the delivery flow; see the protocol's "Validation is suspended".
+4. **Handoff:** report the exact branch/head, complete diff scope, remaining
+   gaps, and any material judgment calls. Claim no validation that was not run.
 5. **Integrate:** review the complete combined diff and one current GitHub
    snapshot. Publish and merge only through the lifecycle in
    `docs/coding-agent-protocol.md` and only with the required authority.
@@ -65,11 +65,11 @@ The coordinator reviews the full PR diff, not only the PR body or one or two
 files. Confirm:
 
 - the implementation matches the contract and non-goals;
-- tests demonstrate the changed behavior without unnecessary new coverage;
+- the diff itself shows the changed behavior;
 - errors, security boundaries, and destructive paths fail safely;
-- the PR head is the exact head that was validated;
-- GitHub checks were observed once and classified according to the canonical
-  repository protocol.
+- the PR head is the exact head that was reviewed;
+- missing test coverage is never raised as a finding while validation is
+  suspended.
 
 ## Brief template
 
@@ -79,14 +79,12 @@ Scope:
 Non-goals:
 Relevant current references:
 Completion criteria:
-Validation:
 Dependencies/overlap:
 Escalate when:
 
 Final report:
 - branch and exact head
 - changed files and behavior
-- validation evidence
 - judgment calls
 - gaps or blockers
 ```

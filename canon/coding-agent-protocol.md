@@ -23,9 +23,9 @@ writes briefs and uses the agent tools already available in its host.
     compatibility, hook installation, heartbeat daemon)
   - `mc` → `src/bin-mc.js` (high-level: lifecycle, coordinator,
     fanout, vault, adapter sync)
-- Focused tests: run `node --test --import ./tests/_isolate-home.mjs` with the
-  exact relevant test files. `npm test` is the explicit full repository suite,
-  not the default after each small edit.
+- Tests are currently **outside** the delivery flow. See "Validation is
+  suspended" below. `node --test --import ./tests/_isolate-home.mjs <files>`
+  remains available for deliberate local investigation, never as a gate.
 - Current V1 session work is governed by
   [`mc-v1-session-architecture.md`](plans/mc-v1-session-architecture.md) and
   [`mc-v1-session-pr-plan.md`](plans/mc-v1-session-pr-plan.md). Read only the
@@ -90,10 +90,6 @@ only after the user approves. When no profile exists, `read --json` returns
     by `mc adapter sync` (§13)
   - `TOOL_NAME`, `STATUS_TIMEOUT_MS`, `getStatus()` — `mc auth
     status` probe (§11a)
-
-  The shape is gated by two contract tests:
-  `tests/adapters/get-status-contract.test.js` (status surface) and
-  `tests/adapters/materialise.test.js` (credential-blind refusal).
 
 ## GitHub interaction in coding sessions
 
@@ -169,9 +165,8 @@ endpoint the agent can repurpose as a credential proxy.
 
 Use one bounded transaction for ordinary commit → PR → main work:
 
-1. Inspect the current branch, complete diff, and base once. Run focused tests
-   proportional to the changed paths and risk. Run the full suite only when the
-   scope or release gate requires it.
+1. Inspect the current branch, complete diff, and base once. Reading the diff
+   is the review; no test run gates this step.
 2. Stage only intended files, commit, and freeze the exact local head SHA.
 3. Publish only the registered session branch through the typed Memoro GitHub
    App operation advertised by the live session. Publication is non-force and
@@ -180,7 +175,8 @@ Use one bounded transaction for ordinary commit → PR → main work:
    credential helper, raw authenticated `git push`, or per-file GitHub object
    reconstruction.
 4. Create or update the PR through `mc github`. The PR description states what
-   changed, why, user impact, root cause for fixes, validation, and known gaps.
+   changed, why, user impact, root cause for fixes, and known gaps. It does not
+   claim validation that was not performed.
 5. Read one current PR/check/review snapshot for the frozen head. This
    repository currently has no automatic pull-request workflows; an empty
    checks result is terminal normal state, not a reason to poll. Never claim a
@@ -195,6 +191,25 @@ Use one bounded transaction for ordinary commit → PR → main work:
 The session-scoped `gh` shim is compatibility syntax for its advertised typed
 operations, not native GitHub authority. `mc github` is the canonical wording
 in instructions and diagnostics.
+
+### Validation is suspended (normative, temporary)
+
+The test suite is out of the delivery flow until it is rebuilt deliberately.
+Large parts of it assert removed architecture, and re-running it turned
+publication into a loop that never terminated. Until the rebuild lands:
+
+- Do not run `npm test`, focused suites, smoke runs, or security probes as a
+  condition of committing, publishing, reviewing, or merging.
+- Do not add "add tests for this" as a completion criterion, a review finding,
+  or a blocker in a plan, PR body, or handoff.
+- Do not treat an existing test file as authority over current behavior. Where
+  a test and the code disagree, the code and this protocol decide.
+- Say plainly in the PR body that validation was not run. Never imply it was.
+
+Rebuilding validation is its own scoped, agreed piece of work: choose what is
+worth asserting, delete what asserts dead architecture, and reintroduce a suite
+that can actually run to completion. Nothing in this section authorizes adding
+tests back one at a time along the way.
 
 ## Critical paths — extra care
 
@@ -220,11 +235,11 @@ in instructions and diagnostics.
   routing; commands rely on the env-var default (PR #29)
 - The shell wrapper template literal in
   `src/mc/commands/install-shell.js` — wrapper bugs land in every
-  user's `~/.zshrc`; ship with an importing smoke test
+  user's `~/.zshrc`; read the rendered wrapper before shipping
 
 ## What not to do
 
-- Don't add a wrapper / dispatcher without an importing smoke test
+- Don't import a wrapper / dispatcher without checking that it loads
   (PR #28 lesson)
 - Don't duplicate install-hint strings (they belong in adapter
   `getStatus()` only)

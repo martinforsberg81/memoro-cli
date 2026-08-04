@@ -5,7 +5,16 @@
 This plan delivers [`mc-v1-session-architecture.md`](mc-v1-session-architecture.md)
 across `memoro-cli` and `memoro`. Each PR is reviewed against the contract and
 its own slice before merge. A failed contract review, unexpected migration
-condition, security regression, or failed check stops the sequence.
+condition, or security regression stops the sequence.
+
+**Revision (2026-08-04): validation is suspended.** Test runs are no longer part
+of this plan's delivery flow. The suite asserts large amounts of removed
+architecture, and re-running it turned every step into a loop that never
+terminated. Each PR below therefore states purpose, scope, and dependencies
+only. The per-PR validation lists that used to sit inline are preserved
+verbatim in the appendix as deferred input for PR 12 — they are an inventory,
+not an instruction to run anything. The normative rule lives in
+`docs/coding-agent-protocol.md`, "Validation is suspended".
 
 ## Delivery rules
 
@@ -15,14 +24,14 @@ condition, security regression, or failed check stops the sequence.
 - Add the new authority before routing user commands to it.
 - Do not introduce feature flags, `--native`, compatibility fallbacks, or
   permanent dual reads/writes to make intermediate states look complete.
-- Add failure, interruption, concurrency, and negative-space tests in the PR
-  that introduces each invariant.
-- Review the complete diff and actual GitHub checks after every PR. Merge only
-  when the slice and the cumulative stack conform to the contract.
+- Do not run tests as a condition of publishing or merging, and do not record
+  missing coverage as a blocker. Reintroducing validation is PR 12's work.
+- Review the complete diff after every PR. Merge only when the slice and the
+  cumulative stack conform to the contract.
 - Production deployment and package release remain separate explicit rollout
   actions even after their source PRs merge.
 
-## PR 0 — Ratify the V1 session contract (`memoro-cli`)
+## PR 0 — Ratify the V1 session contract (`memoro-cli`) — merged (#263)
 
 **Purpose:** establish one current product and delivery authority.
 
@@ -33,10 +42,7 @@ evidence as historical input.
 
 **Dependencies:** none.
 
-**Validation:** links resolve, conflicting active-plan claims are marked, no
-runtime files change, and `git diff --check` passes.
-
-## PR 1 — Build the local session-home kernel (`memoro-cli`)
+## PR 1 — Build the local session-home kernel (`memoro-cli`) — merged (#264)
 
 **Purpose:** replace the global registry architecture with isolated, bounded,
 transactional session homes.
@@ -48,11 +54,7 @@ No public lifecycle command cuts over yet.
 
 **Dependencies:** PR 0.
 
-**Validation:** create/read/update/rename races, malformed and symlinked state,
-interrupted writes, one corrupt session among healthy sessions, name-claim
-repair, permissions, and a 1,000-session enumeration fixture.
-
-## PR 2 — Add workspace and owned-resource records (`memoro-cli`)
+## PR 2 — Add workspace and owned-resource records (`memoro-cli`) — merged (#265)
 
 **Purpose:** make repositories and worktrees associations rather than session
 identity or cleanup authority.
@@ -63,10 +65,6 @@ paths; immutable resource creation intents and receipts; cleanup planning with
 exact target revalidation.
 
 **Dependencies:** PR 1.
-
-**Validation:** multiple repositories, multiple worktrees of one repository,
-ordinary directories, same basenames, relocated/missing paths, external versus
-mc-created resources, forged ownership, and destructive negative space.
 
 ## PR 3 — Add cloud-session canonical storage (`memoro`)
 
@@ -79,10 +77,6 @@ existing cloud and coding ids into bounded legacy-reference columns; update
 tenancy export/deletion registries. KV and R2 remain non-authoritative.
 
 **Dependencies:** PR 0 contract.
-
-**Validation:** migration tests, source/name uniqueness, user isolation,
-projection-versus-canonical constraints, runtime-generation ordering, SQL
-inventory/governance, export, and account deletion.
 
 ## PR 4 — Publish the V1 cloud control-plane API (`memoro`)
 
@@ -100,12 +94,7 @@ no automatic fallback with the V1 routes.
 
 **Dependencies:** PR 3.
 
-**Validation:** authentication, tenancy, source spoofing, stale observations,
-KV loss, Durable Object concurrency, multiple workspaces, wrong-repository
-GitHub requests, local/cloud authority separation, and existing cloud-runtime
-security suites.
-
-## PR 5 — Re-key conversations and generation journals (`memoro-cli`)
+## PR 5 — Re-key conversations and generation journals (`memoro-cli`) — merged (#267)
 
 **Purpose:** make `mc_session_id` the durable runtime correlation and fold the
 existing generation journal into the session home.
@@ -117,11 +106,7 @@ status projection; move durable host lifecycle facts out of `hosts/` and
 
 **Dependencies:** PRs 1–2.
 
-**Validation:** concurrent starts, accepted-outcome timeouts, crash at every
-journal phase, replay/idempotency, missing/conflicting handles, explicit
-replacement, Codex↔Claude switch, and zero transcript/argv/env leakage.
-
-## PR 6 — Replace the PTY and runtime-host data path (`memoro-cli`)
+## PR 6 — Replace the PTY and runtime-host data path (`memoro-cli`) — merged (#268)
 
 **Purpose:** make attachment fast and terminal-correct without coupling reads
 or status to a busy PTY event loop.
@@ -134,12 +119,7 @@ path.
 
 **Dependencies:** PR 5.
 
-**Validation:** alternate-screen fixture, Unicode/chunk boundaries, resize,
-slow and disconnected clients, sustained output flood, attach during output,
-host crash/restart, no duplicate process, bounded memory, and event-loop/list
-latency benchmarks compared with the recorded baseline.
-
-## PR 7 — Establish one certified tool-execution path (`memoro-cli`)
+## PR 7 — Establish one certified tool-execution path (`memoro-cli`) — merged (#269)
 
 **Purpose:** finish the interrupted execution redesign and remove mode/fallback
 behavior.
@@ -152,12 +132,7 @@ contracts; retain only the typed GitHub App shim.
 
 **Dependencies:** PRs 4–6.
 
-**Validation:** shared adapter contract, rejected `--native`, missing/stale
-readiness, no implicit new conversation, credential boundary and source closure,
-GitHub target policy, installed-package smoke, and bounded live Codex/Claude
-journeys on the exact artifact.
-
-## PR 8 — Build the one-time migration and cutover interlock (`memoro-cli`)
+## PR 8 — Build the one-time migration and cutover interlock (`memoro-cli`) — merged (#270)
 
 **Purpose:** preserve real sessions while ending legacy authority permanently.
 
@@ -170,13 +145,25 @@ completion. The migrator is finite and never becomes a runtime fallback.
 
 **Dependencies:** PRs 1–2 and 5–7.
 
-**Validation:** every supported old schema fixture, duplicate and ambiguous
-identity, live-host refusal, interruption at every write boundary, retry,
-rollback before publication, exact backup, no dual writer, old-binary
-interlock, a registry `live` row whose exact lifecycle journal says `exited`,
-and no legacy read after completion.
+**Known defect (open):** the interlock treats a recorded `live` lifecycle
+journal or registry row as a live runtime without checking whether the process
+still exists. A machine whose old sessions all exited therefore refuses to
+migrate forever, which is the current "mc is unusable" state. PR 8b below fixes
+it.
 
-## PR 9 — Cut over the daily lifecycle and session list (`memoro-cli`)
+## PR 8b — Derive cutover liveness from real processes (`memoro-cli`)
+
+**Purpose:** make the interlock refuse only for runtimes that actually exist.
+
+**Scope:** in the legacy lifecycle inspection, treat a recorded `live` host
+journal, registry row, or managed generation as blocking only when its exact
+recorded process is alive; keep refusing while the global or cloud broker
+process is alive; report the blocking sessions and the reason each one blocks,
+so the user can act instead of guessing.
+
+**Dependencies:** PR 8.
+
+## PR 9 — Cut over the daily lifecycle and session list (`memoro-cli`) — merged (#271)
 
 **Purpose:** route the user-visible core to source-owned V1 sessions.
 
@@ -190,13 +177,7 @@ UserSession WebSocket as a runtime command or liveness channel.
 
 **Dependencies:** PRs 4 and 8.
 
-**Validation:** full fresh/new/open/attach/exit/reopen journey; multiple
-workspaces; rename; absent workspace; same names across sources; JSON stability;
-offline local list; 1,000 sessions; busy runtime; cloud reachability; and no
-registry/global-broker imports or local-runtime UserSession WebSocket traffic
-in active commands.
-
-## PR 10 — Separate end, delete, and resource cleanup (`memoro-cli`)
+## PR 10 — Separate end, delete, and resource cleanup (`memoro-cli`) — merged (#275)
 
 **Purpose:** make lifecycle cleanup predictable and non-destructive by default.
 
@@ -207,12 +188,7 @@ deletion.
 
 **Dependencies:** PR 9.
 
-**Validation:** live/idle/dead sessions, interrupted end, external and relocated
-workspaces, mc-created worktrees, dirty/unmerged Git state, forged/stale
-receipts, repeated cleanup, and guarantees that end alone changes no Git
-resource.
-
-## PR 11A — Remove local legacy implementation and certify V1 (`memoro-cli`)
+## PR 11A — Remove local legacy implementation (`memoro-cli`)
 
 **Purpose:** leave one comprehensible implementation rather than another
 half-finished cutover.
@@ -222,16 +198,12 @@ resume branches, local GitHub fallback code, legacy environment contracts, and
 superseded active documentation; remove the local-runtime heartbeat WebSocket,
 its `runtime_event` path, and the legacy credential-domain double-persist
 recovery branch; retain only bounded migration readers and non-executable
-backups; publish the command/support matrix and measured performance comparison.
+backups; publish the command/support matrix.
 
-**Dependencies:** PR 10 and successful migration/release-candidate journeys.
+Deleting a legacy subsystem includes deleting the tests that only existed to
+assert it. Those deletions are part of this PR, not a later cleanup.
 
-**Validation:** source-inventory assertions for forbidden imports/vocabulary,
-full test suite, credential/security suites, `npm pack` installation smoke,
-local migration smoke, PTY stress suite, and live Codex/Claude/GitHub App
-journeys. Source inventory also proves that local runtime liveness has no
-UserSession `ping`/`pong` dependency and credential cleanup is receipt-driven
-and idempotent after its source directory is gone.
+**Dependencies:** PR 8b, PR 10, and a successful local migration journey.
 
 ## PR 11B — Retire server legacy routes (`memoro`)
 
@@ -247,16 +219,26 @@ approved retention operation.
 **Dependencies:** PR 11A released, V1 control-plane deployed, and verified
 absence of supported old-client traffic.
 
-**Validation:** route-removal tests, no legacy writes, V1 local/cloud/GitHub
-journeys, tenancy export/deletion, SQL governance, full affected tests, and
-production-readiness review before a separately approved deployment.
+## PR 12 — Rebuild validation deliberately (`memoro-cli`)
+
+**Purpose:** end the suspension with a suite that can run to completion and
+means something, rather than reintroducing assertions one PR at a time.
+
+**Scope:** inventory every remaining test against current architecture; delete
+what asserts removed subsystems; classify what survives; decide which
+invariants of the V1 session contract are worth asserting at all and at which
+level; make the suite hermetic and finite on a loaded developer machine;
+restore the delivery-flow rule in `docs/coding-agent-protocol.md` once the
+suite is trustworthy. The appendix below is the input inventory.
+
+**Dependencies:** PR 11A. Independent of `memoro`-side work.
 
 ## Dependency and merge order
 
 ```text
 PR 0
-  ├─> PR 1 ─> PR 2 ─> PR 5 ─> PR 6 ─> PR 7 ─> PR 8 ─> PR 9 ─> PR 10 ─> PR 11A
-  └─> PR 3 ─> PR 4 ────────────────────────────────────┘
+  ├─> PR 1 ─> PR 2 ─> PR 5 ─> PR 6 ─> PR 7 ─> PR 8 ─> PR 8b ─> PR 9 ─> PR 10 ─> PR 11A ─> PR 12
+  └─> PR 3 ─> PR 4 ──────────────────────────────────────────────┘
 
 PR 4 deployed before the V1 CLI release
 PR 11A released and verified before PR 11B
@@ -264,7 +246,9 @@ PR 11A released and verified before PR 11B
 
 PRs 3–4 may be implemented in parallel with PRs 1–2 after PR 0, but merge and
 rollout follow the dependency graph. The local chain is stacked because later
-steps replace the same lifecycle surface.
+steps replace the same lifecycle surface. PRs 9 and 10 merged before PR 8b
+existed; PR 8b is sequenced next because nothing downstream is reachable on a
+machine that cannot migrate.
 
 ## Review contract after every PR
 
@@ -272,14 +256,70 @@ The review records:
 
 1. the contract clauses delivered by the PR;
 2. scope and non-goal compliance;
-3. tests and live evidence actually run;
+3. what was and was not exercised, stated honestly and without claiming runs
+   that did not happen;
 4. security and destructive negative-space findings;
 5. migration and rollback behavior;
 6. loose ends, classified as blocking or a named later PR;
 7. cumulative compatibility with all already-reviewed PRs.
 
-If the review passes and checks are terminal, the PR may merge in the declared
-order. Any change to source ownership, session identity, workspace freedom,
-single-path execution, cleanup authority, or the deferred cross-source scope
-changes this contract and requires explicit agreement before implementation
-continues.
+If the review passes, the PR may merge in the declared order. Any change to
+source ownership, session identity, workspace freedom, single-path execution,
+cleanup authority, or the deferred cross-source scope changes this contract and
+requires explicit agreement before implementation continues.
+
+## Appendix — deferred validation inventory (not executable)
+
+Preserved from the pre-revision plan as input for PR 12. These lines describe
+what each slice was once expected to prove. They are not a to-do list, not a
+merge gate, and not an instruction to write tests during PRs 8b–11B.
+
+- **PR 0:** links resolve, conflicting active-plan claims are marked, no runtime
+  files change, and `git diff --check` passes.
+- **PR 1:** create/read/update/rename races, malformed and symlinked state,
+  interrupted writes, one corrupt session among healthy sessions, name-claim
+  repair, permissions, and a 1,000-session enumeration fixture.
+- **PR 2:** multiple repositories, multiple worktrees of one repository,
+  ordinary directories, same basenames, relocated/missing paths, external versus
+  mc-created resources, forged ownership, and destructive negative space.
+- **PR 3:** migration tests, source/name uniqueness, user isolation,
+  projection-versus-canonical constraints, runtime-generation ordering, SQL
+  inventory/governance, export, and account deletion.
+- **PR 4:** authentication, tenancy, source spoofing, stale observations, KV
+  loss, Durable Object concurrency, multiple workspaces, wrong-repository GitHub
+  requests, local/cloud authority separation, and existing cloud-runtime
+  security suites.
+- **PR 5:** concurrent starts, accepted-outcome timeouts, crash at every journal
+  phase, replay/idempotency, missing/conflicting handles, explicit replacement,
+  Codex↔Claude switch, and zero transcript/argv/env leakage.
+- **PR 6:** alternate-screen fixture, Unicode/chunk boundaries, resize, slow and
+  disconnected clients, sustained output flood, attach during output, host
+  crash/restart, no duplicate process, bounded memory, and event-loop/list
+  latency benchmarks compared with the recorded baseline.
+- **PR 7:** shared adapter contract, rejected `--native`, missing/stale
+  readiness, no implicit new conversation, credential boundary and source
+  closure, GitHub target policy, installed-package smoke, and bounded live
+  Codex/Claude journeys on the exact artifact.
+- **PR 8:** every supported old schema fixture, duplicate and ambiguous
+  identity, live-host refusal, interruption at every write boundary, retry,
+  rollback before publication, exact backup, no dual writer, old-binary
+  interlock, a registry `live` row whose exact lifecycle journal says `exited`,
+  and no legacy read after completion.
+- **PR 9:** full fresh/new/open/attach/exit/reopen journey; multiple workspaces;
+  rename; absent workspace; same names across sources; JSON stability; offline
+  local list; 1,000 sessions; busy runtime; cloud reachability; and no
+  registry/global-broker imports or local-runtime UserSession WebSocket traffic
+  in active commands.
+- **PR 10:** live/idle/dead sessions, interrupted end, external and relocated
+  workspaces, mc-created worktrees, dirty/unmerged Git state, forged/stale
+  receipts, repeated cleanup, and guarantees that end alone changes no Git
+  resource.
+- **PR 11A:** source-inventory assertions for forbidden imports/vocabulary, full
+  test suite, credential/security suites, `npm pack` installation smoke, local
+  migration smoke, PTY stress suite, and live Codex/Claude/GitHub App journeys.
+  Source inventory also proves that local runtime liveness has no UserSession
+  `ping`/`pong` dependency and credential cleanup is receipt-driven and
+  idempotent after its source directory is gone.
+- **PR 11B:** route-removal tests, no legacy writes, V1 local/cloud/GitHub
+  journeys, tenancy export/deletion, SQL governance, full affected tests, and
+  production-readiness review before a separately approved deployment.
