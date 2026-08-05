@@ -36,6 +36,7 @@ export function sessionHomePaths({
       mutationLockPath: join(runRoot, 'locks', 'sessions', mcSessionId),
       ephemeralRunPath,
       runtimeHostManifestPath: join(ephemeralRunPath, 'host.json'),
+      runtimeExitTailPath: join(ephemeralRunPath, 'exit-tail.txt'),
       runtimeHostSocketPath: join(ephemeralRunPath, 'terminal.sock'),
       githubCapabilitySocketPath: join(ephemeralRunPath, 'github.sock'),
       runtimeToolsBinPath: join(ephemeralRunPath, 'tools', 'bin'),
