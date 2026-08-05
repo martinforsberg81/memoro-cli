@@ -17,6 +17,7 @@ import {
 } from '../../mc/session-runtime-journal.js';
 import { assertGenerationId } from '../../mc/session-record-ids.js';
 import { log } from '../../mc/logger.js';
+import { restoreArchivedTranscriptSync } from '../../mc/transcript-restore.js';
 import { readSessionLegacyReferenceSync } from '../../mc/session-legacy-reference.js';
 import {
   managedProviderArtifactContextForLaunch,
@@ -228,7 +229,30 @@ export async function prepareCertifiedLaunchPlan({
       ...launchOptions,
       ...(handoff.message === null ? {} : { handoffUserMessage: handoff.message }),
     };
-    log('launch.plan', {
+    // mc archived transcripts while it ran managed sessions. Launching the tool
+  // directly means the tool reads its own home, so a conversation whose only
+  // copy is in that archive would be unresumable — mc holding the bytes and
+  // unable to use them. Put it back before the tool looks.
+  if (UNMANAGED_EXECUTION && generation.intent.action === 'resume' && argv.expected_handle) {
+    const restored = restoreArchivedTranscriptSync({
+      mcHomeDir,
+      tool: adapter.provider_tool,
+      providerStateKey,
+      providerSessionId: argv.expected_handle,
+    });
+    if (restored.restored || restored.reason !== 'already-present') {
+      log('launch.transcript-restore', {
+        mc_session_id: mcSessionId,
+        tool: adapter.provider_tool,
+        handle: argv.expected_handle,
+        ok: restored.ok,
+        restored: restored.restored === true,
+        reason: restored.reason || null,
+        path: restored.path || null,
+      });
+    }
+  }
+  log('launch.plan', {
     mc_session_id: mcSessionId,
     generation_id: generationId,
     action: generation.intent.action,
