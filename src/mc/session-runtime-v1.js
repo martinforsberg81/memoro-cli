@@ -78,9 +78,27 @@ export async function openLocalSessionRuntime({
       stdout,
       stderr,
     });
-    return attached.ok
-      ? success({ action: 'attach', generation_id: generationId, code: attached.code })
-      : failure(attached.reason, attached.code);
+    if (attached.ok) {
+      return success({ action: 'attach', generation_id: generationId, code: attached.code });
+    }
+    // A runtime mc cannot attach to is not a runtime the user can use, and
+    // refusing here left the session unopenable by every verb — open, restart,
+    // end-and-reopen — because each of them starts by trying to attach again.
+    //
+    // The commonest cause is an mc that moved: the host identity includes the
+    // build that started it, so after an upgrade the recorded runtime belongs
+    // to a stranger. Whatever the cause, an unattachable runtime is a spent
+    // one. Retire the generation and continue into a fresh launch rather than
+    // reporting the attach failure as the session's verdict.
+    markGenerationFailed({
+      deps,
+      mcHomeDir,
+      mcSessionId,
+      generationId,
+      reason: attached.reason || 'runtime-not-attachable',
+    });
+    snapshot = (deps.inspectRuntime || inspectSessionRuntimeSync)({ mcHomeDir, mcSessionId });
+    decision = (deps.decideRuntimeAction || decideSessionRuntimeAction)(snapshot, { tool });
   }
 
   if (decision.action === 'manual-repair'
