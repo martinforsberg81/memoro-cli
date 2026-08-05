@@ -154,6 +154,7 @@ const BOUNDARY_REPORT_KEYS = Object.freeze([
  * check, plus the hostile canary probe, completes before custody is opened.
  */
 export async function prepareLocalCodexCredentialDomain({
+  resumeConversation = true,
   codingSessionId,
   domainGeneration = null,
   providerSessionId = null,
@@ -317,12 +318,14 @@ export async function prepareLocalCodexCredentialDomain({
       mkdirSync(path, { recursive: true, mode: 0o700 });
       chmodSync(path, 0o700);
     }
-    const restored = restoreManagedCodexSessionState({
-      root,
-      codingSessionId,
-      providerSessionId,
-      codexHome,
-    });
+    const restored = resumeConversation
+      ? restoreManagedCodexSessionState({
+        root,
+        codingSessionId,
+        providerSessionId,
+        codexHome,
+      })
+      : { ok: true, restored: false };
     if (!restored.ok) {
       return safeFailure(restored.reason);
     }
@@ -981,34 +984,45 @@ export function restoreManagedCodexSessionState({
   let manifestPath = projection.ok && validManagedSessionProjection(projection.value)
     ? join(stateRoot, projection.value.relative_manifest_path)
     : join(stateRoot, 'manifest.json');
-  let manifest;
-  try {
-    manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
-  } catch {
-    // No managed transcript for this conversation. Before giving up: a
-    // session that ran before managed execution wrote its rollout into the
-    // user's own Codex home and nowhere else, so the history is on the disk,
-    // just not anywhere mc controls. Adopting it is what makes those sessions
-    // resumable instead of quietly starting over.
+  const readManifest = (path) => {
+    try { return JSON.parse(readFileSync(path, 'utf8')); } catch { return null; }
+  };
+  let manifest = readManifest(manifestPath);
+  let adoptedNow = false;
+  // The store holds one archive per conversation and one pointer to the
+  // current one. A session that has since started a different conversation
+  // finds a pointer to somebody else's archive — the right answer is not
+  // "mismatch" but "that conversation is not archived yet". So: no manifest,
+  // or a manifest for a different conversation, both mean look for this one.
+  //
+  // A session that ran before managed execution wrote its rollout into the
+  // user's own Codex home and nowhere else. The history is on the disk, just
+  // not anywhere mc controls, and adopting it is what makes those sessions
+  // resumable instead of quietly starting over.
+  if (!manifest || manifest.provider_session_id !== providerSessionId) {
     const adopted = adoptNativeCodexTranscriptSync({
       stateRoot,
       codingSessionId,
       providerSessionId,
     });
-    if (!adopted.ok) return safeSessionStateFailure('managed-portable-session-manifest-missing');
-    try {
-      manifest = JSON.parse(readFileSync(adopted.manifestPath, 'utf8'));
-    } catch {
-      return safeSessionStateFailure('managed-portable-session-manifest-missing');
+    if (!adopted.ok) {
+      return safeSessionStateFailure(manifest
+        ? 'managed-portable-session-state-mismatch'
+        : 'managed-portable-session-manifest-missing');
     }
+    manifest = readManifest(adopted.manifestPath);
+    if (!manifest) return safeSessionStateFailure('managed-portable-session-manifest-missing');
     manifestPath = adopted.manifestPath;
+    adoptedNow = true;
   }
   const currentArchive = validManagedGenerationArchiveManifest(manifest);
   const legacyArchive = validManagedSessionManifest(manifest);
   if ((!currentArchive && !legacyArchive)
     || manifest.coding_session_id !== codingSessionId
     || manifest.provider_session_id !== providerSessionId
-    || (projection.ok && (
+    // Adoption republished the pointer as part of writing the archive, so the
+    // projection read before it is stale by construction, not by corruption.
+    || (!adoptedNow && projection.ok && (
       !validManagedSessionProjection(projection.value)
       || projection.value.coding_session_id !== codingSessionId
       || projection.value.provider_session_id !== providerSessionId

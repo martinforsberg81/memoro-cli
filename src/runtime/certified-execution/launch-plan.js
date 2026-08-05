@@ -153,6 +153,11 @@ export async function prepareCertifiedLaunchPlan({
   try {
     boundary = await adapter.prepare_boundary({
       codingSessionId: providerStateKey,
+      // Only a resume has something to restore. A start, a replacement, or a
+      // switch mints its conversation id here and there is nothing archived
+      // under it — demanding a matching archive made every session that had
+      // ever archived one unable to begin another.
+      resumeConversation: generation.intent.action === 'resume',
       domainGeneration: uuid(),
       providerSessionId: argv.expected_handle,
       cwd: generation.intent.launch_cwd,
