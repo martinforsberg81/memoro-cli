@@ -65,8 +65,25 @@ export function repoSlug(primaryPath, { collide = false, repositoryId = null } =
   return `${base}-${h}`;
 }
 
-export function worktreePath(primaryPath, name, { collide = false, repositoryId = null } = {}) {
-  return join(worktreesRoot(), repoSlug(primaryPath, { collide, repositoryId }), name);
+/**
+ * Where a session's worktrees live: `<mc home>/worktrees/<mc session id>/<name>`.
+ *
+ * The session id is the directory. That makes the ownership rule structural
+ * rather than a lookup — a worktree belongs to exactly one session because it
+ * physically sits under it, and releasing a session is removing one path.
+ *
+ * The old layout keyed on repository slug and session *name*, so renaming a
+ * session orphaned its directory, two sessions could land on one path, and
+ * nothing about the filesystem said who owned what. This machine still holds
+ * 54 directories from that scheme; they are read where they are and are not
+ * moved by this function.
+ */
+export function sessionWorktreesRoot(mcSessionId, root = mcHome()) {
+  return join(root, 'worktrees', mcSessionId);
+}
+
+export function sessionWorktreePath(mcSessionId, name, root = mcHome()) {
+  return join(sessionWorktreesRoot(mcSessionId, root), name);
 }
 
 /**
