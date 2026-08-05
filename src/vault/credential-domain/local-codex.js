@@ -978,14 +978,30 @@ export function restoreManagedCodexSessionState({
   }
   const stateRoot = managedSessionStateRoot(root, codingSessionId);
   const projection = readPrivateJsonFile(join(stateRoot, 'current.json'), 4096);
-  const manifestPath = projection.ok && validManagedSessionProjection(projection.value)
+  let manifestPath = projection.ok && validManagedSessionProjection(projection.value)
     ? join(stateRoot, projection.value.relative_manifest_path)
     : join(stateRoot, 'manifest.json');
   let manifest;
   try {
     manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
   } catch {
-    return safeSessionStateFailure('managed-portable-session-manifest-missing');
+    // No managed transcript for this conversation. Before giving up: a
+    // session that ran before managed execution wrote its rollout into the
+    // user's own Codex home and nowhere else, so the history is on the disk,
+    // just not anywhere mc controls. Adopting it is what makes those sessions
+    // resumable instead of quietly starting over.
+    const adopted = adoptNativeCodexTranscriptSync({
+      stateRoot,
+      codingSessionId,
+      providerSessionId,
+    });
+    if (!adopted.ok) return safeSessionStateFailure('managed-portable-session-manifest-missing');
+    try {
+      manifest = JSON.parse(readFileSync(adopted.manifestPath, 'utf8'));
+    } catch {
+      return safeSessionStateFailure('managed-portable-session-manifest-missing');
+    }
+    manifestPath = adopted.manifestPath;
   }
   const currentArchive = validManagedGenerationArchiveManifest(manifest);
   const legacyArchive = validManagedSessionManifest(manifest);
@@ -1799,6 +1815,103 @@ function reclaimAbandonedLeaseSync(leasePath) {
     }
   }
   try { unlinkSync(leasePath); return true; } catch { return false; }
+}
+
+const MAX_ADOPTED_TRANSCRIPT_BYTES = 512 * 1024 * 1024;
+
+/**
+ * Import a conversation's rollout from the user's own Codex home into the
+ * managed store, so a session that ran before managed execution can be
+ * resumed instead of silently starting over.
+ *
+ * This is a one-way copy of a file the user already owns, performed by mc and
+ * never by the sandboxed tool. The rules are the same ones the managed store
+ * applies to everything else it holds: the source must be a regular file the
+ * user owns inside their real Codex home, its name must carry the exact
+ * conversation id being resumed, and what lands in the store is private,
+ * digest-recorded, and never overwritten.
+ */
+function adoptNativeCodexTranscriptSync({ stateRoot, codingSessionId, providerSessionId }) {
+  const userCodexHome = resolveUserCodexHome();
+  const sessionsRoot = join(userCodexHome, 'sessions');
+  if (!boundedProviderId(providerSessionId)) return { ok: false };
+  let sourcePath;
+  try {
+    sourcePath = findNativeRolloutSync(sessionsRoot, providerSessionId);
+  } catch { return { ok: false }; }
+  if (!sourcePath) return { ok: false };
+
+  let stat;
+  try { stat = lstatSync(sourcePath); } catch { return { ok: false }; }
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.size <= 0
+    || stat.size > MAX_ADOPTED_TRANSCRIPT_BYTES) return { ok: false };
+  const expectedUid = typeof process.getuid === 'function' ? process.getuid() : null;
+  if (expectedUid !== null && stat.uid !== expectedUid) return { ok: false };
+
+  const generation = randomUUID();
+  const archiveRoot = join(stateRoot, 'generations', generation);
+  const relativeTranscriptPath = join('sessions', relative(sessionsRoot, sourcePath));
+  const transcriptPath = join(archiveRoot, relativeTranscriptPath);
+  const manifestPath = join(archiveRoot, 'manifest.json');
+  const projectionPath = join(stateRoot, 'current.json');
+  try {
+    ensurePrivateDirectoryChain(stateRoot, dirname(transcriptPath));
+    const temporary = `${transcriptPath}.${randomUUID()}.tmp`;
+    copyFileSync(sourcePath, temporary, constants.COPYFILE_EXCL);
+    chmodSync(temporary, 0o600);
+    fsyncFileSync(temporary);
+    linkSync(temporary, transcriptPath);
+    unlinkSync(temporary);
+    fsyncDirectorySync(dirname(transcriptPath));
+    const manifest = {
+      schema: MANAGED_GENERATION_ARCHIVE_SCHEMA,
+      coding_session_id: codingSessionId,
+      runtime_generation: generation,
+      provider_session_id: providerSessionId,
+      relative_transcript_path: relativeTranscriptPath,
+      transcript_sha256: sha256FileSync(transcriptPath),
+    };
+    const manifestBody = `${JSON.stringify(manifest)}\n`;
+    writeFileSync(manifestPath, manifestBody, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+    fsyncFileSync(manifestPath);
+    fsyncDirectorySync(dirname(manifestPath));
+    const projection = {
+      schema: MANAGED_SESSION_PROJECTION_SCHEMA,
+      coding_session_id: codingSessionId,
+      runtime_generation: generation,
+      provider_session_id: providerSessionId,
+      relative_manifest_path: relative(stateRoot, manifestPath),
+      archive_digest: sha256(manifestBody),
+    };
+    const temporaryProjection = `${projectionPath}.${randomUUID()}.tmp`;
+    ensurePrivateDirectoryChain(stateRoot, dirname(projectionPath));
+    writeFileSync(temporaryProjection, `${JSON.stringify(projection)}\n`, {
+      encoding: 'utf8', mode: 0o600, flag: 'wx',
+    });
+    fsyncFileSync(temporaryProjection);
+    renameSync(temporaryProjection, projectionPath);
+    fsyncDirectorySync(dirname(projectionPath));
+    return { ok: true, manifestPath, adopted: true };
+  } catch {
+    return { ok: false };
+  }
+}
+
+function findNativeRolloutSync(sessionsRoot, providerSessionId, depth = 0) {
+  if (depth > 6) return null;
+  let entries;
+  try { entries = readdirSync(sessionsRoot, { withFileTypes: true }); } catch { return null; }
+  const suffix = `-${providerSessionId}.jsonl`;
+  for (const entry of entries) {
+    const path = join(sessionsRoot, entry.name);
+    if (entry.isDirectory()) {
+      const found = findNativeRolloutSync(path, providerSessionId, depth + 1);
+      if (found) return found;
+    } else if (entry.isFile() && entry.name.endsWith(suffix)) {
+      return path;
+    }
+  }
+  return null;
 }
 
 function resolveVaultProbeTarget() {
