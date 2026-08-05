@@ -59,7 +59,23 @@ export async function loadManagedClaudeCustody({
         : 'managed-claude-custody-missing');
     }
     const wire = matches[0];
-    if (!Number.isSafeInteger(wire.revision) || wire.revision < 1) {
+    // TEMPORARY (mc is pre-production): tolerate a vault row that carries no
+    // revision at all.
+    //
+    // `revision` is the server's optimistic-concurrency counter for a vault
+    // secret, and `/api/vault/secrets` does not return one — no row has the
+    // field. So this refused every managed Claude launch, and re-adopting the
+    // sign-in could not help: there was nothing to adopt into. Until Memoro
+    // serves revisions, a missing one is read as 0 rather than treated as a
+    // malformed record. A row that does carry a revision must still carry a
+    // valid one.
+    //
+    // What this gives up: a credential refresh cannot detect that another
+    // device wrote the same secret first, because there is nothing to compare
+    // against. On one machine that is nothing; across devices sharing a vault
+    // it is a real risk of overwriting a newer token.
+    const revisionPresent = wire.revision !== undefined && wire.revision !== null;
+    if (revisionPresent && (!Number.isSafeInteger(wire.revision) || wire.revision < 1)) {
       return failure('managed-claude-custody-revision-required');
     }
     let secret;
@@ -74,7 +90,7 @@ export async function loadManagedClaudeCustody({
     return {
       ok: true,
       secretId: wire.id,
-      revision: wire.revision,
+      revision: revisionPresent ? wire.revision : 0,
       updatedAt: typeof wire.updated_at === 'string' ? wire.updated_at : null,
       data: structuredClone(secret.data),
       grant: parsed.grant,

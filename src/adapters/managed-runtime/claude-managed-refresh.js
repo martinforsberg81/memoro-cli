@@ -18,10 +18,17 @@ const REFRESH_TIMEOUT_MS = 30_000;
 const REFRESH_SKEW_MS = 5 * 60_000;
 const MAX_REFRESH_DELAY_MS = 15 * 60_000;
 const MIN_REFRESH_DELAY_MS = 1_000;
+// Claude Code's stored grant, as `claude login` writes it. The list is an
+// allowlist: an unknown key rejects the whole grant, which is the right
+// default for a credential record but makes it a maintenance surface —
+// `refreshTokenExpiresAt` appeared in a Claude release and refused every
+// managed launch with `managed-claude-refresh-grant-required`, on a sign-in
+// that was completely valid.
 const KNOWN_OAUTH_KEYS = Object.freeze([
   'accessToken',
   'refreshToken',
   'expiresAt',
+  'refreshTokenExpiresAt',
   'scopes',
   'subscriptionType',
   'rateLimitTier',
@@ -172,6 +179,8 @@ function validOauthGrant(value, { requireRefresh }) {
     || !safeToken(value.accessToken)
     || ('refreshToken' in value && !safeToken(value.refreshToken))
     || ('expiresAt' in value && numericTimestamp(value.expiresAt) === null)
+    || ('refreshTokenExpiresAt' in value
+      && numericTimestamp(value.refreshTokenExpiresAt) === null)
     || ('scopes' in value && !validScopes(value.scopes))
     || ('subscriptionType' in value && typeof value.subscriptionType !== 'string')
     || ('rateLimitTier' in value && typeof value.rateLimitTier !== 'string')) {
@@ -191,6 +200,9 @@ function orderedGrant(value) {
     expiresAt: numericTimestamp(value.expiresAt),
     scopes: [...value.scopes],
   };
+  if (numericTimestamp(value.refreshTokenExpiresAt) !== null) {
+    out.refreshTokenExpiresAt = numericTimestamp(value.refreshTokenExpiresAt);
+  }
   if (typeof value.subscriptionType === 'string') {
     out.subscriptionType = value.subscriptionType;
   }

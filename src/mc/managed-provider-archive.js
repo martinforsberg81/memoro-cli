@@ -470,10 +470,25 @@ function publishImmutableBody({
   fsyncDirectory(dirname(targetPath));
 }
 
+/**
+ * Where a provider's transcript archives live.
+ *
+ * This used to be `managed-provider-state/`, which the V1 cutover seals: the
+ * interlock replaces that directory with a read-only file so an older binary
+ * cannot write to migrated state. The V1 Claude path kept writing there, so
+ * every archive failed with `ENOTDIR` on a migrated machine and no Claude
+ * session could archive or resume anything.
+ *
+ * `provider-session-state/` is the V1 root — it is what the Codex domain has
+ * always used, which is why Codex was unaffected — and the cutover does not
+ * touch it. Nothing is lost by moving: the sealed directory's contents are
+ * preserved in the cutover's quarantine and backup, and nothing could read
+ * them through this path anyway.
+ */
 function providerStateRoot(root, tool, codingSessionId) {
   return join(
     resolve(root),
-    'managed-provider-state',
+    'provider-session-state',
     safePart(tool),
     safePart(codingSessionId),
   );
