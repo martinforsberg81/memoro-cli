@@ -73,6 +73,7 @@ async function routeV1Command(args) {
     storage: './mc/commands/storage.js',
     doctor: './mc/commands/doctor.js',
     worktrees: './mc/commands/worktrees.js',
+    worktree: './mc/commands/worktree.js',
     restart: './cli/restart.js',
     migrate: './mc/commands/migrate.js',
   };
