@@ -33,6 +33,7 @@ MAINTENANCE
   mc storage status [--json]       Summarize durable and ephemeral session state
   mc storage explain <name>        Explain one session's stored resources
   mc storage repair [--apply]      Plan or apply loss-free storage repairs
+  mc worktrees [--json]            What is lying around, and whose it is
   mc gc [--dry-run|--apply]        Remove stale runtime homes; never Git resources
   mc migrate [--dry-run] [--stop-legacy-runtimes]
                                     Move pre-V1 sessions into session homes, once
