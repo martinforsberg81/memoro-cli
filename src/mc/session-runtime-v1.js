@@ -155,6 +155,52 @@ export async function openLocalSessionRuntime({
     deps: deps.certifiedExecution || {},
   });
   let prepared = await planLaunch(generation);
+  // A conversation mc cannot resume does not mean the session has none. mc
+  // itself creates replacement conversations when a resume fails, so the
+  // newest one is often an empty stand-in for a real history one step back —
+  // and replacing it again on every open builds a chain of empty
+  // conversations while the work sits just behind them. So walk back through
+  // what the session actually recorded and resume the newest one that can be,
+  // before concluding there is nothing to continue.
+  if (!prepared?.ok && UNRESUMABLE_CONVERSATION.has(prepared?.reason)) {
+    const tried = new Set([conversationTargetedBy(generation)].filter(Boolean));
+    for (const candidate of [...snapshot.conversations].reverse()) {
+      if (tried.has(candidate.conversation_id) || candidate.tool !== selectedTool) continue;
+      tried.add(candidate.conversation_id);
+      markGenerationFailed({
+        deps,
+        mcHomeDir,
+        mcSessionId,
+        generationId: generation.intent.generation_id,
+        reason: prepared.reason,
+      });
+      let candidateGeneration;
+      try {
+        candidateGeneration = (deps.beginGeneration || beginRuntimeGenerationSync)({
+          mcHomeDir,
+          mcSessionId,
+          action: 'resume',
+          resumeConversationId: candidate.conversation_id,
+          tool: selectedTool,
+          workspaceId: workspace.workspace_id,
+          launchCwd: workspace.current_path,
+        });
+      } catch { break; }
+      const attempt = await planLaunch(candidateGeneration);
+      if (attempt?.ok) {
+        generation = candidateGeneration;
+        prepared = attempt;
+        break;
+      }
+      if (!UNRESUMABLE_CONVERSATION.has(attempt?.reason)) {
+        generation = candidateGeneration;
+        prepared = attempt;
+        break;
+      }
+      generation = candidateGeneration;
+      prepared = attempt;
+    }
+  }
   if (!prepared?.ok && UNRESUMABLE_CONVERSATION.has(prepared?.reason)) {
     // The session records which conversation it was using, but that
     // conversation's transcript was never written anywhere mc controls — it
@@ -316,12 +362,26 @@ export async function openLocalSessionRuntime({
     : failure(attached.reason, attached.code);
 }
 
+/**
+ * The conversation a generation names, or null when it names none.
+ *
+ * Guessing here is worse than not knowing: a replacement generation targets no
+ * conversation, and treating the newest one as "already tried" skipped exactly
+ * the conversation worth resuming.
+ */
+function conversationTargetedBy(generation) {
+  return generation?.intent?.resume_conversation_id || null;
+}
+
 // Reasons that mean "the recorded conversation has no transcript to resume",
 // as opposed to a transcript that is present but unreadable — those stay hard
 // failures, because a damaged transcript is not the same as an absent one.
 const UNRESUMABLE_CONVERSATION = new Set([
   'managed-portable-session-manifest-missing',
   'managed-portable-session-source-missing',
+  // The store holds an archive, but not for this conversation. Same meaning
+  // as no archive at all: this conversation cannot be resumed from here.
+  'managed-portable-session-state-mismatch',
 ]);
 
 function generationIntentFromDecision(decision, snapshot, { tool, workspace }) {
