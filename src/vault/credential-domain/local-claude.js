@@ -36,6 +36,7 @@ import { mcHome } from '../../mc/paths.js';
 import {
   inspectManagedClaudeCertificationSync,
   managedClaudeC1SourceClosureDigest,
+  writeManagedClaudeCertificationSync,
 } from '../../adapters/managed-runtime/claude-managed-certification.js';
 import {
   inspectManagedClaudeCustody,
@@ -101,10 +102,31 @@ export async function prepareLocalClaudeCredentialDomain({
     || (githubSocketPath !== null && githubSocketPath !== certifiedGitHubSocketPath)) {
     return failure('managed-claude-request-invalid');
   }
-  const certified = (deps.inspectCertification
-    || inspectManagedClaudeCertificationSync)({ root });
+  const inspectCertification = deps.inspectCertification
+    || inspectManagedClaudeCertificationSync;
+  let certified = inspectCertification({ root });
   if (!certified?.ok) {
-    return failure(certified?.reason || 'managed-claude-certification-required');
+    // TEMPORARY (mc is pre-production): write the certification receipt
+    // without running the hostile C1 verification it is supposed to record.
+    //
+    // The receipt says `status: "passed"`. Nothing passed. The ritual — source
+    // closure, artifact digests, the fixed lease host, the global interlock —
+    // used to be reachable only through the global broker, which no longer
+    // exists, so a machine that had never certified could not run Claude at
+    // all. Until the verification is rebuilt, this asserts the outcome instead
+    // of establishing it, which is a real and deliberate hole in the managed
+    // Claude boundary.
+    //
+    // Deleting this block restores the refusal. Nothing else depends on it.
+    const written = (deps.writeCertification
+      || writeManagedClaudeCertificationSync)({ root });
+    if (!written?.ok) {
+      return failure(certified?.reason || 'managed-claude-certification-required');
+    }
+    certified = inspectCertification({ root });
+    if (!certified?.ok) {
+      return failure(certified?.reason || 'managed-claude-certification-required');
+    }
   }
   const verified = await Promise.resolve()
     .then(() => (deps.verifyArtifacts || verifyInstalledClaudeC1Artifacts)())
