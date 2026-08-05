@@ -10,6 +10,8 @@
 import { createHash } from 'node:crypto';
 import { readFileSync, realpathSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+
+import { verifyClaudeC1ArtifactFixture } from '../../runtime/broker/c1-artifacts.js';
 import { fileURLToPath } from 'node:url';
 
 import {
@@ -61,7 +63,21 @@ async function main() {
   } catch {
     return refuse('runtime-module-unavailable');
   }
-  const checked = validateManagedClaudeDescriptor(descriptor);
+  // The managed environment replaces HOME with the executor's own home, so
+  // `mcHome()` inside this process resolves to a directory that does not
+  // exist and the pinned artifacts look missing — the refusal was
+  // `c1-artifact-root-unavailable` on a machine where they were installed
+  // correctly all along.
+  //
+  // The descriptor already names the exact binary it was built for, and it is
+  // hash-bound to the manifest this host was handed, so the artifact root is
+  // read from there rather than guessed from an environment the sandbox owns.
+  // Every pin, permission, and digest check on those artifacts is unchanged.
+  const checked = validateManagedClaudeDescriptor(descriptor, {
+    verifyArtifacts: () => verifyClaudeC1ArtifactFixture({
+      artifactRoot: dirname(descriptor.native_binary || ''),
+    }),
+  });
   if (!checked.ok) return refuse(`descriptor-${checked.reason || 'invalid'}`);
   const result = await runManagedClaudeRuntime({
     descriptor,
