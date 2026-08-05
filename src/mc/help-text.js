@@ -22,6 +22,7 @@ LOCAL SESSIONS
   mc sessions send <name> <text>   Write to the exact live local terminal
   mc sessions read <name> [--last N]
                                     Read its bounded current screen
+  mc restart <name>                Replace the runtime; keep everything else
   mc end <name>                    Stop and archive; keep every workspace
   mc cleanup <name> --dry-run|--apply
                                     Clean only exactly proven mc-owned resources
@@ -75,7 +76,9 @@ IDENTITY
   may change without changing that identity.
 
 REQUIREMENTS
-  - Run from any directory you want to associate with the session.
+  - Run from any directory you want to associate with the session. mc does not
+    require a Git repository; a repository is one thing a workspace may be.
+  - Plain mc lists your sessions.
   - Install and authenticate the selected coding tool.
   - Sign in to Memoro only for cloud listing and connected capabilities.
 
