@@ -412,7 +412,14 @@ export class CertifiedLaunchPlan {
       handle,
       artifact: {
         schema: 'mc-provider-artifact-v1',
-        coding_session_id: this.#mcSessionId,
+        // The key the credential domain was opened under, not the session's
+        // own id. Since a migrated session's provider state is stored under
+        // the id the old registry gave it, those two stopped being the same
+        // thing, and the archive refused every close with
+        // `managed-provider-archive-input-invalid` — it validates that the
+        // artifact and the descriptor agree. Reading it off the descriptor
+        // makes them agree by construction rather than by coincidence.
+        coding_session_id: this.#boundary.descriptor.session_id,
         runtime_generation: this.#boundary.descriptor.generation,
         tool: this.#providerTool,
         provider_session_id: handle,
