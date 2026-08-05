@@ -33,6 +33,10 @@ MAINTENANCE
   mc storage status [--json]       Summarize durable and ephemeral session state
   mc storage explain <name>        Explain one session's stored resources
   mc storage repair [--apply]      Plan or apply loss-free storage repairs
+  mc work                          Pieces of work under ~/mc, derived from git
+  mc work add <name> <repo> [branch]
+                                    Add a repository's worktree to that work
+  mc work release <name> [--apply] Remove what git says can go; keep the rest
   mc worktree add <name> <branch>  Create a worktree this session owns
   mc worktree list <name>          What this session owns
   mc worktrees [--json]            What is lying around, and whose it is
