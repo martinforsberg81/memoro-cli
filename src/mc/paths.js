@@ -66,6 +66,30 @@ export function repoSlug(primaryPath, { collide = false, repositoryId = null } =
 }
 
 /**
+ * The work root: `~/mc`.
+ *
+ * A piece of work is a directory. What lies under it belongs to it — the
+ * worktrees it spans, one per repository, plus one small file recording the
+ * tool conversation. Nothing else is stored, because nothing else is mc's to
+ * know: git owns worktrees and branches, the tools own their transcripts, the
+ * filesystem owns the directories.
+ *
+ * mc used to keep a copy of all of that and then had to hold the copy true.
+ * Every refusal this week was that copy disagreeing with reality.
+ */
+export function workRoot(env = process.env) {
+  return env.MC_WORK_ROOT || join(homedir(), 'mc');
+}
+
+export function workAreaPath(name, env = process.env) {
+  return join(workRoot(env), name);
+}
+
+export function workAreaStatePath(name, env = process.env) {
+  return join(workAreaPath(name, env), '.mc.json');
+}
+
+/**
  * Where a session's worktrees live: `<mc home>/worktrees/<mc session id>/<name>`.
  *
  * The session id is the directory. That makes the ownership rule structural
