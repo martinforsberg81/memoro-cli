@@ -27,7 +27,7 @@ export const MANAGED_CLAUDE_RUNTIME_SOURCE_SHA256 = Object.freeze({
   'src/adapters/managed-runtime/claude-managed-policy.js': '432352bff556ea7d26820d880e95e9be8fffabd73e02113537e1f7349a82daa7',
   'src/adapters/managed-runtime/claude-managed-refresh-owner.js': '0e664560c27ea5ce4f36d70f2ab13236ae0d5663a914a64b493d57d44c928964',
   'src/adapters/managed-runtime/claude-managed-refresh.js': '872ea97b67d1e05a2b781fc56fa8eb09890ac97ffca302713435ded3fa12a144',
-  'src/adapters/managed-runtime/claude-managed-runtime.js': '91f4e264479930e3630e9b3cf588dd977f98ba6e97fb42ee550d26ccddf581a1',
+  'src/adapters/managed-runtime/claude-managed-runtime.js': '02b5f96e1c6eae433e9835b883f9552245f41fe4dfd695652a3c3b5738bdc6e7',
   'src/adapters/managed-runtime/claude-managed.js': 'a1d8ab1bfbc4d29eb8558c7effcbba54372a593f7ab0d2bbb15ec72842d54737',
   'src/vault/engine/api.js': 'c1d88a10e2c2bdcc742f0e98a204d5e23e1e5a8266c4e84c9387aa647addb896',
   'src/vault/engine/client-crypto.js': 'e0b67cd8915232d95aee815f967cb5e104399d4ffdcbf1276bdebe92cde71831',

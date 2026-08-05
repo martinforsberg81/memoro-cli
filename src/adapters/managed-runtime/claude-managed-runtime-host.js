@@ -23,7 +23,7 @@ const SOURCE_CLOSURE_PATH = join(
   'claude-managed-runtime-source-closure.js',
 );
 const SOURCE_CLOSURE_SHA256 =
-  '4f6c46bd1a6114e329383c6e4a44edce1133a4cb880f2ba021751ac679c94d73';
+  '270c244aa1caaa5e03c07327027ed5e40e9ecc89676ffa2a525f3583317eeab3';
 
 /**
  * Every refusal here used to be a bare `return 1`, so a managed Claude launch

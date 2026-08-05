@@ -310,6 +310,12 @@ function runtimeFailure(code) {
 
 function overwriteRuntimeFailure(result, code) {
   if (!result) return;
+  // An unconfirmed teardown still fails the run — that property is unchanged.
+  // But it must not erase why the run failed in the first place: when the
+  // launch never got as far as a proxy port, this check cannot confirm
+  // anything, and overwriting turned every early failure into
+  // `sandbox-reset-unconfirmed`, hiding the only cause worth reporting.
+  if (result.ok === false && result.code) return;
   result.ok = false;
   result.code = code;
   result.exit_code = null;
