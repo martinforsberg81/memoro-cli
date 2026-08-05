@@ -76,6 +76,7 @@ export async function prepareLocalClaudeCredentialDomain({
   codingSessionId,
   domainGeneration = null,
   providerSessionId = null,
+  resumeConversation = true,
   githubCapability = false,
   githubSocketPath = null,
   cwd,
@@ -187,14 +188,34 @@ export async function prepareLocalClaudeCredentialDomain({
     ]) {
       ensurePrivateDirectory(root, path);
     }
-    const restored = restoreManagedProviderArchive({
+    let restored = restoreManagedProviderArchive({
       root,
       tool: TOOL,
       codingSessionId,
       providerSessionId,
       providerRoot: claudeConfigDir,
     });
-    if (providerSessionId != null && !restored.ok) return restored;
+    // A session that ran before managed execution left its transcript in the
+    // user's own Claude home and nowhere mc controls, so the archive is
+    // genuinely absent and resuming would silently start over. The transcript
+    // is on the same disk; adopting it is what makes the session continue.
+    if (providerSessionId != null && !restored.ok && resumeConversation) {
+      const adopted = adoptNativeClaudeTranscript({
+        root,
+        codingSessionId,
+        providerSessionId,
+      });
+      if (adopted.ok) {
+        restored = restoreManagedProviderArchive({
+          root,
+          tool: TOOL,
+          codingSessionId,
+          providerSessionId,
+          providerRoot: claudeConfigDir,
+        });
+      }
+    }
+    if (providerSessionId != null && resumeConversation && !restored.ok) return restored;
 
     const loadedPermissions = (deps.loadUserClaudePermissions
       || loadManagedClaudeUserPermissions)();
@@ -788,4 +809,62 @@ function closeFailure(reason, extra = {}) {
 
 function failure(reason) {
   return { ok: false, reason, error: reason };
+}
+
+const MAX_ADOPTED_TRANSCRIPT_BYTES = 512 * 1024 * 1024;
+
+/**
+ * Import a conversation's transcript from the user's own Claude home into the
+ * managed archive, so a session that ran before managed execution resumes its
+ * work instead of starting over.
+ *
+ * Every rule the archive already enforces still applies — it is the same
+ * writer, given the user's Claude home as the provider root. What is new is
+ * only where the file is read from: a regular file the user owns, named for
+ * the exact conversation being resumed, copied by mc and never by the
+ * sandboxed tool.
+ */
+function adoptNativeClaudeTranscript({ root, codingSessionId, providerSessionId }) {
+  const userClaudeHome = join(homedir(), '.claude');
+  const projectsRoot = join(userClaudeHome, 'projects');
+  let sourcePath;
+  try {
+    sourcePath = findNativeClaudeTranscript(projectsRoot, `${providerSessionId}.jsonl`);
+  } catch { return { ok: false }; }
+  if (!sourcePath) return { ok: false };
+  let stat;
+  try { stat = lstatSync(sourcePath); } catch { return { ok: false }; }
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.size <= 0
+    || stat.size > MAX_ADOPTED_TRANSCRIPT_BYTES) return { ok: false };
+  const expectedUid = typeof process.getuid === 'function' ? process.getuid() : null;
+  if (expectedUid !== null && stat.uid !== expectedUid) return { ok: false };
+  return persistManagedProviderArchive({
+    root,
+    tool: TOOL,
+    descriptor: { session_id: codingSessionId },
+    providerArtifact: {
+      tool: TOOL,
+      coding_session_id: codingSessionId,
+      runtime_generation: randomUUID(),
+      provider_session_id: providerSessionId,
+      transcript_path: sourcePath,
+    },
+    providerRoot: userClaudeHome,
+  });
+}
+
+function findNativeClaudeTranscript(directory, fileName, depth = 0) {
+  if (depth > 6) return null;
+  let entries;
+  try { entries = readdirSync(directory, { withFileTypes: true }); } catch { return null; }
+  for (const entry of entries) {
+    const path = join(directory, entry.name);
+    if (entry.isDirectory()) {
+      const found = findNativeClaudeTranscript(path, fileName, depth + 1);
+      if (found) return found;
+    } else if (entry.isFile() && entry.name === fileName) {
+      return path;
+    }
+  }
+  return null;
 }
