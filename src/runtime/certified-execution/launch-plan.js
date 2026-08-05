@@ -30,6 +30,29 @@ import { CertifiedGitHubSocketHost } from './github-socket-host.js';
 
 const MAX_HANDOFF_BYTES = 128 * 1024;
 
+// The credential-blind execution stack is disconnected. See the note in
+// prepareCertifiedLaunchPlan: mc runs the user's own tool, with the user's own
+// sign-in, on the user's own machine.
+const UNMANAGED_EXECUTION = true;
+
+/**
+ * Spawn the tool exactly as the user would, with the session's environment.
+ */
+function nativeProcessPlan({ launch, argv, env, launchOptions }) {
+  let spawn;
+  try {
+    spawn = typeof launch?.spec?.spawn === 'function'
+      ? launch.spec.spawn(argv || [], launchOptions)
+      : { bin: launch?.spec?.bin, args: launch?.spec?.args?.(argv || [], launchOptions) };
+  } catch {
+    return { ok: false, reason: 'native-process-plan-invalid' };
+  }
+  if (!spawn || typeof spawn.bin !== 'string' || !spawn.bin || !Array.isArray(spawn.args)) {
+    return { ok: false, reason: 'native-process-plan-invalid' };
+  }
+  return { ok: true, command: spawn.bin, args: [...spawn.args], env: { ...(env || {}) } };
+}
+
 export async function prepareCertifiedLaunchPlan({
   mcHomeDir,
   mcSessionId,
@@ -97,17 +120,27 @@ export async function prepareCertifiedLaunchPlan({
   }
   if (!argv?.ok) return failure(argv?.reason || 'certified-launch-argv-unavailable');
 
-  let readiness;
-  try {
-    readiness = await adapter.inspect_readiness({
-      portal,
-      root: mcHomeDir,
-      deps: deps.readiness || {},
-    });
-  } catch {
-    readiness = null;
+  // The credential boundary is off. mc launches the tool the user already has,
+  // signed in the way the user already signed it in, in a PTY this session
+  // owns — which is what `codex resume <id>` does by hand, with the session
+  // keeping the name, workspace, journal and transcript around it.
+  //
+  // What is skipped: readiness attestation, the sandboxed credential domain,
+  // the pinned artifact and source-closure checks, custody, and the archive.
+  // Those exist for a machine that is not the user's own. This one is.
+  if (!UNMANAGED_EXECUTION) {
+    let readiness;
+    try {
+      readiness = await adapter.inspect_readiness({
+        portal,
+        root: mcHomeDir,
+        deps: deps.readiness || {},
+      });
+    } catch {
+      readiness = null;
+    }
+    if (!readiness?.ok) return failure(readiness?.reason || 'certified-readiness-unavailable');
   }
-  if (!readiness?.ok) return failure(readiness?.reason || 'certified-readiness-unavailable');
 
   let capabilities;
   try { capabilities = decodeSessionCapabilities(githubCapabilities); } catch {
@@ -151,7 +184,7 @@ export async function prepareCertifiedLaunchPlan({
   const providerStateKey = legacyProviderStateKey({ mcHomeDir, mcSessionId }) || mcSessionId;
   let boundary = null;
   try {
-    boundary = await adapter.prepare_boundary({
+    boundary = UNMANAGED_EXECUTION ? { ok: true, descriptor: null, env: baseEnv } : await adapter.prepare_boundary({
       codingSessionId: providerStateKey,
       // Only a resume has something to restore. A start, a replacement, or a
       // switch mints its conversation id here and there is nothing archived
@@ -190,22 +223,25 @@ export async function prepareCertifiedLaunchPlan({
       mcHomeDir: paths.mcHomeDir,
       deps: deps.github || {},
     });
-    const processPlan = adapter.resolve_process({
-      boundary,
-      argv: argv.argv,
-      env: github.env,
-      launch: toolLaunch,
-      launchOptions: {
-        ...launchOptions,
-        ...(handoff.message === null ? {} : { handoffUserMessage: handoff.message }),
-      },
-      deps: deps.process || {},
-    });
+    const launchOptionsForPlan = {
+      ...launchOptions,
+      ...(handoff.message === null ? {} : { handoffUserMessage: handoff.message }),
+    };
+    const processPlan = UNMANAGED_EXECUTION
+      ? nativeProcessPlan({ launch: toolLaunch, argv: argv.argv, env: github.env, launchOptions: launchOptionsForPlan })
+      : adapter.resolve_process({
+        boundary,
+        argv: argv.argv,
+        env: github.env,
+        launch: toolLaunch,
+        launchOptions: launchOptionsForPlan,
+        deps: deps.process || {},
+      });
     if (!processPlan?.ok) {
       await safeAbort(adapter, boundary, deps);
       return failure(processPlan?.reason || 'certified-process-plan-unavailable');
     }
-    const artifactContext = (deps.captureArtifactContext
+    const artifactContext = UNMANAGED_EXECUTION ? null : (deps.captureArtifactContext
       || managedProviderArtifactContextForLaunch)({
       tool: adapter.provider_tool,
       provider: { descriptor: boundary.descriptor },
@@ -384,6 +420,17 @@ export class CertifiedLaunchPlan {
     if (!['claimed', 'closed'].includes(this.#state)) {
       return failure('certified-runtime-not-claimed');
     }
+    // Without a credential domain there is no archive to observe. mc mints the
+    // conversation id itself and hands it to the tool on the command line, so
+    // the handle is already known — the observation only ever confirmed a fact
+    // mc supplied. The transcript stays where the tool writes it, in the
+    // user's own home, which is where `codex resume` and `claude --resume`
+    // will look for it.
+    if (UNMANAGED_EXECUTION) {
+      return this.#expectedHandle
+        ? { ok: true, handle: this.#expectedHandle, artifact: null }
+        : failure('certified-conversation-handle-unknown');
+    }
     if (!this.#artifactContext) return failure('certified-conversation-observation-unavailable');
     const observed = (this.#deps.observeProviderArtifact
       || observeManagedProviderArtifact)({
@@ -430,6 +477,7 @@ export class CertifiedLaunchPlan {
   }
 
   async abort() {
+    if (UNMANAGED_EXECUTION) { this.#state = 'aborted'; return { ok: true }; }
     if (this.#state !== 'prepared') return failure('certified-plan-already-claimed');
     const result = await this.#adapter.abort_boundary({
       descriptor: this.#boundary.descriptor,
@@ -466,6 +514,10 @@ export class CertifiedLaunchPlan {
 
   async closeBoundary(options = {}) {
     if (this.#state !== 'claimed') return failure('certified-runtime-not-claimed');
+    if (UNMANAGED_EXECUTION) {
+      this.#state = 'closed';
+      return { ok: true };
+    }
     const result = await this.#adapter.close_boundary({
       ...options,
       descriptor: this.#boundary.descriptor,
