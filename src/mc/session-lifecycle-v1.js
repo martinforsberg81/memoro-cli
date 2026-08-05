@@ -10,6 +10,7 @@ import {
 import { listOwnedResourcesSync } from './owned-resource.js';
 import { readDevServerInventorySync, teardownV1SessionDevServers } from './dev-servers.js';
 import { stopLocalSessionRuntime } from '../runtime/session-host/terminal-client.js';
+import { reconcileRuntimeHostSync } from '../runtime/session-host/runtime-host.js';
 import {
   inspectSessionRuntimeArtifactsSync,
   removeStaleSessionRuntimeArtifactsSync,
@@ -48,6 +49,15 @@ export async function endLocalSession({
     if (!runtimeResult.ok) return failure(runtimeResult.reason || 'runtime-stop-failed');
   }
   runtime = await waitForTerminalRuntime({ mcHomeDir, mcSessionId, deps });
+  if (runtime.kind === 'present' && runtime.active_generation !== null) {
+    // The generation never reached a terminal phase because the host died
+    // without recording its exit — a closed terminal, a lost machine, a kill.
+    // Waiting cannot resolve that: nothing is left to write the receipt. The
+    // reconciler settles it from the process table, which is the only witness
+    // still available, and only when the recorded process is genuinely gone.
+    (deps.reconcileRuntimeHost || reconcileRuntimeHostSync)({ mcHomeDir, mcSessionId });
+    runtime = (deps.inspectRuntime || inspectSessionRuntimeSync)({ mcHomeDir, mcSessionId });
+  }
   if (runtime.kind !== 'present' || runtime.active_generation !== null) {
     return failure(runtime.reason || 'runtime-terminal-state-unconfirmed');
   }

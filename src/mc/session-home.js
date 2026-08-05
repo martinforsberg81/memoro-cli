@@ -760,10 +760,18 @@ function sessionsWithNormalizedNameSync(mcHomeDir, normalizedName) {
     .filter((session) => session.metadata.normalized_name === normalizedName);
 }
 
+// `.<name>.<hex>.tmp` — a publish in flight, written and renamed by
+// private-state.js. Reading a session while one exists is ordinary
+// concurrency, not corruption: `mc end` on a running session raced its own
+// projection write and reported the home as malformed.
+const SESSION_TEMPORARY_ENTRY = /^\.[^/]+\.[0-9a-f]{24}\.tmp$/u;
+
 function unexpectedSessionEntries(home) {
   try {
     return readdirSync(home)
-      .filter((name) => !SESSION_FILE_NAMES.has(name) && !SESSION_DIRECTORY_NAMES.includes(name))
+      .filter((name) => !SESSION_FILE_NAMES.has(name)
+        && !SESSION_DIRECTORY_NAMES.includes(name)
+        && !SESSION_TEMPORARY_ENTRY.test(name))
       .sort();
   } catch {
     return ['<unreadable>'];

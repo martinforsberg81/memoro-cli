@@ -2,6 +2,7 @@ import { EventEmitter } from 'node:events';
 
 import { inspectSessionRuntimeSync } from '../../mc/session-runtime-journal.js';
 import { SessionRuntimeClient } from './client.js';
+import { readRuntimeHostManifestSync } from './ephemeral-state.js';
 
 export async function attachLocalSessionTerminal({
   mcHomeDir,
@@ -166,9 +167,27 @@ export async function stopLocalSessionRuntime({
       exit,
     };
   } catch (error) {
+    // A host that cannot be reached is a host that is not running. Refusing
+    // here made `mc end` impossible for any session whose terminal was closed
+    // abruptly: the record outlived the process, and end, restart and delete
+    // all begin by reaching the runtime. If the recorded process is gone, the
+    // runtime is stopped — which is exactly what the caller asked for.
+    if (!recordedRuntimeProcessAlive({ mcHomeDir, mcSessionId })) {
+      return { ok: true, stopped: false, reason: 'already-stopped' };
+    }
     return { ok: false, reason: error?.reason || 'runtime-host-unreachable' };
   } finally {
     try { client.detach(); } catch {}
+  }
+}
+
+/** True only when the runtime manifest names a process that still exists. */
+function recordedRuntimeProcessAlive({ mcHomeDir, mcSessionId }) {
+  const read = readRuntimeHostManifestSync({ mcHomeDir, mcSessionId });
+  const pid = read?.kind === 'present' ? read.value?.process_pid : null;
+  if (!Number.isSafeInteger(pid) || pid <= 0) return false;
+  try { process.kill(pid, 0); return true; } catch (error) {
+    return error?.code === 'EPERM';
   }
 }
 

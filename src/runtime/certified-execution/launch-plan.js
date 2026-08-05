@@ -16,6 +16,7 @@ import {
   inspectSessionRuntimeSync,
 } from '../../mc/session-runtime-journal.js';
 import { assertGenerationId } from '../../mc/session-record-ids.js';
+import { log } from '../../mc/logger.js';
 import { readSessionLegacyReferenceSync } from '../../mc/session-legacy-reference.js';
 import {
   managedProviderArtifactContextForLaunch,
@@ -227,7 +228,18 @@ export async function prepareCertifiedLaunchPlan({
       ...launchOptions,
       ...(handoff.message === null ? {} : { handoffUserMessage: handoff.message }),
     };
-    const processPlan = UNMANAGED_EXECUTION
+    log('launch.plan', {
+    mc_session_id: mcSessionId,
+    generation_id: generationId,
+    action: generation.intent.action,
+    tool: adapter.provider_tool,
+    unmanaged: UNMANAGED_EXECUTION,
+    expected_handle: argv.expected_handle,
+    argv: argv.argv,
+    launch_cwd: generation.intent.launch_cwd,
+    tool_bin: toolLaunch?.spec?.bin || null,
+  });
+  const processPlan = UNMANAGED_EXECUTION
       ? nativeProcessPlan({ launch: toolLaunch, argv: argv.argv, env: github.env, launchOptions: launchOptionsForPlan })
       : adapter.resolve_process({
         boundary,
@@ -237,6 +249,12 @@ export async function prepareCertifiedLaunchPlan({
         launchOptions: launchOptionsForPlan,
         deps: deps.process || {},
       });
+    log('launch.process-plan', {
+      ok: processPlan?.ok === true,
+      reason: processPlan?.reason || null,
+      command: processPlan?.command || null,
+      args: processPlan?.args || null,
+    });
     if (!processPlan?.ok) {
       await safeAbort(adapter, boundary, deps);
       return failure(processPlan?.reason || 'certified-process-plan-unavailable');
