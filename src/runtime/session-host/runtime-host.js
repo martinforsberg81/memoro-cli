@@ -1,5 +1,16 @@
 import { randomBytes } from 'node:crypto';
 import { EventEmitter } from 'node:events';
+import { writeFileSync } from 'node:fs';
+
+// Enough of the tool's own output to explain an immediate exit, and no more.
+const EXIT_TAIL_BYTES = 16 * 1024;
+
+function stripControl(text) {
+  return text
+    .replace(/\u001b\[[0-9;?]*[ -/]*[@-~]/gu, '')
+    .replace(/\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)/gu, '')
+    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/gu, '');
+}
 
 import {
   acceptRuntimeGenerationSync,
@@ -8,6 +19,7 @@ import {
   markRuntimeGenerationLiveSync,
   recordRuntimeGenerationExitSync,
 } from '../../mc/session-runtime-journal.js';
+import { sessionHomePaths } from '../../mc/session-home-paths.js';
 import { assertMcSessionId, validateIso } from '../../mc/session-home-schema.js';
 import { assertGenerationId } from '../../mc/session-record-ids.js';
 import { RuntimeClientQueue } from './client-queue.js';
@@ -205,6 +217,39 @@ export class SessionRuntimeHost extends EventEmitter {
     return this.status();
   }
 
+  /**
+   * What the tool drew, kept only when it exits without anyone having seen it.
+   *
+   * A tool that dies in the first moments leaves nothing behind: no client was
+   * attached, the screen is discarded with the host, and the session reports a
+   * reason code with no subject. Every failure chased through this path today
+   * ended in guessing at output that had already been thrown away.
+   *
+   * Written on a non-zero exit only, bounded, beside the host manifest in the
+   * session's own run directory. It is never transmitted and is replaced by
+   * the next run.
+   */
+  _captureExitTail({ exitCode, signal }) {
+    if (exitCode === 0 && !signal) return;
+    const body = stripControl(this.recentOutput || '');
+    const header = [
+      `# exit_code: ${exitCode}`,
+      `# signal: ${signal || 'none'}`,
+      `# lived_ms: ${Date.parse(this.exit?.recorded_at || 0) - Date.parse(this.startedAt || 0)}`,
+    ].join('\n');
+    try {
+      writeFileSync(
+        sessionHomePaths({
+          mcHomeDir: this.mcHomeDir,
+          mcSessionId: this.mcSessionId,
+          generationId: this.generationId,
+        }).runtimeExitTailPath,
+        `${header}\n${body || '(the tool wrote nothing to its terminal)'}\n`,
+        { encoding: 'utf8', mode: 0o600 },
+      );
+    } catch { /* diagnostics never fail a lifecycle */ }
+  }
+
   async attach(socket, { cols = this.cols, rows = this.rows } = {}) {
     if (this.state !== 'live' && !this.reconciliationRequired) {
       throw runtimeHostError('runtime-not-attachable');
@@ -321,7 +366,13 @@ export class SessionRuntimeHost extends EventEmitter {
     this.screen.dispose();
   }
 
+  _rememberOutput(chunk) {
+    const text = typeof chunk === 'string' ? chunk : String(chunk);
+    this.recentOutput = `${this.recentOutput || ''}${text}`.slice(-EXIT_TAIL_BYTES);
+  }
+
   _onOutput(data) {
+    this._rememberOutput(data);
     const buffer = Buffer.isBuffer(data) ? data : Buffer.from(String(data), 'utf8');
     for (let offset = 0; offset < buffer.length; offset += MAX_OUTPUT_CHUNK_BYTES) {
       const chunk = buffer.subarray(offset, offset + MAX_OUTPUT_CHUNK_BYTES);
@@ -405,6 +456,7 @@ export class SessionRuntimeHost extends EventEmitter {
         now: () => recordedAt,
       });
       this._broadcast(this._frame('exit', { exit_code: exitCode, signal }));
+      this._captureExitTail({ exitCode, signal });
     }
     this.emit('exit', this.status());
   }
