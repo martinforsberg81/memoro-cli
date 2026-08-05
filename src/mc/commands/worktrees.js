@@ -32,9 +32,43 @@ export async function run(argv, deps = {}) {
   return 0;
 }
 
+/**
+ * Ownership, as the model actually defines it.
+ *
+ * A session's workspace may hold several worktrees and branches. But a
+ * worktree belongs to at most one session, and a branch to at most one
+ * worktree and one session. Only something that satisfies that is a thing a
+ * session may release.
+ *
+ * Two kinds fail the test and must never be released:
+ *   shared   — claimed by more than one session, so owned by none
+ *   external — outside mc's worktree root: a checkout the user brought
+ *
+ * On the machine this was written for, the primary checkout is claimed by 46
+ * sessions. Releasing "the session's worktrees" without this distinction
+ * would have deleted the user's own repository, 46 times over.
+ */
+function classify({ path, claimants, worktreeRoot }) {
+  if (claimants > 1) return 'shared';
+  if (!path.startsWith(`${worktreeRoot}/`)) return 'external';
+  return 'owned';
+}
+
 export function inspectWorktreeSprawl({ mcHomeDir = mcHome() } = {}) {
   const listed = listSessionHomesSync({ mcHomeDir });
   const claimed = new Map();
+  const claimCounts = new Map();
+  for (const entry of listed.sessions || []) {
+    for (const workspace of listWorkspaceAssociationsSync({
+      mcHomeDir, mcSessionId: entry.mc_session_id,
+    }).workspaces || []) {
+      claimCounts.set(
+        workspace.current_path,
+        (claimCounts.get(workspace.current_path) || 0) + 1,
+      );
+    }
+  }
+  const worktreeRoot = worktreesRoot(mcHomeDir);
   const sessions = [];
   for (const entry of listed.sessions || []) {
     const workspaces = listWorkspaceAssociationsSync({
@@ -43,10 +77,13 @@ export function inspectWorktreeSprawl({ mcHomeDir = mcHome() } = {}) {
     }).workspaces || [];
     const rows = workspaces.map((workspace) => {
       claimed.set(workspace.current_path, entry.metadata.name);
+      const claimants = claimCounts.get(workspace.current_path) || 1;
       return {
         path: workspace.current_path,
         present: existsSync(workspace.current_path),
         preferred: workspace.preferred_launch === true,
+        claimants,
+        ownership: classify({ path: workspace.current_path, claimants, worktreeRoot }),
         ...gitFacts(workspace.current_path),
       };
     });
@@ -60,7 +97,7 @@ export function inspectWorktreeSprawl({ mcHomeDir = mcHome() } = {}) {
   }
 
   const orphans = [];
-  const root = worktreesRoot(mcHomeDir);
+  const root = worktreeRoot;
   let repos = [];
   try { repos = readdirSync(root); } catch { repos = []; }
   for (const repo of repos) {
@@ -88,8 +125,21 @@ export function inspectWorktreeSprawl({ mcHomeDir = mcHome() } = {}) {
         0,
       ),
       orphan_directories: orphans.length,
+      owned: countOwnership(sessions, 'owned'),
+      shared: countOwnership(sessions, 'shared'),
+      external: countOwnership(sessions, 'external'),
     },
   };
+}
+
+function countOwnership(sessions, kind) {
+  const seen = new Set();
+  for (const session of sessions) {
+    for (const workspace of session.workspaces) {
+      if (workspace.ownership === kind) seen.add(workspace.path);
+    }
+  }
+  return seen.size;
 }
 
 /** Branch, dirtiness and unmerged commits — never a mutation. */
@@ -129,7 +179,8 @@ function render(report, stdout) {
     const state = session.lifecycle === 'open' ? session.runtime_state : session.lifecycle;
     stdout.write(`  ${session.name.padEnd(30)} ${String(state).padEnd(12)}\n`);
     for (const workspace of session.workspaces) {
-      stdout.write(`      ${flags(workspace)} ${workspace.path}\n`);
+      const mark = workspace.ownership === 'owned' ? ' ' : workspace.ownership === 'shared' ? '~' : 'x';
+      stdout.write(`    ${mark} ${flags(workspace)} ${workspace.path}\n`);
     }
   }
 
@@ -140,7 +191,9 @@ function render(report, stdout) {
     }
   }
 
-  stdout.write('\nNothing here was removed. `mc end <name>` releases what a session owns.\n');
+  stdout.write(`\nOWNERSHIP   ${summary.owned} releasable · ${summary.shared} shared (~) · ${summary.external} brought by you (x)\n`);
+  stdout.write('Only a directory under mc\'s root, claimed by exactly one session, is a\n');
+  stdout.write('thing a session may release. Nothing here was removed.\n');
 }
 
 function flags(item) {
