@@ -48,12 +48,19 @@ export function inspectSessionRuntimeArtifactsSync({
     };
   }
   if (activeState) {
+    // The manifest says the host is starting or live and the host process is
+    // gone: it crashed, was killed, or the machine lost power. That is stale
+    // bookkeeping, not a live runtime to protect — and calling it unsafe made
+    // `mc end` refuse a session whose terminal had simply been closed, with
+    // nothing able to clear it. `unsafe` is for a state mc cannot read, which
+    // this is not: the process table already answered.
     return {
-      state: 'unsafe',
+      state: 'stale',
       mc_session_id: mcSessionId,
       path: paths.ephemeralRunPath,
       host_state: manifest.value.state,
       host_pid: manifest.value.host_pid,
+      updated_at: manifest.value.updated_at,
       reason: 'runtime-host-process-absent',
     };
   }

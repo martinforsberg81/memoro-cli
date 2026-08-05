@@ -20,6 +20,7 @@ import {
   recordRuntimeGenerationExitSync,
 } from '../../mc/session-runtime-journal.js';
 import { sessionHomePaths } from '../../mc/session-home-paths.js';
+import { log } from '../../mc/logger.js';
 import { assertMcSessionId, validateIso } from '../../mc/session-home-schema.js';
 import { assertGenerationId } from '../../mc/session-record-ids.js';
 import { RuntimeClientQueue } from './client-queue.js';
@@ -156,7 +157,25 @@ export class SessionRuntimeHost extends EventEmitter {
         },
       );
       assertPty(pty);
+      log('runtime.pty-spawned', {
+        mc_session_id: this.mcSessionId,
+        generation_id: this.generationId,
+        command: this.spawnPlan.command,
+        args: this.spawnPlan.args,
+        cwd: this.spawnPlan.cwd,
+        pid: pty?.pid ?? null,
+        cols: this.cols,
+        rows: this.rows,
+      });
     } catch (error) {
+      log('runtime.pty-spawn-failed', {
+        mc_session_id: this.mcSessionId,
+        generation_id: this.generationId,
+        command: this.spawnPlan.command,
+        args: this.spawnPlan.args,
+        cwd: this.spawnPlan.cwd,
+        error: error?.message || String(error),
+      });
       this.state = 'failed';
       this.writeManifestSync({
         mcHomeDir: this.mcHomeDir,
@@ -433,6 +452,14 @@ export class SessionRuntimeHost extends EventEmitter {
     } else {
       this.exit = { exit_code: exitCode, signal, recorded_at: recordedAt };
       this.state = 'exited';
+      log('runtime.exited', {
+        mc_session_id: this.mcSessionId,
+        generation_id: this.generationId,
+        exit_code: exitCode,
+        signal: signal || null,
+        lived_ms: Date.parse(recordedAt) - Date.parse(this.startedAt || recordedAt),
+        output_bytes: (this.recentOutput || '').length,
+      });
       this.writeManifestSync({
         mcHomeDir: this.mcHomeDir,
         mcSessionId: this.mcSessionId,
