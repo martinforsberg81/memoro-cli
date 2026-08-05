@@ -277,15 +277,30 @@ export async function prepareLocalCodexCredentialDomain({
     ));
     mkdirSync(leaseDir, { recursive: true, mode: 0o700 });
     chmodSync(leaseDir, 0o700);
+    const leaseBody = `${JSON.stringify({
+      schema: 1,
+      provider_adapter: MANAGED_CODEX_PROVIDER_ID,
+      session_id: codingSessionId,
+      generation,
+      owner_pid: process.pid,
+    })}\n`;
     try {
-      writeFileSync(leasePath, `${JSON.stringify({
-        schema: 1,
-        provider_adapter: MANAGED_CODEX_PROVIDER_ID,
-        session_id: codingSessionId,
-        generation,
-      })}\n`, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+      writeFileSync(leasePath, leaseBody, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
     } catch {
-      return safeFailure('managed-portable-domain-quarantined');
+      // The lease says a runtime holds this credential domain. It said so
+      // exclusively and released on a clean exit, which meant a crash, a
+      // SIGKILL, or a machine that lost power left the session unopenable
+      // forever — the domain was quarantined against a process that no longer
+      // exists. A lease is a claim about a process, so it is reclaimed when
+      // that process is gone, and only then.
+      if (!reclaimAbandonedLeaseSync(leasePath)) {
+        return safeFailure('managed-portable-domain-quarantined');
+      }
+      try {
+        writeFileSync(leasePath, leaseBody, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+      } catch {
+        return safeFailure('managed-portable-domain-quarantined');
+      }
     }
     leaseAcquired = true;
     for (const path of [
@@ -655,6 +670,7 @@ export function inspectPreparedLocalCodexCredentialDomain({
       'provider_adapter',
       'session_id',
       'generation',
+      'owner_pid',
     ])
     || lease.value.schema !== 1
     || lease.value.provider_adapter !== MANAGED_CODEX_PROVIDER_ID
@@ -1757,6 +1773,32 @@ export function workspaceContainsMcInstallSync(cwd) {
   return [hostMcRoot, target.binPath, target.entryPath]
     .filter(Boolean)
     .some((path) => resolve(path) === resolve(cwd) || isPathInside(cwd, resolve(path)));
+}
+
+/**
+ * Remove a credential-domain lease whose owning process is gone.
+ *
+ * Returns true when the lease was reclaimed and the caller may retry. A lease
+ * held by a live process, or one mc cannot read well enough to judge, is left
+ * exactly where it is: refusing to launch a second runtime into one domain is
+ * the whole point of the lease.
+ *
+ * A lease with no `owner_pid` was written by a build that recorded no owner.
+ * There is no process to protect, so it is reclaimable — that is the only
+ * reading that lets a machine recover from the builds that created them.
+ */
+function reclaimAbandonedLeaseSync(leasePath) {
+  const lease = readPrivateJsonFile(leasePath, 2048);
+  if (!lease.ok || !lease.value || typeof lease.value !== 'object') return false;
+  const pid = lease.value.owner_pid;
+  if (pid !== undefined && pid !== null) {
+    if (!Number.isSafeInteger(pid) || pid <= 0) return false;
+    if (pid === process.pid) return false;
+    try { process.kill(pid, 0); return false; } catch (error) {
+      if (error?.code === 'EPERM') return false;
+    }
+  }
+  try { unlinkSync(leasePath); return true; } catch { return false; }
 }
 
 function resolveVaultProbeTarget() {
