@@ -73,16 +73,20 @@ async function main() {
   // hash-bound to the manifest this host was handed, so the artifact root is
   // read from there rather than guessed from an environment the sandbox owns.
   // Every pin, permission, and digest check on those artifacts is unchanged.
-  const checked = validateManagedClaudeDescriptor(descriptor, {
-    verifyArtifacts: () => verifyClaudeC1ArtifactFixture({
-      artifactRoot: dirname(descriptor.native_binary || ''),
-    }),
+  const verifyArtifacts = () => verifyClaudeC1ArtifactFixture({
+    artifactRoot: dirname(descriptor.native_binary || ''),
   });
+  const checked = validateManagedClaudeDescriptor(descriptor, { verifyArtifacts });
   if (!checked.ok) return refuse(`descriptor-${checked.reason || 'invalid'}`);
   const result = await runManagedClaudeRuntime({
     descriptor,
     argv: parsed.providerArgv,
     inheritedEnv: process.env,
+    // The runtime asks the same question the descriptor validation just did,
+    // and would answer it the same wrong way: `mcHome()` under a replaced HOME.
+    // It accepts the verifier as a dependency, so the descriptor stays the
+    // authority for both, and no file inside the pinned closure changes.
+    deps: { verifyArtifacts },
   });
   // The runtime reports its refusal as `code`; reading `reason` printed
   // `runtime-failed` for every distinct cause it has.
