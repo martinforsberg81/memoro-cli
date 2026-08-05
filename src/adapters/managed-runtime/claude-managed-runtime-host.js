@@ -84,7 +84,9 @@ async function main() {
     argv: parsed.providerArgv,
     inheritedEnv: process.env,
   });
-  return result?.ok ? 0 : refuse(`runtime-${result?.reason || 'failed'}`);
+  // The runtime reports its refusal as `code`; reading `reason` printed
+  // `runtime-failed` for every distinct cause it has.
+  return result?.ok ? 0 : refuse(`runtime-${result?.code || result?.reason || 'failed'}`);
 }
 
 function verifyFixedSourceClosure() {
