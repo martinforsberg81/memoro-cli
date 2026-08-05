@@ -233,7 +233,7 @@ belongs with PR 11A's legacy removal, under an explicit verified-dead rule.
 
 **Dependencies:** PRs 8b–10.
 
-## PR 11A — Remove local legacy implementation (`memoro-cli`)
+## PR 11A — Remove local legacy implementation (`memoro-cli`) — merged (#284)
 
 **Purpose:** leave one comprehensible implementation rather than another
 half-finished cutover.
@@ -247,6 +247,17 @@ backups; publish the command/support matrix.
 
 Deleting a legacy subsystem includes deleting the tests that only existed to
 assert it. Those deletions are part of this PR, not a later cleanup.
+
+**Delivered:** wrap mode, the global broker, the legacy registry lifecycle, the
+teardown engine, and the commands built on them (`spawn`, `broker`,
+`supervisor`, `reconcile`, `fanout`, `gather`, `sessions watch|stop|remove`,
+bare `mc` wrapping a tool). 56 source modules and 37 test files removed;
+`mc restart` rebuilt on the V1 runtime primitives. Bare `mc` lists sessions and
+no command is gated on being inside a Git repository. The matrix is
+[`docs/mc-command-matrix.md`](../mc-command-matrix.md).
+
+**Deferred to its own step:** reaping pre-V1 dev-server manifests, which
+`mc doctor` reports and nothing removes.
 
 **Dependencies:** PR 8b, PR 10, and a successful local migration journey.
 

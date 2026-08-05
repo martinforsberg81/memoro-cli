@@ -51,6 +51,10 @@ async function routeV1Command(args) {
     if (subcommand === 'read') return runModule('./cli/read.js', rest);
     return null;
   }
+  // Bare `mc` is "show me my sessions". It used to wrap a coding tool in the
+  // current directory and refused outside a Git repository; nothing about mc
+  // is gated on repositories any more.
+  if (args.length === 0) return runModule('./cli/list.js', []);
   const modules = {
     new: './cli/new.js',
     open: './cli/open.js',
@@ -68,6 +72,8 @@ async function routeV1Command(args) {
     gc: './mc/commands/gc.js',
     storage: './mc/commands/storage.js',
     doctor: './mc/commands/doctor.js',
+    restart: './cli/restart.js',
+    migrate: './mc/commands/migrate.js',
   };
   return Object.hasOwn(modules, command)
     ? runModule(modules[command], args.slice(1))
