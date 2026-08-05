@@ -193,12 +193,22 @@ export async function prepareLocalClaudeCredentialDomain({
   let manifestWritten = false;
   try {
     ensurePrivateDirectory(root, leaseDirectory);
-    writeFileSync(leasePath, `${JSON.stringify({
+    const leaseBody = `${JSON.stringify({
       schema: LEASE_SCHEMA,
       provider_adapter: MANAGED_CLAUDE_PROVIDER_ID,
       session_id: codingSessionId,
       generation,
-    })}\n`, { mode: 0o600, flag: 'wx' });
+      owner_pid: process.pid,
+    })}\n`;
+    try {
+      writeFileSync(leasePath, leaseBody, { mode: 0o600, flag: 'wx' });
+    } catch {
+      // The same reclaim Codex got: a lease is a claim about a process, and a
+      // crash or a kill skips the release, leaving the domain quarantined
+      // against a process that no longer exists. A live owner still refuses.
+      if (!reclaimAbandonedLease(leasePath)) throw new Error('lease-held');
+      writeFileSync(leasePath, leaseBody, { mode: 0o600, flag: 'wx' });
+    }
     leaseAcquired = true;
     for (const path of [
       domainPath,
@@ -889,4 +899,26 @@ function findNativeClaudeTranscript(directory, fileName, depth = 0) {
     }
   }
   return null;
+}
+
+/**
+ * Remove a credential-domain lease whose owning process is gone.
+ *
+ * A lease with no `owner_pid` was written by a build that recorded no owner,
+ * so there is no process to protect and it is reclaimable — the only reading
+ * that lets a machine holding one recover. A live owner, an owner mc may not
+ * signal, and an unreadable lease all keep their claim.
+ */
+function reclaimAbandonedLease(leasePath) {
+  let lease;
+  try { lease = JSON.parse(readFileSync(leasePath, 'utf8')); } catch { return false; }
+  if (!lease || typeof lease !== 'object') return false;
+  const pid = lease.owner_pid;
+  if (pid !== undefined && pid !== null) {
+    if (!Number.isSafeInteger(pid) || pid <= 0 || pid === process.pid) return false;
+    try { process.kill(pid, 0); return false; } catch (error) {
+      if (error?.code === 'EPERM') return false;
+    }
+  }
+  try { unlinkSync(leasePath); return true; } catch { return false; }
 }
