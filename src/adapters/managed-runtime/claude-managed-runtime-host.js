@@ -23,17 +23,30 @@ const SOURCE_CLOSURE_PATH = join(
 const SOURCE_CLOSURE_SHA256 =
   '4f6c46bd1a6114e329383c6e4a44edce1133a4cb880f2ba021751ac679c94d73';
 
+/**
+ * Every refusal here used to be a bare `return 1`, so a managed Claude launch
+ * that failed produced a process that lived a few hundred milliseconds, wrote
+ * nothing at all, and left the session reporting `runtime-not-attachable` —
+ * the echo of a decision taken several layers down. Naming the step costs one
+ * line and no secrecy: these are refusal reasons, not credentials, argv, or
+ * environment.
+ */
+function refuse(code) {
+  try { process.stderr.write(`mc: managed claude runtime refused (${code})\n`); } catch {}
+  return 1;
+}
+
 async function main() {
-  if (!verifyFixedSourceClosure()) return 1;
+  if (!verifyFixedSourceClosure()) return refuse('source-closure-mismatch');
   const parsed = parseHostArgv(process.argv.slice(2));
-  if (!parsed) return 1;
+  if (!parsed) return refuse('host-argv-invalid');
   let manifestBody;
   let manifest;
   try {
     manifestBody = readFileSync(parsed.manifestPath, 'utf8');
     manifest = JSON.parse(manifestBody);
   } catch {
-    return 1;
+    return refuse('manifest-unreadable');
   }
   const descriptor = {
     ...manifest,
@@ -46,16 +59,16 @@ async function main() {
     ({ validateManagedClaudeDescriptor } = await import('./claude-managed.js'));
     ({ runManagedClaudeRuntime } = await import('./claude-managed-runtime.js'));
   } catch {
-    return 1;
+    return refuse('runtime-module-unavailable');
   }
   const checked = validateManagedClaudeDescriptor(descriptor);
-  if (!checked.ok) return 1;
+  if (!checked.ok) return refuse(`descriptor-${checked.reason || 'invalid'}`);
   const result = await runManagedClaudeRuntime({
     descriptor,
     argv: parsed.providerArgv,
     inheritedEnv: process.env,
   });
-  return result?.ok ? 0 : 1;
+  return result?.ok ? 0 : refuse(`runtime-${result?.reason || 'failed'}`);
 }
 
 function verifyFixedSourceClosure() {
