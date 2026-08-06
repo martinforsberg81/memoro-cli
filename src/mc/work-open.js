@@ -18,20 +18,26 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 import { resolveLaunch } from '../adapters/index.js';
-import { readState, writeState } from './work-area.js';
+import { readToolSession, writeToolSession } from './work-area.js';
 
 export function openInWorkArea({
   name,
+  session = 'main',
   worktree,
-  tool = 'codex',
+  tool = null,
   env = process.env,
   spawn = spawnSync,
 } = {}) {
-  const launch = resolveLaunch(tool);
+  // A named session remembers its own tool, so reopening it needs no flag.
+  // Naming a different tool for an existing session starts a new conversation
+  // under that name rather than pretending the old one can continue.
+  const existing = readToolSession(name, session, env);
+  const launch = resolveLaunch(tool || existing?.tool || 'codex');
   if (!launch?.ok) return { ok: false, reason: launch?.reason || 'tool-unavailable', hint: launch?.hint };
   const toolId = launch.id;
-  const state = readState(name, env);
-  const known = typeof state[toolId] === 'string' ? state[toolId] : null;
+  const known = existing && existing.tool === toolId && typeof existing.conversation === 'string'
+    ? existing.conversation
+    : null;
 
   // A remembered id is only worth resuming if the tool actually wrote that
   // conversation. mc records the id before launch so a kill cannot lose it,
@@ -56,7 +62,7 @@ export function openInWorkArea({
   // An id mc minted is known before the tool starts, so it is written before
   // the tool starts. Waiting until exit meant a closed terminal or a kill lost
   // the conversation entirely — the one fact mc exists to keep.
-  if (handle && handle !== known) writeState(name, { [toolId]: handle }, env);
+  if (handle && handle !== known) writeToolSession(name, session, { tool: toolId, conversation: handle }, env);
 
   const startedAt = Date.now();
   const result = spawn(launch.spec.bin, args, { cwd: worktree.path, stdio: 'inherit', env });
@@ -64,10 +70,13 @@ export function openInWorkArea({
 
   // Codex names its own conversation, so the id is read from what it wrote.
   const learned = handle || discoverCodexConversation(startedAt, env);
-  if (learned && learned !== known) writeState(name, { [toolId]: learned }, env);
+  if (learned && learned !== known) {
+    writeToolSession(name, session, { tool: toolId, conversation: learned }, env);
+  }
 
   return {
     ok: true,
+    session,
     tool: toolId,
     conversation: learned || null,
     resumed: resumable,

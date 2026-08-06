@@ -37,7 +37,7 @@ MAINTENANCE
   mc work new <name>               A work area with no repository at all
   mc work add <name> <repo> [branch]
                                     Add a repository's worktree to that work
-  mc work open <name> [repo]       Start a tool where the work is
+  mc work open <name> [session]    Start or resume a tool session in that work
   mc work release <name> [--apply] Remove what git says can go; keep the rest
   mc worktree add <name> <branch>  Create a worktree this session owns
   mc worktree list <name>          What this session owns
