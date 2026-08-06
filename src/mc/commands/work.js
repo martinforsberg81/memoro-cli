@@ -77,6 +77,20 @@ export async function run(argv, deps = {}) {
     return 0;
   }
 
+  if (opts.verb === 'open') return openArea(opts.name, opts, { stdout, stderr });
+  return runVerb(opts, { stdout, stderr });
+}
+
+/**
+ * The verbs, reachable from the command line and from the menu alike.
+ *
+ * Someone standing at the menu who already knows what they want types it,
+ * because that is what a prompt invites. The first time that happened mc read
+ * `mc work discard language-grammar-expansion`, matched none of its numbers,
+ * and exited without a word — leaving a listing that looked like the command
+ * had run and done nothing.
+ */
+async function runVerb(opts, { stdout, stderr }) {
   if (opts.verb === 'add') {
     const found = resolveRepository(opts.repo);
     if (!found.ok) {
@@ -124,7 +138,8 @@ export async function run(argv, deps = {}) {
     if (result.removes_area) {
       stdout.write(`  ${opts.apply ? 'removed' : 'would remove'}    the work area itself\n`);
     }
-    if (!result.discarded.length && !result.kept.length && !result.conversations.length) {
+    if (!result.discarded.length && !result.kept.length
+      && !result.conversations.length && !result.removes_area) {
       stdout.write('  nothing there\n');
     }
     if (!opts.apply) stdout.write('\nThis destroys work. Run again with --apply if that is what you want.\n');
@@ -165,32 +180,78 @@ export async function run(argv, deps = {}) {
     return 0;
   }
 
-  return openArea(opts.name, opts, { stdout, stderr });
+  return 2;
 }
+
 
 /**
  * The way in.
  *
  * What exists, numbered, and one more line for starting something. No verb, no
  * order of arguments, nothing to have read first.
+ *
+ * It also takes a whole command, because a prompt invites one and the verbs
+ * are the same verbs. `mc work discard x`, `discard x`, `discard x --apply` —
+ * the leading `mc` and `work` are stripped and the rest is read exactly as it
+ * would have been from the shell. Anything else is said out loud rather than
+ * swallowed, and the listing is shown again with whatever changed.
  */
-async function menu(areas, { stdout, stderr }) {
-  stdout.write(`\n${workRoot()}\n\n`);
-  if (areas.length === 0) {
-    stdout.write('  nothing here yet\n\n');
-    return startSomething({ stdout, stderr });
+async function menu(first, { stdout, stderr }) {
+  let areas = first;
+  for (;;) {
+    stdout.write(`\n${workRoot()}\n\n`);
+    if (areas.length === 0) {
+      stdout.write('  nothing here yet\n\n');
+      return startSomething({ stdout, stderr });
+    }
+    for (const [index, area] of areas.entries()) {
+      stdout.write(`  ${String(index + 1).padStart(2)}  ${area.name.padEnd(28)} ${summarise(area)}\n`);
+    }
+    stdout.write(`  ${'n'.padStart(2)}  start something new\n`);
+    stdout.write(`  ${'q'.padStart(2)}  quit\n\n`);
+
+    const answer = ask('>', { stdout });
+    if (!answer || answer === 'q') return 0;
+    if (answer === 'n' || answer === 'new') return startSomething({ stdout, stderr });
+
+    const byNumber = areas[Number(answer) - 1];
+    const byName = areas.find((area) => area.name === answer);
+    if (byNumber || byName) return openArea((byNumber || byName).name, {}, { stdout, stderr });
+
+    const outcome = await typed(answer, areas, { stdout, stderr });
+    if (outcome !== null) return outcome;
+    areas = listWorkAreas();
   }
-  const items = areas.map((area, index) => ({
-    key: index + 1,
-    name: area.name,
-    label: `${area.name.padEnd(28)} ${summarise(area)}`,
-    value: { kind: 'open', name: area.name },
-  }));
-  items.push({ key: 'n', name: 'new', label: 'start something new', value: { kind: 'new' } });
-  const chosen = select(null, items, { stdout });
-  if (!chosen) return 0;
-  if (chosen.kind === 'new') return startSomething({ stdout, stderr });
-  return openArea(chosen.name, {}, { stdout, stderr });
+}
+
+/**
+ * A line typed at the menu. Returns an exit code to leave on, or null to show
+ * the listing again.
+ */
+async function typed(answer, areas, { stdout, stderr }) {
+  const words = answer.split(/\s+/u).filter(Boolean);
+  if (words[0] === 'mc') words.shift();
+  if (words[0] === 'work') words.shift();
+  if (words.length === 0) return null;
+
+  const sub = parseArgs(words);
+  if (sub.error) {
+    stderr.write(`\nmc: ${sub.error}\n`);
+    return null;
+  }
+  // A bare word that is not on the list is a typo far more often than it is a
+  // new piece of work, and the list is right there to compare it against. From
+  // the shell the same word still starts something, because there the name is
+  // the whole statement of intent.
+  if (sub.verb === 'open' && words.length === 1 && !areas.some((area) => area.name === sub.name)) {
+    stderr.write(`\nmc: nothing here called "${sub.name}" — n starts one\n`);
+    return null;
+  }
+  if (sub.verb === 'open') return openArea(sub.name, sub, { stdout, stderr });
+  if (sub.verb === 'list') return null;
+  stdout.write('\n');
+  await runVerb(sub, { stdout, stderr });
+  return null;
 }
 
 function summarise(area) {
