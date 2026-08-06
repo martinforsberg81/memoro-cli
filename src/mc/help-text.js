@@ -33,7 +33,7 @@ MAINTENANCE
   mc storage status [--json]       Summarize durable and ephemeral session state
   mc storage explain <name>        Explain one session's stored resources
   mc storage repair [--apply]      Plan or apply loss-free storage repairs
-  mc work                          Pieces of work under ~/mc, and what is in them
+  mc work                          What exists; at a terminal, a way in
   mc work <name>                   Open it — the name is enough, new or not
   mc work <name> new               A new conversation rather than the last one
   mc work <name> <id>              One particular conversation, by the id shown
