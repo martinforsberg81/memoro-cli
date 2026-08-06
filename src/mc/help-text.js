@@ -40,6 +40,7 @@ MAINTENANCE
   mc work open <name> [session]    Start or resume a tool session in that work
   mc work remove <name> <repo>     Take one repository out of that work
   mc work release <name> [--apply] Remove what git says can go; keep the rest
+  mc work discard <name> [--apply] Throw the work away, unfinished and all
   mc worktree add <name> <branch>  Create a worktree this session owns
   mc worktree list <name>          What this session owns
   mc worktrees [--json]            What is lying around, and whose it is
