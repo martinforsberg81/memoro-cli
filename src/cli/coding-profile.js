@@ -140,29 +140,44 @@ export async function runEdit(argv, deps = {}) {
   // A stable path rather than a temp name: if the editor dies, the machine
   // sleeps, or the write is refused, the words are still where they were.
   const path = join(mcHome(), 'coding-profile.edit.md');
-  try {
-    mkdirSync(mcHome(), { recursive: true, mode: 0o700 });
-    writeFileSync(path, before, { encoding: 'utf8', mode: 0o600 });
-  } catch (err) {
-    stderr.write(`mc: could not prepare ${path} (${err?.message || err})\n`);
-    return 1;
-  }
 
-  const editor = deps.editor || process.env.VISUAL || process.env.EDITOR || 'nano';
-  stdout.write(`${revision ? `Coding Profile revision ${revision}` : 'No Coding Profile yet — starting one'} · ${editor}\n`);
-  const run = deps.spawn || spawnSync;
-  const result = run(editor, [path], { stdio: 'inherit' });
-  if (result?.error) {
-    stderr.write(`mc: could not open ${editor} (${result.error.message})\n`);
-    stderr.write(`mc: edit ${path} yourself, then run mc coding-profile write --file ${path} --base-revision ${revision}\n`);
+  // Where the new text comes from. A person opens an editor; an assistant
+  // hands over what it drafted. Both then take the same road — the same diff,
+  // the same confirmation, the same revision handled for them — because the
+  // step worth protecting is agreeing to the change, and that is the same
+  // step whoever typed it.
+  const supplied = await suppliedMarkdown(argv, deps);
+  if (supplied?.error) {
+    stderr.write(`mc: ${supplied.error}\n`);
     return 1;
   }
 
   let after;
-  try { after = ensureTrailingNewline(readFileSync(path, 'utf8')); } catch { after = null; }
-  if (after === null) {
-    stderr.write(`mc: ${path} could not be read back\n`);
-    return 1;
+  if (supplied) {
+    after = ensureTrailingNewline(supplied.markdown);
+    stdout.write(`${revision ? `Coding Profile revision ${revision}` : 'No Coding Profile yet — starting one'}\n`);
+  } else {
+    try {
+      mkdirSync(mcHome(), { recursive: true, mode: 0o700 });
+      writeFileSync(path, before, { encoding: 'utf8', mode: 0o600 });
+    } catch (err) {
+      stderr.write(`mc: could not prepare ${path} (${err?.message || err})\n`);
+      return 1;
+    }
+    const editor = deps.editor || process.env.VISUAL || process.env.EDITOR || 'nano';
+    stdout.write(`${revision ? `Coding Profile revision ${revision}` : 'No Coding Profile yet — starting one'} · ${editor}\n`);
+    const run = deps.spawn || spawnSync;
+    const result = run(editor, [path], { stdio: 'inherit' });
+    if (result?.error) {
+      stderr.write(`mc: could not open ${editor} (${result.error.message})\n`);
+      stderr.write(`mc: edit ${path} yourself, then run mc setup profile --file ${path}\n`);
+      return 1;
+    }
+    try { after = ensureTrailingNewline(readFileSync(path, 'utf8')); } catch { after = null; }
+    if (after === null) {
+      stderr.write(`mc: ${path} could not be read back\n`);
+      return 1;
+    }
   }
   if (normalizeMarkdown(after) === normalizeMarkdown(before)) {
     stdout.write('Unchanged — nothing written.\n');
@@ -175,12 +190,13 @@ export async function runEdit(argv, deps = {}) {
   // text governs how every new conversation behaves.
   if (!argv.includes('--yes')) {
     if (!interactive()) {
-      stdout.write(`Not written — no terminal to confirm at. Re-run at a terminal, or pass --yes.\nYour edit is kept at ${path}\n`);
+      stdout.write('Not written. Show this to the user; run again with --yes once they agree.\n');
+      if (!supplied) stdout.write(`Your edit is kept at ${path}\n`);
       return 0;
     }
     const answer = ask('Write this? [y/N]', { stdout });
     if (!/^y(es)?$/iu.test((answer || '').trim())) {
-      stdout.write(`Not written. Your edit is kept at ${path}\n`);
+      stdout.write(supplied ? 'Not written.\n' : `Not written. Your edit is kept at ${path}\n`);
       return 0;
     }
   }
@@ -194,11 +210,31 @@ export async function runEdit(argv, deps = {}) {
     });
   } catch (err) {
     stderr.write(`mc: ${err?.data?.error || err?.message || 'the write was refused'}\n`);
-    stderr.write(`mc: your edit is kept at ${path}\n`);
+    if (!supplied) stderr.write(`mc: your edit is kept at ${path}\n`);
     return 1;
   }
   stdout.write(`Coding Profile revision ${written?.profile?.revision ?? revision + 1}. New conversations get it from now on.\n`);
   return 0;
+}
+
+/** `--file <path>`, `--stdin` or `-`. Nothing given means open an editor. */
+async function suppliedMarkdown(argv, deps = {}) {
+  const fileIndex = argv.indexOf('--file');
+  if (fileIndex !== -1) {
+    const path = argv[fileIndex + 1];
+    if (!path || path.startsWith('--')) return { error: '--file needs a path' };
+    try {
+      return { markdown: await readFile(path, 'utf8') };
+    } catch (err) {
+      return { error: `could not read ${path} (${err?.message || err})` };
+    }
+  }
+  if (argv.includes('--stdin') || argv.includes('-')) {
+    const text = await readStdinText(deps.stdin || defaultStdin);
+    if (!text.trim()) return { error: 'nothing arrived on stdin' };
+    return { markdown: text };
+  }
+  return null;
 }
 
 export async function runDiff(argv, deps = {}) {
@@ -619,13 +655,15 @@ USAGE
   mc coding-profile diff --stdin [--json]
   mc coding-profile write --file <path> --base-revision <n> [--summary <text>] [--json]
   mc coding-profile write --stdin --base-revision <n> [--summary <text>] [--json]
-  mc coding-profile edit                      (also: mc setup profile)
+  mc coding-profile edit [--file <path>|--stdin] [--yes]
+                                              (also: mc setup profile)
 
 CONTRACT
   read    Prints approved Markdown to stdout by default.
   diff    Compares a candidate profile against the approved server revision.
   write   Replaces the full profile and requires the base revision from read.
-  edit    Opens it in $EDITOR and writes it back after showing you the diff.
+  edit    Opens it in $EDITOR, or takes --file/--stdin. Prints the diff and
+          writes only with --yes. Resolves the base revision itself.
 
 DELIVERY
   A new tool conversation started by mc work receives the approved profile
@@ -633,11 +671,15 @@ DELIVERY
   resuming an existing conversation does not repeat it.
 
 WORKFLOW
-  1. Run read --json to get revision, markdown, update metadata, and a first-profile template when empty.
+  1. Read the current profile: mc coding-profile read
   2. Discuss the intended durable work-method changes with the user.
-  3. Draft the full replacement profile.
-  4. Run diff on the candidate and show the user the result.
-  5. After approval, run write with the base revision and a short summary.
+  3. Draft the full replacement and save it to a file.
+  4. mc setup profile --file <path>        prints the diff, writes nothing.
+  5. Show the user that diff. After approval, add --yes.
+
+  The revision is resolved for you, and a change made by someone else in the
+  meantime is refused rather than overwritten. Use read/diff/write directly
+  only when you need to pin an exact base revision or attach a summary.
 
 OPTIONS
   --file <path>          Candidate Markdown file.
@@ -659,7 +701,17 @@ function diffUsage() {
 }
 
 function editUsage() {
-  return 'Usage: mc coding-profile edit [--yes] [--api <url>]   (also: mc setup profile)\n';
+  return [
+    'Usage: mc setup profile                       edit it in $EDITOR',
+    '       mc setup profile --file <path> [--yes] hand over drafted text',
+    '       mc setup profile --stdin [--yes]       the same, from stdin',
+    '',
+    'Without --yes the diff is printed and nothing is written, so the change',
+    'can be shown to the user before it is made. The revision is handled.',
+    '',
+    'mc coding-profile edit is the same command.',
+    '',
+  ].join('\n');
 }
 
 function writeUsage() {
