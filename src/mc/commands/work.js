@@ -28,7 +28,7 @@ export async function run(argv, deps = {}) {
     stderr.write('usage — mc work\n');
     stderr.write('        mc work new <name>\n');
     stderr.write('        mc work add <name> <repo> [branch]\n');
-    stderr.write('        mc work open <name> [repo] [--codex|--claude]\n');
+    stderr.write('        mc work open <name> [session] [--repo <repo>] [--codex|--claude]\n');
     stderr.write('        mc work release <name> [--apply]\n');
     return 2;
   }
@@ -43,12 +43,12 @@ export async function run(argv, deps = {}) {
     }
     stdout.write(`${workRoot()}\n`);
     for (const area of areas) {
-      const tools = Object.entries(area.state || {})
-        .filter(([, value]) => typeof value === 'string')
-        .map(([key]) => key);
-      stdout.write(`\n  ${area.name}${tools.length ? `  (${tools.join(', ')})` : ''}\n`);
+      stdout.write(`\n  ${area.name}\n`);
       for (const worktree of area.worktrees) {
         stdout.write(`    ${describe(worktree)}\n`);
+      }
+      for (const [session, entry] of Object.entries(area.state?.sessions || {})) {
+        stdout.write(`    · ${session}  ${entry.tool}${entry.conversation ? `  ${entry.conversation.slice(0, 8)}` : ''}\n`);
       }
     }
     stdout.write('\n');
@@ -100,14 +100,19 @@ export async function run(argv, deps = {}) {
     const worktree = named
       || (candidates.length === 1 ? candidates[0] : { repo: null, path: area.path, is_git: false });
     stderr.write(`mc: ${worktree.path}\n`);
-    const opened = openInWorkArea({ name: opts.name, worktree, tool: opts.tool || 'codex' });
+    const opened = openInWorkArea({
+      name: opts.name,
+      session: opts.session,
+      worktree,
+      tool: opts.tool,
+    });
     if (!opened.ok) {
       stderr.write(`mc: could not open ${opts.name} (${opened.reason})\n`);
       if (opened.hint) stderr.write(`mc: ${opened.hint}\n`);
       return 1;
     }
     if (opened.conversation && !opened.resumed) {
-      stderr.write(`mc: remembered ${opened.tool} conversation ${opened.conversation}\n`);
+      stderr.write(`mc: ${opened.session} is a new ${opened.tool} conversation\n`);
     }
     return opened.code || 0;
   }
@@ -141,16 +146,18 @@ function describe(worktree) {
 
 export function parseArgs(argv) {
   const opts = {
-    verb: 'list', name: null, repo: null, branch: null,
-    tool: null, apply: false, json: false,
+    verb: 'list', name: null, repo: null, branch: null, session: 'main',
+    tool: null, apply: false, json: false, repoFlagNext: false,
   };
   const positional = [];
   for (const arg of argv) {
     if (arg === '--json') { opts.json = true; continue; }
     if (arg === '--apply') { opts.apply = true; continue; }
+    if (arg === '--repo') { opts.repoFlagNext = true; continue; }
     if (arg === '--codex') { opts.tool = 'codex'; continue; }
     if (arg === '--claude') { opts.tool = 'claude'; continue; }
     if (arg.startsWith('--')) return { ...opts, error: `unknown flag: ${arg}` };
+    if (opts.repoFlagNext) { opts.repo = arg; opts.repoFlagNext = false; continue; }
     positional.push(arg);
   }
   if (positional.length === 0) return opts;
@@ -167,7 +174,10 @@ export function parseArgs(argv) {
   }
   if (verb === 'new') return opts;
   if (verb === 'open') {
-    opts.repo = rest[1] || null;
+    opts.session = rest[1] || 'main';
+    if (!/^[A-Za-z0-9._-]{1,64}$/u.test(opts.session)) {
+      return { ...opts, error: `"${opts.session}" cannot be a session name` };
+    }
     return opts;
   }
   if (verb === 'add') {

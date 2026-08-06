@@ -190,8 +190,42 @@ export function releaseWorkArea(name, { env = process.env, dryRun = false } = {}
   return { name, removed, kept, dry_run: dryRun };
 }
 
+/**
+ * The tool sessions a work area holds.
+ *
+ * One piece of work can carry several conversations — one per repository it
+ * spans, one per line of enquiry, a throwaway beside the main one. Each has a
+ * name, a tool, and a conversation id, and nothing else: where it opens is
+ * decided when it opens, not remembered.
+ *
+ * The first shape mc wrote was one id per tool, `{ "codex": "019f…" }`. That
+ * is read as a session named after the tool, so nothing written earlier is
+ * lost.
+ */
 export function readState(name, env = process.env) {
-  try { return JSON.parse(readFileSync(workAreaStatePath(name, env), 'utf8')); } catch { return {}; }
+  let raw = {};
+  try { raw = JSON.parse(readFileSync(workAreaStatePath(name, env), 'utf8')); } catch { return { sessions: {} }; }
+  if (raw && typeof raw.sessions === 'object' && raw.sessions) return raw;
+  // The first shape held one conversation per tool. The first of them becomes
+  // `main`, because that is the name `mc work open` reaches for; naming it
+  // after its tool left it there but unreachable.
+  const sessions = {};
+  const legacy = Object.entries(raw || {}).filter(([, value]) => typeof value === 'string');
+  legacy.forEach(([tool, conversation], index) => {
+    sessions[index === 0 ? 'main' : tool] = { tool, conversation };
+  });
+  return { sessions };
+}
+
+export function readToolSession(area, sessionName, env = process.env) {
+  const state = readState(area, env);
+  return state.sessions?.[sessionName] || null;
+}
+
+export function writeToolSession(area, sessionName, entry, env = process.env) {
+  const state = readState(area, env);
+  const sessions = { ...state.sessions, [sessionName]: { ...state.sessions?.[sessionName], ...entry } };
+  return writeState(area, { sessions }, env);
 }
 
 export function writeState(name, patch, env = process.env) {
