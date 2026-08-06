@@ -8,13 +8,12 @@
  * Nothing here is stored except the tool conversation. Nothing here refuses:
  * release removes what git says can go and reports what it kept.
  */
-import { resolve } from 'node:path';
-
 import {
   addWorktree,
   inspectWorkArea,
   listWorkAreas,
   releaseWorkArea,
+  resolveRepository,
 } from '../work-area.js';
 import { workRoot } from '../paths.js';
 import { openInWorkArea } from '../work-open.js';
@@ -55,8 +54,16 @@ export async function run(argv, deps = {}) {
   }
 
   if (opts.verb === 'add') {
-    const repo = resolve(opts.repo);
-    const result = addWorktree({ name: opts.name, repo, branch: opts.branch });
+    const found = resolveRepository(opts.repo);
+    if (!found.ok) {
+      stderr.write(`mc: no repository "${opts.repo || 'here'}" — looked in:\n`);
+      for (const path of found.tried) stderr.write(`      ${path}\n`);
+      return 1;
+    }
+    // Without a branch the work area's own name is the obvious one: the same
+    // change across every repository it spans carries the same name.
+    const branch = opts.branch || opts.name;
+    const result = addWorktree({ name: opts.name, repo: found.path, branch });
     if (!result.ok) {
       stderr.write(`mc: could not add ${repo} to ${opts.name} (${result.reason})\n`);
       return 1;
@@ -155,7 +162,6 @@ export function parseArgs(argv) {
   }
   if (verb === 'add') {
     opts.repo = rest[1] || null;
-    if (!opts.repo) return { ...opts, error: 'a repository path is required' };
     opts.branch = rest[2] || null;
   }
   return opts;

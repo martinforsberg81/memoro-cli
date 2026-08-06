@@ -21,7 +21,9 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+
+import { homedir } from 'node:os';
 
 import { workAreaPath, workAreaStatePath, workRoot } from './paths.js';
 
@@ -70,6 +72,46 @@ export function inspectWorktree(path, repo) {
     uncommitted: dirty ? dirty.split('\n').filter(Boolean).length : 0,
     unmerged_commits: upstreamMerged ? upstreamMerged.split('\n').filter(Boolean).length : 0,
   };
+}
+
+/**
+ * Turn what the user typed into a repository.
+ *
+ * `mc work add x memoro-cli` means the repository called memoro-cli, not a
+ * directory of that name below wherever the shell happens to be. Resolving it
+ * as a path found nothing and said so in git's words, which is a poor way to
+ * learn that mc looked in the wrong place.
+ *
+ * A path that exists wins. Otherwise the name is looked for beside the home
+ * directory, which is where repository roots live. With nothing given at all,
+ * the repository the shell is already inside is the obvious answer.
+ */
+export function resolveRepository(input, { cwd = process.cwd(), env = process.env } = {}) {
+  const tried = [];
+  const candidates = [];
+  if (input) {
+    candidates.push(resolvePath(cwd, input));
+    if (!input.includes('/')) candidates.push(join(homedir(), input));
+  } else {
+    const root = git(cwd, ['rev-parse', '--show-toplevel']);
+    if (root) candidates.push(root);
+  }
+  for (const candidate of candidates) {
+    tried.push(candidate);
+    if (!existsSync(candidate)) continue;
+    const common = git(candidate, ['rev-parse', '--path-format=absolute', '--git-common-dir']);
+    if (!common) continue;
+    // A worktree is not the repository. Running this from inside one named the
+    // work after the worktree — `mc-v2` instead of `memoro-cli` — so the
+    // common directory decides: its parent is the repository root, whichever
+    // checkout the shell happened to be standing in.
+    return { ok: true, path: dirname(common) };
+  }
+  return { ok: false, tried };
+}
+
+function resolvePath(cwd, input) {
+  return input.startsWith('/') ? input : join(cwd, input);
 }
 
 export function createWorkArea(name, env = process.env) {
@@ -125,6 +167,10 @@ export function releaseWorkArea(name, { env = process.env, dryRun = false } = {}
     }
     removed.push({ ...worktree, what: 'worktree and branch' });
   }
+  // A directory removed outside mc leaves git holding a registration for it.
+  // That is git's own bookkeeping and git's own broom — mc calls it rather
+  // than policing it, which is the difference between tidying and guarding.
+  if (!dryRun) pruneWorktrees(knownRepositories(env));
   // When everything is released the work area has nothing left to be, so it
   // goes too — but only if it is genuinely empty. Anything the user put there
   // by hand keeps the directory alive.
@@ -149,6 +195,23 @@ export function writeState(name, patch, env = process.env) {
     encoding: 'utf8', mode: 0o600,
   });
   return next;
+}
+
+/**
+ * The repositories mc can see: the roots beside the home directory, which is
+ * where `mc work add <name>` already looks. Deriving them here means prune
+ * works even when the worktree directory is already gone — which is exactly
+ * when a registration is left dangling.
+ */
+export function knownRepositories(env = process.env) {
+  const home = homedir();
+  let entries = [];
+  try {
+    entries = readdirSync(home, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'))
+      .map((entry) => join(home, entry.name));
+  } catch { return []; }
+  return entries.filter((path) => existsSync(join(path, '.git')));
 }
 
 /** Let git tidy its own registrations rather than mc policing them. */
