@@ -34,8 +34,10 @@ MAINTENANCE
   mc storage explain <name>        Explain one session's stored resources
   mc storage repair [--apply]      Plan or apply loss-free storage repairs
   mc work                          Pieces of work under ~/mc, derived from git
+  mc work new <name>               A work area with no repository at all
   mc work add <name> <repo> [branch]
                                     Add a repository's worktree to that work
+  mc work open <name> [repo]       Start a tool where the work is
   mc work release <name> [--apply] Remove what git says can go; keep the rest
   mc worktree add <name> <branch>  Create a worktree this session owns
   mc worktree list <name>          What this session owns

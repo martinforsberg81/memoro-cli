@@ -10,6 +10,7 @@
  */
 import {
   addWorktree,
+  createWorkArea,
   inspectWorkArea,
   listWorkAreas,
   releaseWorkArea,
@@ -25,6 +26,7 @@ export async function run(argv, deps = {}) {
   if (opts.error) {
     stderr.write(`mc: ${opts.error}\n`);
     stderr.write('usage — mc work\n');
+    stderr.write('        mc work new <name>\n');
     stderr.write('        mc work add <name> <repo> [branch]\n');
     stderr.write('        mc work open <name> [repo] [--codex|--claude]\n');
     stderr.write('        mc work release <name> [--apply]\n');
@@ -53,6 +55,13 @@ export async function run(argv, deps = {}) {
     return 0;
   }
 
+  if (opts.verb === 'new') {
+    const path = createWorkArea(opts.name);
+    stdout.write(`mc: ${path}\n`);
+    stdout.write('mc: no worktree — add one with mc work add, or just open it\n');
+    return 0;
+  }
+
   if (opts.verb === 'add') {
     const found = resolveRepository(opts.repo);
     if (!found.ok) {
@@ -78,19 +87,19 @@ export async function run(argv, deps = {}) {
       stderr.write(`mc: no work area named "${opts.name}" under ${workRoot()}\n`);
       return 1;
     }
+    // The tool opens where the work is. One worktree and the work is that
+    // checkout, so the tool gets it with its git integration intact. Several,
+    // or none, and the work is the area itself — mc opens there rather than
+    // choosing a checkout on the user's behalf and mentioning it in passing.
     const candidates = area.worktrees.filter((item) => item.is_git);
-    const worktree = opts.repo
-      ? candidates.find((item) => item.repo === opts.repo)
-      : candidates[0];
-    if (!worktree) {
-      stderr.write(opts.repo
-        ? `mc: ${opts.name} has no worktree for ${opts.repo}\n`
-        : `mc: ${opts.name} has no worktree yet — mc work add ${opts.name} <repo> [branch]\n`);
+    const named = opts.repo ? candidates.find((item) => item.repo === opts.repo) : null;
+    if (opts.repo && !named) {
+      stderr.write(`mc: ${opts.name} has no worktree for ${opts.repo}\n`);
       return 1;
     }
-    if (candidates.length > 1 && !opts.repo) {
-      stdout.write(`mc: ${opts.name} spans ${candidates.map((item) => item.repo).join(', ')}; opening ${worktree.repo}\n`);
-    }
+    const worktree = named
+      || (candidates.length === 1 ? candidates[0] : { repo: null, path: area.path, is_git: false });
+    stderr.write(`mc: ${worktree.path}\n`);
     const opened = openInWorkArea({ name: opts.name, worktree, tool: opts.tool || 'codex' });
     if (!opened.ok) {
       stderr.write(`mc: could not open ${opts.name} (${opened.reason})\n`);
@@ -146,7 +155,7 @@ export function parseArgs(argv) {
   }
   if (positional.length === 0) return opts;
   const [verb, ...rest] = positional;
-  if (!['add', 'release', 'list', 'open'].includes(verb)) {
+  if (!['add', 'release', 'list', 'open', 'new'].includes(verb)) {
     return { ...opts, error: `unknown verb: ${verb}` };
   }
   opts.verb = verb;
@@ -156,6 +165,7 @@ export function parseArgs(argv) {
   if (!/^[A-Za-z0-9._-]{1,64}$/u.test(opts.name)) {
     return { ...opts, error: `"${opts.name}" cannot be a directory name` };
   }
+  if (verb === 'new') return opts;
   if (verb === 'open') {
     opts.repo = rest[1] || null;
     return opts;

@@ -124,9 +124,16 @@ export function addWorktree({ name, repo, branch, from = null, env = process.env
   const area = createWorkArea(name, env);
   const target = join(area, repoName(repo));
   if (existsSync(target)) return { ok: false, reason: 'worktree-already-there', path: target };
+  // A branch that already exists is checked out, not recreated. That is also
+  // how a user who does not want mc minting branches gets what they want:
+  // name one that exists and mc uses it.
+  const exists = branch
+    ? Boolean(git(repo, ['rev-parse', '--verify', `refs/heads/${branch}`]))
+    : false;
   const args = ['-C', repo, 'worktree', 'add'];
-  if (branch) args.push('-b', branch, target, ...(from ? [from] : []));
-  else args.push(target);
+  if (!branch) args.push('--detach', target);
+  else if (exists) args.push(target, branch);
+  else args.push('-b', branch, target, ...(from ? [from] : []));
   try {
     execFileSync('git', args, { stdio: ['ignore', 'pipe', 'pipe'] });
   } catch (error) {
