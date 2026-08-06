@@ -2,11 +2,10 @@
  * A piece of work is a directory under `~/mc`.
  *
  * Everything about it is derived, never stored: the worktrees it spans are the
- * directories under it, their branches come from git, and whether a thing can
- * be released is a question git answers at the moment of asking. The only file
- * mc writes is `.mc.json` at the work-area root — the tool conversation, which
- * is the one fact no other system holds. It sits above the worktrees, so it is
- * never inside a repository.
+ * directories under it, their branches come from git, whether a thing can be
+ * released is a question git answers at the moment of asking, and the
+ * conversations are the tools' own, found by the directory they were launched
+ * in. mc writes no file at all. The directory is the record.
  *
  * There are no gates here. Nothing refuses. `release` removes what git says is
  * safe to remove and reports what it left, because a tool that blocks on its
@@ -16,15 +15,14 @@ import { execFileSync } from 'node:child_process';
 import {
   existsSync,
   mkdirSync,
-  readFileSync,
   readdirSync,
   rmSync,
-  writeFileSync,
 } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 import { homedir } from 'node:os';
 
+import { deleteConversations, listConversations } from './conversations.js';
 import { workAreaPath, workAreaStatePath, workRoot } from './paths.js';
 
 export function listWorkAreas(env = process.env) {
@@ -52,7 +50,13 @@ export function inspectWorkArea(name, env = process.env) {
   for (const entry of entries) {
     worktrees.push(inspectWorktree(join(path, entry), entry));
   }
-  return { name, path, exists: existsSync(path), state: readState(name, env), worktrees };
+  return {
+    name,
+    path,
+    exists: existsSync(path),
+    worktrees,
+    conversations: listConversations(path, env),
+  };
 }
 
 /** Everything here is asked of git now, not remembered from before. */
@@ -232,15 +236,38 @@ export function releaseWorkArea(name, { env = process.env, dryRun = false } = {}
   // than policing it, which is the difference between tidying and guarding.
   if (!dryRun) pruneWorktrees(knownRepositories(env));
   // When everything is released the work area has nothing left to be, so it
-  // goes too — but only if it is genuinely empty. Anything the user put there
-  // by hand keeps the directory alive.
+  // goes too — and its conversations with it, because a piece of work that is
+  // finished is finished in both places. Only if it is genuinely empty:
+  // anything the user put there by hand keeps the directory alive, and keeps
+  // the conversations too.
+  const conversations = kept.length === 0 ? area.conversations : [];
+  let removedConversations = conversations;
+  let failedConversations = [];
   if (!dryRun && kept.length === 0 && area.exists) {
+    // An earlier mc wrote a copy of the conversation id here. Nothing reads it
+    // any more; it goes out with the area rather than being migrated.
     try { rmSync(workAreaStatePath(name, env), { force: true }); } catch { /* absent */ }
-    try {
-      if (readdirSync(area.path).length === 0) rmSync(area.path, { recursive: true, force: true });
-    } catch { /* leave it */ }
+    let empty = false;
+    try { empty = readdirSync(area.path).length === 0; } catch { /* leave it */ }
+    if (empty) {
+      if (conversations.length) {
+        const outcome = deleteConversations(conversations, env);
+        removedConversations = outcome.removed;
+        failedConversations = outcome.failed;
+      }
+      rmSync(area.path, { recursive: true, force: true });
+    } else {
+      removedConversations = [];
+    }
   }
-  return { name, removed, kept, dry_run: dryRun };
+  return {
+    name,
+    removed,
+    kept,
+    conversations: removedConversations,
+    conversations_failed: failedConversations,
+    dry_run: dryRun,
+  };
 }
 
 /**
@@ -294,46 +321,32 @@ export function discardWorkArea(name, { repo = null, env = process.env, dryRun =
   }
   if (!dryRun) pruneWorktrees(knownRepositories(env));
   const wholeArea = !repo && kept.length === 0;
+
+  // The conversations go with the work. Leaving them would mean the user has to
+  // find and delete them by hand in two different tools, which is the chore mc
+  // exists to end. They are deleted through the tools that own them — mc has no
+  // copy to delete, and makes none.
+  const conversations = wholeArea ? area.conversations : [];
+  let removedConversations = conversations;
+  let failedConversations = [];
+  if (!dryRun && conversations.length) {
+    const outcome = deleteConversations(conversations, env);
+    removedConversations = outcome.removed;
+    failedConversations = outcome.failed;
+  }
+
   if (!dryRun && wholeArea && area.exists) {
     rmSync(area.path, { recursive: true, force: true });
   }
-  return { name, discarded, kept, removes_area: wholeArea, dry_run: dryRun };
-}
-
-export function readState(name, env = process.env) {
-  let raw = {};
-  try { raw = JSON.parse(readFileSync(workAreaStatePath(name, env), 'utf8')); } catch { return { sessions: {} }; }
-  if (raw && typeof raw.sessions === 'object' && raw.sessions) return raw;
-  // The first shape held one conversation per tool. The first of them becomes
-  // `main`, because that is the name `mc work open` reaches for; naming it
-  // after its tool left it there but unreachable.
-  const sessions = {};
-  const legacy = Object.entries(raw || {}).filter(([, value]) => typeof value === 'string');
-  legacy.forEach(([tool, conversation], index) => {
-    sessions[index === 0 ? 'main' : tool] = { tool, conversation };
-  });
-  return { sessions };
-}
-
-export function readToolSession(area, sessionName, env = process.env) {
-  const state = readState(area, env);
-  return state.sessions?.[sessionName] || null;
-}
-
-export function writeToolSession(area, sessionName, entry, env = process.env) {
-  const state = readState(area, env);
-  const sessions = { ...state.sessions, [sessionName]: { ...state.sessions?.[sessionName], ...entry } };
-  return writeState(area, { sessions }, env);
-}
-
-export function writeState(name, patch, env = process.env) {
-  const current = readState(name, env);
-  const next = { ...current, ...patch };
-  createWorkArea(name, env);
-  writeFileSync(workAreaStatePath(name, env), `${JSON.stringify(next, null, 2)}\n`, {
-    encoding: 'utf8', mode: 0o600,
-  });
-  return next;
+  return {
+    name,
+    discarded,
+    kept,
+    conversations: removedConversations,
+    conversations_failed: failedConversations,
+    removes_area: wholeArea,
+    dry_run: dryRun,
+  };
 }
 
 /**

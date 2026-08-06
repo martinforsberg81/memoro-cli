@@ -33,15 +33,16 @@ MAINTENANCE
   mc storage status [--json]       Summarize durable and ephemeral session state
   mc storage explain <name>        Explain one session's stored resources
   mc storage repair [--apply]      Plan or apply loss-free storage repairs
-  mc work                          Pieces of work under ~/mc, derived from git
-  mc work new <name>               A work area with no repository at all
+  mc work                          Pieces of work under ~/mc, and what is in them
+  mc work <name>                   Open it — the name is enough, new or not
+  mc work <name> new               A new conversation rather than the last one
+  mc work <name> <id>              One particular conversation, by the id shown
   mc work add <name> <repo> [branch]
                                     Add a repository's worktree to that work
-  mc work <name> [session]         Open it — the name is enough
-  mc work open <name> [session]    The same thing, spelled out
   mc work remove <name> <repo>     Take one repository out of that work
   mc work release <name> [--apply] Remove what git says can go; keep the rest
-  mc work discard <name> [--apply] Throw the work away, unfinished and all
+  mc work discard <name> [--apply] Throw it away — worktrees, branches, and the
+                                    conversations, which nothing brings back
   mc worktree add <name> <branch>  Create a worktree this session owns
   mc worktree list <name>          What this session owns
   mc worktrees [--json]            What is lying around, and whose it is
