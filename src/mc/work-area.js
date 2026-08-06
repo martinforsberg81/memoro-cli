@@ -120,6 +120,33 @@ export function createWorkArea(name, env = process.env) {
   return path;
 }
 
+/**
+ * Take one repository out of a piece of work, leaving the rest of it alone.
+ *
+ * Doing this by hand — `git worktree remove` and then a branch delete — is
+ * what people did because mc had no verb for it, and it is how a shell ends
+ * up standing in a directory that no longer exists.
+ */
+export function removeWorktree({ name, repo, env = process.env } = {}) {
+  const area = inspectWorkArea(name, env);
+  const worktree = area.worktrees.find((item) => item.repo === repo);
+  if (!worktree) return { ok: false, reason: 'no-such-worktree' };
+  const inUse = directoryInUse(worktree.path);
+  if (inUse) return { ok: false, reason: `in use by ${inUse.join(', ')}` };
+  if (worktree.uncommitted > 0) return { ok: false, reason: `${worktree.uncommitted} uncommitted` };
+  if (!worktree.is_git) {
+    rmSync(worktree.path, { recursive: true, force: true });
+    return { ok: true, removed: 'directory' };
+  }
+  run(['--git-dir', worktree.git_common_dir, 'worktree', 'remove', '--', worktree.path]);
+  const branchKept = worktree.unmerged_commits > 0;
+  if (worktree.branch && !branchKept) {
+    run(['--git-dir', worktree.git_common_dir, 'branch', '-d', worktree.branch]);
+  }
+  pruneWorktrees(knownRepositories(env));
+  return { ok: true, removed: 'worktree', branch: worktree.branch, branch_kept: branchKept };
+}
+
 export function addWorktree({ name, repo, branch, from = null, env = process.env } = {}) {
   const area = createWorkArea(name, env);
   const target = join(area, repoName(repo));
@@ -149,6 +176,27 @@ export function addWorktree({ name, repo, branch, from = null, env = process.env
  * on `origin/main` stays. Neither stops the rest from being released, and
  * neither is an error — it is the work still being work.
  */
+/**
+ * Is something standing in this directory right now?
+ *
+ * A worktree can be the working directory of a running tool session — often
+ * the very session asking for the release. Removing it leaves that shell and
+ * that tool with no ground under them: the terminal falls back to the home
+ * directory and every relative path afterwards is wrong.
+ *
+ * Asked of the operating system, not remembered. A directory nobody is
+ * standing in answers immediately; there is nothing to keep in sync.
+ */
+export function directoryInUse(path) {
+  try {
+    const out = execFileSync('lsof', ['-a', '-d', 'cwd', '--', path], {
+      encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    const lines = out.split('\n').slice(1).filter(Boolean);
+    return lines.length ? [...new Set(lines.map((line) => line.split(/\s+/u)[0]))] : null;
+  } catch { return null; }
+}
+
 export function releaseWorkArea(name, { env = process.env, dryRun = false } = {}) {
   const area = inspectWorkArea(name, env);
   const removed = [];
@@ -157,6 +205,11 @@ export function releaseWorkArea(name, { env = process.env, dryRun = false } = {}
     if (!worktree.is_git) {
       if (!dryRun) rmSync(worktree.path, { recursive: true, force: true });
       removed.push({ ...worktree, what: 'directory' });
+      continue;
+    }
+    const inUse = directoryInUse(worktree.path);
+    if (inUse) {
+      kept.push({ ...worktree, why: `in use by ${inUse.join(', ')}` });
       continue;
     }
     if (worktree.uncommitted > 0) {
