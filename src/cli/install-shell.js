@@ -4,7 +4,8 @@
  *
  * The wrapper runs the CLI with `--emit-shell-directives` and eval's fd
  * 3 so `mc cd <name>` / post-`mc end` cd-back actually change the
- * caller's shell cwd. See §2b in the plan.
+ * caller's shell cwd — without disturbing stdout or stderr, which belong
+ * to whatever is reading the command.
  *
  * Idempotent — re-running replaces the managed block in place.
  */
@@ -17,22 +18,28 @@ const MARK_END = '# <<< memoro mc shell wrapper <<<';
 
 const WRAPPER_BODY = String.raw`
 mc() {
-  # Capture only fd 3 (shell directives) into $out. stdout is routed
-  # to the terminal via fd 2 so the user sees normal command output;
-  # stderr is left untouched on fd 2 so warnings and tips reach the
-  # terminal as well. An earlier version of this wrapper also
-  # redirected stderr into fd 3, which leaked stderr into the eval
-  # buffer and broke any command whose stderr contained shell
-  # metacharacters (e.g. "<branch>" in a hint).
-  local out rc
-  # "command mc" bypasses this very function and resolves to the mc
-  # binary on PATH (src/bin-mc.js, where the LIFECYCLE dispatch lives).
-  # "command memoro-cli" would hit src/bin.js — the OTHER binary in
-  # this package, which does not know about the lifecycle subcommands.
-  out=$(command mc "$@" --emit-shell-directives 3>&1 1>&2)
-  rc=$?
-  [ -n "$out" ] && eval "$out"
-  return $rc
+  # Shell directives travel on fd 3 and are eval'd here, so "mc cd" and the
+  # cd-back after "mc end" can change the caller's shell.
+  #
+  # They go through a temp file rather than a command substitution. The
+  # obvious form — out=$(command mc "$@" 3>&1 1>&2) — moves fd 3 onto the
+  # capture pipe and stdout onto stderr. On a terminal that is invisible,
+  # because both land on the screen. Anywhere else it is fatal: "mc
+  # coding-profile read > profile.md" wrote 0 bytes, and every pipe into jq,
+  # grep or a file got nothing. Assistants and scripts read this CLI, so
+  # stdout has to stay stdout.
+  local __mc_fd3 __mc_out __mc_rc
+  __mc_fd3=$(mktemp -t mc-directives) || { command mc "$@"; return $?; }
+  # "command mc" bypasses this very function and resolves to the mc binary on
+  # PATH (src/bin-mc.js, where the LIFECYCLE dispatch lives). "command
+  # memoro-cli" would hit src/bin.js — the OTHER binary in this package,
+  # which does not know about the lifecycle subcommands.
+  command mc "$@" --emit-shell-directives 3>"$__mc_fd3"
+  __mc_rc=$?
+  __mc_out=$(cat "$__mc_fd3" 2>/dev/null)
+  rm -f "$__mc_fd3"
+  [ -n "$__mc_out" ] && eval "$__mc_out"
+  return $__mc_rc
 }
 `;
 
