@@ -14,6 +14,7 @@ import {
   inspectWorkArea,
   listWorkAreas,
   releaseWorkArea,
+  removeWorktree,
   resolveRepository,
 } from '../work-area.js';
 import { workRoot } from '../paths.js';
@@ -29,6 +30,7 @@ export async function run(argv, deps = {}) {
     stderr.write('        mc work new <name>\n');
     stderr.write('        mc work add <name> <repo> [branch]\n');
     stderr.write('        mc work open <name> [session] [--repo <repo>] [--codex|--claude]\n');
+    stderr.write('        mc work remove <name> <repo>\n');
     stderr.write('        mc work release <name> [--apply]\n');
     return 2;
   }
@@ -78,6 +80,17 @@ export async function run(argv, deps = {}) {
       return 1;
     }
     stdout.write(`mc: ${result.path}${result.branch ? ` on ${result.branch}` : ''}\n`);
+    return 0;
+  }
+
+  if (opts.verb === 'remove') {
+    const result = removeWorktree({ name: opts.name, repo: opts.repo });
+    if (!result.ok) {
+      stderr.write(`mc: kept ${opts.repo} in ${opts.name} — ${result.reason}\n`);
+      return 1;
+    }
+    stdout.write(`mc: removed ${opts.repo} from ${opts.name}\n`);
+    if (result.branch_kept) stdout.write(`mc: kept branch ${result.branch} — it has unmerged commits\n`);
     return 0;
   }
 
@@ -162,7 +175,7 @@ export function parseArgs(argv) {
   }
   if (positional.length === 0) return opts;
   const [verb, ...rest] = positional;
-  if (!['add', 'release', 'list', 'open', 'new'].includes(verb)) {
+  if (!['add', 'release', 'list', 'open', 'new', 'remove'].includes(verb)) {
     return { ...opts, error: `unknown verb: ${verb}` };
   }
   opts.verb = verb;
@@ -178,6 +191,11 @@ export function parseArgs(argv) {
     if (!/^[A-Za-z0-9._-]{1,64}$/u.test(opts.session)) {
       return { ...opts, error: `"${opts.session}" cannot be a session name` };
     }
+    return opts;
+  }
+  if (verb === 'remove') {
+    opts.repo = opts.repo || rest[1] || null;
+    if (!opts.repo) return { ...opts, error: 'which repository? mc work remove <name> <repo>' };
     return opts;
   }
   if (verb === 'add') {
