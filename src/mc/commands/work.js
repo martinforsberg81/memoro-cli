@@ -185,9 +185,14 @@ function describe(worktree) {
   return `${worktree.repo}  ${worktree.branch || '(detached)'}${marks.length ? `  [${marks.join(', ')}]` : ''}`;
 }
 
+function knownWorkArea(name, env = process.env) {
+  if (!name || !/^[A-Za-z0-9._-]{1,64}$/u.test(name)) return false;
+  return listWorkAreas(env).some((area) => area.name === name);
+}
+
 export function parseArgs(argv) {
   const opts = {
-    verb: 'list', name: null, repo: null, branch: null, session: 'main',
+    verb: 'list', name: null, repo: null, branch: null, session: 'main', env: process.env,
     tool: null, apply: false, json: false, repoFlagNext: false,
   };
   const positional = [];
@@ -203,8 +208,16 @@ export function parseArgs(argv) {
   }
   if (positional.length === 0) return opts;
   const [verb, ...rest] = positional;
-  if (!['add', 'release', 'list', 'open', 'new', 'remove', 'discard'].includes(verb)) {
-    return { ...opts, error: `unknown verb: ${verb}` };
+  const VERBS = ['add', 'release', 'list', 'open', 'new', 'remove', 'discard'];
+  if (!VERBS.includes(verb)) {
+    // `mc work critical-chat-error` names a work area, and there is only one
+    // thing anyone means by that. Requiring `open` is mc's grammar, not the
+    // user's, and answering with a usage list when the answer is "you meant
+    // open" is the same refusal in a different costume.
+    if (knownWorkArea(verb, opts.env)) {
+      return { ...opts, verb: 'open', name: verb, session: rest[0] || 'main' };
+    }
+    return { ...opts, error: `unknown verb or work area: ${verb}` };
   }
   opts.verb = verb;
   if (verb === 'list') return opts;
