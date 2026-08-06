@@ -1,11 +1,12 @@
 /**
  * Codex CLI adapter.
  *
- * Codex reads workspace-local `AGENTS.md` files. mc keeps that file as
- * static project instructions managed by `mc adapter sync`; per-session
- * grounding is delivered as the initial CLI prompt so the tracked wrapper
- * is not dirtied by runtime state and Codex does not open its resume picker
- * on an empty launch.
+ * Nothing here writes `AGENTS.md`. Codex reads workspace-local ones and that
+ * is between Codex and the project; mc used to manage the file and deliver
+ * per-session state through it, then through the conversation's first
+ * message, which is why so many transcripts open with mc's words rather than
+ * the user's. The Coding Profile now reaches a new conversation through
+ * `-c instructions=…` at launch, which needs no file. See `../mc/portrait.js`.
  */
 
 import { findCodexSessionById, findLatestCodexSession } from '../lib/codex.js';
@@ -17,10 +18,8 @@ import { spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { basename, dirname, join } from 'node:path';
 import { homedir } from 'node:os';
-import { upsertManagedBlock, removeManagedBlock } from '../lib/managed-block.js';
 import {
   resolveWorkspaceRoot,
-  ensureCodexAgentsIgnored,
   resolveRealCodexBinary,
 } from '../lib/codex.js';
 import { stripAnsi } from '../lib/prompt.js';
@@ -33,7 +32,7 @@ const CODEX_SESSION_START_MATCHER = 'startup|resume';
 
 export const ID = 'codex';
 export const LABEL = 'Codex CLI';
-export const CONFIG_PATH = 'AGENTS.md';
+export const CONFIG_PATH = null;
 export const POLICY_SUPPORT = Object.freeze({
   permissions: Object.freeze({
     profile: 'unsupported',
@@ -43,67 +42,6 @@ export const POLICY_SUPPORT = Object.freeze({
     secrets: 'unsupported',
   }),
 });
-
-export async function writeLens(markdown, { cwd = process.cwd() } = {}) {
-  const root = resolveWorkspaceRoot(cwd);
-  const target = join(root, 'AGENTS.md');
-  const existing = existsSync(target) ? await readFile(target, 'utf8') : '';
-  const next = upsertManagedBlock(existing, markdown);
-  await writeFile(target, next);
-  await ensureCodexAgentsIgnored(root);
-  return target;
-}
-
-export async function removeLens({ cwd = process.cwd() } = {}) {
-  const target = join(resolveWorkspaceRoot(cwd), 'AGENTS.md');
-  if (!existsSync(target)) return;
-  const existing = await readFile(target, 'utf8');
-  const next = removeManagedBlock(existing);
-  await writeFile(target, next);
-}
-
-// Grounding block markers — codex's OWN markers, distinct from both the
-// lens block (default portrait-coding marker) AND the claude-code
-// grounding markers, so a session that switches between tools never has
-// one tool's block collide with another's in a shared AGENTS.md. Same
-// managed-block round-trip as claude-code; only the target file
-// (AGENTS.md) and the marker text differ.
-export const GROUNDING_BEGIN = '<!-- memoro:managed:grounding:codex:begin -->';
-export const GROUNDING_END   = '<!-- memoro:managed:grounding:codex:end -->';
-
-const projectAgentsMd = (cwd) => join(resolveWorkspaceRoot(cwd), 'AGENTS.md');
-
-/**
- * Deliver the grounding bundle without mutating AGENTS.md. AGENTS.md is
- * now the static adapter-sync wrapper and is usually tracked project state;
- * putting per-session runtime state there leaves a dirty worktree after
- * every Codex launch. The shared `groundSession` seam understands this
- * structured return value and passes `message` as Codex's initial prompt
- * before the user's real work begins.
- */
-export async function writeGrounding(markdown, { cwd = process.cwd() } = {}) {
-  return {
-    path: projectAgentsMd(cwd),
-    delivery: 'startup-message',
-    message: markdown,
-  };
-}
-
-/**
- * Remove a legacy codex grounding managed block from the workspace
- * AGENTS.md. New launches do not write this block, but cleanup remains so
- * old sessions and interrupted pre-0.7.5 runs can be repaired safely.
- */
-export async function removeGrounding({ cwd = process.cwd() } = {}) {
-  const target = projectAgentsMd(cwd);
-  if (!existsSync(target)) return;
-  const existing = await readFile(target, 'utf8');
-  const next = removeManagedBlock(existing, {
-    beginMarker: GROUNDING_BEGIN,
-    endMarker: GROUNDING_END,
-  });
-  await writeFile(target, next);
-}
 
 export async function installHooks({
   memoroCliBin = 'memoro-cli',
@@ -251,17 +189,8 @@ export function detect() {
   return existsSync(join(homedir(), '.codex'));
 }
 
-/**
- * Per §13a — Codex reads project-level `AGENTS.md` (per agents.md
- * convention). `mc adapter sync` materialises a thin wrapper here
- * pointing at the canonical `docs/coding-agent-protocol.md`.
- */
-export function instructionsFile() {
-  return { path: 'AGENTS.md', renderer: 'markdown-wrapper' };
-}
-
 // ─────────────────────────────────────────────────────────────
-// Interactive launch contract (§5 / Grounding Phase 3)
+// Interactive launch contract
 //
 // Parity with claude-code's `launchSpec()`. The wrap-mode launcher spawns
 // `bin` in the PTY; for codex we resolve the REAL codex binary (skipping
@@ -270,10 +199,8 @@ export function instructionsFile() {
 // `bin` is null — the launcher fails high with the install hint rather
 // than spawning nothing (soft-degrade is NOT silent here, per §5).
 //
-// Grounding is delivered later through the owned PTY, not as argv, so Codex
-// Apps/MCP startup can finish before the first prompt is submitted. Native
-// resume is represented by the `codex resume <session-id>` subcommand and is
-// built by `resumeArgs()` below.
+// Native resume is represented by the `codex resume <session-id>` subcommand
+// and is built by `resumeArgs()` below.
 // ─────────────────────────────────────────────────────────────
 export function launchSpec({ resolveBinary = resolveRealCodexBinary } = {}) {
   let bin = null;

@@ -79,11 +79,8 @@ SETUP AND CAPABILITIES
   mc github pr list|view|checks    Read pull requests through the GitHub App
   mc github pr create|update       Write through the same typed capability
   mc coding-profile read|diff|write
-                                    Manage the durable Coding Profile
-  mc coding-profile sync [--dry-run]
-                                    Deliver it to ~/.claude/CLAUDE.md and
-                                    ~/.codex/AGENTS.md; never a repo's own
-  mc adapter sync                  Refresh repo-owned tool instructions
+                                    Manage the durable Coding Profile; a new
+                                    conversation receives it at launch
   mc doctor                        Diagnose local mc state
 
 IDENTITY

@@ -4,10 +4,12 @@ Repo-owned instruction contract for **Codex CLI**. The full, tool-agnostic
 content lives at [`docs/coding-agent-protocol.md`](docs/coding-agent-protocol.md) — **read
 that first**.
 
-This wrapper is managed by `mc adapter sync`. To update project
-conventions, edit `docs/coding-agent-protocol.md` and re-run `mc adapter sync`.
-It is not a Coding Profile mirror; user work-method changes live in
-Memoro and are handled with `mc coding-profile read|diff|write`.
-Hand-edits here will be flagged as drift on the next sync.
+This file belongs to the repository and to whoever edits it. mc does not
+write it, read it, or check it for drift — that machinery is gone. To update
+project conventions, edit `docs/coding-agent-protocol.md` and reflect the
+change here by hand.
 
-<!-- mc-adapter-sync:version=0296bf661bb0 -->
+It is not a Coding Profile mirror. Work-method changes are the user's, live in
+Memoro, and reach a new conversation as a launch argument; see
+`mc coding-profile read|diff|write`.
+

@@ -2,10 +2,10 @@
 
 Canonical, tool-agnostic project instructions for any coding agent
 working on this repo. Claude Code reads `CLAUDE.md`, Codex / GPT
-agents read `AGENTS.md`; both are thin wrappers materialised from
-this file by `mc adapter sync` (plan §13). Those wrappers are repo
-contracts only; server-owned User Profile and Coding Profile context is
-delivered at session launch and is not copied into repo instruction files.
+agents read `AGENTS.md`; both are thin wrappers around this file, edited
+by hand. mc writes neither, and no longer has any machinery that could:
+the user's Coding Profile reaches a new conversation as a launch argument
+and is never copied into an instruction file.
 
 `memoro-cli` — the terminal coordinator for Memoro. Ships the `mc`,
 `memoro-cli`, and `memoro` binaries. Node 22+, ESM, `node --test`.
@@ -86,8 +86,6 @@ only after the user approves. When no profile exists, `read --json` returns
 - Adapter contract: every `src/adapters/<tool>.js` exports
   - `ID` and `LABEL` — identity for sync + registry
   - `detect()` — soft signal that the user has the tool installed
-  - `instructionsFile()` — `{ path, renderer }` or `null`; consumed
-    by `mc adapter sync` (§13)
   - `TOOL_NAME`, `STATUS_TIMEOUT_MS`, `getStatus()` — `mc auth
     status` probe (§11a)
 
@@ -249,12 +247,10 @@ tests back one at a time along the way.
   coordinator (see the skill)
 - Don't add `--non-interactive` flags to commands that are already
   non-interactive by default
-- Don't hand-edit `CLAUDE.md` / `AGENTS.md` (or any other file
-  declared by an adapter's `instructionsFile()`). They're managed
-  by `mc adapter sync`; hand-edits are flagged as drift on the
-  next sync. Edit this file instead for repo conventions, and use
-  `mc coding-profile read|diff|write` for durable user work-method
-  changes.
+- Keep `CLAUDE.md` / `AGENTS.md` thin. They are hand-edited wrappers
+  around this file: put repo conventions here and reflect them there.
+  Use `mc coding-profile read|diff|write` for durable user work-method
+  changes — those are the user's, not the repository's.
 
 ## Per-tool surface (what each tool reads natively)
 
@@ -262,12 +258,11 @@ tests back one at a time along the way.
 |---|---|---|
 | Claude Code | `CLAUDE.md` (root) + `.claude/skills/`, `.claude/commands/`, `.claude/hooks/`, `.claude/settings.json` | Full native support today |
 | Codex / GPT | `AGENTS.md` (root) | Markdown only; skills and slash commands are read manually via the prompt above |
-| Gemini CLI | none yet | `instructionsFile()` returns null pending verification of Gemini's project-instruction convention |
+| Gemini CLI | none yet | no verified project-instruction convention |
 
-`mc adapter sync` materialises thin repo-contract wrappers from this file; it
-does not materialise the user's Coding Profile into `CLAUDE.md` or `AGENTS.md`.
-`mc
-tool-switch <tool>` swaps the default tool for future bare `mc` / `mc new`
-starts (plan §13d). Existing sessions change tool only when relaunched with
+mc writes none of these files. The user's Coding Profile is handed to a new
+conversation as a launch argument — `--append-system-prompt` for Claude,
+`-c instructions=` for Codex — and a resumed conversation already has it.
+Existing sessions change tool only when relaunched with
 `mc resume <name> --codex` / `--claude`; a running TUI cannot switch tool
 in place.

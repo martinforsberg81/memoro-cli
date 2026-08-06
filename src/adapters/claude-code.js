@@ -1,12 +1,15 @@
 /**
  * Claude Code adapter.
  *
- * - Managed section lives in `~/.claude/CLAUDE.md`
- * - SessionStart / SessionEnd hooks live in `~/.claude/settings.json`
+ * Nothing here writes `CLAUDE.md` — not the project's and not the user's.
+ * mc used to: a managed block in the repository's file left a dirty worktree
+ * after every launch, and a managed block in `~/.claude/CLAUDE.md` was tidier
+ * and still mc leaving state in a file it does not own. The Coding Profile
+ * now reaches a new conversation through `--append-system-prompt` at launch,
+ * which needs no file at all. See `../mc/portrait.js`.
  *
- * This is the reference adapter — other adapters (Cursor, Codex, Windsurf,
- * Gemini CLI) will implement the same shape with different paths +
- * config formats.
+ * What remains here: launch, resume, transcripts, and the SessionStart /
+ * SessionEnd hooks in `~/.claude/settings.json`.
  */
 
 import { readFile, writeFile, mkdir, chmod, readdir, unlink } from 'node:fs/promises';
@@ -16,14 +19,12 @@ import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { findClaudeSessionById, findLatestClaudeSession } from '../lib/claude.js';
 import { ensureCoordinatorSlashCommand } from '../mc/coordinator-command.js';
-import { upsertManagedBlock, removeManagedBlock } from '../lib/managed-block.js';
 import { getPackageVersion } from '../lib/version.js';
 import { writeProtectedFile, shredFile } from './_materialise.js';
 
 // Paths are resolved lazily via homedir() so tests (and any future env
 // override) can redirect HOME without having to bust the module cache.
 const claudeDir = () => join(homedir(), '.claude');
-const claudeMd = () => join(claudeDir(), 'CLAUDE.md');
 const settingsJson = () => join(claudeDir(), 'settings.json');
 const commandsDir = () => join(claudeDir(), 'commands');
 
@@ -31,10 +32,10 @@ const COMMAND_PREFIX = 'memoro-';
 
 export const ID = 'claude-code';
 export const LABEL = 'Claude Code';
-// Kept for back-compat with callers that read the path before any operation.
-// Prefer reading the return value of writeLens / installHooks for the
-// effective path after a call.
-export const CONFIG_PATH = claudeMd();
+// This adapter owns no instruction file. The constant remains so callers that
+// ask every adapter the same question get a truthful answer rather than an
+// exception.
+export const CONFIG_PATH = null;
 export const POLICY_SUPPORT = Object.freeze({
   permissions: Object.freeze({
     profile: 'unsupported',
@@ -44,75 +45,6 @@ export const POLICY_SUPPORT = Object.freeze({
     secrets: 'unsupported',
   }),
 });
-
-/**
- * Write the lens markdown into the user's Claude Code config, replacing
- * any existing managed block.
- */
-export async function writeLens(markdown) {
-  await ensureDir(claudeDir());
-  const existing = existsSync(claudeMd()) ? await readFile(claudeMd(), 'utf8') : '';
-  const next = upsertManagedBlock(existing, markdown);
-  await writeFile(claudeMd(), next);
-  return claudeMd();
-}
-
-// Grounding block markers — distinct from the lens block. Current launches
-// deliver per-session grounding through Claude's launch args instead of
-// mutating project CLAUDE.md, but these markers remain exported so legacy
-// blocks left by older mc versions can be stripped safely.
-//
-// Exported so `mc adapter sync` can STRIP this per-session block before
-// byte-comparing the wrapper against canon (Phase 2 drift-fix). The
-// strip is symmetric with the legacy writer by construction — same markers,
-// one source of truth — so an older grounded session's CLAUDE.md never
-// reports as drift.
-export const GROUNDING_BEGIN = '<!-- memoro:managed:grounding:begin -->';
-export const GROUNDING_END   = '<!-- memoro:managed:grounding:end -->';
-
-const projectClaudeMd = (cwd) => join(cwd, 'CLAUDE.md');
-
-/**
- * Deliver the grounding bundle without mutating project CLAUDE.md.
- * CLAUDE.md is often a tracked adapter-sync wrapper; writing runtime state
- * there leaves every Claude launch with a dirty worktree. The wrap launcher
- * passes this message to Claude via `--append-system-prompt` before the
- * user starts working.
- */
-export async function writeGrounding(markdown, { cwd = process.cwd() } = {}) {
-  return {
-    path: projectClaudeMd(cwd),
-    delivery: 'launch-args',
-    message: markdown,
-  };
-}
-
-/**
- * Remove a legacy grounding managed block from the cwd's CLAUDE.md.
- * New launches do not write this block, but cleanup remains so old
- * sessions and interrupted pre-0.7.5 runs can be repaired safely.
- */
-export async function removeGrounding({ cwd = process.cwd() } = {}) {
-  const target = projectClaudeMd(cwd);
-  if (!existsSync(target)) return;
-  const existing = await readFile(target, 'utf8');
-  const next = removeManagedBlock(existing, {
-    beginMarker: GROUNDING_BEGIN,
-    endMarker: GROUNDING_END,
-  });
-  await writeFile(target, next);
-}
-
-/**
- * Remove the managed block (undoes writeLens). Leaves any hand-edited
- * content in CLAUDE.md untouched.
- */
-export async function removeLens() {
-  if (!existsSync(claudeMd())) return;
-  const existing = await readFile(claudeMd(), 'utf8');
-  const next = removeManagedBlock(existing);
-  await writeFile(claudeMd(), next);
-}
 
 /**
  * Install SessionStart + SessionEnd hooks into ~/.claude/settings.json.
@@ -213,7 +145,7 @@ export async function uninstallHooks() {
  * user can type `/memoro-loose-ends` (etc.) mid-session to inject that
  * section as context without an LLM roundtrip.
  *
- * Files are identified by the `memoro-` name prefix + a managed-block
+ * Files are identified by the `memoro-` name prefix + a managed
  * marker in the body so `uninstallCommands` can remove them cleanly without
  * touching hand-authored slash commands that happen to live in the same
  * directory.
@@ -291,34 +223,16 @@ export function detect() {
   return existsSync(claudeDir());
 }
 
-/**
- * Per §13a — the project-level instruction file Claude Code reads
- * natively. `mc adapter sync` (§13c) materialises a thin wrapper here
- * pointing at the canonical `docs/coding-agent-protocol.md`.
- *
- * Returning a path means "sync me"; null means "no instruction file for
- * this tool" (used by the gemini stub today). The `renderer` selects
- * the format converter — only `markdown-wrapper` exists in phase 2.
- */
-export function instructionsFile() {
-  return { path: 'CLAUDE.md', renderer: 'markdown-wrapper' };
-}
-
 // ─────────────────────────────────────────────────────────────
-// Interactive launch contract (§5 / Grounding Phase 3)
+// Interactive launch contract
 //
-// The wrap-mode launcher (`runWrap` in bin-mc.js) used to hardcode
-// `claude`. It now routes through the adapter: `launchSpec()` declares
-// WHICH binary to spawn in the PTY and HOW the session identifies itself
-// in heartbeats. The bundle written by `writeGrounding` is tool-agnostic;
-// only the binary + the instruction file differ per tool — and the file
-// is already owned by `writeGrounding`, so the launcher only needs the
-// spawn shape here.
+// `launchSpec()` declares WHICH binary to spawn and HOW the session
+// identifies itself in heartbeats. Nothing about instruction files: the
+// Coding Profile reaches a new conversation as a launch argument, which the
+// caller assembles.
 //
 // `bin`            — the executable to spawn in the PTY.
 // `args(argv)`     — map the user-supplied argv into the binary's args.
-//                    claude takes argv verbatim (incl. `--resume`) and
-//                    appends grounding as an extra system prompt.
 // `heartbeatSource`— the `source` field stamped on heartbeats so peer
 //                    coordinators can tell which tool a session runs.
 // `label`          — human label for the launch banner / errors.

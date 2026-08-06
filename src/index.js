@@ -6,10 +6,3 @@
 
 export * as adapters from './adapters/index.js';
 export { parseTranscript, buildSessionPayload } from './lib/distill.js';
-export {
-  upsertManagedBlock,
-  removeManagedBlock,
-  readManagedBlock,
-  DEFAULT_BEGIN,
-  DEFAULT_END,
-} from './lib/managed-block.js';

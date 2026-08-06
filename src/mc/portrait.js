@@ -1,120 +1,110 @@
 /**
- * The Coding Profile, delivered to the tools' own instruction files.
+ * The Coding Profile, handed to a tool as a new conversation begins.
  *
- * The profile is not mc's. It lives in Memoro as part of the user's profile,
- * and `mc coding-profile read|diff|write` is how it is edited. This module is
- * only the last few centimetres: getting it in front of the tool.
+ * The profile is the user's, not mc's: it lives in Memoro as part of their
+ * profile and `mc coding-profile read|diff|write` is how it is edited. All
+ * that is needed here is to put it in front of the tool once, at the moment a
+ * conversation starts.
  *
- * Where it goes matters more than it sounds, and mc has already been wrong
- * about it twice.
+ * mc has been wrong about the "where" three times, each time by writing to a
+ * file it did not own. It put the profile in the repository's `CLAUDE.md` and
+ * `AGENTS.md`, which are tracked project state, and left a dirty worktree
+ * after every launch. It then moved to a startup message, which is why 1010 of
+ * 1393 conversations on this machine open with `# Session grounding` instead
+ * of with something their author said. It then wrote the tools' own
+ * `~/.claude/CLAUDE.md` and `~/.codex/AGENTS.md`, which is tidier and still
+ * mc leaving state in someone else's file.
  *
- * Writing it into the repository's `CLAUDE.md` or `AGENTS.md` left a dirty
- * worktree after every single launch, because those files are tracked project
- * state. So delivery moved to launch time instead — Claude took it through
- * `--append-system-prompt`, which is invisible and correct, and Codex, having
- * no equivalent, took it as the conversation's first message. That is why
- * 1010 of 1393 conversations on this machine open with `# Session grounding`
- * rather than with something their author said.
+ * There is a channel that needs no file at all. Both tools take instructions
+ * as a launch argument:
  *
- * Both mistakes came from treating the profile as per-session state. It is
- * not. It is how the user works: the same in every conversation, in every
- * repository, changing rarely. Static content belongs in a static place, and
- * both tools have exactly the right one — an instruction file in their own
- * home, outside any repository:
+ *   claude  --append-system-prompt <markdown>
+ *   codex   -c instructions=<markdown>
  *
- *   ~/.claude/CLAUDE.md      read by Claude in every directory
- *   ~/.codex/AGENTS.md       read by Codex in every directory
+ * Verified rather than assumed: `codex exec -c instructions="…begin every
+ * reply with QX7"` answered `QX7 Hej på dig.`, and a second run with a shell
+ * task still listed the directory, so the base instructions are layered
+ * rather than replaced.
  *
- * Verified rather than assumed: a probe file in `~/.codex/AGENTS.md` telling
- * Codex to prefix its reply with a token came back with the token.
- *
- * Nothing here happens at launch. Opening a piece of work does not touch the
- * network — that discipline is what made `mc work` fast, and a profile fetched
- * on every start would put a server between the user and their session.
+ * Only a new conversation gets it. A resumed one already has it in its own
+ * history, and handing it over again would say the same thing twice.
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 
-import { upsertManagedBlock, readManagedBlock } from '../lib/managed-block.js';
 import { log } from './logger.js';
+import { mcHome } from './paths.js';
+
+const PROFILE_PATH = '/api/mc/coding-profile';
+const DEFAULT_API_URL = 'https://meetmemoro.app';
 
 /**
- * A line for the tool, not for the user.
- *
- * Two instruction files now reach the same conversation, and they answer
- * different questions: this one says how the person works, the repository's
- * says what the project requires. Saying which yields avoids the tool having
- * to guess when they appear to disagree.
+ * Opening a piece of work must not wait on a server. The profile is read
+ * once, quickly, and kept — so a slow network costs a moment and an
+ * unreachable one costs nothing at all, because the last answer is still on
+ * disk. Nothing here throws: a conversation without the profile is worse than
+ * one with it, and far better than one that would not start.
  */
-const PREAMBLE = 'The following is how this user works, from their own profile.'
-  + ' It applies across every repository. Where a project\'s own instructions'
-  + ' conflict with it, the project\'s instructions win.';
+const FETCH_TIMEOUT_MS = 2500;
 
-export function portraitTargets(env = process.env) {
-  return [
-    {
-      tool: 'claude-code',
-      path: join(env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude'), 'CLAUDE.md'),
-    },
-    {
-      tool: 'codex',
-      path: join(env.CODEX_HOME || join(homedir(), '.codex'), 'AGENTS.md'),
-    },
-  ];
+export function cachePath() {
+  return join(mcHome(), 'coding-profile.md');
 }
 
-export function renderPortrait(markdown) {
-  return `${PREAMBLE}\n\n${String(markdown || '').trim()}`;
+export function readCached() {
+  try {
+    const text = readFileSync(cachePath(), 'utf8').trim();
+    return text || null;
+  } catch { return null; }
 }
 
-/** What mc has already put in each file, if anything. */
-export function readPortrait(env = process.env) {
-  return portraitTargets(env).map((target) => ({
-    ...target,
-    exists: existsSync(target.path),
-    body: existsSync(target.path)
-      ? readManagedBlock(safeRead(target.path))
-      : null,
-  }));
-}
-
-/**
- * Put the profile in both files, touching nothing else in them.
- *
- * The managed block is the whole contract: mc owns what is between the
- * markers and never looks outside them, so a file the user has written by
- * hand keeps everything they wrote. A target that is already correct is left
- * alone rather than rewritten, because an unchanged file has an unchanged
- * timestamp and that is one less thing to wonder about.
- */
-export function syncPortrait({ markdown, env = process.env, dryRun = false } = {}) {
-  const body = renderPortrait(markdown);
-  const results = [];
-  for (const target of portraitTargets(env)) {
-    const before = safeRead(target.path);
-    const after = upsertManagedBlock(before, body);
-    if (before === after) {
-      results.push({ ...target, status: 'unchanged', bytes: after.length });
-      continue;
-    }
-    const status = before ? 'updated' : 'created';
-    if (!dryRun) {
-      try {
-        mkdirSync(dirname(target.path), { recursive: true });
-        writeFileSync(target.path, after, { encoding: 'utf8', ...(before ? {} : { mode: 0o600 }) });
-      } catch (error) {
-        log('portrait.write-failed', { path: target.path, error: String(error?.message || error) });
-        results.push({ ...target, status: 'failed', reason: String(error?.message || error) });
-        continue;
-      }
-    }
-    results.push({ ...target, status, bytes: after.length, kept: before.length });
+function writeCache(markdown) {
+  try {
+    mkdirSync(dirname(cachePath()), { recursive: true, mode: 0o700 });
+    writeFileSync(cachePath(), `${markdown.trim()}\n`, { encoding: 'utf8', mode: 0o600 });
+  } catch (error) {
+    log('portrait.cache-write-failed', { error: String(error?.message || error) });
   }
-  log('portrait.sync', { dry_run: dryRun, results: results.map((r) => `${r.tool}:${r.status}`) });
-  return results;
 }
 
-function safeRead(path) {
-  try { return readFileSync(path, 'utf8'); } catch { return ''; }
+/**
+ * The one read. Returns the profile markdown, or null.
+ */
+export async function loadProfile({ env = process.env, deps = {} } = {}) {
+  const cached = readCached();
+  try {
+    const { getSecret } = deps.keychain || await import('../lib/keychain.js');
+    const { ACCOUNTS } = deps.auth || await import('../commands/auth.js');
+    const { readConfig, getApiUrl } = deps.config || await import('../lib/config.js');
+    const { memoroFetch } = deps.api || await import('../lib/api.js');
+
+    const token = await getSecret(ACCOUNTS.TOKEN);
+    if (!token) return cached;
+    const apiUrl = getApiUrl([]) || (await readConfig().catch(() => ({}))).apiUrl || DEFAULT_API_URL;
+
+    const response = await memoroFetch(apiUrl, PROFILE_PATH, { token, timeoutMs: FETCH_TIMEOUT_MS });
+    const markdown = response?.profile?.markdown;
+    if (typeof markdown !== 'string' || !markdown.trim()) return cached;
+    if (markdown.trim() !== cached) writeCache(markdown);
+    return markdown.trim();
+  } catch (error) {
+    log('portrait.unavailable', { cached: Boolean(cached), error: String(error?.message || error) });
+    return cached;
+  }
+}
+
+/**
+ * How each tool takes it. A tool mc has no channel for simply gets nothing —
+ * silently, because the profile is enrichment and its absence is not a fault
+ * the user can act on at the moment they are trying to start work.
+ */
+export function profileArgs(toolId, markdown) {
+  if (!markdown) return [];
+  if (toolId === 'claude-code') return ['--append-system-prompt', markdown];
+  if (toolId === 'codex') return ['-c', `instructions=${JSON.stringify(markdown)}`];
+  return [];
+}
+
+export function cacheExists() {
+  return existsSync(cachePath());
 }

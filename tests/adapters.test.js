@@ -12,7 +12,6 @@ describe('adapter registry', () => {
     const a = getAdapter('claude-code');
     assert.equal(a.ID, 'claude-code');
     assert.equal(a.LABEL, 'Claude Code');
-    assert.equal(typeof a.writeLens, 'function');
     assert.equal(typeof a.installHooks, 'function');
   });
 
@@ -20,7 +19,6 @@ describe('adapter registry', () => {
     const a = getAdapter('codex');
     assert.equal(a.ID, 'codex');
     assert.equal(a.LABEL, 'Codex CLI');
-    assert.equal(typeof a.writeLens, 'function');
     assert.equal(typeof a.installHooks, 'function');
   });
 

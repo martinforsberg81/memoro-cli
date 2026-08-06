@@ -1,15 +1,12 @@
 /**
- * `mc coding-profile read|diff|write|sync`
+ * `mc coding-profile read|diff|write`
  *
- * Explicit LLM-callable surface for the server-owned Coding Profile.
- * `read`, `diff` and `write` never touch a file on this machine: they read an
- * approved profile, compare a candidate, or write a full replacement with
- * revision protection.
+ * Explicit LLM-callable surface for the server-owned Coding Profile. Nothing
+ * here touches a file on this machine: it reads an approved profile, compares
+ * a candidate, or writes a full replacement with revision protection.
  *
- * `sync` is the one that does, and only ever the two instruction files the
- * tools keep in their own homes — never a repository's. It is explicit
- * because the alternative, fetching at launch, puts a server between the user
- * and their session. See `../mc/portrait.js` for why that is the whole point.
+ * Delivery is not here and is not a file. `mc/portrait.js` hands the profile
+ * to a tool as a launch argument when a new conversation starts.
  */
 
 import { readFile } from 'node:fs/promises';
@@ -19,7 +16,6 @@ import { getSecret as defaultGetSecret } from '../lib/keychain.js';
 import { memoroFetch as defaultMemoroFetch } from '../lib/api.js';
 import { ACCOUNTS } from '../commands/auth.js';
 import { readConfig as defaultReadConfig, getApiUrl as defaultGetApiUrl } from '../lib/config.js';
-import { syncPortrait } from '../mc/portrait.js';
 
 const PROFILE_PATH = '/api/mc/coding-profile';
 const DEFAULT_API_URL = 'https://meetmemoro.app';
@@ -61,7 +57,6 @@ export async function run(argv, deps = {}) {
   if (sub === 'read') return runRead(rest, deps);
   if (sub === 'diff') return runDiff(rest, deps);
   if (sub === 'write') return runWrite(rest, deps);
-  if (sub === 'sync') return runSync(rest, deps);
 
   (deps.stderr || defaultStderr).write(`mc: unknown coding-profile subcommand "${sub}". Try \`mc coding-profile --help\`.\n`);
   return 2;
@@ -91,52 +86,6 @@ export async function runRead(argv, deps = {}) {
   }
   if (profile?.markdown) ctx.stdout.write(ensureTrailingNewline(profile.markdown));
   return 0;
-}
-
-/**
- * Put the approved profile in front of both tools.
- *
- * The dry run is the default of nothing here — `sync` is not destructive: it
- * replaces a block mc wrote and leaves every other line in the file alone. But
- * it does write to files outside mc's own home, so it says which and what it
- * did to each.
- */
-export async function runSync(argv, deps = {}) {
-  const stdout = deps.stdout || defaultStdout;
-  const json = argv.includes('--json');
-  const dryRun = argv.includes('--dry-run');
-  if (argv.includes('--help') || argv.includes('-h')) {
-    stdout.write(syncUsage());
-    return 0;
-  }
-  const ctx = await resolveContext(argv, deps);
-  if (!ctx.ok) return ctx.code;
-
-  let res;
-  try {
-    res = await ctx.memoroFetch(ctx.apiUrl, PROFILE_PATH, { token: ctx.token });
-  } catch (err) {
-    return requestError('read Coding Profile', err, json, ctx);
-  }
-  const profile = res?.profile || null;
-  if (!profile?.markdown) {
-    ctx.stderr.write('mc: no approved Coding Profile yet — nothing to deliver\n');
-    return 1;
-  }
-
-  const results = syncPortrait({ markdown: profile.markdown, dryRun });
-  if (json) {
-    stdout.write(`${JSON.stringify({ ok: true, revision: profile.revision ?? null, dry_run: dryRun, targets: results }, null, 2)}\n`);
-    return results.some((item) => item.status === 'failed') ? 1 : 0;
-  }
-  stdout.write(`Coding Profile revision ${profile.revision ?? '?'}${dryRun ? ' — dry run' : ''}\n`);
-  for (const item of results) {
-    const verb = { created: 'created', updated: 'updated', unchanged: 'already current', failed: 'FAILED' }[item.status];
-    stdout.write(`  ${item.tool.padEnd(12)} ${verb.padEnd(15)} ${item.path}${item.reason ? ` (${item.reason})` : ''}\n`);
-  }
-  stdout.write('\nRead by both tools in every directory. Only the managed block is mc\'s;\n');
-  stdout.write('anything else in those files is left exactly as you wrote it.\n');
-  return results.some((item) => item.status === 'failed') ? 1 : 0;
 }
 
 export async function runDiff(argv, deps = {}) {
@@ -557,16 +506,16 @@ USAGE
   mc coding-profile diff --stdin [--json]
   mc coding-profile write --file <path> --base-revision <n> [--summary <text>] [--json]
   mc coding-profile write --stdin --base-revision <n> [--summary <text>] [--json]
-  mc coding-profile sync [--dry-run] [--json]
 
 CONTRACT
   read    Prints approved Markdown to stdout by default.
   diff    Compares a candidate profile against the approved server revision.
   write   Replaces the full profile and requires the base revision from read.
-  sync    Delivers the approved profile to ~/.claude/CLAUDE.md and
-          ~/.codex/AGENTS.md, inside a managed block. Never touches a
-          repository's own CLAUDE.md or AGENTS.md — those belong to the
-          project and are handled by mc adapter sync.
+
+DELIVERY
+  A new tool conversation started by mc work receives the approved profile
+  as a launch argument. No file on this machine is written for it, and
+  resuming an existing conversation does not repeat it.
 
 WORKFLOW
   1. Run read --json to get revision, markdown, update metadata, and a first-profile template when empty.
@@ -592,10 +541,6 @@ function readUsage() {
 
 function diffUsage() {
   return 'Usage: mc coding-profile diff (--file <path>|--stdin|-) [--json] [--api <url>]\n';
-}
-
-function syncUsage() {
-  return 'Usage: mc coding-profile sync [--dry-run] [--json] [--api <url>]\n';
 }
 
 function writeUsage() {

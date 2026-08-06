@@ -3,7 +3,7 @@
  * mc — capability dispatch.
  *
  * `src/mc-cli.js` owns the session verbs. Everything else — auth, vault,
- * connections, GitHub, adapters, dev services — routes through here.
+ * connections, GitHub, dev services — routes through here.
  *
  * This file used to be the whole product: it wrapped a coding tool in a PTY
  * this process owned, registered the session in a global registry, and talked
@@ -36,8 +36,6 @@ const CAPABILITIES = {
   setup:         () => import('./cli/setup.js'),
   vault:         () => import('./cli/vault.js'),
   'tool-auth':   () => import('./cli/tool-auth.js'),
-  adapter:       () => import('./cli/adapter.js'),
-  'tool-switch': () => import('./cli/tool-switch.js'),
   'coding-profile': () => import('./cli/coding-profile.js'),
   dev:           () => import('./cli/dev.js'),
   deps:          () => import('./cli/deps.js'),

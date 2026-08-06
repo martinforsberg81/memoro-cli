@@ -45,9 +45,8 @@ worktree, a checkout, or an ordinary directory. Plain `mc` lists your sessions.
 | `mc connections` | Manage connected services. |
 | `mc github status\|pr …` | The typed GitHub App capability. Repository-scoped by nature. |
 | `mc coding-profile read\|diff\|write` | The durable Coding Profile. |
-| `mc adapter sync` | Refresh repo-owned tool instructions. |
 | `mc vault …` | The token vault. |
-| `mc tool-auth`, `mc tool-switch` | Coding-tool credentials and switching. |
+| `mc tool-auth` | Coding-tool credentials. |
 | `mc dev`, `mc deps` | Dev services and dependency snapshots. Repository-scoped by nature. |
 | `mc cloud-session`, `mc cloud-runtime` | Cloud-owned sessions. Separately source-owned. |
 | `mc security` | Security checks. |
