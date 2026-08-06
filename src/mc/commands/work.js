@@ -17,6 +17,7 @@ import {
   releaseWorkArea,
 } from '../work-area.js';
 import { workRoot } from '../paths.js';
+import { openInWorkArea } from '../work-open.js';
 
 export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
@@ -26,6 +27,7 @@ export async function run(argv, deps = {}) {
     stderr.write(`mc: ${opts.error}\n`);
     stderr.write('usage — mc work\n');
     stderr.write('        mc work add <name> <repo> [branch]\n');
+    stderr.write('        mc work open <name> [repo] [--codex|--claude]\n');
     stderr.write('        mc work release <name> [--apply]\n');
     return 2;
   }
@@ -63,6 +65,37 @@ export async function run(argv, deps = {}) {
     return 0;
   }
 
+  if (opts.verb === 'open') {
+    const area = inspectWorkArea(opts.name);
+    if (!area.exists) {
+      stderr.write(`mc: no work area named "${opts.name}" under ${workRoot()}\n`);
+      return 1;
+    }
+    const candidates = area.worktrees.filter((item) => item.is_git);
+    const worktree = opts.repo
+      ? candidates.find((item) => item.repo === opts.repo)
+      : candidates[0];
+    if (!worktree) {
+      stderr.write(opts.repo
+        ? `mc: ${opts.name} has no worktree for ${opts.repo}\n`
+        : `mc: ${opts.name} has no worktree yet — mc work add ${opts.name} <repo> [branch]\n`);
+      return 1;
+    }
+    if (candidates.length > 1 && !opts.repo) {
+      stdout.write(`mc: ${opts.name} spans ${candidates.map((item) => item.repo).join(', ')}; opening ${worktree.repo}\n`);
+    }
+    const opened = openInWorkArea({ name: opts.name, worktree, tool: opts.tool || 'codex' });
+    if (!opened.ok) {
+      stderr.write(`mc: could not open ${opts.name} (${opened.reason})\n`);
+      if (opened.hint) stderr.write(`mc: ${opened.hint}\n`);
+      return 1;
+    }
+    if (opened.conversation && !opened.resumed) {
+      stderr.write(`mc: remembered ${opened.tool} conversation ${opened.conversation}\n`);
+    }
+    return opened.code || 0;
+  }
+
   const area = inspectWorkArea(opts.name);
   if (!area.exists) {
     stderr.write(`mc: no work area named "${opts.name}" under ${workRoot()}\n`);
@@ -91,17 +124,22 @@ function describe(worktree) {
 }
 
 export function parseArgs(argv) {
-  const opts = { verb: 'list', name: null, repo: null, branch: null, apply: false, json: false };
+  const opts = {
+    verb: 'list', name: null, repo: null, branch: null,
+    tool: null, apply: false, json: false,
+  };
   const positional = [];
   for (const arg of argv) {
     if (arg === '--json') { opts.json = true; continue; }
     if (arg === '--apply') { opts.apply = true; continue; }
+    if (arg === '--codex') { opts.tool = 'codex'; continue; }
+    if (arg === '--claude') { opts.tool = 'claude'; continue; }
     if (arg.startsWith('--')) return { ...opts, error: `unknown flag: ${arg}` };
     positional.push(arg);
   }
   if (positional.length === 0) return opts;
   const [verb, ...rest] = positional;
-  if (!['add', 'release', 'list'].includes(verb)) {
+  if (!['add', 'release', 'list', 'open'].includes(verb)) {
     return { ...opts, error: `unknown verb: ${verb}` };
   }
   opts.verb = verb;
@@ -110,6 +148,10 @@ export function parseArgs(argv) {
   if (!opts.name) return { ...opts, error: 'a work-area name is required' };
   if (!/^[A-Za-z0-9._-]{1,64}$/u.test(opts.name)) {
     return { ...opts, error: `"${opts.name}" cannot be a directory name` };
+  }
+  if (verb === 'open') {
+    opts.repo = rest[1] || null;
+    return opts;
   }
   if (verb === 'add') {
     opts.repo = rest[1] || null;
