@@ -142,7 +142,7 @@ async function runVerb(opts, { stdout, stderr }) {
       && !result.conversations.length && !result.removes_area) {
       stdout.write('  nothing there\n');
     }
-    if (!opts.apply) stdout.write('\nThis destroys work. Run again with --apply if that is what you want.\n');
+    if (!opts.apply) stdout.write(`\n${stakes(result, opts.name)}\n`);
     return 0;
   }
 
@@ -389,6 +389,36 @@ async function openArea(name, opts, { stdout, stderr }) {
     stderr.write(`mc: new ${opened.tool} conversation ${opened.started.slice(0, 8)}\n`);
   }
   return opened.code || 0;
+}
+
+/**
+ * What the dry run is actually warning about.
+ *
+ * "This destroys work" was printed over a listing that said the area was
+ * empty. A warning that does not match what is about to happen is worse than
+ * none: it teaches the reader to skip the last line, and the last line is the
+ * one that matters on the day something really is at stake.
+ *
+ * So it says what would be lost, and when nothing would be, it says that too.
+ */
+function stakes(result, name) {
+  const at = [];
+  const total = (key) => result.discarded.reduce((sum, item) => sum + (item[key] || 0), 0);
+  const uncommitted = total('uncommitted');
+  const unmerged = total('unmerged_commits');
+  if (uncommitted) at.push(`${uncommitted} uncommitted file${uncommitted === 1 ? '' : 's'}`);
+  if (unmerged) at.push(`${unmerged} unmerged commit${unmerged === 1 ? '' : 's'}`);
+  if (result.conversations.length) {
+    at.push(`${result.conversations.length} conversation${result.conversations.length === 1 ? '' : 's'}`);
+  }
+  if (at.length) {
+    const list = at.length === 1 ? at[0] : `${at.slice(0, -1).join(', ')} and ${at[at.length - 1]}`;
+    return `This destroys ${list}, which nothing brings back. Run again with --apply if that is what you want.`;
+  }
+  if (!result.discarded.length) {
+    return `Nothing in ${name} but the directory itself. Run again with --apply to remove it.`;
+  }
+  return `Everything in ${name} is committed and merged — only the worktree and branch go. Run again with --apply.`;
 }
 
 function conversationLine(item) {
