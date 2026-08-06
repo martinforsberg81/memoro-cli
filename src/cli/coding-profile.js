@@ -9,13 +9,18 @@
  * to a tool as a launch argument when a new conversation starts.
  */
 
+import { spawnSync } from 'node:child_process';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { stdin as defaultStdin, stdout as defaultStdout, stderr as defaultStderr } from 'node:process';
 
 import { getSecret as defaultGetSecret } from '../lib/keychain.js';
 import { memoroFetch as defaultMemoroFetch } from '../lib/api.js';
 import { ACCOUNTS } from '../commands/auth.js';
 import { readConfig as defaultReadConfig, getApiUrl as defaultGetApiUrl } from '../lib/config.js';
+import { ask, interactive } from '../mc/prompt.js';
+import { mcHome } from '../mc/paths.js';
 
 const PROFILE_PATH = '/api/mc/coding-profile';
 const DEFAULT_API_URL = 'https://meetmemoro.app';
@@ -57,6 +62,7 @@ export async function run(argv, deps = {}) {
   if (sub === 'read') return runRead(rest, deps);
   if (sub === 'diff') return runDiff(rest, deps);
   if (sub === 'write') return runWrite(rest, deps);
+  if (sub === 'edit') return runEdit(rest, deps);
 
   (deps.stderr || defaultStderr).write(`mc: unknown coding-profile subcommand "${sub}". Try \`mc coding-profile --help\`.\n`);
   return 2;
@@ -85,6 +91,113 @@ export async function runRead(argv, deps = {}) {
     return 0;
   }
   if (profile?.markdown) ctx.stdout.write(ensureTrailingNewline(profile.markdown));
+  return 0;
+}
+
+/**
+ * The Coding Profile in your editor.
+ *
+ * `read`, `diff` and `write` are a machine's three steps: fetch the markdown,
+ * compare a candidate, submit with the revision you started from. Written out
+ * by hand that is a chore, and a chore is why a profile stays as someone left
+ * it. This is the same three steps with the file and the revision handled.
+ *
+ * Nothing is sent until it is shown. The editor closing is not consent — the
+ * diff is displayed and answered first, because this text is put in front of
+ * every new conversation and a slip of the hand should not be able to change
+ * how a tool behaves everywhere.
+ */
+const STARTER = `Hej!
+
+Write to your tools the way you would write to a colleague who is about to
+join you. What you are working on, how you like to work, what you want them
+to check with you before doing.
+
+There is no required shape. Any language, any structure, as long as it is
+plain text and under 12 kB.
+`;
+
+export async function runEdit(argv, deps = {}) {
+  const stdout = deps.stdout || defaultStdout;
+  const stderr = deps.stderr || defaultStderr;
+  if (argv.includes('--help') || argv.includes('-h')) {
+    stdout.write(editUsage());
+    return 0;
+  }
+  const ctx = await resolveContext(argv, deps);
+  if (!ctx.ok) return ctx.code;
+
+  let res;
+  try {
+    res = await ctx.memoroFetch(ctx.apiUrl, PROFILE_PATH, { token: ctx.token });
+  } catch (err) {
+    return requestError('read Coding Profile', err, false, ctx);
+  }
+  const profile = res?.profile || null;
+  const revision = Number(profile?.revision) || 0;
+  const before = ensureTrailingNewline(profile?.markdown || STARTER);
+
+  // A stable path rather than a temp name: if the editor dies, the machine
+  // sleeps, or the write is refused, the words are still where they were.
+  const path = join(mcHome(), 'coding-profile.edit.md');
+  try {
+    mkdirSync(mcHome(), { recursive: true, mode: 0o700 });
+    writeFileSync(path, before, { encoding: 'utf8', mode: 0o600 });
+  } catch (err) {
+    stderr.write(`mc: could not prepare ${path} (${err?.message || err})\n`);
+    return 1;
+  }
+
+  const editor = deps.editor || process.env.VISUAL || process.env.EDITOR || 'nano';
+  stdout.write(`${revision ? `Coding Profile revision ${revision}` : 'No Coding Profile yet — starting one'} · ${editor}\n`);
+  const run = deps.spawn || spawnSync;
+  const result = run(editor, [path], { stdio: 'inherit' });
+  if (result?.error) {
+    stderr.write(`mc: could not open ${editor} (${result.error.message})\n`);
+    stderr.write(`mc: edit ${path} yourself, then run mc coding-profile write --file ${path} --base-revision ${revision}\n`);
+    return 1;
+  }
+
+  let after;
+  try { after = ensureTrailingNewline(readFileSync(path, 'utf8')); } catch { after = null; }
+  if (after === null) {
+    stderr.write(`mc: ${path} could not be read back\n`);
+    return 1;
+  }
+  if (normalizeMarkdown(after) === normalizeMarkdown(before)) {
+    stdout.write('Unchanged — nothing written.\n');
+    return 0;
+  }
+
+  stdout.write(`\n${createUnifiedDiff(before, after, { from: `revision ${revision}`, to: 'your edit' })}\n`);
+  // Shown is not the same as agreed. With no terminal there is nobody to
+  // agree, so nothing is sent — an editor that exits is not consent, and this
+  // text governs how every new conversation behaves.
+  if (!argv.includes('--yes')) {
+    if (!interactive()) {
+      stdout.write(`Not written — no terminal to confirm at. Re-run at a terminal, or pass --yes.\nYour edit is kept at ${path}\n`);
+      return 0;
+    }
+    const answer = ask('Write this? [y/N]', { stdout });
+    if (!/^y(es)?$/iu.test((answer || '').trim())) {
+      stdout.write(`Not written. Your edit is kept at ${path}\n`);
+      return 0;
+    }
+  }
+
+  let written;
+  try {
+    written = await ctx.memoroFetch(ctx.apiUrl, PROFILE_PATH, {
+      token: ctx.token,
+      method: 'PUT',
+      body: { markdown: normalizeMarkdown(after), baseRevision: revision },
+    });
+  } catch (err) {
+    stderr.write(`mc: ${err?.data?.error || err?.message || 'the write was refused'}\n`);
+    stderr.write(`mc: your edit is kept at ${path}\n`);
+    return 1;
+  }
+  stdout.write(`Coding Profile revision ${written?.profile?.revision ?? revision + 1}. New conversations get it from now on.\n`);
   return 0;
 }
 
@@ -506,11 +619,13 @@ USAGE
   mc coding-profile diff --stdin [--json]
   mc coding-profile write --file <path> --base-revision <n> [--summary <text>] [--json]
   mc coding-profile write --stdin --base-revision <n> [--summary <text>] [--json]
+  mc coding-profile edit                      (also: mc setup profile)
 
 CONTRACT
   read    Prints approved Markdown to stdout by default.
   diff    Compares a candidate profile against the approved server revision.
   write   Replaces the full profile and requires the base revision from read.
+  edit    Opens it in $EDITOR and writes it back after showing you the diff.
 
 DELIVERY
   A new tool conversation started by mc work receives the approved profile
@@ -541,6 +656,10 @@ function readUsage() {
 
 function diffUsage() {
   return 'Usage: mc coding-profile diff (--file <path>|--stdin|-) [--json] [--api <url>]\n';
+}
+
+function editUsage() {
+  return 'Usage: mc coding-profile edit [--yes] [--api <url>]   (also: mc setup profile)\n';
 }
 
 function writeUsage() {
