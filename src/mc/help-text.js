@@ -80,6 +80,9 @@ SETUP AND CAPABILITIES
   mc github pr create|update       Write through the same typed capability
   mc coding-profile read|diff|write
                                     Manage the durable Coding Profile
+  mc coding-profile sync [--dry-run]
+                                    Deliver it to ~/.claude/CLAUDE.md and
+                                    ~/.codex/AGENTS.md; never a repo's own
   mc adapter sync                  Refresh repo-owned tool instructions
   mc doctor                        Diagnose local mc state
 
