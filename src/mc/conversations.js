@@ -85,7 +85,7 @@ function codexConversations(areaRoot, env) {
     try {
       const out = execFileSync('sqlite3', [
         '-readonly', '-json', db,
-        'select id, cwd, substr(title, 1, 120) as title, rollout_path,'
+        'select id, cwd, substr(first_user_message, 1, 400) as opened, rollout_path,'
         + ' coalesce(updated_at_ms, updated_at * 1000) as updated_ms from threads'
         + ` where cwd = '${quoted}' or cwd like '${quoted}/%'`,
       ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 8 * 1024 * 1024 });
@@ -94,7 +94,10 @@ function codexConversations(areaRoot, env) {
         tool: 'codex',
         id: row.id,
         cwd: row.cwd,
-        title: row.title || null,
+        // The index holds the first message, which is usually what the user
+        // typed and sometimes what a tool put in front of it. When it is the
+        // latter the transcript is read for one that is not.
+        label: label(row.opened) || readHead(row.rollout_path).label,
         path: row.rollout_path || null,
         updated_ms: Number(row.updated_ms) || 0,
         bytes: sizeOf(row.rollout_path),
@@ -122,13 +125,13 @@ function codexRollouts(areaRoot, env) {
       if (entry.isDirectory()) { walk(path, depth + 1); continue; }
       const match = /-([0-9a-f-]{36})\.jsonl$/u.exec(entry.name);
       if (!match) continue;
-      const cwd = firstCwd(path);
-      if (!within(areaRoot, cwd)) continue;
+      const head = readHead(path);
+      if (!within(areaRoot, head.cwd)) continue;
       found.push({
         tool: 'codex',
         id: match[1],
-        cwd,
-        title: null,
+        cwd: head.cwd,
+        label: head.label,
         path,
         updated_ms: mtimeOf(path),
         bytes: sizeOf(path),
@@ -161,13 +164,13 @@ function claudeConversations(areaRoot, env) {
     try { files = readdirSync(join(root, dir)).filter((name) => name.endsWith('.jsonl')); } catch { continue; }
     for (const file of files) {
       const path = join(root, dir, file);
-      const cwd = firstCwd(path);
-      if (!within(areaRoot, cwd)) continue;
+      const head = readHead(path);
+      if (!within(areaRoot, head.cwd)) continue;
       found.push({
         tool: 'claude-code',
         id: file.replace(/\.jsonl$/u, ''),
-        cwd,
-        title: null,
+        cwd: head.cwd,
+        label: head.label,
         path,
         updated_ms: mtimeOf(path),
         bytes: sizeOf(path),
@@ -181,18 +184,82 @@ function encodePath(path) {
   return path.replace(/[/.]/gu, '-');
 }
 
-/** The first cwd a transcript records — read from its head, not the whole file. */
-function firstCwd(path) {
+/**
+ * The two facts that identify a conversation, taken from the head of its own
+ * transcript: where it was launched, and how it opened.
+ *
+ * Both tools write JSON per line, and both put the working directory and the
+ * first turn near the top, so this reads a bounded head rather than a file
+ * that can be megabytes. Two shapes, one pass — Claude records `cwd` at the
+ * top level and turns as `{"type":"user"}`; Codex records both inside a
+ * `payload`.
+ */
+function readHead(path) {
+  if (!path) return { cwd: null, label: null };
   let fd = null;
+  let text = '';
   try {
     fd = openSync(path, 'r');
     const buffer = Buffer.alloc(HEAD_BYTES);
     const read = readSync(fd, buffer, 0, HEAD_BYTES, 0);
-    const match = /"cwd"\s*:\s*"((?:[^"\\]|\\.)*)"/u.exec(buffer.subarray(0, read).toString('utf8'));
-    return match ? JSON.parse(`"${match[1]}"`) : null;
-  } catch { return null; } finally {
+    text = buffer.subarray(0, read).toString('utf8');
+  } catch { return { cwd: null, label: null }; } finally {
     if (fd !== null) { try { closeSync(fd); } catch { /* closed */ } }
   }
+
+  let cwd = null;
+  let opening = null;
+  for (const line of text.split('\n')) {
+    if (cwd && opening) break;
+    if (!line.startsWith('{')) continue;
+    let entry = null;
+    try { entry = JSON.parse(line); } catch { continue; }
+    const payload = entry.payload || entry;
+    if (!cwd && typeof payload.cwd === 'string') cwd = payload.cwd;
+    if (!cwd && typeof entry.cwd === 'string') cwd = entry.cwd;
+    if (opening) continue;
+    const isUser = entry.type === 'user' || payload.role === 'user';
+    if (!isUser) continue;
+    opening = label(textOf(entry.message?.content ?? payload.content));
+  }
+  return { cwd, label: opening };
+}
+
+function textOf(content) {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  return content
+    .filter((part) => part && typeof part === 'object' && typeof part.text === 'string')
+    .map((part) => part.text)
+    .join(' ');
+}
+
+/**
+ * What the user actually said, if they said it.
+ *
+ * The first message in a transcript is not always the user's: tools put
+ * repository instructions, session grounding and compaction summaries in front
+ * of it, and a review thread has no user turn at all. Of 1393 conversations on
+ * this machine, 1010 open with something a tool wrote — nearly all of them
+ * machinery from mc's own past. Naming a conversation after that would be
+ * worse than leaving it unnamed, so this returns nothing rather than
+ * something, and the caller looks further or shows the id alone.
+ */
+const NOT_THE_USER = [
+  /^the following is the codex agent history/iu,
+  /^#\s*session grounding/iu,
+  /^#\s*agents\.md instructions/iu,
+  /^caveat: the messages below were generated/iu,
+  /^this session is being continued from/iu,
+  /^</u,
+];
+
+function label(raw) {
+  if (typeof raw !== 'string') return null;
+  const text = raw.replace(/\s+/gu, ' ').trim();
+  if (!text) return null;
+  if (NOT_THE_USER.some((pattern) => pattern.test(text))) return null;
+  return text.length > 64 ? `${text.slice(0, 63)}…` : text;
 }
 
 function sizeOf(path) {

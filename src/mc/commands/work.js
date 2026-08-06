@@ -127,7 +127,7 @@ async function runVerb(opts, { stdout, stderr }) {
     // A conversation is not in git. Nothing brings it back, so it is named
     // one by one rather than counted.
     for (const item of result.conversations) {
-      stdout.write(`  ${opts.apply ? 'destroyed' : 'would destroy'}  ${item.tool} ${item.id.slice(0, 8)} — ${describeSize(item.bytes)}, ${describeAge(item.updated_ms)}\n`);
+      stdout.write(`  ${opts.apply ? 'destroyed' : 'would destroy'}  ${conversationLine(item)}\n`);
     }
     for (const item of result.conversations_failed || []) {
       stdout.write(`  kept       ${item.tool} ${item.id.slice(0, 8)} — ${item.reason}\n`);
@@ -170,7 +170,7 @@ async function runVerb(opts, { stdout, stderr }) {
       stdout.write(`  ${opts.apply ? 'removed' : 'would remove'}  ${item.repo}${item.branch ? ` (${item.branch})` : ''}\n`);
     }
     for (const item of result.conversations) {
-      stdout.write(`  ${opts.apply ? 'removed' : 'would remove'}  ${item.tool} ${item.id.slice(0, 8)} — ${describeSize(item.bytes)}, ${describeAge(item.updated_ms)}\n`);
+      stdout.write(`  ${opts.apply ? 'removed' : 'would remove'}  ${conversationLine(item)}\n`);
     }
     for (const item of result.kept) {
       stdout.write(`  kept     ${item.repo}${item.branch ? ` (${item.branch})` : ''} — ${item.why}\n`);
@@ -205,7 +205,8 @@ async function menu(first, { stdout, stderr }) {
       return startSomething({ stdout, stderr });
     }
     for (const [index, area] of areas.entries()) {
-      stdout.write(`  ${String(index + 1).padStart(2)}  ${area.name.padEnd(28)} ${summarise(area)}\n`);
+      const room = Math.max(40, (stdout.columns || 100) - 36);
+      stdout.write(`  ${String(index + 1).padStart(2)}  ${area.name.padEnd(28)} ${summarise(area, room)}\n`);
     }
     stdout.write(`  ${'n'.padStart(2)}  start something new\n`);
     stdout.write(`  ${'q'.padStart(2)}  quit\n\n`);
@@ -254,7 +255,14 @@ async function typed(answer, areas, { stdout, stderr }) {
   return null;
 }
 
-function summarise(area) {
+/**
+ * One line about a piece of work, cut to the terminal it is being read in.
+ *
+ * The opening line of a conversation is the most useful thing on this row and
+ * the most variable in length, so it is what gives way when there is no room —
+ * a row that wraps is worse than one that ends in an ellipsis.
+ */
+function summarise(area, room = 60) {
   const parts = area.worktrees.map((worktree) => {
     if (!worktree.is_git) return worktree.repo;
     const marks = [];
@@ -262,9 +270,15 @@ function summarise(area) {
     if (worktree.unmerged_commits) marks.push(`${worktree.unmerged_commits} unmerged`);
     return `${worktree.repo}${marks.length ? ` (${marks.join(', ')})` : ''}`;
   });
-  const conversations = area.conversations.length;
-  if (conversations) {
-    parts.push(`${conversations} conversation${conversations === 1 ? '' : 's'}`);
+  // One conversation says what it is about; several are counted, because the
+  // point of the number is to tell you a choice is waiting.
+  const [only] = area.conversations;
+  if (area.conversations.length > 1) {
+    parts.push(`${area.conversations.length} conversations`);
+  } else if (only) {
+    const spare = Math.max(16, room - parts.join('  ·  ').length - 5);
+    const text = only.label || `1 ${only.tool} conversation`;
+    parts.push(text.length > spare ? `${text.slice(0, spare - 1)}…` : text);
   }
   return parts.length ? parts.join('  ·  ') : 'empty';
 }
@@ -415,14 +429,32 @@ function stakes(result, name) {
     const list = at.length === 1 ? at[0] : `${at.slice(0, -1).join(', ')} and ${at[at.length - 1]}`;
     return `This destroys ${list}, which nothing brings back. Run again with --apply if that is what you want.`;
   }
+  // Nothing is going anywhere while something is standing in it, so `--apply`
+  // is not the missing ingredient and saying so would send the user in a
+  // circle. The kept lines above already say which process and why.
+  if (!result.discarded.length && result.kept.length) {
+    return `Nothing in ${name} can go while it is in use.`;
+  }
   if (!result.discarded.length) {
     return `Nothing in ${name} but the directory itself. Run again with --apply to remove it.`;
   }
   return `Everything in ${name} is committed and merged — only the worktree and branch go. Run again with --apply.`;
 }
 
+/**
+ * A conversation, identified by how it opened.
+ *
+ * `019fd6c6  codex  just now  49 kB` was everything mc knew and none of what
+ * the user needed: with two conversations the picker was a coin toss and with
+ * five it was unanswerable. The first thing said in a conversation is what
+ * anyone remembers it by, and both tools keep it.
+ */
 function conversationLine(item) {
-  return `${item.id.slice(0, 8)}  ${item.tool.padEnd(11)} ${describeAge(item.updated_ms).padEnd(9)} ${describeSize(item.bytes)}`;
+  const tool = item.tool === 'claude-code' ? 'claude' : item.tool;
+  const head = `${item.id.slice(0, 8)}  ${tool.padEnd(6)}  ${describeAge(item.updated_ms).padEnd(9)} ${describeSize(item.bytes).padStart(7)}`;
+  if (!item.label) return head;
+  const text = item.label.length > 48 ? `${item.label.slice(0, 47)}…` : item.label;
+  return `${head}   ${text}`;
 }
 
 function describe(worktree) {
