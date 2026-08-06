@@ -255,6 +255,51 @@ export function releaseWorkArea(name, { env = process.env, dryRun = false } = {}
  * is read as a session named after the tool, so nothing written earlier is
  * lost.
  */
+/**
+ * Throw work away on purpose.
+ *
+ * `release` keeps whatever is unfinished, which is right as a default and
+ * useless when the work itself was the mistake: a failed experiment holds
+ * exactly the uncommitted files and unmerged commits that release protects.
+ * Without this the only way out was git by hand, which is how a shell ends up
+ * standing in a directory that no longer exists.
+ *
+ * So this removes them, and it says what it is about to destroy first — the
+ * dry run is the default and `--apply` is the user saying they meant it. The
+ * one thing it still will not do is pull the ground from under a running
+ * process; that is not protecting the work, it is not breaking the tool.
+ */
+export function discardWorkArea(name, { repo = null, env = process.env, dryRun = true } = {}) {
+  const area = inspectWorkArea(name, env);
+  const targets = repo
+    ? area.worktrees.filter((item) => item.repo === repo)
+    : area.worktrees;
+  const discarded = [];
+  const kept = [];
+  for (const worktree of targets) {
+    const inUse = directoryInUse(worktree.path);
+    if (inUse) {
+      kept.push({ ...worktree, why: `in use by ${inUse.join(', ')}` });
+      continue;
+    }
+    if (!dryRun) {
+      if (worktree.is_git) {
+        run(['--git-dir', worktree.git_common_dir, 'worktree', 'remove', '--force', '--', worktree.path]);
+        if (worktree.branch) run(['--git-dir', worktree.git_common_dir, 'branch', '-D', worktree.branch]);
+      } else {
+        rmSync(worktree.path, { recursive: true, force: true });
+      }
+    }
+    discarded.push(worktree);
+  }
+  if (!dryRun) pruneWorktrees(knownRepositories(env));
+  const wholeArea = !repo && kept.length === 0;
+  if (!dryRun && wholeArea && area.exists) {
+    rmSync(area.path, { recursive: true, force: true });
+  }
+  return { name, discarded, kept, removes_area: wholeArea, dry_run: dryRun };
+}
+
 export function readState(name, env = process.env) {
   let raw = {};
   try { raw = JSON.parse(readFileSync(workAreaStatePath(name, env), 'utf8')); } catch { return { sessions: {} }; }

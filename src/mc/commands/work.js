@@ -13,6 +13,7 @@ import {
   createWorkArea,
   inspectWorkArea,
   listWorkAreas,
+  discardWorkArea,
   releaseWorkArea,
   removeWorktree,
   resolveRepository,
@@ -32,6 +33,7 @@ export async function run(argv, deps = {}) {
     stderr.write('        mc work open <name> [session] [--repo <repo>] [--codex|--claude]\n');
     stderr.write('        mc work remove <name> <repo>\n');
     stderr.write('        mc work release <name> [--apply]\n');
+    stderr.write('        mc work discard <name> [repo] [--apply]\n');
     return 2;
   }
 
@@ -80,6 +82,32 @@ export async function run(argv, deps = {}) {
       return 1;
     }
     stdout.write(`mc: ${result.path}${result.branch ? ` on ${result.branch}` : ''}\n`);
+    return 0;
+  }
+
+  if (opts.verb === 'discard') {
+    const area = inspectWorkArea(opts.name);
+    if (!area.exists) {
+      stderr.write(`mc: no work area named "${opts.name}" under ${workRoot()}\n`);
+      return 1;
+    }
+    const result = discardWorkArea(opts.name, { repo: opts.repo, dryRun: !opts.apply });
+    if (opts.json) { stdout.write(`${JSON.stringify({ ok: true, ...result }, null, 2)}\n`); return 0; }
+    stdout.write(`mc work discard ${opts.name}${opts.apply ? '' : ' — dry run'}\n`);
+    for (const item of result.discarded) {
+      const loses = [];
+      if (item.uncommitted) loses.push(`${item.uncommitted} uncommitted`);
+      if (item.unmerged_commits) loses.push(`${item.unmerged_commits} unmerged`);
+      stdout.write(`  ${opts.apply ? 'destroyed' : 'would destroy'}  ${item.repo}${item.branch ? ` (${item.branch})` : ''}${loses.length ? ` — losing ${loses.join(', ')}` : ''}\n`);
+    }
+    for (const item of result.kept) {
+      stdout.write(`  kept       ${item.repo} — ${item.why}\n`);
+    }
+    if (result.removes_area) {
+      stdout.write(`  ${opts.apply ? 'removed' : 'would remove'}    the work area itself\n`);
+    }
+    if (!result.discarded.length && !result.kept.length) stdout.write('  nothing there\n');
+    if (!opts.apply) stdout.write('\nThis destroys work. Run again with --apply if that is what you want.\n');
     return 0;
   }
 
@@ -175,7 +203,7 @@ export function parseArgs(argv) {
   }
   if (positional.length === 0) return opts;
   const [verb, ...rest] = positional;
-  if (!['add', 'release', 'list', 'open', 'new', 'remove'].includes(verb)) {
+  if (!['add', 'release', 'list', 'open', 'new', 'remove', 'discard'].includes(verb)) {
     return { ...opts, error: `unknown verb: ${verb}` };
   }
   opts.verb = verb;
@@ -191,6 +219,10 @@ export function parseArgs(argv) {
     if (!/^[A-Za-z0-9._-]{1,64}$/u.test(opts.session)) {
       return { ...opts, error: `"${opts.session}" cannot be a session name` };
     }
+    return opts;
+  }
+  if (verb === 'discard') {
+    opts.repo = opts.repo || rest[1] || null;
     return opts;
   }
   if (verb === 'remove') {
