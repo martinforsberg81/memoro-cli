@@ -34,6 +34,7 @@ import { createConnectionClient } from '../capabilities/connections/client.js';
 import { installPlanFor, hydratePlanFor, installTool } from '../mc/bootstrap.js';
 import { promptLine } from '../lib/prompt.js';
 import { readConfig, writeConfig } from '../lib/config.js';
+import { readCached } from '../mc/portrait.js';
 import {
   sentinelPath as freshInstallSentinelPath,
   ensureSentinel as freshInstallEnsureSentinel,
@@ -61,6 +62,13 @@ const REQUIRED_TOOLS = ['codex'];
 const OPTIONAL_TOOLS = ['claude', 'gemini'];
 
 export async function run(argv, deps = {}) {
+  // `mc setup profile` is where people look for it, and setup is where you go
+  // when you are getting yourself in order. It is the same editor flow the
+  // coding-profile command family owns — one implementation, two doors.
+  if (argv[0] === 'profile') {
+    const { runEdit } = await import('./coding-profile.js');
+    return runEdit(argv.slice(1), deps);
+  }
   const opts = parseArgs(argv);
   if (opts.error) { console.error(`mc: ${opts.error}`); return 2; }
 
@@ -320,6 +328,7 @@ function printAllSet(report, resourceReport, dependencyMode) {
   }
   printResourceProfile(resourceReport);
   printDependencyMode(dependencyMode);
+  printCodingProfile();
   process.stdout.write(`\nNext: from a git repo, run \`mc new <name> [focus]\` to start a session.\n`);
 }
 
@@ -346,6 +355,25 @@ function printResourceProfile(resourceReport) {
 
 function printDependencyMode(mode) {
   process.stdout.write(`  ✓ Project dependencies: ${describeDependencyMode(mode)}\n`);
+}
+
+/**
+ * The Coding Profile, read from the copy mc keeps rather than the server.
+ *
+ * `mc setup` says what is true about this machine, and it must stay instant
+ * and work on a train. Whether a profile has ever reached this machine is
+ * answerable from disk; whether it is the newest revision is not worth a
+ * network call here.
+ */
+function printCodingProfile() {
+  const cached = readCached();
+  if (cached) {
+    const words = cached.split(/\s+/u).filter(Boolean).length;
+    process.stdout.write(`  ✓ Coding Profile: ${words} words, sent to every new conversation\n`);
+    return;
+  }
+  process.stdout.write('  · Coding Profile: none yet — `mc setup profile` writes one\n');
+  process.stdout.write('    It is a letter to your tools about how you work.\n');
 }
 
 export async function promptDependencyMode({

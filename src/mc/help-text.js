@@ -78,9 +78,10 @@ SETUP AND CAPABILITIES
   mc github status [--json]        Check GitHub App capability for this repo
   mc github pr list|view|checks    Read pull requests through the GitHub App
   mc github pr create|update       Write through the same typed capability
-  mc coding-profile read|diff|write
-                                    Manage the durable Coding Profile; a new
-                                    conversation receives it at launch
+  mc setup profile                 Write your Coding Profile in $EDITOR — a
+                                    letter to your tools about how you work
+  mc coding-profile read|diff|write|edit
+                                    The same profile, for a machine to handle
   mc doctor                        Diagnose local mc state
 
 IDENTITY
