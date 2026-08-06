@@ -295,8 +295,19 @@ async function forkDetached(argv) {
     await mkdir(CONFIG_DIR, { recursive: true, mode: 0o700 });
   }
 
+  // The daemon reads its working directory from the event, so record it here
+  // while the hook still knows it. That lets the daemon itself stand outside
+  // the directory — see the spawn below.
+  let payload = rawStdin;
+  try {
+    const event = JSON.parse(rawStdin || '{}');
+    if (event && typeof event === 'object' && !event.cwd) {
+      payload = JSON.stringify({ ...event, cwd: process.cwd() });
+    }
+  } catch { /* not JSON; the daemon's own fallbacks apply */ }
+
   const eventFile = join(tmpdir(), `memoro-cli-heartbeat-${Date.now()}-${process.pid}.json`);
-  await writeFile(eventFile, rawStdin, { mode: 0o600 });
+  await writeFile(eventFile, payload, { mode: 0o600 });
 
   // Strip --background; add --from-event-file pointing at the drained stdin.
   const passthrough = [];
@@ -312,8 +323,15 @@ async function forkDetached(argv) {
   const logPath = join(CONFIG_DIR, 'heartbeat.log');
   const logFd = openSync(logPath, 'a');
 
+  // A daemon must not stand in the directory it is reporting on. This one did,
+  // and an operating system will not let a directory be removed while a
+  // process has it as its working directory — so `mc work discard` reported
+  // "in use by node" about mc's own background process and refused to clean up
+  // the very work it had finished. The daemon has the path in its event; it
+  // does not need to be standing in it.
   const child = spawn(process.execPath, childArgs, {
     detached: true,
+    cwd: '/',
     stdio: ['ignore', logFd, logFd],
   });
   child.unref();

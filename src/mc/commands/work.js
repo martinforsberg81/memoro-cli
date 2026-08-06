@@ -1,12 +1,18 @@
 /**
  * `mc work` — pieces of work as directories under `~/mc`.
  *
- *   mc work                       what exists, derived from disk and git
+ *   mc work                       what exists, derived from disk, git and the tools
+ *   mc work <name>                open it — the most recent conversation here
+ *   mc work <name> new            a new conversation
+ *   mc work <name> <id>           that conversation, by the id `mc work` shows
  *   mc work add <name> <repo> [branch]
+ *   mc work remove <name> <repo>
  *   mc work release <name> [--apply]
+ *   mc work discard <name> [repo] [--apply]
  *
- * Nothing here is stored except the tool conversation. Nothing here refuses:
- * release removes what git says can go and reports what it kept.
+ * Nothing here is stored. Nothing here refuses: opening a name that does not
+ * exist yet makes it, release removes what git says can go and reports what it
+ * kept, and discard says what it is about to destroy before it does.
  */
 import {
   addWorktree,
@@ -18,8 +24,11 @@ import {
   removeWorktree,
   resolveRepository,
 } from '../work-area.js';
+import { describeAge, describeSize } from '../conversations.js';
 import { workRoot } from '../paths.js';
 import { openInWorkArea } from '../work-open.js';
+
+const VERBS = ['add', 'remove', 'release', 'discard', 'list'];
 
 export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
@@ -28,9 +37,8 @@ export async function run(argv, deps = {}) {
   if (opts.error) {
     stderr.write(`mc: ${opts.error}\n`);
     stderr.write('usage — mc work\n');
-    stderr.write('        mc work new <name>\n');
+    stderr.write('        mc work <name> [new | <conversation id>] [--repo <repo>] [--codex|--claude]\n');
     stderr.write('        mc work add <name> <repo> [branch]\n');
-    stderr.write('        mc work open <name> [session] [--repo <repo>] [--codex|--claude]\n');
     stderr.write('        mc work remove <name> <repo>\n');
     stderr.write('        mc work release <name> [--apply]\n');
     stderr.write('        mc work discard <name> [repo] [--apply]\n');
@@ -41,8 +49,8 @@ export async function run(argv, deps = {}) {
     const areas = listWorkAreas();
     if (opts.json) { stdout.write(`${JSON.stringify({ ok: true, root: workRoot(), areas }, null, 2)}\n`); return 0; }
     if (areas.length === 0) {
-      stdout.write(`mc: no work areas under ${workRoot()}\n`);
-      stdout.write('mc: start one with mc work add <name> <repo> [branch]\n');
+      stdout.write(`mc: nothing under ${workRoot()} yet\n`);
+      stdout.write('mc: start something with mc work add <name> <repo>\n');
       return 0;
     }
     stdout.write(`${workRoot()}\n`);
@@ -51,18 +59,11 @@ export async function run(argv, deps = {}) {
       for (const worktree of area.worktrees) {
         stdout.write(`    ${describe(worktree)}\n`);
       }
-      for (const [session, entry] of Object.entries(area.state?.sessions || {})) {
-        stdout.write(`    · ${session}  ${entry.tool}${entry.conversation ? `  ${entry.conversation.slice(0, 8)}` : ''}\n`);
+      for (const item of area.conversations) {
+        stdout.write(`    · ${item.id.slice(0, 8)}  ${item.tool.padEnd(11)} ${describeAge(item.updated_ms).padEnd(9)} ${describeSize(item.bytes)}\n`);
       }
     }
     stdout.write('\n');
-    return 0;
-  }
-
-  if (opts.verb === 'new') {
-    const path = createWorkArea(opts.name);
-    stdout.write(`mc: ${path}\n`);
-    stdout.write('mc: no worktree — add one with mc work add, or just open it\n');
     return 0;
   }
 
@@ -78,7 +79,7 @@ export async function run(argv, deps = {}) {
     const branch = opts.branch || opts.name;
     const result = addWorktree({ name: opts.name, repo: found.path, branch });
     if (!result.ok) {
-      stderr.write(`mc: could not add ${repo} to ${opts.name} (${result.reason})\n`);
+      stderr.write(`mc: could not add ${found.path} to ${opts.name} (${result.reason})\n`);
       return 1;
     }
     stdout.write(`mc: ${result.path}${result.branch ? ` on ${result.branch}` : ''}\n`);
@@ -88,7 +89,7 @@ export async function run(argv, deps = {}) {
   if (opts.verb === 'discard') {
     const area = inspectWorkArea(opts.name);
     if (!area.exists) {
-      stderr.write(`mc: no work area named "${opts.name}" under ${workRoot()}\n`);
+      stderr.write(`mc: nothing called "${opts.name}" under ${workRoot()}\n`);
       return 1;
     }
     const result = discardWorkArea(opts.name, { repo: opts.repo, dryRun: !opts.apply });
@@ -100,13 +101,23 @@ export async function run(argv, deps = {}) {
       if (item.unmerged_commits) loses.push(`${item.unmerged_commits} unmerged`);
       stdout.write(`  ${opts.apply ? 'destroyed' : 'would destroy'}  ${item.repo}${item.branch ? ` (${item.branch})` : ''}${loses.length ? ` — losing ${loses.join(', ')}` : ''}\n`);
     }
+    // A conversation is not in git. Nothing brings it back, so it is named
+    // one by one rather than counted.
+    for (const item of result.conversations) {
+      stdout.write(`  ${opts.apply ? 'destroyed' : 'would destroy'}  ${item.tool} ${item.id.slice(0, 8)} — ${describeSize(item.bytes)}, ${describeAge(item.updated_ms)}\n`);
+    }
+    for (const item of result.conversations_failed || []) {
+      stdout.write(`  kept       ${item.tool} ${item.id.slice(0, 8)} — ${item.reason}\n`);
+    }
     for (const item of result.kept) {
       stdout.write(`  kept       ${item.repo} — ${item.why}\n`);
     }
     if (result.removes_area) {
       stdout.write(`  ${opts.apply ? 'removed' : 'would remove'}    the work area itself\n`);
     }
-    if (!result.discarded.length && !result.kept.length) stdout.write('  nothing there\n');
+    if (!result.discarded.length && !result.kept.length && !result.conversations.length) {
+      stdout.write('  nothing there\n');
+    }
     if (!opts.apply) stdout.write('\nThis destroys work. Run again with --apply if that is what you want.\n');
     return 0;
   }
@@ -122,59 +133,69 @@ export async function run(argv, deps = {}) {
     return 0;
   }
 
-  if (opts.verb === 'open') {
+  if (opts.verb === 'release') {
     const area = inspectWorkArea(opts.name);
     if (!area.exists) {
-      stderr.write(`mc: no work area named "${opts.name}" under ${workRoot()}\n`);
+      stderr.write(`mc: nothing called "${opts.name}" under ${workRoot()}\n`);
       return 1;
     }
-    // The tool opens where the work is. One worktree and the work is that
-    // checkout, so the tool gets it with its git integration intact. Several,
-    // or none, and the work is the area itself — mc opens there rather than
-    // choosing a checkout on the user's behalf and mentioning it in passing.
-    const candidates = area.worktrees.filter((item) => item.is_git);
-    const named = opts.repo ? candidates.find((item) => item.repo === opts.repo) : null;
-    if (opts.repo && !named) {
-      stderr.write(`mc: ${opts.name} has no worktree for ${opts.repo}\n`);
-      return 1;
+    const result = releaseWorkArea(opts.name, { dryRun: !opts.apply });
+    if (opts.json) { stdout.write(`${JSON.stringify({ ok: true, ...result }, null, 2)}\n`); return 0; }
+    stdout.write(`mc work release ${opts.name}${opts.apply ? '' : ' — dry run'}\n`);
+    for (const item of result.removed) {
+      stdout.write(`  ${opts.apply ? 'removed' : 'would remove'}  ${item.repo}${item.branch ? ` (${item.branch})` : ''}\n`);
     }
-    const worktree = named
-      || (candidates.length === 1 ? candidates[0] : { repo: null, path: area.path, is_git: false });
-    stderr.write(`mc: ${worktree.path}\n`);
-    const opened = openInWorkArea({
-      name: opts.name,
-      session: opts.session,
-      worktree,
-      tool: opts.tool,
-    });
-    if (!opened.ok) {
-      stderr.write(`mc: could not open ${opts.name} (${opened.reason})\n`);
-      if (opened.hint) stderr.write(`mc: ${opened.hint}\n`);
-      return 1;
+    for (const item of result.conversations) {
+      stdout.write(`  ${opts.apply ? 'removed' : 'would remove'}  ${item.tool} ${item.id.slice(0, 8)} — ${describeSize(item.bytes)}, ${describeAge(item.updated_ms)}\n`);
     }
-    if (opened.conversation && !opened.resumed) {
-      stderr.write(`mc: ${opened.session} is a new ${opened.tool} conversation\n`);
+    for (const item of result.kept) {
+      stdout.write(`  kept     ${item.repo}${item.branch ? ` (${item.branch})` : ''} — ${item.why}\n`);
     }
-    return opened.code || 0;
+    if (!result.removed.length && !result.kept.length) stdout.write('  nothing to release\n');
+    if (!opts.apply) stdout.write('\nRun again with --apply.\n');
+    return 0;
   }
 
-  const area = inspectWorkArea(opts.name);
+  // Open. A name nobody has used yet is not a mistake to report — it is the
+  // start of something, so mc makes the directory and says where it is.
+  let area = inspectWorkArea(opts.name);
   if (!area.exists) {
-    stderr.write(`mc: no work area named "${opts.name}" under ${workRoot()}\n`);
+    createWorkArea(opts.name);
+    stderr.write(`mc: new — ${workRoot()}/${opts.name}\n`);
+    area = inspectWorkArea(opts.name);
+  }
+  // The tool opens where the work is. One worktree and the work is that
+  // checkout, so the tool gets it with its git integration intact. Several,
+  // or none, and the work is the area itself — mc opens there rather than
+  // choosing a checkout on the user's behalf and mentioning it in passing.
+  const candidates = area.worktrees.filter((item) => item.is_git);
+  const named = opts.repo ? candidates.find((item) => item.repo === opts.repo) : null;
+  if (opts.repo && !named) {
+    stderr.write(`mc: ${opts.name} has no worktree for ${opts.repo}\n`);
     return 1;
   }
-  const result = releaseWorkArea(opts.name, { dryRun: !opts.apply });
-  if (opts.json) { stdout.write(`${JSON.stringify({ ok: true, ...result }, null, 2)}\n`); return 0; }
-  stdout.write(`mc work release ${opts.name}${opts.apply ? '' : ' — dry run'}\n`);
-  for (const item of result.removed) {
-    stdout.write(`  ${opts.apply ? 'removed' : 'would remove'}  ${item.repo}${item.branch ? ` (${item.branch})` : ''}\n`);
+  const worktree = named
+    || (candidates.length === 1 ? candidates[0] : { repo: null, path: area.path, is_git: false });
+  stderr.write(`mc: ${worktree.path}\n`);
+  const opened = openInWorkArea({
+    areaRoot: area.path,
+    worktree,
+    tool: opts.tool,
+    pick: opts.pick,
+  });
+  if (!opened.ok) {
+    stderr.write(`mc: could not open ${opts.name} (${opened.reason})\n`);
+    if (opened.hint) stderr.write(`mc: ${opened.hint}\n`);
+    return 1;
   }
-  for (const item of result.kept) {
-    stdout.write(`  kept     ${item.repo}${item.branch ? ` (${item.branch})` : ''} — ${item.why}\n`);
+  // Neither tool saves anything until the first turn. Saying so is the
+  // difference between mc losing something and there being nothing to lose.
+  if (opened.kept_nothing) {
+    stderr.write(`mc: ${opened.tool} saved no conversation — nothing was said\n`);
+  } else if (opened.started) {
+    stderr.write(`mc: new ${opened.tool} conversation ${opened.started.slice(0, 8)}\n`);
   }
-  if (!result.removed.length && !result.kept.length) stdout.write('  nothing to release\n');
-  if (!opts.apply) stdout.write('\nRun again with --apply.\n');
-  return 0;
+  return opened.code || 0;
 }
 
 function describe(worktree) {
@@ -185,14 +206,9 @@ function describe(worktree) {
   return `${worktree.repo}  ${worktree.branch || '(detached)'}${marks.length ? `  [${marks.join(', ')}]` : ''}`;
 }
 
-function knownWorkArea(name, env = process.env) {
-  if (!name || !/^[A-Za-z0-9._-]{1,64}$/u.test(name)) return false;
-  return listWorkAreas(env).some((area) => area.name === name);
-}
-
 export function parseArgs(argv) {
   const opts = {
-    verb: 'list', name: null, repo: null, branch: null, session: 'main', env: process.env,
+    verb: 'list', name: null, repo: null, branch: null, pick: null,
     tool: null, apply: false, json: false, repoFlagNext: false,
   };
   const positional = [];
@@ -207,43 +223,35 @@ export function parseArgs(argv) {
     positional.push(arg);
   }
   if (positional.length === 0) return opts;
-  const [verb, ...rest] = positional;
-  const VERBS = ['add', 'release', 'list', 'open', 'new', 'remove', 'discard'];
-  if (!VERBS.includes(verb)) {
-    // `mc work critical-chat-error` names a work area, and there is only one
-    // thing anyone means by that. Requiring `open` is mc's grammar, not the
-    // user's, and answering with a usage list when the answer is "you meant
-    // open" is the same refusal in a different costume.
-    if (knownWorkArea(verb, opts.env)) {
-      return { ...opts, verb: 'open', name: verb, session: rest[0] || 'main' };
+  const [head, ...rest] = positional;
+
+  // A first word that is not a verb is the name of a piece of work. Requiring
+  // `open` was mc's grammar rather than the user's, and answering a name with
+  // a usage list is a refusal in a different costume.
+  if (!VERBS.includes(head)) {
+    if (!/^[A-Za-z0-9._-]{1,64}$/u.test(head)) {
+      return { ...opts, error: `"${head}" cannot be a directory name` };
     }
-    return { ...opts, error: `unknown verb or work area: ${verb}` };
+    return { ...opts, verb: 'open', name: head, pick: rest[0] || null };
   }
-  opts.verb = verb;
-  if (verb === 'list') return opts;
+
+  opts.verb = head;
+  if (head === 'list') return opts;
   opts.name = rest[0] || null;
-  if (!opts.name) return { ...opts, error: 'a work-area name is required' };
+  if (!opts.name) return { ...opts, error: 'which piece of work?' };
   if (!/^[A-Za-z0-9._-]{1,64}$/u.test(opts.name)) {
     return { ...opts, error: `"${opts.name}" cannot be a directory name` };
   }
-  if (verb === 'new') return opts;
-  if (verb === 'open') {
-    opts.session = rest[1] || 'main';
-    if (!/^[A-Za-z0-9._-]{1,64}$/u.test(opts.session)) {
-      return { ...opts, error: `"${opts.session}" cannot be a session name` };
-    }
-    return opts;
-  }
-  if (verb === 'discard') {
+  if (head === 'discard') {
     opts.repo = opts.repo || rest[1] || null;
     return opts;
   }
-  if (verb === 'remove') {
+  if (head === 'remove') {
     opts.repo = opts.repo || rest[1] || null;
     if (!opts.repo) return { ...opts, error: 'which repository? mc work remove <name> <repo>' };
     return opts;
   }
-  if (verb === 'add') {
+  if (head === 'add') {
     opts.repo = rest[1] || null;
     opts.branch = rest[2] || null;
   }
