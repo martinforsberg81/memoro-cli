@@ -389,7 +389,7 @@ async function openArea(name, opts, { stdout, stderr }) {
   }
 
   stderr.write(`mc: ${worktree.path}\n`);
-  const opened = openInWorkArea({ areaRoot: area.path, worktree, tool, pick });
+  const opened = await openInWorkArea({ areaRoot: area.path, worktree, tool, pick });
   if (!opened.ok) {
     stderr.write(`mc: could not open ${name} (${opened.reason})\n`);
     if (opened.hint) stderr.write(`mc: ${opened.hint}\n`);

@@ -151,34 +151,6 @@ export function parseCodexFunctionArgs(raw) {
   }
 }
 
-export async function ensureCodexAgentsIgnored(cwd = process.cwd()) {
-  const root = resolveWorkspaceRoot(cwd);
-  let excludePath = null;
-  try {
-    excludePath = execFileSync('git', ['-C', root, 'rev-parse', '--git-path', 'info/exclude'], {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-    }).trim();
-  } catch {
-    return null;
-  }
-
-  if (!excludePath) return null;
-
-  let existing = '';
-  try {
-    existing = await readFile(excludePath, 'utf8');
-  } catch {
-    // File may not exist yet.
-  }
-  if (/(^|\n)\/AGENTS\.md(\n|$)/.test(existing)) return excludePath;
-
-  const next = existing.replace(/\s*$/, '');
-  const suffix = next ? '\n/AGENTS.md\n' : '/AGENTS.md\n';
-  await writeFile(excludePath, `${next}${suffix}`);
-  return excludePath;
-}
-
 async function listJsonlFiles(dir) {
   const entries = await readdir(dir, { withFileTypes: true });
   const out = [];

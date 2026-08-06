@@ -7,7 +7,6 @@
 import { login, logout, status } from './commands/auth.js';
 import { configSet, configGet } from './commands/config.js';
 import { uploadSession } from './commands/session.js';
-import { pullLens } from './commands/lens.js';
 import { hookInstall, hookUninstall } from './commands/hook.js';
 import { runCodex } from './commands/codex.js';
 import { showSection, listSections } from './commands/show.js';
@@ -30,8 +29,6 @@ COMMANDS
   config get <key>                   Read config
 
   session upload <transcript>        Clean + POST a coding-session transcript
-  lens pull [--tool <id>] [--repo <name>]
-                                     Legacy: refresh old portrait-coding lens block
   codex run [-- <codex args...>]     Legacy manual wrapper; prefer mc new --codex
 
   show <section> [--repo <name>]     Legacy: print one lens section (loose-ends, decisions,
@@ -91,9 +88,6 @@ async function main(argv) {
       case 'session':
         if (sub === 'upload') return await uploadSession(rest);
         throw new Error(`Unknown session subcommand: ${sub}`);
-      case 'lens':
-        if (sub === 'pull') return await pullLens(rest);
-        throw new Error(`Unknown lens subcommand: ${sub}`);
       case 'codex':
         if (sub === 'run') return await runCodex(rest);
         throw new Error(`Unknown codex subcommand: ${sub}`);

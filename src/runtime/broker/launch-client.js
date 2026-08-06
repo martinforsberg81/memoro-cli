@@ -13,7 +13,6 @@ import {
 } from '../../lib/git-context.js';
 import { lookupOrMint } from '../../lib/coding-session.js';
 import { getPackageVersion } from '../../lib/version.js';
-import { groundSession } from '../../mc/ground.js';
 import { normalizeInteractivePtyEnv } from '../../mc/interactive-env.js';
 import { mcHome } from '../../mc/paths.js';
 import { findEntry } from '../../mc/registry.js';
@@ -298,41 +297,14 @@ export async function launchBrokerOwnedSession({
     }
   } catch {}
   const githubReady = sessionCapabilities.github.state === 'ready';
-  let groundingLaunchMessage = null;
-  // A provider switch is grounded exclusively by the strict, scanner-approved
-  // handoff projection. Normal grounding may contain transitional raw session
-  // continuity, so it must never be fetched, rendered, or concatenated here.
-  if (sendStartupMessage && !handoffUserMessage) {
-    try {
-      const res = await (deps.groundSession || groundSession)({
-        cwd,
-        adapter: launch.adapter,
-        focus,
-        repoContext,
-        tool: launch.shortName,
-        codingSessionId,
-        sessionName,
-        sessionCapabilities,
-        deps: {
-          grounding: config.grounding,
-          mcContextDeps: { apiUrl, token },
-        },
-      });
-      groundingLaunchMessage = res.message || null;
-      if (!res.ok && res.reason) {
-        stderr.write(`mc: grounding skipped (${res.reason}); continuing\n`);
-      }
-    } catch (err) {
-      stderr.write(`mc: grounding failed (${err.message}); continuing without it\n`);
-    }
-  }
-  const brokerUserMessage = handoffUserMessage || null;
-  if (brokerUserMessage) {
-    // A switch handoff is one ordinary user turn for every provider. Claude
-    // must not receive any part of it through --append-system-prompt.
-    groundingLaunchMessage = null;
-  }
+  // The grounding bundle is gone. It mixed the user's Coding Profile — static,
+  // the same in every conversation — with per-session state, and delivered the
+  // mixture as Codex's opening message or into a tracked CLAUDE.md. The
+  // profile now reaches a new conversation as a launch argument; nothing else
+  // in that bundle survived review. See `mc/portrait.js`.
+  const groundingLaunchMessage = null;
 
+  const brokerUserMessage = handoffUserMessage || null;
   const devEnvironment = managedPortable
     ? {}
     : await resolveDevSessionEnvironment({
@@ -360,9 +332,6 @@ export async function launchBrokerOwnedSession({
       const error = auth?.error || 'Codex cloud auth failed';
       stderr.write(`mc: ${error}\n`);
       return { code: 1, error, reason: auth?.reason || 'cloud-codex-auth-failed' };
-    }
-    if (auth.startupMessageSafe === false) {
-      groundingLaunchMessage = null;
     }
     if (auth.interactiveLogin === true) {
       codexDeviceAuthBeforeLaunch = true;

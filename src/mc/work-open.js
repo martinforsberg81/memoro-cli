@@ -17,8 +17,9 @@ import { spawnSync } from 'node:child_process';
 import { resolveLaunch } from '../adapters/index.js';
 import { listConversations } from './conversations.js';
 import { log } from './logger.js';
+import { loadProfile, profileArgs } from './portrait.js';
 
-export function openInWorkArea({
+export async function openInWorkArea({
   areaRoot,
   worktree,
   tool = null,
@@ -46,17 +47,22 @@ export function openInWorkArea({
     chosen = before.find((item) => item.tool === toolId) || null;
   }
 
+  // A new conversation is handed the user's Coding Profile as it starts. A
+  // resumed one already has it in its own history, so asking again would be
+  // saying the same thing twice — and would be the only reason opening
+  // something existing had to touch the network at all.
   const args = chosen && typeof launch.adapter?.resumeArgs === 'function'
     ? launch.adapter.resumeArgs({ sessionId: chosen.id }) || []
-    : [];
+    : profileArgs(toolId, await loadProfile({ env }));
 
   log('work.open', {
     area: areaRoot,
     cwd: worktree.path,
     tool: toolId,
     bin: launch.spec.bin,
-    args,
+    args: args.map((arg) => (arg.length > 60 ? `${arg.slice(0, 57)}…` : arg)),
     resuming: chosen?.id || null,
+    profile: !chosen && args.length > 0,
     known_here: before.length,
   });
 
