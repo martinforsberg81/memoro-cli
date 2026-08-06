@@ -192,13 +192,29 @@ export function addWorktree({ name, repo, branch, from = null, env = process.env
  * standing in answers immediately; there is nothing to keep in sync.
  */
 export function directoryInUse(path) {
+  let pids = [];
   try {
-    const out = execFileSync('lsof', ['-a', '-d', 'cwd', '--', path], {
+    // `-F pn` asks lsof for one field per line rather than a table. The table's
+    // COMMAND column is truncated and splits on spaces, so a process holding
+    // this directory was reported as being called `2.1.223` — a fragment of
+    // its own version string. A pid is unambiguous; the name comes from `ps`.
+    const out = execFileSync('lsof', ['-a', '-d', 'cwd', '-F', 'pn', '--', path], {
       encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'],
     });
-    const lines = out.split('\n').slice(1).filter(Boolean);
-    return lines.length ? [...new Set(lines.map((line) => line.split(/\s+/u)[0]))] : null;
+    pids = [...new Set(out.split('\n')
+      .filter((line) => line.startsWith('p'))
+      .map((line) => line.slice(1).trim())
+      .filter(Boolean))];
   } catch { return null; }
+  if (pids.length === 0) return null;
+  const names = pids.map((pid) => {
+    try {
+      return execFileSync('ps', ['-o', 'comm=', '-p', pid], {
+        encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'],
+      }).trim().split('/').pop() || `pid ${pid}`;
+    } catch { return `pid ${pid}`; }
+  });
+  return [...new Set(names)];
 }
 
 export function releaseWorkArea(name, { env = process.env, dryRun = false } = {}) {
