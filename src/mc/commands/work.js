@@ -36,7 +36,7 @@ import {
 import { describeAge, describeSize } from '../conversations.js';
 import { interactive, ask, select } from '../prompt.js';
 import { workRoot } from '../paths.js';
-import { openInWorkArea } from '../work-open.js';
+import { clearTrustDialog, openInWorkArea, startInBackground } from '../work-open.js';
 
 const VERBS = ['add', 'remove', 'release', 'discard', 'list'];
 const NAME = /^[A-Za-z0-9._-]{1,64}$/u;
@@ -395,6 +395,26 @@ async function openArea(name, opts, { stdout, stderr }) {
     if (!tool) return 0;
   }
 
+  if (opts.tmux) {
+    const started = startInBackground({
+      name, areaRoot: area.path, worktree, tool: opts.tool || 'claude', task: opts.task,
+    });
+    if (!started.ok) {
+      stderr.write(started.reason === 'already-running'
+        ? `mc: ${name} is already running in the background (${started.target})\n`
+        : `mc: could not start ${name} in the background (${started.reason})\n`);
+      if (started.hint) stderr.write(`mc: ${started.hint}\n`);
+      return 1;
+    }
+    const trust = clearTrustDialog(started.target);
+    stdout.write(`mc: ${name} is running in the background as ${started.target}\n`);
+    if (trust.answered) stdout.write('mc: answered Claude\'s folder-trust question for it\n');
+    if (!opts.task) stdout.write('mc: it has no task — send it one, or it will sit there\n');
+    stdout.write(`mc: watch with  mc status\n`);
+    stdout.write(`mc: talk to it  tmux send-keys -t ${started.target} "..." Enter\n`);
+    return 0;
+  }
+
   stderr.write(`mc: ${worktree.path}\n`);
   const opened = await openInWorkArea({ areaRoot: area.path, worktree, tool, pick });
   if (!opened.ok) {
@@ -474,7 +494,7 @@ function describe(worktree) {
 
 export function parseArgs(argv) {
   const opts = {
-    verb: 'list', name: null, repo: null, branch: null, pick: null, from: null,
+    verb: 'list', name: null, repo: null, branch: null, pick: null, from: null, tmux: false, task: null,
     tool: null, apply: false, json: false, repoFlagNext: false, fromFlagNext: false,
   };
   const positional = [];
@@ -483,6 +503,7 @@ export function parseArgs(argv) {
     if (arg === '--apply') { opts.apply = true; continue; }
     if (arg === '--repo') { opts.repoFlagNext = true; continue; }
     if (arg === '--from') { opts.fromFlagNext = true; continue; }
+    if (arg === '--tmux') { opts.tmux = true; continue; }
     if (arg === '--codex') { opts.tool = 'codex'; continue; }
     if (arg === '--claude') { opts.tool = 'claude'; continue; }
     if (arg.startsWith('--')) return { ...opts, error: `unknown flag: ${arg}` };
@@ -498,6 +519,10 @@ export function parseArgs(argv) {
   // a usage list is a refusal in a different costume.
   if (!VERBS.includes(head)) {
     if (!NAME.test(head)) return { ...opts, error: `"${head}" cannot be a directory name` };
+    // With --tmux the rest of the line is what the worker should do, not a
+    // conversation to pick. A worker started with nothing to do sits at an
+    // empty prompt for as long as it is left there.
+    if (opts.tmux) return { ...opts, verb: 'open', name: head, task: rest.join(' ') || null };
     return { ...opts, verb: 'open', name: head, pick: rest[0] || null };
   }
 
