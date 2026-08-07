@@ -9,16 +9,18 @@ export async function run(argv, deps = {}) {
   // asks about a single pre-V1 session, which is what this command used to be
   // and all it could do.
   //
-  // The interval belongs to `--watch`, so it is removed before looking for a
-  // name. Without that, `mc status --watch 2` read the 2 as a session called
-  // "2" and answered with the old command's usage line.
+  // A number belongs to the flag before it, so it is not a name. Without this,
+  // `mc status --watch 2` read the 2 as a session called "2" and answered with
+  // the old command's usage line — and `--wait` and `--timeout` would each
+  // have needed the same fix again.
   const positional = [];
   for (let index = 0; index < argv.length; index += 1) {
-    if (argv[index] === '--watch') {
+    const arg = argv[index];
+    if (arg.startsWith('--')) {
       if (/^\d+$/u.test(argv[index + 1] || '')) index += 1;
       continue;
     }
-    if (!argv[index].startsWith('--')) positional.push(argv[index]);
+    positional.push(arg);
   }
   if (positional.length === 0) {
     const board = await import('../mc/commands/status-board.js');

@@ -270,7 +270,23 @@ function describeConversation(item, live) {
   };
 }
 
-export async function workStatus({ env = process.env, names = null } = {}) {
+/**
+ * A short string that changes exactly when something worth waking for does.
+ *
+ * Not the whole report: a conversation writing another paragraph moves its
+ * size and its timestamp every second, and a supervisor woken by that would
+ * be woken constantly and learn nothing. What matters is a transition —
+ * something stopped and is now waiting, something started, a piece of work
+ * appeared or went away.
+ */
+export function signature(report) {
+  return report.areas
+    .map((area) => `${area.name}:${area.conversations.map((item) => `${item.id.slice(0, 8)}=${item.state}`).sort().join(',')}`)
+    .sort()
+    .join('|');
+}
+
+export async function workStatus({ env = process.env, names = null, git: askGit = true } = {}) {
   // The area's own listing is asked without conversations and without git:
   // both are gathered below for every area at once.
   const areas = (names?.length
@@ -288,7 +304,12 @@ export async function workStatus({ env = process.env, names = null } = {}) {
   // so the work root asks it once and the areas are buckets.
   const root = workRoot(env);
   const everything = listConversations(root, env);
-  const git = await gitFacts(areas.flatMap((area) => area.worktrees.map((w) => w.path)));
+  // Waiting for a change asks this many times a minute, and the git questions
+  // are all of the cost. A watcher only cares whether a conversation moved, so
+  // it skips them and asks in full once something has.
+  const git = askGit
+    ? await gitFacts(areas.flatMap((area) => area.worktrees.map((w) => w.path)))
+    : new Map();
   const now = Date.now();
   const conversationsFor = (area) => everything.filter(
     (item) => item.cwd === area.path || item.cwd.startsWith(`${area.path}/`),

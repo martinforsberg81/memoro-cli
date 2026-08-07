@@ -37,6 +37,7 @@ MAINTENANCE
                                     waiting for you, working, or idle
   mc status --watch [seconds]      The same, refreshed
   mc status --json                 The same, for a session watching the others
+  mc status --wait [--timeout <s>] Block until something moves, then report
   mc work                          What exists; at a terminal, a way in
   mc work <name>                   Open it — the name is enough, new or not
   mc work <name> new               A new conversation rather than the last one

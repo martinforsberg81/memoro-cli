@@ -10,14 +10,15 @@
  * costing time while it is read. Working comes next. Everything idle sits at
  * the bottom, one line each, still there but not asking for anything.
  *
- * `--json` is the same page for a model rather than a person. A session that
- * is asked to keep an eye on the others reads that, and it needs no
- * cooperation from the sessions it is watching — nothing reports in, so a
- * session that crashed reads exactly as accurately as one that did not.
+ * `--json` is the same page for a model rather than a person, and `--wait`
+ * blocks until something moves. A session asked to keep an eye on the others
+ * runs those two, and needs no cooperation from the sessions it watches —
+ * nothing reports in, so a session that crashed reads exactly as accurately
+ * as one that did not.
  */
 import { describeAge, describeSize } from '../conversations.js';
 import { workRoot } from '../paths.js';
-import { workStatus } from '../work-status.js';
+import { signature, workStatus } from '../work-status.js';
 
 const MARK = { waiting: '◆', working: '●', idle: ' ' };
 const RANK = { waiting: 0, working: 1, idle: 2 };
@@ -28,9 +29,14 @@ export async function run(argv, deps = {}) {
   const opts = parseArgs(argv);
   if (opts.error) {
     stderr.write(`mc: ${opts.error}\n`);
-    stderr.write('usage — mc status [--json] [--watch [seconds]]\n');
+    stderr.write('usage — mc status [--json]\n');
+    stderr.write('        mc status --watch [seconds]     redraw continuously\n');
+    stderr.write('        mc status --wait [seconds] [--timeout <seconds>]\n');
+    stderr.write('                                        block until something moves\n');
     return 2;
   }
+
+  if (opts.wait) return waitForChange(opts, { stdout });
 
   if (!opts.watch) {
     const report = await workStatus();
@@ -45,6 +51,38 @@ export async function run(argv, deps = {}) {
     const frame = opts.json ? `${JSON.stringify(report)}\n` : render(report, stdout.columns || 100);
     stdout.write(opts.json ? frame : `[H[2J${frame}`);
     await new Promise((resolve) => { setTimeout(resolve, opts.watch * 1000); });
+  }
+}
+
+/**
+ * Block until something moves, then say what it is.
+ *
+ * This is what a supervising session runs. Polling a status page costs a turn
+ * every time round whether or not anything happened, and most of the time
+ * nothing has — so the loop belongs here, where it costs a subprocess, not
+ * there, where it costs a model.
+ *
+ * The comparison skips git, which is nearly all the cost of a full report,
+ * and asks in full only once a conversation has actually moved.
+ */
+async function waitForChange(opts, { stdout }) {
+  const before = signature(await workStatus({ git: false }));
+  const deadline = opts.timeout ? Date.now() + opts.timeout * 1000 : null;
+  for (;;) {
+    await new Promise((resolve) => { setTimeout(resolve, opts.wait * 1000); });
+    const now = await workStatus({ git: false });
+    if (signature(now) !== before) {
+      const report = await workStatus();
+      stdout.write(opts.json ? `${JSON.stringify(report, null, 2)}\n` : render(report, stdout.columns || 100));
+      return 0;
+    }
+    // A watcher that also wants to look up every so often regardless says so
+    // with --timeout, and gets told plainly that nothing changed rather than
+    // being handed a report it has already seen.
+    if (deadline && Date.now() >= deadline) {
+      stdout.write(opts.json ? `${JSON.stringify({ changed: false, waited: opts.timeout })}\n` : 'nothing changed\n');
+      return 3;
+    }
   }
 }
 
@@ -97,13 +135,23 @@ export function render(report, columns = 100) {
 }
 
 export function parseArgs(argv) {
-  const opts = { json: false, watch: 0 };
+  const opts = { json: false, watch: 0, wait: 0, timeout: 0 };
+  const seconds = (argv, index, fallback) => (
+    /^\d+$/u.test(argv[index + 1] || '') ? Number(argv[index + 1]) : fallback
+  );
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === '--json') { opts.json = true; continue; }
-    if (arg === '--watch') {
-      const next = argv[index + 1];
-      if (next && /^\d+$/u.test(next)) { opts.watch = Number(next); index += 1; } else opts.watch = 5;
+    if (arg === '--watch' || arg === '--wait') {
+      const given = /^\d+$/u.test(argv[index + 1] || '');
+      opts[arg === '--watch' ? 'watch' : 'wait'] = seconds(argv, index, arg === '--watch' ? 5 : 3);
+      if (given) index += 1;
+      continue;
+    }
+    if (arg === '--timeout') {
+      if (!/^\d+$/u.test(argv[index + 1] || '')) return { ...opts, error: '--timeout needs seconds' };
+      opts.timeout = Number(argv[index + 1]);
+      index += 1;
       continue;
     }
     return { ...opts, error: `unknown argument: ${arg}` };
