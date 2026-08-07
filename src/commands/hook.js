@@ -8,7 +8,6 @@
 
 import { readConfig, updateConfig } from '../lib/config.js';
 import { getAdapter, detectInstalled } from '../adapters/index.js';
-import { listSections } from './show.js';
 
 export async function hookInstall(argv) {
   const flags = parseFlags(argv);
@@ -20,7 +19,6 @@ export async function hookInstall(argv) {
 
   const config = await readConfig();
   const installed = { ...(config.installedHooks || {}) };
-  const sections = listSections();
   let changed = false;
 
   for (const adapter of targets) {
@@ -40,15 +38,6 @@ export async function hookInstall(argv) {
       changed = true;
       console.error(`  ✓ ${configPath}`);
 
-      if (typeof adapter.installCommands === 'function') {
-        const written = await adapter.installCommands({
-          memoroCliBin: flags.bin,
-          sections,
-        });
-        if (written.length > 0) {
-          console.error(`  ✓ ${written.length} slash command${written.length === 1 ? '' : 's'} in ${dirOf(written[0])}`);
-        }
-      }
       if (typeof adapter.installUpdateCommand === 'function') {
         try {
           await adapter.installUpdateCommand({ memoroCliBin: flags.bin });
