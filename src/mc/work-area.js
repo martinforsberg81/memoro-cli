@@ -162,6 +162,35 @@ export function removeWorktree({ name, repo, env = process.env } = {}) {
   return { ok: true, removed: 'worktree', branch: worktree.branch, branch_kept: branchKept };
 }
 
+/**
+ * Where new work starts from.
+ *
+ * `git worktree add -b <branch> <path>` with no start point branches from the
+ * repository's HEAD — whatever the user's main checkout happens to be sitting
+ * on. That is almost never what starting a new piece of work means. On this
+ * machine `~/memoro` was 35 commits behind `origin/main`, so every work area
+ * created from it began 35 commits in the past, and a session found its tests
+ * failing against a baseline that had already been fixed.
+ *
+ * mc already treats `origin/main` as the baseline everywhere else: release and
+ * discard both count a branch's commits as `origin/main..branch`. Starting
+ * somewhere else was mc disagreeing with itself.
+ *
+ * The remote's own default branch is asked for rather than assumed, and it is
+ * refreshed first — a stale `origin/main` is the same bug one step removed.
+ * Both steps degrade quietly: no remote, no network, or a repository with no
+ * origin at all falls back to HEAD, which is where it used to start always.
+ */
+function baseFor(repo) {
+  const head = git(repo, ['symbolic-ref', '--short', 'refs/remotes/origin/HEAD']);
+  const ref = head || (git(repo, ['rev-parse', '--verify', 'origin/main']) ? 'origin/main' : null);
+  if (!ref) return { ref: null, why: 'no origin — started from this repository\'s current HEAD' };
+  const remote = ref.split('/')[0];
+  const branch = ref.slice(remote.length + 1);
+  const fetched = run(['-C', repo, 'fetch', '--quiet', remote, branch]);
+  return { ref, why: fetched ? null : `could not reach ${remote} — using the last ${ref} it saw` };
+}
+
 export function addWorktree({ name, repo, branch, from = null, env = process.env } = {}) {
   const area = createWorkArea(name, env);
   const target = join(area, repoName(repo));
@@ -172,16 +201,23 @@ export function addWorktree({ name, repo, branch, from = null, env = process.env
   const exists = branch
     ? Boolean(git(repo, ['rev-parse', '--verify', `refs/heads/${branch}`]))
     : false;
+  const base = exists || !branch ? { ref: null, why: null } : (from ? { ref: from, why: null } : baseFor(repo));
   const args = ['-C', repo, 'worktree', 'add'];
   if (!branch) args.push('--detach', target);
   else if (exists) args.push(target, branch);
-  else args.push('-b', branch, target, ...(from ? [from] : []));
+  else args.push('-b', branch, target, ...(base.ref ? [base.ref] : []));
   try {
     execFileSync('git', args, { stdio: ['ignore', 'pipe', 'pipe'] });
   } catch (error) {
     return { ok: false, reason: firstLine(error), path: target };
   }
-  return { ok: true, path: target, branch: branch || null };
+  return {
+    ok: true,
+    path: target,
+    branch: branch || null,
+    base: base.ref || (exists ? 'the existing branch' : null),
+    base_note: base.why,
+  };
 }
 
 /**

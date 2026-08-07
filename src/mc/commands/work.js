@@ -9,7 +9,7 @@
  *   mc work <name>                open it, asking only what it cannot know
  *   mc work <name> new            a new conversation
  *   mc work <name> <id>           one particular conversation
- *   mc work add <name> <repo> [branch]
+ *   mc work add <name> <repo> [branch] [--from <ref>]
  *   mc work remove <name> <repo>
  *   mc work release <name> [--apply]
  *   mc work discard <name> [repo] [--apply]
@@ -49,7 +49,7 @@ export async function run(argv, deps = {}) {
     stderr.write(`mc: ${opts.error}\n`);
     stderr.write('usage — mc work\n');
     stderr.write('        mc work <name> [new | <conversation id>] [--repo <repo>] [--codex|--claude]\n');
-    stderr.write('        mc work add <name> <repo> [branch]\n');
+    stderr.write('        mc work add <name> <repo> [branch] [--from <ref>]\n');
     stderr.write('        mc work remove <name> <repo>\n');
     stderr.write('        mc work release <name> [--apply]\n');
     stderr.write('        mc work discard <name> [repo] [--apply]\n');
@@ -100,12 +100,19 @@ async function runVerb(opts, { stdout, stderr }) {
     }
     // Without a branch the work's own name is the branch: one name for the
     // piece of work, the directory it lives in, and the branch it is on.
-    const result = addWorktree({ name: opts.name, repo: found.path, branch: opts.branch || opts.name });
+    const result = addWorktree({
+      name: opts.name, repo: found.path, branch: opts.branch || opts.name, from: opts.from,
+    });
     if (!result.ok) {
       stderr.write(`mc: could not add ${found.path} to ${opts.name} (${result.reason})\n`);
       return 1;
     }
+    // Where it started from is worth a line. A work area that quietly began
+    // 35 commits behind cost a session an afternoon of tests that failed for
+    // a reason that had nothing to do with its work.
     stdout.write(`mc: ${result.path}${result.branch ? ` on ${result.branch}` : ''}\n`);
+    if (result.base) stdout.write(`mc: from ${result.base}\n`);
+    if (result.base_note) stderr.write(`mc: ${result.base_note}\n`);
     return 0;
   }
 
@@ -467,18 +474,20 @@ function describe(worktree) {
 
 export function parseArgs(argv) {
   const opts = {
-    verb: 'list', name: null, repo: null, branch: null, pick: null,
-    tool: null, apply: false, json: false, repoFlagNext: false,
+    verb: 'list', name: null, repo: null, branch: null, pick: null, from: null,
+    tool: null, apply: false, json: false, repoFlagNext: false, fromFlagNext: false,
   };
   const positional = [];
   for (const arg of argv) {
     if (arg === '--json') { opts.json = true; continue; }
     if (arg === '--apply') { opts.apply = true; continue; }
     if (arg === '--repo') { opts.repoFlagNext = true; continue; }
+    if (arg === '--from') { opts.fromFlagNext = true; continue; }
     if (arg === '--codex') { opts.tool = 'codex'; continue; }
     if (arg === '--claude') { opts.tool = 'claude'; continue; }
     if (arg.startsWith('--')) return { ...opts, error: `unknown flag: ${arg}` };
     if (opts.repoFlagNext) { opts.repo = arg; opts.repoFlagNext = false; continue; }
+    if (opts.fromFlagNext) { opts.from = arg; opts.fromFlagNext = false; continue; }
     positional.push(arg);
   }
   if (positional.length === 0) return opts;
