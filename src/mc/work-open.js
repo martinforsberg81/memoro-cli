@@ -120,6 +120,29 @@ export async function openInWorkArea({
  * A task. A worker started with nothing to do sits at an empty prompt for as
  * long as it is left there, which is the most expensive way to do nothing.
  */
+/**
+ * Is this piece of work already running somewhere, and can we go to it?
+ *
+ * The same conversation can be entered two ways: started in the background
+ * for another session to drive, and joined from a terminal when a person
+ * wants to see it. That is only true if joining goes to the one that is
+ * running. Resuming it a second time starts another process on the same
+ * transcript, which is two writers on one file and one of them is wrong.
+ */
+export function backgroundTarget(name, { run = null } = {}) {
+  const tmux = run || ((args) => spawnSync('tmux', args, { encoding: 'utf8' }));
+  const target = `mc-${name}`;
+  return tmux(['has-session', '-t', target]).status === 0 ? target : null;
+}
+
+/** Give this terminal to the running session until the user detaches. */
+export function attachBackground(target, { run = null, env = process.env } = {}) {
+  const attach = run || ((args) => spawnSync('tmux', args, { stdio: 'inherit', env }));
+  log('work.background-attach', { target });
+  const result = attach(['attach-session', '-t', target]);
+  return { ok: !result?.error, code: result?.status ?? 0, reason: result?.error?.message };
+}
+
 export function startInBackground({
   name,
   areaRoot,

@@ -36,7 +36,9 @@ import {
 import { describeAge, describeSize } from '../conversations.js';
 import { interactive, ask, select } from '../prompt.js';
 import { workRoot } from '../paths.js';
-import { clearTrustDialog, openInWorkArea, startInBackground } from '../work-open.js';
+import {
+  attachBackground, backgroundTarget, clearTrustDialog, openInWorkArea, startInBackground,
+} from '../work-open.js';
 
 const VERBS = ['add', 'remove', 'release', 'discard', 'list'];
 const NAME = /^[A-Za-z0-9._-]{1,64}$/u;
@@ -413,6 +415,20 @@ async function openArea(name, opts, { stdout, stderr }) {
     stdout.write(`mc: watch with  mc status\n`);
     stdout.write(`mc: talk to it  tmux send-keys -t ${started.target} "..." Enter\n`);
     return 0;
+  }
+
+  // Already running in the background? Then joining means going to it, not
+  // starting a second process on the same conversation.
+  const running = backgroundTarget(name);
+  if (running) {
+    stderr.write(`mc: joining ${name} — it is running in the background\n`);
+    stderr.write('mc: ctrl-b d leaves it running\n');
+    const joined = attachBackground(running);
+    if (!joined.ok) {
+      stderr.write(`mc: could not join ${name} (${joined.reason})\n`);
+      return 1;
+    }
+    return joined.code || 0;
   }
 
   stderr.write(`mc: ${worktree.path}\n`);
