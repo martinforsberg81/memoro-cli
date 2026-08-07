@@ -33,6 +33,10 @@ MAINTENANCE
   mc storage status [--json]       Summarize durable and ephemeral session state
   mc storage explain <name>        Explain one session's stored resources
   mc storage repair [--apply]      Plan or apply loss-free storage repairs
+  mc status                        Every piece of work and what it is doing:
+                                    waiting for you, working, or idle
+  mc status --watch [seconds]      The same, refreshed
+  mc status --json                 The same, for a session watching the others
   mc work                          What exists; at a terminal, a way in
   mc work <name>                   Open it — the name is enough, new or not
   mc work <name> new               A new conversation rather than the last one

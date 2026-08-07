@@ -1,0 +1,331 @@
+/**
+ * What every piece of work is doing right now.
+ *
+ * `mc work` answers "what is there, and let me into one of them". This answers
+ * a different question, and it is the one that costs a person the most time
+ * when several conversations run at once: which of them is thinking, which is
+ * waiting for me, and which has been sitting untouched since this morning.
+ *
+ * Everything here is derived at the moment of asking, like the rest of the
+ * work model. Nothing is stored, nothing is subscribed to, and no session has
+ * to report in — a session that crashed, was killed, or was never started by
+ * mc is described exactly as accurately as one that behaved.
+ *
+ * Three facts, from three places that already know them:
+ *
+ *   running   the operating system — a tool process whose working directory
+ *             is this work, found by pid and named by ps
+ *   turn      the transcript's last entry. An assistant message with nothing
+ *             after it means the model has stopped and is waiting; anything
+ *             else means it is still going
+ *   said      the last thing the assistant actually said, which is what tells
+ *             a person whether they still care about this one
+ */
+import { execFile, execFileSync } from 'node:child_process';
+import { promisify } from 'node:util';
+import { closeSync, openSync, readSync, statSync } from 'node:fs';
+
+import { listConversations } from './conversations.js';
+import { workRoot } from './paths.js';
+import { inspectWorkArea, listWorkAreas } from './work-area.js';
+
+const run = promisify(execFile);
+
+/**
+ * Ask git about every worktree at once.
+ *
+ * Four questions per checkout, asked one after another, took four seconds
+ * across eight areas — each one is a few hundred milliseconds against a
+ * repository this size, and they were queued behind each other for no reason.
+ * They do not depend on one another, so they all go at the same time.
+ */
+async function gitFacts(paths) {
+  const ask = async (cwd, args) => {
+    try {
+      const { stdout } = await run('git', ['-C', cwd, ...args], { encoding: 'utf8' });
+      return stdout.trim() || null;
+    } catch { return null; }
+  };
+  const results = await Promise.all(paths.map(async (path) => {
+    const [branch, dirty] = await Promise.all([
+      ask(path, ['rev-parse', '--abbrev-ref', 'HEAD']),
+      ask(path, ['status', '--porcelain']),
+    ]);
+    const unmerged = branch && branch !== 'HEAD'
+      ? await ask(path, ['log', '--oneline', `origin/main..${branch}`])
+      : null;
+    return [path, {
+      branch: branch && branch !== 'HEAD' ? branch : null,
+      is_git: Boolean(branch),
+      uncommitted: dirty ? dirty.split('\n').filter(Boolean).length : 0,
+      unmerged_commits: unmerged ? unmerged.split('\n').filter(Boolean).length : 0,
+    }];
+  }));
+  return new Map(results);
+}
+
+const TAIL_BYTES = 256 * 1024;
+
+/**
+ * A transcript written this recently belongs to a session that is open.
+ *
+ * Standing in the directory is the stronger signal but not the only one: a
+ * conversation can change directory after it starts — one here moved from a
+ * worktree to the repository root — and then no process is found where the
+ * work is, while the transcript is being written to as you read. It showed as
+ * idle with "just now" beside it, which is a listing arguing with itself.
+ */
+const RECENT_MS = 2 * 60 * 1000;
+
+/**
+ * Which tool processes stand where, for every directory at once.
+ *
+ * One `lsof` and one `ps` for the whole machine rather than a pair per
+ * directory. Asked per directory this took 3.3 seconds across eight areas,
+ * which is fine to type once and useless for something meant to sit on a
+ * second screen and refresh.
+ *
+ * Returns a map of directory → tool names, counted, because the count is what
+ * says how many conversations in that directory are actually open.
+ */
+function toolsByDirectory(paths) {
+  const byDirectory = new Map(paths.map((path) => [path, []]));
+  if (paths.length === 0) return byDirectory;
+
+  // lsof exits non-zero when any named directory has no process standing in
+  // it, which is the normal case for most of them. Asked one directory at a
+  // time that only lost the empty ones; asked together it threw away the
+  // whole answer, and every area reported idle.
+  let output = '';
+  try {
+    output = execFileSync('lsof', ['-a', '-d', 'cwd', '-F', 'pn', '--', ...paths], {
+      encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 4 * 1024 * 1024,
+    });
+  } catch (error) {
+    output = error?.stdout?.toString?.() || '';
+  }
+
+  // `-F pn` emits a pid line then the name lines belonging to it.
+  const here = [];
+  let pid = null;
+  for (const line of output.split('\n')) {
+    if (line.startsWith('p')) { pid = line.slice(1).trim(); continue; }
+    if (line.startsWith('n') && pid) here.push([pid, line.slice(1).trim()]);
+  }
+  if (here.length === 0) return byDirectory;
+
+  const commands = new Map();
+  try {
+    const ps = execFileSync('ps', ['-o', 'pid=,command=', '-p', [...new Set(here.map(([p]) => p))].join(',')], {
+      encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    for (const line of ps.split('\n')) {
+      const match = /^\s*(\d+)\s+(.*)$/u.exec(line);
+      if (match) commands.set(match[1], match[2]);
+    }
+  } catch { return byDirectory; }
+
+  for (const [processId, directory] of here) {
+    const command = commands.get(processId) || '';
+    // The tool itself, not the shell it was started from and not mc's own
+    // background daemons — those stand here too and mean nothing about
+    // whether anyone is working.
+    const name = /(^|\/)claude(\s|$)/u.test(command) ? 'claude'
+      : /(^|\/)codex(\s|$)/u.test(command) ? 'codex'
+        : null;
+    if (name && byDirectory.has(directory)) byDirectory.get(directory).push(name);
+  }
+  return byDirectory;
+}
+
+/**
+ * The end of a transcript, read from the end.
+ *
+ * A conversation can be megabytes and this runs for every one of them, so it
+ * reads a bounded tail and drops the first line, which a mid-line seek almost
+ * always cuts in half.
+ */
+function readTail(path) {
+  if (!path) return [];
+  let fd = null;
+  try {
+    const size = statSync(path).size;
+    const from = Math.max(0, size - TAIL_BYTES);
+    fd = openSync(path, 'r');
+    const buffer = Buffer.alloc(Math.min(TAIL_BYTES, size));
+    const read = readSync(fd, buffer, 0, buffer.length, from);
+    const text = buffer.subarray(0, read).toString('utf8');
+    const lines = text.split('\n');
+    if (from > 0) lines.shift();
+    return lines.filter((line) => line.startsWith('{'));
+  } catch { return []; } finally {
+    if (fd !== null) { try { closeSync(fd); } catch { /* closed */ } }
+  }
+}
+
+function parsed(lines) {
+  const out = [];
+  for (const line of lines) {
+    try { out.push(JSON.parse(line)); } catch { /* truncated write */ }
+  }
+  return out;
+}
+
+/** Claude: `{type:'assistant'|'user', message:{content}}`, plus UI noise. */
+function claudeTail(entries) {
+  let said = null;
+  let turn = null;
+  for (let i = entries.length - 1; i >= 0; i -= 1) {
+    const entry = entries[i];
+    const kind = entry.type;
+    if (kind !== 'assistant' && kind !== 'user') continue;
+    const content = (entry.message || {}).content;
+    const text = textOf(content);
+    if (turn === null) turn = kind === 'assistant' && text ? 'waiting' : 'working';
+    if (kind === 'assistant' && text && !said) said = text;
+    if (turn !== null && said) break;
+  }
+  return { said, turn };
+}
+
+/** Codex: messages live under `payload`, and `task_complete` ends a turn. */
+function codexTail(entries) {
+  let said = null;
+  let turn = null;
+  for (let i = entries.length - 1; i >= 0; i -= 1) {
+    const payload = entries[i].payload || {};
+    if (turn === null) {
+      if (payload.type === 'task_complete') turn = 'waiting';
+      else if (payload.role === 'user' || payload.type === 'function_call') turn = 'working';
+    }
+    if (!said && payload.role === 'assistant') {
+      const text = textOf(payload.content);
+      if (text) said = text;
+    }
+    if (turn !== null && said) break;
+  }
+  return { said, turn };
+}
+
+function textOf(content) {
+  if (typeof content === 'string') return collapse(content);
+  if (!Array.isArray(content)) return '';
+  return collapse(content
+    .filter((part) => part && typeof part === 'object' && typeof part.text === 'string')
+    .map((part) => part.text)
+    .join(' '));
+}
+
+function collapse(text) {
+  const clean = String(text || '').replace(/\s+/gu, ' ').trim();
+  return clean.startsWith('<') ? '' : clean;
+}
+
+/**
+ * Which conversations in an area are the open ones.
+ *
+ * The operating system can say that two claude processes stand in this
+ * directory. It cannot say which conversations they hold. But a process
+ * writes to exactly one transcript, so with two processes and five
+ * conversations it is the two most recently written that are open — the rest
+ * were closed and left behind.
+ *
+ * Marking every conversation in a busy area as live was the first version and
+ * it read plausibly and was wrong: an area with one running tool and an old
+ * finished conversation reported both as active.
+ */
+function markLive(conversations, running, now) {
+  const budget = new Map();
+  for (const name of running) budget.set(name, (budget.get(name) || 0) + 1);
+  const live = new Set();
+  for (const item of [...conversations].sort((a, b) => (b.updated_ms || 0) - (a.updated_ms || 0))) {
+    const name = item.tool === 'claude-code' ? 'claude' : item.tool;
+    const left = budget.get(name) || 0;
+    // A transcript being written right now is its own proof, but it is also
+    // almost certainly the process that was found — so it spends the budget
+    // either way. Letting it through for free handed the spare process to the
+    // next conversation down, and a session finished ten hours ago came back
+    // to life on the page.
+    if (now - (item.updated_ms || 0) < RECENT_MS) {
+      live.add(item.id);
+      if (left > 0) budget.set(name, left - 1);
+      continue;
+    }
+    if (left <= 0) continue;
+    budget.set(name, left - 1);
+    live.add(item.id);
+  }
+  return live;
+}
+
+function describeConversation(item, live) {
+  const entries = parsed(readTail(item.path));
+  const { said, turn } = item.tool === 'codex' ? codexTail(entries) : claudeTail(entries);
+  return {
+    ...item,
+    said,
+    turn,
+    live,
+    state: !live ? 'idle' : turn === 'waiting' ? 'waiting' : 'working',
+  };
+}
+
+export async function workStatus({ env = process.env, names = null } = {}) {
+  // The area's own listing is asked without conversations and without git:
+  // both are gathered below for every area at once.
+  const areas = (names?.length
+    ? names.map((name) => inspectWorkArea(name, env, { conversations: false, git: false }))
+    : listWorkAreas(env, { conversations: false, git: false })).filter((area) => area.exists);
+
+  // Every directory in one question, so the cost does not grow with the
+  // number of pieces of work being watched.
+  const allPaths = areas.flatMap((area) => [area.path, ...area.worktrees.map((w) => w.path)]);
+  const byDirectory = toolsByDirectory(allPaths);
+
+  // And every conversation in one question too. Asked per area this spawned
+  // a sqlite3 and re-scanned Claude's project directory once for each — three
+  // seconds across eight areas. The lookup already matches on a path prefix,
+  // so the work root asks it once and the areas are buckets.
+  const root = workRoot(env);
+  const everything = listConversations(root, env);
+  const git = await gitFacts(areas.flatMap((area) => area.worktrees.map((w) => w.path)));
+  const now = Date.now();
+  const conversationsFor = (area) => everything.filter(
+    (item) => item.cwd === area.path || item.cwd.startsWith(`${area.path}/`),
+  );
+
+  const report = {
+    at: new Date(now).toISOString(),
+    root,
+    areas: areas.map((area) => {
+      const paths = [area.path, ...area.worktrees.map((worktree) => worktree.path)];
+      const running = paths.flatMap((path) => byDirectory.get(path) || []);
+      const found = conversationsFor(area);
+      const liveIds = markLive(found, running, now);
+      const conversations = found.map((item) => describeConversation(item, liveIds.has(item.id)));
+      return {
+        name: area.name,
+        path: area.path,
+        running,
+        worktrees: area.worktrees.map((worktree) => ({
+          repo: worktree.repo,
+          ...(git.get(worktree.path) || { branch: null, is_git: false, uncommitted: 0, unmerged_commits: 0 }),
+        })),
+        conversations,
+        // What a person scanning the page is looking for: is anything here
+        // stopped and waiting for them?
+        waiting: conversations.some((item) => item.state === 'waiting'),
+        working: conversations.some((item) => item.state === 'working'),
+      };
+    }),
+  };
+  // Counted here so a reader — a person glancing, or a session asked to keep
+  // an eye on the others — does not have to walk the list to learn whether
+  // anything needs them.
+  report.summary = {
+    areas: report.areas.length,
+    waiting: report.areas.filter((area) => area.waiting).length,
+    working: report.areas.filter((area) => area.working).length,
+  };
+  return report;
+}

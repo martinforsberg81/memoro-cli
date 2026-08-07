@@ -25,7 +25,7 @@ import { homedir } from 'node:os';
 import { deleteConversations, listConversations } from './conversations.js';
 import { workAreaPath, workAreaStatePath, workRoot } from './paths.js';
 
-export function listWorkAreas(env = process.env) {
+export function listWorkAreas(env = process.env, options = {}) {
   const root = workRoot(env);
   let names = [];
   try {
@@ -34,10 +34,16 @@ export function listWorkAreas(env = process.env) {
       .map((entry) => entry.name)
       .sort();
   } catch { return []; }
-  return names.map((name) => inspectWorkArea(name, env));
+  return names.map((name) => inspectWorkArea(name, env, options));
 }
 
-export function inspectWorkArea(name, env = process.env) {
+/**
+ * `conversations: false` and `git: false` leave those lookups out. Both cost
+ * real time — a sqlite query and a directory walk for the first, four git
+ * commands per checkout for the second — and a caller that is about to ask
+ * for every area at once should ask once rather than once per area.
+ */
+export function inspectWorkArea(name, env = process.env, { conversations = true, git: askGit = true } = {}) {
   const path = workAreaPath(name, env);
   const worktrees = [];
   let entries = [];
@@ -48,14 +54,19 @@ export function inspectWorkArea(name, env = process.env) {
       .sort();
   } catch { /* the work area may not exist yet */ }
   for (const entry of entries) {
-    worktrees.push(inspectWorktree(join(path, entry), entry));
+    // `git: false` returns the directory and nothing asked of git. A caller
+    // gathering facts for every area at once asks git itself, in parallel;
+    // asking here as well ran the same four commands twice per checkout.
+    worktrees.push(askGit
+      ? inspectWorktree(join(path, entry), entry)
+      : { repo: entry, path: join(path, entry) });
   }
   return {
     name,
     path,
     exists: existsSync(path),
     worktrees,
-    conversations: listConversations(path, env),
+    conversations: conversations ? listConversations(path, env) : [],
   };
 }
 

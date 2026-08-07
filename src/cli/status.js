@@ -4,6 +4,26 @@ import { resolveLocalSessionSync, sessionStatusSync } from '../mc/session-v1.js'
 export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
   const stderr = deps.stderr || process.stderr;
+  // No name is not a mistake to correct — it is the more useful question.
+  // `mc status` shows every piece of work and what each is doing; naming one
+  // asks about a single pre-V1 session, which is what this command used to be
+  // and all it could do.
+  //
+  // The interval belongs to `--watch`, so it is removed before looking for a
+  // name. Without that, `mc status --watch 2` read the 2 as a session called
+  // "2" and answered with the old command's usage line.
+  const positional = [];
+  for (let index = 0; index < argv.length; index += 1) {
+    if (argv[index] === '--watch') {
+      if (/^\d+$/u.test(argv[index + 1] || '')) index += 1;
+      continue;
+    }
+    if (!argv[index].startsWith('--')) positional.push(argv[index]);
+  }
+  if (positional.length === 0) {
+    const board = await import('../mc/commands/status-board.js');
+    return board.run(argv, deps);
+  }
   const opts = parseArgs(argv);
   if (opts.error || !opts.name) {
     stderr.write(`mc: ${opts.error || 'usage — mc status <name> [--json]'}\n`);
