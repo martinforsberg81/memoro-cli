@@ -40,10 +40,14 @@ MAINTENANCE
   mc status --wait [--timeout <s>] Block until something moves, then report
   mc work                          What exists; at a terminal, a way in
   mc work <name>                   Open it — the name is enough, new or not
+  mc work <name> --tmux [task]     Start it in the background, for another
+                                    session to talk to; mc work <name> joins
+                                    it, and ctrl-b d leaves it running
   mc work <name> new               A new conversation rather than the last one
   mc work <name> <id>              One particular conversation, by the id shown
   mc work add <name> <repo> [branch]
                                     Add a repository's worktree to that work
+  mc work stop <name>              Stop what is running there; keep the work
   mc work remove <name> <repo>     Take one repository out of that work
   mc work release <name> [--apply] Remove what git says can go; keep the rest
   mc work discard <name> [--apply] Throw it away — worktrees, branches, and the

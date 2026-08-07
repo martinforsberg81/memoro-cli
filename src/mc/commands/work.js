@@ -10,6 +10,7 @@
  *   mc work <name> new            a new conversation
  *   mc work <name> <id>           one particular conversation
  *   mc work add <name> <repo> [branch] [--from <ref>]
+ *   mc work stop <name>              stop what is running; keep the work
  *   mc work remove <name> <repo>
  *   mc work release <name> [--apply]
  *   mc work discard <name> [repo] [--apply]
@@ -34,11 +35,14 @@ import {
   resolveRepository,
 } from '../work-area.js';
 import { describeAge, describeSize } from '../conversations.js';
+import { stopWork } from '../work-stop.js';
 import { interactive, ask, select } from '../prompt.js';
 import { workRoot } from '../paths.js';
-import { openInWorkArea } from '../work-open.js';
+import {
+  attachBackground, backgroundTarget, clearTrustDialog, openInWorkArea, startInBackground,
+} from '../work-open.js';
 
-const VERBS = ['add', 'remove', 'release', 'discard', 'list'];
+const VERBS = ['add', 'remove', 'release', 'discard', 'stop', 'list'];
 const NAME = /^[A-Za-z0-9._-]{1,64}$/u;
 
 export async function run(argv, deps = {}) {
@@ -51,6 +55,7 @@ export async function run(argv, deps = {}) {
     stderr.write('        mc work <name> [new | <conversation id>] [--repo <repo>] [--codex|--claude]\n');
     stderr.write('        mc work add <name> <repo> [branch] [--from <ref>]\n');
     stderr.write('        mc work remove <name> <repo>\n');
+    stderr.write('        mc work stop <name>\n');
     stderr.write('        mc work release <name> [--apply]\n');
     stderr.write('        mc work discard <name> [repo] [--apply]\n');
     return 2;
@@ -150,6 +155,32 @@ async function runVerb(opts, { stdout, stderr }) {
       stdout.write('  nothing there\n');
     }
     if (!opts.apply) stdout.write(`\n${stakes(result, opts.name)}\n`);
+    return 0;
+  }
+
+  if (opts.verb === 'stop') {
+    const area = inspectWorkArea(opts.name);
+    if (!area.exists) {
+      stderr.write(`mc: nothing called "${opts.name}" under ${workRoot()}\n`);
+      return 1;
+    }
+    const result = stopWork(area);
+    if (opts.json) { stdout.write(`${JSON.stringify({ ok: true, ...result }, null, 2)}\n`); return 0; }
+    for (const item of result.stopped) {
+      stdout.write(item.kind === 'background'
+        ? `mc: stopped ${item.target}${item.graceful ? '' : ' — it did not leave on its own, so it was killed'}\n`
+        : `mc: stopped ${item.name} (pid ${item.pid})\n`);
+    }
+    for (const item of result.kept) {
+      stdout.write(`mc: left ${item.name} (pid ${item.pid}) — ${item.why}\n`);
+    }
+    if (!result.stopped.length && !result.kept.length) {
+      stdout.write(`mc: nothing is running in ${opts.name}\n`);
+    } else {
+      // Saying what survives is the point: this is not discard, and someone
+      // who confuses the two loses a branch.
+      stdout.write(`mc: the work is untouched — mc work ${opts.name} picks it up again\n`);
+    }
     return 0;
   }
 
@@ -395,6 +426,40 @@ async function openArea(name, opts, { stdout, stderr }) {
     if (!tool) return 0;
   }
 
+  if (opts.tmux) {
+    const started = startInBackground({
+      name, areaRoot: area.path, worktree, tool: opts.tool || 'claude', task: opts.task,
+    });
+    if (!started.ok) {
+      stderr.write(started.reason === 'already-running'
+        ? `mc: ${name} is already running in the background (${started.target})\n`
+        : `mc: could not start ${name} in the background (${started.reason})\n`);
+      if (started.hint) stderr.write(`mc: ${started.hint}\n`);
+      return 1;
+    }
+    const trust = clearTrustDialog(started.target);
+    stdout.write(`mc: ${name} is running in the background as ${started.target}\n`);
+    if (trust.answered) stdout.write('mc: answered Claude\'s folder-trust question for it\n');
+    if (!opts.task) stdout.write('mc: it has no task — send it one, or it will sit there\n');
+    stdout.write(`mc: watch with  mc status\n`);
+    stdout.write(`mc: talk to it  tmux send-keys -t ${started.target} "..." Enter\n`);
+    return 0;
+  }
+
+  // Already running in the background? Then joining means going to it, not
+  // starting a second process on the same conversation.
+  const running = backgroundTarget(name);
+  if (running) {
+    stderr.write(`mc: joining ${name} — it is running in the background\n`);
+    stderr.write('mc: ctrl-b d leaves it running\n');
+    const joined = attachBackground(running);
+    if (!joined.ok) {
+      stderr.write(`mc: could not join ${name} (${joined.reason})\n`);
+      return 1;
+    }
+    return joined.code || 0;
+  }
+
   stderr.write(`mc: ${worktree.path}\n`);
   const opened = await openInWorkArea({ areaRoot: area.path, worktree, tool, pick });
   if (!opened.ok) {
@@ -474,7 +539,7 @@ function describe(worktree) {
 
 export function parseArgs(argv) {
   const opts = {
-    verb: 'list', name: null, repo: null, branch: null, pick: null, from: null,
+    verb: 'list', name: null, repo: null, branch: null, pick: null, from: null, tmux: false, task: null,
     tool: null, apply: false, json: false, repoFlagNext: false, fromFlagNext: false,
   };
   const positional = [];
@@ -483,6 +548,7 @@ export function parseArgs(argv) {
     if (arg === '--apply') { opts.apply = true; continue; }
     if (arg === '--repo') { opts.repoFlagNext = true; continue; }
     if (arg === '--from') { opts.fromFlagNext = true; continue; }
+    if (arg === '--tmux') { opts.tmux = true; continue; }
     if (arg === '--codex') { opts.tool = 'codex'; continue; }
     if (arg === '--claude') { opts.tool = 'claude'; continue; }
     if (arg.startsWith('--')) return { ...opts, error: `unknown flag: ${arg}` };
@@ -498,6 +564,10 @@ export function parseArgs(argv) {
   // a usage list is a refusal in a different costume.
   if (!VERBS.includes(head)) {
     if (!NAME.test(head)) return { ...opts, error: `"${head}" cannot be a directory name` };
+    // With --tmux the rest of the line is what the worker should do, not a
+    // conversation to pick. A worker started with nothing to do sits at an
+    // empty prompt for as long as it is left there.
+    if (opts.tmux) return { ...opts, verb: 'open', name: head, task: rest.join(' ') || null };
     return { ...opts, verb: 'open', name: head, pick: rest[0] || null };
   }
 
@@ -506,6 +576,7 @@ export function parseArgs(argv) {
   opts.name = rest[0] || null;
   if (!opts.name) return { ...opts, error: 'which piece of work?' };
   if (!NAME.test(opts.name)) return { ...opts, error: `"${opts.name}" cannot be a directory name` };
+  if (head === 'stop') return opts;
   if (head === 'discard') {
     opts.repo = opts.repo || rest[1] || null;
     return opts;

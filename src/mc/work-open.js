@@ -17,7 +17,7 @@ import { spawnSync } from 'node:child_process';
 import { resolveLaunch } from '../adapters/index.js';
 import { listConversations } from './conversations.js';
 import { log } from './logger.js';
-import { loadProfile, profileArgs } from './portrait.js';
+import { loadProfile, profileArgs, readCached as loadProfileSync } from './portrait.js';
 
 export async function openInWorkArea({
   areaRoot,
@@ -98,4 +98,115 @@ export async function openInWorkArea({
     kept_nothing: !chosen && !started,
     code: result?.status ?? 0,
   };
+}
+
+/**
+ * Start a conversation nobody is sitting in front of.
+ *
+ * The point is not a second way for the user to work — a terminal window is
+ * better for that in every respect. The point is a conversation that another
+ * session can talk to. A tool that owns a terminal can only be typed into by
+ * the person at that terminal: `do script` into Terminal.app never reaches a
+ * running TUI, and System Events keystrokes are refused without accessibility
+ * permission and would steal focus even with it. tmux is the one channel that
+ * exists, and here it is plumbing the user never looks at.
+ *
+ * Two things an unattended conversation cannot do for itself:
+ *
+ * The trust dialog. Claude asks whether it may work in a directory it has not
+ * seen, and there is nobody to answer. mc created that directory, from the
+ * user's own repository, moments earlier — so mc answers it, and says it did.
+ *
+ * A task. A worker started with nothing to do sits at an empty prompt for as
+ * long as it is left there, which is the most expensive way to do nothing.
+ */
+/**
+ * Is this piece of work already running somewhere, and can we go to it?
+ *
+ * The same conversation can be entered two ways: started in the background
+ * for another session to drive, and joined from a terminal when a person
+ * wants to see it. That is only true if joining goes to the one that is
+ * running. Resuming it a second time starts another process on the same
+ * transcript, which is two writers on one file and one of them is wrong.
+ */
+export function backgroundTarget(name, { run = null } = {}) {
+  const tmux = run || ((args) => spawnSync('tmux', args, { encoding: 'utf8' }));
+  const target = `mc-${name}`;
+  return tmux(['has-session', '-t', target]).status === 0 ? target : null;
+}
+
+/** Give this terminal to the running session until the user detaches. */
+export function attachBackground(target, { run = null, env = process.env } = {}) {
+  const attach = run || ((args) => spawnSync('tmux', args, { stdio: 'inherit', env }));
+  log('work.background-attach', { target });
+  const result = attach(['attach-session', '-t', target]);
+  return { ok: !result?.error, code: result?.status ?? 0, reason: result?.error?.message };
+}
+
+export function startInBackground({
+  name,
+  areaRoot,
+  worktree,
+  tool = 'claude',
+  task = null,
+  env = process.env,
+  run = null,
+} = {}) {
+  const launch = resolveLaunch(tool);
+  if (!launch?.ok) return { ok: false, reason: launch?.reason || 'tool-unavailable', hint: launch?.hint };
+  const target = `mc-${name}`;
+  const tmux = run || ((args, options = {}) => spawnSync('tmux', args, { encoding: 'utf8', ...options }));
+
+  if (tmux(['has-session', '-t', target]).status === 0) {
+    return { ok: false, reason: 'already-running', target };
+  }
+
+  const args = [launch.spec.bin, ...profileArgs(launch.id, loadProfileSync(env))];
+  if (task) args.push(task);
+  // tmux runs its command through a shell, so the profile — a few kilobytes of
+  // the user's own prose, with quotes and newlines in it — has to survive
+  // quoting. Claude has no --append-system-prompt-file to point at instead.
+  const command = args.map(shellQuote).join(' ');
+
+  const created = tmux(['new-session', '-d', '-s', target, '-c', worktree.path, command]);
+  if (created.status !== 0) {
+    return { ok: false, reason: (created.stderr || 'tmux refused to start it').trim() };
+  }
+  log('work.background-start', { area: areaRoot, target, tool: launch.id, task: Boolean(task) });
+  return { ok: true, target, tool: launch.id };
+}
+
+function shellQuote(value) {
+  return `'${String(value).replace(/'/gu, `'\\''`)}'`;
+}
+
+/**
+ * Answer the one question a worker cannot answer for itself.
+ *
+ * Claude asks whether it may work in a directory it has not seen before, and
+ * an unattended session sits on that question forever — the first background
+ * worker started this way did nothing for forty seconds and had produced no
+ * transcript at all, because it was still asking.
+ *
+ * Only this dialog, only in the seconds right after mc started it, and only
+ * in a directory mc itself just created. Anything else on that screen is left
+ * alone.
+ */
+export function clearTrustDialog(target, { attempts = 12, run = null, sleep = null } = {}) {
+  const tmux = run || ((args) => spawnSync('tmux', args, { encoding: 'utf8' }));
+  const wait = sleep || ((ms) => { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); });
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    wait(1000);
+    const pane = tmux(['capture-pane', '-t', target, '-p']);
+    if (pane.status !== 0) return { asked: false, reason: 'gone' };
+    const text = pane.stdout || '';
+    if (/trust this folder/iu.test(text)) {
+      tmux(['send-keys', '-t', target, 'Enter']);
+      log('work.background-trust-answered', { target });
+      return { asked: true, answered: true };
+    }
+    // A prompt with no dialog above it means it is up and listening.
+    if (/❯/u.test(text)) return { asked: false };
+  }
+  return { asked: false, reason: 'never-settled' };
 }
