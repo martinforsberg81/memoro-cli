@@ -1,5 +1,4 @@
 import { spawn } from 'node:child_process';
-import { pullLens } from './lens.js';
 import { uploadSession } from './session.js';
 import {
   findLatestCodexSession,
@@ -17,16 +16,6 @@ export async function runCodex(argv) {
   if (!codexBinary) {
     console.error('[memoro-cli] Could not locate the real Codex binary.');
     return 1;
-  }
-
-  if (!flags.noLens) {
-    const lensArgs = ['--tool', 'codex'];
-    if (repoHint) lensArgs.push('--repo', repoHint);
-    try {
-      await pullLens(lensArgs);
-    } catch (err) {
-      console.error(`[memoro-cli] Lens pull failed: ${err.message}`);
-    }
   }
 
   const before = await findLatestCodexSession({ cwd: workspace });
@@ -58,7 +47,6 @@ function parseFlags(argv) {
   const flags = {
     repo: null,
     realCodex: null,
-    noLens: false,
     noUpload: false,
   };
   const passthrough = [];
@@ -76,7 +64,6 @@ function parseFlags(argv) {
     }
     if (a === '--repo' && argv[i + 1]) { flags.repo = argv[++i]; continue; }
     if (a === '--real-codex' && argv[i + 1]) { flags.realCodex = argv[++i]; continue; }
-    if (a === '--no-lens') { flags.noLens = true; continue; }
     if (a === '--no-upload') { flags.noUpload = true; continue; }
     passthrough.push(a);
   }
