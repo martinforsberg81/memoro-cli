@@ -47,6 +47,7 @@ MAINTENANCE
   mc work <name> <id>              One particular conversation, by the id shown
   mc work add <name> <repo> [branch]
                                     Add a repository's worktree to that work
+  mc work stop <name>              Stop what is running there; keep the work
   mc work remove <name> <repo>     Take one repository out of that work
   mc work release <name> [--apply] Remove what git says can go; keep the rest
   mc work discard <name> [--apply] Throw it away — worktrees, branches, and the

@@ -90,7 +90,20 @@ const RECENT_MS = 2 * 60 * 1000;
  */
 function toolsByDirectory(paths) {
   const byDirectory = new Map(paths.map((path) => [path, []]));
-  if (paths.length === 0) return byDirectory;
+  for (const { directory, name } of toolProcesses(paths)) {
+    if (byDirectory.has(directory)) byDirectory.get(directory).push(name);
+  }
+  return byDirectory;
+}
+
+/**
+ * The tool processes standing in these directories: pid, name, and where.
+ *
+ * Shared by the status board, which only needs to count them, and by stopping
+ * a piece of work, which needs to reach them.
+ */
+export function toolProcesses(paths) {
+  if (paths.length === 0) return [];
 
   // lsof exits non-zero when any named directory has no process standing in
   // it, which is the normal case for most of them. Asked one directory at a
@@ -112,7 +125,7 @@ function toolsByDirectory(paths) {
     if (line.startsWith('p')) { pid = line.slice(1).trim(); continue; }
     if (line.startsWith('n') && pid) here.push([pid, line.slice(1).trim()]);
   }
-  if (here.length === 0) return byDirectory;
+  if (here.length === 0) return [];
 
   const commands = new Map();
   try {
@@ -123,8 +136,9 @@ function toolsByDirectory(paths) {
       const match = /^\s*(\d+)\s+(.*)$/u.exec(line);
       if (match) commands.set(match[1], match[2]);
     }
-  } catch { return byDirectory; }
+  } catch { return []; }
 
+  const found = [];
   for (const [processId, directory] of here) {
     const command = commands.get(processId) || '';
     // The tool itself, not the shell it was started from and not mc's own
@@ -133,9 +147,9 @@ function toolsByDirectory(paths) {
     const name = /(^|\/)claude(\s|$)/u.test(command) ? 'claude'
       : /(^|\/)codex(\s|$)/u.test(command) ? 'codex'
         : null;
-    if (name && byDirectory.has(directory)) byDirectory.get(directory).push(name);
+    if (name) found.push({ pid: Number(processId), name, directory });
   }
-  return byDirectory;
+  return found;
 }
 
 /**

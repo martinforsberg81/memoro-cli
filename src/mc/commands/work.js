@@ -10,6 +10,7 @@
  *   mc work <name> new            a new conversation
  *   mc work <name> <id>           one particular conversation
  *   mc work add <name> <repo> [branch] [--from <ref>]
+ *   mc work stop <name>              stop what is running; keep the work
  *   mc work remove <name> <repo>
  *   mc work release <name> [--apply]
  *   mc work discard <name> [repo] [--apply]
@@ -34,13 +35,14 @@ import {
   resolveRepository,
 } from '../work-area.js';
 import { describeAge, describeSize } from '../conversations.js';
+import { stopWork } from '../work-stop.js';
 import { interactive, ask, select } from '../prompt.js';
 import { workRoot } from '../paths.js';
 import {
   attachBackground, backgroundTarget, clearTrustDialog, openInWorkArea, startInBackground,
 } from '../work-open.js';
 
-const VERBS = ['add', 'remove', 'release', 'discard', 'list'];
+const VERBS = ['add', 'remove', 'release', 'discard', 'stop', 'list'];
 const NAME = /^[A-Za-z0-9._-]{1,64}$/u;
 
 export async function run(argv, deps = {}) {
@@ -53,6 +55,7 @@ export async function run(argv, deps = {}) {
     stderr.write('        mc work <name> [new | <conversation id>] [--repo <repo>] [--codex|--claude]\n');
     stderr.write('        mc work add <name> <repo> [branch] [--from <ref>]\n');
     stderr.write('        mc work remove <name> <repo>\n');
+    stderr.write('        mc work stop <name>\n');
     stderr.write('        mc work release <name> [--apply]\n');
     stderr.write('        mc work discard <name> [repo] [--apply]\n');
     return 2;
@@ -152,6 +155,32 @@ async function runVerb(opts, { stdout, stderr }) {
       stdout.write('  nothing there\n');
     }
     if (!opts.apply) stdout.write(`\n${stakes(result, opts.name)}\n`);
+    return 0;
+  }
+
+  if (opts.verb === 'stop') {
+    const area = inspectWorkArea(opts.name);
+    if (!area.exists) {
+      stderr.write(`mc: nothing called "${opts.name}" under ${workRoot()}\n`);
+      return 1;
+    }
+    const result = stopWork(area);
+    if (opts.json) { stdout.write(`${JSON.stringify({ ok: true, ...result }, null, 2)}\n`); return 0; }
+    for (const item of result.stopped) {
+      stdout.write(item.kind === 'background'
+        ? `mc: stopped ${item.target}${item.graceful ? '' : ' — it did not leave on its own, so it was killed'}\n`
+        : `mc: stopped ${item.name} (pid ${item.pid})\n`);
+    }
+    for (const item of result.kept) {
+      stdout.write(`mc: left ${item.name} (pid ${item.pid}) — ${item.why}\n`);
+    }
+    if (!result.stopped.length && !result.kept.length) {
+      stdout.write(`mc: nothing is running in ${opts.name}\n`);
+    } else {
+      // Saying what survives is the point: this is not discard, and someone
+      // who confuses the two loses a branch.
+      stdout.write(`mc: the work is untouched — mc work ${opts.name} picks it up again\n`);
+    }
     return 0;
   }
 
@@ -547,6 +576,7 @@ export function parseArgs(argv) {
   opts.name = rest[0] || null;
   if (!opts.name) return { ...opts, error: 'which piece of work?' };
   if (!NAME.test(opts.name)) return { ...opts, error: `"${opts.name}" cannot be a directory name` };
+  if (head === 'stop') return opts;
   if (head === 'discard') {
     opts.repo = opts.repo || rest[1] || null;
     return opts;
