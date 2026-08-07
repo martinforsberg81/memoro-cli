@@ -75,6 +75,7 @@ async function routeV1Command(args) {
     worktrees: './mc/commands/worktrees.js',
     worktree: './mc/commands/worktree.js',
     work: './mc/commands/work.js',
+    supervisor: './mc/commands/supervisor.js',
     restart: './cli/restart.js',
     migrate: './mc/commands/migrate.js',
   };
