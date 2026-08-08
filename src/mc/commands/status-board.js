@@ -16,12 +16,9 @@
  * nothing reports in, so a session that crashed reads exactly as accurately
  * as one that did not.
  */
-import { describeAge, describeSize } from '../conversations.js';
-import { workRoot } from '../paths.js';
+import { getPackageVersion } from '../../lib/version.js';
+import { renderLines } from '../status-render.js';
 import { signature, workStatus } from '../work-status.js';
-
-const MARK = { waiting: '◆', working: '●', idle: ' ' };
-const RANK = { waiting: 0, working: 1, idle: 2 };
 
 export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
@@ -38,18 +35,58 @@ export async function run(argv, deps = {}) {
 
   if (opts.wait) return waitForChange(opts, { stdout });
 
+  const page = async () => renderLines(await workStatus(), {
+    columns: stdout.columns || 100,
+    colour: Boolean(stdout.isTTY) && process.env.NO_COLOR === undefined,
+    version: await getPackageVersion().catch(() => ''),
+  });
+
   if (!opts.watch) {
-    const report = await workStatus();
-    stdout.write(opts.json ? `${JSON.stringify(report, null, 2)}\n` : render(report, stdout.columns || 100));
+    if (opts.json) {
+      stdout.write(`${JSON.stringify(await workStatus(), null, 2)}\n`);
+      return 0;
+    }
+    stdout.write(`${(await page()).join('\n')}\n`);
     return 0;
   }
+  return watch(opts, { stdout, page });
+}
 
-  // Watching writes whole frames rather than diffing, so a terminal that is
-  // resized or scrolled recovers on the next one.
+/**
+ * Redraw the lines that changed, and only those.
+ *
+ * Clearing the screen every fifteen seconds gives a page that flickers, loses
+ * the reader's place, and throws away the one thing worth seeing: the row that
+ * moved. So the previous page is kept, the new one compared against it, and
+ * the cursor sent up to rewrite the differences where they already are.
+ *
+ * The layout has to be stable for that to hold. When work areas appear or
+ * vanish the page changes shape and is drawn whole — rare, and visible when it
+ * happens, which is better than a page quietly out of register.
+ */
+export async function watch(opts, { stdout, page }) {
+  const ESC = String.fromCharCode(27);
+  let previous = null;
+  const restore = () => { if (stdout.isTTY) stdout.write(`${ESC}[?25h`); };
+  process.on('SIGINT', () => { restore(); process.exit(0); });
+  process.on('exit', restore);
+
   for (;;) {
-    const report = await workStatus();
-    const frame = opts.json ? `${JSON.stringify(report)}\n` : render(report, stdout.columns || 100);
-    stdout.write(opts.json ? frame : `[H[2J${frame}`);
+    if (opts.json) {
+      stdout.write(`${JSON.stringify(await workStatus())}\n`);
+    } else {
+      const lines = await page();
+      if (!stdout.isTTY || !previous || previous.length !== lines.length) {
+        stdout.write(`${stdout.isTTY ? `${ESC}[?25l` : ''}${lines.join('\n')}\n`);
+      } else {
+        for (let index = 0; index < lines.length; index += 1) {
+          if (lines[index] === previous[index]) continue;
+          const up = lines.length - index;
+          stdout.write(`${ESC}[${up}A\r${ESC}[2K${lines[index]}${ESC}[${up}B\r`);
+        }
+      }
+      previous = lines;
+    }
     await new Promise((resolve) => { setTimeout(resolve, opts.watch * 1000); });
   }
 }
@@ -73,7 +110,13 @@ async function waitForChange(opts, { stdout }) {
     const now = await workStatus({ git: false });
     if (signature(now) !== before) {
       const report = await workStatus();
-      stdout.write(opts.json ? `${JSON.stringify(report, null, 2)}\n` : render(report, stdout.columns || 100));
+      stdout.write(opts.json
+        ? `${JSON.stringify(report, null, 2)}\n`
+        : `${renderLines(report, {
+          columns: stdout.columns || 100,
+          colour: Boolean(stdout.isTTY) && process.env.NO_COLOR === undefined,
+          version: await getPackageVersion().catch(() => ''),
+        }).join('\n')}\n`);
       return 0;
     }
     // A watcher that also wants to look up every so often regardless says so
@@ -86,54 +129,6 @@ async function waitForChange(opts, { stdout }) {
   }
 }
 
-function state(area) {
-  if (area.waiting) return 'waiting';
-  if (area.working) return 'working';
-  return 'idle';
-}
-
-export function render(report, columns = 100) {
-  const areas = [...report.areas].sort((a, b) => (
-    RANK[state(a)] - RANK[state(b)] || a.name.localeCompare(b.name)
-  ));
-  const waiting = areas.filter((area) => state(area) === 'waiting').length;
-  const working = areas.filter((area) => state(area) === 'working').length;
-
-  const out = [];
-  const counts = [
-    waiting ? `${waiting} waiting for you` : null,
-    working ? `${working} working` : null,
-    `${areas.length} in all`,
-  ].filter(Boolean).join('  ·  ');
-  out.push(`\n${workRoot()}${' '.repeat(Math.max(2, columns - workRoot().length - counts.length - 2))}${counts}\n`);
-
-  for (const area of areas) {
-    const mark = MARK[state(area)];
-    const where = area.worktrees.length
-      ? area.worktrees.map((worktree) => [
-        worktree.repo,
-        worktree.branch || '(detached)',
-        worktree.uncommitted ? `${worktree.uncommitted} uncommitted` : null,
-        worktree.unmerged_commits ? `${worktree.unmerged_commits} unmerged` : null,
-      ].filter(Boolean).join('  ')).join('   ·   ')
-      : 'no repository';
-    out.push(`\n  ${mark} ${area.name.padEnd(26)} ${where}`);
-    for (const item of area.conversations) {
-      const head = `      ${item.state.padEnd(8)} ${item.tool === 'claude-code' ? 'claude' : item.tool}  ${item.id.slice(0, 8)}  ${describeAge(item.updated_ms).padEnd(9)}${describeSize(item.bytes).padStart(8)}`;
-      out.push(head);
-      // The last thing it said is the whole point of the page: it is what
-      // tells you whether this one still needs you without opening it.
-      if (item.said) {
-        const room = Math.max(30, columns - 10);
-        const said = item.said.length > room ? `${item.said.slice(0, room - 1)}…` : item.said;
-        out.push(`         ${said}`);
-      }
-    }
-  }
-  out.push('');
-  return `${out.join('\n')}\n`;
-}
-
 export function parseArgs(argv) {
   const opts = { json: false, watch: 0, wait: 0, timeout: 0 };
   const seconds = (argv, index, fallback) => (
@@ -144,7 +139,7 @@ export function parseArgs(argv) {
     if (arg === '--json') { opts.json = true; continue; }
     if (arg === '--watch' || arg === '--wait') {
       const given = /^\d+$/u.test(argv[index + 1] || '');
-      opts[arg === '--watch' ? 'watch' : 'wait'] = seconds(argv, index, arg === '--watch' ? 5 : 3);
+      opts[arg === '--watch' ? 'watch' : 'wait'] = seconds(argv, index, arg === '--watch' ? 15 : 3);
       if (given) index += 1;
       continue;
     }

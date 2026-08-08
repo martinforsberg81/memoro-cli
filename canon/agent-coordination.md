@@ -56,7 +56,8 @@ base, reread unchanged files, poll checks, or re-resolve already settled scope.
   ownership.
 - Give every work unit its own session/worktree and branch.
 - Do not let two sessions edit the same plan or source surface silently.
-- Preserve session branches after merge; lifecycle tooling owns cleanup.
+- Never delete a branch by hand. The remote branch's fate at merge is the
+  repository's setting; the local branch and worktree are `mc`'s.
 - Stop on unexpected conflicts, moved heads, or material scope expansion.
 
 ## Review rules

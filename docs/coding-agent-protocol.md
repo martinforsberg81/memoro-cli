@@ -181,8 +181,11 @@ Use one bounded transaction for ordinary commit → PR → main work:
    hosted gate ran unless GitHub reports that exact head's run.
 6. Review the final combined diff. After the required explicit merge approval,
    merge through the App with the exact expected head SHA and the repository's
-   established merge method. Preserve the session branch; lifecycle tooling
-   owns cleanup.
+   established merge method. Do not pass `--delete-branch`: whether the remote
+   branch survives a merge is the repository's setting, not a session's
+   decision. Some repositories delete it deliberately, to stop branches
+   accumulating — that is not a fault to report or undo. The local branch and
+   its worktree belong to `mc` and are never removed by hand.
 7. Confirm the merge result once. Re-read or revalidate only when the head,
    base, diff, review state, or external condition actually changed.
 

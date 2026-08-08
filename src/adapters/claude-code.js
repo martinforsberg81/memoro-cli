@@ -18,7 +18,6 @@ import { spawnSync } from 'node:child_process';
 import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { findClaudeSessionById, findLatestClaudeSession } from '../lib/claude.js';
-import { ensureCoordinatorSlashCommand } from '../mc/coordinator-command.js';
 import { getPackageVersion } from '../lib/version.js';
 import { writeProtectedFile, shredFile } from './_materialise.js';
 
@@ -140,46 +139,19 @@ export async function uninstallHooks() {
 }
 
 /**
- * Drop one Claude Code slash-command file per lens section into
- * `~/.claude/commands/`. Each file runs `memoro-cli show <section>` so the
- * user can type `/memoro-loose-ends` (etc.) mid-session to inject that
- * section as context without an LLM roundtrip.
+ * The seven slash-commands mc used to write here are gone.
  *
- * Files are identified by the `memoro-` name prefix + a managed
- * marker in the body so `uninstallCommands` can remove them cleanly without
- * touching hand-authored slash commands that happen to live in the same
- * directory.
+ * Each dropped a file into `~/.claude/commands/` that ran
+ * `memoro-cli show <section>` to pull one slice of the portrait into a
+ * session on demand. The server stopped serving that lens externally — all
+ * seven answered `404` — and the need went with it: the Coding Profile now
+ * reaches every new conversation at launch, which is what they were fetching
+ * by hand.
+ *
+ * `uninstallCommands` below stays, so `memoro-cli hook uninstall` still
+ * clears the ones already written.
  */
-export async function installCommands({
-  memoroCliBin = 'memoro-cli',
-  sections,
-} = {}) {
-  if (!Array.isArray(sections) || sections.length === 0) return [];
-  await ensureDir(commandsDir());
 
-  const written = [];
-  for (const section of sections) {
-    const file = join(commandsDir(), `${COMMAND_PREFIX}${section}.md`);
-    const body = renderCommandFile({ section, memoroCliBin });
-    await writeFile(file, body, { mode: 0o644 });
-    written.push(file);
-  }
-  return written;
-}
-
-/**
- * Drop a `/memoro-update` slash command that surfaces the package update
- * recipe inside Claude Code.
- *
- * Returns the absolute path to the written file. Idempotent — re-running
- * overwrites the existing file.
- *
- * Why not execute the commands directly? `npm install -g` typically needs
- * permissions Claude Code shouldn't run unattended (sudo on some setups).
- * Printing the recipe lets the LLM decide whether to run it and lets the
- * user copy-paste safely. The body is rendered into the conversation as a
- * user message, so the model sees the recipe and can offer to run it.
- */
 export async function installUpdateCommand({ memoroCliBin = 'memoro-cli' } = {}) {
   await ensureDir(commandsDir());
   const file = join(commandsDir(), `${COMMAND_PREFIX}update.md`);
@@ -641,7 +613,6 @@ export const NATIVE_LAUNCH_HOOKS = Object.freeze({
   // Before identity/config resolution: coordinator surface + artifact
   // hooks. A hook-install failure must refuse the launch.
   async prepareEarly({ deps = {} } = {}) {
-    await (deps.ensureCoordinatorSlashCommand || ensureCoordinatorSlashCommand)();
     await (deps.installUpdateCommand || installUpdateCommand)().catch(() => {});
     await (deps.installClaudeArtifactHooks || installHooks)();
   },

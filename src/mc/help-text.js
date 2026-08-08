@@ -37,7 +37,8 @@ MAINTENANCE
                                     worktree, one of it, holds the overview
   mc status                        Every piece of work and what it is doing:
                                     waiting for you, working, or idle
-  mc status --watch [seconds]      The same, refreshed
+  mc status --watch [seconds]      A live page; polls every 15s and rewrites
+                                    only the rows that changed
   mc status --json                 The same, for a session watching the others
   mc status --wait [--timeout <s>] Block until something moves, then report
   mc work                          What exists; at a terminal, a way in

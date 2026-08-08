@@ -8,8 +8,6 @@ import { login, logout, status } from './commands/auth.js';
 import { configSet, configGet } from './commands/config.js';
 import { uploadSession } from './commands/session.js';
 import { hookInstall, hookUninstall } from './commands/hook.js';
-import { runCodex } from './commands/codex.js';
-import { showSection, listSections } from './commands/show.js';
 import { heartbeatLoop } from './commands/heartbeat-loop.js';
 import { heartbeatStop } from './commands/heartbeat-stop.js';
 import { captureProviderArtifact } from './commands/provider-artifact.js';
@@ -29,11 +27,6 @@ COMMANDS
   config get <key>                   Read config
 
   session upload <transcript>        Clean + POST a coding-session transcript
-  codex run [-- <codex args...>]     Legacy manual wrapper; prefer mc new --codex
-
-  show <section> [--repo <name>]     Legacy: print one lens section (loose-ends, decisions,
-                                     rules, stack, repos, practices, tool-use)
-
   hook install [--tool claude-code]  Legacy raw-tool integration; not required for mc
   hook uninstall [--tool claude-code] [--hooks-only]
                                      Remove legacy hooks/shims + slash commands
@@ -88,12 +81,6 @@ async function main(argv) {
       case 'session':
         if (sub === 'upload') return await uploadSession(rest);
         throw new Error(`Unknown session subcommand: ${sub}`);
-      case 'codex':
-        if (sub === 'run') return await runCodex(rest);
-        throw new Error(`Unknown codex subcommand: ${sub}`);
-      case 'show':
-        // `memoro show <section>` — sub is the section name, not a subcommand
-        return await showSection(sub ? [sub, ...rest] : rest);
       case 'hook':
         if (sub === 'install')   return await hookInstall(rest);
         if (sub === 'uninstall') return await hookUninstall(rest);

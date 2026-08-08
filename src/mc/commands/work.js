@@ -325,6 +325,26 @@ function summarise(area, room = 60) {
  * A name, a repository, and mc does the rest: the directory, the worktree and
  * the branch all take the name, so there is only ever one thing to invent.
  */
+/**
+ * Which repository is this work in?
+ *
+ * Returns a path, the string `none`, or null if the question was not answered.
+ * One repository is used rather than asked about; several are offered.
+ */
+function chooseRepository({ stdout }) {
+  const repos = knownRepositories();
+  if (repos.length === 1) return repos[0];
+  if (repos.length === 0) return 'none';
+  const items = repos.map((path, index) => ({
+    key: index + 1,
+    name: path.split('/').pop(),
+    label: path.split('/').pop(),
+    value: path,
+  }));
+  items.push({ key: 'x', name: 'none', label: 'no repository — just a place to work', value: 'none' });
+  return select('\nwhich repository?', items, { stdout });
+}
+
 async function startSomething({ stdout, stderr }) {
   const name = ask('name it:', { stdout });
   if (!name) return 0;
@@ -337,27 +357,17 @@ async function startSomething({ stdout, stderr }) {
     return openArea(name, {}, { stdout, stderr });
   }
 
-  const repos = knownRepositories();
-  let repo = repos.length === 1 ? repos[0] : null;
-  if (repos.length > 1) {
-    const items = repos.map((path, index) => ({
-      key: index + 1,
-      name: path.split('/').pop(),
-      label: path.split('/').pop(),
-      value: path,
-    }));
-    items.push({ key: 'x', name: 'none', label: 'no repository — just a place to work', value: 'none' });
-    repo = select('\nwhich repository?', items, { stdout });
-    if (!repo) return 0;
-  }
+  const repo = chooseRepository({ stdout });
+  if (repo === null) return 0;
 
-  if (repo && repo !== 'none') {
+  if (repo !== 'none') {
     const result = addWorktree({ name, repo, branch: name });
     if (!result.ok) {
       stderr.write(`mc: could not add ${repo} to ${name} (${result.reason})\n`);
       return 1;
     }
     stdout.write(`\nmc: ${result.path} on ${result.branch}\n`);
+    if (result.base) stdout.write(`mc: from ${result.base}\n`);
   } else {
     stdout.write(`\nmc: ${createWorkArea(name)}\n`);
   }
@@ -373,8 +383,27 @@ async function startSomething({ stdout, stderr }) {
 async function openArea(name, opts, { stdout, stderr }) {
   let area = inspectWorkArea(name);
   if (!area.exists) {
+    // A name nobody has used yet is the start of something, and the first
+    // thing it needs is somewhere to work. Typing the name went straight past
+    // that question and opened a tool in an empty directory: the session
+    // reported "the directory is empty — no repo, no files" and could do
+    // nothing at all with what it was asked. The menu asked; the shortcut
+    // everyone uses did not.
     createWorkArea(name);
-    stderr.write(`mc: new — ${workRoot()}/${name}\n`);
+    stderr.write(`mc: ${name} is new\n`);
+    const repo = interactive() ? chooseRepository({ stdout }) : 'none';
+    if (repo === null) return 0;
+    if (repo !== 'none') {
+      const added = addWorktree({ name, repo, branch: name });
+      if (!added.ok) {
+        stderr.write(`mc: could not add ${repo} to ${name} (${added.reason})\n`);
+        return 1;
+      }
+      stdout.write(`mc: ${added.path} on ${added.branch}\n`);
+      if (added.base) stdout.write(`mc: from ${added.base}\n`);
+    } else {
+      stdout.write(`mc: ${workRoot()}/${name} — no repository, so nothing to read here\n`);
+    }
     area = inspectWorkArea(name);
   }
 
