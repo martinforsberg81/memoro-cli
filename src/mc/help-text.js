@@ -47,6 +47,9 @@ MAINTENANCE
                                     session to talk to; mc work <name> joins
                                     it, and ctrl-b d leaves it running
   mc work <name> new               A new conversation rather than the last one
+  mc work <name> new --model <m>   …on a chosen model, passed to the tool as
+                                    given; a resumed conversation stays on the
+                                    model its transcript says it ran on
   mc work <name> <id>              One particular conversation, by the id shown
   mc work add <name> <repo> [branch]
                                     Add a repository's worktree to that work

@@ -15,7 +15,7 @@
 import { spawnSync } from 'node:child_process';
 
 import { resolveLaunch } from '../adapters/index.js';
-import { listConversations } from './conversations.js';
+import { conversationModel, listConversations } from './conversations.js';
 import { log } from './logger.js';
 import { loadProfile, profileArgs, readCached as loadProfileSync } from './portrait.js';
 
@@ -24,8 +24,10 @@ export async function openInWorkArea({
   worktree,
   tool = null,
   pick = null,
+  model = null,
   env = process.env,
   spawn = spawnSync,
+  loadProfile: readProfile = loadProfile,
 } = {}) {
   const before = listConversations(areaRoot, env);
 
@@ -51,9 +53,18 @@ export async function openInWorkArea({
   // resumed one already has it in its own history, so asking again would be
   // saying the same thing twice — and would be the only reason opening
   // something existing had to touch the network at all.
-  const args = chosen && typeof launch.adapter?.resumeArgs === 'function'
-    ? launch.adapter.resumeArgs({ sessionId: chosen.id }) || []
-    : profileArgs(toolId, await loadProfile({ env }));
+  //
+  // The model rides along at both moments. New: whatever `--model` said,
+  // passed through as given. Resumed: the flag if there is one, otherwise
+  // what the transcript says the conversation was already running on — the
+  // tool's own default would quietly switch a conversation's model whenever
+  // the default moved, and a resume should land where the conversation was.
+  const chosenModel = chosen ? (model || conversationModel(chosen)) : model;
+  const resuming = chosen && typeof launch.adapter?.resumeArgs === 'function';
+  const profile = resuming ? [] : profileArgs(toolId, await readProfile({ env }));
+  const args = resuming
+    ? launch.adapter.resumeArgs({ sessionId: chosen.id, model: chosenModel }) || []
+    : [...(launch.adapter?.modelArgs?.(model) ?? []), ...profile];
 
   log('work.open', {
     area: areaRoot,
@@ -62,7 +73,8 @@ export async function openInWorkArea({
     bin: launch.spec.bin,
     args: args.map((arg) => (arg.length > 60 ? `${arg.slice(0, 57)}…` : arg)),
     resuming: chosen?.id || null,
-    profile: !chosen && args.length > 0,
+    model: chosenModel || null,
+    profile: profile.length > 0,
     known_here: before.length,
   });
 
@@ -149,8 +161,10 @@ export function startInBackground({
   worktree,
   tool = 'claude',
   task = null,
+  model = null,
   env = process.env,
   run = null,
+  loadProfile: readProfile = loadProfileSync,
 } = {}) {
   const launch = resolveLaunch(tool);
   if (!launch?.ok) return { ok: false, reason: launch?.reason || 'tool-unavailable', hint: launch?.hint };
@@ -161,18 +175,25 @@ export function startInBackground({
     return { ok: false, reason: 'already-running', target };
   }
 
-  const args = [launch.spec.bin, ...profileArgs(launch.id, loadProfileSync(env))];
+  const args = [
+    launch.spec.bin,
+    ...(launch.adapter?.modelArgs?.(model) ?? []),
+    ...profileArgs(launch.id, readProfile(env)),
+  ];
   if (task) args.push(task);
   // tmux runs its command through a shell, so the profile — a few kilobytes of
   // the user's own prose, with quotes and newlines in it — has to survive
-  // quoting. Claude has no --append-system-prompt-file to point at instead.
+  // quoting, and so does everything beside it on the line. Claude has no
+  // --append-system-prompt-file to point at instead.
   const command = args.map(shellQuote).join(' ');
 
   const created = tmux(['new-session', '-d', '-s', target, '-c', worktree.path, command]);
   if (created.status !== 0) {
     return { ok: false, reason: (created.stderr || 'tmux refused to start it').trim() };
   }
-  log('work.background-start', { area: areaRoot, target, tool: launch.id, task: Boolean(task) });
+  log('work.background-start', {
+    area: areaRoot, target, tool: launch.id, model: model || null, task: Boolean(task),
+  });
   return { ok: true, target, tool: launch.id };
 }
 

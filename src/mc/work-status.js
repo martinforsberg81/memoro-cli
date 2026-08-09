@@ -23,9 +23,8 @@
  */
 import { execFile, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
-import { closeSync, openSync, readSync, statSync } from 'node:fs';
 
-import { listConversations } from './conversations.js';
+import { lastModel, listConversations, readTailEntries } from './conversations.js';
 import { workRoot } from './paths.js';
 import { inspectWorkArea, listWorkAreas } from './work-area.js';
 
@@ -63,8 +62,6 @@ async function gitFacts(paths) {
   }));
   return new Map(results);
 }
-
-const TAIL_BYTES = 256 * 1024;
 
 /**
  * A transcript written this recently belongs to a session that is open.
@@ -150,39 +147,6 @@ export function toolProcesses(paths) {
     if (name) found.push({ pid: Number(processId), name, directory });
   }
   return found;
-}
-
-/**
- * The end of a transcript, read from the end.
- *
- * A conversation can be megabytes and this runs for every one of them, so it
- * reads a bounded tail and drops the first line, which a mid-line seek almost
- * always cuts in half.
- */
-function readTail(path) {
-  if (!path) return [];
-  let fd = null;
-  try {
-    const size = statSync(path).size;
-    const from = Math.max(0, size - TAIL_BYTES);
-    fd = openSync(path, 'r');
-    const buffer = Buffer.alloc(Math.min(TAIL_BYTES, size));
-    const read = readSync(fd, buffer, 0, buffer.length, from);
-    const text = buffer.subarray(0, read).toString('utf8');
-    const lines = text.split('\n');
-    if (from > 0) lines.shift();
-    return lines.filter((line) => line.startsWith('{'));
-  } catch { return []; } finally {
-    if (fd !== null) { try { closeSync(fd); } catch { /* closed */ } }
-  }
-}
-
-function parsed(lines) {
-  const out = [];
-  for (const line of lines) {
-    try { out.push(JSON.parse(line)); } catch { /* truncated write */ }
-  }
-  return out;
 }
 
 /** Claude: `{type:'assistant'|'user', message:{content}}`, plus UI noise. */
@@ -273,12 +237,13 @@ function markLive(conversations, running, now) {
 }
 
 function describeConversation(item, live) {
-  const entries = parsed(readTail(item.path));
+  const entries = readTailEntries(item.path);
   const { said, turn } = item.tool === 'codex' ? codexTail(entries) : claudeTail(entries);
   return {
     ...item,
     said,
     turn,
+    model: lastModel(item.tool, entries),
     live,
     state: !live ? 'idle' : turn === 'waiting' ? 'waiting' : 'working',
   };

@@ -52,7 +52,7 @@ export async function run(argv, deps = {}) {
   if (opts.error) {
     stderr.write(`mc: ${opts.error}\n`);
     stderr.write('usage — mc work\n');
-    stderr.write('        mc work <name> [new | <conversation id>] [--repo <repo>] [--codex|--claude]\n');
+    stderr.write('        mc work <name> [new | <conversation id>] [--repo <repo>] [--codex|--claude] [--model <model>]\n');
     stderr.write('        mc work add <name> <repo> [branch] [--from <ref>]\n');
     stderr.write('        mc work remove <name> <repo>\n');
     stderr.write('        mc work stop <name>\n');
@@ -457,7 +457,7 @@ async function openArea(name, opts, { stdout, stderr }) {
 
   if (opts.tmux) {
     const started = startInBackground({
-      name, areaRoot: area.path, worktree, tool: opts.tool || 'claude', task: opts.task,
+      name, areaRoot: area.path, worktree, tool: opts.tool || 'claude', task: opts.task, model: opts.model,
     });
     if (!started.ok) {
       stderr.write(started.reason === 'already-running'
@@ -479,6 +479,14 @@ async function openArea(name, opts, { stdout, stderr }) {
   // starting a second process on the same conversation.
   const running = backgroundTarget(name);
   if (running) {
+    // A live conversation cannot change model, and quietly attaching would
+    // leave the user believing it did — working with the wrong model is the
+    // silent outcome the flag's own errors exist to prevent.
+    if (opts.model) {
+      stderr.write(`mc: ${name} is already running (${running}) — a live conversation cannot change model\n`);
+      stderr.write(`mc: join it without --model, or restart it first: mc work stop ${name}\n`);
+      return 1;
+    }
     stderr.write(`mc: joining ${name} — it is running in the background\n`);
     stderr.write('mc: ctrl-b d leaves it running\n');
     const joined = attachBackground(running);
@@ -490,7 +498,9 @@ async function openArea(name, opts, { stdout, stderr }) {
   }
 
   stderr.write(`mc: ${worktree.path}\n`);
-  const opened = await openInWorkArea({ areaRoot: area.path, worktree, tool, pick });
+  const opened = await openInWorkArea({
+    areaRoot: area.path, worktree, tool, pick, model: opts.model,
+  });
   if (!opened.ok) {
     stderr.write(`mc: could not open ${name} (${opened.reason})\n`);
     if (opened.hint) stderr.write(`mc: ${opened.hint}\n`);
@@ -569,14 +579,23 @@ function describe(worktree) {
 export function parseArgs(argv) {
   const opts = {
     verb: 'list', name: null, repo: null, branch: null, pick: null, from: null, tmux: false, task: null,
-    tool: null, apply: false, json: false, repoFlagNext: false, fromFlagNext: false,
+    tool: null, model: null, apply: false, json: false,
+    repoFlagNext: false, fromFlagNext: false, modelFlagNext: false,
   };
   const positional = [];
   for (const arg of argv) {
+    // The word after --model is its value, whatever it looks like — checked
+    // before the flag matches so `--model --claude` errors instead of eating
+    // the flag and silently binding the first task word as the model.
+    if (opts.modelFlagNext) {
+      if (arg.startsWith('--')) return { ...opts, error: '--model needs a value' };
+      opts.model = arg; opts.modelFlagNext = false; continue;
+    }
     if (arg === '--json') { opts.json = true; continue; }
     if (arg === '--apply') { opts.apply = true; continue; }
     if (arg === '--repo') { opts.repoFlagNext = true; continue; }
     if (arg === '--from') { opts.fromFlagNext = true; continue; }
+    if (arg === '--model') { opts.modelFlagNext = true; continue; }
     if (arg === '--tmux') { opts.tmux = true; continue; }
     if (arg === '--codex') { opts.tool = 'codex'; continue; }
     if (arg === '--claude') { opts.tool = 'claude'; continue; }
@@ -585,6 +604,9 @@ export function parseArgs(argv) {
     if (opts.fromFlagNext) { opts.from = arg; opts.fromFlagNext = false; continue; }
     positional.push(arg);
   }
+  // A `--model` nothing follows would silently start on the default, which is
+  // the one outcome the person who typed the flag was trying to avoid.
+  if (opts.modelFlagNext) return { ...opts, error: '--model needs a value' };
   if (positional.length === 0) return opts;
   const [head, ...rest] = positional;
 

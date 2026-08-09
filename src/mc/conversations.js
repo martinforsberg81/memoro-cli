@@ -234,6 +234,76 @@ function textOf(content) {
     .join(' ');
 }
 
+const TAIL_BYTES = 256 * 1024;
+const WIDE_TAIL_BYTES = 4 * 1024 * 1024;
+
+/**
+ * The model a conversation last ran on, from the tail of its own transcript.
+ *
+ * Both tools record it as they go — Claude on every assistant turn
+ * (`message.model`), Codex in each `turn_context` — so "which model is this
+ * conversation on?" is asked of the transcript, never remembered by mc, for
+ * the same reason the conversations themselves are not: a stored copy can
+ * disagree with the thing it copied. Resuming hands the answer back to the
+ * tool, which is what makes the model a property of the conversation rather
+ * than of whoever happens to restart it.
+ *
+ * One huge entry — a pasted file, a giant tool result — can push every
+ * model-naming line out of the near tail, and a resume that silently fell
+ * back to the tool's default would be the exact drift this exists to prevent.
+ * So a miss looks again, wider, before giving up. Once, bounded: reading
+ * whole transcripts on every open is what the near tail is there to avoid.
+ */
+export function conversationModel(item) {
+  if (!item?.path) return null;
+  const near = lastModel(item.tool, readTailEntries(item.path));
+  if (near || sizeOf(item.path) <= TAIL_BYTES) return near;
+  return lastModel(item.tool, readTailEntries(item.path, WIDE_TAIL_BYTES));
+}
+
+/** The same question, asked of transcript entries someone already read. */
+export function lastModel(tool, entries) {
+  for (let i = entries.length - 1; i >= 0; i -= 1) {
+    const entry = entries[i];
+    const model = tool === 'codex'
+      ? (entry.type === 'turn_context' ? entry.payload?.model : null)
+      : (entry.type === 'assistant' ? entry.message?.model : null);
+    // Claude stamps `<synthetic>` on messages the model never produced.
+    if (typeof model === 'string' && model && !model.startsWith('<')) return model;
+  }
+  return null;
+}
+
+/**
+ * The end of a transcript, read from the end and parsed. Bounded like
+ * `readHead` because a conversation can be megabytes and callers ask this for
+ * every one of them; the first line is dropped when the seek lands mid-line,
+ * which it almost always does, and a truncated final write is skipped rather
+ * than fatal. Shared with the status board so the two can never disagree
+ * about what the tail of a transcript says.
+ */
+export function readTailEntries(path, bytes = TAIL_BYTES) {
+  if (!path) return [];
+  let fd = null;
+  try {
+    const size = statSync(path).size;
+    const from = Math.max(0, size - bytes);
+    fd = openSync(path, 'r');
+    const buffer = Buffer.alloc(Math.min(bytes, size));
+    const read = readSync(fd, buffer, 0, buffer.length, from);
+    const lines = buffer.subarray(0, read).toString('utf8').split('\n');
+    if (from > 0) lines.shift();
+    const entries = [];
+    for (const line of lines) {
+      if (!line.startsWith('{')) continue;
+      try { entries.push(JSON.parse(line)); } catch { /* truncated write */ }
+    }
+    return entries;
+  } catch { return []; } finally {
+    if (fd !== null) { try { closeSync(fd); } catch { /* closed */ } }
+  }
+}
+
 /**
  * What the user actually said, if they said it.
  *
