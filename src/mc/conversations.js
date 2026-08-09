@@ -235,6 +235,7 @@ function textOf(content) {
 }
 
 const TAIL_BYTES = 256 * 1024;
+const WIDE_TAIL_BYTES = 4 * 1024 * 1024;
 
 /**
  * The model a conversation last ran on, from the tail of its own transcript.
@@ -246,10 +247,18 @@ const TAIL_BYTES = 256 * 1024;
  * disagree with the thing it copied. Resuming hands the answer back to the
  * tool, which is what makes the model a property of the conversation rather
  * than of whoever happens to restart it.
+ *
+ * One huge entry — a pasted file, a giant tool result — can push every
+ * model-naming line out of the near tail, and a resume that silently fell
+ * back to the tool's default would be the exact drift this exists to prevent.
+ * So a miss looks again, wider, before giving up. Once, bounded: reading
+ * whole transcripts on every open is what the near tail is there to avoid.
  */
 export function conversationModel(item) {
   if (!item?.path) return null;
-  return lastModel(item.tool, tailEntries(item.path));
+  const near = lastModel(item.tool, readTailEntries(item.path));
+  if (near || sizeOf(item.path) <= TAIL_BYTES) return near;
+  return lastModel(item.tool, readTailEntries(item.path, WIDE_TAIL_BYTES));
 }
 
 /** The same question, asked of transcript entries someone already read. */
@@ -266,20 +275,23 @@ export function lastModel(tool, entries) {
 }
 
 /**
- * The end of a transcript, parsed. Bounded like `readHead`, and the first
- * line is dropped when the seek lands mid-line, which it almost always does.
+ * The end of a transcript, read from the end and parsed. Bounded like
+ * `readHead` because a conversation can be megabytes and callers ask this for
+ * every one of them; the first line is dropped when the seek lands mid-line,
+ * which it almost always does, and a truncated final write is skipped rather
+ * than fatal. Shared with the status board so the two can never disagree
+ * about what the tail of a transcript says.
  */
-function tailEntries(path) {
+export function readTailEntries(path, bytes = TAIL_BYTES) {
+  if (!path) return [];
   let fd = null;
-  let text = '';
   try {
     const size = statSync(path).size;
-    const from = Math.max(0, size - TAIL_BYTES);
+    const from = Math.max(0, size - bytes);
     fd = openSync(path, 'r');
-    const buffer = Buffer.alloc(Math.min(TAIL_BYTES, size));
+    const buffer = Buffer.alloc(Math.min(bytes, size));
     const read = readSync(fd, buffer, 0, buffer.length, from);
-    text = buffer.subarray(0, read).toString('utf8');
-    const lines = text.split('\n');
+    const lines = buffer.subarray(0, read).toString('utf8').split('\n');
     if (from > 0) lines.shift();
     const entries = [];
     for (const line of lines) {

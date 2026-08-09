@@ -10,7 +10,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { renderLines } from '../../src/mc/status-render.js';
+import { renderLines, width } from '../../src/mc/status-render.js';
 import { signature } from '../../src/mc/work-status.js';
 
 function report(model) {
@@ -49,5 +49,15 @@ describe('model on the status page', () => {
 
   it('never wakes a watcher: the signature ignores the model', () => {
     assert.equal(signature(report('claude-fable-5')), signature(report(null)));
+  });
+
+  it('a long model name is clipped like every other row, never wrapped', () => {
+    const lines = renderLines(report('us.anthropic.claude-fable-5-20251101-v1:0-with-a-very-long-suffix'), {
+      columns: 80, now: 61000,
+    });
+    for (const line of lines) {
+      assert.ok(width(line) <= 80, `line wider than the terminal: "${line}"`);
+    }
+    assert.ok(lines.some((line) => line.includes('…')), 'expected the meta row to be clipped');
   });
 });

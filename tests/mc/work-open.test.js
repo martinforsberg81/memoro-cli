@@ -49,7 +49,7 @@ function opening(overrides = {}) {
   const options = {
     tool: 'claude',
     spawn: (bin, args, spawnOptions) => { calls.push({ bin, args, spawnOptions }); return { status: 0 }; },
-    deps: { loadProfile: async () => 'PROFILE' },
+    loadProfile: async () => 'PROFILE',
     ...overrides,
   };
   return { calls, options };
@@ -130,11 +130,16 @@ describe('startInBackground and --model', () => {
     return found[found.length - 1];
   }
 
+  // The profile source is stubbed in every case: the real one reads a cache
+  // under MC_HOME, and MC_HOME is whatever the machine running the suite has
+  // — a launch assertion that depends on it passes on one machine and fails
+  // on the next.
   it('the model survives the shell, quoting and all', () => {
     const { areaRoot, worktree, env } = fixture();
     const { calls, run } = tmux();
     const started = startInBackground({
       name: 'x', areaRoot, worktree, tool: 'claude', model: "o'pus model", task: 'fix it', env, run,
+      loadProfile: () => null,
     });
     assert.equal(started.ok, true);
     // Single-quoted for the shell tmux runs the command through: an embedded
@@ -142,10 +147,23 @@ describe('startInBackground and --model', () => {
     assert.equal(creation(calls), `'claude' '--model' 'o'\\''pus model' 'fix it'`);
   });
 
+  it('the model rides in front of the profile, both quoted', () => {
+    const { areaRoot, worktree, env } = fixture();
+    const { calls, run } = tmux();
+    const started = startInBackground({
+      name: 'x', areaRoot, worktree, tool: 'claude', model: 'opus', env, run,
+      loadProfile: () => 'THE\nPROFILE',
+    });
+    assert.equal(started.ok, true);
+    assert.equal(creation(calls), `'claude' '--model' 'opus' '--append-system-prompt' 'THE\nPROFILE'`);
+  });
+
   it('without the flag the command is exactly what it always was', () => {
     const { areaRoot, worktree, env } = fixture();
     const { calls, run } = tmux();
-    const started = startInBackground({ name: 'x', areaRoot, worktree, tool: 'claude', env, run });
+    const started = startInBackground({
+      name: 'x', areaRoot, worktree, tool: 'claude', env, run, loadProfile: () => null,
+    });
     assert.equal(started.ok, true);
     assert.equal(creation(calls), `'claude'`);
   });

@@ -34,6 +34,13 @@ describe('mc work parseArgs and --model', () => {
     assert.equal(opts.error, '--model needs a value');
   });
 
+  it('a --model followed by a flag is the same error, not a misbound word', () => {
+    // Without the guard, '--claude' is eaten as a flag and the first task
+    // word 'fix' silently becomes the model.
+    const opts = parseArgs(['api', '--tmux', '--model', '--claude', 'fix', 'the', 'bug']);
+    assert.equal(opts.error, '--model needs a value');
+  });
+
   // Parallel-operation guarantee: the grammar without the flag is untouched.
   it('a line without the flag parses exactly as before', () => {
     const opts = parseArgs(['api', 'new', '--claude']);

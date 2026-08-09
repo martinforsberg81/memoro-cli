@@ -58,6 +58,17 @@ describe('conversation model from transcript', () => {
     assert.equal(conversationModel({ tool: 'codex', path: '/nowhere/at/all.jsonl' }), null);
   });
 
+  it('a model pushed out of the near tail by one huge entry is still found', () => {
+    // 300 KB of model-less filler after the last model-naming entry: the
+    // 256 KB near tail sees none of it, and the wider second look must.
+    const filler = { type: 'user', message: { content: 'x'.repeat(1024) } };
+    const path = transcript([
+      { type: 'assistant', message: { model: 'claude-fable-5', content: [] } },
+      ...Array.from({ length: 300 }, () => filler),
+    ]);
+    assert.equal(conversationModel({ tool: 'claude-code', path }), 'claude-fable-5');
+  });
+
   it('lastModel answers the same question over already-parsed entries', () => {
     const entries = [
       { type: 'turn_context', payload: { model: 'gpt-5.3-codex' } },

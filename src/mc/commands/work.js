@@ -479,6 +479,14 @@ async function openArea(name, opts, { stdout, stderr }) {
   // starting a second process on the same conversation.
   const running = backgroundTarget(name);
   if (running) {
+    // A live conversation cannot change model, and quietly attaching would
+    // leave the user believing it did — working with the wrong model is the
+    // silent outcome the flag's own errors exist to prevent.
+    if (opts.model) {
+      stderr.write(`mc: ${name} is already running (${running}) — a live conversation cannot change model\n`);
+      stderr.write(`mc: join it without --model, or restart it first: mc work stop ${name}\n`);
+      return 1;
+    }
     stderr.write(`mc: joining ${name} — it is running in the background\n`);
     stderr.write('mc: ctrl-b d leaves it running\n');
     const joined = attachBackground(running);
@@ -576,6 +584,13 @@ export function parseArgs(argv) {
   };
   const positional = [];
   for (const arg of argv) {
+    // The word after --model is its value, whatever it looks like — checked
+    // before the flag matches so `--model --claude` errors instead of eating
+    // the flag and silently binding the first task word as the model.
+    if (opts.modelFlagNext) {
+      if (arg.startsWith('--')) return { ...opts, error: '--model needs a value' };
+      opts.model = arg; opts.modelFlagNext = false; continue;
+    }
     if (arg === '--json') { opts.json = true; continue; }
     if (arg === '--apply') { opts.apply = true; continue; }
     if (arg === '--repo') { opts.repoFlagNext = true; continue; }
@@ -587,7 +602,6 @@ export function parseArgs(argv) {
     if (arg.startsWith('--')) return { ...opts, error: `unknown flag: ${arg}` };
     if (opts.repoFlagNext) { opts.repo = arg; opts.repoFlagNext = false; continue; }
     if (opts.fromFlagNext) { opts.from = arg; opts.fromFlagNext = false; continue; }
-    if (opts.modelFlagNext) { opts.model = arg; opts.modelFlagNext = false; continue; }
     positional.push(arg);
   }
   // A `--model` nothing follows would silently start on the default, which is

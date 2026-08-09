@@ -27,7 +27,7 @@ export async function openInWorkArea({
   model = null,
   env = process.env,
   spawn = spawnSync,
-  deps = {},
+  loadProfile: readProfile = loadProfile,
 } = {}) {
   const before = listConversations(areaRoot, env);
 
@@ -60,12 +60,11 @@ export async function openInWorkArea({
   // tool's own default would quietly switch a conversation's model whenever
   // the default moved, and a resume should land where the conversation was.
   const chosenModel = chosen ? (model || conversationModel(chosen)) : model;
-  const args = chosen && typeof launch.adapter?.resumeArgs === 'function'
+  const resuming = chosen && typeof launch.adapter?.resumeArgs === 'function';
+  const profile = resuming ? [] : profileArgs(toolId, await readProfile({ env }));
+  const args = resuming
     ? launch.adapter.resumeArgs({ sessionId: chosen.id, model: chosenModel }) || []
-    : [
-      ...(model ? launch.adapter?.modelArgs?.(model) || [] : []),
-      ...profileArgs(toolId, await (deps.loadProfile || loadProfile)({ env })),
-    ];
+    : [...(launch.adapter?.modelArgs?.(model) ?? []), ...profile];
 
   log('work.open', {
     area: areaRoot,
@@ -75,7 +74,7 @@ export async function openInWorkArea({
     args: args.map((arg) => (arg.length > 60 ? `${arg.slice(0, 57)}…` : arg)),
     resuming: chosen?.id || null,
     model: chosenModel || null,
-    profile: !chosen && args.length > 0,
+    profile: profile.length > 0,
     known_here: before.length,
   });
 
@@ -165,6 +164,7 @@ export function startInBackground({
   model = null,
   env = process.env,
   run = null,
+  loadProfile: readProfile = loadProfileSync,
 } = {}) {
   const launch = resolveLaunch(tool);
   if (!launch?.ok) return { ok: false, reason: launch?.reason || 'tool-unavailable', hint: launch?.hint };
@@ -177,8 +177,8 @@ export function startInBackground({
 
   const args = [
     launch.spec.bin,
-    ...(model ? launch.adapter?.modelArgs?.(model) || [] : []),
-    ...profileArgs(launch.id, loadProfileSync(env)),
+    ...(launch.adapter?.modelArgs?.(model) ?? []),
+    ...profileArgs(launch.id, readProfile(env)),
   ];
   if (task) args.push(task);
   // tmux runs its command through a shell, so the profile — a few kilobytes of

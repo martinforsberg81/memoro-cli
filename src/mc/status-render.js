@@ -102,7 +102,10 @@ export function renderLines(report, {
     for (const item of area.conversations) {
       const tool = item.tool === 'claude-code' ? 'claude' : item.tool;
       const meta = `${tool}${item.model ? ` · ${item.model}` : ''} · ${ago(item.updated_ms, now)} · ${size(item.bytes)}`;
-      lines.push(`      ${c(pad(item.state, 9), TONE[item.state] || 'grey')}${c(meta, 'grey')}`);
+      // The model is the one unbounded thing on this row — mc passes the
+      // value through unvalidated, so the row is clipped like its neighbours
+      // rather than trusting the name to be short.
+      lines.push(`      ${c(pad(item.state, 9), TONE[item.state] || 'grey')}${c(clip(meta, wide - 15), 'grey')}`);
       // What it last said is the line a person actually reads. It is left
       // uncoloured when the conversation is live so it is the brightest thing
       // on the row, and dimmed once idle so a finished one recedes.
