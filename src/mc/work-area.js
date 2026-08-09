@@ -310,6 +310,8 @@ export function releaseWorkArea(name, { env = process.env, dryRun = false } = {}
     // An earlier mc wrote a copy of the conversation id here. Nothing reads it
     // any more; it goes out with the area rather than being migrated.
     try { rmSync(workAreaStatePath(name, env), { force: true }); } catch { /* absent */ }
+    // The role mark belongs to the area and goes out with it.
+    try { rmSync(join(workAreaPath(name, env), '.mc-role'), { force: true }); } catch { /* absent */ }
     let empty = false;
     try { empty = readdirSync(area.path).length === 0; } catch { /* leave it */ }
     if (empty) {

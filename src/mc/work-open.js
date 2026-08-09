@@ -17,6 +17,7 @@ import { spawnSync } from 'node:child_process';
 import { resolveLaunch } from '../adapters/index.js';
 import { conversationModel, listConversations } from './conversations.js';
 import { log } from './logger.js';
+import { instructionsFor } from './roles.js';
 import { loadProfile, profileArgs, readCached as loadProfileSync } from './portrait.js';
 
 export async function openInWorkArea({
@@ -25,6 +26,8 @@ export async function openInWorkArea({
   tool = null,
   pick = null,
   model = null,
+  overlay = null,
+  defaultModel = null,
   env = process.env,
   spawn = spawnSync,
   loadProfile: readProfile = loadProfile,
@@ -55,16 +58,21 @@ export async function openInWorkArea({
   // something existing had to touch the network at all.
   //
   // The model rides along at both moments. New: whatever `--model` said,
-  // passed through as given. Resumed: the flag if there is one, otherwise
-  // what the transcript says the conversation was already running on — the
-  // tool's own default would quietly switch a conversation's model whenever
-  // the default moved, and a resume should land where the conversation was.
-  const chosenModel = chosen ? (model || conversationModel(chosen)) : model;
+  // else the area's role default. Resumed: the flag if there is one,
+  // otherwise what the transcript says the conversation was already running
+  // on — the tool's own default would quietly switch a conversation's model
+  // whenever the default moved, and a resume should land where the
+  // conversation was. In a role's area the overlay rides behind the profile
+  // (`instructionsFor` keeps it Claude-only); an ordinary area has neither
+  // overlay nor default, and launches exactly as it always has.
+  const chosenModel = (chosen ? (model || conversationModel(chosen)) : model) || defaultModel;
   const resuming = chosen && typeof launch.adapter?.resumeArgs === 'function';
-  const profile = resuming ? [] : profileArgs(toolId, await readProfile({ env }));
+  const profile = resuming
+    ? []
+    : profileArgs(toolId, instructionsFor(toolId, await readProfile({ env }), overlay));
   const args = resuming
     ? launch.adapter.resumeArgs({ sessionId: chosen.id, model: chosenModel }) || []
-    : [...(launch.adapter?.modelArgs?.(model) ?? []), ...profile];
+    : [...(launch.adapter?.modelArgs?.(chosenModel) ?? []), ...profile];
 
   log('work.open', {
     area: areaRoot,
@@ -74,6 +82,7 @@ export async function openInWorkArea({
     args: args.map((arg) => (arg.length > 60 ? `${arg.slice(0, 57)}…` : arg)),
     resuming: chosen?.id || null,
     model: chosenModel || null,
+    overlay: !resuming && Boolean(overlay) && toolId === 'claude-code',
     profile: profile.length > 0,
     known_here: before.length,
   });
@@ -162,6 +171,8 @@ export function startInBackground({
   tool = 'claude',
   task = null,
   model = null,
+  overlay = null,
+  defaultModel = null,
   env = process.env,
   run = null,
   loadProfile: readProfile = loadProfileSync,
@@ -177,8 +188,8 @@ export function startInBackground({
 
   const args = [
     launch.spec.bin,
-    ...(launch.adapter?.modelArgs?.(model) ?? []),
-    ...profileArgs(launch.id, readProfile(env)),
+    ...(launch.adapter?.modelArgs?.(model || defaultModel) ?? []),
+    ...profileArgs(launch.id, instructionsFor(launch.id, readProfile(env), overlay)),
   ];
   if (task) args.push(task);
   // tmux runs its command through a shell, so the profile — a few kilobytes of

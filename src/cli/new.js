@@ -1,5 +1,6 @@
 import { resolveToolInput } from '../adapters/index.js';
 import { DEFAULT_TOOL, readConfig } from '../lib/config.js';
+import { reservedRoleHint, reservedRoleName } from '../mc/roles.js';
 import { checkAndPrintFreshInstall, ensureSentinel } from '../mc/first-run.js';
 import { emitCd, parseDirectiveFlag } from '../mc/shell-directives.js';
 import {
@@ -27,6 +28,13 @@ export async function run(rawArgv, deps = {}) {
   if (!opts.name) {
     printUsage(stderr);
     return 2;
+  }
+  // The sole behavioural change this command takes from the role work: the
+  // role names are identities, and a session wearing one would be answered
+  // by everything that trusts the name. No existing session bears them.
+  if (reservedRoleName(opts.name)) {
+    stderr.write(`mc: ${reservedRoleHint(opts.name)}\n`);
+    return 1;
   }
   if (opts.json && !opts.noLaunch) {
     stderr.write('mc: --json requires --no-launch for mc new\n');

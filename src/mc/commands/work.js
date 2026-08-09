@@ -38,6 +38,7 @@ import { describeAge, describeSize } from '../conversations.js';
 import { stopWork } from '../work-stop.js';
 import { interactive, ask, select } from '../prompt.js';
 import { workRoot } from '../paths.js';
+import { areaRole, reservedRoleHint, reservedRoleName } from '../roles.js';
 import {
   attachBackground, backgroundTarget, clearTrustDialog, openInWorkArea, startInBackground,
 } from '../work-open.js';
@@ -97,6 +98,13 @@ export async function run(argv, deps = {}) {
  */
 async function runVerb(opts, { stdout, stderr }) {
   if (opts.verb === 'add') {
+    // The reserved names never become areas, so there is nothing to add to —
+    // and letting `add` conjure one up would be the back door the open-path
+    // guard just closed.
+    if (reservedRoleName(opts.name)) {
+      stderr.write(`mc: ${reservedRoleHint(opts.name)}\n`);
+      return 1;
+    }
     const found = resolveRepository(opts.repo);
     if (!found.ok) {
       stderr.write(`mc: no repository "${opts.repo || 'here'}" — looked in:\n`);
@@ -380,7 +388,15 @@ async function startSomething({ stdout, stderr }) {
  * One conversation is opened rather than offered. One repository is used
  * rather than listed. A flag or an argument answers any of it in advance.
  */
-async function openArea(name, opts, { stdout, stderr }) {
+export async function openArea(name, opts, { stdout, stderr }) {
+  // The role workspaces have their own doors (`mc pm`, `mc pm-helper`);
+  // opening them here would start a conversation without the role's overlay
+  // and semantics, wearing the role's name. Designed difference, not
+  // convention — so it refuses by name, before anything exists or opens.
+  if (reservedRoleName(name)) {
+    stderr.write(`mc: ${reservedRoleHint(name)}\n`);
+    return 1;
+  }
   let area = inspectWorkArea(name);
   if (!area.exists) {
     // A name nobody has used yet is the start of something, and the first
@@ -444,9 +460,27 @@ async function openArea(name, opts, { stdout, stderr }) {
     if (!pick) return 0;
   }
 
+  // The role this area carries, if any. Everything started here inherits its
+  // overlay and model default; an area without a mark inherits nothing. A
+  // marked area whose definition has gone missing still opens — blocking the
+  // work over a mislaid file helps nobody — but says out loud that the
+  // overlay is not being delivered, because a role session silently running
+  // without its role is the failure mode this whole design exists to avoid.
+  const role = areaRole(area.path);
+  if (role?.missing) {
+    stderr.write(`mc: this area carries the role "${role.name}" but no definition was found at ${role.path}\n`);
+    stderr.write('mc: opening without the role overlay\n');
+  }
+  const overlay = role?.missing ? null : role?.overlay || null;
+  const roleModel = role?.missing ? null : role?.model || null;
+
   // A piece of work nobody has opened yet has no tool to inherit, so that is
-  // asked once, here, rather than defaulting quietly to one of them.
+  // asked once, here, rather than defaulting quietly to one of them. In a
+  // role's area the role has already answered: its first listed tool is the
+  // one the overlay is written for, and falling back to the general default
+  // would open a conversation the overlay cannot reach.
   let tool = opts.tool;
+  if (!tool && role && !role.missing && role.tools?.length) [tool] = role.tools;
   if (!tool && area.conversations.length === 0 && interactive()) {
     tool = select(`\n${name} — which tool?`, [
       { key: 1, name: 'claude', label: 'claude', value: 'claude' },
@@ -456,8 +490,12 @@ async function openArea(name, opts, { stdout, stderr }) {
   }
 
   if (opts.tmux) {
+    // Ordinary areas keep the exact default they always had; only a role's
+    // own tool preference slots in between the flag and that default.
+    const roleTool = role && !role.missing ? role.tools?.[0] : null;
     const started = startInBackground({
-      name, areaRoot: area.path, worktree, tool: opts.tool || 'claude', task: opts.task, model: opts.model,
+      name, areaRoot: area.path, worktree, tool: opts.tool || roleTool || 'claude', task: opts.task, model: opts.model,
+      overlay, defaultModel: roleModel,
     });
     if (!started.ok) {
       stderr.write(started.reason === 'already-running'
@@ -500,6 +538,7 @@ async function openArea(name, opts, { stdout, stderr }) {
   stderr.write(`mc: ${worktree.path}\n`);
   const opened = await openInWorkArea({
     areaRoot: area.path, worktree, tool, pick, model: opts.model,
+    overlay, defaultModel: roleModel,
   });
   if (!opened.ok) {
     stderr.write(`mc: could not open ${name} (${opened.reason})\n`);

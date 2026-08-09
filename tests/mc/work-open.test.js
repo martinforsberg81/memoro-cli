@@ -112,6 +112,54 @@ describe('openInWorkArea and --model', () => {
   });
 });
 
+describe('openInWorkArea in a role area', () => {
+  it('the overlay rides behind the profile and the role model is the default', async () => {
+    const { areaRoot, worktree, env } = fixture();
+    const { calls, options } = opening();
+    const result = await openInWorkArea({
+      areaRoot, worktree, env, overlay: 'OVERLAY', defaultModel: 'fable', ...options,
+    });
+    assert.equal(result.ok, true);
+    assert.deepEqual(calls[0].args, [
+      '--model', 'fable', '--append-system-prompt', 'PROFILE\n\n---\n\nOVERLAY',
+    ]);
+  });
+
+  it('an explicit --model outranks the role default', async () => {
+    const { areaRoot, worktree, env } = fixture();
+    const { calls, options } = opening();
+    await openInWorkArea({
+      areaRoot, worktree, env, model: 'opus', overlay: 'OVERLAY', defaultModel: 'fable', ...options,
+    });
+    assert.equal(calls[0].args[1], 'opus');
+  });
+
+  it('on resume the transcript model outranks the role default', async () => {
+    const { areaRoot, worktree, env } = fixture({
+      entries: [
+        { type: 'assistant', message: { model: 'claude-fable-5', content: [] } },
+      ],
+    });
+    const { calls, options } = opening();
+    const result = await openInWorkArea({
+      areaRoot, worktree, env, overlay: 'OVERLAY', defaultModel: 'opus', ...options,
+    });
+    assert.equal(result.resumed, true);
+    assert.deepEqual(calls[0].args, ['--resume', CONVERSATION_ID, '--model', 'claude-fable-5']);
+  });
+
+  it('a resume with no transcript model falls back to the role default', async () => {
+    const { areaRoot, worktree, env } = fixture({
+      entries: [
+        { type: 'user', message: { content: 'first' } },
+      ],
+    });
+    const { calls, options } = opening();
+    await openInWorkArea({ areaRoot, worktree, env, defaultModel: 'fable', ...options });
+    assert.deepEqual(calls[0].args, ['--resume', CONVERSATION_ID, '--model', 'fable']);
+  });
+});
+
 describe('startInBackground and --model', () => {
   /** tmux, faked: no session exists, creation succeeds, everything recorded. */
   function tmux() {
