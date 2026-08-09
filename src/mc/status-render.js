@@ -101,7 +101,7 @@ export function renderLines(report, {
 
     for (const item of area.conversations) {
       const tool = item.tool === 'claude-code' ? 'claude' : item.tool;
-      const meta = `${tool} · ${ago(item.updated_ms, now)} · ${size(item.bytes)}`;
+      const meta = `${tool}${item.model ? ` · ${item.model}` : ''} · ${ago(item.updated_ms, now)} · ${size(item.bytes)}`;
       lines.push(`      ${c(pad(item.state, 9), TONE[item.state] || 'grey')}${c(meta, 'grey')}`);
       // What it last said is the line a person actually reads. It is left
       // uncoloured when the conversation is live so it is the brightest thing

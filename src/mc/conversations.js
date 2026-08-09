@@ -234,6 +234,64 @@ function textOf(content) {
     .join(' ');
 }
 
+const TAIL_BYTES = 256 * 1024;
+
+/**
+ * The model a conversation last ran on, from the tail of its own transcript.
+ *
+ * Both tools record it as they go — Claude on every assistant turn
+ * (`message.model`), Codex in each `turn_context` — so "which model is this
+ * conversation on?" is asked of the transcript, never remembered by mc, for
+ * the same reason the conversations themselves are not: a stored copy can
+ * disagree with the thing it copied. Resuming hands the answer back to the
+ * tool, which is what makes the model a property of the conversation rather
+ * than of whoever happens to restart it.
+ */
+export function conversationModel(item) {
+  if (!item?.path) return null;
+  return lastModel(item.tool, tailEntries(item.path));
+}
+
+/** The same question, asked of transcript entries someone already read. */
+export function lastModel(tool, entries) {
+  for (let i = entries.length - 1; i >= 0; i -= 1) {
+    const entry = entries[i];
+    const model = tool === 'codex'
+      ? (entry.type === 'turn_context' ? entry.payload?.model : null)
+      : (entry.type === 'assistant' ? entry.message?.model : null);
+    // Claude stamps `<synthetic>` on messages the model never produced.
+    if (typeof model === 'string' && model && !model.startsWith('<')) return model;
+  }
+  return null;
+}
+
+/**
+ * The end of a transcript, parsed. Bounded like `readHead`, and the first
+ * line is dropped when the seek lands mid-line, which it almost always does.
+ */
+function tailEntries(path) {
+  let fd = null;
+  let text = '';
+  try {
+    const size = statSync(path).size;
+    const from = Math.max(0, size - TAIL_BYTES);
+    fd = openSync(path, 'r');
+    const buffer = Buffer.alloc(Math.min(TAIL_BYTES, size));
+    const read = readSync(fd, buffer, 0, buffer.length, from);
+    text = buffer.subarray(0, read).toString('utf8');
+    const lines = text.split('\n');
+    if (from > 0) lines.shift();
+    const entries = [];
+    for (const line of lines) {
+      if (!line.startsWith('{')) continue;
+      try { entries.push(JSON.parse(line)); } catch { /* truncated write */ }
+    }
+    return entries;
+  } catch { return []; } finally {
+    if (fd !== null) { try { closeSync(fd); } catch { /* closed */ } }
+  }
+}
+
 /**
  * What the user actually said, if they said it.
  *

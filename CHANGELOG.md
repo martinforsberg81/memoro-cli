@@ -7,6 +7,14 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- `mc work <name> new --model <model>` (and the same flag when opening or
+  resuming a conversation, including `--tmux`) starts the tool on a chosen
+  model — passed through as given, `--model` for Claude and `-m` for Codex;
+  the tool remains the authority on model names. The model is a property of
+  the conversation: resuming reads what the conversation last ran on from its
+  own transcript and passes it again, so a restart lands where the
+  conversation was rather than wherever the tool's default has moved.
+  `mc status` shows the model per conversation.
 - `mc new` now mints the native session id at launch for tools that accept one
   (Claude Code via `--session-id`) and records it in the registry on the launch
   commit. Claude sessions are resumable by `mc open` from their first moment,

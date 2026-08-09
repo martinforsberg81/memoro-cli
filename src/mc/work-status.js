@@ -25,7 +25,7 @@ import { execFile, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
 import { closeSync, openSync, readSync, statSync } from 'node:fs';
 
-import { listConversations } from './conversations.js';
+import { lastModel, listConversations } from './conversations.js';
 import { workRoot } from './paths.js';
 import { inspectWorkArea, listWorkAreas } from './work-area.js';
 
@@ -279,6 +279,7 @@ function describeConversation(item, live) {
     ...item,
     said,
     turn,
+    model: lastModel(item.tool, entries),
     live,
     state: !live ? 'idle' : turn === 'waiting' ? 'waiting' : 'working',
   };

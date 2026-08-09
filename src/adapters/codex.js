@@ -269,9 +269,20 @@ const CODEX_DEVICE_AUTH_BOOTSTRAP = [
   'exec "$codex_bin" "$@"',
 ].join('\n');
 
-export function resumeArgs({ sessionId } = {}) {
+export function resumeArgs({ sessionId, model = null } = {}) {
   if (!sessionId || typeof sessionId !== 'string') return null;
-  return ['resume', sessionId];
+  // Options before the positional: `codex resume [OPTIONS] [SESSION_ID]`.
+  return ['resume', ...modelArgs(model), sessionId];
+}
+
+/**
+ * The model to run on, passed through as given. mc does not validate model
+ * names — the tool is the authority on what exists, and its own error names
+ * the mistake better than a stale list here could.
+ */
+export function modelArgs(model) {
+  if (!model || typeof model !== 'string') return [];
+  return ['-m', model];
 }
 
 export function renderPolicy(policy = null) {
