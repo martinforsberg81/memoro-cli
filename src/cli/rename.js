@@ -1,5 +1,6 @@
 import { renameSessionHomeSync } from '../mc/session-home.js';
 import { resolveLocalSessionSync } from '../mc/session-v1.js';
+import { reservedRoleHint, reservedRoleName } from '../mc/roles.js';
 
 export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
@@ -8,6 +9,11 @@ export async function run(argv, deps = {}) {
   if (opts.error || !opts.oldName || !opts.newName) {
     stderr.write(`mc: ${opts.error || 'usage — mc rename <old> <new>'}\n`);
     return 2;
+  }
+  // Renaming into a role name is `mc new pm` through a side door.
+  if (reservedRoleName(opts.newName)) {
+    stderr.write(`mc: ${reservedRoleHint(opts.newName)}\n`);
+    return 1;
   }
   const resolved = (deps.resolveLocalSession || resolveLocalSessionSync)(opts.oldName, {
     mcHomeDir: deps.mcHomeDir,

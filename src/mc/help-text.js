@@ -58,6 +58,11 @@ MAINTENANCE
   mc work release <name> [--apply] Remove what git says can go; keep the rest
   mc work discard <name> [--apply] Throw it away — worktrees, branches, and the
                                     conversations, which nothing brings back
+  mc worker <name> [task]          A project folder that carries the worker
+                                    role: every conversation started in it
+                                    gets the role's overlay and model default
+  mc roles list                    The defined roles, read from their files
+  mc roles show <role>             One role whole: facts, then overlay text
   mc worktree add <name> <branch>  Create a worktree this session owns
   mc worktree list <name>          What this session owns
   mc worktrees [--json]            What is lying around, and whose it is

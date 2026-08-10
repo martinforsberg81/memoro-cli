@@ -112,6 +112,68 @@ describe('openInWorkArea and --model', () => {
   });
 });
 
+describe('openInWorkArea in a role area', () => {
+  it('the overlay rides behind the profile and the role model is the default', async () => {
+    const { areaRoot, worktree, env } = fixture();
+    const { calls, options } = opening();
+    const result = await openInWorkArea({
+      areaRoot, worktree, env, overlay: 'OVERLAY', defaultModel: 'fable', ...options,
+    });
+    assert.equal(result.ok, true);
+    assert.deepEqual(calls[0].args, [
+      '--model', 'fable', '--append-system-prompt', 'PROFILE\n\n---\n\nOVERLAY',
+    ]);
+  });
+
+  it('an explicit --model outranks the role default', async () => {
+    const { areaRoot, worktree, env } = fixture();
+    const { calls, options } = opening();
+    await openInWorkArea({
+      areaRoot, worktree, env, model: 'opus', overlay: 'OVERLAY', defaultModel: 'fable', ...options,
+    });
+    assert.equal(calls[0].args[1], 'opus');
+  });
+
+  it('on resume the transcript model outranks the role default', async () => {
+    const { areaRoot, worktree, env } = fixture({
+      entries: [
+        { type: 'assistant', message: { model: 'claude-fable-5', content: [] } },
+      ],
+    });
+    const { calls, options } = opening();
+    const result = await openInWorkArea({
+      areaRoot, worktree, env, overlay: 'OVERLAY', defaultModel: 'opus', ...options,
+    });
+    assert.equal(result.resumed, true);
+    assert.deepEqual(calls[0].args, ['--resume', CONVERSATION_ID, '--model', 'claude-fable-5']);
+  });
+
+  it('the role default never rides into a resume', async () => {
+    // A resume lands where the conversation was: with no recorded model and
+    // no flag, it stays unpinned rather than being quietly switched to the
+    // role default.
+    const { areaRoot, worktree, env } = fixture({
+      entries: [
+        { type: 'user', message: { content: 'first' } },
+      ],
+    });
+    const { calls, options } = opening();
+    await openInWorkArea({ areaRoot, worktree, env, defaultModel: 'fable', ...options });
+    assert.deepEqual(calls[0].args, ['--resume', CONVERSATION_ID]);
+  });
+
+  it('the role default follows the role tool, not every tool in the area', async () => {
+    // The role's model is written for its own tool; a claude launch in an
+    // area whose role defaults belong to codex gets no model at all.
+    const { areaRoot, worktree, env } = fixture();
+    const { calls, options } = opening();
+    await openInWorkArea({
+      areaRoot, worktree, env, defaultModel: 'gpt-5.3-codex', defaultModelTool: 'codex', ...options,
+    });
+    assert.deepEqual(calls[0].args, ['--append-system-prompt', 'PROFILE']);
+  });
+});
+
 describe('startInBackground and --model', () => {
   /** tmux, faked: no session exists, creation succeeds, everything recorded. */
   function tmux() {
@@ -163,6 +225,17 @@ describe('startInBackground and --model', () => {
     const { calls, run } = tmux();
     const started = startInBackground({
       name: 'x', areaRoot, worktree, tool: 'claude', env, run, loadProfile: () => null,
+    });
+    assert.equal(started.ok, true);
+    assert.equal(creation(calls), `'claude'`);
+  });
+
+  it('the role default follows the role tool here too', () => {
+    const { areaRoot, worktree, env } = fixture();
+    const { calls, run } = tmux();
+    const started = startInBackground({
+      name: 'x', areaRoot, worktree, tool: 'claude', env, run, loadProfile: () => null,
+      defaultModel: 'gpt-5.3-codex', defaultModelTool: 'codex',
     });
     assert.equal(started.ok, true);
     assert.equal(creation(calls), `'claude'`);

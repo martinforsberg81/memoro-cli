@@ -7,6 +7,18 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- Roles are first-class: a role is a file (frontmatter for mc — default
+  model, singleton, tools — and overlay text for the conversation) that sits
+  on a work area. `mc worker <name>` creates a project folder carrying the
+  worker role; every conversation started in it — `mc work <name> new`,
+  `--tmux`, lead or agent — inherits the role's overlay behind the Coding
+  Profile (Claude conversations only, for now) and the role's model default
+  under any explicit `--model`. `mc roles list`/`mc roles show <role>` read
+  the catalogue (`MC_ROLES_DIR`, else `<mc home>/roles`). The names `pm`,
+  `pm-helper`, and `helper` are reserved for the role workspaces and refused
+  by `mc new`, `mc rename`, `mc work`, and `mc worker` with a pointer to the
+  role's own command. Ordinary areas are untouched: no mark, no overlay, no
+  default — launches are byte-for-byte what they were.
 - `mc work <name> new --model <model>` (and the same flag when opening or
   resuming a conversation, including `--tmux`) starts the tool on a chosen
   model — passed through as given, `--model` for Claude and `-m` for Codex;
