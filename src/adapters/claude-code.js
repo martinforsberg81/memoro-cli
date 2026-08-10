@@ -464,26 +464,52 @@ ${COMMAND_MARKER}
 function renderUpdateCommandFile({ memoroCliBin }) {
   // Body is rendered into the conversation as a user message. The LLM
   // should DISPLAY this recipe to the user — not try to run it, since
-  // `npm install -g` is sanctioned global persistence and auto-mode
-  // (correctly) blocks Claude Code from doing it unattended.
+  // updating is the user's decision and (in registry mode) `npm install -g`
+  // is sanctioned global persistence that auto-mode correctly blocks.
+  //
+  // Two installation modes exist and the wrong recipe is destructive in one
+  // of them: a source-linked install (`npm link`) that runs `npm install -g`
+  // gets silently replaced by a registry copy and stops tracking the source.
+  // So the recipe leads with detection.
+  const pkg = memoroCliBin === 'memoro-cli' ? 'memoro-cli' : memoroCliBin;
   return `---
 description: Show the recipe for updating memoro-cli
 ---
 
 ${COMMAND_MARKER}
 
-The user invoked \`/memoro-update\`. **Display** the update recipe
-below — do not try to run it yourself. \`npm install -g\` is sanctioned
-global persistence; auto-mode will block it, and even if it didn't, the
-user should opt in to global package changes themselves.
+The user invoked \`/memoro-update\`. **Display** the recipe below —
+do not try to run it yourself. Updating is the user's own decision, and
+in registry mode \`npm install -g\` is sanctioned global persistence
+that auto-mode will block anyway.
+
+memoro-cli is installed in one of two modes. Detect first:
 
 \`\`\`sh
-npm install -g ${memoroCliBin === 'memoro-cli' ? 'memoro-cli' : memoroCliBin}
+npm ls -g ${pkg}
 \`\`\`
 
-After the user runs it, the next \`mc\` picks up the new version
-automatically. Reply with just the recipe block and a brief one-line
-confirmation — no further commentary, no offers to run it.
+**Source-linked** — the output shows an arrow into a local directory
+(\`${pkg}@x.y.z -> …/memoro-cli\`, from \`npm link\`). Update by pulling
+the source the arrow points at:
+
+\`\`\`sh
+cd ~/memoro-cli && git pull
+\`\`\`
+
+Never run \`npm install -g\` in this mode: it silently replaces the link
+with a registry copy, and the installation stops tracking the source.
+
+**npm registry** — no arrow in the output. Update the package:
+
+\`\`\`sh
+npm install -g ${pkg}
+\`\`\`
+
+Either way, the next \`mc\` picks up the new version automatically.
+Reply with the detection step and the matching recipe block, plus a
+brief one-line confirmation — no further commentary, no offers to run
+anything.
 `;
 }
 
