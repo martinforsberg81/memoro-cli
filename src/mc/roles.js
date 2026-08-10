@@ -28,9 +28,7 @@
  *   ---
  *   You are a worker: …
  */
-import {
-  existsSync, readFileSync, readdirSync, writeFileSync,
-} from 'node:fs';
+import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { mcHome } from './paths.js';
@@ -47,12 +45,14 @@ export const RESERVED_ROLE_NAMES = Object.freeze(['pm', 'pm-helper', 'helper']);
 const ROLE_COMMANDS = { pm: 'mc pm', 'pm-helper': 'mc pm-helper', helper: 'mc pm-helper' };
 
 export function reservedRoleName(name) {
-  return RESERVED_ROLE_NAMES.includes(name);
+  // Case-insensitively: the filesystems this runs on mostly are, and `PM`
+  // passing a guard that `pm` fails is the same impostor through a side door.
+  return RESERVED_ROLE_NAMES.includes(String(name || '').toLowerCase());
 }
 
 /** The refusal, worded once: what is reserved, and which door is the real one. */
 export function reservedRoleHint(name) {
-  return `"${name}" is reserved for a role — that workspace is created by its own command (${ROLE_COMMANDS[name]})`;
+  return `"${name}" is reserved for a role — that workspace is created by its own command (${ROLE_COMMANDS[String(name || '').toLowerCase()]})`;
 }
 
 export function rolesDir(env = process.env) {
@@ -89,7 +89,9 @@ export function readRole(name, env = process.env) {
  */
 export function parseRole(text, fallbackName = null) {
   if (typeof text !== 'string' || !text.trim()) return null;
-  const match = /^---\n([\s\S]*?)\n---\n?([\s\S]*)$/u.exec(text);
+  // A rulebook checkout with CRLF endings is still a rulebook.
+  const normalised = text.replace(/\r\n/gu, '\n');
+  const match = /^---\n([\s\S]*?)\n---\n?([\s\S]*)$/u.exec(normalised);
   if (!match) return null;
   const fields = {};
   for (const line of match[1].split('\n')) {
@@ -120,10 +122,6 @@ export function markAreaRole(areaPath, roleName) {
   writeFileSync(join(areaPath, '.mc-role'), `${roleName}\n`, { encoding: 'utf8', mode: 0o600 });
 }
 
-export function areaRoleMarkerPath(areaPath) {
-  return join(areaPath, '.mc-role');
-}
-
 /**
  * The role carried by a work area, definition and all. A marked area whose
  * definition has gone missing reports the miss rather than pretending to be
@@ -151,8 +149,4 @@ export function instructionsFor(toolId, profile, overlay) {
 
 function readFile(path) {
   try { return readFileSync(path, 'utf8'); } catch { return null; }
-}
-
-export function roleMarkerExists(areaPath) {
-  return existsSync(join(areaPath, '.mc-role'));
 }

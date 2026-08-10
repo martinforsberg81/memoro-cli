@@ -148,7 +148,10 @@ describe('openInWorkArea in a role area', () => {
     assert.deepEqual(calls[0].args, ['--resume', CONVERSATION_ID, '--model', 'claude-fable-5']);
   });
 
-  it('a resume with no transcript model falls back to the role default', async () => {
+  it('the role default never rides into a resume', async () => {
+    // A resume lands where the conversation was: with no recorded model and
+    // no flag, it stays unpinned rather than being quietly switched to the
+    // role default.
     const { areaRoot, worktree, env } = fixture({
       entries: [
         { type: 'user', message: { content: 'first' } },
@@ -156,7 +159,18 @@ describe('openInWorkArea in a role area', () => {
     });
     const { calls, options } = opening();
     await openInWorkArea({ areaRoot, worktree, env, defaultModel: 'fable', ...options });
-    assert.deepEqual(calls[0].args, ['--resume', CONVERSATION_ID, '--model', 'fable']);
+    assert.deepEqual(calls[0].args, ['--resume', CONVERSATION_ID]);
+  });
+
+  it('the role default follows the role tool, not every tool in the area', async () => {
+    // The role's model is written for its own tool; a claude launch in an
+    // area whose role defaults belong to codex gets no model at all.
+    const { areaRoot, worktree, env } = fixture();
+    const { calls, options } = opening();
+    await openInWorkArea({
+      areaRoot, worktree, env, defaultModel: 'gpt-5.3-codex', defaultModelTool: 'codex', ...options,
+    });
+    assert.deepEqual(calls[0].args, ['--append-system-prompt', 'PROFILE']);
   });
 });
 
@@ -211,6 +225,17 @@ describe('startInBackground and --model', () => {
     const { calls, run } = tmux();
     const started = startInBackground({
       name: 'x', areaRoot, worktree, tool: 'claude', env, run, loadProfile: () => null,
+    });
+    assert.equal(started.ok, true);
+    assert.equal(creation(calls), `'claude'`);
+  });
+
+  it('the role default follows the role tool here too', () => {
+    const { areaRoot, worktree, env } = fixture();
+    const { calls, run } = tmux();
+    const started = startInBackground({
+      name: 'x', areaRoot, worktree, tool: 'claude', env, run, loadProfile: () => null,
+      defaultModel: 'gpt-5.3-codex', defaultModelTool: 'codex',
     });
     assert.equal(started.ok, true);
     assert.equal(creation(calls), `'claude'`);

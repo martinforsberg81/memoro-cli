@@ -28,6 +28,7 @@ export async function openInWorkArea({
   model = null,
   overlay = null,
   defaultModel = null,
+  defaultModelTool = null,
   env = process.env,
   spawn = spawnSync,
   loadProfile: readProfile = loadProfile,
@@ -58,14 +59,19 @@ export async function openInWorkArea({
   // something existing had to touch the network at all.
   //
   // The model rides along at both moments. New: whatever `--model` said,
-  // else the area's role default. Resumed: the flag if there is one,
+  // else the area's role default — but only for the tool the role's defaults
+  // are written for; a Claude model name handed to a codex launch is a
+  // launch error wearing a role. Resumed: the flag if there is one,
   // otherwise what the transcript says the conversation was already running
-  // on — the tool's own default would quietly switch a conversation's model
-  // whenever the default moved, and a resume should land where the
-  // conversation was. In a role's area the overlay rides behind the profile
-  // (`instructionsFor` keeps it Claude-only); an ordinary area has neither
-  // overlay nor default, and launches exactly as it always has.
-  const chosenModel = (chosen ? (model || conversationModel(chosen)) : model) || defaultModel;
+  // on, and nothing else — a resume should land where the conversation was,
+  // and the role default is a start-of-life setting, not a resume setting.
+  // In a role's area the overlay rides behind the profile (`instructionsFor`
+  // keeps it Claude-only); an ordinary area has neither overlay nor default,
+  // and launches exactly as it always has.
+  const roleDefault = defaultModel && (!defaultModelTool || launch.shortName === defaultModelTool)
+    ? defaultModel
+    : null;
+  const chosenModel = chosen ? (model || conversationModel(chosen)) : (model || roleDefault);
   const resuming = chosen && typeof launch.adapter?.resumeArgs === 'function';
   const profile = resuming
     ? []
@@ -173,6 +179,7 @@ export function startInBackground({
   model = null,
   overlay = null,
   defaultModel = null,
+  defaultModelTool = null,
   env = process.env,
   run = null,
   loadProfile: readProfile = loadProfileSync,
@@ -186,9 +193,13 @@ export function startInBackground({
     return { ok: false, reason: 'already-running', target };
   }
 
+  // The role default follows the role's tool here too (see openInWorkArea).
+  const roleDefault = defaultModel && (!defaultModelTool || launch.shortName === defaultModelTool)
+    ? defaultModel
+    : null;
   const args = [
     launch.spec.bin,
-    ...(launch.adapter?.modelArgs?.(model || defaultModel) ?? []),
+    ...(launch.adapter?.modelArgs?.(model || roleDefault) ?? []),
     ...profileArgs(launch.id, instructionsFor(launch.id, readProfile(env), overlay)),
   ];
   if (task) args.push(task);

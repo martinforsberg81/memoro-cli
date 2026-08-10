@@ -41,13 +41,6 @@ export async function run(argv, deps = {}) {
     return 1;
   }
 
-  const role = readRole('worker');
-  if (!role || !role.overlay) {
-    stderr.write(`mc: no worker role is defined — expected ${rolesDir()}/worker.md with an overlay body\n`);
-    stderr.write('mc: a worker area without its overlay would be an ordinary area wearing the name\n');
-    return 1;
-  }
-
   const area = inspectWorkArea(opts.name);
   const existingRole = area.exists ? areaRoleName(area.path) : null;
   if (area.exists && !existingRole) {
@@ -60,7 +53,18 @@ export async function run(argv, deps = {}) {
     return 1;
   }
 
+  // The definition is a creation requirement, not an opening one: an
+  // existing worker area still opens when the role file has been mislaid —
+  // openArea warns about the missing overlay — because blocking real work
+  // over a mislaid file helps nobody. What must not happen is *creating* a
+  // role area that delivers no role.
   if (!area.exists) {
+    const role = readRole('worker');
+    if (!role || !role.overlay) {
+      stderr.write(`mc: no worker role is defined — expected ${rolesDir()}/worker.md with an overlay body\n`);
+      stderr.write('mc: a worker area without its overlay would be an ordinary area wearing the name\n');
+      return 1;
+    }
     const path = createWorkArea(opts.name);
     markAreaRole(path, 'worker');
     stdout.write(`mc: ${path} — a worker area (role from ${role.path})\n`);

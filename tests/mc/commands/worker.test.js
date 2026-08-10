@@ -93,6 +93,19 @@ describe('mc worker', () => {
     assert.match(result.stderr, /a role is decided at creation/u);
   });
 
+  it('an existing worker area reopens even when the definition is mislaid', () => {
+    // The definition is a creation requirement, not an opening one: the
+    // area exists and its work must stay reachable; openArea warns that the
+    // overlay is not being delivered.
+    const { workRoot, env } = fixture({ withWorkerRole: false });
+    mkdirSync(join(workRoot, 'w5'), { recursive: true });
+    writeFileSync(join(workRoot, 'w5', '.mc-role'), 'worker\n');
+    const result = runMcCli(['worker', 'w5', 'task', '--tmux'], env);
+    assert.equal(result.status, 0, `stdout:${result.stdout}\nstderr:${result.stderr}`);
+    assert.match(result.stderr, /no definition was found/u);
+    assert.match(result.stderr, /opening without the role overlay/u);
+  });
+
   it('no definition, no worker area — nothing half-made', () => {
     const { workRoot, env } = fixture({ withWorkerRole: false });
     const result = runMcCli(['worker', 'w3'], env);

@@ -8,7 +8,7 @@
  * `mc rename`; everything else about them is untouched.
  */
 import assert from 'node:assert/strict';
-import { mkdtempSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
@@ -67,5 +67,29 @@ describe('reserved names at every door', () => {
     const result = runMcCli(['worker', 'pm'], workEnv());
     assert.equal(result.status, 1, result.stderr);
     assert.match(result.stderr, /reserved for a role/u);
+  });
+
+  it('case does not open a side door', () => {
+    const result = runMcCli(['work', 'PM'], workEnv());
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(result.stderr, /reserved for a role/u);
+  });
+
+  it('an area that predates the reservation still opens, with a note', () => {
+    // Refusing a pre-existing area named 'helper' would strand real work
+    // behind its own name. It opens as the ordinary area it is; only
+    // creation is closed.
+    const env = workEnv();
+    mkdirSync(join(env.MC_WORK_ROOT, 'helper'), { recursive: true });
+    const bin = join(env.MC_WORK_ROOT, '..', 'bin');
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(join(bin, 'tmux'), '#!/bin/sh\nif [ "$1" = "has-session" ]; then exit 1; fi\nif [ "$1" = "capture-pane" ]; then printf "❯\\n"; exit 0; fi\nexit 0\n');
+    chmodSync(join(bin, 'tmux'), 0o755);
+    const result = runMcCli(
+      ['work', 'helper', 'a task', '--tmux'],
+      { ...env, PATH: `${bin}:/usr/bin:/bin:/usr/sbin:/sbin` },
+    );
+    assert.equal(result.status, 0, `stdout:${result.stdout}\nstderr:${result.stderr}`);
+    assert.match(result.stderr, /pre-existing area opens as ordinary work/u);
   });
 });

@@ -38,7 +38,9 @@ import { describeAge, describeSize } from '../conversations.js';
 import { stopWork } from '../work-stop.js';
 import { interactive, ask, select } from '../prompt.js';
 import { workRoot } from '../paths.js';
-import { areaRole, reservedRoleHint, reservedRoleName } from '../roles.js';
+import {
+  areaRole, areaRoleName, reservedRoleHint, reservedRoleName,
+} from '../roles.js';
 import {
   attachBackground, backgroundTarget, clearTrustDialog, openInWorkArea, startInBackground,
 } from '../work-open.js';
@@ -100,10 +102,14 @@ async function runVerb(opts, { stdout, stderr }) {
   if (opts.verb === 'add') {
     // The reserved names never become areas, so there is nothing to add to —
     // and letting `add` conjure one up would be the back door the open-path
-    // guard just closed.
+    // guard just closed. An area that predates the reservation keeps working
+    // (same carve-out as opening it).
     if (reservedRoleName(opts.name)) {
-      stderr.write(`mc: ${reservedRoleHint(opts.name)}\n`);
-      return 1;
+      const area = inspectWorkArea(opts.name, undefined, { conversations: false, git: false });
+      if (!area.exists || areaRoleName(area.path)) {
+        stderr.write(`mc: ${reservedRoleHint(opts.name)}\n`);
+        return 1;
+      }
     }
     const found = resolveRepository(opts.repo);
     if (!found.ok) {
@@ -360,6 +366,12 @@ async function startSomething({ stdout, stderr }) {
     stderr.write(`mc: "${name}" cannot be a directory name\n`);
     return 1;
   }
+  // The same guard the shell path has: without it, the menu would create the
+  // area first and then refuse to open it forever.
+  if (reservedRoleName(name) && !inspectWorkArea(name).exists) {
+    stderr.write(`mc: ${reservedRoleHint(name)}\n`);
+    return 1;
+  }
   if (inspectWorkArea(name).exists) {
     stderr.write(`mc: ${name} already exists — opening it\n`);
     return openArea(name, {}, { stdout, stderr });
@@ -392,12 +404,18 @@ export async function openArea(name, opts, { stdout, stderr }) {
   // The role workspaces have their own doors (`mc pm`, `mc pm-helper`);
   // opening them here would start a conversation without the role's overlay
   // and semantics, wearing the role's name. Designed difference, not
-  // convention — so it refuses by name, before anything exists or opens.
-  if (reservedRoleName(name)) {
-    stderr.write(`mc: ${reservedRoleHint(name)}\n`);
-    return 1;
-  }
+  // convention — so it refuses by name before anything is created. The one
+  // carve-out is an area that already existed before the names were
+  // reserved: refusing it would strand real work behind its own name, so it
+  // opens as the ordinary area it is, with a note to rename it.
   let area = inspectWorkArea(name);
+  if (reservedRoleName(name)) {
+    if (!area.exists || areaRoleName(area.path)) {
+      stderr.write(`mc: ${reservedRoleHint(name)}\n`);
+      return 1;
+    }
+    stderr.write(`mc: "${name}" is now a reserved role name — this pre-existing area opens as ordinary work; consider renaming it\n`);
+  }
   if (!area.exists) {
     // A name nobody has used yet is the start of something, and the first
     // thing it needs is somewhere to work. Typing the name went straight past
@@ -476,11 +494,14 @@ export async function openArea(name, opts, { stdout, stderr }) {
 
   // A piece of work nobody has opened yet has no tool to inherit, so that is
   // asked once, here, rather than defaulting quietly to one of them. In a
-  // role's area the role has already answered: its first listed tool is the
-  // one the overlay is written for, and falling back to the general default
-  // would open a conversation the overlay cannot reach.
+  // role's area the role has already answered that first question: its first
+  // listed tool is the one the overlay is written for. Only that first
+  // question — once conversations exist, the last-used tool wins exactly as
+  // it always has, or a resume would quietly switch tools and orphan the
+  // conversation it was asked to continue.
   let tool = opts.tool;
-  if (!tool && role && !role.missing && role.tools?.length) [tool] = role.tools;
+  const roleTool = role && !role.missing ? role.tools?.[0] || null : null;
+  if (!tool && roleTool && area.conversations.length === 0) tool = roleTool;
   if (!tool && area.conversations.length === 0 && interactive()) {
     tool = select(`\n${name} — which tool?`, [
       { key: 1, name: 'claude', label: 'claude', value: 'claude' },
@@ -490,12 +511,12 @@ export async function openArea(name, opts, { stdout, stderr }) {
   }
 
   if (opts.tmux) {
-    // Ordinary areas keep the exact default they always had; only a role's
-    // own tool preference slots in between the flag and that default.
-    const roleTool = role && !role.missing ? role.tools?.[0] : null;
+    // `tool` already carries the flag, the role's preference, or the answer
+    // the user just gave at the prompt — starting on anything else would be
+    // ignoring them; 'claude' remains the last resort it always was.
     const started = startInBackground({
-      name, areaRoot: area.path, worktree, tool: opts.tool || roleTool || 'claude', task: opts.task, model: opts.model,
-      overlay, defaultModel: roleModel,
+      name, areaRoot: area.path, worktree, tool: tool || roleTool || 'claude', task: opts.task, model: opts.model,
+      overlay, defaultModel: roleModel, defaultModelTool: roleTool,
     });
     if (!started.ok) {
       stderr.write(started.reason === 'already-running'
@@ -538,7 +559,7 @@ export async function openArea(name, opts, { stdout, stderr }) {
   stderr.write(`mc: ${worktree.path}\n`);
   const opened = await openInWorkArea({
     areaRoot: area.path, worktree, tool, pick, model: opts.model,
-    overlay, defaultModel: roleModel,
+    overlay, defaultModel: roleModel, defaultModelTool: roleTool,
   });
   if (!opened.ok) {
     stderr.write(`mc: could not open ${name} (${opened.reason})\n`);

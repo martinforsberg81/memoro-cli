@@ -25,7 +25,7 @@ import {
   reservedRoleHint,
   reservedRoleName,
 } from '../../src/mc/roles.js';
-import { discardWorkArea } from '../../src/mc/work-area.js';
+import { discardWorkArea, releaseWorkArea } from '../../src/mc/work-area.js';
 
 const WORKER_MD = `---
 name: worker
@@ -64,6 +64,13 @@ describe('role files', () => {
     assert.equal(parseRole(null), null);
   });
 
+  it('a CRLF checkout is still a role', () => {
+    const role = parseRole(WORKER_MD.replace(/\n/gu, '\r\n'));
+    assert.equal(role.name, 'worker');
+    assert.equal(role.model, 'fable');
+    assert.equal(role.overlay, 'You are a worker. Escalate to the PM.');
+  });
+
   it('the catalogue lists what is defined and reads one whole', () => {
     const { dir, env } = catalogue();
     const roles = listRoles(env);
@@ -93,6 +100,33 @@ describe('the mark on an area', () => {
     const missing = areaRole(area, env);
     assert.equal(missing.missing, true);
     assert.equal(missing.name, 'vanished');
+  });
+
+  it('survives a release that keeps the area', () => {
+    // Releasing an area with a stray user file keeps the area — and must
+    // keep its role: an area silently demoted runs every future
+    // conversation without the overlay and cannot even warn about it.
+    const workRoot = mkdtempSync(join(tmpdir(), 'mc-workroot-'));
+    const env = {
+      ...process.env,
+      MC_WORK_ROOT: workRoot,
+      CLAUDE_CONFIG_DIR: join(workRoot, 'claude'),
+      CODEX_HOME: join(workRoot, 'codex'),
+    };
+    const area = join(workRoot, 'w');
+    mkdirSync(area);
+    markAreaRole(area, 'worker');
+    writeFileSync(join(area, 'notes.txt'), 'still mine');
+    const survived = releaseWorkArea('w', { env, dryRun: false });
+    assert.equal(survived.removed.length, 0);
+    assert.equal(areaRoleName(area), 'worker');
+    // And an area holding nothing but its own mark is releasable: the mark
+    // must not keep an otherwise-empty area alive.
+    const area2 = join(workRoot, 'w2');
+    mkdirSync(area2);
+    markAreaRole(area2, 'worker');
+    releaseWorkArea('w2', { env, dryRun: false });
+    assert.equal(areaRoleName(area2), null);
   });
 
   it('goes out with the area when the area is discarded', () => {
@@ -131,5 +165,12 @@ describe('reserved names', () => {
     assert.equal(reservedRoleName('worker-1'), false);
     assert.match(reservedRoleHint('pm'), /mc pm\)/u);
     assert.match(reservedRoleHint('helper'), /mc pm-helper/u);
+  });
+
+  it('guards case-insensitively — the filesystems mostly are', () => {
+    for (const name of ['PM', 'Pm', 'Helper', 'PM-HELPER']) {
+      assert.equal(reservedRoleName(name), true, name);
+    }
+    assert.match(reservedRoleHint('PM'), /mc pm\)/u);
   });
 });
