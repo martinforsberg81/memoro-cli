@@ -147,6 +147,12 @@ describe('claude-code adapter — /memoro-update slash command', () => {
     // (correctly) block it.
     assert.match(body, /[Dd]isplay/);
     assert.match(body, /do not (try to )?run/i);
+    // Two installation modes, detection first: a source-linked install
+    // (npm link) that runs `npm install -g` is silently replaced by a
+    // registry copy, so the recipe must detect before it prescribes.
+    assert.match(body, /npm ls -g memoro-cli/);
+    assert.match(body, /git pull/);
+    assert.match(body, /[Nn]ever run `npm install -g` in this mode/);
   });
 
   test('installUpdateCommand is idempotent (overwrites cleanly)', async () => {
