@@ -7,6 +7,18 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- `mc pm` and `mc pm-helper` — the singleton roles' one door each, grown out
+  of `mc supervisor`: attach if it runs (the conversation lives in tmux, so
+  a second `mc pm` joins the first instead of forking the transcript),
+  restart in the role home if it stopped (resuming the newest conversation
+  on the model its transcript records), create it the first time. Creation
+  bootstraps the role home layout — `pm/` with `state.md`, `inbox/`,
+  `queues/`, `decisions/`, `digests/`, `handoff/`; `pm-helper/` with
+  `sweeps/`, `underlag/`, `memoro-mirror/`, `logs/` — each directory carrying
+  a README marker, and the PM home is `git init`-ed with a first commit; the
+  layout is re-completed idempotently on every start. No worktrees, ever:
+  role homes list none, and their filing directories no longer masquerade as
+  repositories on the status board. Claude-only, per the role design.
 - Roles are first-class: a role is a file (frontmatter for mc — default
   model, singleton, tools — and overlay text for the conversation) that sits
   on a work area. `mc worker <name>` creates a project folder carrying the

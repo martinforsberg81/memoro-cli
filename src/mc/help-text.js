@@ -61,6 +61,11 @@ MAINTENANCE
   mc worker <name> [task]          A project folder that carries the worker
                                     role: every conversation started in it
                                     gets the role's overlay and model default
+  mc pm                            The PM's workspace: attach if it runs,
+                                    restart it if it stopped, create it the
+                                    first time. One of it, ever; no worktree
+  mc pm-helper                     The helper's workspace: same door, same
+                                    rules
   mc roles list                    The defined roles, read from their files
   mc roles show <role>             One role whole: facts, then overlay text
   mc worktree add <name> <branch>  Create a worktree this session owns
