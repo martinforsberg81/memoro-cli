@@ -12,7 +12,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
 const here = dirname(fileURLToPath(import.meta.url));
-export const CLI_PATH = join(here, '..', '..', '..', 'src', 'bin-mc.js');
+export const CLI_PATH = join(here, '..', '..', '..', 'src', 'mc-cli.js');
 
 /**
  * Run `node bin-mc.js <args>` synchronously and capture output.
