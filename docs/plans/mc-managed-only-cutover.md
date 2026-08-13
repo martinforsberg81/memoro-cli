@@ -1,5 +1,7 @@
 # MC managed-only cutover
 
+**Status:** superseded · see [`mc-v1-session-architecture.md`](mc-v1-session-architecture.md)
+
 > **Superseded as a product-mode plan:** V1 has one certified tool-execution
 > path and no managed/native selection or fallback. Security evidence from this
 > document remains relevant; current behavior and delivery are defined by

@@ -1,5 +1,7 @@
 # mc product definition
 
+**Status:** superseded · see [`mc-v1-session-architecture.md`](mc-v1-session-architecture.md)
+
 > **Superseded for active implementation:** The repository-scoped session
 > hierarchy in this document has been replaced by
 > [`mc-v1-session-architecture.md`](mc-v1-session-architecture.md). This file
