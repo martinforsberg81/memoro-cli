@@ -1,7 +1,6 @@
 # Credential-blind capabilities and complete GitHub writes
 
-Status: accepted
-Date: 2026-07-24
+**Status:** accepted · 2026-07-24
 Owners: `memoro` control plane + `memoro-cli` trusted runtime
 Normative dependencies:
 
