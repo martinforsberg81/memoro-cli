@@ -33,8 +33,6 @@ MAINTENANCE
   mc storage status [--json]       Summarize durable and ephemeral session state
   mc storage explain <name>        Explain one session's stored resources
   mc storage repair [--apply]      Plan or apply loss-free storage repairs
-  mc supervisor                    The session that watches the others: no
-                                    worktree, one of it, holds the overview
   mc status                        Every piece of work and what it is doing:
                                     waiting for you, working, or idle
   mc status --watch [seconds]      A live page; polls every 15s and rewrites

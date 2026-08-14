@@ -55,9 +55,6 @@ const DEFAULT_API_URL = 'https://meetmemoro.app';
 const AUTH_BYPASS_FIRST_ARGS = new Set([
   '--help', '-h', 'help',
   '--version', '-v',
-  // `mc supervisor` owns a narrower scoped device-flow and must not receive
-  // the primary Memoro auth token used by ordinary coding/session verbs.
-  'supervisor',
 ]);
 
 // `mc auth memoro <...>` should also bypass: the user is opting into the

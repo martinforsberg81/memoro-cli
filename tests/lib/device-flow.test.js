@@ -79,11 +79,6 @@ describe('shouldTriggerDeviceFlow', () => {
     assert.equal(shouldTriggerDeviceFlow({ ...base, argv: ['-v'] }), false);
   });
 
-  test('bypasses primary auth for mc supervisor because it owns scoped auth', () => {
-    assert.equal(shouldTriggerDeviceFlow({ ...base, argv: ['supervisor'] }), false);
-    assert.equal(shouldTriggerDeviceFlow({ ...base, argv: ['supervisor', '--json'] }), false);
-  });
-
   test('bypasses `mc auth memoro <...>` so login alias still works without a token', () => {
     assert.equal(shouldTriggerDeviceFlow({ ...base, argv: ['auth', 'memoro'] }), false);
     assert.equal(shouldTriggerDeviceFlow({ ...base, argv: ['auth', 'memoro', '--status'] }), false);
