@@ -35,10 +35,16 @@ started in it. mc stores nothing else, because nothing else is mc's to know.
 | `mc roles list \| show <role>` | The defined roles, read from their files. |
 | `mc worktrees` | Worktrees across the work areas. |
 | `mc status` | Every piece of work and what it is doing. `--watch`, `--json`, `--wait`. |
+| `mc repo status [repo]` | One repository seen whole: main, open pull requests with how far behind main each is, the work areas standing on it, and the source-linked installation's drift. `--json`, `--offline`. |
 
 `mc work release` keeps a worktree that is in use, has uncommitted changes, or
 has unmerged commits. `mc work discard` reports what it will destroy and
 requires `--apply`; it does not stop for uncommitted or unmerged work.
+
+`mc repo status` reads. It writes nothing but the remote-tracking refs a
+`git fetch` updates, and `--offline` skips even that and says so on the page.
+Its worktree section is the status board's own inspection regrouped by
+repository, not a second reading of the same directories.
 
 ## Sessions — messaging
 

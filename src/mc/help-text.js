@@ -56,6 +56,15 @@ MAINTENANCE
   mc work release <name> [--apply] Remove what git says can go; keep the rest
   mc work discard <name> [--apply] Throw it away — worktrees, branches, and the
                                     conversations, which nothing brings back
+  mc repo status [repo]            One repository seen whole: main, the open
+                                    pull requests and how far behind main each
+                                    one is, the work areas standing on it, and
+                                    whether this machine's installation is in
+                                    step. Without a name, every repository mc
+                                    can see
+  mc repo status --offline         The same without touching the network; the
+                                    page says which parts are last-seen
+  mc repo status --json            The same, for a session rather than a person
   mc worker <name> [task]          A project folder that carries the worker
                                     role: every conversation started in it
                                     gets the role's overlay and model default

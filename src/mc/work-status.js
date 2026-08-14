@@ -46,9 +46,14 @@ async function gitFacts(paths) {
     } catch { return null; }
   };
   const results = await Promise.all(paths.map(async (path) => {
-    const [branch, dirty] = await Promise.all([
+    // The common directory is asked here rather than in a second inspection
+    // somewhere else: its parent is the repository this checkout belongs to,
+    // which is what `mc repo` groups by. Two implementations of "which
+    // repository is this" would be two answers the day they disagree.
+    const [branch, dirty, common] = await Promise.all([
       ask(path, ['rev-parse', '--abbrev-ref', 'HEAD']),
       ask(path, ['status', '--porcelain']),
+      ask(path, ['rev-parse', '--path-format=absolute', '--git-common-dir']),
     ]);
     const unmerged = branch && branch !== 'HEAD'
       ? await ask(path, ['log', '--oneline', `origin/main..${branch}`])
@@ -56,6 +61,7 @@ async function gitFacts(paths) {
     return [path, {
       branch: branch && branch !== 'HEAD' ? branch : null,
       is_git: Boolean(branch),
+      git_common_dir: common,
       uncommitted: dirty ? dirty.split('\n').filter(Boolean).length : 0,
       unmerged_commits: unmerged ? unmerged.split('\n').filter(Boolean).length : 0,
     }];
@@ -309,7 +315,10 @@ export async function workStatus({ env = process.env, names = null, git: askGit 
         running,
         worktrees: area.worktrees.map((worktree) => ({
           repo: worktree.repo,
-          ...(git.get(worktree.path) || { branch: null, is_git: false, uncommitted: 0, unmerged_commits: 0 }),
+          path: worktree.path,
+          ...(git.get(worktree.path) || {
+            branch: null, is_git: false, git_common_dir: null, uncommitted: 0, unmerged_commits: 0,
+          }),
         })),
         conversations,
         // What a person scanning the page is looking for: is anything here
