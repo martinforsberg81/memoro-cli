@@ -41,6 +41,7 @@ import { workRoot } from '../paths.js';
 import {
   areaRole, areaRoleName, reservedRoleHint, reservedRoleName,
 } from '../roles.js';
+import { scanArgs } from './flags.js';
 import {
   attachBackground, backgroundTarget, clearTrustDialog, openInWorkArea, startInBackground,
 } from '../work-open.js';
@@ -637,36 +638,20 @@ function describe(worktree) {
 }
 
 export function parseArgs(argv) {
+  const scanned = scanArgs(argv, {
+    booleans: ['--json', '--apply', '--tmux'],
+    values: ['--repo', '--from'],
+    strictValues: ['--model'],
+    toolSugar: true,
+  });
   const opts = {
-    verb: 'list', name: null, repo: null, branch: null, pick: null, from: null, tmux: false, task: null,
-    tool: null, model: null, apply: false, json: false,
-    repoFlagNext: false, fromFlagNext: false, modelFlagNext: false,
+    verb: 'list', name: null, repo: scanned.flags.repo, branch: null, pick: null,
+    from: scanned.flags.from, tmux: scanned.flags.tmux, task: null,
+    tool: scanned.flags.tool, model: scanned.flags.model,
+    apply: scanned.flags.apply, json: scanned.flags.json,
   };
-  const positional = [];
-  for (const arg of argv) {
-    // The word after --model is its value, whatever it looks like — checked
-    // before the flag matches so `--model --claude` errors instead of eating
-    // the flag and silently binding the first task word as the model.
-    if (opts.modelFlagNext) {
-      if (arg.startsWith('--')) return { ...opts, error: '--model needs a value' };
-      opts.model = arg; opts.modelFlagNext = false; continue;
-    }
-    if (arg === '--json') { opts.json = true; continue; }
-    if (arg === '--apply') { opts.apply = true; continue; }
-    if (arg === '--repo') { opts.repoFlagNext = true; continue; }
-    if (arg === '--from') { opts.fromFlagNext = true; continue; }
-    if (arg === '--model') { opts.modelFlagNext = true; continue; }
-    if (arg === '--tmux') { opts.tmux = true; continue; }
-    if (arg === '--codex') { opts.tool = 'codex'; continue; }
-    if (arg === '--claude') { opts.tool = 'claude'; continue; }
-    if (arg.startsWith('--')) return { ...opts, error: `unknown flag: ${arg}` };
-    if (opts.repoFlagNext) { opts.repo = arg; opts.repoFlagNext = false; continue; }
-    if (opts.fromFlagNext) { opts.from = arg; opts.fromFlagNext = false; continue; }
-    positional.push(arg);
-  }
-  // A `--model` nothing follows would silently start on the default, which is
-  // the one outcome the person who typed the flag was trying to avoid.
-  if (opts.modelFlagNext) return { ...opts, error: '--model needs a value' };
+  if (scanned.error) return { ...opts, error: scanned.error };
+  const { positional } = scanned;
   if (positional.length === 0) return opts;
   const [head, ...rest] = positional;
 

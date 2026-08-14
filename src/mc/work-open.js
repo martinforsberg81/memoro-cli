@@ -180,6 +180,7 @@ export function startInBackground({
   overlay = null,
   defaultModel = null,
   defaultModelTool = null,
+  conversation = null,
   env = process.env,
   run = null,
   loadProfile: readProfile = loadProfileSync,
@@ -197,12 +198,22 @@ export function startInBackground({
   const roleDefault = defaultModel && (!defaultModelTool || launch.shortName === defaultModelTool)
     ? defaultModel
     : null;
-  const args = [
-    launch.spec.bin,
-    ...(launch.adapter?.modelArgs?.(model || roleDefault) ?? []),
-    ...profileArgs(launch.id, instructionsFor(launch.id, readProfile(env), overlay)),
-  ];
-  if (task) args.push(task);
+  // A conversation to resume changes everything about the argv: its history
+  // already holds the profile and any overlay, and the model — resolved by
+  // the caller, flag over transcript — rides on the resume flags. The task
+  // stays a new-conversation affair: a resumed conversation is mid-thought,
+  // and a positional would land as a reply to wherever it stopped.
+  const args = conversation
+    ? [
+      launch.spec.bin,
+      ...(launch.adapter?.resumeArgs?.({ sessionId: conversation.id, model: conversation.model || null }) || []),
+    ]
+    : [
+      launch.spec.bin,
+      ...(launch.adapter?.modelArgs?.(model || roleDefault) ?? []),
+      ...profileArgs(launch.id, instructionsFor(launch.id, readProfile(env), overlay)),
+    ];
+  if (task && !conversation) args.push(task);
   // tmux runs its command through a shell, so the profile — a few kilobytes of
   // the user's own prose, with quotes and newlines in it — has to survive
   // quoting, and so does everything beside it on the line. Claude has no
@@ -214,9 +225,14 @@ export function startInBackground({
     return { ok: false, reason: (created.stderr || 'tmux refused to start it').trim() };
   }
   log('work.background-start', {
-    area: areaRoot, target, tool: launch.id, model: model || null, task: Boolean(task),
+    area: areaRoot,
+    target,
+    tool: launch.id,
+    model: (conversation ? conversation.model : model) || null,
+    resuming: conversation?.id || null,
+    task: Boolean(task && !conversation),
   });
-  return { ok: true, target, tool: launch.id };
+  return { ok: true, target, tool: launch.id, resumed: conversation?.id || null };
 }
 
 function shellQuote(value) {

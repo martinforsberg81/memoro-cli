@@ -24,6 +24,7 @@ import {
   markAreaRole, areaRoleName, readRole, reservedRoleHint, reservedRoleName, rolesDir,
 } from '../roles.js';
 import { openArea } from './work.js';
+import { scanArgs } from './flags.js';
 
 const NAME = /^[A-Za-z0-9._-]{1,64}$/u;
 
@@ -79,24 +80,17 @@ export async function run(argv, deps = {}) {
 }
 
 export function parseArgs(argv) {
+  const scanned = scanArgs(argv, {
+    booleans: ['--tmux'],
+    strictValues: ['--model'],
+    toolSugar: true,
+  });
   const opts = {
-    name: null, task: null, model: null, tool: null, tmux: false, pick: null,
-    modelFlagNext: false,
+    name: null, task: null, model: scanned.flags.model, tool: scanned.flags.tool,
+    tmux: scanned.flags.tmux, pick: null,
   };
-  const positional = [];
-  for (const arg of argv) {
-    if (opts.modelFlagNext) {
-      if (arg.startsWith('--')) return { ...opts, error: '--model needs a value' };
-      opts.model = arg; opts.modelFlagNext = false; continue;
-    }
-    if (arg === '--model') { opts.modelFlagNext = true; continue; }
-    if (arg === '--tmux') { opts.tmux = true; continue; }
-    if (arg === '--codex') { opts.tool = 'codex'; continue; }
-    if (arg === '--claude') { opts.tool = 'claude'; continue; }
-    if (arg.startsWith('--')) return { ...opts, error: `unknown flag: ${arg}` };
-    positional.push(arg);
-  }
-  if (opts.modelFlagNext) return { ...opts, error: '--model needs a value' };
+  if (scanned.error) return { ...opts, error: scanned.error };
+  const { positional } = scanned;
   if (positional.length === 0) return opts;
   const [head, ...rest] = positional;
   if (!NAME.test(head)) return { ...opts, error: `"${head}" cannot be a directory name` };

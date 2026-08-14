@@ -24,6 +24,7 @@ import { homedir } from 'node:os';
 
 import { deleteConversations, listConversations } from './conversations.js';
 import { workAreaPath, workAreaStatePath, workRoot } from './paths.js';
+import { areaRoleName, reservedRoleName } from './roles.js';
 
 export function listWorkAreas(env = process.env, options = {}) {
   const root = workRoot(env);
@@ -47,8 +48,14 @@ export function inspectWorkArea(name, env = process.env, { conversations = true,
   const path = workAreaPath(name, env);
   const worktrees = [];
   let entries = [];
+  // A singleton role's home has no worktrees by design (K3.2) — its
+  // subdirectories are the role's filing (inbox, queues, sweeps…), and
+  // listing them as repositories would put nonsense on every status page.
+  // Gated on the mark, not the name alone: a pre-reservation ordinary area
+  // that happens to wear the name keeps its worktrees visible.
+  const roleHome = reservedRoleName(name) && Boolean(areaRoleName(path));
   try {
-    entries = readdirSync(path, { withFileTypes: true })
+    entries = roleHome ? [] : readdirSync(path, { withFileTypes: true })
       .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'))
       .map((entry) => entry.name)
       .sort();
