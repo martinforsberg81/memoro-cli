@@ -1,9 +1,10 @@
 /**
  * `mc pm` / `mc pm-helper` — the one door into a singleton role.
  *
- * Grown out of `mc supervisor`, which established the shape: one named
- * workspace, no worktree, resume-or-create, attach rather than duplicate.
- * Two things evolve here. The role text moves out of the code and into the
+ * Grown out of `mc supervisor` (removed once `mc pm` replaced it), which
+ * established the shape: one named workspace, no worktree, resume-or-create,
+ * attach rather than duplicate.
+ * Two things evolved. The role text moves out of the code and into the
  * role catalogue, delivered like any role overlay. And the conversation
  * always lives in tmux (the `mc work --tmux` mechanics): `mc supervisor`
  * opened the tool in whichever terminal asked, so two terminals asking got

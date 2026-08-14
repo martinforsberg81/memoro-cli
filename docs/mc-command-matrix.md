@@ -33,7 +33,6 @@ started in it. mc stores nothing else, because nothing else is mc's to know.
 | `mc work list` | The same listing as bare `mc work`. |
 | `mc worker <name> [task]` | A project folder that carries the worker role. |
 | `mc roles list \| show <role>` | The defined roles, read from their files. |
-| `mc supervisor` | The session that watches the others. |
 | `mc worktrees` | Worktrees across the work areas. |
 | `mc status` | Every piece of work and what it is doing. `--watch`, `--json`, `--wait`. |
 

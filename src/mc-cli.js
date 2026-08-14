@@ -79,7 +79,6 @@ async function routeV1Command(args) {
     roles: './mc/commands/roles.js',
     pm: './mc/commands/pm.js',
     'pm-helper': './mc/commands/pm-helper.js',
-    supervisor: './mc/commands/supervisor.js',
     restart: './cli/restart.js',
     migrate: './mc/commands/migrate.js',
   };

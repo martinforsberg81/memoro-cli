@@ -136,7 +136,7 @@ export function areaRole(areaPath, env = process.env) {
 
 /**
  * What a new conversation is told, per tool. The overlay rides behind the
- * profile, separated the way the supervisor already separates its role text.
+ * profile, kept separate from it the way role text has always been.
  * Claude only for now: codex keeps exactly today's delivery until overlay
  * delivery for it is designed, and handing it half the mechanism would be
  * worse than handing it none.

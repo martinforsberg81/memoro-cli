@@ -6,6 +6,16 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Removed
+- `mc supervisor` — replaced outright by `mc pm`, no transition alias. The
+  singleton shape it established (one named workspace, no worktree,
+  resume-or-create, attach rather than duplicate) lives on in `mc pm` /
+  `mc pm-helper`, with the role text in the role catalogue instead of the
+  code and the conversation always in tmux. The auth bypass for the removed
+  command's argv is gone with it; the cloud-runtime subsystem's scoped
+  supervisor device-flow (server API paths, token account) is a separate
+  surface and is untouched.
+
 ### Added
 - `mc pm` and `mc pm-helper` — the singleton roles' one door each, grown out
   of `mc supervisor`: attach if it runs (the conversation lives in tmux, so
