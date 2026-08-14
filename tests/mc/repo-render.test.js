@@ -8,7 +8,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { renderRepoLines } from '../../src/mc/repo-render.js';
+import { renderRepoLines, renderWatchLines } from '../../src/mc/repo-render.js';
 import { width } from '../../src/mc/status-render.js';
 
 const NOW = Date.parse('2026-08-14T12:00:00Z');
@@ -84,6 +84,52 @@ describe('the repository view, as a page', () => {
     });
     assert.match(text, /no repository called "nope"/u);
     assert.doesNotMatch(text, /mc work add/u);
+  });
+
+  it('says where the page came from: a fresh picture, an old one, or counting', () => {
+    const base = report();
+    const fresh = page({
+      ...base, mode: 'snapshot', updated_at: new Date(NOW - 40_000).toISOString(), stale: false,
+      watcher: { running: true, pid: 4711 },
+    });
+    assert.match(fresh, /updated 1m ago/u);
+    assert.match(fresh, /watcher pid 4711/u);
+    assert.doesNotMatch(fresh, /STALE/u);
+
+    const stale = page({
+      ...base, mode: 'snapshot', updated_at: new Date(NOW - 20 * 60_000).toISOString(), stale: true,
+      watcher: { running: false, pid: null },
+    });
+    assert.match(stale, /STALE/u);
+    assert.match(stale, /mc repo watch start/u);
+
+    const counted = page({ ...base, mode: 'computed', watcher: { running: false, pid: null } });
+    assert.match(counted, /counted now/u);
+    assert.match(counted, /mc repo watch start/u);
+  });
+
+  it('the watcher page says which of its three ways it is not working', () => {
+    const running = renderWatchLines({
+      running: true, pid: 4711, interval_ms: 60_000, abandoned: false,
+      last_write_at: new Date(NOW - 30_000).toISOString(), stale: false, log: '/x/watcher.log',
+    }, { now: NOW }).join('\n');
+    assert.match(running, /watching\s+pid 4711\s+every 60s/u);
+    assert.match(running, /last wrote\s+just now|last wrote\s+1m ago/u);
+
+    const abandoned = renderWatchLines({
+      running: false, pid: null, interval_ms: 60_000, abandoned: true,
+      last_write_at: new Date(NOW - 60 * 60_000).toISOString(), stale: true, log: '/x/watcher.log',
+    }, { now: NOW }).join('\n');
+    assert.match(abandoned, /not running/u);
+    assert.match(abandoned, /pid file was left behind/u);
+    assert.match(abandoned, /STALE/u);
+
+    const never = renderWatchLines({
+      running: false, pid: null, interval_ms: 60_000, abandoned: false,
+      last_write_at: null, stale: null, log: '/x/watcher.log',
+    }, { now: NOW }).join('\n');
+    assert.match(never, /mc repo watch start/u);
+    assert.match(never, /last wrote\s+never/u);
   });
 
   it('every row fits the terminal, colour and all', () => {
