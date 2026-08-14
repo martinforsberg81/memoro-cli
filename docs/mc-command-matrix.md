@@ -36,6 +36,7 @@ started in it. mc stores nothing else, because nothing else is mc's to know.
 | `mc worktrees` | Worktrees across the work areas. |
 | `mc status` | Every piece of work and what it is doing. `--watch`, `--json`, `--wait`. |
 | `mc repo status [repo]` | One repository seen whole: main, open pull requests with how far behind main each is, the work areas standing on it, and the source-linked installation's drift. `--json`, `--offline`. |
+| `mc repo watch start \| stop \| status` | The background process that keeps that answer fresh. `--interval <seconds>` on start; `--json` on status. |
 
 `mc work release` keeps a worktree that is in use, has uncommitted changes, or
 has unmerged commits. `mc work discard` reports what it will destroy and
@@ -45,6 +46,13 @@ requires `--apply`; it does not stop for uncommitted or unmerged work.
 `git fetch` updates, and `--offline` skips even that and says so on the page.
 Its worktree section is the status board's own inspection regrouped by
 repository, not a second reading of the same directories.
+
+With `mc repo watch` running, `mc repo status` reads that watcher's snapshot
+instead of counting — one file read, whoever asks and however often — and the
+page says how old the picture is. Past three intervals it reads `STALE` and
+says to start the watcher; with no snapshot at all it counts for itself and
+says so. The watcher writes only `<mc home>/repo-status/`: never inside a
+repository, never the registry. It is explicit — no command starts it for you.
 
 ## Sessions — messaging
 

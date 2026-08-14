@@ -21,6 +21,9 @@ export function renderRepoLines(report, {
   const wide = Math.max(60, Math.min(columns, 160));
   const lines = [''];
 
+  const source = sourceLine(c, report, now);
+  if (source) { lines.push(`  ${source}`); lines.push(''); }
+
   for (const name of report.unknown || []) {
     lines.push(`  ${c(`no repository called "${name}"`, 'yellow')}`);
   }
@@ -42,6 +45,56 @@ export function renderRepoLines(report, {
     if (repo.deploy) lines.push(...section(c, wide, 'deploy', deployRows(c, repo)));
     lines.push('');
   }
+  return lines;
+}
+
+/**
+ * Where this page came from, and how old it is.
+ *
+ * The whole point of the snapshot is that reading it is nearly free — and the
+ * whole risk of it is a reader taking a picture from an hour ago for the
+ * present. So every page says which of the two it is, and an old one says so
+ * loudly enough that nobody acts on it by accident.
+ */
+function sourceLine(c, report, now) {
+  if (report.mode === 'snapshot') {
+    const age = c(`updated ${ago(report.updated_at, now) || 'just now'}`, report.stale ? 'yellow' : 'grey');
+    if (report.stale) {
+      return `${c('STALE', 'yellow', 'bold')}  ${age}  ${c('— mc repo watch start', 'yellow')}`;
+    }
+    const who = report.watcher?.running ? `watcher pid ${report.watcher.pid}` : 'watcher not running';
+    return `${age}  ${c(`· ${who}`, 'grey')}`;
+  }
+  if (report.mode === 'computed') {
+    return c(report.watcher?.running
+      ? 'counted now — the watcher has not written a snapshot yet'
+      : 'counted now — mc repo watch start keeps this fresh for everyone', 'grey');
+  }
+  return null;
+}
+
+/**
+ * The watcher itself: alive or not, how often, and when it last wrote.
+ *
+ * Three facts, because those are the three ways it fails — never started,
+ * started and died, or running but stuck on a round that never finishes.
+ */
+export function renderWatchLines(state, { colour = false, now = Date.now() } = {}) {
+  const c = painter(colour);
+  const lines = [''];
+  if (state.running) {
+    lines.push(`  ${c('watching', 'green')}  pid ${state.pid}  every ${Math.round(state.interval_ms / 1000)}s`);
+  } else if (state.abandoned) {
+    lines.push(`  ${c('not running', 'yellow')}  ${c('— a pid file was left behind; mc repo watch stop clears it', 'grey')}`);
+  } else {
+    lines.push(`  ${c('not running', 'grey')}  ${c('— mc repo watch start', 'grey')}`);
+  }
+  const when = state.last_write_at
+    ? `${ago(state.last_write_at, now)}${state.stale ? c('  STALE', 'yellow') : ''}`
+    : c('never', 'grey');
+  lines.push(`  ${c('last wrote', 'grey')}  ${when}`);
+  lines.push(`  ${c('log', 'grey')}  ${c(state.log, 'grey')}`);
+  lines.push('');
   return lines;
 }
 

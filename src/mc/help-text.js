@@ -65,6 +65,13 @@ MAINTENANCE
   mc repo status --offline         The same without touching the network; the
                                     page says which parts are last-seen
   mc repo status --json            The same, for a session rather than a person
+  mc repo watch start [--interval <seconds>]
+                                    Keep the answer fresh in the background:
+                                    one process refreshes a snapshot, and every
+                                    reader — person, session, board — gets it
+                                    for the price of a file read
+  mc repo watch stop               Stop it; the last snapshot stays and ages
+  mc repo watch status [--json]    Whether it is running and when it last wrote
   mc worker <name> [task]          A project folder that carries the worker
                                     role: every conversation started in it
                                     gets the role's overlay and model default

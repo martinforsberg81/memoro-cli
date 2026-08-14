@@ -18,6 +18,9 @@ import { accessSync, constants, realpathSync } from 'node:fs';
 import { basename, delimiter, dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 
+import { mcHome } from './paths.js';
+import { readCombinedSnapshot } from './repo-snapshot.js';
+import { watcherState } from './repo-watch.js';
 import { resolveRepository } from './work-area.js';
 import { workStatus } from './work-status.js';
 
@@ -119,6 +122,73 @@ export async function repoStatus({
     repos: repos.sort((a, b) => a.name.localeCompare(b.name)),
     unknown,
   };
+}
+
+/**
+ * The view as anyone should ask for it: the snapshot when there is one, the
+ * count when there is not — and always which of the two it was.
+ *
+ * This is what makes the answer cheap for everybody. A watcher round costs a
+ * fetch, a gh round and an inspection of every checkout; reading its snapshot
+ * costs one file read, whoever is asking and however often. A person, the PM,
+ * the board and a worker can all ask at once and the machine does the work
+ * once a minute rather than once per question.
+ *
+ * The one rule the reader must not break is pretending an old answer is a
+ * current one: past three rounds the page says STALE and says how to start
+ * the watcher, and with no snapshot at all it counts for itself and says that
+ * is what it did. The view never refuses.
+ */
+export async function repoView({
+  env = process.env, names = null, offline = false, cwd = process.cwd(),
+  root = mcHome(), now = Date.now(),
+} = {}) {
+  const snapshot = readCombinedSnapshot({ root, now });
+  const watcher = watcherState({ root, now });
+  const fromSnapshot = snapshot.kind === 'present' ? pick(snapshot.value.repos, names) : null;
+
+  // A name the snapshot has never heard of is a question it cannot answer, so
+  // the whole answer is counted instead of half-read and half-counted. The
+  // count knows every repository mc can see; the picture only knows the ones
+  // that existed when it was taken, so it never gets to call a name unknown.
+  if (fromSnapshot && !fromSnapshot.missed.length) {
+    return {
+      at: new Date(now).toISOString(),
+      offline: Boolean(snapshot.value.offline),
+      mode: 'snapshot',
+      updated_at: snapshot.at,
+      age_ms: snapshot.age_ms,
+      interval_ms: snapshot.interval_ms,
+      stale: snapshot.stale,
+      watcher: { running: watcher.running, pid: watcher.pid },
+      repos: fromSnapshot.repos,
+      unknown: fromSnapshot.unknown,
+    };
+  }
+
+  const computed = await repoStatus({ env, names, offline, cwd });
+  return {
+    ...computed,
+    updated_at: computed.at,
+    age_ms: 0,
+    interval_ms: snapshot.kind === 'present' ? snapshot.interval_ms : null,
+    stale: false,
+    watcher: { running: watcher.running, pid: watcher.pid },
+  };
+}
+
+/** The repositories a snapshot can answer for, and the names it cannot. */
+function pick(repos, names) {
+  const all = Array.isArray(repos) ? repos : [];
+  if (!names?.length) return { repos: all, unknown: [], missed: [] };
+  const chosen = [];
+  const missed = [];
+  for (const name of names) {
+    const match = all.find((repo) => repo.name === name || repo.path === name);
+    if (match) { if (!chosen.includes(match)) chosen.push(match); continue; }
+    missed.push(name);
+  }
+  return { repos: chosen, unknown: [], missed };
 }
 
 /**
