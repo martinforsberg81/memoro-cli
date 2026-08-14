@@ -14,10 +14,16 @@ import { fileURLToPath } from 'node:url';
 
 const MC_CLI = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'src', 'mc-cli.js');
 
-export function runMcCli(args, env = {}) {
+/**
+ * `cwd` matters for the commands that read who is asking from where they are
+ * standing — a lease is held by the work area the shell is in, so a test that
+ * cannot choose a directory cannot test a second holder at all.
+ */
+export function runMcCli(args, env = {}, { cwd } = {}) {
   return spawnSync(process.execPath, [MC_CLI, ...args], {
     encoding: 'utf8',
     timeout: 60_000,
+    cwd,
     env: { ...process.env, MC_TEST_MODE: '1', MEMORO_API_URL: 'http://127.0.0.1:1', ...env },
   });
 }

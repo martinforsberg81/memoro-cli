@@ -37,6 +37,9 @@ started in it. mc stores nothing else, because nothing else is mc's to know.
 | `mc status` | Every piece of work and what it is doing. `--watch`, `--json`, `--wait`. |
 | `mc repo status [repo]` | One repository seen whole: main, open pull requests with how far behind main each is, the work areas standing on it, and the source-linked installation's drift. `--json`, `--offline`. |
 | `mc repo watch start \| stop \| status` | The background process that keeps that answer fresh. `--interval <seconds>` on start; `--json` on status. |
+| `mc repo claim <repo> "<what for>"` | Hold the gate round on a repository. Refused if someone else holds it. |
+| `mc repo release <repo> [--force]` | Give it back; `--force` takes it from another holder and is logged. |
+| `mc repo who <repo>` | Who holds it, for what, since when. `--json`. |
 
 `mc work release` keeps a worktree that is in use, has uncommitted changes, or
 has unmerged commits. `mc work discard` reports what it will destroy and
@@ -53,6 +56,15 @@ page says how old the picture is. Past three intervals it reads `STALE` and
 says to start the watcher; with no snapshot at all it counts for itself and
 says so. The watcher writes only `<mc home>/repo-status/`: never inside a
 repository, never the registry. It is explicit — no command starts it for you.
+
+The lease is advisory. `mc repo claim` refuses a repository someone else is
+holding, and that refusal stops exactly one thing: this command. No git or gh
+operation is blocked anywhere, by design — the gate round is
+`claim` → verify against a fresh baseline → merge → deploy pull → `release`,
+and following it is the roles' instruction, not a lock. There is no expiry: a
+forgotten lease shows its age in `mc repo status`, and a human or the PM ends
+it with `--force`, which the lease log keeps. The lease is one file under
+`<mc home>/repo-leases/` and nothing in mc reads it except `mc repo`.
 
 ## Sessions — messaging
 

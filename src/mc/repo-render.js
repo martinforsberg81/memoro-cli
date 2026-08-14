@@ -43,6 +43,7 @@ export function renderRepoLines(report, {
     lines.push(...section(c, wide, 'pull', prRows(c, repo)));
     lines.push(...section(c, wide, 'worktrees', worktreeRows(c, repo)));
     if (repo.deploy) lines.push(...section(c, wide, 'deploy', deployRows(c, repo)));
+    lines.push(...section(c, wide, 'lease', [leaseRow(c, repo.lease, now)]));
     lines.push('');
   }
   return lines;
@@ -154,6 +155,33 @@ function worktreeRows(c, repo) {
     item.uncommitted ? c(`${item.uncommitted} uncommitted`, 'yellow') : '',
     item.unmerged_commits ? c(`${item.unmerged_commits} unmerged`, 'grey') : '',
   ].filter(Boolean).join('  '));
+}
+
+/**
+ * Who is holding a round on this repository, for what, and since when.
+ *
+ * The age is the whole reason this line exists. There is no expiry: a lease
+ * held for four minutes is a round in progress, and one held since this
+ * morning is somebody who forgot — and the only difference visible anywhere
+ * is this number.
+ */
+export function leaseRow(c, lease, now = Date.now()) {
+  if (!lease?.held) return c('free', 'grey');
+  const age = Number.isFinite(lease.age_ms) ? lease.age_ms : Math.max(0, now - Date.parse(lease.since));
+  const old = age > 2 * 60 * 60 * 1000;
+  return [
+    c(lease.holder, old ? 'yellow' : 'bold'),
+    lease.errand ? `“${lease.errand}”` : '',
+    c(`held for ${duration(age)}`, old ? 'yellow' : 'grey'),
+  ].filter(Boolean).join('  ');
+}
+
+function duration(ms) {
+  const minutes = Math.max(0, Math.round(ms / 60000));
+  if (minutes < 1) return 'under a minute';
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.round(minutes / 60);
+  return hours < 48 ? `${hours}h` : `${Math.round(hours / 24)}d`;
 }
 
 function deployRows(c, repo) {

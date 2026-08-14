@@ -132,6 +132,35 @@ describe('the repository view, as a page', () => {
     assert.match(never, /last wrote\s+never/u);
   });
 
+  it('says who holds a round and for how long — or that it is free', () => {
+    const free = page(report());
+    assert.match(free, /lease\s+free/u);
+
+    const held = page(report({
+      lease: {
+        held: true,
+        holder: 'mc-repo',
+        holder_kind: 'work-area',
+        errand: 'merge round #338',
+        since: new Date(NOW - 40 * 60_000).toISOString(),
+        age_ms: 40 * 60_000,
+      },
+    }));
+    assert.match(held, /lease\s+mc-repo/u);
+    assert.match(held, /merge round #338/u);
+    assert.match(held, /held for 40m/u);
+
+    // The age is the only warning there is: nothing expires a lease, so a
+    // forgotten one has to read differently from a round in progress.
+    const forgotten = page(report({
+      lease: {
+        held: true, holder: 'mc-repo', holder_kind: 'work-area', errand: 'a round',
+        since: new Date(NOW - 9 * 60 * 60_000).toISOString(), age_ms: 9 * 60 * 60_000,
+      },
+    }));
+    assert.match(forgotten, /held for 9h/u);
+  });
+
   it('every row fits the terminal, colour and all', () => {
     const text = renderRepoLines(report({
       pull_requests: {

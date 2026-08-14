@@ -19,6 +19,7 @@ import { basename, delimiter, dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 
 import { mcHome } from './paths.js';
+import { readLease } from './repo-lease.js';
 import { readCombinedSnapshot } from './repo-snapshot.js';
 import { watcherState } from './repo-watch.js';
 import { resolveRepository } from './work-area.js';
@@ -161,7 +162,11 @@ export async function repoView({
       interval_ms: snapshot.interval_ms,
       stale: snapshot.stale,
       watcher: { running: watcher.running, pid: watcher.pid },
-      repos: fromSnapshot.repos,
+      // Every section here is a minute old by design — except this one. A
+      // lease is read to decide whether to start a round right now, and a
+      // picture from before somebody claimed it would send two rounds at the
+      // same repository. It costs one file read, so it is always current.
+      repos: fromSnapshot.repos.map((repo) => ({ ...repo, lease: readLease(repo.path, { root, now }) })),
       unknown: fromSnapshot.unknown,
     };
   }
@@ -229,6 +234,7 @@ async function gatherRepo({ root, worktrees, install, offline }) {
     pull_requests: pullRequests,
     worktrees: worktrees.sort((a, b) => `${a.area}${a.repo}`.localeCompare(`${b.area}${b.repo}`)),
     deploy: install ? await deployState(root, base, install) : null,
+    lease: readLease(root),
   };
 }
 
