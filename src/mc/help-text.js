@@ -49,6 +49,11 @@ MAINTENANCE
                                     given; a resumed conversation stays on the
                                     model its transcript says it ran on
   mc work <name> <id>              One particular conversation, by the id shown
+  mc work send <name> "<text>"     A message into that work's inbox/, written
+                                    before anything else is tried — then, if a
+                                    conversation is running there, it is woken
+                                    to read it. Nothing running is not a
+                                    failure: it reads the inbox when it starts
   mc work add <name> <repo> [branch]
                                     Add a repository's worktree to that work
   mc work stop <name>              Stop what is running there; keep the work

@@ -12,14 +12,16 @@
  * with the moment it was taken so a reader can see it is old, and kept under
  * mc's home so nothing is ever written inside a repository.
  */
-import { randomUUID } from 'node:crypto';
-import {
-  mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync,
-} from 'node:fs';
 import { createHash } from 'node:crypto';
-import { basename, dirname, join } from 'node:path';
+import { readFileSync, readdirSync, rmSync } from 'node:fs';
+import { basename, join } from 'node:path';
 
+import { writeJsonAtomic } from './atomic-write.js';
 import { mcHome } from './paths.js';
+
+// The lease writes through this module's door too, so the one mechanism that
+// makes a file appear whole is imported here rather than reimplemented.
+export { writeJsonAtomic };
 
 export const SNAPSHOT_SCHEMA = 'mc-repo-status';
 export const SNAPSHOT_VERSION = 1;
@@ -141,20 +143,4 @@ function readSnapshotFile(path, now) {
     interval_ms: intervalMs,
     stale: ageMs > STALE_ROUNDS * intervalMs,
   };
-}
-
-/**
- * Temp file, then rename — the same shape the dev-server registry uses.
- *
- * Rename is atomic within a directory, so a reader holding the path sees
- * either the previous round whole or this one whole. Writing in place would
- * hand a reader half a JSON document once a minute, and the reader would be
- * right to call it corrupt.
- */
-export function writeJsonAtomic(path, value) {
-  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-  const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`;
-  writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
-  renameSync(temporary, path);
-  return path;
 }
