@@ -53,9 +53,17 @@ describe('the watcher', () => {
     const fx = fixture({ name: 'repo-watch' });
     addArea(fx, 'alpha', 'alpha');
     try {
-      const started = runMcCli(['repo', 'watch', 'start', '--interval', '1'], fx.env);
+      // The interval is deliberately long, and nothing here waits for it. The
+      // loop writes its first round before it sleeps, so a short interval buys
+      // no speed — it only shortens the window in which that round counts as
+      // fresh, to three seconds. This test then spawns three more mc processes
+      // before it looks, and under load that took longer than three seconds:
+      // the snapshot went STALE mid-test and `view.stale` failed. What the
+      // staleness rule does with an old picture is proved on its own below,
+      // against timestamps rather than against a clock nobody controls.
+      const started = runMcCli(['repo', 'watch', 'start', '--interval', '60'], fx.env);
       assert.equal(started.status, 0, started.stderr);
-      assert.match(started.stdout, /watching every 1s \(pid \d+\)/u);
+      assert.match(started.stdout, /watching every 60s \(pid \d+\)/u);
 
       const written = await until(() => existsSync(combinedPath(fx.mcHome)));
       assert.ok(written, 'the watcher wrote no snapshot');
@@ -68,7 +76,9 @@ describe('the watcher', () => {
       // And now the view is a file read rather than a fetch and a gh round.
       const view = json(runMcCli(['repo', 'status', '--json'], fx.env));
       assert.equal(view.mode, 'snapshot');
-      assert.equal(view.stale, false);
+      // Said with the age in it: if this ever fails again, the message is the
+      // diagnosis rather than `true !== false`.
+      assert.equal(view.stale, false, `snapshot was ${view.age_ms}ms old against a ${view.interval_ms}ms interval`);
       assert.equal(view.watcher.running, true);
       assert.equal(view.repos[0].path, fx.dir);
       assert.equal(view.repos[0].worktrees[0].area, 'alpha');
