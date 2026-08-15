@@ -44,6 +44,19 @@ export function listWorkAreas(env = process.env, options = {}) {
  * commands per checkout for the second — and a caller that is about to ask
  * for every area at once should ask once rather than once per area.
  */
+/**
+ * Directories that belong to the work rather than being work.
+ *
+ * `inbox/` is where the channel drops messages (`mc work send`) and
+ * `handoff/` is where a conversation leaves its baton for the next one. Both
+ * are filing: they hold what has been said about the work, never a checkout
+ * of it. Listed as worktrees they turned up on the status board as
+ * repositories that are not repositories — the same nonsense a role home's
+ * subdirectories were already kept out of, arriving through the front door
+ * once ordinary areas started having filing too.
+ */
+export const FILING_DIRECTORIES = Object.freeze(['inbox', 'handoff']);
+
 export function inspectWorkArea(name, env = process.env, { conversations = true, git: askGit = true } = {}) {
   const path = workAreaPath(name, env);
   const worktrees = [];
@@ -58,6 +71,7 @@ export function inspectWorkArea(name, env = process.env, { conversations = true,
     entries = roleHome ? [] : readdirSync(path, { withFileTypes: true })
       .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'))
       .map((entry) => entry.name)
+      .filter((entry) => !FILING_DIRECTORIES.includes(entry))
       .sort();
   } catch { /* the work area may not exist yet */ }
   for (const entry of entries) {

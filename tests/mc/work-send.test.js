@@ -325,12 +325,12 @@ describe('mc work send — the channel', () => {
 
       const board = runMcCli(['status', '--json'], fx.env);
       assert.equal(board.status, 0, board.stderr);
-      // The inbox is a directory in the area, not a worktree and not a
-      // conversation: the board must not have started reporting it as one.
+      // The inbox is filing, not work: the board lists no worktree for it.
+      // (It used to appear here as a repository that is not one — see
+      // status-roles.test.js, which owns that rule now.)
       const page = JSON.parse(board.stdout);
       const pm = page.areas.find((area) => area.name === 'pm');
-      assert.deepEqual(pm.worktrees.map((worktree) => worktree.repo), ['inbox']);
-      assert.equal(pm.worktrees[0].is_git, false);
+      assert.deepEqual(pm.worktrees, []);
     } finally { fx.cleanup(); }
   });
 });
