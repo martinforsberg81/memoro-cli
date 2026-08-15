@@ -30,14 +30,14 @@ const SAFE_PATH = '/usr/bin:/bin:/usr/sbin:/sbin';
  * A work root with two pieces of work in it, and a tmux that does what the
  * test needs it to do.
  */
-function fixture({ mode = 'reliable', alive = [] } = {}) {
+function fixture({ mode = 'reliable', alive = [], drawAfter = 0 } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'mc-work-send-'));
   const workRoot = join(root, 'work');
   const mcHome = join(root, 'home');
   mkdirSync(join(workRoot, 'pm'), { recursive: true });
   mkdirSync(join(workRoot, 'alpha'), { recursive: true });
   mkdirSync(mcHome, { recursive: true, mode: 0o700 });
-  const tmux = installTmuxStub(root, { mode, alive });
+  const tmux = installTmuxStub(root, { mode, alive, drawAfter });
 
   return {
     root,
@@ -138,6 +138,42 @@ describe('mc work send — the channel', () => {
       assert.equal(keys.length, 2, keys.join(' | '));
       assert.match(keys[0], /send-keys -t mc-pm -l /u);
       assert.equal(keys[1], 'send-keys -t mc-pm Enter');
+    } finally { fx.cleanup(); }
+  });
+
+  it('a slow pane is waited for, not given up on', () => {
+    // The live smoke's finding: under load the text was in the prompt but had
+    // not been painted when mc looked, and one glance was enough to abandon a
+    // wake that would have worked. Here the pane hides it for three captures.
+    const fx = fixture({ alive: ['pm'], drawAfter: 3 });
+    try {
+      const sent = runMcCli(['work', 'send', 'pm', 'wake up'], fx.env, { cwd: join(fx.workRoot, 'alpha') });
+      assert.equal(sent.status, 0, sent.stderr);
+      assert.match(sent.stdout, /woke pm/u);
+      assert.doesNotMatch(sent.stdout, /never reached the prompt/u);
+
+      // It looked more than once before believing the prompt was empty, and
+      // it still pressed Enter exactly once.
+      assert.ok(fx.tmux.captures() >= 4, `only ${fx.tmux.captures()} captures`);
+      assert.equal(fx.tmux.calls().filter((line) => line.endsWith('Enter')).length, 1);
+      assert.equal(fx.tmux.submitted().length, 1);
+      assert.equal(fx.tmux.prompt(), '');
+    } finally { fx.cleanup(); }
+  });
+
+  it('a pane that never shows the text is given up on, and says so', () => {
+    // The other half of the same judgement: waiting is not waiting forever.
+    // Delivered, not woken — and the file is in the inbox either way.
+    const fx = fixture({ alive: ['pm'], drawAfter: 99 });
+    try {
+      const sent = runMcCli(['work', 'send', 'pm', 'wake up'], fx.env, { cwd: join(fx.workRoot, 'alpha') });
+      assert.equal(sent.status, 0, sent.stderr);
+      assert.match(sent.stdout, /could not wake it \(the text never reached the prompt\)/u);
+      assert.equal(fx.messages('pm').length, 1);
+      // It gave up before pressing Enter: an unseen prompt must never be
+      // submitted into on faith.
+      assert.deepEqual(fx.tmux.calls().filter((line) => line.endsWith('Enter')), []);
+      assert.equal(fx.tmux.captures(), 5);
     } finally { fx.cleanup(); }
   });
 

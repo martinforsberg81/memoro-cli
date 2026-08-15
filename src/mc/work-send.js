@@ -29,8 +29,19 @@ import { inspectWorkArea } from './work-area.js';
 import { currentHolder } from './work-identity.js';
 import { backgroundTarget } from './work-open.js';
 
-/** How long the TUI gets to draw the text before Enter is pressed. */
-const DRAW_MS = 250;
+/**
+ * How long the TUI gets to draw the text before Enter is pressed — and how
+ * many times mc is willing to ask again.
+ *
+ * A single quarter-second was too mean. Under load — the first live smoke
+ * caught it — the text was in the prompt but had not been painted yet when mc
+ * looked, so it gave up without ever pressing Enter: a wake abandoned because
+ * a redraw was slow. Waiting longer by default would slow every send instead,
+ * so it asks repeatedly and stops the moment the text appears. A pane that
+ * draws promptly still costs one look.
+ */
+const DRAW_MS = 300;
+const DRAW_ATTEMPTS = 5;
 
 /** How long a submission gets to leave the prompt before it is checked. */
 const SUBMIT_MS = 400;
@@ -137,10 +148,12 @@ function freePath(directory, at, sender) {
  *
  * Three deliberate steps. The text goes in literally (`send-keys -l`), so a
  * message containing words tmux reads as key names — Enter, Escape, C-c —
- * cannot turn into keystrokes. Enter follows as its own call, after the TUI
- * has had a moment to draw. Then the pane is read back: if the notice is
- * still sitting at the foot of the screen it was never submitted, so Enter is
- * pressed once more and the pane read again.
+ * cannot turn into keystrokes. Then the pane is watched until the text
+ * appears in the prompt, because a busy TUI can take a second to paint and
+ * "not yet" must not be mistaken for "never". Enter follows as its own call.
+ * Then the pane is read back once more: if the notice is still sitting at the
+ * foot of the screen it was never submitted, so Enter is pressed again and
+ * the pane read again.
  *
  * If it still has not gone in, that is reported rather than assumed. A
  * message stuck unsent in somebody's prompt looks exactly like a delivered
@@ -160,9 +173,16 @@ export function wakeConversation({ target, sender, run = null, sleep = null }) {
   // Did the text land at all? A pane that is not a prompt — a tool that has
   // exited, a shell running something — takes the keystrokes and shows
   // nothing, and pressing Enter at that would report a wake that never was.
-  wait(DRAW_MS);
-  const landed = inPrompt(tmux, target);
-  if (landed === null) return { ok: false, reason: 'could not read the conversation back' };
+  //
+  // Asked several times, because "not drawn yet" and "never arrived" look
+  // identical in a single glance and only one of them is worth giving up on.
+  let landed = false;
+  for (let attempt = 0; attempt < DRAW_ATTEMPTS && !landed; attempt += 1) {
+    wait(DRAW_MS);
+    const seen = inPrompt(tmux, target);
+    if (seen === null) return { ok: false, reason: 'could not read the conversation back' };
+    landed = seen;
+  }
   if (!landed) return { ok: false, reason: 'the text never reached the prompt' };
 
   for (let attempt = 0; attempt < 2; attempt += 1) {
