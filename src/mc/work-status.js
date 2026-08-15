@@ -26,6 +26,7 @@ import { promisify } from 'node:util';
 
 import { lastModel, listConversations, readTailEntries } from './conversations.js';
 import { workRoot } from './paths.js';
+import { areaRoleName } from './roles.js';
 import { inspectWorkArea, listWorkAreas } from './work-area.js';
 
 const run = promisify(execFile);
@@ -312,6 +313,10 @@ export async function workStatus({ env = process.env, names = null, git: askGit 
       return {
         name: area.name,
         path: area.path,
+        // The role the area carries, or null. A field added beside the
+        // others, never one of them changed: every reader of this page keeps
+        // reading exactly what it read before.
+        role: areaRoleName(area.path),
         running,
         worktrees: area.worktrees.map((worktree) => ({
           repo: worktree.repo,

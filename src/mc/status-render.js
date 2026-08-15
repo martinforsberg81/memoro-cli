@@ -95,7 +95,11 @@ export function renderLines(report, {
 
   for (const area of areas) {
     const tone = TONE[state(area)];
-    const label = pad(clip(area.name, 26), 26);
+    // A role-marked area says so beside its name. The role joins the name
+    // *before* clipping so the column keeps its width: an area name and a role
+    // are two unbounded strings, and the pair is clipped as one label rather
+    // than pushing the rest of the row out of line.
+    const label = pad(clip(area.role ? `${area.name} · ${area.role}` : area.name, 26), 26);
     const name = state(area) === 'idle' ? c(label, 'grey') : c(label, 'bold');
     lines.push(`  ${c(MARK[state(area)], tone)} ${name} ${c(clip(where(area), wide - 32), 'grey')}`);
 
