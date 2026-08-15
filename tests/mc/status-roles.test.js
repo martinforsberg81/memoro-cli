@@ -135,9 +135,7 @@ describe('the board, on roles and on filing', () => {
     } finally { fx.cleanup(); }
   });
 
-  // NEXT: the page a person reads. Remove `.skip` and make it pass — see
-  // handoff/ for exactly where in status-render.js this belongs.
-  it.skip('shows the role beside the name in the row header', () => {
+  it('shows the role beside the name in the row header', () => {
     const report = {
       areas: [
         {
@@ -165,10 +163,18 @@ describe('the board, on roles and on filing', () => {
     };
     const lines = renderLines(report, { columns: 100, now: 0 });
     assert.ok(lines.some((line) => /mc-repo · worker/u.test(line)), lines.join('\n'));
+
     // An area with no role reads exactly as it did before: no separator, no
-    // empty space where a role would have been.
-    const ordinary = lines.find((line) => line.includes('ordinary'));
-    assert.doesNotMatch(ordinary, /·/u);
+    // empty space where a role would have been. Said as an identity against a
+    // page with no `role` field at all — the shape every older reader saw —
+    // rather than by looking for `·`, which is also the idle marker.
+    const before = renderLines(
+      { ...report, areas: report.areas.map(({ role, ...area }) => area) },
+      { columns: 100, now: 0 },
+    );
+    const row = (page) => page.find((line) => line.includes('ordinary'));
+    assert.equal(row(lines), row(before));
+    assert.doesNotMatch(row(lines).replace(/^\s*·\s/u, ''), /·/u);
   });
 });
 
