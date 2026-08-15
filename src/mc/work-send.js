@@ -73,6 +73,22 @@ const BOX_DEPTH = 4;
  */
 const MARKER = 'inbox/';
 
+/**
+ * The pane is mid-answer, and that is not the same as unresponsive.
+ *
+ * A TUI that is streaming does not repaint its input box until the streaming
+ * pauses, so a notice typed into a busy conversation is genuinely there and
+ * genuinely invisible. Giving up on it after five looks abandons a wake that
+ * was going to work — and the recipient is exactly the sort of session that is
+ * busy, because it is doing the work somebody is writing to it about.
+ *
+ * So the looks are not a fixed budget: while the pane says it is working, mc
+ * keeps waiting, up to a bound. The bound exists because a pane can stay busy
+ * for minutes and the sender is holding a terminal.
+ */
+const BUSY_MARKER = 'esc to interrupt';
+const BUSY_ATTEMPTS = 40;
+
 export function inboxPath(areaPath) {
   return join(areaPath, 'inbox');
 }
@@ -170,30 +186,46 @@ export function wakeConversation({ target, sender, run = null, sleep = null }) {
   const typed = tmux(['send-keys', '-t', target, '-l', notice]);
   if (typed?.status !== 0) return { ok: false, reason: 'could not type into the conversation' };
 
+  // From here the notice is in somebody's input box, and every way out of this
+  // function that is not a submission has to take it back out again. Left
+  // there it is not merely litter: it sits in front of whatever that person
+  // types next and goes in as part of their sentence, so a wake mc knew had
+  // failed would corrupt the turn it failed to start.
+  const giveUp = (reason) => {
+    tmux(['send-keys', '-t', target, 'C-u']);
+    return { ok: false, reason };
+  };
+
   // Did the text land at all? A pane that is not a prompt — a tool that has
   // exited, a shell running something — takes the keystrokes and shows
   // nothing, and pressing Enter at that would report a wake that never was.
   //
   // Asked several times, because "not drawn yet" and "never arrived" look
   // identical in a single glance and only one of them is worth giving up on.
+  // A pane that says it is working does not spend its looks: the budget is
+  // DRAW_ATTEMPTS *quiet* looks, and streaming resets it.
   let landed = false;
-  for (let attempt = 0; attempt < DRAW_ATTEMPTS && !landed; attempt += 1) {
+  let quiet = 0;
+  for (let attempt = 0; attempt < BUSY_ATTEMPTS && !landed; attempt += 1) {
     wait(DRAW_MS);
-    const seen = inPrompt(tmux, target);
-    if (seen === null) return { ok: false, reason: 'could not read the conversation back' };
-    landed = seen;
+    const pane = readPane(tmux, target);
+    if (pane === null) return giveUp('could not read the conversation back');
+    landed = inPrompt(pane);
+    if (landed) break;
+    quiet = busy(pane) ? 0 : quiet + 1;
+    if (quiet >= DRAW_ATTEMPTS) break;
   }
-  if (!landed) return { ok: false, reason: 'the text never reached the prompt' };
+  if (!landed) return giveUp('the text never reached the prompt');
 
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const pressed = tmux(['send-keys', '-t', target, 'Enter']);
-    if (pressed?.status !== 0) return { ok: false, reason: 'could not press Enter' };
+    if (pressed?.status !== 0) return giveUp('could not press Enter');
     wait(SUBMIT_MS);
-    const still = inPrompt(tmux, target);
-    if (still === null) return { ok: false, reason: 'could not read the conversation back' };
-    if (!still) return { ok: true, attempts: attempt + 1 };
+    const pane = readPane(tmux, target);
+    if (pane === null) return giveUp('could not read the conversation back');
+    if (!inPrompt(pane)) return { ok: true, attempts: attempt + 1 };
   }
-  return { ok: false, reason: 'it stayed in the prompt' };
+  return giveUp('it stayed in the prompt');
 }
 
 /**
@@ -206,15 +238,27 @@ export function wakeConversation({ target, sender, run = null, sleep = null }) {
  * directions: too few and a wrapped line disappears, too many and the turn it
  * became is mistaken for a line never sent.
  *
- * `null` means the pane could not be read at all, which is neither answer.
+ * Read once, asked twice: whether the notice is still waiting and whether the
+ * pane is busy come from the same capture, so a look costs one tmux call.
+ *
+ * `null` from `readPane` means the pane could not be read at all, which is
+ * neither answer.
  */
-function inPrompt(tmux, target) {
+function readPane(tmux, target) {
   const pane = tmux(['capture-pane', '-t', target, '-p']);
   if (pane?.status !== 0) return null;
   // The capture is padded with blank rows to the height of the pane; the
   // conversation ends where the text does.
-  const lines = String(pane.stdout || '').replace(/\s+$/u, '').split('\n');
+  return String(pane.stdout || '').replace(/\s+$/u, '').split('\n');
+}
+
+function inPrompt(lines) {
   const last = lines.findLastIndex((line) => line.includes(MARKER));
   if (last === -1) return false;
   return lines.length - 1 - last < BOX_DEPTH;
+}
+
+/** Is it mid-answer? Leans toward yes: the cost of waiting is only waiting. */
+function busy(lines) {
+  return lines.some((line) => line.includes(BUSY_MARKER));
 }

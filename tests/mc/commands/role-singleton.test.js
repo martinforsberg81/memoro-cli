@@ -104,6 +104,21 @@ describe('mc pm', () => {
     assert.match(result.stdout, /running as mc-pm/u);
   });
 
+  it('the session it creates is dressed for a person to attach to', () => {
+    // Asserted here as well as at the seam: `mc pm` is the session a person
+    // attaches to most often, and it reaches tmux by its own path.
+    const fx = fixture();
+    assert.equal(runMcCli(['pm'], fx.env).status, 0);
+    const lines = readFileSync(fx.log, 'utf8').split('\n').filter(Boolean);
+    assert.deepEqual(lines.filter((line) => line.startsWith('set-option')), [
+      'set-option -t mc-pm mouse on',
+      'set-option -t mc-pm status off',
+      'set-option -t mc-pm history-limit 50000',
+    ]);
+    // And it changed nothing outside the session it made.
+    assert.deepEqual(lines.filter((line) => / -g\b/u.test(line)), []);
+  });
+
   it('while it runs, a second mc pm goes to it — never a second instance', () => {
     const fx = fixture({ tmuxRunning: true });
     const result = runMcCli(['pm'], fx.env);
