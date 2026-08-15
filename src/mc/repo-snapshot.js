@@ -14,7 +14,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import {
-  existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync,
+  mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync,
 } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { basename, dirname, join } from 'node:path';
@@ -46,8 +46,13 @@ export function combinedPath(root = mcHome()) {
  * what it got rather than infer it from a name.
  */
 export function repoSnapshotPath(repoPath, root = mcHome()) {
+  return join(repoStatusRoot(root), `${repoFileSlug(repoPath)}.json`);
+}
+
+/** The same naming rule wherever mc keeps a file about a repository. */
+export function repoFileSlug(repoPath) {
   const hash = createHash('sha1').update(String(repoPath)).digest('hex').slice(0, 8);
-  return join(repoStatusRoot(root), `${basename(String(repoPath)) || 'repo'}-${hash}.json`);
+  return `${basename(String(repoPath)) || 'repo'}-${hash}`;
 }
 
 export function watcherStatePath(root = mcHome()) {
@@ -136,20 +141,6 @@ function readSnapshotFile(path, now) {
     interval_ms: intervalMs,
     stale: ageMs > STALE_ROUNDS * intervalMs,
   };
-}
-
-/** Everything the snapshot directory holds, for a command that removes it. */
-export function forgetSnapshots({ root = mcHome() } = {}) {
-  const directory = repoStatusRoot(root);
-  if (!existsSync(directory)) return [];
-  const removed = [];
-  for (const name of readdirSync(directory)) {
-    if (name === 'watcher.json' || name === 'watcher.log') continue;
-    const path = join(directory, name);
-    rmSync(path, { force: true });
-    removed.push(path);
-  }
-  return removed;
 }
 
 /**

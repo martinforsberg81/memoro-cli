@@ -72,6 +72,14 @@ MAINTENANCE
                                     for the price of a file read
   mc repo watch stop               Stop it; the last snapshot stays and ages
   mc repo watch status [--json]    Whether it is running and when it last wrote
+  mc repo claim <repo> "<what for>"
+                                    Say you are holding a round on it: verify,
+                                    merge, deploy. mc refuses a second claim
+                                    and blocks no git at all — the lease is an
+                                    agreement, visible to everyone in the view
+  mc repo release <repo> [--force] Give it back. --force takes it from someone
+                                    else, and is always written to the log
+  mc repo who <repo> [--json]      Who holds it, for what, and since when
   mc worker <name> [task]          A project folder that carries the worker
                                     role: every conversation started in it
                                     gets the role's overlay and model default
