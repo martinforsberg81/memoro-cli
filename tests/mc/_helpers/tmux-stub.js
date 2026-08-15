@@ -11,11 +11,15 @@
  * The pane it draws is the shape that matters: a conversation above, an input
  * box of four lines at the foot. Reading back more than that box would make a
  * submitted turn look like an unsubmitted one.
+ *
+ * `drawAfter` makes it slow to paint: the first N captures show an empty box
+ * even though the text is in it, which is a loaded TUI seen from outside — and
+ * the reason a single glance at the prompt was not enough.
  */
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-export function installTmuxStub(root, { mode = 'reliable', alive = [] } = {}) {
+export function installTmuxStub(root, { mode = 'reliable', alive = [], drawAfter = 0 } = {}) {
   const bin = join(root, 'bin');
   const state = join(root, 'tmux-state');
   mkdirSync(bin, { recursive: true });
@@ -26,10 +30,12 @@ export function installTmuxStub(root, { mode = 'reliable', alive = [] } = {}) {
   const screen = join(state, 'screen.txt');
   const modePath = join(state, 'mode');
   const first = join(state, 'first-enter');
+  const captures = join(state, 'captures');
   writeFileSync(log, '');
   writeFileSync(prompt, '');
   writeFileSync(screen, 'a conversation\nthat has been going a while\n');
   writeFileSync(modePath, `${mode}\n`);
+  writeFileSync(captures, '0\n');
   for (const name of alive) writeFileSync(join(state, `alive-mc-${name}`), '');
 
   writeFileSync(join(bin, 'tmux'), `#!/bin/sh
@@ -61,9 +67,13 @@ case "$1" in
     exit 0
     ;;
   capture-pane)
+    seen=\`cat "${captures}"\`
+    seen=\`expr "$seen" + 1\`
+    printf '%s\\n' "$seen" > "${captures}"
+    if [ "$seen" -le "${drawAfter}" ]; then shown=""; else shown=\`cat "${prompt}"\`; fi
     cat "${screen}"
     printf '%s\\n' "+------------------------------+"
-    printf '| > %s\\n' "\`cat "${prompt}"\`"
+    printf '| > %s\\n' "$shown"
     printf '%s\\n' "+------------------------------+"
     printf '%s\\n' "  ? for shortcuts"
     exit 0
@@ -77,6 +87,7 @@ exit 0
     bin,
     state,
     calls: () => readFileSync(log, 'utf8').split('\n').filter(Boolean),
+    captures: () => Number(readFileSync(captures, 'utf8').trim()),
     prompt: () => readFileSync(prompt, 'utf8'),
     screen: () => readFileSync(screen, 'utf8'),
     /** The turns the conversation actually received. */
