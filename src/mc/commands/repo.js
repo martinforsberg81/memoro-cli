@@ -19,7 +19,8 @@
  */
 import { painter } from '../status-render.js';
 import { leaseRow, renderRepoLines, renderWatchLines } from '../repo-render.js';
-import { claimLease, currentHolder, readLease, releaseLease } from '../repo-lease.js';
+import { claimLease, readLease, releaseLease } from '../repo-lease.js';
+import { currentHolder } from '../work-identity.js';
 import { readCombinedSnapshot } from '../repo-snapshot.js';
 import { matchRepo, repoStatus, repoView } from '../repo-status.js';
 import { startWatcher, stopWatcher, watcherState } from '../repo-watch.js';

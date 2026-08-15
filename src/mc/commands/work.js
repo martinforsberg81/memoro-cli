@@ -9,6 +9,7 @@
  *   mc work <name>                open it, asking only what it cannot know
  *   mc work <name> new            a new conversation
  *   mc work <name> <id>           one particular conversation
+ *   mc work send <name> "<message>"  a message into its inbox, and a nudge
  *   mc work add <name> <repo> [branch] [--from <ref>]
  *   mc work stop <name>              stop what is running; keep the work
  *   mc work remove <name> <repo>
@@ -35,6 +36,7 @@ import {
   resolveRepository,
 } from '../work-area.js';
 import { describeAge, describeSize } from '../conversations.js';
+import { sendToArea } from '../work-send.js';
 import { stopWork } from '../work-stop.js';
 import { interactive, ask, select } from '../prompt.js';
 import { workRoot } from '../paths.js';
@@ -46,7 +48,7 @@ import {
   attachBackground, backgroundTarget, clearTrustDialog, openInWorkArea, startInBackground,
 } from '../work-open.js';
 
-const VERBS = ['add', 'remove', 'release', 'discard', 'stop', 'list'];
+const VERBS = ['add', 'remove', 'release', 'discard', 'stop', 'list', 'send'];
 const NAME = /^[A-Za-z0-9._-]{1,64}$/u;
 
 export async function run(argv, deps = {}) {
@@ -57,6 +59,7 @@ export async function run(argv, deps = {}) {
     stderr.write(`mc: ${opts.error}\n`);
     stderr.write('usage — mc work\n');
     stderr.write('        mc work <name> [new | <conversation id>] [--repo <repo>] [--codex|--claude] [--model <model>]\n');
+    stderr.write('        mc work send <name> "<message>" [--json]\n');
     stderr.write('        mc work add <name> <repo> [branch] [--from <ref>]\n');
     stderr.write('        mc work remove <name> <repo>\n');
     stderr.write('        mc work stop <name>\n');
@@ -100,6 +103,31 @@ export async function run(argv, deps = {}) {
  * had run and done nothing.
  */
 async function runVerb(opts, { stdout, stderr }) {
+  // The file first, the waking second. Once the message is in the recipient's
+  // inbox the send has succeeded — a conversation that is not running, or one
+  // that will not take the keystroke, costs the recipient latency and never
+  // costs the sender the message.
+  if (opts.verb === 'send') {
+    const result = sendToArea({ name: opts.name, message: opts.message });
+    if (!result.ok) {
+      stderr.write(`mc: nothing called "${opts.name}" under ${workRoot()}\n`);
+      return 1;
+    }
+    if (opts.json) {
+      stdout.write(`${JSON.stringify({ ok: true, ...result }, null, 2)}\n`);
+      return 0;
+    }
+    stdout.write(`mc: ${result.file}\n`);
+    if (result.woke) {
+      stdout.write(`mc: woke ${opts.name} — it has been told to read its inbox\n`);
+    } else if (result.reason === 'no-live-conversation') {
+      stdout.write(`mc: nothing is running in ${opts.name} — it reads its inbox when it starts\n`);
+    } else {
+      stdout.write(`mc: delivered to the inbox, but could not wake it (${result.reason})\n`);
+    }
+    return 0;
+  }
+
   if (opts.verb === 'add') {
     // The reserved names never become areas, so there is nothing to add to —
     // and letting `add` conjure one up would be the back door the open-path
@@ -645,7 +673,7 @@ export function parseArgs(argv) {
     toolSugar: true,
   });
   const opts = {
-    verb: 'list', name: null, repo: scanned.flags.repo, branch: null, pick: null,
+    verb: 'list', name: null, repo: scanned.flags.repo, branch: null, pick: null, message: null,
     from: scanned.flags.from, tmux: scanned.flags.tmux, task: null,
     tool: scanned.flags.tool, model: scanned.flags.model,
     apply: scanned.flags.apply, json: scanned.flags.json,
@@ -673,6 +701,14 @@ export function parseArgs(argv) {
   if (!opts.name) return { ...opts, error: 'which piece of work?' };
   if (!NAME.test(opts.name)) return { ...opts, error: `"${opts.name}" cannot be a directory name` };
   if (head === 'stop') return opts;
+  if (head === 'send') {
+    // Everything after the name is the message. Requiring quotes around it
+    // would be mc's grammar rather than the user's, and a report typed
+    // straight at a shell is exactly what this is for.
+    opts.message = rest.slice(1).join(' ');
+    if (!opts.message) return { ...opts, error: `what should it say? mc work send ${opts.name} "<message>"` };
+    return opts;
+  }
   if (head === 'discard') {
     opts.repo = opts.repo || rest[1] || null;
     return opts;

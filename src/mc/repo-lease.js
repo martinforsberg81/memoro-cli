@@ -21,12 +21,18 @@
  * make on its own: a human or the PM says so with `--force`, and that is
  * written down.
  */
-import { appendFileSync, mkdirSync, readFileSync, realpathSync, rmSync } from 'node:fs';
-import { hostname, userInfo } from 'node:os';
+import { appendFileSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { mcHome, workRoot } from './paths.js';
-import { repoFileSlug, writeJsonAtomic } from './repo-snapshot.js';
+import { writeJsonAtomic } from './atomic-write.js';
+import { mcHome } from './paths.js';
+import { repoFileSlug } from './repo-snapshot.js';
+import { currentHolder } from './work-identity.js';
+
+// Who holds a lease is the same question as who sends a message, so the rule
+// lives in one place now (`work-identity.js`). Re-exported because the lease
+// was where it started and callers know it by this door.
+export { currentHolder };
 
 export const LEASE_SCHEMA = 'mc-repo-lease';
 export const LEASE_VERSION = 1;
@@ -41,35 +47,6 @@ export function leasePath(repoPath, root = mcHome()) {
 
 export function leaseLogPath(root = mcHome()) {
   return join(leaseRoot(root), 'leases.log');
-}
-
-/**
- * Who is asking.
- *
- * A work area is the unit that holds a lease, because that is the unit that
- * does a round: one directory, one branch per repository, one conversation
- * (or a few) working on one thing. The area is read from the working
- * directory rather than declared, so nobody can hold a lease under a name
- * they are not working in.
- *
- * Outside the work root — Martin's own shell, a script — the holder is the
- * person at the keyboard. That is honest about what it is, and it is exactly
- * who `--force` exists for.
- */
-export function currentHolder({ cwd = process.cwd(), env = process.env } = {}) {
-  // Both sides resolved: a shell's working directory comes back through the
-  // symlinks the temporary and home directories are made of on macOS, and a
-  // string comparison against the unresolved work root said "not in a work
-  // area" for a directory plainly inside one.
-  const root = canonical(workRoot(env));
-  const here = canonical(cwd);
-  if (here === root || here.startsWith(`${root}/`)) {
-    const [area] = here.slice(root.length + 1).split('/').filter(Boolean);
-    if (area) return { name: area, kind: 'work-area' };
-  }
-  let who = 'someone';
-  try { who = `${userInfo().username}@${hostname()}`; } catch { /* nameless shell */ }
-  return { name: who, kind: 'shell' };
 }
 
 /** Who holds this repository, and for how long — or nobody. */
@@ -88,10 +65,6 @@ export function readLease(repoPath, { root = mcHome(), now = Date.now() } = {}) 
     since: raw.since,
     age_ms: Math.max(0, now - since),
   };
-}
-
-function canonical(path) {
-  try { return realpathSync(path); } catch { return path; }
 }
 
 function free() {

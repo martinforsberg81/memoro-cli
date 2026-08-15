@@ -29,6 +29,7 @@ started in it. mc stores nothing else, because nothing else is mc's to know.
 | `mc work remove <name> <repo>` | Take one repository out of it. |
 | `mc work release <name> [--apply]` | Remove what git says can go; keep the rest. |
 | `mc work discard <name> [repo] [--apply]` | Throw it away — worktrees, branches, and all. |
+| `mc work send <name> "<text>"` | A message into that work's `inbox/`, then a nudge to whatever is running there. `--json`. |
 | `mc work stop <name>` | Stop what is running there; keep the work. |
 | `mc work list` | The same listing as bare `mc work`. |
 | `mc worker <name> [task]` | A project folder that carries the worker role. |
@@ -74,9 +75,13 @@ it with `--force`, which the lease log keeps. The lease is one file under
 | `mc sessions send <name> <text>` | Write to that terminal. |
 | `mc sessions read <name> [--last N]` | Read its bounded current screen. |
 
-These resolve through the session model below, not through work areas. A work
-area cannot be addressed with `mc sessions send`; to talk to one started with
-`--tmux`, use `tmux send-keys -t mc-<name>`.
+These resolve through the session model below, not through work areas. To
+reach a work area, use `mc work send <name> "<text>"`: it writes the message
+into that area's `inbox/` first and only then tries to wake whatever is
+running there, so a busy, stopped, or never-started conversation costs latency
+and never the message. The waking is a real turn — text and Enter as separate
+keystrokes, with the submission verified against the pane and retried once —
+so a message can never end up half-typed into somebody's prompt.
 
 ## Setup and capabilities
 
