@@ -39,12 +39,6 @@ export function listWorkAreas(env = process.env, options = {}) {
 }
 
 /**
- * `conversations: false` and `git: false` leave those lookups out. Both cost
- * real time — a sqlite query and a directory walk for the first, four git
- * commands per checkout for the second — and a caller that is about to ask
- * for every area at once should ask once rather than once per area.
- */
-/**
  * Directories that belong to the work rather than being work.
  *
  * `inbox/` is where the channel drops messages (`mc work send`) and
@@ -57,6 +51,12 @@ export function listWorkAreas(env = process.env, options = {}) {
  */
 export const FILING_DIRECTORIES = Object.freeze(['inbox', 'handoff']);
 
+/**
+ * `conversations: false` and `git: false` leave those lookups out. Both cost
+ * real time — a sqlite query and a directory walk for the first, four git
+ * commands per checkout for the second — and a caller that is about to ask
+ * for every area at once should ask once rather than once per area.
+ */
 export function inspectWorkArea(name, env = process.env, { conversations = true, git: askGit = true } = {}) {
   const path = workAreaPath(name, env);
   const worktrees = [];
