@@ -15,11 +15,17 @@
  * `drawAfter` makes it slow to paint: the first N captures show an empty box
  * even though the text is in it, which is a loaded TUI seen from outside — and
  * the reason a single glance at the prompt was not enough.
+ *
+ * `busyFor` makes those first N captures say so, the way a streaming TUI does
+ * — the difference between a pane that is working and one that is gone.
+ *
+ * `C-u` clears the prompt here as it does in a real one, so a test can assert
+ * that a wake mc gave up on left nothing behind.
  */
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-export function installTmuxStub(root, { mode = 'reliable', alive = [], drawAfter = 0 } = {}) {
+export function installTmuxStub(root, { mode = 'reliable', alive = [], drawAfter = 0, busyFor = 0 } = {}) {
   const bin = join(root, 'bin');
   const state = join(root, 'tmux-state');
   mkdirSync(bin, { recursive: true });
@@ -50,6 +56,10 @@ case "$1" in
       printf '%s' "$5" >> "${prompt}"
       exit 0
     fi
+    if [ "$4" = "C-u" ]; then
+      : > "${prompt}"
+      exit 0
+    fi
     if [ "$4" = "Enter" ]; then
       mode=\`cat "${modePath}"\`
       case "$mode" in
@@ -72,6 +82,7 @@ case "$1" in
     printf '%s\\n' "$seen" > "${captures}"
     if [ "$seen" -le "${drawAfter}" ]; then shown=""; else shown=\`cat "${prompt}"\`; fi
     cat "${screen}"
+    if [ "$seen" -le "${busyFor}" ]; then printf '%s\\n' "  * Thinking… (esc to interrupt)"; fi
     printf '%s\\n' "+------------------------------+"
     printf '| > %s\\n' "$shown"
     printf '%s\\n' "+------------------------------+"

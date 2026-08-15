@@ -170,6 +170,31 @@ export function attachBackground(target, { run = null, env = process.env } = {})
   return { ok: !result?.error, code: result?.status ?? 0, reason: result?.error?.message };
 }
 
+/**
+ * What a session mc creates should feel like when somebody attaches to it.
+ *
+ * These are comfort, not plumbing: a person who attaches expects the wheel to
+ * scroll and does not expect a green bar across the bottom announcing a tmux
+ * they never asked for. Set on the session — `-t <target>` — and never with
+ * `-g`. The user's own tmux, and their own sessions, are theirs; mc changing a
+ * global option would reach every session on the machine, which is a thing a
+ * tool has no business doing to fix the look of its own.
+ *
+ * `history-limit` is the honest exception, and it is set anyway. tmux fixes a
+ * pane's scrollback when the pane is created, so this does not enlarge the one
+ * `new-session` just made — verified against tmux 3.6b: the first pane stays
+ * at 2000 while a window opened later in the same session gets 50000. It is
+ * here because it costs nothing, it is right for every pane opened in the
+ * session afterwards, and the alternative — creating the session, setting the
+ * option, then respawning the pane — throws away the pane's history to buy
+ * scrollback, which is the wrong trade.
+ */
+const SESSION_OPTIONS = Object.freeze([
+  ['mouse', 'on'],
+  ['status', 'off'],
+  ['history-limit', '50000'],
+]);
+
 export function startInBackground({
   name,
   areaRoot,
@@ -224,6 +249,10 @@ export function startInBackground({
   if (created.status !== 0) {
     return { ok: false, reason: (created.stderr || 'tmux refused to start it').trim() };
   }
+  // Straight after creation, and the result is not checked: a session that
+  // runs but kept its status bar is a working session, and refusing to start a
+  // conversation over the look of it would be the tail wagging the dog.
+  for (const [option, value] of SESSION_OPTIONS) tmux(['set-option', '-t', target, option, value]);
   log('work.background-start', {
     area: areaRoot,
     target,

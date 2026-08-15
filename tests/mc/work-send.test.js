@@ -30,14 +30,14 @@ const SAFE_PATH = '/usr/bin:/bin:/usr/sbin:/sbin';
  * A work root with two pieces of work in it, and a tmux that does what the
  * test needs it to do.
  */
-function fixture({ mode = 'reliable', alive = [], drawAfter = 0 } = {}) {
+function fixture({ mode = 'reliable', alive = [], drawAfter = 0, busyFor = 0 } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'mc-work-send-'));
   const workRoot = join(root, 'work');
   const mcHome = join(root, 'home');
   mkdirSync(join(workRoot, 'pm'), { recursive: true });
   mkdirSync(join(workRoot, 'alpha'), { recursive: true });
   mkdirSync(mcHome, { recursive: true, mode: 0o700 });
-  const tmux = installTmuxStub(root, { mode, alive, drawAfter });
+  const tmux = installTmuxStub(root, { mode, alive, drawAfter, busyFor });
 
   return {
     root,
@@ -161,6 +161,23 @@ describe('mc work send — the channel', () => {
     } finally { fx.cleanup(); }
   });
 
+  it('a conversation mid-answer is waited for past the ordinary budget', () => {
+    // A streaming TUI does not repaint its input box until it pauses, so the
+    // notice is there and invisible for as long as the answer runs — well past
+    // the five looks a quiet pane gets. And the recipient of a message is
+    // exactly the session likeliest to be busy: it is doing the work being
+    // written to it about.
+    const fx = fixture({ alive: ['pm'], drawAfter: 8, busyFor: 8 });
+    try {
+      const sent = runMcCli(['work', 'send', 'pm', 'wake up'], fx.env, { cwd: join(fx.workRoot, 'alpha') });
+      assert.equal(sent.status, 0, sent.stderr);
+      assert.match(sent.stdout, /woke pm/u);
+      assert.ok(fx.tmux.captures() > 5, `gave up at ${fx.tmux.captures()} captures`);
+      assert.equal(fx.tmux.submitted().length, 1);
+      assert.equal(fx.tmux.prompt(), '');
+    } finally { fx.cleanup(); }
+  });
+
   it('a pane that never shows the text is given up on, and says so', () => {
     // The other half of the same judgement: waiting is not waiting forever.
     // Delivered, not woken — and the file is in the inbox either way.
@@ -203,6 +220,12 @@ describe('mc work send — the channel', () => {
       assert.match(fx.read('pm'), /wake up/u);
       // It tried twice and then stopped rather than hammering the pane.
       assert.equal(fx.tmux.calls().filter((line) => line.endsWith('Enter')).length, 2);
+      // And it left the recipient's prompt as it found it. A notice abandoned
+      // in the input box is not litter — it goes in in front of whatever that
+      // conversation types next, so a wake mc knew had failed would have
+      // corrupted the very turn it failed to start.
+      assert.equal(fx.tmux.prompt(), '');
+      assert.equal(fx.tmux.calls().filter((line) => line.endsWith('C-u')).length, 1);
     } finally { fx.cleanup(); }
   });
 

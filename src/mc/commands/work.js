@@ -560,6 +560,10 @@ export async function openArea(name, opts, { stdout, stderr }) {
     if (!opts.task) stdout.write('mc: it has no task — send it one, or it will sit there\n');
     stdout.write(`mc: watch with  mc status\n`);
     stdout.write(`mc: talk to it  tmux send-keys -t ${started.target} "..." Enter\n`);
+    // The one way in that is not a tmux incantation. Worth saying here: this
+    // is where somebody learns the session exists, and the way out of an
+    // attached session is the part nobody guesses.
+    stdout.write(`mc: sit with it mc work ${name}  —  ctrl-b d leaves it running\n`);
     return 0;
   }
 
