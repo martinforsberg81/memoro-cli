@@ -19,6 +19,16 @@
  * together lands the text in the prompt without submitting it often enough
  * that people had learned to press Enter twice — a habit, in every sender's
  * fingers, standing in for a fix.
+ *
+ * And waking types into somebody else's input box, which is why it now looks
+ * before it types and asks first. Two things seen in real use: a notice left
+ * behind by an earlier failed wake and a new one were pasted together and went
+ * in as a single sentence; and the pane a person was attached to took a wake
+ * while a half-written question of theirs was sitting in the box — where the
+ * cleanup keystroke would have deleted it. So: a pane with a client attached is
+ * never woken, a pane whose box is not visibly empty is never woken, the
+ * cleanup only ever touches text mc can prove it typed itself, and waking at
+ * all is something the sender asks for rather than something that happens.
  */
 import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
@@ -47,31 +57,26 @@ const DRAW_ATTEMPTS = 5;
 const SUBMIT_MS = 400;
 
 /**
- * How many rows sit below the line being typed while it is still in the box.
+ * How the input box is recognised.
  *
- * The box is a border, the line, a border, and a hint — so text still waiting
- * to be sent has two or three rows under it (one more if it wrapped), and
- * text that has been sent has the whole box under it instead. That difference
- * is how a submission is recognised, and it does not depend on guessing how
- * tall a pane is.
+ * A drawn rule — a run of dashes with nothing readable on the row — is the
+ * border, matched by shape rather than by which characters a particular TUI
+ * draws with. The box is the two lowest rules in the pane and everything
+ * between them, and its first row carries the prompt mark. Finding it by its
+ * borders rather than by that mark is what makes a wrapped line work: the
+ * continuation rows have no mark of their own, and looking for the mark alone
+ * finds the last row of a wrap instead of the whole of it.
  *
- * Set to lean the safe way. Read a sent notice as still-waiting and mc presses
- * Enter once more (an empty line, harmless) and reports that it could not
- * wake; read a waiting one as sent and mc claims a wake that never happened,
- * which is the one outcome this whole function exists to prevent.
+ * `BOX_ROWS` and `BELOW_BOX` keep the search near the foot of the pane, so a
+ * box drawn earlier in the conversation and scrolled up can never be read as
+ * the one somebody is typing into. They are generous enough for a notice that
+ * wrapped a few times and a TUI with a second row of hints under its box.
  */
-const BOX_DEPTH = 4;
-
-/**
- * What to look for in the pane — ASCII on purpose.
- *
- * The notice is Swedish, and against a real tmux the first version of this
- * matched on its tail: `läs det nu`. A pane that renders or re-encodes those
- * letters differently — and one did, in the first live test — turns a wake
- * that plainly worked into a reported failure. The path in the notice is the
- * one part of it that no encoding can bend.
- */
-const MARKER = 'inbox/';
+const RULE = /^[^A-Za-z0-9]*[-─═+]{3,}[^A-Za-z0-9]*$/u;
+const PROMPT_ROW = /^\s*(?:[|│]\s*)?[>❯»]\s?/u;
+const BOX_EDGE = /^\s*[|│]\s?/u;
+const BOX_ROWS = 8;
+const BELOW_BOX = 3;
 
 /**
  * The pane is mid-answer, and that is not the same as unresponsive.
@@ -94,13 +99,18 @@ export function inboxPath(areaPath) {
 }
 
 /**
- * Deliver a message, then try to wake the recipient.
+ * Deliver a message, and knock only if asked to.
  *
  * The one failure that loses a message is an area that does not exist, and
  * that is reported as an error. Everything else — no conversation running, a
  * conversation that will not take the keystroke, no tmux on the machine at
  * all — leaves the file where the recipient's boot sequence will read it, and
  * says which of those happened.
+ *
+ * `wake` is off by default, and that is the point rather than a default worth
+ * arguing about. Typing into a pane is the one thing in here that can damage
+ * something outside mc, so it happens when a sender says it should and not as
+ * a free extra on every send. The file is the delivery; the knock is latency.
  */
 export function sendToArea({
   name,
@@ -110,7 +120,7 @@ export function sendToArea({
   now = new Date(),
   run = null,
   sleep = null,
-  wake = true,
+  wake = false,
 } = {}) {
   const area = inspectWorkArea(name, env, { conversations: false, git: false });
   if (!area.exists) return { ok: false, reason: 'no-such-area' };
@@ -122,7 +132,17 @@ export function sendToArea({
   if (!target) return { ok: true, file, woke: false, reason: 'no-live-conversation' };
 
   const woken = wakeConversation({ target, sender: sender.name, run, sleep });
-  return { ok: true, file, woke: woken.ok, reason: woken.ok ? null : woken.reason, target };
+  return {
+    ok: true,
+    file,
+    target,
+    woke: woken.ok,
+    reason: woken.ok ? null : woken.reason,
+    guard: Boolean(woken.guard),
+    // Only meaningful once something was typed: false says the notice is still
+    // sitting in the recipient's box, because mc would not take it back out.
+    left: woken.left ?? false,
+  };
 }
 
 /**
@@ -160,45 +180,90 @@ function freePath(directory, at, sender) {
 }
 
 /**
+ * The notice — ASCII, on purpose, and short.
+ *
+ * Short so it does not wrap in an ordinary pane. ASCII because everything
+ * below turns on comparing what is in the box against this string exactly:
+ * that is what lets mc say "this text is mine" before it deletes anything. A
+ * pane that re-encodes `ä` or an em dash — one did, in the first live test —
+ * would turn every such comparison into "not mine", so the notice is written
+ * out of characters no terminal has an opinion about.
+ */
+function noticeFrom(sender) {
+  return `mc: new in inbox/ from ${sender} - read it now`;
+}
+
+/**
  * Wake a conversation, and know whether it woke.
  *
- * Three deliberate steps. The text goes in literally (`send-keys -l`), so a
- * message containing words tmux reads as key names — Enter, Escape, C-c —
- * cannot turn into keystrokes. Then the pane is watched until the text
- * appears in the prompt, because a busy TUI can take a second to paint and
- * "not yet" must not be mistaken for "never". Enter follows as its own call.
- * Then the pane is read back once more: if the notice is still sitting at the
- * foot of the screen it was never submitted, so Enter is pressed again and
- * the pane read again.
+ * It asks two questions before it types a character, because the input box it
+ * is about to type into belongs to somebody else:
  *
- * If it still has not gone in, that is reported rather than assumed. A
- * message stuck unsent in somebody's prompt looks exactly like a delivered
- * one to the sender, and that is the failure this whole function exists to
- * make impossible.
+ *  1. is anybody attached? `tmux list-clients` answers it. A pane a person is
+ *     sitting at is never woken — they are already here, the notice is noise,
+ *     and the cleanup keystroke would land on their half-written sentence.
+ *  2. is the box empty, and can mc see that it is? Anything already in there —
+ *     someone's draft, a notice an earlier wake gave up on — makes this wake
+ *     refuse, because typing after it produces one pasted-together sentence.
+ *     A pane whose box mc cannot find at all counts as "not empty": not seeing
+ *     it is not the same as it being clear.
+ *
+ * Then the three steps that were always here. The text goes in literally
+ * (`send-keys -l`), so a message containing words tmux reads as key names —
+ * Enter, Escape, C-c — cannot turn into keystrokes. The pane is watched until
+ * the box holds the notice and nothing else, because a busy TUI can take a
+ * second to paint and "not yet" must not be mistaken for "never". Enter
+ * follows as its own call, and the pane is read back to see the box go empty.
+ *
+ * Every exit that is not a submission has to decide what to do with the notice
+ * it left behind, and the rule is narrow: `C-u` clears the whole line, so it is
+ * pressed only when the last thing mc read out of that box was its own notice
+ * and nothing else. Otherwise the line is left exactly as it is and the sender
+ * is told it was. Litter is a nuisance — and the next wake refuses on it rather
+ * than pasting onto it — while deleting a sentence somebody was writing is not.
  */
 export function wakeConversation({ target, sender, run = null, sleep = null }) {
   const tmux = run || ((args) => spawnSync('tmux', args, { encoding: 'utf8' }));
   const wait = sleep || ((ms) => { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); });
-  // Kept short so it does not wrap in an ordinary 80-column pane: a wrapped
-  // notice pushes the row mc looks for further from the bottom.
-  const notice = `mc: nytt i inbox/ från ${sender} — läs nu`;
+  const notice = noticeFrom(sender);
+
+  // Refused before anything was typed: nothing was touched, so there is
+  // nothing to take back and nothing for the sender to worry about.
+  const refuse = (reason) => ({ ok: false, guard: true, reason });
+
+  const clients = tmux(['list-clients', '-t', target, '-F', '#{client_name}']);
+  if (clients?.status !== 0) return refuse('could not tell whether anybody is attached to it');
+  if (String(clients.stdout || '').trim() !== '') return refuse('somebody is attached to it');
+
+  // Read last, immediately before typing: whatever gap remains between looking
+  // and typing is the gap, and there is no reason to make it any wider.
+  const before = readPane(tmux, target);
+  if (before === null) return refuse('could not read the conversation');
+  const box = promptText(before);
+  if (box === null) return refuse('could not find its prompt to check it was empty');
+  if (box !== '') return refuse('there is already something in its prompt');
 
   const typed = tmux(['send-keys', '-t', target, '-l', notice]);
   if (typed?.status !== 0) return { ok: false, reason: 'could not type into the conversation' };
 
-  // From here the notice is in somebody's input box, and every way out of this
-  // function that is not a submission has to take it back out again. Left
-  // there it is not merely litter: it sits in front of whatever that person
-  // types next and goes in as part of their sentence, so a wake mc knew had
-  // failed would corrupt the turn it failed to start.
-  const giveUp = (reason) => {
-    tmux(['send-keys', '-t', target, 'C-u']);
-    return { ok: false, reason };
+  // From here the notice is in somebody's input box. `proof` is the last thing
+  // mc actually read out of that box; the line is cleared only when that is the
+  // notice by itself, and `left` says which of the two happened.
+  const giveUp = (reason, proof) => {
+    const mine = proof !== null && isNotice(proof, notice);
+    if (mine) tmux(['send-keys', '-t', target, 'C-u']);
+    return { ok: false, reason, left: !mine };
   };
 
-  // Did the text land at all? A pane that is not a prompt — a tool that has
-  // exited, a shell running something — takes the keystrokes and shows
-  // nothing, and pressing Enter at that would report a wake that never was.
+  // `seen` is the last thing mc actually read out of that box, and the only
+  // warrant it has for clearing the line. A look that fails, or a box that
+  // cannot be found, puts it back to null: not knowing what is in there is
+  // itself the reason to leave it alone.
+  let seen = null;
+
+  // Did the text land, and is it still alone in there? A pane that is not a
+  // prompt takes the keystrokes and shows nothing, and pressing Enter at that
+  // would report a wake that never was.
   //
   // Asked several times, because "not drawn yet" and "never arrived" look
   // identical in a single glance and only one of them is worth giving up on.
@@ -209,40 +274,42 @@ export function wakeConversation({ target, sender, run = null, sleep = null }) {
   for (let attempt = 0; attempt < BUSY_ATTEMPTS && !landed; attempt += 1) {
     wait(DRAW_MS);
     const pane = readPane(tmux, target);
-    if (pane === null) return giveUp('could not read the conversation back');
-    landed = inPrompt(pane);
-    if (landed) break;
+    if (pane === null) return giveUp('could not read the conversation back', null);
+    seen = promptText(pane);
+    if (seen === null) return giveUp('lost sight of its prompt', null);
+    if (isNotice(seen, notice)) { landed = true; break; }
+    // Anything other than the notice or an empty box means somebody is typing
+    // in there — the box was checked empty a moment ago, so the extra words are
+    // theirs. Their line is not mc's to submit and not mc's to clear.
+    if (seen !== '') return giveUp('somebody started typing', seen);
     quiet = busy(pane) ? 0 : quiet + 1;
     if (quiet >= DRAW_ATTEMPTS) break;
   }
-  if (!landed) return giveUp('the text never reached the prompt');
+  if (!landed) return giveUp('the text never reached the prompt', null);
 
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const pressed = tmux(['send-keys', '-t', target, 'Enter']);
-    if (pressed?.status !== 0) return giveUp('could not press Enter');
+    if (pressed?.status !== 0) return giveUp('could not press Enter', seen);
     wait(SUBMIT_MS);
+    // A look that failed puts the warrant back to nothing. The box was mc's
+    // notice a moment ago and an Enter has gone in since; whether it is still
+    // there, gone, or somebody else's now is exactly what could not be read.
     const pane = readPane(tmux, target);
-    if (pane === null) return giveUp('could not read the conversation back');
-    if (!inPrompt(pane)) return { ok: true, attempts: attempt + 1 };
+    if (pane === null) return giveUp('could not read the conversation back', null);
+    const now = promptText(pane);
+    if (now === null) return giveUp('lost sight of its prompt', null);
+    if (now === '') return { ok: true, attempts: attempt + 1 };
+    seen = now;
+    if (!isNotice(now, notice)) return giveUp('somebody started typing', now);
   }
-  return giveUp('it stayed in the prompt');
+  return giveUp('it stayed in the prompt', seen);
 }
 
 /**
- * Is the notice still sitting in the input box, rather than sent?
+ * The pane as rows of text, or `null` if it could not be read at all.
  *
- * Told apart by how far off the bottom it is. Waiting to be sent, it has the
- * rest of the box under it — two or three rows. Sent, it is a turn with the
- * whole empty box beneath it, and further up still as the conversation goes
- * on. Reading a fixed number of lines instead got this wrong in both
- * directions: too few and a wrapped line disappears, too many and the turn it
- * became is mistaken for a line never sent.
- *
- * Read once, asked twice: whether the notice is still waiting and whether the
- * pane is busy come from the same capture, so a look costs one tmux call.
- *
- * `null` from `readPane` means the pane could not be read at all, which is
- * neither answer.
+ * Read once, asked several times: what is in the box and whether the pane is
+ * busy come from the same capture, so a look costs one tmux call.
  */
 function readPane(tmux, target) {
   const pane = tmux(['capture-pane', '-t', target, '-p']);
@@ -252,10 +319,42 @@ function readPane(tmux, target) {
   return String(pane.stdout || '').replace(/\s+$/u, '').split('\n');
 }
 
-function inPrompt(lines) {
-  const last = lines.findLastIndex((line) => line.includes(MARKER));
-  if (last === -1) return false;
-  return lines.length - 1 - last < BOX_DEPTH;
+/**
+ * What is in the input box right now — `''` for empty, `null` for "no box mc
+ * can find", which is not the same answer and must never be treated as one.
+ *
+ * Found from the bottom by its two borders, and everything between them is
+ * what is in it — including the rows a wrapped line spilled onto, which is why
+ * a notice too long for the pane reads back as one string rather than as its
+ * last fragment. A turn that was already submitted sits above the whole box,
+ * so it is never what this finds; a pane with no box at all — a shell, a tool
+ * that has exited — answers `null`, and so does one drawn in a shape mc does
+ * not recognise. Refusing to wake on that is the point: a box mc cannot read
+ * is a box it cannot promise is empty.
+ */
+function promptText(lines) {
+  const bottom = lines.findLastIndex((line) => RULE.test(line));
+  if (bottom === -1 || lines.length - 1 - bottom > BELOW_BOX) return null;
+  const top = lines.slice(0, bottom).findLastIndex((line) => RULE.test(line));
+  if (top === -1 || bottom - top - 1 > BOX_ROWS) return null;
+
+  const [first, ...rest] = lines.slice(top + 1, bottom);
+  if (first === undefined || !PROMPT_ROW.test(first)) return null;
+  return [first.replace(PROMPT_ROW, ''), ...rest.map((line) => line.replace(BOX_EDGE, ''))]
+    .join(' ')
+    .trim();
+}
+
+/**
+ * Is what is in the box mc's own notice, and only that?
+ *
+ * Whitespace is ignored on both sides, because a box narrower than the notice
+ * wraps it and a wrap is a line break mc did not type. Everything else has to
+ * match: a notice with one more word after it is somebody's sentence now.
+ */
+function isNotice(text, notice) {
+  const bare = (value) => value.replace(/\s+/gu, '');
+  return bare(text) === bare(notice);
 }
 
 /** Is it mid-answer? Leans toward yes: the cost of waiting is only waiting. */

@@ -9,7 +9,7 @@
  *   mc work <name>                open it, asking only what it cannot know
  *   mc work <name> new            a new conversation
  *   mc work <name> <id>           one particular conversation
- *   mc work send <name> "<message>"  a message into its inbox, and a nudge
+ *   mc work send <name> "<message>"  a message into its inbox; --wake knocks
  *   mc work add <name> <repo> [branch] [--from <ref>]
  *   mc work stop <name>              stop what is running; keep the work
  *   mc work remove <name> <repo>
@@ -59,7 +59,7 @@ export async function run(argv, deps = {}) {
     stderr.write(`mc: ${opts.error}\n`);
     stderr.write('usage — mc work\n');
     stderr.write('        mc work <name> [new | <conversation id>] [--repo <repo>] [--codex|--claude] [--model <model>]\n');
-    stderr.write('        mc work send <name> "<message>" [--json]\n');
+    stderr.write('        mc work send <name> "<message>" [--wake] [--json]\n');
     stderr.write('        mc work add <name> <repo> [branch] [--from <ref>]\n');
     stderr.write('        mc work remove <name> <repo>\n');
     stderr.write('        mc work stop <name>\n');
@@ -108,7 +108,7 @@ async function runVerb(opts, { stdout, stderr }) {
   // that will not take the keystroke, costs the recipient latency and never
   // costs the sender the message.
   if (opts.verb === 'send') {
-    const result = sendToArea({ name: opts.name, message: opts.message });
+    const result = sendToArea({ name: opts.name, message: opts.message, wake: opts.wake });
     if (!result.ok) {
       stderr.write(`mc: nothing called "${opts.name}" under ${workRoot()}\n`);
       return 1;
@@ -118,12 +118,22 @@ async function runVerb(opts, { stdout, stderr }) {
       return 0;
     }
     stdout.write(`mc: ${result.file}\n`);
+    // Every outcome says something. A knock that did not happen is not a
+    // silence: the sender has to know the file is there and that nobody was
+    // tapped on the shoulder, or they will sit waiting for an answer.
     if (result.woke) {
       stdout.write(`mc: woke ${opts.name} — it has been told to read its inbox\n`);
+    } else if (result.reason === 'not-asked') {
+      stdout.write(`mc: nobody was woken — ${opts.name} reads it at its next turn (--wake knocks)\n`);
     } else if (result.reason === 'no-live-conversation') {
       stdout.write(`mc: nothing is running in ${opts.name} — it reads its inbox when it starts\n`);
+    } else if (result.guard) {
+      stdout.write(`mc: delivered, but did not knock: ${result.reason}\n`);
     } else {
       stdout.write(`mc: delivered to the inbox, but could not wake it (${result.reason})\n`);
+    }
+    if (result.left) {
+      stdout.write(`mc: the notice is still in ${opts.name}'s prompt — mc will not clear a line it cannot prove is its own\n`);
     }
     return 0;
   }
@@ -671,14 +681,14 @@ function describe(worktree) {
 
 export function parseArgs(argv) {
   const scanned = scanArgs(argv, {
-    booleans: ['--json', '--apply', '--tmux'],
+    booleans: ['--json', '--apply', '--tmux', '--wake'],
     values: ['--repo', '--from'],
     strictValues: ['--model'],
     toolSugar: true,
   });
   const opts = {
     verb: 'list', name: null, repo: scanned.flags.repo, branch: null, pick: null, message: null,
-    from: scanned.flags.from, tmux: scanned.flags.tmux, task: null,
+    from: scanned.flags.from, tmux: scanned.flags.tmux, task: null, wake: scanned.flags.wake,
     tool: scanned.flags.tool, model: scanned.flags.model,
     apply: scanned.flags.apply, json: scanned.flags.json,
   };

@@ -29,7 +29,7 @@ started in it. mc stores nothing else, because nothing else is mc's to know.
 | `mc work remove <name> <repo>` | Take one repository out of it. |
 | `mc work release <name> [--apply]` | Remove what git says can go; keep the rest. |
 | `mc work discard <name> [repo] [--apply]` | Throw it away — worktrees, branches, and all. |
-| `mc work send <name> "<text>"` | A message into that work's `inbox/`, then a nudge to whatever is running there. `--json`. |
+| `mc work send <name> "<text>"` | A message into that work's `inbox/`. `--wake` also knocks on whatever is running there. `--json`. |
 | `mc work stop <name>` | Stop what is running there; keep the work. |
 | `mc work list` | The same listing as bare `mc work`. |
 | `mc worker <name> [task]` | A project folder that carries the worker role. |
@@ -77,11 +77,20 @@ it with `--force`, which the lease log keeps. The lease is one file under
 
 These resolve through the session model below, not through work areas. To
 reach a work area, use `mc work send <name> "<text>"`: it writes the message
-into that area's `inbox/` first and only then tries to wake whatever is
-running there, so a busy, stopped, or never-started conversation costs latency
-and never the message. The waking is a real turn — text and Enter as separate
-keystrokes, with the submission verified against the pane and retried once —
-so a message can never end up half-typed into somebody's prompt.
+into that area's `inbox/`, so a busy, stopped, or never-started conversation
+costs latency and never the message.
+
+Knocking on the running conversation is a separate thing, asked for with
+`--wake`, because it types into an input box that belongs to somebody else. It
+refuses on a pane a tmux client is attached to, and on a pane whose input box
+is not visibly empty — whoever put the text there, including a notice an
+earlier wake gave up on. The notice goes in as text and Enter as separate
+keystrokes, with the submission verified against the pane and retried once, so
+a message can never end up half-typed into somebody's prompt; and the cleanup
+that takes an unsent notice back out is pressed only on a line mc has just read
+and can prove holds nothing but its own notice. Every refusal is printed —
+which guard fired and why — because the file is delivered either way and the
+sender has to know nobody was tapped on the shoulder.
 
 ## Setup and capabilities
 
