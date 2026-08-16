@@ -545,13 +545,61 @@ test('enumerates 1,000 bounded session homes without consulting runtime state', 
     writeSessionFixture(mcHomeDir, index);
   }
 
+  // What plain catalog reading costs on this machine at this moment: stat each
+  // home, read the three files an enumeration has to read. Measured here, next
+  // to the thing it is compared against, so a loaded machine slows both.
+  //
+  // Deliberately first. It pays the cold-cache cost and the enumeration reads
+  // warm, which can only make the ratio look smaller than it is — the safe
+  // direction. Measured the other way round the bias would land on the side
+  // that fails a test for nothing.
+  const referenceStarted = performance.now();
+  let bytes = 0;
+  for (let index = 1; index <= 1000; index += 1) {
+    const paths = sessionHomePaths({ mcHomeDir, mcSessionId: sessionId(index) });
+    lstatSync(paths.home);
+    for (const path of [paths.identityPath, paths.metadataPath, paths.projectionPath]) {
+      bytes += readFileSync(path, 'utf8').length;
+    }
+  }
+  const reference = performance.now() - referenceStarted;
+  assert.ok(bytes > 0, 'the reference read nothing');
+
   const started = performance.now();
   const listed = listSessionHomesSync({ mcHomeDir });
   const elapsed = performance.now() - started;
   assert.equal(listed.sessions.length, 1000);
   assert.deepEqual(listed.issues, []);
-  assert.ok(elapsed < 5000, `1,000-session enumeration took ${Math.round(elapsed)}ms`);
+
+  // The claim in the title, said as work rather than as seconds. A fixed
+  // millisecond budget measured the machine's load: under a full suite this
+  // enumeration took 35s against a 5s bound and failed for being unlucky.
+  // Consulting runtime state — a process table, a socket, a spawned tool, per
+  // session — does not cost a few more milliseconds, it costs orders of
+  // magnitude, so a bound relative to plain reading still catches every
+  // regression the absolute one was there for.
+  const budget = Math.max(reference * RUNTIME_FREE_FACTOR, 250);
+  assert.ok(
+    elapsed < budget,
+    `enumeration took ${Math.round(elapsed)}ms against ${Math.round(reference)}ms of plain catalog reading `
+    + `(${(elapsed / reference).toFixed(1)}× — budget ${RUNTIME_FREE_FACTOR}×)`,
+  );
 });
+
+/**
+ * How much dearer than plain reading an enumeration may be.
+ *
+ * It does strictly more than the reference — a private-chain inspection per
+ * home and per subdirectory, schema checks on what it reads — so the ratio is
+ * never 1. Measured on this machine it sits at 2.3–3.8×, and the spread is the
+ * same idle and under a full parallel suite while the absolute times move by
+ * a factor of three: that is the whole reason the bound is a ratio.
+ *
+ * Ten leaves room above the worst of that and stays far below what leaving the
+ * filesystem costs — a process spawn or a socket per session is three orders
+ * of magnitude, not a factor of two.
+ */
+const RUNTIME_FREE_FACTOR = 10;
 
 function writeSessionFixture(mcHomeDir, index) {
   const mcSessionId = sessionId(index);

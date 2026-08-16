@@ -834,7 +834,16 @@ describe('defaultSleep', () => {
     const start = Date.now();
     await defaultSleep(150, { cancelled: false });
     const elapsed = Date.now() - start;
+    // The floor is the claim: it waited, rather than taking the cancelled
+    // fast path above. That is this function's own behaviour and it holds on
+    // any machine.
     assert.ok(elapsed >= 140, `slept ${elapsed}ms, want >= 140`);
-    assert.ok(elapsed < 400, `slept ${elapsed}ms, want < 400`);
+    // The ceiling is not. How long a 150ms timer really takes belongs to the
+    // scheduler, and on a loaded machine it overshoots by whatever the machine
+    // feels like — an upper bound near the requested duration tests the load
+    // average, not the code. It is kept far out, where it still catches the
+    // one overrun that would be this function's fault: sleeping in the wrong
+    // unit, 150 seconds for 150 milliseconds.
+    assert.ok(elapsed < 5000, `slept ${elapsed}ms, want < 5000 — wrong unit?`);
   });
 });
