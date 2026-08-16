@@ -108,6 +108,19 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `mc work send` no longer wakes the recipient's conversation as a matter of
+  course: the file goes into `inbox/` and the knock is asked for with `--wake`.
+  Waking types into an input box that belongs to somebody else, so it now
+  refuses on a pane a tmux client is attached to, and on a pane whose box is
+  not visibly empty — anybody's draft, and equally a notice an earlier wake
+  gave up on, which is what used to be pasted onto and submitted as one
+  sentence. The `C-u` that takes an unsent notice back out is pressed only on a
+  line mc has just read and can prove holds nothing but its own notice;
+  otherwise the line is left alone and the sender is told it was. Every
+  refusal is printed with the reason, and carried in `--json` as `guard` and
+  `left`. The notice itself is now ASCII, so comparing the box against it
+  cannot be defeated by a pane that re-encodes non-ASCII characters.
+
 - `mc end` now shows one compact session/worktree/branch/provider-artifact
   status and asks once before permanent teardown. Confirmed or automation-
   consented teardown removes exact ID-verified Codex/Claude transcripts and

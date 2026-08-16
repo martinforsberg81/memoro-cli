@@ -134,10 +134,18 @@ function conversation({ paint }) {
   return { calls, run, prompt: () => typed, captures: () => captures };
 }
 
-const NOTICE = 'mc: nytt i inbox/ från alpha — läs nu';
+const NOTICE = 'mc: new in inbox/ from alpha - read it now';
 const wake = (run) => wakeConversation({ target: 'mc-pm', sender: 'alpha', sleep: () => {}, run });
 
-describe('a wake that failed takes its notice back', () => {
+/**
+ * The keystroke hygiene of a wake that failed: how many, and in what order.
+ *
+ * *Whether* the cleanup is allowed to happen at all is a question about whose
+ * text is in the box, and work-wake-guards.test.js owns that. Here the box
+ * holds mc's own notice throughout, so the answer is yes and what is left to
+ * assert is that mc does it once and last.
+ */
+describe('a wake that failed takes its own notice back', () => {
   it('gives up with exactly one C-u, last, and an empty prompt', () => {
     // The pane never submits: the notice stays in the box however often Enter
     // is pressed, which is the failure this whole path exists to report.
@@ -156,25 +164,11 @@ describe('a wake that failed takes its notice back', () => {
     assert.equal(talk.prompt(), '');
   });
 
-  it('cleans up when the pane never showed the text either', () => {
-    const talk = conversation({ paint: () => pane({ typed: '' }) });
-    const result = wake(talk.run);
-    assert.equal(result.reason, 'the text never reached the prompt');
-    assert.equal(talk.calls.filter((args) => args[3] === 'C-u').length, 1);
-    assert.equal(talk.prompt(), '');
-  });
-
-  it('cleans up when the pane stopped answering mid-wake', () => {
-    const talk = conversation({ paint: ({ captures }) => (captures > 1 ? { status: 1 } : pane({ typed: NOTICE })) });
-    const result = wake(talk.run);
-    assert.equal(result.reason, 'could not read the conversation back');
-    assert.equal(talk.calls.filter((args) => args[3] === 'C-u').length, 1);
-    assert.equal(talk.prompt(), '');
-  });
-
   it('a wake that worked clears nothing — the turn is the recipient\'s now', () => {
+    // Capture one is the look that decides the box is empty; capture two finds
+    // the notice in it; after that the pane shows it as a turn.
     const talk = conversation({
-      paint: ({ typed, captures }) => (captures === 1 ? pane({ typed }) : pane({ sent: [NOTICE] })),
+      paint: ({ typed, captures }) => (captures <= 2 ? pane({ typed }) : pane({ sent: [NOTICE] })),
     });
     const result = wake(talk.run);
     assert.deepEqual(result, { ok: true, attempts: 1 });
@@ -201,19 +195,23 @@ describe('a busy conversation is waited for, not abandoned', () => {
 
   it('but a quiet pane still gets five looks and no more', () => {
     // The bound matters as much as the wait: a pane that is simply not a prompt
-    // must not hold the sender's terminal for the busy budget.
+    // must not hold the sender's terminal for the busy budget. Six captures:
+    // the look that cleared the box to type into, then the five it is worth.
     const talk = conversation({ paint: () => pane({ typed: '' }) });
     const result = wake(talk.run);
     assert.equal(result.reason, 'the text never reached the prompt');
-    assert.equal(talk.captures(), 5);
+    assert.equal(talk.captures(), 6);
   });
 
-  it('and a pane busy forever is given up on, with the prompt left clean', () => {
+  it('and a pane busy forever is given up on, and says what it left behind', () => {
     const talk = conversation({ paint: () => pane({ busy: true }) });
     const result = wake(talk.run);
     assert.equal(result.ok, false);
     assert.equal(result.reason, 'the text never reached the prompt');
-    assert.equal(talk.captures(), 40);
-    assert.equal(talk.prompt(), '');
+    assert.equal(talk.captures(), 41);
+    // A pane that never painted never showed mc its own text, so the line is
+    // not mc's to clear — it says so instead. See work-wake-guards.test.js.
+    assert.equal(result.left, true);
+    assert.equal(talk.prompt(), NOTICE);
   });
 });

@@ -111,7 +111,7 @@ describe('mc work send — the channel', () => {
   it('nothing running there is not an error: the file waits for its boot', () => {
     const fx = fixture();
     try {
-      const sent = runMcCli(['work', 'send', 'pm', 'a report'], fx.env, { cwd: join(fx.workRoot, 'alpha') });
+      const sent = runMcCli(['work', 'send', 'pm', '--wake', 'a report'], fx.env, { cwd: join(fx.workRoot, 'alpha') });
       assert.equal(sent.status, 0, sent.stderr);
       assert.match(sent.stdout, /nothing is running in pm — it reads its inbox when it starts/u);
       assert.equal(fx.messages('pm').length, 1);
@@ -123,13 +123,13 @@ describe('mc work send — the channel', () => {
   it('wakes a live conversation as a real turn — text, then Enter, verified', () => {
     const fx = fixture({ alive: ['pm'] });
     try {
-      const sent = runMcCli(['work', 'send', 'pm', 'wake up'], fx.env, { cwd: join(fx.workRoot, 'alpha') });
+      const sent = runMcCli(['work', 'send', 'pm', '--wake', 'wake up'], fx.env, { cwd: join(fx.workRoot, 'alpha') });
       assert.equal(sent.status, 0, sent.stderr);
       assert.match(sent.stdout, /woke pm/u);
 
       // One turn arrived, and it says where to look — not the message itself.
       assert.equal(fx.tmux.submitted().length, 1);
-      assert.match(fx.tmux.submitted()[0], /nytt i inbox\/ från alpha/u);
+      assert.match(fx.tmux.submitted()[0], /new in inbox\/ from alpha/u);
       assert.equal(fx.tmux.prompt(), '', 'something was left sitting in the prompt');
 
       // Text and Enter were separate keystrokes, and the text went in
@@ -147,7 +147,7 @@ describe('mc work send — the channel', () => {
     // wake that would have worked. Here the pane hides it for three captures.
     const fx = fixture({ alive: ['pm'], drawAfter: 3 });
     try {
-      const sent = runMcCli(['work', 'send', 'pm', 'wake up'], fx.env, { cwd: join(fx.workRoot, 'alpha') });
+      const sent = runMcCli(['work', 'send', 'pm', '--wake', 'wake up'], fx.env, { cwd: join(fx.workRoot, 'alpha') });
       assert.equal(sent.status, 0, sent.stderr);
       assert.match(sent.stdout, /woke pm/u);
       assert.doesNotMatch(sent.stdout, /never reached the prompt/u);
@@ -169,7 +169,7 @@ describe('mc work send — the channel', () => {
     // written to it about.
     const fx = fixture({ alive: ['pm'], drawAfter: 8, busyFor: 8 });
     try {
-      const sent = runMcCli(['work', 'send', 'pm', 'wake up'], fx.env, { cwd: join(fx.workRoot, 'alpha') });
+      const sent = runMcCli(['work', 'send', 'pm', '--wake', 'wake up'], fx.env, { cwd: join(fx.workRoot, 'alpha') });
       assert.equal(sent.status, 0, sent.stderr);
       assert.match(sent.stdout, /woke pm/u);
       assert.ok(fx.tmux.captures() > 5, `gave up at ${fx.tmux.captures()} captures`);
@@ -183,21 +183,23 @@ describe('mc work send — the channel', () => {
     // Delivered, not woken — and the file is in the inbox either way.
     const fx = fixture({ alive: ['pm'], drawAfter: 99 });
     try {
-      const sent = runMcCli(['work', 'send', 'pm', 'wake up'], fx.env, { cwd: join(fx.workRoot, 'alpha') });
+      const sent = runMcCli(['work', 'send', 'pm', '--wake', 'wake up'], fx.env, { cwd: join(fx.workRoot, 'alpha') });
       assert.equal(sent.status, 0, sent.stderr);
       assert.match(sent.stdout, /could not wake it \(the text never reached the prompt\)/u);
       assert.equal(fx.messages('pm').length, 1);
       // It gave up before pressing Enter: an unseen prompt must never be
       // submitted into on faith.
       assert.deepEqual(fx.tmux.calls().filter((line) => line.endsWith('Enter')), []);
-      assert.equal(fx.tmux.captures(), 5);
+      // The look that found the box empty to type into, then the five a quiet
+      // pane is worth.
+      assert.equal(fx.tmux.captures(), 6);
     } finally { fx.cleanup(); }
   });
 
   it('the Enter bug: a swallowed first Enter is retried, and the turn lands', () => {
     const fx = fixture({ alive: ['pm'], mode: 'sticky' });
     try {
-      const sent = runMcCli(['work', 'send', 'pm', 'wake up'], fx.env, { cwd: join(fx.workRoot, 'alpha') });
+      const sent = runMcCli(['work', 'send', 'pm', '--wake', 'wake up'], fx.env, { cwd: join(fx.workRoot, 'alpha') });
       assert.equal(sent.status, 0, sent.stderr);
       assert.match(sent.stdout, /woke pm/u);
 
@@ -211,7 +213,7 @@ describe('mc work send — the channel', () => {
   it('a conversation that will not take it is reported, never assumed', () => {
     const fx = fixture({ alive: ['pm'], mode: 'broken' });
     try {
-      const sent = runMcCli(['work', 'send', 'pm', 'wake up'], fx.env, { cwd: join(fx.workRoot, 'alpha') });
+      const sent = runMcCli(['work', 'send', 'pm', '--wake', 'wake up'], fx.env, { cwd: join(fx.workRoot, 'alpha') });
       // The message is delivered, so this is not a failure — but the sender
       // is told plainly that nobody was woken.
       assert.equal(sent.status, 0, sent.stderr);
@@ -232,7 +234,7 @@ describe('mc work send — the channel', () => {
   it('the message itself never becomes keystrokes', () => {
     const fx = fixture({ alive: ['pm'] });
     try {
-      runMcCli(['work', 'send', 'pm', 'C-c Escape Enter ; kill-server'], fx.env, {
+      runMcCli(['work', 'send', 'pm', '--wake', 'C-c Escape Enter ; kill-server'], fx.env, {
         cwd: join(fx.workRoot, 'alpha'),
       });
       const typed = fx.tmux.calls().join('\n');
@@ -308,29 +310,35 @@ describe('mc work send — the channel', () => {
       return { status: 0, stdout: '' };
     };
 
+    const NOTICE = 'mc: new in inbox/ from alpha - read it now';
+    // Every wake now opens with a look that finds the box empty; the panes
+    // after it are the ones the assertion is about.
+    const empty = pane(['a conversation', ...box('')]);
+
     // Sent: the notice is a turn, with the whole empty box beneath it.
     const sent = wakeConversation({
       target: 'mc-pm',
       sender: 'alpha',
       sleep: () => {},
       run: scripted([
-        pane(['a conversation', ...box('mc: nytt i inbox/ från alpha — läs nu')]),
-        pane(['a conversation', '> mc: nytt i inbox/ från alpha — läs nu', ...box('')]),
+        empty,
+        pane(['a conversation', ...box(NOTICE)]),
+        pane(['a conversation', `> ${NOTICE}`, ...box('')]),
       ]),
     });
     assert.deepEqual(sent, { ok: true, attempts: 1 });
 
     // Still waiting, and wrapped onto a second row — which is what made a
-    // fixed number of lines the wrong rule.
+    // fixed number of lines the wrong rule, and what makes the box's borders
+    // rather than its prompt mark the thing worth finding.
+    const wrapped = pane([
+      'a conversation', '+---------+', '| > mc: new in inbox/', '| from alpha - read it now', '+---------+', '  ? for shortcuts',
+    ]);
     const waiting = wakeConversation({
       target: 'mc-pm',
       sender: 'alpha',
       sleep: () => {},
-      run: scripted([
-        pane(['a conversation', '+---------+', '| > mc: nytt i inbox/', 'från alpha — läs nu', '+---------+', '  ? for shortcuts']),
-        pane(['a conversation', '+---------+', '| > mc: nytt i inbox/', 'från alpha — läs nu', '+---------+', '  ? for shortcuts']),
-        pane(['a conversation', '+---------+', '| > mc: nytt i inbox/', 'från alpha — läs nu', '+---------+', '  ? for shortcuts']),
-      ]),
+      run: scripted([empty, wrapped, wrapped, wrapped]),
     });
     assert.equal(waiting.ok, false);
     assert.equal(waiting.reason, 'it stayed in the prompt');

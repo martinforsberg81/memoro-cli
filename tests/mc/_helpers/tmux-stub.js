@@ -21,11 +21,17 @@
  *
  * `C-u` clears the prompt here as it does in a real one, so a test can assert
  * that a wake mc gave up on left nothing behind.
+ *
+ * `clients` puts somebody at the keyboard: `list-clients` names them, which is
+ * how mc decides a pane is occupied. `typedAlready` puts text in the input box
+ * before mc arrives — a draft, or a notice an earlier wake abandoned.
  */
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-export function installTmuxStub(root, { mode = 'reliable', alive = [], drawAfter = 0, busyFor = 0 } = {}) {
+export function installTmuxStub(root, {
+  mode = 'reliable', alive = [], drawAfter = 0, busyFor = 0, clients = [], typedAlready = '',
+} = {}) {
   const bin = join(root, 'bin');
   const state = join(root, 'tmux-state');
   mkdirSync(bin, { recursive: true });
@@ -38,7 +44,8 @@ export function installTmuxStub(root, { mode = 'reliable', alive = [], drawAfter
   const first = join(state, 'first-enter');
   const captures = join(state, 'captures');
   writeFileSync(log, '');
-  writeFileSync(prompt, '');
+  writeFileSync(prompt, typedAlready);
+  writeFileSync(join(state, 'clients'), clients.join('\n') + (clients.length ? '\n' : ''));
   writeFileSync(screen, 'a conversation\nthat has been going a while\n');
   writeFileSync(modePath, `${mode}\n`);
   writeFileSync(captures, '0\n');
@@ -50,6 +57,10 @@ case "$1" in
   has-session)
     if [ -f "${state}/alive-$3" ]; then exit 0; fi
     exit 1
+    ;;
+  list-clients)
+    cat "${state}/clients"
+    exit 0
     ;;
   send-keys)
     if [ "$4" = "-l" ]; then
@@ -99,6 +110,8 @@ exit 0
     state,
     calls: () => readFileSync(log, 'utf8').split('\n').filter(Boolean),
     captures: () => Number(readFileSync(captures, 'utf8').trim()),
+    /** Keystrokes only — `list-clients` and `capture-pane` are looking, not touching. */
+    keys: () => readFileSync(log, 'utf8').split('\n').filter((line) => line.startsWith('send-keys')),
     prompt: () => readFileSync(prompt, 'utf8'),
     screen: () => readFileSync(screen, 'utf8'),
     /** The turns the conversation actually received. */
