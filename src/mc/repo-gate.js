@@ -356,9 +356,17 @@ function realSuite({ cwd, onLine = () => {}, env = process.env } = {}) {
     // first time this module's own live test tried to gate a repository.
     const clean = { ...env };
     delete clean.NODE_TEST_CONTEXT;
+    // And any reporter the caller's own environment was already asking for.
+    // Node rejects a second `--test-reporter` without a matching destination
+    // (`ERR_INVALID_ARG_VALUE`) and the suite dies before running a thing — so
+    // a gate run from inside a TAP-reported test run could not gate anything.
+    // Found by this gate refusing this module's own pull request.
+    const inherited = String(clean.NODE_OPTIONS || '')
+      .replace(/--test-reporter(-destination)?[=\s]\S+/gu, '')
+      .trim();
     const child = spawn('npm', ['test'], {
       cwd,
-      env: { ...clean, NODE_OPTIONS: `${clean.NODE_OPTIONS || ''} --test-reporter=tap`.trim() },
+      env: { ...clean, NODE_OPTIONS: `${inherited} --test-reporter=tap`.trim() },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
 
