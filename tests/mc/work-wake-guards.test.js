@@ -495,3 +495,96 @@ describe('a wake into a busy pane is not a failed wake', () => {
     assert.equal(talk.prompt(), '');
   });
 });
+
+/**
+ * An empty box is not evidence, and a wrapped turn is still a turn.
+ *
+ * The last way left to claim a wake without proof was an empty input box: a
+ * line cleared by an Escape inside the submit window leaves the box exactly as
+ * empty as a line that went in. Measured against a real idle pane before this
+ * was tightened — three runs, the turn appears above the box 480–520ms after
+ * the notice lands and stays for twenty seconds, while mc looks 400ms after
+ * Enter. The evidence is there to be had, so nothing less is accepted.
+ */
+describe('a wake is claimed only on a turn that appeared', () => {
+  /** A pane with `count` copies of the notice above the box, and `boxText` in it. */
+  const pane2 = (count, boxText, { wrapAt = null } = {}) => {
+    const turns = [];
+    for (let index = 0; index < count; index += 1) {
+      if (wrapAt) {
+        // A pane narrower than the turn breaks it across rows, exactly as a
+        // real one does — no row then contains the notice on its own.
+        turns.push(`  ❯ ${NOTICE.slice(0, wrapAt)}`, `    ${NOTICE.slice(wrapAt)}`);
+      } else {
+        turns.push(`  ❯ ${NOTICE}`);
+      }
+    }
+    return {
+      status: 0,
+      stdout: [
+        '  a conversation', ...turns,
+        '────────────────────────────────',
+        `❯ ${boxText}`,
+        '────────────────────────────────',
+        '  ⏵⏵ auto mode on',
+        '',
+      ].join('\n'),
+    };
+  };
+
+  it('an empty box with no turn above it is not a wake', () => {
+    // Somebody pressed Escape inside the submit window: the notice is gone from
+    // the box and became nothing. Indistinguishable from a submit by the box
+    // alone, which is why the box alone no longer decides.
+    const talk = conversation({
+      paint: ({ typed, captures }) => (captures <= 2 ? pane2(0, typed) : pane2(0, '')),
+    });
+    const result = wake(talk.run);
+
+    assert.equal(result.ok, false, 'it claimed a wake on an empty box alone');
+    assert.equal(result.reason, 'the notice left the prompt without becoming a turn');
+  });
+
+  it('an empty box with the turn above it is a wake', () => {
+    // The ordinary path, and the one the measurement covers: idle pane, plain
+    // submit, turn drawn above the box while the box goes empty.
+    const talk = conversation({
+      paint: ({ typed, captures }) => (captures <= 2 ? pane2(0, typed) : pane2(1, '')),
+    });
+    assert.deepEqual(wake(talk.run), { ok: true, attempts: 1 });
+  });
+
+  it('an older turn does not make an empty box into a wake', () => {
+    // Both halves of the rule at once: the box is empty, and the only notice
+    // above it is the one that was already there before mc typed.
+    const talk = conversation({
+      paint: ({ typed, captures }) => (captures <= 2 ? pane2(1, typed) : pane2(1, '')),
+    });
+    const result = wake(talk.run);
+    assert.equal(result.ok, false);
+    assert.equal(result.reason, 'the notice left the prompt without becoming a turn');
+  });
+
+  it('a turn the pane wrapped is counted as the one turn it is', () => {
+    // A turn is the notice plus a mark, so it is wider than the notice and a
+    // narrow pane breaks it in two. Counted row by row it would vanish, and a
+    // real wake would be reported as a failure in every narrow pane.
+    const talk = conversation({
+      paint: ({ typed, captures }) => (
+        captures <= 2 ? pane2(0, typed) : pane2(1, '', { wrapAt: 22 })
+      ),
+    });
+    assert.deepEqual(wake(talk.run), { ok: true, attempts: 1 });
+  });
+
+  it('counts wrapped turns separately rather than smearing them together', () => {
+    const talk = conversation({
+      paint: ({ typed, captures }) => {
+        if (captures === 1) return pane2(1, '', { wrapAt: 22 });
+        if (captures === 2) return pane2(1, typed, { wrapAt: 22 });
+        return pane2(2, '', { wrapAt: 22 });
+      },
+    });
+    assert.deepEqual(wake(talk.run), { ok: true, attempts: 1 });
+  });
+});

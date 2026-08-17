@@ -16,6 +16,20 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   supervisor device-flow (server API paths, token account) is a separate
   surface and is untouched.
 
+### Changed
+- `mc work send --wake` now claims a wake only when the notice appears above
+  the input box as a turn the conversation took — one more time than before mc
+  typed. An empty box is no longer accepted on its own: a line cleared with
+  Escape inside the submit window leaves it exactly as empty as a line that
+  went in, and that was the last way left to report a wake without evidence.
+  Measured against a real idle pane before the rule was tightened — three runs,
+  sampling every 50ms: the turn appears above the box 480–520ms after the
+  notice lands and stays visible for twenty seconds, while mc looks 400ms after
+  Enter. The count is taken over the joined rows rather than row by row,
+  because a turn is the notice plus a mark and so is wider than the notice —
+  a narrower pane wraps it, and a row-by-row match would have turned every wake
+  in a narrow pane into a reported failure.
+
 ### Added
 - Lease liveness — `mc repo who`, the status view's lease section and a refused
   `mc repo claim` now say whether the holder is still working, not only how

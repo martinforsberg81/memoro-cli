@@ -318,11 +318,19 @@ export function wakeConversation({ target, sender, run = null, sleep = null }) {
       continue;
     }
 
-    // Out of the box. An empty box is the plain case. A box showing something
-    // else — the TUI's own placeholder, once a busy pane has queued the turn —
-    // is believed only when there is now one *more* of the notice above the box
-    // than there was before typing: this wake's own turn, not a previous one's.
-    if (box.text === '' || noticesAbove(pane, box.top, notice) > alreadyAbove) {
+    // Out of the box — but that is not the question. The question is whether it
+    // became a turn, and the only answer mc will take is one more of the notice
+    // above the box than there was before typing: this wake's own turn, and not
+    // a previous one's.
+    //
+    // An empty box used to be accepted on its own, and it was the last way left
+    // to claim a wake without evidence: a line cleared by an Escape inside the
+    // submit window leaves the box exactly as empty as a line that went in.
+    // Measured against a real idle pane before removing it — three runs, the
+    // turn appears above the box 480–520ms after the notice lands and stays
+    // there for twenty seconds, while mc looks 400ms after Enter. So the
+    // evidence is there to be had, and there is no reason to accept less.
+    if (noticesAbove(pane, box.top, notice) > alreadyAbove) {
       return { ok: true, attempts: attempt + 1 };
     }
     return giveUp('the notice left the prompt without becoming a turn', null);
@@ -400,8 +408,21 @@ function promptText(lines) {
  * message they believe was delivered and was not.
  */
 function noticesAbove(lines, top, notice) {
+  // Joined before counting, not matched row by row. A turn is drawn as the
+  // notice with a mark in front of it, which is four columns wider than the
+  // notice — so a pane narrower than that wraps the turn onto a second row and
+  // no single row contains it. Since `bare` drops the line breaks along with
+  // every other space, joining first makes a wrapped turn count as the one turn
+  // it is. Checked against 460 captured frames of a real 80-column pane, where
+  // nothing wraps: both ways of counting agree on every one of them, so this is
+  // reach rather than a change of answer.
+  const haystack = bare(lines.slice(0, top).join(' '));
   const needle = bare(notice);
-  return lines.slice(0, top).filter((line) => bare(line).includes(needle)).length;
+  let count = 0;
+  for (let at = haystack.indexOf(needle); at !== -1; at = haystack.indexOf(needle, at + needle.length)) {
+    count += 1;
+  }
+  return count;
 }
 
 /**
