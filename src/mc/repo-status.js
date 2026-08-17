@@ -20,6 +20,7 @@ import { promisify } from 'node:util';
 
 import { mcHome } from './paths.js';
 import { readLease } from './repo-lease.js';
+import { livenessForLeases } from './lease-liveness.js';
 import { readCombinedSnapshot } from './repo-snapshot.js';
 import { watcherState } from './repo-watch.js';
 import { resolveRepository } from './work-area.js';
@@ -153,7 +154,7 @@ export async function repoView({
   // count knows every repository mc can see; the picture only knows the ones
   // that existed when it was taken, so it never gets to call a name unknown.
   if (fromSnapshot && !fromSnapshot.missed.length) {
-    return {
+    return withLiveness({
       at: new Date(now).toISOString(),
       offline: Boolean(snapshot.value.offline),
       mode: 'snapshot',
@@ -168,17 +169,41 @@ export async function repoView({
       // same repository. It costs one file read, so it is always current.
       repos: fromSnapshot.repos.map((repo) => ({ ...repo, lease: readLease(repo.path, { root, now }) })),
       unknown: fromSnapshot.unknown,
-    };
+    }, { env, now });
   }
 
   const computed = await repoStatus({ env, names, offline, cwd });
-  return {
+  return withLiveness({
     ...computed,
     updated_at: computed.at,
     age_ms: 0,
     interval_ms: snapshot.kind === 'present' ? snapshot.interval_ms : null,
     stale: false,
     watcher: { running: watcher.running, pid: watcher.pid },
+  }, { env, now });
+}
+
+/**
+ * Whether each held lease's holder is still working, added to the page.
+ *
+ * Both ways into the view come through here — the snapshot path and the counted
+ * one — because a lease read fresh in one and stale in the other would be two
+ * answers to the question the section exists to settle. The board is asked once
+ * for all the holders on the page, and only about them.
+ *
+ * Failing to reach the board is not an error here. Liveness is one line of a
+ * page that answers several questions, and losing it must not cost somebody the
+ * rest of the page; every holder then reads `unknown`, which is what it is.
+ */
+async function withLiveness(page, { env, now }) {
+  const leases = page.repos.map((repo) => repo.lease).filter(Boolean);
+  const answers = await livenessForLeases(leases, { env });
+  return {
+    ...page,
+    repos: page.repos.map((repo) => (repo.lease?.held
+      ? { ...repo, lease: { ...repo.lease, liveness: answers.get(repo.lease.holder) ?? null } }
+      : repo)),
+    at: page.at ?? new Date(now).toISOString(),
   };
 }
 

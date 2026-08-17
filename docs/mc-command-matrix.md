@@ -29,7 +29,6 @@ started in it. mc stores nothing else, because nothing else is mc's to know.
 | `mc work remove <name> <repo>` | Take one repository out of it. |
 | `mc work release <name> [--apply]` | Remove what git says can go; keep the rest. |
 | `mc work discard <name> [repo] [--apply]` | Throw it away — worktrees, branches, and all. |
-| `mc repo merge <repo> <pr> --check` | Run the test gate for that pull request and report. Does not merge. `--json`. |
 | `mc work send <name> "<text>"` | A message into that work's `inbox/`. `--wake` also knocks on whatever is running there. `--json`. |
 | `mc work stop <name>` | Stop what is running there; keep the work. |
 | `mc work list` | The same listing as bare `mc work`. |
@@ -41,7 +40,7 @@ started in it. mc stores nothing else, because nothing else is mc's to know.
 | `mc repo watch start \| stop \| status` | The background process that keeps that answer fresh. `--interval <seconds>` on start; `--json` on status. |
 | `mc repo claim <repo> "<what for>"` | Hold the gate round on a repository. Refused if someone else holds it. |
 | `mc repo release <repo> [--force]` | Give it back; `--force` takes it from another holder and is logged. |
-| `mc repo who <repo>` | Who holds it, for what, since when. `--json`. |
+| `mc repo who <repo>` | Who holds it, for what, since when — and whether the holder is still working. `--json`. |
 | `mc repo merge <repo> <pr> --check` | Run the test gate for that pull request and report the verdict. It does not merge. `--json`. |
 
 `mc work release` keeps a worktree that is in use, has uncommitted changes, or
@@ -68,6 +67,31 @@ and following it is the roles' instruction, not a lock. There is no expiry: a
 forgotten lease shows its age in `mc repo status`, and a human or the PM ends
 it with `--force`, which the lease log keeps. The lease is one file under
 `<mc home>/repo-leases/` and nothing in mc reads it except `mc repo`.
+
+The lease section carries a second line, because age alone answers the wrong
+question: a gate round *should* take half an hour, and a forgotten lease can be
+two minutes old, so no number separates the two. That line says whether the
+holder is still working:
+
+    lease     mc-repo  “grindvarv #344”  held for 27m
+              holder working  last seen just now
+
+It is derived, not reported in. A holder is a work area, and the board already
+reads every area's processes and transcripts at the moment of asking — so this
+adds no heartbeat, no file, no clock and no expiry. A heartbeat would have been
+worse than useless here: it needs the holder to run mc at intervals, and the
+lease that looks deadest is the one whose holder is ten minutes into a suite
+run, which is exactly when no mc command runs at all.
+
+A holder mc cannot see — `user@host` from somebody's own shell, or an area that
+is no longer there — reads `liveness unknown` with the reason, never a blank and
+never a guess. A blank is what somebody weighing a `--force` would read as
+"dead". The same line appears when a claim is refused, which is the moment that
+decision is actually made.
+
+Nothing here blocks anything. `--force` behaves exactly as it did: warn, log,
+never bar the way. Contacting the holder before forcing is a role instruction,
+not a code gate.
 
 `mc repo merge <repo> <pr> --check` runs the verify half of that round as a
 machine, so following it does not depend on somebody remembering to. It takes

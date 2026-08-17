@@ -87,7 +87,11 @@ MAINTENANCE
                                     agreement, visible to everyone in the view
   mc repo release <repo> [--force] Give it back. --force takes it from someone
                                     else, and is always written to the log
-  mc repo who <repo> [--json]      Who holds it, for what, and since when
+  mc repo who <repo> [--json]      Who holds it, for what, since when — and
+                                    whether that holder is still working, read
+                                    off the board rather than off a clock. A
+                                    holder mc cannot see reads unknown, never
+                                    a guess
   mc repo merge <repo> <pr> --check
                                     Run the test gate for that pull request:
                                     take the lease, build a fresh baseline and
