@@ -33,6 +33,13 @@ MAINTENANCE
   mc storage status [--json]       Summarize durable and ephemeral session state
   mc storage explain <name>        Explain one session's stored resources
   mc storage repair [--apply]      Plan or apply loss-free storage repairs
+  mc dev list [--json]             Every development server on this machine:
+                                    which session owns it, whether it is
+                                    healthy, and where it is listening
+  mc dev status|logs|stop|restart <selector>
+                                    One of them — read it, tail it, stop it,
+                                    or start it again. mc dev with no verb
+                                    lists all nine and what each one takes
   mc status                        Every piece of work and what it is doing:
                                     waiting for you, working, or idle
   mc status --watch [seconds]      A live page; polls every 15s and rewrites
