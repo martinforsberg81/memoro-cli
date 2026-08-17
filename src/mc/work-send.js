@@ -239,9 +239,20 @@ export function wakeConversation({ target, sender, run = null, sleep = null }) {
   // and typing is the gap, and there is no reason to make it any wider.
   const before = readPane(tmux, target);
   if (before === null) return refuse('could not read the conversation');
-  const box = promptText(before);
-  if (box === null) return refuse('could not find its prompt to check it was empty');
-  if (box !== '') return refuse('there is already something in its prompt');
+  const opening = readBox(before);
+  if (opening === null) return refuse('could not find its prompt to check it was empty');
+  if (opening.text !== '') return refuse('there is already something in its prompt');
+
+  // How many times this exact notice is already on screen above the box.
+  //
+  // The notice is identical for every wake from the same sender, so an earlier
+  // one is still sitting up there as an old turn — and "the notice is visible
+  // above the box" would find *that* one and call this wake delivered. Counted
+  // before, compared after: what proves a wake is the number going up, not the
+  // text being present. Otherwise a second wake could claim the first one's
+  // turn as its own, which is the exact failure this function exists to
+  // prevent, arriving from a new direction.
+  const alreadyAbove = noticesAbove(before, opening.top, notice);
 
   const typed = tmux(['send-keys', '-t', target, '-l', notice]);
   if (typed?.status !== 0) return { ok: false, reason: 'could not type into the conversation' };
@@ -296,11 +307,25 @@ export function wakeConversation({ target, sender, run = null, sleep = null }) {
     // there, gone, or somebody else's now is exactly what could not be read.
     const pane = readPane(tmux, target);
     if (pane === null) return giveUp('could not read the conversation back', null);
-    const now = promptText(pane);
-    if (now === null) return giveUp('lost sight of its prompt', null);
-    if (now === '') return { ok: true, attempts: attempt + 1 };
-    seen = now;
-    if (!isNotice(now, notice)) return giveUp('somebody started typing', now);
+    const box = readBox(pane);
+    if (box === null) return giveUp('lost sight of its prompt', null);
+
+    // Still in the box: either nothing happened and Enter is worth pressing
+    // again, or somebody has written after it and the line stopped being mc's.
+    if (holdsNotice(box.text, notice)) {
+      seen = box.text;
+      if (!isNotice(box.text, notice)) return giveUp('somebody started typing', box.text);
+      continue;
+    }
+
+    // Out of the box. An empty box is the plain case. A box showing something
+    // else — the TUI's own placeholder, once a busy pane has queued the turn —
+    // is believed only when there is now one *more* of the notice above the box
+    // than there was before typing: this wake's own turn, not a previous one's.
+    if (box.text === '' || noticesAbove(pane, box.top, notice) > alreadyAbove) {
+      return { ok: true, attempts: attempt + 1 };
+    }
+    return giveUp('the notice left the prompt without becoming a turn', null);
   }
   return giveUp('it stayed in the prompt', seen);
 }
@@ -320,7 +345,7 @@ function readPane(tmux, target) {
 }
 
 /**
- * What is in the input box right now — `''` for empty, `null` for "no box mc
+ * The input box: what is in it, and where it starts — or `null` for "no box mc
  * can find", which is not the same answer and must never be treated as one.
  *
  * Found from the bottom by its two borders, and everything between them is
@@ -331,8 +356,11 @@ function readPane(tmux, target) {
  * that has exited — answers `null`, and so does one drawn in a shape mc does
  * not recognise. Refusing to wake on that is the point: a box mc cannot read
  * is a box it cannot promise is empty.
+ *
+ * `top` is where the box's upper border sits, which is the line between what is
+ * still being typed and what has already been said.
  */
-function promptText(lines) {
+function readBox(lines) {
   const bottom = lines.findLastIndex((line) => RULE.test(line));
   if (bottom === -1 || lines.length - 1 - bottom > BELOW_BOX) return null;
   const top = lines.slice(0, bottom).findLastIndex((line) => RULE.test(line));
@@ -340,9 +368,40 @@ function promptText(lines) {
 
   const [first, ...rest] = lines.slice(top + 1, bottom);
   if (first === undefined || !PROMPT_ROW.test(first)) return null;
-  return [first.replace(PROMPT_ROW, ''), ...rest.map((line) => line.replace(BOX_EDGE, ''))]
+  const text = [first.replace(PROMPT_ROW, ''), ...rest.map((line) => line.replace(BOX_EDGE, ''))]
     .join(' ')
     .trim();
+  return { text, top };
+}
+
+function promptText(lines) {
+  return readBox(lines)?.text ?? null;
+}
+
+/**
+ * How many times the notice appears above the input box.
+ *
+ * Used as a before-and-after count, and the counting is the point. The obvious
+ * test is "the box is empty now", and it was wrong: a pane that is mid-answer
+ * does not send a turn typed into it, it *queues* it, and the box then shows a
+ * placeholder of the TUI's own — `Press up to edit queued messages` — which is
+ * neither empty nor mc's notice. Captured from a real pane 140ms after Enter.
+ *
+ * So the question is asked positively instead: did the notice become a turn?
+ * But mere presence cannot answer that, because the notice is identical for
+ * every wake from the same sender — an earlier one is still on screen, and
+ * finding it would let this wake claim that one's turn as its own. The number
+ * going up is what only this wake can have caused.
+ *
+ * The comparison leans the safe way. A pane that scrolled between the two looks
+ * can lose an old notice off the top as the new one arrives, leaving the count
+ * unchanged and a real wake reported as a failure. That costs the sender a
+ * retry and a truthful "could not wake it"; the other direction costs them a
+ * message they believe was delivered and was not.
+ */
+function noticesAbove(lines, top, notice) {
+  const needle = bare(notice);
+  return lines.slice(0, top).filter((line) => bare(line).includes(needle)).length;
 }
 
 /**
@@ -353,8 +412,16 @@ function promptText(lines) {
  * match: a notice with one more word after it is somebody's sentence now.
  */
 function isNotice(text, notice) {
-  const bare = (value) => value.replace(/\s+/gu, '');
   return bare(text) === bare(notice);
+}
+
+/** Does the box still hold the notice — alone, or with somebody's words after it? */
+function holdsNotice(text, notice) {
+  return bare(text).includes(bare(notice));
+}
+
+function bare(value) {
+  return String(value).replace(/\s+/gu, '');
 }
 
 /** Is it mid-answer? Leans toward yes: the cost of waiting is only waiting. */
