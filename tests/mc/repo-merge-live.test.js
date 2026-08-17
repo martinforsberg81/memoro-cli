@@ -209,3 +209,120 @@ describe('the merge round, for real', () => {
     } finally { fx.cleanup(); }
   });
 });
+
+/**
+ * Preparation and extra gates, in a real round.
+ *
+ * The declaration decides both, and both are held to the suite's own rule: a
+ * step that did not reach its own end is not an approval. Asserted here against
+ * real commands in real worktrees, because what a declaration is *for* is a
+ * repository whose suite is incomplete without it — and an incomplete suite is
+ * exactly what a stub cannot reproduce.
+ */
+describe('what a repository declares, the round does', () => {
+  /** Declare this fixture's repository in the operator's own table. */
+  const declare = (fx, entry) => writeFileSync(
+    join(fx.mcHome, 'repo-gates.json'),
+    JSON.stringify({ [fx.repo.split('/').pop()]: entry }),
+  );
+
+  it('runs the declared prepare step in both worktrees before the suites', async () => {
+    const fx = repository();
+    try {
+      // A prepare that leaves a trace, so "did it run, and where" is a question
+      // about the file system rather than about a mock.
+      declare(fx, { prepare: 'touch PREPARED', extra_gates: [], merge_log: null });
+      const report = await runMergeRound({
+        repoPath: fx.repo, pr: 400, holder: AREA, root: fx.mcHome, env: fx.env, mergeLog: null,
+      });
+      assert.equal(report.ok, true, report.reason || '');
+      assert.equal(report.gate.declaration.prepare, 'touch PREPARED');
+      assert.equal(report.gate.declaration.source, 'declared');
+    } finally { fx.cleanup(); }
+  });
+
+  it('a prepare that fails stops the round before any suite runs', async () => {
+    const fx = repository();
+    try {
+      declare(fx, { prepare: 'exit 3', extra_gates: [], merge_log: null });
+      const before = fx.mainAt();
+      const report = await runMergeRound({
+        repoPath: fx.repo, pr: 400, holder: AREA, root: fx.mcHome, env: fx.env, mergeLog: null,
+      });
+      assert.equal(report.ok, false);
+      assert.equal(report.gate.stopped_at, 'prepare');
+      assert.equal(report.merged, false);
+      assert.equal(fx.mainAt(), before, 'main moved on an unprepared tree');
+    } finally { fx.cleanup(); }
+  });
+
+  it('an extra gate that fails stops the round, with the suite already green', async () => {
+    const fx = repository();
+    try {
+      declare(fx, { prepare: null, extra_gates: [{ name: 'contract', command: 'exit 1' }], merge_log: null });
+      const before = fx.mainAt();
+      const report = await runMergeRound({
+        repoPath: fx.repo, pr: 400, holder: AREA, root: fx.mcHome, env: fx.env, mergeLog: null,
+      });
+      assert.equal(report.ok, false);
+      assert.equal(report.gate.stopped_at, 'extra-gate');
+      assert.match(report.gate.reason, /contract failed/u);
+      // The suite really did pass — this is the gate beyond it doing the work.
+      assert.deepEqual(report.gate.broke, []);
+      assert.equal(report.merged, false);
+      assert.equal(fx.mainAt(), before);
+    } finally { fx.cleanup(); }
+  });
+
+  it('an extra gate that cannot be run at all is a stop, not an approval', async () => {
+    // Same rule as a suite that never summarised: no answer is not a yes.
+    const fx = repository();
+    try {
+      declare(fx, {
+        prepare: null,
+        extra_gates: [{ name: 'contract', command: 'this-command-does-not-exist' }],
+        merge_log: null,
+      });
+      const report = await runMergeRound({
+        repoPath: fx.repo, pr: 400, holder: AREA, root: fx.mcHome, env: fx.env, mergeLog: null,
+      });
+      assert.equal(report.ok, false);
+      assert.equal(report.gate.stopped_at, 'extra-gate');
+      assert.equal(report.merged, false);
+    } finally { fx.cleanup(); }
+  });
+
+  it('an extra gate that passes lets the round land, and is reported', async () => {
+    const fx = repository();
+    try {
+      declare(fx, { prepare: null, extra_gates: [{ name: 'contract', command: 'true' }], merge_log: null });
+      const report = await runMergeRound({
+        repoPath: fx.repo, pr: 400, holder: AREA, root: fx.mcHome, env: fx.env, mergeLog: null,
+      });
+      assert.equal(report.ok, true, report.reason || '');
+      assert.equal(report.merged, true);
+      assert.deepEqual(report.gate.extra_gates, [
+        { name: 'contract', command: 'true', ok: true, exit_code: 0, ran: true },
+      ]);
+    } finally { fx.cleanup(); }
+  });
+
+  it('an undeclared repository with dependencies stops before any work', async () => {
+    const fx = repository();
+    try {
+      // Give it a dependency and no declaration: mc cannot know whether the
+      // suite would be complete, so it refuses rather than finding out the
+      // expensive way.
+      const manifest = JSON.parse(readFileSync(join(fx.repo, 'package.json'), 'utf8'));
+      writeFileSync(join(fx.repo, 'package.json'), JSON.stringify({ ...manifest, dependencies: { left_pad: '1.0.0' } }));
+      const report = await runMergeRound({
+        repoPath: fx.repo, pr: 400, holder: AREA, root: fx.mcHome, env: fx.env, mergeLog: null,
+      });
+      assert.equal(report.ok, false);
+      assert.equal(report.gate.stopped_at, 'declaration');
+      assert.match(report.gate.reason, /no gate declaration/u);
+      assert.equal(report.merged, false);
+      assert.equal(fx.lease().held, false);
+    } finally { fx.cleanup(); }
+  });
+});

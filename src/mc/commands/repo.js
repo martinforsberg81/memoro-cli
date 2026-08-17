@@ -283,7 +283,12 @@ function gateLines(report, { checkOnly = false } = {}) {
 
   if (report.stopped_at && report.stopped_at !== 'red') {
     lines.push(`mc: the round stopped at ${report.stopped_at} — ${report.reason}`);
-    lines.push('mc: nothing was measured, and nothing was merged');
+    // A stop after the suites is a different thing from one before them, and a
+    // reader deciding what to do next needs to know which they are looking at.
+    const measured = report.baseline && report.candidate;
+    lines.push(measured
+      ? 'mc: the suites ran; nothing was merged'
+      : 'mc: nothing was measured, and nothing was merged');
     return lines;
   }
 
@@ -304,6 +309,12 @@ function gateLines(report, { checkOnly = false } = {}) {
   }
 
   if (report.fixed.length) lines.push(`mc: ${report.fixed.length} that were red on the baseline are green here`);
+  // What the repository asked for beyond the suite, so a green is not read as
+  // "the suite passed" when more than the suite was measured.
+  if (report.declaration?.prepare) lines.push(`mc: prepared with ${report.declaration.prepare}`);
+  for (const gate of report.extra_gates || []) {
+    lines.push(`mc: extra gate ${gate.name} — ${gate.ok ? 'passed' : 'failed'}`);
+  }
   lines.push('mc: GREEN — the test gate passes. It says nothing about whether the change is right;');
   lines.push('mc: that is the review, and it is still somebody\'s to do');
   // Said only when it is the whole answer. In a merge round these same lines

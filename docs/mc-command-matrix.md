@@ -136,9 +136,30 @@ A deploy pull that fails does not fail the round and does not undo anything:
 the change has landed, and what is left is a machine one commit behind, which
 the report says plainly so it can be pulled by hand.
 
+What a repository needs beyond `npm test` is **declared, never guessed**. A gate
+worktree is a fresh checkout with no `node_modules`, and mc keeps a table of
+what each repository requires: a preparation step, any gates beyond the suite,
+and where its merges are written down. `<mc home>/repo-gates.json` adds or
+overrides an entry without a release.
+
+A repository mc has not been told about **stops the round**, with a reason that
+says what to write and where. The one exception is a repository that can be
+*proved* not to need preparation — a manifest asking for nothing has nothing
+that could be missing. The obvious heuristic is deliberately not used: this
+repository declares three dependencies, one of them native, and its suite runs
+perfectly from a clean worktree, so "has dependencies" proves nothing either
+way. A guess that works nine times and quietly produces a green from an
+incomplete suite on the tenth is worse than a stop, because the stop is visible.
+
+Gates beyond the suite are held to the suite's own rule: one that did not reach
+its own end is not an approval. A command that could not be run at all stops the
+round exactly as a suite that never summarised does.
+
 And the verdict is `the test gate passes`, never `approved`: reading the diff
 against its contract is judgement, and a green suite says nothing about an
-unescalated design decision.
+unescalated design decision. The merge log records the class as `D (delegerad)`
+— a verb has no authority of its own, it carries out its holder's — with the
+machine's part in the note.
 
 ## Sessions — messaging
 

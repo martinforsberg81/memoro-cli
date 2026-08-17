@@ -281,11 +281,27 @@ describe('a run that did not run is not evidence', () => {
   it('a repository with no suite of its own is a stop, not a pass', async () => {
     const fx = fixture();
     try {
-      rmSync(join(fx.repoPath, 'package.json'), { force: true });
+      // A manifest with nothing to install, so the declaration check passes and
+      // the round gets as far as looking for a suite — and finds none.
+      writeJson(join(fx.repoPath, 'package.json'), { name: 'repo' });
       const report = await fx.run();
       assert.equal(report.ok, false);
       assert.equal(report.stopped_at, 'suite');
       assert.match(report.reason, /no npm test script/u);
+    } finally { fx.cleanup(); }
+  });
+
+  it('a repository mc cannot reason about at all is a stop before any work', async () => {
+    const fx = fixture();
+    try {
+      rmSync(join(fx.repoPath, 'package.json'), { force: true });
+      const report = await fx.run();
+      assert.equal(report.ok, false);
+      assert.equal(report.stopped_at, 'declaration');
+      assert.match(report.reason, /no package.json for mc to reason about/u);
+      // And it cost nothing: no worktrees, no suite, not even a question to gh.
+      assert.deepEqual(fx.ran('suite'), []);
+      assert.deepEqual(fx.ran('gh'), []);
     } finally { fx.cleanup(); }
   });
 });
