@@ -332,3 +332,102 @@ describe('waking is asked for, and every refusal is printed', () => {
     } finally { fx.cleanup(); }
   });
 });
+
+/**
+ * A busy pane queues the turn, and a queued turn is a turn.
+ *
+ * Found in real use and reproduced against a live pane while fixing it: mc
+ * reported `could not wake it (somebody started typing)` and `the notice is
+ * still in the prompt`, and both were false — nobody was there, the prompt was
+ * empty, and the message had arrived.
+ *
+ * What the capture showed, 140ms after Enter: a pane that is mid-answer does
+ * not send a turn typed into it, it queues it, and the input box then shows a
+ * placeholder of the TUI's own — `Press up to edit queued messages` — with the
+ * notice sitting above the box as the queued turn. Neither empty nor the
+ * notice, so the old rule read it as a stranger typing.
+ *
+ * The rows below are that capture, trimmed to the box.
+ */
+describe('a wake into a busy pane is not a failed wake', () => {
+  /** The real thing: queued turn above, TUI placeholder in the box. */
+  const queued = (notice) => ({
+    status: 0,
+    stdout: [
+      '  ⎿  Allowed by auto mode classifier',
+      `  ❯ ${notice}`,
+      '────────────────────────────────────────',
+      '❯ Press up to edit queued messages',
+      '────────────────────────────────────────',
+      '  ⏵⏵ auto mode on · 1 shell · esc to interrupt · ← for agents · ↓ to manage',
+      '',
+    ].join('\n'),
+  });
+
+  it('a queued turn is reported as woken, not as somebody typing', () => {
+    const talk = conversation({
+      paint: ({ typed, captures }) => {
+        if (captures === 1) return pane({ typed });        // the guard: box empty
+        if (captures === 2) return pane({ typed });        // the notice, landed
+        return queued(NOTICE);                             // Enter → queued
+      },
+    });
+    const result = wake(talk.run);
+
+    assert.deepEqual(result, { ok: true, attempts: 1 });
+    // And it left the queued turn alone: no second Enter, no C-u on a box that
+    // holds the TUI's placeholder rather than anything of mc's.
+    assert.equal(talk.keys().filter((args) => args[3] === 'Enter').length, 1);
+    assert.deepEqual(talk.keys().filter((args) => args[3] === 'C-u'), []);
+  });
+
+  it('the placeholder alone is not enough — the turn has to be visible', () => {
+    // Same box, but the notice is nowhere above it. Then the notice left the
+    // prompt without becoming anything, which is not a wake and is not claimed
+    // as one: reporting a wake that never happened is the one outcome this
+    // whole function exists to prevent.
+    const vanished = {
+      status: 0,
+      stdout: [
+        '  a conversation',
+        '────────────────────────────────────────',
+        '❯ Press up to edit queued messages',
+        '────────────────────────────────────────',
+        '  ⏵⏵ auto mode on',
+        '',
+      ].join('\n'),
+    };
+    const talk = conversation({
+      paint: ({ typed, captures }) => (captures <= 2 ? pane({ typed }) : vanished),
+    });
+    const result = wake(talk.run);
+
+    assert.equal(result.ok, false);
+    assert.equal(result.reason, 'the notice left the prompt without becoming a turn');
+    assert.deepEqual(talk.keys().filter((args) => args[3] === 'C-u'), []);
+  });
+
+  it('somebody typing after the notice still stops it', () => {
+    // The fix must not swallow the case it was built around. The notice is
+    // still in the box with words after it, so the line is not mc's to submit
+    // and not mc's to clear — placeholder reasoning does not apply.
+    const talk = conversation({
+      paint: ({ typed, captures }) => (
+        captures <= 2 ? pane({ typed }) : pane({ typed: `${typed} and my own question` })
+      ),
+    });
+    const result = wake(talk.run);
+    assert.equal(result.reason, 'somebody started typing');
+    assert.deepEqual(talk.keys().filter((args) => args[3] === 'C-u'), []);
+  });
+
+  it('a swallowed Enter is still retried, and the box still ends empty', () => {
+    // The notice is unchanged in the box, which is the old sticky-Enter case
+    // and must keep behaving as it did: press again, then clean up.
+    const talk = conversation({ paint: ({ typed }) => pane({ typed }) });
+    const result = wake(talk.run);
+    assert.equal(result.reason, 'it stayed in the prompt');
+    assert.equal(talk.keys().filter((args) => args[3] === 'Enter').length, 2);
+    assert.equal(talk.prompt(), '');
+  });
+});

@@ -296,11 +296,25 @@ export function wakeConversation({ target, sender, run = null, sleep = null }) {
     // there, gone, or somebody else's now is exactly what could not be read.
     const pane = readPane(tmux, target);
     if (pane === null) return giveUp('could not read the conversation back', null);
-    const now = promptText(pane);
-    if (now === null) return giveUp('lost sight of its prompt', null);
-    if (now === '') return { ok: true, attempts: attempt + 1 };
-    seen = now;
-    if (!isNotice(now, notice)) return giveUp('somebody started typing', now);
+    const box = readBox(pane);
+    if (box === null) return giveUp('lost sight of its prompt', null);
+
+    // Still in the box: either nothing happened and Enter is worth pressing
+    // again, or somebody has written after it and the line stopped being mc's.
+    if (holdsNotice(box.text, notice)) {
+      seen = box.text;
+      if (!isNotice(box.text, notice)) return giveUp('somebody started typing', box.text);
+      continue;
+    }
+
+    // Out of the box. An empty box is the plain case; a box showing something
+    // else — the TUI's own placeholder once a busy pane has queued the turn —
+    // is the same answer, and is believed only because the notice can be seen
+    // above the box as a turn the conversation took.
+    if (box.text === '' || submittedAbove(pane, box.top, notice)) {
+      return { ok: true, attempts: attempt + 1 };
+    }
+    return giveUp('the notice left the prompt without becoming a turn', null);
   }
   return giveUp('it stayed in the prompt', seen);
 }
@@ -320,7 +334,7 @@ function readPane(tmux, target) {
 }
 
 /**
- * What is in the input box right now — `''` for empty, `null` for "no box mc
+ * The input box: what is in it, and where it starts — or `null` for "no box mc
  * can find", which is not the same answer and must never be treated as one.
  *
  * Found from the bottom by its two borders, and everything between them is
@@ -331,8 +345,11 @@ function readPane(tmux, target) {
  * that has exited — answers `null`, and so does one drawn in a shape mc does
  * not recognise. Refusing to wake on that is the point: a box mc cannot read
  * is a box it cannot promise is empty.
+ *
+ * `top` is where the box's upper border sits, which is the line between what is
+ * still being typed and what has already been said.
  */
-function promptText(lines) {
+function readBox(lines) {
   const bottom = lines.findLastIndex((line) => RULE.test(line));
   if (bottom === -1 || lines.length - 1 - bottom > BELOW_BOX) return null;
   const top = lines.slice(0, bottom).findLastIndex((line) => RULE.test(line));
@@ -340,9 +357,34 @@ function promptText(lines) {
 
   const [first, ...rest] = lines.slice(top + 1, bottom);
   if (first === undefined || !PROMPT_ROW.test(first)) return null;
-  return [first.replace(PROMPT_ROW, ''), ...rest.map((line) => line.replace(BOX_EDGE, ''))]
+  const text = [first.replace(PROMPT_ROW, ''), ...rest.map((line) => line.replace(BOX_EDGE, ''))]
     .join(' ')
     .trim();
+  return { text, top };
+}
+
+function promptText(lines) {
+  return readBox(lines)?.text ?? null;
+}
+
+/**
+ * Did the notice go in — asked of the conversation, not of the input box.
+ *
+ * The obvious test is "the box is empty now", and it was wrong. A pane that is
+ * mid-answer does not send a turn typed into it, it *queues* it, and once it
+ * has, the box shows a placeholder of the TUI's own — `Press up to edit queued
+ * messages` — which is neither empty nor mc's notice. Read as "somebody else is
+ * typing", that turned every wake of a busy conversation into a reported
+ * failure of a wake that had plainly worked, and the recipient of a message is
+ * exactly the session likeliest to be busy. Captured from a real pane, 140ms
+ * after Enter, while writing this.
+ *
+ * So the question is asked the other way round and positively: is the notice
+ * visible above the box, as a turn the conversation has taken or queued? What
+ * the box happens to say afterwards is the TUI's business.
+ */
+function submittedAbove(lines, top, notice) {
+  return lines.slice(0, top).some((line) => bare(line).includes(bare(notice)));
 }
 
 /**
@@ -353,8 +395,16 @@ function promptText(lines) {
  * match: a notice with one more word after it is somebody's sentence now.
  */
 function isNotice(text, notice) {
-  const bare = (value) => value.replace(/\s+/gu, '');
   return bare(text) === bare(notice);
+}
+
+/** Does the box still hold the notice — alone, or with somebody's words after it? */
+function holdsNotice(text, notice) {
+  return bare(text).includes(bare(notice));
+}
+
+function bare(value) {
+  return String(value).replace(/\s+/gu, '');
 }
 
 /** Is it mid-answer? Leans toward yes: the cost of waiting is only waiting. */
