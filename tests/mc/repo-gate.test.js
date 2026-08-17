@@ -460,16 +460,19 @@ describe('what the round reports', () => {
  * grammar makes: that a verb called `merge` cannot be made to merge yet.
  */
 describe('mc repo merge — the grammar', () => {
-  it('will not run without --check, and says why', () => {
+  it('offers two modes and no way to overrule a red gate', () => {
     const fx = repoFixture({ name: 'repo-gate-cli' });
     try {
-      const asked = runMcCli(['repo', 'merge', 'repo', '400'], fx.env);
-      assert.equal(asked.status, 2);
-      assert.match(asked.stderr, /only runs the gate for now — say --check/u);
-      assert.match(asked.stderr, /Merging is its own step and is not built yet/u);
-      // The usage it prints offers no other mode either.
-      assert.match(asked.stderr, /mc repo merge <repo> <pr> --check/u);
-      assert.doesNotMatch(asked.stderr, /--merge|--apply|--force\b.*merge/u);
+      // `--check` gates and stops; without it the same round also merges.
+      // What must not exist is a third mode — anything that lands a change the
+      // gate called red. Overruling one is the human's call and should cost a
+      // human action rather than a flag on a routine command.
+      const usage = runMcCli(['repo', 'merge'], fx.env).stderr;
+      assert.match(usage, /mc repo merge <repo> <pr> \[--check\]/u);
+      for (const flag of ['--force', '--anyway', '--no-verify', '--skip-gate', '--apply']) {
+        const tried = runMcCli(['repo', 'merge', 'repo', '400', flag], fx.env);
+        assert.notEqual(tried.status, 0, `${flag} was accepted`);
+      }
     } finally { fx.cleanup(); }
   });
 

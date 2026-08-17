@@ -1,0 +1,270 @@
+/**
+ * The gate round that also lands the change.
+ *
+ * `repo-gate.js` answers one question — is the test gate green — and cannot
+ * merge. That is deliberate, and it stays that way: a module that could do both
+ * is one `if` away from landing a change on a verdict it had not finished
+ * forming. So merging lives here, on top of it, and reaches the merge only by
+ * getting a green report back from something that has no opinion about merging.
+ *
+ * The round, in order, stopping at the first thing that is not right:
+ *
+ *  1. take the lease — and keep it across the whole round rather than around
+ *     each half, so no other round can move main between the measurement and
+ *     the merge;
+ *  2. run the gate inside that lease;
+ *  3. check the ground has not moved — the base is still the commit the
+ *     baseline was measured at, and the lease is still ours;
+ *  4. squash-merge;
+ *  5. pull the source-linked installation, because on this machine that is
+ *     what deploying means;
+ *  6. write one line to the merge log;
+ *  7. give the lease back, whatever happened.
+ *
+ * There is no way to merge a red gate. Not a flag, not an option, not an
+ * environment variable. Overriding a red gate is the human's call and it should
+ * cost a human action, visible as one — a verb that offered the override would
+ * make it look like part of the routine.
+ */
+import { spawnSync } from 'node:child_process';
+import { appendFileSync, existsSync, mkdirSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+
+import { claimLease, readLease, releaseLease } from './repo-lease.js';
+import { currentHolder } from './work-identity.js';
+import { mcHome, workRoot } from './paths.js';
+import { runGate } from './repo-gate.js';
+import { sourceLinkedInstallations } from './repo-status.js';
+
+export const MERGE_SCHEMA = 'mc-repo-merge';
+export const MERGE_VERSION = 1;
+
+/**
+ * Where a repository's merge log lives.
+ *
+ * A parameter rather than a constant, because the log a merge belongs in is a
+ * property of the project the work is being done for, not of the checkout. The
+ * default is the one this repository's merges have always been written to; a
+ * repository with no answer gets no line and says so, rather than inventing a
+ * file somewhere.
+ */
+export function defaultMergeLog(repoPath, env = process.env) {
+  if (!/(^|\/)memoro-cli$/u.test(repoPath)) return null;
+  return join(workRoot(env), 'large-scale-llm-project', 'merge-log.md');
+}
+
+/**
+ * Run the gate and, only if it is green, land the change.
+ *
+ * Everything that touches the world is injectable for the same reason as in the
+ * gate: the one thing a test suite cannot assert is a real merge against a real
+ * remote. The defaults are the real thing.
+ */
+export async function runMergeRound({
+  repoPath,
+  pr,
+  holder = currentHolder(),
+  root = mcHome(),
+  env = process.env,
+  git = null,
+  gh = null,
+  gate = runGate,
+  installs = sourceLinkedInstallations,
+  suite = undefined,
+  mergeLog = undefined,
+  onProgress = () => {},
+  clock = () => Date.now(),
+} = {}) {
+  const startedAt = clock();
+  const say = (message) => { try { onProgress(message); } catch { /* progress is a courtesy */ } };
+
+  // Bound to this round's `env`, not the process's — see the same note in
+  // repo-gate.js. Taking an environment and resolving binaries against another
+  // one is how a stub on the PATH still reached the real `gh`.
+  const run = (tool) => (args, options = {}) => spawnSync(tool, args, {
+    cwd: options.cwd, env, encoding: 'utf8',
+  });
+  const askGit = git || run('git');
+  const askGh = gh || run('gh');
+
+  const report = {
+    schema: MERGE_SCHEMA,
+    version: MERGE_VERSION,
+    repo: repoPath,
+    pr: { number: Number(pr) },
+    holder: holder.name,
+    ok: false,
+    merged: false,
+    merge_commit: null,
+    stopped_at: null,
+    reason: null,
+    gate: null,
+    deploy: null,
+    log_line: null,
+    log_path: null,
+    started_at: new Date(startedAt).toISOString(),
+    finished_at: null,
+    duration_ms: null,
+  };
+
+  const finish = (stoppedAt, reason) => {
+    report.stopped_at = stoppedAt;
+    report.reason = reason;
+    report.ok = stoppedAt === null;
+    const ended = clock();
+    report.finished_at = new Date(ended).toISOString();
+    report.duration_ms = ended - startedAt;
+    return report;
+  };
+
+  // One lease across the whole round. The gate would take its own and give it
+  // straight back, which would open exactly the window this round must not have.
+  const lease = claimLease({ repoPath, errand: `merge round for #${pr}`, holder, root });
+  if (!lease.ok) {
+    const held = lease.lease;
+    return finish('lease', `${repoPath} is held by ${held.holder}${held.errand ? ` for “${held.errand}”` : ''}`);
+  }
+  say(`lease taken by ${holder.name} for the whole round`);
+
+  try {
+    const verdict = await gate({
+      repoPath, pr, holder, root, env, git: askGit, gh: askGh, suite, onProgress, clock, holdLease: false,
+    });
+    report.gate = verdict;
+    report.pr = { ...report.pr, ...verdict.pr };
+    if (!verdict.ok) {
+      // The gate stops the round and there is nothing here that can overrule
+      // it. A red gate is reported and the change stays where it is.
+      return finish(verdict.stopped_at === 'red' ? 'red' : verdict.stopped_at, verdict.reason);
+    }
+
+    // The ground under the verdict, checked before acting on it.
+    //
+    // The lease serialises gate rounds against each other; it does not stop a
+    // person merging by hand, and that happened during this feature's own
+    // development — a round measured against one main while another landed in
+    // it. A green verdict is a statement about the tree it measured, so if the
+    // base has moved since, the verdict is about a tree that no longer exists.
+    const base = `origin/${verdict.pr.base}`;
+    const fetched = askGit(['fetch', 'origin', '--prune'], { cwd: repoPath });
+    if (fetched.status !== 0) return finish('drift', 'could not re-check the base before merging');
+    const nowAt = trim(askGit(['rev-parse', base], { cwd: repoPath }).stdout);
+    if (!nowAt) return finish('drift', `could not read ${base} before merging`);
+    if (nowAt !== verdict.baseline.commit) {
+      return finish('drift', `${base} moved from ${short(verdict.baseline.commit)} to ${short(nowAt)} while the gate ran — the green is about a tree that has changed, so it is measured again rather than merged on`);
+    }
+
+    // And the lease, re-read rather than assumed. A `--force` release mid-round
+    // hands the repository to somebody else, and a merge landed after that is a
+    // merge nobody was holding the round for.
+    const still = readLease(repoPath, { root });
+    if (!still.held || still.holder !== holder.name) {
+      return finish('lease', `the lease was taken from ${holder.name} during the round — nothing was merged`);
+    }
+
+    say(`gate green and ${base} unmoved — merging #${verdict.pr.number}`);
+    const merged = askGh(['pr', 'merge', String(verdict.pr.number), '--squash'], { cwd: repoPath });
+    if (merged.status !== 0) {
+      return finish('merge', trim(merged.stderr) || `gh could not merge #${verdict.pr.number}`);
+    }
+    report.merged = true;
+
+    // Read back rather than assumed: the point of recording a merge commit is
+    // that somebody can go and look at it.
+    askGit(['fetch', 'origin', '--prune'], { cwd: repoPath });
+    report.merge_commit = trim(askGit(['rev-parse', base], { cwd: repoPath }).stdout) || null;
+    say(`merged as ${short(report.merge_commit)}`);
+
+    report.deploy = deployPull({ git: askGit, repoPath, env, say, installs });
+    const written = writeMergeLine({ report, verdict, path: mergeLog ?? defaultMergeLog(repoPath, env), clock });
+    report.log_path = written.path;
+    report.log_line = written.line;
+    if (written.path) say(`logged to ${written.path}`);
+
+    return finish(null, null);
+  } finally {
+    releaseLease({ repoPath, holder, root });
+    say('lease released');
+  }
+}
+
+/**
+ * Bring the installation that runs from a checkout up to what just landed.
+ *
+ * On this machine `mc` is a symlink into a working tree, so `git pull` there
+ * *is* the deploy — and the rule that this is routine maintenance rather than a
+ * decision is the reason it belongs inside the round instead of in somebody's
+ * memory. Only an installation running from *this* repository is touched.
+ *
+ * A pull that fails does not undo the merge and must not fail the round: the
+ * change has landed, and what is left is a machine one commit behind, which the
+ * report says plainly so somebody can pull it by hand.
+ */
+function deployPull({ git, repoPath, env, say, installs }) {
+  const install = installs(env).find((item) => item.root === repoPath);
+  if (!install) return { attempted: false, ok: null, reason: 'nothing on this machine runs from this checkout' };
+
+  const pulled = git(['pull', '--ff-only'], { cwd: install.root });
+  const ok = pulled.status === 0;
+  say(ok ? `pulled ${install.command} at ${install.root}` : `could not pull ${install.root}`);
+  return {
+    attempted: true,
+    ok,
+    root: install.root,
+    command: install.command,
+    at: ok ? trim(git(['rev-parse', 'HEAD'], { cwd: install.root }).stdout) : null,
+    reason: ok ? null : trim(pulled.stderr) || 'git pull failed',
+  };
+}
+
+/**
+ * One row in the merge log, appended.
+ *
+ * The log is a table a person reads, so the line carries what a person checking
+ * up on a merge would want: which pull request, what the gate measured on both
+ * sides, what it became, and under whose authority. The red sets go in as
+ * counts with the difference spelled out — the full lists live in the round's
+ * own `--json`, and a table row that ran to fifty names would stop being one.
+ *
+ * Appending is best effort. A merge that happened and a line that did not get
+ * written is a bookkeeping problem; refusing to report the merge because of it
+ * would be a worse one.
+ */
+function writeMergeLine({ report, verdict, path, clock }) {
+  if (!path) return { path: null, line: null };
+  const day = new Date(clock()).toISOString().slice(0, 10);
+  const checks = [
+    `full suite both sides, fresh baseline at ${short(verdict.baseline.commit)}`,
+    `${verdict.baseline.red.length} red before · ${verdict.candidate.red.length} after · 0 new`,
+    `base unmoved at merge`,
+  ].join(' · ');
+  const line = `| ${day} | ${basenameOf(report.repo)} #${report.pr.number}${verdict.pr.title ? ` ${verdict.pr.title}` : ''} `
+    + `| ${checks} | M (mechanical gate) | Squash-merge → \`${short(report.merge_commit)}\` `
+    + `| Run by \`mc repo merge\` as ${report.holder}. ${deployNote(report.deploy)} |`;
+
+  try {
+    if (!existsSync(path)) mkdirSync(dirname(path), { recursive: true });
+    appendFileSync(path, `${line}\n`, { mode: 0o600 });
+  } catch {
+    return { path: null, line };
+  }
+  return { path, line };
+}
+
+function deployNote(deploy) {
+  if (!deploy?.attempted) return 'No source-linked installation here.';
+  return deploy.ok ? 'Live via deploy pull.' : `Deploy pull failed (${deploy.reason}) — pull by hand.`;
+}
+
+function basenameOf(path) {
+  return String(path).replace(/\/+$/u, '').split('/').pop();
+}
+
+function short(sha) {
+  return String(sha || '').slice(0, 7) || 'unknown';
+}
+
+function trim(value) {
+  return String(value || '').trim().split('\n').slice(0, 3).join(' ');
+}
+

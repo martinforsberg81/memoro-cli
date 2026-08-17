@@ -41,7 +41,7 @@ started in it. mc stores nothing else, because nothing else is mc's to know.
 | `mc repo claim <repo> "<what for>"` | Hold the gate round on a repository. Refused if someone else holds it. |
 | `mc repo release <repo> [--force]` | Give it back; `--force` takes it from another holder and is logged. |
 | `mc repo who <repo>` | Who holds it, for what, since when — and whether the holder is still working. `--json`. |
-| `mc repo merge <repo> <pr> --check` | Run the test gate for that pull request and report the verdict. It does not merge. `--json`. |
+| `mc repo merge <repo> <pr>` | Run the test gate and, only if it is green, squash-merge, deploy-pull and log it. `--check` gates and stops. `--json`. |
 
 `mc work release` keeps a worktree that is in use, has uncommitted changes, or
 has unmerged commits. `mc work discard` reports what it will destroy and
@@ -111,10 +111,34 @@ The lease is released in a `finally`, so an interrupted round never leaves the
 repository held. Both worktrees are detached, so no branch is moved and the
 merge into the candidate is never a commit on anybody's work.
 
-`--check` is compulsory, because there is no merge in this verb yet — not
-behind a flag either. And the verdict it prints is `the test gate passes`,
-never `approved`: reading the diff against its contract is judgement, and a
-green suite says nothing about an unescalated design decision.
+Without `--check` the same round also lands the change: squash-merge, then a
+`git pull` in the source-linked installation, because on this machine that is
+what deploying means, and then one line in the merge log. With `--check` it
+gates and stops, which is what a surface without merge authority needs.
+
+There is no third mode. Nothing merges a gate the round called red — not a
+flag, not an option, not an environment variable. Overruling a red gate is the
+human's call and should cost a human action, visible as one.
+
+Two things are re-checked between the verdict and the merge, because a green
+verdict is a statement about the tree it measured:
+
+- **the base has not moved.** The lease serialises gate rounds against each
+  other and does nothing about a person merging by hand, which happened during
+  this feature's own development. If `origin/<base>` is no longer the commit the
+  baseline was measured at, the round stops and says so rather than merging on
+  a verdict about a tree that has changed.
+- **the lease is still ours.** A `--force` release mid-round hands the
+  repository to somebody else, and a merge landed after that is one nobody was
+  holding the round for.
+
+A deploy pull that fails does not fail the round and does not undo anything:
+the change has landed, and what is left is a machine one commit behind, which
+the report says plainly so it can be pulled by hand.
+
+And the verdict is `the test gate passes`, never `approved`: reading the diff
+against its contract is judgement, and a green suite says nothing about an
+unescalated design decision.
 
 ## Sessions — messaging
 
