@@ -10,6 +10,7 @@
  *   mc repo status [repo] [--json] [--offline]
  *   mc repo watch start|stop|status
  *   mc repo claim <repo> "<errand>" / release <repo> [--force] / who <repo>
+ *   mc repo merge <repo> <pr> --check
  *
  * It reads. The one thing status writes is a `git fetch` — remote-tracking
  * refs and nothing else — and `--offline` removes even that, at the price of
@@ -21,13 +22,15 @@ import { painter } from '../status-render.js';
 import { leaseRow, renderRepoLines, renderWatchLines } from '../repo-render.js';
 import { claimLease, readLease, releaseLease } from '../repo-lease.js';
 import { currentHolder } from '../work-identity.js';
+import { runGate } from '../repo-gate.js';
 import { readCombinedSnapshot } from '../repo-snapshot.js';
 import { matchRepo, repoStatus, repoView } from '../repo-status.js';
 import { startWatcher, stopWatcher, watcherState } from '../repo-watch.js';
 import { scanArgs } from './flags.js';
 
-const VERBS = ['status', 'watch', 'claim', 'release', 'who'];
+const VERBS = ['status', 'watch', 'claim', 'release', 'who', 'merge'];
 const WATCH_VERBS = ['start', 'stop', 'status'];
+const LEASE_VERBS = ['claim', 'release', 'who'];
 
 export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
@@ -40,6 +43,7 @@ export async function run(argv, deps = {}) {
   }
 
   if (opts.verb === 'watch') return watch(opts, { stdout, stderr });
+  if (opts.verb === 'merge') return gate(opts, { stdout, stderr });
   if (opts.verb !== 'status') return lease(opts, { stdout, stderr });
 
   const report = await repoView({ names: opts.names, offline: opts.offline });
@@ -174,6 +178,87 @@ async function lease(opts, { stdout, stderr }) {
 }
 
 /**
+ * `mc repo merge <repo> <pr> --check` — the gate round, run and reported.
+ *
+ * Only `--check` for now, and the flag is compulsory rather than a default:
+ * there is no merge in the code behind it, so a command that read as though it
+ * might merge would be promising something it cannot do. When merging arrives
+ * it arrives as its own step, and the flag is what will tell the two apart.
+ *
+ * Progress goes to stderr and the verdict to stdout, so the round can be left
+ * running in the background with its JSON collected from one and its liveness
+ * watched on the other. That split is the whole accommodation this needs: the
+ * suite takes tens of minutes, and nothing here holds a terminal or asks a
+ * question.
+ */
+async function gate(opts, { stdout, stderr }) {
+  const repoPath = await resolveRepoPath(opts.repo);
+  if (!repoPath) {
+    stderr.write(`mc: no repository called "${opts.repo}" — mc repo status lists the ones mc can see\n`);
+    return 1;
+  }
+
+  // The holder is read here, in the shell the operator is actually standing
+  // in. Everything after this runs in temporary worktrees outside the work
+  // root, where the same question would answer `user@host` instead.
+  const holder = currentHolder();
+  const report = await runGate({
+    repoPath,
+    pr: opts.pr,
+    holder,
+    onProgress: (message) => stderr.write(`mc: ${message}\n`),
+  });
+
+  if (opts.json) {
+    stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+    return report.ok ? 0 : 1;
+  }
+
+  for (const line of gateLines(report)) stdout.write(`${line}\n`);
+  return report.ok ? 0 : 1;
+}
+
+/**
+ * The verdict in prose — and never the word "approved".
+ *
+ * The gate reads tests. Whether the change is the right change is a question
+ * about the diff and its contract, which nothing here has looked at, so the
+ * lines below say what was measured and leave the rest to whoever reviews it.
+ */
+function gateLines(report) {
+  const lines = [];
+  const pr = report.pr.head ? `#${report.pr.number} (${report.pr.head} → ${report.pr.base})` : `#${report.pr.number}`;
+
+  if (report.stopped_at && report.stopped_at !== 'red') {
+    lines.push(`mc: the round stopped at ${report.stopped_at} — ${report.reason}`);
+    lines.push('mc: nothing was measured, and nothing was merged');
+    return lines;
+  }
+
+  lines.push(`mc: ${pr}, gated against ${report.baseline.commit?.slice(0, 7)}`);
+  lines.push(`mc: baseline ${count(report.baseline)} · candidate ${count(report.candidate)}`);
+
+  if (report.broke.length) {
+    lines.push(`mc: RED — ${report.broke.length} red on the candidate and green on the baseline:`);
+    for (const name of report.broke.slice(0, 20)) lines.push(`      ${name}`);
+    if (report.broke.length > 20) lines.push(`      … and ${report.broke.length - 20} more`);
+    lines.push('mc: not merged, and this verb would not have merged it either');
+    return lines;
+  }
+
+  if (report.fixed.length) lines.push(`mc: ${report.fixed.length} that were red on the baseline are green here`);
+  lines.push('mc: GREEN — the test gate passes. It says nothing about whether the change is right;');
+  lines.push('mc: that is the review, and it is still somebody\'s to do');
+  lines.push('mc: --check only: this verb does not merge');
+  return lines;
+}
+
+function count(side) {
+  const red = side.red.length;
+  return `${side.totals.tests} tests, ${red} red name${red === 1 ? '' : 's'}`;
+}
+
+/**
  * The lease verbs take one repository, named the way the view names them.
  *
  * Cheap first: the names in the last snapshot, then a path or a clone beside
@@ -206,12 +291,13 @@ function usage() {
     '        mc repo claim <repo> "<what for>"\n',
     '        mc repo release <repo> [--force]\n',
     '        mc repo who <repo> [--json]\n',
+    '        mc repo merge <repo> <pr> --check [--json]\n',
   ].join('');
 }
 
 export function parseArgs(argv) {
   const scanned = scanArgs(argv, {
-    booleans: ['--json', '--offline', '--force'],
+    booleans: ['--json', '--offline', '--force', '--check'],
     strictValues: ['--interval'],
   });
   const opts = {
@@ -219,8 +305,10 @@ export function parseArgs(argv) {
     watch: 'status',
     names: [],
     repo: null,
+    pr: null,
     errand: '',
     force: scanned.flags.force,
+    check: scanned.flags.check,
     json: scanned.flags.json,
     offline: scanned.flags.offline,
     intervalMs: 60_000,
@@ -238,7 +326,33 @@ export function parseArgs(argv) {
     opts.intervalMs = Math.round(value * 1000);
   }
 
-  if (opts.verb === 'claim' || opts.verb === 'release' || opts.verb === 'who') {
+  if (opts.verb === 'merge') {
+    opts.repo = positional.shift() || null;
+    if (!opts.repo) return { ...opts, error: 'which repository? mc repo merge <repo> <pr> --check' };
+    // `#346` and `346` are the same pull request, and a person who copied the
+    // number off a page brings the hash with it.
+    const number = String(positional.shift() || '').replace(/^#/u, '');
+    if (!number) return { ...opts, error: 'which pull request? mc repo merge <repo> <pr> --check' };
+    if (!/^\d+$/u.test(number)) return { ...opts, error: `"${number}" is not a pull request number` };
+    opts.pr = Number(number);
+    if (positional.length) return { ...opts, error: `mc repo merge takes one repository and one pull request (${positional[0]})` };
+    // Compulsory, because there is no other mode yet. A verb called `merge`
+    // that silently only checks would be worse than one that insists you say
+    // so, and the flag is what will separate the two when merging lands.
+    if (!opts.check) {
+      return {
+        ...opts,
+        error: 'mc repo merge only runs the gate for now — say --check. Merging is its own step and is not built yet',
+      };
+    }
+    if (opts.force) return { ...opts, error: '--force belongs to mc repo release' };
+    if (scanned.flags.interval !== null) return { ...opts, error: '--interval belongs to mc repo watch start' };
+    return opts;
+  }
+
+  if (opts.check) return { ...opts, error: '--check belongs to mc repo merge' };
+
+  if (LEASE_VERBS.includes(opts.verb)) {
     // A repository is required: these verbs are about one, and guessing from
     // the current directory would let a claim land on the wrong repository
     // from a shell somebody forgot they had moved.

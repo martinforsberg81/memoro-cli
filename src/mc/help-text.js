@@ -88,6 +88,14 @@ MAINTENANCE
   mc repo release <repo> [--force] Give it back. --force takes it from someone
                                     else, and is always written to the log
   mc repo who <repo> [--json]      Who holds it, for what, and since when
+  mc repo merge <repo> <pr> --check
+                                    Run the test gate for that pull request:
+                                    take the lease, build a fresh baseline and
+                                    a candidate with main merged in, run the
+                                    repository's own full suite on both, and
+                                    compare the failures by name at every
+                                    level. It reports; it does not merge, and
+                                    a green gate is not a review
   mc worker <name> [task]          A project folder that carries the worker
                                     role: every conversation started in it
                                     gets the role's overlay and model default

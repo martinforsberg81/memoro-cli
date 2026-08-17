@@ -29,6 +29,7 @@ started in it. mc stores nothing else, because nothing else is mc's to know.
 | `mc work remove <name> <repo>` | Take one repository out of it. |
 | `mc work release <name> [--apply]` | Remove what git says can go; keep the rest. |
 | `mc work discard <name> [repo] [--apply]` | Throw it away — worktrees, branches, and all. |
+| `mc repo merge <repo> <pr> --check` | Run the test gate for that pull request and report. Does not merge. `--json`. |
 | `mc work send <name> "<text>"` | A message into that work's `inbox/`. `--wake` also knocks on whatever is running there. `--json`. |
 | `mc work stop <name>` | Stop what is running there; keep the work. |
 | `mc work list` | The same listing as bare `mc work`. |
@@ -41,6 +42,7 @@ started in it. mc stores nothing else, because nothing else is mc's to know.
 | `mc repo claim <repo> "<what for>"` | Hold the gate round on a repository. Refused if someone else holds it. |
 | `mc repo release <repo> [--force]` | Give it back; `--force` takes it from another holder and is logged. |
 | `mc repo who <repo>` | Who holds it, for what, since when. `--json`. |
+| `mc repo merge <repo> <pr> --check` | Run the test gate for that pull request and report the verdict. It does not merge. `--json`. |
 
 `mc work release` keeps a worktree that is in use, has uncommitted changes, or
 has unmerged commits. `mc work discard` reports what it will destroy and
@@ -66,6 +68,29 @@ and following it is the roles' instruction, not a lock. There is no expiry: a
 forgotten lease shows its age in `mc repo status`, and a human or the PM ends
 it with `--force`, which the lease log keeps. The lease is one file under
 `<mc home>/repo-leases/` and nothing in mc reads it except `mc repo`.
+
+`mc repo merge <repo> <pr> --check` runs the verify half of that round as a
+machine, so following it does not depend on somebody remembering to. It takes
+the lease, builds two throwaway worktrees under `<mc home>/gate/` — the
+baseline at the pull request's base branch, the candidate at its head with the
+current base merged in — runs the repository's own `npm test` on both in the
+same round, and compares the two red sets **by name at every level**, subtests
+included. A number can match while the contents have swapped, and a failing
+test makes its suite and its file fail with it, so only the full set of names
+at every depth answers the question. Red names on the candidate that were
+green on the baseline stop the round; names that were already red do not, and
+neither do `TODO` or `SKIP`. A run that never reached its own summary stops the
+round too, rather than counting as an empty red set — two suites that both died
+the same way would otherwise read as a confident green.
+
+The lease is released in a `finally`, so an interrupted round never leaves the
+repository held. Both worktrees are detached, so no branch is moved and the
+merge into the candidate is never a commit on anybody's work.
+
+`--check` is compulsory, because there is no merge in this verb yet — not
+behind a flag either. And the verdict it prints is `the test gate passes`,
+never `approved`: reading the diff against its contract is judgement, and a
+green suite says nothing about an unescalated design decision.
 
 ## Sessions — messaging
 
