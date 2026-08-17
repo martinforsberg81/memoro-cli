@@ -340,3 +340,57 @@ describe('a merge that gh refuses', () => {
     } finally { fx.cleanup(); }
   });
 });
+
+/**
+ * What the verb says about itself has to be true.
+ *
+ * In this codebase the comments are the design record, so a stale one claiming
+ * a safety property misleads the next reviewer more than no comment would — and
+ * the file that dispatches the merge is the worst place to have one. This was a
+ * review finding after the merge landed: the dispatcher still said "there is no
+ * merge in the code behind it", the check-only run printed "this verb does not
+ * merge", and the usage in the error messages read as though `--check` were
+ * required.
+ *
+ * The claims that must stay true are asserted against the source rather than
+ * remembered, because remembering is what failed.
+ */
+describe('the verb describes itself accurately', () => {
+  const read = (...parts) => {
+    const here = dirname(fileURLToPath(import.meta.url));
+    return readFileSync(join(here, '..', '..', 'src', 'mc', ...parts), 'utf8');
+  };
+
+  it('the dispatcher no longer claims it cannot merge', () => {
+    const source = read('commands', 'repo.js');
+    for (const stale of [
+      /there is no merge in the code behind it/u,
+      /Merging is its own step and is not built yet/u,
+      /only runs the gate for now/u,
+      /this verb does not merge/u,
+    ]) {
+      assert.doesNotMatch(source, stale, `a stale claim matching ${stale} survives`);
+    }
+  });
+
+  it('its usage presents --check as one mode, not a requirement', () => {
+    const source = read('commands', 'repo.js');
+    // Only the strings the user is actually shown — prose about the verb is
+    // free to describe it in sentences, and does.
+    const printed = [...source.matchAll(/'([^'\n]*mc repo merge <repo> <pr>[^'\n]*)'/gu)].map((m) => m[1]);
+    assert.ok(printed.length >= 3, `expected the usage strings, found ${printed.length}`);
+    for (const usage of printed) {
+      assert.match(usage, /\[--check\]/u, `printed usage "${usage}" presents --check as required`);
+    }
+  });
+
+  it('the gate still says it cannot merge, because it still cannot', () => {
+    // The one claim of this kind that is load-bearing and must not be softened
+    // just because the sibling module now can.
+    const gate = read('repo-gate.js');
+    assert.match(gate, /There is no merge in here/u);
+    const code = gate.replace(/\/\*[\s\S]*?\*\//gu, '').replace(/^\s*\/\/.*$/gmu, '');
+    assert.doesNotMatch(code, /pr['"\s,\]]+merge/u);
+    assert.doesNotMatch(code, /['"]push['"]/u);
+  });
+});

@@ -194,12 +194,19 @@ async function lease(opts, { stdout, stderr }) {
 }
 
 /**
- * `mc repo merge <repo> <pr> --check` — the gate round, run and reported.
+ * `mc repo merge <repo> <pr>` — the gate round, and what becomes of it.
  *
- * Only `--check` for now, and the flag is compulsory rather than a default:
- * there is no merge in the code behind it, so a command that read as though it
- * might merge would be promising something it cannot do. When merging arrives
- * it arrives as its own step, and the flag is what will tell the two apart.
+ * Two modes and no third. Without a flag the round gates and, only on green,
+ * lands the change; `--check` runs the same round and stops at the verdict,
+ * which is what a surface without merge authority needs. What does not exist is
+ * a way to land a change the gate called red — not a flag, not an option, not
+ * an environment variable. Overruling a red gate is the human's call and should
+ * cost a human action, visible as one.
+ *
+ * The dispatch is here; the two rounds are `repo-gate.js` and `repo-merge.js`,
+ * and the separation between them is load-bearing rather than tidy: the gate
+ * cannot merge at all, so nothing reaches a merge except through a report a
+ * module with no opinion about merging marked green.
  *
  * Progress goes to stderr and the verdict to stdout, so the round can be left
  * running in the background with its JSON collected from one and its liveness
@@ -226,7 +233,7 @@ async function gate(opts, { stdout, stderr }) {
     return report.ok ? 0 : 1;
   }
 
-  const lines = opts.check ? gateLines(report) : mergeLines(report);
+  const lines = opts.check ? gateLines(report, { checkOnly: true }) : mergeLines(report);
   for (const line of lines) stdout.write(`${line}\n`);
   return report.ok ? 0 : 1;
 }
@@ -270,7 +277,7 @@ function mergeLines(report) {
  * about the diff and its contract, which nothing here has looked at, so the
  * lines below say what was measured and leave the rest to whoever reviews it.
  */
-function gateLines(report) {
+function gateLines(report, { checkOnly = false } = {}) {
   const lines = [];
   const pr = report.pr.head ? `#${report.pr.number} (${report.pr.head} → ${report.pr.base})` : `#${report.pr.number}`;
 
@@ -292,14 +299,17 @@ function gateLines(report) {
     lines.push(`mc: RED — ${report.broke.length} red on the candidate and green on the baseline:`);
     for (const name of report.broke.slice(0, 20)) lines.push(`      ${name}`);
     if (report.broke.length > 20) lines.push(`      … and ${report.broke.length - 20} more`);
-    lines.push('mc: not merged, and this verb would not have merged it either');
+    lines.push('mc: not merged — nothing lands a red gate, with or without a flag');
     return lines;
   }
 
   if (report.fixed.length) lines.push(`mc: ${report.fixed.length} that were red on the baseline are green here`);
   lines.push('mc: GREEN — the test gate passes. It says nothing about whether the change is right;');
   lines.push('mc: that is the review, and it is still somebody\'s to do');
-  lines.push('mc: --check only: this verb does not merge');
+  // Said only when it is the whole answer. In a merge round these same lines
+  // are followed by what became of the verdict, and a run that says it did not
+  // merge and then says it merged is worse than one that says neither.
+  if (checkOnly) lines.push('mc: this run was asked to check only, so nothing was merged');
   return lines;
 }
 
@@ -378,11 +388,11 @@ export function parseArgs(argv) {
 
   if (opts.verb === 'merge') {
     opts.repo = positional.shift() || null;
-    if (!opts.repo) return { ...opts, error: 'which repository? mc repo merge <repo> <pr> --check' };
+    if (!opts.repo) return { ...opts, error: 'which repository? mc repo merge <repo> <pr> [--check]' };
     // `#346` and `346` are the same pull request, and a person who copied the
     // number off a page brings the hash with it.
     const number = String(positional.shift() || '').replace(/^#/u, '');
-    if (!number) return { ...opts, error: 'which pull request? mc repo merge <repo> <pr> --check' };
+    if (!number) return { ...opts, error: 'which pull request? mc repo merge <repo> <pr> [--check]' };
     if (!/^\d+$/u.test(number)) return { ...opts, error: `"${number}" is not a pull request number` };
     opts.pr = Number(number);
     if (positional.length) return { ...opts, error: `mc repo merge takes one repository and one pull request (${positional[0]})` };
