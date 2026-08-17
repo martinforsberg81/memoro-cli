@@ -19,10 +19,11 @@
  * blocks nothing: git and gh are untouched by anything here.
  */
 import { painter } from '../status-render.js';
-import { leaseRow, renderRepoLines, renderWatchLines } from '../repo-render.js';
+import { leaseRow, livenessRow, renderRepoLines, renderWatchLines } from '../repo-render.js';
 import { claimLease, readLease, releaseLease } from '../repo-lease.js';
 import { currentHolder } from '../work-identity.js';
 import { runGate } from '../repo-gate.js';
+import { livenessForLeases } from '../lease-liveness.js';
 import { readCombinedSnapshot } from '../repo-snapshot.js';
 import { matchRepo, repoStatus, repoView } from '../repo-status.js';
 import { startWatcher, stopWatcher, watcherState } from '../repo-watch.js';
@@ -136,11 +137,18 @@ async function lease(opts, { stdout, stderr }) {
 
   if (opts.verb === 'who') {
     const current = readLease(repoPath);
+    // Asked of the board, not of a clock. The age above says how long the
+    // round has run; this says whether it is still running, which is the
+    // question somebody weighing a `--force` is actually asking.
+    const answers = await livenessForLeases([current]);
+    const liveness = current.held ? answers.get(current.holder) ?? null : null;
     if (opts.json) {
-      stdout.write(`${JSON.stringify({ repo: repoPath, ...current }, null, 2)}\n`);
+      stdout.write(`${JSON.stringify({ repo: repoPath, ...current, liveness }, null, 2)}\n`);
       return 0;
     }
     stdout.write(`${leaseRow(c, current)}\n`);
+    const live = livenessRow(c, current, liveness);
+    if (live) stdout.write(`${live}\n`);
     return 0;
   }
 
@@ -148,6 +156,13 @@ async function lease(opts, { stdout, stderr }) {
     const outcome = claimLease({ repoPath, errand: opts.errand, holder });
     if (!outcome.ok) {
       stderr.write(`mc: ${repoPath} is held by ${outcome.lease.holder} — ${leaseRow(c, outcome.lease)}\n`);
+      // This is the moment somebody decides whether the other round is dead,
+      // and the sentence below offers them `--force`. Saying how long it has
+      // been held without saying whether it is still running is what nearly
+      // ended a live round at 27 minutes.
+      const answers = await livenessForLeases([outcome.lease]);
+      const live = livenessRow(c, outcome.lease, answers.get(outcome.lease.holder));
+      if (live) stderr.write(`mc: ${live}\n`);
       stderr.write('mc: nothing is blocked; this is mc being strict with itself\n');
       stderr.write(`mc: if that round is over, mc repo release ${opts.repo} --force ends it — and says so in the log\n`);
       return 1;

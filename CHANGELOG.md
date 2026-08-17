@@ -17,6 +17,22 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   surface and is untouched.
 
 ### Added
+- Lease liveness — `mc repo who`, the status view's lease section and a refused
+  `mc repo claim` now say whether the holder is still working, not only how
+  long it has held the lease. Age answers the wrong question: a gate round
+  *should* take half an hour and a forgotten lease can be two minutes old, so
+  no threshold separates them — a real lease reading `grindvarv #344` stood 27
+  minutes with a silent holder and came within minutes of being force-released
+  out from under a running round. The fact is derived from the board, which
+  already reads every area's processes and transcripts at the moment of asking:
+  no heartbeat, no new file, no clock, no TTL and no expiry. A heartbeat would
+  have failed hardest in the case it was built for, since it needs the holder
+  to run mc at intervals and the deadest-looking lease is the one whose holder
+  is ten minutes into a suite run. A holder mc cannot see — `user@host`, or an
+  area no longer on the board — reads `liveness unknown` with the reason, never
+  a blank and never a guess. Nothing blocks `--force`, which behaves exactly as
+  it did.
+
 - `mc repo merge <repo> <pr> --check` — the verify half of the gate round as a
   machine rather than as an instruction somebody follows. It takes the
   repository's lease, builds two throwaway detached worktrees under

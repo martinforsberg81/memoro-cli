@@ -43,7 +43,10 @@ export function renderRepoLines(report, {
     lines.push(...section(c, wide, 'pull', prRows(c, repo)));
     lines.push(...section(c, wide, 'worktrees', worktreeRows(c, repo)));
     if (repo.deploy) lines.push(...section(c, wide, 'deploy', deployRows(c, repo)));
-    lines.push(...section(c, wide, 'lease', [leaseRow(c, repo.lease, now)]));
+    lines.push(...section(c, wide, 'lease', [
+      leaseRow(c, repo.lease, now),
+      livenessRow(c, repo.lease, repo.lease?.liveness, now),
+    ].filter(Boolean)));
     lines.push('');
   }
   return lines;
@@ -160,10 +163,9 @@ function worktreeRows(c, repo) {
 /**
  * Who is holding a round on this repository, for what, and since when.
  *
- * The age is the whole reason this line exists. There is no expiry: a lease
- * held for four minutes is a round in progress, and one held since this
- * morning is somebody who forgot — and the only difference visible anywhere
- * is this number.
+ * The age is here because a lease has no expiry and never will. But age is
+ * also, on its own, the wrong question — see `livenessRow` below, which is the
+ * line that actually tells the two cases apart.
  */
 export function leaseRow(c, lease, now = Date.now()) {
   if (!lease?.held) return c('free', 'grey');
@@ -174,6 +176,31 @@ export function leaseRow(c, lease, now = Date.now()) {
     lease.errand ? `“${lease.errand}”` : '',
     c(`held for ${duration(age)}`, old ? 'yellow' : 'grey'),
   ].filter(Boolean).join('  ');
+}
+
+/**
+ * Whether the holder is still working — the line the age could not give.
+ *
+ * A gate round should take half an hour and a forgotten lease can be two
+ * minutes old, so the number above separates nothing. This one does, and it is
+ * read off the board rather than off a clock: no heartbeat, no expiry, and
+ * nothing for the holder to remember to do.
+ *
+ * `unknown` is printed as plainly as the rest, with the reason. A holder mc
+ * cannot see is not a holder who is gone, and the whole risk here is somebody
+ * reading a blank as permission to `--force`.
+ */
+export function livenessRow(c, lease, liveness, now = Date.now()) {
+  if (!lease?.held || !liveness) return null;
+  if (!liveness.known) {
+    return `${c('liveness unknown', 'yellow')}  ${c(liveness.reason || 'mc cannot see this holder', 'grey')}`;
+  }
+  const since = liveness.last_seen_ms === null ? null : Math.max(0, now - liveness.last_seen_ms);
+  const seen = since === null ? 'nothing has run there'
+    : since < 60_000 ? 'last seen just now'
+      : `last seen ${duration(since)} ago`;
+  const colour = liveness.state === 'working' ? 'green' : liveness.state === 'waiting' ? 'cyan' : 'grey';
+  return `${c(`holder ${liveness.state}`, colour)}  ${c(seen, 'grey')}`;
 }
 
 function duration(ms) {
