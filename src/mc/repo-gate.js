@@ -27,7 +27,9 @@
  * There is no merge in here, and not behind a flag either. This module answers
  * one question — is the test gate green — and a module that could also merge
  * would be one `if` away from a round that merged on a verdict it had not
- * finished forming. Merging arrives as its own step, on top of this.
+ * finished forming. Merging lives in `repo-merge.js`, which runs this and acts
+ * on the report; keeping it out of here is load-bearing rather than tidy, and
+ * a test asserts against this file's source that it stays out.
  *
  * It says "the test gate is green", never "the pull request is good". Reading
  * the diff against its contract is judgement, and judgement is not mechanical;
