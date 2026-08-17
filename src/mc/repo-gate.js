@@ -71,14 +71,33 @@ export async function runGate({
   pr,
   holder = currentHolder(),
   root = mcHome(),
-  git = realGit,
-  gh = realGh,
-  suite = realSuite,
+  env = process.env,
+  git = null,
+  gh = null,
+  suite = null,
   onProgress = () => {},
   clock = () => Date.now(),
+  // Whether the round owns the lease or is running inside somebody else's.
+  //
+  // The merge step has to hold one lease across the gate *and* the merge — a
+  // round that let go in between would be measuring against a main another
+  // round was free to move. So it claims first and passes `holdLease: false`,
+  // and this module neither takes nor gives back what it did not claim.
+  holdLease = true,
 } = {}) {
   const startedAt = clock();
   const say = (message) => { try { onProgress(message); } catch { /* progress is a courtesy */ } };
+
+  // Bound to the `env` this round was given rather than to the process's own.
+  // A round that took an environment and then resolved its binaries against a
+  // different one is answering a question nobody asked, and it is why a test
+  // that put a stub `gh` on the PATH still reached the real one.
+  const run = (tool) => (args, options = {}) => spawnSync(tool, args, {
+    cwd: options.cwd, env, encoding: 'utf8',
+  });
+  const askGit = git || run('git');
+  const askGh = gh || run('gh');
+  const runSuite = suite || ((options) => realSuite({ ...options, env }));
 
   const report = {
     schema: GATE_SCHEMA,
@@ -110,12 +129,14 @@ export async function runGate({
     return report;
   };
 
-  const lease = claimLease({ repoPath, errand: `gate round for #${pr}`, holder, root });
-  if (!lease.ok) {
-    const held = lease.lease;
-    return finish('lease', `${repoPath} is held by ${held.holder}${held.errand ? ` for “${held.errand}”` : ''}`);
+  if (holdLease) {
+    const lease = claimLease({ repoPath, errand: `gate round for #${pr}`, holder, root });
+    if (!lease.ok) {
+      const held = lease.lease;
+      return finish('lease', `${repoPath} is held by ${held.holder}${held.errand ? ` for “${held.errand}”` : ''}`);
+    }
+    say(`lease taken by ${holder.name}`);
   }
-  say(`lease taken by ${holder.name}`);
 
   const workspace = join(gateRoot(root), repoFileSlug(repoPath));
   const baseDir = join(workspace, 'baseline');
@@ -125,7 +146,7 @@ export async function runGate({
     // What the pull request actually is, rather than what the caller believes.
     // A number is all the caller has; the branch, its head, and the branch it
     // is aimed at all come from the forge.
-    const facts = prFacts({ gh, repoPath, pr });
+    const facts = prFacts({ gh: askGh, repoPath, pr });
     if (!facts.ok) return finish('pr', facts.reason);
     Object.assign(report.pr, facts.pr);
     say(`#${facts.pr.number} — ${facts.pr.head} into ${facts.pr.base}`);
@@ -133,20 +154,20 @@ export async function runGate({
     // Fresh, always. The whole point of the baseline is that it is current,
     // and a stale remote-tracking ref is how a round measures against a main
     // that moved an hour ago.
-    const fetched = git(['fetch', 'origin', '--prune'], { cwd: repoPath });
+    const fetched = askGit(['fetch', 'origin', '--prune'], { cwd: repoPath });
     if (fetched.status !== 0) return finish('fetch', trim(fetched.stderr) || 'git fetch failed');
 
-    clearWorkspace({ git, repoPath, workspace });
+    clearWorkspace({ git: askGit, repoPath, workspace });
     mkdirSync(workspace, { recursive: true, mode: 0o700 });
 
     // Detached on purpose, both of them. The round must be able to merge the
     // base into the candidate without that ever becoming a commit on somebody's
     // branch: what is measured is a state, not a change to the repository.
     const baseRef = `origin/${facts.pr.base}`;
-    const added = git(['worktree', 'add', '--detach', baseDir, baseRef], { cwd: repoPath });
+    const added = askGit(['worktree', 'add', '--detach', baseDir, baseRef], { cwd: repoPath });
     if (added.status !== 0) return finish('worktree', trim(added.stderr) || `could not check out ${baseRef}`);
 
-    const candidate = git(['worktree', 'add', '--detach', headDir, facts.pr.head_sha], { cwd: repoPath });
+    const candidate = askGit(['worktree', 'add', '--detach', headDir, facts.pr.head_sha], { cwd: repoPath });
     if (candidate.status !== 0) {
       return finish('worktree', trim(candidate.stderr) || `could not check out ${facts.pr.head_sha}`);
     }
@@ -155,7 +176,7 @@ export async function runGate({
     // that is green against the main its author branched from and red against
     // the main it is about to land on is exactly the collision this exists to
     // catch, and it is invisible if the head commit is tested on its own.
-    const merged = git(['merge', '--no-edit', baseRef], { cwd: headDir });
+    const merged = askGit(['merge', '--no-edit', baseRef], { cwd: headDir });
     if (merged.status !== 0) {
       return finish('merge', `#${facts.pr.number} conflicts with ${baseRef} — ${trim(merged.stdout) || 'merge failed'}`);
     }
@@ -171,13 +192,13 @@ export async function runGate({
     // The baseline goes first so a repository that cannot run its own suite is
     // found before the candidate's run is paid for.
     say('running the suite on the baseline — this takes a while');
-    const before = await measure({ suite, git, cwd: baseDir, say, side: 'baseline' });
+    const before = await measure({ suite: runSuite, git: askGit, cwd: baseDir, say, side: 'baseline' });
     if (!before.ok) return finish('suite', `the baseline run ${before.reason}`);
     report.baseline = before.result;
 
     say(`baseline: ${before.result.red.length} red`);
     say('running the suite on the candidate');
-    const after = await measure({ suite, git, cwd: headDir, say, side: 'candidate' });
+    const after = await measure({ suite: runSuite, git: askGit, cwd: headDir, say, side: 'candidate' });
     if (!after.ok) return finish('suite', `the candidate run ${after.reason}`);
     report.candidate = after.result;
 
@@ -189,11 +210,15 @@ export async function runGate({
     if (broke.length) return finish('red', `${broke.length} test${broke.length === 1 ? '' : 's'} red on the candidate and green on the baseline`);
     return finish(null, null);
   } finally {
-    clearWorkspace({ git, repoPath, workspace });
+    clearWorkspace({ git: askGit, repoPath, workspace });
     // Always, and last. A round that died half way through must not leave the
-    // repository held by a session that is no longer running.
-    releaseLease({ repoPath, holder, root });
-    say('lease released');
+    // repository held by a session that is no longer running — but a round
+    // running inside somebody else's lease gives back nothing, because the
+    // holder is still using it.
+    if (holdLease) {
+      releaseLease({ repoPath, holder, root });
+      say('lease released');
+    }
   }
 }
 
@@ -218,7 +243,12 @@ async function measure({ suite, git, cwd, say, side }) {
   return {
     ok: true,
     result: {
+      // The commit of the throwaway worktree this side ran in — for the
+      // candidate that is the PR's head with the base merged into it, which is
+      // a commit that exists nowhere but here and is easily mistaken for the
+      // branch head. `is` says which one it is so nothing has to be inferred.
       commit: at?.status === 0 ? String(at.stdout || '').trim() : null,
+      is: side === 'baseline' ? 'base-branch-as-fetched' : 'pr-head-with-base-merged-in',
       exit_code: run.code,
       totals,
       red: redNames(run.tap),
@@ -299,14 +329,6 @@ function trim(value) {
   return String(value || '').trim().split('\n').slice(0, 3).join(' ');
 }
 
-function realGit(args, { cwd } = {}) {
-  return spawnSync('git', args, { cwd, encoding: 'utf8' });
-}
-
-function realGh(args, { cwd } = {}) {
-  return spawnSync('gh', args, { cwd, encoding: 'utf8' });
-}
-
 /**
  * The real suite run: `npm test`, streamed, with TAP asked for through the
  * environment.
@@ -322,11 +344,29 @@ function realGh(args, { cwd } = {}) {
  * minutes, and a round that says nothing for forty minutes is one nobody can
  * tell from a hung one.
  */
-function realSuite({ cwd, onLine = () => {} } = {}) {
+function realSuite({ cwd, onLine = () => {}, env = process.env } = {}) {
   return new Promise((resolve) => {
+    // The suite is started in a clean test context, not this process's.
+    //
+    // `NODE_TEST_CONTEXT` is set by node inside a test run, and a suite that
+    // inherits it decides it is being required recursively and skips running
+    // its files altogether — output with no results, exit code 0. The gate's
+    // unfinished-run guard turns that into a stop rather than a false green,
+    // but the round could never run at all. Which is exactly what happened the
+    // first time this module's own live test tried to gate a repository.
+    const clean = { ...env };
+    delete clean.NODE_TEST_CONTEXT;
+    // And any reporter the caller's own environment was already asking for.
+    // Node rejects a second `--test-reporter` without a matching destination
+    // (`ERR_INVALID_ARG_VALUE`) and the suite dies before running a thing — so
+    // a gate run from inside a TAP-reported test run could not gate anything.
+    // Found by this gate refusing this module's own pull request.
+    const inherited = String(clean.NODE_OPTIONS || '')
+      .replace(/--test-reporter(-destination)?[=\s]\S+/gu, '')
+      .trim();
     const child = spawn('npm', ['test'], {
       cwd,
-      env: { ...process.env, NODE_OPTIONS: `${process.env.NODE_OPTIONS || ''} --test-reporter=tap`.trim() },
+      env: { ...clean, NODE_OPTIONS: `${inherited} --test-reporter=tap`.trim() },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
 

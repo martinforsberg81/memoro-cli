@@ -10,7 +10,7 @@
  *   mc repo status [repo] [--json] [--offline]
  *   mc repo watch start|stop|status
  *   mc repo claim <repo> "<errand>" / release <repo> [--force] / who <repo>
- *   mc repo merge <repo> <pr> --check
+ *   mc repo merge <repo> <pr> [--check]
  *
  * It reads. The one thing status writes is a `git fetch` — remote-tracking
  * refs and nothing else — and `--offline` removes even that, at the price of
@@ -23,6 +23,7 @@ import { leaseRow, livenessRow, renderRepoLines, renderWatchLines } from '../rep
 import { claimLease, readLease, releaseLease } from '../repo-lease.js';
 import { currentHolder } from '../work-identity.js';
 import { runGate } from '../repo-gate.js';
+import { runMergeRound } from '../repo-merge.js';
 import { livenessForLeases } from '../lease-liveness.js';
 import { readCombinedSnapshot } from '../repo-snapshot.js';
 import { matchRepo, repoStatus, repoView } from '../repo-status.js';
@@ -217,20 +218,49 @@ async function gate(opts, { stdout, stderr }) {
   // in. Everything after this runs in temporary worktrees outside the work
   // root, where the same question would answer `user@host` instead.
   const holder = currentHolder();
-  const report = await runGate({
-    repoPath,
-    pr: opts.pr,
-    holder,
-    onProgress: (message) => stderr.write(`mc: ${message}\n`),
-  });
+  const round = { repoPath, pr: opts.pr, holder, onProgress: (message) => stderr.write(`mc: ${message}\n`) };
+  const report = opts.check ? await runGate(round) : await runMergeRound(round);
 
   if (opts.json) {
     stdout.write(`${JSON.stringify(report, null, 2)}\n`);
     return report.ok ? 0 : 1;
   }
 
-  for (const line of gateLines(report)) stdout.write(`${line}\n`);
+  const lines = opts.check ? gateLines(report) : mergeLines(report);
+  for (const line of lines) stdout.write(`${line}\n`);
   return report.ok ? 0 : 1;
+}
+
+/**
+ * What a merge round did, in prose.
+ *
+ * The gate's own lines are reused for the measurement, because it is the same
+ * measurement; what is added is what became of it. A round that stopped says
+ * plainly that nothing was merged, since the whole risk of a verb like this is
+ * somebody reading a stop as a quiet success.
+ */
+function mergeLines(report) {
+  const lines = [];
+  if (report.gate) {
+    lines.push(...gateLines(report.gate));
+  } else {
+    lines.push(`mc: the round stopped at ${report.stopped_at} — ${report.reason}`);
+  }
+
+  if (!report.ok) {
+    if (report.gate?.ok) lines.push(`mc: stopped before merging — ${report.reason}`);
+    lines.push('mc: nothing was merged');
+    return lines;
+  }
+
+  lines.push(`mc: merged #${report.pr.number} as ${String(report.merge_commit || '').slice(0, 7)} (squash)`);
+  if (report.deploy?.attempted) {
+    lines.push(report.deploy.ok
+      ? `mc: pulled ${report.deploy.command} at ${report.deploy.root}`
+      : `mc: could not pull ${report.deploy.root} (${report.deploy.reason}) — the merge stands; pull by hand`);
+  }
+  if (report.log_path) lines.push(`mc: logged to ${report.log_path}`);
+  return lines;
 }
 
 /**
@@ -250,8 +280,13 @@ function gateLines(report) {
     return lines;
   }
 
-  lines.push(`mc: ${pr}, gated against ${report.baseline.commit?.slice(0, 7)}`);
-  lines.push(`mc: baseline ${count(report.baseline)} · candidate ${count(report.candidate)}`);
+  // Both of these are commits inside the gate's throwaway worktrees — the base
+  // branch, and the PR's head with the base merged into it. Neither is the
+  // branch head somebody would see with `git log` on the branch, and saying
+  // which is which is cheaper than a reviewer working it out.
+  lines.push(`mc: ${pr}`);
+  lines.push(`mc: baseline  ${report.baseline.commit?.slice(0, 7)} (${report.pr.base} as fetched)  ${count(report.baseline)}`);
+  lines.push(`mc: candidate ${report.candidate.commit?.slice(0, 7)} (${report.pr.head} + ${report.pr.base} merged in)  ${count(report.candidate)}`);
 
   if (report.broke.length) {
     lines.push(`mc: RED — ${report.broke.length} red on the candidate and green on the baseline:`);
@@ -306,7 +341,7 @@ function usage() {
     '        mc repo claim <repo> "<what for>"\n',
     '        mc repo release <repo> [--force]\n',
     '        mc repo who <repo> [--json]\n',
-    '        mc repo merge <repo> <pr> --check [--json]\n',
+    '        mc repo merge <repo> <pr> [--check] [--json]\n',
   ].join('');
 }
 
@@ -351,15 +386,10 @@ export function parseArgs(argv) {
     if (!/^\d+$/u.test(number)) return { ...opts, error: `"${number}" is not a pull request number` };
     opts.pr = Number(number);
     if (positional.length) return { ...opts, error: `mc repo merge takes one repository and one pull request (${positional[0]})` };
-    // Compulsory, because there is no other mode yet. A verb called `merge`
-    // that silently only checks would be worse than one that insists you say
-    // so, and the flag is what will separate the two when merging lands.
-    if (!opts.check) {
-      return {
-        ...opts,
-        error: 'mc repo merge only runs the gate for now — say --check. Merging is its own step and is not built yet',
-      };
-    }
+    // `--check` runs the gate and stops there; without it the same round also
+    // lands the change. There is no third mode, and in particular nothing that
+    // merges a red gate: overruling one is the human's call and should cost a
+    // human action rather than a flag.
     if (opts.force) return { ...opts, error: '--force belongs to mc repo release' };
     if (scanned.flags.interval !== null) return { ...opts, error: '--interval belongs to mc repo watch start' };
     return opts;

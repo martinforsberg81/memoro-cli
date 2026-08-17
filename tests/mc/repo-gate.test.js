@@ -460,16 +460,19 @@ describe('what the round reports', () => {
  * grammar makes: that a verb called `merge` cannot be made to merge yet.
  */
 describe('mc repo merge — the grammar', () => {
-  it('will not run without --check, and says why', () => {
+  it('offers two modes and no way to overrule a red gate', () => {
     const fx = repoFixture({ name: 'repo-gate-cli' });
     try {
-      const asked = runMcCli(['repo', 'merge', 'repo', '400'], fx.env);
-      assert.equal(asked.status, 2);
-      assert.match(asked.stderr, /only runs the gate for now — say --check/u);
-      assert.match(asked.stderr, /Merging is its own step and is not built yet/u);
-      // The usage it prints offers no other mode either.
-      assert.match(asked.stderr, /mc repo merge <repo> <pr> --check/u);
-      assert.doesNotMatch(asked.stderr, /--merge|--apply|--force\b.*merge/u);
+      // `--check` gates and stops; without it the same round also merges.
+      // What must not exist is a third mode — anything that lands a change the
+      // gate called red. Overruling one is the human's call and should cost a
+      // human action rather than a flag on a routine command.
+      const usage = runMcCli(['repo', 'merge'], fx.env).stderr;
+      assert.match(usage, /mc repo merge <repo> <pr> \[--check\]/u);
+      for (const flag of ['--force', '--anyway', '--no-verify', '--skip-gate', '--apply']) {
+        const tried = runMcCli(['repo', 'merge', 'repo', '400', flag], fx.env);
+        assert.notEqual(tried.status, 0, `${flag} was accepted`);
+      }
     } finally { fx.cleanup(); }
   });
 
@@ -501,5 +504,44 @@ describe('mc repo merge — the grammar', () => {
       // `--check` belongs to one verb and is refused on the others.
       assert.match(runMcCli(['repo', 'claim', 'repo', 'x', '--check'], fx.env).stderr, /--check belongs to mc repo merge/u);
     } finally { fx.cleanup(); }
+  });
+});
+
+/**
+ * The suite is started in a clean environment, not the round's own.
+ *
+ * Both of these were found the hard way, and the second one by this gate
+ * refusing the pull request that added it.
+ *
+ * `NODE_TEST_CONTEXT` is set by node inside a test run, and a suite that
+ * inherits it decides it is being run recursively and skips its files
+ * entirely — output with no results and exit code 0.
+ *
+ * `--test-reporter` in an inherited `NODE_OPTIONS` becomes a second one when
+ * the gate adds its own, and node rejects that outright: the suite dies before
+ * running anything. Either way the gate's unfinished-run guard turns it into a
+ * stop rather than a false green, which is the guard doing its job — but a
+ * gate that cannot run from inside a test run cannot gate the repository whose
+ * own suite is a test run.
+ */
+describe('what the suite inherits, and what it must not', () => {
+  it('drops the test context and any reporter the caller already asked for', () => {
+    const here = dirname(fileURLToPath(import.meta.url));
+    const source = readFileSync(join(here, '..', '..', 'src', 'mc', 'repo-gate.js'), 'utf8');
+    const runner = source.slice(source.indexOf('function realSuite'));
+
+    assert.match(runner, /delete clean\.NODE_TEST_CONTEXT/u, 'the test context is passed through');
+    assert.match(runner, /--test-reporter\(-destination\)\?/u, 'an inherited reporter is passed through');
+
+    // The rule the two lines add up to, applied to the strings themselves.
+    const strip = (options) => String(options || '')
+      .replace(/--test-reporter(-destination)?[=\s]\S+/gu, '')
+      .trim();
+    assert.equal(strip('--test-reporter=tap'), '');
+    assert.equal(strip('--test-reporter=spec --test-reporter-destination=stdout'), '');
+    assert.equal(strip('--max-old-space-size=4096 --test-reporter=tap'), '--max-old-space-size=4096');
+    // What is not a reporter is the caller's and stays.
+    assert.equal(strip('--max-old-space-size=4096'), '--max-old-space-size=4096');
+    assert.equal(strip(''), '');
   });
 });

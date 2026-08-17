@@ -92,14 +92,18 @@ MAINTENANCE
                                     off the board rather than off a clock. A
                                     holder mc cannot see reads unknown, never
                                     a guess
-  mc repo merge <repo> <pr> --check
-                                    Run the test gate for that pull request:
+  mc repo merge <repo> <pr>        Run the test gate for that pull request —
                                     take the lease, build a fresh baseline and
                                     a candidate with main merged in, run the
                                     repository's own full suite on both, and
                                     compare the failures by name at every
-                                    level. It reports; it does not merge, and
-                                    a green gate is not a review
+                                    level — then, only if it is green and the
+                                    base has not moved since, squash-merge,
+                                    pull the source-linked installation, and
+                                    log a line. Nothing merges a red gate
+  mc repo merge <repo> <pr> --check
+                                    The same round, stopping at the verdict.
+                                    A green gate is not a review
   mc worker <name> [task]          A project folder that carries the worker
                                     role: every conversation started in it
                                     gets the role's overlay and model default

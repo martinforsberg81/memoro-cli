@@ -17,6 +17,18 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   surface and is untouched.
 
 ### Changed
+- `mc repo merge <repo> <pr>` now lands the change when the gate is green:
+  squash-merge, a `git pull` in the source-linked installation, and one line in
+  the merge log. `--check` keeps the old behaviour of gating and stopping, and
+  there is no third mode — nothing merges a gate the round called red, not
+  behind a flag and not behind an option. The merge lives in its own module on
+  top of the gate, which still cannot merge at all. One lease is held across
+  the whole round rather than around each half, and two things are re-checked
+  between the verdict and the merge: that `origin/<base>` is still the commit
+  the baseline was measured at, and that the lease is still ours. A deploy pull
+  that fails does not fail the round or undo the merge — it is reported so the
+  machine can be pulled by hand.
+
 - `mc work send --wake` now claims a wake only when the notice appears above
   the input box as a turn the conversation took — one more time than before mc
   typed. An empty box is no longer accepted on its own: a line cleared with
