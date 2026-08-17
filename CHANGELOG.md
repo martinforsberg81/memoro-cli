@@ -17,6 +17,22 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   surface and is untouched.
 
 ### Added
+- `mc repo merge <repo> <pr> --check` — the verify half of the gate round as a
+  machine rather than as an instruction somebody follows. It takes the
+  repository's lease, builds two throwaway detached worktrees under
+  `<mc home>/gate/` (the baseline at the pull request's base branch, the
+  candidate at its head with the current base merged in), runs the
+  repository's own `npm test` on both in the same round, and compares the two
+  red sets by name at every level — subtests included, because a total can
+  match while the contents have swapped. Names red on the candidate and green
+  on the baseline stop the round; `TODO` and `SKIP` never do; and a run that
+  never reached its own summary stops it too, so two suites that both died the
+  same way cannot read as a confident green. The lease is released in a
+  `finally`, and `--json` carries the red sets, the difference, both commits
+  and the stop reason for a surface that reports onward without reading prose.
+  `--check` is compulsory: there is no merge in this verb yet, not behind a
+  flag either, and its verdict is "the test gate passes", never "approved".
+
 - `mc pm` and `mc pm-helper` — the singleton roles' one door each, grown out
   of `mc supervisor`: attach if it runs (the conversation lives in tmux, so
   a second `mc pm` joins the first instead of forking the transcript),
