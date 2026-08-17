@@ -225,9 +225,7 @@ export function startInBackground({
     : null;
   // A conversation to resume changes everything about the argv: its history
   // already holds the profile and any overlay, and the model — resolved by
-  // the caller, flag over transcript — rides on the resume flags. The task
-  // stays a new-conversation affair: a resumed conversation is mid-thought,
-  // and a positional would land as a reply to wherever it stopped.
+  // the caller, flag over transcript — rides on the resume flags.
   const args = conversation
     ? [
       launch.spec.bin,
@@ -238,7 +236,11 @@ export function startInBackground({
       ...(launch.adapter?.modelArgs?.(model || roleDefault) ?? []),
       ...profileArgs(launch.id, instructionsFor(launch.id, readProfile(env), overlay)),
     ];
-  if (task && !conversation) args.push(task);
+  // A task goes in either way. On a new conversation it is the opening words;
+  // on a resumed one it lands as a reply to wherever that conversation
+  // stopped — which is what somebody asking for both at once is asking for.
+  // Nothing combined them before this, so no existing launch changes shape.
+  if (task) args.push(task);
   // tmux runs its command through a shell, so the profile — a few kilobytes of
   // the user's own prose, with quotes and newlines in it — has to survive
   // quoting, and so does everything beside it on the line. Claude has no

@@ -35,7 +35,7 @@ import {
   removeWorktree,
   resolveRepository,
 } from '../work-area.js';
-import { describeAge, describeSize } from '../conversations.js';
+import { conversationModel, describeAge, describeSize } from '../conversations.js';
 import { sendToArea } from '../work-send.js';
 import { stopWork } from '../work-stop.js';
 import { interactive, ask, select } from '../prompt.js';
@@ -550,12 +550,37 @@ export async function openArea(name, opts, { stdout, stderr }) {
   }
 
   if (opts.tmux) {
+    // A named conversation is resolved before anything starts, because the
+    // failure this replaces looked like success: an id that matched nothing
+    // became a brand new conversation with the id as its opening words, and
+    // the only way to notice was to read the transcript afterwards.
+    let resuming = null;
+    if (pick && pick !== 'new') {
+      resuming = area.conversations.find((item) => item.id.startsWith(pick)) || null;
+      if (!resuming) {
+        stderr.write(`mc: no conversation in ${name} starts with ${pick}\n`);
+        stderr.write(`mc: mc work ${name} lists what is there\n`);
+        return 1;
+      }
+    }
+
     // `tool` already carries the flag, the role's preference, or the answer
     // the user just gave at the prompt — starting on anything else would be
     // ignoring them; 'claude' remains the last resort it always was.
     const started = startInBackground({
-      name, areaRoot: area.path, worktree, tool: tool || roleTool || 'claude', task: opts.task, model: opts.model,
-      overlay, defaultModel: roleModel, defaultModelTool: roleTool,
+      name,
+      areaRoot: area.path,
+      worktree,
+      // A named conversation decides its own tool, exactly as it does in the
+      // foreground: being handed a different tool's conversation would be a
+      // worse answer than either.
+      tool: resuming?.tool || tool || roleTool || 'claude',
+      task: opts.task,
+      model: opts.model,
+      overlay,
+      defaultModel: roleModel,
+      defaultModelTool: roleTool,
+      conversation: resuming ? { id: resuming.id, model: opts.model || conversationModel(resuming) } : null,
     });
     if (!started.ok) {
       stderr.write(started.reason === 'already-running'
@@ -567,7 +592,8 @@ export async function openArea(name, opts, { stdout, stderr }) {
     const trust = clearTrustDialog(started.target);
     stdout.write(`mc: ${name} is running in the background as ${started.target}\n`);
     if (trust.answered) stdout.write('mc: answered Claude\'s folder-trust question for it\n');
-    if (!opts.task) stdout.write('mc: it has no task — send it one, or it will sit there\n');
+    if (resuming) stdout.write(`mc: resumed ${resuming.id.slice(0, 8)}\n`);
+    else if (!opts.task) stdout.write('mc: it has no task — send it one, or it will sit there\n');
     stdout.write(`mc: watch with  mc status\n`);
     stdout.write(`mc: talk to it  tmux send-keys -t ${started.target} "..." Enter\n`);
     // The one way in that is not a tmux incantation. Worth saying here: this
@@ -683,13 +709,13 @@ export function parseArgs(argv) {
   const scanned = scanArgs(argv, {
     booleans: ['--json', '--apply', '--tmux', '--wake'],
     values: ['--repo', '--from'],
-    strictValues: ['--model'],
+    strictValues: ['--model', '--resume'],
     toolSugar: true,
   });
   const opts = {
     verb: 'list', name: null, repo: scanned.flags.repo, branch: null, pick: null, message: null,
     from: scanned.flags.from, tmux: scanned.flags.tmux, task: null, wake: scanned.flags.wake,
-    tool: scanned.flags.tool, model: scanned.flags.model,
+    tool: scanned.flags.tool, model: scanned.flags.model, resume: scanned.flags.resume,
     apply: scanned.flags.apply, json: scanned.flags.json,
   };
   if (scanned.error) return { ...opts, error: scanned.error };
@@ -705,8 +731,16 @@ export function parseArgs(argv) {
     // With --tmux the rest of the line is what the worker should do, not a
     // conversation to pick. A worker started with nothing to do sits at an
     // empty prompt for as long as it is left there.
-    if (opts.tmux) return { ...opts, verb: 'open', name: head, task: rest.join(' ') || null };
-    return { ...opts, verb: 'open', name: head, pick: rest[0] || null };
+    //
+    // Which left no way to resume a particular conversation in the background,
+    // and — worse — made an id typed there the new conversation's opening
+    // words. `--resume <id>` names it instead, in both modes: reading an id out
+    // of a positional would mean asking "does this look like an id?", and a
+    // short task that happens to look like one would be misread in silence.
+    if (opts.tmux) {
+      return { ...opts, verb: 'open', name: head, pick: opts.resume, task: rest.join(' ') || null };
+    }
+    return { ...opts, verb: 'open', name: head, pick: opts.resume || rest[0] || null };
   }
 
   opts.verb = head;

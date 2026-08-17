@@ -22,6 +22,11 @@
  * `C-u` clears the prompt here as it does in a real one, so a test can assert
  * that a wake mc gave up on left nothing behind.
  *
+ * The prompt row is drawn with `❯`, which is what a real pane draws — captured
+ * from live panes while fixing the wake guards. It also matters beyond looks:
+ * `clearTrustDialog` waits for that character to decide a session has settled,
+ * and against a `>` it waited out its whole twelve-second budget every time.
+ *
  * `clients` puts somebody at the keyboard: `list-clients` names them, which is
  * how mc decides a pane is occupied. `typedAlready` puts text in the input box
  * before mc arrives — a draft, or a notice an earlier wake abandoned.
@@ -95,7 +100,7 @@ case "$1" in
     cat "${screen}"
     if [ "$seen" -le "${busyFor}" ]; then printf '%s\\n' "  * Thinking… (esc to interrupt)"; fi
     printf '%s\\n' "+------------------------------+"
-    printf '| > %s\\n' "$shown"
+    printf '| \\342\\235\\257 %s\\n' "$shown"
     printf '%s\\n' "+------------------------------+"
     printf '%s\\n' "  ? for shortcuts"
     exit 0
