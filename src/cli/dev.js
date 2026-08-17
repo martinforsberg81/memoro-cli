@@ -17,6 +17,11 @@ export async function run(argv, deps = {}) {
   const opts = parseArgs(argv);
   if (opts.error) {
     stderr.write(`mc: ${opts.error}\n`);
+    // The usage belongs here, where somebody is actually stuck. It used to sit
+    // after the verb dispatch, which every verb returns from — so it could not
+    // be reached at all, and had quietly fallen two verbs behind the parser
+    // with nobody to notice.
+    stderr.write(usage());
     return 2;
   }
 
@@ -114,8 +119,38 @@ export async function run(argv, deps = {}) {
     return 1;
   }
 
-  stderr.write('mc: usage — `mc dev plan|ensure|list|status|logs|stop|restart ...`\n');
+  // Unreachable by construction: the parser rejects any verb without a branch
+  // above, and every branch returns. Kept as a guard rather than a message.
+  stderr.write(`mc: no handler for dev verb ${opts.verb}\n`);
   return 2;
+}
+
+/**
+ * Every verb, and which of them needs what.
+ *
+ * The old one line listed seven of the nine verbs — `register` and
+ * `unregister` were accepted and invisible — and said nothing about selectors
+ * or which flag belongs to which verb, all of which the parser enforces. A
+ * usage that is narrower than the parser teaches people the command is smaller
+ * than it is, and sends the rest of them to the source.
+ */
+function usage() {
+  return [
+    'mc: usage — mc dev <verb> [selector] [flags]\n',
+    '\n',
+    '  plan [--profile <name>]        what starting a server here would do, without doing it\n',
+    '  ensure [--profile <name>] [--restart]\n',
+    '                                 start it if it is not up, or leave it alone\n',
+    '  list [--json]                  every dev server this machine knows about\n',
+    '  status <selector> [--json]     one of them, in full\n',
+    '  logs <selector> [--lines N]    its recent output (1-1000, default 100)\n',
+    '  stop <selector>                stop it; keep everything else\n',
+    '  restart <selector>             stop it and start it again\n',
+    '  register <selector>            record a manifest mc did not start\n',
+    '  unregister <selector>          forget one, without stopping it\n',
+    '\n',
+    '  A selector is required by every verb except list, plan and ensure.\n',
+  ].join('');
 }
 
 function parseArgs(argv) {
