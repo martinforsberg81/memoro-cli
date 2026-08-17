@@ -16,6 +16,20 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   supervisor device-flow (server API paths, token account) is a separate
   surface and is untouched.
 
+### Fixed
+- `mc work <name> --tmux` can now resume a named conversation, with
+  `--resume <id>`. It could not before: under `--tmux` the whole rest of the
+  line was read as the task, so an id typed there became a *new* conversation's
+  opening words — and it looked like it had worked. The resume machinery was
+  never missing; `startInBackground` has taken a conversation since the
+  singleton roles needed it, which is why `mc pm` resumes fine. Two things kept
+  an id from reaching it, and both are fixed. An id matching nothing is now an
+  error before anything is started, rather than a new conversation quietly
+  standing in for the one that was asked for. `--resume` works without `--tmux`
+  too, alongside the positional form, and a task given with a resume reaches
+  that conversation instead of opening a new one. `--tmux` without `--resume`
+  still reads the rest of the line as the task, unchanged and asserted.
+
 ### Changed
 - The gate round now reads a per-repository declaration: what to run before the
   suite can be believed, which gates beyond the suite are required, and where

@@ -49,6 +49,11 @@ MAINTENANCE
                                     given; a resumed conversation stays on the
                                     model its transcript says it ran on
   mc work <name> <id>              One particular conversation, by the id shown
+  mc work <name> --resume <id>     The same, said explicitly — and the only way
+                                    to name one with --tmux, where the rest of
+                                    the line is the task. An id that matches
+                                    nothing is an error before anything starts,
+                                    never a new conversation in its place
   mc work send <name> "<text>"     A message into that work's inbox/. Nothing
                                     running is not a failure: it reads the
                                     inbox when it starts

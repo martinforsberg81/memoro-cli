@@ -24,7 +24,8 @@ started in it. mc stores nothing else, because nothing else is mc's to know.
 | `mc work <name>` | Open it — the name is enough, new or not. |
 | `mc work <name> new [--model <m>]` | A new conversation rather than the last one. |
 | `mc work <name> <id>` | One particular conversation, by the id shown. |
-| `mc work <name> --tmux [task]` | Start it in the background for another session to talk to. |
+| `mc work <name> --resume <id>` | The same, named explicitly — and the only way to resume one under `--tmux`. |
+| `mc work <name> --tmux [task]` | Start it in the background for another session to talk to. Add `--resume <id>` to continue an existing conversation there. |
 | `mc work add <name> <repo> [branch]` | Add a repository worktree to that work. |
 | `mc work remove <name> <repo>` | Take one repository out of it. |
 | `mc work release <name> [--apply]` | Remove what git says can go; keep the rest. |
