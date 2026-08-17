@@ -35,7 +35,7 @@ import {
   removeWorktree,
   resolveRepository,
 } from '../work-area.js';
-import { conversationModel, describeAge, describeSize } from '../conversations.js';
+import { describeAge, describeSize } from '../conversations.js';
 import { sendToArea } from '../work-send.js';
 import { stopWork } from '../work-stop.js';
 import { interactive, ask, select } from '../prompt.js';
@@ -580,7 +580,18 @@ export async function openArea(name, opts, { stdout, stderr }) {
       overlay,
       defaultModel: roleModel,
       defaultModelTool: roleTool,
-      conversation: resuming ? { id: resuming.id, model: opts.model || conversationModel(resuming) } : null,
+      // Only what the user asked for. The transcript-derived model persistence
+      // is an unratified simplification candidate — M1 decision 2, Martin,
+      // 2026-08-14: "ingenting nytt får byggas som beror på den" — and this
+      // would have been a second thing depending on it.
+      //
+      // Measured rather than assumed, since removing it only costs nothing if
+      // the tool does the job itself: a session pinned to haiku, resumed with
+      // no --model, came back on haiku, while a fresh session with no --model
+      // gets opus. claude-code resumes on the conversation's own model, so
+      // deriving it here changes nothing except the size of the thing that
+      // decision wants to be able to delete.
+      conversation: resuming ? { id: resuming.id, model: opts.model || null } : null,
     });
     if (!started.ok) {
       stderr.write(started.reason === 'already-running'

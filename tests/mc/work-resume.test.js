@@ -18,9 +18,10 @@
  * this whole area has been spent removing.
  */
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, it } from 'node:test';
 
 import { installTmuxStub } from './_helpers/tmux-stub.js';
@@ -190,5 +191,49 @@ describe('an id that matches nothing is an error, not a new conversation', () =>
       assert.equal(asked.status, 0, asked.stderr);
       assert.ok(fx.tmux.calls().some((line) => line.startsWith('new-session')));
     } finally { fx.cleanup(); }
+  });
+});
+
+/**
+ * The model is the user's flag, and nothing else.
+ *
+ * Transcript-derived model persistence is an unratified simplification
+ * candidate — M1 decision 2, Martin, 2026-08-14: the mechanism stays but
+ * "ingenting nytt får byggas som beror på den", pending an evaluation once
+ * `mc pm` restart had been used in anger. Resuming in the background is new,
+ * so it may not depend on it.
+ *
+ * Measured before deciding, because dropping it is only free if the tool does
+ * the job itself. A session pinned to `--model haiku`, resumed with no
+ * `--model`, came back on haiku; a fresh session with no `--model` gets opus.
+ * claude-code resumes on the conversation's own model, so deriving it here
+ * would change nothing except the size of the thing that decision wants to be
+ * able to delete.
+ */
+describe('resuming does not depend on the unratified model persistence', () => {
+  it('sends no model unless the user gave one', () => {
+    const fx = fixture();
+    try {
+      const { launch } = start(fx, { conversation: { id: ID, model: null } });
+      assert.match(launch, /--resume/u);
+      assert.doesNotMatch(launch, /--model/u, 'a model was derived and passed');
+    } finally { fx.cleanup(); }
+  });
+
+  it('sends exactly the model the user gave', () => {
+    const fx = fixture();
+    try {
+      const { launch } = start(fx, { conversation: { id: ID, model: 'opus' } });
+      assert.match(launch, /--resume/u);
+      assert.match(launch, /--model' 'opus/u);
+    } finally { fx.cleanup(); }
+  });
+
+  it('the background resume path reads nothing from a transcript to decide a model', () => {
+    // Asserted against the source: the decision forbids a *new* dependency, and
+    // the two callers that predate it are deliberately left alone.
+    const here = dirname(fileURLToPath(import.meta.url));
+    const source = readFileSync(join(here, '..', '..', 'src', 'mc', 'commands', 'work.js'), 'utf8');
+    assert.doesNotMatch(source.replace(/\/\*[\s\S]*?\*\//gu, '').replace(/^\s*\/\/.*$/gmu, ''), /conversationModel/u);
   });
 });
