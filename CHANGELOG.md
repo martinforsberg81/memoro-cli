@@ -29,7 +29,11 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the suite are held to the suite's own rule — one that did not reach its own
   end is not an approval, and one that could not be run at all stops the round.
   Behaviour for `memoro-cli` is unchanged: it declares that it needs no
-  preparation, with the evidence for that claim written beside it.
+  preparation, with the evidence for that claim written beside it. A
+  declaration can also say `UNKNOWN` for a part it does not know — memoro's
+  extra gate is known and ordered, its preparation step is not — and a partly
+  declared repository stops exactly as hard as an undeclared one, because
+  "partly declared" must never become a way to run anyway.
 
 - The merge log line records the decision class as `D (delegerad)` rather than
   a class of the verb's own invention. A verb has no authority of its own — it

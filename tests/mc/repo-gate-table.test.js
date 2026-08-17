@@ -21,7 +21,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
-import { SHIPPED, declarationFor, tablePath } from '../../src/mc/repo-gate-table.js';
+import { SHIPPED, UNKNOWN, declarationFor, tablePath } from '../../src/mc/repo-gate-table.js';
 
 /** A repository directory with the manifest a test wants it to have. */
 function repo(name, manifest) {
@@ -114,11 +114,26 @@ describe('the heuristic mc deliberately does not use', () => {
     assert.match(SHIPPED['memoro-cli'].prepare_why, /no node_modules/u);
   });
 
-  it('every shipped declaration says why it needs nothing, if it needs nothing', () => {
-    // An unexplained `null` is indistinguishable from a forgotten one.
+  it('every shipped declaration explains its preparation, whatever it says', () => {
+    // An unexplained `null` is indistinguishable from a forgotten one — and an
+    // unexplained command is the guess this file refuses, wearing a uniform.
     for (const [name, entry] of Object.entries(SHIPPED)) {
-      if (entry.prepare === null) {
-        assert.ok(entry.prepare_why, `${name} claims no preparation without saying why`);
+      assert.ok(entry.prepare_why, `${name} says nothing about why its prepare step is what it is`);
+    }
+  });
+
+  it('no shipped entry claims a provenance mc cannot stand behind', () => {
+    // The failure this cannot test is content: "declared by the PM" reads the
+    // same whether or not anybody declared it, which is why the rule is written
+    // in the file header. What *can* be checked is that nothing ships a command
+    // attributed to somebody — if mc does not know, it says UNKNOWN.
+    for (const [name, entry] of Object.entries(SHIPPED)) {
+      if (typeof entry.prepare === 'string' && entry.prepare !== UNKNOWN) {
+        assert.doesNotMatch(
+          entry.prepare_why,
+          /declared by|per the|as agreed/iu,
+          `${name} ships a command resting on an attribution rather than on evidence`,
+        );
       }
     }
   });
@@ -137,15 +152,52 @@ describe('declarations, shipped and overridden', () => {
     } finally { fx.cleanup(); }
   });
 
-  it('memoro carries its contract gate and its install step', () => {
+  it('memoro knows its contract gate and does not know its preparation', () => {
+    // Review finding, and the reason UNKNOWN exists. This entry once said
+    // `prepare: 'npm ci'` with `prepare_why: 'declared by the PM'` — an
+    // attribution nobody had made. A false explanation is worse than a missing
+    // one, because it looks reviewed, and it turned a stop into an action.
     const fx = repo('memoro', { name: 'memoro', dependencies: { next: '15.0.0' } });
     try {
       const answer = fx.ask();
+      assert.equal(answer.ok, false, 'a guessed prepare step let the round run');
+      assert.match(answer.reason, /preparation step is not/u);
+      // What is genuinely known is still reported, with where it came from, so
+      // whoever completes the entry can see what they are completing.
+      assert.deepEqual(answer.known.extra_gates.map((gate) => gate.command), ['npm run test:msr:contract']);
+      assert.match(answer.reason, /D-0018/u);
+      assert.equal(answer.known.merge_log, null);
+    } finally { fx.cleanup(); }
+  });
+
+  it('a partly declared repository stops exactly as hard as an undeclared one', () => {
+    // The rule that makes the third state safe: "partly declared" must never
+    // become a way to run anyway.
+    const known = repo('memoro', { name: 'memoro', dependencies: { next: '15.0.0' } });
+    const unknown = repo('stranger', { name: 'stranger', dependencies: { next: '15.0.0' } });
+    try {
+      assert.equal(known.ask().ok, false);
+      assert.equal(unknown.ask().ok, false);
+      // And neither hands back a declaration the round could act on.
+      assert.equal(known.ask().declaration, undefined);
+      assert.equal(unknown.ask().declaration, undefined);
+    } finally { known.cleanup(); unknown.cleanup(); }
+  });
+
+  it('declaring the missing half is enough to let it run', () => {
+    const fx = repo('memoro', { name: 'memoro', dependencies: { next: '15.0.0' } });
+    try {
+      fx.override({
+        memoro: {
+          prepare: 'npm ci',
+          prepare_why: 'written by whoever actually knows, in the operator table',
+          extra_gates: [{ name: 'msr contract', command: 'npm run test:msr:contract' }],
+          merge_log: null,
+        },
+      });
+      const answer = fx.ask();
       assert.equal(answer.ok, true);
       assert.equal(answer.declaration.prepare, 'npm ci');
-      assert.deepEqual(answer.declaration.extra_gates.map((gate) => gate.command), ['npm run test:msr:contract']);
-      // The open question, answered honestly: no log rather than an invented one.
-      assert.equal(answer.declaration.merge_log, null);
     } finally { fx.cleanup(); }
   });
 

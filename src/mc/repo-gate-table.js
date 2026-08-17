@@ -25,11 +25,30 @@
  * The one thing that can be *proved* rather than declared is that no
  * preparation is needed: a repository with nothing to install has nothing that
  * could be missing. That carve-out is narrow on purpose.
+ *
+ * There are therefore three answers a declaration can give about preparation,
+ * not two. `null` is a claim that none is needed and carries its evidence.
+ * A command is a claim that this is what to run, and carries where that was
+ * decided. `UNKNOWN` is the honest third: something about this repository is
+ * known — which gates it needs, where it logs — and this part is not. It stops
+ * the round exactly as hard as no entry at all, because a partial declaration
+ * that let a round proceed would be the guess wearing a uniform.
+ *
+ * And a `prepare_why` may never carry a provenance that does not exist. This
+ * rule is written rather than tested because its content cannot be checked by
+ * code: a string saying "declared by the PM" looks identical whether or not
+ * anybody declared it. It got in here once — a `npm ci` for memoro attributed
+ * to an order nobody gave — and it was worse than leaving the field blank,
+ * because a false explanation looks reviewed. If a `source` names a decision,
+ * that decision has to be findable in the decision log or in a written order.
  */
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { mcHome, workRoot } from './paths.js';
+
+/** Preparation that is deliberately not known, as opposed to not needed. */
+export const UNKNOWN = 'unknown';
 
 /**
  * The declarations mc ships with.
@@ -49,10 +68,16 @@ export const SHIPPED = Object.freeze({
     merge_log: Object.freeze({ under: 'work-root', path: 'large-scale-llm-project/merge-log.md' }),
   }),
   memoro: Object.freeze({
-    prepare: 'npm ci',
-    prepare_why: 'declared by the PM; not yet exercised by a gate round here',
+    // Known: the gate beyond the suite, ordered in D-0018. Not known: whether
+    // its suite needs anything installed first. Its test script is
+    // `node scripts/testing/ci.mjs`, which says nothing either way — the same
+    // reason the entry above cannot be inferred from a manifest. So this half
+    // stays UNKNOWN and the round stops until somebody who knows writes it down.
+    prepare: UNKNOWN,
+    prepare_why: 'no order or decision has said what memoro needs before its suite can be '
+      + 'believed, and mc will not guess one',
     extra_gates: Object.freeze([
-      Object.freeze({ name: 'msr contract', command: 'npm run test:msr:contract' }),
+      Object.freeze({ name: 'msr contract', command: 'npm run test:msr:contract', source: 'D-0018' }),
     ]),
     // Open question with the PM: which log memoro's merges belong in. Until it
     // is answered the round writes no line and says so, rather than inventing
@@ -79,6 +104,20 @@ export function declarationFor(repoPath, { root = mcHome(), env = process.env } 
   const declared = table[name];
 
   if (declared) {
+    // A partial declaration stops exactly as hard as a missing one. What is
+    // known about the rest is reported anyway, so whoever writes the missing
+    // half can see what they are completing.
+    if (declared.prepare === UNKNOWN) {
+      return {
+        ok: false,
+        name,
+        known: normalise({ ...declared, prepare: null }, env),
+        reason: `${name} is declared, but its preparation step is not: ${declared.prepare_why || 'no reason recorded'}. `
+          + `What is known about it — ${describeKnown(declared)} — is not enough to run a round on. `
+          + `Complete it in ${tablePath(root)}: {"${name}": {"prepare": "<command>", "prepare_why": "<where that was decided>"}} `
+          + '— or "prepare": null with the evidence that its suite runs from a clean checkout.',
+      };
+    }
     return { ok: true, name, declaration: normalise(declared, env), source: 'declared' };
   }
 
@@ -99,8 +138,9 @@ export function declarationFor(repoPath, { root = mcHome(), env = process.env } 
     name,
     reason: `${name} has no gate declaration, and ${nothing.why} — so mc cannot tell whether its suite `
       + `needs anything installed first. Declare it in ${tablePath(root)}: `
-      + '{"' + name + '": {"prepare": "npm ci", "extra_gates": [], "merge_log": null}} '
-      + '— or "prepare": null with a "prepare_why" if the suite runs from a clean checkout.',
+      + '{"' + name + '": {"prepare": "<command>", "prepare_why": "<where that was decided>"}} '
+      + '— or "prepare": null with a "prepare_why" if the suite runs from a clean checkout. '
+      + 'mc suggests no command here on purpose: the one it would suggest is the guess this refusal exists to prevent.',
   };
 }
 
@@ -158,6 +198,15 @@ function resolveLog(log, env) {
 
 function readOverrides(root) {
   try { return JSON.parse(readFileSync(tablePath(root), 'utf8')) || {}; } catch { return {}; }
+}
+
+/** What an incomplete entry does say, for the person completing it. */
+function describeKnown(entry) {
+  const parts = [];
+  const gates = (entry.extra_gates || []).map((gate) => (gate.source ? `${gate.name} (${gate.source})` : gate.name));
+  parts.push(gates.length ? `extra gates: ${gates.join(', ')}` : 'no extra gates');
+  parts.push(entry.merge_log ? 'a merge log' : 'no merge log');
+  return parts.join('; ');
 }
 
 function basenameOf(path) {
