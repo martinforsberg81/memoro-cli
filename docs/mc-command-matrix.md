@@ -141,6 +141,17 @@ and can prove holds nothing but its own notice. Every refusal is printed —
 which guard fired and why — because the file is delivered either way and the
 sender has to know nobody was tapped on the shoulder.
 
+"Verified" means one thing only: the notice appears above the input box as a
+turn the conversation took, one more time than it did before mc typed. Not that
+the box is empty afterwards — a line cleared with Escape leaves it exactly as
+empty as a line that went in — and not merely that the notice is somewhere on
+screen, since it is identical for every wake from the same sender and an
+earlier one is still up there. A busy pane *queues* the turn rather than sending
+it, and then shows a placeholder of its own in the box, so the box says nothing
+useful in the common case anyway. Measured against a real idle pane: the turn
+appears 480–520ms after the notice lands and stays for twenty seconds, while mc
+looks 400ms after Enter.
+
 ## Setup and capabilities
 
 | Command | Does |
