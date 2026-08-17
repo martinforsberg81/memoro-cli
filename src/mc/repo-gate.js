@@ -45,6 +45,7 @@ import { compareRed, redNames, tapTotals } from './tap-red.js';
 import { currentHolder } from './work-identity.js';
 import { mcHome } from './paths.js';
 import { repoFileSlug } from './repo-snapshot.js';
+import { declarationFor } from './repo-gate-table.js';
 
 export const GATE_SCHEMA = 'mc-repo-gate';
 export const GATE_VERSION = 1;
@@ -112,6 +113,8 @@ export async function runGate({
     stopped_at: null,
     reason: null,
     command: null,
+    declaration: null,
+    extra_gates: [],
     baseline: null,
     candidate: null,
     broke: [],
@@ -139,6 +142,16 @@ export async function runGate({
     }
     say(`lease taken by ${holder.name}`);
   }
+
+  // What this repository needs, read before any work is done. A round that
+  // cannot know whether the suite will be complete is a round whose green
+  // means nothing, so it stops here rather than after two suite runs.
+  const declared = declarationFor(repoPath, { root, env });
+  if (!declared.ok) {
+    if (holdLease) releaseLease({ repoPath, holder, root });
+    return finish('declaration', declared.reason);
+  }
+  report.declaration = { source: declared.source, ...declared.declaration };
 
   const workspace = join(gateRoot(root), repoFileSlug(repoPath));
   const baseDir = join(workspace, 'baseline');
@@ -188,6 +201,20 @@ export async function runGate({
     if (!commandLine.ok) return finish('suite', commandLine.reason);
     report.command = commandLine.command;
 
+    // Whatever this repository needs before its suite can be believed, run in
+    // both worktrees. A prepare that fails stops the round: a suite run on a
+    // tree that was not prepared is exactly the incomplete run the declaration
+    // exists to prevent.
+    if (declared.declaration.prepare) {
+      for (const [side, dir] of [['baseline', baseDir], ['candidate', headDir]]) {
+        say(`preparing the ${side}: ${declared.declaration.prepare}`);
+        const ready = shell(declared.declaration.prepare, { cwd: dir, env });
+        if (ready.status !== 0) {
+          return finish('prepare', `${declared.declaration.prepare} failed in the ${side} — ${trim(ready.stderr)}`);
+        }
+      }
+    }
+
     // Sequential, not parallel. Two full suites at once halves the wall clock
     // and loads the machine that both of them are measuring on — and the tests
     // that fail under load are the ones a gate can least afford to guess about.
@@ -210,6 +237,27 @@ export async function runGate({
     say(`candidate: ${after.result.red.length} red, ${broke.length} of them new`);
 
     if (broke.length) return finish('red', `${broke.length} test${broke.length === 1 ? '' : 's'} red on the candidate and green on the baseline`);
+
+    // Gates beyond the suite, on the candidate, under the same rule: one that
+    // did not reach its own end is not an approval. A command that could not be
+    // run at all is a stop, exactly like a suite that never summarised.
+    for (const gate of declared.declaration.extra_gates) {
+      say(`extra gate: ${gate.name}`);
+      const outcome = shell(gate.command, { cwd: headDir, env });
+      const passed = outcome.status === 0;
+      report.extra_gates.push({
+        name: gate.name,
+        command: gate.command,
+        ok: passed,
+        exit_code: outcome.status ?? null,
+        ran: outcome.status !== null && outcome.status !== undefined,
+      });
+      if (outcome.status === null || outcome.status === undefined) {
+        return finish('extra-gate', `${gate.name} could not be run at all — that is not an approval`);
+      }
+      if (!passed) return finish('extra-gate', `${gate.name} failed on the candidate (${trim(outcome.stderr) || `exit ${outcome.status}`})`);
+    }
+
     return finish(null, null);
   } finally {
     clearWorkspace({ git: askGit, repoPath, workspace });
@@ -346,6 +394,19 @@ function trim(value) {
  * minutes, and a round that says nothing for forty minutes is one nobody can
  * tell from a hung one.
  */
+/**
+ * A declared command, run where the round needs it.
+ *
+ * Through a shell because declarations are written the way a person writes
+ * them — `npm ci`, `npm run test:msr:contract` — and splitting those by hand
+ * would be a second grammar to get wrong. The strings come from mc's own table
+ * or from a file only the operator can write, which is the same trust boundary
+ * the suite command already sits on.
+ */
+function shell(command, { cwd, env }) {
+  return spawnSync(command, { cwd, env, shell: true, encoding: 'utf8' });
+}
+
 function realSuite({ cwd, onLine = () => {}, env = process.env } = {}) {
   return new Promise((resolve) => {
     // The suite is started in a clean test context, not this process's.

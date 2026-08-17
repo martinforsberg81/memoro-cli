@@ -17,6 +17,30 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   surface and is untouched.
 
 ### Changed
+- The gate round now reads a per-repository declaration: what to run before the
+  suite can be believed, which gates beyond the suite are required, and where
+  merges are logged. `<mc home>/repo-gates.json` adds or overrides an entry
+  without a release. A repository mc has not been told about **stops the
+  round**, with a reason naming the file and the shape to write — the only
+  exception being one that can be proved not to need preparation, because its
+  manifest asks for nothing. The heuristic "it has dependencies, so install
+  them" is deliberately not used: this repository declares three dependencies,
+  one of them native, and its suite runs from a clean worktree. Gates beyond
+  the suite are held to the suite's own rule — one that did not reach its own
+  end is not an approval, and one that could not be run at all stops the round.
+  Behaviour for `memoro-cli` is unchanged: it declares that it needs no
+  preparation, with the evidence for that claim written beside it. A
+  declaration can also say `UNKNOWN` for a part it does not know — memoro's
+  extra gate is known and ordered, its preparation step is not — and a partly
+  declared repository stops exactly as hard as an undeclared one, because
+  "partly declared" must never become a way to run anyway.
+
+- The merge log line records the decision class as `D (delegerad)` rather than
+  a class of the verb's own invention. A verb has no authority of its own — it
+  carries out its holder's — and the log is the document that shows who allowed
+  what, so a class that is not in the decision matrix breaks the chain. The
+  machine's part is in the note, where it says who ran it and as whom.
+
 - `mc repo merge <repo> <pr>` now lands the change when the gate is green:
   squash-merge, a `git pull` in the source-linked installation, and one line in
   the merge log. `--check` keeps the old behaviour of gating and stopping, and

@@ -32,9 +32,10 @@ import { dirname, join } from 'node:path';
 
 import { claimLease, readLease, releaseLease } from './repo-lease.js';
 import { currentHolder } from './work-identity.js';
-import { mcHome, workRoot } from './paths.js';
+import { mcHome } from './paths.js';
 import { runGate } from './repo-gate.js';
 import { sourceLinkedInstallations } from './repo-status.js';
+import { declarationFor } from './repo-gate-table.js';
 
 export const MERGE_SCHEMA = 'mc-repo-merge';
 export const MERGE_VERSION = 1;
@@ -48,9 +49,9 @@ export const MERGE_VERSION = 1;
  * repository with no answer gets no line and says so, rather than inventing a
  * file somewhere.
  */
-export function defaultMergeLog(repoPath, env = process.env) {
-  if (!/(^|\/)memoro-cli$/u.test(repoPath)) return null;
-  return join(workRoot(env), 'large-scale-llm-project', 'merge-log.md');
+export function defaultMergeLog(repoPath, { root = mcHome(), env = process.env } = {}) {
+  const declared = declarationFor(repoPath, { root, env });
+  return declared.ok ? declared.declaration.merge_log : null;
 }
 
 /**
@@ -176,7 +177,7 @@ export async function runMergeRound({
     say(`merged as ${short(report.merge_commit)}`);
 
     report.deploy = deployPull({ git: askGit, repoPath, env, say, installs });
-    const written = writeMergeLine({ report, verdict, path: mergeLog ?? defaultMergeLog(repoPath, env), clock });
+    const written = writeMergeLine({ report, verdict, path: mergeLog ?? defaultMergeLog(repoPath, { root, env }), clock });
     report.log_path = written.path;
     report.log_line = written.line;
     if (written.path) say(`logged to ${written.path}`);
@@ -226,6 +227,15 @@ function deployPull({ git, repoPath, env, say, installs }) {
  * counts with the difference spelled out — the full lists live in the round's
  * own `--json`, and a table row that ran to fifty names would stop being one.
  *
+ * The class is `D (delegerad)` and nothing else, because a verb has no
+ * authority of its own — it carries out its holder's. An earlier version wrote
+ * a class of its own invention, which read as though the machine were answering
+ * for the merge; the log is the document that shows the chain of who allowed
+ * what, and a class that is not in the matrix breaks it. The machine's part
+ * belongs in the note, where it says who ran it and as whom. Deciding that a
+ * mechanical round deserves a marker of its own would be a change to the
+ * decision matrix, which is not a thing to slip into a log line.
+ *
  * Appending is best effort. A merge that happened and a line that did not get
  * written is a bookkeeping problem; refusing to report the merge because of it
  * would be a worse one.
@@ -239,7 +249,7 @@ function writeMergeLine({ report, verdict, path, clock }) {
     `base unmoved at merge`,
   ].join(' · ');
   const line = `| ${day} | ${basenameOf(report.repo)} #${report.pr.number}${verdict.pr.title ? ` ${verdict.pr.title}` : ''} `
-    + `| ${checks} | M (mechanical gate) | Squash-merge → \`${short(report.merge_commit)}\` `
+    + `| ${checks} | D (delegerad) | Squash-merge → \`${short(report.merge_commit)}\` `
     + `| Run by \`mc repo merge\` as ${report.holder}. ${deployNote(report.deploy)} |`;
 
   try {
