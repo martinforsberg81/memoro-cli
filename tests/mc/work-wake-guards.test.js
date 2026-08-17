@@ -407,6 +407,70 @@ describe('a wake into a busy pane is not a failed wake', () => {
     assert.deepEqual(talk.keys().filter((args) => args[3] === 'C-u'), []);
   });
 
+  it('an earlier identical notice above the box is not this wake\'s turn', () => {
+    // Review finding on the fix above. The notice is identical for every wake
+    // from the same sender, so wake number two runs against a pane where wake
+    // number one is still visible in the scrollback. If the new notice then
+    // leaves the box *without* becoming a turn — somebody presses Escape, the
+    // TUI clears the line — then looking for "the notice, somewhere above the
+    // box" finds the old one and reports a wake that did not happen. Counted
+    // instead: the number has to go up.
+    const withOldTurn = (boxText) => ({
+      status: 0,
+      stdout: [
+        '  a conversation',
+        `  ❯ ${NOTICE}`,                       // wake number one, an hour ago
+        '  ⎿  read the inbox',
+        '────────────────────────────────────────',
+        `❯ ${boxText}`,
+        '────────────────────────────────────────',
+        '  ⏵⏵ auto mode on',
+        '',
+      ].join('\n'),
+    });
+
+    const talk = conversation({
+      paint: ({ typed, captures }) => {
+        if (captures === 1) return withOldTurn('');          // guard: box empty
+        if (captures === 2) return withOldTurn(typed);       // the new notice, landed
+        // Enter pressed, and the line is gone without becoming a turn. Only the
+        // hour-old notice is above the box — the count has not moved.
+        return withOldTurn('Press up to edit queued messages');
+      },
+    });
+    const result = wake(talk.run);
+
+    assert.equal(result.ok, false, 'it claimed the earlier wake\'s turn as its own');
+    assert.equal(result.reason, 'the notice left the prompt without becoming a turn');
+    assert.deepEqual(talk.keys().filter((args) => args[3] === 'C-u'), []);
+  });
+
+  it('a second wake that does land is still reported as landed', () => {
+    // The other half of the same rule: with an old notice above the box, a real
+    // second turn takes the count from one to two and is believed.
+    const withTurns = (count, boxText) => ({
+      status: 0,
+      stdout: [
+        '  a conversation',
+        ...Array.from({ length: count }, () => `  ❯ ${NOTICE}`),
+        '────────────────────────────────────────',
+        `❯ ${boxText}`,
+        '────────────────────────────────────────',
+        '  ⏵⏵ auto mode on · esc to interrupt',
+        '',
+      ].join('\n'),
+    });
+
+    const talk = conversation({
+      paint: ({ typed, captures }) => {
+        if (captures === 1) return withTurns(1, '');
+        if (captures === 2) return withTurns(1, typed);
+        return withTurns(2, 'Press up to edit queued messages');
+      },
+    });
+    assert.deepEqual(wake(talk.run), { ok: true, attempts: 1 });
+  });
+
   it('somebody typing after the notice still stops it', () => {
     // The fix must not swallow the case it was built around. The notice is
     // still in the box with words after it, so the line is not mc's to submit
