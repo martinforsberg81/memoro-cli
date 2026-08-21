@@ -27,6 +27,7 @@ import { promisify } from 'node:util';
 import { lastModel, listConversations, readTailEntries } from './conversations.js';
 import { workRoot } from './paths.js';
 import { areaRoleName } from './roles.js';
+import { openTaskCount } from './task-log.js';
 import { inspectWorkArea, listWorkAreas } from './work-area.js';
 
 const run = promisify(execFile);
@@ -330,6 +331,10 @@ export async function workStatus({ env = process.env, names = null, git: askGit 
         // stopped and waiting for them?
         waiting: conversations.some((item) => item.state === 'waiting'),
         working: conversations.some((item) => item.state === 'working'),
+        // Tasks this area holds that are not done — open and blocked alike,
+        // since both still need somebody's attention. One file read, and
+        // nothing for the common case of a session that has never had one.
+        open_tasks: openTaskCount(area.name),
       };
     }),
   };

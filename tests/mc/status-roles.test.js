@@ -88,10 +88,10 @@ describe('the board, on roles and on filing', () => {
     try {
       const areas = board(fx);
       // The shape every existing reader depends on, spelled out: same keys,
-      // same meanings, plus one.
+      // same meanings, plus the ones added since (role, open_tasks).
       assert.deepEqual(
         Object.keys(areas.plain).sort(),
-        ['conversations', 'name', 'path', 'role', 'running', 'waiting', 'working', 'worktrees'],
+        ['conversations', 'name', 'open_tasks', 'path', 'role', 'running', 'waiting', 'working', 'worktrees'],
       );
       assert.equal(areas.plain.name, 'plain');
       assert.equal(areas.plain.path, join(fx.workRoot, 'plain'));
