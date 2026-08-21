@@ -22,7 +22,7 @@ started in it. mc stores nothing else, because nothing else is mc's to know.
 |---|---|
 | `mc work` | What exists; at a terminal, a way in. |
 | `mc work <name>` | Open it — the name is enough, new or not. |
-| `mc work <name> new [--model <m>]` | A new conversation rather than the last one. |
+| `mc work <name> new [--model <m>]` | A new conversation rather than the last one — including when one is running in the background, which is ended and replaced in the same window. |
 | `mc work <name> <id>` | One particular conversation, by the id shown. |
 | `mc work <name> --resume <id>` | The same, named explicitly — and the only way to resume one under `--tmux`. |
 | `mc work <name> --tmux [task]` | Start it in the background for another session to talk to. Add `--resume <id>` to continue an existing conversation there. |
@@ -34,6 +34,9 @@ started in it. mc stores nothing else, because nothing else is mc's to know.
 | `mc work stop <name>` | Stop what is running there; keep the work. |
 | `mc work list` | The same listing as bare `mc work`. |
 | `mc worker <name> [task]` | A project folder that carries the worker role. |
+| `mc pm` / `mc pm-helper` | The singleton role's workspace: attach if it runs, restart it if it stopped, create it the first time. One of it, ever. |
+| `mc <role> new [--model <m>]` | Start over in the same window: the running conversation is ended and replaced, nothing is deleted, and the successor is told its predecessor's id. |
+| `mc <role> <id>` | One particular conversation in the role's home — the way back from a handoff. Refused while the role is running. |
 | `mc roles list \| show <role>` | The defined roles, read from their files. |
 | `mc worktrees` | Worktrees across the work areas. |
 | `mc status` | Every piece of work and what it is doing. `--watch`, `--json`, `--wait`. |

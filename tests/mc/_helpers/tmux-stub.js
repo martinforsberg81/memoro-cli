@@ -30,12 +30,19 @@
  * `clients` puts somebody at the keyboard: `list-clients` names them, which is
  * how mc decides a pane is occupied. `typedAlready` puts text in the input box
  * before mc arrives — a draft, or a notice an earlier wake abandoned.
+ *
+ * `windowIndex` is what `list-windows` reports, because a window is respawned
+ * at the index tmux says it has and `base-index` is the user's setting to
+ * make. `clientSession` is what `display-message` answers: the session the
+ * caller is sitting in, which decides whether mc can ask a tool to leave
+ * politely or has to replace the pane it is itself running in.
  */
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 export function installTmuxStub(root, {
   mode = 'reliable', alive = [], drawAfter = 0, busyFor = 0, clients = [], typedAlready = '',
+  windowIndex = '0', clientSession = '',
 } = {}) {
   const bin = join(root, 'bin');
   const state = join(root, 'tmux-state');
@@ -65,6 +72,14 @@ case "$1" in
     ;;
   list-clients)
     cat "${state}/clients"
+    exit 0
+    ;;
+  list-windows)
+    printf '%s\n' "${windowIndex}"
+    exit 0
+    ;;
+  display-message)
+    printf '%s\n' "${clientSession}"
     exit 0
     ;;
   send-keys)

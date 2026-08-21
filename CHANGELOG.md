@@ -6,6 +6,47 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- `mc pm new` and `mc pm-helper new` — a reliable way to start a **fresh**
+  conversation in a singleton role. Every door into the role meant "take me to
+  the PM": attach if it runs, resume the newest if it stopped, create if it
+  never existed. There was no way to say *start over*, so the role with the
+  longest life of all was the one role that could not perform a continuity
+  handoff — it respawned its own window by hand, `mc pm` resumed as it always
+  does, and nothing said the handoff had not happened. The verb is `new`
+  because `mc work <name> new` already means exactly this. What is running is
+  ended and replaced **in the same tmux window**, so anyone attached stays
+  attached and watches the successor boot; killing and recreating the session
+  would throw them out, and the case this exists for is the person sitting in
+  the pane. From outside the role's session the tool is asked to leave by its
+  own `/exit` first, so Claude's SessionEnd hooks run; from inside it — the PM
+  handing itself off, the normal case — the caller cannot outlive its own exit,
+  so the replacement is abrupt and the turn in flight is lost. mc says which of
+  the two happened and writes it to the log. `--model` is allowed and chooses
+  the successor's tier; without it, the role's default, never the predecessor's.
+  **Nothing is deleted**: the predecessor's transcript stays on disk, and the
+  successor is started with one factual line naming the id and the command that
+  reaches it.
+- `mc pm <conversation id>` / `mc pm-helper <conversation id>` — one particular
+  conversation in the role's home, by id prefix, in the same grammar as
+  `mc work <name> <id>`. Without it a handoff is one-way: the singleton could
+  only resume the *newest* conversation, which after a handoff is the
+  successor, so the predecessor became unreachable through mc the moment it
+  existed. An id that matches nothing is an error naming where to look — never
+  a new conversation with the id as its opening words. While the role is
+  running it refuses rather than quietly attaching to the other conversation.
+
+### Fixed
+- `mc work <name> new` no longer ignores `new` when that work is running in the
+  background. It printed *joining …* and attached: the background branch
+  returned before the choice was ever read, so a stated choice passed and the
+  tool did its own thing, without an error. One rule now, in both places:
+  **new means a new conversation, whatever is running** — ended and replaced in
+  the same window, politely from outside and abruptly from inside, exactly as
+  the role door does it. `--model` is accepted there too, because a new
+  conversation can take one; joining a live conversation with `--model` is
+  still refused.
+
 ### Removed
 - `mc supervisor` — replaced outright by `mc pm`, no transition alias. The
   singleton shape it established (one named workspace, no worktree,

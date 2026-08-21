@@ -22,6 +22,24 @@
  *   3. Does not exist?        create: role home layout (§7), git init for
  *                             the PM, a new conversation told what it is.
  *
+ * All three mean "take me to the role", and for a long time there was no way
+ * to say the other thing — *start over*. A handoff at a natural boundary is
+ * how this system keeps its costs down, and the role with the longest life of
+ * all could not perform one: `mc pm` resumed, every time, silently. So a
+ * second word decides, in the grammar `mc work <name>` already uses:
+ *
+ *   mc <role> new             a new conversation. Whatever is running is
+ *                             ended and replaced in the same window, so an
+ *                             attached client rides across the handoff and
+ *                             watches the successor boot. Nothing is deleted:
+ *                             the predecessor's transcript stays on disk, and
+ *                             the successor is told the one line that reaches
+ *                             it.
+ *   mc <role> <conversation>  that conversation, by id prefix. The way back
+ *                             from a handoff — after one, the newest is the
+ *                             successor, so without this the predecessor is
+ *                             unreachable through mc the moment it exists.
+ *
  * Every start makes the home whole first (idempotent): a crash that tore a
  * directory away is repaired by the next start, not discovered by the role
  * mid-thought.
@@ -38,7 +56,8 @@ import { ensureRoleHome } from '../role-home.js';
 import { areaRoleName, markAreaRole, readRole, rolesDir } from '../roles.js';
 import { createWorkArea, inspectWorkArea } from '../work-area.js';
 import {
-  attachBackground, backgroundTarget, clearTrustDialog, startInBackground,
+  attachBackground, backgroundTarget, clearTrustDialog, insideSession,
+  respawnInBackground, startInBackground,
 } from '../work-open.js';
 import { scanArgs } from './flags.js';
 
@@ -46,21 +65,23 @@ export async function runRoleSingleton(roleName, argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
   const stderr = deps.stderr || process.stderr;
   const scanned = scanArgs(argv, { booleans: ['--no-attach'], strictValues: ['--model'] });
-  if (scanned.error || scanned.positional.length) {
-    stderr.write(`mc: ${scanned.error || `unexpected arg: ${scanned.positional[0]}`}\n`);
-    stderr.write(`usage — mc ${roleName} [--model <model>] [--no-attach]\n`);
+  const usage = `usage — mc ${roleName} [new | <conversation id>] [--model <model>] [--no-attach]\n`;
+  if (scanned.error || scanned.positional.length > 1) {
+    stderr.write(`mc: ${scanned.error || `unexpected arg: ${scanned.positional[1]}`}\n`);
+    stderr.write(usage);
     return 2;
   }
+  const asked = scanned.positional[0] || null;
   const attach = !scanned.flags['no-attach'] && interactive();
 
   // 1. Running? Then that is where it is. Attaching twice is safe — tmux
   // mirrors the session — which is precisely why the conversation lives
   // there and not in whichever terminal asked first.
   const running = backgroundTarget(roleName);
-  if (running) {
+  if (running && !asked) {
     if (scanned.flags.model) {
       stderr.write(`mc: the ${roleName} is already running — a live conversation cannot change model\n`);
-      stderr.write(`mc: attach without --model, or stop it first: mc work stop ${roleName}\n`);
+      stderr.write(`mc: attach without --model, or start a fresh one: mc ${roleName} new --model <model>\n`);
       return 1;
     }
     stderr.write(`mc: joining the ${roleName} — it is already running\n`);
@@ -71,6 +92,16 @@ export async function runRoleSingleton(roleName, argv, deps = {}) {
     stderr.write('mc: ctrl-b d leaves it running\n');
     const joined = attachBackground(running);
     return joined.ok ? (joined.code || 0) : 1;
+  }
+  // A named conversation against a live one is the one thing a singleton
+  // cannot do: two conversations in one role home is the split-brain this
+  // design exists to prevent. It says so rather than attaching to the
+  // conversation that happens to be running, which would be answering a
+  // question nobody asked. `new` is the exception, and it is the point.
+  if (running && asked !== 'new') {
+    stderr.write(`mc: the ${roleName} is running (${running}) — one conversation at a time\n`);
+    stderr.write(`mc: stop it first:  mc work stop ${roleName}  — then  mc ${roleName} ${asked}\n`);
+    return 1;
   }
 
   const path = workAreaPath(roleName);
@@ -87,6 +118,34 @@ export async function runRoleSingleton(roleName, argv, deps = {}) {
     stderr.write(`mc: ${path} carries the role "${marked}", not ${roleName}\n`);
     return 1;
   }
+
+  // What is on record here, newest first. Singleton roles are claude-only, so
+  // a codex transcript in the home is somebody else's and never a candidate.
+  const known = listConversations(path).filter((item) => item.tool === 'claude-code');
+
+  // Which conversation this is about, decided before anything is created,
+  // started or replaced. An id that matches nothing is an error with a way
+  // forward — never a brand new conversation with the id as its opening
+  // words, which is what the same mistake cost `mc work --tmux` a transcript.
+  let resume = null;
+  if (asked && asked !== 'new') {
+    const chosen = known.find((item) => item.id.startsWith(asked)) || null;
+    if (!chosen) {
+      stderr.write(`mc: no conversation in the ${roleName}'s home starts with ${asked}\n`);
+      stderr.write(`mc: mc work lists what is there — the home is ${path}\n`);
+      return 1;
+    }
+    // Only the flag decides the model (M1 decision 2, 2026-08-14: nothing new
+    // may depend on transcript-derived model persistence). claude-code resumes
+    // a conversation on its own model anyway, which is what makes that free.
+    resume = { id: chosen.id, model: scanned.flags.model || null };
+  } else if (!asked) {
+    const latest = known[0] || null;
+    if (latest) resume = { id: latest.id, model: scanned.flags.model || conversationModel(latest) };
+  }
+  // Whom a new conversation succeeds. `new` never resumes; the predecessor is
+  // there so the successor can be handed the way back to it.
+  const predecessor = asked === 'new' ? known[0] || null : null;
 
   const role = readRole(roleName);
   if (!area.exists) {
@@ -110,37 +169,83 @@ export async function runRoleSingleton(roleName, argv, deps = {}) {
     stderr.write(`mc: could not version the ${roleName} home (${home.git_failed}) — the state files are unprotected until this is fixed\n`);
   }
 
-  // 2 or 3: the newest claude conversation decides which. Resume carries
-  // the model the transcript records (flag outranks it); a first
-  // conversation starts on the flag, else the role's default.
-  const latest = listConversations(path).find((item) => item.tool === 'claude-code') || null;
-  const resumeModel = latest ? (scanned.flags.model || conversationModel(latest)) : null;
-
-  const started = startInBackground({
+  const launch = {
     name: roleName,
     areaRoot: path,
     worktree: { repo: null, path, is_git: false },
     tool: 'claude',
+    // A new conversation starts on the flag, else the role's default — never
+    // on what the predecessor happened to be running. Inheriting that would be
+    // the old session reaching into the new one, which is the one thing a
+    // deliberate handoff is spending a boot to avoid.
     model: scanned.flags.model,
-    overlay: latest ? null : role?.overlay || null,
+    overlay: resume ? null : role?.overlay || null,
     defaultModel: role?.model || null,
     defaultModelTool: 'claude',
-    conversation: latest ? { id: latest.id, model: resumeModel } : null,
-  });
+    conversation: resume,
+    // One factual line, and only for a successor: the id and the command that
+    // reaches it. The rest of what the role is comes from the overlay, and
+    // saying it twice would be mc writing the role's instructions.
+    task: predecessor ? `Predecessor: ${predecessor.id} — reach it with  mc ${roleName} ${predecessor.id}` : null,
+  };
+
+  if (running) {
+    // Replacing the pane rather than the session, so that whoever is attached
+    // stays attached. Politely when somebody else can do the waiting; from
+    // inside the role's own session there is nobody to wait, because the turn
+    // running this command is the one being replaced.
+    const inside = insideSession(running);
+    log('role.singleton-new', {
+      role: roleName,
+      target: running,
+      predecessor: predecessor?.id || null,
+      graceful: !inside,
+      model: scanned.flags.model || role?.model || null,
+    });
+    if (inside) {
+      // Said before the respawn, because there is no after: this process is
+      // in the pane that is about to be replaced.
+      stderr.write(`mc: replacing the ${roleName} from inside its own session — this conversation ends here, and the turn in flight goes with it\n`);
+      if (predecessor) stderr.write(`mc: it stays on disk — mc ${roleName} ${predecessor.id.slice(0, 8)} reaches it\n`);
+    }
+    const respawned = respawnInBackground({ ...launch, graceful: !inside });
+    if (!respawned.ok) {
+      stderr.write(`mc: could not replace the ${roleName} (${respawned.reason})\n`);
+      if (respawned.hint) stderr.write(`mc: ${respawned.hint}\n`);
+      return 1;
+    }
+    stderr.write(`mc: ${roleName} — a new conversation in ${respawned.window}, told what it is\n`);
+    if (predecessor) {
+      stderr.write(`mc: the one it succeeds is ${predecessor.id.slice(0, 8)} — nothing was deleted; mc ${roleName} ${predecessor.id.slice(0, 8)} reaches it\n`);
+    }
+    if (!attach) {
+      stdout.write(`mc: the ${roleName} is running as ${respawned.target} — attach with  mc ${roleName}\n`);
+      return 0;
+    }
+    stderr.write('mc: ctrl-b d leaves it running\n');
+    const joined = attachBackground(respawned.target);
+    return joined.ok ? (joined.code || 0) : 1;
+  }
+
+  const started = startInBackground(launch);
   if (!started.ok) {
     stderr.write(`mc: could not start the ${roleName} (${started.reason})\n`);
     if (started.hint) stderr.write(`mc: ${started.hint}\n`);
     return 1;
   }
-  log('role.singleton-start', {
-    role: roleName, target: started.target, resumed: latest?.id || null,
-    model: resumeModel || scanned.flags.model || role?.model || null,
+  log(asked === 'new' ? 'role.singleton-new' : 'role.singleton-start', {
+    role: roleName, target: started.target, resumed: resume?.id || null,
+    predecessor: predecessor?.id || null,
+    model: resume?.model || scanned.flags.model || role?.model || null,
   });
   const trust = clearTrustDialog(started.target);
   if (trust.answered) stdout.write('mc: answered Claude\'s folder-trust question for it\n');
-  stderr.write(latest
-    ? `mc: ${roleName} — resuming ${latest.id.slice(0, 8)}\n`
+  stderr.write(resume
+    ? `mc: ${roleName} — resuming ${resume.id.slice(0, 8)}\n`
     : `mc: ${roleName} — a new conversation, told what it is\n`);
+  if (predecessor) {
+    stderr.write(`mc: the one it succeeds is ${predecessor.id.slice(0, 8)} — nothing was deleted; mc ${roleName} ${predecessor.id.slice(0, 8)} reaches it\n`);
+  }
 
   if (!attach) {
     stdout.write(`mc: the ${roleName} is running as ${started.target} — attach with  mc ${roleName}\n`);

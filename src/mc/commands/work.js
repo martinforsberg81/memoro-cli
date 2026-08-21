@@ -7,7 +7,8 @@
  *
  *   mc work                       what exists — and, at a terminal, a way in
  *   mc work <name>                open it, asking only what it cannot know
- *   mc work <name> new            a new conversation
+ *   mc work <name> new            a new conversation — even against a
+ *                                 running one, which it replaces in place
  *   mc work <name> <id>           one particular conversation
  *   mc work send <name> "<message>"  a message into its inbox; --wake knocks
  *   mc work add <name> <repo> [branch] [--from <ref>]
@@ -45,7 +46,8 @@ import {
 } from '../roles.js';
 import { scanArgs } from './flags.js';
 import {
-  attachBackground, backgroundTarget, clearTrustDialog, openInWorkArea, startInBackground,
+  attachBackground, backgroundTarget, clearTrustDialog, insideSession, openInWorkArea,
+  respawnInBackground, startInBackground,
 } from '../work-open.js';
 
 const VERBS = ['add', 'remove', 'release', 'discard', 'stop', 'list', 'send'];
@@ -618,6 +620,54 @@ export async function openArea(name, opts, { stdout, stderr }) {
   // starting a second process on the same conversation.
   const running = backgroundTarget(name);
   if (running) {
+    // Unless a new conversation is what was asked for. This branch used to
+    // return before `pick` was ever looked at: `mc work <name> new` against a
+    // background session printed *joining …* and attached, so a stated choice
+    // passed and the tool did its own thing without a word. One rule, both
+    // doors (`mc pm new` is the other): new means a new conversation, whatever
+    // is running.
+    if (pick === 'new') {
+      // Replaced in the same window rather than killed and recreated, so
+      // whoever is attached stays attached and watches the successor boot.
+      // Politely from outside — the tool's own /exit, so Claude's SessionEnd
+      // hooks run. From inside its own session there is nobody left to do the
+      // waiting: the turn running this command is the one being replaced.
+      const inside = insideSession(running);
+      if (inside) {
+        stderr.write(`mc: replacing ${name} from inside its own session — this conversation ends here, and the turn in flight goes with it\n`);
+      }
+      const respawned = respawnInBackground({
+        name,
+        areaRoot: area.path,
+        worktree,
+        // The tool the work already uses, unless a flag or the role says
+        // otherwise — a new conversation is not a request for a new tool.
+        tool: tool || roleTool || area.conversations[0]?.tool || 'claude',
+        model: opts.model,
+        overlay,
+        defaultModel: roleModel,
+        defaultModelTool: roleTool,
+        graceful: !inside,
+      });
+      if (!respawned.ok) {
+        stderr.write(`mc: could not replace ${name} (${respawned.reason})\n`);
+        if (respawned.hint) stderr.write(`mc: ${respawned.hint}\n`);
+        return 1;
+      }
+      stderr.write(`mc: ${name} — a new conversation in ${respawned.window}\n`);
+      stderr.write(`mc: nothing was deleted — mc work ${name} lists what is on record\n`);
+      if (!interactive()) {
+        stdout.write(`mc: ${name} is running as ${respawned.target} — attach with  mc work ${name}\n`);
+        return 0;
+      }
+      stderr.write('mc: ctrl-b d leaves it running\n');
+      const joined = attachBackground(respawned.target);
+      if (!joined.ok) {
+        stderr.write(`mc: could not join ${name} (${joined.reason})\n`);
+        return 1;
+      }
+      return joined.code || 0;
+    }
     // A live conversation cannot change model, and quietly attaching would
     // leave the user believing it did — working with the wrong model is the
     // silent outcome the flag's own errors exist to prevent.

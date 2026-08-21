@@ -51,17 +51,17 @@ function tmuxSession(target, run) {
 }
 
 /**
- * Ask a background worker to finish.
+ * Ask the tool in a pane to leave by its own front door.
  *
  * `/exit` is the tool's own way out: it closes the conversation cleanly and
- * lets Claude's SessionEnd hooks run. Only if it is still there afterwards is
- * the tmux session killed, which is abrupt but never loses more than the turn
- * in flight — every turn before it is already on disk.
+ * lets Claude's SessionEnd hooks run, so the last turn is saved and uploaded.
+ * It says nothing about whether the pane is gone afterwards — that is the
+ * caller's question, and the two callers answer it differently: stopping asks
+ * tmux whether the session survived, replacing does not care because it is
+ * about to respawn the window either way.
  */
-function stopBackground(name, { run = null, wait = null } = {}) {
-  const target = `mc-${name}`;
+export function askToolToLeave(target, { run = null, wait = null } = {}) {
   const tmux = run || ((args) => spawnSync('tmux', args, { encoding: 'utf8' }));
-  if (!tmuxSession(target, run)) return null;
   const pause = wait || ((ms) => {
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
   });
@@ -69,6 +69,20 @@ function stopBackground(name, { run = null, wait = null } = {}) {
   pause(400);
   tmux(['send-keys', '-t', target, 'Enter']);
   pause(2500);
+}
+
+/**
+ * Ask a background worker to finish.
+ *
+ * Only if it is still there after its own front door is the tmux session
+ * killed, which is abrupt but never loses more than the turn in flight —
+ * every turn before it is already on disk.
+ */
+function stopBackground(name, { run = null, wait = null } = {}) {
+  const target = `mc-${name}`;
+  const tmux = run || ((args) => spawnSync('tmux', args, { encoding: 'utf8' }));
+  if (!tmuxSession(target, run)) return null;
+  askToolToLeave(target, { run, wait });
   const left = tmuxSession(target, run);
   if (left) tmux(['kill-session', '-t', target]);
   log('work.stop-background', { target, graceful: !left });

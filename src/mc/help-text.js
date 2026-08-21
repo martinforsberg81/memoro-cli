@@ -51,7 +51,11 @@ MAINTENANCE
   mc work <name> --tmux [task]     Start it in the background, for another
                                     session to talk to; mc work <name> joins
                                     it, and ctrl-b d leaves it running
-  mc work <name> new               A new conversation rather than the last one
+  mc work <name> new               A new conversation rather than the last one —
+                                    including when one is running in the
+                                    background: it is ended and replaced in the
+                                    same window, so anyone attached stays
+                                    attached. Nothing is deleted
   mc work <name> new --model <m>   …on a chosen model, passed to the tool as
                                     given; a resumed conversation stays on the
                                     model its transcript says it ran on
@@ -122,8 +126,21 @@ MAINTENANCE
   mc pm                            The PM's workspace: attach if it runs,
                                     restart it if it stopped, create it the
                                     first time. One of it, ever; no worktree
+  mc pm new [--model <m>]          Start over: a fresh conversation in the same
+                                    window. The one running is asked to leave
+                                    (from inside its own session it cannot be
+                                    asked, and the turn in flight is lost —
+                                    mc says which happened). Nothing is
+                                    deleted: the predecessor stays on disk, the
+                                    successor is told its id, and mc pm <id>
+                                    reaches it. Without --model, the role's
+                                    default — never the predecessor's
+  mc pm <conversation id>          That conversation, by the id shown in
+                                    mc work. The way back from a handoff; it
+                                    refuses while the PM is running rather than
+                                    quietly attaching to the other one
   mc pm-helper                     The helper's workspace: same door, same
-                                    rules
+                                    rules — new and an id included
   mc roles list                    The defined roles, read from their files
   mc roles show <role>             One role whole: facts, then overlay text
   mc worktree add <name> <branch>  Create a worktree this session owns
