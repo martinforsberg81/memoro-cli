@@ -6,7 +6,44 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+- **The test gate no longer says `GREEN` over standing red names.** The rule it
+  enforces is differential — nothing new went red — and on this repository,
+  which carries 55 red names on `main`, the verdict printed `GREEN` anyway.
+  That word is what every merge decision gets reported onward with, and it was
+  reported as the larger claim it sounds like for a week. The differential
+  logic is untouched; the word was the defect. A base with no red names still
+  reads `GREEN — the test gate passes`, unchanged. A base with red names never
+  uses the word: `NO NEW RED — 55 standing red names on main`, followed by what
+  those names actually cost — a test that is already failing cannot fail any
+  harder, so a fault introduced inside one of them has nowhere to appear. They
+  are 55 blind spots, not only 55 items of debt. `--json` gains `standing_red`
+  and a `verdict` of `green` / `no-new-red` / `red` / `ratchet-risen` /
+  `stopped`, the two passes kept as separate words so a reader who wanted the
+  strict one can still ask for it. The merge round narrates the same statement
+  rather than a friendlier one, and the merge log row reads
+  `55 standing red before`.
+
 ### Added
+- **`.mc/red-ratchet.json` — the standing red set, recorded so it can only get
+  smaller.** Inside a single round the differential rule already catches every
+  rise, including a brand new test that is born red: absent from the baseline
+  is the strongest possible way of not being in it, so it lands in `broke` and
+  the round is red. The hole is *between* rounds. Every round measures `main`
+  afresh and remembers nothing, so a red name that reaches `main` by a path no
+  gate stood in becomes part of the next baseline and is reported as "no new
+  red" over it from then on. That is how 55 accumulated. The floor now lives in
+  the repository, in the diff: a red name that is not in its `names` fails the
+  round, the same class as a new red name. It binds **names, not a count** —
+  two rounds hours apart here gave 55 and then 56, the extra one green again
+  after that, so a count ratchet would fail good pull requests whenever the
+  machine was busy, and a gate that fails at random is worse than the word it
+  was built to correct. Nothing writes the file automatically, including the
+  merge round: evicting a name on a lucky round lays a trap for the next
+  author. The round prints exactly which names came good, JSON-quoted, so
+  lowering it is a paste. A repository with no ratchet behaves exactly as
+  before; one whose ratchet will not parse stops the round rather than reading
+  as an empty floor and failing everything on a typo.
 - `mc pm new` and `mc pm-helper new` — a reliable way to start a **fresh**
   conversation in a singleton role. Every door into the role meant "take me to
   the PM": attach if it runs, resume the newest if it stopped, create if it

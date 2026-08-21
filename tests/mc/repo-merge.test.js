@@ -139,7 +139,9 @@ describe('a green gate lands the change', () => {
       assert.equal(rows.length, 3, 'expected exactly one row appended');
       const line = rows[2];
       assert.match(line, /#400/u);
-      assert.match(line, /2 red before · 2 after · 0 new/u);
+      // "red before" was the same understatement as the verdict's "green":
+      // those two were standing red on main and this change did not touch them.
+      assert.match(line, /2 standing red before · 2 after · 0 new/u);
       assert.match(line, /Squash-merge → `ccc/u);
       assert.match(line, /klient-guard/u);
     } finally { fx.cleanup(); }

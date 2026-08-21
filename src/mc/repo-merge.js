@@ -1,11 +1,11 @@
 /**
  * The gate round that also lands the change.
  *
- * `repo-gate.js` answers one question — is the test gate green — and cannot
+ * `repo-gate.js` answers one question — did anything new go red — and cannot
  * merge. That is deliberate, and it stays that way: a module that could do both
  * is one `if` away from landing a change on a verdict it had not finished
  * forming. So merging lives here, on top of it, and reaches the merge only by
- * getting a green report back from something that has no opinion about merging.
+ * getting a passing report back from something that has no opinion about merging.
  *
  * The round, in order, stopping at the first thing that is not right:
  *
@@ -33,7 +33,7 @@ import { dirname, join } from 'node:path';
 import { claimLease, readLease, releaseLease } from './repo-lease.js';
 import { currentHolder } from './work-identity.js';
 import { mcHome } from './paths.js';
-import { runGate } from './repo-gate.js';
+import { runGate, verdictPhrase } from './repo-gate.js';
 import { sourceLinkedInstallations } from './repo-status.js';
 import { declarationFor } from './repo-gate-table.js';
 
@@ -55,7 +55,7 @@ export function defaultMergeLog(repoPath, { root = mcHome(), env = process.env }
 }
 
 /**
- * Run the gate and, only if it is green, land the change.
+ * Run the gate and, only if it passes, land the change.
  *
  * Everything that touches the world is injectable for the same reason as in the
  * gate: the one thing a test suite cannot assert is a real merge against a real
@@ -144,7 +144,7 @@ export async function runMergeRound({
     // The lease serialises gate rounds against each other; it does not stop a
     // person merging by hand, and that happened during this feature's own
     // development — a round measured against one main while another landed in
-    // it. A green verdict is a statement about the tree it measured, so if the
+    // it. A passing verdict is a statement about the tree it measured, so if the
     // base has moved since, the verdict is about a tree that no longer exists.
     const base = `origin/${verdict.pr.base}`;
     const fetched = askGit(['fetch', 'origin', '--prune'], { cwd: repoPath });
@@ -152,7 +152,7 @@ export async function runMergeRound({
     const nowAt = trim(askGit(['rev-parse', base], { cwd: repoPath }).stdout);
     if (!nowAt) return finish('drift', `could not read ${base} before merging`);
     if (nowAt !== verdict.baseline.commit) {
-      return finish('drift', `${base} moved from ${short(verdict.baseline.commit)} to ${short(nowAt)} while the gate ran — the green is about a tree that has changed, so it is measured again rather than merged on`);
+      return finish('drift', `${base} moved from ${short(verdict.baseline.commit)} to ${short(nowAt)} while the gate ran — the verdict is about a tree that has changed, so it is measured again rather than merged on`);
     }
 
     // And the lease, re-read rather than assumed. A `--force` release mid-round
@@ -163,7 +163,10 @@ export async function runMergeRound({
       return finish('lease', `the lease was taken from ${holder.name} during the round — nothing was merged`);
     }
 
-    say(`gate green and ${base} unmoved — merging #${verdict.pr.number}`);
+    // The same statement the verdict makes, not a friendlier one. A merge
+    // round that narrated "gate green" over standing red would put the word
+    // back exactly where it was taken out of.
+    say(`${verdictPhrase(verdict)} and ${base} unmoved — merging #${verdict.pr.number}`);
     const merged = askGh(['pr', 'merge', String(verdict.pr.number), '--squash'], { cwd: repoPath });
     if (merged.status !== 0) {
       return finish('merge', trim(merged.stderr) || `gh could not merge #${verdict.pr.number}`);
@@ -245,7 +248,7 @@ function writeMergeLine({ report, verdict, path, clock }) {
   const day = new Date(clock()).toISOString().slice(0, 10);
   const checks = [
     `full suite both sides, fresh baseline at ${short(verdict.baseline.commit)}`,
-    `${verdict.baseline.red.length} red before · ${verdict.candidate.red.length} after · 0 new`,
+    `${verdict.baseline.red.length} standing red before · ${verdict.candidate.red.length} after · 0 new`,
     `base unmoved at merge`,
   ].join(' · ');
   const line = `| ${day} | ${basenameOf(report.repo)} #${report.pr.number}${verdict.pr.title ? ` ${verdict.pr.title}` : ''} `
