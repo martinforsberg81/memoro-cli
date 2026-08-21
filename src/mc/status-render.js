@@ -131,13 +131,22 @@ function oldest(area) {
 }
 
 function where(area) {
-  if (!area.worktrees.length) return 'no repository';
-  return area.worktrees.map((worktree) => [
+  const parts = [];
+  // Age is what makes a task worth seeing here — the count is a script's
+  // answer to "does anything need a look", and the age behind each one lives
+  // in `mc task list`. This line only ever has to say how many.
+  if (area.open_tasks) parts.push(`${area.open_tasks} open task${area.open_tasks === 1 ? '' : 's'}`);
+  if (!area.worktrees.length) {
+    parts.push('no repository');
+    return parts.join('   ·   ');
+  }
+  parts.push(...area.worktrees.map((worktree) => [
     worktree.repo,
     worktree.branch || '(detached)',
     worktree.uncommitted ? `${worktree.uncommitted} uncommitted` : null,
     worktree.unmerged_commits ? `${worktree.unmerged_commits} unmerged` : null,
-  ].filter(Boolean).join('  ')).join('   ·   ');
+  ].filter(Boolean).join('  ')));
+  return parts.join('   ·   ');
 }
 
 function ago(updatedMs, now) {

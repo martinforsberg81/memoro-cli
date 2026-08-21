@@ -37,6 +37,8 @@ import {
   resolveRepository,
 } from '../work-area.js';
 import { describeAge, describeSize } from '../conversations.js';
+import { openTask } from '../task-log.js';
+import { currentHolder } from '../work-identity.js';
 import { sendToArea } from '../work-send.js';
 import { stopWork } from '../work-stop.js';
 import { interactive, ask, select } from '../prompt.js';
@@ -61,7 +63,7 @@ export async function run(argv, deps = {}) {
     stderr.write(`mc: ${opts.error}\n`);
     stderr.write('usage — mc work\n');
     stderr.write('        mc work <name> [new | <conversation id>] [--repo <repo>] [--codex|--claude] [--model <model>]\n');
-    stderr.write('        mc work send <name> "<message>" [--wake] [--json]\n');
+    stderr.write('        mc work send <name> "<message>" [--wake] [--task] [--json]\n');
     stderr.write('        mc work add <name> <repo> [branch] [--from <ref>]\n');
     stderr.write('        mc work remove <name> <repo>\n');
     stderr.write('        mc work stop <name>\n');
@@ -110,16 +112,29 @@ async function runVerb(opts, { stdout, stderr }) {
   // that will not take the keystroke, costs the recipient latency and never
   // costs the sender the message.
   if (opts.verb === 'send') {
-    const result = sendToArea({ name: opts.name, message: opts.message, wake: opts.wake });
+    // Same holder, same instant, for the order and the task it opens — so
+    // asking "who sent this and when" gets one answer, not two that happen
+    // to be close.
+    const sender = currentHolder();
+    const now = new Date();
+    const result = sendToArea({
+      name: opts.name, message: opts.message, wake: opts.wake, sender, now,
+    });
     if (!result.ok) {
       stderr.write(`mc: nothing called "${opts.name}" under ${workRoot()}\n`);
       return 1;
     }
+    // The task is opened only once the order is actually in the inbox: a
+    // task that outlives the message it tracks is worse than neither.
+    const task = opts.trackTask ? openTask({
+      session: opts.name, text: opts.message, sender, now,
+    }) : null;
     if (opts.json) {
-      stdout.write(`${JSON.stringify({ ok: true, ...result }, null, 2)}\n`);
+      stdout.write(`${JSON.stringify({ ok: true, ...result, task }, null, 2)}\n`);
       return 0;
     }
     stdout.write(`mc: ${result.file}\n`);
+    if (task) stdout.write(`mc: task ${task.id.slice(0, 8)} opened for ${opts.name} — mc task list ${opts.name}\n`);
     // Every outcome says something. A knock that did not happen is not a
     // silence: the sender has to know the file is there and that nobody was
     // tapped on the shoulder, or they will sit waiting for an answer.
@@ -768,7 +783,7 @@ function describe(worktree) {
 
 export function parseArgs(argv) {
   const scanned = scanArgs(argv, {
-    booleans: ['--json', '--apply', '--tmux', '--wake'],
+    booleans: ['--json', '--apply', '--tmux', '--wake', '--task'],
     values: ['--repo', '--from'],
     strictValues: ['--model', '--resume'],
     toolSugar: true,
@@ -776,6 +791,10 @@ export function parseArgs(argv) {
   const opts = {
     verb: 'list', name: null, repo: scanned.flags.repo, branch: null, pick: null, message: null,
     from: scanned.flags.from, tmux: scanned.flags.tmux, task: null, wake: scanned.flags.wake,
+    // `--task` on `mc work send` — kept apart from `task`, the free-form
+    // words `--tmux` starts a background worker with. Same command, two
+    // unrelated ideas that happen to share a word in English.
+    trackTask: scanned.flags.task,
     tool: scanned.flags.tool, model: scanned.flags.model, resume: scanned.flags.resume,
     apply: scanned.flags.apply, json: scanned.flags.json,
   };
