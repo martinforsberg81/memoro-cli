@@ -46,6 +46,7 @@ started in it. mc stores nothing else, because nothing else is mc's to know.
 | `mc repo release <repo> [--force]` | Give it back; `--force` takes it from another holder and is logged. |
 | `mc repo who <repo>` | Who holds it, for what, since when — and whether the holder is still working. `--json`. |
 | `mc repo merge <repo> <pr>` | Run the test gate and, only if it is green, squash-merge, deploy-pull and log it. `--check` gates and stops. `--json`. |
+| `mc watch pm start \| stop \| status` | The PM round: every 30 minutes it commits `pm/`, runs `mc doctor`, counts `pm/inbox/`, delivers the guard's notices and knocks once if something is new. `--interval <seconds>` on start; `--json` on status. |
 
 `mc work release` keeps a worktree that is in use, has uncommitted changes, or
 has unmerged commits. `mc work discard` reports what it will destroy and
@@ -62,6 +63,21 @@ page says how old the picture is. Past three intervals it reads `STALE` and
 says to start the watcher; with no snapshot at all it counts for itself and
 says so. The watcher writes only `<mc home>/repo-status/`: never inside a
 repository, never the registry. It is explicit — no command starts it for you.
+
+`mc watch pm` is a script and never a model turn. An empty inbox and a quiet
+ledger cost a few file reads. It wakes on change rather than on presence: a
+knock happens when the set of unprocessed items gains a member, an item still
+there on the third pass earns one reminder, and after that it is in the log
+rather than in the prompt. It decides nothing about what any item is about —
+it counts files and names them, and never opens one. Its auto-commit commits
+what PM wrote and never edits it. `delivered, but did not knock` is a normal
+outcome: the client guard refuses to type into an occupied pane and the
+message is in the inbox either way. Unprocessed means a file at the top level
+of `pm/inbox/`, excluding `README.md` and directories — archiving to
+`inbox/archive/` is what makes an item processed. It writes only
+`<mc home>/watch/`, and the notices it delivers come from
+`<mc home>/watch/notices.jsonl`, which the session guard appends to and
+nothing ever removes from.
 
 The lease is advisory. `mc repo claim` refuses a repository someone else is
 holding, and that refusal stops exactly one thing: this command. No git or gh

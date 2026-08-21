@@ -120,6 +120,17 @@ MAINTENANCE
   mc repo merge <repo> <pr> --check
                                     The same round, stopping at the verdict.
                                     A green gate is not a review
+  mc watch pm start [--interval <seconds>]
+                                    The PM round, every 30 minutes and never a
+                                    model: commit pm/, run mc doctor, count
+                                    pm/inbox/, deliver what the session guard
+                                    left in the notices ledger, and knock once
+                                    if any of it is new. It wakes on change —
+                                    an item that lingers earns one reminder
+                                    after three passes and then silence
+  mc watch pm stop                 Stop it; nothing else changes
+  mc watch pm status [--json]      Whether it is running, when it last ran, and
+                                    what that pass saw
   mc worker <name> [task]          A project folder that carries the worker
                                     role: every conversation started in it
                                     gets the role's overlay and model default

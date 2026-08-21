@@ -76,6 +76,7 @@ async function routeV1Command(args) {
     worktree: './mc/commands/worktree.js',
     work: './mc/commands/work.js',
     repo: './mc/commands/repo.js',
+    watch: './mc/commands/watch.js',
     worker: './mc/commands/worker.js',
     roles: './mc/commands/roles.js',
     pm: './mc/commands/pm.js',
