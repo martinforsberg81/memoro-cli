@@ -93,10 +93,17 @@ export async function watchRound({
   if (deferred > 0) {
     log(`${deferred} changed session${deferred === 1 ? '' : 's'} not read this round — they are first in the next one`);
   }
+  // Stamped whether the read succeeded or not, so a session the tool keeps
+  // timing out on rotates to the back like any other instead of holding the
+  // front of the queue for ever and starving the rest.
   const readAt = new Date(now).toISOString();
+  let failedReads = 0;
   await inWaves(queue, concurrency, async (session) => {
     const outcome = await (read || defaultRead)(session);
-    if (outcome.failed) log(`could not read ${session.area}: ${outcome.failed}`);
+    if (outcome.failed) {
+      failedReads += 1;
+      log(`could not read ${session.area}: ${outcome.failed}`);
+    }
     session.patterns.push(...outcome.patterns);
     session.read_at = readAt;
   });
@@ -138,13 +145,18 @@ export async function watchRound({
       : `could not deliver ${urgent.length} urgent flag${urgent.length === 1 ? '' : 's'}: ${knocked.reason}`);
   }
 
-  writeMemory(sessions, { root, now: new Date(now) });
+  // Stamped when the round finished, not when it started. The notices carry
+  // the moment they were observed; this one answers "is anybody still
+  // watching", and a round that spent five minutes waiting on the tool must
+  // not read as five minutes behind.
+  writeMemory(sessions, { root });
 
   return {
     at: scan.at,
     sessions: scan.sessions.length,
     live: scan.sessions.filter((item) => item.live).length,
-    read: queue.length,
+    read: queue.length - failedReads,
+    unreadable: failedReads,
     deferred,
     flagged: written.length,
     urgent: urgent.length,
@@ -224,6 +236,7 @@ export async function watchLoop({
     try {
       const outcome = await watchRound({ root, log, now: now ? now() : Date.now(), ...rest });
       log(`${outcome.sessions} conversations, ${outcome.live} live, ${outcome.read} read`
+        + `${outcome.unreadable ? ` (${outcome.unreadable} could not be read)` : ''}`
         + `, ${outcome.flagged} flagged in ${Math.round(outcome.took_ms / 100) / 10}s`);
     } catch (error) {
       log(`round failed: ${error?.stack || error?.message || String(error)}`);

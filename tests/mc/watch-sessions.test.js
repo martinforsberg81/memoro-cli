@@ -534,3 +534,19 @@ describe('a knock that could not happen is not a flag that was lost', () => {
     assert.ok(said.some((line) => /could not deliver .*tmux is not on this machine/u.test(line)));
   });
 });
+
+describe('a round says what it actually spent', () => {
+  it('counts a read that failed as unread, not as read', async () => {
+    const at = root();
+    const outcome = await round({
+      root: at,
+      concurrency: 1,
+      report: board([['alpha', [conversation({ id: 'a' })]], ['beta', [conversation({ id: 'b' })]]]),
+      read: async (session) => (session.id === 'a'
+        ? { patterns: [], failed: 'the model did not answer within 240s' }
+        : { patterns: [], failed: null }),
+    });
+    assert.equal(outcome.read, 1);
+    assert.equal(outcome.unreadable, 1);
+  });
+});
