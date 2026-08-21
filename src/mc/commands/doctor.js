@@ -1,25 +1,39 @@
 import { repairSessionMaintenanceSync, scanSessionMaintenanceSync } from '../session-maintenance-v1.js';
 import { inspectV1DevServerRegistrySync } from '../dev-servers.js';
 
-export async function run(argv, deps = {}) {
-  const stdout = deps.stdout || process.stdout;
-  const stderr = deps.stderr || process.stderr;
-  const opts = parseArgs(argv);
-  if (opts.error) { stderr.write(`mc: ${opts.error}\n`); return 2; }
-  const maintenance = opts.repair
+/**
+ * The diagnosis itself, without a page around it.
+ *
+ * `mc watch pm` runs this every pass (designnote §3, step 2) and carries a
+ * complaint into its knock. It calls the function rather than the command on
+ * purpose: a round that shells out to `mc doctor` would be a second process
+ * and a second parse of the same answer, and the two could drift the day one
+ * of them learns something the other has not. The command below is this plus
+ * rendering.
+ */
+export function diagnose({ repair = false, deps = {} } = {}) {
+  const maintenance = repair
     ? (deps.repair || repairSessionMaintenanceSync)({ mcHomeDir: deps.mcHomeDir, apply: true })
     : (deps.scan || scanSessionMaintenanceSync)({ mcHomeDir: deps.mcHomeDir });
   const devServers = (deps.inspectDevServers || inspectV1DevServerRegistrySync)({
     mcHomeDir: deps.mcHomeDir,
     deps: deps.devServerDeps || {},
   });
-  const result = {
+  return {
     ...maintenance,
     ok: maintenance.ok && devServers.ok,
     summary: { ...maintenance.summary, dev_servers: devServers.summary },
     issues: [...maintenance.issues, ...devServers.issues],
     dev_servers: devServers,
   };
+}
+
+export async function run(argv, deps = {}) {
+  const stdout = deps.stdout || process.stdout;
+  const stderr = deps.stderr || process.stderr;
+  const opts = parseArgs(argv);
+  if (opts.error) { stderr.write(`mc: ${opts.error}\n`); return 2; }
+  const result = diagnose({ repair: opts.repair, deps });
   if (opts.json) stdout.write(`${JSON.stringify(result, null, 2)}\n`);
   else {
     stdout.write(`mc doctor — ${result.ok ? 'ok' : 'issues found'}${opts.repair ? ' · applied safe repairs' : ''}\n`);
