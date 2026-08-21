@@ -135,6 +135,20 @@ MAINTENANCE
   mc watch pm stop                 Stop it; nothing else changes
   mc watch pm status [--json]      Whether it is running, when it last ran, and
                                     what that pass saw
+  mc watch sessions start [--interval <seconds>] [--model <model>]
+                                    A watchman over the running conversations.
+                                    It flags waiting, silent, dead,
+                                    unreachable, stalled, blocked,
+                                    quota-exhausted and error — and only
+                                    flags: no action, no judgement, no
+                                    ranking. Everything with a deterministic
+                                    answer is worked out here; Haiku is asked
+                                    only about output that is prose, and only
+                                    when that output moved
+  mc watch sessions stop           Stop it. It never starts itself
+  mc watch sessions status [--json]
+                                    Whether it is running, when it last looked,
+                                    and what is standing
   mc worker <name> [task]          A project folder that carries the worker
                                     role: every conversation started in it
                                     gets the role's overlay and model default

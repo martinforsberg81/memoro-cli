@@ -194,6 +194,37 @@ function noticeFrom(sender) {
 }
 
 /**
+ * Would a wake be allowed to type into this pane right now?
+ *
+ * The two questions `wakeConversation` asks before it touches a keyboard,
+ * pulled out so somebody can ask them without typing: is a person attached,
+ * and is the input box visibly empty. Both are reads.
+ *
+ * The guard (`mc watch sessions`) needs exactly this and nothing after it. A
+ * session with mail it has not read, sitting in a pane no wake can reach, is a
+ * delivery that arrived and will not be seen — and it is a fact about the pane
+ * rather than an opinion about it, so it is answered here rather than by a
+ * model looking at a screenshot. Two implementations of "can this pane be
+ * woken" would be two answers the day they disagree, so there is one.
+ *
+ * `pane` and `box` come back with the verdict because the wake needs both and
+ * reading them twice would widen the gap between looking and typing.
+ */
+export function paneWillTakeText({ target, run = null } = {}) {
+  const tmux = run || ((args) => spawnSync('tmux', args, { encoding: 'utf8' }));
+  const clients = tmux(['list-clients', '-t', target, '-F', '#{client_name}']);
+  if (clients?.status !== 0) return { ok: false, reason: 'could not tell whether anybody is attached to it' };
+  if (String(clients.stdout || '').trim() !== '') return { ok: false, reason: 'somebody is attached to it' };
+
+  const pane = readPane(tmux, target);
+  if (pane === null) return { ok: false, reason: 'could not read the conversation' };
+  const box = readBox(pane);
+  if (box === null) return { ok: false, reason: 'could not find its prompt to check it was empty' };
+  if (box.text !== '') return { ok: false, reason: 'there is already something in its prompt' };
+  return { ok: true, pane, box };
+}
+
+/**
  * Wake a conversation, and know whether it woke.
  *
  * It asks two questions before it types a character, because the input box it
@@ -231,17 +262,12 @@ export function wakeConversation({ target, sender, run = null, sleep = null }) {
   // nothing to take back and nothing for the sender to worry about.
   const refuse = (reason) => ({ ok: false, guard: true, reason });
 
-  const clients = tmux(['list-clients', '-t', target, '-F', '#{client_name}']);
-  if (clients?.status !== 0) return refuse('could not tell whether anybody is attached to it');
-  if (String(clients.stdout || '').trim() !== '') return refuse('somebody is attached to it');
-
   // Read last, immediately before typing: whatever gap remains between looking
   // and typing is the gap, and there is no reason to make it any wider.
-  const before = readPane(tmux, target);
-  if (before === null) return refuse('could not read the conversation');
-  const opening = readBox(before);
-  if (opening === null) return refuse('could not find its prompt to check it was empty');
-  if (opening.text !== '') return refuse('there is already something in its prompt');
+  const clear = paneWillTakeText({ target, run: tmux });
+  if (!clear.ok) return refuse(clear.reason);
+  const before = clear.pane;
+  const opening = clear.box;
 
   // How many times this exact notice is already on screen above the box.
   //
