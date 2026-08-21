@@ -19,6 +19,7 @@ import { conversationModel, listConversations } from './conversations.js';
 import { log } from './logger.js';
 import { instructionsFor } from './roles.js';
 import { loadProfile, profileArgs, readCached as loadProfileSync } from './portrait.js';
+import { askToolToLeave } from './work-stop.js';
 
 export async function openInWorkArea({
   areaRoot,
@@ -219,6 +220,46 @@ export function startInBackground({
     return { ok: false, reason: 'already-running', target };
   }
 
+  const command = launchCommand(launch, {
+    task, model, overlay, defaultModel, defaultModelTool, conversation, env, readProfile,
+  });
+
+  const created = tmux(['new-session', '-d', '-s', target, '-c', worktree.path, command]);
+  if (created.status !== 0) {
+    return { ok: false, reason: (created.stderr || 'tmux refused to start it').trim() };
+  }
+  // Straight after creation, and the result is not checked: a session that
+  // runs but kept its status bar is a working session, and refusing to start a
+  // conversation over the look of it would be the tail wagging the dog.
+  for (const [option, value] of SESSION_OPTIONS) tmux(['set-option', '-t', target, option, value]);
+  log('work.background-start', {
+    area: areaRoot,
+    target,
+    tool: launch.id,
+    model: (conversation ? conversation.model : model) || null,
+    resuming: conversation?.id || null,
+    task: Boolean(task && !conversation),
+  });
+  return { ok: true, target, tool: launch.id, resumed: conversation?.id || null };
+}
+
+/**
+ * The one command line a tool is started on, however the pane is made.
+ *
+ * Creating a session and replacing what runs in one are the same launch seen
+ * twice, and the day they disagree is the day a replaced conversation quietly
+ * loses its profile or its model. So the argv is built here, once.
+ */
+function launchCommand(launch, {
+  task = null,
+  model = null,
+  overlay = null,
+  defaultModel = null,
+  defaultModelTool = null,
+  conversation = null,
+  env = process.env,
+  readProfile = loadProfileSync,
+} = {}) {
   // The role default follows the role's tool here too (see openInWorkArea).
   const roleDefault = defaultModel && (!defaultModelTool || launch.shortName === defaultModelTool)
     ? defaultModel
@@ -245,25 +286,109 @@ export function startInBackground({
   // the user's own prose, with quotes and newlines in it — has to survive
   // quoting, and so does everything beside it on the line. Claude has no
   // --append-system-prompt-file to point at instead.
-  const command = args.map(shellQuote).join(' ');
+  return args.map(shellQuote).join(' ');
+}
 
-  const created = tmux(['new-session', '-d', '-s', target, '-c', worktree.path, command]);
-  if (created.status !== 0) {
-    return { ok: false, reason: (created.stderr || 'tmux refused to start it').trim() };
+/**
+ * Replace what runs in a session, without replacing the session.
+ *
+ * A handoff kills a conversation and starts another in its place. Killing the
+ * tmux session and making a new one would do that mechanically and throw every
+ * attached client out of the room — and the case this exists for is the person
+ * sitting in the pane watching. `respawn-window` keeps the session, its name
+ * and its window, and swaps only the process inside: whoever is attached stays
+ * attached and sees the successor boot.
+ *
+ * Two ways to end the predecessor, and the caller says which:
+ *
+ *   graceful   ask the tool to leave by its own front door first, so Claude's
+ *              SessionEnd hooks run and the last turn is saved. The window is
+ *              pinned with `remain-on-exit` for the length of that wait — a
+ *              tool that does exit takes the only window of the session with
+ *              it otherwise, which is exactly the eviction this avoids.
+ *   abrupt     respawn straight away. `-k` kills what is there. The turn in
+ *              flight is lost; every turn before it is already on disk.
+ *
+ * The window is measured, never assumed: `base-index` is a tmux setting, and a
+ * user who sets it to 1 has no window 0 to respawn.
+ */
+export function respawnInBackground({
+  name,
+  areaRoot,
+  worktree,
+  tool = 'claude',
+  task = null,
+  model = null,
+  overlay = null,
+  defaultModel = null,
+  defaultModelTool = null,
+  conversation = null,
+  graceful = true,
+  env = process.env,
+  run = null,
+  wait = null,
+  loadProfile: readProfile = loadProfileSync,
+} = {}) {
+  const launch = resolveLaunch(tool);
+  if (!launch?.ok) return { ok: false, reason: launch?.reason || 'tool-unavailable', hint: launch?.hint };
+  const target = `mc-${name}`;
+  const tmux = run || ((args, options = {}) => spawnSync('tmux', args, { encoding: 'utf8', ...options }));
+
+  if (tmux(['has-session', '-t', target]).status !== 0) return { ok: false, reason: 'not-running', target };
+  const listed = tmux(['list-windows', '-t', target, '-F', '#{window_index}']);
+  const index = String(listed?.stdout || '').split('\n').map((line) => line.trim()).filter(Boolean)[0];
+  if (listed?.status !== 0 || !index) {
+    return { ok: false, reason: (listed?.stderr || `tmux named no window in ${target}`).trim(), target };
   }
-  // Straight after creation, and the result is not checked: a session that
-  // runs but kept its status bar is a working session, and refusing to start a
-  // conversation over the look of it would be the tail wagging the dog.
-  for (const [option, value] of SESSION_OPTIONS) tmux(['set-option', '-t', target, option, value]);
-  log('work.background-start', {
+  const window = `${target}:${index}`;
+  const command = launchCommand(launch, {
+    task, model, overlay, defaultModel, defaultModelTool, conversation, env, readProfile,
+  });
+
+  // Written before the respawn, not after: the abrupt path is mc replacing the
+  // pane it is itself running in, and it does not outlive the next call.
+  log('work.background-respawn', {
     area: areaRoot,
     target,
+    window,
     tool: launch.id,
+    graceful,
     model: (conversation ? conversation.model : model) || null,
     resuming: conversation?.id || null,
-    task: Boolean(task && !conversation),
+    task: Boolean(task),
   });
-  return { ok: true, target, tool: launch.id, resumed: conversation?.id || null };
+
+  if (graceful) {
+    tmux(['set-option', '-w', '-t', window, 'remain-on-exit', 'on']);
+    askToolToLeave(window, { run: tmux, wait });
+  }
+  const spawned = tmux(['respawn-window', '-k', '-t', window, '-c', worktree.path, command]);
+  // Back to how the user's tmux behaves everywhere else: a pane that exits from
+  // here on closes its window, as it would in a session mc never touched.
+  if (graceful) tmux(['set-option', '-w', '-t', window, 'remain-on-exit', 'off']);
+  if (spawned?.status !== 0) {
+    return { ok: false, reason: (spawned?.stderr || 'tmux refused to respawn it').trim(), target, window };
+  }
+  return { ok: true, target, window, tool: launch.id, resumed: conversation?.id || null, graceful };
+}
+
+/**
+ * Is the caller sitting inside the very session it is about to replace?
+ *
+ * It decides whether the predecessor can be asked to leave politely: a command
+ * typed inside the pane cannot outlive its own exit, so there is nobody left to
+ * wait for the tool and respawn afterwards. Answered by asking tmux which
+ * session this client belongs to — `$TMUX` alone only says "some tmux".
+ */
+export function insideSession(target, { env = process.env, run = null } = {}) {
+  if (!env.TMUX) return false;
+  const tmux = run || ((args, options = {}) => spawnSync('tmux', args, { encoding: 'utf8', ...options }));
+  const args = ['display-message', '-p'];
+  if (env.TMUX_PANE) args.push('-t', env.TMUX_PANE);
+  args.push('#{session_name}');
+  const asked = tmux(args);
+  if (asked?.status !== 0) return false;
+  return String(asked.stdout || '').trim() === target;
 }
 
 function shellQuote(value) {
