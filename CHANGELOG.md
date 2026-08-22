@@ -6,7 +6,43 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-### Added
+### Added- **A wake refused on a draft is queued, not dropped — and the session shows
+  as unreachable until it lands.** The guard was right to refuse (the draft is
+  somebody's), but the consequence was a session nobody could reach: the
+  answer sat in its inbox for twenty minutes, nothing told it to read, and
+  reaching it by hand cleared the draft the guard existed to protect
+  (2026-08-22, Martin's order). Now `mc work send --wake` on a real draft
+  says *queued — a draft is in <name>'s prompt, so nothing was typed; it will
+  be knocked when the prompt clears* (`--json`: `queued`, `since`), the entry
+  lives in `<mc home>/watch/pending-wakes.json`, the session guard's round
+  tries it first every time, a knock that lands on its own forgets it, and a
+  target that stopped is dropped (the file is still in the inbox). `mc
+  status` writes *✉ draft in prompt — unreachable by wake since 21:14 (wake
+  queued; it lands when the prompt clears)* under the area, in red, so the
+  state is on the board and not in one sender's scrollback. There is no
+  `--anyway` for this one, deliberately: typing into a draft and pressing
+  Enter *sends the draft*, and a flag that did that would be the harm with a
+  name.
+- `mc work <name>` joins what is running instead of asking which of four
+  conversations — a question mc cannot answer either (D-0100) — and then
+  refusing the pick as #361 requires; a person stood outside a live session
+  that way with an answer waiting in its inbox. `mc work` marks a running
+  area (*● running as mc-<name> — mc work <name> joins it*) and the
+  conversation a transcript written in the last two minutes says is live.
+- A session started outside mc's naming is found by where it stands
+  (D-0136 point 2). Nine sessions ran in tmux sessions called `clean`,
+  `ops`, `vocab`, … and every `mc work send --wake` to them delivered the
+  file, never knocked, and reported *nothing is running* — while they ran.
+  When `mc-<name>` does not exist, mc now asks tmux where every pane stands:
+  one whose current path is the area or under it is the area's address (the
+  session's name when it is alone there, the pane id otherwise), for the
+  wake, for `mc work <name>` (which says *running in tmux ops, started
+  outside mc and found by where it stands*) and for the session guard. No
+  bind file, nothing to keep in step. What is left unaddressable is a tool
+  with no pane at all, and that is said as what it is — *claude (pid N) is
+  running in <name> outside tmux — mc has no pane to knock on* — never as
+  nothing running.
+
 ### Changed
 - **The test gate no longer says `GREEN` over standing red names.** The rule it
   enforces is differential — nothing new went red — and on this repository,
@@ -441,43 +477,6 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   KV reads, tail, secrets, and similar). Repo-approved admin scripts can be
   declared through `dataAccess.cloudflare.approvedScripts` in `.mc/policy.json`
   instead of being hardcoded in the package.
-
-- **A wake refused on a draft is queued, not dropped — and the session shows
-  as unreachable until it lands.** The guard was right to refuse (the draft is
-  somebody's), but the consequence was a session nobody could reach: the
-  answer sat in its inbox for twenty minutes, nothing told it to read, and
-  reaching it by hand cleared the draft the guard existed to protect
-  (2026-08-22, Martin's order). Now `mc work send --wake` on a real draft
-  says *queued — a draft is in <name>'s prompt, so nothing was typed; it will
-  be knocked when the prompt clears* (`--json`: `queued`, `since`), the entry
-  lives in `<mc home>/watch/pending-wakes.json`, the session guard's round
-  tries it first every time, a knock that lands on its own forgets it, and a
-  target that stopped is dropped (the file is still in the inbox). `mc
-  status` writes *✉ draft in prompt — unreachable by wake since 21:14 (wake
-  queued; it lands when the prompt clears)* under the area, in red, so the
-  state is on the board and not in one sender's scrollback. There is no
-  `--anyway` for this one, deliberately: typing into a draft and pressing
-  Enter *sends the draft*, and a flag that did that would be the harm with a
-  name.
-- `mc work <name>` joins what is running instead of asking which of four
-  conversations — a question mc cannot answer either (D-0100) — and then
-  refusing the pick as #361 requires; a person stood outside a live session
-  that way with an answer waiting in its inbox. `mc work` marks a running
-  area (*● running as mc-<name> — mc work <name> joins it*) and the
-  conversation a transcript written in the last two minutes says is live.
-- A session started outside mc's naming is found by where it stands
-  (D-0136 point 2). Nine sessions ran in tmux sessions called `clean`,
-  `ops`, `vocab`, … and every `mc work send --wake` to them delivered the
-  file, never knocked, and reported *nothing is running* — while they ran.
-  When `mc-<name>` does not exist, mc now asks tmux where every pane stands:
-  one whose current path is the area or under it is the area's address (the
-  session's name when it is alone there, the pane id otherwise), for the
-  wake, for `mc work <name>` (which says *running in tmux ops, started
-  outside mc and found by where it stands*) and for the session guard. No
-  bind file, nothing to keep in step. What is left unaddressable is a tool
-  with no pane at all, and that is said as what it is — *claude (pid N) is
-  running in <name> outside tmux — mc has no pane to knock on* — never as
-  nothing running.
 
 ## [0.7.6] — 2026-06-06
 
