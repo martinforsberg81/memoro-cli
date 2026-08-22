@@ -77,7 +77,10 @@ function fixture({
   const git = (args, opts = {}) => {
     calls.push({ tool: 'git', args, cwd: opts.cwd });
     if (args[0] === 'worktree' && args[1] === 'add') {
-      mkdirSync(args[args.length - 2], { recursive: true });
+      const dir = args[args.length - 2];
+      mkdirSync(dir, { recursive: true });
+      // A worktree carries the repository's manifest, as a real one would.
+      writeFileSync(join(dir, 'package.json'), readFileSync(join(repoPath, 'package.json')));
       return { status: 0, stdout: '', stderr: '' };
     }
     if (args[0] === 'worktree' && args[1] === 'remove') {
@@ -633,6 +636,54 @@ describe('the pull request\'s own tests are run, wherever they lie', () => {
       await fx.run();
       const order = fx.calls.filter((call) => call.tool === 'suite' || call.tool === 'tests' || (call.tool === 'git' && call.args[0] === 'diff')).map((call) => call.tool === 'git' ? 'diff' : call.tool);
       assert.deepEqual(order, ['suite', 'suite', 'diff', 'tests']);
+    } finally { fx.cleanup(); }
+  });
+});
+
+/**
+ * A suite in a worktree with no dependency tree does not fail, it shrinks
+ * (D-0152): 2162 tests and a tidy number where 206 never ran. The gate checks
+ * the tree after preparation and before either run.
+ */
+describe('the dependency tree is checked before a suite is believed', () => {
+  const declared = (fx, prepare) => writeJson(join(fx.mcHome, 'repo-gates.json'), {
+    repo: { prepare, prepare_why: 'a test', extra_gates: [], merge_log: null },
+  });
+
+  it('stops when a prepared worktree still has no node_modules and the manifest declares dependencies', async () => {
+    const fx = fixture();
+    try {
+      writeJson(join(fx.repoPath, 'package.json'), { name: 'repo', scripts: { test: 'node --test tests/' }, dependencies: { left_pad: '1.0.0' } });
+      declared(fx, 'true');
+      const result = await fx.run();
+      assert.equal(result.stopped_at, 'dependencies', JSON.stringify(result));
+      assert.match(result.reason, /baseline declares 1 dependencies and has no node_modules after preparation/u);
+      assert.match(result.reason, /D-0152/u);
+      assert.deepEqual(fx.ran('suite'), [], 'no suite was run on a tree that would have shrunk');
+    } finally { fx.cleanup(); }
+  });
+
+  it('runs when the tree is there', async () => {
+    const fx = fixture();
+    try {
+      writeJson(join(fx.repoPath, 'package.json'), { name: 'repo', scripts: { test: 'node --test tests/' }, dependencies: { left_pad: '1.0.0' } });
+      // The prepare step is what puts the tree in place.
+      declared(fx, 'mkdir -p node_modules');
+      const result = await fx.run();
+      assert.equal(result.stopped_at, null, JSON.stringify(result));
+      assert.equal(fx.ran('suite').length, 2);
+    } finally { fx.cleanup(); }
+  });
+
+  it('runs, and says so, when the declaration vouches the suite needs no tree', async () => {
+    const fx = fixture();
+    try {
+      writeJson(join(fx.repoPath, 'package.json'), { name: 'repo', scripts: { test: 'node --test tests/' }, dependencies: { left_pad: '1.0.0' } });
+      declared(fx, null);
+      const progress = [];
+      const result = await fx.run({ onProgress: (line) => progress.push(line) });
+      assert.equal(result.stopped_at, null, JSON.stringify(result));
+      assert.ok(progress.some((line) => /1 dependencies declared and no node_modules — the declaration vouches/u.test(line)), progress.join('\n'));
     } finally { fx.cleanup(); }
   });
 });

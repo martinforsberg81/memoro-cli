@@ -170,6 +170,14 @@ that counts red and run on the candidate with the flags the repository's own
 (`pr-tests`) with the whole suite green, because the suite never ran them; a
 PR that touches no test file is recorded as such and said in the progress.
 This is in addition to the suite, not instead of it.
+After preparation and before either suite run, the round checks that a
+manifest declaring dependencies has a `node_modules` to be found in, and
+**stops** with `dependencies` if not (D-0152: a suite run without its tree
+does not fail, it shrinks, and prints a number with the right shape). A
+declaration that vouches the suite runs without one — `prepare: null`, with
+its evidence — is honoured, and the round says so in its progress. The same
+fact is on the status board: `no node_modules` beside any worktree whose
+manifest declares dependencies and has no tree.
 
 A repository mc has not been told about **stops the round**, with a reason that
 says what to write and where. The one exception is a repository that can be

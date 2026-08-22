@@ -45,6 +45,7 @@ import { compareRed, redNames, tapTotals } from './tap-red.js';
 import { currentHolder } from './work-identity.js';
 import { mcHome } from './paths.js';
 import { repoFileSlug } from './repo-snapshot.js';
+import { dependencyTree } from './dependency-tree.js';
 import { declarationFor } from './repo-gate-table.js';
 
 export const GATE_SCHEMA = 'mc-repo-gate';
@@ -219,6 +220,23 @@ export async function runGate({
           return finish('prepare', `${declared.declaration.prepare} failed in the ${side} — ${trim(ready.stderr)}`);
         }
       }
+    }
+
+    // A suite in a worktree with no dependency tree does not fail, it shrinks
+    // (D-0152): the tests that need nothing run and print a number with the
+    // right shape, and the rest are neither run nor counted as skipped. So
+    // the tree is checked after preparation and before either run, and a
+    // missing one stops the round — unless the declaration vouches that this
+    // suite runs without one (`prepare: null`, with the evidence in
+    // `prepare_why`), in which case the round says so rather than assuming.
+    for (const [side, dir] of [['baseline', baseDir], ['candidate', headDir]]) {
+      const tree = dependencyTree(dir);
+      if (!tree.missing) continue;
+      if (declared.declaration.prepare === null) {
+        say(`${side}: ${tree.declares} dependencies declared and no node_modules — the declaration vouches the suite runs without one`);
+        continue;
+      }
+      return finish('dependencies', `the ${side} declares ${tree.declares} dependencies and has no node_modules after preparation — a suite run there would count only what happens to run (D-0152)`);
     }
 
     // Sequential, not parallel. Two full suites at once halves the wall clock

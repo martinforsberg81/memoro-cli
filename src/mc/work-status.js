@@ -26,6 +26,7 @@ import { promisify } from 'node:util';
 
 import { lastModel, listConversations, readTailEntries } from './conversations.js';
 import { workRoot } from './paths.js';
+import { dependencyTree } from './dependency-tree.js';
 import { areaRoleName } from './roles.js';
 import { openTaskCount } from './task-log.js';
 import { inspectWorkArea, listWorkAreas } from './work-area.js';
@@ -40,6 +41,18 @@ const run = promisify(execFile);
  * repository this size, and they were queued behind each other for no reason.
  * They do not depend on one another, so they all go at the same time.
  */
+/**
+ * `'missing'` when the manifest declares dependencies and there is no
+ * `node_modules`; `'present'` when there is one; `null` for a directory that
+ * is not a Node project or declares nothing — where the question does not
+ * arise and the page should say nothing.
+ */
+function dependencyState(path) {
+  const tree = dependencyTree(path);
+  if (!tree.manifest || tree.declares === 0) return null;
+  return tree.missing ? 'missing' : 'present';
+}
+
 async function gitFacts(paths) {
   const ask = async (cwd, args) => {
     try {
@@ -325,6 +338,11 @@ export async function workStatus({ env = process.env, names = null, git: askGit 
           ...(git.get(worktree.path) || {
             branch: null, is_git: false, git_common_dir: null, uncommitted: 0, unmerged_commits: 0,
           }),
+          // Whether the manifest's dependencies have a tree to be found in.
+          // A suite run without one prints a number that is not a measurement
+          // (D-0152), and nothing in that number says so — this does. A field
+          // beside the others, never one of them changed.
+          dependencies: dependencyState(worktree.path),
         })),
         conversations,
         // What a person scanning the page is looking for: is anything here
