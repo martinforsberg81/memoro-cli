@@ -25,7 +25,8 @@ import { execFile, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
 
 import { lastModel, listConversations, readTailEntries } from './conversations.js';
-import { workRoot } from './paths.js';
+import { mcHome, workRoot } from './paths.js';
+import { readSuiteLease } from './suite-lease.js';
 import { dependencyTree } from './dependency-tree.js';
 import { areaRoleName } from './roles.js';
 import { openTaskCount } from './task-log.js';
@@ -122,6 +123,58 @@ function toolsByDirectory(paths) {
  * a piece of work, which needs to reach them.
  */
 export function toolProcesses(paths) {
+  const found = [];
+  for (const { pid, command, directory } of processesIn(paths)) {
+    // The tool itself, not the shell it was started from and not mc's own
+    // background daemons — those stand here too and mean nothing about
+    // whether anyone is working.
+    const name = /(^|\/)claude(\s|$)/u.test(command) ? 'claude'
+      : /(^|\/)codex(\s|$)/u.test(command) ? 'codex'
+        : null;
+    if (name) found.push({ pid, name, directory });
+  }
+  return found;
+}
+
+/**
+ * A full test suite, running: `node --test`, `npm test`, or the contract
+ * suite by name. Found the same way the tools are — by what stands in these
+ * directories — so the page can say a suite is running whoever holds the
+ * right to, and a suite nobody claimed is a row rather than a slow machine.
+ */
+const SUITE_COMMAND = /(?:^|\/|\s)node(?:\s+\S+)*\s+--test(?:\s|$)|(?:^|\s)npm\s+(?:run\s+)?test(?::\S+)?(?:\s|$)/u;
+
+export function suiteProcesses(paths) {
+  const found = [];
+  for (const { pid, command, directory, elapsed } of processesIn(paths, { elapsed: true })) {
+    if (!SUITE_COMMAND.test(command)) continue;
+    found.push({ pid, directory, elapsed, command: command.replace(/^\S*\/(node|npm)\s/u, '$1 ').slice(0, 80) });
+  }
+  return found;
+}
+
+/**
+ * The suites running in every work area and its worktrees, with the area
+ * named. One process per row; a suite that spawned helpers shows as the
+ * parent only, because the children share its command line with `--test`
+ * stripped and fall outside the pattern.
+ */
+export async function suiteRuns({ env = process.env } = {}) {
+  const areas = listWorkAreas(env);
+  const byPath = new Map();
+  for (const area of areas) {
+    byPath.set(area.path, area.name);
+    for (const worktree of area.worktrees) byPath.set(worktree.path, area.name);
+  }
+  return suiteProcesses([...byPath.keys()]).map((run) => ({ ...run, area: byPath.get(run.directory) || null }));
+}
+
+/**
+ * Every process standing in these directories: pid, command line, where —
+ * and how long it has run, when asked. One `lsof` and one `ps` for the whole
+ * machine; asked per directory this took seconds.
+ */
+function processesIn(paths, { elapsed = false } = {}) {
   if (paths.length === 0) return [];
 
   // lsof exits non-zero when any named directory has no process standing in
@@ -148,25 +201,23 @@ export function toolProcesses(paths) {
 
   const commands = new Map();
   try {
-    const ps = execFileSync('ps', ['-o', 'pid=,command=', '-p', [...new Set(here.map(([p]) => p))].join(',')], {
+    const columns = elapsed ? 'pid=,etime=,command=' : 'pid=,command=';
+    const ps = execFileSync('ps', ['-o', columns, '-p', [...new Set(here.map(([p]) => p))].join(',')], {
       encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'],
     });
     for (const line of ps.split('\n')) {
-      const match = /^\s*(\d+)\s+(.*)$/u.exec(line);
-      if (match) commands.set(match[1], match[2]);
+      const match = elapsed
+        ? /^\s*(\d+)\s+(\S+)\s+(.*)$/u.exec(line)
+        : /^\s*(\d+)\s+()(.*)$/u.exec(line);
+      if (match) commands.set(match[1], { command: match[3], elapsed: match[2] || null });
     }
   } catch { return []; }
 
   const found = [];
   for (const [processId, directory] of here) {
-    const command = commands.get(processId) || '';
-    // The tool itself, not the shell it was started from and not mc's own
-    // background daemons — those stand here too and mean nothing about
-    // whether anyone is working.
-    const name = /(^|\/)claude(\s|$)/u.test(command) ? 'claude'
-      : /(^|\/)codex(\s|$)/u.test(command) ? 'codex'
-        : null;
-    if (name) found.push({ pid: Number(processId), name, directory });
+    const known = commands.get(processId);
+    if (!known) continue;
+    found.push({ pid: Number(processId), command: known.command, directory, elapsed: known.elapsed });
   }
   return found;
 }
@@ -367,6 +418,17 @@ export async function workStatus({ env = process.env, names = null, git: askGit 
     areas: report.areas.length,
     waiting: report.areas.filter((area) => area.waiting).length,
     working: report.areas.filter((area) => area.working).length,
+  };
+  // The suite right and the suites actually running — two facts, side by
+  // side, because the gap between them is the finding (D-0141, D-0155).
+  const byPath = new Map();
+  for (const area of report.areas) {
+    byPath.set(area.path, area.name);
+    for (const worktree of area.worktrees) byPath.set(worktree.path, area.name);
+  }
+  report.suite = {
+    lease: readSuiteLease({ root: env.MC_HOME || mcHome(), now }),
+    running: suiteProcesses([...byPath.keys()]).map((run) => ({ ...run, area: byPath.get(run.directory) || null })),
   };
   return report;
 }

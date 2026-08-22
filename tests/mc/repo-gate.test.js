@@ -26,6 +26,7 @@ import { addArea, fixture as repoFixture } from './_helpers/repo-fixture.js';
 import { runMcCli } from './_helpers/mc-cli.js';
 import { gateRoot, runGate } from '../../src/mc/repo-gate.js';
 import { claimLease, readLease } from '../../src/mc/repo-lease.js';
+import { claimSuiteLease, readSuiteLease } from '../../src/mc/suite-lease.js';
 import { renderRatchet } from '../../src/mc/red-ratchet.js';
 
 const AREA = { name: 'klient-guard', kind: 'work-area' };
@@ -811,6 +812,47 @@ describe('the dependency tree is checked before a suite is believed', () => {
       const result = await fx.run({ onProgress: (line) => progress.push(line) });
       assert.equal(result.stopped_at, null, JSON.stringify(result));
       assert.ok(progress.some((line) => /1 dependencies declared and no node_modules — the declaration vouches/u.test(line)), progress.join('\n'));
+    } finally { fx.cleanup(); }
+  });
+});
+
+/**
+ * The suite right (D-0141): the gate is the one thing that runs suites by
+ * machine, so it takes the machine-wide lease before either run and gives it
+ * back after — and stops, in the other holder's favour, when it is held.
+ */
+describe('the gate holds the suite right while it runs', () => {
+  it('stops before any work when somebody else holds the suite right, and keeps nothing', async () => {
+    const fx = fixture();
+    try {
+      claimSuiteLease({ errand: 'msr contract, by hand', holder: { name: 'msr-cleanup', kind: 'work-area' }, root: fx.mcHome });
+      const result = await fx.run();
+      assert.equal(result.stopped_at, 'suite-lease');
+      assert.match(result.reason, /held by msr-cleanup for “msr contract, by hand” — one full suite at a time/u);
+      assert.deepEqual(fx.ran('suite'), [], 'no suite ran over somebody\'s right');
+      assert.equal(fx.lease().held, false, 'the repository lease was given back');
+      assert.equal(readSuiteLease({ root: fx.mcHome }).holder, 'msr-cleanup', 'and theirs was not touched');
+    } finally { fx.cleanup(); }
+  });
+
+  it('takes it for the round and releases it after, whatever happened', async () => {
+    const fx = fixture({ candidateRed: ['new › red'] });
+    try {
+      const progress = [];
+      const result = await fx.run({ onProgress: (line) => progress.push(line) });
+      assert.equal(result.stopped_at, 'red');
+      assert.ok(progress.includes('suite right taken by klient-guard'), progress.join('\n'));
+      assert.ok(progress.includes('suite right released'));
+      assert.equal(readSuiteLease({ root: fx.mcHome }).held, false);
+    } finally { fx.cleanup(); }
+  });
+
+  it('a holder who claimed it by hand before the round keeps it after', async () => {
+    const fx = fixture();
+    try {
+      claimSuiteLease({ errand: 'mine', holder: AREA, root: fx.mcHome });
+      await fx.run();
+      assert.equal(readSuiteLease({ root: fx.mcHome }).holder, AREA.name, 'their claim, their release');
     } finally { fx.cleanup(); }
   });
 });

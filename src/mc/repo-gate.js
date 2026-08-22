@@ -50,6 +50,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { claimLease, releaseLease } from './repo-lease.js';
+import { claimSuiteLease, releaseSuiteLease } from './suite-lease.js';
 import { compareRed, redNames, tapTotals } from './tap-red.js';
 import { RATCHET_FILE, compareRatchet, readRatchet } from './red-ratchet.js';
 import { currentHolder } from './work-identity.js';
@@ -168,12 +169,28 @@ export async function runGate({
     say(`lease taken by ${holder.name}`);
   }
 
+  // The suite right, machine-wide (D-0141): one full suite at a time on
+  // eight gigabytes, and this round runs two. Taken here, before any work,
+  // and held until the round is over — whoever holds the repository. A right
+  // somebody else holds stops the round in their favour, because the gate is
+  // the one thing that runs suites by machine and must not be the thing that
+  // runs over a person's right to.
+  const suiteRight = claimSuiteLease({ errand: `gate round for #${pr}`, holder, root });
+  if (!suiteRight.ok) {
+    if (holdLease) releaseLease({ repoPath, holder, root });
+    const held = suiteRight.lease;
+    return finish('suite-lease', `the suite right is held by ${held.holder}${held.errand ? ` for “${held.errand}”` : ''} — one full suite at a time on this machine (D-0141); mc suite who says whether that run is still going`);
+  }
+  const ownSuiteRight = !suiteRight.already;
+  if (ownSuiteRight) say(`suite right taken by ${holder.name}`);
+
   // What this repository needs, read before any work is done. A round that
   // cannot know whether the suite will be complete is a round whose green
   // means nothing, so it stops here rather than after two suite runs.
   const declared = declarationFor(repoPath, { root, env });
   if (!declared.ok) {
     if (holdLease) releaseLease({ repoPath, holder, root });
+    if (ownSuiteRight) releaseSuiteLease({ holder, root });
     return finish('declaration', declared.reason);
   }
   report.declaration = { source: declared.source, ...declared.declaration };
@@ -353,6 +370,12 @@ export async function runGate({
     if (holdLease) {
       releaseLease({ repoPath, holder, root });
       say('lease released');
+    }
+    // The suite right too — only if this round took it. A holder who claimed
+    // it by hand before the round keeps it afterwards; that was their claim.
+    if (ownSuiteRight) {
+      releaseSuiteLease({ holder, root });
+      say('suite right released');
     }
   }
 }
