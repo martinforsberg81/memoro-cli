@@ -19,6 +19,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
+import { runGate } from '../../src/mc/repo-gate.js';
 import { readLease } from '../../src/mc/repo-lease.js';
 import { runMergeRound } from '../../src/mc/repo-merge.js';
 
@@ -323,6 +324,56 @@ describe('what a repository declares, the round does', () => {
       assert.match(report.gate.reason, /no gate declaration/u);
       assert.equal(report.merged, false);
       assert.equal(fx.lease().held, false);
+    } finally { fx.cleanup(); }
+  });
+});
+
+/**
+ * D-0157, for real: the suite globs `tests/*.test.js`, and the PR's own test
+ * lives in `tests/ui/` — a directory the suite never sees. The suite count is
+ * the same as before the PR; the PR's test is red; the old gate said green.
+ */
+describe('the pull request\'s own tests, for real', () => {
+  const ownTest = (fx, red) => {
+    git(fx.repo, ['checkout', '-q', 'feature']);
+    mkdirSync(join(fx.repo, 'tests', 'ui'), { recursive: true });
+    writeFileSync(join(fx.repo, 'tests', 'ui', 'fix.test.js'), [
+      "import { test } from 'node:test';",
+      "import assert from 'node:assert/strict';",
+      `test('proves the fix', () => { assert.equal(1, ${red ? 2 : 1}); });`,
+      '',
+    ].join('\n'));
+    git(fx.repo, ['add', '-A']);
+    git(fx.repo, ['commit', '-q', '-m', 'Add the proof']);
+    git(fx.repo, ['push', '-q', 'origin', 'feature']);
+    const head = git(fx.repo, ['rev-parse', 'HEAD']).trim();
+    git(fx.repo, ['checkout', '-q', 'main']);
+    const pr = JSON.parse(readFileSync(join(fx.root, 'pr.json'), 'utf8'));
+    writeFileSync(join(fx.root, 'pr.json'), JSON.stringify({ ...pr, headRefOid: head }));
+  };
+
+  it('a red test the suite never globbed stops the round — the hole #10803 fell through', async () => {
+    const fx = repository();
+    try {
+      ownTest(fx, true);
+      const result = await runGate({ repoPath: fx.repo, pr: 400, holder: AREA, root: fx.mcHome, env: fx.env });
+      assert.equal(result.stopped_at, 'pr-tests', JSON.stringify(result));
+      assert.equal(result.candidate.totals.tests, result.baseline.totals.tests + 1, 'the suite saw b.test.js and nothing in tests/ui/');
+      assert.deepEqual(result.broke, []);
+      assert.deepEqual(result.pr_tests.files, ['tests/b.test.js', 'tests/ui/fix.test.js']);
+      assert.deepEqual(result.pr_tests.red, ['proves the fix']);
+    } finally { fx.cleanup(); }
+  });
+
+  it('a green one is recorded, with the files named', async () => {
+    const fx = repository();
+    try {
+      ownTest(fx, false);
+      const result = await runGate({ repoPath: fx.repo, pr: 400, holder: AREA, root: fx.mcHome, env: fx.env });
+      assert.equal(result.stopped_at, null, JSON.stringify(result));
+      assert.deepEqual(result.pr_tests.files, ['tests/b.test.js', 'tests/ui/fix.test.js']);
+      assert.equal(result.pr_tests.totals.tests, 2);
+      assert.deepEqual(result.pr_tests.red, []);
     } finally { fx.cleanup(); }
   });
 });
