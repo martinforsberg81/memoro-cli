@@ -6,7 +6,22 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-### Added- **A wake refused on a draft is queued, not dropped — and the session shows
+### Added
+- A session started outside mc's naming is found by where it stands
+  (D-0136 point 2). Nine sessions ran in tmux sessions called `clean`,
+  `ops`, `vocab`, … and every `mc work send --wake` to them delivered the
+  file, never knocked, and reported *nothing is running* — while they ran.
+  When `mc-<name>` does not exist, mc now asks tmux where every pane stands:
+  one whose current path is the area or under it is the area's address (the
+  session's name when it is alone there, the pane id otherwise), for the
+  wake, for `mc work <name>` (which says *running in tmux ops, started
+  outside mc and found by where it stands*) and for the session guard. No
+  bind file, nothing to keep in step. What is left unaddressable is a tool
+  with no pane at all, and that is said as what it is — *claude (pid N) is
+  running in <name> outside tmux — mc has no pane to knock on* — never as
+  nothing running.
+
+- **A wake refused on a draft is queued, not dropped — and the session shows
   as unreachable until it lands.** The guard was right to refuse (the draft is
   somebody's), but the consequence was a session nobody could reach: the
   answer sat in its inbox for twenty minutes, nothing told it to read, and
@@ -29,19 +44,6 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   that way with an answer waiting in its inbox. `mc work` marks a running
   area (*● running as mc-<name> — mc work <name> joins it*) and the
   conversation a transcript written in the last two minutes says is live.
-- A session started outside mc's naming is found by where it stands
-  (D-0136 point 2). Nine sessions ran in tmux sessions called `clean`,
-  `ops`, `vocab`, … and every `mc work send --wake` to them delivered the
-  file, never knocked, and reported *nothing is running* — while they ran.
-  When `mc-<name>` does not exist, mc now asks tmux where every pane stands:
-  one whose current path is the area or under it is the area's address (the
-  session's name when it is alone there, the pane id otherwise), for the
-  wake, for `mc work <name>` (which says *running in tmux ops, started
-  outside mc and found by where it stands*) and for the session guard. No
-  bind file, nothing to keep in step. What is left unaddressable is a tool
-  with no pane at all, and that is said as what it is — *claude (pid N) is
-  running in <name> outside tmux — mc has no pane to knock on* — never as
-  nothing running.
 
 ### Changed
 - **The test gate no longer says `GREEN` over standing red names.** The rule it
