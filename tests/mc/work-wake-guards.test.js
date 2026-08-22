@@ -359,7 +359,8 @@ describe('waking is asked for, and every refusal is printed', () => {
       const sent = fx.send(['pm', '--wake', 'wake up']);
       assert.equal(sent.status, 0, sent.stderr);
       assert.equal(fx.messages('pm').length, 1);
-      assert.match(sent.stdout, /delivered, but did not knock: there is already something in its prompt/u);
+      // Not refused and dropped: queued, and the board says the pm is unreachable.
+      assert.match(sent.stdout, /queued — a draft is in pm's prompt, so nothing was typed; it will be knocked when the prompt clears/u);
       assert.deepEqual(fx.tmux.submitted(), []);
       assert.equal(fx.tmux.prompt(), 'merga #10799 och', 'the half-written sentence is untouched');
     } finally { fx.cleanup(); }
@@ -687,7 +688,7 @@ describe('text in the box is a question, not an answer', () => {
     try {
       const sent = fx.send(['alpha', '--wake', 'wake up']);
       assert.equal(sent.status, 0, sent.stderr);
-      assert.match(sent.stdout, /did not knock: there is already something in its prompt/u);
+      assert.match(sent.stdout, /queued — a draft is in alpha's prompt/u, 'a real draft is a queued wake, never a typed-over one');
       assert.deepEqual(fx.tmux.submitted(), []);
       assert.equal(fx.tmux.prompt(), 'merga #10799 och', 'the draft is exactly as it was');
       assert.ok(!fx.tmux.keys().some((line) => /C-u|Enter/u.test(line)), 'nothing cleared, nothing sent');
@@ -698,7 +699,7 @@ describe('text in the box is a question, not an answer', () => {
     const fx = fixture({ alive: ['alpha'], ghost: GHOST, typedAlready: 'status' });
     try {
       const sent = fx.send(['alpha', '--wake', 'wake up']);
-      assert.match(sent.stdout, /there is already something in its prompt/u);
+      assert.match(sent.stdout, /queued — a draft is in alpha's prompt/u);
       assert.equal(fx.tmux.prompt(), 'status');
     } finally { fx.cleanup(); }
   });

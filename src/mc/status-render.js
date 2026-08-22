@@ -119,6 +119,14 @@ export function renderLines(report, {
     const label = pad(clip(area.role ? `${area.name} · ${area.role}` : area.name, 26), 26);
     const name = state(area) === 'idle' ? c(label, 'grey') : c(label, 'bold');
     lines.push(`  ${c(MARK[state(area)], tone)} ${name} ${c(clip(where(area), wide - 32), 'grey')}`);
+    // A session nobody can reach by wake: the guard refused on a draft, the
+    // wake is queued, and until the prompt clears this is the only place the
+    // state is visible. "Since" is the number — twenty minutes of it once
+    // passed unnoticed with an answer sitting in the inbox.
+    if (area.pending_wake) {
+      const since = clock(area.pending_wake.since);
+      lines.push(`      ${c(`✉ draft in prompt — unreachable by wake since ${since} (wake queued; it lands when the prompt clears)`, 'red')}`);
+    }
 
     for (const item of area.conversations) {
       const tool = item.tool === 'claude-code' ? 'claude' : item.tool;
@@ -173,6 +181,14 @@ function where(area) {
     worktree.dependencies === 'missing' ? 'no node_modules' : null,
   ].filter(Boolean).join('  ')));
   return parts.join('   ·   ');
+}
+
+/** `21:14` — an ISO instant as the local wall clock, which is how a person says "since". */
+export function clock(iso) {
+  const at = Date.parse(iso);
+  if (!Number.isFinite(at)) return '?';
+  const date = new Date(at);
+  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
 }
 
 /** `ps etime` — `MM:SS`, `HH:MM:SS` or `D-HH:MM:SS` — as the board says time. */
