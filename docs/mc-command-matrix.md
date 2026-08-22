@@ -30,7 +30,7 @@ started in it. mc stores nothing else, because nothing else is mc's to know.
 | `mc work remove <name> <repo>` | Take one repository out of it. |
 | `mc work release <name> [--apply]` | Remove what git says can go; keep the rest. |
 | `mc work discard <name> [repo] [--apply]` | Throw it away — worktrees, branches, and all. |
-| `mc work send <name> "<text>"` | A message into that work's `inbox/`. `--wake` also knocks on whatever is running there. `--json`. |
+| `mc work send <name> "<text>"` | A message into that work's `inbox/`. `--wake` also knocks on whatever is running there — or, when a draft is in its prompt, queues the knock for when the prompt clears and says so. `--json`. |
 | `mc work stop <name>` | Stop what is running there; keep the work. |
 | `mc work list` | The same listing as bare `mc work`. |
 | `mc worker <name> [task]` | A project folder that carries the worker role. |
