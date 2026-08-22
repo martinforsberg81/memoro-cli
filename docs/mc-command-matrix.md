@@ -30,16 +30,19 @@ started in it. mc stores nothing else, because nothing else is mc's to know.
 | `mc work remove <name> <repo>` | Take one repository out of it. |
 | `mc work release <name> [--apply]` | Remove what git says can go; keep the rest. |
 | `mc work discard <name> [repo] [--apply]` | Throw it away — worktrees, branches, and all. |
-| `mc work send <name> "<text>"` | A message into that work's `inbox/`. `--wake` also knocks on whatever is running there. `--json`. |
+| `mc work send <name> "<text>"` | A message into that work's `inbox/`. `--wake` also knocks on whatever is running there. `--task` opens a tracked task for it in the same action. `--json`. |
 | `mc work stop <name>` | Stop what is running there; keep the work. |
 | `mc work list` | The same listing as bare `mc work`. |
+| `mc task list [<session>]` | Open tasks, sorted by how long each has gone without moving — the stalest at the top — with its age. Without a session, every open task anywhere. `--json`. |
+| `mc task done <id>` | Mark it done — the one way out. |
+| `mc task block <id> "<reason>"` | Mark it blocked, with what for. Refused on a task already done. |
 | `mc worker <name> [task]` | A project folder that carries the worker role. |
 | `mc pm` / `mc pm-helper` | The singleton role's workspace: attach if it runs, restart it if it stopped, create it the first time. One of it, ever. |
 | `mc <role> new [--model <m>]` | Start over in the same window: the running conversation is ended and replaced, nothing is deleted, and the successor is told its predecessor's id. |
 | `mc <role> <id>` | One particular conversation in the role's home — the way back from a handoff. Refused while the role is running. |
 | `mc roles list \| show <role>` | The defined roles, read from their files. |
 | `mc worktrees` | Worktrees across the work areas. |
-| `mc status` | Every piece of work and what it is doing. `--watch`, `--json`, `--wait`. |
+| `mc status` | Every piece of work and what it is doing, including its open-task count. `--watch`, `--json`, `--wait`. |
 | `mc repo status [repo]` | One repository seen whole: main, open pull requests with how far behind main each is, the work areas standing on it, and the source-linked installation's drift. `--json`, `--offline`. |
 | `mc repo watch start \| stop \| status` | The background process that keeps that answer fresh. `--interval <seconds>` on start; `--json` on status. |
 | `mc repo claim <repo> "<what for>"` | Hold the gate round on a repository. Refused if someone else holds it. |
@@ -50,6 +53,15 @@ started in it. mc stores nothing else, because nothing else is mc's to know.
 `mc work release` keeps a worktree that is in use, has uncommitted changes, or
 has unmerged commits. `mc work discard` reports what it will destroy and
 requires `--apply`; it does not stop for uncommitted or unmerged work.
+
+A task is created by the dispatcher, never inferred — `--task` on `mc work
+send` is the one door in, so a tracker that guesses is never in the loop.
+States: `open` → `done`, plus `blocked` with one line of reason; `done` is
+where the arrow ends. Storage is `${MC_HOME}/tasks/<session>.jsonl`,
+append-only — current state is the replay of the lines, the same law as the
+repository lease's log. `mc status` carries each area's open-task count on its
+line and in `--json`; `mc task list` is where the ones behind it, and how
+stale each is, are actually read.
 
 `mc repo status` reads. It writes nothing but the remote-tracking refs a
 `git fetch` updates, and `--offline` skips even that and says so on the page.
