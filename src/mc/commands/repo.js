@@ -255,6 +255,14 @@ function mergeLines(report) {
   }
 
   if (!report.ok) {
+    // "Nothing was merged" is a claim, and after a network error it was once
+    // false (#10844: GitHub performed the merge and timed out on the reply).
+    // When the round could not read back what happened, it says that.
+    if (report.stopped_at === 'merge-unknown') {
+      lines.push(`mc: whether #${report.pr.number} merged is UNKNOWN — ${report.reason}`);
+      lines.push('mc: nothing is claimed either way; nothing was pulled or logged');
+      return lines;
+    }
     if (report.gate?.ok) lines.push(`mc: stopped before merging — ${report.reason}`);
     lines.push('mc: nothing was merged');
     return lines;
