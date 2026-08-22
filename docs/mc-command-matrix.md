@@ -199,8 +199,14 @@ Knocking on the running conversation is a separate thing, asked for with
 `--wake`, because it types into an input box that belongs to somebody else. It
 refuses on a pane a tmux client is attached to — except a singleton role's
 (`pm`, `pm-helper`), which is attached by design and would otherwise never be
-knocked at all — and on any pane whose input box is not visibly empty,
-whoever put the text there, including a notice an earlier wake gave up on.
+knocked at all — and on any pane whose input box holds text, whoever put it
+there, including a notice an earlier wake gave up on. Text *drawn* in the box
+is not taken as text in the input: a pane can redraw an order long since
+carried out after the prompt mark (D-0151), so the guard types one character,
+reads the row back and deletes it — a row that became that character alone was
+empty, a row that kept its text is somebody's draft and is left exactly as it
+was. Busy is not a refusal: a notice typed into a mid-answer pane is queued by
+the tool and becomes a turn.
 `mc watch pm` rides the same channel, and its wait between rounds ends early
 on a new file in `pm/inbox/`: the file is what wakes the round, the half hour
 is the floor underneath. The notice goes in as text and Enter as separate

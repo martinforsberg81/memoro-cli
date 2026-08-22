@@ -19,6 +19,21 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   round's wait ends at a new file in the inbox: the file is what wakes the
   round, the half hour is the floor. A loop asked for N rounds also stops
   after the Nth instead of sleeping one more interval first.
+- The wake guard no longer decides prompt-emptiness from the drawing (D-0151).
+  A pane can show an order after the prompt mark that was carried out long
+  ago — redrawn from an old frame, back again after `C-u` — and the guard read
+  it as somebody's draft: *delivered, but did not knock: there is already
+  something in its prompt*, for a day, on three panes that were empty and
+  ready, while the fleet was booked as waiting on a person who had typed
+  nothing. Text in the box is now a question put to the input: one character
+  typed, the row read back, the character deleted. A row that became the
+  character alone was empty and is knocked; a row that kept its text is a
+  real draft, refused as before and left exactly as it was; a probe never
+  drawn claims nothing, in its own words. Measured by hand on three live
+  panes before building and again after. Also: the box is found under up to
+  ten trailing rows instead of three — PM's pane carries a status line, a
+  `/rc active` row, a ledger row and a row per running agent, and the old
+  tolerance answered every knock with *could not find its prompt*.
 - `mc pm new` and `mc pm-helper new` — a reliable way to start a **fresh**
   conversation in a singleton role. Every door into the role meant "take me to
   the PM": attach if it runs, resume the newest if it stopped, create if it

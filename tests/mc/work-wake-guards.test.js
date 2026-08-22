@@ -48,7 +48,7 @@ function pane({ typed = '', busy = false, sent = [], rows = null } = {}) {
  * state rather than about which calls went by. `paint` decides what a capture
  * shows; `clients` is who is sitting at the pane.
  */
-function conversation({ paint, clients = '', typedAlready = '' }) {
+function conversation({ paint, clients = '', typedAlready = '', ghost = '' }) {
   const calls = [];
   let typed = typedAlready;
   let captures = 0;
@@ -57,7 +57,10 @@ function conversation({ paint, clients = '', typedAlready = '' }) {
     if (args[0] === 'list-clients') return { status: 0, stdout: clients };
     if (args[0] === 'send-keys' && args[3] === '-l') { typed += args[4]; return { status: 0 }; }
     if (args[0] === 'send-keys' && args[3] === 'C-u') { typed = ''; return { status: 0 }; }
-    if (args[0] === 'capture-pane') { captures += 1; return paint({ typed, captures }); }
+    if (args[0] === 'send-keys' && args[3] === 'BSpace') { typed = typed.slice(0, -1); return { status: 0 }; }
+    // The ghost (D-0151): an empty input drawn as an old order, back the
+    // moment the input is empty again.
+    if (args[0] === 'capture-pane') { captures += 1; return paint({ typed: typed || ghost, captures }); }
     return { status: 0 };
   };
   return {
@@ -70,6 +73,9 @@ function conversation({ paint, clients = '', typedAlready = '' }) {
 }
 
 const wake = (run) => wakeConversation({ target: 'mc-pm', sender: 'alpha', sleep: () => {}, run });
+
+/** What a refusal on a drawn-but-maybe-real draft costs: the probe, taken back (D-0151). */
+const PROBED = [['-l', 'x'], ['BSpace']];
 
 describe('a pane somebody is sitting at is not mc\'s to type into', () => {
   it('never wakes a pane with a client attached, and touches nothing', () => {
@@ -102,7 +108,8 @@ describe('a pane somebody is sitting at is not mc\'s to type into', () => {
     const typing = conversation({ paint: ({ typed }) => pane({ typed }), clients: '/dev/ttys009\n', typedAlready: 'status?' });
     const refused = wakeConversation({ target: 'mc-pm', sender: 'alpha', sleep: () => {}, run: typing.run, attachedOk: true });
     assert.equal(refused.reason, 'there is already something in its prompt');
-    assert.deepEqual(typing.keys(), []);
+    assert.deepEqual(typing.keys().map((args) => args.slice(3)), PROBED, 'only the probe, and it came back out');
+    assert.equal(typing.prompt(), 'status?');
   });
 
   it('a pane nobody is attached to is woken as before', () => {
@@ -131,7 +138,7 @@ describe('a prompt that is not empty is not mc\'s to type into', () => {
 
     assert.equal(result.guard, true);
     assert.equal(result.reason, 'there is already something in its prompt');
-    assert.deepEqual(talk.keys(), []);
+    assert.deepEqual(talk.keys().map((args) => args.slice(3)), PROBED);
     assert.equal(talk.prompt(), draft, 'the draft was touched');
   });
 
@@ -143,7 +150,7 @@ describe('a prompt that is not empty is not mc\'s to type into', () => {
 
     assert.equal(result.guard, true);
     assert.equal(result.reason, 'there is already something in its prompt');
-    assert.deepEqual(talk.keys(), []);
+    assert.deepEqual(talk.keys().map((args) => args.slice(3)), PROBED);
     assert.equal(talk.prompt(), NOTICE, 'the old notice was disturbed');
   });
 
@@ -353,7 +360,7 @@ describe('waking is asked for, and every refusal is printed', () => {
       assert.equal(sent.status, 0, sent.stderr);
       assert.equal(fx.messages('pm').length, 1);
       assert.match(sent.stdout, /delivered, but did not knock: there is already something in its prompt/u);
-      assert.deepEqual(fx.tmux.keys(), []);
+      assert.deepEqual(fx.tmux.submitted(), []);
       assert.equal(fx.tmux.prompt(), 'merga #10799 och', 'the half-written sentence is untouched');
     } finally { fx.cleanup(); }
   });
@@ -643,5 +650,100 @@ describe('a wake is claimed only on a turn that appeared', () => {
       },
     });
     assert.deepEqual(wake(talk.run), { ok: true, attempts: 1 });
+  });
+});
+
+/**
+ * The drawing is not the input (D-0151).
+ *
+ * Three live panes showed an order after the prompt mark that had already been
+ * carried out — a ghost, redrawn from an old frame, back again after `C-u`.
+ * The guard read it as a draft and refused for a day, and a fleet was booked
+ * as waiting on a person who had typed nothing. So text in the box is now a
+ * question put to the input: one character in, the row read, the character
+ * out. Both directions are asserted: a ghost is knocked through, and a real
+ * draft is still refused — and left exactly as it was.
+ */
+describe('text in the box is a question, not an answer', () => {
+  const GHOST = 'merga #10799 och #10802 till main';
+
+  it('knocks through a ghost: the probe replaces it, so the input was empty', () => {
+    const fx = fixture({ alive: ['alpha'], ghost: GHOST });
+    try {
+      const sent = fx.send(['alpha', '--wake', 'wake up']);
+      assert.equal(sent.status, 0, sent.stderr);
+      assert.match(sent.stdout, /woke alpha/u, sent.stdout);
+      assert.equal(fx.tmux.submitted().length, 1);
+      // The probe went in and came out again before the notice was typed.
+      const keys = fx.tmux.keys();
+      assert.match(keys[0], /send-keys -t mc-alpha -l x$/u);
+      assert.match(keys[1], /BSpace$/u);
+      assert.match(keys[2], /-l mc: new in inbox/u);
+    } finally { fx.cleanup(); }
+  });
+
+  it('still refuses a real draft, and gives back the one character it borrowed', () => {
+    const fx = fixture({ alive: ['alpha'], typedAlready: 'merga #10799 och' });
+    try {
+      const sent = fx.send(['alpha', '--wake', 'wake up']);
+      assert.equal(sent.status, 0, sent.stderr);
+      assert.match(sent.stdout, /did not knock: there is already something in its prompt/u);
+      assert.deepEqual(fx.tmux.submitted(), []);
+      assert.equal(fx.tmux.prompt(), 'merga #10799 och', 'the draft is exactly as it was');
+      assert.ok(!fx.tmux.keys().some((line) => /C-u|Enter/u.test(line)), 'nothing cleared, nothing sent');
+    } finally { fx.cleanup(); }
+  });
+
+  it('a draft behind a ghost is a draft: the probe lands after it', () => {
+    const fx = fixture({ alive: ['alpha'], ghost: GHOST, typedAlready: 'status' });
+    try {
+      const sent = fx.send(['alpha', '--wake', 'wake up']);
+      assert.match(sent.stdout, /there is already something in its prompt/u);
+      assert.equal(fx.tmux.prompt(), 'status');
+    } finally { fx.cleanup(); }
+  });
+
+  it('a probe that is never drawn claims nothing, and is still taken back', () => {
+    // Unknown is a refusal in its own words — not "empty" by default, which
+    // would be the old guess from the other side.
+    const talk = conversation({ paint: () => pane({ typed: GHOST }) });
+    const result = wake(talk.run);
+    assert.equal(result.ok, false);
+    assert.equal(result.reason, 'could not tell whether its prompt was empty');
+    assert.deepEqual(talk.keys().map((args) => args.slice(3)), [['-l', 'x'], ['BSpace']]);
+  });
+
+  it('an empty box is not probed at all', () => {
+    const talk = conversation({
+      paint: ({ typed, captures }) => (captures <= 2 ? pane({ typed }) : pane({ sent: [NOTICE] })),
+    });
+    assert.deepEqual(wake(talk.run), { ok: true, attempts: 1 });
+    assert.ok(!talk.keys().some((args) => args[4] === 'x' || args[3] === 'BSpace'));
+  });
+
+  it('a box whose upper border carries a label is still a box', () => {
+    // PM's pane draws `──── PM ─` as the top edge. A rule that allowed no
+    // letters skipped it, took the rule above as the top, and the box was
+    // "not found" — every knock on PM refused (measured 2026-08-22).
+    const labelled = ({ typed, captures }) => {
+      const drawn = captures <= 2 ? pane({ typed }) : pane({ sent: [NOTICE] });
+      const rows = drawn.stdout.split('\n');
+      const top = rows.findIndex((row) => row.startsWith('+----'));
+      rows[top] = '──────────────────────────── PM ─';
+      return { status: 0, stdout: rows.join('\n') };
+    };
+    assert.deepEqual(wake(conversation({ paint: labelled }).run), { ok: true, attempts: 1 });
+  });
+
+  it('a box with several rows of hints under it is still found', () => {
+    // Measured on PM's pane: status line, `/rc active`, a ledger row and a row
+    // per running agent — five rows, where three was the tolerance, and every
+    // knock was refused with "could not find its prompt".
+    const tall = ({ typed, captures }) => {
+      const drawn = captures <= 2 ? pane({ typed }) : pane({ sent: [NOTICE] });
+      const extra = ['  /rc active', '  ⧉  planledger', '  ◯ Explore  grepping… 1m', '  ◯ Plan  reading… 2m'];
+      return { status: 0, stdout: `${drawn.stdout.replace(/\s+$/u, '')}\n${extra.join('\n')}\n\n\n` };
+    };
+    assert.deepEqual(wake(conversation({ paint: tall }).run), { ok: true, attempts: 1 });
   });
 });
