@@ -39,7 +39,7 @@ started in it. mc stores nothing else, because nothing else is mc's to know.
 | `mc <role> <id>` | One particular conversation in the role's home — the way back from a handoff. Refused while the role is running. |
 | `mc roles list \| show <role>` | The defined roles, read from their files. |
 | `mc worktrees` | Worktrees across the work areas. |
-| `mc status` | Every piece of work and what it is doing. `--watch`, `--json`, `--wait`. |
+| `mc status` | Every piece of work and what it is doing — including the clock a session set for itself (`⏰ wakeup in 9m: <prompt>`, from the last `ScheduleWakeup` in its transcript) `--watch`, `--json`, `--wait`. |
 | `mc repo status [repo]` | One repository seen whole: main, open pull requests with how far behind main each is, the work areas standing on it, and the source-linked installation's drift. `--json`, `--offline`. |
 | `mc repo watch start \| stop \| status` | The background process that keeps that answer fresh. `--interval <seconds>` on start; `--json` on status. |
 | `mc repo claim <repo> "<what for>"` | Hold the gate round on a repository. Refused if someone else holds it. |

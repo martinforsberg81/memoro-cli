@@ -7,6 +7,19 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- `mc status` shows the clock a session set for itself (D-0155). A Claude
+  conversation can schedule its own next turn — `ScheduleWakeup`, a prompt
+  and a delay — and nothing outside its transcript knew: one session ran the
+  full contract suite eleven times that way, on an eight-gigabyte machine,
+  with the suite right held by another area, and its pane looked idle the
+  whole time. The board now reads the last `ScheduleWakeup` in the
+  transcript's tail: set and not stopped and not yet rung, it is a row under
+  the conversation — `⏰ wakeup in 9m: npm run test:msr:contract` — in
+  yellow, overdue ones included, since a clock that was set and a session
+  that is gone is its own finding. `--json` carries it as `wakeup`
+  (`prompt`, `delay_s`, `set_at`, `due_at`, `reason`). A `stop` clears it;
+  the prompt arriving as a user turn means it rang. Read against the
+  eleven-run transcript: the clock before its stop, null after, eleven rings.
 - A suite is not believed in a worktree without its dependency tree (D-0152).
   Run there it does not fail, it shrinks: 2162 tests and a tidy number, where
   206 never ran and were not counted as skipped; 2368/2368 once the tree was

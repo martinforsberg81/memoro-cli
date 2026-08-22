@@ -29,6 +29,7 @@ import { workRoot } from './paths.js';
 import { dependencyTree } from './dependency-tree.js';
 import { areaRoleName } from './roles.js';
 import { openTaskCount } from './task-log.js';
+import { scheduledWakeup } from './wakeup.js';
 import { inspectWorkArea, listWorkAreas } from './work-area.js';
 
 const run = promisify(execFile);
@@ -265,6 +266,9 @@ function describeConversation(item, live) {
     said,
     turn,
     model: lastModel(item.tool, entries),
+    // The clock the session set for itself, if any (D-0155). Claude only —
+    // Codex has no such tool — and read from the same tail as the rest.
+    wakeup: item.tool === 'codex' ? null : scheduledWakeup(entries),
     live,
     state: !live ? 'idle' : turn === 'waiting' ? 'waiting' : 'working',
   };
