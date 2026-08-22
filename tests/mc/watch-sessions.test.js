@@ -190,7 +190,7 @@ describe('everything with a deterministic answer is script', () => {
       reachable: () => ({
         ok: false,
         target: null,
-        reason: 'mc cannot address it: something is running in it, but there is no tmux session called mc-alpha',
+        reason: 'mc cannot address it: something is running in it, but no tmux pane stands in it (neither mc-alpha nor one found by its path) — started outside tmux',
       }),
     });
     const [flag] = sessions[0].patterns.filter((p) => p.pattern === 'unreachable');
