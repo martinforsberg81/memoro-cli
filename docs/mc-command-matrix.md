@@ -163,6 +163,13 @@ what each repository requires: a preparation step, any gates beyond the suite,
 and where its merges are written down. `<mc home>/repo-gates.json` adds or
 overrides an entry without a release.
 
+After the suite, the round runs **the pull request's own tests**: every
+`*.test.js` the PR adds or changes, wherever it lies, taken from the same diff
+that counts red and run on the candidate with the flags the repository's own
+`test` script gives node (D-0157). One red among them stops the round
+(`pr-tests`) with the whole suite green, because the suite never ran them; a
+PR that touches no test file is recorded as such and said in the progress.
+This is in addition to the suite, not instead of it.
 After preparation and before either suite run, the round checks that a
 manifest declaring dependencies has a `node_modules` to be found in, and
 **stops** with `dependencies` if not (D-0152: a suite run without its tree

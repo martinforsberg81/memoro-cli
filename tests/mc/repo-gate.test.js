@@ -61,6 +61,9 @@ function fixture({
   conflict = false,
   pr = { number: 400, headRefName: 'feature', baseRefName: 'main', headRefOid: 'abc1234', state: 'OPEN', title: 'a change' },
   prStatus = 0,
+  changed = [],
+  ownRed = [],
+  ownFinished = true,
 } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'mc-repo-gate-'));
   const repoPath = join(root, 'repo');
@@ -89,6 +92,9 @@ function fixture({
         ? { status: 1, stdout: 'CONFLICT (content): Merge conflict in src/x.js', stderr: '' }
         : { status: 0, stdout: '', stderr: '' };
     }
+    if (args[0] === 'diff') {
+      return { status: 0, stdout: changed.map((file) => `${file}\n`).join(''), stderr: '' };
+    }
     if (args[0] === 'rev-parse') {
       return { status: 0, stdout: `${opts.cwd.endsWith('baseline') ? 'base1111' : 'cand2222'}\n`, stderr: '' };
     }
@@ -112,6 +118,11 @@ function fixture({
     });
   };
 
+  const tests = ({ cwd, files }) => {
+    calls.push({ tool: 'tests', cwd, files });
+    return Promise.resolve({ code: ownRed.length ? 1 : 0, tap: tapWith(ownRed, { finished: ownFinished, tests: files.length * 3 }) });
+  };
+
   return {
     root,
     repoPath,
@@ -120,6 +131,7 @@ function fixture({
     git,
     gh,
     suite,
+    tests,
     progress: [],
     lease: () => readLease(repoPath, { root: mcHome }),
     ran: (tool) => calls.filter((call) => call.tool === tool),
@@ -131,6 +143,7 @@ function fixture({
       git,
       gh,
       suite,
+      tests,
       ...extra,
     }),
     cleanup() { try { rmSync(root, { recursive: true, force: true }); } catch { /* gone */ } },
@@ -562,6 +575,68 @@ describe('what the suite inherits, and what it must not', () => {
     // What is not a reporter is the caller's and stays.
     assert.equal(strip('--max-old-space-size=4096'), '--max-old-space-size=4096');
     assert.equal(strip(''), '');
+  });
+});
+
+/**
+ * The pull request's own tests (D-0157). The suite says whether anything else
+ * broke; this says whether the change is proved — and a suite that globs some
+ * directories and not others had said neither about a PR whose tests lived in
+ * `tests/ui/`: the same count as the day before, 114 new test lines.
+ */
+describe('the pull request\'s own tests are run, wherever they lie', () => {
+  it('runs every *.test.js the PR adds or changes, and records them', async () => {
+    const fx = fixture({ changed: ['src/thing.js', 'tests/ui/thing.test.js', 'tests/architecture/rule.test.mjs', 'README.md'] });
+    try {
+      const result = await fx.run();
+      assert.equal(result.stopped_at, null, JSON.stringify(result));
+      assert.deepEqual(fx.ran('tests').map((call) => call.files), [['tests/ui/thing.test.js', 'tests/architecture/rule.test.mjs']]);
+      assert.ok(fx.ran('tests')[0].cwd.endsWith('candidate'), 'on the candidate, with the base merged in');
+      assert.deepEqual(result.pr_tests.files, ['tests/ui/thing.test.js', 'tests/architecture/rule.test.mjs']);
+      assert.equal(result.pr_tests.totals.tests, 6);
+      assert.deepEqual(result.pr_tests.red, []);
+    } finally { fx.cleanup(); }
+  });
+
+  it('one red among them stops the round with the whole suite green', async () => {
+    const fx = fixture({ changed: ['tests/ui/thing.test.js'], ownRed: ['thing › proves the fix'] });
+    try {
+      const result = await fx.run();
+      assert.equal(result.stopped_at, 'pr-tests');
+      assert.match(result.reason, /2 of the pull request's own tests are red: thing › proves the fix, thing/u);
+      assert.deepEqual(result.broke, [], 'the suite had nothing to say');
+      assert.deepEqual(result.pr_tests.red, ['thing › proves the fix', 'thing'], 'the subtest and its parent, as node reports them');
+    } finally { fx.cleanup(); }
+  });
+
+  it('a run that never summarised is a stop, not an approval', async () => {
+    const fx = fixture({ changed: ['tests/ui/thing.test.js'], ownFinished: false });
+    try {
+      const result = await fx.run();
+      assert.equal(result.stopped_at, 'pr-tests');
+      assert.match(result.reason, /never reached their summary/u);
+    } finally { fx.cleanup(); }
+  });
+
+  it('a PR that touches no test file is said so, and the round goes on', async () => {
+    const fx = fixture({ changed: ['src/thing.js', 'tests/fixtures/data.json'] });
+    try {
+      const progress = [];
+      const result = await fx.run({ onProgress: (line) => progress.push(line) });
+      assert.equal(result.stopped_at, null);
+      assert.deepEqual(result.pr_tests, { files: [], totals: null, red: [], exit_code: null });
+      assert.ok(progress.some((line) => /adds or changes no test file/u.test(line)), progress.join('\n'));
+      assert.deepEqual(fx.ran('tests'), []);
+    } finally { fx.cleanup(); }
+  });
+
+  it('the diff is asked after the suite and before the extra gates', async () => {
+    const fx = fixture({ changed: ['tests/ui/thing.test.js'] });
+    try {
+      await fx.run();
+      const order = fx.calls.filter((call) => call.tool === 'suite' || call.tool === 'tests' || (call.tool === 'git' && call.args[0] === 'diff')).map((call) => call.tool === 'git' ? 'diff' : call.tool);
+      assert.deepEqual(order, ['suite', 'suite', 'diff', 'tests']);
+    } finally { fx.cleanup(); }
   });
 });
 

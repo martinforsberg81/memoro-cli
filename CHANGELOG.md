@@ -19,6 +19,22 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the warning exists to catch. The report carries `merged_into`,
   `default_branch` and `off_default`. Nothing is blocked: a stacked merge is
   sometimes meant, and the round's job is to make it impossible to misread.
+- The gate runs the pull request's own tests (D-0157). The suite answers
+  "did anything else break?"; it had never answered "is this change
+  proved?" — `test:msr:contract` globs some directories and not others, and
+  #10803's tests lived in `tests/ui/`, one it does not glob: the same count
+  as the day before, with 114 new test lines. Now every `*.test.js` (`.mjs`,
+  `.cjs`) the PR adds or changes, wherever it lies, is run on the candidate
+  after the suite, from the same diff that counts red — no directory list,
+  which would fix yesterday's hole and make tomorrow's. Held to the suite's
+  own rule: a run that never summarised or summarised nothing is a stop, and
+  one red among them stops the round with the whole suite green
+  (`pr-tests`). A PR that touches no test file is recorded as `files: []`
+  and said in the progress, never left blank. The files run with the flags
+  the repository's own `test` script gives node (`--import`, `--require`,
+  `--conditions`) and without its globs. The report carries `pr_tests`:
+  files, totals, red, exit code. This does not replace the contract suite
+  and does not make it differential — D-0138 stands on its own.
 - `mc status` shows the clock a session set for itself (D-0155). A Claude
   conversation can schedule its own next turn — `ScheduleWakeup`, a prompt
   and a delay — and nothing outside its transcript knew: one session ran the
