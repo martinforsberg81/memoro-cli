@@ -23,6 +23,7 @@ import { leaseRow, livenessRow, renderRepoLines, renderWatchLines } from '../rep
 import { claimLease, readLease, releaseLease } from '../repo-lease.js';
 import { currentHolder } from '../work-identity.js';
 import { runGate } from '../repo-gate.js';
+import { ratchetLines } from '../red-ratchet.js';
 import { runMergeRound } from '../repo-merge.js';
 import { livenessForLeases } from '../lease-liveness.js';
 import { readCombinedSnapshot } from '../repo-snapshot.js';
@@ -196,7 +197,7 @@ async function lease(opts, { stdout, stderr }) {
 /**
  * `mc repo merge <repo> <pr>` — the gate round, and what becomes of it.
  *
- * Two modes and no third. Without a flag the round gates and, only on green,
+ * Two modes and no third. Without a flag the round gates and, only if it passes,
  * lands the change; `--check` runs the same round and stops at the verdict,
  * which is what a surface without merge authority needs. What does not exist is
  * a way to land a change the gate called red — not a flag, not an option, not
@@ -206,7 +207,7 @@ async function lease(opts, { stdout, stderr }) {
  * The dispatch is here; the two rounds are `repo-gate.js` and `repo-merge.js`,
  * and the separation between them is load-bearing rather than tidy: the gate
  * cannot merge at all, so nothing reaches a merge except through a report a
- * module with no opinion about merging marked green.
+ * module with no opinion about merging marked as passing.
  *
  * Progress goes to stderr and the verdict to stdout, so the round can be left
  * running in the background with its JSON collected from one and its liveness
@@ -277,11 +278,14 @@ function mergeLines(report) {
  * about the diff and its contract, which nothing here has looked at, so the
  * lines below say what was measured and leave the rest to whoever reviews it.
  */
-function gateLines(report, { checkOnly = false } = {}) {
+export function gateLines(report, { checkOnly = false } = {}) {
   const lines = [];
   const pr = report.pr.head ? `#${report.pr.number} (${report.pr.head} → ${report.pr.base})` : `#${report.pr.number}`;
 
-  if (report.stopped_at && report.stopped_at !== 'red') {
+  // `red` and `ratchet` both stop the round *after* both suites ran, and both
+  // have names to show. Everything else stopped before there was anything to
+  // measure, and gets the short form.
+  if (report.stopped_at && report.stopped_at !== 'red' && report.stopped_at !== 'ratchet') {
     lines.push(`mc: the round stopped at ${report.stopped_at} — ${report.reason}`);
     // A stop after the suites is a different thing from one before them, and a
     // reader deciding what to do next needs to know which they are looking at.
@@ -309,19 +313,54 @@ function gateLines(report, { checkOnly = false } = {}) {
   }
 
   if (report.fixed.length) lines.push(`mc: ${report.fixed.length} that were red on the baseline are green here`);
-  // What the repository asked for beyond the suite, so a green is not read as
+
+  // The ratchet is a stop of its own, and it is not the change's fault — so it
+  // is printed before the extra gates rather than after the verdict, where it
+  // would read as a footnote to a pass that did not happen.
+  if (report.stopped_at === 'ratchet') {
+    lines.push(...ratchetLines(report.ratchet));
+    lines.push('mc: not merged — the standing red on main may not grow');
+    return lines;
+  }
+
+  // What the repository asked for beyond the suite, so a pass is not read as
   // "the suite passed" when more than the suite was measured.
   if (report.declaration?.prepare) lines.push(`mc: prepared with ${report.declaration.prepare}`);
   for (const gate of report.extra_gates || []) {
     lines.push(`mc: extra gate ${gate.name} — ${gate.ok ? 'passed' : 'failed'}`);
   }
-  lines.push('mc: GREEN — the test gate passes. It says nothing about whether the change is right;');
+  lines.push(...ratchetLines(report.ratchet));
+  // The word GREEN is reserved for a baseline with nothing red in it. Over 55
+  // standing red names it was not a summary, it was a false one — and it is
+  // the word this whole round is quoted by when somebody decides to merge.
+  lines.push(...verdictLines(report));
+  lines.push('mc: it says nothing about whether the change is right;');
   lines.push('mc: that is the review, and it is still somebody\'s to do');
   // Said only when it is the whole answer. In a merge round these same lines
   // are followed by what became of the verdict, and a run that says it did not
   // merge and then says it merged is worse than one that says neither.
   if (checkOnly) lines.push('mc: this run was asked to check only, so nothing was merged');
   return lines;
+}
+
+/**
+ * The verdict line — the sentence somebody quotes when they merge.
+ *
+ * Green is a claim about the whole suite and is only made when the baseline
+ * had nothing red. Otherwise the line carries the number, because the number
+ * is the part that was being hidden: "no new red" without it invites the
+ * reader to supply "…and everything else is fine", which is what a week of
+ * GREEN over 55 red names already taught everyone to do.
+ */
+export function verdictLines(report) {
+  if (report.verdict === 'green') {
+    return ['mc: GREEN — the test gate passes: nothing is red on the baseline or the candidate.'];
+  }
+  const standing = report.standing_red;
+  // The word "green" may not appear in this line. It is the line somebody
+  // quotes when they merge, and a reader who sees it there supplies the rest
+  // of the sentence themselves — which is the whole failure being fixed.
+  return [`mc: NO NEW RED — nothing that passed on the baseline fails on the candidate. ${standing} standing red on ${report.pr.base || 'main'}, unchanged by this.`];
 }
 
 function count(side) {

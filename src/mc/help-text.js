@@ -117,13 +117,17 @@ MAINTENANCE
                                     a candidate with main merged in, run the
                                     repository's own full suite on both, and
                                     compare the failures by name at every
-                                    level — then, only if it is green and the
-                                    base has not moved since, squash-merge,
-                                    pull the source-linked installation, and
-                                    log a line. Nothing merges a red gate
+                                    level — then, only if nothing went red
+                                    that passed before and the base has not
+                                    moved since, squash-merge, pull the
+                                    source-linked installation, and log a line.
+                                    Nothing merges a red gate. The verdict says
+                                    GREEN only when the baseline had nothing
+                                    red; otherwise NO NEW RED, carrying how
+                                    much red main is already standing on
   mc repo merge <repo> <pr> --check
                                     The same round, stopping at the verdict.
-                                    A green gate is not a review
+                                    A gate that passes is not a review
   mc watch pm start [--interval <seconds>]
                                     The PM round, every 30 minutes and never a
                                     model: commit pm/, run mc doctor, count

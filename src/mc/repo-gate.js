@@ -2,7 +2,7 @@
  * The gate round, as a machine.
  *
  * The rule it enforces is not new: a pull request may not make the suite red
- * anywhere main was green, and "green" has to be measured against a main that
+ * anywhere main was green, and that has to be measured against a main that
  * is current rather than one remembered from this morning. What is new is that
  * it stops being a set of instructions somebody follows. Instructions degrade
  * with distance and tiredness — nine parallel collisions in one day, from
@@ -25,16 +25,22 @@
  *  6. give the lease back, whatever happened.
  *
  * There is no merge in here, and not behind a flag either. This module answers
- * one question — is the test gate green — and a module that could also merge
- * would be one `if` away from a round that merged on a verdict it had not
+ * one question — did anything go red that was green — and a module that merged
+ * too would be one `if` away from a round that merged on a verdict it had not
  * finished forming. Merging lives in `repo-merge.js`, which runs this and acts
  * on the report; keeping it out of here is load-bearing rather than tidy, and
  * a test asserts against this file's source that it stays out.
  *
- * It says "the test gate is green", never "the pull request is good". Reading
+ * It says "the test gate passes", never "the pull request is good". Reading
  * the diff against its contract is judgement, and judgement is not mechanical;
- * a green suite passing an unescalated design decision is exactly the mistake
- * that conflation would license.
+ * a passing suite waving through an unescalated design decision is exactly the
+ * mistake that conflation would license.
+ *
+ * And it will not say "green" over a baseline that is red. The verdict is
+ * `green` only when nothing was red on either side; otherwise it is
+ * `no-new-red` and carries the standing count, because that word is what
+ * somebody quotes when they decide to merge. The red already standing is
+ * `red-ratchet.js`'s subject: it may go down and it may not go up.
  */
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
@@ -46,6 +52,7 @@ import { currentHolder } from './work-identity.js';
 import { mcHome } from './paths.js';
 import { repoFileSlug } from './repo-snapshot.js';
 import { declarationFor } from './repo-gate-table.js';
+import { compareRatchet, readRatchet } from './red-ratchet.js';
 
 export const GATE_SCHEMA = 'mc-repo-gate';
 export const GATE_VERSION = 1;
@@ -119,6 +126,13 @@ export async function runGate({
     candidate: null,
     broke: [],
     fixed: [],
+    // `green` only when the baseline had nothing red. Anything else is
+    // `no-new-red`, which is a different statement and has to read as one:
+    // the word green over 55 standing red names is what this field exists to
+    // stop the round from saying.
+    verdict: null,
+    standing_red: null,
+    ratchet: null,
     started_at: new Date(startedAt).toISOString(),
     finished_at: null,
     duration_ms: null,
@@ -236,7 +250,26 @@ export async function runGate({
     report.fixed = fixed;
     say(`candidate: ${after.result.red.length} red, ${broke.length} of them new`);
 
+    // Standing red is main's, so it is the baseline's count — what this
+    // repository is already carrying, independent of the change in front of
+    // the gate.
+    report.standing_red = before.result.red.length;
+    report.verdict = report.standing_red === 0 ? 'green' : 'no-new-red';
+
     if (broke.length) return finish('red', `${broke.length} test${broke.length === 1 ? '' : 's'} red on the candidate and green on the baseline`);
+
+    // The ratchet, read from the candidate and measured against it: the file
+    // describes what main's standing red becomes once this lands, so the one
+    // pull request that acknowledges a new red name is able to pass.
+    report.ratchet = compareRatchet({
+      recorded: readRatchet(headDir),
+      measured: after.result.red,
+    });
+    if (report.ratchet.blocks) {
+      return finish('ratchet', report.ratchet.malformed
+        ? `${report.ratchet.path} exists and cannot be read: ${report.ratchet.malformed}`
+        : `${report.ratchet.rose.length} red name${report.ratchet.rose.length === 1 ? '' : 's'} on ${report.pr.base} that ${report.ratchet.path} does not record`);
+    }
 
     // Gates beyond the suite, on the candidate, under the same rule: one that
     // did not reach its own end is not an approval. A command that could not be

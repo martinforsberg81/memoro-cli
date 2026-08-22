@@ -45,7 +45,7 @@ started in it. mc stores nothing else, because nothing else is mc's to know.
 | `mc repo claim <repo> "<what for>"` | Hold the gate round on a repository. Refused if someone else holds it. |
 | `mc repo release <repo> [--force]` | Give it back; `--force` takes it from another holder and is logged. |
 | `mc repo who <repo>` | Who holds it, for what, since when — and whether the holder is still working. `--json`. |
-| `mc repo merge <repo> <pr>` | Run the test gate and, only if it is green, squash-merge, deploy-pull and log it. `--check` gates and stops. `--json`. |
+| `mc repo merge <repo> <pr>` | Run the test gate and, only if it passes, squash-merge, deploy-pull and log it. `--check` gates and stops. `--json`. |
 | `mc watch pm start \| stop \| status` | The PM round: every 30 minutes it commits `pm/`, runs `mc doctor`, counts `pm/inbox/`, delivers the guard's notices and knocks once if something is new. `--interval <seconds>` on start; `--json` on status. |
 
 `mc work release` keeps a worktree that is in use, has uncommitted changes, or
@@ -78,6 +78,26 @@ of `pm/inbox/`, excluding `README.md` and directories — archiving to
 `<mc home>/watch/`, and the notices it delivers come from
 `<mc home>/watch/notices.jsonl`, which the session guard appends to and
 nothing ever removes from.
+
+The gate's verdict says `GREEN` only when the baseline had nothing red at all.
+Where main is already carrying red — memoro-cli is — it says `NO NEW RED` and
+puts the standing count in the same line, because that line is what somebody
+quotes when they decide to merge, and "no new red" on its own invites the
+reader to supply "and the rest is fine". `--json` carries `verdict`
+(`green` or `no-new-red`) and `standing_red` beside the red sets.
+
+The standing red itself is ratcheted. `.mc/red-ratchet.json` in the repository
+records the red names main is known to be carrying — names, not a number,
+because a count moves under load and a gate that fails at random stops being
+read. A name the file does not record stops the round; the round says which
+name, says plainly that main got worse rather than that this change broke it,
+and one reviewable commit acknowledging the name ends it for good. Names that
+have gone green stop nothing: the round says exactly what the file should say
+next. mc never writes the file — committing to a repository's main is not
+something a verb does, and a ratchet a machine can loosen is not a ratchet. A
+repository with no such file has not adopted it and is not judged by it; one
+whose file exists and cannot be read stops the round, and since the file is
+read from the candidate, the change that repairs it is the one that passes.
 
 The lease is advisory. `mc repo claim` refuses a repository someone else is
 holding, and that refusal stops exactly one thing: this command. No git or gh

@@ -1,11 +1,11 @@
 /**
  * The gate round that also lands the change.
  *
- * `repo-gate.js` answers one question — is the test gate green — and cannot
+ * `repo-gate.js` answers one question — did anything go red that was green — and cannot
  * merge. That is deliberate, and it stays that way: a module that could do both
  * is one `if` away from landing a change on a verdict it had not finished
  * forming. So merging lives here, on top of it, and reaches the merge only by
- * getting a green report back from something that has no opinion about merging.
+ * getting a passing report back from something that has no opinion about merging.
  *
  * The round, in order, stopping at the first thing that is not right:
  *
@@ -55,7 +55,7 @@ export function defaultMergeLog(repoPath, { root = mcHome(), env = process.env }
 }
 
 /**
- * Run the gate and, only if it is green, land the change.
+ * Run the gate and, only if it passes, land the change.
  *
  * Everything that touches the world is injectable for the same reason as in the
  * gate: the one thing a test suite cannot assert is a real merge against a real
@@ -144,7 +144,7 @@ export async function runMergeRound({
     // The lease serialises gate rounds against each other; it does not stop a
     // person merging by hand, and that happened during this feature's own
     // development — a round measured against one main while another landed in
-    // it. A green verdict is a statement about the tree it measured, so if the
+    // it. A passing verdict is a statement about the tree it measured, so if the
     // base has moved since, the verdict is about a tree that no longer exists.
     const base = `origin/${verdict.pr.base}`;
     const fetched = askGit(['fetch', 'origin', '--prune'], { cwd: repoPath });
@@ -152,7 +152,7 @@ export async function runMergeRound({
     const nowAt = trim(askGit(['rev-parse', base], { cwd: repoPath }).stdout);
     if (!nowAt) return finish('drift', `could not read ${base} before merging`);
     if (nowAt !== verdict.baseline.commit) {
-      return finish('drift', `${base} moved from ${short(verdict.baseline.commit)} to ${short(nowAt)} while the gate ran — the green is about a tree that has changed, so it is measured again rather than merged on`);
+      return finish('drift', `${base} moved from ${short(verdict.baseline.commit)} to ${short(nowAt)} while the gate ran — the verdict is about a tree that has changed, so it is measured again rather than merged on`);
     }
 
     // And the lease, re-read rather than assumed. A `--force` release mid-round
@@ -163,7 +163,12 @@ export async function runMergeRound({
       return finish('lease', `the lease was taken from ${holder.name} during the round — nothing was merged`);
     }
 
-    say(`gate green and ${base} unmoved — merging #${verdict.pr.number}`);
+    // The same sentence the verdict gives, not a second one. A round that
+    // printed NO NEW RED and then said "gate green" here would have put the
+    // word back one line below where it was taken out.
+    say(verdict.verdict === 'green'
+      ? `gate green and ${base} unmoved — merging #${verdict.pr.number}`
+      : `no new red (${verdict.standing_red} standing red on ${verdict.pr.base}) and ${base} unmoved — merging #${verdict.pr.number}`);
     const merged = askGh(['pr', 'merge', String(verdict.pr.number), '--squash'], { cwd: repoPath });
     if (merged.status !== 0) {
       return finish('merge', trim(merged.stderr) || `gh could not merge #${verdict.pr.number}`);
@@ -175,6 +180,13 @@ export async function runMergeRound({
     askGit(['fetch', 'origin', '--prune'], { cwd: repoPath });
     report.merge_commit = trim(askGit(['rev-parse', base], { cwd: repoPath }).stdout) || null;
     say(`merged as ${short(report.merge_commit)}`);
+
+    // The standing red moved down and mc will not write it down for anybody:
+    // committing to a product repository's main is not something a verb does.
+    // So it says exactly what the file should say, and a person lands it.
+    if (verdict.ratchet?.fell?.length) {
+      say(`${verdict.ratchet.fell.length} recorded red name${verdict.ratchet.fell.length === 1 ? ' is' : 's are'} green now — ${verdict.ratchet.path} should say ${verdict.ratchet.standing_red}`);
+    }
 
     report.deploy = deployPull({ git: askGit, repoPath, env, say, installs });
     const written = writeMergeLine({ report, verdict, path: mergeLog ?? defaultMergeLog(repoPath, { root, env }), clock });
@@ -246,6 +258,7 @@ function writeMergeLine({ report, verdict, path, clock }) {
   const checks = [
     `full suite both sides, fresh baseline at ${short(verdict.baseline.commit)}`,
     `${verdict.baseline.red.length} red before · ${verdict.candidate.red.length} after · 0 new`,
+    `${verdict.verdict === 'green' ? 'green' : `no new red, ${verdict.standing_red} standing on ${verdict.pr.base}`}`,
     `base unmoved at merge`,
   ].join(' · ');
   const line = `| ${day} | ${basenameOf(report.repo)} #${report.pr.number}${verdict.pr.title ? ` ${verdict.pr.title}` : ''} `
