@@ -7,6 +7,19 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- `mc status` shows the clock a session set for itself (D-0155). A Claude
+  conversation can schedule its own next turn — `ScheduleWakeup`, a prompt
+  and a delay — and nothing outside its transcript knew: one session ran the
+  full contract suite eleven times that way, on an eight-gigabyte machine,
+  with the suite right held by another area, and its pane looked idle the
+  whole time. The board now reads the last `ScheduleWakeup` in the
+  transcript's tail: set and not stopped and not yet rung, it is a row under
+  the conversation — `⏰ wakeup in 9m: npm run test:msr:contract` — in
+  yellow, overdue ones included, since a clock that was set and a session
+  that is gone is its own finding. `--json` carries it as `wakeup`
+  (`prompt`, `delay_s`, `set_at`, `due_at`, `reason`). A `stop` clears it;
+  the prompt arriving as a user turn means it rang. Read against the
+  eleven-run transcript: the clock before its stop, null after, eleven rings.
 - The PM heartbeat wakes PM (D-0013). Two things stood between a report in
   `pm/inbox/` and PM reading it: the wake guard's first rule refused every
   knock on a pane a client is attached to — and PM's pane is attached by
