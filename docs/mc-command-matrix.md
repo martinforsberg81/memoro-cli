@@ -45,6 +45,8 @@ started in it. mc stores nothing else, because nothing else is mc's to know.
 | `mc repo claim <repo> "<what for>"` | Hold the gate round on a repository. Refused if someone else holds it. |
 | `mc repo release <repo> [--force]` | Give it back; `--force` takes it from another holder and is logged. |
 | `mc repo who <repo>` | Who holds it, for what, since when — and whether the holder is still working. `--json`. |
+| `mc repo merge <repo> <pr>` | Run the test gate and, only if nothing new went red, squash-merge, deploy-pull and log it. `--check` gates and stops. `--json`. |
+| `mc watch pm start \| stop \| status` | The PM round: every 30 minutes it commits `pm/`, runs `mc doctor`, counts `pm/inbox/`, delivers the guard's notices and knocks once if something is new. `--interval <seconds>` on start; `--json` on status. |
 | `mc repo merge <repo> <pr>` | Run the test gate and, only if it is green, squash-merge, deploy-pull and log it — saying what it merged *into*, with a warning when that is not the default branch. `--check` gates and stops. `--json`. |
 | `mc watch pm start \| stop \| status` | The PM round: every 30 minutes, or as soon as a new file lands in `pm/inbox/`, it commits `pm/`, runs `mc doctor`, counts `pm/inbox/`, delivers the guard's notices and knocks once if something is new. `--interval <seconds>` on start; `--json` on status. |
 
@@ -193,10 +195,72 @@ its own end is not an approval. A command that could not be run at all stops the
 round exactly as a suite that never summarised does.
 
 And the verdict is `the test gate passes`, never `approved`: reading the diff
-against its contract is judgement, and a green suite says nothing about an
+against its contract is judgement, and a passing suite says nothing about an
 unescalated design decision. The merge log records the class as `D (delegerad)`
 — a verb has no authority of its own, it carries out its holder's — with the
 machine's part in the note.
+
+### The verdict says `GREEN` only when the base is green
+
+The rule above is differential, and for a while the word on top of it was not.
+On a repository carrying 55 standing red names on `main`, a round where nothing
+new went red printed `GREEN` — and "green" is the word every merge decision is
+reported onward with. It was reported as the larger claim it sounds like for a
+week.
+
+So the verdict carries the number instead. A base with no red names still reads
+`GREEN — the test gate passes`, unchanged. A base with red names never uses the
+word at all: `NO NEW RED — 55 standing red names on main`, followed by what
+those names cost, which is the real reason this mattered. **A test that is
+already failing cannot fail any harder**, so a fault introduced inside one of
+them has nowhere to show up. 55 standing red names are 55 places the gate is
+blind, not just 55 items of debt.
+
+`--json` carries `standing_red` as its own field and a `verdict` of `green`,
+`no-new-red`, `red`, `ratchet-risen`, or `stopped` — `green` and `no-new-red`
+are separate words so a reader who only ever wanted the strict one can ask for
+it. The line the merge round narrates itself with says the same thing, and the
+merge log row reads `55 standing red before`.
+
+### `.mc/red-ratchet.json` — the standing red set, so it can only shrink
+
+The differential rule cannot see its own floor moving. Inside one round a rise
+is always caught — more red names on the candidate than the baseline means at
+least one is not in the baseline, so it is in `broke` and the round is red; a
+brand new test that is born red is stopped for exactly that reason. But every
+round measures `main` afresh and remembers nothing, so a red name that reaches
+`main` by a path no gate stood in simply becomes part of the next baseline, and
+is reported as "no new red" over it from then on. That is how 55 got there.
+
+So the floor is written down in the repository, in the diff. A repository with
+no `.mc/red-ratchet.json` behaves exactly as before and is told it has no floor
+recorded. Where there is one, a red name that is not in its `names` **fails the
+round** — the same class as a new red name. Every such name was red on the base
+too, so the round says plainly that the pull request did not cause it, and
+prints the names JSON-quoted so the remedy is a paste.
+
+It binds **names, not a count**, and that is the load-bearing choice. Two rounds
+hours apart on this repository gave 55 red names and then 56, and the extra one
+was green again on the next run: a wall-clock assertion on a machine with three
+other builders on it. A count ratchet writes down 55 and then fails the next
+perfectly good pull request because the machine was busy — and a gate that
+fails at random is worse than the word this section exists to correct, because
+people stop reading it. A name set holds the flaky name and neither its
+appearing nor its going quiet moves the floor. It also needs no maintained list
+of known-flaky names, which the alternative does.
+
+Nothing writes the file automatically, including the merge round, for the same
+reason: a lucky round where that test passes would evict it from the set, and
+the next round where it does not would read as a rise and fail an author who
+changed nothing. Automatic tightening turns every flaky green into a trap for
+the next person. Lowering it is a commit somebody makes, and the round prints
+exactly which names came good so that commit is a paste rather than an
+investigation. The property worth keeping is that **every movement of the
+floor, in either direction, is in somebody's diff.**
+
+A ratchet file that is present but will not parse **stops the round**. Reading
+it as an empty set would make every standing red name look like a rise, and
+fail everything on a typo.
 
 ## Sessions — messaging
 

@@ -26,6 +26,7 @@ import { addArea, fixture as repoFixture } from './_helpers/repo-fixture.js';
 import { runMcCli } from './_helpers/mc-cli.js';
 import { gateRoot, runGate } from '../../src/mc/repo-gate.js';
 import { claimLease, readLease } from '../../src/mc/repo-lease.js';
+import { renderRatchet } from '../../src/mc/red-ratchet.js';
 
 const AREA = { name: 'klient-guard', kind: 'work-area' };
 const OTHER = { name: 'pm', kind: 'work-area' };
@@ -59,6 +60,10 @@ function fixture({
   candidateFinished = true,
   baselineFinished = true,
   conflict = false,
+  // What `.mc/red-ratchet.json` says in the candidate worktree, if anything.
+  // An array is a recorded set; a string is written verbatim, which is how a
+  // malformed one is tested. `undefined` is a repository with no ratchet.
+  ratchet = undefined,
   pr = { number: 400, headRefName: 'feature', baseRefName: 'main', headRefOid: 'abc1234', state: 'OPEN', title: 'a change' },
   prStatus = 0,
   changed = [],
@@ -79,6 +84,16 @@ function fixture({
     if (args[0] === 'worktree' && args[1] === 'add') {
       const dir = args[args.length - 2];
       mkdirSync(dir, { recursive: true });
+      // The gate reads the ratchet out of the candidate worktree, so this is
+      // where a checkout that has one gets it — the same place a real
+      // `worktree add` would have put it.
+      if (ratchet !== undefined && dir.endsWith('candidate')) {
+        mkdirSync(join(dir, '.mc'), { recursive: true });
+        writeFileSync(
+          join(dir, '.mc', 'red-ratchet.json'),
+          typeof ratchet === 'string' ? ratchet : renderRatchet(ratchet),
+        );
+      }
       // A worktree carries the repository's manifest, as a real one would.
       writeFileSync(join(dir, 'package.json'), readFileSync(join(repoPath, 'package.json')));
       return { status: 0, stdout: '', stderr: '' };
@@ -575,6 +590,118 @@ describe('what the suite inherits, and what it must not', () => {
     // What is not a reporter is the caller's and stays.
     assert.equal(strip('--max-old-space-size=4096'), '--max-old-space-size=4096');
     assert.equal(strip(''), '');
+  });
+});
+
+/**
+ * The verdict now carries a number and a floor.
+ *
+ * The differential rule above is untouched — every test in it still passes
+ * unchanged, which is the point. What is added is a second, independent check
+ * that the differential one structurally cannot make: it compares against a
+ * baseline measured in the same round, so it can never notice that the
+ * baseline itself has got worse since last time.
+ */
+describe('the standing red set, recorded and ratcheted', () => {
+  it('reports how many red names the base itself is carrying', async () => {
+    const red = ['old world › one', 'old world'];
+    const fx = fixture({ baselineRed: red, candidateRed: red });
+    try {
+      const report = await fx.run();
+      assert.equal(report.ok, true, report.reason || '');
+      assert.equal(report.standing_red, 2, 'the count is read off the baseline, which is the base branch');
+      assert.equal(report.verdict, 'no-new-red', 'a pass over standing red is not the same claim as green');
+    } finally { fx.cleanup(); }
+  });
+
+  it('a clean base is still the strict verdict', async () => {
+    const fx = fixture({ baselineRed: [], candidateRed: [] });
+    try {
+      const report = await fx.run();
+      assert.equal(report.standing_red, 0);
+      assert.equal(report.verdict, 'green');
+    } finally { fx.cleanup(); }
+  });
+
+  it('a repository with no ratchet runs exactly as it did before', async () => {
+    const red = ['old world › one', 'old world'];
+    const fx = fixture({ baselineRed: red, candidateRed: red });
+    try {
+      const report = await fx.run();
+      assert.equal(report.ok, true, report.reason || '');
+      assert.equal(report.ratchet.present, false, 'absent is not a floor of zero');
+      assert.deepEqual(report.ratchet.risen, []);
+    } finally { fx.cleanup(); }
+  });
+
+  it('a red name nobody recorded fails the round', async () => {
+    // Red on both sides, so `broke` is empty and the differential rule passes
+    // it. The only thing that can see this is the recorded floor.
+    const red = ['old world › one', 'old world'];
+    const fx = fixture({ baselineRed: red, candidateRed: red, ratchet: ['old world'] });
+    try {
+      const report = await fx.run();
+      assert.equal(report.ok, false);
+      assert.equal(report.stopped_at, 'ratchet');
+      assert.deepEqual(report.broke, [], 'the differential rule had no objection — that is the whole point');
+      assert.deepEqual(report.ratchet.risen, ['old world › one']);
+      assert.equal(report.verdict, 'ratchet-risen');
+      assert.equal(report.merged, false);
+    } finally { fx.cleanup(); }
+  });
+
+  it('the recorded set breathing on a name it already knows does not fail', async () => {
+    // The measurement from the brief: the same repository, 55 red names one
+    // round and 56 the next, the extra one green again after that. The floor
+    // holds the name, so neither round moves it.
+    const floor = ['old world › one', 'old world', 'flaky under load'];
+    const busy = fixture({ baselineRed: floor, candidateRed: floor, ratchet: floor });
+    try {
+      const report = await busy.run();
+      assert.equal(report.ok, true, report.reason || '');
+      assert.deepEqual(report.ratchet.risen, []);
+    } finally { busy.cleanup(); }
+
+    const quiet = fixture({
+      baselineRed: ['old world › one', 'old world'],
+      candidateRed: ['old world › one', 'old world'],
+      ratchet: floor,
+    });
+    try {
+      const report = await quiet.run();
+      assert.equal(report.ok, true, report.reason || '');
+      assert.deepEqual(report.ratchet.fallen, ['flaky under load'], 'offered up, not taken');
+    } finally { quiet.cleanup(); }
+  });
+
+  it('a ratchet that will not parse stops the round rather than reading as empty', async () => {
+    const red = ['old world › one', 'old world'];
+    const fx = fixture({ baselineRed: red, candidateRed: red, ratchet: '{ not json' });
+    try {
+      const report = await fx.run();
+      assert.equal(report.ok, false);
+      assert.equal(report.stopped_at, 'ratchet');
+      assert.equal(report.ratchet.ok, false);
+      // An empty floor would have made both standing names look like a rise.
+      assert.deepEqual(report.ratchet.risen, []);
+    } finally { fx.cleanup(); }
+  });
+
+  it('the ratchet cannot be used to get a new red name past the differential rule', async () => {
+    // The candidate breaks something *and* writes it into the floor. `broke`
+    // runs first and there is no way round it, which is why the two checks are
+    // independent rather than one that consults a file.
+    const fx = fixture({
+      baselineRed: ['old world'],
+      candidateRed: ['old world', 'newly broken'],
+      ratchet: ['old world', 'newly broken'],
+    });
+    try {
+      const report = await fx.run();
+      assert.equal(report.ok, false);
+      assert.equal(report.stopped_at, 'red', 'stopped by broke, not by the ratchet');
+      assert.deepEqual(report.broke, ['newly broken']);
+    } finally { fx.cleanup(); }
   });
 });
 
