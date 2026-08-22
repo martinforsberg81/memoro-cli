@@ -7,6 +7,18 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- The PM heartbeat wakes PM (D-0013). Two things stood between a report in
+  `pm/inbox/` and PM reading it: the wake guard's first rule refused every
+  knock on a pane a client is attached to — and PM's pane is attached by
+  design, so every round of `mc watch pm` ended in *delivered, but did not
+  knock: somebody is attached to it* — and the round itself ran on a
+  thirty-minute clock, so a report landing a minute after a round waited
+  twenty-nine. Now a singleton role's pane (`pm`, `pm-helper`) is knocked
+  with a client attached; the exception is the role, never the sender, and
+  the empty-prompt rule still guards whatever the person has typed. And the
+  round's wait ends at a new file in the inbox: the file is what wakes the
+  round, the half hour is the floor. A loop asked for N rounds also stops
+  after the Nth instead of sleeping one more interval first.
 - `mc pm new` and `mc pm-helper new` — a reliable way to start a **fresh**
   conversation in a singleton role. Every door into the role meant "take me to
   the PM": attach if it runs, resume the newest if it stopped, create if it

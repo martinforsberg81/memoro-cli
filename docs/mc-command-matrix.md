@@ -46,7 +46,7 @@ started in it. mc stores nothing else, because nothing else is mc's to know.
 | `mc repo release <repo> [--force]` | Give it back; `--force` takes it from another holder and is logged. |
 | `mc repo who <repo>` | Who holds it, for what, since when — and whether the holder is still working. `--json`. |
 | `mc repo merge <repo> <pr>` | Run the test gate and, only if it is green, squash-merge, deploy-pull and log it. `--check` gates and stops. `--json`. |
-| `mc watch pm start \| stop \| status` | The PM round: every 30 minutes it commits `pm/`, runs `mc doctor`, counts `pm/inbox/`, delivers the guard's notices and knocks once if something is new. `--interval <seconds>` on start; `--json` on status. |
+| `mc watch pm start \| stop \| status` | The PM round: every 30 minutes, or as soon as a new file lands in `pm/inbox/`, it commits `pm/`, runs `mc doctor`, counts `pm/inbox/`, delivers the guard's notices and knocks once if something is new. `--interval <seconds>` on start; `--json` on status. |
 
 `mc work release` keeps a worktree that is in use, has uncommitted changes, or
 has unmerged commits. `mc work discard` reports what it will destroy and
@@ -71,8 +71,9 @@ there on the third pass earns one reminder, and after that it is in the log
 rather than in the prompt. It decides nothing about what any item is about —
 it counts files and names them, and never opens one. Its auto-commit commits
 what PM wrote and never edits it. `delivered, but did not knock` is a normal
-outcome: the client guard refuses to type into an occupied pane and the
-message is in the inbox either way. Unprocessed means a file at the top level
+outcome: the client guard refuses to type into a pane whose prompt is not
+empty — PM's pane being attached is not a reason, that is what it is for —
+and the message is in the inbox either way. Unprocessed means a file at the top level
 of `pm/inbox/`, excluding `README.md` and directories — archiving to
 `inbox/archive/` is what makes an item processed. It writes only
 `<mc home>/watch/`, and the notices it delivers come from
@@ -196,9 +197,13 @@ costs latency and never the message.
 
 Knocking on the running conversation is a separate thing, asked for with
 `--wake`, because it types into an input box that belongs to somebody else. It
-refuses on a pane a tmux client is attached to, and on a pane whose input box
-is not visibly empty — whoever put the text there, including a notice an
-earlier wake gave up on. The notice goes in as text and Enter as separate
+refuses on a pane a tmux client is attached to — except a singleton role's
+(`pm`, `pm-helper`), which is attached by design and would otherwise never be
+knocked at all — and on any pane whose input box is not visibly empty,
+whoever put the text there, including a notice an earlier wake gave up on.
+`mc watch pm` rides the same channel, and its wait between rounds ends early
+on a new file in `pm/inbox/`: the file is what wakes the round, the half hour
+is the floor underneath. The notice goes in as text and Enter as separate
 keystrokes, with the submission verified against the pane and retried once, so
 a message can never end up half-typed into somebody's prompt; and the cleanup
 that takes an unsent notice back out is pressed only on a line mc has just read

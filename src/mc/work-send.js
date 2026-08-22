@@ -35,6 +35,7 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { writeFileAtomic } from './atomic-write.js';
+import { reservedRoleName } from './roles.js';
 import { inspectWorkArea } from './work-area.js';
 import { currentHolder } from './work-identity.js';
 import { backgroundTarget } from './work-open.js';
@@ -131,7 +132,15 @@ export function sendToArea({
   const target = backgroundTarget(name, { run: run ? (args) => run(args) : null });
   if (!target) return { ok: true, file, woke: false, reason: 'no-live-conversation' };
 
-  const woken = wakeConversation({ target, sender: sender.name, run, sleep });
+  // A singleton role's pane is the one pane somebody is *meant* to be sitting
+  // at — PM is the door to the person (K1.2), so a client on it is the normal
+  // state, not a sign that a knock would be noise. Rule 1 refused every knock
+  // on it for good (D-0013; measured on every round as "delivered, but did
+  // not knock: somebody is attached to it"). The exception is the role, never
+  // the sender, and rule 2 still guards whatever the person has typed.
+  const woken = wakeConversation({
+    target, sender: sender.name, run, sleep, attachedOk: reservedRoleName(name),
+  });
   return {
     ok: true,
     file,
@@ -202,6 +211,9 @@ function noticeFrom(sender) {
  *  1. is anybody attached? `tmux list-clients` answers it. A pane a person is
  *     sitting at is never woken — they are already here, the notice is noise,
  *     and the cleanup keystroke would land on their half-written sentence.
+ *     The one exception is a singleton role's pane (`attachedOk`): PM's pane
+ *     is attached by design, and a rule that never knocks it is the rule that
+ *     had PM reading its inbox only when somebody asked "status?".
  *  2. is the box empty, and can mc see that it is? Anything already in there —
  *     someone's draft, a notice an earlier wake gave up on — makes this wake
  *     refuse, because typing after it produces one pasted-together sentence.
@@ -222,7 +234,7 @@ function noticeFrom(sender) {
  * is told it was. Litter is a nuisance — and the next wake refuses on it rather
  * than pasting onto it — while deleting a sentence somebody was writing is not.
  */
-export function wakeConversation({ target, sender, run = null, sleep = null }) {
+export function wakeConversation({ target, sender, run = null, sleep = null, attachedOk = false }) {
   const tmux = run || ((args) => spawnSync('tmux', args, { encoding: 'utf8' }));
   const wait = sleep || ((ms) => { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); });
   const notice = noticeFrom(sender);
@@ -231,9 +243,14 @@ export function wakeConversation({ target, sender, run = null, sleep = null }) {
   // nothing to take back and nothing for the sender to worry about.
   const refuse = (reason) => ({ ok: false, guard: true, reason });
 
-  const clients = tmux(['list-clients', '-t', target, '-F', '#{client_name}']);
-  if (clients?.status !== 0) return refuse('could not tell whether anybody is attached to it');
-  if (String(clients.stdout || '').trim() !== '') return refuse('somebody is attached to it');
+  // `attachedOk` is the role-pane exception (D-0013), and it skips rule 1
+  // only: a pane meant to have a person at it is knocked like any other, and
+  // rule 2 is what keeps the knock off that person's half-written sentence.
+  if (!attachedOk) {
+    const clients = tmux(['list-clients', '-t', target, '-F', '#{client_name}']);
+    if (clients?.status !== 0) return refuse('could not tell whether anybody is attached to it');
+    if (String(clients.stdout || '').trim() !== '') return refuse('somebody is attached to it');
+  }
 
   // Read last, immediately before typing: whatever gap remains between looking
   // and typing is the gap, and there is no reason to make it any wider.
