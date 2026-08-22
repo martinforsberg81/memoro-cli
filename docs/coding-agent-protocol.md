@@ -74,13 +74,22 @@ a round. Two rules, both cheap:
   (#363, re-landed as #364). Stack only when the child literally cannot be
   built without the parent's commits on `main` — and then merge the child
   first, or retarget it to `main` once the parent lands.
-- **The document lines are the last commit of the PR, on their own.** Code,
-  tests and any protocol text first; `CHANGELOG.md` and
-  `docs/mc-command-matrix.md` in a final commit touching nothing else. Then a
-  conflict can only be in that commit and the resolution is always *keep
-  both*. A series against the same files lands in order with `main` merged in
-  between (a merge commit, no rewritten history); whoever builds the series
-  knows that from the start and says so in the first PR.
+- **The changelog entry is a fragment, never a line in `CHANGELOG.md`.** A
+  pull request adds `changelog.d/<topic>.md` (a `section:` line and the
+  entry; see `changelog.d/README.md`) and does not touch the Unreleased
+  section. `node scripts/changelog-fold.js` folds every fragment into
+  `CHANGELOG.md` at release, in one commit. "Document lines in the PR's own
+  last commit" was the earlier rule: measured, it isolated the conflict and
+  made every resolution *keep both*, but git still stops on two insertions
+  within three lines of each other and GitHub's mergeability ignores local
+  merge drivers — nine resolutions and two red gate rounds later, the
+  conflict class is removed rather than managed. Any other shared document
+  (`docs/mc-command-matrix.md`, this file and its `canon/` copy) still goes
+  in a final commit touching nothing else, and a series against it lands in
+  order with `main` merged in between (a merge commit, no rewritten
+  history). A change to `docs/coding-agent-protocol.md` must carry the same
+  change to `canon/coding-agent-protocol.md`: the gate compares the two
+  copies byte for byte and stopped two pull requests that forgot.
 
 ## Work Method Updates
 
