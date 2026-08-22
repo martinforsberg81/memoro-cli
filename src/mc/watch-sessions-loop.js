@@ -37,7 +37,7 @@ import { knock } from './watch-sessions-knock.js';
 import { readTailEntries } from './conversations.js';
 import { reservedRoleName } from './roles.js';
 import { backgroundTarget } from './work-open.js';
-import { paneWillTakeText, sendToArea } from './work-send.js';
+import { flushPendingWakes, paneWillTakeText, sendToArea } from './work-send.js';
 import { workStatus } from './work-status.js';
 
 /**
@@ -79,9 +79,18 @@ export async function watchRound({
   read = null,
   send = null,
   reachable = null,
+  flush = null,
   log = () => {},
 } = {}) {
   const started = Date.now();
+  // Wakes the guard refused on a draft, tried again first: a prompt that has
+  // cleared since gets its knock now, and the rest of the round sees the
+  // session as reachable again rather than flagging it a second time.
+  try {
+    (flush || flushPendingWakes)({ root, now: new Date(now), log });
+  } catch (error) {
+    log(`could not retry queued wakes: ${error?.message || String(error)}`);
+  }
   const previous = readMemory({ root }).sessions;
   // Without git: the guard never looks at a branch, and the git questions are
   // all of the cost in that report.
