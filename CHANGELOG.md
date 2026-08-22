@@ -7,6 +7,19 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- `mc work <name>` refuses a workplace somebody is already sitting in
+  (D-0154). The repo lease protects the merge queue and says nothing about
+  who is in a worktree: a session started in an area whose worktree belonged
+  to a person's own session — from their terminal, invisible to mc's
+  background naming — switched the branch under them mid-work. Opening an
+  area now asks which tool processes stand in it or its worktrees, the way
+  the status board finds them, and one mc did not start there is an
+  occupant: *alpha is occupied — claude (pid 4242) is working in …, started
+  outside mc*, with the way through named. `--anyway` is that way, for the
+  person who knows the workplace is theirs to share. mc's own background
+  session is not an occupant — `mc work <name>` joins it and `new` replaces
+  it in place, as before. A clean `git status` was never "free"; now the
+  question is asked of the processes rather than of the tree.
 - The gate runs the pull request's own tests (D-0157). The suite answers
   "did anything else break?"; it had never answered "is this change
   proved?" — `test:msr:contract` globs some directories and not others, and
