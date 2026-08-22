@@ -6,6 +6,20 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+- `mc repo merge` no longer says *nothing was merged* after a merge call
+  that failed on the network. On #10844 GitHub took the call, performed the
+  squash, and timed out on the reply; the round reported *nothing was
+  merged* and the change was on `main`. A failed call is now followed by a
+  question to the forge: `MERGED` → the round carries on as merged, with the
+  error kept beside it (`merge_error`) and said in the progress; `OPEN` →
+  the failed merge it always was; cannot ask → the round stops at
+  `merge-unknown`, claims neither way, pulls and logs nothing, and names
+  the command that answers (*check with gh pr view <n>*). The verb prints
+  *whether #N merged is UNKNOWN — …* for that stop instead of the sentence
+  that was once false. A reason says what was measured, not what was
+  inferred — here in the direction of claiming nothing happened.
+
 ### Changed
 - **The test gate no longer says `GREEN` over standing red names.** The rule it
   enforces is differential — nothing new went red — and on this repository,
