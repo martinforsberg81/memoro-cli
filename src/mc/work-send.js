@@ -76,7 +76,11 @@ const SUBMIT_MS = 400;
  * measured on PM's pane, where a tolerance of three rows read as "could not
  * find its prompt" and refused every knock.
  */
-const RULE = /^[^A-Za-z0-9]*[-─═+]{3,}[^A-Za-z0-9]*$/u;
+// A rule may carry one short label inside it: PM's box is drawn with its
+// upper border reading `──── PM ─`, and a rule that allowed no letters at all
+// missed that border, found the one above it, and answered "could not find
+// its prompt" to every knock on PM (measured 2026-08-22).
+const RULE = /^[^A-Za-z0-9]*[-─═+]{3,}(?:\s+\S{1,24}\s+[-─═+]+)?[^A-Za-z0-9]*$/u;
 const PROMPT_ROW = /^\s*(?:[|│]\s*)?[>❯»]\s?/u;
 const BOX_EDGE = /^\s*[|│]\s?/u;
 const BOX_ROWS = 8;

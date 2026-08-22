@@ -721,6 +721,20 @@ describe('text in the box is a question, not an answer', () => {
     assert.ok(!talk.keys().some((args) => args[4] === 'x' || args[3] === 'BSpace'));
   });
 
+  it('a box whose upper border carries a label is still a box', () => {
+    // PM's pane draws `──── PM ─` as the top edge. A rule that allowed no
+    // letters skipped it, took the rule above as the top, and the box was
+    // "not found" — every knock on PM refused (measured 2026-08-22).
+    const labelled = ({ typed, captures }) => {
+      const drawn = captures <= 2 ? pane({ typed }) : pane({ sent: [NOTICE] });
+      const rows = drawn.stdout.split('\n');
+      const top = rows.findIndex((row) => row.startsWith('+----'));
+      rows[top] = '──────────────────────────── PM ─';
+      return { status: 0, stdout: rows.join('\n') };
+    };
+    assert.deepEqual(wake(conversation({ paint: labelled }).run), { ok: true, attempts: 1 });
+  });
+
   it('a box with several rows of hints under it is still found', () => {
     // Measured on PM's pane: status line, `/rc active`, a ledger row and a row
     // per running agent — five rows, where three was the tolerance, and every
