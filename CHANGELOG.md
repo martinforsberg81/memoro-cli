@@ -7,6 +7,20 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- A suite is not believed in a worktree without its dependency tree (D-0152).
+  Run there it does not fail, it shrinks: 2162 tests and a tidy number, where
+  206 never ran and were not counted as skipped; 2368/2368 once the tree was
+  linked. The gate round now checks, after preparation and before either
+  run, that a manifest declaring dependencies has a `node_modules` to be found
+  in, and **stops** with `dependencies` if not — unless the declaration vouches
+  (`prepare: null`, with its evidence) that the suite runs without one, in
+  which case the round says so in its progress rather than assuming. And
+  `mc status` writes `no node_modules` beside a worktree whose manifest
+  declares dependencies and has no tree (a `dependencies` field on the page:
+  `missing`, `present`, or null where the question does not arise), so the
+  state PM measured by hand across twenty-seven worktrees is on the board.
+  What mc cannot do is refuse a suite a session starts itself in its own
+  worktree; that preflight belongs to the repository's own test script.
 - The PM heartbeat wakes PM (D-0013). Two things stood between a report in
   `pm/inbox/` and PM reading it: the wake guard's first rule refused every
   knock on a pane a client is attached to — and PM's pane is attached by
