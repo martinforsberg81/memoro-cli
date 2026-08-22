@@ -59,7 +59,7 @@ function red() {
  * `baseAfterGate` is what `origin/main` reads as when the round re-checks it —
  * the drift the lease cannot prevent.
  */
-function fixture({ verdict = green(), baseAfterGate = BASE, mergeFails = false, pullFails = false } = {}) {
+function fixture({ verdict = green(), baseAfterGate = BASE, mergeFails = false, pullFails = false, defaultBranch = 'origin/main' } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'mc-repo-merge-'));
   const repoPath = join(root, 'repo');
   const mcHome = join(root, 'home');
@@ -72,7 +72,10 @@ function fixture({ verdict = green(), baseAfterGate = BASE, mergeFails = false, 
   let merged = false;
   const git = (args, opts = {}) => {
     calls.push({ tool: 'git', args, cwd: opts.cwd });
-    if (args[0] === 'rev-parse' && args[1] === 'origin/main') {
+    if (args[0] === 'symbolic-ref') {
+      return defaultBranch ? { status: 0, stdout: `${defaultBranch}\n` } : { status: 1, stdout: '', stderr: 'not a symbolic ref' };
+    }
+    if (args[0] === 'rev-parse' && args[1] === `origin/${verdict.pr.base}`) {
       return { status: 0, stdout: `${merged ? LANDED : baseAfterGate}\n` };
     }
     if (args[0] === 'rev-parse') return { status: 0, stdout: `${LANDED}\n` };
@@ -142,7 +145,7 @@ describe('a green gate lands the change', () => {
       // "red before" was the same understatement as the verdict's "green":
       // those two were standing red on main and this change did not touch them.
       assert.match(line, /2 standing red before · 2 after · 0 new/u);
-      assert.match(line, /Squash-merge → `ccc/u);
+      assert.match(line, /Squash-merge into `main` → `ccc/u);
       assert.match(line, /klient-guard/u);
     } finally { fx.cleanup(); }
   });
@@ -394,5 +397,55 @@ describe('the verb describes itself accurately', () => {
     const code = gate.replace(/\/\*[\s\S]*?\*\//gu, '').replace(/^\s*\/\/.*$/gmu, '');
     assert.doesNotMatch(code, /pr['"\s,\]]+merge/u);
     assert.doesNotMatch(code, /['"]push['"]/u);
+  });
+});
+
+/**
+ * Into what. A round on #363 said "merged as 7dcbf96" — true, and into the
+ * stacked base `pm-heartbeat`, which everyone read as main. The line names the
+ * base every time, and says in its own words when it is not the default.
+ */
+describe('the merge line names the base', () => {
+  it('on the default branch: into main, no warning', async () => {
+    const fx = fixture();
+    try {
+      const progress = [];
+      const report = await fx.run({ onProgress: (line) => progress.push(line) });
+      assert.equal(report.merged_into, 'main');
+      assert.equal(report.default_branch, 'main');
+      assert.equal(report.off_default, false);
+      assert.ok(progress.some((line) => line === `merged #400 into main as ${LANDED.slice(0, 7)}`), progress.join('\n'));
+      assert.ok(!progress.some((line) => /WARNING/u.test(line)));
+      assert.match(report.log_line, /Squash-merge into `main` → `ccc/u);
+      assert.doesNotMatch(report.log_line, /NOT/u);
+    } finally { fx.cleanup(); }
+  });
+
+  it('on a stacked base: into that branch, and a warning that it is not main', async () => {
+    const verdict = green();
+    verdict.pr.base = 'pm-heartbeat';
+    const fx = fixture({ verdict });
+    try {
+      const progress = [];
+      const report = await fx.run({ onProgress: (line) => progress.push(line) });
+      assert.equal(report.merged, true);
+      assert.equal(report.merged_into, 'pm-heartbeat');
+      assert.equal(report.off_default, true);
+      assert.ok(progress.some((line) => line.startsWith('merged #400 into pm-heartbeat as')), progress.join('\n'));
+      assert.ok(progress.some((line) => /WARNING: pm-heartbeat is not the default branch \(main\) — this landed on a branch, not on main/u.test(line)), progress.join('\n'));
+      assert.match(report.log_line, /Squash-merge into `pm-heartbeat` → `ccc[0-9a-f]*` \(NOT main\)/u);
+    } finally { fx.cleanup(); }
+  });
+
+  it('a default git cannot name is unknown, never assumed to be main', async () => {
+    const verdict = green();
+    verdict.pr.base = 'pm-heartbeat';
+    const fx = fixture({ verdict, defaultBranch: null });
+    try {
+      const report = await fx.run();
+      assert.equal(report.default_branch, null);
+      assert.equal(report.off_default, false, 'no warning on a guess');
+      assert.equal(report.merged_into, 'pm-heartbeat', 'but the base is still named');
+    } finally { fx.cleanup(); }
   });
 });

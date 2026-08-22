@@ -97,6 +97,12 @@ export async function runMergeRound({
     ok: false,
     merged: false,
     merge_commit: null,
+    // What the squash landed *in*, and whether that is the branch people mean
+    // by "merged". A round on #363 said "merged as 7dcbf96" and was right —
+    // into `pm-heartbeat`, its stacked base — and everyone read "on main".
+    merged_into: null,
+    default_branch: null,
+    off_default: false,
     stopped_at: null,
     reason: null,
     gate: null,
@@ -177,7 +183,17 @@ export async function runMergeRound({
     // that somebody can go and look at it.
     askGit(['fetch', 'origin', '--prune'], { cwd: repoPath });
     report.merge_commit = trim(askGit(['rev-parse', base], { cwd: repoPath }).stdout) || null;
-    say(`merged as ${short(report.merge_commit)}`);
+    // Named, not implied. The sha is read from the PR's base, so it is the
+    // base that says what "merged" meant — and when that is not the branch
+    // the remote points HEAD at, the line says so in its own words rather
+    // than leaving a true sentence to be read as a different true sentence.
+    report.merged_into = verdict.pr.base;
+    report.default_branch = defaultBranch(askGit, repoPath);
+    report.off_default = Boolean(report.default_branch) && report.merged_into !== report.default_branch;
+    say(`merged #${verdict.pr.number} into ${report.merged_into} as ${short(report.merge_commit)}`);
+    if (report.off_default) {
+      say(`WARNING: ${report.merged_into} is not the default branch (${report.default_branch}) — this landed on a branch, not on ${report.default_branch}`);
+    }
 
     report.deploy = deployPull({ git: askGit, repoPath, env, say, installs });
     const written = writeMergeLine({ report, verdict, path: mergeLog ?? defaultMergeLog(repoPath, { root, env }), clock });
@@ -252,7 +268,7 @@ function writeMergeLine({ report, verdict, path, clock }) {
     `base unmoved at merge`,
   ].join(' · ');
   const line = `| ${day} | ${basenameOf(report.repo)} #${report.pr.number}${verdict.pr.title ? ` ${verdict.pr.title}` : ''} `
-    + `| ${checks} | D (delegerad) | Squash-merge → \`${short(report.merge_commit)}\` `
+    + `| ${checks} | D (delegerad) | Squash-merge into \`${report.merged_into}\` → \`${short(report.merge_commit)}\`${report.off_default ? ` (NOT ${report.default_branch})` : ''} `
     + `| Run by \`mc repo merge\` as ${report.holder}. ${deployNote(report.deploy)} |`;
 
   try {
@@ -262,6 +278,17 @@ function writeMergeLine({ report, verdict, path, clock }) {
     return { path: null, line };
   }
   return { path, line };
+}
+
+/**
+ * The branch the remote points HEAD at — `main` here — or null when git
+ * cannot say. Null is "unknown", never "main": a guess would turn the warning
+ * into the very assumption it exists to catch.
+ */
+function defaultBranch(git, repoPath) {
+  const head = git(['symbolic-ref', '--short', '-q', 'refs/remotes/origin/HEAD'], { cwd: repoPath });
+  const name = head?.status === 0 ? trim(head.stdout).replace(/^origin\//u, '') : '';
+  return name || null;
 }
 
 function deployNote(deploy) {

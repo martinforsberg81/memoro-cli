@@ -61,3 +61,38 @@ describe('model on the status page', () => {
     assert.ok(lines.some((line) => line.includes('…')), 'expected the meta row to be clipped');
   });
 });
+describe('a clock a session set for itself is on the page (D-0155)', () => {
+  const withClock = (wakeup, now) => {
+    const page = report('claude-fable-5');
+    page.areas[0].conversations[0].wakeup = wakeup;
+    return renderLines(page, { columns: 120, now }).join('\n');
+  };
+  it('names what it will run and when', () => {
+    const page = withClock({ prompt: 'npm run test:msr:contract', due_at: '2026-08-22T12:10:00.000Z' }, Date.parse('2026-08-22T12:01:00Z'));
+    assert.match(page, /⏰ wakeup in 9m: npm run test:msr:contract/u);
+  });
+  it('an overdue one is still shown — the session may be gone, the clock was set', () => {
+    assert.match(withClock({ prompt: 'poll CI', due_at: '2026-08-22T12:00:00.000Z' }, Date.parse('2026-08-22T12:05:00Z')), /⏰ wakeup overdue 5m: poll CI/u);
+  });
+  it('and nothing is said when none is set', () => {
+    assert.doesNotMatch(withClock(null, 1000), /wakeup/u);
+  });
+});
+
+describe('a worktree without its dependency tree says so on the page (D-0152)', () => {
+  const withTree = (dependencies) => {
+    const page = report('claude-fable-5');
+    page.areas[0].worktrees = [{
+      repo: 'memoro', path: '/x/api/memoro', branch: 'fix', is_git: true, git_common_dir: '/r/.git',
+      uncommitted: 0, unmerged_commits: 1, dependencies,
+    }];
+    return renderLines(page, { columns: 120, now: 61000 }).join('\n');
+  };
+  it('names it beside the branch', () => {
+    assert.match(withTree('missing'), /memoro  fix  1 unmerged  no node_modules/u);
+  });
+  it('and says nothing when the tree is there, or the question does not arise', () => {
+    assert.doesNotMatch(withTree('present'), /node_modules/u);
+    assert.doesNotMatch(withTree(null), /node_modules/u);
+  });
+});

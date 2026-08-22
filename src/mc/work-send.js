@@ -35,6 +35,7 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { writeFileAtomic } from './atomic-write.js';
+import { reservedRoleName } from './roles.js';
 import { inspectWorkArea } from './work-area.js';
 import { currentHolder } from './work-identity.js';
 import { backgroundTarget } from './work-open.js';
@@ -70,13 +71,40 @@ const SUBMIT_MS = 400;
  * `BOX_ROWS` and `BELOW_BOX` keep the search near the foot of the pane, so a
  * box drawn earlier in the conversation and scrolled up can never be read as
  * the one somebody is typing into. They are generous enough for a notice that
- * wrapped a few times and a TUI with a second row of hints under its box.
+ * wrapped a few times and a TUI with several rows under its box: the status
+ * line, a `/rc active` row, a ledger row and a row per running agent were
+ * measured on PM's pane, where a tolerance of three rows read as "could not
+ * find its prompt" and refused every knock.
  */
-const RULE = /^[^A-Za-z0-9]*[-─═+]{3,}[^A-Za-z0-9]*$/u;
+// A rule may carry one short label inside it: PM's box is drawn with its
+// upper border reading `──── PM ─`, and a rule that allowed no letters at all
+// missed that border, found the one above it, and answered "could not find
+// its prompt" to every knock on PM (measured 2026-08-22).
+const RULE = /^[^A-Za-z0-9]*[-─═+]{3,}(?:\s+\S{1,24}\s+[-─═+]+)?[^A-Za-z0-9]*$/u;
 const PROMPT_ROW = /^\s*(?:[|│]\s*)?[>❯»]\s?/u;
 const BOX_EDGE = /^\s*[|│]\s?/u;
 const BOX_ROWS = 8;
-const BELOW_BOX = 3;
+const BELOW_BOX = 10;
+
+/**
+ * The drawing is not the input (D-0151).
+ *
+ * A pane can show text after the prompt mark that is not in the input at all:
+ * an order already carried out, redrawn from an old frame, and redrawn again
+ * after `C-u` clears nothing. Three panes measured, all three; the guard read
+ * that ghost as somebody's draft and refused for a day, and the fleet was
+ * booked as waiting on a person who had typed nothing.
+ *
+ * So text in the box is a question, not an answer, and the question is put to
+ * the input itself: one character typed, the row read back, the character
+ * deleted. If the row became the character alone, the input was empty and the
+ * text was a drawing. If the character landed after the text, the text is
+ * real, and it is left exactly as it was. Measured by hand on the three panes
+ * and again before this was written: `x` replaces the ghost, `BSpace` removes
+ * the `x`, and the ghost is drawn back within half a second.
+ */
+const PROBE = 'x';
+const PROBE_ATTEMPTS = 5;
 
 /**
  * The pane is mid-answer, and that is not the same as unresponsive.
@@ -131,7 +159,15 @@ export function sendToArea({
   const target = backgroundTarget(name, { run: run ? (args) => run(args) : null });
   if (!target) return { ok: true, file, woke: false, reason: 'no-live-conversation' };
 
-  const woken = wakeConversation({ target, sender: sender.name, run, sleep });
+  // A singleton role's pane is the one pane somebody is *meant* to be sitting
+  // at — PM is the door to the person (K1.2), so a client on it is the normal
+  // state, not a sign that a knock would be noise. Rule 1 refused every knock
+  // on it for good (D-0013; measured on every round as "delivered, but did
+  // not knock: somebody is attached to it"). The exception is the role, never
+  // the sender, and rule 2 still guards whatever the person has typed.
+  const woken = wakeConversation({
+    target, sender: sender.name, run, sleep, attachedOk: reservedRoleName(name),
+  });
   return {
     ok: true,
     file,
@@ -202,6 +238,9 @@ function noticeFrom(sender) {
  *  1. is anybody attached? `tmux list-clients` answers it. A pane a person is
  *     sitting at is never woken — they are already here, the notice is noise,
  *     and the cleanup keystroke would land on their half-written sentence.
+ *     The one exception is a singleton role's pane (`attachedOk`): PM's pane
+ *     is attached by design, and a rule that never knocks it is the rule that
+ *     had PM reading its inbox only when somebody asked "status?".
  *  2. is the box empty, and can mc see that it is? Anything already in there —
  *     someone's draft, a notice an earlier wake gave up on — makes this wake
  *     refuse, because typing after it produces one pasted-together sentence.
@@ -222,7 +261,7 @@ function noticeFrom(sender) {
  * is told it was. Litter is a nuisance — and the next wake refuses on it rather
  * than pasting onto it — while deleting a sentence somebody was writing is not.
  */
-export function wakeConversation({ target, sender, run = null, sleep = null }) {
+export function wakeConversation({ target, sender, run = null, sleep = null, attachedOk = false }) {
   const tmux = run || ((args) => spawnSync('tmux', args, { encoding: 'utf8' }));
   const wait = sleep || ((ms) => { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); });
   const notice = noticeFrom(sender);
@@ -231,9 +270,14 @@ export function wakeConversation({ target, sender, run = null, sleep = null }) {
   // nothing to take back and nothing for the sender to worry about.
   const refuse = (reason) => ({ ok: false, guard: true, reason });
 
-  const clients = tmux(['list-clients', '-t', target, '-F', '#{client_name}']);
-  if (clients?.status !== 0) return refuse('could not tell whether anybody is attached to it');
-  if (String(clients.stdout || '').trim() !== '') return refuse('somebody is attached to it');
+  // `attachedOk` is the role-pane exception (D-0013), and it skips rule 1
+  // only: a pane meant to have a person at it is knocked like any other, and
+  // rule 2 is what keeps the knock off that person's half-written sentence.
+  if (!attachedOk) {
+    const clients = tmux(['list-clients', '-t', target, '-F', '#{client_name}']);
+    if (clients?.status !== 0) return refuse('could not tell whether anybody is attached to it');
+    if (String(clients.stdout || '').trim() !== '') return refuse('somebody is attached to it');
+  }
 
   // Read last, immediately before typing: whatever gap remains between looking
   // and typing is the gap, and there is no reason to make it any wider.
@@ -241,7 +285,12 @@ export function wakeConversation({ target, sender, run = null, sleep = null }) {
   if (before === null) return refuse('could not read the conversation');
   const opening = readBox(before);
   if (opening === null) return refuse('could not find its prompt to check it was empty');
-  if (opening.text !== '') return refuse('there is already something in its prompt');
+  if (opening.text !== '') {
+    // Text in the drawing. Ask the input whether it is really there (D-0151).
+    const verdict = probeInput(tmux, target, wait);
+    if (verdict === 'text') return refuse('there is already something in its prompt');
+    if (verdict !== 'empty') return refuse('could not tell whether its prompt was empty');
+  }
 
   // How many times this exact notice is already on screen above the box.
   //
@@ -336,6 +385,32 @@ export function wakeConversation({ target, sender, run = null, sleep = null }) {
     return giveUp('the notice left the prompt without becoming a turn', null);
   }
   return giveUp('it stayed in the prompt', seen);
+}
+
+/**
+ * Is the text drawn in the box in the input, or only in the drawing?
+ *
+ * Returns `'empty'` (the drawing lied, the input is clear), `'text'` (the text
+ * is real), or `'unknown'` (the probe was never seen, so nothing is claimed).
+ * The probe character is deleted on every path, including the unknown one: it
+ * was typed, and leaving it is the one outcome this must not produce. On a
+ * real draft that is one character appended and removed again; on a ghost the
+ * ghost comes back on its own.
+ */
+function probeInput(tmux, target, wait) {
+  const typed = tmux(['send-keys', '-t', target, '-l', PROBE]);
+  if (typed?.status !== 0) return 'unknown';
+  let verdict = 'unknown';
+  for (let attempt = 0; attempt < PROBE_ATTEMPTS; attempt += 1) {
+    wait(DRAW_MS);
+    const pane = readPane(tmux, target);
+    const text = pane === null ? null : promptText(pane);
+    if (text === null) continue;
+    if (text === PROBE) { verdict = 'empty'; break; }
+    if (text.endsWith(PROBE)) { verdict = 'text'; break; }
+  }
+  tmux(['send-keys', '-t', target, 'BSpace']);
+  return verdict;
 }
 
 /**

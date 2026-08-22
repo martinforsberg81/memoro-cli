@@ -9,6 +9,8 @@
  * output is not a terminal. A page piped into a file or read by a session
  * should contain what it says and nothing else.
  */
+import { dueIn } from './wakeup.js';
+
 const SGR = {
   reset: '[0m',
   bold: '[1m',
@@ -117,6 +119,13 @@ export function renderLines(report, {
         const said = clip(item.said, wide - 8);
         lines.push(`      ${item.state === 'idle' ? c(said, 'grey') : said}`);
       }
+      // The clock it set for itself, and what the clock will run (D-0155).
+      // A timer nobody can see is how a suite ran eleven times unasked.
+      if (item.wakeup) {
+        const when = dueIn(item.wakeup, now);
+        const row = `⏰ wakeup${when ? ` ${when}` : ''}: ${item.wakeup.prompt || '(no prompt)'}`;
+        lines.push(`      ${c(clip(row, wide - 8), 'yellow')}`);
+      }
     }
     lines.push('');
   }
@@ -145,6 +154,8 @@ function where(area) {
     worktree.branch || '(detached)',
     worktree.uncommitted ? `${worktree.uncommitted} uncommitted` : null,
     worktree.unmerged_commits ? `${worktree.unmerged_commits} unmerged` : null,
+    // A suite run here prints a number that is not a measurement (D-0152).
+    worktree.dependencies === 'missing' ? 'no node_modules' : null,
   ].filter(Boolean).join('  ')));
   return parts.join('   ·   ');
 }

@@ -44,6 +44,88 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   lowering it is a paste. A repository with no ratchet behaves exactly as
   before; one whose ratchet will not parse stops the round rather than reading
   as an empty floor and failing everything on a typo.
+- `mc repo merge` says what it merged **into**, every time. A round on a
+  stacked pull request said *merged as 7dcbf96* — true, and into its base
+  branch `pm-heartbeat`, which everyone including PM read as main; the fix
+  had to be re-landed. The progress line, the verb's output and the merge
+  log line now name the base (`merged #363 into pm-heartbeat as 7dcbf96`,
+  `Squash-merge into \`pm-heartbeat\` → …`), and when that base is not the
+  branch the remote points HEAD at, a warning says so in its own words:
+  *this landed on a branch, not on main*. A default git cannot name is
+  reported as unknown, never assumed — a guess would be the very assumption
+  the warning exists to catch. The report carries `merged_into`,
+  `default_branch` and `off_default`. Nothing is blocked: a stacked merge is
+  sometimes meant, and the round's job is to make it impossible to misread.
+- The gate runs the pull request's own tests (D-0157). The suite answers
+  "did anything else break?"; it had never answered "is this change
+  proved?" — `test:msr:contract` globs some directories and not others, and
+  #10803's tests lived in `tests/ui/`, one it does not glob: the same count
+  as the day before, with 114 new test lines. Now every `*.test.js` (`.mjs`,
+  `.cjs`) the PR adds or changes, wherever it lies, is run on the candidate
+  after the suite, from the same diff that counts red — no directory list,
+  which would fix yesterday's hole and make tomorrow's. Held to the suite's
+  own rule: a run that never summarised or summarised nothing is a stop, and
+  one red among them stops the round with the whole suite green
+  (`pr-tests`). A PR that touches no test file is recorded as `files: []`
+  and said in the progress, never left blank. The files run with the flags
+  the repository's own `test` script gives node (`--import`, `--require`,
+  `--conditions`) and without its globs. The report carries `pr_tests`:
+  files, totals, red, exit code. This does not replace the contract suite
+  and does not make it differential — D-0138 stands on its own.
+- `mc status` shows the clock a session set for itself (D-0155). A Claude
+  conversation can schedule its own next turn — `ScheduleWakeup`, a prompt
+  and a delay — and nothing outside its transcript knew: one session ran the
+  full contract suite eleven times that way, on an eight-gigabyte machine,
+  with the suite right held by another area, and its pane looked idle the
+  whole time. The board now reads the last `ScheduleWakeup` in the
+  transcript's tail: set and not stopped and not yet rung, it is a row under
+  the conversation — `⏰ wakeup in 9m: npm run test:msr:contract` — in
+  yellow, overdue ones included, since a clock that was set and a session
+  that is gone is its own finding. `--json` carries it as `wakeup`
+  (`prompt`, `delay_s`, `set_at`, `due_at`, `reason`). A `stop` clears it;
+  the prompt arriving as a user turn means it rang. Read against the
+  eleven-run transcript: the clock before its stop, null after, eleven rings.
+- A suite is not believed in a worktree without its dependency tree (D-0152).
+  Run there it does not fail, it shrinks: 2162 tests and a tidy number, where
+  206 never ran and were not counted as skipped; 2368/2368 once the tree was
+  linked. The gate round now checks, after preparation and before either
+  run, that a manifest declaring dependencies has a `node_modules` to be found
+  in, and **stops** with `dependencies` if not — unless the declaration vouches
+  (`prepare: null`, with its evidence) that the suite runs without one, in
+  which case the round says so in its progress rather than assuming. And
+  `mc status` writes `no node_modules` beside a worktree whose manifest
+  declares dependencies and has no tree (a `dependencies` field on the page:
+  `missing`, `present`, or null where the question does not arise), so the
+  state PM measured by hand across twenty-seven worktrees is on the board.
+  What mc cannot do is refuse a suite a session starts itself in its own
+  worktree; that preflight belongs to the repository's own test script.
+- The PM heartbeat wakes PM (D-0013). Two things stood between a report in
+  `pm/inbox/` and PM reading it: the wake guard's first rule refused every
+  knock on a pane a client is attached to — and PM's pane is attached by
+  design, so every round of `mc watch pm` ended in *delivered, but did not
+  knock: somebody is attached to it* — and the round itself ran on a
+  thirty-minute clock, so a report landing a minute after a round waited
+  twenty-nine. Now a singleton role's pane (`pm`, `pm-helper`) is knocked
+  with a client attached; the exception is the role, never the sender, and
+  the empty-prompt rule still guards whatever the person has typed. And the
+  round's wait ends at a new file in the inbox: the file is what wakes the
+  round, the half hour is the floor. A loop asked for N rounds also stops
+  after the Nth instead of sleeping one more interval first.
+- The wake guard no longer decides prompt-emptiness from the drawing (D-0151).
+  A pane can show an order after the prompt mark that was carried out long
+  ago — redrawn from an old frame, back again after `C-u` — and the guard read
+  it as somebody's draft: *delivered, but did not knock: there is already
+  something in its prompt*, for a day, on three panes that were empty and
+  ready, while the fleet was booked as waiting on a person who had typed
+  nothing. Text in the box is now a question put to the input: one character
+  typed, the row read back, the character deleted. A row that became the
+  character alone was empty and is knocked; a row that kept its text is a
+  real draft, refused as before and left exactly as it was; a probe never
+  drawn claims nothing, in its own words. Measured by hand on three live
+  panes before building and again after. Also: the box is found under up to
+  ten trailing rows instead of three — PM's pane carries a status line, a
+  `/rc active` row, a ledger row and a row per running agent, and the old
+  tolerance answered every knock with *could not find its prompt*.
 - `mc pm new` and `mc pm-helper new` — a reliable way to start a **fresh**
   conversation in a singleton role. Every door into the role meant "take me to
   the PM": attach if it runs, resume the newest if it stopped, create if it
@@ -74,6 +156,17 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   running it refuses rather than quietly attaching to the other conversation.
 
 ### Fixed
+- `mc work <name> <id>` no longer joins whatever is running instead of the
+  conversation it was given. It attached, silently: the background branch never
+  looked at the id, so the user landed in some other conversation and nothing
+  from the outside said so — the last of the four D-0100 datapoints. It now
+  refuses, and names both ways on: join what is running (`mc work <name>`), or
+  stop it and open the one asked for. mc does not guess whether the running
+  session happens to hold that conversation — it stores nothing, and a session
+  started fresh names no id anywhere — so it says that rather than pretending
+  to know. An id matching nothing in the area is still its own error, before
+  anything else is said. `--resume <id>` is the same request and gets the same
+  answer.
 - `mc work <name> new` no longer ignores `new` when that work is running in the
   background. It printed *joining …* and attached: the background branch
   returned before the choice was ever read, so a stated choice passed and the
