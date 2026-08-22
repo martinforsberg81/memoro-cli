@@ -45,7 +45,7 @@ started in it. mc stores nothing else, because nothing else is mc's to know.
 | `mc repo claim <repo> "<what for>"` | Hold the gate round on a repository. Refused if someone else holds it. |
 | `mc repo release <repo> [--force]` | Give it back; `--force` takes it from another holder and is logged. |
 | `mc repo who <repo>` | Who holds it, for what, since when — and whether the holder is still working. `--json`. |
-| `mc repo merge <repo> <pr>` | Run the test gate and, only if it is green, squash-merge, deploy-pull and log it. `--check` gates and stops. `--json`. |
+| `mc repo merge <repo> <pr>` | Run the test gate and, only if it is green, squash-merge, deploy-pull and log it — saying what it merged *into*, with a warning when that is not the default branch. `--check` gates and stops. `--json`. |
 | `mc watch pm start \| stop \| status` | The PM round: every 30 minutes, or as soon as a new file lands in `pm/inbox/`, it commits `pm/`, runs `mc doctor`, counts `pm/inbox/`, delivers the guard's notices and knocks once if something is new. `--interval <seconds>` on start; `--json` on status. |
 
 `mc work release` keeps a worktree that is in use, has uncommitted changes, or
