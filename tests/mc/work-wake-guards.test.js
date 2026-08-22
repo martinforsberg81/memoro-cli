@@ -10,7 +10,8 @@
  *     clears the whole line, would have deleted it.
  *
  * Hence the four rules asserted below. A pane with a client attached is never
- * woken. A pane whose box is not visibly empty is never woken, whoever put the
+ * woken — except a singleton role's, which is attached by design and would
+ * otherwise never be woken at all (D-0013). A pane whose box is not visibly empty is never woken, whoever put the
  * text there. `C-u` is pressed only on text mc has just read back and can
  * prove is its own notice. And waking happens because a sender asked for it,
  * not as a free extra on every send — with every refusal printed, because a
@@ -85,6 +86,23 @@ describe('a pane somebody is sitting at is not mc\'s to type into', () => {
     // answered before mc had any reason to read it.
     assert.deepEqual(talk.keys(), []);
     assert.equal(talk.captures(), 0);
+  });
+
+  it('with attachedOk the question is not asked, and rule 2 still is', () => {
+    // The role-pane exception, at the function: rule 1 is skipped, not
+    // answered differently, and the empty-box rule stands behind it.
+    const attended = conversation({
+      paint: ({ typed, captures }) => (captures <= 2 ? pane({ typed }) : pane({ sent: [NOTICE] })),
+      clients: '/dev/ttys009\n',
+    });
+    const woken = wakeConversation({ target: 'mc-pm', sender: 'alpha', sleep: () => {}, run: attended.run, attachedOk: true });
+    assert.deepEqual(woken, { ok: true, attempts: 1 });
+    assert.ok(!attended.calls.some((args) => args[0] === 'list-clients'));
+
+    const typing = conversation({ paint: ({ typed }) => pane({ typed }), clients: '/dev/ttys009\n', typedAlready: 'status?' });
+    const refused = wakeConversation({ target: 'mc-pm', sender: 'alpha', sleep: () => {}, run: typing.run, attachedOk: true });
+    assert.equal(refused.reason, 'there is already something in its prompt');
+    assert.deepEqual(typing.keys(), []);
   });
 
   it('a pane nobody is attached to is woken as before', () => {
@@ -301,12 +319,51 @@ describe('waking is asked for, and every refusal is printed', () => {
   });
 
   it('a guard that fired says which one and why', () => {
-    const fx = fixture({ alive: ['pm'], clients: ['/dev/ttys004'] });
+    const fx = fixture({ alive: ['alpha'], clients: ['/dev/ttys004'] });
+    try {
+      const sent = fx.send(['alpha', '--wake', 'wake up']);
+      assert.equal(sent.status, 0, sent.stderr);
+      assert.equal(fx.messages('alpha').length, 1, 'the message must survive a refusal');
+      assert.match(sent.stdout, /delivered, but did not knock: somebody is attached to it/u);
+      assert.deepEqual(fx.tmux.keys(), []);
+    } finally { fx.cleanup(); }
+  });
+
+  // The role-pane exception (D-0013). PM's pane is attached by design — it is
+  // the door to the person — so "somebody is attached" is its normal state,
+  // and a rule that refuses on it refuses every knock PM will ever get. Measured
+  // on every round of mc watch pm before this: "delivered, but did not knock:
+  // somebody is attached to it", while four reports sat unread in the inbox.
+  it('the pm\'s pane is knocked even with a client attached', () => {
+    const fx = fixture({ alive: ['pm'], clients: ['/dev/ttys009'] });
+    try {
+      const sent = fx.send(['pm', '--wake', 'SLUTRAPPORT — klar']);
+      assert.equal(sent.status, 0, sent.stderr);
+      assert.match(sent.stdout, /woke pm/u);
+      assert.equal(fx.tmux.submitted().length, 1);
+      // Rule 1 was not consulted at all: its answer would not change anything.
+      assert.ok(!fx.tmux.calls().some((line) => line.startsWith('list-clients')), 'nobody asked who was attached');
+    } finally { fx.cleanup(); }
+  });
+
+  it('but what the person at the pm\'s pane has typed is still not typed over', () => {
+    const fx = fixture({ alive: ['pm'], clients: ['/dev/ttys009'], typedAlready: 'merga #10799 och' });
     try {
       const sent = fx.send(['pm', '--wake', 'wake up']);
       assert.equal(sent.status, 0, sent.stderr);
-      assert.equal(fx.messages('pm').length, 1, 'the message must survive a refusal');
-      assert.match(sent.stdout, /delivered, but did not knock: somebody is attached to it/u);
+      assert.equal(fx.messages('pm').length, 1);
+      assert.match(sent.stdout, /delivered, but did not knock: there is already something in its prompt/u);
+      assert.deepEqual(fx.tmux.keys(), []);
+      assert.equal(fx.tmux.prompt(), 'merga #10799 och', 'the half-written sentence is untouched');
+    } finally { fx.cleanup(); }
+  });
+
+  it('and the exception is the role, not a favour to any other attached pane', () => {
+    const fx = fixture({ alive: ['alpha'], clients: ['/dev/ttys009'] });
+    try {
+      const sent = fx.send(['alpha', '--wake', 'wake up']);
+      assert.equal(sent.status, 0, sent.stderr);
+      assert.match(sent.stdout, /did not knock: somebody is attached to it/u);
       assert.deepEqual(fx.tmux.keys(), []);
     } finally { fx.cleanup(); }
   });
@@ -322,9 +379,9 @@ describe('waking is asked for, and every refusal is printed', () => {
   });
 
   it('--json carries the same verdict for anything reading it', () => {
-    const fx = fixture({ alive: ['pm'], clients: ['/dev/ttys004'] });
+    const fx = fixture({ alive: ['alpha'], clients: ['/dev/ttys004'] });
     try {
-      const sent = fx.send(['pm', '--wake', '--json', 'wake up']);
+      const sent = fx.send(['alpha', '--wake', '--json', 'wake up']);
       const result = JSON.parse(sent.stdout);
       assert.equal(result.woke, false);
       assert.equal(result.guard, true);
