@@ -41,6 +41,7 @@ import { describeAge, describeSize } from '../conversations.js';
 import { openTask } from '../task-log.js';
 import { currentHolder } from '../work-identity.js';
 import { sendToArea } from '../work-send.js';
+import { toolProcesses } from '../work-status.js';
 import { stopWork } from '../work-stop.js';
 import { interactive, ask, select } from '../prompt.js';
 import { workRoot } from '../paths.js';
@@ -86,9 +87,13 @@ export async function run(argv, deps = {}) {
     }
     stdout.write(`${workRoot()}\n`);
     for (const area of areas) {
-      stdout.write(`\n  ${area.name}\n`);
+      // Running is marked on the area, which mc knows for certain; which of
+      // its conversations the session holds it does not (D-0100), so the
+      // rows say only what a transcript written this minute says.
+      const running = backgroundTarget(area.name);
+      stdout.write(`\n  ${area.name}${running ? `   ● running as ${running} — mc work ${area.name} joins it` : ''}\n`);
       for (const worktree of area.worktrees) stdout.write(`    ${describe(worktree)}\n`);
-      for (const item of area.conversations) stdout.write(`    · ${conversationLine(item)}\n`);
+      for (const item of area.conversations) stdout.write(`    · ${conversationLine(item, { running: Boolean(running) })}\n`);
     }
     stdout.write('\n');
     return 0;
@@ -145,6 +150,10 @@ async function runVerb(opts, { stdout, stderr }) {
       stdout.write(`mc: nobody was woken — ${opts.name} reads it at its next turn (--wake knocks)\n`);
     } else if (result.reason === 'no-live-conversation') {
       stdout.write(`mc: nothing is running in ${opts.name} — it reads its inbox when it starts\n`);
+    } else if (result.queued) {
+      // Not "did not knock": the knock is owed, and the board shows it owed.
+      stdout.write(`mc: queued — a draft is in ${opts.name}'s prompt, so nothing was typed; it will be knocked when the prompt clears\n`);
+      stdout.write(`mc: until then mc status shows ${opts.name} as unreachable by wake (since ${result.since.slice(11, 16)}Z)\n`);
     } else if (result.reason === 'not-addressable') {
       // Not "nothing is running": something is, and mc cannot reach it.
       const [first] = result.processes;
@@ -461,7 +470,8 @@ async function startSomething({ stdout, stderr }) {
  * One conversation is opened rather than offered. One repository is used
  * rather than listed. A flag or an argument answers any of it in advance.
  */
-export async function openArea(name, opts, { stdout, stderr }) {
+export async function openArea(name, opts, deps) {
+  const { stdout, stderr } = deps;
   // The role workspaces have their own doors (`mc pm`, `mc pm-helper`);
   // opening them here would start a conversation without the role's overlay
   // and semantics, wearing the role's name. Designed difference, not
@@ -524,10 +534,38 @@ export async function openArea(name, opts, { stdout, stderr }) {
   }
   if (!worktree) worktree = { repo: null, path: area.path, is_git: false };
 
+  // Is somebody already working here, outside mc? The repo lease protects
+  // the merge queue and says nothing about who is sitting in a worktree
+  // (D-0154): a session started in an area whose worktree belonged to a
+  // person's own session switched the branch under them mid-work. A clean
+  // status is not "free" — it can belong to a session that is just thinking.
+  // So the tool processes standing in this area are asked, the same way the
+  // status board finds them, and a session mc did not start here is an
+  // occupant. mc's own background session is not one: it is what `mc work
+  // <name>` joins, and `new` replaces it in place, knowingly. Refused, with
+  // the way through named, unless `--anyway` says the person knows.
+  if (!opts.anyway && !backgroundTarget(name)) {
+    const here = [area.path, ...area.worktrees.map((item) => item.path)];
+    const occupants = (deps.occupants || toolProcesses)(here);
+    if (occupants.length > 0) {
+      const [first] = occupants;
+      stderr.write(`mc: ${name} is occupied — ${first.name} (pid ${first.pid}) is working in ${first.directory}, started outside mc\n`);
+      if (occupants.length > 1) stderr.write(`mc: and ${occupants.length - 1} more\n`);
+      stderr.write(`mc: one session per workplace (D-0154): a second one here would change branches under the first\n`);
+      stderr.write(`mc: join that one from its own terminal, or  mc work ${name} --anyway  if you know it is yours to share\n`);
+      return 1;
+    }
+  }
+
   // Several conversations is the one thing mc cannot guess. One is not a
   // question, and neither is none.
   let pick = opts.pick;
-  if (!pick && area.conversations.length > 1 && interactive()) {
+  // Not while something runs: `mc work <name>` then means "take me in", and
+  // a menu of four conversations asking which one is a question mc cannot
+  // answer either (it stores nothing about which one the session holds) —
+  // a person picked one, was refused as #361 requires, and stood outside a
+  // live session with an answer waiting in its inbox (2026-08-22).
+  if (!pick && area.conversations.length > 1 && interactive() && !backgroundTarget(name)) {
     const items = area.conversations.map((item, index) => ({
       key: index + 1,
       name: item.id.slice(0, 8),
@@ -791,13 +829,20 @@ function stakes(result, name) {
  * five it was unanswerable. The first thing said in a conversation is what
  * anyone remembers it by, and both tools keep it.
  */
-function conversationLine(item) {
+function conversationLine(item, { running = false } = {}) {
   const tool = item.tool === 'claude-code' ? 'claude' : item.tool;
   const head = `${item.id.slice(0, 8)}  ${tool.padEnd(6)}  ${describeAge(item.updated_ms).padEnd(9)} ${describeSize(item.bytes).padStart(7)}`;
-  if (!item.label) return head;
+  // The one the live session is writing to, by the only evidence mc has: a
+  // transcript touched in the last two minutes while the area runs.
+  const live = running && Number.isFinite(item.updated_ms) && Date.now() - item.updated_ms < LIVE_MS;
+  const mark = live ? '   ● live' : '';
+  if (!item.label) return `${head}${mark}`;
   const text = item.label.length > 48 ? `${item.label.slice(0, 47)}…` : item.label;
-  return `${head}   ${text}`;
+  return `${head}   ${text}${mark}`;
 }
+
+/** The status board's own rule for "written by a session that is open". */
+const LIVE_MS = 2 * 60 * 1000;
 
 function describe(worktree) {
   if (!worktree.is_git) return `${worktree.repo}  (not a git worktree)`;
@@ -809,7 +854,7 @@ function describe(worktree) {
 
 export function parseArgs(argv) {
   const scanned = scanArgs(argv, {
-    booleans: ['--json', '--apply', '--tmux', '--wake', '--task'],
+    booleans: ['--json', '--apply', '--tmux', '--wake', '--task', '--anyway'],
     values: ['--repo', '--from'],
     strictValues: ['--model', '--resume'],
     toolSugar: true,
@@ -823,6 +868,8 @@ export function parseArgs(argv) {
     trackTask: scanned.flags.task,
     tool: scanned.flags.tool, model: scanned.flags.model, resume: scanned.flags.resume,
     apply: scanned.flags.apply, json: scanned.flags.json,
+    // Open a workplace somebody else is already sitting in (D-0154).
+    anyway: scanned.flags.anyway,
   };
   if (scanned.error) return { ...opts, error: scanned.error };
   const { positional } = scanned;

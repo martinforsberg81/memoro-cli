@@ -7,6 +7,19 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- `mc work <name>` refuses a workplace somebody is already sitting in
+  (D-0154). The repo lease protects the merge queue and says nothing about
+  who is in a worktree: a session started in an area whose worktree belonged
+  to a person's own session — from their terminal, invisible to mc's
+  background naming — switched the branch under them mid-work. Opening an
+  area now asks which tool processes stand in it or its worktrees, the way
+  the status board finds them, and one mc did not start there is an
+  occupant: *alpha is occupied — claude (pid 4242) is working in …, started
+  outside mc*, with the way through named. `--anyway` is that way, for the
+  person who knows the workplace is theirs to share. mc's own background
+  session is not an occupant — `mc work <name>` joins it and `new` replaces
+  it in place, as before. A clean `git status` was never "free"; now the
+  question is asked of the processes rather than of the tree.
 - A session started outside mc's naming is found by where it stands
   (D-0136 point 2). Nine sessions ran in tmux sessions called `clean`,
   `ops`, `vocab`, … and every `mc work send --wake` to them delivered the
@@ -20,6 +33,30 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   with no pane at all, and that is said as what it is — *claude (pid N) is
   running in <name> outside tmux — mc has no pane to knock on* — never as
   nothing running.
+
+- **A wake refused on a draft is queued, not dropped — and the session shows
+  as unreachable until it lands.** The guard was right to refuse (the draft is
+  somebody's), but the consequence was a session nobody could reach: the
+  answer sat in its inbox for twenty minutes, nothing told it to read, and
+  reaching it by hand cleared the draft the guard existed to protect
+  (2026-08-22, Martin's order). Now `mc work send --wake` on a real draft
+  says *queued — a draft is in <name>'s prompt, so nothing was typed; it will
+  be knocked when the prompt clears* (`--json`: `queued`, `since`), the entry
+  lives in `<mc home>/watch/pending-wakes.json`, the session guard's round
+  tries it first every time, a knock that lands on its own forgets it, and a
+  target that stopped is dropped (the file is still in the inbox). `mc
+  status` writes *✉ draft in prompt — unreachable by wake since 21:14 (wake
+  queued; it lands when the prompt clears)* under the area, in red, so the
+  state is on the board and not in one sender's scrollback. There is no
+  `--anyway` for this one, deliberately: typing into a draft and pressing
+  Enter *sends the draft*, and a flag that did that would be the harm with a
+  name.
+- `mc work <name>` joins what is running instead of asking which of four
+  conversations — a question mc cannot answer either (D-0100) — and then
+  refusing the pick as #361 requires; a person stood outside a live session
+  that way with an answer waiting in its inbox. `mc work` marks a running
+  area (*● running as mc-<name> — mc work <name> joins it*) and the
+  conversation a transcript written in the last two minutes says is live.
 
 ### Changed
 - **The test gate no longer says `GREEN` over standing red names.** The rule it

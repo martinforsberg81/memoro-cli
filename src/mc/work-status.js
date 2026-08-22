@@ -27,6 +27,7 @@ import { promisify } from 'node:util';
 import { lastModel, listConversations, readTailEntries } from './conversations.js';
 import { mcHome, workRoot } from './paths.js';
 import { readSuiteLease } from './suite-lease.js';
+import { pendingWakeFor } from './wake-queue.js';
 import { dependencyTree } from './dependency-tree.js';
 import { areaRoleName } from './roles.js';
 import { openTaskCount } from './task-log.js';
@@ -400,6 +401,10 @@ export async function workStatus({ env = process.env, names = null, git: askGit 
           dependencies: dependencyState(worktree.path),
         })),
         conversations,
+        // A wake the guard refused on a draft and queued: the session is
+        // unreachable by wake since then, and the page says so rather than
+        // leaving the state in one sender's scrollback.
+        pending_wake: pendingWakeFor(area.name, { root: env.MC_HOME || mcHome() }),
         // What a person scanning the page is looking for: is anything here
         // stopped and waiting for them?
         waiting: conversations.some((item) => item.state === 'waiting'),

@@ -35,7 +35,9 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { writeFileAtomic } from './atomic-write.js';
+import { mcHome } from './paths.js';
 import { reservedRoleName } from './roles.js';
+import { dropWake, enqueueWake, flushWakeQueue } from './wake-queue.js';
 import { inspectWorkArea } from './work-area.js';
 import { currentHolder } from './work-identity.js';
 import { backgroundTarget } from './work-open.js';
@@ -181,6 +183,27 @@ export function sendToArea({
   const woken = wakeConversation({
     target, sender: sender.name, run, sleep, attachedOk: reservedRoleName(name),
   });
+  // A draft in the prompt is the one refusal that is not the sender's to
+  // argue with and not the recipient's to notice: the file is in the inbox
+  // and nothing will say so until the draft goes. So the wake is queued, the
+  // guard's round tries it again, and the board shows the session as
+  // unreachable meanwhile. Nothing types over the draft, ever.
+  if (!woken.ok && woken.guard && woken.reason === DRAFT_REASON) {
+    const queued = enqueueWake({ name, target, sender: sender.name, reason: woken.reason, root: queueRoot(env), now });
+    return {
+      ok: true,
+      file,
+      target,
+      woke: false,
+      reason: 'queued',
+      guard: true,
+      queued: true,
+      since: queued.entry.since,
+      left: false,
+    };
+  }
+  // A knock that landed is all a queued one was waiting to do.
+  if (woken.ok) dropWake({ name, root: queueRoot(env) });
   return {
     ok: true,
     file,
@@ -192,6 +215,46 @@ export function sendToArea({
     // sitting in the recipient's box, because mc would not take it back out.
     left: woken.left ?? false,
   };
+}
+
+/** The one refusal that is queued rather than reported and dropped. */
+const DRAFT_REASON = 'there is already something in its prompt';
+
+function queueRoot(env) {
+  return env?.MC_HOME || mcHome();
+}
+
+/**
+ * Try every queued wake once — called by the session guard's round.
+ *
+ * A wake lands when the prompt has cleared, and the entry goes. A target that
+ * no longer runs is dropped too: there is nothing to knock on, and the file
+ * is still in the inbox for the session's next boot. Everything else stays
+ * queued with one more attempt counted, including a draft still there.
+ */
+export function flushPendingWakes({ root = mcHome(), run = null, sleep = null, now = new Date(), log = () => {} } = {}) {
+  const outcomes = flushWakeQueue({
+    root,
+    now,
+    attempt: (entry) => {
+      const target = backgroundTarget(entry.name, { run: run ? (args) => run(args) : null });
+      if (!target) return { ok: false, gone: true, reason: 'nothing is running there any more' };
+      const woken = wakeConversation({
+        target, sender: entry.sender || 'mc', run, sleep, attachedOk: reservedRoleName(entry.name),
+      });
+      return { ok: woken.ok, reason: woken.ok ? null : woken.reason };
+    },
+  });
+  for (const outcome of outcomes) {
+    if (outcome.outcome === 'woke') log(`queued wake landed in ${outcome.name} (queued since ${outcome.since})`);
+    else if (outcome.outcome === 'gone') log(`queued wake for ${outcome.name} dropped — ${outcome.reason}`);
+  }
+  return outcomes;
+}
+
+/** The queued wake for an area is forgotten once something else woke it. */
+export function forgetPendingWake(name, { root = mcHome() } = {}) {
+  return dropWake({ name, root });
 }
 
 /**
