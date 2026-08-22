@@ -7,6 +7,10 @@
  * handoff had not happened. `mc work <name> new` had the same shape — against a
  * background session it printed *joining …* and attached, with `new` never read.
  *
+ * The same rule reaches `mc work <name> <id>`: a conversation named against a
+ * running session is refused with both ways on, rather than joined — landing in
+ * whatever happens to run is the outcome nobody can see is wrong from outside.
+ *
  * What is asserted here is the whole mechanism: the window is respawned rather
  * than the session recreated (so an attached client rides across it), the index
  * is the one tmux reports rather than 0, the predecessor is ended politely from
@@ -305,9 +309,24 @@ describe('mc pm <conversation id> — the way back', () => {
       const result = runMcCli(['pm', PREDECESSOR.slice(0, 8)], fx.env);
       assert.equal(result.status, 1, result.stdout);
       assert.match(result.stderr, /one conversation at a time/u);
+      assert.match(result.stderr, /join what is running:  mc pm/u);
       assert.match(result.stderr, /mc work stop pm/u);
       assert.deepEqual(called(fx, 'respawn-window'), []);
       assert.deepEqual(called(fx, 'attach-session'), []);
+    } finally { fx.cleanup(); }
+  });
+
+  it('and an unknown id says so before telling anyone to stop a live pm', () => {
+    // "Stop it first" for an id that names nothing sends somebody to kill
+    // their PM to discover a typo. The id is checked first.
+    const fx = fixture({ running: true });
+    try {
+      const home = makeHome(fx);
+      recordConversation(fx, home, PREDECESSOR);
+      const result = runMcCli(['pm', 'deadbeef'], fx.env);
+      assert.equal(result.status, 1, result.stdout);
+      assert.match(result.stderr, /no conversation in the pm's home starts with deadbeef/u);
+      assert.doesNotMatch(result.stderr, /stop it first/u);
     } finally { fx.cleanup(); }
   });
 
@@ -351,6 +370,53 @@ describe('mc work <name> new — the same word, the same meaning', () => {
       assert.ok(existsSync(transcript), 'nothing may be deleted');
       // Politely, from outside, exactly as the role door does it.
       assert.ok(fx.tmux.keys().some((key) => key.includes('/exit')));
+    } finally { fx.cleanup(); }
+  });
+
+  it('a conversation named by id is refused, never silently swapped for another', () => {
+    // The other half of the same rule: joining would land in whatever is
+    // running, which is not what was asked for and may not even be the same
+    // conversation — and from the outside that outcome looks like success.
+    const fx = fixture({ running: true, area: 'alpha' });
+    try {
+      const home = join(fx.workRoot, 'alpha');
+      mkdirSync(home, { recursive: true });
+      recordConversation(fx, home, PREDECESSOR);
+      const result = runMcCli(['work', 'alpha', PREDECESSOR.slice(0, 8)], fx.env);
+      assert.equal(result.status, 1, `stdout:${result.stdout}\nstderr:${result.stderr}`);
+      assert.doesNotMatch(result.stderr, /joining alpha/u);
+      assert.match(result.stderr, /one conversation at a time/u);
+      // Both ways on are named: in to what is running, or through it.
+      assert.match(result.stderr, /join what is running:  mc work alpha/u);
+      assert.match(result.stderr, /mc work stop alpha/u);
+      assert.deepEqual(called(fx, 'attach-session'), [], 'nothing may be joined');
+      assert.deepEqual(called(fx, 'respawn-window'), [], 'and nothing replaced');
+    } finally { fx.cleanup(); }
+  });
+
+  it('--resume names the same thing and is refused the same way', () => {
+    const fx = fixture({ running: true, area: 'alpha' });
+    try {
+      const home = join(fx.workRoot, 'alpha');
+      mkdirSync(home, { recursive: true });
+      recordConversation(fx, home, PREDECESSOR);
+      const result = runMcCli(['work', 'alpha', '--resume', PREDECESSOR.slice(0, 8)], fx.env);
+      assert.equal(result.status, 1, result.stdout);
+      assert.match(result.stderr, /one conversation at a time/u);
+    } finally { fx.cleanup(); }
+  });
+
+  it('and an id that matches nothing says so, rather than talking about what runs', () => {
+    const fx = fixture({ running: true, area: 'alpha' });
+    try {
+      const home = join(fx.workRoot, 'alpha');
+      mkdirSync(home, { recursive: true });
+      recordConversation(fx, home, PREDECESSOR);
+      const result = runMcCli(['work', 'alpha', 'deadbeef'], fx.env);
+      assert.equal(result.status, 1, result.stdout);
+      assert.match(result.stderr, /no conversation in alpha starts with deadbeef/u);
+      assert.match(result.stderr, /mc work alpha lists what is there/u);
+      assert.deepEqual(called(fx, 'attach-session'), []);
     } finally { fx.cleanup(); }
   });
 

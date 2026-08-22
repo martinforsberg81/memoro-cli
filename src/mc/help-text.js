@@ -59,7 +59,10 @@ MAINTENANCE
   mc work <name> new --model <m>   …on a chosen model, passed to the tool as
                                     given; a resumed conversation stays on the
                                     model its transcript says it ran on
-  mc work <name> <id>              One particular conversation, by the id shown
+  mc work <name> <id>              One particular conversation, by the id shown.
+                                    While another is running there it is
+                                    refused, with both ways on: join what runs,
+                                    or stop it and open the one you named
   mc work <name> --resume <id>     The same, said explicitly — and the only way
                                     to name one with --tmux, where the rest of
                                     the line is the task. An id that matches

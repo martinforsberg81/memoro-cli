@@ -49,6 +49,17 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   running it refuses rather than quietly attaching to the other conversation.
 
 ### Fixed
+- `mc work <name> <id>` no longer joins whatever is running instead of the
+  conversation it was given. It attached, silently: the background branch never
+  looked at the id, so the user landed in some other conversation and nothing
+  from the outside said so — the last of the four D-0100 datapoints. It now
+  refuses, and names both ways on: join what is running (`mc work <name>`), or
+  stop it and open the one asked for. mc does not guess whether the running
+  session happens to hold that conversation — it stores nothing, and a session
+  started fresh names no id anywhere — so it says that rather than pretending
+  to know. An id matching nothing in the area is still its own error, before
+  anything else is said. `--resume <id>` is the same request and gets the same
+  answer.
 - `mc work <name> new` no longer ignores `new` when that work is running in the
   background. It printed *joining …* and attached: the background branch
   returned before the choice was ever read, so a stated choice passed and the

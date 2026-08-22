@@ -9,7 +9,8 @@
  *   mc work <name>                open it, asking only what it cannot know
  *   mc work <name> new            a new conversation — even against a
  *                                 running one, which it replaces in place
- *   mc work <name> <id>           one particular conversation
+ *   mc work <name> <id>           one particular conversation; refused while
+ *                                 another is running, never silently swapped
  *   mc work send <name> "<message>"  a message into its inbox; --wake knocks
  *   mc work add <name> <repo> [branch] [--from <ref>]
  *   mc work stop <name>              stop what is running; keep the work
@@ -682,6 +683,25 @@ export async function openArea(name, opts, { stdout, stderr }) {
         return 1;
       }
       return joined.code || 0;
+    }
+    // A conversation named by id is the other half of the same rule. Joining
+    // would land in whatever is running, which is not what was asked for and
+    // may not even be the same conversation — the one outcome nobody can see
+    // is wrong from the outside. mc cannot know which conversation a running
+    // session holds (it stores nothing, and a session started fresh names no
+    // id anywhere), so it says that plainly instead of guessing, and names
+    // both ways on: in to what is running, or through it to the one asked for.
+    if (pick) {
+      const named = area.conversations.find((item) => item.id.startsWith(pick)) || null;
+      if (!named) {
+        stderr.write(`mc: no conversation in ${name} starts with ${pick}\n`);
+        stderr.write(`mc: mc work ${name} lists what is there\n`);
+        return 1;
+      }
+      stderr.write(`mc: ${name} is running (${running}) — one conversation at a time, and it need not be ${named.id.slice(0, 8)}\n`);
+      stderr.write(`mc: join what is running:  mc work ${name}\n`);
+      stderr.write(`mc: or stop it first:  mc work stop ${name}  — then  mc work ${name} ${pick}\n`);
+      return 1;
     }
     // A live conversation cannot change model, and quietly attaching would
     // leave the user believing it did — working with the wrong model is the
