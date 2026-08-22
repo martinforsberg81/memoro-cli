@@ -72,6 +72,7 @@ export function gateRoot(root = mcHome()) {
 export async function runGate({
   repoPath,
   pr,
+  tests = null,
   holder = currentHolder(),
   root = mcHome(),
   env = process.env,
@@ -101,6 +102,7 @@ export async function runGate({
   const askGit = git || run('git');
   const askGh = gh || run('gh');
   const runSuite = suite || ((options) => realSuite({ ...options, env }));
+  const runTests = tests || ((options) => realTests({ ...options, env }));
 
   const report = {
     schema: GATE_SCHEMA,
@@ -115,6 +117,10 @@ export async function runGate({
     command: null,
     declaration: null,
     extra_gates: [],
+    // The pull request's own tests: every `*.test.js` it adds or changes, run
+    // on the candidate after the suite (D-0157). `files: []` when it touches
+    // none, which is said rather than left blank.
+    pr_tests: null,
     baseline: null,
     candidate: null,
     broke: [],
@@ -237,6 +243,17 @@ export async function runGate({
     say(`candidate: ${after.result.red.length} red, ${broke.length} of them new`);
 
     if (broke.length) return finish('red', `${broke.length} test${broke.length === 1 ? '' : 's'} red on the candidate and green on the baseline`);
+
+    // The pull request's own tests (D-0157). The suite answers "did anything
+    // else break?"; this answers "is this change proved?" — and a suite that
+    // globs some directories and not others had answered neither for a PR
+    // whose tests lived in one it did not glob: the same count as the day
+    // before, with 114 new test lines. So every `*.test.js` the PR adds or
+    // changes is run, wherever it lies, from the same diff that counts red.
+    // A list of directories would fix yesterday's hole and make tomorrow's.
+    const own = await ownTests({ git: askGit, tests: runTests, cwd: headDir, baseRef, say });
+    report.pr_tests = own.result;
+    if (!own.ok) return finish('pr-tests', own.reason);
 
     // Gates beyond the suite, on the candidate, under the same rule: one that
     // did not reach its own end is not an approval. A command that could not be
@@ -403,6 +420,106 @@ function trim(value) {
  * or from a file only the operator can write, which is the same trust boundary
  * the suite command already sits on.
  */
+/** A test file, by the name people actually give them. */
+const TEST_FILE = /\.test\.(?:js|mjs|cjs)$/u;
+
+/**
+ * The pull request's own tests, run on the candidate.
+ *
+ * The files come from the same diff that counts red: what the PR adds or
+ * changes against the base it is measured against (`--diff-filter=AM`, so a
+ * deleted test is not asked to run). Held to the suite's rule — a run that
+ * never summarised, or summarised nothing, is a stop, not an approval — and
+ * one red among them stops the round even with the whole suite green, because
+ * the suite never ran these and its green says nothing about them.
+ *
+ * A PR that touches no test file is recorded as exactly that, `files: []`,
+ * and the round goes on: that fact belongs to the reviewer, not to the gate.
+ */
+async function ownTests({ git, tests, cwd, baseRef, say }) {
+  const diff = git(['diff', '--name-only', '--diff-filter=AM', baseRef, 'HEAD'], { cwd });
+  if (diff?.status !== 0) {
+    return { ok: false, reason: 'could not list the files the pull request changes', result: null };
+  }
+  const files = String(diff.stdout || '').split('\n').map((line) => line.trim()).filter((line) => TEST_FILE.test(line));
+  if (files.length === 0) {
+    say('the pull request adds or changes no test file');
+    return { ok: true, result: { files, totals: null, red: [], exit_code: null } };
+  }
+  say(`running the pull request's own tests: ${files.length} file${files.length === 1 ? '' : 's'}`);
+  const run = await tests({ cwd, files, onLine: (line) => say(`pr tests: ${line}`) });
+  const totals = tapTotals(run.tap);
+  const red = redNames(run.tap);
+  const result = { files, totals, red, exit_code: run.code };
+  if (!totals.finished) return { ok: false, reason: 'the pull request\'s own tests never reached their summary', result };
+  if (!totals.tests) return { ok: false, reason: 'the pull request\'s own test files reported no tests at all', result };
+  if (red.length) {
+    return { ok: false, reason: `${red.length} of the pull request's own tests ${red.length === 1 ? 'is' : 'are'} red: ${red.slice(0, 3).join(', ')}${red.length > 3 ? ', …' : ''}`, result };
+  }
+  return { ok: true, result };
+}
+
+/**
+ * How the repository runs node tests, read from its own `test` script.
+ *
+ * A bare `node --test <file>` is not how every repository runs its tests:
+ * this one needs `--import ./tests/_isolate-home.mjs` or its tests write into
+ * the real home. So the flags the script gives node are kept — `--import`,
+ * `--require`, `--conditions`, the experimental ones — and the globs are not,
+ * since the files are the point. A script that is not a `node --test` line
+ * gets bare `node --test`, and the report names the files either way.
+ */
+function nodeTestFlags(cwd) {
+  let script = '';
+  try {
+    script = String(JSON.parse(readFileSync(join(cwd, 'package.json'), 'utf8')).scripts?.test || '');
+  } catch { return []; }
+  if (!/^node\s+(?:.*\s)?--test(?:\s|$)/u.test(script)) return [];
+  const tokens = script.slice(4).trim().split(/\s+/u);
+  const flags = [];
+  for (let i = 0; i < tokens.length; i += 1) {
+    const token = tokens[i];
+    if (token === '--test' || !token.startsWith('--')) continue;
+    if (token.startsWith('--test-reporter') || token.startsWith('--test-')) continue;
+    if (token.includes('=')) { flags.push(token); continue; }
+    flags.push(token);
+    if (['--import', '--require', '--conditions', '-C', '--loader'].includes(token) && tokens[i + 1]) {
+      flags.push(tokens[i + 1]);
+      i += 1;
+    }
+  }
+  return flags;
+}
+
+function realTests({ cwd, files, onLine = () => {}, env = process.env } = {}) {
+  return new Promise((resolve) => {
+    const clean = { ...env };
+    delete clean.NODE_TEST_CONTEXT;
+    const inherited = String(clean.NODE_OPTIONS || '')
+      .replace(/--test-reporter(-destination)?[=\s]\S+/gu, '')
+      .trim();
+    const child = spawn(process.execPath, ['--test', '--test-reporter=tap', ...nodeTestFlags(cwd), ...files], {
+      cwd,
+      env: { ...clean, NODE_OPTIONS: inherited },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let tap = '';
+    let pending = '';
+    child.stdout.setEncoding('utf8');
+    child.stdout.on('data', (chunk) => {
+      tap += chunk;
+      pending += chunk;
+      const lines = pending.split('\n');
+      pending = lines.pop() ?? '';
+      for (const line of lines) if (/^# (tests|pass|fail) /u.test(line)) onLine(line.trim());
+    });
+    child.stderr.setEncoding('utf8');
+    child.stderr.on('data', () => { /* the verdict is in the TAP */ });
+    child.on('error', (error) => resolve({ code: -1, tap, error: error.message }));
+    child.on('close', (code) => resolve({ code, tap }));
+  });
+}
+
 function shell(command, { cwd, env }) {
   return spawnSync(command, { cwd, env, shell: true, encoding: 'utf8' });
 }

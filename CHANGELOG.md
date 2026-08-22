@@ -7,6 +7,22 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- The gate runs the pull request's own tests (D-0157). The suite answers
+  "did anything else break?"; it had never answered "is this change
+  proved?" — `test:msr:contract` globs some directories and not others, and
+  #10803's tests lived in `tests/ui/`, one it does not glob: the same count
+  as the day before, with 114 new test lines. Now every `*.test.js` (`.mjs`,
+  `.cjs`) the PR adds or changes, wherever it lies, is run on the candidate
+  after the suite, from the same diff that counts red — no directory list,
+  which would fix yesterday's hole and make tomorrow's. Held to the suite's
+  own rule: a run that never summarised or summarised nothing is a stop, and
+  one red among them stops the round with the whole suite green
+  (`pr-tests`). A PR that touches no test file is recorded as `files: []`
+  and said in the progress, never left blank. The files run with the flags
+  the repository's own `test` script gives node (`--import`, `--require`,
+  `--conditions`) and without its globs. The report carries `pr_tests`:
+  files, totals, red, exit code. This does not replace the contract suite
+  and does not make it differential — D-0138 stands on its own.
 - The PM heartbeat wakes PM (D-0013). Two things stood between a report in
   `pm/inbox/` and PM reading it: the wake guard's first rule refused every
   knock on a pane a client is attached to — and PM's pane is attached by
