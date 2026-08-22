@@ -86,7 +86,14 @@ function fixture({ verdict = green(), baseAfterGate = BASE, mergeFails = false, 
   };
   const gh = (args, opts = {}) => {
     calls.push({ tool: 'gh', args, cwd: opts.cwd });
+    if (args[0] === 'pr' && args[1] === 'view') {
+      // What the forge says after a failed merge call: the truth, or nothing.
+      if (mergeFails === 'timed-out-merged') { merged = true; return { status: 0, stdout: JSON.stringify({ state: 'MERGED', mergedAt: '2026-08-22T21:30:00Z' }) }; }
+      if (mergeFails === 'timed-out-unknown') return { status: 1, stderr: 'Post "https://api.github.com/graphql": read: operation timed out' };
+      return { status: 0, stdout: JSON.stringify({ state: 'OPEN' }) };
+    }
     if (args[0] === 'pr' && args[1] === 'merge') {
+      if (mergeFails === 'timed-out-merged' || mergeFails === 'timed-out-unknown') return { status: 1, stderr: 'Post "https://api.github.com/graphql": read tcp: operation timed out' };
       if (mergeFails) return { status: 1, stderr: 'Pull request is not mergeable' };
       merged = true;
       return { status: 0, stdout: '' };
@@ -446,6 +453,53 @@ describe('the merge line names the base', () => {
       assert.equal(report.default_branch, null);
       assert.equal(report.off_default, false, 'no warning on a guess');
       assert.equal(report.merged_into, 'pm-heartbeat', 'but the base is still named');
+    } finally { fx.cleanup(); }
+  });
+});
+
+/**
+ * A failed merge call is not a failed merge (#10844, 2026-08-22): GitHub took
+ * the call, performed it, and timed out on the reply. The round said "nothing
+ * was merged" and the change was on main. Now the forge is asked before
+ * anything is claimed, and when it cannot be asked the round says it does
+ * not know — which is always true and always actionable.
+ */
+describe('a merge call that failed is asked about, not assumed', () => {
+  it('timed out but merged: carried on as merged, the error kept beside it', async () => {
+    const fx = fixture({ mergeFails: 'timed-out-merged' });
+    try {
+      const progress = [];
+      const report = await fx.run({ onProgress: (line) => progress.push(line) });
+      assert.equal(report.ok, true, report.reason || '');
+      assert.equal(report.merged, true);
+      assert.equal(report.merge_commit, LANDED);
+      assert.match(report.merge_error, /operation timed out/u);
+      assert.ok(progress.some((line) => /gh pr merge failed .* but GitHub says #400 is merged, so it is/u.test(line)), progress.join('\n'));
+      assert.ok(report.log_line, 'logged like any other merge');
+    } finally { fx.cleanup(); }
+  });
+
+  it('timed out and cannot be read back: unknown, claimed neither way, nothing pulled or logged', async () => {
+    const fx = fixture({ mergeFails: 'timed-out-unknown' });
+    try {
+      const report = await fx.run();
+      assert.equal(report.ok, false);
+      assert.equal(report.stopped_at, 'merge-unknown');
+      assert.equal(report.merged, false);
+      assert.match(report.reason, /whether it merged could not be read back .* check with gh pr view 400/u);
+      assert.equal(report.log_line, null);
+      assert.equal(report.deploy, null);
+      assert.ok(!fx.ran('git').some((call) => call.args[0] === 'pull'), 'no deploy pull on an unknown');
+    } finally { fx.cleanup(); }
+  });
+
+  it('a plain refusal with the pull request still open is the failed merge it always was', async () => {
+    const fx = fixture({ mergeFails: true });
+    try {
+      const report = await fx.run();
+      assert.equal(report.stopped_at, 'merge');
+      assert.match(report.reason, /not mergeable/u);
+      assert.equal(report.merge_error, null);
     } finally { fx.cleanup(); }
   });
 });

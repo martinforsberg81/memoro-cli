@@ -97,6 +97,9 @@ export async function runMergeRound({
     ok: false,
     merged: false,
     merge_commit: null,
+    // The error a merge call returned when the merge had in fact happened, or
+    // when whether it happened could not be read back. Null on a clean call.
+    merge_error: null,
     // What the squash landed *in*, and whether that is the branch people mean
     // by "merged". A round on #363 said "merged as 7dcbf96" and was right —
     // into `pm-heartbeat`, its stacked base — and everyone read "on main".
@@ -175,7 +178,22 @@ export async function runMergeRound({
     say(`${verdictPhrase(verdict)} and ${base} unmoved — merging #${verdict.pr.number}`);
     const merged = askGh(['pr', 'merge', String(verdict.pr.number), '--squash'], { cwd: repoPath });
     if (merged.status !== 0) {
-      return finish('merge', trim(merged.stderr) || `gh could not merge #${verdict.pr.number}`);
+      // A failed call is not a failed merge. On #10844 GitHub took the call,
+      // performed it, and timed out on the reply; the round said "nothing was
+      // merged" and the change was on main. So the forge is asked what it
+      // did before anything is claimed: merged → carry on as merged; open →
+      // the merge failed; cannot ask → say exactly that, and nothing more.
+      const actual = mergeState({ gh: askGh, repoPath, pr: verdict.pr.number });
+      const error = trim(merged.stderr) || `gh could not merge #${verdict.pr.number}`;
+      if (actual.state === 'merged') {
+        report.merge_error = error;
+        say(`gh pr merge failed (${error}) — but GitHub says #${verdict.pr.number} is merged, so it is`);
+      } else if (actual.state === 'open') {
+        return finish('merge', error);
+      } else {
+        report.merge_error = error;
+        return finish('merge-unknown', `gh pr merge failed (${error}) and whether it merged could not be read back (${actual.reason}) — check with gh pr view ${verdict.pr.number}`);
+      }
     }
     report.merged = true;
 
@@ -289,6 +307,22 @@ function defaultBranch(git, repoPath) {
   const head = git(['symbolic-ref', '--short', '-q', 'refs/remotes/origin/HEAD'], { cwd: repoPath });
   const name = head?.status === 0 ? trim(head.stdout).replace(/^origin\//u, '') : '';
   return name || null;
+}
+
+/**
+ * What the forge says happened to the pull request — `merged`, `open`, or
+ * `unknown` with the reason the question could not be answered. Asked only
+ * after a merge call failed, which is the one moment "nothing was merged"
+ * would be a guess.
+ */
+function mergeState({ gh, repoPath, pr }) {
+  const asked = gh(['pr', 'view', String(pr), '--json', 'state,mergedAt'], { cwd: repoPath });
+  if (asked?.status !== 0) return { state: 'unknown', reason: trim(asked?.stderr) || 'gh could not read the pull request' };
+  let raw = null;
+  try { raw = JSON.parse(asked.stdout); } catch { return { state: 'unknown', reason: 'the pull request came back as something other than JSON' }; }
+  if (raw?.state === 'MERGED') return { state: 'merged', merged_at: raw.mergedAt || null };
+  if (raw?.state === 'OPEN') return { state: 'open' };
+  return { state: 'unknown', reason: raw?.state ? `the pull request is ${String(raw.state).toLowerCase()}` : 'the pull request did not say its state' };
 }
 
 function deployNote(deploy) {
