@@ -7,6 +7,18 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- `mc repo merge` says what it merged **into**, every time. A round on a
+  stacked pull request said *merged as 7dcbf96* — true, and into its base
+  branch `pm-heartbeat`, which everyone including PM read as main; the fix
+  had to be re-landed. The progress line, the verb's output and the merge
+  log line now name the base (`merged #363 into pm-heartbeat as 7dcbf96`,
+  `Squash-merge into \`pm-heartbeat\` → …`), and when that base is not the
+  branch the remote points HEAD at, a warning says so in its own words:
+  *this landed on a branch, not on main*. A default git cannot name is
+  reported as unknown, never assumed — a guess would be the very assumption
+  the warning exists to catch. The report carries `merged_into`,
+  `default_branch` and `off_default`. Nothing is blocked: a stacked merge is
+  sometimes meant, and the round's job is to make it impossible to misread.
 - `mc status` shows the clock a session set for itself (D-0155). A Claude
   conversation can schedule its own next turn — `ScheduleWakeup`, a prompt
   and a delay — and nothing outside its transcript knew: one session ran the
