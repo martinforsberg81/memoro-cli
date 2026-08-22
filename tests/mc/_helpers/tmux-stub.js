@@ -42,7 +42,7 @@ import { join } from 'node:path';
 
 export function installTmuxStub(root, {
   mode = 'reliable', alive = [], drawAfter = 0, busyFor = 0, clients = [], typedAlready = '',
-  windowIndex = '0', clientSession = '', ghost = '',
+  windowIndex = '0', clientSession = '', ghost = '', panes = [],
 } = {}) {
   const bin = join(root, 'bin');
   const state = join(root, 'tmux-state');
@@ -58,6 +58,9 @@ export function installTmuxStub(root, {
   writeFileSync(log, '');
   writeFileSync(prompt, typedAlready);
   writeFileSync(join(state, 'clients'), clients.join('\n') + (clients.length ? '\n' : ''));
+  // `list-panes -a`: one line per pane, the fields the discovery asks for —
+  // `{ session, pane, active, windows, panes, path }`, tab-separated.
+  writeFileSync(join(state, 'panes'), panes.map((pane) => [pane.session, pane.pane || '%1', pane.active ?? '1', pane.windows ?? '1', pane.panes ?? '1', pane.path].join('\t')).join('\n') + (panes.length ? '\n' : ''));
   writeFileSync(screen, 'a conversation\nthat has been going a while\n');
   writeFileSync(modePath, `${mode}\n`);
   writeFileSync(captures, '0\n');
@@ -76,6 +79,10 @@ case "$1" in
     ;;
   list-windows)
     printf '%s\n' "${windowIndex}"
+    exit 0
+    ;;
+  list-panes)
+    cat "${state}/panes"
     exit 0
     ;;
   display-message)

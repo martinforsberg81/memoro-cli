@@ -39,6 +39,7 @@ import { reservedRoleName } from './roles.js';
 import { inspectWorkArea } from './work-area.js';
 import { currentHolder } from './work-identity.js';
 import { backgroundTarget } from './work-open.js';
+import { toolProcesses } from './work-status.js';
 
 /**
  * How long the TUI gets to draw the text before Enter is pressed — and how
@@ -149,6 +150,7 @@ export function sendToArea({
   run = null,
   sleep = null,
   wake = false,
+  processes = null,
 } = {}) {
   const area = inspectWorkArea(name, env, { conversations: false, git: false });
   if (!area.exists) return { ok: false, reason: 'no-such-area' };
@@ -156,8 +158,19 @@ export function sendToArea({
   const file = writeMessage({ areaPath: area.path, message, sender, now });
 
   if (!wake) return { ok: true, file, woke: false, reason: 'not-asked' };
-  const target = backgroundTarget(name, { run: run ? (args) => run(args) : null });
-  if (!target) return { ok: true, file, woke: false, reason: 'no-live-conversation' };
+  const target = backgroundTarget(name, { run: run ? (args) => run(args) : null, env });
+  if (!target) {
+    // "Nothing is running" was the one sentence in the chain a person reads,
+    // and for nine sessions it pointed away from the fault: they were running,
+    // in panes mc could not address (D-0136). Now a pane is found by where it
+    // stands; what is left is a tool with no pane at all — started from a
+    // plain terminal — and that is said as what it is.
+    const standing = (processes || toolProcesses)([area.path, ...area.worktrees.map((item) => item.path)]);
+    if (standing.length > 0) {
+      return { ok: true, file, woke: false, reason: 'not-addressable', processes: standing };
+    }
+    return { ok: true, file, woke: false, reason: 'no-live-conversation' };
+  }
 
   // A singleton role's pane is the one pane somebody is *meant* to be sitting
   // at — PM is the door to the person (K1.2), so a client on it is the normal

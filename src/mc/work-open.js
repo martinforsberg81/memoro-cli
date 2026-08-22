@@ -17,6 +17,7 @@ import { spawnSync } from 'node:child_process';
 import { resolveLaunch } from '../adapters/index.js';
 import { conversationModel, listConversations } from './conversations.js';
 import { log } from './logger.js';
+import { workAreaPath } from './paths.js';
 import { instructionsFor } from './roles.js';
 import { loadProfile, profileArgs, readCached as loadProfileSync } from './portrait.js';
 import { askToolToLeave } from './work-stop.js';
@@ -157,10 +158,40 @@ export async function openInWorkArea({
  * running. Resuming it a second time starts another process on the same
  * transcript, which is two writers on one file and one of them is wrong.
  */
-export function backgroundTarget(name, { run = null } = {}) {
+export function backgroundTarget(name, { run = null, env = process.env } = {}) {
   const tmux = run || ((args) => spawnSync('tmux', args, { encoding: 'utf8' }));
   const target = `mc-${name}`;
-  return tmux(['has-session', '-t', target]).status === 0 ? target : null;
+  if (tmux(['has-session', '-t', target]).status === 0) return target;
+  return discoveredTarget(name, { tmux, env });
+}
+
+/**
+ * The address of a session that was not started by mc, found by where it
+ * stands.
+ *
+ * Nine sessions ran in tmux sessions called `clean`, `ops`, `vocab`, … —
+ * started outside mc's naming — and every `mc work send --wake` to them
+ * delivered the file and never tried to knock, reporting "nothing is running"
+ * (D-0136). They were running the whole time, in panes tmux could name. So
+ * when `mc-<name>` does not exist, the panes are asked where they stand: one
+ * whose current path is the area, or under it, is the area's address. No
+ * bind file, nothing to keep in step — a pane that moves stops being found,
+ * which is also true.
+ *
+ * The pane is addressed by its id (`%7`) unless it is the single active pane
+ * of its session, where the session's own name reads better in a message.
+ */
+export function discoveredTarget(name, { tmux, env = process.env } = {}) {
+  const area = workAreaPath(name, env);
+  const listed = tmux(['list-panes', '-a', '-F', '#{session_name}\t#{pane_id}\t#{pane_active}\t#{session_windows}\t#{window_panes}\t#{pane_current_path}']);
+  if (listed?.status !== 0) return null;
+  for (const line of String(listed.stdout || '').split('\n')) {
+    const [session, pane, active, windows, panes, path] = line.split('\t');
+    if (!session || !path) continue;
+    if (path !== area && !path.startsWith(`${area}/`)) continue;
+    return active === '1' && windows === '1' && panes === '1' ? session : pane;
+  }
+  return null;
 }
 
 /** Give this terminal to the running session until the user detaches. */

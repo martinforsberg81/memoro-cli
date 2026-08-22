@@ -21,7 +21,7 @@ started in it. mc stores nothing else, because nothing else is mc's to know.
 | Command | Does |
 |---|---|
 | `mc work` | What exists; at a terminal, a way in. |
-| `mc work <name>` | Open it — the name is enough, new or not. |
+| `mc work <name>` | Open it — the name is enough, new or not. A session running there under any tmux name is found by where it stands and joined. |
 | `mc work <name> new [--model <m>]` | A new conversation rather than the last one — including when one is running in the background, which is ended and replaced in the same window. |
 | `mc work <name> <id>` | One particular conversation, by the id shown. Refused while another is running there, rather than joined to whatever happens to be live. |
 | `mc work <name> --resume <id>` | The same, named explicitly — and the only way to resume one under `--tmux`. |
