@@ -429,20 +429,34 @@ describe('the round', () => {
 
 describe('mc watch, the words', () => {
   it('takes a target, a verb, and nothing else', () => {
+    // `model` joined the shape when the session guard landed: it is the only
+    // leg that has one, and the parser rejects it for any other rather than
+    // accepting a flag it would then ignore.
     assert.deepEqual(
       parseArgs(['pm', 'start', '--interval', '60']),
-      { target: 'pm', verb: 'start', json: false, intervalMs: 60_000 },
+      {
+        target: 'pm', verb: 'start', json: false, intervalMs: 60_000, model: null,
+      },
     );
     assert.equal(parseArgs(['pm']).verb, 'status');
     assert.equal(parseArgs(['pm', 'status', '--json']).json, true);
   });
 
+  it('gives each leg its own default interval', () => {
+    // The round is cheap and runs every half hour; the guard costs a model
+    // turn per session that moved and runs every ten minutes. One default for
+    // both would have been wrong for both.
+    assert.equal(parseArgs(['pm', 'start']).intervalMs, 30 * 60_000);
+    assert.equal(parseArgs(['sessions', 'start']).intervalMs, 10 * 60_000);
+  });
+
   it('refuses what it cannot do rather than guessing', () => {
     assert.match(parseArgs([]).error, /mc watch what\?/u);
-    assert.match(parseArgs(['sessions']).error, /mc watch sessions\?/u);
+    assert.match(parseArgs(['guard']).error, /mc watch guard\? — pm, sessions/u);
     assert.match(parseArgs(['pm', 'restart']).error, /start, stop or status/u);
     assert.match(parseArgs(['pm', 'stop', '--interval', '60']).error, /--interval belongs to mc watch pm start/u);
     assert.match(parseArgs(['pm', 'start', '--json']).error, /--json belongs to mc watch pm status/u);
     assert.match(parseArgs(['pm', 'start', '--interval', 'soon']).error, /number of seconds/u);
+    assert.match(parseArgs(['pm', 'start', '--model', 'haiku']).error, /mc watch pm has no model/u);
   });
 });

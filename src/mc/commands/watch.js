@@ -2,6 +2,7 @@
  * `mc watch` — the autonomy loop's background processes.
  *
  *   mc watch pm start|stop|status
+ *   mc watch sessions start|stop|status
  *
  * One verb with a target rather than a verb per leg, because they are one
  * mechanism with parts (designnote §2): the round knocks, the guard flags,
@@ -16,11 +17,15 @@
  */
 import { painter } from '../status-render.js';
 import { startPmWatcher, stopPmWatcher, pmWatcherState } from '../watch-pm.js';
-import { DEFAULT_INTERVAL_MS } from '../watch-pm-round.js';
+import { DEFAULT_INTERVAL_MS as PM_INTERVAL_MS } from '../watch-pm-round.js';
+import {
+  startSessionsWatcher, stopSessionsWatcher, sessionsWatcherState,
+} from '../watch-sessions.js';
+import { DEFAULT_INTERVAL_MS as SESSIONS_INTERVAL_MS } from '../watch-sessions-store.js';
 import { scanArgs } from './flags.js';
 
-/** The legs that exist. The session guard joins this list when it lands. */
-const TARGETS = ['pm'];
+/** The legs that exist. */
+const TARGETS = ['pm', 'sessions'];
 const VERBS = ['start', 'stop', 'status'];
 
 const LEGS = {
@@ -29,10 +34,26 @@ const LEGS = {
     stop: () => stopPmWatcher(),
     state: () => pmWatcherState(),
     what: 'the PM round',
+    intervalMs: PM_INTERVAL_MS,
     does: [
       'it commits pm/, runs mc doctor, counts pm/inbox/ and delivers the guard\'s notices',
       'it knocks when the unprocessed set gains a member, reminds once after three passes, then goes quiet',
       'it is a script: an empty inbox costs a few file reads and no model turn at all',
+    ],
+  },
+  sessions: {
+    start: (opts) => startSessionsWatcher({ intervalMs: opts.intervalMs, model: opts.model }),
+    stop: () => stopSessionsWatcher(),
+    state: () => sessionsWatcherState(),
+    what: 'the session guard',
+    intervalMs: SESSIONS_INTERVAL_MS,
+    // `--model` is the guard's alone: it is the only leg that has one.
+    flags: ['model'],
+    does: [
+      'it flags waiting, silent, dead, unreachable, stalled, blocked, quota-exhausted and error — only flags',
+      'five of the eight are script, worked out for every conversation on the machine every round',
+      'Haiku reads only the output that is prose, and only for a session whose output actually moved',
+      'flags go to the notices ledger; only dead and quota-exhausted knock on pm directly',
     ],
   },
 };
@@ -110,6 +131,10 @@ export function renderWatchLines(state, { target = 'pm', colour = false, now = D
     : c('never', 'grey');
   lines.push(`  ${c('last round', 'grey')}  ${when}`);
   if (state.last_round) lines.push(`              ${c(state.last_round, 'grey')}`);
+  // Whatever this leg has to add about itself, in the order it gave it. The
+  // guard puts its standing flags here; a leg with nothing to add says
+  // nothing, and the renderer stays one renderer.
+  for (const line of state.detail || []) lines.push(`    ${c(line, 'grey')}`);
   lines.push(`  ${c('log', 'grey')}  ${c(state.log, 'grey')}`);
   lines.push('');
   return lines;
@@ -120,13 +145,16 @@ function usage() {
     'usage — mc watch pm start [--interval <seconds>]\n',
     '        mc watch pm stop\n',
     '        mc watch pm status [--json]\n',
+    '        mc watch sessions start [--interval <seconds>] [--model <model>]\n',
+    '        mc watch sessions stop\n',
+    '        mc watch sessions status [--json]\n',
   ].join('');
 }
 
 export function parseArgs(argv) {
-  const scanned = scanArgs(argv, { booleans: ['--json'], strictValues: ['--interval'] });
+  const scanned = scanArgs(argv, { booleans: ['--json'], strictValues: ['--interval', '--model'] });
   const opts = {
-    target: null, verb: 'status', json: scanned.flags.json, intervalMs: DEFAULT_INTERVAL_MS,
+    target: null, verb: 'status', json: scanned.flags.json, intervalMs: null, model: null,
   };
   if (scanned.error) return { ...opts, error: scanned.error };
   const positional = [...scanned.positional];
@@ -138,6 +166,7 @@ export function parseArgs(argv) {
   if (!target) return { ...opts, error: `mc watch what? — ${TARGETS.join(', ')}` };
   if (!TARGETS.includes(target)) return { ...opts, error: `mc watch ${target}? — ${TARGETS.join(', ')}` };
   opts.target = target;
+  opts.intervalMs = LEGS[target].intervalMs;
 
   const verb = positional.shift() || 'status';
   if (!VERBS.includes(verb)) return { ...opts, error: `mc watch ${target} ${verb}? — start, stop or status` };
@@ -149,6 +178,15 @@ export function parseArgs(argv) {
     const value = Number(scanned.flags.interval);
     if (!Number.isFinite(value) || value < 1) return { ...opts, error: '--interval needs a number of seconds' };
     opts.intervalMs = Math.round(value * 1000);
+  }
+  if (scanned.flags.model !== null) {
+    // Named per leg rather than globally: a flag accepted everywhere and
+    // honoured in one place is a flag that silently does nothing.
+    if (!(LEGS[target].flags || []).includes('model')) {
+      return { ...opts, error: `mc watch ${target} has no model — it is a script` };
+    }
+    if (verb !== 'start') return { ...opts, error: `--model belongs to mc watch ${target} start` };
+    opts.model = String(scanned.flags.model);
   }
   if (opts.json && verb !== 'status') return { ...opts, error: `--json belongs to mc watch ${target} status` };
   return opts;

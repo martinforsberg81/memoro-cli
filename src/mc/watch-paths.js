@@ -34,3 +34,15 @@ export function watchLogPath(target, root = mcHome()) {
 export function pmRoundStatePath(root = mcHome()) {
   return join(watchRoot(root), 'pm-round.json');
 }
+
+/**
+ * What the guard remembers between rounds — see `watch-sessions-store.js`.
+ *
+ * The guard's equivalent of the round's memory, and the reason it is
+ * affordable: the size and mtime of every transcript at the end of the last
+ * round, so a conversation that has not moved costs a stat instead of a model
+ * turn.
+ */
+export function sessionsSeenPath(root = mcHome()) {
+  return join(watchRoot(root), 'sessions-seen.json');
+}
