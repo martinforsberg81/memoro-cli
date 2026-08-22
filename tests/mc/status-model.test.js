@@ -78,3 +78,21 @@ describe('a clock a session set for itself is on the page (D-0155)', () => {
     assert.doesNotMatch(withClock(null, 1000), /wakeup/u);
   });
 });
+
+describe('a worktree without its dependency tree says so on the page (D-0152)', () => {
+  const withTree = (dependencies) => {
+    const page = report('claude-fable-5');
+    page.areas[0].worktrees = [{
+      repo: 'memoro', path: '/x/api/memoro', branch: 'fix', is_git: true, git_common_dir: '/r/.git',
+      uncommitted: 0, unmerged_commits: 1, dependencies,
+    }];
+    return renderLines(page, { columns: 120, now: 61000 }).join('\n');
+  };
+  it('names it beside the branch', () => {
+    assert.match(withTree('missing'), /memoro  fix  1 unmerged  no node_modules/u);
+  });
+  it('and says nothing when the tree is there, or the question does not arise', () => {
+    assert.doesNotMatch(withTree('present'), /node_modules/u);
+    assert.doesNotMatch(withTree(null), /node_modules/u);
+  });
+});

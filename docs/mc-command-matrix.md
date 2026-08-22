@@ -163,6 +163,15 @@ what each repository requires: a preparation step, any gates beyond the suite,
 and where its merges are written down. `<mc home>/repo-gates.json` adds or
 overrides an entry without a release.
 
+After preparation and before either suite run, the round checks that a
+manifest declaring dependencies has a `node_modules` to be found in, and
+**stops** with `dependencies` if not (D-0152: a suite run without its tree
+does not fail, it shrinks, and prints a number with the right shape). A
+declaration that vouches the suite runs without one — `prepare: null`, with
+its evidence — is honoured, and the round says so in its progress. The same
+fact is on the status board: `no node_modules` beside any worktree whose
+manifest declares dependencies and has no tree.
+
 A repository mc has not been told about **stops the round**, with a reason that
 says what to write and where. The one exception is a repository that can be
 *proved* not to need preparation — a manifest asking for nothing has nothing
