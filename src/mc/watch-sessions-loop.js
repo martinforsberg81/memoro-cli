@@ -216,7 +216,7 @@ function paneVerdict(name) {
     return {
       ok: false,
       target: null,
-      reason: `mc cannot address it: something is running in it, but there is no tmux session called mc-${name}`,
+      reason: `mc cannot address it: something is running in it, but no tmux pane stands in it (neither mc-${name} nor one found by its path) — started outside tmux`,
     };
   }
   // Read only — no probe, so a ghost (D-0151) reads as "drawn", never as a
