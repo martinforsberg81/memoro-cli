@@ -35,6 +35,7 @@ import { scanSessions } from './watch-sessions-scan.js';
 import { appendNotice, isUrgent } from './watch-notices.js';
 import { knock } from './watch-sessions-knock.js';
 import { readTailEntries } from './conversations.js';
+import { reservedRoleName } from './roles.js';
 import { backgroundTarget } from './work-open.js';
 import { paneWillTakeText, sendToArea } from './work-send.js';
 import { workStatus } from './work-status.js';
@@ -209,7 +210,9 @@ function paneVerdict(name) {
       reason: `mc cannot address it: something is running in it, but there is no tmux session called mc-${name}`,
     };
   }
-  const verdict = paneWillTakeText({ target });
+  // Read only — no probe, so a ghost (D-0151) reads as "drawn", never as a
+  // typed draft — and the role-pane exception (D-0013) as the wake applies it.
+  const verdict = paneWillTakeText({ target, attachedOk: reservedRoleName(name) });
   return { ok: verdict.ok, target, reason: verdict.reason ? `it cannot be woken: ${verdict.reason}` : null };
 }
 

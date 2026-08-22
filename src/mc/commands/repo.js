@@ -260,7 +260,12 @@ function mergeLines(report) {
     return lines;
   }
 
-  lines.push(`mc: merged #${report.pr.number} as ${String(report.merge_commit || '').slice(0, 7)} (squash)`);
+  // Into what, every time. "merged as <sha>" was true of a PR that landed on
+  // its stacked base branch, and it was read as "on main" by everyone.
+  lines.push(`mc: merged #${report.pr.number} into ${report.merged_into || report.pr.base} as ${String(report.merge_commit || '').slice(0, 7)} (squash)`);
+  if (report.off_default) {
+    lines.push(`mc: WARNING — ${report.merged_into} is not the default branch (${report.default_branch}): this landed on a branch, not on ${report.default_branch}`);
+  }
   if (report.deploy?.attempted) {
     lines.push(report.deploy.ok
       ? `mc: pulled ${report.deploy.command} at ${report.deploy.root}`

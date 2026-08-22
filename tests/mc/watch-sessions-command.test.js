@@ -181,7 +181,7 @@ describe('unreachable is decided without typing', () => {
     const talk = tmux({ box: 'half a question of mine' });
     const verdict = paneWillTakeText({ target: 'mc-alpha', run: talk.run });
     assert.equal(verdict.ok, false);
-    assert.match(verdict.reason, /already something in its prompt/u);
+    assert.match(verdict.reason, /something is drawn in its prompt — a draft, or a ghost/u);
     assert.deepEqual(talk.typed(), []);
   });
 
@@ -190,5 +190,40 @@ describe('unreachable is decided without typing', () => {
     const verdict = paneWillTakeText({ target: 'mc-alpha', run: talk.run });
     assert.equal(verdict.ok, true);
     assert.deepEqual(talk.typed(), []);
+  });
+});
+
+describe('paneWillTakeText, reconciled with the probe and the role pane', () => {
+  function pane({ clients = '', box = '' } = {}) {
+    const calls = [];
+    const run = (args) => {
+      calls.push(args);
+      if (args[0] === 'list-clients') return { status: 0, stdout: clients };
+      if (args[0] === 'capture-pane') {
+        return { status: 0, stdout: `a conversation\n+------------+\n| > ${box}\n+------------+\n  ? for shortcuts\n\n\n\n` };
+      }
+      return { status: 0 };
+    };
+    return { run, typed: () => calls.filter((args) => args[0] === 'send-keys') };
+  }
+
+  it('a reader gets "drawn" and types nothing; a wake hands in a probe and gets the input\'s answer', () => {
+    const drawn = pane({ box: 'merga #10799 och #10802 till main' });
+    const read = paneWillTakeText({ target: 'mc-alpha', run: drawn.run });
+    assert.equal(read.ok, false);
+    assert.equal(read.drawn, true);
+    assert.deepEqual(drawn.typed(), [], 'reading never types');
+
+    let asked = 0;
+    const ghost = paneWillTakeText({ target: 'mc-alpha', run: pane({ box: 'an old order' }).run, probe: () => { asked += 1; return 'empty'; } });
+    assert.equal(asked, 1);
+    assert.equal(ghost.ok, true, 'the probe said the input was empty');
+    const draft = paneWillTakeText({ target: 'mc-alpha', run: pane({ box: 'a draft' }).run, probe: () => 'text' });
+    assert.match(draft.reason, /already something in its prompt/u);
+  });
+
+  it('attachedOk skips the client question and nothing else', () => {
+    assert.match(paneWillTakeText({ target: 'mc-pm', run: pane({ clients: '/dev/ttys009\n' }).run }).reason, /somebody is attached/u);
+    assert.equal(paneWillTakeText({ target: 'mc-pm', run: pane({ clients: '/dev/ttys009\n' }).run, attachedOk: true }).ok, true);
   });
 });

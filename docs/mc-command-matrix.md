@@ -23,7 +23,7 @@ started in it. mc stores nothing else, because nothing else is mc's to know.
 | `mc work` | What exists; at a terminal, a way in. |
 | `mc work <name>` | Open it — the name is enough, new or not. |
 | `mc work <name> new [--model <m>]` | A new conversation rather than the last one — including when one is running in the background, which is ended and replaced in the same window. |
-| `mc work <name> <id>` | One particular conversation, by the id shown. |
+| `mc work <name> <id>` | One particular conversation, by the id shown. Refused while another is running there, rather than joined to whatever happens to be live. |
 | `mc work <name> --resume <id>` | The same, named explicitly — and the only way to resume one under `--tmux`. |
 | `mc work <name> --tmux [task]` | Start it in the background for another session to talk to. Add `--resume <id>` to continue an existing conversation there. |
 | `mc work add <name> <repo> [branch]` | Add a repository worktree to that work. |
@@ -39,14 +39,14 @@ started in it. mc stores nothing else, because nothing else is mc's to know.
 | `mc <role> <id>` | One particular conversation in the role's home — the way back from a handoff. Refused while the role is running. |
 | `mc roles list \| show <role>` | The defined roles, read from their files. |
 | `mc worktrees` | Worktrees across the work areas. |
-| `mc status` | Every piece of work and what it is doing. `--watch`, `--json`, `--wait`. |
+| `mc status` | Every piece of work and what it is doing — including the clock a session set for itself (`⏰ wakeup in 9m: <prompt>`, from the last `ScheduleWakeup` in its transcript) `--watch`, `--json`, `--wait`. |
 | `mc repo status [repo]` | One repository seen whole: main, open pull requests with how far behind main each is, the work areas standing on it, and the source-linked installation's drift. `--json`, `--offline`. |
 | `mc repo watch start \| stop \| status` | The background process that keeps that answer fresh. `--interval <seconds>` on start; `--json` on status. |
 | `mc repo claim <repo> "<what for>"` | Hold the gate round on a repository. Refused if someone else holds it. |
 | `mc repo release <repo> [--force]` | Give it back; `--force` takes it from another holder and is logged. |
 | `mc repo who <repo>` | Who holds it, for what, since when — and whether the holder is still working. `--json`. |
-| `mc repo merge <repo> <pr>` | Run the test gate and, only if it is green, squash-merge, deploy-pull and log it. `--check` gates and stops. `--json`. |
-| `mc watch pm start \| stop \| status` | The PM round: every 30 minutes it commits `pm/`, runs `mc doctor`, counts `pm/inbox/`, delivers the guard's notices and knocks once if something is new. `--interval <seconds>` on start; `--json` on status. |
+| `mc repo merge <repo> <pr>` | Run the test gate and, only if it is green, squash-merge, deploy-pull and log it — saying what it merged *into*, with a warning when that is not the default branch. `--check` gates and stops. `--json`. |
+| `mc watch pm start \| stop \| status` | The PM round: every 30 minutes, or as soon as a new file lands in `pm/inbox/`, it commits `pm/`, runs `mc doctor`, counts `pm/inbox/`, delivers the guard's notices and knocks once if something is new. `--interval <seconds>` on start; `--json` on status. |
 
 `mc work release` keeps a worktree that is in use, has uncommitted changes, or
 has unmerged commits. `mc work discard` reports what it will destroy and
@@ -71,8 +71,9 @@ there on the third pass earns one reminder, and after that it is in the log
 rather than in the prompt. It decides nothing about what any item is about —
 it counts files and names them, and never opens one. Its auto-commit commits
 what PM wrote and never edits it. `delivered, but did not knock` is a normal
-outcome: the client guard refuses to type into an occupied pane and the
-message is in the inbox either way. Unprocessed means a file at the top level
+outcome: the client guard refuses to type into a pane whose prompt is not
+empty — PM's pane being attached is not a reason, that is what it is for —
+and the message is in the inbox either way. Unprocessed means a file at the top level
 of `pm/inbox/`, excluding `README.md` and directories — archiving to
 `inbox/archive/` is what makes an item processed. It writes only
 `<mc home>/watch/`, and the notices it delivers come from
@@ -162,6 +163,22 @@ what each repository requires: a preparation step, any gates beyond the suite,
 and where its merges are written down. `<mc home>/repo-gates.json` adds or
 overrides an entry without a release.
 
+After the suite, the round runs **the pull request's own tests**: every
+`*.test.js` the PR adds or changes, wherever it lies, taken from the same diff
+that counts red and run on the candidate with the flags the repository's own
+`test` script gives node (D-0157). One red among them stops the round
+(`pr-tests`) with the whole suite green, because the suite never ran them; a
+PR that touches no test file is recorded as such and said in the progress.
+This is in addition to the suite, not instead of it.
+After preparation and before either suite run, the round checks that a
+manifest declaring dependencies has a `node_modules` to be found in, and
+**stops** with `dependencies` if not (D-0152: a suite run without its tree
+does not fail, it shrinks, and prints a number with the right shape). A
+declaration that vouches the suite runs without one — `prepare: null`, with
+its evidence — is honoured, and the round says so in its progress. The same
+fact is on the status board: `no node_modules` beside any worktree whose
+manifest declares dependencies and has no tree.
+
 A repository mc has not been told about **stops the round**, with a reason that
 says what to write and where. The one exception is a repository that can be
 *proved* not to need preparation — a manifest asking for nothing has nothing
@@ -196,9 +213,19 @@ costs latency and never the message.
 
 Knocking on the running conversation is a separate thing, asked for with
 `--wake`, because it types into an input box that belongs to somebody else. It
-refuses on a pane a tmux client is attached to, and on a pane whose input box
-is not visibly empty — whoever put the text there, including a notice an
-earlier wake gave up on. The notice goes in as text and Enter as separate
+refuses on a pane a tmux client is attached to — except a singleton role's
+(`pm`, `pm-helper`), which is attached by design and would otherwise never be
+knocked at all — and on any pane whose input box holds text, whoever put it
+there, including a notice an earlier wake gave up on. Text *drawn* in the box
+is not taken as text in the input: a pane can redraw an order long since
+carried out after the prompt mark (D-0151), so the guard types one character,
+reads the row back and deletes it — a row that became that character alone was
+empty, a row that kept its text is somebody's draft and is left exactly as it
+was. Busy is not a refusal: a notice typed into a mid-answer pane is queued by
+the tool and becomes a turn.
+`mc watch pm` rides the same channel, and its wait between rounds ends early
+on a new file in `pm/inbox/`: the file is what wakes the round, the half hour
+is the floor underneath. The notice goes in as text and Enter as separate
 keystrokes, with the submission verified against the pane and retried once, so
 a message can never end up half-typed into somebody's prompt; and the cleanup
 that takes an unsent notice back out is pressed only on a line mc has just read

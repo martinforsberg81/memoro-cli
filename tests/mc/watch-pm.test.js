@@ -366,6 +366,48 @@ describe('the round', () => {
     } finally { fx.cleanup(); }
   });
 
+  it('a new file in the inbox ends the wait, and the clock is the floor (D-0013)', async () => {
+    // Four reports landed one evening and PM sat on them until somebody asked
+    // "status?": the half hour had not come round. The file is the event the
+    // round exists for, so the file is what wakes the round.
+    const fx = fixture();
+    try {
+      const passes = [];
+      const started = Date.now();
+      let done = false;
+      const loop = pmWatchLoop({
+        intervalMs: 60 * 60 * 1000,
+        settleMs: 50,
+        rounds: 2,
+        root: fx.root,
+        env: fx.env,
+        round: async () => {
+          passes.push(Date.now() - started);
+          if (passes.length === 1) setTimeout(() => fx.item('2026-08-22T19-00-30.885Z-alpha.md'), 150);
+        },
+      }).then(() => { done = true; });
+      await Promise.race([loop, new Promise((resolve) => { setTimeout(resolve, 5000); })]);
+      assert.equal(done, true, 'the second pass waited for the hour instead of the file');
+      assert.equal(passes.length, 2);
+      assert.ok(passes[1] < 3000, `woke ${passes[1]}ms after start — should be the file, not the clock`);
+    } finally { fx.cleanup(); }
+  });
+
+  it('an inbox that cannot be watched is said once, and the clock still runs', async () => {
+    const lines = [];
+    let call = 0;
+    await pmWatchLoop({
+      intervalMs: 0,
+      rounds: 2,
+      log: (line) => lines.push(line),
+      watchInbox: () => null,
+      round: async () => { call += 1; },
+    });
+    assert.equal(call, 2);
+    assert.equal(lines.length, 1);
+    assert.match(lines[0], /not watching .*inbox for new files — the clock is the only wake/u);
+  });
+
   it('a pass that throws is logged and the loop goes on', async () => {
     const lines = [];
     let call = 0;
@@ -373,10 +415,11 @@ describe('the round', () => {
       intervalMs: 0,
       rounds: 3,
       log: (line) => lines.push(line),
+      watchInbox: () => null,
       round: async () => { call += 1; if (call === 2) throw new Error('one bad pass'); },
     });
     assert.equal(call, 3);
-    assert.deepEqual(lines, ['round failed: one bad pass']);
+    assert.deepEqual(lines.filter((line) => !line.startsWith('not watching')), ['round failed: one bad pass']);
   });
 
   it('says the oldest to the minute, in the form the order names', () => {

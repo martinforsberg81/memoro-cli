@@ -98,9 +98,19 @@ export async function runRoleSingleton(roleName, argv, deps = {}) {
   // design exists to prevent. It says so rather than attaching to the
   // conversation that happens to be running, which would be answering a
   // question nobody asked. `new` is the exception, and it is the point.
+  //
+  // The id is checked first, though: an unknown one used to be answered with
+  // "stop it first", which sends somebody to kill their PM to discover a typo.
+  // An error that costs a conversation to read is worse than the mistake.
   if (running && asked !== 'new') {
+    const homePath = workAreaPath(roleName);
+    const here = listConversations(homePath).filter((item) => item.tool === 'claude-code');
+    if (!here.some((item) => item.id.startsWith(asked))) {
+      return noSuchConversation(stderr, roleName, homePath, asked);
+    }
     stderr.write(`mc: the ${roleName} is running (${running}) — one conversation at a time\n`);
-    stderr.write(`mc: stop it first:  mc work stop ${roleName}  — then  mc ${roleName} ${asked}\n`);
+    stderr.write(`mc: join what is running:  mc ${roleName}\n`);
+    stderr.write(`mc: or stop it first:  mc work stop ${roleName}  — then  mc ${roleName} ${asked}\n`);
     return 1;
   }
 
@@ -130,11 +140,7 @@ export async function runRoleSingleton(roleName, argv, deps = {}) {
   let resume = null;
   if (asked && asked !== 'new') {
     const chosen = known.find((item) => item.id.startsWith(asked)) || null;
-    if (!chosen) {
-      stderr.write(`mc: no conversation in the ${roleName}'s home starts with ${asked}\n`);
-      stderr.write(`mc: mc work lists what is there — the home is ${path}\n`);
-      return 1;
-    }
+    if (!chosen) return noSuchConversation(stderr, roleName, path, asked);
     // Only the flag decides the model (M1 decision 2, 2026-08-14: nothing new
     // may depend on transcript-derived model persistence). claude-code resumes
     // a conversation on its own model anyway, which is what makes that free.
@@ -254,4 +260,11 @@ export async function runRoleSingleton(roleName, argv, deps = {}) {
   stderr.write('mc: ctrl-b d leaves it running\n');
   const joined = attachBackground(started.target);
   return joined.ok ? (joined.code || 0) : 1;
+}
+
+/** One wording for an id that names nothing, wherever the question is asked. */
+function noSuchConversation(stderr, roleName, path, asked) {
+  stderr.write(`mc: no conversation in the ${roleName}'s home starts with ${asked}\n`);
+  stderr.write(`mc: mc work lists what is there — the home is ${path}\n`);
+  return 1;
 }
