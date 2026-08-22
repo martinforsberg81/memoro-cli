@@ -41,6 +41,7 @@ import { describeAge, describeSize } from '../conversations.js';
 import { openTask } from '../task-log.js';
 import { currentHolder } from '../work-identity.js';
 import { sendToArea } from '../work-send.js';
+import { toolProcesses } from '../work-status.js';
 import { stopWork } from '../work-stop.js';
 import { interactive, ask, select } from '../prompt.js';
 import { workRoot } from '../paths.js';
@@ -457,7 +458,8 @@ async function startSomething({ stdout, stderr }) {
  * One conversation is opened rather than offered. One repository is used
  * rather than listed. A flag or an argument answers any of it in advance.
  */
-export async function openArea(name, opts, { stdout, stderr }) {
+export async function openArea(name, opts, deps) {
+  const { stdout, stderr } = deps;
   // The role workspaces have their own doors (`mc pm`, `mc pm-helper`);
   // opening them here would start a conversation without the role's overlay
   // and semantics, wearing the role's name. Designed difference, not
@@ -519,6 +521,29 @@ export async function openArea(name, opts, { stdout, stderr }) {
     if (!worktree) return 0;
   }
   if (!worktree) worktree = { repo: null, path: area.path, is_git: false };
+
+  // Is somebody already working here, outside mc? The repo lease protects
+  // the merge queue and says nothing about who is sitting in a worktree
+  // (D-0154): a session started in an area whose worktree belonged to a
+  // person's own session switched the branch under them mid-work. A clean
+  // status is not "free" — it can belong to a session that is just thinking.
+  // So the tool processes standing in this area are asked, the same way the
+  // status board finds them, and a session mc did not start here is an
+  // occupant. mc's own background session is not one: it is what `mc work
+  // <name>` joins, and `new` replaces it in place, knowingly. Refused, with
+  // the way through named, unless `--anyway` says the person knows.
+  if (!opts.anyway && !backgroundTarget(name)) {
+    const here = [area.path, ...area.worktrees.map((item) => item.path)];
+    const occupants = (deps.occupants || toolProcesses)(here);
+    if (occupants.length > 0) {
+      const [first] = occupants;
+      stderr.write(`mc: ${name} is occupied — ${first.name} (pid ${first.pid}) is working in ${first.directory}, started outside mc\n`);
+      if (occupants.length > 1) stderr.write(`mc: and ${occupants.length - 1} more\n`);
+      stderr.write(`mc: one session per workplace (D-0154): a second one here would change branches under the first\n`);
+      stderr.write(`mc: join that one from its own terminal, or  mc work ${name} --anyway  if you know it is yours to share\n`);
+      return 1;
+    }
+  }
 
   // Several conversations is the one thing mc cannot guess. One is not a
   // question, and neither is none.
@@ -803,7 +828,7 @@ function describe(worktree) {
 
 export function parseArgs(argv) {
   const scanned = scanArgs(argv, {
-    booleans: ['--json', '--apply', '--tmux', '--wake', '--task'],
+    booleans: ['--json', '--apply', '--tmux', '--wake', '--task', '--anyway'],
     values: ['--repo', '--from'],
     strictValues: ['--model', '--resume'],
     toolSugar: true,
@@ -817,6 +842,8 @@ export function parseArgs(argv) {
     trackTask: scanned.flags.task,
     tool: scanned.flags.tool, model: scanned.flags.model, resume: scanned.flags.resume,
     apply: scanned.flags.apply, json: scanned.flags.json,
+    // Open a workplace somebody else is already sitting in (D-0154).
+    anyway: scanned.flags.anyway,
   };
   if (scanned.error) return { ...opts, error: scanned.error };
   const { positional } = scanned;

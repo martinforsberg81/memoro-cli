@@ -61,6 +61,27 @@ The command performs one bounded state snapshot through the App-backed
 `mc github` surface. It does not require a personal `gh` login or repeated
 polling.
 
+### A series of pull requests (normative)
+
+Measured four times in one evening (#366, #367, #368, 2026-08-22): every PR
+here writes one entry in `CHANGELOG.md` and one row in
+`docs/mc-command-matrix.md`, so two PRs that touch the same two files conflict
+on every gate round whatever their code does — and each conflict cost the PM
+a round. Two rules, both cheap:
+
+- **One branch from `main` per change, never stacked.** A child PR merged
+  after its squashed parent lands on the orphan parent branch, not on `main`
+  (#363, re-landed as #364). Stack only when the child literally cannot be
+  built without the parent's commits on `main` — and then merge the child
+  first, or retarget it to `main` once the parent lands.
+- **The document lines are the last commit of the PR, on their own.** Code,
+  tests and any protocol text first; `CHANGELOG.md` and
+  `docs/mc-command-matrix.md` in a final commit touching nothing else. Then a
+  conflict can only be in that commit and the resolution is always *keep
+  both*. A series against the same files lands in order with `main` merged in
+  between (a merge commit, no rewritten history); whoever builds the series
+  knows that from the start and says so in the first PR.
+
 ## Work Method Updates
 
 When the user wants durable changes to how coding agents should work with
