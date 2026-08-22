@@ -25,6 +25,25 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `55 standing red before`.
 
 ### Added
+- **The suite right is a lease, and the suites that actually run are on the
+  board** (D-0141, D-0155). One full suite at a time on eight gigabytes was a
+  rule handed out in messages and hoped for; one session ran the contract
+  suite eleven times on a clock nobody saw. `mc suite claim "<what for>"`,
+  `mc suite release [--force]` and `mc suite who` are the machine-wide
+  counterpart of the repository lease — advisory, refusing a second claim and
+  blocking no process, every change of hands logged. The gate round takes the
+  right before either suite run and gives it back after, and stops in the
+  other holder's favour (`suite-lease`) when it is held; a holder who claimed
+  by hand before the round keeps it after. `mc status` carries a `suite` row
+  under the header: who holds the right, and every `node --test` / `npm test`
+  process standing in any work area right now, with how long it has run
+  (`ps etime`) — because seventy minutes on this machine means contention and
+  seven means solo, and a suite nobody claimed is a row rather than a slow
+  machine. `--json` carries it as `suite: { lease, running }`.
+- memoro's built-in gate declaration is the measured one (D-0089: `prepare:
+  npm ci`, the contract gate, the PM's merge log) instead of `UNKNOWN` beside
+  an operator override that knew. Two places answered one question about one
+  repository, and mc's own reading of itself quoted the stale half.
 - **`.mc/red-ratchet.json` — the standing red set, recorded so it can only get
   smaller.** Inside a single round the differential rule already catches every
   rise, including a brand new test that is born red: absent from the baseline

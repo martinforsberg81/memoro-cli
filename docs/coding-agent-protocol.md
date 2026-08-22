@@ -89,6 +89,20 @@ only after the user approves. When no profile exists, `read --json` returns
   - `TOOL_NAME`, `STATUS_TIMEOUT_MS`, `getStatus()` — `mc auth
     status` probe (§11a)
 
+### A reason says what was measured, not what was inferred (normative)
+
+Every refusal, verdict and status line mc prints is read as a fact by
+somebody who cannot see what it read. So the sentence must claim exactly what
+the reading supports and no more. The case that set the rule (2026-08-22): the
+wake guard read text after the prompt mark and said *there is already
+something in its prompt* — but a pane redraws old orders there, and only a
+probe typed into the input can tell a draft from a ghost. A reader that cannot
+probe now says *something is drawn in its prompt — a draft, or a ghost only a
+wake can tell apart*. Same evidence, a sentence the evidence can carry. Nine
+meters that claimed more than they measured were found that week; the word
+`GREEN` over 55 standing red names was another. When a reading is uncertain,
+say *unknown* or *drawn* — never the confident neighbour of what you know.
+
 ## GitHub interaction in coding sessions
 
 ### Credential boundary (normative)

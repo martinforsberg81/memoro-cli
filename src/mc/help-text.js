@@ -132,6 +132,13 @@ MAINTENANCE
   mc repo merge <repo> <pr> --check
                                     The same round, stopping at the verdict.
                                     A gate that passes is not a review
+  mc suite claim "<what for>"      Hold the right to run a full suite — one at
+                                    a time on this machine. Refused if someone
+                                    else holds it; no process is blocked. The
+                                    gate round takes it by itself
+  mc suite release [--force]       Give it back. --force takes it, and is logged
+  mc suite who [--json]            Who holds it — and which suites are actually
+                                    running, and for how long, whoever holds it
   mc watch pm start [--interval <seconds>]
                                     The PM round, every 30 minutes and never a
                                     model: commit pm/, run mc doctor, count

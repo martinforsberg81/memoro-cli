@@ -96,3 +96,24 @@ describe('a worktree without its dependency tree says so on the page (D-0152)', 
     assert.doesNotMatch(withTree(null), /node_modules/u);
   });
 });
+
+describe('the suite row on the page (D-0141, D-0155)', () => {
+  const withSuite = (suite) => {
+    const page = report('claude-fable-5');
+    page.suite = suite;
+    return renderLines(page, { columns: 140, now: 10 * 60000 }).join('\n');
+  };
+  it('says free and nothing running', () => {
+    assert.match(withSuite({ lease: { held: false }, running: [] }), /suite {2}free {2}· {2}nothing running/u);
+  });
+  it('says who holds it and what runs, for how long', () => {
+    const page = withSuite({
+      lease: { held: true, holder: 'msr-cleanup', errand: 'contract on #10820', age_ms: 7 * 60000, since: null },
+      running: [{ pid: 4242, area: 'msr-cleanup', directory: '/x', elapsed: '07:12', command: 'npm run test:msr:contract' }],
+    });
+    assert.match(page, /suite {2}msr-cleanup “contract on #10820” held for 7m {2}· {2}running in msr-cleanup for 7m \(pid 4242\)/u);
+  });
+  it('says nothing when the report has no suite field', () => {
+    assert.doesNotMatch(withSuite(undefined), /suite/u);
+  });
+});
