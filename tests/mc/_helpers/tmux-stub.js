@@ -42,7 +42,7 @@ import { join } from 'node:path';
 
 export function installTmuxStub(root, {
   mode = 'reliable', alive = [], drawAfter = 0, busyFor = 0, clients = [], typedAlready = '',
-  windowIndex = '0', clientSession = '',
+  windowIndex = '0', clientSession = '', ghost = '',
 } = {}) {
   const bin = join(root, 'bin');
   const state = join(root, 'tmux-state');
@@ -91,6 +91,11 @@ case "$1" in
       : > "${prompt}"
       exit 0
     fi
+    if [ "$4" = "BSpace" ]; then
+      current=\`cat "${prompt}"\`
+      printf '%s' "\${current%?}" > "${prompt}"
+      exit 0
+    fi
     if [ "$4" = "Enter" ]; then
       mode=\`cat "${modePath}"\`
       case "$mode" in
@@ -112,6 +117,9 @@ case "$1" in
     seen=\`expr "$seen" + 1\`
     printf '%s\\n' "$seen" > "${captures}"
     if [ "$seen" -le "${drawAfter}" ]; then shown=""; else shown=\`cat "${prompt}"\`; fi
+    # The ghost (D-0151): an empty input is drawn as an old order, and the
+    # drawing comes back the moment the input is empty again.
+    if [ -z "$shown" ] && [ -n "${ghost}" ]; then shown="${ghost}"; fi
     cat "${screen}"
     if [ "$seen" -le "${busyFor}" ]; then printf '%s\\n' "  * Thinking… (esc to interrupt)"; fi
     printf '%s\\n' "+------------------------------+"

@@ -71,13 +71,40 @@ const SUBMIT_MS = 400;
  * `BOX_ROWS` and `BELOW_BOX` keep the search near the foot of the pane, so a
  * box drawn earlier in the conversation and scrolled up can never be read as
  * the one somebody is typing into. They are generous enough for a notice that
- * wrapped a few times and a TUI with a second row of hints under its box.
+ * wrapped a few times and a TUI with several rows under its box: the status
+ * line, a `/rc active` row, a ledger row and a row per running agent were
+ * measured on PM's pane, where a tolerance of three rows read as "could not
+ * find its prompt" and refused every knock.
  */
-const RULE = /^[^A-Za-z0-9]*[-─═+]{3,}[^A-Za-z0-9]*$/u;
+// A rule may carry one short label inside it: PM's box is drawn with its
+// upper border reading `──── PM ─`, and a rule that allowed no letters at all
+// missed that border, found the one above it, and answered "could not find
+// its prompt" to every knock on PM (measured 2026-08-22).
+const RULE = /^[^A-Za-z0-9]*[-─═+]{3,}(?:\s+\S{1,24}\s+[-─═+]+)?[^A-Za-z0-9]*$/u;
 const PROMPT_ROW = /^\s*(?:[|│]\s*)?[>❯»]\s?/u;
 const BOX_EDGE = /^\s*[|│]\s?/u;
 const BOX_ROWS = 8;
-const BELOW_BOX = 3;
+const BELOW_BOX = 10;
+
+/**
+ * The drawing is not the input (D-0151).
+ *
+ * A pane can show text after the prompt mark that is not in the input at all:
+ * an order already carried out, redrawn from an old frame, and redrawn again
+ * after `C-u` clears nothing. Three panes measured, all three; the guard read
+ * that ghost as somebody's draft and refused for a day, and the fleet was
+ * booked as waiting on a person who had typed nothing.
+ *
+ * So text in the box is a question, not an answer, and the question is put to
+ * the input itself: one character typed, the row read back, the character
+ * deleted. If the row became the character alone, the input was empty and the
+ * text was a drawing. If the character landed after the text, the text is
+ * real, and it is left exactly as it was. Measured by hand on the three panes
+ * and again before this was written: `x` replaces the ghost, `BSpace` removes
+ * the `x`, and the ghost is drawn back within half a second.
+ */
+const PROBE = 'x';
+const PROBE_ATTEMPTS = 5;
 
 /**
  * The pane is mid-answer, and that is not the same as unresponsive.
@@ -258,7 +285,12 @@ export function wakeConversation({ target, sender, run = null, sleep = null, att
   if (before === null) return refuse('could not read the conversation');
   const opening = readBox(before);
   if (opening === null) return refuse('could not find its prompt to check it was empty');
-  if (opening.text !== '') return refuse('there is already something in its prompt');
+  if (opening.text !== '') {
+    // Text in the drawing. Ask the input whether it is really there (D-0151).
+    const verdict = probeInput(tmux, target, wait);
+    if (verdict === 'text') return refuse('there is already something in its prompt');
+    if (verdict !== 'empty') return refuse('could not tell whether its prompt was empty');
+  }
 
   // How many times this exact notice is already on screen above the box.
   //
@@ -353,6 +385,32 @@ export function wakeConversation({ target, sender, run = null, sleep = null, att
     return giveUp('the notice left the prompt without becoming a turn', null);
   }
   return giveUp('it stayed in the prompt', seen);
+}
+
+/**
+ * Is the text drawn in the box in the input, or only in the drawing?
+ *
+ * Returns `'empty'` (the drawing lied, the input is clear), `'text'` (the text
+ * is real), or `'unknown'` (the probe was never seen, so nothing is claimed).
+ * The probe character is deleted on every path, including the unknown one: it
+ * was typed, and leaving it is the one outcome this must not produce. On a
+ * real draft that is one character appended and removed again; on a ghost the
+ * ghost comes back on its own.
+ */
+function probeInput(tmux, target, wait) {
+  const typed = tmux(['send-keys', '-t', target, '-l', PROBE]);
+  if (typed?.status !== 0) return 'unknown';
+  let verdict = 'unknown';
+  for (let attempt = 0; attempt < PROBE_ATTEMPTS; attempt += 1) {
+    wait(DRAW_MS);
+    const pane = readPane(tmux, target);
+    const text = pane === null ? null : promptText(pane);
+    if (text === null) continue;
+    if (text === PROBE) { verdict = 'empty'; break; }
+    if (text.endsWith(PROBE)) { verdict = 'text'; break; }
+  }
+  tmux(['send-keys', '-t', target, 'BSpace']);
+  return verdict;
 }
 
 /**
