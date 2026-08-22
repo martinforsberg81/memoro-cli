@@ -1,11 +1,11 @@
 /**
  * The gate round that also lands the change.
  *
- * `repo-gate.js` answers one question — is the test gate green — and cannot
+ * `repo-gate.js` answers one question — did anything new go red — and cannot
  * merge. That is deliberate, and it stays that way: a module that could do both
  * is one `if` away from landing a change on a verdict it had not finished
  * forming. So merging lives here, on top of it, and reaches the merge only by
- * getting a green report back from something that has no opinion about merging.
+ * getting a passing report back from something that has no opinion about merging.
  *
  * The round, in order, stopping at the first thing that is not right:
  *
@@ -33,7 +33,7 @@ import { dirname, join } from 'node:path';
 import { claimLease, readLease, releaseLease } from './repo-lease.js';
 import { currentHolder } from './work-identity.js';
 import { mcHome } from './paths.js';
-import { runGate } from './repo-gate.js';
+import { runGate, verdictPhrase } from './repo-gate.js';
 import { sourceLinkedInstallations } from './repo-status.js';
 import { declarationFor } from './repo-gate-table.js';
 
@@ -55,7 +55,7 @@ export function defaultMergeLog(repoPath, { root = mcHome(), env = process.env }
 }
 
 /**
- * Run the gate and, only if it is green, land the change.
+ * Run the gate and, only if it passes, land the change.
  *
  * Everything that touches the world is injectable for the same reason as in the
  * gate: the one thing a test suite cannot assert is a real merge against a real
@@ -97,6 +97,12 @@ export async function runMergeRound({
     ok: false,
     merged: false,
     merge_commit: null,
+    // What the squash landed *in*, and whether that is the branch people mean
+    // by "merged". A round on #363 said "merged as 7dcbf96" and was right —
+    // into `pm-heartbeat`, its stacked base — and everyone read "on main".
+    merged_into: null,
+    default_branch: null,
+    off_default: false,
     stopped_at: null,
     reason: null,
     gate: null,
@@ -144,7 +150,7 @@ export async function runMergeRound({
     // The lease serialises gate rounds against each other; it does not stop a
     // person merging by hand, and that happened during this feature's own
     // development — a round measured against one main while another landed in
-    // it. A green verdict is a statement about the tree it measured, so if the
+    // it. A passing verdict is a statement about the tree it measured, so if the
     // base has moved since, the verdict is about a tree that no longer exists.
     const base = `origin/${verdict.pr.base}`;
     const fetched = askGit(['fetch', 'origin', '--prune'], { cwd: repoPath });
@@ -152,7 +158,7 @@ export async function runMergeRound({
     const nowAt = trim(askGit(['rev-parse', base], { cwd: repoPath }).stdout);
     if (!nowAt) return finish('drift', `could not read ${base} before merging`);
     if (nowAt !== verdict.baseline.commit) {
-      return finish('drift', `${base} moved from ${short(verdict.baseline.commit)} to ${short(nowAt)} while the gate ran — the green is about a tree that has changed, so it is measured again rather than merged on`);
+      return finish('drift', `${base} moved from ${short(verdict.baseline.commit)} to ${short(nowAt)} while the gate ran — the verdict is about a tree that has changed, so it is measured again rather than merged on`);
     }
 
     // And the lease, re-read rather than assumed. A `--force` release mid-round
@@ -163,7 +169,10 @@ export async function runMergeRound({
       return finish('lease', `the lease was taken from ${holder.name} during the round — nothing was merged`);
     }
 
-    say(`gate green and ${base} unmoved — merging #${verdict.pr.number}`);
+    // The same statement the verdict makes, not a friendlier one. A merge
+    // round that narrated "gate green" over standing red would put the word
+    // back exactly where it was taken out of.
+    say(`${verdictPhrase(verdict)} and ${base} unmoved — merging #${verdict.pr.number}`);
     const merged = askGh(['pr', 'merge', String(verdict.pr.number), '--squash'], { cwd: repoPath });
     if (merged.status !== 0) {
       return finish('merge', trim(merged.stderr) || `gh could not merge #${verdict.pr.number}`);
@@ -174,7 +183,17 @@ export async function runMergeRound({
     // that somebody can go and look at it.
     askGit(['fetch', 'origin', '--prune'], { cwd: repoPath });
     report.merge_commit = trim(askGit(['rev-parse', base], { cwd: repoPath }).stdout) || null;
-    say(`merged as ${short(report.merge_commit)}`);
+    // Named, not implied. The sha is read from the PR's base, so it is the
+    // base that says what "merged" meant — and when that is not the branch
+    // the remote points HEAD at, the line says so in its own words rather
+    // than leaving a true sentence to be read as a different true sentence.
+    report.merged_into = verdict.pr.base;
+    report.default_branch = defaultBranch(askGit, repoPath);
+    report.off_default = Boolean(report.default_branch) && report.merged_into !== report.default_branch;
+    say(`merged #${verdict.pr.number} into ${report.merged_into} as ${short(report.merge_commit)}`);
+    if (report.off_default) {
+      say(`WARNING: ${report.merged_into} is not the default branch (${report.default_branch}) — this landed on a branch, not on ${report.default_branch}`);
+    }
 
     report.deploy = deployPull({ git: askGit, repoPath, env, say, installs });
     const written = writeMergeLine({ report, verdict, path: mergeLog ?? defaultMergeLog(repoPath, { root, env }), clock });
@@ -245,11 +264,11 @@ function writeMergeLine({ report, verdict, path, clock }) {
   const day = new Date(clock()).toISOString().slice(0, 10);
   const checks = [
     `full suite both sides, fresh baseline at ${short(verdict.baseline.commit)}`,
-    `${verdict.baseline.red.length} red before · ${verdict.candidate.red.length} after · 0 new`,
+    `${verdict.baseline.red.length} standing red before · ${verdict.candidate.red.length} after · 0 new`,
     `base unmoved at merge`,
   ].join(' · ');
   const line = `| ${day} | ${basenameOf(report.repo)} #${report.pr.number}${verdict.pr.title ? ` ${verdict.pr.title}` : ''} `
-    + `| ${checks} | D (delegerad) | Squash-merge → \`${short(report.merge_commit)}\` `
+    + `| ${checks} | D (delegerad) | Squash-merge into \`${report.merged_into}\` → \`${short(report.merge_commit)}\`${report.off_default ? ` (NOT ${report.default_branch})` : ''} `
     + `| Run by \`mc repo merge\` as ${report.holder}. ${deployNote(report.deploy)} |`;
 
   try {
@@ -259,6 +278,17 @@ function writeMergeLine({ report, verdict, path, clock }) {
     return { path: null, line };
   }
   return { path, line };
+}
+
+/**
+ * The branch the remote points HEAD at — `main` here — or null when git
+ * cannot say. Null is "unknown", never "main": a guess would turn the warning
+ * into the very assumption it exists to catch.
+ */
+function defaultBranch(git, repoPath) {
+  const head = git(['symbolic-ref', '--short', '-q', 'refs/remotes/origin/HEAD'], { cwd: repoPath });
+  const name = head?.status === 0 ? trim(head.stdout).replace(/^origin\//u, '') : '';
+  return name || null;
 }
 
 function deployNote(deploy) {

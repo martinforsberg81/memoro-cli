@@ -87,6 +87,21 @@ export function renderLines(report, {
   const rule = wide - width(brand) - width(counts) - 4;
   lines.push('');
   lines.push(`  ${brand} ${c('─'.repeat(Math.max(2, rule)), 'grey')} ${counts}`);
+  // The suite right and what is actually running a suite, on one row — the
+  // gap between them is the finding (D-0141: five suites at once on 8 GB;
+  // D-0155: eleven runs on a clock nobody saw). How long it has run is the
+  // number that separates a solo run from one under contention.
+  if (report.suite) {
+    const lease = report.suite.lease;
+    const running = report.suite.running || [];
+    const held = lease?.held
+      ? `${c(lease.holder, 'bold')}${lease.errand ? ` “${lease.errand}”` : ''} ${c(`held for ${ago(now - (lease.age_ms ?? 0), now)}`, 'grey')}`
+      : c('free', 'grey');
+    const runs = running.length
+      ? running.map((run) => c(`running in ${run.area || run.directory} for ${elapsed(run.elapsed)} (pid ${run.pid})`, running.length > 1 ? 'red' : 'yellow')).join(c('  ·  ', 'grey'))
+      : c('nothing running', 'grey');
+    lines.push(`  ${c('suite', 'grey')}  ${clip(`${held}  ${c('·', 'grey')}  ${runs}`, wide - 9)}`);
+  }
   lines.push('');
 
   if (areas.length === 0) {
@@ -158,6 +173,18 @@ function where(area) {
     worktree.dependencies === 'missing' ? 'no node_modules' : null,
   ].filter(Boolean).join('  ')));
   return parts.join('   ·   ');
+}
+
+/** `ps etime` — `MM:SS`, `HH:MM:SS` or `D-HH:MM:SS` — as the board says time. */
+export function elapsed(etime) {
+  const value = String(etime || '').trim();
+  const match = /^(?:(\d+)-)?(?:(\d+):)?(\d+):(\d+)$/u.exec(value);
+  if (!match) return value || '?';
+  const [, days = '0', hours = '0', minutes] = match;
+  const total = Number(days) * 1440 + Number(hours) * 60 + Number(minutes);
+  if (total < 1) return 'under a minute';
+  if (total < 60) return `${total}m`;
+  return `${Math.floor(total / 60)}h ${total % 60}m`;
 }
 
 function ago(updatedMs, now) {

@@ -22,7 +22,7 @@ import { painter } from '../status-render.js';
 import { leaseRow, livenessRow, renderRepoLines, renderWatchLines } from '../repo-render.js';
 import { claimLease, readLease, releaseLease } from '../repo-lease.js';
 import { currentHolder } from '../work-identity.js';
-import { runGate } from '../repo-gate.js';
+import { runGate, verdictHeadline } from '../repo-gate.js';
 import { runMergeRound } from '../repo-merge.js';
 import { livenessForLeases } from '../lease-liveness.js';
 import { readCombinedSnapshot } from '../repo-snapshot.js';
@@ -260,7 +260,12 @@ function mergeLines(report) {
     return lines;
   }
 
-  lines.push(`mc: merged #${report.pr.number} as ${String(report.merge_commit || '').slice(0, 7)} (squash)`);
+  // Into what, every time. "merged as <sha>" was true of a PR that landed on
+  // its stacked base branch, and it was read as "on main" by everyone.
+  lines.push(`mc: merged #${report.pr.number} into ${report.merged_into || report.pr.base} as ${String(report.merge_commit || '').slice(0, 7)} (squash)`);
+  if (report.off_default) {
+    lines.push(`mc: WARNING — ${report.merged_into} is not the default branch (${report.default_branch}): this landed on a branch, not on ${report.default_branch}`);
+  }
   if (report.deploy?.attempted) {
     lines.push(report.deploy.ok
       ? `mc: pulled ${report.deploy.command} at ${report.deploy.root}`
@@ -277,11 +282,14 @@ function mergeLines(report) {
  * about the diff and its contract, which nothing here has looked at, so the
  * lines below say what was measured and leave the rest to whoever reviews it.
  */
-function gateLines(report, { checkOnly = false } = {}) {
+export function gateLines(report, { checkOnly = false } = {}) {
   const lines = [];
   const pr = report.pr.head ? `#${report.pr.number} (${report.pr.head} → ${report.pr.base})` : `#${report.pr.number}`;
 
-  if (report.stopped_at && report.stopped_at !== 'red') {
+  // `red` and `ratchet` are verdicts the round reached by measuring, and both
+  // have their own block below with the names in it. Everything else stopped
+  // short of a verdict, which is a different thing for a reader to be told.
+  if (report.stopped_at && report.stopped_at !== 'red' && report.stopped_at !== 'ratchet') {
     lines.push(`mc: the round stopped at ${report.stopped_at} — ${report.reason}`);
     // A stop after the suites is a different thing from one before them, and a
     // reader deciding what to do next needs to know which they are looking at.
@@ -308,20 +316,105 @@ function gateLines(report, { checkOnly = false } = {}) {
     return lines;
   }
 
+  if (report.ratchet?.risen?.length) {
+    const risen = report.ratchet.risen;
+    lines.push(`mc: RATCHET RISEN — ${risen.length} red name${risen.length === 1 ? '' : 's'} not in the standing red set.`);
+    // Every one of these was red on the baseline too — a name red only on the
+    // candidate is `broke` and was stopped above. So this is never a fault the
+    // pull request introduced, and the line says so rather than leaving an
+    // author to work out why their change was refused for somebody else's.
+    lines.push(`mc: ${risen.length === 1 ? 'It was' : 'They were'} red on ${report.pr.base} too, so this change did not cause ${risen.length === 1 ? 'it' : 'them'} —`);
+    lines.push(`mc: what moved is the floor in ${report.ratchet.file}, and merging on a moved floor is how it stays moved.`);
+    // JSON-quoted, because the remedy is a paste into that array and an author
+    // re-typing fifty-character test names is an author who will get one
+    // wrong.
+    lines.push(`mc: fix ${risen.length === 1 ? 'it' : 'them'}, or add ${risen.length === 1 ? 'it' : 'them'} to its "names" as a commit somebody reviews:`);
+    for (const name of risen.slice(0, 20)) lines.push(`      ${JSON.stringify(name)},`);
+    if (risen.length > 20) lines.push(`      … and ${risen.length - 20} more (the full list is in --json)`);
+    return lines;
+  }
+
+  if (report.ratchet && report.ratchet.ok === false) {
+    lines.push(`mc: STOPPED — ${report.ratchet.reason}`);
+    lines.push('mc: an unreadable ratchet is not an empty one, so nothing was decided from it');
+    return lines;
+  }
+
   if (report.fixed.length) lines.push(`mc: ${report.fixed.length} that were red on the baseline are green here`);
-  // What the repository asked for beyond the suite, so a green is not read as
+  // What the repository asked for beyond the suite, so a pass is not read as
   // "the suite passed" when more than the suite was measured.
   if (report.declaration?.prepare) lines.push(`mc: prepared with ${report.declaration.prepare}`);
   for (const gate of report.extra_gates || []) {
     lines.push(`mc: extra gate ${gate.name} — ${gate.ok ? 'passed' : 'failed'}`);
   }
-  lines.push('mc: GREEN — the test gate passes. It says nothing about whether the change is right;');
+  lines.push(...ratchetLines(report));
+
+  // The headline carries the number when there is one, so the word that gets
+  // read out and reported onward is the whole verdict rather than the half of
+  // it that sounds best.
+  lines.push(`mc: ${verdictHeadline(report)}. It says nothing about whether the change is right;`);
   lines.push('mc: that is the review, and it is still somebody\'s to do');
+  // The second-order cost of a standing red name, said where the verdict is
+  // read rather than in a document beside it: a test that is already failing
+  // cannot fail any harder, so a fault introduced inside one of these has
+  // nowhere to show up. They are not only debt, they are blind spots.
+  if (report.standing_red) {
+    lines.push(`mc: those ${report.standing_red} were red before this change and are red after it —`);
+    lines.push('mc: a new fault inside any of them could not have shown up in this round');
+  }
   // Said only when it is the whole answer. In a merge round these same lines
   // are followed by what became of the verdict, and a run that says it did not
   // merge and then says it merged is worse than one that says neither.
   if (checkOnly) lines.push('mc: this run was asked to check only, so nothing was merged');
   return lines;
+}
+
+/**
+ * What the ratchet has to say on a round that passed it.
+ *
+ * Two things, and neither of them changes the verdict. That the floor is
+ * unrecorded, when there is a floor to record — otherwise the first thing
+ * anybody learns about the mechanism is a gate failing. And which names have
+ * come good, spelled out, because lowering the floor is a commit somebody
+ * makes by hand and this is the difference between that commit being a paste
+ * and being an investigation. Nothing here writes the file: see the header of
+ * `red-ratchet.js` for why a round that tightened it automatically would lay a
+ * trap for the next author.
+ */
+function ratchetLines(report) {
+  const ratchet = report.ratchet;
+  const lines = [];
+  if (!ratchet) return lines;
+
+  if (!ratchet.present) {
+    if (!report.standing_red) return lines;
+    lines.push(`mc: no standing red set is recorded in ${ratchet.file}, so nothing here stops`);
+    lines.push(`mc: the ${ordinal(report.standing_red + 1)} joining them. Record today's ${report.standing_red} there and the number can only go down`);
+    return lines;
+  }
+
+  lines.push(`mc: ratchet — ${ratchet.accepted} standing red name${ratchet.accepted === 1 ? '' : 's'} accepted in ${ratchet.file}, none above it`);
+  if (ratchet.fallen.length) {
+    lines.push(`mc: ${ratchet.fallen.length} of them ${ratchet.fallen.length === 1 ? 'is' : 'are'} green here — remove ${ratchet.fallen.length === 1 ? 'it' : 'them'} from ${ratchet.file}`);
+    lines.push('mc: in a commit to lock the gain. mc does not write it: a name that only passed');
+    lines.push('mc: because the machine was quiet would come back, and read as a rise next round');
+    for (const name of ratchet.fallen.slice(0, 20)) lines.push(`      ${name}`);
+    if (ratchet.fallen.length > 20) lines.push(`      … and ${ratchet.fallen.length - 20} more`);
+  }
+  return lines;
+}
+
+/**
+ * `56th`, not `56st`.
+ *
+ * Small, and worth its four lines: the sentence it appears in is the one that
+ * asks somebody to record a floor, and a verdict that cannot count is not one
+ * anybody takes an instruction from.
+ */
+function ordinal(n) {
+  const teen = n % 100;
+  if (teen >= 11 && teen <= 13) return `${n}th`;
+  return `${n}${['th', 'st', 'nd', 'rd'][n % 10] || 'th'}`;
 }
 
 function count(side) {

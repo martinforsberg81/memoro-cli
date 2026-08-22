@@ -39,6 +39,7 @@ import { reservedRoleName } from './roles.js';
 import { inspectWorkArea } from './work-area.js';
 import { currentHolder } from './work-identity.js';
 import { backgroundTarget } from './work-open.js';
+import { toolProcesses } from './work-status.js';
 
 /**
  * How long the TUI gets to draw the text before Enter is pressed — and how
@@ -149,6 +150,7 @@ export function sendToArea({
   run = null,
   sleep = null,
   wake = false,
+  processes = null,
 } = {}) {
   const area = inspectWorkArea(name, env, { conversations: false, git: false });
   if (!area.exists) return { ok: false, reason: 'no-such-area' };
@@ -156,8 +158,19 @@ export function sendToArea({
   const file = writeMessage({ areaPath: area.path, message, sender, now });
 
   if (!wake) return { ok: true, file, woke: false, reason: 'not-asked' };
-  const target = backgroundTarget(name, { run: run ? (args) => run(args) : null });
-  if (!target) return { ok: true, file, woke: false, reason: 'no-live-conversation' };
+  const target = backgroundTarget(name, { run: run ? (args) => run(args) : null, env });
+  if (!target) {
+    // "Nothing is running" was the one sentence in the chain a person reads,
+    // and for nine sessions it pointed away from the fault: they were running,
+    // in panes mc could not address (D-0136). Now a pane is found by where it
+    // stands; what is left is a tool with no pane at all — started from a
+    // plain terminal — and that is said as what it is.
+    const standing = (processes || toolProcesses)([area.path, ...area.worktrees.map((item) => item.path)]);
+    if (standing.length > 0) {
+      return { ok: true, file, woke: false, reason: 'not-addressable', processes: standing };
+    }
+    return { ok: true, file, woke: false, reason: 'no-live-conversation' };
+  }
 
   // A singleton role's pane is the one pane somebody is *meant* to be sitting
   // at — PM is the door to the person (K1.2), so a client on it is the normal
@@ -230,6 +243,49 @@ function noticeFrom(sender) {
 }
 
 /**
+ * Would a wake be allowed to type into this pane right now?
+ *
+ * The two questions `wakeConversation` asks before it touches a keyboard,
+ * pulled out so somebody can ask them without typing: is a person attached,
+ * and is the input box visibly empty. Both are reads.
+ *
+ * The guard (`mc watch sessions`) needs exactly this and nothing after it. A
+ * session with mail it has not read, sitting in a pane no wake can reach, is a
+ * delivery that arrived and will not be seen — and it is a fact about the pane
+ * rather than an opinion about it, so it is answered here rather than by a
+ * model looking at a screenshot. Two implementations of "can this pane be
+ * woken" would be two answers the day they disagree, so there is one.
+ *
+ * `pane` and `box` come back with the verdict because the wake needs both and
+ * reading them twice would widen the gap between looking and typing.
+ */
+export function paneWillTakeText({ target, run = null, attachedOk = false, probe = null } = {}) {
+  const tmux = run || ((args) => spawnSync('tmux', args, { encoding: 'utf8' }));
+  if (!attachedOk) {
+    const clients = tmux(['list-clients', '-t', target, '-F', '#{client_name}']);
+    if (clients?.status !== 0) return { ok: false, reason: 'could not tell whether anybody is attached to it' };
+    if (String(clients.stdout || '').trim() !== '') return { ok: false, reason: 'somebody is attached to it' };
+  }
+
+  const pane = readPane(tmux, target);
+  if (pane === null) return { ok: false, reason: 'could not read the conversation' };
+  const box = readBox(pane);
+  if (box === null) return { ok: false, reason: 'could not find its prompt to check it was empty' };
+  if (box.text !== '') {
+    // Text in the drawing is not text in the input (D-0151). A caller that
+    // may type asks the input with a probe; a caller that only reads gets
+    // the honest answer — a draft or a ghost, and it cannot say which.
+    if (!probe) {
+      return { ok: false, drawn: true, reason: 'something is drawn in its prompt — a draft, or a ghost only a wake can tell apart (D-0151)' };
+    }
+    const verdict = probe();
+    if (verdict === 'text') return { ok: false, reason: 'there is already something in its prompt' };
+    if (verdict !== 'empty') return { ok: false, reason: 'could not tell whether its prompt was empty' };
+  }
+  return { ok: true, pane, box };
+}
+
+/**
  * Wake a conversation, and know whether it woke.
  *
  * It asks two questions before it types a character, because the input box it
@@ -270,27 +326,18 @@ export function wakeConversation({ target, sender, run = null, sleep = null, att
   // nothing to take back and nothing for the sender to worry about.
   const refuse = (reason) => ({ ok: false, guard: true, reason });
 
-  // `attachedOk` is the role-pane exception (D-0013), and it skips rule 1
-  // only: a pane meant to have a person at it is knocked like any other, and
-  // rule 2 is what keeps the knock off that person's half-written sentence.
-  if (!attachedOk) {
-    const clients = tmux(['list-clients', '-t', target, '-F', '#{client_name}']);
-    if (clients?.status !== 0) return refuse('could not tell whether anybody is attached to it');
-    if (String(clients.stdout || '').trim() !== '') return refuse('somebody is attached to it');
-  }
-
   // Read last, immediately before typing: whatever gap remains between looking
   // and typing is the gap, and there is no reason to make it any wider.
-  const before = readPane(tmux, target);
-  if (before === null) return refuse('could not read the conversation');
-  const opening = readBox(before);
-  if (opening === null) return refuse('could not find its prompt to check it was empty');
-  if (opening.text !== '') {
-    // Text in the drawing. Ask the input whether it is really there (D-0151).
-    const verdict = probeInput(tmux, target, wait);
-    if (verdict === 'text') return refuse('there is already something in its prompt');
-    if (verdict !== 'empty') return refuse('could not tell whether its prompt was empty');
-  }
+  // `attachedOk` is the role-pane exception (D-0013): rule 1 is skipped for
+  // a pane meant to have a person at it. The probe is rule 2's answer to the
+  // drawing (D-0151): text drawn in the box is a question put to the input,
+  // and only a wake — which is about to type anyway — may ask it that way.
+  const clear = paneWillTakeText({
+    target, run: tmux, attachedOk, probe: () => probeInput(tmux, target, wait),
+  });
+  if (!clear.ok) return refuse(clear.reason);
+  const before = clear.pane;
+  const opening = clear.box;
 
   // How many times this exact notice is already on screen above the box.
   //

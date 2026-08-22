@@ -146,6 +146,10 @@ async function runVerb(opts, { stdout, stderr }) {
       stdout.write(`mc: nobody was woken — ${opts.name} reads it at its next turn (--wake knocks)\n`);
     } else if (result.reason === 'no-live-conversation') {
       stdout.write(`mc: nothing is running in ${opts.name} — it reads its inbox when it starts\n`);
+    } else if (result.reason === 'not-addressable') {
+      // Not "nothing is running": something is, and mc cannot reach it.
+      const [first] = result.processes;
+      stdout.write(`mc: ${first.name} (pid ${first.pid}) is running in ${opts.name} outside tmux — mc has no pane to knock on; it reads its inbox at its next turn\n`);
     } else if (result.guard) {
       stdout.write(`mc: delivered, but did not knock: ${result.reason}\n`);
     } else {
@@ -736,7 +740,9 @@ export async function openArea(name, opts, deps) {
       stderr.write(`mc: join it without --model, or restart it first: mc work stop ${name}\n`);
       return 1;
     }
-    stderr.write(`mc: joining ${name} — it is running in the background\n`);
+    stderr.write(running === `mc-${name}`
+      ? `mc: joining ${name} — it is running in the background\n`
+      : `mc: joining ${name} — it is running in tmux ${running}, started outside mc and found by where it stands\n`);
     stderr.write('mc: ctrl-b d leaves it running\n');
     const joined = attachBackground(running);
     if (!joined.ok) {

@@ -22,26 +22,37 @@
  *     last saw;
  *  4. run the repository's own full suite on both, in the same round;
  *  5. compare the two red sets by name at every level;
- *  6. give the lease back, whatever happened.
+ *  6. check what is left against the standing red set the repository recorded;
+ *  7. give the lease back, whatever happened.
  *
  * There is no merge in here, and not behind a flag either. This module answers
- * one question — is the test gate green — and a module that could also merge
+ * one question — did anything new go red — and a module that could also merge
  * would be one `if` away from a round that merged on a verdict it had not
  * finished forming. Merging lives in `repo-merge.js`, which runs this and acts
  * on the report; keeping it out of here is load-bearing rather than tidy, and
  * a test asserts against this file's source that it stays out.
  *
- * It says "the test gate is green", never "the pull request is good". Reading
- * the diff against its contract is judgement, and judgement is not mechanical;
- * a green suite passing an unescalated design decision is exactly the mistake
+ * It says what it measured, never "the pull request is good". Reading the diff
+ * against its contract is judgement, and judgement is not mechanical; a
+ * passing suite carrying an unescalated design decision is exactly the mistake
  * that conflation would license.
+ *
+ * And it does not say "green" unless the base branch is green. The rule above
+ * is differential, so on a repository with fifty-five standing red names a
+ * pass means "no new red", which is a smaller claim — and for a week it was
+ * reported onward as the larger one. The verdict now carries the number
+ * instead. `red-ratchet.js` is the other half of the same correction: the
+ * comparison cannot see a floor that moved between rounds, so the floor is
+ * written down where a rise has to be reviewed rather than inherited.
  */
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { claimLease, releaseLease } from './repo-lease.js';
+import { claimSuiteLease, releaseSuiteLease } from './suite-lease.js';
 import { compareRed, redNames, tapTotals } from './tap-red.js';
+import { RATCHET_FILE, compareRatchet, readRatchet } from './red-ratchet.js';
 import { currentHolder } from './work-identity.js';
 import { mcHome } from './paths.js';
 import { repoFileSlug } from './repo-snapshot.js';
@@ -126,6 +137,13 @@ export async function runGate({
     candidate: null,
     broke: [],
     fixed: [],
+    // The verdict as a word a reader can branch on, and the number that word
+    // used to hide. `green` and `no-new-red` are both passes and are not the
+    // same statement: one says the suite is clean, the other says it is no
+    // dirtier than it was. See `verdictHeadline` below.
+    verdict: null,
+    standing_red: null,
+    ratchet: null,
     started_at: new Date(startedAt).toISOString(),
     finished_at: null,
     duration_ms: null,
@@ -135,6 +153,7 @@ export async function runGate({
     report.stopped_at = stoppedAt;
     report.reason = reason;
     report.ok = stoppedAt === null;
+    report.verdict = verdictFor(report);
     const ended = clock();
     report.finished_at = new Date(ended).toISOString();
     report.duration_ms = ended - startedAt;
@@ -150,12 +169,28 @@ export async function runGate({
     say(`lease taken by ${holder.name}`);
   }
 
+  // The suite right, machine-wide (D-0141): one full suite at a time on
+  // eight gigabytes, and this round runs two. Taken here, before any work,
+  // and held until the round is over — whoever holds the repository. A right
+  // somebody else holds stops the round in their favour, because the gate is
+  // the one thing that runs suites by machine and must not be the thing that
+  // runs over a person's right to.
+  const suiteRight = claimSuiteLease({ errand: `gate round for #${pr}`, holder, root });
+  if (!suiteRight.ok) {
+    if (holdLease) releaseLease({ repoPath, holder, root });
+    const held = suiteRight.lease;
+    return finish('suite-lease', `the suite right is held by ${held.holder}${held.errand ? ` for “${held.errand}”` : ''} — one full suite at a time on this machine (D-0141); mc suite who says whether that run is still going`);
+  }
+  const ownSuiteRight = !suiteRight.already;
+  if (ownSuiteRight) say(`suite right taken by ${holder.name}`);
+
   // What this repository needs, read before any work is done. A round that
   // cannot know whether the suite will be complete is a round whose green
   // means nothing, so it stops here rather than after two suite runs.
   const declared = declarationFor(repoPath, { root, env });
   if (!declared.ok) {
     if (holdLease) releaseLease({ repoPath, holder, root });
+    if (ownSuiteRight) releaseSuiteLease({ holder, root });
     return finish('declaration', declared.reason);
   }
   report.declaration = { source: declared.source, ...declared.declaration };
@@ -249,6 +284,10 @@ export async function runGate({
     if (!before.ok) return finish('suite', `the baseline run ${before.reason}`);
     report.baseline = before.result;
 
+    // The number the word "green" used to sit on top of. Read off the
+    // baseline, because the baseline *is* the base branch as fetched — this is
+    // a statement about main, not about the pull request.
+    report.standing_red = before.result.red.length;
     say(`baseline: ${before.result.red.length} red`);
     say('running the suite on the candidate');
     const after = await measure({ suite: runSuite, git: askGit, cwd: headDir, say, side: 'candidate' });
@@ -262,6 +301,34 @@ export async function runGate({
 
     if (broke.length) return finish('red', `${broke.length} test${broke.length === 1 ? '' : 's'} red on the candidate and green on the baseline`);
 
+    // The floor, checked against the state this change would leave behind.
+    //
+    // Read from the *candidate* worktree, so a pull request that repairs tests
+    // may record the smaller set in the same commit as the repair, and so the
+    // set consulted is the one that would be on main after the merge. It is no
+    // way around the comparison above: a change that added a red name has
+    // already been stopped by `broke`, whatever it wrote in this file.
+    const ratchet = readRatchet(headDir);
+    report.ratchet = {
+      present: ratchet.present,
+      ok: ratchet.ok,
+      file: RATCHET_FILE,
+      accepted: ratchet.names.length,
+      risen: [],
+      fallen: [],
+      reason: ratchet.reason,
+    };
+    if (!ratchet.ok) return finish('ratchet', ratchet.reason);
+    if (ratchet.present) {
+      const moved = compareRatchet(ratchet.names, after.result.red);
+      report.ratchet.risen = moved.risen;
+      report.ratchet.fallen = moved.fallen;
+      say(`ratchet: ${ratchet.names.length} accepted, ${moved.risen.length} above it, ${moved.fallen.length} below`);
+      if (moved.risen.length) {
+        return finish('ratchet', `${moved.risen.length} red name${moved.risen.length === 1 ? '' : 's'} `
+          + `${moved.risen.length === 1 ? 'is' : 'are'} not in the standing red set recorded in ${RATCHET_FILE}`);
+      }
+    }
     // The pull request's own tests (D-0157). The suite answers "did anything
     // else break?"; this answers "is this change proved?" — and a suite that
     // globs some directories and not others had answered neither for a PR
@@ -304,7 +371,51 @@ export async function runGate({
       releaseLease({ repoPath, holder, root });
       say('lease released');
     }
+    // The suite right too — only if this round took it. A holder who claimed
+    // it by hand before the round keeps it afterwards; that was their claim.
+    if (ownSuiteRight) {
+      releaseSuiteLease({ holder, root });
+      say('suite right released');
+    }
   }
+}
+
+/**
+ * What the round decided, as one word.
+ *
+ * `green` and `no-new-red` are both passes and they are not the same claim.
+ * The first says the suite is clean. The second says only that it is no
+ * dirtier than the branch it is aimed at — which is what this gate has always
+ * measured, and what it used to report as "GREEN" over fifty-five red names.
+ * Anything a machine wants to branch on should branch on this rather than on
+ * the prose, and the two passes are separate words precisely so that a reader
+ * who only ever wanted the strict one can still ask for it.
+ */
+export function verdictFor(report) {
+  if (report.stopped_at === 'red') return 'red';
+  if (report.stopped_at === 'ratchet') return 'ratchet-risen';
+  if (report.stopped_at !== null) return 'stopped';
+  return report.standing_red ? 'no-new-red' : 'green';
+}
+
+/**
+ * The verdict as a headline, and never the word "green" over standing red.
+ *
+ * The number goes in the line rather than in a footnote somewhere, because the
+ * line is what gets read out loud and reported onward. A verdict that needed a
+ * document beside it to be understood correctly is the thing being fixed here.
+ */
+export function verdictHeadline(report) {
+  const standing = report.standing_red ?? 0;
+  if (!standing) return 'GREEN — the test gate passes';
+  return `NO NEW RED — ${standing} standing red name${standing === 1 ? '' : 's'} on ${report.pr?.base || 'the base'}`;
+}
+
+/** The same statement mid-sentence, for a round that is narrating itself. */
+export function verdictPhrase(report) {
+  const standing = report.standing_red ?? 0;
+  if (!standing) return 'gate green';
+  return `no new red (${standing} standing red on ${report.pr?.base || 'the base'})`;
 }
 
 /**

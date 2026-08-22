@@ -68,21 +68,25 @@ export const SHIPPED = Object.freeze({
     merge_log: Object.freeze({ under: 'work-root', path: 'large-scale-llm-project/merge-log.md' }),
   }),
   memoro: Object.freeze({
-    // Known: the gate beyond the suite, ordered in D-0018. Not known: whether
-    // its suite needs anything installed first. Its test script is
-    // `node scripts/testing/ci.mjs`, which says nothing either way — the same
-    // reason the entry above cannot be inferred from a manifest. So this half
-    // stays UNKNOWN and the round stops until somebody who knows writes it down.
-    prepare: UNKNOWN,
-    prepare_why: 'no order or decision has said what memoro needs before its suite can be '
-      + 'believed, and mc will not guess one',
+    // Measured, not guessed (D-0089, delivered 2026-08-18; declared by the PM
+    // in the operator table 2026-08-21, shipped here 2026-08-22). A clean
+    // checkout without `npm ci`: exit 1, ~30 files fail with
+    // ERR_MODULE_NOT_FOUND (typescript, fflate). With it, 6.6 s: the contract
+    // suite 2352/2352 in 146 s — repeated with PLAYWRIGHT_BROWSERS_PATH at an
+    // empty directory, identical, so no browser is needed; CI runs the same
+    // two steps. This shipped entry existed as UNKNOWN beside the measured
+    // override for a day, and mc's own reading of itself quoted the stale
+    // half: two places answering one question about one repository.
+    prepare: 'npm ci',
+    prepare_why: 'measured in D-0089: without npm ci ~30 files fail with ERR_MODULE_NOT_FOUND; '
+      + 'with it the contract suite is 2352/2352, no browser binaries involved (verified with an '
+      + 'empty PLAYWRIGHT_BROWSERS_PATH); matches .github/workflows/msr-contract.yml',
     extra_gates: Object.freeze([
       Object.freeze({ name: 'msr contract', command: 'npm run test:msr:contract', source: 'D-0018' }),
     ]),
-    // Open question with the PM: which log memoro's merges belong in. Until it
-    // is answered the round writes no line and says so, rather than inventing
-    // a file somewhere.
-    merge_log: null,
+    // The PM's decisions log, under the work root — where memoro's merges
+    // have been written since the operator table declared it.
+    merge_log: Object.freeze({ under: 'work-root', path: 'pm/decisions/merge-log.md' }),
   }),
 });
 

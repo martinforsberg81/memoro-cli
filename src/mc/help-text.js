@@ -120,13 +120,25 @@ MAINTENANCE
                                     a candidate with main merged in, run the
                                     repository's own full suite on both, and
                                     compare the failures by name at every
-                                    level — then, only if it is green and the
-                                    base has not moved since, squash-merge,
-                                    pull the source-linked installation, and
-                                    log a line. Nothing merges a red gate
+                                    level — then, only if nothing new went red
+                                    and the base has not moved since,
+                                    squash-merge, pull the source-linked
+                                    installation, and log a line. Nothing
+                                    merges a red gate. The verdict says GREEN
+                                    only when the base itself has no red names;
+                                    otherwise it carries the number that are
+                                    standing, and .mc/red-ratchet.json is what
+                                    keeps that number from growing
   mc repo merge <repo> <pr> --check
                                     The same round, stopping at the verdict.
-                                    A green gate is not a review
+                                    A gate that passes is not a review
+  mc suite claim "<what for>"      Hold the right to run a full suite — one at
+                                    a time on this machine. Refused if someone
+                                    else holds it; no process is blocked. The
+                                    gate round takes it by itself
+  mc suite release [--force]       Give it back. --force takes it, and is logged
+  mc suite who [--json]            Who holds it — and which suites are actually
+                                    running, and for how long, whoever holds it
   mc watch pm start [--interval <seconds>]
                                     The PM round, every 30 minutes and never a
                                     model: commit pm/, run mc doctor, count
@@ -138,6 +150,20 @@ MAINTENANCE
   mc watch pm stop                 Stop it; nothing else changes
   mc watch pm status [--json]      Whether it is running, when it last ran, and
                                     what that pass saw
+  mc watch sessions start [--interval <seconds>] [--model <model>]
+                                    A watchman over the running conversations.
+                                    It flags waiting, silent, dead,
+                                    unreachable, stalled, blocked,
+                                    quota-exhausted and error — and only
+                                    flags: no action, no judgement, no
+                                    ranking. Everything with a deterministic
+                                    answer is worked out here; Haiku is asked
+                                    only about output that is prose, and only
+                                    when that output moved
+  mc watch sessions stop           Stop it. It never starts itself
+  mc watch sessions status [--json]
+                                    Whether it is running, when it last looked,
+                                    and what is standing
   mc worker <name> [task]          A project folder that carries the worker
                                     role: every conversation started in it
                                     gets the role's overlay and model default

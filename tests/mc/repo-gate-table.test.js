@@ -152,31 +152,31 @@ describe('declarations, shipped and overridden', () => {
     } finally { fx.cleanup(); }
   });
 
-  it('memoro knows its contract gate and does not know its preparation', () => {
-    // Review finding, and the reason UNKNOWN exists. This entry once said
-    // `prepare: 'npm ci'` with `prepare_why: 'declared by the PM'` — an
-    // attribution nobody had made. A false explanation is worse than a missing
-    // one, because it looks reviewed, and it turned a stop into an action.
+  it('memoro ships the measured declaration, not UNKNOWN (D-0089)', () => {
+    // This entry said UNKNOWN for a day while the operator table beside it
+    // carried the measurement — and mc's own reading of itself quoted the
+    // stale half (2026-08-22). One question about one repository, one answer.
     const fx = repo('memoro', { name: 'memoro', dependencies: { next: '15.0.0' } });
     try {
       const answer = fx.ask();
-      assert.equal(answer.ok, false, 'a guessed prepare step let the round run');
-      assert.match(answer.reason, /preparation step is not/u);
-      // What is genuinely known is still reported, with where it came from, so
-      // whoever completes the entry can see what they are completing.
-      assert.deepEqual(answer.known.extra_gates.map((gate) => gate.command), ['npm run test:msr:contract']);
-      assert.match(answer.reason, /D-0018/u);
-      assert.equal(answer.known.merge_log, null);
+      assert.equal(answer.ok, true, answer.reason);
+      assert.equal(answer.source, 'declared');
+      assert.equal(answer.declaration.prepare, 'npm ci');
+      assert.match(answer.declaration.prepare_why, /D-0089/u);
+      assert.deepEqual(answer.declaration.extra_gates.map((gate) => gate.command), ['npm run test:msr:contract']);
+      assert.match(answer.declaration.merge_log, /pm\/decisions\/merge-log\.md$/u);
     } finally { fx.cleanup(); }
   });
 
   it('a partly declared repository stops exactly as hard as an undeclared one', () => {
     // The rule that makes the third state safe: "partly declared" must never
     // become a way to run anyway.
-    const known = repo('memoro', { name: 'memoro', dependencies: { next: '15.0.0' } });
-    const unknown = repo('stranger', { name: 'stranger', dependencies: { next: '15.0.0' } });
+    const known = repo('stranger', { name: 'stranger', dependencies: { next: '15.0.0' } });
+    const unknown = repo('nobody', { name: 'nobody', dependencies: { next: '15.0.0' } });
     try {
+      known.override({ stranger: { prepare: 'unknown', extra_gates: [], merge_log: null } });
       assert.equal(known.ask().ok, false);
+      assert.match(known.ask().reason, /preparation step is not/u);
       assert.equal(unknown.ask().ok, false);
       // And neither hands back a declaration the round could act on.
       assert.equal(known.ask().declaration, undefined);
