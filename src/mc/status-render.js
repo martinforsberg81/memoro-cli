@@ -102,6 +102,21 @@ export function renderLines(report, {
       : c('nothing running', 'grey');
     lines.push(`  ${c('suite', 'grey')}  ${clip(`${held}  ${c('·', 'grey')}  ${runs}`, wide - 9)}`);
   }
+  // The watchers — the last silent link. PM is woken by a file, queued wakes
+  // are retried by the guard, the repo page kept fresh by its watcher; if one
+  // dies, everything below this row goes quiet and nothing says why.
+  if (report.watchers) {
+    const word = (state) => {
+      if (!state) return c('unknown', 'grey');
+      if (state.running && state.stale) return c(`alive but stale — no round in ${ago(now - (state.last_write_age_ms ?? 0), now)}`, 'red');
+      if (state.running) return c(`alive${state.last_write_age_ms !== null ? `, last round ${ago(now - state.last_write_age_ms, now)}` : ''}`, 'green');
+      if (state.abandoned) return c('NOT RUNNING — stopped without telling anyone', 'red');
+      return c('never started', 'yellow');
+    };
+    const cells = [['watch pm', report.watchers.pm], ['watch sessions', report.watchers.sessions], ['repo watch', report.watchers.repo]]
+      .map(([name, state]) => `${c(name, 'grey')}: ${word(state)}`);
+    lines.push(`  ${c('watch', 'grey')}  ${clip(cells.join(c('  ·  ', 'grey')), wide - 9)}`);
+  }
   lines.push('');
 
   if (areas.length === 0) {

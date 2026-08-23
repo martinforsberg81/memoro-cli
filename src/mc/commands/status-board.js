@@ -18,7 +18,13 @@
  */
 import { getPackageVersion } from '../../lib/version.js';
 import { renderLines } from '../status-render.js';
+import { watchersState } from '../watchers-state.js';
 import { signature, workStatus } from '../work-status.js';
+
+/** The board, with the watchers on it — the last silent link, made visible. */
+async function board(options) {
+  return { ...(await workStatus(options)), watchers: watchersState() };
+}
 
 export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
@@ -35,7 +41,7 @@ export async function run(argv, deps = {}) {
 
   if (opts.wait) return waitForChange(opts, { stdout });
 
-  const page = async () => renderLines(await workStatus(), {
+  const page = async () => renderLines(await board(), {
     columns: stdout.columns || 100,
     colour: Boolean(stdout.isTTY) && process.env.NO_COLOR === undefined,
     version: await getPackageVersion().catch(() => ''),
@@ -43,7 +49,7 @@ export async function run(argv, deps = {}) {
 
   if (!opts.watch) {
     if (opts.json) {
-      stdout.write(`${JSON.stringify(await workStatus(), null, 2)}\n`);
+      stdout.write(`${JSON.stringify(await board(), null, 2)}\n`);
       return 0;
     }
     stdout.write(`${(await page()).join('\n')}\n`);
@@ -73,7 +79,7 @@ export async function watch(opts, { stdout, page }) {
 
   for (;;) {
     if (opts.json) {
-      stdout.write(`${JSON.stringify(await workStatus())}\n`);
+      stdout.write(`${JSON.stringify(await board())}\n`);
     } else {
       const lines = await page();
       if (!stdout.isTTY || !previous || previous.length !== lines.length) {
@@ -103,13 +109,13 @@ export async function watch(opts, { stdout, page }) {
  * and asks in full only once a conversation has actually moved.
  */
 async function waitForChange(opts, { stdout }) {
-  const before = signature(await workStatus({ git: false }));
+  const before = signature(await board({ git: false }));
   const deadline = opts.timeout ? Date.now() + opts.timeout * 1000 : null;
   for (;;) {
     await new Promise((resolve) => { setTimeout(resolve, opts.wait * 1000); });
-    const now = await workStatus({ git: false });
+    const now = await board({ git: false });
     if (signature(now) !== before) {
-      const report = await workStatus();
+      const report = await board();
       stdout.write(opts.json
         ? `${JSON.stringify(report, null, 2)}\n`
         : `${renderLines(report, {
