@@ -159,6 +159,10 @@ export async function runGate({
     candidate: null,
     broke: [],
     fixed: [],
+    // The prefix trees of a batch candidate as it was built, `T_1..T_N`:
+    // what main must be, byte for byte, after each landing. Null for a
+    // single round; `T_N` equals `candidate.tree`.
+    candidate_trees: null,
     // The verdict as a word a reader can branch on, and the number that word
     // used to hide. `green` and `no-new-red` are both passes and are not the
     // same statement: one says the suite is clean, the other says it is no
@@ -344,11 +348,19 @@ export async function runGate({
       if (candidate.status !== 0) {
         return finish('worktree', trim(candidate.stderr) || `could not check out ${baseRef}`);
       }
+      report.candidate_trees = [];
       for (const item of all) {
         const merged = askGit(['merge', '--no-edit', item.head_sha], { cwd: headDir });
         if (merged.status !== 0) {
           return finish('merge', `#${item.number} conflicts with ${baseRef} and the pull requests before it in the batch — ${trim(merged.stdout) || 'merge failed'}`);
         }
+        // The prefix tree after each merge: T_i is what main must be after
+        // landing the i-th pull request, byte for byte, if the sequential
+        // squashes reproduce the build the suite measured. Only T_N was
+        // measured; the chain is what makes each landing checkable the
+        // second it happens rather than at the end (PM's ruling on the
+        // tracks' disagreement, 2026-08-23).
+        report.candidate_trees.push(trim(askGit(['rev-parse', 'HEAD^{tree}'], { cwd: headDir }).stdout) || null);
         say(`merged #${item.number} (${item.head}) into the candidate`);
       }
     }
@@ -414,6 +426,11 @@ export async function runGate({
     const after = await timed('suite candidate', () => measure({ suite: runSuite, git: askGit, cwd: headDir, say, side: 'candidate' }));
     if (!after.ok) return finish('suite', `the candidate run ${after.reason}`);
     report.candidate = after.result;
+    // The measured tree's own hash, so a landing can later prove — not
+    // assume — that main became exactly what was measured (track 3's
+    // correction, 2026-08-23: "verified together" and "landed one at a
+    // time" are two different claims, and only the first was measured).
+    report.candidate.tree = trim(askGit(['rev-parse', 'HEAD^{tree}'], { cwd: headDir }).stdout) || null;
 
     const { broke, fixed } = compareRed(report.baseline.red, after.result.red);
     report.broke = broke;

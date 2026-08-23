@@ -52,6 +52,10 @@ export function recordRound(report, { mode = 'merge', root = mcHome(), now = new
     // `pr-tests`, `ratchet`, `extra-gate`, `drift`, …) so counting them is
     // counting the mechanism's own vocabulary, not a translation of it.
     stopped_at: report.stopped_at || null,
+    // Whether the landed tree was byte-identical to the measured candidate
+    // (null when nothing landed): the difference between a green that
+    // transfers by identity and one that describes a tree main never became.
+    tree_identical: report.tree_identical ?? null,
     reason: report.reason ? String(report.reason).slice(0, 300) : null,
     duration_ms: report.duration_ms ?? null,
     timings: gate?.timings && Object.keys(gate.timings).length ? gate.timings : null,

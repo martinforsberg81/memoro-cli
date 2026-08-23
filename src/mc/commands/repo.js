@@ -307,6 +307,7 @@ function mergeLines(report) {
   // Into what, every time. "merged as <sha>" was true of a PR that landed on
   // its stacked base branch, and it was read as "on main" by everyone.
   lines.push(`mc: merged #${report.pr.number} into ${report.merged_into || report.pr.base} as ${String(report.merge_commit || '').slice(0, 7)} (squash)`);
+  lines.push(...treeIdentityLines(report));
   if (report.off_default) {
     lines.push(`mc: WARNING — ${report.merged_into} is not the default branch (${report.default_branch}): this landed on a branch, not on ${report.default_branch}`);
   }
@@ -315,6 +316,7 @@ function mergeLines(report) {
       ? `mc: pulled ${report.deploy.command} at ${report.deploy.root}`
       : `mc: could not pull ${report.deploy.root} (${report.deploy.reason}) — the merge stands; pull by hand`);
   }
+  lines.push(...freshenedLines(report));
   if (report.log_path) lines.push(`mc: logged to ${report.log_path}`);
   return lines;
 }
@@ -359,6 +361,7 @@ function batchLines(report) {
   }
   const notTried = batch.prs.filter((n) => !batch.merges.some((item) => item.number === n));
   if (notTried.length) lines.push(`mc: not merged: ${notTried.map((n) => `#${n}`).join(' ')}`);
+  lines.push(...treeIdentityLines(report));
   if (report.ok && report.off_default) {
     lines.push(`mc: WARNING — ${report.merged_into} is not the default branch (${report.default_branch}): this landed on a branch, not on ${report.default_branch}`);
   }
@@ -367,7 +370,31 @@ function batchLines(report) {
       ? `mc: pulled ${report.deploy.command} at ${report.deploy.root}`
       : `mc: could not pull ${report.deploy.root} (${report.deploy.reason}) — the merge stands; pull by hand`);
   }
+  lines.push(...freshenedLines(report));
   if (report.log_path) lines.push(`mc: logged to ${report.log_path}`);
+  return lines;
+}
+
+/**
+ * Did main become exactly what was measured? Identity, said either way —
+ * "verified together" and "landed one at a time" are different claims, and
+ * the reader deciding whether to trust the green needs to know which one
+ * they are holding (track 3, 2026-08-23).
+ */
+function treeIdentityLines(report) {
+  if (report.tree_identical === true) return ['mc: the landed tree is byte-identical to the measured candidate — the green transfers by identity'];
+  if (report.tree_identical === false) return ['mc: WARNING — the landed tree is NOT the measured candidate\'s: the sequential squashes resolved something differently; the green does not transfer, and the next round measures main as it stands'];
+  return [];
+}
+
+/** What became of the open branches this merge made dirty (A6). */
+function freshenedLines(report) {
+  const branches = report.freshened?.branches || [];
+  const lines = [];
+  if (report.freshened?.failed) lines.push(`mc: freshening the open branches failed (${report.freshened.failed}) — every branch is exactly as it was`);
+  for (const item of branches) {
+    lines.push(`mc: ${item.action === 'pushed' ? 'freshened' : item.action} #${item.number} ${item.branch}${item.detail ? ` — ${item.detail}` : ''}${item.told ? ` (told ${item.told})` : ''}`);
+  }
   return lines;
 }
 
