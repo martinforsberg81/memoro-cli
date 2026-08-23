@@ -333,16 +333,15 @@ export function paneWillTakeText({ target, run = null, attachedOk = false, probe
 
   const pane = readPane(tmux, target);
   if (pane === null) return { ok: false, reason: 'could not read the conversation' };
+  // A menu first, before any box: the pane is in another mode, waiting on a
+  // choice (2026-08-23) — and the live capture showed the menu drawn *below*
+  // a prompt box that was still on screen, so a box-first reader would have
+  // found the box, probed it, and typed into the menu. A session in a menu
+  // is blocked on a person; said as what it is, with the question.
+  const menu = readMenu(pane);
+  if (menu) return { ok: false, menu, reason: menuReason(menu) };
   const box = readBox(pane);
-  if (box === null) {
-    // No prompt because the pane is in another mode: a menu, waiting on a
-    // choice (2026-08-23). That is not "could not find it" — it is a session
-    // blocked on a person, and a probe would type into the menu. Said as
-    // what it is, with the question, so the answer can be given.
-    const menu = readMenu(pane);
-    if (menu) return { ok: false, menu, reason: menuReason(menu) };
-    return { ok: false, reason: 'could not find its prompt to check it was empty' };
-  }
+  if (box === null) return { ok: false, reason: 'could not find its prompt to check it was empty' };
   if (box.text !== '') {
     // Text in the drawing is not text in the input (D-0151). A caller that
     // may type asks the input with a probe; a caller that only reads gets
