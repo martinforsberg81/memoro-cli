@@ -18,9 +18,14 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
+import { parseArgs } from '../../src/mc/commands/watch.js';
+
 import { appendNotice, markDelivered, pendingNotices } from '../../src/mc/watch-notices.js';
 
 import { paneWillTakeText } from '../../src/mc/work-send.js';
+import {
+  describeStartFlags, readStartFlags, sessionsWatcherState, startSessionsWatcher, stopSessionsWatcher,
+} from '../../src/mc/watch-sessions.js';
 import { renderWatchLines, run } from '../../src/mc/commands/watch.js';
 
 function capture() {
@@ -62,6 +67,18 @@ describe('mc watch sessions', () => {
     const io = capture();
     assert.equal(await run(['pm', 'start', '--model', 'haiku'], io), 2);
     assert.match(said(io.err), /mc watch pm has no model — it is a script/u);
+  });
+
+  it('--idle and --group are the guard\'s, on start, and --group repeats', async () => {
+    const parsed = parseArgs(['sessions', 'start', '--idle', '10', '--group', 'msr-track-', '--group', 'msr-design']);
+    assert.equal(parsed.error, undefined);
+    assert.equal(parsed.idleMs, 10 * 60_000);
+    assert.deepEqual(parsed.groups, ['msr-track-', 'msr-design']);
+    const io = capture();
+    assert.equal(await run(['pm', 'start', '--idle', '10'], io), 2);
+    assert.match(said(io.err), /--idle belongs to mc watch sessions start/u);
+    assert.match(String(parseArgs(['sessions', 'status', '--group', 'x']).error), /--group belongs to mc watch sessions start/u);
+    assert.match(String(parseArgs(['sessions', 'start', '--group']).error), /--group needs a name prefix/u);
   });
 
   it('refuses a verb it does not have, and says which it does', async () => {
@@ -119,6 +136,31 @@ describe('mc watch sessions', () => {
     });
     const text = said(lines);
     assert.ok(text.indexOf('alpha  dead') < text.indexOf('beta  waiting'), 'arrival order, not severity');
+  });
+
+  it('a bare start is the last start again, and says so (B4)', () => {
+    // No daemon is spawned: the runner is a script that exits at once, and
+    // what is under test is what was remembered and what was passed.
+    const root = mkdtempSync(join(tmpdir(), 'mc-watch-start-'));
+    assert.equal(readStartFlags(root), null);
+    const first = startSessionsWatcher({ root, idleMs: 10 * 60_000, groups: ['msr-track-'], env: { ...process.env, MC_HOME: root } });
+    assert.equal(first.ok, true, first.reason);
+    assert.equal(first.remembered, false);
+    assert.deepEqual(readStartFlags(root), { model: null, idle_ms: 600_000, groups: ['msr-track-'] });
+    assert.equal(describeStartFlags(readStartFlags(root)), '--idle 10 --group msr-track-');
+    stopSessionsWatcher({ root });
+    // Bare: the same flags, and said as remembered.
+    const second = startSessionsWatcher({ root, env: { ...process.env, MC_HOME: root } });
+    assert.equal(second.remembered, true);
+    assert.deepEqual(second.flags, { model: null, idle_ms: 600_000, groups: ['msr-track-'] });
+    stopSessionsWatcher({ root });
+    // Any flag named is a whole new set: --group alone drops the old --idle.
+    const third = startSessionsWatcher({ root, groups: ['msr-design'], env: { ...process.env, MC_HOME: root } });
+    assert.deepEqual(third.flags, { model: null, idle_ms: null, groups: ['msr-design'] });
+    assert.equal(third.remembered, false);
+    stopSessionsWatcher({ root });
+    const state = sessionsWatcherState({ root });
+    assert.ok(state.detail.includes('started with  --group msr-design'), state.detail.join('|'));
   });
 
   it('says when a pid file outlived its process', () => {

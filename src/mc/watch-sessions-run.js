@@ -15,6 +15,7 @@ import { fileURLToPath } from 'node:url';
 
 import { clearOwnState, codeDrift, restartDaemon } from './watch-daemon.js';
 import { DEFAULT_INTERVAL_MS } from './watch-sessions-store.js';
+import { DEFAULT_IDLE_MS } from './watch-sessions-scan.js';
 import { excerptOf, readOutput } from './watch-sessions-read.js';
 import { readTailEntries } from './conversations.js';
 import { watchLoop } from './watch-sessions-loop.js';
@@ -34,6 +35,9 @@ const word = (name, fallback) => {
 
 const intervalMs = number('--interval-ms', DEFAULT_INTERVAL_MS);
 const model = word('--model', null);
+const idleMs = number('--idle-ms', DEFAULT_IDLE_MS);
+// `--group a --group b`: every occurrence, in order.
+const groups = argv.flatMap((item, index) => (item === '--group' && argv[index + 1] ? [argv[index + 1]] : []));
 const runner = fileURLToPath(import.meta.url);
 let stopping = false;
 // See watch-pm-run.js: code that moved on disk ends this process between
@@ -52,9 +56,12 @@ for (const signal of ['SIGTERM', 'SIGINT']) {
   });
 }
 
-log(`watching every ${Math.round(intervalMs / 1000)}s${model ? ` on ${model}` : ''} (pid ${process.pid})`);
+log(`watching every ${Math.round(intervalMs / 1000)}s${model ? ` on ${model}` : ''} (pid ${process.pid})`
+  + ` — unattended after ${Math.round(idleMs / 60_000)}m${groups.length ? `, groups ${groups.map((g) => `${g}*`).join(' ')}` : ''}`);
 await watchLoop({
   intervalMs,
+  idleMs,
+  groups,
   shouldStop: () => {
     if (!stopping && !restarting && drifted()) {
       restarting = true;
