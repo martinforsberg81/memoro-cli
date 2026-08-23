@@ -151,7 +151,15 @@ const BUSY_ATTEMPTS = 40;
  * same. The shape is matched loosely (any path, any sender, spaces as a wrap
  * left them) because the stranded one may be older than the current wording.
  */
-const NOTICE_SHAPE = /^mc: new in \S+ from \S+ - read it now$/u;
+// One notice, or several pasted together: two wakes raced into the same box
+// on 2026-08-23 (both looked, both saw empty, both typed) and the pair
+// matched nothing — so it stood, and every wake after it queued behind mc's
+// own words twice over. However many there are, they all say "read the
+// inbox", and one Enter delivers all of them. The sender is `.+?`, not
+// `\S+`: the round signs itself `mc watch pm`, with spaces, and a shape
+// that read senders as one word never recognised the watcher's own
+// stranded knocks (found on the same evening's live capture).
+const NOTICE_SHAPE = /^(?:mc: new in \S+ from .+? - read it now ?)+$/u;
 
 /**
  * What the TUI draws in an empty box while a turn it took is waiting its go.
