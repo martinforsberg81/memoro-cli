@@ -838,9 +838,16 @@ describe('the gate holds the suite right while it runs', () => {
     const fx = fixture();
     try {
       claimSuiteLease({ errand: 'msr contract, by hand', holder: { name: 'msr-cleanup', kind: 'work-area' }, root: fx.mcHome });
-      const result = await fx.run();
+      const running = [{ pid: 9, command: 'npm test', area: 'msr-cleanup', elapsed: '05:00' }];
+      const result = await fx.run({ suiteRunsNow: async () => running });
       assert.equal(result.stopped_at, 'suite-lease');
       assert.match(result.reason, /held by msr-cleanup for “msr contract, by hand” — one full suite at a time/u);
+      // The holder is told what runs under the right as measured, never as
+      // a default: "nothing running" by default told PM a suite was idle
+      // while it was five minutes in (2026-08-23).
+      assert.equal(fx.told.length, 1);
+      assert.equal(fx.told[0].what, 'the suite right');
+      assert.deepEqual(fx.told[0].running, running);
       assert.deepEqual(fx.ran('suite'), [], 'no suite ran over somebody\'s right');
       assert.equal(fx.lease().held, false, 'the repository lease was given back');
       assert.equal(readSuiteLease({ root: fx.mcHome }).holder, 'msr-cleanup', 'and theirs was not touched');
