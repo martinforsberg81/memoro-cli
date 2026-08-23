@@ -134,8 +134,8 @@ function fixture({
     });
   };
 
-  const tests = ({ cwd, files }) => {
-    calls.push({ tool: 'tests', cwd, files });
+  const tests = ({ cwd, files, flags = [] }) => {
+    calls.push({ tool: 'tests', cwd, files, flags });
     return Promise.resolve({ code: ownRed.length ? 1 : 0, tap: tapWith(ownRed, { finished: ownFinished, tests: files.length * 3 }) });
   };
 
@@ -853,6 +853,36 @@ describe('the gate holds the suite right while it runs', () => {
       claimSuiteLease({ errand: 'mine', holder: AREA, root: fx.mcHome });
       await fx.run();
       assert.equal(readSuiteLease({ root: fx.mcHome }).holder, AREA.name, 'their claim, their release');
+    } finally { fx.cleanup(); }
+  });
+});
+
+/**
+ * The flags the pull request's own tests run with are declared, not guessed
+ * (measured 2026-08-23: memoro's runner adds `--import browser-paths`, the
+ * gate ran bare; 123/123 either way for one night's files, three files in
+ * the repository that need it).
+ */
+describe('the pull request\'s own tests run with the declared flags', () => {
+  it('hands the declaration\'s pr_tests_flags to the runner, and says so', async () => {
+    const fx = fixture({ changed: ['tests/ui/thing.test.js'] });
+    try {
+      writeJson(join(fx.mcHome, 'repo-gates.json'), {
+        repo: { prepare: null, prepare_why: 'a test', extra_gates: [], merge_log: null, pr_tests_flags: ['--import', './tests/setup.mjs'] },
+      });
+      const progress = [];
+      const result = await fx.run({ onProgress: (line) => progress.push(line) });
+      assert.equal(result.stopped_at, null, JSON.stringify(result));
+      assert.deepEqual(fx.ran('tests')[0].flags, ['--import', './tests/setup.mjs']);
+      assert.ok(progress.includes('pr tests run with the declared flags: --import ./tests/setup.mjs'), progress.join('\n'));
+    } finally { fx.cleanup(); }
+  });
+
+  it('none declared: the runner gets none, and falls back to the test script on its own', async () => {
+    const fx = fixture({ changed: ['tests/ui/thing.test.js'] });
+    try {
+      await fx.run();
+      assert.deepEqual(fx.ran('tests')[0].flags, []);
     } finally { fx.cleanup(); }
   });
 });
