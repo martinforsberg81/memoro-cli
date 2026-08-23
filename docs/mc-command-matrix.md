@@ -46,7 +46,7 @@ started in it. mc stores nothing else, because nothing else is mc's to know.
 | `mc repo claim <repo> "<what for>"` | Hold the gate round on a repository. Refused if someone else holds it. |
 | `mc repo release <repo> [--force]` | Give it back; `--force` takes it from another holder and is logged. |
 | `mc repo who <repo>` | Who holds it, for what, since when — and whether the holder is still working. `--json`. |
-| `mc repo merge <repo> <pr>` | Run the test gate and, only if nothing new went red, squash-merge, deploy-pull and log it. `--check` gates and stops. `--json`. |
+| `mc repo merge <repo> <pr> [<pr>...]` | Run the test gate and, only if nothing new went red, squash-merge, deploy-pull and log it. Several numbers: one candidate with all of them merged in, the suite once each side, each PR's own tests by itself, then merged in the order given; a batch that stops falls back to one round per PR and says so. Prints wall clock per step. `--check` gates and stops. `--json`. |
 | `mc watch pm start \| stop \| status` | The PM round: every 30 minutes it commits `pm/`, runs `mc doctor`, counts `pm/inbox/`, delivers the guard's notices and knocks once if something is new. `--interval <seconds>` on start; `--json` on status. Both watchers restart themselves between passes when mc's code changes on disk; `status` says *OLD CODE* for a process behind the tree. |
 | `mc suite claim "<what for>"` | Hold the right to run a full suite — one at a time on this machine (D-0141). Refused if someone else holds it; no process is blocked. The gate round takes it by itself. |
 | `mc suite release [--force]` | Give it back; `--force` takes it from another holder and is logged. |

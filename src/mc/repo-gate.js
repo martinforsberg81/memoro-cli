@@ -86,6 +86,14 @@ export function gateRoot(root = mcHome()) {
 export async function runGate({
   repoPath,
   pr,
+  // Several pull requests measured as one candidate (A3, 2026-08-23): with
+  // eleven in the queue and every round 5–13 minutes holding the suite
+  // right, the round — not the computation — was the bottleneck. One tree
+  // with all of them merged in, the suite once on each side, and each pull
+  // request's own tests still run by themselves so the batch never hides
+  // which one carried which test. `pr` alone is the single-PR round it
+  // always was.
+  prs = null,
   tests = null,
   holder = currentHolder(),
   root = mcHome(),
@@ -121,11 +129,19 @@ export async function runGate({
   const runSuite = suite || ((options) => realSuite({ ...options, env }));
   const runTests = tests || ((options) => realTests({ ...options, env }));
 
+  const numbers = (Array.isArray(prs) && prs.length ? prs : [pr]).map(Number);
+  const batch = numbers.length > 1;
+  const label = batch ? numbers.map((n) => `#${n}`).join(' ') : `#${numbers[0]}`;
+
   const report = {
     schema: GATE_SCHEMA,
     version: GATE_VERSION,
     repo: repoPath,
-    pr: { number: Number(pr), head: null, base: null, head_sha: null, title: null },
+    pr: { number: numbers[0], head: null, base: null, head_sha: null, title: null },
+    // The batch, when there is one: every pull request's facts and its own
+    // tests, in the order they were merged into the candidate. Null for a
+    // single round, whose facts are `pr` and whose tests are `pr_tests`.
+    prs: batch ? numbers.map((number) => ({ number, head: null, base: null, head_sha: null, title: null, pr_tests: null })) : null,
     holder: holder.name,
     ok: false,
     merged: false,
@@ -149,9 +165,19 @@ export async function runGate({
     verdict: null,
     standing_red: null,
     ratchet: null,
+    // Wall clock per step (A5). Four decisions about cost were taken one day
+    // without a single number from the tool itself; the next one is measured.
+    timings: {},
     started_at: new Date(startedAt).toISOString(),
     finished_at: null,
     duration_ms: null,
+  };
+  const timed = async (step, fn) => {
+    const from = clock();
+    try { return await fn(); } finally {
+      report.timings[step] = (report.timings[step] || 0) + (clock() - from);
+      say(`${step} took ${seconds(report.timings[step])}`);
+    }
   };
 
   const finish = (stoppedAt, reason) => {
@@ -168,10 +194,10 @@ export async function runGate({
   if (holdLease) {
     // Taken for the length of this process, and it says so (lease-owner.js):
     // a round cut short by a kill leaves a lease its pid can answer for.
-    const lease = claimLease({ repoPath, errand: `gate round for #${pr}`, holder, ownerPid: process.pid, root });
+    const lease = claimLease({ repoPath, errand: `gate round for ${label}`, holder, ownerPid: process.pid, root });
     if (!lease.ok) {
       const held = lease.lease;
-      const told = tell({ lease: held, asker: holder, what: repoPath, errand: `gate round for #${pr}` });
+      const told = tell({ lease: held, asker: holder, what: repoPath, errand: `gate round for ${label}` });
       return finish('lease', `${repoPath} is held by ${held.holder}${held.errand ? ` for “${held.errand}”` : ''}${told.told ? ` — ${held.holder} has been told` : ''}`);
     }
     say(`lease taken by ${holder.name}`);
@@ -183,7 +209,7 @@ export async function runGate({
   // somebody else holds stops the round in their favour, because the gate is
   // the one thing that runs suites by machine and must not be the thing that
   // runs over a person's right to.
-  const suiteRight = claimSuiteLease({ errand: `gate round for #${pr}`, holder, ownerPid: process.pid, root });
+  const suiteRight = claimSuiteLease({ errand: `gate round for ${label}`, holder, ownerPid: process.pid, root });
   if (!suiteRight.ok) {
     if (holdLease) releaseLease({ repoPath, holder, root });
     const held = suiteRight.lease;
@@ -191,7 +217,7 @@ export async function runGate({
     // as a default told PM a suite was idle while it was five minutes in.
     let running = [];
     try { running = await (suiteRunsNow || suiteRuns)({ env }); } catch { running = []; }
-    const told = tell({ lease: held, asker: holder, what: 'the suite right', errand: `gate round for #${pr}`, running });
+    const told = tell({ lease: held, asker: holder, what: 'the suite right', errand: `gate round for ${label}`, running });
     return finish('suite-lease', `the suite right is held by ${held.holder}${held.errand ? ` for “${held.errand}”` : ''} — one full suite at a time on this machine (D-0141); mc suite who says whether that run is still going${told.told ? `; ${held.holder} has been told` : ''}`);
   }
   const ownSuiteRight = !suiteRight.already;
@@ -233,15 +259,27 @@ export async function runGate({
     // What the pull request actually is, rather than what the caller believes.
     // A number is all the caller has; the branch, its head, and the branch it
     // is aimed at all come from the forge.
-    const facts = prFacts({ gh: askGh, repoPath, pr });
-    if (!facts.ok) return finish('pr', facts.reason);
+    const all = [];
+    for (const number of numbers) {
+      const facts = prFacts({ gh: askGh, repoPath, pr: number });
+      if (!facts.ok) return finish('pr', facts.reason);
+      all.push(facts.pr);
+      say(`#${facts.pr.number} — ${facts.pr.head} into ${facts.pr.base}`);
+    }
+    const facts = { pr: all[0] };
     Object.assign(report.pr, facts.pr);
-    say(`#${facts.pr.number} — ${facts.pr.head} into ${facts.pr.base}`);
+    if (batch) {
+      for (const [index, item] of all.entries()) Object.assign(report.prs[index], item);
+      // One base, or it is not one candidate: a tree with two pull requests
+      // aimed at different branches measures nothing anybody will land.
+      const bases = [...new Set(all.map((item) => item.base))];
+      if (bases.length > 1) return finish('pr', `the batch aims at ${bases.length} different bases (${bases.join(', ')}) — one round per base`);
+    }
 
     // Fresh, always. The whole point of the baseline is that it is current,
     // and a stale remote-tracking ref is how a round measures against a main
     // that moved an hour ago.
-    const fetched = askGit(['fetch', 'origin', '--prune'], { cwd: repoPath });
+    const fetched = await timed('fetch', async () => askGit(['fetch', 'origin', '--prune'], { cwd: repoPath }));
     if (fetched.status !== 0) return finish('fetch', trim(fetched.stderr) || 'git fetch failed');
 
     clearWorkspace({ git: askGit, repoPath, workspace });
@@ -254,20 +292,38 @@ export async function runGate({
     const added = askGit(['worktree', 'add', '--detach', baseDir, baseRef], { cwd: repoPath });
     if (added.status !== 0) return finish('worktree', trim(added.stderr) || `could not check out ${baseRef}`);
 
-    const candidate = askGit(['worktree', 'add', '--detach', headDir, facts.pr.head_sha], { cwd: repoPath });
-    if (candidate.status !== 0) {
-      return finish('worktree', trim(candidate.stderr) || `could not check out ${facts.pr.head_sha}`);
-    }
+    if (!batch) {
+      const candidate = askGit(['worktree', 'add', '--detach', headDir, facts.pr.head_sha], { cwd: repoPath });
+      if (candidate.status !== 0) {
+        return finish('worktree', trim(candidate.stderr) || `could not check out ${facts.pr.head_sha}`);
+      }
 
-    // The candidate is measured *after* merging the current base into it. A PR
-    // that is green against the main its author branched from and red against
-    // the main it is about to land on is exactly the collision this exists to
-    // catch, and it is invisible if the head commit is tested on its own.
-    const merged = askGit(['merge', '--no-edit', baseRef], { cwd: headDir });
-    if (merged.status !== 0) {
-      return finish('merge', `#${facts.pr.number} conflicts with ${baseRef} — ${trim(merged.stdout) || 'merge failed'}`);
+      // The candidate is measured *after* merging the current base into it. A PR
+      // that is green against the main its author branched from and red against
+      // the main it is about to land on is exactly the collision this exists to
+      // catch, and it is invisible if the head commit is tested on its own.
+      const merged = askGit(['merge', '--no-edit', baseRef], { cwd: headDir });
+      if (merged.status !== 0) {
+        return finish('merge', `#${facts.pr.number} conflicts with ${baseRef} — ${trim(merged.stdout) || 'merge failed'}`);
+      }
+      say(`merged ${baseRef} into the candidate`);
+    } else {
+      // The batch candidate is the base with every head merged in, in the
+      // order given — the tree main would be after landing them in that
+      // order. A conflict names the pull request that could not go in, so
+      // the caller can fall back to one round per pull request and say so.
+      const candidate = askGit(['worktree', 'add', '--detach', headDir, baseRef], { cwd: repoPath });
+      if (candidate.status !== 0) {
+        return finish('worktree', trim(candidate.stderr) || `could not check out ${baseRef}`);
+      }
+      for (const item of all) {
+        const merged = askGit(['merge', '--no-edit', item.head_sha], { cwd: headDir });
+        if (merged.status !== 0) {
+          return finish('merge', `#${item.number} conflicts with ${baseRef} and the pull requests before it in the batch — ${trim(merged.stdout) || 'merge failed'}`);
+        }
+        say(`merged #${item.number} (${item.head}) into the candidate`);
+      }
     }
-    say(`merged ${baseRef} into the candidate`);
 
     const commandLine = suiteCommand({ repoPath });
     if (!commandLine.ok) return finish('suite', commandLine.reason);
@@ -280,7 +336,7 @@ export async function runGate({
     if (declared.declaration.prepare) {
       for (const [side, dir] of [['baseline', baseDir], ['candidate', headDir]]) {
         say(`preparing the ${side}: ${declared.declaration.prepare}`);
-        const ready = shell(declared.declaration.prepare, { cwd: dir, env });
+        const ready = await timed(`prepare ${side}`, async () => shell(declared.declaration.prepare, { cwd: dir, env }));
         if (ready.status !== 0) {
           return finish('prepare', `${declared.declaration.prepare} failed in the ${side} — ${trim(ready.stderr)}`);
         }
@@ -310,7 +366,7 @@ export async function runGate({
     // The baseline goes first so a repository that cannot run its own suite is
     // found before the candidate's run is paid for.
     say('running the suite on the baseline — this takes a while');
-    const before = await measure({ suite: runSuite, git: askGit, cwd: baseDir, say, side: 'baseline' });
+    const before = await timed('suite baseline', () => measure({ suite: runSuite, git: askGit, cwd: baseDir, say, side: 'baseline' }));
     if (!before.ok) return finish('suite', `the baseline run ${before.reason}`);
     report.baseline = before.result;
 
@@ -320,7 +376,7 @@ export async function runGate({
     report.standing_red = before.result.red.length;
     say(`baseline: ${before.result.red.length} red`);
     say('running the suite on the candidate');
-    const after = await measure({ suite: runSuite, git: askGit, cwd: headDir, say, side: 'candidate' });
+    const after = await timed('suite candidate', () => measure({ suite: runSuite, git: askGit, cwd: headDir, say, side: 'candidate' }));
     if (!after.ok) return finish('suite', `the candidate run ${after.reason}`);
     report.candidate = after.result;
 
@@ -366,18 +422,33 @@ export async function runGate({
     // before, with 114 new test lines. So every `*.test.js` the PR adds or
     // changes is run, wherever it lies, from the same diff that counts red.
     // A list of directories would fix yesterday's hole and make tomorrow's.
-    const own = await ownTests({
-      git: askGit, tests: runTests, cwd: headDir, baseRef, say, flags: declared.declaration.pr_tests_flags || [],
-    });
-    report.pr_tests = own.result;
-    if (!own.ok) return finish('pr-tests', own.reason);
+    if (!batch) {
+      const own = await timed('pr tests', () => ownTests({
+        git: askGit, tests: runTests, cwd: headDir, baseRef, say, flags: declared.declaration.pr_tests_flags || [],
+      }));
+      report.pr_tests = own.result;
+      if (!own.ok) return finish('pr-tests', own.reason);
+    } else {
+      // Each pull request's own tests, by itself: the files *it* adds or
+      // changes against the base, run on the batch candidate. The suite ran
+      // once for all of them; this is what keeps the batch from hiding which
+      // pull request carried which test, and a red here names the one.
+      for (const [index, item] of all.entries()) {
+        say(`#${item.number}'s own tests`);
+        const own = await timed('pr tests', () => ownTests({
+          git: askGit, tests: runTests, cwd: headDir, baseRef, head: item.head_sha, say, flags: declared.declaration.pr_tests_flags || [],
+        }));
+        report.prs[index].pr_tests = own.result;
+        if (!own.ok) return finish('pr-tests', `#${item.number}: ${own.reason}`);
+      }
+    }
 
     // Gates beyond the suite, on the candidate, under the same rule: one that
     // did not reach its own end is not an approval. A command that could not be
     // run at all is a stop, exactly like a suite that never summarised.
     for (const gate of declared.declaration.extra_gates) {
       say(`extra gate: ${gate.name}`);
-      const outcome = shell(gate.command, { cwd: headDir, env });
+      const outcome = await timed('extra gates', async () => shell(gate.command, { cwd: headDir, env }));
       const passed = outcome.status === 0;
       report.extra_gates.push({
         name: gate.name,
@@ -554,6 +625,10 @@ function clearWorkspace({ git, repoPath, workspace }) {
   try { rmSync(workspace, { recursive: true, force: true }); } catch { /* gone */ }
 }
 
+function seconds(ms) {
+  return `${(Math.max(0, ms) / 1000).toFixed(1)}s`;
+}
+
 function trim(value) {
   return String(value || '').trim().split('\n').slice(0, 3).join(' ');
 }
@@ -598,8 +673,12 @@ const TEST_FILE = /\.test\.(?:js|mjs|cjs)$/u;
  * A PR that touches no test file is recorded as exactly that, `files: []`,
  * and the round goes on: that fact belongs to the reviewer, not to the gate.
  */
-async function ownTests({ git, tests, cwd, baseRef, say, flags = [] }) {
-  const diff = git(['diff', '--name-only', '--diff-filter=AM', baseRef, 'HEAD'], { cwd });
+async function ownTests({ git, tests, cwd, baseRef, head = 'HEAD', say, flags = [] }) {
+  // `baseRef...head`: what the pull request changed since it left the base,
+  // not what the base changed since — on a batch candidate, HEAD carries the
+  // other pull requests' files too, and a plain two-dot diff would run them
+  // under this one's name.
+  const diff = git(['diff', '--name-only', '--diff-filter=AM', `${baseRef}...${head}`], { cwd });
   if (diff?.status !== 0) {
     return { ok: false, reason: 'could not list the files the pull request changes', result: null };
   }
