@@ -236,3 +236,17 @@ describe('declarations, shipped and overridden', () => {
     assert.doesNotMatch(raw, /\/home\//u);
   });
 });
+
+describe('pr_tests_flags', () => {
+  it('memoro and memoro-cli ship theirs, an entry without any gets an empty list', () => {
+    const memoro = repo('memoro', { name: 'memoro', dependencies: { next: '15.0.0' } });
+    const cli = repo('memoro-cli', { name: 'memoro-cli', dependencies: { a: '1' } });
+    const other = repo('stranger', { name: 'stranger' });
+    try {
+      assert.deepEqual(memoro.ask().declaration.pr_tests_flags, ['--import', './tests/_helpers/browser-paths.mjs']);
+      assert.deepEqual(cli.ask().declaration.pr_tests_flags, ['--import', './tests/_isolate-home.mjs']);
+      other.override({ stranger: { prepare: null, extra_gates: [], merge_log: null } });
+      assert.deepEqual(other.ask().declaration.pr_tests_flags, []);
+    } finally { memoro.cleanup(); cli.cleanup(); other.cleanup(); }
+  });
+});

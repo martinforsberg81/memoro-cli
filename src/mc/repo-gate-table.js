@@ -66,6 +66,8 @@ export const SHIPPED = Object.freeze({
       + 'since the verb existed, each of which ran it twice in a worktree with no node_modules',
     extra_gates: Object.freeze([]),
     merge_log: Object.freeze({ under: 'work-root', path: 'large-scale-llm-project/merge-log.md' }),
+    // The flag its own `test` script gives node, stated rather than parsed.
+    pr_tests_flags: Object.freeze(['--import', './tests/_isolate-home.mjs']),
   }),
   memoro: Object.freeze({
     // Measured, not guessed (D-0089, delivered 2026-08-18; declared by the PM
@@ -87,6 +89,12 @@ export const SHIPPED = Object.freeze({
     // The PM's decisions log, under the work root — where memoro's merges
     // have been written since the operator table declared it.
     merge_log: Object.freeze({ under: 'work-root', path: 'pm/decisions/merge-log.md' }),
+    // Measured 2026-08-23: memoro's runner (scripts/testing/runner.mjs) runs
+    // `node --test --import ./tests/_helpers/browser-paths.mjs`, which
+    // rewrites `/js/…` imports; 3 of 1962 test files import that way. The
+    // 14 files from one night's merged PRs gave 123/123 with and without the
+    // import — so the gate's bare runs were right, and the three are the gap.
+    pr_tests_flags: Object.freeze(['--import', './tests/_helpers/browser-paths.mjs']),
   }),
 });
 
@@ -184,6 +192,13 @@ function normalise(entry, env) {
       command: gate.command,
     })),
     merge_log: resolveLog(entry.merge_log, env),
+    // The node flags the pull request's own tests run with (D-0157). Empty
+    // means "read them off a `node --test` test script, or none": a guess,
+    // and for memoro the wrong one — its runner is ci.mjs and adds
+    // `--import ./tests/_helpers/browser-paths.mjs`, which three of its test
+    // files cannot run without. Declared here, the round measures with the
+    // repository's own environment rather than an inference about it.
+    pr_tests_flags: Array.isArray(entry.pr_tests_flags) ? entry.pr_tests_flags.map(String) : [],
   };
 }
 

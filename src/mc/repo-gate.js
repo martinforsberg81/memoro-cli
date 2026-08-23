@@ -336,7 +336,9 @@ export async function runGate({
     // before, with 114 new test lines. So every `*.test.js` the PR adds or
     // changes is run, wherever it lies, from the same diff that counts red.
     // A list of directories would fix yesterday's hole and make tomorrow's.
-    const own = await ownTests({ git: askGit, tests: runTests, cwd: headDir, baseRef, say });
+    const own = await ownTests({
+      git: askGit, tests: runTests, cwd: headDir, baseRef, say, flags: declared.declaration.pr_tests_flags || [],
+    });
     report.pr_tests = own.result;
     if (!own.ok) return finish('pr-tests', own.reason);
 
@@ -565,7 +567,7 @@ const TEST_FILE = /\.test\.(?:js|mjs|cjs)$/u;
  * A PR that touches no test file is recorded as exactly that, `files: []`,
  * and the round goes on: that fact belongs to the reviewer, not to the gate.
  */
-async function ownTests({ git, tests, cwd, baseRef, say }) {
+async function ownTests({ git, tests, cwd, baseRef, say, flags = [] }) {
   const diff = git(['diff', '--name-only', '--diff-filter=AM', baseRef, 'HEAD'], { cwd });
   if (diff?.status !== 0) {
     return { ok: false, reason: 'could not list the files the pull request changes', result: null };
@@ -576,7 +578,8 @@ async function ownTests({ git, tests, cwd, baseRef, say }) {
     return { ok: true, result: { files, totals: null, red: [], exit_code: null } };
   }
   say(`running the pull request's own tests: ${files.length} file${files.length === 1 ? '' : 's'}`);
-  const run = await tests({ cwd, files, onLine: (line) => say(`pr tests: ${line}`) });
+  if (flags.length) say(`pr tests run with the declared flags: ${flags.join(' ')}`);
+  const run = await tests({ cwd, files, flags, onLine: (line) => say(`pr tests: ${line}`) });
   const totals = tapTotals(run.tap);
   const red = redNames(run.tap);
   const result = { files, totals, red, exit_code: run.code };
@@ -620,14 +623,15 @@ function nodeTestFlags(cwd) {
   return flags;
 }
 
-function realTests({ cwd, files, onLine = () => {}, env = process.env } = {}) {
+function realTests({ cwd, files, flags = [], onLine = () => {}, env = process.env } = {}) {
   return new Promise((resolve) => {
     const clean = { ...env };
     delete clean.NODE_TEST_CONTEXT;
     const inherited = String(clean.NODE_OPTIONS || '')
       .replace(/--test-reporter(-destination)?[=\s]\S+/gu, '')
       .trim();
-    const child = spawn(process.execPath, ['--test', '--test-reporter=tap', ...nodeTestFlags(cwd), ...files], {
+    // Declared flags first; the test-script heuristic only when none are.
+    const child = spawn(process.execPath, ['--test', '--test-reporter=tap', ...(flags.length ? flags : nodeTestFlags(cwd)), ...files], {
       cwd,
       env: { ...clean, NODE_OPTIONS: inherited },
       stdio: ['ignore', 'pipe', 'pipe'],
