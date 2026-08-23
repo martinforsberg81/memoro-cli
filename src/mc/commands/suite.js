@@ -1,6 +1,7 @@
 /**
  * `mc suite` — the suite right, as a lease.
  *
+ *   mc suite run "<command>"        take it, run, give it back — one step
  *   mc suite claim "<what for>"     hold the right to run a full suite
  *   mc suite release [--force]      give it back; --force takes it, logged
  *   mc suite who [--json]           who holds it, and which suites run now
@@ -9,7 +10,22 @@
  * is refused, and that refusal stops exactly one thing — this command. No
  * process is blocked. What it adds is the fact, visible here and on the
  * status board, where a suite nobody claimed is a row rather than a guess.
+ *
+ * `run` exists because `claim` + a separate command is two steps with a
+ * human decision between them, and the decision was measured being skipped
+ * (D-0176, 2026-08-23): a track chained `mc suite claim; npm test` with `;`
+ * and never read the claim's refusal — the refusal was printed, exit 1, on
+ * stderr, and the mechanism could not help because nothing looked. The same
+ * day, twice more: an interrupt between the steps left the lease standing
+ * (one cost PM 2h25m, D-0167; a command timeout mid-suite did it again). So
+ * the guarded form is one step: refused means NOTHING runs and the exit is
+ * the refusal's; and the lease goes back when the command ends — on
+ * success, on failure, and on SIGINT/SIGTERM, where the command's process
+ * group is ended first. A vakt that only holds when called correctly is a
+ * vakt that holds until somebody is in a hurry.
  */
+import { spawn } from 'node:child_process';
+
 import { painter } from '../status-render.js';
 import { orphanLine } from '../lease-owner.js';
 import { tellHolder } from '../lease-refusal.js';
@@ -18,7 +34,7 @@ import { currentHolder } from '../work-identity.js';
 import { suiteRuns } from '../work-status.js';
 import { scanArgs } from './flags.js';
 
-const VERBS = ['claim', 'release', 'who'];
+const VERBS = ['run', 'claim', 'release', 'who'];
 
 export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
@@ -26,11 +42,11 @@ export async function run(argv, deps = {}) {
   const opts = parseArgs(argv);
   if (opts.error) {
     stderr.write(`mc: ${opts.error}\n`);
-    stderr.write('usage — mc suite claim "<what for>" | release [--force] | who [--json]\n');
+    stderr.write('usage — mc suite run "<command>" | claim "<what for>" | release [--force] | who [--json]\n');
     return 2;
   }
   const c = painter(Boolean(stdout.isTTY) && process.env.NO_COLOR === undefined);
-  const holder = currentHolder();
+  const holder = deps.holder || currentHolder();
   const runs = deps.runs || suiteRuns;
 
   if (opts.verb === 'who') {
@@ -42,6 +58,71 @@ export async function run(argv, deps = {}) {
     }
     stdout.write(`${suiteRow(c, lease, running)}\n`);
     return 0;
+  }
+
+  if (opts.verb === 'run') {
+    const outcome = claimSuiteLease({ errand: opts.errand, holder, ownerPid: process.pid });
+    if (!outcome.ok) {
+      // The whole point: refused means NOTHING runs, and the exit says so.
+      // The same words as a refused claim, so the two forms cannot drift.
+      const running = await runs();
+      stderr.write(`mc: the suite right is held by ${outcome.lease.holder} — ${suiteRow(c, outcome.lease, running)}\n`);
+      stderr.write('mc: NOTHING was run — one full suite at a time on this machine (D-0141)\n');
+      const told = (deps.tell || tellHolder)({ lease: outcome.lease, asker: holder, what: 'the suite right', errand: opts.errand, running });
+      stderr.write(told.told
+        ? `mc: told ${outcome.lease.holder}${told.woke ? ' and woke it' : ` (delivered, not woken: ${told.reason || 'nobody to wake'})`}\n`
+        : `mc: could not tell ${outcome.lease.holder}: ${told.reason}\n`);
+      stderr.write('mc: wait, or run only what is affected; if that run is over, mc suite release --force ends it\n');
+      return 1;
+    }
+    if (outcome.reaped) {
+      stdout.write(`mc: took the suite right from ${outcome.reaped.holder} — its process (pid ${outcome.reaped.owner_pid}) was gone after ${minutes(outcome.reaped.age_ms)}; logged as a reap\n`);
+    }
+    // A right already held by hand stays held afterwards: that was their
+    // claim, and `run` gives back only what it took (the gate's own rule).
+    const ownRight = !outcome.already;
+    stdout.write(`mc: ${holder.name} holds the suite right — running: ${opts.errand}\n`);
+    let released = false;
+    const giveBack = (why) => {
+      if (released || !ownRight) return;
+      released = true;
+      releaseSuiteLease({ holder });
+      if (why) stderr.write(`mc: ${why} — the suite right is released, not left standing\n`);
+    };
+    // A closed pane or a shell timeout sends SIGTERM/SIGINT and runs no
+    // `finally`: the lease went with the process once (D-0167, 2h25m) and
+    // again the same day under a command timeout. The child's whole process
+    // group is ended, the lease goes back, and the exit is the signal's.
+    let child = null;
+    const onSignal = (signal) => {
+      try {
+        try { if (child?.pid) process.kill(-child.pid, signal); } catch { /* already gone */ }
+        giveBack(`cut short by ${signal}`);
+      } finally {
+        process.exit(128 + (signal === 'SIGINT' ? 2 : 15));
+      }
+    };
+    for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, onSignal);
+    try {
+      const started = (deps.spawn || defaultSpawn)(opts.errand);
+      child = started.child || null;
+      const ended = await started.done;
+      if (ended.signal) {
+        giveBack(`the command was killed by ${ended.signal}`);
+        return 128 + (ended.signal === 'SIGINT' ? 2 : 15);
+      }
+      if (ended.code !== 0) {
+        giveBack(`the command exited ${ended.code}`);
+        return ended.code ?? 1;
+      }
+      giveBack(null);
+      if (ownRight) stdout.write('mc: done — suite right released\n');
+      else stdout.write('mc: done — you claimed the right by hand, so you still hold it\n');
+      return 0;
+    } finally {
+      for (const signal of ['SIGINT', 'SIGTERM']) process.off(signal, onSignal);
+      giveBack('the run ended unexpectedly');
+    }
   }
 
   if (opts.verb === 'claim') {
@@ -85,6 +166,22 @@ export async function run(argv, deps = {}) {
   return 0;
 }
 
+/**
+ * The command, through a shell, in its own process group.
+ *
+ * Its own group so a signal to mc can end the whole tree — an `npm test`
+ * killed alone leaves node workers running a suite nobody owns. Output goes
+ * straight to the terminal: this is a wrapper, not a reporter.
+ */
+function defaultSpawn(command) {
+  const child = spawn('sh', ['-c', command], { stdio: 'inherit', detached: true });
+  const done = new Promise((resolve) => {
+    child.on('error', () => resolve({ code: 127, signal: null }));
+    child.on('exit', (code, signal) => resolve({ code, signal }));
+  });
+  return { child, done };
+}
+
 /** One line: the lease, then what is actually running. */
 export function suiteRow(c, lease, running, now = Date.now()) {
   const parts = [];
@@ -115,9 +212,10 @@ export function parseArgs(argv) {
   const opts = { verb: null, errand: '', json: scanned.flags.json, force: scanned.flags.force };
   if (scanned.error) return { ...opts, error: scanned.error };
   const [verb, ...rest] = scanned.positional;
-  if (!verb) return { ...opts, error: 'say which: claim, release or who' };
+  if (!verb) return { ...opts, error: 'say which: run, claim, release or who' };
   if (!VERBS.includes(verb)) return { ...opts, error: `mc suite does not know "${verb}"` };
   if (verb === 'claim' && rest.length === 0) return { ...opts, error: 'claim needs to say what for — mc suite claim "<what for>"' };
-  if (verb !== 'claim' && rest.length > 0) return { ...opts, error: `${verb} takes no further words` };
+  if (verb === 'run' && rest.length === 0) return { ...opts, error: 'run needs the command — mc suite run "<command>"' };
+  if (verb !== 'claim' && verb !== 'run' && rest.length > 0) return { ...opts, error: `${verb} takes no further words` };
   return { ...opts, verb, errand: rest.join(' ') };
 }

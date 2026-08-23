@@ -31,6 +31,7 @@ import { appendFileSync, existsSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 import { claimLease, readLease, releaseLease } from './repo-lease.js';
+import { freshenBranchForLanding, freshenOpenBranches } from './repo-freshen.js';
 import { lockfileHashAt, saveBaseline } from './repo-baseline-cache.js';
 import { currentHolder } from './work-identity.js';
 import { mcHome } from './paths.js';
@@ -79,6 +80,8 @@ export async function runMergeRound({
   installs = sourceLinkedInstallations,
   suite = undefined,
   mergeLog = undefined,
+  freshen = freshenOpenBranches,
+  refresh = null,
   onProgress = () => {},
   clock = () => Date.now(),
   // A batch's fallback rounds run inside the batch's lease; they neither
@@ -125,6 +128,8 @@ export async function runMergeRound({
     reason: null,
     gate: null,
     deploy: null,
+    tree_identical: null,
+    freshened: null,
     log_line: null,
     log_path: null,
     started_at: new Date(startedAt).toISOString(),
@@ -170,6 +175,13 @@ export async function runMergeRound({
       say(`batch ${label} stopped at ${verdict.stopped_at} (${verdict.reason}) — falling back to one round per pull request`);
       report.batch.fallback = true;
       for (const number of numbers) {
+        // Best effort: an earlier fallback round that landed makes the next
+        // branch unmergeable to the forge until it carries the new main.
+        const head = (verdict.prs || []).find((item) => item.number === number)?.head;
+        if (head && report.batch.merges.some((item) => item.merged)) {
+          const ready = (refresh || freshenBranchForLanding)({ repoPath, branch: head, base: verdict.pr.base || 'main', root, env, git: askGit, say });
+          if (!ready.ok) say(`#${number} could not be freshened first (${ready.reason}) — its own round will say what that means`);
+        }
         say(`— round for #${number}`);
         const round = await runMergeRound({
           repoPath, pr: number, holder, root, env, git: askGit, gh: askGh, gate, installs, suite, mergeLog, onProgress, clock, holdLease: false,
@@ -228,7 +240,21 @@ export async function runMergeRound({
         askGit(['fetch', 'origin', '--prune'], { cwd: repoPath });
         const at = trim(askGit(['rev-parse', base], { cwd: repoPath }).stdout);
         if (at !== expected) {
-          return finish('drift', `${base} moved to ${short(at)} between merges, and not by this round — #${number}${index + 1 < numbers.length ? ` and ${numbers.length - index - 1} more` : ''} not merged; ${index} of ${numbers.length} landed`);
+          return finish('drift', `${base} moved to ${short(at)} between merges, and not by this round — #${number}${index + 1 < numbers.length ? ` and ${numbers.length - index - 1} more` : ''} not merged; ${index} of ${numbers.length} landed, and ${base} now stands at a state the batch never measured by itself`);
+        }
+        // The batch verifies together and lands sequentially, and every
+        // squash makes the next branch unmergeable to the forge (measured
+        // on the first live batch: five green on one candidate, one
+        // landed, four refused). The just-made main goes into the next
+        // branch before its turn — a conflict here stops the batch, and
+        // what has landed stays landed and said.
+        const head = (verdict.prs || []).find((item) => item.number === number)?.head;
+        if (head) {
+          const ready = (refresh || freshenBranchForLanding)({ repoPath, branch: head, base: verdict.pr.base, root, env, git: askGit, say });
+          if (!ready.ok) {
+            if (batch) report.batch.merges.push({ number, merged: false, merge_commit: null, error: `could not be freshened for landing: ${ready.reason}` });
+            return finish('merge', `#${number} could not be freshened for landing (${ready.reason}) — ${index} of ${numbers.length} landed before it, and ${verdict.pr.base} now stands at a state the batch never measured by itself`);
+          }
         }
       }
       const merged = askGh(['pr', 'merge', String(number), '--squash'], { cwd: repoPath });
@@ -267,6 +293,52 @@ export async function runMergeRound({
         say(`merged #${number} into ${verdict.pr.base} as ${short(landed)}`);
       }
       report.merge_commit = landed;
+
+      // Is main, right now, byte-for-byte the tree the measured build said
+      // it should be after this landing? (PM's ruling on the tracks'
+      // disagreement, 2026-08-23: identity is a measurement; "still green"
+      // without it is an assumption.) For a batch the expectation is the
+      // prefix tree T_i recorded while the candidate was built; for a
+      // single round it is the candidate's own tree. Identical → the green
+      // transfers, said so. Different → the world the remaining proofs
+      // were made in no longer exists: the rest of the batch is re-measured
+      // in rounds of its own, and nothing is carried forward.
+      const expectTree = batch ? (verdict.candidate_trees || [])[index] || null : verdict.candidate.tree || null;
+      if (expectTree) {
+        const landedTree = trim(askGit(['rev-parse', `${base}^{tree}`], { cwd: repoPath }).stdout) || null;
+        if (landedTree === expectTree) {
+          if (report.tree_identical !== false) report.tree_identical = true;
+          say(batch
+            ? `#${number} landed byte-identical to the measured build (tree ${short(landedTree)})`
+            : `${verdict.pr.base} is byte-identical to the measured candidate (tree ${short(landedTree)}) — the green transfers by identity`);
+        } else {
+          report.tree_identical = false;
+          say(`WARNING: after #${number}, ${base}'s tree (${short(landedTree)}) is NOT the measured build's (${short(expectTree)}) — the sequential squash resolved something differently, and the green measured on the candidate does not transfer`);
+          if (batch && index + 1 < numbers.length) {
+            const rest = numbers.slice(index + 1);
+            say(`re-measuring the remaining ${rest.length} in rounds of their own — the world they were proved in no longer exists`);
+            report.batch.fallback = true;
+            for (const later of rest) {
+              const head = (verdict.prs || []).find((item) => item.number === later)?.head;
+              if (head) {
+                const ready = (refresh || freshenBranchForLanding)({ repoPath, branch: head, base: verdict.pr.base, root, env, git: askGit, say });
+                if (!ready.ok) say(`#${later} could not be freshened first (${ready.reason}) — its own round will say what that means`);
+              }
+              say(`— round for #${later}`);
+              const round = await runMergeRound({
+                repoPath, pr: later, holder, root, env, git: askGit, gh: askGh, gate, installs, suite, mergeLog, onProgress, clock, holdLease: false,
+              });
+              report.batch.rounds.push(round);
+              report.batch.merges.push({ number: later, merged: round.merged, merge_commit: round.merge_commit, error: round.ok ? null : round.reason });
+            }
+            const failed = report.batch.merges.filter((item) => !item.merged);
+            if (failed.length) {
+              return finish('batch', `${failed.length} of ${numbers.length} did not land: ${failed.map((item) => `#${item.number} (${item.error})`).join('; ')}`);
+            }
+            break;
+          }
+        }
+      }
     }
     report.merged = true;
     // Named, not implied. The sha is read from the PR's base, so it is the
@@ -286,7 +358,7 @@ export async function runMergeRound({
     // lockfile at it, and the suite command; the next round reuses it only
     // when all three match. Saved only after a fully landed round — a
     // partial batch leaves the old entry, which then simply never matches.
-    attempt(() => saveBaseline({
+    if (report.tree_identical === true) attempt(() => saveBaseline({
       repoPath,
       commit: report.merge_commit,
       lockfileHash: lockfileHashAt({ git: askGit, repoPath, commit: report.merge_commit }),
@@ -295,6 +367,14 @@ export async function runMergeRound({
       totals: verdict.candidate.totals,
       root,
     }), (why) => say(`could not save the candidate result as the next baseline (${why}) — the next round runs it as before`));
+
+    // The branches this merge just made dirty, brought up to date while the
+    // lease is still held (A6): the same work every open branch's owner
+    // would do twenty minutes later, done once, by the round that moved
+    // main. A failure here never un-merges anything and never fails the
+    // round — the report carries what happened to each branch.
+    report.freshened = attemptFreshen({ freshen, repoPath, base: verdict.pr.base, holder, root, env, git: askGit, gh: askGh, say });
+
 
     report.deploy = deployPull({ git: askGit, repoPath, env, say, installs });
     const written = writeMergeLine({ report, verdict, path: mergeLog ?? defaultMergeLog(repoPath, { root, env }), clock });
@@ -308,6 +388,17 @@ export async function runMergeRound({
       releaseLease({ repoPath, holder, root });
       say('lease released');
     }
+  }
+}
+
+/** The freshen step, held to "never fails the round". */
+function attemptFreshen({ freshen, repoPath, base, holder, root, env, git, gh, say }) {
+  if (!freshen) return null;
+  try {
+    return freshen({ repoPath, base, holder, root, env, git, gh, say });
+  } catch (error) {
+    say(`freshen failed (${error?.message || String(error)}) — every open branch is exactly as it was`);
+    return { branches: [], failed: error?.message || String(error) };
   }
 }
 
