@@ -32,6 +32,7 @@
  */
 import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 import { writeFileAtomic } from './atomic-write.js';
@@ -181,8 +182,9 @@ export function sendToArea({
   // on it for good (D-0013; measured on every round as "delivered, but did
   // not knock: somebody is attached to it"). The exception is the role, never
   // the sender, and rule 2 still guards whatever the person has typed.
+  const inbox = inboxPath(area.path);
   const woken = wakeConversation({
-    target, sender: sender.name, run, sleep, attachedOk: reservedRoleName(name),
+    target, sender: sender.name, inbox, run, sleep, attachedOk: reservedRoleName(name),
   });
   // A draft in the prompt is the one refusal that is not the sender's to
   // argue with and not the recipient's to notice: the file is in the inbox
@@ -190,7 +192,9 @@ export function sendToArea({
   // guard's round tries it again, and the board shows the session as
   // unreachable meanwhile. Nothing types over the draft, ever.
   if (!woken.ok && woken.guard && woken.reason === DRAFT_REASON) {
-    const queued = enqueueWake({ name, target, sender: sender.name, reason: woken.reason, root: queueRoot(env), now });
+    const queued = enqueueWake({
+      name, target, sender: sender.name, inbox, reason: woken.reason, root: queueRoot(env), now,
+    });
     return {
       ok: true,
       file,
@@ -240,8 +244,12 @@ export function flushPendingWakes({ root = mcHome(), run = null, sleep = null, n
     attempt: (entry) => {
       const target = backgroundTarget(entry.name, { run: run ? (args) => run(args) : null });
       if (!target) return { ok: false, gone: true, reason: 'nothing is running there any more' };
+      // An entry queued before the notice carried a path has none; the area
+      // still knows where its inbox is.
+      const area = entry.inbox ? null : inspectWorkArea(entry.name, process.env, { conversations: false, git: false });
+      const inbox = entry.inbox || (area?.path ? inboxPath(area.path) : null);
       const woken = wakeConversation({
-        target, sender: entry.sender || 'mc', run, sleep, attachedOk: reservedRoleName(entry.name),
+        target, sender: entry.sender || 'mc', inbox, run, sleep, attachedOk: reservedRoleName(entry.name),
       });
       return { ok: woken.ok, reason: woken.ok ? null : woken.reason };
     },
@@ -302,8 +310,27 @@ function freePath(directory, at, sender) {
  * would turn every such comparison into "not mine", so the notice is written
  * out of characters no terminal has an opinion about.
  */
-function noticeFrom(sender) {
-  return `mc: new in inbox/ from ${sender} - read it now`;
+function noticeFrom(sender, inbox = null) {
+  return `mc: new in ${noticePath(inbox)} from ${sender} - read it now`;
+}
+
+/**
+ * The place the notice names — a path, not a word (D-0163).
+ *
+ * "Read your inbox" was unambiguous for every session until one came up with
+ * Gmail attached: it read the word, asked for /mcp, and sat for twenty
+ * minutes on the morning's most important order. Reading the wrong inbox
+ * looks exactly like reading the right one — the session reads *something* —
+ * so no guard catches it; only the sentence can. The path is what `mc work
+ * send` already prints when it delivers, shortened to `~` so it fits a pane
+ * and stays ASCII (the comparisons below depend on that). With no area known,
+ * the old `inbox/` stands.
+ */
+function noticePath(inbox) {
+  if (!inbox) return 'inbox/';
+  const home = homedir();
+  const shown = home && inbox.startsWith(home) ? `~${inbox.slice(home.length)}` : inbox;
+  return shown.endsWith('/') ? shown : `${shown}/`;
 }
 
 /**
@@ -388,10 +415,12 @@ export function paneWillTakeText({ target, run = null, attachedOk = false, probe
  * is told it was. Litter is a nuisance — and the next wake refuses on it rather
  * than pasting onto it — while deleting a sentence somebody was writing is not.
  */
-export function wakeConversation({ target, sender, run = null, sleep = null, attachedOk = false }) {
+export function wakeConversation({
+  target, sender, inbox = null, run = null, sleep = null, attachedOk = false,
+}) {
   const tmux = run || ((args) => spawnSync('tmux', args, { encoding: 'utf8' }));
   const wait = sleep || ((ms) => { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); });
-  const notice = noticeFrom(sender);
+  const notice = noticeFrom(sender, inbox);
 
   // Refused before anything was typed: nothing was touched, so there is
   // nothing to take back and nothing for the sender to worry about.

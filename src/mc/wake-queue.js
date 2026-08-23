@@ -50,7 +50,7 @@ function writeWakeQueue(wakes, root) {
 }
 
 /** Queue a wake for an area. Returns the entry — the existing one if there was one. */
-export function enqueueWake({ name, target, sender, reason, root = mcHome(), now = new Date() } = {}) {
+export function enqueueWake({ name, target, sender, inbox, reason, root = mcHome(), now = new Date() } = {}) {
   const wakes = readWakeQueue({ root });
   const existing = wakes.find((item) => item.name === name);
   if (existing) return { entry: existing, already: true };
@@ -58,6 +58,7 @@ export function enqueueWake({ name, target, sender, reason, root = mcHome(), now
     name,
     target: target || null,
     sender: sender || null,
+    inbox: inbox || null,
     reason: reason || null,
     since: now.toISOString(),
     attempts: 0,

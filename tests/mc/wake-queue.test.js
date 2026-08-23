@@ -132,7 +132,9 @@ describe('a wake refused on a draft is queued, and lands when the prompt clears'
       const lines = [];
       outcomes = flushPendingWakes({ root: fx.mcHome, run: spawn, sleep: () => {}, log: (line) => lines.push(line) });
       assert.equal(outcomes[0].outcome, 'woke', JSON.stringify(outcomes));
-      assert.ok(fx.tmux.submitted().some((line) => /mc: new in inbox/u.test(line)));
+      // The notice names the path, not the word (D-0163) — also from the queue.
+      const inbox = `${join(fx.env.MC_WORK_ROOT, 'alpha', 'inbox')}/`;
+      assert.ok(fx.tmux.submitted().some((line) => line.includes(`mc: new in ${inbox} from`)), fx.tmux.submitted().join('\n'));
       assert.equal(pendingWakeFor('alpha', { root: fx.mcHome }), null);
       assert.match(lines[0], /queued wake landed in alpha/u);
       void env;

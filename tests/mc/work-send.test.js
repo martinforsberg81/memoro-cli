@@ -16,7 +16,7 @@ import assert from 'node:assert/strict';
 import {
   existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync,
 } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { describe, it } from 'node:test';
 
@@ -127,9 +127,10 @@ describe('mc work send — the channel', () => {
       assert.equal(sent.status, 0, sent.stderr);
       assert.match(sent.stdout, /woke pm/u);
 
-      // One turn arrived, and it says where to look — not the message itself.
+      // One turn arrived, and it says where to look — the path, not the
+      // message itself, and not the word (D-0163).
       assert.equal(fx.tmux.submitted().length, 1);
-      assert.match(fx.tmux.submitted()[0], /new in inbox\/ from alpha/u);
+      assert.ok(fx.tmux.submitted()[0].includes(`new in ${join(fx.workRoot, 'pm', 'inbox')}/ from alpha`), fx.tmux.submitted()[0]);
       assert.equal(fx.tmux.prompt(), '', 'something was left sitting in the prompt');
 
       // Text and Enter were separate keystrokes, and the text went in
@@ -295,6 +296,28 @@ describe('mc work send — the channel', () => {
       assert.match(readFileSync(first, 'utf8'), /one/u);
       assert.match(readFileSync(second, 'utf8'), /two/u);
     } finally { fx.cleanup(); }
+  });
+
+  it('the notice names the inbox by path, not by the word (D-0163)', () => {
+    // "Read your inbox" was unambiguous until a session came up with Gmail
+    // attached and read the word as e-mail. The typed notice carries the
+    // path mc work send already prints, with the home shortened to ~ so it
+    // fits a pane and stays ASCII; without an area it says inbox/ as before.
+    const typed = [];
+    const scripted = (args) => {
+      if (args[0] === 'send-keys' && args[3] === '-l') typed.push(args[4]);
+      if (args[0] === 'capture-pane') return { status: 0, stdout: 'a conversation\n+----+\n| > \n+----+\n  ? for shortcuts\n\n\n' };
+      return { status: 0, stdout: '' };
+    };
+    const home = homedir();
+    wakeConversation({ target: 'mc-pm', sender: 'alpha', inbox: join(home, 'mc', 'pm', 'inbox'), sleep: () => {}, run: scripted });
+    assert.equal(typed[0], 'mc: new in ~/mc/pm/inbox/ from alpha - read it now');
+    typed.length = 0;
+    wakeConversation({ target: 'mc-pm', sender: 'alpha', inbox: '/srv/work/pm/inbox', sleep: () => {}, run: scripted });
+    assert.equal(typed[0], 'mc: new in /srv/work/pm/inbox/ from alpha - read it now');
+    typed.length = 0;
+    wakeConversation({ target: 'mc-pm', sender: 'alpha', sleep: () => {}, run: scripted });
+    assert.equal(typed[0], 'mc: new in inbox/ from alpha - read it now');
   });
 
   it('tells a sent notice from one still waiting in the box', () => {
