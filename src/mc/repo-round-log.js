@@ -57,6 +57,15 @@ export function recordRound(report, { mode = 'merge', root = mcHome(), now = new
     timings: gate?.timings && Object.keys(gate.timings).length ? gate.timings : null,
     standing_red: gate?.standing_red ?? null,
     broke: gate?.broke?.length ?? null,
+    // The red sets' delta by NAME, not only by count. The two names that
+    // flapped 55 → 57 → 55 could not be pointed at afterwards: the gate's
+    // report carried both red sets and threw them away, and the log line
+    // carried only numbers. With the delta in the line, the next 57 names
+    // itself. Capped and said when capped — a cap that says nothing reads
+    // as "that was all of them".
+    broke_names: capped(gate?.broke),
+    fixed_names: capped(gate?.fixed),
+    baseline_unstable: capped(gate?.ratchet?.baseline_risen),
   };
   try {
     mkdirSync(root, { recursive: true, mode: 0o700 });
@@ -65,6 +74,15 @@ export function recordRound(report, { mode = 'merge', root = mcHome(), now = new
   } catch {
     return null; // the line describes the round; it must never fail it
   }
+}
+
+/** At most this many names in one field; past it, the count of the rest. */
+const NAME_CAP = 40;
+
+function capped(names) {
+  if (!Array.isArray(names) || names.length === 0) return null;
+  if (names.length <= NAME_CAP) return names;
+  return [...names.slice(0, NAME_CAP), `… and ${names.length - NAME_CAP} more, not named here`];
 }
 
 /** Every recorded round, oldest first; lines that will not parse are skipped, counted. */

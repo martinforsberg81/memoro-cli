@@ -37,7 +37,7 @@ describe('every round leaves a line', () => {
       recordRound({
         repo: '/x/memoro', pr: { number: 402 }, holder: 'pm', ok: false, merged: false,
         stopped_at: 'red', reason: '2 tests red on the candidate and green on the baseline', duration_ms: 280_000,
-        gate: { timings: {}, standing_red: 55, broke: ['a', 'b'] },
+        gate: { timings: {}, standing_red: 55, broke: ['a', 'b'], fixed: [], ratchet: { baseline_risen: ['flaky-one', 'flaky-two'] } },
       }, { root, now: NOW });
       recordRound({
         repo: '/x/memoro', pr: { number: 403 }, holder: 'msr-track-1', ok: false, merged: false,
@@ -53,8 +53,13 @@ describe('every round leaves a line', () => {
       ]);
       assert.equal(rounds[1].broke, 2);
       assert.equal(rounds[1].standing_red, 55);
+      // The delta by NAME: the two names that flapped 55 → 57 → 55 could
+      // not be pointed at afterwards, because every log carried only
+      // numbers. The next one names itself.
+      assert.deepEqual(rounds[1].broke_names, ['a', 'b']);
       assert.equal(rounds[2].duration_ms, 900, 'the cost of a refusal is a fact too');
 
+      assert.deepEqual(rounds[1].baseline_unstable, ['flaky-one', 'flaky-two'], 'an unstable baseline is in the line by name');
       const counted = countRounds(rounds);
       assert.equal(counted.rounds, 3);
       assert.equal(counted.merged_prs, 1);
