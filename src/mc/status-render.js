@@ -95,7 +95,7 @@ export function renderLines(report, {
     const lease = report.suite.lease;
     const running = report.suite.running || [];
     const held = lease?.held
-      ? `${c(lease.holder, 'bold')}${lease.errand ? ` “${lease.errand}”` : ''} ${c(`held for ${ago(now - (lease.age_ms ?? 0), now)}`, 'grey')}`
+      ? `${c(lease.holder, 'bold')}${lease.errand ? ` “${lease.errand}”` : ''} ${c(`held for ${ago(now - (lease.age_ms ?? 0), now)}`, 'grey')}${lease.orphaned ? ` ${c(`· its process (pid ${lease.owner_pid}) is gone`, 'yellow')}` : ''}`
       : c('free', 'grey');
     const runs = running.length
       ? running.map((run) => c(`running in ${run.area || run.directory} for ${elapsed(run.elapsed)} (pid ${run.pid})`, running.length > 1 ? 'red' : 'yellow')).join(c('  ·  ', 'grey'))

@@ -78,3 +78,35 @@ describe('the suite right', () => {
     assert.match(parseArgs(['take']).error, /does not know/u);
   });
 });
+
+describe('mc suite claim, refused, tells the holder', () => {
+  it('writes one CLAIM REFUSED file into the holder\'s inbox and says so to the one refused', async () => {
+    const { mkdirSync, readdirSync } = await import('node:fs');
+    const { runMcCli } = await import('./_helpers/mc-cli.js');
+    const root = home();
+    const workRoot = join(root, 'work');
+    const mcHome = join(root, 'home');
+    for (const name of ['alpha', 'beta']) mkdirSync(join(workRoot, name), { recursive: true });
+    mkdirSync(mcHome, { recursive: true, mode: 0o700 });
+    // No tmux on this PATH: the file is the delivery, the wake is latency.
+    const env = { MC_HOME: mcHome, MC_WORK_ROOT: workRoot, PATH: '/usr/bin:/bin', NO_COLOR: '1' };
+    try {
+      const first = runMcCli(['suite', 'claim', 'gate round for #1'], env, { cwd: join(workRoot, 'alpha') });
+      assert.equal(first.status, 0, first.stderr);
+      const second = runMcCli(['suite', 'claim', 'my own run'], env, { cwd: join(workRoot, 'beta') });
+      assert.equal(second.status, 1);
+      assert.match(second.stderr, /held by alpha/u);
+      assert.match(second.stderr, /mc: told alpha \(delivered, not woken: /u);
+      const inbox = readdirSync(join(workRoot, 'alpha', 'inbox'));
+      assert.equal(inbox.length, 1);
+      const text = readFileSync(join(workRoot, 'alpha', 'inbox', inbox[0]), 'utf8');
+      assert.match(text, /from: beta/u);
+      assert.match(text, /CLAIM REFUSED on your account — beta asked for the suite right for “my own run”/u);
+      assert.match(text, /If your run is over: mc suite release/u);
+      // Refusing yourself is not a thing: claiming what you hold tells nobody.
+      const again = runMcCli(['suite', 'claim', 'again'], env, { cwd: join(workRoot, 'alpha') });
+      assert.equal(again.status, 0);
+      assert.equal(readdirSync(join(workRoot, 'alpha', 'inbox')).length, 1);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+});

@@ -129,7 +129,9 @@ export async function runMergeRound({
 
   // One lease across the whole round. The gate would take its own and give it
   // straight back, which would open exactly the window this round must not have.
-  const lease = claimLease({ repoPath, errand: `merge round for #${pr}`, holder, root });
+  // For the length of this process (lease-owner.js): a merge round cut short
+  // leaves a lease its pid answers for.
+  const lease = claimLease({ repoPath, errand: `merge round for #${pr}`, holder, ownerPid: process.pid, root });
   if (!lease.ok) {
     const held = lease.lease;
     return finish('lease', `${repoPath} is held by ${held.holder}${held.errand ? ` for “${held.errand}”` : ''}`);

@@ -80,6 +80,7 @@ function fixture({
   writeJson(join(repoPath, 'package.json'), { name: 'repo', scripts: { test: 'node --test tests/' } });
 
   const calls = [];
+  const told = [];
   const git = (args, opts = {}) => {
     calls.push({ tool: 'git', args, cwd: opts.cwd });
     if (args[0] === 'worktree' && args[1] === 'add') {
@@ -151,6 +152,11 @@ function fixture({
     progress: [],
     lease: () => readLease(repoPath, { root: mcHome }),
     ran: (tool) => calls.filter((call) => call.tool === tool),
+    // What the round told a holder it was refused by. Stubbed, always: the
+    // real one writes to a real area's inbox with a wake, and one run of this
+    // file with it live put two "CLAIM REFUSED" files in PM's inbox about a
+    // temp repository that never existed (2026-08-23).
+    told,
     run: (extra = {}) => runGate({
       repoPath,
       pr: 400,
@@ -160,6 +166,7 @@ function fixture({
       gh,
       suite,
       tests,
+      tell: (message) => { told.push(message); return { told: true, woke: true, reason: null, file: null }; },
       ...extra,
     }),
     cleanup() { try { rmSync(root, { recursive: true, force: true }); } catch { /* gone */ } },
@@ -387,7 +394,12 @@ describe('the lease is held as the area, and always given back', () => {
       const report = await fx.run();
       assert.equal(report.ok, false);
       assert.equal(report.stopped_at, 'lease');
-      assert.match(report.reason, /held by pm .*their own round/u);
+      assert.match(report.reason, /held by pm .*their own round” — pm has been told/u);
+      // The holder was told, once, which lease and by whom (lease-refusal.js).
+      assert.equal(fx.told.length, 1);
+      assert.equal(fx.told[0].lease.holder, 'pm');
+      assert.equal(fx.told[0].asker.name, 'klient-guard');
+      assert.equal(fx.told[0].what, fx.repoPath);
       assert.deepEqual(fx.ran('suite'), []);
       assert.deepEqual(fx.ran('gh'), [], 'it did not even ask about the pull request');
       // And it did not release somebody else's lease on its way out.

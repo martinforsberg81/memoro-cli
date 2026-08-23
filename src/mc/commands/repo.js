@@ -20,6 +20,7 @@
  */
 import { painter } from '../status-render.js';
 import { leaseRow, livenessRow, renderRepoLines, renderWatchLines } from '../repo-render.js';
+import { tellHolder } from '../lease-refusal.js';
 import { claimLease, readLease, releaseLease } from '../repo-lease.js';
 import { currentHolder } from '../work-identity.js';
 import { runGate, verdictHeadline } from '../repo-gate.js';
@@ -46,7 +47,7 @@ export async function run(argv, deps = {}) {
 
   if (opts.verb === 'watch') return watch(opts, { stdout, stderr });
   if (opts.verb === 'merge') return gate(opts, { stdout, stderr });
-  if (opts.verb !== 'status') return lease(opts, { stdout, stderr });
+  if (opts.verb !== 'status') return lease(opts, { stdout, stderr, tell: deps.tell || null });
 
   const report = await repoView({ names: opts.names, offline: opts.offline });
 
@@ -127,7 +128,7 @@ async function watch(opts, { stdout, stderr }) {
  * exactly one thing — this command. Nobody's git is blocked, which is why the
  * message says who has it rather than pretending the work cannot proceed.
  */
-async function lease(opts, { stdout, stderr }) {
+async function lease(opts, { stdout, stderr, tell = null }) {
   const c = painter(Boolean(stdout.isTTY) && process.env.NO_COLOR === undefined);
   const repoPath = await resolveRepoPath(opts.repo);
   if (!repoPath) {
@@ -165,6 +166,11 @@ async function lease(opts, { stdout, stderr }) {
       const live = livenessRow(c, outcome.lease, answers.get(outcome.lease.holder));
       if (live) stderr.write(`mc: ${live}\n`);
       stderr.write('mc: nothing is blocked; this is mc being strict with itself\n');
+      // The holder is told (lease-refusal.js), so the wait is theirs to end.
+      const told = (tell || tellHolder)({ lease: outcome.lease, asker: holder, what: repoPath, errand: opts.errand });
+      stderr.write(told.told
+        ? `mc: told ${outcome.lease.holder}${told.woke ? ' and woke it' : ` (delivered, not woken: ${told.reason || 'nobody to wake'})`}\n`
+        : `mc: could not tell ${outcome.lease.holder}: ${told.reason}\n`);
       stderr.write(`mc: if that round is over, mc repo release ${opts.repo} --force ends it — and says so in the log\n`);
       return 1;
     }

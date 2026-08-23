@@ -11,6 +11,8 @@
  * status board, where a suite nobody claimed is a row rather than a guess.
  */
 import { painter } from '../status-render.js';
+import { orphanLine } from '../lease-owner.js';
+import { tellHolder } from '../lease-refusal.js';
 import { claimSuiteLease, readSuiteLease, releaseSuiteLease } from '../suite-lease.js';
 import { currentHolder } from '../work-identity.js';
 import { suiteRuns } from '../work-status.js';
@@ -45,14 +47,24 @@ export async function run(argv, deps = {}) {
   if (opts.verb === 'claim') {
     const outcome = claimSuiteLease({ errand: opts.errand, holder });
     if (!outcome.ok) {
-      stderr.write(`mc: the suite right is held by ${outcome.lease.holder} — ${suiteRow(c, outcome.lease, await runs())}\n`);
+      const running = await runs();
+      stderr.write(`mc: the suite right is held by ${outcome.lease.holder} — ${suiteRow(c, outcome.lease, running)}\n`);
       stderr.write('mc: nothing is blocked; this is mc being strict with itself — one full suite at a time on this machine (D-0141)\n');
+      // The holder is told (lease-refusal.js): the one who can end the wait
+      // should not have to be written to by the one waiting.
+      const told = (deps.tell || tellHolder)({ lease: outcome.lease, asker: holder, what: 'the suite right', errand: opts.errand, running });
+      stderr.write(told.told
+        ? `mc: told ${outcome.lease.holder}${told.woke ? ' and woke it' : ` (delivered, not woken: ${told.reason || 'nobody to wake'})`}\n`
+        : `mc: could not tell ${outcome.lease.holder}: ${told.reason}\n`);
       stderr.write('mc: if that run is over, mc suite release --force ends it — and says so in the log\n');
       return 1;
     }
     if (outcome.already) {
       stdout.write(`mc: you already hold the suite right — ${suiteRow(c, outcome.lease, [])}\n`);
       return 0;
+    }
+    if (outcome.reaped) {
+      stdout.write(`mc: took the suite right from ${outcome.reaped.holder} — its process (pid ${outcome.reaped.owner_pid}) was gone after ${minutes(outcome.reaped.age_ms)}; logged as a reap\n`);
     }
     stdout.write(`mc: ${holder.name} holds the suite right${opts.errand ? ` for “${opts.errand}”` : ''}\n`);
     stdout.write('mc: release it when the run is done — mc suite release\n');
@@ -67,7 +79,9 @@ export async function run(argv, deps = {}) {
   if (!outcome.released) { stdout.write('mc: nobody holds the suite right\n'); return 0; }
   stdout.write(outcome.forced
     ? `mc: took the suite right from ${outcome.lease.holder} (held ${Math.round(outcome.lease.age_ms / 60000)}m) — logged\n`
-    : 'mc: suite right released\n');
+    : outcome.reaped
+      ? `mc: cleared the suite right ${outcome.lease.holder} held — its process (pid ${outcome.lease.owner_pid}) was gone; logged as a reap\n`
+      : 'mc: suite right released\n');
   return 0;
 }
 
@@ -77,6 +91,9 @@ export function suiteRow(c, lease, running, now = Date.now()) {
   if (lease?.held) {
     const age = Number.isFinite(lease.age_ms) ? lease.age_ms : Math.max(0, now - Date.parse(lease.since));
     parts.push(`${c(lease.holder, 'bold')}${lease.errand ? ` “${lease.errand}”` : ''} ${c(`held for ${minutes(age)}`, 'grey')}`);
+    // A lease whose process is gone is said as that, not as a long hold.
+    const orphan = orphanLine(lease);
+    if (orphan) parts.push(c(orphan, 'yellow'));
   } else {
     parts.push(c('free', 'grey'));
   }

@@ -143,6 +143,24 @@ export async function watchRound({
     }, { root, now: new Date(now) }),
   }));
 
+  // A held suite right with nothing running is told to the one who holds it,
+  // not only to PM through the ledger: the holder is the one who can end it,
+  // and in the incident this is for the holder *was* PM and read nothing. One
+  // file with a wake, once per flag (it is `fresh`, so not once per round).
+  // Still the guard on the channel — the same component, one more recipient.
+  const holding = fresh.filter((item) => item.pattern === 'holding');
+  for (const { session, detail } of holding) {
+    const deliver = send || ((message) => sendToArea(message));
+    try {
+      const told = deliver({ name: session.area, message: `mc watch sessions: you ${detail}`, wake: true });
+      log(told?.ok
+        ? `told ${session.area} it holds the suite right${told.woke ? '' : ` — delivered without waking (${told.reason || 'nobody to wake'})`}`
+        : `could not tell ${session.area} about the suite right: ${told?.reason || 'send failed'}`);
+    } catch (error) {
+      log(`could not tell ${session.area} about the suite right: ${error?.message || String(error)}`);
+    }
+  }
+
   // The bound in §5, and the whole of it. Two classes knock; every other flag
   // sits in the ledger until the round carries it, which is what keeps exactly
   // one component in charge of the wake channel.
