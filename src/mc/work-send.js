@@ -537,7 +537,17 @@ export function wakeConversation({
     quiet = busy(pane) ? 0 : quiet + 1;
     if (quiet >= DRAW_ATTEMPTS) break;
   }
-  if (!landed) return giveUp('the text never reached the prompt', null);
+  // Never drawn, and the pane was busy the whole time. Measured 2026-08-23
+  // 19:02Z on PM's pane: the round typed its notice, looked for twelve
+  // seconds at an empty box, gave up without Enter — and the notice was in
+  // the input all along, painted minutes later, where it stood as a "draft"
+  // that queued every wake after it. The box was probed empty before
+  // typing and stayed visibly empty since, so Enter now either submits the
+  // notice or lands in an empty box and does nothing; leaving it is the one
+  // outcome measured to cost something. A pane that was idle and still did
+  // not draw the text is a different case, and is still given up on.
+  const blind = !landed && quiet < DRAW_ATTEMPTS;
+  if (!landed && !blind) return giveUp('the text never reached the prompt', null);
 
   // Two tries, two spellings. `Enter` is the key's name; `C-m` is the
   // carriage return it stands for. Measured by PM 2026-08-23 on two idle
@@ -584,6 +594,7 @@ export function wakeConversation({
     if (noticesAbove(pane, box.top, notice) > alreadyAbove) {
       return { ok: true, attempts: attempt + 1, ...(attempt ? { key } : {}), ...(stranded ? { stranded } : {}) };
     }
+
     // A busy pane cannot show the turn yet — it shows the receipt instead.
     // Measured 2026-08-23 on PM's pane, mid-answer for seven minutes: Enter
     // put `Press up to edit queued messages` in the box at once, the turn
@@ -592,6 +603,11 @@ export function wakeConversation({
     // nothing: the line went somewhere, and nowhere mc can point to.
     if (busy(pane) && box.text.includes(QUEUED_MARKER)) {
       return { ok: true, attempts: attempt + 1, queued: true, ...(attempt ? { key } : {}), ...(stranded ? { stranded } : {}) };
+    }
+    // Typed blind, and still nothing to point to: not claimed as a wake, and
+    // not left behind either — whatever was in the input has had its Enter.
+    if (blind && !holdsNotice(box.text, notice)) {
+      return { ok: false, reason: 'typed into a busy pane that never drew it; Enter was pressed so nothing is left standing', left: false, blind: true };
     }
     return giveUp('the notice left the prompt without becoming a turn', null);
   }

@@ -507,6 +507,43 @@ describe('a wake into a busy pane is not a failed wake', () => {
     assert.equal(talk.keys().filter((args) => args[3] === 'Enter').length, 1);
   });
 
+  it('a notice a busy pane never drew is given its Enter, not left standing', () => {
+    // Measured 2026-08-23 19:02Z on PM's pane: typed, twelve seconds of an
+    // empty box, given up without Enter — and the notice was in the input
+    // the whole time, painted minutes later as a "draft" that queued every
+    // wake after it. The box was probed empty before typing, so Enter is
+    // safe, and the receipt it gets back is the evidence.
+    let entered = false;
+    const receipt = {
+      status: 0,
+      stdout: [
+        '  a conversation',
+        '· Schlepping… (2m 28s · ↓ 5.4k tokens)',
+        '────────────────────────────────────────',
+        '❯ Press up to edit queued messages',
+        '────────────────────────────────────────',
+        '  ⏵⏵ auto mode on · esc to interrupt · ← for agents',
+        '',
+      ].join('\n'),
+    };
+    const talk = conversation({
+      // Busy, and the box never shows what was typed — until Enter.
+      paint: () => (entered ? receipt : pane({ typed: '', busy: true })),
+    });
+    const run = (args) => {
+      if (args[0] === 'send-keys' && args[3] === 'Enter') entered = true;
+      return talk.run(args);
+    };
+    assert.deepEqual(wake(run), { ok: true, attempts: 1, queued: true });
+  });
+
+  it('an idle pane that never draws the text is still given up on', () => {
+    const talk = conversation({ paint: () => pane({ typed: '' }) });
+    const result = wake(talk.run);
+    assert.equal(result.reason, 'the text never reached the prompt');
+    assert.deepEqual(talk.keys().filter((args) => ['Enter', 'C-m'].includes(args[3])), []);
+  });
+
   it('the placeholder alone is not enough — the turn has to be visible', () => {
     // Same box, but the notice is nowhere above it. Then the notice left the
     // prompt without becoming anything, which is not a wake and is not claimed

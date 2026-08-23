@@ -27,7 +27,12 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   types nothing (Enter on the stranded notice → PM read its inbox within the
   minute). (3) *Press up to edit queued messages* in the box of a busy pane
   is the turn's receipt, reported `queued`, not *the notice left the prompt
-  without becoming a turn*.
+  without becoming a turn*. (4) A notice typed into a busy pane that never
+  drew it within the wait gets its Enter anyway rather than being left
+  standing — the box was probed empty before typing, so Enter submits the
+  notice or lands in an empty box — and the second submit try is `C-m`,
+  the other spelling of the same key, named in the result when it was the
+  one that worked.
 
 ### Added
 - `mc work <name>` refuses a workplace somebody is already sitting in
