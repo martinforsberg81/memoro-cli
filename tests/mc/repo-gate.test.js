@@ -905,3 +905,98 @@ describe('the pull request\'s own tests run with the declared flags', () => {
     } finally { fx.cleanup(); }
   });
 });
+
+/**
+ * Several pull requests as one candidate (A3, 2026-08-23). With eleven in
+ * the queue and each round holding the suite right for 5–13 minutes, the
+ * round itself was the bottleneck. The batch is one tree with all of them
+ * merged in, measured once each side — and each pull request's own tests
+ * still run by themselves, so the batch can never hide which one carried
+ * which test.
+ */
+describe('a batch is one candidate, and each pull request keeps its own tests', () => {
+  const prs = {
+    401: { number: 401, headRefName: 'one', baseRefName: 'main', headRefOid: 'sha401', state: 'OPEN', title: 'first' },
+    402: { number: 402, headRefName: 'two', baseRefName: 'main', headRefOid: 'sha402', state: 'OPEN', title: 'second' },
+    403: { number: 403, headRefName: 'three', baseRefName: 'main', headRefOid: 'sha403', state: 'OPEN', title: 'third' },
+  };
+  /** A gh that answers per number, and a diff that answers per head. */
+  function batchFixture({ conflictOn = null, ownRedOn = null, bases = {} } = {}) {
+    const fx = fixture();
+    const gh = (args, opts = {}) => {
+      fx.calls.push({ tool: 'gh', args, cwd: opts.cwd });
+      const pr = prs[Number(args[2])];
+      return { status: 0, stdout: JSON.stringify({ ...pr, baseRefName: bases[pr.number] || pr.baseRefName }), stderr: '' };
+    };
+    const git = (args, opts = {}) => {
+      if (args[0] === 'merge') {
+        fx.calls.push({ tool: 'git', args, cwd: opts.cwd });
+        return args[2] === conflictOn
+          ? { status: 1, stdout: `CONFLICT (content): Merge conflict in src/${conflictOn}.js`, stderr: '' }
+          : { status: 0, stdout: '', stderr: '' };
+      }
+      if (args[0] === 'diff') {
+        fx.calls.push({ tool: 'git', args, cwd: opts.cwd });
+        const head = String(args[3]).split('...')[1];
+        return { status: 0, stdout: `tests/${head}.test.js\nsrc/${head}.js\n`, stderr: '' };
+      }
+      return fx.git(args, opts);
+    };
+    const tests = ({ cwd, files, flags = [] }) => {
+      fx.calls.push({ tool: 'tests', cwd, files, flags });
+      const red = files.some((file) => file.includes(ownRedOn)) && ownRedOn ? ['own › broke'] : [];
+      return Promise.resolve({ code: red.length ? 1 : 0, tap: tapWith(red, { finished: true, tests: 3 }) });
+    };
+    return { ...fx, run: (extra = {}) => fx.run({ pr: 401, prs: [401, 402, 403], gh, git, tests, ...extra }) };
+  }
+
+  it('builds the candidate from the base with every head merged in, in order, and runs the suite once each side', async () => {
+    const fx = batchFixture();
+    try {
+      const report = await fx.run();
+      assert.equal(report.ok, true, report.reason);
+      const adds = fx.ran('git').filter((call) => call.args[0] === 'worktree' && call.args[1] === 'add').map((call) => call.args[call.args.length - 1]);
+      assert.deepEqual(adds, ['origin/main', 'origin/main'], 'both worktrees start from the base');
+      const merges = fx.ran('git').filter((call) => call.args[0] === 'merge').map((call) => call.args[2]);
+      assert.deepEqual(merges, ['sha401', 'sha402', 'sha403'], 'heads merged in the order given');
+      assert.equal(fx.ran('suite').length, 2, 'one suite per side, not per pull request');
+      // Each pull request's own tests: its files, by its head, never the others'.
+      const own = fx.ran('tests').map((call) => call.files);
+      assert.deepEqual(own, [['tests/sha401.test.js'], ['tests/sha402.test.js'], ['tests/sha403.test.js']]);
+      assert.deepEqual(report.prs.map((item) => [item.number, item.pr_tests.files]), [
+        [401, ['tests/sha401.test.js']], [402, ['tests/sha402.test.js']], [403, ['tests/sha403.test.js']],
+      ]);
+      assert.ok(Object.keys(report.timings).includes('suite baseline'), 'wall clock per step (A5)');
+    } finally { fx.cleanup(); }
+  });
+
+  it('a conflict names the pull request that could not go in', async () => {
+    const fx = batchFixture({ conflictOn: 'sha402' });
+    try {
+      const report = await fx.run();
+      assert.equal(report.stopped_at, 'merge');
+      assert.match(report.reason, /^#402 conflicts with origin\/main and the pull requests before it/u);
+      assert.equal(fx.ran('suite').length, 0);
+    } finally { fx.cleanup(); }
+  });
+
+  it('one pull request\'s own red names that pull request, not the batch', async () => {
+    const fx = batchFixture({ ownRedOn: 'sha403' });
+    try {
+      const report = await fx.run();
+      assert.equal(report.stopped_at, 'pr-tests');
+      assert.match(report.reason, /^#403: \d+ of the pull request's own tests (?:is|are) red/u);
+      assert.equal(report.prs[0].pr_tests.red.length, 0);
+      assert.ok(report.prs[2].pr_tests.red.length > 0);
+    } finally { fx.cleanup(); }
+  });
+
+  it('two bases is not one candidate', async () => {
+    const fx = batchFixture({ bases: { 402: 'release' } });
+    try {
+      const report = await fx.run();
+      assert.equal(report.stopped_at, 'pr');
+      assert.match(report.reason, /2 different bases \(main, release\)/u);
+    } finally { fx.cleanup(); }
+  });
+});

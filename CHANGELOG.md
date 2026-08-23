@@ -6,6 +6,27 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- `mc repo merge <repo> <pr> <pr>...` — several pull requests in one round
+  (A3). Measured 2026-08-23: three PRs in a row took three rounds of
+  4m20s–5m39s and held the suite lease for ~16 minutes while two tracks
+  were refused it and a third waited; with eleven PRs queued the round, not
+  the computation, was the bottleneck. A batch is one candidate — the base
+  with every head merged in, in the order given — the full suite once on
+  each side, and **each pull request's own tests still run by themselves**
+  (`origin/<base>...<head>`), so the batch never hides which PR carried
+  which test. Green: each lands in order, the base re-read between merges
+  and required to be exactly the commit this round just made (read from the
+  forge's `mergeCommit`, so a stranger's merge in the gap stops the rest
+  rather than being booked as ours). A batch that stops — a conflict among
+  them, a red, one PR's own tests — falls back to one round per pull
+  request inside the same lease and says it is doing so; the report keeps
+  the batch verdict beside the single rounds, and the merge log gets one
+  line per landed PR naming the batch. Two different bases refuse to be one
+  candidate. And every round now prints wall clock per step — fetch,
+  prepare, both suites, PR tests, extra gates (A5) — so the next
+  efficiency decision is measured, not guessed.
+
 ### Fixed
 - PM's wake holds: the watcher runs the code on disk, and a stranded notice
   is finished rather than waited on. Measured 2026-08-23: `mc watch pm` had
