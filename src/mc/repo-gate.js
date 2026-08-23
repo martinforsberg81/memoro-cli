@@ -51,6 +51,7 @@ import { join } from 'node:path';
 
 import { claimLease, releaseLease } from './repo-lease.js';
 import { claimSuiteLease, releaseSuiteLease } from './suite-lease.js';
+import { tellHolder } from './lease-refusal.js';
 import { compareRed, redNames, tapTotals } from './tap-red.js';
 import { RATCHET_FILE, compareRatchet, readRatchet } from './red-ratchet.js';
 import { currentHolder } from './work-identity.js';
@@ -93,6 +94,8 @@ export async function runGate({
   suite = null,
   onProgress = () => {},
   clock = () => Date.now(),
+  // How a refused claim reaches the holder (lease-refusal.js); stubbed in tests.
+  tell = tellHolder,
   // Whether the round owns the lease or is running inside somebody else's.
   //
   // The merge step has to hold one lease across the gate *and* the merge — a
@@ -161,10 +164,13 @@ export async function runGate({
   };
 
   if (holdLease) {
-    const lease = claimLease({ repoPath, errand: `gate round for #${pr}`, holder, root });
+    // Taken for the length of this process, and it says so (lease-owner.js):
+    // a round cut short by a kill leaves a lease its pid can answer for.
+    const lease = claimLease({ repoPath, errand: `gate round for #${pr}`, holder, ownerPid: process.pid, root });
     if (!lease.ok) {
       const held = lease.lease;
-      return finish('lease', `${repoPath} is held by ${held.holder}${held.errand ? ` for “${held.errand}”` : ''}`);
+      const told = tell({ lease: held, asker: holder, what: repoPath, errand: `gate round for #${pr}` });
+      return finish('lease', `${repoPath} is held by ${held.holder}${held.errand ? ` for “${held.errand}”` : ''}${told.told ? ` — ${held.holder} has been told` : ''}`);
     }
     say(`lease taken by ${holder.name}`);
   }
@@ -175,14 +181,32 @@ export async function runGate({
   // somebody else holds stops the round in their favour, because the gate is
   // the one thing that runs suites by machine and must not be the thing that
   // runs over a person's right to.
-  const suiteRight = claimSuiteLease({ errand: `gate round for #${pr}`, holder, root });
+  const suiteRight = claimSuiteLease({ errand: `gate round for #${pr}`, holder, ownerPid: process.pid, root });
   if (!suiteRight.ok) {
     if (holdLease) releaseLease({ repoPath, holder, root });
     const held = suiteRight.lease;
-    return finish('suite-lease', `the suite right is held by ${held.holder}${held.errand ? ` for “${held.errand}”` : ''} — one full suite at a time on this machine (D-0141); mc suite who says whether that run is still going`);
+    const told = tell({ lease: held, asker: holder, what: 'the suite right', errand: `gate round for #${pr}` });
+    return finish('suite-lease', `the suite right is held by ${held.holder}${held.errand ? ` for “${held.errand}”` : ''} — one full suite at a time on this machine (D-0141); mc suite who says whether that run is still going${told.told ? `; ${held.holder} has been told` : ''}`);
   }
   const ownSuiteRight = !suiteRight.already;
-  if (ownSuiteRight) say(`suite right taken by ${holder.name}`);
+  if (ownSuiteRight) say(`suite right taken by ${holder.name}${suiteRight.reaped ? ` (reaped from ${suiteRight.reaped.holder}: pid ${suiteRight.reaped.owner_pid} was gone)` : ''}`);
+
+  // The other half of the way back. A SIGTERM — a shell's timeout, a closed
+  // pane — ends node without running any `finally`; the pid in the lease
+  // covers that for the next claim, and this covers it now: give both back
+  // and then exit the way the signal asked. SIGKILL runs nothing, and is
+  // what the pid is for.
+  const onSignal = (signal) => {
+    try {
+      if (holdLease) releaseLease({ repoPath, holder, root });
+      if (ownSuiteRight) releaseSuiteLease({ holder, root });
+      say(`round cut short by ${signal} — leases released`);
+    } finally {
+      process.exit(128 + (signal === 'SIGINT' ? 2 : 15));
+    }
+  };
+  const signals = ['SIGINT', 'SIGTERM'];
+  for (const signal of signals) process.on(signal, onSignal);
 
   // What this repository needs, read before any work is done. A round that
   // cannot know whether the suite will be complete is a round whose green
@@ -364,6 +388,7 @@ export async function runGate({
 
     return finish(null, null);
   } finally {
+    for (const signal of signals) process.off(signal, onSignal);
     clearWorkspace({ git: askGit, repoPath, workspace });
     // Always, and last. A round that died half way through must not leave the
     // repository held by a session that is no longer running — but a round

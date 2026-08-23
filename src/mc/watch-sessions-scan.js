@@ -9,18 +9,19 @@
  * model is let in exactly once, in `watch-sessions-read.js`, where the output is
  * prose and reading it needs interpretation.
  *
- * Six patterns, and the guard's whole vocabulary:
+ * Nine patterns, and the guard's whole vocabulary:
  *
  *   waiting        script  stopped for a person, and has been for a while
  *   silent         script  meant to be working, and nothing has come out
  *   dead           script  it was alive last round, its turn never finished
  *   unreachable    script  mail it has not read, in a pane no wake can reach
  *   stalled        script  an order it was given has not moved in twelve hours
+ *   holding        script  it holds the suite right, and nothing has run under it
  *   blocked        model   it says it is stuck on something it cannot get
  *   quota-exhausted model  it says it ran out
  *   error          model   something in the output failed
  *
- * There is no eighth, there is no severity, and there is no order. The guard
+ * There is no tenth, there is no severity, and there is no order. The guard
  * flags; it does not decide and it does not rank.
  */
 import { readdirSync } from 'node:fs';
@@ -29,7 +30,7 @@ import { DEFAULT_SILENT_MS, DEFAULT_WAITING_MS } from './watch-sessions-store.js
 import { inboxPath } from './work-send.js';
 import { listOpenTasks } from './task-log.js';
 
-export const SCRIPT_PATTERNS = Object.freeze(['waiting', 'silent', 'dead', 'unreachable', 'stalled']);
+export const SCRIPT_PATTERNS = Object.freeze(['waiting', 'silent', 'dead', 'unreachable', 'stalled', 'holding']);
 export const MODEL_PATTERNS = Object.freeze(['blocked', 'quota-exhausted', 'error']);
 export const PATTERNS = Object.freeze([...SCRIPT_PATTERNS, ...MODEL_PATTERNS]);
 
@@ -52,6 +53,7 @@ export function scanSessions({
   reachable = null,
   tasks = listOpenTasks,
   stalledMs = STALLED_MS,
+  holdingMs = HOLDING_MS,
 } = {}) {
   const sessions = [];
   for (const area of report.areas || []) {
@@ -74,6 +76,7 @@ export function scanSessions({
   const areaFlags = [
     ...unreachableAreas({ report, sessions, inbox, reachable }),
     ...stalledAreas({ sessions, tasks, now, stalledMs }),
+    ...holdingAreas({ report, holdingMs }),
   ];
   for (const flag of areaFlags) {
     const owner = sessions.find((item) => item.area === flag.area && item.live)
@@ -183,6 +186,39 @@ function unreachableAreas({ report, sessions, inbox, reachable }) {
     });
   }
   return flags;
+}
+
+/**
+ * Fifteen minutes with nothing running. A gate round runs two suites with
+ * git work between them — a minute or two of silence, not fifteen — and a
+ * claim by hand precedes a run by seconds. Fifteen minutes of a held right and
+ * no suite is a run that ended without its holder, or a holder who forgot.
+ */
+export const HOLDING_MS = 15 * 60 * 1000;
+
+/**
+ * The suite right, held with nothing running under it (D-0141 family).
+ *
+ * The board already showed "held 2h 25m · nothing running" for the whole of
+ * the two hours and twenty-five minutes PM held the suite right after its own
+ * round was killed — and nobody read the board. This flag is that row said to
+ * somebody: the holder's live session, by name, and the round carries it to
+ * PM. A process that is gone is said as that; a hold by hand is said as a
+ * hold. Nothing is released here — the guard flags, it does not decide.
+ *
+ * Only a work-area holder can be flagged, because the flag hangs on a
+ * session; a shell holder has none, and the board row is what there is.
+ */
+function holdingAreas({ report, holdingMs }) {
+  const lease = report?.suite?.lease;
+  if (!lease?.held || lease.holder_kind !== 'work-area') return [];
+  const running = report.suite.running || [];
+  if (running.length > 0) return [];
+  if (!Number.isFinite(lease.age_ms) || lease.age_ms <= holdingMs) return [];
+  const detail = lease.orphaned
+    ? `holds the suite right for ${describeSpan(lease.age_ms)} and the process that took it (pid ${lease.owner_pid}) is gone — nothing is running; the next claim takes it, or mc suite release now`
+    : `holds the suite right for ${describeSpan(lease.age_ms)} with no suite running${lease.errand ? ` (“${lease.errand}”)` : ''} — mc suite release if the run is over`;
+  return [{ area: lease.holder, pattern: 'holding', detail }];
 }
 
 /**

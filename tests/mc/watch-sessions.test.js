@@ -80,8 +80,8 @@ function round(options = {}) {
 }
 
 describe('the guard flags, and only flags', () => {
-  it('has eight patterns, five of them script, and exactly two that knock', () => {
-    assert.deepEqual([...SCRIPT_PATTERNS], ['waiting', 'silent', 'dead', 'unreachable', 'stalled']);
+  it('has nine patterns, six of them script, and exactly two that knock', () => {
+    assert.deepEqual([...SCRIPT_PATTERNS], ['waiting', 'silent', 'dead', 'unreachable', 'stalled', 'holding']);
     assert.deepEqual([...MODEL_PATTERNS], ['blocked', 'quota-exhausted', 'error']);
     // The bound in §5 is the point of the exception. A third urgent class would
     // make the guard the knocker, which is the arrangement it exists to avoid.
@@ -259,6 +259,32 @@ describe('everything with a deterministic answer is script', () => {
       ],
     });
     assert.deepEqual(sessions[0].patterns, []);
+  });
+
+  it('flags the suite right held with nothing running, on the holder, and says which kind of hold', () => {
+    const suite = (lease, running = []) => ({ ...board([['pm', [conversation()]], ['alpha', [conversation({ id: 'a' })]]]), suite: { lease, running } });
+    const held = { held: true, holder: 'pm', holder_kind: 'work-area', errand: 'gate round for #10861', age_ms: 145 * MINUTE, owner_pid: null, orphaned: false };
+    const flags = (report) => scanSessions({ now: NOW, report, tasks: () => [] }).sessions
+      .flatMap((session) => session.patterns.filter((p) => p.pattern === 'holding').map((p) => ({ area: session.area, ...p })));
+
+    // Held by hand for 2h25m, nothing running: the holder's session is flagged.
+    const [byHand] = flags(suite(held));
+    assert.equal(byHand.area, 'pm');
+    assert.match(byHand.detail, /holds the suite right for 2h25m with no suite running \(“gate round for #10861”\) — mc suite release if the run is over/u);
+
+    // Its process gone: said as that, with the pid and the way back.
+    const [orphan] = flags(suite({ ...held, owner_pid: 4242, orphaned: true }));
+    assert.match(orphan.detail, /pid 4242\) is gone — nothing is running; the next claim takes it/u);
+
+    // A suite actually running under it is a lease doing its job.
+    assert.deepEqual(flags(suite(held, [{ pid: 9, command: 'npm test', area: 'alpha', elapsed: '03:00' }])), []);
+    // Fifteen minutes is the line: a gate round's git work between two suites is minutes, not fifteen.
+    assert.deepEqual(flags(suite({ ...held, age_ms: 14 * MINUTE })), []);
+    assert.equal(flags(suite({ ...held, age_ms: 16 * MINUTE })).length, 1);
+    // Free, or held by a shell nobody can flag: nothing — the board row is what there is.
+    assert.deepEqual(flags(suite({ held: false })), []);
+    assert.deepEqual(flags(suite({ ...held, holder: 'me@host', holder_kind: 'shell' })), []);
+    assert.deepEqual(flags(board([['pm', [conversation()]]])), [], 'a board with no suite row flags nothing');
   });
 
   it('reads a span the way a person does', () => {
@@ -473,6 +499,41 @@ describe('one knocker', () => {
     assert.equal(notices.length, 1);
     assert.equal(delivered.size, 1);
     assert.ok(delivered.has(notices[0].id));
+  });
+});
+
+describe('the holder of an idle suite right is told, by the guard, once', () => {
+  it('sends one file with a wake to the holder when the flag is fresh, and not again while it stands', async () => {
+    const at = root();
+    const sent = [];
+    const report = {
+      ...board([['pm', [conversation()]]]),
+      suite: { lease: { held: true, holder: 'pm', holder_kind: 'work-area', errand: 'x', age_ms: 30 * MINUTE, owner_pid: null, orphaned: false }, running: [] },
+    };
+    const send = (message) => { sent.push(message); return { ok: true, woke: true }; };
+    const first = await round({ root: at, report, send });
+    assert.equal(first.flagged, 1);
+    assert.equal(first.urgent, 0, 'holding is not a knock on PM — it is a word to the holder');
+    assert.equal(sent.length, 1);
+    assert.equal(sent[0].name, 'pm');
+    assert.equal(sent[0].wake, true);
+    assert.match(sent[0].message, /^mc watch sessions: you holds the suite right for 30m with no suite running/u);
+    // Still held next round: the flag stands in memory, nothing is sent twice.
+    const second = await round({ root: at, report, send, now: NOW + 5 * MINUTE });
+    assert.equal(second.flagged, 0);
+    assert.equal(sent.length, 1);
+  });
+
+  it('a send that fails is logged, and the round goes on', async () => {
+    const at = root();
+    const lines = [];
+    const report = {
+      ...board([['pm', [conversation()]]]),
+      suite: { lease: { held: true, holder: 'pm', holder_kind: 'work-area', errand: 'x', age_ms: 30 * MINUTE }, running: [] },
+    };
+    const outcome = await round({ root: at, report, send: () => { throw new Error('tmux is not on this machine'); }, log: (line) => lines.push(line) });
+    assert.equal(outcome.flagged, 1);
+    assert.ok(lines.some((line) => /could not tell pm about the suite right: tmux is not on this machine/u.test(line)), lines.join('\n'));
   });
 });
 

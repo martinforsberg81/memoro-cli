@@ -19,3 +19,13 @@ import { join } from 'node:path';
 if (!process.env.MC_HOME) {
   process.env.MC_HOME = mkdtempSync(join(tmpdir(), 'mc-test-isolated-home-'));
 }
+
+// The work root too — the channel lives there. A gate test that ran the real
+// "tell the holder" path resolved `pm` against the user's real ~/mc and put
+// two CLAIM REFUSED files, with a wake, in PM's actual inbox about a temp
+// repository that never existed (2026-08-23). Same invariant, same shape: the
+// runner starts with MC_WORK_ROOT pointing at an empty throwaway directory,
+// so a send that escapes a fixture finds no area rather than a person.
+if (!process.env.MC_WORK_ROOT) {
+  process.env.MC_WORK_ROOT = mkdtempSync(join(tmpdir(), 'mc-test-isolated-work-'));
+}
