@@ -32,6 +32,9 @@ export function pmWatcherState({ root = mcHome(), now = Date.now() } = {}) {
       defaultIntervalMs: DEFAULT_INTERVAL_MS,
     }),
     last_round: state.last_round || null,
+    // The last time a knock was tried, apart from the last round: six quiet
+    // passes and a refused knock read the same on the board for a day (B5).
+    last_knock: state.last_knock || null,
     // How many items the last pass counted, so `status` can answer the
     // question people actually open it for without a second read.
     unprocessed: countItems(state.items),

@@ -31,6 +31,7 @@ import { appendFileSync, existsSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 import { claimLease, readLease, releaseLease } from './repo-lease.js';
+import { lockfileHashAt, saveBaseline } from './repo-baseline-cache.js';
 import { currentHolder } from './work-identity.js';
 import { mcHome } from './paths.js';
 import { runGate, verdictPhrase } from './repo-gate.js';
@@ -64,6 +65,11 @@ export function defaultMergeLog(repoPath, { root = mcHome(), env = process.env }
 export async function runMergeRound({
   repoPath,
   pr,
+  // Several pull requests in one round (A3): one candidate, the suite once,
+  // then each landed in order if it is green. A batch that stops — a
+  // conflict, a red, one pull request's own tests — falls back to one round
+  // per pull request, inside the same lease, and says that it is doing so.
+  prs = null,
   holder = currentHolder(),
   root = mcHome(),
   env = process.env,
@@ -75,9 +81,15 @@ export async function runMergeRound({
   mergeLog = undefined,
   onProgress = () => {},
   clock = () => Date.now(),
+  // A batch's fallback rounds run inside the batch's lease; they neither
+  // take nor give back what they did not claim (the gate's own rule).
+  holdLease = true,
 } = {}) {
   const startedAt = clock();
   const say = (message) => { try { onProgress(message); } catch { /* progress is a courtesy */ } };
+  const numbers = (Array.isArray(prs) && prs.length ? prs : [pr]).map(Number);
+  const batch = numbers.length > 1;
+  const label = numbers.map((n) => `#${n}`).join(' ');
 
   // Bound to this round's `env`, not the process's — see the same note in
   // repo-gate.js. Taking an environment and resolving binaries against another
@@ -92,7 +104,10 @@ export async function runMergeRound({
     schema: MERGE_SCHEMA,
     version: MERGE_VERSION,
     repo: repoPath,
-    pr: { number: Number(pr) },
+    pr: { number: numbers[0] },
+    // The batch (A3): what landed, in order, and — if the batch gate stopped —
+    // the one-per-PR rounds that ran instead. Null for a single round.
+    batch: batch ? { prs: numbers, gate_ok: null, merges: [], fallback: false, rounds: [] } : null,
     holder: holder.name,
     ok: false,
     merged: false,
@@ -131,19 +146,44 @@ export async function runMergeRound({
   // straight back, which would open exactly the window this round must not have.
   // For the length of this process (lease-owner.js): a merge round cut short
   // leaves a lease its pid answers for.
-  const lease = claimLease({ repoPath, errand: `merge round for #${pr}`, holder, ownerPid: process.pid, root });
-  if (!lease.ok) {
-    const held = lease.lease;
-    return finish('lease', `${repoPath} is held by ${held.holder}${held.errand ? ` for “${held.errand}”` : ''}`);
+  if (holdLease) {
+    const lease = claimLease({ repoPath, errand: `merge round for ${label}`, holder, ownerPid: process.pid, root });
+    if (!lease.ok) {
+      const held = lease.lease;
+      return finish('lease', `${repoPath} is held by ${held.holder}${held.errand ? ` for “${held.errand}”` : ''}`);
+    }
+    say(`lease taken by ${holder.name} for the whole round`);
   }
-  say(`lease taken by ${holder.name} for the whole round`);
 
   try {
     const verdict = await gate({
-      repoPath, pr, holder, root, env, git: askGit, gh: askGh, suite, onProgress, clock, holdLease: false,
+      repoPath, pr: numbers[0], prs: batch ? numbers : null, holder, root, env, git: askGit, gh: askGh, suite, onProgress, clock, holdLease: false,
     });
     report.gate = verdict;
     report.pr = { ...report.pr, ...verdict.pr };
+    if (batch) report.batch.gate_ok = Boolean(verdict.ok);
+    if (!verdict.ok && batch && FALLBACK_STOPS.includes(verdict.stopped_at)) {
+      // The batch could not be measured as one, or measured red. Which pull
+      // request is to blame is not the batch's to say, so each is given its
+      // own round — the gate it would have had anyway — and the report keeps
+      // the batch verdict beside them. The lease stays with this round.
+      say(`batch ${label} stopped at ${verdict.stopped_at} (${verdict.reason}) — falling back to one round per pull request`);
+      report.batch.fallback = true;
+      for (const number of numbers) {
+        say(`— round for #${number}`);
+        const round = await runMergeRound({
+          repoPath, pr: number, holder, root, env, git: askGit, gh: askGh, gate, installs, suite, mergeLog, onProgress, clock, holdLease: false,
+        });
+        report.batch.rounds.push(round);
+        report.batch.merges.push({ number, merged: round.merged, merge_commit: round.merge_commit, error: round.ok ? null : round.reason });
+      }
+      report.merged = report.batch.merges.every((item) => item.merged);
+      const failed = report.batch.merges.filter((item) => !item.merged);
+      if (failed.length) {
+        return finish('batch', `${failed.length} of ${numbers.length} did not land in its own round: ${failed.map((item) => `#${item.number} (${item.error})`).join('; ')}`);
+      }
+      return finish(null, null);
+    }
     if (!verdict.ok) {
       // The gate stops the round and there is nothing here that can overrule
       // it. A red gate is reported and the change stays where it is.
@@ -177,32 +217,58 @@ export async function runMergeRound({
     // The same statement the verdict makes, not a friendlier one. A merge
     // round that narrated "gate green" over standing red would put the word
     // back exactly where it was taken out of.
-    say(`${verdictPhrase(verdict)} and ${base} unmoved — merging #${verdict.pr.number}`);
-    const merged = askGh(['pr', 'merge', String(verdict.pr.number), '--squash'], { cwd: repoPath });
-    if (merged.status !== 0) {
-      // A failed call is not a failed merge. On #10844 GitHub took the call,
-      // performed it, and timed out on the reply; the round said "nothing was
-      // merged" and the change was on main. So the forge is asked what it
-      // did before anything is claimed: merged → carry on as merged; open →
-      // the merge failed; cannot ask → say exactly that, and nothing more.
-      const actual = mergeState({ gh: askGh, repoPath, pr: verdict.pr.number });
-      const error = trim(merged.stderr) || `gh could not merge #${verdict.pr.number}`;
-      if (actual.state === 'merged') {
-        report.merge_error = error;
-        say(`gh pr merge failed (${error}) — but GitHub says #${verdict.pr.number} is merged, so it is`);
-      } else if (actual.state === 'open') {
-        return finish('merge', error);
-      } else {
-        report.merge_error = error;
-        return finish('merge-unknown', `gh pr merge failed (${error}) and whether it merged could not be read back (${actual.reason}) — check with gh pr view ${verdict.pr.number}`);
+    say(`${verdictPhrase(verdict)} and ${base} unmoved — merging ${label}`);
+    // In order, each on the main the one before it made. Between two merges
+    // the base is read again: it must be exactly the commit this round just
+    // landed, or somebody else moved it and the rest of the batch is a
+    // verdict about a tree that has changed.
+    let expected = verdict.baseline.commit;
+    for (const [index, number] of numbers.entries()) {
+      if (index > 0) {
+        askGit(['fetch', 'origin', '--prune'], { cwd: repoPath });
+        const at = trim(askGit(['rev-parse', base], { cwd: repoPath }).stdout);
+        if (at !== expected) {
+          return finish('drift', `${base} moved to ${short(at)} between merges, and not by this round — #${number}${index + 1 < numbers.length ? ` and ${numbers.length - index - 1} more` : ''} not merged; ${index} of ${numbers.length} landed`);
+        }
       }
+      const merged = askGh(['pr', 'merge', String(number), '--squash'], { cwd: repoPath });
+      if (merged.status !== 0) {
+        // A failed call is not a failed merge. On #10844 GitHub took the call,
+        // performed it, and timed out on the reply; the round said "nothing was
+        // merged" and the change was on main. So the forge is asked what it
+        // did before anything is claimed: merged → carry on as merged; open →
+        // the merge failed; cannot ask → say exactly that, and nothing more.
+        const actual = mergeState({ gh: askGh, repoPath, pr: number });
+        const error = trim(merged.stderr) || `gh could not merge #${number}`;
+        if (actual.state === 'merged') {
+          report.merge_error = error;
+          say(`gh pr merge failed (${error}) — but GitHub says #${number} is merged, so it is`);
+        } else if (actual.state === 'open') {
+          if (batch) report.batch.merges.push({ number, merged: false, merge_commit: null, error });
+          return finish('merge', batch ? `#${number}: ${error} — ${index} of ${numbers.length} landed before it` : error);
+        } else {
+          report.merge_error = error;
+          return finish('merge-unknown', `gh pr merge failed (${error}) and whether it merged could not be read back (${actual.reason}) — check with gh pr view ${number}`);
+        }
+      }
+      // Read back rather than assumed: the point of recording a merge commit is
+      // that somebody can go and look at it. The forge is asked which commit
+      // *this* merge made, and the base is read beside it: in a batch the
+      // two must agree before the next merge, or somebody else landed
+      // between them and the rest of the batch is measured against a tree
+      // that has changed. With a forge that will not say, the base is taken.
+      askGit(['fetch', 'origin', '--prune'], { cwd: repoPath });
+      const at = trim(askGit(['rev-parse', base], { cwd: repoPath }).stdout) || null;
+      const made = mergeCommitOf({ gh: askGh, repoPath, pr: number });
+      const landed = made || at;
+      expected = landed;
+      if (batch) {
+        report.batch.merges.push({ number, merged: true, merge_commit: landed, error: null });
+        say(`merged #${number} into ${verdict.pr.base} as ${short(landed)}`);
+      }
+      report.merge_commit = landed;
     }
     report.merged = true;
-
-    // Read back rather than assumed: the point of recording a merge commit is
-    // that somebody can go and look at it.
-    askGit(['fetch', 'origin', '--prune'], { cwd: repoPath });
-    report.merge_commit = trim(askGit(['rev-parse', base], { cwd: repoPath }).stdout) || null;
     // Named, not implied. The sha is read from the PR's base, so it is the
     // base that says what "merged" meant — and when that is not the branch
     // the remote points HEAD at, the line says so in its own words rather
@@ -210,10 +276,25 @@ export async function runMergeRound({
     report.merged_into = verdict.pr.base;
     report.default_branch = defaultBranch(askGit, repoPath);
     report.off_default = Boolean(report.default_branch) && report.merged_into !== report.default_branch;
-    say(`merged #${verdict.pr.number} into ${report.merged_into} as ${short(report.merge_commit)}`);
+    if (!batch) say(`merged #${verdict.pr.number} into ${report.merged_into} as ${short(report.merge_commit)}`);
     if (report.off_default) {
       say(`WARNING: ${report.merged_into} is not the default branch (${report.default_branch}) — this landed on a branch, not on ${report.default_branch}`);
     }
+
+    // Main is now the tree the candidate was measured on: save that result
+    // as the next round's baseline (A1). Keyed on the merge commit, the
+    // lockfile at it, and the suite command; the next round reuses it only
+    // when all three match. Saved only after a fully landed round — a
+    // partial batch leaves the old entry, which then simply never matches.
+    attempt(() => saveBaseline({
+      repoPath,
+      commit: report.merge_commit,
+      lockfileHash: lockfileHashAt({ git: askGit, repoPath, commit: report.merge_commit }),
+      command: verdict.command,
+      red: verdict.candidate.red,
+      totals: verdict.candidate.totals,
+      root,
+    }), (why) => say(`could not save the candidate result as the next baseline (${why}) — the next round runs it as before`));
 
     report.deploy = deployPull({ git: askGit, repoPath, env, say, installs });
     const written = writeMergeLine({ report, verdict, path: mergeLog ?? defaultMergeLog(repoPath, { root, env }), clock });
@@ -223,10 +304,21 @@ export async function runMergeRound({
 
     return finish(null, null);
   } finally {
-    releaseLease({ repoPath, holder, root });
-    say('lease released');
+    if (holdLease) {
+      releaseLease({ repoPath, holder, root });
+      say('lease released');
+    }
   }
 }
+
+/**
+ * The batch stops that mean "measure them one by one": the candidate could
+ * not be built (a conflict among them), or it measured red, or one pull
+ * request's own tests failed. A lease, a missing declaration or a suite that
+ * never summarised would stop the single rounds exactly the same way, and
+ * running them would be four more of the same stop.
+ */
+const FALLBACK_STOPS = Object.freeze(['merge', 'red', 'pr-tests', 'ratchet', 'extra-gate']);
 
 /**
  * Bring the installation that runs from a checkout up to what just landed.
@@ -240,6 +332,10 @@ export async function runMergeRound({
  * change has landed, and what is left is a machine one commit behind, which the
  * report says plainly so somebody can pull it by hand.
  */
+function attempt(fn, complain) {
+  try { return fn(); } catch (error) { complain(error?.message || String(error)); return null; }
+}
+
 function deployPull({ git, repoPath, env, say, installs }) {
   const install = installs(env).find((item) => item.root === repoPath);
   if (!install) return { attempted: false, ok: null, reason: 'nothing on this machine runs from this checkout' };
@@ -287,9 +383,19 @@ function writeMergeLine({ report, verdict, path, clock }) {
     `${verdict.baseline.red.length} standing red before · ${verdict.candidate.red.length} after · 0 new`,
     `base unmoved at merge`,
   ].join(' · ');
-  const line = `| ${day} | ${basenameOf(report.repo)} #${report.pr.number}${verdict.pr.title ? ` ${verdict.pr.title}` : ''} `
-    + `| ${checks} | D (delegerad) | Squash-merge into \`${report.merged_into}\` → \`${short(report.merge_commit)}\`${report.off_default ? ` (NOT ${report.default_branch})` : ''} `
-    + `| Run by \`mc repo merge\` as ${report.holder}. ${deployNote(report.deploy)} |`;
+  // One line per pull request, batch or not: the log is read per PR, and a
+  // batch line says it was measured as one candidate with the others.
+  const landed = report.batch
+    ? report.batch.merges.filter((item) => item.merged).map((item) => ({
+      number: item.number,
+      title: (verdict.prs || []).find((pr) => pr.number === item.number)?.title || null,
+      commit: item.merge_commit,
+      note: `Batch of ${report.batch.prs.length} (${report.batch.prs.map((n) => `#${n}`).join(' ')}) measured as one candidate, own tests per PR.`,
+    }))
+    : [{ number: report.pr.number, title: verdict.pr.title, commit: report.merge_commit, note: '' }];
+  const line = landed.map((item) => `| ${day} | ${basenameOf(report.repo)} #${item.number}${item.title ? ` ${item.title}` : ''} `
+    + `| ${checks} | D (delegerad) | Squash-merge into \`${report.merged_into}\` → \`${short(item.commit)}\`${report.off_default ? ` (NOT ${report.default_branch})` : ''} `
+    + `| Run by \`mc repo merge\` as ${report.holder}. ${item.note ? `${item.note} ` : ''}${deployNote(report.deploy)} |`).join('\n');
 
   try {
     if (!existsSync(path)) mkdirSync(dirname(path), { recursive: true });
@@ -317,6 +423,13 @@ function defaultBranch(git, repoPath) {
  * after a merge call failed, which is the one moment "nothing was merged"
  * would be a guess.
  */
+/** The squash commit a merged pull request became, or null if the forge will not say. */
+function mergeCommitOf({ gh, repoPath, pr }) {
+  const asked = gh(['pr', 'view', String(pr), '--json', 'mergeCommit'], { cwd: repoPath });
+  if (asked?.status !== 0) return null;
+  try { return JSON.parse(asked.stdout)?.mergeCommit?.oid || null; } catch { return null; }
+}
+
 function mergeState({ gh, repoPath, pr }) {
   const asked = gh(['pr', 'view', String(pr), '--json', 'state,mergedAt'], { cwd: repoPath });
   if (asked?.status !== 0) return { state: 'unknown', reason: trim(asked?.stderr) || 'gh could not read the pull request' };

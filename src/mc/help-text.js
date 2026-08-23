@@ -129,6 +129,12 @@ MAINTENANCE
                                     otherwise it carries the number that are
                                     standing, and .mc/red-ratchet.json is what
                                     keeps that number from growing
+  mc repo merge <repo> <pr> <pr>... Several at once: one candidate with all
+                                    of them merged in, the suite once each
+                                    side, each one's own tests by itself, then
+                                    merged in the order given. A batch that
+                                    stops — a conflict, a red — falls back to
+                                    one round per pull request and says so
   mc repo merge <repo> <pr> --check
                                     The same round, stopping at the verdict.
                                     A gate that passes is not a review

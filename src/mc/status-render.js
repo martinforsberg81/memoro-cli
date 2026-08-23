@@ -110,7 +110,11 @@ export function renderLines(report, {
       if (!state) return c('unknown', 'grey');
       if (state.running && state.stale) return c(`alive but stale — no round in ${ago(now - (state.last_write_age_ms ?? 0), now)}`, 'red');
       if (state.running && state.stale_code) return c('alive on OLD CODE — mc changed since it started; restarts itself, or stop && start', 'yellow');
-      if (state.running) return c(`alive${state.last_write_age_ms !== null ? `, last round ${ago(now - state.last_write_age_ms, now)}` : ''}`, 'green');
+      if (state.running) {
+        const knock = state.last_knock;
+        const knocked = knock ? `, last knock ${knock.woke ? 'woke' : `refused: ${knock.reason || 'unknown'}`}` : '';
+        return c(`alive${state.last_write_age_ms !== null ? `, last round ${ago(now - state.last_write_age_ms, now)}` : ''}${knocked}`, knock && !knock.woke ? 'yellow' : 'green');
+      }
       if (state.abandoned) return c('NOT RUNNING — stopped without telling anyone', 'red');
       return c('never started', 'yellow');
     };
