@@ -20,6 +20,7 @@ import { startPmWatcher, stopPmWatcher, pmWatcherState } from '../watch-pm.js';
 import { DEFAULT_INTERVAL_MS as PM_INTERVAL_MS } from '../watch-pm-round.js';
 import {
   startSessionsWatcher, stopSessionsWatcher, sessionsWatcherState,
+  describeStartFlags,
 } from '../watch-sessions.js';
 import { DEFAULT_INTERVAL_MS as SESSIONS_INTERVAL_MS } from '../watch-sessions-store.js';
 import { scanArgs } from './flags.js';
@@ -42,18 +43,20 @@ const LEGS = {
     ],
   },
   sessions: {
-    start: (opts) => startSessionsWatcher({ intervalMs: opts.intervalMs, model: opts.model }),
+    start: (opts) => startSessionsWatcher({
+      intervalMs: opts.intervalMs, model: opts.model, idleMs: opts.idleMs, groups: opts.groups,
+    }),
     stop: () => stopSessionsWatcher(),
     state: () => sessionsWatcherState(),
     what: 'the session guard',
     intervalMs: SESSIONS_INTERVAL_MS,
     // `--model` is the guard's alone: it is the only leg that has one.
-    flags: ['model'],
+    flags: ['model', 'idle', 'group'],
     does: [
-      'it flags waiting, silent, dead, unreachable, stalled, blocked, quota-exhausted and error — only flags',
-      'five of the eight are script, worked out for every conversation on the machine every round',
+      'it flags waiting, silent, dead, unreachable, unattended, quiet-group, stalled, holding, blocked, quota-exhausted and error — only flags',
+      'eight of the eleven are script, worked out for every conversation on the machine every round',
       'Haiku reads only the output that is prose, and only for a session whose output actually moved',
-      'flags go to the notices ledger; only dead and quota-exhausted knock on pm directly',
+      'flags go to the notices ledger; dead, quota-exhausted, unattended and quiet-group knock on pm directly',
     ],
   },
 };
@@ -80,6 +83,13 @@ export async function run(argv, deps = {}) {
       return 1;
     }
     stdout.write(`mc: watching ${opts.target} every ${seconds(started.interval_ms)} (pid ${started.pid})\n`);
+    // The guard's flags, and where they came from: a bare start after a
+    // stop is the last start again, and says so rather than silently being
+    // a plainer guard (B4).
+    if (started.flags) {
+      const shown = describeStartFlags(started.flags);
+      if (shown) stdout.write(`mc: ${started.remembered ? 'as last started: ' : 'with '}${shown}\n`);
+    }
     for (const line of leg.does) stdout.write(`mc: ${line}\n`);
     stdout.write(`mc: it logs to ${started.log}\n`);
     return 0;
@@ -140,6 +150,16 @@ export function renderWatchLines(state, { target = 'pm', colour = false, now = D
     : c('never', 'grey');
   lines.push(`  ${c('last round', 'grey')}  ${when}`);
   if (state.last_round) lines.push(`              ${c(state.last_round, 'grey')}`);
+  // The last knock, and what became of it. "Nothing to say" for six passes
+  // and "refused every time" were the same silence on this page for a day —
+  // and the difference was 188 knocks that never landed (B5).
+  if (state.last_knock) {
+    const knock = state.last_knock;
+    const what = knock.woke ? c('woke', 'green')
+      : knock.delivered ? c(`delivered, did not knock: ${knock.reason || 'unknown'}`, 'yellow')
+        : c(`NOT DELIVERED: ${knock.reason || 'unknown'}`, 'red');
+    lines.push(`  ${c('last knock', 'grey')}  ${ago(knock.at, now)}  ${what}`);
+  }
   // Whatever this leg has to add about itself, in the order it gave it. The
   // guard puts its standing flags here; a leg with nothing to add says
   // nothing, and the renderer stays one renderer.
@@ -154,16 +174,28 @@ function usage() {
     'usage — mc watch pm start [--interval <seconds>]\n',
     '        mc watch pm stop\n',
     '        mc watch pm status [--json]\n',
-    '        mc watch sessions start [--interval <seconds>] [--model <model>]\n',
+    '        mc watch sessions start [--interval <seconds>] [--model <model>] [--idle <minutes>] [--group <prefix>]...\n',
     '        mc watch sessions stop\n',
     '        mc watch sessions status [--json]\n',
   ].join('');
 }
 
 export function parseArgs(argv) {
-  const scanned = scanArgs(argv, { booleans: ['--json'], strictValues: ['--interval', '--model'] });
+  // `--group` may repeat, which `scanArgs` does not do; it is picked out first.
+  const groups = [];
+  const rest = [];
+  for (let index = 0; index < argv.length; index += 1) {
+    if (argv[index] === '--group') {
+      if (!argv[index + 1] || argv[index + 1].startsWith('--')) return { target: null, verb: 'status', error: '--group needs a name prefix' };
+      groups.push(argv[index + 1]);
+      index += 1;
+      continue;
+    }
+    rest.push(argv[index]);
+  }
+  const scanned = scanArgs(rest, { booleans: ['--json'], strictValues: ['--interval', '--model', '--idle'] });
   const opts = {
-    target: null, verb: 'status', json: scanned.flags.json, intervalMs: null, model: null,
+    target: null, verb: 'status', json: scanned.flags.json, intervalMs: null, model: null, idleMs: null, groups,
   };
   if (scanned.error) return { ...opts, error: scanned.error };
   const positional = [...scanned.positional];
@@ -196,6 +228,17 @@ export function parseArgs(argv) {
     }
     if (verb !== 'start') return { ...opts, error: `--model belongs to mc watch ${target} start` };
     opts.model = String(scanned.flags.model);
+  }
+  if (scanned.flags.idle !== null) {
+    if (!(LEGS[target].flags || []).includes('idle')) return { ...opts, error: `--idle belongs to mc watch sessions start` };
+    if (verb !== 'start') return { ...opts, error: `--idle belongs to mc watch ${target} start` };
+    const value = Number(scanned.flags.idle);
+    if (!Number.isFinite(value) || value < 1) return { ...opts, error: '--idle needs a number of minutes' };
+    opts.idleMs = Math.round(value * 60_000);
+  }
+  if (groups.length) {
+    if (!(LEGS[target].flags || []).includes('group')) return { ...opts, error: `--group belongs to mc watch sessions start` };
+    if (verb !== 'start') return { ...opts, error: `--group belongs to mc watch ${target} start` };
   }
   if (opts.json && verb !== 'status') return { ...opts, error: `--json belongs to mc watch ${target} status` };
   return opts;

@@ -80,12 +80,99 @@ function round(options = {}) {
 }
 
 describe('the guard flags, and only flags', () => {
-  it('has nine patterns, six of them script, and exactly two that knock', () => {
-    assert.deepEqual([...SCRIPT_PATTERNS], ['waiting', 'silent', 'dead', 'unreachable', 'stalled', 'holding']);
+  it('has eleven patterns, eight of them script, and exactly four that knock', () => {
+    assert.deepEqual([...SCRIPT_PATTERNS], ['waiting', 'silent', 'dead', 'unreachable', 'unattended', 'quiet-group', 'stalled', 'holding']);
     assert.deepEqual([...MODEL_PATTERNS], ['blocked', 'quota-exhausted', 'error']);
-    // The bound in §5 is the point of the exception. A third urgent class would
-    // make the guard the knocker, which is the arrangement it exists to avoid.
-    assert.deepEqual([...URGENT_PATTERNS], ['dead', 'quota-exhausted']);
+    // The bound in §5 is the point of the exception. The two added for B2
+    // (2026-08-23) are the work itself standing still — a session stopped
+    // with mail it has not read, a group in which nobody works — and the
+    // round's half hour is the latency they exist to remove. Everything else
+    // still waits for the round.
+    assert.deepEqual([...URGENT_PATTERNS], ['dead', 'quota-exhausted', 'unattended', 'quiet-group']);
+  });
+
+  it('a session stopped with mail that arrived since it last moved is unattended, knocked, and urgent', async () => {
+    // Measured 2026-08-23: a track idle 9m36s with its answer lying in its
+    // own inbox, and nothing said so. Unread is not "files in inbox/" — a
+    // work area does not archive — it is a file newer than the session's
+    // last move.
+    const at = root();
+    const sent = [];
+    const stopped = NOW - 12 * MINUTE;
+    const outcome = await round({
+      root: at,
+      report: board([['alpha', [conversation({ state: 'waiting', turn: 'waiting', updated_ms: stopped })]]]),
+      arrivals: (path, since) => (since === stopped ? { count: 2, oldest: '2026-08-23T18-50-00.000Z-pm.md' } : { count: 0, oldest: null }),
+      send: (message) => { sent.push(message); return { ok: true, woke: true }; },
+    });
+    const notice = readLedger({ root: at }).notices.find((item) => item.pattern === 'unattended');
+    assert.ok(notice, 'no unattended notice');
+    assert.equal(notice.session, 'alpha');
+    assert.match(notice.detail, /stopped for 12m with 2 inbox files that arrived since it last moved, oldest 2026-08-23T18-50-00\.000Z-pm\.md/u);
+    // Knocked twice: the session itself, and PM — at once, not at the round.
+    assert.deepEqual(sent.map((item) => item.name), ['alpha', 'pm']);
+    assert.match(sent[0].message, /read your inbox now/u);
+    assert.equal(outcome.urgent, 1);
+    assert.equal(outcome.knocked, 1);
+  });
+
+  it('unattended needs the stop to be long enough, and the mail to be newer than the stop', async () => {
+    const at = root();
+    const stopped = NOW - 12 * MINUTE;
+    // Mail older than the stop: it was read, or will be, on the session's
+    // own turn. Nothing flagged.
+    const first = await round({
+      root: at,
+      report: board([['alpha', [conversation({ state: 'waiting', turn: 'waiting', updated_ms: stopped })]]]),
+      arrivals: () => ({ count: 0, oldest: null }),
+    });
+    assert.equal(first.urgent, 0);
+    // Stopped four minutes with new mail: not yet — ten is the line.
+    const second = await round({
+      root: at,
+      report: board([['alpha', [conversation({ id: 'c2', state: 'waiting', turn: 'waiting', updated_ms: NOW - 4 * MINUTE })]]]),
+      arrivals: () => ({ count: 1, oldest: 'x.md' }),
+    });
+    assert.equal(second.urgent, 0);
+    // Working with new mail: it reads it when its turn ends.
+    const third = await round({
+      root: at,
+      report: board([['alpha', [conversation({ id: 'c3', state: 'working', turn: 'working', updated_ms: NOW - 30 * MINUTE })]]]),
+      arrivals: () => ({ count: 1, oldest: 'x.md' }),
+    });
+    assert.equal(third.urgent, 0);
+  });
+
+  it('a named group in which nobody works is quiet-group, once, with how long', async () => {
+    const at = root();
+    const sent = [];
+    const report = board([
+      ['msr-track-1', [conversation({ id: 't1', state: 'waiting', turn: 'waiting', updated_ms: NOW - 25 * MINUTE })]],
+      ['msr-track-2', [conversation({ id: 't2', state: 'waiting', turn: 'waiting', updated_ms: NOW - 40 * MINUTE })]],
+      ['msr-design', [conversation({ id: 'd1', state: 'working', turn: 'working' })]],
+    ]);
+    const first = await round({
+      root: at, report, groups: ['msr-track-'], arrivals: () => ({ count: 0, oldest: null }),
+      send: (message) => { sent.push(message); return { ok: true, woke: true }; },
+    });
+    const notice = readLedger({ root: at }).notices.find((item) => item.pattern === 'quiet-group');
+    assert.ok(notice, 'no quiet-group notice');
+    assert.equal(notice.session, 'msr-track-*');
+    // The last one stopped 25 minutes ago: that is how long the group has been quiet.
+    assert.match(notice.detail, /none of 2 live under msr-track-\* is working — the last stopped 25m ago \(msr-track-1, msr-track-2\)/u);
+    assert.equal(first.urgent, 1);
+    assert.deepEqual(sent.map((item) => item.name), ['pm']);
+    // Still quiet next round: still true, not newly true. One notice.
+    const second = await round({ root: at, report, groups: ['msr-track-'], arrivals: () => ({ count: 0, oldest: null }) });
+    assert.equal(second.urgent, 0);
+    assert.equal(readLedger({ root: at }).notices.filter((item) => item.pattern === 'quiet-group').length, 1);
+    // One of them starts working: the flag ends, and memory follows.
+    const working = board([
+      ['msr-track-1', [conversation({ id: 't1', state: 'working', turn: 'working' })]],
+      ['msr-track-2', [conversation({ id: 't2', state: 'waiting', turn: 'waiting', updated_ms: NOW - 40 * MINUTE })]],
+    ]);
+    await round({ root: at, report: working, groups: ['msr-track-'], arrivals: () => ({ count: 0, oldest: null }) });
+    assert.deepEqual(readMemory({ root: at }).sessions['group:msr-track-'].active, []);
   });
 
   it('writes a notice that says where to look and nothing else', async () => {

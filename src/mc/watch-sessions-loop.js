@@ -31,7 +31,7 @@ import {
   writeMemory,
 } from './watch-sessions-store.js';
 import { excerptOf, readOutput } from './watch-sessions-read.js';
-import { scanSessions } from './watch-sessions-scan.js';
+import { DEFAULT_IDLE_MS, scanSessions } from './watch-sessions-scan.js';
 import { appendNotice, isUrgent } from './watch-notices.js';
 import { knock } from './watch-sessions-knock.js';
 import { readTailEntries } from './conversations.js';
@@ -66,6 +66,9 @@ import { workStatus } from './work-status.js';
 export const NOTICE_SOURCE = 'guard';
 
 export const MAX_READS_PER_ROUND = 6;
+
+/** The guard signs what it sends itself; see `watch-sessions-knock.js`. */
+const GUARD = Object.freeze({ name: 'mc watch sessions', kind: 'watcher' });
 export const READ_CONCURRENCY = 2;
 
 export async function watchRound({
@@ -80,6 +83,9 @@ export async function watchRound({
   send = null,
   reachable = null,
   flush = null,
+  idleMs = DEFAULT_IDLE_MS,
+  groups = [],
+  arrivals = null,
   log = () => {},
 } = {}) {
   const started = Date.now();
@@ -97,6 +103,7 @@ export async function watchRound({
   const report = await (status || (() => workStatus({ git: false })))();
   const scan = scanSessions({
     report, previous, now, waitingMs, silentMs, reachable: reachable || paneVerdict,
+    idleMs, groups, ...(arrivals ? { arrivals } : {}),
   });
 
   const { queue, deferred } = readingOrder(scan.sessions, previous, maxReads);
@@ -152,7 +159,7 @@ export async function watchRound({
   for (const { session, detail } of holding) {
     const deliver = send || ((message) => sendToArea(message));
     try {
-      const told = deliver({ name: session.area, message: `mc watch sessions: you ${detail}`, wake: true });
+      const told = deliver({ name: session.area, message: `mc watch sessions: you ${detail}`, sender: GUARD, wake: true });
       log(told?.ok
         ? `told ${session.area} it holds the suite right${told.woke ? '' : ` — delivered without waking (${told.reason || 'nobody to wake'})`}`
         : `could not tell ${session.area} about the suite right: ${told?.reason || 'send failed'}`);
@@ -161,7 +168,25 @@ export async function watchRound({
     }
   }
 
-  // The bound in §5, and the whole of it. Two classes knock; every other flag
+  // A session stopped with mail it has not read is knocked itself, not only
+  // reported: the wake is what the sender should have got through, and the
+  // guard is the one component that comes back to try. One file with a
+  // wake, once per flag. A pane that refuses is said in the log and stands
+  // as `unreachable` on the board.
+  const unattended = fresh.filter((item) => item.pattern === 'unattended');
+  for (const { session, detail } of unattended) {
+    const deliver = send || ((message) => sendToArea(message));
+    try {
+      const told = deliver({ name: session.area, message: `mc watch sessions: you have ${detail} — read your inbox now`, sender: GUARD, wake: true });
+      log(told?.ok
+        ? `knocked ${session.area} for its unread mail${told.woke ? '' : ` — delivered without waking (${told.reason || 'nobody to wake'})`}`
+        : `could not knock ${session.area} for its unread mail: ${told?.reason || 'send failed'}`);
+    } catch (error) {
+      log(`could not knock ${session.area} for its unread mail: ${error?.message || String(error)}`);
+    }
+  }
+
+  // The bound in §5, and the whole of it. Four classes knock; every other flag
   // sits in the ledger until the round carries it, which is what keeps exactly
   // one component in charge of the wake channel.
   const urgent = written.filter((item) => isUrgent(item.pattern)).map((item) => item.notice);

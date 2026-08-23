@@ -363,7 +363,9 @@ describe('mc work send — the channel', () => {
       target: 'mc-pm',
       sender: 'alpha',
       sleep: () => {},
-      run: scripted([empty, wrapped, wrapped, wrapped]),
+      // A key now gets several looks before the next; the pane is the same
+      // every time, so the last frame repeats.
+      run: scripted([empty, ...Array.from({ length: 16 }, () => wrapped)]),
     });
     assert.equal(waiting.ok, false);
     assert.equal(waiting.reason, 'it stayed in the prompt');
