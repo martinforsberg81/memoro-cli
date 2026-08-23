@@ -1,0 +1,106 @@
+/**
+ * A pane in a menu is a session waiting on a person (2026-08-23). It has no
+ * prompt; "could not find its prompt" was true and named the wrong thing, and
+ * a probe would have typed into the menu. Recognised, said with the question,
+ * and on the board — by the wake, the guard and the status page alike.
+ */
+import assert from 'node:assert/strict';
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { describe, it } from 'node:test';
+
+import { installTmuxStub } from './_helpers/tmux-stub.js';
+import { runMcCli } from './_helpers/mc-cli.js';
+import { menuReason, readMenu } from '../../src/mc/menu-read.js';
+import { renderLines } from '../../src/mc/status-render.js';
+import { paneWillTakeText } from '../../src/mc/work-send.js';
+
+const SAFE_PATH = '/usr/bin:/bin:/usr/sbin:/sbin';
+
+const MENU = [
+  'a conversation',
+  '⏺ Which card migration order should the plan take?',
+  '',
+  '❯ 1. Concepts first, then cards',
+  '  2. Cards first, then concepts',
+  '  3. Cancel',
+  '',
+  '  Enter to select · ↑/↓ to navigate · Esc to cancel',
+  '',
+];
+
+describe('readMenu', () => {
+  it('reads the options and the question above them', () => {
+    assert.deepEqual(readMenu(MENU), {
+      question: 'Which card migration order should the plan take?',
+      options: ['Concepts first, then cards', 'Cards first, then concepts', 'Cancel'],
+    });
+    assert.equal(menuReason(readMenu(MENU)), 'waiting on a menu — it needs an answer, not a knock: "Which card migration order should the plan take?"');
+  });
+
+  it('a menu at the top of the capture has options and no question', () => {
+    const menu = readMenu(['❯ 1. Yes', '  2. No', '  Enter to select · ↑/↓ to navigate · Esc to cancel']);
+    assert.equal(menu.question, null);
+    assert.deepEqual(menu.options, ['Yes', 'No']);
+    assert.equal(menuReason(menu), 'waiting on a menu — it needs an answer, not a knock');
+  });
+
+  it('a prompt is not a menu, and neither is a footer with no options', () => {
+    assert.equal(readMenu(['a conversation', '+---+', '| ❯ ', '+---+', '  ? for shortcuts']), null);
+    assert.equal(readMenu(['  Enter to select · ↑/↓ to navigate']), null);
+    assert.equal(readMenu(['1. a numbered line in prose', '2. another']), null, 'no footer, no menu');
+  });
+});
+
+describe('the wake guard on a menu', () => {
+  const pane = (lines) => (args) => (args[0] === 'list-clients' ? { status: 0, stdout: '' }
+    : args[0] === 'capture-pane' ? { status: 0, stdout: `${lines.join('\n')}\n\n` } : { status: 0 });
+
+  it('says waiting on a menu, with the question, and types nothing — not "could not find its prompt"', () => {
+    const keys = [];
+    const run = (args) => { if (args[0] === 'send-keys') keys.push(args); return pane(MENU)(args); };
+    const verdict = paneWillTakeText({ target: 'mc-alpha', run, probe: () => { throw new Error('a probe would type into the menu'); } });
+    assert.equal(verdict.ok, false);
+    assert.match(verdict.reason, /^waiting on a menu — it needs an answer, not a knock: "Which card migration/u);
+    assert.deepEqual(verdict.menu.options.length, 3);
+    assert.deepEqual(keys, []);
+  });
+
+  it('a pane with neither box nor menu still says it could not find the prompt', () => {
+    const verdict = paneWillTakeText({ target: 'mc-alpha', run: pane(['$ ', 'npm ERR!']) });
+    assert.match(verdict.reason, /could not find its prompt/u);
+  });
+});
+
+describe('mc work send --wake against a menu', () => {
+  it('delivers, does not knock, and names the state', () => {
+    const root = mkdtempSync(join(tmpdir(), 'mc-menu-state-'));
+    const workRoot = join(root, 'work');
+    mkdirSync(join(workRoot, 'alpha'), { recursive: true });
+    mkdirSync(join(root, 'home'), { recursive: true, mode: 0o700 });
+    const tmux = installTmuxStub(root, { alive: ['alpha'], menu: { question: 'Proceed with the migration?', options: ['Yes', 'No'] } });
+    try {
+      const sent = runMcCli(['work', 'send', 'alpha', '--wake', 'read me'], {
+        MC_HOME: join(root, 'home'), MC_WORK_ROOT: workRoot, CLAUDE_CONFIG_DIR: join(root, 'claude'), CODEX_HOME: join(root, 'codex'),
+        PATH: `${tmux.bin}:${SAFE_PATH}`,
+      }, { cwd: join(workRoot, 'alpha') });
+      assert.equal(sent.status, 0, sent.stderr);
+      assert.match(sent.stdout, /delivered, but did not knock: waiting on a menu — it needs an answer, not a knock: "Proceed with the migration\?"/u);
+      assert.deepEqual(tmux.keys(), [], 'nothing typed into a menu');
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+});
+
+describe('the board on a menu', () => {
+  it('shows the session blocked on a question, with the options', () => {
+    const page = renderLines({
+      areas: [{
+        name: 'msr-vocabulary', path: '/x', running: ['claude'], worktrees: [], conversations: [], waiting: false, working: true,
+        menu: { question: 'Which order?', options: ['Concepts first', 'Cards first'], target: 'mc-msr-vocabulary' },
+      }],
+      summary: { areas: 1, waiting: 0, working: 1 },
+    }, { columns: 160 }).join('\n');
+    assert.match(page, /⧗ waiting on a menu — needs an answer, not a knock: “Which order\?” — 1\. Concepts first {2}2\. Cards first/u);
+  });
+});

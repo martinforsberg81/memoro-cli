@@ -36,6 +36,7 @@ import { join } from 'node:path';
 
 import { writeFileAtomic } from './atomic-write.js';
 import { mcHome } from './paths.js';
+import { menuReason, readMenu } from './menu-read.js';
 import { reservedRoleName } from './roles.js';
 import { dropWake, enqueueWake, flushWakeQueue } from './wake-queue.js';
 import { inspectWorkArea } from './work-area.js';
@@ -333,7 +334,15 @@ export function paneWillTakeText({ target, run = null, attachedOk = false, probe
   const pane = readPane(tmux, target);
   if (pane === null) return { ok: false, reason: 'could not read the conversation' };
   const box = readBox(pane);
-  if (box === null) return { ok: false, reason: 'could not find its prompt to check it was empty' };
+  if (box === null) {
+    // No prompt because the pane is in another mode: a menu, waiting on a
+    // choice (2026-08-23). That is not "could not find it" — it is a session
+    // blocked on a person, and a probe would type into the menu. Said as
+    // what it is, with the question, so the answer can be given.
+    const menu = readMenu(pane);
+    if (menu) return { ok: false, menu, reason: menuReason(menu) };
+    return { ok: false, reason: 'could not find its prompt to check it was empty' };
+  }
   if (box.text !== '') {
     // Text in the drawing is not text in the input (D-0151). A caller that
     // may type asks the input with a probe; a caller that only reads gets

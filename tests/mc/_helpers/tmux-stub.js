@@ -42,7 +42,7 @@ import { join } from 'node:path';
 
 export function installTmuxStub(root, {
   mode = 'reliable', alive = [], drawAfter = 0, busyFor = 0, clients = [], typedAlready = '',
-  windowIndex = '0', clientSession = '', ghost = '', panes = [],
+  windowIndex = '0', clientSession = '', ghost = '', panes = [], menu = null,
 } = {}) {
   const bin = join(root, 'bin');
   const state = join(root, 'tmux-state');
@@ -62,6 +62,8 @@ export function installTmuxStub(root, {
   // `{ session, pane, active, windows, panes, path }`, tab-separated.
   writeFileSync(join(state, 'panes'), panes.map((pane) => [pane.session, pane.pane || '%1', pane.active ?? '1', pane.windows ?? '1', pane.panes ?? '1', pane.path].join('\t')).join('\n') + (panes.length ? '\n' : ''));
   writeFileSync(screen, 'a conversation\nthat has been going a while\n');
+  // A menu instead of a box: the tool is asking the session something.
+  writeFileSync(join(state, 'menu'), menu ? [menu.question || '', ...(menu.options || []).map((option, index) => `${index === 0 ? '❯ ' : '  '}${index + 1}. ${option}`), '', '  Enter to select · ↑/↓ to navigate · Esc to cancel'].join('\n') + '\n' : '');
   writeFileSync(modePath, `${mode}\n`);
   writeFileSync(captures, '0\n');
   for (const name of alive) writeFileSync(join(state, `alive-mc-${name}`), '');
@@ -128,6 +130,7 @@ case "$1" in
     # drawing comes back the moment the input is empty again.
     if [ -z "$shown" ] && [ -n "${ghost}" ]; then shown="${ghost}"; fi
     cat "${screen}"
+    if [ -s "${state}/menu" ]; then cat "${state}/menu"; exit 0; fi
     if [ "$seen" -le "${busyFor}" ]; then printf '%s\\n' "  * Thinking… (esc to interrupt)"; fi
     printf '%s\\n' "+------------------------------+"
     printf '| \\342\\235\\257 %s\\n' "$shown"
