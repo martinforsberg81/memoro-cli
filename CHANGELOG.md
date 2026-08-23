@@ -7,6 +7,23 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Fixed
+- The PM round is quiet when it has nothing to say, and the board can tell
+  a refused knock from silence (B3+B5). Measured 2026-08-23: five
+  `mc-watch-pm` files in PM's inbox inside ninety seconds whose whole
+  content was the list of the four before them — the round counted its own
+  knocks as unprocessed items, and each knock named the whole inbox again.
+  Now a file signed `mc watch pm` is not an item at all (recognised by the
+  sender line the channel writes, never by the filename), the knock names
+  only what is new or reminded and counts the rest as *N older, already
+  announced*, and the round's memory keeps the **last knock** apart from
+  the last round — `mc watch pm status` shows *last knock 3m ago · woke /
+  delivered, did not knock: <reason> / NOT DELIVERED: <reason>*, and the
+  `mc status` watch row carries the same, in yellow when it did not wake.
+  "Nothing to say" for six passes and "refused every time" were the same
+  silence on that board for a day, and the difference was 188 knocks that
+  never landed.
+
+### Fixed
 - PM's wake holds: the watcher runs the code on disk, and a stranded notice
   is finished rather than waited on. Measured 2026-08-23: `mc watch pm` had
   been started thirteen minutes *before* the fix for the prompt it could not

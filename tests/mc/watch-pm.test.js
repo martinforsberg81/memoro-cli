@@ -17,6 +17,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
+import { renderWatchLines } from '../../src/mc/commands/watch.js';
+
 import { appendNotice, pendingNotices, readLedger } from '../../src/mc/watch-notices.js';
 import { pmWatchLoop } from '../../src/mc/watch-pm-loop.js';
 import {
@@ -58,6 +60,12 @@ function fixture() {
       const path = join(area, 'inbox', name);
       writeFileSync(path, body);
       return path;
+    },
+    /** A knock as the channel would write it: the round's own sender line first. */
+    ownKnock(name = '2026-08-23T19-00-00.000Z-mc-watch-pm.md') {
+      const path = join(area, 'inbox', name);
+      writeFileSync(path, '---\nfrom: mc watch pm\nat: 2026-08-23T19:00:00.000Z\n---\n\n1 unprocessed item\n');
+      return { name, path };
     },
     aged(name, at) {
       const path = join(area, 'inbox', name);
@@ -224,9 +232,59 @@ describe('the round', () => {
     const items = Array.from({ length: 20 }, (_, index) => ({
       name: `item-${String(index).padStart(2, '0')}.md`, at: '2026-08-17T15:53:02.000Z',
     }));
-    const text = knockText({ items, fresh: [items[0].name] });
+    // All twenty new: twelve named, the cap said out loud.
+    const text = knockText({ items, fresh: items.map((item) => item.name) });
     assert.match(text, /^20 unprocessed items in pm\/inbox\//u);
-    assert.match(text, /and 8 more, not named here/u);
+    assert.match(text, /and 8 more new, not named here/u);
+  });
+
+  it('names what is new, and counts what it has already announced (B3)', () => {
+    // Five knocks in ninety seconds, each listing the four before it: a
+    // knock names the fresh and the reminded, and says how many older
+    // items are still there without naming them again.
+    const items = Array.from({ length: 6 }, (_, index) => ({
+      name: `item-${index}.md`, at: '2026-08-17T15:53:02.000Z',
+    }));
+    const text = knockText({ items, fresh: ['item-5.md'], reminders: ['item-1.md'] });
+    assert.match(text, /^6 unprocessed items/u);
+    assert.match(text, /new\s+item-5\.md/u);
+    assert.match(text, /reminder\s+item-1\.md/u);
+    assert.match(text, /waiting\s+4 older, already announced/u);
+    assert.doesNotMatch(text, /item-0\.md|item-2\.md/u);
+  });
+
+  it('the last knock is remembered apart from the last round (B5)', async () => {
+    const fx = fixture();
+    try {
+      fx.reply({ ok: true, woke: false, reason: 'somebody is attached to it', guard: true });
+      fx.item('a.md');
+      await pass(fx);
+      // Three quiet passes later, the last knock still says what became of it.
+      await pass(fx); await pass(fx);
+      const state = readState(fx.root);
+      assert.equal(state.last_knock.woke, false);
+      assert.equal(state.last_knock.delivered, true);
+      assert.equal(state.last_knock.reason, 'somebody is attached to it');
+      // And the page says it: "nothing to say" and "refused every time" were
+      // the same silence for a day — 188 knocks, none landed.
+      const lines = renderWatchLines({ running: true, pid: 1, interval_ms: 1800000, last_write_at: state.at, last_round: 'x', last_knock: state.last_knock, log: '/x' }, { target: 'pm', now: Date.parse(state.at) });
+      assert.ok(lines.some((line) => /last knock .*delivered, did not knock: somebody is attached to it/u.test(line)), lines.join('|'));
+    } finally { fx.cleanup(); }
+  });
+
+  it('its own knocks are not items: not counted, not named, never a reason to knock (B3)', async () => {
+    const fx = fixture();
+    try {
+      fx.item('a.md');
+      const first = await pass(fx);
+      assert.equal(first.knock.ok, true);
+      // The channel's file for that knock is in the inbox now, signed by the
+      // round. The next pass must not count it, and must have nothing to say.
+      const { name } = fx.ownKnock();
+      const second = await pass(fx);
+      assert.equal(second.inbox.count, 1, `the round's own ${name} was counted`);
+      assert.equal(second.knock, null, 'the round knocked about its own knock');
+    } finally { fx.cleanup(); }
   });
 
   it('delivered, but did not knock is a normal outcome', async () => {

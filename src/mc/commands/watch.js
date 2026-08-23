@@ -140,6 +140,16 @@ export function renderWatchLines(state, { target = 'pm', colour = false, now = D
     : c('never', 'grey');
   lines.push(`  ${c('last round', 'grey')}  ${when}`);
   if (state.last_round) lines.push(`              ${c(state.last_round, 'grey')}`);
+  // The last knock, and what became of it. "Nothing to say" for six passes
+  // and "refused every time" were the same silence on this page for a day —
+  // and the difference was 188 knocks that never landed (B5).
+  if (state.last_knock) {
+    const knock = state.last_knock;
+    const what = knock.woke ? c('woke', 'green')
+      : knock.delivered ? c(`delivered, did not knock: ${knock.reason || 'unknown'}`, 'yellow')
+        : c(`NOT DELIVERED: ${knock.reason || 'unknown'}`, 'red');
+    lines.push(`  ${c('last knock', 'grey')}  ${ago(knock.at, now)}  ${what}`);
+  }
   // Whatever this leg has to add about itself, in the order it gave it. The
   // guard puts its standing flags here; a leg with nothing to add says
   // nothing, and the renderer stays one renderer.

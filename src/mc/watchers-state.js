@@ -29,6 +29,7 @@ export function watchersState({ root = mcHome(), now = Date.now() } = {}) {
     running: Boolean(state?.running),
     abandoned: Boolean(state?.abandoned),
     stale: state?.stale ?? null,
+    last_knock: state?.last_knock ?? null,
     // A live process on yesterday's code reads as alive in every other
     // field — and ran PM's round for a day without one knock landing
     // (2026-08-23). Null for a watcher whose leg does not carry a stamp.
