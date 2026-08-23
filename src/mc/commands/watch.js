@@ -20,6 +20,7 @@ import { startPmWatcher, stopPmWatcher, pmWatcherState } from '../watch-pm.js';
 import { DEFAULT_INTERVAL_MS as PM_INTERVAL_MS } from '../watch-pm-round.js';
 import {
   startSessionsWatcher, stopSessionsWatcher, sessionsWatcherState,
+  describeStartFlags,
 } from '../watch-sessions.js';
 import { DEFAULT_INTERVAL_MS as SESSIONS_INTERVAL_MS } from '../watch-sessions-store.js';
 import { scanArgs } from './flags.js';
@@ -82,6 +83,13 @@ export async function run(argv, deps = {}) {
       return 1;
     }
     stdout.write(`mc: watching ${opts.target} every ${seconds(started.interval_ms)} (pid ${started.pid})\n`);
+    // The guard's flags, and where they came from: a bare start after a
+    // stop is the last start again, and says so rather than silently being
+    // a plainer guard (B4).
+    if (started.flags) {
+      const shown = describeStartFlags(started.flags);
+      if (shown) stdout.write(`mc: ${started.remembered ? 'as last started: ' : 'with '}${shown}\n`);
+    }
     for (const line of leg.does) stdout.write(`mc: ${line}\n`);
     stdout.write(`mc: it logs to ${started.log}\n`);
     return 0;

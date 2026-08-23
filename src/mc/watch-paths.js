@@ -46,3 +46,13 @@ export function pmRoundStatePath(root = mcHome()) {
 export function sessionsSeenPath(root = mcHome()) {
   return join(watchRoot(root), 'sessions-seen.json');
 }
+
+/**
+ * How the guard was last started — its flags — so that `mc watch sessions
+ * start` after a stop, a reboot or a new PM session is the same guard and
+ * not a plainer one (B4, 2026-08-23: the flags lived only in the pid file,
+ * and the pid file goes with the process).
+ */
+export function sessionsStartPath(root = mcHome()) {
+  return join(watchRoot(root), 'sessions-start.json');
+}
