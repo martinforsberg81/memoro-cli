@@ -1,0 +1,126 @@
+/**
+ * `mc suite run` — the step that cannot be skipped (D-0176).
+ *
+ * A track chained `mc suite claim; npm test` and never read the claim's
+ * refusal: the mechanism existed (exit 1, stderr) and could not help,
+ * because nothing looked. Twice more the same day an interrupt between
+ * claim and release left the lease standing — one cost PM 2h25m (D-0167).
+ * So the guarded form is one step, and what is asserted here is the whole
+ * of its contract: refused runs nothing; the lease goes back on success,
+ * on failure, and when the run dies; a right held by hand beforehand is
+ * not taken away by it.
+ */
+import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { describe, it } from 'node:test';
+
+import { parseArgs, run } from '../../src/mc/commands/suite.js';
+import { claimSuiteLease, readSuiteLease } from '../../src/mc/suite-lease.js';
+
+const AREA = { name: 'worker-one', kind: 'work-area' };
+
+function home() {
+  const root = mkdtempSync(join(tmpdir(), 'mc-suite-run-'));
+  process.env.MC_HOME = root;
+  return root;
+}
+
+function io() {
+  const out = [];
+  const err = [];
+  return {
+    out, err,
+    stdout: { write: (line) => out.push(line), isTTY: false },
+    stderr: { write: (line) => err.push(line) },
+  };
+}
+
+/** The command, faked: what matters is whether it ran and how it ended. */
+function shell({ code = 0, signal = null } = {}) {
+  const ran = [];
+  return {
+    ran,
+    spawn: (command) => {
+      ran.push(command);
+      return { child: { pid: 4242 }, done: Promise.resolve({ code, signal }) };
+    },
+  };
+}
+
+const HOME = process.env.MC_HOME;
+function restore() { if (HOME) process.env.MC_HOME = HOME; else delete process.env.MC_HOME; }
+
+describe('mc suite run — claim, run, release as one step', () => {
+  it('the words: run needs its command', () => {
+    assert.equal(parseArgs(['run', 'npm', 'test']).errand, 'npm test');
+    assert.match(String(parseArgs(['run']).error), /run needs the command/u);
+  });
+
+  it('runs the command with the right held, and gives it back when it passes', async () => {
+    const root = home();
+    try {
+      const sh = shell({ code: 0 });
+      const code = await run(['run', 'npm test'], { ...io(), spawn: sh.spawn, runs: async () => [] });
+      assert.equal(code, 0);
+      assert.deepEqual(sh.ran, ['npm test']);
+      assert.equal(readSuiteLease({ root }).held, false, 'the right went back');
+    } finally { restore(); rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it('refused means NOTHING runs, and the exit is the refusal', async () => {
+    const root = home();
+    try {
+      claimSuiteLease({ errand: 'gate round', holder: { name: 'pm', kind: 'work-area' }, root });
+      const sh = shell();
+      const told = [];
+      const streams = io();
+      const code = await run(['run', 'npm test'], {
+        ...streams, spawn: sh.spawn, runs: async () => [],
+        tell: (message) => { told.push(message); return { told: true, woke: true }; },
+      });
+      assert.equal(code, 1);
+      assert.deepEqual(sh.ran, [], 'the command never started');
+      assert.ok(streams.err.some((line) => /NOTHING was run/u.test(line)), streams.err.join(''));
+      assert.equal(told.length, 1, 'the holder was told, as a refused claim tells them');
+      assert.equal(readSuiteLease({ root }).holder, 'pm', 'their lease untouched');
+    } finally { restore(); rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it('a failing command still gives the right back, and the exit is the command\'s', async () => {
+    const root = home();
+    try {
+      const streams = io();
+      const code = await run(['run', 'npm test'], { ...streams, spawn: shell({ code: 3 }).spawn, runs: async () => [] });
+      assert.equal(code, 3);
+      assert.equal(readSuiteLease({ root }).held, false, 'the lease did not outlive the failure');
+      assert.ok(streams.err.some((line) => /exited 3 — the suite right is released, not left standing/u.test(line)));
+    } finally { restore(); rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it('a command killed by a signal gives the right back too', async () => {
+    const root = home();
+    try {
+      const code = await run(['run', 'npm test'], { ...io(), spawn: shell({ code: null, signal: 'SIGTERM' }).spawn, runs: async () => [] });
+      assert.equal(code, 143);
+      assert.equal(readSuiteLease({ root }).held, false);
+    } finally { restore(); rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it('a right claimed by hand beforehand stays held afterwards', async () => {
+    const root = home();
+    try {
+      // The same holder claimed by hand — mc suite run must give back only
+      // what it took (the gate round's own rule for the suite right).
+      claimSuiteLease({ errand: 'gate round', holder: AREA, root });
+      const streams = io();
+      const code = await run(['run', 'npm test'], { ...streams, spawn: shell().spawn, runs: async () => [], holder: AREA });
+      assert.equal(code, 0);
+      const after = readSuiteLease({ root });
+      assert.equal(after.held, true, 'their hand-claim survived the run');
+      assert.equal(after.holder, AREA.name);
+      assert.ok(streams.out.some((line) => /you claimed the right by hand, so you still hold it/u.test(line)));
+    } finally { restore(); rmSync(root, { recursive: true, force: true }); }
+  });
+});

@@ -138,6 +138,11 @@ MAINTENANCE
   mc repo merge <repo> <pr> --check
                                     The same round, stopping at the verdict.
                                     A gate that passes is not a review
+  mc suite run "<command>"         Take the suite right, run the command, and
+                                    give the right back when it ends — on
+                                    success, on failure, and on a signal.
+                                    Refused if someone else holds it, and then
+                                    NOTHING runs. One step, no decision between
   mc suite claim "<what for>"      Hold the right to run a full suite — one at
                                     a time on this machine. Refused if someone
                                     else holds it; no process is blocked. The
