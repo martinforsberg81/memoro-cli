@@ -110,3 +110,19 @@ describe('mc suite claim, refused, tells the holder', () => {
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 });
+
+describe('what counts as a running suite', () => {
+  it('is the runner, not the shell that typed it', async () => {
+    const { isSuiteCommand } = await import('../../src/mc/work-status.js');
+    assert.equal(isSuiteCommand('node --test --test-reporter=tap --import ./tests/_isolate-home.mjs tests/**/*.test.js'), true);
+    assert.equal(isSuiteCommand('/opt/homebrew/bin/node --test tests/a.test.js'), true);
+    assert.equal(isSuiteCommand('npm test'), true);
+    assert.equal(isSuiteCommand('npm run test:msr:contract'), true);
+    // The zsh -c wrapper carries the whole script on its command line and
+    // outlives the node it started: two rows per suite, one of them a ghost.
+    assert.equal(isSuiteCommand('/bin/zsh -c source ~/.claude/shell-snapshots/x.sh 2>/dev/null || true && eval \'cd /w; node --test tests\''), false);
+    assert.equal(isSuiteCommand('bash -lc "npm test"'), false);
+    assert.equal(isSuiteCommand('sh -c npm test'), false);
+    assert.equal(isSuiteCommand('node src/mc/repo-watch-run.js --interval 60'), false);
+  });
+});

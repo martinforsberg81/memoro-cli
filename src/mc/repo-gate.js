@@ -52,6 +52,7 @@ import { join } from 'node:path';
 import { claimLease, releaseLease } from './repo-lease.js';
 import { claimSuiteLease, releaseSuiteLease } from './suite-lease.js';
 import { tellHolder } from './lease-refusal.js';
+import { suiteRuns } from './work-status.js';
 import { compareRed, redNames, tapTotals } from './tap-red.js';
 import { RATCHET_FILE, compareRatchet, readRatchet } from './red-ratchet.js';
 import { currentHolder } from './work-identity.js';
@@ -96,6 +97,7 @@ export async function runGate({
   clock = () => Date.now(),
   // How a refused claim reaches the holder (lease-refusal.js); stubbed in tests.
   tell = tellHolder,
+  suiteRunsNow = null,
   // Whether the round owns the lease or is running inside somebody else's.
   //
   // The merge step has to hold one lease across the gate *and* the merge — a
@@ -185,7 +187,11 @@ export async function runGate({
   if (!suiteRight.ok) {
     if (holdLease) releaseLease({ repoPath, holder, root });
     const held = suiteRight.lease;
-    const told = tell({ lease: held, asker: holder, what: 'the suite right', errand: `gate round for #${pr}` });
+    // What runs under the right is measured, not defaulted: "nothing running"
+    // as a default told PM a suite was idle while it was five minutes in.
+    let running = [];
+    try { running = await (suiteRunsNow || suiteRuns)({ env }); } catch { running = []; }
+    const told = tell({ lease: held, asker: holder, what: 'the suite right', errand: `gate round for #${pr}`, running });
     return finish('suite-lease', `the suite right is held by ${held.holder}${held.errand ? ` for “${held.errand}”` : ''} — one full suite at a time on this machine (D-0141); mc suite who says whether that run is still going${told.told ? `; ${held.holder} has been told` : ''}`);
   }
   const ownSuiteRight = !suiteRight.already;

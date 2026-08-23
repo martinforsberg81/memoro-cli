@@ -147,10 +147,24 @@ export function toolProcesses(paths) {
  */
 const SUITE_COMMAND = /(?:^|\/|\s)node(?:\s+\S+)*\s+--test(?:\s|$)|(?:^|\s)npm\s+(?:run\s+)?test(?::\S+)?(?:\s|$)/u;
 
+/**
+ * A shell started with `-c` carries its whole script on its command line —
+ * including the `node --test` it is about to run, or has finished running.
+ * Counting it made every suite two rows and left a "running suite" on the
+ * board after node had exited, while the shell waited for its own cleanup.
+ * The suite is the process that runs tests, not the one that typed them.
+ */
+const SHELL_WRAPPER = /^(?:\S*\/)?(?:zsh|bash|sh|dash|fish)\s+(?:-\S+\s+)*-c\s/u;
+
+/** Is this command line a running suite — the runner itself, not a shell that typed it? */
+export function isSuiteCommand(command) {
+  return !SHELL_WRAPPER.test(command) && SUITE_COMMAND.test(command);
+}
+
 export function suiteProcesses(paths) {
   const found = [];
   for (const { pid, command, directory, elapsed } of processesIn(paths, { elapsed: true })) {
-    if (!SUITE_COMMAND.test(command)) continue;
+    if (!isSuiteCommand(command)) continue;
     found.push({ pid, directory, elapsed, command: command.replace(/^\S*\/(node|npm)\s/u, '$1 ').slice(0, 80) });
   }
   return found;
