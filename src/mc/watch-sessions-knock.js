@@ -19,6 +19,14 @@ import { mcHome } from './paths.js';
 import { sendToArea } from './work-send.js';
 
 /**
+ * Who the knock is from. Fixed, as the round's is: the guard runs detached
+ * from wherever it was started, and `currentHolder()` signed a knock from a
+ * guard started in a worktree with that worktree's name (measured
+ * 2026-08-23: `from: mc-repo` on a guard's flag in PM's inbox).
+ */
+const SENDER = Object.freeze({ name: 'mc watch sessions', kind: 'watcher' });
+
+/**
  * Knock, then record it.
  *
  * The file lands in PM's inbox whether or not anybody is awake to be knocked,
@@ -39,7 +47,7 @@ export function knock(notices, {
   const deliver = send || ((message) => sendToArea(message));
   let result = null;
   try {
-    result = deliver({ name: recipient, message: knockText(items), wake: true });
+    result = deliver({ name: recipient, message: knockText(items), sender: SENDER, wake: true });
   } catch (error) {
     return { ok: false, reason: error?.message || String(error), delivered: [] };
   }

@@ -61,12 +61,17 @@ export function sessionsWatcherState({ root = mcHome(), now = Date.now() } = {})
 }
 
 export function startSessionsWatcher({
-  intervalMs = DEFAULT_INTERVAL_MS, root = mcHome(), env = process.env, model = null,
+  intervalMs = DEFAULT_INTERVAL_MS, root = mcHome(), env = process.env, model = null, idleMs = null, groups = [],
 } = {}) {
   return startDaemon({
     target: TARGET,
     runner: RUNNER,
-    args: ['--interval-ms', String(intervalMs), ...(model ? ['--model', model] : [])],
+    args: [
+      '--interval-ms', String(intervalMs),
+      ...(model ? ['--model', model] : []),
+      ...(idleMs ? ['--idle-ms', String(idleMs)] : []),
+      ...(groups || []).flatMap((group) => ['--group', group]),
+    ],
     intervalMs,
     root,
     env,
