@@ -36,6 +36,7 @@ import { basename, join } from 'node:path';
 import { writeJsonAtomic } from './atomic-write.js';
 import { diagnose } from './commands/doctor.js';
 import { markDelivered, pendingNotices } from './watch-notices.js';
+import { deliveryLines, undeliveredOrders } from './watch-pm-deliveries.js';
 import { mcHome, workAreaPath } from './paths.js';
 import { pmRoundStatePath } from './watch-paths.js';
 import { sendToArea } from './work-send.js';
@@ -80,6 +81,7 @@ export async function pmRound({
   now = new Date(),
   send = sendToArea,
   doctor = diagnose,
+  deliveries = undeliveredOrders,
   log = () => {},
 } = {}) {
   const areaPath = workAreaPath(area, env);
@@ -95,6 +97,7 @@ export async function pmRound({
     doctor: null,
     inbox: null,
     notices: [],
+    orders: [],
     knock: null,
     failed: [],
   };
@@ -107,16 +110,29 @@ export async function pmRound({
   const inbox = attempt(outcome, 'inbox', () => readInbox(areaPath, area));
   outcome.inbox = inbox ? { count: inbox.items.length, oldest: inbox.items[0]?.at || null, reason: inbox.reason } : null;
   outcome.notices = attempt(outcome, 'notices', () => pendingNotices({ root })) || [];
+  // The delivery check (D-0170): an order line in an archived msr-design
+  // report that never reached its track. A check PM has to remember to run
+  // is the same kind of note as the fault it would catch (D-0113), so it
+  // runs here, every pass, and is quiet when everything is delivered.
+  outcome.orders = attempt(outcome, 'orders', () => deliveries({ env })) || [];
 
   const previous = readState(root);
   // Only a pass that actually read the directory may change what the round
   // remembers about it. An inbox mc could not open says nothing either way.
   const reachable = Boolean(inbox) && inbox.reason === null;
   const change = decide(inbox?.items || [], previous.items || {}, { reachable });
+  // The same wake-on-change bookkeeping for undelivered orders as for inbox
+  // items: an order newly found undelivered knocks now, one still sitting
+  // there earns one reminder, and a delivered one is forgotten. The name is
+  // the order's own key, so the same order in the same report is one item
+  // however many passes look at it.
+  const orderItems = outcome.orders.map((order) => ({ name: `${order.source} → msr-track-${order.track}: ${order.excerpt}`, at: order.at || outcome.at }));
+  const undelivered = decide(orderItems, previous.orders || {}, { reachable: true });
 
   // The one place a pass can decide to cost somebody a turn. Everything above
   // is filesystem; this is the whole of what the round asks of PM.
-  const worthSaying = change.fresh.length > 0 || change.reminders.length > 0 || outcome.notices.length > 0;
+  const worthSaying = change.fresh.length > 0 || change.reminders.length > 0 || outcome.notices.length > 0
+    || undelivered.fresh.length > 0 || undelivered.reminders.length > 0;
   if (worthSaying) {
     attempted = true;
     outcome.knock = await attemptAsync(outcome, 'knock', () => knock({
@@ -126,6 +142,7 @@ export async function pmRound({
       fresh: change.fresh,
       reminders: change.reminders,
       notices: outcome.notices,
+      orders: outcome.orders,
       doctor: outcome.doctor,
     }));
   }
@@ -137,8 +154,9 @@ export async function pmRound({
   // that is the round saying it ran, which `mc watch pm status` reads.
   const delivered = !attempted || Boolean(outcome.knock?.ok);
   const items = delivered ? change.items : previous.items || {};
+  const orders = delivered ? undelivered.items : previous.orders || {};
   if (delivered && outcome.knock?.file) remember(items, basename(outcome.knock.file), outcome.at);
-  attempt(outcome, 'state', () => writeState(root, { at: outcome.at, items, last_round: summary(outcome) }));
+  attempt(outcome, 'state', () => writeState(root, { at: outcome.at, items, orders, last_round: summary(outcome) }));
 
   if (delivered && outcome.knock?.ok) {
     for (const notice of outcome.notices) {
@@ -262,10 +280,17 @@ export function decide(items, previous, { reachable = true } = {}) {
  * single one of these files and is in no position to say.
  */
 export function knockText({
-  area = 'pm', items = [], fresh = [], reminders = [], notices = [], doctor = null,
+  area = 'pm', items = [], fresh = [], reminders = [], notices = [], orders = [], doctor = null,
 } = {}) {
   const lines = [];
+  // Undelivered orders first: an inbox count is housekeeping, a track
+  // standing blocked on an order that exists is the evening lost (D-0170).
+  if (orders.length) {
+    lines.push(`${orders.length} order${orders.length === 1 ? '' : 's'} from msr-design ${orders.length === 1 ? 'has' : 'have'} not reached ${orders.length === 1 ? 'its' : 'their'} track:`);
+    for (const line of deliveryLines(orders)) lines.push(`  ${line}`);
+  }
   if (items.length) {
+    if (lines.length) lines.push('');
     const plural = items.length === 1 ? 'item' : 'items';
     lines.push(`${items.length} unprocessed ${plural} in ${area}/inbox/, oldest ${minute(items[0].at)}`);
     for (const item of items.slice(0, NAMED_LIMIT)) {
@@ -288,8 +313,8 @@ export function knockText({
   return lines.join('\n');
 }
 
-async function knock({ send, area, items, fresh, reminders, notices, doctor }) {
-  const message = knockText({ area, items, fresh, reminders, notices, doctor });
+async function knock({ send, area, items, fresh, reminders, notices, orders, doctor }) {
+  const message = knockText({ area, items, fresh, reminders, notices, orders, doctor });
   const result = await send({ name: area, message, sender: SENDER, wake: true });
   return {
     ok: Boolean(result?.ok),
@@ -300,6 +325,7 @@ async function knock({ send, area, items, fresh, reminders, notices, doctor }) {
     fresh: fresh.length,
     reminders: reminders.length,
     notices: notices.length,
+    orders: (orders || []).length,
   };
 }
 
@@ -327,6 +353,7 @@ export function summary(outcome) {
   else if (outcome.inbox.reason) parts.push(outcome.inbox.reason);
   else parts.push(`${outcome.inbox.count} unprocessed`);
   if (outcome.notices.length) parts.push(`${outcome.notices.length} notices`);
+  if (outcome.orders?.length) parts.push(`${outcome.orders.length} undelivered order${outcome.orders.length === 1 ? '' : 's'}`);
   if (!outcome.knock) parts.push('nothing to say');
   else if (outcome.knock.woke) parts.push('knocked');
   else if (outcome.knock.ok) parts.push(`delivered, but did not knock: ${outcome.knock.reason || 'unknown'}`);
