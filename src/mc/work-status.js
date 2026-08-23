@@ -28,6 +28,7 @@ import { lastModel, listConversations, readTailEntries } from './conversations.j
 import { readMenu } from './menu-read.js';
 import { mcHome, workRoot } from './paths.js';
 import { backgroundTarget } from './work-open.js';
+import { processesStandingIn } from './standing.js';
 import { readSuiteLease } from './suite-lease.js';
 import { pendingWakeFor } from './wake-queue.js';
 import { dependencyTree } from './dependency-tree.js';
@@ -194,26 +195,9 @@ export async function suiteRuns({ env = process.env } = {}) {
 function processesIn(paths, { elapsed = false } = {}) {
   if (paths.length === 0) return [];
 
-  // lsof exits non-zero when any named directory has no process standing in
-  // it, which is the normal case for most of them. Asked one directory at a
-  // time that only lost the empty ones; asked together it threw away the
-  // whole answer, and every area reported idle.
-  let output = '';
-  try {
-    output = execFileSync('lsof', ['-a', '-d', 'cwd', '-F', 'pn', '--', ...paths], {
-      encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 4 * 1024 * 1024,
-    });
-  } catch (error) {
-    output = error?.stdout?.toString?.() || '';
-  }
-
-  // `-F pn` emits a pid line then the name lines belonging to it.
-  const here = [];
-  let pid = null;
-  for (const line of output.split('\n')) {
-    if (line.startsWith('p')) { pid = line.slice(1).trim(); continue; }
-    if (line.startsWith('n') && pid) here.push([pid, line.slice(1).trim()]);
-  }
+  // By prefix, not by exact path (standing.js): a tool started one directory
+  // down was invisible to the board, to occupation and to addressing at once.
+  const here = processesStandingIn(paths).map(({ pid, directory }) => [String(pid), directory]);
   if (here.length === 0) return [];
 
   const commands = new Map();

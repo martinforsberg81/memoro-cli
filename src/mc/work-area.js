@@ -260,19 +260,11 @@ export function addWorktree({ name, repo, branch, from = null, env = process.env
  * standing in answers immediately; there is nothing to keep in sync.
  */
 export function directoryInUse(path) {
+  // By prefix (standing.js): a shell one directory down is still standing
+  // here, and removing the worktree would still pull the ground from it.
   let pids = [];
   try {
-    // `-F pn` asks lsof for one field per line rather than a table. The table's
-    // COMMAND column is truncated and splits on spaces, so a process holding
-    // this directory was reported as being called `2.1.223` — a fragment of
-    // its own version string. A pid is unambiguous; the name comes from `ps`.
-    const out = execFileSync('lsof', ['-a', '-d', 'cwd', '-F', 'pn', '--', path], {
-      encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'],
-    });
-    pids = [...new Set(out.split('\n')
-      .filter((line) => line.startsWith('p'))
-      .map((line) => line.slice(1).trim())
-      .filter(Boolean))];
+    pids = [...new Set(processesStandingIn([path]).map((item) => String(item.pid)))];
   } catch { return null; }
   if (pids.length === 0) return null;
   const names = pids.map((pid) => {
