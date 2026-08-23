@@ -138,7 +138,13 @@ export async function pmRound({
   const delivered = !attempted || Boolean(outcome.knock?.ok);
   const items = delivered ? change.items : previous.items || {};
   if (delivered && outcome.knock?.file) remember(items, basename(outcome.knock.file), outcome.at);
-  attempt(outcome, 'state', () => writeState(root, { at: outcome.at, items, last_round: summary(outcome) }));
+  // The last knock, kept apart from the last round: "nothing to say" for
+  // six passes is not the same as "the last knock was refused", and the
+  // board could not tell them apart for a day (B5).
+  const lastKnock = outcome.knock
+    ? { at: outcome.at, woke: Boolean(outcome.knock.woke), delivered: Boolean(outcome.knock.ok), reason: outcome.knock.woke ? null : outcome.knock.reason || null }
+    : previous.last_knock || null;
+  attempt(outcome, 'state', () => writeState(root, { at: outcome.at, items, last_round: summary(outcome), last_knock: lastKnock }));
 
   if (delivered && outcome.knock?.ok) {
     for (const notice of outcome.notices) {
@@ -193,7 +199,7 @@ export function commitRoleHome(areaPath, now = new Date()) {
  * not, and one rule that answers for every file beats two that answer for
  * different ones.
  */
-export function readInbox(areaPath, area = 'pm') {
+export function readInbox(areaPath, area = 'pm', { own = isOwnMessage } = {}) {
   const directory = join(areaPath, 'inbox');
   let entries = [];
   try {
@@ -209,9 +215,28 @@ export function readInbox(areaPath, area = 'pm') {
   }
   const items = entries
     .filter((entry) => entry.isFile() && entry.name !== 'README.md' && !entry.name.startsWith('.'))
+    // The round's own knocks are not PM's work (B3, 2026-08-23: five files
+    // in ninety seconds whose whole content was the list of the other four).
+    .filter((entry) => !own(join(directory, entry.name)))
     .map((entry) => ({ name: entry.name, at: modified(join(directory, entry.name)) }))
     .sort((a, b) => (a.at === b.at ? a.name.localeCompare(b.name) : a.at.localeCompare(b.at)));
   return { items, reason: null };
+}
+
+/**
+ * Is this file one of the round's own knocks?
+ *
+ * Answered by the sender line the channel writes as the first thing in
+ * every message, not by the filename — a round recognising its own messages
+ * by how they are named would be a second copy of `work-send.js`'s naming
+ * rule. Reading two lines of frontmatter is not opening the item: the round
+ * still forms no opinion about what anything is about.
+ */
+export function isOwnMessage(path) {
+  try {
+    const head = readFileSync(path, 'utf8').slice(0, 200);
+    return head.startsWith('---\n') && head.includes(`\nfrom: ${SENDER.name}\n`);
+  } catch { return false; }
 }
 
 /**
@@ -268,11 +293,17 @@ export function knockText({
   if (items.length) {
     const plural = items.length === 1 ? 'item' : 'items';
     lines.push(`${items.length} unprocessed ${plural} in ${area}/inbox/, oldest ${minute(items[0].at)}`);
-    for (const item of items.slice(0, NAMED_LIMIT)) {
+    // What is new and what is reminded about, by name; the rest as a count.
+    // A knock that listed the whole inbox every time was, five times in
+    // ninety seconds, a list of the four knocks before it (B3).
+    const named = items.filter((item) => fresh.includes(item.name) || reminders.includes(item.name));
+    for (const item of named.slice(0, NAMED_LIMIT)) {
       lines.push(`  ${mark(item.name, fresh, reminders)}  ${item.name}`);
     }
     // A cap that says nothing is a cap that reads as "that was all of them".
-    if (items.length > NAMED_LIMIT) lines.push(`  ${'...'.padEnd(8)}  and ${items.length - NAMED_LIMIT} more, not named here`);
+    if (named.length > NAMED_LIMIT) lines.push(`  ${'...'.padEnd(8)}  and ${named.length - NAMED_LIMIT} more new, not named here`);
+    const older = items.length - named.length;
+    if (older > 0) lines.push(`  ${'waiting'.padEnd(8)}  ${older} older, already announced`);
   }
   if (notices.length) {
     if (lines.length) lines.push('');
