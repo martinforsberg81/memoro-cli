@@ -1,0 +1,24 @@
+  vad det kostar. Egen gren, egen PR, bara dokument, ingen kod. Det är olöst.
+
+  Vill du att jag tar det uppdraget (mäta motorinversionen och leverera
+  dokumentet), eller ville du något annat med sessions-id:t — t.ex. att jag
+  gräver i något specifikt ur den gamla sessionen?
+
+✻ Brewed for 1m 30s
+
+────────────────────────────────────────────────────────────────────────────────
+❯ Ta uppdraget — mät motorinversionen
+────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents
+
+────────────────────────────────────────────────────────────────────────────────
+  Teach auto mode about your environment?
+
+  Auto mode works better when it knows your environment. Takes about a minute.
+
+  ❯ 1. Yes
+    2. Not now
+    3. Don't show again
+
+  Enter to confirm · Esc to cancel
+

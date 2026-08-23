@@ -104,3 +104,43 @@ describe('the board on a menu', () => {
     assert.match(page, /⧗ waiting on a menu — needs an answer, not a knock: “Which order\?” — 1\. Concepts first {2}2\. Cards first/u);
   });
 });
+
+/**
+ * The live capture (PM, 2026-08-23 07:22): a confirmation menu with the
+ * footer `Enter to confirm · Esc to cancel`, drawn BELOW a prompt box still
+ * on screen, with an explanatory sentence between the question and the
+ * options. The first reader knew one footer and looked for the box first;
+ * it said "could not find its prompt".
+ */
+import { readFileSync } from 'node:fs';
+describe('the live capture', () => {
+  const lines = readFileSync(new URL('../fixtures/menu-capture-live.txt', import.meta.url), 'utf8').replace(/\s+$/u, '').split('\n');
+
+  it('is read as a menu, with the question and not the sentence under it', () => {
+    assert.deepEqual(readMenu(lines), {
+      question: 'Teach auto mode about your environment?',
+      options: ['Yes', 'Not now', "Don't show again"],
+    });
+  });
+
+  it('is a menu even though a prompt box is still drawn above it, and nothing is typed', () => {
+    const keys = [];
+    const run = (args) => {
+      if (args[0] === 'send-keys') keys.push(args);
+      if (args[0] === 'list-clients') return { status: 0, stdout: '' };
+      if (args[0] === 'capture-pane') return { status: 0, stdout: `${lines.join('\n')}\n\n` };
+      return { status: 0 };
+    };
+    const verdict = paneWillTakeText({ target: 'mc-alpha', run, probe: () => { throw new Error('a probe would type into the menu'); } });
+    assert.match(verdict.reason, /^waiting on a menu — it needs an answer, not a knock: "Teach auto mode about your environment\?"/u);
+    assert.deepEqual(keys, []);
+  });
+
+  it('the footer family: Enter plus a way out, in either order; a footer without options is not a menu', () => {
+    assert.ok(readMenu(['❯ 1. Yes', '  2. No', 'Enter to confirm · Esc to cancel']));
+    assert.ok(readMenu(['❯ 1. Yes', '  2. No', 'Esc to cancel · Enter to select']));
+    assert.ok(readMenu(['❯ 1. Yes', '  2. No', 'Press Enter to accept or cancel with q']));
+    assert.equal(readMenu(['❯ 1. Yes', '  2. No', 'Enter a value']), null, 'Enter alone is not a menu');
+    assert.equal(readMenu(['Enter to confirm · Esc to cancel']), null, 'no options, no menu');
+  });
+});
