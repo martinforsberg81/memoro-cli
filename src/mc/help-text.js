@@ -132,6 +132,14 @@ MAINTENANCE
   mc repo merge <repo> <pr> --check
                                     The same round, stopping at the verdict.
                                     A gate that passes is not a review
+  mc repo guard [repo]             Install the pre-push guard: a push to a
+                                    branch whose pull request is already merged
+                                    is refused with the number and date, and
+                                    the way forward (a new branch from main).
+                                    Not knowing never refuses. MC_PUSH_ANYWAY=1
+                                    lets a deliberate push through. mc installs
+                                    it in every repository it adds a worktree
+                                    to; --json says whether it is in place
   mc suite claim "<what for>"      Hold the right to run a full suite — one at
                                     a time on this machine. Refused if someone
                                     else holds it; no process is blocked. The
