@@ -109,6 +109,7 @@ export function renderLines(report, {
     const word = (state) => {
       if (!state) return c('unknown', 'grey');
       if (state.running && state.stale) return c(`alive but stale — no round in ${ago(now - (state.last_write_age_ms ?? 0), now)}`, 'red');
+      if (state.running && state.stale_code) return c('alive on OLD CODE — mc changed since it started; restarts itself, or stop && start', 'yellow');
       if (state.running) return c(`alive${state.last_write_age_ms !== null ? `, last round ${ago(now - state.last_write_age_ms, now)}` : ''}`, 'green');
       if (state.abandoned) return c('NOT RUNNING — stopped without telling anyone', 'red');
       return c('never started', 'yellow');

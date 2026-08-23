@@ -105,7 +105,9 @@ case "$1" in
       printf '%s' "\${current%?}" > "${prompt}"
       exit 0
     fi
-    if [ "$4" = "Enter" ]; then
+    # Enter and C-m are the same carriage return to this stub; the real
+    # thing was measured to honour one and not the other in some state.
+    if [ "$4" = "Enter" ] || [ "$4" = "C-m" ]; then
       mode=\`cat "${modePath}"\`
       case "$mode" in
         broken) exit 0 ;;

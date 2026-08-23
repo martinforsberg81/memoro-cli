@@ -204,8 +204,10 @@ describe('mc work send — the channel', () => {
       assert.equal(sent.status, 0, sent.stderr);
       assert.match(sent.stdout, /woke pm/u);
 
-      const keys = fx.tmux.calls().filter((line) => line === 'send-keys -t mc-pm Enter');
-      assert.equal(keys.length, 2, 'the swallowed Enter was not retried');
+      // The retry is the other spelling of the same key (measured 2026-08-23:
+      // `Enter` left a notice standing on two idle panes, `C-m` sent it).
+      const keys = fx.tmux.calls().filter((line) => /^send-keys -t mc-pm (Enter|C-m)$/u.test(line));
+      assert.deepEqual(keys, ['send-keys -t mc-pm Enter', 'send-keys -t mc-pm C-m'], 'the swallowed Enter was not retried');
       assert.equal(fx.tmux.submitted().length, 1, 'the notice arrived twice or not at all');
       assert.equal(fx.tmux.prompt(), '');
     } finally { fx.cleanup(); }
@@ -222,7 +224,7 @@ describe('mc work send — the channel', () => {
       assert.equal(fx.messages('pm').length, 1);
       assert.match(fx.read('pm'), /wake up/u);
       // It tried twice and then stopped rather than hammering the pane.
-      assert.equal(fx.tmux.calls().filter((line) => line.endsWith('Enter')).length, 2);
+      assert.equal(fx.tmux.calls().filter((line) => /(Enter|C-m)$/u.test(line)).length, 2);
       // And it left the recipient's prompt as it found it. A notice abandoned
       // in the input box is not litter — it goes in in front of whatever that
       // conversation types next, so a wake mc knew had failed would have

@@ -6,6 +6,34 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+- PM's wake holds: the watcher runs the code on disk, and a stranded notice
+  is finished rather than waited on. Measured 2026-08-23: `mc watch pm` had
+  been started thirteen minutes *before* the fix for the prompt it could not
+  find (#364) and ran the old code for a day — 188 knocks tried, none
+  landed, 154 *could not find its prompt*, and the board read *alive*. On
+  current code a second gap stood behind the first: a wake had typed its
+  notice into PM's busy pane and given up before Enter, and every wake after
+  it probed the box, found real text, and queued itself behind mc's own
+  sentence — 75 minutes, four tracks standing. Three changes, each
+  measured live: (1) both watchers carry the stamp of the source tree they
+  started from, look at it between passes, and restart themselves on the
+  new code when it moves (29 s from the edit to the new pid); `mc watch
+  <leg> status` and the `mc status` watch row say *OLD CODE* for a process
+  behind the tree, and which kind — one that restarts itself, or one started
+  before the check existed that needs `stop && start` once. (2) Text in a
+  box shaped like an mc notice — any sender, any wording — is mc's own knock
+  stopped halfway, not a person's draft: the wake presses Enter on it and
+  types nothing (Enter on the stranded notice → PM read its inbox within the
+  minute). (3) *Press up to edit queued messages* in the box of a busy pane
+  is the turn's receipt, reported `queued`, not *the notice left the prompt
+  without becoming a turn*. (4) A notice typed into a busy pane that never
+  drew it within the wait gets its Enter anyway rather than being left
+  standing — the box was probed empty before typing, so Enter submits the
+  notice or lands in an empty box — and the second submit try is `C-m`,
+  the other spelling of the same key, named in the result when it was the
+  one that worked.
+
 ### Added
 - `mc work <name>` refuses a workplace somebody is already sitting in
   (D-0154). The repo lease protects the merge queue and says nothing about
