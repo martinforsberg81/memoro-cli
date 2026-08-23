@@ -21,3 +21,11 @@ section: Added
   the next pull request in the batch unmergeable (measured on the first
   live batch: five verified together, one landed, four refused), so the
   next branch gets the just-made main merged in and pushed before its turn.
+  And "still green" after a landing is a **measurement, never an
+  assumption** (PM's ruling on the tracks' disagreement): the gate records
+  the candidate's prefix tree after each merge while building it, and every
+  landing requires main's tree to be byte-identical to its prefix — said
+  out loud when it is, and when it is not, the remaining pull requests are
+  re-measured in rounds of their own, because the world they were proved in
+  no longer exists. The carried baseline (A1) is saved only on proven
+  identity.

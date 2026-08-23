@@ -541,6 +541,9 @@ describe('a batch lands in order, or falls back one by one', () => {
     const git = (args, opts = {}) => {
       fx.calls.push({ tool: 'git', args, cwd: opts.cwd });
       if (args[0] === 'rev-parse' && args[1] === 'origin/main') return { status: 0, stdout: `${state.mainAt}\n` };
+      // The tree of main as landed: in this stub a commit IS its content,
+      // so the tree hash is the same word.
+      if (args[0] === 'rev-parse' && args[1] === 'origin/main^{tree}') return { status: 0, stdout: `${state.mainAt}\n` };
       if (args[0] === 'symbolic-ref') return { status: 0, stdout: 'origin/main\n' };
       return { status: 0, stdout: '' };
     };
@@ -623,6 +626,42 @@ describe('a batch lands in order, or falls back one by one', () => {
       assert.match(report.reason, /moved to strange\w* between merges, and not by this round — #402 and 1 more not merged; 1 of 3 landed/u);
       assert.deepEqual(fx.landed, [401]);
       assert.deepEqual(report.batch.merges.map((item) => item.number), [401]);
+    } finally { fx.cleanup(); }
+  });
+
+  it('every landing is checked against the measured build\'s prefix tree, and identity is said (PM\'s ruling)', async () => {
+    // "Verified together" and "landed one at a time" are two claims; the
+    // bridge is identity, measured, not assumed. The stub's rev-parse
+    // answers LANDED for the tree reads, so prefix trees of LANDED are the
+    // measured build reproduced exactly.
+    const verdict = { ...greenBatch(), candidate_trees: ['landed401', 'landed402', 'landed403'] };
+    const fx = batchFixture({ verdict });
+    try {
+      // rev-parse origin/main^{tree} → the generic branch of the stub,
+      // which answers what the last merge made: landedN.
+      const progress = [];
+      const report = await fx.run({ refresh: () => ({ ok: true, at: 'abc1234' }), onProgress: (line) => progress.push(line) });
+      assert.equal(report.ok, true, report.reason);
+      assert.equal(report.tree_identical, true);
+      assert.ok(progress.some((line) => /#401 landed byte-identical to the measured build/u.test(line)), progress.join('|'));
+    } finally { fx.cleanup(); }
+  });
+
+  it('a landing whose tree is not the measured build\'s re-measures the rest in rounds of their own', async () => {
+    const verdict = { ...greenBatch(), candidate_trees: ['landed401', 'expected-but-not-what-main-became', 'landed403'] };
+    // The single rounds that re-measure land green against fresh main.
+    const gateFor = async ({ prs, pr }, state) => (prs ? verdict : { ...green({ baseCommit: state.mainAt }), pr: { ...green().pr, number: pr } });
+    const fx = batchFixture({ verdict, gateFor });
+    const progress = [];
+    try {
+      const report = await fx.run({ refresh: () => ({ ok: true, at: 'abc1234' }), onProgress: (line) => progress.push(line) });
+      assert.equal(report.tree_identical, false, 'identity failed at #402 and stays failed');
+      assert.ok(progress.some((line) => /^WARNING: after #402, origin\/main's tree/u.test(line)), progress.join('|'));
+      assert.ok(progress.some((line) => /re-measuring the remaining 1 in rounds of their own/u.test(line)));
+      assert.equal(report.batch.fallback, true);
+      assert.deepEqual(report.batch.merges.map((item) => [item.number, item.merged]), [[401, true], [402, true], [403, true]], 'everything landed — the last through its own measured round');
+      assert.equal(report.batch.rounds.length, 1, 'one re-measured round, for the one after the mismatch');
+      assert.equal(report.ok, true, report.reason);
     } finally { fx.cleanup(); }
   });
 
