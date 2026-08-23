@@ -31,6 +31,7 @@ import { appendFileSync, existsSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 import { claimLease, readLease, releaseLease } from './repo-lease.js';
+import { freshenOpenBranches } from './repo-freshen.js';
 import { currentHolder } from './work-identity.js';
 import { mcHome } from './paths.js';
 import { runGate, verdictPhrase } from './repo-gate.js';
@@ -73,6 +74,7 @@ export async function runMergeRound({
   installs = sourceLinkedInstallations,
   suite = undefined,
   mergeLog = undefined,
+  freshen = freshenOpenBranches,
   onProgress = () => {},
   clock = () => Date.now(),
 } = {}) {
@@ -110,6 +112,7 @@ export async function runMergeRound({
     reason: null,
     gate: null,
     deploy: null,
+    freshened: null,
     log_line: null,
     log_path: null,
     started_at: new Date(startedAt).toISOString(),
@@ -215,6 +218,13 @@ export async function runMergeRound({
       say(`WARNING: ${report.merged_into} is not the default branch (${report.default_branch}) — this landed on a branch, not on ${report.default_branch}`);
     }
 
+    // The branches this merge just made dirty, brought up to date while the
+    // lease is still held (A6): the same work every open branch's owner
+    // would do twenty minutes later, done once, by the round that moved
+    // main. A failure here never un-merges anything and never fails the
+    // round — the report carries what happened to each branch.
+    report.freshened = attemptFreshen({ freshen, repoPath, base: verdict.pr.base, holder, root, env, git: askGit, gh: askGh, say });
+
     report.deploy = deployPull({ git: askGit, repoPath, env, say, installs });
     const written = writeMergeLine({ report, verdict, path: mergeLog ?? defaultMergeLog(repoPath, { root, env }), clock });
     report.log_path = written.path;
@@ -225,6 +235,17 @@ export async function runMergeRound({
   } finally {
     releaseLease({ repoPath, holder, root });
     say('lease released');
+  }
+}
+
+/** The freshen step, held to "never fails the round". */
+function attemptFreshen({ freshen, repoPath, base, holder, root, env, git, gh, say }) {
+  if (!freshen) return null;
+  try {
+    return freshen({ repoPath, base, holder, root, env, git, gh, say });
+  } catch (error) {
+    say(`freshen failed (${error?.message || String(error)}) — every open branch is exactly as it was`);
+    return { branches: [], failed: error?.message || String(error) };
   }
 }
 
