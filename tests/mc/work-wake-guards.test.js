@@ -164,6 +164,21 @@ describe('a prompt that is not empty is not mc\'s to type into', () => {
     assert.deepEqual(talk.keys().map((args) => args.slice(3)), [...PROBED, ['Enter']]);
   });
 
+  it('two notices pasted together, and a sender with spaces, are still mc\'s litter', () => {
+    // Captured live 2026-08-23 21:46 in PM's box: two wakes raced in, both
+    // looked, both saw empty, both typed — and the pair matched nothing, so
+    // every wake after it queued behind mc's own words twice over. The
+    // second half is signed `mc watch pm`, with spaces, which the old
+    // one-word sender shape never recognised at all.
+    const PASTED = 'mc: new in ~/mc/pm/inbox/ from msr-track-3 - read it nowmc: new in ~/mc/pm/inbox/ from mc watch pm - read it now';
+    const talk = conversation({
+      paint: ({ typed, captures }) => (captures <= 2 ? pane({ typed }) : pane({ sent: [PASTED] })),
+      typedAlready: PASTED,
+    });
+    assert.deepEqual(wake(talk.run), { ok: true, attempts: 1, stranded: true });
+    assert.deepEqual(talk.keys().map((args) => args.slice(3)), [...PROBED, ['Enter']]);
+  });
+
   it('a notice with somebody\'s words after it is their draft, not mc\'s litter', () => {
     const draft = `${NOTICE} and also check the build`;
     const talk = conversation({ paint: ({ typed }) => pane({ typed }), typedAlready: draft });

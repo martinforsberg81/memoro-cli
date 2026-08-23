@@ -59,8 +59,19 @@ import { toolProcesses } from './work-status.js';
 const DRAW_MS = 300;
 const DRAW_ATTEMPTS = 5;
 
-/** How long a submission gets to leave the prompt before it is checked. */
+/**
+ * How long a submission gets to leave the prompt — per look, and how many.
+ *
+ * One look at 400ms was the rule, and it was measured wrong on 2026-08-23:
+ * on PM's idle pane the notice was still drawn in the box 600ms after Enter
+ * and had become a turn by the next look. A wake that looks once reads
+ * "still in the box", presses again, reads it again, and clears with C-u a
+ * line that was on its way — reported as "it stayed in the prompt", which
+ * is what three panes said that evening. So a key gets several looks, and
+ * the next key is pressed only when the line has had its time.
+ */
 const SUBMIT_MS = 400;
+const SUBMIT_LOOKS = 6;
 
 /**
  * How the input box is recognised.
@@ -140,7 +151,15 @@ const BUSY_ATTEMPTS = 40;
  * same. The shape is matched loosely (any path, any sender, spaces as a wrap
  * left them) because the stranded one may be older than the current wording.
  */
-const NOTICE_SHAPE = /^mc: new in \S+ from \S+ - read it now$/u;
+// One notice, or several pasted together: two wakes raced into the same box
+// on 2026-08-23 (both looked, both saw empty, both typed) and the pair
+// matched nothing — so it stood, and every wake after it queued behind mc's
+// own words twice over. However many there are, they all say "read the
+// inbox", and one Enter delivers all of them. The sender is `.+?`, not
+// `\S+`: the round signs itself `mc watch pm`, with spaces, and a shape
+// that read senders as one word never recognised the watcher's own
+// stranded knocks (found on the same evening's live capture).
+const NOTICE_SHAPE = /^(?:mc: new in \S+ from .+? - read it now ?)+$/u;
 
 /**
  * What the TUI draws in an empty box while a turn it took is waiting its go.
@@ -562,20 +581,27 @@ export function wakeConversation({
     const key = KEYS[attempt];
     const pressed = tmux(['send-keys', '-t', target, key]);
     if (pressed?.status !== 0) return giveUp(`could not press ${key}`, seen);
-    wait(SUBMIT_MS);
     // A look that failed puts the warrant back to nothing. The box was mc's
     // notice a moment ago and an Enter has gone in since; whether it is still
     // there, gone, or somebody else's now is exactly what could not be read.
-    const pane = readPane(tmux, target);
-    if (pane === null) return giveUp('could not read the conversation back', null);
-    const box = readBox(pane);
-    if (box === null) return giveUp('lost sight of its prompt', null);
+    let pane = null;
+    let box = null;
+    let still = true;
+    for (let look = 0; look < SUBMIT_LOOKS && still; look += 1) {
+      wait(SUBMIT_MS);
+      pane = readPane(tmux, target);
+      if (pane === null) return giveUp('could not read the conversation back', null);
+      box = readBox(pane);
+      if (box === null) return giveUp('lost sight of its prompt', null);
+      still = holdsNotice(box.text, notice);
+      // Somebody has written after it: the line stopped being mc's.
+      if (still && !isNotice(box.text, notice)) return giveUp('somebody started typing', box.text);
+    }
 
-    // Still in the box: either nothing happened and Enter is worth pressing
-    // again, or somebody has written after it and the line stopped being mc's.
-    if (holdsNotice(box.text, notice)) {
+    // Still in the box after its time: nothing happened, and the other
+    // spelling of the key is worth pressing.
+    if (still) {
       seen = box.text;
-      if (!isNotice(box.text, notice)) return giveUp('somebody started typing', box.text);
       continue;
     }
 
