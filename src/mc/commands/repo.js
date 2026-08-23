@@ -25,13 +25,14 @@ import { claimLease, readLease, releaseLease } from '../repo-lease.js';
 import { currentHolder } from '../work-identity.js';
 import { runGate, verdictHeadline } from '../repo-gate.js';
 import { runMergeRound } from '../repo-merge.js';
+import { countRounds, readRounds, recordRound } from '../repo-round-log.js';
 import { livenessForLeases } from '../lease-liveness.js';
 import { readCombinedSnapshot } from '../repo-snapshot.js';
 import { matchRepo, repoStatus, repoView } from '../repo-status.js';
 import { startWatcher, stopWatcher, watcherState } from '../repo-watch.js';
 import { scanArgs } from './flags.js';
 
-const VERBS = ['status', 'watch', 'claim', 'release', 'who', 'merge'];
+const VERBS = ['status', 'watch', 'claim', 'release', 'who', 'merge', 'rounds'];
 const WATCH_VERBS = ['start', 'stop', 'status'];
 const LEASE_VERBS = ['claim', 'release', 'who'];
 
@@ -47,6 +48,7 @@ export async function run(argv, deps = {}) {
 
   if (opts.verb === 'watch') return watch(opts, { stdout, stderr });
   if (opts.verb === 'merge') return gate(opts, { stdout, stderr });
+  if (opts.verb === 'rounds') return rounds(opts, { stdout });
   if (opts.verb !== 'status') return lease(opts, { stdout, stderr, tell: deps.tell || null });
 
   const report = await repoView({ names: opts.names, offline: opts.offline });
@@ -220,6 +222,30 @@ async function lease(opts, { stdout, stderr, tell = null }) {
  * suite takes tens of minutes, and nothing here holds a terminal or asks a
  * question.
  */
+/**
+ * `mc repo rounds` — the count A7 exists for. Every round, by where it
+ * ended, and how many pull requests actually landed; `--json` is the raw
+ * lines for anything that wants to count differently.
+ */
+function rounds(opts, { stdout }) {
+  const { rounds: all, skipped } = readRounds();
+  if (opts.json) {
+    stdout.write(`${JSON.stringify({ rounds: all, skipped }, null, 2)}\n`);
+    return 0;
+  }
+  if (!all.length) {
+    stdout.write('mc: no rounds recorded yet — every mc repo merge and --check from now on leaves a line\n');
+    return 0;
+  }
+  const counted = countRounds(all);
+  stdout.write(`mc: ${counted.rounds} round${counted.rounds === 1 ? '' : 's'} recorded, ${counted.merged_prs} pull request${counted.merged_prs === 1 ? '' : 's'} landed\n`);
+  for (const [stop, count] of Object.entries(counted.by_stop).sort((a, b) => b[1] - a[1])) {
+    stdout.write(`mc:   ${String(stop === 'completed' ? 'reached its end' : `stopped at ${stop}`).padEnd(24)} ${count}\n`);
+  }
+  if (skipped) stdout.write(`mc: ${skipped} line${skipped === 1 ? '' : 's'} could not be read, and ${skipped === 1 ? 'is' : 'are'} counted nowhere\n`);
+  return 0;
+}
+
 async function gate(opts, { stdout, stderr }) {
   const repoPath = await resolveRepoPath(opts.repo);
   if (!repoPath) {
@@ -233,6 +259,9 @@ async function gate(opts, { stdout, stderr }) {
   const holder = currentHolder();
   const round = { repoPath, pr: opts.pr, prs: opts.prs, holder, onProgress: (message) => stderr.write(`mc: ${message}\n`) };
   const report = opts.check ? await runGate(round) : await runMergeRound(round);
+  // Every round leaves a line — merged, stopped, refused — so "has the gate
+  // ever caught anything?" is a count, not a reading of survivors (A7).
+  recordRound(report, { mode: opts.check ? 'check' : 'merge' });
 
   if (opts.json) {
     stdout.write(`${JSON.stringify(report, null, 2)}\n`);

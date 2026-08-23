@@ -7,6 +7,19 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- `mc repo rounds`, and a line for every gate round (A7). An independent
+  review measured *92 machine-run rounds, 0 with a red delta* and then tore
+  its own number down: the merge log is written after a successful merge,
+  so a round that stopped on red writes nothing, and "0 of 92" can never
+  contain the cases that would disprove it. Every `mc repo merge` and
+  `--check` now appends one JSON line to `gate-rounds.jsonl` under mc's
+  home — merged, stopped, refused, cut short — with `stopped_at` in the
+  round's own vocabulary (lease · suite-lease · merge · red · pr-tests ·
+  ratchet · extra-gate · drift), the reason, the duration and the step
+  timings. `mc repo rounds` counts them by outcome; `--json` is the raw
+  lines. A line that cannot be written never fails the round it describes.
+
+### Added
 - `mc repo merge <repo> <pr> <pr>...` — several pull requests in one round
   (A3). Measured 2026-08-23: three PRs in a row took three rounds of
   4m20s–5m39s and held the suite lease for ~16 minutes while two tracks
