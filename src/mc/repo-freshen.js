@@ -157,6 +157,52 @@ export function freshenOpenBranches({
 }
 
 /**
+ * One branch, freshened for its landing inside a batch (A3's found limit).
+ *
+ * The batch verifies together and lands sequentially — and every
+ * squash-merge makes the next pull request in the batch unmergeable to the
+ * forge, because the squash is a commit none of the other branches has.
+ * Measured on the first live batch (2026-08-23): five verified green on
+ * one candidate, one landed, the second refused with "Pull Request has
+ * merge conflicts", four left for hands. So between landings the just-made
+ * main is merged into the next branch and pushed — the same mechanic as
+ * the after-round freshen, minus the affected run: the batch candidate
+ * already proved the combination, and re-proving per landing would put
+ * back the serial cost the batch removed. A conflict aborts and touches
+ * nothing, exactly as always; the caller stops the batch there.
+ */
+export function freshenBranchForLanding({
+  repoPath, branch, base, root = mcHome(), env = process.env, git = null, say = () => {},
+} = {}) {
+  const run = (tool) => (args, options = {}) => spawnSync(tool, args, {
+    cwd: options.cwd, env, encoding: 'utf8',
+  });
+  const askGit = git || run('git');
+  const workspace = join(gateRoot(root), `${repoFileSlug(repoPath)}-freshen`);
+  askGit(['fetch', 'origin', '--prune'], { cwd: repoPath });
+  rmSync(workspace, { recursive: true, force: true });
+  askGit(['worktree', 'prune'], { cwd: repoPath });
+  const added = askGit(['worktree', 'add', '--detach', workspace, `origin/${branch}`], { cwd: repoPath });
+  if (added.status !== 0) return { ok: false, reason: trim(added.stderr) || `could not check out origin/${branch}` };
+  try {
+    const merged = askGit(['merge', '--no-edit', `origin/${base}`], { cwd: workspace });
+    if (merged.status !== 0) {
+      const conflicted = trim(askGit(['diff', '--name-only', '--diff-filter=U'], { cwd: workspace }).stdout).split('\n').filter(Boolean);
+      askGit(['merge', '--abort'], { cwd: workspace });
+      return { ok: false, reason: `${branch} conflicts with ${base} in ${conflicted.slice(0, 5).join(', ') || 'unknown files'} — left exactly as it was` };
+    }
+    const pushed = askGit(['push', 'origin', `HEAD:refs/heads/${branch}`], { cwd: workspace });
+    if (pushed.status !== 0) return { ok: false, reason: trim(pushed.stderr) || 'push refused' };
+    const at = trim(askGit(['rev-parse', 'HEAD'], { cwd: workspace }).stdout).slice(0, 7);
+    say(`freshened ${branch} for its landing: ${base} merged in at ${at}`);
+    return { ok: true, at };
+  } finally {
+    rmSync(workspace, { recursive: true, force: true });
+    askGit(['worktree', 'prune'], { cwd: repoPath });
+  }
+}
+
+/**
  * Which branches have a session standing in them right now: every worktree
  * of the repository, its branch, and whether a tool process stands in it.
  */

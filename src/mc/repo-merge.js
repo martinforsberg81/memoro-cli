@@ -31,7 +31,7 @@ import { appendFileSync, existsSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 import { claimLease, readLease, releaseLease } from './repo-lease.js';
-import { freshenOpenBranches } from './repo-freshen.js';
+import { freshenBranchForLanding, freshenOpenBranches } from './repo-freshen.js';
 import { lockfileHashAt, saveBaseline } from './repo-baseline-cache.js';
 import { currentHolder } from './work-identity.js';
 import { mcHome } from './paths.js';
@@ -81,6 +81,7 @@ export async function runMergeRound({
   suite = undefined,
   mergeLog = undefined,
   freshen = freshenOpenBranches,
+  refresh = null,
   onProgress = () => {},
   clock = () => Date.now(),
   // A batch's fallback rounds run inside the batch's lease; they neither
@@ -232,6 +233,20 @@ export async function runMergeRound({
         const at = trim(askGit(['rev-parse', base], { cwd: repoPath }).stdout);
         if (at !== expected) {
           return finish('drift', `${base} moved to ${short(at)} between merges, and not by this round — #${number}${index + 1 < numbers.length ? ` and ${numbers.length - index - 1} more` : ''} not merged; ${index} of ${numbers.length} landed`);
+        }
+        // The batch verifies together and lands sequentially, and every
+        // squash makes the next branch unmergeable to the forge (measured
+        // on the first live batch: five green on one candidate, one
+        // landed, four refused). The just-made main goes into the next
+        // branch before its turn — a conflict here stops the batch, and
+        // what has landed stays landed and said.
+        const head = (verdict.prs || []).find((item) => item.number === number)?.head;
+        if (head) {
+          const ready = (refresh || freshenBranchForLanding)({ repoPath, branch: head, base: verdict.pr.base, root, env, git: askGit, say });
+          if (!ready.ok) {
+            if (batch) report.batch.merges.push({ number, merged: false, merge_commit: null, error: `could not be freshened for landing: ${ready.reason}` });
+            return finish('merge', `#${number} could not be freshened for landing (${ready.reason}) — ${index} of ${numbers.length} landed before it`);
+          }
         }
       }
       const merged = askGh(['pr', 'merge', String(number), '--squash'], { cwd: repoPath });

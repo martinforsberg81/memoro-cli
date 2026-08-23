@@ -588,6 +588,32 @@ describe('a batch lands in order, or falls back one by one', () => {
     } finally { fx.cleanup(); }
   });
 
+  it('between landings, the next branch gets the just-made main merged in — and a refusal stops the batch honestly', async () => {
+    // Measured on the first live batch: five verified green on one
+    // candidate, one landed, the second refused by the forge — every
+    // squash makes the next branch unmergeable until it carries the new
+    // main. The freshen runs between landings; the batch already proved
+    // the combination, so there is no affected here.
+    const freshened = [];
+    const fx = batchFixture();
+    try {
+      const report = await fx.run({ refresh: ({ branch, base }) => { freshened.push([branch, base]); return { ok: true, at: 'abc1234' }; } });
+      assert.equal(report.ok, true, report.reason);
+      assert.deepEqual(freshened, [['h402', 'main'], ['h403', 'main']], 'each later branch, before its own landing');
+      assert.deepEqual(fx.landed, [401, 402, 403]);
+    } finally { fx.cleanup(); }
+
+    const fx2 = batchFixture();
+    try {
+      const report = await fx2.run({ refresh: ({ branch }) => (branch === 'h403' ? { ok: false, reason: 'h403 conflicts with main in artifacts/x.json — left exactly as it was' } : { ok: true, at: 'abc1234' }) });
+      assert.equal(report.ok, false);
+      assert.equal(report.stopped_at, 'merge');
+      assert.match(report.reason, /#403 could not be freshened for landing \(h403 conflicts with main in artifacts\/x\.json — left exactly as it was\) — 2 of 3 landed before it/u);
+      assert.deepEqual(fx2.landed, [401, 402], 'what landed stays landed and said');
+      assert.deepEqual(report.batch.merges.map((item) => [item.number, item.merged]), [[401, true], [402, true], [403, false]]);
+    } finally { fx2.cleanup(); }
+  });
+
   it('main moved between two merges by somebody else: the rest is not merged, and it says how many did', async () => {
     const fx = batchFixture({ strangerAfter: 401 });
     try {
