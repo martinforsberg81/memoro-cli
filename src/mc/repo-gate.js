@@ -58,6 +58,7 @@ import { RATCHET_FILE, compareRatchet, readRatchet } from './red-ratchet.js';
 import { currentHolder } from './work-identity.js';
 import { mcHome } from './paths.js';
 import { repoFileSlug } from './repo-snapshot.js';
+import { loadBaseline, lockfileHashAt } from './repo-baseline-cache.js';
 import { dependencyTree } from './dependency-tree.js';
 import { declarationFor } from './repo-gate-table.js';
 
@@ -285,12 +286,39 @@ export async function runGate({
     clearWorkspace({ git: askGit, repoPath, workspace });
     mkdirSync(workspace, { recursive: true, mode: 0o700 });
 
+    const baseRef = `origin/${facts.pr.base}`;
+
+    // The baseline, carried forward instead of rerun (A1). After a green
+    // merge, main is the tree the candidate was just measured on; measured
+    // across 61 memoro rounds, 52 baselines were exactly the previous
+    // round's candidate result, and across 92 the baseline never once
+    // produced a red delta. The saved result is used only when every key
+    // matches — the commit, the lockfile at that commit, the suite command
+    // — and the chain breaks on the smallest deviation, with the run as it
+    // always was. The red comparison keeps its form: it becomes free, not
+    // absent.
+    const commandLine = suiteCommand({ repoPath });
+    if (!commandLine.ok) return finish('suite', commandLine.reason);
+    report.command = commandLine.command;
+    const baseCommit = trim(askGit(['rev-parse', baseRef], { cwd: repoPath }).stdout);
+    const carried = baseCommit ? loadBaseline({
+      repoPath,
+      commit: baseCommit,
+      lockfileHash: lockfileHashAt({ git: askGit, repoPath, commit: baseCommit }),
+      command: report.command,
+      root,
+    }) : null;
+    if (carried) {
+      say(`baseline carried from the last green round: ${carried.red.length} red at ${baseCommit.slice(0, 7)}, measured ${carried.measured_at} — not rerun`);
+    }
+
     // Detached on purpose, both of them. The round must be able to merge the
     // base into the candidate without that ever becoming a commit on somebody's
     // branch: what is measured is a state, not a change to the repository.
-    const baseRef = `origin/${facts.pr.base}`;
-    const added = askGit(['worktree', 'add', '--detach', baseDir, baseRef], { cwd: repoPath });
-    if (added.status !== 0) return finish('worktree', trim(added.stderr) || `could not check out ${baseRef}`);
+    if (!carried) {
+      const added = askGit(['worktree', 'add', '--detach', baseDir, baseRef], { cwd: repoPath });
+      if (added.status !== 0) return finish('worktree', trim(added.stderr) || `could not check out ${baseRef}`);
+    }
 
     if (!batch) {
       const candidate = askGit(['worktree', 'add', '--detach', headDir, facts.pr.head_sha], { cwd: repoPath });
@@ -325,16 +353,13 @@ export async function runGate({
       }
     }
 
-    const commandLine = suiteCommand({ repoPath });
-    if (!commandLine.ok) return finish('suite', commandLine.reason);
-    report.command = commandLine.command;
-
     // Whatever this repository needs before its suite can be believed, run in
     // both worktrees. A prepare that fails stops the round: a suite run on a
     // tree that was not prepared is exactly the incomplete run the declaration
     // exists to prevent.
+    const sides = carried ? [['candidate', headDir]] : [['baseline', baseDir], ['candidate', headDir]];
     if (declared.declaration.prepare) {
-      for (const [side, dir] of [['baseline', baseDir], ['candidate', headDir]]) {
+      for (const [side, dir] of sides) {
         say(`preparing the ${side}: ${declared.declaration.prepare}`);
         const ready = await timed(`prepare ${side}`, async () => shell(declared.declaration.prepare, { cwd: dir, env }));
         if (ready.status !== 0) {
@@ -350,7 +375,7 @@ export async function runGate({
     // missing one stops the round — unless the declaration vouches that this
     // suite runs without one (`prepare: null`, with the evidence in
     // `prepare_why`), in which case the round says so rather than assuming.
-    for (const [side, dir] of [['baseline', baseDir], ['candidate', headDir]]) {
+    for (const [side, dir] of sides) {
       const tree = dependencyTree(dir);
       if (!tree.missing) continue;
       if (declared.declaration.prepare === null) {
@@ -365,22 +390,32 @@ export async function runGate({
     // that fail under load are the ones a gate can least afford to guess about.
     // The baseline goes first so a repository that cannot run its own suite is
     // found before the candidate's run is paid for.
-    say('running the suite on the baseline — this takes a while');
-    const before = await timed('suite baseline', () => measure({ suite: runSuite, git: askGit, cwd: baseDir, say, side: 'baseline' }));
-    if (!before.ok) return finish('suite', `the baseline run ${before.reason}`);
-    report.baseline = before.result;
+    if (carried) {
+      report.baseline = {
+        commit: carried.commit,
+        red: [...carried.red],
+        totals: carried.totals,
+        carried: true,
+        measured_at: carried.measured_at,
+      };
+    } else {
+      say('running the suite on the baseline — this takes a while');
+      const before = await timed('suite baseline', () => measure({ suite: runSuite, git: askGit, cwd: baseDir, say, side: 'baseline' }));
+      if (!before.ok) return finish('suite', `the baseline run ${before.reason}`);
+      report.baseline = before.result;
+    }
 
     // The number the word "green" used to sit on top of. Read off the
     // baseline, because the baseline *is* the base branch as fetched — this is
     // a statement about main, not about the pull request.
-    report.standing_red = before.result.red.length;
-    say(`baseline: ${before.result.red.length} red`);
+    report.standing_red = report.baseline.red.length;
+    say(`baseline: ${report.baseline.red.length} red${report.baseline.carried ? ' (carried)' : ''}`);
     say('running the suite on the candidate');
     const after = await timed('suite candidate', () => measure({ suite: runSuite, git: askGit, cwd: headDir, say, side: 'candidate' }));
     if (!after.ok) return finish('suite', `the candidate run ${after.reason}`);
     report.candidate = after.result;
 
-    const { broke, fixed } = compareRed(before.result.red, after.result.red);
+    const { broke, fixed } = compareRed(report.baseline.red, after.result.red);
     report.broke = broke;
     report.fixed = fixed;
     say(`candidate: ${after.result.red.length} red, ${broke.length} of them new`);
@@ -402,6 +437,7 @@ export async function runGate({
       accepted: ratchet.names.length,
       risen: [],
       fallen: [],
+      baseline_risen: [],
       reason: ratchet.reason,
     };
     if (!ratchet.ok) return finish('ratchet', ratchet.reason);
@@ -413,6 +449,20 @@ export async function runGate({
       if (moved.risen.length) {
         return finish('ratchet', `${moved.risen.length} red name${moved.risen.length === 1 ? '' : 's'} `
           + `${moved.risen.length === 1 ? 'is' : 'are'} not in the standing red set recorded in ${RATCHET_FILE}`);
+      }
+      // The BASELINE against the floor too — the check nothing ran the day
+      // 57 red passed through a round whose floor said 55 (measured
+      // 2026-08-23: #385's candidate measured a tree at 55, #386's baseline
+      // measured the same content at 57 minutes later; the 57 was compared
+      // against nothing and written into a log line). A base above its own
+      // floor is the base's instability or regression, never this PR's
+      // fault, so it is flagged as loudly as a stop without being one —
+      // and it is the replacement for the accident that found the last
+      // one: a carried baseline (A1) would never have measured the 57.
+      const unstable = compareRatchet(ratchet.names, report.baseline.red);
+      report.ratchet.baseline_risen = unstable.risen;
+      if (unstable.risen.length) {
+        say(`BASELINE UNSTABLE — ${unstable.risen.length} red name${unstable.risen.length === 1 ? '' : 's'} on the baseline ${unstable.risen.length === 1 ? 'is' : 'are'} not in ${RATCHET_FILE}: ${unstable.risen.slice(0, 5).join(', ')}${unstable.risen.length > 5 ? ', …' : ''} — the base itself is flaky or regressed; not this change's doing`);
       }
     }
     // The pull request's own tests (D-0157). The suite answers "did anything

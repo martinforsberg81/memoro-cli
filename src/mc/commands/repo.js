@@ -438,6 +438,12 @@ export function gateLines(report, { checkOnly = false } = {}) {
   }
 
   if (report.fixed.length) lines.push(`mc: ${report.fixed.length} that were red on the baseline are green here`);
+  if (report.ratchet?.baseline_risen?.length) {
+    const unstable = report.ratchet.baseline_risen;
+    lines.push(`mc: BASELINE UNSTABLE — ${unstable.length} red name${unstable.length === 1 ? '' : 's'} on the baseline ${unstable.length === 1 ? 'is' : 'are'} not in the recorded floor:`);
+    for (const name of unstable.slice(0, 10)) lines.push(`      ${name}`);
+    lines.push('mc: the base itself is flaky or regressed — not this change\'s doing, and worth a look before it hides a real one');
+  }
   // Each pull request's own tests, by number — in a batch especially, so the
   // batch never hides which pull request carried which test (A3).
   for (const item of report.prs || (report.pr_tests ? [{ number: report.pr.number, pr_tests: report.pr_tests }] : [])) {
