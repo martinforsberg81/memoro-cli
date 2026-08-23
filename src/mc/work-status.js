@@ -21,11 +21,13 @@
  *   said      the last thing the assistant actually said, which is what tells
  *             a person whether they still care about this one
  */
-import { execFile, execFileSync } from 'node:child_process';
+import { execFile, execFileSync, spawnSync } from 'node:child_process';
 import { promisify } from 'node:util';
 
 import { lastModel, listConversations, readTailEntries } from './conversations.js';
+import { readMenu } from './menu-read.js';
 import { mcHome, workRoot } from './paths.js';
+import { backgroundTarget } from './work-open.js';
 import { readSuiteLease } from './suite-lease.js';
 import { pendingWakeFor } from './wake-queue.js';
 import { dependencyTree } from './dependency-tree.js';
@@ -342,7 +344,20 @@ export function signature(report) {
     .join('|');
 }
 
-export async function workStatus({ env = process.env, names = null, git: askGit = true } = {}) {
+/**
+ * Is the area's running pane in a menu? One tmux capture, read by the same
+ * rule the wake guard uses, so the board and the guard cannot disagree.
+ */
+export function menuFor(name, env = process.env) {
+  const target = backgroundTarget(name, { env });
+  if (!target) return null;
+  const captured = spawnSync('tmux', ['capture-pane', '-t', target, '-p'], { encoding: 'utf8' });
+  if (captured.status !== 0) return null;
+  const menu = readMenu(String(captured.stdout || '').replace(/\s+$/u, '').split('\n'));
+  return menu ? { ...menu, target } : null;
+}
+
+export async function workStatus({ env = process.env, names = null, git: askGit = true, menu = null } = {}) {
   // The area's own listing is asked without conversations and without git:
   // both are gathered below for every area at once.
   const areas = (names?.length
@@ -405,6 +420,11 @@ export async function workStatus({ env = process.env, names = null, git: askGit 
         // unreachable by wake since then, and the page says so rather than
         // leaving the state in one sender's scrollback.
         pending_wake: pendingWakeFor(area.name, { root: env.MC_HOME || mcHome() }),
+        // A pane sitting in a menu is a session blocked on a person, and it
+        // can sit there all night (2026-08-23). One capture per running area;
+        // the question, when the drawing carries one, so it can be answered
+        // without going to look.
+        menu: running.length > 0 ? (menu || menuFor)(area.name, env) : null,
         // What a person scanning the page is looking for: is anything here
         // stopped and waiting for them?
         waiting: conversations.some((item) => item.state === 'waiting'),

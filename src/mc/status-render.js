@@ -123,6 +123,14 @@ export function renderLines(report, {
     // wake is queued, and until the prompt clears this is the only place the
     // state is visible. "Since" is the number — twenty minutes of it once
     // passed unnoticed with an answer sitting in the inbox.
+    // A session in a menu is blocked on a person — usually the PM — and can
+    // sit there all night; no wake reaches it. The question, when the drawing
+    // carries one, so the answer can be given without going to look.
+    if (area.menu) {
+      const ask = area.menu.question ? `: “${area.menu.question}”` : '';
+      const options = area.menu.options?.length ? ` — ${area.menu.options.map((option, index) => `${index + 1}. ${option}`).join('  ')}` : '';
+      lines.push(`      ${c(clip(`⧗ waiting on a menu — needs an answer, not a knock${ask}${options}`, wide - 8), 'red')}`);
+    }
     if (area.pending_wake) {
       const since = clock(area.pending_wake.since);
       lines.push(`      ${c(`✉ draft in prompt — unreachable by wake since ${since} (wake queued; it lands when the prompt clears)`, 'red')}`);

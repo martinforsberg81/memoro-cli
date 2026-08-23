@@ -91,7 +91,7 @@ describe('the board, on roles and on filing', () => {
       // same meanings, plus the ones added since (role, open_tasks).
       assert.deepEqual(
         Object.keys(areas.plain).sort(),
-        ['conversations', 'name', 'open_tasks', 'path', 'pending_wake', 'role', 'running', 'waiting', 'working', 'worktrees'],
+        ['conversations', 'menu', 'name', 'open_tasks', 'path', 'pending_wake', 'role', 'running', 'waiting', 'working', 'worktrees'],
       );
       assert.equal(areas.plain.name, 'plain');
       assert.equal(areas.plain.path, join(fx.workRoot, 'plain'));
