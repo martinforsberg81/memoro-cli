@@ -31,6 +31,7 @@ import { appendFileSync, existsSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 import { claimLease, readLease, releaseLease } from './repo-lease.js';
+import { lockfileHashAt, saveBaseline } from './repo-baseline-cache.js';
 import { currentHolder } from './work-identity.js';
 import { mcHome } from './paths.js';
 import { runGate, verdictPhrase } from './repo-gate.js';
@@ -280,6 +281,21 @@ export async function runMergeRound({
       say(`WARNING: ${report.merged_into} is not the default branch (${report.default_branch}) — this landed on a branch, not on ${report.default_branch}`);
     }
 
+    // Main is now the tree the candidate was measured on: save that result
+    // as the next round's baseline (A1). Keyed on the merge commit, the
+    // lockfile at it, and the suite command; the next round reuses it only
+    // when all three match. Saved only after a fully landed round — a
+    // partial batch leaves the old entry, which then simply never matches.
+    attempt(() => saveBaseline({
+      repoPath,
+      commit: report.merge_commit,
+      lockfileHash: lockfileHashAt({ git: askGit, repoPath, commit: report.merge_commit }),
+      command: verdict.command,
+      red: verdict.candidate.red,
+      totals: verdict.candidate.totals,
+      root,
+    }), (why) => say(`could not save the candidate result as the next baseline (${why}) — the next round runs it as before`));
+
     report.deploy = deployPull({ git: askGit, repoPath, env, say, installs });
     const written = writeMergeLine({ report, verdict, path: mergeLog ?? defaultMergeLog(repoPath, { root, env }), clock });
     report.log_path = written.path;
@@ -316,6 +332,10 @@ const FALLBACK_STOPS = Object.freeze(['merge', 'red', 'pr-tests', 'ratchet', 'ex
  * change has landed, and what is left is a machine one commit behind, which the
  * report says plainly so somebody can pull it by hand.
  */
+function attempt(fn, complain) {
+  try { return fn(); } catch (error) { complain(error?.message || String(error)); return null; }
+}
+
 function deployPull({ git, repoPath, env, say, installs }) {
   const install = installs(env).find((item) => item.root === repoPath);
   if (!install) return { attempted: false, ok: null, reason: 'nothing on this machine runs from this checkout' };

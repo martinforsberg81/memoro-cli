@@ -6,6 +6,24 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+- The gate carries the candidate's result forward as the next baseline
+  (A1, approved by Martin 2026-08-23: "Verkställ 1+2"). After a green
+  merge, main is the tree the candidate was just measured on — 52 of 61
+  memoro baselines were exactly the previous round's candidate result, and
+  0 of 92 rounds ever saw a red delta on the baseline. The result is saved
+  keyed on `(merge-commit SHA, lockfile hash at that commit, suite
+  command)` and reused only on an exact three-key match, with a line
+  saying so and where the number came from; the chain breaks on the
+  smallest deviation and the baseline runs as before. The red comparison
+  keeps its form — fed from the carried result, free instead of absent.
+  And the check the fresh baseline used to provide by accident is replaced
+  by design: the baseline's red set is compared against the recorded floor
+  too (`BASELINE UNSTABLE — N red names on the baseline are not in
+  .mc/red-ratchet.json`), loudly but never as a stop — measured 2026-08-23,
+  one tree read 55 by #385's candidate and 57 by #386's baseline minutes
+  later, and the 57 was compared against nothing.
+
 ### Added
 - `mc repo merge <repo> <pr> <pr>...` — several pull requests in one round
   (A3). Measured 2026-08-23: three PRs in a row took three rounds of
