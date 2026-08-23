@@ -32,7 +32,12 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   standing — the box was probed empty before typing, so Enter submits the
   notice or lands in an empty box — and the second submit try is `C-m`,
   the other spelling of the same key, named in the result when it was the
-  one that worked.
+  one that worked. (5) A submitted line gets several looks (up to 2.4 s)
+  before the next key: measured on PM's idle pane, the notice was still
+  drawn 600 ms after Enter and a turn by the next look, so one look at
+  400 ms read "still there", pressed again, and cleared a line that was on
+  its way — the *it stayed in the prompt* three panes reported that
+  evening.
 
 ### Added
 - `mc work <name>` refuses a workplace somebody is already sitting in
