@@ -142,16 +142,35 @@ describe('a prompt that is not empty is not mc\'s to type into', () => {
     assert.equal(talk.prompt(), draft, 'the draft was touched');
   });
 
-  it('refuses on a notice an earlier wake left behind — not pastes onto it', () => {
+  it('a notice an earlier wake left behind is submitted, never pasted onto', () => {
     // Observation (1), pinned: two notices in one box submitted as a single
-    // sentence. It cannot happen if the second one is never typed.
-    const talk = conversation({ paint: ({ typed }) => pane({ typed }), typedAlready: NOTICE });
+    // sentence. It cannot happen if the second one is never typed — and it
+    // is not. What changed (measured 2026-08-23, PM's pane, 75 minutes): a
+    // stranded notice is mc's own knock stopped before Enter, and refusing
+    // on it queued every later wake behind mc's own litter, for good. So
+    // the stranded one is finished: Enter, and the turn it becomes is the
+    // wake.
+    const STRANDED = 'mc: new in inbox/ from pm - read it now';
+    const talk = conversation({
+      // Enter is the third capture: the box has gone empty and the turn
+      // stands above it.
+      paint: ({ typed, captures }) => (captures <= 2 ? pane({ typed }) : pane({ sent: [STRANDED] })),
+      typedAlready: STRANDED,
+    });
     const result = wake(talk.run);
 
-    assert.equal(result.guard, true);
+    assert.deepEqual(result, { ok: true, attempts: 1, stranded: true });
+    // Probed (it is real text), then Enter — and nothing typed in between.
+    assert.deepEqual(talk.keys().map((args) => args.slice(3)), [...PROBED, ['Enter']]);
+  });
+
+  it('a notice with somebody\'s words after it is their draft, not mc\'s litter', () => {
+    const draft = `${NOTICE} and also check the build`;
+    const talk = conversation({ paint: ({ typed }) => pane({ typed }), typedAlready: draft });
+    const result = wake(talk.run);
+
     assert.equal(result.reason, 'there is already something in its prompt');
-    assert.deepEqual(talk.keys().map((args) => args.slice(3)), PROBED);
-    assert.equal(talk.prompt(), NOTICE, 'the old notice was disturbed');
+    assert.equal(talk.prompt(), draft, 'the draft was touched');
   });
 
   it('a pane with no prompt to read counts as occupied, not as clear', () => {
@@ -196,6 +215,23 @@ describe('C-u is for mc\'s own text and nothing else', () => {
     assert.equal(result.left, true, 'it should say the notice is still there');
     assert.deepEqual(talk.keys().filter((args) => args[3] === 'C-u'), []);
     assert.equal(talk.prompt(), NOTICE);
+  });
+
+  it('a notice Enter left standing is sent with C-m, and the result says so', () => {
+    // Measured by PM 2026-08-23 on two idle panes: `send-keys Enter` left
+    // the notice in the box; `send-keys C-m` started the session at once.
+    // The second try is the other spelling, and the wake that needed it
+    // says which key it was — a count of those is how the drift shows.
+    const keys = [];
+    const talk = conversation({
+      paint: ({ typed, captures }) => (keys.includes('C-m') && captures > 3 ? pane({ sent: [NOTICE] }) : pane({ typed })),
+    });
+    const run = (args) => {
+      if (args[0] === 'send-keys' && (args[3] === 'Enter' || args[3] === 'C-m')) keys.push(args[3]);
+      return talk.run(args);
+    };
+    assert.deepEqual(wake(run), { ok: true, attempts: 2, key: 'C-m' });
+    assert.deepEqual(keys, ['Enter', 'C-m']);
   });
 
   it('clears when the last thing it read was its own notice, alone', () => {
@@ -446,6 +482,31 @@ describe('a wake into a busy pane is not a failed wake', () => {
     assert.deepEqual(talk.keys().filter((args) => args[3] === 'C-u'), []);
   });
 
+  it('the placeholder on a busy pane is the turn\'s receipt', () => {
+    // Measured 2026-08-23 on PM's pane, seven minutes into an answer: Enter
+    // put the placeholder in the box at once and the turn itself appeared
+    // above only when the answer ended. A wake that gave up here left the
+    // sender believing nothing landed, when the inbox was read within the
+    // minute.
+    const receipt = {
+      status: 0,
+      stdout: [
+        '  a conversation',
+        '· Schlepping… (2m 28s · ↓ 5.4k tokens)',
+        '────────────────────────────────────────',
+        '❯ Press up to edit queued messages',
+        '────────────────────────────────────────',
+        '  ⏵⏵ auto mode on · esc to interrupt · ← for agents',
+        '',
+      ].join('\n'),
+    };
+    const talk = conversation({
+      paint: ({ typed, captures }) => (captures <= 2 ? pane({ typed, busy: true }) : receipt),
+    });
+    assert.deepEqual(wake(talk.run), { ok: true, attempts: 1, queued: true });
+    assert.equal(talk.keys().filter((args) => args[3] === 'Enter').length, 1);
+  });
+
   it('the placeholder alone is not enough — the turn has to be visible', () => {
     // Same box, but the notice is nowhere above it. Then the notice left the
     // prompt without becoming anything, which is not a wake and is not claimed
@@ -556,7 +617,7 @@ describe('a wake into a busy pane is not a failed wake', () => {
     const talk = conversation({ paint: ({ typed }) => pane({ typed }) });
     const result = wake(talk.run);
     assert.equal(result.reason, 'it stayed in the prompt');
-    assert.equal(talk.keys().filter((args) => args[3] === 'Enter').length, 2);
+    assert.deepEqual(talk.keys().filter((args) => ['Enter', 'C-m'].includes(args[3])).map((args) => args[3]), ['Enter', 'C-m']);
     assert.equal(talk.prompt(), '');
   });
 });

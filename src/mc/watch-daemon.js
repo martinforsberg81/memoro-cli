@@ -12,9 +12,9 @@
  */
 import { execFileSync, spawn } from 'node:child_process';
 import {
-  closeSync, mkdirSync, openSync, readFileSync, rmSync, statSync, truncateSync,
+  closeSync, mkdirSync, openSync, readdirSync, readFileSync, rmSync, statSync, truncateSync,
 } from 'node:fs';
-import { basename } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 
 import { writeJsonAtomic } from './atomic-write.js';
 import { mcHome } from './paths.js';
@@ -33,6 +33,44 @@ const STOP_GRACE_MS = 3000;
 export const STALE_ROUNDS = 3;
 
 /**
+ * How often a running watcher looks at whether mc's code has moved under it.
+ *
+ * Measured 2026-08-23: the PM round was started at 21:20 and the fix for the
+ * prompt it could not find landed at 21:33 — thirteen minutes later — and
+ * the process ran the old code for the next twenty-four hours: 188 knocks
+ * tried, none landed, and nothing on the board could tell "nothing to say"
+ * from "reading the pane with yesterday's regex". A detached process is
+ * whatever was on disk when it started; the fix is that it does not stay so.
+ * It reads the stamp between passes, never mid-pass, and a walk over a
+ * hundred-odd files every half minute is nothing.
+ */
+export const CODE_CHECK_MS = 30_000;
+
+/**
+ * One string for "which code is this": the source tree the runner lives in,
+ * as a count of files and the newest modification time among them. A merge,
+ * a pull or an edit moves it; a restart on the same tree does not.
+ */
+export function codeStamp(runner) {
+  const root = dirname(String(runner || ''));
+  let count = 0;
+  let newest = 0;
+  const walk = (directory) => {
+    let entries = [];
+    try { entries = readdirSync(directory, { withFileTypes: true }); } catch { return; }
+    for (const entry of entries) {
+      const path = join(directory, entry.name);
+      if (entry.isDirectory()) { walk(path); continue; }
+      if (!entry.isFile() || !entry.name.endsWith('.js')) continue;
+      count += 1;
+      try { newest = Math.max(newest, statSync(path).mtimeMs); } catch { /* gone between list and stat */ }
+    }
+  };
+  if (root) walk(root);
+  return `${count}:${Math.round(newest)}`;
+}
+
+/**
  * Is it running, and when did it last do something?
  *
  * The pid is checked against the process table rather than trusted: a pid
@@ -42,19 +80,27 @@ export const STALE_ROUNDS = 3;
  */
 export function daemonState({
   target, runner, root = mcHome(), now = Date.now(), lastWriteAt = null, defaultIntervalMs = 0,
+  isRunner: recognise = isRunner,
 } = {}) {
   const record = readJson(watchStatePath(target, root));
   const pid = Number(record?.pid);
-  const running = Number.isInteger(pid) && pid > 0 && alive(pid) && isRunner(pid, runner);
+  const running = Number.isInteger(pid) && pid > 0 && alive(pid) && recognise(pid, runner);
   const intervalMs = Number(record?.interval_ms) || defaultIntervalMs;
   const wrote = lastWriteAt ? Date.parse(lastWriteAt) : NaN;
   const ageMs = Number.isFinite(wrote) ? Math.max(0, now - wrote) : null;
+  // Is the code on disk the code this process is running? A record with no
+  // stamp was written by a watcher that did not know to check — which is the
+  // exact watcher that needs restarting by hand, and `stale_code` says so.
+  const stamp = running ? codeStamp(record?.runner || runner) : null;
   return {
     target,
     running,
     pid: running ? pid : null,
     started_at: running ? record?.started_at || null : null,
     interval_ms: intervalMs,
+    code: running ? record?.code || null : null,
+    stale_code: running ? !record?.code || record.code !== stamp : null,
+    restarts: Number(record?.restarts) || 0,
     // A pid file whose process is gone is the ordinary aftermath of a reboot
     // or a kill -9, and worth saying out loud: it is the difference between
     // "never started" and "stopped without telling anyone".
@@ -72,6 +118,48 @@ export function startDaemon({
   const state = daemonState({ target, runner, root, lastWriteAt, defaultIntervalMs: intervalMs });
   if (state.running) return { ok: false, reason: 'already-running', pid: state.pid, interval_ms: state.interval_ms };
 
+  return launch({ target, runner, args, intervalMs, root, env, restarts: 0 });
+}
+
+/**
+ * The watcher replaces itself with one running the code now on disk.
+ *
+ * Called by the runner, between passes, when `codeStamp` no longer matches
+ * the one it started with. The successor is started exactly as `mc watch
+ * <target> start` would start it and takes over the pid file; the caller
+ * then leaves without clearing that file — `clearOwnState` refuses a file
+ * naming another pid, which is the point. The count of restarts is carried
+ * so `status` can say how many times this has happened.
+ */
+export function restartDaemon({
+  target, runner, args = [], intervalMs = 0, root = mcHome(), env = process.env,
+} = {}) {
+  const record = readJson(watchStatePath(target, root));
+  return launch({
+    target, runner, args, intervalMs, root, env, restarts: (Number(record?.restarts) || 0) + 1,
+  });
+}
+
+/**
+ * A runner's own check, made cheap enough to poll: has the code moved since
+ * this process was started? Asked at most every `CODE_CHECK_MS`; between
+ * asks it answers what it last found.
+ */
+export function codeDrift(runner, { everyMs = CODE_CHECK_MS, now = Date.now } = {}) {
+  const started = codeStamp(runner);
+  let checkedAt = now();
+  let drifted = false;
+  return () => {
+    if (drifted) return true;
+    const at = now();
+    if (at - checkedAt < everyMs) return false;
+    checkedAt = at;
+    drifted = codeStamp(runner) !== started;
+    return drifted;
+  };
+}
+
+function launch({ target, runner, args, intervalMs, root, env, restarts }) {
   mkdirSync(watchRoot(root), { recursive: true, mode: 0o700 });
   const log = watchLogPath(target, root);
   rotate(log);
@@ -100,8 +188,10 @@ export function startDaemon({
     started_at: new Date().toISOString(),
     interval_ms: intervalMs,
     runner,
+    code: codeStamp(runner),
+    restarts,
   });
-  return { ok: true, pid: child.pid, interval_ms: intervalMs, log };
+  return { ok: true, pid: child.pid, interval_ms: intervalMs, log, restarts };
 }
 
 /**

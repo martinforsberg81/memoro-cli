@@ -120,7 +120,16 @@ export function renderWatchLines(state, { target = 'pm', colour = false, now = D
   const c = painter(colour);
   const lines = [''];
   if (state.running) {
-    lines.push(`  ${c('watching', 'green')}  pid ${state.pid}  every ${seconds(state.interval_ms)}`);
+    const restarts = state.restarts ? `  ${c(`restarted on new code ${state.restarts}×`, 'grey')}` : '';
+    lines.push(`  ${c('watching', 'green')}  pid ${state.pid}  every ${seconds(state.interval_ms)}${restarts}`);
+    // The one failure mode the board could not see for a day: a live process
+    // on yesterday's code. A watcher that knows to check restarts itself
+    // within half a minute; one that does not is said as needing a hand.
+    if (state.stale_code) {
+      lines.push(`  ${c('OLD CODE', 'yellow')}  ${c(state.code
+        ? 'mc changed on disk since it started — it restarts itself between passes'
+        : `it started before mc knew to check — mc watch ${target} stop && mc watch ${target} start`, 'yellow')}`);
+    }
   } else if (state.abandoned) {
     lines.push(`  ${c('not running', 'yellow')}  ${c(`— a pid file was left behind; mc watch ${target} stop clears it`, 'grey')}`);
   } else {

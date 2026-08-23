@@ -29,6 +29,10 @@ export function watchersState({ root = mcHome(), now = Date.now() } = {}) {
     running: Boolean(state?.running),
     abandoned: Boolean(state?.abandoned),
     stale: state?.stale ?? null,
+    // A live process on yesterday's code reads as alive in every other
+    // field — and ran PM's round for a day without one knock landing
+    // (2026-08-23). Null for a watcher whose leg does not carry a stamp.
+    stale_code: state?.stale_code ?? null,
     last_write_age_ms: state?.last_write_age_ms ?? null,
     interval_ms: state?.interval_ms ?? null,
     pid: state?.pid ?? null,
@@ -45,6 +49,7 @@ export function watchersState({ root = mcHome(), now = Date.now() } = {}) {
 export function watcherWord(state) {
   if (!state) return 'unknown';
   if (state.running && state.stale) return 'stale';
+  if (state.running && state.stale_code) return 'old-code';
   if (state.running) return 'alive';
   if (state.abandoned) return 'not-running';
   return 'never-started';
