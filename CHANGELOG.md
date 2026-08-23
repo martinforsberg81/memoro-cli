@@ -6,22 +6,36 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+- The gate carries the candidate's result forward as the next baseline
+  (A1, approved by Martin 2026-08-23: "Verkställ 1+2"). After a green
+  merge, main is the tree the candidate was just measured on — 52 of 61
+  memoro baselines were exactly the previous round's candidate result, and
+  0 of 92 rounds ever saw a red delta on the baseline. The result is saved
+  keyed on `(merge-commit SHA, lockfile hash at that commit, suite
+  command)` and reused only on an exact three-key match, with a line
+  saying so and where the number came from; the chain breaks on the
+  smallest deviation and the baseline runs as before. The red comparison
+  keeps its form — fed from the carried result, free instead of absent.
+  And the check the fresh baseline used to provide by accident is replaced
+  by design: the baseline's red set is compared against the recorded floor
+  too (`BASELINE UNSTABLE — N red names on the baseline are not in
+  .mc/red-ratchet.json`), loudly but never as a stop — measured 2026-08-23,
+  one tree read 55 by #385's candidate and 57 by #386's baseline minutes
+  later, and the 57 was compared against nothing.
+
 ### Added
-- The PM round checks that every order line reached its track (D-0170). A
-  track stood blocked one day, unable to build G5, while the order —
-  verbatim, complete, with its negative test — sat under `Rad till spår 3:`
-  in an msr-design report in PM's inbox archive; the convention held, the
-  channel broke. Every pass, deterministically and with no model: for each
-  `RAD TILL SPÅR N:` line (any casing, quoted or bare) in an archived
-  msr-design report, the order's own text — whitespace-normalised, first
-  sixty characters — must appear somewhere in `msr-track-N`'s `inbox/` or
-  its `archive/`. Quiet when everything is delivered; otherwise the knock
-  opens with one line per undelivered order (source file, minute, first
-  eighty characters), under the round's own wake-on-change rule — a new
-  miss knocks now, a standing one earns one reminder on the third pass. A
-  track that does not exist is said as that, never as delivered.
-  Deliberately not generalised: `msr-design → msr-track-N` is the only
-  channel with this form today, and a second channel is a second order.
+- `mc repo rounds`, and a line for every gate round (A7). An independent
+  review measured *92 machine-run rounds, 0 with a red delta* and then tore
+  its own number down: the merge log is written after a successful merge,
+  so a round that stopped on red writes nothing, and "0 of 92" can never
+  contain the cases that would disprove it. Every `mc repo merge` and
+  `--check` now appends one JSON line to `gate-rounds.jsonl` under mc's
+  home — merged, stopped, refused, cut short — with `stopped_at` in the
+  round's own vocabulary (lease · suite-lease · merge · red · pr-tests ·
+  ratchet · extra-gate · drift), the reason, the duration and the step
+  timings. `mc repo rounds` counts them by outcome; `--json` is the raw
+  lines. A line that cannot be written never fails the round it describes.
 
 ### Added
 - `mc repo merge <repo> <pr> <pr>...` — several pull requests in one round
@@ -43,6 +57,23 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   candidate. And every round now prints wall clock per step — fetch,
   prepare, both suites, PR tests, extra gates (A5) — so the next
   efficiency decision is measured, not guessed.
+
+### Fixed
+- The PM round is quiet when it has nothing to say, and the board can tell
+  a refused knock from silence (B3+B5). Measured 2026-08-23: five
+  `mc-watch-pm` files in PM's inbox inside ninety seconds whose whole
+  content was the list of the four before them — the round counted its own
+  knocks as unprocessed items, and each knock named the whole inbox again.
+  Now a file signed `mc watch pm` is not an item at all (recognised by the
+  sender line the channel writes, never by the filename), the knock names
+  only what is new or reminded and counts the rest as *N older, already
+  announced*, and the round's memory keeps the **last knock** apart from
+  the last round — `mc watch pm status` shows *last knock 3m ago · woke /
+  delivered, did not knock: <reason> / NOT DELIVERED: <reason>*, and the
+  `mc status` watch row carries the same, in yellow when it did not wake.
+  "Nothing to say" for six passes and "refused every time" were the same
+  silence on that board for a day, and the difference was 188 knocks that
+  never landed.
 
 ### Fixed
 - PM's wake holds: the watcher runs the code on disk, and a stranded notice

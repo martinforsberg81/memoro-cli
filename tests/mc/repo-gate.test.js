@@ -25,6 +25,7 @@ import { describe, it } from 'node:test';
 import { addArea, fixture as repoFixture } from './_helpers/repo-fixture.js';
 import { runMcCli } from './_helpers/mc-cli.js';
 import { gateRoot, runGate } from '../../src/mc/repo-gate.js';
+import { lockfileHashAt, saveBaseline } from '../../src/mc/repo-baseline-cache.js';
 import { claimLease, readLease } from '../../src/mc/repo-lease.js';
 import { claimSuiteLease, readSuiteLease } from '../../src/mc/suite-lease.js';
 import { renderRatchet } from '../../src/mc/red-ratchet.js';
@@ -997,6 +998,85 @@ describe('a batch is one candidate, and each pull request keeps its own tests', 
       const report = await fx.run();
       assert.equal(report.stopped_at, 'pr');
       assert.match(report.reason, /2 different bases \(main, release\)/u);
+    } finally { fx.cleanup(); }
+  });
+});
+
+/**
+ * The baseline, carried forward instead of rerun (A1). Ordered by Martin on
+ * the independent review's finding: 52 of 61 memoro baselines were exactly
+ * the previous round's already-measured candidate, and 0 of 92 rounds ever
+ * had a red delta on the baseline. The rules asserted here: reuse only on
+ * an exact three-key match, break the chain on the smallest deviation, and
+ * keep the red comparison's form — fed from the carried result.
+ */
+describe('the baseline is carried forward, and the chain breaks on any deviation', () => {
+
+  it('an exact key match skips the baseline run and says where the number came from', async () => {
+    const fx = fixture({ baselineRed: [], candidateRed: ['old-red'] });
+    try {
+      // The key as the gate will compute it: the base commit the stubbed
+      // rev-parse answers in the repo, the lockfile hash the stubbed git
+      // shows, and the repository's own suite command.
+      saveBaseline({
+        repoPath: fx.repoPath,
+        commit: 'cand2222',
+        lockfileHash: lockfileHashAt({ git: fx.git, repoPath: fx.repoPath, commit: 'cand2222' }),
+        command: 'npm test  (node --test tests/)',
+        red: ['old-red'],
+        totals: { tests: 100, fail: 1 },
+        root: fx.mcHome,
+      });
+      const progress = [];
+      const report = await fx.run({ root: fx.mcHome, onProgress: (line) => progress.push(line) });
+      assert.equal(report.ok, true, report.reason);
+      assert.equal(report.baseline.carried, true);
+      assert.equal(report.baseline.commit, 'cand2222');
+      assert.equal(fx.ran('suite').length, 1, 'one suite run: the candidate\'s');
+      assert.ok(fx.ran('suite')[0].cwd.endsWith('candidate'));
+      // The red comparison kept its form, fed from the carried result: the
+      // candidate's red name was already red, so nothing broke.
+      assert.deepEqual(report.broke, []);
+      assert.equal(report.standing_red, 1);
+      assert.ok(progress.some((line) => /^baseline carried from the last green round: 1 red at cand222/u.test(line)), progress.join('\n'));
+    } finally { fx.cleanup(); }
+  });
+
+  it('a baseline above its own floor is flagged loudly, and is not a stop (the 57 that passed through)', async () => {
+    // Measured 2026-08-23: #385's candidate measured a tree at 55 red;
+    // #386's baseline measured the same content at 57 minutes later, and
+    // the 57 was compared against nothing. The floor already knew 55.
+    const names = Array.from({ length: 3 }, (_, index) => `stable-${index}`);
+    const fx = fixture({
+      baselineRed: [...names, 'flaky-one', 'flaky-two'],
+      candidateRed: names,
+      ratchet: names,
+    });
+    try {
+      const progress = [];
+      const report = await fx.run({ onProgress: (line) => progress.push(line) });
+      assert.equal(report.ok, true, `${report.reason} — the base's instability is never the change's fault`);
+      assert.deepEqual(report.ratchet.baseline_risen, ['flaky-one', 'flaky-two']);
+      assert.ok(progress.some((line) => /^BASELINE UNSTABLE — 2 red names on the baseline are not in/u.test(line)), progress.join('|'));
+    } finally { fx.cleanup(); }
+  });
+
+  it('any key off — commit, lockfile, command, or nothing saved — runs the baseline as before', async () => {
+    const fx = fixture();
+    try {
+      saveBaseline({
+        repoPath: fx.repoPath,
+        commit: 'somebody-elses-commit',
+        lockfileHash: lockfileHashAt({ git: fx.git, repoPath: fx.repoPath, commit: 'x' }),
+        command: 'npm test  (node --test tests/)',
+        red: [],
+        totals: null,
+        root: fx.mcHome,
+      });
+      const report = await fx.run({ root: fx.mcHome });
+      assert.equal(report.ok, true, report.reason);
+      assert.ok(!report.baseline.carried);
+      assert.equal(fx.ran('suite').length, 2, 'both sides measured, as always');
     } finally { fx.cleanup(); }
   });
 });
