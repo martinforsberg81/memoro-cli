@@ -679,7 +679,7 @@ describe('text in the box is a question, not an answer', () => {
       const keys = fx.tmux.keys();
       assert.match(keys[0], /send-keys -t mc-alpha -l x$/u);
       assert.match(keys[1], /BSpace$/u);
-      assert.match(keys[2], /-l mc: new in inbox/u);
+      assert.match(keys[2], /-l mc: new in \S+\/alpha\/inbox\/ from/u);
     } finally { fx.cleanup(); }
   });
 
