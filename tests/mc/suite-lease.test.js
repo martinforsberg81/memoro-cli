@@ -59,6 +59,11 @@ describe('the suite right', () => {
       { command: 'npm run test:msr:contract', area: 'msr-cleanup', pid: 4242, elapsed: '07:12' },
     ]);
     assert.equal(row, 'alpha “contract” held for 7m  ·  running: npm run test:msr:contract in msr-cleanup (pid 4242, 07:12)');
+    // No suite the row can name, but the holder's process is alive: an
+    // extra gate or a prepare, not a hold to release (2026-08-24 — the row
+    // said "nothing running" 20 minutes into a round's extra gate).
+    const alive = suiteRow(c, { held: true, holder: 'pm', errand: 'gate round for #10909', age_ms: 20 * 60000, owner_pid: 42074, owner_alive: true }, []);
+    assert.equal(alive, 'pm “gate round for #10909” held for 20m  ·  no suite visible, but the holder\'s process (pid 42074) is alive — likely an extra gate or preparation');
   });
 
   it('reads ps etime the way the board says time', () => {

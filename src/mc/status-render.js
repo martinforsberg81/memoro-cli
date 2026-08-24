@@ -97,9 +97,15 @@ export function renderLines(report, {
     const held = lease?.held
       ? `${c(lease.holder, 'bold')}${lease.errand ? ` “${lease.errand}”` : ''} ${c(`held for ${ago(now - (lease.age_ms ?? 0), now)}`, 'grey')}${lease.orphaned ? ` ${c(`· its process (pid ${lease.owner_pid}) is gone`, 'yellow')}` : ''}`
       : c('free', 'grey');
+    // "Nothing running" beside a living holder read as "release it" and
+    // nearly cost a mid-round release (2026-08-24): the board can only name
+    // suites, and a gate spends ~88 % of its round in steps that are not
+    // one (extra gates, prepare). The holder's living process is the truth.
     const runs = running.length
       ? running.map((run) => c(`running in ${run.area || run.directory} for ${elapsed(run.elapsed)} (pid ${run.pid})`, running.length > 1 ? 'red' : 'yellow')).join(c('  ·  ', 'grey'))
-      : c('nothing running', 'grey');
+      : lease?.held && lease.owner_alive === true
+        ? c(`no suite visible, but the holder's process (pid ${lease.owner_pid}) is alive — likely an extra gate or preparation`, 'yellow')
+        : c('nothing running', 'grey');
     lines.push(`  ${c('suite', 'grey')}  ${clip(`${held}  ${c('·', 'grey')}  ${runs}`, wide - 9)}`);
   }
   // The watchers — the last silent link. PM is woken by a file, queued wakes

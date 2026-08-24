@@ -196,6 +196,12 @@ export function suiteRow(c, lease, running, now = Date.now()) {
   }
   if (running?.length) {
     parts.push(...running.map((run) => c(`running: ${run.command} in ${run.area || run.directory} (pid ${run.pid}, ${run.elapsed})`, 'yellow')));
+  } else if (lease?.held && lease.owner_alive === true) {
+    // "Nothing running" beside a living holder read as "release it" and
+    // nearly cost a mid-round release (2026-08-24): this row can only name
+    // suites, and a gate spends most of its round in steps that are not
+    // one (extra gates, prepare). The living pid is the holder's answer.
+    parts.push(c(`no suite visible, but the holder's process (pid ${lease.owner_pid}) is alive — likely an extra gate or preparation`, 'yellow'));
   } else {
     parts.push(c('nothing running', 'grey'));
   }
