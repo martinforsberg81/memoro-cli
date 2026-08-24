@@ -155,6 +155,12 @@ export function renderLines(report, {
       const since = clock(area.pending_wake.since);
       lines.push(`      ${c(`✉ draft in prompt — unreachable by wake since ${since} (wake queued; it lands when the prompt clears)`, 'red')}`);
     }
+    // Stopped on purpose and not opened since (KP-09): the one line that
+    // separates "PM stopped it at 03:16" from "it died". Shown only while
+    // nothing runs here — a mark under a running conversation is stale.
+    if (area.stopped && !area.conversations.some((item) => item.live)) {
+      lines.push(`      ${c(`■ stopped by ${area.stopped.by} ${clock(area.stopped.at)} (${ago(Date.parse(area.stopped.at), now)}) — mc work ${area.name} picks it up`, 'grey')}`);
+    }
 
     for (const item of area.conversations) {
       const tool = item.tool === 'claude-code' ? 'claude' : item.tool;

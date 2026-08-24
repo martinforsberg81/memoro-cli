@@ -36,6 +36,7 @@ import { appendNotice, isUrgent } from './watch-notices.js';
 import { knock } from './watch-sessions-knock.js';
 import { readTailEntries } from './conversations.js';
 import { reservedRoleName } from './roles.js';
+import { clock } from './status-render.js';
 import { backgroundTarget } from './work-open.js';
 import { flushPendingWakes, paneWillTakeText, sendToArea } from './work-send.js';
 import { workStatus } from './work-status.js';
@@ -86,6 +87,7 @@ export async function watchRound({
   idleMs = DEFAULT_IDLE_MS,
   groups = [],
   arrivals = null,
+  stopMark = null,
   log = () => {},
 } = {}) {
   const started = Date.now();
@@ -103,8 +105,15 @@ export async function watchRound({
   const report = await (status || (() => workStatus({ git: false })))();
   const scan = scanSessions({
     report, previous, now, waitingMs, silentMs, reachable: reachable || paneVerdict,
-    idleMs, groups, ...(arrivals ? { arrivals } : {}),
+    idleMs, groups, ...(arrivals ? { arrivals } : {}), ...(stopMark ? { stopMark } : {}),
   });
+
+  // A conversation gone since last round because `mc work stop` asked it to
+  // (KP-09): said in the log, in the words the flag would have used, and
+  // that is all — nobody is knocked about what they did themselves.
+  for (const session of scan.sessions) {
+    if (session.stopped) log(`${session.area}: stopped by ${session.stopped.by} ${clock(session.stopped.at)} — not dead`);
+  }
 
   const { queue, deferred } = readingOrder(scan.sessions, previous, maxReads);
   if (deferred > 0) {

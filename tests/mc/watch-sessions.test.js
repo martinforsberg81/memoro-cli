@@ -31,7 +31,7 @@ import {
   MODEL_PATTERNS, SCRIPT_PATTERNS, arrivedSince, countInbox, describeSpan, scanSessions,
 } from '../../src/mc/watch-sessions-scan.js';
 import { parseFlags, quoteFrom, readOutput } from '../../src/mc/watch-sessions-read.js';
-import { readMemory } from '../../src/mc/watch-sessions-store.js';
+import { readMemory, writeMemory } from '../../src/mc/watch-sessions-store.js';
 import { URGENT_PATTERNS, pendingNotices, readLedger } from '../../src/mc/watch-notices.js';
 import { knockText } from '../../src/mc/watch-sessions-knock.js';
 
@@ -240,6 +240,58 @@ describe('everything with a deterministic answer is script', () => {
       previous: { c1: { live: true, bytes: 1000, updated_ms: gone.updated_ms, active: [] } },
     });
     assert.deepEqual(second.sessions[0].patterns.map((p) => p.pattern), ['dead']);
+  });
+
+  it('a conversation gone because mc work stop asked is not dead — it is stopped, by whom, when (KP-09)', () => {
+    // Three times in one night the guard knocked PM about sessions PM had
+    // just stopped on purpose (2026-08-24). The mark the stop leaves is at
+    // or after the conversation's last movement, so it explains the stop.
+    const gone = conversation({ live: false, state: 'idle', turn: 'working', updated_ms: NOW - 5 * MINUTE });
+    const previous = { c1: { live: true, bytes: 1000, updated_ms: gone.updated_ms, active: [] } };
+    const stopped = scanSessions({
+      now: NOW,
+      report: board([['alpha', [gone]]]),
+      previous,
+      stopMark: () => ({ at: new Date(NOW - 4 * MINUTE).toISOString(), by: 'pm' }),
+    });
+    assert.deepEqual(stopped.sessions[0].patterns, [], 'a stop on purpose is not a flag');
+    assert.deepEqual(stopped.sessions[0].stopped, { by: 'pm', at: new Date(NOW - 4 * MINUTE).toISOString() });
+
+    // The exit hooks write one last line after the stop was asked: a mark up
+    // to a minute older than the last movement is still that stop.
+    const hooks = scanSessions({
+      now: NOW,
+      report: board([['alpha', [gone]]]),
+      previous,
+      stopMark: () => ({ at: new Date(gone.updated_ms - 30_000).toISOString(), by: 'pm' }),
+    });
+    assert.deepEqual(hooks.sessions[0].patterns, []);
+
+    // A mark from before a restart mc did not see explains nothing: the
+    // conversation moved for an hour after it, and then it died.
+    const stale = scanSessions({
+      now: NOW,
+      report: board([['alpha', [gone]]]),
+      previous,
+      stopMark: () => ({ at: new Date(gone.updated_ms - 60 * MINUTE).toISOString(), by: 'pm' }),
+    });
+    assert.deepEqual(stale.sessions[0].patterns.map((p) => p.pattern), ['dead']);
+    assert.equal(stale.sessions[0].stopped, undefined);
+  });
+
+  it('the round says a stop in its log, and writes no notice for it', async () => {
+    const gone = conversation({ live: false, state: 'idle', turn: 'working', updated_ms: NOW - 5 * MINUTE });
+    const at = root();
+    writeMemory({ c1: { live: true, bytes: 1000, updated_ms: gone.updated_ms, active: [] } }, { root: at });
+    const lines = [];
+    await round({
+      root: at,
+      report: board([['alpha', [gone]]]),
+      log: (line) => lines.push(line),
+      stopMark: () => ({ at: new Date(NOW - 4 * MINUTE).toISOString(), by: 'pm' }),
+    });
+    assert.ok(lines.some((line) => /alpha: stopped by pm \d\d:\d\d — not dead/u.test(line)), lines.join('\n'));
+    assert.deepEqual(readLedger({ root: at }).notices, [], 'a stop on purpose wrote a notice');
   });
 
   it('flags mail that arrived in a pane no wake can reach — and asks the channel, not a model', () => {

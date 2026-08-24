@@ -13,7 +13,9 @@
  *
  *   waiting        script  stopped for a person, and has been for a while
  *   silent         script  meant to be working, and nothing has come out
- *   dead           script  it was alive last round, its turn never finished
+ *   dead           script  it was alive last round, its turn never finished —
+ *                          and nobody asked it to stop (`mc work stop` says
+ *                          `stopped by pm 03:16` instead, and that is not a flag)
  *   unreachable    script  mail it has not read, in a pane no wake can reach
  *   unattended     script  stopped, with mail that arrived after it last moved
  *   quiet-group    script  nobody under a named prefix is working at all
@@ -31,6 +33,7 @@ import { join } from 'node:path';
 
 import { DEFAULT_SILENT_MS, DEFAULT_WAITING_MS } from './watch-sessions-store.js';
 import { isWatcherMessage } from './watch-senders.js';
+import { explainsStop, readStopMark } from './work-stop-marker.js';
 import { inboxPath } from './work-send.js';
 import { listOpenTasks } from './task-log.js';
 
@@ -69,12 +72,15 @@ export function scanSessions({
   idleMs = DEFAULT_IDLE_MS,
   arrivals = arrivedSince,
   groups = [],
+  stopMark = readStopMark,
 } = {}) {
   const sessions = [];
   for (const area of report.areas || []) {
+    // Read once per area: the mark belongs to the area, not the conversation.
+    const stopped = stopMark ? stopMark(area.path) : null;
     for (const conversation of area.conversations || []) {
       sessions.push(oneSession({
-        area, conversation, previous: previous[conversation.id] || null, now, waitingMs, silentMs,
+        area, conversation, previous: previous[conversation.id] || null, now, waitingMs, silentMs, stopped,
       }));
     }
   }
@@ -107,10 +113,11 @@ export function scanSessions({
 }
 
 function oneSession({
-  area, conversation, previous, now, waitingMs, silentMs,
+  area, conversation, previous, now, waitingMs, silentMs, stopped = null,
 }) {
   const quiet = now - (conversation.updated_ms || 0);
   const patterns = [];
+  let stoppedBy = null;
 
   // Alive last round, gone this round, and its last turn never finished. That
   // is the pane that died mid-work — the failure that cost an hour on
@@ -121,8 +128,20 @@ function oneSession({
   // and the guard's first round would flag the whole machine. So the first
   // sighting of a conversation can never be `dead`, and that is correct rather
   // than a gap — the guard did not see it die.
+  //
+  // Unless somebody stopped it on purpose. `mc work stop` leaves a mark in
+  // the area saying who and when, and a mark at or after the conversation's
+  // last movement is the stop that ended it. The guard knocked PM three
+  // times in one night about sessions PM had just stopped (KP-09,
+  // 2026-08-24): the flag was not wrong, it was indistinguishable — and a
+  // guard whose alarm one learns to ignore is a guard that is not there.
+  // So it is said as what it is, and it is not a flag: PM already knows.
   if (previous?.live && !conversation.live && conversation.turn === 'working') {
-    patterns.push({ pattern: 'dead', detail: 'it was running last round; its last turn never finished' });
+    if (explainsStop(stopped, conversation.updated_ms)) {
+      stoppedBy = { by: stopped.by, at: stopped.at };
+    } else {
+      patterns.push({ pattern: 'dead', detail: 'it was running last round; its last turn never finished' });
+    }
   }
 
   if (conversation.live && conversation.state === 'working' && quiet > silentMs) {
@@ -153,6 +172,9 @@ function oneSession({
     readable: Boolean(conversation.live) && changed,
     patterns,
     was: previous?.active || [],
+    // Gone since last round because somebody asked — who and when. Not a
+    // pattern: the round logs it, the board shows it, nobody is knocked.
+    ...(stoppedBy ? { stopped: stoppedBy } : {}),
   };
 }
 

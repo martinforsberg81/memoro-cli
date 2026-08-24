@@ -265,6 +265,8 @@ async function runVerb(opts, { stdout, stderr }) {
       // who confuses the two loses a branch.
       stdout.write(`mc: the work is untouched — mc work ${opts.name} picks it up again\n`);
     }
+    // The mark the guard reads (KP-09): a stop on purpose is not a death.
+    if (result.marked) stdout.write(`mc: noted as stopped by ${result.marked.by} — the guard will say so, not "dead"\n`);
     return 0;
   }
 

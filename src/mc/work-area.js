@@ -25,6 +25,7 @@ import { homedir } from 'node:os';
 import { deleteConversations, listConversations } from './conversations.js';
 import { workAreaPath, workAreaStatePath, workRoot } from './paths.js';
 import { areaRoleName, reservedRoleName } from './roles.js';
+import { STOP_MARK } from './work-stop-marker.js';
 
 export function listWorkAreas(env = process.env, options = {}) {
   const root = workRoot(env);
@@ -50,6 +51,9 @@ export function listWorkAreas(env = process.env, options = {}) {
  * once ordinary areas started having filing too.
  */
 export const FILING_DIRECTORIES = Object.freeze(['inbox', 'handoff']);
+
+/** mc's own marks in an area: state, never litter, and never what keeps an area alive. */
+const OWN_MARKS = new Set(['.mc-role', STOP_MARK]);
 
 /**
  * `conversations: false` and `git: false` leave those lookups out. Both cost
@@ -327,9 +331,10 @@ export function releaseWorkArea(name, { env = process.env, dryRun = false } = {}
     // otherwise-empty area alive, and it must survive whenever the area does —
     // an area quietly demoted from its role would run every future
     // conversation without the overlay and have no way to warn about it.
+    // The stop mark (`mc work stop`, KP-09) is the same kind of thing.
     let empty = false;
     try {
-      empty = readdirSync(area.path).filter((entry) => entry !== '.mc-role').length === 0;
+      empty = readdirSync(area.path).filter((entry) => !OWN_MARKS.has(entry)).length === 0;
     } catch { /* leave it */ }
     if (empty) {
       if (conversations.length) {
