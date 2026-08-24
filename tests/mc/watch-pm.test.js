@@ -91,10 +91,32 @@ describe('the round', () => {
     const fx = fixture();
     try {
       const outcome = await pass(fx);
-      assert.equal(fx.sent.length, 0, 'an empty inbox and a quiet ledger say nothing');
+      assert.equal(fx.sent.length, 0, 'an empty inbox, a quiet ledger and no helper home say nothing');
       assert.equal(outcome.knock, null);
       assert.deepEqual(outcome.failed, []);
       assert.equal(outcome.inbox.count, 0);
+    } finally { fx.cleanup(); }
+  });
+
+  it('a quiet heartbeat pulses the helper\'s improve round — once it exists, and never when something is urgent', async () => {
+    const fx = fixture();
+    try {
+      // The improve rhythm hangs on this heartbeat (design note §4): a
+      // quiet pass is the helper's cue to take the next project in rotation.
+      mkdirSync(join(fx.area, '..', 'pm-helper'), { recursive: true });
+      const quiet = await pass(fx);
+      assert.equal(quiet.knock, null);
+      assert.equal(fx.sent.length, 1);
+      assert.equal(fx.sent[0].name, 'pm-helper');
+      assert.match(fx.sent[0].message, /improve round: nothing urgent this heartbeat — take the next project in rotation/u);
+      assert.deepEqual(quiet.helper_pulse, { sent: true, woke: true });
+      // Urgency outranks the rotation: an unread item is PM's turn, not an
+      // improve round.
+      fx.item('a.md');
+      const urgent = await pass(fx);
+      assert.equal(urgent.knock?.ok, true);
+      assert.equal(urgent.helper_pulse, null);
+      assert.ok(!fx.sent.slice(1).some((sent) => sent.name === 'pm-helper'));
     } finally { fx.cleanup(); }
   });
 

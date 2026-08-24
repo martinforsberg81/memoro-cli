@@ -44,12 +44,16 @@ describe('the PM home', () => {
 });
 
 describe('the helper home', () => {
-  it('gets its own layout, an empty mirror directory, and no repository', () => {
+  it('gets the v0.2 layout — intake first — an empty mirror, and no repository', () => {
     const home = mkdtempSync(join(tmpdir(), 'mc-helper-home-'));
     ensureRoleHome('pm-helper', home);
-    for (const dir of ['sweeps', 'underlag', 'memoro-mirror', 'logs']) {
+    // Design note §2: intake/ (with processed/), sweeps, briefs (né
+    // underlag — renamed before the home ever existed on disk), improve,
+    // the mirror, the channel's inbox, logs.
+    for (const dir of ['intake', join('intake', 'processed'), 'sweeps', 'briefs', 'improve', 'memoro-mirror', 'inbox', 'logs']) {
       assert.ok(existsSync(join(home, dir, 'README.md')), dir);
     }
+    assert.equal(existsSync(join(home, 'underlag')), false, 'nothing creates the pre-v0.2 name');
     assert.equal(existsSync(join(home, 'state.md')), false);
     assert.equal(existsSync(join(home, '.git')), false);
   });

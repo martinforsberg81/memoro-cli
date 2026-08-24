@@ -249,6 +249,18 @@ function rounds(opts, { stdout }) {
   return 0;
 }
 
+/**
+ * The one verb the pm-helper's overlay does not carry, enforced by the tool
+ * rather than remembered by the role: merge without --check lands code, and
+ * the helper produces evidence — never decisions.
+ */
+export function helperMergeRefusal(holder, { check = false } = {}) {
+  if (check) return null;
+  if (holder?.kind !== 'work-area') return null;
+  if (!['pm-helper', 'helper'].includes(String(holder.name || '').toLowerCase())) return null;
+  return 'REFUSED — the pm-helper\'s tool does not carry mc repo merge without --check: the helper produces evidence, the PM makes decisions (design note §5)';
+}
+
 async function gate(opts, { stdout, stderr }) {
   const repoPath = await resolveRepoPath(opts.repo);
   if (!repoPath) {
@@ -260,6 +272,15 @@ async function gate(opts, { stdout, stderr }) {
   // in. Everything after this runs in temporary worktrees outside the work
   // root, where the same question would answer `user@host` instead.
   const holder = currentHolder();
+  // The helper's tool does not carry the landing form (design note §5,
+  // ratified 2026-08-17): the helper produces evidence, the PM makes
+  // decisions, and the role must not have to remember the boundary.
+  const refusal = helperMergeRefusal(holder, { check: opts.check });
+  if (refusal) {
+    stderr.write(`mc: ${refusal}\n`);
+    stderr.write(`mc: the check form measures and reports: mc repo merge ${opts.repo} ${opts.pr || (opts.prs || []).join(' ')} --check\n`);
+    return 2;
+  }
   const round = { repoPath, pr: opts.pr, prs: opts.prs, holder, onProgress: (message) => stderr.write(`mc: ${message}\n`) };
   const report = opts.check ? await runGate(round) : await runMergeRound(round);
   // Every round leaves a line — merged, stopped, refused — so "has the gate
