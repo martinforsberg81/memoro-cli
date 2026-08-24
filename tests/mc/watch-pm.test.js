@@ -120,6 +120,30 @@ describe('the round', () => {
     } finally { fx.cleanup(); }
   });
 
+  it('the pulse rides its own 30-minute clock, not the round\'s (PM 2026-08-24: 26 pulses in 36 minutes)', async () => {
+    const fx = fixture();
+    try {
+      // The loop re-runs the whole round the moment a real file lands in
+      // PM's inbox (correct — PM is knocked at once), but the pulse must not
+      // ride that: a report from one session fired a pulse to another role
+      // 26 times in 36 minutes. The pulse is due at most once per interval.
+      mkdirSync(join(fx.area, '..', 'pm-helper'), { recursive: true });
+      const t0 = new Date('2026-08-24T10:00:00Z');
+      const first = await pass(fx, { now: t0 });
+      assert.deepEqual(first.helper_pulse, { sent: true, woke: true }, 'the first quiet pass pulses');
+      // Five more quiet passes seconds apart — as a busy inbox would drive
+      // them — must NOT pulse again.
+      for (let index = 1; index <= 5; index += 1) {
+        const soon = await pass(fx, { now: new Date(t0.getTime() + index * 5000) });
+        assert.equal(soon.helper_pulse, null, `pass ${index} pulsed within the interval`);
+      }
+      assert.equal(fx.sent.filter((s) => s.name === 'pm-helper').length, 1, 'one pulse across six passes in half a minute');
+      // Once the interval has passed, the pulse is due again.
+      const later = await pass(fx, { now: new Date(t0.getTime() + 30 * 60_000 + 1000) });
+      assert.deepEqual(later.helper_pulse, { sent: true, woke: true }, 'due again after 30 minutes');
+    } finally { fx.cleanup(); }
+  });
+
   it('commits what PM wrote, and edits nothing', async () => {
     const fx = fixture();
     try {

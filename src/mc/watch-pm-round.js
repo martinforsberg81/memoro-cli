@@ -58,6 +58,14 @@ export const DEFAULT_INTERVAL_MS = 30 * 60 * 1000;
  */
 export const REMINDER_PASS = 3;
 
+/**
+ * The improve pulse's own cadence (design note §4: one heartbeat, ~30 min).
+ * The round itself re-runs on every inbox change; the pulse rides the clock,
+ * not the round, so a busy inbox cannot turn a 30-minute rhythm into 26
+ * pulses in 36 minutes (2026-08-24).
+ */
+export const PULSE_INTERVAL_MS = 30 * 60_000;
+
 /** The knock names files; past this many it says how many it did not name. */
 const NAMED_LIMIT = 12;
 
@@ -157,7 +165,19 @@ export async function pmRound({
   // and holds no opinion about which project is next. A helper that has
   // never been created gets no pulse: mc does not knock on homes that do
   // not exist.
-  if (!worthSaying && existsSync(workAreaPath('pm-helper', env))) {
+  //
+  // On its OWN clock, not the round's. The loop re-runs the whole round the
+  // moment a real file lands in PM's inbox — correct, so PM is knocked about
+  // a new report at once — but the improve pulse must not ride that: a
+  // session's report landing fired a pulse to a different role, 26 times in
+  // 36 minutes (PM, 2026-08-24). #408 stopped the round feeding itself; this
+  // stops the pulse riding every inbox-triggered pass. The pulse is due at
+  // most once per interval of wall clock, tracked apart from everything the
+  // round does per pass.
+  const lastPulseAt = Date.parse(previous.last_pulse_at || '') || 0;
+  const pulseDue = now.getTime() - lastPulseAt >= PULSE_INTERVAL_MS;
+  let pulsedAt = previous.last_pulse_at || null;
+  if (!worthSaying && pulseDue && existsSync(workAreaPath('pm-helper', env))) {
     outcome.helper_pulse = await attemptAsync(outcome, 'helper-pulse', async () => {
       const pulse = await send({
         name: 'pm-helper',
@@ -167,6 +187,7 @@ export async function pmRound({
       });
       return pulse?.ok ? { sent: true, woke: Boolean(pulse.woke) } : null;
     });
+    if (outcome.helper_pulse?.sent) pulsedAt = outcome.at;
   }
 
   // The state advances only when the round is sure PM has the message. A
@@ -185,7 +206,7 @@ export async function pmRound({
   const lastKnock = outcome.knock
     ? { at: outcome.at, woke: Boolean(outcome.knock.woke), delivered: Boolean(outcome.knock.ok), reason: outcome.knock.woke ? null : outcome.knock.reason || null }
     : previous.last_knock || null;
-  attempt(outcome, 'state', () => writeState(root, { at: outcome.at, items, orders, enforcement: enforcementState, last_round: summary(outcome), last_knock: lastKnock }));
+  attempt(outcome, 'state', () => writeState(root, { at: outcome.at, items, orders, enforcement: enforcementState, last_round: summary(outcome), last_knock: lastKnock, last_pulse_at: pulsedAt }));
 
   if (delivered && outcome.knock?.ok) {
     for (const notice of outcome.notices) {
