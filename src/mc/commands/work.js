@@ -150,6 +150,10 @@ async function runVerb(opts, { stdout, stderr }) {
       stdout.write(`mc: nobody was woken — ${opts.name} reads it at its next turn (--wake knocks)\n`);
     } else if (result.reason === 'no-live-conversation') {
       stdout.write(`mc: nothing is running in ${opts.name} — it reads its inbox when it starts\n`);
+    } else if (result.reason === 'stopped-with-draft') {
+      // A ghost draft over a stopped session queued two orders for hours
+      // (D-0186): nothing will clear that prompt, so no knock is owed.
+      stdout.write(`mc: nothing is running in ${opts.name}, and a leftover draft sits in its pane — nothing will clear it, so no knock was queued; it reads its inbox when it starts\n`);
     } else if (result.queued) {
       // Not "did not knock": the knock is owed, and the board shows it owed.
       stdout.write(`mc: queued — a draft is in ${opts.name}'s prompt, so nothing was typed; it will be knocked when the prompt clears\n`);

@@ -23,7 +23,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
-import { installTmuxStub } from './_helpers/tmux-stub.js';
+import { installStandingStub, installTmuxStub } from './_helpers/tmux-stub.js';
 import { runMcCli } from './_helpers/mc-cli.js';
 import { wakeConversation } from '../../src/mc/work-send.js';
 
@@ -407,6 +407,8 @@ describe('waking is asked for, and every refusal is printed', () => {
   it('but what the person at the pm\'s pane has typed is still not typed over', () => {
     const fx = fixture({ alive: ['pm'], clients: ['/dev/ttys009'], typedAlready: 'merga #10799 och' });
     try {
+      // PM's claude is running — that is what makes the knock owed (D-0186).
+      installStandingStub(fx.tmux.bin, [{ pid: 99901, cwd: join(fx.workRoot, 'pm') }]);
       const sent = fx.send(['pm', '--wake', 'wake up']);
       assert.equal(sent.status, 0, sent.stderr);
       assert.equal(fx.messages('pm').length, 1);
@@ -414,6 +416,18 @@ describe('waking is asked for, and every refusal is printed', () => {
       assert.match(sent.stdout, /queued — a draft is in pm's prompt, so nothing was typed; it will be knocked when the prompt clears/u);
       assert.deepEqual(fx.tmux.submitted(), []);
       assert.equal(fx.tmux.prompt(), 'merga #10799 och', 'the half-written sentence is untouched');
+    } finally { fx.cleanup(); }
+  });
+
+  it('the same draft over a stopped tool queues nothing — no turn is coming (D-0186)', () => {
+    const fx = fixture({ alive: ['pm'], clients: ['/dev/ttys009'], typedAlready: 'merga #10799 och' });
+    try {
+      const sent = fx.send(['pm', '--wake', 'wake up']);
+      assert.equal(sent.status, 0, sent.stderr);
+      assert.equal(fx.messages('pm').length, 1, 'the file is delivered either way');
+      assert.match(sent.stdout, /nothing is running in pm, and a leftover draft sits in its pane — nothing will clear it, so no knock was queued/u);
+      assert.deepEqual(fx.tmux.submitted(), []);
+      assert.equal(fx.tmux.prompt(), 'merga #10799 och', 'still not typed over');
     } finally { fx.cleanup(); }
   });
 
@@ -799,6 +813,9 @@ describe('text in the box is a question, not an answer', () => {
   it('still refuses a real draft, and gives back the one character it borrowed', () => {
     const fx = fixture({ alive: ['alpha'], typedAlready: 'merga #10799 och' });
     try {
+      // A living tool behind the draft: the subject here is the probe, and
+      // a draft over a stopped tool is D-0186's case, tested apart.
+      installStandingStub(fx.tmux.bin, [{ pid: 99901, cwd: join(fx.workRoot, 'alpha') }]);
       const sent = fx.send(['alpha', '--wake', 'wake up']);
       assert.equal(sent.status, 0, sent.stderr);
       assert.match(sent.stdout, /queued — a draft is in alpha's prompt/u, 'a real draft is a queued wake, never a typed-over one');
@@ -811,6 +828,7 @@ describe('text in the box is a question, not an answer', () => {
   it('a draft behind a ghost is a draft: the probe lands after it', () => {
     const fx = fixture({ alive: ['alpha'], ghost: GHOST, typedAlready: 'status' });
     try {
+      installStandingStub(fx.tmux.bin, [{ pid: 99901, cwd: join(fx.workRoot, 'alpha') }]);
       const sent = fx.send(['alpha', '--wake', 'wake up']);
       assert.match(sent.stdout, /queued — a draft is in alpha's prompt/u);
       assert.equal(fx.tmux.prompt(), 'status');

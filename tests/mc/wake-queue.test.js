@@ -11,7 +11,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
-import { installTmuxStub } from './_helpers/tmux-stub.js';
+import { installStandingStub, installTmuxStub } from './_helpers/tmux-stub.js';
 import { runMcCli } from './_helpers/mc-cli.js';
 import { dropWake, enqueueWake, flushWakeQueue, pendingWakeFor, readWakeQueue } from '../../src/mc/wake-queue.js';
 import { flushPendingWakes } from '../../src/mc/work-send.js';
@@ -69,6 +69,10 @@ function fixture(options = {}) {
   mkdirSync(join(workRoot, 'alpha'), { recursive: true });
   mkdirSync(mcHome, { recursive: true, mode: 0o700 });
   const tmux = installTmuxStub(root, options);
+  // The queue is for a conversation that is running (D-0186): unless a test
+  // says otherwise, a claude stands in alpha, so a draft means "queued" and
+  // not "nobody behind it".
+  if (options.standing !== false) installStandingStub(tmux.bin, [{ pid: 99901, cwd: join(workRoot, 'alpha') }]);
   const env = {
     MC_HOME: mcHome, MC_WORK_ROOT: workRoot, CLAUDE_CONFIG_DIR: join(root, 'claude'), CODEX_HOME: join(root, 'codex'),
     PATH: `${tmux.bin}:${SAFE_PATH}`,
@@ -80,6 +84,45 @@ function fixture(options = {}) {
     cleanup() { try { rmSync(root, { recursive: true, force: true }); } catch { /* gone */ } },
   };
 }
+
+describe('a draft over a stopped session queues nothing (D-0186)', () => {
+  it('says so, delivers the file, and owes no knock', () => {
+    // PM's two orders, 2026-08-24: queued for hours behind a ghost draft in
+    // a pane whose tool had been stopped. A stopped session has no turn
+    // coming, so "knocked when the prompt clears" means never.
+    const fx = fixture({ alive: ['alpha'], typedAlready: 'a ghost of an old wake', standing: false });
+    try {
+      const sent = fx.send(['alpha', '--wake', 'read me']);
+      assert.equal(sent.status, 0, sent.stderr);
+      assert.equal(fx.messages().length, 1, 'the file is delivered either way');
+      assert.match(sent.stdout, /nothing is running in alpha, and a leftover draft sits in its pane — nothing will clear it, so no knock was queued/u);
+      assert.equal(pendingWakeFor('alpha', { root: fx.mcHome }), null, 'a wake was queued for nobody');
+      assert.deepEqual(fx.tmux.submitted(), [], 'the ghost was not sent');
+    } finally { fx.cleanup(); }
+  });
+
+  it('the flush drops an entry whose pane outlived its tool, and says why', () => {
+    const fx = fixture({ alive: ['alpha'], typedAlready: 'draft' });
+    try {
+      fx.send(['alpha', '--wake', 'read me']);
+      assert.ok(pendingWakeFor('alpha', { root: fx.mcHome }), 'queued while the tool lived');
+      // The tool stops; the pane and its draft stay.
+      const previous = process.env.MC_WORK_ROOT;
+      process.env.MC_WORK_ROOT = fx.env.MC_WORK_ROOT;
+      try {
+        const lines = [];
+        const outcomes = flushPendingWakes({
+          root: fx.mcHome, run: (args) => runTmux(fx, args), sleep: () => {}, processes: () => [], log: (line) => lines.push(line),
+        });
+        assert.equal(outcomes[0].outcome, 'gone', JSON.stringify(outcomes));
+        assert.match(outcomes[0].reason, /a pane is there but no conversation runs in it/u);
+      } finally {
+        if (previous === undefined) delete process.env.MC_WORK_ROOT; else process.env.MC_WORK_ROOT = previous;
+      }
+      assert.equal(pendingWakeFor('alpha', { root: fx.mcHome }), null);
+    } finally { fx.cleanup(); }
+  });
+});
 
 describe('a wake refused on a draft is queued, and lands when the prompt clears', () => {
   it('says queued rather than did not knock, and the board shows the session unreachable since then', () => {
