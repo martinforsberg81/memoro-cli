@@ -6,7 +6,7 @@
  * `mc repo watch`. If any of them quietly dies, the chain breaks and the only
  * trace is that nothing happens. The board showed everything downstream of
  * them — unreachable since, queued, overdue — and never whether anybody was
- * still trying. One row, three watchers, each saying one of four things:
+ * still trying. One row, four watchers, each saying one of four things:
  * never started · alive (last round N ago) · alive but stale (no round in
  * three intervals) · NOT RUNNING — stopped without telling anyone (a pid
  * file whose process is gone).
@@ -20,8 +20,9 @@ import { mcHome } from './paths.js';
 import { watcherState as repoWatcherState } from './repo-watch.js';
 import { pmWatcherState } from './watch-pm.js';
 import { sessionsWatcherState } from './watch-sessions.js';
+import { mainWatcherState } from './watch-main.js';
 
-export const WATCHERS = Object.freeze(['pm', 'sessions', 'repo']);
+export const WATCHERS = Object.freeze(['pm', 'sessions', 'repo', 'main']);
 
 /** `{ pm, sessions, repo }`, each `{ running, abandoned, stale, last_write_age_ms, interval_ms, pid }`. */
 export function watchersState({ root = mcHome(), now = Date.now() } = {}) {
@@ -43,6 +44,7 @@ export function watchersState({ root = mcHome(), now = Date.now() } = {}) {
     pm: safely(() => pmWatcherState({ root, now })),
     sessions: safely(() => sessionsWatcherState({ root, now })),
     repo: safely(() => repoWatcherState({ root, now })),
+    main: safely(() => mainWatcherState({ root, now })),
   };
 }
 

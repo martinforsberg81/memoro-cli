@@ -583,7 +583,7 @@ describe('mc watch, the words', () => {
     assert.deepEqual(
       parseArgs(['pm', 'start', '--interval', '60']),
       {
-        target: 'pm', verb: 'start', json: false, intervalMs: 60_000, model: null, idleMs: null, groups: [],
+        target: 'pm', verb: 'start', json: false, intervalMs: 60_000, model: null, idleMs: null, groups: [], repo: null,
       },
     );
     assert.equal(parseArgs(['pm']).verb, 'status');

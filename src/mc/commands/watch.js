@@ -23,10 +23,13 @@ import {
   describeStartFlags,
 } from '../watch-sessions.js';
 import { DEFAULT_INTERVAL_MS as SESSIONS_INTERVAL_MS } from '../watch-sessions-store.js';
+import {
+  startMainWatcher, stopMainWatcher, mainWatcherState, DEFAULT_INTERVAL_MS as MAIN_INTERVAL_MS,
+} from '../watch-main.js';
 import { scanArgs } from './flags.js';
 
 /** The legs that exist. */
-const TARGETS = ['pm', 'sessions'];
+const TARGETS = ['pm', 'sessions', 'main'];
 const VERBS = ['start', 'stop', 'status'];
 
 const LEGS = {
@@ -59,6 +62,19 @@ const LEGS = {
       'flags go to the notices ledger; dead, quota-exhausted, unattended and quiet-group knock on pm directly',
     ],
   },
+  main: {
+    start: (opts) => startMainWatcher({ intervalMs: opts.intervalMs, repo: opts.repo }),
+    stop: () => stopMainWatcher(),
+    state: () => mainWatcherState(),
+    what: 'the main-watch',
+    intervalMs: MAIN_INTERVAL_MS,
+    flags: ['repo'],
+    does: [
+      'it measures the base branch per SHA — a pass where main has not moved costs one git fetch and no suite',
+      'a moved main already measured green by the gate is green for free; only a landing that bypassed the gate is run',
+      'it knocks pm the moment main goes red, names the new red, and lists the landings in the interval',
+    ],
+  },
 };
 
 export async function run(argv, deps = {}) {
@@ -78,6 +94,10 @@ export async function run(argv, deps = {}) {
       stdout.write(`mc: ${leg.what} is already running (pid ${started.pid}, every ${seconds(started.interval_ms)})\n`);
       return 0;
     }
+    if (!started.ok && started.reason === 'no-repo') {
+      stderr.write('mc: mc watch main needs a repository — mc watch main start --repo <name>\n');
+      return 1;
+    }
     if (!started.ok) {
       stderr.write(`mc: could not start ${leg.what} (${started.reason})\n`);
       return 1;
@@ -87,7 +107,9 @@ export async function run(argv, deps = {}) {
     // stop is the last start again, and says so rather than silently being
     // a plainer guard (B4).
     if (started.flags) {
-      const shown = describeStartFlags(started.flags);
+      const shown = opts.target === 'main'
+        ? (started.flags.repo ? `--repo ${started.flags.repo}` : '')
+        : describeStartFlags(started.flags);
       if (shown) stdout.write(`mc: ${started.remembered ? 'as last started: ' : 'with '}${shown}\n`);
     }
     for (const line of leg.does) stdout.write(`mc: ${line}\n`);
@@ -177,6 +199,9 @@ function usage() {
     '        mc watch sessions start [--interval <seconds>] [--model <model>] [--idle <minutes>] [--group <prefix>]...\n',
     '        mc watch sessions stop\n',
     '        mc watch sessions status [--json]\n',
+    '        mc watch main start [--interval <seconds>] --repo <name>\n',
+    '        mc watch main stop\n',
+    '        mc watch main status [--json]\n',
   ].join('');
 }
 
@@ -193,9 +218,9 @@ export function parseArgs(argv) {
     }
     rest.push(argv[index]);
   }
-  const scanned = scanArgs(rest, { booleans: ['--json'], strictValues: ['--interval', '--model', '--idle'] });
+  const scanned = scanArgs(rest, { booleans: ['--json'], strictValues: ['--interval', '--model', '--idle', '--repo'] });
   const opts = {
-    target: null, verb: 'status', json: scanned.flags.json, intervalMs: null, model: null, idleMs: null, groups,
+    target: null, verb: 'status', json: scanned.flags.json, intervalMs: null, model: null, idleMs: null, groups, repo: scanned.flags.repo || null,
   };
   if (scanned.error) return { ...opts, error: scanned.error };
   const positional = [...scanned.positional];
@@ -241,6 +266,10 @@ export function parseArgs(argv) {
     if (verb !== 'start') return { ...opts, error: `--group belongs to mc watch ${target} start` };
   }
   if (opts.json && verb !== 'status') return { ...opts, error: `--json belongs to mc watch ${target} status` };
+  if (scanned.flags.repo !== null && scanned.flags.repo !== undefined) {
+    if (!(LEGS[target].flags || []).includes('repo')) return { ...opts, error: `--repo belongs to mc watch main start` };
+    if (verb !== 'start') return { ...opts, error: `--repo belongs to mc watch ${target} start` };
+  }
   return opts;
 }
 

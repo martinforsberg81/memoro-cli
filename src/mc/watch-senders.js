@@ -34,6 +34,7 @@ import { readFileSync } from 'node:fs';
 export const WATCHERS = Object.freeze({
   pm: Object.freeze({ name: 'mc watch pm', kind: 'watcher' }),
   sessions: Object.freeze({ name: 'mc watch sessions', kind: 'watcher' }),
+  main: Object.freeze({ name: 'mc watch main', kind: 'watcher' }),
 });
 
 const SENDER_LINES = Object.freeze(Object.values(WATCHERS).map((sender) => `\nfrom: ${sender.name}\n`));

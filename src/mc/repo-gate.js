@@ -774,7 +774,7 @@ function prFacts({ gh, repoPath, pr }) {
  * value of this is that what it runs is what the repository means by "the
  * suite", so nobody has to keep two definitions in agreement.
  */
-function suiteCommand({ repoPath }) {
+export function suiteCommand({ repoPath }) {
   let manifest = null;
   try { manifest = JSON.parse(readFileSync(join(repoPath, 'package.json'), 'utf8')); } catch { manifest = null; }
   const script = manifest?.scripts?.test;
@@ -1018,7 +1018,7 @@ function attemptQuietly(fn) {
   try { return fn(); } catch { return null; }
 }
 
-function realSuite({ cwd, onLine = () => {}, env = process.env } = {}) {
+export function realSuite({ cwd, onLine = () => {}, env = process.env } = {}) {
   return new Promise((resolve) => {
     // The suite is started in a clean test context, not this process's.
     //

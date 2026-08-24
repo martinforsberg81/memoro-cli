@@ -12,12 +12,13 @@ import { watchStatePath } from '../../src/mc/watch-paths.js';
 import { watcherWord, watchersState } from '../../src/mc/watchers-state.js';
 
 describe('watchersState', () => {
-  it('a fresh home: all three never started', () => {
+  it('a fresh home: all four never started', () => {
     const root = mkdtempSync(join(tmpdir(), 'mc-watchers-'));
     try {
       const state = watchersState({ root });
-      assert.deepEqual(Object.keys(state).sort(), ['pm', 'repo', 'sessions']);
-      for (const name of ['pm', 'sessions', 'repo']) assert.equal(watcherWord(state[name]), 'never-started', name);
+      // The main-watch joined the row (D-0190/D-0199, 2026-08-24).
+      assert.deepEqual(Object.keys(state).sort(), ['main', 'pm', 'repo', 'sessions']);
+      for (const name of ['pm', 'sessions', 'repo', 'main']) assert.equal(watcherWord(state[name]), 'never-started', name);
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
