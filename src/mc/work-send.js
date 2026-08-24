@@ -239,7 +239,27 @@ export function sendToArea({
   // and nothing will say so until the draft goes. So the wake is queued, the
   // guard's round tries it again, and the board shows the session as
   // unreachable meanwhile. Nothing types over the draft, ever.
+  //
+  // Queued only for a conversation that is actually running (D-0186,
+  // 2026-08-24): a stopped session has no turn coming, so "knocked when the
+  // prompt clears" means never — PM's two orders queued for hours behind a
+  // ghost draft in a pane whose tool had been stopped, and a person with
+  // tmux was the thing that finally delivered them. A pane with a draft and
+  // nobody behind it is said as what it is: the file is in the inbox for
+  // the next boot, and no knock is owed.
   if (!woken.ok && woken.guard && woken.reason === DRAFT_REASON) {
+    const standing = (processes || toolProcesses)([area.path, ...area.worktrees.map((item) => item.path)]);
+    if (standing.length === 0) {
+      return {
+        ok: true,
+        file,
+        target,
+        woke: false,
+        reason: 'stopped-with-draft',
+        guard: true,
+        left: false,
+      };
+    }
     const queued = enqueueWake({
       name, target, sender: sender.name, inbox, reason: woken.reason, root: queueRoot(env), now,
     });
@@ -285,16 +305,23 @@ function queueRoot(env) {
  * is still in the inbox for the session's next boot. Everything else stays
  * queued with one more attempt counted, including a draft still there.
  */
-export function flushPendingWakes({ root = mcHome(), run = null, sleep = null, now = new Date(), log = () => {} } = {}) {
+export function flushPendingWakes({ root = mcHome(), run = null, sleep = null, now = new Date(), processes = null, log = () => {} } = {}) {
   const outcomes = flushWakeQueue({
     root,
     now,
     attempt: (entry) => {
       const target = backgroundTarget(entry.name, { run: run ? (args) => run(args) : null });
       if (!target) return { ok: false, gone: true, reason: 'nothing is running there any more' };
+      // A pane that outlived its tool holds the queue's one impossible
+      // promise: the draft in it will never clear itself (D-0186). The
+      // entry goes; the file is in the inbox for the session's next boot.
+      const area = inspectWorkArea(entry.name, process.env, { conversations: false, git: false });
+      if (area.exists) {
+        const standing = (processes || toolProcesses)([area.path, ...area.worktrees.map((item) => item.path)]);
+        if (standing.length === 0) return { ok: false, gone: true, reason: 'a pane is there but no conversation runs in it — nothing will clear that draft' };
+      }
       // An entry queued before the notice carried a path has none; the area
       // still knows where its inbox is.
-      const area = entry.inbox ? null : inspectWorkArea(entry.name, process.env, { conversations: false, git: false });
       const inbox = entry.inbox || (area?.path ? inboxPath(area.path) : null);
       const woken = wakeConversation({
         target, sender: entry.sender || 'mc', inbox, run, sleep, attachedOk: reservedRoleName(entry.name),

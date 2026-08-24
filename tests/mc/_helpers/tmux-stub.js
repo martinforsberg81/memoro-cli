@@ -158,3 +158,26 @@ exit 0
     submitted: () => readFileSync(screen, 'utf8').split('\n').filter((line) => line.startsWith('> ')),
   };
 }
+
+/**
+ * A `lsof` and a `ps` beside the tmux, so a CLI test can put a living tool
+ * in an area. `toolProcesses` asks the machine — lsof for who stands where,
+ * ps for what each pid runs — and a child process cannot be handed a stub
+ * function, only a PATH. One entry: a pid that need not exist (ps is the
+ * stub answering for it), a cwd, and a command line ("claude" by default,
+ * which is what the tool matcher looks for).
+ */
+export function installStandingStub(bin, entries = []) {
+  const lsof = entries.map((entry) => `p${entry.pid}\nn${entry.cwd}`).join('\n');
+  writeFileSync(join(bin, 'lsof'), `#!/bin/sh
+printf '%s\n' "${lsof}"
+exit 0
+`);
+  chmodSync(join(bin, 'lsof'), 0o755);
+  const ps = entries.map((entry) => ` ${entry.pid} ${entry.command || 'claude'}`).join('\n');
+  writeFileSync(join(bin, 'ps'), `#!/bin/sh
+printf '%s\n' "${ps}"
+exit 0
+`);
+  chmodSync(join(bin, 'ps'), 0o755);
+}
