@@ -54,26 +54,20 @@ async function routeV1Command(args) {
   // Bare `mc` is "show me my sessions". It used to wrap a coding tool in the
   // current directory and refused outside a Git repository; nothing about mc
   // is gated on repositories any more.
-  if (args.length === 0) return runModule('./cli/list.js', []);
+  // No verb: the work menu. The old session list stood here (`mc list`,
+  // 7 calls across 1157 sessions' transcripts, all looking for work areas).
+  if (args.length === 0) return runModule('./mc/commands/work.js', []);
+  // The verbs measured used, 2026-08-24, across every session transcript on
+  // this machine (1157 conversations): work 268, repo 56, status 22,
+  // suite 11, worker 5, task 1, pm 1 — plus the daemons' watch, doctor (the
+  // PM round calls it as a function), roles, pm-helper. The seventeen
+  // removed here had ZERO calls: the old portable-session surface. Cut
+  // because mc is for memoro me only (Martin, 2026-08-24) — and NOT on the
+  // gate's word, which could not measure during this work (its suite was
+  // the flaky dead surface being removed).
   const modules = {
-    new: './cli/new.js',
-    open: './cli/open.js',
-    resume: './cli/resume.js',
-    list: './cli/list.js',
     status: './cli/status.js',
-    rename: './cli/rename.js',
-    cd: './cli/cd.js',
-    attach: './cli/attach.js',
-    dispatch: './cli/dispatch.js',
-    read: './cli/read.js',
-    end: './mc/commands/end.js',
-    delete: './mc/commands/delete.js',
-    cleanup: './mc/commands/cleanup.js',
-    gc: './mc/commands/gc.js',
-    storage: './mc/commands/storage.js',
     doctor: './mc/commands/doctor.js',
-    worktrees: './mc/commands/worktrees.js',
-    worktree: './mc/commands/worktree.js',
     work: './mc/commands/work.js',
     task: './mc/commands/task.js',
     repo: './mc/commands/repo.js',
@@ -83,8 +77,6 @@ async function routeV1Command(args) {
     roles: './mc/commands/roles.js',
     pm: './mc/commands/pm.js',
     'pm-helper': './mc/commands/pm-helper.js',
-    restart: './cli/restart.js',
-    migrate: './mc/commands/migrate.js',
   };
   return Object.hasOwn(modules, command)
     ? runModule(modules[command], args.slice(1))
