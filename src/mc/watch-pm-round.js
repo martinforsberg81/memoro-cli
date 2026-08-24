@@ -100,7 +100,7 @@ export async function pmRound({
   outcome.commit = attempt(outcome, 'commit', () => commitRoleHome(areaPath, now));
   outcome.doctor = attempt(outcome, 'doctor', () => {
     const result = doctor({ deps: {} });
-    return { ok: Boolean(result?.ok), issues: (result?.issues || []).length };
+    return { ok: Boolean(result?.ok), issues: (result?.issues || []).length, not_in_force: result?.not_in_force || [] };
   });
   const inbox = attempt(outcome, 'inbox', () => readInbox(areaPath, area));
   outcome.inbox = inbox ? { count: inbox.items.length, oldest: inbox.items[0]?.at || null, reason: inbox.reason } : null;
@@ -123,11 +123,18 @@ export async function pmRound({
   // however many passes look at it.
   const orderItems = outcome.orders.map((order) => ({ name: `${order.source} → msr-track-${order.track}: ${order.excerpt}`, at: order.at || outcome.at }));
   const undelivered = decide(orderItems, previous.orders || {}, { reachable: true });
+  // A mechanism out of force knocks the same way (PM's order, 2026-08-24:
+  // five instances in a week of built-and-not-in-force, each found by
+  // accident): newly broken knocks now, still broken earns one reminder,
+  // repaired is forgotten. The sentence is its own key.
+  const brokenItems = (outcome.doctor?.not_in_force || []).map((line) => ({ name: line, at: outcome.at }));
+  const enforcement = decide(brokenItems, previous.enforcement || {}, { reachable: true });
 
   // The one place a pass can decide to cost somebody a turn. Everything above
   // is filesystem; this is the whole of what the round asks of PM.
   const worthSaying = change.fresh.length > 0 || change.reminders.length > 0 || outcome.notices.length > 0
-    || undelivered.fresh.length > 0 || undelivered.reminders.length > 0;
+    || undelivered.fresh.length > 0 || undelivered.reminders.length > 0
+    || enforcement.fresh.length > 0 || enforcement.reminders.length > 0;
   if (worthSaying) {
     attempted = true;
     outcome.knock = await attemptAsync(outcome, 'knock', () => knock({
@@ -150,6 +157,7 @@ export async function pmRound({
   const delivered = !attempted || Boolean(outcome.knock?.ok);
   const items = delivered ? change.items : previous.items || {};
   const orders = delivered ? undelivered.items : previous.orders || {};
+  const enforcementState = delivered ? enforcement.items : previous.enforcement || {};
   if (delivered && outcome.knock?.file) remember(items, basename(outcome.knock.file), outcome.at);
   // The last knock, kept apart from the last round: "nothing to say" for
   // six passes is not the same as "the last knock was refused", and the
@@ -157,7 +165,7 @@ export async function pmRound({
   const lastKnock = outcome.knock
     ? { at: outcome.at, woke: Boolean(outcome.knock.woke), delivered: Boolean(outcome.knock.ok), reason: outcome.knock.woke ? null : outcome.knock.reason || null }
     : previous.last_knock || null;
-  attempt(outcome, 'state', () => writeState(root, { at: outcome.at, items, orders, last_round: summary(outcome), last_knock: lastKnock }));
+  attempt(outcome, 'state', () => writeState(root, { at: outcome.at, items, orders, enforcement: enforcementState, last_round: summary(outcome), last_knock: lastKnock }));
 
   if (delivered && outcome.knock?.ok) {
     for (const notice of outcome.notices) {
@@ -319,6 +327,14 @@ export function knockText({
     for (const notice of notices) {
       lines.push(`  ${notice.session}  ${notice.pattern}${notice.detail ? ` — ${notice.detail}` : ''}`);
     }
+  }
+  // A mechanism out of force is named in full, never counted: "28 issues"
+  // went unread for a day, and this line is the difference between a guard
+  // that guards and one that was merged (D-0180's form, five instances).
+  if (doctor?.not_in_force?.length) {
+    if (lines.length) lines.push('');
+    lines.push(`${doctor.not_in_force.length} mechanism${doctor.not_in_force.length === 1 ? '' : 's'} NOT IN FORCE:`);
+    for (const line of doctor.not_in_force) lines.push(`  ${line}`);
   }
   if (doctor && doctor.ok === false) {
     if (lines.length) lines.push('');

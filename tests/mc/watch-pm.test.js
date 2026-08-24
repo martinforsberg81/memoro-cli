@@ -287,6 +287,30 @@ describe('the round', () => {
     } finally { fx.cleanup(); }
   });
 
+  it('a mechanism out of force knocks, earns one reminder, then rests — and is named in full (D-0180)', async () => {
+    const fx = fixture();
+    try {
+      const broken = 'push-guard is not in force on memoro — no pre-push hook; mc repo guard memoro';
+      const out = (list) => () => ({ ok: true, issues: [], not_in_force: list });
+      const first = await pass(fx, { doctor: out([broken]) });
+      assert.equal(first.knock?.ok, true, 'newly out of force is worth a turn');
+      const said = fx.sent[fx.sent.length - 1].message;
+      assert.match(said, /1 mechanism NOT IN FORCE:/u);
+      assert.ok(said.includes(broken), 'named in full, never counted');
+      // Still broken: quiet, then one reminder on the third pass, then rest.
+      const second = await pass(fx, { doctor: out([broken]) });
+      assert.equal(second.knock, null, 'still broken is not news yet');
+      const third = await pass(fx, { doctor: out([broken]) });
+      assert.equal(third.knock?.ok, true, 'one reminder');
+      const fourth = await pass(fx, { doctor: out([broken]) });
+      assert.equal(fourth.knock, null, 'then rest');
+      // Repaired: forgotten — and a NEW break knocks at once.
+      await pass(fx, { doctor: out([]) });
+      const again = await pass(fx, { doctor: out([broken]) });
+      assert.equal(again.knock?.ok, true, 'a repaired-then-rebroken mechanism is news again');
+    } finally { fx.cleanup(); }
+  });
+
   it("does not count the guard's knock either — a watcher's file is never an item (KP-10)", async () => {
     const fx = fixture();
     try {

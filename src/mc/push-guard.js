@@ -29,8 +29,8 @@
  * marker line and only replaces what carries it.
  */
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { isAbsolute, join } from 'node:path';
 
 export const MARKER = '# mc push-guard (D-0164) — replaced by mc, never by hand';
 
@@ -47,11 +47,43 @@ export function hookScript() {
     MARKER,
     '# Refuses a push to a branch whose pull request is already merged. See',
     '# src/mc/push-guard.js. MC_PUSH_ANYWAY=1 lets a deliberate push through.',
-    'if command -v mc >/dev/null 2>&1; then exec mc repo push-check "$1" "$2"; fi',
-    'echo "mc: push-guard: mc is not on PATH — pushing unchecked" >&2',
+    '# A hook that was here before mc is preserved beside this one and runs',
+    '# after the check, with the same stdin — mc chains, it does not replace.',
+    'input=$(cat)',
+    'if command -v mc >/dev/null 2>&1; then',
+    '  printf \'%s\\n\' "$input" | mc repo push-check "$1" "$2" || exit $?',
+    'else',
+    '  echo "mc: push-guard: mc is not on PATH — pushing unchecked" >&2',
+    'fi',
+    `chained="$(dirname "$0")/${CHAINED}"`,
+    'if [ -x "$chained" ]; then printf \'%s\\n\' "$input" | "$chained" "$1" "$2" || exit $?; fi',
     'exit 0',
     '',
   ].join('\n');
+}
+
+/** The name a pre-existing hook is preserved under, beside mc's. */
+export const CHAINED = 'pre-push.before-mc';
+
+/**
+ * Where this repository's hooks actually live.
+ *
+ * `core.hooksPath` moves them, and both repos this guard exists for have it
+ * set (measured 2026-08-24): memoro-cli to `.git/hooks` — the default,
+ * spelled out — and memoro to a versioned `.githooks/`. The old code asked
+ * only `common/hooks`, so `mc repo guard` refused one repository for a
+ * setting that changed nothing and reported the other's real hook as "no
+ * pre-push hook". One function answers for install and state alike, and a
+ * relative path is git's: relative to the top level, not to the caller.
+ */
+export function hooksDir(repoPath, { git = defaultGit } = {}) {
+  const common = git(['-C', repoPath, 'rev-parse', '--path-format=absolute', '--git-common-dir']);
+  if (!common) return null;
+  const configured = git(['-C', repoPath, 'config', '--get', 'core.hooksPath']);
+  if (!configured) return join(common, 'hooks');
+  if (isAbsolute(configured)) return configured;
+  const top = git(['-C', repoPath, 'rev-parse', '--show-toplevel']);
+  return join(top || repoPath, configured);
 }
 
 /**
@@ -59,37 +91,60 @@ export function hookScript() {
  * it did not write.
  */
 export function installPushGuard(repoPath, { git = defaultGit } = {}) {
-  const common = git(['-C', repoPath, 'rev-parse', '--path-format=absolute', '--git-common-dir']);
-  if (!common) return { ok: false, reason: 'not a git repository' };
-  // core.hooksPath moves the hooks away from the repository; a user who set it
-  // has their own arrangement, and mc writing into .git/hooks would install
-  // a hook git never runs — which would look installed and guard nothing.
-  const hooksPath = git(['-C', repoPath, 'config', '--get', 'core.hooksPath']);
-  if (hooksPath) return { ok: false, reason: `core.hooksPath is set to ${hooksPath} — install the hook there by hand, or unset it` };
-  const dir = join(common, 'hooks');
+  const dir = hooksDir(repoPath, { git });
+  if (!dir) return { ok: false, reason: 'not a git repository' };
   const path = join(dir, 'pre-push');
   const wanted = hookScript();
   if (existsSync(path)) {
     const current = readFileSync(path, 'utf8');
-    if (!current.includes(MARKER)) return { ok: false, reason: `${path} exists and is not mc's — left alone`, path };
-    if (current === wanted) return { ok: true, installed: false, path };
+    if (!current.includes(MARKER)) {
+      // A version-controlled hook is the repository's, and a change to the
+      // repository goes through a pull request — a rename here would dirty
+      // every working tree that shares it, unexplained (PM's ruling,
+      // 2026-08-24; K3). The way in is to add the check to that file in a
+      // PR; the state below recognises a repository-owned check as in
+      // force.
+      if (git(['-C', repoPath, 'ls-files', '--error-unmatch', '--', path]) !== null) {
+        return { ok: false, reason: `${path} is version-controlled — it is the repository's; add 'mc repo push-check' to it through a pull request instead`, path };
+      }
+      // An untracked hook that was here first is never overwritten and
+      // never lost: it is preserved byte for byte under CHAINED and runs
+      // after the check, with the same stdin and arguments. A guard that
+      // refused around it was merged and in force nowhere (D-0180's fifth
+      // instance, 2026-08-24), and one that overwrote it would be worse
+      // than none.
+      const kept = join(dir, CHAINED);
+      if (existsSync(kept)) return { ok: false, reason: `both ${path} and ${kept} exist and neither is mc's — left alone`, path };
+      renameSync(path, kept);
+      writeFileSync(path, wanted);
+      chmodSync(path, 0o755);
+      return { ok: true, installed: true, path, chained: kept };
+    }
+    if (current === wanted) return { ok: true, installed: false, path, chained: existsSync(join(dir, CHAINED)) ? join(dir, CHAINED) : null };
   }
   mkdirSync(dir, { recursive: true });
   writeFileSync(path, wanted);
   chmodSync(path, 0o755);
-  return { ok: true, installed: true, path };
+  return { ok: true, installed: true, path, chained: existsSync(join(dir, CHAINED)) ? join(dir, CHAINED) : null };
 }
 
-/** Is mc's hook in place for this repository? */
+/** Is mc's hook in place for this repository — wherever its hooks live? */
 export function pushGuardState(repoPath, { git = defaultGit } = {}) {
-  const common = git(['-C', repoPath, 'rev-parse', '--path-format=absolute', '--git-common-dir']);
-  if (!common) return { installed: false, reason: 'not a git repository' };
-  const path = join(common, 'hooks', 'pre-push');
+  const dir = hooksDir(repoPath, { git });
+  if (!dir) return { installed: false, reason: 'not a git repository' };
+  const path = join(dir, 'pre-push');
   if (!existsSync(path)) return { installed: false, path, reason: 'no pre-push hook' };
   const text = readFileSync(path, 'utf8');
-  return text.includes(MARKER)
-    ? { installed: true, path }
-    : { installed: false, path, reason: 'a pre-push hook that is not mc\'s' };
+  if (text.includes(MARKER)) {
+    return { installed: true, path, chained: existsSync(join(dir, CHAINED)) ? join(dir, CHAINED) : null };
+  }
+  // A hook the repository owns that carries the check itself — memoro's
+  // way in (PM's ruling, 2026-08-24) — is the guard in force, not a
+  // stranger: the mechanism is what runs, not who wrote the file.
+  if (text.includes('mc repo push-check')) {
+    return { installed: true, path, owned: 'repository', chained: null };
+  }
+  return { installed: false, path, reason: 'a pre-push hook that is not mc\'s' };
 }
 
 /**
