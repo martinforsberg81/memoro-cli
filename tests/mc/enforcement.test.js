@@ -77,37 +77,35 @@ describe('what the list says', () => {
   });
 });
 
-describe('identical findings fold into one counted line', () => {
-  it('a crowd is named once with a count and a first id; one of a kind keeps its row', async () => {
-    // Twenty-eight identical dev-server-session-unbound rows stood in every
-    // heartbeat for a day and nobody read them (2026-08-24) — a counter,
-    // not information.
-    const crowd = Array.from({ length: 28 }, (_, index) => ({ scope: 'session', mc_session_id: `s-${index}`, reason: 'dev-server-session-unbound' }));
-    const lone = { scope: 'session', mc_session_id: 'x-1', reason: 'runtime stale' };
+describe('mc doctor is enforcement-only (2026-08-24)', () => {
+  it('reports mechanisms not in force, and nothing else — the old pre-V1 session scan is gone', async () => {
+    // doctor once scanned pre-V1 session homes and the V1 dev-server
+    // registry; its one output was 27 identical dev-server-session-unbound
+    // lines about a dev-server nobody runs, unread for a day. With mc for
+    // memoro me only, that scan is gone; doctor is the enforcement list now.
     let out = '';
     const code = await run([], {
       stdout: { write: (text) => { out += text; } },
-      scan: () => ({ ok: false, summary: { sessions: 29, runtime_active: 0, runtime_stale: 1 }, issues: [...crowd, lone] }),
-      inspectDevServers: () => ({ ok: true, summary: {}, issues: [] }),
-      enforcement: () => [],
+      stderr: { write: () => {} },
+      enforcement: () => ['push-guard is not in force on memoro — no pre-push hook; mc repo guard memoro'],
     });
     assert.equal(code, 1);
-    assert.match(out, /! session {2}dev-server-session-unbound × 28 {2}\(first: s-0\)/u);
-    assert.match(out, /! session {2}x-1 {2}runtime stale/u);
-    assert.equal((out.match(/dev-server-session-unbound/gu) || []).length, 1, 'the crowd took one line, not twenty-eight');
+    assert.match(out, /NOT IN FORCE {2}push-guard is not in force on memoro/u);
+    assert.doesNotMatch(out, /dev-server-session-unbound|runtime active|sessions \d/u, 'the old session scan is gone');
   });
-});
 
-describe('mc doctor carries it, apart from the 28', () => {
-  it('as its own field, counted in no issue list and moving no ok', () => {
+  it('says so plainly when every mechanism is in force', async () => {
+    let out = '';
+    const code = await run([], { stdout: { write: (t) => { out += t; } }, enforcement: () => [] });
+    assert.equal(code, 0);
+    assert.match(out, /every mechanism that should be in force is/u);
+  });
+
+  it('diagnose is the enforcement list, with ok/issues kept empty for its readers', () => {
     const result = diagnose({
-      deps: {
-        scan: () => ({ ok: true, summary: { sessions: 0, runtime_active: 0, runtime_stale: 0 }, issues: [] }),
-        inspectDevServers: () => ({ ok: true, summary: {}, issues: [] }),
-        enforcement: () => ['push-guard is not in force on memoro — no pre-push hook; mc repo guard memoro'],
-      },
+      deps: { enforcement: () => ['push-guard is not in force on memoro — no pre-push hook; mc repo guard memoro'] },
     });
-    assert.equal(result.ok, true, 'enforcement does not move ok — it answers for the machinery, not the sessions');
+    assert.equal(result.ok, true, 'enforcement does not move ok');
     assert.deepEqual(result.issues, []);
     assert.deepEqual(result.not_in_force, ['push-guard is not in force on memoro — no pre-push hook; mc repo guard memoro']);
   });

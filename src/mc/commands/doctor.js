@@ -1,39 +1,31 @@
+/**
+ * `mc doctor` — the mechanisms that should be in force, and are not.
+ *
+ * It once scanned pre-V1 session homes and the V1 dev-server registry for
+ * orphans (`session-maintenance-v1`, `dev-servers`); that whole surface is
+ * the old portable-session vision, and its one output was twenty-seven
+ * identical `dev-server-session-unbound` lines about a dev-server nobody
+ * runs — a diagnostic that stood in every heartbeat for a day and was never
+ * read (PM, 2026-08-24). With mc for memoro me only, that scan is gone
+ * without replacement (memoro's actual dev server belongs on the board, not
+ * here). What remains is the live half built the night before: the
+ * enforcement list — a mechanism out of force, said by something that
+ * already runs.
+ *
+ * `mc watch pm` runs `diagnose()` every pass (design note §3) and carries
+ * `not_in_force` into its knock. It calls the function rather than the
+ * command so the two cannot drift.
+ */
 import { notInForce } from '../enforcement.js';
-import { repairSessionMaintenanceSync, scanSessionMaintenanceSync } from '../session-maintenance-v1.js';
-import { inspectV1DevServerRegistrySync } from '../dev-servers.js';
 
 /**
- * The diagnosis itself, without a page around it.
- *
- * `mc watch pm` runs this every pass (designnote §3, step 2) and carries a
- * complaint into its knock. It calls the function rather than the command on
- * purpose: a round that shells out to `mc doctor` would be a second process
- * and a second parse of the same answer, and the two could drift the day one
- * of them learns something the other has not. The command below is this plus
- * rendering.
+ * The diagnosis: mechanisms out of force. `ok` and `issues` are kept in the
+ * shape (always green / empty now) so every reader — the PM round, the
+ * command below — keeps its answer; the enforcement list is the substance.
  */
-export function diagnose({ repair = false, deps = {} } = {}) {
-  const maintenance = repair
-    ? (deps.repair || repairSessionMaintenanceSync)({ mcHomeDir: deps.mcHomeDir, apply: true })
-    : (deps.scan || scanSessionMaintenanceSync)({ mcHomeDir: deps.mcHomeDir });
-  const devServers = (deps.inspectDevServers || inspectV1DevServerRegistrySync)({
-    mcHomeDir: deps.mcHomeDir,
-    deps: deps.devServerDeps || {},
-  });
-  // Mechanisms that should be in force and are not (enforcement.js): its own
-  // field and its own section, never folded into `issues` — "28 issues" has
-  // gone unread for a day at a time, and a mechanism out of force must not
-  // be the 29th line of that. It does not move `ok` either: `ok` answers for
-  // the sessions, and this answers for the machinery.
+export function diagnose({ deps = {} } = {}) {
   const enforcement = (deps.enforcement || notInForce)({ deps: deps.enforcementDeps || {} });
-  return {
-    ...maintenance,
-    ok: maintenance.ok && devServers.ok,
-    summary: { ...maintenance.summary, dev_servers: devServers.summary },
-    issues: [...maintenance.issues, ...devServers.issues],
-    dev_servers: devServers,
-    not_in_force: enforcement,
-  };
+  return { ok: true, issues: [], summary: {}, not_in_force: enforcement };
 }
 
 export async function run(argv, deps = {}) {
@@ -41,45 +33,27 @@ export async function run(argv, deps = {}) {
   const stderr = deps.stderr || process.stderr;
   const opts = parseArgs(argv);
   if (opts.error) { stderr.write(`mc: ${opts.error}\n`); return 2; }
-  const result = diagnose({ repair: opts.repair, deps });
-  if (opts.json) stdout.write(`${JSON.stringify(result, null, 2)}\n`);
-  else {
-    stdout.write(`mc doctor — ${result.ok ? 'ok' : 'issues found'}${opts.repair ? ' · applied safe repairs' : ''}\n`);
-    // Before everything else, and never as a count: each of these is a
-    // mechanism somebody built that is not doing its job right now.
-    for (const line of result.not_in_force || []) stdout.write(`  NOT IN FORCE  ${line}\n`);
-    stdout.write(`  sessions ${result.summary.sessions} · runtime active ${result.summary.runtime_active} · stale ${result.summary.runtime_stale}\n`);
-    // Identical findings fold into one line with a count: twenty-eight
-    // repeats of dev-server-session-unbound stood in every heartbeat for a
-    // day and nobody read them, PM included — a diagnostic that repeats
-    // one line twenty-eight times is a counter, not information
-    // (2026-08-24). One of a kind keeps its id; a crowd is named once,
-    // counted, with the first id as the way in.
-    const groups = new Map();
-    for (const issue of result.issues) {
-      const key = `${issue.scope || 'session'}\u0000${issue.reason}`;
-      if (!groups.has(key)) groups.set(key, []);
-      groups.get(key).push(issue);
-    }
-    for (const bunch of groups.values()) {
-      const [first] = bunch;
-      const id = first.mc_session_id || first.entry || '';
-      stdout.write(bunch.length === 1
-        ? `  ! ${first.scope || 'session'}  ${id}  ${first.reason}\n`
-        : `  ! ${first.scope || 'session'}  ${first.reason} × ${bunch.length}  (first: ${id || 'unnamed'})\n`);
-    }
-    if (!opts.repair && result.issues.length > 0) stdout.write('  Run mc doctor --repair to apply loss-free catalog and stale-runtime repairs.\n');
+  const result = diagnose({ deps });
+  if (opts.json) { stdout.write(`${JSON.stringify(result, null, 2)}\n`); return result.not_in_force.length ? 1 : 0; }
+  const broken = result.not_in_force || [];
+  if (broken.length === 0) {
+    stdout.write('mc doctor — every mechanism that should be in force is\n');
+    return 0;
   }
-  return result.ok ? 0 : 1;
+  stdout.write(`mc doctor — ${broken.length} mechanism${broken.length === 1 ? '' : 's'} not in force\n`);
+  for (const line of broken) stdout.write(`  NOT IN FORCE  ${line}\n`);
+  return 1;
 }
 
 export function parseArgs(argv) {
-  const opts = { repair: false, json: false };
+  const opts = { json: false };
   for (const arg of argv) {
-    if (arg === '--repair') { opts.repair = true; continue; }
-    if (arg === '--dry-run') { opts.repair = false; continue; }
     if (arg === '--json') { opts.json = true; continue; }
-    return { ...opts, error: `unknown flag: ${arg}` };
+    // `--repair` is gone with the session maintenance it repaired: there is
+    // nothing here to repair any more, and a flag that silently does nothing
+    // is worse than no flag.
+    if (arg === '--repair') return { ...opts, error: 'mc doctor no longer repairs — the session maintenance it fixed is gone; it now only reports mechanisms out of force' };
+    return { ...opts, error: `unknown argument: ${arg}` };
   }
   return opts;
 }
