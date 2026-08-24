@@ -49,7 +49,25 @@ export async function run(argv, deps = {}) {
     // mechanism somebody built that is not doing its job right now.
     for (const line of result.not_in_force || []) stdout.write(`  NOT IN FORCE  ${line}\n`);
     stdout.write(`  sessions ${result.summary.sessions} · runtime active ${result.summary.runtime_active} · stale ${result.summary.runtime_stale}\n`);
-    for (const issue of result.issues) stdout.write(`  ! ${issue.scope || 'session'}  ${issue.mc_session_id || issue.entry || ''}  ${issue.reason}\n`);
+    // Identical findings fold into one line with a count: twenty-eight
+    // repeats of dev-server-session-unbound stood in every heartbeat for a
+    // day and nobody read them, PM included — a diagnostic that repeats
+    // one line twenty-eight times is a counter, not information
+    // (2026-08-24). One of a kind keeps its id; a crowd is named once,
+    // counted, with the first id as the way in.
+    const groups = new Map();
+    for (const issue of result.issues) {
+      const key = `${issue.scope || 'session'}\u0000${issue.reason}`;
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(issue);
+    }
+    for (const bunch of groups.values()) {
+      const [first] = bunch;
+      const id = first.mc_session_id || first.entry || '';
+      stdout.write(bunch.length === 1
+        ? `  ! ${first.scope || 'session'}  ${id}  ${first.reason}\n`
+        : `  ! ${first.scope || 'session'}  ${first.reason} × ${bunch.length}  (first: ${id || 'unnamed'})\n`);
+    }
     if (!opts.repair && result.issues.length > 0) stdout.write('  Run mc doctor --repair to apply loss-free catalog and stale-runtime repairs.\n');
   }
   return result.ok ? 0 : 1;
