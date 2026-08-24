@@ -16,15 +16,11 @@
  */
 import { markDelivered } from './watch-notices.js';
 import { mcHome } from './paths.js';
+import { WATCHERS } from './watch-senders.js';
 import { sendToArea } from './work-send.js';
 
-/**
- * Who the knock is from. Fixed, as the round's is: the guard runs detached
- * from wherever it was started, and `currentHolder()` signed a knock from a
- * guard started in a worktree with that worktree's name (measured
- * 2026-08-23: `from: mc-repo` on a guard's flag in PM's inbox).
- */
-const SENDER = Object.freeze({ name: 'mc watch sessions', kind: 'watcher' });
+/** Who the knock is from: the guard, by its fixed name (`watch-senders.js`). */
+const SENDER = WATCHERS.sessions;
 
 /**
  * Knock, then record it.
