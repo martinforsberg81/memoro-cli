@@ -431,6 +431,14 @@ describe('everything with a deterministic answer is script', () => {
 
     // A suite actually running under it is a lease doing its job.
     assert.deepEqual(flags(suite(held, [{ pid: 9, command: 'npm test', area: 'alpha', elapsed: '03:00' }])), []);
+    // A holder whose process is alive is working — the board just cannot
+    // name what (an extra gate, a prepare). The guard told PM to release
+    // the right 20 minutes into PM's own round's extra gate (2026-08-24);
+    // the living pid is the holder's "I am alive", and no command-name
+    // list can age out of it.
+    assert.deepEqual(flags(suite({ ...held, owner_pid: 42074, owner_alive: true })), []);
+    // Its owner dead but not yet marked orphaned: still a hold nobody is behind.
+    assert.equal(flags(suite({ ...held, owner_pid: 42074, owner_alive: false })).length, 1);
     // Fifteen minutes is the line: a gate round's git work between two suites is minutes, not fifteen.
     assert.deepEqual(flags(suite({ ...held, age_ms: 14 * MINUTE })), []);
     assert.equal(flags(suite({ ...held, age_ms: 16 * MINUTE })).length, 1);

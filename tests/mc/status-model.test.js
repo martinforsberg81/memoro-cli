@@ -36,6 +36,21 @@ function report(model) {
   };
 }
 
+describe('the suite row beside a living holder', () => {
+  it('says the holder is alive instead of "nothing running"', () => {
+    const page = report(null);
+    page.suite = {
+      lease: { held: true, holder: 'pm', errand: 'gate round', age_ms: 20 * 60000, owner_pid: 42074, owner_alive: true, orphaned: false },
+      running: [],
+    };
+    const lines = renderLines(page, { columns: 140, now: 61000 });
+    // Asserted on the head of the sentence: the row is clipped to the
+    // terminal like every other, and the tail may fall off at 140 columns.
+    assert.ok(lines.some((line) => /no suite visible, but the holder's process \(pid 42074\) is alive/u.test(line)), lines.join('\n'));
+    assert.ok(!lines.some((line) => line.includes('nothing running')), 'the misreading stayed on the board');
+  });
+});
+
 describe('a stop on purpose on the status page (KP-09)', () => {
   const stopped = { at: new Date(60000).toISOString(), by: 'pm' };
   it('says who stopped the area and when, while nothing runs there', () => {

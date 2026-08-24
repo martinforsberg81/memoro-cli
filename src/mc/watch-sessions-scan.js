@@ -335,6 +335,15 @@ export const HOLDING_MS = 15 * 60 * 1000;
 function holdingAreas({ report, holdingMs }) {
   const lease = report?.suite?.lease;
   if (!lease?.held || lease.holder_kind !== 'work-area') return [];
+  // The holder's living process IS its "I am alive": a gate round is one
+  // process from claim to release, and `mc suite run` holds through its
+  // command the same way. "No suite running" was a command-name list, and
+  // the list went wrong the day the extra gate was added — the guard told
+  // PM to release the right 20 minutes into PM's own round's extra gate
+  // (measured 2026-08-24), asking for exactly the collision the lease
+  // exists to prevent. A liveness no list can age out of; the flag keeps
+  // to the holds nobody is behind: an orphaned pid, a claim by hand.
+  if (lease.owner_alive === true) return [];
   const running = report.suite.running || [];
   if (running.length > 0) return [];
   if (!Number.isFinite(lease.age_ms) || lease.age_ms <= holdingMs) return [];
