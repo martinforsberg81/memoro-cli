@@ -744,7 +744,9 @@ describe('the pull request\'s own tests are run, wherever they lie', () => {
     try {
       const result = await fx.run();
       assert.equal(result.stopped_at, 'pr-tests');
-      assert.match(result.reason, /2 of the pull request's own tests are red: thing › proves the fix, thing/u);
+      // One failure, two names (the parent reddens too): counted by # fail,
+      // and the names said as names (2026-08-24 — "3 names but fail 2").
+      assert.match(result.reason, /1 of the pull request's own tests is red — the red names, parent suites included: thing › proves the fix, thing/u);
       assert.deepEqual(result.broke, [], 'the suite had nothing to say');
       assert.deepEqual(result.pr_tests.red, ['thing › proves the fix', 'thing'], 'the subtest and its parent, as node reports them');
     } finally { fx.cleanup(); }
@@ -903,6 +905,49 @@ describe('the pull request\'s own tests run with the declared flags', () => {
     try {
       await fx.run();
       assert.deepEqual(fx.ran('tests')[0].flags, []);
+    } finally { fx.cleanup(); }
+  });
+
+  it('a wrapper test script with nothing declared is a stop, never a silent bare run (2026-08-24)', async () => {
+    // memoro's scripts.test became `node scripts/testing/ci.mjs` and the
+    // harvester returned [] without a word: bare `node --test`, no loader,
+    // and every PR touching one of nine /js/-importing files got red
+    // pr-tests that were the gate's own. Silent-empty is the worst of the
+    // three outcomes — the gate says what it cannot know.
+    const fx = fixture({ changed: ['tests/ui/thing.test.js'] });
+    try {
+      writeJson(join(fx.repoPath, 'package.json'), { name: 'repo', scripts: { test: 'node scripts/testing/ci.mjs' } });
+      const result = await fx.run();
+      assert.equal(result.stopped_at, 'pr-tests', JSON.stringify(result.reason));
+      assert.match(result.reason, /test script is not a `node --test` line/u);
+      assert.match(result.reason, /declare pr_tests_flags/u);
+      assert.deepEqual(fx.ran('tests'), [], 'nothing ran bare');
+    } finally { fx.cleanup(); }
+  });
+
+  it('declared flags make the wrapper script nobody\'s problem — the declaration answers', async () => {
+    const fx = fixture({ changed: ['tests/ui/thing.test.js'] });
+    try {
+      writeJson(join(fx.repoPath, 'package.json'), { name: 'repo', scripts: { test: 'node scripts/testing/ci.mjs' } });
+      writeJson(join(fx.mcHome, 'repo-gates.json'), {
+        repo: { prepare: null, prepare_why: 'a test', extra_gates: [], merge_log: null, pr_tests_flags: ['--import', './x.mjs'] },
+      });
+      const result = await fx.run();
+      assert.equal(result.stopped_at, null, JSON.stringify(result.reason));
+      assert.deepEqual(fx.ran('tests')[0].flags, ['--import', './x.mjs']);
+    } finally { fx.cleanup(); }
+  });
+
+  it('red own tests are counted by # fail, never by the number of red names', async () => {
+    // Two failures in one suite carry three red names (the parent reddens
+    // too) — and "3 of the pull request's own tests" answered a question
+    // the count had not asked (2026-08-24).
+    const fx = fixture({ changed: ['tests/ui/thing.test.js'], ownRed: ['one-suite › a', 'one-suite › b'] });
+    try {
+      const result = await fx.run();
+      assert.equal(result.stopped_at, 'pr-tests');
+      assert.match(result.reason, /^2 of the pull request's own tests are red — the red names, parent suites included: /u);
+      assert.equal(result.pr_tests.red.length, 3, 'the names, parents included, stay in the report');
     } finally { fx.cleanup(); }
   });
 });
