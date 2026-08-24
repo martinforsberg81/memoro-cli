@@ -99,7 +99,7 @@ describe('delivered is the order\'s own text in the track\'s inbox', () => {
 });
 
 describe('the round carries it: quiet when delivered, one knock when not', () => {
-  it('knocks with the order named, reminds once, then is quiet — and forgets it when it lands', async () => {
+  it('knocks with the order named once, then is quiet — and forgets it when it lands', async () => {
     const fx = world();
     try {
       fx.report('r3-msr-design.md', `Rad till spår 3: '${G5}'`);
@@ -116,13 +116,11 @@ describe('the round carries it: quiet when delivered, one knock when not', () =>
       await round();
       assert.equal(sent.length, 1, 'still undelivered is not news on the second pass');
       await round();
-      assert.equal(sent.length, 2, 'the third pass is the one reminder');
-      await round();
-      assert.equal(sent.length, 2, 'and after the reminder, the log has it, not the prompt');
+      assert.equal(sent.length, 1, 'nor on the third — one knock per order, no reminder (PM 2026-08-24)');
       // Delivered at last: the check goes quiet, and does not announce the recovery.
       fx.track(3, 'late.md', G5);
       await round();
-      assert.equal(sent.length, 2, 'quiet when everything is delivered');
+      assert.equal(sent.length, 1, 'quiet when everything is delivered — the one knock was the arrival');
     } finally { fx.cleanup(); }
   });
 });

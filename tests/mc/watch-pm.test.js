@@ -162,39 +162,39 @@ describe('the round', () => {
     } finally { fx.cleanup(); }
   });
 
-  it('knocks on a new member, then goes quiet, then reminds once, then is silent for good', async () => {
+  it('knocks on a new member exactly once, then is silent for good (no reminder, PM 2026-08-24)', async () => {
     const fx = fixture();
     try {
       fx.item('2026-08-17T15-53-02.000Z-martin.md');
       fx.aged('2026-08-17T15-53-02.000Z-martin.md', '2026-08-17T15:53:02Z');
 
-      // Six passes back to back. At the default interval that is three hours;
-      // here it is a few milliseconds, because the rule is counted in passes
-      // and the clock is an argument.
+      // Six passes back to back. A reminder about an item PM was already
+      // knocked about is not information, and every knock costs PM a whole
+      // turn — so one knock per item, never a second.
       const knocks = [];
       for (let index = 0; index < 6; index += 1) {
         const outcome = await pass(fx, { now: new Date(Date.parse('2026-08-21T10:00:00Z') + index * 1800_000) });
         knocks.push(Boolean(outcome.knock));
       }
 
-      assert.deepEqual(knocks, [true, false, true, false, false, false], 'arrival, silence, one reminder, silence');
-      assert.equal(fx.sent.length, 2);
+      assert.deepEqual(knocks, [true, false, false, false, false, false], 'arrival, then silence for good');
+      assert.equal(fx.sent.length, 1);
       assert.match(fx.sent[0].message, /^1 unprocessed item in pm\/inbox\/, oldest 2026-08-17T15:53Z/u);
       assert.match(fx.sent[0].message, /new\s+2026-08-17T15-53-02\.000Z-martin\.md/u);
-      assert.match(fx.sent[1].message, /reminder\s+2026-08-17T15-53-02\.000Z-martin\.md/u);
     } finally { fx.cleanup(); }
   });
 
-  it('the reminder lands on the third pass whatever the interval is', () => {
+  it('an item never earns a reminder, however many passes look at it', () => {
     let state = {};
     const items = [{ name: 'a.md', at: '2026-08-17T15:53:02.000Z' }];
     const seen = [];
-    for (let index = 0; index < REMINDER_PASS + 1; index += 1) {
+    for (let index = 0; index < REMINDER_PASS + 2; index += 1) {
       const outcome = decide(items, state);
       state = outcome.items;
-      seen.push(outcome.fresh.length ? 'new' : outcome.reminders.length ? 'reminder' : 'quiet');
+      assert.deepEqual(outcome.reminders, [], 'reminders is always empty now');
+      seen.push(outcome.fresh.length ? 'new' : 'quiet');
     }
-    assert.deepEqual(seen, ['new', 'quiet', 'reminder', 'quiet']);
+    assert.deepEqual(seen, ['new', 'quiet', 'quiet', 'quiet', 'quiet']);
   });
 
   it('an item that comes back after PM archived it is a new arrival, not a lingering one', async () => {
@@ -267,12 +267,11 @@ describe('the round', () => {
     const items = Array.from({ length: 6 }, (_, index) => ({
       name: `item-${index}.md`, at: '2026-08-17T15:53:02.000Z',
     }));
-    const text = knockText({ items, fresh: ['item-5.md'], reminders: ['item-1.md'] });
+    const text = knockText({ items, fresh: ['item-5.md'] });
     assert.match(text, /^6 unprocessed items/u);
     assert.match(text, /new\s+item-5\.md/u);
-    assert.match(text, /reminder\s+item-1\.md/u);
-    assert.match(text, /waiting\s+4 older, already announced/u);
-    assert.doesNotMatch(text, /item-0\.md|item-2\.md/u);
+    assert.match(text, /waiting\s+5 older, already announced/u);
+    assert.doesNotMatch(text, /item-0\.md|item-1\.md|item-2\.md/u);
   });
 
   it('the last knock is remembered apart from the last round (B5)', async () => {
@@ -309,7 +308,7 @@ describe('the round', () => {
     } finally { fx.cleanup(); }
   });
 
-  it('a mechanism out of force knocks, earns one reminder, then rests — and is named in full (D-0180)', async () => {
+  it('a mechanism out of force knocks once, then rests — and is named in full (D-0180)', async () => {
     const fx = fixture();
     try {
       const broken = 'push-guard is not in force on memoro — no pre-push hook; mc repo guard memoro';
@@ -319,13 +318,11 @@ describe('the round', () => {
       const said = fx.sent[fx.sent.length - 1].message;
       assert.match(said, /1 mechanism NOT IN FORCE:/u);
       assert.ok(said.includes(broken), 'named in full, never counted');
-      // Still broken: quiet, then one reminder on the third pass, then rest.
+      // Still broken: silent for good — no reminder (PM 2026-08-24).
       const second = await pass(fx, { doctor: out([broken]) });
-      assert.equal(second.knock, null, 'still broken is not news yet');
+      assert.equal(second.knock, null, 'still broken is not news');
       const third = await pass(fx, { doctor: out([broken]) });
-      assert.equal(third.knock?.ok, true, 'one reminder');
-      const fourth = await pass(fx, { doctor: out([broken]) });
-      assert.equal(fourth.knock, null, 'then rest');
+      assert.equal(third.knock, null, 'and stays silent');
       // Repaired: forgotten — and a NEW break knocks at once.
       await pass(fx, { doctor: out([]) });
       const again = await pass(fx, { doctor: out([broken]) });
@@ -512,6 +509,35 @@ describe('the round', () => {
       assert.equal(done, true, 'the second pass waited for the hour instead of the file');
       assert.equal(passes.length, 2);
       assert.ok(passes[1] < 3000, `woke ${passes[1]}ms after start — should be the file, not the clock`);
+    } finally { fx.cleanup(); }
+  });
+
+  it('the round\'s own knock file does not wake the loop (PM 2026-08-24: no self-feeding)', async () => {
+    // The round writes its knock into pm/inbox/, and the watch used to count
+    // that as "a new file" — a pass every three seconds, each announcing the
+    // one before. A watcher's file must never end the wait.
+    const fx = fixture();
+    try {
+      let onChange = null;
+      const passes = [];
+      await pmWatchLoop({
+        intervalMs: 40,
+        settleMs: 5,
+        rounds: 2,
+        root: fx.root,
+        env: fx.env,
+        watchInbox: (_dir, cb) => { onChange = cb; return { close() {} }; },
+        round: async () => {
+          passes.push(Date.now());
+          if (passes.length === 1) {
+            // The round's own knock lands, signed by the round.
+            fx.ownKnock('2026-08-24T18-00-00.000Z-mc-watch-pm.md');
+            onChange('2026-08-24T18-00-00.000Z-mc-watch-pm.md');
+          }
+        },
+      });
+      assert.equal(passes.length, 2);
+      assert.ok(passes[1] - passes[0] >= 35, `woke ${passes[1] - passes[0]}ms after the round's own knock — the loop fed itself`);
     } finally { fx.cleanup(); }
   });
 
