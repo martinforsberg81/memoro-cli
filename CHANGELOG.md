@@ -6,6 +6,108 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+- The gate carries the candidate's result forward as the next baseline
+  (A1, approved by Martin 2026-08-23: "Verkställ 1+2"). After a green
+  merge, main is the tree the candidate was just measured on — 52 of 61
+  memoro baselines were exactly the previous round's candidate result, and
+  0 of 92 rounds ever saw a red delta on the baseline. The result is saved
+  keyed on `(merge-commit SHA, lockfile hash at that commit, suite
+  command)` and reused only on an exact three-key match, with a line
+  saying so and where the number came from; the chain breaks on the
+  smallest deviation and the baseline runs as before. The red comparison
+  keeps its form — fed from the carried result, free instead of absent.
+  And the check the fresh baseline used to provide by accident is replaced
+  by design: the baseline's red set is compared against the recorded floor
+  too (`BASELINE UNSTABLE — N red names on the baseline are not in
+  .mc/red-ratchet.json`), loudly but never as a stop — measured 2026-08-23,
+  one tree read 55 by #385's candidate and 57 by #386's baseline minutes
+  later, and the 57 was compared against nothing.
+
+### Added
+- `mc repo rounds`, and a line for every gate round (A7). An independent
+  review measured *92 machine-run rounds, 0 with a red delta* and then tore
+  its own number down: the merge log is written after a successful merge,
+  so a round that stopped on red writes nothing, and "0 of 92" can never
+  contain the cases that would disprove it. Every `mc repo merge` and
+  `--check` now appends one JSON line to `gate-rounds.jsonl` under mc's
+  home — merged, stopped, refused, cut short — with `stopped_at` in the
+  round's own vocabulary (lease · suite-lease · merge · red · pr-tests ·
+  ratchet · extra-gate · drift), the reason, the duration and the step
+  timings. `mc repo rounds` counts them by outcome; `--json` is the raw
+  lines. A line that cannot be written never fails the round it describes.
+
+### Added
+- `mc repo merge <repo> <pr> <pr>...` — several pull requests in one round
+  (A3). Measured 2026-08-23: three PRs in a row took three rounds of
+  4m20s–5m39s and held the suite lease for ~16 minutes while two tracks
+  were refused it and a third waited; with eleven PRs queued the round, not
+  the computation, was the bottleneck. A batch is one candidate — the base
+  with every head merged in, in the order given — the full suite once on
+  each side, and **each pull request's own tests still run by themselves**
+  (`origin/<base>...<head>`), so the batch never hides which PR carried
+  which test. Green: each lands in order, the base re-read between merges
+  and required to be exactly the commit this round just made (read from the
+  forge's `mergeCommit`, so a stranger's merge in the gap stops the rest
+  rather than being booked as ours). A batch that stops — a conflict among
+  them, a red, one PR's own tests — falls back to one round per pull
+  request inside the same lease and says it is doing so; the report keeps
+  the batch verdict beside the single rounds, and the merge log gets one
+  line per landed PR naming the batch. Two different bases refuse to be one
+  candidate. And every round now prints wall clock per step — fetch,
+  prepare, both suites, PR tests, extra gates (A5) — so the next
+  efficiency decision is measured, not guessed.
+
+### Fixed
+- The PM round is quiet when it has nothing to say, and the board can tell
+  a refused knock from silence (B3+B5). Measured 2026-08-23: five
+  `mc-watch-pm` files in PM's inbox inside ninety seconds whose whole
+  content was the list of the four before them — the round counted its own
+  knocks as unprocessed items, and each knock named the whole inbox again.
+  Now a file signed `mc watch pm` is not an item at all (recognised by the
+  sender line the channel writes, never by the filename), the knock names
+  only what is new or reminded and counts the rest as *N older, already
+  announced*, and the round's memory keeps the **last knock** apart from
+  the last round — `mc watch pm status` shows *last knock 3m ago · woke /
+  delivered, did not knock: <reason> / NOT DELIVERED: <reason>*, and the
+  `mc status` watch row carries the same, in yellow when it did not wake.
+  "Nothing to say" for six passes and "refused every time" were the same
+  silence on that board for a day, and the difference was 188 knocks that
+  never landed.
+
+### Fixed
+- PM's wake holds: the watcher runs the code on disk, and a stranded notice
+  is finished rather than waited on. Measured 2026-08-23: `mc watch pm` had
+  been started thirteen minutes *before* the fix for the prompt it could not
+  find (#364) and ran the old code for a day — 188 knocks tried, none
+  landed, 154 *could not find its prompt*, and the board read *alive*. On
+  current code a second gap stood behind the first: a wake had typed its
+  notice into PM's busy pane and given up before Enter, and every wake after
+  it probed the box, found real text, and queued itself behind mc's own
+  sentence — 75 minutes, four tracks standing. Three changes, each
+  measured live: (1) both watchers carry the stamp of the source tree they
+  started from, look at it between passes, and restart themselves on the
+  new code when it moves (29 s from the edit to the new pid); `mc watch
+  <leg> status` and the `mc status` watch row say *OLD CODE* for a process
+  behind the tree, and which kind — one that restarts itself, or one started
+  before the check existed that needs `stop && start` once. (2) Text in a
+  box shaped like an mc notice — any sender, any wording — is mc's own knock
+  stopped halfway, not a person's draft: the wake presses Enter on it and
+  types nothing (Enter on the stranded notice → PM read its inbox within the
+  minute). (3) *Press up to edit queued messages* in the box of a busy pane
+  is the turn's receipt, reported `queued`, not *the notice left the prompt
+  without becoming a turn*. (4) A notice typed into a busy pane that never
+  drew it within the wait gets its Enter anyway rather than being left
+  standing — the box was probed empty before typing, so Enter submits the
+  notice or lands in an empty box — and the second submit try is `C-m`,
+  the other spelling of the same key, named in the result when it was the
+  one that worked. (5) A submitted line gets several looks (up to 2.4 s)
+  before the next key: measured on PM's idle pane, the notice was still
+  drawn 600 ms after Enter and a turn by the next look, so one look at
+  400 ms read "still there", pressed again, and cleared a line that was on
+  its way — the *it stayed in the prompt* three panes reported that
+  evening.
+
 ### Added
 - `mc work <name>` refuses a workplace somebody is already sitting in
   (D-0154). The repo lease protects the merge queue and says nothing about

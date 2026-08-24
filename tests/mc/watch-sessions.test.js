@@ -28,10 +28,10 @@ import { describe, it } from 'node:test';
 
 import { readingOrder, watchLoop, watchRound } from '../../src/mc/watch-sessions-loop.js';
 import {
-  MODEL_PATTERNS, SCRIPT_PATTERNS, countInbox, describeSpan, scanSessions,
+  MODEL_PATTERNS, SCRIPT_PATTERNS, arrivedSince, countInbox, describeSpan, scanSessions,
 } from '../../src/mc/watch-sessions-scan.js';
 import { parseFlags, quoteFrom, readOutput } from '../../src/mc/watch-sessions-read.js';
-import { readMemory } from '../../src/mc/watch-sessions-store.js';
+import { readMemory, writeMemory } from '../../src/mc/watch-sessions-store.js';
 import { URGENT_PATTERNS, pendingNotices, readLedger } from '../../src/mc/watch-notices.js';
 import { knockText } from '../../src/mc/watch-sessions-knock.js';
 
@@ -80,12 +80,99 @@ function round(options = {}) {
 }
 
 describe('the guard flags, and only flags', () => {
-  it('has eight patterns, five of them script, and exactly two that knock', () => {
-    assert.deepEqual([...SCRIPT_PATTERNS], ['waiting', 'silent', 'dead', 'unreachable', 'stalled']);
+  it('has eleven patterns, eight of them script, and exactly four that knock', () => {
+    assert.deepEqual([...SCRIPT_PATTERNS], ['waiting', 'silent', 'dead', 'unreachable', 'unattended', 'quiet-group', 'stalled', 'holding']);
     assert.deepEqual([...MODEL_PATTERNS], ['blocked', 'quota-exhausted', 'error']);
-    // The bound in §5 is the point of the exception. A third urgent class would
-    // make the guard the knocker, which is the arrangement it exists to avoid.
-    assert.deepEqual([...URGENT_PATTERNS], ['dead', 'quota-exhausted']);
+    // The bound in §5 is the point of the exception. The two added for B2
+    // (2026-08-23) are the work itself standing still — a session stopped
+    // with mail it has not read, a group in which nobody works — and the
+    // round's half hour is the latency they exist to remove. Everything else
+    // still waits for the round.
+    assert.deepEqual([...URGENT_PATTERNS], ['dead', 'quota-exhausted', 'unattended', 'quiet-group']);
+  });
+
+  it('a session stopped with mail that arrived since it last moved is unattended, knocked, and urgent', async () => {
+    // Measured 2026-08-23: a track idle 9m36s with its answer lying in its
+    // own inbox, and nothing said so. Unread is not "files in inbox/" — a
+    // work area does not archive — it is a file newer than the session's
+    // last move.
+    const at = root();
+    const sent = [];
+    const stopped = NOW - 12 * MINUTE;
+    const outcome = await round({
+      root: at,
+      report: board([['alpha', [conversation({ state: 'waiting', turn: 'waiting', updated_ms: stopped })]]]),
+      arrivals: (path, since) => (since === stopped ? { count: 2, oldest: '2026-08-23T18-50-00.000Z-pm.md' } : { count: 0, oldest: null }),
+      send: (message) => { sent.push(message); return { ok: true, woke: true }; },
+    });
+    const notice = readLedger({ root: at }).notices.find((item) => item.pattern === 'unattended');
+    assert.ok(notice, 'no unattended notice');
+    assert.equal(notice.session, 'alpha');
+    assert.match(notice.detail, /stopped for 12m with 2 inbox files that arrived since it last moved, oldest 2026-08-23T18-50-00\.000Z-pm\.md/u);
+    // Knocked twice: the session itself, and PM — at once, not at the round.
+    assert.deepEqual(sent.map((item) => item.name), ['alpha', 'pm']);
+    assert.match(sent[0].message, /read your inbox now/u);
+    assert.equal(outcome.urgent, 1);
+    assert.equal(outcome.knocked, 1);
+  });
+
+  it('unattended needs the stop to be long enough, and the mail to be newer than the stop', async () => {
+    const at = root();
+    const stopped = NOW - 12 * MINUTE;
+    // Mail older than the stop: it was read, or will be, on the session's
+    // own turn. Nothing flagged.
+    const first = await round({
+      root: at,
+      report: board([['alpha', [conversation({ state: 'waiting', turn: 'waiting', updated_ms: stopped })]]]),
+      arrivals: () => ({ count: 0, oldest: null }),
+    });
+    assert.equal(first.urgent, 0);
+    // Stopped four minutes with new mail: not yet — ten is the line.
+    const second = await round({
+      root: at,
+      report: board([['alpha', [conversation({ id: 'c2', state: 'waiting', turn: 'waiting', updated_ms: NOW - 4 * MINUTE })]]]),
+      arrivals: () => ({ count: 1, oldest: 'x.md' }),
+    });
+    assert.equal(second.urgent, 0);
+    // Working with new mail: it reads it when its turn ends.
+    const third = await round({
+      root: at,
+      report: board([['alpha', [conversation({ id: 'c3', state: 'working', turn: 'working', updated_ms: NOW - 30 * MINUTE })]]]),
+      arrivals: () => ({ count: 1, oldest: 'x.md' }),
+    });
+    assert.equal(third.urgent, 0);
+  });
+
+  it('a named group in which nobody works is quiet-group, once, with how long', async () => {
+    const at = root();
+    const sent = [];
+    const report = board([
+      ['msr-track-1', [conversation({ id: 't1', state: 'waiting', turn: 'waiting', updated_ms: NOW - 25 * MINUTE })]],
+      ['msr-track-2', [conversation({ id: 't2', state: 'waiting', turn: 'waiting', updated_ms: NOW - 40 * MINUTE })]],
+      ['msr-design', [conversation({ id: 'd1', state: 'working', turn: 'working' })]],
+    ]);
+    const first = await round({
+      root: at, report, groups: ['msr-track-'], arrivals: () => ({ count: 0, oldest: null }),
+      send: (message) => { sent.push(message); return { ok: true, woke: true }; },
+    });
+    const notice = readLedger({ root: at }).notices.find((item) => item.pattern === 'quiet-group');
+    assert.ok(notice, 'no quiet-group notice');
+    assert.equal(notice.session, 'msr-track-*');
+    // The last one stopped 25 minutes ago: that is how long the group has been quiet.
+    assert.match(notice.detail, /none of 2 live under msr-track-\* is working — the last stopped 25m ago \(msr-track-1, msr-track-2\)/u);
+    assert.equal(first.urgent, 1);
+    assert.deepEqual(sent.map((item) => item.name), ['pm']);
+    // Still quiet next round: still true, not newly true. One notice.
+    const second = await round({ root: at, report, groups: ['msr-track-'], arrivals: () => ({ count: 0, oldest: null }) });
+    assert.equal(second.urgent, 0);
+    assert.equal(readLedger({ root: at }).notices.filter((item) => item.pattern === 'quiet-group').length, 1);
+    // One of them starts working: the flag ends, and memory follows.
+    const working = board([
+      ['msr-track-1', [conversation({ id: 't1', state: 'working', turn: 'working' })]],
+      ['msr-track-2', [conversation({ id: 't2', state: 'waiting', turn: 'waiting', updated_ms: NOW - 40 * MINUTE })]],
+    ]);
+    await round({ root: at, report: working, groups: ['msr-track-'], arrivals: () => ({ count: 0, oldest: null }) });
+    assert.deepEqual(readMemory({ root: at }).sessions['group:msr-track-'].active, []);
   });
 
   it('writes a notice that says where to look and nothing else', async () => {
@@ -153,6 +240,58 @@ describe('everything with a deterministic answer is script', () => {
       previous: { c1: { live: true, bytes: 1000, updated_ms: gone.updated_ms, active: [] } },
     });
     assert.deepEqual(second.sessions[0].patterns.map((p) => p.pattern), ['dead']);
+  });
+
+  it('a conversation gone because mc work stop asked is not dead — it is stopped, by whom, when (KP-09)', () => {
+    // Three times in one night the guard knocked PM about sessions PM had
+    // just stopped on purpose (2026-08-24). The mark the stop leaves is at
+    // or after the conversation's last movement, so it explains the stop.
+    const gone = conversation({ live: false, state: 'idle', turn: 'working', updated_ms: NOW - 5 * MINUTE });
+    const previous = { c1: { live: true, bytes: 1000, updated_ms: gone.updated_ms, active: [] } };
+    const stopped = scanSessions({
+      now: NOW,
+      report: board([['alpha', [gone]]]),
+      previous,
+      stopMark: () => ({ at: new Date(NOW - 4 * MINUTE).toISOString(), by: 'pm' }),
+    });
+    assert.deepEqual(stopped.sessions[0].patterns, [], 'a stop on purpose is not a flag');
+    assert.deepEqual(stopped.sessions[0].stopped, { by: 'pm', at: new Date(NOW - 4 * MINUTE).toISOString() });
+
+    // The exit hooks write one last line after the stop was asked: a mark up
+    // to a minute older than the last movement is still that stop.
+    const hooks = scanSessions({
+      now: NOW,
+      report: board([['alpha', [gone]]]),
+      previous,
+      stopMark: () => ({ at: new Date(gone.updated_ms - 30_000).toISOString(), by: 'pm' }),
+    });
+    assert.deepEqual(hooks.sessions[0].patterns, []);
+
+    // A mark from before a restart mc did not see explains nothing: the
+    // conversation moved for an hour after it, and then it died.
+    const stale = scanSessions({
+      now: NOW,
+      report: board([['alpha', [gone]]]),
+      previous,
+      stopMark: () => ({ at: new Date(gone.updated_ms - 60 * MINUTE).toISOString(), by: 'pm' }),
+    });
+    assert.deepEqual(stale.sessions[0].patterns.map((p) => p.pattern), ['dead']);
+    assert.equal(stale.sessions[0].stopped, undefined);
+  });
+
+  it('the round says a stop in its log, and writes no notice for it', async () => {
+    const gone = conversation({ live: false, state: 'idle', turn: 'working', updated_ms: NOW - 5 * MINUTE });
+    const at = root();
+    writeMemory({ c1: { live: true, bytes: 1000, updated_ms: gone.updated_ms, active: [] } }, { root: at });
+    const lines = [];
+    await round({
+      root: at,
+      report: board([['alpha', [gone]]]),
+      log: (line) => lines.push(line),
+      stopMark: () => ({ at: new Date(NOW - 4 * MINUTE).toISOString(), by: 'pm' }),
+    });
+    assert.ok(lines.some((line) => /alpha: stopped by pm \d\d:\d\d — not dead/u.test(line)), lines.join('\n'));
+    assert.deepEqual(readLedger({ root: at }).notices, [], 'a stop on purpose wrote a notice');
   });
 
   it('flags mail that arrived in a pane no wake can reach — and asks the channel, not a model', () => {
@@ -229,6 +368,20 @@ describe('everything with a deterministic answer is script', () => {
     assert.deepEqual(countInbox(at), { count: 2, oldest: 'a.md' });
   });
 
+  it("never counts a watcher's knock as mail — neither the round's nor its own (KP-10)", () => {
+    const at = root();
+    mkdirSync(join(at, 'inbox'), { recursive: true });
+    // The round's knock into PM's inbox was, to this guard, "a file that
+    // arrived since PM last moved": PM went `unattended`, the guard knocked,
+    // and the round counted that knock as the next item. Six wakes in a row
+    // after the fleet went quiet, none carrying a report (2026-08-24).
+    writeFileSync(join(at, 'inbox', '2026-08-24T03-00-00.000Z-mc-watch-pm.md'), '---\nfrom: mc watch pm\nat: 2026-08-24T03:00:00.000Z\n---\n\n1 unprocessed item\n');
+    writeFileSync(join(at, 'inbox', '2026-08-24T03-01-00.000Z-mc-watch-sessions.md'), '---\nfrom: mc watch sessions\nat: 2026-08-24T03:01:00.000Z\n---\n\nmc watch sessions flagged 1 thing\n');
+    writeFileSync(join(at, 'inbox', '2026-08-24T03-02-00.000Z-alpha.md'), '---\nfrom: alpha\nat: 2026-08-24T03:02:00.000Z\n---\n\nSLUTRAPPORT\n');
+    assert.deepEqual(countInbox(at), { count: 1, oldest: '2026-08-24T03-02-00.000Z-alpha.md' });
+    assert.deepEqual(arrivedSince(at, 0), { count: 1, oldest: '2026-08-24T03-02-00.000Z-alpha.md' });
+  });
+
   it('flags an order that was given and has not moved, without saying what it was', () => {
     const twelveHours = 12 * 60 * 60_000;
     const { sessions } = scanSessions({
@@ -259,6 +412,32 @@ describe('everything with a deterministic answer is script', () => {
       ],
     });
     assert.deepEqual(sessions[0].patterns, []);
+  });
+
+  it('flags the suite right held with nothing running, on the holder, and says which kind of hold', () => {
+    const suite = (lease, running = []) => ({ ...board([['pm', [conversation()]], ['alpha', [conversation({ id: 'a' })]]]), suite: { lease, running } });
+    const held = { held: true, holder: 'pm', holder_kind: 'work-area', errand: 'gate round for #10861', age_ms: 145 * MINUTE, owner_pid: null, orphaned: false };
+    const flags = (report) => scanSessions({ now: NOW, report, tasks: () => [] }).sessions
+      .flatMap((session) => session.patterns.filter((p) => p.pattern === 'holding').map((p) => ({ area: session.area, ...p })));
+
+    // Held by hand for 2h25m, nothing running: the holder's session is flagged.
+    const [byHand] = flags(suite(held));
+    assert.equal(byHand.area, 'pm');
+    assert.match(byHand.detail, /holds the suite right for 2h25m with no suite running \(“gate round for #10861”\) — mc suite release if the run is over/u);
+
+    // Its process gone: said as that, with the pid and the way back.
+    const [orphan] = flags(suite({ ...held, owner_pid: 4242, orphaned: true }));
+    assert.match(orphan.detail, /pid 4242\) is gone — nothing is running; the next claim takes it/u);
+
+    // A suite actually running under it is a lease doing its job.
+    assert.deepEqual(flags(suite(held, [{ pid: 9, command: 'npm test', area: 'alpha', elapsed: '03:00' }])), []);
+    // Fifteen minutes is the line: a gate round's git work between two suites is minutes, not fifteen.
+    assert.deepEqual(flags(suite({ ...held, age_ms: 14 * MINUTE })), []);
+    assert.equal(flags(suite({ ...held, age_ms: 16 * MINUTE })).length, 1);
+    // Free, or held by a shell nobody can flag: nothing — the board row is what there is.
+    assert.deepEqual(flags(suite({ held: false })), []);
+    assert.deepEqual(flags(suite({ ...held, holder: 'me@host', holder_kind: 'shell' })), []);
+    assert.deepEqual(flags(board([['pm', [conversation()]]])), [], 'a board with no suite row flags nothing');
   });
 
   it('reads a span the way a person does', () => {
@@ -473,6 +652,41 @@ describe('one knocker', () => {
     assert.equal(notices.length, 1);
     assert.equal(delivered.size, 1);
     assert.ok(delivered.has(notices[0].id));
+  });
+});
+
+describe('the holder of an idle suite right is told, by the guard, once', () => {
+  it('sends one file with a wake to the holder when the flag is fresh, and not again while it stands', async () => {
+    const at = root();
+    const sent = [];
+    const report = {
+      ...board([['pm', [conversation()]]]),
+      suite: { lease: { held: true, holder: 'pm', holder_kind: 'work-area', errand: 'x', age_ms: 30 * MINUTE, owner_pid: null, orphaned: false }, running: [] },
+    };
+    const send = (message) => { sent.push(message); return { ok: true, woke: true }; };
+    const first = await round({ root: at, report, send });
+    assert.equal(first.flagged, 1);
+    assert.equal(first.urgent, 0, 'holding is not a knock on PM — it is a word to the holder');
+    assert.equal(sent.length, 1);
+    assert.equal(sent[0].name, 'pm');
+    assert.equal(sent[0].wake, true);
+    assert.match(sent[0].message, /^mc watch sessions: you holds the suite right for 30m with no suite running/u);
+    // Still held next round: the flag stands in memory, nothing is sent twice.
+    const second = await round({ root: at, report, send, now: NOW + 5 * MINUTE });
+    assert.equal(second.flagged, 0);
+    assert.equal(sent.length, 1);
+  });
+
+  it('a send that fails is logged, and the round goes on', async () => {
+    const at = root();
+    const lines = [];
+    const report = {
+      ...board([['pm', [conversation()]]]),
+      suite: { lease: { held: true, holder: 'pm', holder_kind: 'work-area', errand: 'x', age_ms: 30 * MINUTE }, running: [] },
+    };
+    const outcome = await round({ root: at, report, send: () => { throw new Error('tmux is not on this machine'); }, log: (line) => lines.push(line) });
+    assert.equal(outcome.flagged, 1);
+    assert.ok(lines.some((line) => /could not tell pm about the suite right: tmux is not on this machine/u.test(line)), lines.join('\n'));
   });
 });
 

@@ -28,6 +28,7 @@ import { lastModel, listConversations, readTailEntries } from './conversations.j
 import { readMenu } from './menu-read.js';
 import { mcHome, workRoot } from './paths.js';
 import { backgroundTarget } from './work-open.js';
+import { processesStandingIn } from './standing.js';
 import { readSuiteLease } from './suite-lease.js';
 import { pendingWakeFor } from './wake-queue.js';
 import { dependencyTree } from './dependency-tree.js';
@@ -35,6 +36,7 @@ import { areaRoleName } from './roles.js';
 import { openTaskCount } from './task-log.js';
 import { scheduledWakeup } from './wakeup.js';
 import { inspectWorkArea, listWorkAreas } from './work-area.js';
+import { readStopMark } from './work-stop-marker.js';
 
 const run = promisify(execFile);
 
@@ -147,10 +149,24 @@ export function toolProcesses(paths) {
  */
 const SUITE_COMMAND = /(?:^|\/|\s)node(?:\s+\S+)*\s+--test(?:\s|$)|(?:^|\s)npm\s+(?:run\s+)?test(?::\S+)?(?:\s|$)/u;
 
+/**
+ * A shell started with `-c` carries its whole script on its command line —
+ * including the `node --test` it is about to run, or has finished running.
+ * Counting it made every suite two rows and left a "running suite" on the
+ * board after node had exited, while the shell waited for its own cleanup.
+ * The suite is the process that runs tests, not the one that typed them.
+ */
+const SHELL_WRAPPER = /^(?:\S*\/)?(?:zsh|bash|sh|dash|fish)\s+(?:-\S+\s+)*-c\s/u;
+
+/** Is this command line a running suite — the runner itself, not a shell that typed it? */
+export function isSuiteCommand(command) {
+  return !SHELL_WRAPPER.test(command) && SUITE_COMMAND.test(command);
+}
+
 export function suiteProcesses(paths) {
   const found = [];
   for (const { pid, command, directory, elapsed } of processesIn(paths, { elapsed: true })) {
-    if (!SUITE_COMMAND.test(command)) continue;
+    if (!isSuiteCommand(command)) continue;
     found.push({ pid, directory, elapsed, command: command.replace(/^\S*\/(node|npm)\s/u, '$1 ').slice(0, 80) });
   }
   return found;
@@ -180,26 +196,9 @@ export async function suiteRuns({ env = process.env } = {}) {
 function processesIn(paths, { elapsed = false } = {}) {
   if (paths.length === 0) return [];
 
-  // lsof exits non-zero when any named directory has no process standing in
-  // it, which is the normal case for most of them. Asked one directory at a
-  // time that only lost the empty ones; asked together it threw away the
-  // whole answer, and every area reported idle.
-  let output = '';
-  try {
-    output = execFileSync('lsof', ['-a', '-d', 'cwd', '-F', 'pn', '--', ...paths], {
-      encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 4 * 1024 * 1024,
-    });
-  } catch (error) {
-    output = error?.stdout?.toString?.() || '';
-  }
-
-  // `-F pn` emits a pid line then the name lines belonging to it.
-  const here = [];
-  let pid = null;
-  for (const line of output.split('\n')) {
-    if (line.startsWith('p')) { pid = line.slice(1).trim(); continue; }
-    if (line.startsWith('n') && pid) here.push([pid, line.slice(1).trim()]);
-  }
+  // By prefix, not by exact path (standing.js): a tool started one directory
+  // down was invisible to the board, to occupation and to addressing at once.
+  const here = processesStandingIn(paths).map(({ pid, directory }) => [String(pid), directory]);
   if (here.length === 0) return [];
 
   const commands = new Map();
@@ -402,6 +401,10 @@ export async function workStatus({ env = process.env, names = null, git: askGit 
         // others, never one of them changed: every reader of this page keeps
         // reading exactly what it read before.
         role: areaRoleName(area.path),
+        // `mc work stop` was here, and nobody has opened the area since: who
+        // and when, so a conversation gone from the page reads as stopped
+        // rather than as dead (KP-09). Null in every other case.
+        stopped: readStopMark(area.path),
         running,
         worktrees: area.worktrees.map((worktree) => ({
           repo: worktree.repo,

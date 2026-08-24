@@ -26,6 +26,7 @@ import { deleteConversations, listConversations } from './conversations.js';
 import { workAreaPath, workAreaStatePath, workRoot } from './paths.js';
 import { installPushGuard } from './push-guard.js';
 import { areaRoleName, reservedRoleName } from './roles.js';
+import { STOP_MARK } from './work-stop-marker.js';
 
 export function listWorkAreas(env = process.env, options = {}) {
   const root = workRoot(env);
@@ -51,6 +52,9 @@ export function listWorkAreas(env = process.env, options = {}) {
  * once ordinary areas started having filing too.
  */
 export const FILING_DIRECTORIES = Object.freeze(['inbox', 'handoff']);
+
+/** mc's own marks in an area: state, never litter, and never what keeps an area alive. */
+const OWN_MARKS = new Set(['.mc-role', STOP_MARK]);
 
 /**
  * `conversations: false` and `git: false` leave those lookups out. Both cost
@@ -267,19 +271,11 @@ export function addWorktree({ name, repo, branch, from = null, env = process.env
  * standing in answers immediately; there is nothing to keep in sync.
  */
 export function directoryInUse(path) {
+  // By prefix (standing.js): a shell one directory down is still standing
+  // here, and removing the worktree would still pull the ground from it.
   let pids = [];
   try {
-    // `-F pn` asks lsof for one field per line rather than a table. The table's
-    // COMMAND column is truncated and splits on spaces, so a process holding
-    // this directory was reported as being called `2.1.223` — a fragment of
-    // its own version string. A pid is unambiguous; the name comes from `ps`.
-    const out = execFileSync('lsof', ['-a', '-d', 'cwd', '-F', 'pn', '--', path], {
-      encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'],
-    });
-    pids = [...new Set(out.split('\n')
-      .filter((line) => line.startsWith('p'))
-      .map((line) => line.slice(1).trim())
-      .filter(Boolean))];
+    pids = [...new Set(processesStandingIn([path]).map((item) => String(item.pid)))];
   } catch { return null; }
   if (pids.length === 0) return null;
   const names = pids.map((pid) => {
@@ -342,9 +338,10 @@ export function releaseWorkArea(name, { env = process.env, dryRun = false } = {}
     // otherwise-empty area alive, and it must survive whenever the area does —
     // an area quietly demoted from its role would run every future
     // conversation without the overlay and have no way to warn about it.
+    // The stop mark (`mc work stop`, KP-09) is the same kind of thing.
     let empty = false;
     try {
-      empty = readdirSync(area.path).filter((entry) => entry !== '.mc-role').length === 0;
+      empty = readdirSync(area.path).filter((entry) => !OWN_MARKS.has(entry)).length === 0;
     } catch { /* leave it */ }
     if (empty) {
       if (conversations.length) {

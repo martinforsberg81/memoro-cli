@@ -10,6 +10,7 @@
  * installed here. A section that could not be read says so on its own line —
  * an empty section and an unreachable one must never look alike.
  */
+import { orphanLine } from './lease-owner.js';
 import { painter, width } from './status-render.js';
 
 const LABEL = 11;
@@ -175,6 +176,8 @@ export function leaseRow(c, lease, now = Date.now()) {
     c(lease.holder, old ? 'yellow' : 'bold'),
     lease.errand ? `“${lease.errand}”` : '',
     c(`held for ${duration(age)}`, old ? 'yellow' : 'grey'),
+    // Its process gone: said as that, because age alone reads as "walked away".
+    lease.orphaned ? c(orphanLine(lease), 'yellow') : '',
   ].filter(Boolean).join('  ');
 }
 

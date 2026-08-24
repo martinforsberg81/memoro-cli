@@ -9,27 +9,43 @@
  * model is let in exactly once, in `watch-sessions-read.js`, where the output is
  * prose and reading it needs interpretation.
  *
- * Six patterns, and the guard's whole vocabulary:
+ * Eleven patterns, and the guard's whole vocabulary:
  *
  *   waiting        script  stopped for a person, and has been for a while
  *   silent         script  meant to be working, and nothing has come out
- *   dead           script  it was alive last round, its turn never finished
+ *   dead           script  it was alive last round, its turn never finished —
+ *                          and nobody asked it to stop (`mc work stop` says
+ *                          `stopped by pm 03:16` instead, and that is not a flag)
  *   unreachable    script  mail it has not read, in a pane no wake can reach
+ *   unattended     script  stopped, with mail that arrived after it last moved
+ *   quiet-group    script  nobody under a named prefix is working at all
  *   stalled        script  an order it was given has not moved in twelve hours
+ *   holding        script  it holds the suite right, and nothing has run under it
  *   blocked        model   it says it is stuck on something it cannot get
  *   quota-exhausted model  it says it ran out
  *   error          model   something in the output failed
  *
- * There is no eighth, there is no severity, and there is no order. The guard
+ * There is no twelfth, there is no severity, and there is no order. The guard
  * flags; it does not decide and it does not rank.
  */
-import { readdirSync } from 'node:fs';
+import { readdirSync, statSync } from 'node:fs';
+import { join } from 'node:path';
 
 import { DEFAULT_SILENT_MS, DEFAULT_WAITING_MS } from './watch-sessions-store.js';
+import { isWatcherMessage } from './watch-senders.js';
+import { explainsStop, readStopMark } from './work-stop-marker.js';
 import { inboxPath } from './work-send.js';
 import { listOpenTasks } from './task-log.js';
 
-export const SCRIPT_PATTERNS = Object.freeze(['waiting', 'silent', 'dead', 'unreachable', 'stalled']);
+export const SCRIPT_PATTERNS = Object.freeze(['waiting', 'silent', 'dead', 'unreachable', 'unattended', 'quiet-group', 'stalled', 'holding']);
+
+/**
+ * Ten minutes stopped with unread mail, and the order picked the number
+ * (B2, 2026-08-23: "N configurable, suggest 10"). The case it is for, measured
+ * the same evening: a track idle for 9m36s with an answer it was waiting for
+ * lying in its own inbox, and nothing said so to anybody.
+ */
+export const DEFAULT_IDLE_MS = 10 * 60_000;
 export const MODEL_PATTERNS = Object.freeze(['blocked', 'quota-exhausted', 'error']);
 export const PATTERNS = Object.freeze([...SCRIPT_PATTERNS, ...MODEL_PATTERNS]);
 
@@ -52,12 +68,19 @@ export function scanSessions({
   reachable = null,
   tasks = listOpenTasks,
   stalledMs = STALLED_MS,
+  holdingMs = HOLDING_MS,
+  idleMs = DEFAULT_IDLE_MS,
+  arrivals = arrivedSince,
+  groups = [],
+  stopMark = readStopMark,
 } = {}) {
   const sessions = [];
   for (const area of report.areas || []) {
+    // Read once per area: the mark belongs to the area, not the conversation.
+    const stopped = stopMark ? stopMark(area.path) : null;
     for (const conversation of area.conversations || []) {
       sessions.push(oneSession({
-        area, conversation, previous: previous[conversation.id] || null, now, waitingMs, silentMs,
+        area, conversation, previous: previous[conversation.id] || null, now, waitingMs, silentMs, stopped,
       }));
     }
   }
@@ -73,21 +96,28 @@ export function scanSessions({
   // flag withheld is invisible.
   const areaFlags = [
     ...unreachableAreas({ report, sessions, inbox, reachable }),
+    ...unattendedAreas({ report, sessions, now, idleMs, arrivals }),
     ...stalledAreas({ sessions, tasks, now, stalledMs }),
+    ...holdingAreas({ report, holdingMs }),
   ];
   for (const flag of areaFlags) {
     const owner = sessions.find((item) => item.area === flag.area && item.live)
       || sessions.find((item) => item.area === flag.area);
     if (owner) owner.patterns.push({ pattern: flag.pattern, detail: flag.detail });
   }
+  // A group is not a session, so its flag hangs on an entry of its own —
+  // `group:<prefix>` — which the memory keeps like any other, so that a
+  // group quiet for three rounds is one notice rather than three.
+  for (const group of quietGroups({ sessions, groups, previous, now })) sessions.push(group);
   return { at: new Date(now).toISOString(), sessions };
 }
 
 function oneSession({
-  area, conversation, previous, now, waitingMs, silentMs,
+  area, conversation, previous, now, waitingMs, silentMs, stopped = null,
 }) {
   const quiet = now - (conversation.updated_ms || 0);
   const patterns = [];
+  let stoppedBy = null;
 
   // Alive last round, gone this round, and its last turn never finished. That
   // is the pane that died mid-work — the failure that cost an hour on
@@ -98,8 +128,20 @@ function oneSession({
   // and the guard's first round would flag the whole machine. So the first
   // sighting of a conversation can never be `dead`, and that is correct rather
   // than a gap — the guard did not see it die.
+  //
+  // Unless somebody stopped it on purpose. `mc work stop` leaves a mark in
+  // the area saying who and when, and a mark at or after the conversation's
+  // last movement is the stop that ended it. The guard knocked PM three
+  // times in one night about sessions PM had just stopped (KP-09,
+  // 2026-08-24): the flag was not wrong, it was indistinguishable — and a
+  // guard whose alarm one learns to ignore is a guard that is not there.
+  // So it is said as what it is, and it is not a flag: PM already knows.
   if (previous?.live && !conversation.live && conversation.turn === 'working') {
-    patterns.push({ pattern: 'dead', detail: 'it was running last round; its last turn never finished' });
+    if (explainsStop(stopped, conversation.updated_ms)) {
+      stoppedBy = { by: stopped.by, at: stopped.at };
+    } else {
+      patterns.push({ pattern: 'dead', detail: 'it was running last round; its last turn never finished' });
+    }
   }
 
   if (conversation.live && conversation.state === 'working' && quiet > silentMs) {
@@ -130,6 +172,9 @@ function oneSession({
     readable: Boolean(conversation.live) && changed,
     patterns,
     was: previous?.active || [],
+    // Gone since last round because somebody asked — who and when. Not a
+    // pattern: the round logs it, the board shows it, nobody is knocked.
+    ...(stoppedBy ? { stopped: stoppedBy } : {}),
   };
 }
 
@@ -183,6 +228,120 @@ function unreachableAreas({ report, sessions, inbox, reachable }) {
     });
   }
   return flags;
+}
+
+/**
+ * Stopped, with mail it cannot have read (B2, 2026-08-23).
+ *
+ * "Unread" is not "files in inbox/": a work area does not archive, and an
+ * inbox of fifty-five read files would flag its owner forever. A file that
+ * arrived *after the conversation last moved* is one it cannot have read, and
+ * that is a subtraction of two mtimes. A live conversation that has been
+ * stopped for longer than `idleMs` with such a file is the track that stood
+ * idle for 9m36s with its answer lying in its own inbox — the flag says the
+ * area, how long, how many, and the oldest. It is urgent: the guard knocks
+ * PM with it at once, and the round would otherwise carry it half an hour
+ * later, which is the gap it exists to close.
+ *
+ * Mail that arrived while the session was working is not this: the session
+ * will read it when its turn ends, or be woken by the sender's `--wake`.
+ */
+function unattendedAreas({ report, sessions, now, idleMs, arrivals }) {
+  if (!arrivals) return [];
+  const flags = [];
+  for (const area of report.areas || []) {
+    const live = sessions.find((item) => item.area === area.name && item.live);
+    if (!live || live.state !== 'waiting') continue;
+    const quiet = now - (live.updated_ms || 0);
+    if (quiet <= idleMs) continue;
+    const unread = arrivals(area.path, live.updated_ms || 0);
+    if (unread.count === 0) continue;
+    flags.push({
+      area: area.name,
+      pattern: 'unattended',
+      detail: `stopped for ${describeSpan(quiet)} with ${unread.count} inbox file${unread.count === 1 ? '' : 's'}`
+        + ` that arrived since it last moved, oldest ${unread.oldest}`,
+    });
+  }
+  return flags;
+}
+
+/**
+ * Nobody under a prefix is working (B2's second condition).
+ *
+ * Four tracks stood still for twenty to forty minutes one evening and every
+ * one of them was, on its own, merely "waiting". Seen as a group they were
+ * the whole of the work stopped. A group is named by prefix on `mc watch
+ * sessions start --group msr-track-`; it is quiet when it has at least one
+ * live conversation and none of them is working, and the flag says for how
+ * long — the shortest time since any of them last moved, which is when the
+ * last one stopped. A group with nothing live at all is not quiet, it is
+ * finished or not started, and the board already says which.
+ */
+function quietGroups({ sessions, groups, previous, now }) {
+  const entries = [];
+  for (const prefix of groups || []) {
+    const members = sessions.filter((item) => item.live && !item.id.startsWith('group:') && item.area.startsWith(prefix));
+    const id = `group:${prefix}`;
+    const patterns = [];
+    if (members.length > 0 && !members.some((item) => item.state === 'working')) {
+      const stoppedMs = Math.min(...members.map((item) => now - (item.updated_ms || 0)));
+      patterns.push({
+        pattern: 'quiet-group',
+        detail: `none of ${members.length} live under ${prefix}* is working — the last stopped ${describeSpan(stoppedMs)} ago`
+          + ` (${members.map((item) => item.area).sort().join(', ')})`,
+      });
+    }
+    entries.push({
+      id,
+      area: `${prefix}*`,
+      tool: null,
+      path: null,
+      bytes: 0,
+      updated_ms: 0,
+      live: members.length > 0,
+      state: patterns.length ? 'quiet' : 'working',
+      turn: null,
+      changed: false,
+      readable: false,
+      patterns,
+      was: previous[id]?.active || [],
+    });
+  }
+  return entries;
+}
+
+/**
+ * Fifteen minutes with nothing running. A gate round runs two suites with
+ * git work between them — a minute or two of silence, not fifteen — and a
+ * claim by hand precedes a run by seconds. Fifteen minutes of a held right and
+ * no suite is a run that ended without its holder, or a holder who forgot.
+ */
+export const HOLDING_MS = 15 * 60 * 1000;
+
+/**
+ * The suite right, held with nothing running under it (D-0141 family).
+ *
+ * The board already showed "held 2h 25m · nothing running" for the whole of
+ * the two hours and twenty-five minutes PM held the suite right after its own
+ * round was killed — and nobody read the board. This flag is that row said to
+ * somebody: the holder's live session, by name, and the round carries it to
+ * PM. A process that is gone is said as that; a hold by hand is said as a
+ * hold. Nothing is released here — the guard flags, it does not decide.
+ *
+ * Only a work-area holder can be flagged, because the flag hangs on a
+ * session; a shell holder has none, and the board row is what there is.
+ */
+function holdingAreas({ report, holdingMs }) {
+  const lease = report?.suite?.lease;
+  if (!lease?.held || lease.holder_kind !== 'work-area') return [];
+  const running = report.suite.running || [];
+  if (running.length > 0) return [];
+  if (!Number.isFinite(lease.age_ms) || lease.age_ms <= holdingMs) return [];
+  const detail = lease.orphaned
+    ? `holds the suite right for ${describeSpan(lease.age_ms)} and the process that took it (pid ${lease.owner_pid}) is gone — nothing is running; the next claim takes it, or mc suite release now`
+    : `holds the suite right for ${describeSpan(lease.age_ms)} with no suite running${lease.errand ? ` (“${lease.errand}”)` : ''} — mc suite release if the run is over`;
+  return [{ area: lease.holder, pattern: 'holding', detail }];
 }
 
 /**
@@ -247,10 +406,41 @@ export function countInbox(areaPath) {
   let entries = [];
   try { entries = readdirSync(inboxPath(areaPath), { withFileTypes: true }); } catch { return { count: 0, oldest: null }; }
   const items = entries
-    .filter((entry) => entry.isFile() && entry.name !== 'README.md' && !entry.name.startsWith('.'))
+    .filter((entry) => isItem(inboxPath(areaPath), entry))
     .map((entry) => entry.name)
     .sort();
   return { count: items.length, oldest: items[0] || null };
+}
+
+/**
+ * Inbox files that arrived after a moment: top level, not `README.md`, and
+ * with a modification time later than `sinceMs`. The oldest is named by file,
+ * the way the round names PM's.
+ */
+export function arrivedSince(areaPath, sinceMs) {
+  let entries = [];
+  try { entries = readdirSync(inboxPath(areaPath), { withFileTypes: true }); } catch { return { count: 0, oldest: null }; }
+  const items = entries
+    .filter((entry) => isItem(inboxPath(areaPath), entry))
+    .filter((entry) => {
+      try { return statSync(join(inboxPath(areaPath), entry.name)).mtimeMs > sinceMs; } catch { return false; }
+    })
+    .map((entry) => entry.name)
+    .sort();
+  return { count: items.length, oldest: items[0] || null };
+}
+
+/**
+ * What counts as mail: a file at the top level, not `README.md`, and not a
+ * watcher's knock. The round's knocks into PM's inbox were, until KP-10
+ * (2026-08-24), "files that arrived since PM last moved" to this guard, which
+ * flagged PM `unattended`, which knocked, which the round then counted as an
+ * item — the two watchers announcing each other, six wakes in a row with no
+ * report in any of them. One rule for both readers, in `watch-senders.js`.
+ */
+function isItem(directory, entry) {
+  return entry.isFile() && entry.name !== 'README.md' && !entry.name.startsWith('.')
+    && !isWatcherMessage(join(directory, entry.name));
 }
 
 /** Hours and minutes, because "4h12m" is read faster than 15120000. */

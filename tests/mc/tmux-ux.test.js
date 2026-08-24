@@ -203,15 +203,19 @@ describe('a busy conversation is waited for, not abandoned', () => {
     assert.equal(talk.captures(), 6);
   });
 
-  it('and a pane busy forever is given up on, and says what it left behind', () => {
+  it('and a pane busy forever gets its Enter anyway, and nothing is left standing', () => {
+    // It used to give up here and leave the line — "not mc's to clear". It
+    // was measured (2026-08-23 19:02Z, PM's pane) to be exactly mc's line,
+    // in the input all along and painted minutes later, where it queued
+    // every wake after it. The box was probed empty before typing, so Enter
+    // is safe: it submits the notice, or it lands in an empty box.
     const talk = conversation({ paint: () => pane({ busy: true }) });
     const result = wake(talk.run);
-    assert.equal(result.ok, false);
-    assert.equal(result.reason, 'the text never reached the prompt');
-    assert.equal(talk.captures(), 41);
-    // A pane that never painted never showed mc its own text, so the line is
-    // not mc's to clear — it says so instead. See work-wake-guards.test.js.
-    assert.equal(result.left, true);
-    assert.equal(talk.prompt(), NOTICE);
+    assert.equal(result.ok, false, 'still not claimed as a wake: nothing on screen says it became one');
+    assert.equal(result.blind, true);
+    assert.equal(result.left, false);
+    // One Enter; the box read back empty, so there was nothing to press again on.
+    assert.deepEqual(talk.calls.filter((args) => args[0] === 'send-keys' && ['Enter', 'C-m'].includes(args[3])).map((args) => args[3]), ['Enter']);
+    assert.equal(talk.captures(), 41 + 1);
   });
 });

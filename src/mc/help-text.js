@@ -129,6 +129,12 @@ MAINTENANCE
                                     otherwise it carries the number that are
                                     standing, and .mc/red-ratchet.json is what
                                     keeps that number from growing
+  mc repo merge <repo> <pr> <pr>... Several at once: one candidate with all
+                                    of them merged in, the suite once each
+                                    side, each one's own tests by itself, then
+                                    merged in the order given. A batch that
+                                    stops — a conflict, a red — falls back to
+                                    one round per pull request and says so
   mc repo merge <repo> <pr> --check
                                     The same round, stopping at the verdict.
                                     A gate that passes is not a review
@@ -140,6 +146,11 @@ MAINTENANCE
                                     lets a deliberate push through. mc installs
                                     it in every repository it adds a worktree
                                     to; --json says whether it is in place
+  mc suite run "<command>"         Take the suite right, run the command, and
+                                    give the right back when it ends — on
+                                    success, on failure, and on a signal.
+                                    Refused if someone else holds it, and then
+                                    NOTHING runs. One step, no decision between
   mc suite claim "<what for>"      Hold the right to run a full suite — one at
                                     a time on this machine. Refused if someone
                                     else holds it; no process is blocked. The

@@ -25,6 +25,7 @@ import { appendFileSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { writeJsonAtomic } from './atomic-write.js';
+import { ownerState } from './lease-owner.js';
 import { mcHome } from './paths.js';
 import { repoFileSlug } from './repo-snapshot.js';
 import { currentHolder } from './work-identity.js';
@@ -50,7 +51,7 @@ export function leaseLogPath(root = mcHome()) {
 }
 
 /** Who holds this repository, and for how long — or nobody. */
-export function readLease(repoPath, { root = mcHome(), now = Date.now() } = {}) {
+export function readLease(repoPath, { root = mcHome(), now = Date.now(), kill = null } = {}) {
   let raw = null;
   try { raw = JSON.parse(readFileSync(leasePath(repoPath, root), 'utf8')); } catch { return free(); }
   if (raw?.schema !== LEASE_SCHEMA || raw?.version !== LEASE_VERSION) return free();
@@ -64,11 +65,17 @@ export function readLease(repoPath, { root = mcHome(), now = Date.now() } = {}) 
     errand: typeof raw.errand === 'string' ? raw.errand : '',
     since: raw.since,
     age_ms: Math.max(0, now - since),
+    // The way back (lease-owner.js): a lease taken for the length of a
+    // process says which, and a process that is gone makes it orphaned.
+    ...ownerState(raw, kill ? { kill } : {}),
   };
 }
 
 function free() {
-  return { held: false, holder: null, holder_kind: null, errand: '', since: null, age_ms: null };
+  return {
+    held: false, holder: null, holder_kind: null, errand: '', since: null, age_ms: null,
+    owner_pid: null, owner_alive: null, orphaned: false,
+  };
 }
 
 /**
@@ -79,13 +86,20 @@ function free() {
  * second claim in the middle of it must not make a two-hour round look new.
  */
 export function claimLease({
-  repoPath, errand, holder = currentHolder(), root = mcHome(), now = Date.now(),
+  repoPath, errand, holder = currentHolder(), ownerPid = null, root = mcHome(), now = Date.now(), kill = null,
 } = {}) {
-  const current = readLease(repoPath, { root, now });
-  if (current.held && current.holder !== holder.name) {
-    return { ok: false, reason: 'held', lease: current };
+  const current = readLease(repoPath, { root, now, kill });
+  // An orphaned lease is nobody's (lease-owner.js): taken, and logged as a
+  // reap rather than a claim so the change of hands is legible afterwards.
+  const reaped = current.held && current.orphaned ? current : null;
+  if (reaped) {
+    log(root, `reap     ${repoPath}  by=${holder.name}  was=${reaped.holder}  pid=${reaped.owner_pid} gone  after=${Math.round(reaped.age_ms / 1000)}s  errand="${reaped.errand}"`);
+  } else {
+    if (current.held && current.holder !== holder.name) {
+      return { ok: false, reason: 'held', lease: current };
+    }
+    if (current.held) return { ok: true, already: true, lease: current };
   }
-  if (current.held) return { ok: true, already: true, lease: current };
 
   const lease = {
     schema: LEASE_SCHEMA,
@@ -95,11 +109,12 @@ export function claimLease({
     holder_kind: holder.kind,
     errand: String(errand || '').slice(0, 200),
     since: new Date(now).toISOString(),
+    ...(Number.isInteger(ownerPid) && ownerPid > 0 ? { owner_pid: ownerPid } : {}),
   };
   mkdirSync(leaseRoot(root), { recursive: true, mode: 0o700 });
   writeJsonAtomic(leasePath(repoPath, root), lease);
-  log(root, `claim    ${repoPath}  holder=${holder.name}  errand="${lease.errand}"`);
-  return { ok: true, already: false, lease: readLease(repoPath, { root, now }) };
+  log(root, `claim    ${repoPath}  holder=${holder.name}  errand="${lease.errand}"${lease.owner_pid ? `  pid=${lease.owner_pid}` : ''}`);
+  return { ok: true, already: false, reaped, lease: readLease(repoPath, { root, now, kill }) };
 }
 
 /**
@@ -111,19 +126,22 @@ export function claimLease({
  * what makes it answerable afterwards.
  */
 export function releaseLease({
-  repoPath, holder = currentHolder(), force = false, root = mcHome(), now = Date.now(),
+  repoPath, holder = currentHolder(), force = false, root = mcHome(), now = Date.now(), kill = null,
 } = {}) {
-  const current = readLease(repoPath, { root, now });
+  const current = readLease(repoPath, { root, now, kill });
   if (!current.held) return { ok: true, released: false, lease: current };
   const mine = current.holder === holder.name;
-  if (!mine && !force) return { ok: false, reason: 'not-yours', lease: current };
+  // Releasing an orphaned lease is clearing up, not overruling: no force needed.
+  if (!mine && !force && !current.orphaned) return { ok: false, reason: 'not-yours', lease: current };
   rmSync(leasePath(repoPath, root), { force: true });
   // `--force` on your own lease is just a release; what has to be written
   // down is one holder ending another's round.
   log(root, mine
     ? `release  ${repoPath}  holder=${current.holder}  after=${Math.round(current.age_ms / 1000)}s`
-    : `force    ${repoPath}  by=${holder.name}  was=${current.holder}  after=${Math.round(current.age_ms / 1000)}s  errand="${current.errand}"`);
-  return { ok: true, released: true, forced: !mine, lease: current };
+    : current.orphaned
+      ? `reap     ${repoPath}  by=${holder.name}  was=${current.holder}  pid=${current.owner_pid} gone  after=${Math.round(current.age_ms / 1000)}s  errand="${current.errand}"`
+      : `force    ${repoPath}  by=${holder.name}  was=${current.holder}  after=${Math.round(current.age_ms / 1000)}s  errand="${current.errand}"`);
+  return { ok: true, released: true, forced: !mine && !current.orphaned, reaped: !mine && current.orphaned, lease: current };
 }
 
 /**

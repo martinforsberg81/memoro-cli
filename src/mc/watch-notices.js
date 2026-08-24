@@ -39,10 +39,14 @@ export const NOTICES_FILE = 'notices.jsonl';
  * The two patterns that may not wait for the next pass.
  *
  * A session that has died cannot be woken later, and one out of quota is
- * burning calendar time for nothing. Everything else waits — half an hour of
- * latency on a flag is cheaper than a channel nobody trusts to be quiet.
+ * burning calendar time for nothing. A session stopped with mail it has not
+ * read, and a group in which nobody works, are the work itself standing
+ * still (B2, 2026-08-23: four tracks, 20–41 minutes, nothing said) — and
+ * the round's half hour is exactly the latency they cannot afford.
+ * Everything else waits — half an hour of latency on a flag is cheaper than
+ * a channel nobody trusts to be quiet.
  */
-export const URGENT_PATTERNS = Object.freeze(['dead', 'quota-exhausted']);
+export const URGENT_PATTERNS = Object.freeze(['dead', 'quota-exhausted', 'unattended', 'quiet-group']);
 
 export function noticesPath(root = mcHome()) {
   return join(watchRoot(root), NOTICES_FILE);

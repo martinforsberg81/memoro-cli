@@ -16,7 +16,11 @@
  */
 import { markDelivered } from './watch-notices.js';
 import { mcHome } from './paths.js';
+import { WATCHERS } from './watch-senders.js';
 import { sendToArea } from './work-send.js';
+
+/** Who the knock is from: the guard, by its fixed name (`watch-senders.js`). */
+const SENDER = WATCHERS.sessions;
 
 /**
  * Knock, then record it.
@@ -39,7 +43,7 @@ export function knock(notices, {
   const deliver = send || ((message) => sendToArea(message));
   let result = null;
   try {
-    result = deliver({ name: recipient, message: knockText(items), wake: true });
+    result = deliver({ name: recipient, message: knockText(items), sender: SENDER, wake: true });
   } catch (error) {
     return { ok: false, reason: error?.message || String(error), delivered: [] };
   }

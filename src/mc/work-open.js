@@ -21,6 +21,7 @@ import { workAreaPath } from './paths.js';
 import { instructionsFor } from './roles.js';
 import { loadProfile, profileArgs, readCached as loadProfileSync } from './portrait.js';
 import { askToolToLeave } from './work-stop.js';
+import { clearStopMark } from './work-stop-marker.js';
 
 export async function openInWorkArea({
   areaRoot,
@@ -95,6 +96,9 @@ export async function openInWorkArea({
     known_here: before.length,
   });
 
+  // Opened again: whatever `mc work stop` noted is over, and the next time
+  // this area's conversation disappears it is judged on its own (KP-09).
+  clearStopMark(areaRoot);
   const result = spawn(launch.spec.bin, args, { cwd: worktree.path, stdio: 'inherit', env });
   if (result?.error) {
     log('work.open-failed', { area: areaRoot, error: result.error.message });
@@ -259,6 +263,7 @@ export function startInBackground({
   if (created.status !== 0) {
     return { ok: false, reason: (created.stderr || 'tmux refused to start it').trim() };
   }
+  clearStopMark(areaRoot);
   // Straight after creation, and the result is not checked: a session that
   // runs but kept its status bar is a working session, and refusing to start a
   // conversation over the look of it would be the tail wagging the dog.
@@ -400,6 +405,7 @@ export function respawnInBackground({
   if (spawned?.status !== 0) {
     return { ok: false, reason: (spawned?.stderr || 'tmux refused to respawn it').trim(), target, window };
   }
+  clearStopMark(areaRoot);
   return { ok: true, target, window, tool: launch.id, resumed: conversation?.id || null, graceful };
 }
 

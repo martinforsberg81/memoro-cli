@@ -59,8 +59,19 @@ import { toolProcesses } from './work-status.js';
 const DRAW_MS = 300;
 const DRAW_ATTEMPTS = 5;
 
-/** How long a submission gets to leave the prompt before it is checked. */
+/**
+ * How long a submission gets to leave the prompt — per look, and how many.
+ *
+ * One look at 400ms was the rule, and it was measured wrong on 2026-08-23:
+ * on PM's idle pane the notice was still drawn in the box 600ms after Enter
+ * and had become a turn by the next look. A wake that looks once reads
+ * "still in the box", presses again, reads it again, and clears with C-u a
+ * line that was on its way — reported as "it stayed in the prompt", which
+ * is what three panes said that evening. So a key gets several looks, and
+ * the next key is pressed only when the line has had its time.
+ */
 const SUBMIT_MS = 400;
+const SUBMIT_LOOKS = 6;
 
 /**
  * How the input box is recognised.
@@ -126,6 +137,43 @@ const PROBE_ATTEMPTS = 5;
  */
 const BUSY_MARKER = 'esc to interrupt';
 const BUSY_ATTEMPTS = 40;
+
+/**
+ * A notice mc left behind is mc's, whoever typed it.
+ *
+ * Measured 2026-08-23 on PM's pane: a wake typed its notice into a busy pane,
+ * gave up before Enter, and left it. Every wake after that read the box,
+ * probed it, found real text, and queued itself behind a "draft" — for an
+ * hour and a quarter, while four tracks stood still. The draft was mc's own
+ * sentence. So text shaped like a notice is not somebody's draft: it is a
+ * knock that stopped halfway, and the right thing to do with it is to finish
+ * it — press Enter — rather than to wait for a person to notice it and do the
+ * same. The shape is matched loosely (any path, any sender, spaces as a wrap
+ * left them) because the stranded one may be older than the current wording.
+ */
+// One notice, or several pasted together: two wakes raced into the same box
+// on 2026-08-23 (both looked, both saw empty, both typed) and the pair
+// matched nothing — so it stood, and every wake after it queued behind mc's
+// own words twice over. However many there are, they all say "read the
+// inbox", and one Enter delivers all of them. The sender is `.+?`, not
+// `\S+`: the round signs itself `mc watch pm`, with spaces, and a shape
+// that read senders as one word never recognised the watcher's own
+// stranded knocks (found on the same evening's live capture).
+const NOTICE_SHAPE = /^(?:mc: new in \S+ from .+? - read it now ?)+$/u;
+
+/**
+ * What the TUI draws in an empty box while a turn it took is waiting its go.
+ *
+ * A busy conversation does not run a submitted line at once; it queues it,
+ * and says so in the box. Seen on a pane that is mid-answer, that is the
+ * turn's receipt — the one the pane gives before it can show the turn itself.
+ */
+const QUEUED_MARKER = 'Press up to edit queued messages';
+
+/** Is this text an mc wake notice — this wording or an earlier one? */
+export function isMcNotice(text) {
+  return NOTICE_SHAPE.test(String(text ?? '').replace(/\s+/gu, ' ').trim());
+}
 
 export function inboxPath(areaPath) {
   return join(areaPath, 'inbox');
@@ -370,14 +418,21 @@ export function paneWillTakeText({ target, run = null, attachedOk = false, probe
   const box = readBox(pane);
   if (box === null) return { ok: false, reason: 'could not find its prompt to check it was empty' };
   if (box.text !== '') {
+    const litter = isMcNotice(box.text);
     // Text in the drawing is not text in the input (D-0151). A caller that
     // may type asks the input with a probe; a caller that only reads gets
     // the honest answer — a draft or a ghost, and it cannot say which.
     if (!probe) {
+      if (litter) return { ok: false, drawn: true, litter: true, reason: 'an mc notice is sitting in its prompt — the next wake submits it' };
       return { ok: false, drawn: true, reason: 'something is drawn in its prompt — a draft, or a ghost only a wake can tell apart (D-0151)' };
     }
     const verdict = probe();
-    if (verdict === 'text') return { ok: false, reason: 'there is already something in its prompt' };
+    if (verdict === 'text') {
+      // Real text, and mc's own: a knock that stopped before Enter. Not a
+      // refusal — the wake finishes it.
+      if (litter) return { ok: true, litter: true, pane, box };
+      return { ok: false, reason: 'there is already something in its prompt' };
+    }
     if (verdict !== 'empty') return { ok: false, reason: 'could not tell whether its prompt was empty' };
   }
   return { ok: true, pane, box };
@@ -420,7 +475,7 @@ export function wakeConversation({
 }) {
   const tmux = run || ((args) => spawnSync('tmux', args, { encoding: 'utf8' }));
   const wait = sleep || ((ms) => { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); });
-  const notice = noticeFrom(sender, inbox);
+  let notice = noticeFrom(sender, inbox);
 
   // Refused before anything was typed: nothing was touched, so there is
   // nothing to take back and nothing for the sender to worry about.
@@ -448,10 +503,19 @@ export function wakeConversation({
   // text being present. Otherwise a second wake could claim the first one's
   // turn as its own, which is the exact failure this function exists to
   // prevent, arriving from a new direction.
+  // A stranded notice is the knock, already typed: it says what this one
+  // would say, so it is submitted as it stands and nothing is typed after
+  // it. From here on `notice` is that sentence, so every comparison below
+  // — landed, alone, became a turn — is made against the text actually in
+  // the box rather than the one mc would have written.
+  const stranded = Boolean(clear.litter);
+  if (stranded) notice = opening.text.replace(/\s+/gu, ' ').trim();
   const alreadyAbove = noticesAbove(before, opening.top, notice);
 
-  const typed = tmux(['send-keys', '-t', target, '-l', notice]);
-  if (typed?.status !== 0) return { ok: false, reason: 'could not type into the conversation' };
+  if (!stranded) {
+    const typed = tmux(['send-keys', '-t', target, '-l', notice]);
+    if (typed?.status !== 0) return { ok: false, reason: 'could not type into the conversation' };
+  }
 
   // From here the notice is in somebody's input box. `proof` is the last thing
   // mc actually read out of that box; the line is cleared only when that is the
@@ -476,7 +540,7 @@ export function wakeConversation({
   // identical in a single glance and only one of them is worth giving up on.
   // A pane that says it is working does not spend its looks: the budget is
   // DRAW_ATTEMPTS *quiet* looks, and streaming resets it.
-  let landed = false;
+  let landed = stranded;
   let quiet = 0;
   for (let attempt = 0; attempt < BUSY_ATTEMPTS && !landed; attempt += 1) {
     wait(DRAW_MS);
@@ -492,25 +556,52 @@ export function wakeConversation({
     quiet = busy(pane) ? 0 : quiet + 1;
     if (quiet >= DRAW_ATTEMPTS) break;
   }
-  if (!landed) return giveUp('the text never reached the prompt', null);
+  // Never drawn, and the pane was busy the whole time. Measured 2026-08-23
+  // 19:02Z on PM's pane: the round typed its notice, looked for twelve
+  // seconds at an empty box, gave up without Enter — and the notice was in
+  // the input all along, painted minutes later, where it stood as a "draft"
+  // that queued every wake after it. The box was probed empty before
+  // typing and stayed visibly empty since, so Enter now either submits the
+  // notice or lands in an empty box and does nothing; leaving it is the one
+  // outcome measured to cost something. A pane that was idle and still did
+  // not draw the text is a different case, and is still given up on.
+  const blind = !landed && quiet < DRAW_ATTEMPTS;
+  if (!landed && !blind) return giveUp('the text never reached the prompt', null);
 
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    const pressed = tmux(['send-keys', '-t', target, 'Enter']);
-    if (pressed?.status !== 0) return giveUp('could not press Enter', seen);
-    wait(SUBMIT_MS);
+  // Two tries, two spellings. `Enter` is the key's name; `C-m` is the
+  // carriage return it stands for. Measured by PM 2026-08-23 on two idle
+  // panes (msr-track-3 after nine minutes cooked, msr-design a minute
+  // earlier): `send-keys Enter` left the notice standing, `send-keys C-m`
+  // started the session at once — while on a busy pane the same evening
+  // `Enter` queued the line as it should. Which spelling a TUI honours in
+  // which state is not mc's to know, so the second try is the other one,
+  // and the result says which one it was.
+  const KEYS = ['Enter', 'C-m'];
+  for (let attempt = 0; attempt < KEYS.length; attempt += 1) {
+    const key = KEYS[attempt];
+    const pressed = tmux(['send-keys', '-t', target, key]);
+    if (pressed?.status !== 0) return giveUp(`could not press ${key}`, seen);
     // A look that failed puts the warrant back to nothing. The box was mc's
     // notice a moment ago and an Enter has gone in since; whether it is still
     // there, gone, or somebody else's now is exactly what could not be read.
-    const pane = readPane(tmux, target);
-    if (pane === null) return giveUp('could not read the conversation back', null);
-    const box = readBox(pane);
-    if (box === null) return giveUp('lost sight of its prompt', null);
+    let pane = null;
+    let box = null;
+    let still = true;
+    for (let look = 0; look < SUBMIT_LOOKS && still; look += 1) {
+      wait(SUBMIT_MS);
+      pane = readPane(tmux, target);
+      if (pane === null) return giveUp('could not read the conversation back', null);
+      box = readBox(pane);
+      if (box === null) return giveUp('lost sight of its prompt', null);
+      still = holdsNotice(box.text, notice);
+      // Somebody has written after it: the line stopped being mc's.
+      if (still && !isNotice(box.text, notice)) return giveUp('somebody started typing', box.text);
+    }
 
-    // Still in the box: either nothing happened and Enter is worth pressing
-    // again, or somebody has written after it and the line stopped being mc's.
-    if (holdsNotice(box.text, notice)) {
+    // Still in the box after its time: nothing happened, and the other
+    // spelling of the key is worth pressing.
+    if (still) {
       seen = box.text;
-      if (!isNotice(box.text, notice)) return giveUp('somebody started typing', box.text);
       continue;
     }
 
@@ -527,7 +618,22 @@ export function wakeConversation({
     // there for twenty seconds, while mc looks 400ms after Enter. So the
     // evidence is there to be had, and there is no reason to accept less.
     if (noticesAbove(pane, box.top, notice) > alreadyAbove) {
-      return { ok: true, attempts: attempt + 1 };
+      return { ok: true, attempts: attempt + 1, ...(attempt ? { key } : {}), ...(stranded ? { stranded } : {}) };
+    }
+
+    // A busy pane cannot show the turn yet — it shows the receipt instead.
+    // Measured 2026-08-23 on PM's pane, mid-answer for seven minutes: Enter
+    // put `Press up to edit queued messages` in the box at once, the turn
+    // appeared above it when the answer ended, and the inbox was read within
+    // the minute. A placeholder on a pane that is *not* busy is still
+    // nothing: the line went somewhere, and nowhere mc can point to.
+    if (busy(pane) && box.text.includes(QUEUED_MARKER)) {
+      return { ok: true, attempts: attempt + 1, queued: true, ...(attempt ? { key } : {}), ...(stranded ? { stranded } : {}) };
+    }
+    // Typed blind, and still nothing to point to: not claimed as a wake, and
+    // not left behind either — whatever was in the input has had its Enter.
+    if (blind && !holdsNotice(box.text, notice)) {
+      return { ok: false, reason: 'typed into a busy pane that never drew it; Enter was pressed so nothing is left standing', left: false, blind: true };
     }
     return giveUp('the notice left the prompt without becoming a turn', null);
   }

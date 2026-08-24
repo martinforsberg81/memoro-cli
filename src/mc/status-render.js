@@ -95,7 +95,7 @@ export function renderLines(report, {
     const lease = report.suite.lease;
     const running = report.suite.running || [];
     const held = lease?.held
-      ? `${c(lease.holder, 'bold')}${lease.errand ? ` “${lease.errand}”` : ''} ${c(`held for ${ago(now - (lease.age_ms ?? 0), now)}`, 'grey')}`
+      ? `${c(lease.holder, 'bold')}${lease.errand ? ` “${lease.errand}”` : ''} ${c(`held for ${ago(now - (lease.age_ms ?? 0), now)}`, 'grey')}${lease.orphaned ? ` ${c(`· its process (pid ${lease.owner_pid}) is gone`, 'yellow')}` : ''}`
       : c('free', 'grey');
     const runs = running.length
       ? running.map((run) => c(`running in ${run.area || run.directory} for ${elapsed(run.elapsed)} (pid ${run.pid})`, running.length > 1 ? 'red' : 'yellow')).join(c('  ·  ', 'grey'))
@@ -109,7 +109,12 @@ export function renderLines(report, {
     const word = (state) => {
       if (!state) return c('unknown', 'grey');
       if (state.running && state.stale) return c(`alive but stale — no round in ${ago(now - (state.last_write_age_ms ?? 0), now)}`, 'red');
-      if (state.running) return c(`alive${state.last_write_age_ms !== null ? `, last round ${ago(now - state.last_write_age_ms, now)}` : ''}`, 'green');
+      if (state.running && state.stale_code) return c('alive on OLD CODE — mc changed since it started; restarts itself, or stop && start', 'yellow');
+      if (state.running) {
+        const knock = state.last_knock;
+        const knocked = knock ? `, last knock ${knock.woke ? 'woke' : `refused: ${knock.reason || 'unknown'}`}` : '';
+        return c(`alive${state.last_write_age_ms !== null ? `, last round ${ago(now - state.last_write_age_ms, now)}` : ''}${knocked}`, knock && !knock.woke ? 'yellow' : 'green');
+      }
       if (state.abandoned) return c('NOT RUNNING — stopped without telling anyone', 'red');
       return c('never started', 'yellow');
     };
@@ -149,6 +154,12 @@ export function renderLines(report, {
     if (area.pending_wake) {
       const since = clock(area.pending_wake.since);
       lines.push(`      ${c(`✉ draft in prompt — unreachable by wake since ${since} (wake queued; it lands when the prompt clears)`, 'red')}`);
+    }
+    // Stopped on purpose and not opened since (KP-09): the one line that
+    // separates "PM stopped it at 03:16" from "it died". Shown only while
+    // nothing runs here — a mark under a running conversation is stale.
+    if (area.stopped && !area.conversations.some((item) => item.live)) {
+      lines.push(`      ${c(`■ stopped by ${area.stopped.by} ${clock(area.stopped.at)} (${ago(Date.parse(area.stopped.at), now)}) — mc work ${area.name} picks it up`, 'grey')}`);
     }
 
     for (const item of area.conversations) {

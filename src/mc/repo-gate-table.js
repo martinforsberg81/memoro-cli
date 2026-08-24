@@ -187,6 +187,10 @@ function normalise(entry, env) {
   return {
     prepare: entry.prepare ?? null,
     prepare_why: entry.prepare_why ?? null,
+    // The branch-freshening step's test (A6): what this repository calls
+    // "run what my change affects". No declaration, no run — the freshen
+    // says so instead of guessing a script name.
+    affected: entry.affected ?? null,
     extra_gates: (entry.extra_gates || []).map((gate) => ({
       name: gate.name || gate.command,
       command: gate.command,

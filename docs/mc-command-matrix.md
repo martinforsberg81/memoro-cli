@@ -32,7 +32,7 @@ started in it. mc stores nothing else, because nothing else is mc's to know.
 | `mc work release <name> [--apply]` | Remove what git says can go; keep the rest. |
 | `mc work discard <name> [repo] [--apply]` | Throw it away — worktrees, branches, and all. |
 | `mc work send <name> "<text>"` | A message into that work's `inbox/`. `--wake` also knocks on whatever is running there — or, when a draft is in its prompt, queues the knock for when the prompt clears and says so. `--json`. |
-| `mc work stop <name>` | Stop what is running there; keep the work. |
+| `mc work stop <name>` | Stop what is running there; keep the work. Leaves a mark (`.mc-stopped`: who, when) so the session guard says `stopped by pm 03:16` instead of `dead` and the board shows it; `mc work <name>` removes it. |
 | `mc work list` | The same listing as bare `mc work`. |
 | `mc worker <name> [task]` | A project folder that carries the worker role. |
 | `mc pm` / `mc pm-helper` | The singleton role's workspace: attach if it runs, restart it if it stopped, create it the first time. One of it, ever. |
@@ -43,11 +43,14 @@ started in it. mc stores nothing else, because nothing else is mc's to know.
 | `mc status` | Every piece of work and what it is doing — including the clock a session set for itself (`⏰ wakeup in 9m: <prompt>`, from the last `ScheduleWakeup` in its transcript) `--watch`, `--json`, `--wait`. |
 | `mc repo status [repo]` | One repository seen whole: main, open pull requests with how far behind main each is, the work areas standing on it, and the source-linked installation's drift. `--json`, `--offline`. |
 | `mc repo watch start \| stop \| status` | The background process that keeps that answer fresh. `--interval <seconds>` on start; `--json` on status. |
+| `mc watch sessions start \| stop \| status` | The session guard: every 10 minutes it flags waiting, silent, dead, unreachable, unattended, quiet-group, stalled, holding (script) and blocked, quota-exhausted, error (model) into the notices ledger. `dead`, `quota-exhausted`, `unattended` and `quiet-group` knock PM at once. `--interval <seconds>`, `--model <model>`, `--idle <minutes>` (unattended after, default 10) and `--group <prefix>` (repeatable; quiet-group when nobody under it works) on start; `--json` on status. |
 | `mc repo claim <repo> "<what for>"` | Hold the gate round on a repository. Refused if someone else holds it. |
 | `mc repo release <repo> [--force]` | Give it back; `--force` takes it from another holder and is logged. |
 | `mc repo who <repo>` | Who holds it, for what, since when — and whether the holder is still working. `--json`. |
-| `mc repo merge <repo> <pr>` | Run the test gate and, only if nothing new went red, squash-merge, deploy-pull and log it. `--check` gates and stops. `--json`. |
-| `mc watch pm start \| stop \| status` | The PM round: every 30 minutes it commits `pm/`, runs `mc doctor`, counts `pm/inbox/`, delivers the guard's notices and knocks once if something is new. `--interval <seconds>` on start; `--json` on status. |
+| `mc repo rounds [--json]` | Every gate round ever run from this machine, counted by where it ended — merged, red, refused lease, drift, cut short. Written one JSON line per round (`~/.memoro/mc/gate-rounds.jsonl`), for every `mc repo merge` and `--check`, so the question "has the gate ever caught anything?" is a count, not a reading of the merge log's survivors (A7). |
+| `mc repo merge <repo> <pr> [<pr>...]` | Run the test gate and, only if nothing new went red, squash-merge, deploy-pull, freshen the open branches the merge made dirty (base merged in, plain push, owner's inbox told; conflicts touch nothing) and log it. Several numbers: one candidate with all of them merged in, the suite once each side, each PR's own tests by itself, then merged in the order given; a batch that stops falls back to one round per PR and says so. Prints wall clock per step. `--check` gates and stops. `--json`. |
+| `mc watch pm start \| stop \| status` | The PM round: every 30 minutes it commits `pm/`, runs `mc doctor`, counts `pm/inbox/`, delivers the guard's notices and knocks once if something is new. `--interval <seconds>` on start; `--json` on status. Both watchers restart themselves between passes when mc's code changes on disk; `status` says *OLD CODE* for a process behind the tree. |
+| `mc suite run "<command>"` | Take the suite right, run the command, give the right back when it ends — on success, on failure, and on SIGINT/SIGTERM (the command's process group is ended first). Refused when someone else holds it, and then NOTHING runs — refused-claim-then-run-anyway was measured three times in one day (D-0176). A right claimed by hand beforehand stays held afterwards. |
 | `mc suite claim "<what for>"` | Hold the right to run a full suite — one at a time on this machine (D-0141). Refused if someone else holds it; no process is blocked. The gate round takes it by itself. |
 | `mc suite release [--force]` | Give it back; `--force` takes it from another holder and is logged. |
 | `mc suite who` | Who holds it — and which suites are actually running, where, and for how long. `--json`. |

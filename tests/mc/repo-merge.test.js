@@ -21,6 +21,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, it } from 'node:test';
 
 import { claimLease, readLease, releaseLease } from '../../src/mc/repo-lease.js';
+import { parseArgs } from '../../src/mc/commands/repo.js';
 import { runMergeRound } from '../../src/mc/repo-merge.js';
 
 const AREA = { name: 'klient-guard', kind: 'work-area' };
@@ -500,6 +501,196 @@ describe('a merge call that failed is asked about, not assumed', () => {
       assert.equal(report.stopped_at, 'merge');
       assert.match(report.reason, /not mergeable/u);
       assert.equal(report.merge_error, null);
+    } finally { fx.cleanup(); }
+  });
+});
+
+/**
+ * Several pull requests in one round (A3, 2026-08-23): one gate, then each
+ * landed in order on the main the one before it made; a batch that stopped
+ * falls back to one round per pull request inside the same lease, and says
+ * so. Nothing may read as "all landed" when one did not.
+ */
+describe('the words: several numbers are a batch, in the order given', () => {
+  it('parses one number as before, several as a batch, and refuses a double', () => {
+    const one = parseArgs(['merge', 'memoro', '400']);
+    assert.equal(one.pr, 400);
+    assert.equal(one.prs, null);
+    const many = parseArgs(['merge', 'memoro', '#401', '402', '403']);
+    assert.equal(many.pr, 401);
+    assert.deepEqual(many.prs, [401, 402, 403]);
+    assert.match(String(parseArgs(['merge', 'memoro', '401', '401']).error), /named twice/u);
+    assert.match(String(parseArgs(['merge', 'memoro', '401', 'x']).error), /"x" is not a pull request number/u);
+  });
+});
+
+describe('a batch lands in order, or falls back one by one', () => {
+  const PRS = [401, 402, 403];
+  function greenBatch() {
+    return {
+      ...green(),
+      pr: { number: 401, head: 'one', base: 'main', head_sha: 'sha401', title: 'first' },
+      prs: PRS.map((number) => ({ number, head: `h${number}`, base: 'main', head_sha: `sha${number}`, title: `pr ${number}`, pr_tests: { files: [], totals: null, red: [], exit_code: null } })),
+    };
+  }
+  /** A git whose origin/main advances by one sha per merge — or by a stranger once. */
+  function batchFixture({ verdict = greenBatch(), strangerAfter = null, gateFor = null } = {}) {
+    const fx = fixture({ verdict });
+    const landed = [];
+    const state = { mainAt: BASE };
+    const git = (args, opts = {}) => {
+      fx.calls.push({ tool: 'git', args, cwd: opts.cwd });
+      if (args[0] === 'rev-parse' && args[1] === 'origin/main') return { status: 0, stdout: `${state.mainAt}\n` };
+      // The tree of main as landed: in this stub a commit IS its content,
+      // so the tree hash is the same word.
+      if (args[0] === 'rev-parse' && args[1] === 'origin/main^{tree}') return { status: 0, stdout: `${state.mainAt}\n` };
+      if (args[0] === 'symbolic-ref') return { status: 0, stdout: 'origin/main\n' };
+      return { status: 0, stdout: '' };
+    };
+    const gh = (args, opts = {}) => {
+      fx.calls.push({ tool: 'gh', args, cwd: opts.cwd });
+      if (args[0] === 'pr' && args[1] === 'merge') {
+        const number = Number(args[2]);
+        landed.push(number);
+        state.mainAt = `landed${number}`;
+        if (strangerAfter === number) state.mainAt = 'stranger';
+        return { status: 0, stdout: '' };
+      }
+      if (args[0] === 'pr' && args[1] === 'view') {
+        const number = Number(args[2]);
+        return landed.includes(number)
+          ? { status: 0, stdout: JSON.stringify({ state: 'MERGED', mergeCommit: { oid: `landed${number}` } }) }
+          : { status: 0, stdout: JSON.stringify({ state: 'OPEN' }) };
+      }
+      return { status: 0, stdout: '' };
+    };
+    return {
+      ...fx,
+      landed,
+      run: (extra = {}) => fx.run({ pr: 401, prs: PRS, git, gh, gate: gateFor ? (args) => gateFor(args, state) : (async () => verdict), ...extra }),
+    };
+  }
+
+  it('one gate, three merges in order, each on the main the one before made', async () => {
+    const fx = batchFixture();
+    try {
+      const report = await fx.run();
+      assert.equal(report.ok, true, report.reason);
+      assert.deepEqual(fx.landed, [401, 402, 403]);
+      assert.deepEqual(report.batch.merges.map((item) => [item.number, item.merged, item.merge_commit]), [
+        [401, true, 'landed401'], [402, true, 'landed402'], [403, true, 'landed403'],
+      ]);
+      assert.equal(report.merged, true);
+      assert.equal(report.merge_commit, 'landed403');
+      assert.equal(report.batch.fallback, false);
+      // One line per pull request in the log, each saying it was a batch.
+      const lines = fx.log().split('\n').filter((line) => line.includes('#40'));
+      assert.equal(lines.length, 3);
+      assert.match(lines[1], /#402 pr 402 .*Batch of 3 \(#401 #402 #403\)/u);
+      assert.equal(fx.lease().held, false, 'the lease went back');
+    } finally { fx.cleanup(); }
+  });
+
+  it('between landings, the next branch gets the just-made main merged in — and a refusal stops the batch honestly', async () => {
+    // Measured on the first live batch: five verified green on one
+    // candidate, one landed, the second refused by the forge — every
+    // squash makes the next branch unmergeable until it carries the new
+    // main. The freshen runs between landings; the batch already proved
+    // the combination, so there is no affected here.
+    const freshened = [];
+    const fx = batchFixture();
+    try {
+      const report = await fx.run({ refresh: ({ branch, base }) => { freshened.push([branch, base]); return { ok: true, at: 'abc1234' }; } });
+      assert.equal(report.ok, true, report.reason);
+      assert.deepEqual(freshened, [['h402', 'main'], ['h403', 'main']], 'each later branch, before its own landing');
+      assert.deepEqual(fx.landed, [401, 402, 403]);
+    } finally { fx.cleanup(); }
+
+    const fx2 = batchFixture();
+    try {
+      const report = await fx2.run({ refresh: ({ branch }) => (branch === 'h403' ? { ok: false, reason: 'h403 conflicts with main in artifacts/x.json — left exactly as it was' } : { ok: true, at: 'abc1234' }) });
+      assert.equal(report.ok, false);
+      assert.equal(report.stopped_at, 'merge');
+      assert.match(report.reason, /#403 could not be freshened for landing \(h403 conflicts with main in artifacts\/x\.json — left exactly as it was\) — 2 of 3 landed before it/u);
+      assert.deepEqual(fx2.landed, [401, 402], 'what landed stays landed and said');
+      assert.deepEqual(report.batch.merges.map((item) => [item.number, item.merged]), [[401, true], [402, true], [403, false]]);
+    } finally { fx2.cleanup(); }
+  });
+
+  it('main moved between two merges by somebody else: the rest is not merged, and it says how many did', async () => {
+    const fx = batchFixture({ strangerAfter: 401 });
+    try {
+      const report = await fx.run();
+      assert.equal(report.ok, false);
+      assert.equal(report.stopped_at, 'drift');
+      assert.match(report.reason, /moved to strange\w* between merges, and not by this round — #402 and 1 more not merged; 1 of 3 landed/u);
+      assert.deepEqual(fx.landed, [401]);
+      assert.deepEqual(report.batch.merges.map((item) => item.number), [401]);
+    } finally { fx.cleanup(); }
+  });
+
+  it('every landing is checked against the measured build\'s prefix tree, and identity is said (PM\'s ruling)', async () => {
+    // "Verified together" and "landed one at a time" are two claims; the
+    // bridge is identity, measured, not assumed. The stub's rev-parse
+    // answers LANDED for the tree reads, so prefix trees of LANDED are the
+    // measured build reproduced exactly.
+    const verdict = { ...greenBatch(), candidate_trees: ['landed401', 'landed402', 'landed403'] };
+    const fx = batchFixture({ verdict });
+    try {
+      // rev-parse origin/main^{tree} → the generic branch of the stub,
+      // which answers what the last merge made: landedN.
+      const progress = [];
+      const report = await fx.run({ refresh: () => ({ ok: true, at: 'abc1234' }), onProgress: (line) => progress.push(line) });
+      assert.equal(report.ok, true, report.reason);
+      assert.equal(report.tree_identical, true);
+      assert.ok(progress.some((line) => /#401 landed byte-identical to the measured build/u.test(line)), progress.join('|'));
+    } finally { fx.cleanup(); }
+  });
+
+  it('a landing whose tree is not the measured build\'s re-measures the rest in rounds of their own', async () => {
+    const verdict = { ...greenBatch(), candidate_trees: ['landed401', 'expected-but-not-what-main-became', 'landed403'] };
+    // The single rounds that re-measure land green against fresh main.
+    const gateFor = async ({ prs, pr }, state) => (prs ? verdict : { ...green({ baseCommit: state.mainAt }), pr: { ...green().pr, number: pr } });
+    const fx = batchFixture({ verdict, gateFor });
+    const progress = [];
+    try {
+      const report = await fx.run({ refresh: () => ({ ok: true, at: 'abc1234' }), onProgress: (line) => progress.push(line) });
+      assert.equal(report.tree_identical, false, 'identity failed at #402 and stays failed');
+      assert.ok(progress.some((line) => /^WARNING: after #402, origin\/main's tree/u.test(line)), progress.join('|'));
+      assert.ok(progress.some((line) => /re-measuring the remaining 1 in rounds of their own/u.test(line)));
+      assert.equal(report.batch.fallback, true);
+      assert.deepEqual(report.batch.merges.map((item) => [item.number, item.merged]), [[401, true], [402, true], [403, true]], 'everything landed — the last through its own measured round');
+      assert.equal(report.batch.rounds.length, 1, 'one re-measured round, for the one after the mismatch');
+      assert.equal(report.ok, true, report.reason);
+    } finally { fx.cleanup(); }
+  });
+
+  it('a red batch falls back to one round per pull request, inside the same lease, and says so', async () => {
+    const batchVerdict = { ...greenBatch(), ok: false, stopped_at: 'red', reason: '1 test red on the candidate and green on the baseline', broke: ['x › y'] };
+    // The batch gate is red; each single gate is green except #402's.
+    // A real single gate fetches the base afresh, so its baseline is the
+    // main the batch's earlier merges made.
+    const gateFor = async ({ prs, pr }, state) => {
+      if (prs) return batchVerdict;
+      const fresh = green({ baseCommit: state.mainAt });
+      if (pr === 402) return { ...fresh, pr: { ...fresh.pr, number: 402 }, ok: false, stopped_at: 'red', reason: '1 test red', broke: ['x › y'] };
+      return { ...fresh, pr: { ...fresh.pr, number: pr } };
+    };
+    const fx = batchFixture({ verdict: batchVerdict, gateFor });
+    const progress = [];
+    try {
+      const report = await fx.run({ onProgress: (line) => progress.push(line) });
+      assert.equal(report.batch.fallback, true);
+      assert.ok(progress.some((line) => /^batch #401 #402 #403 stopped at red .* — falling back to one round per pull request$/u.test(line)), progress.join('\n'));
+      assert.deepEqual(fx.landed, [401, 403], 'the green ones landed, the red one did not');
+      assert.deepEqual(report.batch.merges.map((item) => [item.number, item.merged]), [[401, true], [402, false], [403, true]]);
+      assert.equal(report.ok, false);
+      assert.equal(report.stopped_at, 'batch');
+      assert.match(report.reason, /1 of 3 did not land in its own round: #402 \(1 test red\)/u);
+      assert.equal(report.batch.rounds.length, 3);
+      // One lease for the whole thing: the single rounds took none of their own.
+      assert.equal(fx.lease().held, false);
+      assert.equal(progress.filter((line) => line === 'lease released').length, 1);
     } finally { fx.cleanup(); }
   });
 });

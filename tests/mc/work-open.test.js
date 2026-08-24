@@ -18,6 +18,7 @@ import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
 import { openInWorkArea, startInBackground } from '../../src/mc/work-open.js';
+import { markStopped, readStopMark } from '../../src/mc/work-stop-marker.js';
 
 const CONVERSATION_ID = '3f9d2c81-0000-4000-8000-000000000001';
 
@@ -228,6 +229,22 @@ describe('startInBackground and --model', () => {
     });
     assert.equal(started.ok, true);
     assert.equal(creation(calls), `'claude'`);
+  });
+
+  it('opening the area again removes the mark mc work stop left (KP-09)', async () => {
+    const { areaRoot, worktree, env } = fixture();
+    markStopped(areaRoot, { by: 'pm' });
+    const { run } = tmux();
+    const started = startInBackground({
+      name: 'x', areaRoot, worktree, tool: 'claude', env, run, loadProfile: () => null,
+    });
+    assert.equal(started.ok, true);
+    assert.equal(readStopMark(areaRoot), null, 'the background start left the mark');
+
+    markStopped(areaRoot, { by: 'pm' });
+    const { options } = opening();
+    await openInWorkArea({ areaRoot, worktree, env, ...options });
+    assert.equal(readStopMark(areaRoot), null, 'the terminal open left the mark');
   });
 
   it('the role default follows the role tool here too', () => {
