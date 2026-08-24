@@ -94,6 +94,7 @@ export async function pmRound({
     notices: [],
     orders: [],
     knock: null,
+    helper_pulse: null,
     failed: [],
   };
 
@@ -147,6 +148,25 @@ export async function pmRound({
       orders: outcome.orders,
       doctor: outcome.doctor,
     }));
+  }
+
+  // The improve rhythm hangs on this heartbeat, not on a clock of its own
+  // (design note §4: two clocks in one system are two ways to drift apart).
+  // When the heartbeat fires and nothing is urgent, the helper takes the
+  // next round; the rotation itself is the helper's — mc delivers the pulse
+  // and holds no opinion about which project is next. A helper that has
+  // never been created gets no pulse: mc does not knock on homes that do
+  // not exist.
+  if (!worthSaying && existsSync(workAreaPath('pm-helper', env))) {
+    outcome.helper_pulse = await attemptAsync(outcome, 'helper-pulse', async () => {
+      const pulse = await send({
+        name: 'pm-helper',
+        message: 'improve round: nothing urgent this heartbeat — take the next project in rotation and write improve/<project>/<date>.md (design note §4). A quiet project gets three lines, not a sweep.',
+        sender: SENDER,
+        wake: true,
+      });
+      return pulse?.ok ? { sent: true, woke: Boolean(pulse.woke) } : null;
+    });
   }
 
   // The state advances only when the round is sure PM has the message. A

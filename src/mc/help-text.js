@@ -202,6 +202,9 @@ MAINTENANCE
                                     mc work. The way back from a handoff; it
                                     refuses while the PM is running rather than
                                     quietly attaching to the other one
+  mc pm-helper intake [--json]     Martin's unprocessed intake items, oldest
+                                    first; done <stem…> moves them to
+                                    intake/processed/<date>/ — never deletes
   mc pm-helper                     The helper's workspace: same door, same
                                     rules — new and an id included
   mc roles list                    The defined roles, read from their files

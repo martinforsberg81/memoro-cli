@@ -35,7 +35,7 @@ started in it. mc stores nothing else, because nothing else is mc's to know.
 | `mc work stop <name>` | Stop what is running there; keep the work. Leaves a mark (`.mc-stopped`: who, when) so the session guard says `stopped by pm 03:16` instead of `dead` and the board shows it; `mc work <name>` removes it. |
 | `mc work list` | The same listing as bare `mc work`. |
 | `mc worker <name> [task]` | A project folder that carries the worker role. |
-| `mc pm` / `mc pm-helper` | The singleton role's workspace: attach if it runs, restart it if it stopped, create it the first time. One of it, ever. |
+| `mc pm` / `mc pm-helper` | The singleton role's workspace: attach if it runs, restart it if it stopped, create it the first time. One of it, ever. `mc pm-helper intake [--json]` lists Martin's unprocessed intake items (oldest first; `done <stem…>` moves them to `intake/processed/<date>/` — never deletes). The helper may run `mc repo merge … --check`; the form without `--check` is refused by the tool itself (design note §5). |
 | `mc <role> new [--model <m>]` | Start over in the same window: the running conversation is ended and replaced, nothing is deleted, and the successor is told its predecessor's id. |
 | `mc <role> <id>` | One particular conversation in the role's home — the way back from a handoff. Refused while the role is running. |
 | `mc roles list \| show <role>` | The defined roles, read from their files. |

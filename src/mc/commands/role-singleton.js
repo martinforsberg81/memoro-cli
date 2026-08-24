@@ -53,6 +53,7 @@ import { log } from '../logger.js';
 import { workAreaPath } from '../paths.js';
 import { interactive } from '../prompt.js';
 import { ensureRoleHome } from '../role-home.js';
+import { listIntake, processIntake } from '../pm-helper-intake.js';
 import { areaRoleName, markAreaRole, readRole, rolesDir } from '../roles.js';
 import { createWorkArea, inspectWorkArea } from '../work-area.js';
 import {
@@ -64,6 +65,12 @@ import { scanArgs } from './flags.js';
 export async function runRoleSingleton(roleName, argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
   const stderr = deps.stderr || process.stderr;
+  // The helper's intake surface (design note §3): the one module that knows
+  // where intake comes from is pm-helper-intake.js; this is its door. Taken
+  // before the conversation grammar so 'intake' is never read as an id.
+  if (roleName === 'pm-helper' && argv[0] === 'intake') {
+    return intakeVerb(argv.slice(1), { stdout, stderr, env: deps.env || process.env });
+  }
   const scanned = scanArgs(argv, { booleans: ['--no-attach'], strictValues: ['--model'] });
   const usage = `usage — mc ${roleName} [new | <conversation id>] [--model <model>] [--no-attach]\n`;
   if (scanned.error || scanned.positional.length > 1) {
@@ -260,6 +267,46 @@ export async function runRoleSingleton(roleName, argv, deps = {}) {
   stderr.write('mc: ctrl-b d leaves it running\n');
   const joined = attachBackground(started.target);
   return joined.ok ? (joined.code || 0) : 1;
+}
+
+/**
+ * `mc pm-helper intake [--json]` — the unprocessed items, oldest first.
+ * `mc pm-helper intake done <stem…>` — move them to processed/<date>/.
+ *
+ * Unreadable or empty is said, never silent: Martin has put something in
+ * the box and expects it to show up (§3's load-bearing rule).
+ */
+function intakeVerb(argv, { stdout, stderr, env }) {
+  const home = workAreaPath('pm-helper', env);
+  if (argv[0] === 'done') {
+    const stems = argv.slice(1);
+    if (stems.length === 0) {
+      stderr.write('mc: intake done needs the stems — mc pm-helper intake done <stem…>\n');
+      return 2;
+    }
+    const outcome = processIntake(home, stems);
+    for (const file of outcome.moved) stdout.write(`mc: processed ${file} → ${outcome.to}\n`);
+    for (const stem of outcome.missing) stderr.write(`mc: nothing in intake/ is called ${stem} — mc pm-helper intake lists what is there\n`);
+    return outcome.missing.length ? 1 : 0;
+  }
+  if (argv[0] && argv[0] !== '--json') {
+    stderr.write(`mc: unknown intake verb: ${argv[0]} — mc pm-helper intake [--json] | done <stem…>\n`);
+    return 2;
+  }
+  const items = listIntake(home);
+  if (argv[0] === '--json') {
+    stdout.write(`${JSON.stringify({ items }, null, 2)}\n`);
+    return 0;
+  }
+  if (items.length === 0) {
+    stdout.write('mc: intake/ is empty — nothing from Martin is waiting\n');
+    return 0;
+  }
+  for (const item of items) {
+    stdout.write(`mc: ${item.stem}  (${item.files.join(', ')})  ${item.at.slice(0, 16)}Z${item.description ? ` — ${item.description.split('\n')[0].slice(0, 60)}` : ''}\n`);
+  }
+  stdout.write(`mc: ${items.length} item${items.length === 1 ? '' : 's'} — describe, draft into pm/inbox/, then mc pm-helper intake done <stem>\n`);
+  return 0;
 }
 
 /** One wording for an id that names nothing, wherever the question is asked. */

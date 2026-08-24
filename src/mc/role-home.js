@@ -56,13 +56,21 @@ const HOMES = {
       handoff: 'Baton notes vid continue (K4). Efterträdaren ska inte behöva fråga något företrädaren visste.',
     },
   },
+  // v0.2 of the design note (2026-08-17, built 2026-08-24): English
+  // directory names per D-0084 — `underlag` became `briefs` before the home
+  // ever existed on disk, so nothing migrates. `intake/` is Martin's
+  // mailbox and the one surface that cannot wait its turn (§3).
   'pm-helper': {
     git: false,
     state: null,
     dirs: {
+      intake: 'Martins råmaterial: skärmdumpar, textrader, felmeddelanden — vad som helst, i vilken form som helst. Icke-.md är bilaga; .md med samma filnamnsstam är dess beskrivning; samma kvart hör ihop. Behandlat flyttas till processed/, raderas aldrig.',
+      [join('intake', 'processed')]: 'Behandlat intag, per datum. Martin ska kunna gå tillbaka till sin egen skärmdump.',
       sweeps: 'Komprimerade sessionssvep. Roteras.',
-      underlag: 'Sammanställningar PM beställt.',
+      briefs: 'Sammanställningar PM beställt.',
+      improve: 'Improve-resultat per projekt: improve/<projekt>/<datum>.md. Ett projekt per varv i rotation; turordningen är ingen prioritering.',
       'memoro-mirror': 'Läs-spegel av repot. Initieras av helpern själv (git/gh direkt) — aldrig av mc, aldrig commits.',
+      inbox: 'Kanalens transport: ett ärende per fil (§7b). Hit kommer PM:s beställningar och hjärtslagets improve-puls.',
       logs: 'Helperns egna loggar.',
     },
   },
