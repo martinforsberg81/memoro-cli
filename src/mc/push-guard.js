@@ -151,7 +151,7 @@ export function pushCheckLines(verdict, { branch, anyway = false }) {
       `mc: the pull request is closed; pushing to ${branch} does not reopen it, and nothing reads the branch.`,
     ];
     // The quietest failure of the four: the recreated branch announces
-    // itself as \`* [new branch]\`, which reads as success (D-0164's fourth
+    // itself as `* [new branch]`, which reads as success (D-0164's fourth
     // event, 2026-08-24). One sentence, no new mechanism.
     if (verdict.remote_gone) {
       lines.push(`mc: this branch was deleted on the remote after it merged; your push would recreate it — "* [new branch]" would be the only sign.`);
