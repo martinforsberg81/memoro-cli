@@ -306,7 +306,14 @@ async function runVerb(opts, { stdout, stderr }) {
     for (const item of result.kept) {
       stdout.write(`  kept     ${item.repo}${item.branch ? ` (${item.branch})` : ''} — ${item.why}\n`);
     }
-    if (!result.removed.length && !result.kept.length) stdout.write('  nothing to release\n');
+    // The area itself, when the user's own files hold it: said the same way
+    // in the dry run and the apply, with the way forward (2026-08-24 — the
+    // dry run promised the conversations, the apply said "nothing to
+    // release", and both were the same area).
+    if (result.held_by?.length) {
+      stdout.write(`  kept     the area and its conversations — it still holds ${result.held_by.join(', ')} (mc work discard ${opts.name} removes everything)\n`);
+    }
+    if (!result.removed.length && !result.kept.length && !result.conversations.length && !result.held_by?.length) stdout.write('  nothing to release\n');
     if (!opts.apply) stdout.write('\nRun again with --apply.\n');
     return 0;
   }
