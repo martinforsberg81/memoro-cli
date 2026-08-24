@@ -23,6 +23,31 @@ import { describe, it } from 'node:test';
 
 import { SHIPPED, UNKNOWN, declarationFor, tablePath } from '../../src/mc/repo-gate-table.js';
 
+describe('an override that shadows shipped fields is said, not silent (D-0135)', () => {
+  it('names the fields the override dropped, and nothing when there is no override', () => {
+    const root = mkdtempSync(join(tmpdir(), 'mc-shadow-'));
+    try {
+      // The measured hole, twice on one repository: the operator's memoro
+      // override replaced the whole shipped entry — extra_gates fell out
+      // 2026-08-22, pr_tests_flags fell out 2026-08-24, both in silence.
+      writeFileSync(join(root, 'repo-gates.json'), JSON.stringify({
+        memoro: {
+          prepare: 'npm ci',
+          prepare_why: 'measured',
+          extra_gates: [{ name: 'msr contract', command: 'npm run test:msr:contract' }],
+          merge_log: null,
+        },
+      }));
+      const shadowedResult = declarationFor('/x/memoro', { root });
+      assert.equal(shadowedResult.ok, true);
+      assert.deepEqual(shadowedResult.shadowed, ['pr_tests_flags']);
+      // The shipped entry alone shadows nothing.
+      const plain = declarationFor('/x/memoro-cli', { root });
+      assert.deepEqual(plain.shadowed, []);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+});
+
 /** A repository directory with the manifest a test wants it to have. */
 function repo(name, manifest) {
   const root = mkdtempSync(join(tmpdir(), 'mc-gate-table-'));

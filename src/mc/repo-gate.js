@@ -255,6 +255,13 @@ export async function runGate({
     return finish('declaration', declared.reason);
   }
   report.declaration = { source: declared.source, ...declared.declaration };
+  // An override that shadows shipped fields does it in silence — it took
+  // extra_gates on 2026-08-22 (D-0135) and pr_tests_flags on 2026-08-24,
+  // one repository, same hole. The table says which fields fell out; the
+  // round says it where somebody is listening.
+  for (const field of declared.shadowed || []) {
+    say(`DECLARATION SHADOWED — the override for ${declared.name} omits ${field}, which the shipped table declares; an override states every field it wants (D-0135)`);
+  }
 
   const workspace = join(gateRoot(root), repoFileSlug(repoPath));
   const baseDir = join(workspace, 'baseline');
@@ -843,6 +850,7 @@ const TEST_FILE = /\.test\.(?:js|mjs|cjs)$/u;
  * and the round goes on: that fact belongs to the reviewer, not to the gate.
  */
 async function ownTests({ git, tests, cwd, baseRef, head = 'HEAD', say, flags = [] }) {
+
   // `baseRef...head`: what the pull request changed since it left the base,
   // not what the base changed since — on a batch candidate, HEAD carries the
   // other pull requests' files too, and a plain two-dot diff would run them
@@ -856,6 +864,22 @@ async function ownTests({ git, tests, cwd, baseRef, head = 'HEAD', say, flags = 
     say('the pull request adds or changes no test file');
     return { ok: true, result: { files, totals: null, red: [], exit_code: null } };
   }
+  // No declared flags and a test script the harvester cannot read is a
+  // question the gate cannot answer — and it used to answer it anyway, in
+  // silence: memoro's scripts.test became a wrapper (`node
+  // scripts/testing/ci.mjs`), nodeTestFlags returned [] without a word,
+  // and the round ran bare `node --test` with no loader. Nine files import
+  // /js/ specifiers there; every PR touching one got red pr-tests that
+  // were the gate's own (measured 2026-08-24: 2 FAIL bare, 30/30 with the
+  // loader). Saying so is the ruling: silent-empty is the worst of the
+  // three outcomes.
+  if (flags.length === 0 && testScriptShape(cwd) === 'wrapper') {
+    return {
+      ok: false,
+      reason: `the repository's test script is not a \`node --test\` line, so the gate cannot know which loaders these tests need — declare pr_tests_flags for this repository in the gate table (an override states every field it wants)`,
+      result: { files, totals: null, red: [], exit_code: null },
+    };
+  }
   say(`running the pull request's own tests: ${files.length} file${files.length === 1 ? '' : 's'}`);
   if (flags.length) say(`pr tests run with the declared flags: ${flags.join(' ')}`);
   const run = await tests({ cwd, files, flags, onLine: (line) => say(`pr tests: ${line}`) });
@@ -865,9 +889,30 @@ async function ownTests({ git, tests, cwd, baseRef, head = 'HEAD', say, flags = 
   if (!totals.finished) return { ok: false, reason: 'the pull request\'s own tests never reached their summary', result };
   if (!totals.tests) return { ok: false, reason: 'the pull request\'s own test files reported no tests at all', result };
   if (red.length) {
-    return { ok: false, reason: `${red.length} of the pull request's own tests ${red.length === 1 ? 'is' : 'are'} red: ${red.slice(0, 3).join(', ')}${red.length > 3 ? ', …' : ''}`, result };
+    // Counted by the summary's own `# fail`, never by the number of red
+    // names: a failing test reddens its parent suites too, so two failures
+    // can carry three names — and "3 of the pull request's own tests" was
+    // the gate answering with confidence a question it had miscounted
+    // (2026-08-24). The names stay, said as names.
+    const failed = totals.fail ?? red.length;
+    return { ok: false, reason: `${failed} of the pull request's own tests ${failed === 1 ? 'is' : 'are'} red — the red names, parent suites included: ${red.slice(0, 3).join(', ')}${red.length > 3 ? ', …' : ''}`, result };
   }
   return { ok: true, result };
+}
+
+/**
+ * What kind of test script this repository has: a `node --test` line the
+ * harvester below can read (`node-test`), something else (`wrapper` — a
+ * runner like memoro's ci.mjs, whose loaders live where no heuristic
+ * looks), or none at all.
+ */
+function testScriptShape(cwd) {
+  let script = '';
+  try {
+    script = String(JSON.parse(readFileSync(join(cwd, 'package.json'), 'utf8')).scripts?.test || '');
+  } catch { return 'none'; }
+  if (!script) return 'none';
+  return /^node\s+(?:.*\s)?--test(?:\s|$)/u.test(script) ? 'node-test' : 'wrapper';
 }
 
 /**
