@@ -287,6 +287,24 @@ describe('the round', () => {
     } finally { fx.cleanup(); }
   });
 
+  it("does not count the guard's knock either — a watcher's file is never an item (KP-10)", async () => {
+    const fx = fixture();
+    try {
+      fx.item('a.md');
+      await pass(fx);
+      // The guard flagged something into PM's inbox, signed with its own fixed
+      // name. Measured 2026-08-24: the round counted it, knocked, and the
+      // guard then flagged PM for the round's knock — 104 of 163 archived
+      // files were the two watchers announcing each other.
+      const guard = join(fx.area, 'inbox', '2026-08-24T03-00-00.000Z-mc-watch-sessions.md');
+      writeFileSync(guard, '---\nfrom: mc watch sessions\nat: 2026-08-24T03:00:00.000Z\n---\n\nmc watch sessions flagged 1 thing\n');
+      const second = await pass(fx);
+      assert.equal(second.inbox.count, 1, "the guard's knock was counted as an item");
+      assert.equal(second.knock, null, "the round knocked about the guard's knock");
+      assert.deepEqual(readInbox(fx.area).items.map((i) => i.name), ['a.md']);
+    } finally { fx.cleanup(); }
+  });
+
   it('delivered, but did not knock is a normal outcome', async () => {
     const fx = fixture();
     try {

@@ -30,6 +30,7 @@ import { readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { DEFAULT_SILENT_MS, DEFAULT_WAITING_MS } from './watch-sessions-store.js';
+import { isWatcherMessage } from './watch-senders.js';
 import { inboxPath } from './work-send.js';
 import { listOpenTasks } from './task-log.js';
 
@@ -383,7 +384,7 @@ export function countInbox(areaPath) {
   let entries = [];
   try { entries = readdirSync(inboxPath(areaPath), { withFileTypes: true }); } catch { return { count: 0, oldest: null }; }
   const items = entries
-    .filter((entry) => entry.isFile() && entry.name !== 'README.md' && !entry.name.startsWith('.'))
+    .filter((entry) => isItem(inboxPath(areaPath), entry))
     .map((entry) => entry.name)
     .sort();
   return { count: items.length, oldest: items[0] || null };
@@ -398,13 +399,26 @@ export function arrivedSince(areaPath, sinceMs) {
   let entries = [];
   try { entries = readdirSync(inboxPath(areaPath), { withFileTypes: true }); } catch { return { count: 0, oldest: null }; }
   const items = entries
-    .filter((entry) => entry.isFile() && entry.name !== 'README.md' && !entry.name.startsWith('.'))
+    .filter((entry) => isItem(inboxPath(areaPath), entry))
     .filter((entry) => {
       try { return statSync(join(inboxPath(areaPath), entry.name)).mtimeMs > sinceMs; } catch { return false; }
     })
     .map((entry) => entry.name)
     .sort();
   return { count: items.length, oldest: items[0] || null };
+}
+
+/**
+ * What counts as mail: a file at the top level, not `README.md`, and not a
+ * watcher's knock. The round's knocks into PM's inbox were, until KP-10
+ * (2026-08-24), "files that arrived since PM last moved" to this guard, which
+ * flagged PM `unattended`, which knocked, which the round then counted as an
+ * item — the two watchers announcing each other, six wakes in a row with no
+ * report in any of them. One rule for both readers, in `watch-senders.js`.
+ */
+function isItem(directory, entry) {
+  return entry.isFile() && entry.name !== 'README.md' && !entry.name.startsWith('.')
+    && !isWatcherMessage(join(directory, entry.name));
 }
 
 /** Hours and minutes, because "4h12m" is read faster than 15120000. */
