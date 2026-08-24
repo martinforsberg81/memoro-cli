@@ -9,7 +9,7 @@
  * model is let in exactly once, in `watch-sessions-read.js`, where the output is
  * prose and reading it needs interpretation.
  *
- * Eleven patterns, and the guard's whole vocabulary:
+ * Twelve patterns, and the guard's whole vocabulary:
  *
  *   waiting        script  stopped for a person, and has been for a while
  *   silent         script  meant to be working, and nothing has come out
@@ -21,23 +21,25 @@
  *   quiet-group    script  nobody under a named prefix is working at all
  *   stalled        script  an order it was given has not moved in twelve hours
  *   holding        script  it holds the suite right, and nothing has run under it
+ *   context        script  its context is nearly full — the next turns are the ones that stall
  *   blocked        model   it says it is stuck on something it cannot get
  *   quota-exhausted model  it says it ran out
  *   error          model   something in the output failed
  *
- * There is no twelfth, there is no severity, and there is no order. The guard
+ * There is no thirteenth, there is no severity, and there is no order. The guard
  * flags; it does not decide and it does not rank.
  */
 import { readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
+import { CONTEXT_LEVELS } from './conversations.js';
 import { DEFAULT_SILENT_MS, DEFAULT_WAITING_MS } from './watch-sessions-store.js';
 import { isWatcherMessage } from './watch-senders.js';
 import { explainsStop, readStopMark } from './work-stop-marker.js';
 import { inboxPath } from './work-send.js';
 import { listOpenTasks } from './task-log.js';
 
-export const SCRIPT_PATTERNS = Object.freeze(['waiting', 'silent', 'dead', 'unreachable', 'unattended', 'quiet-group', 'stalled', 'holding']);
+export const SCRIPT_PATTERNS = Object.freeze(['waiting', 'silent', 'dead', 'unreachable', 'unattended', 'quiet-group', 'stalled', 'holding', 'context']);
 
 /**
  * Ten minutes stopped with unread mail, and the order picked the number
@@ -150,6 +152,19 @@ function oneSession({
 
   if (conversation.live && conversation.state === 'waiting' && quiet > waitingMs) {
     patterns.push({ pattern: 'waiting', detail: `stopped and waiting for ${describeSpan(quiet)}` });
+  }
+
+  // Nearly out of context (2026-08-24): read from the transcript, so a
+  // session outside tmux — no pane, unreachable by wake — is seen exactly
+  // like one inside. PM found msr-track-1 at 99 % by looking, mid-repair;
+  // a rule without an alarm about its own absence is a note (D-0180).
+  const fill = conversation.context;
+  if (conversation.live && fill && fill.percent >= CONTEXT_LEVELS.knock) {
+    patterns.push({
+      pattern: 'context',
+      detail: `${fill.percent}% of its context used (${Math.round(fill.used / 1000)}k of ${Math.round(fill.window / 1000)}k tokens, window assumed from ${fill.model || 'the model'})`
+        + ' — /compact or /clear before the next turns stall; the rule is regular compaction',
+    });
   }
 
   const changed = previous === null

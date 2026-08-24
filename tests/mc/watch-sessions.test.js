@@ -80,15 +80,16 @@ function round(options = {}) {
 }
 
 describe('the guard flags, and only flags', () => {
-  it('has eleven patterns, eight of them script, and exactly four that knock', () => {
-    assert.deepEqual([...SCRIPT_PATTERNS], ['waiting', 'silent', 'dead', 'unreachable', 'unattended', 'quiet-group', 'stalled', 'holding']);
+  it('has twelve patterns, nine of them script, and exactly five that knock', () => {
+    assert.deepEqual([...SCRIPT_PATTERNS], ['waiting', 'silent', 'dead', 'unreachable', 'unattended', 'quiet-group', 'stalled', 'holding', 'context']);
     assert.deepEqual([...MODEL_PATTERNS], ['blocked', 'quota-exhausted', 'error']);
     // The bound in §5 is the point of the exception. The two added for B2
     // (2026-08-23) are the work itself standing still — a session stopped
     // with mail it has not read, a group in which nobody works — and the
     // round's half hour is the latency they exist to remove. Everything else
     // still waits for the round.
-    assert.deepEqual([...URGENT_PATTERNS], ['dead', 'quota-exhausted', 'unattended', 'quiet-group']);
+    // And a context nearly full (2026-08-24): its next turns stall.
+    assert.deepEqual([...URGENT_PATTERNS], ['dead', 'quota-exhausted', 'unattended', 'quiet-group', 'context']);
   });
 
   it('a session stopped with mail that arrived since it last moved is unattended, knocked, and urgent', async () => {

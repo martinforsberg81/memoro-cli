@@ -24,7 +24,7 @@
 import { execFile, execFileSync, spawnSync } from 'node:child_process';
 import { promisify } from 'node:util';
 
-import { lastModel, listConversations, readTailEntries } from './conversations.js';
+import { contextUsage, lastModel, listConversations, readTailEntries } from './conversations.js';
 import { readMenu } from './menu-read.js';
 import { mcHome, workRoot } from './paths.js';
 import { backgroundTarget } from './work-open.js';
@@ -332,6 +332,10 @@ function describeConversation(item, live) {
     said,
     turn,
     model: lastModel(item.tool, entries),
+    // How full its context is, from the same tail (2026-08-24): a pane
+    // prints it, but a session outside tmux has no pane, and the transcript
+    // has it for both.
+    context: contextUsage(item.tool, entries),
     // The clock the session set for itself, if any (D-0155). Claude only —
     // Codex has no such tool — and read from the same tail as the rest.
     wakeup: item.tool === 'codex' ? null : scheduledWakeup(entries),

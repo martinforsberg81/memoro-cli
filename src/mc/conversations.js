@@ -261,6 +261,54 @@ export function conversationModel(item) {
   return lastModel(item.tool, readTailEntries(item.path, WIDE_TAIL_BYTES));
 }
 
+/**
+ * How full a Claude conversation's context is, read from its transcript.
+ *
+ * Nobody sees a session's context fill but the session itself: PM found
+ * msr-track-1 at 99 % by looking into its pane mid-repair, which is luck,
+ * not a mechanism (2026-08-24). The pane prints "NN% context used", but a
+ * pane is the one thing a session run outside tmux does not have — and
+ * the transcript carries the same number for every session, pane or not:
+ * each assistant message records `usage`, and the context in play is the
+ * whole input side of the latest one (fresh + cache written + cache read).
+ *
+ * The window is not in the transcript, so it is assumed from the model —
+ * calibrated once, measured: msr-track-1's pane said 100 % at 977 k
+ * tokens on claude-opus-5, so the 5-family is a 1M window; haiku 4.5 and
+ * anything unknown are taken as 200k. The answer says `window_assumed` so
+ * nobody reads the percentage as more than it is.
+ */
+export const CONTEXT_LEVELS = Object.freeze({
+  /** Shown on the board from here: the rule is regular compaction, and this is when it is worth a glance. */
+  show: 70,
+  /** The guard knocks PM from here: the next turns are the ones that stall. */
+  knock: 90,
+});
+
+export function contextWindowFor(model) {
+  const name = String(model || '').toLowerCase();
+  if (/-5(?:-|$)/u.test(name) && !name.includes('haiku')) return 1_000_000;
+  return 200_000;
+}
+
+export function contextUsage(tool, entries) {
+  if (tool === 'codex') return null;
+  for (let i = entries.length - 1; i >= 0; i -= 1) {
+    const entry = entries[i];
+    if (entry.type !== 'assistant') continue;
+    const usage = entry.message?.usage;
+    if (!usage || typeof usage !== 'object') continue;
+    const used = (Number(usage.input_tokens) || 0)
+      + (Number(usage.cache_creation_input_tokens) || 0)
+      + (Number(usage.cache_read_input_tokens) || 0);
+    if (!used) continue;
+    const model = typeof entry.message?.model === 'string' ? entry.message.model : null;
+    const window = contextWindowFor(model);
+    return { used, window, percent: Math.round((used / window) * 100), model, window_assumed: true };
+  }
+  return null;
+}
+
 /** The same question, asked of transcript entries someone already read. */
 export function lastModel(tool, entries) {
   for (let i = entries.length - 1; i >= 0; i -= 1) {

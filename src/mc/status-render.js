@@ -10,6 +10,7 @@
  * should contain what it says and nothing else.
  */
 import { dueIn } from './wakeup.js';
+import { CONTEXT_LEVELS } from './conversations.js';
 
 const SGR = {
   reset: '[0m',
@@ -174,7 +175,13 @@ export function renderLines(report, {
       // The model is the one unbounded thing on this row — mc passes the
       // value through unvalidated, so the row is clipped like its neighbours
       // rather than trusting the name to be short.
-      lines.push(`      ${c(pad(item.state, 9), TONE[item.state] || 'grey')}${c(clip(meta, wide - 15), 'grey')}`);
+      // Context fill, from the early level up (2026-08-24): the rule is
+      // regular compaction, and a number nobody can see is a rule nobody
+      // can keep. Yellow when worth a glance, red when the guard knocks.
+      const fill = item.context && item.context.percent >= CONTEXT_LEVELS.show
+        ? c(`${item.context.percent}% context`, item.context.percent >= CONTEXT_LEVELS.knock ? 'red' : 'yellow')
+        : '';
+      lines.push(`      ${c(pad(item.state, 9), TONE[item.state] || 'grey')}${c(clip(meta, wide - 15), 'grey')}${fill ? `  ${fill}` : ''}`);
       // What it last said is the line a person actually reads. It is left
       // uncoloured when the conversation is live so it is the brightest thing
       // on the row, and dimmed once idle so a finished one recedes.

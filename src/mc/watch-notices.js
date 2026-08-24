@@ -43,10 +43,12 @@ export const NOTICES_FILE = 'notices.jsonl';
  * read, and a group in which nobody works, are the work itself standing
  * still (B2, 2026-08-23: four tracks, 20–41 minutes, nothing said) — and
  * the round's half hour is exactly the latency they cannot afford.
+ * A context nearly full (2026-08-24) is the same shape: its next turns
+ * are the ones that stall, and PM found one at 99 % only by looking.
  * Everything else waits — half an hour of latency on a flag is cheaper than
  * a channel nobody trusts to be quiet.
  */
-export const URGENT_PATTERNS = Object.freeze(['dead', 'quota-exhausted', 'unattended', 'quiet-group']);
+export const URGENT_PATTERNS = Object.freeze(['dead', 'quota-exhausted', 'unattended', 'quiet-group', 'context']);
 
 export function noticesPath(root = mcHome()) {
   return join(watchRoot(root), NOTICES_FILE);
