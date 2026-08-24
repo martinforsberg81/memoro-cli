@@ -57,7 +57,8 @@ export function lockfileHashAt({ git, repoPath, commit }) {
 export function saveBaseline({
   repoPath, commit, lockfileHash, command, red, totals, extraGates = null, root = mcHome(), now = new Date(),
 }) {
-  const table = readTable(root);
+  const store = readStore(root);
+  const table = store.repos;
   table[repoFileSlug(repoPath)] = {
     commit,
     lockfile_hash: lockfileHash,
@@ -76,7 +77,7 @@ export function saveBaseline({
     measured_at: now.toISOString(),
   };
   writeJsonAtomic(baselineCachePath(root), {
-    schema: BASELINE_CACHE_SCHEMA, version: BASELINE_CACHE_VERSION, repos: table,
+    schema: BASELINE_CACHE_SCHEMA, version: BASELINE_CACHE_VERSION, repos: table, measured: store.measured,
   });
   return table[repoFileSlug(repoPath)];
 }
@@ -109,10 +110,64 @@ export function carriedGate(entry, gate) {
   return entry.extra_gates.find((saved) => saved.command === gate.command) || null;
 }
 
+/**
+ * The baseline side of one extra gate, measured and kept — red included.
+ *
+ * The A1 entry above is written only after a green merge, so on a red main
+ * there is never anything to carry and every round pays the baseline gate
+ * again: measured 2026-08-24, 662 s + 531 s ≈ 20 minutes per round, on the
+ * very main where the most rounds run. But the baseline's own measurement
+ * is exactly as deterministic red as green — same commit, same lockfile,
+ * same command, same answer — so it is saved the moment it is taken and
+ * reused on an exact key match, whatever its colour. Kept apart from the
+ * A1 entry: that one is a candidate result promoted by a merge; this is a
+ * baseline result that never went anywhere.
+ */
+export function saveMeasuredGate({
+  repoPath, commit, lockfileHash, gate, root = mcHome(), now = new Date(),
+}) {
+  const store = readStore(root);
+  const measured = store.measured || {};
+  const slug = repoFileSlug(repoPath);
+  const mine = (measured[slug]?.commit === commit && measured[slug]?.lockfile_hash === lockfileHash)
+    ? measured[slug]
+    : { commit, lockfile_hash: lockfileHash, gates: [] };
+  mine.gates = [
+    ...mine.gates.filter((saved) => saved.command !== gate.command),
+    {
+      command: gate.command,
+      ok: Boolean(gate.ok),
+      exit_code: gate.exit_code ?? null,
+      red: Array.isArray(gate.red) ? [...gate.red] : null,
+      measured_at: now.toISOString(),
+    },
+  ];
+  measured[slug] = mine;
+  writeJsonAtomic(baselineCachePath(root), {
+    schema: BASELINE_CACHE_SCHEMA, version: BASELINE_CACHE_VERSION, repos: store.repos, measured,
+  });
+  return mine.gates[mine.gates.length - 1];
+}
+
+/** The measured baseline gate for exactly this commit, lockfile and command — or null. */
+export function loadMeasuredGate({ repoPath, commit, lockfileHash, command, root = mcHome() }) {
+  const mine = readStore(root).measured?.[repoFileSlug(repoPath)];
+  if (!mine) return null;
+  if (mine.commit !== commit || mine.lockfile_hash !== lockfileHash) return null;
+  return mine.gates?.find((saved) => saved.command === command) || null;
+}
+
 function readTable(root) {
+  return readStore(root).repos;
+}
+
+function readStore(root) {
   try {
     const value = JSON.parse(readFileSync(baselineCachePath(root), 'utf8'));
-    if (value?.schema !== BASELINE_CACHE_SCHEMA || value?.version !== BASELINE_CACHE_VERSION) return {};
-    return value.repos && typeof value.repos === 'object' ? value.repos : {};
-  } catch { return {}; }
+    if (value?.schema !== BASELINE_CACHE_SCHEMA || value?.version !== BASELINE_CACHE_VERSION) return { repos: {}, measured: {} };
+    return {
+      repos: value.repos && typeof value.repos === 'object' ? value.repos : {},
+      measured: value.measured && typeof value.measured === 'object' ? value.measured : {},
+    };
+  } catch { return { repos: {}, measured: {} }; }
 }

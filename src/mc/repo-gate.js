@@ -58,7 +58,7 @@ import { RATCHET_FILE, compareRatchet, readRatchet } from './red-ratchet.js';
 import { currentHolder } from './work-identity.js';
 import { mcHome } from './paths.js';
 import { repoFileSlug } from './repo-snapshot.js';
-import { carriedGate, loadBaseline, lockfileHashAt } from './repo-baseline-cache.js';
+import { carriedGate, loadBaseline, loadMeasuredGate, lockfileHashAt, saveMeasuredGate } from './repo-baseline-cache.js';
 import { dependencyTree } from './dependency-tree.js';
 import { declarationFor } from './repo-gate-table.js';
 
@@ -533,22 +533,58 @@ export async function runGate({
     // prints TAP is compared by red *names*, like the suite; one that does
     // not is compared by exit code. And under the same rule as ever: a side
     // that could not run at all is a stop, never an approval.
+    // The gates run in an environment that asks node's test runner for TAP,
+    // the way the suite already does: node 24 writes its spec reporter to a
+    // pipe (measured 2026-08-24 — `# tests` never appears), so without this
+    // the name comparison silently degrades to exit codes on every gate
+    // that is a node test. A command that is not node ignores the variable.
+    const gateEnv = { ...env };
+    delete gateEnv.NODE_TEST_CONTEXT;
+    gateEnv.NODE_OPTIONS = `${String(env.NODE_OPTIONS || '').replace(/--test-reporter(-destination)?[=\s]\S+/gu, '').trim()} --test-reporter=tap`.trim();
+    const baseKeys = {
+      repoPath,
+      commit: baseCommit,
+      lockfileHash: lockfileHashAt({ git: askGit, repoPath, commit: baseCommit }),
+      root,
+    };
     for (const gate of gates) {
-      const saved = carriedGate(carried, gate);
+      // The baseline side: the A1 entry (a candidate result a green merge
+      // promoted), else the measured store (a baseline result kept whatever
+      // its colour — on a red main there is no green merge to promote
+      // anything, and rerunning the same red cost 662 s per round,
+      // measured 2026-08-24), else run it here.
+      const saved = carriedGate(carried, gate)
+        || (baseCommit ? loadMeasuredGate({ ...baseKeys, command: gate.command }) : null);
       let base;
       if (saved) {
         base = { ok: saved.ok, exit_code: saved.exit_code ?? null, ran: true, red: Array.isArray(saved.red) ? saved.red : null, carried: true };
-        say(`extra gate ${gate.name} on the baseline: carried from the last green round (${base.ok ? 'passed' : `failed, exit ${base.exit_code}`})`);
+        say(`extra gate ${gate.name} on the baseline: carried (${base.ok ? 'passed' : `failed, exit ${base.exit_code}${base.red ? `, ${base.red.length} red` : ''}`}${saved.measured_at ? `, measured ${saved.measured_at}` : ''}) — not rerun`);
       } else {
         say(`extra gate ${gate.name} on the baseline`);
-        base = gateSide(await timed('extra gates baseline', async () => shell(gate.command, { cwd: baseDir, env })));
+        base = gateSide(await timed('extra gates baseline', async () => shell(gate.command, { cwd: baseDir, env: gateEnv })));
+        // Saved the moment it is taken, red included: the same keys as A1,
+        // and exactly as deterministic.
+        if (base.ran && baseCommit) {
+          attemptQuietly(() => saveMeasuredGate({ ...baseKeys, gate: { command: gate.command, ok: base.ok, exit_code: base.exit_code, red: base.red } }));
+        }
       }
       say(`extra gate ${gate.name} on the candidate`);
-      const outcome = await timed('extra gates', async () => shell(gate.command, { cwd: headDir, env }));
+      const outcome = await timed('extra gates', async () => shell(gate.command, { cwd: headDir, env: gateEnv }));
       const head = gateSide(outcome);
       // Names when both sides have them; exit codes are the fallback claim.
       const named = base.red !== null && head.red !== null;
       const delta = named ? compareRed(base.red, head.red) : { broke: [], fixed: [] };
+      // What was compared, said out loud — a gate that does the right thing
+      // silently is a gate nobody can trust next time (PM, 2026-08-24; and
+      // track 3 called it before the round ran: "5 red on both sides" can
+      // be five DIFFERENT red on each and report nothing new).
+      if (named) {
+        if (base.red.length || head.red.length) {
+          say(`extra gate ${gate.name}: baseline red [${nameSome(base.red) || 'none'}] · candidate red [${nameSome(head.red) || 'none'}] — ${delta.broke.length} new, ${delta.fixed.length} fixed`);
+        }
+      } else if (!base.ok || !head.ok) {
+        say(`extra gate ${gate.name}: could not compare by name — falling back to exit codes; a new failure over a red baseline would not be seen`);
+      }
       report.extra_gates.push({
         name: gate.name,
         command: gate.command,
@@ -589,8 +625,10 @@ export async function runGate({
       }
       return finish('extra-gate-baseline', `${gate.name} was already red before this PR — `
         + (named
-          ? `${base.red.length} red on the baseline, ${head.red.length} on the candidate, none of them new`
-          : `exit ${base.exit_code} on the baseline, exit ${head.exit_code} on the candidate`)
+          ? `${base.red.length} red on the baseline (${nameSome(base.red)}), ${head.red.length} on the candidate, `
+            + `${sameSets(base.red, head.red) ? `the same ${base.red.length}` : 'none of them new'}`
+          : `exit ${base.exit_code} on the baseline, exit ${head.exit_code} on the candidate; `
+            + 'could not compare by name — a new failure over a red baseline would not be seen')
         + ` — the base itself is broken; not this change's doing`);
     }
 
@@ -923,6 +961,16 @@ function gateSide(outcome) {
 /** A few names, and how many were not named. */
 function nameSome(names) {
   return `${names.slice(0, 5).join(', ')}${names.length > 5 ? `, … and ${names.length - 5} more` : ''}`;
+}
+
+/** The same red set on both sides — the sentence "the same five" hangs on this. */
+function sameSets(a, b) {
+  return a.length === b.length && a.every((name) => b.includes(name));
+}
+
+/** Best effort where failing must not fail the round — a cache is a saving, never a stop. */
+function attemptQuietly(fn) {
+  try { return fn(); } catch { return null; }
 }
 
 function realSuite({ cwd, onLine = () => {}, env = process.env } = {}) {

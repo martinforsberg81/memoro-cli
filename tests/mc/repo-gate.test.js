@@ -25,7 +25,7 @@ import { describe, it } from 'node:test';
 import { addArea, fixture as repoFixture } from './_helpers/repo-fixture.js';
 import { runMcCli } from './_helpers/mc-cli.js';
 import { gateRoot, runGate } from '../../src/mc/repo-gate.js';
-import { carriedGate, lockfileHashAt, saveBaseline } from '../../src/mc/repo-baseline-cache.js';
+import { carriedGate, loadMeasuredGate, lockfileHashAt, saveBaseline, saveMeasuredGate } from '../../src/mc/repo-baseline-cache.js';
 import { claimLease, readLease } from '../../src/mc/repo-lease.js';
 import { claimSuiteLease, readSuiteLease } from '../../src/mc/suite-lease.js';
 import { renderRatchet } from '../../src/mc/red-ratchet.js';
@@ -1125,6 +1125,79 @@ describe('extra gates are differential: both sides, and the delta decides', () =
       assert.equal(fx.ran('suite').length, 1, 'no suite reran for the gate\'s sake');
       assert.deepEqual(readFileSync(marker, 'utf8').trim().split('\n').sort(), ['baseline', 'candidate']);
     } finally { fx.cleanup(); }
+  });
+
+  it('a node-test gate is compared by NAME for real: five red each side, one different, and the round knows (track 3)', async () => {
+    const fx = fixture();
+    try {
+      // A real `node --test` gate whose one failing test differs by side:
+      // the exit codes match (1 and 1), the counts match (1 and 1), and
+      // only the names tell the candidate's new failure from the baseline's
+      // standing one. The gate env asks node for TAP — node 24 writes spec
+      // to a pipe otherwise, and the comparison would silently fall back.
+      const emit = String.raw`printf 'const { test } = require("node:test");\ntest("side-%s", () => { throw new Error("no"); });\n' "$(basename "$PWD")" > g.test.cjs; node --test g.test.cjs`;
+      declare(fx, emit);
+      const progress = [];
+      const report = await fx.run({ root: fx.mcHome, onProgress: (line) => progress.push(line) });
+      assert.equal(report.stopped_at, 'extra-gate', report.reason);
+      assert.match(report.reason, /adds 1 more: side-candidate/u);
+      assert.deepEqual(report.extra_gates[0].broke, ['side-candidate']);
+      assert.ok(progress.some((line) => /baseline red \[side-baseline\] · candidate red \[side-candidate\] — 1 new, 1 fixed/u.test(line)), progress.join('\n'));
+    } finally { fx.cleanup(); }
+  });
+
+  it('the same red on both sides says so by name — "the same N", not just a matching count', async () => {
+    const fx = fixture();
+    try {
+      const emit = String.raw`printf 'const { test } = require("node:test");\ntest("standing", () => { throw new Error("no"); });\n' > g.test.cjs; node --test g.test.cjs`;
+      declare(fx, emit);
+      const report = await fx.run({ root: fx.mcHome });
+      assert.equal(report.stopped_at, 'extra-gate-baseline', report.reason);
+      assert.match(report.reason, /1 red on the baseline \(standing\), 1 on the candidate, the same 1/u);
+    } finally { fx.cleanup(); }
+  });
+
+  it('a gate with no readable TAP says the fallback out loud, in the progress and in the reason', async () => {
+    const fx = fixture();
+    try {
+      declare(fx, gate(1, 1));
+      const progress = [];
+      const report = await fx.run({ root: fx.mcHome, onProgress: (line) => progress.push(line) });
+      assert.equal(report.stopped_at, 'extra-gate-baseline');
+      assert.match(report.reason, /could not compare by name — a new failure over a red baseline would not be seen/u);
+      assert.ok(progress.some((line) => /could not compare by name — falling back to exit codes/u.test(line)), progress.join('\n'));
+    } finally { fx.cleanup(); }
+  });
+
+  it('a red baseline measurement is saved on its SHA and not paid again next round (20 minutes, measured)', async () => {
+    const fx = fixture();
+    try {
+      const marker = join(fx.root, 'gate-ran.txt');
+      declare(fx, `echo "$(basename "$PWD")" >> "${marker}"; exit 1`);
+      const first = await fx.run({ root: fx.mcHome });
+      assert.equal(first.stopped_at, 'extra-gate-baseline');
+      assert.deepEqual(readFileSync(marker, 'utf8').trim().split('\n'), ['baseline', 'candidate']);
+      // Same main SHA, next round: the baseline side is carried — red.
+      const second = await fx.run({ root: fx.mcHome });
+      assert.equal(second.stopped_at, 'extra-gate-baseline');
+      assert.equal(second.extra_gates[0].baseline.carried, true);
+      assert.deepEqual(readFileSync(marker, 'utf8').trim().split('\n'), ['baseline', 'candidate', 'candidate'], 'the baseline was paid twice');
+    } finally { fx.cleanup(); }
+  });
+
+  it('the measured store breaks on any key and survives a saveBaseline write', () => {
+    const root = mkdtempSync(join(tmpdir(), 'mc-measured-'));
+    try {
+      const keys = { repoPath: '/r/repo', commit: 'aaa', lockfileHash: 'lll', root };
+      saveMeasuredGate({ ...keys, gate: { command: 'run-it', ok: false, exit_code: 1, red: ['x'] } });
+      assert.equal(loadMeasuredGate({ ...keys, command: 'run-it' }).red[0], 'x');
+      assert.equal(loadMeasuredGate({ ...keys, commit: 'bbb', command: 'run-it' }), null);
+      assert.equal(loadMeasuredGate({ ...keys, lockfileHash: 'other', command: 'run-it' }), null);
+      assert.equal(loadMeasuredGate({ ...keys, command: 'other' }), null);
+      // The A1 write keeps the measured table beside it.
+      saveBaseline({ repoPath: '/r/repo', commit: 'ccc', lockfileHash: 'lll', command: 'npm test', red: [], totals: null, root });
+      assert.equal(loadMeasuredGate({ ...keys, command: 'run-it' }).red[0], 'x');
+    } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
   it('carriedGate matches by command, never by name', () => {
