@@ -37,6 +37,16 @@ function io() {
   };
 }
 
+/**
+ * A dependency tree that is present, for the tests that are not about it.
+ *
+ * The lease tests once asked the real cwd — and the first treeless cwd they
+ * met (the gate's own candidate worktree, 2026-08-24) turned all of them
+ * red with exit 2. A test about the lease must not depend on where the
+ * process happens to stand.
+ */
+const TREE_OK = () => ({ manifest: true, declares: 1, present: true, missing: false });
+
 /** The command, faked: what matters is whether it ran and how it ended. */
 function shell({ code = 0, signal = null } = {}) {
   const ran = [];
@@ -62,10 +72,87 @@ describe('mc suite run — claim, run, release as one step', () => {
     const root = home();
     try {
       const sh = shell({ code: 0 });
-      const code = await run(['run', 'npm test'], { ...io(), spawn: sh.spawn, runs: async () => [] });
+      const code = await run(['run', 'npm test'], { ...io(), spawn: sh.spawn, runs: async () => [], tree: TREE_OK });
       assert.equal(code, 0);
       assert.deepEqual(sh.ran, ['npm test']);
       assert.equal(readSuiteLease({ root }).held, false, 'the right went back');
+    } finally { restore(); rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it('a worktree without its dependency tree is refused before anything runs (D-0152)', async () => {
+    const root = home();
+    try {
+      // The shrunk suite runs fewer files and reports fewer failures —
+      // greener than the truth, the one direction nobody reviews. The
+      // refusal is exit 2, never a test's exit, and says the suite never
+      // ran on its first line so nobody can read it as a red run.
+      const sh = shell();
+      const streams = io();
+      const code = await run(['run', 'npm test'], {
+        ...streams, spawn: sh.spawn, runs: async () => [],
+        cwd: '/work/msr-track-2/memoro',
+        tree: (where) => ({ manifest: true, declares: 41, present: false, missing: true, where }),
+        toplevel: () => '/work/msr-track-2/memoro',
+        declaration: () => ({ ok: true, name: 'memoro', declaration: { prepare: 'npm ci' } }),
+      });
+      assert.equal(code, 2);
+      assert.deepEqual(sh.ran, [], 'the command never started');
+      assert.equal(readSuiteLease({ root }).held, false, 'no lease was taken for a run that never was');
+      assert.ok(streams.err.some((line) => /REFUSED — the suite never ran: \/work\/msr-track-2\/memoro declares 41 dependencies and has no node_modules/u.test(line)), streams.err.join(''));
+      assert.ok(streams.err.some((line) => /greener than the truth \(D-0152\)/u.test(line)));
+      assert.ok(streams.err.some((line) => /npm ci, or link node_modules from a sibling worktree with the same lockfile/u.test(line)));
+    } finally { restore(); rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it('a repository whose declaration vouches a treeless suite runs, and says so (the gate\'s own exception)', async () => {
+    const root = home();
+    try {
+      // memoro-cli itself: prepare: null, verified on every gate round.
+      // The exception follows from what the repository IS — its declared,
+      // evidenced truth — never from a flag.
+      const sh = shell({ code: 0 });
+      const streams = io();
+      const code = await run(['run', 'npm test'], {
+        ...streams, spawn: sh.spawn, runs: async () => [],
+        cwd: '/work/x/memoro-cli',
+        tree: () => ({ manifest: true, declares: 12, present: false, missing: true }),
+        toplevel: () => '/work/x/memoro-cli',
+        declaration: () => ({ ok: true, name: 'memoro-cli', declaration: { prepare: null } }),
+      });
+      assert.equal(code, 0);
+      assert.deepEqual(sh.ran, ['npm test'], 'the vouched suite ran');
+      assert.ok(streams.out.some((line) => /no node_modules here, and memoro-cli's declaration vouches its suite runs without one — running/u.test(line)), streams.out.join(''));
+    } finally { restore(); rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it('an undeclared repository with a missing tree is still refused', async () => {
+    const root = home();
+    try {
+      const sh = shell();
+      const streams = io();
+      const code = await run(['run', 'npm test'], {
+        ...streams, spawn: sh.spawn, runs: async () => [],
+        cwd: '/work/somewhere/stranger',
+        tree: () => ({ manifest: true, declares: 3, present: false, missing: true }),
+        toplevel: () => null,
+        declaration: () => ({ ok: false, name: 'stranger', reason: 'not declared' }),
+      });
+      assert.equal(code, 2);
+      assert.deepEqual(sh.ran, []);
+    } finally { restore(); rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it('a directory that is not a Node project, or declares nothing, runs as always', async () => {
+    const root = home();
+    try {
+      const sh = shell({ code: 0 });
+      const code = await run(['run', 'make check'], {
+        ...io(), spawn: sh.spawn, runs: async () => [],
+        cwd: '/work/elsewhere',
+        tree: () => ({ manifest: false, declares: 0, present: false, missing: false }),
+      });
+      assert.equal(code, 0);
+      assert.deepEqual(sh.ran, ['make check']);
     } finally { restore(); rmSync(root, { recursive: true, force: true }); }
   });
 
@@ -77,7 +164,7 @@ describe('mc suite run — claim, run, release as one step', () => {
       const told = [];
       const streams = io();
       const code = await run(['run', 'npm test'], {
-        ...streams, spawn: sh.spawn, runs: async () => [],
+        ...streams, spawn: sh.spawn, runs: async () => [], tree: TREE_OK,
         tell: (message) => { told.push(message); return { told: true, woke: true }; },
       });
       assert.equal(code, 1);
@@ -92,7 +179,7 @@ describe('mc suite run — claim, run, release as one step', () => {
     const root = home();
     try {
       const streams = io();
-      const code = await run(['run', 'npm test'], { ...streams, spawn: shell({ code: 3 }).spawn, runs: async () => [] });
+      const code = await run(['run', 'npm test'], { ...streams, spawn: shell({ code: 3 }).spawn, runs: async () => [], tree: TREE_OK });
       assert.equal(code, 3);
       assert.equal(readSuiteLease({ root }).held, false, 'the lease did not outlive the failure');
       assert.ok(streams.err.some((line) => /exited 3 — the suite right is released, not left standing/u.test(line)));
@@ -102,7 +189,7 @@ describe('mc suite run — claim, run, release as one step', () => {
   it('a command killed by a signal gives the right back too', async () => {
     const root = home();
     try {
-      const code = await run(['run', 'npm test'], { ...io(), spawn: shell({ code: null, signal: 'SIGTERM' }).spawn, runs: async () => [] });
+      const code = await run(['run', 'npm test'], { ...io(), spawn: shell({ code: null, signal: 'SIGTERM' }).spawn, runs: async () => [], tree: TREE_OK });
       assert.equal(code, 143);
       assert.equal(readSuiteLease({ root }).held, false);
     } finally { restore(); rmSync(root, { recursive: true, force: true }); }
@@ -115,7 +202,7 @@ describe('mc suite run — claim, run, release as one step', () => {
       // what it took (the gate round's own rule for the suite right).
       claimSuiteLease({ errand: 'gate round', holder: AREA, root });
       const streams = io();
-      const code = await run(['run', 'npm test'], { ...streams, spawn: shell().spawn, runs: async () => [], holder: AREA });
+      const code = await run(['run', 'npm test'], { ...streams, spawn: shell().spawn, runs: async () => [], holder: AREA, tree: TREE_OK });
       assert.equal(code, 0);
       const after = readSuiteLease({ root });
       assert.equal(after.held, true, 'their hand-claim survived the run');
