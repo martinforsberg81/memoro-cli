@@ -32,7 +32,7 @@ started in it. mc stores nothing else, because nothing else is mc's to know.
 | `mc work release <name> [--apply]` | Remove what git says can go; keep the rest. |
 | `mc work discard <name> [repo] [--apply]` | Throw it away — worktrees, branches, and all. |
 | `mc work send <name> "<text>"` | A message into that work's `inbox/`. `--wake` also knocks on whatever is running there — or, when a draft is in its prompt, queues the knock for when the prompt clears and says so. `--json`. |
-| `mc work stop <name>` | Stop what is running there; keep the work. |
+| `mc work stop <name>` | Stop what is running there; keep the work. Leaves a mark (`.mc-stopped`: who, when) so the session guard says `stopped by pm 03:16` instead of `dead` and the board shows it; `mc work <name>` removes it. |
 | `mc work list` | The same listing as bare `mc work`. |
 | `mc worker <name> [task]` | A project folder that carries the worker role. |
 | `mc pm` / `mc pm-helper` | The singleton role's workspace: attach if it runs, restart it if it stopped, create it the first time. One of it, ever. |

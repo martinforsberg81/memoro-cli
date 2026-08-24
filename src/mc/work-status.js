@@ -36,6 +36,7 @@ import { areaRoleName } from './roles.js';
 import { openTaskCount } from './task-log.js';
 import { scheduledWakeup } from './wakeup.js';
 import { inspectWorkArea, listWorkAreas } from './work-area.js';
+import { readStopMark } from './work-stop-marker.js';
 
 const run = promisify(execFile);
 
@@ -400,6 +401,10 @@ export async function workStatus({ env = process.env, names = null, git: askGit 
         // others, never one of them changed: every reader of this page keeps
         // reading exactly what it read before.
         role: areaRoleName(area.path),
+        // `mc work stop` was here, and nobody has opened the area since: who
+        // and when, so a conversation gone from the page reads as stopped
+        // rather than as dead (KP-09). Null in every other case.
+        stopped: readStopMark(area.path),
         running,
         worktrees: area.worktrees.map((worktree) => ({
           repo: worktree.repo,

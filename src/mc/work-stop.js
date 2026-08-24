@@ -15,7 +15,9 @@
 import { execFileSync, spawnSync } from 'node:child_process';
 
 import { log } from './logger.js';
+import { currentHolder } from './work-identity.js';
 import { toolProcesses } from './work-status.js';
+import { markStopped } from './work-stop-marker.js';
 
 /**
  * Which processes must never be stopped: this one, and everything it grew out
@@ -89,7 +91,9 @@ function stopBackground(name, { run = null, wait = null } = {}) {
   return { kind: 'background', target, graceful: !left };
 }
 
-export function stopWork(area, { env = process.env, signal = 'SIGTERM', deps = {} } = {}) {
+export function stopWork(area, {
+  env = process.env, signal = 'SIGTERM', holder = null, now = new Date(), deps = {},
+} = {}) {
   const stopped = [];
   const kept = [];
 
@@ -111,5 +115,12 @@ export function stopWork(area, { env = process.env, signal = 'SIGTERM', deps = {
       kept.push({ ...item, why: error?.code === 'ESRCH' ? 'already gone' : String(error?.message || error) });
     }
   }
-  return { name: area.name, stopped, kept };
+  // Say so in the area, so the guard's next round reads "stopped by pm
+  // 03:16" and not "dead" (KP-09). Only when something was actually stopped:
+  // a stop of nothing running is not a stop, and marking it would explain
+  // away a later death that was nobody's doing.
+  const marked = stopped.length > 0
+    ? (deps.markStopped || markStopped)(area.path, { by: (holder || (deps.currentHolder || currentHolder)()).name, now })
+    : null;
+  return { name: area.name, stopped, kept, marked };
 }

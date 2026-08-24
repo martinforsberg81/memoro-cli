@@ -36,6 +36,26 @@ function report(model) {
   };
 }
 
+describe('a stop on purpose on the status page (KP-09)', () => {
+  const stopped = { at: new Date(60000).toISOString(), by: 'pm' };
+  it('says who stopped the area and when, while nothing runs there', () => {
+    const page = report(null);
+    page.areas[0].stopped = stopped;
+    page.areas[0].conversations[0].live = false;
+    page.areas[0].conversations[0].state = 'idle';
+    const lines = renderLines(page, { columns: 120, now: 20 * 60000 });
+    assert.ok(lines.some((line) => /■ stopped by pm \d\d:\d\d \(19m\) — mc work api picks it up/u.test(line)), lines.join('\n'));
+  });
+
+  it('says nothing about a mark under a running conversation — that mark is stale', () => {
+    const page = report(null);
+    page.areas[0].stopped = stopped;
+    page.areas[0].conversations[0].live = true;
+    const lines = renderLines(page, { columns: 120, now: 20 * 60000 });
+    assert.ok(!lines.some((line) => line.includes('stopped by')), lines.join('\n'));
+  });
+});
+
 describe('model on the status page', () => {
   it('shows up beside the tool when the transcript names one', () => {
     const lines = renderLines(report('claude-fable-5'), { columns: 100, now: 61000 });
