@@ -224,7 +224,7 @@ async function runVerb(opts, { stdout, stderr }) {
     for (const item of result.discarded) {
       const loses = [];
       if (item.uncommitted) loses.push(`${item.uncommitted} uncommitted`);
-      if (item.unmerged_commits) loses.push(`${item.unmerged_commits} unmerged`);
+      if (item.unmerged_commits && item.landed !== 'landed') loses.push(`${item.unmerged_commits} unmerged`);
       stdout.write(`  ${opts.apply ? 'destroyed' : 'would destroy'}  ${item.repo}${item.branch ? ` (${item.branch})` : ''}${loses.length ? ` — losing ${loses.join(', ')}` : ''}\n`);
     }
     // A conversation is not in git. Nothing brings it back, so it is named
@@ -284,7 +284,7 @@ async function runVerb(opts, { stdout, stderr }) {
       return 1;
     }
     stdout.write(`mc: removed ${opts.repo} from ${opts.name}\n`);
-    if (result.branch_kept) stdout.write(`mc: kept branch ${result.branch} — it has unmerged commits\n`);
+    if (result.branch_kept) stdout.write(`mc: kept branch ${result.branch} — ${result.branch_kept_why || 'it has unmerged commits'}\n`);
     return 0;
   }
 
@@ -398,7 +398,7 @@ function summarise(area, room = 60) {
     if (!worktree.is_git) return worktree.repo;
     const marks = [];
     if (worktree.uncommitted) marks.push(`${worktree.uncommitted} uncommitted`);
-    if (worktree.unmerged_commits) marks.push(`${worktree.unmerged_commits} unmerged`);
+    if (worktree.unmerged_commits && worktree.landed !== 'landed') marks.push(`${worktree.unmerged_commits} unmerged`);
     return `${worktree.repo}${marks.length ? ` (${marks.join(', ')})` : ''}`;
   });
   // One conversation says what it is about; several are counted, because the
@@ -810,7 +810,7 @@ function stakes(result, name) {
   const at = [];
   const total = (key) => result.discarded.reduce((sum, item) => sum + (item[key] || 0), 0);
   const uncommitted = total('uncommitted');
-  const unmerged = total('unmerged_commits');
+  const unmerged = result.discarded.reduce((sum, item) => sum + (item.landed === 'landed' ? 0 : item.unmerged_commits || 0), 0);
   if (uncommitted) at.push(`${uncommitted} uncommitted file${uncommitted === 1 ? '' : 's'}`);
   if (unmerged) at.push(`${unmerged} unmerged commit${unmerged === 1 ? '' : 's'}`);
   if (result.conversations.length) {
@@ -859,7 +859,7 @@ function describe(worktree) {
   if (!worktree.is_git) return `${worktree.repo}  (not a git worktree)`;
   const marks = [];
   if (worktree.uncommitted) marks.push(`${worktree.uncommitted} uncommitted`);
-  if (worktree.unmerged_commits) marks.push(`${worktree.unmerged_commits} unmerged`);
+  if (worktree.unmerged_commits && worktree.landed !== 'landed') marks.push(`${worktree.unmerged_commits} unmerged`);
   return `${worktree.repo}  ${worktree.branch || '(detached)'}${marks.length ? `  [${marks.join(', ')}]` : ''}`;
 }
 

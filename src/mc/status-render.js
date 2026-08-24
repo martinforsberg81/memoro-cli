@@ -216,7 +216,9 @@ function where(area) {
     worktree.repo,
     worktree.branch || '(detached)',
     worktree.uncommitted ? `${worktree.uncommitted} uncommitted` : null,
-    worktree.unmerged_commits ? `${worktree.unmerged_commits} unmerged` : null,
+    // A landed branch's commit count is a squash artefact, not work — it
+    // read as disorder to the person the board exists for (2026-08-24).
+    worktree.unmerged_commits && worktree.landed !== 'landed' ? `${worktree.unmerged_commits} unmerged` : null,
     // A suite run here prints a number that is not a measurement (D-0152).
     worktree.dependencies === 'missing' ? 'no node_modules' : null,
   ].filter(Boolean).join('  ')));

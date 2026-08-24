@@ -27,6 +27,7 @@ import { workAreaPath, workAreaStatePath, workRoot } from './paths.js';
 import { installPushGuard } from './push-guard.js';
 import { areaRoleName, reservedRoleName } from './roles.js';
 import { STOP_MARK } from './work-stop-marker.js';
+import { branchLanded } from './branch-landed.js';
 
 export function listWorkAreas(env = process.env, options = {}) {
   const root = workRoot(env);
@@ -104,6 +105,7 @@ export function inspectWorktree(path, repo) {
   const upstreamMerged = branch && branch !== 'HEAD'
     ? git(path, ['log', '--oneline', `origin/main..${branch}`])
     : null;
+  const unmergedCommits = upstreamMerged ? upstreamMerged.split('\n').filter(Boolean).length : 0;
   return {
     repo,
     path,
@@ -111,7 +113,10 @@ export function inspectWorktree(path, repo) {
     branch: branch && branch !== 'HEAD' ? branch : null,
     git_common_dir: common,
     uncommitted: dirty ? dirty.split('\n').filter(Boolean).length : 0,
-    unmerged_commits: upstreamMerged ? upstreamMerged.split('\n').filter(Boolean).length : 0,
+    unmerged_commits: unmergedCommits,
+    // Content, not commits (2026-08-24): every merge here is a squash, so
+    // ahead-counting alone calls every landed branch unmerged forever.
+    landed: unmergedCommits > 0 && branch && branch !== 'HEAD' ? branchLanded(path, branch) : null,
   };
 }
 
@@ -180,12 +185,23 @@ export function removeWorktree({ name, repo, env = process.env } = {}) {
     return { ok: true, removed: 'directory' };
   }
   run(['--git-dir', worktree.git_common_dir, 'worktree', 'remove', '--', worktree.path]);
-  const branchKept = worktree.unmerged_commits > 0;
+  // Content, not commits: a landed branch is a squash artefact, not work.
+  const branchKept = worktree.unmerged_commits > 0 && worktree.landed !== 'landed';
   if (worktree.branch && !branchKept) {
-    run(['--git-dir', worktree.git_common_dir, 'branch', '-d', worktree.branch]);
+    run(['--git-dir', worktree.git_common_dir, 'branch', '-D', worktree.branch]);
   }
   pruneWorktrees(knownRepositories(env));
-  return { ok: true, removed: 'worktree', branch: worktree.branch, branch_kept: branchKept };
+  return {
+    ok: true,
+    removed: 'worktree',
+    branch: worktree.branch,
+    branch_kept: branchKept,
+    branch_kept_why: branchKept
+      ? (worktree.landed === 'ahead'
+        ? `it has ${worktree.unmerged_commits} commit${worktree.unmerged_commits === 1 ? '' : 's'} main lacks`
+        : 'mc cannot tell whether main has this content — its merge against origin/main conflicts')
+      : null,
+  };
 }
 
 /**
@@ -307,14 +323,24 @@ export function releaseWorkArea(name, { env = process.env, dryRun = false } = {}
       kept.push({ ...worktree, why: `${worktree.uncommitted} uncommitted` });
       continue;
     }
-    if (worktree.unmerged_commits > 0) {
-      kept.push({ ...worktree, why: `${worktree.unmerged_commits} unmerged` });
+    // Content, not commits: a squash-merged branch has commits main lacks
+    // and nothing main lacks. Kept only for real work or a real doubt, and
+    // the why says which (2026-08-24: twelve landed areas refused cleaning).
+    if (worktree.unmerged_commits > 0 && worktree.landed === 'ahead') {
+      kept.push({ ...worktree, why: `${worktree.unmerged_commits} commit${worktree.unmerged_commits === 1 ? '' : 's'} main lacks` });
+      continue;
+    }
+    if (worktree.unmerged_commits > 0 && worktree.landed !== 'landed') {
+      kept.push({ ...worktree, why: `cannot tell whether main has this content — its merge against origin/main conflicts; left for a person` });
       continue;
     }
     if (!dryRun) {
       const common = worktree.git_common_dir;
       run(['--git-dir', common, 'worktree', 'remove', '--', worktree.path]);
-      if (worktree.branch) run(['--git-dir', common, 'branch', '-d', worktree.branch]);
+      // -D, not -d: a squash-merged branch is never ancestor-merged, so git's
+      // own safety check would refuse the exact branches this exists to
+      // clean. The content check above is the safety.
+      if (worktree.branch) run(['--git-dir', common, 'branch', '-D', worktree.branch]);
     }
     removed.push({ ...worktree, what: 'worktree and branch' });
   }

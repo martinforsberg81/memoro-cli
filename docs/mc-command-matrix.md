@@ -56,8 +56,12 @@ started in it. mc stores nothing else, because nothing else is mc's to know.
 | `mc suite who` | Who holds it — and which suites are actually running, where, and for how long. `--json`. |
 
 `mc work release` keeps a worktree that is in use, has uncommitted changes, or
-has unmerged commits. `mc work discard` reports what it will destroy and
-requires `--apply`; it does not stop for uncommitted or unmerged work.
+holds commits main lacks — counted by CONTENT, not by SHA: a squash-merged
+branch whose merge against `origin/main` reproduces main's own tree has
+landed and is released (and the board does not call it unmerged). A merge
+that conflicts is kept with "cannot tell", which is a doubt, not work.
+`mc work discard` reports what it will destroy and requires `--apply`; it
+does not stop for uncommitted or unmerged work.
 
 `mc repo status` reads. It writes nothing but the remote-tracking refs a
 `git fetch` updates, and `--offline` skips even that and says so on the page.

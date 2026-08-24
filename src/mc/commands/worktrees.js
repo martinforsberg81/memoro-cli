@@ -12,6 +12,8 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
+import { branchLanded } from '../branch-landed.js';
+
 import { mcHome, worktreesRoot } from '../paths.js';
 import { listSessionHomesSync } from '../session-home.js';
 import { listWorkspaceAssociationsSync } from '../workspace-record.js';
@@ -158,12 +160,15 @@ function gitFacts(path) {
   const unmerged = branch && branch !== 'HEAD'
     ? git(['log', '--oneline', `origin/main..${branch}`])
     : null;
+  const unmergedCommits = unmerged ? unmerged.split('\n').filter(Boolean).length : 0;
   return {
     git: true,
     branch: branch || null,
     dirty: dirty ? dirty.split('\n').filter(Boolean).length : 0,
     upstream: upstream || null,
-    unmerged_commits: unmerged ? unmerged.split('\n').filter(Boolean).length : 0,
+    unmerged_commits: unmergedCommits,
+    // Content, not commits: squash merges make the SHA count lie (2026-08-24).
+    landed: unmergedCommits > 0 && branch && branch !== 'HEAD' ? branchLanded(path, branch) : null,
   };
 }
 
@@ -201,7 +206,7 @@ function flags(item) {
   if (!item.git) return 'plain   ';
   const marks = [];
   if (item.dirty) marks.push(`${item.dirty} uncommitted`);
-  if (item.unmerged_commits) marks.push(`${item.unmerged_commits} unmerged`);
+  if (item.unmerged_commits && item.landed !== 'landed') marks.push(`${item.unmerged_commits} unmerged`);
   const branch = item.branch ? item.branch : '(detached)';
   return `${branch}${marks.length ? ` [${marks.join(', ')}]` : ''}`;
 }
