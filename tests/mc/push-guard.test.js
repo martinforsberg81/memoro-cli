@@ -8,14 +8,14 @@
  */
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import {
-  MARKER, hookScript, installPushGuard, pushCheckLines, pushGuardState, pushVerdict,
+  MARKER, hookScript, hooksDir, installPushGuard, pushCheckLines, pushGuardState, pushVerdict,
 } from '../../src/mc/push-guard.js';
 
 const NOW = new Date('2026-08-23T14:00:00Z');
@@ -122,14 +122,18 @@ describe('the hook, installed', () => {
       assert.equal(text, hookScript());
       assert.match(text, /^#!\/bin\/sh\n/u);
       assert.ok(text.includes(MARKER));
-      assert.match(text, /exec mc repo push-check "\$1" "\$2"/u);
+      assert.match(text, /mc repo push-check "\$1" "\$2"/u);
+      // The hook pipes the same stdin to the check and to a chained hook:
+      // pre-push's refs arrive on stdin, and a chain that ate them would
+      // starve whichever ran second.
+      assert.match(text, /input=\$\(cat\)/u);
       assert.doesNotMatch(text, /\/Users\/|\/home\//u, 'no absolute path into anybody\'s checkout');
       // No mc on PATH: said, and the push goes (exit 0).
       const noMc = execFileSync('sh', [first.path, 'origin', 'x'], { encoding: 'utf8', env: { PATH: '/usr/bin:/bin' }, input: '', stdio: ['pipe', 'pipe', 'pipe'] });
       void noMc;
       // Again: nothing to do, and said so.
       const again = installPushGuard(dir);
-      assert.deepEqual(again, { ok: true, installed: false, path: first.path });
+      assert.deepEqual(again, { ok: true, installed: false, path: first.path, chained: null });
       assert.equal(pushGuardState(dir).installed, true);
       // A worktree of the repository shares the hook: same common dir.
       const wt = join(dir, '..', `${dir.split('/').pop()}-wt`);
@@ -139,31 +143,86 @@ describe('the hook, installed', () => {
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 
-  it('never overwrites a hook it did not write, and says so', () => {
+  it('a hook that was here first is preserved and chained, never overwritten and never lost', () => {
     const dir = repo();
     try {
       const path = join(dir, '.git', 'hooks', 'pre-push');
-      writeFileSync(path, '#!/bin/sh\necho theirs\n');
+      const theirs = '#!/bin/sh\necho theirs\n';
+      writeFileSync(path, theirs, { mode: 0o755 });
+      // memoro's case (2026-08-24): a wrangler reminder stood where mc's
+      // guard should go, and a guard that refused around it was merged and
+      // in force nowhere (D-0180's fifth instance).
       const outcome = installPushGuard(dir);
-      assert.equal(outcome.ok, false);
-      assert.match(outcome.reason, /is not mc's — left alone/u);
-      assert.equal(readFileSync(path, 'utf8'), '#!/bin/sh\necho theirs\n');
-      assert.match(pushGuardState(dir).reason, /not mc's/u);
+      assert.equal(outcome.ok, true);
+      assert.equal(outcome.installed, true);
+      assert.equal(outcome.chained, join(dir, '.git', 'hooks', 'pre-push.before-mc'));
+      assert.equal(readFileSync(outcome.chained, 'utf8'), theirs, 'their hook, byte for byte');
+      assert.equal(readFileSync(path, 'utf8'), hookScript());
+      assert.equal(pushGuardState(dir).installed, true);
+      assert.equal(pushGuardState(dir).chained, outcome.chained);
+      // Both taken and neither mc's: nothing left to preserve into — refused.
+      writeFileSync(path, theirs);
+      writeFileSync(outcome.chained, '#!/bin/sh\necho also theirs\n');
+      const stuck = installPushGuard(dir);
+      assert.equal(stuck.ok, false);
+      assert.match(stuck.reason, /neither is mc's — left alone/u);
       // An old mc hook is replaced: the marker is what makes it mc's.
       writeFileSync(path, `#!/bin/sh\n${MARKER}\necho old\n`);
       assert.equal(installPushGuard(dir).installed, true);
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 
-  it('refuses to install where git would not run it: core.hooksPath set, or not a repository', () => {
+  it('installs where the hooks actually live: core.hooksPath, relative or absolute', () => {
+    // Both real repos have it set (measured 2026-08-24): memoro-cli to the
+    // absolute default directory, memoro to a versioned .githooks. The old
+    // code refused one and misread the other as "no pre-push hook".
     const dir = repo();
     try {
-      git(dir, ['config', 'core.hooksPath', '/elsewhere']);
-      const outcome = installPushGuard(dir);
-      assert.equal(outcome.ok, false);
-      assert.match(outcome.reason, /core.hooksPath is set to \/elsewhere/u);
-      assert.equal(existsSync(join(dir, '.git', 'hooks', 'pre-push')), false);
-      assert.equal(installPushGuard(tmpdir()).ok, false);
+      git(dir, ['config', 'core.hooksPath', '.githooks']);
+      assert.equal(hooksDir(dir), join(dir, '.githooks'));
+      const relative = installPushGuard(dir);
+      assert.equal(relative.ok, true);
+      assert.equal(relative.path, join(dir, '.githooks', 'pre-push'));
+      assert.equal(pushGuardState(dir).installed, true, 'state reads the same directory');
+      assert.equal(existsSync(join(dir, '.git', 'hooks', 'pre-push')), false, 'nothing written where git does not look');
+
+      git(dir, ['config', 'core.hooksPath', join(dir, '.git', 'hooks')]);
+      assert.equal(hooksDir(dir), join(dir, '.git', 'hooks'));
+      const absolute = installPushGuard(dir);
+      assert.equal(absolute.ok, true);
+      assert.equal(absolute.path, join(dir, '.git', 'hooks', 'pre-push'));
+      assert.equal(pushGuardState(dir).installed, true);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it('still refuses what is not a repository', () => {
+    assert.equal(installPushGuard(tmpdir()).ok, false);
+    assert.equal(hooksDir(tmpdir()), null);
+  });
+
+  it('a real chained hook runs after the check, with the same stdin, and its refusal counts', () => {
+    const dir = repo();
+    try {
+      git(dir, ['config', 'core.hooksPath', '.githooks']);
+      mkdirSync(join(dir, '.githooks'), { recursive: true });
+      const seen = join(dir, 'chained-saw.txt');
+      writeFileSync(join(dir, '.githooks', 'pre-push'), `#!/bin/sh\ncat > "${seen}"\n`, { mode: 0o755 });
+      assert.equal(installPushGuard(dir).ok, true);
+      // No mc on PATH: the check says so and the chain still runs, fed the
+      // refs the hook itself was given.
+      execFileSync('sh', [join(dir, '.githooks', 'pre-push'), 'origin', 'url'], {
+        encoding: 'utf8', env: { PATH: '/usr/bin:/bin' }, input: 'refs/heads/x sha refs/heads/x sha\n', stdio: ['pipe', 'pipe', 'pipe'],
+      });
+      assert.equal(readFileSync(seen, 'utf8'), 'refs/heads/x sha refs/heads/x sha\n');
+      // A chained hook that refuses refuses the push: its exit code is kept.
+      writeFileSync(join(dir, '.githooks', 'pre-push.before-mc'), '#!/bin/sh\nexit 7\n', { mode: 0o755 });
+      let code = 0;
+      try {
+        execFileSync('sh', [join(dir, '.githooks', 'pre-push'), 'origin', 'url'], {
+          encoding: 'utf8', env: { PATH: '/usr/bin:/bin' }, input: '', stdio: ['pipe', 'pipe', 'pipe'],
+        });
+      } catch (error) { code = error.status; }
+      assert.equal(code, 7);
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 });
