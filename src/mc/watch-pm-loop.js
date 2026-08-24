@@ -18,6 +18,8 @@
 import { watch } from 'node:fs';
 import { join } from 'node:path';
 
+import { isWatcherMessage } from './watch-senders.js';
+
 import { mcHome, workAreaPath } from './paths.js';
 import { DEFAULT_INTERVAL_MS, pmRound } from './watch-pm-round.js';
 
@@ -51,7 +53,16 @@ export async function pmWatchLoop({
 } = {}) {
   const inbox = join(workAreaPath(area, env), 'inbox');
   let changed = false;
-  const watcher = watchInbox(inbox, () => { changed = true; });
+  // The round writes its own knock into this very directory, and the watch
+  // used to count that as "a new file" — a pass every three seconds, each
+  // one announcing the one before (measured 2026-08-24: six knocks in
+  // forty seconds, nine files archived that were the round talking to
+  // itself). A watcher's file is never a reason to pass early, by the same
+  // sender line that keeps it off the item count (watch-senders.js).
+  const watcher = watchInbox(inbox, (filename) => {
+    if (filename && isWatcherMessage(join(inbox, filename))) return;
+    changed = true;
+  });
   if (!watcher) log(`not watching ${inbox} for new files — the clock is the only wake`);
   try {
     for (let pass = 0; pass < rounds && !shouldStop(); pass += 1) {
@@ -82,7 +93,7 @@ export async function pmWatchLoop({
  */
 function watchDirectory(directory, onChange) {
   try {
-    const watcher = watch(directory, { persistent: false }, () => onChange());
+    const watcher = watch(directory, { persistent: false }, (event, filename) => onChange(filename ? String(filename) : null));
     watcher.on('error', () => { try { watcher.close(); } catch { /* already gone */ } });
     return watcher;
   } catch {

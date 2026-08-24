@@ -299,10 +299,12 @@ export function decide(items, previous, { reachable = true } = {}) {
       passes,
       reminded: Boolean(seen.reminded),
     };
-    if (passes >= REMINDER_PASS && !record.reminded) {
-      record.reminded = true;
-      reminders.push(item.name);
-    }
+    // No reminder, ever (PM's ruling 2026-08-24): a reminder about an item
+    // PM was already knocked about is not information, and every knock
+    // costs PM a whole turn. One knock per item — the lingering ones are
+    // counted in the next knock that something new earns, never named
+    // again. `reminders` stays in the shape, always empty, so every reader
+    // keeps its answer.
     next[item.name] = record;
   }
   return { items: next, fresh, reminders };
@@ -334,7 +336,7 @@ export function knockText({
     // ninety seconds, a list of the four knocks before it (B3).
     const named = items.filter((item) => fresh.includes(item.name) || reminders.includes(item.name));
     for (const item of named.slice(0, NAMED_LIMIT)) {
-      lines.push(`  ${mark(item.name, fresh, reminders)}  ${item.name}`);
+      lines.push(`  ${mark(item.name, fresh)}  ${item.name}`);
     }
     // A cap that says nothing is a cap that reads as "that was all of them".
     if (named.length > NAMED_LIMIT) lines.push(`  ${'...'.padEnd(8)}  and ${named.length - NAMED_LIMIT} more new, not named here`);
@@ -484,10 +486,8 @@ async function attemptAsync(outcome, step, fn) {
   }
 }
 
-function mark(name, fresh, reminders) {
-  if (fresh.includes(name)) return 'new'.padEnd(8);
-  if (reminders.includes(name)) return 'reminder';
-  return 'waiting'.padEnd(8);
+function mark(name, fresh) {
+  return fresh.includes(name) ? 'new'.padEnd(8) : 'waiting'.padEnd(8);
 }
 
 function modified(path) {
