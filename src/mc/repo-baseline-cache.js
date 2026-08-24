@@ -45,9 +45,17 @@ export function lockfileHashAt({ git, repoPath, commit }) {
   return createHash('sha256').update(content).digest('hex');
 }
 
-/** Save the candidate's measured result as the baseline-in-waiting. */
+/**
+ * Save the candidate's measured result as the baseline-in-waiting.
+ *
+ * `extraGates` rides along for the same reason the red set does: after a
+ * green merge, main *is* the tree the candidate's extra gates just ran on,
+ * so their results are the next round's baseline side of the same gates —
+ * free, not absent. Each is keyed by its own command inside the entry; a
+ * gate whose command changed simply finds no saved result and runs.
+ */
 export function saveBaseline({
-  repoPath, commit, lockfileHash, command, red, totals, root = mcHome(), now = new Date(),
+  repoPath, commit, lockfileHash, command, red, totals, extraGates = null, root = mcHome(), now = new Date(),
 }) {
   const table = readTable(root);
   table[repoFileSlug(repoPath)] = {
@@ -56,6 +64,15 @@ export function saveBaseline({
     command,
     red: [...(red || [])],
     totals: totals || null,
+    extra_gates: Array.isArray(extraGates)
+      ? extraGates.map((gate) => ({
+        name: gate.name,
+        command: gate.command,
+        ok: Boolean(gate.ok),
+        exit_code: gate.exit_code ?? null,
+        red: Array.isArray(gate.red) ? [...gate.red] : null,
+      }))
+      : null,
     measured_at: now.toISOString(),
   };
   writeJsonAtomic(baselineCachePath(root), {
@@ -77,6 +94,19 @@ export function loadBaseline({ repoPath, commit, lockfileHash, command, root = m
   if (entry.command !== command) return null;
   if (!Array.isArray(entry.red)) return null;
   return entry;
+}
+
+/**
+ * The saved result of one extra gate on this baseline, or null.
+ *
+ * Matched by the gate's command — the thing that actually ran — never by its
+ * display name. Null means "run it on the baseline as before": an entry
+ * saved before extra gates were carried, a renamed command, a gate added
+ * since. No partial credit, same as the suite.
+ */
+export function carriedGate(entry, gate) {
+  if (!entry || !Array.isArray(entry.extra_gates)) return null;
+  return entry.extra_gates.find((saved) => saved.command === gate.command) || null;
 }
 
 function readTable(root) {

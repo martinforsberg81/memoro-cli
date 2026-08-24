@@ -488,7 +488,17 @@ export function gateLines(report, { checkOnly = false } = {}) {
   // "the suite passed" when more than the suite was measured.
   if (report.declaration?.prepare) lines.push(`mc: prepared with ${report.declaration.prepare}`);
   for (const gate of report.extra_gates || []) {
-    lines.push(`mc: extra gate ${gate.name} — ${gate.ok ? 'passed' : 'failed'}`);
+    // Both sides, so a red gate names its culprit: "failed" alone once
+    // attributed a red main to the one PR in the room (2026-08-24). Older
+    // reports carry only the candidate's outcome, and are said as before.
+    if (!gate.baseline) {
+      lines.push(`mc: extra gate ${gate.name} — ${gate.ok ? 'passed' : 'failed'}`);
+      continue;
+    }
+    const side = (s) => `${s.ok ? 'passed' : 'failed'}${s.carried ? ' (carried)' : ''}`;
+    lines.push(`mc: extra gate ${gate.name} — baseline ${side(gate.baseline)}, candidate ${side(gate.candidate)}`
+      + (gate.already_red ? ' — red before this PR; the base itself is broken' : '')
+      + (gate.ok && !gate.baseline.ok ? ' — this change repairs it' : ''));
   }
   lines.push(...ratchetLines(report));
 

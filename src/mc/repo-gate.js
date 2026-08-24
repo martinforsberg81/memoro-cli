@@ -58,7 +58,7 @@ import { RATCHET_FILE, compareRatchet, readRatchet } from './red-ratchet.js';
 import { currentHolder } from './work-identity.js';
 import { mcHome } from './paths.js';
 import { repoFileSlug } from './repo-snapshot.js';
-import { loadBaseline, lockfileHashAt } from './repo-baseline-cache.js';
+import { carriedGate, loadBaseline, lockfileHashAt } from './repo-baseline-cache.js';
 import { dependencyTree } from './dependency-tree.js';
 import { declarationFor } from './repo-gate-table.js';
 
@@ -316,10 +316,19 @@ export async function runGate({
       say(`baseline carried from the last green round: ${carried.red.length} red at ${baseCommit.slice(0, 7)}, measured ${carried.measured_at} — not rerun`);
     }
 
+    // Whether the baseline worktree is needed at all. A carried suite result
+    // spares the suite run — but an extra gate whose baseline result was not
+    // carried still has to run somewhere, and "somewhere" is the base branch
+    // as fetched (KP: an extra gate run only on the candidate attributed a
+    // red main to the one PR in the room, 2026-08-24).
+    const gates = declared.declaration.extra_gates || [];
+    const gatesToRun = gates.filter((gate) => !carriedGate(carried, gate));
+    const needBaseline = !carried || gatesToRun.length > 0;
+
     // Detached on purpose, both of them. The round must be able to merge the
     // base into the candidate without that ever becoming a commit on somebody's
     // branch: what is measured is a state, not a change to the repository.
-    if (!carried) {
+    if (needBaseline) {
       const added = askGit(['worktree', 'add', '--detach', baseDir, baseRef], { cwd: repoPath });
       if (added.status !== 0) return finish('worktree', trim(added.stderr) || `could not check out ${baseRef}`);
     }
@@ -369,7 +378,7 @@ export async function runGate({
     // both worktrees. A prepare that fails stops the round: a suite run on a
     // tree that was not prepared is exactly the incomplete run the declaration
     // exists to prevent.
-    const sides = carried ? [['candidate', headDir]] : [['baseline', baseDir], ['candidate', headDir]];
+    const sides = needBaseline ? [['baseline', baseDir], ['candidate', headDir]] : [['candidate', headDir]];
     if (declared.declaration.prepare) {
       for (const [side, dir] of sides) {
         say(`preparing the ${side}: ${declared.declaration.prepare}`);
@@ -510,24 +519,79 @@ export async function runGate({
       }
     }
 
-    // Gates beyond the suite, on the candidate, under the same rule: one that
-    // did not reach its own end is not an approval. A command that could not be
-    // run at all is a stop, exactly like a suite that never summarised.
-    for (const gate of declared.declaration.extra_gates) {
-      say(`extra gate: ${gate.name}`);
+    // Gates beyond the suite, run on BOTH sides and judged by the delta —
+    // the same differential rule the suite has always had. Measured
+    // 2026-08-24 (#10909's round): the extra gate ran only on the candidate,
+    // main's own contract suite was red the whole time (5 fail, the same 5
+    // on untouched origin/main), and the round said "FAILED on the
+    // candidate" — attributing the world's standing red to the one party in
+    // the room. A track spent six minutes proving its innocence.
+    //
+    // The baseline side is carried when the A1 entry holds this gate's
+    // result (after a green merge, main *is* the tree the candidate's gates
+    // ran on); otherwise it runs in the baseline worktree. A gate that
+    // prints TAP is compared by red *names*, like the suite; one that does
+    // not is compared by exit code. And under the same rule as ever: a side
+    // that could not run at all is a stop, never an approval.
+    for (const gate of gates) {
+      const saved = carriedGate(carried, gate);
+      let base;
+      if (saved) {
+        base = { ok: saved.ok, exit_code: saved.exit_code ?? null, ran: true, red: Array.isArray(saved.red) ? saved.red : null, carried: true };
+        say(`extra gate ${gate.name} on the baseline: carried from the last green round (${base.ok ? 'passed' : `failed, exit ${base.exit_code}`})`);
+      } else {
+        say(`extra gate ${gate.name} on the baseline`);
+        base = gateSide(await timed('extra gates baseline', async () => shell(gate.command, { cwd: baseDir, env })));
+      }
+      say(`extra gate ${gate.name} on the candidate`);
       const outcome = await timed('extra gates', async () => shell(gate.command, { cwd: headDir, env }));
-      const passed = outcome.status === 0;
+      const head = gateSide(outcome);
+      // Names when both sides have them; exit codes are the fallback claim.
+      const named = base.red !== null && head.red !== null;
+      const delta = named ? compareRed(base.red, head.red) : { broke: [], fixed: [] };
       report.extra_gates.push({
         name: gate.name,
         command: gate.command,
-        ok: passed,
-        exit_code: outcome.status ?? null,
-        ran: outcome.status !== null && outcome.status !== undefined,
+        // The candidate's outcome under the old keys, so every reader that
+        // asked "did the gate pass" keeps its answer.
+        ok: head.ok,
+        exit_code: head.exit_code,
+        ran: head.ran,
+        baseline: base,
+        candidate: head,
+        broke: delta.broke,
+        fixed: delta.fixed,
+        already_red: !base.ok && !head.ok && (!named || delta.broke.length === 0),
       });
-      if (outcome.status === null || outcome.status === undefined) {
-        return finish('extra-gate', `${gate.name} could not be run at all — that is not an approval`);
+      if (!head.ran) return finish('extra-gate', `${gate.name} could not be run at all — that is not an approval`);
+      if (!base.ran) return finish('extra-gate', `${gate.name} could not be run on the baseline — that is not a measurement`);
+      if (head.ok) {
+        // A candidate that repairs a red baseline is a pass with a sentence,
+        // not a stop with an apology.
+        if (!base.ok) say(`extra gate ${gate.name}: red on the baseline, green on the candidate — this change repairs it`);
+        continue;
       }
-      if (!passed) return finish('extra-gate', `${gate.name} failed on the candidate (${trim(outcome.stderr) || `exit ${outcome.status}`})`);
+      if (base.ok) {
+        return finish('extra-gate', `${gate.name} failed on the candidate and passed on the baseline`
+          + ` (${trim(outcome.stderr) || `exit ${head.exit_code}`})`
+          + (named && delta.broke.length ? ` — ${delta.broke.length} new red: ${nameSome(delta.broke)}` : ''));
+      }
+      if (named && delta.broke.length) {
+        return finish('extra-gate', `${gate.name} was already red on the baseline (${base.red.length} red)`
+          + ` and the candidate adds ${delta.broke.length} more: ${nameSome(delta.broke)}`);
+      }
+      // Exit 127 is the shell's own word for "no such command". Two sides
+      // that both said it are not a broken base — they are a gate that never
+      // ran, and calling that main's fault would be the same misattribution
+      // pointed the other way.
+      if (base.exit_code === 127 && head.exit_code === 127) {
+        return finish('extra-gate', `${gate.name} could not be run on either side (exit 127 — command not found); that is not an approval`);
+      }
+      return finish('extra-gate-baseline', `${gate.name} was already red before this PR — `
+        + (named
+          ? `${base.red.length} red on the baseline, ${head.red.length} on the candidate, none of them new`
+          : `exit ${base.exit_code} on the baseline, exit ${head.exit_code} on the candidate`)
+        + ` — the base itself is broken; not this change's doing`);
     }
 
     return finish(null, null);
@@ -832,6 +896,33 @@ function realTests({ cwd, files, flags = [], onLine = () => {}, env = process.en
 
 function shell(command, { cwd, env }) {
   return spawnSync(command, { cwd, env, shell: true, encoding: 'utf8' });
+}
+
+/**
+ * One side of an extra gate, read off the run.
+ *
+ * The red names are taken only from output that finished as TAP — a gate
+ * that prints something TAP-like but never summarised gets `red: null`, and
+ * the comparison falls back to exit codes rather than trusting half a
+ * parse. stdout and stderr both, because npm puts its own banner on one and
+ * node's reporter writes on the other depending on the wrapper.
+ */
+function gateSide(outcome) {
+  const ran = outcome.status !== null && outcome.status !== undefined;
+  const output = `${outcome.stdout || ''}\n${outcome.stderr || ''}`;
+  const finished = tapTotals(output).finished;
+  return {
+    ok: ran && outcome.status === 0,
+    exit_code: outcome.status ?? null,
+    ran,
+    red: finished ? redNames(output) : null,
+    carried: false,
+  };
+}
+
+/** A few names, and how many were not named. */
+function nameSome(names) {
+  return `${names.slice(0, 5).join(', ')}${names.length > 5 ? `, … and ${names.length - 5} more` : ''}`;
 }
 
 function realSuite({ cwd, onLine = () => {}, env = process.env } = {}) {
