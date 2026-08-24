@@ -31,6 +31,7 @@ import { orphanLine } from '../lease-owner.js';
 import { tellHolder } from '../lease-refusal.js';
 import { claimSuiteLease, readSuiteLease, releaseSuiteLease } from '../suite-lease.js';
 import { currentHolder } from '../work-identity.js';
+import { dependencyTree } from '../dependency-tree.js';
 import { suiteRuns } from '../work-status.js';
 import { scanArgs } from './flags.js';
 
@@ -61,6 +62,24 @@ export async function run(argv, deps = {}) {
   }
 
   if (opts.verb === 'run') {
+    // Refuse a shrunk suite before anything runs (D-0152, ordered
+    // 2026-08-24). A suite in a worktree without node_modules does not
+    // fail — it runs fewer files and reports fewer failures, greener than
+    // the truth, and green is the one direction nobody reviews. Four of
+    // twenty-seven worktrees stood like that for nine days; the session
+    // that found it called its own escape luck, not a guardrail. The gate
+    // already refuses this (its `dependencies` stop); this is the same
+    // rule at the door everyone was told to use. The refusal must not be
+    // readable as a red run: exit 2 (never a test's exit), first word
+    // REFUSED, and "the suite never ran" on the first line.
+    const where = deps.cwd || process.cwd();
+    const tree = (deps.tree || dependencyTree)(where);
+    if (tree.missing) {
+      stderr.write(`mc: REFUSED — the suite never ran: ${where} declares ${tree.declares} dependencies and has no node_modules\n`);
+      stderr.write('mc: a suite there shrinks silently — fewer files run, fewer failures reported, greener than the truth (D-0152)\n');
+      stderr.write('mc: npm ci, or link node_modules from a sibling worktree with the same lockfile, then run again\n');
+      return 2;
+    }
     const outcome = claimSuiteLease({ errand: opts.errand, holder, ownerPid: process.pid });
     if (!outcome.ok) {
       // The whole point: refused means NOTHING runs, and the exit says so.

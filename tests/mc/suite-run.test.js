@@ -69,6 +69,43 @@ describe('mc suite run — claim, run, release as one step', () => {
     } finally { restore(); rmSync(root, { recursive: true, force: true }); }
   });
 
+  it('a worktree without its dependency tree is refused before anything runs (D-0152)', async () => {
+    const root = home();
+    try {
+      // The shrunk suite runs fewer files and reports fewer failures —
+      // greener than the truth, the one direction nobody reviews. The
+      // refusal is exit 2, never a test's exit, and says the suite never
+      // ran on its first line so nobody can read it as a red run.
+      const sh = shell();
+      const streams = io();
+      const code = await run(['run', 'npm test'], {
+        ...streams, spawn: sh.spawn, runs: async () => [],
+        cwd: '/work/msr-track-2/memoro',
+        tree: (where) => ({ manifest: true, declares: 41, present: false, missing: true, where }),
+      });
+      assert.equal(code, 2);
+      assert.deepEqual(sh.ran, [], 'the command never started');
+      assert.equal(readSuiteLease({ root }).held, false, 'no lease was taken for a run that never was');
+      assert.ok(streams.err.some((line) => /REFUSED — the suite never ran: \/work\/msr-track-2\/memoro declares 41 dependencies and has no node_modules/u.test(line)), streams.err.join(''));
+      assert.ok(streams.err.some((line) => /greener than the truth \(D-0152\)/u.test(line)));
+      assert.ok(streams.err.some((line) => /npm ci, or link node_modules from a sibling worktree with the same lockfile/u.test(line)));
+    } finally { restore(); rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it('a directory that is not a Node project, or declares nothing, runs as always', async () => {
+    const root = home();
+    try {
+      const sh = shell({ code: 0 });
+      const code = await run(['run', 'make check'], {
+        ...io(), spawn: sh.spawn, runs: async () => [],
+        cwd: '/work/elsewhere',
+        tree: () => ({ manifest: false, declares: 0, present: false, missing: false }),
+      });
+      assert.equal(code, 0);
+      assert.deepEqual(sh.ran, ['make check']);
+    } finally { restore(); rmSync(root, { recursive: true, force: true }); }
+  });
+
   it('refused means NOTHING runs, and the exit is the refusal', async () => {
     const root = home();
     try {
