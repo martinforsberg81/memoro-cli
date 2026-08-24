@@ -98,13 +98,21 @@ export function installPushGuard(repoPath, { git = defaultGit } = {}) {
   if (existsSync(path)) {
     const current = readFileSync(path, 'utf8');
     if (!current.includes(MARKER)) {
-      // A hook that was here first is never overwritten and never lost: it
-      // is preserved byte for byte under CHAINED and runs after the check,
-      // with the same stdin and arguments. memoro's own pre-push (a
-      // wrangler reminder) is the measured case — a guard that refused to
-      // install around it was merged and in force nowhere (D-0180's fifth
-      // instance, 2026-08-24), and a guard that overwrote it would be
-      // worse than none.
+      // A version-controlled hook is the repository's, and a change to the
+      // repository goes through a pull request — a rename here would dirty
+      // every working tree that shares it, unexplained (PM's ruling,
+      // 2026-08-24; K3). The way in is to add the check to that file in a
+      // PR; the state below recognises a repository-owned check as in
+      // force.
+      if (git(['-C', repoPath, 'ls-files', '--error-unmatch', '--', path]) !== null) {
+        return { ok: false, reason: `${path} is version-controlled — it is the repository's; add 'mc repo push-check' to it through a pull request instead`, path };
+      }
+      // An untracked hook that was here first is never overwritten and
+      // never lost: it is preserved byte for byte under CHAINED and runs
+      // after the check, with the same stdin and arguments. A guard that
+      // refused around it was merged and in force nowhere (D-0180's fifth
+      // instance, 2026-08-24), and one that overwrote it would be worse
+      // than none.
       const kept = join(dir, CHAINED);
       if (existsSync(kept)) return { ok: false, reason: `both ${path} and ${kept} exist and neither is mc's — left alone`, path };
       renameSync(path, kept);
@@ -127,9 +135,16 @@ export function pushGuardState(repoPath, { git = defaultGit } = {}) {
   const path = join(dir, 'pre-push');
   if (!existsSync(path)) return { installed: false, path, reason: 'no pre-push hook' };
   const text = readFileSync(path, 'utf8');
-  return text.includes(MARKER)
-    ? { installed: true, path, chained: existsSync(join(dir, CHAINED)) ? join(dir, CHAINED) : null }
-    : { installed: false, path, reason: 'a pre-push hook that is not mc\'s' };
+  if (text.includes(MARKER)) {
+    return { installed: true, path, chained: existsSync(join(dir, CHAINED)) ? join(dir, CHAINED) : null };
+  }
+  // A hook the repository owns that carries the check itself — memoro's
+  // way in (PM's ruling, 2026-08-24) — is the guard in force, not a
+  // stranger: the mechanism is what runs, not who wrote the file.
+  if (text.includes('mc repo push-check')) {
+    return { installed: true, path, owned: 'repository', chained: null };
+  }
+  return { installed: false, path, reason: 'a pre-push hook that is not mc\'s' };
 }
 
 /**

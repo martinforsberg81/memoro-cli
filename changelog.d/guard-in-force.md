@@ -11,7 +11,12 @@ section: Fixed
   absolute, else the common dir) and both install and state use it; a hook
   that was there first is preserved byte for byte as `pre-push.before-mc`
   and runs after the check, fed the same stdin and arguments, its refusal
-  kept — mc chains, it never overwrites and never loses.
+  kept — mc chains, it never overwrites and never loses. A
+  version-controlled hook is the repository's and is never renamed (PM's
+  ruling, 2026-08-24; K3): the install refuses with the way in — add
+  `mc repo push-check` to it through a pull request — and a repository-owned
+  hook that carries the check reads as in force, because the mechanism is
+  what runs, not who wrote the file.
 
 - **Mechanisms out of force are said by something that already runs
   (D-0180).** Five instances in one week of built-and-not-in-force — the

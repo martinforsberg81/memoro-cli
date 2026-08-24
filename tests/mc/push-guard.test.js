@@ -172,6 +172,33 @@ describe('the hook, installed', () => {
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 
+  it('a version-controlled hook is the repository\'s: refused with the way in, and its check counts as in force (K3)', () => {
+    const dir = repo();
+    try {
+      // memoro's case after PM's ruling: .githooks/pre-push is tracked, so
+      // a rename would dirty every working tree that shares it. The way in
+      // is a pull request against the repository.
+      git(dir, ['config', 'core.hooksPath', '.githooks']);
+      mkdirSync(join(dir, '.githooks'), { recursive: true });
+      const path = join(dir, '.githooks', 'pre-push');
+      const theirs = '#!/bin/sh\nsh scripts/reminder.sh\n';
+      writeFileSync(path, theirs, { mode: 0o755 });
+      git(dir, ['add', '.githooks/pre-push']);
+      git(dir, ['commit', '-q', '-m', 'their hook']);
+      const outcome = installPushGuard(dir);
+      assert.equal(outcome.ok, false);
+      assert.match(outcome.reason, /version-controlled — it is the repository's; add 'mc repo push-check' to it through a pull request/u);
+      assert.equal(readFileSync(path, 'utf8'), theirs, 'untouched');
+      assert.equal(existsSync(join(dir, '.githooks', 'pre-push.before-mc')), false, 'nothing renamed');
+      // The repository takes the check into its own hook: that is the
+      // guard in force — the mechanism is what runs, not who wrote it.
+      writeFileSync(path, '#!/bin/sh\ninput=$(cat)\nprintf \'%s\\n\' "$input" | mc repo push-check "$1" "$2" || exit $?\nsh scripts/reminder.sh\n', { mode: 0o755 });
+      const state = pushGuardState(dir);
+      assert.equal(state.installed, true);
+      assert.equal(state.owned, 'repository');
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
   it('installs where the hooks actually live: core.hooksPath, relative or absolute', () => {
     // Both real repos have it set (measured 2026-08-24): memoro-cli to the
     // absolute default directory, memoro to a versioned .githooks. The old
