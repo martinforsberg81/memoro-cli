@@ -18,7 +18,7 @@ import {
   readdirSync,
   rmSync,
 } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 
 import { homedir } from 'node:os';
 
@@ -353,32 +353,35 @@ export function releaseWorkArea(name, { env = process.env, dryRun = false } = {}
   // finished is finished in both places. Only if it is genuinely empty:
   // anything the user put there by hand keeps the directory alive, and keeps
   // the conversations too.
-  const conversations = kept.length === 0 ? area.conversations : [];
+  //
+  // ONE forecast for both modes (2026-08-24): the dry run used to promise
+  // "would remove <conversation>" whenever git kept nothing, while the
+  // apply then found inbox/ files, kept everything, and said "nothing to
+  // release" — a dry run that promises more than the command does. The
+  // emptiness question is now asked the same way in both modes: what would
+  // be left once the removable worktrees are gone, own marks aside — and
+  // whatever holds the area is named instead of implied.
+  const goneDirs = new Set(removed.map((item) => basename(item.path)));
+  let heldBy = [];
+  try {
+    heldBy = readdirSync(area.path)
+      .filter((entry) => !OWN_MARKS.has(entry) && !goneDirs.has(entry))
+      .sort();
+  } catch { /* the area may not exist */ }
+  const wouldBeEmpty = kept.length === 0 && heldBy.length === 0;
+  const conversations = wouldBeEmpty ? area.conversations : [];
   let removedConversations = conversations;
   let failedConversations = [];
-  if (!dryRun && kept.length === 0 && area.exists) {
+  if (!dryRun && wouldBeEmpty && area.exists) {
     // An earlier mc wrote a copy of the conversation id here. Nothing reads it
     // any more; it goes out with the area rather than being migrated.
     try { rmSync(workAreaStatePath(name, env), { force: true }); } catch { /* absent */ }
-    // The role mark is the area's own state, not litter: it must not keep an
-    // otherwise-empty area alive, and it must survive whenever the area does —
-    // an area quietly demoted from its role would run every future
-    // conversation without the overlay and have no way to warn about it.
-    // The stop mark (`mc work stop`, KP-09) is the same kind of thing.
-    let empty = false;
-    try {
-      empty = readdirSync(area.path).filter((entry) => !OWN_MARKS.has(entry)).length === 0;
-    } catch { /* leave it */ }
-    if (empty) {
-      if (conversations.length) {
-        const outcome = deleteConversations(conversations, env);
-        removedConversations = outcome.removed;
-        failedConversations = outcome.failed;
-      }
-      rmSync(area.path, { recursive: true, force: true });
-    } else {
-      removedConversations = [];
+    if (conversations.length) {
+      const outcome = deleteConversations(conversations, env);
+      removedConversations = outcome.removed;
+      failedConversations = outcome.failed;
     }
+    rmSync(area.path, { recursive: true, force: true });
   }
   return {
     name,
@@ -386,6 +389,11 @@ export function releaseWorkArea(name, { env = process.env, dryRun = false } = {}
     kept,
     conversations: removedConversations,
     conversations_failed: failedConversations,
+    // What keeps the area (and its conversations) in place when nothing
+    // above did: the user's own files, named so the dry run and the apply
+    // tell the same story — and so the way forward (mc work discard) has
+    // an object.
+    held_by: kept.length === 0 ? heldBy : [],
     dry_run: dryRun,
   };
 }
