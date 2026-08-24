@@ -202,6 +202,9 @@ async function runVerb(opts, { stdout, stderr }) {
     stdout.write(`mc: ${result.path}${result.branch ? ` on ${result.branch}` : ''}\n`);
     if (result.base) stdout.write(`mc: from ${result.base}\n`);
     if (result.base_note) stderr.write(`mc: ${result.base_note}\n`);
+    // A guard that did not go in is said once, here, rather than found the
+    // day a push to a merged branch goes through unremarked (D-0164).
+    if (result.push_guard && !result.push_guard.ok) stderr.write(`mc: pre-push guard not installed — ${result.push_guard.reason}\n`);
     return 0;
   }
 
@@ -460,6 +463,7 @@ async function startSomething({ stdout, stderr }) {
     }
     stdout.write(`\nmc: ${result.path} on ${result.branch}\n`);
     if (result.base) stdout.write(`mc: from ${result.base}\n`);
+    if (result.push_guard && !result.push_guard.ok) stderr.write(`mc: pre-push guard not installed — ${result.push_guard.reason}\n`);
   } else {
     stdout.write(`\nmc: ${createWorkArea(name)}\n`);
   }
@@ -508,6 +512,7 @@ export async function openArea(name, opts, deps) {
       }
       stdout.write(`mc: ${added.path} on ${added.branch}\n`);
       if (added.base) stdout.write(`mc: from ${added.base}\n`);
+      if (added.push_guard && !added.push_guard.ok) stderr.write(`mc: pre-push guard not installed — ${added.push_guard.reason}\n`);
     } else {
       stdout.write(`mc: ${workRoot()}/${name} — no repository, so nothing to read here\n`);
     }

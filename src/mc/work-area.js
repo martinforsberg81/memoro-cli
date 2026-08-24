@@ -24,6 +24,7 @@ import { homedir } from 'node:os';
 
 import { deleteConversations, listConversations } from './conversations.js';
 import { workAreaPath, workAreaStatePath, workRoot } from './paths.js';
+import { installPushGuard } from './push-guard.js';
 import { areaRoleName, reservedRoleName } from './roles.js';
 import { STOP_MARK } from './work-stop-marker.js';
 
@@ -236,12 +237,18 @@ export function addWorktree({ name, repo, branch, from = null, env = process.env
   } catch (error) {
     return { ok: false, reason: firstLine(error), path: target };
   }
+  // The pre-push guard (push-guard.js) rides along with every worktree mc
+  // adds: one file in the repository's common hooks, covering all of them.
+  // Its failure is reported, never fatal — the worktree is the deliverable.
+  let guard = null;
+  try { guard = installPushGuard(repo); } catch (error) { guard = { ok: false, reason: error?.message || String(error) }; }
   return {
     ok: true,
     path: target,
     branch: branch || null,
     base: base.ref || (exists ? 'the existing branch' : null),
     base_note: base.why,
+    push_guard: guard,
   };
 }
 

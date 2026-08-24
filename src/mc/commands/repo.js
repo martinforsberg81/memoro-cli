@@ -22,6 +22,7 @@ import { painter } from '../status-render.js';
 import { leaseRow, livenessRow, renderRepoLines, renderWatchLines } from '../repo-render.js';
 import { tellHolder } from '../lease-refusal.js';
 import { claimLease, readLease, releaseLease } from '../repo-lease.js';
+import { installPushGuard, pushCheckLines, pushGuardState, pushVerdict } from '../push-guard.js';
 import { currentHolder } from '../work-identity.js';
 import { runGate, verdictHeadline } from '../repo-gate.js';
 import { runMergeRound } from '../repo-merge.js';
@@ -32,7 +33,7 @@ import { matchRepo, repoStatus, repoView } from '../repo-status.js';
 import { startWatcher, stopWatcher, watcherState } from '../repo-watch.js';
 import { scanArgs } from './flags.js';
 
-const VERBS = ['status', 'watch', 'claim', 'release', 'who', 'merge', 'rounds'];
+const VERBS = ['status', 'watch', 'claim', 'release', 'who', 'merge', 'rounds', 'guard', 'push-check'];
 const WATCH_VERBS = ['start', 'stop', 'status'];
 const LEASE_VERBS = ['claim', 'release', 'who'];
 
@@ -49,6 +50,8 @@ export async function run(argv, deps = {}) {
   if (opts.verb === 'watch') return watch(opts, { stdout, stderr });
   if (opts.verb === 'merge') return gate(opts, { stdout, stderr });
   if (opts.verb === 'rounds') return rounds(opts, { stdout });
+  if (opts.verb === 'guard') return guard(opts, { stdout, stderr });
+  if (opts.verb === 'push-check') return pushCheck(opts, { stdout, stderr, stdin: deps.stdin || process.stdin, env: deps.env || process.env, git: deps.git, gh: deps.gh });
   if (opts.verb !== 'status') return lease(opts, { stdout, stderr, tell: deps.tell || null });
 
   const report = await repoView({ names: opts.names, offline: opts.offline });
@@ -580,6 +583,63 @@ function count(side) {
  * those know costs a full count, because a claim should not wait on an
  * inspection of every checkout on the machine to find out where a name lives.
  */
+/**
+ * `mc repo guard [repo]` — install the pre-push guard (push-guard.js), or say
+ * whether it is in place. Idempotent; a hook mc did not write is left alone.
+ */
+async function guard(opts, { stdout, stderr }) {
+  const repoPath = opts.repo ? await resolveRepoPath(opts.repo) : process.cwd();
+  if (!repoPath) {
+    stderr.write(`mc: no repository called "${opts.repo}" — mc repo status lists the ones mc can see\n`);
+    return 1;
+  }
+  if (opts.json) {
+    stdout.write(`${JSON.stringify({ repo: repoPath, ...pushGuardState(repoPath) }, null, 2)}\n`);
+    return 0;
+  }
+  const outcome = installPushGuard(repoPath);
+  if (!outcome.ok) {
+    stderr.write(`mc: could not guard ${repoPath}: ${outcome.reason}\n`);
+    return 1;
+  }
+  stdout.write(outcome.installed
+    ? `mc: pre-push guard installed at ${outcome.path} — a push to a merged branch is refused and says why (MC_PUSH_ANYWAY=1 overrides)\n`
+    : `mc: pre-push guard already in place at ${outcome.path}\n`);
+  return 0;
+}
+
+/**
+ * The hook's entry: one line per ref on stdin, as git gives them. A refusal
+ * is exit 1 — git then does not push. Not knowing is never a refusal.
+ */
+async function pushCheck(opts, { stderr, stdin, env, git, gh }) {
+  const input = await readAll(stdin);
+  const anyway = Boolean(env.MC_PUSH_ANYWAY);
+  let refuse = false;
+  for (const line of input.split('\n')) {
+    const [localRef, localSha] = line.trim().split(/\s+/u);
+    if (!localRef || !localRef.startsWith('refs/heads/')) continue;
+    // Deleting a remote branch pushes the null sha; nothing to guard.
+    if (/^0+$/u.test(localSha || '')) continue;
+    const branch = localRef.slice('refs/heads/'.length);
+    const verdict = pushVerdict({ cwd: process.cwd(), branch, ...(git ? { git } : {}), ...(gh ? { gh } : {}) });
+    for (const out of pushCheckLines(verdict, { branch, anyway })) stderr.write(`${out}\n`);
+    if (verdict.verdict === 'refuse' && !anyway) refuse = true;
+  }
+  return refuse ? 1 : 0;
+}
+
+function readAll(stream) {
+  return new Promise((resolve) => {
+    if (!stream || stream.isTTY) { resolve(''); return; }
+    let text = '';
+    stream.setEncoding('utf8');
+    stream.on('data', (chunk) => { text += chunk; });
+    stream.on('end', () => resolve(text));
+    stream.on('error', () => resolve(text));
+  });
+}
+
 async function resolveRepoPath(name) {
   const snapshot = readCombinedSnapshot();
   const roots = snapshot.kind === 'present'
@@ -606,6 +666,7 @@ function usage() {
     '        mc repo release <repo> [--force]\n',
     '        mc repo who <repo> [--json]\n',
     '        mc repo merge <repo> <pr> [<pr>...] [--check] [--json]\n',
+    '        mc repo guard [repo] [--json]\n',
   ].join('');
 }
 
@@ -660,6 +721,19 @@ export function parseArgs(argv) {
     // human action rather than a flag.
     if (opts.force) return { ...opts, error: '--force belongs to mc repo release' };
     if (scanned.flags.interval !== null) return { ...opts, error: '--interval belongs to mc repo watch start' };
+    return opts;
+  }
+
+  if (opts.verb === 'guard') {
+    opts.repo = positional.shift() || null;
+    if (positional.length) return { ...opts, error: `mc repo guard takes one repository (${positional[0]})` };
+    return opts;
+  }
+  if (opts.verb === 'push-check') {
+    // git's pre-push gives the remote's name and URL as arguments and the
+    // refs on stdin; both are taken as they come.
+    opts.remote = positional.shift() || 'origin';
+    opts.url = positional.shift() || null;
     return opts;
   }
 
