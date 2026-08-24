@@ -80,12 +80,13 @@ describe('the notices ledger', () => {
     assert.equal(readLedger({ root }).exists, false);
   });
 
-  it('four urgent classes, and no fifth', () => {
+  it('five urgent classes, and no sixth', () => {
     // dead and quota-exhausted since the guard was built; unattended and
     // quiet-group since B2 (2026-08-23), when four tracks stood still for
     // 20–41 minutes and the round's half hour was the latency nobody could
-    // afford.
-    assert.deepEqual([...URGENT_PATTERNS], ['dead', 'quota-exhausted', 'unattended', 'quiet-group']);
+    // afford; context since 2026-08-24, when PM found a session at 99 % by
+    // looking, and its next turns were the ones that stall.
+    assert.deepEqual([...URGENT_PATTERNS], ['dead', 'quota-exhausted', 'unattended', 'quiet-group', 'context']);
     assert.equal(isUrgent('dead'), true);
     assert.equal(isUrgent('silent'), false);
   });

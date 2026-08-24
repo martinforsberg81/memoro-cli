@@ -171,7 +171,7 @@ MAINTENANCE
                                     what that pass saw
   mc watch sessions start [--interval <seconds>] [--model <model>]
                                     A watchman over the running conversations.
-                                    It flags waiting, silent, dead,
+                                    It flags waiting, silent, dead, context,
                                     unreachable, stalled, blocked,
                                     quota-exhausted and error — and only
                                     flags: no action, no judgement, no
