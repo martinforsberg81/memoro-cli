@@ -24,13 +24,15 @@
  * group is ended first. A vakt that only holds when called correctly is a
  * vakt that holds until somebody is in a hurry.
  */
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 
 import { painter } from '../status-render.js';
 import { orphanLine } from '../lease-owner.js';
 import { tellHolder } from '../lease-refusal.js';
 import { claimSuiteLease, readSuiteLease, releaseSuiteLease } from '../suite-lease.js';
 import { currentHolder } from '../work-identity.js';
+import { dependencyTree } from '../dependency-tree.js';
+import { declarationFor } from '../repo-gate-table.js';
 import { suiteRuns } from '../work-status.js';
 import { scanArgs } from './flags.js';
 
@@ -61,6 +63,39 @@ export async function run(argv, deps = {}) {
   }
 
   if (opts.verb === 'run') {
+    // Refuse a shrunk suite before anything runs (D-0152, ordered
+    // 2026-08-24). A suite in a worktree without node_modules does not
+    // fail — it runs fewer files and reports fewer failures, greener than
+    // the truth, and green is the one direction nobody reviews. Four of
+    // twenty-seven worktrees stood like that for nine days; the session
+    // that found it called its own escape luck, not a guardrail. The gate
+    // already refuses this (its `dependencies` stop); this is the same
+    // rule at the door everyone was told to use. The refusal must not be
+    // readable as a red run: exit 2 (never a test's exit), first word
+    // REFUSED, and "the suite never ran" on the first line.
+    const where = deps.cwd || process.cwd();
+    const tree = (deps.tree || dependencyTree)(where);
+    if (tree.missing) {
+      // The gate's own exception, word for word: a repository whose
+      // declaration vouches that its suite runs without a tree
+      // (`prepare: null`, with the evidence recorded) is not shrunk by a
+      // missing one — memoro-cli itself is that repository, and a door
+      // that refused it would refuse a truth the gate has verified on
+      // every round. The exception follows from what the repository IS,
+      // never from a flag: same table, same words, one source
+      // (declarationFor). Measured 2026-08-24: without it, this refusal's
+      // first meeting with the gate's own treeless candidate worktree
+      // turned six green tests red.
+      const declared = (deps.declaration || declarationFor)((deps.toplevel || gitToplevel)(where) || where);
+      if (declared.ok && declared.declaration.prepare === null) {
+        stdout.write(`mc: no node_modules here, and ${declared.name}'s declaration vouches its suite runs without one — running\n`);
+      } else {
+        stderr.write(`mc: REFUSED — the suite never ran: ${where} declares ${tree.declares} dependencies and has no node_modules\n`);
+        stderr.write('mc: a suite there shrinks silently — fewer files run, fewer failures reported, greener than the truth (D-0152)\n');
+        stderr.write('mc: npm ci, or link node_modules from a sibling worktree with the same lockfile, then run again\n');
+        return 2;
+      }
+    }
     const outcome = claimSuiteLease({ errand: opts.errand, holder, ownerPid: process.pid });
     if (!outcome.ok) {
       // The whole point: refused means NOTHING runs, and the exit says so.
@@ -173,6 +208,12 @@ export async function run(argv, deps = {}) {
  * killed alone leaves node workers running a suite nobody owns. Output goes
  * straight to the terminal: this is a wrapper, not a reporter.
  */
+/** The worktree root this directory belongs to, or null outside git. */
+function gitToplevel(where) {
+  const asked = spawnSync('git', ['-C', where, 'rev-parse', '--show-toplevel'], { encoding: 'utf8' });
+  return asked.status === 0 ? String(asked.stdout || '').trim() || null : null;
+}
+
 function defaultSpawn(command) {
   const child = spawn('sh', ['-c', command], { stdio: 'inherit', detached: true });
   const done = new Promise((resolve) => {
