@@ -157,7 +157,7 @@ function worktreeRows(c, repo) {
     item.area,
     item.branch || '(detached)',
     item.uncommitted ? c(`${item.uncommitted} uncommitted`, 'yellow') : '',
-    item.unmerged_commits ? c(`${item.unmerged_commits} unmerged`, 'grey') : '',
+    item.unmerged_commits && item.landed !== 'landed' ? c(`${item.unmerged_commits} unmerged`, 'grey') : '',
   ].filter(Boolean).join('  '));
 }
 

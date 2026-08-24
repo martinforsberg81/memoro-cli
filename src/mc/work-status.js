@@ -80,12 +80,25 @@ async function gitFacts(paths) {
     const unmerged = branch && branch !== 'HEAD'
       ? await ask(path, ['log', '--oneline', `origin/main..${branch}`])
       : null;
+    const unmergedCommits = unmerged ? unmerged.split('\n').filter(Boolean).length : 0;
+    // Content, not commits (2026-08-24): squash merges leave every landed
+    // branch "unmerged" by SHA forever, and the board read as disorder.
+    const landed = unmergedCommits > 0
+      ? await (async () => {
+        const baseTree = await ask(path, ['rev-parse', 'origin/main^{tree}']);
+        if (!baseTree) return 'unknown';
+        const merged = await ask(path, ['merge-tree', '--write-tree', 'origin/main', branch]);
+        if (!merged) return 'unknown';
+        return merged === baseTree ? 'landed' : 'ahead';
+      })()
+      : null;
     return [path, {
       branch: branch && branch !== 'HEAD' ? branch : null,
       is_git: Boolean(branch),
       git_common_dir: common,
       uncommitted: dirty ? dirty.split('\n').filter(Boolean).length : 0,
-      unmerged_commits: unmerged ? unmerged.split('\n').filter(Boolean).length : 0,
+      unmerged_commits: unmergedCommits,
+      landed,
     }];
   }));
   return new Map(results);
@@ -410,7 +423,7 @@ export async function workStatus({ env = process.env, names = null, git: askGit 
           repo: worktree.repo,
           path: worktree.path,
           ...(git.get(worktree.path) || {
-            branch: null, is_git: false, git_common_dir: null, uncommitted: 0, unmerged_commits: 0,
+            branch: null, is_git: false, git_common_dir: null, uncommitted: 0, unmerged_commits: 0, landed: null,
           }),
           // Whether the manifest's dependencies have a tree to be found in.
           // A suite run without one prints a number that is not a measurement
