@@ -365,6 +365,16 @@ export async function runMergeRound({
       command: verdict.command,
       red: verdict.candidate.red,
       totals: verdict.candidate.totals,
+      // The extra gates' candidate results ride along: main is now the tree
+      // they ran on, so they are the next round's baseline side — run once
+      // per main SHA, not once per PR.
+      extraGates: (verdict.extra_gates || []).map((gate) => ({
+        name: gate.name,
+        command: gate.command,
+        ok: gate.ok,
+        exit_code: gate.exit_code ?? null,
+        red: gate.candidate?.red ?? null,
+      })),
       root,
     }), (why) => say(`could not save the candidate result as the next baseline (${why}) — the next round runs it as before`));
 

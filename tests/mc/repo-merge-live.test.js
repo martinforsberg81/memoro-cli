@@ -257,7 +257,31 @@ describe('what a repository declares, the round does', () => {
     } finally { fx.cleanup(); }
   });
 
-  it('an extra gate that fails stops the round, with the suite already green', async () => {
+  it('an extra gate that fails on the candidate alone stops the round, with the suite already green', async () => {
+    const fx = repository();
+    try {
+      // Red only where this PR is: green in the baseline worktree, red in
+      // the candidate's — the one case that is the change's own fault.
+      declare(fx, {
+        prepare: null,
+        extra_gates: [{ name: 'contract', command: 'case "$(basename "$PWD")" in baseline) exit 0;; *) exit 1;; esac' }],
+        merge_log: null,
+      });
+      const before = fx.mainAt();
+      const report = await runMergeRound({
+        repoPath: fx.repo, pr: 400, holder: AREA, root: fx.mcHome, env: fx.env, mergeLog: null,
+      });
+      assert.equal(report.ok, false);
+      assert.equal(report.gate.stopped_at, 'extra-gate');
+      assert.match(report.gate.reason, /contract failed on the candidate and passed on the baseline/u);
+      // The suite really did pass — this is the gate beyond it doing the work.
+      assert.deepEqual(report.gate.broke, []);
+      assert.equal(report.merged, false);
+      assert.equal(fx.mainAt(), before);
+    } finally { fx.cleanup(); }
+  });
+
+  it('an extra gate red on both sides stops for main\'s fault, not the PR\'s (D-0138)', async () => {
     const fx = repository();
     try {
       declare(fx, { prepare: null, extra_gates: [{ name: 'contract', command: 'exit 1' }], merge_log: null });
@@ -266,10 +290,8 @@ describe('what a repository declares, the round does', () => {
         repoPath: fx.repo, pr: 400, holder: AREA, root: fx.mcHome, env: fx.env, mergeLog: null,
       });
       assert.equal(report.ok, false);
-      assert.equal(report.gate.stopped_at, 'extra-gate');
-      assert.match(report.gate.reason, /contract failed/u);
-      // The suite really did pass — this is the gate beyond it doing the work.
-      assert.deepEqual(report.gate.broke, []);
+      assert.equal(report.gate.stopped_at, 'extra-gate-baseline');
+      assert.match(report.gate.reason, /already red before this PR/u);
       assert.equal(report.merged, false);
       assert.equal(fx.mainAt(), before);
     } finally { fx.cleanup(); }
@@ -302,9 +324,18 @@ describe('what a repository declares, the round does', () => {
       });
       assert.equal(report.ok, true, report.reason || '');
       assert.equal(report.merged, true);
-      assert.deepEqual(report.gate.extra_gates, [
-        { name: 'contract', command: 'true', ok: true, exit_code: 0, ran: true },
-      ]);
+      assert.deepEqual(report.gate.extra_gates, [{
+        name: 'contract',
+        command: 'true',
+        ok: true,
+        exit_code: 0,
+        ran: true,
+        baseline: { ok: true, exit_code: 0, ran: true, red: null, carried: false },
+        candidate: { ok: true, exit_code: 0, ran: true, red: null, carried: false },
+        broke: [],
+        fixed: [],
+        already_red: false,
+      }]);
     } finally { fx.cleanup(); }
   });
 
