@@ -16,3 +16,8 @@ section: Added
   PATH all print one line and push. `MC_PUSH_ANYWAY=1` lets a deliberate
   push through. A hook mc did not write is never overwritten, and
   `core.hooksPath` set elsewhere is reported rather than written around.
+  When the refusal finds the branch deleted on the remote (asked with
+  `ls-remote` on the refuse path only), it says the quietest part out loud:
+  "this branch was deleted on the remote after it merged; your push would
+  recreate it" — because `* [new branch]` is the only sign, and it reads as
+  success (the fourth event of this shape, 2026-08-24).

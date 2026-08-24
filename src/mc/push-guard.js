@@ -118,8 +118,17 @@ export function pushVerdict({
   // The newest merge wins the sentence; a branch reused across two pull
   // requests is the case this exists for, and its last merge is the fact.
   const latest = merged.slice().sort((a, b) => String(b.mergedAt).localeCompare(String(a.mergedAt)))[0];
+  // Asked only on the refuse path, where a question to the remote is already
+  // being paid for: does the branch still exist over there? GitHub deletes
+  // it after the merge, and a push then says `* [new branch]` and looks like
+  // a normal push — that is the only sign, and it reads as success. Track 3
+  // recreated a deleted branch that way on 2026-08-24, the fourth event of
+  // this shape. '' is "asked, and it is gone"; null is "could not ask", and
+  // not knowing never adds a sentence.
+  const remote = git(['-C', cwd, 'ls-remote', '--heads', 'origin', branch]);
   return {
     verdict: 'refuse',
+    remote_gone: remote === '',
     pr: latest.number,
     title: latest.title,
     merged_at: latest.mergedAt,
@@ -140,8 +149,14 @@ export function pushCheckLines(verdict, { branch, anyway = false }) {
     const lines = [
       `mc: push refused — ${verdict.reason}.`,
       `mc: the pull request is closed; pushing to ${branch} does not reopen it, and nothing reads the branch.`,
-      `mc: start from ${verdict.base}: git switch -c <new-branch> ${verdict.base} && git cherry-pick <your commits>`,
     ];
+    // The quietest failure of the four: the recreated branch announces
+    // itself as \`* [new branch]\`, which reads as success (D-0164's fourth
+    // event, 2026-08-24). One sentence, no new mechanism.
+    if (verdict.remote_gone) {
+      lines.push(`mc: this branch was deleted on the remote after it merged; your push would recreate it — "* [new branch]" would be the only sign.`);
+    }
+    lines.push(`mc: start from ${verdict.base}: git switch -c <new-branch> ${verdict.base} && git cherry-pick <your commits>`);
     if (anyway) lines.push('mc: MC_PUSH_ANYWAY=1 is set — pushing regardless.');
     else lines.push('mc: if you mean it: MC_PUSH_ANYWAY=1 git push …');
     return lines;

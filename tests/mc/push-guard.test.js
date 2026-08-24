@@ -20,10 +20,11 @@ import {
 
 const NOW = new Date('2026-08-23T14:00:00Z');
 
-/** A git that answers the two questions the verdict asks. */
-const gitWith = ({ head = 'origin/main', ahead = '2' } = {}) => (args) => {
+/** A git that answers the three questions the verdict asks. */
+const gitWith = ({ head = 'origin/main', ahead = '2', remote = null } = {}) => (args) => {
   if (args.includes('symbolic-ref')) return head;
   if (args.includes('rev-list')) return ahead;
+  if (args.includes('ls-remote')) return remote;
   return null;
 };
 const ghWith = (answer) => (args, { cwd }) => {
@@ -66,6 +67,25 @@ describe('the verdict', () => {
     // And the hook's lines for it: one line, and the push goes.
     assert.deepEqual(pushCheckLines(noGh, { branch: 'topic' }), ['mc: push-guard could not check topic: could not ask GitHub whether topic was merged — gh is not installed — pushing']);
     assert.deepEqual(pushCheckLines({ verdict: 'allow' }, { branch: 'topic' }), []);
+  });
+
+  it('a branch the remote deleted after the merge earns the one extra sentence — and only then', () => {
+    const merged = JSON.stringify([{ number: 371, title: 'done', mergedAt: '2026-08-23T10:00:00Z', mergeCommit: { oid: 'abc123456' } }]);
+    // Asked, and it is gone: '' is ls-remote's own way of saying so.
+    const gone = pushVerdict({ cwd: '/r', branch: 'topic', git: gitWith({ remote: '' }), gh: ghWith(merged), now: NOW });
+    assert.equal(gone.verdict, 'refuse');
+    assert.equal(gone.remote_gone, true);
+    assert.ok(pushCheckLines(gone, { branch: 'topic' }).some((line) => /deleted on the remote after it merged; your push would recreate it/u.test(line)));
+
+    // Still there: no extra sentence.
+    const there = pushVerdict({ cwd: '/r', branch: 'topic', git: gitWith({ remote: 'abc\trefs/heads/topic' }), gh: ghWith(merged), now: NOW });
+    assert.equal(there.remote_gone, false);
+    assert.ok(!pushCheckLines(there, { branch: 'topic' }).some((line) => /recreate/u.test(line)));
+
+    // Could not ask: not knowing never adds a sentence.
+    const unknown = pushVerdict({ cwd: '/r', branch: 'topic', git: gitWith({ remote: null }), gh: ghWith(merged), now: NOW });
+    assert.equal(unknown.remote_gone, false);
+    assert.ok(!pushCheckLines(unknown, { branch: 'topic' }).some((line) => /recreate/u.test(line)));
   });
 
   it('the refusal says the way forward, and the override when it is set', () => {
