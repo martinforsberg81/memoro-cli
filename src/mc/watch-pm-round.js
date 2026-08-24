@@ -39,6 +39,7 @@ import { markDelivered, pendingNotices } from './watch-notices.js';
 import { deliveryLines, undeliveredOrders } from './watch-pm-deliveries.js';
 import { mcHome, workAreaPath } from './paths.js';
 import { pmRoundStatePath } from './watch-paths.js';
+import { WATCHERS, isWatcherMessage } from './watch-senders.js';
 import { sendToArea } from './work-send.js';
 
 export const ROUND_SCHEMA = 'mc-watch-pm';
@@ -60,14 +61,8 @@ export const REMINDER_PASS = 3;
 /** The knock names files; past this many it says how many it did not name. */
 const NAMED_LIMIT = 12;
 
-/**
- * Who the message is from.
- *
- * Fixed rather than read from the working directory: the round runs detached,
- * from wherever it was started, and `currentHolder()` would sign PM's inbox
- * with whatever shell happened to launch the daemon.
- */
-const SENDER = Object.freeze({ name: 'mc watch pm', kind: 'watcher' });
+/** Who the message is from: the round, by its fixed name (`watch-senders.js`). */
+const SENDER = WATCHERS.pm;
 
 /**
  * One pass. Everything is injectable because a thirty-minute round has to be
@@ -217,7 +212,7 @@ export function commitRoleHome(areaPath, now = new Date()) {
  * not, and one rule that answers for every file beats two that answer for
  * different ones.
  */
-export function readInbox(areaPath, area = 'pm', { own = isOwnMessage } = {}) {
+export function readInbox(areaPath, area = 'pm', { own = isWatcherMessage } = {}) {
   const directory = join(areaPath, 'inbox');
   let entries = [];
   try {
@@ -233,29 +228,17 @@ export function readInbox(areaPath, area = 'pm', { own = isOwnMessage } = {}) {
   }
   const items = entries
     .filter((entry) => entry.isFile() && entry.name !== 'README.md' && !entry.name.startsWith('.'))
-    // The round's own knocks are not PM's work (B3, 2026-08-23: five files
-    // in ninety seconds whose whole content was the list of the other four).
+    // A watcher's knock is not PM's work — the round's own (B3, 2026-08-23:
+    // five files in ninety seconds whose whole content was the list of the
+    // other four) and the guard's (KP-10, 2026-08-24: the two watchers
+    // announcing each other, 64 % of the archive). One rule, in
+    // `watch-senders.js`, for every watcher there is.
     .filter((entry) => !own(join(directory, entry.name)))
     .map((entry) => ({ name: entry.name, at: modified(join(directory, entry.name)) }))
     .sort((a, b) => (a.at === b.at ? a.name.localeCompare(b.name) : a.at.localeCompare(b.at)));
   return { items, reason: null };
 }
 
-/**
- * Is this file one of the round's own knocks?
- *
- * Answered by the sender line the channel writes as the first thing in
- * every message, not by the filename — a round recognising its own messages
- * by how they are named would be a second copy of `work-send.js`'s naming
- * rule. Reading two lines of frontmatter is not opening the item: the round
- * still forms no opinion about what anything is about.
- */
-export function isOwnMessage(path) {
-  try {
-    const head = readFileSync(path, 'utf8').slice(0, 200);
-    return head.startsWith('---\n') && head.includes(`\nfrom: ${SENDER.name}\n`);
-  } catch { return false; }
-}
 
 /**
  * Wake on change — the bookkeeping that makes it true.

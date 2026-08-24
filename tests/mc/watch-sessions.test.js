@@ -28,7 +28,7 @@ import { describe, it } from 'node:test';
 
 import { readingOrder, watchLoop, watchRound } from '../../src/mc/watch-sessions-loop.js';
 import {
-  MODEL_PATTERNS, SCRIPT_PATTERNS, countInbox, describeSpan, scanSessions,
+  MODEL_PATTERNS, SCRIPT_PATTERNS, arrivedSince, countInbox, describeSpan, scanSessions,
 } from '../../src/mc/watch-sessions-scan.js';
 import { parseFlags, quoteFrom, readOutput } from '../../src/mc/watch-sessions-read.js';
 import { readMemory } from '../../src/mc/watch-sessions-store.js';
@@ -314,6 +314,20 @@ describe('everything with a deterministic answer is script', () => {
     writeFileSync(join(at, 'inbox', 'b.md'), 'x');
     writeFileSync(join(at, 'inbox', 'a.md'), 'x');
     assert.deepEqual(countInbox(at), { count: 2, oldest: 'a.md' });
+  });
+
+  it("never counts a watcher's knock as mail — neither the round's nor its own (KP-10)", () => {
+    const at = root();
+    mkdirSync(join(at, 'inbox'), { recursive: true });
+    // The round's knock into PM's inbox was, to this guard, "a file that
+    // arrived since PM last moved": PM went `unattended`, the guard knocked,
+    // and the round counted that knock as the next item. Six wakes in a row
+    // after the fleet went quiet, none carrying a report (2026-08-24).
+    writeFileSync(join(at, 'inbox', '2026-08-24T03-00-00.000Z-mc-watch-pm.md'), '---\nfrom: mc watch pm\nat: 2026-08-24T03:00:00.000Z\n---\n\n1 unprocessed item\n');
+    writeFileSync(join(at, 'inbox', '2026-08-24T03-01-00.000Z-mc-watch-sessions.md'), '---\nfrom: mc watch sessions\nat: 2026-08-24T03:01:00.000Z\n---\n\nmc watch sessions flagged 1 thing\n');
+    writeFileSync(join(at, 'inbox', '2026-08-24T03-02-00.000Z-alpha.md'), '---\nfrom: alpha\nat: 2026-08-24T03:02:00.000Z\n---\n\nSLUTRAPPORT\n');
+    assert.deepEqual(countInbox(at), { count: 1, oldest: '2026-08-24T03-02-00.000Z-alpha.md' });
+    assert.deepEqual(arrivedSince(at, 0), { count: 1, oldest: '2026-08-24T03-02-00.000Z-alpha.md' });
   });
 
   it('flags an order that was given and has not moved, without saying what it was', () => {
