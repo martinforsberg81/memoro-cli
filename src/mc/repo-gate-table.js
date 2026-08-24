@@ -130,7 +130,19 @@ export function declarationFor(repoPath, { root = mcHome(), env = process.env } 
           + '— or "prepare": null with the evidence that its suite runs from a clean checkout.',
       };
     }
-    return { ok: true, name, declaration: normalise(declared, env), source: 'declared' };
+    // Which shipped fields this override silently dropped, if it is one.
+    // A shallow table means an override states every field it wants — a
+    // rule this table's own operator wrote into the memoro entry after
+    // extra_gates fell out (D-0135) — but a rule people must remember is a
+    // hole (pr_tests_flags fell out the same way, 2026-08-24), so the
+    // dropped fields are named to whoever reads the declaration.
+    const overridden = readOverrides(root)[name];
+    const shipped = SHIPPED[name];
+    const shadowed = overridden && shipped
+      ? Object.keys(shipped).filter((field) => overridden[field] === undefined
+        && shipped[field] != null && (!Array.isArray(shipped[field]) || shipped[field].length > 0))
+      : [];
+    return { ok: true, name, declaration: normalise(declared, env), source: 'declared', shadowed };
   }
 
   // No entry. The only thing that lets a round proceed anyway is proof that
