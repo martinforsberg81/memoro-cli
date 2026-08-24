@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import { notInForce } from '../../src/mc/enforcement.js';
-import { diagnose } from '../../src/mc/commands/doctor.js';
+import { diagnose, run } from '../../src/mc/commands/doctor.js';
 
 const QUIET_WATCHERS = {
   pm: { running: true, stale: false, stale_code: false, abandoned: false },
@@ -74,6 +74,27 @@ describe('what the list says', () => {
   it('a check that cannot run reports itself instead of staying quiet', () => {
     const broken = notInForce({ deps: deps({ guardState: () => { throw new Error('git is gone'); } }) });
     assert.deepEqual(broken, ['push-guard could not be checked: git is gone']);
+  });
+});
+
+describe('identical findings fold into one counted line', () => {
+  it('a crowd is named once with a count and a first id; one of a kind keeps its row', async () => {
+    // Twenty-eight identical dev-server-session-unbound rows stood in every
+    // heartbeat for a day and nobody read them (2026-08-24) — a counter,
+    // not information.
+    const crowd = Array.from({ length: 28 }, (_, index) => ({ scope: 'session', mc_session_id: `s-${index}`, reason: 'dev-server-session-unbound' }));
+    const lone = { scope: 'session', mc_session_id: 'x-1', reason: 'runtime stale' };
+    let out = '';
+    const code = await run([], {
+      stdout: { write: (text) => { out += text; } },
+      scan: () => ({ ok: false, summary: { sessions: 29, runtime_active: 0, runtime_stale: 1 }, issues: [...crowd, lone] }),
+      inspectDevServers: () => ({ ok: true, summary: {}, issues: [] }),
+      enforcement: () => [],
+    });
+    assert.equal(code, 1);
+    assert.match(out, /! session {2}dev-server-session-unbound × 28 {2}\(first: s-0\)/u);
+    assert.match(out, /! session {2}x-1 {2}runtime stale/u);
+    assert.equal((out.match(/dev-server-session-unbound/gu) || []).length, 1, 'the crowd took one line, not twenty-eight');
   });
 });
 
