@@ -25,7 +25,7 @@ import { describe, it } from 'node:test';
 import { addArea, fixture as repoFixture } from './_helpers/repo-fixture.js';
 import { runMcCli } from './_helpers/mc-cli.js';
 import { gateRoot, runGate } from '../../src/mc/repo-gate.js';
-import { lockfileHashAt, saveBaseline } from '../../src/mc/repo-baseline-cache.js';
+import { carriedGate, lockfileHashAt, saveBaseline } from '../../src/mc/repo-baseline-cache.js';
 import { claimLease, readLease } from '../../src/mc/repo-lease.js';
 import { claimSuiteLease, readSuiteLease } from '../../src/mc/suite-lease.js';
 import { renderRatchet } from '../../src/mc/red-ratchet.js';
@@ -999,6 +999,139 @@ describe('a batch is one candidate, and each pull request keeps its own tests', 
       assert.equal(report.stopped_at, 'pr');
       assert.match(report.reason, /2 different bases \(main, release\)/u);
     } finally { fx.cleanup(); }
+  });
+});
+
+/**
+ * Extra gates, run on both sides and judged by the delta (2026-08-24).
+ *
+ * Measured that night on #10909's round: the extra gate ran only on the
+ * candidate, main's own contract suite was red the whole time (5 fail, the
+ * same 5 on untouched origin/main), and the round said "FAILED on the
+ * candidate". A track spent six minutes proving its innocence. The rules
+ * asserted here: both sides run, the verdict is the delta, a red baseline
+ * is said as main's fault, and a carried result spares the baseline run.
+ */
+describe('extra gates are differential: both sides, and the delta decides', () => {
+  const declare = (fx, command, { name = 'contract' } = {}) => writeJson(join(fx.mcHome, 'repo-gates.json'), {
+    repo: { prepare: null, prepare_why: 'a test', extra_gates: [{ name, command }], merge_log: null },
+  });
+  // A gate whose result depends on which worktree it runs in: red in the
+  // baseline, green in the candidate, or any mix — one shell line, branching
+  // on the directory name the round gave it as cwd.
+  const gate = (baselineExit, candidateExit) => `case "$(basename "$PWD")" in baseline) exit ${baselineExit};; *) exit ${candidateExit};; esac`;
+
+  it('runs the gate on both sides, and both green passes', async () => {
+    const fx = fixture();
+    try {
+      declare(fx, gate(0, 0));
+      const report = await fx.run({ root: fx.mcHome });
+      assert.equal(report.ok, true, report.reason);
+      assert.equal(report.extra_gates.length, 1);
+      assert.equal(report.extra_gates[0].baseline.ok, true);
+      assert.equal(report.extra_gates[0].candidate.ok, true);
+      assert.ok('extra gates baseline' in report.timings, 'the baseline run was not timed');
+    } finally { fx.cleanup(); }
+  });
+
+  it('candidate red and baseline green is the PR\'s fault, said as loudly as ever', async () => {
+    const fx = fixture();
+    try {
+      declare(fx, gate(0, 1));
+      const report = await fx.run({ root: fx.mcHome });
+      assert.equal(report.stopped_at, 'extra-gate');
+      assert.match(report.reason, /failed on the candidate and passed on the baseline/u);
+    } finally { fx.cleanup(); }
+  });
+
+  it('red on both sides is main\'s fault, and the round stops for THAT reason', async () => {
+    const fx = fixture();
+    try {
+      declare(fx, gate(1, 1));
+      const report = await fx.run({ root: fx.mcHome });
+      assert.equal(report.stopped_at, 'extra-gate-baseline');
+      assert.match(report.reason, /already red before this PR/u);
+      assert.match(report.reason, /the base itself is broken; not this change's doing/u);
+      assert.equal(report.extra_gates[0].already_red, true);
+    } finally { fx.cleanup(); }
+  });
+
+  it('a candidate that repairs a red baseline passes, with a sentence', async () => {
+    const fx = fixture();
+    try {
+      declare(fx, gate(1, 0));
+      const progress = [];
+      const report = await fx.run({ root: fx.mcHome, onProgress: (line) => progress.push(line) });
+      assert.equal(report.ok, true, report.reason);
+      assert.ok(progress.some((line) => /red on the baseline, green on the candidate — this change repairs it/u.test(line)), progress.join('\n'));
+    } finally { fx.cleanup(); }
+  });
+
+  it('a gate that prints TAP is judged by red names: a new name is the PR\'s even over a red baseline', async () => {
+    const fx = fixture();
+    try {
+      // Baseline: one standing red. Candidate: the same, plus a new one.
+      const emit = (names) => `printf '%s\\n' 'TAP version 13' ${names.map((n, i) => `'# Subtest: ${n}' 'not ok ${i + 1} - ${n}'`).join(' ')} '1..${names.length}' '# tests ${names.length}' '# pass 0' '# fail ${names.length}'; exit 1`;
+      declare(fx, `case "$(basename "$PWD")" in baseline) ${emit(['standing'])};; *) ${emit(['standing', 'fresh'])};; esac`);
+      const report = await fx.run({ root: fx.mcHome });
+      assert.equal(report.stopped_at, 'extra-gate', report.reason);
+      assert.match(report.reason, /already red on the baseline \(1 red\) and the candidate adds 1 more: fresh/u);
+      assert.deepEqual(report.extra_gates[0].broke, ['fresh']);
+    } finally { fx.cleanup(); }
+  });
+
+  it('a carried gate result spares the baseline run — once per main SHA, not once per PR', async () => {
+    const fx = fixture();
+    try {
+      const marker = join(fx.root, 'gate-ran.txt');
+      declare(fx, `echo "$(basename "$PWD")" >> "${marker}"; exit 0`);
+      saveBaseline({
+        repoPath: fx.repoPath,
+        commit: 'cand2222',
+        lockfileHash: lockfileHashAt({ git: fx.git, repoPath: fx.repoPath, commit: 'cand2222' }),
+        command: 'npm test  (node --test tests/)',
+        red: [],
+        totals: { tests: 100, fail: 0 },
+        extraGates: [{ name: 'contract', command: `echo "$(basename "$PWD")" >> "${marker}"; exit 0`, ok: true, exit_code: 0, red: [] }],
+        root: fx.mcHome,
+      });
+      const report = await fx.run({ root: fx.mcHome });
+      assert.equal(report.ok, true, report.reason);
+      assert.equal(report.baseline.carried, true);
+      assert.equal(report.extra_gates[0].baseline.carried, true);
+      assert.deepEqual(readFileSync(marker, 'utf8').trim().split('\n'), ['candidate'], 'the gate ran somewhere besides the candidate');
+      assert.equal(fx.ran('suite').length, 1, 'the suite baseline was carried too');
+    } finally { fx.cleanup(); }
+  });
+
+  it('a carried suite entry WITHOUT this gate still gets a baseline worktree, and the gate runs there', async () => {
+    const fx = fixture();
+    try {
+      const marker = join(fx.root, 'gate-ran.txt');
+      declare(fx, `echo "$(basename "$PWD")" >> "${marker}"; exit 0`);
+      // An A1 entry from before extra gates were carried: suite result only.
+      saveBaseline({
+        repoPath: fx.repoPath,
+        commit: 'cand2222',
+        lockfileHash: lockfileHashAt({ git: fx.git, repoPath: fx.repoPath, commit: 'cand2222' }),
+        command: 'npm test  (node --test tests/)',
+        red: [],
+        totals: { tests: 100, fail: 0 },
+        root: fx.mcHome,
+      });
+      const report = await fx.run({ root: fx.mcHome });
+      assert.equal(report.ok, true, report.reason);
+      assert.equal(report.baseline.carried, true, 'the suite result was still carried');
+      assert.equal(fx.ran('suite').length, 1, 'no suite reran for the gate\'s sake');
+      assert.deepEqual(readFileSync(marker, 'utf8').trim().split('\n').sort(), ['baseline', 'candidate']);
+    } finally { fx.cleanup(); }
+  });
+
+  it('carriedGate matches by command, never by name', () => {
+    const entry = { extra_gates: [{ name: 'old name', command: 'run-it', ok: true, exit_code: 0, red: [] }] };
+    assert.ok(carriedGate(entry, { name: 'new name', command: 'run-it' }));
+    assert.equal(carriedGate(entry, { name: 'old name', command: 'run-it --different' }), null);
+    assert.equal(carriedGate(null, { name: 'x', command: 'run-it' }), null);
   });
 });
 
