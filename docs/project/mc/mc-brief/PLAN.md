@@ -1,6 +1,6 @@
 ---
 status: ready
-next: "Step 2 — `mc brief` (no flag) runs --collect and then opens a fresh foreground session (stdio inherit, never tmux, never --resume) with the brief file as its first prompt, the Coding Profile appended and the `brief` role overlay from canon/roles/brief.md — done when running it opens a session whose first assistant turn lists the pending decisions."
+next: "Step 3 — answers land: a decision answered in a brief session is picked up by the runner's next round on that project — done when it is observed once in runner.log (needs a waiting-decision project with a **Beslut:** line written from `mc brief`)."
 budget: 150k
 needs: []
 ---
@@ -68,7 +68,7 @@ runs whether or not `mc brief` is ever called.
       with all six sections, produced without a model, and the test passes.
       (2026-08-25: `src/mc/brief-collect.js`, `tests/mc/brief-collect.test.js`;
       7.1 s live with two repositories, 1.6 s `--offline`.)
-- [ ] **2. Session** — `mc brief` launches the fresh session with the file as
+- [x] **2. Session** (2026-08-25: `canon/roles/brief.md`, session in `src/mc/commands/brief.js`, `tests/mc/commands/brief.test.js`; the interactive launch itself is not yet observed) — `mc brief` launches the fresh session with the file as
       first prompt and the `brief` role overlay. Done when running it opens a
       session whose first assistant turn lists the pending decisions.
 - [ ] **3. Answers land** — the overlay's `**Beslut:**` line format matches
@@ -87,6 +87,9 @@ runs whether or not `mc brief` is ever called.
   have neither and are skipped.
 - One fetch and two `gh pr list` per repository, run one after another,
   took 10.4 s — the whole budget. Concurrently: 7 s. `--offline` skips them.
+- The brief session stands in the work root (`~/mc`), not in a repository:
+  its writes are `~/mc/*/decisions/*.md`, and a worktree would only put a
+  branch under a conversation that must not commit anything.
 - `~/mc/bin/runner.sh`'s `queue_names` fallback (`NF==4`) never matches
   `docs/project/<programme>/<project>/PLAN.md` (five fields), so only
   `queue.md` names run today. `mc run` must use depth five.
