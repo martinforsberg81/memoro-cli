@@ -1,6 +1,6 @@
 ---
 status: ready
-next: "Step 1 — `mc plan <name>` starts a fresh foreground Opus session (no tmux) in the workarea for <name> (created with `mc work add` if missing, from origin/main of the repo given by --repo, default memoro) with the Coding Profile and the `plan` role overlay from canon/roles/plan.md appended, and a first prompt that asks for docs/project/<programme>/<name>/PLAN.md as a PR — done when running it opens a session whose first turn starts reading the workarea, and `canon/roles/plan.md` exists with the triage instructions from ~/mc/bin/runner.sh (triage_prompt) rewritten as a role."
+next: "Step 2 — verify how the plan overlay reaches codex through the adapter (`-c instructions=` carries the profile today; `instructionsFor` drops the overlay for codex) and document the result under What the code taught us — done when `mc plan <name> --codex` starts codex with the same role text reachable, or the step writes it into the workarea's AGENTS.md and says so."
 budget: 150k
 needs: []
 ---
@@ -52,7 +52,8 @@ its result is the file, not the conversation.
 
 ## Steps
 
-- [ ] **1. Role + verb** — `canon/roles/plan.md`, `src/mc/commands/plan.js`,
+- [x] **1. Role + verb** (2026-08-25: `canon/roles/plan.md`, `src/mc/commands/plan.js`, `readCanonRole` in roles.js, `prompt` on `openInWorkArea`)
+      — — `canon/roles/plan.md`, `src/mc/commands/plan.js`,
       help text, foreground launch. Done when `mc plan <name>` opens the
       session described above.
 - [ ] **2. Codex channel** — verify how the overlay reaches codex through the
@@ -63,7 +64,13 @@ its result is the file, not the conversation.
 
 ## What the code taught us
 
-(empty)
+- `openInWorkArea` had overlay and model but no opening words; a `prompt`
+  option now rides as the last positional argument for a new conversation
+  (both tools take it that way) and never for a resume.
+- Roles that belong to verbs live in `canon/roles/` and are read with
+  `readCanonRole`; the user's `~/.memoro/mc/roles/` catalogue is untouched.
+- `instructionsFor` already drops the overlay for codex — step 2 is that
+  question, not a new one.
 
 ## Documents
 
