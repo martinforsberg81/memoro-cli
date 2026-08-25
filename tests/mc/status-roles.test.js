@@ -66,7 +66,7 @@ function fixture() {
 }
 
 function board(fx) {
-  const result = runMcCli(['status', '--json'], fx.env);
+  const result = runMcCli(['status', '--sessions', '--json'], fx.env);
   assert.equal(result.status, 0, result.stderr);
   const page = JSON.parse(result.stdout);
   return Object.fromEntries(page.areas.map((area) => [area.name, area]));
@@ -119,7 +119,7 @@ describe('the board, on roles and on filing', () => {
   it('leaves filing where it is — the listing hides it, nothing removes it', () => {
     const fx = fixture();
     try {
-      runMcCli(['status', '--json'], fx.env);
+      runMcCli(['status', '--sessions', '--json'], fx.env);
       runMcCli(['work', 'list', '--json'], fx.env);
       const listed = runMcCli(['work', 'list', '--json'], fx.env);
       const areas = JSON.parse(listed.stdout).areas;

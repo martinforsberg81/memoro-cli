@@ -26,7 +26,7 @@ describe('mc repo status — the view', () => {
     const worktree = addArea(fx, 'alpha', 'alpha');
     writeFileSync(join(worktree, 'scratch.txt'), 'work in progress\n');
     try {
-      const board = json(runMcCli(['status', '--json'], fx.env));
+      const board = json(runMcCli(['status', '--sessions', '--json'], fx.env));
       const view = json(runMcCli(['repo', 'status', '--offline', '--json'], fx.env));
 
       assert.equal(view.repos.length, 1);
