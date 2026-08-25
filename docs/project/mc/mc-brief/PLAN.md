@@ -32,9 +32,12 @@ runs whether or not `mc brief` is ever called.
       `~/mc/runner/log/runs.tsv`: steps, kinds, failures, cache_read total) ·
       *Queue* (`~/mc/queue.md`). No model call. Under 10 s.
 - [ ] `mc brief` (no flag) runs `--collect`, then starts a fresh interactive
-      Claude session (model opus, Coding Profile appended, role overlay from
-      `canon/roles/brief.md`) whose first prompt is the brief file. It does
-      not use `--resume`.
+      session **in the foreground — an ordinary terminal program, not tmux**
+      (`stdio: 'inherit'`, the path at `src/mc/work-open.js:102`; model opus
+      by default, `--codex` allowed through the adapter; Coding Profile
+      appended; role overlay from `canon/roles/brief.md`) whose first prompt
+      is the brief file. It does not use `--resume`. Martin closes it when
+      the decisions are done.
 - [ ] The role overlay instructs the session to: take decisions one at a
       time, always give a recommendation, write the answer as a line starting
       with `**Beslut:**` (date, Martin's word, one sentence why) at the end of
