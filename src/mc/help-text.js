@@ -40,11 +40,15 @@ MAINTENANCE
                                     One of them — read it, tail it, stop it,
                                     or start it again. mc dev with no verb
                                     lists all nine and what each one takes
-  mc status                        Every piece of work and what it is doing:
-                                    waiting for you, working, or idle
-  mc status --watch [seconds]      A live page; polls every 15s and rewrites
-                                    only the rows that changed
-  mc status --json                 The same, for a session watching the others
+  mc status                        The one page: the runner (alive, queue,
+                                    next, last 24 h, estimated list cost),
+                                    decisions waiting on you, every project
+                                    per repo and programme, and workareas
+                                    without a project. No model; reads only
+  mc status --json                 The same, as one object; --offline skips
+                                    fetch and gh
+  mc status --sessions             The old board: sessions, leases, watchers
+  mc status --watch [seconds]      That board, live; polls every 15s
   mc status --wait [--timeout <s>] Block until something moves, then report
   mc work                          What exists; at a terminal, a way in
   mc work <name>                   Open it — the name is enough, new or not

@@ -1,6 +1,6 @@
 ---
 status: ready
-next: "Step 1 — `mc status` (bare, no args) prints four blocks with no model call in under 5 s: RUNNER (queue with count and next project; steps in the last 24 h by kind with merged/open/failed; estimated list-price cost from runs.tsv token columns with the price table stated), DECISIONS (unanswered decision files under ~/mc/*/decisions/, one row each), PROJECTS per repo (programme → project: status, next truncated, last step time from runs.tsv, open PR number), and an --json form — done when the bare verb prints those blocks on this machine against the real files and a test covers each block's builder with fixture files."
+next: "Step 2 — `mc status <name>` for one project: its PLAN.md frontmatter, its decisions, last three runs, open PR — done when `mc status docx-editor` prints those against the real files and a test covers it on fixtures (--json already lands with step 1)."
 budget: 150k
 needs: []
 ---
@@ -59,7 +59,8 @@ from files the runner and the sessions already write; it writes nothing.
 
 ## Steps
 
-- [ ] **1. Runner + decisions + projects** — the four blocks, text form.
+- [x] **1. Runner + decisions + projects** (2026-08-25: `src/mc/status-collect.js`, `src/mc/prices.js`, `src/mc/commands/status-page.js`; 3.3 s live, 1.6 s `--offline`; `--json` included)
+      — — the four blocks, text form.
       Done when the bare verb prints them against the real files and tests
       pass on fixtures.
 - [ ] **2. `--json` and `mc status <name>`.** Done when both work and are
@@ -71,7 +72,13 @@ from files the runner and the sessions already write; it writes nothing.
 
 ## What the code taught us
 
-(empty)
+- `runs.tsv` has no model column; every row is priced as the runner's
+  `MODEL` (opus) and the page says so. `mc run` should write the model.
+- The estimate is large: a day of 30 steps ≈ $120 list, dominated by
+  cache reads (0.1× input). It is labelled list, never what is paid.
+- The bare verb and the old board share `src/cli/status.js`: no positional
+  and none of `--watch/--wait/--timeout/--sessions` → the page; those flags
+  → the board. `mc status <name>` still means a pre-V1 session until step 2.
 
 ## Documents
 
