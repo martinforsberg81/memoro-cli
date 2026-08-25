@@ -249,16 +249,16 @@ describe('mc status and tasks', () => {
   it('shows the open task count on the area line, and in --json', () => {
     const fx = fixture();
     try {
-      const before = runMcCli(['status'], fx.env).stdout;
+      const before = runMcCli(['status', '--sessions'], fx.env).stdout;
       assert.doesNotMatch(before, /open task/u);
 
       runMcCli(['work', 'send', 'pm', 'one', '--task'], fx.env, { cwd: join(fx.workRoot, 'alpha') });
       runMcCli(['work', 'send', 'pm', 'two', '--task'], fx.env, { cwd: join(fx.workRoot, 'alpha') });
 
-      const page = runMcCli(['status'], fx.env).stdout;
+      const page = runMcCli(['status', '--sessions'], fx.env).stdout;
       assert.match(page, /pm\s+2 open tasks/u);
 
-      const board = json(runMcCli(['status', '--json'], fx.env));
+      const board = json(runMcCli(['status', '--sessions', '--json'], fx.env));
       const pm = board.areas.find((area) => area.name === 'pm');
       assert.equal(pm.open_tasks, 2);
       const alpha = board.areas.find((area) => area.name === 'alpha');
@@ -273,7 +273,7 @@ describe('mc status and tasks', () => {
       const id = /task ([0-9a-f]{8}) opened/u.exec(sent.stdout)[1];
       runMcCli(['task', 'done', id], fx.env);
 
-      const board = json(runMcCli(['status', '--json'], fx.env));
+      const board = json(runMcCli(['status', '--sessions', '--json'], fx.env));
       assert.equal(board.areas.find((area) => area.name === 'pm').open_tasks, 0);
     } finally { fx.cleanup(); }
   });
@@ -281,9 +281,9 @@ describe('mc status and tasks', () => {
   it('nothing else about the board changes shape — the field only grows it', () => {
     const fx = fixture();
     try {
-      const before = json(runMcCli(['status', '--json'], fx.env));
+      const before = json(runMcCli(['status', '--sessions', '--json'], fx.env));
       runMcCli(['work', 'send', 'pm', 'one', '--task'], fx.env, { cwd: join(fx.workRoot, 'alpha') });
-      const after = json(runMcCli(['status', '--json'], fx.env));
+      const after = json(runMcCli(['status', '--sessions', '--json'], fx.env));
       const names = (page) => page.areas.map((area) => area.name).sort();
       assert.deepEqual(names(after), names(before));
     } finally { fx.cleanup(); }

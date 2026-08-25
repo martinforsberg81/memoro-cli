@@ -195,11 +195,11 @@ describe('the repository lease', () => {
     const fx = fixture({ name: 'repo-lease' });
     addArea(fx, 'alpha', 'alpha');
     try {
-      const before = runMcCli(['status', '--json'], fx.env);
+      const before = runMcCli(['status', '--sessions', '--json'], fx.env);
       runMcCli(['repo', 'claim', 'repo', 'merge round'], fx.env, inArea(fx, 'alpha'));
 
       // The board says exactly what it said, and says nothing about leases.
-      const after = runMcCli(['status', '--json'], fx.env);
+      const after = runMcCli(['status', '--sessions', '--json'], fx.env);
       assert.equal(after.status, 0);
       assert.equal(JSON.stringify(areas(after)), JSON.stringify(areas(before)));
       // Not a text search — the fixture's own path has "lease" in it. The
