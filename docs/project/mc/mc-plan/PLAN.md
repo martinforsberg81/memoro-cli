@@ -53,7 +53,7 @@ its result is the file, not the conversation.
 ## Steps
 
 - [x] **1. Role + verb** (2026-08-25: `canon/roles/plan.md`, `src/mc/commands/plan.js`, `readCanonRole` in roles.js, `prompt` on `openInWorkArea`)
-      — — `canon/roles/plan.md`, `src/mc/commands/plan.js`,
+      — `canon/roles/plan.md`, `src/mc/commands/plan.js`,
       help text, foreground launch. Done when `mc plan <name>` opens the
       session described above.
 - [ ] **2. Codex channel** — verify how the overlay reaches codex through the
