@@ -79,6 +79,10 @@ from files the runner and the sessions already write; it writes nothing.
 - The bare verb and the old board share `src/cli/status.js`: no positional
   and none of `--watch/--wait/--timeout/--sessions` → the page; those flags
   → the board. `mc status <name>` still means a pre-V1 session until step 2.
+- `mc status --json` used to be the board's machine form and nine test
+  files (and any session watching the others) read it that way; they now
+  say `--sessions --json`. Anything outside this repository that parsed
+  the board from `mc status --json` needs the same word.
 
 ## Documents
 
