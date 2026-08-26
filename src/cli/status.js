@@ -23,8 +23,17 @@ export async function run(argv, deps = {}) {
     positional.push(arg);
   }
   if (positional.length === 0) {
+    // The bare verb is the page about the runner, the decisions and the
+    // projects (docs/project/mc/mc-status). The old board — sessions,
+    // leases, watcher pulses — still answers to its own flags and to
+    // `--sessions` until cut-old-surface removes it.
+    const boardFlags = ['--watch', '--wait', '--timeout', '--sessions'];
+    if (!argv.some((arg) => boardFlags.includes(arg))) {
+      const page = await import('../mc/commands/status-page.js');
+      return page.run(argv, deps);
+    }
     const board = await import('../mc/commands/status-board.js');
-    return board.run(argv, deps);
+    return board.run(argv.filter((arg) => arg !== '--sessions'), deps);
   }
   const opts = parseArgs(argv);
   if (opts.error || !opts.name) {

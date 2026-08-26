@@ -40,11 +40,15 @@ MAINTENANCE
                                     One of them — read it, tail it, stop it,
                                     or start it again. mc dev with no verb
                                     lists all nine and what each one takes
-  mc status                        Every piece of work and what it is doing:
-                                    waiting for you, working, or idle
-  mc status --watch [seconds]      A live page; polls every 15s and rewrites
-                                    only the rows that changed
-  mc status --json                 The same, for a session watching the others
+  mc status                        The one page: the runner (alive, queue,
+                                    next, last 24 h, estimated list cost),
+                                    decisions waiting on you, every project
+                                    per repo and programme, and workareas
+                                    without a project. No model; reads only
+  mc status --json                 The same, as one object; --offline skips
+                                    fetch and gh
+  mc status --sessions             The old board: sessions, leases, watchers
+  mc status --watch [seconds]      That board, live; polls every 15s
   mc status --wait [--timeout <s>] Block until something moves, then report
   mc work                          What exists; at a terminal, a way in
   mc work <name>                   Open it — the name is enough, new or not
@@ -196,6 +200,19 @@ MAINTENANCE
                                     titled "Plan: <name>"
   mc plan <name> --repo <r>        …in which repository (default memoro);
                                     --codex|--claude, --model <m> as usual
+  mc plan <name>                   A planning session that ends in a PLAN.md:
+                                    a fresh foreground session in the workarea
+                                    (made from origin/main if missing) with
+                                    the plan role, whose deliverable is a PR
+                                    titled "Plan: <name>"
+  mc plan <name> --repo <r>        …in which repository (default memoro);
+                                    --codex|--claude, --model <m> as usual
+  mc brief                         The evaluation session: gather what the
+                                    runner merged, opened and is waiting on,
+                                    then decide with a fresh session
+  mc brief --collect [--offline]   Only the file: ~/mc/brief/<date>.md, no
+                                    model, from the runner log, PRs, plans
+                                    on main, decision files and the queue
   mc worker <name> [task]          A project folder that carries the worker
                                     role: every conversation started in it
                                     gets the role's overlay and model default
