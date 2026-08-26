@@ -1,6 +1,6 @@
 ---
 status: ready
-next: "Step 1 — `mc brief` collects the ground: a script (no model) that writes ~/mc/brief/<date>.md from the runner log, PRs merged/opened in the last 24 h, every PLAN.md status on main (both repos), decision files without a **Beslut:** line, and the runner's queue — done when `mc brief --collect` produces that file on this machine in under 10 s with no model call, and a test covers the decision-file scan."
+next: "Step 2 — `mc brief` (no flag) runs --collect and then opens a fresh foreground session (stdio inherit, never tmux, never --resume) with the brief file as its first prompt, the Coding Profile appended and the `brief` role overlay from canon/roles/brief.md — done when running it opens a session whose first assistant turn lists the pending decisions."
 budget: 150k
 needs: []
 ---
@@ -64,8 +64,10 @@ runs whether or not `mc brief` is ever called.
 
 ## Steps
 
-- [ ] **1. Collect** — `mc brief --collect`. Done when the file above exists
+- [x] **1. Collect** — `mc brief --collect`. Done when the file above exists
       with all six sections, produced without a model, and the test passes.
+      (2026-08-25: `src/mc/brief-collect.js`, `tests/mc/brief-collect.test.js`;
+      7.1 s live with two repositories, 1.6 s `--offline`.)
 - [ ] **2. Session** — `mc brief` launches the fresh session with the file as
       first prompt and the `brief` role overlay. Done when running it opens a
       session whose first assistant turn lists the pending decisions.
@@ -78,7 +80,16 @@ runs whether or not `mc brief` is ever called.
 
 ## What the code taught us
 
-(empty — nothing built yet)
+- Decision files come in two shapes: a `## Rekommendation` heading (night-1
+  sessions) and a bold lead `**Recommendation: option 2.**` (docx-editor).
+  A file counts as a decision when it has a `# ` title and either shape of
+  options/recommendation; `~/mc/pm/decisions/{README,log,merge-log}.md`
+  have neither and are skipped.
+- One fetch and two `gh pr list` per repository, run one after another,
+  took 10.4 s — the whole budget. Concurrently: 7 s. `--offline` skips them.
+- `~/mc/bin/runner.sh`'s `queue_names` fallback (`NF==4`) never matches
+  `docs/project/<programme>/<project>/PLAN.md` (five fields), so only
+  `queue.md` names run today. `mc run` must use depth five.
 
 ## Documents
 
