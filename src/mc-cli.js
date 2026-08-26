@@ -80,6 +80,7 @@ async function routeV1Command(args) {
     suite: './mc/commands/suite.js',
     watch: './mc/commands/watch.js',
     worker: './mc/commands/worker.js',
+    brief: './mc/commands/brief.js',
     roles: './mc/commands/roles.js',
     pm: './mc/commands/pm.js',
     'pm-helper': './mc/commands/pm-helper.js',
