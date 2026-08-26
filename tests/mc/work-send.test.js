@@ -381,7 +381,7 @@ describe('mc work send — the channel', () => {
       const areas = JSON.parse(listed.stdout).areas.map((area) => area.name).sort();
       assert.deepEqual(areas, ['alpha', 'pm']);
 
-      const board = runMcCli(['status', '--json'], fx.env);
+      const board = runMcCli(['status', '--sessions', '--json'], fx.env);
       assert.equal(board.status, 0, board.stderr);
       // The inbox is filing, not work: the board lists no worktree for it.
       // (It used to appear here as a repository that is not one — see
