@@ -82,8 +82,6 @@ async function routeV1Command(args) {
     worker: './mc/commands/worker.js',
     brief: './mc/commands/brief.js',
     plan: './mc/commands/plan.js',
-    plan: './mc/commands/plan.js',
-    brief: './mc/commands/brief.js',
     roles: './mc/commands/roles.js',
     pm: './mc/commands/pm.js',
     'pm-helper': './mc/commands/pm-helper.js',

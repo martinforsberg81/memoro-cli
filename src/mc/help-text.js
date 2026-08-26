@@ -200,19 +200,6 @@ MAINTENANCE
                                     titled "Plan: <name>"
   mc plan <name> --repo <r>        …in which repository (default memoro);
                                     --codex|--claude, --model <m> as usual
-  mc plan <name>                   A planning session that ends in a PLAN.md:
-                                    a fresh foreground session in the workarea
-                                    (made from origin/main if missing) with
-                                    the plan role, whose deliverable is a PR
-                                    titled "Plan: <name>"
-  mc plan <name> --repo <r>        …in which repository (default memoro);
-                                    --codex|--claude, --model <m> as usual
-  mc brief                         The evaluation session: gather what the
-                                    runner merged, opened and is waiting on,
-                                    then decide with a fresh session
-  mc brief --collect [--offline]   Only the file: ~/mc/brief/<date>.md, no
-                                    model, from the runner log, PRs, plans
-                                    on main, decision files and the queue
   mc worker <name> [task]          A project folder that carries the worker
                                     role: every conversation started in it
                                     gets the role's overlay and model default
