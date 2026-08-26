@@ -3,7 +3,7 @@
  *
  * §3: one module knows where intake comes from — the path, the file forms,
  * the quarter-hour grouping — and processing moves, never deletes. §5: the
- * helper's tool does not carry `mc repo merge` without `--check`; the role
+ * helper's tool does not carry `mc merge` without `--check`; the role
  * must not have to remember the boundary.
  */
 import assert from 'node:assert/strict';
@@ -96,7 +96,7 @@ describe('mc pm-helper intake — the door to the module', () => {
 describe('the boundary the role does not have to remember (§5)', () => {
   it('refuses merge without --check for the helper, and only for the helper', () => {
     const helper = { name: 'pm-helper', kind: 'work-area' };
-    assert.match(helperMergeRefusal(helper, { check: false }), /does not carry mc repo merge without --check/u);
+    assert.match(helperMergeRefusal(helper, { check: false }), /does not carry mc merge without --check/u);
     assert.equal(helperMergeRefusal(helper, { check: true }), null, 'the check form measures and reports');
     assert.equal(helperMergeRefusal({ name: 'helper', kind: 'work-area' }, { check: false }) === null, false, 'the alias is the same role');
     assert.equal(helperMergeRefusal({ name: 'pm', kind: 'work-area' }, { check: false }), null, 'the PM lands');

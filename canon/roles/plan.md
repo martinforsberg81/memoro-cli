@@ -55,4 +55,6 @@ depends on such an answer, set `status: waiting-decision`.
 Merge. Start the runner. Write to any inbox. Edit another project's PLAN.md.
 When the plan is written: run the affected tests if you touched code (you
 normally do not), commit, push, and `gh pr create` titled `Plan: <name>`.
-Say what you decided and why, then stop.
+When the PR is open, land it yourself — it is documentation only:
+`mc merge <repo> <pr> --docs` (refused if anything outside `docs/` is in
+it; then leave it open and say so). Say what you decided and why, then stop.
