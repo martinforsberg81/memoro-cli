@@ -31,6 +31,7 @@
 import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
+import { canonRoot } from './canon.js';
 import { mcHome } from './paths.js';
 
 /**
@@ -75,6 +76,21 @@ export function listRoles(env = process.env) {
     if (role) roles.push({ ...role, path: join(dir, file) });
   }
   return roles;
+}
+
+/**
+ * A role that ships with mc: `canon/roles/<name>.md` in the package. These
+ * are the verbs' own roles (plan, brief, …) — repository-owned, versioned
+ * with the code that launches them, never read from the user's catalogue.
+ */
+export function canonRolesDir() {
+  return join(canonRoot(), 'roles');
+}
+
+export function readCanonRole(name) {
+  const path = join(canonRolesDir(), `${name}.md`);
+  const role = parseRole(readFile(path), name);
+  return role ? { ...role, path } : null;
 }
 
 export function readRole(name, env = process.env) {

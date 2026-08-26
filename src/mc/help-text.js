@@ -183,6 +183,13 @@ MAINTENANCE
   mc watch sessions status [--json]
                                     Whether it is running, when it last looked,
                                     and what is standing
+  mc plan <name>                   A planning session that ends in a PLAN.md:
+                                    a fresh foreground session in the workarea
+                                    (made from origin/main if missing) with
+                                    the plan role, whose deliverable is a PR
+                                    titled "Plan: <name>"
+  mc plan <name> --repo <r>        …in which repository (default memoro);
+                                    --codex|--claude, --model <m> as usual
   mc brief                         The evaluation session: gather what the
                                     runner merged, opened and is waiting on,
                                     then decide with a fresh session

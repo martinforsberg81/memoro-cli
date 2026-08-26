@@ -11,6 +11,10 @@
  *   (nothing)   the most recent conversation here, or a new one if there is none
  *   new         a new one regardless
  *   <id prefix> that one, as shown by `mc work`
+ *
+ * `prompt` is the conversation's opening words, given to a new conversation
+ * only: both tools take it as the last positional argument. A resumed
+ * conversation already has its own history and is not spoken over.
  */
 import { spawnSync } from 'node:child_process';
 
@@ -30,6 +34,7 @@ export async function openInWorkArea({
   pick = null,
   model = null,
   overlay = null,
+  prompt = null,
   defaultModel = null,
   defaultModelTool = null,
   env = process.env,
@@ -81,7 +86,7 @@ export async function openInWorkArea({
     : profileArgs(toolId, instructionsFor(toolId, await readProfile({ env }), overlay));
   const args = resuming
     ? launch.adapter.resumeArgs({ sessionId: chosen.id, model: chosenModel }) || []
-    : [...(launch.adapter?.modelArgs?.(chosenModel) ?? []), ...profile];
+    : [...(launch.adapter?.modelArgs?.(chosenModel) ?? []), ...profile, ...(prompt ? [prompt] : [])];
 
   log('work.open', {
     area: areaRoot,
@@ -92,6 +97,7 @@ export async function openInWorkArea({
     resuming: chosen?.id || null,
     model: chosenModel || null,
     overlay: !resuming && Boolean(overlay) && toolId === 'claude-code',
+    prompt: !resuming && Boolean(prompt),
     profile: profile.length > 0,
     known_here: before.length,
   });
