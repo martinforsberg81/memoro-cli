@@ -34,6 +34,8 @@ import { startWatcher, stopWatcher, watcherState } from '../repo-watch.js';
 import { scanArgs } from './flags.js';
 
 const VERBS = ['status', 'watch', 'claim', 'release', 'who', 'merge', 'rounds', 'guard', 'push-check'];
+// `merge` stays in the list only so the old spelling can be answered with
+// where it went; it is not a verb here any more.
 const WATCH_VERBS = ['start', 'stop', 'status'];
 const LEASE_VERBS = ['claim', 'release', 'who'];
 
@@ -48,7 +50,10 @@ export async function run(argv, deps = {}) {
   }
 
   if (opts.verb === 'watch') return watch(opts, { stdout, stderr });
-  if (opts.verb === 'merge') return gate(opts, { stdout, stderr });
+  if (opts.verb === 'merge') {
+    stderr.write('mc: mc repo merge is now mc merge — same round, its own door: mc merge <repo> <pr> [--check] | --docs\n');
+    return 2;
+  }
   if (opts.verb === 'rounds') return rounds(opts, { stdout });
   if (opts.verb === 'guard') return guard(opts, { stdout, stderr });
   if (opts.verb === 'push-check') return pushCheck(opts, { stdout, stderr, stdin: deps.stdin || process.stdin, env: deps.env || process.env, git: deps.git, gh: deps.gh });
@@ -258,10 +263,10 @@ export function helperMergeRefusal(holder, { check = false } = {}) {
   if (check) return null;
   if (holder?.kind !== 'work-area') return null;
   if (!['pm-helper', 'helper'].includes(String(holder.name || '').toLowerCase())) return null;
-  return 'REFUSED — the pm-helper\'s tool does not carry mc repo merge without --check: the helper produces evidence, the PM makes decisions (design note §5)';
+  return 'REFUSED — the pm-helper\'s tool does not carry mc merge without --check: the helper produces evidence, the PM makes decisions (design note §5)';
 }
 
-async function gate(opts, { stdout, stderr }) {
+export async function gate(opts, { stdout, stderr }) {
   const repoPath = await resolveRepoPath(opts.repo);
   if (!repoPath) {
     stderr.write(`mc: no repository called "${opts.repo}" — mc repo status lists the ones mc can see\n`);
@@ -278,7 +283,7 @@ async function gate(opts, { stdout, stderr }) {
   const refusal = helperMergeRefusal(holder, { check: opts.check });
   if (refusal) {
     stderr.write(`mc: ${refusal}\n`);
-    stderr.write(`mc: the check form measures and reports: mc repo merge ${opts.repo} ${opts.pr || (opts.prs || []).join(' ')} --check\n`);
+    stderr.write(`mc: the check form measures and reports: mc merge ${opts.repo} ${opts.pr || (opts.prs || []).join(' ')} --check\n`);
     return 2;
   }
   const round = { repoPath, pr: opts.pr, prs: opts.prs, holder, onProgress: (message) => stderr.write(`mc: ${message}\n`) };
@@ -661,7 +666,7 @@ function readAll(stream) {
   });
 }
 
-async function resolveRepoPath(name) {
+export async function resolveRepoPath(name) {
   const snapshot = readCombinedSnapshot();
   const roots = snapshot.kind === 'present'
     ? (snapshot.value.repos || []).map((repo) => repo.path)
@@ -686,7 +691,6 @@ function usage() {
     '        mc repo claim <repo> "<what for>"\n',
     '        mc repo release <repo> [--force]\n',
     '        mc repo who <repo> [--json]\n',
-    '        mc repo merge <repo> <pr> [<pr>...] [--check] [--json]\n',
     '        mc repo guard [repo] [--json]\n',
   ].join('');
 }
@@ -722,28 +726,7 @@ export function parseArgs(argv) {
     opts.intervalMs = Math.round(value * 1000);
   }
 
-  if (opts.verb === 'merge') {
-    opts.repo = positional.shift() || null;
-    if (!opts.repo) return { ...opts, error: 'which repository? mc repo merge <repo> <pr> [--check]' };
-    // `#346` and `346` are the same pull request, and a person who copied the
-    // number off a page brings the hash with it.
-    const numbers = positional.splice(0).map((word) => String(word).replace(/^#/u, ''));
-    if (!numbers.length) return { ...opts, error: 'which pull request? mc repo merge <repo> <pr> [<pr>...] [--check]' };
-    const bad = numbers.find((number) => !/^\d+$/u.test(number));
-    if (bad !== undefined) return { ...opts, error: `"${bad}" is not a pull request number` };
-    opts.pr = Number(numbers[0]);
-    // Several at once is one candidate and one suite run (A3); the order
-    // given is the order they land in.
-    opts.prs = numbers.length > 1 ? numbers.map(Number) : null;
-    if (opts.prs && new Set(opts.prs).size !== opts.prs.length) return { ...opts, error: 'the same pull request is named twice' };
-    // `--check` runs the gate and stops there; without it the same round also
-    // lands the change. There is no third mode, and in particular nothing that
-    // merges a red gate: overruling one is the human's call and should cost a
-    // human action rather than a flag.
-    if (opts.force) return { ...opts, error: '--force belongs to mc repo release' };
-    if (scanned.flags.interval !== null) return { ...opts, error: '--interval belongs to mc repo watch start' };
-    return opts;
-  }
+  if (opts.verb === 'merge') return { ...opts, error: 'mc repo merge is now mc merge' };
 
   if (opts.verb === 'guard') {
     opts.repo = positional.shift() || null;
@@ -758,7 +741,7 @@ export function parseArgs(argv) {
     return opts;
   }
 
-  if (opts.check) return { ...opts, error: '--check belongs to mc repo merge' };
+  if (opts.check) return { ...opts, error: '--check belongs to mc merge' };
 
   if (LEASE_VERBS.includes(opts.verb)) {
     // A repository is required: these verbs are about one, and guessing from
@@ -798,5 +781,34 @@ export function parseArgs(argv) {
     return { ...opts, error: '--interval belongs to mc repo watch start' };
   }
   opts.names = positional;
+  return opts;
+}
+
+/**
+ * `mc merge <repo> <pr> [<pr>...] [--check] [--json] [--docs]` — the
+ * arguments of the landing verb, in one place for both of its forms.
+ */
+export function parseMergeArgs(argv, { docs = false } = {}) {
+  const scanned = scanArgs(argv, { booleans: ['--json', '--check', ...(docs ? ['--docs'] : [])] });
+  const opts = { verb: 'merge', repo: null, pr: null, prs: null, check: scanned.flags.check, json: scanned.flags.json, docs: Boolean(scanned.flags.docs) };
+  if (scanned.error) return { ...opts, error: scanned.error };
+  const positional = [...scanned.positional];
+  opts.repo = positional.shift() || null;
+  if (!opts.repo) return { ...opts, error: 'which repository? mc merge <repo> <pr> [--check] | --docs' };
+  // `#346` and `346` are the same pull request, and a person who copied the
+  // number off a page brings the hash with it.
+  const numbers = positional.splice(0).map((word) => String(word).replace(/^#/u, ''));
+  if (!numbers.length) return { ...opts, error: 'which pull request? mc merge <repo> <pr> [<pr>...] [--check] | --docs' };
+  const bad = numbers.find((number) => !/^\d+$/u.test(number));
+  if (bad !== undefined) return { ...opts, error: `"${bad}" is not a pull request number` };
+  opts.pr = Number(numbers[0]);
+  // Several at once is one candidate and one suite run (A3); the order
+  // given is the order they land in.
+  opts.prs = numbers.length > 1 ? numbers.map(Number) : null;
+  if (opts.prs && new Set(opts.prs).size !== opts.prs.length) return { ...opts, error: 'the same pull request is named twice' };
+  // `--check` runs the gate and stops there; without it the same round also
+  // lands the change. There is no third mode, and in particular nothing that
+  // merges a red gate: overruling one is the human's call and should cost a
+  // human action rather than a flag.
   return opts;
 }

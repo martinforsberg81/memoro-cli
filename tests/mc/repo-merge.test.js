@@ -21,7 +21,9 @@ import { fileURLToPath } from 'node:url';
 import { describe, it } from 'node:test';
 
 import { claimLease, readLease, releaseLease } from '../../src/mc/repo-lease.js';
-import { parseArgs } from '../../src/mc/commands/repo.js';
+import { parseMergeArgs } from '../../src/mc/commands/repo.js';
+
+const parseArgs = (argv) => parseMergeArgs(argv.slice(1));
 import { runMergeRound } from '../../src/mc/repo-merge.js';
 
 const AREA = { name: 'klient-guard', kind: 'work-area' };
@@ -390,7 +392,7 @@ describe('the verb describes itself accurately', () => {
     const source = read('commands', 'repo.js');
     // Only the strings the user is actually shown — prose about the verb is
     // free to describe it in sentences, and does.
-    const printed = [...source.matchAll(/'([^'\n]*mc repo merge <repo> <pr>[^'\n]*)'/gu)].map((m) => m[1]);
+    const printed = [...source.matchAll(/'([^'\n]*mc merge <repo> <pr>[^'\n]*)'/gu)].map((m) => m[1]);
     assert.ok(printed.length >= 3, `expected the usage strings, found ${printed.length}`);
     for (const usage of printed) {
       assert.match(usage, /\[--check\]/u, `printed usage "${usage}" presents --check as required`);

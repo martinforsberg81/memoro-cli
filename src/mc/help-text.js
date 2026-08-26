@@ -119,7 +119,7 @@ MAINTENANCE
                                     off the board rather than off a clock. A
                                     holder mc cannot see reads unknown, never
                                     a guess
-  mc repo merge <repo> <pr>        Run the test gate for that pull request —
+  mc merge <repo> <pr>             Run the test gate for that pull request —
                                     take the lease, build a fresh baseline and
                                     a candidate with main merged in, run the
                                     repository's own full suite on both, and
@@ -133,15 +133,20 @@ MAINTENANCE
                                     otherwise it carries the number that are
                                     standing, and .mc/red-ratchet.json is what
                                     keeps that number from growing
-  mc repo merge <repo> <pr> <pr>... Several at once: one candidate with all
+  mc merge <repo> <pr> <pr>...      Several at once: one candidate with all
                                     of them merged in, the suite once each
                                     side, each one's own tests by itself, then
                                     merged in the order given. A batch that
                                     stops — a conflict, a red — falls back to
                                     one round per pull request and says so
-  mc repo merge <repo> <pr> --check
+  mc merge <repo> <pr> --check
                                     The same round, stopping at the verdict.
                                     A gate that passes is not a review
+  mc merge <repo> <pr> --docs      Land a pull request that touches nothing
+                                    outside docs/ — no suite, no lease, squash.
+                                    A plan PR lands this way, by the session
+                                    that opened it. Anything else is refused
+                                    with the file that is outside docs/
   mc repo guard [repo]             Install the pre-push guard: a push to a
                                     branch whose pull request is already merged
                                     is refused with the number and date, and

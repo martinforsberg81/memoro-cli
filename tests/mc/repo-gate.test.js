@@ -520,7 +520,7 @@ describe('what the round reports', () => {
  * real remote — so what is asserted is the grammar and the one promise the
  * grammar makes: that a verb called `merge` cannot be made to merge yet.
  */
-describe('mc repo merge — the grammar', () => {
+describe('mc merge — the grammar', () => {
   it('offers two modes and no way to overrule a red gate', () => {
     const fx = repoFixture({ name: 'repo-gate-cli' });
     try {
@@ -528,10 +528,10 @@ describe('mc repo merge — the grammar', () => {
       // What must not exist is a third mode — anything that lands a change the
       // gate called red. Overruling one is the human's call and should cost a
       // human action rather than a flag on a routine command.
-      const usage = runMcCli(['repo', 'merge'], fx.env).stderr;
-      assert.match(usage, /mc repo merge <repo> <pr> \[--check\]/u);
+      const usage = runMcCli(['merge'], fx.env).stderr;
+      assert.match(usage, /mc merge <repo> <pr> \[<pr>\.\.\.\] \[--check\]/u);
       for (const flag of ['--force', '--anyway', '--no-verify', '--skip-gate', '--apply']) {
-        const tried = runMcCli(['repo', 'merge', 'repo', '400', flag], fx.env);
+        const tried = runMcCli(['merge', 'repo', '400', flag], fx.env);
         assert.notEqual(tried.status, 0, `${flag} was accepted`);
       }
     } finally { fx.cleanup(); }
@@ -540,16 +540,16 @@ describe('mc repo merge — the grammar', () => {
   it('asks for the pull request rather than guessing one', () => {
     const fx = repoFixture({ name: 'repo-gate-cli' });
     try {
-      assert.match(runMcCli(['repo', 'merge', 'repo'], fx.env).stderr, /which pull request\?/u);
-      assert.match(runMcCli(['repo', 'merge'], fx.env).stderr, /which repository\?/u);
-      assert.match(runMcCli(['repo', 'merge', 'repo', 'later', '--check'], fx.env).stderr, /not a pull request number/u);
+      assert.match(runMcCli(['merge', 'repo'], fx.env).stderr, /which pull request\?/u);
+      assert.match(runMcCli(['merge'], fx.env).stderr, /which repository\?/u);
+      assert.match(runMcCli(['merge', 'repo', 'later', '--check'], fx.env).stderr, /not a pull request number/u);
     } finally { fx.cleanup(); }
   });
 
   it('a repository nobody has heard of is an error, not a round', () => {
     const fx = repoFixture({ name: 'repo-gate-cli' });
     try {
-      const asked = runMcCli(['repo', 'merge', 'nowhere-at-all', '400', '--check'], fx.env);
+      const asked = runMcCli(['merge', 'nowhere-at-all', '400', '--check'], fx.env);
       assert.equal(asked.status, 1);
       assert.match(asked.stderr, /no repository called "nowhere-at-all"/u);
     } finally { fx.cleanup(); }
@@ -563,7 +563,7 @@ describe('mc repo merge — the grammar', () => {
       assert.equal(who.status, 0, who.stderr);
       assert.equal(JSON.parse(who.stdout).held, false);
       // `--check` belongs to one verb and is refused on the others.
-      assert.match(runMcCli(['repo', 'claim', 'repo', 'x', '--check'], fx.env).stderr, /--check belongs to mc repo merge/u);
+      assert.match(runMcCli(['repo', 'claim', 'repo', 'x', '--check'], fx.env).stderr, /--check belongs to mc merge/u);
     } finally { fx.cleanup(); }
   });
 });
