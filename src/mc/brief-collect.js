@@ -108,7 +108,7 @@ export function scanDecisions(root) {
 export function parsePlanFrontmatter(text) {
   const normalised = String(text || '').replace(/\r\n/gu, '\n');
   const match = /^---\n([\s\S]*?)\n---/u.exec(normalised);
-  if (!match) return { status: null, next: null };
+  if (!match) return { status: null, next: null, fields: {} };
   const fields = {};
   let key = null;
   for (const raw of match[1].split('\n')) {
@@ -126,7 +126,8 @@ export function parsePlanFrontmatter(text) {
     if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) v = v.slice(1, -1);
     return v.replace(/\\"/gu, '"') || null;
   };
-  return { status: scalar(fields.status), next: scalar(fields.next) };
+  const all = Object.fromEntries(Object.entries(fields).map(([k, v]) => [k, scalar(v)]));
+  return { status: scalar(fields.status), next: scalar(fields.next), fields: all };
 }
 
 /**

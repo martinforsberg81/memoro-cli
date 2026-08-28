@@ -85,10 +85,10 @@ describe('decision files', () => {
 describe('PLAN.md frontmatter', () => {
   it('reads a quoted next and a folded one', () => {
     assert.deepEqual(parsePlanFrontmatter('---\nstatus: ready\nnext: "Step 1 — do it"\nbudget: 150k\n---\n# x'),
-      { status: 'ready', next: 'Step 1 — do it' });
+      { status: 'ready', next: 'Step 1 — do it', fields: { status: 'ready', next: 'Step 1 — do it', budget: '150k' } });
     assert.deepEqual(parsePlanFrontmatter('---\nstatus: blocked\nnext: >-\n  Add a watchdog —\n  done when tested.\nneeds: []\n---\n'),
-      { status: 'blocked', next: 'Add a watchdog — done when tested.' });
-    assert.deepEqual(parsePlanFrontmatter('no frontmatter'), { status: null, next: null });
+      { status: 'blocked', next: 'Add a watchdog — done when tested.', fields: { status: 'blocked', next: 'Add a watchdog — done when tested.', needs: '[]' } });
+    assert.deepEqual(parsePlanFrontmatter('no frontmatter'), { status: null, next: null, fields: {} });
   });
 
   it('lists docs/project/<programme>/<project>/PLAN.md through an injected git', () => {

@@ -205,6 +205,13 @@ MAINTENANCE
                                     titled "Plan: <name>"
   mc plan <name> --repo <r>        …in which repository (default memoro);
                                     --codex|--claude, --model <m> as usual
+  mc run                           The runner: one fresh headless session per
+                                    step of the next project, merged direct;
+                                    queue = ~/mc/queue.md then every ready
+                                    PLAN.md on origin/main. Touch
+                                    ~/mc/runner/STOP to exit after the step
+  mc run --once                    One step for the first runnable project
+  mc run --rounds <n> [--no-merge] [--idle-sleep <s>]
   mc worker <name> [task]          A project folder that carries the worker
                                     role: every conversation started in it
                                     gets the role's overlay and model default
