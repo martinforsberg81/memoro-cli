@@ -1,6 +1,6 @@
 ---
-status: blocked
-next: "Blocked until mc-brief step 2 and mc-plan step 1 are on main (they establish canon/roles/ and the foreground launch). Then Step 1 — `mc run` reproduces ~/mc/bin/runner.sh inside mc: queue = ~/mc/queue.md plus every ready PLAN.md on origin/main of memoro and memoro-cli; one fresh headless session per step through the launch adapter (claude -p today; codex exec when the project frontmatter says tool: codex); merge origin/main in, never rebase; reconcile step on conflicts; wait for GitHub mergeability then squash-merge — done when one full round over the real queue runs under `mc run --rounds 1` with the same runs.tsv columns as the shell runner and the shell runner can be deleted."
+status: ready
+next: "Step 1 — `mc run` reproduces ~/mc/bin/runner.sh inside mc: queue = ~/mc/queue.md plus every ready PLAN.md on origin/main of memoro and memoro-cli; one fresh headless session per step through the launch adapter (claude -p today; codex exec when the project frontmatter says tool: codex); merge origin/main in, never rebase; reconcile step on conflicts; wait for GitHub mergeability then squash-merge — done when one full round over the real queue runs under `mc run --rounds 1` with the same runs.tsv columns as the shell runner and the shell runner can be deleted."
 budget: 150k
 needs: []
 ---
@@ -68,8 +68,8 @@ per round, merge direct, no model in the runner itself.
 
 ## Steps
 
-- [ ] **0. Wait** — blocked on mc-brief step 2 and mc-plan step 1 (roles dir,
-      foreground launch). Done when both are on main.
+- [x] **0. Wait** (2026-08-29) — mc-brief step 2 (#416) and mc-plan step 1
+      (#414) are on main; `canon/roles/` and the foreground launch exist.
 - [ ] **1. Verb + queue + one step** — `mc run --once` runs one step for the
       first ready project through the adapter and logs it. Done when a real
       step lands a PR and a runs.tsv row.
