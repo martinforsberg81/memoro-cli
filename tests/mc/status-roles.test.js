@@ -82,10 +82,10 @@ describe('the work model, on roles and on filing', () => {
     try {
       const areas = await areasByName(fx.env);
       // The shape every existing reader depends on, spelled out: same keys,
-      // same meanings, plus the ones added since (role, open_tasks, stopped).
+      // same meanings, plus the ones added since (role, stopped).
       assert.deepEqual(
         Object.keys(areas.plain).sort(),
-        ['conversations', 'menu', 'name', 'open_tasks', 'path', 'role', 'running', 'stopped', 'waiting', 'working', 'worktrees'],
+        ['conversations', 'menu', 'name', 'path', 'role', 'running', 'stopped', 'waiting', 'working', 'worktrees'],
       );
       assert.equal(areas.plain.name, 'plain');
       assert.equal(areas.plain.path, join(fx.workRoot, 'plain'));

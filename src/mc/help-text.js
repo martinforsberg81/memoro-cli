@@ -93,10 +93,6 @@ MAINTENANCE
                                     refuses on a pane somebody is attached to
                                     or one whose prompt is not empty, and says
                                     so — the message is delivered either way
-  mc work send <name> … --task     …and open a tracked task for it in the same
-                                    action: state open, moving to done or to
-                                    blocked with one line of reason. Never
-                                    inferred — without the flag no task exists
   mc work add <name> <repo> [branch]
                                     Add a repository's worktree to that work
   mc work stop <name>              Stop what is running there; keep the work
@@ -227,17 +223,6 @@ MAINTENANCE
                                     escalates by writing ../decisions/
   mc roles list                    The defined roles, read from their files
   mc roles show <role>             One role whole: facts, then overlay text
-  mc worktree add <name> <branch>  Create a worktree this session owns
-  mc worktree list <name>          What this session owns
-  mc worktrees [--json]            What is lying around, and whose it is
-  mc task list [<session>] [--json]
-                                    Open tasks, oldest-moved first, with age.
-                                    Without a session, every open task
-                                    anywhere. mc status shows the count per
-                                    session; this shows which ones and why
-  mc task done <id>                Mark it done — the one way out
-  mc task block <id> "<reason>"    Mark it blocked, with what for. done still
-                                    ends it from here; nothing else moves it
   mc gc [--dry-run|--apply]        Remove stale runtime homes; never Git resources
   mc migrate [--dry-run] [--stop-legacy-runtimes]
                                     Move pre-V1 sessions into session homes, once
