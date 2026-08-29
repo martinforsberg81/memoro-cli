@@ -1,6 +1,6 @@
 ---
 status: ready
-next: "Step 1 — the page in colour: the palette below applied in page-render.js after clipping, names white, one colour per plan status and per step kind, budget and STOP in warning colours, --json and NO_COLOR untouched — done when `script -q /dev/null mc` shows every rule below and the snapshot test pins them."
+next: "Step 2 — close-out: the palette table added to `docs/technical/mc-ui.md` and a `project_log.md` row — done when the table in the doc names the same colour for every kind and every status as `KIND_TONE` and `STATUS_TONE` in page-render.js."
 budget: 150k
 needs: [mc-ui]
 ---
@@ -56,13 +56,13 @@ escape is added **after** `clip`/`pad` decided the width.
 
 ## Success criteria
 
-- [ ] `script -q /dev/null mc` shows every rule above; a snapshot test
+- [x] `script -q /dev/null mc` shows every rule above; a snapshot test
       with colour forced on pins the escapes per row and proves they sit
       outside the clipped width (a coloured row is as wide as its plain
       twin by `width()`).
-- [ ] `mc --json` and `NO_COLOR=1 mc` are unchanged from before this
+- [x] `mc --json` and `NO_COLOR=1 mc` are unchanged from before this
       project (test compares against the plain render).
-- [ ] `mc --watch 1` for 30 s in a terminal: no flicker, only changed
+- [x] `mc --watch 1` for 30 s in a terminal: no flicker, only changed
       lines rewritten.
 
 ## Contract
@@ -70,8 +70,30 @@ escape is added **after** `clip`/`pad` decided the width.
 - No new section, datum, flag or key. `mc` without a TTY prints exactly
   what it prints today.
 
+## What the code taught us
+
+- **The plain page gained one glyph, and only one.** The Contract says a
+  page without a TTY prints exactly what it prints today, and the rules ask
+  for a yellow `●` on every DECISIONS row. A mark drawn only when colour is
+  on would break the rule that a coloured row is as wide as its plain twin,
+  so the mark is always drawn — inside the row's own footprint, where two of
+  the seven leading spaces used to be. Rendered against the same fixtures at
+  six widths, that `●` is the *only* difference between the plain page
+  before this step and after it; everything else is byte-identical.
+- **`--watch`'s redraw rule lives in `commands/home.js`, not in
+  `status-render.js`'s header comment.** `watch()` already keeps the
+  previous page, compares line by line and rewrites only what moved; the
+  page is drawn whole only when the number of rows changes. Nothing had to
+  be built for it — measured, not assumed: 32 s of `mc --watch 1` under a
+  pty.
+- **A parts helper was the price of colour.** `clip` counts columns but
+  slices bytes, so a string that already carries escapes cannot be cut.
+  `paint(c, parts, space)` measures the plain text of a run, paints only
+  when it fits and otherwise clips the plain text and goes grey — which is
+  why every escape on the page sits outside the width it was clipped to.
+
 ## Steps
 
-- [ ] **1. The palette** — one PR.
+- [x] **1. The palette** — one PR.
 - [ ] **2. Close-out** — a short `docs/technical/mc-ui.md` addition with
       the palette table, `project_log.md` row.

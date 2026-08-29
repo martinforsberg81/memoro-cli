@@ -22,6 +22,7 @@ const SGR = {
   blue: '[34m',
   magenta: '[35m',
   cyan: '[36m',
+  white: '[37m',
   grey: '[90m',
 };
 

@@ -239,42 +239,43 @@ function pageData(over = {}) {
   };
 }
 
-describe('the page', () => {
-  const DATA = pageData({
-    now: nowSection({
-      runner: { pid: 4242, started: '2026-08-29T10:00:00Z' },
-      current: {
-        name: 'mc-ui', kind: 'step', tool: 'claude', model: 'opus', budget_minutes: 90,
-        started: '2026-08-29T11:40:00Z', pid: 4242, worktree: '/w/mc-ui/memoro-cli',
-      },
-      stop: true,
-      rows: ROWS,
-      live: [{ name: 'docx-editor', opened_ms: Date.parse('2026-08-29T11:00:00Z') }],
-      now: NOW,
-      alive: live,
-    }),
-    queue: queueSection({ queue: ['mc-ui', 'docx-editor', 'mc-run'], plans: PLANS, live: ['docx-editor'] }),
-    decisions: decisionsSection(DECISIONS),
-    intake: intakeSection({
-      digest: {
-        name: 'errors-2026-08-29.md',
-        text: '## New since the last digest\n\n- ! `abc` — 41x 500 — loud\n',
-        mtime_ms: Date.parse('2026-08-29T11:00:00Z'),
-      },
-      proposals: ['a.md'],
-      now: NOW,
-    }),
-    work: workSection({
-      areas: [{ name: 'mc-ui', mtime_ms: Date.parse('2026-08-29T11:50:00Z') }, { name: 'ui-fixes', mtime_ms: 0 }],
-      plans: PLANS,
-      rows: ROWS,
-      openPrs: [{ repo: 'memoro-cli', number: 440, headRefName: 'mc-ui' }],
-      live: [],
-    }),
-    caches: { fresh: false, plans: [], prs: { fetched: '2026-08-29T10:00:00Z', age_seconds: 7200, count: 1 } },
-    notes: ['PRs from cache, 2 h old — --fresh asks GitHub', 'no queue.md'],
-  });
+/** The whole page, with every section carrying something. */
+const DATA = pageData({
+  now: nowSection({
+    runner: { pid: 4242, started: '2026-08-29T10:00:00Z' },
+    current: {
+      name: 'mc-ui', kind: 'step', tool: 'claude', model: 'opus', budget_minutes: 90,
+      started: '2026-08-29T11:40:00Z', pid: 4242, worktree: '/w/mc-ui/memoro-cli',
+    },
+    stop: true,
+    rows: ROWS,
+    live: [{ name: 'docx-editor', opened_ms: Date.parse('2026-08-29T11:00:00Z') }],
+    now: NOW,
+    alive: live,
+  }),
+  queue: queueSection({ queue: ['mc-ui', 'docx-editor', 'mc-run'], plans: PLANS, live: ['docx-editor'] }),
+  decisions: decisionsSection(DECISIONS),
+  intake: intakeSection({
+    digest: {
+      name: 'errors-2026-08-29.md',
+      text: '## New since the last digest\n\n- ! `abc` — 41x 500 — loud\n',
+      mtime_ms: Date.parse('2026-08-29T11:00:00Z'),
+    },
+    proposals: ['a.md'],
+    now: NOW,
+  }),
+  work: workSection({
+    areas: [{ name: 'mc-ui', mtime_ms: Date.parse('2026-08-29T11:50:00Z') }, { name: 'ui-fixes', mtime_ms: 0 }],
+    plans: PLANS,
+    rows: ROWS,
+    openPrs: [{ repo: 'memoro-cli', number: 440, headRefName: 'mc-ui' }],
+    live: [],
+  }),
+  caches: { fresh: false, plans: [], prs: { fetched: '2026-08-29T10:00:00Z', age_seconds: 7200, count: 1 } },
+  notes: ['PRs from cache, 2 h old — --fresh asks GitHub', 'no queue.md'],
+});
 
+describe('the page', () => {
   it('prints the five sections in order, with the counts and the verb that expands each', () => {
     const text = renderPage(DATA, { columns: 120, version: '0.7.11', now: NOW });
     const at = ['NOW', 'QUEUE', 'DECISIONS', 'INTAKE', 'WORK'].map((head) => text.indexOf(`  ${head}`));
@@ -422,5 +423,219 @@ describe('collectPage', () => {
     assert.deepEqual(saved, [{ repo: 'memoro-cli', number: 440, headRefName: 'mc-ui' }]);
     assert.equal(data.caches.fresh, true);
     assert.equal(data.work.areas.find((area) => area.name === 'mc-ui').pr, 440);
+  });
+});
+
+/* ------------------------------------------------------------- the palette */
+
+const NAMES = {
+  0: 'reset', 1: 'bold', 2: 'dim', 31: 'red', 32: 'green', 33: 'yellow', 34: 'blue', 35: 'magenta', 36: 'cyan', 37: 'white', 90: 'grey',
+};
+const ESC = String.fromCharCode(27);
+const SGR = new RegExp(`${ESC}\\[([0-9;]*)m`, 'gu');
+const strip = (line) => line.replace(SGR, '');
+
+/**
+ * A row's colours in order — `bold+white grey` for a painted name followed by
+ * a painted count. The palette is a table, and this is how a test reads one
+ * row of it back without pinning the escape bytes themselves.
+ */
+function signature(line) {
+  const out = [];
+  let run = [];
+  for (const match of line.matchAll(SGR)) {
+    const name = NAMES[Number(match[1])];
+    if (name === 'reset') { if (run.length) out.push(run.join('+')); run = []; continue; }
+    if (name) run.push(name);
+  }
+  return out.join(' ');
+}
+
+/** The one row whose text contains `text`, painted. */
+function rowWith(lines, text) {
+  const found = lines.filter((line) => strip(line).includes(text));
+  assert.equal(found.length, 1, `one row saying "${text}", found ${found.length}`);
+  return found[0];
+}
+
+const paintedPage = (data, over = {}) => renderPageLines(data, {
+  columns: 120, colour: true, version: '0.7.11', now: NOW, ...over,
+});
+
+describe('the palette', () => {
+  // One line of the page per row, and the colours it carries. The text beside
+  // each is what that row says at 120 columns; the plain page below is the
+  // same page with the escapes taken out again.
+  const SNAPSHOT = [
+    '',
+    'bold+white grey grey yellow+bold grey white grey grey', //   MEMORO·CLI 0.7.11 ── 4 decisions · 1 of 3 queued · ≈$7.28 today
+    '',
+    'bold+cyan', //                                               NOW
+    'green bold+white green grey grey grey white grey grey', //  ● mc-ui  step · claude opus · 20 min of 90 min · pid 4242
+    'red+bold grey', //                                          ■ STOP requested — the runner exits after the step it is in
+    'yellow bold+white grey', //                                 ◆ docx-editor  tmux mc-docx-editor · open 60 min
+    'grey', //                                                     runner up 120 min · 3 steps in 24 h — …
+    '',
+    'bold+cyan grey grey', //                                      QUEUE  1 runnable of 3            mc status <name>
+    'grey bold+white green', //                                      1  mc-ui  step
+    'dim+grey', //                                                   skipped 2 (live 1, done 1)
+    '',
+    'bold+cyan grey grey', //                                      DECISIONS  4 waiting              mc brief
+    'yellow grey white', //                                        ● org-update/…/network-review-1.md  1. A durable graph model?
+    'yellow grey white',
+    'yellow grey white',
+    'grey', //                                                     … 1 more
+    '',
+    'bold+cyan green grey red grey yellow grey', //                INTAKE  2026-08-29 (60 min old) · 1 new error (1 loud) · 1 proposal
+    'red bold+white', //                                           !  `abc` — 41x 500 — loud
+    '',
+    'bold+cyan grey grey', //                                      WORK  2 workareas                 mc status <name>
+    'grey grey white green grey green cyan', //                      1 · mc-ui  ready  Step 3 — the page  08-29 10:00Z step #440
+    'grey grey grey dim+grey grey', //                               2 · ui-fixes  —  no PLAN.md on main
+    'grey', //                                                       3 project(s) on main without a workarea
+    '',
+    'grey', //                                                     offline, PRs 2 h old — --fresh asks GitHub
+    'grey', //                                                     note: no queue.md
+  ];
+
+  it('paints every row of the page, and the same colour for the same meaning', () => {
+    assert.deepEqual(paintedPage(DATA).map(signature), SNAPSHOT);
+  });
+
+  it('adds every escape outside the width: a coloured row is as wide as its plain twin', () => {
+    for (const columns of [60, 80, 100, 120, 160]) {
+      const wide = Math.max(60, Math.min(columns, 160));
+      const plain = renderPageLines(DATA, { columns, version: '0.7.11', now: NOW });
+      const painted = paintedPage(DATA, { columns });
+      assert.equal(painted.length, plain.length, `${columns} columns: a different number of rows`);
+      for (const [index, line] of painted.entries()) {
+        assert.equal(strip(line), plain[index], `${columns} columns, row ${index}: the text moved`);
+        assert.equal(width(line), width(plain[index]), `${columns} columns, row ${index}: a different width`);
+        assert.ok(width(line) <= wide, `${columns} columns, row ${index}: over the margin`);
+        // No clip ever cut an escape in half: every ESC still starts a whole
+        // SGR sequence.
+        const halves = line.split(ESC).slice(1).filter((part) => !/^\[[0-9;]*m/u.test(part));
+        assert.deepEqual(halves, [], `${columns} columns, row ${index}: a cut escape`);
+      }
+    }
+  });
+
+  it('leaves the plain page exactly as it was: NO_COLOR and a pipe carry no escapes', () => {
+    const plain = renderPage(DATA, { columns: 120, version: '0.7.11', now: NOW });
+    assert.ok(!plain.includes(ESC), 'a page that is not a terminal carries no escapes');
+    // What `NO_COLOR=1 mc` prints is the plain render, decided before a single
+    // escape is chosen.
+    assert.equal(colourFor({ isTTY: true }, { NO_COLOR: '1' }), false);
+    assert.equal(renderPage(DATA, {
+      columns: 120, version: '0.7.11', now: NOW, colour: colourFor({ isTTY: true }, { NO_COLOR: '1' }),
+    }), plain);
+  });
+
+  it('--json carries no colour, terminal or not', async () => {
+    let out = '';
+    const code = await page(['--json'], {
+      collect: async () => DATA,
+      stdout: { isTTY: true, columns: 120, write: (s) => { out += s; } },
+      env: {},
+    });
+    assert.equal(code, 0);
+    assert.ok(!out.includes(ESC), '--json is bytes for a program, never for an eye');
+    assert.deepEqual(Object.keys(JSON.parse(out)), ['now', 'queue', 'decisions', 'intake', 'work', 'caches', 'notes']);
+  });
+
+  it('gives a step kind one colour wherever a kind is printed', () => {
+    for (const [kind, tone] of [['step', 'green'], ['reconcile', 'magenta'], ['triage', 'blue'], ['brief', 'cyan'], ['plan', 'cyan']]) {
+      const data = pageData({
+        now: nowSection({
+          runner: { pid: 4242, started: '2026-08-29T11:00:00Z' },
+          current: {
+            name: 'thing', kind, tool: 'claude', model: 'opus', budget_minutes: 90,
+            started: '2026-08-29T11:40:00Z', pid: 4242,
+          },
+          now: NOW,
+          alive: live,
+        }),
+        queue: {
+          depth: 1, runnable: 1, items: [], next: [{ name: 'thing', kind }], more: 0, skipped: { count: 0, reasons: {} },
+        },
+        work: workSection({
+          areas: [{ name: 'thing', mtime_ms: 1 }],
+          plans: [{ repo: 'memoro-cli', programme: 'mc', project: 'thing', status: 'ready', next: 'go on' }],
+          rows: [{ ts: '2026-08-29T10:00:00Z', name: 'thing', kind, pr: '-', note: '' }],
+        }),
+      });
+      const lines = paintedPage(data);
+      const now = signature(rowWith(lines, `● thing  `)).split(' ');
+      assert.equal(now[2], tone, `NOW says ${kind} in ${now[2]}`);
+      assert.equal(signature(rowWith(lines, `  1  thing`)).split(' ').at(-1), tone, `QUEUE says ${kind} in its colour`);
+      assert.equal(signature(rowWith(lines, 'go on')).split(' ').at(-1), tone, `WORK says ${kind} in its colour`);
+    }
+  });
+
+  it('gives a plan status one colour wherever a status is printed', () => {
+    const plans = [
+      { repo: 'memoro-cli', project: 'a-ready', status: 'ready', next: 'one' },
+      { repo: 'memoro-cli', project: 'b-blocked', status: 'blocked', next: 'two' },
+      { repo: 'memoro-cli', project: 'c-waiting', status: 'waiting-decision', next: 'three' },
+      { repo: 'memoro-cli', project: 'd-done', status: 'done', next: 'four' },
+    ];
+    const data = pageData({
+      work: workSection({ areas: plans.map((plan, n) => ({ name: plan.project, mtime_ms: 100 - n })).concat([{ name: 'e-none', mtime_ms: 0 }]), plans }),
+    });
+    const lines = paintedPage(data);
+    for (const [name, tone] of [['a-ready', 'green'], ['b-blocked', 'red'], ['c-waiting', 'yellow'], ['d-done', 'grey']]) {
+      assert.equal(signature(rowWith(lines, name)).split(' ')[3], tone, `${name} is ${tone}`);
+    }
+    // A workarea with no PLAN.md on main is grey through and through, and its
+    // missing status is the dimmest thing on the page.
+    assert.deepEqual(signature(rowWith(lines, 'e-none')).split(' '), ['grey', 'grey', 'grey', 'dim+grey', 'grey']);
+  });
+
+  it('turns the clock yellow near the budget and red past it', () => {
+    const stepAt = (spent) => pageData({
+      now: nowSection({
+        runner: { pid: 4242, started: '2026-08-29T10:00:00Z' },
+        current: {
+          name: 'thing', kind: 'step', tool: 'claude', model: 'opus', budget_minutes: 90,
+          started: new Date(NOW.getTime() - spent * 1000).toISOString(), pid: 4242,
+        },
+        now: NOW,
+        alive: live,
+      }),
+    });
+    const clock = (spent) => signature(rowWith(paintedPage(stepAt(spent)), '● thing')).split(' ')[6];
+    assert.equal(clock(600), 'white', 'ten minutes in, the clock is just a clock');
+    assert.equal(clock(0.74 * 5400), 'white');
+    assert.equal(clock(0.8 * 5400), 'yellow', 'past three quarters of the budget');
+    assert.equal(clock(5401), 'red+bold', 'over budget');
+    assert.ok(strip(rowWith(paintedPage(stepAt(5401)), '● thing')).includes('over budget'));
+  });
+
+  it('says a quota answer in yellow while it is recent, and in grey once it is history', () => {
+    const quota = (last) => {
+      const rows = [{
+        ts: last, name: 'thing', kind: 'step', exit: '1', seconds: '10', pr: '-', note: 'quota,timeout',
+      }];
+      const lines = paintedPage(pageData({ now: nowSection({ rows, now: NOW, alive: () => false }) }));
+      return signature(rowWith(lines, 'quota: 1 answer(s)'));
+    };
+    assert.equal(quota('2026-08-29T11:00:00Z'), 'yellow', 'an hour ago is why the runner is idle');
+    assert.equal(quota('2026-08-29T02:00:00Z'), 'grey', 'ten hours ago is history');
+  });
+
+  it('paints a foreground verb in the cyan the verbs are printed in', () => {
+    const data = pageData({
+      now: nowSection({
+        foreground: [{ verb: 'brief', area: 'brief', tool: 'claude', model: 'opus', pid: 99 }],
+        now: NOW,
+        alive: live,
+      }),
+    });
+    assert.deepEqual(signature(rowWith(paintedPage(data), '● mc brief')).split(' ').slice(0, 2), ['cyan', 'bold+cyan']);
+  });
+
+  it('says what --watch is doing in the header, and says nothing there without it', () => {
+    assert.ok(strip(paintedPage(DATA, { watch: 15 })[1]).includes('watch · 15 s'));
+    assert.ok(!strip(paintedPage(DATA)[1]).includes('watch'), 'bare mc says nothing about a watch');
   });
 });
