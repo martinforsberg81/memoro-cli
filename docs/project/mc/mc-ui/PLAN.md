@@ -18,7 +18,7 @@ Martin asked for, hardcodes its column widths, uses no colour, and takes
 adds the three things it cannot say today: **what is running right now**,
 **how deep the queue is and what is in it**, **how much waits in intake**.
 
-Decided 2026-08-29 (`~/mc/mc-utredning/decisions/mc-3.md`, in session):
+Decided 2026-08-29 ([`mc-3`](../rulings.md), in session):
 **two surfaces and no more.** `mc` is the page and, at a TTY, the menu
 `mc work` has today underneath it; `mc --watch [seconds]` is the same page
 redrawn, no prompt. Bare `mc work`, `mc list`, bare `mc status`, `mc status
@@ -92,7 +92,7 @@ redrawn, no prompt. Bare `mc work`, `mc list`, bare `mc status`, `mc status
 
 ## Steps
 
-- [x] **0. Decision** (2026-08-29) — `~/mc/mc-utredning/decisions/mc-3.md`:
+- [x] **0. Decision** (2026-08-29) — [`mc-3`](../rulings.md):
       A, sharpened to two surfaces; the removals are this project's.
 - [x] **1. What is running now** (2026-08-29) — `mc run` writes `~/mc/runner/runner.json`
       (pid, started) at start and `~/mc/runner/current.json` (name, kind,
@@ -356,11 +356,11 @@ assumed, are in `investigation-2026-08-29.md`.
 - `docs/technical/mc-ui.md` — **what this project leaves behind**: the page as built (step 6)
 - `docs/project/project_log.md` — the close-out row; the first one in this repository (step 6)
 - `docs/project/mc/mc-ui/investigation-2026-08-29.md` — inventory, mock-up, options
-- `~/mc/mc-utredning/decisions/mc-3.md` — the decision (A, two surfaces)
+- [`mc-3`](../rulings.md) — the decision (A, two surfaces)
 - `src/mc/page-collect.js`, `src/mc/page-render.js` — the five sections and how they look (step 3)
 - `src/mc/page-cache.js` — plans.json and prs.json, the two caches step 2 added
 - `src/mc/commands/home.js` — bare `mc`: the page, the menu and `--watch` (step 4)
 - `src/mc/foreground.js` — the foreground register NOW reads (step 5)
 - `src/mc/commands/work.js` `runVerb()`/`openArea()`/`startSomething()` — the verbs the menu reaches back into
 - `docs/project/mc/mc-status/PLAN.md` — the page this rebuilds; `mc-run` — the writer of `current.json`; `mc-helper` — the writer of intake
-- `~/mc/mc-utredning/utredning-2026-08-24.md` §12.5 — the five parts the page must show
+- [`utredning-2026-08-24.md`](../utredning-2026-08-24.md) §12.5 — the five parts the page must show

@@ -177,7 +177,7 @@ Rules the mock-up encodes:
 **Bare `mc`.** (a) *the page* — `mc` and `mc status` print the same thing, the
 sessions table survives only as `mc list`; (b) *a live dashboard by default*,
 `mc status` the static one-shot; (c) *a six-line summary*, `mc status` kept
-whole. Chosen: **(a)**, put to Martin as `~/mc/mc-utredning/decisions/mc-3.md`
+whole. Chosen: **(a)**, put to Martin as [`mc-3`](../rulings.md)
 because it changes the front door he types fifty times a day. (b) makes the
 commonest use — glance and go — the one that needs ctrl-c. (c) leaves two
 pages to keep in step, which is how `mc status` and the board drifted apart.
