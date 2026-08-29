@@ -15,7 +15,8 @@ LOCAL SESSIONS
   mc open <name> [--cwd <path>] [--tool codex|claude] [--replace]
                                     Associate another directory or open here
   mc resume <name>                 Alias for mc open
-  mc status <name> [--json]        Read durable session and runtime state
+  mc status --sessions <name> [--json]
+                                    Read durable session and runtime state
   mc rename <old> <new> [--json]   Rename metadata without moving workspaces
   mc cd <name> [--workspace <id>]  Print or enter an associated directory
   mc attach <name>                 Attach to the exact live local terminal
@@ -45,8 +46,15 @@ MAINTENANCE
                                     decisions waiting on you, every project
                                     per repo and programme, and workareas
                                     without a project. No model; reads only
-  mc status --json                 The same, as one object; --offline skips
-                                    fetch and gh
+  mc status --json                 The same, as one object. The page is
+                                    offline and instant; --fresh fetches and
+                                    asks GitHub, and without it the page
+                                    says how old its PR cache is
+  mc status <name>                 One project: its PLAN.md frontmatter and
+                                    step, the decisions that belong to it,
+                                    its last three runner steps and the open
+                                    PR on its branch. --json and --offline
+                                    as above
   mc status --sessions             The old board: every work area, the
                                     conversations in it and what they last
                                     said, the suite lease and the repository
@@ -183,6 +191,13 @@ MAINTENANCE
                                     titled "Plan: <name>"
   mc plan <name> --repo <r>        …in which repository (default memoro);
                                     --codex|--claude, --model <m> as usual
+  mc run                           The runner: one fresh headless session per
+                                    step of the next project, merged direct;
+                                    queue = ~/mc/queue.md then every ready
+                                    PLAN.md on origin/main. Touch
+                                    ~/mc/runner/STOP to exit after the step
+  mc run --once                    One step for the first runnable project
+  mc run --rounds <n> [--no-merge] [--idle-sleep <s>]
   mc worker <name> [task]          A project folder that carries the worker
                                     role, read from the roles mc ships: every
                                     conversation started in it gets the

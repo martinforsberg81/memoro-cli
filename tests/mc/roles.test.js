@@ -147,9 +147,16 @@ describe('what a conversation is told', () => {
     assert.equal(instructionsFor('claude-code', null, 'OVERLAY'), 'OVERLAY');
   });
 
-  it('codex keeps exactly today\'s delivery, overlay or no overlay', () => {
-    assert.equal(instructionsFor('codex', 'PROFILE', 'OVERLAY'), 'PROFILE');
-    assert.equal(instructionsFor('codex', null, 'OVERLAY'), null);
+  it('codex gets the same body, on its own instruction channel', () => {
+    assert.equal(instructionsFor('codex', 'PROFILE', 'OVERLAY'), 'PROFILE\n\n---\n\nOVERLAY');
+    assert.equal(instructionsFor('codex', null, 'OVERLAY'), 'OVERLAY');
+  });
+
+  it('is one body of text, whichever tool is asked', () => {
+    assert.equal(
+      instructionsFor('codex', 'PROFILE', 'OVERLAY'),
+      instructionsFor('claude-code', 'PROFILE', 'OVERLAY'),
+    );
   });
 
   it('nothing to say is nothing, for both', () => {

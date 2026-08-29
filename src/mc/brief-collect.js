@@ -127,64 +127,134 @@ export function scanDecisions(root) {
 
 /* --------------------------------------------------------------------- plans */
 
-/** `status` and `next` from a PLAN.md frontmatter; `next` may be a folded scalar. */
-export function parsePlanFrontmatter(text) {
+/**
+ * Every frontmatter field of a PLAN.md, in the order it is written, each
+ * value unquoted and folded onto one line. `mc status <name>` prints them
+ * all; the brief and the page take two of them through
+ * `parsePlanFrontmatter`.
+ */
+export function planFields(text) {
   const normalised = String(text || '').replace(/\r\n/gu, '\n');
   const match = /^---\n([\s\S]*?)\n---/u.exec(normalised);
-  if (!match) return { status: null, next: null };
-  const fields = {};
+  if (!match) return {};
+  const raws = {};
   let key = null;
   for (const raw of match[1].split('\n')) {
     const pair = /^([A-Za-z_-]+):\s*(.*)$/u.exec(raw);
     if (pair) {
       key = pair[1].toLowerCase();
-      fields[key] = pair[2].trim();
+      raws[key] = pair[2].trim();
     } else if (key && /^\s+\S/u.test(raw)) {
-      fields[key] = `${fields[key]} ${raw.trim()}`.trim();
+      raws[key] = `${raws[key]} ${raw.trim()}`.trim();
     }
   }
   const scalar = (value) => {
-    if (value == null) return null;
     let v = value.replace(/^[>|][-+]?\s*/u, '').trim();
     if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) v = v.slice(1, -1);
     return v.replace(/\\"/gu, '"') || null;
   };
-  return { status: scalar(fields.status), next: scalar(fields.next) };
+  return Object.fromEntries(Object.entries(raws).map(([k, v]) => [k, scalar(v)]));
+}
+
+/** `status` and `next` from a PLAN.md frontmatter; `next` may be a folded scalar. */
+export function parsePlanFrontmatter(text) {
+  const fields = planFields(text);
+  return { status: fields.status ?? null, next: fields.next ?? null };
 }
 
 /**
  * `docs/project/<programme>/<project>/PLAN.md` on a ref of one repository,
- * read without a checkout. `git` is injectable so the test can stay off git.
+ * read without a checkout: one `ls-tree` for the names and one
+ * `cat-file --batch` for every plan's text. `git` and `batch` are both
+ * injectable so a caller with its own git — the runner — and the tests can
+ * stay off the real one; `showBatch` turns such a git into a batch reader.
  */
-export function listPlans(repo, { ref = 'origin/main', git = runGit } = {}) {
+export function listPlans(repo, { ref = 'origin/main', git = runGit, batch = catFileBatch } = {}) {
   const tree = git(repo.path, ['ls-tree', '-r', '--name-only', ref, '--', 'docs/project']);
   if (tree == null) return [];
-  const plans = [];
-  for (const path of tree.split('\n')) {
+  const paths = tree.split('\n').filter((path) => {
     const parts = path.split('/');
-    if (parts.length !== 5 || parts[4] !== 'PLAN.md') continue;
-    const text = git(repo.path, ['show', `${ref}:${path}`]) || '';
-    plans.push({ repo: repo.name, programme: parts[2], project: parts[3], path, ...parsePlanFrontmatter(text) });
+    return parts.length === 5 && parts[4] === 'PLAN.md';
+  });
+  const texts = batch(repo.path, paths.map((path) => `${ref}:${path}`));
+  return paths.map((path) => {
+    const parts = path.split('/');
+    const text = texts.get(`${ref}:${path}`) || '';
+    return { repo: repo.name, programme: parts[2], project: parts[3], path, ...parsePlanFrontmatter(text) };
+  });
+}
+
+/**
+ * `git cat-file --batch` output, split back into one text per input line.
+ *
+ * The stream is `<oid> <type> <size>\n<size bytes>\n` per object, or
+ * `<input> missing\n` for a path that is not on the ref — no content follows
+ * a miss, so the walk simply does not advance. `size` counts bytes, not
+ * characters, which is why this works on a Buffer: a plan full of em-dashes
+ * would slice apart under a string index.
+ */
+export function parseCatFileBatch(stdout, refs) {
+  const out = new Map();
+  const buf = Buffer.isBuffer(stdout) ? stdout : Buffer.from(String(stdout || ''));
+  let at = 0;
+  for (const ref of refs) {
+    const end = buf.indexOf(10, at);
+    if (end < 0) break;
+    const [, , size] = buf.toString('utf8', at, end).split(' ');
+    at = end + 1;
+    const bytes = Number(size);
+    if (!Number.isFinite(bytes)) continue; // "<ref> missing" — nothing follows it
+    out.set(ref, buf.toString('utf8', at, at + bytes));
+    at += bytes + 1;
   }
-  return plans;
+  return out;
+}
+
+/**
+ * A batch reader made from an injected `git`: one `show` per ref, which is
+ * what the caller was doing before. The runner keeps it — its `git` is a
+ * dependency its own tests replace — and it is the shape a fixture passes.
+ */
+export function showBatch(git) {
+  return (cwd, refs) => new Map(refs.map((ref) => [ref, git(cwd, ['show', ref]) || '']));
+}
+
+/**
+ * Every named object of one repository in one process. The loop this
+ * replaced spent a `git show` per plan — 1.22 s for memoro's 38 on
+ * 2026-08-29, against 54 ms for the whole listing this way.
+ */
+export function catFileBatch(cwd, refs) {
+  if (!refs.length) return new Map();
+  const r = spawnSync('git', ['-C', cwd, 'cat-file', '--batch'], { input: `${refs.join('\n')}\n`, maxBuffer: 64 << 20 });
+  if (r.status !== 0) return new Map();
+  return parseCatFileBatch(r.stdout, refs);
 }
 
 /* -------------------------------------------------------------------- runner */
 
-/** runs.tsv rows with `ts >= since`, as objects keyed by the header. */
-export function runsSince(tsv, since) {
+/** Every runs.tsv row, in file order, as objects keyed by the header. */
+export function parseRuns(tsv) {
   const lines = String(tsv || '').split('\n').filter((line) => line.trim());
   if (!lines.length) return [];
   const header = lines[0].split('\t');
-  const rows = [];
-  for (const line of lines.slice(1)) {
+  return lines.slice(1).map((line) => {
     const cells = line.split('\t');
-    const row = Object.fromEntries(header.map((key, i) => [key, cells[i] ?? '']));
+    return Object.fromEntries(header.map((key, i) => [key, cells[i] ?? '']));
+  });
+}
+
+/** runs.tsv rows with `ts >= since`, as objects keyed by the header. */
+export function runsSince(tsv, since) {
+  return parseRuns(tsv).filter((row) => {
     const ts = Date.parse(row.ts);
-    if (Number.isNaN(ts) || ts < since.getTime()) continue;
-    rows.push(row);
-  }
-  return rows;
+    return !Number.isNaN(ts) && ts >= since.getTime();
+  });
+}
+
+/** The last `limit` rows for one project, oldest first. */
+export function runsFor(tsv, name, limit = 3) {
+  return parseRuns(tsv).filter((row) => row.name === name).slice(-limit);
 }
 
 export function summariseRuns(rows) {

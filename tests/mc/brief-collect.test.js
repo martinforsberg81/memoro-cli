@@ -12,8 +12,8 @@ import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
 import {
-  collectBrief, lastBriefTime, listPlans, parseDecision, parsePlanFrontmatter, queueNames,
-  runsSince, scanDecisions, summariseRuns,
+  collectBrief, lastBriefTime, listPlans, parseCatFileBatch, parseDecision, parsePlanFrontmatter, planFields,
+  queueNames, runsFor, runsSince, scanDecisions, showBatch, summariseRuns,
 } from '../../src/mc/brief-collect.js';
 
 const DECISION = (answered) => `---
@@ -117,15 +117,38 @@ describe('PLAN.md frontmatter', () => {
     assert.deepEqual(parsePlanFrontmatter('no frontmatter'), { status: null, next: null });
   });
 
-  it('lists docs/project/<programme>/<project>/PLAN.md through an injected git', () => {
+  it('keeps every field for the page about one project', () => {
+    assert.deepEqual(planFields('---\nstatus: ready\nnext: "Step 1 — do it"\nbudget: 150k\nneeds: []\n---\n# x'),
+      { status: 'ready', next: 'Step 1 — do it', budget: '150k', needs: '[]' });
+    assert.deepEqual(planFields('no frontmatter'), {});
+  });
+
+  it('lists docs/project/<programme>/<project>/PLAN.md with one batch read per repository', () => {
     const git = (cwd, args) => {
       if (args[0] === 'ls-tree') return 'docs/project/README.md\ndocs/project/mc/mc-brief/PLAN.md\ndocs/project/mc/mc.md\ndocs/project/mc/mc-plan/notes/PLAN.md';
       if (args[0] === 'show') return `---\nstatus: ready\nnext: "Step 1 — ${args[1]}"\n---\n`;
       return null;
     };
-    const plans = listPlans({ name: 'memoro-cli', path: '/nowhere' }, { git });
+    const batches = [];
+    const batch = (cwd, refs) => { batches.push(refs); return showBatch(git)(cwd, refs); };
+    const plans = listPlans({ name: 'memoro-cli', path: '/nowhere' }, { git, batch });
     assert.deepEqual(plans.map((p) => [p.programme, p.project, p.status]), [['mc', 'mc-brief', 'ready']]);
     assert.match(plans[0].next, /origin\/main:docs\/project\/mc\/mc-brief\/PLAN\.md/u);
+    assert.deepEqual(batches, [['origin/main:docs/project/mc/mc-brief/PLAN.md']], 'one call, every plan in it');
+  });
+
+  it('splits a cat-file --batch stream by byte size, and skips what is missing', () => {
+    const plan = '---\nstatus: ready\nnext: "Steg 1 — mät i sekunder"\n---\n';
+    const bytes = Buffer.byteLength(plan);
+    const stdout = Buffer.concat([
+      Buffer.from(`abc123 blob ${bytes}\n`), Buffer.from(plan), Buffer.from('\n'),
+      Buffer.from('origin/main:gone.md missing\n'),
+      Buffer.from('def456 blob 3\nhi!\n'),
+    ]);
+    const texts = parseCatFileBatch(stdout, ['a', 'origin/main:gone.md', 'c']);
+    assert.equal(texts.get('a'), plan, 'a multi-byte plan survives the split');
+    assert.equal(texts.has('origin/main:gone.md'), false);
+    assert.equal(texts.get('c'), 'hi!', 'the walk stayed in step after the miss');
   });
 });
 
@@ -142,6 +165,13 @@ describe('runner log', () => {
     assert.equal(s.timeout, 1);
     assert.equal(s.failed, 0);
     assert.equal(s.cacheRead, 3683298 + 12463655);
+  });
+
+  it('keeps the last rows of one project, whatever the window', () => {
+    const tsv = readFileSync(join(workRoot(), 'runner', 'log', 'runs.tsv'), 'utf8');
+    assert.deepEqual(runsFor(tsv, 'docx', 3).map((r) => r.pr), ['10958']);
+    assert.deepEqual(runsFor(tsv, 'old', 3).map((r) => r.ts), ['2026-08-24T10:00:00Z'], 'older than the 24 h window');
+    assert.deepEqual(runsFor(tsv, 'never-ran', 3), []);
   });
 
   it('reads the queue without comments and blanks', () => {

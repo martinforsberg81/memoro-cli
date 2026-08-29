@@ -3,7 +3,9 @@
  * and the sessions already write. No model, nothing written, nothing
  * started.
  *
- * Four blocks: RUNNER (alive? queue and the next project with its kind;
+ * Five blocks: NOW (the runner's pid, the step in flight with its tool,
+ * model and elapsed against budget, a pending STOP, quota answers today),
+ * RUNNER (alive? queue and the next project with its kind;
  * the last 24 h by kind and outcome; an estimated list-price cost),
  * DECISIONS (files without a `**Beslut:**` line), PROJECTS per repository
  * (programme → project: status, next, last step, open PR, workarea),
@@ -12,15 +14,22 @@
  * The readers are shared with `mc brief --collect` (brief-collect.js); the
  * builders here take the read data and are tested on fixtures, with no git
  * and no gh.
+ *
+ * Offline is what the page does: plans come from `~/mc/runner/plans.json`
+ * keyed by the `origin/main` sha and open PRs from `~/mc/runner/prs.json`
+ * with their age said out loud (page-cache.js). `--fresh` is the opt-in that
+ * fetches, asks GitHub and refills both.
  */
 import { execFile, spawnSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import {
-  DAY_MS, defaultRepos, listPlans, queueNames, runsSince, scanDecisions, summariseRuns,
+  DAY_MS, defaultRepos, queueNames, runsSince, scanDecisions, summariseRuns,
 } from './brief-collect.js';
+import { ageWords, loadPlans, loadPrs, savePrs } from './page-cache.js';
 import { workRoot } from './paths.js';
+import { chooseKind } from './run-plan.js';
 import { PRICES_DATED, estimateCost } from './prices.js';
 
 /** What the runner ran everything on; runs.tsv carries no model column yet. */
@@ -29,21 +38,25 @@ export const RUNNER_MODEL = 'opus';
 /* ------------------------------------------------------------------ runner */
 
 /**
- * What the runner would do with a queued name, by the same rules as
- * `~/mc/bin/runner.sh`: no plan → triage; ready → step; waiting-decision →
- * step only once a decision file for the project or its programme carries
- * an answer; anything else is skipped.
+ * What the runner would do with a queued name — asked of the runner itself.
+ *
+ * The rule lives in one place, `chooseKind` in run-plan.js, and run.js calls
+ * the same function before it starts a step. This wrapper only supplies what
+ * the runner reads from the worktree (an answered decision file) from what
+ * the page has already scanned, and flattens the answer to one string. It
+ * cannot see `reconcile`: that is a merge left in progress inside a
+ * workarea, and the page does not open worktrees.
  */
 export function kindFor(name, { plans, decisions }) {
-  const plan = plans.find((p) => p.project === name);
-  if (!plan) return 'triage';
-  if (plan.status === 'ready') return 'step';
-  if (plan.status === 'waiting-decision') {
-    const answered = decisions.some((d) => d.answered
-      && (d.file.includes(`/decisions/${plan.programme}-`) || d.file.includes(`/decisions/${name}-`) || d.area === name));
-    return answered ? 'step' : 'skip:waiting-decision';
-  }
-  return `skip:${plan.status || 'no-status'}`;
+  const plan = plans.find((p) => p.project === name) || null;
+  const answered = plan
+    ? decisions.filter((d) => d.answered
+      && (d.file.includes(`/decisions/${plan.programme}-`) || d.file.includes(`/decisions/${name}-`) || d.area === name))
+    : [];
+  const choice = chooseKind({ plan, answered });
+  if (choice.kind) return choice.kind;
+  const status = choice.skip.startsWith('status ') ? choice.skip.slice('status '.length) : 'waiting-decision';
+  return `skip:${status === 'missing' ? 'no-status' : status}`;
 }
 
 export function runnerBlock({ queue, plans, decisions, rows, alive, live = [] }) {
@@ -58,6 +71,67 @@ export function runnerBlock({ queue, plans, decisions, rows, alive, live = [] })
   }), { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
   const cost = estimateCost(tokens, RUNNER_MODEL);
   return { alive, queue: items, next, summary, tokens, cost, model: RUNNER_MODEL, prices_dated: PRICES_DATED };
+}
+
+/* --------------------------------------------------------------------- now */
+
+/**
+ * Is this pid a live process? `kill(pid, 0)` sends nothing and only asks;
+ * EPERM means it exists and belongs to somebody else, which is still alive.
+ * This is the whole liveness test — no tmux session name, no pgrep pattern.
+ * Both of those lied on 2026-08-29: a dead pane still answered
+ * `tmux has-session -t runner`, and `pgrep -f 'runner.sh|mc run'` matched a
+ * step session whose prompt happened to contain the words "mc run".
+ */
+export function pidAlive(pid) {
+  const n = Number(pid);
+  if (!Number.isInteger(n) || n <= 0) return false;
+  try { process.kill(n, 0); return true; } catch (error) { return error.code === 'EPERM'; }
+}
+
+/**
+ * NOW — what is happening this second, from the two files `mc run` keeps
+ * and the STOP file anyone can touch.
+ *
+ * A file whose pid is dead is a crashed runner, not a running one: it is
+ * reported as stale and counts as nothing running. `runs.tsv` cannot answer
+ * any of this — its row is appended after the step is over.
+ */
+export function nowBlock({ runner = null, current = null, stop = false, rows = [], now = new Date(), alive = pidAlive }) {
+  const stale = [];
+  const runnerLive = runner ? alive(runner.pid) : false;
+  if (runner && !runnerLive) stale.push(`runner.json (pid ${runner.pid} is gone)`);
+  const stepLive = current ? alive(current.pid) : false;
+  if (current && !stepLive) stale.push(`current.json (pid ${current.pid} is gone)`);
+
+  const since = (iso) => {
+    const t = Date.parse(iso);
+    return Number.isNaN(t) ? null : Math.max(0, Math.round((now.getTime() - t) / 1000));
+  };
+  const budget = Number(current?.budget_minutes);
+  const budgetSeconds = Number.isFinite(budget) && budget > 0 ? budget * 60 : null;
+  const elapsed = current ? since(current.started) : null;
+  const step = stepLive ? {
+    name: current.name || null,
+    kind: current.kind || null,
+    tool: current.tool || null,
+    model: current.model || null,
+    worktree: current.worktree || null,
+    pid: current.pid ?? null,
+    started: current.started || null,
+    elapsed_seconds: elapsed,
+    budget_seconds: budgetSeconds,
+    over_budget: elapsed != null && budgetSeconds != null && elapsed > budgetSeconds,
+  } : null;
+
+  const quotaRows = rows.filter((row) => String(row.note || '').includes('quota'));
+  return {
+    runner: runner ? { pid: runner.pid ?? null, started: runner.started || null, alive: runnerLive, up_seconds: since(runner.started) } : null,
+    step,
+    stop,
+    stale,
+    quota: { count: quotaRows.length, last: quotaRows.at(-1)?.ts || null },
+  };
 }
 
 /* --------------------------------------------------------------- decisions */
@@ -113,9 +187,28 @@ const clip = (text, max) => {
 };
 const when = (ts) => String(ts || '').replace(/^\d{4}-/u, '').replace(/:\d{2}Z$/u, 'Z').replace('T', ' ');
 
-export function renderStatus({ runner, decisions, projects, orphans, notes = [] }) {
+const duration = (seconds) => {
+  if (seconds == null) return '?';
+  if (seconds < 90) return `${seconds}s`;
+  const minutes = Math.round(seconds / 60);
+  return minutes <= 180 ? `${minutes} min` : `${(minutes / 60).toFixed(1)} h`;
+};
+
+export function renderStatus({ now = null, runner, decisions, projects, orphans, notes = [] }) {
   const out = [];
   const s = runner.summary;
+  if (now) {
+    out.push('NOW');
+    out.push(`  runner: ${now.runner?.alive ? `pid ${now.runner.pid}, up ${duration(now.runner.up_seconds)}` : 'not running'}`);
+    if (now.step) {
+      const budget = now.step.budget_seconds == null ? '' : ` of ${duration(now.step.budget_seconds)}`;
+      out.push(`  step: ${now.step.name} — ${now.step.kind} (${now.step.tool} ${now.step.model}) ${duration(now.step.elapsed_seconds)}${budget}${now.step.over_budget ? ' — over budget' : ''}`);
+    } else out.push('  step: none in flight');
+    if (now.stop) out.push('  STOP requested — the runner exits after the step it is in');
+    if (now.quota.count) out.push(`  quota: ${now.quota.count} answer(s) in the last 24 h (last ${when(now.quota.last)})`);
+    for (const line of now.stale) out.push(`  stale: ${line}`);
+    out.push('');
+  }
   out.push('RUNNER');
   out.push(`  ${runner.alive ? `running (${runner.alive})` : 'not running'}`);
   const next = runner.next ? `${runner.next.name} (${runner.next.kind})` : 'nothing runnable';
@@ -171,11 +264,8 @@ function execAsync(cmd, args, opts = {}) {
   });
 }
 
-function runnerAlive(run = (cmd, args) => spawnSync(cmd, args, { encoding: 'utf8' })) {
-  if (run('tmux', ['has-session', '-t', 'runner']).status === 0) return 'tmux runner';
-  const p = run('pgrep', ['-f', 'runner.sh|mc run']);
-  if (p.status === 0 && p.stdout.trim()) return `pid ${p.stdout.trim().split('\n')[0]}`;
-  return null;
+function readJson(path) {
+  try { return JSON.parse(readFileSync(path, 'utf8')); } catch { return null; }
 }
 
 function liveAreas(run = (cmd, args) => spawnSync(cmd, args, { encoding: 'utf8' })) {
@@ -201,29 +291,39 @@ export async function collectStatus({
   env = process.env,
   now = new Date(),
   repos = defaultRepos(env),
-  offline = false,
+  fresh = false,
   git = runGit,
   run = (cmd, args) => spawnSync(cmd, args, { encoding: 'utf8' }),
   exec = execAsync,
+  alive = pidAlive,
+  cache = { loadPlans, loadPrs, savePrs },
 } = {}) {
   const root = workRoot(env);
   const notes = [];
   const present = repos.filter((repo) => existsSync(join(repo.path, '.git')));
-  const openPrs = [];
-  if (!offline) {
+  let prs = { prs: [], fetched: null, age_seconds: null };
+  if (fresh) {
     // Fetch and gh per repository, side by side: serial they were the
     // whole 5 s budget on their own.
+    const asked = [];
     await Promise.all(present.flatMap((repo) => [
       exec('git', ['-C', repo.path, 'fetch', '-q', 'origin']).then((r) => { if (!r.ok) notes.push(`${repo.name}: git fetch failed — plans may be stale`); }),
       exec('gh', ['pr', 'list', '--state', 'open', '--limit', '100', '--json', 'number,headRefName'], { cwd: repo.path }).then((r) => {
         try {
-          if (r.ok) openPrs.push(...JSON.parse(r.stdout).map((pr) => ({ repo: repo.name, ...pr })));
+          if (r.ok) asked.push(...JSON.parse(r.stdout).map((pr) => ({ repo: repo.name, ...pr })));
           else notes.push(`${repo.name}: gh pr list failed`);
         } catch { notes.push(`${repo.name}: gh pr list unreadable`); }
       }),
     ]));
+    prs = cache.savePrs({ root, prs: asked, now });
+  } else {
+    prs = cache.loadPrs({ root, now });
+    notes.push(prs.fetched
+      ? `PRs from cache, ${ageWords(prs.age_seconds)} old — --fresh asks GitHub`
+      : 'no PR cache yet — --fresh asks GitHub and fills it');
   }
-  const plans = present.flatMap((repo) => listPlans(repo, { git }));
+  const openPrs = prs.prs;
+  const { plans, sources } = cache.loadPlans({ root, repos: present, now, git });
   const decisions = scanDecisions(root);
   let tsv = '';
   try { tsv = readFileSync(join(root, 'runner', 'log', 'runs.tsv'), 'utf8'); } catch { notes.push('no runner/log/runs.tsv'); }
@@ -231,12 +331,26 @@ export async function collectStatus({
   let queue = [];
   try { queue = queueNames(readFileSync(join(root, 'queue.md'), 'utf8')); } catch { notes.push('no queue.md'); }
   const workareas = areasWithCheckout(root);
-  const runner = runnerBlock({ queue, plans, decisions, rows, alive: runnerAlive(run), live: liveAreas(run) });
+  const nowState = nowBlock({
+    runner: readJson(join(root, 'runner', 'runner.json')),
+    current: readJson(join(root, 'runner', 'current.json')),
+    stop: existsSync(join(root, 'runner', 'STOP')),
+    rows,
+    now,
+    alive,
+  });
+  const runner = runnerBlock({
+    queue, plans, decisions, rows,
+    alive: nowState.runner?.alive ? `pid ${nowState.runner.pid}` : null,
+    live: liveAreas(run),
+  });
   return {
+    now: nowState,
     runner,
     decisions: decisionsBlock(decisions),
     projects: projectsBlock({ plans, rows, openPrs, workareas }),
     orphans: orphanWorkareas({ workareas, plans }),
+    caches: { fresh, plans: sources, prs: { fetched: prs.fetched, age_seconds: prs.age_seconds, count: openPrs.length } },
     notes,
   };
 }

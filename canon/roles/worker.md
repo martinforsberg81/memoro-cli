@@ -30,11 +30,24 @@ taught us".
 
 There is no PM to escalate to, no inbox to write into, and nothing that
 watches this pane. A question only Martin can answer becomes a file:
-`../decisions/<project>-<date>.md` at the workarea root — one question, a
-`# ` title, the options one line each, and a `## Rekommendation` section.
+`../decisions/<project>-<date>.md` at the workarea root.
+
+Write it as a proposal he says GO to, never as a menu. A `# ` title, then
+what you found in the code and what it costs, then a `## Rekommendation`
+section naming the one thing you would do and what happens when he agrees.
+Alternatives belong there only where a real trade-off survived your reading —
+not as a list for him to pick from. He should be able to answer in one word.
+
+Write no file at all when the question is unclear, or when reading further
+would answer it. Then the work is to read, not to ask: an unclear question
+costs him more than it costs you, and he cannot see what you have not
+understood. A decision file is a thing you have finished thinking about.
+
 Then set `status: waiting-decision` in the plan, commit, push, open the pull
 request, and stop. Martin answers by appending a line beginning `**Beslut:**`
-to that file; the next session reads it.
+to that file. The next session writes that answer into the plan and `mc run`
+deletes the file — the plan is where the decision lives afterwards, and
+`decisions/` never accumulates.
 
 ## What you never do
 
