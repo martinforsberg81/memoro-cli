@@ -1,6 +1,6 @@
 ---
-status: ready
-next: "Step 3 — close-out: `docs/technical/mc-plan.md` describing the verb, the role and both instruction channels, and a `project_log.md` row — done when the document exists and the log names `mc plan`."
+status: done
+next: "Nothing — all three steps are done and the close-out is written. `mc run` archives this directory in the round it reads it."
 budget: 150k
 needs: []
 ---
@@ -60,7 +60,8 @@ its result is the file, not the conversation.
       for both tools; `-c instructions=` carries it; no AGENTS.md fallback
       needed) — verify how the overlay reaches codex through the adapter;
       document the result under "What the code taught us".
-- [ ] **3. Close-out** — `docs/technical/mc-plan.md`, `project_log.md` row.
+- [x] **3. Close-out** (2026-08-29: [`docs/technical/mc-plan.md`](../../../technical/mc-plan.md),
+      one `project_log.md` row) — `docs/technical/mc-plan.md`, `project_log.md` row.
 
 ## What the code taught us
 
@@ -84,9 +85,15 @@ its result is the file, not the conversation.
   `missing-bin` before any of this is reached. The assembly is covered by a
   test that builds the argv without a binary; the launch itself waits for a
   machine that has codex.
+- The close-out found one claim that had gone stale under this project's own
+  feet. The docs merge used to be said in three places — the role, `mc plan`'s
+  first prompt, and the runner's `triage` prompt — and `triage` has since been
+  deleted (`run-plan.js`, `chooseKind`: the runner runs plans and does not
+  write them). Two places say it now, and the note says two.
 
 ## Documents
 
 - `~/mc/bin/runner.sh` — `triage_prompt` is the role's first draft
 - `docs/project/mc/mc-brief/PLAN.md` — sibling verb, same launcher
 - `~/memoro/docs/project/README.md` — the plan-directory convention
+- [`docs/technical/mc-plan.md`](../../../technical/mc-plan.md) — the close-out note
