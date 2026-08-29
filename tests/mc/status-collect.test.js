@@ -34,14 +34,12 @@ const TSV = [
 const ROWS = runsSince(TSV, new Date('2026-08-25T00:00:00Z'));
 
 describe('RUNNER', () => {
-  it('decides each queued name the way runner.sh does', () => {
-    const ctx = { plans: PLANS, decisions: DECISIONS };
-    assert.equal(kindFor('brand-new', ctx), 'triage');
+  it('decides each queued name the way the runner does: only ready runs', () => {
+    const ctx = { plans: PLANS };
+    assert.equal(kindFor('brand-new', ctx), 'skip:no-plan', 'the runner does not write plans');
     assert.equal(kindFor('avatar-image-animation', ctx), 'step');
-    assert.equal(kindFor('avatar-self-serve', ctx), 'step', 'waiting-decision with an answered programme file');
+    assert.equal(kindFor('avatar-self-serve', ctx), 'skip:waiting-decision', 'an answered decision file does not start it');
     assert.equal(kindFor('docx-editor', ctx), 'skip:blocked');
-    const unanswered = { plans: [{ ...PLANS[0], programme: 'docs-navigation', project: 'docs-structure' }], decisions: DECISIONS };
-    assert.equal(kindFor('docs-structure', unanswered), 'skip:waiting-decision');
   });
 
   it('names the next runnable project, skips live areas, sums and prices the day', () => {

@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  assembleQueue, chooseKind, headlessArgs, isAnswered, quotaSeen, readSessionOutput, sessionSettings, stepPrompt, tsvHeader, tsvRow,
+  assembleQueue, chooseKind, headlessArgs, quotaSeen, readSessionOutput, sessionSettings, stepPrompt, tsvHeader, tsvRow,
 } from '../../src/mc/run-plan.js';
 import { profileArgs } from '../../src/mc/portrait.js';
 import { parseRunArgs } from '../../src/mc/commands/run.js';
@@ -13,33 +13,48 @@ test('assembleQueue: queue.md order first, then plans on main it did not name, s
   assert.deepEqual(assembleQueue(queue, plans), ['b', 'a', 'm', 'z']);
 });
 
-test('chooseKind: reconcile beats everything; no plan is triage; ready is step', () => {
+test('chooseKind: reconcile beats everything; ready is the only thing that runs', () => {
   assert.equal(chooseKind({ plan: null, conflicts: ['x.md'] }).kind, 'reconcile');
-  assert.equal(chooseKind({ plan: null }).kind, 'triage');
   assert.equal(chooseKind({ plan: { status: 'ready' } }).kind, 'step');
-});
-
-test('chooseKind: waiting-decision runs only with an answered decision file', () => {
-  assert.deepEqual(chooseKind({ plan: { status: 'waiting-decision' } }), { kind: null, skip: 'waiting-decision (no Beslut line yet)' });
-  const c = chooseKind({ plan: { status: 'waiting-decision' }, answered: ['/d/a-1.md'] });
-  assert.equal(c.kind, 'step');
-  assert.deepEqual(c.answered, ['/d/a-1.md']);
   assert.equal(chooseKind({ plan: { status: 'done' } }).skip, 'status done');
+  assert.equal(chooseKind({ plan: { status: 'blocked' } }).skip, 'status blocked');
   assert.equal(chooseKind({ plan: { status: null } }).skip, 'status missing');
 });
 
-test('isAnswered: a line starting with **Beslut', () => {
-  assert.equal(isAnswered('# q\n\n**Beslut:** A\n'), true);
-  assert.equal(isAnswered('# q\n\nBeslut: A\n'), false);
-  assert.equal(isAnswered(''), false);
+/**
+ * The runner runs plans; it does not write them (Martin, 2026-08-29). There
+ * used to be a `triage` kind here that started a headless session to invent
+ * the plan and land it on main by itself.
+ */
+test('chooseKind: no plan is a skip that names `mc plan`, never a triage session', () => {
+  const c = chooseKind({ plan: null });
+  assert.equal(c.kind, null);
+  assert.match(c.skip, /no plan — take it through `mc plan <name>`/u);
 });
 
-test('stepPrompt carries the plan text and the answered decisions', () => {
-  const p = stepPrompt({ name: 'x', repo: 'memoro', planPath: 'docs/project/p/x/PLAN.md', planText: '---\nstatus: ready\n---\n# X', answered: ['/mc/x/decisions/p-1.md'], now: new Date('2026-08-29T00:00:00Z') });
+/**
+ * And the runner has nothing to do with decisions: waiting-decision is not
+ * ready, and no answered file anywhere changes that. The plan comes back by
+ * being set `ready`.
+ */
+test('chooseKind: waiting-decision is simply not ready', () => {
+  assert.deepEqual(chooseKind({ plan: { status: 'waiting-decision' } }), { kind: null, skip: 'status waiting-decision' });
+  assert.deepEqual(
+    chooseKind({ plan: { status: 'waiting-decision' }, answered: ['/d/a-1.md'] }),
+    { kind: null, skip: 'status waiting-decision' },
+    'an answered decision file is not a parameter any more',
+  );
+});
+
+
+test('stepPrompt carries the plan text, and nothing about decisions', () => {
+  const p = stepPrompt({ name: 'x', repo: 'memoro', planPath: 'docs/project/p/x/PLAN.md', planText: '---\nstatus: ready\n---\n# X', now: new Date('2026-08-29T00:00:00Z') });
   assert.match(p, /`x` workarea of memoro/u);
-  assert.match(p, /decisions\/x-2026-08-29\.md/u);
-  assert.match(p, /Decisions answered by Martin[\s\S]*\/mc\/x\/decisions\/p-1\.md/u);
+  assert.match(p, /decisions\/x-2026-08-29\.md/u, 'it still says where a question it cannot answer goes');
   assert.match(p, /----- PLAN\.md -----\n---\nstatus: ready/u);
+  // The runner only ever starts a `ready` plan, so a step is never handed an
+  // answered decision to apply (Martin, 2026-08-29).
+  assert.doesNotMatch(p, /Decisions answered by Martin/u);
 });
 
 test('headlessArgs: claude is -p with json output; codex is exec --json', () => {

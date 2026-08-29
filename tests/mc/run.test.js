@@ -136,7 +136,7 @@ test('one step: worktree made from origin/main, session through the adapter, PR 
   assert.match(f.files['/w/runner/log/runner.log'], /alpha: merged #77\n.*alpha: step done rc=0 0s pr=77 turns=4 note=success,merged/u);
 });
 
-test('skips: live tmux session, dirty worktree, waiting-decision without an answer, done', async () => {
+test('skips: live tmux session, dirty worktree, waiting-decision, done', async () => {
   const waiting = '---\nstatus: waiting-decision\n---\n';
   const f = fixture({
     plans: { memoro: { live: ready, dirty: ready, wait: waiting, over: '---\nstatus: done\n---\n' } },
@@ -149,26 +149,30 @@ test('skips: live tmux session, dirty worktree, waiting-decision without an answ
   const log = f.files['/w/runner/log/runner.log'];
   assert.match(log, /live: live tmux session, skip/u);
   assert.match(log, /dirty: dirty worktree, skip/u);
-  assert.match(log, /wait: waiting-decision \(no Beslut line yet\), skip/u);
+  assert.match(log, /wait: status waiting-decision, skip/u);
   assert.match(log, /over: status done, skip/u);
 });
 
-test('waiting-decision runs as a step once a decision file for the programme carries **Beslut:**', async () => {
+/**
+ * The runner has nothing to do with decisions (Martin, 2026-08-29). It used
+ * to grep every decisions directory under the work root for a `Beslut` line
+ * naming this project or its programme, and start the project when it found
+ * one. A plan comes back by being set `ready`, and by nothing else.
+ */
+test('an answered decision file does not start a waiting-decision project', async () => {
   const waiting = '---\nstatus: waiting-decision\n---\n# W\n';
   const f = fixture({
     areas: {
-      other: { repo: 'memoro', decisions: { 'prog-1.md': '# q\n\n**Beslut:** A\n', 'prog-2.md': '# q2\n' } },
+      other: { repo: 'memoro', decisions: { 'prog-1.md': '# q\n\n**Beslut:** A\n' } },
       wait: { repo: 'memoro', programme: 'prog', plan: waiting },
     },
     plans: { memoro: { wait: waiting } },
     session: okSession(),
   });
-  const runner = createRunner({ deps: f.deps });
-  await runner.round();
-  assert.equal(f.calls.sessions.length, 1);
-  const prompt = f.calls.sessions[0].args[1];
-  assert.match(prompt, /Decisions answered by Martin[\s\S]*\/w\/other\/decisions\/prog-1\.md/u);
-  assert.doesNotMatch(prompt, /prog-2\.md/u);
+  await createRunner({ deps: f.deps }).round();
+  assert.equal(f.calls.sessions.length, 0, 'nothing starts');
+  assert.match(f.files['/w/runner/log/runner.log'], /wait: status waiting-decision, skip/u);
+  assert.equal(f.files['/w/other/decisions/prog-1.md'], '# q\n\n**Beslut:** A\n', 'and the runner does not touch the file either');
 });
 
 test('a conflicting merge of origin/main becomes a reconcile step with the files named', async () => {
@@ -181,12 +185,18 @@ test('a conflicting merge of origin/main becomes a reconcile step with the files
   assert.match(f.files['/w/runner/log/runs.tsv'], /\tc\treconcile\t/u);
 });
 
-test('no plan in the worktree is a triage step', async () => {
+/**
+ * The runner runs plans; it does not write them. There used to be a `triage`
+ * kind here that started a headless session, invented the PLAN.md and landed
+ * it on main by itself (Martin, 2026-08-29: "JAG TAR FRAM PLANER I EN mc plan
+ * SESSION").
+ */
+test('no plan in the worktree is a skip that names `mc plan`, not a triage step', async () => {
   const f = fixture({ areas: { fresh: { repo: 'memoro' } }, queue: 'fresh\n', session: okSession() });
-  const runner = createRunner({ deps: f.deps });
-  await runner.round();
-  assert.match(f.calls.sessions[0].args[1], /There is no\n`docs\/project\/\*\/fresh\/PLAN\.md` yet/u);
-  assert.match(f.files['/w/runner/log/runs.tsv'], /\tfresh\ttriage\t/u);
+  await createRunner({ deps: f.deps }).round();
+  assert.equal(f.calls.sessions.length, 0);
+  assert.match(f.files['/w/runner/log/runner.log'], /fresh: no plan — take it through `mc plan <name>`, skip/u);
+  assert.equal(f.files['/w/runner/log/runs.tsv'], undefined, 'nothing ran, so nothing is logged as a run');
 });
 
 test('a quota answer is logged as quota, not merged, and the runner sleeps 30 minutes', async () => {
@@ -247,74 +257,6 @@ test('runLoop: --rounds 1 does one pass and exits; --once exits after the first 
   const g = fixture({ plans: { memoro: { a: ready, b: ready } }, session: okSession() });
   assert.equal(await runLoop({ once: true, deps: g.deps }), 0);
   assert.equal(g.calls.sessions.length, 1);
-});
-
-/**
- * End of round: `decisions/` holds open questions and nothing else.
- *
- * The file goes when the plan that owns it has left `waiting-decision` — not
- * when it merely carries a `**Beslut:**` line. `~/mc` on 2026-08-29 held 51
- * decision files, 42 of them answered, and the eight that could *not* be
- * removed are exactly the ones these cases describe.
- */
-const answered = '# Q\n\n## Rekommendation\n\nA.\n\n**Beslut:** A (Martin, 2026-08-29). Because.\n';
-const waiting = '---\nstatus: waiting-decision\nnext: "wait"\n---\n# X\n';
-// `remove` also clears runner.json/current.json; only the decisions matter here.
-const retired = (f) => f.calls.removed.filter((p) => p.includes('/decisions/'));
-
-test('round retires an answered decision once its plan has moved on', async () => {
-  const f = fixture({
-    plans: { memoro: { alpha: ready } },
-    areas: { alpha: { repo: 'memoro', programme: 'prog', plan: ready, decisions: { 'prog-1.md': answered } } },
-    session: okSession(),
-    gh: { alpha: { number: 5, title: 'Alpha' } },
-  });
-  await createRunner({ deps: f.deps }).round({});
-  assert.equal(f.files['/w/alpha/decisions/prog-1.md'], undefined, 'the file is gone');
-  assert.deepEqual(retired(f), ['/w/alpha/decisions/prog-1.md']);
-  assert.match(f.files['/w/runner/log/runner.log'], /retired alpha\/decisions\/prog-1\.md \(applied in alpha\)/u);
-});
-
-test('round keeps an answered decision while its plan still says waiting-decision', async () => {
-  const f = fixture({
-    plans: { memoro: { alpha: waiting } },
-    areas: { alpha: { repo: 'memoro', programme: 'prog', plan: waiting, decisions: { 'prog-1.md': answered } } },
-    session: okSession(),
-  });
-  await createRunner({ deps: f.deps }).round({});
-  assert.equal(f.files['/w/alpha/decisions/prog-1.md'], answered, 'the answer is still there for the step that must apply it');
-  assert.deepEqual(retired(f), []);
-  assert.match(f.files['/w/runner/log/runner.log'], /kept alpha\/decisions\/prog-1\.md — alpha still waiting-decision/u);
-});
-
-test('round never deletes an open question, and never deletes an orphan', async () => {
-  const open = '# Q\n\n## Rekommendation\n\nA.\n';
-  const f = fixture({
-    plans: { memoro: { alpha: ready } },
-    areas: {
-      alpha: { repo: 'memoro', programme: 'prog', plan: ready, decisions: { 'prog-9.md': open } },
-      ghost: { repo: 'memoro', decisions: { 'gone-1.md': answered } },
-    },
-    session: okSession(),
-    gh: { alpha: { number: 5, title: 'Alpha' } },
-  });
-  await createRunner({ deps: f.deps }).round({});
-  assert.equal(f.files['/w/alpha/decisions/prog-9.md'], open, 'an unanswered question is untouchable');
-  assert.equal(f.files['/w/ghost/decisions/gone-1.md'], answered, 'no plan owns it, so no machine removes it');
-  assert.deepEqual(retired(f), []);
-  assert.match(f.files['/w/runner/log/runner.log'], /orphan ghost\/decisions\/gone-1\.md — no plan on main owns it; answer it or delete it by hand/u);
-});
-
-test('the append-only bookkeeping logs are never decisions', async () => {
-  const f = fixture({
-    plans: { memoro: { alpha: ready } },
-    areas: { alpha: { repo: 'memoro', programme: 'prog', plan: ready, decisions: { 'log.md': answered, 'merge-log.md': answered, 'README.md': answered } } },
-    session: okSession(),
-    gh: { alpha: { number: 5, title: 'Alpha' } },
-  });
-  await createRunner({ deps: f.deps }).round({});
-  assert.deepEqual(retired(f), []);
-  assert.equal(f.files['/w/alpha/decisions/log.md'], answered);
 });
 
 test('current.json exists only while the step is in flight, and runner.json only while the loop runs', async () => {

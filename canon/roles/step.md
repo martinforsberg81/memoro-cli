@@ -27,13 +27,9 @@ the diff of PLAN.md. Do not merge — the runner merges after you. Do not ask
 questions; decide from the code and say what you decided. Stop when the PR
 exists.
 
-When the prompt lists decision files answered by Martin (lines starting
-with `**Beslut:**`), read them first and write the answer **into PLAN.md** —
-what was decided, in the Contract, the Steps or `next:` as the answer
-requires — so the plan carries the decision on its own and the file is no
-longer needed to understand the work. Set `status: ready` (or `blocked` if
-the answer blocks), name each file you applied in the PR body, and then do
-the next step if it fits in this session. `mc run` deletes an answered
-decision file once the plan it belongs to has left `waiting-decision`; a
-plan that does not carry the answer keeps the file alive and the question
-comes back.
+When Martin has answered a decision this project waited on, the answer is
+written **into PLAN.md** — what was decided, in the Contract, the Steps or
+`next:` as it requires — so the plan carries it on its own and `status:` goes
+back to `ready` (or `blocked` if the answer blocks). The runner never reads
+decision files: a plan comes back by being `ready`, and by nothing else. The
+answered file is deleted by `mc brief --collect` once the plan carries it.

@@ -43,78 +43,36 @@ export function assembleQueue(queueText, plans) {
 /**
  * What a project gets this round. `conflicts` non-empty means the merge of
  * origin/main stopped and is left in progress; `plan` is null when no
- * PLAN.md exists in the worktree; `answered` lists decision files with a
- * `**Beslut:**` line for the project or its programme.
+ * PLAN.md exists in the worktree.
+ *
+ * Two things the runner used to do here and does not any more, both on
+ * Martin's word of 2026-08-29:
+ *
+ * - **No plan is a skip, not a `triage` session.** The runner runs plans; it
+ *   does not write them. Planning is `mc plan <name>`, a foreground session
+ *   with Martin in it, ending in a `Plan: <name>` PR he has read. ("JAG TAR
+ *   FRAM PLANER I EN mc plan SESSION … Runner ska köra de planer som tagits
+ *   fram.") The old `triage` kind invented a plan headlessly and landed it on
+ *   main by itself, so work could begin on a plan nobody had agreed to.
+ * - **`waiting-decision` is simply not ready.** The runner has nothing to do
+ *   with decisions — it does not read them, count them, or start a project
+ *   because one was answered. ("Runner genomför planer som är ready. Om
+ *   väntande beslut är ej ready.") A plan comes back by being set `ready`,
+ *   which is the job of whoever applies the answer.
  */
-export function chooseKind({ plan, conflicts = [], answered = [] }) {
+export function chooseKind({ plan, conflicts = [] }) {
   if (conflicts.length) return { kind: 'reconcile' };
-  if (!plan) return { kind: 'triage' };
+  if (!plan) return { kind: null, skip: 'no plan — take it through `mc plan <name>`' };
   if (plan.status === 'ready') return { kind: 'step' };
-  if (plan.status === 'waiting-decision') {
-    return answered.length ? { kind: 'step', answered } : { kind: null, skip: 'waiting-decision (no Beslut line yet)' };
-  }
   return { kind: null, skip: `status ${plan.status || 'missing'}` };
-}
-
-/** The `**Beslut:**` test the whole decision mechanism rests on. */
-export function isAnswered(text) {
-  return /^\*\*Beslut/mu.test(String(text || ''));
-}
-
-/* -------------------------------------------------------------- retirement */
-
-/**
- * Which decision files have done their job and can go.
- *
- * `decisions/` is meant to hold open questions and nothing else. It did not:
- * on 2026-08-29 it held 51 files, 42 of them answered, some for weeks — so
- * every reader (the brief, `mc status`, a person, a session) had to sort 51
- * to find the 6 that were live, and two of those 6 asked about projects that
- * no longer had a plan on main. Martin's rule is that the plan changes for
- * the decision and the file goes.
- *
- * The test is deliberately not "has a `**Beslut:**` line". A file is retired
- * only when its answer has demonstrably landed: every plan that owns it has
- * left `waiting-decision`. Measured against `~/mc` the difference is real —
- * `avatar-image-animation` carries seven answered decisions while its plan
- * still says `waiting-decision` and its `next:` still names the file, and
- * `mc-utredning/mc-2.md` was answered the same day `mc-helper` was still
- * waiting on it. Deleting on the answer alone would have taken those answers
- * away before the sessions that need them ever read them.
- *
- * Ownership is `answeredDecisions()`'s rule, inverted: a plan owns a file in
- * its own area, or one named `<programme>-*` or `<project>-*`. A file no plan
- * owns is an **orphan** — the project it belonged to is gone from main — and
- * a machine never deletes one. It is reported so a person can decide; that
- * is the class `network-review-1` and `test-architecture-2` fell into, and
- * silently deleting a question nobody has answered is the one failure worse
- * than keeping it.
- */
-export function retireDecisions({ decisions = [], plans = [] } = {}) {
-  const owners = (d) => plans.filter((p) => d.area === p.project
-    || d.base.startsWith(`${p.programme}-`)
-    || d.base.startsWith(`${p.project}-`));
-
-  const remove = [];
-  const orphans = [];
-  const held = [];
-  for (const d of decisions) {
-    if (!d.answered) continue;                      // an open question stays
-    const mine = owners(d);
-    if (!mine.length) { orphans.push({ ...d, why: 'no plan on main owns it' }); continue; }
-    const waiting = mine.filter((p) => p.status === 'waiting-decision');
-    if (waiting.length) { held.push({ ...d, why: `${waiting.map((p) => p.project).join(', ')} still waiting-decision` }); continue; }
-    remove.push({ ...d, appliedBy: mine.map((p) => p.project).sort() });
-  }
-  return { remove, orphans, held };
 }
 
 /* ---------------------------------------------------------------- prompts */
 
 const today = (now) => now.toISOString().slice(0, 10);
 
-export function stepPrompt({ name, repo, planPath, planText, answered = [], now = new Date() }) {
-  const head = [
+export function stepPrompt({ name, repo, planPath, planText, now = new Date() }) {
+  return [
     `You are working in the \`${name}\` workarea of ${repo} (this worktree; origin/main`,
     `is merged in). Below is your plan, \`${planPath}\`. Do the step named in \`next:\`;`,
     'its "done when" is your success criterion for this session — verify it before',
@@ -122,27 +80,9 @@ export function stepPrompt({ name, repo, planPath, planText, answered = [], now 
     '',
     `If the Contract must change, the decision file is \`../decisions/${name}-${today(now)}.md\`.`,
     'Do not merge. Do not ask questions. Stop when the PR exists.',
-  ];
-  const decisions = answered.length
-    ? [
-      '',
-      '----- Decisions answered by Martin -----',
-      'The plan says waiting-decision, but these decision files now carry a line',
-      'starting with **Beslut:** — read them first, apply the answer, set status:',
-      'ready (or blocked if the answer blocks), and then do the next step if it fits',
-      'in this session:',
-      ...answered,
-    ]
-    : [];
-  return [...head, ...decisions, '', '----- PLAN.md -----', planText].join('\n');
-}
-
-export function triagePrompt({ name, repo, now = new Date() }) {
-  return [
-    `You are working in the \`${name}\` workarea of ${repo} (this worktree). There is no`,
-    `\`docs/project/*/${name}/PLAN.md\` yet. Write it as your role says, under the`,
-    `programme it belongs to; a question for Martin goes in \`../decisions/${name}-${today(now)}.md\`.`,
-    `Open a PR titled "Plan: ${name}" and land it with \`mc merge ${repo} <pr> --docs\`.`,
+    '',
+    '----- PLAN.md -----',
+    planText,
   ].join('\n');
 }
 
