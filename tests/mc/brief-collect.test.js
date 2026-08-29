@@ -304,7 +304,15 @@ describe('collectBrief', () => {
 describe('collectBrief retires what has been answered', () => {
   const PLAN = (status) => `---\nstatus: ${status}\nnext: "x"\n---\n# P\n`;
 
-  /** A work root plus a real git repository whose main carries the plans. */
+  /**
+   * A work root plus a real git repository whose main carries the plans.
+   *
+   * The plan path must name the project `DECISION` declares in its
+   * frontmatter — `assistant-avatar/avatar-image-animation` — because that is
+   * what decides ownership. The decision's own directory under the work root
+   * (`avatar/`) does not, and the two differ here on purpose: matching by area
+   * was the guess that made `mc-test-1` deletable.
+   */
   function rootWithPlans(plans) {
     const root = mkdtempSync(join(tmpdir(), 'mc-retire-'));
     mkdirSync(join(root, 'avatar', 'decisions'), { recursive: true });
@@ -327,7 +335,7 @@ describe('collectBrief retires what has been answered', () => {
   }
 
   it('deletes the answered file once its plan is no longer waiting on it', async () => {
-    const { root, env } = rootWithPlans({ 'docs/project/assistant-avatar/avatar/PLAN.md': PLAN('ready') });
+    const { root, env } = rootWithPlans({ 'docs/project/assistant-avatar/avatar-image-animation/PLAN.md': PLAN('ready') });
     const r = await collectBrief({ env, now: new Date('2026-08-29T10:00:00Z'), offline: true, ref: 'main' });
     assert.equal(existsSync(join(root, 'avatar', 'decisions', 'assistant-avatar-1.md')), false, 'answered and applied — gone');
     assert.equal(existsSync(join(root, 'avatar', 'decisions', 'assistant-avatar-2.md')), true, 'the open question stays');
@@ -344,7 +352,7 @@ describe('collectBrief retires what has been answered', () => {
   });
 
   it('keeps it while the plan still says waiting-decision', async () => {
-    const { root, env } = rootWithPlans({ 'docs/project/assistant-avatar/avatar/PLAN.md': PLAN('waiting-decision') });
+    const { root, env } = rootWithPlans({ 'docs/project/assistant-avatar/avatar-image-animation/PLAN.md': PLAN('waiting-decision') });
     await collectBrief({ env, now: new Date('2026-08-29T10:00:00Z'), offline: true, ref: 'main' });
     assert.equal(existsSync(join(root, 'avatar', 'decisions', 'assistant-avatar-1.md')), true, 'the answer is still needed');
   });

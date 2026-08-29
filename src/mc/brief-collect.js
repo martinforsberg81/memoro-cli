@@ -107,7 +107,17 @@ export function parseDecision(text) {
     }
     recommendation = para.join(' ') || null;
   }
-  return { title: heading.replace(/^#\s*/u, '').trim(), recommendation, answered };
+  const fm = planFields(text);
+  return {
+    title: heading.replace(/^#\s*/u, '').trim(),
+    recommendation,
+    answered,
+    owner: {
+      programme: fm.programme ?? null,
+      project: fm.project ?? null,
+      plan: fm.plan ?? null,
+    },
+  };
 }
 
 /**
@@ -150,9 +160,21 @@ export function scanDecisions(root) {
  * Deleting on the answer alone takes the answer away before whoever must
  * apply it has read it.
  *
- * A plan owns a file in its own area, or one named `<programme>-*` or
- * `<project>-*`. A file no plan owns is an **orphan** — the project it
- * belonged to is gone from main — and a machine never deletes one: it is
+ * **A decision file says who owns it, and that is read before anything is
+ * guessed.** Its frontmatter carries `plan:`, `project:` or `programme:`, and
+ * every file under `~/mc` on 2026-08-29 declared one. Only when none is
+ * present does the old heuristic apply: a plan owns a file in its own area,
+ * or one named `<programme>-*` or `<project>-*`.
+ *
+ * The heuristic alone was wrong for any programme whose name prefixes its
+ * projects. `mc-test-1` declares `project: mc-test`, and no `mc-test` plan
+ * exists — but `'mc-test-1'.startsWith('mc-')` made all eleven `mc` projects
+ * its owners, none of them waiting, so a ruling nobody had applied and no
+ * document carried was one `--collect` from deletion. Read as declared it is
+ * an orphan, which is what it is.
+ *
+ * A file no plan owns is an **orphan** — the project it belonged to is gone
+ * from main, or never existed — and a machine never deletes one: it is
  * reported so a person can decide. Silently deleting a question nobody has
  * answered is the one failure worse than keeping it.
  *
@@ -161,9 +183,15 @@ export function scanDecisions(root) {
  * when you sit down to look at the list, which is the moment it matters.
  */
 export function retireDecisions({ decisions = [], plans = [] } = {}) {
-  const owners = (d) => plans.filter((p) => d.area === p.project
-    || d.base?.startsWith(`${p.programme}-`)
-    || d.base?.startsWith(`${p.project}-`));
+  const owners = (d) => {
+    const own = d.owner || {};
+    if (own.plan) return plans.filter((p) => p.path === own.plan);
+    if (own.project) return plans.filter((p) => p.project === own.project);
+    if (own.programme) return plans.filter((p) => p.programme === own.programme);
+    return plans.filter((p) => d.area === p.project
+      || d.base?.startsWith(`${p.programme}-`)
+      || d.base?.startsWith(`${p.project}-`));
+  };
 
   const remove = [];
   const orphans = [];
