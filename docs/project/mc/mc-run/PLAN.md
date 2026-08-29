@@ -1,6 +1,6 @@
 ---
 status: ready
-next: "Step 3 — Codex: a project whose frontmatter says `tool: codex` runs its step with `codex exec` through the adapter, usage fields `-` when codex gives none — done when one codex step is logged in runs.tsv with a `codex` launch in runner.log. Was: Step 2 — `mc run --rounds 1` completes a full round on the live queue (merge, reconcile, answered decisions all exercised at least once in runner.log), then a night on `mc run` in tmux instead of runner.sh — done when runs.tsv shows a round with no line the shell runner would have handled differently."
+next: "Step 4 — Close-out: `docs/technical/mc-run.md` grown from the lanes note into the whole runner, `project_log.md` row — done when the document describes the runner as it now is (two lanes, archive, close-out, helper, both tools) and the row is on main. Was: Step 3 — Codex: a project whose frontmatter says `tool: codex` runs its step with `codex exec` through the adapter — done when one codex step is logged in runs.tsv with a `codex` launch in runner.log."
 budget: 150k
 needs: []
 ---
@@ -83,9 +83,13 @@ per round, merge direct, no model in the runner itself.
       Decisions are out of the runner's hands and the round-completion line
       cannot be read from inside the round — both under What the code taught
       us.
-- [ ] **3. Codex** — `tool: codex` in a project frontmatter runs that step
-      with `codex exec` through the adapter; usage fields `-` if codex gives
-      none. Done when one codex step is logged.
+- [x] **3. Codex** (2026-08-29) — `tool: codex` in a project frontmatter runs
+      that step with `codex exec` through the adapter; usage fields `-` if
+      codex gives none. One codex step is logged: `cx step 0 0s pr=- turns=-
+      … codex-thread-42 success`, after `cx: step starting (codex own default
+      model, 90 min)` in runner.log. The launch was a stub codex, because
+      codex is not installed on this machine, and the two faults the lane
+      carried are fixed — see What the code taught us.
 - [ ] **4. Close-out** — `docs/technical/mc-run.md` grown from the lanes note
       into the whole runner, `project_log.md` row. `runner.sh` is already
       gone; what is left beside mc is `runner-loop.sh`, and it belongs to the
@@ -137,9 +141,32 @@ per round, merge direct, no model in the runner itself.
   round started 17:12:50Z, `dropFromQueue` merged at 18:27Z in #455, and
   `~/mc/queue.md` still held the names of projects whose steps had run. Owned
   by `~/mc/intake/proposals/2026-08-29-runner-runs-stale-code.md`.
-- Codex: `codex exec --json --full-auto` is wired with `-c instructions=`
-  for the profile+role, usage read from the event stream when present —
-  not measured, codex is not installed on this machine.
+- **The codex lane was wired and would have failed twice, both times on its
+  own argument list.** It had never been started, so nothing had read it.
+  `codex exec --full-auto` is codex's workspace-write sandbox: no network, so
+  no `git push` and no `gh pr create`, and no writes outside the working
+  directory — which takes the commit as well, because a workarea's `.git` is
+  a file pointing into the main checkout's `.git/worktrees/<name>`. A codex
+  step could not have reached the one thing its prompt ends with, "Stop when
+  the PR exists." It is `--sandbox danger-full-access` now: the same trust
+  the claude lane has had all along with `--permission-mode auto`, because
+  the workarea is the boundary the runner trusts, not a sandbox inside it.
+  Second, `sessionSettings` defaulted every tool's model to `opus`, a claude
+  alias — `codex -m opus` names a model that tool does not have, and the step
+  would have died before reading a word of the plan. The default is claude's
+  now; another tool with no `model:` in its frontmatter gets none, and picks
+  its own.
+- **Codex is still not installed here, so the boundary is where the
+  measurement stops.** `tests/mc/run-codex.test.js` drives the whole thing on
+  `realDeps` — a real git repository with a real origin, a real worktree
+  whose `.git` points outside it, a real spawned process — with a stub
+  `codex` on PATH that answers in codex's `exec --json` event stream. That
+  proves mc's half: `tool: codex` reaches `resolveLaunch`, the argument list
+  mc builds is the one the process gets, the Coding Profile and
+  `canon/roles/step.md` arrive on `-c instructions=`, the event stream is
+  read into the usage columns, and the row and the launch line are written.
+  It cannot prove the real codex accepts those arguments. That is one live
+  step away, the day codex is on this machine.
 
 (read `~/mc/runner/log/natt-1.md` first: it records what the
 shell runner learned on nights 1–2, including why merges failed and why

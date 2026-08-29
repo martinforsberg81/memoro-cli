@@ -93,7 +93,9 @@ function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], live = 
     helperTurn: async (options) => { calls.turns.push(options); return helperTurn(options); },
     profile: async () => 'PROFILE',
     role: (kind) => (roles ? { name: kind, overlay: `ROLE ${kind}` } : null),
-    launch: (tool) => ({ ok: true, id: tool === 'codex' ? 'codex' : 'claude-code', shortName: tool, adapter: { modelArgs: (m) => ['--model', m] }, spec: { bin: `/bin/${tool}` } }),
+    // `modelArgs` guards on a missing model exactly as both real adapters do:
+    // no model named means no flag, not `--model null`.
+    launch: (tool) => ({ ok: true, id: tool === 'codex' ? 'codex' : 'claude-code', shortName: tool, adapter: { modelArgs: (m) => (m ? ['--model', m] : []) }, spec: { bin: `/bin/${tool}` } }),
     session: (call) => { calls.sessions.push(call); duringSession.push(structuredClone(files)); return session(call); },
     log: (line) => log.push(line),
     git: (cwd, args) => {
@@ -349,7 +351,19 @@ test('tool and model come from the project frontmatter', async () => {
   assert.equal(call.bin, '/bin/codex');
   assert.equal(call.cwd, '/w/cx/memoro-cli');
   assert.equal(call.timeoutMs, 20 * 60_000);
-  assert.deepEqual(call.args.slice(0, 5), ['exec', '--json', '--full-auto', '--model', 'o3']);
+  assert.deepEqual(call.args.slice(0, 6), ['exec', '--json', '--sandbox', 'danger-full-access', '--model', 'o3']);
+});
+
+test('a codex plan that names no model gets none, and the log says so', async () => {
+  const codexPlan = '---\nstatus: ready\ntool: codex\n---\n';
+  const f = fixture({ plans: { 'memoro-cli': { cx: codexPlan } }, session: () => ({ status: 0, stdout: '', stderr: '', timedOut: false }) });
+  const runner = createRunner({ deps: f.deps });
+  await runner.round({ once: true });
+  const [call] = f.calls.sessions;
+  // `opus` is claude's alias; codex would die on it before reading the plan.
+  assert.equal(call.args.includes('--model'), false);
+  assert.equal(call.args.includes('opus'), false);
+  assert.match(f.files['/w/runner/log/runner.log'], /cx: step starting \(codex own default model, 90 min\)/u);
 });
 
 test('STOP file: the loop exits after the step it is in, and refuses to start while it exists', async () => {

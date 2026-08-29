@@ -20,7 +20,7 @@ import { parseRuns } from './brief-collect.js';
 
 export const RUNS_HEADER = ['ts', 'name', 'kind', 'exit', 'seconds', 'pr', 'turns', 'input', 'output', 'cache_read', 'cache_write', 'session', 'note'];
 
-export const DEFAULT_MODEL = 'opus';
+export const DEFAULT_MODEL = 'opus'; // claude's alias, and only claude's — see `sessionSettings`
 export const DEFAULT_TOOL = 'claude';
 export const DEFAULT_BUDGET_MINUTES = 90;
 export const QUOTA_SLEEP_MS = 30 * 60 * 1000;
@@ -208,12 +208,23 @@ export function reconcilePrompt({ name, repo, conflicts }) {
  * (Coding Profile + role overlay) through the same channel `mc work` uses;
  * the prompt is the last positional for both. Claude answers with one JSON
  * object; codex's `exec --json` streams events — parsed in
- * `readSessionOutput`. Codex is not measured live: it is not installed here.
+ * `readSessionOutput`.
+ *
+ * Codex gets `--sandbox danger-full-access`, and not the `--full-auto` this
+ * started as. `--full-auto` is codex's workspace-write sandbox: no network,
+ * and no writes outside the working directory. A step has to `git commit`,
+ * `git push` and `gh pr create` — the network half goes at once, and the
+ * commit goes with it, because a workarea's `.git` is a file pointing into
+ * the main checkout's `.git/worktrees/<name>`, which is outside the working
+ * directory. So a codex step under `--full-auto` could never reach the one
+ * thing its prompt ends with: "Stop when the PR exists." The claude lane is
+ * already `--permission-mode auto` — the workarea is the boundary the runner
+ * trusts, not a sandbox inside it, and both tools are given the same.
  */
 export function headlessArgs({ toolId, adapter, model, instructions, prompt, profileArgs }) {
   const modelArgs = adapter?.modelArgs?.(model) ?? [];
   const instr = profileArgs(toolId, instructions);
-  if (toolId === 'codex') return ['exec', '--json', '--full-auto', ...modelArgs, ...instr, prompt];
+  if (toolId === 'codex') return ['exec', '--json', '--sandbox', 'danger-full-access', ...modelArgs, ...instr, prompt];
   return ['-p', prompt, ...modelArgs, '--permission-mode', 'auto', ...instr, '--output-format', 'json'];
 }
 
@@ -289,12 +300,23 @@ export function tsvHeader() {
 
 /* -------------------------------------------------------------- frontmatter */
 
-/** `tool`, `model`, `budget_minutes` from a PLAN.md frontmatter, with the runner's defaults. */
+/**
+ * `tool`, `model`, `budget_minutes` from a PLAN.md frontmatter, with the
+ * runner's defaults.
+ *
+ * The model default belongs to claude and to nothing else. `opus` is a claude
+ * alias; handed to `codex -m` it names a model that tool does not have, and
+ * the step dies on its own argument list before it has read a word of the
+ * plan. A plan on another tool that names no model gets none — `modelArgs`
+ * of nothing is `[]`, and the tool's own default is a better answer than
+ * mc's guess at what that tool calls its best model.
+ */
 export function sessionSettings(fields = {}) {
   const minutes = Number(fields.budget_minutes);
+  const tool = fields.tool || DEFAULT_TOOL;
   return {
-    tool: fields.tool || DEFAULT_TOOL,
-    model: fields.model || DEFAULT_MODEL,
+    tool,
+    model: fields.model || (tool === DEFAULT_TOOL ? DEFAULT_MODEL : null),
     budgetMinutes: Number.isFinite(minutes) && minutes > 0 ? minutes : DEFAULT_BUDGET_MINUTES,
   };
 }
