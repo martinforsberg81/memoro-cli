@@ -33,8 +33,9 @@ still accepted on the page and does nothing: offline is what the page does.
 
 In this order, because that is the order the questions come in:
 
-- **NOW** — the runner's step in flight (kind, tool, model, elapsed against
-  budget, pid), a pending `~/mc/runner/STOP`, the live tmux `mc-<name>`
+- **NOW** — the runner's steps in flight, one line per lane (kind, tool,
+  model, elapsed against budget, pid), a pending `~/mc/runner/STOP`, the
+  live tmux `mc-<name>`
   areas with how long they have been open, the foreground verbs somebody is
   sitting in, and one line of the day behind it: steps, merged, open,
   failed, timed out, and an estimated **list-price** cost.
@@ -66,8 +67,8 @@ the helper and the sessions already write.
 | fact | file | written by |
 |---|---|---|
 | a runner is here | `~/mc/runner/runner.json` (pid, started) | `mc run`, at start |
-| a step is in flight | `~/mc/runner/current.json` (name, kind, tool, model, budget, started, pid, worktree) | `mc run`, per step |
-| stop after this step | `~/mc/runner/STOP` | anyone |
+| a step is in flight | `~/mc/runner/current-<repo>.json`, one per lane (name, kind, repo, tool, model, budget, started, pid, worktree) | `mc run`, per step |
+| stop after this step | `~/mc/runner/STOP` (every lane) | anyone |
 | the day behind it | `~/mc/runner/log/runs.tsv` | `mc run`, after each step |
 | the queue | `~/mc/queue.md` | Martin, at the brief |
 | decisions waiting | `<area>/decisions/*.md` without a `**Beslut:**` line | the sessions |
@@ -76,11 +77,15 @@ the helper and the sessions already write.
 | plans and open PRs | `~/mc/runner/plans.json`, `~/mc/runner/prs.json` | the page itself (below) |
 
 `runs.tsv` gets its row only *after* a step ends, which is why
-`runner.json` and `current.json` exist at all: before them, the fact the
-page most needed — what is running right now — existed nowhere a program
-could read. Both are written through `atomic-write.js` and removed when
-their scope ends, the removal paired in a `finally` so a step that throws
-still clears the file.
+`runner.json` and the `current-<repo>.json` files exist at all: before them,
+the fact the page most needed — what is running right now — existed nowhere
+a program could read. They are written through `atomic-write.js` and removed
+when their scope ends, the removal paired in a `finally` so a step that
+throws still clears the file.
+
+There is one current file **per lane**: `mc run` drives memoro's queue and
+memoro-cli's at the same time, so NOW is a list rather than a line, and the
+page reads `runner/current-*.json` by name instead of one fixed file.
 
 **Liveness is one test, `pidAlive`** — `kill(pid, 0)`, with `EPERM`
 counted as alive. Nothing asks tmux or pgrep. Both of those lied on
@@ -100,7 +105,7 @@ never do.
 So the verb registers itself: `~/mc/runner/foreground/<pid>.json` (verb,
 area, tool, model, pid, started), written before the call that blocks and
 removed however it returns. The pid is **mc's**, not the tool's — the same
-reason `current.json` names the runner: it is the pid whose death means the
+reason a lane's current file names the runner: it is the pid whose death means the
 session is over, and the one that can be tested for life from outside.
 
 ctrl-c kills mc together with the tool and `finally` never runs, so a file

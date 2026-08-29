@@ -3,8 +3,8 @@
  * the helper and the sessions already write. No model, nothing started; the
  * only writes are the two read-through caches in page-cache.js.
  *
- * NOW      — the step in flight, a pending STOP, the live tmux areas, the
- *            foreground verbs, and the day behind it.
+ * NOW      — the steps in flight, one per lane, a pending STOP, the live
+ *            tmux areas, the foreground verbs, and the day behind it.
  * QUEUE    — how deep, how much of it is runnable, what comes next, and what
  *            is skipped, counted by reason.
  * DECISIONS— how many wait on Martin, and the first few by name.
@@ -46,7 +46,8 @@ export const DECISIONS_NAMED = 3;
 /* --------------------------------------------------------------------- NOW */
 
 /**
- * What is happening this second: the runner's step (nowBlock), the tmux areas
+ * What is happening this second: the runner's steps, one per lane (nowBlock),
+ * the tmux areas
  * somebody is sitting in, the foreground verbs that registered themselves, and
  * one line of the day behind it.
  *
@@ -58,10 +59,10 @@ export const DECISIONS_NAMED = 3;
  * session killed with its terminal never gets to remove its own file.
  */
 export function nowSection({
-  runner = null, current = null, stop = false, rows = [], live = [], foreground = [],
+  runner = null, currents = [], stop = false, rows = [], live = [], foreground = [],
   now = new Date(), alive = pidAlive,
 } = {}) {
-  const base = nowBlock({ runner, current, stop, rows, now, alive });
+  const base = nowBlock({ runner, currents, stop, rows, now, alive });
   const tokens = rows.reduce((acc, r) => ({
     input: acc.input + (Number(r.input) || 0),
     output: acc.output + (Number(r.output) || 0),
@@ -280,6 +281,18 @@ export function readForeground(dir, read = readJson, list = readdirSync) {
   return out;
 }
 
+/**
+ * `~/mc/runner/current-<repo>.json` — one file per lane, and one lane per
+ * repository. They are read by name rather than counted: a lane that is
+ * between steps has no file at all, and a lane whose runner died leaves one
+ * behind that `nowBlock` reports as stale.
+ */
+export function readCurrents(dir, read = readJson, list = readdirSync) {
+  let names = [];
+  try { names = list(dir).filter((name) => /^current-.+\.json$/u.test(name)).sort(); } catch { return []; }
+  return names.map((name) => read(join(dir, name))).filter(Boolean);
+}
+
 /** The newest `errors-<date>.md` in the intake directory, with its mtime. */
 export function readDigest(dir) {
   let names = [];
@@ -361,7 +374,7 @@ export async function collectPage({
   return {
     now: nowSection({
       runner: readJson(join(root, 'runner', 'runner.json')),
-      current: readJson(join(root, 'runner', 'current.json')),
+      currents: readCurrents(join(root, 'runner')),
       stop: existsSync(join(root, 'runner', 'STOP')),
       rows,
       live,

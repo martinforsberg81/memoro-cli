@@ -161,19 +161,23 @@ function row(c, wide, left, middle, right, tone = null) {
 
 function nowLines(lines, c, wide, now) {
   heading(lines, c, wide, 'NOW', null, null);
-  if (now.step) {
-    const s = now.step;
-    const budget = s.budget_seconds == null ? '' : ` of ${duration(s.budget_seconds)}`;
-    const meta = paint(c, between([
-      { text: s.kind, styles: kindTone(s.kind) },
-      { text: [s.tool, s.model].filter(Boolean).join(' '), styles: ['grey'] },
-      {
-        text: `${duration(s.elapsed_seconds)}${budget}${s.over_budget ? ' — over budget' : ''}`,
-        styles: elapsedTone(s),
-      },
-      { text: s.pid ? `pid ${s.pid}` : '', styles: ['grey'] },
-    ], ' · '), wide - 28);
-    lines.push(`  ${c(MARK.running, 'green')} ${c(pad(clip(s.name, 21), 22), 'bold', 'white')} ${meta}`);
+  // One line per lane: `mc run` drives one lane per repository at the same
+  // time, and each of them is a step somebody may want to look at.
+  const steps = now.steps || [];
+  if (steps.length) {
+    for (const s of steps) {
+      const budget = s.budget_seconds == null ? '' : ` of ${duration(s.budget_seconds)}`;
+      const meta = paint(c, between([
+        { text: s.kind, styles: kindTone(s.kind) },
+        { text: [s.tool, s.model].filter(Boolean).join(' '), styles: ['grey'] },
+        {
+          text: `${duration(s.elapsed_seconds)}${budget}${s.over_budget ? ' — over budget' : ''}`,
+          styles: elapsedTone(s),
+        },
+        { text: s.pid ? `pid ${s.pid}` : '', styles: ['grey'] },
+      ], ' · '), wide - 28);
+      lines.push(`  ${c(MARK.running, 'green')} ${c(pad(clip(s.name, 21), 22), 'bold', 'white')} ${meta}`);
+    }
   } else if (now.runner?.alive) {
     lines.push(`  ${c(MARK.quiet, 'grey')} ${c(pad('runner', 22), 'grey')} ${c('between steps — nothing in flight', 'grey')}`);
   } else {
@@ -182,7 +186,7 @@ function nowLines(lines, c, wide, now) {
   if (now.stop) {
     lines.push(`  ${paint(c, [
       { text: `${MARK.stopped} STOP requested`, styles: ['red', 'bold'] },
-      { text: ' — the runner exits after the step it is in', styles: ['grey'] },
+      { text: ' — the runner exits after the steps it is in', styles: ['grey'] },
     ], wide - 2)}`);
   }
   // A foreground verb is a person's session: cyan, the colour of the verbs

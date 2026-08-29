@@ -114,8 +114,8 @@ export async function openInWorkArea({
   clearStopMark(areaRoot);
   // The register exists exactly as long as the tool holds the terminal, and
   // is removed however the call returns — the same pairing `mc run` uses for
-  // current.json, for the same reason: a session that throws must not leave
-  // the page claiming it forever.
+  // the runner's current file, for the same reason: a session that throws
+  // must not leave the page claiming it forever.
   // The short name, not the adapter id: NOW puts this beside the runner's
   // step, whose tool is 'claude' or 'codex', and one page should not call the
   // same tool two things.

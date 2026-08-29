@@ -3,7 +3,7 @@
  * sessions already write, that more than one caller needs.
  * No model, nothing written, nothing started.
  *
- * `nowBlock` turns the two files `mc run` keeps into the NOW section;
+ * `nowBlock` turns the files `mc run` keeps into the NOW section;
  * `kindFor` answers what the runner would do with a queued name; `pidAlive`
  * is the one liveness test the page and the foreground register both use;
  * `decisionsBlock` and `areasWithCheckout` name what waits on Martin and
@@ -67,44 +67,53 @@ export function pidAlive(pid) {
 }
 
 /**
- * NOW — what is happening this second, from the two files `mc run` keeps
- * and the STOP file anyone can touch.
+ * NOW — what is happening this second, from the files `mc run` keeps and the
+ * STOP file anyone can touch.
+ *
+ * There is one `current-<repo>.json` per lane and one runner.json for the
+ * process that drives them all, so `steps` is a list: `mc run` runs one lane
+ * per repository at the same time, and NOW names every one of them.
  *
  * A file whose pid is dead is a crashed runner, not a running one: it is
  * reported as stale and counts as nothing running. `runs.tsv` cannot answer
  * any of this — its row is appended after the step is over.
  */
-export function nowBlock({ runner = null, current = null, stop = false, rows = [], now = new Date(), alive = pidAlive }) {
+export function nowBlock({ runner = null, currents = [], stop = false, rows = [], now = new Date(), alive = pidAlive }) {
   const stale = [];
   const runnerLive = runner ? alive(runner.pid) : false;
   if (runner && !runnerLive) stale.push(`runner.json (pid ${runner.pid} is gone)`);
-  const stepLive = current ? alive(current.pid) : false;
-  if (current && !stepLive) stale.push(`current.json (pid ${current.pid} is gone)`);
 
   const since = (iso) => {
     const t = Date.parse(iso);
     return Number.isNaN(t) ? null : Math.max(0, Math.round((now.getTime() - t) / 1000));
   };
-  const budget = Number(current?.budget_minutes);
-  const budgetSeconds = Number.isFinite(budget) && budget > 0 ? budget * 60 : null;
-  const elapsed = current ? since(current.started) : null;
-  const step = stepLive ? {
-    name: current.name || null,
-    kind: current.kind || null,
-    tool: current.tool || null,
-    model: current.model || null,
-    worktree: current.worktree || null,
-    pid: current.pid ?? null,
-    started: current.started || null,
-    elapsed_seconds: elapsed,
-    budget_seconds: budgetSeconds,
-    over_budget: elapsed != null && budgetSeconds != null && elapsed > budgetSeconds,
-  } : null;
+  const steps = [];
+  for (const current of currents.filter(Boolean)) {
+    const file = current.repo ? `current-${current.repo}.json` : 'current.json';
+    if (!alive(current.pid)) { stale.push(`${file} (pid ${current.pid} is gone)`); continue; }
+    const budget = Number(current.budget_minutes);
+    const budgetSeconds = Number.isFinite(budget) && budget > 0 ? budget * 60 : null;
+    const elapsed = since(current.started);
+    steps.push({
+      name: current.name || null,
+      kind: current.kind || null,
+      repo: current.repo || null,
+      tool: current.tool || null,
+      model: current.model || null,
+      worktree: current.worktree || null,
+      pid: current.pid ?? null,
+      started: current.started || null,
+      elapsed_seconds: elapsed,
+      budget_seconds: budgetSeconds,
+      over_budget: elapsed != null && budgetSeconds != null && elapsed > budgetSeconds,
+    });
+  }
+  steps.sort((a, b) => String(a.name).localeCompare(String(b.name)));
 
   const quotaRows = rows.filter((row) => String(row.note || '').includes('quota'));
   return {
     runner: runner ? { pid: runner.pid ?? null, started: runner.started || null, alive: runnerLive, up_seconds: since(runner.started) } : null,
-    step,
+    steps,
     stop,
     stale,
     quota: { count: quotaRows.length, last: quotaRows.at(-1)?.ts || null },
