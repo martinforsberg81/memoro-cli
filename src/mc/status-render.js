@@ -34,12 +34,12 @@ export function width(text) {
   return String(text).replace(/\[[0-9;]*m/gu, '').length;
 }
 
-function pad(text, to) {
+export function pad(text, to) {
   const short = to - width(text);
   return short > 0 ? text + ' '.repeat(short) : text;
 }
 
-function clip(text, to) {
+export function clip(text, to) {
   if (width(text) <= to) return text;
   return `${String(text).slice(0, Math.max(0, to - 1))}…`;
 }
