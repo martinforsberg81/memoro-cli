@@ -1,14 +1,15 @@
 /**
- * `mc helper` — the verb: what it accepts, what it refuses, and what one
- * line it leaves behind for a runner log to carry.
+ * `mc helper` — the verb: what it accepts, what it refuses, and the two
+ * lines it leaves behind for a runner log to carry — the digest's delta, and
+ * what the turn proposed.
  *
- * The proposal turn is step 2 of the plan and does not exist; the bare verb
- * has to say so rather than exit 0 having done nothing.
+ * No model here: the turn is a stub. `--collect` must not reach it at all,
+ * which is the whole difference between the two halves.
  */
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { describe as describeRun, run, unreadable } from '../../../src/mc/commands/helper.js';
+import { describe as describeRun, run, turnLine, unreadable } from '../../../src/mc/commands/helper.js';
 
 function sink() {
   const chunks = [];
@@ -30,24 +31,68 @@ const RESULT = (data) => ({
   },
 });
 
-async function invoke(argv, data = {}) {
+const TURN = (over = {}) => ({
+  ok: true, note: 'success', tool: 'claude', model: 'sonnet', groundNotes: [],
+  wrote: [], waiting: [], ...over,
+});
+
+async function invoke(argv, data = {}, turn = TURN()) {
   const stdout = sink();
   const stderr = sink();
   const seen = {};
+  const turned = {};
   const code = await run(argv, {
     stdout,
     stderr,
     collect: async (options) => { Object.assign(seen, options); return RESULT(data); },
+    turn: async (options) => { Object.assign(turned, options, { called: true }); return turn; },
   });
-  return { code, stdout: stdout.text, stderr: stderr.text, seen };
+  return { code, stdout: stdout.text, stderr: stderr.text, seen, turned };
 }
 
 describe('mc helper', () => {
-  it('refuses the bare verb — the proposal turn is not built', async () => {
-    const result = await invoke([]);
-    assert.equal(result.code, 2);
-    assert.match(result.stderr, /the proposal turn is not built yet/u);
-    assert.match(result.stderr, /usage — mc helper --collect/u);
+  it('collects and then runs the turn over the digest it just wrote', async () => {
+    const result = await invoke([], {}, TURN({
+      wrote: [{ file: '2026-08-29-expose-operations.md', title: 'The nightly outcomes reach no script' }],
+      waiting: [{ file: '2026-08-29-expose-operations.md' }],
+    }));
+    assert.equal(result.code, 0);
+    assert.equal(result.turned.called, true);
+    assert.equal(result.turned.digestPath, '/tmp/mc/intake/errors-2026-08-29.md');
+    assert.equal(result.turned.digestText, '# Errors and maintenance');
+    assert.match(result.stdout, /1 proposal, 1 waiting \(\d+\.\ds, claude sonnet\)/u);
+    assert.match(result.stdout, /2026-08-29-expose-operations\.md — The nightly outcomes reach no script/u);
+    assert.match(result.stdout, /read them at the next brief/u);
+  });
+
+  it('--collect is the script half and never reaches the model', async () => {
+    const result = await invoke(['--collect']);
+    assert.equal(result.code, 0);
+    assert.equal(result.turned.called, undefined);
+  });
+
+  it('says a quiet day cost nothing, and is still a success', async () => {
+    const result = await invoke([], {}, TURN({ waiting: [{ file: 'old.md' }] }));
+    assert.equal(result.code, 0);
+    assert.match(result.stdout, /no proposal — nothing in the digest warranted one \(1 still waiting\)/u);
+    assert.doesNotMatch(result.stdout, /next brief/u);
+  });
+
+  it('fails when the turn did not finish, and says what the session said', async () => {
+    const result = await invoke([], {}, TURN({ ok: false, note: 'quota', stderr: 'x\nweekly limit reached' }));
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /the helper turn did not finish — quota/u);
+    assert.match(result.stderr, /weekly limit reached/u);
+  });
+
+  it('passes --model through to the turn', async () => {
+    const result = await invoke(['--model', 'opus']);
+    assert.equal(result.turned.model, 'opus');
+  });
+
+  it('repeats what the ground could not be read from', async () => {
+    const result = await invoke([], {}, TURN({ groundNotes: ['memoro: could not list plans on origin/main'] }));
+    assert.match(result.stderr, /could not list plans on origin\/main/u);
   });
 
   it('collects and prints the path, the time and the delta', async () => {
@@ -91,6 +136,12 @@ describe('mc helper', () => {
     assert.equal((await invoke(['--collect', '--threshold', 'many'])).code, 2);
     assert.equal((await invoke(['--collect', 'extra'])).code, 2);
     assert.equal((await invoke(['--collect', '--purge'])).code, 2);
+    assert.match((await invoke(['--collect', '--purge'])).stderr, /usage — mc helper \[--collect\]/u);
+  });
+
+  it('says what the turn produced in one line', () => {
+    assert.equal(turnLine({ wrote: [], waiting: [] }), 'no proposal — nothing in the digest warranted one (0 still waiting)');
+    assert.equal(turnLine({ wrote: [1, 2], waiting: [1, 2, 3] }), '2 proposals, 3 waiting');
   });
 
   it('lists the unreadable sections by name', () => {

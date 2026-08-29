@@ -1,8 +1,8 @@
 ---
 status: ready
-next: "Step 2 — the proposal turn: `canon/roles/helper.md` and bare `mc helper`, one headless Sonnet turn that reads the digest, `docs/project/project_log.md` and the PLAN.md frontmatters and writes zero or more `~/mc/intake/proposals/<date>-<slug>.md`. Done when a real digest yields a proposal Martin can read in `mc brief`. The first one is already named by the digest: `/api/admin/operations/status` and `/api/admin/health` are session-admin only, so the nightly and morning outcomes reach no script; second is the deploy webhook, which writes nothing into `deploy:index`."
+next: "Step 3 — runner and status: `mc run` runs `mc helper` once per calendar day (first round after 05:00Z) as kind `helper` in runs.tsv, a failed collect logged and never retried within the day; and `mc status` gets a HELPER block — last digest time, new fingerprints in it, proposals waiting, the `!` lines first. Done when runs.tsv shows one `helper` row per day for two days. Unblocked: mc-run step 1 landed (#436, #437), so the daily gate goes in `mc run` and `~/mc/bin/runner.sh` is already deleted."
 budget: 150k
-needs: [mc-run]
+needs: []
 ---
 
 # mc helper — production errors and maintenance, watched by a script, read by one model turn
@@ -75,18 +75,25 @@ the new-error count and the proposals waiting.
       are behind `/api/admin/operations/status`, and full service health
       behind `/api/admin/health`, both session-admin. Exposing them to the
       admin token is the helper's first candidate proposal.
-- [ ] `mc helper` = collect, then one headless turn with the `helper`
+- [x] `mc helper` = collect, then one headless turn with the `helper`
       role from `canon/roles/helper.md` (model from the role, Sonnet)
       that writes zero or more `~/mc/intake/proposals/<date>-<slug>.md`,
       each with: the evidence (fingerprint, count, first/last seen), the
       proposed project or step, and a one-line "done when". It edits no
-      file outside `~/mc/intake/`.
+      file outside `~/mc/intake/`: the turn stands in `~/mc/intake/` and is
+      *given* the digest, the plans on main and the project log in its
+      prompt rather than sent to find them, so the repositories are not in
+      its reach at all.
 - [ ] `mc run` runs `mc helper` once per calendar day (first round after
       05:00Z), as kind `helper` in the existing `kind` column of runs.tsv;
       a failed collect is logged, never retried within the day.
+- [x] `mc brief --collect` lists the proposals under a "Proposals" section
+      — file, what it proposes (project or step, repo, project), title and
+      the one-line "done when" — so the brief session can move them. It
+      landed with step 2 rather than step 3: "a proposal Martin can read in
+      `mc brief`" is step 2's own success criterion.
 - [ ] `mc status` gets a HELPER block: last digest time, new fingerprints
-      in it, proposals waiting; `mc brief --collect` lists the proposals
-      under a "Proposals" section so the brief session can move them.
+      in it, proposals waiting.
 - [x] A digest line with a new fingerprint above a threshold (default 20
       hits in 24 h) is marked `!`. `mc status` printing it first is step 3.
 - [x] Tests: the digest on stubbed script output and stubbed routes; the
@@ -123,15 +130,19 @@ the new-error count and the proposals waiting.
 - [x] **1. The digest** — `mc helper --collect`. Done: one digest written
       from production 2026-08-29 (50 fingerprints, 2.5 s) and a second run
       against it named only the new ones.
-- [ ] **2. The proposal turn** — `canon/roles/helper.md`, `mc helper`.
-      Done when a real digest yields a proposal Martin can read in
-      `mc brief`. `canon/roles/` today holds `brief.md`, `plan.md` and
-      `worker.md`; `helper.md` is new and follows their shape.
+- [x] **2. The proposal turn** — `canon/roles/helper.md`, `mc helper`.
+      Done: run for real on 2026-08-29 against the day's digest (50
+      fingerprints), one headless Sonnet turn, 109 s, three proposals —
+      the two the plan predicted (`/api/admin/*` unreachable to a token;
+      the silent deploy webhook) and one it found on its own (a
+      `touchSession` KV rate-limit burst next to the slow-auth
+      fingerprints). All three then read back out of
+      `mc brief --collect`'s Proposals section.
 - [ ] **3. Runner and status** — daily kind `helper` in `mc run`; the
       HELPER block. Done when runs.tsv shows one `helper` row per day for
-      two days. Blocked on mc-run step 1 (PR #421, open): today the runner
-      is `~/mc/bin/runner.sh`, and the daily gate belongs in `mc run`, not
-      in the shell script that is about to be deleted.
+      two days. No longer blocked: mc-run step 1 landed (#436, #437) and
+      `~/mc/bin/runner.sh` is deleted, so the daily gate goes straight into
+      `mc run`'s round.
 - [ ] **4. Close-out** — `docs/technical/mc-helper.md`, `project_log.md`.
 - [ ] **5. Retire `sync-todo.mjs`** — in `~/memoro`, a week after the
       helper has been running (decision mc-2). Done when `/improve`,
@@ -180,6 +191,27 @@ production calls made.
   `needs: [mc-run]`.
 - **`~/mc/intake/` does not exist.** Collect creates it and
   `~/mc/intake/proposals/` on first run rather than assuming them.
+- **The helper's own help text broke every subprocess test.** Step 1 wrote
+  ``one `!` `` into `HELP_TEXT`, which is a template literal: the two
+  backticks closed and reopened it, and `src/mc/help-text.js` stopped
+  parsing. `mc --help` — and with it 115 of the suite's tests, every one
+  that spawns the CLI — had been failing since. Escaped, and the count is
+  back to the two that fail on this machine for their own reasons.
+- **Proposal parsing lives in `brief-collect.js`, not with the turn.** It
+  needs `planFields`, and `helper-turn.js` already imports that module for
+  the plans on main; putting `scanProposals` the other way round would have
+  made the two files import each other. The brief is also where it belongs
+  by meaning: that file already scans `decisions/`, and both are lists of
+  things waiting for Martin.
+- **The turn is given its material, not sent to find it.** Everything it
+  judges — the digest, every PLAN.md frontmatter on origin/main, the project
+  log, the proposals already waiting — is in the prompt (22 kB against the
+  real digest), and its cwd is `~/mc/intake`. A turn that cannot reach the
+  repositories cannot write in them either, which is cheaper than trusting
+  it not to.
+- **What it wrote is measured, not believed.** `runHelperTurn` lists
+  `proposals/` before and after and reports the difference, so a turn that
+  says it filed three and filed none is reported as having filed none.
 - **mc-1 is spent.** Its ruling (pm/pm-helper dormant, `mc watch`
   removed, `worker` kept) landed in #422 and #423 and touches nothing
   here. The reserved role name `helper` it mentions is free for

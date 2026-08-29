@@ -13,7 +13,8 @@ import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
 import {
-  collectBrief, lastBriefTime, listPlans, parseCatFileBatch, parseDecision, parsePlanFrontmatter, planFields,
+  collectBrief, lastBriefTime, listPlans, parseCatFileBatch, parseDecision, parsePlanFrontmatter, parseProposal,
+  planFields, scanProposals,
   queueNames, runsFor, runsSince, scanDecisions, showBatch, summariseRuns,
 } from '../../src/mc/brief-collect.js';
 
@@ -72,8 +73,51 @@ function workRoot() {
     '',
   ].join('\n'));
   writeFileSync(join(root, 'queue.md'), '# round 3\ndocx-editor\n\nsql-readiness-session-A\n');
+  mkdirSync(join(root, 'intake', 'proposals'), { recursive: true });
+  writeFileSync(join(root, 'intake', 'proposals', '2026-08-29-expose-operations.md'), PROPOSAL);
+  writeFileSync(join(root, 'intake', 'proposals', 'README.md'), 'Not a proposal: no title.\n');
   return root;
 }
+
+const PROPOSAL = `---
+name: expose-operations
+repo: memoro
+kind: project
+---
+
+# The nightly and morning outcomes reach no script
+
+## Evidence
+
+- \`/api/admin/operations/status\` answers 401 to an admin token (digest 2026-08-29).
+
+## Proposal
+
+A project whose step 1 is to read the two routes and say what a token may see.
+
+## Done when
+
+The nightly task outcomes are a section in the digest instead of a paragraph
+saying they cannot be read.
+`;
+
+describe('proposals', () => {
+  it('parses the frontmatter, the title and the one-line done when', () => {
+    const p = parseProposal(PROPOSAL);
+    assert.equal(p.name, 'expose-operations');
+    assert.equal(p.repo, 'memoro');
+    assert.equal(p.kind, 'project');
+    assert.equal(p.project, null);
+    assert.equal(p.title, 'The nightly and morning outcomes reach no script');
+    assert.match(p.doneWhen, /^The nightly task outcomes are a section in the digest/u);
+    assert.match(p.evidence, /answers 401 to an admin token/u);
+  });
+
+  it('is not a proposal without a title, and an absent directory is empty', () => {
+    assert.equal(parseProposal('---\nname: x\n---\n\nno heading here\n'), null);
+    assert.deepEqual(scanProposals(join(tmpdir(), 'mc-no-such-proposals-dir')), []);
+  });
+});
 
 describe('decision files', () => {
   it('parses title, recommendation and whether a **Beslut:** line exists', () => {
@@ -181,7 +225,7 @@ describe('runner log', () => {
 });
 
 describe('collectBrief', () => {
-  it('writes the six sections, offline, with a 24 h window on the first run', async () => {
+  it('writes the seven sections, offline, with a 24 h window on the first run', async () => {
     const root = workRoot();
     const env = { MC_WORK_ROOT: root, MC_REPOS_HOME: join(root, 'no-repos') };
     const now = new Date('2026-08-25T20:00:00Z');
@@ -189,7 +233,7 @@ describe('collectBrief', () => {
     const result = await collectBrief({ env, now, offline: true });
     const text = readFileSync(result.path, 'utf8');
     assert.equal(text, result.text);
-    const order = ['## Merged since last brief', '## Opened, not merged', '## Waiting on Martin', '## Plan status', '## Runner', '## Queue'];
+    const order = ['## Merged since last brief', '## Opened, not merged', '## Waiting on Martin', '## Proposals', '## Plan status', '## Runner', '## Queue'];
     let at = -1;
     for (const heading of order) {
       const next = text.indexOf(heading);
@@ -200,6 +244,10 @@ describe('collectBrief', () => {
     assert.match(text, /\| avatar\/decisions\/assistant-avatar-2\.md \| 1\. Ska QA-tabellen fortsätta grinda\? \| \*\*B\.\*\* Keeps the veto/u);
     assert.match(text, /\| avatar\/decisions\/language-content-1\.md \| Is the Swedish map accepted[^|]*\| — \|/u);
     assert.match(text, /2 waiting, 1 answered/u);
+    // The helper's own output, listed where Martin decides: one proposal, and
+    // the README beside it is not one.
+    assert.equal(result.data.proposals.length, 1);
+    assert.match(text, /\| 2026-08-29-expose-operations\.md \| project · memoro \| The nightly and morning outcomes reach no script \| The nightly task/u);
     assert.match(text, /Last 24 h: 3 steps \(step 2, triage 1\) — merged 1, left open 1, failed 0, timed out 1/u);
     assert.match(text, /- docx-editor\n- sql-readiness-session-A/u);
     assert.match(text, /memoro: no checkout/u);

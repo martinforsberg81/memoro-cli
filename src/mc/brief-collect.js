@@ -3,9 +3,9 @@
  * script and written to one file. No model is involved here; the model is
  * the session that reads the file afterwards.
  *
- * Six sections, in the order the plan fixes them: merged since the last
- * brief · opened, not merged · waiting on Martin · plan status · runner ·
- * queue. Every line comes from a file the runner or a session already
+ * Seven sections, in the order the plan fixes them: merged since the last
+ * brief · opened, not merged · waiting on Martin · the helper's proposals ·
+ * plan status · runner · queue. Every line comes from a file the runner or a session already
  * writes (`~/mc/runner/log/runs.tsv`, `~/mc/<area>/decisions/<n>.md`,
  * `docs/project/<programme>/<project>/PLAN.md` on origin/main, `~/mc/queue.md`) or from
  * GitHub through `gh`. The pure builders take text and return data so the
@@ -20,6 +20,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, wri
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
+import { proposalsDir } from './helper-collect.js';
 import { workRoot } from './paths.js';
 
 export const DAY_MS = 24 * 60 * 60 * 1000;
@@ -175,6 +176,68 @@ export function retireDecisions({ decisions = [], plans = [] } = {}) {
     remove.push({ ...d, appliedBy: mine.map((p) => p.project).sort() });
   }
   return { remove, orphans, held };
+}
+
+/* ---------------------------------------------------------------- proposals */
+
+/**
+ * `~/mc/intake/proposals/` — what the helper's turn wrote and nobody has
+ * acted on yet. It is read here for the same reason `decisions/` is: this is
+ * the file a person sits down with, and a proposal exists to be queued or
+ * dropped by Martin at exactly that moment. `mc helper` never touches
+ * `queue.md` itself, so the brief is the only place a proposal becomes work.
+ */
+
+/**
+ * A proposal file: the frontmatter mc needs (what kind of thing, and where
+ * it belongs) and the three sections a reader needs. Parsed the same way a
+ * PLAN.md frontmatter is, so a proposal written by hand behaves like one
+ * written by the turn.
+ *
+ * A file without a `# ` title is not a proposal — the turn's scratch notes,
+ * a README somebody left — and is skipped rather than listed as one.
+ */
+export function parseProposal(text) {
+  const lines = String(text || '').replace(/\r\n/gu, '\n').split('\n');
+  const heading = lines.find((line) => /^# /u.test(line));
+  if (!heading) return null;
+  const fields = planFields(text);
+  return {
+    name: fields.name || null,
+    repo: fields.repo || null,
+    kind: fields.kind || null,
+    project: fields.project || null,
+    title: heading.replace(/^#\s*/u, '').trim(),
+    doneWhen: section(lines, /^##\s+Done when\b/iu),
+    evidence: section(lines, /^##\s+Evidence\b/iu),
+  };
+}
+
+/** The first paragraph under a heading, folded onto one line. */
+function section(lines, heading) {
+  const at = lines.findIndex((line) => heading.test(line));
+  if (at < 0) return null;
+  const para = [];
+  for (const line of lines.slice(at + 1)) {
+    if (/^#/u.test(line)) break;
+    if (!line.trim()) { if (para.length) break; continue; }
+    para.push(line.trim().replace(/^[-*]\s+/u, ''));
+  }
+  return para.join(' ') || null;
+}
+
+/** Every proposal waiting in `~/mc/intake/proposals/`, oldest name first. */
+export function scanProposals(dir) {
+  let names = [];
+  try { names = readdirSync(dir).filter((name) => name.endsWith('.md')).sort(); } catch { return []; }
+  const out = [];
+  for (const file of names) {
+    const path = join(dir, file);
+    let parsed = null;
+    try { parsed = parseProposal(readFileSync(path, 'utf8')); } catch { parsed = null; }
+    if (parsed) out.push({ file, path, ...parsed });
+  }
+  return out;
 }
 
 /* --------------------------------------------------------------------- plans */
@@ -339,7 +402,7 @@ const clip = (text, max = 90) => {
 };
 
 export function renderBrief({
-  now, since, firstBrief, merged, opened, decisions, plans, runs, queue, notes = [],
+  now, since, firstBrief, merged, opened, decisions, proposals = [], plans, runs, queue, notes = [],
 }) {
   const out = [];
   const stamp = (d) => d.toISOString().replace(/\.\d{3}Z$/u, 'Z');
@@ -369,6 +432,19 @@ export function renderBrief({
   }
   const answered = decisions.length - waiting.length;
   out.push('', `${waiting.length} waiting, ${answered} answered.`, '');
+
+  out.push('## Proposals', '');
+  if (!proposals.length) out.push('_none in ~/mc/intake/proposals/_');
+  else {
+    out.push('| file | proposes | what | done when |', '|---|---|---|---|');
+    for (const p of proposals) {
+      const where = [p.kind || '?', p.repo, p.project].filter(Boolean).join(' · ');
+      out.push(`| ${p.file} | ${where} | ${clip(p.title, 80)} | ${clip(p.doneWhen || '—', 90)} |`);
+    }
+    out.push('', 'Each is the helper\'s reading of a digest, not work yet: queue it in `~/mc/queue.md` '
+      + 'and delete the file, or delete the file.');
+  }
+  out.push('');
 
   out.push('## Plan status', '');
   if (!plans.length) out.push('_no PLAN.md on origin/main_');
@@ -486,9 +562,11 @@ export async function collectBrief({
   let queue = [];
   try { queue = queueNames(read(join(root, 'queue.md'))); } catch { notes.push('no queue.md'); }
 
-  const text = renderBrief({ now, since, firstBrief: !last, merged, opened, decisions, plans, runs, queue, notes });
+  const proposals = scanProposals(proposalsDir(env));
+
+  const text = renderBrief({ now, since, firstBrief: !last, merged, opened, decisions, proposals, plans, runs, queue, notes });
   mkdirSync(dir, { recursive: true });
   const path = join(dir, `${now.toISOString().replace(/[:.]/gu, '-').replace(/-\d{3}Z$/u, 'Z')}.md`);
   writeFileSync(path, text);
-  return { path, text, data: { since, merged, opened, decisions, plans, runs, queue, notes } };
+  return { path, text, data: { since, merged, opened, decisions, proposals, plans, runs, queue, notes } };
 }
