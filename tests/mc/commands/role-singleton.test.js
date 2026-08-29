@@ -1,6 +1,9 @@
 /**
- * `mc pm` / `mc pm-helper` — the singleton semantics, observed through a
- * stubbed tmux (design note §6):
+ * The singleton semantics, observed through a stubbed tmux (design note §6).
+ * `mc pm` / `mc pm-helper` went dormant with decision mc-1; the machinery
+ * they stood on stays until the wider surface cut, and is driven here
+ * through its own entry rather than through a dispatch that no longer
+ * routes to it:
  *
  *   running        → attach, never a second instance
  *   stopped        → restart: resume the newest conversation, on the model
@@ -19,7 +22,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
-import { runMcCli } from '../_helpers/mc-cli.js';
+import { runRoleSingletonCli } from '../_helpers/mc-cli.js';
 
 const PM_MD = `---
 name: pm
@@ -89,7 +92,7 @@ function newSessionLine(log) {
 describe('mc pm', () => {
   it('first start creates the home and a conversation told what it is', () => {
     const fx = fixture();
-    const result = runMcCli(['pm'], fx.env);
+    const result = runRoleSingletonCli(['pm'], fx.env);
     assert.equal(result.status, 0, `stdout:${result.stdout}\nstderr:${result.stderr}`);
     const home = join(fx.workRoot, 'pm');
     assert.equal(readFileSync(join(home, '.mc-role'), 'utf8'), 'pm\n');
@@ -108,7 +111,7 @@ describe('mc pm', () => {
     // Asserted here as well as at the seam: `mc pm` is the session a person
     // attaches to most often, and it reaches tmux by its own path.
     const fx = fixture();
-    assert.equal(runMcCli(['pm'], fx.env).status, 0);
+    assert.equal(runRoleSingletonCli(['pm'], fx.env).status, 0);
     const lines = readFileSync(fx.log, 'utf8').split('\n').filter(Boolean);
     assert.deepEqual(lines.filter((line) => line.startsWith('set-option')), [
       'set-option -t mc-pm mouse on',
@@ -121,7 +124,7 @@ describe('mc pm', () => {
 
   it('while it runs, a second mc pm goes to it — never a second instance', () => {
     const fx = fixture({ tmuxRunning: true });
-    const result = runMcCli(['pm'], fx.env);
+    const result = runRoleSingletonCli(['pm'], fx.env);
     assert.equal(result.status, 0, result.stderr);
     assert.match(result.stderr, /joining the pm/u);
     assert.equal(existsSync(fx.log), false, 'nothing should have been started');
@@ -136,7 +139,7 @@ describe('mc pm', () => {
       { type: 'user', message: { content: 'boot' } },
       { type: 'assistant', message: { model: 'claude-fable-5', content: [] } },
     ]);
-    const result = runMcCli(['pm'], fx.env);
+    const result = runRoleSingletonCli(['pm'], fx.env);
     assert.equal(result.status, 0, `stdout:${result.stdout}\nstderr:${result.stderr}`);
     const line = newSessionLine(fx.log);
     assert.ok(line.includes(`'--resume' '${CONVERSATION_ID}'`), line);
@@ -148,14 +151,14 @@ describe('mc pm', () => {
   it('an ordinary area wearing the name cannot become the pm', () => {
     const fx = fixture();
     mkdirSync(join(fx.workRoot, 'pm'), { recursive: true });
-    const result = runMcCli(['pm'], fx.env);
+    const result = runRoleSingletonCli(['pm'], fx.env);
     assert.equal(result.status, 1);
     assert.match(result.stderr, /cannot become the pm/u);
   });
 
   it('no definition, no pm — nothing half-made', () => {
     const fx = fixture({ withPmRole: false });
-    const result = runMcCli(['pm'], fx.env);
+    const result = runRoleSingletonCli(['pm'], fx.env);
     assert.equal(result.status, 1);
     assert.match(result.stderr, /no pm role is defined/u);
     assert.equal(existsSync(join(fx.workRoot, 'pm')), false);
@@ -163,7 +166,7 @@ describe('mc pm', () => {
 
   it('--model against the running pm refuses rather than pretending', () => {
     const fx = fixture({ tmuxRunning: true });
-    const result = runMcCli(['pm', '--model', 'opus'], fx.env);
+    const result = runRoleSingletonCli(['pm', '--model', 'opus'], fx.env);
     assert.equal(result.status, 1);
     assert.match(result.stderr, /cannot change model/u);
   });
@@ -172,7 +175,7 @@ describe('mc pm', () => {
 describe('the role home on the status surfaces', () => {
   it('its filing directories are not worktrees', async () => {
     const fx = fixture();
-    const created = runMcCli(['pm'], fx.env);
+    const created = runRoleSingletonCli(['pm'], fx.env);
     assert.equal(created.status, 0, created.stderr);
     const { inspectWorkArea } = await import('../../../src/mc/work-area.js');
     const area = inspectWorkArea('pm', { ...process.env, ...fx.env });

@@ -33,7 +33,7 @@ import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
 import { installTmuxStub } from './_helpers/tmux-stub.js';
-import { runMcCli } from './_helpers/mc-cli.js';
+import { runMcCli, runRoleSingletonCli } from './_helpers/mc-cli.js';
 
 const PM_MD = `---
 name: pm
@@ -128,7 +128,7 @@ describe('mc pm new — against a running pm', () => {
     try {
       const home = makeHome(fx);
       const transcript = recordConversation(fx, home, PREDECESSOR);
-      const result = runMcCli(['pm', 'new'], fx.env);
+      const result = runRoleSingletonCli(['pm', 'new'], fx.env);
       assert.equal(result.status, 0, `stdout:${result.stdout}\nstderr:${result.stderr}`);
 
       const line = respawnLine(fx);
@@ -149,7 +149,7 @@ describe('mc pm new — against a running pm', () => {
     try {
       const home = makeHome(fx);
       recordConversation(fx, home, PREDECESSOR);
-      assert.equal(runMcCli(['pm', 'new'], fx.env).status, 0);
+      assert.equal(runRoleSingletonCli(['pm', 'new'], fx.env).status, 0);
       const line = respawnLine(fx);
       assert.ok(line.includes(`Predecessor: ${PREDECESSOR}`), line);
       assert.ok(line.includes(`mc pm ${PREDECESSOR}`), line);
@@ -161,7 +161,7 @@ describe('mc pm new — against a running pm', () => {
     const fx = fixture({ running: true, windowIndex: '3', insideIt: true });
     try {
       makeHome(fx);
-      assert.equal(runMcCli(['pm', 'new'], fx.env).status, 0);
+      assert.equal(runRoleSingletonCli(['pm', 'new'], fx.env).status, 0);
       assert.match(respawnLine(fx), /-t mc-pm:3 /u);
     } finally { fx.cleanup(); }
   });
@@ -170,7 +170,7 @@ describe('mc pm new — against a running pm', () => {
     const fx = fixture({ running: true });
     try {
       makeHome(fx);
-      const result = runMcCli(['pm', 'new'], fx.env);
+      const result = runRoleSingletonCli(['pm', 'new'], fx.env);
       assert.equal(result.status, 0, result.stderr);
       const keys = fx.tmux.keys();
       assert.ok(keys.some((line) => line.includes('/exit')), keys.join('\n'));
@@ -192,7 +192,7 @@ describe('mc pm new — against a running pm', () => {
     try {
       const home = makeHome(fx);
       recordConversation(fx, home, PREDECESSOR);
-      const result = runMcCli(['pm', 'new'], fx.env);
+      const result = runRoleSingletonCli(['pm', 'new'], fx.env);
       assert.equal(result.status, 0, `stdout:${result.stdout}\nstderr:${result.stderr}`);
       // Nobody can wait for a tool to leave when the waiting turn is the one
       // being replaced, so mc does not pretend to try.
@@ -215,7 +215,7 @@ describe('mc pm new — against a running pm', () => {
       recordConversation(fx, home, PREDECESSOR, [
         { type: 'assistant', message: { model: 'claude-haiku-4-5-20251001', content: [] } },
       ]);
-      assert.equal(runMcCli(['pm', 'new'], fx.env).status, 0);
+      assert.equal(runRoleSingletonCli(['pm', 'new'], fx.env).status, 0);
       const line = respawnLine(fx);
       assert.ok(line.includes(`'--model' 'fable'`), line);
       assert.ok(!line.includes('haiku'), line);
@@ -226,7 +226,7 @@ describe('mc pm new — against a running pm', () => {
     const fx = fixture({ running: true, insideIt: true });
     try {
       makeHome(fx);
-      assert.equal(runMcCli(['pm', 'new', '--model', 'opus'], fx.env).status, 0);
+      assert.equal(runRoleSingletonCli(['pm', 'new', '--model', 'opus'], fx.env).status, 0);
       assert.ok(respawnLine(fx).includes(`'--model' 'opus'`));
     } finally { fx.cleanup(); }
   });
@@ -235,7 +235,7 @@ describe('mc pm new — against a running pm', () => {
     const fx = fixture({ running: true });
     try {
       makeHome(fx);
-      const result = runMcCli(['pm', '--model', 'opus'], fx.env);
+      const result = runRoleSingletonCli(['pm', '--model', 'opus'], fx.env);
       assert.equal(result.status, 1);
       assert.match(result.stderr, /cannot change model/u);
       assert.deepEqual(called(fx, 'respawn-window'), []);
@@ -249,7 +249,7 @@ describe('mc pm new — with nothing running', () => {
     try {
       const home = makeHome(fx);
       recordConversation(fx, home, PREDECESSOR);
-      const result = runMcCli(['pm', 'new'], fx.env);
+      const result = runRoleSingletonCli(['pm', 'new'], fx.env);
       assert.equal(result.status, 0, `stdout:${result.stdout}\nstderr:${result.stderr}`);
       const [created] = called(fx, 'new-session');
       assert.ok(created, fx.tmux.calls().join('\n'));
@@ -263,7 +263,7 @@ describe('mc pm new — with nothing running', () => {
   it('a first pm ever is a new conversation with nobody to succeed', () => {
     const fx = fixture();
     try {
-      const result = runMcCli(['pm', 'new'], fx.env);
+      const result = runRoleSingletonCli(['pm', 'new'], fx.env);
       assert.equal(result.status, 0, `stdout:${result.stdout}\nstderr:${result.stderr}`);
       const [created] = called(fx, 'new-session');
       assert.ok(created.includes('You are the PM'), created);
@@ -279,7 +279,7 @@ describe('mc pm <conversation id> — the way back', () => {
       const home = makeHome(fx);
       recordConversation(fx, home, OLDER);
       recordConversation(fx, home, PREDECESSOR);
-      const result = runMcCli(['pm', OLDER.slice(0, 8)], fx.env);
+      const result = runRoleSingletonCli(['pm', OLDER.slice(0, 8)], fx.env);
       assert.equal(result.status, 0, `stdout:${result.stdout}\nstderr:${result.stderr}`);
       const [created] = called(fx, 'new-session');
       assert.ok(created.includes(`'--resume' '${OLDER}'`), created);
@@ -293,7 +293,7 @@ describe('mc pm <conversation id> — the way back', () => {
     try {
       const home = makeHome(fx);
       recordConversation(fx, home, PREDECESSOR);
-      const result = runMcCli(['pm', 'deadbeef'], fx.env);
+      const result = runRoleSingletonCli(['pm', 'deadbeef'], fx.env);
       assert.equal(result.status, 1, result.stdout);
       assert.match(result.stderr, /no conversation in the pm's home starts with deadbeef/u);
       assert.deepEqual(called(fx, 'new-session'), [], 'nothing may be started');
@@ -306,7 +306,7 @@ describe('mc pm <conversation id> — the way back', () => {
     try {
       const home = makeHome(fx);
       recordConversation(fx, home, PREDECESSOR);
-      const result = runMcCli(['pm', PREDECESSOR.slice(0, 8)], fx.env);
+      const result = runRoleSingletonCli(['pm', PREDECESSOR.slice(0, 8)], fx.env);
       assert.equal(result.status, 1, result.stdout);
       assert.match(result.stderr, /one conversation at a time/u);
       assert.match(result.stderr, /join what is running:  mc pm/u);
@@ -323,7 +323,7 @@ describe('mc pm <conversation id> — the way back', () => {
     try {
       const home = makeHome(fx);
       recordConversation(fx, home, PREDECESSOR);
-      const result = runMcCli(['pm', 'deadbeef'], fx.env);
+      const result = runRoleSingletonCli(['pm', 'deadbeef'], fx.env);
       assert.equal(result.status, 1, result.stdout);
       assert.match(result.stderr, /no conversation in the pm's home starts with deadbeef/u);
       assert.doesNotMatch(result.stderr, /stop it first/u);
@@ -333,7 +333,7 @@ describe('mc pm <conversation id> — the way back', () => {
   it('two words is a usage error, and the usage names both forms', () => {
     const fx = fixture();
     try {
-      const result = runMcCli(['pm', 'new', 'and-then-some'], fx.env);
+      const result = runRoleSingletonCli(['pm', 'new', 'and-then-some'], fx.env);
       assert.equal(result.status, 2);
       assert.match(result.stderr, /usage — mc pm \[new \| <conversation id>\]/u);
     } finally { fx.cleanup(); }
@@ -346,7 +346,7 @@ describe('mc pm-helper gets it from the same code', () => {
     try {
       writeFileSync(join(fx.root, 'roles', 'pm-helper.md'), PM_MD.replace('name: pm', 'name: pm-helper'));
       makeHome(fx, 'pm-helper', { role: 'pm-helper' });
-      const result = runMcCli(['pm-helper', 'new'], fx.env);
+      const result = runRoleSingletonCli(['pm-helper', 'new'], fx.env);
       assert.equal(result.status, 0, `stdout:${result.stdout}\nstderr:${result.stderr}`);
       assert.match(respawnLine(fx), /-t mc-pm-helper:0 /u);
     } finally { fx.cleanup(); }

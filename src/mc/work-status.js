@@ -30,11 +30,9 @@ import { mcHome, workRoot } from './paths.js';
 import { backgroundTarget } from './work-open.js';
 import { processesStandingIn } from './standing.js';
 import { readSuiteLease } from './suite-lease.js';
-import { pendingWakeFor } from './wake-queue.js';
 import { dependencyTree } from './dependency-tree.js';
 import { areaRoleName } from './roles.js';
 import { openTaskCount } from './task-log.js';
-import { scheduledWakeup } from './wakeup.js';
 import { inspectWorkArea, listWorkAreas } from './work-area.js';
 import { readStopMark } from './work-stop-marker.js';
 
@@ -336,9 +334,6 @@ function describeConversation(item, live) {
     // prints it, but a session outside tmux has no pane, and the transcript
     // has it for both.
     context: contextUsage(item.tool, entries),
-    // The clock the session set for itself, if any (D-0155). Claude only —
-    // Codex has no such tool — and read from the same tail as the rest.
-    wakeup: item.tool === 'codex' ? null : scheduledWakeup(entries),
     live,
     state: !live ? 'idle' : turn === 'waiting' ? 'waiting' : 'working',
   };
@@ -436,10 +431,6 @@ export async function workStatus({ env = process.env, names = null, git: askGit 
           dependencies: dependencyState(worktree.path),
         })),
         conversations,
-        // A wake the guard refused on a draft and queued: the session is
-        // unreachable by wake since then, and the page says so rather than
-        // leaving the state in one sender's scrollback.
-        pending_wake: pendingWakeFor(area.name, { root: env.MC_HOME || mcHome() }),
         // A pane sitting in a menu is a session blocked on a person, and it
         // can sit there all night (2026-08-23). One capture per running area;
         // the question, when the drawing carries one, so it can be answered
