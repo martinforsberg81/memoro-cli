@@ -1,13 +1,39 @@
 ---
 status: ready
-next: "Step 1 — queue.md becomes a strict self-emptying list; the runner closes a workarea by itself once its plan is done on main, its worktree is clean and its last run merged; the page lists only real workareas — done when `mc` (or `mc work` until mc-ui lands) no longer shows bin/brief/decisions/inbox/runner/status/pm/pm-helper, and the seven done workareas of 2026-08-29 are gone from ~/mc with their conversation logs kept under ~/mc/runner/log/closed/."
+next: "Step 1 — a plan that reaches `done` on main is archived by the runner in the same round: its `docs/project/<programme>/<project>/` directory is removed, `project_log.md` carries a row for it, and only then does the workarea go — done when the ten done plans of 2026-08-29 (8 in memoro, 2 in memoro-cli) are gone from `docs/project/` with a row each, and `docs/project/` holds no directory whose plan says `done`."
 budget: 150k
 needs: [mc-ui]
 ---
 
-# mc tidy — workareas leave by themselves when their work lives on main
+# mc tidy — a plan that is done leaves, and takes its workarea with it
 
 ## Goal
+
+A plan that reaches `done` is archived. Nothing else is the trigger, and
+nothing has to be typed (Martin, 2026-08-29: "När en plan är DONE ska den
+arkiveras. Punkt.").
+
+Measured on 2026-08-29, that is not what happens. `run.js:355` answers a
+done plan with `break` — the runner stops working on it and does nothing
+else. No code in mc writes a `project_log.md` row or removes a directory
+under `docs/project/`; `PROJECT_LOG` appears once in the source
+(`helper-turn.js:38`) and is only ever read. The close-out rule in
+`docs/project/README.md` is prose that a human or a step's Claude is
+expected to follow unaided, so:
+
+- memoro: 39 plans, **8 say `done`**, all 8 still in `docs/project/`, all 8
+  still holding a workarea. `project_log.md` has 4 rows, none of them these.
+- memoro-cli: 11 plans, **2 say `done`** (mc-ui, mc-ui-polish). Both already
+  have their `project_log.md` row — and both directories are still there.
+  Step 1 of close-out happens; step 2, the only one that removes anything,
+  does not.
+- `docs/plans/`, the home `docs/project/` replaced, holds **656 .md files**
+  (49 archived). `docs/project/` is five weeks old and holds 77 on 39
+  projects. Same curve, one generation later.
+
+So the archiving is the runner's, not the reader's. The workarea question
+below is the same question one layer down — a workarea outlives its plan
+for exactly the same reason — and both are answered here.
 
 `mc work` on 2026-08-29 listed 62 rows. Measured: 8 are mc's own folders
 (bin, brief, decisions, inbox, runner, status, pm, pm-helper), 7 are
@@ -18,6 +44,33 @@ Martin ruled (2026-08-29, in session): **no new verb**. The runner and the
 page keep the list clean on their own.
 
 ## Rules
+
+- **A plan on main that says `status: done` is archived in the round the
+  runner reads it**, in the repository that keeps it: the directory
+  `docs/project/<programme>/<project>/` is `git rm -r`'d, a row is appended
+  to that repository's `docs/project/project_log.md`, and the change lands
+  as its own PR the runner merges like any other. `done` is the whole
+  trigger — not a verb, not a flag, not the workarea's state.
+- **The row is preferred, never waited for.** If the project's close-out
+  step already wrote its `project_log.md` row, the runner leaves it alone
+  and only removes the directory — that is the case measured on mc-ui and
+  mc-ui-polish. If no row names the project, the runner writes one from the
+  plan: `date` today, `programme`/`project` from the path, `outcome`
+  `delivered`, `summary` the plan's `next:` clipped to one line, `pointer`
+  the PRs the runner merged for it in `runs.tsv`, and `doc` the
+  `docs/technical/` path the plan names if it names one, else `none`.
+- **A missing doc is recorded, never a blocker.** Archiving a delivered
+  project whose row says `doc: none` writes one line to runner.log naming
+  it, and `~/mc/intake/undocumented-closures.md` gets a row for `mc brief`
+  to raise. It does not stop the removal: a project kept alive because its
+  documentation is thin is how `docs/plans/` reached 656 files.
+- Archiving is of `docs/project/<programme>/<project>/` only. An empty
+  programme directory goes with its last project; `project_log.md`,
+  `README.md` and any file the programme keeps beside its projects stay.
+  `docs/plans/` is not touched by this project at all.
+- **The plan goes first, then the workarea.** A workarea is closed in the
+  same round, after its project's archive PR has merged — so a workarea is
+  never removed while the plan that explains it is still on main.
 
 - A workarea is **closable** when all three hold: its plan on main says
   `status: done`; its worktree has no uncommitted change; the last row for
@@ -51,6 +104,20 @@ page keep the list clean on their own.
 
 ## Success criteria
 
+- [ ] `mc run` archives every plan that says `done` on main, in the round it
+      reads it, and says so in runner.log — one line per project.
+- [ ] The first run after merge archives the ten done plans of 2026-08-29 —
+      memoro: docs-structure, improve-chat-runtime,
+      language-voice-lexical-selection, language-voice-live-watchdog,
+      language-voice-playback-underrun, continue-section, msr-design,
+      sql-readiness-session-A; memoro-cli: mc-ui, mc-ui-polish — and leaves
+      every other directory in `docs/project/` untouched.
+- [ ] After that run, no directory under `docs/project/` in either
+      repository has a PLAN.md that says `done`, and every one that was
+      removed has exactly one `project_log.md` row naming it — the two that
+      already had a row (mc-ui, mc-ui-polish) still have exactly one each.
+- [ ] `~/mc/intake/undocumented-closures.md` names every project archived
+      with `doc: none`.
 - [ ] `mc run` closes every closable workarea at the end of each round
       (`git worktree remove`, local branch deleted, logs moved) and says so
       in runner.log, one line per workarea.
@@ -67,16 +134,26 @@ page keep the list clean on their own.
       every named project ran, the file is empty. `mc run` never reads a
       comment line into the queue.
 - [ ] Tests cover the closable rule with the squash-merge case (branch
-      ahead, plan done, last run merged → closable) and the dirty case.
+      ahead, plan done, last run merged → closable) and the dirty case;
+      and archiving with a row already written, with no row, and with a
+      programme left empty by its last project.
 
 ## Contract
 
 - No new command, flag or prompt key. Nothing is removed that has an
   uncommitted change, no plan, or an unmerged last run.
-- Removal is of the `~/mc/<name>/` folder and the local branch only; the
-  remote branch and the PRs stay.
+- Archiving removes `docs/project/<programme>/<project>/` and nothing else
+  in the repository; `docs/plans/` is out of scope. The history is the
+  record — `git log --all -- <path>` still answers every question the
+  removed directory could.
+- Workarea removal is of the `~/mc/<name>/` folder and the local branch
+  only; the remote branch and the PRs stay.
+- A thin or missing `docs/technical/` note never stops an archive. It is
+  reported, and Martin decides whether to write it.
 
 ## Steps
 
-- [ ] **1. Closable rule + runner close + page filter + strict queue.md** — one PR.
-- [ ] **2. Close-out** — `docs/technical/` note, `project_log.md` row.
+- [ ] **1. Archive on done** — the runner removes the directory and writes
+      the row it needs, PR per repository. One PR.
+- [ ] **2. Closable rule + runner close + page filter + strict queue.md** — one PR.
+- [ ] **3. Close-out** — `docs/technical/` note, `project_log.md` row.
