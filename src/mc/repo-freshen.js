@@ -41,7 +41,7 @@ import { sendToArea } from './work-send.js';
 import { toolProcesses } from './work-status.js';
 
 /** Who the inbox lines are from. Fixed: the round runs wherever it was started. */
-const SENDER = Object.freeze({ name: 'mc repo merge', kind: 'watcher' });
+const SENDER = Object.freeze({ name: 'mc merge', kind: 'watcher' });
 
 /**
  * Freshen every open branch aimed at `base`, and say what happened to each.
@@ -121,7 +121,7 @@ export function freshenOpenBranches({
           ? `conflicts with ${base} in ${outside.slice(0, 5).join(', ')}${outside.length > 5 ? ` and ${outside.length - 5} more` : ''} — left exactly as it was`
           : `conflicts only under artifacts/ (${conflicted.length} file${conflicted.length === 1 ? '' : 's'}) — regenerate, never resolve; left exactly as it was`;
         entry.told = tell({ send, branch, number: item.number, occupied, git: askGit, repoPath, say,
-          message: `mc repo merge: #${item.number} (${branch}) ${detail}` });
+          message: `mc merge: #${item.number} (${branch}) ${detail}` });
         note({ ...entry, action: 'conflict', detail });
         continue;
       }
@@ -135,7 +135,7 @@ export function freshenOpenBranches({
         if (ran.status !== 0) {
           const detail = `${base} merged in cleanly but ${affected} is red — nothing pushed; the branch needs its owner`;
           entry.told = tell({ send, branch, number: item.number, occupied, git: askGit, repoPath, say,
-            message: `mc repo merge: #${item.number} (${branch}) ${detail}` });
+            message: `mc merge: #${item.number} (${branch}) ${detail}` });
           note({ ...entry, action: 'affected-red', detail });
           continue;
         }
@@ -146,7 +146,7 @@ export function freshenOpenBranches({
       const at = trim(askGit(['rev-parse', 'HEAD'], { cwd: workspace }).stdout).slice(0, 7);
       const detail = `${base} merged in at ${at}, clean${affected ? `, ${affected} green` : ', no affected declared — run yours before building on it'}`;
       entry.told = tell({ send, branch, number: item.number, occupied, git: askGit, repoPath, say,
-        message: `mc repo merge: your branch ${branch} (#${item.number}) is freshened — ${detail}; plain merge commit, nothing rewritten, git pull and continue` });
+        message: `mc merge: your branch ${branch} (#${item.number}) is freshened — ${detail}; plain merge commit, nothing rewritten, git pull and continue` });
       note({ ...entry, action: 'pushed', detail });
     } finally {
       rmSync(workspace, { recursive: true, force: true });

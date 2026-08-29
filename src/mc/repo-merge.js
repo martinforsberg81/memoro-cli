@@ -496,7 +496,7 @@ function writeMergeLine({ report, verdict, path, clock }) {
     : [{ number: report.pr.number, title: verdict.pr.title, commit: report.merge_commit, note: '' }];
   const line = landed.map((item) => `| ${day} | ${basenameOf(report.repo)} #${item.number}${item.title ? ` ${item.title}` : ''} `
     + `| ${checks} | D (delegerad) | Squash-merge into \`${report.merged_into}\` → \`${short(item.commit)}\`${report.off_default ? ` (NOT ${report.default_branch})` : ''} `
-    + `| Run by \`mc repo merge\` as ${report.holder}. ${item.note ? `${item.note} ` : ''}${deployNote(report.deploy)} |`).join('\n');
+    + `| Run by \`mc merge\` as ${report.holder}. ${item.note ? `${item.note} ` : ''}${deployNote(report.deploy)} |`).join('\n');
 
   try {
     if (!existsSync(path)) mkdirSync(dirname(path), { recursive: true });

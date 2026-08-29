@@ -11,6 +11,14 @@
 import { spawnSync } from 'node:child_process';
 
 export const DOCS_PREFIX = 'docs/';
+/**
+ * How long to wait for GitHub to make up its mind about mergeability, as
+ * tries and the pause between them. Exported because the note that describes
+ * this form states the wait in words, and a doc that names a number goes
+ * stale silently (tests/mc/merge-doc.test.js).
+ */
+export const MERGEABILITY_TRIES = 12;
+export const MERGEABILITY_WAIT_MS = 5000;
 
 function ghRunner(cwd) {
   return (args) => {
@@ -50,9 +58,9 @@ export async function runDocsMerge({
   // GitHub reports UNKNOWN for a few seconds after a push; merging then
   // fails for no real reason. Wait for a verdict first.
   let mergeable = 'UNKNOWN';
-  for (let i = 0; i < 12 && mergeable === 'UNKNOWN'; i += 1) {
+  for (let i = 0; i < MERGEABILITY_TRIES && mergeable === 'UNKNOWN'; i += 1) {
     mergeable = view(gh, pr, 'mergeable')?.mergeable || 'UNKNOWN';
-    if (mergeable === 'UNKNOWN') { onProgress(`waiting for GitHub's mergeability of #${pr}`); await sleep(5000); }
+    if (mergeable === 'UNKNOWN') { onProgress(`waiting for GitHub's mergeability of #${pr}`); await sleep(MERGEABILITY_WAIT_MS); }
   }
   if (mergeable === 'CONFLICTING') return finish('conflicting', `#${pr} conflicts with ${report.pr.base} — merge ${report.pr.base} in and push`);
 
