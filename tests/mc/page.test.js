@@ -4,7 +4,7 @@
  * made of real files with no git, no gh and no tmux.
  */
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
@@ -632,6 +632,37 @@ describe('the palette', () => {
       }),
     });
     assert.deepEqual(signature(rowWith(paintedPage(data), '● mc brief')).split(' ').slice(0, 2), ['cyan', 'bold+cyan']);
+  });
+
+  // The two tables in `docs/technical/mc-ui.md` are the palette written down;
+  // a colour changed in one place and not the other is a doc that lies, which
+  // is worse than no doc at all.
+  it('says the same colours in docs/technical/mc-ui.md as page-render.js does', () => {
+    const source = readFileSync(new URL('../../src/mc/page-render.js', import.meta.url), 'utf8');
+    const doc = readFileSync(new URL('../../docs/technical/mc-ui.md', import.meta.url), 'utf8');
+    const inCode = (name) => Object.fromEntries(
+      [...new RegExp(`const ${name} = \\{([^}]*)\\}`, 'u').exec(source)[1]
+        .matchAll(/'?([\w-]+)'?:\s*\[([^\]]*)\]/gu)]
+        .map(([, key, styles]) => [key, styles.split(',').map((s) => s.trim().replace(/'/gu, '')).join(' ')]),
+    );
+    const inDoc = (heading) => Object.fromEntries(
+      [...new RegExp(`\\| ${heading} \\| colour \\|\\n\\|---\\|---\\|\\n([\\s\\S]*?)\\n\\n`, 'u').exec(doc)[1]
+        .matchAll(/^\| `([\w-]+)` \| (.+?) \|$/gmu)].map(([, key, tone]) => [key, tone]),
+    );
+    assert.deepEqual(inDoc('step kind'), inCode('KIND_TONE'), 'the doc names another colour for a step kind');
+    assert.deepEqual(inDoc('plan status'), inCode('STATUS_TONE'), 'the doc names another colour for a plan status');
+    // The two fallbacks are rows of their own in the doc, and they are the
+    // colours `kindTone` and `statusTone` reach for when the table has no key.
+    assert.ok(/\| anything else \| grey \|/u.test(doc));
+    assert.ok(/\| no PLAN\.md on main \| dim grey \|/u.test(doc));
+    assert.deepEqual(signature(rowWith(paintedPage(pageData({
+      work: workSection({
+        areas: [{ name: 'unplanned', mtime_ms: 1 }],
+        plans: [],
+        rows: [{ ts: '2026-08-29T10:00:00Z', name: 'unplanned', kind: 'rebase', pr: '-', note: '' }],
+      }),
+    })), 'unplanned')).split(' '), ['grey', 'grey', 'grey', 'dim+grey', 'grey', 'grey', 'grey'],
+    'a kind the table has no key for, on a row with no plan, is the page at its quietest');
   });
 
   it('says what --watch is doing in the header, and says nothing there without it', () => {
