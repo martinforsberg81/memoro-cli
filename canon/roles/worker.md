@@ -45,9 +45,12 @@ understood. A decision file is a thing you have finished thinking about.
 
 Then set `status: waiting-decision` in the plan, commit, push, open the pull
 request, and stop. Martin answers by appending a line beginning `**Beslut:**`
-to that file. The next session writes that answer into the plan and `mc run`
-deletes the file — the plan is where the decision lives afterwards, and
-`decisions/` never accumulates.
+to that file. The next session writes that answer into the plan and sets
+`status:` back to `ready` — that, and nothing else, is what puts the project
+back in front of the runner, which reads no decision file at all. The next
+`mc brief --collect` then deletes the file, once no plan waits on it: the
+plan is where the decision lives afterwards, and `decisions/` never
+accumulates.
 
 ## What you never do
 

@@ -37,25 +37,21 @@ started in it. mc stores nothing else, because nothing else is mc's to know.
 | `mc work remove <name> <repo>` | Take one repository out of it. |
 | `mc work release <name> [--apply]` | Remove what git says can go; keep the rest. |
 | `mc work discard <name> [repo] [--apply]` | Throw it away — worktrees, branches, and all. |
-| `mc work send <name> "<text>"` | A message into that work's `inbox/`. `--wake` also knocks on whatever is running there — or, when a draft is in its prompt, queues the knock for when the prompt clears and says so. `--json`. |
-| `mc work stop <name>` | Stop what is running there; keep the work. Leaves a mark (`.mc-stopped`: who, when) so the session guard says `stopped by pm 03:16` instead of `dead` and the board shows it; `mc work <name>` removes it. |
+| `mc work send <name> "<text>"` | A message into that work's `inbox/`. `--wake` also knocks on whatever is running there — or, when a draft is in its prompt, says that nothing was typed and leaves the knock undone (the wake queue went with the session guard, decision mc-1). `--json`. |
+| `mc work stop <name>` | Stop what is running there; keep the work. Leaves a mark (`.mc-stopped`: who, when) so a reader can tell a stopped session from a dead one; `mc work <name>` removes it. |
 | `mc work list` | The page, as bare `mc work` is. |
-| `mc worker <name> [task]` | A project folder that carries the worker role. |
-| `mc pm` / `mc pm-helper` | The singleton role's workspace: attach if it runs, restart it if it stopped, create it the first time. One of it, ever. `mc pm-helper intake [--json]` lists Martin's unprocessed intake items (oldest first; `done <stem…>` moves them to `intake/processed/<date>/` — never deletes). The helper may run `mc repo merge … --check`; the form without `--check` is refused by the tool itself (design note §5). |
-| `mc <role> new [--model <m>]` | Start over in the same window: the running conversation is ended and replaced, nothing is deleted, and the successor is told its predecessor's id. |
-| `mc <role> <id>` | One particular conversation in the role's home — the way back from a handoff. Refused while the role is running. |
+| `mc worker <name> [task]` | A project folder that carries the worker role, read from `canon/roles/worker.md` — the roles mc ships — so a machine with no catalogue still gets the overlay. Every conversation started in the area inherits it and the role's model default. `--model`, `--tmux`, `--codex|--claude`. |
+| `mc pm` / `mc pm-helper` | **Dormant** since decision mc-1 (2026-08-26). Each prints one line — "mc pm is dormant — the runner and mc brief replaced it (decision mc-1)" — and exits 2, whatever follows it. No workspace is opened and none of the singleton forms (`mc <role> new`, `mc <role> <id>`) is routed. `role-singleton.js`, `pm-helper-intake.js` and the reserved names stay until the surface cut; see [`docs/technical/mc-dormant.md`](technical/mc-dormant.md). |
 | `mc roles list \| show <role>` | The defined roles, read from their files. |
 | `mc worktrees` | Worktrees across the work areas. |
 | `mc status <name>` | One project: its PLAN.md frontmatter and step, the decisions that belong to it, its last three runner steps and the open PR on its branch. `--json`, `--offline`. Without a name it says the page is `mc`; `--sessions`, `--watch` and `--wait` went with the old board (decision mc-3). |
 | `mc repo status [repo]` | One repository seen whole: main, open pull requests with how far behind main each is, the work areas standing on it, and the source-linked installation's drift. `--json`, `--offline`. |
 | `mc repo watch start \| stop \| status` | The background process that keeps that answer fresh. `--interval <seconds>` on start; `--json` on status. |
-| `mc watch sessions start \| stop \| status` | The session guard: every 10 minutes it flags waiting, silent, dead, unreachable, unattended, quiet-group, stalled, holding, context (script) and blocked, quota-exhausted, error (model) into the notices ledger. `dead`, `quota-exhausted`, `unattended`, `quiet-group` and `context` (90 % of the window, read from the transcript so a session without a pane is seen too; the board shows the fill from 70 %) knock PM at once. `--interval <seconds>`, `--model <model>`, `--idle <minutes>` (unattended after, default 10) and `--group <prefix>` (repeatable; quiet-group when nobody under it works) on start; `--json` on status. |
 | `mc repo claim <repo> "<what for>"` | Hold the gate round on a repository. Refused if someone else holds it. |
 | `mc repo release <repo> [--force]` | Give it back; `--force` takes it from another holder and is logged. |
 | `mc repo who <repo>` | Who holds it, for what, since when — and whether the holder is still working. `--json`. |
 | `mc repo rounds [--json]` | Every gate round ever run from this machine, counted by where it ended — merged, red, refused lease, drift, cut short. Written one JSON line per round (`~/.memoro/mc/gate-rounds.jsonl`), for every `mc repo merge` and `--check`, so the question "has the gate ever caught anything?" is a count, not a reading of the merge log's survivors (A7). |
 | `mc repo merge <repo> <pr> [<pr>...]` | Run the test gate and, only if nothing new went red, squash-merge, deploy-pull, freshen the open branches the merge made dirty (base merged in, plain push, owner's inbox told; conflicts touch nothing) and log it. Several numbers: one candidate with all of them merged in, the suite once each side, each PR's own tests by itself, then merged in the order given; a batch that stops falls back to one round per PR and says so. Prints wall clock per step. `--check` gates and stops. `--json`. |
-| `mc watch pm start \| stop \| status` | The PM round: every 30 minutes it commits `pm/`, runs `mc doctor`, counts `pm/inbox/`, delivers the guard's notices and knocks once if something is new. `--interval <seconds>` on start; `--json` on status. Both watchers restart themselves between passes when mc's code changes on disk; `status` says *OLD CODE* for a process behind the tree. |
 | `mc suite run "<command>"` | Take the suite right, run the command, give the right back when it ends — on success, on failure, and on SIGINT/SIGTERM (the command's process group is ended first). Refused when someone else holds it, and then NOTHING runs — refused-claim-then-run-anyway was measured three times in one day (D-0176). Also refused (exit 2, "the suite never ran") in a worktree that declares dependencies and has no node_modules — a suite there shrinks silently and reports fewer failures (D-0152). A right claimed by hand beforehand stays held afterwards. |
 | `mc suite claim "<what for>"` | Hold the right to run a full suite — one at a time on this machine (D-0141). Refused if someone else holds it; no process is blocked. The gate round takes it by itself. |
 | `mc suite release [--force]` | Give it back; `--force` takes it from another holder and is logged. |
@@ -81,21 +77,14 @@ says to start the watcher; with no snapshot at all it counts for itself and
 says so. The watcher writes only `<mc home>/repo-status/`: never inside a
 repository, never the registry. It is explicit — no command starts it for you.
 
-`mc watch pm` is a script and never a model turn. An empty inbox and a quiet
-ledger cost a few file reads. It wakes on change rather than on presence: a
-knock happens when the set of unprocessed items gains a member, an item still
-there on the third pass earns one reminder, and after that it is in the log
-rather than in the prompt. It decides nothing about what any item is about —
-it counts files and names them, and never opens one. Its auto-commit commits
-what PM wrote and never edits it. `delivered, but did not knock` is a normal
-outcome: the client guard refuses to type into a pane whose prompt is not
-empty — PM's pane being attached is not a reason, that is what it is for —
-and the message is in the inbox either way. Unprocessed means a file at the top level
-of `pm/inbox/`, excluding `README.md` and directories — archiving to
-`inbox/archive/` is what makes an item processed. It writes only
-`<mc home>/watch/`, and the notices it delivers come from
-`<mc home>/watch/notices.jsonl`, which the session guard appends to and
-nothing ever removes from.
+There is no `mc watch`. The PM round and the session guard were removed with
+the resident PM (decision mc-1, 2026-08-26), together with the notices ledger
+and `<mc home>/watch/`; `mc repo watch` above is a different mechanism and is
+the only watcher mc has. `delivered, but did not knock` is still a normal
+outcome of `mc work send --wake` — the client guard refuses to type into a
+pane whose prompt is not empty, and the message is in the inbox either way —
+but nothing retries it afterwards, and the sender is told so. See
+[`docs/technical/mc-dormant.md`](technical/mc-dormant.md).
 
 The lease is advisory. `mc repo claim` refuses a repository someone else is
 holding, and that refusal stops exactly one thing: this command. No git or gh
@@ -293,17 +282,18 @@ Knocking on the running conversation is a separate thing, asked for with
 `--wake`, because it types into an input box that belongs to somebody else. It
 refuses on a pane a tmux client is attached to — except a singleton role's
 (`pm`, `pm-helper`), which is attached by design and would otherwise never be
-knocked at all — and on any pane whose input box holds text, whoever put it
-there, including a notice an earlier wake gave up on. Text *drawn* in the box
+knocked at all; the exception outlives the dormant verbs, since it is the area
+name that carries it — and on any pane whose input box holds text, whoever put
+it there, including a notice an earlier wake gave up on. A refused knock is
+reported and never retried: the queue that used to hold it went with the
+session guard (decision mc-1). Text *drawn* in the box
 is not taken as text in the input: a pane can redraw an order long since
 carried out after the prompt mark (D-0151), so the guard types one character,
 reads the row back and deletes it — a row that became that character alone was
 empty, a row that kept its text is somebody's draft and is left exactly as it
 was. Busy is not a refusal: a notice typed into a mid-answer pane is queued by
 the tool and becomes a turn.
-`mc watch pm` rides the same channel, and its wait between rounds ends early
-on a new file in `pm/inbox/`: the file is what wakes the round, the half hour
-is the floor underneath. The notice goes in as text and Enter as separate
+The notice goes in as text and Enter as separate
 keystrokes, with the submission verified against the pane and retried once, so
 a message can never end up half-typed into somebody's prompt; and the cleanup
 that takes an unsent notice back out is pressed only on a line mc has just read

@@ -1,6 +1,6 @@
 ---
-status: ready
-next: "Step 2 — close-out: a `docs/technical/` note on the one-world surface and a `project_log.md` row — done when the note names what `mc --help` now shows (projects, the runner, brief, plan, worker), says where the `mc watch` programme and the PM went, and the log carries the row."
+status: done
+next: "Nothing — the plan is finished. `docs/technical/mc-dormant.md` says what `mc --help` now shows and where the PM and the `mc watch` programme went, `docs/project/project_log.md` carries the row, and `docs/mc-command-matrix.md` no longer lists commands this project removed."
 budget: 150k
 needs: []
 ---
@@ -63,10 +63,11 @@ A new reader of `mc --help` should see one world: projects under
 
 - [x] **1. Dormant, deleted, moved** — the three changes above in one PR,
       because they share `mc-cli.js` dispatch and `help-text.js`.
-- [ ] **2. Close-out** — `docs/technical/` note on the one-world surface,
-      `project_log.md` row. (The `mc status --sessions` help line was
-      rewritten in step 1: the watchers column went with the programme, so
-      the line could not be left saying it was there.)
+- [x] **2. Close-out** — `docs/technical/mc-dormant.md`, the `project_log.md`
+      row, and the command matrix brought back to what exists. (The
+      `mc status --sessions` help line was rewritten in step 1; the board it
+      described has since gone entirely with decision mc-3, so nothing
+      prints a watchers column because nothing prints that board.)
 
 ## What the code taught us
 
@@ -100,8 +101,34 @@ A new reader of `mc --help` should see one world: projects under
   same subprocess shape, one hop closer to the module — so the code that
   stays until #410 does not rot untested.
 
+- **A close-out found two role overlays still naming the runner.**
+  `canon/roles/worker.md` — written by step 1 — and `canon/roles/plan.md`
+  both said `mc run` deletes an answered decision file. It does not, and has
+  not since 2026-08-29: the runner reads no decision file at all, and
+  `retireDecisions` runs from `mc brief --collect` once no plan waits on it.
+  The same drift was corrected in `canon/roles/brief.md` by mc tidy's
+  close-out; these two were the rest of it. Both now say what actually puts a
+  project back in front of the runner — the next session writing the answer
+  into `PLAN.md` and setting `status: ready`.
+- **`docs/mc-command-matrix.md` still ran the old world.** It claims to be
+  derived from the routers and that "if a command is not listed here it does
+  not exist", and it listed `mc watch sessions` and `mc watch pm` with their
+  flags, described `--wake` as queuing a knock, and gave `mc pm` a workspace.
+  The plan's Goal is that a reader sees one world; the help was made to say
+  so in step 1 and this file was the other half of the same reader's path.
+  Only this project's own footprint was corrected — the matrix's other
+  staleness (`mc --watch`, `mc work list`, `mc worktrees`) belongs to the
+  projects that caused it.
+- **The reserved names now point at dormant doors.** `mc worker pm` is still
+  refused, correctly, with "created by its own command (`mc pm`)" — and
+  `mc pm` then says it is dormant. `helper` is on the same list and points at
+  `mc pm-helper`, while the live `mc helper` is a different thing that creates
+  no workarea. Two honest hops rather than one, and the name stays protected;
+  the wording is for #410's cut to settle, not for a close-out to change.
+
 ## Documents
 
+- `docs/technical/mc-dormant.md` — what this project leaves behind
 - `~/mc/mc-utredning/decisions/mc-1.md` — the ruling this plan executes
 - `docs/project/mc/mc-run/PLAN.md` — the runner that replaced the PM
 - `docs/project/mc/mc-plan/PLAN.md` — where `canon/roles/` was established
