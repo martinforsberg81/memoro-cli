@@ -48,10 +48,12 @@ describe('mc --help shows one world', () => {
     assert.doesNotMatch(help(), /mc pm/u);
   });
 
-  it('names no watcher but the repository one', () => {
+  it('names no watcher but the page and the repository one', () => {
     const lines = help().split('\n').filter((line) => /\bwatch\b/u.test(line));
     for (const line of lines) {
-      assert.match(line, /mc repo watch|mc status --watch/u, `unexpected watcher in the help: ${line}`);
+      // `mc --watch` is the page redrawn (decision mc-3), not a daemon; the
+      // dead `mc watch` programme is what must leave no trace.
+      assert.match(line, /mc repo watch|mc --watch|until ctrl-c/u, `unexpected watcher in the help: ${line}`);
     }
   });
 

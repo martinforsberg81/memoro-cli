@@ -19,6 +19,7 @@ import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
 import { runMcCli } from './_helpers/mc-cli.js';
+import { board as workModel } from './_helpers/board.js';
 import { taskLogPath } from '../../src/mc/task-log.js';
 
 function fixture() {
@@ -245,20 +246,17 @@ describe('mc task', () => {
   });
 });
 
-describe('mc status and tasks', () => {
-  it('shows the open task count on the area line, and in --json', () => {
+describe('the work model and tasks', () => {
+  it('counts the open tasks per area', async () => {
     const fx = fixture();
     try {
-      const before = runMcCli(['status', '--sessions'], fx.env).stdout;
-      assert.doesNotMatch(before, /open task/u);
+      const before = await workModel(fx.env);
+      assert.equal(before.areas.find((area) => area.name === 'pm').open_tasks, 0);
 
       runMcCli(['work', 'send', 'pm', 'one', '--task'], fx.env, { cwd: join(fx.workRoot, 'alpha') });
       runMcCli(['work', 'send', 'pm', 'two', '--task'], fx.env, { cwd: join(fx.workRoot, 'alpha') });
 
-      const page = runMcCli(['status', '--sessions'], fx.env).stdout;
-      assert.match(page, /pm\s+2 open tasks/u);
-
-      const board = json(runMcCli(['status', '--sessions', '--json'], fx.env));
+      const board = await workModel(fx.env);
       const pm = board.areas.find((area) => area.name === 'pm');
       assert.equal(pm.open_tasks, 2);
       const alpha = board.areas.find((area) => area.name === 'alpha');
@@ -266,24 +264,24 @@ describe('mc status and tasks', () => {
     } finally { fx.cleanup(); }
   });
 
-  it('a done task drops the count back down', () => {
+  it('a done task drops the count back down', async () => {
     const fx = fixture();
     try {
       const sent = runMcCli(['work', 'send', 'pm', 'one', '--task'], fx.env, { cwd: join(fx.workRoot, 'alpha') });
       const id = /task ([0-9a-f]{8}) opened/u.exec(sent.stdout)[1];
       runMcCli(['task', 'done', id], fx.env);
 
-      const board = json(runMcCli(['status', '--sessions', '--json'], fx.env));
+      const board = await workModel(fx.env);
       assert.equal(board.areas.find((area) => area.name === 'pm').open_tasks, 0);
     } finally { fx.cleanup(); }
   });
 
-  it('nothing else about the board changes shape — the field only grows it', () => {
+  it('nothing else about the model changes shape — the field only grows it', async () => {
     const fx = fixture();
     try {
-      const before = json(runMcCli(['status', '--sessions', '--json'], fx.env));
+      const before = await workModel(fx.env);
       runMcCli(['work', 'send', 'pm', 'one', '--task'], fx.env, { cwd: join(fx.workRoot, 'alpha') });
-      const after = json(runMcCli(['status', '--sessions', '--json'], fx.env));
+      const after = await workModel(fx.env);
       const names = (page) => page.areas.map((area) => area.name).sort();
       assert.deepEqual(names(after), names(before));
     } finally { fx.cleanup(); }

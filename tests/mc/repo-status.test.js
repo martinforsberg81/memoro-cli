@@ -19,14 +19,15 @@ import {
   addArea, fixture, json, moveOriginMain, snapshot,
 } from './_helpers/repo-fixture.js';
 import { runMcCli } from './_helpers/mc-cli.js';
+import { board as workModel } from './_helpers/board.js';
 
 describe('mc repo status — the view', () => {
-  it('groups the board\'s own worktree inspection by repository', () => {
+  it('groups the work model\'s own worktree inspection by repository', async () => {
     const fx = fixture();
     const worktree = addArea(fx, 'alpha', 'alpha');
     writeFileSync(join(worktree, 'scratch.txt'), 'work in progress\n');
     try {
-      const board = json(runMcCli(['status', '--sessions', '--json'], fx.env));
+      const board = await workModel(fx.env);
       const view = json(runMcCli(['repo', 'status', '--offline', '--json'], fx.env));
 
       assert.equal(view.repos.length, 1);

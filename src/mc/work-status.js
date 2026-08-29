@@ -1,10 +1,16 @@
 /**
  * What every piece of work is doing right now.
  *
- * `mc work` answers "what is there, and let me into one of them". This answers
- * a different question, and it is the one that costs a person the most time
- * when several conversations run at once: which of them is thinking, which is
+ * `mc` answers "what is there, and let me into one of them". This answers a
+ * different question, and it is the one that costs a person the most time when
+ * several conversations run at once: which of them is thinking, which is
  * waiting for me, and which has been sitting untouched since this morning.
+ *
+ * It had a page of its own — `mc status --sessions`, 7.26 s over 1 417
+ * transcripts — until decision mc-3 left one page and one way in. What is
+ * left is a model with two readers: `mc repo status`, which groups its
+ * worktree facts by repository, and the lease liveness check, which asks
+ * whether a holder is still working.
  *
  * Everything here is derived at the moment of asking, like the rest of the
  * work model. Nothing is stored, nothing is subscribed to, and no session has
@@ -337,22 +343,6 @@ function describeConversation(item, live) {
     live,
     state: !live ? 'idle' : turn === 'waiting' ? 'waiting' : 'working',
   };
-}
-
-/**
- * A short string that changes exactly when something worth waking for does.
- *
- * Not the whole report: a conversation writing another paragraph moves its
- * size and its timestamp every second, and a supervisor woken by that would
- * be woken constantly and learn nothing. What matters is a transition —
- * something stopped and is now waiting, something started, a piece of work
- * appeared or went away.
- */
-export function signature(report) {
-  return report.areas
-    .map((area) => `${area.name}:${area.conversations.map((item) => `${item.id.slice(0, 8)}=${item.state}`).sort().join(',')}`)
-    .sort()
-    .join('|');
 }
 
 /**

@@ -4,10 +4,30 @@
  */
 export const HELP_TEXT = `mc — source-owned coding sessions
 
+THE PAGE
+  mc                               The one page: what is running now, how deep
+                                    the queue is, the decisions waiting on
+                                    you, what waits in intake, and every
+                                    workarea numbered. At a terminal it ends
+                                    in a way in — a number opens that
+                                    workarea. No model; reads only
+  mc --watch [seconds]             The same page, redrawn every 15 seconds
+                                    until ctrl-c. No prompt
+  mc --json [--fresh]              The same page as one object. The page is
+                                    offline and instant; --fresh fetches and
+                                    asks GitHub, and without it the page says
+                                    how old its PR cache is
+
+  mc brief                         Decide what to work on next
+  mc plan <name>                   Plan one piece of work, ending in a PLAN.md
+  mc run                           The runner: one step at a time, headless
+  mc merge <repo> <pr>             The test gate, then the merge
+  mc status <name>                 One project, whole
+  mc work <name>                   Open that workarea
+
 USAGE
   mc new <name> [objective]        Create a local session in this directory
   mc open <name>                   Attach to, start, or exactly resume a session
-  mc list                          List local and Memoro Cloud sessions
 
 LOCAL SESSIONS
   mc new <name> [objective] [--tool codex|claude] [--no-launch]
@@ -15,8 +35,6 @@ LOCAL SESSIONS
   mc open <name> [--cwd <path>] [--tool codex|claude] [--replace]
                                     Associate another directory or open here
   mc resume <name>                 Alias for mc open
-  mc status --sessions <name> [--json]
-                                    Read durable session and runtime state
   mc rename <old> <new> [--json]   Rename metadata without moving workspaces
   mc cd <name> [--workspace <id>]  Print or enter an associated directory
   mc attach <name>                 Attach to the exact live local terminal
@@ -41,27 +59,13 @@ MAINTENANCE
                                     One of them — read it, tail it, stop it,
                                     or start it again. mc dev with no verb
                                     lists all nine and what each one takes
-  mc status                        The one page: the runner (alive, queue,
-                                    next, last 24 h, estimated list cost),
-                                    decisions waiting on you, every project
-                                    per repo and programme, and workareas
-                                    without a project. No model; reads only
-  mc status --json                 The same, as one object. The page is
-                                    offline and instant; --fresh fetches and
-                                    asks GitHub, and without it the page
-                                    says how old its PR cache is
   mc status <name>                 One project: its PLAN.md frontmatter and
                                     step, the decisions that belong to it,
                                     its last three runner steps and the open
                                     PR on its branch. --json and --offline
-                                    as above
-  mc status --sessions             The old board: every work area, the
-                                    conversations in it and what they last
-                                    said, the suite lease and the repository
-                                    leases
-  mc status --watch [seconds]      That board, live; polls every 15s
-  mc status --wait [--timeout <s>] Block until something moves, then report
-  mc work                          What exists; at a terminal, a way in
+                                    as above. Without a name it says where
+                                    the page went: mc is the page
+  mc work                          The page — mc by another name
   mc work <name>                   Open it — the name is enough, new or not
   mc work <name> --tmux [task]     Start it in the background, for another
                                     session to talk to; mc work <name> joins
@@ -237,13 +241,14 @@ MAINTENANCE
                                     and explicitly; no other command migrates
   mc migrate --session <name>       Move one session and leave the rest alone
 
-LISTING
-  mc list [--local|--cloud] [--all] [--json|--names]
-  mc sessions list                 Alias for mc list
+SESSIONS
 
-  Local sessions are authoritative on this machine and are listed without
+  Local sessions are authoritative on this machine and are read without
   probing sockets or the network. Cloud sessions are authoritative in Memoro
-  Cloud and appear as a separate source. They are not synchronized copies.
+  Cloud and are a separate source. They are not synchronized copies.
+
+  There is no verb that lists them. mc is the page, and mc --watch is the same
+  page redrawn; a second list beside the first one is what this replaced.
 
 EXECUTION
   Codex and Claude use one certified execution path. A live runtime is attached
@@ -277,7 +282,7 @@ IDENTITY
 REQUIREMENTS
   - Run from any directory you want to associate with the session. mc does not
     require a Git repository; a repository is one thing a workspace may be.
-  - Plain mc lists your sessions.
+  - Plain mc prints the page and, at a terminal, opens what you pick.
   - Install and authenticate the selected coding tool.
   - Sign in to Memoro only for cloud listing and connected capabilities.
 

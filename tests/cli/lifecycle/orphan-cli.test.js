@@ -37,8 +37,10 @@ describe('mc list V1 diagnostics boundary', () => {
       cwd: repo.dir,
       env: { MC_HOME: repo.mcHome, MC_ORPHAN_PID_DIR: pidDir },
     });
+    // `mc list` itself went with decision mc-3 — it refuses before it could
+    // read a pidfile, which is the property this asserts.
     assert.equal(r.status, 2);
-    assert.match(r.stderr, /unknown flag: --orphans/);
+    assert.match(r.stderr, /mc list is now mc/);
     assert.ok(existsSync(pidfile));
   });
 });

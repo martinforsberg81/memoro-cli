@@ -1,15 +1,17 @@
 /**
- * The board says what each area *is*, and stops calling filing "work".
+ * The work model says what each area *is*, and stops calling filing "work".
  *
  * Two things, both about the same misreading. An area that carries a role
- * looks exactly like an ordinary one on the status page, so the page cannot
- * answer the question people actually have when several areas are running:
- * which of these is the PM, which is a worker. And the directories the
- * channel and the handoff protocol write — `inbox/`, `handoff/` — were being
- * listed as worktrees, which announced a repository that is not one.
+ * looked exactly like an ordinary one, so a reader could not answer the
+ * question people actually have when several areas are running: which of
+ * these is the PM, which is a worker. And the directories the channel and the
+ * handoff protocol write — `inbox/`, `handoff/` — were being listed as
+ * worktrees, which announced a repository that is not one.
  *
- * The rule for both: the JSON page may grow fields, never change them.
- * Everything that reads it today must keep reading exactly what it read.
+ * The rule for both: the model may grow fields, never change them. Everything
+ * that reads it today must keep reading exactly what it read. It was asked
+ * through `mc status --sessions --json` until decision mc-3 removed the
+ * board; the model is asked directly now, and answers the same.
  */
 import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -17,9 +19,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
-import { runMcCli } from './_helpers/mc-cli.js';
-import { renderLines } from '../../src/mc/status-render.js';
-import { inspectWorkArea } from '../../src/mc/work-area.js';
+import { areasByName } from './_helpers/board.js';
+import { inspectWorkArea, listWorkAreas } from '../../src/mc/work-area.js';
 
 const WORKER_MD = `---
 name: worker
@@ -65,28 +66,21 @@ function fixture() {
   };
 }
 
-function board(fx) {
-  const result = runMcCli(['status', '--sessions', '--json'], fx.env);
-  assert.equal(result.status, 0, result.stderr);
-  const page = JSON.parse(result.stdout);
-  return Object.fromEntries(page.areas.map((area) => [area.name, area]));
-}
-
-describe('the board, on roles and on filing', () => {
-  it('carries the area\'s role in the page, and null when it has none', () => {
+describe('the work model, on roles and on filing', () => {
+  it('carries the area\'s role, and null when it has none', async () => {
     const fx = fixture();
     try {
-      const areas = board(fx);
+      const areas = await areasByName(fx.env);
       assert.equal(areas.marked.role, 'worker');
       assert.equal(areas.plain.role, null);
       assert.equal(areas.filed.role, null);
     } finally { fx.cleanup(); }
   });
 
-  it('adds that field without disturbing one that was already there', () => {
+  it('adds that field without disturbing one that was already there', async () => {
     const fx = fixture();
     try {
-      const areas = board(fx);
+      const areas = await areasByName(fx.env);
       // The shape every existing reader depends on, spelled out: same keys,
       // same meanings, plus the ones added since (role, open_tasks, stopped).
       assert.deepEqual(
@@ -102,10 +96,10 @@ describe('the board, on roles and on filing', () => {
     } finally { fx.cleanup(); }
   });
 
-  it('never calls the channel\'s inbox or the handoff baton a worktree', () => {
+  it('never calls the channel\'s inbox or the handoff baton a worktree', async () => {
     const fx = fixture();
     try {
-      const areas = board(fx);
+      const areas = await areasByName(fx.env);
       assert.deepEqual(areas.filed.worktrees.map((worktree) => worktree.repo), ['some-repo']);
       assert.deepEqual(areas.marked.worktrees, []);
 
@@ -119,10 +113,7 @@ describe('the board, on roles and on filing', () => {
   it('leaves filing where it is — the listing hides it, nothing removes it', () => {
     const fx = fixture();
     try {
-      runMcCli(['status', '--sessions', '--json'], fx.env);
-      runMcCli(['work', 'list', '--json'], fx.env);
-      const listed = runMcCli(['work', 'list', '--json'], fx.env);
-      const areas = JSON.parse(listed.stdout).areas;
+      const areas = listWorkAreas(fx.env, { conversations: false, git: false });
       const filed = areas.find((area) => area.name === 'filed');
       assert.deepEqual(filed.worktrees.map((worktree) => worktree.repo), ['some-repo']);
       // The directories are still on disk: this is a question of what counts
@@ -133,48 +124,6 @@ describe('the board, on roles and on filing', () => {
         ['inbox', 'handoff', 'some-repo'],
       );
     } finally { fx.cleanup(); }
-  });
-
-  it('shows the role beside the name in the row header', () => {
-    const report = {
-      areas: [
-        {
-          name: 'mc-repo',
-          path: '/x/mc-repo',
-          role: 'worker',
-          running: [],
-          worktrees: [],
-          conversations: [],
-          waiting: false,
-          working: false,
-        },
-        {
-          name: 'ordinary',
-          path: '/x/ordinary',
-          role: null,
-          running: [],
-          worktrees: [],
-          conversations: [],
-          waiting: false,
-          working: false,
-        },
-      ],
-      summary: { areas: 2, waiting: 0, working: 0 },
-    };
-    const lines = renderLines(report, { columns: 100, now: 0 });
-    assert.ok(lines.some((line) => /mc-repo · worker/u.test(line)), lines.join('\n'));
-
-    // An area with no role reads exactly as it did before: no separator, no
-    // empty space where a role would have been. Said as an identity against a
-    // page with no `role` field at all — the shape every older reader saw —
-    // rather than by looking for `·`, which is also the idle marker.
-    const before = renderLines(
-      { ...report, areas: report.areas.map(({ role, ...area }) => area) },
-      { columns: 100, now: 0 },
-    );
-    const row = (page) => page.find((line) => line.includes('ordinary'));
-    assert.equal(row(lines), row(before));
-    assert.doesNotMatch(row(lines).replace(/^\s*·\s/u, ''), /·/u);
   });
 });
 

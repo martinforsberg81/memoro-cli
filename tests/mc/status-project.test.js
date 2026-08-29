@@ -247,7 +247,7 @@ describe('the project page', () => {
 });
 
 describe('routing', () => {
-  it('a name is the project page; --sessions <name> is still the old session', () => {
+  it('a name is the project page; no name says the page is mc', () => {
     const root = workRoot();
     const env = { MC_WORK_ROOT: root, MC_REPOS_HOME: join(root, 'no-repos') };
     const page = runMcCli(['status', 'mc-status', '--offline'], env);
@@ -255,8 +255,14 @@ describe('routing', () => {
     assert.match(page.stdout, /^mc-status — memoro-cli · mc\n/u);
     assert.match(page.stdout, /NEXT\n {2}Step 2 — one project/u);
 
-    const session = runMcCli(['status', '--sessions', 'mc-status'], env);
-    assert.equal(session.status, 1, session.stdout);
-    assert.match(session.stderr, /session "mc-status" was not found/u);
+    // The board and its flags went with decision mc-3: `--sessions` is not a
+    // name, so it lands on the same sentence a bare `mc status` does.
+    const moved = runMcCli(['status', '--sessions', 'mc-status'], env);
+    assert.equal(moved.status, 2, moved.stdout);
+    assert.match(moved.stderr, /--sessions went with the old board/u);
+    assert.match(moved.stderr, /mc status is now mc/u);
+    const bare = runMcCli(['status'], env);
+    assert.equal(bare.status, 2);
+    assert.match(bare.stderr, /mc status is now mc/u);
   });
 });

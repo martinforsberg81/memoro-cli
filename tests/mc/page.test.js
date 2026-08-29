@@ -15,7 +15,7 @@ import {
 } from '../../src/mc/page-collect.js';
 import { colourFor, columnsFor, renderPage, renderPageLines } from '../../src/mc/page-render.js';
 import { width } from '../../src/mc/status-render.js';
-import { run as page } from '../../src/mc/commands/status-page.js';
+import { run as page } from '../../src/mc/commands/home.js';
 
 const NOW = new Date('2026-08-29T12:00:00Z');
 
