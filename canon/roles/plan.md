@@ -53,9 +53,11 @@ alternatives appear only where a real trade-off survived your reading.
 A question that is unclear, or that reading further would answer, gets no
 file: read instead. Fewer, sharper questions are the deliverable here.
 
-Martin answers by appending a line that starts with `**Beslut:**`; the
-runner reads that line, the next session writes the answer into PLAN.md, and
-`mc run` deletes the file. If the next step depends on such an answer, set
+Martin answers by appending a line that starts with `**Beslut:**`; the next
+session writes the answer into PLAN.md and sets `status:` back to `ready`,
+which is the only thing that puts the project back in front of the runner —
+it reads no decision file. `mc brief --collect` then deletes the file, once
+no plan waits on it. If the next step depends on such an answer, set
 `status: waiting-decision`.
 
 ## What you never do
