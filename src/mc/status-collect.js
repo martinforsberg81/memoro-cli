@@ -1,41 +1,33 @@
 /**
- * `mc status` — the one page Martin looks at, built from files the runner
- * and the sessions already write. No model, nothing written, nothing
- * started.
+ * The readers behind the page — the parts built from files the runner and the
+ * sessions already write, that more than one caller needs.
+ * No model, nothing written, nothing started.
  *
- * Five blocks: NOW (the runner's pid, the step in flight with its tool,
- * model and elapsed against budget, a pending STOP, quota answers today),
- * RUNNER (alive? queue and the next project with its kind;
- * the last 24 h by kind and outcome; an estimated list-price cost),
- * DECISIONS (files without a `**Beslut:**` line), PROJECTS per repository
- * (programme → project: status, next, last step, open PR, workarea),
- * WORKAREAS WITHOUT A PROJECT (the closure candidates).
+ * `nowBlock` turns the two files `mc run` keeps into the NOW section;
+ * `kindFor` answers what the runner would do with a queued name; `pidAlive`
+ * is the one liveness test the page and the foreground register both use;
+ * `decisionsBlock` and `areasWithCheckout` name what waits on Martin and
+ * what exists on disk.
  *
- * The readers are shared with `mc brief --collect` (brief-collect.js); the
- * builders here take the read data and are tested on fixtures, with no git
- * and no gh.
+ * `page-collect.js` assembles the five sections out of these and
+ * `page-render.js` draws them. Nothing here renders: the block-and-render
+ * half `mc status` printed before the page existed — `collectStatus`,
+ * `renderStatus`, `runnerBlock`, `projectsBlock`, `orphanWorkareas` — went
+ * with its last caller, `commands/status-page.js`, in the same project that
+ * replaced it.
  *
- * Offline is what the page does: plans come from `~/mc/runner/plans.json`
- * keyed by the `origin/main` sha and open PRs from `~/mc/runner/prs.json`
- * with their age said out loud (page-cache.js). `--fresh` is the opt-in that
- * fetches, asks GitHub and refills both.
+ * The builders are pure: each takes read data and returns a block, so the
+ * tests feed them fixtures and never touch git, gh or tmux.
  */
-import { execFile, spawnSync } from 'node:child_process';
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 
-import {
-  DAY_MS, defaultRepos, queueNames, runsSince, scanDecisions, summariseRuns,
-} from './brief-collect.js';
-import { ageWords, loadPlans, loadPrs, savePrs } from './page-cache.js';
-import { workRoot } from './paths.js';
 import { chooseKind } from './run-plan.js';
-import { PRICES_DATED, estimateCost } from './prices.js';
 
 /** What the runner ran everything on; runs.tsv carries no model column yet. */
 export const RUNNER_MODEL = 'opus';
 
-/* ------------------------------------------------------------------ runner */
+/* -------------------------------------------------------------------- kind */
 
 /**
  * What the runner would do with a queued name — asked of the runner itself.
@@ -56,20 +48,6 @@ export function kindFor(name, { plans }) {
   if (!plan) return 'skip:no-plan';
   const status = choice.skip.slice('status '.length);
   return `skip:${status === 'missing' ? 'no-status' : status}`;
-}
-
-export function runnerBlock({ queue, plans, decisions, rows, alive, live = [] }) {
-  const items = queue.map((name) => ({ name, kind: kindFor(name, { plans }), live: live.includes(name) }));
-  const next = items.find((item) => !item.kind.startsWith('skip') && !item.live) || null;
-  const summary = summariseRuns(rows);
-  const tokens = rows.reduce((acc, r) => ({
-    input: acc.input + (Number(r.input) || 0),
-    output: acc.output + (Number(r.output) || 0),
-    cacheRead: acc.cacheRead + (Number(r.cache_read) || 0),
-    cacheWrite: acc.cacheWrite + (Number(r.cache_write) || 0),
-  }), { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
-  const cost = estimateCost(tokens, RUNNER_MODEL);
-  return { alive, queue: items, next, summary, tokens, cost, model: RUNNER_MODEL, prices_dated: PRICES_DATED };
 }
 
 /* --------------------------------------------------------------------- now */
@@ -143,135 +121,7 @@ export function decisionsBlock(decisions) {
   });
 }
 
-/* ---------------------------------------------------------------- projects */
-
-/**
- * One row per PLAN.md on origin/main, grouped by repository and programme,
- * with the last runner step, the open PR on the workarea branch and whether
- * a workarea exists.
- */
-export function projectsBlock({ plans, rows, openPrs = [], workareas = [] }) {
-  const lastRun = {};
-  for (const r of rows) lastRun[r.name] = r; // rows are in time order; the last wins
-  const byRepo = {};
-  for (const p of plans) {
-    const pr = openPrs.find((item) => item.repo === p.repo && item.headRefName === p.project) || null;
-    const row = {
-      programme: p.programme,
-      project: p.project,
-      status: p.status || '?',
-      next: p.next || '',
-      last: lastRun[p.project] ? { ts: lastRun[p.project].ts, kind: lastRun[p.project].kind, pr: lastRun[p.project].pr, note: lastRun[p.project].note } : null,
-      pr: pr ? pr.number : null,
-      workarea: workareas.includes(p.project),
-    };
-    (byRepo[p.repo] ||= []).push(row);
-  }
-  for (const list of Object.values(byRepo)) list.sort((a, b) => a.programme.localeCompare(b.programme) || a.project.localeCompare(b.project));
-  return byRepo;
-}
-
-/** Areas with a checkout inside but no PLAN.md anywhere on main. */
-export function orphanWorkareas({ workareas, plans }) {
-  const known = new Set(plans.map((p) => p.project));
-  return workareas.filter((name) => !known.has(name));
-}
-
-/* ------------------------------------------------------------------ render */
-
-const fmt = (n) => Number(n).toLocaleString('en-US');
-const clip = (text, max) => {
-  const one = String(text || '').replace(/\s+/gu, ' ').trim();
-  return one.length > max ? `${one.slice(0, max - 1)}…` : one;
-};
-const when = (ts) => String(ts || '').replace(/^\d{4}-/u, '').replace(/:\d{2}Z$/u, 'Z').replace('T', ' ');
-
-const duration = (seconds) => {
-  if (seconds == null) return '?';
-  if (seconds < 90) return `${seconds}s`;
-  const minutes = Math.round(seconds / 60);
-  return minutes <= 180 ? `${minutes} min` : `${(minutes / 60).toFixed(1)} h`;
-};
-
-export function renderStatus({ now = null, runner, decisions, projects, orphans, notes = [] }) {
-  const out = [];
-  const s = runner.summary;
-  if (now) {
-    out.push('NOW');
-    out.push(`  runner: ${now.runner?.alive ? `pid ${now.runner.pid}, up ${duration(now.runner.up_seconds)}` : 'not running'}`);
-    if (now.step) {
-      const budget = now.step.budget_seconds == null ? '' : ` of ${duration(now.step.budget_seconds)}`;
-      out.push(`  step: ${now.step.name} — ${now.step.kind} (${now.step.tool} ${now.step.model}) ${duration(now.step.elapsed_seconds)}${budget}${now.step.over_budget ? ' — over budget' : ''}`);
-    } else out.push('  step: none in flight');
-    if (now.stop) out.push('  STOP requested — the runner exits after the step it is in');
-    if (now.quota.count) out.push(`  quota: ${now.quota.count} answer(s) in the last 24 h (last ${when(now.quota.last)})`);
-    for (const line of now.stale) out.push(`  stale: ${line}`);
-    out.push('');
-  }
-  out.push('RUNNER');
-  out.push(`  ${runner.alive ? `running (${runner.alive})` : 'not running'}`);
-  const next = runner.next ? `${runner.next.name} (${runner.next.kind})` : 'nothing runnable';
-  out.push(`  queue: ${runner.queue.length} projects — next: ${next}`);
-  const skipped = runner.queue.filter((q) => q.kind.startsWith('skip') || q.live);
-  if (skipped.length) out.push(`  skipped: ${skipped.map((q) => `${q.name} (${q.live ? 'live' : q.kind.slice(5)})`).join(', ')}`);
-  const kinds = Object.entries(s.kinds).map(([k, n]) => `${k} ${n}`).join(', ') || 'none';
-  out.push(`  last 24 h: ${s.steps} steps (${kinds}) — merged ${s.merged}, left open ${s.open}, failed ${s.failed}, timed out ${s.timeout}`);
-  const cost = runner.cost == null ? 'n/a' : `$${runner.cost.toFixed(2)}`;
-  out.push(`  tokens: cache_read ${fmt(runner.tokens.cacheRead)}, input ${fmt(runner.tokens.input)}, output ${fmt(runner.tokens.output)}`);
-  out.push(`  ≈ ${cost} list (${runner.model}, prices ${runner.prices_dated}); quota is the real limit — /status`);
-  out.push('');
-
-  out.push('DECISIONS');
-  if (!decisions.length) out.push('  none waiting');
-  for (const d of decisions) out.push(`  ${d.file}  ${clip(d.title, 60)}  → ${d.waits_on}`);
-  out.push('');
-
-  out.push('PROJECTS');
-  for (const [repo, rows] of Object.entries(projects)) {
-    out.push(`  ${repo}`);
-    let programme = null;
-    for (const r of rows) {
-      if (r.programme !== programme) { programme = r.programme; out.push(`    ${programme}`); }
-      const last = r.last ? `${when(r.last.ts)} ${r.last.kind}${r.last.pr && r.last.pr !== '-' ? ` #${r.last.pr}` : ''}` : '—';
-      const pr = r.pr ? `PR #${r.pr}` : '';
-      const area = r.workarea ? '' : 'no workarea';
-      const tail = [last, pr, area].filter(Boolean).join(' · ');
-      out.push(`      ${r.project.padEnd(34)} ${r.status.padEnd(17)} ${clip(r.next, 70)}`);
-      out.push(`      ${''.padEnd(34)} ${tail}`);
-    }
-  }
-  if (!Object.keys(projects).length) out.push('  no PLAN.md on origin/main');
-  out.push('');
-
-  out.push('WORKAREAS WITHOUT A PROJECT');
-  if (!orphans.length) out.push('  none');
-  else out.push(`  ${orphans.join(', ')}`);
-  for (const note of notes) out.push('', `note: ${note}`);
-  return `${out.join('\n')}\n`;
-}
-
-/* ----------------------------------------------------------------- collect */
-
-function runGit(cwd, args) {
-  const r = spawnSync('git', ['-C', cwd, ...args], { encoding: 'utf8' });
-  return r.status === 0 ? r.stdout.trimEnd() : null;
-}
-
-function execAsync(cmd, args, opts = {}) {
-  return new Promise((resolve) => {
-    execFile(cmd, args, { encoding: 'utf8', timeout: 20_000, maxBuffer: 8 << 20, ...opts }, (error, stdout) => resolve({ ok: !error, stdout: stdout || '' }));
-  });
-}
-
-function readJson(path) {
-  try { return JSON.parse(readFileSync(path, 'utf8')); } catch { return null; }
-}
-
-function liveAreas(run = (cmd, args) => spawnSync(cmd, args, { encoding: 'utf8' })) {
-  const r = run('tmux', ['ls', '-F', '#S']);
-  if (r.status !== 0) return [];
-  return r.stdout.split('\n').filter((s) => s.startsWith('mc-')).map((s) => s.slice(3));
-}
+/* ------------------------------------------------------------------- areas */
 
 /** Areas under the work root that hold at least one checkout. */
 export function areasWithCheckout(root) {
@@ -284,72 +134,4 @@ export function areasWithCheckout(root) {
       })
       .sort();
   } catch { return []; }
-}
-
-export async function collectStatus({
-  env = process.env,
-  now = new Date(),
-  repos = defaultRepos(env),
-  fresh = false,
-  git = runGit,
-  run = (cmd, args) => spawnSync(cmd, args, { encoding: 'utf8' }),
-  exec = execAsync,
-  alive = pidAlive,
-  cache = { loadPlans, loadPrs, savePrs },
-} = {}) {
-  const root = workRoot(env);
-  const notes = [];
-  const present = repos.filter((repo) => existsSync(join(repo.path, '.git')));
-  let prs = { prs: [], fetched: null, age_seconds: null };
-  if (fresh) {
-    // Fetch and gh per repository, side by side: serial they were the
-    // whole 5 s budget on their own.
-    const asked = [];
-    await Promise.all(present.flatMap((repo) => [
-      exec('git', ['-C', repo.path, 'fetch', '-q', 'origin']).then((r) => { if (!r.ok) notes.push(`${repo.name}: git fetch failed — plans may be stale`); }),
-      exec('gh', ['pr', 'list', '--state', 'open', '--limit', '100', '--json', 'number,headRefName'], { cwd: repo.path }).then((r) => {
-        try {
-          if (r.ok) asked.push(...JSON.parse(r.stdout).map((pr) => ({ repo: repo.name, ...pr })));
-          else notes.push(`${repo.name}: gh pr list failed`);
-        } catch { notes.push(`${repo.name}: gh pr list unreadable`); }
-      }),
-    ]));
-    prs = cache.savePrs({ root, prs: asked, now });
-  } else {
-    prs = cache.loadPrs({ root, now });
-    notes.push(prs.fetched
-      ? `PRs from cache, ${ageWords(prs.age_seconds)} old — --fresh asks GitHub`
-      : 'no PR cache yet — --fresh asks GitHub and fills it');
-  }
-  const openPrs = prs.prs;
-  const { plans, sources } = cache.loadPlans({ root, repos: present, now, git });
-  const decisions = scanDecisions(root);
-  let tsv = '';
-  try { tsv = readFileSync(join(root, 'runner', 'log', 'runs.tsv'), 'utf8'); } catch { notes.push('no runner/log/runs.tsv'); }
-  const rows = runsSince(tsv, new Date(now.getTime() - DAY_MS));
-  let queue = [];
-  try { queue = queueNames(readFileSync(join(root, 'queue.md'), 'utf8')); } catch { notes.push('no queue.md'); }
-  const workareas = areasWithCheckout(root);
-  const nowState = nowBlock({
-    runner: readJson(join(root, 'runner', 'runner.json')),
-    current: readJson(join(root, 'runner', 'current.json')),
-    stop: existsSync(join(root, 'runner', 'STOP')),
-    rows,
-    now,
-    alive,
-  });
-  const runner = runnerBlock({
-    queue, plans, decisions, rows,
-    alive: nowState.runner?.alive ? `pid ${nowState.runner.pid}` : null,
-    live: liveAreas(run),
-  });
-  return {
-    now: nowState,
-    runner,
-    decisions: decisionsBlock(decisions),
-    projects: projectsBlock({ plans, rows, openPrs, workareas }),
-    orphans: orphanWorkareas({ workareas, plans }),
-    caches: { fresh, plans: sources, prs: { fetched: prs.fetched, age_seconds: prs.age_seconds, count: openPrs.length } },
-    notes,
-  };
 }

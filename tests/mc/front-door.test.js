@@ -88,6 +88,14 @@ describe('bare mc', () => {
       assert.match(result.stderr, /unknown command "--nonsense"/u);
     } finally { fx.cleanup(); }
   });
+
+  it('the help leads with the two surfaces and names no third one', () => {
+    const help = runMcCli(['--help']).stdout;
+    assert.match(help, /^ {2}mc {2,}The one page/mu);
+    assert.match(help, /^ {2}mc --watch \[seconds\]/mu);
+    assert.doesNotMatch(help, /mc status --sessions/u);
+    assert.doesNotMatch(help, /^ {2}mc list /mu);
+  });
 });
 
 describe('the verbs that became mc', () => {
