@@ -1,6 +1,6 @@
 ---
-status: ready
-next: "Step 2 — close-out: the palette table added to `docs/technical/mc-ui.md` and a `project_log.md` row — done when the table in the doc names the same colour for every kind and every status as `KIND_TONE` and `STATUS_TONE` in page-render.js."
+status: done
+next: "nothing — the page is painted and written down; step 2 closed it out."
 budget: 150k
 needs: [mc-ui]
 ---
@@ -86,6 +86,13 @@ escape is added **after** `clip`/`pad` decided the width.
   page is drawn whole only when the number of rows changes. Nothing had to
   be built for it — measured, not assumed: 32 s of `mc --watch 1` under a
   pty.
+- **A table in a doc is a claim that rots.** The palette in
+  `docs/technical/mc-ui.md` is the only place outside the code that names a
+  colour per kind and per status, so it is pinned: a test in
+  `tests/mc/page.test.js` parses both tables out of the doc and both objects
+  out of `page-render.js` and compares them, and it fails when either side
+  moves alone (proved by changing `triage` to red in the doc and watching it
+  go red).
 - **A parts helper was the price of colour.** `clip` counts columns but
   slices bytes, so a string that already carries escapes cannot be cut.
   `paint(c, parts, space)` measures the plain text of a run, paints only
@@ -95,5 +102,5 @@ escape is added **after** `clip`/`pad` decided the width.
 ## Steps
 
 - [x] **1. The palette** — one PR.
-- [ ] **2. Close-out** — a short `docs/technical/mc-ui.md` addition with
+- [x] **2. Close-out** — a short `docs/technical/mc-ui.md` addition with
       the palette table, `project_log.md` row.

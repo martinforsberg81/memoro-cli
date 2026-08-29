@@ -158,10 +158,103 @@ test can look at one row.
 - **Every column clips one short of its pad**, so the ellipsis is the last
   character and a clipped name never touches its neighbour.
 - **Colour carries state, never decoration**: green running, yellow waiting
-  on a person, red failed, grey quiet. Only on a TTY, and only when
-  `NO_COLOR` is unset **or empty** — the convention is that any non-empty
-  value turns colour off.
+  on a person, red failed, grey quiet — the table is below. Only on a TTY,
+  and only when `NO_COLOR` is unset **or empty**; the convention is that any
+  non-empty value turns colour off, and `--json` is never painted at all.
 - No new dependency. The ANSI is by hand, as the rest of the repo is.
+
+## The palette
+
+The page is grey with meaning painted on it, and the meanings are a short
+list. Two of them are tables, and those tables are the rule the rest of the
+page bends to: **a step kind and a plan status have one colour each, wherever
+they are printed.** NOW, QUEUE and WORK all say `reconcile` in the same
+magenta, so a kind is recognised before it is read. They are `KIND_TONE` and
+`STATUS_TONE` in `page-render.js`, and `tests/mc/page.test.js` walks each one
+through all three sections.
+
+| step kind | colour |
+|---|---|
+| `step` | green |
+| `reconcile` | magenta |
+| `triage` | blue |
+| `brief` | cyan |
+| `plan` | cyan |
+| anything else | grey |
+
+| plan status | colour |
+|---|---|
+| `ready` | green |
+| `waiting-decision` | yellow |
+| `blocked` | red |
+| `done` | grey |
+| no PLAN.md on main | dim grey |
+
+Everything else is structure, and structure is quiet:
+
+| where | what | colour |
+|---|---|---|
+| header | `MEMORO·CLI` | bold white |
+| header | decisions waiting, when > 0 | bold yellow |
+| header | `N of M queued` | white |
+| header | version, rule, cost today, `watch · N s` | grey |
+| section titles | `NOW` `QUEUE` `DECISIONS` `INTAKE` `WORK` | bold cyan |
+| section titles | the count beside it, the verb hint on the right | grey |
+| NOW | the live step's `●`, its name | green, bold white |
+| NOW | elapsed: under ¾ of budget, from ¾, past it | white, yellow, bold red |
+| NOW | a foreground session — `●`, `mc brief` | cyan |
+| NOW | a live tmux area's `◆` | yellow |
+| NOW | `■ STOP requested` | bold red |
+| NOW | a stale runner file | red |
+| NOW | a quota answer under 6 h old, older | yellow, grey |
+| NOW | between steps, no runner, the day's line, the tool and pid | grey |
+| QUEUE | the next name, the first of them | white, bold white |
+| QUEUE | the number, `… N more runnable` | grey |
+| QUEUE | why a project was skipped | dim grey |
+| DECISIONS | the `●` on every row | yellow |
+| DECISIONS | the question | white |
+| DECISIONS | the file path, `… N more` | grey |
+| INTAKE | the digest's date, under 24 h old, older | green, yellow |
+| INTAKE | new errors, when > 0 | red |
+| INTAKE | proposals, when > 0 | yellow |
+| INTAKE | a `!` line: its mark, its text | red, bold white |
+| INTAKE | no digest yet, no new errors, no proposals | grey |
+| WORK | a live area's `●`, its name | green, bold white |
+| WORK | a quiet area's name and `next` | white, plain |
+| WORK | the PR number | cyan |
+| WORK | the number, the last-run time, the projects-without-a-workarea line | grey |
+| WORK | a row with no PLAN.md on main | grey throughout |
+| footer | the cache line, the notes | grey |
+
+Four things hold that table up:
+
+- **Plain 16-colour SGR, and only the `SGR` table in `status-render.js`** —
+  `bold`, `dim`, `red`, `green`, `yellow`, `blue`, `magenta`, `cyan`, `white`,
+  `grey`. Nothing 256-colour, nothing new: `white` was already there, and
+  `bgred` turned out not to be needed.
+- **`paint(c, parts, space)` is why no escape is ever cut.** `clip` counts
+  columns but slices bytes, so a string that already carries escapes cannot be
+  cut. `paint` measures the plain text of a run, paints it only when it fits,
+  and otherwise clips the plain text and goes grey — a truncated line is
+  bookkeeping. Every escape on the page therefore sits outside the width the
+  row was clipped to, and a coloured row is exactly as wide as its plain twin.
+- **The plain page gained one glyph, and only one.** A page without a TTY
+  prints what it printed before this palette, with one exception: the yellow
+  `●` on a DECISIONS row is drawn always, not only when colour is on, because
+  a mark that appears with colour would make a coloured row wider than its
+  plain twin. It sits inside the row's own footprint, where two of the seven
+  leading spaces used to be. Everything else is byte-identical, at six widths,
+  against the same fixtures.
+- **`--watch` redraws only the lines that changed**, so the page does not
+  flicker; the whole page is drawn only when the number of rows changes. That
+  rule lives in `watch()` in `commands/home.js` and predates the colour —
+  measured, not assumed: 32 s of `mc --watch 1` under a pty, no flicker.
+
+`tests/mc/page.test.js` pins all of it: a per-row signature snapshot of the
+painted page (the colours in order, not the escape bytes), the two tables
+walked through every section that prints them, the clock at ¾ and past the
+budget, and — at six terminal widths — painted against plain, row for row,
+with every escape checked to be whole.
 
 ## The menu
 
@@ -253,3 +346,8 @@ the front door
 foreground register
 ([#443](https://github.com/martinforsberg81/memoro-cli/pull/443)) and this
 close-out. The decision that set the shape is `mc-3` (2026-08-29).
+
+The palette came after, as `docs/project/mc/mc-ui-polish/`, in two steps: the
+page in colour ([#446](https://github.com/martinforsberg81/memoro-cli/pull/446))
+and this close-out. It added no section, no datum and no flag — the page it
+paints is the page above.
