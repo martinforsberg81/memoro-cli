@@ -665,8 +665,7 @@ describe('the palette', () => {
     'a kind the table has no key for, on a row with no plan, is the page at its quietest');
   });
 
-  it('says what --watch is doing in the header, and says nothing there without it', () => {
-    assert.ok(strip(paintedPage(DATA, { watch: 15 })[1]).includes('watch · 15 s'));
-    assert.ok(!strip(paintedPage(DATA)[1]).includes('watch'), 'bare mc says nothing about a watch');
+  it('says nothing about a watch in the header — there is none', () => {
+    assert.ok(!strip(paintedPage(DATA)[1]).includes('watch'));
   });
 });

@@ -11,8 +11,6 @@ THE PAGE
                                     workarea numbered. At a terminal it ends
                                     in a way in — a number opens that
                                     workarea. No model; reads only
-  mc --watch [seconds]             The same page, redrawn every 15 seconds
-                                    until ctrl-c. No prompt
   mc --json [--fresh]              The same page as one object. The page is
                                     offline and instant; --fresh fetches and
                                     asks GitHub, and without it the page says
@@ -252,8 +250,8 @@ SESSIONS
   probing sockets or the network. Cloud sessions are authoritative in Memoro
   Cloud and are a separate source. They are not synchronized copies.
 
-  There is no verb that lists them. mc is the page, and mc --watch is the same
-  page redrawn; a second list beside the first one is what this replaced.
+  There is no verb that lists them. mc is the page; a second list beside the
+  first one is what this replaced.
 
 EXECUTION
   Codex and Claude use one certified execution path. A live runtime is attached
