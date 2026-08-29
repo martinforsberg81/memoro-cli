@@ -101,7 +101,14 @@ test('headlessArgs: claude is -p with json output; codex is exec --json', () => 
   const claude = headlessArgs({ toolId: 'claude-code', adapter: { modelArgs: (m) => ['--model', m] }, model: 'opus', instructions: 'PROFILE', prompt: 'do it', profileArgs });
   assert.deepEqual(claude, ['-p', 'do it', '--model', 'opus', '--permission-mode', 'auto', '--append-system-prompt', 'PROFILE', '--output-format', 'json']);
   const codex = headlessArgs({ toolId: 'codex', adapter: { modelArgs: (m) => ['-m', m] }, model: 'o3', instructions: 'PROFILE', prompt: 'do it', profileArgs });
-  assert.deepEqual(codex, ['exec', '--json', '--full-auto', '-m', 'o3', '-c', 'instructions="PROFILE"', 'do it']);
+  assert.deepEqual(codex, ['exec', '--json', '--sandbox', 'danger-full-access', '-m', 'o3', '-c', 'instructions="PROFILE"', 'do it']);
+  // Never `--full-auto`: workspace-write has no network and no writes outside
+  // the working directory, so the step could not push or open its PR — and a
+  // workarea's `.git` lives outside it, so it could not even commit.
+  assert.equal(codex.includes('--full-auto'), false);
+  // No model named means no `-m` at all — the tool's own default, not opus.
+  const bare = headlessArgs({ toolId: 'codex', adapter: { modelArgs: (m) => (m ? ['-m', m] : []) }, model: null, instructions: null, prompt: 'do it', profileArgs });
+  assert.deepEqual(bare, ['exec', '--json', '--sandbox', 'danger-full-access', 'do it']);
 });
 
 test('readSessionOutput: claude json usage fields, dashes when absent', () => {
@@ -148,6 +155,9 @@ test('sessionSettings: frontmatter tool/model/budget_minutes with the runner def
   assert.deepEqual(sessionSettings({}), { tool: 'claude', model: 'opus', budgetMinutes: 90 });
   assert.deepEqual(sessionSettings({ tool: 'codex', model: 'o3', budget_minutes: '30' }), { tool: 'codex', model: 'o3', budgetMinutes: 30 });
   assert.equal(sessionSettings({ budget_minutes: 'lots' }).budgetMinutes, 90);
+  // `opus` is claude's alias and nobody else's: a plan on another tool that
+  // names no model gets none, and the tool picks its own.
+  assert.deepEqual(sessionSettings({ tool: 'codex' }), { tool: 'codex', model: null, budgetMinutes: 90 });
 });
 
 test('parseRunArgs: defaults, flags, errors', () => {

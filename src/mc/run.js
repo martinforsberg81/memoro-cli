@@ -649,7 +649,9 @@ export function createRunner({
 
     const ts = stamp().replace(/[-:]/gu, '');
     const out = join(paths.log, `${name}-${ts}.json`);
-    say(`${name}: ${kind} starting (${launch.shortName} ${settings.model}, ${settings.budgetMinutes} min)`);
+    // A plan that names no model on a tool that is not claude gets none, and
+    // the line says so rather than printing `null`: the tool picks.
+    say(`${name}: ${kind} starting (${launch.shortName} ${settings.model || 'own default model'}, ${settings.budgetMinutes} min)`);
     const t0 = deps.now().getTime();
     // The lane's current file exists exactly as long as the session does —
     // written before the call that blocks, removed however that call
