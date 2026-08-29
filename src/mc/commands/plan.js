@@ -75,6 +75,8 @@ export async function run(argv, deps = {}) {
     worktree,
     tool: opts.tool || role.tools?.[0] || 'claude',
     pick: 'new',
+    verb: 'plan',
+    areaName: opts.name,
     model: opts.model,
     overlay: launch.overlay,
     prompt: launch.prompt,

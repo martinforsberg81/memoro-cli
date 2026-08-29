@@ -83,7 +83,9 @@ export async function run(argv, deps = {}) {
   if (opts.task && !opts.tmux) {
     stderr.write('mc: the task is used when starting detached (--tmux); opening interactively — say it to the tool instead\n');
   }
-  return openArea(opts.name, opts, { stdout, stderr });
+  // Ordinary `mc work` mechanics from here, under its own name: NOW says
+  // "mc worker", because that is what was typed.
+  return openArea(opts.name, { ...opts, opener: 'worker' }, { stdout, stderr });
 }
 
 export function parseArgs(argv) {

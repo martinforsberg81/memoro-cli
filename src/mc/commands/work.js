@@ -669,6 +669,16 @@ export async function openArea(name, opts, deps) {
   const opened = await openInWorkArea({
     areaRoot: area.path, worktree, tool, pick, model: opts.model,
     overlay, defaultModel: roleModel, defaultModelTool: roleTool,
+    // This is the one door here that blocks on a tool in this terminal: the
+    // tmux branches above hand the session to tmux, where NOW already sees it
+    // as a live area, and joining one is somebody walking into a session that
+    // is already on the page. So this is where the register belongs.
+    //
+    // `opener`, not `verb`: `opts.verb` is `mc work`'s own word for what the
+    // line asked for ('open', 'send', 'add'), and NOW wants the verb the
+    // person typed — which for `mc worker <name>` is a different door into
+    // this same function.
+    verb: opts.opener || 'work', areaName: name,
   });
   if (!opened.ok) {
     stderr.write(`mc: could not open ${name} (${opened.reason})\n`);
