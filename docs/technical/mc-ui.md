@@ -85,7 +85,8 @@ throws still clears the file.
 
 There is one current file **per lane**: `mc run` drives memoro's queue and
 memoro-cli's at the same time, so NOW is a list rather than a line, and the
-page reads `runner/current-*.json` by name instead of one fixed file.
+page reads `runner/current-*.json` by name instead of one fixed file. The
+lanes themselves are in [`docs/technical/mc-run.md`](mc-run.md).
 
 **Liveness is one test, `pidAlive`** — `kill(pid, 0)`, with `EPERM`
 counted as alive. Nothing asks tmux or pgrep. Both of those lied on
