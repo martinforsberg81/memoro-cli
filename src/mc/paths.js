@@ -1,13 +1,17 @@
 /**
- * Path resolution for the mc worktree lifecycle (§1).
+ * Path resolution for mc's two roots.
  *
- * MC_HOME defaults to `~/.memoro/mc/` (existing memoro-cli dir, per plan §1
- * amendment). Tests override via the `MC_HOME` env var to a tmpdir.
+ * MC_HOME defaults to `~/.memoro/mc/` (existing memoro-cli dir). Tests
+ * override via the `MC_HOME` env var to a tmpdir. It holds what mc runs on:
+ * the registry, sessions, the broker's sockets and logs, auth, dev servers.
  *
- * Worktrees live at `${MC_HOME}/worktrees/<repo-slug>/<name>`. The slug is
- * the basename of the primary worktree path; if two repos on this machine
- * share a basename, the second one's slug gets a short hash suffix so
- * worktree paths never collide silently.
+ * It does *not* hold worktrees. `${MC_HOME}/worktrees/<repo-slug>/<name>`
+ * was the first design — a worktree lifecycle keyed on repository and
+ * session, reached through `mc worktree` and measured by `mc worktrees`.
+ * `workRoot()` below replaced it: a piece of work is a directory under
+ * `~/mc`, and the directory is the record. Both roots were live at once and
+ * only one was ever used; the old one was removed 2026-08-29 on Martin's
+ * word, together with `mc task`, the tracker that shared its era.
  */
 import { createHash } from 'node:crypto';
 import { homedir } from 'node:os';
@@ -24,18 +28,6 @@ export function registryPath() {
 
 export function sessionsRoot() {
   return join(mcHome(), 'sessions');
-}
-
-export function sessionNamesRoot() {
-  return join(mcHome(), 'session-names');
-}
-
-export function sessionRunRoot() {
-  return join(mcHome(), 'run', 'sessions');
-}
-
-export function worktreesRoot() {
-  return join(mcHome(), 'worktrees');
 }
 
 export function devServersRoot(root = mcHome()) {
@@ -87,27 +79,6 @@ export function workAreaPath(name, env = process.env) {
 
 export function workAreaStatePath(name, env = process.env) {
   return join(workAreaPath(name, env), '.mc.json');
-}
-
-/**
- * Where a session's worktrees live: `<mc home>/worktrees/<mc session id>/<name>`.
- *
- * The session id is the directory. That makes the ownership rule structural
- * rather than a lookup — a worktree belongs to exactly one session because it
- * physically sits under it, and releasing a session is removing one path.
- *
- * The old layout keyed on repository slug and session *name*, so renaming a
- * session orphaned its directory, two sessions could land on one path, and
- * nothing about the filesystem said who owned what. This machine still holds
- * 54 directories from that scheme; they are read where they are and are not
- * moved by this function.
- */
-export function sessionWorktreesRoot(mcSessionId, root = mcHome()) {
-  return join(root, 'worktrees', mcSessionId);
-}
-
-export function sessionWorktreePath(mcSessionId, name, root = mcHome()) {
-  return join(sessionWorktreesRoot(mcSessionId, root), name);
 }
 
 /**

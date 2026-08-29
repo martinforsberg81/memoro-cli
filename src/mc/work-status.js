@@ -38,7 +38,6 @@ import { processesStandingIn } from './standing.js';
 import { readSuiteLease } from './suite-lease.js';
 import { dependencyTree } from './dependency-tree.js';
 import { areaRoleName } from './roles.js';
-import { openTaskCount } from './task-log.js';
 import { inspectWorkArea, listWorkAreas } from './work-area.js';
 import { readStopMark } from './work-stop-marker.js';
 
@@ -430,10 +429,6 @@ export async function workStatus({ env = process.env, names = null, git: askGit 
         // stopped and waiting for them?
         waiting: conversations.some((item) => item.state === 'waiting'),
         working: conversations.some((item) => item.state === 'working'),
-        // Tasks this area holds that are not done — open and blocked alike,
-        // since both still need somebody's attention. One file read, and
-        // nothing for the common case of a session that has never had one.
-        open_tasks: openTaskCount(area.name),
       };
     }),
   };
