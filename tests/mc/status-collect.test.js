@@ -52,39 +52,61 @@ describe('NOW', () => {
   const NOW = new Date('2026-08-29T10:30:00Z');
   const RUNNER = { pid: 4242, started: '2026-08-29T08:30:00Z' };
   const CURRENT = {
-    name: 'mc-ui', kind: 'step', tool: 'claude', model: 'opus', budget_minutes: 90,
+    name: 'mc-ui', kind: 'step', repo: 'memoro-cli', tool: 'claude', model: 'opus', budget_minutes: 90,
     started: '2026-08-29T10:00:00Z', pid: 4242, worktree: '/w/mc-ui/memoro-cli',
+  };
+  const OTHER = {
+    name: 'docx-editor', kind: 'step', repo: 'memoro', tool: 'claude', model: 'opus', budget_minutes: 90,
+    started: '2026-08-29T10:20:00Z', pid: 4243, worktree: '/w/docx-editor/memoro',
   };
   const live = () => true;
   const dead = () => false;
 
   it('names the step in flight with its elapsed time against its budget', () => {
-    const block = nowBlock({ runner: RUNNER, current: CURRENT, rows: ROWS, now: NOW, alive: live });
+    const block = nowBlock({ runner: RUNNER, currents: [CURRENT], rows: ROWS, now: NOW, alive: live });
     assert.deepEqual(block.runner, { pid: 4242, started: '2026-08-29T08:30:00Z', alive: true, up_seconds: 7200 });
-    assert.equal(block.step.name, 'mc-ui');
-    assert.equal(block.step.kind, 'step');
-    assert.equal(block.step.tool, 'claude');
-    assert.equal(block.step.elapsed_seconds, 1800);
-    assert.equal(block.step.budget_seconds, 5400);
-    assert.equal(block.step.over_budget, false);
+    assert.equal(block.steps.length, 1);
+    assert.equal(block.steps[0].name, 'mc-ui');
+    assert.equal(block.steps[0].kind, 'step');
+    assert.equal(block.steps[0].tool, 'claude');
+    assert.equal(block.steps[0].repo, 'memoro-cli');
+    assert.equal(block.steps[0].elapsed_seconds, 1800);
+    assert.equal(block.steps[0].budget_seconds, 5400);
+    assert.equal(block.steps[0].over_budget, false);
     assert.deepEqual(block.stale, []);
     assert.equal(block.stop, false);
+  });
+
+  // One lane per repository, so there is one `current-<repo>.json` per lane
+  // and NOW names every one of them — the file that says what is running is
+  // no longer a single file.
+  it('names every lane that has a step in flight', () => {
+    const block = nowBlock({ runner: RUNNER, currents: [CURRENT, OTHER], now: NOW, alive: live });
+    assert.deepEqual(block.steps.map((step) => [step.name, step.repo]), [
+      ['docx-editor', 'memoro'], ['mc-ui', 'memoro-cli'],
+    ]);
+    assert.deepEqual(block.steps.map((step) => step.elapsed_seconds), [600, 1800]);
+    assert.deepEqual(block.stale, []);
   });
 
   it('is empty when no runner has written a file, and says so when a step is over budget', () => {
     const empty = nowBlock({ now: NOW, alive: live });
     assert.equal(empty.runner, null);
-    assert.equal(empty.step, null);
+    assert.deepEqual(empty.steps, []);
     assert.deepEqual(empty.quota, { count: 0, last: null });
-    const late = nowBlock({ current: { ...CURRENT, started: '2026-08-29T08:00:00Z' }, now: NOW, alive: live });
-    assert.equal(late.step.over_budget, true);
+    const late = nowBlock({ currents: [{ ...CURRENT, started: '2026-08-29T08:00:00Z' }], now: NOW, alive: live });
+    assert.equal(late.steps[0].over_budget, true);
   });
 
-  it('a file whose pid is gone is stale, not running', () => {
-    const block = nowBlock({ runner: RUNNER, current: CURRENT, now: NOW, alive: dead });
+  it('a file whose pid is gone is stale, not running — and it says which lane', () => {
+    const block = nowBlock({ runner: RUNNER, currents: [CURRENT, OTHER], now: NOW, alive: dead });
     assert.equal(block.runner.alive, false);
-    assert.equal(block.step, null);
-    assert.deepEqual(block.stale, ['runner.json (pid 4242 is gone)', 'current.json (pid 4242 is gone)']);
+    assert.deepEqual(block.steps, []);
+    assert.deepEqual(block.stale, [
+      'runner.json (pid 4242 is gone)',
+      'current-memoro-cli.json (pid 4242 is gone)',
+      'current-memoro.json (pid 4243 is gone)',
+    ]);
   });
 
   it('carries a pending STOP and the quota answers of the last 24 h', () => {

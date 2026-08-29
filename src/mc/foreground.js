@@ -1,8 +1,8 @@
 /**
  * The foreground register — `~/mc/runner/foreground/<pid>.json`.
  *
- * The runner writes `current.json` while a step is in flight, so NOW can name
- * it. A session somebody opens themselves — `mc brief`, `mc plan <name>`,
+ * The runner writes `current-<repo>.json` while a lane's step is in flight,
+ * so NOW can name it. A session somebody opens themselves — `mc brief`, `mc plan <name>`,
  * `mc worker <name>`, `mc work <name>` in a plain terminal — leaves no such
  * trace: it is a child of mc holding the terminal, and nothing on disk says it
  * exists. NOW would then say "nothing is running" while the machine is busy,
@@ -11,8 +11,8 @@
  * So the verb registers itself: one small file named by the pid of the mc
  * process that is waiting on the tool, written before the call that blocks and
  * removed however that call returns. The pid is the mc process rather than the
- * tool's, for the same reason `current.json` names the runner: it is the pid
- * whose death means the session is over, and it is the one that can be tested
+ * tool's, for the same reason a lane's current file names the runner: it is
+ * the pid whose death means the session is over, and it is the one that can be tested
  * for life from outside.
  *
  * Two things keep the directory honest without any bookkeeping:

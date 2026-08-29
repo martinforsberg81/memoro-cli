@@ -291,32 +291,139 @@ test('runLoop: --rounds 1 does one pass and exits; --once exits after the first 
   assert.equal(g.calls.sessions.length, 1);
 });
 
-test('current.json exists only while the step is in flight, and runner.json only while the loop runs', async () => {
+test('current-<repo>.json exists only while the step is in flight, and runner.json only while the loop runs', async () => {
   const f = fixture({ plans: { memoro: { alpha: ready } }, session: okSession(), gh: { alpha: { number: 77 } } });
   assert.equal(await runLoop({ once: true, deps: f.deps }), 0);
 
   const during = f.duringSession[0];
-  assert.deepEqual(JSON.parse(during['/w/runner/current.json']), {
-    name: 'alpha', kind: 'step', tool: 'claude', model: 'opus', budget_minutes: 90,
+  assert.deepEqual(JSON.parse(during['/w/runner/current-memoro.json']), {
+    name: 'alpha', kind: 'step', repo: 'memoro', tool: 'claude', model: 'opus', budget_minutes: 90,
     started: '2026-08-29T10:00:00Z', pid: 4242, worktree: '/w/alpha/memoro',
   });
   assert.deepEqual(JSON.parse(during['/w/runner/runner.json']), { pid: 4242, started: '2026-08-29T10:00:00Z' });
 
   // ...and both are gone once the step and the loop are over.
-  assert.equal('/w/runner/current.json' in f.files, false);
+  assert.equal('/w/runner/current-memoro.json' in f.files, false);
   assert.equal('/w/runner/runner.json' in f.files, false);
 });
 
-test('current.json carries the project frontmatter, and is removed even when the session throws', async () => {
+test('the current file carries the project frontmatter, and is removed even when the session throws', async () => {
   const codexPlan = '---\nstatus: ready\ntool: codex\nmodel: o3\nbudget_minutes: 20\n---\n';
   const f = fixture({ plans: { 'memoro-cli': { cx: codexPlan } }, session: () => { throw new Error('boom'); } });
   const runner = createRunner({ deps: f.deps });
   await assert.rejects(runner.round({ once: true }), /boom/u);
-  assert.deepEqual(JSON.parse(f.duringSession[0]['/w/runner/current.json']), {
-    name: 'cx', kind: 'step', tool: 'codex', model: 'o3', budget_minutes: 20,
+  assert.deepEqual(JSON.parse(f.duringSession[0]['/w/runner/current-memoro-cli.json']), {
+    name: 'cx', kind: 'step', repo: 'memoro-cli', tool: 'codex', model: 'o3', budget_minutes: 20,
     started: '2026-08-29T10:00:00Z', pid: 4242, worktree: '/w/cx/memoro-cli',
   });
-  assert.equal('/w/runner/current.json' in f.files, false);
+  assert.equal('/w/runner/current-memoro-cli.json' in f.files, false);
+});
+
+/* ---------------------------------------------------------------- lanes */
+
+/**
+ * One lane per repository, both inside the one `mc run` process. The steps
+ * of memoro and memoro-cli never touch — different main branches, different
+ * worktrees, different PRs — so a round is as slow as the slower repository
+ * rather than as slow as both.
+ */
+test('two lanes: a memoro step and a memoro-cli step are in flight at the same time', async () => {
+  const inFlight = new Set();
+  const seen = [];
+  let release = () => {};
+  const both = new Promise((resolve) => { release = resolve; });
+  const f = fixture({
+    plans: { memoro: { alpha: ready }, 'memoro-cli': { beta: ready } },
+    session: async (call) => {
+      inFlight.add(call.cwd);
+      seen.push([...inFlight].sort());
+      if (inFlight.size === 2) release();
+      await both;
+      inFlight.delete(call.cwd);
+      return okSession()();
+    },
+  });
+  const guard = setTimeout(release, 5000);
+  await createRunner({ deps: f.deps }).round();
+  clearTimeout(guard);
+
+  assert.deepEqual(seen.at(-1), ['/w/alpha/memoro', '/w/beta/memoro-cli'], 'both sessions were running at once');
+  // And each lane said so in its own file, both present at the same moment.
+  const during = f.duringSession.at(-1);
+  assert.equal(JSON.parse(during['/w/runner/current-memoro.json']).name, 'alpha');
+  assert.equal(JSON.parse(during['/w/runner/current-memoro-cli.json']).name, 'beta');
+  assert.match(f.files['/w/runner/log/runner.log'], /lanes: memoro \(1\), memoro-cli \(1\)/u);
+});
+
+test('the queue is split by repository, and Martin\'s order holds within a lane', () => {
+  const f = fixture({
+    queue: 'mc-run\nalpha\n',
+    plans: { memoro: { alpha: ready, gamma: ready }, 'memoro-cli': { 'mc-run': ready } },
+  });
+  const runner = createRunner({ deps: f.deps });
+  const { names, plans } = runner.queue();
+  assert.deepEqual(names, ['mc-run', 'alpha', 'gamma']);
+  assert.deepEqual(runner.splitLanes(names, plans), [
+    { repo: 'memoro-cli', names: ['mc-run'] },
+    { repo: 'memoro', names: ['alpha', 'gamma'] },
+  ]);
+});
+
+test('one repository with ready plans is one lane, and a round is what it was', async () => {
+  const f = fixture({ plans: { memoro: { a: ready, b: ready } }, session: okSession() });
+  await createRunner({ deps: f.deps }).round();
+  assert.deepEqual(f.calls.sessions.map((call) => call.cwd), ['/w/a/memoro', '/w/b/memoro']);
+  assert.doesNotMatch(f.files['/w/runner/log/runner.log'], /lanes:/u, 'nothing to say about lanes when there is one');
+});
+
+/**
+ * The 5-hour Claude quota is one budget for both lanes: the lane that is
+ * refused sleeps, and the other joins that same sleep rather than spending a
+ * session to be told the same thing.
+ */
+test('a quota answer in one lane pauses the other, and there is one sleep, not two', async () => {
+  const events = [];
+  let releaseA = () => {};
+  const aGate = new Promise((resolve) => { releaseA = resolve; });
+  const quota = { status: 1, stdout: JSON.stringify({ subtype: 'success', num_turns: 1, result: "You've hit your weekly limit" }), stderr: '', timedOut: false };
+  const f = fixture({
+    plans: { memoro: { q: ready }, 'memoro-cli': { a: ready, b: ready } },
+    session: async (call) => {
+      const name = call.cwd.split('/')[2];
+      events.push(`start ${name}`);
+      if (name === 'a') await aGate;
+      return name === 'q' ? quota : okSession()();
+    },
+  });
+  f.deps.sleep = async (ms) => {
+    if (ms !== 30 * 60 * 1000) return;
+    events.push('sleep');
+    releaseA();
+    // Long enough for the other lane to finish its step and want the next
+    // one; it must not get one until this sleep is over.
+    await new Promise((resolve) => { setTimeout(resolve, 5); });
+    events.push('woke');
+  };
+  await createRunner({ deps: f.deps }).round();
+
+  assert.equal(events.filter((event) => event === 'sleep').length, 1, 'one sleep for both lanes');
+  assert.ok(events.indexOf('start b') > events.indexOf('woke'),
+    `the other lane waited out the quota sleep: ${events.join(', ')}`);
+  assert.match(f.files['/w/runner/log/runner.log'], /quota\/rate limit seen — every lane sleeping 30m/u);
+});
+
+test('STOP ends both lanes after the step each is in', async () => {
+  const f = fixture({
+    plans: { memoro: { a: ready, a2: ready }, 'memoro-cli': { b: ready, b2: ready } },
+    session: okSession(),
+  });
+  const inner = f.deps.session;
+  f.deps.session = async (call) => { f.files['/w/runner/STOP'] = ''; return inner(call); };
+  assert.equal(await runLoop({ rounds: 0, deps: f.deps }), 0);
+  assert.equal(f.calls.sessions.length, 2, 'one step in each lane, and no more');
+  assert.deepEqual(f.calls.sessions.map((call) => call.cwd).sort(), ['/w/a/memoro', '/w/b/memoro-cli']);
+  assert.match(f.files['/w/runner/log/runner.log'], /runner exit on STOP after a\b/u);
+  assert.match(f.files['/w/runner/log/runner.log'], /runner exit on STOP after b\b/u);
 });
 
 /* ------------------------------------------------------------- the helper */

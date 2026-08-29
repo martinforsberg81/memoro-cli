@@ -45,14 +45,14 @@ const live = () => true;
 describe('NOW', () => {
   const RUNNER = { pid: 4242, started: '2026-08-29T10:00:00Z' };
   const CURRENT = {
-    name: 'mc-ui', kind: 'step', tool: 'claude', model: 'opus', budget_minutes: 90,
+    name: 'mc-ui', kind: 'step', repo: 'memoro-cli', tool: 'claude', model: 'opus', budget_minutes: 90,
     started: '2026-08-29T11:40:00Z', pid: 4242, worktree: '/w/mc-ui/memoro-cli',
   };
 
   it('carries the step, the tmux areas, the foreground verbs and the day behind them', () => {
     const now = nowSection({
       runner: RUNNER,
-      current: CURRENT,
+      currents: [CURRENT],
       stop: true,
       rows: ROWS,
       live: [{ name: 'docx-editor', opened_ms: Date.parse('2026-08-29T11:00:00Z') }],
@@ -60,15 +60,32 @@ describe('NOW', () => {
       now: NOW,
       alive: live,
     });
-    assert.equal(now.step.name, 'mc-ui');
-    assert.equal(now.step.elapsed_seconds, 1200);
-    assert.equal(now.step.budget_seconds, 5400);
+    assert.equal(now.steps[0].name, 'mc-ui');
+    assert.equal(now.steps[0].elapsed_seconds, 1200);
+    assert.equal(now.steps[0].budget_seconds, 5400);
     assert.equal(now.stop, true);
     assert.deepEqual(now.live.map((area) => area.name), ['docx-editor']);
     assert.deepEqual(now.foreground.map((item) => item.verb), ['brief']);
     assert.equal(now.day.steps, 3);
     assert.equal(now.day.timeout, 1);
     assert.ok(now.day.cost > 7 && now.day.cost < 8, `≈ $7.3 list: ${now.day.cost}`);
+  });
+
+  // `mc run` drives one lane per repository at the same time, so NOW is a
+  // list: one line for memoro's step and one for memoro-cli's.
+  it('carries one step per lane when two lanes are running', () => {
+    const now = nowSection({
+      runner: RUNNER,
+      currents: [CURRENT, {
+        name: 'docx-editor', kind: 'step', repo: 'memoro', tool: 'claude', model: 'opus',
+        budget_minutes: 90, started: '2026-08-29T11:50:00Z', pid: 4243, worktree: '/w/docx-editor/memoro',
+      }],
+      rows: ROWS,
+      now: NOW,
+      alive: live,
+    });
+    assert.deepEqual(now.steps.map((step) => step.repo), ['memoro', 'memoro-cli']);
+    assert.deepEqual(now.steps.map((step) => step.name), ['docx-editor', 'mc-ui']);
   });
 
   it('drops a registered foreground session whose process is gone', () => {
@@ -78,7 +95,7 @@ describe('NOW', () => {
       alive: (pid) => pid === 100,
     });
     assert.deepEqual(now.foreground.map((item) => item.verb), ['plan']);
-    assert.equal(now.step, null);
+    assert.deepEqual(now.steps, []);
     assert.equal(now.day.steps, 0);
   });
 });
@@ -243,10 +260,10 @@ function pageData(over = {}) {
 const DATA = pageData({
   now: nowSection({
     runner: { pid: 4242, started: '2026-08-29T10:00:00Z' },
-    current: {
-      name: 'mc-ui', kind: 'step', tool: 'claude', model: 'opus', budget_minutes: 90,
+    currents: [{
+      name: 'mc-ui', kind: 'step', repo: 'memoro-cli', tool: 'claude', model: 'opus', budget_minutes: 90,
       started: '2026-08-29T11:40:00Z', pid: 4242, worktree: '/w/mc-ui/memoro-cli',
-    },
+    }],
     stop: true,
     rows: ROWS,
     live: [{ name: 'docx-editor', opened_ms: Date.parse('2026-08-29T11:00:00Z') }],
@@ -283,7 +300,7 @@ describe('the page', () => {
     assert.match(text, /MEMORO·CLI {2}0\.7\.11/u);
     assert.match(text, /4 decisions {2}· {2}1 of 3 queued/u);
     assert.match(text, /● mc-ui\s+step · claude opus · 20 min of 90 min · pid 4242/u);
-    assert.match(text, /■ STOP requested — the runner exits after the step it is in/u);
+    assert.match(text, /■ STOP requested — the runner exits after the steps it is in/u);
     assert.match(text, /◆ docx-editor\s+tmux mc-docx-editor · open 60 min/u);
     assert.match(text, /runner up 120 min · 3 steps in 24 h — merged 1, open 1, failed 0, timed out 1 · ≈\$7\.\d\d list \(opus, 2026-06\)/u);
     assert.match(text, /QUEUE {2}1 runnable of 3\s+mc status <name>/u);
@@ -346,9 +363,13 @@ describe('collectPage', () => {
     const root = mkdtempSync(join(tmpdir(), 'mc-page-'));
     mkdirSync(join(root, 'runner', 'log'), { recursive: true });
     writeFileSync(join(root, 'runner', 'runner.json'), JSON.stringify({ pid: process.pid, started: '2026-08-29T10:00:00Z' }));
-    writeFileSync(join(root, 'runner', 'current.json'), JSON.stringify({
-      name: 'mc-ui', kind: 'step', tool: 'claude', model: 'opus', budget_minutes: 90,
+    writeFileSync(join(root, 'runner', 'current-memoro-cli.json'), JSON.stringify({
+      name: 'mc-ui', kind: 'step', repo: 'memoro-cli', tool: 'claude', model: 'opus', budget_minutes: 90,
       started: '2026-08-29T11:40:00Z', pid: process.pid, worktree: `${root}/mc-ui/memoro-cli`,
+    }));
+    writeFileSync(join(root, 'runner', 'current-memoro.json'), JSON.stringify({
+      name: 'docx-editor', kind: 'step', repo: 'memoro', tool: 'claude', model: 'opus', budget_minutes: 90,
+      started: '2026-08-29T11:50:00Z', pid: process.pid, worktree: `${root}/docx-editor/memoro`,
     }));
     mkdirSync(join(root, 'runner', 'foreground'), { recursive: true });
     writeFileSync(join(root, 'runner', 'foreground', `${process.pid}.json`), JSON.stringify({
@@ -381,7 +402,8 @@ describe('collectPage', () => {
       },
     });
     assert.deepEqual(asked, ['tmux'], 'the default page runs no fetch and no gh');
-    assert.equal(data.now.step.name, 'mc-ui');
+    assert.deepEqual(data.now.steps.map((step) => step.name), ['docx-editor', 'mc-ui'],
+      'one current-<repo>.json per lane, and the page reads every one of them');
     assert.deepEqual(data.now.foreground.map((item) => item.verb), ['brief']);
     assert.equal(data.now.day.steps, 3);
     assert.equal(data.queue.depth, 2, 'the comment line is not a project');
@@ -472,7 +494,7 @@ describe('the palette', () => {
     '',
     'bold+cyan', //                                               NOW
     'green bold+white green grey grey grey white grey grey', //  ● mc-ui  step · claude opus · 20 min of 90 min · pid 4242
-    'red+bold grey', //                                          ■ STOP requested — the runner exits after the step it is in
+    'red+bold grey', //                                          ■ STOP requested — the runner exits after the steps it is in
     'yellow bold+white grey', //                                 ◆ docx-editor  tmux mc-docx-editor · open 60 min
     'grey', //                                                     runner up 120 min · 3 steps in 24 h — …
     '',
@@ -548,10 +570,10 @@ describe('the palette', () => {
       const data = pageData({
         now: nowSection({
           runner: { pid: 4242, started: '2026-08-29T11:00:00Z' },
-          current: {
-            name: 'thing', kind, tool: 'claude', model: 'opus', budget_minutes: 90,
+          currents: [{
+            name: 'thing', kind, repo: 'memoro-cli', tool: 'claude', model: 'opus', budget_minutes: 90,
             started: '2026-08-29T11:40:00Z', pid: 4242,
-          },
+          }],
           now: NOW,
           alive: live,
         }),
@@ -595,10 +617,10 @@ describe('the palette', () => {
     const stepAt = (spent) => pageData({
       now: nowSection({
         runner: { pid: 4242, started: '2026-08-29T10:00:00Z' },
-        current: {
-          name: 'thing', kind: 'step', tool: 'claude', model: 'opus', budget_minutes: 90,
+        currents: [{
+          name: 'thing', kind: 'step', repo: 'memoro-cli', tool: 'claude', model: 'opus', budget_minutes: 90,
           started: new Date(NOW.getTime() - spent * 1000).toISOString(), pid: 4242,
-        },
+        }],
         now: NOW,
         alive: live,
       }),

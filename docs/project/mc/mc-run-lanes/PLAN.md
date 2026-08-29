@@ -1,6 +1,6 @@
 ---
 status: ready
-next: "Step 1 — `mc run` drives one lane per repository (memoro, memoro-cli) at the same time inside the one process; each lane has its own `current-<repo>.json`, the page's NOW lists both; a quota answer pauses both lanes; STOP stops both after their current step — done when runner.log shows two steps overlapping in time and the page names both."
+next: "Step 2 — close-out: the lanes written down in `docs/technical/mc-run.md` (what a lane owns, the one current file per lane, the shared quota sleep and STOP, why the session is spawned rather than run with spawnSync), and a `docs/project/project_log.md` row — done when the note exists and the log names the change."
 budget: 150k
 needs: [mc-ui]
 ---
@@ -33,11 +33,11 @@ type or start.
 
 ## Success criteria
 
-- [ ] runner.log shows a memoro step and a memoro-cli step overlapping.
-- [ ] `mc status --json` (`mc --json` once mc-ui lands) shows both under
-      `now`.
-- [ ] A quota answer in one lane pauses the other; STOP stops both.
-- [ ] Tests cover the split queue, two current files, and the shared
+- [x] runner.log shows a memoro step and a memoro-cli step overlapping.
+- [x] `mc --json` (mc-ui landed, so this and not `mc status --json`) shows
+      both under `now.steps`.
+- [x] A quota answer in one lane pauses the other; STOP stops both.
+- [x] Tests cover the split queue, two current files, and the shared
       pause.
 
 ## Contract
@@ -47,5 +47,22 @@ type or start.
 
 ## Steps
 
-- [ ] **1. Lanes** — one PR.
+- [x] **1. Lanes** — one PR.
 - [ ] **2. Close-out** — `docs/technical/` note, `project_log.md` row.
+
+## What the code taught us
+
+- **NOW became a list, not a second field.** `nowBlock` used to return one
+  `step`; keeping it beside a new `steps` would have been two truths about
+  the same fact. It returns `steps` only, and the page draws one line per
+  lane. `mc --json`'s `now.step` is gone with it — the only reader was the
+  page.
+- **The session had to stop being synchronous.** `mc run` spawned the
+  headless tool with `spawnSync` and waited. Two lanes in one process cannot
+  overlap behind a call that holds the event loop for the whole budget, so
+  `deps.session` is a promise now (`spawn`, output collected and capped
+  rather than `maxBuffer`). Nothing else about the step changed, and the
+  fakes in the tests still return a plain object.
+- **A lane re-reads only its own repository.** The mid-round re-read after a
+  merged step fetches one repository (`queue({ only })`), so the two lanes
+  never run `git fetch` in the same checkout at the same moment.

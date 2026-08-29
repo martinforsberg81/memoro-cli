@@ -7,6 +7,12 @@
  * session through the launch adapter and waits for it. No inbox, no knock,
  * no watcher — it is the parent of the process it starts.
  *
+ * A round drives one lane per repository at the same time: memoro's steps
+ * and memoro-cli's never touch (different main branches, different
+ * worktrees), so a round is as slow as the slower repository rather than as
+ * slow as both. Nothing new to type or start — the lanes are inside the one
+ * `mc run` process, and one repository with ready plans is one lane.
+ *
  * One thing that is not a step rides along: `mc helper`, once per calendar
  * day at the top of the first round after 05:00Z, logged in runs.tsv under
  * its own kind. It opens no worktree and touches no branch — it reads
@@ -17,7 +23,7 @@
  * driven in a test with a fake git, gh, tmux and session and no network.
  * The rules themselves live in run-plan.js.
  */
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
@@ -74,11 +80,41 @@ export function realDeps(env = process.env) {
     // The session: the adapter's binary with the headless argument list,
     // stdin closed (claude -p reads a piped stdin and would eat it), a
     // wall-clock cap after which it is killed and logged as a timeout.
-    session: ({ bin, args, cwd, timeoutMs }) => {
-      const r = spawnSync(bin, args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: timeoutMs, killSignal: 'SIGTERM', maxBuffer: 256 << 20, env });
-      const timedOut = r.error?.code === 'ETIMEDOUT' || (r.status == null && r.signal === 'SIGTERM');
-      return { status: timedOut ? TIMEOUT_EXIT : (r.status ?? 1), stdout: r.stdout || '', stderr: r.stderr || (r.error ? String(r.error.message) : ''), timedOut };
-    },
+    //
+    // `spawn` and not `spawnSync`: two lanes run in this one process, and a
+    // synchronous wait would hold the event loop for the whole ninety
+    // minutes — the second lane would never get to start. The output is
+    // collected here instead of by `maxBuffer`, and capped rather than
+    // allowed to eat the machine: a session that floods stdout is not going
+    // to parse as JSON either way.
+    session: ({ bin, args, cwd, timeoutMs }) => new Promise((resolve) => {
+      const child = spawn(bin, args, { cwd, stdio: ['ignore', 'pipe', 'pipe'], timeout: timeoutMs, killSignal: 'SIGTERM', env });
+      const cap = 256 << 20;
+      const collect = (stream) => {
+        const chunks = [];
+        let size = 0;
+        stream.on('data', (chunk) => { if (size < cap) { chunks.push(chunk); size += chunk.length; } });
+        return () => Buffer.concat(chunks).toString('utf8');
+      };
+      const stdout = collect(child.stdout);
+      const stderr = collect(child.stderr);
+      let settled = false;
+      let failure = null;
+      const done = (value) => { if (!settled) { settled = true; resolve(value); } };
+      child.on('error', (error) => {
+        failure = error;
+        if (!child.pid) done({ status: 1, stdout: '', stderr: String(error.message), timedOut: false });
+      });
+      child.on('close', (status, signal) => {
+        const timedOut = status == null && signal === 'SIGTERM';
+        done({
+          status: timedOut ? TIMEOUT_EXIT : (status ?? 1),
+          stdout: stdout(),
+          stderr: stderr() || (failure ? String(failure.message) : ''),
+          timedOut,
+        });
+      });
+    }),
     log: (line) => process.stdout.write(`${line}\n`),
   };
 }
@@ -96,11 +132,13 @@ export function createRunner({
     runnerLog: join(root, 'runner', 'log', 'runner.log'),
     stop: join(root, 'runner', 'STOP'),
     // What is running, for anyone who asks. runner.json says a runner is
-    // here and names the pid to test; current.json exists only while a step
-    // is in flight. runs.tsv gets its row when the step is over — that is
-    // too late to answer "what is running now", which is why these exist.
+    // here and names the pid to test; `current-<repo>.json` exists only
+    // while that lane's step is in flight — one file per lane, because two
+    // steps run side by side. runs.tsv gets its row when the step is over —
+    // that is too late to answer "what is running now", which is why these
+    // exist.
     runner: join(root, 'runner', 'runner.json'),
-    current: join(root, 'runner', 'current.json'),
+    currentFor: (repo) => join(root, 'runner', `current-${repo}.json`),
   };
   const writeJson = deps.writeJson || ((path, value) => deps.write(path, `${JSON.stringify(value, null, 2)}\n`));
   const remove = deps.remove || (() => {});
@@ -114,6 +152,23 @@ export function createRunner({
   };
   const gitOut = (cwd, args) => { const r = deps.git(cwd, args); return r.ok ? String(r.stdout ?? '').trimEnd() : null; };
   const stopRequested = () => deps.exists(paths.stop);
+
+  /**
+   * The 5-hour Claude quota is one budget for every lane. The first lane to
+   * be refused sleeps on it and every other lane joins that same sleep
+   * before its next step: one sleep, not two, and no session spent to be
+   * told the same thing again. `quotaHold` is what a lane awaits before it
+   * starts anything; `quotaPause` is what the lane that saw the refusal
+   * calls.
+   */
+  let quotaSleep = null;
+  async function quotaPause() {
+    if (quotaSleep) { await quotaSleep; return; }
+    say(`quota/rate limit seen — every lane sleeping ${QUOTA_SLEEP_MS / 60000}m`);
+    quotaSleep = Promise.resolve(deps.sleep(QUOTA_SLEEP_MS));
+    try { await quotaSleep; } finally { quotaSleep = null; }
+  }
+  const quotaHold = async () => { if (quotaSleep) await quotaSleep; };
 
   function planOf(worktree, name) {
     const base = join(worktree, 'docs', 'project');
@@ -233,13 +288,16 @@ export function createRunner({
     say(turn.ok
       ? `helper: ${describeTurn(turn)} (${took()}s)`
       : `helper: the turn did not finish — ${turn.reason || turn.note} (${took()}s)`);
-    if (turn.quota) { say(`quota/rate limit seen — sleeping ${QUOTA_SLEEP_MS / 60000}m`); await deps.sleep(QUOTA_SLEEP_MS); }
+    if (turn.quota) await quotaPause();
     return turn.ok ? 'ran' : 'failed';
   }
 
   /** One project. Returns 'merged' | 'ran' | 'skipped' | 'stop'. */
   async function runStep(name, plans) {
     if (stopRequested()) { say(`STOP file present (${paths.stop}) — not starting ${name}`); return 'stop'; }
+    // A quota answer in the other lane is this lane's answer too: wait it
+    // out here, before a worktree is touched or a session is spent.
+    await quotaHold();
     const repo = repoOf(name, plans);
     if (!repo) { say(`${name}: no workarea and no plan on main, skip`); return 'skipped'; }
     const worktree = join(root, name, repo.name);
@@ -276,17 +334,19 @@ export function createRunner({
     const out = join(paths.log, `${name}-${ts}.json`);
     say(`${name}: ${kind} starting (${launch.shortName} ${settings.model}, ${settings.budgetMinutes} min)`);
     const t0 = deps.now().getTime();
-    // current.json exists exactly as long as the session does — written
-    // before the call that blocks, removed however that call returns.
-    writeJson(paths.current, {
-      name, kind, tool: settings.tool, model: settings.model,
+    // The lane's current file exists exactly as long as the session does —
+    // written before the call that blocks, removed however that call
+    // returns. It carries its repo, which is also its lane's name.
+    const currentPath = paths.currentFor(repo.name);
+    writeJson(currentPath, {
+      name, kind, repo: repo.name, tool: settings.tool, model: settings.model,
       budget_minutes: settings.budgetMinutes, started: stamp(), pid, worktree,
     });
     let result;
     try {
-      result = deps.session({ bin: launch.spec.bin, args, cwd: worktree, timeoutMs: settings.budgetMinutes * 60_000 });
+      result = await deps.session({ bin: launch.spec.bin, args, cwd: worktree, timeoutMs: settings.budgetMinutes * 60_000 });
     } finally {
-      remove(paths.current);
+      remove(currentPath);
     }
     const seconds = Math.round((deps.now().getTime() - t0) / 1000);
     deps.write(out, result.stdout);
@@ -305,16 +365,21 @@ export function createRunner({
 
     logRun({ ts: stamp(), name, kind, exit: result.status, seconds, pr, turns: read.turns, input: read.input, output: read.output, cacheRead: read.cacheRead, cacheWrite: read.cacheWrite, session: read.session, note });
     say(`${name}: ${kind} done rc=${result.status} ${seconds}s pr=${pr} turns=${read.turns} note=${note}`);
-    if (read.quota) { say(`quota/rate limit seen — sleeping ${QUOTA_SLEEP_MS / 60000}m`); await deps.sleep(QUOTA_SLEEP_MS); }
+    if (read.quota) await quotaPause();
     // A merged step or a finished reconcile both leave the project ready for
     // its next step now; 'merged' is the round's cue to stay on it.
     return note === 'success,merged' || (kind === 'reconcile' && note === 'success') ? 'merged' : 'ran';
   }
 
-  /** The queue, re-read every round: queue.md, then every plan on origin/main. */
-  function queue() {
+  /**
+   * The queue, re-read every round: queue.md, then every plan on origin/main.
+   * `only` narrows it to one repository — what a lane re-reads mid-round, so
+   * two lanes never fetch the same repository at the same moment.
+   */
+  function queue({ only = null } = {}) {
     const plans = [];
     for (const repo of repos) {
+      if (only && repo.name !== only) continue;
       if (!deps.exists(join(repo.path, '.git'))) continue;
       deps.git(repo.path, ['fetch', '-q', 'origin']);
       plans.push(...listPlans(repo, { git: gitOut, batch: showBatch(gitOut) }));
@@ -323,24 +388,33 @@ export function createRunner({
   }
 
   /**
-   * One pass: the day's helper if it is due, then every queued project.
-   * Returns { ran, stop } — the helper is not counted, it is not a step.
-   *
-   * A project whose step merged keeps the
-   * runner: its next step follows at once (plans re-read, so the merged
-   * status is what decides) instead of waiting a whole round behind every
-   * other project — 2026-08-29 a six-step plan would have taken six rounds
-   * of twenty projects. STOP is honoured between those steps too.
+   * The queue split into lanes: one lane per repository, Martin's order kept
+   * within each. A name whose repository cannot be told (no workarea and no
+   * plan on main) rides in a lane of its own, where `runStep` says so and
+   * skips it.
    */
-  async function round({ once = false } = {}) {
-    // The day's helper first, and only in a round that is a round: `--once`
-    // exists to watch a single step, and a two-minute model turn over
-    // production is not what somebody typing it asked for.
-    if (!once && !stopRequested()) await runHelperDay();
-    let { names, plans } = queue();
+  function splitLanes(names, plans) {
+    const lanes = new Map();
+    for (const name of names) {
+      const repo = repoOf(name, plans)?.name || null;
+      if (!lanes.has(repo)) lanes.set(repo, []);
+      lanes.get(repo).push(name);
+    }
+    return [...lanes].map(([repo, laneNames]) => ({ repo, names: laneNames }));
+  }
+
+  /**
+   * One lane: its names in order, one step at a time. A project whose step
+   * merged keeps the lane — its next step follows at once (plans re-read, so
+   * the merged status is what decides) instead of waiting a whole round
+   * behind every other project — 2026-08-29 a six-step plan would have taken
+   * six rounds of twenty projects. STOP is honoured between those steps too.
+   */
+  async function runLane({ repo = null, names = [] }, plans, { once = false } = {}) {
+    let known = plans;
     let ran = 0;
     for (const name of names) {
-      let r = await runStep(name, plans);
+      let r = await runStep(name, known);
       for (let stayed = 0; ; stayed += 1) {
         if (r === 'stop') return { ran, stop: true };
         if (r === 'ran' || r === 'merged') {
@@ -350,21 +424,54 @@ export function createRunner({
         }
         if (stopRequested()) { say(`runner exit on STOP after ${name} (remove ${paths.stop} before the next start)`); return { ran, stop: true }; }
         if (r !== 'merged' || stayed >= 8) break;
-        plans = queue().plans;
-        const status = plans.find((p) => p.project === name)?.status;
+        known = queue({ only: repo }).plans;
+        const status = known.find((p) => p.project === name)?.status;
         if (!status || status === 'done') break;
         say(`${name}: step merged and the plan is ${status} — staying on ${name}`);
-        r = await runStep(name, plans);
+        r = await runStep(name, known);
       }
     }
     return { ran, stop: false };
   }
 
+  /**
+   * One pass: the day's helper if it is due, then every queued project —
+   * memoro's lane and memoro-cli's at the same time, in the one process.
+   * Returns { ran, stop } — the helper is not counted, it is not a step.
+   *
+   * The lanes never touch: different main branches, different worktrees,
+   * different PRs. What they do share is the Claude quota (`quotaPause`) and
+   * the STOP file, which ends both lanes after the step each is in. With
+   * only one repository holding ready plans there is one lane, and a round
+   * is exactly what it was before.
+   */
+  async function round({ once = false } = {}) {
+    // The day's helper first, and only in a round that is a round: `--once`
+    // exists to watch a single step, and a two-minute model turn over
+    // production is not what somebody typing it asked for.
+    if (!once && !stopRequested()) await runHelperDay();
+    const { names, plans } = queue();
+    // `--once` is one step, so it is one lane over the whole queue in
+    // Martin's order — there is nothing for a second lane to do.
+    const lanes = once ? [{ repo: null, names }] : splitLanes(names, plans);
+    if (lanes.length > 1) say(`lanes: ${lanes.map((lane) => `${lane.repo || 'unplaced'} (${lane.names.length})`).join(', ')}`);
+    const results = await Promise.all(lanes.map((lane) => runLane(lane, plans, { once })));
+    const out = {
+      ran: results.reduce((sum, r) => sum + r.ran, 0),
+      stop: results.some((r) => r.stop),
+    };
+    if (results.some((r) => r.once)) out.once = true;
+    return out;
+  }
+
   /** runner.json — a runner is here, and this is the pid to test for life. */
   const markRunner = () => writeJson(paths.runner, { pid, started: stamp() });
-  const clearRunner = () => { remove(paths.runner); remove(paths.current); };
+  const clearRunner = () => {
+    remove(paths.runner);
+    for (const repo of repos) remove(paths.currentFor(repo.name));
+  };
 
-  return { paths, say, round, runStep, runHelperDay, queue, stopRequested, syncMain, mergePr, planOf, repoOf, markRunner, clearRunner };
+  return { paths, say, round, runStep, runLane, splitLanes, runHelperDay, queue, stopRequested, syncMain, mergePr, planOf, repoOf, markRunner, clearRunner };
 }
 
 /**
