@@ -14,6 +14,10 @@ still runs today but is not where new work goes.
 
 ## Work — the current model
 
+The page and the two surfaces that print it are described in full in
+[`docs/technical/mc-ui.md`](technical/mc-ui.md) — what each section says,
+which file every fact comes from, and why there is no third surface.
+
 A piece of work is a directory under `~/mc/<name>`. What lies under it belongs
 to it: the worktrees it spans, one per repository, and the tool conversations
 started in it. mc stores nothing else, because nothing else is mc's to know.
@@ -277,7 +281,6 @@ fail everything on a typo.
 
 | Command | Does |
 |---|---|
-| `mc sessions list` | Local sessions from disk, cloud sessions from Memoro. |
 | `mc sessions send <name> <text>` | Write to that terminal. |
 | `mc sessions read <name> [--last N]` | Read its bounded current screen. |
 

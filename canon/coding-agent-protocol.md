@@ -288,7 +288,7 @@ tests back one at a time along the way.
   (PR #28 lesson)
 - Don't duplicate install-hint strings (they belong in adapter
   `getStatus()` only)
-- Don't make `mc list` / `mc auth status` print to stdout in a way
+- Don't make `mc` / `mc auth status` print to stdout in a way
   that breaks `--json` consumers
 - Don't guess on design with 2+ reasonable options — ask the
   coordinator (see the skill)

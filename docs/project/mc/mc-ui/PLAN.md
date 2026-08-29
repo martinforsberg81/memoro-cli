@@ -1,6 +1,6 @@
 ---
-status: ready
-next: "Step 6 — Close-out: `docs/technical/mc-ui.md` and `project_log.md`, and the step-1/2 collector that lost its caller (`collectStatus`, `renderStatus`, `runnerBlock`, `projectsBlock`, `orphanWorkareas` in status-collect.js) — done when the document describes the page as built and nothing unreachable is left behind."
+status: done
+next: "Nothing. All six steps are done and every success criterion is checked. What remains is not a step: `docs/project/README.md` says close-out also removes this directory, and that is the archive act after the merge, not a change this PR makes to the plan it is still being read from."
 budget: 150k
 needs: []
 ---
@@ -174,7 +174,23 @@ redrawn, no prompt. Bare `mc work`, `mc list`, bare `mc status`, `mc status
       `now.foreground[0].verb === "brief"` in `--json` from a second process,
       and both were empty a second after it exited; `npm test` is 54 failures
       in the 22 known V1 files, unchanged from step 4.
-- [ ] **6. Close-out** — `docs/technical/mc-ui.md`, `project_log.md`.
+- [x] **6. Close-out** (2026-08-29) — `docs/technical/mc-ui.md` describes the
+      page as built: the two surfaces and the rule that there is no third, the
+      five sections and the two honesty rules under them, the table of which
+      file says what and who writes it, the foreground register, why the page
+      is instant and which half of that the caches actually bought, how it is
+      drawn, the menu, the modules and their tests, and what went and what
+      could not. `docs/project/project_log.md` is created — the first close-out
+      in this repository — with memoro's fields and rule, and carries the row.
+      The unreachable half of `status-collect.js` is gone: `collectStatus`,
+      `renderStatus`, `runnerBlock`, `projectsBlock`, `orphanWorkareas` and the
+      eight private helpers and eleven imports that only they used, 355 lines
+      down to 136; its test file keeps the four readers that still have callers
+      and the `--help` assertion moved to `front-door.test.js`, which is where
+      the surfaces are tested. Done: `npm test` is 54 failures in the same 22
+      known V1 files as steps 4 and 5, and the page prints all five sections
+      against the real `~/mc` in 0.09–0.11 s over twelve runs at load average
+      10, with both caches hit.
 
 ## What the code taught us
 
@@ -226,6 +242,31 @@ assumed, are in `investigation-2026-08-29.md`.
 - **`renderStatus` hardcodes 34/17/70-column pads** and never asks
   `stdout.columns`, while `status-render.js` already exports the
   `painter`/`width`/`pad`/`clip` it needs.
+
+- **The removal was bigger than the five names.** `collectStatus` and
+  `renderStatus` were the only readers of eight private helpers (`fmt`,
+  `clip`, `when`, `duration`, `runGit`, `execAsync`, `readJson`, `liveAreas`)
+  and of every import in the file except `chooseKind` — `summariseRuns`,
+  `estimateCost`, `loadPlans`, `workRoot`, `spawnSync` and the rest. Deleting
+  the five exports without them would have left the file compiling and still
+  dead. What survives is the readers with living callers: `nowBlock`,
+  `kindFor`, `pidAlive`, `decisionsBlock`, `areasWithCheckout`, `RUNNER_MODEL`.
+
+- **Deleting a page's test deletes assertions the page still needs.** Three
+  of the four `it`s in the removed half were covered again by `page.test.js`
+  and `front-door.test.js`, but two were not: `priceFor`/`estimateCost` had no
+  other test in the repository at all, and the `--help` assertion that the
+  help leads with the two surfaces and names no third one was only here. The
+  first stayed where it was; the second moved to `front-door.test.js`, where
+  the surfaces are.
+
+- **`docs/technical/` and `docs/project/project_log.md` did not exist in this
+  repository.** Every plan under `docs/project/mc/` names both in its
+  close-out step and none had reached one — mc-ui is the first. The log is
+  memoro's file, fields and append-only rule verbatim, because `mc helper`
+  reads whichever of the two the repository it is looking at keeps
+  (`PROJECT_LOG` in `helper-turn.js`) and a second format would be a second
+  parser.
 
 - **A count is only honest if the section knows what it cannot see.** INTAKE
   exists now — `mc helper` ran on 2026-08-29 and wrote
@@ -312,6 +353,8 @@ assumed, are in `investigation-2026-08-29.md`.
 
 ## Documents
 
+- `docs/technical/mc-ui.md` — **what this project leaves behind**: the page as built (step 6)
+- `docs/project/project_log.md` — the close-out row; the first one in this repository (step 6)
 - `docs/project/mc/mc-ui/investigation-2026-08-29.md` — inventory, mock-up, options
 - `~/mc/mc-utredning/decisions/mc-3.md` — the decision (A, two surfaces)
 - `src/mc/page-collect.js`, `src/mc/page-render.js` — the five sections and how they look (step 3)
