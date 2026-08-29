@@ -2,7 +2,7 @@
 
 `mc`, typed alone, is the page. It is the only thing in mc that lists
 workareas, projects, sessions or queue entries, and there is exactly one
-other surface: `mc --watch`, which is the same page redrawn.
+only surface. `mc --watch` existed for a few hours on 2026-08-29 and was removed the same day (Martin: a page redrawn on a timer is not a live page; the real one comes later).
 
 That is a deliberate limit (decision `mc-3`, 2026-08-29). Before it, five
 verbs each printed a list of their own — bare `mc` printed the V1 sessions
@@ -17,7 +17,6 @@ sessions or projects is a regression**, not a feature.
 | | what it does |
 |---|---|
 | `mc` | prints the page; at a terminal, then the menu |
-| `mc --watch [seconds]` | the same page every 15 s (or `seconds`) until ctrl-c, no prompt |
 | `mc --json [--fresh]` | the same object the renderer takes, one key per section, exit 0 |
 | `mc --fresh` | fetch and ask GitHub first, then print |
 | `mc status <name>` | one project — still its own verb |
@@ -145,7 +144,7 @@ fetches in; it does not yet.
 
 ## How it looks
 
-`page-render.js` draws lines, not one string, so `--watch` can redraw and a
+`page-render.js` draws lines, not one string, so a
 test can look at one row.
 
 - **Width-aware.** `stdout.columns` clamped to 60–160, through `width`,
@@ -197,7 +196,7 @@ Everything else is structure, and structure is quiet:
 | header | `MEMORO·CLI` | bold white |
 | header | decisions waiting, when > 0 | bold yellow |
 | header | `N of M queued` | white |
-| header | version, rule, cost today, `watch · N s` | grey |
+| header | version, rule, cost today | grey |
 | section titles | `NOW` `QUEUE` `DECISIONS` `INTAKE` `WORK` | bold cyan |
 | section titles | the count beside it, the verb hint on the right | grey |
 | NOW | the live step's `●`, its name | green, bold white |
@@ -245,10 +244,7 @@ Four things hold that table up:
   plain twin. It sits inside the row's own footprint, where two of the seven
   leading spaces used to be. Everything else is byte-identical, at six widths,
   against the same fixtures.
-- **`--watch` redraws only the lines that changed**, so the page does not
-  flicker; the whole page is drawn only when the number of rows changes. That
-  rule lives in `watch()` in `commands/home.js` and predates the colour —
-  measured, not assumed: 32 s of `mc --watch 1` under a pty, no flicker.
+- **`--watch` is gone** (2026-08-29): it cleared and redrew on a timer, which is not a live page. A real live page is later work.
 
 `tests/mc/page.test.js` pins all of it: a per-row signature snapshot of the
 painted page (the colours in order, not the escape bytes), the two tables
@@ -270,7 +266,6 @@ not changed:
 | `b` | `mc brief` |
 | `p <name>` | `mc plan <name>` |
 | `s <name>` | `mc status <name>` |
-| `w` | switch to `--watch` |
 | `q`, empty | quit |
 | anything else | parsed as an `mc work` command, with or without its first two words |
 
@@ -286,7 +281,7 @@ never reaches it.
 
 | file | what it is |
 |---|---|
-| `src/mc/commands/home.js` | the three surfaces: the page, the menu, `--watch` |
+| `src/mc/commands/home.js` | the two surfaces: the page and the menu |
 | `src/mc/page-collect.js` | the five sections, built from read data |
 | `src/mc/page-render.js` | how they look |
 | `src/mc/page-cache.js` | `plans.json` and `prs.json` |

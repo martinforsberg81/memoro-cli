@@ -59,7 +59,7 @@ async function routeV1Command(args) {
   // The page's own flags, and only those: anything else that starts with a
   // dash keeps falling through to the capability dispatcher, which is where
   // it was answered before.
-  const pageFlags = new Set(['--json', '--fresh', '--offline', '--watch']);
+  const pageFlags = new Set(['--json', '--fresh', '--offline']);
   if (pageFlags.has(command)
     && args.every((arg) => pageFlags.has(arg) || /^\d+$/u.test(arg))) {
     return runModule('./mc/commands/home.js', args);
@@ -112,7 +112,6 @@ async function routeV1Command(args) {
 function moved(verb) {
   console.error(`mc: ${verb} is now mc — one page, and it is what mc prints`);
   console.error('    mc                  the page, and at a terminal a way in');
-  console.error('    mc --watch          the same page, redrawn');
   console.error('    mc status <name>    one project');
   return 2;
 }

@@ -26,7 +26,7 @@
  * coloured row is exactly as wide as its plain twin and no clip ever cuts an
  * escape sequence in half.
  *
- * Lines rather than one string, so `--watch` can redraw and a test can look
+ * Lines rather than one string, so a test can look
  * at a row without splitting a page apart again.
  */
 import { ageWords } from './page-cache.js';
@@ -331,7 +331,7 @@ function workLines(lines, c, wide, work) {
  * per section, so the two can never say different things.
  */
 export function renderPageLines(data, {
-  columns = 100, colour = false, version = '', now = new Date(), watch = 0,
+  columns = 100, colour = false, version = '', now = new Date(),
 } = {}) {
   const c = painter(colour);
   const wide = Math.max(60, Math.min(columns, 160));
@@ -346,7 +346,6 @@ export function renderPageLines(data, {
     data.decisions.count ? { text: `${data.decisions.count} decisions`, styles: ['yellow', 'bold'] } : null,
     { text: `${data.queue.runnable} of ${data.queue.depth} queued`, styles: ['white'] },
     cost ? { text: `${cost} today`, styles: ['grey'] } : null,
-    watch ? { text: `watch · ${watch} s`, styles: ['grey'] } : null,
   ].filter(Boolean);
   const plain = () => parts.map((part) => part.text).join('  ·  ');
   while (parts.length > 1 && width(brand) + plain().length + 6 > wide) parts.pop();

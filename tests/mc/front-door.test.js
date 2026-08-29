@@ -15,7 +15,7 @@ import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
 import { runMcCli } from './_helpers/mc-cli.js';
-import { menu, parsePageArgs, watch } from '../../src/mc/commands/home.js';
+import { menu, parsePageArgs } from '../../src/mc/commands/home.js';
 
 /** A work root with two areas and a queue, and nothing that needs a network. */
 function fixture() {
@@ -89,10 +89,10 @@ describe('bare mc', () => {
     } finally { fx.cleanup(); }
   });
 
-  it('the help leads with the two surfaces and names no third one', () => {
+  it('the help leads with the one surface and names no other', () => {
     const help = runMcCli(['--help']).stdout;
     assert.match(help, /^ {2}mc {2,}The one page/mu);
-    assert.match(help, /^ {2}mc --watch \[seconds\]/mu);
+    assert.doesNotMatch(help, /mc --watch/u);
     assert.doesNotMatch(help, /mc status --sessions/u);
     assert.doesNotMatch(help, /^ {2}mc list /mu);
   });
@@ -105,7 +105,7 @@ describe('the verbs that became mc', () => {
       const result = runMcCli(['list'], fx.env);
       assert.equal(result.status, 2);
       assert.match(result.stderr, /mc list is now mc/u);
-      assert.match(result.stderr, /mc --watch/u);
+      assert.doesNotMatch(result.stderr, /--watch/u);
       assert.equal(result.stdout, '');
     } finally { fx.cleanup(); }
   });
@@ -146,33 +146,14 @@ describe('the verbs that became mc', () => {
 });
 
 describe('the page flags', () => {
-  it('reads --watch with and without its seconds, and rejects the rest', () => {
-    assert.deepEqual(parsePageArgs([]), { json: false, fresh: false, watch: 0 });
-    assert.deepEqual(parsePageArgs(['--watch']), { json: false, fresh: false, watch: 15 });
-    assert.deepEqual(parsePageArgs(['--watch', '3']), { json: false, fresh: false, watch: 3 });
-    assert.deepEqual(parsePageArgs(['--json', '--fresh']), { json: true, fresh: true, watch: 0 });
+  it('reads --json and --fresh, and rejects the rest — --watch included', () => {
+    assert.deepEqual(parsePageArgs([]), { json: false, fresh: false });
+    assert.deepEqual(parsePageArgs(['--json', '--fresh']), { json: true, fresh: true });
     // What the page does anyway, still accepted so step 2's habit keeps working.
-    assert.deepEqual(parsePageArgs(['--offline']), { json: false, fresh: false, watch: 0 });
+    assert.deepEqual(parsePageArgs(['--offline']), { json: false, fresh: false });
     assert.match(parsePageArgs(['--sessions']).error, /unknown argument: --sessions/u);
-  });
-
-  it('watch redraws and leaves the terminal with its cursor back', async () => {
-    const written = [];
-    const stdout = { isTTY: true, columns: 100, write: (text) => written.push(text) };
-    let drawn = 0;
-    const code = await watch(15, {
-      stdout,
-      draw: async () => { drawn += 1; return ['  NOW', `  step ${drawn}`, '  WORK']; },
-      sleep: async () => {},
-      rounds: 3,
-    });
-    assert.equal(code, 0);
-    assert.equal(drawn, 3);
-    // The first page whole, then only the line that moved.
-    assert.match(written[0], /NOW/u);
-    assert.equal(written.filter((text) => /step 2/u.test(text)).length, 1);
-    assert.ok(!/NOW/u.test(written[1]), 'a page that did not change shape is not drawn again');
-    assert.equal(written.at(-1), `${String.fromCharCode(27)}[?25h`, 'the cursor is put back');
+    // Removed 2026-08-29: a page redrawn on a timer is not a live page.
+    assert.match(parsePageArgs(['--watch']).error, /unknown argument: --watch/u);
   });
 });
 
@@ -247,12 +228,13 @@ describe('the menu under the page', () => {
     assert.deepEqual(bare.opened, ['mc-ui']);
   });
 
-  it('offers b, p, s and w beside the numbers', async () => {
+  it('offers n, b, p and s beside the numbers, and no watch', async () => {
     const shown = drive(['q']);
     await shown.run();
     const keys = shown.written.join('');
-    for (const key of ['n  start something new', 'b  brief', 'p <name>  plan', 's <name>', 'w  watch', 'q  quit']) {
+    for (const key of ['n  start something new', 'b  brief', 'p <name>  plan', 's <name>', 'q  quit']) {
       assert.ok(keys.includes(key), `${key} is not offered: ${keys}`);
     }
+    assert.ok(!keys.includes('watch'), 'the menu offers no watch');
   });
 });
