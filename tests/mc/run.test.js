@@ -31,7 +31,7 @@ function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], live = 
     }
   }
   const log = [];
-  const calls = { git: [], gh: [], sessions: [], added: [] };
+  const calls = { git: [], gh: [], sessions: [], added: [], removed: [] };
   const deps = {
     env,
     now: () => new Date('2026-08-29T10:00:00Z'),
@@ -48,6 +48,7 @@ function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], live = 
     },
     write: (p, t) => { files[p] = t; },
     append: (p, t) => { files[p] = (files[p] || '') + t; },
+    remove: (p) => { if (!(p in files)) return false; delete files[p]; calls.removed.push(p); return true; },
     addWorktree: ({ name, repo }) => {
       const repoName = repo.split('/').at(-1);
       calls.added.push(name);
@@ -241,4 +242,70 @@ test('runLoop: --rounds 1 does one pass and exits; --once exits after the first 
   const g = fixture({ plans: { memoro: { a: ready, b: ready } }, session: okSession() });
   assert.equal(await runLoop({ once: true, deps: g.deps }), 0);
   assert.equal(g.calls.sessions.length, 1);
+});
+
+/**
+ * End of round: `decisions/` holds open questions and nothing else.
+ *
+ * The file goes when the plan that owns it has left `waiting-decision` — not
+ * when it merely carries a `**Beslut:**` line. `~/mc` on 2026-08-29 held 51
+ * decision files, 42 of them answered, and the eight that could *not* be
+ * removed are exactly the ones these cases describe.
+ */
+const answered = '# Q\n\n## Rekommendation\n\nA.\n\n**Beslut:** A (Martin, 2026-08-29). Because.\n';
+const waiting = '---\nstatus: waiting-decision\nnext: "wait"\n---\n# X\n';
+
+test('round retires an answered decision once its plan has moved on', async () => {
+  const f = fixture({
+    plans: { memoro: { alpha: ready } },
+    areas: { alpha: { repo: 'memoro', programme: 'prog', plan: ready, decisions: { 'prog-1.md': answered } } },
+    session: okSession(),
+    gh: { alpha: { number: 5, title: 'Alpha' } },
+  });
+  await createRunner({ deps: f.deps }).round({});
+  assert.equal(f.files['/w/alpha/decisions/prog-1.md'], undefined, 'the file is gone');
+  assert.deepEqual(f.calls.removed, ['/w/alpha/decisions/prog-1.md']);
+  assert.match(f.files['/w/runner/log/runner.log'], /retired alpha\/decisions\/prog-1\.md \(applied in alpha\)/u);
+});
+
+test('round keeps an answered decision while its plan still says waiting-decision', async () => {
+  const f = fixture({
+    plans: { memoro: { alpha: waiting } },
+    areas: { alpha: { repo: 'memoro', programme: 'prog', plan: waiting, decisions: { 'prog-1.md': answered } } },
+    session: okSession(),
+  });
+  await createRunner({ deps: f.deps }).round({});
+  assert.equal(f.files['/w/alpha/decisions/prog-1.md'], answered, 'the answer is still there for the step that must apply it');
+  assert.deepEqual(f.calls.removed, []);
+  assert.match(f.files['/w/runner/log/runner.log'], /kept alpha\/decisions\/prog-1\.md — alpha still waiting-decision/u);
+});
+
+test('round never deletes an open question, and never deletes an orphan', async () => {
+  const open = '# Q\n\n## Rekommendation\n\nA.\n';
+  const f = fixture({
+    plans: { memoro: { alpha: ready } },
+    areas: {
+      alpha: { repo: 'memoro', programme: 'prog', plan: ready, decisions: { 'prog-9.md': open } },
+      ghost: { repo: 'memoro', decisions: { 'gone-1.md': answered } },
+    },
+    session: okSession(),
+    gh: { alpha: { number: 5, title: 'Alpha' } },
+  });
+  await createRunner({ deps: f.deps }).round({});
+  assert.equal(f.files['/w/alpha/decisions/prog-9.md'], open, 'an unanswered question is untouchable');
+  assert.equal(f.files['/w/ghost/decisions/gone-1.md'], answered, 'no plan owns it, so no machine removes it');
+  assert.deepEqual(f.calls.removed, []);
+  assert.match(f.files['/w/runner/log/runner.log'], /orphan ghost\/decisions\/gone-1\.md — no plan on main owns it; answer it or delete it by hand/u);
+});
+
+test('the append-only bookkeeping logs are never decisions', async () => {
+  const f = fixture({
+    plans: { memoro: { alpha: ready } },
+    areas: { alpha: { repo: 'memoro', programme: 'prog', plan: ready, decisions: { 'log.md': answered, 'merge-log.md': answered, 'README.md': answered } } },
+    session: okSession(),
+    gh: { alpha: { number: 5, title: 'Alpha' } },
+  });
+  await createRunner({ deps: f.deps }).round({});
+  assert.deepEqual(f.calls.removed, []);
+  assert.equal(f.files['/w/alpha/decisions/log.md'], answered);
 });

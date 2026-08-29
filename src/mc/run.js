@@ -12,18 +12,18 @@
  * The rules themselves live in run-plan.js.
  */
 import { spawnSync } from 'node:child_process';
-import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 import { resolveLaunch } from '../adapters/index.js';
-import { defaultRepos, listPlans, parsePlanFrontmatter, planFields } from './brief-collect.js';
+import { NOT_A_DECISION, defaultRepos, listPlans, parsePlanFrontmatter, planFields } from './brief-collect.js';
 import { workRoot } from './paths.js';
 import { loadProfile, profileArgs } from './portrait.js';
 import { readCanonRole } from './roles.js';
 import { addWorktree } from './work-area.js';
 import {
   QUOTA_SLEEP_MS, TIMEOUT_EXIT, assembleQueue, chooseKind, headlessArgs, isAnswered, readSessionOutput,
-  reconcilePrompt, sessionSettings, stepPrompt, triagePrompt, tsvHeader, tsvRow,
+  reconcilePrompt, retireDecisions, sessionSettings, stepPrompt, triagePrompt, tsvHeader, tsvRow,
 } from './run-plan.js';
 
 export const REPO_NAMES = ['memoro', 'memoro-cli'];
@@ -46,6 +46,7 @@ export function realDeps(env = process.env) {
     exists: existsSync,
     read: (path) => { try { return readFileSync(path, 'utf8'); } catch { return null; } },
     list: (path) => { try { return readdirSync(path); } catch { return []; } },
+    remove: (path) => { try { rmSync(path); return true; } catch { return false; } },
     write: (path, text) => { mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, text); },
     append: (path, text) => { mkdirSync(dirname(path), { recursive: true }); appendFileSync(path, text); },
     addWorktree,
@@ -133,6 +134,40 @@ export function createRunner({
       }
     }
     return [...files].sort();
+  }
+
+  /**
+   * Every `<area>/decisions/*.md` on disk, as `retireDecisions()` wants it.
+   * The bookkeeping names are skipped by name, the way `scanDecisions()` does
+   * it — `pm/decisions/log.md` is 358 kB of append-only log and one of its
+   * lines starts with `**Beslut`.
+   */
+  function allDecisions() {
+    const out = [];
+    for (const area of deps.list(root)) {
+      const dir = join(root, area, 'decisions');
+      for (const file of deps.list(dir)) {
+        if (!file.endsWith('.md') || NOT_A_DECISION.has(file)) continue;
+        out.push({ area, base: file.replace(/\.md$/u, ''), path: join(dir, file), answered: isAnswered(deps.read(join(dir, file))) });
+      }
+    }
+    return out.sort((a, b) => a.path.localeCompare(b.path));
+  }
+
+  /**
+   * End of round: an answered decision whose plan has absorbed it is deleted,
+   * so `decisions/` holds open questions and nothing else. Held and orphaned
+   * files are said out loud rather than removed — see `retireDecisions()`.
+   */
+  function retireAnswered(plans) {
+    const { remove, orphans, held } = retireDecisions({ decisions: allDecisions(), plans });
+    for (const d of remove) {
+      if (deps.remove(d.path)) say(`retired ${d.area}/decisions/${d.base}.md (applied in ${d.appliedBy.join(', ')})`);
+      else say(`could not remove ${d.path}`);
+    }
+    for (const d of held) say(`kept ${d.area}/decisions/${d.base}.md — ${d.why}`);
+    for (const d of orphans) say(`orphan ${d.area}/decisions/${d.base}.md — ${d.why}; answer it or delete it by hand`);
+    return { removed: remove.length, held: held.length, orphans: orphans.length };
   }
 
   async function waitMergeable(worktree, pr) {
@@ -255,10 +290,14 @@ export function createRunner({
       }
       if (stopRequested()) { say(`runner exit on STOP after ${name} (remove ${paths.stop} before the next start)`); return { ran, stop: true }; }
     }
-    return { ran, stop: false };
+    // After the steps, so a decision applied by a step this round is retired
+    // in the same round and the next brief never sees it. The plans are
+    // re-read: a step that merged has changed the status this rests on.
+    const retired = retireAnswered(queue().plans);
+    return { ran, stop: false, retired };
   }
 
-  return { paths, say, round, runStep, queue, stopRequested, syncMain, answeredDecisions, mergePr, planOf, repoOf };
+  return { paths, say, round, runStep, queue, stopRequested, syncMain, answeredDecisions, allDecisions, retireAnswered, mergePr, planOf, repoOf };
 }
 
 /**

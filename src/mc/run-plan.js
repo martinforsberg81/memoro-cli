@@ -61,6 +61,54 @@ export function isAnswered(text) {
   return /^\*\*Beslut/mu.test(String(text || ''));
 }
 
+/* -------------------------------------------------------------- retirement */
+
+/**
+ * Which decision files have done their job and can go.
+ *
+ * `decisions/` is meant to hold open questions and nothing else. It did not:
+ * on 2026-08-29 it held 51 files, 42 of them answered, some for weeks — so
+ * every reader (the brief, `mc status`, a person, a session) had to sort 51
+ * to find the 6 that were live, and two of those 6 asked about projects that
+ * no longer had a plan on main. Martin's rule is that the plan changes for
+ * the decision and the file goes.
+ *
+ * The test is deliberately not "has a `**Beslut:**` line". A file is retired
+ * only when its answer has demonstrably landed: every plan that owns it has
+ * left `waiting-decision`. Measured against `~/mc` the difference is real —
+ * `avatar-image-animation` carries seven answered decisions while its plan
+ * still says `waiting-decision` and its `next:` still names the file, and
+ * `mc-utredning/mc-2.md` was answered the same day `mc-helper` was still
+ * waiting on it. Deleting on the answer alone would have taken those answers
+ * away before the sessions that need them ever read them.
+ *
+ * Ownership is `answeredDecisions()`'s rule, inverted: a plan owns a file in
+ * its own area, or one named `<programme>-*` or `<project>-*`. A file no plan
+ * owns is an **orphan** — the project it belonged to is gone from main — and
+ * a machine never deletes one. It is reported so a person can decide; that
+ * is the class `network-review-1` and `test-architecture-2` fell into, and
+ * silently deleting a question nobody has answered is the one failure worse
+ * than keeping it.
+ */
+export function retireDecisions({ decisions = [], plans = [] } = {}) {
+  const owners = (d) => plans.filter((p) => d.area === p.project
+    || d.base.startsWith(`${p.programme}-`)
+    || d.base.startsWith(`${p.project}-`));
+
+  const remove = [];
+  const orphans = [];
+  const held = [];
+  for (const d of decisions) {
+    if (!d.answered) continue;                      // an open question stays
+    const mine = owners(d);
+    if (!mine.length) { orphans.push({ ...d, why: 'no plan on main owns it' }); continue; }
+    const waiting = mine.filter((p) => p.status === 'waiting-decision');
+    if (waiting.length) { held.push({ ...d, why: `${waiting.map((p) => p.project).join(', ')} still waiting-decision` }); continue; }
+    remove.push({ ...d, appliedBy: mine.map((p) => p.project).sort() });
+  }
+  return { remove, orphans, held };
+}
+
 /* ---------------------------------------------------------------- prompts */
 
 const today = (now) => now.toISOString().slice(0, 10);
