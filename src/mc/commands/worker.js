@@ -21,7 +21,7 @@
 import { createWorkArea, inspectWorkArea } from '../work-area.js';
 import { workRoot } from '../paths.js';
 import {
-  markAreaRole, areaRoleName, readRole, reservedRoleHint, reservedRoleName, rolesDir,
+  markAreaRole, areaRoleName, canonRolesDir, readCanonRole, reservedRoleHint, reservedRoleName,
 } from '../roles.js';
 import { openArea } from './work.js';
 import { scanArgs } from './flags.js';
@@ -59,10 +59,17 @@ export async function run(argv, deps = {}) {
   // openArea warns about the missing overlay — because blocking real work
   // over a mislaid file helps nobody. What must not happen is *creating* a
   // role area that delivers no role.
+  //
+  // It comes from `canon/roles/worker.md` in the package, the way `mc plan`
+  // and `mc brief` read theirs. It used to come from the user's catalogue,
+  // and that made the one role mc still launches depend on a directory mc
+  // does not ship: a fresh machine got the area and none of the role. The
+  // catalogue still wins where it defines `worker` — `areaRole` reads it
+  // first — but it is no longer required for one to exist.
   if (!area.exists) {
-    const role = readRole('worker');
+    const role = readCanonRole('worker');
     if (!role || !role.overlay) {
-      stderr.write(`mc: no worker role is defined — expected ${rolesDir()}/worker.md with an overlay body\n`);
+      stderr.write(`mc: the worker role is missing from this install — expected ${canonRolesDir()}/worker.md with an overlay body\n`);
       stderr.write('mc: a worker area without its overlay would be an ordinary area wearing the name\n');
       return 1;
     }

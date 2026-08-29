@@ -79,7 +79,6 @@ async function routeV1Command(args) {
     repo: './mc/commands/repo.js',
     merge: './mc/commands/merge.js',
     suite: './mc/commands/suite.js',
-    watch: './mc/commands/watch.js',
     worker: './mc/commands/worker.js',
     brief: './mc/commands/brief.js',
     plan: './mc/commands/plan.js',

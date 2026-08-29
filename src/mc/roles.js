@@ -146,7 +146,11 @@ export function markAreaRole(areaPath, roleName) {
 export function areaRole(areaPath, env = process.env) {
   const name = areaRoleName(areaPath);
   if (!name) return null;
-  const role = readRole(name, env);
+  // The user's catalogue first — it is their rulebook, and a role defined
+  // there is the one they meant. Canon is the fallback so a role mc ships
+  // (worker, since the PM went dormant) reaches every conversation in its
+  // area on a machine with no catalogue at all.
+  const role = readRole(name, env) || readCanonRole(name);
   return role || { name, missing: true, path: join(rolesDir(env), `${name}.md`) };
 }
 

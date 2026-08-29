@@ -36,10 +36,8 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 import { writeFileAtomic } from './atomic-write.js';
-import { mcHome } from './paths.js';
 import { menuReason, readMenu } from './menu-read.js';
 import { reservedRoleName } from './roles.js';
-import { dropWake, enqueueWake, flushWakeQueue } from './wake-queue.js';
 import { inspectWorkArea } from './work-area.js';
 import { currentHolder } from './work-identity.js';
 import { backgroundTarget } from './work-open.js';
@@ -236,47 +234,26 @@ export function sendToArea({
   });
   // A draft in the prompt is the one refusal that is not the sender's to
   // argue with and not the recipient's to notice: the file is in the inbox
-  // and nothing will say so until the draft goes. So the wake is queued, the
-  // guard's round tries it again, and the board shows the session as
-  // unreachable meanwhile. Nothing types over the draft, ever.
+  // and nothing will say so until the draft goes. Nothing types over the
+  // draft, ever.
   //
-  // Queued only for a conversation that is actually running (D-0186,
-  // 2026-08-24): a stopped session has no turn coming, so "knocked when the
-  // prompt clears" means never — PM's two orders queued for hours behind a
-  // ghost draft in a pane whose tool had been stopped, and a person with
-  // tmux was the thing that finally delivered them. A pane with a draft and
-  // nobody behind it is said as what it is: the file is in the inbox for
-  // the next boot, and no knock is owed.
+  // It used to be queued instead of reported, and retried by the session
+  // guard's round. The guard went with the PM (decision mc-1), so the queue
+  // had no one left to try it: "it will be knocked when the prompt clears"
+  // became a promise nothing could keep. A refusal is now said as what it
+  // is, and it says the same thing whether or not a tool still stands
+  // behind the pane (D-0186 was about who would retry, and nobody does).
   if (!woken.ok && woken.guard && woken.reason === DRAFT_REASON) {
-    const standing = (processes || toolProcesses)([area.path, ...area.worktrees.map((item) => item.path)]);
-    if (standing.length === 0) {
-      return {
-        ok: true,
-        file,
-        target,
-        woke: false,
-        reason: 'stopped-with-draft',
-        guard: true,
-        left: false,
-      };
-    }
-    const queued = enqueueWake({
-      name, target, sender: sender.name, inbox, reason: woken.reason, root: queueRoot(env), now,
-    });
     return {
       ok: true,
       file,
       target,
       woke: false,
-      reason: 'queued',
+      reason: 'draft-in-prompt',
       guard: true,
-      queued: true,
-      since: queued.entry.since,
       left: false,
     };
   }
-  // A knock that landed is all a queued one was waiting to do.
-  if (woken.ok) dropWake({ name, root: queueRoot(env) });
   return {
     ok: true,
     file,
@@ -290,56 +267,8 @@ export function sendToArea({
   };
 }
 
-/** The one refusal that is queued rather than reported and dropped. */
+/** The one refusal the sender is told about by name. */
 const DRAFT_REASON = 'there is already something in its prompt';
-
-function queueRoot(env) {
-  return env?.MC_HOME || mcHome();
-}
-
-/**
- * Try every queued wake once — called by the session guard's round.
- *
- * A wake lands when the prompt has cleared, and the entry goes. A target that
- * no longer runs is dropped too: there is nothing to knock on, and the file
- * is still in the inbox for the session's next boot. Everything else stays
- * queued with one more attempt counted, including a draft still there.
- */
-export function flushPendingWakes({ root = mcHome(), run = null, sleep = null, now = new Date(), processes = null, log = () => {} } = {}) {
-  const outcomes = flushWakeQueue({
-    root,
-    now,
-    attempt: (entry) => {
-      const target = backgroundTarget(entry.name, { run: run ? (args) => run(args) : null });
-      if (!target) return { ok: false, gone: true, reason: 'nothing is running there any more' };
-      // A pane that outlived its tool holds the queue's one impossible
-      // promise: the draft in it will never clear itself (D-0186). The
-      // entry goes; the file is in the inbox for the session's next boot.
-      const area = inspectWorkArea(entry.name, process.env, { conversations: false, git: false });
-      if (area.exists) {
-        const standing = (processes || toolProcesses)([area.path, ...area.worktrees.map((item) => item.path)]);
-        if (standing.length === 0) return { ok: false, gone: true, reason: 'a pane is there but no conversation runs in it — nothing will clear that draft' };
-      }
-      // An entry queued before the notice carried a path has none; the area
-      // still knows where its inbox is.
-      const inbox = entry.inbox || (area?.path ? inboxPath(area.path) : null);
-      const woken = wakeConversation({
-        target, sender: entry.sender || 'mc', inbox, run, sleep, attachedOk: reservedRoleName(entry.name),
-      });
-      return { ok: woken.ok, reason: woken.ok ? null : woken.reason };
-    },
-  });
-  for (const outcome of outcomes) {
-    if (outcome.outcome === 'woke') log(`queued wake landed in ${outcome.name} (queued since ${outcome.since})`);
-    else if (outcome.outcome === 'gone') log(`queued wake for ${outcome.name} dropped — ${outcome.reason}`);
-  }
-  return outcomes;
-}
-
-/** The queued wake for an area is forgotten once something else woke it. */
-export function forgetPendingWake(name, { root = mcHome() } = {}) {
-  return dropWake({ name, root });
-}
 
 /**
  * The message on disk: one file, named for when it arrived and who sent it.

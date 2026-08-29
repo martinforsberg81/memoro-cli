@@ -10,15 +10,13 @@
  * discovering each one takes somebody remembering to ask.
  *
  * So the asking is a list, and the list is read by something that already
- * runs: `mc doctor` carries it, and the PM round calls `mc doctor` every
- * pass. What belongs on it is judgement (PM's order left that here); the
- * rule of membership is narrow on purpose: a mechanism that *exists on this
- * machine* and is *not doing its job right now*. Never a style opinion,
- * never a wish — those would train the reader to skim, which is the failure
+ * runs: `mc doctor` carries it, and the runner's own rounds call it. What
+ * belongs on it is judgement; the rule of membership is narrow on purpose:
+ * a mechanism that *exists on this machine* and is *not doing its job right
+ * now*. Never a style opinion, never a wish — those would train the reader to skim, which is the failure
  * mode this list exists to end.
  *
- * Everything is read, nothing is fixed: like the session guard, this flags
- * and does not decide.
+ * Everything is read, nothing is fixed: this flags and does not decide.
  */
 import { existsSync, readdirSync } from 'node:fs';
 import { basename, join } from 'node:path';
@@ -27,7 +25,6 @@ import { mcHome } from './paths.js';
 import { pushGuardState } from './push-guard.js';
 import { readRatchet } from './red-ratchet.js';
 import { readRounds } from './repo-round-log.js';
-import { watchersState } from './watchers-state.js';
 import { knownRepositories } from './work-area.js';
 import { workRoot } from './paths.js';
 
@@ -54,18 +51,6 @@ export function notInForce({ root = mcHome(), env = process.env, deps = {} } = {
       const state = (deps.guardState || pushGuardState)(repo);
       if (state.installed) continue;
       broken.push(`push-guard is not in force on ${basename(repo)} — ${state.reason || 'not installed'}; mc repo guard ${basename(repo)}`);
-    }
-  });
-
-  // The watchers. Alive on old code is the one that cost 188 knocks; not
-  // running after being started is the one nobody is told about. A watcher
-  // never started on this machine is absent, not broken, and stays quiet.
-  safely('watchers', () => {
-    const watchers = (deps.watchers || watchersState)({ root });
-    for (const [name, state] of Object.entries(watchers)) {
-      if (state.running && state.stale_code) broken.push(`mc watch ${name} runs OLD code — mc changed since it started; it restarts itself, or mc watch ${name} stop && start`);
-      else if (state.running && state.stale) broken.push(`mc watch ${name} is alive but stale — no round has been written for too long`);
-      else if (state.abandoned) broken.push(`mc watch ${name} is NOT RUNNING — stopped without telling anyone`);
     }
   });
 
