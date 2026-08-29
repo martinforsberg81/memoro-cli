@@ -22,6 +22,7 @@ import { describe, it } from 'node:test';
 
 import { installTmuxStub } from './_helpers/tmux-stub.js';
 import { runMcCli } from './_helpers/mc-cli.js';
+import { areasByName } from './_helpers/board.js';
 import { wakeConversation, writeMessage } from '../../src/mc/work-send.js';
 
 const SAFE_PATH = '/usr/bin:/bin:/usr/sbin:/sbin';
@@ -371,24 +372,18 @@ describe('mc work send — the channel', () => {
     assert.equal(waiting.reason, 'it stayed in the prompt');
   });
 
-  it('leaves the ordinary work commands exactly as they were', () => {
+  it('leaves the ordinary work commands exactly as they were', async () => {
     const fx = fixture();
     try {
       runMcCli(['work', 'send', 'pm', 'a report'], fx.env, { cwd: join(fx.workRoot, 'alpha') });
 
-      const listed = runMcCli(['work', 'list', '--json'], fx.env);
-      assert.equal(listed.status, 0, listed.stderr);
-      const areas = JSON.parse(listed.stdout).areas.map((area) => area.name).sort();
-      assert.deepEqual(areas, ['alpha', 'pm']);
+      const areas = await areasByName(fx.env);
+      assert.deepEqual(Object.keys(areas).sort(), ['alpha', 'pm']);
 
-      const board = runMcCli(['status', '--sessions', '--json'], fx.env);
-      assert.equal(board.status, 0, board.stderr);
-      // The inbox is filing, not work: the board lists no worktree for it.
+      // The inbox is filing, not work: the model lists no worktree for it.
       // (It used to appear here as a repository that is not one — see
       // status-roles.test.js, which owns that rule now.)
-      const page = JSON.parse(board.stdout);
-      const pm = page.areas.find((area) => area.name === 'pm');
-      assert.deepEqual(pm.worktrees, []);
+      assert.deepEqual(areas.pm.worktrees, []);
     } finally { fx.cleanup(); }
   });
 });

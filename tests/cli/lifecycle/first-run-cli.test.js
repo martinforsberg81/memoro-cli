@@ -6,8 +6,8 @@
  *     keychain has no token
  *   - `mc new`: friendly hint replaces the cryptic prereq failure,
  *     exits 1 without touching git
- *   - `mc list`: friendly hint goes to stderr, the empty list still
- *     renders on stdout (machine-parseable)
+ *   - bare `mc`: friendly hint goes to stderr, the page still renders on
+ *     stdout (machine-parseable with --json)
  *   - successful `mc new` writes the sentinel; subsequent calls
  *     don't re-fire the hint even with no token (migrant path)
  *
@@ -30,7 +30,7 @@ import { makeTempRepo } from '../../mc/_helpers/git-fixture.js';
 
 const HINT = /New to mc\? Run `mc` to sign in, then `mc setup` to finish local setup\./;
 
-describe('mc list — first-run hint on stderr', () => {
+describe('bare mc — first-run hint on stderr', () => {
   let repo;
   beforeEach(() => { repo = makeTempRepo({ name: 'firstrun-list' }); });
   afterEach(() => { repo.cleanup(); });
@@ -38,22 +38,22 @@ describe('mc list — first-run hint on stderr', () => {
   test('sentinel present → no hint regardless of token state', () => {
     mkdirSync(repo.mcHome, { recursive: true });
     writeFileSync(join(repo.mcHome, '.setup-done-v1'), 'x\n');
-    const r = runMc(['list'], {
+    const r = runMc([], {
       cwd: repo.dir,
-      env: { MC_HOME: repo.mcHome, HOME: repo.root },
+      env: { MC_HOME: repo.mcHome, MC_WORK_ROOT: join(repo.root, 'work'), HOME: repo.root },
     });
     assert.doesNotMatch(r.stderr, HINT);
   });
 
   test('hint goes to stderr, not stdout — JSON callers still parse cleanly', () => {
-    const r = runMc(['list', '--json'], {
+    const r = runMc(['--json'], {
       cwd: repo.dir,
-      env: { MC_HOME: repo.mcHome, HOME: repo.root },
+      env: { MC_HOME: repo.mcHome, MC_WORK_ROOT: join(repo.root, 'work'), HOME: repo.root },
     });
     // Whether the hint fires depends on the host keychain having no
     // token. Either way, stdout must remain pure JSON.
     const j = parseJsonOrNull(r.stdout);
-    assert.ok(j && Array.isArray(j.entries), `stdout must be valid JSON; got: ${r.stdout}`);
+    assert.ok(j && j.work && Array.isArray(j.work.areas), `stdout must be valid JSON; got: ${r.stdout}`);
   });
 });
 

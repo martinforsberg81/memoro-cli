@@ -1,6 +1,6 @@
 ---
 status: ready
-next: "Step 4 — The front door: bare `mc` prints the page and, at a TTY, the menu moved from `commands/work.js` with `b`/`p`/`s`/`w` added; `mc --watch`; bare `mc work` routes to the same; `mc list`, bare `mc status`, the status board flags and their modules and tests removed; `HELP_TEXT` leads with the two surfaces — done when `mc` at a TTY shows the page and opens a workarea by number, `mc --json` exits 0 without a prompt, `mc list` and `mc status` say where they went, and `npm test` is green minus the known V1 set."
+next: "Step 5 — Foreground register: `mc brief`/`mc plan`/`mc worker` write `~/mc/runner/foreground/<pid>.json` (verb, area, tool, model, started) at launch and remove it at exit, so NOW names the verb — done when a running `mc brief` appears in NOW as \"brief\" and is gone after exit."
 budget: 150k
 needs: []
 ---
@@ -27,8 +27,9 @@ redrawn, no prompt. Bare `mc work`, `mc list`, bare `mc status`, `mc status
 
 ## Success criteria
 
-- [ ] Bare `mc` prints the page (per decision mc-3) in under 300 ms with no
+- [x] Bare `mc` prints the page (per decision mc-3) in under 300 ms with no
       network — measured against today's 1.92 s for `mc status --offline`.
+      `time node src/mc-cli.js` is 0.09–0.11 s warm at load average 13.
 - [x] Five sections, in this order: **NOW** (the running step with kind,
       tool, model, elapsed against budget; a pending STOP; live tmux
       `mc-<name>` areas; a foreground `mc brief`/`mc plan`), **QUEUE**
@@ -38,28 +39,33 @@ redrawn, no prompt. Bare `mc work`, `mc list`, bare `mc status`, `mc status
       workarea — name, plan status, `next`, last runner step and PR, live
       mark — live first, then by last activity; then one line: N projects
       on main without a workarea, `mc status <name>`).
-- [ ] At a TTY, `mc` ends in the menu `mc work` has today (`menu()` in
+- [x] At a TTY, `mc` ends in the menu `mc work` has today (`menu()` in
       `commands/work.js`, moved, not rewritten): a number or a name opens
       the workarea through `openArea`, `n` starts one, `b` runs `mc brief`,
       `p <name>` runs `mc plan <name>`, `s <name>` prints `mc status
       <name>`, `w` switches to watch, `q` quits; any other line is parsed as
       a `mc work` verb as today. Without a TTY, or with `--json`, it prints
       and exits 0.
-- [ ] `mc --watch [seconds]` redraws the page every 15 s by default until
+- [x] `mc --watch [seconds]` redraws the page every 15 s by default until
       ctrl-c and leaves the terminal clean; no prompt.
-- [ ] Removed, with their tests: bare `mc work` (prints the page and menu —
-      it *is* `mc`), `mc list` and `src/cli/list.js`, bare `mc status`
-      (prints "mc status is now mc", exit 2), `--sessions|--watch|--wait`
-      on `mc status`, `commands/status-board.js`, `work-status.js`, the
-      board half of `status-render.js` (the `painter`/`width`/`pad`/`clip`
-      half stays). `mc status <name>` and `mc work <name> …` unchanged.
-- [ ] A number where a number answers the question, a line only where the
+- [x] Removed, with their tests: bare `mc work` (prints the page and menu —
+      it *is* `mc`), `mc list` and `src/cli/list.js` (and, necessarily,
+      `mc sessions list` and `src/mc/session-v1-list.js` — the same module
+      and its renderer), bare `mc status` (prints "mc status is now mc",
+      exit 2), `--sessions|--watch|--wait` on `mc status`,
+      `commands/status-board.js`, `commands/status-page.js`, the board's own
+      half of `work-status.js` (`signature()`; `workStatus()` stays — `mc
+      repo status` and the lease liveness check read it, which the plan did
+      not know), and the board half of `status-render.js` (the
+      `painter`/`width`/`pad`/`clip` half stays). `mc status <name>` and
+      `mc work <name> …` unchanged.
+- [x] A number where a number answers the question, a line only where the
       identity matters; each count names the verb that expands it.
 - [x] Width-aware and coloured: `stdout.columns` clamped 60–160 through
       `width`/`pad`/`clip` from `status-render.js`; colour only on a TTY and
       only when `NO_COLOR` is unset **or empty** (the convention is any
-      non-empty value; `src/cli/list.js` tests `!== '1'`, which is wrong —
-      `src/cli/list.js` goes in step 4, so the wrong test goes with it).
+      non-empty value; `src/cli/list.js` tested `!== '1'`, which was wrong —
+      `src/cli/list.js` went in step 4, and the wrong test with it).
 - [x] `--json` is the same object the renderer takes, one key per section;
       `--fresh` does the `git fetch` and `gh pr list` that `mc status` does
       by default today; without it the page reads a cache and says its age.
@@ -135,15 +141,24 @@ redrawn, no prompt. Bare `mc work`, `mc list`, bare `mc status`, `mc status
       parsed JSON and compares), and `tests/mc/page.test.js` builds every
       section from fixtures plus a temporary work root with no git, gh or
       tmux.
-- [ ] **4. The front door** — bare `mc` prints the page and, at a TTY, the
-      menu moved from `commands/work.js` with `b`/`p`/`s`/`w` added;
-      `mc --watch`; bare `mc work` routes to the same; `mc list`, bare
-      `mc status`, the status board flags and their modules and tests
-      removed; `HELP_TEXT` leads with `mc`, `mc --watch`, `mc brief`,
-      `mc plan`, `mc run`, `mc merge`, `mc status <name>`, `mc work <name>`.
-      Done when `mc` at a TTY shows the page and opens a workarea by number,
-      `mc --json` exits 0 without a prompt, `mc list` and `mc status` say
-      where they went, and `npm test` is green minus the known V1 set.
+- [x] **4. The front door** (2026-08-29) — `src/mc/commands/home.js` is the
+      page, the menu and `--watch`; `mc-cli.js` routes bare `mc` and the page
+      flags to it, and `mc work` with no name goes there too. The menu is
+      `work.js`'s, moved: a number or a name opens through `openArea`, `n`
+      starts one, a typed line is parsed as a `mc work` verb — with `b`
+      (brief), `p <name>` (plan), `s <name>` (that project) and `w` (watch)
+      added, and the numbers taken from WORK rather than from a listing of its
+      own. `mc list`, `mc sessions list` and bare `mc status` say where they
+      went and exit 2; `src/cli/list.js`, `src/mc/session-v1-list.js`,
+      `commands/status-board.js`, `commands/status-page.js`, `signature()` and
+      `renderLines` are gone. Done: `npm test` is 54 failures in the 22 known
+      V1 files, three fewer than the 57 on this branch's merge-base, and no
+      other file fails; the page prints in 0.09–0.11 s against the real `~/mc`
+      at load average 13; a real pty (`printf 'q\n' | script -q /dev/null node
+      src/mc-cli.js`) shows the page, the prompt and `q` leaving with 0; and
+      the number → workarea mapping is driven in process in
+      `tests/mc/front-door.test.js` with the reading and the opening handed
+      in, so it is asserted without a session ever starting.
 - [ ] **5. Foreground register** — `mc brief`/`mc plan`/`mc worker` write
       `~/mc/runner/foreground/<pid>.json` (verb, area, tool, model, started)
       at launch and remove it at exit, so NOW names the verb. Done when a
@@ -221,6 +236,47 @@ assumed, are in `investigation-2026-08-29.md`.
   escape in half. Every heading and prose line is measured and cut as plain
   text and painted afterwards; the row helper only ever pads text whose width
   it set itself.
+- **`work-status.js` could not go; only the board on top of it could.**
+  The plan named the module, but `workStatus()` has two live readers —
+  `mc repo status`, which regroups its worktree facts by repository, and the
+  lease liveness check. What went was the board's own half: `signature()`
+  (only `--wait` called it) and `renderLines` with its `ago`/`size`/`where`
+  helpers. `elapsed` stayed: it formats `ps etime`, is tested on its own, and
+  belongs with the drawing primitives.
+
+- **Removing `mc list` removes `mc sessions list` too**, because they were the
+  same module, and `src/mc/session-v1-list.js` with it: the renderer had no
+  other reader. `mc sessions read|send` are untouched — they are not lists.
+
+- **Six tests used the board as a probe, not as a page.** `repo-status`,
+  `repo-lease`, `task`, `work-send` and `status-roles` all read `mc status
+  --sessions --json` to observe worktrees, leases and open-task counts. They
+  ask `workStatus()` directly now, through `tests/mc/_helpers/board.js` —
+  which applies the fixture's env to the process for the length of the call,
+  because the open-task count reads `MC_HOME` ambiently as it did in a
+  subprocess.
+
+- **WORK draws the areas that hold a checkout, so the menu could not use its
+  rows to decide what exists.** An area made with no repository — which `mc
+  work` offers in as many words — has no row, and the moved `typed()` would
+  have refused to open it by the only name it has. It asks
+  `inspectWorkArea(name).exists` instead: the typo guard stays, the stranding
+  goes. The rows themselves are unchanged; listing `runner/`, `intake/` and
+  `brief/` as workareas would be a worse page than one missing an empty area.
+
+- **The first-run hint belonged to `mc list`, which is where a fresh install
+  landed.** It lands on `mc` now, so the hint moved with the front door —
+  stderr, so `--json` stays parseable, and one `existsSync` on every machine
+  that has ever run `mc new`.
+
+- **The step-1/2 collector is now unreachable.** `collectStatus`,
+  `renderStatus`, `runnerBlock`, `projectsBlock` and `orphanWorkareas` in
+  `status-collect.js` lost their only caller when `commands/status-page.js`
+  went; the live half (`nowBlock`, `kindFor`, `decisionsBlock`,
+  `areasWithCheckout`, `pidAlive`, `RUNNER_MODEL`) is what `page-collect.js`
+  imports. Left in place rather than removed in the same breath as the board:
+  step 6 is the close-out, and it is the right size of change for it.
+
 - **The 24 h summary counts a timeout as a timeout and not a failure**
   (`summariseRuns`), which is why the page's own line reads `failed 0, timed
   out 1` for a run that did both. The page repeats the runner's arithmetic
@@ -232,6 +288,7 @@ assumed, are in `investigation-2026-08-29.md`.
 - `~/mc/mc-utredning/decisions/mc-3.md` — the decision (A, two surfaces)
 - `src/mc/page-collect.js`, `src/mc/page-render.js` — the five sections and how they look (step 3)
 - `src/mc/page-cache.js` — plans.json and prs.json, the two caches step 2 added
-- `src/mc/commands/work.js` `menu()`/`typed()`/`startSomething()` — the menu that moves under the page
+- `src/mc/commands/home.js` — bare `mc`: the page, the menu and `--watch` (step 4)
+- `src/mc/commands/work.js` `runVerb()`/`openArea()`/`startSomething()` — the verbs the menu reaches back into
 - `docs/project/mc/mc-status/PLAN.md` — the page this rebuilds; `mc-run` — the writer of `current.json`; `mc-helper` — the writer of intake
 - `~/mc/mc-utredning/utredning-2026-08-24.md` §12.5 — the five parts the page must show

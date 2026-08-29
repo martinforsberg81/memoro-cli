@@ -1,11 +1,12 @@
 /**
  * `mc work` — pieces of work as directories under `~/mc`.
  *
- * Run it with nothing and it shows what exists and asks what you want. That is
- * the way in: the verbs below still work, and are still what a script or a
- * habit reaches for, but nobody has to know them to use mc.
+ * Run it with nothing and you get `mc`: the page, and at a terminal the menu
+ * that used to live here (decision mc-3). The way in is the front door now —
+ * the verbs below still work, and are still what a script or a habit reaches
+ * for, but nobody has to know them to use mc.
  *
- *   mc work                       what exists — and, at a terminal, a way in
+ *   mc work                       the page — `mc` by another name
  *   mc work <name>                open it, asking only what it cannot know
  *   mc work <name> new            a new conversation — even against a
  *                                 running one, which it replaces in place
@@ -31,7 +32,6 @@ import {
   createWorkArea,
   inspectWorkArea,
   knownRepositories,
-  listWorkAreas,
   discardWorkArea,
   releaseWorkArea,
   removeWorktree,
@@ -74,29 +74,13 @@ export async function run(argv, deps = {}) {
     return 2;
   }
 
+  // Bare `mc work` is `mc` — the page, and at a terminal the menu under it
+  // (decision mc-3). There is one surface that lists, and this is not a
+  // second one; `--json` gets the page's object, the same one `mc --json`
+  // prints. Lazy, because the front door imports the verbs back.
   if (opts.verb === 'list') {
-    const areas = listWorkAreas();
-    if (opts.json) { stdout.write(`${JSON.stringify({ ok: true, root: workRoot(), areas }, null, 2)}\n`); return 0; }
-    // A pipe, a script and `--json` see exactly what they always saw. A person
-    // at a terminal is asked instead of being handed a grammar to memorise.
-    if (interactive()) return menu(areas, { stdout, stderr });
-    if (areas.length === 0) {
-      stdout.write(`mc: nothing under ${workRoot()} yet\n`);
-      stdout.write('mc: start something with mc work add <name> <repo>\n');
-      return 0;
-    }
-    stdout.write(`${workRoot()}\n`);
-    for (const area of areas) {
-      // Running is marked on the area, which mc knows for certain; which of
-      // its conversations the session holds it does not (D-0100), so the
-      // rows say only what a transcript written this minute says.
-      const running = backgroundTarget(area.name);
-      stdout.write(`\n  ${area.name}${running ? `   ● running as ${running} — mc work ${area.name} joins it` : ''}\n`);
-      for (const worktree of area.worktrees) stdout.write(`    ${describe(worktree)}\n`);
-      for (const item of area.conversations) stdout.write(`    · ${conversationLine(item, { running: Boolean(running) })}\n`);
-    }
-    stdout.write('\n');
-    return 0;
+    const home = await import('./home.js');
+    return home.run(opts.json ? ['--json'] : [], deps);
   }
 
   if (opts.verb === 'open') return openArea(opts.name, opts, { stdout, stderr });
@@ -112,7 +96,7 @@ export async function run(argv, deps = {}) {
  * and exited without a word — leaving a listing that looked like the command
  * had run and done nothing.
  */
-async function runVerb(opts, { stdout, stderr }) {
+export async function runVerb(opts, { stdout, stderr }) {
   // The file first, the waking second. Once the message is in the recipient's
   // inbox the send has succeeded — a conversation that is not running, or one
   // that will not take the keystroke, costs the recipient latency and never
@@ -320,105 +304,6 @@ async function runVerb(opts, { stdout, stderr }) {
 
 
 /**
- * The way in.
- *
- * What exists, numbered, and one more line for starting something. No verb, no
- * order of arguments, nothing to have read first.
- *
- * It also takes a whole command, because a prompt invites one and the verbs
- * are the same verbs. `mc work discard x`, `discard x`, `discard x --apply` —
- * the leading `mc` and `work` are stripped and the rest is read exactly as it
- * would have been from the shell. Anything else is said out loud rather than
- * swallowed, and the listing is shown again with whatever changed.
- */
-async function menu(first, { stdout, stderr }) {
-  let areas = first;
-  for (;;) {
-    stdout.write(`\n${workRoot()}\n\n`);
-    if (areas.length === 0) {
-      stdout.write('  nothing here yet\n\n');
-      return startSomething({ stdout, stderr });
-    }
-    for (const [index, area] of areas.entries()) {
-      const room = Math.max(40, (stdout.columns || 100) - 36);
-      stdout.write(`  ${String(index + 1).padStart(2)}  ${area.name.padEnd(28)} ${summarise(area, room)}\n`);
-    }
-    stdout.write(`  ${'n'.padStart(2)}  start something new\n`);
-    stdout.write(`  ${'q'.padStart(2)}  quit\n\n`);
-
-    const answer = ask('>', { stdout });
-    if (!answer || answer === 'q') return 0;
-    if (answer === 'n' || answer === 'new') return startSomething({ stdout, stderr });
-
-    const byNumber = areas[Number(answer) - 1];
-    const byName = areas.find((area) => area.name === answer);
-    if (byNumber || byName) return openArea((byNumber || byName).name, {}, { stdout, stderr });
-
-    const outcome = await typed(answer, areas, { stdout, stderr });
-    if (outcome !== null) return outcome;
-    areas = listWorkAreas();
-  }
-}
-
-/**
- * A line typed at the menu. Returns an exit code to leave on, or null to show
- * the listing again.
- */
-async function typed(answer, areas, { stdout, stderr }) {
-  const words = answer.split(/\s+/u).filter(Boolean);
-  if (words[0] === 'mc') words.shift();
-  if (words[0] === 'work') words.shift();
-  if (words.length === 0) return null;
-
-  const sub = parseArgs(words);
-  if (sub.error) {
-    stderr.write(`\nmc: ${sub.error}\n`);
-    return null;
-  }
-  // A bare word that is not on the list is a typo far more often than it is a
-  // new piece of work, and the list is right there to compare it against. From
-  // the shell the same word still starts something, because there the name is
-  // the whole statement of intent.
-  if (sub.verb === 'open' && words.length === 1 && !areas.some((area) => area.name === sub.name)) {
-    stderr.write(`\nmc: nothing here called "${sub.name}" — n starts one\n`);
-    return null;
-  }
-  if (sub.verb === 'open') return openArea(sub.name, sub, { stdout, stderr });
-  if (sub.verb === 'list') return null;
-  stdout.write('\n');
-  await runVerb(sub, { stdout, stderr });
-  return null;
-}
-
-/**
- * One line about a piece of work, cut to the terminal it is being read in.
- *
- * The opening line of a conversation is the most useful thing on this row and
- * the most variable in length, so it is what gives way when there is no room —
- * a row that wraps is worse than one that ends in an ellipsis.
- */
-function summarise(area, room = 60) {
-  const parts = area.worktrees.map((worktree) => {
-    if (!worktree.is_git) return worktree.repo;
-    const marks = [];
-    if (worktree.uncommitted) marks.push(`${worktree.uncommitted} uncommitted`);
-    if (worktree.unmerged_commits && worktree.landed !== 'landed') marks.push(`${worktree.unmerged_commits} unmerged`);
-    return `${worktree.repo}${marks.length ? ` (${marks.join(', ')})` : ''}`;
-  });
-  // One conversation says what it is about; several are counted, because the
-  // point of the number is to tell you a choice is waiting.
-  const [only] = area.conversations;
-  if (area.conversations.length > 1) {
-    parts.push(`${area.conversations.length} conversations`);
-  } else if (only) {
-    const spare = Math.max(16, room - parts.join('  ·  ').length - 5);
-    const text = only.label || `1 ${only.tool} conversation`;
-    parts.push(text.length > spare ? `${text.slice(0, spare - 1)}…` : text);
-  }
-  return parts.length ? parts.join('  ·  ') : 'empty';
-}
-
-/**
  * A name, a repository, and mc does the rest: the directory, the worktree and
  * the branch all take the name, so there is only ever one thing to invent.
  */
@@ -428,7 +313,7 @@ function summarise(area, room = 60) {
  * Returns a path, the string `none`, or null if the question was not answered.
  * One repository is used rather than asked about; several are offered.
  */
-function chooseRepository({ stdout }) {
+export function chooseRepository({ stdout }) {
   const repos = knownRepositories();
   if (repos.length === 1) return repos[0];
   if (repos.length === 0) return 'none';
@@ -442,7 +327,7 @@ function chooseRepository({ stdout }) {
   return select('\nwhich repository?', items, { stdout });
 }
 
-async function startSomething({ stdout, stderr }) {
+export async function startSomething({ stdout, stderr }) {
   const name = ask('name it:', { stdout });
   if (!name) return 0;
   if (!NAME.test(name)) {
@@ -858,14 +743,6 @@ function conversationLine(item, { running = false } = {}) {
 
 /** The status board's own rule for "written by a session that is open". */
 const LIVE_MS = 2 * 60 * 1000;
-
-function describe(worktree) {
-  if (!worktree.is_git) return `${worktree.repo}  (not a git worktree)`;
-  const marks = [];
-  if (worktree.uncommitted) marks.push(`${worktree.uncommitted} uncommitted`);
-  if (worktree.unmerged_commits && worktree.landed !== 'landed') marks.push(`${worktree.unmerged_commits} unmerged`);
-  return `${worktree.repo}  ${worktree.branch || '(detached)'}${marks.length ? `  [${marks.join(', ')}]` : ''}`;
-}
 
 export function parseArgs(argv) {
   const scanned = scanArgs(argv, {

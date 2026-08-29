@@ -1,19 +1,19 @@
-import { DEFAULT_TOOL } from '../lib/config.js';
-import { resolveLocalSessionSync, sessionStatusSync } from '../mc/session-v1.js';
-
+/**
+ * `mc status <name>` — one project.
+ *
+ * Bare `mc status` was the page. The page is `mc` now (decision mc-3): two
+ * surfaces that list, `mc` and `mc --watch`, and none other. So this verb no
+ * longer prints a second one — it says where the page went, and answers only
+ * when it is given a project to answer about.
+ *
+ * The old board went with it: `--sessions`, `--watch`, `--wait` and
+ * `--timeout` were a second page over the same ground, built on a scan of
+ * 1 417 transcripts that cost 7.26 s. `mc status <name>` and `mc work <name>`
+ * are what remain.
+ */
 export async function run(argv, deps = {}) {
-  const stdout = deps.stdout || process.stdout;
   const stderr = deps.stderr || process.stderr;
-  // No name is not a mistake to correct — it is the more useful question.
-  // `mc status` shows every piece of work and what each is doing; naming one
-  // narrows the same ground to that project. A name used to mean a pre-V1
-  // session, which is what this command used to be and all it could do; that
-  // reading now needs `--sessions`.
-  //
-  // A number belongs to the flag before it, so it is not a name. Without this,
-  // `mc status --watch 2` read the 2 as a session called "2" and answered with
-  // the old command's usage line — and `--wait` and `--timeout` would each
-  // have needed the same fix again.
+  // A number belongs to the flag before it, so it is not a name.
   const positional = [];
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -23,61 +23,18 @@ export async function run(argv, deps = {}) {
     }
     positional.push(arg);
   }
-  // The old board — sessions, leases, watcher pulses — and the pre-V1
-  // session behind a name still answer, but only to `--sessions` and to the
-  // board's own flags, until cut-old-surface removes them.
-  const boardFlags = ['--watch', '--wait', '--timeout', '--sessions'];
-  const board = argv.some((arg) => boardFlags.includes(arg));
-  if (!board) {
-    // No name is the page about the runner, the decisions and the projects;
-    // a name is that same ground for one project (docs/project/mc/mc-status).
-    const module = positional.length === 0
-      ? await import('../mc/commands/status-page.js')
-      : await import('../mc/commands/status-project.js');
-    return module.run(argv, deps);
-  }
-  if (positional.length === 0) {
-    const page = await import('../mc/commands/status-board.js');
-    return page.run(argv.filter((arg) => arg !== '--sessions'), deps);
-  }
-  const opts = parseArgs(argv.filter((arg) => arg !== '--sessions'));
-  if (opts.error || !opts.name) {
-    stderr.write(`mc: ${opts.error || 'usage — mc status --sessions <name> [--json]'}\n`);
+  // The board's own flags, said by name: a person who types one is asking for
+  // the page, and `unknown argument --sessions` would not tell them where it
+  // went.
+  const board = ['--sessions', '--watch', '--wait', '--timeout'].filter((flag) => argv.includes(flag));
+  if (positional.length === 0 || board.length > 0) {
+    if (board.length > 0) stderr.write(`mc: ${board.join(', ')} went with the old board\n`);
+    stderr.write('mc: mc status is now mc — one page, and it is what mc prints\n');
+    stderr.write('    mc                  the page, and at a terminal a way in\n');
+    stderr.write('    mc --watch          the same page, redrawn\n');
+    stderr.write('    mc status <name>    one project\n');
     return 2;
   }
-  const resolved = (deps.resolveLocalSession || resolveLocalSessionSync)(opts.name, {
-    mcHomeDir: deps.mcHomeDir,
-  });
-  if (!resolved.ok) {
-    stderr.write(`mc: session "${opts.name}" was not found (${resolved.reason})\n`);
-    return 1;
-  }
-  const status = (deps.sessionStatus || sessionStatusSync)(resolved.session, {
-    mcHomeDir: deps.mcHomeDir,
-  });
-  if (opts.json) {
-    stdout.write(`${JSON.stringify(status, null, 2)}\n`);
-    return 0;
-  }
-  stdout.write(`${status.name}  ${status.mc_session_id}\n`);
-  stdout.write(`  source       local:${status.source_id}\n`);
-  stdout.write(`  lifecycle    ${status.lifecycle}\n`);
-  stdout.write(`  runtime      ${status.runtime_state}\n`);
-  stdout.write(`  tool         ${status.tool || DEFAULT_TOOL}\n`);
-  stdout.write(`  workspace    ${status.workspace_path || '—'}\n`);
-  stdout.write(`  associations ${status.workspace_count}\n`);
-  if (status.objective) stdout.write(`  objective    ${status.objective}\n`);
-  if (status.issues.length > 0) stdout.write(`  issues       ${status.issues.length}\n`);
-  return 0;
-}
-
-export function parseArgs(argv) {
-  const opts = { name: null, json: false };
-  for (const arg of argv) {
-    if (arg === '--json') { opts.json = true; continue; }
-    if (arg.startsWith('--')) return { ...opts, error: `unknown flag: ${arg}` };
-    if (opts.name) return { ...opts, error: `unexpected arg: ${arg}` };
-    opts.name = arg;
-  }
-  return opts;
+  const module = await import('../mc/commands/status-project.js');
+  return module.run(argv, deps);
 }

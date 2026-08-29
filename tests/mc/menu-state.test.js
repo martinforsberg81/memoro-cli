@@ -2,10 +2,11 @@
  * A pane in a menu is a session waiting on a person (2026-08-23). It has no
  * prompt; "could not find its prompt" was true and named the wrong thing, and
  * a probe would have typed into the menu. Recognised, said with the question,
- * and on the board — by the wake, the guard and the status page alike.
+ * by the wake and the guard alike; the work model carries it as a field, for
+ * whoever reads it next.
  */
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
@@ -13,7 +14,6 @@ import { describe, it } from 'node:test';
 import { installTmuxStub } from './_helpers/tmux-stub.js';
 import { runMcCli } from './_helpers/mc-cli.js';
 import { menuReason, readMenu } from '../../src/mc/menu-read.js';
-import { renderLines } from '../../src/mc/status-render.js';
 import { paneWillTakeText } from '../../src/mc/work-send.js';
 
 const SAFE_PATH = '/usr/bin:/bin:/usr/sbin:/sbin';
@@ -92,27 +92,6 @@ describe('mc work send --wake against a menu', () => {
   });
 });
 
-describe('the board on a menu', () => {
-  it('shows the session blocked on a question, with the options', () => {
-    const page = renderLines({
-      areas: [{
-        name: 'msr-vocabulary', path: '/x', running: ['claude'], worktrees: [], conversations: [], waiting: false, working: true,
-        menu: { question: 'Which order?', options: ['Concepts first', 'Cards first'], target: 'mc-msr-vocabulary' },
-      }],
-      summary: { areas: 1, waiting: 0, working: 1 },
-    }, { columns: 160 }).join('\n');
-    assert.match(page, /⧗ waiting on a menu — needs an answer, not a knock: “Which order\?” — 1\. Concepts first {2}2\. Cards first/u);
-  });
-});
-
-/**
- * The live capture (PM, 2026-08-23 07:22): a confirmation menu with the
- * footer `Enter to confirm · Esc to cancel`, drawn BELOW a prompt box still
- * on screen, with an explanatory sentence between the question and the
- * options. The first reader knew one footer and looked for the box first;
- * it said "could not find its prompt".
- */
-import { readFileSync } from 'node:fs';
 describe('the live capture', () => {
   const lines = readFileSync(new URL('../fixtures/menu-capture-live.txt', import.meta.url), 'utf8').replace(/\s+$/u, '').split('\n');
 

@@ -20,7 +20,9 @@ started in it. mc stores nothing else, because nothing else is mc's to know.
 
 | Command | Does |
 |---|---|
-| `mc work` | What exists; at a terminal, a way in. |
+| `mc` | The one page — NOW, QUEUE, DECISIONS, INTAKE, WORK — and at a terminal the way in under it: a number opens that workarea, `n` starts one, `b`/`p <name>`/`s <name>` run brief, plan and one project, `w` watches, `q` quits, and any other line is read as an `mc work` command. `--json`, `--fresh`. |
+| `mc --watch [seconds]` | The same page, redrawn every 15 seconds until ctrl-c. No prompt. |
+| `mc work` | The page — `mc` by another name. |
 | `mc work <name>` | Open it — the name is enough, new or not. Refused while a session mc did not start is working in it (`--anyway` opens it regardless). |
 | `mc work <name>` | Open it — the name is enough, new or not. A session running there under any tmux name is found by where it stands and joined. |
 | `mc work <name> new [--model <m>]` | A new conversation rather than the last one — including when one is running in the background, which is ended and replaced in the same window. |
@@ -33,14 +35,14 @@ started in it. mc stores nothing else, because nothing else is mc's to know.
 | `mc work discard <name> [repo] [--apply]` | Throw it away — worktrees, branches, and all. |
 | `mc work send <name> "<text>"` | A message into that work's `inbox/`. `--wake` also knocks on whatever is running there — or, when a draft is in its prompt, queues the knock for when the prompt clears and says so. `--json`. |
 | `mc work stop <name>` | Stop what is running there; keep the work. Leaves a mark (`.mc-stopped`: who, when) so the session guard says `stopped by pm 03:16` instead of `dead` and the board shows it; `mc work <name>` removes it. |
-| `mc work list` | The same listing as bare `mc work`. |
+| `mc work list` | The page, as bare `mc work` is. |
 | `mc worker <name> [task]` | A project folder that carries the worker role. |
 | `mc pm` / `mc pm-helper` | The singleton role's workspace: attach if it runs, restart it if it stopped, create it the first time. One of it, ever. `mc pm-helper intake [--json]` lists Martin's unprocessed intake items (oldest first; `done <stem…>` moves them to `intake/processed/<date>/` — never deletes). The helper may run `mc repo merge … --check`; the form without `--check` is refused by the tool itself (design note §5). |
 | `mc <role> new [--model <m>]` | Start over in the same window: the running conversation is ended and replaced, nothing is deleted, and the successor is told its predecessor's id. |
 | `mc <role> <id>` | One particular conversation in the role's home — the way back from a handoff. Refused while the role is running. |
 | `mc roles list \| show <role>` | The defined roles, read from their files. |
 | `mc worktrees` | Worktrees across the work areas. |
-| `mc status` | Every piece of work and what it is doing — including the clock a session set for itself (`⏰ wakeup in 9m: <prompt>`, from the last `ScheduleWakeup` in its transcript) `--watch`, `--json`, `--wait`. |
+| `mc status <name>` | One project: its PLAN.md frontmatter and step, the decisions that belong to it, its last three runner steps and the open PR on its branch. `--json`, `--offline`. Without a name it says the page is `mc`; `--sessions`, `--watch` and `--wait` went with the old board (decision mc-3). |
 | `mc repo status [repo]` | One repository seen whole: main, open pull requests with how far behind main each is, the work areas standing on it, and the source-linked installation's drift. `--json`, `--offline`. |
 | `mc repo watch start \| stop \| status` | The background process that keeps that answer fresh. `--interval <seconds>` on start; `--json` on status. |
 | `mc watch sessions start \| stop \| status` | The session guard: every 10 minutes it flags waiting, silent, dead, unreachable, unattended, quiet-group, stalled, holding, context (script) and blocked, quota-exhausted, error (model) into the notices ledger. `dead`, `quota-exhausted`, `unattended`, `quiet-group` and `context` (90 % of the window, read from the transcript so a session without a pane is seen too; the board shows the fill from 70 %) knock PM at once. `--interval <seconds>`, `--model <model>`, `--idle <minutes>` (unattended after, default 10) and `--group <prefix>` (repeatable; quiet-group when nobody under it works) on start; `--json` on status. |
@@ -350,9 +352,10 @@ looks 400ms after Enter.
 host is **old mc**. It is retained only until the last old sessions are paid
 off, and gets no new features. `mc work` is where work goes.
 
-As of 2026-08-13 the local session store is empty: `mc list` reports zero
-sessions, and the 42 session homes, 429 pre-V1 records, and their worktrees
-were removed.
+As of 2026-08-13 the local session store was empty: zero sessions, and the 42
+session homes, 429 pre-V1 records, and their worktrees were removed. There is
+no verb that lists them any more — `mc list`, `mc sessions list` and the old
+`mc status` board went with decision mc-3, and `mc` is the page.
 
 | Command | Does |
 |---|---|
@@ -360,8 +363,6 @@ were removed.
 | `mc open <name>` | Attach to the live runtime, or start/resume one. |
 | `mc resume <name>` | Alias for `mc open`. |
 | `mc restart <name>` | Stop the runtime and open again. |
-| `mc list` | Local sessions from disk, cloud sessions from Memoro. |
-| `mc status --sessions <name>` | Durable session, workspace, and runtime state. A bare `mc status <name>` is the project of that name. |
 | `mc rename <old> <new>` | Rename metadata. |
 | `mc cd <name>` | Print or enter an associated directory. |
 | `mc attach <name>` | Attach to the exact live terminal. |

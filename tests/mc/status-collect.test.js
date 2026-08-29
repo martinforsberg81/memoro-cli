@@ -12,7 +12,7 @@ import {
   collectStatus, decisionsBlock, kindFor, nowBlock, orphanWorkareas, pidAlive, projectsBlock, renderStatus,
   runnerBlock,
 } from '../../src/mc/status-collect.js';
-import { run as page } from '../../src/mc/commands/status-page.js';
+import { run as page } from '../../src/mc/commands/home.js';
 import { runMcCli } from './_helpers/mc-cli.js';
 
 const PLANS = [
@@ -242,10 +242,14 @@ describe('the page', () => {
     assert.equal(data.notes.some((n) => /cache/u.test(n)), false, 'nothing to apologise for when it just asked');
   });
 
-  it('refuses an unknown flag, and the help says what the bare verb is', async () => {
+  it('refuses an unknown flag, and the help leads with the two surfaces', async () => {
     let err = '';
-    assert.equal(await page(['--watch'], { stderr: { write: (s) => { err += s; } } }), 2);
-    assert.match(err, /unknown argument --watch/u);
-    assert.match(runMcCli(['--help']).stdout, /mc status --sessions/u);
+    assert.equal(await page(['--sessions'], { stderr: { write: (s) => { err += s; } } }), 2);
+    assert.match(err, /unknown argument: --sessions/u);
+    const help = runMcCli(['--help']).stdout;
+    assert.match(help, /^ {2}mc {2,}The one page/mu);
+    assert.match(help, /^ {2}mc --watch \[seconds\]/mu);
+    assert.doesNotMatch(help, /mc status --sessions/u);
+    assert.doesNotMatch(help, /^ {2}mc list /mu);
   });
 });
