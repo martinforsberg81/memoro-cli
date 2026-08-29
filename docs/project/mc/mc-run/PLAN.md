@@ -1,6 +1,6 @@
 ---
 status: ready
-next: "Step 1 — `mc run` reproduces ~/mc/bin/runner.sh inside mc: queue = ~/mc/queue.md plus every ready PLAN.md on origin/main of memoro and memoro-cli; one fresh headless session per step through the launch adapter (claude -p today; codex exec when the project frontmatter says tool: codex); merge origin/main in, never rebase; reconcile step on conflicts; wait for GitHub mergeability then squash-merge — done when one full round over the real queue runs under `mc run --rounds 1` with the same runs.tsv columns as the shell runner and the shell runner can be deleted."
+next: "Step 2 — `mc run --rounds 1` completes a full round on the live queue (merge, reconcile, answered decisions all exercised at least once in runner.log), then a night on `mc run` in tmux instead of runner.sh — done when runs.tsv shows a round with no line the shell runner would have handled differently. Was: Step 1 — `mc run` reproduces ~/mc/bin/runner.sh inside mc: queue = ~/mc/queue.md plus every ready PLAN.md on origin/main of memoro and memoro-cli; one fresh headless session per step through the launch adapter (claude -p today; codex exec when the project frontmatter says tool: codex); merge origin/main in, never rebase; reconcile step on conflicts; wait for GitHub mergeability then squash-merge — done when one full round over the real queue runs under `mc run --rounds 1` with the same runs.tsv columns as the shell runner and the shell runner can be deleted."
 budget: 150k
 needs: []
 ---
@@ -70,9 +70,9 @@ per round, merge direct, no model in the runner itself.
 
 - [x] **0. Wait** (2026-08-29) — mc-brief step 2 (#416) and mc-plan step 1
       (#414) are on main; `canon/roles/` and the foreground launch exist.
-- [ ] **1. Verb + queue + one step** — `mc run --once` runs one step for the
-      first ready project through the adapter and logs it. Done when a real
-      step lands a PR and a runs.tsv row.
+- [x] **1. Verb + queue + one step** (2026-08-29) — `mc run --once` ran the
+      continue-section step through the adapter, merged its PR and wrote the
+      runs.tsv row (see What the code taught us).
 - [ ] **2. Merge + reconcile + decisions** — the rest of the behaviour above.
       Done when `mc run --rounds 1` completes a full round on the live queue.
 - [ ] **3. Codex** — `tool: codex` in a project frontmatter runs that step
@@ -83,7 +83,20 @@ per round, merge direct, no model in the runner itself.
 
 ## What the code taught us
 
-(empty — but read `~/mc/runner/log/natt-1.md` first: it records what the
+- The whole of step 2's behaviour (merge with wait-and-retry, reconcile,
+  answered decisions, STOP, quota sleep) came with step 1: it shares the
+  step function, and the tests cover it on fakes. Step 2 is the live
+  observation, not new code.
+- A quota answer came back as `subtype: success` in one turn on
+  2026-08-26 and the shell runner logged eleven of them as success. The
+  note is now `quota`, from the result text.
+- `runner.sh` lost its execute bit when replaced (tmux exit 126, no log
+  line). `mc run` has no such failure mode: it is a verb.
+- Codex: `codex exec --json --full-auto` is wired with `-c instructions=`
+  for the profile+role, usage read from the event stream when present —
+  not measured, codex is not installed on this machine.
+
+(read `~/mc/runner/log/natt-1.md` first: it records what the
 shell runner learned on nights 1–2, including why merges failed and why
 rebase was wrong.)
 
