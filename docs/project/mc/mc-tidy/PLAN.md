@@ -1,6 +1,6 @@
 ---
 status: ready
-next: "Step 1 — the runner closes a workarea by itself once its plan is done on main, its worktree is clean and its last run merged; the page lists only real workareas — done when `mc` (or `mc work` until mc-ui lands) no longer shows bin/brief/decisions/inbox/runner/status/pm/pm-helper, and the seven done workareas of 2026-08-29 are gone from ~/mc with their conversation logs kept under ~/mc/runner/log/closed/."
+next: "Step 1 — queue.md becomes a strict self-emptying list; the runner closes a workarea by itself once its plan is done on main, its worktree is clean and its last run merged; the page lists only real workareas — done when `mc` (or `mc work` until mc-ui lands) no longer shows bin/brief/decisions/inbox/runner/status/pm/pm-helper, and the seven done workareas of 2026-08-29 are gone from ~/mc with their conversation logs kept under ~/mc/runner/log/closed/."
 budget: 150k
 needs: [mc-ui]
 ---
@@ -37,6 +37,18 @@ page keep the list clean on their own.
   raise. (Of the 16: msr-track-1 carries 30 commits from 2026-08-24 and
   mc-repo 4 — those are the two where something real may sit.)
 
+- **`~/mc/queue.md` is a strict list** (Martin, 2026-08-29: "ett träsk —
+  där ska INTE finnas någonting annat än en lista över vad som ska köras").
+  One project name per line, nothing else: no comments, no headings, no
+  blank-line sections. The runner removes a name from the file the moment
+  that project's step has run (or when the project is `done` or has no
+  plan on main, saying why in runner.log) — the file is Martin's "these
+  first" and empties itself; the alphabetical list of ready plans on main
+  is the order after it, as today. A line that is not a project name is
+  dropped with one log line, never kept. The step rewrites the current
+  file to that shape in its first run (the 2026-08-29 file has 7 comment
+  lines and 20 names that are already done or have no plan).
+
 ## Success criteria
 
 - [ ] `mc run` closes every closable workarea at the end of each round
@@ -50,6 +62,10 @@ page keep the list clean on their own.
 - [ ] The page (WORK in `mc`, or `mc work` until then) hides mc's own
       folders and shows unplanned workareas under their own heading.
 - [ ] `~/mc/intake/unplanned-workareas.md` exists after the first run.
+- [ ] `~/mc/queue.md` contains only names of projects with a plan on main
+      that have not yet had their step this round; after a round in which
+      every named project ran, the file is empty. `mc run` never reads a
+      comment line into the queue.
 - [ ] Tests cover the closable rule with the squash-merge case (branch
       ahead, plan done, last run merged → closable) and the dirty case.
 
@@ -62,5 +78,5 @@ page keep the list clean on their own.
 
 ## Steps
 
-- [ ] **1. Closable rule + runner close + page filter** — one PR.
+- [ ] **1. Closable rule + runner close + page filter + strict queue.md** — one PR.
 - [ ] **2. Close-out** — `docs/technical/` note, `project_log.md` row.
