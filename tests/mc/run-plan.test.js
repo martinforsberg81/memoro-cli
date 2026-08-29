@@ -64,6 +64,11 @@ test('readSessionOutput: a quota answer is logged as quota, never success', () =
   assert.equal(r.quota, true);
   assert.equal(quotaSeen('Rate limit reached'), true);
   assert.equal(quotaSeen('all good'), false);
+  // A finished session whose prose mentions quota is success, not quota.
+  const done = JSON.stringify({ subtype: 'success', num_turns: 39, result: 'PR open: the page shows quota rows of the last 24 h' });
+  const d = readSessionOutput({ toolId: 'claude-code', stdout: done, exitCode: 0 });
+  assert.equal(d.note, 'success');
+  assert.equal(d.quota, false);
 });
 
 test('readSessionOutput: codex events give what they give', () => {

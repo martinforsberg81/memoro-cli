@@ -132,14 +132,25 @@ export function headlessArgs({ toolId, adapter, model, instructions, prompt, pro
  */
 export function readSessionOutput({ toolId, stdout, stderr = '', exitCode, timedOut = false }) {
   const dash = { turns: '-', session: '-', input: '-', output: '-', cacheRead: '-', cacheWrite: '-' };
-  const quota = quotaSeen(`${stdout}\n${stderr}`);
-  if (timedOut) return { ...dash, note: 'timeout', quota };
-  if (toolId === 'codex') return { ...dash, ...readCodexEvents(stdout), note: quota ? 'quota' : (exitCode === 0 ? 'success' : 'failed'), quota };
+  // A limit answer is what the tool says when it refuses: one or two turns
+  // and the limit text as the whole result. Session prose that mentions a
+  // quota (a PR body about quota rows, say) is not a limit — 2026-08-29 the
+  // runner slept 30 min and left a finished PR unmerged on exactly that.
+  if (timedOut) return { ...dash, note: 'timeout', quota: false };
+  if (toolId === 'codex') {
+    const quota = exitCode !== 0 && quotaSeen(`${stdout}\n${stderr}`);
+    return { ...dash, ...readCodexEvents(stdout), note: quota ? 'quota' : (exitCode === 0 ? 'success' : 'failed'), quota };
+  }
   let json = null;
   try { json = JSON.parse(stdout); } catch { json = null; }
-  if (!json || typeof json !== 'object') return { ...dash, note: quota ? 'quota' : 'no-json', quota };
+  if (!json || typeof json !== 'object') {
+    const quota = quotaSeen(`${stdout}\n${stderr}`);
+    return { ...dash, note: quota ? 'quota' : 'no-json', quota };
+  }
   const usage = json.usage || {};
   const pick = (v) => (v == null ? '-' : String(v));
+  const fewTurns = !(Number(json.num_turns) > 2);
+  const quota = fewTurns && quotaSeen(`${json.result ?? ''}\n${stderr}`);
   return {
     turns: pick(json.num_turns),
     session: pick(json.session_id),
