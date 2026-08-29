@@ -15,7 +15,9 @@
  *                     are the ones in WORK above the prompt
  *   - a pipe, --json  the page, and exit 0. Nothing prompts, ever
  *   - --watch [n]     the page every n seconds (15 by default) until ctrl-c,
- *                     with no prompt and the terminal left as it was found
+ *                     with no prompt and the terminal left as it was found.
+ *                     The header says so — `watch · 15 s` — because a page
+ *                     that redraws itself looks exactly like one that does not
  *
  * The page is offline: it answers from `~/mc/runner/plans.json` and
  * `~/mc/runner/prs.json` and says how old the PR cache is. `--fresh` is the
@@ -64,7 +66,7 @@ export async function run(argv, deps = {}) {
   // One way to make a page, used by all three surfaces: the width and the
   // colour are read per draw, so a terminal resized under `--watch` is
   // answered on the next round.
-  const page = async () => {
+  const page = async (watch = 0) => {
     const data = await collect({ fresh: opts.fresh });
     return {
       data,
@@ -72,10 +74,11 @@ export async function run(argv, deps = {}) {
         columns: columnsFor(stdout),
         colour: colourFor(stdout, env),
         version,
+        watch,
       }),
     };
   };
-  const draw = async () => (await page()).lines;
+  const draw = async () => (await page(opts.watch)).lines;
 
   if (opts.watch) return watch(opts.watch, { stdout, draw });
 
@@ -198,7 +201,7 @@ export async function menu(first, {
       return brief.run([], { stdout, stderr });
     }
     if (answer === 'w' || answer === 'watch') {
-      return watch(WATCH_SECONDS, { stdout, draw: async () => (await page()).lines });
+      return watch(WATCH_SECONDS, { stdout, draw: async () => (await page(WATCH_SECONDS)).lines });
     }
 
     const words = answer.split(/\s+/u).filter(Boolean);
