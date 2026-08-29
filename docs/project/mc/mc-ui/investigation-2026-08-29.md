@@ -209,3 +209,15 @@ at step start is one write per step, in the process that alone knows the answer.
   off as a separate decision by `mc-helper`'s Contract.
 - Whether `kindFor` should be deleted in favour of `chooseKind`. Real, but it
   is `mc-run`'s and `mc-status`'s shared ground, not this project's.
+
+## 6. Decision — 2026-08-29, in session
+
+Martin: *"vi kan inte ha `mc`, `mc work`, `mc list`, `mc status` + `--watch`
+flagga som genererar olika listor. … endast 2 st."* Decided as option A,
+sharpened: **`mc`** is the page with `mc work`'s menu under it at a TTY;
+**`mc --watch`** is the page redrawn. Every other list — bare `mc work`,
+`mc list`, bare `mc status`, the `--sessions/--watch/--wait` board — is
+removed in this project, not left for #410. PROJECTS becomes WORK: one
+numbered row per workarea (that is what the menu needs), one count line for
+projects on main without a workarea. `mc status <name>` stays as the one
+detail view. The plan is `ready`; the runner builds it.

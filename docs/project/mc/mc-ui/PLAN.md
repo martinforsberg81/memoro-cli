@@ -1,6 +1,6 @@
 ---
-status: waiting-decision
-next: "Waiting on `~/mc/mc-utredning/decisions/mc-3.md` (what bare `mc` is, and static or live) — it carries no `**Beslut:**` line yet, and the front door cannot be rebuilt before its shape is chosen. Then Step 1 — `mc run` writes `~/mc/runner/current.json` while a step is in flight and removes it when the step ends — done when `mc status --json` names the running project, its kind, tool, model, start time and budget within a second of a step starting, and carries nothing there within a second of it ending."
+status: ready
+next: "Step 1 — `mc run` writes `~/mc/runner/runner.json` (pid, started) at start and `~/mc/runner/current.json` (name, kind, tool, model, budget_minutes, started, pid, worktree) while a step is in flight, removing each when it ends; the collector reads them plus `~/mc/runner/STOP` — done when `mc status --json` carries a `now` block within a second of a step starting and nothing there a second after it ends, and runner liveness comes from the pid in runner.json, never from pgrep."
 budget: 150k
 needs: []
 ---
@@ -18,17 +18,41 @@ Martin asked for, hardcodes its column widths, uses no colour, and takes
 adds the three things it cannot say today: **what is running right now**,
 **how deep the queue is and what is in it**, **how much waits in intake**.
 
+Decided 2026-08-29 (`~/mc/mc-utredning/decisions/mc-3.md`, in session):
+**two surfaces and no more.** `mc` is the page and, at a TTY, the menu
+`mc work` has today underneath it; `mc --watch [seconds]` is the same page
+redrawn, no prompt. Bare `mc work`, `mc list`, bare `mc status`, `mc status
+--sessions|--watch|--wait` and the old board go in this project. `mc status
+<name>` (one project) and `mc work <name> …` stay as verbs.
+
 ## Success criteria
 
 - [ ] Bare `mc` prints the page (per decision mc-3) in under 300 ms with no
       network — measured against today's 1.92 s for `mc status --offline`.
-- [ ] Six sections, in this order: **NOW** (the running step with kind, tool,
-      model, elapsed against budget; a pending STOP; live tmux `mc-<name>`
-      areas; a foreground `mc brief`/`mc plan`), **QUEUE** (depth, runnable
-      count, the next few by name and kind, skips counted by reason),
-      **DECISIONS**, **INTAKE** (digest date, new errors, proposals waiting),
-      **PROJECTS** (counts by status, then today's rows), **WORKAREAS
-      WITHOUT A PROJECT**.
+- [ ] Five sections, in this order: **NOW** (the running step with kind,
+      tool, model, elapsed against budget; a pending STOP; live tmux
+      `mc-<name>` areas; a foreground `mc brief`/`mc plan`), **QUEUE**
+      (depth, runnable count, the next few by name and kind, skips counted
+      by reason), **DECISIONS** (count, the first three), **INTAKE** (digest
+      date, new errors, proposals waiting), **WORK** (one numbered row per
+      workarea — name, plan status, `next`, last runner step and PR, live
+      mark — live first, then by last activity; then one line: N projects
+      on main without a workarea, `mc status <name>`).
+- [ ] At a TTY, `mc` ends in the menu `mc work` has today (`menu()` in
+      `commands/work.js`, moved, not rewritten): a number or a name opens
+      the workarea through `openArea`, `n` starts one, `b` runs `mc brief`,
+      `p <name>` runs `mc plan <name>`, `s <name>` prints `mc status
+      <name>`, `w` switches to watch, `q` quits; any other line is parsed as
+      a `mc work` verb as today. Without a TTY, or with `--json`, it prints
+      and exits 0.
+- [ ] `mc --watch [seconds]` redraws the page every 15 s by default until
+      ctrl-c and leaves the terminal clean; no prompt.
+- [ ] Removed, with their tests: bare `mc work` (prints the page and menu —
+      it *is* `mc`), `mc list` and `src/cli/list.js`, bare `mc status`
+      (prints "mc status is now mc", exit 2), `--sessions|--watch|--wait`
+      on `mc status`, `commands/status-board.js`, `work-status.js`, the
+      board half of `status-render.js` (the `painter`/`width`/`pad`/`clip`
+      half stays). `mc status <name>` and `mc work <name> …` unchanged.
 - [ ] A number where a number answers the question, a line only where the
       identity matters; each count names the verb that expands it.
 - [ ] Width-aware and coloured: `stdout.columns` clamped 60–160 through
@@ -38,7 +62,7 @@ adds the three things it cannot say today: **what is running right now**,
 - [ ] `--json` is the same object the renderer takes, one key per section;
       `--fresh` does the `git fetch` and `gh pr list` that `mc status` does
       by default today; without it the page reads a cache and says its age.
-      `--watch [seconds]` redraws until ctrl-c, leaving the terminal clean.
+
 - [ ] No new dependency; the renderer is ANSI by hand, as the repo is.
       Tests build every section from fixtures (`current.json`, `runs.tsv`, a
       decisions tree, a `docs/project` tree, an intake dir) — no git, gh or
@@ -51,39 +75,50 @@ adds the three things it cannot say today: **what is running right now**,
   exists nowhere else.
 - Step 1 edits `src/mc/run.js`, which `mc-run` owns. It adds a write and
   changes no rule; if `mc-run` is mid-step on that file, this step waits.
-- The old sessions table is not restyled — it is V1 surface on its way out
-  (`mc-dormant`); this only stops it being the first thing seen.
+- Two surfaces that list, `mc` and `mc --watch`, and none other. A verb
+  that prints a list of areas, sessions or projects is a regression.
+- The menu's behaviour is `mc work`'s today, moved: what a number, a name,
+  `n` and a typed verb do does not change.
 - The estimated cost stays labelled list-price, never what Martin pays.
 - INTAKE is empty until `mc helper` writes it (decision mc-2, answered A);
   it says "no digest yet", never a zero that looks like health.
 
 ## Steps
 
-- [ ] **0. Decision** — `~/mc/mc-utredning/decisions/mc-3.md`: bare `mc` is
-      the page (static, `--watch` for live), a live dashboard by default, or
-      a short summary with `mc status` kept whole. Open as of 2026-08-29.
-- [ ] **1. What is running now** — `mc run` writes `~/mc/runner/current.json`
-      (name, kind, tool, model, budget_minutes, started, pid, worktree) at
-      step start through `atomic-write.js` and removes it at the end; the
-      collector reads it, plus `~/mc/runner/STOP`, plus `quota` rows in the
-      last 24 h. Done when `mc status --json` carries a `now` block within a
-      second of a step starting and nothing there a second after it ends.
+- [x] **0. Decision** (2026-08-29) — `~/mc/mc-utredning/decisions/mc-3.md`:
+      A, sharpened to two surfaces; the removals are this project's.
+- [ ] **1. What is running now** — `mc run` writes `~/mc/runner/runner.json`
+      (pid, started) at start and `~/mc/runner/current.json` (name, kind,
+      tool, model, budget_minutes, started, pid, worktree) at step start,
+      both through `atomic-write.js`, each removed when its scope ends; the
+      collector reads them, plus `~/mc/runner/STOP`, plus `quota` rows in
+      the last 24 h; `runnerAlive()` becomes "runner.json's pid is alive"
+      and the pgrep goes; `kindFor` is replaced by `chooseKind` from
+      `run-plan.js`. Done when `mc status --json` carries a `now` block
+      within a second of a step starting and nothing there a second after
+      it ends.
 - [ ] **2. Instant** — plans read with one `git cat-file --batch` per
       repository behind a `~/mc/runner/plans.json` cache keyed by the
       `origin/main` sha; open PRs cached to `~/mc/runner/prs.json`; offline
       becomes the default, `--fresh` the opt-in. Done when the page prints
       in under 300 ms with no network, measured with `time`.
-- [ ] **3. The page** — the six sections, the width and colour rules, the
-      counts, `--json` parity. Done when all six print against the real
-      files and the fixture tests pass.
-- [ ] **4. The front door** — bare `mc` prints it (per mc-3); the sessions
-      table answers only to `mc list`; `HELP_TEXT` leads with the page. Done
-      when `mc` and `mc status` print the same page and nothing on the first
-      screen of `mc --help` names a mechanism that no longer runs.
-- [ ] **5. Live** — `--watch [seconds]`, and a foreground register so
-      `mc brief`/`mc plan`/`mc worker` record verb, area, tool, model and
-      start time. Done when a running `mc brief` appears in NOW and is gone
-      from it after it exits.
+- [ ] **3. The page** — the five sections, the width and colour rules, the
+      counts, `--json` parity, in `src/mc/page-collect.js` and
+      `page-render.js` (status-collect.js's readers reused). Done when all
+      five print against the real files and the fixture tests pass.
+- [ ] **4. The front door** — bare `mc` prints the page and, at a TTY, the
+      menu moved from `commands/work.js` with `b`/`p`/`s`/`w` added;
+      `mc --watch`; bare `mc work` routes to the same; `mc list`, bare
+      `mc status`, the status board flags and their modules and tests
+      removed; `HELP_TEXT` leads with `mc`, `mc --watch`, `mc brief`,
+      `mc plan`, `mc run`, `mc merge`, `mc status <name>`, `mc work <name>`.
+      Done when `mc` at a TTY shows the page and opens a workarea by number,
+      `mc --json` exits 0 without a prompt, `mc list` and `mc status` say
+      where they went, and `npm test` is green minus the known V1 set.
+- [ ] **5. Foreground register** — `mc brief`/`mc plan`/`mc worker` write
+      `~/mc/runner/foreground/<pid>.json` (verb, area, tool, model, started)
+      at launch and remove it at exit, so NOW names the verb. Done when a
+      running `mc brief` appears in NOW as "brief" and is gone after exit.
 - [ ] **6. Close-out** — `docs/technical/mc-ui.md`, `project_log.md`.
 
 ## What the code taught us
@@ -116,6 +151,7 @@ assumed, are in `investigation-2026-08-29.md`.
 ## Documents
 
 - `docs/project/mc/mc-ui/investigation-2026-08-29.md` — inventory, mock-up, options
-- `~/mc/mc-utredning/decisions/mc-3.md` — the open question
+- `~/mc/mc-utredning/decisions/mc-3.md` — the decision (A, two surfaces)
+- `src/mc/commands/work.js` `menu()`/`typed()`/`startSomething()` — the menu that moves under the page
 - `docs/project/mc/mc-status/PLAN.md` — the page this rebuilds; `mc-run` — the writer of `current.json`; `mc-helper` — the writer of intake
 - `~/mc/mc-utredning/utredning-2026-08-24.md` §12.5 — the five parts the page must show
