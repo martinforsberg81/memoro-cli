@@ -1,6 +1,6 @@
 ---
-status: ready
-next: "Step 3 — close-out: `docs/technical/mc-merge.md` describes both forms of the verb and `docs/project/project_log.md` carries the line — done when both files are on main and the plan is `status: done`."
+status: done
+next: "Nothing — the plan is finished. `docs/technical/mc-merge.md` describes both forms of the verb, `docs/project/project_log.md` carries the row, and `docs/mc-command-matrix.md` lists `mc merge` where it listed `mc repo merge`."
 budget: 150k
 needs: []
 ---
@@ -21,19 +21,19 @@ waits for a click and the runner does not see it (Martin, 2026-08-26:
 
 ## Success criteria
 
-- [ ] `mc merge <repo> <pr> [<pr>...] [--check] [--json]` does exactly what
+- [x] `mc merge <repo> <pr> [<pr>...] [--check] [--json]` does exactly what
       `mc repo merge` did, through the same `runGate`/`runMergeRound`.
-- [ ] `mc merge <repo> <pr> --docs`: reads the PR's files with `gh`; refuses,
+- [x] `mc merge <repo> <pr> --docs`: reads the PR's files with `gh`; refuses,
       naming the first file, if any path is outside `docs/`; refuses a draft
       or a closed PR; waits for GitHub's mergeability (up to ~60 s); squash-
       merges with subject `<title> (#<n>)`; reads the merge commit back and
       prints it; records a round with `mode: docs` in the repo round log.
       No suite, no lease, no worktree, no model.
-- [ ] `--docs` with several PRs, or with `--check`, is refused.
-- [ ] `mc repo merge …` prints one line — "mc repo merge is now mc merge" —
+- [x] `--docs` with several PRs, or with `--check`, is refused.
+- [x] `mc repo merge …` prints one line — "mc repo merge is now mc merge" —
       and exits 2; it is not in `mc repo`'s usage or help.
-- [ ] Help text: `mc merge` block replaces the `mc repo merge` block.
-- [ ] Tests: the docs form on a stubbed `gh` (docs-only merges; one file
+- [x] Help text: `mc merge` block replaces the `mc repo merge` block.
+- [x] Tests: the docs form on a stubbed `gh` (docs-only merges; one file
       outside docs refuses; draft refuses; batch refuses); the gate form's
       argument errors moved from `repo merge` to `merge`.
 
@@ -61,7 +61,12 @@ waits for a click and the runner does not see it (Martin, 2026-08-26:
       (`~/mc/runner/log/canonical-response-20260829T033139Z.json`, first
       line of `.result`); the round log has four `mode: docs` rounds
       (memoro-cli #419, #420; memoro #11025, #11039), none of them clicked.
-- [ ] **3. Close-out** — `docs/technical/mc-merge.md`, `project_log.md`.
+- [x] **3. Close-out** (2026-08-29) — `docs/technical/mc-merge.md` (both
+      forms, the six measured `mode: docs` rounds, the three places that say
+      it), the `project_log.md` row, and the last user-visible places that
+      still said the old name: `docs/mc-command-matrix.md`, `mc repo rounds`
+      with no rounds yet, the merge log's "Run by" line and the freshen
+      sender. `mc repo merge` now survives only in CHANGELOG history.
 
 ## What the code taught us
 
@@ -76,6 +81,11 @@ waits for a click and the runner does not see it (Martin, 2026-08-26:
   … and stop" — the most recent instruction, contradicting the role two
   screens above it. The prompt now ends with the merge and names the
   repository, so `<repo>` is filled in rather than guessed.
+- The rename was not finished in the code when step 1 called it done. Six
+  strings still said `mc repo merge` where a person would read them: the
+  matrix row, `mc repo rounds`' empty answer, the merge log line the gate
+  writes into the repository, and the freshen half's inbox sender and two
+  of its messages. No test asserted any of them, which is why they lasted.
 - `~/mc/bin/runner.sh` is not in this repository and no test can reach it;
   the repository's half of this step is locked by assertions on the role
   overlay and on `planLaunch()`'s last line.
