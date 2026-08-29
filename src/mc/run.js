@@ -17,7 +17,7 @@ import { dirname, join } from 'node:path';
 
 import { resolveLaunch } from '../adapters/index.js';
 import { writeJsonAtomic } from './atomic-write.js';
-import { NOT_A_DECISION, defaultRepos, listPlans, parsePlanFrontmatter, planFields } from './brief-collect.js';
+import { NOT_A_DECISION, defaultRepos, listPlans, parsePlanFrontmatter, planFields, showBatch } from './brief-collect.js';
 import { workRoot } from './paths.js';
 import { loadProfile, profileArgs } from './portrait.js';
 import { readCanonRole } from './roles.js';
@@ -299,7 +299,7 @@ export function createRunner({
     for (const repo of repos) {
       if (!deps.exists(join(repo.path, '.git'))) continue;
       deps.git(repo.path, ['fetch', '-q', 'origin']);
-      plans.push(...listPlans(repo, { git: gitOut }));
+      plans.push(...listPlans(repo, { git: gitOut, batch: showBatch(gitOut) }));
     }
     return { names: assembleQueue(deps.read(paths.queue) || '', plans), plans };
   }

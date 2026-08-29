@@ -1,6 +1,6 @@
 ---
 status: ready
-next: "Step 2 — Instant: plans read with one `git cat-file --batch` per repository behind a `~/mc/runner/plans.json` cache keyed by the `origin/main` sha, open PRs cached to `~/mc/runner/prs.json`, offline the default and `--fresh` the opt-in — done when the page prints in under 300 ms with no network, measured with `time`."
+next: "Step 3 — The page: the five sections (NOW, QUEUE, DECISIONS, INTAKE, WORK), the width and colour rules, the counts and `--json` parity, in `src/mc/page-collect.js` and `page-render.js` with status-collect.js's readers reused — done when all five print against the real files and the fixture tests pass."
 budget: 150k
 needs: []
 ---
@@ -98,11 +98,22 @@ redrawn, no prompt. Bare `mc work`, `mc list`, bare `mc status`, `mc status
       within a second of a step starting and nothing there a second after
       it ends — verified with a real runner writing to a real work root
       while `mc status --json` ran in its own process.
-- [ ] **2. Instant** — plans read with one `git cat-file --batch` per
-      repository behind a `~/mc/runner/plans.json` cache keyed by the
-      `origin/main` sha; open PRs cached to `~/mc/runner/prs.json`; offline
-      becomes the default, `--fresh` the opt-in. Done when the page prints
-      in under 300 ms with no network, measured with `time`.
+- [x] **2. Instant** (2026-08-29) — `listPlans` reads one `ls-tree` and one
+      `cat-file --batch` per repository (`parseCatFileBatch` walks the stream
+      by byte size, so a plan full of em-dashes survives it); `page-cache.js`
+      keeps `~/mc/runner/plans.json` keyed per repository by the
+      `origin/main` sha and `~/mc/runner/prs.json` stamped with when it was
+      asked; the page is offline and `--fresh` is the opt-in that fetches,
+      asks GitHub and refills both; without it the page says the PR cache's
+      age. `mc run` keeps its own injected git through `showBatch`. Done:
+      `time node src/mc-cli.js status` is 0.10–0.15 s on a quiet machine and
+      0.20–0.22 s under load average 15, against 1.34 s before; a PATH shim
+      that logged every `git` and `gh` recorded exactly two
+      `git rev-parse origin/main` on the default page — no fetch, no gh.
+      **The cold path is not under 300 ms**: the first print after
+      origin/main moves re-reads both repositories and costs 0.31 s quiet,
+      0.48 s loaded. It happens once per merge, and the runner could warm
+      the cache in the round it already fetches in — not done here.
 - [ ] **3. The page** — the five sections, the width and colour rules, the
       counts, `--json` parity, in `src/mc/page-collect.js` and
       `page-render.js` (status-collect.js's readers reused). Done when all
@@ -152,6 +163,23 @@ assumed, are in `investigation-2026-08-29.md`.
 - **A step that throws must still clear `current.json`.** The write is paired
   with a `finally` around the session call, not with the normal return — a
   crash in the middle would otherwise leave the page claiming a step forever.
+- **One `git show` per plan was the whole cost.** Replacing 47 of them with
+  two `cat-file --batch` calls took the page from 1.34 s to 0.31 s before a
+  cache existed at all; the cache then takes it to 0.11 s. The brief got the
+  same win for free — `mc brief --collect --offline` is 0.64 s. Which means
+  the cache buys the last 0.2 s, and the batch read bought the first 1.0 s:
+  if the cache ever gets in the way, it can go without losing much.
+- **A sha is a better cache key than a clock.** `plans.json` is keyed by
+  `origin/main`, so a hit is exactly what a fresh read would return and the
+  page has no staleness to confess. Open PRs have no such key — one closes
+  without moving any sha — so `prs.json` is stamped instead, written only by
+  `--fresh`, and its age is printed. The two files are not the same kind of
+  cache and the code says so.
+- **The Contract's "reads only" now has a second exception.** Step 2, as
+  approved, writes `plans.json` and `prs.json`. They are a read-through
+  cache of what the page already reads — delete both and `--fresh` refills
+  them — not state anything else depends on, so this is recorded rather than
+  escalated. The Contract's point stands: no model, nothing started.
 - **`renderStatus` hardcodes 34/17/70-column pads** and never asks
   `stdout.columns`, while `status-render.js` already exports the
   `painter`/`width`/`pad`/`clip` it needs.
@@ -160,6 +188,7 @@ assumed, are in `investigation-2026-08-29.md`.
 
 - `docs/project/mc/mc-ui/investigation-2026-08-29.md` — inventory, mock-up, options
 - `~/mc/mc-utredning/decisions/mc-3.md` — the decision (A, two surfaces)
+- `src/mc/page-cache.js` — plans.json and prs.json, the two caches step 2 added
 - `src/mc/commands/work.js` `menu()`/`typed()`/`startSomething()` — the menu that moves under the page
 - `docs/project/mc/mc-status/PLAN.md` — the page this rebuilds; `mc-run` — the writer of `current.json`; `mc-helper` — the writer of intake
 - `~/mc/mc-utredning/utredning-2026-08-24.md` §12.5 — the five parts the page must show

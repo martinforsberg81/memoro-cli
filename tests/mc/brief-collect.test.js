@@ -12,8 +12,8 @@ import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
 import {
-  collectBrief, lastBriefTime, listPlans, parseDecision, parsePlanFrontmatter, planFields,
-  queueNames, runsFor, runsSince, scanDecisions, summariseRuns,
+  collectBrief, lastBriefTime, listPlans, parseCatFileBatch, parseDecision, parsePlanFrontmatter, planFields,
+  queueNames, runsFor, runsSince, scanDecisions, showBatch, summariseRuns,
 } from '../../src/mc/brief-collect.js';
 
 const DECISION = (answered) => `---
@@ -123,15 +123,32 @@ describe('PLAN.md frontmatter', () => {
     assert.deepEqual(planFields('no frontmatter'), {});
   });
 
-  it('lists docs/project/<programme>/<project>/PLAN.md through an injected git', () => {
+  it('lists docs/project/<programme>/<project>/PLAN.md with one batch read per repository', () => {
     const git = (cwd, args) => {
       if (args[0] === 'ls-tree') return 'docs/project/README.md\ndocs/project/mc/mc-brief/PLAN.md\ndocs/project/mc/mc.md\ndocs/project/mc/mc-plan/notes/PLAN.md';
       if (args[0] === 'show') return `---\nstatus: ready\nnext: "Step 1 — ${args[1]}"\n---\n`;
       return null;
     };
-    const plans = listPlans({ name: 'memoro-cli', path: '/nowhere' }, { git });
+    const batches = [];
+    const batch = (cwd, refs) => { batches.push(refs); return showBatch(git)(cwd, refs); };
+    const plans = listPlans({ name: 'memoro-cli', path: '/nowhere' }, { git, batch });
     assert.deepEqual(plans.map((p) => [p.programme, p.project, p.status]), [['mc', 'mc-brief', 'ready']]);
     assert.match(plans[0].next, /origin\/main:docs\/project\/mc\/mc-brief\/PLAN\.md/u);
+    assert.deepEqual(batches, [['origin/main:docs/project/mc/mc-brief/PLAN.md']], 'one call, every plan in it');
+  });
+
+  it('splits a cat-file --batch stream by byte size, and skips what is missing', () => {
+    const plan = '---\nstatus: ready\nnext: "Steg 1 — mät i sekunder"\n---\n';
+    const bytes = Buffer.byteLength(plan);
+    const stdout = Buffer.concat([
+      Buffer.from(`abc123 blob ${bytes}\n`), Buffer.from(plan), Buffer.from('\n'),
+      Buffer.from('origin/main:gone.md missing\n'),
+      Buffer.from('def456 blob 3\nhi!\n'),
+    ]);
+    const texts = parseCatFileBatch(stdout, ['a', 'origin/main:gone.md', 'c']);
+    assert.equal(texts.get('a'), plan, 'a multi-byte plan survives the split');
+    assert.equal(texts.has('origin/main:gone.md'), false);
+    assert.equal(texts.get('c'), 'hi!', 'the walk stayed in step after the miss');
   });
 });
 
