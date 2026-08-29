@@ -6,7 +6,8 @@
  * whole collect run against a work root with no git and no gh.
  */
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
@@ -203,5 +204,62 @@ describe('collectBrief', () => {
     assert.match(text, /- docx-editor\n- sql-readiness-session-A/u);
     assert.match(text, /memoro: no checkout/u);
     assert.ok(lastBriefTime(join(root, 'brief')) instanceof Date);
+  });
+});
+
+/**
+ * The tidying, where it lives now: `--collect` deletes an answered decision
+ * file whose plan has absorbed it, before the agenda is built, so *Waiting on
+ * Martin* is only ever open questions. The runner does not do this — it has
+ * nothing to do with decisions at all (Martin, 2026-08-29).
+ */
+describe('collectBrief retires what has been answered', () => {
+  const PLAN = (status) => `---\nstatus: ${status}\nnext: "x"\n---\n# P\n`;
+
+  /** A work root plus a real git repository whose main carries the plans. */
+  function rootWithPlans(plans) {
+    const root = mkdtempSync(join(tmpdir(), 'mc-retire-'));
+    mkdirSync(join(root, 'avatar', 'decisions'), { recursive: true });
+    writeFileSync(join(root, 'avatar', 'decisions', 'assistant-avatar-1.md'), DECISION(true));
+    writeFileSync(join(root, 'avatar', 'decisions', 'assistant-avatar-2.md'), DECISION(false));
+    const repo = join(root, 'repos', 'memoro');
+    mkdirSync(repo, { recursive: true });
+    const git = (...args) => execFileSync('git', ['-C', repo, ...args], { stdio: 'pipe' });
+    git('init', '-q', '-b', 'main');
+    git('config', 'user.email', 't@t');
+    git('config', 'user.name', 't');
+    for (const [path, text] of Object.entries(plans)) {
+      mkdirSync(join(repo, path.split('/').slice(0, -1).join('/')), { recursive: true });
+      writeFileSync(join(repo, path), text);
+    }
+    git('add', '-A');
+    git('commit', '-qm', 'plans');
+    git('branch', '-f', 'origin/main', 'main');
+    return { root, env: { MC_WORK_ROOT: root, MC_REPOS_HOME: join(root, 'repos') } };
+  }
+
+  it('deletes the answered file once its plan is no longer waiting on it', async () => {
+    const { root, env } = rootWithPlans({ 'docs/project/assistant-avatar/avatar/PLAN.md': PLAN('ready') });
+    const r = await collectBrief({ env, now: new Date('2026-08-29T10:00:00Z'), offline: true, ref: 'main' });
+    assert.equal(existsSync(join(root, 'avatar', 'decisions', 'assistant-avatar-1.md')), false, 'answered and applied — gone');
+    assert.equal(existsSync(join(root, 'avatar', 'decisions', 'assistant-avatar-2.md')), true, 'the open question stays');
+    assert.ok(r.data.notes.some((n) => /retired 1 answered decision file\(s\).*assistant-avatar-1\.md/u.test(n)));
+    const agenda = r.text.slice(r.text.indexOf('## Waiting on Martin'), r.text.indexOf('## Plan status'));
+    assert.doesNotMatch(agenda, /assistant-avatar-1\.md/u, 'and it is not on the agenda');
+    assert.match(agenda, /assistant-avatar-2\.md/u);
+    assert.match(agenda, /1 waiting, 0 answered/u, 'nothing answered is left to count');
+  });
+
+  it('keeps it while the plan still says waiting-decision', async () => {
+    const { root, env } = rootWithPlans({ 'docs/project/assistant-avatar/avatar/PLAN.md': PLAN('waiting-decision') });
+    await collectBrief({ env, now: new Date('2026-08-29T10:00:00Z'), offline: true, ref: 'main' });
+    assert.equal(existsSync(join(root, 'avatar', 'decisions', 'assistant-avatar-1.md')), true, 'the answer is still needed');
+  });
+
+  it('reports an orphan and never deletes it', async () => {
+    const { root, env } = rootWithPlans({ 'docs/project/other/elsewhere/PLAN.md': PLAN('ready') });
+    const r = await collectBrief({ env, now: new Date('2026-08-29T10:00:00Z'), offline: true, ref: 'main' });
+    assert.equal(existsSync(join(root, 'avatar', 'decisions', 'assistant-avatar-1.md')), true);
+    assert.ok(r.data.notes.some((n) => /orphan decision avatar\/decisions\/assistant-avatar-1\.md.*by hand/u.test(n)));
   });
 });

@@ -18,7 +18,7 @@ import { describe, it } from 'node:test';
 import { readCanonRole } from '../../src/mc/roles.js';
 
 /** Every role that may create a decision file. `brief` answers them instead. */
-const AUTHORS = ['worker', 'plan', 'triage', 'step'];
+const AUTHORS = ['worker', 'plan', 'step'];
 
 /** Overlays wrap at 76 columns, so every phrase test has to cross newlines. */
 const phrase = (words) => new RegExp(words.split(' ').join('\\s+'), 'u');
@@ -53,11 +53,12 @@ describe('the decision shape every role writes', () => {
    * the deletion rule keeps the file forever; if it writes the answer into
    * PLAN.md, the file has done its job and can go.
    */
-  it('step writes the answer into the plan, not just into the code', () => {
+  it('step writes the answer into the plan, and the runner never reads one', () => {
     const { overlay } = readCanonRole('step');
     assert.match(overlay, phrase('into PLAN.md'));
-    assert.match(overlay, phrase('so the plan carries the decision on its own'));
-    assert.match(overlay, phrase('deletes an answered decision file'));
+    assert.match(overlay, phrase('so the plan carries it on its own'));
+    assert.match(overlay, phrase('The runner never reads decision files'));
+    assert.match(overlay, phrase('a plan comes back by being `ready`'));
     assert.doesNotMatch(overlay, phrase('read them first, apply the answer, set'));
   });
 
