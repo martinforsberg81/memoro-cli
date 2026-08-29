@@ -23,7 +23,10 @@ function fixture() {
   const workRoot = join(root, 'work');
   mkdirSync(join(workRoot, 'runner', 'log'), { recursive: true });
   writeFileSync(join(workRoot, 'queue.md'), '# the queue\nalpha\n');
-  for (const name of ['alpha', 'beta']) mkdirSync(join(workRoot, name, 'repo', '.git'), { recursive: true });
+  // A directory under the work root is a workarea when it holds `memoro/` or
+  // `memoro-cli/`; mc's own folders hold neither and are never rows.
+  for (const name of ['alpha', 'beta']) mkdirSync(join(workRoot, name, 'memoro-cli', '.git'), { recursive: true });
+  mkdirSync(join(workRoot, 'brief'), { recursive: true });
   return {
     root,
     workRoot,
@@ -62,7 +65,12 @@ describe('bare mc', () => {
       assert.equal(result.status, 0, result.stderr);
       const page = JSON.parse(result.stdout);
       assert.deepEqual(Object.keys(page), ['now', 'queue', 'decisions', 'intake', 'work', 'caches', 'notes']);
-      assert.deepEqual(page.work.areas.map((area) => area.number), [1, 2]);
+      // No plan on main here, so both are under the unplanned heading — and
+      // the numbers still run through both lists without a gap or a repeat.
+      assert.deepEqual(page.work.areas, []);
+      assert.deepEqual(page.work.unplanned.map((area) => area.name).sort(), ['alpha', 'beta']);
+      assert.deepEqual(page.work.unplanned.map((area) => area.number), [1, 2]);
+      assert.equal(page.work.count, 2, 'mc\u2019s own brief/ folder is not a workarea');
     } finally { fx.cleanup(); }
   });
 
@@ -73,8 +81,8 @@ describe('bare mc', () => {
       const viaWork = runMcCli(['work'], fx.env);
       assert.equal(viaWork.status, 0, viaWork.stderr);
       assert.deepEqual(
-        JSON.parse(runMcCli(['work', '--json'], fx.env).stdout).work.areas.map((a) => a.name),
-        JSON.parse(runMcCli(['--json'], fx.env).stdout).work.areas.map((a) => a.name),
+        JSON.parse(runMcCli(['work', '--json'], fx.env).stdout).work.unplanned.map((a) => a.name),
+        JSON.parse(runMcCli(['--json'], fx.env).stdout).work.unplanned.map((a) => a.name),
       );
       assert.equal(bare.stdout.split('\n').length, viaWork.stdout.split('\n').length);
     } finally { fx.cleanup(); }
@@ -161,11 +169,13 @@ describe('the menu under the page', () => {
   /** WORK, as the page hands it over: the numbers are these numbers. */
   const DATA = {
     work: {
-      count: 2,
+      count: 3,
       areas: [
         { number: 1, name: 'mc-ui', live: true },
         { number: 2, name: 'docx-editor', live: false },
       ],
+      // Under its own heading on the page, and still openable by its number.
+      unplanned: [{ number: 3, name: 'msr-track-1', live: false, unplanned: true }],
       without_workarea: 0,
     },
   };

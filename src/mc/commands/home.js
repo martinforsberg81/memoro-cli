@@ -122,7 +122,9 @@ export async function menu(first, {
 }) {
   let data = first;
   for (;;) {
-    const areas = data.work.areas;
+    // Both WORK lists, in the order the page numbered them: an unplanned
+    // workarea is under its own heading, not out of reach.
+    const areas = [...data.work.areas, ...(data.work.unplanned || [])];
     stdout.write(`\n${KEYS}\n\n`);
     const answer = ask('>', { stdout });
     if (!answer || answer === 'q') return 0;
@@ -146,7 +148,9 @@ export async function menu(first, {
       continue;
     }
 
-    const byNumber = areas[Number(answer) - 1];
+    // By the number printed beside the row, not by position: the two lists
+    // are numbered through, and the page is the listing.
+    const byNumber = areas.find((area) => area.number === Number(answer));
     const byName = areas.find((area) => area.name === answer);
     if (byNumber || byName) return open((byNumber || byName).name, {}, { stdout, stderr });
 

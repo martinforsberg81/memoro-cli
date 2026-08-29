@@ -298,34 +298,58 @@ function intakeLines(lines, c, wide, intake) {
   if (intake.more_loud) say(lines, c, wide, 7, `… ${intake.more_loud} more above the threshold`);
 }
 
+/** One WORK row: the number the menu opens it by, and what the plan says. */
+function areaLine(c, wide, area) {
+  // A row without a plan on main is grey through and through: the missing
+  // plan is the whole content of the row, and nothing in it is state.
+  const known = Boolean(area.status);
+  const mark = area.live ? c(MARK.running, 'green') : c(MARK.quiet, 'grey');
+  const status = area.status || (area.unplanned ? area.repo || '—' : '—');
+  const nameTone = known ? (area.live ? ['bold', 'white'] : ['white']) : ['grey'];
+  const left = `  ${c(String(area.number).padStart(3), 'grey')} ${mark} ${c(pad(clip(area.name, 25), 26), ...nameTone)} `
+    + `${c(pad(clip(status, 15), 16), ...statusTone(area.status))} `;
+  const right = area.last
+    ? paint(c, [
+      { text: `${when(area.last.ts)} `, styles: ['grey'] },
+      { text: area.last.kind, styles: known ? kindTone(area.last.kind) : ['grey'] },
+      { text: area.pr ? ` #${area.pr}` : '', styles: known ? ['cyan'] : ['grey'] },
+    ])
+    : paint(c, [
+      { text: area.pr ? 'PR #' : '', styles: ['grey'] },
+      { text: area.pr ? String(area.pr) : '', styles: known ? ['cyan'] : ['grey'] },
+    ]);
+  return row(c, wide, left, area.next || (known ? '' : unplannedWords(area)), right, known ? null : ['grey']);
+}
+
+/**
+ * What an unplanned row says in the middle: what would be lost by removing
+ * it. No plan is not the interesting part — nothing is going to remove it
+ * either way — so the row carries the two facts that decide it.
+ */
+function unplannedWords(area) {
+  const parts = [];
+  if (area.uncommitted) parts.push(`${area.uncommitted} uncommitted`);
+  if (area.last_commit) parts.push(`last commit ${area.last_commit}`);
+  return parts.length ? parts.join(' · ') : 'no PLAN.md on main';
+}
+
 function workLines(lines, c, wide, work) {
-  const liveCount = work.areas.filter((area) => area.live).length;
+  const unplanned = work.unplanned || [];
+  const liveCount = [...work.areas, ...unplanned].filter((area) => area.live).length;
   const counts = `${work.count} workareas${liveCount ? ` · ${liveCount} live` : ''}`;
   heading(lines, c, wide, 'WORK', counts, 'mc status <name>');
-  for (const area of work.areas) {
-    // A row without a plan on main is grey through and through: the missing
-    // plan is the whole content of the row, and nothing in it is state.
-    const known = Boolean(area.status);
-    const mark = area.live ? c(MARK.running, 'green') : c(MARK.quiet, 'grey');
-    const status = area.status || '—';
-    const nameTone = known ? (area.live ? ['bold', 'white'] : ['white']) : ['grey'];
-    const left = `  ${c(String(area.number).padStart(3), 'grey')} ${mark} ${c(pad(clip(area.name, 25), 26), ...nameTone)} `
-      + `${c(pad(clip(status, 15), 16), ...statusTone(area.status))} `;
-    const right = area.last
-      ? paint(c, [
-        { text: `${when(area.last.ts)} `, styles: ['grey'] },
-        { text: area.last.kind, styles: known ? kindTone(area.last.kind) : ['grey'] },
-        { text: area.pr ? ` #${area.pr}` : '', styles: known ? ['cyan'] : ['grey'] },
-      ])
-      : paint(c, [
-        { text: area.pr ? 'PR #' : '', styles: ['grey'] },
-        { text: area.pr ? String(area.pr) : '', styles: known ? ['cyan'] : ['grey'] },
-      ]);
-    lines.push(row(c, wide, left, area.next || (known ? '' : 'no PLAN.md on main'), right, known ? null : ['grey']));
-  }
+  for (const area of work.areas) lines.push(areaLine(c, wide, area));
   if (work.without_workarea) {
     say(lines, c, wide, 7, `${work.without_workarea} project(s) on main without a workarea — mc status <name>`);
   }
+  // The workareas nothing explains, under one heading rather than scattered
+  // through the rows above. No machine removes them — `mc run` writes the
+  // same list, with whether each branch has landed, to
+  // `~/mc/intake/unplanned-workareas.md` for `mc brief` to raise.
+  if (!unplanned.length) return;
+  lines.push('');
+  say(lines, c, wide, 2, `${unplanned.length} workarea${unplanned.length === 1 ? '' : 's'} with no plan on main — nothing removes them`);
+  for (const area of unplanned) lines.push(areaLine(c, wide, area));
 }
 
 /* ------------------------------------------------------------------- page */

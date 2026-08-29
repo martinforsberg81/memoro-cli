@@ -114,8 +114,10 @@ describe('archiving a done plan, for real', () => {
 
     // The branch the runner pushes is named in the PR it opens; the fake
     // forge squashes exactly that branch onto main.
-    const archived = await runner.archiveDone({ name: 'memoro-cli', path: fx.repo }, plans);
+    const { archived, landed } = await runner.archiveDone({ name: 'memoro-cli', path: fx.repo }, plans);
     assert.deepEqual(archived.sort(), ['alone', 'closed-out', 'documented']);
+    assert.deepEqual(landed.sort(), ['alone', 'closed-out', 'documented'],
+      'the PR merged, so the workareas these plans explain may go later in the round');
 
     const tree = fx.mainTree();
     assert.deepEqual(tree.filter((path) => path.startsWith('docs/project/')).sort(), [
@@ -155,8 +157,9 @@ describe('archiving a done plan, for real', () => {
     // `gh pr list` answers with a number now, as it would while the PR is open.
     const deps = { ...fx.deps, gh: (cwd, args) => (args[1] === 'list' ? { ok: true, status: 0, stdout: '812\n', stderr: '' } : fx.deps.gh(cwd, args)) };
     const runner = createRunner({ deps });
-    const archived = await runner.archiveDone({ name: 'memoro-cli', path: fx.repo }, [{ repo: 'memoro-cli', programme: 'mc', project: 'still-there', status: 'done' }]);
+    const { archived, landed } = await runner.archiveDone({ name: 'memoro-cli', path: fx.repo }, [{ repo: 'memoro-cli', programme: 'mc', project: 'still-there', status: 'done' }]);
     assert.deepEqual(archived, []);
+    assert.deepEqual(landed, []);
     assert.equal(existsSync(join(fx.work, 'runner', 'archive', 'memoro-cli')), false);
   });
 });

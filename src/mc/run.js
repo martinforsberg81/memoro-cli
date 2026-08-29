@@ -19,6 +19,19 @@
  * repository that the runner merges like any other. `done` is the whole
  * trigger; there is nothing to type. The rules are in archive-plan.js.
  *
+ * A round ends by taking away the folder that plan explains: a workarea whose
+ * plan left main this round, whose worktree is clean and whose last row in
+ * runs.tsv ends `merged` is removed — worktree handed back, local branch
+ * deleted, everything it kept beside its checkout moved to
+ * `runner/log/closed/<name>/`. A workarea with no plan on main is never
+ * removed by a machine; it is written to `~/mc/intake/unplanned-workareas.md`
+ * instead. The rules are in close-workarea.js.
+ *
+ * `~/mc/queue.md` is Martin's "these first" and nothing else: names of
+ * projects that still have a step to run, one per line. The round rewrites it
+ * to that shape and a name leaves it the moment its step has run, so a queue
+ * everything ran from is an empty file.
+ *
  * One thing that is not a step rides along: `mc helper`, once per calendar
  * day at the top of the first round after 05:00Z, logged in runs.tsv under
  * its own kind. It opens no worktree and touches no branch — it reads
@@ -30,7 +43,7 @@
  * The rules themselves live in run-plan.js.
  */
 import { spawn, spawnSync } from 'node:child_process';
-import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 import { resolveLaunch } from '../adapters/index.js';
@@ -39,7 +52,9 @@ import {
   planDoc, planSummary, pointerCell, remoteSlug, rowFor, undocumentedRow,
 } from './archive-plan.js';
 import { writeJsonAtomic } from './atomic-write.js';
+import { branchLanded } from './branch-landed.js';
 import { defaultRepos, listPlans, parsePlanFrontmatter, planFields, showBatch } from './brief-collect.js';
+import { closable, lastRunFor, unplannedFile, unplannedRow } from './close-workarea.js';
 import { collectHelper, describeDigest, intakeDir, unreadableSections } from './helper-collect.js';
 import { describeTurn, runHelperTurn } from './helper-turn.js';
 import { workRoot } from './paths.js';
@@ -48,8 +63,8 @@ import { readCanonRole } from './roles.js';
 import { addWorktree } from './work-area.js';
 import {
   HELPER_KIND, HELPER_NAME, QUOTA_SLEEP_MS, TIMEOUT_EXIT, assembleQueue, chooseKind, headlessArgs,
-  helperDue, helperNote, readSessionOutput, reconcilePrompt, sessionSettings, stepPrompt, tsvHeader,
-  tsvRow,
+  helperDue, helperNote, queueFileNames, queueFileText, readSessionOutput, reconcilePrompt,
+  sessionSettings, stepPrompt, strictQueue, tsvHeader, tsvRow,
 } from './run-plan.js';
 
 export const REPO_NAMES = ['memoro', 'memoro-cli'];
@@ -74,6 +89,15 @@ export function realDeps(env = process.env) {
     list: (path) => { try { return readdirSync(path); } catch { return []; } },
     write: (path, text) => { mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, text); },
     append: (path, text) => { mkdirSync(dirname(path), { recursive: true }); appendFileSync(path, text); },
+    // Closing a workarea moves what it kept beside its worktree; it never
+    // deletes it. `~/mc` and `~/mc/runner/log/closed/` are one filesystem, so
+    // a rename is the whole move.
+    move: (from, to) => {
+      try { mkdirSync(dirname(to), { recursive: true }); renameSync(from, to); return true; } catch { return false; }
+    },
+    // The area directory itself, once everything in it has been moved out.
+    // Called with an empty directory and nothing else — see `closeWorkarea`.
+    rmdir: (path) => { try { rmSync(path, { recursive: true }); return true; } catch { return false; } },
     // The two files that say a runner is here and a step is in flight. Whole
     // or not at all: `mc status` reads them while they are being written.
     writeJson: (path, value) => writeJsonAtomic(path, value, { mode: 0o644 }),
@@ -149,6 +173,11 @@ export function createRunner({
     // exist.
     runner: join(root, 'runner', 'runner.json'),
     currentFor: (repo) => join(root, 'runner', `current-${repo}.json`),
+    // Where a closed workarea's filing goes — its inbox, its decisions, the
+    // scratch directory a session left beside its checkout. Moved, never
+    // deleted: the folder is what goes, not what somebody wrote in it.
+    closed: join(root, 'runner', 'log', 'closed'),
+    unplanned: join(intakeDir(deps.env), 'unplanned-workareas.md'),
   };
   const writeJson = deps.writeJson || ((path, value) => deps.write(path, `${JSON.stringify(value, null, 2)}\n`));
   const remove = deps.remove || (() => {});
@@ -272,7 +301,11 @@ export function createRunner({
    * Every plan of one repository that says `done` on main, archived in this
    * round: the directory removed, a `project_log.md` row written for the
    * projects that have none, one PR the runner merges like any other.
-   * Returns the project names it archived.
+   *
+   * Returns `{ archived, landed }` — the projects this round took out of
+   * `docs/project/`, and the ones whose PR actually merged. Only the second
+   * set may have its workarea closed later in the round: the plan goes first,
+   * then the workarea.
    *
    * The work happens in a worktree of its own under `~/mc/runner/archive/`,
    * made from origin/main and taken down again however this ends. Not the
@@ -282,17 +315,18 @@ export function createRunner({
    * removed while the plan that explains it is still on main.
    */
   async function archiveDone(repo, plans) {
+    const none = { archived: [], landed: [] };
     const done = donePlans(plans, repo.name);
-    if (!done.length) return [];
+    if (!done.length) return none;
     const open = openArchivePr(repo);
-    if (open) { say(`archive: ${repo.name} #${open} is still open from an earlier round — not opening another`); return []; }
+    if (open) { say(`archive: ${repo.name} #${open} is still open from an earlier round — not opening another`); return none; }
 
     const branch = `${ARCHIVE_BRANCH_PREFIX}${stamp().replace(/[-:]/gu, '')}`;
     const worktree = join(root, 'runner', 'archive', repo.name);
     if (deps.exists(worktree)) deps.git(repo.path, ['worktree', 'remove', '--force', worktree]);
     if (!deps.git(repo.path, ['worktree', 'add', '-b', branch, worktree, 'origin/main']).ok) {
       say(`archive: ${repo.name} — could not open the archive worktree, nothing archived this round`);
-      return [];
+      return none;
     }
     try {
       return await archiveIn({ repo, worktree, branch, done });
@@ -341,7 +375,7 @@ export function createRunner({
         say(`archive: ${plan.project} names no docs/technical/ note — recorded for mc brief`);
       }
     }
-    if (!archived.length) return [];
+    if (!archived.length) return { archived: [], landed: [] };
 
     deps.write(logPath, logText);
     const title = `Archive ${archived.length} done project${archived.length === 1 ? '' : 's'}: ${archived.join(', ')}`;
@@ -357,20 +391,168 @@ export function createRunner({
     if (!deps.git(worktree, ['commit', '-q', '-m', title, '-m', body]).ok
       || !deps.git(worktree, ['push', '-q', '-u', 'origin', 'HEAD']).ok) {
       say(`archive: ${repo.name} — commit or push failed, nothing archived this round`);
-      return [];
+      return { archived: [], landed: [] };
     }
     const created = deps.gh(worktree, ['pr', 'create', '--base', 'main', '--head', branch, '--title', title, '--body', body]);
     const listed = deps.gh(worktree, ['pr', 'list', '--head', branch, '--state', 'open', '--json', 'number', '-q', '.[0].number']);
     const pr = (/(\d+)\s*$/u.exec(created.stdout.trim())?.[1]) || (listed.ok && listed.stdout.trim()) || null;
-    if (!pr) { say(`archive: ${repo.name} — the PR could not be opened (${created.stderr.trim().split('\n').at(-1) || 'no number'})`); return []; }
+    if (!pr) { say(`archive: ${repo.name} — the PR could not be opened (${created.stderr.trim().split('\n').at(-1) || 'no number'})`); return { archived: [], landed: [] }; }
 
     if (undocumented.length) {
       const path = join(intakeDir(deps.env), 'undocumented-closures.md');
       if (!deps.exists(path)) deps.write(path, UNDOCUMENTED_HEADER);
       deps.append(path, `${undocumented.join('\n')}\n`);
     }
-    if (merge) await mergePr(worktree, `archive/${repo.name}`, pr);
-    return archived;
+    // Only a merged archive PR lets the workareas go: until the plan is off
+    // main, the folder it explains stays where it is.
+    const landed = (merge && await mergePr(worktree, `archive/${repo.name}`, pr)) ? archived : [];
+    return { archived, landed };
+  }
+
+  /* -------------------------------------------------------------- closing */
+
+  /** The repositories this workarea has a checkout of. Empty means it is not one. */
+  function areaRepos(name) {
+    return repos.filter((repo) => deps.exists(join(root, name, repo.name, '.git')));
+  }
+
+  /**
+   * Every directory under `~/mc` that is a workarea, sorted.
+   *
+   * A folder without `memoro/` or `memoro-cli/` in it is not a workarea:
+   * `bin/`, `brief/`, `decisions/`, `inbox/`, `intake/`, `runner/`, `status/`
+   * and the two role homes are mc's own, and the runner has no business
+   * looking at them.
+   */
+  function workareas() {
+    return deps.list(root).filter((name) => !name.startsWith('.') && areaRepos(name).length).sort();
+  }
+
+  /** `git status --porcelain` across every checkout the area holds. */
+  function uncommitted(name) {
+    return areaRepos(name).reduce((count, repo) => {
+      const out = gitOut(join(root, name, repo.name), ['status', '--porcelain']) || '';
+      return count + out.split('\n').filter(Boolean).length;
+    }, 0);
+  }
+
+  /**
+   * One closable workarea, taken down: the worktree removed through the
+   * repository that owns it, the local branch deleted, and everything the
+   * folder kept beside its checkout moved to `runner/log/closed/<name>/`
+   * before the folder itself goes.
+   *
+   * What mc deletes is nothing: every file the folder holds outside the
+   * checkout is moved, and the checkout is git's to hand back — its content
+   * is on origin, and the remote branch and the PRs stay. `git worktree
+   * remove` does take the ignored files with it, which on the workareas
+   * measured 2026-08-29 was `node_modules/`, `__pycache__/`, `.wrangler/`,
+   * `public/dist/` and one generated `.sql` — build output a fresh checkout
+   * rebuilds, and nothing a person wrote.
+   *
+   * A step that fails stops the rest and says so: the folder keeps whatever
+   * has not been moved yet, and the next round tries again.
+   */
+  function closeWorkarea(name) {
+    const area = join(root, name);
+    for (const repo of areaRepos(name)) {
+      const worktree = join(area, repo.name);
+      if (!deps.git(repo.path, ['worktree', 'remove', worktree]).ok) {
+        say(`close: ${name} — git worktree remove failed for ${repo.name}, left alone`);
+        return false;
+      }
+      deps.git(repo.path, ['branch', '-D', name]);
+    }
+    const kept = deps.list(area).filter(Boolean);
+    for (const entry of kept) {
+      if (!deps.move(join(area, entry), join(paths.closed, name, entry))) {
+        say(`close: ${name} — could not move ${entry} to ${join(paths.closed, name)}, folder left alone`);
+        return false;
+      }
+    }
+    deps.rmdir(area);
+    const moved = kept.length ? `, ${kept.length} file(s) moved to runner/log/closed/${name}/` : '';
+    say(`close: ${name} removed — worktree, branch ${name}${moved}`);
+    return true;
+  }
+
+  /**
+   * The end of the round: every workarea whose plan is finished is taken
+   * down, and every workarea with no plan on main is written where somebody
+   * looks.
+   *
+   * `landed` is the projects whose archive PR merged in this round — the plan
+   * goes first, then the workarea, so a workarea is never removed while the
+   * plan that explains it is still on main. `plans` is the round's reading of
+   * main, taken before that archive removed them.
+   *
+   * A plan that is neither done nor missing is passed over without asking git
+   * anything: `closable` would answer the same, and forty `git status` calls
+   * a round for an answer already on the plan is not a price worth paying.
+   */
+  function closeWorkareas(plans, landed = []) {
+    const byProject = new Map(plans.map((plan) => [plan.project, plan]));
+    const tsv = deps.read(paths.runs) || '';
+    const rows = [];
+    let closed = 0;
+    for (const name of workareas()) {
+      const plan = byProject.get(name) || null;
+      if (plan && plan.status !== 'done') continue;
+      const verdict = closable({
+        plan,
+        dirty: uncommitted(name) > 0,
+        live: deps.tmuxHas(`mc-${name}`),
+        lastRun: lastRunFor(tsv, name),
+      });
+      if (verdict.unplanned) { rows.push(unplannedFor(name)); continue; }
+      if (!verdict.close) { say(`close: ${name} kept — ${verdict.why}`); continue; }
+      if (!landed.includes(name)) { say(`close: ${name} kept — its plan is still on main`); continue; }
+      if (closeWorkarea(name)) closed += 1;
+    }
+    deps.write(paths.unplanned, unplannedFile(rows));
+    if (rows.length) say(`close: ${rows.length} workarea(s) with no plan on main — ${paths.unplanned}`);
+    return { closed, unplanned: rows.length };
+  }
+
+  /**
+   * One row of `~/mc/intake/unplanned-workareas.md`. `branch` is asked of
+   * content rather than of commit counts — the runner squash-merges, so
+   * "ahead" by commits says nothing (branch-landed.js).
+   */
+  function unplannedFor(name) {
+    const [repo] = areaRepos(name);
+    const worktree = join(root, name, repo.name);
+    return unplannedRow({
+      name,
+      repo: repo.name,
+      uncommitted: uncommitted(name),
+      lastCommit: gitOut(worktree, ['log', '-1', '--format=%cs']) || '-',
+      branch: branchLanded(worktree, name, { run: (args) => gitOut(worktree, args) }),
+    });
+  }
+
+  /* ---------------------------------------------------------------- queue */
+
+  /**
+   * `~/mc/queue.md` rewritten to what it is for: names of projects that still
+   * have a step to run. Everything else goes, one runner.log line each.
+   */
+  function tidyQueue(plans) {
+    const text = deps.read(paths.queue);
+    if (text == null) return;
+    const { names, dropped } = strictQueue(text, plans);
+    for (const item of dropped) say(`queue: dropped "${item.line}" — ${item.why}`);
+    const next = queueFileText(names);
+    if (next !== text) deps.write(paths.queue, next);
+  }
+
+  /** A name leaves the queue the moment its step has run. */
+  function dropFromQueue(name) {
+    const text = deps.read(paths.queue);
+    if (text == null) return;
+    const names = queueFileNames(text).filter((line) => line !== name);
+    const next = queueFileText(names);
+    if (next !== text) deps.write(paths.queue, next);
   }
 
   /**
@@ -495,6 +677,9 @@ export function createRunner({
     logRun({ ts: stamp(), name, kind, exit: result.status, seconds, pr, turns: read.turns, input: read.input, output: read.output, cacheRead: read.cacheRead, cacheWrite: read.cacheWrite, session: read.session, note });
     say(`${name}: ${kind} done rc=${result.status} ${seconds}s pr=${pr} turns=${read.turns} note=${note}`);
     if (read.quota) await quotaPause();
+    // The queue is Martin's "these first", and it empties itself: this
+    // project has had its step, so its name leaves the file now.
+    dropFromQueue(name);
     // A merged step or a finished reconcile both leave the project ready for
     // its next step now; 'merged' is the round's cue to stay on it.
     return note === 'success,merged' || (kind === 'reconcile' && note === 'success') ? 'merged' : 'ran';
@@ -580,11 +765,14 @@ export function createRunner({
     // production is not what somebody typing it asked for.
     if (!once && !stopRequested()) await runHelperDay();
     const { names, plans } = queue();
+    if (!once) tidyQueue(plans);
     // A plan that says `done` is archived in the round the runner reads it,
     // before any step of that round runs — one PR per repository, and the
     // two repositories never touch. Not under `--once`, for the reason the
     // helper is not: that is one step to watch, not a round.
-    const archived = once ? [] : (await Promise.all(repos.map((repo) => archiveDone(repo, plans)))).flat();
+    const archives = once ? [] : await Promise.all(repos.map((repo) => archiveDone(repo, plans)));
+    const archived = archives.flatMap((a) => a.archived);
+    const landed = archives.flatMap((a) => a.landed);
     const left = names.filter((name) => !archived.includes(name));
     // `--once` is one step, so it is one lane over the whole queue in
     // Martin's order — there is nothing for a second lane to do.
@@ -595,6 +783,11 @@ export function createRunner({
       ran: results.reduce((sum, r) => sum + r.ran, 0),
       stop: results.some((r) => r.stop),
     };
+    // Last of all, and only in a whole round that was not cut short: the
+    // workareas whose plan left main this round are taken down, and the ones
+    // with no plan at all are written where Martin looks. `--once` changes
+    // nothing but the one step it exists to watch.
+    if (!once && !out.stop) closeWorkareas(plans, landed);
     if (results.some((r) => r.once)) out.once = true;
     return out;
   }
@@ -606,7 +799,11 @@ export function createRunner({
     for (const repo of repos) remove(paths.currentFor(repo.name));
   };
 
-  return { paths, say, round, runStep, runLane, splitLanes, runHelperDay, archiveDone, queue, stopRequested, syncMain, mergePr, planOf, repoOf, markRunner, clearRunner };
+  return {
+    paths, say, round, runStep, runLane, splitLanes, runHelperDay, archiveDone, queue, stopRequested,
+    syncMain, mergePr, planOf, repoOf, markRunner, clearRunner, closeWorkareas, closeWorkarea,
+    workareas, tidyQueue,
+  };
 }
 
 /**

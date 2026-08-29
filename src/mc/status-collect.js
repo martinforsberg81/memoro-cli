@@ -27,6 +27,9 @@ import { chooseKind } from './run-plan.js';
 /** What the runner ran everything on; runs.tsv carries no model column yet. */
 export const RUNNER_MODEL = 'opus';
 
+/** The repositories a directory under `~/mc` must hold one of to be a workarea. */
+export const REPO_NAMES = Object.freeze(['memoro', 'memoro-cli']);
+
 /* -------------------------------------------------------------------- kind */
 
 /**
@@ -132,15 +135,26 @@ export function decisionsBlock(decisions) {
 
 /* ------------------------------------------------------------------- areas */
 
-/** Areas under the work root that hold at least one checkout. */
-export function areasWithCheckout(root) {
+/**
+ * Areas under the work root that hold a checkout of a repository mc knows,
+ * each with the repositories it holds.
+ *
+ * A folder without `memoro/` or `memoro-cli/` in it is not a workarea and is
+ * never listed: `bin/`, `brief/`, `decisions/`, `inbox/`, `intake/`,
+ * `runner/`, `status/` and the two role homes are mc's own filing. They were
+ * off the page already, but by accident — nothing under them happens to hold
+ * a `.git` — and a repository mirror dropped into one would have put mc's own
+ * bookkeeping on the board as work.
+ */
+export function areasWithCheckout(root, repoNames = REPO_NAMES) {
   try {
     return readdirSync(root, { withFileTypes: true })
       .filter((d) => d.isDirectory() && !d.name.startsWith('.'))
-      .map((d) => d.name)
-      .filter((name) => {
-        try { return readdirSync(join(root, name)).some((sub) => existsSync(join(root, name, sub, '.git'))); } catch { return false; }
-      })
-      .sort();
+      .map((d) => ({
+        name: d.name,
+        repos: repoNames.filter((repo) => existsSync(join(root, d.name, repo, '.git'))),
+      }))
+      .filter((area) => area.repos.length)
+      .sort((a, b) => a.name.localeCompare(b.name));
   } catch { return []; }
 }
