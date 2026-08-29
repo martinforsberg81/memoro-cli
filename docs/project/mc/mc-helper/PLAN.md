@@ -1,6 +1,6 @@
 ---
-status: waiting-decision
-next: "Waiting on `~/mc/mc-utredning/decisions/mc-2.md` (which shape the helper takes) — it carries no `**Beslut:**` line yet, and the file itself says the runner leaves this plan alone until it does. mc-1 is answered but concerns `mc-dormant`/`mc-brief` and is already applied (#422, #423); it does not unblock this plan. Then Step 1 — `mc helper --collect`: the error and maintenance digest from what memoro already records, no model — done when `~/mc/intake/errors-<date>.md` is written from production and names the new fingerprints since the previous digest."
+status: ready
+next: "Step 2 — the proposal turn: `canon/roles/helper.md` and bare `mc helper`, one headless Sonnet turn that reads the digest, `docs/project/project_log.md` and the PLAN.md frontmatters and writes zero or more `~/mc/intake/proposals/<date>-<slug>.md`. Done when a real digest yields a proposal Martin can read in `mc brief`. The first one is already named by the digest: `/api/admin/operations/status` and `/api/admin/health` are session-admin only, so the nightly and morning outcomes reach no script; second is the deploy webhook, which writes nothing into `deploy:index`."
 budget: 150k
 needs: [mc-run]
 ---
@@ -12,12 +12,14 @@ needs: [mc-run]
 Somebody keeps an eye on memoro.me all the time, and it is not Martin
 staring at `admin.html`. memoro already records what matters — grouped
 worker errors in D1 (`worker_errors`, written by the tail worker),
-AI-provider errors, the nightly and morning tasks' outcomes in
-`operational_events`, deploy age, and D1/R2/KV health behind
-`/api/admin/health` and `/api/admin/operations/status` — but nothing reads
-it unless a person does, and nothing alerts (survey 2026-08-29: no uptime
+AI-provider errors, the server's own analysis pass behind
+`/admin/analysis`, the deploy log in `deploy:index`, and the nightly and
+morning tasks' outcomes in `operational_events` — but nothing reads it
+unless a person does, and nothing alerts (survey 2026-08-29: no uptime
 check, no notifier, no Logpush; `survey-errors.mjs` needs a hand-computed
-`--since`).
+`--since`). Some of it does not reach a script at all: measured against
+production on 2026-08-29, the `/api/admin/*` observability routes answer
+401 to an admin token and only a browser session opens them.
 
 `mc helper` is the investigation's §12.3, as decided there: **a script
 first** — a daily digest into `~/mc/intake/errors-<date>.md` from the
@@ -35,30 +37,44 @@ the new-error count and the proposals waiting.
 
 ## Success criteria
 
-- [ ] `mc helper --collect [--since <iso>]` runs from `~/memoro` and writes
-      `~/mc/intake/errors-<date>.md` with four sections, each saying what
-      it could not read. No model. The sources and their auth differ:
+- [x] `mc helper --collect [--since <iso>] [--limit <n>] [--threshold <n>]`
+      writes `~/mc/intake/errors-<date>.md`, each section saying what it
+      could not read. No model, no write to production. The sources and
+      their auth differ, and the surface matters more than the plan first
+      assumed — `/admin/*` is the admin-token surface, `/api/admin/*` is
+      session-admin:
       - error fingerprints — `scripts/admin/survey-errors.mjs --env
-        production --limit <n>`, which resolves `ADMIN_TOKEN` itself
-        through `scripts/_lib/admin-token.mjs` and prints JSON on stdout;
+        production --limit <n> --since <iso>`, which resolves the admin
+        token itself through `scripts/_lib/admin-token.mjs` and prints
+        JSON on stdout;
+      - analysis items — `GET /admin/analysis` with the bearer token, the
+        server's own LLM pass over errors and feedback (decision mc-2);
+        the helper never triggers the `POST` that runs it;
       - AI-provider errors — `inspect-ai-provider-errors.mjs --env
         production --days 1`, which does **not** use the admin token but
         shells out to `wrangler d1 execute memoro-db --remote`, so it
         fails differently and may fail alone;
-      - health — `GET /api/admin/health` with the same bearer token;
-      - operations status — `GET /api/admin/operations/status`: nightly and
-        morning task outcomes and staleness.
-- [ ] The delta is computed by the collect step against the previous
+      - deploys — `GET /admin/deploy/logs?limit=20`, the same
+        `deploy:index` KV key the nightly `checkDeployAge` reads;
+      - D1 health — `GET /ping-d1`, which needs no credential.
+- [x] The delta is computed by the collect step against the previous
       digest's fingerprint set, not by `--since` alone: `--since` is passed
       through to `/api/admin/errors` and filters rows, but neither the
       script nor the route reports what is new relative to a prior run.
-- [ ] The deploy section reports what is actually reachable: the nightly
-      `checkDeployAge` task's pass/fail from operations status, plus the
-      local date of `origin/main` in `~/memoro`. The deployed commit and
-      its age are **not** exposed by any admin route (see What the code
-      taught us) — the section says so in one line rather than guessing,
-      and "expose deploy age" is a candidate for the helper's first
-      proposal.
+      The digest carries its own `<!-- mc-helper:state v1 -->` block for
+      exactly this, and a second run on the same day measures against
+      yesterday rather than against itself.
+- [x] The deploy section reports what is actually reachable, and it is more
+      than the plan expected: `/admin/deploy/logs` returns the deploy index
+      itself, so the digest computes last success, age and consecutive
+      failures the same way `checkDeployAge` does (36 h), next to the local
+      `origin/main`. An **empty** index is reported as a silent webhook,
+      not as a healthy deploy — which is what production shows today.
+- [x] The digest names what it cannot reach and why, rather than carrying a
+      section that is always empty: the nightly and morning task outcomes
+      are behind `/api/admin/operations/status`, and full service health
+      behind `/api/admin/health`, both session-admin. Exposing them to the
+      admin token is the helper's first candidate proposal.
 - [ ] `mc helper` = collect, then one headless turn with the `helper`
       role from `canon/roles/helper.md` (model from the role, Sonnet)
       that writes zero or more `~/mc/intake/proposals/<date>-<slug>.md`,
@@ -71,11 +87,12 @@ the new-error count and the proposals waiting.
 - [ ] `mc status` gets a HELPER block: last digest time, new fingerprints
       in it, proposals waiting; `mc brief --collect` lists the proposals
       under a "Proposals" section so the brief session can move them.
-- [ ] A digest line with a new fingerprint above a threshold (default 20
-      hits in 24 h) is marked `!` and `mc status` prints it first.
-- [ ] Tests: the digest on stubbed script output and stubbed routes; the
-      delta against a previous digest; proposals parsing; the daily gate
-      in the runner; the status block — no network, no model.
+- [x] A digest line with a new fingerprint above a threshold (default 20
+      hits in 24 h) is marked `!`. `mc status` printing it first is step 3.
+- [x] Tests: the digest on stubbed script output and stubbed routes; the
+      delta against a previous digest; the failure domains kept separate —
+      no network, no model. Proposals parsing, the daily gate in the runner
+      and the status block come with steps 2 and 3.
 
 ## Contract
 
@@ -90,11 +107,22 @@ the new-error count and the proposals waiting.
 
 ## Steps
 
-- [ ] **0. Decision** — `~/mc/mc-utredning/decisions/mc-2.md`: this shape,
-      or the admin UI alone, or an external uptime/alert service first.
-      Still open — no `**Beslut:**` line as of 2026-08-29.
-- [ ] **1. The digest** — `mc helper --collect`. Done when one digest is
-      written from production and a second run names only what is new.
+- [x] **0. Decision** — `~/mc/mc-utredning/decisions/mc-2.md`, answered
+      2026-08-29: **A**, this shape. Set up `mc helper` with intake as
+      planned. The ruling adds a source and settles `/improve`: the machine
+      behind `/improve` is good and is reused, its surface is not. Collect
+      reads the analysis directly and puts the items in the digest beside
+      the raw fingerprints; the LLM pass itself (`POST`) runs on the
+      server's own cadence, never once a day from the helper. The
+      `/improve` command and the `docs/TODO.md` sentinels are not used —
+      they make a human in a terminal into the queue, cost a repo commit
+      per sync, and put proposals where `mc brief` cannot see them.
+      `scripts/sync-todo.mjs` is retired in a later step, once the helper
+      has run for a week (utredningen §9: two systems doing the same thing,
+      one should go). That retirement is **step 5** below.
+- [x] **1. The digest** — `mc helper --collect`. Done: one digest written
+      from production 2026-08-29 (50 fingerprints, 2.5 s) and a second run
+      against it named only the new ones.
 - [ ] **2. The proposal turn** — `canon/roles/helper.md`, `mc helper`.
       Done when a real digest yields a proposal Martin can read in
       `mc brief`. `canon/roles/` today holds `brief.md`, `plan.md` and
@@ -105,6 +133,11 @@ the new-error count and the proposals waiting.
       is `~/mc/bin/runner.sh`, and the daily gate belongs in `mc run`, not
       in the shell script that is about to be deleted.
 - [ ] **4. Close-out** — `docs/technical/mc-helper.md`, `project_log.md`.
+- [ ] **5. Retire `sync-todo.mjs`** — in `~/memoro`, a week after the
+      helper has been running (decision mc-2). Done when `/improve`,
+      `scripts/sync-todo.mjs` and the `docs/TODO.md` production sentinels
+      are gone and the analysis reaches Martin only through the digest.
+      Not before: the helper has to have earned it first.
 
 ## What the code taught us
 

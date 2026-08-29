@@ -184,6 +184,15 @@ MAINTENANCE
   mc brief --collect [--offline]   Only the file: ~/mc/brief/<date>.md, no
                                     model, from the runner log, PRs, plans
                                     on main, decision files and the queue
+  mc helper --collect              The daily digest of what production is
+                                    saying: ~/mc/intake/errors-<date>.md from
+                                    the error survey, the analysis items,
+                                    AI-provider errors, health and operations
+                                    — plus what is new since the last digest.
+                                    Reads production, writes nothing to it
+  mc helper --collect --since <iso> [--limit <n>] [--threshold <n>]
+                                    …a different window, more fingerprints,
+                                    or another bar for marking one `!`
   mc plan <name>                   A planning session that ends in a PLAN.md:
                                     a fresh foreground session in the workarea
                                     (made from origin/main if missing) with
