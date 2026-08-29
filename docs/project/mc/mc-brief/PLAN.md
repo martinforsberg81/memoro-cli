@@ -1,6 +1,6 @@
 ---
-status: ready
-next: "Step 4 — close-out: `docs/technical/mc-brief.md` (what it is, what it reads, what it writes) and a row in `docs/project/project_log.md` — done when both exist and the help line still names `mc brief` (it already does, #417)."
+status: done
+next: "nothing — `docs/technical/mc-brief.md` and the `project_log.md` row exist, and the help line names `mc brief` (#417). The one criterion a session cannot tick is the second, and it stays unticked: no headless session can watch a program take the terminal, so what is verified is the argv and the inherited-stdio spawn, and the launch itself is for Martin to see once. It is written down as *Not measured* in the note, which outlives this plan."
 budget: 150k
 needs: []
 ---
@@ -84,12 +84,29 @@ runs whether or not `mc brief` is ever called.
       against the live `~/mc`, 45 decision files with 10 unanswered and an
       empty "watched but never shown" list (was 41/9, and one of the 41 was a
       358 kB log).
-- [ ] **4. Close-out** — `docs/technical/mc-brief.md` (what it is, what it
-      reads, what it writes), row in `docs/project/project_log.md`; the help
-      line landed in #417. Done when both files exist.
+- [x] **4. Close-out** (2026-08-29) — `docs/technical/mc-brief.md` (what it
+      is, what it reads, what it writes, how an answer travels, and what is
+      not measured), row in `docs/project/project_log.md`; the help line
+      landed in #417. Done when both files exist. Verified: both files are on
+      the branch, `mc brief --collect` was run twice against a copy of the
+      real `~/mc` and both real repositories — nine sections in the documented
+      order, 1.5 s online and 0.2 s offline over 51 plans, 15 decision files,
+      8 proposals and 72 runner rows — and `npm test` for the two brief
+      suites is green.
 
 ## What the code taught us
 
+- The Goal's parenthesis — the `**Beslut:**` line as "the runner's trigger" —
+  is history, and the note says so instead. The runner runs `ready` plans and
+  reads no decision file at all (Martin, 2026-08-29); `~/mc/bin/runner.sh`
+  and its grep are deleted. The line is read in `brief-collect.js` and
+  nowhere else, and an answer reaches the runner only by a session writing it
+  into PLAN.md. That also settles the last note below: there is no
+  `answeredDecisions` rule left to fix.
+- The collect is five times faster than the plan measured, without anyone
+  aiming at it: 1.5 s online and 0.2 s offline on 2026-08-29, against 7.1 s
+  and 1.6 s on 2026-08-25. The concurrent network was one half; `cat-file
+  --batch` replacing a `git show` per plan was the other.
 - Recommendations come in two shapes: a `## Rekommendation` heading (night-1
   sessions) and a bold lead `**Recommendation: option 2.**` (docx-editor).
   Both are quoted into *Waiting on Martin*; a question with neither shows a
