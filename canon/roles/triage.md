@@ -34,8 +34,11 @@ no programme directory exists yet, create `docs/project/<programme>/` with
 the programme document moved there, one project directory per state that can
 still start, each with its own PLAN.md, and make THIS workarea's PLAN.md the
 first state that can start. Lift every "decision still required" into
-`../decisions/<programme>-<n>.md` at the workarea root (one question per
-file, with the options and your recommendation).
+`../decisions/<programme>-<n>.md` at the workarea root — one question per
+file, written as a proposal Martin says GO to: what the code says, and a
+`## Rekommendation` naming the one thing you would do. Never a menu of
+options. A question that is unclear, or that reading further would answer,
+gets no file at all; read instead.
 
 Add a frozen notice at the top of the old plan pointing to the new location.
 If everything on this branch is already on main and nothing remains, set
