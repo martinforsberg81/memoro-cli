@@ -1,6 +1,6 @@
 ---
-status: ready
-next: "Step 4 — close-out: `docs/technical/mc-helper.md` (the two halves, the daily gate in `mc run`, the intake directory, what the digest cannot reach and why) and a `project_log.md` entry. Done when a reader who has never seen the helper can say what it reads, when it runs, what it writes and who acts on it, without opening the source."
+status: done
+next: "nothing — every success criterion is checked and step 4 closed it out. Step 5 (retiring `sync-todo.mjs`) is not this plan's to do: it is work in `~/memoro`, date-gated to on or after 2026-09-05, and has to be carried by a memoro-side plan or a queue entry. See Steps."
 budget: 150k
 needs: []
 ---
@@ -157,12 +157,30 @@ the new-error count and the proposals waiting.
       same the next morning — with the 04:30 round silent and the 09:00 and
       22:00 rounds silent. The page's INTAKE section printed a real digest's
       four `!` lines, three named and one counted.
-- [ ] **4. Close-out** — `docs/technical/mc-helper.md`, `project_log.md`.
-- [ ] **5. Retire `sync-todo.mjs`** — in `~/memoro`, a week after the
-      helper has been running (decision mc-2). Done when `/improve`,
-      `scripts/sync-todo.mjs` and the `docs/TODO.md` production sentinels
-      are gone and the analysis reaches Martin only through the digest.
-      Not before: the helper has to have earned it first.
+- [x] **4. Close-out** — `docs/technical/mc-helper.md`, `project_log.md`.
+      Done: the doc answers the four questions in order — what it reads (the
+      five sources with their transport, credential and timeout, and the
+      three things about that table that were measured rather than assumed),
+      what it cannot reach and why, when it runs (the daily gate, and why the
+      runs.tsv row is the whole of it), what it writes (the digest's
+      sections, the state block, the proposal frontmatter) and who acts on it
+      (`mc brief --collect`, then the page's INTAKE — nobody automatic). No
+      source file is required to follow it; the file table at the end is for
+      the reader who wants to change something, not to understand it.
+- [ ] **5. Retire `sync-todo.mjs`** — **handed over, not done here.** In
+      `~/memoro`, on or after 2026-09-05, a week after the helper started
+      running (decision mc-2). Done when `/improve`, `scripts/sync-todo.mjs`
+      and the `docs/TODO.md` production sentinels are gone and the analysis
+      reaches Martin only through the digest. Not before: the helper has to
+      have earned it first.
+
+      This plan cannot carry it. A plan under memoro-cli's `docs/project/`
+      runs in the memoro-cli worktree, and every file this step touches is in
+      the other repository; keeping the plan `ready` for it would only make
+      the runner open the wrong worktree, a week early. It needs a
+      memoro-side plan or a queue entry when the week is up. Martin's to
+      start — flagged in the close-out PR and in the project log row so it is
+      written down somewhere that outlives this directory.
 
 ## What the code taught us
 
@@ -262,6 +280,14 @@ production calls made.
   `unreadableSections` in helper-collect.js and `describeTurn` in
   helper-turn.js now; the command imports them. A runner log and a terminal
   cannot describe the same digest differently any more.
+- **Step 5 belongs to the other repository, so the plan cannot end
+  `ready`.** The close-out found the one thing left in Steps is work in
+  `~/memoro`: the runner takes a plan's repo from where the plan lives, so a
+  `ready` mc-helper plan whose `next:` was step 5 would open the memoro-cli
+  worktree and find nothing to edit. The plan is `done` and step 5 is handed
+  over in writing instead. Recorded here because "there is a step left, so
+  the plan is not done" is the obvious reading and it is the wrong one.
+
 - **mc-1 is spent.** Its ruling (pm/pm-helper dormant, `mc watch`
   removed, `worker` kept) landed in #422 and #423 and touches nothing
   here. The reserved role name `helper` it mentions is free for
@@ -274,3 +300,4 @@ production calls made.
 - `~/memoro/scripts/admin/survey-errors.mjs`, `inspect-ai-provider-errors.mjs`, `scripts/help.mjs`
 - `~/memoro/src/routes/admin/health.js`, `operations.js`, `errors.js`; `src/operations/admin-status.js`; `src/automation/tasks/deploy-monitor.js`
 - `docs/project/mc/mc-run/PLAN.md` — the runner that runs it; `mc-dormant` — why there is no pm-helper
+- `docs/technical/mc-helper.md` — what this project built (step 4)
