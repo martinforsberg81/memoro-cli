@@ -10,7 +10,7 @@ import { createRunner, runLoop } from '../../src/mc/run.js';
  * a "session" that returns what the test says. Nothing starts, nothing is
  * written outside `files`.
  */
-function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], live = [], areas = {}, conflicts = {}, roles = true, now = '2026-08-29T10:00:00Z', runs = null, collect = okCollect, helperTurn = okTurn, projectLog = {}, archive = {}, landed = [], removeFails = [] } = {}) {
+function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], live = [], areas = {}, conflicts = {}, roles = true, now = '2026-08-29T10:00:00Z', runs = null, collect = okCollect, helperTurn = okTurn, projectLog = {}, archive = {}, landed = [], removeFails = [], heads = {} } = {}) {
   const root = '/w';
   const files = { [`${root}/queue.md`]: queue };
   if (runs != null) files[`${root}/runner/log/runs.tsv`] = runs;
@@ -140,7 +140,16 @@ function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], live = 
       if (args[0] === 'diff') return { ok: true, stdout: (conflicts[cwd.split('/')[2]] || []).join('\n') };
       // `rev-parse -q --verify MERGE_HEAD` is the reconcile check and answers
       // no; `rev-parse origin/main^{tree}` is branchLanded's base.
-      if (args[0] === 'rev-parse') return args[1] === 'origin/main^{tree}' ? { ok: true, stdout: 'basetree' } : { ok: false, stdout: '' };
+      if (args[0] === 'rev-parse') {
+        if (args[1] === 'origin/main^{tree}') return { ok: true, stdout: 'basetree' };
+        // `rev-parse --abbrev-ref HEAD` in a workarea's checkout: the branch
+        // it actually sits on. `heads` names the ones that are not the folder.
+        if (args[1] === '--abbrev-ref') {
+          const head = heads[cwd.split('/')[2]];
+          return head ? { ok: true, stdout: head } : { ok: false, stdout: '' };
+        }
+        return { ok: false, stdout: '' };
+      }
       if (args[0] === 'merge-tree') return { ok: true, stdout: landed.includes(args.at(-1)) ? 'basetree' : 'othertree' };
       if (args[0] === 'branch') return { ok: true, stdout: cwd.split('/')[2] };
       return { ok: true, stdout: '', stderr: '' };
@@ -802,6 +811,21 @@ test('a workarea with no plan on main is never removed, and is written to intake
   assert.match(intake, /\| mc-repo \| memoro-cli \| 0 \| abc1234 \| landed \|/u);
   assert.match(intake, /\| msr-track-1 \| memoro \| 1 \| abc1234 \| ahead \|/u);
   assert.match(f.files['/w/runner/log/runner.log'], /close: 2 workarea\(s\) with no plan on main/u);
+});
+
+test('the branch is asked of the worktree, not guessed from the folder name', async () => {
+  // The sixteen workareas from before the plan world were made by hand and
+  // need not be named after their branch: msr-track-1 sits on
+  // `msr-track1-skin`. Guessing left the one column that says whether
+  // anything would be lost reading `unknown` for most of the file.
+  const f = fixture({
+    areas: { 'msr-track-1': { repo: 'memoro' } },
+    heads: { 'msr-track-1': 'msr-track1-skin' },
+    landed: ['msr-track1-skin'],
+    session: okSession(),
+  });
+  await createRunner({ deps: f.deps }).round();
+  assert.match(f.files['/w/intake/unplanned-workareas.md'], /\| msr-track-1 \| memoro \| 0 \| abc1234 \| landed \|/u);
 });
 
 test('a live workarea is never closed, however done its plan is', async () => {

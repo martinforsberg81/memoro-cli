@@ -131,7 +131,14 @@ Two things a machine must not decide, so it writes them down and moves on:
   somebody started and only Martin can say is finished, so no machine removes
   one. Each row carries whether the branch's content is already on main —
   asked of content with `git merge-tree`, not of commit counts — which is the
-  one fact that says whether anything would be lost.
+  one fact that says whether anything would be lost. The branch is asked of
+  the worktree (`rev-parse --abbrev-ref HEAD`), never guessed from the folder
+  name: a workarea from before the plan world was made by hand and need not
+  be named after its branch, and a stale branch that *does* carry the folder's
+  name would make the column answer confidently about something nobody is on
+  (`mc-repo` sits on `cut-old-surface`). `unknown` in that column means
+  `merge-tree` hit a conflict, which is itself an answer: a branch that
+  conflicts with main holds something main does not.
 
 Both are raised in `mc brief`, which is where they are read: two sections,
 *Archived without a note* and *Workareas with no plan on main*, and the brief

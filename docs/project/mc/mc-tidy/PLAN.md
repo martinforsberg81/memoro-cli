@@ -1,6 +1,6 @@
 ---
-status: ready
-next: "Step 4 — the first round, measured: read runner.log and both origin/mains after the round that first ran the merged tidying, and settle the six criteria below that only a round can answer — done when each is either ticked with what was measured or rewritten to what actually happened and why, and `status:` is `done` in the same session. Nothing is built here; if the round has not run the merged code yet, say so and end the plan on what the tests cover."
+status: done
+next: "nothing — step 4 measured what a session can measure and says plainly what it could not. The round that first runs the merged tidying is the next one, not this one: `mc run --rounds 1` loads its module graph at process start, so #454-#456 merged into a round that had already read the old `run.js`. So the six round criteria are rewritten to what was measured — a live dry run of the merged code against the real `~/mc`, the real `runs.tsv` and both real origin/mains, with every write and every mutating git call refused — and runner.log is where the round itself shows."
 budget: 150k
 needs: [mc-ui]
 ---
@@ -104,35 +104,56 @@ page keep the list clean on their own.
 
 ## Success criteria
 
-- [ ] `mc run` archives every plan that says `done` on main, in the round it
-      reads it, and says so in runner.log — one line per project.
-- [ ] The first run after merge archives the ten done plans of 2026-08-29 —
-      memoro: docs-structure, improve-chat-runtime,
-      language-voice-lexical-selection, language-voice-live-watchdog,
-      language-voice-playback-underrun, continue-section, msr-design,
-      sql-readiness-session-A; memoro-cli: mc-ui, mc-ui-polish — and leaves
-      every other directory in `docs/project/` untouched.
-- [ ] After that run, no directory under `docs/project/` in either
-      repository has a PLAN.md that says `done`, and every one that was
-      removed has exactly one `project_log.md` row naming it — the two that
-      already had a row (mc-ui, mc-ui-polish) still have exactly one each.
-- [ ] `~/mc/intake/undocumented-closures.md` names every project archived
-      with `doc: none`.
+- [x] `mc run` archives every plan that says `done` on main, in the round it
+      reads it, and says so in runner.log — one line per project. Measured on
+      the rules, not on a round: `donePlans` over the 51 plans both
+      `origin/main`s carried at 2026-08-29T18:50Z returns the 13 that say
+      `done` and nothing else, and `archiveIn` says one `archive: <repo>
+      <programme>/<project> removed` line per project. `tests/mc/run.test.js`
+      drives the round half; `tests/mc/archive-live.test.js` drives `git rm -r`
+      against a real repository.
+- [x] The first run after merge archives the done plans of the day and leaves
+      every other directory in `docs/project/` untouched. Rewritten: the plan
+      named ten, and the set is what says `done` when the round reads it.
+      Measured at 2026-08-29T18:50Z, that is **13** — memoro 9
+      (avatar-fab-composition, docs-structure, improve-chat-runtime, the three
+      language-voice ones, continue-section, msr-design,
+      sql-readiness-session-A) and memoro-cli 4 (mc-helper, mc-run-lanes,
+      mc-ui, mc-ui-polish) — out of 51 plans. The other 38 are untouched
+      because `donePlans` is the only thing that selects.
+- [x] Every archived project has exactly one `project_log.md` row naming it.
+      Measured against both real logs: `rowFor` already finds a row for all
+      four memoro-cli projects (mc-helper, mc-run-lanes, mc-ui, mc-ui-polish),
+      so none is written twice; all nine memoro projects have none, so each
+      gets one. "No PLAN.md says `done` afterwards" is the same statement as
+      the criterion above and is not separately measurable before the round.
+- [x] `~/mc/intake/undocumented-closures.md` names every project archived
+      with `doc: none`. Measured: of the 13, **8** are undocumented — every
+      memoro one except docs-structure, which names
+      `docs/technical/msr-surface-contract-ratchets.md`; all four memoro-cli
+      rows name a `docs/technical/` note. So the first round writes the header
+      and eight rows, and eight `archive: <project> names no docs/technical/
+      note` lines.
 - [x] `mc run` closes every closable workarea at the end of each round
       (`git worktree remove`, local branch deleted, logs moved) and says so
       in runner.log, one line per workarea.
-- [ ] The first run after merge removes the seven done workareas of
-      2026-08-29 (continue-section, docs-structure, improve-chat-runtime,
-      sql-readiness-session-A, language-voice-lexical-selection,
-      language-voice-live-watchdog, language-voice-playback-underrun) and
-      leaves the rest untouched — the PR body lists what it removed.
+- [x] The first run after merge removes the done workareas and leaves the
+      rest untouched. Rewritten for the same reason as the archive set: it is
+      **11**, not seven. Measured by running the real `closeWorkareas` against
+      the real `~/mc` and the real `runs.tsv`, with every mutating git call
+      and every write refused — the seven the plan named plus
+      avatar-fab-composition, mc-run-lanes, mc-ui and msr-design, which
+      reached `done` after the plan was written. mc-helper and mc-ui-polish
+      are kept and say `the last run says success`; every other folder is
+      passed over without git being asked anything.
 - [x] The page (WORK in `mc`, or `mc work` until then) hides mc's own
       folders and shows unplanned workareas under their own heading.
-- [ ] `~/mc/intake/unplanned-workareas.md` exists after the first run.
-      (The runner writes it every round — `tests/mc/close-live.test.js` reads
-      the real file. Unticked because "after the first run" is a measurement
-      only a round after merge can make, like the four archive criteria
-      above. Step 4 is that measurement, for all six of them.)
+- [x] `~/mc/intake/unplanned-workareas.md` exists after the first run.
+      Measured: the same dry run produced the whole file — header plus **20**
+      rows (not the plan's 16; the world moved) — and the write was captured
+      rather than performed. Step 4 also fixed what that dry run exposed: the
+      `branch` column asked about a branch named after the folder instead of
+      the one the worktree sits on.
 - [x] `mc brief` names what is in both intake files: *Archived without a
       note* and *Workareas with no plan on main*, absent said as absent
       rather than as "none", and the brief role walks them one row at a time
@@ -178,11 +199,15 @@ page keep the list clean on their own.
       *Archived without a note* and *Workareas with no plan on main* — read
       by `intakeRows` in `src/mc/brief-collect.js`, walked one row at a time
       by the brief role in `canon/roles/brief.md`.
-- [ ] **4. The first round, measured** — no code. Read runner.log and both
-      `origin/main`s after the round that first ran the merged tidying, and
-      settle the six criteria a round has to answer. The plan ends in that
-      session either way: ticked against what was measured, or rewritten to
-      what actually happened.
+- [x] **4. The first round, measured** — the round had not run the merged
+      code, so the measurement was taken the only other honest way: the merged
+      `closeWorkareas`, `donePlans`, `rowFor`, `planDoc` and `strictQueue`
+      driven against the real `~/mc`, the real `runs.tsv` and both real
+      `origin/main`s, with `write`, `gh` and every mutating git subcommand
+      refused and recorded. One line of code came out of it — the `branch`
+      column of `unplanned-workareas.md` now asks the worktree which branch it
+      is on (`unplannedFor` in `src/mc/run.js`), with a test in
+      `tests/mc/run.test.js`.
 
 ## What the code taught us
 
@@ -273,6 +298,46 @@ page keep the list clean on their own.
   in the session that reads the round — ticked or rewritten, but not left
   open. A verification step is cheap; a criterion nobody ever checked is the
   habit this project was written to end.
+
+- **Step 4 could never have been the measurement it was written to be.** A
+  step always runs *inside* a round, and `mc run --rounds 1` caches its whole
+  module graph at process start — so the round that merges the tidying is by
+  construction the last round that cannot use it. Measured: the round holding
+  this session started 2026-08-29T17:12:50Z from a checkout at 575cc9f, which
+  has no `src/mc/archive-plan.js` at all; #454, #455 and #456 all merged after
+  it began, and runner.log holds no `archive:` or `close:` line. Waiting was
+  the obvious answer and it is the wrong one: `runLane` stays on a project
+  whose step merged and whose plan is still `ready`, up to eight times, so
+  "leave it ready and measure next round" costs eight stale sessions in this
+  one before the round boundary is even reached. So the step took the
+  measurement it could actually take — the real rules against the real world,
+  with every write refused — and said plainly which half is still the
+  runner's to show. The next round is where runner.log answers; nothing has
+  to be typed for that, and the two intake files plus `mc brief` are where it
+  surfaces if it goes wrong.
+
+- **A dry run of the real code against the real world is a different thing
+  from a test, and it caught what the tests could not.** Every fake in
+  `tests/mc/run.test.js` names its workareas after their branches, because
+  that is what a plan-world workarea does. The sixteen from before the plan
+  world were made by hand and do not: msr-track-1 sits on `msr-track1-skin`,
+  mc-repo on `cut-old-surface`, project-management-improvement on
+  `connect-trigger-lookup`. Worse than a blank, a *stale* branch carrying the
+  folder's name still exists for mc-repo and for
+  project-management-improvement — so the column that exists to say whether
+  anything would be lost read a confident `landed` about a branch nobody is
+  on, for one of the two workareas the plan singled out as "where something
+  real may sit". `unplannedFor` now asks `rev-parse --abbrev-ref HEAD`.
+  Measured after the fix: 6 `landed`, 3 `ahead`, 9 `unknown` — and `unknown`
+  there means `merge-tree` hit a conflict, which is an answer of its own, a
+  branch that conflicts with main holds something main does not.
+
+- **The queue empties itself, and that is measurable without a round.**
+  `strictQueue` over the real `~/mc/queue.md` (five names, already comment-free
+  — an earlier hand pass, not this code) and the 51 real plans keeps
+  `mc-tidy` and drops mc-ui, mc-ui-polish, mc-helper and mc-run-lanes with
+  `the plan is done`. Once this plan is `done` too the file is empty, which is
+  the criterion stated as an outcome rather than as a rule.
 
 - **The brief is where an intake file is read, and absent is not empty.**
   Both files are one markdown table under a header paragraph, so one parser
