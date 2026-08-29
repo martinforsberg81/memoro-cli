@@ -522,12 +522,18 @@ export function createRunner({
   function unplannedFor(name) {
     const [repo] = areaRepos(name);
     const worktree = join(root, name, repo.name);
+    // The branch is asked of the worktree, not guessed from the folder: a
+    // workarea from before the plan world was made by hand and need not be
+    // named after its branch (msr-track-1 sits on `msr-track1-skin`).
+    // Measured 2026-08-29, guessing left 14 of 20 rows `unknown` — which is
+    // the one column that says whether anything would be lost.
+    const branch = gitOut(worktree, ['rev-parse', '--abbrev-ref', 'HEAD']) || name;
     return unplannedRow({
       name,
       repo: repo.name,
       uncommitted: uncommitted(name),
       lastCommit: gitOut(worktree, ['log', '-1', '--format=%cs']) || '-',
-      branch: branchLanded(worktree, name, { run: (args) => gitOut(worktree, args) }),
+      branch: branchLanded(worktree, branch, { run: (args) => gitOut(worktree, args) }),
     });
   }
 
