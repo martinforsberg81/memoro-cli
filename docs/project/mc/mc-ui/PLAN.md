@@ -1,6 +1,6 @@
 ---
 status: ready
-next: "Step 3 — The page: the five sections (NOW, QUEUE, DECISIONS, INTAKE, WORK), the width and colour rules, the counts and `--json` parity, in `src/mc/page-collect.js` and `page-render.js` with status-collect.js's readers reused — done when all five print against the real files and the fixture tests pass."
+next: "Step 4 — The front door: bare `mc` prints the page and, at a TTY, the menu moved from `commands/work.js` with `b`/`p`/`s`/`w` added; `mc --watch`; bare `mc work` routes to the same; `mc list`, bare `mc status`, the status board flags and their modules and tests removed; `HELP_TEXT` leads with the two surfaces — done when `mc` at a TTY shows the page and opens a workarea by number, `mc --json` exits 0 without a prompt, `mc list` and `mc status` say where they went, and `npm test` is green minus the known V1 set."
 budget: 150k
 needs: []
 ---
@@ -29,7 +29,7 @@ redrawn, no prompt. Bare `mc work`, `mc list`, bare `mc status`, `mc status
 
 - [ ] Bare `mc` prints the page (per decision mc-3) in under 300 ms with no
       network — measured against today's 1.92 s for `mc status --offline`.
-- [ ] Five sections, in this order: **NOW** (the running step with kind,
+- [x] Five sections, in this order: **NOW** (the running step with kind,
       tool, model, elapsed against budget; a pending STOP; live tmux
       `mc-<name>` areas; a foreground `mc brief`/`mc plan`), **QUEUE**
       (depth, runnable count, the next few by name and kind, skips counted
@@ -55,15 +55,16 @@ redrawn, no prompt. Bare `mc work`, `mc list`, bare `mc status`, `mc status
       half stays). `mc status <name>` and `mc work <name> …` unchanged.
 - [ ] A number where a number answers the question, a line only where the
       identity matters; each count names the verb that expands it.
-- [ ] Width-aware and coloured: `stdout.columns` clamped 60–160 through
+- [x] Width-aware and coloured: `stdout.columns` clamped 60–160 through
       `width`/`pad`/`clip` from `status-render.js`; colour only on a TTY and
       only when `NO_COLOR` is unset **or empty** (the convention is any
-      non-empty value; `src/cli/list.js` tests `!== '1'`, which is wrong).
-- [ ] `--json` is the same object the renderer takes, one key per section;
+      non-empty value; `src/cli/list.js` tests `!== '1'`, which is wrong —
+      `src/cli/list.js` goes in step 4, so the wrong test goes with it).
+- [x] `--json` is the same object the renderer takes, one key per section;
       `--fresh` does the `git fetch` and `gh pr list` that `mc status` does
       by default today; without it the page reads a cache and says its age.
 
-- [ ] No new dependency; the renderer is ANSI by hand, as the repo is.
+- [x] No new dependency; the renderer is ANSI by hand, as the repo is.
       Tests build every section from fixtures (`current.json`, `runs.tsv`, a
       decisions tree, a `docs/project` tree, an intake dir) — no git, gh or
       tmux.
@@ -114,10 +115,26 @@ redrawn, no prompt. Bare `mc work`, `mc list`, bare `mc status`, `mc status
       origin/main moves re-reads both repositories and costs 0.31 s quiet,
       0.48 s loaded. It happens once per merge, and the runner could warm
       the cache in the round it already fetches in — not done here.
-- [ ] **3. The page** — the five sections, the width and colour rules, the
-      counts, `--json` parity, in `src/mc/page-collect.js` and
-      `page-render.js` (status-collect.js's readers reused). Done when all
-      five print against the real files and the fixture tests pass.
+- [x] **3. The page** (2026-08-29) — `src/mc/page-collect.js` builds the five
+      sections and `page-render.js` draws them; `mc status` prints them today
+      and `mc` prints them in step 4. NOW adds the live tmux areas (one
+      `tmux ls` carrying `#{session_created}`) and the foreground register
+      `~/mc/runner/foreground/<pid>.json`, empty until step 5 writes it;
+      QUEUE counts its depth, what is runnable and the skips by reason (a
+      live area is a reason of its own); DECISIONS counts and names three;
+      INTAKE reads the newest `~/mc/intake/errors-<date>.md`, the bullets
+      under "New since the last digest" and the proposals; WORK is one
+      numbered row per workarea — the number the menu will open — live first,
+      then by the later of the area's mtime and its last runner step, with
+      one count line for the projects on main without a workarea. Width comes
+      from `stdout.columns` clamped 60–160 through `width`/`pad`/`clip`, now
+      exported from status-render.js; colour only on a TTY and only when
+      `NO_COLOR` is unset or empty. Done: all five print against the real
+      `~/mc` in 0.09–0.14 s, no line exceeds the terminal at 40/60/100/200
+      columns, `--json` is the object the renderer takes (the test renders the
+      parsed JSON and compares), and `tests/mc/page.test.js` builds every
+      section from fixtures plus a temporary work root with no git, gh or
+      tmux.
 - [ ] **4. The front door** — bare `mc` prints the page and, at a TTY, the
       menu moved from `commands/work.js` with `b`/`p`/`s`/`w` added;
       `mc --watch`; bare `mc work` routes to the same; `mc list`, bare
@@ -184,10 +201,36 @@ assumed, are in `investigation-2026-08-29.md`.
   `stdout.columns`, while `status-render.js` already exports the
   `painter`/`width`/`pad`/`clip` it needs.
 
+- **A count is only honest if the section knows what it cannot see.** INTAKE
+  exists now — `mc helper` ran on 2026-08-29 and wrote
+  `~/mc/intake/errors-2026-08-29.md` — but its first digest has no baseline,
+  so the section says "first digest — no baseline" rather than "0 new errors".
+  The same rule keeps the foreground list empty rather than claiming nothing
+  is running: nothing has registered, which is not the same as nothing being
+  there. Step 5 makes the difference disappear.
+- **The tmux call already had the answer to "how long".** `tmux ls -F
+  '#{session_name} #{session_created}'` costs what `-F '#S'` cost and carries
+  the epoch second the area was opened, so a live row can say `open 3 h`
+  without a second call. NOW needs no `ps` and no `lsof`.
+- **`clip` fills its column exactly, so a clipped name touches its
+  neighbour.** Every column now clips one short of its pad — the ellipsis is
+  the last character, never the last column. Found by reading the real page,
+  not by a test.
+- **Escape sequences must be added after the width is decided.** `clip` slices
+  by character index, so clipping a string that already carries colour cuts an
+  escape in half. Every heading and prose line is measured and cut as plain
+  text and painted afterwards; the row helper only ever pads text whose width
+  it set itself.
+- **The 24 h summary counts a timeout as a timeout and not a failure**
+  (`summariseRuns`), which is why the page's own line reads `failed 0, timed
+  out 1` for a run that did both. The page repeats the runner's arithmetic
+  rather than inventing its own.
+
 ## Documents
 
 - `docs/project/mc/mc-ui/investigation-2026-08-29.md` — inventory, mock-up, options
 - `~/mc/mc-utredning/decisions/mc-3.md` — the decision (A, two surfaces)
+- `src/mc/page-collect.js`, `src/mc/page-render.js` — the five sections and how they look (step 3)
 - `src/mc/page-cache.js` — plans.json and prs.json, the two caches step 2 added
 - `src/mc/commands/work.js` `menu()`/`typed()`/`startSomething()` — the menu that moves under the page
 - `docs/project/mc/mc-status/PLAN.md` — the page this rebuilds; `mc-run` — the writer of `current.json`; `mc-helper` — the writer of intake
