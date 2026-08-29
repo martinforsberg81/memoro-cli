@@ -30,6 +30,9 @@ describe('the plan role', () => {
     assert.match(role.overlay, /Plan: <name>/u);
     assert.match(role.overlay, /\*\*Beslut:\*\*/u);
     assert.match(role.overlay, /Never create a parallel programme/u);
+    // The role's last instruction: a plan PR is documentation, so it lands
+    // itself instead of waiting for a click.
+    assert.match(role.overlay, /mc merge <repo> <pr> --docs/u);
   });
 
   it('assembles a first prompt that names the workarea, the repository and the PR', () => {
@@ -37,6 +40,10 @@ describe('the plan role', () => {
     assert.match(launch.prompt, /`gate-word` workarea of memoro/u);
     assert.match(launch.prompt, /docs\/project\/<programme>\/gate-word\/PLAN\.md/u);
     assert.match(launch.prompt, /"Plan: gate-word"/u);
+    // …and ends with the docs merge, naming the repository it runs in, so
+    // the plan is on main before the session is closed.
+    assert.match(launch.prompt, /mc merge memoro <pr> --docs/u);
+    assert.match(launch.prompt.split('\n').at(-1), /--docs/u);
     assert.equal(launch.model, 'opus');
   });
 });

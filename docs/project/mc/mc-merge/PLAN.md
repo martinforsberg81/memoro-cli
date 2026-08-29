@@ -1,6 +1,6 @@
 ---
 status: ready
-next: "Step 2 — the plan role and the runner's triage prompt end with `mc merge <repo> <pr> --docs`, so a plan lands the moment it is opened — done when a plan written by `mc plan` is on main without Martin clicking, observed once."
+next: "Step 3 — close-out: `docs/technical/mc-merge.md` describes both forms of the verb and `docs/project/project_log.md` carries the line — done when both files are on main and the plan is `status: done`."
 budget: 150k
 needs: []
 ---
@@ -52,10 +52,15 @@ waits for a click and the runner does not see it (Martin, 2026-08-26:
       — — `src/mc/commands/merge.js`, `src/mc/docs-merge.js`,
       the pointer in `repo.js`, help, tests. Done when both forms run from
       `mc merge` and `mc repo merge` only points.
-- [ ] **2. Roles and runner** — `canon/roles/plan.md` and
-      `~/mc/bin/runner.sh`'s triage prompt end with the docs merge. Done
-      when a plan lands without a click, once, in `runner.log` or a plan
-      session's last line.
+- [x] **2. Roles and runner** (2026-08-29; `mc plan`'s own first prompt
+      was the missing third place) — `canon/roles/plan.md`,
+      `~/mc/bin/runner.sh`'s triage prompt and `planLaunch()` in
+      `src/mc/commands/plan.js` all end with the docs merge. Observed: the
+      runner's `canonical-response` triage on 2026-08-29 opened memoro
+      #11039 and landed it itself with `mc merge memoro 11039 --docs`
+      (`~/mc/runner/log/canonical-response-20260829T033139Z.json`, first
+      line of `.result`); the round log has four `mode: docs` rounds
+      (memoro-cli #419, #420; memoro #11025, #11039), none of them clicked.
 - [ ] **3. Close-out** — `docs/technical/mc-merge.md`, `project_log.md`.
 
 ## What the code taught us
@@ -64,8 +69,16 @@ waits for a click and the runner does not see it (Martin, 2026-08-26:
   now `parseMergeArgs`, exported, and `mc repo merge` answers only with
   where it went. `gate()` and `resolveRepoPath()` are exported for the new
   door; nothing in the round itself moved.
-- `--docs` is not run live yet: no docs-only PR was open when it was
-  built. The first `mc plan` PR after this lands is the live test.
+- `--docs` was not run live when it was built; it has been now — four
+  rounds, four merges, no refusals (see step 2).
+- The role was not the last word a plan session hears. `mc plan` builds its
+  own first prompt in `planLaunch()`, and that prompt ended with "open a PR
+  … and stop" — the most recent instruction, contradicting the role two
+  screens above it. The prompt now ends with the merge and names the
+  repository, so `<repo>` is filled in rather than guessed.
+- `~/mc/bin/runner.sh` is not in this repository and no test can reach it;
+  the repository's half of this step is locked by assertions on the role
+  overlay and on `planLaunch()`'s last line.
 
 ## Documents
 
