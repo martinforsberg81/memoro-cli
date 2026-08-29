@@ -187,7 +187,8 @@ export function createRunner({
     if (!sync.ok && !sync.conflicts.length) { say(`${name}: fetch/merge failed, skip`); return 'skipped'; }
     const plan = sync.conflicts.length ? null : planOf(worktree, name);
     const choice = chooseKind({ plan, conflicts: sync.conflicts });
-    if (!choice.kind) { say(`${name}: ${choice.skip}, skip`); return 'skipped'; }
+    // A null `skip` is a skip nobody would read — see `chooseKind`.
+    if (!choice.kind) { if (choice.skip) say(`${name}: ${choice.skip}, skip`); return 'skipped'; }
     const { kind } = choice;
 
     const role = deps.role(kind);

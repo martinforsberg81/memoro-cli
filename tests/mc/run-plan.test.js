@@ -9,8 +9,18 @@ import { parseRunArgs } from '../../src/mc/commands/run.js';
 
 test('assembleQueue: queue.md order first, then plans on main it did not name, sorted', () => {
   const queue = '# round\nb\n\na\n# tail\n';
-  const plans = [{ project: 'a' }, { project: 'z' }, { project: 'm' }, { project: 'z' }];
+  const plans = [{ project: 'a' }, { project: 'z' }, { project: 'm' }, { project: 'z' }, { project: 'b' }];
   assert.deepEqual(assembleQueue(queue, plans), ['b', 'a', 'm', 'z']);
+});
+
+/**
+ * A queued name with no plan on main is not queued at all — the runner would
+ * only have logged a skip line for it, and nobody reads that (Martin,
+ * 2026-08-29). `mc status` is where an unplanned workarea shows.
+ */
+test('assembleQueue: a name with no plan on main is dropped, not skipped', () => {
+  assert.deepEqual(assembleQueue('ghost\nreal\n', [{ project: 'real' }]), ['real']);
+  assert.deepEqual(assembleQueue('ghost\n', []), []);
 });
 
 test('chooseKind: reconcile beats everything; ready is the only thing that runs', () => {
@@ -26,10 +36,9 @@ test('chooseKind: reconcile beats everything; ready is the only thing that runs'
  * used to be a `triage` kind here that started a headless session to invent
  * the plan and land it on main by itself.
  */
-test('chooseKind: no plan is a skip that names `mc plan`, never a triage session', () => {
-  const c = chooseKind({ plan: null });
-  assert.equal(c.kind, null);
-  assert.match(c.skip, /no plan — take it through `mc plan <name>`/u);
+test('chooseKind: no plan does nothing, and says nothing', () => {
+  assert.deepEqual(chooseKind({ plan: null }), { kind: null, skip: null },
+    'a null skip is a skip nobody would read — "Ingen skip-rad: vem ska läsa den!?"');
 });
 
 /**

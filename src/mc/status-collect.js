@@ -73,7 +73,7 @@ export function runnerBlock({ queue, plans, decisions, rows, alive, live = [] })
  * EPERM means it exists and belongs to somebody else, which is still alive.
  * This is the whole liveness test — no tmux session name, no pgrep pattern.
  * Both of those lied on 2026-08-29: a dead pane still answered
- * `tmux has-session -t runner`, and `pgrep -f 'runner.sh|mc run'` matched a
+ * `tmux has-session -t runner`, and `pgrep -f 'mc run'` matched a
  * step session whose prompt happened to contain the words "mc run".
  */
 export function pidAlive(pid) {

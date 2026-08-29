@@ -34,7 +34,8 @@ export const DAY_MS = 24 * 60 * 60 * 1000;
  * question closed, and what lets `retireDecisions` delete the file once the
  * plan carries the answer. `canon/roles/brief.md` fixes the shape a brief
  * session writes, and `tests/mc/commands/brief.test.js` holds the overlay's
- * own template against this pattern.
+ * own template against this pattern. There is no second implementation to
+ * keep in step any more: `~/mc/bin/runner.sh` and its own grep are deleted.
  */
 export const ANSWER_LINE = /^\*\*Beslut/u;
 

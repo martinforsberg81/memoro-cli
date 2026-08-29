@@ -8,12 +8,13 @@
  * process-touching half (git, gh, tmux, the session itself) is run.js, and
  * it calls in here so that the tests can cover the rules with no session.
  *
- * The rules are `~/mc/bin/runner.sh`'s, line by line — the shell runner is
- * what nights 1–2 measured (`~/mc/runner/log/natt-1.md`), and this module
- * changes none of them. Two things it adds: a quota answer is logged as
- * `quota`, not `success` (the shell runner logged the weekly limit of
- * 2026-08-26 as eleven successful eight-second steps), and the tool and
- * model come from the project's frontmatter.
+ * These rules began as `~/mc/bin/runner.sh`'s, line by line — the shell
+ * runner nights 1–2 measured (`~/mc/runner/log/natt-1.md`). That file is
+ * deleted (Martin, 2026-08-29: "Inget att hålla kvar"); `mc run` had taken
+ * over the nights by then. What it did differently and this does not: it
+ * logged a weekly quota answer as eleven successful eight-second steps, it
+ * ran every tool as claude on opus, it wrote plans it had invented, and it
+ * started projects off answered decision files.
  */
 
 export const RUNS_HEADER = ['ts', 'name', 'kind', 'exit', 'seconds', 'pr', 'turns', 'input', 'output', 'cache_read', 'cache_write', 'session', 'note'];
@@ -28,13 +29,21 @@ export const TIMEOUT_EXIT = 142; // what the shell runner's `perl alarm` left in
 /**
  * Martin's order first (`queue.md`, comments and blanks ignored), then every
  * project with a PLAN.md on origin/main that the queue did not name, sorted.
- * The shell runner lists every plan and lets the status decide at run time;
- * so does this — a `done` plan is one skip line, which is also information.
+ *
+ * A name with no plan on main is not in the queue at all. It used to be —
+ * queue.md was taken literally and whatever it named was attempted — and the
+ * runner logged a skip line for it every round. Nobody reads that line
+ * (Martin, 2026-08-29: "Ingen skip-rad: vem ska läsa den!?"). A workarea with
+ * no plan is shown where somebody actually looks: `mc status`'s WORKAREAS
+ * WITHOUT A PROJECT block.
  */
 export function assembleQueue(queueText, plans) {
-  const named = String(queueText || '').split('\n').map((line) => line.trim()).filter((line) => line && !line.startsWith('#'));
+  const planned = new Set(plans.map((p) => p.project));
+  const named = String(queueText || '').split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith('#') && planned.has(line));
   const seen = new Set(named);
-  const rest = [...new Set(plans.map((p) => p.project))].filter((name) => !seen.has(name)).sort();
+  const rest = [...planned].filter((name) => !seen.has(name)).sort();
   return [...named, ...rest];
 }
 
@@ -48,12 +57,15 @@ export function assembleQueue(queueText, plans) {
  * Two things the runner used to do here and does not any more, both on
  * Martin's word of 2026-08-29:
  *
- * - **No plan is a skip, not a `triage` session.** The runner runs plans; it
+ * - **No plan means nothing happens, silently.** The runner runs plans; it
  *   does not write them. Planning is `mc plan <name>`, a foreground session
  *   with Martin in it, ending in a `Plan: <name>` PR he has read. ("JAG TAR
  *   FRAM PLANER I EN mc plan SESSION … Runner ska köra de planer som tagits
  *   fram.") The old `triage` kind invented a plan headlessly and landed it on
  *   main by itself, so work could begin on a plan nobody had agreed to.
+ *   `assembleQueue` already drops such names, so this branch is only reached
+ *   when a plan disappears mid-round; it carries no `skip` text because
+ *   nothing would read it.
  * - **`waiting-decision` is simply not ready.** The runner has nothing to do
  *   with decisions — it does not read them, count them, or start a project
  *   because one was answered. ("Runner genomför planer som är ready. Om
@@ -62,7 +74,7 @@ export function assembleQueue(queueText, plans) {
  */
 export function chooseKind({ plan, conflicts = [] }) {
   if (conflicts.length) return { kind: 'reconcile' };
-  if (!plan) return { kind: null, skip: 'no plan — take it through `mc plan <name>`' };
+  if (!plan) return { kind: null, skip: null };
   if (plan.status === 'ready') return { kind: 'step' };
   return { kind: null, skip: `status ${plan.status || 'missing'}` };
 }

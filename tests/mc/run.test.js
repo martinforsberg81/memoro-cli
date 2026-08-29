@@ -191,12 +191,15 @@ test('a conflicting merge of origin/main becomes a reconcile step with the files
  * it on main by itself (Martin, 2026-08-29: "JAG TAR FRAM PLANER I EN mc plan
  * SESSION").
  */
-test('no plan in the worktree is a skip that names `mc plan`, not a triage step', async () => {
+test('a workarea with no plan is not in the queue, and produces no line at all', async () => {
   const f = fixture({ areas: { fresh: { repo: 'memoro' } }, queue: 'fresh\n', session: okSession() });
-  await createRunner({ deps: f.deps }).round();
+  const runner = createRunner({ deps: f.deps });
+  assert.deepEqual(runner.queue().names, [], 'queue.md named it; it has no plan, so it is not queued');
+  await runner.round();
   assert.equal(f.calls.sessions.length, 0);
-  assert.match(f.files['/w/runner/log/runner.log'], /fresh: no plan — take it through `mc plan <name>`, skip/u);
-  assert.equal(f.files['/w/runner/log/runs.tsv'], undefined, 'nothing ran, so nothing is logged as a run');
+  assert.equal(f.files['/w/runner/log/runs.tsv'], undefined);
+  assert.doesNotMatch(f.files['/w/runner/log/runner.log'] || '', /fresh/u,
+    'no skip line — nobody reads it, and `mc status` is where an unplanned workarea shows');
 });
 
 test('a quota answer is logged as quota, not merged, and the runner sleeps 30 minutes', async () => {
