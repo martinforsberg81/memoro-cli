@@ -9,7 +9,6 @@
  * output is not a terminal. A page piped into a file or read by a session
  * should contain what it says and nothing else.
  */
-import { dueIn } from './wakeup.js';
 import { CONTEXT_LEVELS } from './conversations.js';
 
 const SGR = {
@@ -109,26 +108,6 @@ export function renderLines(report, {
         : c('nothing running', 'grey');
     lines.push(`  ${c('suite', 'grey')}  ${clip(`${held}  ${c('·', 'grey')}  ${runs}`, wide - 9)}`);
   }
-  // The watchers — the last silent link. PM is woken by a file, queued wakes
-  // are retried by the guard, the repo page kept fresh by its watcher; if one
-  // dies, everything below this row goes quiet and nothing says why.
-  if (report.watchers) {
-    const word = (state) => {
-      if (!state) return c('unknown', 'grey');
-      if (state.running && state.stale) return c(`alive but stale — no round in ${ago(now - (state.last_write_age_ms ?? 0), now)}`, 'red');
-      if (state.running && state.stale_code) return c('alive on OLD CODE — mc changed since it started; restarts itself, or stop && start', 'yellow');
-      if (state.running) {
-        const knock = state.last_knock;
-        const knocked = knock ? `, last knock ${knock.woke ? 'woke' : `refused: ${knock.reason || 'unknown'}`}` : '';
-        return c(`alive${state.last_write_age_ms !== null ? `, last round ${ago(now - state.last_write_age_ms, now)}` : ''}${knocked}`, knock && !knock.woke ? 'yellow' : 'green');
-      }
-      if (state.abandoned) return c('NOT RUNNING — stopped without telling anyone', 'red');
-      return c('never started', 'yellow');
-    };
-    const cells = [['watch pm', report.watchers.pm], ['watch sessions', report.watchers.sessions], ['repo watch', report.watchers.repo]]
-      .map(([name, state]) => `${c(name, 'grey')}: ${word(state)}`);
-    lines.push(`  ${c('watch', 'grey')}  ${clip(cells.join(c('  ·  ', 'grey')), wide - 9)}`);
-  }
   lines.push('');
 
   if (areas.length === 0) {
@@ -146,21 +125,13 @@ export function renderLines(report, {
     const label = pad(clip(area.role ? `${area.name} · ${area.role}` : area.name, 26), 26);
     const name = state(area) === 'idle' ? c(label, 'grey') : c(label, 'bold');
     lines.push(`  ${c(MARK[state(area)], tone)} ${name} ${c(clip(where(area), wide - 32), 'grey')}`);
-    // A session nobody can reach by wake: the guard refused on a draft, the
-    // wake is queued, and until the prompt clears this is the only place the
-    // state is visible. "Since" is the number — twenty minutes of it once
-    // passed unnoticed with an answer sitting in the inbox.
-    // A session in a menu is blocked on a person — usually the PM — and can
+    // A session in a menu is blocked on a person and can
     // sit there all night; no wake reaches it. The question, when the drawing
     // carries one, so the answer can be given without going to look.
     if (area.menu) {
       const ask = area.menu.question ? `: “${area.menu.question}”` : '';
       const options = area.menu.options?.length ? ` — ${area.menu.options.map((option, index) => `${index + 1}. ${option}`).join('  ')}` : '';
       lines.push(`      ${c(clip(`⧗ waiting on a menu — needs an answer, not a knock${ask}${options}`, wide - 8), 'red')}`);
-    }
-    if (area.pending_wake) {
-      const since = clock(area.pending_wake.since);
-      lines.push(`      ${c(`✉ draft in prompt — unreachable by wake since ${since} (wake queued; it lands when the prompt clears)`, 'red')}`);
     }
     // Stopped on purpose and not opened since (KP-09): the one line that
     // separates "PM stopped it at 03:16" from "it died". Shown only while
@@ -188,13 +159,6 @@ export function renderLines(report, {
       if (item.said) {
         const said = clip(item.said, wide - 8);
         lines.push(`      ${item.state === 'idle' ? c(said, 'grey') : said}`);
-      }
-      // The clock it set for itself, and what the clock will run (D-0155).
-      // A timer nobody can see is how a suite ran eleven times unasked.
-      if (item.wakeup) {
-        const when = dueIn(item.wakeup, now);
-        const row = `⏰ wakeup${when ? ` ${when}` : ''}: ${item.wakeup.prompt || '(no prompt)'}`;
-        lines.push(`      ${c(clip(row, wide - 8), 'yellow')}`);
       }
     }
     lines.push('');

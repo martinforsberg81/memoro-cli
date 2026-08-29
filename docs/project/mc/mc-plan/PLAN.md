@@ -1,6 +1,6 @@
 ---
 status: ready
-next: "Step 2 — verify how the plan overlay reaches codex through the adapter (`-c instructions=` carries the profile today; `instructionsFor` drops the overlay for codex) and document the result under What the code taught us — done when `mc plan <name> --codex` starts codex with the same role text reachable, or the step writes it into the workarea's AGENTS.md and says so."
+next: "Step 3 — close-out: `docs/technical/mc-plan.md` describing the verb, the role and both instruction channels, and a `project_log.md` row — done when the document exists and the log names `mc plan`."
 budget: 150k
 needs: []
 ---
@@ -21,11 +21,11 @@ its result is the file, not the conversation.
 
 ## Success criteria
 
-- [ ] `mc plan <name> [--repo memoro|memoro-cli] [--codex|--claude] [--model]`
+- [x] `mc plan <name> [--repo memoro|memoro-cli] [--codex|--claude] [--model]`
       exists, listed in `src/mc/help-text.js`.
-- [ ] It runs in the foreground with `stdio: 'inherit'` (the existing path in
+- [x] It runs in the foreground with `stdio: 'inherit'` (the existing path in
       `src/mc/work-open.js:102`), never in tmux, and never with `--resume`.
-- [ ] `canon/roles/plan.md` carries the role: what to read, the PLAN.md
+- [x] `canon/roles/plan.md` carries the role: what to read, the PLAN.md
       shape (frontmatter `status`, `next`, `budget`, `needs`; sections Goal ·
       Success criteria · Contract · Steps · What the code taught us ·
       Documents), the programme rule (extend an existing programme, never
@@ -33,11 +33,11 @@ its result is the file, not the conversation.
       PRs), the decision rule (`../decisions/<programme>-<n>.md`, one question
       per file, options and a recommendation), and "open a PR titled
       `Plan: <name>`; do not merge".
-- [ ] The overlay is plain text the launch adapter appends for whichever tool
+- [x] The overlay is plain text the launch adapter appends for whichever tool
       is chosen (claude via `--append-system-prompt`; codex via whatever
       `src/adapters` already does for role text — if codex has no channel,
       the step writes it into the workarea's `AGENTS.md` and says so).
-- [ ] A test covers the prompt/overlay assembly (no session started).
+- [x] A test covers the prompt/overlay assembly (no session started).
 
 ## Contract
 
@@ -56,10 +56,10 @@ its result is the file, not the conversation.
       — `canon/roles/plan.md`, `src/mc/commands/plan.js`,
       help text, foreground launch. Done when `mc plan <name>` opens the
       session described above.
-- [ ] **2. Codex channel** — verify how the overlay reaches codex through the
-      adapter; document the result under "What the code taught us". Done when
-      `mc plan <name> --codex` starts codex with the same role text reachable
-      (or the AGENTS.md fallback is in place and tested).
+- [x] **2. Codex channel** (2026-08-29: `instructionsFor` assembles one body
+      for both tools; `-c instructions=` carries it; no AGENTS.md fallback
+      needed) — verify how the overlay reaches codex through the adapter;
+      document the result under "What the code taught us".
 - [ ] **3. Close-out** — `docs/technical/mc-plan.md`, `project_log.md` row.
 
 ## What the code taught us
@@ -69,8 +69,21 @@ its result is the file, not the conversation.
   (both tools take it that way) and never for a resume.
 - Roles that belong to verbs live in `canon/roles/` and are read with
   `readCanonRole`; the user's `~/.memoro/mc/roles/` catalogue is untouched.
-- `instructionsFor` already drops the overlay for codex — step 2 is that
-  question, not a new one.
+- `instructionsFor` dropped the overlay for codex, and there was no reason
+  left for it to. `profileArgs` has carried markdown to codex through `-c
+  instructions=` since the profile stopped being written to files, and
+  `portrait.js` records a live check that codex layers that text over its
+  base instructions instead of replacing them. The guard was a note from
+  before that channel existed. `instructionsFor` now assembles the same
+  profile-then-overlay body whichever tool is asked, and `profileArgs`
+  decides how it travels — so codex has a channel and the AGENTS.md fallback
+  is not needed. Nothing is written to the worktree.
+- Codex is not installed on this machine (no `codex` on PATH, no shim under
+  `~/.local/bin`, only a leftover `~/.codex`), so `mc plan <name> --codex`
+  could not be started live here: `resolveLaunch('codex')` fails on
+  `missing-bin` before any of this is reached. The assembly is covered by a
+  test that builds the argv without a binary; the launch itself waits for a
+  machine that has codex.
 
 ## Documents
 

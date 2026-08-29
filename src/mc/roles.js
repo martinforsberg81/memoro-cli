@@ -14,9 +14,10 @@
  * settled home, `MC_ROLES_DIR` points at wherever it is being drafted and
  * `<mc home>/roles` is where mc looks otherwise.
  *
- * The overlay reaches Claude conversations only, for now. Codex runs happily
- * inside a role's area — that is the point of the area — but keeps today's
- * plain instruction delivery until overlay delivery for it is designed.
+ * The overlay reaches both tools, through whichever channel each one takes
+ * instructions on at launch (`--append-system-prompt` for Claude, `-c
+ * instructions=` for codex; see `portrait.js`). It is one body of text with
+ * the profile, not a second mechanism.
  *
  * A role file:
  *
@@ -146,19 +147,26 @@ export function markAreaRole(areaPath, roleName) {
 export function areaRole(areaPath, env = process.env) {
   const name = areaRoleName(areaPath);
   if (!name) return null;
-  const role = readRole(name, env);
+  // The user's catalogue first — it is their rulebook, and a role defined
+  // there is the one they meant. Canon is the fallback so a role mc ships
+  // (worker, since the PM went dormant) reaches every conversation in its
+  // area on a machine with no catalogue at all.
+  const role = readRole(name, env) || readCanonRole(name);
   return role || { name, missing: true, path: join(rolesDir(env), `${name}.md`) };
 }
 
 /**
- * What a new conversation is told, per tool. The overlay rides behind the
- * profile, kept separate from it the way role text has always been.
- * Claude only for now: codex keeps exactly today's delivery until overlay
- * delivery for it is designed, and handing it half the mechanism would be
- * worse than handing it none.
+ * What a new conversation is told: the profile, then the overlay behind it,
+ * separated so each still reads as itself.
+ *
+ * The same text for every tool, because the channel is the same shape for
+ * every tool — `profileArgs` already carries a body of markdown to each one
+ * at launch, and codex's `-c instructions=` was verified to layer over the
+ * base instructions rather than replace them (see `portrait.js`). A tool mc
+ * has no channel for gets an empty argument list there and is unaffected by
+ * what is assembled here.
  */
 export function instructionsFor(toolId, profile, overlay) {
-  if (toolId !== 'claude-code') return profile || null;
   const combined = [profile, overlay].filter(Boolean).join('\n\n---\n\n');
   return combined || null;
 }

@@ -7,6 +7,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
+import { ANSWER_LINE, parseDecision } from '../../../src/mc/brief-collect.js';
 import { briefLaunch, run } from '../../../src/mc/commands/brief.js';
 import { readCanonRole } from '../../../src/mc/roles.js';
 
@@ -29,6 +30,33 @@ describe('the brief role', () => {
     assert.match(role.overlay, /`\*\*Beslut:\*\* <option> \(Martin, <YYYY-MM-DD>\)\. <one sentence why>`/u);
     assert.match(role.overlay, /one at a time/u);
     assert.match(role.overlay, /never edit PLAN\.md/u);
+  });
+
+  /**
+   * Step 3 of the plan: the answer lands. The line the overlay dictates is
+   * the only thing that moves a `waiting-decision` project, and the same
+   * test for it is written three times — `ANSWER_LINE` here, `grep -l
+   * '^\*\*Beslut'` in `~/mc/bin/runner.sh`, `isAnswered()` in `mc run`.
+   * So take the template out of the overlay itself, fill it the way a
+   * session would, and hold it against all three shapes; then close the
+   * loop, that the next brief stops asking the question.
+   */
+  it('dictates an answer line that the runner already greps for, and that closes the question', () => {
+    const template = /`(\*\*Beslut:\*\* <option>[^`]*)`/u.exec(readCanonRole('brief').overlay)?.[1];
+    assert.equal(template, '**Beslut:** <option> (Martin, <YYYY-MM-DD>). <one sentence why>');
+    const line = template
+      .replace('<option>', 'A — vilande')
+      .replace('<YYYY-MM-DD>', '2026-08-26')
+      .replace('<one sentence why>', 'It costs one Sonnet turn a day and asks for no new daemon.');
+
+    assert.match(line, ANSWER_LINE);                 // the brief's own answered test
+    assert.ok(/^\*\*Beslut/mu.test(line));           // mc run's isAnswered()
+    assert.ok(new RegExp('^\\*\\*Beslut', 'm').test(line)); // runner.sh's grep -l '^\*\*Beslut'
+
+    const open = '# 2. Hur bevakar vi memoro.me?\n\n## Alternativ\n\n**A.** En helper.\n\n## Rekommendation\n\n**A**, med C som senare steg.\n';
+    assert.equal(parseDecision(open).answered, false);
+    assert.equal(parseDecision(`${open}\n${line}\n`).answered, true);
+    assert.equal(parseDecision(`${open}\n${line}\n`).recommendation, '**A**, med C som senare steg.');
   });
 
   it('opens with the brief as the first words', () => {

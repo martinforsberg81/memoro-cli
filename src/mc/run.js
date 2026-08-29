@@ -16,7 +16,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, write
 import { dirname, join } from 'node:path';
 
 import { resolveLaunch } from '../adapters/index.js';
-import { defaultRepos, listPlans, parsePlanFrontmatter } from './brief-collect.js';
+import { defaultRepos, listPlans, parsePlanFrontmatter, planFields } from './brief-collect.js';
 import { workRoot } from './paths.js';
 import { loadProfile, profileArgs } from './portrait.js';
 import { readCanonRole } from './roles.js';
@@ -93,7 +93,7 @@ export function createRunner({
       const path = join(base, programme, name, 'PLAN.md');
       if (deps.exists(path)) {
         const text = deps.read(path) || '';
-        return { path, programme, text, ...parsePlanFrontmatter(text) };
+        return { path, programme, text, ...parsePlanFrontmatter(text), fields: planFields(text) };
       }
     }
     return null;

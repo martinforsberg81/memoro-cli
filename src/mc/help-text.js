@@ -15,7 +15,8 @@ LOCAL SESSIONS
   mc open <name> [--cwd <path>] [--tool codex|claude] [--replace]
                                     Associate another directory or open here
   mc resume <name>                 Alias for mc open
-  mc status <name> [--json]        Read durable session and runtime state
+  mc status --sessions <name> [--json]
+                                    Read durable session and runtime state
   mc rename <old> <new> [--json]   Rename metadata without moving workspaces
   mc cd <name> [--workspace <id>]  Print or enter an associated directory
   mc attach <name>                 Attach to the exact live local terminal
@@ -47,7 +48,15 @@ MAINTENANCE
                                     without a project. No model; reads only
   mc status --json                 The same, as one object; --offline skips
                                     fetch and gh
-  mc status --sessions             The old board: sessions, leases, watchers
+  mc status <name>                 One project: its PLAN.md frontmatter and
+                                    step, the decisions that belong to it,
+                                    its last three runner steps and the open
+                                    PR on its branch. --json and --offline
+                                    as above
+  mc status --sessions             The old board: every work area, the
+                                    conversations in it and what they last
+                                    said, the suite lease and the repository
+                                    leases
   mc status --watch [seconds]      That board, live; polls every 15s
   mc status --wait [--timeout <s>] Block until something moves, then report
   mc work                          What exists; at a terminal, a way in
@@ -167,31 +176,6 @@ MAINTENANCE
   mc suite release [--force]       Give it back. --force takes it, and is logged
   mc suite who [--json]            Who holds it — and which suites are actually
                                     running, and for how long, whoever holds it
-  mc watch pm start [--interval <seconds>]
-                                    The PM round, every 30 minutes and never a
-                                    model: commit pm/, run mc doctor, count
-                                    pm/inbox/, deliver what the session guard
-                                    left in the notices ledger, and knock once
-                                    if any of it is new. It wakes on change —
-                                    an item that lingers earns one reminder
-                                    after three passes and then silence
-  mc watch pm stop                 Stop it; nothing else changes
-  mc watch pm status [--json]      Whether it is running, when it last ran, and
-                                    what that pass saw
-  mc watch sessions start [--interval <seconds>] [--model <model>]
-                                    A watchman over the running conversations.
-                                    It flags waiting, silent, dead, context,
-                                    unreachable, stalled, blocked,
-                                    quota-exhausted and error — and only
-                                    flags: no action, no judgement, no
-                                    ranking. Everything with a deterministic
-                                    answer is worked out here; Haiku is asked
-                                    only about output that is prose, and only
-                                    when that output moved
-  mc watch sessions stop           Stop it. It never starts itself
-  mc watch sessions status [--json]
-                                    Whether it is running, when it last looked,
-                                    and what is standing
   mc brief                         The evaluation session: gather what the
                                     runner merged, opened and is waiting on,
                                     then decide with a fresh session
@@ -213,29 +197,10 @@ MAINTENANCE
   mc run --once                    One step for the first runnable project
   mc run --rounds <n> [--no-merge] [--idle-sleep <s>]
   mc worker <name> [task]          A project folder that carries the worker
-                                    role: every conversation started in it
-                                    gets the role's overlay and model default
-  mc pm                            The PM's workspace: attach if it runs,
-                                    restart it if it stopped, create it the
-                                    first time. One of it, ever; no worktree
-  mc pm new [--model <m>]          Start over: a fresh conversation in the same
-                                    window. The one running is asked to leave
-                                    (from inside its own session it cannot be
-                                    asked, and the turn in flight is lost —
-                                    mc says which happened). Nothing is
-                                    deleted: the predecessor stays on disk, the
-                                    successor is told its id, and mc pm <id>
-                                    reaches it. Without --model, the role's
-                                    default — never the predecessor's
-  mc pm <conversation id>          That conversation, by the id shown in
-                                    mc work. The way back from a handoff; it
-                                    refuses while the PM is running rather than
-                                    quietly attaching to the other one
-  mc pm-helper intake [--json]     Martin's unprocessed intake items, oldest
-                                    first; done <stem…> moves them to
-                                    intake/processed/<date>/ — never deletes
-  mc pm-helper                     The helper's workspace: same door, same
-                                    rules — new and an id included
+                                    role, read from the roles mc ships: every
+                                    conversation started in it gets the
+                                    overlay and the model default, and
+                                    escalates by writing ../decisions/
   mc roles list                    The defined roles, read from their files
   mc roles show <role>             One role whole: facts, then overlay text
   mc worktree add <name> <branch>  Create a worktree this session owns

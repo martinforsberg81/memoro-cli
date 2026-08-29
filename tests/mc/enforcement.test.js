@@ -1,8 +1,8 @@
 /**
- * Mechanisms that should be in force, and whether they are (PM's order,
- * 2026-08-24). Five instances in a week of built-and-not-in-force, each
- * found by accident: the list exists so nobody has to remember to ask, and
- * it is read by something that already runs — mc doctor, every PM round.
+ * Mechanisms that should be in force, and whether they are. Five instances
+ * in a week of built-and-not-in-force, each found by accident: the list
+ * exists so nobody has to remember to ask, and it is read by something that
+ * already runs — mc doctor, every round the runner takes.
  */
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
@@ -10,17 +10,10 @@ import { describe, it } from 'node:test';
 import { notInForce } from '../../src/mc/enforcement.js';
 import { diagnose, run } from '../../src/mc/commands/doctor.js';
 
-const QUIET_WATCHERS = {
-  pm: { running: true, stale: false, stale_code: false, abandoned: false },
-  sessions: { running: true, stale: false, stale_code: false, abandoned: false },
-  repo: { running: false, stale: null, stale_code: null, abandoned: false },
-};
-
 function deps(overrides = {}) {
   return {
     repos: () => ['/repos/memoro', '/repos/memoro-cli'],
     guardState: () => ({ installed: true }),
-    watchers: () => QUIET_WATCHERS,
     rounds: () => [],
     ratchet: () => ({ present: true }),
     ...overrides,
@@ -37,25 +30,6 @@ describe('what the list says', () => {
       deps: deps({ guardState: (repo) => (repo.endsWith('memoro') ? { installed: false, reason: 'no pre-push hook' } : { installed: true }) }),
     });
     assert.deepEqual(broken, ['push-guard is not in force on memoro — no pre-push hook; mc repo guard memoro']);
-  });
-
-  it('names a watcher on old code, one gone stale, and one stopped without telling anyone', () => {
-    const broken = notInForce({
-      deps: deps({
-        watchers: () => ({
-          pm: { running: true, stale: false, stale_code: true, abandoned: false },
-          sessions: { running: true, stale: true, stale_code: false, abandoned: false },
-          repo: { running: false, stale: null, stale_code: null, abandoned: true },
-        }),
-      }),
-    });
-    assert.match(broken[0], /mc watch pm runs OLD code/u);
-    assert.match(broken[1], /mc watch sessions is alive but stale/u);
-    assert.match(broken[2], /mc watch repo is NOT RUNNING — stopped without telling anyone/u);
-  });
-
-  it('a watcher never started on this machine is absent, not broken', () => {
-    assert.deepEqual(notInForce({ deps: deps() }), []);
   });
 
   it('a repository whose last round stood on red needs a floor; a green one earns no line', () => {

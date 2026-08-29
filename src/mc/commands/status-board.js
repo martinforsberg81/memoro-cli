@@ -18,12 +18,16 @@
  */
 import { getPackageVersion } from '../../lib/version.js';
 import { renderLines } from '../status-render.js';
-import { watchersState } from '../watchers-state.js';
 import { signature, workStatus } from '../work-status.js';
 
-/** The board, with the watchers on it — the last silent link, made visible. */
+/**
+ * The board. It carried a watchers row until the `mc watch` programme went
+ * away with the PM (decision mc-1): the row named three daemons, two of
+ * which no longer exist. `mc repo watch status` answers for the one that
+ * does.
+ */
 async function board(options) {
-  return { ...(await workStatus(options)), watchers: watchersState() };
+  return workStatus(options);
 }
 
 export async function run(argv, deps = {}) {
