@@ -12,10 +12,11 @@
  * The rules themselves live in run-plan.js.
  */
 import { spawnSync } from 'node:child_process';
-import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 import { resolveLaunch } from '../adapters/index.js';
+import { writeJsonAtomic } from './atomic-write.js';
 import { defaultRepos, listPlans, parsePlanFrontmatter, planFields } from './brief-collect.js';
 import { workRoot } from './paths.js';
 import { loadProfile, profileArgs } from './portrait.js';
@@ -48,6 +49,11 @@ export function realDeps(env = process.env) {
     list: (path) => { try { return readdirSync(path); } catch { return []; } },
     write: (path, text) => { mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, text); },
     append: (path, text) => { mkdirSync(dirname(path), { recursive: true }); appendFileSync(path, text); },
+    // The two files that say a runner is here and a step is in flight. Whole
+    // or not at all: `mc status` reads them while they are being written.
+    writeJson: (path, value) => writeJsonAtomic(path, value, { mode: 0o644 }),
+    remove: (path) => { try { rmSync(path, { force: true }); } catch { /* already gone */ } },
+    pid: process.pid,
     addWorktree,
     profile: () => loadProfile({ env }),
     role: readCanonRole,
@@ -76,7 +82,16 @@ export function createRunner({
     runs: join(root, 'runner', 'log', 'runs.tsv'),
     runnerLog: join(root, 'runner', 'log', 'runner.log'),
     stop: join(root, 'runner', 'STOP'),
+    // What is running, for anyone who asks. runner.json says a runner is
+    // here and names the pid to test; current.json exists only while a step
+    // is in flight. runs.tsv gets its row when the step is over — that is
+    // too late to answer "what is running now", which is why these exist.
+    runner: join(root, 'runner', 'runner.json'),
+    current: join(root, 'runner', 'current.json'),
   };
+  const writeJson = deps.writeJson || ((path, value) => deps.write(path, `${JSON.stringify(value, null, 2)}\n`));
+  const remove = deps.remove || (() => {});
+  const pid = deps.pid ?? process.pid;
   const repos = defaultRepos(deps.env);
   const stamp = () => deps.now().toISOString().replace(/\.\d{3}Z$/u, 'Z');
   const say = (text) => {
@@ -207,7 +222,18 @@ export function createRunner({
     const out = join(paths.log, `${name}-${ts}.json`);
     say(`${name}: ${kind} starting (${launch.shortName} ${settings.model}, ${settings.budgetMinutes} min)`);
     const t0 = deps.now().getTime();
-    const result = deps.session({ bin: launch.spec.bin, args, cwd: worktree, timeoutMs: settings.budgetMinutes * 60_000 });
+    // current.json exists exactly as long as the session does — written
+    // before the call that blocks, removed however that call returns.
+    writeJson(paths.current, {
+      name, kind, tool: settings.tool, model: settings.model,
+      budget_minutes: settings.budgetMinutes, started: stamp(), pid, worktree,
+    });
+    let result;
+    try {
+      result = deps.session({ bin: launch.spec.bin, args, cwd: worktree, timeoutMs: settings.budgetMinutes * 60_000 });
+    } finally {
+      remove(paths.current);
+    }
     const seconds = Math.round((deps.now().getTime() - t0) / 1000);
     deps.write(out, result.stdout);
     deps.write(`${out}.err`, result.stderr);
@@ -258,7 +284,11 @@ export function createRunner({
     return { ran, stop: false };
   }
 
-  return { paths, say, round, runStep, queue, stopRequested, syncMain, answeredDecisions, mergePr, planOf, repoOf };
+  /** runner.json — a runner is here, and this is the pid to test for life. */
+  const markRunner = () => writeJson(paths.runner, { pid, started: stamp() });
+  const clearRunner = () => { remove(paths.runner); remove(paths.current); };
+
+  return { paths, say, round, runStep, queue, stopRequested, syncMain, answeredDecisions, mergePr, planOf, repoOf, markRunner, clearRunner };
 }
 
 /**
@@ -269,15 +299,20 @@ export async function runLoop({ rounds = 0, once = false, merge = true, idleSlee
   const runner = createRunner({ merge, deps });
   if (runner.stopRequested()) { runner.say(`STOP file present (${runner.paths.stop}) — remove it before starting`); return 2; }
   runner.say(`runner start (mc run, merge=${merge ? 1 : 0} rounds=${rounds} once=${once ? 1 : 0})`);
-  let n = 0;
-  while (rounds === 0 || n < rounds) {
-    n += 1;
-    const r = await runner.round({ once });
-    if (r.stop) { runner.say(`runner exit on STOP (remove ${runner.paths.stop} before the next start)`); return 0; }
-    if (r.once) { runner.say('once: exiting'); return 0; }
-    runner.say(`round ${n} done (${r.ran} ran)`);
-    if (r.ran === 0 && (rounds === 0 || n < rounds)) await deps.sleep(idleSleepMs);
+  runner.markRunner();
+  try {
+    let n = 0;
+    while (rounds === 0 || n < rounds) {
+      n += 1;
+      const r = await runner.round({ once });
+      if (r.stop) { runner.say(`runner exit on STOP (remove ${runner.paths.stop} before the next start)`); return 0; }
+      if (r.once) { runner.say('once: exiting'); return 0; }
+      runner.say(`round ${n} done (${r.ran} ran)`);
+      if (r.ran === 0 && (rounds === 0 || n < rounds)) await deps.sleep(idleSleepMs);
+    }
+    runner.say(`runner exit after ${rounds} round(s)`);
+    return 0;
+  } finally {
+    runner.clearRunner();
   }
-  runner.say(`runner exit after ${rounds} round(s)`);
-  return 0;
 }

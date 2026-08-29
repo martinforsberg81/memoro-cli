@@ -32,6 +32,9 @@ function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], live = 
   }
   const log = [];
   const calls = { git: [], gh: [], sessions: [], added: [] };
+  // A snapshot of the work root taken inside every session call — the only
+  // way to see the files that exist only while a step is in flight.
+  const duringSession = [];
   const deps = {
     env,
     now: () => new Date('2026-08-29T10:00:00Z'),
@@ -48,6 +51,9 @@ function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], live = 
     },
     write: (p, t) => { files[p] = t; },
     append: (p, t) => { files[p] = (files[p] || '') + t; },
+    writeJson: (p, v) => { files[p] = `${JSON.stringify(v, null, 2)}\n`; },
+    remove: (p) => { delete files[p]; },
+    pid: 4242,
     addWorktree: ({ name, repo }) => {
       const repoName = repo.split('/').at(-1);
       calls.added.push(name);
@@ -63,7 +69,7 @@ function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], live = 
     profile: async () => 'PROFILE',
     role: (kind) => (roles ? { name: kind, overlay: `ROLE ${kind}` } : null),
     launch: (tool) => ({ ok: true, id: tool === 'codex' ? 'codex' : 'claude-code', shortName: tool, adapter: { modelArgs: (m) => ['--model', m] }, spec: { bin: `/bin/${tool}` } }),
-    session: (call) => { calls.sessions.push(call); return session(call); },
+    session: (call) => { calls.sessions.push(call); duringSession.push(structuredClone(files)); return session(call); },
     log: (line) => log.push(line),
     git: (cwd, args) => {
       calls.git.push([cwd, ...args]);
@@ -96,7 +102,7 @@ function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], live = 
       return { ok: true, stdout: '' };
     },
   };
-  return { deps, files, log, calls, root };
+  return { deps, files, log, calls, root, duringSession };
 }
 
 const ready = '---\nstatus: ready\nnext: "do x"\n---\n# X\n';
@@ -241,4 +247,32 @@ test('runLoop: --rounds 1 does one pass and exits; --once exits after the first 
   const g = fixture({ plans: { memoro: { a: ready, b: ready } }, session: okSession() });
   assert.equal(await runLoop({ once: true, deps: g.deps }), 0);
   assert.equal(g.calls.sessions.length, 1);
+});
+
+test('current.json exists only while the step is in flight, and runner.json only while the loop runs', async () => {
+  const f = fixture({ plans: { memoro: { alpha: ready } }, session: okSession(), gh: { alpha: { number: 77 } } });
+  assert.equal(await runLoop({ once: true, deps: f.deps }), 0);
+
+  const during = f.duringSession[0];
+  assert.deepEqual(JSON.parse(during['/w/runner/current.json']), {
+    name: 'alpha', kind: 'step', tool: 'claude', model: 'opus', budget_minutes: 90,
+    started: '2026-08-29T10:00:00Z', pid: 4242, worktree: '/w/alpha/memoro',
+  });
+  assert.deepEqual(JSON.parse(during['/w/runner/runner.json']), { pid: 4242, started: '2026-08-29T10:00:00Z' });
+
+  // ...and both are gone once the step and the loop are over.
+  assert.equal('/w/runner/current.json' in f.files, false);
+  assert.equal('/w/runner/runner.json' in f.files, false);
+});
+
+test('current.json carries the project frontmatter, and is removed even when the session throws', async () => {
+  const codexPlan = '---\nstatus: ready\ntool: codex\nmodel: o3\nbudget_minutes: 20\n---\n';
+  const f = fixture({ plans: { 'memoro-cli': { cx: codexPlan } }, session: () => { throw new Error('boom'); } });
+  const runner = createRunner({ deps: f.deps });
+  await assert.rejects(runner.round({ once: true }), /boom/u);
+  assert.deepEqual(JSON.parse(f.duringSession[0]['/w/runner/current.json']), {
+    name: 'cx', kind: 'step', tool: 'codex', model: 'o3', budget_minutes: 20,
+    started: '2026-08-29T10:00:00Z', pid: 4242, worktree: '/w/cx/memoro-cli',
+  });
+  assert.equal('/w/runner/current.json' in f.files, false);
 });

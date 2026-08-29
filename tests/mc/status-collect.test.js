@@ -9,7 +9,7 @@ import { describe, it } from 'node:test';
 import { runsSince } from '../../src/mc/brief-collect.js';
 import { estimateCost, priceFor } from '../../src/mc/prices.js';
 import {
-  decisionsBlock, kindFor, orphanWorkareas, projectsBlock, renderStatus, runnerBlock,
+  decisionsBlock, kindFor, nowBlock, orphanWorkareas, pidAlive, projectsBlock, renderStatus, runnerBlock,
 } from '../../src/mc/status-collect.js';
 import { run as page } from '../../src/mc/commands/status-page.js';
 import { runMcCli } from './_helpers/mc-cli.js';
@@ -70,6 +70,64 @@ describe('RUNNER', () => {
   });
 });
 
+describe('NOW', () => {
+  const NOW = new Date('2026-08-29T10:30:00Z');
+  const RUNNER = { pid: 4242, started: '2026-08-29T08:30:00Z' };
+  const CURRENT = {
+    name: 'mc-ui', kind: 'step', tool: 'claude', model: 'opus', budget_minutes: 90,
+    started: '2026-08-29T10:00:00Z', pid: 4242, worktree: '/w/mc-ui/memoro-cli',
+  };
+  const live = () => true;
+  const dead = () => false;
+
+  it('names the step in flight with its elapsed time against its budget', () => {
+    const block = nowBlock({ runner: RUNNER, current: CURRENT, rows: ROWS, now: NOW, alive: live });
+    assert.deepEqual(block.runner, { pid: 4242, started: '2026-08-29T08:30:00Z', alive: true, up_seconds: 7200 });
+    assert.equal(block.step.name, 'mc-ui');
+    assert.equal(block.step.kind, 'step');
+    assert.equal(block.step.tool, 'claude');
+    assert.equal(block.step.elapsed_seconds, 1800);
+    assert.equal(block.step.budget_seconds, 5400);
+    assert.equal(block.step.over_budget, false);
+    assert.deepEqual(block.stale, []);
+    assert.equal(block.stop, false);
+  });
+
+  it('is empty when no runner has written a file, and says so when a step is over budget', () => {
+    const empty = nowBlock({ now: NOW, alive: live });
+    assert.equal(empty.runner, null);
+    assert.equal(empty.step, null);
+    assert.deepEqual(empty.quota, { count: 0, last: null });
+    const late = nowBlock({ current: { ...CURRENT, started: '2026-08-29T08:00:00Z' }, now: NOW, alive: live });
+    assert.equal(late.step.over_budget, true);
+  });
+
+  it('a file whose pid is gone is stale, not running', () => {
+    const block = nowBlock({ runner: RUNNER, current: CURRENT, now: NOW, alive: dead });
+    assert.equal(block.runner.alive, false);
+    assert.equal(block.step, null);
+    assert.deepEqual(block.stale, ['runner.json (pid 4242 is gone)', 'current.json (pid 4242 is gone)']);
+  });
+
+  it('carries a pending STOP and the quota answers of the last 24 h', () => {
+    const rows = runsSince([
+      'ts\tname\tkind\texit\tseconds\tpr\tturns\tinput\toutput\tcache_read\tcache_write\tsession\tnote',
+      '2026-08-29T04:00:00Z\tmc-ui\tstep\t1\t8\t-\t1\t-\t-\t-\t-\t-\tquota',
+      '2026-08-29T05:00:00Z\tmc-ui\tstep\t0\t600\t9\t9\t-\t-\t-\t-\t-\tsuccess,merged',
+    ].join('\n'), new Date('2026-08-28T10:30:00Z'));
+    const block = nowBlock({ runner: RUNNER, stop: true, rows, now: NOW, alive: live });
+    assert.equal(block.stop, true);
+    assert.deepEqual(block.quota, { count: 1, last: '2026-08-29T04:00:00Z' });
+  });
+
+  it('liveness is this process by pid, and nothing for a pid that cannot exist', () => {
+    assert.equal(pidAlive(process.pid), true);
+    assert.equal(pidAlive(0), false);
+    assert.equal(pidAlive(null), false);
+    assert.equal(pidAlive('nope'), false);
+  });
+});
+
 describe('DECISIONS and PROJECTS', () => {
   it('lists only unanswered files and names what waits on them', () => {
     assert.deepEqual(decisionsBlock(DECISIONS).map((d) => [d.file.split('/').at(-1), d.waits_on]), [
@@ -101,8 +159,16 @@ describe('DECISIONS and PROJECTS', () => {
 });
 
 describe('the page', () => {
-  it('renders the four blocks in order, and --json emits the data', async () => {
+  it('renders the five blocks in order, and --json emits the data', async () => {
     const data = {
+      now: nowBlock({
+        runner: { pid: 4242, started: '2026-08-25T19:00:00Z' },
+        current: { name: 'mc-status', kind: 'step', tool: 'claude', model: 'opus', budget_minutes: 90, started: '2026-08-25T19:20:00Z', pid: 4242, worktree: '/w/mc-status/memoro-cli' },
+        stop: true,
+        rows: ROWS,
+        now: new Date('2026-08-25T19:40:00Z'),
+        alive: () => true,
+      }),
       runner: runnerBlock({ queue: ['mc-status'], plans: PLANS, decisions: DECISIONS, rows: ROWS, alive: null }),
       decisions: decisionsBlock(DECISIONS),
       projects: projectsBlock({ plans: PLANS, rows: ROWS, workareas: ['docx-editor'] }),
@@ -110,8 +176,11 @@ describe('the page', () => {
       notes: ['memoro-cli: gh pr list failed'],
     };
     const text = renderStatus(data);
-    const at = ['RUNNER', 'DECISIONS', 'PROJECTS', 'WORKAREAS WITHOUT A PROJECT'].map((h) => text.indexOf(`${h}\n`));
+    const at = ['NOW', 'RUNNER', 'DECISIONS', 'PROJECTS', 'WORKAREAS WITHOUT A PROJECT'].map((h) => text.indexOf(`${h}\n`));
     assert.ok(at.every((i, n) => i >= 0 && (n === 0 || i > at[n - 1])), text);
+    assert.match(text, /  runner: pid 4242, up 40 min\n/u);
+    assert.match(text, /  step: mc-status — step \(claude opus\) 20 min of 90 min\n/u);
+    assert.match(text, /  STOP requested — the runner exits after the step it is in\n/u);
     assert.match(text, /not running/u);
     assert.match(text, /queue: 1 projects — next: mc-status \(step\)/u);
     assert.match(text, /≈ \$\d+\.\d\d list \(opus, prices 2026-06\); quota is the real limit/u);
