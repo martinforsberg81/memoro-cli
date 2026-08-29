@@ -218,7 +218,7 @@ export function createRunner({
     return false;
   }
 
-  /** One project. Returns 'ran' | 'skipped' | 'stop'. */
+  /** One project. Returns 'merged' | 'ran' | 'skipped' | 'stop'. */
   async function runStep(name, plans) {
     if (stopRequested()) { say(`STOP file present (${paths.stop}) — not starting ${name}`); return 'stop'; }
     const repo = repoOf(name, plans);
@@ -290,7 +290,7 @@ export function createRunner({
     deps.append(paths.runs, `${tsvRow({ ts: stamp(), name, kind, exit: result.status, seconds, pr, turns: read.turns, input: read.input, output: read.output, cacheRead: read.cacheRead, cacheWrite: read.cacheWrite, session: read.session, note })}\n`);
     say(`${name}: ${kind} done rc=${result.status} ${seconds}s pr=${pr} turns=${read.turns} note=${note}`);
     if (read.quota) { say(`quota/rate limit seen — sleeping ${QUOTA_SLEEP_MS / 60000}m`); await deps.sleep(QUOTA_SLEEP_MS); }
-    return 'ran';
+    return note === 'success,merged' ? 'merged' : 'ran';
   }
 
   /** The queue, re-read every round: queue.md, then every plan on origin/main. */
@@ -304,19 +304,33 @@ export function createRunner({
     return { names: assembleQueue(deps.read(paths.queue) || '', plans), plans };
   }
 
-  /** One pass. Returns { ran, stop }. */
+  /**
+   * One pass. Returns { ran, stop }. A project whose step merged keeps the
+   * runner: its next step follows at once (plans re-read, so the merged
+   * status is what decides) instead of waiting a whole round behind every
+   * other project — 2026-08-29 a six-step plan would have taken six rounds
+   * of twenty projects. STOP is honoured between those steps too.
+   */
   async function round({ once = false } = {}) {
-    const { names, plans } = queue();
+    let { names, plans } = queue();
     let ran = 0;
     for (const name of names) {
-      const r = await runStep(name, plans);
-      if (r === 'stop') return { ran, stop: true };
-      if (r === 'ran') {
-        ran += 1;
-        if (once) return { ran, stop: false, once: true };
-        await deps.sleep(60_000);
+      let r = await runStep(name, plans);
+      for (let stayed = 0; ; stayed += 1) {
+        if (r === 'stop') return { ran, stop: true };
+        if (r === 'ran' || r === 'merged') {
+          ran += 1;
+          if (once) return { ran, stop: false, once: true };
+          await deps.sleep(60_000);
+        }
+        if (stopRequested()) { say(`runner exit on STOP after ${name} (remove ${paths.stop} before the next start)`); return { ran, stop: true }; }
+        if (r !== 'merged' || stayed >= 8) break;
+        plans = queue().plans;
+        const status = plans.find((p) => p.project === name)?.status;
+        if (!status || status === 'done') break;
+        say(`${name}: step merged and the plan is ${status} — staying on ${name}`);
+        r = await runStep(name, plans);
       }
-      if (stopRequested()) { say(`runner exit on STOP after ${name} (remove ${paths.stop} before the next start)`); return { ran, stop: true }; }
     }
     // After the steps, so a decision applied by a step this round is retired
     // in the same round and the next brief never sees it. The plans are

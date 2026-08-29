@@ -64,6 +64,10 @@ test('readSessionOutput: a quota answer is logged as quota, never success', () =
   assert.equal(r.quota, true);
   assert.equal(quotaSeen('Rate limit reached'), true);
   assert.equal(quotaSeen('all good'), false);
+  // is_error is a failure whatever the subtype says (2026-08-29: "API Error:
+  // No response from API" after 83 turns came back subtype success).
+  const err = JSON.stringify({ subtype: 'success', is_error: true, num_turns: 83, result: 'API Error: No response from API' });
+  assert.equal(readSessionOutput({ toolId: 'claude-code', stdout: err, exitCode: 1 }).note, 'failed');
   // A finished session whose prose mentions quota is success, not quota.
   const done = JSON.stringify({ subtype: 'success', num_turns: 39, result: 'PR open: the page shows quota rows of the last 24 h' });
   const d = readSessionOutput({ toolId: 'claude-code', stdout: done, exitCode: 0 });
