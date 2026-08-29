@@ -1,8 +1,9 @@
 /**
  * `mc brief --collect` — the builders behind the six sections, on fixtures:
- * the decision-file scan (answered vs unanswered, non-decisions skipped),
- * PLAN.md frontmatter parsing, the runs.tsv window, and the whole collect
- * run against a work root with no git and no gh.
+ * the decision-file scan (answered vs unanswered, bookkeeping skipped, a
+ * question whose options are neither a `## Options` heading nor a bold lead
+ * still listed), PLAN.md frontmatter parsing, the runs.tsv window, and the
+ * whole collect run against a work root with no git and no gh.
  */
 import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
@@ -35,13 +36,30 @@ drops the approval work.
 
 ${answered ? '**Beslut:** B (Martin, 2026-08-25). Keep the veto.\n' : ''}`;
 
+// The shape the runner watches and the old rule dropped: the options are a
+// heading of their own words and a bullet, and there is no recommendation
+// section at all. ~/mc/swedish-grammar/decisions/language-content-1.md.
+const OWN_WORDS = `---
+programme: language-content
+---
+
+# Is the Swedish map accepted, and when does grammar go live?
+
+## Half one — does the map count as accepted?
+
+- **Option A (recommended).** Yes, record acceptance.
+- **Option B.** No.
+`;
+
 function workRoot() {
   const root = mkdtempSync(join(tmpdir(), 'mc-brief-'));
   mkdirSync(join(root, 'avatar', 'decisions'), { recursive: true });
   writeFileSync(join(root, 'avatar', 'decisions', 'assistant-avatar-1.md'), DECISION(true));
   writeFileSync(join(root, 'avatar', 'decisions', 'assistant-avatar-2.md'), DECISION(false));
+  writeFileSync(join(root, 'avatar', 'decisions', 'language-content-1.md'), OWN_WORDS);
   mkdirSync(join(root, 'pm', 'decisions'), { recursive: true });
   writeFileSync(join(root, 'pm', 'decisions', 'merge-log.md'), '## 2026-08-15 — PR #344\n- **Beslut:** Martin\n');
+  writeFileSync(join(root, 'pm', 'decisions', 'log.md'), '# Beslutslogg — append-only\n\n## Alternativ\n\n**Beslut:** whatever.\n');
   writeFileSync(join(root, 'pm', 'decisions', 'README.md'), '# decisions\n\nAppend-only log.\n');
   mkdirSync(join(root, 'runner', 'log'), { recursive: true });
   writeFileSync(join(root, 'runner', 'log', 'runs.tsv'), [
@@ -70,14 +88,22 @@ describe('decision files', () => {
     assert.equal(d.title, 'surface 3 — autosave');
     assert.equal(d.recommendation, '**option 2.** Text is never lost, history stays readable.');
     assert.equal(d.answered, true);
-    assert.equal(parseDecision('# decisions\n\nAppend-only log.\n'), null);
+    assert.equal(parseDecision('no heading at all\n'), null);
   });
 
-  it('scans every <area>/decisions/*.md and skips files that are not decisions', () => {
+  it('lists a question whose options are its own words, with no recommendation to quote', () => {
+    const d = parseDecision(OWN_WORDS);
+    assert.equal(d.title, 'Is the Swedish map accepted, and when does grammar go live?');
+    assert.equal(d.recommendation, null);
+    assert.equal(d.answered, false);
+  });
+
+  it('scans every <area>/decisions/*.md and skips the bookkeeping names only', () => {
     const found = scanDecisions(workRoot());
     assert.deepEqual(found.map((d) => [d.file, d.answered]), [
       ['avatar/decisions/assistant-avatar-1.md', true],
       ['avatar/decisions/assistant-avatar-2.md', false],
+      ['avatar/decisions/language-content-1.md', false],
     ]);
   });
 });
@@ -141,7 +167,8 @@ describe('collectBrief', () => {
     }
     assert.match(text, /First brief: the window is the last 24 h \(since 2026-08-24T20:00:00Z\)/u);
     assert.match(text, /\| avatar\/decisions\/assistant-avatar-2\.md \| 1\. Ska QA-tabellen fortsätta grinda\? \| \*\*B\.\*\* Keeps the veto/u);
-    assert.match(text, /1 waiting, 1 answered/u);
+    assert.match(text, /\| avatar\/decisions\/language-content-1\.md \| Is the Swedish map accepted[^|]*\| — \|/u);
+    assert.match(text, /2 waiting, 1 answered/u);
     assert.match(text, /Last 24 h: 3 steps \(step 2, triage 1\) — merged 1, left open 1, failed 0, timed out 1/u);
     assert.match(text, /- docx-editor\n- sql-readiness-session-A/u);
     assert.match(text, /memoro: no checkout/u);

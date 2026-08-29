@@ -23,7 +23,19 @@ import { join } from 'node:path';
 import { workRoot } from './paths.js';
 
 export const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * The answer line, and the only mechanism there is: Martin's word turns a
+ * `waiting-decision` project back into a running one. The same test exists
+ * three times — here, as `grep -l '^\*\*Beslut'` in `~/mc/bin/runner.sh`,
+ * and as `isAnswered()` in `mc run` — so `canon/roles/brief.md` fixes the
+ * shape a brief session writes and `tests/mc/commands/brief.test.js` holds
+ * the overlay's own template against this pattern.
+ */
 export const ANSWER_LINE = /^\*\*Beslut/u;
+
+/** Bookkeeping that lives under a `decisions/` directory but asks nothing. */
+export const NOT_A_DECISION = new Set(['README.md', 'log.md', 'merge-log.md']);
 
 /** The two repositories that carry projects, checked out on main at home. */
 export function defaultRepos(env = process.env) {
@@ -54,20 +66,27 @@ export function lastBriefTime(dir) {
 
 /**
  * One decision file: the question is the first `# ` heading, the session's
- * recommendation is the first paragraph under `## Rekommendation`, and it
- * is answered when any line starts with `**Beslut`. A decision has a `# `
- * heading and an options-or-recommendation section, written either as a
- * `##` heading or as a bold lead (`**Recommendation: option 2.**`) — both
- * shapes exist. A README or a log under decisions/ has neither and is left
- * out (both exist in ~/mc/pm).
+ * recommendation is the first paragraph under `## Rekommendation` — or a
+ * bold lead, `**Recommendation: option 2.**`, both shapes exist — and it is
+ * answered when a line starts with `**Beslut`.
+ *
+ * A `# ` heading is the whole test, because the runner's is looser still:
+ * it watches every `<area>/decisions/*.md` for the answer line, so anything
+ * narrower here hides an open question from the only person who can answer
+ * it. This once also demanded an options-or-recommendation section; measured
+ * against ~/mc on 2026-08-29 that dropped five files the runner watches —
+ * `swedish-grammar/decisions/language-content-1.md` unanswered among them,
+ * its options written as `## Half one …` and its alternatives as bullets —
+ * and let in `pm/decisions/log.md`, a 358 kB append-only log, because one of
+ * its thousands of lines matched. The bookkeeping names go by name instead,
+ * in `scanDecisions`.
  */
-const DECISION_SECTION = /^(##\s+|\*\*)(Rekommendation|Recommendation|Alternativ|Options)\b/iu;
 const RECOMMENDATION = /^(##\s+|\*\*)(Rekommendation|Recommendation)\b/iu;
 
 export function parseDecision(text) {
   const lines = String(text || '').replace(/\r\n/gu, '\n').split('\n');
   const heading = lines.find((line) => /^# /u.test(line));
-  if (!heading || !lines.some((line) => DECISION_SECTION.test(line))) return null;
+  if (!heading) return null;
   const answered = lines.some((line) => ANSWER_LINE.test(line));
   let recommendation = null;
   const at = lines.findIndex((line) => RECOMMENDATION.test(line));
@@ -84,7 +103,10 @@ export function parseDecision(text) {
   return { title: heading.replace(/^#\s*/u, '').trim(), recommendation, answered };
 }
 
-/** Every `<work root>/<area>/decisions/*.md` that is a decision, parsed. */
+/**
+ * Every `<work root>/<area>/decisions/*.md` that is a decision, parsed —
+ * the same set the runner watches, minus the bookkeeping names.
+ */
 export function scanDecisions(root) {
   const out = [];
   let areas = [];
@@ -94,6 +116,7 @@ export function scanDecisions(root) {
     let files = [];
     try { files = readdirSync(dir).filter((name) => name.endsWith('.md')).sort(); } catch { continue; }
     for (const file of files) {
+      if (NOT_A_DECISION.has(file)) continue;
       const parsed = parseDecision(readFileSync(join(dir, file), 'utf8'));
       if (!parsed) continue;
       out.push({ area, file: `${area}/decisions/${file}`, ...parsed });
