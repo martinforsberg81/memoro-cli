@@ -1,6 +1,6 @@
 ---
 status: ready
-next: "Step 2 — the closable rule, the runner's close, the page filter and a strict `queue.md`: a workarea whose plan on main says `done`, whose worktree is clean and whose last row in `runs.tsv` ends `merged` is removed at the end of the round (`git worktree remove`, local branch deleted, index/log files moved to `~/mc/runner/log/closed/<name>/`) — done when a round removes such a workarea and says so in runner.log one line each, a workarea with no plan on main is never removed but is listed under its own heading with `~/mc/intake/unplanned-workareas.md` beside it, mc's own folders are off the page, and `~/mc/queue.md` holds nothing but names of projects that still have a step to run this round."
+next: "Step 3 — close-out: the `docs/technical/` note for the whole of mc tidy, this project's own `project_log.md` row, and the one thing steps 1 and 2 left for a reader — `mc brief` raising `~/mc/intake/undocumented-closures.md` and `~/mc/intake/unplanned-workareas.md` (the runner writes both; nothing reads either yet) — done when `mc brief` names what is in them and the note says what a done plan and a done workarea now cost."
 budget: 150k
 needs: [mc-ui]
 ---
@@ -118,7 +118,7 @@ page keep the list clean on their own.
       already had a row (mc-ui, mc-ui-polish) still have exactly one each.
 - [ ] `~/mc/intake/undocumented-closures.md` names every project archived
       with `doc: none`.
-- [ ] `mc run` closes every closable workarea at the end of each round
+- [x] `mc run` closes every closable workarea at the end of each round
       (`git worktree remove`, local branch deleted, logs moved) and says so
       in runner.log, one line per workarea.
 - [ ] The first run after merge removes the seven done workareas of
@@ -126,14 +126,17 @@ page keep the list clean on their own.
       sql-readiness-session-A, language-voice-lexical-selection,
       language-voice-live-watchdog, language-voice-playback-underrun) and
       leaves the rest untouched — the PR body lists what it removed.
-- [ ] The page (WORK in `mc`, or `mc work` until then) hides mc's own
+- [x] The page (WORK in `mc`, or `mc work` until then) hides mc's own
       folders and shows unplanned workareas under their own heading.
 - [ ] `~/mc/intake/unplanned-workareas.md` exists after the first run.
-- [ ] `~/mc/queue.md` contains only names of projects with a plan on main
+      (The runner writes it every round — `tests/mc/close-live.test.js` reads
+      the real file. Unticked because "after the first run" is a measurement
+      only a round after merge can make, like the four archive criteria above.)
+- [x] `~/mc/queue.md` contains only names of projects with a plan on main
       that have not yet had their step this round; after a round in which
       every named project ran, the file is empty. `mc run` never reads a
       comment line into the queue.
-- [ ] Tests cover the closable rule with the squash-merge case (branch
+- [x] Tests cover the closable rule with the squash-merge case (branch
       ahead, plan done, last run merged → closable) and the dirty case;
       and archiving with a row already written, with no row, and with a
       programme left empty by its last project.
@@ -154,14 +157,20 @@ page keep the list clean on their own.
 ## Steps
 
 - [x] **1. Archive on done** — the runner removes the directory and writes
-      the row it needs, PR per repository. One PR. (PR pending; the rules are
+      the row it needs, PR per repository. One PR (#454). The rules are
       `src/mc/archive-plan.js`, the round's half is `archiveDone` in
-      `src/mc/run.js`.)
-- [ ] **2. Closable rule + runner close + page filter + strict queue.md** — one PR.
+      `src/mc/run.js`.
+- [x] **2. Closable rule + runner close + page filter + strict queue.md** — one PR.
+      The rules are `src/mc/close-workarea.js` and `strictQueue` in
+      `src/mc/run-plan.js`; the round's half is `closeWorkareas`, `tidyQueue`
+      and `dropFromQueue` in `src/mc/run.js`; the page's is `workSection` in
+      `src/mc/page-collect.js` and `areasWithCheckout` in
+      `src/mc/status-collect.js`.
 - [ ] **3. Close-out** — `docs/technical/` note, `project_log.md` row, and
-      the one thing step 1 left for a reader: `mc brief` raising
-      `~/mc/intake/undocumented-closures.md` (the runner writes it; nothing
-      reads it yet).
+      the one thing steps 1 and 2 left for a reader: `mc brief` raising
+      `~/mc/intake/undocumented-closures.md` and
+      `~/mc/intake/unplanned-workareas.md` (the runner writes both; nothing
+      reads either yet).
 
 ## What the code taught us
 
@@ -185,3 +194,62 @@ page keep the list clean on their own.
   merged would therefore be joined by a second one next round removing the
   same directories again. The runner asks for an open PR whose head starts
   with `mc-archive-` first and holds off while one exists.
+
+- **The closable set is eleven, not seven, and two done projects are kept.**
+  Dry-run against the real `~/mc` and the real `runs.tsv` while step 2 was
+  written: eleven workareas are closable — the plan's seven plus
+  avatar-fab-composition, mc-run-lanes, mc-ui and msr-design, which reached
+  `done` after the plan was written. Two more say `done` and are kept,
+  because their last row in `runs.tsv` ends `success` rather than
+  `success,merged`: mc-helper and mc-ui-polish, whose last step's PR was
+  merged by something other than the runner. The rule does not guess at
+  that. Once their plans are archived they have no plan on main, so they
+  land in `unplanned-workareas.md` for Martin — which is the escape hatch
+  working, not a gap.
+
+- **mc's own folders were already off the page, by accident.** The plan
+  counted eight of the 62 rows as `bin/`, `brief/`, `decisions/`, `inbox/`,
+  `runner/`, `status/`, `pm/` and `pm-helper/`. Measured while step 2 was
+  written, the page showed 61 rows and none of them were those: the filter
+  asked whether *any* subdirectory held a `.git`, and none of mc's do. So
+  the change is not a fix but a rule made explicit — a folder is a workarea
+  when it holds `memoro/` or `memoro-cli/`, and a repository mirror dropped
+  into `pm-helper/` would no longer put mc's own bookkeeping on the board.
+  The runner uses the same rule, which is what keeps it from ever removing
+  one of them.
+
+- **A live tmux session is a fourth reason to keep a workarea.** Not a
+  fourth rule: it is the refusal `runStep` already makes before it starts
+  anything, and removing the worktree somebody is sitting in is the one
+  irreversible thing in this step. It is inside the Contract's "nothing is
+  removed that has an uncommitted change, no plan, or an unmerged last run"
+  — strictly more conservative, never less.
+
+- **The close needs the round's reading of main, not main.** A workarea is
+  closed after its plan has been archived, so by then the plan is gone from
+  main and "its plan on main says `done`" can no longer be asked of main.
+  The round already holds the reading it took before archiving, and
+  `archiveDone` now returns `{ archived, landed }` — `landed` being the
+  projects whose archive PR actually merged. Only those may have their
+  workarea closed, which is what "the plan goes first, then the workarea"
+  costs in code. A done project whose archive PR failed to merge keeps its
+  workarea and says so.
+
+- **`git worktree remove` takes the ignored files with it, and that is
+  measured rather than assumed.** A clean `git status --porcelain` says
+  nothing about files `.gitignore` covers, and git removes those without
+  `--force` (verified in a throwaway repository: a worktree holding only
+  `node_modules/` is "clean" and is removed, directory and all). Measured on
+  the seven closable workareas of 2026-08-29, what that costs is
+  `node_modules/`, `__pycache__/`, `.wrangler/`, `public/dist/` and one
+  generated `scripts/dev/local-schema.sql` — build output and nothing else.
+  No `.env` and no untracked note. So the close does not ask about ignored
+  files: everything else the folder holds is moved to
+  `runner/log/closed/<name>/` first, and what git deletes is what a fresh
+  checkout would rebuild.
+
+- **`waiting-decision` keeps its place in the queue.** The strict-queue rule
+  drops a line that is not a name, a project that is `done`, and a project
+  with no plan on main — a plan that is waiting or blocked still has a step
+  ahead of it, so its name stays where Martin put it. A name leaves the file
+  when its step has *run*, not when it was skipped.

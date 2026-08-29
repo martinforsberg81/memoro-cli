@@ -2,8 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  assembleQueue, chooseKind, headlessArgs, helperDue, helperNote, quotaSeen, readSessionOutput,
-  sessionSettings, stepPrompt, tsvHeader, tsvRow,
+  assembleQueue, chooseKind, headlessArgs, helperDue, helperNote, queueFileNames, queueFileText,
+  quotaSeen, readSessionOutput, sessionSettings, stepPrompt, strictQueue, tsvHeader, tsvRow,
 } from '../../src/mc/run-plan.js';
 import { profileArgs } from '../../src/mc/portrait.js';
 import { parseRunArgs } from '../../src/mc/commands/run.js';
@@ -22,6 +22,36 @@ test('assembleQueue: queue.md order first, then plans on main it did not name, s
 test('assembleQueue: a name with no plan on main is dropped, not skipped', () => {
   assert.deepEqual(assembleQueue('ghost\nreal\n', [{ project: 'real' }]), ['real']);
   assert.deepEqual(assembleQueue('ghost\n', []), []);
+});
+
+/**
+ * `~/mc/queue.md` is a strict list (Martin, 2026-08-29: "ett träsk — där ska
+ * INTE finnas någonting annat än en lista över vad som ska köras"). The
+ * 2026-08-29 file had seven comment lines and twenty names that were already
+ * done or had no plan on main.
+ */
+test('strictQueue: names of projects that still have a step to run, and nothing else', () => {
+  const text = '# the queue\n\n## Martin first\nalpha\nover\nghost\nalpha\nbeta\n';
+  const plans = [{ project: 'alpha', status: 'ready' }, { project: 'beta', status: 'waiting-decision' }, { project: 'over', status: 'done' }];
+  const { names, dropped } = strictQueue(text, plans);
+  assert.deepEqual(names, ['alpha', 'beta'], 'a plan that is not ready still has a step ahead of it');
+  assert.deepEqual(dropped, [
+    { line: '# the queue', why: 'not a project name' },
+    { line: '## Martin first', why: 'not a project name' },
+    { line: 'over', why: 'the plan is done' },
+    { line: 'ghost', why: 'no plan on main' },
+    { line: 'alpha', why: 'named twice' },
+  ]);
+});
+
+test('strictQueue: a blank line is not a drop worth a log line', () => {
+  assert.deepEqual(strictQueue('\n\n\n', []), { names: [], dropped: [] });
+});
+
+test('queueFileText: one name per line, and an empty file when every name has run', () => {
+  assert.equal(queueFileText(['a', 'b']), 'a\nb\n');
+  assert.equal(queueFileText([]), '');
+  assert.deepEqual(queueFileNames('a\n# no\n\nb\n'), ['a', 'b']);
 });
 
 test('chooseKind: reconcile beats everything; ready is the only thing that runs', () => {

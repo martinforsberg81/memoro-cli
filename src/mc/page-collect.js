@@ -12,7 +12,10 @@
  *            themselves, and how many proposals nobody has queued or dropped.
  * WORK     — one numbered row per workarea: the plan's status and `next`, the
  *            last runner step, the open PR, and whether something is live in
- *            it. The number is the one the menu opens.
+ *            it. The number is the one the menu opens. The workareas with no
+ *            plan on main come last, under a heading of their own — nothing
+ *            removes them, and what they are judged by is how much is
+ *            uncommitted and when they were last committed to.
  *
  * The builders are pure: each takes read data and returns the section, so the
  * tests feed them fixtures and never touch git, gh or tmux. `collectPage` is
@@ -200,10 +203,20 @@ export function intakeSection({ digest = null, proposals = [], now = new Date(),
  *
  * Live first — that is where a conversation is waiting on a person — then by
  * last activity, which is the later of the area's own mtime and its last
- * runner step. An area without a PLAN.md on main is still a row: it is work
- * somebody started, and the missing plan is the thing worth seeing.
+ * runner step.
+ *
+ * A workarea without a PLAN.md on main is not one of those rows. It is work
+ * somebody started that nothing in the plan world explains, and no machine
+ * will ever remove it — so it belongs under a heading of its own, with what
+ * says whether anything would be lost: how much is uncommitted, when it was
+ * last committed to, and whether the branch's content is already on main.
+ * Measured 2026-08-29: sixteen of them, from before the plan world, scattered
+ * through a list of thirty-two real ones.
+ *
+ * Numbering runs through both lists in order, so every row on the page is
+ * still openable by the number beside it.
  */
-export function workSection({ areas = [], plans = [], rows = [], openPrs = [], live = [] } = {}) {
+export function workSection({ areas = [], plans = [], rows = [], openPrs = [], live = [], detail = {} } = {}) {
   const lastRun = {};
   for (const row of rows) lastRun[row.name] = row; // rows are in time order; the last wins
   const byProject = new Map(plans.map((plan) => [plan.project, plan]));
@@ -213,25 +226,57 @@ export function workSection({ areas = [], plans = [], rows = [], openPrs = [], l
     const last = lastRun[name] || null;
     const pr = openPrs.find((item) => item.headRefName === name && (!plan || item.repo === plan.repo)) || null;
     const ran = last ? Date.parse(last.ts) : NaN;
+    const held = (typeof area === 'string' ? [] : area.repos) || [];
     return {
       name,
       live: live.includes(name),
-      repo: plan?.repo || null,
+      repo: plan?.repo || held[0] || null,
       programme: plan?.programme || null,
       status: plan?.status || null,
       next: plan?.next || null,
       last: last ? { ts: last.ts, kind: last.kind, pr: last.pr, note: last.note } : null,
       pr: pr ? pr.number : null,
       activity_ms: Math.max(Number(area.mtime_ms) || 0, Number.isNaN(ran) ? 0 : ran),
+      ...(plan ? {} : { unplanned: true, ...(detail[name] || {}) }),
     };
   });
-  items.sort((a, b) => (Number(b.live) - Number(a.live))
+  const order = (a, b) => (Number(b.live) - Number(a.live))
     || (b.activity_ms - a.activity_ms)
-    || a.name.localeCompare(b.name));
-  items.forEach((item, index) => { item.number = index + 1; });
+    || a.name.localeCompare(b.name);
+  const planned = items.filter((item) => !item.unplanned).sort(order);
+  const unplanned = items.filter((item) => item.unplanned).sort(order);
+  [...planned, ...unplanned].forEach((item, index) => { item.number = index + 1; });
   const known = new Set(items.map((item) => item.name));
   const without = plans.filter((plan) => !known.has(plan.project));
-  return { count: items.length, areas: items, without_workarea: without.length };
+  return {
+    count: items.length, areas: planned, unplanned, without_workarea: without.length,
+  };
+}
+
+/**
+ * The two facts an unplanned workarea is judged by, asked of git — how much
+ * is uncommitted, and when it was last committed to. Asked only of the areas
+ * with no plan: they are the minority, and the rest have a plan that says
+ * everything a row needs.
+ *
+ * Whether the branch's content is already on main is deliberately not here:
+ * `git merge-tree` is another process per area, and the page is offline and
+ * fast. `mc run` writes that into `~/mc/intake/unplanned-workareas.md` once a
+ * round, which is where the question gets answered.
+ */
+export function readUnplanned(root, areas, git = runGit) {
+  const out = {};
+  for (const area of areas) {
+    const repo = (area.repos || [])[0];
+    if (!repo) continue;
+    const dir = join(root, area.name, repo);
+    const status = git(dir, ['status', '--porcelain']);
+    out[area.name] = {
+      uncommitted: status == null ? null : status.split('\n').filter(Boolean).length,
+      last_commit: git(dir, ['log', '-1', '--format=%cs']) || null,
+    };
+  }
+  return out;
 }
 
 /* ----------------------------------------------------------------- readers */
@@ -306,12 +351,17 @@ export function readDigest(dir) {
   } catch { return null; }
 }
 
-/** The areas under the work root that hold a checkout, each with its mtime. */
-export function readAreas(root) {
-  return areasWithCheckout(root).map((name) => {
+/**
+ * The areas under the work root that hold a checkout, each with its mtime and
+ * the repositories it holds. `repoNames` is what makes a directory a workarea
+ * at all, and defaults to the two mc knows — mc's own folders under `~/mc`
+ * hold neither.
+ */
+export function readAreas(root, repoNames) {
+  return areasWithCheckout(root, repoNames).map(({ name, repos }) => {
     let mtime = 0;
     try { mtime = statSync(join(root, name)).mtimeMs; } catch { mtime = 0; }
-    return { name, mtime_ms: mtime };
+    return { name, repos, mtime_ms: mtime };
   });
 }
 
@@ -371,6 +421,8 @@ export async function collectPage({
 
   const live = liveAreas(run);
   const liveNames = live.map((item) => item.name);
+  const areas = readAreas(root);
+  const planned = new Set(plans.map((plan) => plan.project));
   return {
     now: nowSection({
       runner: readJson(join(root, 'runner', 'runner.json')),
@@ -385,7 +437,10 @@ export async function collectPage({
     queue: queueSection({ queue, plans, live: liveNames }),
     decisions: decisionsSection(scanDecisions(root)),
     intake: intakeSection({ digest: readDigest(intakeDir(env)), proposals: proposalFiles(proposalsDir(env)), now }),
-    work: workSection({ areas: readAreas(root), plans, rows, openPrs: prs.prs, live: liveNames }),
+    work: workSection({
+      areas, plans, rows, openPrs: prs.prs, live: liveNames,
+      detail: readUnplanned(root, areas.filter((area) => !planned.has(area.name)), git),
+    }),
     caches: { fresh, plans: sources, prs: { fetched: prs.fetched, age_seconds: prs.age_seconds, count: prs.prs.length } },
     notes,
   };

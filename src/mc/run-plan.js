@@ -41,12 +41,60 @@ export const TIMEOUT_EXIT = 142; // what the shell runner's `perl alarm` left in
  */
 export function assembleQueue(queueText, plans) {
   const planned = new Set(plans.map((p) => p.project));
-  const named = String(queueText || '').split('\n')
-    .map((line) => line.trim())
-    .filter((line) => line && !line.startsWith('#') && planned.has(line));
+  const named = queueFileNames(queueText).filter((name) => planned.has(name));
   const seen = new Set(named);
   const rest = [...planned].filter((name) => !seen.has(name)).sort();
   return [...named, ...rest];
+}
+
+/** What a project may be called — the same shape `mc work` accepts. */
+const QUEUE_NAME = /^[A-Za-z0-9._-]{1,64}$/u;
+
+/** The lines of the queue file that look like a name at all, in order. */
+export function queueFileNames(queueText) {
+  return String(queueText || '').split('\n')
+    .map((line) => line.trim())
+    .filter((line) => QUEUE_NAME.test(line));
+}
+
+/**
+ * `~/mc/queue.md` is a strict list (Martin, 2026-08-29: "ett träsk — där ska
+ * INTE finnas någonting annat än en lista över vad som ska köras"). One
+ * project name per line and nothing else: no comments, no headings, no
+ * blank-line sections.
+ *
+ * The file is Martin's "these first", and it empties itself — a name leaves
+ * it the moment its project's step has run, and a name that cannot have a
+ * step (the plan is done, or there is no plan on main) leaves it now. What
+ * is left is the order; the alphabetical list of ready plans on main is what
+ * follows it, as before.
+ *
+ * Returns `{ names, dropped }` — `dropped` is `{ line, why }` per line that
+ * goes, one runner.log line each. The 2026-08-29 file had seven comment
+ * lines and twenty names that were already done or had no plan on main.
+ */
+export function strictQueue(queueText, plans) {
+  const byProject = new Map(plans.map((plan) => [plan.project, plan]));
+  const names = [];
+  const dropped = [];
+  const seen = new Set();
+  for (const raw of String(queueText || '').split('\n')) {
+    const line = raw.trim();
+    if (!line) continue;
+    if (!QUEUE_NAME.test(line)) { dropped.push({ line, why: 'not a project name' }); continue; }
+    if (seen.has(line)) { dropped.push({ line, why: 'named twice' }); continue; }
+    const plan = byProject.get(line);
+    if (!plan) { dropped.push({ line, why: 'no plan on main' }); continue; }
+    if (plan.status === 'done') { dropped.push({ line, why: 'the plan is done' }); continue; }
+    seen.add(line);
+    names.push(line);
+  }
+  return { names, dropped };
+}
+
+/** The queue file as it is written back: names, one per line, nothing else. */
+export function queueFileText(names) {
+  return names.length ? `${names.join('\n')}\n` : '';
 }
 
 /* ------------------------------------------------------------------- kind */

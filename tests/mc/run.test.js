@@ -10,7 +10,7 @@ import { createRunner, runLoop } from '../../src/mc/run.js';
  * a "session" that returns what the test says. Nothing starts, nothing is
  * written outside `files`.
  */
-function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], live = [], areas = {}, conflicts = {}, roles = true, now = '2026-08-29T10:00:00Z', runs = null, collect = okCollect, helperTurn = okTurn, projectLog = {}, archive = {} } = {}) {
+function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], live = [], areas = {}, conflicts = {}, roles = true, now = '2026-08-29T10:00:00Z', runs = null, collect = okCollect, helperTurn = okTurn, projectLog = {}, archive = {}, landed = [], removeFails = [] } = {}) {
   const root = '/w';
   const files = { [`${root}/queue.md`]: queue };
   if (runs != null) files[`${root}/runner/log/runs.tsv`] = runs;
@@ -32,7 +32,7 @@ function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], live = 
     }
   }
   const log = [];
-  const calls = { git: [], gh: [], sessions: [], added: [], removed: [], collects: [], turns: [], rm: [] };
+  const calls = { git: [], gh: [], sessions: [], added: [], removed: [], collects: [], turns: [], rm: [], moved: [], rmdirs: [] };
   /** `/w/runner/archive/<repo>` — the worktree the runner archives in. */
   const archiveRoot = `${root}/runner/archive`;
   // A snapshot of the work root taken inside every session call — the only
@@ -54,6 +54,26 @@ function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], live = 
     },
     write: (p, t) => { files[p] = t; },
     append: (p, t) => { files[p] = (files[p] || '') + t; },
+    // Closing a workarea moves everything it kept and then takes the empty
+    // folder: both are recorded, so a test can say what was moved where.
+    move: (from, to) => {
+      const prefix = `${from}/`;
+      let moved = false;
+      for (const key of Object.keys(files)) {
+        if (key !== from && !key.startsWith(prefix)) continue;
+        files[key === from ? to : to + key.slice(from.length)] = files[key];
+        delete files[key];
+        moved = true;
+      }
+      for (const dir of [...dirs]) if (dir === from || dir.startsWith(prefix)) { dirs.delete(dir); dirs.add(to + dir.slice(from.length)); moved = true; }
+      calls.moved.push([from, to]);
+      return moved;
+    },
+    rmdir: (p) => {
+      dirs.delete(p);
+      calls.rmdirs.push(p);
+      return true;
+    },
     writeJson: (p, v) => { files[p] = `${JSON.stringify(v, null, 2)}\n`; },
     remove: (p) => { if (!(p in files)) return false; delete files[p]; calls.removed.push(p); return true; },
     pid: 4242,
@@ -88,6 +108,16 @@ function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], live = 
       }
       // `git worktree add -b <branch> <path> origin/main` in a repository:
       // origin/main checked out, which here is its plans and its project log.
+      // `git worktree remove <path>` — the checkout is handed back, so its
+      // files go with it and the folder above is left holding its filing.
+      // `--force` is the archive worktree being taken down, which the archive
+      // tests read the files of afterwards; only a workarea's is emptied here.
+      if (args[0] === 'worktree' && args[1] === 'remove' && args[2] !== '--force') {
+        const prefix = `${args.at(-1)}/`;
+        for (const key of Object.keys(files)) if (key.startsWith(prefix)) delete files[key];
+        for (const dir of [...dirs]) if (dir === args.at(-1) || dir.startsWith(prefix)) dirs.delete(dir);
+        return { ok: !removeFails.includes(args.at(-1).split('/')[2]), stdout: '' };
+      }
       if (args[0] === 'worktree' && args[1] === 'add' && repoName) {
         const path = args[4];
         for (const [name, text] of Object.entries(plans[repoName] || {})) files[`${path}/docs/project/prog/${name}/PLAN.md`] = text;
@@ -108,7 +138,10 @@ function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], live = 
         return conflicts[name] ? { ok: false, stdout: '', stderr: 'CONFLICT' } : { ok: true, stdout: '' };
       }
       if (args[0] === 'diff') return { ok: true, stdout: (conflicts[cwd.split('/')[2]] || []).join('\n') };
-      if (args[0] === 'rev-parse') return { ok: false, stdout: '' };
+      // `rev-parse -q --verify MERGE_HEAD` is the reconcile check and answers
+      // no; `rev-parse origin/main^{tree}` is branchLanded's base.
+      if (args[0] === 'rev-parse') return args[1] === 'origin/main^{tree}' ? { ok: true, stdout: 'basetree' } : { ok: false, stdout: '' };
+      if (args[0] === 'merge-tree') return { ok: true, stdout: landed.includes(args.at(-1)) ? 'basetree' : 'othertree' };
       if (args[0] === 'branch') return { ok: true, stdout: cwd.split('/')[2] };
       return { ok: true, stdout: '', stderr: '' };
     },
@@ -254,15 +287,20 @@ test('a conflicting merge of origin/main becomes a reconcile step with the files
  * it on main by itself (Martin, 2026-08-29: "JAG TAR FRAM PLANER I EN mc plan
  * SESSION").
  */
-test('a workarea with no plan is not in the queue, and produces no line at all', async () => {
+test('a workarea with no plan is not in the queue, and gets no step and no skip line', async () => {
   const f = fixture({ areas: { fresh: { repo: 'memoro' } }, queue: 'fresh\n', session: okSession() });
   const runner = createRunner({ deps: f.deps });
   assert.deepEqual(runner.queue().names, [], 'queue.md named it; it has no plan, so it is not queued');
   await runner.round();
   assert.equal(f.calls.sessions.length, 0);
   assert.deepEqual(runRows(f.files).filter((r) => r.kind !== 'helper'), []);
-  assert.doesNotMatch(f.files['/w/runner/log/runner.log'] || '', /fresh/u,
-    'no skip line — nobody reads it, and `mc status` is where an unplanned workarea shows');
+  const log = f.files['/w/runner/log/runner.log'] || '';
+  assert.doesNotMatch(log, /fresh: /u, 'no skip line — nobody reads it');
+  // The two lines it does get are the two places somebody looks: the queue
+  // says why the name left it, and the workarea is written for `mc brief`.
+  assert.match(log, /queue: dropped "fresh" — no plan on main/u);
+  assert.equal(f.files['/w/queue.md'], '', 'the queue empties itself');
+  assert.match(f.files['/w/intake/unplanned-workareas.md'], /\| fresh \| memoro \|/u);
 });
 
 test('a quota answer is logged as quota, not merged, and the runner sleeps 30 minutes', async () => {
@@ -664,4 +702,169 @@ test('--once is one step and no archiving', async () => {
   await createRunner({ deps: f.deps }).round({ once: true });
   assert.deepEqual(f.calls.rm, [], '--once exists to watch one step, not to change main');
   assert.deepEqual(f.calls.sessions.map((call) => call.cwd), ['/w/alpha/memoro']);
+});
+
+/* ------------------------------------------------------------- closing */
+
+/**
+ * A workarea outlives its plan for the reason a done plan used to outlive
+ * its project: nothing removed it. Measured 2026-08-29, `~/mc` held seven
+ * workareas whose plan said `done` and whose last step had merged weeks
+ * earlier — and sixteen with no plan on main at all.
+ *
+ * The plan goes first, then the workarea: a folder is never removed while
+ * the plan that explains it is still on main.
+ */
+const RUNS_HEAD = 'ts\tname\tkind\texit\tseconds\tpr\tturns\tinput\toutput\tcache_read\tcache_write\tsession\tnote\n';
+const ranRow = (name, note = 'success,merged') => `2026-08-28T10:00:00Z\t${name}\tstep\t0\t10\t77\t4\t1\t2\t3\t4\tsid\t${note}\n`;
+
+test('a workarea whose plan left main this round is closed: worktree handed back, branch deleted, filing moved', async () => {
+  const f = fixture({
+    plans: { memoro: { over: done() } },
+    areas: { over: { repo: 'memoro', programme: 'prog', plan: done(), decisions: { 'prog-1.md': '# q\n' } } },
+    projectLog: { memoro: LOG_HEAD },
+    runs: RUNS_HEAD + ranRow('over'),
+    session: okSession(),
+  });
+  await createRunner({ deps: f.deps }).round();
+
+  assert.ok(f.calls.git.some((c) => c[0] === '/home/memoro' && c[1] === 'worktree' && c[2] === 'remove' && c[3] === '/w/over/memoro'));
+  assert.ok(f.calls.git.some((c) => c[0] === '/home/memoro' && c[1] === 'branch' && c[2] === '-D' && c[3] === 'over'));
+  // Nothing is deleted: what the folder kept beside its checkout is moved.
+  assert.deepEqual(f.calls.moved, [['/w/over/decisions', '/w/runner/log/closed/over/decisions']]);
+  assert.equal(f.files['/w/runner/log/closed/over/decisions/prog-1.md'], '# q\n');
+  assert.deepEqual(f.calls.rmdirs, ['/w/over']);
+  assert.match(f.files['/w/runner/log/runner.log'],
+    /close: over removed — worktree, branch over, 1 file\(s\) moved to runner\/log\/closed\/over\//u);
+});
+
+test('a done workarea with an uncommitted change is kept, and says why', async () => {
+  const f = fixture({
+    plans: { memoro: { over: done() } },
+    areas: { over: { repo: 'memoro', programme: 'prog', plan: done() } },
+    projectLog: { memoro: LOG_HEAD },
+    runs: RUNS_HEAD + ranRow('over'),
+    dirty: ['over'],
+    session: okSession(),
+  });
+  await createRunner({ deps: f.deps }).round();
+  assert.deepEqual(f.calls.rmdirs, []);
+  assert.equal('/w/over/memoro/.git' in f.files, true, 'the checkout is untouched');
+  assert.match(f.files['/w/runner/log/runner.log'], /close: over kept — an uncommitted change/u);
+});
+
+/**
+ * The runner squash-merges, so a finished branch reads as "ahead" of main
+ * forever. The last row in runs.tsv is what says the step landed — and a row
+ * that does not end `merged` is a step that is still open.
+ */
+test('a done workarea whose last step is still open is kept', async () => {
+  const f = fixture({
+    plans: { memoro: { over: done() } },
+    areas: { over: { repo: 'memoro', programme: 'prog', plan: done() } },
+    projectLog: { memoro: LOG_HEAD },
+    runs: RUNS_HEAD + ranRow('over', 'success,open'),
+    session: okSession(),
+  });
+  await createRunner({ deps: f.deps }).round();
+  assert.deepEqual(f.calls.rmdirs, []);
+  assert.match(f.files['/w/runner/log/runner.log'], /close: over kept — the last run says success,open/u);
+});
+
+test('an archive PR that did not merge keeps the workarea: the plan is still on main', async () => {
+  const f = fixture({
+    plans: { memoro: { over: done() } },
+    areas: { over: { repo: 'memoro', programme: 'prog', plan: done() } },
+    projectLog: { memoro: LOG_HEAD },
+    archive: { memoro: { mergeFails: true } },
+    runs: RUNS_HEAD + ranRow('over'),
+    session: okSession(),
+  });
+  await createRunner({ deps: f.deps }).round();
+  assert.deepEqual(f.calls.rmdirs, []);
+  assert.match(f.files['/w/runner/log/runner.log'], /close: over kept — its plan is still on main/u);
+});
+
+test('a workarea with no plan on main is never removed, and is written to intake with whether its branch landed', async () => {
+  const f = fixture({
+    areas: {
+      'msr-track-1': { repo: 'memoro' },
+      'mc-repo': { repo: 'memoro-cli' },
+    },
+    dirty: ['msr-track-1'],
+    landed: ['mc-repo'],
+    session: okSession(),
+  });
+  await createRunner({ deps: f.deps }).round();
+  assert.deepEqual(f.calls.rmdirs, [], 'only Martin can say whether an unplanned workarea is finished');
+  const intake = f.files['/w/intake/unplanned-workareas.md'];
+  assert.match(intake, /# Workareas with no plan on main/u);
+  assert.match(intake, /\| mc-repo \| memoro-cli \| 0 \| abc1234 \| landed \|/u);
+  assert.match(intake, /\| msr-track-1 \| memoro \| 1 \| abc1234 \| ahead \|/u);
+  assert.match(f.files['/w/runner/log/runner.log'], /close: 2 workarea\(s\) with no plan on main/u);
+});
+
+test('a live workarea is never closed, however done its plan is', async () => {
+  const f = fixture({
+    plans: { memoro: { over: done() } },
+    areas: { over: { repo: 'memoro', programme: 'prog', plan: done() } },
+    projectLog: { memoro: LOG_HEAD },
+    runs: RUNS_HEAD + ranRow('over'),
+    live: ['over'],
+    session: okSession(),
+  });
+  await createRunner({ deps: f.deps }).round();
+  assert.deepEqual(f.calls.rmdirs, []);
+  assert.match(f.files['/w/runner/log/runner.log'], /close: over kept — a live tmux session/u);
+});
+
+test('--once closes nothing', async () => {
+  const f = fixture({
+    plans: { memoro: { over: done(), alpha: ready } },
+    areas: { over: { repo: 'memoro', programme: 'prog', plan: done() } },
+    runs: RUNS_HEAD + ranRow('over'),
+    session: okSession(),
+    gh: { alpha: { number: 7 } },
+  });
+  await createRunner({ deps: f.deps }).round({ once: true });
+  assert.deepEqual(f.calls.rmdirs, []);
+  assert.equal('/w/intake/unplanned-workareas.md' in f.files, false);
+});
+
+/* --------------------------------------------------------------- queue */
+
+/**
+ * `~/mc/queue.md` is a strict list (Martin, 2026-08-29: "ett träsk — där ska
+ * INTE finnas någonting annat än en lista över vad som ska köras"). The
+ * 2026-08-29 file had seven comment lines and twenty names that were already
+ * done or had no plan on main.
+ */
+test('queue.md is rewritten to names only, and a name leaves it the moment its step has run', async () => {
+  const f = fixture({
+    queue: '# the queue\n\n## Martin\nalpha\nover\nghost\nbeta\n',
+    plans: { memoro: { alpha: ready, beta: ready, over: done() } },
+    projectLog: { memoro: LOG_HEAD },
+    areas: { over: { repo: 'memoro', programme: 'prog', plan: done() } },
+    runs: RUNS_HEAD + ranRow('over'),
+    session: okSession(),
+    gh: { alpha: { number: 7 }, beta: { number: 8 } },
+  });
+  await createRunner({ deps: f.deps }).round();
+  const log = f.files['/w/runner/log/runner.log'];
+  assert.match(log, /queue: dropped "# the queue" — not a project name/u);
+  assert.match(log, /queue: dropped "## Martin" — not a project name/u);
+  assert.match(log, /queue: dropped "over" — the plan is done/u);
+  assert.match(log, /queue: dropped "ghost" — no plan on main/u);
+  assert.equal(f.files['/w/queue.md'], '', 'every name that was left had its step, so the file is empty');
+});
+
+test('a name whose project was skipped stays in the queue', async () => {
+  const f = fixture({
+    queue: 'alpha\nwait\n',
+    plans: { memoro: { alpha: ready, wait: '---\nstatus: waiting-decision\n---\n# W\n' } },
+    session: okSession(),
+    gh: { alpha: { number: 7 } },
+  });
+  await createRunner({ deps: f.deps }).round();
+  assert.equal(f.files['/w/queue.md'], 'wait\n', 'it has not had its step, so it keeps its place');
 });

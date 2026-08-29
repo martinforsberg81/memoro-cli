@@ -215,30 +215,57 @@ describe('WORK', () => {
     { name: 'avatar-self-serve', mtime_ms: Date.parse('2026-08-29T09:00:00Z') },
   ];
 
+  const workFixture = (over = {}) => workSection({
+    areas: AREAS,
+    plans: PLANS,
+    rows: ROWS,
+    openPrs: [{ repo: 'memoro-cli', number: 440, headRefName: 'mc-ui' }, { repo: 'memoro', number: 2, headRefName: 'elsewhere' }],
+    live: ['ui-fixes'],
+    ...over,
+  });
+
   it('numbers one row per workarea, live first and then by last activity', () => {
-    const work = workSection({
-      areas: AREAS,
-      plans: PLANS,
-      rows: ROWS,
-      openPrs: [{ repo: 'memoro-cli', number: 440, headRefName: 'mc-ui' }, { repo: 'memoro', number: 2, headRefName: 'elsewhere' }],
-      live: ['ui-fixes'],
-    });
+    const work = workFixture();
     assert.deepEqual(work.areas.map((area) => [area.number, area.name]), [
-      [1, 'ui-fixes'], [2, 'mc-ui'], [3, 'avatar-self-serve'], [4, 'docx-editor'],
+      [1, 'mc-ui'], [2, 'avatar-self-serve'], [3, 'docx-editor'],
     ]);
     const ui = work.areas.find((area) => area.name === 'mc-ui');
     assert.equal(ui.status, 'ready');
     assert.equal(ui.next, 'Step 3 — the page');
     assert.equal(ui.pr, 440);
     assert.deepEqual(ui.last, { ts: '2026-08-29T10:00:00Z', kind: 'step', pr: '440', note: 'success,merged' });
-    // An area with no plan on main is still a row — that it has none is the
-    // thing worth seeing.
-    const orphan = work.areas.find((area) => area.name === 'ui-fixes');
-    assert.equal(orphan.status, null);
-    assert.equal(orphan.live, true);
     // mc-run has a plan and no workarea; it is a number, not a row.
     assert.equal(work.count, 4);
     assert.equal(work.without_workarea, 1);
+  });
+
+  /**
+   * A workarea with no plan on main is not one of the rows above. Nothing
+   * removes it, so it belongs under a heading of its own — with what says
+   * whether anything would be lost by removing it by hand.
+   */
+  it('puts a workarea with no plan on main under its own heading, numbered after the rest', () => {
+    const work = workFixture({ detail: { 'ui-fixes': { uncommitted: 3, last_commit: '2026-08-20' } } });
+    assert.deepEqual(work.unplanned.map((area) => [area.number, area.name]), [[4, 'ui-fixes']]);
+    const orphan = work.unplanned[0];
+    assert.equal(orphan.status, null);
+    assert.equal(orphan.live, true, 'live or not, it is still nobody\u2019s plan');
+    assert.equal(orphan.unplanned, true);
+    assert.equal(orphan.uncommitted, 3);
+    assert.equal(orphan.last_commit, '2026-08-20');
+    assert.equal(work.count, 4, 'the count is every workarea, planned or not');
+    assert.equal(work.areas.some((area) => area.name === 'ui-fixes'), false);
+  });
+
+  it('numbers through both lists, so the page has no two rows with one number', () => {
+    const work = workFixture();
+    const numbers = [...work.areas, ...work.unplanned].map((area) => area.number);
+    assert.deepEqual(numbers, [1, 2, 3, 4]);
+  });
+
+  it('names the repository a workarea holds when no plan names one', () => {
+    const work = workSection({ areas: [{ name: 'msr-track-1', mtime_ms: 1, repos: ['memoro'] }], plans: [] });
+    assert.equal(work.unplanned[0].repo, 'memoro');
   });
 });
 
@@ -513,8 +540,10 @@ describe('the palette', () => {
     '',
     'bold+cyan grey grey', //                                      WORK  2 workareas                 mc status <name>
     'grey grey white green grey green cyan', //                      1 · mc-ui  ready  Step 3 — the page  08-29 10:00Z step #440
-    'grey grey grey dim+grey grey', //                               2 · ui-fixes  —  no PLAN.md on main
     'grey', //                                                       3 project(s) on main without a workarea
+    '',
+    'grey', //                                                     1 workarea with no plan on main — nothing removes them
+    'grey grey grey dim+grey grey', //                               2 · ui-fixes  —  no PLAN.md on main
     '',
     'grey', //                                                     offline, PRs 2 h old — --fresh asks GitHub
     'grey', //                                                     note: no queue.md
