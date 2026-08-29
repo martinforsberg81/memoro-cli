@@ -10,9 +10,10 @@ import { createRunner, runLoop } from '../../src/mc/run.js';
  * a "session" that returns what the test says. Nothing starts, nothing is
  * written outside `files`.
  */
-function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], live = [], areas = {}, conflicts = {}, roles = true } = {}) {
+function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], live = [], areas = {}, conflicts = {}, roles = true, now = '2026-08-29T10:00:00Z', runs = null, collect = okCollect, helperTurn = okTurn } = {}) {
   const root = '/w';
   const files = { [`${root}/queue.md`]: queue };
+  if (runs != null) files[`${root}/runner/log/runs.tsv`] = runs;
   const dirs = new Set([root]);
   const env = { MC_WORK_ROOT: root, MC_REPOS_HOME: '/home' };
   const repos = { memoro: '/home/memoro', 'memoro-cli': '/home/memoro-cli' };
@@ -31,13 +32,13 @@ function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], live = 
     }
   }
   const log = [];
-  const calls = { git: [], gh: [], sessions: [], added: [], removed: [] };
+  const calls = { git: [], gh: [], sessions: [], added: [], removed: [], collects: [], turns: [] };
   // A snapshot of the work root taken inside every session call — the only
   // way to see the files that exist only while a step is in flight.
   const duringSession = [];
   const deps = {
     env,
-    now: () => new Date('2026-08-29T10:00:00Z'),
+    now: () => new Date(now),
     sleep: async () => {},
     tmuxHas: (name) => live.includes(name.replace(/^mc-/u, '')),
     exists: (p) => p in files || dirs.has(p),
@@ -66,6 +67,8 @@ function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], live = 
       }
       return { ok: true, path: `${root}/${name}/${repoName}` };
     },
+    collect: async (options) => { calls.collects.push(options); return collect(options); },
+    helperTurn: async (options) => { calls.turns.push(options); return helperTurn(options); },
     profile: async () => 'PROFILE',
     role: (kind) => (roles ? { name: kind, overlay: `ROLE ${kind}` } : null),
     launch: (tool) => ({ ok: true, id: tool === 'codex' ? 'codex' : 'claude-code', shortName: tool, adapter: { modelArgs: (m) => ['--model', m] }, spec: { bin: `/bin/${tool}` } }),
@@ -103,6 +106,32 @@ function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], live = 
     },
   };
   return { deps, files, log, calls, root, duringSession };
+}
+
+/** The helper's two halves, faked: a digest that was written and a turn that ran. */
+const okCollect = async () => ({
+  path: '/w/intake/errors-2026-08-29.md',
+  text: '# digest',
+  data: {
+    delta: { first: false, fingerprints: [{ fingerprint: 'abc', count: 41, loud: true }], failing: [] },
+    errors: { rows: [{ fingerprint: 'abc' }] },
+    notes: [],
+    analysis: {}, provider: {}, health: {}, deploy: {},
+  },
+});
+const okTurn = async () => ({
+  ok: true, status: 0, note: 'success', turns: '3', session: 'hsid',
+  input: '10', output: '20', cacheRead: '30', cacheWrite: '40',
+  wrote: [{ file: '2026-08-29-a.md', title: 'A' }], waiting: [{ file: '2026-08-29-a.md' }], groundNotes: [],
+});
+
+/** runs.tsv rows as objects, header and all. */
+function runRows(files) {
+  const tsv = files['/w/runner/log/runs.tsv'] || '';
+  const lines = tsv.split('\n').filter(Boolean);
+  if (!lines.length) return [];
+  const header = lines[0].split('\t');
+  return lines.slice(1).map((line) => Object.fromEntries(line.split('\t').map((cell, i) => [header[i], cell])));
 }
 
 const ready = '---\nstatus: ready\nnext: "do x"\n---\n# X\n';
@@ -197,7 +226,7 @@ test('a workarea with no plan is not in the queue, and produces no line at all',
   assert.deepEqual(runner.queue().names, [], 'queue.md named it; it has no plan, so it is not queued');
   await runner.round();
   assert.equal(f.calls.sessions.length, 0);
-  assert.equal(f.files['/w/runner/log/runs.tsv'], undefined);
+  assert.deepEqual(runRows(f.files).filter((r) => r.kind !== 'helper'), []);
   assert.doesNotMatch(f.files['/w/runner/log/runner.log'] || '', /fresh/u,
     'no skip line — nobody reads it, and `mc status` is where an unplanned workarea shows');
 });
@@ -288,4 +317,94 @@ test('current.json carries the project frontmatter, and is removed even when the
     started: '2026-08-29T10:00:00Z', pid: 4242, worktree: '/w/cx/memoro-cli',
   });
   assert.equal('/w/runner/current.json' in f.files, false);
+});
+
+/* ------------------------------------------------------------- the helper */
+
+/**
+ * `mc helper` is the one thing in a round that is not a step. It opens no
+ * worktree and touches no branch: what proves it ran is its row in runs.tsv,
+ * and that row is also the gate — there is no second stamp file to fall out
+ * of step with it.
+ */
+test('the helper runs once per calendar day, logged as kind helper with helper in the name', async () => {
+  const f = fixture({ plans: { memoro: { alpha: ready } }, session: okSession(), gh: { alpha: { number: 7 } } });
+  const runner = createRunner({ deps: f.deps });
+  await runner.round();
+  const first = runRows(f.files).filter((r) => r.kind === 'helper');
+  assert.equal(first.length, 1);
+  assert.deepEqual(
+    { name: first[0].name, exit: first[0].exit, pr: first[0].pr, note: first[0].note },
+    { name: 'helper', exit: '0', pr: '-', note: 'success,1-proposals' },
+  );
+  assert.equal(first[0].turns, '3', 'the turn is a model call and its usage is logged like a step');
+  assert.equal(first[0].cache_read, '30');
+
+  await runner.round();
+  assert.equal(runRows(f.files).filter((r) => r.kind === 'helper').length, 1, 'a second round the same day does not run it again');
+  assert.equal(f.calls.collects.length, 1);
+  assert.ok(f.log.some((line) => /already ran today/u.test(line)) === false, 'the gate is silent — nobody reads a skip line');
+});
+
+test('the helper waits for 05:00Z, and runs in the first round after it', async () => {
+  const early = fixture({ now: '2026-08-29T04:59:00Z' });
+  await createRunner({ deps: early.deps }).round();
+  assert.equal(early.calls.collects.length, 0);
+  assert.equal(runRows(early.files).length, 0);
+
+  const late = fixture({ now: '2026-08-29T05:00:00Z' });
+  await createRunner({ deps: late.deps }).round();
+  assert.equal(late.calls.collects.length, 1);
+});
+
+test('yesterday\'s helper row does not count as today\'s', async () => {
+  const yesterday = 'ts\tname\tkind\texit\tseconds\tpr\tturns\tinput\toutput\tcache_read\tcache_write\tsession\tnote\n'
+    + '2026-08-28T06:00:00Z\thelper\thelper\t0\t120\t-\t3\t-\t-\t-\t-\t-\tsuccess,0-proposals\n';
+  const f = fixture({ runs: yesterday });
+  await createRunner({ deps: f.deps }).round();
+  assert.equal(f.calls.collects.length, 1);
+  assert.equal(runRows(f.files).filter((r) => r.kind === 'helper').length, 2);
+});
+
+/**
+ * A failed collect is a logged fact, not a retry loop: production being
+ * unreachable at 05:00 must not cost twenty attempts before noon.
+ */
+test('a failed collect is logged and never retried within the day', async () => {
+  const f = fixture({ collect: async () => { throw new Error('wrangler is not logged in'); } });
+  const runner = createRunner({ deps: f.deps });
+  await runner.round();
+  const row = runRows(f.files).find((r) => r.kind === 'helper');
+  assert.equal(row.note, 'collect-failed');
+  assert.equal(row.exit, '1');
+  assert.equal(f.calls.turns.length, 0, 'no turn is run over a digest that was never written');
+  assert.ok(f.log.some((line) => /collect step failed — wrangler is not logged in/u.test(line)));
+
+  await runner.round();
+  assert.equal(f.calls.collects.length, 1);
+});
+
+test('a turn that did not finish is logged under its own reason, and still counts as the day\'s run', async () => {
+  const f = fixture({ helperTurn: async () => ({ ok: false, reason: 'no-tool', note: 'claude is not on PATH', wrote: [] }) });
+  const runner = createRunner({ deps: f.deps });
+  await runner.round();
+  const row = runRows(f.files).find((r) => r.kind === 'helper');
+  assert.equal(row.note, 'no-tool');
+  assert.equal(row.exit, '1');
+  await runner.round();
+  assert.equal(f.calls.collects.length, 1);
+});
+
+test('--once is one step and no helper', async () => {
+  const f = fixture({ plans: { memoro: { alpha: ready } }, session: okSession(), gh: { alpha: { number: 7 } } });
+  await createRunner({ deps: f.deps }).round({ once: true });
+  assert.equal(f.calls.collects.length, 0, '--once exists to watch one step, not to call production');
+  assert.equal(runRows(f.files).filter((r) => r.kind === 'helper').length, 0);
+});
+
+test('a STOP file stops the helper as well as the steps', async () => {
+  const f = fixture();
+  f.files['/w/runner/STOP'] = '';
+  await createRunner({ deps: f.deps }).round();
+  assert.equal(f.calls.collects.length, 0);
 });

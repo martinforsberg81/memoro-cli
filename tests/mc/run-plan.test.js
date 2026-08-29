@@ -2,7 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  assembleQueue, chooseKind, headlessArgs, quotaSeen, readSessionOutput, sessionSettings, stepPrompt, tsvHeader, tsvRow,
+  assembleQueue, chooseKind, headlessArgs, helperDue, helperNote, quotaSeen, readSessionOutput,
+  sessionSettings, stepPrompt, tsvHeader, tsvRow,
 } from '../../src/mc/run-plan.js';
 import { profileArgs } from '../../src/mc/portrait.js';
 import { parseRunArgs } from '../../src/mc/commands/run.js';
@@ -125,4 +126,42 @@ test('parseRunArgs: defaults, flags, errors', () => {
   assert.match(parseRunArgs(['--rounds', 'x']).error, /whole number/u);
   assert.match(parseRunArgs(['--rounds']).error, /needs a value/u);
   assert.match(parseRunArgs(['extra']).error, /unexpected argument/u);
+});
+
+/* ------------------------------------------------------------- the helper */
+
+const RUNS = (...rows) => [tsvHeader(), ...rows].join('\n');
+const helperRow = (ts, note = 'success,0-proposals') => tsvRow({
+  ts, name: 'helper', kind: 'helper', exit: 0, seconds: 120, pr: '-', note,
+});
+
+test('helperDue: not before 05:00Z, and only once per UTC day', () => {
+  assert.deepEqual(helperDue({ now: new Date('2026-08-29T04:59:59Z') }), { due: false, why: 'not before 05:00Z' });
+  assert.equal(helperDue({ now: new Date('2026-08-29T05:00:00Z') }).due, true);
+
+  const today = RUNS(helperRow('2026-08-29T05:01:00Z'));
+  assert.equal(helperDue({ tsv: today, now: new Date('2026-08-29T23:00:00Z') }).due, false);
+  assert.match(helperDue({ tsv: today, now: new Date('2026-08-29T23:00:00Z') }).why, /already ran today/u);
+  assert.equal(helperDue({ tsv: today, now: new Date('2026-08-30T05:00:00Z') }).due, true, 'a new UTC day is a new run');
+});
+
+/**
+ * The row is the state, and it is written whether the run worked or not:
+ * that is the whole of "a failed collect is logged and never retried within
+ * the day". A step row for a project called something else must not count.
+ */
+test('helperDue: a failed run still closes the day, and only a helper row counts', () => {
+  const failed = RUNS(helperRow('2026-08-29T05:01:00Z', 'collect-failed'));
+  assert.equal(helperDue({ tsv: failed, now: new Date('2026-08-29T12:00:00Z') }).due, false);
+
+  const steps = RUNS(tsvRow({ ts: '2026-08-29T06:00:00Z', name: 'mc-helper', kind: 'step', exit: 0, seconds: 1, pr: '-', note: 'success,merged' }));
+  assert.equal(helperDue({ tsv: steps, now: new Date('2026-08-29T12:00:00Z') }).due, true);
+});
+
+test('helperNote keeps the success, shape every other row uses', () => {
+  assert.equal(helperNote(null), 'collect-failed');
+  assert.equal(helperNote({ ok: true, wrote: [] }), 'success,0-proposals');
+  assert.equal(helperNote({ ok: true, wrote: [1, 2, 3] }), 'success,3-proposals');
+  assert.equal(helperNote({ ok: false, reason: 'no-role' }), 'no-role');
+  assert.equal(helperNote({ ok: false, note: 'timeout' }), 'timeout');
 });

@@ -160,6 +160,15 @@ function decisionsLines(lines, c, wide, decisions) {
   if (decisions.more) say(lines, c, wide, 7, `… ${decisions.more} more`);
 }
 
+/**
+ * INTAKE — the helper's block: when it last looked, what it found, and how
+ * many proposals nobody has queued or dropped.
+ *
+ * The `!` lines come first and whole, before anything else in the section.
+ * The digest marks a new fingerprint `!` when it crossed the threshold, or a
+ * condition `!` when it has just started failing; a count of those is a
+ * number somebody has to go and look up, and the line is what makes them look.
+ */
 function intakeLines(lines, c, wide, intake) {
   if (!intake.digest) {
     heading(lines, c, wide, 'INTAKE', 'no digest yet — mc helper has not run', null);
@@ -172,6 +181,10 @@ function intakeLines(lines, c, wide, intake) {
     : `${intake.new_errors} new error${intake.new_errors === 1 ? '' : 's'}${intake.loud ? ` (${intake.loud} loud)` : ''}`;
   const counts = `${intake.date}${age} · ${errors} · ${intake.proposals} proposal${intake.proposals === 1 ? '' : 's'}`;
   heading(lines, c, wide, 'INTAKE', counts, 'mc helper');
+  for (const line of intake.loud_lines || []) {
+    lines.push(`  ${c('  !', 'red')}  ${c(clip(one(line), wide - 7), 'bold')}`);
+  }
+  if (intake.more_loud) say(lines, c, wide, 7, `… ${intake.more_loud} more above the threshold`);
 }
 
 function workLines(lines, c, wide, work) {

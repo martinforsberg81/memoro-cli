@@ -364,6 +364,35 @@ export function renderDigest({
   return out.join('\n');
 }
 
+/* ------------------------------------------------------------------ words */
+
+/**
+ * The one line a runner log and a person share: what the digest found that
+ * the previous one had not. `mc helper` prints it and `mc run` writes it into
+ * the round's log, so the two can never describe the same digest differently.
+ */
+export function describeDigest({ delta, errors }) {
+  if (delta.first) return `first digest, ${errors.rows.length} fingerprints — no baseline yet`;
+  const loud = delta.fingerprints.filter((f) => f.loud).length;
+  const parts = [`${delta.fingerprints.length} new fingerprint${delta.fingerprints.length === 1 ? '' : 's'}`];
+  if (loud) parts.push(`${loud} above the threshold`);
+  if (delta.failing.length) {
+    parts.push(`${delta.failing.length} newly failing condition${delta.failing.length === 1 ? '' : 's'}`);
+  }
+  return parts.join(', ');
+}
+
+/** Every section that could not be read, so a partial digest still complains. */
+export function unreadableSections({ errors, analysis, provider, health, deploy }) {
+  return [
+    ['error fingerprints', errors],
+    ['analysis items', analysis],
+    ['AI-provider errors', provider],
+    ['D1 health', health],
+    ['deploy logs', deploy],
+  ].filter(([, source]) => source?.error);
+}
+
 /* ------------------------------------------------------------------ collect */
 
 /** A memoro admin script, run in the memoro checkout, its JSON stdout parsed. */

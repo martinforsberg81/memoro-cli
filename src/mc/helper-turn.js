@@ -76,6 +76,12 @@ export function helperPrompt({ digestPath, digestText, proposalsPath = proposals
 
 /* -------------------------------------------------------------------- turn */
 
+/** What the turn produced, in the one line a runner log and a person share. */
+export function describeTurn({ wrote = [], waiting = [] }) {
+  if (!wrote.length) return `no proposal — nothing in the digest warranted one (${waiting.length} still waiting)`;
+  return `${wrote.length} proposal${wrote.length === 1 ? '' : 's'}, ${waiting.length} waiting`;
+}
+
 function realSession({ bin, args, cwd, timeoutMs, env }) {
   return new Promise((resolve) => {
     execFile(bin, args, { cwd, env, encoding: 'utf8', timeout: timeoutMs, killSignal: 'SIGTERM', maxBuffer: 64 << 20 }, (error, stdout, stderr) => {
@@ -200,6 +206,12 @@ export async function runHelperTurn({
     quota: read.quota,
     turns: read.turns,
     session: read.session,
+    // What it cost, in the same columns runs.tsv keeps for a step: the daily
+    // turn is a model call the page's day line should be able to price.
+    input: read.input,
+    output: read.output,
+    cacheRead: read.cacheRead,
+    cacheWrite: read.cacheWrite,
     stdout: result.stdout,
     stderr: result.stderr,
     model: model || role.model,

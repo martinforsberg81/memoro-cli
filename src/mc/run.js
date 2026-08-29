@@ -3,9 +3,15 @@
  *
  * One round is one pass over the queue; one step is one fresh headless
  * session in one workarea, then the merge of the PR it opened. The runner
- * itself never calls a model: it reads files, runs git and gh, starts the
+ * decides nothing with a model: it reads files, runs git and gh, starts the
  * session through the launch adapter and waits for it. No inbox, no knock,
  * no watcher — it is the parent of the process it starts.
+ *
+ * One thing that is not a step rides along: `mc helper`, once per calendar
+ * day at the top of the first round after 05:00Z, logged in runs.tsv under
+ * its own kind. It opens no worktree and touches no branch — it reads
+ * production, writes a digest and proposals into `~/mc/intake/`, and that is
+ * all. `runHelperDay` below is the whole of it.
  *
  * Every process boundary is a dependency on `deps`, so the round can be
  * driven in a test with a fake git, gh, tmux and session and no network.
@@ -18,13 +24,16 @@ import { dirname, join } from 'node:path';
 import { resolveLaunch } from '../adapters/index.js';
 import { writeJsonAtomic } from './atomic-write.js';
 import { defaultRepos, listPlans, parsePlanFrontmatter, planFields, showBatch } from './brief-collect.js';
+import { collectHelper, describeDigest, unreadableSections } from './helper-collect.js';
+import { describeTurn, runHelperTurn } from './helper-turn.js';
 import { workRoot } from './paths.js';
 import { loadProfile, profileArgs } from './portrait.js';
 import { readCanonRole } from './roles.js';
 import { addWorktree } from './work-area.js';
 import {
-  QUOTA_SLEEP_MS, TIMEOUT_EXIT, assembleQueue, chooseKind, headlessArgs, readSessionOutput,
-  reconcilePrompt, sessionSettings, stepPrompt, tsvHeader, tsvRow,
+  HELPER_KIND, HELPER_NAME, QUOTA_SLEEP_MS, TIMEOUT_EXIT, assembleQueue, chooseKind, headlessArgs,
+  helperDue, helperNote, readSessionOutput, reconcilePrompt, sessionSettings, stepPrompt, tsvHeader,
+  tsvRow,
 } from './run-plan.js';
 
 export const REPO_NAMES = ['memoro', 'memoro-cli'];
@@ -58,6 +67,10 @@ export function realDeps(env = process.env) {
     profile: () => loadProfile({ env }),
     role: readCanonRole,
     launch: resolveLaunch,
+    // The two halves of `mc helper`, so a round can be driven in a test with
+    // no production behind it and no model in it.
+    collect: (options) => collectHelper({ env, ...options }),
+    helperTurn: (options) => runHelperTurn({ env, ...options }),
     // The session: the adapter's binary with the headless argument list,
     // stdin closed (claude -p reads a piped stdin and would eat it), a
     // wall-clock cap after which it is killed and logged as a timeout.
@@ -168,6 +181,62 @@ export function createRunner({
     return false;
   }
 
+  /** One row in runs.tsv, header written the first time. Steps and the helper. */
+  function logRun(row) {
+    if (!deps.exists(paths.runs)) deps.write(paths.runs, `${tsvHeader()}\n`);
+    deps.append(paths.runs, `${tsvRow(row)}\n`);
+  }
+
+  const dashes = { turns: '-', input: '-', output: '-', cacheRead: '-', cacheWrite: '-', session: '-' };
+
+  /**
+   * The day's `mc helper`, run at the top of a round. Returns 'ran',
+   * 'failed' or null when it was not due.
+   *
+   * It is not a step and not a project: it opens no worktree, touches no
+   * branch, and its row in runs.tsv carries `helper` in both the name and the
+   * kind column. `helperDue` is the whole gate, and that row is the whole
+   * state — written whether the run succeeded or failed, which is how a
+   * failed collect stays unretried for the rest of the day.
+   *
+   * The collect half reads production and the turn half calls a model, so the
+   * two are timed together and logged once: what a reader of runs.tsv wants
+   * to know is what the day's helper cost and what came out of it.
+   */
+  async function runHelperDay() {
+    const due = helperDue({ tsv: deps.read(paths.runs) || '', now: deps.now() });
+    if (!due.due) return null;
+    const t0 = deps.now().getTime();
+    const took = () => Math.round((deps.now().getTime() - t0) / 1000);
+    say('helper: the day\'s digest');
+
+    let digest = null;
+    try {
+      digest = await deps.collect({ now: deps.now() });
+    } catch (error) {
+      logRun({ ts: stamp(), name: HELPER_NAME, kind: HELPER_KIND, exit: 1, seconds: took(), pr: '-', ...dashes, note: helperNote(null) });
+      say(`helper: the collect step failed — ${error?.message || error}. Not retried today.`);
+      return 'failed';
+    }
+    say(`helper: ${digest.path} — ${describeDigest(digest.data)}`);
+    for (const note of digest.data.notes || []) say(`helper: ${note}`);
+    for (const [section, source] of unreadableSections(digest.data)) say(`helper: ${section} not read — ${source.error}`);
+
+    const turn = await deps.helperTurn({ digestPath: digest.path, digestText: digest.text, now: deps.now() });
+    logRun({
+      ts: stamp(), name: HELPER_NAME, kind: HELPER_KIND, exit: turn.status ?? 1, seconds: took(), pr: '-',
+      turns: turn.turns ?? '-', input: turn.input ?? '-', output: turn.output ?? '-',
+      cacheRead: turn.cacheRead ?? '-', cacheWrite: turn.cacheWrite ?? '-', session: turn.session ?? '-',
+      note: helperNote(turn),
+    });
+    for (const note of turn.groundNotes || []) say(`helper: ${note}`);
+    say(turn.ok
+      ? `helper: ${describeTurn(turn)} (${took()}s)`
+      : `helper: the turn did not finish — ${turn.reason || turn.note} (${took()}s)`);
+    if (turn.quota) { say(`quota/rate limit seen — sleeping ${QUOTA_SLEEP_MS / 60000}m`); await deps.sleep(QUOTA_SLEEP_MS); }
+    return turn.ok ? 'ran' : 'failed';
+  }
+
   /** One project. Returns 'merged' | 'ran' | 'skipped' | 'stop'. */
   async function runStep(name, plans) {
     if (stopRequested()) { say(`STOP file present (${paths.stop}) — not starting ${name}`); return 'stop'; }
@@ -234,8 +303,7 @@ export function createRunner({
     let { note } = read;
     if (merge && pr !== '-' && note === 'success') note = (await mergePr(worktree, name, pr)) ? 'success,merged' : 'success,open';
 
-    if (!deps.exists(paths.runs)) deps.write(paths.runs, `${tsvHeader()}\n`);
-    deps.append(paths.runs, `${tsvRow({ ts: stamp(), name, kind, exit: result.status, seconds, pr, turns: read.turns, input: read.input, output: read.output, cacheRead: read.cacheRead, cacheWrite: read.cacheWrite, session: read.session, note })}\n`);
+    logRun({ ts: stamp(), name, kind, exit: result.status, seconds, pr, turns: read.turns, input: read.input, output: read.output, cacheRead: read.cacheRead, cacheWrite: read.cacheWrite, session: read.session, note });
     say(`${name}: ${kind} done rc=${result.status} ${seconds}s pr=${pr} turns=${read.turns} note=${note}`);
     if (read.quota) { say(`quota/rate limit seen — sleeping ${QUOTA_SLEEP_MS / 60000}m`); await deps.sleep(QUOTA_SLEEP_MS); }
     // A merged step or a finished reconcile both leave the project ready for
@@ -255,13 +323,20 @@ export function createRunner({
   }
 
   /**
-   * One pass. Returns { ran, stop }. A project whose step merged keeps the
+   * One pass: the day's helper if it is due, then every queued project.
+   * Returns { ran, stop } — the helper is not counted, it is not a step.
+   *
+   * A project whose step merged keeps the
    * runner: its next step follows at once (plans re-read, so the merged
    * status is what decides) instead of waiting a whole round behind every
    * other project — 2026-08-29 a six-step plan would have taken six rounds
    * of twenty projects. STOP is honoured between those steps too.
    */
   async function round({ once = false } = {}) {
+    // The day's helper first, and only in a round that is a round: `--once`
+    // exists to watch a single step, and a two-minute model turn over
+    // production is not what somebody typing it asked for.
+    if (!once && !stopRequested()) await runHelperDay();
     let { names, plans } = queue();
     let ran = 0;
     for (const name of names) {
@@ -289,7 +364,7 @@ export function createRunner({
   const markRunner = () => writeJson(paths.runner, { pid, started: stamp() });
   const clearRunner = () => { remove(paths.runner); remove(paths.current); };
 
-  return { paths, say, round, runStep, queue, stopRequested, syncMain, mergePr, planOf, repoOf, markRunner, clearRunner };
+  return { paths, say, round, runStep, runHelperDay, queue, stopRequested, syncMain, mergePr, planOf, repoOf, markRunner, clearRunner };
 }
 
 /**

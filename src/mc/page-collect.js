@@ -8,8 +8,8 @@
  * QUEUE    — how deep, how much of it is runnable, what comes next, and what
  *            is skipped, counted by reason.
  * DECISIONS— how many wait on Martin, and the first few by name.
- * INTAKE   — the helper's newest digest, what is new in it, and how many
- *            proposals nobody has queued or dropped.
+ * INTAKE   — the helper's newest digest, what is new in it, the `!` lines
+ *            themselves, and how many proposals nobody has queued or dropped.
  * WORK     — one numbered row per workarea: the plan's status and `next`, the
  *            last runner step, the open PR, and whether something is live in
  *            it. The number is the one the menu opens.
@@ -127,22 +127,36 @@ export function decisionsSection(decisions = [], { named = DECISIONS_NAMED } = {
 
 const NEW_SINCE = /^##\s+New since the last digest\b/iu;
 
-/** The bullets under "New since the last digest": how many, and how many loud. */
-export function countNewErrors(text) {
+/** How many of the digest's `!` lines the page names rather than counts. */
+export const INTAKE_LOUD_NAMED = 3;
+
+/**
+ * The bullets under "New since the last digest", as the digest wrote them:
+ * `- ! \`<fingerprint>\` — 41× 500 — <message>` for a new fingerprint at or
+ * above the threshold or a condition that has just started failing, `- ·` for
+ * the rest. The marker is dropped here and kept as `loud`, so the page can
+ * draw it in its own way.
+ */
+export function newErrorLines(text) {
   const lines = String(text || '').replace(/\r\n/gu, '\n').split('\n');
   const at = lines.findIndex((line) => NEW_SINCE.test(line));
-  if (at < 0) return { count: 0, loud: 0, first: false };
-  let count = 0;
-  let loud = 0;
+  if (at < 0) return { lines: [], first: false };
+  const out = [];
   let first = false;
   for (const line of lines.slice(at + 1)) {
     if (/^##\s/u.test(line)) break;
     if (/^_first digest/u.test(line.trim())) { first = true; continue; }
-    if (!/^-\s/u.test(line)) continue;
-    count += 1;
-    if (/^-\s+!/u.test(line)) loud += 1;
+    const bullet = /^-\s+(!|·)?\s*(.*)$/u.exec(line);
+    if (!bullet) continue;
+    out.push({ loud: bullet[1] === '!', text: bullet[2].trim() });
   }
-  return { count, loud, first };
+  return { lines: out, first };
+}
+
+/** The bullets under "New since the last digest": how many, and how many loud. */
+export function countNewErrors(text) {
+  const { lines, first } = newErrorLines(text);
+  return { count: lines.length, loud: lines.filter((line) => line.loud).length, first };
 }
 
 /**
@@ -152,16 +166,27 @@ export function countNewErrors(text) {
  * With no digest the section says so. It never prints a zero — a zero here
  * would read as "production is quiet" when it means "nobody has looked".
  */
-export function intakeSection({ digest = null, proposals = [], now = new Date() } = {}) {
-  if (!digest) return { digest: null, date: null, age_seconds: null, new_errors: 0, loud: 0, first: false, proposals: proposals.length };
-  const { count, loud, first } = countNewErrors(digest.text);
+export function intakeSection({ digest = null, proposals = [], now = new Date(), named = INTAKE_LOUD_NAMED } = {}) {
+  if (!digest) {
+    return {
+      digest: null, date: null, age_seconds: null, new_errors: 0, loud: 0, loud_lines: [], more_loud: 0,
+      first: false, proposals: proposals.length,
+    };
+  }
+  const { lines, first } = newErrorLines(digest.text);
+  const loud = lines.filter((line) => line.loud);
   const age = digest.mtime_ms == null ? null : Math.max(0, Math.round((now.getTime() - digest.mtime_ms) / 1000));
   return {
     digest: digest.name,
     date: (/errors-(\d{4}-\d{2}-\d{2})\.md/u.exec(digest.name) || [])[1] || null,
     age_seconds: age,
-    new_errors: count,
-    loud,
+    new_errors: lines.length,
+    loud: loud.length,
+    // The `!` lines themselves, not just how many. A count of loud errors is a
+    // number somebody has to go and look up; the line is the thing that makes
+    // them look. Everything below the first few is a number again.
+    loud_lines: loud.slice(0, named).map((line) => line.text),
+    more_loud: Math.max(0, loud.length - named),
     first,
     proposals: proposals.length,
   };
