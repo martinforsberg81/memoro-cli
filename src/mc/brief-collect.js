@@ -164,19 +164,71 @@ export function parsePlanFrontmatter(text) {
 
 /**
  * `docs/project/<programme>/<project>/PLAN.md` on a ref of one repository,
- * read without a checkout. `git` is injectable so the test can stay off git.
+ * read without a checkout: one `ls-tree` for the names and one
+ * `cat-file --batch` for every plan's text. `git` and `batch` are both
+ * injectable so a caller with its own git — the runner — and the tests can
+ * stay off the real one; `showBatch` turns such a git into a batch reader.
  */
-export function listPlans(repo, { ref = 'origin/main', git = runGit } = {}) {
+export function listPlans(repo, { ref = 'origin/main', git = runGit, batch = catFileBatch } = {}) {
   const tree = git(repo.path, ['ls-tree', '-r', '--name-only', ref, '--', 'docs/project']);
   if (tree == null) return [];
-  const plans = [];
-  for (const path of tree.split('\n')) {
+  const paths = tree.split('\n').filter((path) => {
     const parts = path.split('/');
-    if (parts.length !== 5 || parts[4] !== 'PLAN.md') continue;
-    const text = git(repo.path, ['show', `${ref}:${path}`]) || '';
-    plans.push({ repo: repo.name, programme: parts[2], project: parts[3], path, ...parsePlanFrontmatter(text) });
+    return parts.length === 5 && parts[4] === 'PLAN.md';
+  });
+  const texts = batch(repo.path, paths.map((path) => `${ref}:${path}`));
+  return paths.map((path) => {
+    const parts = path.split('/');
+    const text = texts.get(`${ref}:${path}`) || '';
+    return { repo: repo.name, programme: parts[2], project: parts[3], path, ...parsePlanFrontmatter(text) };
+  });
+}
+
+/**
+ * `git cat-file --batch` output, split back into one text per input line.
+ *
+ * The stream is `<oid> <type> <size>\n<size bytes>\n` per object, or
+ * `<input> missing\n` for a path that is not on the ref — no content follows
+ * a miss, so the walk simply does not advance. `size` counts bytes, not
+ * characters, which is why this works on a Buffer: a plan full of em-dashes
+ * would slice apart under a string index.
+ */
+export function parseCatFileBatch(stdout, refs) {
+  const out = new Map();
+  const buf = Buffer.isBuffer(stdout) ? stdout : Buffer.from(String(stdout || ''));
+  let at = 0;
+  for (const ref of refs) {
+    const end = buf.indexOf(10, at);
+    if (end < 0) break;
+    const [, , size] = buf.toString('utf8', at, end).split(' ');
+    at = end + 1;
+    const bytes = Number(size);
+    if (!Number.isFinite(bytes)) continue; // "<ref> missing" — nothing follows it
+    out.set(ref, buf.toString('utf8', at, at + bytes));
+    at += bytes + 1;
   }
-  return plans;
+  return out;
+}
+
+/**
+ * A batch reader made from an injected `git`: one `show` per ref, which is
+ * what the caller was doing before. The runner keeps it — its `git` is a
+ * dependency its own tests replace — and it is the shape a fixture passes.
+ */
+export function showBatch(git) {
+  return (cwd, refs) => new Map(refs.map((ref) => [ref, git(cwd, ['show', ref]) || '']));
+}
+
+/**
+ * Every named object of one repository in one process. The loop this
+ * replaced spent a `git show` per plan — 1.22 s for memoro's 38 on
+ * 2026-08-29, against 54 ms for the whole listing this way.
+ */
+export function catFileBatch(cwd, refs) {
+  if (!refs.length) return new Map();
+  const r = spawnSync('git', ['-C', cwd, 'cat-file', '--batch'], { input: `${refs.join('\n')}\n`, maxBuffer: 64 << 20 });
+  if (r.status !== 0) return new Map();
+  return parseCatFileBatch(r.stdout, refs);
 }
 
 /* -------------------------------------------------------------------- runner */

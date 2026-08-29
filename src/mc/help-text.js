@@ -46,8 +46,10 @@ MAINTENANCE
                                     decisions waiting on you, every project
                                     per repo and programme, and workareas
                                     without a project. No model; reads only
-  mc status --json                 The same, as one object; --offline skips
-                                    fetch and gh
+  mc status --json                 The same, as one object. The page is
+                                    offline and instant; --fresh fetches and
+                                    asks GitHub, and without it the page
+                                    says how old its PR cache is
   mc status <name>                 One project: its PLAN.md frontmatter and
                                     step, the decisions that belong to it,
                                     its last three runner steps and the open

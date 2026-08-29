@@ -9,7 +9,8 @@ import { describe, it } from 'node:test';
 import { runsSince } from '../../src/mc/brief-collect.js';
 import { estimateCost, priceFor } from '../../src/mc/prices.js';
 import {
-  decisionsBlock, kindFor, nowBlock, orphanWorkareas, pidAlive, projectsBlock, renderStatus, runnerBlock,
+  collectStatus, decisionsBlock, kindFor, nowBlock, orphanWorkareas, pidAlive, projectsBlock, renderStatus,
+  runnerBlock,
 } from '../../src/mc/status-collect.js';
 import { run as page } from '../../src/mc/commands/status-page.js';
 import { runMcCli } from './_helpers/mc-cli.js';
@@ -194,6 +195,53 @@ describe('the page', () => {
     const code = await page(['--json'], { collect: async () => data, stdout: { write: (s) => { out += s; } } });
     assert.equal(code, 0);
     assert.equal(JSON.parse(out).orphans[0], 'ui-fixes');
+  });
+
+  it('is offline by default — no fetch, no gh — and says how old its PR cache is', async () => {
+    const asked = [];
+    const cache = {
+      loadPlans: () => ({ plans: PLANS, sources: [{ repo: 'memoro', sha: 'aaa', cached: true }] }),
+      loadPrs: () => ({ prs: [{ repo: 'memoro-cli', number: 433, headRefName: 'mc-status' }], fetched: '2026-08-29T10:00:00Z', age_seconds: 7200 }),
+      savePrs: () => { throw new Error('savePrs on the offline page'); },
+    };
+    const data = await collectStatus({
+      env: { MC_WORK_ROOT: '/nowhere' }, repos: [], cache,
+      exec: async (...args) => { asked.push(args[0]); return { ok: false, stdout: '' }; },
+      run: () => ({ status: 1, stdout: '' }),
+    });
+    assert.deepEqual(asked, [], 'the default page runs no fetch and no gh');
+    assert.equal(data.caches.fresh, false);
+    assert.equal(data.caches.prs.age_seconds, 7200);
+    assert.deepEqual(data.caches.plans, [{ repo: 'memoro', sha: 'aaa', cached: true }]);
+    assert.equal(data.projects.memoro.length, 3, 'the cached plans are the page');
+    assert.equal(data.projects['memoro-cli'][0].pr, 433, 'the cached PR lands on its branch');
+    assert.ok(data.notes.some((n) => /PRs from cache, 2 h old — --fresh asks GitHub/u.test(n)), data.notes.join(' | '));
+  });
+
+  it('--fresh fetches, asks GitHub and refills the PR cache', async () => {
+    const asked = [];
+    let saved = null;
+    const cache = {
+      loadPlans: () => ({ plans: PLANS, sources: [{ repo: 'memoro', sha: 'aaa', cached: false }] }),
+      loadPrs: () => { throw new Error('loadPrs under --fresh'); },
+      savePrs: ({ prs }) => { saved = prs; return { prs, fetched: '2026-08-29T12:00:00Z', age_seconds: 0 }; },
+    };
+    const data = await collectStatus({
+      env: { MC_WORK_ROOT: '/nowhere' },
+      repos: [{ name: 'memoro-cli', path: process.cwd() }],
+      fresh: true,
+      cache,
+      exec: async (cmd, args) => {
+        asked.push(`${cmd} ${args[0] === '-C' ? args[2] : args[0]}`);
+        return { ok: true, stdout: cmd === 'gh' ? '[{"number":433,"headRefName":"mc-status"}]' : '' };
+      },
+      run: () => ({ status: 1, stdout: '' }),
+    });
+    assert.deepEqual(asked.sort(), ['gh pr', 'git fetch']);
+    assert.deepEqual(saved, [{ repo: 'memoro-cli', number: 433, headRefName: 'mc-status' }]);
+    assert.equal(data.caches.fresh, true);
+    assert.equal(data.caches.prs.age_seconds, 0);
+    assert.equal(data.notes.some((n) => /cache/u.test(n)), false, 'nothing to apologise for when it just asked');
   });
 
   it('refuses an unknown flag, and the help says what the bare verb is', async () => {
