@@ -25,6 +25,7 @@ import { workAreaPath } from './paths.js';
 import { instructionsFor } from './roles.js';
 import { loadProfile, profileArgs, readCached as loadProfileSync } from './portrait.js';
 import { askToolToLeave } from './work-stop.js';
+import { registerForeground } from './foreground.js';
 import { clearStopMark } from './work-stop-marker.js';
 
 export async function openInWorkArea({
@@ -37,8 +38,14 @@ export async function openInWorkArea({
   prompt = null,
   defaultModel = null,
   defaultModelTool = null,
+  // Which verb opened this, and in which area — the two words NOW needs to
+  // name the session while it is up. A caller that says nothing registers
+  // nothing: this is what the verbs know and the opener does not.
+  verb = null,
+  areaName = null,
   env = process.env,
   spawn = spawnSync,
+  register = registerForeground,
   loadProfile: readProfile = loadProfile,
 } = {}) {
   const before = listConversations(areaRoot, env);
@@ -105,7 +112,22 @@ export async function openInWorkArea({
   // Opened again: whatever `mc work stop` noted is over, and the next time
   // this area's conversation disappears it is judged on its own (KP-09).
   clearStopMark(areaRoot);
-  const result = spawn(launch.spec.bin, args, { cwd: worktree.path, stdio: 'inherit', env });
+  // The register exists exactly as long as the tool holds the terminal, and
+  // is removed however the call returns — the same pairing `mc run` uses for
+  // current.json, for the same reason: a session that throws must not leave
+  // the page claiming it forever.
+  // The short name, not the adapter id: NOW puts this beside the runner's
+  // step, whose tool is 'claude' or 'codex', and one page should not call the
+  // same tool two things.
+  const release = register({
+    verb, area: areaName, tool: launch.shortName || toolId, model: chosenModel || null, env,
+  });
+  let result;
+  try {
+    result = spawn(launch.spec.bin, args, { cwd: worktree.path, stdio: 'inherit', env });
+  } finally {
+    release();
+  }
   if (result?.error) {
     log('work.open-failed', { area: areaRoot, error: result.error.message });
     return { ok: false, reason: result.error.message };

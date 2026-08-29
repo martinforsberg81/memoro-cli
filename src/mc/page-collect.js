@@ -51,10 +51,11 @@ export const DECISIONS_NAMED = 3;
  * one line of the day behind it.
  *
  * The foreground register is `~/mc/runner/foreground/<pid>.json`, written by
- * `mc brief`/`mc plan`/`mc worker` (step 5). Until they write it the list is
- * empty — which is the truth, not a zero that looks like health: no verb is
- * *known* to be running, and NOW says nothing about it rather than claiming
- * nothing is.
+ * the verbs that hold a terminal — `mc brief`, `mc plan`, `mc worker`,
+ * `mc work <name>` — through `foreground.js`. What it says is what somebody
+ * is sitting in front of; what it does not say is that nothing else is. An
+ * entry whose pid is not alive is dropped here rather than believed: a
+ * session killed with its terminal never gets to remove its own file.
  */
 export function nowSection({
   runner = null, current = null, stop = false, rows = [], live = [], foreground = [],

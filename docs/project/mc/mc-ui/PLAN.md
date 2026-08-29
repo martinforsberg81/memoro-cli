@@ -1,6 +1,6 @@
 ---
 status: ready
-next: "Step 5 — Foreground register: `mc brief`/`mc plan`/`mc worker` write `~/mc/runner/foreground/<pid>.json` (verb, area, tool, model, started) at launch and remove it at exit, so NOW names the verb — done when a running `mc brief` appears in NOW as \"brief\" and is gone after exit."
+next: "Step 6 — Close-out: `docs/technical/mc-ui.md` and `project_log.md`, and the step-1/2 collector that lost its caller (`collectStatus`, `renderStatus`, `runnerBlock`, `projectsBlock`, `orphanWorkareas` in status-collect.js) — done when the document describes the page as built and nothing unreachable is left behind."
 budget: 150k
 needs: []
 ---
@@ -159,10 +159,21 @@ redrawn, no prompt. Bare `mc work`, `mc list`, bare `mc status`, `mc status
       the number → workarea mapping is driven in process in
       `tests/mc/front-door.test.js` with the reading and the opening handed
       in, so it is asserted without a session ever starting.
-- [ ] **5. Foreground register** — `mc brief`/`mc plan`/`mc worker` write
-      `~/mc/runner/foreground/<pid>.json` (verb, area, tool, model, started)
-      at launch and remove it at exit, so NOW names the verb. Done when a
-      running `mc brief` appears in NOW as "brief" and is gone after exit.
+- [x] **5. Foreground register** (2026-08-29) — `src/mc/foreground.js` writes
+      `~/mc/runner/foreground/<pid>.json` (verb, area, tool, model, pid,
+      started) and hands back the release; `openInWorkArea` takes a `verb` and
+      an `areaName` and pairs the write with the call that blocks, in a
+      `finally`, as `mc run` pairs current.json. `mc brief` says `brief`,
+      `mc plan <name>` says `plan`, `mc worker <name>` says `worker` through
+      `openArea`, and `mc work <name>` opened in a terminal says `work` — the
+      same door, and NOW may not claim nothing is running because the person
+      typed the shorter verb. The pid is mc's, not the tool's, for the reason
+      current.json names the runner. Done: a real `mc brief` against a
+      throwaway work root with a stand-in tool binary showed
+      `● mc brief  claude opus · pid 85768` in NOW and
+      `now.foreground[0].verb === "brief"` in `--json` from a second process,
+      and both were empty a second after it exited; `npm test` is 54 failures
+      in the 22 known V1 files, unchanged from step 4.
 - [ ] **6. Close-out** — `docs/technical/mc-ui.md`, `project_log.md`.
 
 ## What the code taught us
@@ -277,6 +288,23 @@ assumed, are in `investigation-2026-08-29.md`.
   imports. Left in place rather than removed in the same breath as the board:
   step 6 is the close-out, and it is the right size of change for it.
 
+- **A register the process cannot always remove is still honest, twice over.**
+  ctrl-c kills mc with the tool it is waiting on, and `finally` never runs —
+  measured: the file survived the interrupt. It claims nothing, because the
+  reader drops an entry whose pid is not alive, and it does not accumulate,
+  because the next verb sweeps the dead pids as it registers. Both halves use
+  the same `pidAlive`, imported rather than repeated.
+
+- **`opts.verb` was already taken.** `mc work`'s own parse calls the thing the
+  line asked for a "verb" (`open`, `send`, `add`), so passing the register's
+  verb under that name made NOW say "mc open". The door the person walked
+  through is `opts.opener`, and only `mc worker` sets it.
+
+- **One page should not call the same tool two things.** The register writes
+  `launch.shortName` (`claude`), not the adapter id (`claude-code`), because
+  it sits directly under the runner's step, whose tool comes from the plan's
+  own word.
+
 - **The 24 h summary counts a timeout as a timeout and not a failure**
   (`summariseRuns`), which is why the page's own line reads `failed 0, timed
   out 1` for a run that did both. The page repeats the runner's arithmetic
@@ -289,6 +317,7 @@ assumed, are in `investigation-2026-08-29.md`.
 - `src/mc/page-collect.js`, `src/mc/page-render.js` — the five sections and how they look (step 3)
 - `src/mc/page-cache.js` — plans.json and prs.json, the two caches step 2 added
 - `src/mc/commands/home.js` — bare `mc`: the page, the menu and `--watch` (step 4)
+- `src/mc/foreground.js` — the foreground register NOW reads (step 5)
 - `src/mc/commands/work.js` `runVerb()`/`openArea()`/`startSomething()` — the verbs the menu reaches back into
 - `docs/project/mc/mc-status/PLAN.md` — the page this rebuilds; `mc-run` — the writer of `current.json`; `mc-helper` — the writer of intake
 - `~/mc/mc-utredning/utredning-2026-08-24.md` §12.5 — the five parts the page must show
