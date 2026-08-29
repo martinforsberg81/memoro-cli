@@ -1,6 +1,6 @@
 ---
-status: ready
-next: "Step 2 — close-out: the lanes written down in `docs/technical/mc-run.md` (what a lane owns, the one current file per lane, the shared quota sleep and STOP, why the session is spawned rather than run with spawnSync), and a `docs/project/project_log.md` row — done when the note exists and the log names the change."
+status: done
+next: "nothing — the lanes run and are written down; step 2 closed it out."
 budget: 150k
 needs: [mc-ui]
 ---
@@ -48,7 +48,7 @@ type or start.
 ## Steps
 
 - [x] **1. Lanes** — one PR.
-- [ ] **2. Close-out** — `docs/technical/` note, `project_log.md` row.
+- [x] **2. Close-out** — `docs/technical/` note, `project_log.md` row.
 
 ## What the code taught us
 
@@ -66,3 +66,11 @@ type or start.
 - **A lane re-reads only its own repository.** The mid-round re-read after a
   merged step fetches one repository (`queue({ only })`), so the two lanes
   never run `git fetch` in the same checkout at the same moment.
+- **The close-out note is the lanes, not the whole runner.**
+  `docs/technical/mc-run.md` did not exist, and the `mc run` project that owns
+  that name is still open (its step 2 is a live round on the real queue). So
+  the note frames the round/step/lane vocabulary and then says what this
+  project changed; the rest of the runner grows into the same file when
+  `mc run` closes out. It is pinned by `tests/mc/run-doc.test.js`, the way
+  `mc helper`'s note is pinned — every number the prose states is read back
+  out of it and compared with the export it describes.
