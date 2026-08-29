@@ -91,13 +91,19 @@ export async function run(argv, deps = {}) {
  * What the session is told, assembled without starting anything: the role
  * overlay as written, and the first prompt naming the workarea, the
  * repository and the deliverable.
+ *
+ * The last line is the docs merge, not "and stop": a plan PR touches only
+ * `docs/`, so it is `mc merge <repo> <pr> --docs`' case, and the runner
+ * cannot queue a project whose PLAN.md is still sitting in an open PR. The
+ * role says the same thing; the prompt is the word that comes last.
  */
 export function planLaunch({ name, repo, role }) {
   const prompt = [
     `You are working in the \`${name}\` workarea of ${repo} (this worktree; origin/main is its base).`,
     `There is no \`docs/project/*/${name}/PLAN.md\` yet, or it needs rethinking.`,
     'Start by reading what already exists — docs/project/ here, the open "Plan:" PRs, the workarea\'s ../HANDOFF.md and ../inbox/ if present, the old plan under docs/plans/ they point to — and say what you found.',
-    `Then talk it through with Martin and write \`docs/project/<programme>/${name}/PLAN.md\` as described in your role; open a PR titled "Plan: ${name}" and stop.`,
+    `Then talk it through with Martin and write \`docs/project/<programme>/${name}/PLAN.md\` as described in your role, and open a PR titled "Plan: ${name}".`,
+    `Land that PR yourself — it is documentation only: \`mc merge ${repo} <pr> --docs\`. If it refuses, leave the PR open and say why. Then stop.`,
   ].join('\n');
   return { overlay: role.overlay, prompt, model: role.model || null };
 }
