@@ -9,7 +9,9 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { describe as describeRun, run, turnLine, unreadable } from '../../../src/mc/commands/helper.js';
+import { run } from '../../../src/mc/commands/helper.js';
+import { describeDigest, unreadableSections } from '../../../src/mc/helper-collect.js';
+import { describeTurn } from '../../../src/mc/helper-turn.js';
 
 function sink() {
   const chunks = [];
@@ -140,19 +142,19 @@ describe('mc helper', () => {
   });
 
   it('says what the turn produced in one line', () => {
-    assert.equal(turnLine({ wrote: [], waiting: [] }), 'no proposal — nothing in the digest warranted one (0 still waiting)');
-    assert.equal(turnLine({ wrote: [1, 2], waiting: [1, 2, 3] }), '2 proposals, 3 waiting');
+    assert.equal(describeTurn({ wrote: [], waiting: [] }), 'no proposal — nothing in the digest warranted one (0 still waiting)');
+    assert.equal(describeTurn({ wrote: [1, 2], waiting: [1, 2, 3] }), '2 proposals, 3 waiting');
   });
 
   it('lists the unreadable sections by name', () => {
-    const found = unreadable({
+    const found = unreadableSections({
       errors: { error: 'a' }, analysis: {}, provider: { error: 'b' }, health: {}, deploy: {},
     });
     assert.deepEqual(found.map(([name]) => name), ['error fingerprints', 'AI-provider errors']);
   });
 
   it('describes a quiet day as nothing new', () => {
-    const line = describeRun({
+    const line = describeDigest({
       delta: { first: false, fingerprints: [], failing: [] },
       errors: { rows: [] },
     });

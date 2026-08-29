@@ -16,8 +16,10 @@
  * ran every tool as claude on opus, it wrote plans it had invented, and it
  * started projects off answered decision files.
  */
+import { parseRuns } from './brief-collect.js';
 
 export const RUNS_HEADER = ['ts', 'name', 'kind', 'exit', 'seconds', 'pr', 'turns', 'input', 'output', 'cache_read', 'cache_write', 'session', 'note'];
+
 export const DEFAULT_MODEL = 'opus';
 export const DEFAULT_TOOL = 'claude';
 export const DEFAULT_BUDGET_MINUTES = 90;
@@ -77,6 +79,48 @@ export function chooseKind({ plan, conflicts = [] }) {
   if (!plan) return { kind: null, skip: null };
   if (plan.status === 'ready') return { kind: 'step' };
   return { kind: null, skip: `status ${plan.status || 'missing'}` };
+}
+
+/* ----------------------------------------------------------- the helper */
+
+/**
+ * `mc helper` is a step of the runner's day, not a project: it is logged in
+ * runs.tsv under its own `kind` with `helper` in the name column, and it runs
+ * at most once per calendar day.
+ *
+ * The hour is UTC and the day is UTC, so the two agree — the digest's window
+ * is the day behind it, and a run before dawn would be measuring against a
+ * baseline written an hour earlier. `05:00Z` is early morning here and after
+ * the nightly tasks memoro runs on its own cadence.
+ */
+export const HELPER_KIND = 'helper';
+export const HELPER_NAME = 'helper';
+export const HELPER_HOUR_UTC = 5;
+
+/**
+ * Is the day's helper run due? The runs.tsv row is the whole state — there is
+ * no separate stamp file to fall out of step with it — and the row is written
+ * whether the run succeeded or failed. That is what "a failed collect is
+ * logged and never retried within the day" means: the gate does not ask how
+ * it went, only that it happened.
+ */
+export function helperDue({ tsv = '', now = new Date(), hour = HELPER_HOUR_UTC } = {}) {
+  if (now.getUTCHours() < hour) return { due: false, why: `not before ${String(hour).padStart(2, '0')}:00Z` };
+  const day = now.toISOString().slice(0, 10);
+  const ran = parseRuns(tsv).find((row) => row.kind === HELPER_KIND && String(row.ts).slice(0, 10) === day);
+  if (ran) return { due: false, why: `already ran today (${ran.ts}, ${ran.note || '-'})` };
+  return { due: true, why: null };
+}
+
+/**
+ * The runs.tsv note for a day's helper run. `success,<n>-proposals` keeps the
+ * `success,...` shape every other row uses — `summariseRuns` reads a note that
+ * does not start with it as a failure, and a quiet day is not a failure.
+ */
+export function helperNote(turn) {
+  if (!turn) return 'collect-failed';
+  if (turn.ok) return `success,${turn.wrote?.length ?? 0}-proposals`;
+  return turn.reason || turn.note || 'failed';
 }
 
 /* ---------------------------------------------------------------- prompts */

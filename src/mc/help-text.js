@@ -192,7 +192,9 @@ MAINTENANCE
                                     then one headless turn that reads it and
                                     writes ~/mc/intake/proposals/<date>-<x>.md
                                     — zero on a quiet day. Never the queue:
-                                    the next brief lists them, and you decide
+                                    the next brief lists them, and you decide.
+                                    mc run does this once a day on its own;
+                                    mc shows the digest and its \`!\` lines
   mc helper --collect              Only the digest, no model:
                                     ~/mc/intake/errors-<date>.md from the
                                     error survey, the analysis items,
@@ -214,8 +216,11 @@ MAINTENANCE
                                     step of the next project, merged direct;
                                     queue = ~/mc/queue.md then every ready
                                     PLAN.md on origin/main. Touch
-                                    ~/mc/runner/STOP to exit after the step
-  mc run --once                    One step for the first runnable project
+                                    ~/mc/runner/STOP to exit after the step.
+                                    Runs mc helper once a day too, in the
+                                    first round after 05:00Z
+  mc run --once                    One step for the first runnable project,
+                                    and no helper
   mc run --rounds <n> [--no-merge] [--idle-sleep <s>]
   mc worker <name> [task]          A project folder that carries the worker
                                     role, read from the roles mc ships: every

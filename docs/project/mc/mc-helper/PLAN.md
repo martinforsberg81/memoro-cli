@@ -1,6 +1,6 @@
 ---
 status: ready
-next: "Step 3 — runner and status: `mc run` runs `mc helper` once per calendar day (first round after 05:00Z) as kind `helper` in runs.tsv, a failed collect logged and never retried within the day; and `mc status` gets a HELPER block — last digest time, new fingerprints in it, proposals waiting, the `!` lines first. Done when runs.tsv shows one `helper` row per day for two days. Unblocked: mc-run step 1 landed (#436, #437), so the daily gate goes in `mc run` and `~/mc/bin/runner.sh` is already deleted."
+next: "Step 4 — close-out: `docs/technical/mc-helper.md` (the two halves, the daily gate in `mc run`, the intake directory, what the digest cannot reach and why) and a `project_log.md` entry. Done when a reader who has never seen the helper can say what it reads, when it runs, what it writes and who acts on it, without opening the source."
 budget: 150k
 needs: []
 ---
@@ -84,22 +84,33 @@ the new-error count and the proposals waiting.
       *given* the digest, the plans on main and the project log in its
       prompt rather than sent to find them, so the repositories are not in
       its reach at all.
-- [ ] `mc run` runs `mc helper` once per calendar day (first round after
-      05:00Z), as kind `helper` in the existing `kind` column of runs.tsv;
-      a failed collect is logged, never retried within the day.
+- [x] `mc run` runs `mc helper` once per calendar day (first round after
+      05:00Z), as kind `helper` in the existing `kind` column of runs.tsv
+      and `helper` in the name column; a failed collect is logged, never
+      retried within the day. The row *is* the gate — there is no stamp file
+      beside it to fall out of step with — and it is written whether the run
+      worked or not, which is the whole of "never retried within the day".
+      `mc run --once` does not run it: that flag exists to watch one step,
+      and a model turn over production is not what it asked for.
 - [x] `mc brief --collect` lists the proposals under a "Proposals" section
       — file, what it proposes (project or step, repo, project), title and
       the one-line "done when" — so the brief session can move them. It
       landed with step 2 rather than step 3: "a proposal Martin can read in
       `mc brief`" is step 2's own success criterion.
-- [ ] `mc status` gets a HELPER block: last digest time, new fingerprints
-      in it, proposals waiting.
+- [x] `mc status` gets a HELPER block: last digest time, new fingerprints
+      in it, proposals waiting — and the `!` lines themselves, first, right
+      under the heading. It is the page's INTAKE section: `mc status` became
+      bare `mc` while this plan was being run (decision mc-3, mc-ui step 4),
+      and INTAKE was already the helper's block on it. See "What the code
+      taught us".
 - [x] A digest line with a new fingerprint above a threshold (default 20
-      hits in 24 h) is marked `!`. `mc status` printing it first is step 3.
+      hits in 24 h) is marked `!`. The page prints those lines whole, first
+      in the section, three of them and then a count.
 - [x] Tests: the digest on stubbed script output and stubbed routes; the
       delta against a previous digest; the failure domains kept separate —
-      no network, no model. Proposals parsing, the daily gate in the runner
-      and the status block come with steps 2 and 3.
+      no network, no model. Proposals parsing landed with step 2; the daily
+      gate (`helperDue`, `helperNote`, and the round driven end to end on
+      fakes) and the page's `!` lines landed with step 3.
 
 ## Contract
 
@@ -138,11 +149,14 @@ the new-error count and the proposals waiting.
       `touchSession` KV rate-limit burst next to the slow-auth
       fingerprints). All three then read back out of
       `mc brief --collect`'s Proposals section.
-- [ ] **3. Runner and status** — daily kind `helper` in `mc run`; the
-      HELPER block. Done when runs.tsv shows one `helper` row per day for
-      two days. No longer blocked: mc-run step 1 landed (#436, #437) and
-      `~/mc/bin/runner.sh` is deleted, so the daily gate goes straight into
-      `mc run`'s round.
+- [x] **3. Runner and status** — daily kind `helper` in `mc run`; the
+      HELPER block. Done: the real `createRunner` on real files, its clock
+      moved through seven rounds across 2026-08-29 and 08-30 and only the
+      two halves of `mc helper` stood in for, wrote exactly two rows —
+      `2026-08-29T05:10:00Z helper helper 0 … success,1-proposals` and the
+      same the next morning — with the 04:30 round silent and the 09:00 and
+      22:00 rounds silent. The page's INTAKE section printed a real digest's
+      four `!` lines, three named and one counted.
 - [ ] **4. Close-out** — `docs/technical/mc-helper.md`, `project_log.md`.
 - [ ] **5. Retire `sync-todo.mjs`** — in `~/memoro`, a week after the
       helper has been running (decision mc-2). Done when `/improve`,
@@ -212,6 +226,42 @@ production calls made.
 - **What it wrote is measured, not believed.** `runHelperTurn` lists
   `proposals/` before and after and reports the difference, so a turn that
   says it filed three and filed none is reported as having filed none.
+- **`mc status` is the page now, and the HELPER block was already on it.**
+  Between step 2 and step 3, mc-ui step 4 (decision mc-3) made bare `mc` the
+  one page and left `mc status <name>` as one project; the board `mc status`
+  used to print is gone, and so is `renderStatus`. The page already had an
+  INTAKE section reading the newest `errors-<date>.md` and counting the
+  proposals — the plan's "last digest time, new fingerprints, proposals
+  waiting" was built there by somebody else. What was missing was the last
+  clause: the `!` lines *themselves*, first. So step 3 did not add a block; it
+  finished the one that exists. `intakeSection` now carries `loud_lines` and
+  `more_loud`, and `newErrorLines` parses the bullets the digest writes rather
+  than only counting them.
+- **The runs.tsv row is the whole gate.** `helperDue` reads runs.tsv and
+  nothing else — no stamp file, no separate state — and the row goes in
+  whether the run worked or failed. That is what makes "a failed collect is
+  logged and never retried within the day" one rule instead of two: a
+  `collect-failed` row closes the day exactly as a successful one does.
+- **The note has to start with `success`.** `summariseRuns` in
+  brief-collect.js counts any row whose note does not start with `success` as
+  a failure, and the page's day line prints that count. A quiet helper day is
+  not a failure, so the note is `success,0-proposals` — the same
+  `success,<something>` shape `success,merged` and `success,open` already use.
+- **The runner does call a model once a day now.** run.js's own header said it
+  never does. The helper turn is not a step — no worktree, no branch, no PR —
+  but it is a model call the runner is the parent of, and its tokens go in the
+  same runs.tsv columns so the page can price the day honestly. `runHelperTurn`
+  now returns `input`/`output`/`cacheRead`/`cacheWrite` for that reason alone.
+- **`mc run --once` does not run the helper.** `--once` exists to watch a
+  single step. Two minutes of production reads and a model turn is not what
+  somebody typing it asked for, and skipping it costs the real runner nothing
+  — it never passes `--once`.
+- **The one-line wordings moved out of the command.** `describe`, `turnLine`
+  and `unreadable` lived in `commands/helper.js`, and the runner needs the
+  same sentences in `runner.log`. They are `describeDigest` and
+  `unreadableSections` in helper-collect.js and `describeTurn` in
+  helper-turn.js now; the command imports them. A runner log and a terminal
+  cannot describe the same digest differently any more.
 - **mc-1 is spent.** Its ruling (pm/pm-helper dormant, `mc watch`
   removed, `worker` kept) landed in #422 and #423 and touches nothing
   here. The reserved role name `helper` it mentions is free for

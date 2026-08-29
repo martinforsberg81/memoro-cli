@@ -11,7 +11,8 @@ import { describe, it } from 'node:test';
 
 import { runsSince } from '../../src/mc/brief-collect.js';
 import {
-  collectPage, countNewErrors, decisionsSection, intakeSection, nowSection, queueSection, workSection,
+  collectPage, countNewErrors, decisionsSection, intakeSection, newErrorLines, nowSection, queueSection,
+  workSection,
 } from '../../src/mc/page-collect.js';
 import { colourFor, columnsFor, renderPage, renderPageLines } from '../../src/mc/page-render.js';
 import { width } from '../../src/mc/status-render.js';
@@ -147,6 +148,37 @@ describe('INTAKE', () => {
     assert.equal(intake.new_errors, 2);
     assert.equal(intake.loud, 1);
     assert.equal(intake.proposals, 2);
+  });
+
+  it('keeps the `!` lines themselves, and names the first few', () => {
+    const many = ['## New since the last digest', '',
+      '- ! `one` — 90x 500 — the first',
+      '- ! `two` — 80x 500 — the second',
+      '- · `quiet` — 2x 500 — not loud',
+      '- ! `three` — 70x 500 — the third',
+      '- ! `four` — 60x 500 — the fourth',
+    ].join('\n');
+    assert.deepEqual(newErrorLines('- ! `a` — x').lines, [], 'a bullet outside the section is not a new error');
+    const intake = intakeSection({ digest: { name: 'errors-2026-08-29.md', text: many, mtime_ms: null }, named: 3 });
+    assert.equal(intake.new_errors, 5);
+    assert.equal(intake.loud, 4);
+    assert.deepEqual(intake.loud_lines, ['`one` — 90x 500 — the first', '`two` — 80x 500 — the second', '`three` — 70x 500 — the third']);
+    assert.equal(intake.more_loud, 1);
+
+    const lines = renderPageLines(pageData({ intake }), { columns: 100 });
+    const at = lines.findIndex((line) => /^ {2}INTAKE/u.test(line));
+    assert.match(lines[at + 1], /^ {2} {2}! {2}`one` — 90x 500 — the first$/u, 'the `!` lines come first, right under the heading');
+    assert.match(lines[at + 4], /… 1 more above the threshold/u);
+  });
+
+  it('has no `!` lines to print on a quiet day', () => {
+    const intake = intakeSection({
+      digest: { name: 'errors-2026-08-29.md', text: '## New since the last digest\n\n_nothing new_\n', mtime_ms: null },
+    });
+    assert.deepEqual(intake.loud_lines, []);
+    const lines = renderPageLines(pageData({ intake }), { columns: 100 });
+    const at = lines.findIndex((line) => /^ {2}INTAKE/u.test(line));
+    assert.equal(lines[at + 1], '', 'nothing between the heading and the next section');
   });
 
   it('says there is no digest rather than a zero that looks like health', () => {
@@ -355,6 +387,7 @@ describe('collectPage', () => {
     assert.equal(data.queue.runnable, 2);
     assert.equal(data.decisions.count, 1);
     assert.equal(data.intake.new_errors, 1);
+    assert.deepEqual(data.intake.loud_lines, ['`abc` — 41x 500 — loud']);
     assert.equal(data.intake.proposals, 1);
     assert.deepEqual(data.work.areas.map((area) => area.name).sort(), ['docx-editor', 'mc-ui']);
     assert.equal(data.work.areas.find((area) => area.name === 'mc-ui').pr, 440);
