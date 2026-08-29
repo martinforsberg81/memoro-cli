@@ -41,26 +41,25 @@ export const RUNNER_MODEL = 'opus';
  * What the runner would do with a queued name — asked of the runner itself.
  *
  * The rule lives in one place, `chooseKind` in run-plan.js, and run.js calls
- * the same function before it starts a step. This wrapper only supplies what
- * the runner reads from the worktree (an answered decision file) from what
- * the page has already scanned, and flattens the answer to one string. It
- * cannot see `reconcile`: that is a merge left in progress inside a
- * workarea, and the page does not open worktrees.
+ * the same function before it starts a step; this only flattens the answer
+ * to one string. It cannot see `reconcile`: that is a merge left in progress
+ * inside a workarea, and the page does not open worktrees.
+ *
+ * Decisions are not a parameter any more. The runner runs `ready` plans and
+ * nothing else — a project waiting on a decision is simply not ready, and no
+ * `**Beslut:**` line anywhere starts it (Martin, 2026-08-29).
  */
-export function kindFor(name, { plans, decisions }) {
+export function kindFor(name, { plans }) {
   const plan = plans.find((p) => p.project === name) || null;
-  const answered = plan
-    ? decisions.filter((d) => d.answered
-      && (d.file.includes(`/decisions/${plan.programme}-`) || d.file.includes(`/decisions/${name}-`) || d.area === name))
-    : [];
-  const choice = chooseKind({ plan, answered });
+  const choice = chooseKind({ plan });
   if (choice.kind) return choice.kind;
-  const status = choice.skip.startsWith('status ') ? choice.skip.slice('status '.length) : 'waiting-decision';
+  if (!plan) return 'skip:no-plan';
+  const status = choice.skip.slice('status '.length);
   return `skip:${status === 'missing' ? 'no-status' : status}`;
 }
 
 export function runnerBlock({ queue, plans, decisions, rows, alive, live = [] }) {
-  const items = queue.map((name) => ({ name, kind: kindFor(name, { plans, decisions }), live: live.includes(name) }));
+  const items = queue.map((name) => ({ name, kind: kindFor(name, { plans }), live: live.includes(name) }));
   const next = items.find((item) => !item.kind.startsWith('skip') && !item.live) || null;
   const summary = summariseRuns(rows);
   const tokens = rows.reduce((acc, r) => ({
@@ -80,7 +79,7 @@ export function runnerBlock({ queue, plans, decisions, rows, alive, live = [] })
  * EPERM means it exists and belongs to somebody else, which is still alive.
  * This is the whole liveness test — no tmux session name, no pgrep pattern.
  * Both of those lied on 2026-08-29: a dead pane still answered
- * `tmux has-session -t runner`, and `pgrep -f 'runner.sh|mc run'` matched a
+ * `tmux has-session -t runner`, and `pgrep -f 'mc run'` matched a
  * step session whose prompt happened to contain the words "mc run".
  */
 export function pidAlive(pid) {

@@ -8,12 +8,13 @@
  * process-touching half (git, gh, tmux, the session itself) is run.js, and
  * it calls in here so that the tests can cover the rules with no session.
  *
- * The rules are `~/mc/bin/runner.sh`'s, line by line — the shell runner is
- * what nights 1–2 measured (`~/mc/runner/log/natt-1.md`), and this module
- * changes none of them. Two things it adds: a quota answer is logged as
- * `quota`, not `success` (the shell runner logged the weekly limit of
- * 2026-08-26 as eleven successful eight-second steps), and the tool and
- * model come from the project's frontmatter.
+ * These rules began as `~/mc/bin/runner.sh`'s, line by line — the shell
+ * runner nights 1–2 measured (`~/mc/runner/log/natt-1.md`). That file is
+ * deleted (Martin, 2026-08-29: "Inget att hålla kvar"); `mc run` had taken
+ * over the nights by then. What it did differently and this does not: it
+ * logged a weekly quota answer as eleven successful eight-second steps, it
+ * ran every tool as claude on opus, it wrote plans it had invented, and it
+ * started projects off answered decision files.
  */
 
 export const RUNS_HEADER = ['ts', 'name', 'kind', 'exit', 'seconds', 'pr', 'turns', 'input', 'output', 'cache_read', 'cache_write', 'session', 'note'];
@@ -28,13 +29,21 @@ export const TIMEOUT_EXIT = 142; // what the shell runner's `perl alarm` left in
 /**
  * Martin's order first (`queue.md`, comments and blanks ignored), then every
  * project with a PLAN.md on origin/main that the queue did not name, sorted.
- * The shell runner lists every plan and lets the status decide at run time;
- * so does this — a `done` plan is one skip line, which is also information.
+ *
+ * A name with no plan on main is not in the queue at all. It used to be —
+ * queue.md was taken literally and whatever it named was attempted — and the
+ * runner logged a skip line for it every round. Nobody reads that line
+ * (Martin, 2026-08-29: "Ingen skip-rad: vem ska läsa den!?"). A workarea with
+ * no plan is shown where somebody actually looks: `mc status`'s WORKAREAS
+ * WITHOUT A PROJECT block.
  */
 export function assembleQueue(queueText, plans) {
-  const named = String(queueText || '').split('\n').map((line) => line.trim()).filter((line) => line && !line.startsWith('#'));
+  const planned = new Set(plans.map((p) => p.project));
+  const named = String(queueText || '').split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith('#') && planned.has(line));
   const seen = new Set(named);
-  const rest = [...new Set(plans.map((p) => p.project))].filter((name) => !seen.has(name)).sort();
+  const rest = [...planned].filter((name) => !seen.has(name)).sort();
   return [...named, ...rest];
 }
 
@@ -43,78 +52,39 @@ export function assembleQueue(queueText, plans) {
 /**
  * What a project gets this round. `conflicts` non-empty means the merge of
  * origin/main stopped and is left in progress; `plan` is null when no
- * PLAN.md exists in the worktree; `answered` lists decision files with a
- * `**Beslut:**` line for the project or its programme.
+ * PLAN.md exists in the worktree.
+ *
+ * Two things the runner used to do here and does not any more, both on
+ * Martin's word of 2026-08-29:
+ *
+ * - **No plan means nothing happens, silently.** The runner runs plans; it
+ *   does not write them. Planning is `mc plan <name>`, a foreground session
+ *   with Martin in it, ending in a `Plan: <name>` PR he has read. ("JAG TAR
+ *   FRAM PLANER I EN mc plan SESSION … Runner ska köra de planer som tagits
+ *   fram.") The old `triage` kind invented a plan headlessly and landed it on
+ *   main by itself, so work could begin on a plan nobody had agreed to.
+ *   `assembleQueue` already drops such names, so this branch is only reached
+ *   when a plan disappears mid-round; it carries no `skip` text because
+ *   nothing would read it.
+ * - **`waiting-decision` is simply not ready.** The runner has nothing to do
+ *   with decisions — it does not read them, count them, or start a project
+ *   because one was answered. ("Runner genomför planer som är ready. Om
+ *   väntande beslut är ej ready.") A plan comes back by being set `ready`,
+ *   which is the job of whoever applies the answer.
  */
-export function chooseKind({ plan, conflicts = [], answered = [] }) {
+export function chooseKind({ plan, conflicts = [] }) {
   if (conflicts.length) return { kind: 'reconcile' };
-  if (!plan) return { kind: 'triage' };
+  if (!plan) return { kind: null, skip: null };
   if (plan.status === 'ready') return { kind: 'step' };
-  if (plan.status === 'waiting-decision') {
-    return answered.length ? { kind: 'step', answered } : { kind: null, skip: 'waiting-decision (no Beslut line yet)' };
-  }
   return { kind: null, skip: `status ${plan.status || 'missing'}` };
-}
-
-/** The `**Beslut:**` test the whole decision mechanism rests on. */
-export function isAnswered(text) {
-  return /^\*\*Beslut/mu.test(String(text || ''));
-}
-
-/* -------------------------------------------------------------- retirement */
-
-/**
- * Which decision files have done their job and can go.
- *
- * `decisions/` is meant to hold open questions and nothing else. It did not:
- * on 2026-08-29 it held 51 files, 42 of them answered, some for weeks — so
- * every reader (the brief, `mc status`, a person, a session) had to sort 51
- * to find the 6 that were live, and two of those 6 asked about projects that
- * no longer had a plan on main. Martin's rule is that the plan changes for
- * the decision and the file goes.
- *
- * The test is deliberately not "has a `**Beslut:**` line". A file is retired
- * only when its answer has demonstrably landed: every plan that owns it has
- * left `waiting-decision`. Measured against `~/mc` the difference is real —
- * `avatar-image-animation` carries seven answered decisions while its plan
- * still says `waiting-decision` and its `next:` still names the file, and
- * `mc-utredning/mc-2.md` was answered the same day `mc-helper` was still
- * waiting on it. Deleting on the answer alone would have taken those answers
- * away before the sessions that need them ever read them.
- *
- * Ownership is `answeredDecisions()`'s rule, inverted: a plan owns a file in
- * its own area, or one named `<programme>-*` or `<project>-*`. A file no plan
- * owns is an **orphan** — the project it belonged to is gone from main — and
- * a machine never deletes one. It is reported so a person can decide; that
- * is the class `network-review-1` and `test-architecture-2` fell into, and
- * silently deleting a question nobody has answered is the one failure worse
- * than keeping it.
- */
-export function retireDecisions({ decisions = [], plans = [] } = {}) {
-  const owners = (d) => plans.filter((p) => d.area === p.project
-    || d.base.startsWith(`${p.programme}-`)
-    || d.base.startsWith(`${p.project}-`));
-
-  const remove = [];
-  const orphans = [];
-  const held = [];
-  for (const d of decisions) {
-    if (!d.answered) continue;                      // an open question stays
-    const mine = owners(d);
-    if (!mine.length) { orphans.push({ ...d, why: 'no plan on main owns it' }); continue; }
-    const waiting = mine.filter((p) => p.status === 'waiting-decision');
-    if (waiting.length) { held.push({ ...d, why: `${waiting.map((p) => p.project).join(', ')} still waiting-decision` }); continue; }
-    remove.push({ ...d, appliedBy: mine.map((p) => p.project).sort() });
-  }
-  return { remove, orphans, held };
 }
 
 /* ---------------------------------------------------------------- prompts */
 
 const today = (now) => now.toISOString().slice(0, 10);
 
-export function stepPrompt({ name, repo, planPath, planText, answered = [], now = new Date() }) {
-  const head = [
+export function stepPrompt({ name, repo, planPath, planText, now = new Date() }) {
+  return [
     `You are working in the \`${name}\` workarea of ${repo} (this worktree; origin/main`,
     `is merged in). Below is your plan, \`${planPath}\`. Do the step named in \`next:\`;`,
     'its "done when" is your success criterion for this session — verify it before',
@@ -122,27 +92,9 @@ export function stepPrompt({ name, repo, planPath, planText, answered = [], now 
     '',
     `If the Contract must change, the decision file is \`../decisions/${name}-${today(now)}.md\`.`,
     'Do not merge. Do not ask questions. Stop when the PR exists.',
-  ];
-  const decisions = answered.length
-    ? [
-      '',
-      '----- Decisions answered by Martin -----',
-      'The plan says waiting-decision, but these decision files now carry a line',
-      'starting with **Beslut:** — read them first, apply the answer, set status:',
-      'ready (or blocked if the answer blocks), and then do the next step if it fits',
-      'in this session:',
-      ...answered,
-    ]
-    : [];
-  return [...head, ...decisions, '', '----- PLAN.md -----', planText].join('\n');
-}
-
-export function triagePrompt({ name, repo, now = new Date() }) {
-  return [
-    `You are working in the \`${name}\` workarea of ${repo} (this worktree). There is no`,
-    `\`docs/project/*/${name}/PLAN.md\` yet. Write it as your role says, under the`,
-    `programme it belongs to; a question for Martin goes in \`../decisions/${name}-${today(now)}.md\`.`,
-    `Open a PR titled "Plan: ${name}" and land it with \`mc merge ${repo} <pr> --docs\`.`,
+    '',
+    '----- PLAN.md -----',
+    planText,
   ].join('\n');
 }
 
@@ -206,7 +158,7 @@ export function readSessionOutput({ toolId, stdout, stderr = '', exitCode, timed
     output: pick(usage.output_tokens),
     cacheRead: pick(usage.cache_read_input_tokens),
     cacheWrite: pick(usage.cache_creation_input_tokens),
-    note: quota ? 'quota' : pick(json.subtype ?? '-'),
+    note: quota ? 'quota' : (json.is_error ? 'failed' : pick(json.subtype ?? '-')),
     quota,
   };
 }

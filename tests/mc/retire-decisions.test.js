@@ -10,7 +10,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { retireDecisions } from '../../src/mc/run-plan.js';
+import { retireDecisions } from '../../src/mc/brief-collect.js';
 
 const decision = (area, base, answered = true) => ({ area, base, path: `/work/${area}/decisions/${base}.md`, answered });
 const plan = (programme, project, status) => ({ programme, project, status });

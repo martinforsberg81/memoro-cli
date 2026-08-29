@@ -17,14 +17,14 @@ import { dirname, join } from 'node:path';
 
 import { resolveLaunch } from '../adapters/index.js';
 import { writeJsonAtomic } from './atomic-write.js';
-import { NOT_A_DECISION, defaultRepos, listPlans, parsePlanFrontmatter, planFields, showBatch } from './brief-collect.js';
+import { defaultRepos, listPlans, parsePlanFrontmatter, planFields, showBatch } from './brief-collect.js';
 import { workRoot } from './paths.js';
 import { loadProfile, profileArgs } from './portrait.js';
 import { readCanonRole } from './roles.js';
 import { addWorktree } from './work-area.js';
 import {
-  QUOTA_SLEEP_MS, TIMEOUT_EXIT, assembleQueue, chooseKind, headlessArgs, isAnswered, readSessionOutput,
-  reconcilePrompt, retireDecisions, sessionSettings, stepPrompt, triagePrompt, tsvHeader, tsvRow,
+  QUOTA_SLEEP_MS, TIMEOUT_EXIT, assembleQueue, chooseKind, headlessArgs, readSessionOutput,
+  reconcilePrompt, sessionSettings, stepPrompt, tsvHeader, tsvRow,
 } from './run-plan.js';
 
 export const REPO_NAMES = ['memoro', 'memoro-cli'];
@@ -52,10 +52,7 @@ export function realDeps(env = process.env) {
     // The two files that say a runner is here and a step is in flight. Whole
     // or not at all: `mc status` reads them while they are being written.
     writeJson: (path, value) => writeJsonAtomic(path, value, { mode: 0o644 }),
-    // Serves both callers: `force` so clearing runner.json/current.json is
-    // idempotent, and a boolean so retiring a decision file can say whether
-    // the file actually went.
-    remove: (path) => { try { rmSync(path, { force: true }); return true; } catch { return false; } },
+    remove: (path) => { try { rmSync(path, { force: true }); } catch { /* already gone */ } },
     pid: process.pid,
     addWorktree,
     profile: () => loadProfile({ env }),
@@ -140,53 +137,6 @@ export function createRunner({
     return { ok: false, conflicts };
   }
 
-  function answeredDecisions(name, programme) {
-    const files = new Set();
-    for (const area of deps.list(root)) {
-      const dir = join(root, area, 'decisions');
-      for (const file of deps.list(dir)) {
-        if (!file.endsWith('.md')) continue;
-        const mine = area === name || file.startsWith(`${programme}-`) || file.startsWith(`${name}-`);
-        if (mine && isAnswered(deps.read(join(dir, file)))) files.add(join(dir, file));
-      }
-    }
-    return [...files].sort();
-  }
-
-  /**
-   * Every `<area>/decisions/*.md` on disk, as `retireDecisions()` wants it.
-   * The bookkeeping names are skipped by name, the way `scanDecisions()` does
-   * it — `pm/decisions/log.md` is 358 kB of append-only log and one of its
-   * lines starts with `**Beslut`.
-   */
-  function allDecisions() {
-    const out = [];
-    for (const area of deps.list(root)) {
-      const dir = join(root, area, 'decisions');
-      for (const file of deps.list(dir)) {
-        if (!file.endsWith('.md') || NOT_A_DECISION.has(file)) continue;
-        out.push({ area, base: file.replace(/\.md$/u, ''), path: join(dir, file), answered: isAnswered(deps.read(join(dir, file))) });
-      }
-    }
-    return out.sort((a, b) => a.path.localeCompare(b.path));
-  }
-
-  /**
-   * End of round: an answered decision whose plan has absorbed it is deleted,
-   * so `decisions/` holds open questions and nothing else. Held and orphaned
-   * files are said out loud rather than removed — see `retireDecisions()`.
-   */
-  function retireAnswered(plans) {
-    const { remove, orphans, held } = retireDecisions({ decisions: allDecisions(), plans });
-    for (const d of remove) {
-      if (deps.remove(d.path)) say(`retired ${d.area}/decisions/${d.base}.md (applied in ${d.appliedBy.join(', ')})`);
-      else say(`could not remove ${d.path}`);
-    }
-    for (const d of held) say(`kept ${d.area}/decisions/${d.base}.md — ${d.why}`);
-    for (const d of orphans) say(`orphan ${d.area}/decisions/${d.base}.md — ${d.why}; answer it or delete it by hand`);
-    return { removed: remove.length, held: held.length, orphans: orphans.length };
-  }
-
   async function waitMergeable(worktree, pr) {
     let verdict = 'UNKNOWN';
     for (let i = 0; i < 12 && verdict === 'UNKNOWN'; i += 1) {
@@ -218,7 +168,7 @@ export function createRunner({
     return false;
   }
 
-  /** One project. Returns 'ran' | 'skipped' | 'stop'. */
+  /** One project. Returns 'merged' | 'ran' | 'skipped' | 'stop'. */
   async function runStep(name, plans) {
     if (stopRequested()) { say(`STOP file present (${paths.stop}) — not starting ${name}`); return 'stop'; }
     const repo = repoOf(name, plans);
@@ -236,9 +186,9 @@ export function createRunner({
     const sync = syncMain(worktree, name);
     if (!sync.ok && !sync.conflicts.length) { say(`${name}: fetch/merge failed, skip`); return 'skipped'; }
     const plan = sync.conflicts.length ? null : planOf(worktree, name);
-    const answered = plan?.status === 'waiting-decision' ? answeredDecisions(name, plan.programme) : [];
-    const choice = chooseKind({ plan, conflicts: sync.conflicts, answered });
-    if (!choice.kind) { say(`${name}: ${choice.skip}, skip`); return 'skipped'; }
+    const choice = chooseKind({ plan, conflicts: sync.conflicts });
+    // A null `skip` is a skip nobody would read — see `chooseKind`.
+    if (!choice.kind) { if (choice.skip) say(`${name}: ${choice.skip}, skip`); return 'skipped'; }
     const { kind } = choice;
 
     const role = deps.role(kind);
@@ -249,9 +199,7 @@ export function createRunner({
     const now = deps.now();
     const prompt = kind === 'reconcile'
       ? reconcilePrompt({ name, repo: repo.name, conflicts: sync.conflicts })
-      : kind === 'triage'
-        ? triagePrompt({ name, repo: repo.name, now })
-        : stepPrompt({ name, repo: repo.name, planPath: plan.path, planText: plan.text, answered, now });
+      : stepPrompt({ name, repo: repo.name, planPath: plan.path, planText: plan.text, now });
     const instructions = [await deps.profile(), role.overlay].filter(Boolean).join('\n\n---\n\n');
     const args = headlessArgs({ toolId: launch.id, adapter: launch.adapter, model: settings.model, instructions, prompt, profileArgs });
 
@@ -290,7 +238,7 @@ export function createRunner({
     deps.append(paths.runs, `${tsvRow({ ts: stamp(), name, kind, exit: result.status, seconds, pr, turns: read.turns, input: read.input, output: read.output, cacheRead: read.cacheRead, cacheWrite: read.cacheWrite, session: read.session, note })}\n`);
     say(`${name}: ${kind} done rc=${result.status} ${seconds}s pr=${pr} turns=${read.turns} note=${note}`);
     if (read.quota) { say(`quota/rate limit seen — sleeping ${QUOTA_SLEEP_MS / 60000}m`); await deps.sleep(QUOTA_SLEEP_MS); }
-    return 'ran';
+    return note === 'success,merged' ? 'merged' : 'ran';
   }
 
   /** The queue, re-read every round: queue.md, then every plan on origin/main. */
@@ -304,32 +252,42 @@ export function createRunner({
     return { names: assembleQueue(deps.read(paths.queue) || '', plans), plans };
   }
 
-  /** One pass. Returns { ran, stop }. */
+  /**
+   * One pass. Returns { ran, stop }. A project whose step merged keeps the
+   * runner: its next step follows at once (plans re-read, so the merged
+   * status is what decides) instead of waiting a whole round behind every
+   * other project — 2026-08-29 a six-step plan would have taken six rounds
+   * of twenty projects. STOP is honoured between those steps too.
+   */
   async function round({ once = false } = {}) {
-    const { names, plans } = queue();
+    let { names, plans } = queue();
     let ran = 0;
     for (const name of names) {
-      const r = await runStep(name, plans);
-      if (r === 'stop') return { ran, stop: true };
-      if (r === 'ran') {
-        ran += 1;
-        if (once) return { ran, stop: false, once: true };
-        await deps.sleep(60_000);
+      let r = await runStep(name, plans);
+      for (let stayed = 0; ; stayed += 1) {
+        if (r === 'stop') return { ran, stop: true };
+        if (r === 'ran' || r === 'merged') {
+          ran += 1;
+          if (once) return { ran, stop: false, once: true };
+          await deps.sleep(60_000);
+        }
+        if (stopRequested()) { say(`runner exit on STOP after ${name} (remove ${paths.stop} before the next start)`); return { ran, stop: true }; }
+        if (r !== 'merged' || stayed >= 8) break;
+        plans = queue().plans;
+        const status = plans.find((p) => p.project === name)?.status;
+        if (!status || status === 'done') break;
+        say(`${name}: step merged and the plan is ${status} — staying on ${name}`);
+        r = await runStep(name, plans);
       }
-      if (stopRequested()) { say(`runner exit on STOP after ${name} (remove ${paths.stop} before the next start)`); return { ran, stop: true }; }
     }
-    // After the steps, so a decision applied by a step this round is retired
-    // in the same round and the next brief never sees it. The plans are
-    // re-read: a step that merged has changed the status this rests on.
-    const retired = retireAnswered(queue().plans);
-    return { ran, stop: false, retired };
+    return { ran, stop: false };
   }
 
   /** runner.json — a runner is here, and this is the pid to test for life. */
   const markRunner = () => writeJson(paths.runner, { pid, started: stamp() });
   const clearRunner = () => { remove(paths.runner); remove(paths.current); };
 
-  return { paths, say, round, runStep, queue, stopRequested, syncMain, answeredDecisions, allDecisions, retireAnswered, mergePr, planOf, repoOf, markRunner, clearRunner };
+  return { paths, say, round, runStep, queue, stopRequested, syncMain, mergePr, planOf, repoOf, markRunner, clearRunner };
 }
 
 /**
