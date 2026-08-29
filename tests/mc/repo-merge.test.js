@@ -61,8 +61,15 @@ function red() {
  * A repository, a lease store, and a git/gh the test decides the answers for.
  * `baseAfterGate` is what `origin/main` reads as when the round re-checks it —
  * the drift the lease cannot prevent.
+ *
+ * `ancestor`, `movedFiles` and `candidateFiles` are what the round asks git
+ * once the base has moved: was it a fast-forward, what did it move over, and
+ * what does this change touch. The defaults are what an unteachable git said
+ * before those questions existed — a fast-forward over nothing, with no
+ * candidate files readable — which is a refusal, so every test written before
+ * this still means what it meant.
  */
-function fixture({ verdict = green(), baseAfterGate = BASE, mergeFails = false, pullFails = false, defaultBranch = 'origin/main' } = {}) {
+function fixture({ verdict = green(), baseAfterGate = BASE, mergeFails = false, pullFails = false, defaultBranch = 'origin/main', ancestor = true, movedFiles = [], candidateFiles = [] } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'mc-repo-merge-'));
   const repoPath = join(root, 'repo');
   const mcHome = join(root, 'home');
@@ -82,6 +89,15 @@ function fixture({ verdict = green(), baseAfterGate = BASE, mergeFails = false, 
       return { status: 0, stdout: `${merged ? LANDED : baseAfterGate}\n` };
     }
     if (args[0] === 'rev-parse') return { status: 0, stdout: `${LANDED}\n` };
+    if (args[0] === 'merge-base' && args[1] === '--is-ancestor') {
+      return ancestor ? { status: 0, stdout: '' } : { status: 1, stdout: '' };
+    }
+    if (args[0] === 'diff' && args[1] === '--name-only') {
+      // `a..b` is what the base moved over; `a...b` is what the candidate
+      // changes against it. One dot apart, opposite questions.
+      const three = String(args[2] || '').includes('...');
+      return { status: 0, stdout: `${(three ? candidateFiles : movedFiles).join('\n')}\n` };
+    }
     if (args[0] === 'pull') {
       return pullFails ? { status: 1, stderr: 'diverged' } : { status: 0, stdout: 'Updating\n' };
     }
@@ -218,6 +234,83 @@ describe('the ground is checked before the verdict is acted on', () => {
       assert.match(report.reason, /moved from aaaa111 to eeee555/u);
       assert.equal(report.merged, false);
       assert.deepEqual(fx.ran('gh').filter((call) => call.args[1] === 'merge'), []);
+    } finally { fx.cleanup(); }
+  });
+
+  it('merges when the base only moved forward, over files this change does not touch', async () => {
+    // The eight `drift` rounds in gate-rounds.jsonl on 2026-08-29 were all
+    // this: one squash landing on main while a 4-to-101-minute gate ran. The
+    // verdict is differential, so a commit elsewhere in the tree does not
+    // change what it says about this candidate.
+    const fx = fixture({
+      baseAfterGate: 'eeee555',
+      movedFiles: ['src/other/thing.js', 'tests/other/thing.test.js'],
+      candidateFiles: ['src/mine/feature.js'],
+    });
+    try {
+      const report = await fx.run();
+      assert.equal(report.ok, true, report.reason || '');
+      assert.equal(report.merged, true);
+      assert.equal(report.stopped_at, null);
+    } finally { fx.cleanup(); }
+  });
+
+  it('still stops when the forward move touches a file this change also touches', async () => {
+    const fx = fixture({
+      baseAfterGate: 'eeee555',
+      movedFiles: ['src/mine/feature.js', 'docs/unrelated.md'],
+      candidateFiles: ['src/mine/feature.js', 'src/mine/other.js'],
+    });
+    try {
+      const report = await fx.run();
+      assert.equal(report.ok, false);
+      assert.equal(report.stopped_at, 'drift');
+      assert.match(report.reason, /src\/mine\/feature\.js/u);
+      assert.equal(report.merged, false);
+    } finally { fx.cleanup(); }
+  });
+
+  it('still stops when the base was rewritten rather than moved forward', async () => {
+    const fx = fixture({
+      baseAfterGate: 'eeee555',
+      ancestor: false,
+      movedFiles: ['src/other/thing.js'],
+      candidateFiles: ['src/mine/feature.js'],
+    });
+    try {
+      const report = await fx.run();
+      assert.equal(report.ok, false);
+      assert.equal(report.stopped_at, 'drift');
+      assert.match(report.reason, /not an ancestor/u);
+      assert.equal(report.merged, false);
+    } finally { fx.cleanup(); }
+  });
+
+  it('an unreadable candidate is a refusal, not an all-clear', async () => {
+    const fx = fixture({ baseAfterGate: 'eeee555', movedFiles: ['src/other/thing.js'], candidateFiles: [] });
+    try {
+      const report = await fx.run();
+      assert.equal(report.ok, false);
+      assert.equal(report.stopped_at, 'drift');
+      assert.match(report.reason, /could not be read/u);
+    } finally { fx.cleanup(); }
+  });
+
+  it('a red verdict never reaches the ground check at all', async () => {
+    // The loosening above must not become a route around the gate: red stops
+    // the round before anything asks where the base stands.
+    const fx = fixture({
+      verdict: red(),
+      baseAfterGate: 'eeee555',
+      movedFiles: ['src/other/thing.js'],
+      candidateFiles: ['src/mine/feature.js'],
+    });
+    try {
+      const report = await fx.run();
+      assert.equal(report.ok, false);
+      assert.equal(report.stopped_at, 'red');
+      assert.equal(report.merged, false);
+      assert.deepEqual(fx.ran('git').filter((call) => call.args[0] === 'merge-base'), []);
     } finally { fx.cleanup(); }
   });
 
