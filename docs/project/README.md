@@ -10,5 +10,8 @@ Steps · What the code taught us · Documents.
 There is one programme here, `mc`. mc is built only for memoro me (D-0205);
 projects that do not serve that do not belong under it.
 
-Close-out: remove the project directory, add a row to `project_log.md`, and
-update the technical documentation to describe what now exists.
+Close-out: add a row to `project_log.md` and update the technical
+documentation to describe what now exists. Removing the directory is not
+yours to do — a plan that says `status: done` is archived by `mc run` in the
+round it reads it: the directory goes, and the row is written for it if the
+close-out step did not write one (`src/mc/archive-plan.js`).

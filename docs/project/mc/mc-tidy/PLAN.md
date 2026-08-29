@@ -1,6 +1,6 @@
 ---
 status: ready
-next: "Step 1 — a plan that reaches `done` on main is archived by the runner in the same round: its `docs/project/<programme>/<project>/` directory is removed, `project_log.md` carries a row for it, and only then does the workarea go — done when the ten done plans of 2026-08-29 (8 in memoro, 2 in memoro-cli) are gone from `docs/project/` with a row each, and `docs/project/` holds no directory whose plan says `done`."
+next: "Step 2 — the closable rule, the runner's close, the page filter and a strict `queue.md`: a workarea whose plan on main says `done`, whose worktree is clean and whose last row in `runs.tsv` ends `merged` is removed at the end of the round (`git worktree remove`, local branch deleted, index/log files moved to `~/mc/runner/log/closed/<name>/`) — done when a round removes such a workarea and says so in runner.log one line each, a workarea with no plan on main is never removed but is listed under its own heading with `~/mc/intake/unplanned-workareas.md` beside it, mc's own folders are off the page, and `~/mc/queue.md` holds nothing but names of projects that still have a step to run this round."
 budget: 150k
 needs: [mc-ui]
 ---
@@ -153,7 +153,35 @@ page keep the list clean on their own.
 
 ## Steps
 
-- [ ] **1. Archive on done** — the runner removes the directory and writes
-      the row it needs, PR per repository. One PR.
+- [x] **1. Archive on done** — the runner removes the directory and writes
+      the row it needs, PR per repository. One PR. (PR pending; the rules are
+      `src/mc/archive-plan.js`, the round's half is `archiveDone` in
+      `src/mc/run.js`.)
 - [ ] **2. Closable rule + runner close + page filter + strict queue.md** — one PR.
-- [ ] **3. Close-out** — `docs/technical/` note, `project_log.md` row.
+- [ ] **3. Close-out** — `docs/technical/` note, `project_log.md` row, and
+      the one thing step 1 left for a reader: `mc brief` raising
+      `~/mc/intake/undocumented-closures.md` (the runner writes it; nothing
+      reads it yet).
+
+## What the code taught us
+
+- **The done set is not a fixed list.** The plan names ten done plans
+  measured earlier on 2026-08-29; measured again while step 1 was written,
+  there are thirteen — memoro 9 (the plan's 8 and avatar-fab-composition)
+  and memoro-cli 4 (mc-ui, mc-ui-polish and, both with their
+  `project_log.md` row already written, mc-helper and mc-run-lanes). So the
+  criterion the code implements is `status: done` on main at the moment the
+  round reads it, and the list in the success criteria is that morning's
+  measurement rather than its definition: the first run archives whatever
+  says `done` then.
+- **The archive needs a worktree of its own.** A done project need not have
+  a workarea (nothing guarantees one, and step 2 removes it), and several
+  projects are archived in the one PR per repository. So the runner opens
+  `~/mc/runner/archive/<repo>` from origin/main, archives there, and takes
+  it down again however the round ends — inside `~/mc/runner/`, which is
+  mc's own folder and not a workarea.
+- **One archive PR at a time per repository.** The branch is
+  `mc-archive-<stamp>`, which is unique per round; an archive PR that never
+  merged would therefore be joined by a second one next round removing the
+  same directories again. The runner asks for an open PR whose head starts
+  with `mc-archive-` first and holds off while one exists.

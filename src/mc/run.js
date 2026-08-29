@@ -13,6 +13,12 @@
  * slow as both. Nothing new to type or start — the lanes are inside the one
  * `mc run` process, and one repository with ready plans is one lane.
  *
+ * A round begins by taking away what is finished: every plan on main that
+ * says `status: done` is archived — its `docs/project/<programme>/<project>/`
+ * removed and a `project_log.md` row left behind it — in one PR per
+ * repository that the runner merges like any other. `done` is the whole
+ * trigger; there is nothing to type. The rules are in archive-plan.js.
+ *
  * One thing that is not a step rides along: `mc helper`, once per calendar
  * day at the top of the first round after 05:00Z, logged in runs.tsv under
  * its own kind. It opens no worktree and touches no branch — it reads
@@ -28,9 +34,13 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSyn
 import { dirname, join } from 'node:path';
 
 import { resolveLaunch } from '../adapters/index.js';
+import {
+  ARCHIVE_BRANCH_PREFIX, UNDOCUMENTED_HEADER, appendRow, donePlans, isUndocumented, mergedPrs,
+  planDoc, planSummary, pointerCell, remoteSlug, rowFor, undocumentedRow,
+} from './archive-plan.js';
 import { writeJsonAtomic } from './atomic-write.js';
 import { defaultRepos, listPlans, parsePlanFrontmatter, planFields, showBatch } from './brief-collect.js';
-import { collectHelper, describeDigest, unreadableSections } from './helper-collect.js';
+import { collectHelper, describeDigest, intakeDir, unreadableSections } from './helper-collect.js';
 import { describeTurn, runHelperTurn } from './helper-turn.js';
 import { workRoot } from './paths.js';
 import { loadProfile, profileArgs } from './portrait.js';
@@ -244,6 +254,125 @@ export function createRunner({
 
   const dashes = { turns: '-', input: '-', output: '-', cacheRead: '-', cacheWrite: '-', session: '-' };
 
+  /* ------------------------------------------------------------- archiving */
+
+  /**
+   * An archive PR of an earlier round that never merged, or null. One is
+   * enough to hold this round off: a second PR would remove the same
+   * directories again and land two rows for the same project.
+   */
+  function openArchivePr(repo) {
+    const r = deps.gh(repo.path, ['pr', 'list', '--state', 'open', '--json', 'number,headRefName',
+      '-q', `.[] | select(.headRefName | startswith("${ARCHIVE_BRANCH_PREFIX}")) | .number`]);
+    if (!r.ok) return null;
+    return r.stdout.trim().split('\n').filter(Boolean)[0] || null;
+  }
+
+  /**
+   * Every plan of one repository that says `done` on main, archived in this
+   * round: the directory removed, a `project_log.md` row written for the
+   * projects that have none, one PR the runner merges like any other.
+   * Returns the project names it archived.
+   *
+   * The work happens in a worktree of its own under `~/mc/runner/archive/`,
+   * made from origin/main and taken down again however this ends. Not the
+   * project's own workarea: a done project need not have one, several are
+   * archived in the one PR, and the workarea is removed later in the same
+   * round — the plan goes first, then the workarea, so a workarea is never
+   * removed while the plan that explains it is still on main.
+   */
+  async function archiveDone(repo, plans) {
+    const done = donePlans(plans, repo.name);
+    if (!done.length) return [];
+    const open = openArchivePr(repo);
+    if (open) { say(`archive: ${repo.name} #${open} is still open from an earlier round — not opening another`); return []; }
+
+    const branch = `${ARCHIVE_BRANCH_PREFIX}${stamp().replace(/[-:]/gu, '')}`;
+    const worktree = join(root, 'runner', 'archive', repo.name);
+    if (deps.exists(worktree)) deps.git(repo.path, ['worktree', 'remove', '--force', worktree]);
+    if (!deps.git(repo.path, ['worktree', 'add', '-b', branch, worktree, 'origin/main']).ok) {
+      say(`archive: ${repo.name} — could not open the archive worktree, nothing archived this round`);
+      return [];
+    }
+    try {
+      return await archiveIn({ repo, worktree, branch, done });
+    } finally {
+      deps.git(repo.path, ['worktree', 'remove', '--force', worktree]);
+      deps.git(repo.path, ['branch', '-D', branch]);
+    }
+  }
+
+  /** The archive itself, inside the worktree that was made for it. */
+  async function archiveIn({ repo, worktree, branch, done }) {
+    const logPath = join(worktree, 'docs', 'project', 'project_log.md');
+    const slug = remoteSlug(gitOut(repo.path, ['remote', 'get-url', 'origin']));
+    const date = stamp().slice(0, 10);
+    let logText = deps.read(logPath) ?? '';
+    const archived = [];
+    const undocumented = [];
+
+    for (const plan of done) {
+      const dir = join('docs', 'project', plan.programme, plan.project);
+      const planText = deps.read(join(worktree, dir, 'PLAN.md')) || '';
+      if (!deps.git(worktree, ['rm', '-r', '-q', '--', dir]).ok) {
+        say(`archive: ${repo.name} ${plan.programme}/${plan.project} — git rm failed, left alone`);
+        continue;
+      }
+      // The row is preferred, never waited for: a close-out step that already
+      // wrote one knows more about the project than this does.
+      const existing = rowFor(logText, plan.project);
+      const row = existing || {
+        date,
+        programme: plan.programme,
+        project: plan.project,
+        outcome: 'delivered',
+        summary: planSummary(planText),
+        doc: planDoc(planText),
+        pointer: pointerCell(mergedPrs(deps.read(paths.runs) || '', plan.project), {
+          slug,
+          fallback: gitOut(worktree, ['log', '-1', '--format=%h', 'origin/main', '--', dir]),
+        }),
+      };
+      if (!existing) logText = appendRow(logText, row);
+      archived.push(plan.project);
+      say(`archive: ${repo.name} ${plan.programme}/${plan.project} removed — ${existing ? 'row already written' : 'row added to project_log.md'}`);
+      if (isUndocumented(row)) {
+        undocumented.push(undocumentedRow({ date, repo: repo.name, programme: plan.programme, project: plan.project, pointer: row.pointer }));
+        say(`archive: ${plan.project} names no docs/technical/ note — recorded for mc brief`);
+      }
+    }
+    if (!archived.length) return [];
+
+    deps.write(logPath, logText);
+    const title = `Archive ${archived.length} done project${archived.length === 1 ? '' : 's'}: ${archived.join(', ')}`;
+    const body = [
+      'A plan that reaches `done` is archived in the round the runner reads it:',
+      'the project directory is removed and `docs/project/project_log.md` carries',
+      'a row for it. The history is the record — `git log --all -- <path>` still',
+      'answers every question the removed directory could.',
+      '',
+      ...archived.map((project) => `- ${project}`),
+    ].join('\n');
+    deps.git(worktree, ['add', '-A']);
+    if (!deps.git(worktree, ['commit', '-q', '-m', title, '-m', body]).ok
+      || !deps.git(worktree, ['push', '-q', '-u', 'origin', 'HEAD']).ok) {
+      say(`archive: ${repo.name} — commit or push failed, nothing archived this round`);
+      return [];
+    }
+    const created = deps.gh(worktree, ['pr', 'create', '--base', 'main', '--head', branch, '--title', title, '--body', body]);
+    const listed = deps.gh(worktree, ['pr', 'list', '--head', branch, '--state', 'open', '--json', 'number', '-q', '.[0].number']);
+    const pr = (/(\d+)\s*$/u.exec(created.stdout.trim())?.[1]) || (listed.ok && listed.stdout.trim()) || null;
+    if (!pr) { say(`archive: ${repo.name} — the PR could not be opened (${created.stderr.trim().split('\n').at(-1) || 'no number'})`); return []; }
+
+    if (undocumented.length) {
+      const path = join(intakeDir(deps.env), 'undocumented-closures.md');
+      if (!deps.exists(path)) deps.write(path, UNDOCUMENTED_HEADER);
+      deps.append(path, `${undocumented.join('\n')}\n`);
+    }
+    if (merge) await mergePr(worktree, `archive/${repo.name}`, pr);
+    return archived;
+  }
+
   /**
    * The day's `mc helper`, run at the top of a round. Returns 'ran',
    * 'failed' or null when it was not due.
@@ -451,9 +580,15 @@ export function createRunner({
     // production is not what somebody typing it asked for.
     if (!once && !stopRequested()) await runHelperDay();
     const { names, plans } = queue();
+    // A plan that says `done` is archived in the round the runner reads it,
+    // before any step of that round runs — one PR per repository, and the
+    // two repositories never touch. Not under `--once`, for the reason the
+    // helper is not: that is one step to watch, not a round.
+    const archived = once ? [] : (await Promise.all(repos.map((repo) => archiveDone(repo, plans)))).flat();
+    const left = names.filter((name) => !archived.includes(name));
     // `--once` is one step, so it is one lane over the whole queue in
     // Martin's order — there is nothing for a second lane to do.
-    const lanes = once ? [{ repo: null, names }] : splitLanes(names, plans);
+    const lanes = once ? [{ repo: null, names: left }] : splitLanes(left, plans);
     if (lanes.length > 1) say(`lanes: ${lanes.map((lane) => `${lane.repo || 'unplaced'} (${lane.names.length})`).join(', ')}`);
     const results = await Promise.all(lanes.map((lane) => runLane(lane, plans, { once })));
     const out = {
@@ -471,7 +606,7 @@ export function createRunner({
     for (const repo of repos) remove(paths.currentFor(repo.name));
   };
 
-  return { paths, say, round, runStep, runLane, splitLanes, runHelperDay, queue, stopRequested, syncMain, mergePr, planOf, repoOf, markRunner, clearRunner };
+  return { paths, say, round, runStep, runLane, splitLanes, runHelperDay, archiveDone, queue, stopRequested, syncMain, mergePr, planOf, repoOf, markRunner, clearRunner };
 }
 
 /**
