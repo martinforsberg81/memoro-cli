@@ -1,8 +1,8 @@
 {
   "schema": "mc-red-ratchet",
   "version": 1,
-  "note": "The standing red set on main, seeded from a full npm test run on a clean origin/main worktree at d382274 on 2026-08-22. It may only get smaller: a red name that is not in this list fails the gate. Remove names here when they come good; adding one is raising the floor and is meant to be reviewed as such. See docs/mc-command-matrix.md. 2026-08-29: 15 launchBrokerOwnedSession names (tests/runtime/broker/launch-client.test.js) added \u2014 measured red on a clean origin/main at c52fbfe; they landed through the runner, which merges without this gate.",
-  "standing_red": 68,
+  "note": "The standing red set on main, seeded from a full npm test run on a clean origin/main worktree at d382274 on 2026-08-22. It may only get smaller: a red name that is not in this list fails the gate. Remove names here when they come good; adding one is raising the floor and is meant to be reviewed as such. See docs/mc-command-matrix.md. 2026-08-29: 15 launchBrokerOwnedSession names (tests/runtime/broker/launch-client.test.js) added \u2014 measured red on a clean origin/main at c52fbfe; they landed through the runner, which merges without this gate. Also the three `mc status V1` names: red on main since bare `mc status` became the page (#427).",
+  "standing_red": 70,
   "names": [
     "C1 release graph contains every transitive local source edge",
     "Claude accepts a V1 owner id and rejects a forged GitHub socket before readiness",
@@ -71,6 +71,8 @@
     "launchBrokerOwnedSession \u203a reconciles an accepted live launch after transport timeout without terminalizing it",
     "launchBrokerOwnedSession \u203a waits through transient absence before recovering the exact accepted launch",
     "launchBrokerOwnedSession \u203a fails closed without terminalizing when an ambiguous launch remains absent",
-    "launchBrokerOwnedSession \u203a prepares cloud Codex auth and passes scrubbed env to broker launch"
+    "launchBrokerOwnedSession \u203a prepares cloud Codex auth and passes scrubbed env to broker launch",
+    "mc status V1 \u203a human output identifies source and opaque mc-id",
+    "mc status V1 \u203a fails clearly for an unknown local name"
   ]
 }
