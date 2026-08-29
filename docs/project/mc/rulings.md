@@ -132,7 +132,11 @@ Built by [`mc-ui`](mc-ui/PLAN.md).
 
 **No `mc-test` plan exists.** This ruling is not carried by any plan, which is
 why it is written out here in more detail than the three above — until a plan
-picks it up, this document is the whole record of it.
+picks it up, this document and
+[`mc-test/ground-2026-08-29.md`](mc-test/ground-2026-08-29.md) are the whole
+record of it. That file is the workarea's handoff — the file:line map, what to
+reuse, the memoro-side step that comes first — carried in before the workarea
+was removed, with every reference re-checked against main.
 
 The sequence was already half split out. `repo-merge.js:66 runMergeRound` is the
 landing round; `repo-gate.js:87 runGate` is the measurement and **cannot** merge,

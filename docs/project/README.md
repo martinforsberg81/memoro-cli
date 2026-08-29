@@ -25,6 +25,13 @@ verbatim, and the plan that builds it. `mc brief --collect` deletes an answered
 file once every plan that owns it has left `waiting-decision`, and
 `~/mc/*/decisions/` is outside git — so the carry happens first, not after.
 
+A project directory can therefore exist before its plan does:
+`mc/mc-test/ground-2026-08-29.md` is a workarea's handoff carried in ahead of a
+`PLAN.md`, so that `mc plan mc-test` has something to read. That is deliberate
+and costs nothing — the plan scan matches `docs/project/*/*/PLAN.md` exactly
+(`listPlans`, `src/mc/brief-collect.js`), so a directory without one is invisible
+to the runner and to the page.
+
 The same rule covers any other working material a plan leans on. The programme's
 design source, [`mc/utredning-2026-08-24.md`](mc/utredning-2026-08-24.md), was
 cited by section number from four plans while living only in a workarea; that is
