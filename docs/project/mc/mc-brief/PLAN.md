@@ -142,7 +142,7 @@ runs whether or not `mc brief` is ever called.
 - The runner starts a `waiting-decision` project on the wrong answer. Its
   rule (`runner.sh:205`, `mc run`'s `answeredDecisions`) counts any
   `<programme>-*.md` with a `**Beslut:**` line, so `mc/mc-helper` — whose
-  `next:` says it waits on `~/mc/mc-utredning/decisions/mc-2.md`, unanswered —
+  `next:` says it waits on [`mc-2`](../rulings.md), unanswered —
   will be run this round because `mc-1.md` was answered on 2026-08-26. Not
   mc-brief's code to change (it is `mc run`'s, on `mc-run-step-1`), and the
   plan already names the file it waits on, so the fix is small: match the
@@ -150,7 +150,9 @@ runs whether or not `mc brief` is ever called.
 
 ## Documents
 
-- `~/mc/mc-utredning/utredning-2026-08-24.md` §9–13 — why a runner and a brief, not a PM
-- `~/mc/decisions/2026-08-25-briefing.md` — the hand-made brief this verb replaces
+- [`utredning-2026-08-24.md`](../utredning-2026-08-24.md) §9–13 — why a runner and a brief, not a PM
+- `2026-08-25-briefing` at the `~/mc` root — the hand-made brief this verb
+  replaces. Outside the repository and not carried here; it is a sample of the
+  old output, not a specification
 - `~/mc/bin/runner.sh` — the runner; `waiting-decision` handling is the contract this must match
 - `~/memoro/docs/project/README.md` — the plan-directory convention

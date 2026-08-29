@@ -125,7 +125,7 @@ the new-error count and the proposals waiting.
 
 ## Steps
 
-- [x] **0. Decision** — `~/mc/mc-utredning/decisions/mc-2.md`, answered
+- [x] **0. Decision** — [`mc-2`](../rulings.md), answered
       2026-08-29: **A**, this shape. Set up `mc helper` with intake as
       planned. The ruling adds a source and settles `/improve`: the machine
       behind `/improve` is good and is reused, its surface is not. Collect
@@ -295,7 +295,7 @@ production calls made.
 
 ## Documents
 
-- `~/mc/mc-utredning/utredning-2026-08-24.md` §12.3 — the design
+- [`utredning-2026-08-24.md`](../utredning-2026-08-24.md) §12.3 — the design
 - `~/memoro/docs/technical/operations-observability.md`, `logging.md` — what is recorded, and where
 - `~/memoro/scripts/admin/survey-errors.mjs`, `inspect-ai-provider-errors.mjs`, `scripts/help.mjs`
 - `~/memoro/src/routes/admin/health.js`, `operations.js`, `errors.js`; `src/operations/admin-status.js`; `src/automation/tasks/deploy-monitor.js`

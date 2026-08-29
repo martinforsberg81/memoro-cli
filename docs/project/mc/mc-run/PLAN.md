@@ -152,5 +152,5 @@ rebase was wrong.)
   2026-08-28T23:28Z
 - `~/mc/intake/proposals/2026-08-29-runner-runs-stale-code.md` — why a shell
   supervisor is still there
-- `~/mc/mc-utredning/utredning-2026-08-24.md` §9–13 — the design
+- [`utredning-2026-08-24.md`](../utredning-2026-08-24.md) §9–13 — the design
 - `docs/project/mc/mc-brief/PLAN.md`, `docs/project/mc/mc-plan/PLAN.md`

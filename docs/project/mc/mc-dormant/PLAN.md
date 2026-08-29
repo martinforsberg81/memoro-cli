@@ -9,7 +9,7 @@ needs: []
 
 ## Goal
 
-Martin ruled on `~/mc/mc-utredning/decisions/mc-1.md` (2026-08-26, option
+Martin ruled on [`mc-1`](../rulings.md) (2026-08-26, option
 A): the runner (`~/mc/bin/runner.sh`, becoming `mc run`) and `mc brief`
 replaced the resident PM and the pm-helper. `mc pm` and `mc pm-helper`
 leave the help text and `mc status` and answer "dormant" if typed; their
@@ -129,7 +129,7 @@ A new reader of `mc --help` should see one world: projects under
 ## Documents
 
 - `docs/technical/mc-dormant.md` — what this project leaves behind
-- `~/mc/mc-utredning/decisions/mc-1.md` — the ruling this plan executes
+- [`mc-1`](../rulings.md) — the ruling this plan executes
 - `docs/project/mc/mc-run/PLAN.md` — the runner that replaced the PM
 - `docs/project/mc/mc-plan/PLAN.md` — where `canon/roles/` was established
 - PR #410 `cut-old-surface` — the later deletion of the dormant code
