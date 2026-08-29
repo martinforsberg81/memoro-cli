@@ -158,7 +158,7 @@ export function readSessionOutput({ toolId, stdout, stderr = '', exitCode, timed
     output: pick(usage.output_tokens),
     cacheRead: pick(usage.cache_read_input_tokens),
     cacheWrite: pick(usage.cache_creation_input_tokens),
-    note: quota ? 'quota' : pick(json.subtype ?? '-'),
+    note: quota ? 'quota' : (json.is_error ? 'failed' : pick(json.subtype ?? '-')),
     quota,
   };
 }

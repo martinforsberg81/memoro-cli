@@ -14,14 +14,20 @@
  * The readers are shared with `mc brief --collect` (brief-collect.js); the
  * builders here take the read data and are tested on fixtures, with no git
  * and no gh.
+ *
+ * Offline is what the page does: plans come from `~/mc/runner/plans.json`
+ * keyed by the `origin/main` sha and open PRs from `~/mc/runner/prs.json`
+ * with their age said out loud (page-cache.js). `--fresh` is the opt-in that
+ * fetches, asks GitHub and refills both.
  */
 import { execFile, spawnSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import {
-  DAY_MS, defaultRepos, listPlans, queueNames, runsSince, scanDecisions, summariseRuns,
+  DAY_MS, defaultRepos, queueNames, runsSince, scanDecisions, summariseRuns,
 } from './brief-collect.js';
+import { ageWords, loadPlans, loadPrs, savePrs } from './page-cache.js';
 import { workRoot } from './paths.js';
 import { chooseKind } from './run-plan.js';
 import { PRICES_DATED, estimateCost } from './prices.js';
@@ -284,30 +290,39 @@ export async function collectStatus({
   env = process.env,
   now = new Date(),
   repos = defaultRepos(env),
-  offline = false,
+  fresh = false,
   git = runGit,
   run = (cmd, args) => spawnSync(cmd, args, { encoding: 'utf8' }),
   exec = execAsync,
   alive = pidAlive,
+  cache = { loadPlans, loadPrs, savePrs },
 } = {}) {
   const root = workRoot(env);
   const notes = [];
   const present = repos.filter((repo) => existsSync(join(repo.path, '.git')));
-  const openPrs = [];
-  if (!offline) {
+  let prs = { prs: [], fetched: null, age_seconds: null };
+  if (fresh) {
     // Fetch and gh per repository, side by side: serial they were the
     // whole 5 s budget on their own.
+    const asked = [];
     await Promise.all(present.flatMap((repo) => [
       exec('git', ['-C', repo.path, 'fetch', '-q', 'origin']).then((r) => { if (!r.ok) notes.push(`${repo.name}: git fetch failed — plans may be stale`); }),
       exec('gh', ['pr', 'list', '--state', 'open', '--limit', '100', '--json', 'number,headRefName'], { cwd: repo.path }).then((r) => {
         try {
-          if (r.ok) openPrs.push(...JSON.parse(r.stdout).map((pr) => ({ repo: repo.name, ...pr })));
+          if (r.ok) asked.push(...JSON.parse(r.stdout).map((pr) => ({ repo: repo.name, ...pr })));
           else notes.push(`${repo.name}: gh pr list failed`);
         } catch { notes.push(`${repo.name}: gh pr list unreadable`); }
       }),
     ]));
+    prs = cache.savePrs({ root, prs: asked, now });
+  } else {
+    prs = cache.loadPrs({ root, now });
+    notes.push(prs.fetched
+      ? `PRs from cache, ${ageWords(prs.age_seconds)} old — --fresh asks GitHub`
+      : 'no PR cache yet — --fresh asks GitHub and fills it');
   }
-  const plans = present.flatMap((repo) => listPlans(repo, { git }));
+  const openPrs = prs.prs;
+  const { plans, sources } = cache.loadPlans({ root, repos: present, now, git });
   const decisions = scanDecisions(root);
   let tsv = '';
   try { tsv = readFileSync(join(root, 'runner', 'log', 'runs.tsv'), 'utf8'); } catch { notes.push('no runner/log/runs.tsv'); }
@@ -334,6 +349,7 @@ export async function collectStatus({
     decisions: decisionsBlock(decisions),
     projects: projectsBlock({ plans, rows, openPrs, workareas }),
     orphans: orphanWorkareas({ workareas, plans }),
+    caches: { fresh, plans: sources, prs: { fetched: prs.fetched, age_seconds: prs.age_seconds, count: openPrs.length } },
     notes,
   };
 }
