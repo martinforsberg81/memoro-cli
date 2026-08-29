@@ -73,9 +73,9 @@ export async function openInWorkArea({
   // otherwise what the transcript says the conversation was already running
   // on, and nothing else — a resume should land where the conversation was,
   // and the role default is a start-of-life setting, not a resume setting.
-  // In a role's area the overlay rides behind the profile (`instructionsFor`
-  // keeps it Claude-only); an ordinary area has neither overlay nor default,
-  // and launches exactly as it always has.
+  // In a role's area the overlay rides behind the profile, on whichever
+  // instruction channel the chosen tool takes at launch; an ordinary area has
+  // neither overlay nor default, and launches exactly as it always has.
   const roleDefault = defaultModel && (!defaultModelTool || launch.shortName === defaultModelTool)
     ? defaultModel
     : null;
@@ -96,7 +96,7 @@ export async function openInWorkArea({
     args: args.map((arg) => (arg.length > 60 ? `${arg.slice(0, 57)}…` : arg)),
     resuming: chosen?.id || null,
     model: chosenModel || null,
-    overlay: !resuming && Boolean(overlay) && toolId === 'claude-code',
+    overlay: !resuming && Boolean(overlay),
     prompt: !resuming && Boolean(prompt),
     profile: profile.length > 0,
     known_here: before.length,

@@ -11,7 +11,8 @@ import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
 import { planLaunch, run } from '../../../src/mc/commands/plan.js';
-import { readCanonRole } from '../../../src/mc/roles.js';
+import { profileArgs } from '../../../src/mc/portrait.js';
+import { instructionsFor, readCanonRole } from '../../../src/mc/roles.js';
 import { openInWorkArea } from '../../../src/mc/work-open.js';
 import { runMcCli } from '../_helpers/mc-cli.js';
 
@@ -76,6 +77,20 @@ describe('the launch', () => {
     assert.equal(call.args.at(-1), launch.prompt);
     assert.ok(!call.args.includes('--resume'));
     assert.equal(call.options.stdio, 'inherit');
+  });
+
+  // `--codex` is the same launch with a different instruction channel. Asserted
+  // on the argv rather than through `openInWorkArea`, because resolving the
+  // codex launch needs the codex binary and a test must not depend on one.
+  it('reaches codex through `-c instructions=`, role text and all', () => {
+    const launch = planLaunch({ name: 'x', repo: 'memoro', role: readCanonRole('plan') });
+    const args = profileArgs('codex', instructionsFor('codex', 'PROFILE', launch.overlay));
+    assert.equal(args[0], '-c');
+    assert.match(args[1], /^instructions=/u);
+    const body = JSON.parse(args[1].slice('instructions='.length));
+    assert.match(body, /^PROFILE\n\n---\n\nYou are the planning session/u);
+    assert.match(body, /docs\/project\/<programme>\/<name>\/PLAN\.md/u);
+    assert.match(body, /mc merge <repo> <pr> --docs/u);
   });
 
   it('refuses without a name, and refuses a reserved role name', async () => {
