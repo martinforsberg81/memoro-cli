@@ -104,6 +104,15 @@ the change, draft a full replacement Markdown profile, show the diff, and write
 only after the user approves. When no profile exists, `read --json` returns
 `base_revision: 0` plus `template_markdown` for the first revision.
 
+A rule that should bind the next agent in a repository — a way of merging,
+a way of running subagents, a thing never to do again — is written into
+that repository's agent contract (`docs/coding-agent-protocol.md` here,
+`AGENTS.md`/`CLAUDE.md` in memoro), in the section the next agent will be
+reading when the rule matters. It is never left only in an agent's
+per-project memory store: a memory is read by one agent, a repository file
+by all of them. Ruled by Martin 2026-08-29 after a merge-gate rule had been
+saved as a memory and nowhere else.
+
 ## Code conventions
 
 - `src/mc/commands/<name>.js` for new `mc` subcommands (NOT
