@@ -10,7 +10,7 @@ import { createRunner, runLoop } from '../../src/mc/run.js';
  * a "session" that returns what the test says. Nothing starts, nothing is
  * written outside `files`.
  */
-function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], live = [], areas = {}, conflicts = {}, roles = true, now = '2026-08-29T10:00:00Z', runs = null, collect = okCollect, helperTurn = okTurn } = {}) {
+function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], live = [], areas = {}, conflicts = {}, roles = true, now = '2026-08-29T10:00:00Z', runs = null, collect = okCollect, helperTurn = okTurn, projectLog = {}, archive = {} } = {}) {
   const root = '/w';
   const files = { [`${root}/queue.md`]: queue };
   if (runs != null) files[`${root}/runner/log/runs.tsv`] = runs;
@@ -32,7 +32,9 @@ function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], live = 
     }
   }
   const log = [];
-  const calls = { git: [], gh: [], sessions: [], added: [], removed: [], collects: [], turns: [] };
+  const calls = { git: [], gh: [], sessions: [], added: [], removed: [], collects: [], turns: [], rm: [] };
+  /** `/w/runner/archive/<repo>` — the worktree the runner archives in. */
+  const archiveRoot = `${root}/runner/archive`;
   // A snapshot of the work root taken inside every session call — the only
   // way to see the files that exist only while a step is in flight.
   const duringSession = [];
@@ -84,6 +86,22 @@ function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], live = 
         const name = args[1].split('/').at(-2);
         return { ok: true, stdout: plans[repoName][name] };
       }
+      // `git worktree add -b <branch> <path> origin/main` in a repository:
+      // origin/main checked out, which here is its plans and its project log.
+      if (args[0] === 'worktree' && args[1] === 'add' && repoName) {
+        const path = args[4];
+        for (const [name, text] of Object.entries(plans[repoName] || {})) files[`${path}/docs/project/prog/${name}/PLAN.md`] = text;
+        files[`${path}/docs/project/project_log.md`] = projectLog[repoName] ?? '';
+        return { ok: true, stdout: '' };
+      }
+      if (args[0] === 'rm') {
+        const prefix = `${cwd}/${args.at(-1)}/`;
+        calls.rm.push(args.at(-1));
+        for (const key of Object.keys(files)) if (key.startsWith(prefix)) delete files[key];
+        return { ok: true, stdout: '' };
+      }
+      if (args[0] === 'remote') return { ok: true, stdout: `git@github.com:o/${repoName || 'r'}.git` };
+      if (args[0] === 'log') return { ok: true, stdout: 'abc1234' };
       if (args[0] === 'status') return { ok: true, stdout: dirty.some((d) => cwd.includes(`/${d}/`)) ? ' M x' : '' };
       if (args[0] === 'merge' && args.includes('origin/main')) {
         const name = cwd.split('/')[2];
@@ -96,6 +114,23 @@ function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], live = 
     },
     gh: (cwd, args) => {
       calls.gh.push([cwd, ...args]);
+      // The archive PR: opened in `/w/runner/archive/<repo>`, and asked for
+      // in the repository itself ("is one still open from an earlier round?").
+      const repoName = Object.keys(repos).find((r) => cwd === repos[r]);
+      if (repoName) {
+        const stale = archive[repoName]?.openFromEarlierRound;
+        return { ok: true, stdout: stale ? String(stale) : '' };
+      }
+      if (cwd.startsWith(`${archiveRoot}/`)) {
+        const a = archive[cwd.slice(archiveRoot.length + 1)] || {};
+        const number = a.number ?? 900;
+        if (args[1] === 'create') return a.createFails ? { ok: false, stdout: '', stderr: 'no' } : { ok: true, stdout: `https://github.com/o/r/pull/${number}\n` };
+        if (args[1] === 'list') return { ok: true, stdout: String(number) };
+        if (args[1] === 'view' && args.includes('mergeable')) return { ok: true, stdout: 'MERGEABLE' };
+        if (args[1] === 'view' && args.includes('title')) return { ok: true, stdout: 'Archive' };
+        if (args[1] === 'merge') return a.mergeFails ? { ok: false, stdout: '', stderr: 'nope' } : { ok: true, stdout: '' };
+        return { ok: true, stdout: '' };
+      }
       const name = cwd.split('/')[2];
       const pr = gh[name];
       if (args[1] === 'list') return { ok: true, stdout: pr ? String(pr.number) : '' };
@@ -165,10 +200,10 @@ test('one step: worktree made from origin/main, session through the adapter, PR 
   assert.match(f.files['/w/runner/log/runner.log'], /alpha: merged #77\n.*alpha: step done rc=0 0s pr=77 turns=4 note=success,merged/u);
 });
 
-test('skips: live tmux session, dirty worktree, waiting-decision, done', async () => {
+test('skips: live tmux session, dirty worktree, waiting-decision', async () => {
   const waiting = '---\nstatus: waiting-decision\n---\n';
   const f = fixture({
-    plans: { memoro: { live: ready, dirty: ready, wait: waiting, over: '---\nstatus: done\n---\n' } },
+    plans: { memoro: { live: ready, dirty: ready, wait: waiting } },
     live: ['live'], dirty: ['dirty'], session: okSession(),
   });
   const runner = createRunner({ deps: f.deps });
@@ -179,7 +214,6 @@ test('skips: live tmux session, dirty worktree, waiting-decision, done', async (
   assert.match(log, /live: live tmux session, skip/u);
   assert.match(log, /dirty: dirty worktree, skip/u);
   assert.match(log, /wait: status waiting-decision, skip/u);
-  assert.match(log, /over: status done, skip/u);
 });
 
 /**
@@ -514,4 +548,120 @@ test('a STOP file stops the helper as well as the steps', async () => {
   f.files['/w/runner/STOP'] = '';
   await createRunner({ deps: f.deps }).round();
   assert.equal(f.calls.collects.length, 0);
+});
+
+/* ----------------------------------------------------------- archiving */
+
+/**
+ * A plan that reaches `done` is archived (Martin, 2026-08-29: "När en plan
+ * är DONE ska den arkiveras. Punkt."). The runner used to answer a done plan
+ * with a skip line and nothing else — measured on 2026-08-29, ten directories
+ * under `docs/project/` in the two repositories held a plan that said `done`,
+ * and `docs/plans/`, the directory `docs/project/` replaced, had reached 656
+ * files the same way.
+ */
+const done = (next = 'Step 3 — close-out') => `---\nstatus: done\nnext: "${next}"\n---\n# D\n\nSee \`docs/technical/d.md\`.\n`;
+const LOG_HEAD = '# Project log\n\n## Log\n\n| date | programme | project | outcome | summary | doc | pointer |\n|---|---|---|---|---|---|---|\n';
+
+test('a done plan is archived in the round it is read: directory removed, row written, one PR merged', async () => {
+  const f = fixture({
+    plans: { memoro: { over: done('Step 2 — the rule'), alpha: ready } },
+    projectLog: { memoro: LOG_HEAD },
+    session: okSession(),
+  });
+  await createRunner({ deps: f.deps }).round();
+
+  const wt = '/w/runner/archive/memoro';
+  assert.deepEqual(f.calls.rm, ['docs/project/prog/over'], 'the project directory, and nothing else');
+  assert.equal(`${wt}/docs/project/prog/over/PLAN.md` in f.files, false);
+  assert.equal(`${wt}/docs/project/prog/alpha/PLAN.md` in f.files, true, 'every other directory is untouched');
+
+  const row = f.files[`${wt}/docs/project/project_log.md`].trim().split('\n').at(-1);
+  assert.equal(row, '| 2026-08-29 | prog | over | delivered | Step 2 — the rule | [docs/technical/d.md](../technical/d.md) | abc1234 |');
+
+  assert.ok(f.calls.gh.some((c) => c[0] === wt && c[2] === 'create' && c.includes('Archive 1 done project: over')));
+  assert.ok(f.calls.gh.some((c) => c[0] === wt && c[2] === 'merge' && c.includes('900')), 'the runner merges it like any other PR');
+  assert.ok(f.calls.git.some((c) => c[0] === '/home/memoro' && c[1] === 'worktree' && c[2] === 'remove'), 'the archive worktree is taken down again');
+
+  const runnerLog = f.files['/w/runner/log/runner.log'];
+  assert.match(runnerLog, /archive: memoro prog\/over removed — row added to project_log\.md/u);
+  assert.doesNotMatch(runnerLog, /over: status done, skip/u, 'the plan is gone, so there is no skip line to read');
+  assert.deepEqual(f.calls.sessions.map((call) => call.cwd), ['/w/alpha/memoro'], 'the ready plan still had its step');
+});
+
+test('a row its close-out already wrote is kept: only the directory goes, and there is still exactly one row', async () => {
+  const already = `${LOG_HEAD}| 2026-08-01 | prog | mc-ui | delivered | Made bare mc the one page. | [docs/technical/mc-ui.md](../technical/mc-ui.md) | [#430](https://github.com/o/r/pull/430) |\n`;
+  const f = fixture({
+    plans: { 'memoro-cli': { 'mc-ui': done() } },
+    projectLog: { 'memoro-cli': already },
+    session: okSession(),
+  });
+  await createRunner({ deps: f.deps }).round();
+  const text = f.files['/w/runner/archive/memoro-cli/docs/project/project_log.md'];
+  assert.equal(text, already, 'the row is preferred, never rewritten');
+  assert.equal(text.split('\n').filter((line) => line.includes('| mc-ui |')).length, 1);
+  assert.deepEqual(f.calls.rm, ['docs/project/prog/mc-ui']);
+  assert.match(f.files['/w/runner/log/runner.log'], /archive: memoro-cli prog\/mc-ui removed — row already written/u);
+});
+
+test('a programme left empty by its last project goes with it; the log and the prose beside it stay', async () => {
+  const f = fixture({
+    plans: { memoro: { one: done(), two: done() } },
+    projectLog: { memoro: LOG_HEAD },
+    session: okSession(),
+  });
+  await createRunner({ deps: f.deps }).round();
+  const wt = '/w/runner/archive/memoro';
+  assert.deepEqual(f.calls.rm.sort(), ['docs/project/prog/one', 'docs/project/prog/two']);
+  assert.deepEqual(Object.keys(f.files).filter((p) => p.startsWith(`${wt}/docs/project/prog/`)), [],
+    'nothing of the programme is left, so the directory is gone with its last project');
+  assert.equal(`${wt}/docs/project/project_log.md` in f.files, true);
+  assert.equal(f.files[`${wt}/docs/project/project_log.md`].split('\n').filter((l) => l.startsWith('| 2026-08-29')).length, 2);
+  assert.ok(f.calls.gh.some((c) => c[2] === 'create' && c.includes('Archive 2 done projects: one, two')), 'one PR for the repository');
+});
+
+test('a project with no docs/technical note is recorded in intake, and archived all the same', async () => {
+  const f = fixture({
+    plans: { memoro: { thin: '---\nstatus: done\nnext: "Step 1"\n---\n# thin\n' } },
+    projectLog: { memoro: LOG_HEAD },
+    session: okSession(),
+  });
+  await createRunner({ deps: f.deps }).round();
+  assert.deepEqual(f.calls.rm, ['docs/project/prog/thin'], 'a thin note never stops an archive');
+  const intake = f.files['/w/intake/undocumented-closures.md'];
+  assert.match(intake, /# Projects archived with no docs\/technical\/ note/u);
+  assert.match(intake, /\| 2026-08-29 \| memoro \| prog \| thin \| abc1234 \|/u);
+  assert.match(f.files['/w/runner/log/runner.log'], /archive: thin names no docs\/technical\/ note — recorded for mc brief/u);
+});
+
+test('an archive PR still open from an earlier round holds the next one off', async () => {
+  const f = fixture({
+    plans: { memoro: { over: done() } },
+    archive: { memoro: { openFromEarlierRound: 812 } },
+    session: okSession(),
+  });
+  await createRunner({ deps: f.deps }).round();
+  assert.deepEqual(f.calls.rm, [], 'nothing is removed twice');
+  assert.ok(!f.calls.git.some((c) => c[1] === 'worktree' && c[2] === 'add'));
+  assert.match(f.files['/w/runner/log/runner.log'], /archive: memoro #812 is still open from an earlier round — not opening another/u);
+});
+
+test('both repositories archive in the same round, one PR each', async () => {
+  const f = fixture({
+    plans: { memoro: { a: done() }, 'memoro-cli': { b: done() } },
+    projectLog: { memoro: LOG_HEAD, 'memoro-cli': LOG_HEAD },
+    archive: { memoro: { number: 901 }, 'memoro-cli': { number: 902 } },
+    session: okSession(),
+  });
+  await createRunner({ deps: f.deps }).round();
+  const created = f.calls.gh.filter((c) => c[2] === 'create').map((c) => c[0]);
+  assert.deepEqual(created.sort(), ['/w/runner/archive/memoro', '/w/runner/archive/memoro-cli']);
+  assert.equal(f.calls.sessions.length, 0, 'nothing was ready, so nothing else happened');
+});
+
+test('--once is one step and no archiving', async () => {
+  const f = fixture({ plans: { memoro: { over: done(), alpha: ready } }, session: okSession(), gh: { alpha: { number: 7 } } });
+  await createRunner({ deps: f.deps }).round({ once: true });
+  assert.deepEqual(f.calls.rm, [], '--once exists to watch one step, not to change main');
+  assert.deepEqual(f.calls.sessions.map((call) => call.cwd), ['/w/alpha/memoro']);
 });
