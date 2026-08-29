@@ -238,7 +238,9 @@ export function createRunner({
     deps.append(paths.runs, `${tsvRow({ ts: stamp(), name, kind, exit: result.status, seconds, pr, turns: read.turns, input: read.input, output: read.output, cacheRead: read.cacheRead, cacheWrite: read.cacheWrite, session: read.session, note })}\n`);
     say(`${name}: ${kind} done rc=${result.status} ${seconds}s pr=${pr} turns=${read.turns} note=${note}`);
     if (read.quota) { say(`quota/rate limit seen — sleeping ${QUOTA_SLEEP_MS / 60000}m`); await deps.sleep(QUOTA_SLEEP_MS); }
-    return note === 'success,merged' ? 'merged' : 'ran';
+    // A merged step or a finished reconcile both leave the project ready for
+    // its next step now; 'merged' is the round's cue to stay on it.
+    return note === 'success,merged' || (kind === 'reconcile' && note === 'success') ? 'merged' : 'ran';
   }
 
   /** The queue, re-read every round: queue.md, then every plan on origin/main. */
