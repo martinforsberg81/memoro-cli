@@ -10,8 +10,8 @@ section: Changed
   a project, and a plan comes back only by being set `ready`. `chooseKind` lost
   its `answered` parameter, `stepPrompt` its answered-decisions block,
   `answeredDecisions()` and `isAnswered()` are gone from `mc run`, and
-  `~/mc/bin/runner.sh` — still the runner that runs the nights — lost the same
-  two branches. Retiring answered decision files moved out of the runner's
+  `~/mc/bin/runner.sh` lost the same two branches before it was deleted
+  outright (below). Retiring answered decision files moved out of the runner's
   round and into `mc brief --collect`, which tidies before it builds the
   agenda; `retireDecisions()` now lives in `brief-collect.js` beside the rest
   of the decision reading.
