@@ -12,8 +12,8 @@ import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
 import {
-  collectBrief, lastBriefTime, listPlans, parseDecision, parsePlanFrontmatter, queueNames,
-  runsSince, scanDecisions, summariseRuns,
+  collectBrief, lastBriefTime, listPlans, parseDecision, parsePlanFrontmatter, planFields,
+  queueNames, runsFor, runsSince, scanDecisions, summariseRuns,
 } from '../../src/mc/brief-collect.js';
 
 const DECISION = (answered) => `---
@@ -117,6 +117,12 @@ describe('PLAN.md frontmatter', () => {
     assert.deepEqual(parsePlanFrontmatter('no frontmatter'), { status: null, next: null });
   });
 
+  it('keeps every field for the page about one project', () => {
+    assert.deepEqual(planFields('---\nstatus: ready\nnext: "Step 1 — do it"\nbudget: 150k\nneeds: []\n---\n# x'),
+      { status: 'ready', next: 'Step 1 — do it', budget: '150k', needs: '[]' });
+    assert.deepEqual(planFields('no frontmatter'), {});
+  });
+
   it('lists docs/project/<programme>/<project>/PLAN.md through an injected git', () => {
     const git = (cwd, args) => {
       if (args[0] === 'ls-tree') return 'docs/project/README.md\ndocs/project/mc/mc-brief/PLAN.md\ndocs/project/mc/mc.md\ndocs/project/mc/mc-plan/notes/PLAN.md';
@@ -142,6 +148,13 @@ describe('runner log', () => {
     assert.equal(s.timeout, 1);
     assert.equal(s.failed, 0);
     assert.equal(s.cacheRead, 3683298 + 12463655);
+  });
+
+  it('keeps the last rows of one project, whatever the window', () => {
+    const tsv = readFileSync(join(workRoot(), 'runner', 'log', 'runs.tsv'), 'utf8');
+    assert.deepEqual(runsFor(tsv, 'docx', 3).map((r) => r.pr), ['10958']);
+    assert.deepEqual(runsFor(tsv, 'old', 3).map((r) => r.ts), ['2026-08-24T10:00:00Z'], 'older than the 24 h window');
+    assert.deepEqual(runsFor(tsv, 'never-ran', 3), []);
   });
 
   it('reads the queue without comments and blanks', () => {

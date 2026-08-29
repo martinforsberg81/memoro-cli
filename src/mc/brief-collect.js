@@ -127,29 +127,39 @@ export function scanDecisions(root) {
 
 /* --------------------------------------------------------------------- plans */
 
-/** `status` and `next` from a PLAN.md frontmatter; `next` may be a folded scalar. */
-export function parsePlanFrontmatter(text) {
+/**
+ * Every frontmatter field of a PLAN.md, in the order it is written, each
+ * value unquoted and folded onto one line. `mc status <name>` prints them
+ * all; the brief and the page take two of them through
+ * `parsePlanFrontmatter`.
+ */
+export function planFields(text) {
   const normalised = String(text || '').replace(/\r\n/gu, '\n');
   const match = /^---\n([\s\S]*?)\n---/u.exec(normalised);
-  if (!match) return { status: null, next: null };
-  const fields = {};
+  if (!match) return {};
+  const raws = {};
   let key = null;
   for (const raw of match[1].split('\n')) {
     const pair = /^([A-Za-z_-]+):\s*(.*)$/u.exec(raw);
     if (pair) {
       key = pair[1].toLowerCase();
-      fields[key] = pair[2].trim();
+      raws[key] = pair[2].trim();
     } else if (key && /^\s+\S/u.test(raw)) {
-      fields[key] = `${fields[key]} ${raw.trim()}`.trim();
+      raws[key] = `${raws[key]} ${raw.trim()}`.trim();
     }
   }
   const scalar = (value) => {
-    if (value == null) return null;
     let v = value.replace(/^[>|][-+]?\s*/u, '').trim();
     if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) v = v.slice(1, -1);
     return v.replace(/\\"/gu, '"') || null;
   };
-  return { status: scalar(fields.status), next: scalar(fields.next) };
+  return Object.fromEntries(Object.entries(raws).map(([k, v]) => [k, scalar(v)]));
+}
+
+/** `status` and `next` from a PLAN.md frontmatter; `next` may be a folded scalar. */
+export function parsePlanFrontmatter(text) {
+  const fields = planFields(text);
+  return { status: fields.status ?? null, next: fields.next ?? null };
 }
 
 /**
@@ -171,20 +181,28 @@ export function listPlans(repo, { ref = 'origin/main', git = runGit } = {}) {
 
 /* -------------------------------------------------------------------- runner */
 
-/** runs.tsv rows with `ts >= since`, as objects keyed by the header. */
-export function runsSince(tsv, since) {
+/** Every runs.tsv row, in file order, as objects keyed by the header. */
+export function parseRuns(tsv) {
   const lines = String(tsv || '').split('\n').filter((line) => line.trim());
   if (!lines.length) return [];
   const header = lines[0].split('\t');
-  const rows = [];
-  for (const line of lines.slice(1)) {
+  return lines.slice(1).map((line) => {
     const cells = line.split('\t');
-    const row = Object.fromEntries(header.map((key, i) => [key, cells[i] ?? '']));
+    return Object.fromEntries(header.map((key, i) => [key, cells[i] ?? '']));
+  });
+}
+
+/** runs.tsv rows with `ts >= since`, as objects keyed by the header. */
+export function runsSince(tsv, since) {
+  return parseRuns(tsv).filter((row) => {
     const ts = Date.parse(row.ts);
-    if (Number.isNaN(ts) || ts < since.getTime()) continue;
-    rows.push(row);
-  }
-  return rows;
+    return !Number.isNaN(ts) && ts >= since.getTime();
+  });
+}
+
+/** The last `limit` rows for one project, oldest first. */
+export function runsFor(tsv, name, limit = 3) {
+  return parseRuns(tsv).filter((row) => row.name === name).slice(-limit);
 }
 
 export function summariseRuns(rows) {

@@ -15,7 +15,8 @@ LOCAL SESSIONS
   mc open <name> [--cwd <path>] [--tool codex|claude] [--replace]
                                     Associate another directory or open here
   mc resume <name>                 Alias for mc open
-  mc status <name> [--json]        Read durable session and runtime state
+  mc status --sessions <name> [--json]
+                                    Read durable session and runtime state
   mc rename <old> <new> [--json]   Rename metadata without moving workspaces
   mc cd <name> [--workspace <id>]  Print or enter an associated directory
   mc attach <name>                 Attach to the exact live local terminal
@@ -47,6 +48,11 @@ MAINTENANCE
                                     without a project. No model; reads only
   mc status --json                 The same, as one object; --offline skips
                                     fetch and gh
+  mc status <name>                 One project: its PLAN.md frontmatter and
+                                    step, the decisions that belong to it,
+                                    its last three runner steps and the open
+                                    PR on its branch. --json and --offline
+                                    as above
   mc status --sessions             The old board: every work area, the
                                     conversations in it and what they last
                                     said, the suite lease and the repository

@@ -361,7 +361,7 @@ were removed.
 | `mc resume <name>` | Alias for `mc open`. |
 | `mc restart <name>` | Stop the runtime and open again. |
 | `mc list` | Local sessions from disk, cloud sessions from Memoro. |
-| `mc status <name>` | Durable session, workspace, and runtime state. |
+| `mc status --sessions <name>` | Durable session, workspace, and runtime state. A bare `mc status <name>` is the project of that name. |
 | `mc rename <old> <new>` | Rename metadata. |
 | `mc cd <name>` | Print or enter an associated directory. |
 | `mc attach <name>` | Attach to the exact live terminal. |
