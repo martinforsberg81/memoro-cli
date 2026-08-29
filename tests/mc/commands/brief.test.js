@@ -51,11 +51,30 @@ describe('the brief role', () => {
    * Where a decision lives once it is answered: in the plan, and nowhere
    * else. The overlay has to say so, because the file is deleted afterwards
    * and a plan that did not absorb the answer is the only way to lose it.
+   *
+   * It is `mc brief --collect` that deletes it, not `mc run` — the runner has
+   * nothing to do with decisions (Martin, 2026-08-29), and `retireDecisions`
+   * lives in `brief-collect.js`. The overlay said `mc run` until 2026-08-29
+   * and this test held it there.
    */
   it('says the plan carries the decision and the file is deleted', () => {
     const { overlay } = readCanonRole('brief');
-    assert.match(overlay, /`mc\s+run`\s+then\s+deletes\s+the\s+file/u);
+    assert.match(overlay, /`mc\s+brief\s+--collect`\s+then\s+deletes\s+the\s+file/u);
     assert.match(overlay, /the\s+plan\s+is\s+where\s+a\s+decision\s+lives/u);
+  });
+
+  /**
+   * The two lists the tidying leaves — `mc run` writes both intake files and
+   * reads neither, so the brief is where they are raised. The overlay has to
+   * name them, and has to say the one thing that is not obvious from a row:
+   * the session removes nothing itself.
+   */
+  it('walks what the tidying left, and removes nothing itself', () => {
+    const { overlay } = readCanonRole('brief');
+    assert.match(overlay, /\*Archived without a note\*/u);
+    assert.match(overlay, /\*Workareas with no plan on main\*/u);
+    assert.match(overlay, /`branch: landed`/u);
+    assert.match(overlay, /You remove nothing\./u);
   });
 
   /**

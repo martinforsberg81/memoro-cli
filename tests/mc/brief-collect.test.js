@@ -1,5 +1,5 @@
 /**
- * `mc brief --collect` — the builders behind the six sections, on fixtures:
+ * `mc brief --collect` — the builders behind the sections, on fixtures:
  * the decision-file scan (answered vs unanswered, bookkeeping skipped, a
  * question whose options are neither a `## Options` heading nor a bold lead
  * still listed), PLAN.md frontmatter parsing, the runs.tsv window, and the
@@ -13,10 +13,13 @@ import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
 import {
-  collectBrief, lastBriefTime, listPlans, parseCatFileBatch, parseDecision, parsePlanFrontmatter, parseProposal,
-  planFields, scanProposals,
+  UNDOCUMENTED_KEYS, UNPLANNED_KEYS,
+  collectBrief, intakeRows, lastBriefTime, listPlans, parseCatFileBatch, parseDecision, parsePlanFrontmatter,
+  parseProposal, planFields, scanProposals,
   queueNames, runsFor, runsSince, scanDecisions, showBatch, summariseRuns,
 } from '../../src/mc/brief-collect.js';
+import { UNDOCUMENTED_HEADER, undocumentedRow } from '../../src/mc/archive-plan.js';
+import { unplannedFile, unplannedRow } from '../../src/mc/close-workarea.js';
 
 const DECISION = (answered) => `---
 programme: assistant-avatar
@@ -74,6 +77,15 @@ function workRoot() {
   ].join('\n'));
   writeFileSync(join(root, 'queue.md'), '# round 3\ndocx-editor\n\nsql-readiness-session-A\n');
   mkdirSync(join(root, 'intake', 'proposals'), { recursive: true });
+  // What `mc run` left behind: one project archived with no note, two folders
+  // no plan explains. Written through the runner's own row builders, so the
+  // brief is read against the exact bytes the runner writes.
+  writeFileSync(join(root, 'intake', 'undocumented-closures.md'), UNDOCUMENTED_HEADER
+    + `${undocumentedRow({ date: '2026-08-29', repo: 'memoro', programme: 'msr-core', project: 'msr-design', pointer: '[#11003](https://github.com/x/y/pull/11003)' })}\n`);
+  writeFileSync(join(root, 'intake', 'unplanned-workareas.md'), unplannedFile([
+    unplannedRow({ name: 'msr-track-1', repo: 'memoro', uncommitted: 0, lastCommit: '2026-08-24', branch: 'ahead' }),
+    unplannedRow({ name: 'mc-repo', repo: 'memoro-cli', uncommitted: 2, lastCommit: '2026-08-20', branch: 'landed' }),
+  ]));
   writeFileSync(join(root, 'intake', 'proposals', '2026-08-29-expose-operations.md'), PROPOSAL);
   writeFileSync(join(root, 'intake', 'proposals', 'README.md'), 'Not a proposal: no title.\n');
   return root;
@@ -224,8 +236,28 @@ describe('runner log', () => {
   });
 });
 
+/**
+ * The two files `mc run` writes and never reads. Both are one markdown table
+ * under a header paragraph; a cell may carry an escaped pipe, and an absent
+ * file is a different answer from an empty one.
+ */
+describe('the intake tables the runner writes', () => {
+  it('reads the rows under the rule, keyed, and ignores the header prose', () => {
+    const text = UNDOCUMENTED_HEADER
+      + `${undocumentedRow({ date: '2026-08-29', repo: 'memoro', programme: 'mc', project: 'a | b', pointer: 'none' })}\n`;
+    assert.deepEqual(intakeRows(text, UNDOCUMENTED_KEYS), [
+      { date: '2026-08-29', repo: 'memoro', programme: 'mc', project: 'a | b', pointer: 'none' },
+    ], 'the escaped pipe stays one cell');
+  });
+
+  it('is empty for a table with no rows, and for text with no table at all', () => {
+    assert.deepEqual(intakeRows(unplannedFile([]), UNPLANNED_KEYS), []);
+    assert.deepEqual(intakeRows('# nothing here\n\njust prose\n', UNPLANNED_KEYS), []);
+  });
+});
+
 describe('collectBrief', () => {
-  it('writes the seven sections, offline, with a 24 h window on the first run', async () => {
+  it('writes the nine sections, offline, with a 24 h window on the first run', async () => {
     const root = workRoot();
     const env = { MC_WORK_ROOT: root, MC_REPOS_HOME: join(root, 'no-repos') };
     const now = new Date('2026-08-25T20:00:00Z');
@@ -233,7 +265,8 @@ describe('collectBrief', () => {
     const result = await collectBrief({ env, now, offline: true });
     const text = readFileSync(result.path, 'utf8');
     assert.equal(text, result.text);
-    const order = ['## Merged since last brief', '## Opened, not merged', '## Waiting on Martin', '## Proposals', '## Plan status', '## Runner', '## Queue'];
+    const order = ['## Merged since last brief', '## Opened, not merged', '## Waiting on Martin', '## Proposals',
+      '## Plan status', '## Archived without a note', '## Workareas with no plan on main', '## Runner', '## Queue'];
     let at = -1;
     for (const heading of order) {
       const next = text.indexOf(heading);
@@ -248,6 +281,13 @@ describe('collectBrief', () => {
     // the README beside it is not one.
     assert.equal(result.data.proposals.length, 1);
     assert.match(text, /\| 2026-08-29-expose-operations\.md \| project · memoro \| The nightly and morning outcomes reach no script \| The nightly task/u);
+    // The two files the runner writes and nothing read until now.
+    assert.deepEqual(result.data.undocumented.map((r) => r.project), ['msr-design']);
+    assert.match(text, /\| 2026-08-29 \| memoro \| msr-core \/ msr-design \| #11003 \|/u, 'the URL is dropped, not clipped mid-link');
+    assert.match(text, /1 project archived with `doc: none`/u);
+    assert.deepEqual(result.data.unplanned.map((r) => r.name), ['msr-track-1', 'mc-repo']);
+    assert.match(text, /\| mc-repo \| memoro-cli \| 2 \| 2026-08-20 \| landed \|/u);
+    assert.match(text, /2 folders under `~\/mc` that no plan on main explains, 1 whose branch is already on main/u);
     assert.match(text, /Last 24 h: 3 steps \(step 2, triage 1\) — merged 1, left open 1, failed 0, timed out 1/u);
     assert.match(text, /- docx-editor\n- sql-readiness-session-A/u);
     assert.match(text, /memoro: no checkout/u);
@@ -296,6 +336,11 @@ describe('collectBrief retires what has been answered', () => {
     assert.doesNotMatch(agenda, /assistant-avatar-1\.md/u, 'and it is not on the agenda');
     assert.match(agenda, /assistant-avatar-2\.md/u);
     assert.match(agenda, /1 waiting, 0 answered/u, 'nothing answered is left to count');
+    // A work root the runner has never tidied: absent is said as absent,
+    // never as "none", or the brief would report a clean board it never read.
+    assert.equal(r.data.unplanned, null);
+    assert.match(r.text, /_no `~\/mc\/intake\/unplanned-workareas\.md` — `mc run` writes it at the end of every round_/u);
+    assert.match(r.text, /_no `~\/mc\/intake\/undocumented-closures\.md` — nothing has been archived without one_/u);
   });
 
   it('keeps it while the plan still says waiting-decision', async () => {
