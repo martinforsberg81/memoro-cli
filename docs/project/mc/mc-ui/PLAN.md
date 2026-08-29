@@ -1,6 +1,6 @@
 ---
 status: ready
-next: "Step 1 — `mc run` writes `~/mc/runner/runner.json` (pid, started) at start and `~/mc/runner/current.json` (name, kind, tool, model, budget_minutes, started, pid, worktree) while a step is in flight, removing each when it ends; the collector reads them plus `~/mc/runner/STOP` — done when `mc status --json` carries a `now` block within a second of a step starting and nothing there a second after it ends, and runner liveness comes from the pid in runner.json, never from pgrep."
+next: "Step 2 — Instant: plans read with one `git cat-file --batch` per repository behind a `~/mc/runner/plans.json` cache keyed by the `origin/main` sha, open PRs cached to `~/mc/runner/prs.json`, offline the default and `--fresh` the opt-in — done when the page prints in under 300 ms with no network, measured with `time`."
 budget: 150k
 needs: []
 ---
@@ -87,7 +87,7 @@ redrawn, no prompt. Bare `mc work`, `mc list`, bare `mc status`, `mc status
 
 - [x] **0. Decision** (2026-08-29) — `~/mc/mc-utredning/decisions/mc-3.md`:
       A, sharpened to two surfaces; the removals are this project's.
-- [ ] **1. What is running now** — `mc run` writes `~/mc/runner/runner.json`
+- [x] **1. What is running now** (2026-08-29) — `mc run` writes `~/mc/runner/runner.json`
       (pid, started) at start and `~/mc/runner/current.json` (name, kind,
       tool, model, budget_minutes, started, pid, worktree) at step start,
       both through `atomic-write.js`, each removed when its scope ends; the
@@ -96,7 +96,8 @@ redrawn, no prompt. Bare `mc work`, `mc list`, bare `mc status`, `mc status
       and the pgrep goes; `kindFor` is replaced by `chooseKind` from
       `run-plan.js`. Done when `mc status --json` carries a `now` block
       within a second of a step starting and nothing there a second after
-      it ends.
+      it ends — verified with a real runner writing to a real work root
+      while `mc status --json` ran in its own process.
 - [ ] **2. Instant** — plans read with one `git cat-file --batch` per
       repository behind a `~/mc/runner/plans.json` cache keyed by the
       `origin/main` sha; open PRs cached to `~/mc/runner/prs.json`; offline
@@ -144,6 +145,13 @@ assumed, are in `investigation-2026-08-29.md`.
 - **Two answers to one question:** `kindFor` (status-collect.js) and
   `chooseKind` (run-plan.js) decide the same thing from different inputs,
   and the page's copy cannot see `reconcile` at all.
+- **The step's pid is the runner's pid.** The session is a `spawnSync` child
+  of the runner and its pid is never handed back, so `current.json` names the
+  runner. That is the right pid anyway: it is the one whose death means the
+  step is over, and both files are tested for life the same way.
+- **A step that throws must still clear `current.json`.** The write is paired
+  with a `finally` around the session call, not with the normal return — a
+  crash in the middle would otherwise leave the page claiming a step forever.
 - **`renderStatus` hardcodes 34/17/70-column pads** and never asks
   `stdout.columns`, while `status-render.js` already exports the
   `painter`/`width`/`pad`/`clip` it needs.

@@ -32,6 +32,9 @@ function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], live = 
   }
   const log = [];
   const calls = { git: [], gh: [], sessions: [], added: [], removed: [] };
+  // A snapshot of the work root taken inside every session call — the only
+  // way to see the files that exist only while a step is in flight.
+  const duringSession = [];
   const deps = {
     env,
     now: () => new Date('2026-08-29T10:00:00Z'),
@@ -48,7 +51,9 @@ function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], live = 
     },
     write: (p, t) => { files[p] = t; },
     append: (p, t) => { files[p] = (files[p] || '') + t; },
+    writeJson: (p, v) => { files[p] = `${JSON.stringify(v, null, 2)}\n`; },
     remove: (p) => { if (!(p in files)) return false; delete files[p]; calls.removed.push(p); return true; },
+    pid: 4242,
     addWorktree: ({ name, repo }) => {
       const repoName = repo.split('/').at(-1);
       calls.added.push(name);
@@ -64,7 +69,7 @@ function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], live = 
     profile: async () => 'PROFILE',
     role: (kind) => (roles ? { name: kind, overlay: `ROLE ${kind}` } : null),
     launch: (tool) => ({ ok: true, id: tool === 'codex' ? 'codex' : 'claude-code', shortName: tool, adapter: { modelArgs: (m) => ['--model', m] }, spec: { bin: `/bin/${tool}` } }),
-    session: (call) => { calls.sessions.push(call); return session(call); },
+    session: (call) => { calls.sessions.push(call); duringSession.push(structuredClone(files)); return session(call); },
     log: (line) => log.push(line),
     git: (cwd, args) => {
       calls.git.push([cwd, ...args]);
@@ -97,7 +102,7 @@ function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], live = 
       return { ok: true, stdout: '' };
     },
   };
-  return { deps, files, log, calls, root };
+  return { deps, files, log, calls, root, duringSession };
 }
 
 const ready = '---\nstatus: ready\nnext: "do x"\n---\n# X\n';
@@ -254,6 +259,8 @@ test('runLoop: --rounds 1 does one pass and exits; --once exits after the first 
  */
 const answered = '# Q\n\n## Rekommendation\n\nA.\n\n**Beslut:** A (Martin, 2026-08-29). Because.\n';
 const waiting = '---\nstatus: waiting-decision\nnext: "wait"\n---\n# X\n';
+// `remove` also clears runner.json/current.json; only the decisions matter here.
+const retired = (f) => f.calls.removed.filter((p) => p.includes('/decisions/'));
 
 test('round retires an answered decision once its plan has moved on', async () => {
   const f = fixture({
@@ -264,7 +271,7 @@ test('round retires an answered decision once its plan has moved on', async () =
   });
   await createRunner({ deps: f.deps }).round({});
   assert.equal(f.files['/w/alpha/decisions/prog-1.md'], undefined, 'the file is gone');
-  assert.deepEqual(f.calls.removed, ['/w/alpha/decisions/prog-1.md']);
+  assert.deepEqual(retired(f), ['/w/alpha/decisions/prog-1.md']);
   assert.match(f.files['/w/runner/log/runner.log'], /retired alpha\/decisions\/prog-1\.md \(applied in alpha\)/u);
 });
 
@@ -276,7 +283,7 @@ test('round keeps an answered decision while its plan still says waiting-decisio
   });
   await createRunner({ deps: f.deps }).round({});
   assert.equal(f.files['/w/alpha/decisions/prog-1.md'], answered, 'the answer is still there for the step that must apply it');
-  assert.deepEqual(f.calls.removed, []);
+  assert.deepEqual(retired(f), []);
   assert.match(f.files['/w/runner/log/runner.log'], /kept alpha\/decisions\/prog-1\.md — alpha still waiting-decision/u);
 });
 
@@ -294,7 +301,7 @@ test('round never deletes an open question, and never deletes an orphan', async 
   await createRunner({ deps: f.deps }).round({});
   assert.equal(f.files['/w/alpha/decisions/prog-9.md'], open, 'an unanswered question is untouchable');
   assert.equal(f.files['/w/ghost/decisions/gone-1.md'], answered, 'no plan owns it, so no machine removes it');
-  assert.deepEqual(f.calls.removed, []);
+  assert.deepEqual(retired(f), []);
   assert.match(f.files['/w/runner/log/runner.log'], /orphan ghost\/decisions\/gone-1\.md — no plan on main owns it; answer it or delete it by hand/u);
 });
 
@@ -306,6 +313,34 @@ test('the append-only bookkeeping logs are never decisions', async () => {
     gh: { alpha: { number: 5, title: 'Alpha' } },
   });
   await createRunner({ deps: f.deps }).round({});
-  assert.deepEqual(f.calls.removed, []);
+  assert.deepEqual(retired(f), []);
   assert.equal(f.files['/w/alpha/decisions/log.md'], answered);
+});
+
+test('current.json exists only while the step is in flight, and runner.json only while the loop runs', async () => {
+  const f = fixture({ plans: { memoro: { alpha: ready } }, session: okSession(), gh: { alpha: { number: 77 } } });
+  assert.equal(await runLoop({ once: true, deps: f.deps }), 0);
+
+  const during = f.duringSession[0];
+  assert.deepEqual(JSON.parse(during['/w/runner/current.json']), {
+    name: 'alpha', kind: 'step', tool: 'claude', model: 'opus', budget_minutes: 90,
+    started: '2026-08-29T10:00:00Z', pid: 4242, worktree: '/w/alpha/memoro',
+  });
+  assert.deepEqual(JSON.parse(during['/w/runner/runner.json']), { pid: 4242, started: '2026-08-29T10:00:00Z' });
+
+  // ...and both are gone once the step and the loop are over.
+  assert.equal('/w/runner/current.json' in f.files, false);
+  assert.equal('/w/runner/runner.json' in f.files, false);
+});
+
+test('current.json carries the project frontmatter, and is removed even when the session throws', async () => {
+  const codexPlan = '---\nstatus: ready\ntool: codex\nmodel: o3\nbudget_minutes: 20\n---\n';
+  const f = fixture({ plans: { 'memoro-cli': { cx: codexPlan } }, session: () => { throw new Error('boom'); } });
+  const runner = createRunner({ deps: f.deps });
+  await assert.rejects(runner.round({ once: true }), /boom/u);
+  assert.deepEqual(JSON.parse(f.duringSession[0]['/w/runner/current.json']), {
+    name: 'cx', kind: 'step', tool: 'codex', model: 'o3', budget_minutes: 20,
+    started: '2026-08-29T10:00:00Z', pid: 4242, worktree: '/w/cx/memoro-cli',
+  });
+  assert.equal('/w/runner/current.json' in f.files, false);
 });
