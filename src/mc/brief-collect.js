@@ -3,14 +3,15 @@
  * script and written to one file. No model is involved here; the model is
  * the session that reads the file afterwards.
  *
- * Seven sections, in the order the plan fixes them: merged since the last
+ * Nine sections, in the order the plan fixes them: merged since the last
  * brief · opened, not merged · waiting on Martin · the helper's proposals ·
- * plan status · runner · queue. Every line comes from a file the runner or a session already
+ * plan status · archived without a note · workareas with no plan · runner ·
+ * queue. Every line comes from a file the runner or a session already
  * writes (`~/mc/runner/log/runs.tsv`, `~/mc/<area>/decisions/<n>.md`,
- * `docs/project/<programme>/<project>/PLAN.md` on origin/main, `~/mc/queue.md`) or from
- * GitHub through `gh`. The pure builders take text and return data so the
- * test can feed them fixtures; `collectBrief` is the only part that touches
- * the machine.
+ * `docs/project/<programme>/<project>/PLAN.md` on origin/main, `~/mc/queue.md`,
+ * `~/mc/intake/*.md`) or from GitHub through `gh`. The pure builders take text
+ * and return data so the test can feed them fixtures; `collectBrief` is the
+ * only part that touches the machine.
  *
  * "Since last brief" is the mtime of the newest file in `~/mc/brief/`; the
  * first run looks back 24 hours.
@@ -20,7 +21,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, wri
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
-import { proposalsDir } from './helper-collect.js';
+import { intakeDir, proposalsDir } from './helper-collect.js';
 import { workRoot } from './paths.js';
 
 export const DAY_MS = 24 * 60 * 60 * 1000;
@@ -240,6 +241,56 @@ export function scanProposals(dir) {
   return out;
 }
 
+/* -------------------------------------------------- intake: what mc run left */
+
+/**
+ * `mc run` writes two files and reads neither: `undocumented-closures.md`,
+ * appended when it archives a project whose `project_log.md` row says
+ * `doc: none`, and `unplanned-workareas.md`, rewritten every round with the
+ * folders under `~/mc` that no plan on main explains. Both exist because the
+ * tidying refuses to decide alone — a missing note never stops an archive,
+ * and a workarea without a plan is never removed by a machine — and both are
+ * therefore questions for the one person who can answer them. This is where
+ * they are asked.
+ *
+ * The runner is the only writer of either, so the shape is known: a header
+ * paragraph saying who writes it, then one table.
+ */
+export const UNDOCUMENTED_KEYS = ['date', 'repo', 'programme', 'project', 'pointer'];
+export const UNPLANNED_KEYS = ['name', 'repo', 'uncommitted', 'lastCommit', 'branch'];
+
+/** A row of a pipe table, with `\|` folded back into a cell rather than splitting it. */
+function splitRow(line) {
+  const inner = line.trim().replace(/^\|/u, '').replace(/\|$/u, '');
+  return inner.split(/(?<!\\)\|/u).map((cell) => cell.replace(/\\\|/gu, '|').trim());
+}
+
+/**
+ * The rows under the first `|---|` rule of a table, keyed by `keys`. A file
+ * the runner has written but never filled is a header and a rule, which is
+ * an empty list — not the same answer as a file that is not there, which the
+ * caller gets as `null`.
+ */
+export function intakeRows(text, keys) {
+  const lines = String(text || '').replace(/\r\n/gu, '\n').split('\n');
+  const rule = lines.findIndex((line) => /^\s*\|(\s*:?-{2,}:?\s*\|)+\s*$/u.test(line));
+  if (rule < 0) return [];
+  const out = [];
+  for (const line of lines.slice(rule + 1)) {
+    if (!line.trim().startsWith('|')) continue;
+    const cells = splitRow(line);
+    out.push(Object.fromEntries(keys.map((key, i) => [key, cells[i] ?? ''])));
+  }
+  return out;
+}
+
+/** One intake table, or `null` when the runner has never written the file. */
+function readIntake(read, path, keys) {
+  let text = null;
+  try { text = read(path); } catch { return null; }
+  return intakeRows(text, keys);
+}
+
 /* --------------------------------------------------------------------- plans */
 
 /**
@@ -396,13 +447,26 @@ export function queueNames(text) {
 /* ------------------------------------------------------------------- render */
 
 const fmt = (n) => Number(n).toLocaleString('en-US');
+/** Named in the brief so the answer is a file Martin can open, not a fact he must trust. */
+const UNDOCUMENTED_FILE = '`~/mc/intake/undocumented-closures.md`';
+const UNPLANNED_FILE = '`~/mc/intake/unplanned-workareas.md`';
+/** The undocumented file is append-only; the brief shows the newest rows and counts the rest. */
+const INTAKE_CAP = 12;
+/**
+ * A `project_log.md` pointer cell as text: `[#455](https://…), [#456](…)`
+ * is five PRs' worth of URL in one cell, and clipping that mid-URL leaves a
+ * broken link rather than a short one. The brief is read in a terminal, so
+ * the numbers are the whole value; the row in the intake file keeps the URLs.
+ */
+const unlink = (text) => String(text ?? '-').replace(/\[([^\]]+)\]\([^)]*\)/gu, '$1');
 const clip = (text, max = 90) => {
   const one = String(text || '').replace(/\s+/gu, ' ').trim();
   return one.length > max ? `${one.slice(0, max - 1)}…` : one;
 };
 
 export function renderBrief({
-  now, since, firstBrief, merged, opened, decisions, proposals = [], plans, runs, queue, notes = [],
+  now, since, firstBrief, merged, opened, decisions, proposals = [], plans,
+  undocumented = null, unplanned = null, runs, queue, notes = [],
 }) {
   const out = [];
   const stamp = (d) => d.toISOString().replace(/\.\d{3}Z$/u, 'Z');
@@ -455,6 +519,34 @@ export function renderBrief({
   const byStatus = {};
   for (const p of plans) byStatus[p.status || '?'] = (byStatus[p.status || '?'] || 0) + 1;
   out.push('', Object.entries(byStatus).map(([s, n]) => `${s}: ${n}`).join(' · ') || '', '');
+
+  out.push('## Archived without a note', '');
+  if (!undocumented) out.push(`_no ${UNDOCUMENTED_FILE} — nothing has been archived without one_`);
+  else if (!undocumented.length) out.push('_none_');
+  else {
+    const shown = undocumented.slice(-INTAKE_CAP);
+    out.push('| date | repo | programme / project | pointer |', '|---|---|---|---|');
+    for (const r of shown) out.push(`| ${r.date} | ${r.repo} | ${r.programme} / ${r.project} | ${clip(unlink(r.pointer), 60)} |`);
+    const older = undocumented.length - shown.length;
+    if (older) out.push(`| … | | ${older} older row${older === 1 ? '' : 's'} above these | |`);
+    out.push('', `${undocumented.length} project${undocumented.length === 1 ? '' : 's'} archived with \`doc: none\`. `
+      + `The directory is gone and \`git log --all -- docs/project/…\` is what is left of it: write the note under `
+      + `\`docs/technical/\`, or decide it needs none. ${UNDOCUMENTED_FILE} is append-only — nothing but you prunes it.`);
+  }
+  out.push('');
+
+  out.push('## Workareas with no plan on main', '');
+  if (!unplanned) out.push(`_no ${UNPLANNED_FILE} — \`mc run\` writes it at the end of every round_`);
+  else if (!unplanned.length) out.push('_none_');
+  else {
+    out.push('| name | repo | uncommitted | last commit | branch |', '|---|---|---|---|---|');
+    for (const r of unplanned) out.push(`| ${r.name} | ${r.repo} | ${r.uncommitted} | ${r.lastCommit} | ${r.branch} |`);
+    const landed = unplanned.filter((r) => r.branch === 'landed').length;
+    out.push('', `${unplanned.length} folder${unplanned.length === 1 ? '' : 's'} under \`~/mc\` that no plan on main `
+      + `explains, ${landed} whose branch is already on main. No machine removes one: give it a plan `
+      + `(\`mc plan <name>\`), or remove the folder by hand.`);
+  }
+  out.push('');
 
   const s = runs.summary;
   out.push('## Runner', '');
@@ -564,9 +656,18 @@ export async function collectBrief({
 
   const proposals = scanProposals(proposalsDir(env));
 
-  const text = renderBrief({ now, since, firstBrief: !last, merged, opened, decisions, proposals, plans, runs, queue, notes });
+  // The two files `mc run` writes and never reads. Absent is its own answer —
+  // the runner has not written one yet — so it is kept apart from empty.
+  const intake = intakeDir(env);
+  const undocumented = readIntake(read, join(intake, 'undocumented-closures.md'), UNDOCUMENTED_KEYS);
+  const unplanned = readIntake(read, join(intake, 'unplanned-workareas.md'), UNPLANNED_KEYS);
+
+  const text = renderBrief({
+    now, since, firstBrief: !last, merged, opened, decisions, proposals, plans,
+    undocumented, unplanned, runs, queue, notes,
+  });
   mkdirSync(dir, { recursive: true });
   const path = join(dir, `${now.toISOString().replace(/[:.]/gu, '-').replace(/-\d{3}Z$/u, 'Z')}.md`);
   writeFileSync(path, text);
-  return { path, text, data: { since, merged, opened, decisions, proposals, plans, runs, queue, notes } };
+  return { path, text, data: { since, merged, opened, decisions, proposals, plans, undocumented, unplanned, runs, queue, notes } };
 }

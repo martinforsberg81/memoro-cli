@@ -1,6 +1,6 @@
 ---
 status: ready
-next: "Step 3 — close-out: the `docs/technical/` note for the whole of mc tidy, this project's own `project_log.md` row, and the one thing steps 1 and 2 left for a reader — `mc brief` raising `~/mc/intake/undocumented-closures.md` and `~/mc/intake/unplanned-workareas.md` (the runner writes both; nothing reads either yet) — done when `mc brief` names what is in them and the note says what a done plan and a done workarea now cost."
+next: "Step 4 — the first round, measured: read runner.log and both origin/mains after the round that first ran the merged tidying, and settle the six criteria below that only a round can answer — done when each is either ticked with what was measured or rewritten to what actually happened and why, and `status:` is `done` in the same session. Nothing is built here; if the round has not run the merged code yet, say so and end the plan on what the tests cover."
 budget: 150k
 needs: [mc-ui]
 ---
@@ -131,7 +131,12 @@ page keep the list clean on their own.
 - [ ] `~/mc/intake/unplanned-workareas.md` exists after the first run.
       (The runner writes it every round — `tests/mc/close-live.test.js` reads
       the real file. Unticked because "after the first run" is a measurement
-      only a round after merge can make, like the four archive criteria above.)
+      only a round after merge can make, like the four archive criteria
+      above. Step 4 is that measurement, for all six of them.)
+- [x] `mc brief` names what is in both intake files: *Archived without a
+      note* and *Workareas with no plan on main*, absent said as absent
+      rather than as "none", and the brief role walks them one row at a time
+      after the decisions.
 - [x] `~/mc/queue.md` contains only names of projects with a plan on main
       that have not yet had their step this round; after a round in which
       every named project ran, the file is empty. `mc run` never reads a
@@ -166,11 +171,18 @@ page keep the list clean on their own.
       and `dropFromQueue` in `src/mc/run.js`; the page's is `workSection` in
       `src/mc/page-collect.js` and `areasWithCheckout` in
       `src/mc/status-collect.js`.
-- [ ] **3. Close-out** — `docs/technical/` note, `project_log.md` row, and
-      the one thing steps 1 and 2 left for a reader: `mc brief` raising
-      `~/mc/intake/undocumented-closures.md` and
-      `~/mc/intake/unplanned-workareas.md` (the runner writes both; nothing
-      reads either yet).
+- [x] **3. Close-out** — `docs/technical/mc-tidy.md`, the `project_log.md`
+      row, and the one thing steps 1 and 2 left for a reader: `mc brief`
+      raising `~/mc/intake/undocumented-closures.md` and
+      `~/mc/intake/unplanned-workareas.md`. Two sections in the brief —
+      *Archived without a note* and *Workareas with no plan on main* — read
+      by `intakeRows` in `src/mc/brief-collect.js`, walked one row at a time
+      by the brief role in `canon/roles/brief.md`.
+- [ ] **4. The first round, measured** — no code. Read runner.log and both
+      `origin/main`s after the round that first ran the merged tidying, and
+      settle the six criteria a round has to answer. The plan ends in that
+      session either way: ticked against what was measured, or rewritten to
+      what actually happened.
 
 ## What the code taught us
 
@@ -247,6 +259,37 @@ page keep the list clean on their own.
   files: everything else the folder holds is moved to
   `runner/log/closed/<name>/` first, and what git deletes is what a fresh
   checkout would rebuild.
+
+- **Six criteria are a round's to answer, not a session's — so the round
+  gets a step.** Step 3 could verify everything it built (`npm test`, the
+  brief rendered from the runner's own row builders) and none of what the
+  plan asks of "the first run after merge": on 2026-08-29T18:40Z runner.log
+  held no `archive:` or `close:` line, and both `origin/main`s still carried
+  every done plan — #454 and #455 merged into a runner process that had
+  already loaded the old `run.js`. Setting `status: done` here would have
+  archived this plan and closed its workarea in the very round that first
+  exercises archiving, taking the plan away before anyone could read what
+  that round did. So step 4 exists, it builds nothing, and it ends the plan
+  in the session that reads the round — ticked or rewritten, but not left
+  open. A verification step is cheap; a criterion nobody ever checked is the
+  habit this project was written to end.
+
+- **The brief is where an intake file is read, and absent is not empty.**
+  Both files are one markdown table under a header paragraph, so one parser
+  keyed by column names reads either. A file the runner has never written is
+  reported as absent: "none" for a file nobody has produced would be the
+  brief claiming a clean board it never looked at. The undocumented file is
+  append-only and nothing but Martin prunes it, so the brief shows the newest
+  twelve rows and counts the rest, and it prints `#455` rather than clipping
+  a GitHub URL mid-link.
+
+- **The brief role's overlay had drifted, and a test held it there.** It said
+  the `**Beslut:**` line is the runner's trigger and that `mc run` deletes the
+  answered file. Neither is true since 2026-08-29: the runner runs `ready`
+  plans and nothing else, and `retireDecisions` runs from `mc brief
+  --collect`. `tests/mc/commands/brief.test.js` asserted the stale sentence
+  word for word, which is how it survived. Both are corrected here — the
+  drift was in the file this step had to edit anyway.
 
 - **`waiting-decision` keeps its place in the queue.** The strict-queue rule
   drops a line that is not a name, a project that is `done`, and a project
