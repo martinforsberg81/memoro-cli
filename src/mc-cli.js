@@ -11,6 +11,29 @@ for (const arg of rawArgv) {
 }
 const first = argv[0];
 
+// Every invocation, at its two ends.
+//
+// This is the only place that sees all of them: `routeV1Command` covers the
+// V1 verbs and everything it declines falls through to the capability
+// dispatcher, so a line written here cannot miss a command the way seven
+// hand-placed call sites did. The pair matters more than either half — a
+// start with no end is a command that died, and that is the shape of the
+// failure this was built for. Nothing here can throw into the command: the
+// logger swallows its own errors by contract.
+// Loading it is guarded for the same reason writing to it is: the promise is
+// that no command ever fails because of the record it keeps.
+let log = () => {};
+let shape = { verb: first || '(page)' };
+try {
+  const logger = await import('./mc/logger.js');
+  log = logger.log;
+  shape = logger.invocationShape(argv);
+} catch { /* no record is bad; a broken command is worse */ }
+
+const startedAt = Date.now();
+let ended = false;
+log('mc.start', { ...shape, cwd: process.cwd(), holder: await holderName() });
+
 try {
   if (first === '--help' || first === '-h' || first === 'help') {
     const { HELP_TEXT } = await import('./mc/help-text.js');
@@ -31,8 +54,34 @@ try {
     }
   }
 } catch (error) {
+  // The message, not the stack: a stack is a path into somebody's home
+  // directory and the console already has it. `threw` is what separates a
+  // crash from a verb that returned a nonzero code on purpose.
+  log('mc.end', {
+    verb: shape.verb, exit_code: 1, duration_ms: Date.now() - startedAt, threw: true,
+    error: error?.message || String(error),
+  });
   console.error(error?.stack || error?.message || String(error));
   process.exitCode = 1;
+  ended = true;
+}
+if (!ended) {
+  log('mc.end', { verb: shape.verb, exit_code: process.exitCode ?? 0, duration_ms: Date.now() - startedAt, threw: false });
+}
+
+/**
+ * Which work area is asking, or the person's own shell.
+ *
+ * The same derivation the lease and the message channel use, so the name in
+ * `mc.log` is the name in `leases.log` and the two join without a mapping.
+ * Loaded lazily and never fatally: identity is a nicety here, and the module
+ * reads the filesystem.
+ */
+async function holderName() {
+  try {
+    const { currentHolder } = await import('./mc/work-identity.js');
+    return currentHolder().name;
+  } catch { return null; }
 }
 
 async function routeV1Command(args) {
@@ -95,6 +144,7 @@ async function routeV1Command(args) {
     pm: './mc/commands/pm.js',
     'pm-helper': './mc/commands/pm-helper.js',
     restart: './cli/restart.js',
+    log: './mc/commands/log.js',
     migrate: './mc/commands/migrate.js',
   };
   return Object.hasOwn(modules, command)

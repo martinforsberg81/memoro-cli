@@ -25,7 +25,7 @@ import { installPushGuard, pushCheckLines, pushGuardState, pushVerdict } from '.
 import { currentHolder } from '../work-identity.js';
 import { runGate, verdictHeadline } from '../repo-gate.js';
 import { runMergeRound } from '../repo-merge.js';
-import { countRounds, readRounds, recordRound } from '../repo-round-log.js';
+import { countRounds, readRounds, recordRound, recordRoundStart } from '../repo-round-log.js';
 import { livenessForLeases } from '../lease-liveness.js';
 import { readCombinedSnapshot } from '../repo-snapshot.js';
 import { matchRepo, repoStatus, repoView } from '../repo-status.js';
@@ -288,11 +288,18 @@ export async function gate(opts, { stdout, stderr }) {
     stderr.write(`mc: the measurement is its own verb, and this role may run it: mc test ${opts.repo} ${opts.pr || (opts.prs || []).join(' ')}\n`);
     return 2;
   }
+  const mode = opts.check ? 'check' : 'merge';
+  // Before any work: a round that is killed mid-flight writes no end line, and
+  // the start is the only trace it will ever leave (2026-08-30).
+  recordRoundStart({
+    repo: repoPath, mode, holder: holder?.name || null,
+    prs: opts.prs?.length ? opts.prs : [opts.pr].filter(Boolean),
+  });
   const round = { repoPath, pr: opts.pr, prs: opts.prs, holder, onProgress: (message) => stderr.write(`mc: ${message}\n`) };
   const report = opts.check ? await runGate(round) : await runMergeRound(round);
   // Every round leaves a line — merged, stopped, refused — so "has the gate
   // ever caught anything?" is a count, not a reading of survivors (A7).
-  recordRound(report, { mode: opts.check ? 'check' : 'merge' });
+  recordRound(report, { mode });
 
   if (opts.json) {
     stdout.write(`${JSON.stringify(report, null, 2)}\n`);

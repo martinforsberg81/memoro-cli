@@ -182,6 +182,15 @@ MAINTENANCE
   mc suite release [--force]       Give it back. --force takes it, and is logged
   mc suite who [--json]            Who holds it — and which suites are actually
                                     running, and for how long, whoever holds it
+  mc log [--failures] [--limit n]  What mc did and how it ended. Every
+                                    invocation writes a start and an end; a
+                                    start with no end is a command that died
+  mc log <run>                     One invocation whole: what it said, the
+                                    rounds it ran, the leases it touched —
+                                    the three files joined on its run id
+  mc log --open                    Gate rounds that started and never ended,
+                                    with the lease each left behind. It only
+                                    reads: releasing one stays your decision
   mc brief                         The evaluation session: gather what the
                                     runner merged, opened and is waiting on,
                                     then decide with a fresh session

@@ -34,6 +34,7 @@ import { claimLease, readLease, releaseLease } from './repo-lease.js';
 import { freshenBranchForLanding, freshenOpenBranches } from './repo-freshen.js';
 import { lockfileHashAt, saveBaseline } from './repo-baseline-cache.js';
 import { currentHolder } from './work-identity.js';
+import { log } from './logger.js';
 import { mcHome } from './paths.js';
 import { runGate, verdictPhrase } from './repo-gate.js';
 import { sourceLinkedInstallations } from './repo-status.js';
@@ -89,7 +90,13 @@ export async function runMergeRound({
   holdLease = true,
 } = {}) {
   const startedAt = clock();
-  const say = (message) => { try { onProgress(message); } catch { /* progress is a courtesy */ } };
+  // Kept as well as printed — see the note on the gate's own `say`. This is
+  // the half that matters most: a merge round that dies between two landings
+  // leaves the repository in a state its stderr was the only witness to.
+  const say = (message) => {
+    log('merge.say', { text: message });
+    try { onProgress(message); } catch { /* progress is a courtesy */ }
+  };
   const numbers = (Array.isArray(prs) && prs.length ? prs : [pr]).map(Number);
   const batch = numbers.length > 1;
   const label = numbers.map((n) => `#${n}`).join(' ');

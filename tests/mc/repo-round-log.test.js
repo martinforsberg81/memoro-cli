@@ -16,8 +16,9 @@ import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
 import {
-  countRounds, readRounds, recordRound, roundLogPath,
+  countRounds, readRounds, recordRound, recordRoundStart, roundLogPath, unfinishedRounds,
 } from '../../src/mc/repo-round-log.js';
+import { resetRunId } from '../../src/mc/logger.js';
 
 function home() {
   return mkdtempSync(join(tmpdir(), 'mc-round-log-'));
@@ -102,6 +103,95 @@ describe('every round leaves a line', () => {
       rmSync(roundLogPath(root)); 
       const outcome = recordRound({ repo: '/x/r', pr: { number: 1 }, ok: true }, { root: join(root, 'no', 'such', '\0bad'), now: NOW });
       assert.equal(outcome, null);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+});
+
+/**
+ * The round that never reached its own end.
+ *
+ * The file above promises a line for every round, "merged, stopped, refused
+ * the lease, cut short" — and it kept that promise for every round that
+ * finished. On 2026-08-30 two merge rounds were killed from outside, the
+ * first after #11082 had already landed and before #11085 was reached, and
+ * neither wrote anything at all. What was left was a lease claimed at 09:48,
+ * a reap at 10:01 saying pid 175 was gone, and a round log with nothing in
+ * it — the meter built to answer "did the gate ever catch anything?" silent
+ * about the two rounds of that day that went wrong.
+ *
+ * SIGKILL runs no handler, so there is no line the dying process could have
+ * written. The only shape that catches it is a line written BEFORE the work
+ * and a reader that notices the missing partner.
+ */
+describe('a round that was killed is still a fact', () => {
+  it('announces itself before doing any work, carrying its pid and run', () => {
+    const root = home();
+    try {
+      const line = recordRoundStart(
+        { repo: '/x/memoro', mode: 'merge', prs: [11082, 11085], holder: 'icon-assets' },
+        { root, now: NOW },
+      );
+      assert.equal(line.phase, 'start');
+      assert.equal(line.repo, 'memoro');
+      assert.deepEqual(line.prs, [11082, 11085]);
+      assert.equal(line.holder, 'icon-assets');
+      assert.equal(line.pid, process.pid);
+      assert.match(line.run, /^run_/u);
+      const { rounds } = readRounds({ root });
+      assert.equal(rounds.length, 1, 'the start is on disk before anything else happens');
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it('a start with no end and a dead pid is a round that died', () => {
+    const root = home();
+    try {
+      resetRunId();
+      recordRoundStart({ repo: '/x/memoro', mode: 'merge', prs: [11082, 11085] }, { root, now: NOW });
+      const { rounds } = readRounds({ root });
+      // Nothing else was written: this is the killed round, exactly as it
+      // appears on disk afterwards.
+      const open = unfinishedRounds(rounds, { alive: () => false });
+      assert.equal(open.length, 1);
+      assert.equal(open[0].verdict, 'died');
+      assert.deepEqual(open[0].prs, [11082, 11085]);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it('a start with no end and a live pid is a round still running — never called dead', () => {
+    const root = home();
+    try {
+      resetRunId();
+      recordRoundStart({ repo: '/x/memoro', mode: 'merge', prs: [11090] }, { root, now: NOW });
+      const { rounds } = readRounds({ root });
+      const open = unfinishedRounds(rounds, { alive: () => true });
+      assert.equal(open[0].verdict, 'running');
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it('a round that ended is not open, however long it took', () => {
+    const root = home();
+    try {
+      resetRunId();
+      recordRoundStart({ repo: '/x/memoro', mode: 'merge', prs: [11090] }, { root, now: NOW });
+      recordRound({ repo: '/x/memoro', pr: { number: 11090 }, ok: true, merged: true }, { root, now: NOW });
+      const { rounds } = readRounds({ root });
+      assert.equal(rounds.length, 2);
+      assert.equal(rounds[1].phase, 'end');
+      assert.deepEqual(unfinishedRounds(rounds, { alive: () => false }), []);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it('lines written before the start/end pair existed are ends, not deaths', () => {
+    const root = home();
+    try {
+      // A line from the old schema: no `phase`, no `run`, no `pid`. Reading it
+      // as an unfinished round would report every historical round as dead.
+      appendFileSync(roundLogPath(root), `${JSON.stringify({
+        schema: 'mc-gate-round', version: 1, at: '2026-08-24T10:00:00.000Z',
+        repo: 'memoro', mode: 'merge', prs: [400], ok: true, merged: [400], stopped_at: null,
+      })}\n`);
+      const { rounds } = readRounds({ root });
+      assert.deepEqual(unfinishedRounds(rounds, { alive: () => false }), []);
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 });
