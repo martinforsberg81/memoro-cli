@@ -24,33 +24,8 @@ THE PAGE
   mc status <name>                 One project, whole
   mc work <name>                   Open that workarea
 
-USAGE
-  mc new <name> [objective]        Create a local session in this directory
-  mc open <name>                   Attach to, start, or exactly resume a session
-
-LOCAL SESSIONS
-  mc new <name> [objective] [--tool codex|claude] [--no-launch]
-                                    Create no branch or worktree implicitly
-  mc open <name> [--cwd <path>] [--tool codex|claude] [--replace]
-                                    Associate another directory or open here
-  mc resume <name>                 Alias for mc open
-  mc rename <old> <new> [--json]   Rename metadata without moving workspaces
-  mc cd <name> [--workspace <id>]  Print or enter an associated directory
-  mc attach <name>                 Attach to the exact live local terminal
-  mc sessions send <name> <text>   Write to the exact live local terminal
-  mc sessions read <name> [--last N]
-                                    Read its bounded current screen
-  mc restart <name>                Replace the runtime; keep everything else
-  mc end <name>                    Stop and archive; keep every workspace
-  mc cleanup <name> --dry-run|--apply
-                                    Clean only exactly proven mc-owned resources
-  mc delete <name> --force         Delete an archived session home after cleanup
-
 MAINTENANCE
   mc doctor [--repair] [--json]    Diagnose or safely repair session-home state
-  mc storage status [--json]       Summarize durable and ephemeral session state
-  mc storage explain <name>        Explain one session's stored resources
-  mc storage repair [--apply]      Plan or apply loss-free storage repairs
   mc dev list [--json]             Every development server on this machine:
                                     which session owns it, whether it is
                                     healthy, and where it is listening
@@ -234,7 +209,6 @@ MAINTENANCE
                                     escalates by writing ../decisions/
   mc roles list                    The defined roles, read from their files
   mc roles show <role>             One role whole: facts, then overlay text
-  mc gc [--dry-run|--apply]        Remove stale runtime homes; never Git resources
   mc migrate [--dry-run] [--stop-legacy-runtimes]
                                     Move pre-V1 sessions into session homes, once
                                     and explicitly; no other command migrates

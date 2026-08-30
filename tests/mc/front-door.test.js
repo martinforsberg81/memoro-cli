@@ -118,12 +118,18 @@ describe('the verbs that became mc', () => {
     } finally { fx.cleanup(); }
   });
 
-  it('mc sessions list says the same', () => {
+  it('mc sessions — all of it — says where it went', () => {
     const fx = fixture();
     try {
-      const result = runMcCli(['sessions', 'list'], fx.env);
-      assert.equal(result.status, 2);
-      assert.match(result.stderr, /mc sessions list is now mc/u);
+      // `mc sessions list` was the only spelling answered before; the session
+      // verbs were cut on 2026-08-30 and the whole family answers now,
+      // because somebody typing `mc sessions read` deserves the same sentence
+      // as somebody typing `mc sessions list`.
+      for (const args of [['sessions'], ['sessions', 'list'], ['sessions', 'read', 'x'], ['sessions', 'send', 'x', 'hi']]) {
+        const result = runMcCli(args, fx.env);
+        assert.equal(result.status, 2, args.join(' '));
+        assert.match(result.stderr, /mc sessions is now mc/u, args.join(' '));
+      }
     } finally { fx.cleanup(); }
   });
 
