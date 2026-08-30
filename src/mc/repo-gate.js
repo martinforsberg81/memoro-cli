@@ -744,15 +744,37 @@ export function verdictFor(report) {
  */
 export function verdictHeadline(report) {
   const standing = report.standing_red ?? 0;
-  if (!standing) return 'GREEN — the test gate passes';
-  return `NO NEW RED — ${standing} standing red name${standing === 1 ? '' : 's'} on ${report.pr?.base || 'the base'}`;
+  const reach = scopeOf(report);
+  if (!standing) return `GREEN — the test gate passes${reach}`;
+  return `NO NEW RED — ${standing} standing red name${standing === 1 ? '' : 's'} on ${report.pr?.base || 'the base'}${reach}`;
 }
 
 /** The same statement mid-sentence, for a round that is narrating itself. */
 export function verdictPhrase(report) {
   const standing = report.standing_red ?? 0;
-  if (!standing) return 'gate green';
-  return `no new red (${standing} standing red on ${report.pr?.base || 'the base'})`;
+  const reach = scopeOf(report);
+  if (!standing) return `gate green${reach}`;
+  return `no new red (${standing} standing red on ${report.pr?.base || 'the base'})${reach}`;
+}
+
+/**
+ * How far the verdict reaches, said in the verdict itself.
+ *
+ * A selected round measured the files the change touches, not the suite — so
+ * "GREEN" here means "nothing this change reaches went red", which is a smaller
+ * claim than the one those words used to make. The number goes in the sentence
+ * rather than in a field somebody has to know to look up, because the sentence
+ * is what gets read aloud and pasted onward. This is the same correction the
+ * standing-red count already forced once: a verdict that needs a document
+ * beside it to be understood correctly is a verdict that will be misread.
+ *
+ * A full-suite round says nothing extra. Its reach is the suite, which is what
+ * a reader already assumes.
+ */
+function scopeOf(report) {
+  const selected = report.selection?.files;
+  if (!selected) return '';
+  return ` — measured over the ${selected} test file${selected === 1 ? '' : 's'} this change reaches, not the whole suite`;
 }
 
 /**

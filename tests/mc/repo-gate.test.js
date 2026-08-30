@@ -24,7 +24,7 @@ import { describe, it } from 'node:test';
 
 import { addArea, fixture as repoFixture } from './_helpers/repo-fixture.js';
 import { runMcCli } from './_helpers/mc-cli.js';
-import { gateRoot, runGate } from '../../src/mc/repo-gate.js';
+import { gateRoot, runGate, verdictHeadline, verdictPhrase } from '../../src/mc/repo-gate.js';
 import { carriedGate, loadMeasuredGate, lockfileHashAt, saveBaseline, saveMeasuredGate } from '../../src/mc/repo-baseline-cache.js';
 import { claimLease, readLease } from '../../src/mc/repo-lease.js';
 import { claimSuiteLease, readSuiteLease } from '../../src/mc/suite-lease.js';
@@ -1510,5 +1510,28 @@ describe('mc test — the grammar', () => {
       const source = readFileSync(new URL('../../src/mc/commands/test.js', import.meta.url), 'utf8');
       assert.doesNotMatch(source, /runMergeRound|pr merge|--squash/u);
     } finally { fx.cleanup(); }
+  });
+});
+
+describe('a verdict says how far it reached', () => {
+  it('a selected round never says GREEN without saying over what', async () => {
+    // "GREEN — the test gate passes" over a suite that ran 6 of 257 files is
+    // the same overclaim the standing-red count already had to correct once.
+    // The reach goes in the sentence, because the sentence is what gets read
+    // aloud and pasted into a pull request.
+    const green = verdictHeadline({ standing_red: 0, selection: { files: 6 }, pr: { base: 'main' } });
+    assert.match(green, /^GREEN/u);
+    assert.match(green, /6 test files this change reaches, not the whole suite/u);
+
+    const standing = verdictHeadline({ standing_red: 3, selection: { files: 6 }, pr: { base: 'main' } });
+    assert.match(standing, /^NO NEW RED — 3 standing red names on main/u);
+    assert.match(standing, /6 test files this change reaches/u);
+
+    assert.match(verdictPhrase({ standing_red: 0, selection: { files: 1 } }), /1 test file this change reaches/u);
+  });
+
+  it('a full-suite round says nothing extra, because its reach is what a reader assumes', () => {
+    assert.equal(verdictHeadline({ standing_red: 0, selection: null, pr: { base: 'main' } }), 'GREEN — the test gate passes');
+    assert.equal(verdictPhrase({ standing_red: 0, selection: null }), 'gate green');
   });
 });
