@@ -23,7 +23,7 @@ A large part of `src/` is still the session manager that preceded this:
 a registry, a broker, a PTY host, managed providers, cloud runtimes and a
 capability dispatcher. Measured 2026-08-29, 71 % of `src/` is unreachable
 from the page and its verbs. It is being removed by
-[`docs/project/mc/mc-cut/PLAN.md`](project/mc/mc-cut/PLAN.md). Do not build
+[`docs/project/mc/mc-cut/PLAN.json`](project/mc/mc-cut/PLAN.json). Do not build
 new work on it, and do not assume a module is live because it exists —
 `node docs/project/mc/mc-cut/reach.mjs .` answers that question.
 
