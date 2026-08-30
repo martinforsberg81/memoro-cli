@@ -8,9 +8,9 @@ THE PAGE
   mc                               The one page: what is running now, how deep
                                     the queue is, the decisions waiting on
                                     you, what waits in intake, and every
-                                    workarea numbered. At a terminal it ends
-                                    in a way in — a number opens that
-                                    workarea. No model; reads only
+                                    project numbered, by repository. At a
+                                    terminal it ends in a way in — a number
+                                    opens that project. No model; reads only
   mc --json [--fresh]              The same page as one object. The page is
                                     offline and instant; --fresh fetches and
                                     asks GitHub, and without it the page says

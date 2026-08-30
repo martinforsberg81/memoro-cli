@@ -10,12 +10,14 @@
  * DECISIONS— how many wait on Martin, and the first few by name.
  * INTAKE   — the helper's newest digest, what is new in it, the `!` lines
  *            themselves, and how many proposals nobody has queued or dropped.
- * WORK     — one numbered row per workarea: the plan's status and `next`, the
- *            last runner step, the open PR, and whether something is live in
- *            it. The number is the one the menu opens. The workareas with no
- *            plan on main come last, under a heading of their own — nothing
- *            removes them, and what they are judged by is how much is
- *            uncommitted and when they were last committed to.
+ * PROJECTS — one numbered row per project on `origin/main`, grouped by
+ *            repository and sorted repo, programme, project: the plan's
+ *            status, how many of its steps are done, `next`, the open PR, and
+ *            whether it has a workarea at all. The number is the one the menu
+ *            opens. The workareas that no project explains come last, under a
+ *            heading of their own — nothing removes them, and what they are
+ *            judged by is how much is uncommitted and when they were last
+ *            committed to.
  *
  * The builders are pure: each takes read data and returns the section, so the
  * tests feed them fixtures and never touch git, gh or tmux. `collectPage` is
@@ -196,68 +198,138 @@ export function intakeSection({ digest = null, proposals = [], now = new Date(),
   };
 }
 
-/* -------------------------------------------------------------------- WORK */
+/* ---------------------------------------------------------------- PROJECTS */
+
+/** How many workareas with no project the page draws before it counts them. */
+export const UNPLANNED_SHOWN = 12;
 
 /**
- * One row per workarea, numbered as the menu numbers them.
+ * One row per **project**, grouped by repository, sorted repo then programme
+ * then project.
  *
- * Live first — that is where a conversation is waiting on a person — then by
- * last activity, which is the later of the area's own mtime and its last
- * runner step.
+ * This was one row per *workarea*, and a workarea is the wrong unit. Measured
+ * 2026-08-30: 81 folders under `~/mc`, of which 24 had a plan on main and 57
+ * did not — so the page's longest section was mostly a list of things nobody
+ * is working on, the 27 real projects were scattered through it, and two were
+ * missing altogether because no folder happened to exist for them. A project
+ * is what the work *is*: it lives in `PLAN.json` on `origin/main`, it is what
+ * the runner steps and what `mc status` opens, and it exists whether or not a
+ * folder does.
  *
- * A workarea without a plan on main is not one of those rows. It is work
- * somebody started that nothing in the plan world explains, and no machine
- * will ever remove it — so it belongs under a heading of its own, with what
- * says whether anything would be lost: how much is uncommitted, when it was
- * last committed to, and whether the branch's content is already on main.
- * Measured 2026-08-29: sixteen of them, from before the plan world, scattered
- * through a list of thirty-two real ones.
+ * The workarea has not stopped mattering — it is where a session runs — so
+ * every row says whether the project has one, and the folders that no project
+ * explains keep a list of their own underneath. Nothing removes those
+ * (close-workarea.js), which is exactly why they are counted where somebody
+ * looks; only the first `UNPLANNED_SHOWN` are drawn, because fifty-seven rows
+ * would be the page again.
  *
- * Numbering runs through both lists in order, so every row on the page is
- * still openable by the number beside it.
+ * Numbering runs through the projects and then the drawn folders, so every row
+ * is openable by the number beside it. A project with no workarea is numbered
+ * like any other: opening it is what creates the folder.
  */
-export function workSection({ areas = [], plans = [], rows = [], openPrs = [], live = [], detail = {} } = {}) {
+export function projectsSection({
+  plans = [], areas = [], rows = [], openPrs = [], live = [], detail = () => ({}),
+  repoOrder = [], shown = UNPLANNED_SHOWN,
+} = {}) {
   const lastRun = {};
   for (const row of rows) lastRun[row.name] = row; // rows are in time order; the last wins
-  const byProject = new Map(plans.map((plan) => [plan.project, plan]));
-  const items = areas.map((area) => {
-    const name = typeof area === 'string' ? area : area.name;
-    const plan = byProject.get(name) || null;
+  const held = new Set(areas.map((area) => (typeof area === 'string' ? area : area.name)));
+
+  const projects = plans.map((plan) => {
+    const name = plan.project;
     const last = lastRun[name] || null;
-    const pr = openPrs.find((item) => item.headRefName === name && (!plan || item.repo === plan.repo)) || null;
-    const ran = last ? Date.parse(last.ts) : NaN;
-    const held = (typeof area === 'string' ? [] : area.repos) || [];
+    const pr = openPrs.find((item) => item.headRefName === name && item.repo === plan.repo) || null;
+    // The steps are on the plan the cache already holds, so how far a project
+    // has got costs nothing to say — and "3 of 7" is the one number that turns
+    // a list of names into a picture of where the work stands.
+    const steps = Array.isArray(plan.plan?.steps) ? plan.plan.steps : [];
     return {
       name,
+      repo: plan.repo,
+      programme: plan.programme,
+      status: plan.status || null,
+      next: plan.next || null,
+      legacy: Boolean(plan.legacy),
+      steps: steps.length ? { done: steps.filter((step) => step?.status === 'done').length, total: steps.length } : null,
       live: live.includes(name),
-      repo: plan?.repo || held[0] || null,
-      programme: plan?.programme || null,
-      status: plan?.status || null,
-      next: plan?.next || null,
+      workarea: held.has(name),
       last: last ? { ts: last.ts, kind: last.kind, pr: last.pr, note: last.note } : null,
       pr: pr ? pr.number : null,
-      activity_ms: Math.max(Number(area.mtime_ms) || 0, Number.isNaN(ran) ? 0 : ran),
-      ...(plan ? {} : { unplanned: true, ...(detail[name] || {}) }),
     };
   });
-  const order = (a, b) => (Number(b.live) - Number(a.live))
-    || (b.activity_ms - a.activity_ms)
-    || a.name.localeCompare(b.name);
-  const planned = items.filter((item) => !item.unplanned).sort(order);
-  const unplanned = items.filter((item) => item.unplanned).sort(order);
-  [...planned, ...unplanned].forEach((item, index) => { item.number = index + 1; });
-  const known = new Set(items.map((item) => item.name));
-  const without = plans.filter((plan) => !known.has(plan.project));
+
+  // Martin's order of repositories, not the alphabet: the lane he watches is
+  // the one he named first.
+  const rank = (repo) => {
+    const at = repoOrder.indexOf(repo);
+    return at === -1 ? repoOrder.length : at;
+  };
+  projects.sort((a, b) => rank(a.repo) - rank(b.repo)
+    || String(a.repo).localeCompare(String(b.repo))
+    || String(a.programme).localeCompare(String(b.programme))
+    || a.name.localeCompare(b.name));
+
+  // The folders no project explains, in the order the old WORK list used: live
+  // first — that is where a conversation waits on a person — then by last
+  // activity, the later of the folder's own mtime and its last runner step.
+  const known = new Set(projects.map((project) => project.name));
+  const orphans = areas
+    .map((area) => (typeof area === 'string' ? { name: area } : area))
+    .filter((area) => !known.has(area.name))
+    .map((area) => {
+      const last = lastRun[area.name] || null;
+      const ran = last ? Date.parse(last.ts) : NaN;
+      return {
+        name: area.name,
+        repo: (area.repos || [])[0] || null,
+        live: live.includes(area.name),
+        last: last ? { ts: last.ts, kind: last.kind, pr: last.pr, note: last.note } : null,
+        activity_ms: Math.max(Number(area.mtime_ms) || 0, Number.isNaN(ran) ? 0 : ran),
+      };
+    })
+    .sort((a, b) => (Number(b.live) - Number(a.live))
+      || (b.activity_ms - a.activity_ms)
+      || a.name.localeCompare(b.name));
+
+  let number = 0;
+  for (const project of projects) { number += 1; project.number = number; }
+  const drawn = orphans.slice(0, Math.max(0, shown));
+  // `detail` is asked here and nowhere else, of the rows that are actually
+  // drawn. It is two `git` calls per folder, and it was being paid for all of
+  // them: 81 folders on 2026-08-30, which was 15 s of the page's 8 s — most of
+  // it for rows the page then did not print. The cap turned a slow section into
+  // a wasteful one, so the reading follows the cap.
+  for (const orphan of drawn) { number += 1; orphan.number = number; Object.assign(orphan, detail(orphan.name)); }
+
+  const repos = [];
+  for (const project of projects) {
+    let group = repos.find((item) => item.repo === project.repo);
+    if (!group) { group = { repo: project.repo, projects: [] }; repos.push(group); }
+    group.projects.push(project);
+  }
+
+  const statuses = {};
+  for (const project of projects) {
+    const key = project.status || 'unknown';
+    statuses[key] = (statuses[key] || 0) + 1;
+  }
+
   return {
-    count: items.length, areas: planned, unplanned, without_workarea: without.length,
+    count: projects.length,
+    repos,
+    statuses,
+    live: projects.filter((project) => project.live).length,
+    no_workarea: projects.filter((project) => !project.workarea).length,
+    unplanned: { count: orphans.length, shown: drawn, more: Math.max(0, orphans.length - drawn.length) },
   };
 }
 
 /**
  * The two facts an unplanned workarea is judged by, asked of git — how much
- * is uncommitted, and when it was last committed to. Asked only of the areas
- * with no plan: they are the minority, and the rest have a plan that says
- * everything a row needs.
+ * is uncommitted, and when it was last committed to. Asked one folder at a
+ * time, of the few the section actually draws: it is two `git` calls each, and
+ * paying them for all 81 folders under `~/mc` was 15 s of an 8 s page — most
+ * of it for rows nothing printed.
  *
  * Whether the branch's content is already on main is deliberately not here:
  * `git merge-tree` is another process per area, and the page is offline and
@@ -422,7 +494,6 @@ export async function collectPage({
   const live = liveAreas(run);
   const liveNames = live.map((item) => item.name);
   const areas = readAreas(root);
-  const planned = new Set(plans.map((plan) => plan.project));
   return {
     now: nowSection({
       runner: readJson(join(root, 'runner', 'runner.json')),
@@ -437,9 +508,10 @@ export async function collectPage({
     queue: queueSection({ queue, plans, live: liveNames }),
     decisions: decisionsSection(scanDecisions(root)),
     intake: intakeSection({ digest: readDigest(intakeDir(env)), proposals: proposalFiles(proposalsDir(env)), now }),
-    work: workSection({
-      areas, plans, rows, openPrs: prs.prs, live: liveNames,
-      detail: readUnplanned(root, areas.filter((area) => !planned.has(area.name)), git),
+    projects: projectsSection({
+      plans, areas, rows, openPrs: prs.prs, live: liveNames,
+      repoOrder: repos.map((repo) => repo.name),
+      detail: (name) => readUnplanned(root, areas.filter((area) => area.name === name), git)[name] || {},
     }),
     caches: { fresh, plans: sources, prs: { fetched: prs.fetched, age_seconds: prs.age_seconds, count: prs.prs.length } },
     notes,

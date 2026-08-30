@@ -41,6 +41,9 @@ const STATUS_TONE = {
   'waiting-decision': ['yellow'],
   blocked: ['red'],
   done: ['grey'],
+  // A plan that does not parse is not a quiet state: the runner will refuse it
+  // at the door, and nobody will be told unless the page says so.
+  invalid: ['red', 'bold'],
 };
 
 /** What is being done, one colour each, wherever a kind is printed. */
@@ -298,58 +301,103 @@ function intakeLines(lines, c, wide, intake) {
   if (intake.more_loud) say(lines, c, wide, 7, `… ${intake.more_loud} more above the threshold`);
 }
 
-/** One WORK row: the number the menu opens it by, and what the plan says. */
-function areaLine(c, wide, area) {
-  // A row without a plan on main is grey through and through: the missing
-  // plan is the whole content of the row, and nothing in it is state.
-  const known = Boolean(area.status);
-  const mark = area.live ? c(MARK.running, 'green') : c(MARK.quiet, 'grey');
-  const status = area.status || (area.unplanned ? area.repo || '—' : '—');
-  const nameTone = known ? (area.live ? ['bold', 'white'] : ['white']) : ['grey'];
-  const left = `  ${c(String(area.number).padStart(3), 'grey')} ${mark} ${c(pad(clip(area.name, 25), 26), ...nameTone)} `
-    + `${c(pad(clip(status, 15), 16), ...statusTone(area.status))} `;
-  const right = area.last
-    ? paint(c, [
-      { text: `${when(area.last.ts)} `, styles: ['grey'] },
-      { text: area.last.kind, styles: known ? kindTone(area.last.kind) : ['grey'] },
-      { text: area.pr ? ` #${area.pr}` : '', styles: known ? ['cyan'] : ['grey'] },
-    ])
-    : paint(c, [
-      { text: area.pr ? 'PR #' : '', styles: ['grey'] },
-      { text: area.pr ? String(area.pr) : '', styles: known ? ['cyan'] : ['grey'] },
-    ]);
-  return row(c, wide, left, area.next || (known ? '' : unplannedWords(area)), right, known ? null : ['grey']);
+/**
+ * The fixed columns of a PROJECTS row, sized to the terminal rather than to a
+ * number somebody typed once — which is the rule this file keeps everywhere
+ * else, and the one a first draft of this section broke: 41 columns of name
+ * plus 17 of status is wider than the 60-column floor all by itself.
+ *
+ * `waiting-decision` is sixteen characters and the longest status there is, so
+ * it gets its whole width the moment the terminal can afford it and is clipped
+ * below that. The name is whatever is left once the middle has the eight
+ * columns `row` will insist on anyway.
+ */
+function projectColumns(wide) {
+  const roomy = wide >= 90;
+  const status = roomy ? 17 : 10;
+  const steps = roomy ? 8 : 6;
+  return { status, steps, name: Math.max(16, Math.min(41, wide - 10 - status - steps - 8)) };
 }
 
 /**
- * What an unplanned row says in the middle: what would be lost by removing
- * it. No plan is not the interesting part — nothing is going to remove it
- * either way — so the row carries the two facts that decide it.
+ * One PROJECTS row: the number the menu opens it by, where the plan stands,
+ * how far through its steps it is, and what happens next.
+ *
+ * `programme/project` and not just the name — a project belongs to a
+ * programme, and two projects of one programme read as one piece of work only
+ * when it is on the row. The steps cell is what a list of names could never
+ * say: `3/7` is where the work stands.
  */
-function unplannedWords(area) {
+function projectLine(c, wide, project) {
+  const mark = project.live ? c(MARK.running, 'green') : c(MARK.quiet, 'grey');
+  const nameTone = project.live ? ['bold', 'white'] : ['white'];
+  // A plan still on the old markdown file has no steps to count and is said to
+  // be what it is, rather than drawn as a fraction of nothing.
+  const steps = project.steps
+    ? `${project.steps.done}/${project.steps.total}`
+    : (project.legacy ? 'PLAN.md' : '—');
+  const column = projectColumns(wide);
+  const left = `  ${c(String(project.number).padStart(3), 'grey')} ${mark} `
+    + `${c(pad(clip(`${project.programme}/${project.name}`, column.name), column.name), ...nameTone)} `
+    + `${c(pad(clip(project.status || '—', column.status), column.status), ...statusTone(project.status))} `
+    + `${c(pad(steps, column.steps), 'grey')}`;
+  // The open PR is the actionable half and wins the right-hand column; with
+  // none, the last runner step is what says whether anything has happened.
+  const right = project.pr
+    ? paint(c, [{ text: `#${project.pr}`, styles: ['cyan'] }])
+    : paint(c, [
+      { text: project.last ? `${when(project.last.ts)} ` : '', styles: ['grey'] },
+      { text: project.last ? project.last.kind : '', styles: kindTone(project.last?.kind) },
+    ]);
+  return row(c, wide, left, project.next || '', right);
+}
+
+/**
+ * One row for a workarea that no project explains. Grey through and through:
+ * the missing project is the whole content of the row, and nothing in it is
+ * state. The middle carries what would be lost by removing it, because that is
+ * the only question such a folder poses.
+ */
+function orphanLine(c, wide, area) {
+  const column = projectColumns(wide);
+  const mark = area.live ? c(MARK.running, 'green') : c(MARK.quiet, 'grey');
+  const left = `  ${c(String(area.number).padStart(3), 'grey')} ${mark} `
+    + `${c(pad(clip(area.name, column.name), column.name), 'grey')} `
+    + `${c(pad(clip(area.repo || '—', column.status), column.status), 'dim', 'grey')}`;
   const parts = [];
   if (area.uncommitted) parts.push(`${area.uncommitted} uncommitted`);
   if (area.last_commit) parts.push(`last commit ${area.last_commit}`);
-  return parts.length ? parts.join(' · ') : 'no plan on main';
+  return row(c, wide, left, parts.join(' · ') || 'no project on main', null, ['grey']);
 }
 
-function workLines(lines, c, wide, work) {
-  const unplanned = work.unplanned || [];
-  const liveCount = [...work.areas, ...unplanned].filter((area) => area.live).length;
-  const counts = `${work.count} workareas${liveCount ? ` · ${liveCount} live` : ''}`;
-  heading(lines, c, wide, 'WORK', counts, 'mc status <name>');
-  for (const area of work.areas) lines.push(areaLine(c, wide, area));
-  if (work.without_workarea) {
-    say(lines, c, wide, 7, `${work.without_workarea} project(s) on main without a workarea — mc status <name>`);
+function projectsLines(lines, c, wide, projects) {
+  const statuses = Object.entries(projects.statuses || {})
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .map(([status, n]) => ({ text: `${status} ${n}`, styles: statusTone(status) }));
+  const repos = projects.repos || [];
+  heading(lines, c, wide, 'PROJECTS', [
+    { text: `${projects.count} in ${repos.length} repo${repos.length === 1 ? '' : 's'}  `, styles: ['grey'] },
+    ...between(statuses, ' · '),
+  ], 'mc status <name>');
+
+  for (const group of repos) {
+    lines.push(`  ${c(group.repo, 'bold', 'cyan')} ${c(String(group.projects.length), 'dim', 'grey')}`);
+    for (const project of group.projects) lines.push(projectLine(c, wide, project));
   }
+  if (projects.no_workarea) {
+    say(lines, c, wide, 7, `${projects.no_workarea} of them ${projects.no_workarea === 1 ? 'has' : 'have'} no workarea yet — opening by number makes one`);
+  }
+
   // The workareas nothing explains, under one heading rather than scattered
-  // through the rows above. No machine removes them — `mc run` writes the
-  // same list, with whether each branch has landed, to
+  // through the rows above. No machine removes them — `mc run` writes the same
+  // list, with whether each branch has landed, to
   // `~/mc/intake/unplanned-workareas.md` for `mc brief` to raise.
-  if (!unplanned.length) return;
+  const orphans = projects.unplanned || { count: 0, shown: [], more: 0 };
+  if (!orphans.count) return;
   lines.push('');
-  say(lines, c, wide, 2, `${unplanned.length} workarea${unplanned.length === 1 ? '' : 's'} with no plan on main — nothing removes them`);
-  for (const area of unplanned) lines.push(areaLine(c, wide, area));
+  say(lines, c, wide, 2, `${orphans.count} workarea${orphans.count === 1 ? '' : 's'} with no project on main — nothing removes them`);
+  for (const area of orphans.shown) lines.push(orphanLine(c, wide, area));
+  if (orphans.more) say(lines, c, wide, 7, `… ${orphans.more} more — ~/mc/intake/unplanned-workareas.md has them all`);
 }
 
 /* ------------------------------------------------------------------- page */
@@ -391,7 +439,7 @@ export function renderPageLines(data, {
   lines.push('');
   intakeLines(lines, c, wide, data.intake);
   lines.push('');
-  workLines(lines, c, wide, data.work);
+  projectsLines(lines, c, wide, data.projects);
 
   const cache = data.caches?.fresh
     ? 'fresh — fetched and asked GitHub'
