@@ -60,6 +60,7 @@ import { describeTurn, runHelperTurn } from './helper-turn.js';
 import { workRoot } from './paths.js';
 import { loadProfile, profileArgs } from './portrait.js';
 import { readCanonRole } from './roles.js';
+import { keepAwake, onACPower } from './stay-awake.js';
 import { addWorktree } from './work-area.js';
 import {
   HELPER_KIND, HELPER_NAME, QUOTA_SLEEP_MS, TIMEOUT_EXIT, assembleQueue, chooseKind, headlessArgs,
@@ -818,10 +819,31 @@ export function createRunner({
  * The loop: rounds until `rounds` is reached (0 = forever), a STOP file
  * appears, or `--once` has run its one step.
  */
-export async function runLoop({ rounds = 0, once = false, merge = true, idleSleepMs = 600_000, deps = realDeps() } = {}) {
+export async function runLoop({
+  rounds = 0, once = false, merge = true, idleSleepMs = 600_000,
+  // The machine's sleep, held for the length of the run. On by default,
+  // because a runner that stops because the laptop dozed is the failure this
+  // exists for and nobody would think to ask for the flag beforehand.
+  awake = true,
+  deps = realDeps(),
+} = {}) {
   const runner = createRunner({ merge, deps });
   if (runner.stopRequested()) { runner.say(`STOP file present (${runner.paths.stop}) — remove it before starting`); return 2; }
   runner.say(`runner start (mc run, merge=${merge ? 1 : 0} rounds=${rounds} once=${once ? 1 : 0})`);
+  // Before the first round, so a run that is going to be unattended is already
+  // holding the assertion by the time anybody walks away from it. `--once` is
+  // a person watching one step and does not need it.
+  //
+  // Nothing releases this: `caffeinate -w <pid>` watches this process and
+  // exits when it does, including when it is killed with a signal no handler
+  // can see. A `finally` here would be a worse version of that, and would not
+  // run in exactly the case that matters.
+  if (awake && !once) {
+    const held = (deps.keepAwake || keepAwake)({ pid: process.pid, onAC: (deps.onACPower || onACPower)() });
+    runner.say(held.ok
+      ? `staying awake (caffeinate ${held.flags.join(' ')} pid ${held.pid}) — ${held.note}`
+      : `NOT staying awake (${held.reason}) — this machine may sleep mid-run: ${held.note}`);
+  }
   runner.markRunner();
   try {
     let n = 0;
