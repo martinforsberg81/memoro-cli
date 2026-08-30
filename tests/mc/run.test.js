@@ -105,8 +105,13 @@ function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], live = 
         return { ok: true, stdout: Object.keys(plans[repoName] || {}).map((n) => `docs/project/prog/${n}/PLAN.json`).join('\n') };
       }
       if (args[0] === 'show' && repoName) {
+        // The project log is read straight off origin/main at the end of a
+        // round: it is what says a folder was a project once its plan has gone.
+        if (args[1].endsWith(':docs/project/project_log.md')) {
+          return { ok: true, stdout: projectLog[repoName] ?? '' };
+        }
         const name = args[1].split('/').at(-2);
-        return { ok: true, stdout: plans[repoName][name] };
+        return { ok: true, stdout: (plans[repoName] || {})[name] };
       }
       // `git worktree add -b <branch> <path> origin/main` in a repository:
       // origin/main checked out, which here is its plans and its project log.
@@ -859,6 +864,49 @@ test('a done workarea whose last step is still open is kept', async () => {
   assert.match(f.files['/w/runner/log/runner.log'], /close: over kept — the last run says success,open/u);
 });
 
+/**
+ * The plan goes first and the workarea second, and they used to have to happen
+ * in the same round: with the plan already archived, the folder read as one
+ * nothing explains and no machine ever looked at it again. Measured 2026-08-30,
+ * the one round that archived three projects was cut short by STOP before it
+ * reached the closing.
+ */
+test('a workarea whose plan an earlier round archived is closed on the strength of the project log', async () => {
+  const logged = `${LOG_HEAD}| 2026-08-29 | prog | gone | delivered | It shipped. | - | #12 |\n`;
+  const f = fixture({
+    // No plan on main at all: an earlier round already took it off.
+    plans: { memoro: {} },
+    areas: { gone: { repo: 'memoro' } },
+    projectLog: { memoro: logged },
+    runs: RUNS_HEAD + ranRow('gone'),
+    session: okSession(),
+  });
+  await createRunner({ deps: f.deps }).round();
+  assert.deepEqual(f.calls.rmdirs, ['/w/gone']);
+  assert.match(f.files['/w/runner/log/runner.log'], /close: gone removed — worktree, branch gone/u);
+  // ...and it is not also filed as a folder nobody can explain.
+  assert.doesNotMatch(f.files['/w/intake/unplanned-workareas.md'], /\| gone \|/u);
+});
+
+/**
+ * What keeps that widening from taking anything it should not. A folder named
+ * after an archived project but with no runner step behind it is somebody's,
+ * not the runner's.
+ */
+test('a folder sharing an archived name, with no runner step, is kept and filed as unexplained', async () => {
+  const logged = `${LOG_HEAD}| 2026-08-29 | prog | gone | delivered | It shipped. | - | #12 |\n`;
+  const f = fixture({
+    plans: { memoro: {} },
+    areas: { gone: { repo: 'memoro' } },
+    projectLog: { memoro: logged },
+    runs: RUNS_HEAD,
+    session: okSession(),
+  });
+  await createRunner({ deps: f.deps }).round();
+  assert.deepEqual(f.calls.rmdirs, []);
+  assert.match(f.files['/w/runner/log/runner.log'], /close: gone kept — no runner step to point at/u);
+});
+
 test('an archive PR that did not merge keeps the workarea: the plan is still on main', async () => {
   const f = fixture({
     plans: { memoro: { over: done() } },
@@ -873,7 +921,7 @@ test('an archive PR that did not merge keeps the workarea: the plan is still on 
   assert.match(f.files['/w/runner/log/runner.log'], /close: over kept — its plan is still on main/u);
 });
 
-test('a workarea with no plan on main is never removed, and is written to intake with whether its branch landed', async () => {
+test('a workarea no project explains is never removed, and is written to intake with whether its branch landed', async () => {
   const f = fixture({
     areas: {
       'msr-track-1': { repo: 'memoro' },
@@ -886,10 +934,10 @@ test('a workarea with no plan on main is never removed, and is written to intake
   await createRunner({ deps: f.deps }).round();
   assert.deepEqual(f.calls.rmdirs, [], 'only Martin can say whether an unplanned workarea is finished');
   const intake = f.files['/w/intake/unplanned-workareas.md'];
-  assert.match(intake, /# Workareas with no plan on main/u);
+  assert.match(intake, /# Workareas with no project on main/u);
   assert.match(intake, /\| mc-repo \| memoro-cli \| 0 \| abc1234 \| landed \|/u);
   assert.match(intake, /\| msr-track-1 \| memoro \| 1 \| abc1234 \| ahead \|/u);
-  assert.match(f.files['/w/runner/log/runner.log'], /close: 2 workarea\(s\) with no plan on main/u);
+  assert.match(f.files['/w/runner/log/runner.log'], /close: 2 workarea\(s\) with no project on main/u);
 });
 
 test('the branch is asked of the worktree, not guessed from the folder name', async () => {
