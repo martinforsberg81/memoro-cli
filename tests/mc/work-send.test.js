@@ -66,10 +66,11 @@ function fixture({ mode = 'reliable', alive = [], drawAfter = 0, busyFor = 0 } =
 }
 
 /** Every file under a directory, with its size and modification time. */
-function snapshot(dir) {
+function snapshot(dir, { skipLog = false } = {}) {
   const seen = {};
   const walk = (here) => {
     for (const entry of readdirSync(here, { withFileTypes: true })) {
+      if (skipLog && entry.name === 'logs' && entry.isDirectory()) continue;
       const full = join(here, entry.name);
       if (entry.isDirectory()) { walk(full); continue; }
       const stat = statSync(full);
@@ -261,7 +262,13 @@ describe('mc work send — the channel', () => {
       assert.equal(added.length, 1, added.join(', '));
       assert.match(added[0], /^pm\/inbox\/.*\.md$/u);
       assert.deepEqual(changed, []);
-      assert.deepEqual(snapshot(fx.mcHome), before.home);
+      // Under mc's home, the log and only the log. Every invocation records
+      // that it ran (2026-08-30); the point of this test is that a send
+      // touches no state anywhere, and naming the exception keeps that claim
+      // exact instead of merely narrower.
+      const homeAdded = Object.keys(snapshot(fx.mcHome)).filter((path) => !(path in before.home));
+      assert.deepEqual(homeAdded.sort(), ['logs/mc.log']);
+      assert.deepEqual(snapshot(fx.mcHome, { skipLog: true }), before.home);
     } finally { fx.cleanup(); }
   });
 

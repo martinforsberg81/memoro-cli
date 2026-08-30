@@ -56,6 +56,7 @@ import { suiteRuns } from './work-status.js';
 import { compareRed, redNames, tapTotals } from './tap-red.js';
 import { RATCHET_FILE, compareRatchet, readRatchet } from './red-ratchet.js';
 import { currentHolder } from './work-identity.js';
+import { log } from './logger.js';
 import { mcHome } from './paths.js';
 import { repoFileSlug } from './repo-snapshot.js';
 import { carriedGate, loadBaseline, loadMeasuredGate, lockfileHashAt, saveMeasuredGate } from './repo-baseline-cache.js';
@@ -116,7 +117,15 @@ export async function runGate({
   holdLease = true,
 } = {}) {
   const startedAt = clock();
-  const say = (message) => { try { onProgress(message); } catch { /* progress is a courtesy */ } };
+  // The narration goes two places. `onProgress` is the operator's stderr and
+  // scrolls away with the pane; the log keeps it under this run's id, so a
+  // round that is killed still says how far it had got and what it had decided
+  // by then — the thing that was missing on 2026-08-30. One funnel, so a line
+  // cannot reach one and miss the other.
+  const say = (message) => {
+    log('gate.say', { text: message });
+    try { onProgress(message); } catch { /* progress is a courtesy */ }
+  };
 
   // Bound to the `env` this round was given rather than to the process's own.
   // A round that took an environment and then resolved its binaries against a
@@ -239,6 +248,10 @@ export async function runGate({
   // what the pid is for.
   const onSignal = (signal) => {
     try {
+      // Written first, before the releases: this is the one line that says a
+      // round ended by signal rather than by verdict, and a release that
+      // throws must not be able to take it with it.
+      log('gate.killed', { repo: repoFileSlug(repoPath), signal, pr: label, holder: holder?.name || null });
       if (holdLease) releaseLease({ repoPath, holder, root });
       if (ownSuiteRight) releaseSuiteLease({ holder, root });
       say(`round cut short by ${signal} — leases released`);

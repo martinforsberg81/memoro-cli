@@ -72,7 +72,12 @@ describe('the repository lease', () => {
       assert.deepEqual(snapshot(worktree, { skipGit: true }), before.worktreeFiles);
       assert.equal(git(fx.dir, 'rev-parse HEAD'), before.head);
       assert.equal(git(fx.dir, 'status --porcelain'), before.dirty);
-      assert.deepEqual(readdirSync(fx.mcHome).sort(), ['repo-leases']);
+      // The lease, and the record that the command ran (2026-08-30). Named
+      // exactly rather than loosened to a subset match: this assertion is the
+      // one that would catch mc growing a new file under its home by accident,
+      // and the claim of the test — nothing inside the repository — is
+      // untouched by it.
+      assert.deepEqual(readdirSync(fx.mcHome).sort(), ['logs', 'repo-leases']);
     } finally { fx.cleanup(); }
   });
 

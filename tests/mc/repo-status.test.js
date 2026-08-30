@@ -16,7 +16,7 @@ import { describe, it } from 'node:test';
 
 import { git } from './_helpers/git-fixture.js';
 import {
-  addArea, fixture, json, moveOriginMain, snapshot,
+  addArea, addedPaths, fixture, json, moveOriginMain, snapshot,
 } from './_helpers/repo-fixture.js';
 import { runMcCli } from './_helpers/mc-cli.js';
 import { board as workModel } from './_helpers/board.js';
@@ -120,16 +120,23 @@ describe('mc repo status — the view', () => {
         worktreeDirty: git(worktree, 'status --porcelain'),
         files: snapshot(fx.dir, { skipGit: true }),
         worktreeFiles: snapshot(worktree, { skipGit: true }),
-        home: snapshot(fx.mcHome),
+        home: snapshot(fx.mcHome, { skipLog: true }),
         work: snapshot(fx.workRoot),
       });
       const before = state();
+      const homeBefore = snapshot(fx.mcHome);
       assert.equal(runMcCli(['repo', 'status', '--json'], fx.env).status, 0);
       assert.equal(runMcCli(['repo', 'status', '--offline'], fx.env).status, 0);
 
-      // Every commit, branch and file exactly where it was — and nothing at
-      // all written under mc's home or the work root.
+      // Every commit, branch and file exactly where it was — and no STATE
+      // written under mc's home or the work root.
       assert.deepEqual(state(), before);
+      // The log is the one exception, and it is named rather than filtered
+      // out of sight: a read-only command records that it ran, and records
+      // nothing else. Asserting the exact set is what keeps this test worth
+      // running — "nothing changed except the thing we stopped looking at" is
+      // not an invariant (2026-08-30).
+      assert.deepEqual(addedPaths(homeBefore, snapshot(fx.mcHome)), ['logs/mc.log']);
     } finally { fx.cleanup(); }
   });
 

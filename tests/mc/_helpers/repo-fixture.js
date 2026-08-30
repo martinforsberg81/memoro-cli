@@ -96,12 +96,22 @@ export function json(result) {
  * refs, and `git status` refreshes the index's stat cache as it reads. What
  * must not move is asserted separately and exactly — the working tree, HEAD,
  * and every local branch.
+ *
+ * `skipLog` leaves out `logs/` for the same kind of reason, and only where the
+ * invariant being asserted is about STATE. Every mc invocation writes a start
+ * and an end line to `logs/mc.log` (2026-08-30), so a read-only command now
+ * changes that one file and nothing else. Filtering it here would be the
+ * cheap move and the wrong one on its own — a caller that passes `skipLog`
+ * should also assert that the log is the *only* thing that appeared, or the
+ * invariant quietly becomes "nothing changed except whatever we stopped
+ * looking at".
  */
-export function snapshot(root, { skipGit = false } = {}) {
+export function snapshot(root, { skipGit = false, skipLog = false } = {}) {
   const seen = {};
   const walk = (dir) => {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
       if (skipGit && entry.name === '.git') continue;
+      if (skipLog && entry.name === 'logs' && entry.isDirectory()) continue;
       const full = join(dir, entry.name);
       if (entry.isDirectory()) { walk(full); continue; }
       const stat = statSync(full);
@@ -110,5 +120,15 @@ export function snapshot(root, { skipGit = false } = {}) {
   };
   if (existsSync(root)) walk(root);
   return seen;
+}
+
+/**
+ * The paths one command added under a root, as a sorted list.
+ *
+ * The other half of `skipLog`: it lets a test say "the log, and nothing but
+ * the log" instead of saying nothing at all about what appeared.
+ */
+export function addedPaths(before, after) {
+  return Object.keys(after).filter((path) => !(path in before)).sort();
 }
 
