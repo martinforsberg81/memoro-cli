@@ -24,34 +24,38 @@ exists, you stop. Martin closes this session right after.
 
 Martin is at the terminal. Say what you found, what you propose, and where
 you are unsure — one question at a time, with a recommendation — and then
-write `docs/project/<programme>/<name>/PLAN.md`:
+write `docs/project/<programme>/<name>/PLAN.json`.
 
-The shape is written down in the repository you are writing in, in
-`docs/project/README.md` § *What a PLAN.md is* — the frontmatter, the sections
-and what each is for. memoro and memoro-cli carry the same text; read it there
-and follow it rather than a form you remember. `budget` and `needs` are yours to
-set.
+It is one file, and it has a schema — `mc run` validates it before it spends a
+session on it, so a plan that is thin in the wrong place is refused at the door
+rather than guessed at for ninety minutes. What each field is for is written
+down in the repository you are writing in, `docs/project/README.md` § *What a
+PLAN.json is*; memoro and memoro-cli carry the same text. Read it there and
+follow it rather than a form you remember. `runner` is yours to set when the
+project needs a tool, a model or a budget other than the default.
 
 Four things are yours in particular, because a plan that is thin on them cannot
 be run:
 
-- **Every step, written before the work.** A step session may not write a step —
-  not a new one, not a rewrite of one that has not run. What you leave vague, it
-  must either guess at or stop on.
-- **The Contract in both directions.** What may not change without Martin, *and*
-  what is out of scope, named. A boundary nobody wrote down is one every session
-  redraws.
-- **A criterion that names its check** — the assertion, the query, the
+- **Every step, written before the work**, each with its `done_when` and its
+  `instruction`. A step session may not write a step — not a new one, not a
+  rewrite of one that has not run. What you leave vague, it must either guess at
+  or stop on.
+- **The boundary in both directions.** `contract` is what may not change without
+  Martin; `out_of_scope` names what this project does not do. A boundary nobody
+  wrote down is one every session redraws.
+- **A criterion that names its `check`** — the assertion, the query, the
   measurement, and for anything with a surface the measurement in the running
   app. "Done" is never the session's judgement of its own work.
 - **Length that follows the work.** A step needing three pages of interface,
-  order and edge cases gets three pages. Link rather than copy; what earns space
-  is what the next session cannot see from the code in front of it.
+  order and edge cases gets three pages, as paragraphs in its `instruction`.
+  Link rather than copy; what earns space is what the next session cannot see
+  from the code in front of it.
 
 A programme with several independently stable states gets
 `docs/project/<programme>/` with the programme document, one project
-directory per state that can still start, each with its own PLAN.md; this
-workarea's PLAN.md is the first state that can start. Add a frozen notice
+directory per state that can still start, each with its own PLAN.json; this
+workarea's PLAN.json is the first state that can start. Add a frozen notice
 at the top of any old plan pointing to the new location.
 
 ## Decisions
@@ -66,15 +70,15 @@ A question that is unclear, or that reading further would answer, gets no
 file: read instead. Fewer, sharper questions are the deliverable here.
 
 Martin answers by appending a line that starts with `**Beslut:**`; the next
-session writes the answer into PLAN.md and sets `status:` back to `ready`,
-which is the only thing that puts the project back in front of the runner —
-it reads no decision file. `mc brief --collect` then deletes the file, once
-no plan waits on it. If the next step depends on such an answer, set
-`status: waiting-decision`.
+session writes the answer into the plan and sets the waiting step back to
+`ready`, which is the only thing that puts the project back in front of the
+runner — it reads no decision file. `mc brief --collect` then deletes the file,
+once no plan waits on it. A step that depends on such an answer is written
+`waiting-decision`, with `blocked_by` naming the decision.
 
 ## What you never do
 
-Merge. Start the runner. Write to any inbox. Edit another project's PLAN.md.
+Merge. Start the runner. Write to any inbox. Edit another project's plan.
 When the plan is written: run the affected tests if you touched code (you
 normally do not), commit, push, and `gh pr create` titled `Plan: <name>`.
 When the PR is open, land it yourself — it is documentation only:
