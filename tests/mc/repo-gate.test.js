@@ -66,6 +66,11 @@ function fixture({
   // An array is a recorded set; a string is written verbatim, which is how a
   // malformed one is tested. `undefined` is a repository with no ratchet.
   ratchet = undefined,
+  // What `.mc/red-ratchet.json` says on the BASE branch. Defaults to the
+  // candidate's, which is the ordinary case: a change that does not touch the
+  // file leaves main's floor exactly where it was. Give it separately to model
+  // a change that edits the floor.
+  baseRatchet = undefined,
   pr = { number: 400, headRefName: 'feature', baseRefName: 'main', headRefOid: 'abc1234', state: 'OPEN', title: 'a change' },
   prStatus = 0,
   changed = [],
@@ -115,6 +120,13 @@ function fixture({
     }
     if (args[0] === 'rev-parse') {
       return { status: 0, stdout: `${opts.cwd.endsWith('baseline') ? 'base1111' : 'cand2222'}\n`, stderr: '' };
+    }
+    // The floor as it stands on the base branch, read without a worktree —
+    // the base worktree is not built on a carried round.
+    if (args[0] === 'show' && String(args[1]).endsWith('.mc/red-ratchet.json')) {
+      const floor = baseRatchet === undefined ? ratchet : baseRatchet;
+      if (floor === undefined) return { status: 1, stdout: '', stderr: 'path does not exist' };
+      return { status: 0, stdout: typeof floor === 'string' ? floor : renderRatchet(floor), stderr: '' };
     }
     return { status: 0, stdout: '', stderr: '' };
   };
@@ -644,23 +656,87 @@ describe('the standing red set, recorded and ratcheted', () => {
       const report = await fx.run();
       assert.equal(report.ok, true, report.reason || '');
       assert.equal(report.ratchet.present, false, 'absent is not a floor of zero');
-      assert.deepEqual(report.ratchet.risen, []);
+      assert.deepEqual(report.ratchet.baseline_risen, []);
     } finally { fx.cleanup(); }
   });
 
-  it('a red name nobody recorded fails the round', async () => {
+  /**
+   * The rule that was removed on 2026-08-30, and why.
+   *
+   * A red name absent from the floor used to stop the round. It could never
+   * fire on a fault the change introduced: `broke` returns before the floor is
+   * consulted, so `candidate.red ⊆ baseline.red`, so every name it could stop
+   * on was already red on main — which the same block computed separately and
+   * called "not this change's doing".
+   *
+   * The demonstration: a broken `codex` install made thirteen broker tests red
+   * on this laptop. Under the old rule no change could merge on any machine
+   * missing that binary. What is installed has nothing to do with whether a
+   * change may land.
+   */
+  it('a red name nobody recorded is reported against main, and does not stop the round', async () => {
     // Red on both sides, so `broke` is empty and the differential rule passes
-    // it. The only thing that can see this is the recorded floor.
+    // it. This is main carrying a name its own floor does not record.
     const red = ['old world › one', 'old world'];
     const fx = fixture({ baselineRed: red, candidateRed: red, ratchet: ['old world'] });
     try {
       const report = await fx.run();
+      assert.equal(report.ok, true, report.reason || '');
+      assert.deepEqual(report.broke, [], 'the differential rule had no objection');
+      assert.deepEqual(report.ratchet.baseline_risen, ['old world › one'], 'said about main');
+      assert.deepEqual(report.ratchet.lowered_still_red, [], 'the change did not touch the floor');
+      assert.notEqual(report.stopped_at, 'ratchet');
+    } finally { fx.cleanup(); }
+  });
+
+  /**
+   * The one thing here that IS the change's own doing, and the only stop left.
+   *
+   * Taking a name out of the floor is a claim in somebody's diff — "this came
+   * good" — and it is a claim the round can check against the run it just did.
+   */
+  it('a change that removes a still-red name from the floor is stopped', async () => {
+    const red = ['old world › one', 'old world'];
+    const fx = fixture({
+      baselineRed: red,
+      candidateRed: red,
+      baseRatchet: ['old world › one', 'old world'],
+      ratchet: ['old world'],
+    });
+    try {
+      const report = await fx.run();
       assert.equal(report.ok, false);
       assert.equal(report.stopped_at, 'ratchet');
-      assert.deepEqual(report.broke, [], 'the differential rule had no objection — that is the whole point');
-      assert.deepEqual(report.ratchet.risen, ['old world › one']);
-      assert.equal(report.verdict, 'ratchet-risen');
+      assert.deepEqual(report.ratchet.lowered_still_red, ['old world › one']);
+      assert.match(report.reason, /still red/u);
       assert.equal(report.merged, false);
+    } finally { fx.cleanup(); }
+  });
+
+  it('a change that repairs a test and records the smaller floor in the same commit passes', async () => {
+    // The case the stop must not catch: the name is gone from the floor AND
+    // green on the candidate, which is exactly what a repair looks like.
+    const fx = fixture({
+      baselineRed: ['old world › one', 'old world'],
+      candidateRed: ['old world'],
+      baseRatchet: ['old world › one', 'old world'],
+      ratchet: ['old world'],
+    });
+    try {
+      const report = await fx.run();
+      assert.equal(report.ok, true, report.reason || '');
+      assert.deepEqual(report.ratchet.lowered_still_red, []);
+      assert.deepEqual(report.fixed, ['old world › one']);
+    } finally { fx.cleanup(); }
+  });
+
+  it('a floor on main that will not parse is main\'s problem, not this change\'s', async () => {
+    const red = ['old world › one'];
+    const fx = fixture({ baselineRed: red, candidateRed: red, ratchet: red, baseRatchet: '{ not json' });
+    try {
+      const report = await fx.run();
+      assert.equal(report.ok, true, report.reason || '');
+      assert.notEqual(report.stopped_at, 'ratchet');
     } finally { fx.cleanup(); }
   });
 
@@ -673,7 +749,7 @@ describe('the standing red set, recorded and ratcheted', () => {
     try {
       const report = await busy.run();
       assert.equal(report.ok, true, report.reason || '');
-      assert.deepEqual(report.ratchet.risen, []);
+      assert.deepEqual(report.ratchet.baseline_risen, []);
     } finally { busy.cleanup(); }
 
     const quiet = fixture({
@@ -697,7 +773,7 @@ describe('the standing red set, recorded and ratcheted', () => {
       assert.equal(report.stopped_at, 'ratchet');
       assert.equal(report.ratchet.ok, false);
       // An empty floor would have made both standing names look like a rise.
-      assert.deepEqual(report.ratchet.risen, []);
+      assert.deepEqual(report.ratchet.baseline_risen, []);
     } finally { fx.cleanup(); }
   });
 
@@ -1308,7 +1384,10 @@ describe('the baseline is carried forward, and the chain breaks on any deviation
       const report = await fx.run({ onProgress: (line) => progress.push(line) });
       assert.equal(report.ok, true, `${report.reason} — the base's instability is never the change's fault`);
       assert.deepEqual(report.ratchet.baseline_risen, ['flaky-one', 'flaky-two']);
-      assert.ok(progress.some((line) => /^BASELINE UNSTABLE — 2 red names on the baseline are not in/u.test(line)), progress.join('|'));
+      // Said in main's name now, not the baseline's, because that is whose
+      // fact it is — and it says outright that it is not a reason to refuse.
+      assert.ok(progress.some((line) => /^MAIN IS ABOVE ITS FLOOR — 2 red names on .* are not in/u.test(line)), progress.join('|'));
+      assert.ok(progress.some((line) => /not a reason to refuse it/u.test(line)), progress.join('|'));
     } finally { fx.cleanup(); }
   });
 

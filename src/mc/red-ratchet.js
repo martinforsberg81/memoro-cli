@@ -1,5 +1,43 @@
 /**
- * The standing red set, written down — so it can only get smaller.
+ * The standing red set, written down — a statement about main, not a gate.
+ *
+ * ## What this file used to do, and why that was wrong
+ *
+ * Until 2026-08-30 a red name absent from this list *stopped the round*. That
+ * rule could not fire on a fault the pull request introduced, and the proof is
+ * three lines of the gate: `broke` (red on the candidate, green on the
+ * baseline) already returned before this was consulted, so by the time the
+ * floor was compared, `candidate.red ⊆ baseline.red`. Every name it could
+ * stop on was therefore already red on main — which the gate computed
+ * separately, called `baseline_risen`, and described in its own message as
+ * "the base itself is flaky or regressed; not this change's doing".
+ *
+ * So it refused changes for something it simultaneously said was not their
+ * fault. The demonstration arrived the same day: `codex` was installed but
+ * unrunnable on this laptop, thirteen broker tests were red for that reason
+ * alone, and they sat above the floor. What is installed on a machine has
+ * nothing to do with whether a change may land — but the floor made it the
+ * deciding fact, and it would have blocked every merge on any machine without
+ * that binary.
+ *
+ * ## What it does now
+ *
+ * The differential comparison is the gate, and it always was: a change may not
+ * make red what was green, measured on one machine in one round, on both sides
+ * at once. That rule is environment-neutral for free — a missing binary is
+ * missing on both sides, so those tests are red on both and `broke` is empty.
+ *
+ * This file answers the different question that comparison structurally cannot
+ * see: has *main's* red set grown beyond what somebody agreed to? That is a
+ * fact about main. It is reported, loudly and into the round log, and it never
+ * refuses somebody else's change.
+ *
+ * One thing here is still a stop, and it is the one that is genuinely the
+ * change's own doing: a pull request that **removes names from this file while
+ * those tests are still red** is lowering the floor under failing tests, and
+ * that is a claim in its diff that the round can check and does.
+ *
+ * ## The original argument, which still holds
  *
  * The gate's verdict is differential: it compares the candidate's red set
  * against a baseline measured in the same round, and passes when nothing new
@@ -91,9 +129,44 @@ export function readRatchet(dir) {
   if (!existsSync(path)) {
     return { present: false, ok: true, path, names: [], reason: 'no standing red set is recorded for this repository' };
   }
+  let raw = null;
+  try { raw = readFileSync(path, 'utf8'); } catch {
+    return { present: true, ok: false, path, names: [], reason: `${RATCHET_FILE} could not be read` };
+  }
+  return parseRatchet(raw, path);
+}
 
+/**
+ * The floor as it stands on a ref, without a worktree.
+ *
+ * The base branch's own floor is what says whether a change *lowered* it, and
+ * the baseline worktree is not always built — a carried baseline (A1) skips
+ * it entirely. `git show` needs no worktree and is always available, so the
+ * comparison does not quietly stop happening on exactly the rounds that are
+ * cheapest.
+ *
+ * Absent is not an error, the same as for a checkout: a base branch with no
+ * floor is a repository that has not recorded one.
+ */
+export function ratchetAtRef({ git, ref, cwd }) {
+  const path = `${ref}:${RATCHET_FILE}`;
+  let out = null;
+  try { out = git(['show', path], { cwd }); } catch {
+    return { present: false, ok: true, path, names: [], reason: `${RATCHET_FILE} could not be read at ${ref}` };
+  }
+  // A missing path is a nonzero status from real git; an empty body is what a
+  // stub gives back. Both mean the same thing — there is no floor here — and
+  // neither is a malformed file.
+  if (!out || out.status !== 0 || !String(out.stdout || '').trim()) {
+    return { present: false, ok: true, path, names: [], reason: `no ${RATCHET_FILE} at ${ref}` };
+  }
+  return parseRatchet(out.stdout, path);
+}
+
+/** One parser, so a floor read from a checkout and one read from a ref cannot disagree. */
+export function parseRatchet(text, path) {
   let parsed = null;
-  try { parsed = JSON.parse(readFileSync(path, 'utf8')); } catch {
+  try { parsed = JSON.parse(text); } catch {
     return { present: true, ok: false, path, names: [], reason: `${RATCHET_FILE} is not readable JSON` };
   }
   if (!parsed || !Array.isArray(parsed.names)) {
@@ -109,11 +182,17 @@ export function readRatchet(dir) {
 }
 
 /**
- * The red set now against the floor that was agreed.
+ * A red set against the floor that was agreed.
  *
- * `risen` is the verdict — names red on this round that nobody wrote down.
- * `fallen` decides nothing, for the reason in this file's header: it is what
- * the gate offers the next commit, not something it acts on.
+ * `risen` is names red that nobody wrote down. Applied to *main's* red set it
+ * is main's drift, which is reported; it is no longer applied to the
+ * candidate's, for the reason in this file's header.
+ *
+ * `fallen` decides nothing and must not be read as a to-do. A name can fall
+ * out of the red set because the machine changed rather than because the code
+ * did — thirteen fell on 2026-08-30 when a broken `codex` install was
+ * repaired, and removing them would have made this laptop's package manager a
+ * precondition for merging.
  */
 export function compareRatchet(accepted, red) {
   const floor = new Set(accepted);
