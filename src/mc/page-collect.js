@@ -205,7 +205,7 @@ export function intakeSection({ digest = null, proposals = [], now = new Date(),
  * last activity, which is the later of the area's own mtime and its last
  * runner step.
  *
- * A workarea without a PLAN.md on main is not one of those rows. It is work
+ * A workarea without a plan on main is not one of those rows. It is work
  * somebody started that nothing in the plan world explains, and no machine
  * will ever remove it — so it belongs under a heading of its own, with what
  * says whether anything would be lost: how much is uncommitted, when it was

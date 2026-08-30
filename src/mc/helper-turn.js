@@ -13,7 +13,7 @@
  * Both write into the same `proposals/`, and neither reads the other.
  *
  * Everything the turn judges from is in its prompt — the digest, the project
- * log, every PLAN.md on main with its status and `next:`, and the proposals
+ * log, every plan on main with the step it is on, and the proposals
  * already waiting. It is given the material rather than sent to find it: the
  * repositories are elsewhere on the disk, and a turn that cannot reach them
  * cannot accidentally write in them either. What it may write is one

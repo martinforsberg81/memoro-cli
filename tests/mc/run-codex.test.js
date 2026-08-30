@@ -29,7 +29,7 @@ import { realDeps, runLoop } from '../../src/mc/run.js';
  */
 
 // Arguments are recorded one per record and not one per line: the prompt is
-// a whole PLAN.md and has newlines of its own.
+// a whole PLAN.json and has newlines of its own.
 const ARG_SEP = '<<mc-arg>>\n';
 
 const CODEX_STUB = (argvFile) => `#!/bin/sh
@@ -41,20 +41,43 @@ echo '{"type":"turn.completed","usage":{"input_tokens":1200,"cached_input_tokens
 exit 0
 `;
 
-const PLAN = [
-  '---',
-  'status: ready',
-  'next: "Step 1 — the one step"',
-  'tool: codex',
-  '---',
-  '',
-  '# cx',
-  '',
-  '## Steps',
-  '',
-  '- [ ] **1. The one step**',
-  '',
-].join('\n');
+const PLAN = {
+  "schema": "mc-plan",
+  "version": 1,
+  "goal": [
+    "The one step runs through the codex adapter."
+  ],
+  "contract": [
+    "The step runs on codex."
+  ],
+  "out_of_scope": [
+    "Everything else."
+  ],
+  "success_criteria": [
+    {
+      "met": false,
+      "criterion": "The step ran.",
+      "check": "runs.tsv holds its row."
+    }
+  ],
+  "what_the_code_taught_us": [],
+  "documents": [],
+  "runner": {
+    "tool": "codex"
+  },
+  "steps": [
+    {
+      "title": "The one step",
+      "status": "ready",
+      "done_when": "the row is written",
+      "instruction": [
+        "Do the one step."
+      ],
+      "pr": null,
+      "blocked_by": null
+    }
+  ]
+};
 
 function git(cwd, ...args) {
   return execFileSync('git', ['-C', cwd, '-c', 'user.email=t@example.com', '-c', 'user.name=T', ...args], { encoding: 'utf8' });
@@ -89,7 +112,7 @@ test('a codex step runs through the adapter and lands in runs.tsv', async (t) =>
   execFileSync('git', ['init', '-q', '--bare', '-b', 'main', origin]);
   execFileSync('git', ['init', '-q', '-b', 'main', repo]);
   mkdirSync(join(repo, 'docs', 'project', 'mc', 'cx'), { recursive: true });
-  writeFileSync(join(repo, 'docs', 'project', 'mc', 'cx', 'PLAN.md'), PLAN);
+  writeFileSync(join(repo, 'docs', 'project', 'mc', 'cx', 'PLAN.json'), JSON.stringify(PLAN, null, 2));
   git(repo, 'add', '-A');
   git(repo, 'commit', '-qm', 'plan');
   git(repo, 'remote', 'add', 'origin', origin);
@@ -137,5 +160,8 @@ test('a codex step runs through the adapter and lands in runs.tsv', async (t) =>
   assert.match(instructions, /^instructions="/u);
   assert.match(instructions, /PROFILE/u);
   assert.match(argv.at(-1), /You are working in the `cx` workarea of memoro-cli/u);
-  assert.match(argv.at(-1), /Step 1 — the one step/u);
+  // The prompt names the step by index and repeats its done_when: that
+  // sentence is what the session verifies before it stops.
+  assert.match(argv.at(-1), /Your step is `steps\[0\]` — 1, "The one step"/u);
+  assert.match(argv.at(-1), /Done when: the row is written/u);
 });

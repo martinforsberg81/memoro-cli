@@ -55,11 +55,24 @@ describe('the decision shape every role writes', () => {
    */
   it('step writes the answer into the plan, and the runner never reads one', () => {
     const { overlay } = readCanonRole('step');
-    assert.match(overlay, phrase('into PLAN.md'));
+    assert.match(overlay, phrase('the answer is written'));
+    assert.match(overlay, phrase('into the plan'));
     assert.match(overlay, phrase('so the plan carries it on its own'));
     assert.match(overlay, phrase('The runner never reads decision files'));
-    assert.match(overlay, phrase('a plan comes back by being `ready`'));
+    assert.match(overlay, phrase('a plan comes back by its first unfinished step being `ready`'));
     assert.doesNotMatch(overlay, phrase('read them first, apply the answer, set'));
+  });
+
+  /**
+   * The boundary the runner checks on the way back in. It is in the overlay as
+   * well, so a session is told before it is caught.
+   */
+  it('step is told which four things are its to edit, and that it is checked', () => {
+    const { overlay } = readCanonRole('step');
+    assert.match(overlay, phrase('You never write the plan\'s steps'));
+    assert.match(overlay, phrase('your step\'s `status` and `pr`'));
+    assert.match(overlay, phrase('This is checked, not asked'));
+    assert.match(overlay, phrase('a session that changed anything else leaves a PR it will not'));
   });
 
   /**

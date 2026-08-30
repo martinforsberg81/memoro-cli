@@ -4,7 +4,7 @@
  * A workarea outlives its plan for exactly the reason a done plan used to
  * outlive its project: nothing removed it. Measured on 2026-08-29, `~/mc`
  * held 61 workareas — seven of them finished and merged weeks earlier, and
- * sixteen from before the plan world with no PLAN.md on main at all.
+ * sixteen from before the plan world with no plan on main at all.
  *
  * So the rule is three facts and no judgement. A workarea is **closable**
  * when its plan on main says `done`, its worktree has no uncommitted change,

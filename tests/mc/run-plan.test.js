@@ -54,12 +54,78 @@ test('queueFileText: one name per line, and an empty file when every name has ru
   assert.deepEqual(queueFileNames('a\n# no\n\nb\n'), ['a', 'b']);
 });
 
-test('chooseKind: reconcile beats everything; ready is the only thing that runs', () => {
+/**
+ * A plan record as `planOf` builds it: the parsed plan, or the reason there
+ * isn't one. `status` used to be a field the runner trusted; it is the state of
+ * the first unfinished step now, so a fixture makes that step.
+ */
+function record({ status = 'ready', steps } = {}) {
+  const stopped = status === 'blocked' || status === 'waiting-decision';
+  return {
+    path: 'docs/project/p/x/PLAN.json',
+    legacy: false,
+    problems: [],
+    plan: {
+      schema: 'mc-plan',
+      version: 1,
+      goal: ['One thing.'],
+      contract: ['Not without Martin.'],
+      out_of_scope: ['Everything else.'],
+      success_criteria: [{ met: false, criterion: 'It is done.', check: 'The gate is green.' }],
+      what_the_code_taught_us: [],
+      documents: [],
+      steps: steps || [{
+        title: 'The one step',
+        status,
+        done_when: 'the rail draws',
+        instruction: status === 'done' ? [] : ['Do it.'],
+        pr: null,
+        blocked_by: stopped ? { kind: 'decision', name: 'p-1' } : null,
+      }],
+    },
+  };
+}
+
+test('chooseKind: reconcile beats everything; a ready first step is the only thing that runs', () => {
   assert.equal(chooseKind({ plan: null, conflicts: ['x.md'] }).kind, 'reconcile');
-  assert.equal(chooseKind({ plan: { status: 'ready' } }).kind, 'step');
-  assert.equal(chooseKind({ plan: { status: 'done' } }).skip, 'status done');
-  assert.equal(chooseKind({ plan: { status: 'blocked' } }).skip, 'status blocked');
-  assert.equal(chooseKind({ plan: { status: null } }).skip, 'status missing');
+  const ready = chooseKind({ plan: record() });
+  assert.equal(ready.kind, 'step');
+  assert.equal(ready.index, 0);
+  assert.equal(ready.step.title, 'The one step');
+  assert.equal(chooseKind({ plan: record({ status: 'done' }) }).skip, 'every step is done');
+  assert.equal(chooseKind({ plan: record({ status: 'blocked' }) }).reason, 'blocked');
+});
+
+/**
+ * The whole admission test, before a session is spent. `status: ready` in a
+ * frontmatter used to be all of it, so a plan missing what the role names could
+ * still cost ninety minutes.
+ */
+test('chooseKind: a plan that does not parse, and one still written as markdown, are both refused', () => {
+  const broken = record();
+  delete broken.plan.out_of_scope;
+  const refused = chooseKind({ plan: { ...broken, plan: null, problems: ['out_of_scope: at least one entry'] } });
+  assert.equal(refused.kind, null);
+  assert.equal(refused.reason, 'unparseable');
+  assert.match(refused.skip, /out_of_scope/u);
+
+  const legacy = chooseKind({ plan: { path: 'docs/project/p/x/PLAN.md', legacy: true, plan: null, problems: [] } });
+  assert.equal(legacy.reason, 'unmigrated');
+  assert.match(legacy.skip, /migrate it to PLAN\.json/u);
+});
+
+/** Steps are an order: a later ready step does not jump a stopped one. */
+test('chooseKind: the first unfinished step decides, and it is not skipped past', () => {
+  const plan = record({
+    steps: [
+      { title: 'One', status: 'done', done_when: 'x', instruction: [], pr: 1, blocked_by: null },
+      { title: 'Two', status: 'waiting-decision', done_when: 'y', instruction: ['do'], pr: null, blocked_by: { kind: 'decision', name: 'p-2' } },
+      { title: 'Three', status: 'ready', done_when: 'z', instruction: ['do'], pr: null, blocked_by: null },
+    ],
+  });
+  const choice = chooseKind({ plan });
+  assert.equal(choice.kind, null);
+  assert.equal(choice.skip, 'step 2 is waiting-decision on decision p-2');
 });
 
 /**
@@ -78,22 +144,38 @@ test('chooseKind: no plan does nothing, and says nothing', () => {
  * being set `ready`.
  */
 test('chooseKind: waiting-decision is simply not ready', () => {
-  assert.deepEqual(chooseKind({ plan: { status: 'waiting-decision' } }), { kind: null, skip: 'status waiting-decision' });
+  const waiting = chooseKind({ plan: record({ status: 'waiting-decision' }) });
+  assert.equal(waiting.kind, null);
+  assert.equal(waiting.skip, 'step 1 is waiting-decision on decision p-1');
   assert.deepEqual(
-    chooseKind({ plan: { status: 'waiting-decision' }, answered: ['/d/a-1.md'] }),
-    { kind: null, skip: 'status waiting-decision' },
+    chooseKind({ plan: record({ status: 'waiting-decision' }), answered: ['/d/a-1.md'] }),
+    waiting,
     'an answered decision file is not a parameter any more',
   );
 });
 
 
-test('stepPrompt carries the plan text, and nothing about decisions', () => {
-  const p = stepPrompt({ name: 'x', repo: 'memoro', planPath: 'docs/project/p/x/PLAN.md', planText: '---\nstatus: ready\n---\n# X', now: new Date('2026-08-29T00:00:00Z') });
+test('stepPrompt names the step, its done_when, and what the session may edit', () => {
+  const step = { title: 'The hero object', status: 'ready', done_when: 'the object draws in both themes', instruction: ['Do it.'], pr: null, blocked_by: null };
+  const p = stepPrompt({
+    name: 'x',
+    repo: 'memoro',
+    planPath: 'docs/project/p/x/PLAN.json',
+    planText: '{"schema":"mc-plan"}',
+    step,
+    index: 1,
+    now: new Date('2026-08-29T00:00:00Z'),
+  });
   assert.match(p, /`x` workarea of memoro/u);
+  assert.match(p, /Your step is `steps\[1\]` — 2, "The hero object"/u);
+  assert.match(p, /Done when: the object draws in both themes/u);
+  // The boundary is in the prompt as well as the role, because it is what the
+  // runner checks on the way back in.
+  assert.match(p, /not another step, not the goal, the contract or the scope/u);
   assert.match(p, /decisions\/x-2026-08-29\.md/u, 'it still says where a question it cannot answer goes');
-  assert.match(p, /----- PLAN\.md -----\n---\nstatus: ready/u);
-  // The runner only ever starts a `ready` plan, so a step is never handed an
-  // answered decision to apply (Martin, 2026-08-29).
+  assert.match(p, /----- PLAN\.json -----\n\{"schema":"mc-plan"\}/u);
+  // The runner only ever starts a plan whose first unfinished step is ready, so
+  // a step is never handed an answered decision to apply (Martin, 2026-08-29).
   assert.doesNotMatch(p, /Decisions answered by Martin/u);
 });
 

@@ -29,7 +29,7 @@ and the queue. Nothing about it is yours to re-collect; read it and start.
 
    `**Beslut:** <what was decided> (Martin, <YYYY-MM-DD>). <one sentence why>`
 
-   You never edit PLAN.md from here — that line is the whole of what you
+   You never edit a plan from here — that line is the whole of what you
    write. The next session writes the decision into the plan and sets
    `status:` back to `ready`, which is what puts the project back in front
    of the runner; `mc brief --collect` then deletes the file once no plan
@@ -52,7 +52,7 @@ and the queue. Nothing about it is yours to re-collect; read it and start.
 
 ## What you never do
 
-Edit any PLAN.md. Merge. Start or stop the runner. Write to any inbox.
+Edit any plan. Merge. Start or stop the runner. Write to any inbox.
 Write anything except `**Beslut:**` lines. Skip a recommendation. Present a
 decision as a menu of options. Put a question to Martin that you have not
 read the code behind.

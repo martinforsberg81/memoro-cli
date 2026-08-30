@@ -1,14 +1,121 @@
 # docs/project — active plan work in memoro-cli
 
-Same convention as memoro's `docs/project/README.md`: `docs/project/<programme>/<project>/`,
+Plan work here is handled exactly as it is in memoro: `docs/project/<programme>/<project>/`,
 where `<project>` is the mc workarea name and each project directory holds a
-`PLAN.md` the runner can act on. `PLAN.md` frontmatter: `status`
-(ready | waiting-decision | blocked | done), `next` (one line with its own
-"done when"), `budget`, `needs`. Sections: Goal · Success criteria · Contract ·
-Steps · What the code taught us · Documents.
+`PLAN.json` the runner can act on. The section below is the same text as memoro's
+`docs/project/README.md` — one shape, both repositories, no local dialect.
 
 There is one programme here, `mc`. mc is built only for memoro me (D-0205);
 projects that do not serve that do not belong under it.
+
+## What a PLAN.json is
+
+A plan is instructions for a headless session that has read nothing else, with
+nobody watching. `mc run` hands it the step it is to do, and it opens a PR. That
+is the whole test of a plan: can that session do this step, and know when it is
+finished?
+
+It is **one file**, `PLAN.json`, in the project directory — an overall part
+first, then one entry per step carrying that step's instruction *and* its state.
+It used to be prose with frontmatter, and the parts the runner depended on were
+conventions nothing checked: a plan could be missing them and still be handed a
+ninety-minute session, which then guessed. The shape is a schema now
+(`src/mc/plan-schema.js` in memoro-cli), so a plan that cannot be run says so at
+the door.
+
+### The overall part
+
+- `goal` — what is true when the project is done.
+- `contract` — what may not change without Martin.
+- `out_of_scope` — what this project does not do, named. A boundary nobody
+  wrote down is one every session redraws.
+- `success_criteria` — `{ met, criterion, check }`. The `check` is the half a
+  criterion is usually missing: the assertion, the query, the measurement — and
+  for anything with a surface, the measurement *in the running app*. "Done" is
+  never the session's judgement of its own work.
+- `what_the_code_taught_us` — `{ title, body }`, empty until the code teaches
+  something. A step session writes here.
+- `documents` — `{ label, path }`.
+- `runner` — optional: `tool`, `model`, `budget_minutes`. Only what the runner
+  actually reads; there is no field here that nothing enforces.
+
+### The steps
+
+`steps[]` is an order, and it is written **before** the work — a step session
+may not write one, so a step nobody specified is a step nobody can run. Each
+carries:
+
+- `title`, and `done_when` — the sentence the runner calls the session's success
+  criterion for its own PR. Every step has one, finished ones included.
+- `instruction` — an array of paragraphs. Length follows the work: a step
+  needing three pages of interface, order and edge cases gets three pages,
+  because the under-specified step is the expensive one. Paragraphs rather than
+  one string so a diff stays line-oriented for whoever reads the PR.
+- `status` — `ready`, `done`, `blocked`, `waiting-decision` — with `pr` and
+  `blocked_by` (`{ kind: "decision" | "project", name }`, required when stopped).
+
+The plan has **no status of its own**: it is the state of the first step that is
+not done, and a plan whose steps are all done is done. The runner looks at that
+first unfinished step and no other — steps are an order, and skipping a stopped
+one to reach a later `ready` step is how a plan gets half-built in an order
+nobody chose.
+
+In full, small:
+
+```json
+{
+  "schema": "mc-plan",
+  "version": 1,
+  "goal": ["Project detail answers where a project stands."],
+  "contract": ["Läget replaces project-timeline rather than joining it."],
+  "out_of_scope": ["Trip detail, and every other entity detail surface."],
+  "success_criteria": [
+    { "met": false, "criterion": "The hero draws a visual object.",
+      "check": "Seen on a project page in the running app, light and dark." }
+  ],
+  "what_the_code_taught_us": [],
+  "documents": [{ "label": "Superseded", "path": "../../../plans/project-briefing-redesign.md" }],
+  "steps": [
+    { "title": "The purpose line", "status": "done",
+      "done_when": "The description is edited in the hero.",
+      "instruction": [], "pr": 11085, "blocked_by": null },
+    { "title": "The hero object", "status": "ready",
+      "done_when": "A project page draws the object in light and in dark.",
+      "instruction": ["Generate the light and dark siblings, register the token, wire the hero.",
+                      "No entity hero draws one today: the render path swaps the icon ref, the entity path hydrates by writing it."],
+      "pr": null, "blocked_by": null }
+  ]
+}
+```
+
+### What earns space
+
+What the next session cannot see from the code in front of it: the trap, the
+missing mechanism, the cost that is not in the diff, the order that matters.
+Link rather than copy. What does not earn space is the case for the plan —
+nobody reads a plan to be convinced of it; they read it to do the work.
+
+Every claim in a plan is acted on without being checked, so name the file that
+carries it, and only if you opened that file. A plausible-sounding claim from a
+grep costs more than saying nothing, because it becomes the next session's
+premise.
+
+### Who writes what
+
+The planning session (`mc plan`, Martin at the terminal) writes the plan.
+
+A step session edits its own step's `status` and `pr`, the criteria it actually
+met, and `what_the_code_taught_us`. It **never writes the plan's steps** — not a
+new one, not a rewrite of one that has not run, not a deletion — and never
+`goal`, `contract`, `out_of_scope`, or the criteria themselves. This is checked
+rather than asked: the runner compares the file before and after, and a session
+that touched anything else fails on the way back in.
+
+When the code says a coming step is wrong, that is not a revision the step
+makes: the step goes `waiting-decision` with `blocked_by` naming the decision,
+which is written at the workarea root with one recommendation, and the session
+stops. A plan comes back to the runner by its first unfinished step being
+`ready`, and by nothing else.
 
 ## Citing a decision
 

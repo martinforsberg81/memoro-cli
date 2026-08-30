@@ -330,7 +330,7 @@ function unplannedWords(area) {
   const parts = [];
   if (area.uncommitted) parts.push(`${area.uncommitted} uncommitted`);
   if (area.last_commit) parts.push(`last commit ${area.last_commit}`);
-  return parts.length ? parts.join(' · ') : 'no PLAN.md on main';
+  return parts.length ? parts.join(' · ') : 'no plan on main';
 }
 
 function workLines(lines, c, wide, work) {
