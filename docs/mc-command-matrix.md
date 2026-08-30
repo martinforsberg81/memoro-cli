@@ -69,8 +69,10 @@ does not stop for uncommitted or unmerged work.
 
 `mc repo status` reads. It writes nothing but the remote-tracking refs a
 `git fetch` updates, and `--offline` skips even that and says so on the page.
-Its worktree section is the status board's own inspection regrouped by
-repository, not a second reading of the same directories.
+Its worktree section is `workStatus()`'s inspection regrouped by
+repository, not a second reading of the same directories. The status board
+that used to print the same reading went with decision mc-3; `workStatus()`
+stayed, because `mc repo status` and the lease-liveness check read it.
 
 With `mc repo watch` running, `mc repo status` reads that watcher's snapshot
 instead of counting — one file read, whoever asks and however often — and the
@@ -183,9 +185,12 @@ manifest declaring dependencies has a `node_modules` to be found in, and
 **stops** with `dependencies` if not (D-0152: a suite run without its tree
 does not fail, it shrinks, and prints a number with the right shape). A
 declaration that vouches the suite runs without one — `prepare: null`, with
-its evidence — is honoured, and the round says so in its progress. The same
-fact is on the status board: `no node_modules` beside any worktree whose
-manifest declares dependencies and has no tree.
+its evidence — is honoured, and the round says so in its progress.
+
+`workStatus()` computes the same fact per worktree — `dependencies:
+'missing'` when the manifest declares dependencies and there is no tree — but
+no page prints it since the status board went (decision mc-3); the suite
+round is where it is said out loud.
 
 A repository mc has not been told about **stops the round**, with a reason that
 says what to write and where. The one exception is a repository that can be
