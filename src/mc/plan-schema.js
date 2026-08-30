@@ -214,6 +214,38 @@ export function validatePlan(value) {
 }
 
 /**
+ * A plan file's text, as the runner and the page both need it: the parsed
+ * object, and everything wrong with it. A file that is not JSON is one problem,
+ * not a crash — the caller is deciding what to say about a project, not
+ * trusting the file.
+ */
+export function readPlanText(text) {
+  let value;
+  try {
+    value = JSON.parse(String(text ?? ''));
+  } catch (err) {
+    return { plan: null, problems: [`the file is not JSON: ${err.message}`] };
+  }
+  const { ok, problems } = validatePlan(value);
+  return { plan: ok ? value : null, problems };
+}
+
+/**
+ * The two lines every reader of a plan wants — `mc status`, the brief, the
+ * page, the queue: what state it is in, and what happens next.
+ *
+ * `next` is not a field any more. It was one, written by hand and restated
+ * with its own "done when" each time, and it disagreed with the steps below it
+ * in several plans. Here it is read off the step the runner would hand out.
+ */
+export function planSummary(plan) {
+  const { step, index, why } = deliverableStep(plan);
+  if (step) return { status: 'ready', next: `Step ${index + 1}, ${step.title} — done when ${step.done_when}` };
+  const state = planState(plan);
+  return { status: state.status, next: why };
+}
+
+/**
  * The plan's state, derived rather than declared: the first step that is not
  * done decides. A plan whose steps are all done is done.
  *
@@ -235,20 +267,21 @@ export function planState(plan) {
  */
 export function deliverableStep(plan) {
   const { ok, problems } = validatePlan(plan);
-  if (!ok) return { step: null, index: -1, why: `the plan does not parse: ${problems[0]}`, problems };
+  if (!ok) return { step: null, index: -1, reason: 'unparseable', why: `the plan does not parse: ${problems[0]}`, problems };
 
   const state = planState(plan);
-  if (state.status === 'done') return { step: null, index: -1, why: 'every step is done', problems: [] };
+  if (state.status === 'done') return { step: null, index: -1, reason: 'done', why: 'every step is done', problems: [] };
   if (state.status !== 'ready') {
     const waiting = state.step?.blocked_by;
     return {
       step: null,
       index: state.index,
+      reason: state.status,
       why: `step ${state.index + 1} is ${state.status} on ${waiting?.kind || 'something'} ${waiting?.name || '(unnamed)'}`,
       problems: [],
     };
   }
-  return { step: state.step, index: state.index, why: null, problems: [] };
+  return { step: state.step, index: state.index, reason: null, why: null, problems: [] };
 }
 
 /**

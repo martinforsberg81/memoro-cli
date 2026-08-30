@@ -20,11 +20,52 @@ import { run as page } from '../../src/mc/commands/home.js';
 
 const NOW = new Date('2026-08-29T12:00:00Z');
 
+/**
+ * Plans as `listPlans` returns them: the record the page reads, with the parsed
+ * plan on it. A status is not a field any more — it is the state of the first
+ * step that is not done — so a fixture says which step it is on by building one.
+ */
+function planRecord({ repo, programme, project, status, title }) {
+  const stopped = status === 'blocked' || status === 'waiting-decision';
+  const steps = status === 'done'
+    ? [{ title, status: 'done', done_when: 'it was done', instruction: [], pr: null, blocked_by: null }]
+    : [{
+      title,
+      status,
+      done_when: 'the step is finished',
+      instruction: ['Do it.'],
+      pr: null,
+      blocked_by: stopped ? { kind: 'decision', name: `${programme}-1` } : null,
+    }];
+  const plan = {
+    schema: 'mc-plan',
+    version: 1,
+    goal: ['One thing.'],
+    contract: ['Not without Martin.'],
+    out_of_scope: ['Everything else.'],
+    success_criteria: [{ met: false, criterion: 'It is done.', check: 'The gate is green.' }],
+    what_the_code_taught_us: [],
+    documents: [],
+    steps,
+  };
+  return {
+    repo,
+    programme,
+    project,
+    path: `docs/project/${programme}/${project}/PLAN.json`,
+    legacy: false,
+    plan,
+    problems: [],
+    status,
+    next: status === 'ready' ? `Step 1, ${title} — done when the step is finished` : title,
+  };
+}
+
 const PLANS = [
-  { repo: 'memoro', programme: 'assistant-avatar', project: 'avatar-self-serve', status: 'waiting-decision', next: 'Answer decision 4' },
-  { repo: 'memoro', programme: 'docx-editing-surface', project: 'docx-editor', status: 'ready', next: 'Measure paste and IME' },
-  { repo: 'memoro-cli', programme: 'mc', project: 'mc-ui', status: 'ready', next: 'Step 3 — the page' },
-  { repo: 'memoro-cli', programme: 'mc', project: 'mc-run', status: 'done', next: 'nothing' },
+  planRecord({ repo: 'memoro', programme: 'assistant-avatar', project: 'avatar-self-serve', status: 'waiting-decision', title: 'Answer decision 4' }),
+  planRecord({ repo: 'memoro', programme: 'docx-editing-surface', project: 'docx-editor', status: 'ready', title: 'Measure paste and IME' }),
+  planRecord({ repo: 'memoro-cli', programme: 'mc', project: 'mc-ui', status: 'ready', title: 'The page' }),
+  planRecord({ repo: 'memoro-cli', programme: 'mc', project: 'mc-run', status: 'done', title: 'nothing' }),
 ];
 const DECISIONS = [
   { area: 'org-update', file: 'org-update/decisions/network-review-1.md', title: '1. A durable graph model?', answered: false },
@@ -231,7 +272,7 @@ describe('WORK', () => {
     ]);
     const ui = work.areas.find((area) => area.name === 'mc-ui');
     assert.equal(ui.status, 'ready');
-    assert.equal(ui.next, 'Step 3 — the page');
+    assert.equal(ui.next, 'Step 1, The page — done when the step is finished');
     assert.equal(ui.pr, 440);
     assert.deepEqual(ui.last, { ts: '2026-08-29T10:00:00Z', kind: 'step', pr: '440', note: 'success,merged' });
     // mc-run has a plan and no workarea; it is a number, not a row.
@@ -336,7 +377,7 @@ describe('the page', () => {
     assert.match(text, /… 1 more/u);
     assert.match(text, /INTAKE {2}2026-08-29 \(60 min old\) · 1 new error \(1 loud\) · 1 proposal\s+mc helper --intake/u);
     assert.match(text, /WORK {2}2 workareas\s+mc status <name>/u);
-    assert.match(text, / {2}1 · mc-ui\s+ready\s+Step 3 — the page\s+08-29 10:00Z step #440/u);
+    assert.match(text, / {2}1 · mc-ui\s+ready\s+Step 1, The page — done when the step is fi…\s+08-29 10:00Z step #440/u);
     assert.match(text, / {2}2 · ui-fixes\s+—\s+no PLAN\.md on main/u);
     assert.match(text, /3 project\(s\) on main without a workarea/u);
     assert.match(text, /offline, PRs 2 h old — --fresh asks GitHub/u);
@@ -539,7 +580,7 @@ describe('the palette', () => {
     'red bold+white', //                                           !  `abc` — 41x 500 — loud
     '',
     'bold+cyan grey grey', //                                      WORK  2 workareas                 mc status <name>
-    'grey grey white green grey green cyan', //                      1 · mc-ui  ready  Step 3 — the page  08-29 10:00Z step #440
+    'grey grey white green grey green cyan', //                      1 · mc-ui  ready  Step 1, The page — …  08-29 10:00Z step #440
     'grey', //                                                       3 project(s) on main without a workarea
     '',
     'grey', //                                                     1 workarea with no plan on main — nothing removes them

@@ -53,7 +53,8 @@ import {
 } from './archive-plan.js';
 import { writeJsonAtomic } from './atomic-write.js';
 import { branchLanded } from './branch-landed.js';
-import { defaultRepos, listPlans, parsePlanFrontmatter, planFields, showBatch } from './brief-collect.js';
+import { defaultRepos, listPlans, showBatch } from './brief-collect.js';
+import { readPlanText, unauthorisedChanges } from './plan-schema.js';
 import { closable, lastRunFor, unplannedFile, unplannedRow } from './close-workarea.js';
 import { collectHelper, describeDigest, intakeDir, unreadableSections } from './helper-collect.js';
 import { describeTurn, runHelperTurn } from './helper-turn.js';
@@ -212,10 +213,18 @@ export function createRunner({
   function planOf(worktree, name) {
     const base = join(worktree, 'docs', 'project');
     for (const programme of deps.list(base)) {
-      const path = join(base, programme, name, 'PLAN.md');
+      const dir = join(base, programme, name);
+      const path = join(dir, 'PLAN.json');
       if (deps.exists(path)) {
         const text = deps.read(path) || '';
-        return { path, programme, text, ...parsePlanFrontmatter(text), fields: planFields(text) };
+        const { plan, problems } = readPlanText(text);
+        return { path, programme, text, plan, problems, legacy: false };
+      }
+      // A project still on the old file is reported as what it is. The runner
+      // reads PLAN.json and nothing else; guessing at markdown is what let a
+      // plan missing the sections the role names be handed out anyway.
+      if (deps.exists(join(dir, 'PLAN.md'))) {
+        return { path: join(dir, 'PLAN.md'), programme, text: '', plan: null, problems: [], legacy: true };
       }
     }
     return null;
@@ -347,7 +356,11 @@ export function createRunner({
 
     for (const plan of done) {
       const dir = join('docs', 'project', plan.programme, plan.project);
-      const planText = deps.read(join(worktree, dir, 'PLAN.md')) || '';
+      // The plan as it stands at close-out. PLAN.json is the plan; a project
+      // still on the old file is read there until the last one is migrated.
+      const planText = deps.read(join(worktree, dir, 'PLAN.json'))
+        || deps.read(join(worktree, dir, 'PLAN.md'))
+        || '';
       if (!deps.git(worktree, ['rm', '-r', '-q', '--', dir]).ok) {
         say(`archive: ${repo.name} ${plan.programme}/${plan.project} — git rm failed, left alone`);
         continue;
@@ -637,13 +650,13 @@ export function createRunner({
 
     const role = deps.role(kind);
     if (!role?.overlay) { say(`${name}: canon/roles/${kind}.md is missing — skip`); return 'skipped'; }
-    const settings = sessionSettings(plan?.fields || {});
+    const settings = sessionSettings(plan?.plan?.runner || {});
     const launch = deps.launch(settings.tool);
     if (!launch?.ok) { say(`${name}: ${settings.tool} is not available (${launch?.hint || launch?.reason}), skip`); return 'skipped'; }
     const now = deps.now();
     const prompt = kind === 'reconcile'
       ? reconcilePrompt({ name, repo: repo.name, conflicts: sync.conflicts })
-      : stepPrompt({ name, repo: repo.name, planPath: plan.path, planText: plan.text, now });
+      : stepPrompt({ name, repo: repo.name, planPath: plan.path, planText: plan.text, step: choice.step, index: choice.index, now });
     const instructions = [await deps.profile(), role.overlay].filter(Boolean).join('\n\n---\n\n');
     const args = headlessArgs({ toolId: launch.id, adapter: launch.adapter, model: settings.model, instructions, prompt, profileArgs });
 
@@ -680,6 +693,24 @@ export function createRunner({
     const pr = (prList.ok && prList.stdout.trim()) || '-';
     const read = readSessionOutput({ toolId: launch.id, stdout: result.stdout, stderr: result.stderr, exitCode: result.status, timedOut: result.timedOut });
     let { note } = read;
+
+    // The boundary, checked instead of asked for. A step session edits its own
+    // step, the criteria it met and what the code taught it; a session that
+    // rewrote a step it did not run, added one, or widened the scope leaves a
+    // PR the runner will not merge. Nothing is reverted here — the branch is
+    // the session's work and Martin reads the PR.
+    if (kind === 'step' && note === 'success') {
+      const after = readPlanText(deps.read(plan.path) || '');
+      const trespass = after.plan
+        ? unauthorisedChanges(plan.plan, after.plan, choice.index)
+        : { ok: false, problems: [`the plan no longer parses: ${after.problems[0]}`] };
+      if (!trespass.ok) {
+        note = 'plan-trespass';
+        for (const problem of trespass.problems) say(`${name}: ${problem}`);
+        say(`${name}: #${pr} left open — the session changed more of the plan than its step`);
+      }
+    }
+
     if (merge && pr !== '-' && note === 'success') note = (await mergePr(worktree, name, pr)) ? 'success,merged' : 'success,open';
 
     logRun({ ts: stamp(), name, kind, exit: result.status, seconds, pr, turns: read.turns, input: read.input, output: read.output, cacheRead: read.cacheRead, cacheWrite: read.cacheWrite, session: read.session, note });
