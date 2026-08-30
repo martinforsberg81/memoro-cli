@@ -15,9 +15,9 @@ import { fileURLToPath } from 'node:url';
 import { describe, it } from 'node:test';
 
 import {
-  DEFAULT_LIMIT, DEFAULT_THRESHOLD, DEPLOY_STALE_HOURS, failingConditions, renderState,
+  DEFAULT_LIMIT, DEFAULT_THRESHOLD, DEPLOY_STALE_HOURS, failingConditions, helperDir, renderState,
 } from '../../src/mc/helper-collect.js';
-import { DEFAULT_TURN_MINUTES } from '../../src/mc/helper-turn.js';
+import { DEFAULT_TURN_MINUTES, INTAKE_ROLE } from '../../src/mc/helper-turn.js';
 import { INTAKE_LOUD_NAMED } from '../../src/mc/page-collect.js';
 import { HELPER_HOUR_UTC, HELPER_KIND, HELPER_NAME } from '../../src/mc/run-plan.js';
 
@@ -31,6 +31,19 @@ const number = (pattern) => {
 };
 
 describe('docs/technical/mc-helper.md says what the code does', () => {
+  /**
+   * The verb is two doors now, and a doc that describes one of them is worse
+   * than a doc that describes neither: somebody reading it would type the
+   * wrong thing. So both are pinned — the room the desk stands in, and the
+   * role each half wears.
+   */
+  it('names the desk\'s room and the role each half wears', () => {
+    assert.ok(DOC.includes('`~/mc/helper/`'), 'the doc no longer names the desk\'s room');
+    assert.match(helperDir({ MC_WORK_ROOT: '/work' }), /\/helper$/u);
+    assert.ok(DOC.includes(`\`canon/roles/${INTAKE_ROLE}.md\``), `the doc does not name canon/roles/${INTAKE_ROLE}.md`);
+    assert.ok(DOC.includes('`canon/roles/helper.md`'), 'the doc does not name the desk\'s role file');
+  });
+
   it('states the flag defaults the code exports', () => {
     assert.equal(number(/fingerprints asked for; default (\d+)/u), DEFAULT_LIMIT);
     assert.equal(number(/marked `!`; default (\d+)/u), DEFAULT_THRESHOLD);
