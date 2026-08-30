@@ -123,6 +123,87 @@ describe('which tests a change reaches', () => {
     } finally { fx.cleanup(); }
   });
 
+  /**
+   * The third edge: data. Measured 2026-08-30, 17 of the last 20 merges ran the
+   * whole suite, and 51 of the 63 paths that forced them were under `docs/` —
+   * every one of them named by the very test that checks it. The fallback was
+   * asking "is this source?" when the question is "does anything read this?".
+   */
+  it('a doc a test reads is that test, not the whole suite', () => {
+    const fx = repo({
+      base: {
+        'docs/technical/thing.md': '# thing\n\nninety minutes\n',
+        'tests/doc.test.js': "import { readFileSync } from 'node:fs';\nreadFileSync('docs/technical/thing.md');\n",
+        'tests/other.test.js': "export default 'unrelated';\n",
+      },
+      change: { 'docs/technical/thing.md': '# thing\n\nsixty minutes\n' },
+    });
+    try {
+      const { files, why } = fx.select();
+      assert.equal(why.reason, 'affected');
+      assert.deepEqual(files, ['tests/doc.test.js']);
+    } finally { fx.cleanup(); }
+  });
+
+  /**
+   * A directory is the only written-down link to a file whose name is built at
+   * run time: `readCanonRole` opens `canon/roles/<kind>.md`, so no literal ever
+   * spells `brief.md`, and the module spells the directory instead.
+   */
+  it('data read through a directory reaches every test that reaches the reader', () => {
+    const fx = repo({
+      base: {
+        'canon/roles/brief.md': 'the brief role\n',
+        'src/roles.js': "import { readFileSync } from 'node:fs';\nexport const read = (k) => readFileSync(`canon/roles/${k}.md`);\n",
+        'tests/roles.test.js': "import { read } from '../src/roles.js';\nexport default read;\n",
+        'tests/other.test.js': "export default 'unrelated';\n",
+      },
+      change: { 'canon/roles/brief.md': 'the brief role, revised\n' },
+    });
+    try {
+      const { files, why } = fx.select();
+      assert.equal(why.reason, 'affected');
+      assert.deepEqual(files, ['tests/roles.test.js']);
+      assert.match(why.selected_by['tests/roles.test.js'].join(' '), /reads:canon\/roles\/brief\.md/u);
+    } finally { fx.cleanup(); }
+  });
+
+  /**
+   * The boundary of that widening, and the reason it is a list rather than a
+   * rule. A manifest changes what every test runs *inside*, so whoever happens
+   * to name it understates its reach by a mile.
+   */
+  it('a manifest is not data, however many tests name it', () => {
+    const fx = repo({
+      base: {
+        'src/a.js': 'export const a = 1;\n',
+        'tests/a.test.js': "import { readFileSync } from 'node:fs';\nreadFileSync('./package.json');\n",
+        'tests/b.test.js': "export default 'unrelated';\n",
+      },
+      change: { 'package.json': '{"name":"changed"}\n' },
+    });
+    try {
+      const { files, why } = fx.select();
+      assert.equal(why.reason, 'full-suite');
+      assert.deepEqual(files, ['tests/a.test.js', 'tests/b.test.js']);
+    } finally { fx.cleanup(); }
+  });
+
+  it('a doc nothing reads is an unanswered question, not an inert one', () => {
+    const fx = repo({
+      base: {
+        'docs/orphan.md': '# nobody reads me\n',
+        'tests/a.test.js': "export default 'a';\n",
+      },
+      change: { 'docs/orphan.md': '# still nobody\n' },
+    });
+    try {
+      const { why } = fx.select();
+      assert.equal(why.reason, 'full-suite');
+      assert.deepEqual(why.unexplained, ['docs/orphan.md']);
+    } finally { fx.cleanup(); }
+  });
+
   it('a change that reaches nothing selects nothing, and says so plainly', () => {
     // Not an error, and not a licence either: the gate refuses to treat an
     // empty selection as a measurement, so this is where that refusal starts.
