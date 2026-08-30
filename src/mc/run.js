@@ -38,6 +38,12 @@
  * production, writes a digest and proposals into `~/mc/intake/`, and that is
  * all. `runHelperDay` below is the whole of it.
  *
+ * The runner is worked from another terminal by three files under
+ * `~/mc/runner/`, all read at a round boundary and never mid-session: `STOP`
+ * ends it, `UPDATE` makes it fast-forward mc's own checkout and hand over to a
+ * fresh process on the new code. `mc run start|stop|--update` write them; the
+ * rules and the handover are in run-control.js.
+ *
  * Every process boundary is a dependency on `deps`, so the round can be
  * driven in a test with a fake git, gh, tmux and session and no network.
  * The rules themselves live in run-plan.js.
@@ -56,6 +62,7 @@ import { branchLanded } from './branch-landed.js';
 import { defaultRepos, listPlans, showBatch } from './brief-collect.js';
 import { readPlanText, unauthorisedChanges } from './plan-schema.js';
 import { closable, lastRunFor, unplannedFile, unplannedRow } from './close-workarea.js';
+import { handOver } from './run-control.js';
 import { collectHelper, describeDigest, HELPER_REPOS, intakeDir, unreadableSections } from './helper-collect.js';
 import { describeTurn, runHelperTurn } from './helper-turn.js';
 import { workRoot } from './paths.js';
@@ -151,6 +158,16 @@ export function realDeps(env = process.env) {
         });
       });
     }),
+    // `mc run --update`: this runner's replacement, on the code that is on
+    // disk now. Node read its whole module graph at process start, so the only
+    // way to run new code is to be a new process — the same argument list,
+    // detached so it outlives this one, and the same stdio, which for a runner
+    // `mc run start` spawned is the append handle on runner.log.
+    respawn: () => {
+      const child = spawn(process.execPath, process.argv.slice(1), { detached: true, stdio: 'inherit', env });
+      child.unref();
+      return child.pid ?? null;
+    },
     log: (line) => process.stdout.write(`${line}\n`),
   };
 }
@@ -167,6 +184,10 @@ export function createRunner({
     runs: join(root, 'runner', 'log', 'runs.tsv'),
     runnerLog: join(root, 'runner', 'log', 'runner.log'),
     stop: join(root, 'runner', 'STOP'),
+    // `mc run --update` leaves this one. It is read where STOP is read — at a
+    // round boundary — because it means the same kind of thing: finish what
+    // you are in, then do as you are told. See run-control.js.
+    update: join(root, 'runner', 'UPDATE'),
     // What is running, for anyone who asks. runner.json says a runner is
     // here and names the pid to test; `current-<repo>.json` exists only
     // while that lane's step is in flight — one file per lane, because two
@@ -193,6 +214,7 @@ export function createRunner({
   };
   const gitOut = (cwd, args) => { const r = deps.git(cwd, args); return r.ok ? String(r.stdout ?? '').trimEnd() : null; };
   const stopRequested = () => deps.exists(paths.stop);
+  const updateRequested = () => deps.exists(paths.update);
 
   /**
    * The 5-hour Claude quota is one budget for every lane. The first lane to
@@ -860,8 +882,8 @@ export function createRunner({
 
   return {
     paths, say, round, runStep, runLane, splitLanes, runHelperDay, archiveDone, queue, stopRequested,
-    syncMain, mergePr, planOf, repoOf, markRunner, clearRunner, closeWorkareas, closeWorkarea,
-    workareas, tidyQueue,
+    updateRequested, syncMain, mergePr, planOf, repoOf, markRunner, clearRunner, closeWorkareas,
+    closeWorkarea, workareas, tidyQueue,
   };
 }
 
@@ -895,6 +917,10 @@ export async function runLoop({
       : `NOT staying awake (${held.reason}) — this machine may sleep mid-run: ${held.note}`);
   }
   runner.markRunner();
+  // A handover is the one exit that must not clear runner.json: the runner it
+  // handed to has already written its own, and removing it on the way out
+  // would leave the page saying nothing is running while something is.
+  let handedOver = false;
   try {
     let n = 0;
     while (rounds === 0 || n < rounds) {
@@ -903,11 +929,21 @@ export async function runLoop({
       if (r.stop) { runner.say(`runner exit on STOP (remove ${runner.paths.stop} before the next start)`); return 0; }
       if (r.once) { runner.say('once: exiting'); return 0; }
       runner.say(`round ${n} done (${r.ran} ran)`);
+      // `mc run --update`, read where STOP is read: between rounds, with no
+      // session in flight and nothing half-done. runner.json is cleared before
+      // the new runner is started rather than after, so the two never race for
+      // the same file.
+      if (runner.updateRequested()) {
+        runner.clearRunner();
+        const handed = await (deps.handOver || handOver)({ paths: runner.paths, deps, say: runner.say });
+        if (handed.ok) { handedOver = true; return 0; }
+        runner.markRunner();
+      }
       if (r.ran === 0 && (rounds === 0 || n < rounds)) await deps.sleep(idleSleepMs);
     }
     runner.say(`runner exit after ${rounds} round(s)`);
     return 0;
   } finally {
-    runner.clearRunner();
+    if (!handedOver) runner.clearRunner();
   }
 }
