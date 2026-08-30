@@ -789,3 +789,57 @@ describe('a batch lands in order, or falls back one by one', () => {
     } finally { fx.cleanup(); }
   });
 });
+
+/**
+ * One merge round at a time — the invariant, asserted rather than assumed.
+ *
+ * Two rounds writing to one repository at the same minute is not a git
+ * problem: git merges the text fine. What breaks is that each one's "green"
+ * was measured against a main the other has already moved. Martin,
+ * 2026-08-30: *"Endast en instans mc merge åt gången. Det förhindrar
+ * parallell skrivning."*
+ *
+ * Two leases carry it, and they are separate on purpose. The repository lease
+ * is per repository; the suite right is per machine. Neither blocks git — they
+ * refuse `mc`, and the refusal is the whole mechanism.
+ */
+describe('one round at a time', () => {
+  it('a second round on the same repository is refused by name, and merges nothing', async () => {
+    const fx = fixture();
+    try {
+      // Somebody else is already holding it.
+      claimLease({
+        repoPath: fx.repoPath, errand: 'merge round for #401',
+        holder: { name: 'icon-assets', kind: 'work-area' }, ownerPid: process.pid, root: fx.mcHome,
+      });
+      const report = await fx.run();
+      assert.equal(report.ok, false);
+      assert.equal(report.stopped_at, 'lease');
+      assert.match(report.reason, /held by icon-assets/u);
+      assert.match(report.reason, /merge round for #401/u, 'and what for');
+      assert.equal(report.merged, false);
+      assert.equal(report.gate, null, 'it stops before measuring anything');
+    } finally { fx.cleanup(); }
+  });
+
+  it('the round takes the lease under its own pid, so a killed round is reapable', async () => {
+    // A round that is killed runs no handler. The pid in the lease is what
+    // lets the next claim tell "somebody is working" from "somebody died".
+    const fx = fixture();
+    try {
+      await fx.run();
+      const log = readFileSync(join(fx.mcHome, 'repo-leases', 'leases.log'), 'utf8');
+      assert.match(log, new RegExp(`claim.*pid=${process.pid}`, 'u'));
+    } finally { fx.cleanup(); }
+  });
+
+  it('gives the lease back whatever happened, so the next round is not blocked', async () => {
+    for (const broken of [false, true]) {
+      const fx = fixture(broken ? { gate: async () => ({ ok: false, stopped_at: 'red', reason: '1 red', pr: { base: 'main' } }) } : {});
+      try {
+        await fx.run();
+        assert.equal(readLease(fx.repoPath, { root: fx.mcHome }).held, false, `lease left held (broken=${broken})`);
+      } finally { fx.cleanup(); }
+    }
+  });
+});
