@@ -228,7 +228,7 @@ export const UNPLANNED_SHOWN = 12;
  * like any other: opening it is what creates the folder.
  */
 export function projectsSection({
-  plans = [], areas = [], rows = [], openPrs = [], live = [], detail = {},
+  plans = [], areas = [], rows = [], openPrs = [], live = [], detail = () => ({}),
   repoOrder = [], shown = UNPLANNED_SHOWN,
 } = {}) {
   const lastRun = {};
@@ -285,7 +285,6 @@ export function projectsSection({
         live: live.includes(area.name),
         last: last ? { ts: last.ts, kind: last.kind, pr: last.pr, note: last.note } : null,
         activity_ms: Math.max(Number(area.mtime_ms) || 0, Number.isNaN(ran) ? 0 : ran),
-        ...(detail[area.name] || {}),
       };
     })
     .sort((a, b) => (Number(b.live) - Number(a.live))
@@ -295,7 +294,12 @@ export function projectsSection({
   let number = 0;
   for (const project of projects) { number += 1; project.number = number; }
   const drawn = orphans.slice(0, Math.max(0, shown));
-  for (const orphan of drawn) { number += 1; orphan.number = number; }
+  // `detail` is asked here and nowhere else, of the rows that are actually
+  // drawn. It is two `git` calls per folder, and it was being paid for all of
+  // them: 81 folders on 2026-08-30, which was 15 s of the page's 8 s — most of
+  // it for rows the page then did not print. The cap turned a slow section into
+  // a wasteful one, so the reading follows the cap.
+  for (const orphan of drawn) { number += 1; orphan.number = number; Object.assign(orphan, detail(orphan.name)); }
 
   const repos = [];
   for (const project of projects) {
@@ -322,9 +326,10 @@ export function projectsSection({
 
 /**
  * The two facts an unplanned workarea is judged by, asked of git — how much
- * is uncommitted, and when it was last committed to. Asked only of the areas
- * with no plan: they are the minority, and the rest have a plan that says
- * everything a row needs.
+ * is uncommitted, and when it was last committed to. Asked one folder at a
+ * time, of the few the section actually draws: it is two `git` calls each, and
+ * paying them for all 81 folders under `~/mc` was 15 s of an 8 s page — most
+ * of it for rows nothing printed.
  *
  * Whether the branch's content is already on main is deliberately not here:
  * `git merge-tree` is another process per area, and the page is offline and
@@ -489,7 +494,6 @@ export async function collectPage({
   const live = liveAreas(run);
   const liveNames = live.map((item) => item.name);
   const areas = readAreas(root);
-  const planned = new Set(plans.map((plan) => plan.project));
   return {
     now: nowSection({
       runner: readJson(join(root, 'runner', 'runner.json')),
@@ -507,7 +511,7 @@ export async function collectPage({
     projects: projectsSection({
       plans, areas, rows, openPrs: prs.prs, live: liveNames,
       repoOrder: repos.map((repo) => repo.name),
-      detail: readUnplanned(root, areas.filter((area) => !planned.has(area.name)), git),
+      detail: (name) => readUnplanned(root, areas.filter((area) => area.name === name), git)[name] || {},
     }),
     caches: { fresh, plans: sources, prs: { fetched: prs.fetched, age_seconds: prs.age_seconds, count: prs.prs.length } },
     notes,

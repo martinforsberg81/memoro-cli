@@ -309,7 +309,7 @@ describe('PROJECTS', () => {
    * whether anything would be lost by removing it by hand.
    */
   it('puts a workarea with no project under its own heading, numbered after the rest', () => {
-    const projects = projectsFixture({ detail: { 'ui-fixes': { uncommitted: 3, last_commit: '2026-08-20' } } });
+    const projects = projectsFixture({ detail: (name) => (name === 'ui-fixes' ? { uncommitted: 3, last_commit: '2026-08-20' } : {}) });
     assert.deepEqual(projects.unplanned.shown.map((area) => [area.number, area.name]), [[5, 'ui-fixes']]);
     const orphan = projects.unplanned.shown[0];
     assert.equal(orphan.live, true, 'live or not, it is still nobody’s project');
@@ -327,6 +327,15 @@ describe('PROJECTS', () => {
     assert.deepEqual(projects.unplanned.shown.map((area) => area.name), ['old-00', 'old-01', 'old-02']);
     assert.equal(projects.unplanned.more, 17);
     assert.equal(projects.unplanned.count, 20);
+  });
+
+  // Two `git` calls per folder, and they were paid for all 81 folders under
+  // `~/mc` — 15 s of an 8 s page, most of it for rows the cap then dropped.
+  it('asks git about the orphans it draws, and no others', () => {
+    const asked = [];
+    const many = Array.from({ length: 20 }, (_, n) => ({ name: `old-${String(n).padStart(2, '0')}`, mtime_ms: 1000 - n }));
+    projectsSection({ plans: [], areas: many, shown: 3, detail: (name) => { asked.push(name); return {}; } });
+    assert.deepEqual(asked, ['old-00', 'old-01', 'old-02']);
   });
 
   it('numbers through both lists, so the page has no two rows with one number', () => {
