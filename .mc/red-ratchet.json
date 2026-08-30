@@ -1,8 +1,8 @@
 {
   "schema": "mc-red-ratchet",
   "version": 1,
-  "note": "The standing red set on main. It is a statement about main, not a gate: a red name that is not in this list is REPORTED loudly by the round and written to the round log, and does not refuse anybody’s change. The one thing that does stop a round is a change that REMOVES a name from this list while that test is still red — taking a name out is the claim that it came good. Adding one is raising the floor and is meant to be reviewed as such. See docs/mc-command-matrix.md. 2026-08-30, re-seeded from a full suite run: 70 → 32. Of the 38 that left, 14 went with the session verbs whose tests were deleted and cannot come back; 11 were never broken at all (a fixture compared /var against its /private symlink); 13 are broker tests that were red only because the local codex install was missing its platform binary — those can go red again on a machine without codex, and under this file’s rules that is a warning about main, not a refusal.",
-  "standing_red": 32,
+  "note": "The standing red set on main. It is a statement about main, not a gate: a red name that is not in this list is REPORTED loudly by the round and written to the round log, and does not refuse anybody’s change. The one thing that does stop a round is a change that REMOVES a name from this list while that test is still red — taking a name out is the claim that it came good. Adding one is raising the floor and is meant to be reviewed as such. See docs/mc-command-matrix.md. 2026-08-30, re-seeded from a full suite run: 70 → 32. Of the 38 that left, 14 went with the session verbs whose tests were deleted and cannot come back; 11 were never broken at all (a fixture compared /var against its /private symlink); 13 are broker tests that were red only because the local codex install was missing its platform binary — those can go red again on a machine without codex, and under this file’s rules that is a warning about main, not a refusal. Seven file-level names are back after the gate refused to let them go: a full run names those failures per test, a selected run names them per file, and both spellings are true. The floor carries both, which is why it has always been larger than the count of distinct failures.",
+  "standing_red": 39,
   "names": [
     "C1 release graph contains every transitive local source edge",
     "Claude accepts a V1 owner id and rejects a forged GitHub socket before readiness",
@@ -35,6 +35,13 @@
     "requires explicit replacement after a failed generation without a handle",
     "resume uses the one durable handle and never creates a replacement",
     "starts the exact GitHub socket before the tool and closes it with the runtime",
-    "switch requires the exact bounded handoff digest"
+    "switch requires the exact bounded handoff digest",
+    "tests/mc/owned-resource-cleanup.test.js",
+    "tests/mc/session-lifecycle-v1.test.js",
+    "tests/mc/session-runtime-v1.test.js",
+    "tests/runtime/certified-execution/launch-plan.test.js",
+    "tests/runtime/session-host/runtime-host.test.js",
+    "tests/runtime/session-host/socket-e2e.test.js",
+    "tests/runtime/session-host/terminal-screen.test.js"
   ]
 }
