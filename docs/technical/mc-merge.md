@@ -57,8 +57,7 @@ before `gh` is asked anything
 Unchanged, deliberately: `mc merge` calls the same `gate()` in `repo.js`, which
 calls the same `runGate` and `runMergeRound`. The round, its lease, its two
 throwaway worktrees, the by-name comparison of red sets at every depth, the
-deploy pull, the freshening of open branches and the merge-log line are all
-described where they live —
+deploy pull and the merge-log line are all described where they live —
 [`src/mc/repo-merge.js`](../../src/mc/repo-merge.js),
 [`src/mc/repo-gate.js`](../../src/mc/repo-gate.js) and
 [`docs/mc-command-matrix.md`](../mc-command-matrix.md). There is still no flag
@@ -89,8 +88,8 @@ one thing this form must never do is land a file the suite would have had an
 opinion about.
 
 What it does *not* do is as much of the design as what it does: no lease, no
-worktree, no suite, no model, no deploy pull, no branch freshening, and no line
-in the repository's human merge log. A docs merge is a `gh` call with a check in
+worktree, no suite, no model, no deploy pull, and no line in the repository's
+human merge log. A docs merge is a `gh` call with a check in
 front of it.
 
 It does leave a line in the round log
@@ -201,3 +200,43 @@ processes and `tapTotals` kept the last summary it saw.
 
 Both are fixed: the totals are summed, and memoro declares `select`. A
 documentation diff there selects 6 files where it selected 332.
+
+## One pull request, and nothing else
+
+A round has exactly one subject: the pull request (or the batch) named on the
+command line. It touches no other branch.
+
+Until 2026-08-30 a green round ended by freshening **every open pull request on
+the repository** — merging the new main into each, pushing, and writing a line
+into its owner's inbox (A6). It came from a real measurement and it was still
+the wrong shape. Every round reported that two unrelated six-day-old pull
+requests conflicted with main; the fact was true and it was about those
+branches, restated by every round that had nothing to do with them, until it
+read as though the merge that had just succeeded had gone wrong.
+
+It was redundant besides. The gate merges the current base *into the candidate*
+before measuring, so every pull request is already measured as the state it
+would leave behind. A branch that has fallen behind finds out in its own round,
+which is the round that can do something about it — and a conflict needs a
+person either way. All the sweep bought was learning about it earlier, at the
+price of pushing to branches and messaging people from a round about something
+else.
+
+The one freshen left is inside a batch: after each landing, the just-made main
+is merged into the next branch *in the batch*, because the squash makes it
+unmergeable to the forge otherwise. Every branch it touches was named on the
+command line.
+
+## One round at a time
+
+Two leases, and between them a merge round cannot overlap another:
+
+- **the repository lease** — one round per repository. A second `mc merge` on
+  the same repository is refused by name, with who holds it and for what.
+- **the suite right** — one full suite on this machine, whoever holds it. Two
+  rounds on *different* repositories therefore cannot both be measuring at
+  once; the second stops at `suite-lease`.
+
+Both carry the holder's pid, so a round that was killed rather than finished
+is reaped by the next claim instead of blocking forever. Neither blocks git:
+they refuse `mc`, and nothing else.

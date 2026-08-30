@@ -220,10 +220,6 @@ function normalise(entry, env) {
   return {
     prepare: entry.prepare ?? null,
     prepare_why: entry.prepare_why ?? null,
-    // The branch-freshening step's test (A6): what this repository calls
-    // "run what my change affects". No declaration, no run — the freshen
-    // says so instead of guessing a script name.
-    affected: entry.affected ?? null,
     // How this repository lists the test files a change reaches: a command
     // that prints JSON carrying a `files` array, run in the candidate
     // worktree. Declaring it turns the round from two full suites into the
