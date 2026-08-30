@@ -41,6 +41,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
+import { cliFailing, cliRows as cliCollect, renderCliSections } from './helper-cli-collect.js';
 import { workRoot } from './paths.js';
 
 export const DAY_MS = 24 * 60 * 60 * 1000;
@@ -149,25 +150,50 @@ export function parseState(text) {
   return state;
 }
 
-export function digestName(now) {
-  return `errors-${now.toISOString().slice(0, 10)}.md`;
+/** The repositories the helper collects for, and the order it names them in. */
+export const HELPER_REPOS = Object.freeze(['memoro', 'memoro-cli']);
+
+/**
+ * One digest per repository, named for it.
+ *
+ * `errors-<date>.md` was the name while memoro was the only thing with a
+ * production to read. memoro-cli has one too — this machine — so the name
+ * carries the repository, and the two deltas cannot end up measured against
+ * each other's baseline.
+ */
+export function digestName(now, repo = 'memoro') {
+  return `errors-${repo}-${now.toISOString().slice(0, 10)}.md`;
 }
 
 /**
  * The newest digest that is not the one about to be written. Two runs on the
  * same day therefore both measure against yesterday, instead of the second
  * comparing today's file with itself and reporting nothing new.
+ *
+ * memoro also accepts the old unprefixed `errors-<date>.md`. Renaming a file
+ * whose entire purpose is to be *the previous one* would otherwise throw away
+ * a day of delta: the first run after the rename would find no baseline and
+ * report an ordinary Tuesday's fingerprints as all new. The fallback costs
+ * four lines and stops mattering once no unprefixed digest is left.
  */
-export function previousDigest(dir, exclude) {
+export function previousDigest(dir, exclude, repo = 'memoro') {
+  const own = new RegExp(`^errors-${repo}-\\d{4}-\\d{2}-\\d{2}\\.md$`, 'u');
+  const legacy = /^errors-\d{4}-\d{2}-\d{2}\.md$/u;
   let names = [];
   try {
     names = readdirSync(dir)
-      .filter((name) => /^errors-\d{4}-\d{2}-\d{2}\.md$/u.test(name) && name !== exclude)
-      .sort();
+      .filter((name) => name !== exclude && (own.test(name) || (repo === 'memoro' && legacy.test(name))))
+      // By date, not by name: `errors-memoro-2026-08-29.md` and
+      // `errors-2026-08-30.md` sort wrongly against each other as strings.
+      .sort((a, b) => dateIn(a).localeCompare(dateIn(b)));
   } catch { return null; }
   const name = names.at(-1);
   if (!name) return null;
   try { return { name, text: readFileSync(join(dir, name), 'utf8') }; } catch { return null; }
+}
+
+function dateIn(name) {
+  return /(\d{4}-\d{2}-\d{2})\.md$/u.exec(name)?.[1] || '';
 }
 
 /* -------------------------------------------------------------------- delta */
@@ -465,9 +491,17 @@ export async function collectHelper({
   script = runScriptDefault,
   getJson = getJsonDefault,
   git = runGitDefault,
+  // Which repository's production to read. memoro's is five remote sources;
+  // memoro-cli's is this machine (helper-cli-collect.js). Same delta, same
+  // state block, same threshold — one notion of "new since yesterday".
+  repo = 'memoro',
+  cli = cliCollect,
 } = {}) {
+  if (repo === 'memoro-cli') {
+    return collectCli({ env, now, since, threshold, cli });
+  }
   const dir = intakeDir(env);
-  const name = digestName(now);
+  const name = digestName(now, repo);
   const windowStart = since ? new Date(since) : new Date(now.getTime() - DAY_MS);
   const notes = [];
 
@@ -510,14 +544,14 @@ export async function collectHelper({
     : { error: deployRaw.error };
   const health = pingRaw.ok ? healthState(pingRaw.json) : { error: pingRaw.error };
 
-  const previous = previousDigest(dir, name);
+  const previous = previousDigest(dir, name, repo);
   const delta = computeDelta({
     fingerprints: errors.rows, failing: failingConditions({ deploy, health }), previous, threshold,
   });
 
   const text = renderDigest({
     now, since: windowStart, previous, threshold, delta,
-    errors, analysis, provider, health, deploy, mainCommit, notes,
+    errors, analysis, provider, health, deploy, mainCommit, notes, repo,
   });
   mkdirSync(dir, { recursive: true });
   mkdirSync(proposalsDir(env), { recursive: true });
@@ -526,6 +560,66 @@ export async function collectHelper({
   return {
     path,
     text,
+    repo,
     data: { since: windowStart, previous, delta, errors, analysis, provider, health, deploy, mainCommit, notes },
+  };
+}
+
+/**
+ * The memoro-cli digest: same delta, same state block, same file shape.
+ *
+ * It reads no network and holds no credential — everything it needs is
+ * already on this disk, written by mc about itself. That is why it is the
+ * cheap half and why it can run every day without asking anybody for a token.
+ */
+async function collectCli({ env, now, since, threshold, cli = cliCollect }) {
+  const dir = intakeDir(env);
+  const repo = 'memoro-cli';
+  const name = digestName(now, repo);
+  const windowStart = since ? new Date(since) : new Date(now.getTime() - DAY_MS);
+  const measured = cli({ since: windowStart, now });
+  const failing = cliFailing({ open: measured.open, lastRun: measured.lastRun, now });
+  const previous = previousDigest(dir, name, repo);
+  const delta = computeDelta({ fingerprints: measured.rows, failing, previous, threshold });
+
+  const out = [];
+  out.push(`# mc itself — ${stamp(now)}`, '');
+  out.push(previous
+    ? `Baseline: \`${previous.name}\`. Window: since ${stamp(windowStart)}.`
+    : `First digest for ${repo} — no baseline, so nothing is called new. Window: since ${stamp(windowStart)}.`);
+  out.push('', 'memoro-cli has no server to ask. Its production is this machine, and it records',
+    'what happens in `logs/mc.log`, `gate-rounds.jsonl`, `repo-leases/leases.log` and',
+    '`runner/log/runs.tsv`. This is those four, counted.', '');
+
+  out.push('## New since the last digest', '');
+  if (delta.first) out.push('_first digest — no baseline_');
+  else if (!delta.fingerprints.length && !delta.failing.length) out.push('_nothing new_');
+  else {
+    for (const f of delta.fingerprints) out.push(`- ${f.loud ? '!' : '·'} \`${f.fingerprint}\` — ${f.count}× ${f.status} — ${clip(f.message)}`);
+    for (const one of delta.failing) out.push(`- ! \`${one}\` — failing now, and not in the last digest`);
+    out.push('', `\`!\` = a new fingerprint at or above ${threshold} hits in the window, or a condition that has just started failing.`);
+  }
+  out.push('');
+  out.push(...renderCliSections({ cli: measured, threshold }));
+  out.push('## Failing now', '');
+  if (!failing.length) out.push('_nothing_');
+  else for (const one of failing) out.push(`- \`${one}\``);
+  out.push('');
+  out.push(renderState({ fingerprints: measured.rows, failing }));
+
+  const text = `${out.join('\n')}\n`;
+  mkdirSync(dir, { recursive: true });
+  mkdirSync(proposalsDir(env), { recursive: true });
+  const path = join(dir, name);
+  writeFileSync(path, text);
+  return {
+    path,
+    text,
+    repo,
+    data: {
+      since: windowStart, previous, delta, notes: measured.notes,
+      errors: { rows: measured.rows, byStatus: measured.byStatus },
+      open: measured.open, failing, lastRun: measured.lastRun,
+    },
   };
 }

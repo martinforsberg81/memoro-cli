@@ -283,3 +283,76 @@ describe('mc helper --intake', () => {
     assert.equal(line, '0 new fingerprints');
   });
 });
+
+/**
+ * Both repositories, every time.
+ *
+ * memoro's production is the deployed service; memoro-cli's is this machine.
+ * For a week only the first was collected, so every failure in mc itself was
+ * found by a person noticing it — and sixteen gate rounds stopping on a held
+ * lease in one day was a feeling rather than a number.
+ */
+describe('mc helper --intake — both repositories', () => {
+  const both = async (argv, turn = TURN(), over = {}) => {
+    const repos = [];
+    const turnedRepos = [];
+    const stdout = sink();
+    const stderr = sink();
+    const code = await run(argv, {
+      stdout,
+      stderr,
+      collect: async (options) => {
+        repos.push(options.repo);
+        return { ...RESULT({}), repo: options.repo, path: `/tmp/mc/intake/errors-${options.repo}-2026-08-29.md` };
+      },
+      turn: async (options) => { turnedRepos.push(options.repo); return turn; },
+      role: () => ROLE,
+      mkdir: () => {},
+      ...over,
+    });
+    return { code, repos, turnedRepos, stdout: stdout.text, stderr: stderr.text };
+  };
+
+  it('--collect writes a digest for each repository, memoro first', async () => {
+    const result = await both(['--collect']);
+    assert.equal(result.code, 0);
+    assert.deepEqual(result.repos, ['memoro', 'memoro-cli']);
+    assert.match(result.stdout, /errors-memoro-2026-08-29\.md/u);
+    assert.match(result.stdout, /errors-memoro-cli-2026-08-29\.md/u);
+  });
+
+  it('runs one turn per digest, each told which repository it is reading', async () => {
+    const result = await both(['--intake']);
+    // `repo:` is the frontmatter key everything downstream routes on. A
+    // single turn over both digests would have to guess it.
+    assert.deepEqual(result.turnedRepos, ['memoro', 'memoro-cli']);
+    assert.match(result.stdout, /memoro: 0 proposals?|memoro: no proposal/u);
+    assert.match(result.stdout, /memoro-cli: /u);
+  });
+
+  it('a turn that fails does not cost the other repository its turn', async () => {
+    let call = 0;
+    const result = await both(['--intake'], TURN(), {
+      turn: async (options) => {
+        call += 1;
+        return call === 1
+          ? { ok: false, reason: 'quota', note: 'weekly limit reached', wrote: [], waiting: [] }
+          : { ...TURN(), repo: options.repo };
+      },
+    });
+    assert.equal(result.code, 1, 'the failure is still reported in the exit code');
+    assert.match(result.stderr, /memoro: the intake turn did not finish — weekly limit reached/u);
+    assert.match(result.stdout, /memoro-cli: /u, 'the second repository still ran');
+  });
+
+  it('names the repository on every stderr line, so a failure can be attributed', async () => {
+    const result = await both(['--collect'], TURN(), {
+      collect: async (options) => ({
+        ...RESULT({}), repo: options.repo, path: `/tmp/${options.repo}.md`,
+        data: { ...RESULT({}).data, notes: ['wrangler is not logged in'] },
+      }),
+    });
+    assert.match(result.stderr, /mc: memoro: wrangler is not logged in/u);
+    assert.match(result.stderr, /mc: memoro-cli: wrangler is not logged in/u);
+  });
+});

@@ -60,10 +60,18 @@ const clip = (text, max = 110) => {
  * it would make the turn guess — then the ground it judges against: what is
  * already planned, what was already closed, and what is already proposed.
  */
-export function helperPrompt({ digestPath, digestText, proposalsPath = proposalsDir(), projectLog = null, plans = [], proposals = [], now = new Date() }) {
+export function helperPrompt({ digestPath, digestText, proposalsPath = proposalsDir(), projectLog = null, plans = [], proposals = [], repo = 'memoro', now = new Date() }) {
   const date = now.toISOString().slice(0, 10);
   const out = [
     `Today is ${date}. Below is today's digest, \`${digestPath}\`, and the ground to judge it against.`,
+    // The digest is one repository's, and `repo:` is the frontmatter key
+    // everything downstream routes on. A turn left to infer it from the
+    // contents would get it right most days, and the days it did not would be
+    // a proposal filed against the wrong system.
+    `It is **${repo}**'s digest, so every proposal you write has \`repo: ${repo}\` in its frontmatter.`,
+    repo === 'memoro-cli'
+      ? 'memoro-cli has no server: its production is this machine, and the digest below counts what mc recorded about itself — invocations that failed, gate rounds that stopped or died, leases reaped from holders that went away, runner steps that did not succeed.'
+      : 'memoro\'s production is the deployed service, and the digest below is what it reported.',
     'Decide what — if anything — is worth doing about it, and write the proposals your role describes',
     `into \`${proposalsPath}\`, named \`${date}-<slug>.md\`. Write no file at all if nothing warrants one,`,
     'and say in one line what you decided either way. Then stop.',
@@ -175,6 +183,7 @@ export async function runHelperTurn({
   digestPath,
   digestText,
   model = null,
+  repo = 'memoro',
   minutes = DEFAULT_TURN_MINUTES,
   deps = {},
 } = {}) {
@@ -195,7 +204,7 @@ export async function runHelperTurn({
   const ground = await (deps.ground || helperGround)({ env });
   const prompt = helperPrompt({
     digestPath, digestText, proposalsPath: proposals, projectLog: ground.projectLog, plans: ground.plans,
-    proposals: [...before].map((file) => ({ file, title: '' })), now,
+    proposals: [...before].map((file) => ({ file, title: '' })), repo, now,
   });
   const instructions = [await (deps.profile || (() => loadProfile({ env })))(), role.overlay].filter(Boolean).join('\n\n---\n\n');
   const args = headlessArgs({

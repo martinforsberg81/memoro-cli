@@ -20,7 +20,7 @@
 import { mkdirSync } from 'node:fs';
 
 import {
-  collectHelper, DEFAULT_LIMIT, DEFAULT_THRESHOLD, describeDigest, helperDir, proposalsDir,
+  collectHelper, DEFAULT_LIMIT, DEFAULT_THRESHOLD, describeDigest, helperDir, HELPER_REPOS, proposalsDir,
   unreadableSections,
 } from '../helper-collect.js';
 import { describeTurn, runHelperTurn } from '../helper-turn.js';
@@ -65,37 +65,67 @@ export async function run(argv, deps = {}) {
     return 2;
   }
 
-  const t0 = Date.now();
-  const result = await (deps.collect || collectHelper)({ since, limit, threshold });
-  const seconds = ((Date.now() - t0) / 1000).toFixed(1);
-  const { delta, errors, notes } = result.data;
-  stdout.write(`mc: ${result.path} (${seconds}s) — ${describeDigest({ delta, errors })}\n`);
-
-  for (const note of notes) stderr.write(`mc: ${note}\n`);
-  for (const [section, source] of unreadableSections(result.data)) {
-    stderr.write(`mc: ${section} not read — ${source.error}\n`);
+  // Both repositories, every time. memoro's production is five remote
+  // sources; memoro-cli's is this machine. For a week only the first was
+  // read, which is why every memoro-cli failure was found by a person
+  // noticing it — and why sixteen merge rounds stopping on a lease in one day
+  // was a feeling rather than a number.
+  //
+  // Sequential, not concurrent: the memoro half spends minutes on wrangler
+  // and the network, and interleaving the two streams of stderr would make
+  // the half that failed impossible to attribute. The cli half costs
+  // milliseconds and reads nothing but this disk.
+  const results = [];
+  let worst = 0;
+  for (const repo of HELPER_REPOS) {
+    const t0 = Date.now();
+    const result = await (deps.collect || collectHelper)({ since, limit, threshold, repo });
+    const seconds = ((Date.now() - t0) / 1000).toFixed(1);
+    const { delta, errors, notes = [] } = result.data;
+    stdout.write(`mc: ${result.path} (${seconds}s) — ${describeDigest({ delta, errors })}\n`);
+    for (const note of notes) stderr.write(`mc: ${repo}: ${note}\n`);
+    for (const [section, source] of unreadableSections(result.data)) {
+      stderr.write(`mc: ${repo}: ${section} not read — ${source.error}\n`);
+    }
+    // The repository is carried beside the result, not read back out of it:
+    // the collector echoes it, but a caller that trusted the echo printed
+    // `undefined:` in front of every line the moment a stub did not.
+    results.push({ repo, result });
   }
   if (flags.collect) return 0;
 
-  // The turn. A digest with nothing new in it is still read — "nothing new"
-  // is a judgement about fingerprints, and a condition that has been failing
+  // One turn per digest. A digest with nothing new in it is still read —
+  // "nothing new" is a judgement about fingerprints, and a condition failing
   // for three days is exactly what a fresh reader should still propose
   // fixing. Zero proposals is the answer on a quiet day, not a failure.
-  const t1 = Date.now();
-  const turn = await (deps.turn || runHelperTurn)({
-    digestPath: result.path, digestText: result.text, model: flags.model || null,
-  });
-  const took = ((Date.now() - t1) / 1000).toFixed(1);
-  for (const note of turn.groundNotes || []) stderr.write(`mc: ${note}\n`);
-  if (!turn.ok) {
-    stderr.write(`mc: the intake turn did not finish — ${turn.note || turn.reason}\n`);
-    if (turn.stderr?.trim()) stderr.write(`mc: ${turn.stderr.trim().split('\n').at(-1)}\n`);
-    return 1;
+  //
+  // Per digest and not one turn over both: a single reader would have to
+  // guess which repository each finding belongs to, and `repo:` is the
+  // frontmatter key everything downstream routes on. A turn that fails does
+  // not stop the other — losing memoro-cli's proposals because wrangler was
+  // unauthenticated is the exact failure shape this file is written against.
+  let wrote = 0;
+  for (const { repo, result } of results) {
+    const t1 = Date.now();
+    const turn = await (deps.turn || runHelperTurn)({
+      digestPath: result.path, digestText: result.text, model: flags.model || null, repo,
+    });
+    const took = ((Date.now() - t1) / 1000).toFixed(1);
+    for (const note of turn.groundNotes || []) stderr.write(`mc: ${note}\n`);
+    if (!turn.ok) {
+      stderr.write(`mc: ${repo}: the intake turn did not finish — ${turn.note || turn.reason}\n`);
+      if (turn.stderr?.trim()) stderr.write(`mc: ${turn.stderr.trim().split('\n').at(-1)}\n`);
+      worst = 1;
+      continue;
+    }
+    stdout.write(`mc: ${repo}: ${describeTurn(turn)} (${took}s, ${turn.tool} ${turn.model})\n`);
+    for (const p of turn.wrote) stdout.write(`mc:   ${p.file} — ${p.title}\n`);
+    wrote += turn.wrote.length;
   }
-  stdout.write(`mc: ${describeTurn(turn)} (${took}s, ${turn.tool} ${turn.model})\n`);
-  for (const p of turn.wrote) stdout.write(`mc:   ${p.file} — ${p.title}\n`);
-  if (turn.wrote.length) stdout.write(`mc: read them at the next brief — ${proposalsDir()}\n`);
-  return 0;
+  // Only when there is something to read. A quiet day that still points at
+  // the proposals directory is a line that trains people to ignore the line.
+  if (wrote) stdout.write(`mc: read them at the next brief — ${proposalsDir()}\n`);
+  return worst;
 }
 
 /**

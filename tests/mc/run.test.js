@@ -534,17 +534,24 @@ test('the helper runs once per calendar day, logged as kind helper with helper i
   const runner = createRunner({ deps: f.deps });
   await runner.round();
   const first = runRows(f.files).filter((r) => r.kind === 'helper');
-  assert.equal(first.length, 1);
+  // One row per repository: memoro's production is the deployed service,
+  // memoro-cli's is this machine, and a single row could not say which of
+  // them failed.
+  assert.equal(first.length, 2);
   assert.deepEqual(
-    { name: first[0].name, exit: first[0].exit, pr: first[0].pr, note: first[0].note },
-    { name: 'helper', exit: '0', pr: '-', note: 'success,1-proposals' },
+    first.map((r) => ({ name: r.name, exit: r.exit, pr: r.pr, note: r.note })),
+    [
+      { name: 'helper', exit: '0', pr: '-', note: 'memoro,success,1-proposals' },
+      { name: 'helper', exit: '0', pr: '-', note: 'memoro-cli,success,1-proposals' },
+    ],
   );
   assert.equal(first[0].turns, '3', 'the turn is a model call and its usage is logged like a step');
   assert.equal(first[0].cache_read, '30');
+  assert.deepEqual(f.calls.collects.map((c) => c.repo), ['memoro', 'memoro-cli']);
 
   await runner.round();
-  assert.equal(runRows(f.files).filter((r) => r.kind === 'helper').length, 1, 'a second round the same day does not run it again');
-  assert.equal(f.calls.collects.length, 1);
+  assert.equal(runRows(f.files).filter((r) => r.kind === 'helper').length, 2, 'a second round the same day does not run it again');
+  assert.equal(f.calls.collects.length, 2);
   assert.ok(f.log.some((line) => /already ran today/u.test(line)) === false, 'the gate is silent — nobody reads a skip line');
 });
 
@@ -556,7 +563,7 @@ test('the helper waits for 05:00Z, and runs in the first round after it', async 
 
   const late = fixture({ now: '2026-08-29T05:00:00Z' });
   await createRunner({ deps: late.deps }).round();
-  assert.equal(late.calls.collects.length, 1);
+  assert.equal(late.calls.collects.length, 2, 'both repositories, once the day has started');
 });
 
 test('yesterday\'s helper row does not count as today\'s', async () => {
@@ -564,8 +571,8 @@ test('yesterday\'s helper row does not count as today\'s', async () => {
     + '2026-08-28T06:00:00Z\thelper\thelper\t0\t120\t-\t3\t-\t-\t-\t-\t-\tsuccess,0-proposals\n';
   const f = fixture({ runs: yesterday });
   await createRunner({ deps: f.deps }).round();
-  assert.equal(f.calls.collects.length, 1);
-  assert.equal(runRows(f.files).filter((r) => r.kind === 'helper').length, 2);
+  assert.equal(f.calls.collects.length, 2);
+  assert.equal(runRows(f.files).filter((r) => r.kind === 'helper').length, 3, 'yesterday\'s one row plus today\'s two');
 });
 
 /**
@@ -580,10 +587,31 @@ test('a failed collect is logged and never retried within the day', async () => 
   assert.equal(row.note, 'collect-failed');
   assert.equal(row.exit, '1');
   assert.equal(f.calls.turns.length, 0, 'no turn is run over a digest that was never written');
-  assert.ok(f.log.some((line) => /collect step failed — wrangler is not logged in/u.test(line)));
+  assert.ok(f.log.some((line) => /memoro: the collect step failed — wrangler is not logged in/u.test(line)));
 
   await runner.round();
-  assert.equal(f.calls.collects.length, 1);
+  assert.equal(f.calls.collects.length, 2, 'both were tried once; neither is retried today');
+});
+
+/**
+ * One repository failing must not silence the other. memoro's collect needs
+ * wrangler and the network; memoro-cli's reads four files on this disk. They
+ * do not share a failure domain, and the digest has always reported per
+ * section rather than failing as a unit for exactly that reason.
+ */
+test('a repository whose collect throws does not cost the other its digest', async () => {
+  const f = fixture({
+    collect: async (options) => {
+      if (options.repo === 'memoro') throw new Error('wrangler is not logged in');
+      return { path: '/w/intake/errors-memoro-cli-2026-08-29.md', text: '# mc itself', repo: 'memoro-cli', data: { delta: { first: true, fingerprints: [], failing: [] }, errors: { rows: [] }, notes: [] } };
+    },
+  });
+  await createRunner({ deps: f.deps }).round();
+  const rows = runRows(f.files).filter((r) => r.kind === 'helper');
+  assert.equal(rows.length, 1, 'the repository that worked still logged its turn');
+  assert.match(rows[0].note, /^memoro-cli,/u);
+  assert.equal(f.calls.turns.length, 1, 'a turn ran over the digest that was written');
+  assert.ok(f.log.some((line) => /memoro: the collect step failed/u.test(line)));
 });
 
 test('a turn that did not finish is logged under its own reason, and still counts as the day\'s run', async () => {
@@ -591,10 +619,10 @@ test('a turn that did not finish is logged under its own reason, and still count
   const runner = createRunner({ deps: f.deps });
   await runner.round();
   const row = runRows(f.files).find((r) => r.kind === 'helper');
-  assert.equal(row.note, 'no-tool');
+  assert.equal(row.note, 'memoro,no-tool');
   assert.equal(row.exit, '1');
   await runner.round();
-  assert.equal(f.calls.collects.length, 1);
+  assert.equal(f.calls.collects.length, 2);
 });
 
 test('--once is one step and no helper', async () => {
