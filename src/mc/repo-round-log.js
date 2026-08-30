@@ -18,6 +18,7 @@
 import { appendFileSync, mkdirSync, readFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 
+import { log, runId } from './logger.js';
 import { mcHome } from './paths.js';
 
 export const ROUND_LOG_SCHEMA = 'mc-gate-round';
@@ -25,6 +26,39 @@ export const ROUND_LOG_VERSION = 1;
 
 export function roundLogPath(root = mcHome()) {
   return join(root, 'gate-rounds.jsonl');
+}
+
+/**
+ * A round, at its beginning.
+ *
+ * The line above says every round writes one line, "merged, stopped, refused
+ * the lease, cut short" — and that was true of every round that *reached its
+ * own end*. On 2026-08-30 two merge rounds were killed from outside, the
+ * first after #11082 had already landed. Neither wrote anything. The file
+ * built to answer "has the gate ever caught anything?" was silent about the
+ * two rounds of that day that went wrong, and the meter that only sees the
+ * case that finishes is the same shape as the meter that only sees the case
+ * that passes.
+ *
+ * So a round announces itself before it does any work, and the pair is the
+ * record: a start with no end is a round that died, and `pid` is how a later
+ * reader proves it rather than guessing from a clock. SIGKILL runs nothing —
+ * there is no line the dying process could have written — so this is the only
+ * shape that can catch it.
+ */
+export function recordRoundStart({ repo, mode = 'merge', prs = [], holder = null }, { root = mcHome(), now = new Date() } = {}) {
+  return append({
+    schema: ROUND_LOG_SCHEMA,
+    version: ROUND_LOG_VERSION,
+    phase: 'start',
+    at: now.toISOString(),
+    repo: basename(String(repo || '')),
+    mode,
+    prs: (prs || []).map(Number).filter(Number.isFinite),
+    holder,
+    pid: process.pid,
+    run: runId(),
+  }, root);
 }
 
 /**
@@ -38,9 +72,16 @@ export function recordRound(report, { mode = 'merge', root = mcHome(), now = new
   const line = {
     schema: ROUND_LOG_SCHEMA,
     version: ROUND_LOG_VERSION,
+    // Named on both halves so a reader never has to infer which it is holding.
+    // Lines written before 2026-08-30 carry no `phase` and are ends: that is
+    // what they were, and back-filling a field into a file nobody can rewrite
+    // is how a log starts lying about its own history.
+    phase: 'end',
     at: report.started_at || now.toISOString(),
     repo: basename(String(report.repo || '')),
     mode,
+    pid: process.pid,
+    run: runId(),
     prs: report.batch?.prs || [Number(report.pr?.number)].filter(Number.isFinite),
     holder: report.holder || null,
     ok: Boolean(report.ok),
@@ -71,13 +112,42 @@ export function recordRound(report, { mode = 'merge', root = mcHome(), now = new
     fixed_names: capped(gate?.fixed),
     baseline_unstable: capped(gate?.ratchet?.baseline_risen),
   };
+  log('gate.round', {
+    repo: line.repo, mode, ok: line.ok, stopped_at: line.stopped_at,
+    prs: line.prs, merged: line.merged, duration_ms: line.duration_ms,
+  });
+  return append(line, root);
+}
+
+/** One line, or null. A line that describes a round must never fail it. */
+function append(line, root) {
   try {
     mkdirSync(root, { recursive: true, mode: 0o700 });
     appendFileSync(roundLogPath(root), `${JSON.stringify(line)}\n`, { mode: 0o600 });
     return line;
   } catch {
-    return null; // the line describes the round; it must never fail it
+    return null;
   }
+}
+
+/**
+ * Rounds that started and never ended, oldest first.
+ *
+ * The join the incident needed: a `start` line whose `run` no `end` line
+ * carries. `pid` is what turns "no end yet" into "died" — a round still
+ * running has a live pid, and one that was killed does not. Asking the
+ * operating system is deliberate: a clock cannot tell a dead round from a
+ * slow one, and a gate round is *supposed* to take half an hour.
+ */
+export function unfinishedRounds(rounds, { alive = (pid) => isAlive(pid) } = {}) {
+  const ended = new Set(rounds.filter((r) => r.phase === 'end' || !r.phase).map((r) => r.run).filter(Boolean));
+  return rounds
+    .filter((r) => r.phase === 'start' && !ended.has(r.run))
+    .map((r) => ({ ...r, verdict: r.pid && alive(r.pid) ? 'running' : 'died' }));
+}
+
+function isAlive(pid) {
+  try { process.kill(pid, 0); return true; } catch (error) { return error?.code === 'EPERM'; }
 }
 
 /** At most this many names in one field; past it, the count of the rest. */
