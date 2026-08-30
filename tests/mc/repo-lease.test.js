@@ -18,6 +18,7 @@ import { describe, it } from 'node:test';
 
 import { git } from './_helpers/git-fixture.js';
 import { addArea, fixture, json, snapshot } from './_helpers/repo-fixture.js';
+import { board as workModel } from './_helpers/board.js';
 import { runMcCli } from './_helpers/mc-cli.js';
 import { leaseLogPath, leasePath, readLease } from '../../src/mc/repo-lease.js';
 import { writeSnapshot } from '../../src/mc/repo-snapshot.js';
@@ -191,20 +192,20 @@ describe('the repository lease', () => {
     } finally { fx.cleanup(); }
   });
 
-  it('nothing else in mc reads it: a held lease changes no other command', () => {
+  it('nothing else in mc reads it: a held lease changes no other command', async () => {
     const fx = fixture({ name: 'repo-lease' });
     addArea(fx, 'alpha', 'alpha');
     try {
-      const before = runMcCli(['status', '--sessions', '--json'], fx.env);
+      const before = await workModel(fx.env);
       runMcCli(['repo', 'claim', 'repo', 'merge round'], fx.env, inArea(fx, 'alpha'));
 
-      // The board says exactly what it said, and says nothing about leases.
-      const after = runMcCli(['status', '--sessions', '--json'], fx.env);
-      assert.equal(after.status, 0);
+      // The work model says exactly what it said, and says nothing about
+      // leases on an area.
+      const after = await workModel(fx.env);
       assert.equal(JSON.stringify(areas(after)), JSON.stringify(areas(before)));
       // Not a text search — the fixture's own path has "lease" in it. The
-      // board's shape is what must be free of the word.
-      assert.equal(JSON.stringify(JSON.parse(after.stdout).areas).includes('"lease"'), false);
+      // area's shape is what must be free of the word.
+      assert.equal(JSON.stringify(after.areas).includes('"lease"'), false);
 
       // And the ordinary work verbs go on working on a held repository.
       const added = runMcCli(['work', 'add', 'beta', fx.dir, 'beta-branch'], fx.env);
@@ -232,10 +233,9 @@ describe('the repository lease', () => {
   });
 });
 
-/** The board's areas with their volatile fields dropped. */
-function areas(result) {
-  const page = JSON.parse(result.stdout);
-  return page.areas.map((area) => ({
+/** The model's areas with their volatile fields dropped. */
+function areas(report) {
+  return report.areas.map((area) => ({
     name: area.name,
     worktrees: area.worktrees,
     running: area.running,

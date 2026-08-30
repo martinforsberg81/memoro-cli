@@ -10,7 +10,6 @@ const activeSources = [
   'src/cli/new.js',
   'src/cli/open.js',
   'src/cli/resume.js',
-  'src/cli/list.js',
   'src/cli/status.js',
   'src/cli/rename.js',
   'src/cli/cd.js',
@@ -25,7 +24,6 @@ const activeSources = [
   'src/mc/commands/doctor.js',
   'src/mc/local-source.js',
   'src/mc/session-v1.js',
-  'src/mc/session-v1-list.js',
   'src/mc/session-runtime-v1.js',
   'src/mc/session-lifecycle-v1.js',
   'src/mc/session-maintenance-v1.js',
@@ -81,10 +79,8 @@ test('machine-local runtime protocol contains no heartbeat message types', () =>
   }
 });
 
-test('local list implementation contains no socket, network, or runtime probe', () => {
+test('the local session projection contains no socket, network, or runtime probe', () => {
   const sources = read([
-    'src/cli/list.js',
-    'src/mc/session-v1-list.js',
     'src/mc/session-v1.js',
   ]);
   assert.doesNotMatch(sources, /createConnection|runtimeHostSocket|probeSessionRuntime|WebSocket/iu);

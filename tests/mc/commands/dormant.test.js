@@ -48,10 +48,12 @@ describe('mc --help shows one world', () => {
     assert.doesNotMatch(help(), /mc pm/u);
   });
 
-  it('names no watcher but the repository one', () => {
+  it('names no watcher but the page and the repository one', () => {
     const lines = help().split('\n').filter((line) => /\bwatch\b/u.test(line));
     for (const line of lines) {
-      assert.match(line, /mc repo watch|mc status --watch/u, `unexpected watcher in the help: ${line}`);
+      // Only the repository watcher may be named; the dead `mc watch`
+      // programme and the removed `mc --watch` must leave no trace.
+      assert.match(line, /mc repo watch/u, `unexpected watcher in the help: ${line}`);
     }
   });
 

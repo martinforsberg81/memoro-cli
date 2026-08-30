@@ -40,7 +40,11 @@ describe('an override that shadows shipped fields is said, not silent (D-0135)',
       }));
       const shadowedResult = declarationFor('/x/memoro', { root });
       assert.equal(shadowedResult.ok, true);
-      assert.deepEqual(shadowedResult.shadowed, ['pr_tests_flags']);
+      // `select` joined the shipped entry on 2026-08-30 and is the field that
+      // decides whether the round measures the change's reach or the whole
+      // suite — so an override that omits it silently would cost the whole
+      // saving, which is exactly the shape of the two earlier losses.
+      assert.deepEqual(shadowedResult.shadowed, ['select', 'select_why', 'pr_tests_flags']);
       // The shipped entry alone shadows nothing.
       const plain = declarationFor('/x/memoro-cli', { root });
       assert.deepEqual(plain.shadowed, []);
@@ -188,7 +192,14 @@ describe('declarations, shipped and overridden', () => {
       assert.equal(answer.source, 'declared');
       assert.equal(answer.declaration.prepare, 'npm ci');
       assert.match(answer.declaration.prepare_why, /D-0089/u);
-      assert.deepEqual(answer.declaration.extra_gates.map((gate) => gate.command), ['npm run test:msr:contract']);
+      // `msr contract` was an extra gate until 2026-08-30. It ran the same 326
+      // files the suite already ran — `test:msr:contract` globs exactly the
+      // `msr-contract` profile — so a round paid for that suite four times
+      // over: both sides of `npm test`, then both sides of the gate.
+      assert.deepEqual(answer.declaration.extra_gates, []);
+      // How memoro says what a change reaches. Its presence is what turns the
+      // round from two full suites into the reached files, measured on both.
+      assert.match(answer.declaration.select, /ci\.mjs --list --json/u);
       assert.match(answer.declaration.merge_log, /pm\/decisions\/merge-log\.md$/u);
     } finally { fx.cleanup(); }
   });

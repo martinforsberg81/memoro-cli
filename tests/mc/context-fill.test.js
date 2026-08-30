@@ -1,15 +1,15 @@
 /**
  * Context fill, seen by something other than the session itself
  * (2026-08-24). The transcript carries it for every Claude session, pane or
- * not, and the board shows it from the early level. The late level used to
- * knock through the session guard; the guard went with the PM (decision
- * mc-1) and the level is what remains.
+ * not, from the early level up. The late level used to knock through the
+ * session guard; the guard went with the PM (decision mc-1), the board that
+ * drew the number went with `mc status` (decision mc-3), and the reading is
+ * what remains.
  */
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { CONTEXT_LEVELS, contextUsage, contextWindowFor } from '../../src/mc/conversations.js';
-import { renderLines } from '../../src/mc/status-render.js';
+import { contextUsage, contextWindowFor } from '../../src/mc/conversations.js';
 
 const assistant = (usage, model = 'claude-opus-5') => ({ type: 'assistant', message: { model, usage } });
 
@@ -40,21 +40,5 @@ describe('reading the fill from the transcript', () => {
     assert.equal(contextUsage('codex', [assistant({ input_tokens: 5 })]), null);
     assert.equal(contextUsage('claude-code', [{ type: 'user' }]), null);
     assert.equal(contextUsage('claude-code', [assistant({ output_tokens: 3 })]), null);
-  });
-});
-
-describe('the early level is on the board', () => {
-  const page = (percent) => ({
-    areas: [{
-      name: 'msr-track-1', path: '/x', running: [], worktrees: [], waiting: true, working: false,
-      conversations: [{ id: 'c1', tool: 'claude-code', model: 'claude-opus-5', said: 'hm', state: 'waiting', updated_ms: 1000, bytes: 2048, live: true, context: { used: percent * 10000, window: 1_000_000, percent, model: 'claude-opus-5', window_assumed: true } }],
-    }],
-    summary: { areas: 1, waiting: 1, working: 0 },
-  });
-
-  it('shows the fill from the early level, and not below it', () => {
-    assert.ok(renderLines(page(CONTEXT_LEVELS.show), { columns: 120, now: 61000 }).some((line) => /70% context/u.test(line)));
-    assert.ok(!renderLines(page(CONTEXT_LEVELS.show - 1), { columns: 120, now: 61000 }).some((line) => /context/u.test(line)));
-    assert.ok(renderLines(page(100), { columns: 120, now: 61000 }).some((line) => /100% context/u.test(line)));
   });
 });

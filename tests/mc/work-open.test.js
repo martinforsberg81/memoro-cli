@@ -175,6 +175,56 @@ describe('openInWorkArea in a role area', () => {
   });
 });
 
+/**
+ * The register is the opener's only side effect, and it must be paired with
+ * the call that blocks rather than with the call that returns: a tool that
+ * throws on its way out would otherwise leave NOW claiming a session forever.
+ */
+describe('openInWorkArea and the foreground register', () => {
+  function registering() {
+    const events = [];
+    const register = (item) => {
+      events.push({ ...item, event: 'register' });
+      return () => events.push({ event: 'release' });
+    };
+    return { events, register };
+  }
+
+  it('registers the verb, the area, the tool and the model, and releases when the tool is done', async () => {
+    const { areaRoot, worktree, env } = fixture();
+    const { events, register } = registering();
+    const { options } = opening();
+    await openInWorkArea({
+      areaRoot, worktree, env, verb: 'plan', areaName: 'mc-ui', model: 'opus', register, ...options,
+    });
+    assert.deepEqual(events, [
+      { event: 'register', verb: 'plan', area: 'mc-ui', tool: 'claude', model: 'opus', env },
+      { event: 'release' },
+    ]);
+  });
+
+  it('releases even when the tool throws on the way out', async () => {
+    const { areaRoot, worktree, env } = fixture();
+    const { events, register } = registering();
+    const { options } = opening({ spawn: () => { throw new Error('no such binary'); } });
+    await assert.rejects(openInWorkArea({
+      areaRoot, worktree, env, verb: 'brief', register, ...options,
+    }));
+    assert.deepEqual(events.map((item) => item.event), ['register', 'release']);
+  });
+
+  it('a caller that names no verb registers nothing — the register is opt-in', async () => {
+    const { areaRoot, worktree, env } = fixture();
+    const { events, register } = registering();
+    const { options } = opening();
+    await openInWorkArea({ areaRoot, worktree, env, register, ...options });
+    assert.deepEqual(events, [
+      { event: 'register', verb: null, area: null, tool: 'claude', model: null, env },
+      { event: 'release' },
+    ]);
+  });
+});
+
 describe('startInBackground and --model', () => {
   /** tmux, faked: no session exists, creation succeeds, everything recorded. */
   function tmux() {

@@ -1,8 +1,9 @@
 /**
  * `mc plan <name>` — a planning session that ends in a PLAN.md.
  *
- * How new work enters the system when Martin wants to think it through
- * rather than let the runner triage it blind. A fresh, ordinary foreground
+ * How new work enters the system: every plan is written here, with Martin in
+ * the session. The runner does not write plans — it runs `ready` ones (Martin,
+ * 2026-08-29). A fresh, ordinary foreground
  * session — the terminal's, `stdio: 'inherit'`, never tmux, never
  * `--resume` — opens in the workarea with the `plan` role from
  * `canon/roles/plan.md` behind the Coding Profile, and a first prompt that
@@ -74,6 +75,8 @@ export async function run(argv, deps = {}) {
     worktree,
     tool: opts.tool || role.tools?.[0] || 'claude',
     pick: 'new',
+    verb: 'plan',
+    areaName: opts.name,
     model: opts.model,
     overlay: launch.overlay,
     prompt: launch.prompt,

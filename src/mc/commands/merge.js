@@ -19,6 +19,10 @@ export async function run(argv, deps = {}) {
     stderr.write(usage());
     return 2;
   }
+  // `--check` was the measurement wearing the merge verb's clothes. It still
+  // works, and it says where the measurement lives now: a person asking "is
+  // this red?" should not have to find it under the verb for landing things.
+  if (opts.check && !opts.docs) stderr.write('mc: --check is now mc test <repo> <pr> — same round, running it\n');
   if (!opts.docs) return gate(opts, { stdout, stderr });
 
   if (opts.prs) { stderr.write('mc: --docs lands one pull request at a time\n'); return 2; }

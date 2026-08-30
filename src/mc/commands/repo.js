@@ -10,7 +10,6 @@
  *   mc repo status [repo] [--json] [--offline]
  *   mc repo watch start|stop|status
  *   mc repo claim <repo> "<errand>" / release <repo> [--force] / who <repo>
- *   mc repo merge <repo> <pr> [--check]
  *
  * It reads. The one thing status writes is a `git fetch` — remote-tracking
  * refs and nothing else — and `--offline` removes even that, at the price of
@@ -210,7 +209,10 @@ async function lease(opts, { stdout, stderr, tell = null }) {
 }
 
 /**
- * `mc repo merge <repo> <pr>` — the gate round, and what becomes of it.
+ * `mc merge <repo> <pr>` — the gate round, and what becomes of it.
+ *
+ * The round is still here; only its door moved (`commands/merge.js`), and
+ * `mc repo merge` answers with where it went.
  *
  * Two modes and no third. Without a flag the round gates and, only on green,
  * lands the change; `--check` runs the same round and stops at the verdict,
@@ -242,7 +244,7 @@ function rounds(opts, { stdout }) {
     return 0;
   }
   if (!all.length) {
-    stdout.write('mc: no rounds recorded yet — every mc repo merge and --check from now on leaves a line\n');
+    stdout.write('mc: no rounds recorded yet — every mc merge and --check from now on leaves a line\n');
     return 0;
   }
   const counted = countRounds(all);
@@ -283,7 +285,7 @@ export async function gate(opts, { stdout, stderr }) {
   const refusal = helperMergeRefusal(holder, { check: opts.check });
   if (refusal) {
     stderr.write(`mc: ${refusal}\n`);
-    stderr.write(`mc: the check form measures and reports: mc merge ${opts.repo} ${opts.pr || (opts.prs || []).join(' ')} --check\n`);
+    stderr.write(`mc: the measurement is its own verb, and this role may run it: mc test ${opts.repo} ${opts.pr || (opts.prs || []).join(' ')}\n`);
     return 2;
   }
   const round = { repoPath, pr: opts.pr, prs: opts.prs, holder, onProgress: (message) => stderr.write(`mc: ${message}\n`) };

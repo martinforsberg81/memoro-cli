@@ -39,8 +39,9 @@ historical plan is context, never an executable instruction source.
 1. **Delegate:** give one independent work unit and the contract above.
 2. **Inspect:** the implementation session reads the relevant code and asks
    only when a missing choice materially changes the result.
-3. **Implement:** keep the diff focused and preserve unrelated work. Tests are
-   outside the delivery flow; see the protocol's "Validation is suspended".
+3. **Implement:** keep the diff focused and preserve unrelated work. The suite
+   is the merge gate — `mc merge <repo> <pr>` cannot land a red one; see the
+   protocol's "Validation".
 4. **Handoff:** report the exact branch/head, complete diff scope, remaining
    gaps, and any material judgment calls. Claim no validation that was not run.
 5. **Integrate:** review the complete combined diff and one current GitHub

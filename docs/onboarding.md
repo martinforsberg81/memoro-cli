@@ -117,8 +117,8 @@ mc auth codex      # or claude / gemini
    credentials. Cache misses still require normal registry network access.
 
 When all required checks pass, `mc setup` writes the `${MC_HOME}/.setup-done-v1`
-sentinel so the friendly first-run hint in `mc new` / `mc list`
-silences itself for that machine.
+sentinel so the friendly first-run hint in `mc new` / `mc` (the page a fresh
+install lands on) silences itself for that machine.
 
 ## The dev-server loop in one screenful
 
@@ -209,9 +209,10 @@ mc
 mc setup
 ```
 
-`mc sessions list` will then show sessions from every machine that
-has reported a heartbeat against the same Memoro account — it's the
-multi-host view; worktrees themselves stay per-machine.
+Memoro then knows about every machine that has reported a heartbeat
+against the same account. Nothing lists them: `mc sessions list` went
+with decision mc-3 and `mc` is the page, which is per-machine — as are
+the worktrees themselves.
 
 A "trust this machine from your phone" QR / short-code link is
 discussed in plan §11f as a deferred v2 idea. For v1, the manual

@@ -1,0 +1,841 @@
+/**
+ * `mc run` — the runner, inside mc.
+ *
+ * One round is one pass over the queue; one step is one fresh headless
+ * session in one workarea, then the merge of the PR it opened. The runner
+ * decides nothing with a model: it reads files, runs git and gh, starts the
+ * session through the launch adapter and waits for it. No inbox, no knock,
+ * no watcher — it is the parent of the process it starts.
+ *
+ * A round drives one lane per repository at the same time: memoro's steps
+ * and memoro-cli's never touch (different main branches, different
+ * worktrees), so a round is as slow as the slower repository rather than as
+ * slow as both. Nothing new to type or start — the lanes are inside the one
+ * `mc run` process, and one repository with ready plans is one lane.
+ *
+ * A round begins by taking away what is finished: every plan on main that
+ * says `status: done` is archived — its `docs/project/<programme>/<project>/`
+ * removed and a `project_log.md` row left behind it — in one PR per
+ * repository that the runner merges like any other. `done` is the whole
+ * trigger; there is nothing to type. The rules are in archive-plan.js.
+ *
+ * A round ends by taking away the folder that plan explains: a workarea whose
+ * plan left main this round, whose worktree is clean and whose last row in
+ * runs.tsv ends `merged` is removed — worktree handed back, local branch
+ * deleted, everything it kept beside its checkout moved to
+ * `runner/log/closed/<name>/`. A workarea with no plan on main is never
+ * removed by a machine; it is written to `~/mc/intake/unplanned-workareas.md`
+ * instead. The rules are in close-workarea.js.
+ *
+ * `~/mc/queue.md` is Martin's "these first" and nothing else: names of
+ * projects that still have a step to run, one per line. The round rewrites it
+ * to that shape and a name leaves it the moment its step has run, so a queue
+ * everything ran from is an empty file.
+ *
+ * One thing that is not a step rides along: `mc helper --intake`, once per calendar
+ * day at the top of the first round after 05:00Z, logged in runs.tsv under
+ * its own kind. It opens no worktree and touches no branch — it reads
+ * production, writes a digest and proposals into `~/mc/intake/`, and that is
+ * all. `runHelperDay` below is the whole of it.
+ *
+ * Every process boundary is a dependency on `deps`, so the round can be
+ * driven in a test with a fake git, gh, tmux and session and no network.
+ * The rules themselves live in run-plan.js.
+ */
+import { spawn, spawnSync } from 'node:child_process';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+
+import { resolveLaunch } from '../adapters/index.js';
+import {
+  ARCHIVE_BRANCH_PREFIX, UNDOCUMENTED_HEADER, appendRow, donePlans, isUndocumented, mergedPrs,
+  planDoc, planSummary, pointerCell, remoteSlug, rowFor, undocumentedRow,
+} from './archive-plan.js';
+import { writeJsonAtomic } from './atomic-write.js';
+import { branchLanded } from './branch-landed.js';
+import { defaultRepos, listPlans, parsePlanFrontmatter, planFields, showBatch } from './brief-collect.js';
+import { closable, lastRunFor, unplannedFile, unplannedRow } from './close-workarea.js';
+import { collectHelper, describeDigest, intakeDir, unreadableSections } from './helper-collect.js';
+import { describeTurn, runHelperTurn } from './helper-turn.js';
+import { workRoot } from './paths.js';
+import { loadProfile, profileArgs } from './portrait.js';
+import { readCanonRole } from './roles.js';
+import { addWorktree } from './work-area.js';
+import {
+  HELPER_KIND, HELPER_NAME, QUOTA_SLEEP_MS, TIMEOUT_EXIT, assembleQueue, chooseKind, headlessArgs,
+  helperDue, helperNote, queueFileNames, queueFileText, readSessionOutput, reconcilePrompt,
+  sessionSettings, stepPrompt, strictQueue, tsvHeader, tsvRow,
+} from './run-plan.js';
+
+export const REPO_NAMES = ['memoro', 'memoro-cli'];
+
+/* ------------------------------------------------------------ real deps */
+
+function sh(cmd, args, { cwd, timeout = 120_000 } = {}) {
+  const r = spawnSync(cmd, args, { cwd, encoding: 'utf8', timeout, maxBuffer: 64 << 20 });
+  return { ok: r.status === 0, status: r.status, stdout: r.stdout || '', stderr: r.stderr || '' };
+}
+
+export function realDeps(env = process.env) {
+  return {
+    env,
+    now: () => new Date(),
+    sleep: (ms) => new Promise((resolve) => { setTimeout(resolve, ms); }),
+    git: (cwd, args) => sh('git', ['-C', cwd, ...args]),
+    gh: (cwd, args) => sh('gh', args, { cwd }),
+    tmuxHas: (name) => sh('tmux', ['has-session', '-t', name]).ok,
+    exists: existsSync,
+    read: (path) => { try { return readFileSync(path, 'utf8'); } catch { return null; } },
+    list: (path) => { try { return readdirSync(path); } catch { return []; } },
+    write: (path, text) => { mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, text); },
+    append: (path, text) => { mkdirSync(dirname(path), { recursive: true }); appendFileSync(path, text); },
+    // Closing a workarea moves what it kept beside its worktree; it never
+    // deletes it. `~/mc` and `~/mc/runner/log/closed/` are one filesystem, so
+    // a rename is the whole move.
+    move: (from, to) => {
+      try { mkdirSync(dirname(to), { recursive: true }); renameSync(from, to); return true; } catch { return false; }
+    },
+    // The area directory itself, once everything in it has been moved out.
+    // Called with an empty directory and nothing else — see `closeWorkarea`.
+    rmdir: (path) => { try { rmSync(path, { recursive: true }); return true; } catch { return false; } },
+    // The two files that say a runner is here and a step is in flight. Whole
+    // or not at all: `mc status` reads them while they are being written.
+    writeJson: (path, value) => writeJsonAtomic(path, value, { mode: 0o644 }),
+    remove: (path) => { try { rmSync(path, { force: true }); } catch { /* already gone */ } },
+    pid: process.pid,
+    addWorktree,
+    profile: () => loadProfile({ env }),
+    role: readCanonRole,
+    launch: resolveLaunch,
+    // The two halves of `mc helper --intake`, so a round can be driven in a test with
+    // no production behind it and no model in it.
+    collect: (options) => collectHelper({ env, ...options }),
+    helperTurn: (options) => runHelperTurn({ env, ...options }),
+    // The session: the adapter's binary with the headless argument list,
+    // stdin closed (claude -p reads a piped stdin and would eat it), a
+    // wall-clock cap after which it is killed and logged as a timeout.
+    //
+    // `spawn` and not `spawnSync`: two lanes run in this one process, and a
+    // synchronous wait would hold the event loop for the whole ninety
+    // minutes — the second lane would never get to start. The output is
+    // collected here instead of by `maxBuffer`, and capped rather than
+    // allowed to eat the machine: a session that floods stdout is not going
+    // to parse as JSON either way.
+    session: ({ bin, args, cwd, timeoutMs }) => new Promise((resolve) => {
+      const child = spawn(bin, args, { cwd, stdio: ['ignore', 'pipe', 'pipe'], timeout: timeoutMs, killSignal: 'SIGTERM', env });
+      const cap = 256 << 20;
+      const collect = (stream) => {
+        const chunks = [];
+        let size = 0;
+        stream.on('data', (chunk) => { if (size < cap) { chunks.push(chunk); size += chunk.length; } });
+        return () => Buffer.concat(chunks).toString('utf8');
+      };
+      const stdout = collect(child.stdout);
+      const stderr = collect(child.stderr);
+      let settled = false;
+      let failure = null;
+      const done = (value) => { if (!settled) { settled = true; resolve(value); } };
+      child.on('error', (error) => {
+        failure = error;
+        if (!child.pid) done({ status: 1, stdout: '', stderr: String(error.message), timedOut: false });
+      });
+      child.on('close', (status, signal) => {
+        const timedOut = status == null && signal === 'SIGTERM';
+        done({
+          status: timedOut ? TIMEOUT_EXIT : (status ?? 1),
+          stdout: stdout(),
+          stderr: stderr() || (failure ? String(failure.message) : ''),
+          timedOut,
+        });
+      });
+    }),
+    log: (line) => process.stdout.write(`${line}\n`),
+  };
+}
+
+/* --------------------------------------------------------------- runner */
+
+export function createRunner({
+  merge = true, deps = realDeps(),
+} = {}) {
+  const root = workRoot(deps.env);
+  const paths = {
+    queue: join(root, 'queue.md'),
+    log: join(root, 'runner', 'log'),
+    runs: join(root, 'runner', 'log', 'runs.tsv'),
+    runnerLog: join(root, 'runner', 'log', 'runner.log'),
+    stop: join(root, 'runner', 'STOP'),
+    // What is running, for anyone who asks. runner.json says a runner is
+    // here and names the pid to test; `current-<repo>.json` exists only
+    // while that lane's step is in flight — one file per lane, because two
+    // steps run side by side. runs.tsv gets its row when the step is over —
+    // that is too late to answer "what is running now", which is why these
+    // exist.
+    runner: join(root, 'runner', 'runner.json'),
+    currentFor: (repo) => join(root, 'runner', `current-${repo}.json`),
+    // Where a closed workarea's filing goes — its inbox, its decisions, the
+    // scratch directory a session left beside its checkout. Moved, never
+    // deleted: the folder is what goes, not what somebody wrote in it.
+    closed: join(root, 'runner', 'log', 'closed'),
+    unplanned: join(intakeDir(deps.env), 'unplanned-workareas.md'),
+  };
+  const writeJson = deps.writeJson || ((path, value) => deps.write(path, `${JSON.stringify(value, null, 2)}\n`));
+  const remove = deps.remove || (() => {});
+  const pid = deps.pid ?? process.pid;
+  const repos = defaultRepos(deps.env);
+  const stamp = () => deps.now().toISOString().replace(/\.\d{3}Z$/u, 'Z');
+  const say = (text) => {
+    const line = `${stamp()}  ${text}`;
+    deps.append(paths.runnerLog, `${line}\n`);
+    deps.log(line);
+  };
+  const gitOut = (cwd, args) => { const r = deps.git(cwd, args); return r.ok ? String(r.stdout ?? '').trimEnd() : null; };
+  const stopRequested = () => deps.exists(paths.stop);
+
+  /**
+   * The 5-hour Claude quota is one budget for every lane. The first lane to
+   * be refused sleeps on it and every other lane joins that same sleep
+   * before its next step: one sleep, not two, and no session spent to be
+   * told the same thing again. `quotaHold` is what a lane awaits before it
+   * starts anything; `quotaPause` is what the lane that saw the refusal
+   * calls.
+   */
+  let quotaSleep = null;
+  async function quotaPause() {
+    if (quotaSleep) { await quotaSleep; return; }
+    say(`quota/rate limit seen — every lane sleeping ${QUOTA_SLEEP_MS / 60000}m`);
+    quotaSleep = Promise.resolve(deps.sleep(QUOTA_SLEEP_MS));
+    try { await quotaSleep; } finally { quotaSleep = null; }
+  }
+  const quotaHold = async () => { if (quotaSleep) await quotaSleep; };
+
+  function planOf(worktree, name) {
+    const base = join(worktree, 'docs', 'project');
+    for (const programme of deps.list(base)) {
+      const path = join(base, programme, name, 'PLAN.md');
+      if (deps.exists(path)) {
+        const text = deps.read(path) || '';
+        return { path, programme, text, ...parsePlanFrontmatter(text), fields: planFields(text) };
+      }
+    }
+    return null;
+  }
+
+  /** memoro | memoro-cli | null — an existing workarea first, then the main trees. */
+  function repoOf(name, plans) {
+    for (const repo of repos) if (deps.exists(join(root, name, repo.name, '.git'))) return repo;
+    const plan = plans.find((p) => p.project === name);
+    return plan ? repos.find((r) => r.name === plan.repo) || null : null;
+  }
+
+  /**
+   * Merge origin/main into the area branch — never rebase. The one conflict
+   * resolved here is an identical .gitignore hunk; anything else is left in
+   * progress for a reconcile step.
+   */
+  function syncMain(worktree, name) {
+    if (!deps.git(worktree, ['fetch', '-q', 'origin']).ok) return { ok: false, conflicts: [] };
+    if (deps.git(worktree, ['merge', '-q', '--no-edit', 'origin/main']).ok) return { ok: true, conflicts: [] };
+    const conflicts = (gitOut(worktree, ['diff', '--name-only', '--diff-filter=U']) || '').split('\n').filter(Boolean);
+    if (conflicts.length === 1 && conflicts[0] === '.gitignore') {
+      if (deps.git(worktree, ['checkout', '--theirs', '.gitignore']).ok && deps.git(worktree, ['add', '.gitignore']).ok && deps.git(worktree, ['commit', '-q', '--no-edit']).ok) return { ok: true, conflicts: [] };
+    }
+    say(`${name}: merge conflict in: ${conflicts.join(' ')}`);
+    return { ok: false, conflicts };
+  }
+
+  async function waitMergeable(worktree, pr) {
+    let verdict = 'UNKNOWN';
+    for (let i = 0; i < 12 && verdict === 'UNKNOWN'; i += 1) {
+      const r = deps.gh(worktree, ['pr', 'view', String(pr), '--json', 'mergeable', '-q', '.mergeable']);
+      verdict = (r.ok && r.stdout.trim()) || 'UNKNOWN';
+      if (verdict === 'UNKNOWN') await deps.sleep(5000);
+    }
+    return verdict;
+  }
+
+  async function mergePr(worktree, name, pr) {
+    const title = deps.gh(worktree, ['pr', 'view', String(pr), '--json', 'title', '-q', '.title']).stdout.trim();
+    const squash = () => deps.gh(worktree, ['pr', 'merge', String(pr), '--squash', '--subject', `${title} (#${pr})`]);
+    await waitMergeable(worktree, pr);
+    let r = squash();
+    if (r.ok) { say(`${name}: merged #${pr}`); deps.git(worktree, ['fetch', '-q', 'origin']); return true; }
+    say(`${name}: merge of #${pr} failed: ${r.stderr.trim().split('\n').at(-1) || r.stdout.trim()}`);
+    // Usually main moved during the step: bring it in and try once more. A
+    // conflict is aborted here — the next round's reconcile step owns it; a
+    // merge left in progress would make the worktree dirty and skipped forever.
+    const sync = syncMain(worktree, name);
+    if (!sync.ok) { deps.git(worktree, ['merge', '--abort']); say(`${name}: #${pr} needs reconcile next round`); return false; }
+    if (deps.git(worktree, ['push', '-q', 'origin', 'HEAD']).ok) {
+      await waitMergeable(worktree, pr);
+      r = squash();
+      if (r.ok) { say(`${name}: merged #${pr} (after syncing main)`); deps.git(worktree, ['fetch', '-q', 'origin']); return true; }
+    }
+    say(`${name}: #${pr} left open — could not merge`);
+    return false;
+  }
+
+  /** One row in runs.tsv, header written the first time. Steps and the helper. */
+  function logRun(row) {
+    if (!deps.exists(paths.runs)) deps.write(paths.runs, `${tsvHeader()}\n`);
+    deps.append(paths.runs, `${tsvRow(row)}\n`);
+  }
+
+  const dashes = { turns: '-', input: '-', output: '-', cacheRead: '-', cacheWrite: '-', session: '-' };
+
+  /* ------------------------------------------------------------- archiving */
+
+  /**
+   * An archive PR of an earlier round that never merged, or null. One is
+   * enough to hold this round off: a second PR would remove the same
+   * directories again and land two rows for the same project.
+   */
+  function openArchivePr(repo) {
+    const r = deps.gh(repo.path, ['pr', 'list', '--state', 'open', '--json', 'number,headRefName',
+      '-q', `.[] | select(.headRefName | startswith("${ARCHIVE_BRANCH_PREFIX}")) | .number`]);
+    if (!r.ok) return null;
+    return r.stdout.trim().split('\n').filter(Boolean)[0] || null;
+  }
+
+  /**
+   * Every plan of one repository that says `done` on main, archived in this
+   * round: the directory removed, a `project_log.md` row written for the
+   * projects that have none, one PR the runner merges like any other.
+   *
+   * Returns `{ archived, landed }` — the projects this round took out of
+   * `docs/project/`, and the ones whose PR actually merged. Only the second
+   * set may have its workarea closed later in the round: the plan goes first,
+   * then the workarea.
+   *
+   * The work happens in a worktree of its own under `~/mc/runner/archive/`,
+   * made from origin/main and taken down again however this ends. Not the
+   * project's own workarea: a done project need not have one, several are
+   * archived in the one PR, and the workarea is removed later in the same
+   * round — the plan goes first, then the workarea, so a workarea is never
+   * removed while the plan that explains it is still on main.
+   */
+  async function archiveDone(repo, plans) {
+    const none = { archived: [], landed: [] };
+    const done = donePlans(plans, repo.name);
+    if (!done.length) return none;
+    const open = openArchivePr(repo);
+    if (open) { say(`archive: ${repo.name} #${open} is still open from an earlier round — not opening another`); return none; }
+
+    const branch = `${ARCHIVE_BRANCH_PREFIX}${stamp().replace(/[-:]/gu, '')}`;
+    const worktree = join(root, 'runner', 'archive', repo.name);
+    if (deps.exists(worktree)) deps.git(repo.path, ['worktree', 'remove', '--force', worktree]);
+    if (!deps.git(repo.path, ['worktree', 'add', '-b', branch, worktree, 'origin/main']).ok) {
+      say(`archive: ${repo.name} — could not open the archive worktree, nothing archived this round`);
+      return none;
+    }
+    try {
+      return await archiveIn({ repo, worktree, branch, done });
+    } finally {
+      deps.git(repo.path, ['worktree', 'remove', '--force', worktree]);
+      deps.git(repo.path, ['branch', '-D', branch]);
+    }
+  }
+
+  /** The archive itself, inside the worktree that was made for it. */
+  async function archiveIn({ repo, worktree, branch, done }) {
+    const logPath = join(worktree, 'docs', 'project', 'project_log.md');
+    const slug = remoteSlug(gitOut(repo.path, ['remote', 'get-url', 'origin']));
+    const date = stamp().slice(0, 10);
+    let logText = deps.read(logPath) ?? '';
+    const archived = [];
+    const undocumented = [];
+
+    for (const plan of done) {
+      const dir = join('docs', 'project', plan.programme, plan.project);
+      const planText = deps.read(join(worktree, dir, 'PLAN.md')) || '';
+      if (!deps.git(worktree, ['rm', '-r', '-q', '--', dir]).ok) {
+        say(`archive: ${repo.name} ${plan.programme}/${plan.project} — git rm failed, left alone`);
+        continue;
+      }
+      // The row is preferred, never waited for: a close-out step that already
+      // wrote one knows more about the project than this does.
+      const existing = rowFor(logText, plan.project);
+      const row = existing || {
+        date,
+        programme: plan.programme,
+        project: plan.project,
+        outcome: 'delivered',
+        summary: planSummary(planText),
+        doc: planDoc(planText),
+        pointer: pointerCell(mergedPrs(deps.read(paths.runs) || '', plan.project), {
+          slug,
+          fallback: gitOut(worktree, ['log', '-1', '--format=%h', 'origin/main', '--', dir]),
+        }),
+      };
+      if (!existing) logText = appendRow(logText, row);
+      archived.push(plan.project);
+      say(`archive: ${repo.name} ${plan.programme}/${plan.project} removed — ${existing ? 'row already written' : 'row added to project_log.md'}`);
+      if (isUndocumented(row)) {
+        undocumented.push(undocumentedRow({ date, repo: repo.name, programme: plan.programme, project: plan.project, pointer: row.pointer }));
+        say(`archive: ${plan.project} names no docs/technical/ note — recorded for mc brief`);
+      }
+    }
+    if (!archived.length) return { archived: [], landed: [] };
+
+    deps.write(logPath, logText);
+    const title = `Archive ${archived.length} done project${archived.length === 1 ? '' : 's'}: ${archived.join(', ')}`;
+    const body = [
+      'A plan that reaches `done` is archived in the round the runner reads it:',
+      'the project directory is removed and `docs/project/project_log.md` carries',
+      'a row for it. The history is the record — `git log --all -- <path>` still',
+      'answers every question the removed directory could.',
+      '',
+      ...archived.map((project) => `- ${project}`),
+    ].join('\n');
+    deps.git(worktree, ['add', '-A']);
+    if (!deps.git(worktree, ['commit', '-q', '-m', title, '-m', body]).ok
+      || !deps.git(worktree, ['push', '-q', '-u', 'origin', 'HEAD']).ok) {
+      say(`archive: ${repo.name} — commit or push failed, nothing archived this round`);
+      return { archived: [], landed: [] };
+    }
+    const created = deps.gh(worktree, ['pr', 'create', '--base', 'main', '--head', branch, '--title', title, '--body', body]);
+    const listed = deps.gh(worktree, ['pr', 'list', '--head', branch, '--state', 'open', '--json', 'number', '-q', '.[0].number']);
+    const pr = (/(\d+)\s*$/u.exec(created.stdout.trim())?.[1]) || (listed.ok && listed.stdout.trim()) || null;
+    if (!pr) { say(`archive: ${repo.name} — the PR could not be opened (${created.stderr.trim().split('\n').at(-1) || 'no number'})`); return { archived: [], landed: [] }; }
+
+    if (undocumented.length) {
+      const path = join(intakeDir(deps.env), 'undocumented-closures.md');
+      if (!deps.exists(path)) deps.write(path, UNDOCUMENTED_HEADER);
+      deps.append(path, `${undocumented.join('\n')}\n`);
+    }
+    // Only a merged archive PR lets the workareas go: until the plan is off
+    // main, the folder it explains stays where it is.
+    const landed = (merge && await mergePr(worktree, `archive/${repo.name}`, pr)) ? archived : [];
+    return { archived, landed };
+  }
+
+  /* -------------------------------------------------------------- closing */
+
+  /** The repositories this workarea has a checkout of. Empty means it is not one. */
+  function areaRepos(name) {
+    return repos.filter((repo) => deps.exists(join(root, name, repo.name, '.git')));
+  }
+
+  /**
+   * Every directory under `~/mc` that is a workarea, sorted.
+   *
+   * A folder without `memoro/` or `memoro-cli/` in it is not a workarea:
+   * `bin/`, `brief/`, `decisions/`, `inbox/`, `intake/`, `runner/`, `status/`
+   * and the two role homes are mc's own, and the runner has no business
+   * looking at them.
+   */
+  function workareas() {
+    return deps.list(root).filter((name) => !name.startsWith('.') && areaRepos(name).length).sort();
+  }
+
+  /** `git status --porcelain` across every checkout the area holds. */
+  function uncommitted(name) {
+    return areaRepos(name).reduce((count, repo) => {
+      const out = gitOut(join(root, name, repo.name), ['status', '--porcelain']) || '';
+      return count + out.split('\n').filter(Boolean).length;
+    }, 0);
+  }
+
+  /**
+   * One closable workarea, taken down: the worktree removed through the
+   * repository that owns it, the local branch deleted, and everything the
+   * folder kept beside its checkout moved to `runner/log/closed/<name>/`
+   * before the folder itself goes.
+   *
+   * What mc deletes is nothing: every file the folder holds outside the
+   * checkout is moved, and the checkout is git's to hand back — its content
+   * is on origin, and the remote branch and the PRs stay. `git worktree
+   * remove` does take the ignored files with it, which on the workareas
+   * measured 2026-08-29 was `node_modules/`, `__pycache__/`, `.wrangler/`,
+   * `public/dist/` and one generated `.sql` — build output a fresh checkout
+   * rebuilds, and nothing a person wrote.
+   *
+   * A step that fails stops the rest and says so: the folder keeps whatever
+   * has not been moved yet, and the next round tries again.
+   */
+  function closeWorkarea(name) {
+    const area = join(root, name);
+    for (const repo of areaRepos(name)) {
+      const worktree = join(area, repo.name);
+      if (!deps.git(repo.path, ['worktree', 'remove', worktree]).ok) {
+        say(`close: ${name} — git worktree remove failed for ${repo.name}, left alone`);
+        return false;
+      }
+      deps.git(repo.path, ['branch', '-D', name]);
+    }
+    const kept = deps.list(area).filter(Boolean);
+    for (const entry of kept) {
+      if (!deps.move(join(area, entry), join(paths.closed, name, entry))) {
+        say(`close: ${name} — could not move ${entry} to ${join(paths.closed, name)}, folder left alone`);
+        return false;
+      }
+    }
+    deps.rmdir(area);
+    const moved = kept.length ? `, ${kept.length} file(s) moved to runner/log/closed/${name}/` : '';
+    say(`close: ${name} removed — worktree, branch ${name}${moved}`);
+    return true;
+  }
+
+  /**
+   * The end of the round: every workarea whose plan is finished is taken
+   * down, and every workarea with no plan on main is written where somebody
+   * looks.
+   *
+   * `landed` is the projects whose archive PR merged in this round — the plan
+   * goes first, then the workarea, so a workarea is never removed while the
+   * plan that explains it is still on main. `plans` is the round's reading of
+   * main, taken before that archive removed them.
+   *
+   * A plan that is neither done nor missing is passed over without asking git
+   * anything: `closable` would answer the same, and forty `git status` calls
+   * a round for an answer already on the plan is not a price worth paying.
+   */
+  function closeWorkareas(plans, landed = []) {
+    const byProject = new Map(plans.map((plan) => [plan.project, plan]));
+    const tsv = deps.read(paths.runs) || '';
+    const rows = [];
+    let closed = 0;
+    for (const name of workareas()) {
+      const plan = byProject.get(name) || null;
+      if (plan && plan.status !== 'done') continue;
+      const verdict = closable({
+        plan,
+        dirty: uncommitted(name) > 0,
+        live: deps.tmuxHas(`mc-${name}`),
+        lastRun: lastRunFor(tsv, name),
+      });
+      if (verdict.unplanned) { rows.push(unplannedFor(name)); continue; }
+      if (!verdict.close) { say(`close: ${name} kept — ${verdict.why}`); continue; }
+      if (!landed.includes(name)) { say(`close: ${name} kept — its plan is still on main`); continue; }
+      if (closeWorkarea(name)) closed += 1;
+    }
+    deps.write(paths.unplanned, unplannedFile(rows));
+    if (rows.length) say(`close: ${rows.length} workarea(s) with no plan on main — ${paths.unplanned}`);
+    return { closed, unplanned: rows.length };
+  }
+
+  /**
+   * One row of `~/mc/intake/unplanned-workareas.md`. `branch` is asked of
+   * content rather than of commit counts — the runner squash-merges, so
+   * "ahead" by commits says nothing (branch-landed.js).
+   */
+  function unplannedFor(name) {
+    const [repo] = areaRepos(name);
+    const worktree = join(root, name, repo.name);
+    // The branch is asked of the worktree, not guessed from the folder: a
+    // workarea from before the plan world was made by hand and need not be
+    // named after its branch (msr-track-1 sits on `msr-track1-skin`).
+    // Measured 2026-08-29, guessing left 14 of 20 rows `unknown` — which is
+    // the one column that says whether anything would be lost.
+    const branch = gitOut(worktree, ['rev-parse', '--abbrev-ref', 'HEAD']) || name;
+    return unplannedRow({
+      name,
+      repo: repo.name,
+      uncommitted: uncommitted(name),
+      lastCommit: gitOut(worktree, ['log', '-1', '--format=%cs']) || '-',
+      branch: branchLanded(worktree, branch, { run: (args) => gitOut(worktree, args) }),
+    });
+  }
+
+  /* ---------------------------------------------------------------- queue */
+
+  /**
+   * `~/mc/queue.md` rewritten to what it is for: names of projects that still
+   * have a step to run. Everything else goes, one runner.log line each.
+   */
+  function tidyQueue(plans) {
+    const text = deps.read(paths.queue);
+    if (text == null) return;
+    const { names, dropped } = strictQueue(text, plans);
+    for (const item of dropped) say(`queue: dropped "${item.line}" — ${item.why}`);
+    const next = queueFileText(names);
+    if (next !== text) deps.write(paths.queue, next);
+  }
+
+  /** A name leaves the queue the moment its step has run. */
+  function dropFromQueue(name) {
+    const text = deps.read(paths.queue);
+    if (text == null) return;
+    const names = queueFileNames(text).filter((line) => line !== name);
+    const next = queueFileText(names);
+    if (next !== text) deps.write(paths.queue, next);
+  }
+
+  /**
+   * The day's `mc helper --intake`, run at the top of a round. Returns 'ran',
+   * 'failed' or null when it was not due.
+   *
+   * It is not a step and not a project: it opens no worktree, touches no
+   * branch, and its row in runs.tsv carries `helper` in both the name and the
+   * kind column. `helperDue` is the whole gate, and that row is the whole
+   * state — written whether the run succeeded or failed, which is how a
+   * failed collect stays unretried for the rest of the day.
+   *
+   * The collect half reads production and the turn half calls a model, so the
+   * two are timed together and logged once: what a reader of runs.tsv wants
+   * to know is what the day's helper cost and what came out of it.
+   */
+  async function runHelperDay() {
+    const due = helperDue({ tsv: deps.read(paths.runs) || '', now: deps.now() });
+    if (!due.due) return null;
+    const t0 = deps.now().getTime();
+    const took = () => Math.round((deps.now().getTime() - t0) / 1000);
+    say('helper: the day\'s digest');
+
+    let digest = null;
+    try {
+      digest = await deps.collect({ now: deps.now() });
+    } catch (error) {
+      logRun({ ts: stamp(), name: HELPER_NAME, kind: HELPER_KIND, exit: 1, seconds: took(), pr: '-', ...dashes, note: helperNote(null) });
+      say(`helper: the collect step failed — ${error?.message || error}. Not retried today.`);
+      return 'failed';
+    }
+    say(`helper: ${digest.path} — ${describeDigest(digest.data)}`);
+    for (const note of digest.data.notes || []) say(`helper: ${note}`);
+    for (const [section, source] of unreadableSections(digest.data)) say(`helper: ${section} not read — ${source.error}`);
+
+    const turn = await deps.helperTurn({ digestPath: digest.path, digestText: digest.text, now: deps.now() });
+    logRun({
+      ts: stamp(), name: HELPER_NAME, kind: HELPER_KIND, exit: turn.status ?? 1, seconds: took(), pr: '-',
+      turns: turn.turns ?? '-', input: turn.input ?? '-', output: turn.output ?? '-',
+      cacheRead: turn.cacheRead ?? '-', cacheWrite: turn.cacheWrite ?? '-', session: turn.session ?? '-',
+      note: helperNote(turn),
+    });
+    for (const note of turn.groundNotes || []) say(`helper: ${note}`);
+    say(turn.ok
+      ? `helper: ${describeTurn(turn)} (${took()}s)`
+      : `helper: the turn did not finish — ${turn.reason || turn.note} (${took()}s)`);
+    if (turn.quota) await quotaPause();
+    return turn.ok ? 'ran' : 'failed';
+  }
+
+  /** One project. Returns 'merged' | 'ran' | 'skipped' | 'stop'. */
+  async function runStep(name, plans) {
+    if (stopRequested()) { say(`STOP file present (${paths.stop}) — not starting ${name}`); return 'stop'; }
+    // A quota answer in the other lane is this lane's answer too: wait it
+    // out here, before a worktree is touched or a session is spent.
+    await quotaHold();
+    const repo = repoOf(name, plans);
+    if (!repo) { say(`${name}: no workarea and no plan on main, skip`); return 'skipped'; }
+    const worktree = join(root, name, repo.name);
+    if (!deps.exists(worktree)) {
+      say(`${name}: no workarea — creating ${repo.name} worktree from origin/main`);
+      deps.git(repo.path, ['fetch', '-q', 'origin']);
+      const added = deps.addWorktree({ name, repo: repo.path, branch: name, from: 'origin/main', env: deps.env });
+      if (!added.ok) { say(`${name}: worktree add failed (${added.reason}), skip`); return 'skipped'; }
+    }
+    if (deps.tmuxHas(`mc-${name}`)) { say(`${name}: live tmux session, skip`); return 'skipped'; }
+    if ((gitOut(worktree, ['status', '--porcelain']) || '').trim()) { say(`${name}: dirty worktree, skip`); return 'skipped'; }
+
+    const sync = syncMain(worktree, name);
+    if (!sync.ok && !sync.conflicts.length) { say(`${name}: fetch/merge failed, skip`); return 'skipped'; }
+    const plan = sync.conflicts.length ? null : planOf(worktree, name);
+    const choice = chooseKind({ plan, conflicts: sync.conflicts });
+    // A null `skip` is a skip nobody would read — see `chooseKind`.
+    if (!choice.kind) { if (choice.skip) say(`${name}: ${choice.skip}, skip`); return 'skipped'; }
+    const { kind } = choice;
+
+    const role = deps.role(kind);
+    if (!role?.overlay) { say(`${name}: canon/roles/${kind}.md is missing — skip`); return 'skipped'; }
+    const settings = sessionSettings(plan?.fields || {});
+    const launch = deps.launch(settings.tool);
+    if (!launch?.ok) { say(`${name}: ${settings.tool} is not available (${launch?.hint || launch?.reason}), skip`); return 'skipped'; }
+    const now = deps.now();
+    const prompt = kind === 'reconcile'
+      ? reconcilePrompt({ name, repo: repo.name, conflicts: sync.conflicts })
+      : stepPrompt({ name, repo: repo.name, planPath: plan.path, planText: plan.text, now });
+    const instructions = [await deps.profile(), role.overlay].filter(Boolean).join('\n\n---\n\n');
+    const args = headlessArgs({ toolId: launch.id, adapter: launch.adapter, model: settings.model, instructions, prompt, profileArgs });
+
+    const ts = stamp().replace(/[-:]/gu, '');
+    const out = join(paths.log, `${name}-${ts}.json`);
+    // A plan that names no model on a tool that is not claude gets none, and
+    // the line says so rather than printing `null`: the tool picks.
+    say(`${name}: ${kind} starting (${launch.shortName} ${settings.model || 'own default model'}, ${settings.budgetMinutes} min)`);
+    const t0 = deps.now().getTime();
+    // The lane's current file exists exactly as long as the session does —
+    // written before the call that blocks, removed however that call
+    // returns. It carries its repo, which is also its lane's name.
+    const currentPath = paths.currentFor(repo.name);
+    writeJson(currentPath, {
+      name, kind, repo: repo.name, tool: settings.tool, model: settings.model,
+      budget_minutes: settings.budgetMinutes, started: stamp(), pid, worktree,
+    });
+    let result;
+    try {
+      result = await deps.session({ bin: launch.spec.bin, args, cwd: worktree, timeoutMs: settings.budgetMinutes * 60_000 });
+    } finally {
+      remove(currentPath);
+    }
+    const seconds = Math.round((deps.now().getTime() - t0) / 1000);
+    deps.write(out, result.stdout);
+    deps.write(`${out}.err`, result.stderr);
+
+    if (kind === 'reconcile' && deps.git(worktree, ['rev-parse', '-q', '--verify', 'MERGE_HEAD']).ok) {
+      deps.git(worktree, ['merge', '--abort']);
+      say(`${name}: reconcile did not finish — merge aborted`);
+    }
+    const branch = gitOut(worktree, ['branch', '--show-current']) || name;
+    const prList = deps.gh(worktree, ['pr', 'list', '--head', branch, '--state', 'open', '--json', 'number', '-q', '.[0].number']);
+    const pr = (prList.ok && prList.stdout.trim()) || '-';
+    const read = readSessionOutput({ toolId: launch.id, stdout: result.stdout, stderr: result.stderr, exitCode: result.status, timedOut: result.timedOut });
+    let { note } = read;
+    if (merge && pr !== '-' && note === 'success') note = (await mergePr(worktree, name, pr)) ? 'success,merged' : 'success,open';
+
+    logRun({ ts: stamp(), name, kind, exit: result.status, seconds, pr, turns: read.turns, input: read.input, output: read.output, cacheRead: read.cacheRead, cacheWrite: read.cacheWrite, session: read.session, note });
+    say(`${name}: ${kind} done rc=${result.status} ${seconds}s pr=${pr} turns=${read.turns} note=${note}`);
+    if (read.quota) await quotaPause();
+    // The queue is Martin's "these first", and it empties itself: this
+    // project has had its step, so its name leaves the file now.
+    dropFromQueue(name);
+    // A merged step or a finished reconcile both leave the project ready for
+    // its next step now; 'merged' is the round's cue to stay on it.
+    return note === 'success,merged' || (kind === 'reconcile' && note === 'success') ? 'merged' : 'ran';
+  }
+
+  /**
+   * The queue, re-read every round: queue.md, then every plan on origin/main.
+   * `only` narrows it to one repository — what a lane re-reads mid-round, so
+   * two lanes never fetch the same repository at the same moment.
+   */
+  function queue({ only = null } = {}) {
+    const plans = [];
+    for (const repo of repos) {
+      if (only && repo.name !== only) continue;
+      if (!deps.exists(join(repo.path, '.git'))) continue;
+      deps.git(repo.path, ['fetch', '-q', 'origin']);
+      plans.push(...listPlans(repo, { git: gitOut, batch: showBatch(gitOut) }));
+    }
+    return { names: assembleQueue(deps.read(paths.queue) || '', plans), plans };
+  }
+
+  /**
+   * The queue split into lanes: one lane per repository, Martin's order kept
+   * within each. A name whose repository cannot be told (no workarea and no
+   * plan on main) rides in a lane of its own, where `runStep` says so and
+   * skips it.
+   */
+  function splitLanes(names, plans) {
+    const lanes = new Map();
+    for (const name of names) {
+      const repo = repoOf(name, plans)?.name || null;
+      if (!lanes.has(repo)) lanes.set(repo, []);
+      lanes.get(repo).push(name);
+    }
+    return [...lanes].map(([repo, laneNames]) => ({ repo, names: laneNames }));
+  }
+
+  /**
+   * One lane: its names in order, one step at a time. A project whose step
+   * merged keeps the lane — its next step follows at once (plans re-read, so
+   * the merged status is what decides) instead of waiting a whole round
+   * behind every other project — 2026-08-29 a six-step plan would have taken
+   * six rounds of twenty projects. STOP is honoured between those steps too.
+   */
+  async function runLane({ repo = null, names = [] }, plans, { once = false } = {}) {
+    let known = plans;
+    let ran = 0;
+    for (const name of names) {
+      let r = await runStep(name, known);
+      for (let stayed = 0; ; stayed += 1) {
+        if (r === 'stop') return { ran, stop: true };
+        if (r === 'ran' || r === 'merged') {
+          ran += 1;
+          if (once) return { ran, stop: false, once: true };
+          await deps.sleep(60_000);
+        }
+        if (stopRequested()) { say(`runner exit on STOP after ${name} (remove ${paths.stop} before the next start)`); return { ran, stop: true }; }
+        if (r !== 'merged' || stayed >= 8) break;
+        known = queue({ only: repo }).plans;
+        const status = known.find((p) => p.project === name)?.status;
+        if (!status || status === 'done') break;
+        say(`${name}: step merged and the plan is ${status} — staying on ${name}`);
+        r = await runStep(name, known);
+      }
+    }
+    return { ran, stop: false };
+  }
+
+  /**
+   * One pass: the day's helper if it is due, then every queued project —
+   * memoro's lane and memoro-cli's at the same time, in the one process.
+   * Returns { ran, stop } — the helper is not counted, it is not a step.
+   *
+   * The lanes never touch: different main branches, different worktrees,
+   * different PRs. What they do share is the Claude quota (`quotaPause`) and
+   * the STOP file, which ends both lanes after the step each is in. With
+   * only one repository holding ready plans there is one lane, and a round
+   * is exactly what it was before.
+   */
+  async function round({ once = false } = {}) {
+    // The day's helper first, and only in a round that is a round: `--once`
+    // exists to watch a single step, and a two-minute model turn over
+    // production is not what somebody typing it asked for.
+    if (!once && !stopRequested()) await runHelperDay();
+    const { names, plans } = queue();
+    if (!once) tidyQueue(plans);
+    // A plan that says `done` is archived in the round the runner reads it,
+    // before any step of that round runs — one PR per repository, and the
+    // two repositories never touch. Not under `--once`, for the reason the
+    // helper is not: that is one step to watch, not a round.
+    const archives = once ? [] : await Promise.all(repos.map((repo) => archiveDone(repo, plans)));
+    const archived = archives.flatMap((a) => a.archived);
+    const landed = archives.flatMap((a) => a.landed);
+    const left = names.filter((name) => !archived.includes(name));
+    // `--once` is one step, so it is one lane over the whole queue in
+    // Martin's order — there is nothing for a second lane to do.
+    const lanes = once ? [{ repo: null, names: left }] : splitLanes(left, plans);
+    if (lanes.length > 1) say(`lanes: ${lanes.map((lane) => `${lane.repo || 'unplaced'} (${lane.names.length})`).join(', ')}`);
+    const results = await Promise.all(lanes.map((lane) => runLane(lane, plans, { once })));
+    const out = {
+      ran: results.reduce((sum, r) => sum + r.ran, 0),
+      stop: results.some((r) => r.stop),
+    };
+    // Last of all, and only in a whole round that was not cut short: the
+    // workareas whose plan left main this round are taken down, and the ones
+    // with no plan at all are written where Martin looks. `--once` changes
+    // nothing but the one step it exists to watch.
+    if (!once && !out.stop) closeWorkareas(plans, landed);
+    if (results.some((r) => r.once)) out.once = true;
+    return out;
+  }
+
+  /** runner.json — a runner is here, and this is the pid to test for life. */
+  const markRunner = () => writeJson(paths.runner, { pid, started: stamp() });
+  const clearRunner = () => {
+    remove(paths.runner);
+    for (const repo of repos) remove(paths.currentFor(repo.name));
+  };
+
+  return {
+    paths, say, round, runStep, runLane, splitLanes, runHelperDay, archiveDone, queue, stopRequested,
+    syncMain, mergePr, planOf, repoOf, markRunner, clearRunner, closeWorkareas, closeWorkarea,
+    workareas, tidyQueue,
+  };
+}
+
+/**
+ * The loop: rounds until `rounds` is reached (0 = forever), a STOP file
+ * appears, or `--once` has run its one step.
+ */
+export async function runLoop({ rounds = 0, once = false, merge = true, idleSleepMs = 600_000, deps = realDeps() } = {}) {
+  const runner = createRunner({ merge, deps });
+  if (runner.stopRequested()) { runner.say(`STOP file present (${runner.paths.stop}) — remove it before starting`); return 2; }
+  runner.say(`runner start (mc run, merge=${merge ? 1 : 0} rounds=${rounds} once=${once ? 1 : 0})`);
+  runner.markRunner();
+  try {
+    let n = 0;
+    while (rounds === 0 || n < rounds) {
+      n += 1;
+      const r = await runner.round({ once });
+      if (r.stop) { runner.say(`runner exit on STOP (remove ${runner.paths.stop} before the next start)`); return 0; }
+      if (r.once) { runner.say('once: exiting'); return 0; }
+      runner.say(`round ${n} done (${r.ran} ran)`);
+      if (r.ran === 0 && (rounds === 0 || n < rounds)) await deps.sleep(idleSleepMs);
+    }
+    runner.say(`runner exit after ${rounds} round(s)`);
+    return 0;
+  } finally {
+    runner.clearRunner();
+  }
+}

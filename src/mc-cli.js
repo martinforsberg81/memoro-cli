@@ -40,7 +40,7 @@ async function routeV1Command(args) {
   if (command === 'sessions') {
     const subcommand = args[1];
     const rest = args.slice(2);
-    if (subcommand === 'list') return runModule('./cli/list.js', rest);
+    if (subcommand === 'list') return moved('mc sessions list');
     if (subcommand === 'send') {
       if (!rest[0] || rest.length < 2) {
         console.error('mc: usage — mc sessions send <session> <message>');
@@ -51,15 +51,24 @@ async function routeV1Command(args) {
     if (subcommand === 'read') return runModule('./cli/read.js', rest);
     return null;
   }
-  // Bare `mc` is "show me my sessions". It used to wrap a coding tool in the
-  // current directory and refused outside a Git repository; nothing about mc
-  // is gated on repositories any more.
-  if (args.length === 0) return runModule('./cli/list.js', []);
+  // Bare `mc` is the page: the runner, the queue, the decisions, the intake
+  // and every workarea, and at a terminal the way in underneath it. It was
+  // the V1 sessions table until 2026-08-29 (decision mc-3) — the front door
+  // of the whole system, saying nothing true about it.
+  if (args.length === 0) return runModule('./mc/commands/home.js', []);
+  // The page's own flags, and only those: anything else that starts with a
+  // dash keeps falling through to the capability dispatcher, which is where
+  // it was answered before.
+  const pageFlags = new Set(['--json', '--fresh', '--offline']);
+  if (pageFlags.has(command)
+    && args.every((arg) => pageFlags.has(arg) || /^\d+$/u.test(arg))) {
+    return runModule('./mc/commands/home.js', args);
+  }
+  if (command === 'list') return moved('mc list');
   const modules = {
     new: './cli/new.js',
     open: './cli/open.js',
     resume: './cli/resume.js',
-    list: './cli/list.js',
     status: './cli/status.js',
     rename: './cli/rename.js',
     cd: './cli/cd.js',
@@ -72,16 +81,16 @@ async function routeV1Command(args) {
     gc: './mc/commands/gc.js',
     storage: './mc/commands/storage.js',
     doctor: './mc/commands/doctor.js',
-    worktrees: './mc/commands/worktrees.js',
-    worktree: './mc/commands/worktree.js',
     work: './mc/commands/work.js',
-    task: './mc/commands/task.js',
     repo: './mc/commands/repo.js',
     merge: './mc/commands/merge.js',
+    test: './mc/commands/test.js',
     suite: './mc/commands/suite.js',
     worker: './mc/commands/worker.js',
     brief: './mc/commands/brief.js',
+    helper: './mc/commands/helper.js',
     plan: './mc/commands/plan.js',
+    run: './mc/commands/run.js',
     roles: './mc/commands/roles.js',
     pm: './mc/commands/pm.js',
     'pm-helper': './mc/commands/pm-helper.js',
@@ -91,6 +100,18 @@ async function routeV1Command(args) {
   return Object.hasOwn(modules, command)
     ? runModule(modules[command], args.slice(1))
     : null;
+}
+
+/**
+ * A verb that has become part of `mc` itself. It says where it went rather
+ * than printing a second list beside the first one — a wrong answer given
+ * confidently is worse than none, and silence is worse than both.
+ */
+function moved(verb) {
+  console.error(`mc: ${verb} is now mc — one page, and it is what mc prints`);
+  console.error('    mc                  the page, and at a terminal a way in');
+  console.error('    mc status <name>    one project');
+  return 2;
 }
 
 async function runModule(path, argv) {

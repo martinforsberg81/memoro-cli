@@ -4,10 +4,29 @@
  */
 export const HELP_TEXT = `mc — source-owned coding sessions
 
+THE PAGE
+  mc                               The one page: what is running now, how deep
+                                    the queue is, the decisions waiting on
+                                    you, what waits in intake, and every
+                                    workarea numbered. At a terminal it ends
+                                    in a way in — a number opens that
+                                    workarea. No model; reads only
+  mc --json [--fresh]              The same page as one object. The page is
+                                    offline and instant; --fresh fetches and
+                                    asks GitHub, and without it the page says
+                                    how old its PR cache is
+
+  mc brief                         Decide what to work on next
+  mc plan <name>                   Plan one piece of work, ending in a PLAN.md
+  mc run                           The runner: one step at a time, headless
+  mc test <repo> <pr>              Measure a pull request; merge nothing
+  mc merge <repo> <pr>             The same measurement, then the merge
+  mc status <name>                 One project, whole
+  mc work <name>                   Open that workarea
+
 USAGE
   mc new <name> [objective]        Create a local session in this directory
   mc open <name>                   Attach to, start, or exactly resume a session
-  mc list                          List local and Memoro Cloud sessions
 
 LOCAL SESSIONS
   mc new <name> [objective] [--tool codex|claude] [--no-launch]
@@ -15,8 +34,6 @@ LOCAL SESSIONS
   mc open <name> [--cwd <path>] [--tool codex|claude] [--replace]
                                     Associate another directory or open here
   mc resume <name>                 Alias for mc open
-  mc status --sessions <name> [--json]
-                                    Read durable session and runtime state
   mc rename <old> <new> [--json]   Rename metadata without moving workspaces
   mc cd <name> [--workspace <id>]  Print or enter an associated directory
   mc attach <name>                 Attach to the exact live local terminal
@@ -41,25 +58,13 @@ MAINTENANCE
                                     One of them — read it, tail it, stop it,
                                     or start it again. mc dev with no verb
                                     lists all nine and what each one takes
-  mc status                        The one page: the runner (alive, queue,
-                                    next, last 24 h, estimated list cost),
-                                    decisions waiting on you, every project
-                                    per repo and programme, and workareas
-                                    without a project. No model; reads only
-  mc status --json                 The same, as one object; --offline skips
-                                    fetch and gh
   mc status <name>                 One project: its PLAN.md frontmatter and
                                     step, the decisions that belong to it,
                                     its last three runner steps and the open
                                     PR on its branch. --json and --offline
-                                    as above
-  mc status --sessions             The old board: every work area, the
-                                    conversations in it and what they last
-                                    said, the suite lease and the repository
-                                    leases
-  mc status --watch [seconds]      That board, live; polls every 15s
-  mc status --wait [--timeout <s>] Block until something moves, then report
-  mc work                          What exists; at a terminal, a way in
+                                    as above. Without a name it says where
+                                    the page went: mc is the page
+  mc work                          The page — mc by another name
   mc work <name>                   Open it — the name is enough, new or not
   mc work <name> --tmux [task]     Start it in the background, for another
                                     session to talk to; mc work <name> joins
@@ -89,10 +94,6 @@ MAINTENANCE
                                     refuses on a pane somebody is attached to
                                     or one whose prompt is not empty, and says
                                     so — the message is delivered either way
-  mc work send <name> … --task     …and open a tracked task for it in the same
-                                    action: state open, moving to done or to
-                                    blocked with one line of reason. Never
-                                    inferred — without the flag no task exists
   mc work add <name> <repo> [branch]
                                     Add a repository's worktree to that work
   mc work stop <name>              Stop what is running there; keep the work
@@ -128,29 +129,34 @@ MAINTENANCE
                                     off the board rather than off a clock. A
                                     holder mc cannot see reads unknown, never
                                     a guess
-  mc merge <repo> <pr>             Run the test gate for that pull request —
+  mc test <repo> <pr>              Measure that pull request, and stop there —
                                     take the lease, build a fresh baseline and
-                                    a candidate with main merged in, run the
-                                    repository's own full suite on both, and
+                                    a candidate with main merged in, run what
+                                    the change reaches on BOTH sides, and
                                     compare the failures by name at every
-                                    level — then, only if nothing new went red
-                                    and the base has not moved since,
-                                    squash-merge, pull the source-linked
-                                    installation, and log a line. Nothing
-                                    merges a red gate. The verdict says GREEN
-                                    only when the base itself has no red names;
-                                    otherwise it carries the number that are
-                                    standing, and .mc/red-ratchet.json is what
-                                    keeps that number from growing
+                                    level. What runs is what the repository
+                                    declares: with a select command it is the
+                                    test files the change reaches, without one
+                                    it is the whole suite. Both sides always
+                                    run the CANDIDATE's list, because a
+                                    selection is a function of the diff and the
+                                    base's diff against itself is empty. Merges
+                                    nothing, and cannot
+  mc merge <repo> <pr>             That same measurement, then the landing:
+                                    only if nothing new went red and the base
+                                    has not moved since, squash-merge, pull the
+                                    source-linked installation, and log a line.
+                                    Nothing merges a red gate. The verdict says
+                                    GREEN only when the base itself has no red
+                                    names; otherwise it carries the number that
+                                    are standing, and .mc/red-ratchet.json is
+                                    what keeps that number from growing
   mc merge <repo> <pr> <pr>...      Several at once: one candidate with all
-                                    of them merged in, the suite once each
+                                    of them merged in, measured once each
                                     side, each one's own tests by itself, then
                                     merged in the order given. A batch that
                                     stops — a conflict, a red — falls back to
                                     one round per pull request and says so
-  mc merge <repo> <pr> --check
-                                    The same round, stopping at the verdict.
-                                    A gate that passes is not a review
   mc merge <repo> <pr> --docs      Land a pull request that touches nothing
                                     outside docs/ — no suite, no lease, squash.
                                     A plan PR lands this way, by the session
@@ -182,6 +188,31 @@ MAINTENANCE
   mc brief --collect [--offline]   Only the file: ~/mc/brief/<date>.md, no
                                     model, from the runner log, PRs, plans
                                     on main, decision files and the queue
+  mc helper                        The desk: a session in ~/mc/helper/ that
+                                    takes your report of a bug or something
+                                    that should be better and writes it into
+                                    ~/mc/intake/proposals/<date>-<x>.md. It
+                                    reads no digest, touches no proposal that
+                                    is already there, and fixes nothing — you
+                                    pick it up at mc brief or mc plan
+                                    (--codex|--claude, --model <m> as usual)
+  mc helper --intake               The eye on production: the daily digest,
+                                    then one headless turn that reads it and
+                                    proposes from it — zero on a quiet day.
+                                    Never the queue: the next brief lists
+                                    them, and you decide. mc run does this
+                                    once a day on its own; mc shows the
+                                    digest and its \`!\` lines
+  mc helper --collect              Only the digest, no model:
+                                    ~/mc/intake/errors-<date>.md from the
+                                    error survey, the analysis items,
+                                    AI-provider errors, health and deploys
+                                    — plus what is new since the last digest.
+                                    Reads production, writes nothing to it
+  mc helper --intake [--collect] --since <iso> [--limit <n>] [--threshold <n>] [--model <model>]
+                                    …a different window, more fingerprints,
+                                    another bar for marking one \`!\`, or a
+                                    model other than the role's
   mc plan <name>                   A planning session that ends in a PLAN.md:
                                     a fresh foreground session in the workarea
                                     (made from origin/main if missing) with
@@ -189,6 +220,16 @@ MAINTENANCE
                                     titled "Plan: <name>"
   mc plan <name> --repo <r>        …in which repository (default memoro);
                                     --codex|--claude, --model <m> as usual
+  mc run                           The runner: one fresh headless session per
+                                    step of the next project, merged direct;
+                                    queue = ~/mc/queue.md then every ready
+                                    PLAN.md on origin/main. Touch
+                                    ~/mc/runner/STOP to exit after the step.
+                                    Runs mc helper --intake once a day too,
+                                    in the first round after 05:00Z
+  mc run --once                    One step for the first runnable project,
+                                    and no helper
+  mc run --rounds <n> [--no-merge] [--idle-sleep <s>]
   mc worker <name> [task]          A project folder that carries the worker
                                     role, read from the roles mc ships: every
                                     conversation started in it gets the
@@ -196,30 +237,20 @@ MAINTENANCE
                                     escalates by writing ../decisions/
   mc roles list                    The defined roles, read from their files
   mc roles show <role>             One role whole: facts, then overlay text
-  mc worktree add <name> <branch>  Create a worktree this session owns
-  mc worktree list <name>          What this session owns
-  mc worktrees [--json]            What is lying around, and whose it is
-  mc task list [<session>] [--json]
-                                    Open tasks, oldest-moved first, with age.
-                                    Without a session, every open task
-                                    anywhere. mc status shows the count per
-                                    session; this shows which ones and why
-  mc task done <id>                Mark it done — the one way out
-  mc task block <id> "<reason>"    Mark it blocked, with what for. done still
-                                    ends it from here; nothing else moves it
   mc gc [--dry-run|--apply]        Remove stale runtime homes; never Git resources
   mc migrate [--dry-run] [--stop-legacy-runtimes]
                                     Move pre-V1 sessions into session homes, once
                                     and explicitly; no other command migrates
   mc migrate --session <name>       Move one session and leave the rest alone
 
-LISTING
-  mc list [--local|--cloud] [--all] [--json|--names]
-  mc sessions list                 Alias for mc list
+SESSIONS
 
-  Local sessions are authoritative on this machine and are listed without
+  Local sessions are authoritative on this machine and are read without
   probing sockets or the network. Cloud sessions are authoritative in Memoro
-  Cloud and appear as a separate source. They are not synchronized copies.
+  Cloud and are a separate source. They are not synchronized copies.
+
+  There is no verb that lists them. mc is the page; a second list beside the
+  first one is what this replaced.
 
 EXECUTION
   Codex and Claude use one certified execution path. A live runtime is attached
@@ -253,7 +284,7 @@ IDENTITY
 REQUIREMENTS
   - Run from any directory you want to associate with the session. mc does not
     require a Git repository; a repository is one thing a workspace may be.
-  - Plain mc lists your sessions.
+  - Plain mc prints the page and, at a terminal, opens what you pick.
   - Install and authenticate the selected coding tool.
   - Sign in to Memoro only for cloud listing and connected capabilities.
 

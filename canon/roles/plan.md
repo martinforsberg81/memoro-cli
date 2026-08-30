@@ -45,10 +45,20 @@ at the top of any old plan pointing to the new location.
 ## Decisions
 
 Every "decision still required" becomes `../decisions/<programme>-<n>.md`
-at the workarea root: one question per file, a `# ` title, the options, and
-a `## Rekommendation` section. Martin answers by appending a line that
-starts with `**Beslut:**`; the runner reads that line. If the next step
-depends on such an answer, set `status: waiting-decision`.
+at the workarea root: one question per file, a `# ` title, what the code
+says and what it costs, and a `## Rekommendation` section naming the one
+thing you would do. It is a proposal Martin says GO to, not a menu —
+alternatives appear only where a real trade-off survived your reading.
+
+A question that is unclear, or that reading further would answer, gets no
+file: read instead. Fewer, sharper questions are the deliverable here.
+
+Martin answers by appending a line that starts with `**Beslut:**`; the next
+session writes the answer into PLAN.md and sets `status:` back to `ready`,
+which is the only thing that puts the project back in front of the runner —
+it reads no decision file. `mc brief --collect` then deletes the file, once
+no plan waits on it. If the next step depends on such an answer, set
+`status: waiting-decision`.
 
 ## What you never do
 

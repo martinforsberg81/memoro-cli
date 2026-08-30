@@ -23,7 +23,7 @@ export async function run(argv, deps = {}) {
   }
   const data = await (deps.collect || collectProject)(names[0], { offline: argv.includes('--offline') });
   if (!data) {
-    stderr.write(`mc: no project or workarea "${names[0]}" — mc status lists them; mc status --sessions ${names[0]} asks about a pre-V1 session\n`);
+    stderr.write(`mc: no project or workarea "${names[0]}" — mc lists them\n`);
     return 1;
   }
   if (argv.includes('--json')) stdout.write(`${JSON.stringify(data, null, 2)}\n`);

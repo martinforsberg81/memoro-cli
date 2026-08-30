@@ -27,9 +27,54 @@ describe('the brief role', () => {
     const role = readCanonRole('brief');
     assert.equal(role.model, 'opus');
     assert.deepEqual(role.tools, ['claude', 'codex']);
-    assert.match(role.overlay, /`\*\*Beslut:\*\* <option> \(Martin, <YYYY-MM-DD>\)\. <one sentence why>`/u);
+    assert.match(role.overlay, /`\*\*Beslut:\*\* <what was decided> \(Martin, <YYYY-MM-DD>\)\. <one sentence why>`/u);
     assert.match(role.overlay, /one at a time/u);
     assert.match(role.overlay, /never edit PLAN\.md/u);
+  });
+
+  /**
+   * A decision is put to Martin as one proposal he says GO to. The overlay
+   * that told the session to lay out "the options in one line each" is the
+   * reason a brief could open with six unrelated menus; it says the opposite
+   * now, and forbids a question the session has not read the code behind.
+   */
+  it('forbids the menu, and demands the code was read', () => {
+    const { overlay } = readCanonRole('brief');
+    assert.match(overlay, /says\s+GO\s+to/u);
+    assert.match(overlay, /Never\s+lay\s+out\s+options\s+for\s+him\s+to\s+choose\s+between/u);
+    assert.match(overlay, /Present\s+a\s+decision\s+as\s+a\s+menu\s+of\s+options/u);
+    assert.match(overlay, /the\s+code\s+it\s+stands\s+on/u);
+    assert.doesNotMatch(overlay, /the\s+options\s+in\s+one\s+line\s+each/u);
+  });
+
+  /**
+   * Where a decision lives once it is answered: in the plan, and nowhere
+   * else. The overlay has to say so, because the file is deleted afterwards
+   * and a plan that did not absorb the answer is the only way to lose it.
+   *
+   * It is `mc brief --collect` that deletes it, not `mc run` — the runner has
+   * nothing to do with decisions (Martin, 2026-08-29), and `retireDecisions`
+   * lives in `brief-collect.js`. The overlay said `mc run` until 2026-08-29
+   * and this test held it there.
+   */
+  it('says the plan carries the decision and the file is deleted', () => {
+    const { overlay } = readCanonRole('brief');
+    assert.match(overlay, /`mc\s+brief\s+--collect`\s+then\s+deletes\s+the\s+file/u);
+    assert.match(overlay, /the\s+plan\s+is\s+where\s+a\s+decision\s+lives/u);
+  });
+
+  /**
+   * The two lists the tidying leaves — `mc run` writes both intake files and
+   * reads neither, so the brief is where they are raised. The overlay has to
+   * name them, and has to say the one thing that is not obvious from a row:
+   * the session removes nothing itself.
+   */
+  it('walks what the tidying left, and removes nothing itself', () => {
+    const { overlay } = readCanonRole('brief');
+    assert.match(overlay, /\*Archived without a note\*/u);
+    assert.match(overlay, /\*Workareas with no plan on main\*/u);
+    assert.match(overlay, /`branch: landed`/u);
+    assert.match(overlay, /You remove nothing\./u);
   });
 
   /**
@@ -42,10 +87,10 @@ describe('the brief role', () => {
    * loop, that the next brief stops asking the question.
    */
   it('dictates an answer line that the runner already greps for, and that closes the question', () => {
-    const template = /`(\*\*Beslut:\*\* <option>[^`]*)`/u.exec(readCanonRole('brief').overlay)?.[1];
-    assert.equal(template, '**Beslut:** <option> (Martin, <YYYY-MM-DD>). <one sentence why>');
+    const template = /`(\*\*Beslut:\*\* <what was decided>[^`]*)`/u.exec(readCanonRole('brief').overlay)?.[1];
+    assert.equal(template, '**Beslut:** <what was decided> (Martin, <YYYY-MM-DD>). <one sentence why>');
     const line = template
-      .replace('<option>', 'A — vilande')
+      .replace('<what was decided>', 'A — vilande')
       .replace('<YYYY-MM-DD>', '2026-08-26')
       .replace('<one sentence why>', 'It costs one Sonnet turn a day and asks for no new daemon.');
 

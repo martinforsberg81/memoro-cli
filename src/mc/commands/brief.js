@@ -30,9 +30,10 @@ export async function run(argv, deps = {}) {
   const t0 = Date.now();
   const result = await (deps.collect || collectBrief)({ offline: flags.offline });
   const seconds = ((Date.now() - t0) / 1000).toFixed(1);
-  const { decisions, merged, opened, notes } = result.data;
+  const { decisions, merged, opened, proposals = [], notes } = result.data;
   const waiting = decisions.filter((d) => !d.answered).length;
-  stdout.write(`mc: ${result.path} (${seconds}s) — ${merged.length} merged, ${opened.length} open, ${waiting} waiting on you\n`);
+  const extra = proposals.length ? `, ${proposals.length} proposal${proposals.length === 1 ? '' : 's'}` : '';
+  stdout.write(`mc: ${result.path} (${seconds}s) — ${merged.length} merged, ${opened.length} open, ${waiting} waiting on you${extra}\n`);
   for (const note of notes) stderr.write(`mc: ${note}\n`);
   if (flags.collect) return 0;
 
@@ -48,6 +49,9 @@ export async function run(argv, deps = {}) {
     worktree: { repo: null, path: root, is_git: false },
     tool: flags.tool || role.tools?.[0] || 'claude',
     pick: 'new',
+    // NOW says "mc brief" while this is up. It stands in the work root, which
+    // is nobody's area, so there is no name to give it.
+    verb: 'brief',
     model: flags.model,
     overlay: launch.overlay,
     prompt: launch.prompt,

@@ -171,7 +171,10 @@ describe('reserved names', () => {
     for (const name of RESERVED_ROLE_NAMES) assert.equal(reservedRoleName(name), true);
     assert.equal(reservedRoleName('worker-1'), false);
     assert.match(reservedRoleHint('pm'), /mc pm\)/u);
-    assert.match(reservedRoleHint('helper'), /mc pm-helper/u);
+    assert.match(reservedRoleHint('pm-helper'), /mc pm-helper\)/u);
+    // `helper` pointed at `mc pm-helper` until `mc helper` grew a door of its
+    // own: the bare verb owns `~/mc/helper/`, so that is the command to name.
+    assert.match(reservedRoleHint('helper'), /mc helper\)/u);
   });
 
   it('guards case-insensitively — the filesystems mostly are', () => {
