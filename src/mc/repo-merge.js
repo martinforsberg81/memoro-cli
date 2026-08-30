@@ -31,7 +31,7 @@ import { appendFileSync, existsSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 import { claimLease, readLease, releaseLease } from './repo-lease.js';
-import { freshenBranchForLanding, freshenOpenBranches } from './repo-freshen.js';
+import { freshenBranchForLanding } from './repo-freshen.js';
 import { lockfileHashAt, saveBaseline } from './repo-baseline-cache.js';
 import { currentHolder } from './work-identity.js';
 import { log } from './logger.js';
@@ -81,7 +81,6 @@ export async function runMergeRound({
   installs = sourceLinkedInstallations,
   suite = undefined,
   mergeLog = undefined,
-  freshen = freshenOpenBranches,
   refresh = null,
   onProgress = () => {},
   clock = () => Date.now(),
@@ -136,7 +135,6 @@ export async function runMergeRound({
     gate: null,
     deploy: null,
     tree_identical: null,
-    freshened: null,
     log_line: null,
     log_path: null,
     started_at: new Date(startedAt).toISOString(),
@@ -399,14 +397,6 @@ export async function runMergeRound({
       root,
     }), (why) => say(`could not save the candidate result as the next baseline (${why}) — the next round runs it as before`));
 
-    // The branches this merge just made dirty, brought up to date while the
-    // lease is still held (A6): the same work every open branch's owner
-    // would do twenty minutes later, done once, by the round that moved
-    // main. A failure here never un-merges anything and never fails the
-    // round — the report carries what happened to each branch.
-    report.freshened = attemptFreshen({ freshen, repoPath, base: verdict.pr.base, holder, root, env, git: askGit, gh: askGh, say });
-
-
     report.deploy = deployPull({ git: askGit, repoPath, env, say, installs });
     const written = writeMergeLine({ report, verdict, path: mergeLog ?? defaultMergeLog(repoPath, { root, env }), clock });
     report.log_path = written.path;
@@ -419,17 +409,6 @@ export async function runMergeRound({
       releaseLease({ repoPath, holder, root });
       say('lease released');
     }
-  }
-}
-
-/** The freshen step, held to "never fails the round". */
-function attemptFreshen({ freshen, repoPath, base, holder, root, env, git, gh, say }) {
-  if (!freshen) return null;
-  try {
-    return freshen({ repoPath, base, holder, root, env, git, gh, say });
-  } catch (error) {
-    say(`freshen failed (${error?.message || String(error)}) — every open branch is exactly as it was`);
-    return { branches: [], failed: error?.message || String(error) };
   }
 }
 

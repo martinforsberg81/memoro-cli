@@ -354,7 +354,6 @@ function mergeLines(report) {
       ? `mc: pulled ${report.deploy.command} at ${report.deploy.root}`
       : `mc: could not pull ${report.deploy.root} (${report.deploy.reason}) — the merge stands; pull by hand`);
   }
-  lines.push(...freshenedLines(report));
   if (report.log_path) lines.push(`mc: logged to ${report.log_path}`);
   return lines;
 }
@@ -408,7 +407,6 @@ function batchLines(report) {
       ? `mc: pulled ${report.deploy.command} at ${report.deploy.root}`
       : `mc: could not pull ${report.deploy.root} (${report.deploy.reason}) — the merge stands; pull by hand`);
   }
-  lines.push(...freshenedLines(report));
   if (report.log_path) lines.push(`mc: logged to ${report.log_path}`);
   return lines;
 }
@@ -423,17 +421,6 @@ function treeIdentityLines(report) {
   if (report.tree_identical === true) return ['mc: the landed tree is byte-identical to the measured candidate — the green transfers by identity'];
   if (report.tree_identical === false) return ['mc: WARNING — the landed tree is NOT the measured candidate\'s: the sequential squashes resolved something differently; the green does not transfer, and the next round measures main as it stands'];
   return [];
-}
-
-/** What became of the open branches this merge made dirty (A6). */
-function freshenedLines(report) {
-  const branches = report.freshened?.branches || [];
-  const lines = [];
-  if (report.freshened?.failed) lines.push(`mc: freshening the open branches failed (${report.freshened.failed}) — every branch is exactly as it was`);
-  for (const item of branches) {
-    lines.push(`mc: ${item.action === 'pushed' ? 'freshened' : item.action} #${item.number} ${item.branch}${item.detail ? ` — ${item.detail}` : ''}${item.told ? ` (told ${item.told})` : ''}`);
-  }
-  return lines;
 }
 
 /**
