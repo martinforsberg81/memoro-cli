@@ -54,7 +54,7 @@ import { claimSuiteLease, releaseSuiteLease } from './suite-lease.js';
 import { tellHolder } from './lease-refusal.js';
 import { suiteRuns } from './work-status.js';
 import { compareRed, redNames, tapTotals } from './tap-red.js';
-import { RATCHET_FILE, compareRatchet, readRatchet } from './red-ratchet.js';
+import { RATCHET_FILE, compareRatchet, ratchetAtRef, readRatchet } from './red-ratchet.js';
 import { currentHolder } from './work-identity.js';
 import { log } from './logger.js';
 import { mcHome } from './paths.js';
@@ -529,47 +529,83 @@ export async function runGate({
 
     if (broke.length) return finish('red', `${broke.length} test${broke.length === 1 ? '' : 's'} red on the candidate and green on the baseline`);
 
-    // The floor, checked against the state this change would leave behind.
+    // The floor. It reports on main; it does not refuse this change.
     //
-    // Read from the *candidate* worktree, so a pull request that repairs tests
-    // may record the smaller set in the same commit as the repair, and so the
-    // set consulted is the one that would be on main after the merge. It is no
-    // way around the comparison above: a change that added a red name has
-    // already been stopped by `broke`, whatever it wrote in this file.
+    // The rule it used to enforce — a red name absent from the file stops the
+    // round — could not fire on a fault this change introduced. `broke`
+    // returned above, so `candidate.red ⊆ baseline.red`, so every name the
+    // floor could stop on was already red on main. It refused changes for the
+    // very thing the next paragraph calls "not this change's doing", and on
+    // 2026-08-30 a broken `codex` install made thirteen broker tests red for a
+    // reason no pull request could have caused or fixed. What is installed on
+    // a machine has nothing to do with whether a change may land.
+    //
+    // Two comparisons now, and only one of them can stop a round.
     const ratchet = readRatchet(headDir);
+    const onBase = ratchetAtRef({ git: askGit, ref: baseRef, cwd: repoPath });
     report.ratchet = {
       present: ratchet.present,
       ok: ratchet.ok,
       file: RATCHET_FILE,
       accepted: ratchet.names.length,
-      risen: [],
+      // Names this change takes out of the floor while they are still red.
+      lowered_still_red: [],
       fallen: [],
+      // Names red on MAIN that main's own floor does not record. Kept under
+      // the old key so the round log and everything reading it still find it.
       baseline_risen: [],
+      base_floor: onBase.present ? onBase.names.length : null,
       reason: ratchet.reason,
     };
+    // A malformed floor is still a stop, and it is about the file rather than
+    // the machine: read as an empty set it would make every standing red name
+    // look like a rise, having first told the operator the typo was fine.
     if (!ratchet.ok) return finish('ratchet', ratchet.reason);
+    // A floor on MAIN that will not parse is main's problem, by the same rule
+    // as everything else here: it is not this change's doing and must not
+    // refuse it. The comparison that needs it is skipped and said.
+    if (onBase.present && !onBase.ok) {
+      say(`${RATCHET_FILE} at ${baseRef} ${onBase.reason} — the floor cannot be compared this round; not this change's doing`);
+      onBase.present = false;
+    }
+
     if (ratchet.present) {
-      const moved = compareRatchet(ratchet.names, after.result.red);
-      report.ratchet.risen = moved.risen;
-      report.ratchet.fallen = moved.fallen;
-      say(`ratchet: ${ratchet.names.length} accepted, ${moved.risen.length} above it, ${moved.fallen.length} below`);
-      if (moved.risen.length) {
-        return finish('ratchet', `${moved.risen.length} red name${moved.risen.length === 1 ? '' : 's'} `
-          + `${moved.risen.length === 1 ? 'is' : 'are'} not in the standing red set recorded in ${RATCHET_FILE}`);
+      // (1) THE STOP, and the only one: this change removes names from the
+      // floor that are still failing. Lowering the floor is a claim in
+      // somebody's diff — "these came good" — and it is a claim the round can
+      // check. A change that repairs tests and records the smaller set in the
+      // same commit passes, because the names it removed are green.
+      const removed = onBase.present ? onBase.names.filter((name) => !ratchet.names.includes(name)) : [];
+      const stillRed = removed.filter((name) => after.result.red.includes(name));
+      report.ratchet.lowered_still_red = stillRed;
+      if (stillRed.length) {
+        return finish('ratchet', `this change removes ${stillRed.length} name${stillRed.length === 1 ? '' : 's'} `
+          + `from ${RATCHET_FILE} that ${stillRed.length === 1 ? 'is' : 'are'} still red: `
+          + `${stillRed.slice(0, 5).join(', ')}${stillRed.length > 5 ? ', …' : ''}`);
       }
-      // The BASELINE against the floor too — the check nothing ran the day
-      // 57 red passed through a round whose floor said 55 (measured
-      // 2026-08-23: #385's candidate measured a tree at 55, #386's baseline
-      // measured the same content at 57 minutes later; the 57 was compared
-      // against nothing and written into a log line). A base above its own
-      // floor is the base's instability or regression, never this PR's
-      // fault, so it is flagged as loudly as a stop without being one —
-      // and it is the replacement for the accident that found the last
-      // one: a carried baseline (A1) would never have measured the 57.
-      const unstable = compareRatchet(ratchet.names, report.baseline.red);
-      report.ratchet.baseline_risen = unstable.risen;
-      if (unstable.risen.length) {
-        say(`BASELINE UNSTABLE — ${unstable.risen.length} red name${unstable.risen.length === 1 ? '' : 's'} on the baseline ${unstable.risen.length === 1 ? 'is' : 'are'} not in ${RATCHET_FILE}: ${unstable.risen.slice(0, 5).join(', ')}${unstable.risen.length > 5 ? ', …' : ''} — the base itself is flaky or regressed; not this change's doing`);
+
+      // (2) MAIN against its own floor — the check nothing ran the day 57 red
+      // passed through a round whose floor said 55 (measured 2026-08-23:
+      // #385's candidate measured a tree at 55, #386's baseline measured the
+      // same content at 57 minutes later; the 57 was compared against nothing
+      // and written into a log line). A base above its own floor is the base's
+      // instability or regression, never this PR's fault — so it is said as
+      // loudly as a stop without being one, and it goes into the round log
+      // where `mc log` can count it.
+      const floor = onBase.present ? onBase.names : ratchet.names;
+      const drift = compareRatchet(floor, report.baseline.red);
+      report.ratchet.baseline_risen = drift.risen;
+      report.ratchet.fallen = drift.fallen;
+      say(`ratchet: ${floor.length} accepted on ${baseRef}, ${drift.risen.length} above it, ${drift.fallen.length} below`);
+      if (drift.risen.length) {
+        say(`MAIN IS ABOVE ITS FLOOR — ${drift.risen.length} red name${drift.risen.length === 1 ? '' : 's'} on ${baseRef} ${drift.risen.length === 1 ? 'is' : 'are'} not in ${RATCHET_FILE}: ${drift.risen.slice(0, 5).join(', ')}${drift.risen.length > 5 ? ', …' : ''} — main is flaky, regressed, or this machine is missing something the tests need; not this change's doing, and not a reason to refuse it`);
+      }
+      if (drift.fallen.length) {
+        // Said, and said with the caveat, because a fall is not a to-do. On
+        // 2026-08-30 thirteen names fell the moment a broken `codex` install
+        // was repaired; removing them would have made this laptop's package
+        // manager a precondition for merging anywhere.
+        say(`${drift.fallen.length} name${drift.fallen.length === 1 ? '' : 's'} in ${RATCHET_FILE} ${drift.fallen.length === 1 ? 'is' : 'are'} not red on ${baseRef} right now — a name can fall because the machine changed rather than because the code did, so check which before taking any out`);
       }
     }
     // The pull request's own tests (D-0157). The suite answers "did anything
@@ -747,7 +783,7 @@ export async function runGate({
  */
 export function verdictFor(report) {
   if (report.stopped_at === 'red') return 'red';
-  if (report.stopped_at === 'ratchet') return 'ratchet-risen';
+  if (report.stopped_at === 'ratchet') return 'ratchet-lowered';
   if (report.stopped_at !== null) return 'stopped';
   return report.standing_red ? 'no-new-red' : 'green';
 }

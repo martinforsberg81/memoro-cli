@@ -228,12 +228,12 @@ them has nowhere to show up. 55 standing red names are 55 places the gate is
 blind, not just 55 items of debt.
 
 `--json` carries `standing_red` as its own field and a `verdict` of `green`,
-`no-new-red`, `red`, `ratchet-risen`, or `stopped` — `green` and `no-new-red`
+`no-new-red`, `red`, `ratchet-lowered`, or `stopped` — `green` and `no-new-red`
 are separate words so a reader who only ever wanted the strict one can ask for
 it. The line the merge round narrates itself with says the same thing, and the
 merge log row reads `55 standing red before`.
 
-### `.mc/red-ratchet.json` — the standing red set, so it can only shrink
+### `.mc/red-ratchet.json` — the standing red set, reported not enforced
 
 The differential rule cannot see its own floor moving. Inside one round a rise
 is always caught — more red names on the candidate than the baseline means at
@@ -243,12 +243,36 @@ round measures `main` afresh and remembers nothing, so a red name that reaches
 `main` by a path no gate stood in simply becomes part of the next baseline, and
 is reported as "no new red" over it from then on. That is how 55 got there.
 
-So the floor is written down in the repository, in the diff. A repository with
-no `.mc/red-ratchet.json` behaves exactly as before and is told it has no floor
-recorded. Where there is one, a red name that is not in its `names` **fails the
-round** — the same class as a new red name. Every such name was red on the base
-too, so the round says plainly that the pull request did not cause it, and
-prints the names JSON-quoted so the remedy is a paste.
+So the floor is written down in the repository, in the diff — as a statement
+about `main`. A repository with no `.mc/red-ratchet.json` behaves exactly as
+before and is told it has no floor recorded.
+
+**It reports; it does not refuse.** A red name on `main` that `main`'s own
+floor does not record is said as loudly as a stop — `MAIN IS ABOVE ITS FLOOR`,
+with the names — and written into the round log, and it does not fail the
+round.
+
+Until 2026-08-30 it did fail the round, and that rule could never fire on a
+fault the change introduced. `broke` returns before the floor is consulted, so
+`candidate.red ⊆ baseline.red`, so every name it could stop on was already red
+on `main` — which the same code computed separately and described as "not this
+change's doing". It refused changes for the thing it simultaneously said they
+had not caused. The demonstration arrived that morning: `codex` was installed
+but unrunnable on this laptop, thirteen broker tests were red for that reason
+alone, and under the old rule no change could have merged on any machine
+missing that binary. What is installed on a machine has nothing to do with
+whether a change may land.
+
+**One refusal is left, and it is about the change's own diff:** a pull request
+that removes names from `names` while those tests are **still red** is stopped
+(`RATCHET LOWERED`, verdict `ratchet-lowered`). Taking a name out is the claim
+that it came good, and that is a claim the round can check against the run it
+just did. A change that repairs a test and records the smaller floor in the
+same commit passes, because the name it removed is green.
+
+The base branch's floor is read with `git show <base>:.mc/red-ratchet.json`,
+not off a worktree: a carried baseline (A1) never builds one, and a check that
+quietly stopped happening on the cheapest rounds would be worse than none.
 
 It binds **names, not a count**, and that is the load-bearing choice. Two rounds
 hours apart on this repository gave 55 red names and then 56, and the extra one
@@ -262,16 +286,21 @@ of known-flaky names, which the alternative does.
 
 Nothing writes the file automatically, including the merge round, for the same
 reason: a lucky round where that test passes would evict it from the set, and
-the next round where it does not would read as a rise and fail an author who
-changed nothing. Automatic tightening turns every flaky green into a trap for
-the next person. Lowering it is a commit somebody makes, and the round prints
-exactly which names came good so that commit is a paste rather than an
-investigation. The property worth keeping is that **every movement of the
-floor, in either direction, is in somebody's diff.**
+the next round where it does not would read as drift on a base that had not
+moved. Automatic tightening turns every flaky green into a trap for the next
+person. Lowering it is a commit somebody makes, and the round names which
+entries are not red right now — **with the caveat that a name can fall because
+the machine changed rather than because the code did.** Thirteen fell the
+moment a broken `codex` install was repaired; taking those out would have made
+one laptop's package manager a precondition for merging. The property worth
+keeping is that **every movement of the floor, in either direction, is in
+somebody's diff.**
 
-A ratchet file that is present but will not parse **stops the round**. Reading
-it as an empty set would make every standing red name look like a rise, and
-fail everything on a typo.
+A ratchet file **in the change** that is present but will not parse stops the
+round. Reading it as an empty set would make every standing red name look like
+a rise, and fail everything on a typo. A malformed floor on `main` is main's
+problem by the same rule as everything else here: the comparison is skipped and
+said, and the change is not refused for it.
 
 ## Sessions — messaging
 

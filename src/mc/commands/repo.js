@@ -465,21 +465,22 @@ export function gateLines(report, { checkOnly = false } = {}) {
     return lines;
   }
 
-  if (report.ratchet?.risen?.length) {
-    const risen = report.ratchet.risen;
-    lines.push(`mc: RATCHET RISEN — ${risen.length} red name${risen.length === 1 ? '' : 's'} not in the standing red set.`);
-    // Every one of these was red on the baseline too — a name red only on the
-    // candidate is `broke` and was stopped above. So this is never a fault the
-    // pull request introduced, and the line says so rather than leaving an
-    // author to work out why their change was refused for somebody else's.
-    lines.push(`mc: ${risen.length === 1 ? 'It was' : 'They were'} red on ${report.pr.base} too, so this change did not cause ${risen.length === 1 ? 'it' : 'them'} —`);
-    lines.push(`mc: what moved is the floor in ${report.ratchet.file}, and merging on a moved floor is how it stays moved.`);
-    // JSON-quoted, because the remedy is a paste into that array and an author
-    // re-typing fifty-character test names is an author who will get one
-    // wrong.
-    lines.push(`mc: fix ${risen.length === 1 ? 'it' : 'them'}, or add ${risen.length === 1 ? 'it' : 'them'} to its "names" as a commit somebody reviews:`);
-    for (const name of risen.slice(0, 20)) lines.push(`      ${JSON.stringify(name)},`);
-    if (risen.length > 20) lines.push(`      … and ${risen.length - 20} more (the full list is in --json)`);
+  // The floor's one refusal, and it is about this change's own diff: it takes
+  // names out of the floor that the round just measured as still red.
+  //
+  // What used to be here refused a change for names that were red on the base
+  // too — and said so itself, in a comment that read "this is never a fault
+  // the pull request introduced". A gate that refuses a change while
+  // explaining the change did not cause it is a gate people learn to route
+  // around. That comparison is now a report about main, below.
+  if (report.ratchet?.lowered_still_red?.length) {
+    const lowered = report.ratchet.lowered_still_red;
+    lines.push(`mc: RATCHET LOWERED — this change takes ${lowered.length} name${lowered.length === 1 ? '' : 's'} out of ${report.ratchet.file} that ${lowered.length === 1 ? 'is' : 'are'} still red:`);
+    for (const name of lowered.slice(0, 20)) lines.push(`      ${name}`);
+    if (lowered.length > 20) lines.push(`      … and ${lowered.length - 20} more (the full list is in --json)`);
+    lines.push('mc: taking a name out of the floor is the claim that it came good. Repair the test in the');
+    lines.push('mc: same change, or put the name back — a floor lowered under a failing test is a floor that');
+    lines.push('mc: stops meaning anything.');
     return lines;
   }
 

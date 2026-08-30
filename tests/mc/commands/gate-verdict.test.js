@@ -114,47 +114,65 @@ describe('what the ratchet says on a round that passed it', () => {
   });
 });
 
-describe('a floor that moved', () => {
-  const risen = {
+describe('a floor that was lowered under a failing test', () => {
+  const lowered = {
     pr: { number: 400, head: 'feature', base: 'main' },
     ok: false,
     stopped_at: 'ratchet',
-    reason: '1 red name is not in the standing red set recorded in .mc/red-ratchet.json',
+    reason: 'this change removes 1 name from .mc/red-ratchet.json that is still red: b',
     baseline: { commit: 'base1111', totals: { tests: 1876 }, red: ['a', 'b'] },
     candidate: { commit: 'cand2222', totals: { tests: 1876 }, red: ['a', 'b'] },
     broke: [],
     fixed: [],
     standing_red: 2,
-    ratchet: { present: true, ok: true, file: '.mc/red-ratchet.json', accepted: 1, risen: ['b'], fallen: [] },
+    ratchet: {
+      present: true, ok: true, file: '.mc/red-ratchet.json', accepted: 1,
+      lowered_still_red: ['b'], baseline_risen: [], fallen: [],
+    },
     extra_gates: [],
     declaration: {},
   };
 
   it('is reported with its names rather than as a generic stop', () => {
-    const text = said(risen);
-    assert.match(text, /RATCHET RISEN — 1 red name not in the standing red set/u);
+    const text = said(lowered);
+    assert.match(text, /RATCHET LOWERED — this change takes 1 name out of/u);
+    assert.match(text, /^ {6}b$/mu);
     assert.doesNotMatch(text, /the round stopped at ratchet/u, 'it is a verdict, not a round that fell over');
-    assert.equal(verdictFor(risen), 'ratchet-risen');
+    assert.equal(verdictFor(lowered), 'ratchet-lowered');
   });
 
-  it('says plainly that the pull request did not cause it', () => {
-    // Every risen name was red on the baseline too — one red only on the
-    // candidate is `broke` and was stopped before this. An author refused for
-    // somebody else's regression should not have to work that out.
-    assert.match(said(risen), /red on main too, so this change did not cause it/u);
+  it('says what the claim was, so the remedy is obvious', () => {
+    assert.match(said(lowered), /taking a name out of the floor is the claim that it came good/u);
+    assert.match(said(lowered), /Repair the test in the/u);
   });
 
-  it('offers the remedy as a paste rather than as a retyping exercise', () => {
-    assert.match(said(risen), /^ +"b",$/mu);
-    // And it agrees with itself about how many there are.
-    assert.match(said(risen), /fix it, or add it to its "names"/u);
+  /**
+   * The refusal that was removed on 2026-08-30.
+   *
+   * It fired on names red on the base branch too — and the code that printed
+   * it said so itself: "this is never a fault the pull request introduced".
+   * A gate that refuses a change while explaining the change did not cause it
+   * is a gate people learn to route around, and a missing `codex` binary on
+   * one laptop would have blocked every merge under it.
+   */
+  it('main carrying a name its own floor does not record is said, and is not a refusal', () => {
+    const drifted = {
+      ...lowered,
+      ok: true,
+      stopped_at: null,
+      reason: null,
+      ratchet: { ...lowered.ratchet, lowered_still_red: [], baseline_risen: ['b'] },
+    };
+    const text = said(drifted);
+    assert.doesNotMatch(text, /RATCHET LOWERED/u);
+    assert.equal(verdictFor(drifted), 'no-new-red');
   });
 
   it('an unreadable ratchet stops the round and decides nothing from it', () => {
     const broken = {
-      ...risen,
+      ...lowered,
       reason: '.mc/red-ratchet.json is not readable JSON',
-      ratchet: { present: true, ok: false, file: '.mc/red-ratchet.json', accepted: 0, risen: [], fallen: [], reason: '.mc/red-ratchet.json is not readable JSON' },
+      ratchet: { present: true, ok: false, file: '.mc/red-ratchet.json', accepted: 0, lowered_still_red: [], baseline_risen: [], fallen: [], reason: '.mc/red-ratchet.json is not readable JSON' },
     };
     const text = said(broken);
     assert.match(text, /STOPPED — .mc\/red-ratchet.json is not readable JSON/u);

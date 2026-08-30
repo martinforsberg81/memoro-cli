@@ -21,7 +21,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { describe, it } from 'node:test';
 
-import { compareRatchet, readRatchet, ratchetPath, renderRatchet } from '../../src/mc/red-ratchet.js';
+import { compareRatchet, parseRatchet, ratchetAtRef, readRatchet, ratchetPath, renderRatchet } from '../../src/mc/red-ratchet.js';
 import { compareRed, redNames } from '../../src/mc/tap-red.js';
 
 function checkout(contents) {
@@ -183,5 +183,58 @@ describe("this repository's own recorded floor", () => {
     assert.equal(read.present, true, 'memoro-cli records its own standing red set');
     assert.equal(read.ok, true, read.reason || '');
     assert.ok(read.names.length > 0);
+  });
+});
+
+/**
+ * The floor as it stands on the base branch, read without a worktree.
+ *
+ * It is what says whether a change *lowered* the floor, and it has to be
+ * available on every round: a carried baseline (A1) never builds the baseline
+ * worktree, so a check that read the file off disk would quietly stop
+ * happening on exactly the rounds that are cheapest to run.
+ */
+describe('the floor on a ref', () => {
+  const gitSaying = (out) => () => out;
+
+  it('parses the file git shows at the ref', () => {
+    const floor = ratchetAtRef({
+      git: gitSaying({ status: 0, stdout: renderRatchet(['one', 'two']) }),
+      ref: 'origin/main',
+      cwd: '/repo',
+    });
+    assert.equal(floor.ok, true);
+    assert.equal(floor.present, true);
+    assert.deepEqual(floor.names, ['one', 'two']);
+  });
+
+  it('a base branch with no floor is absent, not malformed', () => {
+    for (const out of [{ status: 1, stdout: '' }, { status: 0, stdout: '' }, { status: 0, stdout: '  \n' }]) {
+      const floor = ratchetAtRef({ git: gitSaying(out), ref: 'origin/main', cwd: '/repo' });
+      assert.equal(floor.present, false, JSON.stringify(out));
+      assert.equal(floor.ok, true, 'absent is not an error');
+      assert.deepEqual(floor.names, []);
+    }
+  });
+
+  it('a floor that will not parse says so rather than reading as empty', () => {
+    const floor = ratchetAtRef({ git: gitSaying({ status: 0, stdout: '{ not json' }), ref: 'origin/main', cwd: '/repo' });
+    assert.equal(floor.present, true);
+    assert.equal(floor.ok, false);
+    assert.match(floor.reason, /not readable JSON/u);
+  });
+
+  it('a git that throws is absent, never an exception into the round', () => {
+    const floor = ratchetAtRef({
+      git: () => { throw new Error('git is not on PATH'); }, ref: 'origin/main', cwd: '/repo',
+    });
+    assert.equal(floor.present, false);
+    assert.equal(floor.ok, true);
+  });
+
+  it('one parser, so a floor read from a checkout and one read from a ref agree', () => {
+    const text = renderRatchet(['a', 'b', 'a']);
+    assert.deepEqual(parseRatchet(text, 'x').names, ['a', 'b']);
+    assert.deepEqual(ratchetAtRef({ git: gitSaying({ status: 0, stdout: text }), ref: 'r', cwd: '/' }).names, ['a', 'b']);
   });
 });
