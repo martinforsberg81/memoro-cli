@@ -1477,3 +1477,38 @@ describe('a repository that selects by diff', () => {
     } finally { fx.cleanup(); }
   });
 });
+
+describe('mc test — the grammar', () => {
+  it('is a verb of its own, and asks the same questions merge does', () => {
+    const fx = repoFixture({ name: 'repo-gate-cli' });
+    try {
+      // The measurement was reachable as `mc merge --check`: a flag on the
+      // verb for landing things, which is not where a person looks when the
+      // question is "is this red?". Its own name, and its own usage line.
+      const usage = runMcCli(['test'], fx.env).stderr;
+      assert.match(usage, /which repository\?/u);
+      assert.match(usage, /mc test <repo> <pr>/u);
+      assert.doesNotMatch(usage, /--check/u);
+      assert.match(runMcCli(['test', 'repo'], fx.env).stderr, /which pull request\?/u);
+      assert.match(runMcCli(['test', 'repo', 'later'], fx.env).stderr, /not a pull request number/u);
+      const nowhere = runMcCli(['test', 'nowhere-at-all', '400'], fx.env);
+      assert.equal(nowhere.status, 1);
+      assert.match(nowhere.stderr, /no repository called "nowhere-at-all"/u);
+    } finally { fx.cleanup(); }
+  });
+
+  it('has no flag that makes it land anything', () => {
+    const fx = repoFixture({ name: 'repo-gate-cli' });
+    try {
+      // The one promise the name makes. `mc test` reaches `runGate`, which has
+      // no merge in it — and the flags a person might reach for to change that
+      // are refused at the grammar rather than somewhere deeper.
+      for (const flag of ['--merge', '--land', '--force', '--apply', '--no-verify']) {
+        const tried = runMcCli(['test', 'repo', '400', flag], fx.env);
+        assert.notEqual(tried.status, 0, `${flag} was accepted`);
+      }
+      const source = readFileSync(new URL('../../src/mc/commands/test.js', import.meta.url), 'utf8');
+      assert.doesNotMatch(source, /runMergeRound|pr merge|--squash/u);
+    } finally { fx.cleanup(); }
+  });
+});
