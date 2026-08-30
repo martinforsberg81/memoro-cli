@@ -203,7 +203,7 @@ describe('INTAKE', () => {
     assert.equal(intake.digest, null);
     assert.equal(intake.new_errors, 0);
     const lines = renderPageLines(pageData({ intake }), { columns: 100 });
-    assert.ok(lines.some((line) => /INTAKE {2}no digest yet — mc helper has not run/u.test(line)), lines.join('\n'));
+    assert.ok(lines.some((line) => /INTAKE {2}no digest yet — mc helper --intake has not run/u.test(line)), lines.join('\n'));
   });
 });
 
@@ -334,7 +334,7 @@ describe('the page', () => {
     assert.match(text, /skipped 2 \(live 1, done 1\)/u);
     assert.match(text, /DECISIONS {2}4 waiting\s+mc brief/u);
     assert.match(text, /… 1 more/u);
-    assert.match(text, /INTAKE {2}2026-08-29 \(60 min old\) · 1 new error \(1 loud\) · 1 proposal\s+mc helper/u);
+    assert.match(text, /INTAKE {2}2026-08-29 \(60 min old\) · 1 new error \(1 loud\) · 1 proposal\s+mc helper --intake/u);
     assert.match(text, /WORK {2}2 workareas\s+mc status <name>/u);
     assert.match(text, / {2}1 · mc-ui\s+ready\s+Step 3 — the page\s+08-29 10:00Z step #440/u);
     assert.match(text, / {2}2 · ui-fixes\s+—\s+no PLAN\.md on main/u);

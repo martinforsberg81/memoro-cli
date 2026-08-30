@@ -188,20 +188,28 @@ MAINTENANCE
   mc brief --collect [--offline]   Only the file: ~/mc/brief/<date>.md, no
                                     model, from the runner log, PRs, plans
                                     on main, decision files and the queue
-  mc helper                        The eye on production: the daily digest,
+  mc helper                        The desk: a session in ~/mc/helper/ that
+                                    takes your report of a bug or something
+                                    that should be better and writes it into
+                                    ~/mc/intake/proposals/<date>-<x>.md. It
+                                    reads no digest, touches no proposal that
+                                    is already there, and fixes nothing — you
+                                    pick it up at mc brief or mc plan
+                                    (--codex|--claude, --model <m> as usual)
+  mc helper --intake               The eye on production: the daily digest,
                                     then one headless turn that reads it and
-                                    writes ~/mc/intake/proposals/<date>-<x>.md
-                                    — zero on a quiet day. Never the queue:
-                                    the next brief lists them, and you decide.
-                                    mc run does this once a day on its own;
-                                    mc shows the digest and its \`!\` lines
+                                    proposes from it — zero on a quiet day.
+                                    Never the queue: the next brief lists
+                                    them, and you decide. mc run does this
+                                    once a day on its own; mc shows the
+                                    digest and its \`!\` lines
   mc helper --collect              Only the digest, no model:
                                     ~/mc/intake/errors-<date>.md from the
                                     error survey, the analysis items,
                                     AI-provider errors, health and deploys
                                     — plus what is new since the last digest.
                                     Reads production, writes nothing to it
-  mc helper [--collect] --since <iso> [--limit <n>] [--threshold <n>] [--model <model>]
+  mc helper --intake [--collect] --since <iso> [--limit <n>] [--threshold <n>] [--model <model>]
                                     …a different window, more fingerprints,
                                     another bar for marking one \`!\`, or a
                                     model other than the role's
