@@ -144,6 +144,7 @@ async function routeV1Command(args) {
     pm: './mc/commands/pm.js',
     'pm-helper': './mc/commands/pm-helper.js',
     restart: './cli/restart.js',
+    log: './mc/commands/log.js',
     migrate: './mc/commands/migrate.js',
   };
   return Object.hasOwn(modules, command)
