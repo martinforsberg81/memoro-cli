@@ -219,3 +219,53 @@ describe('the incident, replayed', () => {
     } finally { setLogPath(null); rmSync(root, { recursive: true, force: true }); }
   });
 });
+
+/**
+ * Only an invocation can die.
+ *
+ * The first `mc log` on the real machine printed five rows of `died` with no
+ * verb, on a morning when nothing had died. They were the runner's ordinary
+ * `work.open` and `work.background-start` lines: written by a long-lived
+ * process still running the code from before the run id existed, so they
+ * carried none, grouped by pid, and had no start line to have returned from.
+ *
+ * "A tool that reports itself as the anomaly teaches people to ignore the
+ * anomaly column" was already a comment in this code. It applies here too.
+ */
+describe('events with no invocation behind them are not dead commands', () => {
+  const loose = [
+    { at: '2026-08-30T13:31:00Z', pid: 32452, event: 'work.open', area: '/w/alpha' },
+    { at: '2026-08-30T13:32:00Z', pid: 32452, event: 'work.background-start', area: '/w/alpha' },
+  ];
+
+  it('a run with no start line is `events`, never `died`', () => {
+    const [run] = runsFrom(loose, { alive: DEAD });
+    assert.equal(run.outcome, 'events');
+    assert.equal(run.started, false);
+    assert.equal(run.verb, null);
+  });
+
+  it('they are left out of the default listing, and reachable with --all', () => {
+    const runs = runsFrom([
+      ...loose,
+      { at: '2026-08-30T13:33:00Z', pid: 1, run: 'r', event: 'mc.start', verb: 'merge' },
+      { at: '2026-08-30T13:34:00Z', pid: 1, run: 'r', event: 'mc.end', exit_code: 0 },
+    ], { alive: DEAD });
+    assert.deepEqual(filterRuns(runs, {}).map((x) => x.outcome), ['ok']);
+    assert.equal(filterRuns(runs, { all: true }).length, 2);
+  });
+
+  it('--failures never surfaces them: they are not failures', () => {
+    assert.deepEqual(filterRuns(runsFrom(loose, { alive: DEAD }), { failures: true, all: true }), []);
+  });
+
+  it('a real invocation with a start and no end is still died', () => {
+    // The regression guard in the other direction: the fix must not make
+    // every unfinished command invisible.
+    const [run] = runsFrom([
+      { at: '2026-08-30T13:31:00Z', pid: 4321, run: 'r', event: 'mc.start', verb: 'merge' },
+    ], { alive: DEAD });
+    assert.equal(run.outcome, 'died');
+    assert.deepEqual(filterRuns([run], { failures: true }).length, 1);
+  });
+});
