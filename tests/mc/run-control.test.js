@@ -11,7 +11,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import {
-  controlPaths, endNow, handOver, readRunner, requestUpdate, startRunner, stopRunner,
+  childEnv, controlPaths, endNow, handOver, readRunner, requestUpdate, startRunner, stopRunner,
 } from '../../src/mc/run-control.js';
 
 const ROOT = '/w';
@@ -113,6 +113,13 @@ describe('mc run start', () => {
     assert.equal(out.ok, true);
     assert.ok(!(paths.stop in fx.store), 'STOP is still there');
     assert.ok(out.lines.some((line) => /removed the STOP/u.test(line)));
+  });
+
+  // The wrapper's fd 3 closes the moment `mc run start` returns; the runner it
+  // started is still up hours later, and must not claim otherwise.
+  it('starts the runner without the shell wrapper\'s directive flag', () => {
+    assert.deepEqual(childEnv({ PATH: '/bin', MC_EMIT_SHELL_DIRECTIVES: '1', HOME: '/h' }), { PATH: '/bin', HOME: '/h' });
+    assert.deepEqual(childEnv({ PATH: '/bin' }), { PATH: '/bin' });
   });
 
   it('clears a runner.json whose pid is gone rather than refusing on it', async () => {

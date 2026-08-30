@@ -49,6 +49,22 @@ import { pidAlive } from './status-collect.js';
 export const FORCE_WAIT_MS = 2000;
 const FORCE_POLL_MS = 100;
 
+/**
+ * The environment a background runner gets: this one, without the shell
+ * wrapper's flag.
+ *
+ * `mc run start` typed at a terminal arrives through the wrapper `mc
+ * install-shell` writes, which sets `MC_EMIT_SHELL_DIRECTIVES=1` and holds
+ * fd 3 open for the `cd` lines it evals. That pipe closes the moment this
+ * command returns, and the runner outlives the shell by hours — so it is
+ * started without the flag rather than carrying a claim about a pipe that is
+ * no longer there.
+ */
+export function childEnv(env) {
+  const { MC_EMIT_SHELL_DIRECTIVES: _wrapper, ...rest } = env;
+  return rest;
+}
+
 /** The four files the switch reads and writes, under one work root. */
 export function controlPaths(root) {
   const dir = join(root, 'runner');
@@ -81,7 +97,7 @@ export function realControlDeps(env = process.env) {
     // however many processes have told it.
     openLog: (path) => { mkdirSync(dirname(path), { recursive: true }); return openSync(path, 'a'); },
     spawn: ({ bin, args, stdio }) => {
-      const child = spawn(bin, args, { detached: true, stdio, env });
+      const child = spawn(bin, args, { detached: true, stdio, env: childEnv(env) });
       child.unref();
       return child.pid ?? null;
     },
