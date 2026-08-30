@@ -35,7 +35,7 @@ writes:
 | Opened, not merged | `gh pr list --state open` |
 | Waiting on Martin | every `~/mc/<area>/decisions/*.md` with no `**Beslut:**` line |
 | Proposals | `~/mc/intake/proposals/*.md`, what `mc helper`'s turn wrote |
-| Plan status | every `docs/project/*/*/PLAN.md` on `origin/main` of both repositories |
+| Plan status | every `docs/project/*/*/PLAN.json` on `origin/main` of both repositories |
 | Archived without a note | `~/mc/intake/undocumented-closures.md` |
 | Workareas with no plan on main | `~/mc/intake/unplanned-workareas.md` |
 | Runner | the last 24 h of `~/mc/runner/log/runs.tsv` |
@@ -113,7 +113,7 @@ Three files, in order, and no daemon between them:
 1. The brief session appends one line to the decision file, in the shape the
    overlay fixes:
    `**Beslut:** <what was decided> (Martin, <YYYY-MM-DD>). <one sentence why>`
-2. The **next step session** writes that decision into `PLAN.md` — into the
+2. The **next step session** writes that decision into the plan — into the
    Contract, the Steps or `next:` as it requires — and sets `status:` back to
    `ready`. That, and nothing else, is what puts the project in front of the
    runner: the runner runs `ready` plans and does not read decision files at
@@ -121,7 +121,7 @@ Three files, in order, and no daemon between them:
 3. The next `mc brief --collect` deletes the decision file, because no plan
    waits on it any more.
 
-The brief session never edits `PLAN.md`. That line is the whole of what it
+The brief session never edits a plan. That line is the whole of what it
 writes, and the plan is where a decision lives — `decisions/` holds open
 questions and nothing else.
 
@@ -169,7 +169,7 @@ skips all of them and reads only what is on disk.
 
 `tests/mc/brief-collect.test.js` covers the parsers on text: decision files
 answered and unanswered, the wide heading rule and the bookkeeping names,
-`retireDecisions`'s three outcomes (removed, held, orphan), PLAN.md
+`retireDecisions`'s three outcomes (removed, held, orphan), plan
 frontmatter including folded scalars, `cat-file --batch` framing on bytes
 rather than characters, the runs.tsv window, and both intake tables
 including absent-versus-empty.

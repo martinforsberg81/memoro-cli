@@ -10,11 +10,39 @@ import { runsSince } from '../../src/mc/brief-collect.js';
 import { estimateCost, priceFor } from '../../src/mc/prices.js';
 import { decisionsBlock, kindFor, nowBlock, pidAlive } from '../../src/mc/status-collect.js';
 
+/**
+ * Plans as `listPlans` returns them, with the parsed plan on the record: a
+ * status belongs to the first step that is not done, so a fixture says which
+ * state it is in by building that step.
+ */
+function planRecord({ repo, programme, project, status, title }) {
+  const stopped = status === 'blocked' || status === 'waiting-decision';
+  const plan = {
+    schema: 'mc-plan',
+    version: 1,
+    goal: ['One thing.'],
+    contract: ['Not without Martin.'],
+    out_of_scope: ['Everything else.'],
+    success_criteria: [{ met: false, criterion: 'It is done.', check: 'The gate is green.' }],
+    what_the_code_taught_us: [],
+    documents: [],
+    steps: [{
+      title,
+      status,
+      done_when: 'the step is finished',
+      instruction: status === 'done' ? [] : ['Do it.'],
+      pr: null,
+      blocked_by: stopped ? { kind: status === 'blocked' ? 'project' : 'decision', name: `${programme}-1` } : null,
+    }],
+  };
+  return { repo, programme, project, path: `docs/project/${programme}/${project}/PLAN.json`, legacy: false, plan, problems: [], status, next: title };
+}
+
 const PLANS = [
-  { repo: 'memoro', programme: 'assistant-avatar', project: 'avatar-self-serve', status: 'waiting-decision', next: 'Answer decision 4' },
-  { repo: 'memoro', programme: 'assistant-avatar', project: 'avatar-image-animation', status: 'ready', next: 'Publish Tim' },
-  { repo: 'memoro', programme: 'docx-editing-surface', project: 'docx-editor', status: 'blocked', next: 'Wait' },
-  { repo: 'memoro-cli', programme: 'mc', project: 'mc-status', status: 'ready', next: 'Step 1 — the page' },
+  planRecord({ repo: 'memoro', programme: 'assistant-avatar', project: 'avatar-self-serve', status: 'waiting-decision', title: 'Answer decision 4' }),
+  planRecord({ repo: 'memoro', programme: 'assistant-avatar', project: 'avatar-image-animation', status: 'ready', title: 'Publish Tim' }),
+  planRecord({ repo: 'memoro', programme: 'docx-editing-surface', project: 'docx-editor', status: 'blocked', title: 'Wait' }),
+  planRecord({ repo: 'memoro-cli', programme: 'mc', project: 'mc-status', status: 'ready', title: 'The page' }),
 ];
 const DECISIONS = [
   { area: 'avatar-image-animation', file: 'avatar-image-animation/decisions/assistant-avatar-4.md', title: '4. Retention?', answered: true },

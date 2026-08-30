@@ -16,15 +16,28 @@ import {
 import { run as project } from '../../src/mc/commands/status-project.js';
 import { runMcCli } from './_helpers/mc-cli.js';
 
-const PLAN = (status, next) => `---
-status: ${status}
-next: "${next}"
-budget: 150k
-needs: []
----
-
-# a plan
-`;
+/** A plan as the file now is: one step, in the state the test wants. */
+const PLAN = (status, title) => JSON.stringify({
+  schema: 'mc-plan',
+  version: 1,
+  goal: ['One project on one page.'],
+  contract: ['Not without Martin.'],
+  out_of_scope: ['Everything else.'],
+  success_criteria: [{ met: false, criterion: 'It is done.', check: 'The gate is green.' }],
+  what_the_code_taught_us: [],
+  documents: [],
+  steps: [
+    { title: 'The first step', status: 'done', done_when: 'it was done', instruction: [], pr: 401, blocked_by: null },
+    {
+      title,
+      status,
+      done_when: 'one project is on one page',
+      instruction: ['Do it.'],
+      pr: null,
+      blocked_by: status === 'waiting-decision' || status === 'blocked' ? { kind: 'decision', name: 'mc-1' } : null,
+    },
+  ],
+}, null, 2);
 
 const DECISION = (title, answered) => `# ${title}
 
@@ -50,7 +63,7 @@ function workRoot() {
   const repo = join(root, 'mc-status', 'memoro-cli');
   mkdirSync(join(repo, '.git'), { recursive: true });
   mkdirSync(join(repo, 'docs', 'project', 'mc', 'mc-status'), { recursive: true });
-  writeFileSync(join(repo, 'docs', 'project', 'mc', 'mc-status', 'PLAN.md'), PLAN('ready', 'Step 2 — one project'));
+  writeFileSync(join(repo, 'docs', 'project', 'mc', 'mc-status', 'PLAN.json'), PLAN('ready', 'One project'));
   mkdirSync(join(root, 'mc-status', 'decisions'), { recursive: true });
   writeFileSync(join(root, 'mc-status', 'decisions', 'mc-status-2026-08-29.md'), DECISION('Contract change?', false));
   mkdirSync(join(root, 'mc-utredning', 'decisions'), { recursive: true });
@@ -83,8 +96,10 @@ describe('what belongs to one project', () => {
     assert.deepEqual(decisionsForProject(DECISIONS, { project: 'x', programme: null }), []);
   });
 
-  it('lists every frontmatter field but next, which gets its own block', () => {
-    assert.deepEqual(fieldRows({ status: 'ready', next: 'Step 2', budget: '150k', needs: null }), [['status', 'ready'], ['budget', '150k']]);
+  it('says the state the steps put the plan in, and anything wrong with the file', () => {
+    const plan = JSON.parse(PLAN('ready', 'One project'));
+    assert.deepEqual(fieldRows(plan), [['status', 'ready']]);
+    assert.deepEqual(fieldRows(null, ['out_of_scope: at least one entry']), [['problem', 'out_of_scope: at least one entry']]);
     assert.deepEqual(fieldRows(null), []);
   });
 
@@ -100,30 +115,30 @@ describe('finding the plan', () => {
     const found = findWorkareaPlan(join(root, 'mc-status'), 'mc-status');
     assert.equal(found.repo, 'memoro-cli');
     assert.equal(found.programme, 'mc');
-    assert.equal(found.path, 'docs/project/mc/mc-status/PLAN.md');
+    assert.equal(found.path, 'docs/project/mc/mc-status/PLAN.json');
     assert.equal(findWorkareaPlan(join(root, 'jobbet'), 'jobbet'), null);
   });
 
   it('finds it on origin/main through an injected git', () => {
     const root = workRoot();
     const git = (cwd, args) => {
-      if (args[0] === 'ls-tree') return 'docs/project/mc/mc-status/PLAN.md\ndocs/project/mc/mc-run/PLAN.md';
-      if (args[0] === 'show') return PLAN('ready', 'Step 1 — the page');
+      if (args[0] === 'ls-tree') return 'docs/project/mc/mc-status/PLAN.json\ndocs/project/mc/mc-run/PLAN.json';
+      if (args[0] === 'show') return PLAN('ready', 'The page');
       return null;
     };
     const repos = [{ name: 'memoro-cli', path: join(root, 'mc-status', 'memoro-cli') }];
     const main = findMainPlan(repos, 'mc-status', { git });
     assert.equal(main.repo, 'memoro-cli');
     assert.equal(main.programme, 'mc');
-    assert.match(main.text, /Step 1 — the page/u);
+    assert.match(main.text, /The page/u);
     assert.equal(findMainPlan(repos, 'nothing-here', { git }), null);
   });
 });
 
 describe('collectProject', () => {
   const git = (cwd, args) => {
-    if (args[0] === 'ls-tree') return 'docs/project/mc/mc-status/PLAN.md';
-    if (args[0] === 'show') return PLAN('ready', 'Step 1 — the page');
+    if (args[0] === 'ls-tree') return 'docs/project/mc/mc-status/PLAN.json';
+    if (args[0] === 'show') return PLAN('ready', 'The page');
     return null;
   };
 
@@ -135,8 +150,9 @@ describe('collectProject', () => {
     assert.equal(data.repo, 'memoro-cli');
     assert.equal(data.programme, 'mc');
     assert.equal(data.source, 'workarea memoro-cli');
-    assert.equal(data.unmerged, true, 'the workarea says step 2, origin/main still says step 1');
-    assert.deepEqual(data.fields, { status: 'ready', next: 'Step 2 — one project', budget: '150k', needs: '[]' });
+    assert.equal(data.unmerged, true, 'the workarea and origin/main hold different plans');
+    assert.deepEqual(data.problems, []);
+    assert.equal(data.plan.steps[1].title, 'One project', 'the workarea plan wins');
     assert.deepEqual(data.runs.map((r) => [r.ts.slice(0, 10), r.pr]), [['2026-08-26', '401'], ['2026-08-27', '402'], ['2026-08-28', '-']]);
     assert.deepEqual(data.decisions.map((d) => d.answered), [false, true]);
     assert.deepEqual(data.prs, []);
@@ -150,11 +166,11 @@ describe('collectProject', () => {
       env: { MC_WORK_ROOT: root },
       repos,
       offline: true,
-      git: (cwd, args) => (args[0] === 'ls-tree' ? 'docs/project/mc/mc-run/PLAN.md' : PLAN('blocked', 'Wait for mc-2')),
+      git: (cwd, args) => (args[0] === 'ls-tree' ? 'docs/project/mc/mc-run/PLAN.json' : PLAN('blocked', 'Wait for mc-2')),
     });
     assert.equal(data.source, 'origin/main');
     assert.equal(data.unmerged, false);
-    assert.equal(data.path, 'docs/project/mc/mc-run/PLAN.md');
+    assert.equal(data.path, 'docs/project/mc/mc-run/PLAN.json');
     assert.match(data.workarea, /mc-run$/u, 'the area exists for the decisions, but holds no checkout');
     assert.deepEqual(data.runs, []);
   });
@@ -191,10 +207,11 @@ describe('the project page', () => {
     name: 'mc-status',
     repo: 'memoro-cli',
     programme: 'mc',
-    path: 'docs/project/mc/mc-status/PLAN.md',
+    path: 'docs/project/mc/mc-status/PLAN.json',
     source: 'workarea memoro-cli',
     unmerged: true,
-    fields: { status: 'ready', next: 'Step 2 — one project', budget: '150k' },
+    plan: JSON.parse(PLAN('ready', 'One project')),
+    problems: [],
     workarea: '/tmp/mc/mc-status',
     decisions: [{ file: 'mc-status/decisions/mc-status-2026-08-29.md', title: 'Contract change?', answered: false, recommendation: '**A.** Do it.' }],
     runs: [{ ts: '2026-08-27T18:00:00Z', kind: 'step', seconds: '300', pr: '402', note: 'success,merged' }],
@@ -202,15 +219,18 @@ describe('the project page', () => {
     notes: ['gh pr list failed'],
   };
 
-  it('renders the frontmatter, the step, the decisions, the runs and the PR', () => {
+  it('renders the state, the next step, every step, the decisions, the runs and the PR', () => {
     const text = renderProject(data);
-    const at = ['NEXT', 'DECISIONS', 'LAST RUNS', 'OPEN PR'].map((h) => text.indexOf(`${h}\n`));
+    const at = ['NEXT', 'STEPS', 'DECISIONS', 'LAST RUNS', 'OPEN PR'].map((h) => text.indexOf(`${h}\n`));
     assert.ok(at.every((i, n) => i >= 0 && (n === 0 || i > at[n - 1])), text);
     assert.match(text, /^mc-status — memoro-cli · mc\n/u);
-    assert.match(text, /plan +docs\/project\/mc\/mc-status\/PLAN\.md \(workarea memoro-cli, differs from\n +origin\/main\)/u);
+    assert.match(text, /plan +docs\/project\/mc\/mc-status\/PLAN\.json \(workarea memoro-cli, differs from\n +origin\/main\)/u);
     assert.match(text, /status +ready/u);
     assert.doesNotMatch(text, /^ +next /mu, 'next is a block, not a label row');
-    assert.match(text, /NEXT\n {2}Step 2 — one project/u);
+    assert.match(text, /NEXT\n {2}Step 2, One project — done when one project is on one page/u);
+    // The steps are the record: what is finished, with its PR, and where the
+    // project is now.
+    assert.match(text, /STEPS\n {2}✓ {2}1 {2}The first step\s+#401\n {2}▸ {2}2 {2}One project\s+ready/u);
     assert.match(text, /waiting {3}mc-status\/decisions\/mc-status-2026-08-29\.md {2}Contract change\?/u);
     assert.match(text, /\*\*A\.\*\* Do it\./u);
     assert.match(text, /08-27 18:00Z +step +300s +#402 +success,merged/u);
@@ -219,8 +239,8 @@ describe('the project page', () => {
   });
 
   it('says plainly when a workarea has no plan, no decisions, no runs and no PR', () => {
-    const text = renderProject({ ...data, path: null, repo: null, programme: null, fields: {}, decisions: [], runs: [], prs: [], notes: [] });
-    assert.match(text, /no PLAN\.md — this is a workarea without a project/u);
+    const text = renderProject({ ...data, path: null, repo: null, programme: null, plan: null, problems: [], decisions: [], runs: [], prs: [], notes: [] });
+    assert.match(text, /no plan — this is a workarea without a project/u);
     assert.doesNotMatch(text, /NEXT/u);
     assert.match(text, /DECISIONS\n {2}none/u);
     assert.match(text, /LAST RUNS\n {2}none in the runner log/u);
@@ -253,7 +273,7 @@ describe('routing', () => {
     const page = runMcCli(['status', 'mc-status', '--offline'], env);
     assert.equal(page.status, 0, page.stderr);
     assert.match(page.stdout, /^mc-status — memoro-cli · mc\n/u);
-    assert.match(page.stdout, /NEXT\n {2}Step 2 — one project/u);
+    assert.match(page.stdout, /NEXT\n {2}Step 2, One project — done when one project is on one page/u);
 
     // The board and its flags went with decision mc-3: `--sessions` is not a
     // name, so it lands on the same sentence a bare `mc status` does.

@@ -20,6 +20,7 @@
  * replaced, had reached 656 files the same way.
  */
 import { planFields } from './brief-collect.js';
+import { readPlanText } from './plan-schema.js';
 
 /** Every archive branch the runner has ever pushed starts with this. */
 export const ARCHIVE_BRANCH_PREFIX = 'mc-archive-';
@@ -97,11 +98,18 @@ export function appendRow(text, row) {
 /* --------------------------------------------------------- the cells to derive */
 
 /**
- * The summary cell: the plan's `next:` on one line. It is what the project
- * was last doing, which for a plan that reached `done` is what it finished —
- * and it is the one line of a PLAN.md written to be read on its own.
+ * The summary cell: what the project was last doing, which for a plan that
+ * reached `done` is what it finished.
+ *
+ * In a `PLAN.json` that is the last step's title — the steps are the record,
+ * and the last one is where the project got to. A `PLAN.md` still on the old
+ * shape answers with its `next:`, which was the one line written to be read on
+ * its own; that arm goes when the last plan is migrated.
  */
 export function planSummary(planText) {
+  const { plan } = readPlanText(planText);
+  const last = plan?.steps?.at(-1)?.title;
+  if (last) return String(last).replace(/\s+/gu, ' ').trim();
   const next = planFields(planText).next;
   return next ? String(next).replace(/\s+/gu, ' ').trim() : '-';
 }
