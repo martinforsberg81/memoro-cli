@@ -20,7 +20,7 @@ process is [`src/mc/run.js`](../../src/mc/run.js), where every boundary is a
 key on `deps` so a whole round can be driven in a test with no network.
 
 ```
-mc run [--rounds <n>] [--once] [--no-merge] [--idle-sleep <seconds>]
+mc run [--rounds <n>] [--once] [--no-merge] [--idle-sleep <seconds>] [--no-caffeinate]
 ```
 
 `--rounds 0` (the default) is forever. `--once` runs one step for the first
@@ -28,6 +28,42 @@ runnable project and exits — the way to watch a single step. `--no-merge`
 leaves the pull requests open; it is a default-on boolean written mc's way,
 not `--merge 0|1`. `--idle-sleep` is how long a round that ran nothing waits
 before the next one, 600 s by default.
+
+## Staying awake
+
+A run that is not `--once` holds the machine awake for its whole length, and
+that is the default rather than a flag to remember: this laptop is set to
+sleep after **one minute** of idle on battery (`pmset -g custom`), and a
+runner waiting ten minutes between rounds is exactly what that setting is for.
+An unattended run would stop without anybody deciding it should.
+
+It is `caffeinate -i -m -s -w <runner pid>`
+([`src/mc/stay-awake.js`](../../src/mc/stay-awake.js)) — tied to the process,
+never to a clock. A timed assertion is wrong at both ends: too short and the
+run sleeps, too long and a laptop is held awake in somebody's bag. Watching
+the pid also means nothing has to clean up, including when the runner is
+killed by a signal that runs no handler.
+
+What it holds, honestly:
+
+| flag | what it actually does |
+|---|---|
+| `-i` | idle system sleep — **the one that matters**, and it holds on battery |
+| `-m` | the disk idling down under a run that is mostly waiting |
+| `-s` | system sleep — caffeinate(8) says this is *valid only on AC power*, so on battery it is asked for and does nothing |
+
+`-d` is deliberately not asked for: display sleep does not stop a process, and
+keeping the screen lit all night costs battery for nothing.
+
+**A closed lid still sleeps the machine.** No assertion suppresses it. On
+Apple Silicon the ways around it are clamshell mode (external display and
+power) or `sudo pmset -a disablesleep 1`, which is machine-wide, persists
+until it is changed back, and is therefore an operator's decision rather than
+something a verb does on somebody's behalf. `mc run` prints which of these it
+got at start, so the limit is read at the beginning rather than discovered as
+an empty log the next morning.
+
+`--no-caffeinate` turns it off.
 
 ## The round, in order
 

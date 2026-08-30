@@ -906,3 +906,50 @@ test('a name whose project was skipped stays in the queue', async () => {
   await createRunner({ deps: f.deps }).round();
   assert.equal(f.files['/w/queue.md'], 'wait\n', 'it has not had its step, so it keeps its place');
 });
+
+/**
+ * The runner holds the machine awake — for a real run, not for a watched one.
+ *
+ * The rules live in stay-awake.js and are asserted there. What this asserts is
+ * the wiring: that the loop actually asks, that it asks once, before the first
+ * round rather than after it, and that `--once` — a person watching a single
+ * step — does not hold anything.
+ */
+test('runLoop: an unattended run holds the machine awake; --once does not', async () => {
+  const held = [];
+  const f = fixture({ plans: { memoro: { a: ready } }, session: okSession() });
+  f.deps.keepAwake = (options) => {
+    held.push({ ...options, roundsSoFar: f.calls.sessions.length });
+    return { ok: true, pid: 9, flags: ['-i', '-m', '-s'], note: 'held' };
+  };
+  f.deps.onACPower = () => true;
+  assert.equal(await runLoop({ rounds: 1, deps: f.deps }), 0);
+  assert.equal(held.length, 1, 'asked once, not once per round');
+  assert.equal(held[0].pid, process.pid);
+  assert.equal(held[0].onAC, true);
+  assert.equal(held[0].roundsSoFar, 0, 'held before the first step, not after it');
+  assert.match(f.files['/w/runner/log/runner.log'], /staying awake \(caffeinate -i -m -s pid 9\)/u);
+
+  const g = fixture({ plans: { memoro: { a: ready } }, session: okSession() });
+  const watched = [];
+  g.deps.keepAwake = (options) => { watched.push(options); return { ok: true, pid: 9, flags: [], note: '' }; };
+  assert.equal(await runLoop({ once: true, deps: g.deps }), 0);
+  assert.deepEqual(watched, [], '--once is somebody watching; it holds nothing');
+});
+
+test('runLoop: a machine that will not stay awake still runs, and says so', async () => {
+  const f = fixture({ plans: { memoro: { a: ready } }, session: okSession() });
+  f.deps.keepAwake = () => ({ ok: false, reason: 'caffeinate-missing', flags: [], note: 'caffeinate could not be run' });
+  f.deps.onACPower = () => null;
+  assert.equal(await runLoop({ rounds: 1, deps: f.deps }), 0, 'the run is not blocked by it');
+  assert.equal(f.calls.sessions.length, 1);
+  assert.match(f.files['/w/runner/log/runner.log'], /NOT staying awake \(caffeinate-missing\)/u);
+});
+
+test('runLoop: --no-caffeinate is obeyed', async () => {
+  const f = fixture({ plans: { memoro: { a: ready } }, session: okSession() });
+  const asked = [];
+  f.deps.keepAwake = (options) => { asked.push(options); return { ok: true, pid: 1, flags: [], note: '' }; };
+  assert.equal(await runLoop({ rounds: 1, awake: false, deps: f.deps }), 0);
+  assert.deepEqual(asked, []);
+});

@@ -161,8 +161,12 @@ test('sessionSettings: frontmatter tool/model/budget_minutes with the runner def
 });
 
 test('parseRunArgs: defaults, flags, errors', () => {
-  assert.deepEqual(parseRunArgs([]), { rounds: 0, once: false, merge: true, idleSleep: 600 });
-  assert.deepEqual(parseRunArgs(['--rounds', '1', '--once', '--no-merge', '--idle-sleep', '5']), { rounds: 1, once: true, merge: false, idleSleep: 5 });
+  // `awake` defaults to true: a runner waits ten minutes between rounds and
+  // this laptop sleeps after one of them on battery, so the default that keeps
+  // an unattended run alive is the one nobody has to remember (stay-awake.js).
+  assert.deepEqual(parseRunArgs([]), { rounds: 0, once: false, merge: true, idleSleep: 600, awake: true });
+  assert.deepEqual(parseRunArgs(['--rounds', '1', '--once', '--no-merge', '--idle-sleep', '5']), { rounds: 1, once: true, merge: false, idleSleep: 5, awake: true });
+  assert.equal(parseRunArgs(['--no-caffeinate']).awake, false);
   assert.match(parseRunArgs(['--rounds', 'x']).error, /whole number/u);
   assert.match(parseRunArgs(['--rounds']).error, /needs a value/u);
   assert.match(parseRunArgs(['extra']).error, /unexpected argument/u);
