@@ -26,15 +26,27 @@ Martin is at the terminal. Say what you found, what you propose, and where
 you are unsure — one question at a time, with a recommendation — and then
 write `docs/project/<programme>/<name>/PLAN.md`:
 
-- Frontmatter: `status` (ready | waiting-decision | blocked | done), `next`
-  (one line — the next step, with its own "done when"), `budget: 150k`,
-  `needs: []`.
-- Sections, in this order: **Goal** (one paragraph: what is true when this
-  project is done) · **Success criteria** (a checklist a fresh session can
-  verify from code and tests — no judgement calls) · **Contract** (what may
-  not change without Martin) · **Steps** (done / current / remaining; every
-  remaining step carries a one-line "done when") · **What the code taught
-  us** · **Documents** (links). Under 120 lines; link, don't copy.
+The shape is written down in the repository you are writing in, in
+`docs/project/README.md` § *What a PLAN.md is* — the frontmatter, the sections
+and what each is for. memoro and memoro-cli carry the same text; read it there
+and follow it rather than a form you remember. `budget` and `needs` are yours to
+set.
+
+Four things are yours in particular, because a plan that is thin on them cannot
+be run:
+
+- **Every step, written before the work.** A step session may not write a step —
+  not a new one, not a rewrite of one that has not run. What you leave vague, it
+  must either guess at or stop on.
+- **The Contract in both directions.** What may not change without Martin, *and*
+  what is out of scope, named. A boundary nobody wrote down is one every session
+  redraws.
+- **A criterion that names its check** — the assertion, the query, the
+  measurement, and for anything with a surface the measurement in the running
+  app. "Done" is never the session's judgement of its own work.
+- **Length that follows the work.** A step needing three pages of interface,
+  order and edge cases gets three pages. Link rather than copy; what earns space
+  is what the next session cannot see from the code in front of it.
 
 A programme with several independently stable states gets
 `docs/project/<programme>/` with the programme document, one project
