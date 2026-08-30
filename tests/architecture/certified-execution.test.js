@@ -18,16 +18,18 @@ test('active lifecycle surfaces expose no selectable execution mode', () => {
   assert.equal(sources.includes(`--${'managed-portable'}`), false);
 });
 
-test('local orchestration has no host gh authority fallback', () => {
-  const sources = read([
-    'src/cli/gather.js',
-    'src/mc/reconcile.js',
-    'src/mc/squash-phantom.js',
-  ]);
-  assert.doesNotMatch(sources, /spawn(?:Sync)?\(\s*['"]gh['"]/u);
-  assert.doesNotMatch(sources, /execFile(?:Sync)?\(\s*['"]gh['"]/u);
-  assert.doesNotMatch(sources, /MC_TEST_GH_PHANTOM/u);
-});
+// `local orchestration has no host gh authority fallback` stood here. It
+// watched three modules — src/cli/gather.js, src/mc/reconcile.js and
+// src/mc/squash-phantom.js — and all three have since been deleted, so it had
+// been failing with ENOENT on files that do not exist rather than asserting
+// anything about the code that does. It was in the standing red set for that
+// reason alone.
+//
+// It is not re-pointed at a successor: the rule was about that cluster, and
+// the live orchestration that replaced it (`mc run`) calls `gh` on purpose.
+// A rule kept alive by aiming it somewhere it does not apply is worse than no
+// rule.
+
 
 test('certified execution cannot import the global broker launch path', () => {
   const sources = read([
