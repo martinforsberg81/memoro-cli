@@ -1,6 +1,6 @@
 ---
-status: ready
-next: "Step 4 — close-out: `docs/technical/mc-status.md` says what `mc status <name>` and the page read, which file every fact comes from, and what the old board was; `docs/project/project_log.md` gets a row — done when both exist, the doc names no mechanism that is gone, and `npm test` is no redder than main."
+status: done
+next: "Done — closed out 2026-08-30: `docs/technical/mc-status.md` and a `project_log.md` row."
 budget: 150k
 needs: []
 ---
@@ -39,13 +39,16 @@ from files the runner and the sessions already write; it writes nothing.
       4. **Workareas without a project** — `~/mc/*` with a worktree but no
          PLAN.md anywhere: the closure candidates.
 - [x] `--json` emits the same as one object.
-- [ ] No model call, no network beyond `git fetch` and `gh pr list` (both
-      skippable with `--offline`), under 5 s with fetch cached. Measured
-      2026-08-30 on a quiet machine: `mc status <name>` 2.3 s live and
-      0.13 s `--offline` — inside the bound; the page, which is `mc` now,
-      6.8 s either way, so the time is local work (24 worktrees walked, `ps`,
-      one git per repo) and not the fetch. Left open deliberately: the page's
-      speed is `mc`'s to answer, not this verb's.
+- [x] No model call, no network beyond `git fetch` and `gh pr list` (both
+      skippable with `--offline`), under 5 s with fetch cached. Re-measured
+      2026-08-30 at close-out, three runs each: `mc status <name>` 1.7–2.2 s
+      live and 0.13–0.16 s `--offline` — inside the bound, and met for the
+      verb this project owns. The page, which is `mc` now, is 6.0 s live and
+      5.8 s `--offline`, so the time is local work (73 areas under `~/mc`
+      walked, 24 git worktrees inspected) and not the fetch. That number is
+      handed to `mc`: it is written down in `docs/technical/mc-status.md`
+      under *Speed* and pointed at `docs/technical/mc-ui.md`, which is where
+      it can be answered.
 - [x] `mc status <name>` keeps working for one project: its PLAN.md
       frontmatter, decisions, last three runs, open PR.
 - [x] Tests: each block built from fixture files (runs.tsv, decisions dir,
@@ -83,10 +86,36 @@ from files the runner and the sessions already write; it writes nothing.
       `mc --watch [seconds]` row and the `w` key the menu no longer has.
       `tests/mc/status-project.test.js` now runs every `mc …` the sentence
       offers.
-- [ ] **4. Close-out** — `docs/technical/mc-status.md`, `project_log.md`.
+- [x] **4. Close-out** (2026-08-30) — `docs/technical/mc-status.md`: the
+      fact-to-file table for `mc status <name>`, why the plan is read from
+      the workarea, which decisions belong to a project, the list-price
+      estimate and its two caveats, what the old board was and what did not
+      go with it, the modules, the measured speeds. A `project_log.md` row.
+      `docs/mc-command-matrix.md` lost its last two sentences that spoke of
+      the status board in the present tense. `tests/mc/status-doc.test.js`
+      pins the note the way `run-doc` and `helper-doc` pin theirs: the price
+      date, the cache multipliers, the model every runs.tsv row is priced as,
+      every `src/…` path it names, every link it makes, and the block it
+      quotes as what bare `mc status` prints.
 
 ## What the code taught us
 
+- A close-out finds the drift the steps left. `docs/mc-command-matrix.md`
+  still said "its worktree section is the status board's own inspection" and
+  "the same fact is on the status board" — a mechanism removed the day
+  before, in the one document whose own rule is that if it is not listed
+  there it does not exist. Both are now written as what stayed
+  (`workStatus()`) and what went with it.
+- `dependencyState` is computed for every worktree and printed nowhere. The
+  board was its only reader; `mc repo status` never took it up. It is not a
+  bug — the suite round refuses on the same fact — but it is a reading no
+  page shows, and the matrix now says so rather than promising a board.
+- A decision file says who owns it and this verb does not ask.
+  `parseDecision` returns `owner` from the `plan:`/`project:`/`programme:`
+  frontmatter, and `retiredDecisions` reads it; `decisionsForProject` still
+  matches on names alone. The names have been right on every file so far, so
+  this is written down in the technical note as the next reader's first move
+  rather than changed in a close-out step.
 - The board was gone before this step arrived. mc-ui took the whole page to
   `mc` under decision mc-3 and removed `--sessions`, `--watch`, `--wait` and
   `--timeout` outright, rather than parking the board behind `--sessions`
