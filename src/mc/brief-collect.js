@@ -210,11 +210,13 @@ export function retireDecisions({ decisions = [], plans = [] } = {}) {
 /* ---------------------------------------------------------------- proposals */
 
 /**
- * `~/mc/intake/proposals/` — what the helper's turn wrote and nobody has
- * acted on yet. It is read here for the same reason `decisions/` is: this is
- * the file a person sits down with, and a proposal exists to be queued or
- * dropped by Martin at exactly that moment. `mc helper` never touches
- * `queue.md` itself, so the brief is the only place a proposal becomes work.
+ * `~/mc/intake/proposals/` — what the helper wrote and nobody has acted on
+ * yet: the desk session's, from what Martin reported, and the intake turn's,
+ * from the digest, in one directory and one shape. It is read here for the
+ * same reason `decisions/` is: this is the file a person sits down with, and
+ * a proposal exists to be queued or dropped by Martin at exactly that
+ * moment. Neither half of `mc helper` touches `queue.md`, so the brief is
+ * the only place a proposal becomes work.
  */
 
 /**
