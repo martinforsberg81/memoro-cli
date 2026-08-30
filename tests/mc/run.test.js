@@ -407,6 +407,42 @@ test('STOP file: the loop exits after the step it is in, and refuses to start wh
   assert.equal(await runLoop({ rounds: 1, deps: f.deps }), 2);
 });
 
+/**
+ * `mc run --update` from the runner's side: the file is read where STOP is
+ * read — between rounds — and the round in flight is never cut short for it.
+ */
+test('UPDATE file: the loop finishes its round, then hands over to a new process', async () => {
+  const f = fixture({ plans: { memoro: { a: ready } }, session: okSession() });
+  const inner = f.deps.session;
+  f.deps.session = (call) => { f.files['/w/runner/UPDATE'] = ''; return inner(call); };
+  const handovers = [];
+  f.deps.handOver = async ({ paths, say }) => {
+    handovers.push(paths.update);
+    say('update: handed over to pid 9001 — this runner is done');
+    return { ok: true, pid: 9001 };
+  };
+  assert.equal(await runLoop({ rounds: 0, deps: f.deps }), 0);
+  // One step ran, the round finished, and only then was the handover made.
+  assert.equal(f.calls.sessions.length, 1);
+  assert.deepEqual(handovers, ['/w/runner/UPDATE']);
+  assert.match(f.files['/w/runner/log/runner.log'], /round 1 done \(1 ran\)\n.*handed over to pid 9001/u);
+  // The runner it handed to has written its own runner.json by now: this one
+  // must not remove it on the way out.
+  assert.equal('/w/runner/runner.json' in f.files, false);
+  assert.equal(f.calls.removed.includes('/w/runner/runner.json'), true);
+  const after = f.calls.removed.lastIndexOf('/w/runner/runner.json');
+  assert.equal(f.calls.removed.slice(after + 1).includes('/w/runner/runner.json'), false,
+    'runner.json was cleared a second time, after the new runner had written it');
+});
+
+test('UPDATE file: a handover that does not start keeps this runner going', async () => {
+  const f = fixture({ plans: { memoro: { a: ready } }, session: okSession(), runs: null });
+  f.files['/w/runner/UPDATE'] = '';
+  f.deps.handOver = async ({ say }) => { say('update: the new runner did not start'); return { ok: false }; };
+  assert.equal(await runLoop({ rounds: 1, deps: f.deps }), 0);
+  assert.match(f.files['/w/runner/log/runner.log'], /runner exit after 1 round/u);
+});
+
 test('runLoop: --rounds 1 does one pass and exits; --once exits after the first step', async () => {
   const f = fixture({ plans: { memoro: { a: ready, b: ready } }, session: okSession() });
   assert.equal(await runLoop({ rounds: 1, deps: f.deps }), 0);
