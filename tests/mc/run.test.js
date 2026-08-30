@@ -23,7 +23,7 @@ function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], live = 
     files[`${root}/${name}/${area.repo}/.git`] = '';
     dirs.add(`${root}/${name}`);
     if (area.plan) {
-      files[`${root}/${name}/${area.repo}/docs/project/${area.programme}/${name}/PLAN.md`] = area.plan;
+      files[`${root}/${name}/${area.repo}/docs/project/${area.programme}/${name}/PLAN.json`] = area.plan;
       dirs.add(`${root}/${name}/${area.repo}/docs/project`);
     }
     for (const [file, text] of Object.entries(area.decisions || {})) {
@@ -84,7 +84,7 @@ function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], live = 
       dirs.add(`${root}/${name}`);
       const text = plans[repoName]?.[name];
       if (text) {
-        files[`${root}/${name}/${repoName}/docs/project/prog/${name}/PLAN.md`] = text;
+        files[`${root}/${name}/${repoName}/docs/project/prog/${name}/PLAN.json`] = text;
         dirs.add(`${root}/${name}/${repoName}/docs/project`);
       }
       return { ok: true, path: `${root}/${name}/${repoName}` };
@@ -102,7 +102,7 @@ function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], live = 
       calls.git.push([cwd, ...args]);
       const repoName = Object.keys(repos).find((r) => cwd === repos[r]);
       if (args[0] === 'ls-tree' && repoName) {
-        return { ok: true, stdout: Object.keys(plans[repoName] || {}).map((n) => `docs/project/prog/${n}/PLAN.md`).join('\n') };
+        return { ok: true, stdout: Object.keys(plans[repoName] || {}).map((n) => `docs/project/prog/${n}/PLAN.json`).join('\n') };
       }
       if (args[0] === 'show' && repoName) {
         const name = args[1].split('/').at(-2);
@@ -122,7 +122,7 @@ function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], live = 
       }
       if (args[0] === 'worktree' && args[1] === 'add' && repoName) {
         const path = args[4];
-        for (const [name, text] of Object.entries(plans[repoName] || {})) files[`${path}/docs/project/prog/${name}/PLAN.md`] = text;
+        for (const [name, text] of Object.entries(plans[repoName] || {})) files[`${path}/docs/project/prog/${name}/PLAN.json`] = text;
         files[`${path}/docs/project/project_log.md`] = projectLog[repoName] ?? '';
         return { ok: true, stdout: '' };
       }
@@ -213,7 +213,37 @@ function runRows(files) {
   return lines.slice(1).map((line) => Object.fromEntries(line.split('\t').map((cell, i) => [header[i], cell])));
 }
 
-const ready = '---\nstatus: ready\nnext: "do x"\n---\n# X\n';
+/**
+ * A plan as the runner now reads it: `PLAN.json`, one step, and a status that
+ * belongs to the step rather than to the file. `plan()` is every fixture below
+ * — the frontmatter strings these replaced could say `status: ready` while
+ * saying nothing a session could act on, which is the fault the schema exists
+ * to stop.
+ */
+function plan({ status = 'ready', title = 'The one step', done_when = 'do x', runner, steps, documents = [] } = {}) {
+  const stopped = status === 'blocked' || status === 'waiting-decision';
+  return JSON.stringify({
+    schema: 'mc-plan',
+    version: 1,
+    goal: ['One thing is true when this is done.'],
+    contract: ['Not without Martin.'],
+    out_of_scope: ['Everything else.'],
+    success_criteria: [{ met: false, criterion: 'It is done.', check: 'The row is in runs.tsv.' }],
+    what_the_code_taught_us: [],
+    documents,
+    ...(runner ? { runner } : {}),
+    steps: steps || [{
+      title,
+      status,
+      done_when,
+      instruction: status === 'done' ? [] : ['Do the one step.'],
+      pr: null,
+      blocked_by: stopped ? { kind: 'decision', name: 'prog-1' } : null,
+    }],
+  }, null, 2);
+}
+
+const ready = plan();
 const okSession = (json = {}) => () => ({ status: 0, stdout: JSON.stringify({ subtype: 'success', num_turns: 4, session_id: 'sid', usage: { input_tokens: 1, output_tokens: 2, cache_read_input_tokens: 3, cache_creation_input_tokens: 4 }, ...json }), stderr: '', timedOut: false });
 
 test('queue: queue.md first, then plans on origin/main of both repositories', () => {
@@ -233,7 +263,8 @@ test('one step: worktree made from origin/main, session through the adapter, PR 
   assert.equal(call.cwd, '/w/alpha/memoro');
   assert.equal(call.timeoutMs, 90 * 60_000);
   assert.deepEqual(call.args.slice(2, 6), ['--model', 'opus', '--permission-mode', 'auto']);
-  assert.match(call.args[1], /`alpha` workarea of memoro[\s\S]*----- PLAN\.md -----\n---\nstatus: ready/u);
+  assert.match(call.args[1], /`alpha` workarea of memoro[\s\S]*----- PLAN\.json -----\n\{/u);
+  assert.match(call.args[1], /Your step is `steps\[0\]` — 1, "The one step"/u);
   assert.match(call.args[call.args.indexOf('--append-system-prompt') + 1], /^PROFILE\n\n---\n\nROLE step$/u);
   assert.ok(f.calls.gh.some((c) => c.includes('merge') && c.includes('Alpha step (#77)')));
   const rows = f.files['/w/runner/log/runs.tsv'].trim().split('\n');
@@ -245,7 +276,7 @@ test('one step: worktree made from origin/main, session through the adapter, PR 
 });
 
 test('skips: live tmux session, dirty worktree, waiting-decision', async () => {
-  const waiting = '---\nstatus: waiting-decision\n---\n';
+  const waiting = plan({ status: 'waiting-decision' });
   const f = fixture({
     plans: { memoro: { live: ready, dirty: ready, wait: waiting } },
     live: ['live'], dirty: ['dirty'], session: okSession(),
@@ -257,7 +288,7 @@ test('skips: live tmux session, dirty worktree, waiting-decision', async () => {
   const log = f.files['/w/runner/log/runner.log'];
   assert.match(log, /live: live tmux session, skip/u);
   assert.match(log, /dirty: dirty worktree, skip/u);
-  assert.match(log, /wait: status waiting-decision, skip/u);
+  assert.match(log, /wait: step 1 is waiting-decision on decision prog-1, skip/u);
 });
 
 /**
@@ -267,7 +298,7 @@ test('skips: live tmux session, dirty worktree, waiting-decision', async () => {
  * one. A plan comes back by being set `ready`, and by nothing else.
  */
 test('an answered decision file does not start a waiting-decision project', async () => {
-  const waiting = '---\nstatus: waiting-decision\n---\n# W\n';
+  const waiting = plan({ status: 'waiting-decision' });
   const f = fixture({
     areas: {
       other: { repo: 'memoro', decisions: { 'prog-1.md': '# q\n\n**Beslut:** A\n' } },
@@ -278,7 +309,7 @@ test('an answered decision file does not start a waiting-decision project', asyn
   });
   await createRunner({ deps: f.deps }).round();
   assert.equal(f.calls.sessions.length, 0, 'nothing starts');
-  assert.match(f.files['/w/runner/log/runner.log'], /wait: status waiting-decision, skip/u);
+  assert.match(f.files['/w/runner/log/runner.log'], /wait: step 1 is waiting-decision on decision prog-1, skip/u);
   assert.equal(f.files['/w/other/decisions/prog-1.md'], '# q\n\n**Beslut:** A\n', 'and the runner does not touch the file either');
 });
 
@@ -343,7 +374,7 @@ test('merge that fails syncs main in, pushes, retries once; still failing leaves
 });
 
 test('tool and model come from the project frontmatter', async () => {
-  const codexPlan = '---\nstatus: ready\ntool: codex\nmodel: o3\nbudget_minutes: 20\n---\n';
+  const codexPlan = plan({ runner: { tool: 'codex', model: 'o3', budget_minutes: 20 } });
   const f = fixture({ plans: { 'memoro-cli': { cx: codexPlan } }, session: () => ({ status: 0, stdout: '', stderr: '', timedOut: false }) });
   const runner = createRunner({ deps: f.deps });
   await runner.round({ once: true });
@@ -355,7 +386,7 @@ test('tool and model come from the project frontmatter', async () => {
 });
 
 test('a codex plan that names no model gets none, and the log says so', async () => {
-  const codexPlan = '---\nstatus: ready\ntool: codex\n---\n';
+  const codexPlan = plan({ runner: { tool: 'codex' } });
   const f = fixture({ plans: { 'memoro-cli': { cx: codexPlan } }, session: () => ({ status: 0, stdout: '', stderr: '', timedOut: false }) });
   const runner = createRunner({ deps: f.deps });
   await runner.round({ once: true });
@@ -403,7 +434,7 @@ test('current-<repo>.json exists only while the step is in flight, and runner.js
 });
 
 test('the current file carries the project frontmatter, and is removed even when the session throws', async () => {
-  const codexPlan = '---\nstatus: ready\ntool: codex\nmodel: o3\nbudget_minutes: 20\n---\n';
+  const codexPlan = plan({ runner: { tool: 'codex', model: 'o3', budget_minutes: 20 } });
   const f = fixture({ plans: { 'memoro-cli': { cx: codexPlan } }, session: () => { throw new Error('boom'); } });
   const runner = createRunner({ deps: f.deps });
   await assert.rejects(runner.round({ once: true }), /boom/u);
@@ -649,12 +680,18 @@ test('a STOP file stops the helper as well as the steps', async () => {
  * and `docs/plans/`, the directory `docs/project/` replaced, had reached 656
  * files the same way.
  */
-const done = (next = 'Step 3 — close-out') => `---\nstatus: done\nnext: "${next}"\n---\n# D\n\nSee \`docs/technical/d.md\`.\n`;
+// A finished project names the note it left behind: the archiver reads the
+// row's doc cell out of the plan's own documents.
+const done = (title = 'Close-out') => plan({
+  status: 'done',
+  title,
+  documents: [{ label: 'What now exists', path: 'docs/technical/d.md' }],
+});
 const LOG_HEAD = '# Project log\n\n## Log\n\n| date | programme | project | outcome | summary | doc | pointer |\n|---|---|---|---|---|---|---|\n';
 
 test('a done plan is archived in the round it is read: directory removed, row written, one PR merged', async () => {
   const f = fixture({
-    plans: { memoro: { over: done('Step 2 — the rule'), alpha: ready } },
+    plans: { memoro: { over: done('The rule'), alpha: ready } },
     projectLog: { memoro: LOG_HEAD },
     session: okSession(),
   });
@@ -662,11 +699,11 @@ test('a done plan is archived in the round it is read: directory removed, row wr
 
   const wt = '/w/runner/archive/memoro';
   assert.deepEqual(f.calls.rm, ['docs/project/prog/over'], 'the project directory, and nothing else');
-  assert.equal(`${wt}/docs/project/prog/over/PLAN.md` in f.files, false);
-  assert.equal(`${wt}/docs/project/prog/alpha/PLAN.md` in f.files, true, 'every other directory is untouched');
+  assert.equal(`${wt}/docs/project/prog/over/PLAN.json` in f.files, false);
+  assert.equal(`${wt}/docs/project/prog/alpha/PLAN.json` in f.files, true, 'every other directory is untouched');
 
   const row = f.files[`${wt}/docs/project/project_log.md`].trim().split('\n').at(-1);
-  assert.equal(row, '| 2026-08-29 | prog | over | delivered | Step 2 — the rule | [docs/technical/d.md](../technical/d.md) | abc1234 |');
+  assert.equal(row, '| 2026-08-29 | prog | over | delivered | The rule | [docs/technical/d.md](../technical/d.md) | abc1234 |');
 
   assert.ok(f.calls.gh.some((c) => c[0] === wt && c[2] === 'create' && c.includes('Archive 1 done project: over')));
   assert.ok(f.calls.gh.some((c) => c[0] === wt && c[2] === 'merge' && c.includes('900')), 'the runner merges it like any other PR');
@@ -711,7 +748,7 @@ test('a programme left empty by its last project goes with it; the log and the p
 
 test('a project with no docs/technical note is recorded in intake, and archived all the same', async () => {
   const f = fixture({
-    plans: { memoro: { thin: '---\nstatus: done\nnext: "Step 1"\n---\n# thin\n' } },
+    plans: { memoro: { thin: plan({ status: 'done', title: 'Step 1' }) } },
     projectLog: { memoro: LOG_HEAD },
     session: okSession(),
   });
@@ -927,7 +964,7 @@ test('queue.md is rewritten to names only, and a name leaves it the moment its s
 test('a name whose project was skipped stays in the queue', async () => {
   const f = fixture({
     queue: 'alpha\nwait\n',
-    plans: { memoro: { alpha: ready, wait: '---\nstatus: waiting-decision\n---\n# W\n' } },
+    plans: { memoro: { alpha: ready, wait: plan({ status: 'waiting-decision' }) } },
     session: okSession(),
     gh: { alpha: { number: 7 } },
   });

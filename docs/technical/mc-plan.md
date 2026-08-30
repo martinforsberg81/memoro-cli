@@ -1,4 +1,4 @@
-# mc plan — where a PLAN.md comes from
+# mc plan — where a PLAN.json comes from
 
 Everything else in mc runs on plans. `mc run` takes `ready` ones off
 `~/mc/queue.md` and off both origin/mains, spends one fresh headless session
@@ -96,18 +96,23 @@ Four things the overlay fixes:
   PR, the project goes under it. *Never a parallel programme, never a second
   project for the same state* — the failure this rule exists to stop is two
   plans quietly editing the same code from different directories.
-- **The PLAN.md shape.** Frontmatter `status` · `next` · `budget` · `needs`;
-  sections **Goal · Success criteria · Contract · Steps · What the code taught
-  us · Documents**, in that order, under 120 lines. Success criteria a fresh
-  session can check from code and tests, no judgement calls; every remaining
-  step carries a one-line "done when". That shape is not decoration — it is
-  the interface a headless step session reads at 03:00 with nobody to ask.
+- **The plan's shape.** One `PLAN.json`: the overall part — `goal`,
+  `contract`, `out_of_scope`, `success_criteria`, `what_the_code_taught_us`,
+  `documents` — then `steps[]`, each with its own `instruction`, `done_when`
+  and `status`. The shape itself is written down in the
+  repository being planned, in `docs/project/README.md` § *What a PLAN.json is*,
+  the same text in memoro and memoro-cli, so the overlay points there rather
+  than keeping a second copy that drifts. Every remaining step carries its own
+  "done when", every criterion names how it is checked, and the Contract names
+  what is out of scope as well as what may not change. That shape is not
+  decoration — it is the interface a headless step session reads at 03:00 with
+  nobody to ask.
 - **Decisions are files.** `../decisions/<programme>-<n>.md` at the workarea
   root, one question each, what the code says and a `## Rekommendation` naming
   the one thing to do. A proposal Martin says GO to, not a menu. A question
   that is unclear, or that reading further would answer, gets no file — it
   gets read. [`mc brief`](mc-brief.md) is what puts them to him, and the
-  answer travels plan-first: the next session writes it into PLAN.md and sets
+  answer travels plan-first: the next session writes it into the plan and sets
   `ready`, which is the only thing that puts a project back in front of the
   runner.
 - **Never merge, never start the runner, never write another project's plan.**
@@ -136,7 +141,7 @@ gone: the runner runs plans and does not write them, see
 [`tests/mc/commands/plan.test.js`](../../tests/mc/commands/plan.test.js), six
 tests, none of which starts a session:
 
-- the role ships, is Opus, claude-first, and its overlay carries the PLAN.md
+- the role ships, is Opus, claude-first, and its overlay carries the plan
   path, the `Plan: <name>` title, the `**Beslut:**` shape, the no-parallel-
   programme rule and the docs merge;
 - `planLaunch` names the workarea, the repository and the PR title, and its

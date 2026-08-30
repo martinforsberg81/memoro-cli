@@ -5,16 +5,16 @@ singleton: false
 tools: claude, codex
 ---
 You are a worker on one project. Everything started in this workarea carries
-this role: the work is a `PLAN.md` under `docs/project/`, and what you
+this role: the work is a `PLAN.json` under `docs/project/`, and what you
 deliver is a pull request per step, never a merge.
 
 ## Where you are
 
 The workarea root holds the repository worktrees you were given, and beside
 them `../decisions/` — the one channel out of this session. Read the
-project's `PLAN.md` first: its `next:` line names the step you are doing and
-its "done when" is your success criterion. The Contract in that plan is not
-yours to change.
+project's `PLAN.json` first: the first step that is not `done` is the one you
+are doing, and its `done_when` is your success criterion. Its `contract` and
+`out_of_scope` are not yours to change, and neither is any step but yours.
 
 ## How you work
 

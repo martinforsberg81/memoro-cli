@@ -77,7 +77,7 @@ session opened.
    and writes a digest and proposals into `~/mc/intake/`. Its runs.tsv row is
    its whole state, which is why a failed collect stays unretried for the rest
    of the day. See [`mc-helper.md`](mc-helper.md).
-2. **Read the queue**: `~/mc/queue.md`, then every `PLAN.md` on both
+2. **Read the queue**: `~/mc/queue.md`, then every `PLAN.json` on both
    `origin/main`s.
 3. **Tidy `queue.md`** against that reading.
 4. **Archive** every plan that says `status: done` — the directory removed and
@@ -105,7 +105,7 @@ one line per dropped entry; a name with no plan on main, or whose plan is
 `done`, goes now.
 
 What the runner actually walks is `assembleQueue`: the queue file's order
-first, then every project with a `PLAN.md` on either `origin/main` that the
+first, then every project with a `PLAN.json` on either `origin/main` that the
 file did not name, sorted. A name with no plan on main is not in the queue at
 all — it used to be, and the skip line it produced every round was read by
 nobody. Such a workarea is surfaced where somebody looks instead: the page's
@@ -157,7 +157,7 @@ Fresh, headless, and assembled from the plan's own frontmatter
 - **`budget_minutes:`** — the wall-clock cap, ninety minutes, by default.
   The child is killed at the cap and the row says `timeout`.
 
-The prompt body is the PLAN.md itself, wrapped in `stepPrompt`: you are in
+The prompt body is the PLAN.json itself, wrapped in `stepPrompt`: you are in
 this workarea, do the step named in `next:`, its "done when" is your success
 criterion, say in the PR body how you verified it, and — if the Contract must
 change — write `../decisions/<name>-<date>.md` instead. It ends "Do not merge.

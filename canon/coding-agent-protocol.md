@@ -48,24 +48,29 @@ new work on it, and do not assume a module is live because it exists —
 
 ## How work is organized
 
-Work is **projects**, and a project is a `PLAN.md` on `main`. This is the same
+Work is **projects**, and a project is a `PLAN.json` on `main`. This is the same
 shape in memoro; the difference is only which repository the plan lives in.
 
 ```
 mc brief    → Martin answers open questions with a **Beslut:** line
-mc plan     → a foreground session writes docs/project/<programme>/<name>/PLAN.md
+mc plan     → a foreground session writes docs/project/<programme>/<name>/PLAN.json
 mc run      → the runner takes one step of one ready plan, in a fresh session
 mc merge    → the gate, then the squash
               close-out → project_log.md + docs/technical/
 ```
 
-- **Plans live at `docs/project/<programme>/<project>/PLAN.md`.** There is one
-  programme here, `mc`. Frontmatter: `status` (`ready` | `waiting-decision` |
-  `blocked` | `done`), `next` (one line carrying its own "done when"), `budget`,
-  `needs`. See [`docs/project/README.md`](project/README.md).
+- **Plans live at `docs/project/<programme>/<project>/PLAN.json`.** There is one
+  programme here, `mc`. One file: the overall part — `goal`, `contract`,
+  `out_of_scope`, `success_criteria`, `what_the_code_taught_us`, `documents` —
+  then `steps[]`, each carrying its own `instruction`, `done_when` and `status`
+  (`ready` | `done` | `blocked` | `waiting-decision`). The plan has no status of
+  its own: it is the state of the first step that is not done. See
+  [`docs/project/README.md`](project/README.md).
 - **You do not write plan state by hand.** `mc plan <name>` opens the session
-  that writes one, with Martin in it. A step session edits the plan it was
-  given — its `next:` line and its own sections — and no other.
+  that writes one, with Martin in it. A step session edits its own step's
+  `status` and `pr`, the criteria it met and `what_the_code_taught_us` — and
+  `mc run` compares the file before and after, so a session that touched a step
+  it did not run leaves a PR the runner will not merge.
 - **You do not decide.** An open question becomes
   `~/mc/<workarea>/decisions/<programme>-<n>.md`: the question, the options, one
   recommendation, and no menu. Martin answers it in `mc brief`. That directory
