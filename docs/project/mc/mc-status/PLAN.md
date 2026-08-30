@@ -1,6 +1,6 @@
 ---
 status: ready
-next: "Step 3 — retire the old board: sessions, leases and watcher pulses stay only behind `--sessions`, and the help text stops offering the mechanisms that no longer run — done when nothing `mc status` or `mc status --json` prints is about a mechanism that is gone, and `mc --help` says the same."
+next: "Step 4 — close-out: `docs/technical/mc-status.md` says what `mc status <name>` and the page read, which file every fact comes from, and what the old board was; `docs/project/project_log.md` gets a row — done when both exist, the doc names no mechanism that is gone, and `npm test` is no redder than main."
 budget: 150k
 needs: []
 ---
@@ -18,7 +18,9 @@ from files the runner and the sessions already write; it writes nothing.
 
 ## Success criteria
 
-- [ ] `mc status` with no arguments prints, in this order:
+- [x] The page prints, in this order — on `mc`, not on `mc status`: decision
+      mc-3 (2026-08-29) made the page the front door, and `mc status` now
+      says so and answers only about a named project:
       1. **Runner** — is `runner.sh`/`mc run` alive (tmux `runner` or pid);
          queue: N projects, the next one and its kind (triage/step/
          reconcile/decision); last 24 h: steps by kind, merged / left open /
@@ -38,14 +40,20 @@ from files the runner and the sessions already write; it writes nothing.
          PLAN.md anywhere: the closure candidates.
 - [x] `--json` emits the same as one object.
 - [ ] No model call, no network beyond `git fetch` and `gh pr list` (both
-      skippable with `--offline`), under 5 s with fetch cached.
+      skippable with `--offline`), under 5 s with fetch cached. Measured
+      2026-08-30 on a quiet machine: `mc status <name>` 2.3 s live and
+      0.13 s `--offline` — inside the bound; the page, which is `mc` now,
+      6.8 s either way, so the time is local work (24 worktrees walked, `ps`,
+      one git per repo) and not the fetch. Left open deliberately: the page's
+      speed is `mc`'s to answer, not this verb's.
 - [x] `mc status <name>` keeps working for one project: its PLAN.md
       frontmatter, decisions, last three runs, open PR.
-- [ ] Tests: each block built from fixture files (runs.tsv, decisions dir,
-      a docs/project tree) — no git, no gh.
-- [ ] The old status-board sections (sessions, leases, watcher state) are
-      removed from the bare verb; `mc status --sessions` may keep them until
-      cut-old-surface removes the code.
+- [x] Tests: each block built from fixture files (runs.tsv, decisions dir,
+      a docs/project tree) — no git, no gh (`tests/mc/status-collect.test.js`,
+      `tests/mc/status-project.test.js`; git is injected, gh is a stub).
+- [x] The old status-board sections (sessions, leases, watcher state) are
+      gone from the bare verb — and `--sessions` went with them rather than
+      keeping them, so cut-old-surface has no board left to remove.
 
 ## Contract
 
@@ -68,13 +76,39 @@ from files the runner and the sessions already write; it writes nothing.
       `mc status docx-editor` 2.3 s live, 1.2 s `--offline`) — the frontmatter,
       the step, the decisions that belong to the project, its last three runs
       and the open PR on its branch. `--json` landed with step 1.
-- [ ] **3. Retire the old board** — remove sessions/leases/watchers from the
-      bare output (`--sessions` keeps them), update help text. Done when
-      `mc status` shows nothing about mechanisms that no longer run.
+- [x] **3. Retire the old board** (2026-08-30) — the board itself was already
+      gone (mc-ui, #441/#444, decision mc-3); what was left was the sentence
+      it left behind. `mc status` stopped offering `mc --watch`, a page that
+      was removed the day it landed, and `docs/mc-command-matrix.md` lost the
+      `mc --watch [seconds]` row and the `w` key the menu no longer has.
+      `tests/mc/status-project.test.js` now runs every `mc …` the sentence
+      offers.
 - [ ] **4. Close-out** — `docs/technical/mc-status.md`, `project_log.md`.
 
 ## What the code taught us
 
+- The board was gone before this step arrived. mc-ui took the whole page to
+  `mc` under decision mc-3 and removed `--sessions`, `--watch`, `--wait` and
+  `--timeout` outright, rather than parking the board behind `--sessions`
+  until cut-old-surface. `status-render.js` kept only the drawing primitives
+  every other page borrows; `work-status.js` kept only the model that
+  `mc repo status` and the lease-liveness check read. There was nothing left
+  to delete here.
+- What a retired surface leaves behind is a sentence pointing at it. Bare
+  `mc status` sent a person to `mc --watch` — removed the same day it landed
+  — which answers `unknown command "--watch"`. `docs/mc-command-matrix.md`,
+  whose own rule is "if it is not listed here it does not exist", still
+  listed it. A pointer is a surface too: the test now runs each `mc …` it
+  offers, so it cannot rot into a menu of things that exit 2.
+- `--offline` does not make the page faster, which says the 6.8 s is not the
+  network. `mc status <name>` is 2.3 s live and 0.13 s offline, so the verb
+  this project owns is well inside its bound and the number that misses it
+  belongs to `mc`.
+- Of the three subjects in this step's own `next:` — sessions, leases,
+  watcher pulses — only sessions is gone. `mc repo claim|release|who`,
+  `mc suite claim|release|who` and `mc repo watch start|stop|status` all
+  still run, and `mc --help` is right to offer them. The old board read
+  them; they did not go with it.
 - `runs.tsv` has no model column; every row is priced as the runner's
   `MODEL` (opus) and the page says so. `mc run` should write the model.
 - The estimate is large: a day of 30 steps ≈ $120 list, dominated by

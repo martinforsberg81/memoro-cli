@@ -265,4 +265,22 @@ describe('routing', () => {
     assert.equal(bare.status, 2);
     assert.match(bare.stderr, /mc status is now mc/u);
   });
+
+  it('the sentence names only surfaces that run', () => {
+    const root = workRoot();
+    const env = { MC_WORK_ROOT: root, MC_REPOS_HOME: join(root, 'no-repos') };
+    const bare = runMcCli(['status'], env);
+    // `mc --watch` was the page on a timer and was removed the day it landed;
+    // pointing at it sent a person to `unknown command "--watch"`.
+    assert.doesNotMatch(bare.stderr, /--watch/u);
+    // Every `mc …` the sentence offers is run here, so the pointer cannot rot
+    // into a menu of things that exit 2.
+    const offered = [...bare.stderr.matchAll(/^ {4}(mc [^ ]*(?: <name>)?)/gmu)]
+      .map((m) => m[1].replace(' <name>', ' mc-status').split(' ').slice(1).filter(Boolean));
+    assert.ok(offered.length >= 2, bare.stderr);
+    for (const args of offered) {
+      const result = runMcCli([...args, '--offline'], env);
+      assert.equal(result.status, 0, `mc ${args.join(' ')}: ${result.stderr}`);
+    }
+  });
 });
