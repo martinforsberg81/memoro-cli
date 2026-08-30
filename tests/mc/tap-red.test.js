@@ -87,7 +87,7 @@ describe('the red set of a suite run', () => {
   it('reads the totals the run printed, and knows when there are none', () => {
     const finished = tap({ suites: [{ name: 'a', tests: [{ name: 'b' }] }], totals: { tests: 2, pass: 2, fail: 0 } });
     assert.deepEqual(tapTotals(finished), {
-      tests: 2, pass: 2, fail: 0, cancelled: null, finished: true,
+      tests: 2, pass: 2, fail: 0, cancelled: null, runs: 1, finished: true,
     });
 
     // A run that died before its summary. The distinction is the whole reason
@@ -95,6 +95,34 @@ describe('the red set of a suite run', () => {
     // like a clean sweep.
     const died = 'TAP version 13\n# Subtest: a\nnot ok 1 - a\n';
     assert.equal(tapTotals(died).finished, false);
+  });
+
+  it('sums a suite that ran in several processes, instead of keeping the last', () => {
+    // memoro's runner spawns one `node --test` per resource class, so one
+    // `npm test` prints three summaries. Measured on 2026-08-30, round
+    // #11104: 2477 + 9 + 39 tests, reported as "39 tests" — the last batch's
+    // number standing in for the whole suite, in the round's own output and
+    // in the baseline cache it wrote.
+    const batched = [
+      '# tests 2477', '# pass 2477', '# fail 0',
+      '# tests 9', '# pass 9', '# fail 0',
+      '# tests 39', '# pass 39', '# fail 0',
+    ].join('\n');
+    const totals = tapTotals(batched);
+    assert.equal(totals.tests, 2525);
+    assert.equal(totals.pass, 2525);
+    assert.equal(totals.fail, 0);
+    assert.equal(totals.runs, 3);
+    assert.equal(totals.finished, true);
+  });
+
+  it('counts the failures of every process, not only the last one to speak', () => {
+    // The shape that matters for the gate: a red first batch and a green one
+    // after it. Keeping the last summary reported `fail 0` over a suite with
+    // four failures in it.
+    const batched = ['# tests 100', '# fail 4', '# tests 20', '# fail 0'].join('\n');
+    assert.equal(tapTotals(batched).fail, 4);
+    assert.equal(tapTotals(batched).tests, 120);
   });
 });
 

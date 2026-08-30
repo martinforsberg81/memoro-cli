@@ -84,25 +84,45 @@ export function redNames(tap) {
 }
 
 /**
- * The run's own totals, when it printed them.
+ * The run's own totals, when it printed them — every process of it.
  *
- * Reported alongside the names but never used to decide anything: they are how
- * a person checks the parse looks sane, and how a run that died before it
- * finished — no plan, no totals — is told apart from one that passed.
+ * A suite is not always one process. memoro's runner spawns one `node --test`
+ * per resource class (standard, sqlite, heavy), so a single `npm test` emits
+ * three summaries, and this function used to keep the last one it saw: on
+ * 2026-08-30 a round printed `# tests 2477`, `# tests 9` and `# tests 39`, and
+ * reported "39 tests, 0 red names" as the whole suite. Both sides of the gate
+ * were wrong the same way, so the red comparison still held — but every number
+ * a person read off that round, and every total written into the baseline cache
+ * for the next one, was the last batch's alone.
+ *
+ * So the summaries are summed, and `runs` says how many there were. A
+ * single-process suite prints one summary and is unaffected: the sum of one
+ * number is that number.
+ *
+ * This cannot see a summary that was never printed. A runner that stops after a
+ * red batch emits two summaries instead of three, and nothing here can tell
+ * that from a suite that only ever had two. Reporting honestly what was printed
+ * is this function's half of the problem; not truncating is the runner's.
  */
 export function tapTotals(tap) {
   const totals = {};
+  let runs = 0;
   for (const line of String(tap ?? '').split('\n')) {
     const counted = /^#\s+(tests|pass|fail|cancelled|skipped|todo)\s+(\d+)\s*$/u.exec(line);
-    if (counted) totals[counted[1]] = Number(counted[2]);
+    if (!counted) continue;
+    const [, key, value] = counted;
+    if (key === 'tests') runs += 1;
+    totals[key] = (totals[key] ?? 0) + Number(value);
   }
   return {
     tests: totals.tests ?? null,
     pass: totals.pass ?? null,
     fail: totals.fail ?? null,
     cancelled: totals.cancelled ?? null,
+    /** How many summaries the output carried — one per process the suite ran in. */
+    runs,
     /** A run that never printed its totals did not finish, whatever its exit code said. */
-    finished: totals.tests !== undefined,
+    finished: runs > 0,
   };
 }
 

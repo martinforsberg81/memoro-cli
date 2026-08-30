@@ -1,12 +1,18 @@
-# mc merge — one door for landing a pull request
+# mc test and mc merge — one measurement, two doors
 
 A pull request lands through `mc merge <repo> <pr>`, and through nothing else.
+It is measured by `mc test <repo> <pr>`, which is the same round stopping at the
+verdict. There is one implementation: `mc merge` runs `mc test`'s round and then
+lands what it cleared. A second implementation is the thing this arrangement
+exists to prevent — two measurements drift, and the one that drifts is always
+the one the merge trusted.
+
 The verb has two forms, and which one runs is decided by what the pull request
 touches:
 
 - **the gate round** — lease, fresh baseline, a candidate with main merged in,
-  the repository's own suite on both, squash. This is what `mc repo merge` was;
-  only the name moved.
+  what the change reaches measured on both, squash. This is what `mc repo merge`
+  was; only the name moved.
 - **`--docs`** — a pull request whose every file is under `docs/`, squash-merged
   without a suite, because there is nothing to run.
 
@@ -36,7 +42,8 @@ new door and the old pointer answer the same way about `#346` versus `346`, a
 number that is not a number, and the same pull request named twice.
 
 ```
-mc merge <repo> <pr> [<pr>...] [--check] [--json]   the gate round, then squash
+mc test  <repo> <pr> [<pr>...] [--json]            measure it; merge nothing
+mc merge <repo> <pr> [<pr>...] [--check] [--json]   the same round, then squash
 mc merge <repo> <pr> --docs [--json]                docs-only: no suite, squash
 ```
 
@@ -154,3 +161,43 @@ repository, and `mc repo merge` pointing at `mc merge` while `mc --help` no
 longer mentions it. The gate form's argument errors live with the gate, in
 [`tests/mc/repo-merge.test.js`](../../tests/mc/repo-merge.test.js) and
 [`tests/mc/repo-gate.test.js`](../../tests/mc/repo-gate.test.js).
+
+## What the round measures
+
+Not "the suite", necessarily. A repository may declare `select` in the gate
+table ([`src/mc/repo-gate-table.js`](../../src/mc/repo-gate-table.js)): a command
+printing JSON with a `files` array, run in the candidate worktree. With one, the
+round measures the test files the change reaches; without one, the whole suite,
+exactly as it always did.
+
+**Both sides run the candidate's list.** This is the part worth stating twice,
+because getting it wrong is silent. A selection is a function of the diff, so a
+baseline asked to select for itself answers "nothing changed" and returns its
+mandatory core. A round that let each side choose would compare the change's 56
+files against 6, and every red already standing on main inside those 56 would
+read as this change's doing. The list is asked for once, on the candidate, and
+run on both.
+
+A selected file that exists only on the candidate — a test the change adds — is
+run there and reported as absent on the baseline rather than faked. An empty
+selection stops the round: it is not a measurement, and a green from it would be
+the most confident kind of nothing.
+
+### What it cost before
+
+Measured on memoro #11104 (2026-08-30), landing two markdown files and a test:
+
+| step | time |
+|---|---:|
+| `npm ci`, both sides | 15 s |
+| suite, baseline | 649 s |
+| suite, candidate | 224 s |
+| extra gate `msr contract`, candidate | 194 s |
+
+That extra gate globbed exactly the profile the suite already ran, so the
+contract suite was bought four times in one round. The same round also reported
+`2477 + 9 + 39` tests as **"39 tests"**, because the suite runs in three
+processes and `tapTotals` kept the last summary it saw.
+
+Both are fixed: the totals are summed, and memoro declares `select`. A
+documentation diff there selects 6 files where it selected 332.

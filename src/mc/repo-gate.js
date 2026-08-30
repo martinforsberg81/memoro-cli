@@ -150,6 +150,10 @@ export async function runGate({
     reason: null,
     command: null,
     declaration: null,
+    // What the round measured, when the repository selects by diff: the files
+    // the change reaches, and the fact that both sides ran exactly these. Null
+    // when the repository has no `select` and the whole suite ran instead.
+    selection: null,
     extra_gates: [],
     // The pull request's own tests: every `*.test.js` it adds or changes, run
     // on the candidate after the suite (D-0157). `files: []` when it touches
@@ -308,11 +312,16 @@ export async function runGate({
     // — and the chain breaks on the smallest deviation, with the run as it
     // always was. The red comparison keeps its form: it becomes free, not
     // absent.
+    const selects = Boolean(declared.declaration.select);
     const commandLine = suiteCommand({ repoPath });
-    if (!commandLine.ok) return finish('suite', commandLine.reason);
-    report.command = commandLine.command;
+    if (!commandLine.ok && !selects) return finish('suite', commandLine.reason);
+    report.command = selects ? declared.declaration.select : commandLine.command;
     const baseCommit = trim(askGit(['rev-parse', baseRef], { cwd: repoPath }).stdout);
-    const carried = baseCommit ? loadBaseline({
+    // No carry when the repository selects by diff. A carried baseline is a
+    // saved result for the WHOLE suite at a commit; a selected round measures a
+    // different, smaller set for every pull request, and reusing one for the
+    // other would be comparing two different questions' answers.
+    const carried = !selects && baseCommit ? loadBaseline({
       repoPath,
       commit: baseCommit,
       lockfileHash: lockfileHashAt({ git: askGit, repoPath, commit: baseCommit }),
@@ -330,7 +339,9 @@ export async function runGate({
     // red main to the one PR in the room, 2026-08-24).
     const gates = declared.declaration.extra_gates || [];
     const gatesToRun = gates.filter((gate) => !carriedGate(carried, gate));
-    const needBaseline = !carried || gatesToRun.length > 0;
+    // A selected round always needs the baseline: the comparison is what makes
+    // the verdict differential, and there is nothing saved to compare against.
+    const needBaseline = selects || !carried || gatesToRun.length > 0;
 
     // Detached on purpose, both of them. The round must be able to merge the
     // base into the candidate without that ever becoming a commit on somebody's
@@ -413,11 +424,48 @@ export async function runGate({
       return finish('dependencies', `the ${side} declares ${tree.declares} dependencies and has no node_modules after preparation — a suite run there would count only what happens to run (D-0152)`);
     }
 
+    // What this change reaches, asked of the repository rather than assumed.
+    //
+    // Read from the CANDIDATE, and then run on both sides. The list is a
+    // function of the diff, so the baseline — which is the base branch, whose
+    // diff against itself is empty — would answer with almost nothing if it
+    // were asked separately, and the round would compare the change's files
+    // against a handful of mandatory ones and call main's own red new.
+    let selection = null;
+    if (selects) {
+      selection = await timed('selection', () => selectFiles({
+        command: declared.declaration.select, cwd: headDir, env, say,
+      }));
+      if (!selection.ok) return finish('selection', selection.reason);
+      report.selection = {
+        command: declared.declaration.select,
+        files: selection.files.length,
+        // The selector's own admission that it could not narrow this change,
+        // carried through so the verdict does not read as a saving it is not.
+        full_suite: Boolean(selection.full),
+        why: selection.why,
+        // Which of them the baseline could not run, because this change adds
+        // them. A new test file is red-free on a base that does not have it,
+        // and saying so is the difference between a measurement and a guess.
+        only_on_candidate: 0,
+      };
+      say(`selection: ${selection.files.length} test file${selection.files.length === 1 ? '' : 's'} reached by this change`);
+      if (selection.files.length === 0) {
+        return finish('selection', 'the repository selected no test files for this change at all — that is not a measurement');
+      }
+    }
+
     // Sequential, not parallel. Two full suites at once halves the wall clock
     // and loads the machine that both of them are measuring on — and the tests
     // that fail under load are the ones a gate can least afford to guess about.
     // The baseline goes first so a repository that cannot run its own suite is
     // found before the candidate's run is paid for.
+    const flags = declared.declaration.pr_tests_flags || [];
+    const onBaseline = selection
+      ? selection.files.filter((file) => existsSync(join(baseDir, file)))
+      : null;
+    if (selection) report.selection.only_on_candidate = selection.files.length - onBaseline.length;
+
     if (carried) {
       report.baseline = {
         commit: carried.commit,
@@ -426,6 +474,14 @@ export async function runGate({
         carried: true,
         measured_at: carried.measured_at,
       };
+    } else if (selection) {
+      say(`running ${onBaseline.length} selected file${onBaseline.length === 1 ? '' : 's'} on the baseline`
+        + (report.selection.only_on_candidate ? ` (${report.selection.only_on_candidate} exist only on the candidate)` : ''));
+      const before = await timed('suite baseline', () => measureSelected({
+        tests: runTests, git: askGit, cwd: baseDir, files: onBaseline, flags, say, side: 'baseline',
+      }));
+      if (!before.ok) return finish('suite', `the baseline run ${before.reason}`);
+      report.baseline = before.result;
     } else {
       say('running the suite on the baseline — this takes a while');
       const before = await timed('suite baseline', () => measure({ suite: runSuite, git: askGit, cwd: baseDir, say, side: 'baseline' }));
@@ -435,11 +491,16 @@ export async function runGate({
 
     // The number the word "green" used to sit on top of. Read off the
     // baseline, because the baseline *is* the base branch as fetched — this is
-    // a statement about main, not about the pull request.
+    // a statement about main, not about the pull request. On a selected round
+    // it is a statement about main *within this change's reach*, which the
+    // verdict says out loud rather than leaving to be assumed.
     report.standing_red = report.baseline.red.length;
     say(`baseline: ${report.baseline.red.length} red${report.baseline.carried ? ' (carried)' : ''}`);
-    say('running the suite on the candidate');
-    const after = await timed('suite candidate', () => measure({ suite: runSuite, git: askGit, cwd: headDir, say, side: 'candidate' }));
+    const after = selection
+      ? await (say(`running the same ${selection.files.length} on the candidate`), timed('suite candidate', () => measureSelected({
+        tests: runTests, git: askGit, cwd: headDir, files: selection.files, flags, say, side: 'candidate',
+      })))
+      : await (say('running the suite on the candidate'), timed('suite candidate', () => measure({ suite: runSuite, git: askGit, cwd: headDir, say, side: 'candidate' })));
     if (!after.ok) return finish('suite', `the candidate run ${after.reason}`);
     report.candidate = after.result;
     // The measured tree's own hash, so a landing can later prove — not
@@ -687,15 +748,42 @@ export function verdictFor(report) {
  */
 export function verdictHeadline(report) {
   const standing = report.standing_red ?? 0;
-  if (!standing) return 'GREEN — the test gate passes';
-  return `NO NEW RED — ${standing} standing red name${standing === 1 ? '' : 's'} on ${report.pr?.base || 'the base'}`;
+  const reach = scopeOf(report);
+  if (!standing) return `GREEN — the test gate passes${reach}`;
+  return `NO NEW RED — ${standing} standing red name${standing === 1 ? '' : 's'} on ${report.pr?.base || 'the base'}${reach}`;
 }
 
 /** The same statement mid-sentence, for a round that is narrating itself. */
 export function verdictPhrase(report) {
   const standing = report.standing_red ?? 0;
-  if (!standing) return 'gate green';
-  return `no new red (${standing} standing red on ${report.pr?.base || 'the base'})`;
+  const reach = scopeOf(report);
+  if (!standing) return `gate green${reach}`;
+  return `no new red (${standing} standing red on ${report.pr?.base || 'the base'})${reach}`;
+}
+
+/**
+ * How far the verdict reaches, said in the verdict itself.
+ *
+ * A selected round measured the files the change touches, not the suite — so
+ * "GREEN" here means "nothing this change reaches went red", which is a smaller
+ * claim than the one those words used to make. The number goes in the sentence
+ * rather than in a field somebody has to know to look up, because the sentence
+ * is what gets read aloud and pasted onward. This is the same correction the
+ * standing-red count already forced once: a verdict that needs a document
+ * beside it to be understood correctly is a verdict that will be misread.
+ *
+ * A full-suite round says nothing extra. Its reach is the suite, which is what
+ * a reader already assumes.
+ */
+function scopeOf(report) {
+  const selected = report.selection?.files;
+  if (!selected) return '';
+  // A selector that gave up and returned everything must not be reported as a
+  // narrow measurement. Saying "the 258 files this change reaches" when 258 is
+  // the whole suite is true and misleading in the same breath, which is the
+  // exact failure mode this sentence was added to fix.
+  if (report.selection.full_suite) return ' — over the whole suite: the selector could not narrow this change';
+  return ` — measured over the ${selected} test file${selected === 1 ? '' : 's'} this change reaches, not the whole suite`;
 }
 
 /**
@@ -729,6 +817,74 @@ async function measure({ suite, git, cwd, say, side }) {
       totals,
       red: redNames(run.tap),
     },
+  };
+}
+
+/**
+ * The test files this change reaches, asked of the repository.
+ *
+ * The command prints JSON carrying a `files` array; anything else is a stop
+ * rather than an empty list, because an empty list and a list that could not be
+ * read look identical to a comparison and only one of them is a measurement.
+ *
+ * Run in the candidate worktree, so the diff it computes is the pull request's.
+ */
+async function selectFiles({ command, cwd, env, say }) {
+  const run = shell(command, { cwd, env });
+  if (run.status !== 0) {
+    return { ok: false, reason: `${command} failed in the candidate — ${trim(run.stderr) || `exit ${run.status}`}` };
+  }
+  let parsed = null;
+  try { parsed = JSON.parse(run.stdout); } catch {
+    return { ok: false, reason: `${command} did not print JSON — a selection that cannot be read is not a selection` };
+  }
+  const files = parsed?.files;
+  if (!Array.isArray(files)) {
+    return { ok: false, reason: `${command} printed JSON with no \`files\` array` };
+  }
+  const clean = files.map(String).filter(Boolean);
+  // A selector may say it gave up and returned everything. memoro-cli's does
+  // that whenever a changed path is not source it can trace, and the round has
+  // to repeat the admission rather than present the whole suite as a narrow
+  // measurement — "measured over the 258 files this change reaches" is true and
+  // reads as a saving when 258 is the entire suite.
+  const full = parsed?.why?.reason === 'full-suite';
+  say(`selection read from ${command}${full ? ' — it fell back to the whole suite' : ''}`);
+  return { ok: true, files: clean, full, why: parsed?.why ?? null };
+}
+
+/**
+ * One side of a selected round: the same file list, run where it was asked for.
+ *
+ * Held to the suite's rule, and for the same reason — a run that never
+ * summarised, or summarised nothing, is a stop rather than an approval. That
+ * matters more here than for a full suite: a selected list is short enough that
+ * "no tests ran" is an easy accident and an expensive one.
+ *
+ * An empty list on the baseline is not a failure. It means every file the
+ * change reaches is a file the change adds, and the honest red set for that
+ * side is the empty one.
+ */
+async function measureSelected({ tests, git, cwd, files, flags, say, side }) {
+  const at = git(['rev-parse', 'HEAD'], { cwd });
+  const commit = at?.status === 0 ? String(at.stdout || '').trim() : null;
+  const is = side === 'baseline' ? 'base-branch-as-fetched' : 'pr-head-with-base-merged-in';
+  if (files.length === 0) {
+    say(`${side}: no selected file exists here — every one of them is added by this change`);
+    return {
+      ok: true,
+      result: { commit, is, exit_code: null, totals: { tests: 0, pass: 0, fail: 0, cancelled: null, runs: 0, finished: true }, red: [], selected: 0 },
+    };
+  }
+  const run = await tests({ cwd, files, flags, onLine: (line) => say(`${side}: ${line}`) });
+  const totals = tapTotals(run.tap);
+  if (!totals.finished) {
+    return { ok: false, reason: 'never reached its own summary — the selected files did not run to the end' };
+  }
+  if (!totals.tests) return { ok: false, reason: 'reported no tests at all' };
+  return {
+    ok: true,
+    result: { commit, is, exit_code: run.code, totals, red: redNames(run.tap), selected: files.length },
   };
 }
 

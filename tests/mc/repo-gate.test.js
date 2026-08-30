@@ -24,7 +24,7 @@ import { describe, it } from 'node:test';
 
 import { addArea, fixture as repoFixture } from './_helpers/repo-fixture.js';
 import { runMcCli } from './_helpers/mc-cli.js';
-import { gateRoot, runGate } from '../../src/mc/repo-gate.js';
+import { gateRoot, runGate, verdictHeadline, verdictPhrase } from '../../src/mc/repo-gate.js';
 import { carriedGate, loadMeasuredGate, lockfileHashAt, saveBaseline, saveMeasuredGate } from '../../src/mc/repo-baseline-cache.js';
 import { claimLease, readLease } from '../../src/mc/repo-lease.js';
 import { claimSuiteLease, readSuiteLease } from '../../src/mc/suite-lease.js';
@@ -1329,5 +1329,218 @@ describe('the baseline is carried forward, and the chain breaks on any deviation
       assert.ok(!report.baseline.carried);
       assert.equal(fx.ran('suite').length, 2, 'both sides measured, as always');
     } finally { fx.cleanup(); }
+  });
+});
+
+describe('a repository that selects by diff', () => {
+  /**
+   * The round for a repository whose suite is chosen by the change.
+   *
+   * The property under test is not the speed — it is that BOTH sides run the
+   * CANDIDATE's list. A selection is a function of the diff, so the baseline,
+   * whose diff against itself is empty, would choose almost nothing if it were
+   * asked on its own: the round would then compare this change's files against
+   * a handful of mandatory ones and report every red already standing on main
+   * as this change's doing. Asking once and running the answer twice is what
+   * keeps the verdict differential.
+   */
+  function selecting({ files, baselineRed = [], candidateRed = [], onBaseline = null } = {}) {
+    const root = mkdtempSync(join(tmpdir(), 'mc-select-'));
+    const repoPath = join(root, 'repo');
+    const mcHome = join(root, 'home');
+    mkdirSync(repoPath, { recursive: true });
+    mkdirSync(mcHome, { recursive: true, mode: 0o700 });
+    writeJson(join(repoPath, 'package.json'), { name: 'repo', scripts: { test: 'node --test tests/' } });
+    // The operator table is where a repository says how it selects. `echo` is a
+    // real command through a real shell — the same path a real declaration
+    // takes — so this exercises the JSON contract rather than a stub of it.
+    writeJson(join(mcHome, 'repo-gates.json'), {
+      repo: {
+        prepare: null,
+        prepare_why: 'the fixture installs nothing',
+        select: `echo '${JSON.stringify({ files })}'`,
+        select_why: 'the fixture says so',
+        extra_gates: [],
+        merge_log: null,
+        pr_tests_flags: ['--import', './x.mjs'],
+      },
+    });
+
+    // Which selected files exist on each side. A file the change ADDS is on the
+    // candidate only, and the baseline cannot run what it does not have.
+    const present = onBaseline ?? files;
+    const runs = [];
+    const git = (args, opts = {}) => {
+      if (args[0] === 'worktree' && args[1] === 'add') {
+        const dir = args[args.length - 2];
+        mkdirSync(dir, { recursive: true });
+        writeFileSync(join(dir, 'package.json'), readFileSync(join(repoPath, 'package.json')));
+        const here = dir.endsWith('baseline') ? present : files;
+        for (const file of here) {
+          mkdirSync(join(dir, dirname(file)), { recursive: true });
+          writeFileSync(join(dir, file), '');
+        }
+        return { status: 0, stdout: '', stderr: '' };
+      }
+      if (args[0] === 'worktree' && args[1] === 'remove') {
+        rmSync(args[args.length - 1], { recursive: true, force: true });
+        return { status: 0, stdout: '', stderr: '' };
+      }
+      if (args[0] === 'diff') return { status: 0, stdout: '', stderr: '' };
+      if (args[0] === 'rev-parse') {
+        return { status: 0, stdout: `${opts.cwd.endsWith('baseline') ? 'base1111' : 'cand2222'}\n`, stderr: '' };
+      }
+      return { status: 0, stdout: '', stderr: '' };
+    };
+    const gh = () => ({
+      status: 0,
+      stdout: JSON.stringify({ number: 7, headRefName: 'feature', baseRefName: 'main', headRefOid: 'abc1234', state: 'OPEN', title: 'a change' }),
+      stderr: '',
+    });
+    const tests = ({ cwd, files: ran, flags }) => {
+      const side = cwd.endsWith('baseline') ? 'baseline' : 'candidate';
+      runs.push({ side, files: [...ran], flags });
+      const red = side === 'baseline' ? baselineRed : candidateRed;
+      return Promise.resolve({ code: red.length ? 1 : 0, tap: tapWith(red, { tests: Math.max(ran.length * 3, 1) }) });
+    };
+    return {
+      runs,
+      report: () => runGate({
+        repoPath, pr: 7, holder: AREA, root: mcHome, git, gh, tests,
+        suite: () => { throw new Error('a selecting round must not run the whole suite'); },
+      }),
+      cleanup: () => rmSync(root, { recursive: true, force: true }),
+    };
+  }
+
+  it('runs the candidate’s list on both sides, and never the whole suite', async () => {
+    const files = ['tests/a.test.js', 'tests/b.test.js'];
+    const fx = selecting({ files });
+    try {
+      const report = await fx.report();
+      assert.equal(report.ok, true, report.reason);
+      assert.equal(report.selection.files, 2);
+      // The same two files, both sides. This is the whole guarantee.
+      const sides = fx.runs.filter(({ side }) => side !== 'own');
+      assert.deepEqual(sides.map(({ side }) => side).slice(0, 2), ['baseline', 'candidate']);
+      assert.deepEqual(sides[0].files, files);
+      assert.deepEqual(sides[1].files, files);
+      // And with the repository's own declared flags, not a guess at them.
+      assert.deepEqual(sides[0].flags, ['--import', './x.mjs']);
+    } finally { fx.cleanup(); }
+  });
+
+  it('red on both sides is main’s, not this change’s', async () => {
+    // The misattribution this exists to prevent: a test already failing on main
+    // is red on the candidate too, and a round that measured only the candidate
+    // would name it a regression.
+    const fx = selecting({
+      files: ['tests/a.test.js'],
+      baselineRed: ['already broken'],
+      candidateRed: ['already broken'],
+    });
+    try {
+      const report = await fx.report();
+      assert.equal(report.ok, true, report.reason);
+      assert.deepEqual(report.broke, []);
+      assert.equal(report.standing_red, 1);
+      assert.equal(report.verdict, 'no-new-red');
+    } finally { fx.cleanup(); }
+  });
+
+  it('a file only the candidate has is measured there and not missed on the baseline', async () => {
+    // A change that ADDS a test file: the baseline has nothing to run for it,
+    // which is a fact to state rather than a run to fake.
+    const fx = selecting({
+      files: ['tests/a.test.js', 'tests/new.test.js'],
+      onBaseline: ['tests/a.test.js'],
+      candidateRed: ['the new one'],
+    });
+    try {
+      const report = await fx.report();
+      assert.equal(report.selection.only_on_candidate, 1);
+      assert.deepEqual(fx.runs[0].files, ['tests/a.test.js'], 'the baseline ran only what it has');
+      assert.deepEqual(fx.runs[1].files, ['tests/a.test.js', 'tests/new.test.js']);
+      // Red on the candidate and absent from the baseline is new, and stops it.
+      assert.equal(report.ok, false);
+      assert.equal(report.stopped_at, 'red');
+    } finally { fx.cleanup(); }
+  });
+
+  it('a selection that cannot be read stops the round instead of measuring nothing', async () => {
+    const fx = selecting({ files: [] });
+    try {
+      const report = await fx.report();
+      assert.equal(report.ok, false);
+      assert.equal(report.stopped_at, 'selection');
+      assert.match(report.reason, /no test files/u);
+    } finally { fx.cleanup(); }
+  });
+});
+
+describe('mc test — the grammar', () => {
+  it('is a verb of its own, and asks the same questions merge does', () => {
+    const fx = repoFixture({ name: 'repo-gate-cli' });
+    try {
+      // The measurement was reachable as `mc merge --check`: a flag on the
+      // verb for landing things, which is not where a person looks when the
+      // question is "is this red?". Its own name, and its own usage line.
+      const usage = runMcCli(['test'], fx.env).stderr;
+      assert.match(usage, /which repository\?/u);
+      assert.match(usage, /mc test <repo> <pr>/u);
+      assert.doesNotMatch(usage, /--check/u);
+      assert.match(runMcCli(['test', 'repo'], fx.env).stderr, /which pull request\?/u);
+      assert.match(runMcCli(['test', 'repo', 'later'], fx.env).stderr, /not a pull request number/u);
+      const nowhere = runMcCli(['test', 'nowhere-at-all', '400'], fx.env);
+      assert.equal(nowhere.status, 1);
+      assert.match(nowhere.stderr, /no repository called "nowhere-at-all"/u);
+    } finally { fx.cleanup(); }
+  });
+
+  it('has no flag that makes it land anything', () => {
+    const fx = repoFixture({ name: 'repo-gate-cli' });
+    try {
+      // The one promise the name makes. `mc test` reaches `runGate`, which has
+      // no merge in it — and the flags a person might reach for to change that
+      // are refused at the grammar rather than somewhere deeper.
+      for (const flag of ['--merge', '--land', '--force', '--apply', '--no-verify']) {
+        const tried = runMcCli(['test', 'repo', '400', flag], fx.env);
+        assert.notEqual(tried.status, 0, `${flag} was accepted`);
+      }
+      const source = readFileSync(new URL('../../src/mc/commands/test.js', import.meta.url), 'utf8');
+      assert.doesNotMatch(source, /runMergeRound|pr merge|--squash/u);
+    } finally { fx.cleanup(); }
+  });
+});
+
+describe('a verdict says how far it reached', () => {
+  it('a selected round never says GREEN without saying over what', async () => {
+    // "GREEN — the test gate passes" over a suite that ran 6 of 257 files is
+    // the same overclaim the standing-red count already had to correct once.
+    // The reach goes in the sentence, because the sentence is what gets read
+    // aloud and pasted into a pull request.
+    const green = verdictHeadline({ standing_red: 0, selection: { files: 6 }, pr: { base: 'main' } });
+    assert.match(green, /^GREEN/u);
+    assert.match(green, /6 test files this change reaches, not the whole suite/u);
+
+    const standing = verdictHeadline({ standing_red: 3, selection: { files: 6 }, pr: { base: 'main' } });
+    assert.match(standing, /^NO NEW RED — 3 standing red names on main/u);
+    assert.match(standing, /6 test files this change reaches/u);
+
+    assert.match(verdictPhrase({ standing_red: 0, selection: { files: 1 } }), /1 test file this change reaches/u);
+  });
+
+  it('a selector that gave up says so, instead of reading as a saving', () => {
+    // memoro-cli's selector returns everything whenever a changed path is not
+    // source it can trace. "measured over the 258 files this change reaches"
+    // is true and misleading in the same breath when 258 is the whole suite.
+    const fell = verdictHeadline({ standing_red: 0, selection: { files: 258, full_suite: true }, pr: { base: 'main' } });
+    assert.match(fell, /over the whole suite: the selector could not narrow this change/u);
+    assert.doesNotMatch(fell, /this change reaches/u);
+  });
+
+  it('a full-suite round says nothing extra, because its reach is what a reader assumes', () => {
+    assert.equal(verdictHeadline({ standing_red: 0, selection: null, pr: { base: 'main' } }), 'GREEN — the test gate passes');
+    assert.equal(verdictPhrase({ standing_red: 0, selection: null }), 'gate green');
   });
 });

@@ -64,6 +64,15 @@ export const SHIPPED = Object.freeze({
     prepare: null,
     prepare_why: 'the suite is node:test over source only; verified across every gate round '
       + 'since the verb existed, each of which ran it twice in a worktree with no node_modules',
+    // This repository's own answer to "what does this change reach": the import
+    // closure of each test file, plus the source files a test reads as *text*
+    // — which is a real edge here, not a hypothetical one. `merge-doc.test.js`
+    // asserts against `repo-gate.js`'s source that no merge call is in it, and
+    // an import graph cannot see that.
+    select: 'node scripts/affected-tests.js --base-ref origin/main',
+    select_why: 'measured 2026-08-30 on this repository\'s own gate work: 17 of 257 test files, '
+      + '241 tests in 25 s, against 2,353 tests in ~100 s for the whole suite — twice, once a side. '
+      + 'It fails closed to the full suite whenever a changed path is not source it can trace',
     extra_gates: Object.freeze([]),
     merge_log: Object.freeze({ under: 'work-root', path: 'large-scale-llm-project/merge-log.md' }),
     // The flag its own `test` script gives node, stated rather than parsed.
@@ -83,9 +92,21 @@ export const SHIPPED = Object.freeze({
     prepare_why: 'measured in D-0089: without npm ci ~30 files fail with ERR_MODULE_NOT_FOUND; '
       + 'with it the contract suite is 2352/2352, no browser binaries involved (verified with an '
       + 'empty PLAYWRIGHT_BROWSERS_PATH); matches .github/workflows/msr-contract.yml',
-    extra_gates: Object.freeze([
-      Object.freeze({ name: 'msr contract', command: 'npm run test:msr:contract', source: 'D-0018' }),
-    ]),
+    // How memoro lists what a change reaches (2026-08-30). Its `npm test` is
+    // `scripts/testing/ci.mjs`, which selects by diff against the base and
+    // follows the pin graph, so the list is the honest answer to "what does
+    // this change touch" rather than a profile that rides every round.
+    select: 'node scripts/testing/ci.mjs --list --json --base-ref origin/main',
+    select_why: 'measured 2026-08-30: a documentation diff selected 332 files and 6 of them were '
+      + 'the diff\'s; 326 were the always-on msr-contract profile. With that profile bound to its '
+      + 'own surface and pin-following closing the blindness it covered, the same diff selects 6',
+    // No extra gates. `msr contract` was one until 2026-08-30, and it was the
+    // same 326 files the suite already ran — `test:msr:contract` globs exactly
+    // the `msr-contract` profile, so the round paid for that suite four times
+    // over: both sides of `npm test`, then both sides of the gate. memoro's own
+    // gate-consolidation plan says the same thing from its end — the contract
+    // suite belongs inside `npm run ci`, not beside it.
+    extra_gates: Object.freeze([]),
     // The PM's decisions log, under the work root — where memoro's merges
     // have been written since the operator table declared it.
     merge_log: Object.freeze({ under: 'work-root', path: 'pm/decisions/merge-log.md' }),
@@ -203,6 +224,19 @@ function normalise(entry, env) {
     // "run what my change affects". No declaration, no run — the freshen
     // says so instead of guessing a script name.
     affected: entry.affected ?? null,
+    // How this repository lists the test files a change reaches: a command
+    // that prints JSON carrying a `files` array, run in the candidate
+    // worktree. Declaring it turns the round from two full suites into the
+    // reached files measured on both sides; not declaring it keeps the full
+    // suite, which is the right answer for a repository whose suite is small
+    // enough to run whole.
+    //
+    // Both sides run the CANDIDATE's list, never each side's own. A repository
+    // that selects by diff answers "nothing changed" on the baseline, and a
+    // round that let each side choose would compare 56 files against 6 and
+    // report main's own red as this change's doing.
+    select: entry.select ?? null,
+    select_why: entry.select_why ?? null,
     extra_gates: (entry.extra_gates || []).map((gate) => ({
       name: gate.name || gate.command,
       command: gate.command,

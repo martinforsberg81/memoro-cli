@@ -285,7 +285,7 @@ export async function gate(opts, { stdout, stderr }) {
   const refusal = helperMergeRefusal(holder, { check: opts.check });
   if (refusal) {
     stderr.write(`mc: ${refusal}\n`);
-    stderr.write(`mc: the check form measures and reports: mc merge ${opts.repo} ${opts.pr || (opts.prs || []).join(' ')} --check\n`);
+    stderr.write(`mc: the measurement is its own verb, and this role may run it: mc test ${opts.repo} ${opts.pr || (opts.prs || []).join(' ')}\n`);
     return 2;
   }
   const round = { repoPath, pr: opts.pr, prs: opts.prs, holder, onProgress: (message) => stderr.write(`mc: ${message}\n`) };
