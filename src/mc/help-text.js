@@ -19,7 +19,8 @@ THE PAGE
   mc brief                         Decide what to work on next
   mc plan <name>                   Plan one piece of work, ending in a PLAN.md
   mc run                           The runner: one step at a time, headless
-  mc merge <repo> <pr>             The test gate, then the merge
+  mc test <repo> <pr>              Measure a pull request; merge nothing
+  mc merge <repo> <pr>             The same measurement, then the merge
   mc status <name>                 One project, whole
   mc work <name>                   Open that workarea
 
@@ -128,29 +129,34 @@ MAINTENANCE
                                     off the board rather than off a clock. A
                                     holder mc cannot see reads unknown, never
                                     a guess
-  mc merge <repo> <pr>             Run the test gate for that pull request —
+  mc test <repo> <pr>              Measure that pull request, and stop there —
                                     take the lease, build a fresh baseline and
-                                    a candidate with main merged in, run the
-                                    repository's own full suite on both, and
+                                    a candidate with main merged in, run what
+                                    the change reaches on BOTH sides, and
                                     compare the failures by name at every
-                                    level — then, only if nothing new went red
-                                    and the base has not moved since,
-                                    squash-merge, pull the source-linked
-                                    installation, and log a line. Nothing
-                                    merges a red gate. The verdict says GREEN
-                                    only when the base itself has no red names;
-                                    otherwise it carries the number that are
-                                    standing, and .mc/red-ratchet.json is what
-                                    keeps that number from growing
+                                    level. What runs is what the repository
+                                    declares: with a select command it is the
+                                    test files the change reaches, without one
+                                    it is the whole suite. Both sides always
+                                    run the CANDIDATE's list, because a
+                                    selection is a function of the diff and the
+                                    base's diff against itself is empty. Merges
+                                    nothing, and cannot
+  mc merge <repo> <pr>             That same measurement, then the landing:
+                                    only if nothing new went red and the base
+                                    has not moved since, squash-merge, pull the
+                                    source-linked installation, and log a line.
+                                    Nothing merges a red gate. The verdict says
+                                    GREEN only when the base itself has no red
+                                    names; otherwise it carries the number that
+                                    are standing, and .mc/red-ratchet.json is
+                                    what keeps that number from growing
   mc merge <repo> <pr> <pr>...      Several at once: one candidate with all
-                                    of them merged in, the suite once each
+                                    of them merged in, measured once each
                                     side, each one's own tests by itself, then
                                     merged in the order given. A batch that
                                     stops — a conflict, a red — falls back to
                                     one round per pull request and says so
-  mc merge <repo> <pr> --check
-                                    The same round, stopping at the verdict.
-                                    A gate that passes is not a review
   mc merge <repo> <pr> --docs      Land a pull request that touches nothing
                                     outside docs/ — no suite, no lease, squash.
                                     A plan PR lands this way, by the session

@@ -1331,3 +1331,149 @@ describe('the baseline is carried forward, and the chain breaks on any deviation
     } finally { fx.cleanup(); }
   });
 });
+
+describe('a repository that selects by diff', () => {
+  /**
+   * The round for a repository whose suite is chosen by the change.
+   *
+   * The property under test is not the speed — it is that BOTH sides run the
+   * CANDIDATE's list. A selection is a function of the diff, so the baseline,
+   * whose diff against itself is empty, would choose almost nothing if it were
+   * asked on its own: the round would then compare this change's files against
+   * a handful of mandatory ones and report every red already standing on main
+   * as this change's doing. Asking once and running the answer twice is what
+   * keeps the verdict differential.
+   */
+  function selecting({ files, baselineRed = [], candidateRed = [], onBaseline = null } = {}) {
+    const root = mkdtempSync(join(tmpdir(), 'mc-select-'));
+    const repoPath = join(root, 'repo');
+    const mcHome = join(root, 'home');
+    mkdirSync(repoPath, { recursive: true });
+    mkdirSync(mcHome, { recursive: true, mode: 0o700 });
+    writeJson(join(repoPath, 'package.json'), { name: 'repo', scripts: { test: 'node --test tests/' } });
+    // The operator table is where a repository says how it selects. `echo` is a
+    // real command through a real shell — the same path a real declaration
+    // takes — so this exercises the JSON contract rather than a stub of it.
+    writeJson(join(mcHome, 'repo-gates.json'), {
+      repo: {
+        prepare: null,
+        prepare_why: 'the fixture installs nothing',
+        select: `echo '${JSON.stringify({ files })}'`,
+        select_why: 'the fixture says so',
+        extra_gates: [],
+        merge_log: null,
+        pr_tests_flags: ['--import', './x.mjs'],
+      },
+    });
+
+    // Which selected files exist on each side. A file the change ADDS is on the
+    // candidate only, and the baseline cannot run what it does not have.
+    const present = onBaseline ?? files;
+    const runs = [];
+    const git = (args, opts = {}) => {
+      if (args[0] === 'worktree' && args[1] === 'add') {
+        const dir = args[args.length - 2];
+        mkdirSync(dir, { recursive: true });
+        writeFileSync(join(dir, 'package.json'), readFileSync(join(repoPath, 'package.json')));
+        const here = dir.endsWith('baseline') ? present : files;
+        for (const file of here) {
+          mkdirSync(join(dir, dirname(file)), { recursive: true });
+          writeFileSync(join(dir, file), '');
+        }
+        return { status: 0, stdout: '', stderr: '' };
+      }
+      if (args[0] === 'worktree' && args[1] === 'remove') {
+        rmSync(args[args.length - 1], { recursive: true, force: true });
+        return { status: 0, stdout: '', stderr: '' };
+      }
+      if (args[0] === 'diff') return { status: 0, stdout: '', stderr: '' };
+      if (args[0] === 'rev-parse') {
+        return { status: 0, stdout: `${opts.cwd.endsWith('baseline') ? 'base1111' : 'cand2222'}\n`, stderr: '' };
+      }
+      return { status: 0, stdout: '', stderr: '' };
+    };
+    const gh = () => ({
+      status: 0,
+      stdout: JSON.stringify({ number: 7, headRefName: 'feature', baseRefName: 'main', headRefOid: 'abc1234', state: 'OPEN', title: 'a change' }),
+      stderr: '',
+    });
+    const tests = ({ cwd, files: ran, flags }) => {
+      const side = cwd.endsWith('baseline') ? 'baseline' : 'candidate';
+      runs.push({ side, files: [...ran], flags });
+      const red = side === 'baseline' ? baselineRed : candidateRed;
+      return Promise.resolve({ code: red.length ? 1 : 0, tap: tapWith(red, { tests: Math.max(ran.length * 3, 1) }) });
+    };
+    return {
+      runs,
+      report: () => runGate({
+        repoPath, pr: 7, holder: AREA, root: mcHome, git, gh, tests,
+        suite: () => { throw new Error('a selecting round must not run the whole suite'); },
+      }),
+      cleanup: () => rmSync(root, { recursive: true, force: true }),
+    };
+  }
+
+  it('runs the candidate’s list on both sides, and never the whole suite', async () => {
+    const files = ['tests/a.test.js', 'tests/b.test.js'];
+    const fx = selecting({ files });
+    try {
+      const report = await fx.report();
+      assert.equal(report.ok, true, report.reason);
+      assert.equal(report.selection.files, 2);
+      // The same two files, both sides. This is the whole guarantee.
+      const sides = fx.runs.filter(({ side }) => side !== 'own');
+      assert.deepEqual(sides.map(({ side }) => side).slice(0, 2), ['baseline', 'candidate']);
+      assert.deepEqual(sides[0].files, files);
+      assert.deepEqual(sides[1].files, files);
+      // And with the repository's own declared flags, not a guess at them.
+      assert.deepEqual(sides[0].flags, ['--import', './x.mjs']);
+    } finally { fx.cleanup(); }
+  });
+
+  it('red on both sides is main’s, not this change’s', async () => {
+    // The misattribution this exists to prevent: a test already failing on main
+    // is red on the candidate too, and a round that measured only the candidate
+    // would name it a regression.
+    const fx = selecting({
+      files: ['tests/a.test.js'],
+      baselineRed: ['already broken'],
+      candidateRed: ['already broken'],
+    });
+    try {
+      const report = await fx.report();
+      assert.equal(report.ok, true, report.reason);
+      assert.deepEqual(report.broke, []);
+      assert.equal(report.standing_red, 1);
+      assert.equal(report.verdict, 'no-new-red');
+    } finally { fx.cleanup(); }
+  });
+
+  it('a file only the candidate has is measured there and not missed on the baseline', async () => {
+    // A change that ADDS a test file: the baseline has nothing to run for it,
+    // which is a fact to state rather than a run to fake.
+    const fx = selecting({
+      files: ['tests/a.test.js', 'tests/new.test.js'],
+      onBaseline: ['tests/a.test.js'],
+      candidateRed: ['the new one'],
+    });
+    try {
+      const report = await fx.report();
+      assert.equal(report.selection.only_on_candidate, 1);
+      assert.deepEqual(fx.runs[0].files, ['tests/a.test.js'], 'the baseline ran only what it has');
+      assert.deepEqual(fx.runs[1].files, ['tests/a.test.js', 'tests/new.test.js']);
+      // Red on the candidate and absent from the baseline is new, and stops it.
+      assert.equal(report.ok, false);
+      assert.equal(report.stopped_at, 'red');
+    } finally { fx.cleanup(); }
+  });
+
+  it('a selection that cannot be read stops the round instead of measuring nothing', async () => {
+    const fx = selecting({ files: [] });
+    try {
+      const report = await fx.report();
+      assert.equal(report.ok, false);
+      assert.equal(report.stopped_at, 'selection');
+      assert.match(report.reason, /no test files/u);
+    } finally { fx.cleanup(); }
+  });
+});
