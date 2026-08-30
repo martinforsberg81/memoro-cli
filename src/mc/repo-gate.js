@@ -50,12 +50,11 @@ import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { claimLease, releaseLease } from './repo-lease.js';
-import { claimSuiteLease, releaseSuiteLease } from './suite-lease.js';
 import { tellHolder } from './lease-refusal.js';
-import { suiteRuns } from './work-status.js';
 import { compareRed, redNames, tapTotals } from './tap-red.js';
 import { RATCHET_FILE, compareRatchet, readRatchet } from './red-ratchet.js';
 import { currentHolder } from './work-identity.js';
+import { describeRunning, releaseGateLock, takeGateLock } from './gate-lock.js';
 import { log } from './logger.js';
 import { mcHome } from './paths.js';
 import { repoFileSlug } from './repo-snapshot.js';
@@ -107,7 +106,6 @@ export async function runGate({
   clock = () => Date.now(),
   // How a refused claim reaches the holder (lease-refusal.js); stubbed in tests.
   tell = tellHolder,
-  suiteRunsNow = null,
   // Whether the round owns the lease or is running inside somebody else's.
   //
   // The merge step has to hold one lease across the gate *and* the merge — a
@@ -221,25 +219,24 @@ export async function runGate({
     say(`lease taken by ${holder.name}`);
   }
 
-  // The suite right, machine-wide (D-0141): one full suite at a time on
-  // eight gigabytes, and this round runs two. Taken here, before any work,
-  // and held until the round is over — whoever holds the repository. A right
-  // somebody else holds stops the round in their favour, because the gate is
-  // the one thing that runs suites by machine and must not be the thing that
-  // runs over a person's right to.
-  const suiteRight = claimSuiteLease({ errand: `gate round for ${label}`, holder, ownerPid: process.pid, root });
-  if (!suiteRight.ok) {
+  // One gate round at a time on this machine (gate-lock.js). A full suite
+  // pins the cores for a minute and a half, and this round runs two; two
+  // rounds at once make both slower and both flakier, and the flakiness lands
+  // on whichever pull request happened to be measured.
+  //
+  // A file and a pid, and nothing else. What was here was "the suite right" —
+  // a lease with an errand, a liveness verdict, a --force release, an inbox
+  // message, a row on the page and four verbs of its own. Four hundred lines
+  // of vocabulary for "one at a time", under a name nobody could say without
+  // explaining it.
+  const held = takeGateLock({ repo: repoFileSlug(repoPath), pr: numbers[0], root });
+  if (!held.ok) {
     if (holdLease) releaseLease({ repoPath, holder, root });
-    const held = suiteRight.lease;
-    // What runs under the right is measured, not defaulted: "nothing running"
-    // as a default told PM a suite was idle while it was five minutes in.
-    let running = [];
-    try { running = await (suiteRunsNow || suiteRuns)({ env }); } catch { running = []; }
-    const told = tell({ lease: held, asker: holder, what: 'the suite right', errand: `gate round for ${label}`, running });
-    return finish('suite-lease', `the suite right is held by ${held.holder}${held.errand ? ` for “${held.errand}”` : ''} — one full suite at a time on this machine (D-0141); mc suite who says whether that run is still going${told.told ? `; ${held.holder} has been told` : ''}`);
+    return finish('busy', describeRunning(held.running));
   }
-  const ownSuiteRight = !suiteRight.already;
-  if (ownSuiteRight) say(`suite right taken by ${holder.name}${suiteRight.reaped ? ` (reaped from ${suiteRight.reaped.holder}: pid ${suiteRight.reaped.owner_pid} was gone)` : ''}`);
+  const ownGateLock = held.took;
+  if (ownGateLock) say(`gate round started (pid ${process.pid}) — one at a time on this machine`);
+  else say('the round lock could not be written — running anyway; another round could overlap this one');
 
   // The other half of the way back. A SIGTERM — a shell's timeout, a closed
   // pane — ends node without running any `finally`; the pid in the lease
@@ -253,8 +250,8 @@ export async function runGate({
       // throws must not be able to take it with it.
       log('gate.killed', { repo: repoFileSlug(repoPath), signal, pr: label, holder: holder?.name || null });
       if (holdLease) releaseLease({ repoPath, holder, root });
-      if (ownSuiteRight) releaseSuiteLease({ holder, root });
-      say(`round cut short by ${signal} — leases released`);
+      if (ownGateLock) releaseGateLock({ root });
+      say(`round cut short by ${signal} — the lease and the round lock are released`);
     } finally {
       process.exit(128 + (signal === 'SIGINT' ? 2 : 15));
     }
@@ -268,7 +265,7 @@ export async function runGate({
   const declared = declarationFor(repoPath, { root, env });
   if (!declared.ok) {
     if (holdLease) releaseLease({ repoPath, holder, root });
-    if (ownSuiteRight) releaseSuiteLease({ holder, root });
+    if (ownGateLock) releaseGateLock({ root });
     return finish('declaration', declared.reason);
   }
   report.declaration = { source: declared.source, ...declared.declaration };
@@ -725,12 +722,9 @@ export async function runGate({
       releaseLease({ repoPath, holder, root });
       say('lease released');
     }
-    // The suite right too — only if this round took it. A holder who claimed
-    // it by hand before the round keeps it afterwards; that was their claim.
-    if (ownSuiteRight) {
-      releaseSuiteLease({ holder, root });
-      say('suite right released');
-    }
+    // And the round lock, only if this round wrote it, and only while it is
+    // still ours — see releaseGateLock.
+    if (ownGateLock) releaseGateLock({ root });
   }
 }
 

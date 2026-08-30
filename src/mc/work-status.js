@@ -35,7 +35,6 @@ import { readMenu } from './menu-read.js';
 import { mcHome, workRoot } from './paths.js';
 import { backgroundTarget } from './work-open.js';
 import { processesStandingIn } from './standing.js';
-import { readSuiteLease } from './suite-lease.js';
 import { dependencyTree } from './dependency-tree.js';
 import { areaRoleName } from './roles.js';
 import { inspectWorkArea, listWorkAreas } from './work-area.js';
@@ -155,53 +154,6 @@ export function toolProcesses(paths) {
     if (name) found.push({ pid, name, directory });
   }
   return found;
-}
-
-/**
- * A full test suite, running: `node --test`, `npm test`, or the contract
- * suite by name. Found the same way the tools are — by what stands in these
- * directories — so the page can say a suite is running whoever holds the
- * right to, and a suite nobody claimed is a row rather than a slow machine.
- */
-const SUITE_COMMAND = /(?:^|\/|\s)node(?:\s+\S+)*\s+--test(?:\s|$)|(?:^|\s)npm\s+(?:run\s+)?test(?::\S+)?(?:\s|$)/u;
-
-/**
- * A shell started with `-c` carries its whole script on its command line —
- * including the `node --test` it is about to run, or has finished running.
- * Counting it made every suite two rows and left a "running suite" on the
- * board after node had exited, while the shell waited for its own cleanup.
- * The suite is the process that runs tests, not the one that typed them.
- */
-const SHELL_WRAPPER = /^(?:\S*\/)?(?:zsh|bash|sh|dash|fish)\s+(?:-\S+\s+)*-c\s/u;
-
-/** Is this command line a running suite — the runner itself, not a shell that typed it? */
-export function isSuiteCommand(command) {
-  return !SHELL_WRAPPER.test(command) && SUITE_COMMAND.test(command);
-}
-
-export function suiteProcesses(paths) {
-  const found = [];
-  for (const { pid, command, directory, elapsed } of processesIn(paths, { elapsed: true })) {
-    if (!isSuiteCommand(command)) continue;
-    found.push({ pid, directory, elapsed, command: command.replace(/^\S*\/(node|npm)\s/u, '$1 ').slice(0, 80) });
-  }
-  return found;
-}
-
-/**
- * The suites running in every work area and its worktrees, with the area
- * named. One process per row; a suite that spawned helpers shows as the
- * parent only, because the children share its command line with `--test`
- * stripped and fall outside the pattern.
- */
-export async function suiteRuns({ env = process.env } = {}) {
-  const areas = listWorkAreas(env);
-  const byPath = new Map();
-  for (const area of areas) {
-    byPath.set(area.path, area.name);
-    for (const worktree of area.worktrees) byPath.set(worktree.path, area.name);
-  }
-  return suiteProcesses([...byPath.keys()]).map((run) => ({ ...run, area: byPath.get(run.directory) || null }));
 }
 
 /**
@@ -439,17 +391,6 @@ export async function workStatus({ env = process.env, names = null, git: askGit 
     areas: report.areas.length,
     waiting: report.areas.filter((area) => area.waiting).length,
     working: report.areas.filter((area) => area.working).length,
-  };
-  // The suite right and the suites actually running — two facts, side by
-  // side, because the gap between them is the finding (D-0141, D-0155).
-  const byPath = new Map();
-  for (const area of report.areas) {
-    byPath.set(area.path, area.name);
-    for (const worktree of area.worktrees) byPath.set(worktree.path, area.name);
-  }
-  report.suite = {
-    lease: readSuiteLease({ root: env.MC_HOME || mcHome(), now }),
-    running: suiteProcesses([...byPath.keys()]).map((run) => ({ ...run, area: byPath.get(run.directory) || null })),
   };
   return report;
 }

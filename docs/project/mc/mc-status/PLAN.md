@@ -135,7 +135,7 @@ from files the runner and the sessions already write; it writes nothing.
   belongs to `mc`.
 - Of the three subjects in this step's own `next:` — sessions, leases,
   watcher pulses — only sessions is gone. `mc repo claim|release|who`,
-  `mc suite claim|release|who` and `mc repo watch start|stop|status` all
+  `mc repo watch start|stop|status` and the other verb families all
   still run, and `mc --help` is right to offer them. The old board read
   them; they did not go with it.
 - `runs.tsv` has no model column; every row is priced as the runner's

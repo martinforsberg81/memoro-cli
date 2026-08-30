@@ -14,7 +14,6 @@ import { describe, it } from 'node:test';
 
 import { orphanLine, ownerState, processAlive } from '../../src/mc/lease-owner.js';
 import { refusalText, tellHolder } from '../../src/mc/lease-refusal.js';
-import { claimSuiteLease, readSuiteLease, releaseSuiteLease, suiteLeaseLogPath } from '../../src/mc/suite-lease.js';
 import { claimLease, leaseLogPath, readLease, releaseLease } from '../../src/mc/repo-lease.js';
 
 const A = { name: 'alpha', kind: 'work-area' };
@@ -44,70 +43,6 @@ describe('a lease knows whether the process that took it is still there', () => 
     assert.deepEqual(ownerState({ owner_pid: 'x' }), { owner_pid: null, owner_alive: null, orphaned: false });
     assert.equal(orphanLine({ held: true, orphaned: false }), null);
     assert.match(orphanLine({ held: true, orphaned: true, owner_pid: 4242 }), /pid 4242.*gone.*next claim takes it/u);
-  });
-});
-
-describe('the suite right, taken for the length of a process', () => {
-  it('is held while the process lives, and taken — logged as a reap, not a force — once it is gone', () => {
-    const root = home();
-    try {
-      let kernel = kernelWith([4242]);
-      const taken = claimSuiteLease({ errand: 'gate round for #1', holder: A, ownerPid: 4242, root, now: 1000, kill: kernel });
-      assert.equal(taken.ok, true);
-      assert.equal(taken.lease.owner_pid, 4242);
-      assert.equal(taken.lease.owner_alive, true);
-      assert.equal(taken.lease.orphaned, false);
-
-      // Alive: a second claimant is refused exactly as before.
-      const refused = claimSuiteLease({ errand: 'mine', holder: B, root, now: 2000, kill: kernel });
-      assert.equal(refused.ok, false);
-      assert.equal(refused.reason, 'held');
-
-      // The round is killed. The board says so before anybody acts on it.
-      kernel = kernelWith([]);
-      const seen = readSuiteLease({ root, now: 3000, kill: kernel });
-      assert.equal(seen.held, true, 'an orphaned lease is still a fact on disk');
-      assert.equal(seen.owner_alive, false);
-      assert.equal(seen.orphaned, true);
-
-      // The next claim takes it, and says whose it was.
-      const next = claimSuiteLease({ errand: 'mine', holder: B, root, now: 4000, kill: kernel });
-      assert.equal(next.ok, true);
-      assert.equal(next.already, undefined === next.already ? undefined : false);
-      assert.equal(next.reaped.holder, 'alpha');
-      assert.equal(next.reaped.owner_pid, 4242);
-      assert.equal(readSuiteLease({ root, now: 4000, kill: kernel }).holder, 'beta');
-      const log = readFileSync(suiteLeaseLogPath(root), 'utf8');
-      assert.match(log, /claim {4}holder=alpha {2}errand="gate round for #1" {2}pid=4242/u);
-      assert.match(log, /reap {5}by=beta {2}was=alpha {2}pid=4242 gone/u);
-      assert.doesNotMatch(log, /force/u, 'nobody overruled anybody');
-    } finally { rmSync(root, { recursive: true, force: true }); }
-  });
-
-  it('an orphaned lease can be released by anyone without --force, and that too is a reap', () => {
-    const root = home();
-    try {
-      claimSuiteLease({ errand: 'x', holder: A, ownerPid: 4242, root, kill: kernelWith([4242]) });
-      const still = releaseSuiteLease({ holder: B, root, kill: kernelWith([4242]) });
-      assert.equal(still.ok, false, 'alive: not yours');
-      const cleared = releaseSuiteLease({ holder: B, root, kill: kernelWith([]) });
-      assert.equal(cleared.released, true);
-      assert.equal(cleared.forced, false);
-      assert.equal(cleared.reaped, true);
-      assert.match(readFileSync(suiteLeaseLogPath(root), 'utf8'), /reap {5}by=beta {2}was=alpha/u);
-    } finally { rmSync(root, { recursive: true, force: true }); }
-  });
-
-  it('a hold by hand records no pid and keeps the old rule: no expiry, --force decides', () => {
-    const root = home();
-    try {
-      claimSuiteLease({ errand: 'by hand', holder: A, root, kill: kernelWith([]) });
-      const lease = readSuiteLease({ root, kill: kernelWith([]) });
-      assert.equal(lease.owner_pid, null);
-      assert.equal(lease.orphaned, false);
-      assert.equal(claimSuiteLease({ errand: 'mine', holder: B, root, kill: kernelWith([]) }).ok, false);
-      assert.equal(releaseSuiteLease({ holder: B, root, kill: kernelWith([]) }).ok, false);
-    } finally { rmSync(root, { recursive: true, force: true }); }
   });
 });
 
@@ -143,7 +78,7 @@ describe('a refused claim is told to the holder', () => {
   it('sends one file with a wake to the holder, naming who asked, for what, how long, and the way out', () => {
     const sent = [];
     const told = tellHolder({
-      lease, asker: { name: 'track-1', kind: 'work-area' }, what: 'the suite right', errand: 'full suite before PR',
+      lease, asker: { name: 'track-1', kind: 'work-area' }, what: '/srv/repo', errand: 'gate round for #485',
       send: (message) => { sent.push(message); return { ok: true, woke: true, file: '/x' }; },
     });
     assert.deepEqual(told, { told: true, woke: true, reason: null, file: '/x' });
@@ -152,10 +87,10 @@ describe('a refused claim is told to the holder', () => {
     assert.equal(sent[0].wake, true);
     assert.equal(sent[0].sender.name, 'track-1');
     const text = sent[0].message;
-    assert.match(text, /CLAIM REFUSED on your account — track-1 asked for the suite right for “full suite before PR”/u);
+    assert.match(text, /CLAIM REFUSED on your account — track-1 asked for \/srv\/repo for “gate round for #485”/u);
     assert.match(text, /held it for 2h 25m for “gate round for #10861”; nothing running under it/u);
     assert.match(text, /pid 4242\) is gone/u);
-    assert.match(text, /mc suite release/u);
+    assert.match(text, /mc repo release/u);
   });
 
   it('says what is running under the lease, and names the repository release for a repository lease', () => {

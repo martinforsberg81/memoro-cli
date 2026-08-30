@@ -89,9 +89,11 @@ export function recordRound(report, { mode = 'merge', root = mcHome(), now = new
       ? (report.batch.merges || []).filter((item) => item.merged).map((item) => item.number)
       : report.merged ? [Number(report.pr?.number)] : [],
     // Where it stopped, or null for a round that reached its end. The words
-    // are the round's own (`lease`, `suite-lease`, `merge`, `red`,
+    // are the round's own (`lease`, `busy`, `merge`, `red`,
     // `pr-tests`, `ratchet`, `extra-gate`, `drift`, …) so counting them is
-    // counting the mechanism's own vocabulary, not a translation of it.
+    // counting the mechanism's own vocabulary, not a translation of it. Lines
+    // from before 2026-08-30 say `suite-lease` where `busy` is written now;
+    // they are what those rounds were, and nothing rewrites them.
     stopped_at: report.stopped_at || null,
     // Whether the landed tree was byte-identical to the measured candidate
     // (null when nothing landed): the difference between a green that

@@ -134,7 +134,6 @@ async function routeV1Command(args) {
     repo: './mc/commands/repo.js',
     merge: './mc/commands/merge.js',
     test: './mc/commands/test.js',
-    suite: './mc/commands/suite.js',
     worker: './mc/commands/worker.js',
     brief: './mc/commands/brief.js',
     helper: './mc/commands/helper.js',

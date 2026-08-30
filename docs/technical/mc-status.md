@@ -172,7 +172,7 @@ section:
   reads it. Only the board's own half went. Six tests that had used the board
   as a probe ask `workStatus()` directly now.
 - **Leases and watchers are not gone.** `mc repo claim|release|who`,
-  `mc suite claim|release|who` and `mc repo watch start|stop|status` all
+  `mc repo watch start|stop|status` and the other verb families all
   still run and `mc --help` is right to offer them. The board read them; they
   did not leave with it.
 
