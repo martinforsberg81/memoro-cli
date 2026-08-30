@@ -1530,6 +1530,15 @@ describe('a verdict says how far it reached', () => {
     assert.match(verdictPhrase({ standing_red: 0, selection: { files: 1 } }), /1 test file this change reaches/u);
   });
 
+  it('a selector that gave up says so, instead of reading as a saving', () => {
+    // memoro-cli's selector returns everything whenever a changed path is not
+    // source it can trace. "measured over the 258 files this change reaches"
+    // is true and misleading in the same breath when 258 is the whole suite.
+    const fell = verdictHeadline({ standing_red: 0, selection: { files: 258, full_suite: true }, pr: { base: 'main' } });
+    assert.match(fell, /over the whole suite: the selector could not narrow this change/u);
+    assert.doesNotMatch(fell, /this change reaches/u);
+  });
+
   it('a full-suite round says nothing extra, because its reach is what a reader assumes', () => {
     assert.equal(verdictHeadline({ standing_red: 0, selection: null, pr: { base: 'main' } }), 'GREEN — the test gate passes');
     assert.equal(verdictPhrase({ standing_red: 0, selection: null }), 'gate green');

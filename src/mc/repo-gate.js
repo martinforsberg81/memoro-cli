@@ -440,6 +440,10 @@ export async function runGate({
       report.selection = {
         command: declared.declaration.select,
         files: selection.files.length,
+        // The selector's own admission that it could not narrow this change,
+        // carried through so the verdict does not read as a saving it is not.
+        full_suite: Boolean(selection.full),
+        why: selection.why,
         // Which of them the baseline could not run, because this change adds
         // them. A new test file is red-free on a base that does not have it,
         // and saying so is the difference between a measurement and a guess.
@@ -774,6 +778,11 @@ export function verdictPhrase(report) {
 function scopeOf(report) {
   const selected = report.selection?.files;
   if (!selected) return '';
+  // A selector that gave up and returned everything must not be reported as a
+  // narrow measurement. Saying "the 258 files this change reaches" when 258 is
+  // the whole suite is true and misleading in the same breath, which is the
+  // exact failure mode this sentence was added to fix.
+  if (report.selection.full_suite) return ' — over the whole suite: the selector could not narrow this change';
   return ` — measured over the ${selected} test file${selected === 1 ? '' : 's'} this change reaches, not the whole suite`;
 }
 
@@ -834,8 +843,14 @@ async function selectFiles({ command, cwd, env, say }) {
     return { ok: false, reason: `${command} printed JSON with no \`files\` array` };
   }
   const clean = files.map(String).filter(Boolean);
-  say(`selection read from ${command}`);
-  return { ok: true, files: clean };
+  // A selector may say it gave up and returned everything. memoro-cli's does
+  // that whenever a changed path is not source it can trace, and the round has
+  // to repeat the admission rather than present the whole suite as a narrow
+  // measurement — "measured over the 258 files this change reaches" is true and
+  // reads as a saving when 258 is the entire suite.
+  const full = parsed?.why?.reason === 'full-suite';
+  say(`selection read from ${command}${full ? ' — it fell back to the whole suite' : ''}`);
+  return { ok: true, files: clean, full, why: parsed?.why ?? null };
 }
 
 /**
