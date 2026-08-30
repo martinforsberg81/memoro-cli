@@ -44,10 +44,11 @@ In this order, because that is the order the questions come in:
 - **DECISIONS** — how many wait on Martin, the first three by name.
 - **INTAKE** — the newest `~/mc/intake/errors-<date>.md`, its age, what is
   new in it, and how many proposals nobody has queued or dropped.
-- **WORK** — one numbered row per workarea: plan status, `next`, the last
-  runner step, the open PR, a live mark. Live first, then by the later of
-  the area's mtime and its last runner step. Then one line counting the
-  projects on main with no workarea.
+- **PROJECTS** — one numbered row per project on `origin/main`, grouped by
+  repository and sorted repo, programme, project: where the plan stands, how
+  many of its steps are done, `next`, the open PR, a live mark. Then the
+  workareas no project explains, under a heading of their own — the first few
+  by name and the rest as a count.
 
 Two rules the sections keep:
 
@@ -173,7 +174,7 @@ test can look at one row.
 The page is grey with meaning painted on it, and the meanings are a short
 list. Two of them are tables, and those tables are the rule the rest of the
 page bends to: **a step kind and a plan status have one colour each, wherever
-they are printed.** NOW, QUEUE and WORK all say `reconcile` in the same
+they are printed.** NOW, QUEUE and PROJECTS all say `reconcile` in the same
 magenta, so a kind is recognised before it is read. They are `KIND_TONE` and
 `STATUS_TONE` in `page-render.js`, and `tests/mc/page.test.js` walks each one
 through all three sections.
@@ -193,6 +194,7 @@ through all three sections.
 | `waiting-decision` | yellow |
 | `blocked` | red |
 | `done` | grey |
+| `invalid` | red bold |
 | no plan on main | dim grey |
 
 Everything else is structure, and structure is quiet:
@@ -203,7 +205,7 @@ Everything else is structure, and structure is quiet:
 | header | decisions waiting, when > 0 | bold yellow |
 | header | `N of M queued` | white |
 | header | version, rule, cost today | grey |
-| section titles | `NOW` `QUEUE` `DECISIONS` `INTAKE` `WORK` | bold cyan |
+| section titles | `NOW` `QUEUE` `DECISIONS` `INTAKE` `PROJECTS` | bold cyan |
 | section titles | the count beside it, the verb hint on the right | grey |
 | NOW | the live step's `●`, its name | green, bold white |
 | NOW | elapsed: under ¾ of budget, from ¾, past it | white, yellow, bold red |
@@ -224,11 +226,12 @@ Everything else is structure, and structure is quiet:
 | INTAKE | proposals, when > 0 | yellow |
 | INTAKE | a `!` line: its mark, its text | red, bold white |
 | INTAKE | no digest yet, no new errors, no proposals | grey |
-| WORK | a live area's `●`, its name | green, bold white |
-| WORK | a quiet area's name and `next` | white, plain |
-| WORK | the PR number | cyan |
-| WORK | the number, the last-run time, the projects-without-a-workarea line | grey |
-| WORK | a row with no plan on main | grey throughout |
+| PROJECTS | a live project's `●`, its name | green, bold white |
+| PROJECTS | a quiet project's name and `next` | white, plain |
+| PROJECTS | the repository heading | bold cyan |
+| PROJECTS | the open PR number | cyan |
+| PROJECTS | the number, the steps done, the last-run time, the no-workarea line | grey |
+| PROJECTS | a workarea row with no project on main | grey throughout |
 | footer | the cache line, the notes | grey |
 
 Four things hold that table up:
@@ -266,7 +269,7 @@ not changed:
 
 | | |
 |---|---|
-| a number | opens that workarea — **WORK's number**, not a listing of its own |
+| a number | opens that project's workarea, making one if it has none — **PROJECTS’ number**, not a listing of its own |
 | a name | opens that workarea |
 | `n` | starts a new one |
 | `b` | `mc brief` |
@@ -275,10 +278,11 @@ not changed:
 | `q`, empty | quit |
 | anything else | parsed as an `mc work` command, with or without its first two words |
 
-The menu asks `inspectWorkArea(name).exists` rather than looking for a WORK
-row, because WORK draws the areas that hold a checkout and `mc work` offers
-to make an area with no repository in it. Using the rows would have kept the
-typo guard and stranded the empty area under the only name it has.
+The menu asks `inspectWorkArea(name).exists` rather than looking for a
+PROJECTS row, because the page draws projects and the folders that hold a
+checkout, and `mc work` offers to make an area with no repository in it.
+Using the rows would have kept the typo guard and stranded the empty area
+under the only name it has.
 
 The prompt reads `/dev/tty` by design, so a subprocess without a terminal
 never reaches it.
@@ -304,8 +308,8 @@ touches the machine and `renderPage` the only part that knows how it looks;
 parsed JSON and compares, so the two surfaces cannot drift.
 
 `tests/mc/front-door.test.js` drives the menu in process with the reading
-and the opening handed in, so a number can be shown to open the workarea
-WORK gave that number to without a session ever starting.
+and the opening handed in, so a number can be shown to open the project
+PROJECTS gave that number to without a session ever starting.
 
 ## What went, and what did not
 

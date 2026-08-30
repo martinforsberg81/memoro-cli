@@ -12,7 +12,7 @@ import { describe, it } from 'node:test';
 import { runsSince } from '../../src/mc/brief-collect.js';
 import {
   collectPage, countNewErrors, decisionsSection, intakeSection, newErrorLines, nowSection, queueSection,
-  workSection,
+  projectsSection,
 } from '../../src/mc/page-collect.js';
 import { colourFor, columnsFor, renderPage, renderPageLines } from '../../src/mc/page-render.js';
 import { width } from '../../src/mc/status-render.js';
@@ -248,7 +248,7 @@ describe('INTAKE', () => {
   });
 });
 
-describe('WORK', () => {
+describe('PROJECTS', () => {
   const AREAS = [
     { name: 'docx-editor', mtime_ms: Date.parse('2026-08-29T08:00:00Z') },
     { name: 'mc-ui', mtime_ms: Date.parse('2026-08-29T11:50:00Z') },
@@ -256,57 +256,98 @@ describe('WORK', () => {
     { name: 'avatar-self-serve', mtime_ms: Date.parse('2026-08-29T09:00:00Z') },
   ];
 
-  const workFixture = (over = {}) => workSection({
-    areas: AREAS,
+  const projectsFixture = (over = {}) => projectsSection({
     plans: PLANS,
+    areas: AREAS,
     rows: ROWS,
     openPrs: [{ repo: 'memoro-cli', number: 440, headRefName: 'mc-ui' }, { repo: 'memoro', number: 2, headRefName: 'elsewhere' }],
     live: ['ui-fixes'],
+    repoOrder: ['memoro', 'memoro-cli'],
     ...over,
   });
 
-  it('numbers one row per workarea, live first and then by last activity', () => {
-    const work = workFixture();
-    assert.deepEqual(work.areas.map((area) => [area.number, area.name]), [
-      [1, 'mc-ui'], [2, 'avatar-self-serve'], [3, 'docx-editor'],
+  const flat = (projects) => projects.repos.flatMap((group) => group.projects);
+
+  it('groups by repository in the order given, then programme, then project', () => {
+    const projects = projectsFixture();
+    assert.deepEqual(projects.repos.map((group) => group.repo), ['memoro', 'memoro-cli']);
+    assert.deepEqual(flat(projects).map((p) => [p.number, `${p.programme}/${p.name}`]), [
+      [1, 'assistant-avatar/avatar-self-serve'],
+      [2, 'docx-editing-surface/docx-editor'],
+      [3, 'mc/mc-run'],
+      [4, 'mc/mc-ui'],
     ]);
-    const ui = work.areas.find((area) => area.name === 'mc-ui');
+    assert.equal(projects.count, 4);
+  });
+
+  it('carries the plan state, how far it has got, its PR and its last step', () => {
+    const projects = projectsFixture();
+    const ui = flat(projects).find((p) => p.name === 'mc-ui');
     assert.equal(ui.status, 'ready');
     assert.equal(ui.next, 'Step 1, The page — done when the step is finished');
+    assert.deepEqual(ui.steps, { done: 0, total: 1 });
     assert.equal(ui.pr, 440);
+    assert.equal(ui.workarea, true);
     assert.deepEqual(ui.last, { ts: '2026-08-29T10:00:00Z', kind: 'step', pr: '440', note: 'success,merged' });
-    // mc-run has a plan and no workarea; it is a number, not a row.
-    assert.equal(work.count, 4);
-    assert.equal(work.without_workarea, 1);
+    assert.deepEqual(projects.statuses, { 'waiting-decision': 1, ready: 2, done: 1 });
+  });
+
+  // A project is what the work is; a folder is where a session runs. mc-run
+  // has a plan and no folder, and used to be a count at the foot of the
+  // section rather than a row anybody could open.
+  it('lists a project that has no workarea, and says how many are like it', () => {
+    const projects = projectsFixture();
+    const run = flat(projects).find((p) => p.name === 'mc-run');
+    assert.equal(run.workarea, false);
+    assert.equal(run.number, 3, 'it is a numbered row, not a footnote');
+    assert.equal(projects.no_workarea, 1);
   });
 
   /**
-   * A workarea with no plan on main is not one of the rows above. Nothing
+   * A workarea no project explains is not one of the rows above. Nothing
    * removes it, so it belongs under a heading of its own — with what says
    * whether anything would be lost by removing it by hand.
    */
-  it('puts a workarea with no plan on main under its own heading, numbered after the rest', () => {
-    const work = workFixture({ detail: { 'ui-fixes': { uncommitted: 3, last_commit: '2026-08-20' } } });
-    assert.deepEqual(work.unplanned.map((area) => [area.number, area.name]), [[4, 'ui-fixes']]);
-    const orphan = work.unplanned[0];
-    assert.equal(orphan.status, null);
-    assert.equal(orphan.live, true, 'live or not, it is still nobody\u2019s plan');
-    assert.equal(orphan.unplanned, true);
+  it('puts a workarea with no project under its own heading, numbered after the rest', () => {
+    const projects = projectsFixture({ detail: { 'ui-fixes': { uncommitted: 3, last_commit: '2026-08-20' } } });
+    assert.deepEqual(projects.unplanned.shown.map((area) => [area.number, area.name]), [[5, 'ui-fixes']]);
+    const orphan = projects.unplanned.shown[0];
+    assert.equal(orphan.live, true, 'live or not, it is still nobody’s project');
     assert.equal(orphan.uncommitted, 3);
     assert.equal(orphan.last_commit, '2026-08-20');
-    assert.equal(work.count, 4, 'the count is every workarea, planned or not');
-    assert.equal(work.areas.some((area) => area.name === 'ui-fixes'), false);
+    assert.equal(projects.unplanned.count, 1);
+    assert.equal(projects.count, 4, 'the count is projects; a folder is not one');
+  });
+
+  // Fifty-seven of them on 2026-08-30. Drawn whole they would be the page
+  // again, so the page draws a few and counts the rest.
+  it('draws the first few orphans and counts the others', () => {
+    const many = Array.from({ length: 20 }, (_, n) => ({ name: `old-${String(n).padStart(2, '0')}`, mtime_ms: 1000 - n }));
+    const projects = projectsSection({ plans: [], areas: many, shown: 3 });
+    assert.deepEqual(projects.unplanned.shown.map((area) => area.name), ['old-00', 'old-01', 'old-02']);
+    assert.equal(projects.unplanned.more, 17);
+    assert.equal(projects.unplanned.count, 20);
   });
 
   it('numbers through both lists, so the page has no two rows with one number', () => {
-    const work = workFixture();
-    const numbers = [...work.areas, ...work.unplanned].map((area) => area.number);
-    assert.deepEqual(numbers, [1, 2, 3, 4]);
+    const projects = projectsFixture();
+    const numbers = [...flat(projects), ...projects.unplanned.shown].map((area) => area.number);
+    assert.deepEqual(numbers, [1, 2, 3, 4, 5]);
   });
 
-  it('names the repository a workarea holds when no plan names one', () => {
-    const work = workSection({ areas: [{ name: 'msr-track-1', mtime_ms: 1, repos: ['memoro'] }], plans: [] });
-    assert.equal(work.unplanned[0].repo, 'memoro');
+  it('names the repository an orphan workarea holds', () => {
+    const projects = projectsSection({ areas: [{ name: 'msr-track-1', mtime_ms: 1, repos: ['memoro'] }], plans: [] });
+    assert.equal(projects.unplanned.shown[0].repo, 'memoro');
+  });
+
+  it('says a plan still on the old markdown file is one, rather than a fraction of nothing', () => {
+    const projects = projectsSection({
+      plans: [{ repo: 'memoro', programme: 'mc', project: 'old', legacy: true, plan: null, status: 'ready', next: 'x' }],
+      areas: [],
+    });
+    const [project] = projects.repos[0].projects;
+    assert.equal(project.steps, null);
+    assert.equal(project.legacy, true);
   });
 });
 
@@ -317,7 +358,7 @@ function pageData(over = {}) {
     queue: queueSection({ queue: [], plans: [] }),
     decisions: decisionsSection([]),
     intake: intakeSection({ digest: null, proposals: [], now: NOW }),
-    work: workSection({ areas: [], plans: [] }),
+    projects: projectsSection({ areas: [], plans: [] }),
     caches: { fresh: false, plans: [], prs: { fetched: null, age_seconds: null, count: 0 } },
     notes: [],
     ...over,
@@ -349,12 +390,13 @@ const DATA = pageData({
     proposals: ['a.md'],
     now: NOW,
   }),
-  work: workSection({
-    areas: [{ name: 'mc-ui', mtime_ms: Date.parse('2026-08-29T11:50:00Z') }, { name: 'ui-fixes', mtime_ms: 0 }],
+  projects: projectsSection({
     plans: PLANS,
+    areas: [{ name: 'mc-ui', mtime_ms: Date.parse('2026-08-29T11:50:00Z') }, { name: 'ui-fixes', mtime_ms: 0 }],
     rows: ROWS,
     openPrs: [{ repo: 'memoro-cli', number: 440, headRefName: 'mc-ui' }],
     live: [],
+    repoOrder: ['memoro', 'memoro-cli'],
   }),
   caches: { fresh: false, plans: [], prs: { fetched: '2026-08-29T10:00:00Z', age_seconds: 7200, count: 1 } },
   notes: ['PRs from cache, 2 h old — --fresh asks GitHub', 'no queue.md'],
@@ -363,7 +405,7 @@ const DATA = pageData({
 describe('the page', () => {
   it('prints the five sections in order, with the counts and the verb that expands each', () => {
     const text = renderPage(DATA, { columns: 120, version: '0.7.11', now: NOW });
-    const at = ['NOW', 'QUEUE', 'DECISIONS', 'INTAKE', 'WORK'].map((head) => text.indexOf(`  ${head}`));
+    const at = ['NOW', 'QUEUE', 'DECISIONS', 'INTAKE', 'PROJECTS'].map((head) => text.indexOf(`  ${head}`));
     assert.ok(at.every((index, n) => index >= 0 && (n === 0 || index > at[n - 1])), text);
     assert.match(text, /MEMORO·CLI {2}0\.7\.11/u);
     assert.match(text, /4 decisions {2}· {2}1 of 3 queued/u);
@@ -376,10 +418,12 @@ describe('the page', () => {
     assert.match(text, /DECISIONS {2}4 waiting\s+mc brief/u);
     assert.match(text, /… 1 more/u);
     assert.match(text, /INTAKE {2}2026-08-29 \(60 min old\) · 1 new error \(1 loud\) · 1 proposal\s+mc helper --intake/u);
-    assert.match(text, /WORK {2}2 workareas\s+mc status <name>/u);
-    assert.match(text, / {2}1 · mc-ui\s+ready\s+Step 1, The page — done when the step is fi…\s+08-29 10:00Z step #440/u);
-    assert.match(text, / {2}2 · ui-fixes\s+—\s+no plan on main/u);
-    assert.match(text, /3 project\(s\) on main without a workarea/u);
+    assert.match(text, /PROJECTS {2}4 in 2 repos {2}ready 2 · done 1 · waiting-decision 1\s+mc status <name>/u);
+    assert.match(text, /^ {2}memoro 2$/mu, 'the repository is a heading of its own');
+    assert.match(text, / {4}4 · mc\/mc-ui\s+ready\s+0\/1\s+Step 1, The page — done when the step\s?…?\s+#440/u);
+    assert.match(text, /3 of them have no workarea yet/u);
+    assert.match(text, /1 workarea with no project on main — nothing removes them/u);
+    assert.match(text, / {4}5 · ui-fixes\s+—\s+no project on main/u);
     assert.match(text, /offline, PRs 2 h old — --fresh asks GitHub/u);
     assert.match(text, /note: no queue\.md/u);
     assert.ok(!/note: PRs from cache/u.test(text), 'the cache line already says it');
@@ -417,8 +461,8 @@ describe('the page', () => {
     const code = await page(['--json'], { collect: async () => DATA, stdout: { write: (s) => { out += s; } } });
     assert.equal(code, 0);
     const parsed = JSON.parse(out);
-    assert.deepEqual(Object.keys(parsed), ['now', 'queue', 'decisions', 'intake', 'work', 'caches', 'notes']);
-    assert.equal(parsed.work.areas[0].name, 'mc-ui');
+    assert.deepEqual(Object.keys(parsed), ['now', 'queue', 'decisions', 'intake', 'projects', 'caches', 'notes']);
+    assert.equal(parsed.projects.repos[0].projects[0].name, 'avatar-self-serve');
     assert.equal(parsed.queue.runnable, 1);
     // Rendering the parsed JSON gives the same page: the two cannot drift.
     assert.equal(renderPage(parsed, { columns: 100, now: NOW }), renderPage(DATA, { columns: 100, now: NOW }));
@@ -480,13 +524,13 @@ describe('collectPage', () => {
     assert.equal(data.intake.new_errors, 1);
     assert.deepEqual(data.intake.loud_lines, ['`abc` — 41x 500 — loud']);
     assert.equal(data.intake.proposals, 1);
-    assert.deepEqual(data.work.areas.map((area) => area.name).sort(), ['docx-editor', 'mc-ui']);
-    assert.equal(data.work.areas.find((area) => area.name === 'mc-ui').pr, 440);
-    assert.equal(data.work.without_workarea, 2);
+    assert.deepEqual(data.projects.repos.flatMap((g) => g.projects).map((p) => p.name), ['avatar-self-serve', 'docx-editor', 'mc-run', 'mc-ui']);
+    assert.equal(data.projects.repos.flatMap((g) => g.projects).find((p) => p.name === 'mc-ui').pr, 440);
+    assert.equal(data.projects.no_workarea, 2);
     assert.equal(data.caches.fresh, false);
     assert.equal(data.caches.prs.age_seconds, 7200);
     // The whole page renders from it without throwing.
-    assert.match(renderPage(data, { columns: 100, now: NOW }), /WORK {2}2 workareas/u);
+    assert.match(renderPage(data, { columns: 100, now: NOW }), /PROJECTS {2}4 in 2 repos/u);
   });
 
   it('--fresh fetches, asks GitHub and refills the PR cache', async () => {
@@ -512,7 +556,7 @@ describe('collectPage', () => {
     assert.deepEqual(asked.sort(), ['gh pr', 'git fetch']);
     assert.deepEqual(saved, [{ repo: 'memoro-cli', number: 440, headRefName: 'mc-ui' }]);
     assert.equal(data.caches.fresh, true);
-    assert.equal(data.work.areas.find((area) => area.name === 'mc-ui').pr, 440);
+    assert.equal(data.projects.repos.flatMap((g) => g.projects).find((p) => p.name === 'mc-ui').pr, 440);
   });
 });
 
@@ -579,12 +623,17 @@ describe('the palette', () => {
     'bold+cyan green grey red grey yellow grey', //                INTAKE  2026-08-29 (60 min old) · 1 new error (1 loud) · 1 proposal
     'red bold+white', //                                           !  `abc` — 41x 500 — loud
     '',
-    'bold+cyan grey grey', //                                      WORK  2 workareas                 mc status <name>
-    'grey grey white green grey green cyan', //                      1 · mc-ui  ready  Step 1, The page — …  08-29 10:00Z step #440
-    'grey', //                                                       3 project(s) on main without a workarea
+    'bold+cyan grey green grey grey grey yellow grey', //          PROJECTS  4 in 2 repos  ready 2 · done 1 · waiting-decision 1
+    'bold+cyan dim+grey', //                                       memoro 2
+    'grey grey white yellow grey grey blue', //                      1 · assistant-avatar/avatar-self-serve  waiting-decision  0/1  …  triage
+    'grey grey white green grey grey green', //                      2 · docx-editing-surface/docx-editor  ready  0/1  …  step
+    'bold+cyan dim+grey', //                                       memoro-cli 2
+    'grey grey white grey grey', //                                  3 · mc/mc-run  done  1/1  nothing
+    'grey grey white green grey cyan', //                            4 · mc/mc-ui  ready  0/1  Step 1, The page — …  #440
+    'grey', //                                                       3 of them have no workarea yet
     '',
-    'grey', //                                                     1 workarea with no plan on main — nothing removes them
-    'grey grey grey dim+grey grey', //                               2 · ui-fixes  —  no plan on main
+    'grey', //                                                     1 workarea with no project on main — nothing removes them
+    'grey grey grey dim+grey grey', //                               5 · ui-fixes  —  no project on main
     '',
     'grey', //                                                     offline, PRs 2 h old — --fresh asks GitHub
     'grey', //                                                     note: no queue.md
@@ -632,7 +681,7 @@ describe('the palette', () => {
     });
     assert.equal(code, 0);
     assert.ok(!out.includes(ESC), '--json is bytes for a program, never for an eye');
-    assert.deepEqual(Object.keys(JSON.parse(out)), ['now', 'queue', 'decisions', 'intake', 'work', 'caches', 'notes']);
+    assert.deepEqual(Object.keys(JSON.parse(out)), ['now', 'queue', 'decisions', 'intake', 'projects', 'caches', 'notes']);
   });
 
   it('gives a step kind one colour wherever a kind is printed', () => {
@@ -650,9 +699,9 @@ describe('the palette', () => {
         queue: {
           depth: 1, runnable: 1, items: [], next: [{ name: 'thing', kind }], more: 0, skipped: { count: 0, reasons: {} },
         },
-        work: workSection({
-          areas: [{ name: 'thing', mtime_ms: 1 }],
+        projects: projectsSection({
           plans: [{ repo: 'memoro-cli', programme: 'mc', project: 'thing', status: 'ready', next: 'go on' }],
+          areas: [{ name: 'thing', mtime_ms: 1 }],
           rows: [{ ts: '2026-08-29T10:00:00Z', name: 'thing', kind, pr: '-', note: '' }],
         }),
       });
@@ -660,7 +709,7 @@ describe('the palette', () => {
       const now = signature(rowWith(lines, `● thing  `)).split(' ');
       assert.equal(now[2], tone, `NOW says ${kind} in ${now[2]}`);
       assert.equal(signature(rowWith(lines, `  1  thing`)).split(' ').at(-1), tone, `QUEUE says ${kind} in its colour`);
-      assert.equal(signature(rowWith(lines, 'go on')).split(' ').at(-1), tone, `WORK says ${kind} in its colour`);
+      assert.equal(signature(rowWith(lines, 'go on')).split(' ').at(-1), tone, `PROJECTS says ${kind} in its colour`);
     }
   });
 
@@ -672,14 +721,14 @@ describe('the palette', () => {
       { repo: 'memoro-cli', project: 'd-done', status: 'done', next: 'four' },
     ];
     const data = pageData({
-      work: workSection({ areas: plans.map((plan, n) => ({ name: plan.project, mtime_ms: 100 - n })).concat([{ name: 'e-none', mtime_ms: 0 }]), plans }),
+      projects: projectsSection({ plans, areas: plans.map((plan, n) => ({ name: plan.project, mtime_ms: 100 - n })).concat([{ name: 'e-none', mtime_ms: 0 }]) }),
     });
     const lines = paintedPage(data);
     for (const [name, tone] of [['a-ready', 'green'], ['b-blocked', 'red'], ['c-waiting', 'yellow'], ['d-done', 'grey']]) {
       assert.equal(signature(rowWith(lines, name)).split(' ')[3], tone, `${name} is ${tone}`);
     }
-    // A workarea with no plan on main is grey through and through, and its
-    // missing status is the dimmest thing on the page.
+    // A workarea no project explains is grey through and through, and the
+    // repository it holds is the dimmest thing on the page.
     assert.deepEqual(signature(rowWith(lines, 'e-none')).split(' '), ['grey', 'grey', 'grey', 'dim+grey', 'grey']);
   });
 
@@ -748,13 +797,13 @@ describe('the palette', () => {
     assert.ok(/\| anything else \| grey \|/u.test(doc));
     assert.ok(/\| no plan on main \| dim grey \|/u.test(doc));
     assert.deepEqual(signature(rowWith(paintedPage(pageData({
-      work: workSection({
-        areas: [{ name: 'unplanned', mtime_ms: 1 }],
+      projects: projectsSection({
         plans: [],
+        areas: [{ name: 'unplanned', mtime_ms: 1 }],
         rows: [{ ts: '2026-08-29T10:00:00Z', name: 'unplanned', kind: 'rebase', pr: '-', note: '' }],
       }),
-    })), 'unplanned')).split(' '), ['grey', 'grey', 'grey', 'dim+grey', 'grey', 'grey', 'grey'],
-    'a kind the table has no key for, on a row with no plan, is the page at its quietest');
+    })), 'unplanned')).split(' '), ['grey', 'grey', 'grey', 'dim+grey', 'grey'],
+    'a folder no project explains is the page at its quietest');
   });
 
   it('says nothing about a watch in the header — there is none', () => {

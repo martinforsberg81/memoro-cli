@@ -12,8 +12,9 @@
  * printing to:
  *
  *   - a terminal      the page, then the menu `mc work` used to carry — a
- *                     number or a name opens that workarea, and the numbers
- *                     are the ones in WORK above the prompt
+ *                     number or a name opens that project's workarea, making
+ *                     one if it has none, and the numbers are the ones in
+ *                     PROJECTS above the prompt
  *   - a pipe, --json  the page, and exit 0. Nothing prompts, ever
  *
  * The page is offline: it answers from `~/mc/runner/plans.json` and
@@ -108,8 +109,8 @@ const KEYS = [
 /**
  * The way on from the page.
  *
- * The numbers are WORK's numbers — the page above the prompt is the listing,
- * so the menu has none of its own. Everything a number cannot say is a letter,
+ * The numbers are PROJECTS' numbers — the page above the prompt is the
+ * listing, so the menu has none of its own. Everything a number cannot say is a letter,
  * and anything else is read as a `mc work` command, because a prompt invites
  * one and the verbs are the same verbs. `mc work discard x`, `discard x`,
  * `discard x --apply` — the leading `mc` and `work` are stripped and the rest
@@ -122,9 +123,15 @@ export async function menu(first, {
 }) {
   let data = first;
   for (;;) {
-    // Both WORK lists, in the order the page numbered them: an unplanned
-    // workarea is under its own heading, not out of reach.
-    const areas = [...data.work.areas, ...(data.work.unplanned || [])];
+    // Everything PROJECTS numbered, in the order it numbered it: every project
+    // of every repository, then the workareas no project explains, which are
+    // under their own heading but not out of reach. Opening a project that has
+    // no workarea yet is what creates one — `openArea` has always done that,
+    // and it is why a project can be a row before a folder is.
+    const areas = [
+      ...data.projects.repos.flatMap((group) => group.projects),
+      ...(data.projects.unplanned?.shown || []),
+    ];
     stdout.write(`\n${KEYS}\n\n`);
     const answer = ask('>', { stdout });
     if (!answer || answer === 'q') return 0;
@@ -187,9 +194,10 @@ export async function typed(answer, areas, { stdout, stderr, open = openArea }) 
   // the shell the same word still starts something, because there the name is
   // the whole statement of intent.
   //
-  // Asked of the disk rather than of WORK's rows: WORK draws the areas that
-  // hold a checkout, and an area made with no repository — `mc work` offers
-  // exactly that — would otherwise be unreachable by the only name it has.
+  // Asked of the disk rather than of the page's rows: PROJECTS draws projects
+  // and the folders that hold a checkout, and an area made with no repository
+  // — `mc work` offers exactly that — would otherwise be unreachable by the
+  // only name it has.
   if (sub.verb === 'open' && words.length === 1
     && !areas.some((area) => area.name === sub.name)
     && !inspectWorkArea(sub.name).exists) {

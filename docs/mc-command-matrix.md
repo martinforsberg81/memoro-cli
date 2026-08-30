@@ -24,7 +24,7 @@ started in it. mc stores nothing else, because nothing else is mc's to know.
 
 | Command | Does |
 |---|---|
-| `mc` | The one page — NOW, QUEUE, DECISIONS, INTAKE, WORK — and at a terminal the way in under it: a number opens that workarea, `n` starts one, `b`/`p <name>`/`s <name>` run brief, plan and one project, `q` quits, and any other line is read as an `mc work` command. `--json`, `--fresh`. |
+| `mc` | The one page — NOW, QUEUE, DECISIONS, INTAKE, PROJECTS — and at a terminal the way in under it: a number opens that project's workarea, making one if it has none, `n` starts something new, `b`/`p <name>`/`s <name>` run brief, plan and one project, `q` quits, and any other line is read as an `mc work` command. PROJECTS is one row per `PLAN.json` on `origin/main`, grouped by repository and sorted repo, programme, project, with the workareas no project explains underneath. `--json`, `--fresh`. |
 | `mc work` | The page — `mc` by another name. |
 | `mc work <name>` | Open it — the name is enough, new or not. Refused while a session mc did not start is working in it (`--anyway` opens it regardless). |
 | `mc work <name>` | Open it — the name is enough, new or not. A session running there under any tmux name is found by where it stands and joined. |
