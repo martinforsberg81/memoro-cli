@@ -64,6 +64,15 @@ export const SHIPPED = Object.freeze({
     prepare: null,
     prepare_why: 'the suite is node:test over source only; verified across every gate round '
       + 'since the verb existed, each of which ran it twice in a worktree with no node_modules',
+    // This repository's own answer to "what does this change reach": the import
+    // closure of each test file, plus the source files a test reads as *text*
+    // — which is a real edge here, not a hypothetical one. `merge-doc.test.js`
+    // asserts against `repo-gate.js`'s source that no merge call is in it, and
+    // an import graph cannot see that.
+    select: 'node scripts/affected-tests.js --base-ref origin/main',
+    select_why: 'measured 2026-08-30 on this repository\'s own gate work: 17 of 257 test files, '
+      + '241 tests in 25 s, against 2,353 tests in ~100 s for the whole suite — twice, once a side. '
+      + 'It fails closed to the full suite whenever a changed path is not source it can trace',
     extra_gates: Object.freeze([]),
     merge_log: Object.freeze({ under: 'work-root', path: 'large-scale-llm-project/merge-log.md' }),
     // The flag its own `test` script gives node, stated rather than parsed.
