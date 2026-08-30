@@ -1,5 +1,5 @@
 /**
- * `mc status <name>` — one project on one page: what its PLAN.md says right
+ * `mc status <name>` — one project on one page: what its plan says right
  * now, which decisions belong to it and whether they are answered, the last
  * three runner steps, and the open PR on its branch.
  *
@@ -16,7 +16,8 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
-import { defaultRepos, planFields, runsFor, scanDecisions } from './brief-collect.js';
+import { defaultRepos, runsFor, scanDecisions } from './brief-collect.js';
+import { planSummary, readPlanText } from './plan-schema.js';
 import { workRoot } from './paths.js';
 
 /* ---------------------------------------------------------------- builders */
@@ -45,8 +46,31 @@ export function decisionsForProject(decisions, { project, programme }) {
  * paragraph, long enough on a live plan to push everything else off the
  * screen, so the page gives it a block of its own.
  */
-export function fieldRows(fields) {
-  return Object.entries(fields || {}).filter(([key, value]) => key !== 'next' && value != null);
+/**
+ * The rows above the fold: what state the project is in, and anything wrong
+ * with the file. A plan used to answer this with its frontmatter, which could
+ * say `ready` while saying nothing a session could act on; the status is read
+ * off the steps now, and a plan that does not parse says so here rather than at
+ * three in the morning when the runner refuses it.
+ */
+export function fieldRows(plan, problems = []) {
+  const rows = [];
+  if (plan) rows.push(['status', planSummary(plan).status]);
+  for (const problem of problems) rows.push(['problem', problem]);
+  return rows;
+}
+
+/** One line per step: where the project got to, and where it stopped. */
+export function stepRows(plan) {
+  const steps = Array.isArray(plan?.steps) ? plan.steps : [];
+  const mark = { done: '✓', ready: '▸', blocked: '■', 'waiting-decision': '?' };
+  return steps.map((step, index) => {
+    const waiting = step.blocked_by ? ` on ${step.blocked_by.kind} ${step.blocked_by.name}` : '';
+    const state = step.status === 'done'
+      ? (step.pr ? `#${step.pr}` : 'done')
+      : `${step.status}${waiting}`;
+    return `  ${mark[step.status] || '·'} ${String(index + 1).padStart(2)}  ${clip(step.title, 52).padEnd(53)} ${state}`;
+  });
 }
 
 /* ------------------------------------------------------------------ render */
@@ -70,7 +94,7 @@ export function wrap(text, width, pad) {
 }
 
 export function renderProject({
-  name, repo, programme, path, source, unmerged, fields, workarea, decisions, runs, prs, notes = [],
+  name, repo, programme, path, source, unmerged, plan, problems = [], workarea, decisions, runs, prs, notes = [],
 }) {
   const out = [];
   out.push(`${name} — ${[repo, programme].filter(Boolean).join(' · ') || 'no repository'}`);
@@ -79,14 +103,21 @@ export function renderProject({
   const row = (key, value) => out.push(`  ${key.padEnd(label)} ${wrap(value, 92 - indent, indent)}`);
   if (path) row('plan', `${path} (${source}${unmerged ? ', differs from origin/main' : ''})`);
   row('workarea', tilde(workarea) || 'none');
-  for (const [key, value] of fieldRows(fields)) row(key, value);
-  if (!path) out.push('  no PLAN.md — this is a workarea without a project');
+  for (const [key, value] of fieldRows(plan, problems)) row(key, value);
+  if (!path) out.push('  no plan — this is a workarea without a project');
   out.push('');
 
   if (path) {
     out.push('NEXT');
-    out.push(`  ${wrap(fields?.next || 'nothing — the plan names no next step', 90, 2)}`);
+    out.push(`  ${wrap(plan ? planSummary(plan).next : 'the plan does not parse — nothing can be handed out', 90, 2)}`);
     out.push('');
+
+    const steps = stepRows(plan);
+    if (steps.length) {
+      out.push('STEPS');
+      out.push(...steps);
+      out.push('');
+    }
   }
 
   out.push('DECISIONS');
@@ -125,7 +156,7 @@ function execAsync(cmd, args, opts = {}) {
   });
 }
 
-/** The `docs/project/<programme>/<name>/PLAN.md` inside a workarea checkout. */
+/** The `docs/project/<programme>/<name>/PLAN.json` inside a workarea checkout. */
 export function findWorkareaPlan(dir, name) {
   let entries = [];
   try { entries = readdirSync(dir, { withFileTypes: true }).filter((d) => d.isDirectory()); } catch { return null; }
@@ -135,7 +166,7 @@ export function findWorkareaPlan(dir, name) {
     let programmes = [];
     try { programmes = readdirSync(join(root, 'docs', 'project')); } catch { continue; }
     for (const programme of programmes) {
-      const path = `docs/project/${programme}/${name}/PLAN.md`;
+      const path = `docs/project/${programme}/${name}/PLAN.json`;
       if (existsSync(join(root, path))) return { repo: entry.name, programme, path, file: join(root, path) };
     }
   }
@@ -150,7 +181,7 @@ export function findMainPlan(repos, name, { git = runGit } = {}) {
     if (tree == null) continue;
     const path = tree.split('\n').find((p) => {
       const parts = p.split('/');
-      return parts.length === 5 && parts[3] === name && parts[4] === 'PLAN.md';
+      return parts.length === 5 && parts[3] === name && parts[4] === 'PLAN.json';
     });
     if (path) return { repo: repo.name, path: repo.path, programme: path.split('/')[2], plan: path, text: git(repo.path, ['show', `origin/main:${path}`]) || '' };
   }
@@ -183,15 +214,17 @@ export async function collectProject(name, {
   const main = findMainPlan(present, name, { git });
   if (!local && !main && !workarea) return null;
 
-  let localFields = null;
+  let localPlan = null;
   if (local) {
-    try { localFields = planFields(read(local.file)); } catch { notes.push(`${local.path}: unreadable in the workarea`); }
+    try { localPlan = readPlanText(read(local.file)); } catch { notes.push(`${local.path}: unreadable in the workarea`); }
   }
-  const mainFields = main ? planFields(main.text) : null;
-  const fields = localFields || mainFields || {};
-  const source = localFields ? `workarea ${local.repo}` : 'origin/main';
-  const unmerged = Boolean(localFields && mainFields
-    && JSON.stringify(localFields) !== JSON.stringify(mainFields));
+  const mainPlan = main ? readPlanText(main.text) : null;
+  const chosen = localPlan || mainPlan || { plan: null, problems: [] };
+  const plan = chosen.plan;
+  const problems = chosen.problems;
+  const source = localPlan ? `workarea ${local.repo}` : 'origin/main';
+  const unmerged = Boolean(localPlan?.plan && mainPlan?.plan
+    && JSON.stringify(localPlan.plan) !== JSON.stringify(mainPlan.plan));
   const repo = main?.repo || local?.repo || null;
   const programme = main?.programme || local?.programme || null;
 
@@ -215,7 +248,8 @@ export async function collectProject(name, {
     path: local?.path || main?.plan || null,
     source,
     unmerged,
-    fields,
+    plan,
+    problems,
     workarea,
     decisions: decisionsForProject(scanDecisions(root), { project: name, programme }),
     runs: runsFor(tsv, name, 3),

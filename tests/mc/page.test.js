@@ -378,7 +378,7 @@ describe('the page', () => {
     assert.match(text, /INTAKE {2}2026-08-29 \(60 min old\) · 1 new error \(1 loud\) · 1 proposal\s+mc helper --intake/u);
     assert.match(text, /WORK {2}2 workareas\s+mc status <name>/u);
     assert.match(text, / {2}1 · mc-ui\s+ready\s+Step 1, The page — done when the step is fi…\s+08-29 10:00Z step #440/u);
-    assert.match(text, / {2}2 · ui-fixes\s+—\s+no PLAN\.md on main/u);
+    assert.match(text, / {2}2 · ui-fixes\s+—\s+no plan on main/u);
     assert.match(text, /3 project\(s\) on main without a workarea/u);
     assert.match(text, /offline, PRs 2 h old — --fresh asks GitHub/u);
     assert.match(text, /note: no queue\.md/u);
@@ -584,7 +584,7 @@ describe('the palette', () => {
     'grey', //                                                       3 project(s) on main without a workarea
     '',
     'grey', //                                                     1 workarea with no plan on main — nothing removes them
-    'grey grey grey dim+grey grey', //                               2 · ui-fixes  —  no PLAN.md on main
+    'grey grey grey dim+grey grey', //                               2 · ui-fixes  —  no plan on main
     '',
     'grey', //                                                     offline, PRs 2 h old — --fresh asks GitHub
     'grey', //                                                     note: no queue.md
@@ -678,7 +678,7 @@ describe('the palette', () => {
     for (const [name, tone] of [['a-ready', 'green'], ['b-blocked', 'red'], ['c-waiting', 'yellow'], ['d-done', 'grey']]) {
       assert.equal(signature(rowWith(lines, name)).split(' ')[3], tone, `${name} is ${tone}`);
     }
-    // A workarea with no PLAN.md on main is grey through and through, and its
+    // A workarea with no plan on main is grey through and through, and its
     // missing status is the dimmest thing on the page.
     assert.deepEqual(signature(rowWith(lines, 'e-none')).split(' '), ['grey', 'grey', 'grey', 'dim+grey', 'grey']);
   });
@@ -746,7 +746,7 @@ describe('the palette', () => {
     // The two fallbacks are rows of their own in the doc, and they are the
     // colours `kindTone` and `statusTone` reach for when the table has no key.
     assert.ok(/\| anything else \| grey \|/u.test(doc));
-    assert.ok(/\| no PLAN\.md on main \| dim grey \|/u.test(doc));
+    assert.ok(/\| no plan on main \| dim grey \|/u.test(doc));
     assert.deepEqual(signature(rowWith(paintedPage(pageData({
       work: workSection({
         areas: [{ name: 'unplanned', mtime_ms: 1 }],

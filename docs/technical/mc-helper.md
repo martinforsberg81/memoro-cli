@@ -209,7 +209,7 @@ two want opposite things: the desk asks Martin, and the turn is told there is
 nobody to ask. One file trying to be both is how a role stops being either.
 
 **It is given its material, not sent to find it.** The prompt carries the
-digest whole, every PLAN.md frontmatter on `origin/main` in whichever of the
+digest whole, every plan on `origin/main` in whichever of the
 two checkouts is present, with its `status` and `next:`, the project log, and the proposals already
 waiting — 22 kB against a real 50-fingerprint digest. Its cwd is the intake
 directory and the repositories are elsewhere on the disk: a turn that cannot
@@ -244,7 +244,7 @@ already been seen; a proposal that duplicates a live plan is noise; **zero
 proposals is a good answer** — a quiet day should cost Martin nothing to
 read.
 
-The role forbids, in the same words: `queue.md`, any PLAN.md, any decision
+The role forbids, in the same words: `queue.md`, any plan, any decision
 file, anything outside `~/mc/intake/proposals/`, production, a deploy, a
 credential, a PR, a session, and a question — there is nobody to answer one.
 
@@ -307,7 +307,7 @@ Nobody automatic. That is the point.
   change on an error, no deploy, not even `/ping-kv`'s probe key.
 - The desk never reads the digest, and neither half lists, edits or deletes a
   proposal that is already waiting. Both only add.
-- Neither writes `queue.md` or any PLAN.md. Proposals are the only output.
+- Neither writes `queue.md` or any plan. Proposals are the only output.
 - The desk changes no code and opens no PR. A report becomes a proposal, and
   the work happens later, elsewhere.
 - No resident session, no watcher, no pulse. The eye runs when the runner

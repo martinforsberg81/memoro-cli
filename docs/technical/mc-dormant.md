@@ -1,6 +1,6 @@
 # mc dormant — one world on the surface
 
-`mc --help` describes one system now. Work is a `PLAN.md` under
+`mc --help` describes one system now. Work is a `PLAN.json` under
 `docs/project/`; `mc run` takes its steps; `mc brief` is the hour the
 questions get answered; `mc plan` and `mc worker` are the two sessions
 Martin drives himself; `mc` is the page that says what is running. There is
