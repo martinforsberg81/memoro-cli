@@ -93,6 +93,15 @@ export function readLeaseLog({ root = mcHome() } = {}) {
  * `ended: false` is the shape that matters. A run with a start and no end did
  * not return — it was killed, or it is still going — and `alive` says which,
  * from the pid rather than from elapsed time.
+ *
+ * That verdict is only ever reached for a run that HAS a start. Lines written
+ * before the run id existed carry none, and every long-lived process still
+ * running the older code writes them today: the runner logs `work.open` and
+ * `work.background-start` all day, they group by pid, and the first version of
+ * this reported each of them as a dead command. Five rows of `died` with no
+ * verb, on a machine where nothing had died. A tool that reports itself as the
+ * anomaly teaches people to ignore the anomaly column, which is the one thing
+ * this file cannot afford.
  */
 export function runsFrom(events, { alive = isAlive } = {}) {
   const runs = new Map();
@@ -101,13 +110,14 @@ export function runsFrom(events, { alive = isAlive } = {}) {
     if (!runs.has(id)) {
       runs.set(id, {
         run: id, pid: event.pid ?? null, at: event.at, verb: null, sub: null, args: [], flags: [],
-        holder: null, cwd: null, ended: false, exit_code: null, duration_ms: null, threw: false,
-        error: null, killed: null, said: [], events: 0,
+        holder: null, cwd: null, started: false, ended: false, exit_code: null, duration_ms: null,
+        threw: false, error: null, killed: null, said: [], events: 0,
       });
     }
     const run = runs.get(id);
     run.events += 1;
     if (event.event === 'mc.start') {
+      run.started = true;
       run.verb = event.verb ?? run.verb;
       run.sub = event.sub ?? run.sub;
       run.args = event.args || run.args;
@@ -129,9 +139,16 @@ export function runsFrom(events, { alive = isAlive } = {}) {
     }
   }
   for (const run of runs.values()) {
-    run.outcome = run.ended
-      ? (run.threw ? 'threw' : run.exit_code === 0 ? 'ok' : 'failed')
-      : (run.pid && alive(run.pid) ? 'running' : 'died');
+    if (run.ended) {
+      run.outcome = run.threw ? 'threw' : run.exit_code === 0 ? 'ok' : 'failed';
+    } else if (!run.started) {
+      // Events with no invocation behind them: pre-run-id lines, or a process
+      // that logs without going through the CLI funnel. They record that
+      // something happened, not that a command failed to return.
+      run.outcome = 'events';
+    } else {
+      run.outcome = run.pid && alive(run.pid) ? 'running' : 'died';
+    }
   }
   return [...runs.values()];
 }
@@ -185,7 +202,7 @@ export function abandoned({ root = mcHome(), alive = isAlive } = {}) {
  * the thing that failed. The first version of this printed a column of
  * verbless failures.
  */
-export function filterRuns(runs, { since = null, repo = null, verb = null, failures = false, exclude = null } = {}) {
+export function filterRuns(runs, { since = null, repo = null, verb = null, failures = false, exclude = null, all = false } = {}) {
   let out = runs;
   if (since) {
     const from = Date.parse(since);
@@ -194,6 +211,9 @@ export function filterRuns(runs, { since = null, repo = null, verb = null, failu
   if (repo) out = out.filter((run) => (run.args || []).some((arg) => String(arg).includes(repo)));
   if (verb) out = out.filter((run) => run.verb === verb);
   if (failures) out = out.filter((run) => run.outcome === 'failed' || run.outcome === 'threw' || run.outcome === 'died');
+  // Loose events are context, never the answer to "what did mc run?". They
+  // are reachable with --all, and with `mc log <run>` for one of them.
+  if (!all) out = out.filter((run) => run.outcome !== 'events');
   if (exclude) out = out.filter((run) => run.run !== exclude);
   return out;
 }

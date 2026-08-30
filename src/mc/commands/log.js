@@ -8,6 +8,8 @@
  *   mc log --open                   rounds that started and never ended
  *   mc log --repo <repo>            narrowed to one repository
  *   mc log --since <iso>            narrowed to a window
+ *   mc log --all                    include events with no invocation behind
+ *                                   them — what a long-lived process logged
  *   mc log --where                  the files this reads, and their sizes
  *
  * This exists because of one morning. On 2026-08-30 two merge rounds were
@@ -86,7 +88,7 @@ export async function run(argv, deps = {}) {
 
   const { events, skipped } = readEvents({ root });
   const runs = filterRuns(runsFrom(events, { alive }), {
-    since: opts.since, repo: opts.repo, verb: opts.verb, failures: opts.failures,
+    since: opts.since, repo: opts.repo, verb: opts.verb, failures: opts.failures, all: opts.all,
     // This invocation is in the log it is reading, and it has not ended yet,
     // so it would head every listing as the one thing that is still running.
     // A tool that reports itself as the anomaly teaches people to ignore the
@@ -173,7 +175,7 @@ const bold = (c, text) => c(text, 'bold');
 function paint(c, outcome) {
   const word = outcome.padEnd(7);
   if (outcome === 'ok') return green(c, word);
-  if (outcome === 'running') return dim(c, word);
+  if (outcome === 'running' || outcome === 'events') return dim(c, word);
   return red(c, word);
 }
 
@@ -195,7 +197,7 @@ function kb(bytes) {
 
 export function parseArgs(argv) {
   const scanned = scanArgs(argv, {
-    booleans: ['--json', '--failures', '--open', '--where'],
+    booleans: ['--json', '--failures', '--open', '--where', '--all'],
     strictValues: ['--limit', '--since', '--repo', '--verb'],
   });
   if (scanned.error) return { error: scanned.error };
@@ -208,6 +210,7 @@ export function parseArgs(argv) {
     failures: Boolean(scanned.flags.failures),
     open: Boolean(scanned.flags.open),
     where: Boolean(scanned.flags.where),
+    all: Boolean(scanned.flags.all),
     limit,
     since: scanned.flags.since || null,
     repo: scanned.flags.repo || null,
@@ -217,7 +220,7 @@ export function parseArgs(argv) {
 
 function usage() {
   return 'usage — mc log [<run>] [--failures] [--open] [--repo <repo>] [--since <iso>]\n'
-    + '              [--verb <verb>] [--limit <n>] [--where] [--json]\n';
+    + '              [--verb <verb>] [--limit <n>] [--all] [--where] [--json]\n';
 }
 
 // Re-exported so the reading rules have one door for anything that wants them
