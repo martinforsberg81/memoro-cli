@@ -1,6 +1,6 @@
 ---
-status: ready
-next: "Step 4 — Close-out: `docs/technical/mc-run.md` grown from the lanes note into the whole runner, `project_log.md` row — done when the document describes the runner as it now is (two lanes, archive, close-out, helper, both tools) and the row is on main. Was: Step 3 — Codex: a project whose frontmatter says `tool: codex` runs its step with `codex exec` through the adapter — done when one codex step is logged in runs.tsv with a `codex` launch in runner.log."
+status: done
+next: "nothing — step 4 grew `docs/technical/mc-run.md` from the lanes note into the whole runner (the loop and its flags, the round in order, the queue, one step with both tools' argument lists, the merge, lanes, everything it writes, STOP and quota, the shell supervisor beside it, and what the era measured) and wrote the `project_log.md` row. The row is on main when the runner merges this PR — the archive round then finds a row already written and keeps it."
 budget: 150k
 needs: []
 ---
@@ -90,10 +90,18 @@ per round, merge direct, no model in the runner itself.
       model, 90 min)` in runner.log. The launch was a stub codex, because
       codex is not installed on this machine, and the two faults the lane
       carried are fixed — see What the code taught us.
-- [ ] **4. Close-out** — `docs/technical/mc-run.md` grown from the lanes note
-      into the whole runner, `project_log.md` row. `runner.sh` is already
-      gone; what is left beside mc is `runner-loop.sh`, and it belongs to the
-      stale-code proposal, not to this close-out.
+- [x] **4. Close-out** (2026-08-30) — `docs/technical/mc-run.md` is the whole
+      runner now, not only the lanes: the loop and its four flags, the round's
+      six things in order, the queue, one step (skips, the never-rebase merge,
+      `chooseKind` as a table, the session's tool/model/budget and both
+      argument lists), the merge with its wait-and-retry, lanes, every file the
+      runner writes, STOP and the shared quota, `runner-loop.sh` beside it, the
+      four test files, and what the era measured. `tests/mc/run-doc.test.js`
+      pins eight of its numbers against the exports — four more than before.
+      The `project_log.md` row is written here, so the archive round keeps it
+      rather than generating one. `runner.sh` was already gone; `runner-loop.sh`
+      belongs to the stale-code proposal and is named in the note, not fixed
+      here.
 
 ## What the code taught us
 
@@ -156,6 +164,14 @@ per round, merge direct, no model in the runner itself.
   would have died before reading a word of the plan. The default is claude's
   now; another tool with no `model:` in its frontmatter gets none, and picks
   its own.
+- **A close-out note is pinned or it goes stale in a week.** The lanes note
+  had four assertions in `run-doc.test.js`; the whole-runner note has eight,
+  and every one of them reads a number out of the prose and compares it with
+  the export that owns it — the quota sleep, the budget, the two repository
+  names, the current/runner/STOP file names, the default tool and model, the
+  runs.tsv column order and `parseRunArgs`'s own defaults. What is not pinned
+  is prose that would be wrong rather than stale, and the era's measured
+  numbers, which are a date-stamped observation and not a constant.
 - **Codex is still not installed here, so the boundary is where the
   measurement stops.** `tests/mc/run-codex.test.js` drives the whole thing on
   `realDeps` — a real git repository with a real origin, a real worktree
