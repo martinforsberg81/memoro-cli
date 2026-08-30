@@ -4,6 +4,7 @@ import {
   mkdtempSync,
   mkdirSync,
   readdirSync,
+  realpathSync,
   rmSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -15,7 +16,21 @@ import {
 } from '../../../src/mc/session-v1.js';
 
 export function makeV1Fixture(prefix = 'mc-v1-cli-') {
-  const root = mkdtempSync(join(tmpdir(), prefix));
+  // Resolved, and that is the whole of a bug that read as five broken verbs.
+  //
+  // On macOS `tmpdir()` is `/var/folders/…`, a symlink to `/private/var/…`.
+  // mc resolves the paths it is given — `mc cd` prints a real directory, not
+  // the string it was handed — so a fixture that kept the unresolved form
+  // compared `/var/…` against `/private/var/…` and failed. `mc cd`, `mc new`,
+  // `mc rename` and `mc open/resume` were all working perfectly; the tests
+  // were measuring the symlink.
+  //
+  // Worth naming because of what it nearly cost: those tests sat in the
+  // standing red set, and #410 proposed deleting them as dead weight from an
+  // old surface. Every verb they cover is live and correct. The path was
+  // wrong, not the code, and the fix is here rather than in ten call sites so
+  // it cannot come back one file at a time.
+  const root = realpathSync(mkdtempSync(join(tmpdir(), prefix)));
   const mcHomeDir = join(root, 'mc');
   const workspace = join(root, 'workspace');
   mkdirSync(mcHomeDir, { mode: 0o700 });
