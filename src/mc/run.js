@@ -32,7 +32,7 @@
  * to that shape and a name leaves it the moment its step has run, so a queue
  * everything ran from is an empty file.
  *
- * One thing that is not a step rides along: `mc helper`, once per calendar
+ * One thing that is not a step rides along: `mc helper --intake`, once per calendar
  * day at the top of the first round after 05:00Z, logged in runs.tsv under
  * its own kind. It opens no worktree and touches no branch — it reads
  * production, writes a digest and proposals into `~/mc/intake/`, and that is
@@ -107,7 +107,7 @@ export function realDeps(env = process.env) {
     profile: () => loadProfile({ env }),
     role: readCanonRole,
     launch: resolveLaunch,
-    // The two halves of `mc helper`, so a round can be driven in a test with
+    // The two halves of `mc helper --intake`, so a round can be driven in a test with
     // no production behind it and no model in it.
     collect: (options) => collectHelper({ env, ...options }),
     helperTurn: (options) => runHelperTurn({ env, ...options }),
@@ -562,7 +562,7 @@ export function createRunner({
   }
 
   /**
-   * The day's `mc helper`, run at the top of a round. Returns 'ran',
+   * The day's `mc helper --intake`, run at the top of a round. Returns 'ran',
    * 'failed' or null when it was not due.
    *
    * It is not a step and not a project: it opens no worktree, touches no

@@ -132,7 +132,7 @@ export function chooseKind({ plan, conflicts = [] }) {
 /* ----------------------------------------------------------- the helper */
 
 /**
- * `mc helper` is a step of the runner's day, not a project: it is logged in
+ * `mc helper --intake` is a step of the runner's day, not a project: it is logged
  * runs.tsv under its own `kind` with `helper` in the name column, and it runs
  * at most once per calendar day.
  *

@@ -378,7 +378,7 @@ export function renderDigest({
 
 /**
  * The one line a runner log and a person share: what the digest found that
- * the previous one had not. `mc helper` prints it and `mc run` writes it into
+ * the previous one had not. `mc helper --intake` prints it and `mc run` writes it into
  * the round's log, so the two can never describe the same digest differently.
  */
 export function describeDigest({ delta, errors }) {

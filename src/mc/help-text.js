@@ -225,8 +225,8 @@ MAINTENANCE
                                     queue = ~/mc/queue.md then every ready
                                     PLAN.md on origin/main. Touch
                                     ~/mc/runner/STOP to exit after the step.
-                                    Runs mc helper once a day too, in the
-                                    first round after 05:00Z
+                                    Runs mc helper --intake once a day too,
+                                    in the first round after 05:00Z
   mc run --once                    One step for the first runnable project,
                                     and no helper
   mc run --rounds <n> [--no-merge] [--idle-sleep <s>]
