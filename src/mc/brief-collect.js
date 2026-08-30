@@ -278,7 +278,7 @@ export function scanProposals(dir) {
  * `mc run` writes two files and reads neither: `undocumented-closures.md`,
  * appended when it archives a project whose `project_log.md` row says
  * `doc: none`, and `unplanned-workareas.md`, rewritten every round with the
- * folders under `~/mc` that no plan on main explains. Both exist because the
+ * folders under `~/mc` that no project on main explains. Both exist because the
  * tidying refuses to decide alone — a missing note never stops an archive,
  * and a workarea without a plan is never removed by a machine — and both are
  * therefore questions for the one person who can answer them. This is where
@@ -591,16 +591,16 @@ export function renderBrief({
   }
   out.push('');
 
-  out.push('## Workareas with no plan on main', '');
+  out.push('## Workareas with no project on main', '');
   if (!unplanned) out.push(`_no ${UNPLANNED_FILE} — \`mc run\` writes it at the end of every round_`);
   else if (!unplanned.length) out.push('_none_');
   else {
     out.push('| name | repo | uncommitted | last commit | branch |', '|---|---|---|---|---|');
     for (const r of unplanned) out.push(`| ${r.name} | ${r.repo} | ${r.uncommitted} | ${r.lastCommit} | ${r.branch} |`);
     const landed = unplanned.filter((r) => r.branch === 'landed').length;
-    out.push('', `${unplanned.length} folder${unplanned.length === 1 ? '' : 's'} under \`~/mc\` that no plan on main `
-      + `explains, ${landed} whose branch is already on main. No machine removes one: give it a plan `
-      + `(\`mc plan <name>\`), or remove the folder by hand.`);
+    out.push('', `${unplanned.length} folder${unplanned.length === 1 ? '' : 's'} under \`~/mc\` that no project on main `
+      + `explains — no plan, and no row in \`project_log.md\` — ${landed} whose branch is already on main. `
+      + `No machine removes one: give it a plan (\`mc plan <name>\`), or remove the folder by hand.`);
   }
   out.push('');
 

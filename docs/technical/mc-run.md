@@ -130,7 +130,9 @@ session opened.
    a `project_log.md` row left behind it, one PR per repository, merged like
    any other. See [`mc-tidy.md`](mc-tidy.md).
 5. **Run the steps**, one lane per repository at the same time.
-6. **Close** the workareas whose archive PR merged in step 4.
+6. **Close** the workareas whose project is finished — whose archive PR merged
+   in step 4, or whose plan an earlier round already archived, which
+   `project_log.md` is what still knows.
 
 Steps 1, 3, 4 and 6 are skipped under `--once`: that flag exists to watch one
 step, and a two-minute model turn over production is not what somebody typing

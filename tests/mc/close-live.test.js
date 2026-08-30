@@ -103,10 +103,10 @@ describe('closing a workarea, for real', () => {
       /close: dirty kept — an uncommitted change/u);
   });
 
-  it('never removes the workarea with no plan, and writes it where mc brief looks', () => {
+  it('never removes the workarea no project explains, and writes it where mc brief looks', () => {
     assert.equal(existsSync(join(fx.work, 'orphan', 'memoro-cli')), true);
     const text = readFileSync(join(fx.work, 'intake', 'unplanned-workareas.md'), 'utf8');
-    assert.match(text, /# Workareas with no plan on main/u);
+    assert.match(text, /# Workareas with no project on main/u);
     // Asked of content, not of commit counts: this branch has a commit main
     // does not, so it is `ahead` and something would be lost.
     assert.match(text, /\| orphan \| memoro-cli \| 0 \| \d{4}-\d{2}-\d{2} \| ahead \|/u);

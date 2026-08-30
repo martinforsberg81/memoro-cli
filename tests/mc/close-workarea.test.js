@@ -38,11 +38,41 @@ test('a plan that is not done is not a reason to remove anything', () => {
   assert.equal(closable({ plan: {}, lastRun: merged }).why, 'the plan is unreadable');
 });
 
-test('no plan on main is a different answer, not a failed one', () => {
-  const verdict = closable({ plan: null, dirty: false, lastRun: merged });
+test('no project at all is a different answer, not a failed one', () => {
+  const verdict = closable({ plan: null, archived: false, dirty: false, lastRun: merged });
   assert.equal(verdict.close, false);
   assert.equal(verdict.unplanned, true);
-  assert.equal(verdict.why, 'no plan on main');
+  assert.equal(verdict.why, 'no project on main');
+});
+
+/**
+ * The plan goes first and the workarea second, and for a while both had to
+ * happen in the same round: the rule tested `status: done`, so a plan an
+ * earlier round had already archived read as "no plan on main" and the folder
+ * was never touched again. Measured 2026-08-30, the one round that archived
+ * three projects was cut short by STOP before it reached the closing.
+ */
+test('a project the runner archived in an earlier round is still closable', () => {
+  const verdict = closable({ plan: null, archived: true, dirty: false, lastRun: merged });
+  assert.equal(verdict.close, true);
+  assert.equal(verdict.unplanned, false);
+  assert.equal(verdict.why, 'project archived in an earlier round, worktree clean, last run merged');
+});
+
+/**
+ * What keeps that widening from taking anything it should not: the two facts
+ * after it. A folder somebody made by hand that happens to share a name with
+ * an archived project has no runner step to point at.
+ */
+test('an archived name alone removes nothing — the worktree and the last run still decide', () => {
+  assert.equal(closable({ plan: null, archived: true, lastRun: null }).why, 'no runner step to point at');
+  assert.equal(closable({ plan: null, archived: true, dirty: true, lastRun: merged }).why, 'an uncommitted change');
+  assert.equal(closable({ plan: null, archived: true, live: true, lastRun: merged }).why, 'a live tmux session');
+  assert.equal(closable({ plan: null, archived: true, lastRun: { note: 'success,open' } }).why, 'the last run says success,open');
+  for (const verdict of [
+    closable({ plan: null, archived: true, lastRun: null }),
+    closable({ plan: null, archived: true, dirty: true, lastRun: merged }),
+  ]) assert.equal(verdict.unplanned, false, 'it is a kept project, not a folder nobody can explain');
 });
 
 test('a last run that did not merge, and no last run at all, both keep the workarea', () => {

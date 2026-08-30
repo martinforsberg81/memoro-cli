@@ -20,10 +20,11 @@
  * trigger; there is nothing to type. The rules are in archive-plan.js.
  *
  * A round ends by taking away the folder that plan explains: a workarea whose
- * plan left main this round, whose worktree is clean and whose last row in
- * runs.tsv ends `merged` is removed — worktree handed back, local branch
- * deleted, everything it kept beside its checkout moved to
- * `runner/log/closed/<name>/`. A workarea with no plan on main is never
+ * project is finished — its plan left main this round, or `project_log.md`
+ * says an earlier round archived it — and whose worktree is clean and whose
+ * last row in runs.tsv ends `merged` is removed: worktree handed back, local
+ * branch deleted, everything it kept beside its checkout moved to
+ * `runner/log/closed/<name>/`. A workarea no project explains at all is never
  * removed by a machine; it is written to `~/mc/intake/unplanned-workareas.md`
  * instead. The rules are in close-workarea.js.
  *
@@ -54,8 +55,8 @@ import { dirname, join } from 'node:path';
 
 import { resolveLaunch } from '../adapters/index.js';
 import {
-  ARCHIVE_BRANCH_PREFIX, UNDOCUMENTED_HEADER, appendRow, donePlans, isUndocumented, mergedPrs,
-  planDoc, planSummary, pointerCell, remoteSlug, rowFor, undocumentedRow,
+  ARCHIVE_BRANCH_PREFIX, UNDOCUMENTED_HEADER, appendRow, donePlans, isUndocumented, logRows,
+  mergedPrs, planDoc, planSummary, pointerCell, remoteSlug, rowFor, undocumentedRow,
 } from './archive-plan.js';
 import { writeJsonAtomic } from './atomic-write.js';
 import { branchLanded } from './branch-landed.js';
@@ -520,13 +521,16 @@ export function createRunner({
    * `landed` is the projects whose archive PR merged in this round — the plan
    * goes first, then the workarea, so a workarea is never removed while the
    * plan that explains it is still on main. `plans` is the round's reading of
-   * main, taken before that archive removed them.
+   * main, taken before that archive removed them. `archived` is every project
+   * `project_log.md` names, which is what a plan removed by an *earlier* round
+   * leaves behind: without it, a round cut short between the archive and the
+   * closing left a folder no machine would ever look at again.
    *
    * A plan that is neither done nor missing is passed over without asking git
    * anything: `closable` would answer the same, and forty `git status` calls
    * a round for an answer already on the plan is not a price worth paying.
    */
-  function closeWorkareas(plans, landed = []) {
+  function closeWorkareas(plans, landed = [], archived = new Set()) {
     const byProject = new Map(plans.map((plan) => [plan.project, plan]));
     const tsv = deps.read(paths.runs) || '';
     const rows = [];
@@ -536,18 +540,41 @@ export function createRunner({
       if (plan && plan.status !== 'done') continue;
       const verdict = closable({
         plan,
+        archived: archived.has(name),
         dirty: uncommitted(name) > 0,
         live: deps.tmuxHas(`mc-${name}`),
         lastRun: lastRunFor(tsv, name),
       });
       if (verdict.unplanned) { rows.push(unplannedFor(name)); continue; }
       if (!verdict.close) { say(`close: ${name} kept — ${verdict.why}`); continue; }
-      if (!landed.includes(name)) { say(`close: ${name} kept — its plan is still on main`); continue; }
+      // The plan goes first, then the workarea. A plan this round still read on
+      // main goes only if the archive PR that removes it actually merged; one
+      // that was already gone is answered by the project log instead, which is
+      // what lets a round cut short by STOP be finished by the next one.
+      if (plan && !landed.includes(name)) { say(`close: ${name} kept — its plan is still on main`); continue; }
       if (closeWorkarea(name)) closed += 1;
     }
     deps.write(paths.unplanned, unplannedFile(rows));
-    if (rows.length) say(`close: ${rows.length} workarea(s) with no plan on main — ${paths.unplanned}`);
+    if (rows.length) say(`close: ${rows.length} workarea(s) with no project on main — ${paths.unplanned}`);
     return { closed, unplanned: rows.length };
+  }
+
+  /**
+   * Every project `docs/project/project_log.md` names on origin/main — the
+   * runner's own record of what it has archived, and the only thing that still
+   * knows a folder was ever a project once its plan has gone.
+   *
+   * One `git show` per repository per round, read after the archive PRs have
+   * merged, so a project archived moments ago is already in it.
+   */
+  function archivedProjects() {
+    const names = new Set();
+    for (const repo of repos) {
+      if (!deps.exists(join(repo.path, '.git'))) continue;
+      const text = gitOut(repo.path, ['show', 'origin/main:docs/project/project_log.md']);
+      for (const row of logRows(text || '')) if (row.project) names.add(row.project);
+    }
+    return names;
   }
 
   /**
@@ -868,7 +895,7 @@ export function createRunner({
     // workareas whose plan left main this round are taken down, and the ones
     // with no plan at all are written where Martin looks. `--once` changes
     // nothing but the one step it exists to watch.
-    if (!once && !out.stop) closeWorkareas(plans, landed);
+    if (!once && !out.stop) closeWorkareas(plans, landed, archivedProjects());
     if (results.some((r) => r.once)) out.once = true;
     return out;
   }
@@ -883,7 +910,7 @@ export function createRunner({
   return {
     paths, say, round, runStep, runLane, splitLanes, runHelperDay, archiveDone, queue, stopRequested,
     updateRequested, syncMain, mergePr, planOf, repoOf, markRunner, clearRunner, closeWorkareas,
-    closeWorkarea, workareas, tidyQueue,
+    closeWorkarea, archivedProjects, workareas, tidyQueue,
   };
 }
 

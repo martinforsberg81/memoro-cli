@@ -37,6 +37,16 @@ close is given the round's own reading, taken before the archive, and the
 list of projects whose archive PR actually merged. A done project whose
 archive PR failed to merge keeps its workarea, and runner.log says so.
 
+**But the two halves need not be the same round.** They had to be, once: the
+close tested `status: done`, so a plan an *earlier* round had already
+archived read as "no plan on main" and its folder joined the pile no machine
+will touch. Measured 2026-08-30, the close had never once run — the only round
+that reached the archive, taking three projects off main, was cut short by STOP
+before step 4 — and the next round found three folders it could no longer
+explain. The close now asks the record the archive itself writes:
+`docs/project/project_log.md` names every project the runner has ever
+archived, so a round cut short is finished by the next one.
+
 ## What archiving does
 
 `docs/project/<programme>/<project>/` is `git rm -r`'d and one row is
@@ -75,9 +85,16 @@ Two things about the mechanics are worth knowing:
 A workarea is **closable** when three facts hold, and no judgement is made
 beyond them:
 
-- its plan on main says `status: done`,
+- its project is finished — its plan on main says `status: done`, **or** the
+  plan is gone and `docs/project/project_log.md` carries the row the archive
+  wrote for it,
 - its worktree has no uncommitted change,
 - its last row in `~/mc/runner/log/runs.tsv` ends `merged`.
+
+The last two are what keep the second half of the first from taking anything
+it should not. A folder somebody made by hand that happens to share a name
+with a project archived weeks ago has no runner step to point at, so it is
+kept and filed as one nothing explains.
 
 Commit counting against main is deliberately not one of them: the runner
 squash-merges, so every finished branch reads as "ahead" forever. A live
@@ -126,10 +143,10 @@ Two things a machine must not decide, so it writes them down and moves on:
   note never stops an archive: keeping a project alive because its
   documentation is thin is how `docs/plans/` reached 656 files.
 - **`~/mc/intake/unplanned-workareas.md`** — rewritten every round with every
-  folder under `~/mc` that no plan on main explains (sixteen of them on
-  2026-08-29, from before the plan world). A workarea without a plan is work
-  somebody started and only Martin can say is finished, so no machine removes
-  one. Each row carries whether the branch's content is already on main —
+  folder under `~/mc` that **no project** explains — no plan on main and no
+  row in `project_log.md` (sixteen of them on 2026-08-29, from before the plan
+  world; fifty-seven on 2026-08-30). Such a folder is work somebody started and
+  only Martin can say is finished, so no machine removes one. Each row carries whether the branch's content is already on main —
   asked of content with `git merge-tree`, not of commit counts — which is the
   one fact that says whether anything would be lost. The branch is asked of
   the worktree (`rev-parse --abbrev-ref HEAD`), never guessed from the folder
