@@ -44,7 +44,7 @@ export function refusalText({ lease, asker, what, errand, running = [], now = ne
     ? running.map((run) => `running: ${run.command || 'a suite'} in ${run.area || run.directory || '?'} (pid ${run.pid}, ${run.elapsed})`).join('; ')
     : 'nothing running under it';
   const orphan = orphanLine(lease);
-  const release = what === 'the suite right' ? 'mc suite release' : `mc repo release ${lease.repo || ''}`.trim();
+  const release = `mc repo release ${lease.repo || ''}`.trim();
   return [
     `CLAIM REFUSED on your account — ${asker?.name || 'somebody'} asked for ${what}${errand ? ` for “${errand}”` : ''} and was refused because you hold it.`,
     `You have held it for ${held}${lease.errand ? ` for “${lease.errand}”` : ''}; ${runs}.${orphan ? ` ${orphan}.` : ''}`,

@@ -170,18 +170,6 @@ MAINTENANCE
                                     lets a deliberate push through. mc installs
                                     it in every repository it adds a worktree
                                     to; --json says whether it is in place
-  mc suite run "<command>"         Take the suite right, run the command, and
-                                    give the right back when it ends — on
-                                    success, on failure, and on a signal.
-                                    Refused if someone else holds it, and then
-                                    NOTHING runs. One step, no decision between
-  mc suite claim "<what for>"      Hold the right to run a full suite — one at
-                                    a time on this machine. Refused if someone
-                                    else holds it; no process is blocked. The
-                                    gate round takes it by itself
-  mc suite release [--force]       Give it back. --force takes it, and is logged
-  mc suite who [--json]            Who holds it — and which suites are actually
-                                    running, and for how long, whoever holds it
   mc log [--failures] [--limit n]  What mc did and how it ended. Every
                                     invocation writes a start and an end; a
                                     start with no end is a command that died

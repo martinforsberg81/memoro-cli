@@ -4,7 +4,7 @@
  * This was the status board's renderer. The board went with `mc status`
  * (decision mc-3) and its `renderLines` with it; what is left is the half
  * every other page was already borrowing — `page-render.js` for the one page,
- * `repo-render.js` and `mc suite` for their own.
+ * `repo-render.js` and `mc log` for their own.
  *
  * Colour is applied through `painter`, which returns the text untouched when
  * the output is not a terminal. A page piped into a file or read by a session

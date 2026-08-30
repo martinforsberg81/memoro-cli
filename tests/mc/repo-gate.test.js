@@ -27,7 +27,7 @@ import { runMcCli } from './_helpers/mc-cli.js';
 import { gateRoot, runGate, verdictHeadline, verdictPhrase } from '../../src/mc/repo-gate.js';
 import { carriedGate, loadMeasuredGate, lockfileHashAt, saveBaseline, saveMeasuredGate } from '../../src/mc/repo-baseline-cache.js';
 import { claimLease, readLease } from '../../src/mc/repo-lease.js';
-import { claimSuiteLease, readSuiteLease } from '../../src/mc/suite-lease.js';
+import { gateLockPath, runningRound, takeGateLock } from '../../src/mc/gate-lock.js';
 import { renderRatchet } from '../../src/mc/red-ratchet.js';
 
 const AREA = { name: 'klient-guard', kind: 'work-area' };
@@ -908,28 +908,36 @@ describe('the dependency tree is checked before a suite is believed', () => {
 });
 
 /**
- * The suite right (D-0141): the gate is the one thing that runs suites by
- * machine, so it takes the machine-wide lease before either run and gives it
- * back after — and stops, in the other holder's favour, when it is held.
+ * One gate round at a time on this machine.
+ *
+ * A full suite pins the cores for a minute and a half and a round runs two of
+ * them; two rounds at once make both slower and both flakier, and the
+ * flakiness lands on whichever pull request happened to be measured.
+ *
+ * This used to be "the suite right": a lease with an errand, a liveness
+ * verdict derived from the work board, a --force release, an inbox message to
+ * whoever held it, a row on the page and four verbs of its own. Four hundred
+ * lines of vocabulary for "one at a time", under a name (Martin, 2026-08-30)
+ * *"mycket märkligt"* — and none of it was reachable except through the gate.
+ * It is a file and a pid now, and what is asserted is the behaviour, which
+ * did not change.
  */
-describe('the gate holds the suite right while it runs', () => {
-  it('stops before any work when somebody else holds the suite right, and keeps nothing', async () => {
+describe('one gate round at a time', () => {
+  it('stops before any work when another round is running, and keeps nothing', async () => {
     const fx = fixture();
     try {
-      claimSuiteLease({ errand: 'msr contract, by hand', holder: { name: 'msr-cleanup', kind: 'work-area' }, root: fx.mcHome });
-      const running = [{ pid: 9, command: 'npm test', area: 'msr-cleanup', elapsed: '05:00' }];
-      const result = await fx.run({ suiteRunsNow: async () => running });
-      assert.equal(result.stopped_at, 'suite-lease');
-      assert.match(result.reason, /held by msr-cleanup for “msr contract, by hand” — one full suite at a time/u);
-      // The holder is told what runs under the right as measured, never as
-      // a default: "nothing running" by default told PM a suite was idle
-      // while it was five minutes in (2026-08-23).
-      assert.equal(fx.told.length, 1);
-      assert.equal(fx.told[0].what, 'the suite right');
-      assert.deepEqual(fx.told[0].running, running);
-      assert.deepEqual(fx.ran('suite'), [], 'no suite ran over somebody\'s right');
+      // A live round: this test's own pid is the one thing certain to be alive.
+      writeFileSync(gateLockPath(fx.mcHome), JSON.stringify({
+        pid: process.pid, repo: 'other-repo', pr: 77, since: '2026-08-30T09:00:00.000Z',
+      }));
+      const result = await fx.run();
+      assert.equal(result.stopped_at, 'busy');
+      assert.match(result.reason, /another gate round is running on this machine/u);
+      assert.match(result.reason, /other-repo #77/u, 'and says which round, so the refusal is actionable');
+      assert.match(result.reason, /one at a time/u);
+      assert.deepEqual(fx.ran('suite'), [], 'no suite ran alongside another round');
       assert.equal(fx.lease().held, false, 'the repository lease was given back');
-      assert.equal(readSuiteLease({ root: fx.mcHome }).holder, 'msr-cleanup', 'and theirs was not touched');
+      assert.equal(runningRound({ root: fx.mcHome }).pr, 77, 'and the other round was not touched');
     } finally { fx.cleanup(); }
   });
 
@@ -939,19 +947,30 @@ describe('the gate holds the suite right while it runs', () => {
       const progress = [];
       const result = await fx.run({ onProgress: (line) => progress.push(line) });
       assert.equal(result.stopped_at, 'red');
-      assert.ok(progress.includes('suite right taken by klient-guard'), progress.join('\n'));
-      assert.ok(progress.includes('suite right released'));
-      assert.equal(readSuiteLease({ root: fx.mcHome }).held, false);
+      assert.ok(progress.some((line) => /^gate round started \(pid \d+\) — one at a time/u.test(line)), progress.join('\n'));
+      assert.equal(runningRound({ root: fx.mcHome }), null, 'released even though the round was red');
     } finally { fx.cleanup(); }
   });
 
-  it('a holder who claimed it by hand before the round keeps it after', async () => {
+  it('a round whose process is gone is litter, not a holder', async () => {
     const fx = fixture();
     try {
-      claimSuiteLease({ errand: 'mine', holder: AREA, root: fx.mcHome });
-      await fx.run();
-      assert.equal(readSuiteLease({ root: fx.mcHome }).holder, AREA.name, 'their claim, their release');
+      // What a killed round leaves behind. There is no clock that can tell a
+      // slow round from a dead one — a round is supposed to take minutes — so
+      // the only honest question is whether the pid exists.
+      writeFileSync(gateLockPath(fx.mcHome), JSON.stringify({ pid: 999_999, repo: 'x', pr: 1 }));
+      const result = await fx.run();
+      assert.notEqual(result.stopped_at, 'busy', 'a dead round does not block the next one');
+      assert.equal(runningRound({ root: fx.mcHome }), null);
     } finally { fx.cleanup(); }
+  });
+
+  it('a lock it cannot write does not stop the round it was meant to protect', () => {
+    // The worst case is the contention it was avoiding. Refusing to measure
+    // anything at all is worse than measuring it slowly.
+    const out = takeGateLock({ repo: 'x', pr: 1, root: '/proc/definitely/not/writable' });
+    assert.equal(out.ok, true);
+    assert.equal(out.took, false);
   });
 });
 

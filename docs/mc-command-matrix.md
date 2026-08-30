@@ -54,10 +54,6 @@ started in it. mc stores nothing else, because nothing else is mc's to know.
 | `mc merge <repo> <pr> [<pr>...]` | The one door a pull request lands through. Run the test gate and, only if nothing new went red, squash-merge, deploy-pull and log it. It touches no branch but the one named — a round has one subject, and drift on any other branch is that branch's own round's business. Several numbers: one candidate with all of them merged in, the suite once each side, each PR's own tests by itself, then merged in the order given; a batch that stops falls back to one round per PR and says so. Prints wall clock per step. `--check` gates and stops, and says that the measurement is now `mc test`. `--json`. |
 | `mc merge <repo> <pr> --docs` | The same door for a pull request that touches nothing outside `docs/`: no suite, no lease, no worktree. Reads the PR's file list from GitHub — never a local diff — refuses by name the first path outside `docs/`, refuses a draft or a closed PR, waits up to ~60 s for GitHub's mergeability, squash-merges as `<title> (#<n>)` and reads the commit back. A plan PR lands this way, by the session that opened it. One PR at a time; `--check` is refused. `--json`. See [`docs/technical/mc-merge.md`](technical/mc-merge.md). |
 | `mc repo merge …` | **Gone** since 2026-08-26. Prints "mc repo merge is now mc merge" and exits 2. Not aliased. |
-| `mc suite run "<command>"` | Take the suite right, run the command, give the right back when it ends — on success, on failure, and on SIGINT/SIGTERM (the command's process group is ended first). Refused when someone else holds it, and then NOTHING runs — refused-claim-then-run-anyway was measured three times in one day (D-0176). Also refused (exit 2, "the suite never ran") in a worktree that declares dependencies and has no node_modules — a suite there shrinks silently and reports fewer failures (D-0152). A right claimed by hand beforehand stays held afterwards. |
-| `mc suite claim "<what for>"` | Hold the right to run a full suite — one at a time on this machine (D-0141). Refused if someone else holds it; no process is blocked. The gate round takes it by itself. |
-| `mc suite release [--force]` | Give it back; `--force` takes it from another holder and is logged. |
-| `mc suite who` | Who holds it — and which suites are actually running, where, and for how long. `--json`. |
 
 `mc work release` keeps a worktree that is in use, has uncommitted changes, or
 holds commits main lacks — counted by CONTENT, not by SHA: a squash-merged
@@ -436,3 +432,42 @@ writing a file there.
 
 Cloud-side storage and the V1 control-plane API are `memoro`'s side of the plan
 and are not required for local work to run.
+
+## One gate round at a time
+
+A full suite pins the cores for a minute and a half, and a round runs two of
+them. Two rounds at once make both slower and both flakier, and the flakiness
+lands on whichever pull request happened to be measured — which is the
+55 → 57 → 55 the red floor exists to absorb.
+
+So one round runs and the second is told to wait. The big suites have exactly
+one door — the gate round, reached by `mc test` and `mc merge` — so the guard
+sits on that door: `~/.memoro/mc/gate-running.json`, a pid, and two functions
+([`src/mc/gate-lock.js`](../src/mc/gate-lock.js)).
+
+```
+mc: another gate round is running on this machine (pid 4242, memoro #11082,
+    since 2026-08-30T09:00:00.000Z) — one at a time
+```
+
+Taken, and the pid is alive → refused, and told which round. Taken, and the pid
+is gone → that round was killed, so take it. There is **no expiry**: a round is
+supposed to take minutes, so no clock can tell a slow round from a dead one,
+and asking the operating system whether the pid exists is the only honest
+question. There is no override — no flag takes it from a round that is running.
+
+A lock that cannot be written lets the round run anyway and says so. The worst
+case is the contention it was avoiding; refusing to measure anything is worse.
+
+It blocks nothing else. A person running `npm test` in their own worktree is
+not asking mc's permission and is not refused it.
+
+### What this replaced
+
+`mc suite run|claim|release|who` and "the suite right" (D-0141): a machine-wide
+lease with a holder, an errand, a liveness verdict derived from the work board,
+a `--force` release, an inbox message to whoever held it, and a row on the
+status page. Four hundred lines of vocabulary for one sentence, under a name
+nobody could say out loud without explaining it. Removed 2026-08-30 on Martin's
+word: *"Vi använder enbart mc test för de stora testerna. En instans kan köra
+åt gången. Det löser hela problemet."*
