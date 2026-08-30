@@ -1,12 +1,16 @@
 /**
- * `mc helper` — the model half: one headless turn that reads the digest and
- * writes proposals, and nothing else.
+ * `mc helper --intake` — the model half: one headless turn that reads the
+ * digest and writes proposals, and nothing else.
  *
  * The collect step (`helper-collect.js`) gathers what production is saying
  * into `~/mc/intake/errors-<date>.md` without a model. This is the turn that
- * reads it: a fresh, headless session with the `helper` role from
- * `canon/roles/helper.md`, standing in `~/mc/intake/`, whose only output is
+ * reads it: a fresh, headless session with the `intake` role from
+ * `canon/roles/intake.md`, standing in `~/mc/intake/`, whose only output is
  * zero or more `~/mc/intake/proposals/<date>-<slug>.md`.
+ *
+ * The bare `mc helper` is the other half of the verb and is not here: it is a
+ * session with Martin in it, taking his own reports (`commands/helper.js`).
+ * Both write into the same `proposals/`, and neither reads the other.
  *
  * Everything the turn judges from is in its prompt — the digest, the project
  * log, every PLAN.md on main with its status and `next:`, and the proposals
@@ -33,6 +37,13 @@ import { headlessArgs, readSessionOutput, TIMEOUT_EXIT } from './run-plan.js';
 
 /** One turn over one digest. Ten minutes is four times the longest measured. */
 export const DEFAULT_TURN_MINUTES = 10;
+
+/**
+ * The role this turn wears. It is `intake`, not `helper`: `helper` is the
+ * session Martin sits in, and one name for two different jobs is how a role
+ * file ends up trying to be both.
+ */
+export const INTAKE_ROLE = 'intake';
 
 /** The project log the turn is given, if the repository that keeps one is here. */
 export const PROJECT_LOG = join('docs', 'project', 'project_log.md');
@@ -167,9 +178,9 @@ export async function runHelperTurn({
   minutes = DEFAULT_TURN_MINUTES,
   deps = {},
 } = {}) {
-  const role = (deps.role || readCanonRole)('helper');
+  const role = (deps.role || readCanonRole)(INTAKE_ROLE);
   if (!role?.overlay) {
-    return { ok: false, reason: 'no-role', note: 'canon/roles/helper.md is missing from this install' };
+    return { ok: false, reason: 'no-role', note: `canon/roles/${INTAKE_ROLE}.md is missing from this install` };
   }
   const launch = (deps.launch || resolveLaunch)(role.tools?.[0] || 'claude');
   if (!launch?.ok) {

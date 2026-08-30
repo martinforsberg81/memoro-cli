@@ -67,6 +67,16 @@ export function intakeDir(env = process.env) {
   return join(workRoot(env), 'intake');
 }
 
+/**
+ * Where the bare `mc helper` session stands — its own room beside
+ * `~/mc/brief/`, and not `~/mc/intake/`: the intake turn's material is not
+ * that session's business, and standing in the directory it must not read
+ * would be an odd way to say so.
+ */
+export function helperDir(env = process.env) {
+  return join(workRoot(env), 'helper');
+}
+
 export function proposalsDir(env = process.env) {
   return join(intakeDir(env), 'proposals');
 }
@@ -368,7 +378,7 @@ export function renderDigest({
 
 /**
  * The one line a runner log and a person share: what the digest found that
- * the previous one had not. `mc helper` prints it and `mc run` writes it into
+ * the previous one had not. `mc helper --intake` prints it and `mc run` writes it into
  * the round's log, so the two can never describe the same digest differently.
  */
 export function describeDigest({ delta, errors }) {

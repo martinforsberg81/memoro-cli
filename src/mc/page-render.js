@@ -276,7 +276,7 @@ function decisionsLines(lines, c, wide, decisions) {
  */
 function intakeLines(lines, c, wide, intake) {
   if (!intake.digest) {
-    heading(lines, c, wide, 'INTAKE', 'no digest yet — mc helper has not run', null);
+    heading(lines, c, wide, 'INTAKE', 'no digest yet — mc helper --intake has not run', null);
     if (intake.proposals) say(lines, c, wide, 7, `${intake.proposals} proposal(s) waiting`, 'yellow');
     return;
   }
@@ -291,7 +291,7 @@ function intakeLines(lines, c, wide, intake) {
     { text: `${intake.date}${age}`, styles: intake.age_seconds == null ? ['grey'] : (fresh ? ['green'] : ['yellow']) },
     { text: errors, styles: !intake.first && intake.new_errors ? ['red'] : ['grey'] },
     { text: `${intake.proposals} proposal${intake.proposals === 1 ? '' : 's'}`, styles: intake.proposals ? ['yellow'] : ['grey'] },
-  ], ' · '), 'mc helper');
+  ], ' · '), 'mc helper --intake');
   for (const line of intake.loud_lines || []) {
     lines.push(`  ${c('  !', 'red')}  ${c(clip(one(line), wide - 7), 'bold', 'white')}`);
   }
