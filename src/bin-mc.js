@@ -40,7 +40,6 @@ const CAPABILITIES = {
   dev:           () => import('./cli/dev.js'),
   deps:          () => import('./cli/deps.js'),
   migrate:       () => import('./mc/commands/migrate.js'),
-  restart:       () => import('./cli/restart.js'),
   'cloud-session': () => import('./cli/cloud-session.js'),
   'cloud-runtime': () => import('./cli/cloud-runtime.js'),
   security:      () => import('./cli/security.js'),

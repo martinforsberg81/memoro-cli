@@ -86,19 +86,12 @@ describe('local auth mode', () => {
     );
   });
 
-  test('lifecycle parsers reject removed execution-mode flags', async () => {
-    const { parseArgs: newArgs } = await import('../../src/cli/new.js');
-    const { parseArgs: openArgs } = await import('../../src/cli/open.js');
-
-    assert.equal(openArgs(['s']).error, undefined);
-    assert.equal(newArgs(['s']).error, undefined);
-    for (const flag of ['--native', '--managed-portable']) {
-      assert.match(openArgs(['s', flag]).error, /unknown flag/);
-      assert.match(newArgs(['s', flag]).error, /unknown flag/);
-    }
-    assert.equal(resolveLocalAuthMode({ managedPortable: false }),
-      LOCAL_AUTH_MODES.MANAGED_PORTABLE);
-  });
+  // `lifecycle parsers reject removed execution-mode flags` stood here. It
+  // asserted that `mc new` and `mc open` refused `--native` and
+  // `--managed-portable`; both verbs were cut on 2026-08-30, so there is no
+  // parser left to refuse anything. The rule those flags were removed for is
+  // still asserted, on the surfaces that exist, in
+  // tests/architecture/certified-execution.test.js.
 
   test('unknown modes fail closed without echoing caller data', () => {
     const canary = 'invalid-mode-secret-canary';

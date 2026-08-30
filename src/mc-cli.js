@@ -86,20 +86,9 @@ async function holderName() {
 
 async function routeV1Command(args) {
   const command = args[0];
-  if (command === 'sessions') {
-    const subcommand = args[1];
-    const rest = args.slice(2);
-    if (subcommand === 'list') return moved('mc sessions list');
-    if (subcommand === 'send') {
-      if (!rest[0] || rest.length < 2) {
-        console.error('mc: usage — mc sessions send <session> <message>');
-        return 2;
-      }
-      return runModule('./cli/dispatch.js', [rest[0], '--message', rest.slice(1).join(' ')]);
-    }
-    if (subcommand === 'read') return runModule('./cli/read.js', rest);
-    return null;
-  }
+  // `mc sessions …` went with the session verbs (2026-08-30). What a person
+  // means by it now is a work area, and `mc work` is where that lives.
+  if (command === 'sessions') return moved('mc sessions');
   // Bare `mc` is the page: the runner, the queue, the decisions, the intake
   // and every workarea, and at a terminal the way in underneath it. It was
   // the V1 sessions table until 2026-08-29 (decision mc-3) — the front door
@@ -115,20 +104,7 @@ async function routeV1Command(args) {
   }
   if (command === 'list') return moved('mc list');
   const modules = {
-    new: './cli/new.js',
-    open: './cli/open.js',
-    resume: './cli/resume.js',
     status: './cli/status.js',
-    rename: './cli/rename.js',
-    cd: './cli/cd.js',
-    attach: './cli/attach.js',
-    dispatch: './cli/dispatch.js',
-    read: './cli/read.js',
-    end: './mc/commands/end.js',
-    delete: './mc/commands/delete.js',
-    cleanup: './mc/commands/cleanup.js',
-    gc: './mc/commands/gc.js',
-    storage: './mc/commands/storage.js',
     doctor: './mc/commands/doctor.js',
     work: './mc/commands/work.js',
     repo: './mc/commands/repo.js',
@@ -142,7 +118,6 @@ async function routeV1Command(args) {
     roles: './mc/commands/roles.js',
     pm: './mc/commands/pm.js',
     'pm-helper': './mc/commands/pm-helper.js',
-    restart: './cli/restart.js',
     log: './mc/commands/log.js',
     migrate: './mc/commands/migrate.js',
   };

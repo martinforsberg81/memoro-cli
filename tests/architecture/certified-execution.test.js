@@ -7,10 +7,9 @@ import { fileURLToPath } from 'node:url';
 const root = fileURLToPath(new URL('../../', import.meta.url));
 
 test('active lifecycle surfaces expose no selectable execution mode', () => {
+  // `mc new`, `mc open` and `mc resume` were cut 2026-08-30; the invariant is
+  // about whatever surface is live, and these are what is left of it.
   const sources = read([
-    'src/cli/new.js',
-    'src/cli/open.js',
-    'src/cli/resume.js',
     'src/mc/help-text.js',
     'src/mc/session-runtime-v1.js',
     'src/runtime/certified-execution/launch-plan.js',
