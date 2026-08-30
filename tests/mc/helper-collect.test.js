@@ -151,9 +151,9 @@ describe('mc helper --collect — the sources', () => {
   it('creates the intake and proposals directories on first run', async () => {
     const g = ground();
     const result = await collect(g);
-    assert.equal(result.path, join(intakeDir(g.env), 'errors-2026-08-29.md'));
+    assert.equal(result.path, join(intakeDir(g.env), 'errors-memoro-2026-08-29.md'));
     assert.ok(readFileSync(result.path, 'utf8').startsWith('# Errors and maintenance'));
-    assert.doesNotThrow(() => readFileSync(join(proposalsDir(g.env), '..', 'errors-2026-08-29.md')));
+    assert.doesNotThrow(() => readFileSync(join(proposalsDir(g.env), '..', 'errors-memoro-2026-08-29.md')));
   });
 
   it('says in the file itself why the operations projection is absent', async () => {
@@ -320,14 +320,49 @@ describe('mc helper — the pure builders', () => {
     assert.equal(readAdminToken(g.memoro, {}), null, 'no file, no token, no throw');
   });
 
-  it('names the digest by date and finds the newest earlier one', () => {
+  it('names the digest by repository and date, and finds the newest earlier one', () => {
     const g = ground();
-    assert.equal(digestName(NOW), 'errors-2026-08-29.md');
+    assert.equal(digestName(NOW), 'errors-memoro-2026-08-29.md');
+    assert.equal(digestName(NOW, 'memoro-cli'), 'errors-memoro-cli-2026-08-29.md');
     mkdirSync(intakeDir(g.env), { recursive: true });
-    for (const name of ['errors-2026-08-26.md', 'errors-2026-08-28.md', 'notes.md']) {
+    for (const name of ['errors-memoro-2026-08-26.md', 'errors-memoro-2026-08-28.md', 'notes.md']) {
       writeFileSync(join(intakeDir(g.env), name), name);
     }
-    assert.equal(previousDigest(intakeDir(g.env), 'errors-2026-08-29.md').name, 'errors-2026-08-28.md');
-    assert.equal(previousDigest(join(g.root, 'nowhere'), 'errors-2026-08-29.md'), null);
+    assert.equal(previousDigest(intakeDir(g.env), 'errors-memoro-2026-08-29.md').name, 'errors-memoro-2026-08-28.md');
+    assert.equal(previousDigest(join(g.root, 'nowhere'), 'errors-memoro-2026-08-29.md'), null);
+  });
+
+  it('the two repositories never read each other\'s baseline', () => {
+    const g = ground();
+    mkdirSync(intakeDir(g.env), { recursive: true });
+    for (const name of ['errors-memoro-2026-08-28.md', 'errors-memoro-cli-2026-08-27.md']) {
+      writeFileSync(join(intakeDir(g.env), name), name);
+    }
+    // The whole reason the name carries the repository: a delta measured
+    // against the other system's digest would call every fingerprint new.
+    assert.equal(previousDigest(intakeDir(g.env), digestName(NOW), 'memoro').name, 'errors-memoro-2026-08-28.md');
+    assert.equal(previousDigest(intakeDir(g.env), digestName(NOW, 'memoro-cli'), 'memoro-cli').name, 'errors-memoro-cli-2026-08-27.md');
+  });
+
+  it('memoro still finds the unprefixed digests it wrote before the rename', () => {
+    const g = ground();
+    mkdirSync(intakeDir(g.env), { recursive: true });
+    // A day of delta would be lost if the rename orphaned yesterday's file:
+    // the first run afterwards would find no baseline and report an ordinary
+    // Tuesday's fingerprints as all new.
+    writeFileSync(join(intakeDir(g.env), 'errors-2026-08-28.md'), 'legacy');
+    assert.equal(previousDigest(intakeDir(g.env), digestName(NOW), 'memoro').name, 'errors-2026-08-28.md');
+    // memoro-cli has no such history and must not adopt memoro's.
+    assert.equal(previousDigest(intakeDir(g.env), digestName(NOW, 'memoro-cli'), 'memoro-cli'), null);
+  });
+
+  it('picks the newest by DATE, not by string order across the two name shapes', () => {
+    const g = ground();
+    mkdirSync(intakeDir(g.env), { recursive: true });
+    writeFileSync(join(intakeDir(g.env), 'errors-2026-08-28.md'), 'legacy, newer');
+    writeFileSync(join(intakeDir(g.env), 'errors-memoro-2026-08-26.md'), 'prefixed, older');
+    // Sorted as strings, `errors-memoro-…` comes after `errors-…` whatever
+    // the dates say, and the baseline would silently be the older file.
+    assert.equal(previousDigest(intakeDir(g.env), digestName(NOW), 'memoro').name, 'errors-2026-08-28.md');
   });
 });

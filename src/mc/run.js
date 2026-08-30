@@ -55,7 +55,7 @@ import { writeJsonAtomic } from './atomic-write.js';
 import { branchLanded } from './branch-landed.js';
 import { defaultRepos, listPlans, parsePlanFrontmatter, planFields, showBatch } from './brief-collect.js';
 import { closable, lastRunFor, unplannedFile, unplannedRow } from './close-workarea.js';
-import { collectHelper, describeDigest, intakeDir, unreadableSections } from './helper-collect.js';
+import { collectHelper, describeDigest, HELPER_REPOS, intakeDir, unreadableSections } from './helper-collect.js';
 import { describeTurn, runHelperTurn } from './helper-turn.js';
 import { workRoot } from './paths.js';
 import { loadProfile, profileArgs } from './portrait.js';
@@ -583,31 +583,50 @@ export function createRunner({
     const took = () => Math.round((deps.now().getTime() - t0) / 1000);
     say('helper: the day\'s digest');
 
-    let digest = null;
-    try {
-      digest = await deps.collect({ now: deps.now() });
-    } catch (error) {
-      logRun({ ts: stamp(), name: HELPER_NAME, kind: HELPER_KIND, exit: 1, seconds: took(), pr: '-', ...dashes, note: helperNote(null) });
-      say(`helper: the collect step failed — ${error?.message || error}. Not retried today.`);
-      return 'failed';
-    }
-    say(`helper: ${digest.path} — ${describeDigest(digest.data)}`);
-    for (const note of digest.data.notes || []) say(`helper: ${note}`);
-    for (const [section, source] of unreadableSections(digest.data)) say(`helper: ${section} not read — ${source.error}`);
+    // One digest and one turn per repository. memoro's production is the
+    // deployed service; memoro-cli's is this machine, and until 2026-08-30
+    // nothing read the second — every failure in mc itself was found by a
+    // person noticing it.
+    //
+    // A repository that fails does not take the other down with it. The whole
+    // reason the collect step reports per section instead of failing as a
+    // unit is that these sources do not share a failure domain, and two
+    // repositories share one even less.
+    let outcome = null;
+    for (const repo of HELPER_REPOS) {
+      let digest = null;
+      try {
+        digest = await deps.collect({ now: deps.now(), repo });
+      } catch (error) {
+        say(`helper: ${repo}: the collect step failed — ${error?.message || error}. Not retried today.`);
+        outcome = 'failed';
+        continue;
+      }
+      say(`helper: ${digest.path} — ${describeDigest(digest.data)}`);
+      for (const note of digest.data.notes || []) say(`helper: ${repo}: ${note}`);
+      for (const [section, source] of unreadableSections(digest.data)) say(`helper: ${repo}: ${section} not read — ${source.error}`);
 
-    const turn = await deps.helperTurn({ digestPath: digest.path, digestText: digest.text, now: deps.now() });
-    logRun({
-      ts: stamp(), name: HELPER_NAME, kind: HELPER_KIND, exit: turn.status ?? 1, seconds: took(), pr: '-',
-      turns: turn.turns ?? '-', input: turn.input ?? '-', output: turn.output ?? '-',
-      cacheRead: turn.cacheRead ?? '-', cacheWrite: turn.cacheWrite ?? '-', session: turn.session ?? '-',
-      note: helperNote(turn),
-    });
-    for (const note of turn.groundNotes || []) say(`helper: ${note}`);
-    say(turn.ok
-      ? `helper: ${describeTurn(turn)} (${took()}s)`
-      : `helper: the turn did not finish — ${turn.reason || turn.note} (${took()}s)`);
-    if (turn.quota) await quotaPause();
-    return turn.ok ? 'ran' : 'failed';
+      const turn = await deps.helperTurn({ digestPath: digest.path, digestText: digest.text, repo, now: deps.now() });
+      logRun({
+        ts: stamp(), name: HELPER_NAME, kind: HELPER_KIND, exit: turn.status ?? 1, seconds: took(), pr: '-',
+        turns: turn.turns ?? '-', input: turn.input ?? '-', output: turn.output ?? '-',
+        cacheRead: turn.cacheRead ?? '-', cacheWrite: turn.cacheWrite ?? '-', session: turn.session ?? '-',
+        note: `${repo},${helperNote(turn)}`,
+      });
+      for (const note of turn.groundNotes || []) say(`helper: ${note}`);
+      say(turn.ok
+        ? `helper: ${repo}: ${describeTurn(turn)} (${took()}s)`
+        : `helper: ${repo}: the turn did not finish — ${turn.reason || turn.note} (${took()}s)`);
+      if (turn.quota) await quotaPause();
+      if (!turn.ok) outcome = 'failed';
+      else if (outcome !== 'failed') outcome = 'ran';
+    }
+    // Every repository's collect step threw: nothing was written and nothing
+    // read it, which is the one case that never logged a row above.
+    if (outcome === 'failed' && !deps.read(paths.runs)?.includes(HELPER_NAME)) {
+      logRun({ ts: stamp(), name: HELPER_NAME, kind: HELPER_KIND, exit: 1, seconds: took(), pr: '-', ...dashes, note: helperNote(null) });
+    }
+    return outcome;
   }
 
   /** One project. Returns 'merged' | 'ran' | 'skipped' | 'stop'. */

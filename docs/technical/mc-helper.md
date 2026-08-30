@@ -8,8 +8,8 @@ acts on until Martin picks it up at `mc brief` or `mc plan`.
 | | what it does |
 |---|---|
 | `mc helper` | **the desk.** A foreground session in `~/mc/helper/` that takes Martin's report of a bug or something that should be better, and writes it as a proposal. No digest, no production, no fix |
-| `mc helper --intake` | **the eye.** The digest, then one headless turn that reads it and proposes from it |
-| `mc helper --collect` | the eye's script half alone: read five sources, write `~/mc/intake/errors-<date>.md` with the delta against the previous digest. **No model, no writes to production** |
+| `mc helper --intake` | **the eye.** One digest per repository, then one headless turn per digest that reads it and proposes from it |
+| `mc helper --collect` | the eye's script half alone: write `~/mc/intake/errors-<repo>-<date>.md` for each repository, with the delta against that repository's previous digest. **No model, no writes to production** |
 | `--since <iso>` | the window; default is the last 24 h |
 | `--limit <n>` | fingerprints asked for; default 50, the route caps at 200 |
 | `--threshold <n>` | hits at or above which a *new* fingerprint is marked `!`; default 20 |
@@ -143,9 +143,45 @@ today's file with itself and reporting nothing new. A first run has no
 baseline and says `first digest — no baseline` rather than calling all fifty
 fingerprints new.
 
+Each repository's baseline is its own: the name carries the repository, so a
+delta is never measured against the other system's digest. memoro also
+accepts the older unprefixed `errors-<date>.md`, because renaming a file whose
+only purpose is to be *the previous one* would otherwise throw away a day of
+delta.
+
+## Two repositories, one eye
+
+memoro's production is the deployed service — five remote sources, an admin
+token, wrangler. memoro-cli has no server, and for a week that was read as
+"nothing to collect", so every failure in mc itself was found by a person
+noticing it. On 2026-08-30 sixteen gate rounds stopped on a held lease in one
+day, and that was a feeling rather than a number.
+
+memoro-cli has a production. It is this machine, and mc records what happens
+there in four files: `logs/mc.log` (every invocation and how it ended),
+`gate-rounds.jsonl` (every round, including the ones that started and never
+finished), `repo-leases/leases.log` (claims, releases, reaps) and
+`runner/log/runs.tsv` (every step). The eye now reads both.
+
+The second half reads no network and holds no credential, which is why it can
+run every day without asking anybody for a token — and why a memoro collect
+that fails on an expired wrangler login does not cost memoro-cli its digest.
+
+It is the **same** delta, state block and threshold, deliberately: a second
+implementation of "new since yesterday" would be a second answer waiting to
+disagree with the first. A fingerprint on this side is a failure *signature*
+with its variables removed — pull request numbers, pids and commits become
+`N` and `<hash>` — so two rounds that both stopped on `lease` are one
+fingerprint seen twice. Without that the digest could never say "sixteen".
+
+One turn per digest, not one over both: `repo:` is the frontmatter key
+everything downstream routes on, and a reader left to infer it would get it
+right most days. The days it did not would be a proposal filed against the
+wrong system.
+
 ## The digest
 
-`~/mc/intake/errors-<date>.md`, in this order:
+`~/mc/intake/errors-<repo>-<date>.md`, in this order:
 
 - **New since the last digest** — the agenda. One bullet per new fingerprint
   and per newly failing condition, marked `!` at or above the threshold and
