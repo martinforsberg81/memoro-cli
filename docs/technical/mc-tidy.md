@@ -21,7 +21,7 @@ and `tidyQueue` in [`src/mc/run.js`](../../src/mc/run.js).
 
 ## The order: the plan first, then the workarea
 
-A round reads every `PLAN.md` on both `origin/main`s, and then:
+A round reads every `PLAN.json` on both `origin/main`s, and then:
 
 1. **tidies `queue.md`** against that reading,
 2. **archives** every plan that says `done`, one PR per repository, and
@@ -89,7 +89,7 @@ The close hands the worktree back through the repository that owns it,
 deletes the local branch, and moves everything the folder kept beside its
 checkout to `~/mc/runner/log/closed/<name>/`. The remote branch and the PRs
 stay. Conversations are not a reason to keep a folder — what is current lives
-in PLAN.md and in decisions on main — so their index and log files are moved,
+in the plans and in decisions on main — so their index and log files are moved,
 never deleted.
 
 **mc deletes nothing itself.** The one thing that is deleted is what `git

@@ -17,6 +17,7 @@
  * started projects off answered decision files.
  */
 import { parseRuns } from './brief-collect.js';
+import { deliverableStep } from './plan-schema.js';
 
 export const RUNS_HEADER = ['ts', 'name', 'kind', 'exit', 'seconds', 'pr', 'turns', 'input', 'output', 'cache_read', 'cache_write', 'session', 'note'];
 
@@ -40,7 +41,10 @@ export const TIMEOUT_EXIT = 142; // what the shell runner's `perl alarm` left in
  * WITHOUT A PROJECT block.
  */
 export function assembleQueue(queueText, plans) {
-  const planned = new Set(plans.map((p) => p.project));
+  // A plan still written as PLAN.md is not one the runner reads. It is left out
+  // here rather than skipped in the round, because a skip line per unmigrated
+  // project per round is a line nobody reads — `mc status` is where they show.
+  const planned = new Set(plans.filter((p) => !p.legacy).map((p) => p.project));
   const named = queueFileNames(queueText).filter((name) => planned.has(name));
   const seen = new Set(named);
   const rest = [...planned].filter((name) => !seen.has(name)).sort();
@@ -85,6 +89,7 @@ export function strictQueue(queueText, plans) {
     if (seen.has(line)) { dropped.push({ line, why: 'named twice' }); continue; }
     const plan = byProject.get(line);
     if (!plan) { dropped.push({ line, why: 'no plan on main' }); continue; }
+    if (plan.legacy) { dropped.push({ line, why: 'still a PLAN.md — migrate it to PLAN.json' }); continue; }
     if (plan.status === 'done') { dropped.push({ line, why: 'the plan is done' }); continue; }
     seen.add(line);
     names.push(line);
@@ -125,8 +130,14 @@ export function queueFileText(names) {
 export function chooseKind({ plan, conflicts = [] }) {
   if (conflicts.length) return { kind: 'reconcile' };
   if (!plan) return { kind: null, skip: null };
-  if (plan.status === 'ready') return { kind: 'step' };
-  return { kind: null, skip: `status ${plan.status || 'missing'}` };
+  if (plan.legacy) return { kind: null, reason: 'unmigrated', skip: 'still a PLAN.md — migrate it to PLAN.json' };
+  if (!plan.plan) {
+    const first = plan.problems?.[0] || 'the plan does not parse';
+    return { kind: null, reason: 'unparseable', skip: `the plan does not parse: ${first}`, problems: plan.problems || [] };
+  }
+  const { step, index, reason, why, problems } = deliverableStep(plan.plan);
+  if (!step) return { kind: null, reason, skip: why, problems };
+  return { kind: 'step', step, index };
 }
 
 /* ----------------------------------------------------------- the helper */
@@ -175,17 +186,30 @@ export function helperNote(turn) {
 
 const today = (now) => now.toISOString().slice(0, 10);
 
-export function stepPrompt({ name, repo, planPath, planText, now = new Date() }) {
+export function stepPrompt({ name, repo, planPath, planText, step, index, now = new Date() }) {
+  const ordinal = Number.isInteger(index) ? index + 1 : 1;
   return [
     `You are working in the \`${name}\` workarea of ${repo} (this worktree; origin/main`,
-    `is merged in). Below is your plan, \`${planPath}\`. Do the step named in \`next:\`;`,
-    'its "done when" is your success criterion for this session — verify it before',
+    `is merged in). Below is your plan, \`${planPath}\`.`,
+    '',
+    `Your step is \`steps[${index}]\` — ${ordinal}, "${step?.title || ''}".`,
+    `Done when: ${step?.done_when || ''}`,
+    'That sentence is your success criterion for this session — verify it before',
     'you stop, and say in the PR body how you verified it.',
     '',
-    `If the Contract must change, the decision file is \`../decisions/${name}-${today(now)}.md\`.`,
+    `In the plan file you may edit that step's \`status\` and \`pr\`, the`,
+    '`success_criteria` you actually met, and `what_the_code_taught_us`. Nothing',
+    'else: not another step, not the goal, the contract or the scope. The runner',
+    'compares the file before and after and will leave your PR unmerged if you',
+    'changed anything else.',
+    '',
+    `If the contract must change, or a later step is wrong, the decision file is`,
+    `\`../decisions/${name}-${today(now)}.md\` — set this step to`,
+    '`waiting-decision` with `blocked_by` naming it, and stop.',
+    '',
     'Do not merge. Do not ask questions. Stop when the PR exists.',
     '',
-    '----- PLAN.md -----',
+    '----- PLAN.json -----',
     planText,
   ].join('\n');
 }

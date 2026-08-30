@@ -1,6 +1,6 @@
 # mc status — one project, and where the page went
 
-`mc status <name>` answers about **one project**: what its `PLAN.md` says
+`mc status <name>` answers about **one project**: what its `PLAN.json` says
 right now, which decisions belong to it, its last three runner steps, and the
 open pull request on its branch. It is a script — no model — it writes
 nothing, starts nothing, and takes at most a `git fetch` and a `gh pr list`
@@ -31,7 +31,7 @@ project built: `nowBlock`, `kindFor`, `pidAlive`, `decisionsBlock` and
 
 ```
 mc-status — memoro-cli · mc
-  plan        docs/project/mc/mc-status/PLAN.md (workarea memoro-cli)
+  plan        docs/project/mc/mc-status/PLAN.json (workarea memoro-cli)
   workarea    ~/mc/mc-status
   status      ready
   budget      150k
@@ -69,7 +69,7 @@ From the page's menu, `s <name>` runs this same verb and redraws
 
 | fact | file | written by |
 |---|---|---|
-| the plan, its frontmatter and `next:` | `<workarea>/<repo>/docs/project/<programme>/<name>/PLAN.md`, else the same path on `origin/main` | the step sessions, through `mc run` |
+| the plan, its state and its steps | `<workarea>/<repo>/docs/project/<programme>/<name>/PLAN.json`, else the same path on `origin/main` | the step sessions, through `mc run` |
 | the workarea exists | `~/mc/<name>/` holding a checkout with a `.git` | `mc run`, `mc work`, `mc plan` |
 | decisions, answered or waiting | `~/mc/*/decisions/*.md` — waiting is "no line starting `**Beslut:**`" | the sessions; answered by Martin at `mc brief` |
 | the last three steps | `~/mc/runner/log/runs.tsv`, rows whose `name` is this project | `mc run`, after each step |
@@ -96,8 +96,8 @@ asks about is almost always one that is being worked on right now. So:
 When both exist and their frontmatters differ, the row adds
 `differs from origin/main`. The page never picks one silently.
 
-A name that has a workarea but no `PLAN.md` anywhere is answered too — with
-`no PLAN.md — this is a workarea without a project`. Those are the closure
+A name that has a workarea but no plan anywhere is answered too — with
+`no plan — this is a workarea without a project`. Those are the closure
 candidates `mc run` will not remove by itself; the page lists them and
 `~/mc/intake/unplanned-workareas.md` keeps them.
 

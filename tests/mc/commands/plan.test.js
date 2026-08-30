@@ -22,12 +22,12 @@ function sink() {
 }
 
 describe('the plan role', () => {
-  it('ships with mc, for claude first, and says what a PLAN.md is', () => {
+  it('ships with mc, for claude first, and says what a PLAN.json is', () => {
     const role = readCanonRole('plan');
     assert.equal(role.name, 'plan');
     assert.equal(role.model, 'opus');
     assert.deepEqual(role.tools, ['claude', 'codex']);
-    assert.match(role.overlay, /docs\/project\/<programme>\/<name>\/PLAN\.md/u);
+    assert.match(role.overlay, /docs\/project\/<programme>\/<name>\/PLAN\.json/u);
     assert.match(role.overlay, /Plan: <name>/u);
     assert.match(role.overlay, /\*\*Beslut:\*\*/u);
     assert.match(role.overlay, /Never create a parallel programme/u);
@@ -39,7 +39,7 @@ describe('the plan role', () => {
   it('assembles a first prompt that names the workarea, the repository and the PR', () => {
     const launch = planLaunch({ name: 'gate-word', repo: 'memoro', role: readCanonRole('plan') });
     assert.match(launch.prompt, /`gate-word` workarea of memoro/u);
-    assert.match(launch.prompt, /docs\/project\/<programme>\/gate-word\/PLAN\.md/u);
+    assert.match(launch.prompt, /docs\/project\/<programme>\/gate-word\/PLAN\.json/u);
     assert.match(launch.prompt, /"Plan: gate-word"/u);
     // …and ends with the docs merge, naming the repository it runs in, so
     // the plan is on main before the session is closed.
@@ -89,7 +89,7 @@ describe('the launch', () => {
     assert.match(args[1], /^instructions=/u);
     const body = JSON.parse(args[1].slice('instructions='.length));
     assert.match(body, /^PROFILE\n\n---\n\nYou are the planning session/u);
-    assert.match(body, /docs\/project\/<programme>\/<name>\/PLAN\.md/u);
+    assert.match(body, /docs\/project\/<programme>\/<name>\/PLAN\.json/u);
     assert.match(body, /mc merge <repo> <pr> --docs/u);
   });
 

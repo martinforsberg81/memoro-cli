@@ -29,7 +29,7 @@ describe('the brief role', () => {
     assert.deepEqual(role.tools, ['claude', 'codex']);
     assert.match(role.overlay, /`\*\*Beslut:\*\* <what was decided> \(Martin, <YYYY-MM-DD>\)\. <one sentence why>`/u);
     assert.match(role.overlay, /one at a time/u);
-    assert.match(role.overlay, /never edit PLAN\.md/u);
+    assert.match(role.overlay, /never edit a plan/u);
   });
 
   /**

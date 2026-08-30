@@ -122,7 +122,7 @@ the same machine pushes single runs to 0.2–0.3 s.) Two changes did it, and
 they are worth different amounts:
 
 1. **One read per repository instead of one per plan.** `listPlans` was
-   spending a `git show` per PLAN.md — 37 in memoro alone, 1.45 s of the
+   spending a `git show` per plan — 37 in memoro alone, 1.45 s of the
    1.92. It now runs one `ls-tree` and one `cat-file --batch`, walking the
    stream by byte size so a plan full of em-dashes survives it. That alone
    took the page to 0.31 s. `mc brief --collect --offline` got the same win
@@ -193,7 +193,7 @@ through all three sections.
 | `waiting-decision` | yellow |
 | `blocked` | red |
 | `done` | grey |
-| no PLAN.md on main | dim grey |
+| no plan on main | dim grey |
 
 Everything else is structure, and structure is quiet:
 
@@ -228,7 +228,7 @@ Everything else is structure, and structure is quiet:
 | WORK | a quiet area's name and `next` | white, plain |
 | WORK | the PR number | cyan |
 | WORK | the number, the last-run time, the projects-without-a-workarea line | grey |
-| WORK | a row with no PLAN.md on main | grey throughout |
+| WORK | a row with no plan on main | grey throughout |
 | footer | the cache line, the notes | grey |
 
 Four things hold that table up:

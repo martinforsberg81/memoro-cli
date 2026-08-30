@@ -22,6 +22,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 import { intakeDir, proposalsDir } from './helper-collect.js';
+import { planSummary, readPlanText } from './plan-schema.js';
 import { workRoot } from './paths.js';
 
 export const DAY_MS = 24 * 60 * 60 * 1000;
@@ -370,14 +371,39 @@ export function listPlans(repo, { ref = 'origin/main', git = runGit, batch = cat
   if (tree == null) return [];
   const paths = tree.split('\n').filter((path) => {
     const parts = path.split('/');
-    return parts.length === 5 && parts[4] === 'PLAN.md';
+    return parts.length === 5 && (parts[4] === 'PLAN.json' || parts[4] === 'PLAN.md');
   });
   const texts = batch(repo.path, paths.map((path) => `${ref}:${path}`));
-  return paths.map((path) => {
+
+  // One project, one plan. Both files can exist while a project is being
+  // migrated; the JSON is the plan and the markdown is what it was.
+  const byProject = new Map();
+  for (const path of paths) {
     const parts = path.split('/');
+    const project = parts[3];
+    const json = parts[4] === 'PLAN.json';
+    const held = byProject.get(project);
+    if (held && !json) continue;
     const text = texts.get(`${ref}:${path}`) || '';
-    return { repo: repo.name, programme: parts[2], project: parts[3], path, ...parsePlanFrontmatter(text) };
-  });
+    const base = { repo: repo.name, programme: parts[2], project, path };
+    if (!json) {
+      // A PLAN.md is not a plan the runner can read. It keeps its frontmatter
+      // status so `mc status` can still show what the project was, and carries
+      // `legacy` so the queue leaves it alone rather than skipping it, loudly,
+      // once per project per round.
+      byProject.set(project, { ...base, legacy: true, plan: null, problems: [], ...parsePlanFrontmatter(text) });
+      continue;
+    }
+    const { plan, problems } = readPlanText(text);
+    byProject.set(project, {
+      ...base,
+      legacy: false,
+      plan,
+      problems,
+      ...(plan ? planSummary(plan) : { status: 'invalid', next: problems[0] || 'the plan does not parse' }),
+    });
+  }
+  return [...byProject.values()];
 }
 
 /**

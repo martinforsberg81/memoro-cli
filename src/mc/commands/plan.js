@@ -1,5 +1,5 @@
 /**
- * `mc plan <name>` — a planning session that ends in a PLAN.md.
+ * `mc plan <name>` — a planning session that ends in a PLAN.json.
  *
  * How new work enters the system: every plan is written here, with Martin in
  * the session. The runner does not write plans — it runs `ready` ones (Martin,
@@ -7,7 +7,7 @@
  * session — the terminal's, `stdio: 'inherit'`, never tmux, never
  * `--resume` — opens in the workarea with the `plan` role from
  * `canon/roles/plan.md` behind the Coding Profile, and a first prompt that
- * asks for `docs/project/<programme>/<name>/PLAN.md` as a PR. The result is
+ * asks for `docs/project/<programme>/<name>/PLAN.json` as a PR. The result is
  * the file; the conversation is meant to be closed right after.
  *
  * The workarea is made if it is missing: `~/mc/<name>/<repo>` as a worktree
@@ -97,15 +97,15 @@ export async function run(argv, deps = {}) {
  *
  * The last line is the docs merge, not "and stop": a plan PR touches only
  * `docs/`, so it is `mc merge <repo> <pr> --docs`' case, and the runner
- * cannot queue a project whose PLAN.md is still sitting in an open PR. The
+ * cannot queue a project whose plan is still sitting in an open PR. The
  * role says the same thing; the prompt is the word that comes last.
  */
 export function planLaunch({ name, repo, role }) {
   const prompt = [
     `You are working in the \`${name}\` workarea of ${repo} (this worktree; origin/main is its base).`,
-    `There is no \`docs/project/*/${name}/PLAN.md\` yet, or it needs rethinking.`,
+    `There is no \`docs/project/*/${name}/PLAN.json\` yet, or it needs rethinking.`,
     'Start by reading what already exists — docs/project/ here, the open "Plan:" PRs, the workarea\'s ../HANDOFF.md and ../inbox/ if present, the old plan under docs/plans/ they point to — and say what you found.',
-    `Then talk it through with Martin and write \`docs/project/<programme>/${name}/PLAN.md\` as described in your role, and open a PR titled "Plan: ${name}".`,
+    `Then talk it through with Martin and write \`docs/project/<programme>/${name}/PLAN.json\` as described in your role, and open a PR titled "Plan: ${name}".`,
     `Land that PR yourself — it is documentation only: \`mc merge ${repo} <pr> --docs\`. If it refuses, leave the PR open and say why. Then stop.`,
   ].join('\n');
   return { overlay: role.overlay, prompt, model: role.model || null };

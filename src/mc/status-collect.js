@@ -49,8 +49,10 @@ export function kindFor(name, { plans }) {
   const choice = chooseKind({ plan });
   if (choice.kind) return choice.kind;
   if (!plan) return 'skip:no-plan';
-  const status = choice.skip.slice('status '.length);
-  return `skip:${status === 'missing' ? 'no-status' : status}`;
+  // The reason is a word the page can count. The sentence beside it is for a
+  // person; grouping on it produced rows like "n does not parse: ..." when the
+  // sentence changed shape.
+  return `skip:${choice.reason || 'no-status'}`;
 }
 
 /* --------------------------------------------------------------------- now */
