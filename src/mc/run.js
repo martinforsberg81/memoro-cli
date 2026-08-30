@@ -20,10 +20,11 @@
  * trigger; there is nothing to type. The rules are in archive-plan.js.
  *
  * A round ends by taking away the folder that plan explains: a workarea whose
- * plan left main this round, whose worktree is clean and whose last row in
- * runs.tsv ends `merged` is removed — worktree handed back, local branch
- * deleted, everything it kept beside its checkout moved to
- * `runner/log/closed/<name>/`. A workarea with no plan on main is never
+ * project is finished — its plan left main this round, or `project_log.md`
+ * says an earlier round archived it — and whose worktree is clean and whose
+ * last row in runs.tsv ends `merged` is removed: worktree handed back, local
+ * branch deleted, everything it kept beside its checkout moved to
+ * `runner/log/closed/<name>/`. A workarea no project explains at all is never
  * removed by a machine; it is written to `~/mc/intake/unplanned-workareas.md`
  * instead. The rules are in close-workarea.js.
  *
@@ -38,6 +39,12 @@
  * production, writes a digest and proposals into `~/mc/intake/`, and that is
  * all. `runHelperDay` below is the whole of it.
  *
+ * The runner is worked from another terminal by three files under
+ * `~/mc/runner/`, all read at a round boundary and never mid-session: `STOP`
+ * ends it, `UPDATE` makes it fast-forward mc's own checkout and hand over to a
+ * fresh process on the new code. `mc run start|stop|--update` write them; the
+ * rules and the handover are in run-control.js.
+ *
  * Every process boundary is a dependency on `deps`, so the round can be
  * driven in a test with a fake git, gh, tmux and session and no network.
  * The rules themselves live in run-plan.js.
@@ -48,14 +55,15 @@ import { dirname, join } from 'node:path';
 
 import { resolveLaunch } from '../adapters/index.js';
 import {
-  ARCHIVE_BRANCH_PREFIX, UNDOCUMENTED_HEADER, appendRow, donePlans, isUndocumented, mergedPrs,
-  planDoc, planSummary, pointerCell, remoteSlug, rowFor, undocumentedRow,
+  ARCHIVE_BRANCH_PREFIX, UNDOCUMENTED_HEADER, appendRow, donePlans, isUndocumented, logRows,
+  mergedPrs, planDoc, planSummary, pointerCell, remoteSlug, rowFor, undocumentedRow,
 } from './archive-plan.js';
 import { writeJsonAtomic } from './atomic-write.js';
 import { branchLanded } from './branch-landed.js';
 import { defaultRepos, listPlans, showBatch } from './brief-collect.js';
 import { readPlanText, unauthorisedChanges } from './plan-schema.js';
 import { closable, lastRunFor, unplannedFile, unplannedRow } from './close-workarea.js';
+import { handOver } from './run-control.js';
 import { collectHelper, describeDigest, HELPER_REPOS, intakeDir, unreadableSections } from './helper-collect.js';
 import { describeTurn, runHelperTurn } from './helper-turn.js';
 import { workRoot } from './paths.js';
@@ -151,6 +159,16 @@ export function realDeps(env = process.env) {
         });
       });
     }),
+    // `mc run --update`: this runner's replacement, on the code that is on
+    // disk now. Node read its whole module graph at process start, so the only
+    // way to run new code is to be a new process — the same argument list,
+    // detached so it outlives this one, and the same stdio, which for a runner
+    // `mc run start` spawned is the append handle on runner.log.
+    respawn: () => {
+      const child = spawn(process.execPath, process.argv.slice(1), { detached: true, stdio: 'inherit', env });
+      child.unref();
+      return child.pid ?? null;
+    },
     log: (line) => process.stdout.write(`${line}\n`),
   };
 }
@@ -167,6 +185,10 @@ export function createRunner({
     runs: join(root, 'runner', 'log', 'runs.tsv'),
     runnerLog: join(root, 'runner', 'log', 'runner.log'),
     stop: join(root, 'runner', 'STOP'),
+    // `mc run --update` leaves this one. It is read where STOP is read — at a
+    // round boundary — because it means the same kind of thing: finish what
+    // you are in, then do as you are told. See run-control.js.
+    update: join(root, 'runner', 'UPDATE'),
     // What is running, for anyone who asks. runner.json says a runner is
     // here and names the pid to test; `current-<repo>.json` exists only
     // while that lane's step is in flight — one file per lane, because two
@@ -193,6 +215,7 @@ export function createRunner({
   };
   const gitOut = (cwd, args) => { const r = deps.git(cwd, args); return r.ok ? String(r.stdout ?? '').trimEnd() : null; };
   const stopRequested = () => deps.exists(paths.stop);
+  const updateRequested = () => deps.exists(paths.update);
 
   /**
    * The 5-hour Claude quota is one budget for every lane. The first lane to
@@ -498,13 +521,16 @@ export function createRunner({
    * `landed` is the projects whose archive PR merged in this round — the plan
    * goes first, then the workarea, so a workarea is never removed while the
    * plan that explains it is still on main. `plans` is the round's reading of
-   * main, taken before that archive removed them.
+   * main, taken before that archive removed them. `archived` is every project
+   * `project_log.md` names, which is what a plan removed by an *earlier* round
+   * leaves behind: without it, a round cut short between the archive and the
+   * closing left a folder no machine would ever look at again.
    *
    * A plan that is neither done nor missing is passed over without asking git
    * anything: `closable` would answer the same, and forty `git status` calls
    * a round for an answer already on the plan is not a price worth paying.
    */
-  function closeWorkareas(plans, landed = []) {
+  function closeWorkareas(plans, landed = [], archived = new Set()) {
     const byProject = new Map(plans.map((plan) => [plan.project, plan]));
     const tsv = deps.read(paths.runs) || '';
     const rows = [];
@@ -514,18 +540,41 @@ export function createRunner({
       if (plan && plan.status !== 'done') continue;
       const verdict = closable({
         plan,
+        archived: archived.has(name),
         dirty: uncommitted(name) > 0,
         live: deps.tmuxHas(`mc-${name}`),
         lastRun: lastRunFor(tsv, name),
       });
       if (verdict.unplanned) { rows.push(unplannedFor(name)); continue; }
       if (!verdict.close) { say(`close: ${name} kept — ${verdict.why}`); continue; }
-      if (!landed.includes(name)) { say(`close: ${name} kept — its plan is still on main`); continue; }
+      // The plan goes first, then the workarea. A plan this round still read on
+      // main goes only if the archive PR that removes it actually merged; one
+      // that was already gone is answered by the project log instead, which is
+      // what lets a round cut short by STOP be finished by the next one.
+      if (plan && !landed.includes(name)) { say(`close: ${name} kept — its plan is still on main`); continue; }
       if (closeWorkarea(name)) closed += 1;
     }
     deps.write(paths.unplanned, unplannedFile(rows));
-    if (rows.length) say(`close: ${rows.length} workarea(s) with no plan on main — ${paths.unplanned}`);
+    if (rows.length) say(`close: ${rows.length} workarea(s) with no project on main — ${paths.unplanned}`);
     return { closed, unplanned: rows.length };
+  }
+
+  /**
+   * Every project `docs/project/project_log.md` names on origin/main — the
+   * runner's own record of what it has archived, and the only thing that still
+   * knows a folder was ever a project once its plan has gone.
+   *
+   * One `git show` per repository per round, read after the archive PRs have
+   * merged, so a project archived moments ago is already in it.
+   */
+  function archivedProjects() {
+    const names = new Set();
+    for (const repo of repos) {
+      if (!deps.exists(join(repo.path, '.git'))) continue;
+      const text = gitOut(repo.path, ['show', 'origin/main:docs/project/project_log.md']);
+      for (const row of logRows(text || '')) if (row.project) names.add(row.project);
+    }
+    return names;
   }
 
   /**
@@ -846,7 +895,7 @@ export function createRunner({
     // workareas whose plan left main this round are taken down, and the ones
     // with no plan at all are written where Martin looks. `--once` changes
     // nothing but the one step it exists to watch.
-    if (!once && !out.stop) closeWorkareas(plans, landed);
+    if (!once && !out.stop) closeWorkareas(plans, landed, archivedProjects());
     if (results.some((r) => r.once)) out.once = true;
     return out;
   }
@@ -860,8 +909,8 @@ export function createRunner({
 
   return {
     paths, say, round, runStep, runLane, splitLanes, runHelperDay, archiveDone, queue, stopRequested,
-    syncMain, mergePr, planOf, repoOf, markRunner, clearRunner, closeWorkareas, closeWorkarea,
-    workareas, tidyQueue,
+    updateRequested, syncMain, mergePr, planOf, repoOf, markRunner, clearRunner, closeWorkareas,
+    closeWorkarea, archivedProjects, workareas, tidyQueue,
   };
 }
 
@@ -895,6 +944,10 @@ export async function runLoop({
       : `NOT staying awake (${held.reason}) — this machine may sleep mid-run: ${held.note}`);
   }
   runner.markRunner();
+  // A handover is the one exit that must not clear runner.json: the runner it
+  // handed to has already written its own, and removing it on the way out
+  // would leave the page saying nothing is running while something is.
+  let handedOver = false;
   try {
     let n = 0;
     while (rounds === 0 || n < rounds) {
@@ -903,11 +956,21 @@ export async function runLoop({
       if (r.stop) { runner.say(`runner exit on STOP (remove ${runner.paths.stop} before the next start)`); return 0; }
       if (r.once) { runner.say('once: exiting'); return 0; }
       runner.say(`round ${n} done (${r.ran} ran)`);
+      // `mc run --update`, read where STOP is read: between rounds, with no
+      // session in flight and nothing half-done. runner.json is cleared before
+      // the new runner is started rather than after, so the two never race for
+      // the same file.
+      if (runner.updateRequested()) {
+        runner.clearRunner();
+        const handed = await (deps.handOver || handOver)({ paths: runner.paths, deps, say: runner.say });
+        if (handed.ok) { handedOver = true; return 0; }
+        runner.markRunner();
+      }
       if (r.ran === 0 && (rounds === 0 || n < rounds)) await deps.sleep(idleSleepMs);
     }
     runner.say(`runner exit after ${rounds} round(s)`);
     return 0;
   } finally {
-    runner.clearRunner();
+    if (!handedOver) runner.clearRunner();
   }
 }

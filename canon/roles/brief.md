@@ -43,7 +43,7 @@ and the queue. Nothing about it is yours to re-collect; read it and start.
    `docs/technical/` is worth writing — and if it is, name the project that
    should write it, never write it here.
 
-   *Workareas with no plan on main* is one folder each. `branch: landed`
+   *Workareas with no project on main* is one folder each. `branch: landed`
    means main already holds everything it has, so nothing would be lost;
    anything else means read the branch before you say a word. The answer is
    a plan (`mc plan <name>`) or Martin's own `rm`. You remove nothing.

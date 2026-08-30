@@ -105,8 +105,13 @@ function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], live = 
         return { ok: true, stdout: Object.keys(plans[repoName] || {}).map((n) => `docs/project/prog/${n}/PLAN.json`).join('\n') };
       }
       if (args[0] === 'show' && repoName) {
+        // The project log is read straight off origin/main at the end of a
+        // round: it is what says a folder was a project once its plan has gone.
+        if (args[1].endsWith(':docs/project/project_log.md')) {
+          return { ok: true, stdout: projectLog[repoName] ?? '' };
+        }
         const name = args[1].split('/').at(-2);
-        return { ok: true, stdout: plans[repoName][name] };
+        return { ok: true, stdout: (plans[repoName] || {})[name] };
       }
       // `git worktree add -b <branch> <path> origin/main` in a repository:
       // origin/main checked out, which here is its plans and its project log.
@@ -405,6 +410,42 @@ test('STOP file: the loop exits after the step it is in, and refuses to start wh
   assert.equal(f.calls.sessions.length, 1);
   assert.match(f.files['/w/runner/log/runner.log'], /runner exit on STOP after a/u);
   assert.equal(await runLoop({ rounds: 1, deps: f.deps }), 2);
+});
+
+/**
+ * `mc run --update` from the runner's side: the file is read where STOP is
+ * read — between rounds — and the round in flight is never cut short for it.
+ */
+test('UPDATE file: the loop finishes its round, then hands over to a new process', async () => {
+  const f = fixture({ plans: { memoro: { a: ready } }, session: okSession() });
+  const inner = f.deps.session;
+  f.deps.session = (call) => { f.files['/w/runner/UPDATE'] = ''; return inner(call); };
+  const handovers = [];
+  f.deps.handOver = async ({ paths, say }) => {
+    handovers.push(paths.update);
+    say('update: handed over to pid 9001 — this runner is done');
+    return { ok: true, pid: 9001 };
+  };
+  assert.equal(await runLoop({ rounds: 0, deps: f.deps }), 0);
+  // One step ran, the round finished, and only then was the handover made.
+  assert.equal(f.calls.sessions.length, 1);
+  assert.deepEqual(handovers, ['/w/runner/UPDATE']);
+  assert.match(f.files['/w/runner/log/runner.log'], /round 1 done \(1 ran\)\n.*handed over to pid 9001/u);
+  // The runner it handed to has written its own runner.json by now: this one
+  // must not remove it on the way out.
+  assert.equal('/w/runner/runner.json' in f.files, false);
+  assert.equal(f.calls.removed.includes('/w/runner/runner.json'), true);
+  const after = f.calls.removed.lastIndexOf('/w/runner/runner.json');
+  assert.equal(f.calls.removed.slice(after + 1).includes('/w/runner/runner.json'), false,
+    'runner.json was cleared a second time, after the new runner had written it');
+});
+
+test('UPDATE file: a handover that does not start keeps this runner going', async () => {
+  const f = fixture({ plans: { memoro: { a: ready } }, session: okSession(), runs: null });
+  f.files['/w/runner/UPDATE'] = '';
+  f.deps.handOver = async ({ say }) => { say('update: the new runner did not start'); return { ok: false }; };
+  assert.equal(await runLoop({ rounds: 1, deps: f.deps }), 0);
+  assert.match(f.files['/w/runner/log/runner.log'], /runner exit after 1 round/u);
 });
 
 test('runLoop: --rounds 1 does one pass and exits; --once exits after the first step', async () => {
@@ -859,6 +900,49 @@ test('a done workarea whose last step is still open is kept', async () => {
   assert.match(f.files['/w/runner/log/runner.log'], /close: over kept — the last run says success,open/u);
 });
 
+/**
+ * The plan goes first and the workarea second, and they used to have to happen
+ * in the same round: with the plan already archived, the folder read as one
+ * nothing explains and no machine ever looked at it again. Measured 2026-08-30,
+ * the one round that archived three projects was cut short by STOP before it
+ * reached the closing.
+ */
+test('a workarea whose plan an earlier round archived is closed on the strength of the project log', async () => {
+  const logged = `${LOG_HEAD}| 2026-08-29 | prog | gone | delivered | It shipped. | - | #12 |\n`;
+  const f = fixture({
+    // No plan on main at all: an earlier round already took it off.
+    plans: { memoro: {} },
+    areas: { gone: { repo: 'memoro' } },
+    projectLog: { memoro: logged },
+    runs: RUNS_HEAD + ranRow('gone'),
+    session: okSession(),
+  });
+  await createRunner({ deps: f.deps }).round();
+  assert.deepEqual(f.calls.rmdirs, ['/w/gone']);
+  assert.match(f.files['/w/runner/log/runner.log'], /close: gone removed — worktree, branch gone/u);
+  // ...and it is not also filed as a folder nobody can explain.
+  assert.doesNotMatch(f.files['/w/intake/unplanned-workareas.md'], /\| gone \|/u);
+});
+
+/**
+ * What keeps that widening from taking anything it should not. A folder named
+ * after an archived project but with no runner step behind it is somebody's,
+ * not the runner's.
+ */
+test('a folder sharing an archived name, with no runner step, is kept and filed as unexplained', async () => {
+  const logged = `${LOG_HEAD}| 2026-08-29 | prog | gone | delivered | It shipped. | - | #12 |\n`;
+  const f = fixture({
+    plans: { memoro: {} },
+    areas: { gone: { repo: 'memoro' } },
+    projectLog: { memoro: logged },
+    runs: RUNS_HEAD,
+    session: okSession(),
+  });
+  await createRunner({ deps: f.deps }).round();
+  assert.deepEqual(f.calls.rmdirs, []);
+  assert.match(f.files['/w/runner/log/runner.log'], /close: gone kept — no runner step to point at/u);
+});
+
 test('an archive PR that did not merge keeps the workarea: the plan is still on main', async () => {
   const f = fixture({
     plans: { memoro: { over: done() } },
@@ -873,7 +957,7 @@ test('an archive PR that did not merge keeps the workarea: the plan is still on 
   assert.match(f.files['/w/runner/log/runner.log'], /close: over kept — its plan is still on main/u);
 });
 
-test('a workarea with no plan on main is never removed, and is written to intake with whether its branch landed', async () => {
+test('a workarea no project explains is never removed, and is written to intake with whether its branch landed', async () => {
   const f = fixture({
     areas: {
       'msr-track-1': { repo: 'memoro' },
@@ -886,10 +970,10 @@ test('a workarea with no plan on main is never removed, and is written to intake
   await createRunner({ deps: f.deps }).round();
   assert.deepEqual(f.calls.rmdirs, [], 'only Martin can say whether an unplanned workarea is finished');
   const intake = f.files['/w/intake/unplanned-workareas.md'];
-  assert.match(intake, /# Workareas with no plan on main/u);
+  assert.match(intake, /# Workareas with no project on main/u);
   assert.match(intake, /\| mc-repo \| memoro-cli \| 0 \| abc1234 \| landed \|/u);
   assert.match(intake, /\| msr-track-1 \| memoro \| 1 \| abc1234 \| ahead \|/u);
-  assert.match(f.files['/w/runner/log/runner.log'], /close: 2 workarea\(s\) with no plan on main/u);
+  assert.match(f.files['/w/runner/log/runner.log'], /close: 2 workarea\(s\) with no project on main/u);
 });
 
 test('the branch is asked of the worktree, not guessed from the folder name', async () => {

@@ -29,6 +29,52 @@ leaves the pull requests open; it is a default-on boolean written mc's way,
 not `--merge 0|1`. `--idle-sleep` is how long a round that ran nothing waits
 before the next one, 600 s by default.
 
+## The switch
+
+```
+mc run start [same flags]   the runner, in the background
+mc run stop                 after the round it is in
+mc run stop --force         now, and the session it is holding with it
+mc run --update             after the round: new code, new process
+```
+
+All three orders are **files under `~/mc/runner/`, read at a round boundary**
+— never signals, and never mid-session. A runner ninety minutes into a
+headless step is given the order without that step being interrupted, which is
+the whole reason they are files. `src/mc/run-control.js` writes them and holds
+the rules; `runLoop` reads them between rounds.
+
+- **`start`** spawns `mc run` detached with its stdout and stderr appended to
+  `runner.log`, carrying whatever flags follow it. It removes the `STOP` the
+  last stop wrote — `start` and `stop` are one switch, and a switch that will
+  not turn back on is not one — and refuses only on a first runner that is
+  still alive.
+- **`stop`** writes `STOP`. **`stop --force`** writes it too, and then ends the
+  runner now: `SIGTERM` to its process group, `SIGKILL` to whatever is left of
+  it two seconds later. The group and not the pid, because the headless session
+  is a child of the runner and shares it — kill the runner alone and `claude`
+  carries on for another eighty minutes with nobody left to read its output.
+  A killed runner never reaches its own `finally`, so `--force` removes the
+  `runner.json` and `current-<repo>.json` it would have removed itself;
+  otherwise the page draws a step that is not running.
+- **`--update`** writes `UPDATE`. At the next round boundary the runner
+  fast-forwards the checkout mc is running from, starts a fresh `mc run` with
+  the same argument list and the same stdio, and exits. `runner.json` is
+  cleared *before* the new process is started, so the two never race for it.
+  A checkout that will not fast-forward — local work, or diverged — is said out
+  loud and handed over anyway: the restart was asked for.
+
+**Why `--update` has to exist at all.** Node reads its whole module graph at
+process start and never looks at the disk again. The runner merges pull
+requests, including pull requests that change the runner, so a runner that has
+been up all day is running the code it was started with however much of itself
+it has improved since. Measured 2026-08-29, four merged improvements to
+`mc run` sat unused for two hours. Measured 2026-08-30, the round that could
+first have closed a finished workarea ran for eighteen hours in a process that
+started ninety minutes *before* the closing code was merged — so nothing was
+ever closed, and no line anywhere said why. New code needs a new process; this
+is the order that asks for one at the one moment it costs nothing.
+
 ## Staying awake
 
 A run that is not `--once` holds the machine awake for its whole length, and
@@ -84,7 +130,9 @@ session opened.
    a `project_log.md` row left behind it, one PR per repository, merged like
    any other. See [`mc-tidy.md`](mc-tidy.md).
 5. **Run the steps**, one lane per repository at the same time.
-6. **Close** the workareas whose archive PR merged in step 4.
+6. **Close** the workareas whose project is finished — whose archive PR merged
+   in step 4, or whose plan an earlier round already archived, which
+   `project_log.md` is what still knows.
 
 Steps 1, 3, 4 and 6 are skipped under `--once`: that flag exists to watch one
 step, and a two-minute model turn over production is not what somebody typing
@@ -282,7 +330,10 @@ Everything lives under `~/mc/runner/`.
 - **`~/mc/runner/STOP`** — checked at the top of every step and between the
   steps of a lane, so it ends *both* lanes after the step each is in. Neither
   lane abandons a session that is already running, and the runner refuses to
-  start at all while the file exists.
+  start at all while the file exists. Written by `mc run stop`, removed by
+  `mc run start`.
+- **`~/mc/runner/UPDATE`** — read between rounds only, and answered by a
+  handover rather than an exit. Written by `mc run --update`; see *The switch*.
 - **The Claude quota.** The 5-hour limit is one budget for the whole machine,
   so a quota answer in either lane pauses both. The lane that sees the refusal
   calls `quotaPause`, which logs `every lane sleeping 30m` and holds one

@@ -246,12 +246,33 @@ test('parseRunArgs: defaults, flags, errors', () => {
   // `awake` defaults to true: a runner waits ten minutes between rounds and
   // this laptop sleeps after one of them on battery, so the default that keeps
   // an unattended run alive is the one nobody has to remember (stay-awake.js).
-  assert.deepEqual(parseRunArgs([]), { rounds: 0, once: false, merge: true, idleSleep: 600, awake: true });
-  assert.deepEqual(parseRunArgs(['--rounds', '1', '--once', '--no-merge', '--idle-sleep', '5']), { rounds: 1, once: true, merge: false, idleSleep: 5, awake: true });
+  assert.deepEqual(parseRunArgs([]), { rounds: 0, once: false, merge: true, idleSleep: 600, awake: true, verb: 'run' });
+  assert.deepEqual(parseRunArgs(['--rounds', '1', '--once', '--no-merge', '--idle-sleep', '5']), { rounds: 1, once: true, merge: false, idleSleep: 5, awake: true, verb: 'run' });
   assert.equal(parseRunArgs(['--no-caffeinate']).awake, false);
   assert.match(parseRunArgs(['--rounds', 'x']).error, /whole number/u);
   assert.match(parseRunArgs(['--rounds']).error, /needs a value/u);
   assert.match(parseRunArgs(['extra']).error, /unexpected argument/u);
+});
+
+test('parseRunArgs: the three orders, and the flags start carries through', () => {
+  assert.deepEqual(parseRunArgs(['stop']), { verb: 'stop', force: false });
+  assert.deepEqual(parseRunArgs(['stop', '--force']), { verb: 'stop', force: true });
+  assert.deepEqual(parseRunArgs(['--update']), { verb: 'update' });
+
+  // `start` is the run, in the background: its flags are parsed here so a typo
+  // is answered at the terminal rather than in a log nobody is watching, and
+  // passed on untouched because the background runner is the same runner.
+  const start = parseRunArgs(['start', '--no-merge', '--rounds', '3']);
+  assert.equal(start.verb, 'start');
+  assert.equal(start.merge, false);
+  assert.equal(start.rounds, 3);
+  assert.deepEqual(start.pass, ['--no-merge', '--rounds', '3']);
+  assert.match(parseRunArgs(['start', '--rounds', 'x']).error, /whole number/u);
+
+  // An order to a runner that is already up takes nothing else: every flag it
+  // could take is a property that runner already has.
+  assert.match(parseRunArgs(['--update', '--rounds', '2']).error, /one order on its own/u);
+  assert.match(parseRunArgs(['stop', 'now']).error, /unexpected argument/u);
 });
 
 /* ------------------------------------------------------------- the helper */

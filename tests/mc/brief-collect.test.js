@@ -266,7 +266,7 @@ describe('collectBrief', () => {
     const text = readFileSync(result.path, 'utf8');
     assert.equal(text, result.text);
     const order = ['## Merged since last brief', '## Opened, not merged', '## Waiting on Martin', '## Proposals',
-      '## Plan status', '## Archived without a note', '## Workareas with no plan on main', '## Runner', '## Queue'];
+      '## Plan status', '## Archived without a note', '## Workareas with no project on main', '## Runner', '## Queue'];
     let at = -1;
     for (const heading of order) {
       const next = text.indexOf(heading);
@@ -287,7 +287,7 @@ describe('collectBrief', () => {
     assert.match(text, /1 project archived with `doc: none`/u);
     assert.deepEqual(result.data.unplanned.map((r) => r.name), ['msr-track-1', 'mc-repo']);
     assert.match(text, /\| mc-repo \| memoro-cli \| 2 \| 2026-08-20 \| landed \|/u);
-    assert.match(text, /2 folders under `~\/mc` that no plan on main explains, 1 whose branch is already on main/u);
+    assert.match(text, /2 folders under `~\/mc` that no project on main explains — no plan, and no row in `project_log.md` — 1 whose branch is already on main/u);
     assert.match(text, /Last 24 h: 3 steps \(step 2, triage 1\) — merged 1, left open 1, failed 0, timed out 1/u);
     assert.match(text, /- docx-editor\n- sql-readiness-session-A/u);
     assert.match(text, /memoro: no checkout/u);

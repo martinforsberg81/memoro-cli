@@ -72,7 +72,7 @@ describe('the brief role', () => {
   it('walks what the tidying left, and removes nothing itself', () => {
     const { overlay } = readCanonRole('brief');
     assert.match(overlay, /\*Archived without a note\*/u);
-    assert.match(overlay, /\*Workareas with no plan on main\*/u);
+    assert.match(overlay, /\*Workareas with no project on main\*/u);
     assert.match(overlay, /`branch: landed`/u);
     assert.match(overlay, /You remove nothing\./u);
   });
