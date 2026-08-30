@@ -116,6 +116,32 @@ opened memoro #11039 and landed it in the same session
 (`~/mc/runner/log/canonical-response-20260829T033139Z.json`). The same log holds
 131 `merge` rounds and 10 `check` rounds — the gate is still where code goes.
 
+## Known defect — the round does not converge under concurrent landings
+
+Measured 2026-08-29 in memoro, four sessions merging. The gate round
+measures a candidate for 20–35 minutes and then, before merging, requires
+that `origin/main` is still the commit it fetched (`repo-merge.js`,
+"origin/main moved … measured again rather than merged on"). Any landing
+from another session during the round voids the verdict. With several
+sessions landing, main moves every round: memoro #11096 was green twice
+(candidate 0 red, extra gate passed) and stopped both times for main
+moving; then "could not re-check the base"; then the lease was held by a
+session that was itself re-running its own round for the same reason. Two
+sessions re-measuring against each other's landings is a livelock, and a
+retry loop around it only hides the defect.
+
+What the operator does meanwhile is written in memoro's `AGENTS.md`
+(§ *When the gate stops a green pull request for a reason that is not the
+PR's*): investigate briefly, report, `gh pr merge --squash --admin`. No
+loop.
+
+What the gate should do instead — not built: when main has moved, compare
+the moved range against the candidate's change set and the tests the round
+ran; if the range touches neither, the verdict still holds and the merge
+proceeds (a fast-forward re-check, seconds), and only an overlap costs a
+new round. The lease should likewise be released between the measurement
+and the merge attempt rather than held for the whole round.
+
 ## How it is tested
 
 [`tests/mc/docs-merge.test.js`](../../tests/mc/docs-merge.test.js) drives

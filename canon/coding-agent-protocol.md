@@ -10,32 +10,75 @@ and is never copied into an instruction file.
 `memoro-cli` — the terminal coordinator for Memoro. Ships the `mc`,
 `memoro-cli`, and `memoro` binaries. Node 22+, ESM, `node --test`.
 
-Current product boundary: `mc` is a **minimal grounded coordinator
-runtime**, not a project-management system and not an agent runner. It
-keeps server-owned profile context, repo/session metadata, coordinator
-role, and cross-session work projects visible; the launched LLM session
-writes briefs and uses the agent tools already available in its host.
+Current product boundary: `mc` runs Martin's coding work. It is one page
+(bare `mc`), a set of plans on `main`, a runner that takes their steps in
+fresh headless sessions, and one door those steps land through. It is
+built for that one user (D-0205); a feature that does not serve it does
+not belong here. The description this paragraph replaced — "a minimal
+grounded coordinator runtime, not a project-management system and not an
+agent runner" — described the product before `mc plan`, `mc run` and
+`mc brief` existed.
+
+A large part of `src/` is still the session manager that preceded this:
+a registry, a broker, a PTY host, managed providers, cloud runtimes and a
+capability dispatcher. Measured 2026-08-29, 71 % of `src/` is unreachable
+from the page and its verbs. It is being removed by
+[`docs/project/mc/mc-cut/PLAN.md`](project/mc/mc-cut/PLAN.md). Do not build
+new work on it, and do not assume a module is live because it exists —
+`node docs/project/mc/mc-cut/reach.mjs .` answers that question.
 
 ## Stack + commands
 
 - Two binaries from one package (`package.json` `bin` field):
   - `memoro-cli` / `memoro` → `src/bin.js` (low-level: login, legacy lens
     compatibility, hook installation, heartbeat daemon)
-  - `mc` → `src/bin-mc.js` (high-level: lifecycle, coordinator,
-    fanout, vault, adapter sync)
-- Tests are currently **outside** the delivery flow. See "Validation is
-  suspended" below. `node --test --import ./tests/_isolate-home.mjs <files>`
-  remains available for deliberate local investigation, never as a gate.
-- Current V1 session work is governed by
-  [`mc-v1-session-architecture.md`](plans/mc-v1-session-architecture.md) and
-  [`mc-v1-session-pr-plan.md`](plans/mc-v1-session-pr-plan.md). Read only the
-  current sections needed for the task.
+  - `mc` → `src/mc-cli.js` — the page and the verbs, falling through to
+    `src/bin-mc.js` for the capability commands (auth, vault, github,
+    connections, dev)
+- Tests are the merge gate. `mc merge memoro-cli <pr>` runs the suite and
+  cannot land a red one; see "Validation" below.
+  `node --test --import ./tests/_isolate-home.mjs <files>` is the focused
+  local loop.
 - `docs/plans/worktree-lifecycle.md` is historical context. Do not execute its
   commands or use it to override current architecture, repository guidance, or
   live capability descriptors.
 - Cloud workload changes: read
   [`docs/plans/mc-v2-workload-allowlist.md`](plans/mc-v2-workload-allowlist.md)
   first. No route outside that fail-closed table is permitted.
+
+## How work is organized
+
+Work is **projects**, and a project is a `PLAN.md` on `main`. This is the same
+shape in memoro; the difference is only which repository the plan lives in.
+
+```
+mc brief    → Martin answers open questions with a **Beslut:** line
+mc plan     → a foreground session writes docs/project/<programme>/<name>/PLAN.md
+mc run      → the runner takes one step of one ready plan, in a fresh session
+mc merge    → the gate, then the squash
+              close-out → project_log.md + docs/technical/
+```
+
+- **Plans live at `docs/project/<programme>/<project>/PLAN.md`.** There is one
+  programme here, `mc`. Frontmatter: `status` (`ready` | `waiting-decision` |
+  `blocked` | `done`), `next` (one line carrying its own "done when"), `budget`,
+  `needs`. See [`docs/project/README.md`](project/README.md).
+- **You do not write plan state by hand.** `mc plan <name>` opens the session
+  that writes one, with Martin in it. A step session edits the plan it was
+  given — its `next:` line and its own sections — and no other.
+- **You do not decide.** An open question becomes
+  `~/mc/<workarea>/decisions/<programme>-<n>.md`: the question, the options, one
+  recommendation, and no menu. Martin answers it in `mc brief`. That directory
+  is outside git and does not survive its workarea, so a ruling worth keeping is
+  carried into [`docs/project/mc/rulings.md`](project/mc/rulings.md) **before**
+  the file is retired — `mc brief --collect` deletes an answered file once no
+  plan is still waiting on it.
+- **A workarea is `~/mc/<project>/memoro-cli`,** a worktree on branch
+  `<project>` from `origin/main`. `mc` owns it: it is created by `mc plan` or
+  `mc work add`, and closed by `mc run` in the round after its plan says `done`.
+  Never remove one, or its branch, by hand.
+- **`status: ready` is what starts the runner on a plan.** Nothing else is a
+  queue. Do not set it on a plan that is not ready to be executed unattended.
 
 ## Working on this codebase as a coding agent
 
@@ -103,6 +146,15 @@ The expected loop is explicit: read the current profile with `--json`, discuss
 the change, draft a full replacement Markdown profile, show the diff, and write
 only after the user approves. When no profile exists, `read --json` returns
 `base_revision: 0` plus `template_markdown` for the first revision.
+
+A rule that should bind the next agent in a repository — a way of merging,
+a way of running subagents, a thing never to do again — is written into
+that repository's agent contract (`docs/coding-agent-protocol.md` here,
+`AGENTS.md`/`CLAUDE.md` in memoro), in the section the next agent will be
+reading when the rule matters. It is never left only in an agent's
+per-project memory store: a memory is read by one agent, a repository file
+by all of them. Ruled by Martin 2026-08-29 after a merge-gate rule had been
+saved as a memory and nowhere else.
 
 ## Code conventions
 
@@ -237,24 +289,39 @@ The session-scoped `gh` shim is compatibility syntax for its advertised typed
 operations, not native GitHub authority. `mc github` is the canonical wording
 in instructions and diagnostics.
 
-### Validation is suspended (normative, temporary)
+### Validation (normative)
 
-The test suite is out of the delivery flow until it is rebuilt deliberately.
-Large parts of it assert removed architecture, and re-running it turned
-publication into a loop that never terminated. Until the rebuild lands:
+**The suite is the gate again.** This section replaced "Validation is
+suspended", which said the opposite and had stopped being true: `mc merge
+<repo> <pr>` runs the round in `src/mc/repo-gate.js`, and there is no way to
+merge a red one — not a flag, not an option, not an environment variable
+(`src/mc/repo-merge.js`). Red is measured as a set of failing test **names**
+against a ratchet floor (`src/mc/tap-red.js`, `src/mc/red-ratchet.js`), never
+as a count, so a standing red name does not block an unrelated change but a new
+one does.
 
-- Do not run `npm test`, focused suites, smoke runs, or security probes as a
-  condition of committing, publishing, reviewing, or merging.
-- Do not add "add tests for this" as a completion criterion, a review finding,
-  or a blocker in a plan, PR body, or handoff.
-- Do not treat an existing test file as authority over current behavior. Where
-  a test and the code disagree, the code and this protocol decide.
-- Say plainly in the PR body that validation was not run. Never imply it was.
+- `mc merge <repo> <pr>` — the gate, then the squash. The only door for code.
+- `mc merge <repo> <pr> --check` — the same measurement, stopping at the
+  verdict. Use it before you claim anything about the suite.
+- `mc merge <repo> <pr> --docs` — a pull request whose every file is under
+  `docs/`: no suite, no lease, no worktree, no model. The session that opened
+  it lands it itself.
+- `npm test` locally is the fast loop, but it runs 2 107 tests with no
+  `--test-concurrency` cap and is load-flaky on this machine. A local red is
+  worth re-running before it is worth reporting; the gate's verdict is the one
+  that counts.
 
-Rebuilding validation is its own scoped, agreed piece of work: choose what is
-worth asserting, delete what asserts dead architecture, and reintroduce a suite
-that can actually run to completion. Nothing in this section authorizes adding
-tests back one at a time along the way.
+Two things this does **not** yet cover, both known and both written down rather
+than left to be rediscovered:
+
+- **The runner does not gate.** `mc run` lands a step's pull request with
+  `mergePr` (`src/mc/run.js`), a raw `gh pr merge --squash`. Ruling `mc-test-1`
+  ([`docs/project/mc/rulings.md`](project/mc/rulings.md) §4) replaces that path
+  so the runner goes through `mc merge`; until it does, a runner-landed PR was
+  not gated.
+- **Never claim a run you did not make.** Say in the PR body what was run and
+  what was not. "Suite not run" is an acceptable sentence; implying it passed
+  is not.
 
 ## Critical paths — extra care
 
@@ -290,8 +357,10 @@ tests back one at a time along the way.
   `getStatus()` only)
 - Don't make `mc` / `mc auth status` print to stdout in a way
   that breaks `--json` consumers
-- Don't guess on design with 2+ reasonable options — ask the
-  coordinator (see the skill)
+- Don't guess on design with 2+ reasonable options — raise a decision
+  file (`~/mc/<workarea>/decisions/<programme>-<n>.md`) with one
+  recommendation and let `mc brief` answer it. A menu of options is not a
+  decision file; if you cannot recommend one, investigate further first
 - Don't add `--non-interactive` flags to commands that are already
   non-interactive by default
 - Keep `CLAUDE.md` / `AGENTS.md` thin. They are hand-edited wrappers
