@@ -1,8 +1,9 @@
 /**
- * `docs/technical/mc-run.md` is the lanes written down: it exists so somebody
- * who has never read run.js can say what a lane owns, what it writes and what
- * the two lanes share. That only holds while the numbers in it are the numbers
- * in the code, and a doc that names a default goes stale silently.
+ * `docs/technical/mc-run.md` is the runner written down: it exists so somebody
+ * who has never read run.js can say what a round does, what a step is, what
+ * the two lanes share and what the runner writes. That only holds while the
+ * numbers in it are the numbers in the code, and a doc that names a default
+ * goes stale silently.
  *
  * So the doc is pinned, the same way `tests/mc/helper-doc.test.js` pins the
  * helper's note: every constant the prose states is read back out of it and
@@ -13,8 +14,11 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, it } from 'node:test';
 
+import { parseRunArgs } from '../../src/mc/commands/run.js';
 import { REPO_NAMES } from '../../src/mc/run.js';
-import { DEFAULT_BUDGET_MINUTES, QUOTA_SLEEP_MS } from '../../src/mc/run-plan.js';
+import {
+  DEFAULT_BUDGET_MINUTES, DEFAULT_MODEL, DEFAULT_TOOL, HELPER_HOUR_UTC, QUOTA_SLEEP_MS, RUNS_HEADER,
+} from '../../src/mc/run-plan.js';
 
 const DOC = readFileSync(fileURLToPath(new URL('../../docs/technical/mc-run.md', import.meta.url)), 'utf8');
 
@@ -36,8 +40,32 @@ describe('docs/technical/mc-run.md says what the runner does', () => {
   });
 
   it('names the files a lane writes, and the one the runner writes once', () => {
-    assert.match(DOC, /`~\/mc\/runner\/current-<repo>\.json`/u);
-    assert.match(DOC, /`~\/mc\/runner\/runner\.json` stays one/u);
+    assert.match(DOC, /`current-<repo>\.json`/u);
+    assert.match(DOC, /`runner\.json`\*\* stays one/u);
     assert.match(DOC, /`~\/mc\/runner\/STOP`/u);
+  });
+
+  it('states the tool and model a plan gets when its frontmatter names none', () => {
+    assert.match(DOC, new RegExp(`\\*\\*\`tool:\`\\*\\* — \`${DEFAULT_TOOL}\` by default`, 'u'));
+    assert.match(DOC, new RegExp(`\\*\\*\`model:\`\\*\\* — \`${DEFAULT_MODEL}\` by default`, 'u'));
+  });
+
+  it('lists the runs.tsv columns in the order the row is written', () => {
+    const columns = DOC.replace(/\s+/gu, ' ');
+    assert.ok(columns.includes(RUNS_HEADER.join(' ')), 'the doc no longer lists the runs.tsv columns');
+  });
+
+  it('states the hour the day\'s helper becomes due', () => {
+    assert.match(DOC, new RegExp(`after ${String(HELPER_HOUR_UTC).padStart(2, '0')}:00Z`, 'u'));
+  });
+
+  it('states the flag defaults the command parses', () => {
+    const defaults = parseRunArgs([]);
+    assert.equal(defaults.rounds, 0);
+    assert.equal(defaults.merge, true);
+    assert.equal(defaults.idleSleep, 600);
+    assert.match(DOC, /`--rounds 0` \(the default\) is forever/u);
+    assert.match(DOC, /600 s by default/u);
+    assert.match(DOC, /`--no-merge`\s+leaves the pull requests open/u);
   });
 });
