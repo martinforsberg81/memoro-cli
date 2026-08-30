@@ -19,14 +19,15 @@
  * repository that the runner merges like any other. `done` is the whole
  * trigger; there is nothing to type. The rules are in archive-plan.js.
  *
- * A round ends by taking away the folder that plan explains: a workarea whose
- * project is finished — its plan left main this round, or `project_log.md`
- * says an earlier round archived it — and whose worktree is clean and whose
- * last row in runs.tsv ends `merged` is removed: worktree handed back, local
- * branch deleted, everything it kept beside its checkout moved to
- * `runner/log/closed/<name>/`. A workarea no project explains at all is never
- * removed by a machine; it is written to `~/mc/intake/unplanned-workareas.md`
- * instead. The rules are in close-workarea.js.
+ * A round ends by taking away the folder that plan explains — but only one the
+ * plan world built. A workarea whose project ever had a `PLAN.json`, whose plan
+ * left main this round or was archived by an earlier one, whose worktree is
+ * clean, whose branch holds nothing main does not, and whose last delivery ends
+ * `merged`, is removed: worktree handed back, local branch deleted, everything
+ * it kept beside its checkout moved to `runner/log/closed/<name>/`. Everything
+ * else is listed and never touched — the finished ones from before `PLAN.json`
+ * in `~/mc/intake/finished-workareas.md`, the ones no project explains in
+ * `~/mc/intake/unplanned-workareas.md`. The rules are in close-workarea.js.
  *
  * `~/mc/queue.md` is Martin's "these first" and nothing else: names of
  * projects that still have a step to run, one per line. The round rewrites it
@@ -62,7 +63,9 @@ import { writeJsonAtomic } from './atomic-write.js';
 import { branchLanded } from './branch-landed.js';
 import { defaultRepos, listPlans, showBatch } from './brief-collect.js';
 import { readPlanText, unauthorisedChanges } from './plan-schema.js';
-import { closable, lastRunFor, unplannedFile, unplannedRow } from './close-workarea.js';
+import {
+  closable, finishedFile, finishedRow, lastDeliveryFor, unplannedFile, unplannedRow,
+} from './close-workarea.js';
 import { handOver } from './run-control.js';
 import { collectHelper, describeDigest, HELPER_REPOS, intakeDir, unreadableSections } from './helper-collect.js';
 import { describeTurn, runHelperTurn } from './helper-turn.js';
@@ -202,6 +205,9 @@ export function createRunner({
     // deleted: the folder is what goes, not what somebody wrote in it.
     closed: join(root, 'runner', 'log', 'closed'),
     unplanned: join(intakeDir(deps.env), 'unplanned-workareas.md'),
+    // The finished ones a round may not take down: from before PLAN.json, or
+    // holding a branch main does not. Listed for Martin, never acted on.
+    finished: join(intakeDir(deps.env), 'finished-workareas.md'),
   };
   const writeJson = deps.writeJson || ((path, value) => deps.write(path, `${JSON.stringify(value, null, 2)}\n`));
   const remove = deps.remove || (() => {});
@@ -534,19 +540,37 @@ export function createRunner({
     const byProject = new Map(plans.map((plan) => [plan.project, plan]));
     const tsv = deps.read(paths.runs) || '';
     const rows = [];
+    const finished = [];
     let closed = 0;
     for (const name of workareas()) {
       const plan = byProject.get(name) || null;
       if (plan && plan.status !== 'done') continue;
+      // Everything cheap first. The two git questions below are asked only of a
+      // folder that has already passed the rest: one `log` and one `merge-tree`
+      // per candidate is nothing, and per workarea would be eighty of each.
+      const finishedNow = closable({
+        plan,
+        archived: archived.has(name),
+        planWorld: true,
+        dirty: uncommitted(name) > 0,
+        live: deps.tmuxHas(`mc-${name}`),
+        lastRun: lastDeliveryFor(tsv, name),
+      });
+      if (finishedNow.unplanned) { rows.push(unplannedFor(name)); continue; }
+      if (!finishedNow.close) { say(`close: ${name} kept — ${finishedNow.why}`); continue; }
+
       const verdict = closable({
         plan,
         archived: archived.has(name),
-        dirty: uncommitted(name) > 0,
-        live: deps.tmuxHas(`mc-${name}`),
-        lastRun: lastRunFor(tsv, name),
+        planWorld: planWorldProject(name),
+        lastRun: lastDeliveryFor(tsv, name),
+        landed: branchOf(name),
       });
-      if (verdict.unplanned) { rows.push(unplannedFor(name)); continue; }
-      if (!verdict.close) { say(`close: ${name} kept — ${verdict.why}`); continue; }
+      if (!verdict.close) {
+        say(`close: ${name} kept — ${verdict.why}`);
+        if (verdict.legacy) finished.push(finishedFor(name, plan, tsv, verdict.why));
+        continue;
+      }
       // The plan goes first, then the workarea. A plan this round still read on
       // main goes only if the archive PR that removes it actually merged; one
       // that was already gone is answered by the project log instead, which is
@@ -555,8 +579,47 @@ export function createRunner({
       if (closeWorkarea(name)) closed += 1;
     }
     deps.write(paths.unplanned, unplannedFile(rows));
+    deps.write(paths.finished, finishedFile(finished));
     if (rows.length) say(`close: ${rows.length} workarea(s) with no project on main — ${paths.unplanned}`);
-    return { closed, unplanned: rows.length };
+    if (finished.length) say(`close: ${finished.length} finished workarea(s) nothing here removes — ${paths.finished}`);
+    return { closed, unplanned: rows.length, finished: finished.length };
+  }
+
+  /**
+   * Did this project ever have a `PLAN.json` in main's history?
+   *
+   * The whole boundary between what a round may take down and what is Martin's
+   * (2026-08-30). Asked of git rather than remembered: by the time the question
+   * matters the plan itself is gone — the archive removed it — and the history
+   * is the only thing left that knows which world the project came from.
+   */
+  function planWorldProject(name) {
+    for (const repo of repos) {
+      if (!deps.exists(join(repo.path, '.git'))) continue;
+      if (gitOut(repo.path, ['log', 'origin/main', '--format=%h', '-1', '--', `docs/project/*/${name}/PLAN.json`])) return true;
+    }
+    return false;
+  }
+
+  /** `landed` | `ahead` | `unknown` — asked of content, never of commit counts. */
+  function branchOf(name) {
+    const [repo] = areaRepos(name);
+    if (!repo) return 'unknown';
+    const worktree = join(root, name, repo.name);
+    const branch = gitOut(worktree, ['rev-parse', '--abbrev-ref', 'HEAD']) || name;
+    return branchLanded(worktree, branch, { run: (args) => gitOut(worktree, args) });
+  }
+
+  /** One row of `~/mc/intake/finished-workareas.md` — a folder only Martin removes. */
+  function finishedFor(name, plan, tsv, why) {
+    const [repo] = areaRepos(name);
+    return finishedRow({
+      name,
+      repo: plan?.repo || repo?.name || '-',
+      why,
+      pr: lastDeliveryFor(tsv, name)?.pr || '-',
+      branch: branchOf(name),
+    });
   }
 
   /**

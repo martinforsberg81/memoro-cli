@@ -10,7 +10,7 @@ import { createRunner, runLoop } from '../../src/mc/run.js';
  * a "session" that returns what the test says. Nothing starts, nothing is
  * written outside `files`.
  */
-function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], live = [], areas = {}, conflicts = {}, roles = true, now = '2026-08-29T10:00:00Z', runs = null, collect = okCollect, helperTurn = okTurn, projectLog = {}, archive = {}, landed = [], removeFails = [], heads = {} } = {}) {
+function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], live = [], areas = {}, conflicts = {}, roles = true, now = '2026-08-29T10:00:00Z', runs = null, collect = okCollect, helperTurn = okTurn, projectLog = {}, archive = {}, landed = [], removeFails = [], heads = {}, planWorld = [] } = {}) {
   const root = '/w';
   const files = { [`${root}/queue.md`]: queue };
   if (runs != null) files[`${root}/runner/log/runs.tsv`] = runs;
@@ -103,6 +103,15 @@ function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], live = 
       const repoName = Object.keys(repos).find((r) => cwd === repos[r]);
       if (args[0] === 'ls-tree' && repoName) {
         return { ok: true, stdout: Object.keys(plans[repoName] || {}).map((n) => `docs/project/prog/${n}/PLAN.json`).join('\n') };
+      }
+      // `log origin/main -1 -- docs/project/*/<name>/PLAN.json` — did this
+      // project ever come through the plan world? A plan the fixture wrote is
+      // a PLAN.json by construction; `planWorld` names the archived ones whose
+      // plan has already left main.
+      if (args[0] === 'log' && args[1] === 'origin/main' && String(args.at(-1)).endsWith('/PLAN.json')) {
+        const name = String(args.at(-1)).split('/').at(-2);
+        const known = Object.hasOwn(plans[repoName] || {}, name) || planWorld.includes(name);
+        return { ok: true, stdout: known ? 'abc1234' : '' };
       }
       if (args[0] === 'show' && repoName) {
         // The project log is read straight off origin/main at the end of a
@@ -852,6 +861,7 @@ test('a workarea whose plan left main this round is closed: worktree handed back
     plans: { memoro: { over: done() } },
     areas: { over: { repo: 'memoro', programme: 'prog', plan: done(), decisions: { 'prog-1.md': '# q\n' } } },
     projectLog: { memoro: LOG_HEAD },
+    landed: ['over'],
     runs: RUNS_HEAD + ranRow('over'),
     session: okSession(),
   });
@@ -893,11 +903,12 @@ test('a done workarea whose last step is still open is kept', async () => {
     areas: { over: { repo: 'memoro', programme: 'prog', plan: done() } },
     projectLog: { memoro: LOG_HEAD },
     runs: RUNS_HEAD + ranRow('over', 'success,open'),
+    landed: ['over'],
     session: okSession(),
   });
   await createRunner({ deps: f.deps }).round();
   assert.deepEqual(f.calls.rmdirs, []);
-  assert.match(f.files['/w/runner/log/runner.log'], /close: over kept — the last run says success,open/u);
+  assert.match(f.files['/w/runner/log/runner.log'], /close: over kept — its last delivery says success,open/u);
 });
 
 /**
@@ -915,6 +926,8 @@ test('a workarea whose plan an earlier round archived is closed on the strength 
     areas: { gone: { repo: 'memoro' } },
     projectLog: { memoro: logged },
     runs: RUNS_HEAD + ranRow('gone'),
+    planWorld: ['gone'],
+    landed: ['gone'],
     session: okSession(),
   });
   await createRunner({ deps: f.deps }).round();
@@ -929,6 +942,53 @@ test('a workarea whose plan an earlier round archived is closed on the strength 
  * after an archived project but with no runner step behind it is somebody's,
  * not the runner's.
  */
+/**
+ * The boundary Martin drew on 2026-08-30. A round removed 22 workareas in one
+ * evening; checked afterwards, every one of them was a PLAN.md project and not
+ * one had ever had a PLAN.json. Nothing was lost \u2014 every last pull request had
+ * merged \u2014 but they were not the runner's folders to take.
+ */
+test('a finished workarea from before PLAN.json is listed for Martin, never removed', async () => {
+  const logged = `${LOG_HEAD}| 2026-08-29 | prog | old | delivered | It shipped. | - | #12 |\n`;
+  const f = fixture({
+    plans: { memoro: {} },
+    areas: { old: { repo: 'memoro' } },
+    projectLog: { memoro: logged },
+    runs: RUNS_HEAD + ranRow('old'),
+    landed: ['old'],
+    // No planWorld entry: main's history has no PLAN.json for it.
+    session: okSession(),
+  });
+  await createRunner({ deps: f.deps }).round();
+  assert.deepEqual(f.calls.rmdirs, [], 'a folder from before the plan world is nobody\u2019s but Martin\u2019s');
+  assert.equal('/w/old/memoro/.git' in f.files, true, 'the checkout is untouched');
+  assert.match(f.files['/w/runner/log/runner.log'], /close: old kept — finished, but from before PLAN\.json — yours to remove/u);
+  const listed = f.files['/w/intake/finished-workareas.md'];
+  assert.match(listed, /# Workareas whose project is finished/u);
+  assert.match(listed, /\| old \| memoro \| finished, but from before PLAN\.json[^|]*\| 77 \| landed \|/u);
+});
+
+/**
+ * What `git status --porcelain` cannot see, on a real round: it reports
+ * uncommitted changes and says nothing about a commit that was never pushed,
+ * and the close ends in `git branch -D`.
+ */
+test('a plan-world workarea whose branch main does not hold is listed, not removed', async () => {
+  const f = fixture({
+    plans: { memoro: { over: done() } },
+    areas: { over: { repo: 'memoro', programme: 'prog', plan: done() } },
+    projectLog: { memoro: LOG_HEAD },
+    runs: RUNS_HEAD + ranRow('over'),
+    // `landed` is empty, so merge-tree says this branch holds something main
+    // does not — which is exactly the commit nobody pushed.
+    session: okSession(),
+  });
+  await createRunner({ deps: f.deps }).round();
+  assert.deepEqual(f.calls.rmdirs, []);
+  assert.match(f.files['/w/runner/log/runner.log'], /close: over kept — its branch is ahead — main does not hold everything it has/u);
+  assert.match(f.files['/w/intake/finished-workareas.md'], /\| over \| memoro \|[^|]*ahead[^|]*\|/u);
+});
+
 test('a folder sharing an archived name, with no runner step, is kept and filed as unexplained', async () => {
   const logged = `${LOG_HEAD}| 2026-08-29 | prog | gone | delivered | It shipped. | - | #12 |\n`;
   const f = fixture({
@@ -950,6 +1010,7 @@ test('an archive PR that did not merge keeps the workarea: the plan is still on 
     projectLog: { memoro: LOG_HEAD },
     archive: { memoro: { mergeFails: true } },
     runs: RUNS_HEAD + ranRow('over'),
+    landed: ['over'],
     session: okSession(),
   });
   await createRunner({ deps: f.deps }).round();

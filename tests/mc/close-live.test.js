@@ -35,6 +35,9 @@ function repository() {
   git(repo, ['config', 'user.name', 'mc-test']);
   const write = (path, text) => { mkdirSync(dirname(join(repo, path)), { recursive: true }); writeFileSync(join(repo, path), text); };
   write('README.md', '# a repository\n');
+  // `finished` came through the plan world and `dirty` did not: the boundary a
+  // round closes across is a PLAN.json in main's history, and this is it.
+  write('docs/project/mc/finished/PLAN.json', '{"schema":"mc-plan","version":1}\n');
   git(repo, ['add', '-A']);
   git(repo, ['commit', '-q', '-m', 'first']);
   git(repo, ['push', '-q', 'origin', 'HEAD:main']);
@@ -81,7 +84,7 @@ describe('closing a workarea, for real', () => {
     assert.deepEqual(createRunner({ deps: fx.deps }).workareas(), ['dirty', 'finished', 'orphan']);
   });
 
-  it('hands the worktree back, deletes the branch, moves the filing and takes the folder', () => {
+  it('closes only the plan-world project — the other finished one is not the runner\u2019s', () => {
     const out = createRunner({ deps: fx.deps }).closeWorkareas(PLANS, ['finished', 'dirty']);
     assert.equal(out.closed, 1);
 

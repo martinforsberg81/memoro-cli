@@ -82,19 +82,45 @@ Two things about the mechanics are worth knowing:
 
 ## What closing a workarea does
 
-A workarea is **closable** when three facts hold, and no judgement is made
+**A round closes what the plan world built, and lists everything else.** Ruled
+by Martin on 2026-08-30, after a round removed 22 workareas in one evening:
+checked afterwards, every one of them was a `PLAN.md` project and not one had
+ever had a `PLAN.json`. Nothing was lost — every last pull request had merged —
+but they were not the runner's folders to take. What comes through `PLAN.json`
+is the runner's to take down when it is done; what predates that system is
+Martin's, and no machine touches it.
+
+A workarea is **closable** when four facts hold, and no judgement is made
 beyond them:
 
+- **it is a plan-world project** — `git log origin/main -- docs/project/*/<name>/PLAN.json`
+  finds something. Asked of history rather than remembered, because by the time
+  the question matters the plan itself is gone: the archive removed it,
 - its project is finished — its plan on main says `status: done`, **or** the
   plan is gone and `docs/project/project_log.md` carries the row the archive
   wrote for it,
-- its worktree has no uncommitted change,
-- its last row in `~/mc/runner/log/runs.tsv` ends `merged`.
+- its worktree has no uncommitted change **and** its branch holds nothing main
+  does not (`branch-landed.js`, asked of content),
+- its **last delivering** row in `~/mc/runner/log/runs.tsv` ends `merged`.
 
-The last two are what keep the second half of the first from taking anything
-it should not. A folder somebody made by hand that happens to share a name
-with a project archived weeks ago has no runner step to point at, so it is
-kept and filed as one nothing explains.
+The branch fact is there because of what the worktree fact cannot see:
+`git status --porcelain` reports uncommitted changes and says nothing about a
+commit that was never pushed, and the close ends in `git branch -D`. A row
+saying `merged` is evidence that *a* pull request landed, never that this
+branch has nothing left on it.
+
+"Last delivering" and not "last": a `reconcile` resolves a conflict and opens
+nothing, so its `pr` column is `-` and its note is a plain `success`. Measured
+on the first round that ever reached this code, 20 finished workareas were
+passed over saying `the last run says success` because a reconcile happened to
+be the last thing that ran. A row with no pull request is not evidence either
+way, and is skipped rather than believed.
+
+Everything the four facts pass over is **listed, never taken**: the finished
+ones the runner may not remove in `~/mc/intake/finished-workareas.md`, the ones
+no project explains in `~/mc/intake/unplanned-workareas.md`.
+`mc work discard <name> --apply` is what removes one, typed by a person who has
+read the row.
 
 Commit counting against main is deliberately not one of them: the runner
 squash-merges, so every finished branch reads as "ahead" forever. A live

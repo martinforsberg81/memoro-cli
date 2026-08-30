@@ -257,7 +257,7 @@ describe('the intake tables the runner writes', () => {
 });
 
 describe('collectBrief', () => {
-  it('writes the nine sections, offline, with a 24 h window on the first run', async () => {
+  it('writes the ten sections, offline, with a 24 h window on the first run', async () => {
     const root = workRoot();
     const env = { MC_WORK_ROOT: root, MC_REPOS_HOME: join(root, 'no-repos') };
     const now = new Date('2026-08-25T20:00:00Z');
@@ -266,7 +266,8 @@ describe('collectBrief', () => {
     const text = readFileSync(result.path, 'utf8');
     assert.equal(text, result.text);
     const order = ['## Merged since last brief', '## Opened, not merged', '## Waiting on Martin', '## Proposals',
-      '## Plan status', '## Archived without a note', '## Workareas with no project on main', '## Runner', '## Queue'];
+      '## Plan status', '## Archived without a note', '## Finished workareas nothing removes',
+      '## Workareas with no project on main', '## Runner', '## Queue'];
     let at = -1;
     for (const heading of order) {
       const next = text.indexOf(heading);

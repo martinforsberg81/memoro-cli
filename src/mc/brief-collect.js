@@ -3,10 +3,10 @@
  * script and written to one file. No model is involved here; the model is
  * the session that reads the file afterwards.
  *
- * Nine sections, in the order the plan fixes them: merged since the last
+ * Ten sections, in the order the plan fixes them: merged since the last
  * brief · opened, not merged · waiting on Martin · the helper's proposals ·
- * plan status · archived without a note · workareas with no plan · runner ·
- * queue. Every line comes from a file the runner or a session already
+ * plan status · archived without a note · finished workareas nothing removes ·
+ * workareas with no project · runner · queue. Every line comes from a file the runner or a session already
  * writes (`~/mc/runner/log/runs.tsv`, `~/mc/<area>/decisions/<n>.md`,
  * `docs/project/<programme>/<project>/PLAN.md` on origin/main, `~/mc/queue.md`,
  * `~/mc/intake/*.md`) or from GitHub through `gh`. The pure builders take text
@@ -289,6 +289,7 @@ export function scanProposals(dir) {
  */
 export const UNDOCUMENTED_KEYS = ['date', 'repo', 'programme', 'project', 'pointer'];
 export const UNPLANNED_KEYS = ['name', 'repo', 'uncommitted', 'lastCommit', 'branch'];
+export const FINISHED_KEYS = ['name', 'repo', 'why', 'pr', 'branch'];
 
 /** A row of a pipe table, with `\|` folded back into a cell rather than splitting it. */
 function splitRow(line) {
@@ -506,6 +507,7 @@ const fmt = (n) => Number(n).toLocaleString('en-US');
 /** Named in the brief so the answer is a file Martin can open, not a fact he must trust. */
 const UNDOCUMENTED_FILE = '`~/mc/intake/undocumented-closures.md`';
 const UNPLANNED_FILE = '`~/mc/intake/unplanned-workareas.md`';
+const FINISHED_FILE = '`~/mc/intake/finished-workareas.md`';
 /** The undocumented file is append-only; the brief shows the newest rows and counts the rest. */
 const INTAKE_CAP = 12;
 /**
@@ -522,7 +524,7 @@ const clip = (text, max = 90) => {
 
 export function renderBrief({
   now, since, firstBrief, merged, opened, decisions, proposals = [], plans,
-  undocumented = null, unplanned = null, runs, queue, notes = [],
+  undocumented = null, unplanned = null, finished = null, runs, queue, notes = [],
 }) {
   const out = [];
   const stamp = (d) => d.toISOString().replace(/\.\d{3}Z$/u, 'Z');
@@ -588,6 +590,19 @@ export function renderBrief({
     out.push('', `${undocumented.length} project${undocumented.length === 1 ? '' : 's'} archived with \`doc: none\`. `
       + `The directory is gone and \`git log --all -- docs/project/…\` is what is left of it: write the note under `
       + `\`docs/technical/\`, or decide it needs none. ${UNDOCUMENTED_FILE} is append-only — nothing but you prunes it.`);
+  }
+  out.push('');
+
+  out.push('## Finished workareas nothing removes', '');
+  if (!finished) out.push(`_no ${FINISHED_FILE} — \`mc run\` writes it at the end of every round_`);
+  else if (!finished.length) out.push('_none_');
+  else {
+    out.push('| name | repo | why | pr | branch |', '|---|---|---|---|---|');
+    for (const r of finished) out.push(`| ${r.name} | ${r.repo} | ${clip(r.why, 60)} | ${r.pr} | ${r.branch} |`);
+    const landed = finished.filter((r) => r.branch === 'landed').length;
+    out.push('', `${finished.length} workarea${finished.length === 1 ? '' : 's'} whose project is over but which `
+      + `\`mc run\` may not take down — from before \`PLAN.json\`, or holding a branch main does not. `
+      + `${landed} would lose nothing. \`mc work discard <name> --apply\` is what removes one, and only you type it.`);
   }
   out.push('');
 
@@ -717,13 +732,14 @@ export async function collectBrief({
   const intake = intakeDir(env);
   const undocumented = readIntake(read, join(intake, 'undocumented-closures.md'), UNDOCUMENTED_KEYS);
   const unplanned = readIntake(read, join(intake, 'unplanned-workareas.md'), UNPLANNED_KEYS);
+  const finished = readIntake(read, join(intake, 'finished-workareas.md'), FINISHED_KEYS);
 
   const text = renderBrief({
     now, since, firstBrief: !last, merged, opened, decisions, proposals, plans,
-    undocumented, unplanned, runs, queue, notes,
+    undocumented, unplanned, finished, runs, queue, notes,
   });
   mkdirSync(dir, { recursive: true });
   const path = join(dir, `${now.toISOString().replace(/[:.]/gu, '-').replace(/-\d{3}Z$/u, 'Z')}.md`);
   writeFileSync(path, text);
-  return { path, text, data: { since, merged, opened, decisions, proposals, plans, undocumented, unplanned, runs, queue, notes } };
+  return { path, text, data: { since, merged, opened, decisions, proposals, plans, undocumented, unplanned, finished, runs, queue, notes } };
 }

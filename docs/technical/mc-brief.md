@@ -37,6 +37,7 @@ writes:
 | Proposals | `~/mc/intake/proposals/*.md`, what `mc helper`'s turn wrote |
 | Plan status | every `docs/project/*/*/PLAN.json` on `origin/main` of both repositories |
 | Archived without a note | `~/mc/intake/undocumented-closures.md` |
+| Finished workareas nothing removes | `~/mc/intake/finished-workareas.md` |
 | Workareas with no project on main | `~/mc/intake/unplanned-workareas.md` |
 | Runner | the last 24 h of `~/mc/runner/log/runs.tsv` |
 | Queue | `~/mc/queue.md` |
