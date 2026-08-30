@@ -169,9 +169,10 @@ describe('the merge round, for real', () => {
     } finally { fx.cleanup(); }
   });
 
-  it('a base that moved while the suites ran stops the round', async () => {
-    // Somebody merges by hand mid-round. The lease does not stop them, so the
-    // round has to notice before acting on a verdict about a tree that changed.
+  it('a base that moved over this change’s own files stops the round', async () => {
+    // Somebody merges by hand mid-round, into a file the candidate also
+    // changes. The merged tree is then one neither side measured, and the
+    // round has to notice before acting on a verdict about it.
     const fx = repository();
     try {
       const before = fx.mainAt();
@@ -190,7 +191,9 @@ describe('the merge round, for real', () => {
           git(fx.root, ['clone', '-q', fx.bare, side]);
           git(side, ['config', 'user.email', 'other@example.invalid']);
           git(side, ['config', 'user.name', 'other']);
-          writeFileSync(join(side, 'NOTES.md'), 'landed while the suites ran\n');
+          // The same file the candidate adds — this is the overlap.
+          mkdirSync(join(side, 'tests'), { recursive: true });
+          writeFileSync(join(side, 'tests', 'b.test.js'), '// somebody else got here first\n');
           git(side, ['add', '-A']);
           git(side, ['commit', '-q', '-m', 'Something else']);
           git(side, ['push', '-q', 'origin', 'main']);
@@ -200,12 +203,51 @@ describe('the merge round, for real', () => {
 
       assert.equal(report.ok, false);
       assert.equal(report.stopped_at, 'drift');
-      assert.match(report.reason, /moved from/u);
+      assert.match(report.reason, /tests\/b\.test\.js/u);
       assert.equal(report.merged, false);
       // Main carries the other person's commit and not ours.
       assert.notEqual(fx.mainAt(), before);
       assert.match(fx.subjectsOnMain()[0], /Something else/u);
       assert.doesNotMatch(fx.subjectsOnMain().join('\n'), /#400/u);
+      assert.equal(fx.lease().held, false);
+    } finally { fx.cleanup(); }
+  });
+
+  it('a base that only moved forward, elsewhere in the tree, is merged onto', async () => {
+    // The eight `drift` rounds in gate-rounds.jsonl on 2026-08-29 were all
+    // this shape, and all eight threw away a measurement that still held: one
+    // squash landing on main, elsewhere, while a 4-to-101-minute gate ran.
+    const fx = repository();
+    try {
+      const report = await runMergeRound({
+        repoPath: fx.repo,
+        pr: 400,
+        holder: AREA,
+        root: fx.mcHome,
+        env: fx.env,
+        mergeLog: null,
+        gate: async (options) => {
+          const { runGate } = await import('../../src/mc/repo-gate.js');
+          const verdict = await runGate(options);
+          const side = join(fx.root, 'meanwhile');
+          git(fx.root, ['clone', '-q', fx.bare, side]);
+          git(side, ['config', 'user.email', 'other@example.invalid']);
+          git(side, ['config', 'user.name', 'other']);
+          writeFileSync(join(side, 'NOTES.md'), 'landed while the suites ran\n');
+          git(side, ['add', '-A']);
+          git(side, ['commit', '-q', '-m', 'Something else']);
+          git(side, ['push', '-q', 'origin', 'main']);
+          return verdict;
+        },
+      });
+
+      assert.equal(report.ok, true, report.reason || '');
+      assert.equal(report.merged, true);
+      assert.equal(report.stopped_at, null);
+      // Both landed: theirs, then ours on top of it.
+      const subjects = fx.subjectsOnMain().join('\n');
+      assert.match(subjects, /#400/u);
+      assert.match(subjects, /Something else/u);
       assert.equal(fx.lease().held, false);
     } finally { fx.cleanup(); }
   });

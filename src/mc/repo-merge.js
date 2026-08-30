@@ -214,8 +214,20 @@ export async function runMergeRound({
     if (fetched.status !== 0) return finish('drift', 'could not re-check the base before merging');
     const nowAt = trim(askGit(['rev-parse', base], { cwd: repoPath }).stdout);
     if (!nowAt) return finish('drift', `could not read ${base} before merging`);
+    let groundNote = `${base} unmoved`;
     if (nowAt !== verdict.baseline.commit) {
-      return finish('drift', `${base} moved from ${short(verdict.baseline.commit)} to ${short(nowAt)} while the gate ran — the verdict is about a tree that has changed, so it is measured again rather than merged on`);
+      const from = verdict.baseline.commit;
+      const held = groundStillHolds({
+        base,
+        from,
+        to: nowAt,
+        fastForward: askGit(['merge-base', '--is-ancestor', from, nowAt], { cwd: repoPath }).status === 0,
+        movedFiles: pathList(askGit(['diff', '--name-only', `${from}..${nowAt}`], { cwd: repoPath })),
+        candidateFiles: candidateFilesOf(verdict, { from, repoPath, git: askGit }),
+      });
+      if (!held.ok) return finish('drift', held.reason);
+      groundNote = held.note;
+      say(`${base} moved to ${short(nowAt)} while the gate ran — ${held.note}`);
     }
 
     // And the lease, re-read rather than assumed. A `--force` release mid-round
@@ -229,12 +241,14 @@ export async function runMergeRound({
     // The same statement the verdict makes, not a friendlier one. A merge
     // round that narrated "gate green" over standing red would put the word
     // back exactly where it was taken out of.
-    say(`${verdictPhrase(verdict)} and ${base} unmoved — merging ${label}`);
+    say(`${verdictPhrase(verdict)} and ${groundNote} — merging ${label}`);
     // In order, each on the main the one before it made. Between two merges
     // the base is read again: it must be exactly the commit this round just
     // landed, or somebody else moved it and the rest of the batch is a
-    // verdict about a tree that has changed.
-    let expected = verdict.baseline.commit;
+    // verdict about a tree that has changed. `nowAt`, not the baseline: the
+    // ground may have moved forward past the measurement above, and what the
+    // batch lands on is where it stands now.
+    let expected = nowAt;
     for (const [index, number] of numbers.entries()) {
       if (index > 0) {
         askGit(['fetch', 'origin', '--prune'], { cwd: repoPath });
@@ -548,6 +562,91 @@ function deployNote(deploy) {
 
 function basenameOf(path) {
   return String(path).replace(/\/+$/u, '').split('/').pop();
+}
+
+/**
+ * The base moved while the gate ran — does the verdict still answer the
+ * question it was asked?
+ *
+ * Measured over the 166 rounds in `gate-rounds.jsonl` on 2026-08-29: eight
+ * stopped at `drift`, and **every one of the eight was a plain fast-forward,
+ * exactly one commit ahead**. Not one was a rewrite or a divergence. The test
+ * that threw those measurements away was `nowAt !== baseline.commit`, and a
+ * round costs 3.7 minutes at the median and 101 at the worst — so with four
+ * sessions landing all day the base is never still, and a green verdict was
+ * re-measured into another green verdict that arrived just as late.
+ *
+ * What a passing verdict says is differential: *these* test names went red
+ * because of this candidate, against the red set the base already had. A
+ * commit that lands on the base afterwards does not change that sentence —
+ * unless it touches the same files, and then the merged tree is one neither
+ * side measured and measuring again is the honest answer.
+ *
+ * So the refusal keeps its two real cases and loses the third:
+ *
+ *  - the base was **rewritten or diverged** — the measured commit is not an
+ *    ancestor of where it stands now, so the tree it described never becomes
+ *    the tree being merged into. Drift, as before.
+ *  - the base moved **forward over the candidate's own files** — named, so the
+ *    refusal says which ones. Drift, as before.
+ *  - the base moved forward over **other** files. Not drift. This is the case
+ *    that was costing every round.
+ *
+ * What this does not do: it does not claim the merged tree is green. It never
+ * could — a red verdict stops the round before this is reached, and red
+ * arriving on the base is the base's, caught by the next round's baseline.
+ * Nothing here can turn a red verdict into a merge.
+ *
+ * @returns {{ok: true, note: string} | {ok: false, reason: string}}
+ */
+export function groundStillHolds({ base = 'the base', from, to, fastForward, movedFiles = [], candidateFiles = [] } = {}) {
+  if (!fastForward) {
+    return { ok: false, reason: `${base} moved from ${short(from)} to ${short(to)} while the gate ran, and not by moving forward — ${short(from)} is not an ancestor of ${short(to)}, so the tree the verdict describes is not the tree this would merge into. Measured again rather than merged on` };
+  }
+  const candidate = new Set(candidateFiles);
+  const both = movedFiles.filter((path) => candidate.has(path));
+  if (both.length) {
+    const named = both.slice(0, 3).join(', ');
+    return { ok: false, reason: `${base} moved from ${short(from)} to ${short(to)} while the gate ran, over ${both.length} file(s) this change also touches (${named}${both.length > 3 ? `, and ${both.length - 3} more` : ''}) — the merged tree is one neither side measured, so it is measured again rather than merged on` };
+  }
+  // No candidateFiles at all means the round could not read them, not that
+  // there is no overlap. An unknown is not an all-clear.
+  if (!candidateFiles.length) {
+    return { ok: false, reason: `${base} moved from ${short(from)} to ${short(to)} while the gate ran, and the files this change touches could not be read — measured again rather than merged on a comparison that was not made` };
+  }
+  return { ok: true, note: `${base} moved forward to ${short(to)} over ${movedFiles.length} file(s), none of them this change's` };
+}
+
+/**
+ * `git` output as a path list: one path per line, blank lines dropped.
+ *
+ * Not through this module's `trim()`, which is a message helper — it keeps the
+ * first three lines and joins them with a space, so a file list through it
+ * comes back as one string that matches nothing. Cost one debugging round.
+ */
+function pathList(result) {
+  if (!result || result.status !== 0) return [];
+  return String(result.stdout || '').split('\n').map((line) => line.trim()).filter(Boolean);
+}
+
+/**
+ * Every file the round is about to land, across the whole batch, as paths
+ * against the measured base. Read from the checked-out candidates the gate
+ * already fetched — no network, and no second opinion from the forge about
+ * what a pull request contains.
+ *
+ * An unreadable head contributes nothing, and `groundStillHolds` treats an
+ * empty list as "not compared" rather than "no overlap".
+ */
+function candidateFilesOf(verdict, { from, repoPath, git }) {
+  const heads = (verdict.prs?.length ? verdict.prs : [verdict.pr])
+    .map((item) => item?.head_sha)
+    .filter(Boolean);
+  const files = new Set();
+  for (const head of heads) {
+    for (const path of pathList(git(['diff', '--name-only', `${from}...${head}`], { cwd: repoPath }))) files.add(path);
+  }
+  return [...files];
 }
 
 function short(sha) {

@@ -110,5 +110,7 @@ from files the runner and the sessions already write; it writes nothing.
 
 - `~/mc/runner/log/runs.tsv` — column contract (ts name kind exit seconds pr turns input output cache_read cache_write session note)
 - `~/mc/queue.md`, `~/mc/*/decisions/*.md`, `docs/project/*/*/PLAN.md` — the inputs
-- `~/mc/mc-utredning/underlag/usage48h.py` — the price table used in the investigation (list prices, 2026-06)
+- The price table used in the investigation (list prices, 2026-06). Its script
+  is gone from the workarea; what it produced is
+  [`utredning-2026-08-24.md`](../utredning-2026-08-24.md) §1.1
 - `docs/project/mc/mc-run/PLAN.md` — the writer of runs.tsv

@@ -56,11 +56,11 @@ describe('reserved names at every door', () => {
     assert.match(result.stderr, /reserved for a role/u);
   });
 
-  it('mc work add refuses to conjure one up', () => {
+  it('mc work add refuses to conjure one up, and names the door that is real', () => {
     const result = runMcCli(['work', 'add', 'helper', 'memoro-cli'], workEnv());
     assert.equal(result.status, 1, result.stderr);
     assert.match(result.stderr, /reserved for a role/u);
-    assert.match(result.stderr, /mc pm-helper/u);
+    assert.match(result.stderr, /mc helper\)/u);
   });
 
   it('mc worker refuses them too — a worker is not a singleton role', () => {

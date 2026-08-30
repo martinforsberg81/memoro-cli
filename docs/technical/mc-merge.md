@@ -1,12 +1,18 @@
-# mc merge — one door for landing a pull request
+# mc test and mc merge — one measurement, two doors
 
 A pull request lands through `mc merge <repo> <pr>`, and through nothing else.
+It is measured by `mc test <repo> <pr>`, which is the same round stopping at the
+verdict. There is one implementation: `mc merge` runs `mc test`'s round and then
+lands what it cleared. A second implementation is the thing this arrangement
+exists to prevent — two measurements drift, and the one that drifts is always
+the one the merge trusted.
+
 The verb has two forms, and which one runs is decided by what the pull request
 touches:
 
 - **the gate round** — lease, fresh baseline, a candidate with main merged in,
-  the repository's own suite on both, squash. This is what `mc repo merge` was;
-  only the name moved.
+  what the change reaches measured on both, squash. This is what `mc repo merge`
+  was; only the name moved.
 - **`--docs`** — a pull request whose every file is under `docs/`, squash-merged
   without a suite, because there is nothing to run.
 
@@ -36,7 +42,8 @@ new door and the old pointer answer the same way about `#346` versus `346`, a
 number that is not a number, and the same pull request named twice.
 
 ```
-mc merge <repo> <pr> [<pr>...] [--check] [--json]   the gate round, then squash
+mc test  <repo> <pr> [<pr>...] [--json]            measure it; merge nothing
+mc merge <repo> <pr> [<pr>...] [--check] [--json]   the same round, then squash
 mc merge <repo> <pr> --docs [--json]                docs-only: no suite, squash
 ```
 
@@ -116,6 +123,32 @@ opened memoro #11039 and landed it in the same session
 (`~/mc/runner/log/canonical-response-20260829T033139Z.json`). The same log holds
 131 `merge` rounds and 10 `check` rounds — the gate is still where code goes.
 
+## Known defect — the round does not converge under concurrent landings
+
+Measured 2026-08-29 in memoro, four sessions merging. The gate round
+measures a candidate for 20–35 minutes and then, before merging, requires
+that `origin/main` is still the commit it fetched (`repo-merge.js`,
+"origin/main moved … measured again rather than merged on"). Any landing
+from another session during the round voids the verdict. With several
+sessions landing, main moves every round: memoro #11096 was green twice
+(candidate 0 red, extra gate passed) and stopped both times for main
+moving; then "could not re-check the base"; then the lease was held by a
+session that was itself re-running its own round for the same reason. Two
+sessions re-measuring against each other's landings is a livelock, and a
+retry loop around it only hides the defect.
+
+What the operator does meanwhile is written in memoro's `AGENTS.md`
+(§ *When the gate stops a green pull request for a reason that is not the
+PR's*): investigate briefly, report, `gh pr merge --squash --admin`. No
+loop.
+
+What the gate should do instead — not built: when main has moved, compare
+the moved range against the candidate's change set and the tests the round
+ran; if the range touches neither, the verdict still holds and the merge
+proceeds (a fast-forward re-check, seconds), and only an overlap costs a
+new round. The lease should likewise be released between the measurement
+and the merge attempt rather than held for the whole round.
+
 ## How it is tested
 
 [`tests/mc/docs-merge.test.js`](../../tests/mc/docs-merge.test.js) drives
@@ -128,3 +161,43 @@ repository, and `mc repo merge` pointing at `mc merge` while `mc --help` no
 longer mentions it. The gate form's argument errors live with the gate, in
 [`tests/mc/repo-merge.test.js`](../../tests/mc/repo-merge.test.js) and
 [`tests/mc/repo-gate.test.js`](../../tests/mc/repo-gate.test.js).
+
+## What the round measures
+
+Not "the suite", necessarily. A repository may declare `select` in the gate
+table ([`src/mc/repo-gate-table.js`](../../src/mc/repo-gate-table.js)): a command
+printing JSON with a `files` array, run in the candidate worktree. With one, the
+round measures the test files the change reaches; without one, the whole suite,
+exactly as it always did.
+
+**Both sides run the candidate's list.** This is the part worth stating twice,
+because getting it wrong is silent. A selection is a function of the diff, so a
+baseline asked to select for itself answers "nothing changed" and returns its
+mandatory core. A round that let each side choose would compare the change's 56
+files against 6, and every red already standing on main inside those 56 would
+read as this change's doing. The list is asked for once, on the candidate, and
+run on both.
+
+A selected file that exists only on the candidate — a test the change adds — is
+run there and reported as absent on the baseline rather than faked. An empty
+selection stops the round: it is not a measurement, and a green from it would be
+the most confident kind of nothing.
+
+### What it cost before
+
+Measured on memoro #11104 (2026-08-30), landing two markdown files and a test:
+
+| step | time |
+|---|---:|
+| `npm ci`, both sides | 15 s |
+| suite, baseline | 649 s |
+| suite, candidate | 224 s |
+| extra gate `msr contract`, candidate | 194 s |
+
+That extra gate globbed exactly the profile the suite already ran, so the
+contract suite was bought four times in one round. The same round also reported
+`2477 + 9 + 39` tests as **"39 tests"**, because the suite runs in three
+processes and `tapTotals` kept the last summary it saw.
+
+Both are fixed: the totals are summed, and memoro declares `select`. A
+documentation diff there selects 6 files where it selected 332.
