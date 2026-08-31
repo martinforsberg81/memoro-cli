@@ -182,6 +182,17 @@ run there and reported as absent on the baseline rather than faked. An empty
 selection stops the round: it is not a measurement, and a green from it would be
 the most confident kind of nothing.
 
+**And the commands the same selection named.** memoro's selector reports a
+`commands` array beside `files` — `css:lint`, `css:tokens`, `i18n:contract` and
+their kind — and until 2026-08-31 the round read the files and dropped them, so
+no gate round had ever run one. They run now, on the **candidate only**: these
+are contracts about the diff rather than measurements of a tree, and several of
+them take `--base-ref` and are differential in themselves, so a baseline run
+would measure main against main. Every one runs even after another fails, all
+of them are reported with their own timing, and one that fails makes the round
+red. Measured on memoro #11185 (2026-08-31), a css-only diff: `css:lint` 15.1 s,
+`css:tokens` 1.6 s.
+
 ### What it cost before
 
 Measured on memoro #11104 (2026-08-30), landing two markdown files and a test:

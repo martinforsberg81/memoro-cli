@@ -21,9 +21,11 @@
  *     is measured is the state after merging rather than the state the author
  *     last saw;
  *  4. run the repository's own full suite on both, in the same round;
- *  5. compare the two red sets by name at every level;
- *  6. check what is left against the standing red set the repository recorded;
- *  7. give the lease back, whatever happened.
+ *  5. run the command gates the repository's selection named, on the candidate
+ *     alone — they are contracts about the diff, not measurements of a tree;
+ *  6. compare the two red sets by name at every level;
+ *  7. check what is left against the standing red set the repository recorded;
+ *  8. give the lease back, whatever happened.
  *
  * There is no merge in here, and not behind a flag either. This module answers
  * one question — did anything new go red — and a module that could also merge
@@ -458,6 +460,9 @@ export async function runGate({
         // them. A new test file is red-free on a base that does not have it,
         // and saying so is the difference between a measurement and a guess.
         only_on_candidate: 0,
+        // The command gates the same answer named. Counted here and listed in
+        // `extra_gates`, where every gate this round ran is listed.
+        commands: selection.commands.length,
       };
       say(`selection: ${selection.files.length} test file${selection.files.length === 1 ? '' : 's'} reached by this change`);
       if (selection.files.length === 0) {
@@ -519,12 +524,32 @@ export async function runGate({
     // time" are two different claims, and only the first was measured).
     report.candidate.tree = trim(askGit(['rev-parse', 'HEAD^{tree}'], { cwd: headDir }).stdout) || null;
 
+    // The gates the selection named, on the candidate. After the files, in the
+    // order the selector gave, and before any verdict is reached — a round that
+    // stopped at a red test and skipped them would report a contract as
+    // unchecked exactly when it is least safe to assume it holds.
+    const selectedGates = selection?.commands?.length
+      ? await runSelectedCommands({
+        commands: selection.commands, cwd: headDir, env, baseRef, say, timed, clock,
+      })
+      : [];
+    report.extra_gates.push(...selectedGates);
+    const failedGates = selectedGates.filter((gate) => !gate.ok);
+
     const { broke, fixed } = compareRed(report.baseline.red, after.result.red);
     report.broke = broke;
     report.fixed = fixed;
     say(`candidate: ${after.result.red.length} red, ${broke.length} of them new`);
 
     if (broke.length) return finish('red', `${broke.length} test${broke.length === 1 ? '' : 's'} red on the candidate and green on the baseline`);
+
+    // A command gate the selection chose is a contract about this diff, and a
+    // change that breaks one is red whatever its tests did. They all ran; the
+    // stop names every one that failed rather than the first.
+    if (failedGates.length) {
+      return finish('selected-gate', `${failedGates.length} command gate${failedGates.length === 1 ? '' : 's'} the selection chose failed: `
+        + `${failedGates.map((gate) => `${gate.name} (exit ${gate.exit_code})`).join(', ')}`);
+    }
 
     // The floor. It reports on main; it does not refuse this change.
     //
@@ -700,6 +725,9 @@ export async function runGate({
         say(`extra gate ${gate.name}: could not compare by name — falling back to exit codes; a new failure over a red baseline would not be seen`);
       }
       report.extra_gates.push({
+        // What an operator declared beside the suite, as opposed to what the
+        // repository's selector chose for this diff.
+        source: 'declaration',
         name: gate.name,
         command: gate.command,
         // The candidate's outcome under the old keys, so every reader that
@@ -777,6 +805,9 @@ export async function runGate({
  */
 export function verdictFor(report) {
   if (report.stopped_at === 'red') return 'red';
+  // A contract gate this change breaks is red, and the word a reader acts on
+  // should not depend on whether a test or a command found it.
+  if (report.stopped_at === 'selected-gate') return 'red';
   if (report.stopped_at === 'ratchet') return 'ratchet-lowered';
   if (report.stopped_at !== null) return 'stopped';
   return report.standing_red ? 'no-new-red' : 'green';
@@ -864,11 +895,18 @@ async function measure({ suite, git, cwd, say, side }) {
 }
 
 /**
- * The test files this change reaches, asked of the repository.
+ * The test files this change reaches, and the command gates beside them, asked
+ * of the repository.
  *
  * The command prints JSON carrying a `files` array; anything else is a stop
  * rather than an empty list, because an empty list and a list that could not be
  * read look identical to a comparison and only one of them is a measurement.
+ *
+ * `commands` is the other half of the same answer and was thrown away until
+ * 2026-08-31: memoro's selector reported six of them on #11158 — i18n three
+ * times, `sdk:check`, `css:lint`, `css:tokens`, 20.0 s in all — and no round
+ * had run one since `select` was declared. A gate that reads half a selection
+ * and reports a verdict is a gate that lies about what it checked.
  *
  * Run in the candidate worktree, so the diff it computes is the pull request's.
  */
@@ -892,8 +930,95 @@ async function selectFiles({ command, cwd, env, say }) {
   // measurement — "measured over the 258 files this change reaches" is true and
   // reads as a saving when 258 is the entire suite.
   const full = parsed?.why?.reason === 'full-suite';
-  say(`selection read from ${command}${full ? ' — it fell back to the whole suite' : ''}`);
-  return { ok: true, files: clean, full, why: parsed?.why ?? null };
+
+  // The gates the selector named. A repository that reports none has none —
+  // that is memoro-cli's own selector, and an absent field is not a fault. A
+  // `commands` that is not a list, or an entry with no script to run, is the
+  // same kind of unreadable as a missing `files`: it stops, because running
+  // fewer gates than the repository asked for is exactly the silence this
+  // whole reading exists to end.
+  const declaredCommands = parsed?.commands;
+  if (declaredCommands !== undefined && !Array.isArray(declaredCommands)) {
+    return { ok: false, reason: `${command} printed a \`commands\` field that is not a list — a gate list that cannot be read is not a gate list` };
+  }
+  const commands = (declaredCommands || []).map((entry) => ({
+    id: entry?.id ? String(entry.id) : null,
+    packageScript: entry?.packageScript ? String(entry.packageScript) : null,
+    passBaseRef: Boolean(entry?.passBaseRef),
+    resourceClass: entry?.resourceClass ? String(entry.resourceClass) : null,
+    selectedBy: Array.isArray(entry?.selectedBy) ? entry.selectedBy.map(String) : [],
+  }));
+  const nameless = commands.filter((entry) => !entry.packageScript);
+  if (nameless.length) {
+    return {
+      ok: false,
+      reason: `${command} named ${nameless.length} command gate${nameless.length === 1 ? '' : 's'} with no packageScript — `
+        + 'mc cannot run what the selection did not name, and skipping it would be a green over an unchecked contract',
+    };
+  }
+
+  say(`selection read from ${command}${full ? ' — it fell back to the whole suite' : ''}`
+    + (commands.length ? `, with ${commands.length} command gate${commands.length === 1 ? '' : 's'}: ${commands.map((entry) => entry.packageScript).join(', ')}` : ''));
+  return { ok: true, files: clean, commands, full, why: parsed?.why ?? null };
+}
+
+/**
+ * The command gates the selection named, run on the candidate and nowhere else.
+ *
+ * Candidate only, on purpose. These are gates about the change rather than
+ * measurements of a tree: `css:tokens` and `i18n:contract` take `--base-ref`
+ * and are differential in themselves, so running them on the baseline would
+ * measure main against main and answer a question nobody asked.
+ *
+ * Every one of them runs, and a failure does not end the loop. `ci.mjs` wrote
+ * the reason down where it makes the same choice about tests: while anything
+ * else is red, a skipped command gate hides every contract regression it would
+ * have caught. Reported all, judged all.
+ *
+ * Invoked the way memoro's own `runPackageCommand` invokes them — `npm run
+ * <packageScript>`, plus `-- --base-ref <ref>` when the selection said the
+ * command takes one — so the gate runs the repository's command rather than an
+ * approximation of it.
+ */
+async function runSelectedCommands({ commands, cwd, env, baseRef, say, timed, clock }) {
+  const results = [];
+  // The one thing the round's environment must not carry in: node sets
+  // NODE_TEST_CONTEXT inside a test run, and a command that inherits it
+  // decides it is being required recursively and runs nothing at all — output
+  // with no results and exit 0, which is the false green the whole module is
+  // built to refuse. Everything else is the environment the round was given,
+  // because that is what `runPackageCommand` passes.
+  const commandEnv = { ...env };
+  delete commandEnv.NODE_TEST_CONTEXT;
+  for (const entry of commands) {
+    const invocation = `npm run ${entry.packageScript}${entry.passBaseRef ? ` -- --base-ref ${baseRef}` : ''}`;
+    say(`command gate ${entry.packageScript}`);
+    const from = clock();
+    const outcome = await timed('selected gates', async () => shell(invocation, { cwd, env: commandEnv }));
+    const duration = clock() - from;
+    const ran = outcome.status !== null && outcome.status !== undefined;
+    results.push({
+      // Which of the two kinds of gate this is. One list, because a reader
+      // wants one list; the field is what tells an operator's declaration
+      // apart from what the repository's selector chose for this diff.
+      source: 'selection',
+      name: entry.packageScript,
+      command: invocation,
+      ok: ran && outcome.status === 0,
+      exit_code: outcome.status ?? null,
+      ran,
+      duration_ms: duration,
+      resource_class: entry.resourceClass,
+      selected_by: entry.selectedBy,
+      // The last thing it said, so a red gate names something. The full
+      // output belongs in a log, not in a verdict.
+      output: trim(outcome.stderr) || trim(outcome.stdout) || null,
+      baseline: null,
+    });
+    const last = results[results.length - 1];
+    say(`command gate ${entry.packageScript}: ${last.ok ? 'passed' : `FAILED (exit ${last.exit_code})`} in ${seconds(duration)}`);
+  }
+  return results;
 }
 
 /**

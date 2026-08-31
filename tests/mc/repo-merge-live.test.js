@@ -367,6 +367,10 @@ describe('what a repository declares, the round does', () => {
       assert.equal(report.ok, true, report.reason || '');
       assert.equal(report.merged, true);
       assert.deepEqual(report.gate.extra_gates, [{
+        // Which kind of gate this is: one an operator declared beside the
+        // suite, as opposed to one the repository's selector chose for this
+        // diff. Both live in this list; the field is what tells them apart.
+        source: 'declaration',
         name: 'contract',
         command: 'true',
         ok: true,
