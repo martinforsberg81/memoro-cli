@@ -45,7 +45,7 @@
       "check": "A green round is at most three lines; a red one names the failing tests and commands and nothing else. Everything else moves behind `--json`. Judged on a real round of each kind, pasted into the pull request."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "memoro-cli's own selector stops selecting a quarter of its suite for one documentation file.",
       "check": "`node scripts/affected-tests.js --base-ref origin/main` over a diff adding one file under `docs/project/` selects fewer than 10 test files, against the 57 of 250 measured on 2026-08-30."
     }
@@ -171,6 +171,29 @@
         "They ran in 31.2 s for 783 tests, and the round came back red on `readPackageCanon › reads all three packaged canon files from the real package`, which is red identically on a clean `origin/main` checkout (confirmed the same day in a detached worktree: 7 tests, 6 pass, 1 fail). That is the second consecutive step of this project refused by a test its diff never touched, and both times the cause is a document being matched as a pin.",
         "The whole suite on this tree at the same time: 7 test files red, all under `tests/runtime/` and `tests/mc/session-*`. None of them was selected, none of them is this change's, and all of them are red on main."
       ]
+    },
+    {
+      "title": "A directory literal was answering two questions with one edge",
+      "body": [
+        "`dirsOf` collects every quoted string that resolves to a tracked directory, and `readersOf` handed the naming module every file underneath it, at any depth. Two different facts were sharing that edge. `canon/roles/${kind}.md` is a join away from a literal — the module opens the file, on behalf of everything that calls it, so the edge must travel the import graph. `docs/project/` in `run.js` builds a plan's path; walking or building under a tree gives a caller no dependency on any one file in it, and travelling was the entire defect.",
+        "Split by depth. A directory literal reaches the files **directly in** that directory as an open, propagating through the closure like a pin; it reaches the whole tree **under** it as a walk, which stops at whoever spelled it. Measured 2026-08-31, one new document under `docs/project/mc/`: **58 of 250** test files at `origin/main`, all with the same reason, against **9 of 250** after — `plan-file-shape`, `archive-live`, `brief-collect`, `page`, `page-cache`, `plan-schema`, `retire-decisions`, `run`, `status-collect`. Every one of the nine spells a path under the project tree in its own source.",
+        "The walk edge also had to stop believing one-segment literals. `'docs'` in `canon.test.js` and `run-codex.test.js` is a segment handed to `join()`, and it was worth 5 of the 58 — the same ambiguity `PIN_TOKEN` already refuses for `'index.js'`. The open edge still honours them, because there the reach is one directory's own files and `changelog.d/<entry>.md` is exactly that shape; dropping them everywhere made a changelog fragment unexplained and cost the whole suite."
+      ]
+    },
+    {
+      "title": "The index reads its own test file, prose included",
+      "body": [
+        "`tests/mc/affected-tests.test.js` is a tracked source file, so every path literal in it — fixtures and JSDoc alike — is indexed as a thing that file reads. The first draft of this step's new test used `docs/project/...` fixture paths and quoted `docs/project/` in the comment explaining the defect, and that alone made the selector's own test a reader of every plan document in the repository: 10 files selected instead of 9, from a comment.",
+        "There is no way to mark a literal as make-believe. The fixtures now name trees this repository does not have (`docs/ledger/`, `docs/guide/`), and the prose above them names the real ones without backticks. It is a live hazard for any test in this repository that documents a path, and it is written down in that file rather than left to be rediscovered."
+      ]
+    },
+    {
+      "title": "What is left of the blanket, and why it is left",
+      "body": [
+        "A change to a document directly under `docs/` still reaches wide: this step's own pull request, which edits `docs/mc-command-matrix.md`, selects 56 test files. The cause is the surviving half of the edge — `src/mc/canon.js` spells `docs` and `src/mc/archive-plan.js` spells `docs/technical/`, both as directories they open files in, so the open edge travels to everything importing them.",
+        "That is the edge the canon case depends on and `affected-tests.test.js` asserts, so narrowing it is a different decision from this step's. What would actually shrink it is that most of those literals are in **comments** — `archive-plan.js:12` names the directory in a JSDoc line, not in code — and the index cannot tell prose from a call. Telling them apart needs a parse, not a regexp.",
+        "The 56 ran in 30.4 s for 753 tests and came back red on `readPackageCanon > reads all three packaged canon files from the real package`, which is red identically on a clean `origin/main` checkout (confirmed 2026-08-31 in a detached worktree: 7 tests, 6 pass, 1 fail). Third consecutive step of this project refused by that same test."
+      ]
     }
   ],
   "documents": [
@@ -251,7 +274,7 @@
     },
     {
       "title": "Stop this repository's own selector matching a directory as a pin",
-      "status": "ready",
+      "status": "done",
       "done_when": "A diff adding one file under `docs/project/` selects fewer than 10 test files, against the 57 of 250 measured on 2026-08-30, and the tests that genuinely read a plan document are still among them.",
       "instruction": [
         "Measured 2026-08-30: one new file under `docs/project/mc/` made `scripts/affected-tests.js` select 57 of this repository's 250 test files, every one with the reason `reads:docs/project/mc/`. The pin index is treating a directory prefix that appears in a test's source as a pin against every file underneath it.",
@@ -260,7 +283,7 @@
         "Verify both directions. The narrow case: adding one plan document selects the handful of tests that actually read plan documents, and `tests/architecture/plan-file-shape.test.js` had better be one of them. The wide case: changing a source file a test reads as text still selects that test — `merge-doc.test.js` asserting against `repo-gate.js`'s source is the example `repo-gate-table.js` names, and it must keep working.",
         "Land the measurement: files selected before and after for the same one-document diff, and the reason list for each survivor."
       ],
-      "pr": null,
+      "pr": 505,
       "blocked_by": null
     }
   ]
