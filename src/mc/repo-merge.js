@@ -13,8 +13,8 @@
  *     each half, so no other round can move main between the measurement and
  *     the merge;
  *  2. run the gate inside that lease;
- *  3. check the ground has not moved — the base is still the commit the
- *     baseline was measured at, and the lease is still ours;
+ *  3. check the ground has not moved — the base is still the commit the round
+ *     merged into the candidate, and the lease is still ours;
  *  4. squash-merge;
  *  5. pull the source-linked installation, because on this machine that is
  *     what deploying means;
@@ -32,7 +32,6 @@ import { dirname, join } from 'node:path';
 
 import { claimLease, readLease, releaseLease } from './repo-lease.js';
 import { freshenBranchForLanding } from './repo-freshen.js';
-import { lockfileHashAt, saveBaseline } from './repo-baseline-cache.js';
 import { currentHolder } from './work-identity.js';
 import { log } from './logger.js';
 import { mcHome } from './paths.js';
@@ -220,8 +219,8 @@ export async function runMergeRound({
     const nowAt = trim(askGit(['rev-parse', base], { cwd: repoPath }).stdout);
     if (!nowAt) return finish('drift', `could not read ${base} before merging`);
     let groundNote = `${base} unmoved`;
-    if (nowAt !== verdict.baseline.commit) {
-      const from = verdict.baseline.commit;
+    if (nowAt !== verdict.base?.commit) {
+      const from = verdict.base?.commit;
       const held = groundStillHolds({
         base,
         from,
@@ -250,9 +249,9 @@ export async function runMergeRound({
     // In order, each on the main the one before it made. Between two merges
     // the base is read again: it must be exactly the commit this round just
     // landed, or somebody else moved it and the rest of the batch is a
-    // verdict about a tree that has changed. `nowAt`, not the baseline: the
-    // ground may have moved forward past the measurement above, and what the
-    // batch lands on is where it stands now.
+    // verdict about a tree that has changed. `nowAt`, not the base commit the
+    // round read: the ground may have moved forward past the measurement
+    // above, and what the batch lands on is where it stands now.
     let expected = nowAt;
     for (const [index, number] of numbers.entries()) {
       if (index > 0) {
@@ -372,31 +371,6 @@ export async function runMergeRound({
       say(`WARNING: ${report.merged_into} is not the default branch (${report.default_branch}) — this landed on a branch, not on ${report.default_branch}`);
     }
 
-    // Main is now the tree the candidate was measured on: save that result
-    // as the next round's baseline (A1). Keyed on the merge commit, the
-    // lockfile at it, and the suite command; the next round reuses it only
-    // when all three match. Saved only after a fully landed round — a
-    // partial batch leaves the old entry, which then simply never matches.
-    if (report.tree_identical === true) attempt(() => saveBaseline({
-      repoPath,
-      commit: report.merge_commit,
-      lockfileHash: lockfileHashAt({ git: askGit, repoPath, commit: report.merge_commit }),
-      command: verdict.command,
-      red: verdict.candidate.red,
-      totals: verdict.candidate.totals,
-      // The extra gates' candidate results ride along: main is now the tree
-      // they ran on, so they are the next round's baseline side — run once
-      // per main SHA, not once per PR.
-      extraGates: (verdict.extra_gates || []).map((gate) => ({
-        name: gate.name,
-        command: gate.command,
-        ok: gate.ok,
-        exit_code: gate.exit_code ?? null,
-        red: gate.candidate?.red ?? null,
-      })),
-      root,
-    }), (why) => say(`could not save the candidate result as the next baseline (${why}) — the next round runs it as before`));
-
     report.deploy = deployPull({ git: askGit, repoPath, env, say, installs });
     const written = writeMergeLine({ report, verdict, path: mergeLog ?? defaultMergeLog(repoPath, { root, env }), clock });
     report.log_path = written.path;
@@ -419,7 +393,7 @@ export async function runMergeRound({
  * never summarised would stop the single rounds exactly the same way, and
  * running them would be four more of the same stop.
  */
-const FALLBACK_STOPS = Object.freeze(['merge', 'red', 'pr-tests', 'ratchet', 'extra-gate']);
+const FALLBACK_STOPS = Object.freeze(['merge', 'red', 'pr-tests', 'extra-gate']);
 
 /**
  * Bring the installation that runs from a checkout up to what just landed.
@@ -433,10 +407,6 @@ const FALLBACK_STOPS = Object.freeze(['merge', 'red', 'pr-tests', 'ratchet', 'ex
  * change has landed, and what is left is a machine one commit behind, which the
  * report says plainly so somebody can pull it by hand.
  */
-function attempt(fn, complain) {
-  try { return fn(); } catch (error) { complain(error?.message || String(error)); return null; }
-}
-
 function deployPull({ git, repoPath, env, say, installs }) {
   const install = installs(env).find((item) => item.root === repoPath);
   if (!install) return { attempted: false, ok: null, reason: 'nothing on this machine runs from this checkout' };
@@ -480,8 +450,10 @@ function writeMergeLine({ report, verdict, path, clock }) {
   if (!path) return { path: null, line: null };
   const day = new Date(clock()).toISOString().slice(0, 10);
   const checks = [
-    `full suite both sides, fresh baseline at ${short(verdict.baseline.commit)}`,
-    `${verdict.baseline.red.length} standing red before · ${verdict.candidate.red.length} after · 0 new`,
+    verdict.selection
+      ? `${verdict.selection.files} test files this change reaches, against ${short(verdict.base?.commit)}`
+      : `full suite, against ${short(verdict.base?.commit)}`,
+    `${verdict.candidate.red.length} red`,
     `base unmoved at merge`,
   ].join(' · ');
   // One line per pull request, batch or not: the log is read per PR, and a
@@ -557,16 +529,16 @@ function basenameOf(path) {
  * Measured over the 166 rounds in `gate-rounds.jsonl` on 2026-08-29: eight
  * stopped at `drift`, and **every one of the eight was a plain fast-forward,
  * exactly one commit ahead**. Not one was a rewrite or a divergence. The test
- * that threw those measurements away was `nowAt !== baseline.commit`, and a
+ * that threw those measurements away was `nowAt !== base.commit`, and a
  * round costs 3.7 minutes at the median and 101 at the worst — so with four
  * sessions landing all day the base is never still, and a green verdict was
  * re-measured into another green verdict that arrived just as late.
  *
- * What a passing verdict says is differential: *these* test names went red
- * because of this candidate, against the red set the base already had. A
- * commit that lands on the base afterwards does not change that sentence —
- * unless it touches the same files, and then the merged tree is one neither
- * side measured and measuring again is the honest answer.
+ * What a passing verdict says is about one tree: *these* test files ran on the
+ * candidate with the base merged in, and none of them was red. A commit that
+ * lands on the base afterwards does not change that sentence — unless it
+ * touches the same files, and then the merged tree is one nothing measured and
+ * measuring again is the honest answer.
  *
  * So the refusal keeps its two real cases and loses the third:
  *
@@ -580,8 +552,8 @@ function basenameOf(path) {
  *
  * What this does not do: it does not claim the merged tree is green. It never
  * could — a red verdict stops the round before this is reached, and red
- * arriving on the base is the base's, caught by the next round's baseline.
- * Nothing here can turn a red verdict into a merge.
+ * arriving on the base is the base's, caught by whatever round reaches it
+ * next. Nothing here can turn a red verdict into a merge.
  *
  * @returns {{ok: true, note: string} | {ok: false, reason: string}}
  */

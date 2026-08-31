@@ -8,8 +8,8 @@
  * two-line change. That is the same cost memoro was paying, and the same fix
  * applies — it just has to be written in the terms this repository is built in.
  *
- * Two edges are followed, because a test depends on source in two different
- * ways and only one of them is visible to an import graph:
+ * Three edges are followed, because a test depends on what it reads in three
+ * different ways and only one of them is visible to an import graph:
  *
  *  - **Imports.** A test that imports a module, directly or through any chain
  *    of modules, runs when that module changes. The closure is walked from each
@@ -19,6 +19,15 @@
  *    invisible to the graph. This repository has such tests on purpose: the one
  *    asserting `repo-gate.js` contains no merge call is exactly this shape, and
  *    it is load-bearing. A path literal that resolves to a tracked file counts.
+ *  - **Data.** A file nothing imports and no literal spells: `canon/roles/`
+ *    holds one document per role, opened by a name built at run time. A
+ *    directory literal is the only written-down link, and it says one of two
+ *    things — the files *in* that directory, one join away, or the tree *under*
+ *    it, walked. The first travels the import graph like a pin; the second
+ *    stops at whoever spelled it, because walking a tree gives a caller no
+ *    dependency on any one file in it. Measured 2026-08-30, not telling them
+ *    apart made one new document under `docs/project/mc/` select 57 of 250
+ *    test files.
  *
  * And it fails closed, loudly. A changed file that neither edge explains — a
  * manifest, a lockfile, a config, anything outside `src/` and `tests/` — means
@@ -162,6 +171,10 @@ function pinsOf(path, trackedSet, imported) {
  * read. `readCanonRole` opens `canon/roles/<kind>.md` with the name built at
  * run time, so no literal ever spells the file; what the source does spell is
  * the directory, and that is the only written-down link between the two.
+ *
+ * What the literal does *not* say is which of the two things naming a directory
+ * means, and the answer differs by a factor of fifty. See `opensFile` and
+ * `walksTree` in `selectAffected`, where the two are told apart by depth.
  */
 function dirsOf(path, dirSet) {
   const source = readOr(path);
@@ -213,15 +226,51 @@ export function selectAffected({ baseRef = 'origin/main' } = {}) {
     }
   }
 
-  /** The modules that read this path: by its name, or by a directory above it. */
-  const readersOf = (path) => {
+  /**
+   * The modules that **open this file**: ones naming it outright, and ones
+   * naming the directory it sits directly in. That second case is the one
+   * `dirsOf` exists for — `canon/roles/${kind}.md` is a join away from a
+   * literal, and a module that does that join opens the file on behalf of
+   * everything that calls it. So this edge travels the import graph, exactly
+   * like a pin.
+   */
+  const opensFile = (path) => {
     const readers = new Set(namesFile.get(path) ?? []);
+    const parent = path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : null;
+    if (parent !== null) for (const reader of namesDir.get(parent) ?? []) readers.add(reader);
+    return readers;
+  };
+
+  /**
+   * The files that **walk a tree** this path is somewhere under, at any depth.
+   *
+   * A different fact, and it must not travel the same way. `src/mc/run.js`
+   * spells `docs/project/` to build a plan's path; measured 2026-08-30, one new
+   * document two levels below it selected 57 of this repository's 250 test
+   * files, every one of them for the same reason — they import `run.js`, or
+   * import something that does. None of them reads that document. Walking a
+   * tree gives a caller no dependency on any one file in it, so this edge stops
+   * at whoever spelled the directory: a test that scans `docs/project` selects,
+   * and a test that merely reaches a module which builds paths under it does
+   * not.
+   */
+  const walksTree = (path) => {
+    const readers = new Set();
     const parts = path.split('/');
-    for (let i = 1; i < parts.length; i += 1) {
+    // From two segments up. A one-segment literal — `'docs'`, `'src'` — is a
+    // segment handed to `join()` far more often than a tree anybody reads, the
+    // same ambiguity `PIN_TOKEN` refuses for `'index.js'`; and claiming a tree
+    // from one hands its author every file in the repository underneath it.
+    // `opensFile` still honours it, because there the reach is one directory's
+    // own files and `changelog.d/<entry>.md` is exactly that shape.
+    for (let i = 2; i < parts.length; i += 1) {
       for (const reader of namesDir.get(parts.slice(0, i).join('/')) ?? []) readers.add(reader);
     }
     return readers;
   };
+
+  /** Anything that reads this path at all, either way — the fail-closed question. */
+  const readersOf = (path) => new Set([...opensFile(path), ...walksTree(path)]);
 
   // Anything the three edges cannot explain. A manifest, a lockfile, a
   // workflow, a config: real changes whose reach is not written down anywhere
@@ -260,12 +309,14 @@ export function selectAffected({ baseRef = 'origin/main' } = {}) {
     if (hitImports.length) reasons.push(`imports:${hitImports.slice(0, 3).join(',')}`);
     const hitPins = [...pinsOf(test, trackedSet, imported)].filter((path) => changedSet.has(path));
     if (hitPins.length) reasons.push(`pins:${hitPins.slice(0, 3).join(',')}`);
-    // Data the test never names itself, but something in its closure reads:
+    // Data the test never names itself, but something in its closure opens:
     // `canon/roles/brief.md` is opened by `src/mc/commands/brief.js`, so every
-    // test that reaches that module reaches the file too.
+    // test that reaches that module reaches the file too. A tree the test
+    // itself walks counts as well — and a tree something in its closure walks
+    // does not, which is the whole of the difference between 57 files and 3.
     const reach = new Set([test, ...imported]);
     const hitData = changed.filter((path) => !SOURCE_FILE.test(path)
-      && [...readersOf(path)].some((reader) => reach.has(reader)));
+      && ([...opensFile(path)].some((reader) => reach.has(reader)) || walksTree(path).has(test)));
     if (hitData.length) reasons.push(`reads:${hitData.slice(0, 3).join(',')}`);
     if (reasons.length) { selected.add(test); because[test] = reasons; }
   }

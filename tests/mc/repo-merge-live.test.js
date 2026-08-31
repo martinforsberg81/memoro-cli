@@ -3,7 +3,7 @@
  *
  * Everything else about this verb is asserted against injected commands, which
  * proves the decisions and nothing about the plumbing. This runs the whole
- * round for real — two full suite runs in throwaway worktrees, a squash that
+ * round for real — a full suite run in one throwaway worktree, a squash that
  * actually lands on a bare origin, a deploy pull that actually moves a checkout
  * — in a repository built for the purpose, because the one thing that must
  * never be used to test a verb that merges is a repository somebody needs.
@@ -26,8 +26,15 @@ import { runMergeRound } from '../../src/mc/repo-merge.js';
 const AREA = { name: 'klient-guard', kind: 'work-area' };
 const git = (cwd, args) => execFileSync('git', args, { cwd, encoding: 'utf8' });
 
-/** A repository with an origin, a main, and a branch with a change on it. */
-function repository({ branchBreaksSuite = false } = {}) {
+/**
+ * A repository with an origin, a main, and a branch with a change on it.
+ *
+ * `standingRed` puts a test on main that has always failed. It used to be the
+ * default here, because the round was differential and a standing red name was
+ * the interesting case; since 2026-08-31 it is the case where nothing lands
+ * until somebody repairs it, which is asserted below rather than assumed.
+ */
+function repository({ branchBreaksSuite = false, standingRed = false } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'mc-merge-live-'));
   const repo = join(root, 'repo');
   const bare = join(root, 'origin.git');
@@ -50,7 +57,7 @@ function repository({ branchBreaksSuite = false } = {}) {
     "import { test } from 'node:test';",
     "import assert from 'node:assert/strict';",
     "test('always green', () => { assert.equal(1, 1); });",
-    "test('long red', () => { assert.equal(1, 2); });",
+    ...(standingRed ? ["test('long red', () => { assert.equal(1, 2); });"] : []),
     '',
   ].join('\n'));
   git(repo, ['add', '-A']);
@@ -134,11 +141,10 @@ describe('the merge round, for real', () => {
       assert.equal(report.ok, true, report.reason || '');
       assert.equal(report.merged, true);
 
-      // The suite really ran, on both sides, and really found the long-red test.
-      assert.equal(report.gate.baseline.totals.finished, true);
-      assert.deepEqual(report.gate.broke, [], 'the branch broke nothing');
-      assert.ok(report.gate.baseline.red.length > 0, 'the fixture is meant to carry one long-red test');
-      assert.equal(report.gate.candidate.totals.tests > report.gate.baseline.totals.tests, true);
+      // The suite really ran, once, in the candidate worktree.
+      assert.equal(report.gate.candidate.totals.finished, true);
+      assert.deepEqual(report.gate.candidate.red, [], 'nothing this change reaches is red');
+      assert.equal(report.gate.candidate.totals.tests, 2, 'both test files ran');
 
       // And main really moved, by exactly one squashed commit.
       const after = fx.mainAt();
@@ -163,9 +169,32 @@ describe('the merge round, for real', () => {
       assert.equal(report.ok, false);
       assert.equal(report.stopped_at, 'red');
       assert.equal(report.merged, false);
-      assert.ok(report.gate.broke.length > 0, 'the gate should have named what broke');
+      assert.ok(report.gate.candidate.red.length > 0, 'the gate should have named what broke');
       assert.equal(fx.mainAt(), before, 'main moved on a red gate');
       assert.equal(fx.lease().held, false);
+    } finally { fx.cleanup(); }
+  });
+
+  /**
+   * The 2026-08-31 ruling, against real git and a real suite: a test that has
+   * always been red on main is red here, and the change cannot land until it
+   * is green. The differential round merged this happily, and paid a second
+   * worktree and a second suite run every time to be able to.
+   */
+  it('a test that was already red on main stops the round, and nothing lands', async () => {
+    const fx = repository({ standingRed: true });
+    try {
+      const before = fx.mainAt();
+      const report = await runMergeRound({
+        repoPath: fx.repo, pr: 400, holder: AREA, root: fx.mcHome, env: fx.env, mergeLog: null,
+      });
+
+      assert.equal(report.ok, false);
+      assert.equal(report.stopped_at, 'red');
+      assert.deepEqual(report.gate.candidate.red, ['long red'], 'the round names the test, not a count');
+      assert.match(report.gate.reason, /1 test red: long red/u);
+      assert.equal(report.merged, false);
+      assert.equal(fx.mainAt(), before);
     } finally { fx.cleanup(); }
   });
 
@@ -269,7 +298,7 @@ describe('what a repository declares, the round does', () => {
     JSON.stringify({ [fx.repo.split('/').pop()]: entry }),
   );
 
-  it('runs the declared prepare step in both worktrees before the suites', async () => {
+  it('runs the declared prepare step in the one worktree before the suite', async () => {
     const fx = repository();
     try {
       // A prepare that leaves a trace, so "did it run, and where" is a question
@@ -299,14 +328,12 @@ describe('what a repository declares, the round does', () => {
     } finally { fx.cleanup(); }
   });
 
-  it('an extra gate that fails on the candidate alone stops the round, with the suite already green', async () => {
+  it('an extra gate that fails stops the round, with the suite already green', async () => {
     const fx = repository();
     try {
-      // Red only where this PR is: green in the baseline worktree, red in
-      // the candidate's — the one case that is the change's own fault.
       declare(fx, {
         prepare: null,
-        extra_gates: [{ name: 'contract', command: 'case "$(basename "$PWD")" in baseline) exit 0;; *) exit 1;; esac' }],
+        extra_gates: [{ name: 'contract', command: 'exit 1' }],
         merge_log: null,
       });
       const before = fx.mainAt();
@@ -315,27 +342,30 @@ describe('what a repository declares, the round does', () => {
       });
       assert.equal(report.ok, false);
       assert.equal(report.gate.stopped_at, 'extra-gate');
-      assert.match(report.gate.reason, /contract failed on the candidate and passed on the baseline/u);
+      assert.match(report.gate.reason, /^contract failed \(exit 1\)/u);
       // The suite really did pass — this is the gate beyond it doing the work.
-      assert.deepEqual(report.gate.broke, []);
+      assert.deepEqual(report.gate.candidate.red, []);
       assert.equal(report.merged, false);
       assert.equal(fx.mainAt(), before);
     } finally { fx.cleanup(); }
   });
 
-  it('an extra gate red on both sides stops for main\'s fault, not the PR\'s (D-0138)', async () => {
+  /**
+   * D-0138 ran the gate on both sides so a gate red on main could be reported
+   * as main's fault rather than the pull request's. The baseline is gone, so
+   * that distinction is gone with it — deliberately, by the same ruling that
+   * took it off the suite. A declared gate red on main is red here.
+   */
+  it('a gate that is red on main is red here, with no side to blame it on', async () => {
     const fx = repository();
     try {
       declare(fx, { prepare: null, extra_gates: [{ name: 'contract', command: 'exit 1' }], merge_log: null });
-      const before = fx.mainAt();
       const report = await runMergeRound({
         repoPath: fx.repo, pr: 400, holder: AREA, root: fx.mcHome, env: fx.env, mergeLog: null,
       });
-      assert.equal(report.ok, false);
-      assert.equal(report.gate.stopped_at, 'extra-gate-baseline');
-      assert.match(report.gate.reason, /already red before this PR/u);
+      assert.equal(report.gate.stopped_at, 'extra-gate');
+      assert.notEqual(report.gate.stopped_at, 'extra-gate-baseline');
       assert.equal(report.merged, false);
-      assert.equal(fx.mainAt(), before);
     } finally { fx.cleanup(); }
   });
 
@@ -367,16 +397,17 @@ describe('what a repository declares, the round does', () => {
       assert.equal(report.ok, true, report.reason || '');
       assert.equal(report.merged, true);
       assert.deepEqual(report.gate.extra_gates, [{
+        // Which kind of gate this is: one an operator declared beside the
+        // suite, as opposed to one the repository's selector chose for this
+        // diff. Both live in this list; the field is what tells them apart.
+        source: 'declaration',
         name: 'contract',
         command: 'true',
         ok: true,
         exit_code: 0,
         ran: true,
-        baseline: { ok: true, exit_code: 0, ran: true, red: null, carried: false },
-        candidate: { ok: true, exit_code: 0, ran: true, red: null, carried: false },
-        broke: [],
-        fixed: [],
-        already_red: false,
+        red: null,
+        output: null,
       }]);
     } finally { fx.cleanup(); }
   });
@@ -431,8 +462,8 @@ describe('the pull request\'s own tests, for real', () => {
       ownTest(fx, true);
       const result = await runGate({ repoPath: fx.repo, pr: 400, holder: AREA, root: fx.mcHome, env: fx.env });
       assert.equal(result.stopped_at, 'pr-tests', JSON.stringify(result));
-      assert.equal(result.candidate.totals.tests, result.baseline.totals.tests + 1, 'the suite saw b.test.js and nothing in tests/ui/');
-      assert.deepEqual(result.broke, []);
+      assert.equal(result.candidate.totals.tests, 2, 'the suite saw a.test.js and b.test.js, and nothing in tests/ui/');
+      assert.deepEqual(result.candidate.red, []);
       assert.deepEqual(result.pr_tests.files, ['tests/b.test.js', 'tests/ui/fix.test.js']);
       assert.deepEqual(result.pr_tests.red, ['proves the fix']);
     } finally { fx.cleanup(); }
