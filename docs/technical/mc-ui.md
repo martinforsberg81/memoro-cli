@@ -73,7 +73,7 @@ the helper and the sessions already write.
 | the day behind it | `~/mc/runner/log/runs.tsv` | `mc run`, after each step |
 | the queue | `~/mc/queue.md` | Martin, at the brief |
 | decisions waiting | `<area>/decisions/*.md` without a `**Beslut:**` line | the sessions |
-| what production said | `~/mc/intake/errors-<date>.md`, `~/mc/intake/proposals/` | `mc helper` |
+| what production said | `~/mc/intake/errors-<date>.md`, `~/mc/proposals/` | `mc helper` |
 | someone is sitting here | `tmux ls`, `~/mc/runner/foreground/<pid>.json` | tmux, `foreground.js` |
 | plans and open PRs | `~/mc/runner/plans.json`, `~/mc/runner/prs.json` | the page itself (below) |
 

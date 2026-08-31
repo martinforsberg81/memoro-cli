@@ -211,65 +211,30 @@ export function retireDecisions({ decisions = [], plans = [] } = {}) {
 /* ---------------------------------------------------------------- proposals */
 
 /**
- * `~/mc/intake/proposals/` — what the helper wrote and nobody has acted on
- * yet: the desk session's, from what Martin reported, and the intake turn's,
- * from the digest, in one directory and one shape. It is read here for the
- * same reason `decisions/` is: this is the file a person sits down with, and
- * a proposal exists to be queued or dropped by Martin at exactly that
- * moment. Neither half of `mc helper` touches `queue.md`, so the brief is
- * the only place a proposal becomes work.
- */
-
-/**
- * A proposal file: the frontmatter mc needs (what kind of thing, and where
- * it belongs) and the three sections a reader needs. Parsed the same way a
- * PLAN.md frontmatter is, so a proposal written by hand behaves like one
- * written by the turn.
+ * `~/mc/proposals/` — what the helper wrote and nobody has acted on yet: the
+ * desk session's, from what Martin reported, and the intake turn's, from the
+ * digest, in one directory.
  *
- * A file without a `# ` title is not a proposal — the turn's scratch notes,
- * a README somebody left — and is skipped rather than listed as one.
+ * **mc does not read them.** It used to parse a fixed frontmatter and fixed
+ * section names out of every file, in three places that disagreed: a proposal
+ * whose first prose line was not marked `# ` was counted by the page, missing
+ * from the brief, and recorded as "wrote nothing" by the very turn that had
+ * just written it — with no error anywhere. The parse existed so a script
+ * could say what kind of thing each file was. Nothing needs that. A count says
+ * how many are waiting, and a session that has to know what is in one opens
+ * it, the way it would open any other document.
+ *
+ * So this is the whole of it: the names, oldest first. A proposal is prose.
  */
-export function parseProposal(text) {
-  const lines = String(text || '').replace(/\r\n/gu, '\n').split('\n');
-  const heading = lines.find((line) => /^# /u.test(line));
-  if (!heading) return null;
-  const fields = planFields(text);
-  return {
-    name: fields.name || null,
-    repo: fields.repo || null,
-    kind: fields.kind || null,
-    project: fields.project || null,
-    title: heading.replace(/^#\s*/u, '').trim(),
-    doneWhen: section(lines, /^##\s+Done when\b/iu),
-    evidence: section(lines, /^##\s+Evidence\b/iu),
-  };
-}
-
-/** The first paragraph under a heading, folded onto one line. */
-function section(lines, heading) {
-  const at = lines.findIndex((line) => heading.test(line));
-  if (at < 0) return null;
-  const para = [];
-  for (const line of lines.slice(at + 1)) {
-    if (/^#/u.test(line)) break;
-    if (!line.trim()) { if (para.length) break; continue; }
-    para.push(line.trim().replace(/^[-*]\s+/u, ''));
+export function listProposals(dir) {
+  try {
+    return readdirSync(dir)
+      .filter((name) => name.endsWith('.md'))
+      .sort()
+      .map((file) => ({ file, path: join(dir, file) }));
+  } catch {
+    return [];
   }
-  return para.join(' ') || null;
-}
-
-/** Every proposal waiting in `~/mc/intake/proposals/`, oldest name first. */
-export function scanProposals(dir) {
-  let names = [];
-  try { names = readdirSync(dir).filter((name) => name.endsWith('.md')).sort(); } catch { return []; }
-  const out = [];
-  for (const file of names) {
-    const path = join(dir, file);
-    let parsed = null;
-    try { parsed = parseProposal(readFileSync(path, 'utf8')); } catch { parsed = null; }
-    if (parsed) out.push({ file, path, ...parsed });
-  }
-  return out;
 }
 
 /* -------------------------------------------------- intake: what mc run left */
@@ -554,15 +519,11 @@ export function renderBrief({
   out.push('', `${waiting.length} waiting, ${answered} answered.`, '');
 
   out.push('## Proposals', '');
-  if (!proposals.length) out.push('_none in ~/mc/intake/proposals/_');
+  if (!proposals.length) out.push('_none in ~/mc/proposals/_');
   else {
-    out.push('| file | proposes | what | done when |', '|---|---|---|---|');
-    for (const p of proposals) {
-      const where = [p.kind || '?', p.repo, p.project].filter(Boolean).join(' · ');
-      out.push(`| ${p.file} | ${where} | ${clip(p.title, 80)} | ${clip(p.doneWhen || '—', 90)} |`);
-    }
-    out.push('', 'Each is the helper\'s reading of a digest, not work yet: queue it in `~/mc/queue.md` '
-      + 'and delete the file, or delete the file.');
+    for (const p of proposals) out.push(`- \`${p.file}\``);
+    out.push('', 'Open the ones worth opening. Each is a reading, not work yet: queue it in '
+      + '`~/mc/queue.md` and delete the file, or delete the file.');
   }
   out.push('');
 
@@ -710,7 +671,7 @@ export async function collectBrief({
   let queue = [];
   try { queue = queueNames(read(join(root, 'queue.md'))); } catch { notes.push('no queue.md'); }
 
-  const proposals = scanProposals(proposalsDir(env));
+  const proposals = listProposals(proposalsDir(env));
 
   // The two files `mc run` writes and never reads. Absent is its own answer —
   // the runner has not written one yet — so it is kept apart from empty.

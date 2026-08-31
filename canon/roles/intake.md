@@ -22,7 +22,7 @@ helper that thinks.
 
 ## What you write
 
-Zero or more files, `~/mc/intake/proposals/<date>-<slug>.md`, one per thing
+Zero or more files, `~/mc/proposals/<date>-<slug>.md`, one per thing
 worth doing:
 
     ---
@@ -71,7 +71,7 @@ worth doing:
 
 Write `~/mc/queue.md` — Martin moves a proposal into the queue, or drops it,
 and that is the whole point of the file being a proposal. Write or edit any
-any plan, any decision file, or anything outside `~/mc/intake/proposals/`.
+any plan, any decision file, or anything outside `~/mc/proposals/`.
 Call production, run a deploy, or touch a credential. Open a PR. Start a
 session. Ask a question — there is nobody to answer it, so decide from the
 digest and say what you decided.

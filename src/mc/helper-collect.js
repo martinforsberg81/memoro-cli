@@ -78,8 +78,15 @@ export function helperDir(env = process.env) {
   return join(workRoot(env), 'helper');
 }
 
+/**
+ * `~/mc/proposals/` — a room of its own beside `~/mc/intake/`, not a
+ * subdirectory of it. Intake is inbound material the turn reads and files
+ * away; proposals are what came out of reading it. Nesting the output inside
+ * the input made "read everything in intake" an instruction that had to carve
+ * out an exception for its own results.
+ */
 export function proposalsDir(env = process.env) {
-  return join(intakeDir(env), 'proposals');
+  return join(workRoot(env), 'proposals');
 }
 
 export function baseUrl(env = process.env) {
