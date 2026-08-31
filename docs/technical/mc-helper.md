@@ -292,8 +292,11 @@ Nobody automatic. That is the point.
   `~/mc/queue.md` and deletes the file, or just deletes the file. It reads
   the desk's proposals and the eye's the same way, because they are the same
   file.
-- **`mc plan <name>`** is the other way in: read the proposal, then plan it.
-  Nothing automatic carries one there — `mc plan` takes a name, not a file.
+- **`mc plan <programme>`** is the other way in: the planning session reads
+  `~/mc/intake/proposals/` itself — its role says so and its first prompt names
+  the directory — and turns what belongs to that programme into projects.
+  Nothing automatic carries a proposal there: `mc plan` takes a programme, not
+  a file, and a proposal is a candidate for a project rather than a project.
 - **The page (`mc`)** has an INTAKE section: the newest digest and its age,
   what is new in it, how many proposals are waiting — and the `!` lines
   themselves, first, three named and the rest counted. A count is a number
