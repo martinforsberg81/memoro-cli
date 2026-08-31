@@ -39,11 +39,14 @@ function green({ baseCommit = BASE } = {}) {
     stopped_at: null,
     reason: null,
     merged: false,
+    full: false,
     pr: { number: 400, head: 'feature', base: 'main', head_sha: HEAD, title: 'a change' },
-    baseline: { commit: baseCommit, red: ['old world › one', 'old world'], totals: { tests: 100, fail: 2 } },
-    candidate: { commit: 'dddd444', red: ['old world › one', 'old world'], totals: { tests: 104, fail: 2 } },
-    broke: [],
-    fixed: [],
+    // The ground the candidate was built on — not a measurement of it. It is
+    // what the drift check compares against once the round has run.
+    base: { ref: 'main', commit: baseCommit },
+    selection: null,
+    candidate: { commit: 'dddd444', red: [], totals: { tests: 104, fail: 0 } },
+    extra_gates: [],
   };
 }
 
@@ -52,8 +55,8 @@ function red() {
     ...green(),
     ok: false,
     stopped_at: 'red',
-    reason: '1 test red on the candidate and green on the baseline',
-    broke: ['new thing › broke'],
+    reason: '1 test red: new thing › broke',
+    candidate: { commit: 'dddd444', red: ['new thing › broke'], totals: { tests: 104, fail: 1 } },
   };
 }
 
@@ -160,7 +163,7 @@ describe('a green gate lands the change', () => {
     } finally { fx.cleanup(); }
   });
 
-  it('writes one line to the merge log, with both red counts', async () => {
+  it('writes one line to the merge log, saying what ran and what it found', async () => {
     const fx = fixture();
     try {
       await fx.run();
@@ -168,11 +171,19 @@ describe('a green gate lands the change', () => {
       assert.equal(rows.length, 3, 'expected exactly one row appended');
       const line = rows[2];
       assert.match(line, /#400/u);
-      // "red before" was the same understatement as the verdict's "green":
-      // those two were standing red on main and this change did not touch them.
-      assert.match(line, /2 standing red before · 2 after · 0 new/u);
+      // One tree, so one number. "2 standing red before · 2 after · 0 new"
+      // described a comparison that no longer happens.
+      assert.match(line, /full suite, against aaaa111 · 0 red/u);
       assert.match(line, /Squash-merge into `main` → `ccc/u);
       assert.match(line, /klient-guard/u);
+    } finally { fx.cleanup(); }
+  });
+
+  it('a selected round says how many files it reached, not "full suite"', async () => {
+    const fx = fixture({ verdict: { ...green(), selection: { files: 17, commands: 2 } } });
+    try {
+      await fx.run();
+      assert.match(fx.log().trim().split('\n')[2], /17 test files this change reaches, against aaaa111 · 0 red/u);
     } finally { fx.cleanup(); }
   });
 

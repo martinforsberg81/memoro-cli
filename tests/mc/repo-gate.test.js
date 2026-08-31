@@ -2,12 +2,13 @@
  * The gate round as a machine — what it must do, and what it must not be able
  * to do.
  *
- * The verdict half: a fresh baseline every round, the candidate measured with
- * the current base merged into it, red sets compared by name at every level,
- * and a run that never finished treated as no evidence rather than as a clean
- * sweep. That last one is the quiet failure worth guarding: two runs that both
- * died on the same missing dependency produce two empty red sets, and a gate
- * that compares them reports a confident green from a suite that never ran.
+ * The verdict half: ONE tree, the candidate with the current base merged into
+ * it, and what went red in it named at every level. There is no baseline and
+ * no comparison — ruled by Martin on 2026-08-31, so a test the change reaches
+ * that is already red on main is red here too, which several tests below exist
+ * to pin rather than to soften. A run that never finished is still treated as
+ * no evidence rather than as a clean sweep: it is the quiet failure worth
+ * guarding, and with one side it is the whole verdict.
  *
  * The safety half: the lease is taken as the *area* that asked and given back
  * in every exit including a crash, and there is no path through this module
@@ -25,11 +26,9 @@ import { describe, it } from 'node:test';
 import { addArea, fixture as repoFixture } from './_helpers/repo-fixture.js';
 import { gateLines } from '../../src/mc/commands/repo.js';
 import { runMcCli } from './_helpers/mc-cli.js';
-import { gateRoot, runGate, verdictHeadline, verdictPhrase } from '../../src/mc/repo-gate.js';
-import { carriedGate, loadMeasuredGate, lockfileHashAt, saveBaseline, saveMeasuredGate } from '../../src/mc/repo-baseline-cache.js';
+import { gateRoot, runGate, verdictFor, verdictHeadline, verdictPhrase } from '../../src/mc/repo-gate.js';
 import { claimLease, readLease } from '../../src/mc/repo-lease.js';
 import { gateLockPath, runningRound, takeGateLock } from '../../src/mc/gate-lock.js';
-import { renderRatchet } from '../../src/mc/red-ratchet.js';
 
 const AREA = { name: 'klient-guard', kind: 'work-area' };
 const OTHER = { name: 'pm', kind: 'work-area' };
@@ -58,20 +57,9 @@ function tapWith(red, { finished = true, tests = 100 } = {}) {
  * question about a list rather than about a mock's expectations.
  */
 function fixture({
-  baselineRed = [],
   candidateRed = [],
   candidateFinished = true,
-  baselineFinished = true,
   conflict = false,
-  // What `.mc/red-ratchet.json` says in the candidate worktree, if anything.
-  // An array is a recorded set; a string is written verbatim, which is how a
-  // malformed one is tested. `undefined` is a repository with no ratchet.
-  ratchet = undefined,
-  // What `.mc/red-ratchet.json` says on the BASE branch. Defaults to the
-  // candidate's, which is the ordinary case: a change that does not touch the
-  // file leaves main's floor exactly where it was. Give it separately to model
-  // a change that edits the floor.
-  baseRatchet = undefined,
   pr = { number: 400, headRefName: 'feature', baseRefName: 'main', headRefOid: 'abc1234', state: 'OPEN', title: 'a change' },
   prStatus = 0,
   changed = [],
@@ -93,16 +81,6 @@ function fixture({
     if (args[0] === 'worktree' && args[1] === 'add') {
       const dir = args[args.length - 2];
       mkdirSync(dir, { recursive: true });
-      // The gate reads the ratchet out of the candidate worktree, so this is
-      // where a checkout that has one gets it — the same place a real
-      // `worktree add` would have put it.
-      if (ratchet !== undefined && dir.endsWith('candidate')) {
-        mkdirSync(join(dir, '.mc'), { recursive: true });
-        writeFileSync(
-          join(dir, '.mc', 'red-ratchet.json'),
-          typeof ratchet === 'string' ? ratchet : renderRatchet(ratchet),
-        );
-      }
       // A worktree carries the repository's manifest, as a real one would.
       writeFileSync(join(dir, 'package.json'), readFileSync(join(repoPath, 'package.json')));
       return { status: 0, stdout: '', stderr: '' };
@@ -120,15 +98,11 @@ function fixture({
       return { status: 0, stdout: changed.map((file) => `${file}\n`).join(''), stderr: '' };
     }
     if (args[0] === 'rev-parse') {
-      return { status: 0, stdout: `${opts.cwd.endsWith('baseline') ? 'base1111' : 'cand2222'}\n`, stderr: '' };
+      // `origin/main` is asked in the repository itself; HEAD is asked in the
+      // one worktree the round builds.
+      return { status: 0, stdout: `${opts.cwd === repoPath ? 'base1111' : 'cand2222'}\n`, stderr: '' };
     }
-    // The floor as it stands on the base branch, read without a worktree —
-    // the base worktree is not built on a carried round.
-    if (args[0] === 'show' && String(args[1]).endsWith('.mc/red-ratchet.json')) {
-      const floor = baseRatchet === undefined ? ratchet : baseRatchet;
-      if (floor === undefined) return { status: 1, stdout: '', stderr: 'path does not exist' };
-      return { status: 0, stdout: typeof floor === 'string' ? floor : renderRatchet(floor), stderr: '' };
-    }
+    if (args[0] === 'symbolic-ref') return { status: 0, stdout: 'origin/main\n', stderr: '' };
     return { status: 0, stdout: '', stderr: '' };
   };
 
@@ -140,13 +114,7 @@ function fixture({
 
   const suite = ({ cwd }) => {
     calls.push({ tool: 'suite', cwd });
-    const baseline = cwd.endsWith('baseline');
-    return Promise.resolve({
-      code: 1,
-      tap: baseline
-        ? tapWith(baselineRed, { finished: baselineFinished })
-        : tapWith(candidateRed, { finished: candidateFinished }),
-    });
+    return Promise.resolve({ code: 1, tap: tapWith(candidateRed, { finished: candidateFinished }) });
   };
 
   const tests = ({ cwd, files, flags = [] }) => {
@@ -192,57 +160,57 @@ function writeJson(path, value) {
   writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
 }
 
-describe('the gate round decides on names, at every level', () => {
-  it('is green when the candidate is red nowhere the baseline was green', async () => {
-    const red = ['old world › one', 'old world'];
-    const fx = fixture({ baselineRed: red, candidateRed: red });
+describe('the round decides on the one tree it measured', () => {
+  it('a candidate with nothing red is green', async () => {
+    const fx = fixture({ candidateRed: [] });
     try {
       const report = await fx.run();
       assert.equal(report.ok, true, report.reason || '');
       assert.equal(report.stopped_at, null);
-      assert.deepEqual(report.broke, []);
+      assert.equal(report.verdict, 'green');
       assert.equal(report.merged, false, 'the gate must never report a merge');
-      assert.equal(report.baseline.commit, 'base1111');
       assert.equal(report.candidate.commit, 'cand2222');
     } finally { fx.cleanup(); }
   });
 
-  it('the same number of failures with different names is red', async () => {
-    // The regression a counting gate waves through: one repaired, one broken.
-    const fx = fixture({
-      baselineRed: ['old world › one', 'old world'],
-      candidateRed: ['old world › two', 'old world'],
-    });
+  it('any red on the candidate is red, and the names are in the reason', async () => {
+    const fx = fixture({ candidateRed: ['old world › two', 'old world'] });
     try {
       const report = await fx.run();
       assert.equal(report.ok, false);
       assert.equal(report.stopped_at, 'red');
-      assert.deepEqual(report.broke, ['old world › two']);
-      assert.deepEqual(report.fixed, ['old world › one']);
-      assert.equal(report.baseline.totals.fail, report.candidate.totals.fail, 'the point is that the totals agree');
+      assert.equal(report.verdict, 'red');
+      assert.deepEqual(report.candidate.red, ['old world › two', 'old world']);
+      assert.match(report.reason, /2 tests red: old world › two, old world/u);
     } finally { fx.cleanup(); }
   });
 
-  it('a subtest swapped under an identical top level is red', async () => {
-    // Both runs have `old world` failing at the top. Only the level below
-    // says which test it was, which is why the comparison goes all the way down.
-    const fx = fixture({
-      baselineRed: ['old world › reads the manifest', 'old world'],
-      candidateRed: ['old world › writes the manifest', 'old world'],
-    });
+  /**
+   * The consequence of the 2026-08-31 ruling, pinned rather than left to be
+   * discovered: a test that is red on main and inside this change's reach
+   * makes the round red. The differential form passed exactly this case, at
+   * the price of a second worktree and a second suite run to find out. The
+   * repair is a selector that reaches fewer unrelated tests, not a second
+   * measurement here.
+   */
+  it('a test that was already red on main is red here — it is not subtracted', async () => {
+    const fx = fixture({ candidateRed: ['old world › one', 'old world'] });
     try {
       const report = await fx.run();
       assert.equal(report.ok, false);
-      assert.deepEqual(report.broke, ['old world › writes the manifest']);
+      assert.equal(report.stopped_at, 'red');
+      assert.deepEqual(report.candidate.red, ['old world › one', 'old world']);
+      assert.equal(fx.ran('suite').length, 1, 'and nothing was run to ask whether main carried it');
     } finally { fx.cleanup(); }
   });
 
-  it('repairing a long-red test does not fail the round', async () => {
-    const fx = fixture({ baselineRed: ['old world › one', 'old world'], candidateRed: [] });
+  it('every level of the run is read, not only the top', async () => {
+    // A red test reddens its suite too, and a report that named only the top
+    // level would say "old world" and leave the reader to find the test.
+    const fx = fixture({ candidateRed: ['old world › writes the manifest', 'old world'] });
     try {
       const report = await fx.run();
-      assert.equal(report.ok, true);
-      assert.deepEqual(report.fixed, ['old world › one', 'old world']);
+      assert.ok(report.candidate.red.includes('old world › writes the manifest'));
     } finally { fx.cleanup(); }
   });
 });
@@ -263,7 +231,7 @@ describe('the round measures a state worth measuring', () => {
     } finally { fx.cleanup(); }
   });
 
-  it('fetches before it builds the baseline — no remembered main', async () => {
+  it('fetches before it builds the candidate — no remembered main merged in', async () => {
     const fx = fixture();
     try {
       await fx.run();
@@ -271,26 +239,25 @@ describe('the round measures a state worth measuring', () => {
       const fetched = git.findIndex((line) => line.startsWith('fetch origin'));
       const built = git.findIndex((line) => line.startsWith('worktree add'));
       assert.ok(fetched !== -1, 'it never fetched');
-      assert.ok(fetched < built, 'the baseline was checked out from a remembered ref');
+      assert.ok(fetched < built, 'the candidate was built from a remembered ref');
     } finally { fx.cleanup(); }
   });
 
-  it('both worktrees are detached, so no branch is moved', async () => {
+  /**
+   * The 2× this step removed. One worktree, one prepare, one suite run — on
+   * memoro the second side was a second `npm ci` for a 492 MB tree and a
+   * second 233.6 s of tests for every pull request.
+   */
+  it('builds ONE worktree, detached, and runs the suite once', async () => {
     const fx = fixture();
     try {
       await fx.run();
       const added = fx.ran('git').filter((call) => call.args[0] === 'worktree' && call.args[1] === 'add');
-      assert.equal(added.length, 2);
-      for (const call of added) assert.ok(call.args.includes('--detach'), call.args.join(' '));
-    } finally { fx.cleanup(); }
-  });
-
-  it('runs the two suites one after the other, baseline first', async () => {
-    const fx = fixture();
-    try {
-      await fx.run();
+      assert.equal(added.length, 1, 'a second worktree was built');
+      assert.ok(added[0].args.includes('--detach'), added[0].args.join(' '));
+      assert.ok(added[0].args[added[0].args.length - 2].endsWith('candidate'));
       const sides = fx.ran('suite').map((call) => call.cwd.split('/').pop());
-      assert.deepEqual(sides, ['baseline', 'candidate']);
+      assert.deepEqual(sides, ['candidate']);
     } finally { fx.cleanup(); }
   });
 
@@ -308,26 +275,16 @@ describe('the round measures a state worth measuring', () => {
 
 describe('a run that did not run is not evidence', () => {
   it('stops rather than reading an empty red set as a clean sweep', async () => {
-    // Both sides die the same way — a missing dependency, a syntax error — and
-    // both produce no failures at all. Compared, that is a confident green from
-    // a suite that never ran, which is the worst thing this could report.
-    const fx = fixture({ baselineFinished: false });
-    try {
-      const report = await fx.run();
-      assert.equal(report.ok, false);
-      assert.equal(report.stopped_at, 'suite');
-      assert.match(report.reason, /baseline run never reached its own summary/u);
-      assert.deepEqual(fx.ran('suite').length, 1, 'it paid for the candidate run anyway');
-    } finally { fx.cleanup(); }
-  });
-
-  it('catches it on the candidate side too', async () => {
+    // A run that dies on a missing dependency or a syntax error produces no
+    // failures at all, and with one side that empty set IS the verdict — a
+    // confident green from a suite that never ran, which is the worst thing
+    // this could report.
     const fx = fixture({ candidateFinished: false });
     try {
       const report = await fx.run();
       assert.equal(report.ok, false);
       assert.equal(report.stopped_at, 'suite');
-      assert.match(report.reason, /candidate run never reached its own summary/u);
+      assert.match(report.reason, /never reached its own summary/u);
     } finally { fx.cleanup(); }
   });
 
@@ -421,13 +378,11 @@ describe('the lease is held as the area, and always given back', () => {
     } finally { fx.cleanup(); }
   });
 
-  it('clears the worktrees it made, whatever the verdict', async () => {
+  it('clears the worktree it made, whatever the verdict', async () => {
     const fx = fixture({ candidateRed: ['new thing › broke', 'new thing'] });
     try {
       await fx.run();
-      const workspace = gateRoot(fx.mcHome);
-      assert.equal(existsSync(join(workspace, 'baseline')), false);
-      assert.equal(existsSync(join(workspace, 'candidate')), false);
+      assert.equal(existsSync(join(gateRoot(fx.mcHome), 'candidate')), false);
     } finally { fx.cleanup(); }
   });
 });
@@ -479,11 +434,8 @@ describe('there is no merge in here', () => {
 });
 
 describe('what the round reports', () => {
-  it('carries the red sets, the difference, the commits and the stop reason', async () => {
-    const fx = fixture({
-      baselineRed: ['old world › one', 'old world'],
-      candidateRed: ['old world › one', 'old world', 'new thing › broke', 'new thing'],
-    });
+  it('carries the red set, the commits, the base it stood on and the stop reason', async () => {
+    const fx = fixture({ candidateRed: ['new thing › broke', 'new thing'] });
     try {
       const report = await fx.run();
       // Everything a surface with no judgement needs in order to report onward
@@ -491,17 +443,20 @@ describe('what the round reports', () => {
       assert.equal(report.ok, false);
       assert.equal(report.stopped_at, 'red');
       assert.equal(typeof report.reason, 'string');
-      assert.deepEqual(report.baseline.red, ['old world › one', 'old world']);
-      assert.deepEqual(report.broke, ['new thing › broke', 'new thing']);
-      assert.equal(report.baseline.commit, 'base1111');
+      assert.deepEqual(report.candidate.red, ['new thing › broke', 'new thing']);
       assert.equal(report.candidate.commit, 'cand2222');
+      assert.equal(report.candidate.is, 'pr-head-with-base-merged-in');
+      // The ground, not a measurement of it: `mc merge` has to know whether
+      // the base moved between the round and the landing.
+      assert.deepEqual(report.base, { ref: 'origin/main', commit: 'base1111' });
       assert.equal(report.pr.head, 'feature');
       assert.equal(report.pr.base, 'main');
+      assert.equal(report.full, false);
       assert.match(report.command, /npm test/u);
       assert.equal(report.holder, 'klient-guard');
       assert.equal(typeof report.duration_ms, 'number');
       // It survives the trip through a pipe intact.
-      assert.deepEqual(JSON.parse(JSON.stringify(report)).broke, report.broke);
+      assert.deepEqual(JSON.parse(JSON.stringify(report)).candidate.red, report.candidate.red);
     } finally { fx.cleanup(); }
   });
 
@@ -620,188 +575,6 @@ describe('what the suite inherits, and what it must not', () => {
   });
 });
 
-/**
- * The verdict now carries a number and a floor.
- *
- * The differential rule above is untouched — every test in it still passes
- * unchanged, which is the point. What is added is a second, independent check
- * that the differential one structurally cannot make: it compares against a
- * baseline measured in the same round, so it can never notice that the
- * baseline itself has got worse since last time.
- */
-describe('the standing red set, recorded and ratcheted', () => {
-  it('reports how many red names the base itself is carrying', async () => {
-    const red = ['old world › one', 'old world'];
-    const fx = fixture({ baselineRed: red, candidateRed: red });
-    try {
-      const report = await fx.run();
-      assert.equal(report.ok, true, report.reason || '');
-      assert.equal(report.standing_red, 2, 'the count is read off the baseline, which is the base branch');
-      assert.equal(report.verdict, 'no-new-red', 'a pass over standing red is not the same claim as green');
-    } finally { fx.cleanup(); }
-  });
-
-  it('a clean base is still the strict verdict', async () => {
-    const fx = fixture({ baselineRed: [], candidateRed: [] });
-    try {
-      const report = await fx.run();
-      assert.equal(report.standing_red, 0);
-      assert.equal(report.verdict, 'green');
-    } finally { fx.cleanup(); }
-  });
-
-  it('a repository with no ratchet runs exactly as it did before', async () => {
-    const red = ['old world › one', 'old world'];
-    const fx = fixture({ baselineRed: red, candidateRed: red });
-    try {
-      const report = await fx.run();
-      assert.equal(report.ok, true, report.reason || '');
-      assert.equal(report.ratchet.present, false, 'absent is not a floor of zero');
-      assert.deepEqual(report.ratchet.baseline_risen, []);
-    } finally { fx.cleanup(); }
-  });
-
-  /**
-   * The rule that was removed on 2026-08-30, and why.
-   *
-   * A red name absent from the floor used to stop the round. It could never
-   * fire on a fault the change introduced: `broke` returns before the floor is
-   * consulted, so `candidate.red ⊆ baseline.red`, so every name it could stop
-   * on was already red on main — which the same block computed separately and
-   * called "not this change's doing".
-   *
-   * The demonstration: a broken `codex` install made thirteen broker tests red
-   * on this laptop. Under the old rule no change could merge on any machine
-   * missing that binary. What is installed has nothing to do with whether a
-   * change may land.
-   */
-  it('a red name nobody recorded is reported against main, and does not stop the round', async () => {
-    // Red on both sides, so `broke` is empty and the differential rule passes
-    // it. This is main carrying a name its own floor does not record.
-    const red = ['old world › one', 'old world'];
-    const fx = fixture({ baselineRed: red, candidateRed: red, ratchet: ['old world'] });
-    try {
-      const report = await fx.run();
-      assert.equal(report.ok, true, report.reason || '');
-      assert.deepEqual(report.broke, [], 'the differential rule had no objection');
-      assert.deepEqual(report.ratchet.baseline_risen, ['old world › one'], 'said about main');
-      assert.deepEqual(report.ratchet.lowered_still_red, [], 'the change did not touch the floor');
-      assert.notEqual(report.stopped_at, 'ratchet');
-    } finally { fx.cleanup(); }
-  });
-
-  /**
-   * The one thing here that IS the change's own doing, and the only stop left.
-   *
-   * Taking a name out of the floor is a claim in somebody's diff — "this came
-   * good" — and it is a claim the round can check against the run it just did.
-   */
-  it('a change that removes a still-red name from the floor is stopped', async () => {
-    const red = ['old world › one', 'old world'];
-    const fx = fixture({
-      baselineRed: red,
-      candidateRed: red,
-      baseRatchet: ['old world › one', 'old world'],
-      ratchet: ['old world'],
-    });
-    try {
-      const report = await fx.run();
-      assert.equal(report.ok, false);
-      assert.equal(report.stopped_at, 'ratchet');
-      assert.deepEqual(report.ratchet.lowered_still_red, ['old world › one']);
-      assert.match(report.reason, /still red/u);
-      assert.equal(report.merged, false);
-    } finally { fx.cleanup(); }
-  });
-
-  it('a change that repairs a test and records the smaller floor in the same commit passes', async () => {
-    // The case the stop must not catch: the name is gone from the floor AND
-    // green on the candidate, which is exactly what a repair looks like.
-    const fx = fixture({
-      baselineRed: ['old world › one', 'old world'],
-      candidateRed: ['old world'],
-      baseRatchet: ['old world › one', 'old world'],
-      ratchet: ['old world'],
-    });
-    try {
-      const report = await fx.run();
-      assert.equal(report.ok, true, report.reason || '');
-      assert.deepEqual(report.ratchet.lowered_still_red, []);
-      assert.deepEqual(report.fixed, ['old world › one']);
-    } finally { fx.cleanup(); }
-  });
-
-  it('a floor on main that will not parse is main\'s problem, not this change\'s', async () => {
-    const red = ['old world › one'];
-    const fx = fixture({ baselineRed: red, candidateRed: red, ratchet: red, baseRatchet: '{ not json' });
-    try {
-      const report = await fx.run();
-      assert.equal(report.ok, true, report.reason || '');
-      assert.notEqual(report.stopped_at, 'ratchet');
-    } finally { fx.cleanup(); }
-  });
-
-  it('the recorded set breathing on a name it already knows does not fail', async () => {
-    // The measurement from the brief: the same repository, 55 red names one
-    // round and 56 the next, the extra one green again after that. The floor
-    // holds the name, so neither round moves it.
-    const floor = ['old world › one', 'old world', 'flaky under load'];
-    const busy = fixture({ baselineRed: floor, candidateRed: floor, ratchet: floor });
-    try {
-      const report = await busy.run();
-      assert.equal(report.ok, true, report.reason || '');
-      assert.deepEqual(report.ratchet.baseline_risen, []);
-    } finally { busy.cleanup(); }
-
-    const quiet = fixture({
-      baselineRed: ['old world › one', 'old world'],
-      candidateRed: ['old world › one', 'old world'],
-      ratchet: floor,
-    });
-    try {
-      const report = await quiet.run();
-      assert.equal(report.ok, true, report.reason || '');
-      assert.deepEqual(report.ratchet.fallen, ['flaky under load'], 'offered up, not taken');
-    } finally { quiet.cleanup(); }
-  });
-
-  it('a ratchet that will not parse stops the round rather than reading as empty', async () => {
-    const red = ['old world › one', 'old world'];
-    const fx = fixture({ baselineRed: red, candidateRed: red, ratchet: '{ not json' });
-    try {
-      const report = await fx.run();
-      assert.equal(report.ok, false);
-      assert.equal(report.stopped_at, 'ratchet');
-      assert.equal(report.ratchet.ok, false);
-      // An empty floor would have made both standing names look like a rise.
-      assert.deepEqual(report.ratchet.baseline_risen, []);
-    } finally { fx.cleanup(); }
-  });
-
-  it('the ratchet cannot be used to get a new red name past the differential rule', async () => {
-    // The candidate breaks something *and* writes it into the floor. `broke`
-    // runs first and there is no way round it, which is why the two checks are
-    // independent rather than one that consults a file.
-    const fx = fixture({
-      baselineRed: ['old world'],
-      candidateRed: ['old world', 'newly broken'],
-      ratchet: ['old world', 'newly broken'],
-    });
-    try {
-      const report = await fx.run();
-      assert.equal(report.ok, false);
-      assert.equal(report.stopped_at, 'red', 'stopped by broke, not by the ratchet');
-      assert.deepEqual(report.broke, ['newly broken']);
-    } finally { fx.cleanup(); }
-  });
-});
-
-/**
- * The pull request's own tests (D-0157). The suite says whether anything else
- * broke; this says whether the change is proved — and a suite that globs some
- * directories and not others had said neither about a PR whose tests lived in
- * `tests/ui/`: the same count as the day before, 114 new test lines.
- */
 describe('the pull request\'s own tests are run, wherever they lie', () => {
   it('runs every *.test.js the PR adds or changes, and records them', async () => {
     const fx = fixture({ changed: ['src/thing.js', 'tests/ui/thing.test.js', 'tests/architecture/rule.test.mjs', 'README.md'] });
@@ -824,7 +597,7 @@ describe('the pull request\'s own tests are run, wherever they lie', () => {
       // One failure, two names (the parent reddens too): counted by # fail,
       // and the names said as names (2026-08-24 — "3 names but fail 2").
       assert.match(result.reason, /1 of the pull request's own tests is red — the red names, parent suites included: thing › proves the fix, thing/u);
-      assert.deepEqual(result.broke, [], 'the suite had nothing to say');
+      assert.deepEqual(result.candidate.red, [], 'the suite had nothing to say');
       assert.deepEqual(result.pr_tests.red, ['thing › proves the fix', 'thing'], 'the subtest and its parent, as node reports them');
     } finally { fx.cleanup(); }
   });
@@ -855,7 +628,7 @@ describe('the pull request\'s own tests are run, wherever they lie', () => {
     try {
       await fx.run();
       const order = fx.calls.filter((call) => call.tool === 'suite' || call.tool === 'tests' || (call.tool === 'git' && call.args[0] === 'diff')).map((call) => call.tool === 'git' ? 'diff' : call.tool);
-      assert.deepEqual(order, ['suite', 'suite', 'diff', 'tests']);
+      assert.deepEqual(order, ['suite', 'diff', 'tests']);
     } finally { fx.cleanup(); }
   });
 });
@@ -863,7 +636,7 @@ describe('the pull request\'s own tests are run, wherever they lie', () => {
 /**
  * A suite in a worktree with no dependency tree does not fail, it shrinks
  * (D-0152): 2162 tests and a tidy number where 206 never ran. The gate checks
- * the tree after preparation and before either run.
+ * the tree after preparation and before the run.
  */
 describe('the dependency tree is checked before a suite is believed', () => {
   const declared = (fx, prepare) => writeJson(join(fx.mcHome, 'repo-gates.json'), {
@@ -877,7 +650,7 @@ describe('the dependency tree is checked before a suite is believed', () => {
       declared(fx, 'true');
       const result = await fx.run();
       assert.equal(result.stopped_at, 'dependencies', JSON.stringify(result));
-      assert.match(result.reason, /baseline declares 1 dependencies and has no node_modules after preparation/u);
+      assert.match(result.reason, /candidate declares 1 dependencies and has no node_modules after preparation/u);
       assert.match(result.reason, /D-0152/u);
       assert.deepEqual(fx.ran('suite'), [], 'no suite was run on a tree that would have shrunk');
     } finally { fx.cleanup(); }
@@ -891,7 +664,7 @@ describe('the dependency tree is checked before a suite is believed', () => {
       declared(fx, 'mkdir -p node_modules');
       const result = await fx.run();
       assert.equal(result.stopped_at, null, JSON.stringify(result));
-      assert.equal(fx.ran('suite').length, 2);
+      assert.equal(fx.ran('suite').length, 1);
     } finally { fx.cleanup(); }
   });
 
@@ -911,9 +684,9 @@ describe('the dependency tree is checked before a suite is believed', () => {
 /**
  * One gate round at a time on this machine.
  *
- * A full suite pins the cores for a minute and a half and a round runs two of
- * them; two rounds at once make both slower and both flakier, and the
- * flakiness lands on whichever pull request happened to be measured.
+ * A full suite pins the cores for a minute and a half; two rounds at once make
+ * both slower and both flakier, and the flakiness lands on whichever pull
+ * request happened to be measured.
  *
  * This used to be "the suite right": a lease with an errand, a liveness
  * verdict derived from the work board, a --force release, an inbox message to
@@ -1052,9 +825,8 @@ describe('the pull request\'s own tests run with the declared flags', () => {
  * Several pull requests as one candidate (A3, 2026-08-23). With eleven in
  * the queue and each round holding the suite right for 5–13 minutes, the
  * round itself was the bottleneck. The batch is one tree with all of them
- * merged in, measured once each side — and each pull request's own tests
- * still run by themselves, so the batch can never hide which one carried
- * which test.
+ * merged in, measured once — and each pull request's own tests still run by
+ * themselves, so the batch can never hide which one carried which test.
  */
 describe('a batch is one candidate, and each pull request keeps its own tests', () => {
   const prs = {
@@ -1092,23 +864,23 @@ describe('a batch is one candidate, and each pull request keeps its own tests', 
     return { ...fx, run: (extra = {}) => fx.run({ pr: 401, prs: [401, 402, 403], gh, git, tests, ...extra }) };
   }
 
-  it('builds the candidate from the base with every head merged in, in order, and runs the suite once each side', async () => {
+  it('builds the candidate from the base with every head merged in, in order, and runs the suite once', async () => {
     const fx = batchFixture();
     try {
       const report = await fx.run();
       assert.equal(report.ok, true, report.reason);
       const adds = fx.ran('git').filter((call) => call.args[0] === 'worktree' && call.args[1] === 'add').map((call) => call.args[call.args.length - 1]);
-      assert.deepEqual(adds, ['origin/main', 'origin/main'], 'both worktrees start from the base');
+      assert.deepEqual(adds, ['origin/main'], 'one worktree, starting from the base');
       const merges = fx.ran('git').filter((call) => call.args[0] === 'merge').map((call) => call.args[2]);
       assert.deepEqual(merges, ['sha401', 'sha402', 'sha403'], 'heads merged in the order given');
-      assert.equal(fx.ran('suite').length, 2, 'one suite per side, not per pull request');
+      assert.equal(fx.ran('suite').length, 1, 'one suite for the batch, not one per pull request');
       // Each pull request's own tests: its files, by its head, never the others'.
       const own = fx.ran('tests').map((call) => call.files);
       assert.deepEqual(own, [['tests/sha401.test.js'], ['tests/sha402.test.js'], ['tests/sha403.test.js']]);
       assert.deepEqual(report.prs.map((item) => [item.number, item.pr_tests.files]), [
         [401, ['tests/sha401.test.js']], [402, ['tests/sha402.test.js']], [403, ['tests/sha403.test.js']],
       ]);
-      assert.ok(Object.keys(report.timings).includes('suite baseline'), 'wall clock per step (A5)');
+      assert.ok(Object.keys(report.timings).includes('suite'), 'wall clock per step (A5)');
     } finally { fx.cleanup(); }
   });
 
@@ -1144,289 +916,81 @@ describe('a batch is one candidate, and each pull request keeps its own tests', 
 });
 
 /**
- * Extra gates, run on both sides and judged by the delta (2026-08-24).
+ * Extra gates — what an operator declares beside the suite, run on the
+ * candidate.
  *
- * Measured that night on #10909's round: the extra gate ran only on the
- * candidate, main's own contract suite was red the whole time (5 fail, the
- * same 5 on untouched origin/main), and the round said "FAILED on the
- * candidate". A track spent six minutes proving its innocence. The rules
- * asserted here: both sides run, the verdict is the delta, a red baseline
- * is said as main's fault, and a carried result spares the baseline run.
+ * They ran on both sides and were judged by the delta until 2026-08-31, for a
+ * reason measured on #10909's round: an extra gate run only on the candidate
+ * attributed a red main to the one PR in the room, and a track spent six
+ * minutes proving its innocence. That protection went with the baseline,
+ * deliberately — the ruling is that main's own red is not the round's
+ * question, and a declared gate that is red on main is red here.
  */
-describe('extra gates are differential: both sides, and the delta decides', () => {
+describe('extra gates run on the candidate, and a failing one is red', () => {
   const declare = (fx, command, { name = 'contract' } = {}) => writeJson(join(fx.mcHome, 'repo-gates.json'), {
     repo: { prepare: null, prepare_why: 'a test', extra_gates: [{ name, command }], merge_log: null },
   });
-  // A gate whose result depends on which worktree it runs in: red in the
-  // baseline, green in the candidate, or any mix — one shell line, branching
-  // on the directory name the round gave it as cwd.
-  const gate = (baselineExit, candidateExit) => `case "$(basename "$PWD")" in baseline) exit ${baselineExit};; *) exit ${candidateExit};; esac`;
 
-  it('runs the gate on both sides, and both green passes', async () => {
+  it('runs it once, in the candidate worktree, and green passes', async () => {
     const fx = fixture();
     try {
-      declare(fx, gate(0, 0));
+      const marker = join(fx.root, 'gate-ran.txt');
+      declare(fx, `echo "$(basename "$PWD")" >> "${marker}"; exit 0`);
       const report = await fx.run({ root: fx.mcHome });
       assert.equal(report.ok, true, report.reason);
       assert.equal(report.extra_gates.length, 1);
-      assert.equal(report.extra_gates[0].baseline.ok, true);
-      assert.equal(report.extra_gates[0].candidate.ok, true);
-      assert.ok('extra gates baseline' in report.timings, 'the baseline run was not timed');
+      assert.equal(report.extra_gates[0].ok, true);
+      assert.equal(report.extra_gates[0].source, 'declaration');
+      assert.deepEqual(readFileSync(marker, 'utf8').trim().split('\n'), ['candidate'], 'it ran somewhere besides the candidate');
+      assert.ok('extra gates' in report.timings, 'the run was not timed');
     } finally { fx.cleanup(); }
   });
 
-  it('candidate red and baseline green is the PR\'s fault, said as loudly as ever', async () => {
+  it('a failing gate is a stop, and the exit code is in the reason', async () => {
     const fx = fixture();
     try {
-      declare(fx, gate(0, 1));
+      declare(fx, 'exit 3');
       const report = await fx.run({ root: fx.mcHome });
       assert.equal(report.stopped_at, 'extra-gate');
-      assert.match(report.reason, /failed on the candidate and passed on the baseline/u);
+      assert.match(report.reason, /^contract failed \(exit 3\)/u);
     } finally { fx.cleanup(); }
   });
 
-  it('red on both sides is main\'s fault, and the round stops for THAT reason', async () => {
+  /**
+   * The consequence, said in a test rather than left for somebody to find: a
+   * declared gate that is red on main is red here. It was reported as main's
+   * fault and let through until 2026-08-31, which took a second worktree and a
+   * second run of the gate to be able to say.
+   */
+  it('a gate that is red on main is red here too — there is no side to blame it on', async () => {
     const fx = fixture();
     try {
-      declare(fx, gate(1, 1));
+      declare(fx, 'exit 1');
       const report = await fx.run({ root: fx.mcHome });
-      assert.equal(report.stopped_at, 'extra-gate-baseline');
-      assert.match(report.reason, /already red before this PR/u);
-      assert.match(report.reason, /the base itself is broken; not this change's doing/u);
-      assert.equal(report.extra_gates[0].already_red, true);
+      assert.equal(report.stopped_at, 'extra-gate');
+      assert.notEqual(report.stopped_at, 'extra-gate-baseline', 'the stop that named main is gone with the baseline');
     } finally { fx.cleanup(); }
   });
 
-  it('a candidate that repairs a red baseline passes, with a sentence', async () => {
-    const fx = fixture();
-    try {
-      declare(fx, gate(1, 0));
-      const progress = [];
-      const report = await fx.run({ root: fx.mcHome, onProgress: (line) => progress.push(line) });
-      assert.equal(report.ok, true, report.reason);
-      assert.ok(progress.some((line) => /red on the baseline, green on the candidate — this change repairs it/u.test(line)), progress.join('\n'));
-    } finally { fx.cleanup(); }
-  });
-
-  it('a gate that prints TAP is judged by red names: a new name is the PR\'s even over a red baseline', async () => {
-    const fx = fixture();
-    try {
-      // Baseline: one standing red. Candidate: the same, plus a new one.
-      const emit = (names) => `printf '%s\\n' 'TAP version 13' ${names.map((n, i) => `'# Subtest: ${n}' 'not ok ${i + 1} - ${n}'`).join(' ')} '1..${names.length}' '# tests ${names.length}' '# pass 0' '# fail ${names.length}'; exit 1`;
-      declare(fx, `case "$(basename "$PWD")" in baseline) ${emit(['standing'])};; *) ${emit(['standing', 'fresh'])};; esac`);
-      const report = await fx.run({ root: fx.mcHome });
-      assert.equal(report.stopped_at, 'extra-gate', report.reason);
-      assert.match(report.reason, /already red on the baseline \(1 red\) and the candidate adds 1 more: fresh/u);
-      assert.deepEqual(report.extra_gates[0].broke, ['fresh']);
-    } finally { fx.cleanup(); }
-  });
-
-  it('a carried gate result spares the baseline run — once per main SHA, not once per PR', async () => {
-    const fx = fixture();
-    try {
-      const marker = join(fx.root, 'gate-ran.txt');
-      declare(fx, `echo "$(basename "$PWD")" >> "${marker}"; exit 0`);
-      saveBaseline({
-        repoPath: fx.repoPath,
-        commit: 'cand2222',
-        lockfileHash: lockfileHashAt({ git: fx.git, repoPath: fx.repoPath, commit: 'cand2222' }),
-        command: 'npm test  (node --test tests/)',
-        red: [],
-        totals: { tests: 100, fail: 0 },
-        extraGates: [{ name: 'contract', command: `echo "$(basename "$PWD")" >> "${marker}"; exit 0`, ok: true, exit_code: 0, red: [] }],
-        root: fx.mcHome,
-      });
-      const report = await fx.run({ root: fx.mcHome });
-      assert.equal(report.ok, true, report.reason);
-      assert.equal(report.baseline.carried, true);
-      assert.equal(report.extra_gates[0].baseline.carried, true);
-      assert.deepEqual(readFileSync(marker, 'utf8').trim().split('\n'), ['candidate'], 'the gate ran somewhere besides the candidate');
-      assert.equal(fx.ran('suite').length, 1, 'the suite baseline was carried too');
-    } finally { fx.cleanup(); }
-  });
-
-  it('a carried suite entry WITHOUT this gate still gets a baseline worktree, and the gate runs there', async () => {
-    const fx = fixture();
-    try {
-      const marker = join(fx.root, 'gate-ran.txt');
-      declare(fx, `echo "$(basename "$PWD")" >> "${marker}"; exit 0`);
-      // An A1 entry from before extra gates were carried: suite result only.
-      saveBaseline({
-        repoPath: fx.repoPath,
-        commit: 'cand2222',
-        lockfileHash: lockfileHashAt({ git: fx.git, repoPath: fx.repoPath, commit: 'cand2222' }),
-        command: 'npm test  (node --test tests/)',
-        red: [],
-        totals: { tests: 100, fail: 0 },
-        root: fx.mcHome,
-      });
-      const report = await fx.run({ root: fx.mcHome });
-      assert.equal(report.ok, true, report.reason);
-      assert.equal(report.baseline.carried, true, 'the suite result was still carried');
-      assert.equal(fx.ran('suite').length, 1, 'no suite reran for the gate\'s sake');
-      assert.deepEqual(readFileSync(marker, 'utf8').trim().split('\n').sort(), ['baseline', 'candidate']);
-    } finally { fx.cleanup(); }
-  });
-
-  it('a node-test gate is compared by NAME for real: five red each side, one different, and the round knows (track 3)', async () => {
-    const fx = fixture();
-    try {
-      // A real `node --test` gate whose one failing test differs by side:
-      // the exit codes match (1 and 1), the counts match (1 and 1), and
-      // only the names tell the candidate's new failure from the baseline's
-      // standing one. The gate env asks node for TAP — node 24 writes spec
-      // to a pipe otherwise, and the comparison would silently fall back.
-      const emit = String.raw`printf 'const { test } = require("node:test");\ntest("side-%s", () => { throw new Error("no"); });\n' "$(basename "$PWD")" > g.test.cjs; node --test g.test.cjs`;
-      declare(fx, emit);
-      const progress = [];
-      const report = await fx.run({ root: fx.mcHome, onProgress: (line) => progress.push(line) });
-      assert.equal(report.stopped_at, 'extra-gate', report.reason);
-      assert.match(report.reason, /adds 1 more: side-candidate/u);
-      assert.deepEqual(report.extra_gates[0].broke, ['side-candidate']);
-      assert.ok(progress.some((line) => /baseline red \[side-baseline\] · candidate red \[side-candidate\] — 1 new, 1 fixed/u.test(line)), progress.join('\n'));
-    } finally { fx.cleanup(); }
-  });
-
-  it('the same red on both sides says so by name — "the same N", not just a matching count', async () => {
+  it('a gate that prints TAP has its red names in the report and in the reason', async () => {
     const fx = fixture();
     try {
       const emit = String.raw`printf 'const { test } = require("node:test");\ntest("standing", () => { throw new Error("no"); });\n' > g.test.cjs; node --test g.test.cjs`;
       declare(fx, emit);
       const report = await fx.run({ root: fx.mcHome });
-      assert.equal(report.stopped_at, 'extra-gate-baseline', report.reason);
-      assert.match(report.reason, /1 red on the baseline \(standing\), 1 on the candidate, the same 1/u);
+      assert.equal(report.stopped_at, 'extra-gate', report.reason);
+      assert.deepEqual(report.extra_gates[0].red, ['standing']);
+      assert.match(report.reason, /1 red: standing/u);
     } finally { fx.cleanup(); }
   });
 
-  it('a gate with no readable TAP says the fallback out loud, in the progress and in the reason', async () => {
+  it('a gate with no readable TAP has no names, and is still a stop', async () => {
     const fx = fixture();
     try {
-      declare(fx, gate(1, 1));
-      const progress = [];
-      const report = await fx.run({ root: fx.mcHome, onProgress: (line) => progress.push(line) });
-      assert.equal(report.stopped_at, 'extra-gate-baseline');
-      assert.match(report.reason, /could not compare by name — a new failure over a red baseline would not be seen/u);
-      assert.ok(progress.some((line) => /could not compare by name — falling back to exit codes/u.test(line)), progress.join('\n'));
-    } finally { fx.cleanup(); }
-  });
-
-  it('a red baseline measurement is saved on its SHA and not paid again next round (20 minutes, measured)', async () => {
-    const fx = fixture();
-    try {
-      const marker = join(fx.root, 'gate-ran.txt');
-      declare(fx, `echo "$(basename "$PWD")" >> "${marker}"; exit 1`);
-      const first = await fx.run({ root: fx.mcHome });
-      assert.equal(first.stopped_at, 'extra-gate-baseline');
-      assert.deepEqual(readFileSync(marker, 'utf8').trim().split('\n'), ['baseline', 'candidate']);
-      // Same main SHA, next round: the baseline side is carried — red.
-      const second = await fx.run({ root: fx.mcHome });
-      assert.equal(second.stopped_at, 'extra-gate-baseline');
-      assert.equal(second.extra_gates[0].baseline.carried, true);
-      assert.deepEqual(readFileSync(marker, 'utf8').trim().split('\n'), ['baseline', 'candidate', 'candidate'], 'the baseline was paid twice');
-    } finally { fx.cleanup(); }
-  });
-
-  it('the measured store breaks on any key and survives a saveBaseline write', () => {
-    const root = mkdtempSync(join(tmpdir(), 'mc-measured-'));
-    try {
-      const keys = { repoPath: '/r/repo', commit: 'aaa', lockfileHash: 'lll', root };
-      saveMeasuredGate({ ...keys, gate: { command: 'run-it', ok: false, exit_code: 1, red: ['x'] } });
-      assert.equal(loadMeasuredGate({ ...keys, command: 'run-it' }).red[0], 'x');
-      assert.equal(loadMeasuredGate({ ...keys, commit: 'bbb', command: 'run-it' }), null);
-      assert.equal(loadMeasuredGate({ ...keys, lockfileHash: 'other', command: 'run-it' }), null);
-      assert.equal(loadMeasuredGate({ ...keys, command: 'other' }), null);
-      // The A1 write keeps the measured table beside it.
-      saveBaseline({ repoPath: '/r/repo', commit: 'ccc', lockfileHash: 'lll', command: 'npm test', red: [], totals: null, root });
-      assert.equal(loadMeasuredGate({ ...keys, command: 'run-it' }).red[0], 'x');
-    } finally { rmSync(root, { recursive: true, force: true }); }
-  });
-
-  it('carriedGate matches by command, never by name', () => {
-    const entry = { extra_gates: [{ name: 'old name', command: 'run-it', ok: true, exit_code: 0, red: [] }] };
-    assert.ok(carriedGate(entry, { name: 'new name', command: 'run-it' }));
-    assert.equal(carriedGate(entry, { name: 'old name', command: 'run-it --different' }), null);
-    assert.equal(carriedGate(null, { name: 'x', command: 'run-it' }), null);
-  });
-});
-
-/**
- * The baseline, carried forward instead of rerun (A1). Ordered by Martin on
- * the independent review's finding: 52 of 61 memoro baselines were exactly
- * the previous round's already-measured candidate, and 0 of 92 rounds ever
- * had a red delta on the baseline. The rules asserted here: reuse only on
- * an exact three-key match, break the chain on the smallest deviation, and
- * keep the red comparison's form — fed from the carried result.
- */
-describe('the baseline is carried forward, and the chain breaks on any deviation', () => {
-
-  it('an exact key match skips the baseline run and says where the number came from', async () => {
-    const fx = fixture({ baselineRed: [], candidateRed: ['old-red'] });
-    try {
-      // The key as the gate will compute it: the base commit the stubbed
-      // rev-parse answers in the repo, the lockfile hash the stubbed git
-      // shows, and the repository's own suite command.
-      saveBaseline({
-        repoPath: fx.repoPath,
-        commit: 'cand2222',
-        lockfileHash: lockfileHashAt({ git: fx.git, repoPath: fx.repoPath, commit: 'cand2222' }),
-        command: 'npm test  (node --test tests/)',
-        red: ['old-red'],
-        totals: { tests: 100, fail: 1 },
-        root: fx.mcHome,
-      });
-      const progress = [];
-      const report = await fx.run({ root: fx.mcHome, onProgress: (line) => progress.push(line) });
-      assert.equal(report.ok, true, report.reason);
-      assert.equal(report.baseline.carried, true);
-      assert.equal(report.baseline.commit, 'cand2222');
-      assert.equal(fx.ran('suite').length, 1, 'one suite run: the candidate\'s');
-      assert.ok(fx.ran('suite')[0].cwd.endsWith('candidate'));
-      // The red comparison kept its form, fed from the carried result: the
-      // candidate's red name was already red, so nothing broke.
-      assert.deepEqual(report.broke, []);
-      assert.equal(report.standing_red, 1);
-      assert.ok(progress.some((line) => /^baseline carried from the last green round: 1 red at cand222/u.test(line)), progress.join('\n'));
-    } finally { fx.cleanup(); }
-  });
-
-  it('a baseline above its own floor is flagged loudly, and is not a stop (the 57 that passed through)', async () => {
-    // Measured 2026-08-23: #385's candidate measured a tree at 55 red;
-    // #386's baseline measured the same content at 57 minutes later, and
-    // the 57 was compared against nothing. The floor already knew 55.
-    const names = Array.from({ length: 3 }, (_, index) => `stable-${index}`);
-    const fx = fixture({
-      baselineRed: [...names, 'flaky-one', 'flaky-two'],
-      candidateRed: names,
-      ratchet: names,
-    });
-    try {
-      const progress = [];
-      const report = await fx.run({ onProgress: (line) => progress.push(line) });
-      assert.equal(report.ok, true, `${report.reason} — the base's instability is never the change's fault`);
-      assert.deepEqual(report.ratchet.baseline_risen, ['flaky-one', 'flaky-two']);
-      // Said in main's name now, not the baseline's, because that is whose
-      // fact it is — and it says outright that it is not a reason to refuse.
-      assert.ok(progress.some((line) => /^MAIN IS ABOVE ITS FLOOR — 2 red names on .* are not in/u.test(line)), progress.join('|'));
-      assert.ok(progress.some((line) => /not a reason to refuse it/u.test(line)), progress.join('|'));
-    } finally { fx.cleanup(); }
-  });
-
-  it('any key off — commit, lockfile, command, or nothing saved — runs the baseline as before', async () => {
-    const fx = fixture();
-    try {
-      saveBaseline({
-        repoPath: fx.repoPath,
-        commit: 'somebody-elses-commit',
-        lockfileHash: lockfileHashAt({ git: fx.git, repoPath: fx.repoPath, commit: 'x' }),
-        command: 'npm test  (node --test tests/)',
-        red: [],
-        totals: null,
-        root: fx.mcHome,
-      });
+      declare(fx, 'exit 1');
       const report = await fx.run({ root: fx.mcHome });
-      assert.equal(report.ok, true, report.reason);
-      assert.ok(!report.baseline.carried);
-      assert.equal(fx.ran('suite').length, 2, 'both sides measured, as always');
+      assert.equal(report.stopped_at, 'extra-gate');
+      assert.equal(report.extra_gates[0].red, null, 'half a parse is not a name list');
     } finally { fx.cleanup(); }
   });
 });
@@ -1435,17 +999,13 @@ describe('a repository that selects by diff', () => {
   /**
    * The round for a repository whose suite is chosen by the change.
    *
-   * The property under test is not the speed — it is that BOTH sides run the
-   * CANDIDATE's list. A selection is a function of the diff, so the baseline,
-   * whose diff against itself is empty, would choose almost nothing if it were
-   * asked on its own: the round would then compare this change's files against
-   * a handful of mandatory ones and report every red already standing on main
-   * as this change's doing. Asking once and running the answer twice is what
-   * keeps the verdict differential.
+   * The selection is read in the candidate worktree, because it is a function
+   * of the diff, and it is run there and nowhere else. The command gates the
+   * same answer names run beside it — read and thrown away until 2026-08-31,
+   * so no round had ever run one.
    */
   function selecting({
-    files, baselineRed = [], candidateRed = [], onBaseline = null,
-    commands = undefined, scripts = {},
+    files, candidateRed = [], commands = undefined, scripts = {}, full = false,
   } = {}) {
     const root = mkdtempSync(join(tmpdir(), 'mc-select-'));
     const repoPath = join(root, 'repo');
@@ -1475,17 +1035,13 @@ describe('a repository that selects by diff', () => {
       },
     });
 
-    // Which selected files exist on each side. A file the change ADDS is on the
-    // candidate only, and the baseline cannot run what it does not have.
-    const present = onBaseline ?? files;
     const runs = [];
     const git = (args, opts = {}) => {
       if (args[0] === 'worktree' && args[1] === 'add') {
         const dir = args[args.length - 2];
         mkdirSync(dir, { recursive: true });
         writeFileSync(join(dir, 'package.json'), readFileSync(join(repoPath, 'package.json')));
-        const here = dir.endsWith('baseline') ? present : files;
-        for (const file of here) {
+        for (const file of files) {
           mkdirSync(join(dir, dirname(file)), { recursive: true });
           writeFileSync(join(dir, file), '');
         }
@@ -1497,8 +1053,9 @@ describe('a repository that selects by diff', () => {
       }
       if (args[0] === 'diff') return { status: 0, stdout: '', stderr: '' };
       if (args[0] === 'rev-parse') {
-        return { status: 0, stdout: `${opts.cwd.endsWith('baseline') ? 'base1111' : 'cand2222'}\n`, stderr: '' };
+        return { status: 0, stdout: `${opts.cwd === repoPath ? 'base1111' : 'cand2222'}\n`, stderr: '' };
       }
+      if (args[0] === 'symbolic-ref') return { status: 0, stdout: 'origin/main\n', stderr: '' };
       return { status: 0, stdout: '', stderr: '' };
     };
     const gh = () => ({
@@ -1507,19 +1064,24 @@ describe('a repository that selects by diff', () => {
       stderr: '',
     });
     const tests = ({ cwd, files: ran, flags }) => {
-      const side = cwd.endsWith('baseline') ? 'baseline' : 'candidate';
-      runs.push({ side, files: [...ran], flags });
-      const red = side === 'baseline' ? baselineRed : candidateRed;
-      return Promise.resolve({ code: red.length ? 1 : 0, tap: tapWith(red, { tests: Math.max(ran.length * 3, 1) }) });
+      runs.push({ files: [...ran], flags, cwd });
+      return Promise.resolve({ code: candidateRed.length ? 1 : 0, tap: tapWith(candidateRed, { tests: Math.max(ran.length * 3, 1) }) });
     };
+    const suites = [];
     return {
       runs,
+      suites,
       marks,
       mark: (name) => (existsSync(join(marks, name)) ? readFileSync(join(marks, name), 'utf8') : null),
-      report: () => runGate({
-        repoPath, pr: 7, holder: AREA, root: mcHome, git, gh, tests,
+      report: (extra = {}) => runGate({
+        repoPath, pr: full ? null : 7, full, holder: AREA, root: mcHome, git, gh, tests,
         env: { ...process.env, GATE_MARKS: marks },
-        suite: () => { throw new Error('a selecting round must not run the whole suite'); },
+        suite: ({ cwd }) => {
+          if (!full) throw new Error('a selecting round must not run the whole suite');
+          suites.push(cwd);
+          return Promise.resolve({ code: candidateRed.length ? 1 : 0, tap: tapWith(candidateRed, { tests: 42 }) });
+        },
+        ...extra,
       }),
       cleanup: () => rmSync(root, { recursive: true, force: true }),
     };
@@ -1530,57 +1092,36 @@ describe('a repository that selects by diff', () => {
     return `sh -c 'printf "%s" "$*" > "$GATE_MARKS/${name}"; exit ${exit}' sh`;
   }
 
-  it('runs the candidate’s list on both sides, and never the whole suite', async () => {
+  it('runs the selected list once, on the candidate, and never the whole suite', async () => {
     const files = ['tests/a.test.js', 'tests/b.test.js'];
     const fx = selecting({ files });
     try {
       const report = await fx.report();
       assert.equal(report.ok, true, report.reason);
       assert.equal(report.selection.files, 2);
-      // The same two files, both sides. This is the whole guarantee.
-      const sides = fx.runs.filter(({ side }) => side !== 'own');
-      assert.deepEqual(sides.map(({ side }) => side).slice(0, 2), ['baseline', 'candidate']);
-      assert.deepEqual(sides[0].files, files);
-      assert.deepEqual(sides[1].files, files);
+      assert.equal(fx.runs.length, 1, 'the list was run twice');
+      assert.deepEqual(fx.runs[0].files, files);
+      assert.ok(fx.runs[0].cwd.endsWith('candidate'));
       // And with the repository's own declared flags, not a guess at them.
-      assert.deepEqual(sides[0].flags, ['--import', './x.mjs']);
+      assert.deepEqual(fx.runs[0].flags, ['--import', './x.mjs']);
     } finally { fx.cleanup(); }
   });
 
-  it('red on both sides is main’s, not this change’s', async () => {
-    // The misattribution this exists to prevent: a test already failing on main
-    // is red on the candidate too, and a round that measured only the candidate
-    // would name it a regression.
-    const fx = selecting({
-      files: ['tests/a.test.js'],
-      baselineRed: ['already broken'],
-      candidateRed: ['already broken'],
-    });
+  /**
+   * The ruling, at the level a session will meet it: a test the change reaches
+   * that is already failing on main makes the round red. It is stricter than
+   * the differential form and it is the point — and it is why narrowing what a
+   * change reaches is the repair, in the repository's own selector.
+   */
+  it('a selected test that is red on main is red, and the verdict names it', async () => {
+    const fx = selecting({ files: ['tests/a.test.js'], candidateRed: ['already broken'] });
     try {
       const report = await fx.report();
-      assert.equal(report.ok, true, report.reason);
-      assert.deepEqual(report.broke, []);
-      assert.equal(report.standing_red, 1);
-      assert.equal(report.verdict, 'no-new-red');
-    } finally { fx.cleanup(); }
-  });
-
-  it('a file only the candidate has is measured there and not missed on the baseline', async () => {
-    // A change that ADDS a test file: the baseline has nothing to run for it,
-    // which is a fact to state rather than a run to fake.
-    const fx = selecting({
-      files: ['tests/a.test.js', 'tests/new.test.js'],
-      onBaseline: ['tests/a.test.js'],
-      candidateRed: ['the new one'],
-    });
-    try {
-      const report = await fx.report();
-      assert.equal(report.selection.only_on_candidate, 1);
-      assert.deepEqual(fx.runs[0].files, ['tests/a.test.js'], 'the baseline ran only what it has');
-      assert.deepEqual(fx.runs[1].files, ['tests/a.test.js', 'tests/new.test.js']);
-      // Red on the candidate and absent from the baseline is new, and stops it.
       assert.equal(report.ok, false);
       assert.equal(report.stopped_at, 'red');
+      assert.equal(report.verdict, 'red');
+      assert.match(report.reason, /already broken/u);
+      assert.match(gateLines(report).join('\n'), /RED — 1 test red:\n\s+already broken/u);
     } finally { fx.cleanup(); }
   });
 
@@ -1685,6 +1226,59 @@ describe('a repository that selects by diff', () => {
       assert.match(report.reason, /no test files/u);
     } finally { fx.cleanup(); }
   });
+
+  /**
+   * `mc test <repo> --full` — the one reading here that is about the code rather
+   * than about a change.
+   *
+   * It exists because the differential round used to answer "is main red?" as a
+   * side effect of every measurement, and the 2026-08-31 ruling took that away.
+   * The state of main is still a real question; it is now asked for, on one
+   * tree, with the repository's own whole suite, and never scheduled.
+   */
+  describe('--full runs the whole suite on one tree', () => {
+    it('ignores the selector, runs the repository\'s own suite, and names its red', async () => {
+      const fx = selecting({ files: ['tests/a.test.js'], full: true, candidateRed: ['main is red here'] });
+      try {
+        const report = await fx.report();
+        assert.equal(report.full, true);
+        assert.equal(report.selection, null, 'a --full round selects nothing');
+        assert.equal(fx.runs.length, 0, 'the selected-file runner was used');
+        assert.deepEqual(fx.suites.map((cwd) => cwd.split('/').pop()), ['candidate'], 'one tree');
+        assert.match(report.command, /npm test/u);
+        assert.equal(report.stopped_at, 'red');
+        assert.deepEqual(report.candidate.red, ['main is red here']);
+        assert.equal(report.candidate.is, 'base-branch-as-fetched');
+      } finally { fx.cleanup(); }
+    });
+
+    it('with no pull request it measures the branch origin calls its default', async () => {
+      const fx = selecting({ files: ['tests/a.test.js'], full: true });
+      try {
+        const report = await fx.report();
+        assert.equal(report.ok, true, report.reason);
+        assert.equal(report.pr.number, null, 'there is no pull request to name');
+        assert.deepEqual(report.base, { ref: 'origin/main', commit: 'base1111' });
+        assert.equal(report.pr_tests, null, 'and no diff of its own to prove');
+        assert.match(verdictHeadline(report), /over the whole suite, asked for by --full/u);
+        assert.match(gateLines(report).join('\n'), /the whole suite/u);
+      } finally { fx.cleanup(); }
+    });
+
+    it('a remote that does not say which branch is default is a stop, not a guess', async () => {
+      const fx = selecting({ files: ['tests/a.test.js'], full: true });
+      try {
+        const report = await fx.report({
+          git: (args, opts = {}) => (args[0] === 'symbolic-ref'
+            ? { status: 1, stdout: '', stderr: 'not a symbolic ref' }
+            : { status: 0, stdout: args[0] === 'rev-parse' ? 'x\n' : '', stderr: '' }),
+        });
+        assert.equal(report.ok, false);
+        assert.equal(report.stopped_at, 'base');
+        assert.match(report.reason, /origin does not say which branch is its default/u);
+      } finally { fx.cleanup(); }
+    });
+  });
 });
 
 describe('mc test — the grammar', () => {
@@ -1697,6 +1291,7 @@ describe('mc test — the grammar', () => {
       const usage = runMcCli(['test'], fx.env).stderr;
       assert.match(usage, /which repository\?/u);
       assert.match(usage, /mc test <repo> <pr>/u);
+      assert.match(usage, /mc test <repo> --full/u);
       assert.doesNotMatch(usage, /--check/u);
       assert.match(runMcCli(['test', 'repo'], fx.env).stderr, /which pull request\?/u);
       assert.match(runMcCli(['test', 'repo', 'later'], fx.env).stderr, /not a pull request number/u);
@@ -1723,33 +1318,39 @@ describe('mc test — the grammar', () => {
 });
 
 describe('a verdict says how far it reached', () => {
-  it('a selected round never says GREEN without saying over what', async () => {
+  it('a selected round never says GREEN without saying over what', () => {
     // "GREEN — the test gate passes" over a suite that ran 6 of 257 files is
-    // the same overclaim the standing-red count already had to correct once.
-    // The reach goes in the sentence, because the sentence is what gets read
-    // aloud and pasted into a pull request.
-    const green = verdictHeadline({ standing_red: 0, selection: { files: 6 }, pr: { base: 'main' } });
+    // the same overclaim the standing-red count had to correct once. The reach
+    // goes in the sentence, because the sentence is what gets read aloud and
+    // pasted into a pull request.
+    const green = verdictHeadline({ selection: { files: 6 }, pr: { base: 'main' } });
     assert.match(green, /^GREEN/u);
     assert.match(green, /6 test files this change reaches, not the whole suite/u);
 
-    const standing = verdictHeadline({ standing_red: 3, selection: { files: 6 }, pr: { base: 'main' } });
-    assert.match(standing, /^NO NEW RED — 3 standing red names on main/u);
-    assert.match(standing, /6 test files this change reaches/u);
+    assert.match(verdictPhrase({ selection: { files: 1 } }), /1 test file this change reaches/u);
+  });
 
-    assert.match(verdictPhrase({ standing_red: 0, selection: { files: 1 } }), /1 test file this change reaches/u);
+  it('there is no third pass any more — a round is green or it is not', () => {
+    // `no-new-red` said "no dirtier than the base", and saying it cost a
+    // second worktree and half the round. With one tree a pass is a pass.
+    assert.equal(verdictFor({ stopped_at: null }), 'green');
+    assert.equal(verdictFor({ stopped_at: 'red' }), 'red');
+    assert.equal(verdictFor({ stopped_at: 'selected-gate' }), 'red');
+    assert.equal(verdictFor({ stopped_at: 'lease' }), 'stopped');
+    assert.doesNotMatch(verdictHeadline({ selection: null, pr: { base: 'main' } }), /NO NEW RED/u);
   });
 
   it('a selector that gave up says so, instead of reading as a saving', () => {
     // memoro-cli's selector returns everything whenever a changed path is not
     // source it can trace. "measured over the 258 files this change reaches"
     // is true and misleading in the same breath when 258 is the whole suite.
-    const fell = verdictHeadline({ standing_red: 0, selection: { files: 258, full_suite: true }, pr: { base: 'main' } });
+    const fell = verdictHeadline({ selection: { files: 258, full_suite: true }, pr: { base: 'main' } });
     assert.match(fell, /over the whole suite: the selector could not narrow this change/u);
     assert.doesNotMatch(fell, /this change reaches/u);
   });
 
   it('a full-suite round says nothing extra, because its reach is what a reader assumes', () => {
-    assert.equal(verdictHeadline({ standing_red: 0, selection: null, pr: { base: 'main' } }), 'GREEN — the test gate passes');
-    assert.equal(verdictPhrase({ standing_red: 0, selection: null }), 'gate green');
+    assert.equal(verdictHeadline({ selection: null, pr: { base: 'main' } }), 'GREEN — the test gate passes');
+    assert.equal(verdictPhrase({ selection: null }), 'gate green');
   });
 });

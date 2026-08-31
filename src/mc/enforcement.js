@@ -58,6 +58,12 @@ export function notInForce({ root = mcHome(), env = process.env, deps = {} } = {
   // A floor nobody recorded is a comparison the next round cannot make
   // (the 57 that passed through, 2026-08-23). A repository whose rounds
   // are green needs no floor and earns no line.
+  //
+  // Fed by `standing_red`, which rounds stopped writing on 2026-08-31 when
+  // the baseline went (see `red-ratchet.js`). So this answers only from the
+  // lines written before that, and goes quiet as they age out. Left standing
+  // rather than removed: whether main keeps a floor anywhere is an open
+  // question, and this is the only place still asking it.
   safely('red-ratchet', () => {
     const rounds = (deps.rounds || (() => readRounds({ root }).rounds))();
     const latest = new Map();

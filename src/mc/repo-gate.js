@@ -1,51 +1,45 @@
 /**
  * The gate round, as a machine.
  *
- * The rule it enforces is not new: a pull request may not make the suite red
- * anywhere main was green, and "green" has to be measured against a main that
- * is current rather than one remembered from this morning. What is new is that
- * it stops being a set of instructions somebody follows. Instructions degrade
- * with distance and tiredness — nine parallel collisions in one day, from
- * areas that merged before they read the directive — and a gate that runs as
- * code does not degrade. It is also the only way to keep the rule without
- * spending the PM's judgement on mechanical work: this is cheap enough for the
- * cheapest surface that can run it.
+ * The rule it enforces: a test the change reaches is either green, or the
+ * round is red. Whether main was already red is not the round's question —
+ * ruled by Martin on 2026-08-31, after the differential form spent half of
+ * every round's wall clock, a second worktree and a second `npm ci` answering
+ * it. What is measured is the diff: the test files the repository's selector
+ * says the change reaches, and the command gates it named beside them.
  *
  * The round, in order, stopping at the first red step:
  *
  *  1. take the repository's lease, so two rounds cannot measure against each
  *     other's moving main;
  *  2. read what the pull request actually is, from `gh`;
- *  3. build two throwaway worktrees — the baseline at the base branch, the
- *     candidate at the PR's head with the current base merged into it, so what
- *     is measured is the state after merging rather than the state the author
- *     last saw;
- *  4. run the repository's own full suite on both, in the same round;
- *  5. run the command gates the repository's selection named, on the candidate
- *     alone — they are contracts about the diff, not measurements of a tree;
- *  6. compare the two red sets by name at every level;
- *  7. check what is left against the standing red set the repository recorded;
- *  8. give the lease back, whatever happened.
+ *  3. build ONE throwaway worktree — the PR's head with the current base
+ *     merged into it, so what is measured is the state after merging rather
+ *     than the state the author last saw;
+ *  4. run what the repository's selection reached — or, with `full`, the
+ *     repository's own whole suite, which is the only reading here that is
+ *     about the code rather than about a change;
+ *  5. run the command gates the repository's selection named;
+ *  6. give the lease back, whatever happened.
  *
  * There is no merge in here, and not behind a flag either. This module answers
- * one question — did anything new go red — and a module that could also merge
- * would be one `if` away from a round that merged on a verdict it had not
- * finished forming. Merging lives in `repo-merge.js`, which runs this and acts
- * on the report; keeping it out of here is load-bearing rather than tidy, and
- * a test asserts against this file's source that it stays out.
+ * one question — is this change red — and a module that could also merge would
+ * be one `if` away from a round that merged on a verdict it had not finished
+ * forming. Merging lives in `repo-merge.js`, which runs this and acts on the
+ * report; keeping it out of here is load-bearing rather than tidy, and a test
+ * asserts against this file's source that it stays out.
  *
  * It says what it measured, never "the pull request is good". Reading the diff
  * against its contract is judgement, and judgement is not mechanical; a
  * passing suite carrying an unescalated design decision is exactly the mistake
  * that conflation would license.
  *
- * And it does not say "green" unless the base branch is green. The rule above
- * is differential, so on a repository with fifty-five standing red names a
- * pass means "no new red", which is a smaller claim — and for a week it was
- * reported onward as the larger one. The verdict now carries the number
- * instead. `red-ratchet.js` is the other half of the same correction: the
- * comparison cannot see a floor that moved between rounds, so the floor is
- * written down where a rise has to be reviewed rather than inherited.
+ * The strictness has a cost, and it is said out loud rather than discovered:
+ * a change whose reached tests include one that is already red on main is red,
+ * and cannot land until that test is green. The differential form let that
+ * through, at the price of measuring main every round to find out. The repair
+ * is a selector that reaches fewer unrelated tests, which belongs in the
+ * repository rather than in a second measurement here.
  */
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
@@ -53,21 +47,19 @@ import { join } from 'node:path';
 
 import { claimLease, releaseLease } from './repo-lease.js';
 import { tellHolder } from './lease-refusal.js';
-import { compareRed, redNames, tapTotals } from './tap-red.js';
-import { RATCHET_FILE, compareRatchet, ratchetAtRef, readRatchet } from './red-ratchet.js';
+import { redNames, tapTotals } from './tap-red.js';
 import { currentHolder } from './work-identity.js';
 import { describeRunning, releaseGateLock, takeGateLock } from './gate-lock.js';
 import { log } from './logger.js';
 import { mcHome } from './paths.js';
 import { repoFileSlug } from './repo-snapshot.js';
-import { carriedGate, loadBaseline, loadMeasuredGate, lockfileHashAt, saveMeasuredGate } from './repo-baseline-cache.js';
 import { dependencyTree } from './dependency-tree.js';
 import { declarationFor } from './repo-gate-table.js';
 
 export const GATE_SCHEMA = 'mc-repo-gate';
 export const GATE_VERSION = 1;
 
-/** Where the throwaway worktrees live: mc's own home, never inside the repository. */
+/** Where the throwaway worktree lives: mc's own home, never inside the repository. */
 export function gateRoot(root = mcHome()) {
   return join(root, 'gate');
 }
@@ -92,11 +84,16 @@ export async function runGate({
   // Several pull requests measured as one candidate (A3, 2026-08-23): with
   // eleven in the queue and every round 5–13 minutes holding the suite
   // right, the round — not the computation — was the bottleneck. One tree
-  // with all of them merged in, the suite once on each side, and each pull
+  // with all of them merged in, the suite once, and each pull
   // request's own tests still run by themselves so the batch never hides
   // which one carried which test. `pr` alone is the single-PR round it
   // always was.
   prs = null,
+  // The whole suite on one tree, instead of the files the diff reaches. Asked
+  // for, never scheduled: it is the one reading here that is about the code
+  // rather than about a change, and with no pull request it measures the
+  // default branch as fetched.
+  full = false,
   tests = null,
   holder = currentHolder(),
   root = mcHome(),
@@ -139,15 +136,21 @@ export async function runGate({
   const runSuite = suite || ((options) => realSuite({ ...options, env }));
   const runTests = tests || ((options) => realTests({ ...options, env }));
 
-  const numbers = (Array.isArray(prs) && prs.length ? prs : [pr]).map(Number);
+  const numbers = (Array.isArray(prs) && prs.length ? prs : [pr]).filter((n) => n !== null && n !== undefined).map(Number);
   const batch = numbers.length > 1;
-  const label = batch ? numbers.map((n) => `#${n}`).join(' ') : `#${numbers[0]}`;
+  // `mc test <repo> --full` names no pull request: there is nothing to merge
+  // in, and the one tree is the default branch as fetched.
+  const wholeSuite = Boolean(full);
+  const label = numbers.length ? (batch ? numbers.map((n) => `#${n}`).join(' ') : `#${numbers[0]}`) : 'the whole suite';
 
   const report = {
     schema: GATE_SCHEMA,
     version: GATE_VERSION,
     repo: repoPath,
-    pr: { number: numbers[0], head: null, base: null, head_sha: null, title: null },
+    // What was measured, as a word: the diff a pull request makes, or the
+    // repository's own suite on one tree.
+    full: wholeSuite,
+    pr: { number: numbers[0] ?? null, head: null, base: null, head_sha: null, title: null },
     // The batch, when there is one: every pull request's facts and its own
     // tests, in the order they were merged into the candidate. Null for a
     // single round, whose facts are `pr` and whose tests are `pr_tests`.
@@ -159,30 +162,30 @@ export async function runGate({
     reason: null,
     command: null,
     declaration: null,
+    // The branch the candidate was measured against, and the commit it stood
+    // at when the round fetched. Not a measurement of it — nothing is run
+    // there — but `mc merge` has to know whether the ground moved between the
+    // round and the landing, and this is the ground.
+    base: null,
     // What the round measured, when the repository selects by diff: the files
-    // the change reaches, and the fact that both sides ran exactly these. Null
-    // when the repository has no `select` and the whole suite ran instead.
+    // the change reaches. Null when the repository has no `select`, or when
+    // `--full` asked for the whole suite instead.
     selection: null,
     extra_gates: [],
     // The pull request's own tests: every `*.test.js` it adds or changes, run
     // on the candidate after the suite (D-0157). `files: []` when it touches
     // none, which is said rather than left blank.
     pr_tests: null,
-    baseline: null,
     candidate: null,
-    broke: [],
-    fixed: [],
     // The prefix trees of a batch candidate as it was built, `T_1..T_N`:
     // what main must be, byte for byte, after each landing. Null for a
     // single round; `T_N` equals `candidate.tree`.
     candidate_trees: null,
-    // The verdict as a word a reader can branch on, and the number that word
-    // used to hide. `green` and `no-new-red` are both passes and are not the
-    // same statement: one says the suite is clean, the other says it is no
-    // dirtier than it was. See `verdictHeadline` below.
+    // The verdict as a word a reader can branch on: `green`, `red`, or
+    // `stopped`. There is no third pass any more — `no-new-red` was the
+    // differential form's word for "no dirtier than main", and the round no
+    // longer measures main to be able to say it.
     verdict: null,
-    standing_red: null,
-    ratchet: null,
     // Wall clock per step (A5). Four decisions about cost were taken one day
     // without a single number from the tool itself; the next one is measured.
     timings: {},
@@ -231,7 +234,7 @@ export async function runGate({
   // message, a row on the page and four verbs of its own. Four hundred lines
   // of vocabulary for "one at a time", under a name nobody could say without
   // explaining it.
-  const held = takeGateLock({ repo: repoFileSlug(repoPath), pr: numbers[0], root });
+  const held = takeGateLock({ repo: repoFileSlug(repoPath), pr: numbers[0] ?? null, root });
   if (!held.ok) {
     if (holdLease) releaseLease({ repoPath, holder, root });
     return finish('busy', describeRunning(held.running));
@@ -280,7 +283,9 @@ export async function runGate({
   }
 
   const workspace = join(gateRoot(root), repoFileSlug(repoPath));
-  const baseDir = join(workspace, 'baseline');
+  // One worktree. There was a second, at the base branch, and everything that
+  // ran in it answered "was main already red?" — the question the 2026-08-31
+  // ruling took off the round.
   const headDir = join(workspace, 'candidate');
 
   try {
@@ -294,8 +299,8 @@ export async function runGate({
       all.push(facts.pr);
       say(`#${facts.pr.number} — ${facts.pr.head} into ${facts.pr.base}`);
     }
-    const facts = { pr: all[0] };
-    Object.assign(report.pr, facts.pr);
+    const facts = { pr: all[0] || null };
+    if (facts.pr) Object.assign(report.pr, facts.pr);
     if (batch) {
       for (const [index, item] of all.entries()) Object.assign(report.prs[index], item);
       // One base, or it is not one candidate: a tree with two pull requests
@@ -304,66 +309,40 @@ export async function runGate({
       if (bases.length > 1) return finish('pr', `the batch aims at ${bases.length} different bases (${bases.join(', ')}) — one round per base`);
     }
 
-    // Fresh, always. The whole point of the baseline is that it is current,
-    // and a stale remote-tracking ref is how a round measures against a main
-    // that moved an hour ago.
+    // Fresh, always. What is measured is the tree after the current base has
+    // been merged in, and a stale remote-tracking ref is how a round measures
+    // a main that moved an hour ago.
     const fetched = await timed('fetch', async () => askGit(['fetch', 'origin', '--prune'], { cwd: repoPath }));
     if (fetched.status !== 0) return finish('fetch', trim(fetched.stderr) || 'git fetch failed');
 
     clearWorkspace({ git: askGit, repoPath, workspace });
     mkdirSync(workspace, { recursive: true, mode: 0o700 });
 
-    const baseRef = `origin/${facts.pr.base}`;
+    // The branch the change is aimed at — or, with no pull request to ask it
+    // of, the default branch as the remote itself names it. Assuming `main`
+    // here would measure a tree nobody asked about on a repository that calls
+    // it something else, so it is read, and a repository that will not say is
+    // a stop.
+    const baseRef = facts.pr ? `origin/${facts.pr.base}` : defaultBaseRef({ git: askGit, repoPath });
+    if (!baseRef) return finish('base', 'no pull request named a base and origin does not say which branch is its default');
+    report.base = { ref: baseRef, commit: trim(askGit(['rev-parse', baseRef], { cwd: repoPath }).stdout) || null };
 
-    // The baseline, carried forward instead of rerun (A1). After a green
-    // merge, main is the tree the candidate was just measured on; measured
-    // across 61 memoro rounds, 52 baselines were exactly the previous
-    // round's candidate result, and across 92 the baseline never once
-    // produced a red delta. The saved result is used only when every key
-    // matches — the commit, the lockfile at that commit, the suite command
-    // — and the chain breaks on the smallest deviation, with the run as it
-    // always was. The red comparison keeps its form: it becomes free, not
-    // absent.
-    const selects = Boolean(declared.declaration.select);
+    // What gets run: the test files the repository's selector says this change
+    // reaches, or the repository's own whole suite. `full` asks for the second
+    // on purpose; a repository with no `select` gets it either way.
+    const selects = Boolean(declared.declaration.select) && !wholeSuite;
     const commandLine = suiteCommand({ repoPath });
     if (!commandLine.ok && !selects) return finish('suite', commandLine.reason);
     report.command = selects ? declared.declaration.select : commandLine.command;
-    const baseCommit = trim(askGit(['rev-parse', baseRef], { cwd: repoPath }).stdout);
-    // No carry when the repository selects by diff. A carried baseline is a
-    // saved result for the WHOLE suite at a commit; a selected round measures a
-    // different, smaller set for every pull request, and reusing one for the
-    // other would be comparing two different questions' answers.
-    const carried = !selects && baseCommit ? loadBaseline({
-      repoPath,
-      commit: baseCommit,
-      lockfileHash: lockfileHashAt({ git: askGit, repoPath, commit: baseCommit }),
-      command: report.command,
-      root,
-    }) : null;
-    if (carried) {
-      say(`baseline carried from the last green round: ${carried.red.length} red at ${baseCommit.slice(0, 7)}, measured ${carried.measured_at} — not rerun`);
-    }
 
-    // Whether the baseline worktree is needed at all. A carried suite result
-    // spares the suite run — but an extra gate whose baseline result was not
-    // carried still has to run somewhere, and "somewhere" is the base branch
-    // as fetched (KP: an extra gate run only on the candidate attributed a
-    // red main to the one PR in the room, 2026-08-24).
-    const gates = declared.declaration.extra_gates || [];
-    const gatesToRun = gates.filter((gate) => !carriedGate(carried, gate));
-    // A selected round always needs the baseline: the comparison is what makes
-    // the verdict differential, and there is nothing saved to compare against.
-    const needBaseline = selects || !carried || gatesToRun.length > 0;
-
-    // Detached on purpose, both of them. The round must be able to merge the
-    // base into the candidate without that ever becoming a commit on somebody's
-    // branch: what is measured is a state, not a change to the repository.
-    if (needBaseline) {
-      const added = askGit(['worktree', 'add', '--detach', baseDir, baseRef], { cwd: repoPath });
-      if (added.status !== 0) return finish('worktree', trim(added.stderr) || `could not check out ${baseRef}`);
-    }
-
-    if (!batch) {
+    // Detached on purpose. The round must be able to merge the base into the
+    // candidate without that ever becoming a commit on somebody's branch:
+    // what is measured is a state, not a change to the repository.
+    if (!facts.pr) {
+      const only = askGit(['worktree', 'add', '--detach', headDir, baseRef], { cwd: repoPath });
+      if (only.status !== 0) return finish('worktree', trim(only.stderr) || `could not check out ${baseRef}`);
+      say(`measuring ${baseRef} as fetched — the whole suite, one tree`);
+    } else if (!batch) {
       const candidate = askGit(['worktree', 'add', '--detach', headDir, facts.pr.head_sha], { cwd: repoPath });
       if (candidate.status !== 0) {
         return finish('worktree', trim(candidate.stderr) || `could not check out ${facts.pr.head_sha}`);
@@ -404,45 +383,36 @@ export async function runGate({
       }
     }
 
-    // Whatever this repository needs before its suite can be believed, run in
-    // both worktrees. A prepare that fails stops the round: a suite run on a
-    // tree that was not prepared is exactly the incomplete run the declaration
-    // exists to prevent.
-    const sides = needBaseline ? [['baseline', baseDir], ['candidate', headDir]] : [['candidate', headDir]];
+    // Whatever this repository needs before its suite can be believed. A
+    // prepare that fails stops the round: a suite run on a tree that was not
+    // prepared is exactly the incomplete run the declaration exists to
+    // prevent. Once, now — it used to run in both worktrees, and on memoro
+    // that was a second `npm ci` for a 492 MB tree every round.
     if (declared.declaration.prepare) {
-      for (const [side, dir] of sides) {
-        say(`preparing the ${side}: ${declared.declaration.prepare}`);
-        const ready = await timed(`prepare ${side}`, async () => shell(declared.declaration.prepare, { cwd: dir, env }));
-        if (ready.status !== 0) {
-          return finish('prepare', `${declared.declaration.prepare} failed in the ${side} — ${trim(ready.stderr)}`);
-        }
+      say(`preparing the candidate: ${declared.declaration.prepare}`);
+      const ready = await timed('prepare', async () => shell(declared.declaration.prepare, { cwd: headDir, env }));
+      if (ready.status !== 0) {
+        return finish('prepare', `${declared.declaration.prepare} failed in the candidate — ${trim(ready.stderr)}`);
       }
     }
 
     // A suite in a worktree with no dependency tree does not fail, it shrinks
     // (D-0152): the tests that need nothing run and print a number with the
     // right shape, and the rest are neither run nor counted as skipped. So
-    // the tree is checked after preparation and before either run, and a
-    // missing one stops the round — unless the declaration vouches that this
-    // suite runs without one (`prepare: null`, with the evidence in
-    // `prepare_why`), in which case the round says so rather than assuming.
-    for (const [side, dir] of sides) {
-      const tree = dependencyTree(dir);
-      if (!tree.missing) continue;
+    // the tree is checked after preparation and before the run, and a missing
+    // one stops the round — unless the declaration vouches that this suite
+    // runs without one (`prepare: null`, with the evidence in `prepare_why`),
+    // in which case the round says so rather than assuming.
+    const tree = dependencyTree(headDir);
+    if (tree.missing) {
       if (declared.declaration.prepare === null) {
-        say(`${side}: ${tree.declares} dependencies declared and no node_modules — the declaration vouches the suite runs without one`);
-        continue;
+        say(`${tree.declares} dependencies declared and no node_modules — the declaration vouches the suite runs without one`);
+      } else {
+        return finish('dependencies', `the candidate declares ${tree.declares} dependencies and has no node_modules after preparation — a suite run there would count only what happens to run (D-0152)`);
       }
-      return finish('dependencies', `the ${side} declares ${tree.declares} dependencies and has no node_modules after preparation — a suite run there would count only what happens to run (D-0152)`);
     }
 
     // What this change reaches, asked of the repository rather than assumed.
-    //
-    // Read from the CANDIDATE, and then run on both sides. The list is a
-    // function of the diff, so the baseline — which is the base branch, whose
-    // diff against itself is empty — would answer with almost nothing if it
-    // were asked separately, and the round would compare the change's files
-    // against a handful of mandatory ones and call main's own red new.
     let selection = null;
     if (selects) {
       selection = await timed('selection', () => selectFiles({
@@ -456,10 +426,6 @@ export async function runGate({
         // carried through so the verdict does not read as a saving it is not.
         full_suite: Boolean(selection.full),
         why: selection.why,
-        // Which of them the baseline could not run, because this change adds
-        // them. A new test file is red-free on a base that does not have it,
-        // and saying so is the difference between a measurement and a guess.
-        only_on_candidate: 0,
         // The command gates the same answer named. Counted here and listed in
         // `extra_gates`, where every gate this round ran is listed.
         commands: selection.commands.length,
@@ -470,53 +436,19 @@ export async function runGate({
       }
     }
 
-    // Sequential, not parallel. Two full suites at once halves the wall clock
-    // and loads the machine that both of them are measuring on — and the tests
-    // that fail under load are the ones a gate can least afford to guess about.
-    // The baseline goes first so a repository that cannot run its own suite is
-    // found before the candidate's run is paid for.
+    // The one run. What it finds red is the verdict: there is no second tree
+    // to subtract, so a test the change reaches is either green or the round
+    // is red.
     const flags = declared.declaration.pr_tests_flags || [];
-    const onBaseline = selection
-      ? selection.files.filter((file) => existsSync(join(baseDir, file)))
-      : null;
-    if (selection) report.selection.only_on_candidate = selection.files.length - onBaseline.length;
-
-    if (carried) {
-      report.baseline = {
-        commit: carried.commit,
-        red: [...carried.red],
-        totals: carried.totals,
-        carried: true,
-        measured_at: carried.measured_at,
-      };
-    } else if (selection) {
-      say(`running ${onBaseline.length} selected file${onBaseline.length === 1 ? '' : 's'} on the baseline`
-        + (report.selection.only_on_candidate ? ` (${report.selection.only_on_candidate} exist only on the candidate)` : ''));
-      const before = await timed('suite baseline', () => measureSelected({
-        tests: runTests, git: askGit, cwd: baseDir, files: onBaseline, flags, say, side: 'baseline',
-      }));
-      if (!before.ok) return finish('suite', `the baseline run ${before.reason}`);
-      report.baseline = before.result;
-    } else {
-      say('running the suite on the baseline — this takes a while');
-      const before = await timed('suite baseline', () => measure({ suite: runSuite, git: askGit, cwd: baseDir, say, side: 'baseline' }));
-      if (!before.ok) return finish('suite', `the baseline run ${before.reason}`);
-      report.baseline = before.result;
-    }
-
-    // The number the word "green" used to sit on top of. Read off the
-    // baseline, because the baseline *is* the base branch as fetched — this is
-    // a statement about main, not about the pull request. On a selected round
-    // it is a statement about main *within this change's reach*, which the
-    // verdict says out loud rather than leaving to be assumed.
-    report.standing_red = report.baseline.red.length;
-    say(`baseline: ${report.baseline.red.length} red${report.baseline.carried ? ' (carried)' : ''}`);
+    const is = facts.pr ? 'pr-head-with-base-merged-in' : 'base-branch-as-fetched';
     const after = selection
-      ? await (say(`running the same ${selection.files.length} on the candidate`), timed('suite candidate', () => measureSelected({
-        tests: runTests, git: askGit, cwd: headDir, files: selection.files, flags, say, side: 'candidate',
+      ? await (say(`running the ${selection.files.length} file${selection.files.length === 1 ? '' : 's'} this change reaches`), timed('suite', () => measureSelected({
+        tests: runTests, git: askGit, cwd: headDir, files: selection.files, flags, say, is,
       })))
-      : await (say('running the suite on the candidate'), timed('suite candidate', () => measure({ suite: runSuite, git: askGit, cwd: headDir, say, side: 'candidate' })));
-    if (!after.ok) return finish('suite', `the candidate run ${after.reason}`);
+      : await (say('running the whole suite — this takes a while'), timed('suite', () => measure({
+        suite: runSuite, git: askGit, cwd: headDir, say, is,
+      })));
+    if (!after.ok) return finish('suite', `the run ${after.reason}`);
     report.candidate = after.result;
     // The measured tree's own hash, so a landing can later prove — not
     // assume — that main became exactly what was measured (track 3's
@@ -536,12 +468,11 @@ export async function runGate({
     report.extra_gates.push(...selectedGates);
     const failedGates = selectedGates.filter((gate) => !gate.ok);
 
-    const { broke, fixed } = compareRed(report.baseline.red, after.result.red);
-    report.broke = broke;
-    report.fixed = fixed;
-    say(`candidate: ${after.result.red.length} red, ${broke.length} of them new`);
-
-    if (broke.length) return finish('red', `${broke.length} test${broke.length === 1 ? '' : 's'} red on the candidate and green on the baseline`);
+    say(`${after.result.red.length} red`);
+    if (after.result.red.length) {
+      const red = after.result.red;
+      return finish('red', `${red.length} test${red.length === 1 ? '' : 's'} red: ${nameSome(red)}`);
+    }
 
     // A command gate the selection chose is a contract about this diff, and a
     // change that breaks one is red whatever its tests did. They all ran; the
@@ -551,85 +482,6 @@ export async function runGate({
         + `${failedGates.map((gate) => `${gate.name} (exit ${gate.exit_code})`).join(', ')}`);
     }
 
-    // The floor. It reports on main; it does not refuse this change.
-    //
-    // The rule it used to enforce — a red name absent from the file stops the
-    // round — could not fire on a fault this change introduced. `broke`
-    // returned above, so `candidate.red ⊆ baseline.red`, so every name the
-    // floor could stop on was already red on main. It refused changes for the
-    // very thing the next paragraph calls "not this change's doing", and on
-    // 2026-08-30 a broken `codex` install made thirteen broker tests red for a
-    // reason no pull request could have caused or fixed. What is installed on
-    // a machine has nothing to do with whether a change may land.
-    //
-    // Two comparisons now, and only one of them can stop a round.
-    const ratchet = readRatchet(headDir);
-    const onBase = ratchetAtRef({ git: askGit, ref: baseRef, cwd: repoPath });
-    report.ratchet = {
-      present: ratchet.present,
-      ok: ratchet.ok,
-      file: RATCHET_FILE,
-      accepted: ratchet.names.length,
-      // Names this change takes out of the floor while they are still red.
-      lowered_still_red: [],
-      fallen: [],
-      // Names red on MAIN that main's own floor does not record. Kept under
-      // the old key so the round log and everything reading it still find it.
-      baseline_risen: [],
-      base_floor: onBase.present ? onBase.names.length : null,
-      reason: ratchet.reason,
-    };
-    // A malformed floor is still a stop, and it is about the file rather than
-    // the machine: read as an empty set it would make every standing red name
-    // look like a rise, having first told the operator the typo was fine.
-    if (!ratchet.ok) return finish('ratchet', ratchet.reason);
-    // A floor on MAIN that will not parse is main's problem, by the same rule
-    // as everything else here: it is not this change's doing and must not
-    // refuse it. The comparison that needs it is skipped and said.
-    if (onBase.present && !onBase.ok) {
-      say(`${RATCHET_FILE} at ${baseRef} ${onBase.reason} — the floor cannot be compared this round; not this change's doing`);
-      onBase.present = false;
-    }
-
-    if (ratchet.present) {
-      // (1) THE STOP, and the only one: this change removes names from the
-      // floor that are still failing. Lowering the floor is a claim in
-      // somebody's diff — "these came good" — and it is a claim the round can
-      // check. A change that repairs tests and records the smaller set in the
-      // same commit passes, because the names it removed are green.
-      const removed = onBase.present ? onBase.names.filter((name) => !ratchet.names.includes(name)) : [];
-      const stillRed = removed.filter((name) => after.result.red.includes(name));
-      report.ratchet.lowered_still_red = stillRed;
-      if (stillRed.length) {
-        return finish('ratchet', `this change removes ${stillRed.length} name${stillRed.length === 1 ? '' : 's'} `
-          + `from ${RATCHET_FILE} that ${stillRed.length === 1 ? 'is' : 'are'} still red: `
-          + `${stillRed.slice(0, 5).join(', ')}${stillRed.length > 5 ? ', …' : ''}`);
-      }
-
-      // (2) MAIN against its own floor — the check nothing ran the day 57 red
-      // passed through a round whose floor said 55 (measured 2026-08-23:
-      // #385's candidate measured a tree at 55, #386's baseline measured the
-      // same content at 57 minutes later; the 57 was compared against nothing
-      // and written into a log line). A base above its own floor is the base's
-      // instability or regression, never this PR's fault — so it is said as
-      // loudly as a stop without being one, and it goes into the round log
-      // where `mc log` can count it.
-      const floor = onBase.present ? onBase.names : ratchet.names;
-      const drift = compareRatchet(floor, report.baseline.red);
-      report.ratchet.baseline_risen = drift.risen;
-      report.ratchet.fallen = drift.fallen;
-      say(`ratchet: ${floor.length} accepted on ${baseRef}, ${drift.risen.length} above it, ${drift.fallen.length} below`);
-      if (drift.risen.length) {
-        say(`MAIN IS ABOVE ITS FLOOR — ${drift.risen.length} red name${drift.risen.length === 1 ? '' : 's'} on ${baseRef} ${drift.risen.length === 1 ? 'is' : 'are'} not in ${RATCHET_FILE}: ${drift.risen.slice(0, 5).join(', ')}${drift.risen.length > 5 ? ', …' : ''} — main is flaky, regressed, or this machine is missing something the tests need; not this change's doing, and not a reason to refuse it`);
-      }
-      if (drift.fallen.length) {
-        // Said, and said with the caveat, because a fall is not a to-do. On
-        // 2026-08-30 thirteen names fell the moment a broken `codex` install
-        // was repaired; removing them would have made this laptop's package
-        // manager a precondition for merging anywhere.
-        say(`${drift.fallen.length} name${drift.fallen.length === 1 ? '' : 's'} in ${RATCHET_FILE} ${drift.fallen.length === 1 ? 'is' : 'are'} not red on ${baseRef} right now — a name can fall because the machine changed rather than because the code did, so check which before taking any out`);
-      }
-    }
     // The pull request's own tests (D-0157). The suite answers "did anything
     // else break?"; this answers "is this change proved?" — and a suite that
     // globs some directories and not others had answered neither for a PR
@@ -637,13 +489,13 @@ export async function runGate({
     // before, with 114 new test lines. So every `*.test.js` the PR adds or
     // changes is run, wherever it lies, from the same diff that counts red.
     // A list of directories would fix yesterday's hole and make tomorrow's.
-    if (!batch) {
+    if (facts.pr && !batch) {
       const own = await timed('pr tests', () => ownTests({
         git: askGit, tests: runTests, cwd: headDir, baseRef, say, flags: declared.declaration.pr_tests_flags || [],
       }));
       report.pr_tests = own.result;
       if (!own.ok) return finish('pr-tests', own.reason);
-    } else {
+    } else if (batch) {
       // Each pull request's own tests, by itself: the files *it* adds or
       // changes against the base, run on the batch candidate. The suite ran
       // once for all of them; this is what keeps the batch from hiding which
@@ -658,120 +510,47 @@ export async function runGate({
       }
     }
 
-    // Gates beyond the suite, run on BOTH sides and judged by the delta —
-    // the same differential rule the suite has always had. Measured
-    // 2026-08-24 (#10909's round): the extra gate ran only on the candidate,
-    // main's own contract suite was red the whole time (5 fail, the same 5
-    // on untouched origin/main), and the round said "FAILED on the
-    // candidate" — attributing the world's standing red to the one party in
-    // the room. A track spent six minutes proving its innocence.
+    // Gates an operator declared beside the suite, run on the candidate.
     //
-    // The baseline side is carried when the A1 entry holds this gate's
-    // result (after a green merge, main *is* the tree the candidate's gates
-    // ran on); otherwise it runs in the baseline worktree. A gate that
-    // prints TAP is compared by red *names*, like the suite; one that does
-    // not is compared by exit code. And under the same rule as ever: a side
-    // that could not run at all is a stop, never an approval.
+    // They ran on both sides until 2026-08-31 and were judged by the delta,
+    // for the reason the suite was: an extra gate run only on the candidate
+    // had attributed a red main to the one PR in the room (#10909's round,
+    // 2026-08-24). That protection is gone with the baseline, deliberately —
+    // the ruling is that main's own red is not the round's question, and a
+    // declared gate that is red on main is red here.
+    //
     // The gates run in an environment that asks node's test runner for TAP,
     // the way the suite already does: node 24 writes its spec reporter to a
     // pipe (measured 2026-08-24 — `# tests` never appears), so without this
-    // the name comparison silently degrades to exit codes on every gate
-    // that is a node test. A command that is not node ignores the variable.
+    // the red names silently degrade to exit codes on every gate that is a
+    // node test. A command that is not node ignores the variable.
+    const gates = declared.declaration.extra_gates || [];
     const gateEnv = { ...env };
     delete gateEnv.NODE_TEST_CONTEXT;
     gateEnv.NODE_OPTIONS = `${String(env.NODE_OPTIONS || '').replace(/--test-reporter(-destination)?[=\s]\S+/gu, '').trim()} --test-reporter=tap`.trim();
-    const baseKeys = {
-      repoPath,
-      commit: baseCommit,
-      lockfileHash: lockfileHashAt({ git: askGit, repoPath, commit: baseCommit }),
-      root,
-    };
     for (const gate of gates) {
-      // The baseline side: the A1 entry (a candidate result a green merge
-      // promoted), else the measured store (a baseline result kept whatever
-      // its colour — on a red main there is no green merge to promote
-      // anything, and rerunning the same red cost 662 s per round,
-      // measured 2026-08-24), else run it here.
-      const saved = carriedGate(carried, gate)
-        || (baseCommit ? loadMeasuredGate({ ...baseKeys, command: gate.command }) : null);
-      let base;
-      if (saved) {
-        base = { ok: saved.ok, exit_code: saved.exit_code ?? null, ran: true, red: Array.isArray(saved.red) ? saved.red : null, carried: true };
-        say(`extra gate ${gate.name} on the baseline: carried (${base.ok ? 'passed' : `failed, exit ${base.exit_code}${base.red ? `, ${base.red.length} red` : ''}`}${saved.measured_at ? `, measured ${saved.measured_at}` : ''}) — not rerun`);
-      } else {
-        say(`extra gate ${gate.name} on the baseline`);
-        base = gateSide(await timed('extra gates baseline', async () => shell(gate.command, { cwd: baseDir, env: gateEnv })));
-        // Saved the moment it is taken, red included: the same keys as A1,
-        // and exactly as deterministic.
-        if (base.ran && baseCommit) {
-          attemptQuietly(() => saveMeasuredGate({ ...baseKeys, gate: { command: gate.command, ok: base.ok, exit_code: base.exit_code, red: base.red } }));
-        }
-      }
-      say(`extra gate ${gate.name} on the candidate`);
+      say(`extra gate ${gate.name}`);
       const outcome = await timed('extra gates', async () => shell(gate.command, { cwd: headDir, env: gateEnv }));
       const head = gateSide(outcome);
-      // Names when both sides have them; exit codes are the fallback claim.
-      const named = base.red !== null && head.red !== null;
-      const delta = named ? compareRed(base.red, head.red) : { broke: [], fixed: [] };
-      // What was compared, said out loud — a gate that does the right thing
-      // silently is a gate nobody can trust next time (PM, 2026-08-24; and
-      // track 3 called it before the round ran: "5 red on both sides" can
-      // be five DIFFERENT red on each and report nothing new).
-      if (named) {
-        if (base.red.length || head.red.length) {
-          say(`extra gate ${gate.name}: baseline red [${nameSome(base.red) || 'none'}] · candidate red [${nameSome(head.red) || 'none'}] — ${delta.broke.length} new, ${delta.fixed.length} fixed`);
-        }
-      } else if (!base.ok || !head.ok) {
-        say(`extra gate ${gate.name}: could not compare by name — falling back to exit codes; a new failure over a red baseline would not be seen`);
-      }
       report.extra_gates.push({
         // What an operator declared beside the suite, as opposed to what the
         // repository's selector chose for this diff.
         source: 'declaration',
         name: gate.name,
         command: gate.command,
-        // The candidate's outcome under the old keys, so every reader that
-        // asked "did the gate pass" keeps its answer.
         ok: head.ok,
         exit_code: head.exit_code,
         ran: head.ran,
-        baseline: base,
-        candidate: head,
-        broke: delta.broke,
-        fixed: delta.fixed,
-        already_red: !base.ok && !head.ok && (!named || delta.broke.length === 0),
+        // The red names when the gate printed TAP that finished, null when it
+        // did not — the difference between "these failed" and "it failed".
+        red: head.red,
+        output: trim(outcome.stderr) || trim(outcome.stdout) || null,
       });
       if (!head.ran) return finish('extra-gate', `${gate.name} could not be run at all — that is not an approval`);
-      if (!base.ran) return finish('extra-gate', `${gate.name} could not be run on the baseline — that is not a measurement`);
-      if (head.ok) {
-        // A candidate that repairs a red baseline is a pass with a sentence,
-        // not a stop with an apology.
-        if (!base.ok) say(`extra gate ${gate.name}: red on the baseline, green on the candidate — this change repairs it`);
-        continue;
+      if (!head.ok) {
+        return finish('extra-gate', `${gate.name} failed (${trim(outcome.stderr) || `exit ${head.exit_code}`})`
+          + (head.red?.length ? ` — ${head.red.length} red: ${nameSome(head.red)}` : ''));
       }
-      if (base.ok) {
-        return finish('extra-gate', `${gate.name} failed on the candidate and passed on the baseline`
-          + ` (${trim(outcome.stderr) || `exit ${head.exit_code}`})`
-          + (named && delta.broke.length ? ` — ${delta.broke.length} new red: ${nameSome(delta.broke)}` : ''));
-      }
-      if (named && delta.broke.length) {
-        return finish('extra-gate', `${gate.name} was already red on the baseline (${base.red.length} red)`
-          + ` and the candidate adds ${delta.broke.length} more: ${nameSome(delta.broke)}`);
-      }
-      // Exit 127 is the shell's own word for "no such command". Two sides
-      // that both said it are not a broken base — they are a gate that never
-      // ran, and calling that main's fault would be the same misattribution
-      // pointed the other way.
-      if (base.exit_code === 127 && head.exit_code === 127) {
-        return finish('extra-gate', `${gate.name} could not be run on either side (exit 127 — command not found); that is not an approval`);
-      }
-      return finish('extra-gate-baseline', `${gate.name} was already red before this PR — `
-        + (named
-          ? `${base.red.length} red on the baseline (${nameSome(base.red)}), ${head.red.length} on the candidate, `
-            + `${sameSets(base.red, head.red) ? `the same ${base.red.length}` : 'none of them new'}`
-          : `exit ${base.exit_code} on the baseline, exit ${head.exit_code} on the candidate; `
-            + 'could not compare by name — a new failure over a red baseline would not be seen')
-        + ` — the base itself is broken; not this change's doing`);
     }
 
     return finish(null, null);
@@ -795,44 +574,39 @@ export async function runGate({
 /**
  * What the round decided, as one word.
  *
- * `green` and `no-new-red` are both passes and they are not the same claim.
- * The first says the suite is clean. The second says only that it is no
- * dirtier than the branch it is aimed at — which is what this gate has always
- * measured, and what it used to report as "GREEN" over fifty-five red names.
+ * Three of them, and no more. `no-new-red` was the differential form's pass —
+ * "no dirtier than the branch it is aimed at" — and it took a second worktree
+ * and half the round's wall clock to be able to say. A round now measures one
+ * tree, so a pass is a pass: `green`.
+ *
  * Anything a machine wants to branch on should branch on this rather than on
- * the prose, and the two passes are separate words precisely so that a reader
- * who only ever wanted the strict one can still ask for it.
+ * the prose.
  */
 export function verdictFor(report) {
   if (report.stopped_at === 'red') return 'red';
   // A contract gate this change breaks is red, and the word a reader acts on
   // should not depend on whether a test or a command found it.
   if (report.stopped_at === 'selected-gate') return 'red';
-  if (report.stopped_at === 'ratchet') return 'ratchet-lowered';
   if (report.stopped_at !== null) return 'stopped';
-  return report.standing_red ? 'no-new-red' : 'green';
+  return 'green';
 }
 
 /**
- * The verdict as a headline, and never the word "green" over standing red.
+ * The verdict as a headline.
  *
- * The number goes in the line rather than in a footnote somewhere, because the
- * line is what gets read out loud and reported onward. A verdict that needed a
- * document beside it to be understood correctly is the thing being fixed here.
+ * It used to carry a number — the standing red on the base — because "GREEN"
+ * over fifty-five red names was the larger claim read out of the smaller one.
+ * The round no longer measures the base, so there is no number to carry and no
+ * second reading to guard against: green is green, over the reach the same
+ * sentence names.
  */
 export function verdictHeadline(report) {
-  const standing = report.standing_red ?? 0;
-  const reach = scopeOf(report);
-  if (!standing) return `GREEN — the test gate passes${reach}`;
-  return `NO NEW RED — ${standing} standing red name${standing === 1 ? '' : 's'} on ${report.pr?.base || 'the base'}${reach}`;
+  return `GREEN — the test gate passes${scopeOf(report)}`;
 }
 
 /** The same statement mid-sentence, for a round that is narrating itself. */
 export function verdictPhrase(report) {
-  const standing = report.standing_red ?? 0;
-  const reach = scopeOf(report);
-  if (!standing) return `gate green${reach}`;
-  return `no new red (${standing} standing red on ${report.pr?.base || 'the base'})${reach}`;
+  return `gate green${scopeOf(report)}`;
 }
 
 /**
@@ -850,6 +624,7 @@ export function verdictPhrase(report) {
  * a reader already assumes.
  */
 function scopeOf(report) {
+  if (report.full) return ' — over the whole suite, asked for by --full';
   const selected = report.selection?.files;
   if (!selected) return '';
   // A selector that gave up and returned everything must not be reported as a
@@ -861,18 +636,17 @@ function scopeOf(report) {
 }
 
 /**
- * One side of the round: run the suite, read what failed out of it.
+ * The whole suite, run once, with what failed read out of it.
  *
  * A run that never printed its totals did not finish — it died on a missing
  * dependency, a syntax error, a killed process — and its empty red set would
- * read as a clean sweep. Since both sides would usually die the same way, that
- * failure mode produces a confident green from two runs that never ran, which
- * is the worst thing this module could do. So an unfinished run stops the
- * round rather than counting as evidence.
+ * read as a clean sweep. With one side and nothing to compare against, that is
+ * the whole verdict, so an unfinished run stops the round rather than counting
+ * as evidence.
  */
-async function measure({ suite, git, cwd, say, side }) {
+async function measure({ suite, git, cwd, say, is }) {
   const at = git(['rev-parse', 'HEAD'], { cwd });
-  const run = await suite({ cwd, onLine: (line) => say(`${side}: ${line}`) });
+  const run = await suite({ cwd, onLine: (line) => say(line) });
   const totals = tapTotals(run.tap);
   if (!totals.finished) {
     return { ok: false, reason: 'never reached its own summary — the suite did not run to the end' };
@@ -881,12 +655,12 @@ async function measure({ suite, git, cwd, say, side }) {
   return {
     ok: true,
     result: {
-      // The commit of the throwaway worktree this side ran in — for the
-      // candidate that is the PR's head with the base merged into it, which is
-      // a commit that exists nowhere but here and is easily mistaken for the
+      // The commit of the throwaway worktree the run happened in — for a pull
+      // request that is its head with the base merged into it, which is a
+      // commit that exists nowhere but here and is easily mistaken for the
       // branch head. `is` says which one it is so nothing has to be inferred.
       commit: at?.status === 0 ? String(at.stdout || '').trim() : null,
-      is: side === 'baseline' ? 'base-branch-as-fetched' : 'pr-head-with-base-merged-in',
+      is,
       exit_code: run.code,
       totals,
       red: redNames(run.tap),
@@ -965,10 +739,10 @@ async function selectFiles({ command, cwd, env, say }) {
 /**
  * The command gates the selection named, run on the candidate and nowhere else.
  *
- * Candidate only, on purpose. These are gates about the change rather than
- * measurements of a tree: `css:tokens` and `i18n:contract` take `--base-ref`
- * and are differential in themselves, so running them on the baseline would
- * measure main against main and answer a question nobody asked.
+ * These are gates about the change rather than measurements of a tree:
+ * `css:tokens` and `i18n:contract` take `--base-ref` and are differential in
+ * themselves, so the base branch is a ref they are handed rather than a tree
+ * anything is run in.
  *
  * Every one of them runs, and a failure does not end the loop. `ci.mjs` wrote
  * the reason down where it makes the same choice about tests: while anything
@@ -1013,7 +787,6 @@ async function runSelectedCommands({ commands, cwd, env, baseRef, say, timed, cl
       // The last thing it said, so a red gate names something. The full
       // output belongs in a log, not in a verdict.
       output: trim(outcome.stderr) || trim(outcome.stdout) || null,
-      baseline: null,
     });
     const last = results[results.length - 1];
     say(`command gate ${entry.packageScript}: ${last.ok ? 'passed' : `FAILED (exit ${last.exit_code})`} in ${seconds(duration)}`);
@@ -1022,29 +795,17 @@ async function runSelectedCommands({ commands, cwd, env, baseRef, say, timed, cl
 }
 
 /**
- * One side of a selected round: the same file list, run where it was asked for.
+ * The files the selection chose, run where the selection was asked for.
  *
  * Held to the suite's rule, and for the same reason — a run that never
  * summarised, or summarised nothing, is a stop rather than an approval. That
  * matters more here than for a full suite: a selected list is short enough that
  * "no tests ran" is an easy accident and an expensive one.
- *
- * An empty list on the baseline is not a failure. It means every file the
- * change reaches is a file the change adds, and the honest red set for that
- * side is the empty one.
  */
-async function measureSelected({ tests, git, cwd, files, flags, say, side }) {
+async function measureSelected({ tests, git, cwd, files, flags, say, is }) {
   const at = git(['rev-parse', 'HEAD'], { cwd });
   const commit = at?.status === 0 ? String(at.stdout || '').trim() : null;
-  const is = side === 'baseline' ? 'base-branch-as-fetched' : 'pr-head-with-base-merged-in';
-  if (files.length === 0) {
-    say(`${side}: no selected file exists here — every one of them is added by this change`);
-    return {
-      ok: true,
-      result: { commit, is, exit_code: null, totals: { tests: 0, pass: 0, fail: 0, cancelled: null, runs: 0, finished: true }, red: [], selected: 0 },
-    };
-  }
-  const run = await tests({ cwd, files, flags, onLine: (line) => say(`${side}: ${line}`) });
+  const run = await tests({ cwd, files, flags, onLine: (line) => say(line) });
   const totals = tapTotals(run.tap);
   if (!totals.finished) {
     return { ok: false, reason: 'never reached its own summary — the selected files did not run to the end' };
@@ -1107,6 +868,21 @@ function suiteCommand({ repoPath }) {
 }
 
 /**
+ * The branch origin itself calls its default, for a reading with no pull
+ * request to name one.
+ *
+ * Read rather than assumed: `main` is this machine's habit, not a fact about
+ * every repository, and `mc test <repo> --full` measuring the wrong branch
+ * would be a whole-suite answer about a tree nobody asked about. A remote that
+ * does not say gives null, and the round stops rather than guessing.
+ */
+function defaultBaseRef({ git, repoPath }) {
+  const asked = git(['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'], { cwd: repoPath });
+  const ref = asked?.status === 0 ? trim(asked.stdout) : '';
+  return ref || null;
+}
+
+/**
  * Worktrees the round made, taken back — and the directory with them.
  *
  * `git worktree remove --force` first so the repository's own administrative
@@ -1115,6 +891,8 @@ function suiteCommand({ repoPath }) {
  * interrupted round leaves behind.
  */
 function clearWorkspace({ git, repoPath, workspace }) {
+  // `candidate` is the only one the round makes now; `baseline` is swept for
+  // the rounds that ran before 2026-08-31 and may have left one behind.
   for (const name of ['baseline', 'candidate']) {
     const dir = join(workspace, name);
     if (existsSync(dir)) {
@@ -1306,7 +1084,7 @@ function shell(command, { cwd, env }) {
 }
 
 /**
- * One side of an extra gate, read off the run.
+ * An extra gate, read off the run.
  *
  * The red names are taken only from output that finished as TAP — a gate
  * that prints something TAP-like but never summarised gets `red: null`, and
@@ -1323,23 +1101,12 @@ function gateSide(outcome) {
     exit_code: outcome.status ?? null,
     ran,
     red: finished ? redNames(output) : null,
-    carried: false,
   };
 }
 
 /** A few names, and how many were not named. */
 function nameSome(names) {
   return `${names.slice(0, 5).join(', ')}${names.length > 5 ? `, … and ${names.length - 5} more` : ''}`;
-}
-
-/** The same red set on both sides — the sentence "the same five" hangs on this. */
-function sameSets(a, b) {
-  return a.length === b.length && a.every((name) => b.includes(name));
-}
-
-/** Best effort where failing must not fail the round — a cache is a saving, never a stop. */
-function attemptQuietly(fn) {
-  try { return fn(); } catch { return null; }
 }
 
 function realSuite({ cwd, onLine = () => {}, env = process.env } = {}) {

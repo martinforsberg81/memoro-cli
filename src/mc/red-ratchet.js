@@ -1,67 +1,47 @@
 /**
  * The standing red set, written down — a statement about main, not a gate.
  *
- * ## What this file used to do, and why that was wrong
+ * ## Nothing in a round reads this any more
+ *
+ * Read this first, because the rest of the file is the argument for a
+ * mechanism the round no longer runs. On 2026-08-31 Martin ruled that a round
+ * evaluates the diff and nothing else: a test the change reaches is either
+ * green, or the round is red. Whether main was already red — the question this
+ * file was built to keep honest — is not asked at a merge. So the gate's
+ * consultation of the floor went out with the baseline it was compared
+ * against, and `mc test` and `mc merge` neither read nor report it.
+ *
+ * What still reads it is `enforcement.js`, which asks whether a repository
+ * carrying standing red has recorded a floor at all. That check is fed by the
+ * round log's `standing_red`, which new rounds no longer write — so it answers
+ * only from lines older than the ruling, and will fall silent as they age out.
+ * Whether a floor for main is worth keeping anywhere is a separate question
+ * and was deliberately left open; this file is kept, unused by the round,
+ * rather than deleted on the way past.
+ *
+ * The rest of this header is the reasoning as it stood, kept because the two
+ * arguments below outlived the mechanism.
+ *
+ * ## What it used to do, twice over
  *
  * Until 2026-08-30 a red name absent from this list *stopped the round*. That
- * rule could not fire on a fault the pull request introduced, and the proof is
- * three lines of the gate: `broke` (red on the candidate, green on the
- * baseline) already returned before this was consulted, so by the time the
- * floor was compared, `candidate.red ⊆ baseline.red`. Every name it could
- * stop on was therefore already red on main — which the gate computed
- * separately, called `baseline_risen`, and described in its own message as
- * "the base itself is flaky or regressed; not this change's doing".
+ * rule could not fire on a fault the pull request introduced: the differential
+ * comparison had already returned on anything red on the candidate and green
+ * on the base, so by the time the floor was consulted every name it could stop
+ * on was already red on main. It refused changes for something it
+ * simultaneously said was not their fault, and the demonstration arrived the
+ * same day — `codex` was installed but unrunnable on this laptop, thirteen
+ * broker tests were red for that reason alone, and they sat above the floor.
+ * What is installed on a machine has nothing to do with whether a change may
+ * land.
  *
- * So it refused changes for something it simultaneously said was not their
- * fault. The demonstration arrived the same day: `codex` was installed but
- * unrunnable on this laptop, thirteen broker tests were red for that reason
- * alone, and they sat above the floor. What is installed on a machine has
- * nothing to do with whether a change may land — but the floor made it the
- * deciding fact, and it would have blocked every merge on any machine without
- * that binary.
- *
- * ## What it does now
- *
- * The differential comparison is the gate, and it always was: a change may not
- * make red what was green, measured on one machine in one round, on both sides
- * at once. That rule is environment-neutral for free — a missing binary is
- * missing on both sides, so those tests are red on both and `broke` is empty.
- *
- * This file answers the different question that comparison structurally cannot
- * see: has *main's* red set grown beyond what somebody agreed to? That is a
- * fact about main. It is reported, loudly and into the round log, and it never
- * refuses somebody else's change.
- *
- * One thing here is still a stop, and it is the one that is genuinely the
- * change's own doing: a pull request that **removes names from this file while
- * those tests are still red** is lowering the floor under failing tests, and
- * that is a claim in its diff that the round can check and does.
- *
- * ## The original argument, which still holds
- *
- * The gate's verdict is differential: it compares the candidate's red set
- * against a baseline measured in the same round, and passes when nothing new
- * went red. That is the right rule and this file does not touch it. What it
- * adds is the thing the rule structurally cannot see.
- *
- * Inside one round a rise is always visible — if the candidate has more red
- * names than the baseline, at least one of them is not in the baseline, so it
- * is in `broke` and the gate is red. That was checked against `compareRed`
- * over every subset pair of a six-name universe: zero rounds where the count
- * rose and `broke` was empty. A brand new test that is born red is caught for
- * the same reason; it is red on the candidate and absent from the baseline, so
- * set difference puts it straight into `broke`.
- *
- * The leak is *between* rounds. Every round measures main afresh and remembers
- * nothing, so whatever main is red at is simply accepted as the new floor. A
- * name that reaches main by any path this gate did not stand in — a merge by
- * hand, a direct push, a round nobody ran — becomes part of the baseline, and
- * from then on the gate reports "no new red" over it forever. Fifty-five
- * standing red names got there that way. Nothing in a memoryless comparison
- * can notice a floor that has moved.
- *
- * So the floor is written down, in the repository, in the diff, where a rise
- * has to be reviewed by somebody instead of inherited by the next round.
+ * From then until 2026-08-31 it reported instead: main above its own floor was
+ * said loudly, into the round log, and never refused anybody's change. One
+ * stop survived, and it was genuinely about the diff — a pull request removing
+ * names from this file while those tests are still red is lowering the floor
+ * under failing tests. That stop went with the rest: it needed both the floor
+ * on main and a measurement of main to check the claim, and the round has
+ * neither now.
  *
  * ## Names, not a count
  *
@@ -91,11 +71,9 @@
  * and fail a pull request that changed nothing. Automatic tightening turns
  * every flaky green into a trap laid for the next author.
  *
- * Lowering it is therefore a commit somebody makes, and the gate prints
- * exactly which names to remove so that commit is a paste rather than an
- * investigation. That also keeps the property that makes the file worth
- * having: every movement of the floor, in either direction, is in somebody's
- * diff.
+ * Lowering it is therefore a commit somebody makes. That also keeps the
+ * property that makes the file worth having: every movement of the floor, in
+ * either direction, is in somebody's diff.
  */
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';

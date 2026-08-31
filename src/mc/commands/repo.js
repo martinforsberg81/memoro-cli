@@ -295,7 +295,7 @@ export async function gate(opts, { stdout, stderr }) {
     repo: repoPath, mode, holder: holder?.name || null,
     prs: opts.prs?.length ? opts.prs : [opts.pr].filter(Boolean),
   });
-  const round = { repoPath, pr: opts.pr, prs: opts.prs, holder, onProgress: (message) => stderr.write(`mc: ${message}\n`) };
+  const round = { repoPath, pr: opts.pr, prs: opts.prs, full: Boolean(opts.full), holder, onProgress: (message) => stderr.write(`mc: ${message}\n`) };
   const report = opts.check ? await runGate(round) : await runMergeRound(round);
   // Every round leaves a line — merged, stopped, refused — so "has the gate
   // ever caught anything?" is a count, not a reading of survivors (A7).
@@ -453,36 +453,39 @@ function selectedGateLines(report) {
  */
 export function gateLines(report, { checkOnly = false } = {}) {
   const lines = [];
-  const pr = report.pr.head ? `#${report.pr.number} (${report.pr.head} → ${report.pr.base})` : `#${report.pr.number}`;
+  const pr = report.pr.number === null
+    ? `${report.repo} — the whole suite`
+    : (report.pr.head ? `#${report.pr.number} (${report.pr.head} → ${report.pr.base})` : `#${report.pr.number}`);
 
   // `red`, `ratchet` and `selected-gate` are verdicts the round reached by
   // measuring, and each has its own block below with the names in it.
   // Everything else stopped short of a verdict, which is a different thing for
   // a reader to be told.
-  if (report.stopped_at && !['red', 'ratchet', 'selected-gate'].includes(report.stopped_at)) {
+  if (report.stopped_at && !['red', 'selected-gate'].includes(report.stopped_at)) {
     lines.push(`mc: the round stopped at ${report.stopped_at} — ${report.reason}`);
-    // A stop after the suites is a different thing from one before them, and a
+    // A stop after the run is a different thing from one before it, and a
     // reader deciding what to do next needs to know which they are looking at.
-    const measured = report.baseline && report.candidate;
-    lines.push(measured
-      ? 'mc: the suites ran; nothing was merged'
+    lines.push(report.candidate
+      ? 'mc: the tests ran; nothing was merged'
       : 'mc: nothing was measured, and nothing was merged');
     return lines;
   }
 
-  // Both of these are commits inside the gate's throwaway worktrees — the base
-  // branch, and the PR's head with the base merged into it. Neither is the
-  // branch head somebody would see with `git log` on the branch, and saying
-  // which is which is cheaper than a reviewer working it out.
+  // One commit, inside the gate's throwaway worktree: the PR's head with the
+  // base merged into it. It is not the branch head somebody would see with
+  // `git log` on the branch, and saying so is cheaper than a reviewer working
+  // it out.
   lines.push(`mc: ${pr}`);
-  lines.push(`mc: baseline  ${report.baseline.commit?.slice(0, 7)} (${report.pr.base} as fetched)  ${count(report.baseline)}`);
   const heads = report.prs ? report.prs.map((item) => `#${item.number}`).join(' + ') : report.pr.head;
-  lines.push(`mc: candidate ${report.candidate.commit?.slice(0, 7)} (${heads} + ${report.pr.base} merged in)  ${count(report.candidate)}`);
+  lines.push(report.full
+    ? `mc: ${report.candidate.commit?.slice(0, 7)} (${report.base?.ref || 'the default branch'} as fetched)  ${count(report.candidate)}`
+    : `mc: ${report.candidate.commit?.slice(0, 7)} (${heads} + ${report.pr.base} merged in)  ${count(report.candidate)}`);
 
-  if (report.broke.length) {
-    lines.push(`mc: RED — ${report.broke.length} red on the candidate and green on the baseline:`);
-    for (const name of report.broke.slice(0, 20)) lines.push(`      ${name}`);
-    if (report.broke.length > 20) lines.push(`      … and ${report.broke.length - 20} more`);
+  const red = report.candidate.red || [];
+  if (red.length) {
+    lines.push(`mc: RED — ${red.length} test${red.length === 1 ? '' : 's'} red:`);
+    for (const name of red.slice(0, 20)) lines.push(`      ${name}`);
+    if (red.length > 20) lines.push(`      … and ${red.length - 20} more`);
     // The command gates ran before this verdict was reached, and what they
     // found is said here rather than lost with the stop: a red test and a
     // broken contract are two repairs, and a reader who sees only the first
@@ -503,38 +506,6 @@ export function gateLines(report, { checkOnly = false } = {}) {
     return lines;
   }
 
-  // The floor's one refusal, and it is about this change's own diff: it takes
-  // names out of the floor that the round just measured as still red.
-  //
-  // What used to be here refused a change for names that were red on the base
-  // too — and said so itself, in a comment that read "this is never a fault
-  // the pull request introduced". A gate that refuses a change while
-  // explaining the change did not cause it is a gate people learn to route
-  // around. That comparison is now a report about main, below.
-  if (report.ratchet?.lowered_still_red?.length) {
-    const lowered = report.ratchet.lowered_still_red;
-    lines.push(`mc: RATCHET LOWERED — this change takes ${lowered.length} name${lowered.length === 1 ? '' : 's'} out of ${report.ratchet.file} that ${lowered.length === 1 ? 'is' : 'are'} still red:`);
-    for (const name of lowered.slice(0, 20)) lines.push(`      ${name}`);
-    if (lowered.length > 20) lines.push(`      … and ${lowered.length - 20} more (the full list is in --json)`);
-    lines.push('mc: taking a name out of the floor is the claim that it came good. Repair the test in the');
-    lines.push('mc: same change, or put the name back — a floor lowered under a failing test is a floor that');
-    lines.push('mc: stops meaning anything.');
-    return lines;
-  }
-
-  if (report.ratchet && report.ratchet.ok === false) {
-    lines.push(`mc: STOPPED — ${report.ratchet.reason}`);
-    lines.push('mc: an unreadable ratchet is not an empty one, so nothing was decided from it');
-    return lines;
-  }
-
-  if (report.fixed.length) lines.push(`mc: ${report.fixed.length} that were red on the baseline are green here`);
-  if (report.ratchet?.baseline_risen?.length) {
-    const unstable = report.ratchet.baseline_risen;
-    lines.push(`mc: BASELINE UNSTABLE — ${unstable.length} red name${unstable.length === 1 ? '' : 's'} on the baseline ${unstable.length === 1 ? 'is' : 'are'} not in the recorded floor:`);
-    for (const name of unstable.slice(0, 10)) lines.push(`      ${name}`);
-    lines.push('mc: the base itself is flaky or regressed — not this change\'s doing, and worth a look before it hides a real one');
-  }
   // Each pull request's own tests, by number — in a batch especially, so the
   // batch never hides which pull request carried which test (A3).
   for (const item of report.prs || (report.pr_tests ? [{ number: report.pr.number, pr_tests: report.pr_tests }] : [])) {
@@ -550,86 +521,16 @@ export function gateLines(report, { checkOnly = false } = {}) {
   if (report.declaration?.prepare) lines.push(`mc: prepared with ${report.declaration.prepare}`);
   lines.push(...selectedGateLines(report));
   for (const gate of selectedGates(report, 'declaration')) {
-    // Both sides, so a red gate names its culprit: "failed" alone once
-    // attributed a red main to the one PR in the room (2026-08-24). Older
-    // reports carry only the candidate's outcome, and are said as before.
-    if (!gate.baseline) {
-      lines.push(`mc: extra gate ${gate.name} — ${gate.ok ? 'passed' : 'failed'}`);
-      continue;
-    }
-    const side = (s) => `${s.ok ? 'passed' : 'failed'}${s.carried ? ' (carried)' : ''}`;
-    lines.push(`mc: extra gate ${gate.name} — baseline ${side(gate.baseline)}, candidate ${side(gate.candidate)}`
-      + (gate.already_red ? ' — red before this PR; the base itself is broken' : '')
-      + (gate.ok && !gate.baseline.ok ? ' — this change repairs it' : ''));
+    lines.push(`mc: extra gate ${gate.name} — ${gate.ok ? 'passed' : 'failed'}`);
   }
-  lines.push(...ratchetLines(report));
 
-  // The headline carries the number when there is one, so the word that gets
-  // read out and reported onward is the whole verdict rather than the half of
-  // it that sounds best.
   lines.push(`mc: ${verdictHeadline(report)}. It says nothing about whether the change is right;`);
   lines.push('mc: that is the review, and it is still somebody\'s to do');
-  // The second-order cost of a standing red name, said where the verdict is
-  // read rather than in a document beside it: a test that is already failing
-  // cannot fail any harder, so a fault introduced inside one of these has
-  // nowhere to show up. They are not only debt, they are blind spots.
-  if (report.standing_red) {
-    lines.push(`mc: those ${report.standing_red} were red before this change and are red after it —`);
-    lines.push('mc: a new fault inside any of them could not have shown up in this round');
-  }
   // Said only when it is the whole answer. In a merge round these same lines
   // are followed by what became of the verdict, and a run that says it did not
   // merge and then says it merged is worse than one that says neither.
   if (checkOnly) lines.push('mc: this run was asked to check only, so nothing was merged');
   return lines;
-}
-
-/**
- * What the ratchet has to say on a round that passed it.
- *
- * Two things, and neither of them changes the verdict. That the floor is
- * unrecorded, when there is a floor to record — otherwise the first thing
- * anybody learns about the mechanism is a gate failing. And which names have
- * come good, spelled out, because lowering the floor is a commit somebody
- * makes by hand and this is the difference between that commit being a paste
- * and being an investigation. Nothing here writes the file: see the header of
- * `red-ratchet.js` for why a round that tightened it automatically would lay a
- * trap for the next author.
- */
-function ratchetLines(report) {
-  const ratchet = report.ratchet;
-  const lines = [];
-  if (!ratchet) return lines;
-
-  if (!ratchet.present) {
-    if (!report.standing_red) return lines;
-    lines.push(`mc: no standing red set is recorded in ${ratchet.file}, so nothing here stops`);
-    lines.push(`mc: the ${ordinal(report.standing_red + 1)} joining them. Record today's ${report.standing_red} there and the number can only go down`);
-    return lines;
-  }
-
-  lines.push(`mc: ratchet — ${ratchet.accepted} standing red name${ratchet.accepted === 1 ? '' : 's'} accepted in ${ratchet.file}, none above it`);
-  if (ratchet.fallen.length) {
-    lines.push(`mc: ${ratchet.fallen.length} of them ${ratchet.fallen.length === 1 ? 'is' : 'are'} green here — remove ${ratchet.fallen.length === 1 ? 'it' : 'them'} from ${ratchet.file}`);
-    lines.push('mc: in a commit to lock the gain. mc does not write it: a name that only passed');
-    lines.push('mc: because the machine was quiet would come back, and read as a rise next round');
-    for (const name of ratchet.fallen.slice(0, 20)) lines.push(`      ${name}`);
-    if (ratchet.fallen.length > 20) lines.push(`      … and ${ratchet.fallen.length - 20} more`);
-  }
-  return lines;
-}
-
-/**
- * `56th`, not `56st`.
- *
- * Small, and worth its four lines: the sentence it appears in is the one that
- * asks somebody to record a floor, and a verdict that cannot count is not one
- * anybody takes an instruction from.
- */
-function ordinal(n) {
-  const teen = n % 100;
-  if (teen >= 11 && teen <= 13) return `${n}th`;
-  return `${n}${['th', 'st', 'nd', 'rd'][n % 10] || 'th'}`;
 }
 
 function count(side) {
@@ -824,9 +725,9 @@ export function parseArgs(argv) {
  * `mc merge <repo> <pr> [<pr>...] [--check] [--json] [--docs]` — the
  * arguments of the landing verb, in one place for both of its forms.
  */
-export function parseMergeArgs(argv, { docs = false } = {}) {
-  const scanned = scanArgs(argv, { booleans: ['--json', '--check', ...(docs ? ['--docs'] : [])] });
-  const opts = { verb: 'merge', repo: null, pr: null, prs: null, check: scanned.flags.check, json: scanned.flags.json, docs: Boolean(scanned.flags.docs) };
+export function parseMergeArgs(argv, { docs = false, full = false } = {}) {
+  const scanned = scanArgs(argv, { booleans: ['--json', '--check', ...(docs ? ['--docs'] : []), ...(full ? ['--full'] : [])] });
+  const opts = { verb: 'merge', repo: null, pr: null, prs: null, check: scanned.flags.check, json: scanned.flags.json, docs: Boolean(scanned.flags.docs), full: Boolean(scanned.flags.full) };
   if (scanned.error) return { ...opts, error: scanned.error };
   const positional = [...scanned.positional];
   opts.repo = positional.shift() || null;
@@ -834,6 +735,10 @@ export function parseMergeArgs(argv, { docs = false } = {}) {
   // `#346` and `346` are the same pull request, and a person who copied the
   // number off a page brings the hash with it.
   const numbers = positional.splice(0).map((word) => String(word).replace(/^#/u, ''));
+  // `--full` is the one form with nothing to name: the repository's own suite
+  // on the default branch, which is a question about the code rather than
+  // about a change.
+  if (!numbers.length && opts.full) return opts;
   if (!numbers.length) return { ...opts, error: 'which pull request? mc merge <repo> <pr> [<pr>...] [--check] | --docs' };
   const bad = numbers.find((number) => !/^\d+$/u.test(number));
   if (bad !== undefined) return { ...opts, error: `"${bad}" is not a pull request number` };
