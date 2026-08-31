@@ -17,6 +17,8 @@
  * lease writes one file under mc's home and never inside a repository, and it
  * blocks nothing: git and gh are untouched by anything here.
  */
+import { basename } from 'node:path';
+
 import { painter } from '../status-render.js';
 import { leaseRow, livenessRow, renderRepoLines, renderWatchLines } from '../repo-render.js';
 import { tellHolder } from '../lease-refusal.js';
@@ -306,7 +308,7 @@ export async function gate(opts, { stdout, stderr }) {
     return report.ok ? 0 : 1;
   }
 
-  const lines = opts.check ? gateLines(report, { checkOnly: true }) : mergeLines(report);
+  const lines = opts.check ? gateLines(report) : mergeLines(report);
   for (const line of lines) stdout.write(`${line}\n`);
   return report.ok ? 0 : 1;
 }
@@ -356,14 +358,6 @@ function mergeLines(report) {
   }
   if (report.log_path) lines.push(`mc: logged to ${report.log_path}`);
   return lines;
-}
-
-/** `3 files, 41 tests, 0 red` — or that the pull request changed none. */
-function ownTestsPhrase(own) {
-  if (!own) return 'not run';
-  if (!own.files?.length) return 'none changed';
-  const tests = own.totals?.tests ?? '?';
-  return `${own.files.length} file${own.files.length === 1 ? '' : 's'}, ${tests} tests, ${own.red?.length || 0} red`;
 }
 
 /**
@@ -429,38 +423,94 @@ function selectedGates(report, source = 'selection') {
 }
 
 /**
- * What the selection's own command gates did — name, invocation, time, outcome.
+ * Which repository, which pull request, against what.
  *
- * They ran on the candidate only and there is no delta to report, so each is
- * one line. The timing is in it because these are the part of a round whose
- * cost nobody had ever seen: six of them on memoro's #11158 is 20.0 s, and a
- * number in the verdict is how the next decision about that cost gets made
- * from evidence rather than from an impression.
+ * The repository is in it because a verdict gets pasted into a pull request or
+ * a plan and read somewhere other than the shell that produced it, where
+ * `#400` alone names nothing.
  */
-function selectedGateLines(report) {
-  return selectedGates(report).map((gate) => `mc: gate ${gate.name} — `
-    + `${gate.ran ? (gate.ok ? 'passed' : `FAILED (exit ${gate.exit_code})`) : 'COULD NOT RUN'}`
-    + ` in ${((gate.duration_ms || 0) / 1000).toFixed(1)}s — ${gate.command}`
-    + (!gate.ok && gate.output ? `\n      ${gate.output}` : ''));
+function subjectOf(report) {
+  const name = basename(report.repo || '') || report.repo || 'the repository';
+  // `--full` has no pull request: what it measured is a branch.
+  if (report.pr?.number === null || report.pr?.number === undefined) {
+    return `${name} ${report.base?.ref || 'the default branch'}`;
+  }
+  const heads = report.prs ? report.prs.map((item) => `#${item.number}`).join(' + ') : `#${report.pr.number}`;
+  const head = !report.prs && report.pr.head ? ` (${report.pr.head})` : '';
+  return `${name} ${heads}${head} → ${report.pr.base}`;
 }
 
 /**
- * The verdict in prose — and never the word "approved".
+ * What ran, as counts.
  *
- * The gate reads tests. Whether the change is the right change is a question
- * about the diff and its contract, which nothing here has looked at, so the
- * lines below say what was measured and leave the rest to whoever reviews it.
+ * The counts are the reach, and they replaced the sentence that used to carry
+ * it — *"measured over the 17 test files this change reaches, not the whole
+ * suite"*. Ruling 4's second condition is that a verdict carries its own
+ * reach; a number does that, and the prose around it was the part a reader had
+ * to weigh (ruled 2026-08-31).
+ *
+ * The one admission kept is the selector's own — that it could not narrow the
+ * change, so the verdict is broader than the diff — and it is a clause on the
+ * headline above rather than a repetition here (`scopeOf`). The blindness
+ * count went with the prose: it is a fact about the selector, not about this
+ * change, and there is nothing a reader can do with it.
  */
-export function gateLines(report, { checkOnly = false } = {}) {
-  const lines = [];
-  const pr = report.pr.number === null
-    ? `${report.repo} — the whole suite`
-    : (report.pr.head ? `#${report.pr.number} (${report.pr.head} → ${report.pr.base})` : `#${report.pr.number}`);
+function ranPhrase(report) {
+  const gates = (report.extra_gates || []).length;
+  // The test total is in it because a run that reported none is the round's
+  // worst failure mode, and a reader seeing `(0 tests)` knows at a glance.
+  const tests = report.candidate?.totals?.tests;
+  const both = (what) => `${what}${tests === undefined ? '' : ` (${tests} tests)`}`
+    + ` and ${gates} command gate${gates === 1 ? '' : 's'}`;
+  const files = report.selection?.files;
+  if (report.full || !report.selection) return both('ran the whole suite');
+  return both(`ran ${files} test file${files === 1 ? '' : 's'}`);
+}
 
-  // `red`, `ratchet` and `selected-gate` are verdicts the round reached by
-  // measuring, and each has its own block below with the names in it.
-  // Everything else stopped short of a verdict, which is a different thing for
-  // a reader to be told.
+/** The tree the run happened on, and what that commit is. */
+function measuredOn(report) {
+  const commit = report.candidate?.commit?.slice(0, 7);
+  if (!commit) return '';
+  // Not the branch head somebody would see with `git log`: the round measures
+  // the head with the base merged in, which is the state after landing.
+  return report.full
+    ? ` on ${commit} (${report.base?.ref || 'the default branch'} as fetched)`
+    : ` on ${commit} (the head with ${report.pr?.base} merged in)`;
+}
+
+/** Wall clock, once. The per-phase breakdown is `--json`'s. */
+function tookLine(report) {
+  const ms = typeof report.duration_ms === 'number' && report.duration_ms
+    ? report.duration_ms
+    : Object.values(report.timings || {}).reduce((sum, value) => sum + value, 0);
+  if (!ms) return null;
+  return `mc: ${(ms / 1000).toFixed(0)}s — --json for timings, gate output and the file list`;
+}
+
+/**
+ * The verdict, short enough to act on without reading twice.
+ *
+ * Ruled by Martin on 2026-08-31: a session reading this should have nothing to
+ * weigh. Green is the subject, what ran as counts, and the time — three lines.
+ * Red is what failed and the time, and nothing else: caveats, reach sentences,
+ * the pull request's own test counts, per-phase timings, per-gate durations,
+ * what the repository prepared with and the passing gates all moved behind
+ * `--json`, which every round already accepts.
+ *
+ * Two lines went that are worth naming, because both were there on purpose.
+ * *"It says nothing about whether the change is right"* was the guard against
+ * reading a green as an approval — the headline still never says approved, and
+ * the sentence was three lines of caveat for a reader who has to weigh it.
+ * *"This run was asked to check only"* was true of `mc test`, whose name
+ * already says it; a merge round still says plainly that nothing was merged,
+ * from `mergeLines`.
+ */
+export function gateLines(report) {
+  const lines = [];
+
+  // `red` and `selected-gate` are verdicts the round reached by measuring, and
+  // each has its names below. Everything else stopped short of a verdict,
+  // which is a different thing for a reader to be told.
   if (report.stopped_at && !['red', 'selected-gate'].includes(report.stopped_at)) {
     lines.push(`mc: the round stopped at ${report.stopped_at} — ${report.reason}`);
     // A stop after the run is a different thing from one before it, and a
@@ -471,71 +521,32 @@ export function gateLines(report, { checkOnly = false } = {}) {
     return lines;
   }
 
-  // One commit, inside the gate's throwaway worktree: the PR's head with the
-  // base merged into it. It is not the branch head somebody would see with
-  // `git log` on the branch, and saying so is cheaper than a reviewer working
-  // it out.
-  lines.push(`mc: ${pr}`);
-  const heads = report.prs ? report.prs.map((item) => `#${item.number}`).join(' + ') : report.pr.head;
-  lines.push(report.full
-    ? `mc: ${report.candidate.commit?.slice(0, 7)} (${report.base?.ref || 'the default branch'} as fetched)  ${count(report.candidate)}`
-    : `mc: ${report.candidate.commit?.slice(0, 7)} (${heads} + ${report.pr.base} merged in)  ${count(report.candidate)}`);
+  const red = report.candidate?.red || [];
+  // The gates ran before the red tests were judged, so a round that stopped at
+  // a red test can still hold a broken contract: a red test and a broken
+  // contract are two repairs, and a reader who sees only the first comes back
+  // for the second.
+  const failed = selectedGates(report).filter((gate) => !gate.ok);
+  const what = [
+    red.length ? `${red.length} test${red.length === 1 ? '' : 's'} red` : null,
+    failed.length ? `${failed.length} command gate${failed.length === 1 ? '' : 's'} failed` : null,
+  ].filter(Boolean).join(', ');
 
-  const red = report.candidate.red || [];
-  if (red.length) {
-    lines.push(`mc: RED — ${red.length} test${red.length === 1 ? '' : 's'} red:`);
+  if (what) {
+    lines.push(`mc: ${subjectOf(report)} — RED — ${what}:`);
     for (const name of red.slice(0, 20)) lines.push(`      ${name}`);
     if (red.length > 20) lines.push(`      … and ${red.length - 20} more`);
-    // The command gates ran before this verdict was reached, and what they
-    // found is said here rather than lost with the stop: a red test and a
-    // broken contract are two repairs, and a reader who sees only the first
-    // comes back for the second.
-    lines.push(...selectedGateLines(report));
-    lines.push('mc: not merged — nothing lands a red gate, with or without a flag');
-    return lines;
+    for (const gate of failed) {
+      lines.push(`      ${gate.name} — ${gate.ran ? `exit ${gate.exit_code}` : 'could not run'} — ${gate.command}`);
+    }
+  } else {
+    lines.push(`mc: ${subjectOf(report)} — ${verdictHeadline(report)}`);
+    lines.push(`mc: ${ranPhrase(report)}${measuredOn(report)}`);
   }
 
-  // The command gates the repository's own selector chose for this diff.
-  // `css:tokens`, `i18n:contract` and their kind are contracts about the
-  // change, so one that fails is red however green the tests were.
-  const failedGates = selectedGates(report).filter((gate) => !gate.ok);
-  if (failedGates.length) {
-    lines.push(`mc: RED — ${failedGates.length} command gate${failedGates.length === 1 ? '' : 's'} the selection chose failed:`);
-    lines.push(...selectedGateLines(report));
-    lines.push('mc: not merged — a command gate is a contract this change breaks, not a test that was already red');
-    return lines;
-  }
-
-  // Each pull request's own tests, by number — in a batch especially, so the
-  // batch never hides which pull request carried which test (A3).
-  for (const item of report.prs || (report.pr_tests ? [{ number: report.pr.number, pr_tests: report.pr_tests }] : [])) {
-    lines.push(`mc: #${item.number}'s own tests — ${ownTestsPhrase(item.pr_tests)}`);
-  }
-  // Wall clock per step (A5), so the next decision about cost has a number.
-  const timings = Object.entries(report.timings || {});
-  if (timings.length) {
-    lines.push(`mc: took ${timings.map(([step, ms]) => `${step} ${(ms / 1000).toFixed(0)}s`).join(' · ')}`);
-  }
-  // What the repository asked for beyond the suite, so a pass is not read as
-  // "the suite passed" when more than the suite was measured.
-  if (report.declaration?.prepare) lines.push(`mc: prepared with ${report.declaration.prepare}`);
-  lines.push(...selectedGateLines(report));
-  for (const gate of selectedGates(report, 'declaration')) {
-    lines.push(`mc: extra gate ${gate.name} — ${gate.ok ? 'passed' : 'failed'}`);
-  }
-
-  lines.push(`mc: ${verdictHeadline(report)}. It says nothing about whether the change is right;`);
-  lines.push('mc: that is the review, and it is still somebody\'s to do');
-  // Said only when it is the whole answer. In a merge round these same lines
-  // are followed by what became of the verdict, and a run that says it did not
-  // merge and then says it merged is worse than one that says neither.
-  if (checkOnly) lines.push('mc: this run was asked to check only, so nothing was merged');
+  const took = tookLine(report);
+  if (took) lines.push(took);
   return lines;
-}
-
-function count(side) {
-  const red = side.red.length;
-  return `${side.totals.tests} tests, ${red} red name${red === 1 ? '' : 's'}`;
 }
 
 /**
