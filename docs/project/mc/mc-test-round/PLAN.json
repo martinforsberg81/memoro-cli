@@ -190,9 +190,9 @@
     {
       "title": "What is left of the blanket, and why it is left",
       "body": [
-        "A change to a document directly under `docs/` still reaches wide: this step's own pull request, which edits `docs/mc-command-matrix.md`, selects 49 test files. The cause is the surviving half of the edge — `src/mc/canon.js` spells `docs` and `src/mc/archive-plan.js` spells `docs/technical/`, both as directories they open files in, so the open edge travels to everything importing them.",
+        "A change to a document directly under `docs/` still reaches wide: this step's own pull request, which edits `docs/mc-command-matrix.md`, selects 56 test files. The cause is the surviving half of the edge — `src/mc/canon.js` spells `docs` and `src/mc/archive-plan.js` spells `docs/technical/`, both as directories they open files in, so the open edge travels to everything importing them.",
         "That is the edge the canon case depends on and `affected-tests.test.js` asserts, so narrowing it is a different decision from this step's. What would actually shrink it is that most of those literals are in **comments** — `archive-plan.js:12` names the directory in a JSDoc line, not in code — and the index cannot tell prose from a call. Telling them apart needs a parse, not a regexp.",
-        "The 49 ran in 32.0 s for 680 tests and came back red on `readPackageCanon > reads all three packaged canon files from the real package`, which is red identically on a clean `origin/main` checkout (confirmed 2026-08-31 in a detached worktree: 7 tests, 6 pass, 1 fail). Third consecutive step of this project refused by that same test."
+        "The 56 ran in 30.4 s for 753 tests and came back red on `readPackageCanon > reads all three packaged canon files from the real package`, which is red identically on a clean `origin/main` checkout (confirmed 2026-08-31 in a detached worktree: 7 tests, 6 pass, 1 fail). Third consecutive step of this project refused by that same test."
       ]
     }
   ],
