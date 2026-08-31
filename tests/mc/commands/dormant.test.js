@@ -60,7 +60,7 @@ describe('mc --help shows one world', () => {
   it('and still names the verbs that took the work over', () => {
     const text = help();
     assert.match(text, /mc brief/u);
-    assert.match(text, /mc plan <name>/u);
+    assert.match(text, /mc plan <programme>/u);
     assert.match(text, /mc worker <name>/u);
   });
 });

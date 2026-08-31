@@ -62,6 +62,11 @@ function workRoot() {
   writeFileSync(join(root, 'avatar', 'decisions', 'assistant-avatar-1.md'), DECISION(true));
   writeFileSync(join(root, 'avatar', 'decisions', 'assistant-avatar-2.md'), DECISION(false));
   writeFileSync(join(root, 'avatar', 'decisions', 'language-content-1.md'), OWN_WORDS);
+  // A planning session is not a workarea — it lives under `plan/<programme>/`
+  // precisely so `mc run` cannot see it — so the questions it raises sit one
+  // level deeper than everything else here, and are read all the same.
+  mkdirSync(join(root, 'plan', 'msr-core', 'decisions'), { recursive: true });
+  writeFileSync(join(root, 'plan', 'msr-core', 'decisions', 'msr-core-1.md'), DECISION(false));
   mkdirSync(join(root, 'pm', 'decisions'), { recursive: true });
   writeFileSync(join(root, 'pm', 'decisions', 'merge-log.md'), '## 2026-08-15 — PR #344\n- **Beslut:** Martin\n');
   writeFileSync(join(root, 'pm', 'decisions', 'log.md'), '# Beslutslogg — append-only\n\n## Alternativ\n\n**Beslut:** whatever.\n');
@@ -161,6 +166,7 @@ describe('decision files', () => {
       ['avatar/decisions/assistant-avatar-1.md', true],
       ['avatar/decisions/assistant-avatar-2.md', false],
       ['avatar/decisions/language-content-1.md', false],
+      ['plan/msr-core/decisions/msr-core-1.md', false],
     ]);
   });
 });
@@ -276,7 +282,10 @@ describe('collectBrief', () => {
     assert.match(text, /First brief: the window is the last 24 h \(since 2026-08-24T20:00:00Z\)/u);
     assert.match(text, /\| avatar\/decisions\/assistant-avatar-2\.md \| 1\. Ska QA-tabellen fortsätta grinda\? \| \*\*B\.\*\* Keeps the veto/u);
     assert.match(text, /\| avatar\/decisions\/language-content-1\.md \| Is the Swedish map accepted[^|]*\| — \|/u);
-    assert.match(text, /2 waiting, 1 answered/u);
+    // A planning session's question waits on Martin exactly as a workarea's
+    // does — the directory it was written in is not a category of decision.
+    assert.match(text, /\| plan\/msr-core\/decisions\/msr-core-1\.md \| 1\. Ska QA-tabellen fortsätta grinda\?/u);
+    assert.match(text, /3 waiting, 1 answered/u);
     // The helper's own output, listed where Martin decides: one proposal, and
     // the README beside it is not one.
     assert.equal(result.data.proposals.length, 1);

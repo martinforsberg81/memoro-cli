@@ -29,6 +29,17 @@ import { areaRoleName, reservedRoleName } from './roles.js';
 import { STOP_MARK } from './work-stop-marker.js';
 import { branchLanded } from './branch-landed.js';
 
+/**
+ * mc's own directory for planning sessions, `~/mc/plan/<programme>/`.
+ *
+ * It is not a work area and it holds none: what is under it are programmes,
+ * each with its own checkouts one level down. Listed as an area it read as a
+ * directory called `plan` whose "repositories" were programme names, which is
+ * the same nonsense a role home's filing is kept out of. `mc plan` opens what
+ * is under here; nothing else has business listing it (`commands/plan.js`).
+ */
+export const PLAN_HOME = 'plan';
+
 export function listWorkAreas(env = process.env, options = {}) {
   const root = workRoot(env);
   let names = [];
@@ -36,6 +47,7 @@ export function listWorkAreas(env = process.env, options = {}) {
     names = readdirSync(root, { withFileTypes: true })
       .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'))
       .map((entry) => entry.name)
+      .filter((name) => name !== PLAN_HOME)
       .sort();
   } catch { return []; }
   return names.map((name) => inspectWorkArea(name, env, options));

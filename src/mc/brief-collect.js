@@ -124,11 +124,28 @@ export function parseDecision(text) {
 /**
  * Every `<work root>/<area>/decisions/*.md` that is a decision, parsed,
  * minus the bookkeeping names.
+ *
+ * `plan/` is mc's own directory for planning sessions rather than a workarea,
+ * so the questions a programme's planning session raises sit one level deeper
+ * — `~/mc/plan/<programme>/decisions/`. They are read as everything else here
+ * is: a decision is a decision wherever it was written, and the reader who
+ * answers it should not have to know which kind of session asked.
  */
+export const PLAN_HOME = 'plan';
+
 export function scanDecisions(root) {
   const out = [];
-  let areas = [];
-  try { areas = readdirSync(root, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name).sort(); } catch { return out; }
+  const areas = [];
+  const dirs = (at) => {
+    try { return readdirSync(at, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name).sort(); } catch { return []; }
+  };
+  for (const name of dirs(root)) {
+    if (name === PLAN_HOME) {
+      for (const programme of dirs(join(root, name))) areas.push(join(name, programme));
+      continue;
+    }
+    areas.push(name);
+  }
   for (const area of areas) {
     const dir = join(root, area, 'decisions');
     let files = [];
@@ -357,6 +374,25 @@ export function planFields(text) {
 export function parsePlanFrontmatter(text) {
   const fields = planFields(text);
   return { status: fields.status ?? null, next: fields.next ?? null };
+}
+
+/**
+ * The programmes on a ref: the directories directly under `docs/project/`.
+ *
+ * Asked of the tree rather than derived from the plans, because a programme
+ * outlives its projects. `mc run` archives a project directory the round its
+ * plan says done, so a programme whose work is finished for now holds only its
+ * own document and its rulings — no PLAN.json anywhere under it — and
+ * `listPlans` cannot see it at all. It is still a programme, and still the
+ * place the next piece of that work belongs (`mc plan`).
+ */
+export function listProgrammes(repo, { ref = 'origin/main', git = runGit } = {}) {
+  const tree = git(repo.path, ['ls-tree', '-d', '--name-only', ref, 'docs/project/']);
+  if (tree == null) return [];
+  return tree.split('\n')
+    .map((path) => path.split('/')[2])
+    .filter(Boolean)
+    .sort();
 }
 
 /**

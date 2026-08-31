@@ -17,7 +17,7 @@ THE PAGE
                                     how old its PR cache is
 
   mc brief                         Decide what to work on next
-  mc plan <name>                   Plan one piece of work, ending in a PLAN.md
+  mc plan [<programme>]            Plan a programme; no name asks which
   mc run                           The runner: one step at a time, headless
   mc run start | stop [--force]    Turn it on, or off — after the round, or now
   mc run --update                  After the round: new code, new process
@@ -187,13 +187,18 @@ MAINTENANCE
                                     …a different window, more fingerprints,
                                     another bar for marking one \`!\`, or a
                                     model other than the role's
-  mc plan <name>                   A planning session that ends in a PLAN.md:
-                                    a fresh foreground session in the workarea
-                                    (made from origin/main if missing) with
-                                    the plan role, whose deliverable is a PR
-                                    titled "Plan: <name>"
-  mc plan <name> --repo <r>        …in which repository (default memoro);
-                                    --codex|--claude, --model <m> as usual
+  mc plan <programme>              A planning session for one programme: a
+                                    fresh foreground session in
+                                    ~/mc/plan/<programme>/, both repositories
+                                    checked out on plan/<programme>, with the
+                                    plan role. Its deliverable is a PR titled
+                                    "Plan: <programme>" carrying a PLAN.json
+                                    per project the runner can then pick up.
+                                    Never a workarea — mc run cannot see it
+  mc plan                          …asks which programme first: the ones on
+                                    main, the ones being planned, or a new
+                                    one you name. --codex|--claude, --model
+                                    <m> as usual
   mc run                           The runner: one fresh headless session per
                                     step of the next project, merged direct;
                                     queue = ~/mc/queue.md then every ready
