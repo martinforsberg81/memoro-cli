@@ -30,12 +30,12 @@
       "check": "`declarationFor` returns a repository's own `.mc/test.json` fields over the shipped entry and under `~/mc/repo-gates.json`; `tests/mc/repo-gate-table.test.js` covers all three levels, an unparseable file is a stop with a reason, and a repository with no file produces a declaration byte-identical to today's."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "No round builds or runs a baseline side.",
       "check": "`git grep -l 'repo-baseline-cache\\|compareRed' -- src/` is empty, a round creates one worktree rather than two, and `mc test memoro <pr>` on a pull request whose affected set contains a test that is red on main comes back red naming that test."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "`mc test <repo> --full` runs the whole suite and `mc test <repo> <pr>` never does.",
       "check": "`--full` runs the repository's declared suite command on one tree and reports its red names; the PR form's report names only files the selection chose. Both read off real runs."
     },
@@ -123,6 +123,30 @@
         "Two facts found while wiring it: `.mc/` already exists in this repository and holds `red-ratchet.json`, so the address sits beside one that is already there; and `declarationFor` is handed the repository path, not the candidate worktree, so a pull request cannot edit the instruction that judges it. Both are worth keeping that way.",
         "`affected` and `serial_paths` are readable now and no shipped entry fills either. `affected` has no value to ship — ruling 4 said `npm run ci`, which is 554.7 s and was ruled out 2026-08-31. `serial_paths` distinguishes `null` (this repository has not said) from `[]` (it has said, and nothing is serial), which is what lets a round report the honest first one."
       ]
+    },
+    {
+      "title": "The baseline was the only reader of three other mechanisms",
+      "body": [
+        "Removing one side of the round disarmed things two modules away, and none of them announced it. `standing_red` was read off the baseline, so it is gone from the report and from new round-log lines — and `enforcement.js`'s red-ratchet rule is fed by exactly that field. It now answers only from log lines written before 2026-08-31 and goes quiet as they age out. It is left standing, because whether main keeps a floor anywhere is this project's out-of-scope, but it is said in a comment there and in `red-ratchet.js`'s header rather than left to be found.",
+        "`red-ratchet.js` survives with nothing in a round reading it. Its 100-line header argued for a mechanism that no longer runs, so the header is rewritten to open with that fact; the two arguments that outlived it — names rather than a count, and why nothing writes the file automatically — are kept below it.",
+        "The third was not a check but a fact: `mc merge` decided drift with `nowAt !== verdict.baseline.commit`. The round stops measuring the base and still has to say what it stood on, so the report carries `base: { ref, commit }` — the ground, explicitly not a measurement of it."
+      ]
+    },
+    {
+      "title": "The strictness bit on this project's own pull request, immediately",
+      "body": [
+        "Measured 2026-08-31 on #503, the pull request that removes the baseline: the selection reached 64 test files, they ran once in 54.1 s, and the round came back **red** on `readPackageCanon › reads all three packaged canon files from the real package`. That test is red identically on a clean `origin/main` checkout — confirmed by running the file alone in a detached worktree at `origin/main` the same day.",
+        "So the first round under the new rule was refused by a test the change never touched, and the differential form would have passed it. That is the ruling working as ruled, and it is also the argument for step 5: this repository's selector drew `tests/mc/canon.test.js` into a diff that edits the gate, and a narrower selector would not have.",
+        "The cost of what was removed, in the same numbers: one side, one `prepare`, one worktree. The plan's estimate of 2× is what the shape says; on this pull request the second side would have been another 54 s of tests plus a second checkout."
+      ]
+    },
+    {
+      "title": "`--full` gives an answer the round used to produce as a by-product",
+      "body": [
+        "Measured 2026-08-31, `mc test memoro-cli --full` at `8a34a0d`: the whole suite on one tree at `origin/main` as fetched, 2468 tests, 23 failures, **28 red names** (a failing test reddens its parents, which is why the two numbers differ and why the report names rather than counts).",
+        "That is the state of main, asked for. Every round used to compute it and report it as `standing_red` on the way past — which is how it came to be believed and never checked. Asking costs 107.4 s and nothing else in the round pays for it.",
+        "With no pull request there is no base to inherit, so the tree comes from `git symbolic-ref --short refs/remotes/origin/HEAD`. Assuming `main` would have been a whole-suite answer about a branch nobody asked for on any repository that calls it something else; a remote that will not say is a stop."
+      ]
     }
   ],
   "documents": [
@@ -172,7 +196,7 @@
     },
     {
       "title": "Stop measuring the baseline at all",
-      "status": "ready",
+      "status": "done",
       "done_when": "A round builds one worktree, not two; `git grep -l 'repo-baseline-cache\\|compareRed' -- src/` is empty; and a round on a pull request whose affected set contains a test that is red on main comes back red naming that test.",
       "instruction": [
         "Ruled by Martin on 2026-08-31: a round evaluates the diff, and whether main was already red is not the round's question. This is the largest deletion in the project and it is also the 2× — the baseline side is half the wall clock, and on memoro it is also a second `npm ci` and a second worktree.",
@@ -183,7 +207,7 @@
         "Say the consequence plainly in the pull request rather than discovering it later: a change whose affected tests include a test that is already red on main is now red, and cannot land until that test is green. That is stricter than today and it is the point. It is also why the memoro side's work matters — a narrowed selection reaches far fewer unrelated tests, so this bites much less often than it would have before.",
         "Add `mc test <repo> --full`: the repository's declared suite command on the candidate tree, one side, reporting its red names. That is the only reading that is about the code rather than about a change, and it is asked for, never scheduled. `runFullSuite` and `measure` already exist for it; they lose their second side like everything else."
       ],
-      "pr": null,
+      "pr": 503,
       "blocked_by": null
     },
     {
