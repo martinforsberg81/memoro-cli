@@ -33,12 +33,12 @@ describe('every round leaves a line', () => {
       recordRound({
         repo: '/x/memoro', pr: { number: 401 }, holder: 'pm', ok: true, merged: true,
         stopped_at: null, reason: null, duration_ms: 300_000, started_at: '2026-08-23T20:00:00.000Z',
-        gate: { timings: { 'suite candidate': 146_000 }, standing_red: 0, broke: [] },
+        gate: { timings: { suite: 146_000 }, candidate: { red: [] } },
       }, { root, now: NOW });
       recordRound({
         repo: '/x/memoro', pr: { number: 402 }, holder: 'pm', ok: false, merged: false,
-        stopped_at: 'red', reason: '2 tests red on the candidate and green on the baseline', duration_ms: 280_000,
-        gate: { timings: {}, standing_red: 55, broke: ['a', 'b'], fixed: [], ratchet: { baseline_risen: ['flaky-one', 'flaky-two'] } },
+        stopped_at: 'red', reason: '2 tests red: a, b', duration_ms: 280_000,
+        gate: { timings: {}, candidate: { red: ['a', 'b'] } },
       }, { root, now: NOW });
       recordRound({
         repo: '/x/memoro', pr: { number: 403 }, holder: 'msr-track-1', ok: false, merged: false,
@@ -52,15 +52,12 @@ describe('every round leaves a line', () => {
         [[402], 'red', []],
         [[403], 'suite-lease', []],
       ]);
-      assert.equal(rounds[1].broke, 2);
-      assert.equal(rounds[1].standing_red, 55);
-      // The delta by NAME: the two names that flapped 55 → 57 → 55 could
-      // not be pointed at afterwards, because every log carried only
+      assert.equal(rounds[1].red, 2);
+      // By NAME, not only by count: the two names that flapped 55 → 57 → 55
+      // could not be pointed at afterwards, because every log carried only
       // numbers. The next one names itself.
-      assert.deepEqual(rounds[1].broke_names, ['a', 'b']);
+      assert.deepEqual(rounds[1].red_names, ['a', 'b']);
       assert.equal(rounds[2].duration_ms, 900, 'the cost of a refusal is a fact too');
-
-      assert.deepEqual(rounds[1].baseline_unstable, ['flaky-one', 'flaky-two'], 'an unstable baseline is in the line by name');
       const counted = countRounds(rounds);
       assert.equal(counted.rounds, 3);
       assert.equal(counted.merged_prs, 1);

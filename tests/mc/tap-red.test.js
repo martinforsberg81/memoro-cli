@@ -1,17 +1,17 @@
 /**
  * Reading a suite run's failures — the two mistakes that make a gate lie.
  *
- * Counting instead of naming: a round that fixed one test and broke another
- * has the same total on both sides, and a gate comparing totals waves it
- * through. Reading only the top level: a file's suites and tests each get a
- * TAP line, so swapping which test inside a suite fails leaves the top level
- * byte-identical. Both are asserted here against TAP shaped the way node's own
- * reporter shapes it.
+ * Counting instead of naming: "3 red" is not something anybody can act on, and
+ * a verdict that carried a number while the names were thrown away is what
+ * this exists to stop. Reading only the top level: a file's suites and tests
+ * each get a TAP line, so a red test inside a green-looking file is invisible
+ * unless every level is read. Both are asserted here against TAP shaped the
+ * way node's own reporter shapes it.
  */
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { compareRed, redNames, tapTotals } from '../../src/mc/tap-red.js';
+import { redNames, tapTotals } from '../../src/mc/tap-red.js';
 
 /** TAP the shape node emits it: `# Subtest:` announcements, four-space nesting. */
 function tap({ suites = [], totals = { tests: 0, pass: 0, fail: 0 } } = {}) {
@@ -123,34 +123,5 @@ describe('the red set of a suite run', () => {
     const batched = ['# tests 100', '# fail 4', '# tests 20', '# fail 0'].join('\n');
     assert.equal(tapTotals(batched).fail, 4);
     assert.equal(tapTotals(batched).tests, 120);
-  });
-});
-
-describe('comparing two red sets', () => {
-  it('the same count with different names is a regression', () => {
-    // The mistake this whole module exists for: one fixed, one broken, totals
-    // unchanged. A gate comparing numbers calls this quiet.
-    const before = ['suite › one', 'suite'];
-    const after = ['suite › two', 'suite'];
-    const { broke, fixed } = compareRed(before, after);
-    assert.deepEqual(broke, ['suite › two']);
-    assert.deepEqual(fixed, ['suite › one']);
-  });
-
-  it('a round that repaired something is not held against it', () => {
-    const { broke, fixed } = compareRed(['a', 'b'], ['a']);
-    assert.deepEqual(broke, []);
-    assert.deepEqual(fixed, ['b']);
-  });
-
-  it('an unchanged red set is unchanged', () => {
-    const red = ['old world › one', 'old world › two', 'old world'];
-    assert.deepEqual(compareRed(red, [...red]), { broke: [], fixed: [] });
-  });
-
-  it('order does not make two identical sets differ', () => {
-    const { broke, fixed } = compareRed(['a', 'b'], ['b', 'a']);
-    assert.deepEqual(broke, []);
-    assert.deepEqual(fixed, []);
   });
 });

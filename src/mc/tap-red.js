@@ -1,15 +1,13 @@
 /**
  * What failed in a suite run, named — every level of it.
  *
- * The gate compares two suite runs and asks whether the candidate went red
- * anywhere the baseline was green. That comparison is only as good as the
- * names it is made of, and two ways of getting the names wrong have already
- * been seen in practice:
+ * The gate runs one suite and reports what went red in it. The verdict is only
+ * as good as the names it is made of, and two ways of getting the names wrong
+ * have already been seen in practice:
  *
- * Counting instead of naming. A round where one failure was fixed and another
- * introduced has the same total on both sides, and a gate that compares totals
- * calls it unchanged. So the red set is a set of names, and the verdict is
- * about set membership.
+ * Counting instead of naming. "3 red" is not something anybody can act on, and
+ * a count is what a round reported for a week while the names it had were
+ * thrown away. So the red set is a set of names, and the verdict names them.
  *
  * Reading only the top level. A file's suites and their tests each get a TAP
  * line, and a failing test makes its suite and its file fail too — so a run
@@ -123,22 +121,5 @@ export function tapTotals(tap) {
     runs,
     /** A run that never printed its totals did not finish, whatever its exit code said. */
     finished: runs > 0,
-  };
-}
-
-/**
- * What the candidate broke — names red on one side and not the other.
- *
- * The gate's whole verdict is this function's first return value being empty.
- * `fixed` is the other direction and decides nothing: a round that repaired
- * something is welcome to, and a gate that insisted the sets match exactly
- * would refuse every PR that fixed a test.
- */
-export function compareRed(baseline, candidate) {
-  const before = new Set(baseline);
-  const after = new Set(candidate);
-  return {
-    broke: candidate.filter((name) => !before.has(name)),
-    fixed: baseline.filter((name) => !after.has(name)),
   };
 }

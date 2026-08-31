@@ -1,19 +1,19 @@
 /**
- * The standing red set: what it binds, and the two ways of getting it wrong.
+ * The standing red set: what it binds, and the way a ratchet invites getting
+ * it wrong.
  *
- * The first is the one this repository has already lived through — a gate that
- * reports "green" over fifty-five red names, because the rule it enforces is
- * differential and the word it printed was not. That half is a wording test and
- * lives beside the verdict.
+ * No round reads this any more — the 2026-08-31 ruling took main's own red out
+ * of the verdict, and `red-ratchet.js` says so in its header. What is asserted
+ * here is the file's reading and writing, which survives the ruling, and the
+ * property that made it a name set rather than a count.
  *
- * The second is the one a ratchet invites. The measurement that motivated this
- * file: two rounds hours apart on this repository gave 55 and 56 red names, and
- * the extra one was green again on the next run — a wall-clock assertion on a
- * machine with three other builders on it. A ratchet on the *number* fails the
- * next pull request when that happens, having been given no reason to. So the
- * tests below assert the property that makes a name-set ratchet survivable and
- * a count ratchet not: the same set breathing does not move the floor, and a
- * name that is genuinely new does.
+ * The measurement that motivated it: two rounds hours apart on this repository
+ * gave 55 and 56 red names, and the extra one was green again on the next run
+ * — a wall-clock assertion on a machine with three other builders on it. A
+ * ratchet on the *number* fails the next pull request when that happens,
+ * having been given no reason to. So the tests below assert the property that
+ * makes a name-set ratchet survivable and a count ratchet not: the same set
+ * breathing does not move the floor, and a name that is genuinely new does.
  */
 import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
@@ -22,7 +22,6 @@ import { dirname, join } from 'node:path';
 import { describe, it } from 'node:test';
 
 import { compareRatchet, parseRatchet, ratchetAtRef, readRatchet, ratchetPath, renderRatchet } from '../../src/mc/red-ratchet.js';
-import { compareRed, redNames } from '../../src/mc/tap-red.js';
 
 function checkout(contents) {
   const dir = mkdtempSync(join(tmpdir(), 'mc-ratchet-'));
@@ -33,56 +32,6 @@ function checkout(contents) {
   }
   return { dir, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }
-
-describe('the question the ratchet was commissioned to answer', () => {
-  /**
-   * The brief's premise, checked against the real comparison rather than
-   * argued: a brand new test that is born red is red on the candidate and
-   * absent from the baseline — does it fall out of `broke`?
-   *
-   * It does not, and it cannot, because `broke` is a set difference taken on
-   * the candidate side. Absent from the baseline is the strongest possible way
-   * of not being in it. So that is not the hole the ratchet fills.
-   */
-  it('a test that is born red is caught by the differential check, not missed by it', () => {
-    const tap = (rows) => [
-      'TAP version 13',
-      ...rows.flatMap(([name, ok]) => [`# Subtest: ${name}`, `${ok ? 'ok' : 'not ok'} 1 - ${name}`]),
-      '# tests 4', '# pass 2', '# fail 2',
-    ].join('\n');
-
-    const baseline = redNames(tap([['standing red', false], ['a green one', true]]));
-    const candidate = redNames(tap([['standing red', false], ['a green one', true], ['born red', false]]));
-    const { broke } = compareRed(baseline, candidate);
-
-    assert.deepEqual(broke, ['born red'], 'a name absent from the baseline cannot be filtered out of broke');
-  });
-
-  /**
-   * And the general form, because one example is not a property. Within a
-   * single round the count cannot rise while `broke` stays empty: if the
-   * candidate has more names than the baseline then at least one is not in it.
-   *
-   * This is what makes the ratchet's real job the one it has. The hole is not
-   * inside a round — it is between rounds, where every round measures main
-   * afresh and inherits whatever it finds as the new floor.
-   */
-  it('inside one round a rise is always visible to the differential check', () => {
-    const universe = ['a', 'b', 'c', 'd', 'e'];
-    const subsets = [];
-    for (let mask = 0; mask < (1 << universe.length); mask += 1) {
-      subsets.push(universe.filter((_, index) => mask & (1 << index)));
-    }
-    let missed = 0;
-    for (const baseline of subsets) {
-      for (const candidate of subsets) {
-        const { broke } = compareRed(baseline, candidate);
-        if (!broke.length && candidate.length > baseline.length) missed += 1;
-      }
-    }
-    assert.equal(missed, 0, 'no pair where the count rose and broke was empty');
-  });
-});
 
 describe('the recorded floor', () => {
   it('a name nobody wrote down is a rise', () => {
