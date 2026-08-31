@@ -55,7 +55,8 @@ started in it. mc stores nothing else, because nothing else is mc's to know.
 | `mc repo release <repo> [--force]` | Give it back; `--force` takes it from another holder and is logged. |
 | `mc repo who <repo>` | Who holds it, for what, since when — and whether the holder is still working. `--json`. |
 | `mc repo rounds [--json]` | Every gate round ever run from this machine, counted by where it ended — merged, red, refused lease, drift, cut short. Written one JSON line per round (`~/.memoro/mc/gate-rounds.jsonl`), for every `mc merge` and `--check` (and `mode: docs` for the documentation form), so the question "has the gate ever caught anything?" is a count, not a reading of the merge log's survivors (A7). |
-| `mc test <repo> <pr> [<pr>...]` | Measure a pull request against the branch it is aimed at, and stop there. Lease, fresh baseline, candidate with main merged in, and what the change reaches run on **both** sides, compared by red name at every level. What runs is what the repository declares: with a `select` command it is the test files the change reaches, without one the whole suite. Here that command is `scripts/affected-tests.js`, which follows three edges — imports, a path a test names as text, and **data**: a file under `docs/`, `canon/`, `changelog.d/`, `.claude/` or `.mc/` reaches the modules that name it or a directory above it. Anything else it cannot trace — a manifest, a lockfile, a workflow — is still the whole suite. Both sides always run the candidate's list — a selection is a function of the diff, and the base's diff against itself is empty. Merges nothing, and has no flag that would. `--json`. |
+| `mc test <repo> <pr> [<pr>...]` | Measure a pull request and stop there. Lease, **one** throwaway worktree — the candidate, at the pull request's head with the current base merged in — and what the change reaches run there once. A test the change reaches is either green or the round is red; whether `main` was already red is not the round's question (ruled 2026-08-31). What runs is what the repository declares: with a `select` command it is the test files the change reaches **and the command gates that same selection names**, without one the whole suite. Here that command is `scripts/affected-tests.js`, which follows three edges — imports, a path a test names as text, and **data**: a file under `docs/`, `canon/`, `changelog.d/`, `.claude/` or `.mc/` reaches the modules that name it, or that name the directory it sits directly in — and, separately, whoever spells the tree it is somewhere under, which is where it stops rather than travelling the import graph. Anything else it cannot trace — a manifest, a lockfile, a workflow — is still the whole suite. Merges nothing, and has no flag that would. `--json`. |
+| `mc test <repo> --full` | The repository's own whole suite on the branch `origin` calls its default, as fetched — one tree, no pull request, no selection. The only reading here that is about the code rather than about a change, and it is asked for rather than scheduled. `--json`. |
 | `mc merge <repo> <pr> [<pr>...]` | The one door a pull request lands through. Run the test gate and, only if nothing new went red, squash-merge, deploy-pull and log it. It touches no branch but the one named — a round has one subject, and drift on any other branch is that branch's own round's business. Several numbers: one candidate with all of them merged in, the suite once each side, each PR's own tests by itself, then merged in the order given; a batch that stops falls back to one round per PR and says so. Prints wall clock per step. `--check` gates and stops, and says that the measurement is now `mc test`. `--json`. |
 | `mc merge <repo> <pr> --docs` | The same door for a pull request that touches nothing outside `docs/`: no suite, no lease, no worktree. Reads the PR's file list from GitHub — never a local diff — refuses by name the first path outside `docs/`, refuses a draft or a closed PR, waits up to ~60 s for GitHub's mergeability, squash-merges as `<title> (#<n>)` and reads the commit back. A plan PR lands this way, by the session that opened it. One PR at a time; `--check` is refused. `--json`. See [`docs/technical/mc-merge.md`](technical/mc-merge.md). |
 | `mc repo merge …` | **Gone** since 2026-08-26. Prints "mc repo merge is now mc merge" and exits 2. Not aliased. |
@@ -94,7 +95,7 @@ but nothing retries it afterwards, and the sender is told so. See
 The lease is advisory. `mc repo claim` refuses a repository someone else is
 holding, and that refusal stops exactly one thing: this command. No git or gh
 operation is blocked anywhere, by design — the gate round is
-`claim` → verify against a fresh baseline → merge → deploy pull → `release`,
+`claim` → measure the change on one tree → merge → deploy pull → `release`,
 and following it is the roles' instruction, not a lock. There is no expiry: a
 forgotten lease shows its age in `mc repo status`, and a human or the PM ends
 it with `--force`, which the lease log keeps. The lease is one file under
@@ -125,23 +126,30 @@ Nothing here blocks anything. `--force` behaves exactly as it did: warn, log,
 never bar the way. Contacting the holder before forcing is a role instruction,
 not a code gate.
 
-`mc merge <repo> <pr> --check` runs the verify half of that round as a
-machine, so following it does not depend on somebody remembering to. It takes
-the lease, builds two throwaway worktrees under `<mc home>/gate/` — the
-baseline at the pull request's base branch, the candidate at its head with the
-current base merged in — runs the repository's own `npm test` on both in the
-same round, and compares the two red sets **by name at every level**, subtests
-included. A number can match while the contents have swapped, and a failing
-test makes its suite and its file fail with it, so only the full set of names
-at every depth answers the question. Red names on the candidate that were
-green on the baseline stop the round; names that were already red do not, and
-neither do `TODO` or `SKIP`. A run that never reached its own summary stops the
-round too, rather than counting as an empty red set — two suites that both died
-the same way would otherwise read as a confident green.
+`mc test <repo> <pr>` runs the verify half of that round as a machine, so
+following it does not depend on somebody remembering to. It takes the lease,
+builds **one** throwaway worktree under `<mc home>/gate/` — the candidate, at
+the pull request's head with the current base merged in — and runs what the
+repository's selection reached there, once. What it finds red is the verdict,
+named **at every level**, subtests included: a failing test makes its suite and
+its file fail with it, and a reader needs the name of the test rather than the
+name of the file. `TODO` and `SKIP` are not red. A run that never reached its
+own summary stops the round rather than counting as an empty red set — with one
+side, a suite that died on a missing dependency would otherwise read as a
+confident green.
+
+Until 2026-08-31 there was a second worktree at the base branch, the same list
+ran in it, and the verdict was the difference. That answered "was `main`
+already red?", which Martin ruled is not interesting at a merge — and it cost
+half of every round's wall clock, a second `npm ci`, and four modules. So the
+round is stricter now, deliberately: a change whose reached tests include one
+that is already red on `main` is red, and cannot land until that test is green.
+The repair for that is a selector that reaches fewer unrelated tests, in the
+repository's own gate, not a second measurement here.
 
 The lease is released in a `finally`, so an interrupted round never leaves the
-repository held. Both worktrees are detached, so no branch is moved and the
-merge into the candidate is never a commit on anybody's work.
+repository held. The worktree is detached, so no branch is moved and the merge
+into the candidate is never a commit on anybody's work.
 
 Without `--check` the same round also lands the change: squash-merge, then a
 `git pull` in the source-linked installation, because on this machine that is
@@ -158,8 +166,8 @@ verdict is a statement about the tree it measured:
 - **the base has not moved.** The lease serialises gate rounds against each
   other and does nothing about a person merging by hand, which happened during
   this feature's own development. If `origin/<base>` is no longer the commit the
-  baseline was measured at, the round stops and says so rather than merging on
-  a verdict about a tree that has changed.
+  round merged into the candidate, the round stops and says so rather than
+  merging on a verdict about a tree that has changed.
 - **the lease is still ours.** A `--force` release mid-round hands the
   repository to somebody else, and a merge landed after that is one nobody was
   holding the round for.
@@ -212,96 +220,62 @@ unescalated design decision. The merge log records the class as `D (delegerad)`
 — a verb has no authority of its own, it carries out its holder's — with the
 machine's part in the note.
 
-### The verdict says `GREEN` only when the base is green
+### The verdict is one word: `GREEN` or `RED`
 
-The rule above is differential, and for a while the word on top of it was not.
-On a repository carrying 55 standing red names on `main`, a round where nothing
-new went red printed `GREEN` — and "green" is the word every merge decision is
-reported onward with. It was reported as the larger claim it sounds like for a
-week.
+For a while the word on top of the differential rule was not the rule. On a
+repository carrying 55 standing red names on `main`, a round where nothing new
+went red printed `GREEN` — and "green" is the word every merge decision is
+reported onward with. The correction was a second word, `NO NEW RED — 55
+standing red names on main`, with the count in the line.
 
-So the verdict carries the number instead. A base with no red names still reads
-`GREEN — the test gate passes`, unchanged. A base with red names never uses the
-word at all: `NO NEW RED — 55 standing red names on main`, followed by what
-those names cost, which is the real reason this mattered. **A test that is
-already failing cannot fail any harder**, so a fault introduced inside one of
-them has nowhere to show up. 55 standing red names are 55 places the gate is
-blind, not just 55 items of debt.
+Both are gone with the differential rule itself (2026-08-31). A round measures
+one tree, so a pass is a pass: `GREEN — the test gate passes`, and the line
+under it says how far that reached as a count — `ran 17 test files (1876 tests)
+and 2 command gates`. Three lines in all, and a red round is the failing names
+and nothing else; the headline takes a clause only when the selector could not
+narrow the change, or when `--full` asked for the whole suite. `--json` carries
+a `verdict` of `green`, `red` or `stopped` and everything the lines dropped, and
+the round log line carries `red` and `red_names` off the one measured tree.
 
-`--json` carries `standing_red` as its own field and a `verdict` of `green`,
-`no-new-red`, `red`, `ratchet-lowered`, or `stopped` — `green` and `no-new-red`
-are separate words so a reader who only ever wanted the strict one can ask for
-it. The line the merge round narrates itself with says the same thing, and the
-merge log row reads `55 standing red before`.
+### `.mc/red-ratchet.json` — the standing red set, read by no round
 
-### `.mc/red-ratchet.json` — the standing red set, reported not enforced
+The floor is a written-down statement about `main`: which red names somebody
+has agreed to, in the repository, in the diff, where a rise has to be reviewed
+rather than inherited. It existed because the differential rule could not see
+its own floor moving — every round measured `main` afresh and remembered
+nothing, so a red name that reached `main` by a path no gate stood in simply
+became part of the next baseline. That is how 55 got there.
 
-The differential rule cannot see its own floor moving. Inside one round a rise
-is always caught — more red names on the candidate than the baseline means at
-least one is not in the baseline, so it is in `broke` and the round is red; a
-brand new test that is born red is stopped for exactly that reason. But every
-round measures `main` afresh and remembers nothing, so a red name that reaches
-`main` by a path no gate stood in simply becomes part of the next baseline, and
-is reported as "no new red" over it from then on. That is how 55 got there.
-
-So the floor is written down in the repository, in the diff — as a statement
-about `main`. A repository with no `.mc/red-ratchet.json` behaves exactly as
-before and is told it has no floor recorded.
-
-**It reports; it does not refuse.** A red name on `main` that `main`'s own
-floor does not record is said as loudly as a stop — `MAIN IS ABOVE ITS FLOOR`,
-with the names — and written into the round log, and it does not fail the
-round.
-
-Until 2026-08-30 it did fail the round, and that rule could never fire on a
-fault the change introduced. `broke` returns before the floor is consulted, so
-`candidate.red ⊆ baseline.red`, so every name it could stop on was already red
-on `main` — which the same code computed separately and described as "not this
-change's doing". It refused changes for the thing it simultaneously said they
-had not caused. The demonstration arrived that morning: `codex` was installed
-but unrunnable on this laptop, thirteen broker tests were red for that reason
-alone, and under the old rule no change could have merged on any machine
-missing that binary. What is installed on a machine has nothing to do with
-whether a change may land.
-
-**One refusal is left, and it is about the change's own diff:** a pull request
-that removes names from `names` while those tests are **still red** is stopped
-(`RATCHET LOWERED`, verdict `ratchet-lowered`). Taking a name out is the claim
-that it came good, and that is a claim the round can check against the run it
-just did. A change that repairs a test and records the smaller floor in the
-same commit passes, because the name it removed is green.
-
-The base branch's floor is read with `git show <base>:.mc/red-ratchet.json`,
-not off a worktree: a carried baseline (A1) never builds one, and a check that
-quietly stopped happening on the cheapest rounds would be worse than none.
+**No round reads it any more.** The 2026-08-31 ruling took `main`'s own red out
+of the verdict, and the consultation went with the baseline it was compared
+against: `mc test` and `mc merge` neither read the file nor report it, and the
+`ratchet-lowered` verdict is gone. `mc enforcement` still asks whether a
+repository carrying standing red has recorded a floor, off the round log's
+`standing_red` — which new rounds no longer write, so that check answers only
+from lines older than the ruling and goes quiet as they age out. Whether a
+floor for `main` is worth keeping anywhere is an open question; the file and
+its reader are kept rather than deleted on the way past.
 
 It binds **names, not a count**, and that is the load-bearing choice. Two rounds
 hours apart on this repository gave 55 red names and then 56, and the extra one
 was green again on the next run: a wall-clock assertion on a machine with three
 other builders on it. A count ratchet writes down 55 and then fails the next
 perfectly good pull request because the machine was busy — and a gate that
-fails at random is worse than the word this section exists to correct, because
-people stop reading it. A name set holds the flaky name and neither its
+fails at random is worse than the word the section above exists to correct,
+because people stop reading it. A name set holds the flaky name and neither its
 appearing nor its going quiet moves the floor. It also needs no maintained list
 of known-flaky names, which the alternative does.
 
-Nothing writes the file automatically, including the merge round, for the same
-reason: a lucky round where that test passes would evict it from the set, and
-the next round where it does not would read as drift on a base that had not
-moved. Automatic tightening turns every flaky green into a trap for the next
-person. Lowering it is a commit somebody makes, and the round names which
-entries are not red right now — **with the caveat that a name can fall because
-the machine changed rather than because the code did.** Thirteen fell the
-moment a broken `codex` install was repaired; taking those out would have made
-one laptop's package manager a precondition for merging. The property worth
-keeping is that **every movement of the floor, in either direction, is in
-somebody's diff.**
-
-A ratchet file **in the change** that is present but will not parse stops the
-round. Reading it as an empty set would make every standing red name look like
-a rise, and fail everything on a typo. A malformed floor on `main` is main's
-problem by the same rule as everything else here: the comparison is skipped and
-said, and the change is not refused for it.
+Nothing writes the file automatically, for the same reason: a lucky round where
+that test passes would evict it from the set, and the next round where it does
+not would read as a rise on a base that had not moved. Automatic tightening
+turns every flaky green into a trap for the next person. Lowering it is a
+commit somebody makes — **with the caveat that a name can fall because the
+machine changed rather than because the code did.** Thirteen fell the moment a
+broken `codex` install was repaired; taking those out would have made one
+laptop's package manager a precondition for merging. The property worth keeping
+is that **every movement of the floor, in either direction, is in somebody's
+diff.**
 
 ## Sessions — messaging
 

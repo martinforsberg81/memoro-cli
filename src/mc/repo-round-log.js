@@ -102,17 +102,18 @@ export function recordRound(report, { mode = 'merge', root = mcHome(), now = new
     reason: report.reason ? String(report.reason).slice(0, 300) : null,
     duration_ms: report.duration_ms ?? null,
     timings: gate?.timings && Object.keys(gate.timings).length ? gate.timings : null,
-    standing_red: gate?.standing_red ?? null,
-    broke: gate?.broke?.length ?? null,
-    // The red sets' delta by NAME, not only by count. The two names that
-    // flapped 55 → 57 → 55 could not be pointed at afterwards: the gate's
-    // report carried both red sets and threw them away, and the log line
-    // carried only numbers. With the delta in the line, the next 57 names
-    // itself. Capped and said when capped — a cap that says nothing reads
-    // as "that was all of them".
-    broke_names: capped(gate?.broke),
-    fixed_names: capped(gate?.fixed),
-    baseline_unstable: capped(gate?.ratchet?.baseline_risen),
+    // What the one measured tree had red, by NAME and not only by count. A
+    // count is not something anybody can act on: the two names that flapped
+    // 55 → 57 → 55 could not be pointed at afterwards, because the report
+    // carried the names and the line carried a number. Capped, and said when
+    // capped — a cap that says nothing reads as "that was all of them".
+    //
+    // `standing_red`, `broke`, `broke_names`, `fixed_names` and
+    // `baseline_unstable` were the differential form's fields and are gone
+    // from new lines; the lines already written keep them, and nothing
+    // rewrites them.
+    red: gate?.candidate?.red?.length ?? null,
+    red_names: capped(gate?.candidate?.red),
   };
   log('gate.round', {
     repo: line.repo, mode, ok: line.ok, stopped_at: line.stopped_at,

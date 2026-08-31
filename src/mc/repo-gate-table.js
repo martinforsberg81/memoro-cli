@@ -34,6 +34,16 @@
  * the round exactly as hard as no entry at all, because a partial declaration
  * that let a round proceed would be the guess wearing a uniform.
  *
+ * Written down, but not necessarily *here*. There are three places, read in
+ * this order: what mc ships in this file, what a repository writes in its own
+ * `.mc/test.json`, and what an operator writes in `~/mc/repo-gates.json`. The
+ * middle layer is the one that was missing: how memoro tests itself is a fact
+ * about memoro, and holding it in mc's source made every change to it a
+ * memoro-cli release — two places answering one question about one repository,
+ * which this file has already paid for once (the memoro entry said UNKNOWN for
+ * a day while the operator table beside it carried the measurement). The rule
+ * is unchanged; only the address is.
+ *
  * And a `prepare_why` may never carry a provenance that does not exist. This
  * rule is written rather than tested because its content cannot be checked by
  * code: a string saying "declared by the PM" looks identical whether or not
@@ -124,17 +134,111 @@ export function tablePath(root = mcHome()) {
   return join(root, 'repo-gates.json');
 }
 
+/** Where a repository writes its own half of the declaration, in its own tree. */
+export function repoDeclarationPath(repoPath) {
+  return join(repoPath, '.mc', 'test.json');
+}
+
+/**
+ * The repository's own declaration, if it has written one.
+ *
+ * Three answers, and the third is why this is not a one-liner. Absent means
+ * the repository has said nothing and the shipped table answers alone — the
+ * case that has to keep behaving exactly as it did. Present and readable is a
+ * layer. Present and unreadable is a **stop**: a file that will not parse is a
+ * repository that tried to say something mc could not hear, and falling back
+ * to the shipped table there would run a round on an instruction somebody
+ * believes they replaced. That is the same failure as a partial declaration,
+ * and it stops exactly as hard.
+ *
+ * The operator's file at `~/mc/repo-gates.json` deliberately keeps the
+ * opposite behaviour — a broken file there hides no declaration, because it is
+ * additions on top of one. Here the file *is* the repository's declaration.
+ */
+function readRepoDeclaration(repoPath) {
+  const path = repoDeclarationPath(repoPath);
+  if (!existsSync(path)) return { present: false, entry: null };
+  let parsed = null;
+  try { parsed = JSON.parse(readFileSync(path, 'utf8')); } catch (error) {
+    return { present: true, entry: null, error: `it could not be read as JSON (${error.message})` };
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return { present: true, entry: null, error: 'it does not hold a JSON object of declaration fields' };
+  }
+  return { present: true, entry: parsed };
+}
+
+/** Which of the three files each field of a declaration came from. */
+function layerSources({ shipped, own, override }) {
+  const sources = {};
+  if (override) {
+    for (const field of Object.keys(override)) sources[field] = 'override';
+    return sources;
+  }
+  for (const field of Object.keys(shipped || {})) sources[field] = 'shipped';
+  for (const field of Object.keys(own || {})) sources[field] = 'repository';
+  return sources;
+}
+
 /**
  * The declaration for a repository, or the reason there is none.
  *
  * `ok: false` is a stop, and the round has to treat it as one. The caller is
  * not offered a default to fall back on, because a default is the guess this
  * whole file exists to refuse.
+ *
+ * Three layers, in order: what mc ships, what the repository writes in
+ * `.mc/test.json`, what the operator writes in `~/mc/repo-gates.json`. The
+ * middle one exists because how memoro tests itself is a fact about memoro,
+ * and holding it here made every change to it a memoro-cli release. The
+ * operator's file stays the last word — it is how a machine-local fact gets in
+ * without a release at all.
+ *
+ * The two upper layers merge differently on purpose. The repository's file is
+ * merged **field by field**: it is written by a repository about itself, and
+ * it cannot know facts that are not its own — where its merges are logged is
+ * one, and a whole-entry replacement would make a file that says `select` drop
+ * `merge_log` in silence, which is the hole D-0135 already cost this table
+ * twice. The operator's file keeps replacing the entry whole, as it always
+ * has, and the fields it drops are still named in `shadowed`.
  */
 export function declarationFor(repoPath, { root = mcHome(), env = process.env } = {}) {
   const name = basenameOf(repoPath);
-  const table = { ...SHIPPED, ...readOverrides(root) };
-  const declared = table[name];
+  const own = readRepoDeclaration(repoPath);
+  if (own.error) {
+    return {
+      ok: false,
+      name,
+      reason: `${name} declares itself in ${repoDeclarationPath(repoPath)}, but ${own.error}. `
+        + 'mc will not fall back to what it ships when a repository has tried to say something else — '
+        + 'that would run the round on an instruction somebody believes they replaced. '
+        + 'Fix that file, or delete it and let the shipped table answer.',
+    };
+  }
+
+  const shipped = SHIPPED[name];
+  const overrides = readOverrides(root);
+  const overridden = overrides[name];
+  // The repository's layer on top of the shipped one, then the operator's
+  // whole entry if there is one.
+  const base = own.entry ? { ...(shipped || {}), ...own.entry } : shipped;
+  const declared = overridden || base;
+
+  // A repository file can declare a repository mc ships nothing for — and
+  // then it has to state its preparation, like any other declaration. Saying
+  // `select` and nothing else is exactly the partial declaration this file
+  // refuses, and without this it would quietly mean "prepare: null".
+  if (own.entry && !overridden && !shipped && !('prepare' in declared) && !nothingToInstall(repoPath).proven) {
+    return {
+      ok: false,
+      name,
+      known: normalise(declared, env),
+      reason: `${name} declares itself in ${repoDeclarationPath(repoPath)}, but says nothing about `
+        + 'its preparation — and mc ships no entry for it, so nothing else does either. '
+        + 'Add "prepare" and "prepare_why" to that file: a command, or null with the evidence '
+        + 'that its suite runs from a clean checkout.',
+    };
+  }
 
   if (declared) {
     // A partial declaration stops exactly as hard as a missing one. What is
@@ -147,23 +251,36 @@ export function declarationFor(repoPath, { root = mcHome(), env = process.env } 
         known: normalise({ ...declared, prepare: null }, env),
         reason: `${name} is declared, but its preparation step is not: ${declared.prepare_why || 'no reason recorded'}. `
           + `What is known about it — ${describeKnown(declared)} — is not enough to run a round on. `
-          + `Complete it in ${tablePath(root)}: {"${name}": {"prepare": "<command>", "prepare_why": "<where that was decided>"}} `
+          + `Complete it where the fact belongs — in the repository, ${repoDeclarationPath(repoPath)}: `
+          + '{"prepare": "<command>", "prepare_why": "<where that was decided>"}, '
+          + `or, if it is a fact about this machine, in ${tablePath(root)}: `
+          + `{"${name}": {"prepare": "<command>", "prepare_why": "<where that was decided>"}} `
           + '— or "prepare": null with the evidence that its suite runs from a clean checkout.',
       };
     }
-    // Which shipped fields this override silently dropped, if it is one.
-    // A shallow table means an override states every field it wants — a
-    // rule this table's own operator wrote into the memoro entry after
-    // extra_gates fell out (D-0135) — but a rule people must remember is a
-    // hole (pr_tests_flags fell out the same way, 2026-08-24), so the
-    // dropped fields are named to whoever reads the declaration.
-    const overridden = readOverrides(root)[name];
-    const shipped = SHIPPED[name];
-    const shadowed = overridden && shipped
-      ? Object.keys(shipped).filter((field) => overridden[field] === undefined
-        && shipped[field] != null && (!Array.isArray(shipped[field]) || shipped[field].length > 0))
+    // Which fields of the layers below it this override silently dropped, if
+    // it is one. A shallow table means an override states every field it
+    // wants — a rule this table's own operator wrote into the memoro entry
+    // after extra_gates fell out (D-0135) — but a rule people must remember is
+    // a hole (pr_tests_flags fell out the same way, 2026-08-24), so the
+    // dropped fields are named to whoever reads the declaration. A repository
+    // that has written its own file is one more layer that can be dropped
+    // that way, so it is counted here too.
+    const shadowed = overridden && base
+      ? Object.keys(base).filter((field) => overridden[field] === undefined
+        && base[field] != null && (!Array.isArray(base[field]) || base[field].length > 0))
       : [];
-    return { ok: true, name, declaration: normalise(declared, env), source: 'declared', shadowed };
+    return {
+      ok: true,
+      name,
+      declaration: normalise(declared, env),
+      source: 'declared',
+      shadowed,
+      // Which of the three files each field came from. A reader who disagrees
+      // with a declaration has to know which one to edit, and "it is declared"
+      // does not say that once there are three places it could be declared in.
+      sources: layerSources({ shipped, own: own.entry, override: overridden }),
+    };
   }
 
   // No entry. The only thing that lets a round proceed anyway is proof that
@@ -182,9 +299,11 @@ export function declarationFor(repoPath, { root = mcHome(), env = process.env } 
     ok: false,
     name,
     reason: `${name} has no gate declaration, and ${nothing.why} — so mc cannot tell whether its suite `
-      + `needs anything installed first. Declare it in ${tablePath(root)}: `
-      + '{"' + name + '": {"prepare": "<command>", "prepare_why": "<where that was decided>"}} '
-      + '— or "prepare": null with a "prepare_why" if the suite runs from a clean checkout. '
+      + `needs anything installed first. Declare it in the repository itself, ${repoDeclarationPath(repoPath)}: `
+      + '{"prepare": "<command>", "prepare_why": "<where that was decided>"} '
+      + `— or, for a fact about this machine rather than about the repository, in ${tablePath(root)}: `
+      + '{"' + name + '": {"prepare": "<command>", "prepare_why": "<where that was decided>"}}. '
+      + 'Either way "prepare": null with a "prepare_why" says the suite runs from a clean checkout. '
       + 'mc suggests no command here on purpose: the one it would suggest is the guess this refusal exists to prevent.',
   };
 }
@@ -233,6 +352,25 @@ function normalise(entry, env) {
     // report main's own red as this change's doing.
     select: entry.select ?? null,
     select_why: entry.select_why ?? null,
+    // What a branch runs when it is freshened against a new main —
+    // `repo-freshen.js` has described this path since it was written, and the
+    // field it names has been `undefined` for every repository, so the path
+    // never ran. Present here so a repository can answer; no shipped entry
+    // fills it, because what it should hold for memoro is a live question:
+    // ruling 4 said `npm run ci`, and that is 554.7 s, ruled out 2026-08-31.
+    affected: entry.affected ?? null,
+    // Paths whose test files must not run beside each other. mc runs a
+    // repository's selected files itself rather than through the repository's
+    // own runner, which is the faster of the two — and which means it does not
+    // see the resource class memoro's `buildExecutionBatches` knows and its
+    // `printablePlan` does not report. Until a selection carries that per
+    // file, a repository can say here which paths it will not survive being
+    // run seven-wide.
+    //
+    // `null` and `[]` are different answers on purpose: `null` is "this
+    // repository has not said", `[]` is "it has said, and nothing is serial".
+    // A round that wants to report the honest first one needs it expressible.
+    serial_paths: Array.isArray(entry.serial_paths) ? entry.serial_paths.map(String) : null,
     extra_gates: (entry.extra_gates || []).map((gate) => ({
       name: gate.name || gate.command,
       command: gate.command,
