@@ -31,20 +31,16 @@
  */
 import { spawnSync } from 'node:child_process';
 import { existsSync, readdirSync } from 'node:fs';
-import { join } from 'node:path';
 
 import { defaultRepos, listPlans, listProgrammes } from '../brief-collect.js';
 import { addWorktree, createWorkArea, inspectWorkArea } from '../work-area.js';
 import { openInWorkArea } from '../work-open.js';
-import { workRoot } from '../paths.js';
+import { PLAN_HOME, planHome } from '../paths.js';
 import { readCanonRole, reservedRoleHint, reservedRoleName } from '../roles.js';
 import { ask, interactive, select } from '../prompt.js';
 import { scanArgs } from './flags.js';
 
 const NAME = /^[A-Za-z0-9._-]{1,64}$/u;
-
-/** mc's own directory for planning sessions — never a workarea. */
-export const PLAN_HOME = 'plan';
 
 /** `~/mc/plan/<programme>`, as `inspectWorkArea` and friends name a directory. */
 export const planArea = (programme) => `${PLAN_HOME}/${programme}`;
@@ -238,7 +234,7 @@ export function programmeRows({ repos, env = process.env, read = null } = {}) {
 /** The programmes that already have a planning session directory. */
 export function openPlanAreas(env = process.env) {
   try {
-    return readdirSync(join(workRoot(env), PLAN_HOME), { withFileTypes: true })
+    return readdirSync(planHome(env), { withFileTypes: true })
       .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'))
       .map((entry) => entry.name)
       .sort();
