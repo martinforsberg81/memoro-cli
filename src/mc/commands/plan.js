@@ -1,13 +1,16 @@
 /**
- * `mc plan [<programme>]` — a planning session for one programme.
+ * `mc plan [<programme>]` — a session in a directory, told which programme it
+ * is for. That is the whole verb.
  *
- * A programme is the unit, not a project. The session writes the programme's
- * document and one `PLAN.json` per project that can start now, and `mc run`
- * picks those up later from origin/main. That file on main is the whole
- * coupling between the two: nothing else is shared, and in particular not a
- * directory.
+ * It opens a foreground session in `~/mc/plan/<programme>/` and hands it one
+ * prompt naming the programme. What comes out of it — one plan or four, under
+ * which project names, reaching `main` by which route, or nothing this time —
+ * is not this command's business and cannot be known when it starts (Martin,
+ * 2026-08-31). `mc run` reads `PLAN.json` files off `origin/main`; how they
+ * got there is not a thing the runner or this verb has an opinion about.
  *
- * It used to be shared, and that is what this replaces. `mc plan <name>` made
+ * A programme is the unit rather than a project, and the directory is not a
+ * workarea. That is what this replaces: `mc plan <name>` made
  * `~/mc/<name>` on branch `<name>` — exactly the workarea and the branch the
  * runner gives the project of that name — so one word did three jobs, and the
  * planning session sat in the folder `mc run` would later merge into, close,
@@ -88,9 +91,12 @@ export async function run(argv, deps = {}) {
     return 1;
   }
 
+  // The role is frontmatter — the model and the tools this session defaults to.
+  // It carries no overlay: what a planning session is told is the first prompt
+  // and nothing else (Martin, 2026-08-31).
   const role = readCanonRole('plan');
-  if (!role?.overlay) {
-    stderr.write('mc: the plan role is missing from this install — expected canon/roles/plan.md with an overlay body\n');
+  if (!role) {
+    stderr.write('mc: the plan role is missing from this install — expected canon/roles/plan.md\n');
     return 1;
   }
 
@@ -257,37 +263,39 @@ export function programmeLabel(row) {
 /* --------------------------------------------------------------- the launch */
 
 /**
- * What the session is told, assembled without starting anything: the role
- * overlay as written, and the first prompt naming the programme, the
- * repositories it can see, and the deliverable.
+ * The whole of what a planning session is told: which programme, where it
+ * stands, and what to read first.
  *
- * The last line is the docs merge, not "and stop": a plan PR touches only
- * `docs/`, so it is `mc merge <repo> <pr> --docs`' case, and the runner cannot
- * queue a project whose plan is still sitting in an open PR.
+ * It stops there on purpose. An earlier version of this prompt went on to name
+ * the deliverable — a programme document, one `PLAN.json` per project that can
+ * start now, a `Plan: <programme>` PR, the docs merge that lands it — and none
+ * of that is knowable when the session opens (Martin, 2026-08-31: "Hur en
+ * EVENTUELL PLAN SENARE SKA LÄGGAS PÅ MAIN OCH I VILKET PROJEKT GÅR INTE ATT
+ * FÖRUTSÄGA"). Whether this programme needs one project or four, whether it
+ * needs a plan at all this time, and how what comes out of it reaches `main`
+ * are the session's and Martin's to work out together, at the terminal. A
+ * prompt that answers them in advance is guessing, and a session that follows
+ * the guess is doing the wrong work confidently.
+ *
+ * So the reading is named and nothing else is: `docs/project/README.md`, which
+ * is where the convention and the `PLAN.json` schema actually live, and the
+ * programme's own directory. There is no role overlay behind this — the role
+ * file is frontmatter, the model and the tools, and no prose.
  */
 export function planLaunch({ programme, repos = [], role }) {
   const beside = repos.map((repo) => `\`${repo}/\``).join(' and ') || 'no checkout';
   const prompt = [
-    `You are the planning session for the \`${programme}\` programme. You stand in`,
-    `\`~/mc/plan/${programme}/\`, with ${beside} beside you — each a worktree on`,
-    `branch \`plan/${programme}\` from origin/main. This directory is not a workarea:`,
-    'nothing `mc run` does will ever reach it.',
+    `You are the planning session for the \`${programme}\` programme.`,
     '',
-    `Start by reading what already exists — \`docs/project/${programme}/\` in each`,
-    'repository here, the open "Plan:" PRs, and `~/mc/intake/proposals/` — and say',
-    'what you found.',
+    `You stand in \`~/mc/plan/${programme}/\`, with ${beside} beside you — each a`,
+    `worktree on branch \`plan/${programme}\`. This is not a workarea: nothing`,
+    '`mc run` does can reach it.',
     '',
-    'Then talk it through with Martin and write the programme document and one',
-    `\`docs/project/${programme}/<project>/PLAN.json\` for every project that can`,
-    'start now, as described in your role. Each `<project>` name you choose is what',
-    'the runner will later call that project\'s branch and workarea; you do not make',
-    'either — you write the file.',
-    '',
-    `Open a PR titled "Plan: ${programme}" in each repository you changed, and land`,
-    'it yourself — it is documentation only: `mc merge <repo> <pr> --docs`. If it',
-    'refuses, leave the PR open and say why. Then stop.',
+    'Martin is at the terminal. Start by reading `docs/project/README.md` and what',
+    `\`docs/project/${programme}/\` already holds in each repository, and say what`,
+    'you found.',
   ].join('\n');
-  return { overlay: role.overlay, prompt, model: role.model || null };
+  return { overlay: role.overlay || null, prompt, model: role.model || null };
 }
 
 function parseArgs(argv) {

@@ -1,9 +1,11 @@
 # docs/project — active plan work in memoro-cli
 
 Plan work here is handled exactly as it is in memoro: `docs/project/<programme>/<project>/`,
-where `<project>` is the mc workarea name and each project directory holds a
-`PLAN.json` the runner can act on. The section below is the same text as memoro's
-`docs/project/README.md` — one shape, both repositories, no local dialect.
+where each project directory holds a `PLAN.json` the runner can act on. The
+`<project>` name is what `mc run` will call that project's branch and its
+workarea; the planning session chooses it and creates neither. The section
+below is the same text as memoro's `docs/project/README.md` — one shape, both
+repositories, no local dialect.
 
 There is one programme here, `mc`. mc is built only for memoro me (D-0205);
 projects that do not serve that do not belong under it.
@@ -102,7 +104,17 @@ premise.
 
 ### Who writes what
 
-The planning session (`mc plan`, Martin at the terminal) writes the plan.
+A plan is written by a planning session: `mc plan <programme>`, Martin at the
+terminal. It opens on a **programme**, not on one project — how many projects
+come out of it, under what names, and by what route they reach `main` is worked
+out in the session, not decided by the command that opens it.
+
+**That session has no workarea and makes none.** It lives at
+`~/mc/plan/<programme>/`, with a checkout of each repository on branch
+`plan/<programme>` — mc's own directory, which `mc run` cannot see. What a
+planning session and the runner share is a `PLAN.json` on `main`, and nothing
+else; the `<project>` directory name is what the runner will call that
+project's branch and its workarea when it first steps it.
 
 A step session edits its own step's `status` and `pr`, the criteria it actually
 met, and `what_the_code_taught_us`. It **never writes the plan's steps** — not a
@@ -113,24 +125,25 @@ that touched anything else fails on the way back in.
 
 When the code says a coming step is wrong, that is not a revision the step
 makes: the step goes `waiting-decision` with `blocked_by` naming the decision,
-which is written at the workarea root with one recommendation, and the session
-stops. A plan comes back to the runner by its first unfinished step being
-`ready`, and by nothing else.
+which is written at the root of the session that raised it with one
+recommendation, and the session stops. A plan comes back to the runner by its
+first unfinished step being `ready`, and by nothing else.
 
 ## Citing a decision
 
-Decisions are raised as files under a `decisions/` directory at the **`mc`
-workarea root**. That directory is not part of this repository and does not
-survive the workarea, so a document here cites a decision **by name, never by
-path** — `` [`mc-1`](mc/rulings.md) ``, not
-`` `~/mc/mc-utredning/decisions/mc-1.md` ``. A path out of the repository is a
-citation no reader with a checkout can follow.
+Decisions are raised as files under a `decisions/` directory at the root of the
+session that raised them: `~/mc/<workarea>/decisions/` for a step session,
+`~/mc/plan/<programme>/decisions/` for a planning one. Neither directory is
+part of this repository and neither survives its session, so a document here
+cites a decision **by name, never by path** — `` [`mc-1`](mc/rulings.md) ``,
+not `` `~/mc/mc-utredning/decisions/mc-1.md` ``. A path out of the repository
+is a citation no reader with a checkout can follow.
 
 When a decision is answered, carry the ruling into [`mc/rulings.md`](mc/rulings.md)
 before the file is retired: the question, the options, Martin's answer quoted
 verbatim, and the plan that builds it. `mc brief --collect` deletes an answered
-file once every plan that owns it has left `waiting-decision`, and
-`~/mc/*/decisions/` is outside git — so the carry happens first, not after.
+file once every plan that owns it has left `waiting-decision`, and everything
+under `~/mc/` is outside git — so the carry happens first, not after.
 
 The same rule covers any other working material a plan leans on. The programme's
 design source, [`mc/utredning-2026-08-24.md`](mc/utredning-2026-08-24.md), was
@@ -153,3 +166,8 @@ folder kept beside its checkout moved to `~/mc/runner/log/closed/<name>/`
 (`src/mc/close-workarea.js`). A workarea with no plan on main is never
 removed by a machine — it is listed in `~/mc/intake/unplanned-workareas.md`
 and on the page, for Martin.
+
+None of that reaches a planning session. `~/mc/plan/<programme>/` holds no
+top-level checkout, so neither `mc run`'s `workareas()` nor `mc status`'s
+`areasWithCheckout()` can see what is under it: a planning session is never
+archived, never closed, and never listed as a workarea without a plan.

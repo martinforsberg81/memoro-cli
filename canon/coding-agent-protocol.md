@@ -53,7 +53,8 @@ shape in memoro; the difference is only which repository the plan lives in.
 
 ```
 mc brief    → Martin answers open questions with a **Beslut:** line
-mc plan     → a foreground session writes docs/project/<programme>/<name>/PLAN.json
+mc plan     → a foreground session on one programme, with Martin in it;
+              plans come out of it as docs/project/<programme>/<project>/PLAN.json
 mc run      → the runner takes one step of one ready plan, in a fresh session
 mc merge    → the gate, then the squash
               close-out → project_log.md + docs/technical/
@@ -66,22 +67,28 @@ mc merge    → the gate, then the squash
   (`ready` | `done` | `blocked` | `waiting-decision`). The plan has no status of
   its own: it is the state of the first step that is not done. See
   [`docs/project/README.md`](project/README.md).
-- **You do not write plan state by hand.** `mc plan <name>` opens the session
-  that writes one, with Martin in it. A step session edits its own step's
-  `status` and `pr`, the criteria it met and `what_the_code_taught_us` — and
-  `mc run` compares the file before and after, so a session that touched a step
-  it did not run leaves a PR the runner will not merge.
-- **You do not decide.** An open question becomes
-  `~/mc/<workarea>/decisions/<programme>-<n>.md`: the question, the options, one
-  recommendation, and no menu. Martin answers it in `mc brief`. That directory
-  is outside git and does not survive its workarea, so a ruling worth keeping is
-  carried into [`docs/project/mc/rulings.md`](project/mc/rulings.md) **before**
-  the file is retired — `mc brief --collect` deletes an answered file once no
-  plan is still waiting on it.
+- **You do not write plan state by hand.** `mc plan <programme>` opens the
+  session a plan is written in, with Martin in it. A step session edits its own
+  step's `status` and
+  `pr`, the criteria it met and `what_the_code_taught_us` — and `mc run`
+  compares the file before and after, so a session that touched a step it did
+  not run leaves a PR the runner will not merge.
+- **You do not decide.** An open question becomes a
+  `decisions/<programme>-<n>.md` file at the root of the session that raised it
+  — `~/mc/<workarea>/` for a step session, `~/mc/plan/<programme>/` for a
+  planning one: the question, the options, one recommendation, and no menu.
+  Martin answers it in `mc brief`. Those directories are outside git and do not
+  survive the session, so a ruling worth keeping is carried into
+  [`docs/project/mc/rulings.md`](project/mc/rulings.md) **before** the file is
+  retired — `mc brief --collect` deletes an answered file once no plan is still
+  waiting on it.
 - **A workarea is `~/mc/<project>/memoro-cli`,** a worktree on branch
-  `<project>` from `origin/main`. `mc` owns it: it is created by `mc plan` or
-  `mc work add`, and closed by `mc run` in the round after its plan says `done`.
-  Never remove one, or its branch, by hand.
+  `<project>` from `origin/main`. `mc` owns it: it is created by `mc run` when
+  it first steps that project, or by `mc work add`, and closed by `mc run` in
+  the round after its plan says `done`. Never remove one, or its branch, by
+  hand. A planning session has no workarea and makes none: it lives at
+  `~/mc/plan/<programme>/`, which the runner cannot see (see
+  [`docs/technical/mc-plan.md`](technical/mc-plan.md)).
 - **`status: ready` is what starts the runner on a plan.** Nothing else is a
   queue. Do not set it on a plan that is not ready to be executed unattended.
 

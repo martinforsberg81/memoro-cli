@@ -17,8 +17,19 @@ import { describe, it } from 'node:test';
 
 import { readCanonRole } from '../../src/mc/roles.js';
 
-/** Every role that may create a decision file. `brief` answers them instead. */
-const AUTHORS = ['worker', 'plan', 'step'];
+/**
+ * Every role whose overlay tells a session how to write a decision file.
+ * `brief` answers them instead.
+ *
+ * `plan` is not one any more. Its overlay is gone — the role is frontmatter,
+ * and what a planning session is told is its first prompt and nothing else
+ * (Martin, 2026-08-31) — so there is no text there to hold to a shape. It is
+ * also the one session Martin is sitting in front of: a question does not have
+ * to become a file to reach him, it can be asked. If one is written anyway,
+ * `scanDecisions` reads `~/mc/plan/<programme>/decisions/` and `mc brief` puts
+ * it up like any other.
+ */
+const AUTHORS = ['worker', 'step'];
 
 /** Overlays wrap at 76 columns, so every phrase test has to cross newlines. */
 const phrase = (words) => new RegExp(words.split(' ').join('\\s+'), 'u');

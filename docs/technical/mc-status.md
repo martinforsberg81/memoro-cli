@@ -70,8 +70,8 @@ From the page's menu, `s <name>` runs this same verb and redraws
 | fact | file | written by |
 |---|---|---|
 | the plan, its state and its steps | `<workarea>/<repo>/docs/project/<programme>/<name>/PLAN.json`, else the same path on `origin/main` | the step sessions, through `mc run` |
-| the workarea exists | `~/mc/<name>/` holding a checkout with a `.git` | `mc run`, `mc work`, `mc plan` |
-| decisions, answered or waiting | `~/mc/*/decisions/*.md` — waiting is "no line starting `**Beslut:**`" | the sessions; answered by Martin at `mc brief` |
+| the workarea exists | `~/mc/<name>/` holding a checkout with a `.git` | `mc run`, `mc work` — never `mc plan`, whose session lives under `~/mc/plan/` and is not a workarea |
+| decisions, answered or waiting | `~/mc/*/decisions/*.md` and `~/mc/plan/*/decisions/*.md` — waiting is "no line starting `**Beslut:**`" | the sessions; answered by Martin at `mc brief` |
 | the last three steps | `~/mc/runner/log/runs.tsv`, rows whose `name` is this project | `mc run`, after each step |
 | the open pull request | `gh pr list --head <name>` in the project's repository | GitHub |
 

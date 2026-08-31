@@ -184,8 +184,11 @@ with the conflicting paths named in its prompt.
 | no plan in the worktree | nothing, silently |
 
 There is no `triage` and there never will be again: the runner runs plans, it
-does not write them. Planning is `mc plan <name>`, a foreground session with
-Martin in it. And `waiting-decision` is simply not `ready` — the runner does
+does not write them. Planning is `mc plan <programme>`, a foreground session
+with Martin in it, and it happens somewhere the runner cannot reach —
+`~/mc/plan/<programme>/`, not a workarea (see [`mc-plan.md`](mc-plan.md)). What
+the two share is a `PLAN.json` on `main`, and nothing else. And
+`waiting-decision` is simply not `ready` — the runner does
 not read decision files, count them, or start a project because one was
 answered. A plan comes back by being set `ready`, which is the job of whoever
 applies the answer.

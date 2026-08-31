@@ -292,8 +292,10 @@ Nobody automatic. That is the point.
   `~/mc/queue.md` and deletes the file, or just deletes the file. It reads
   the desk's proposals and the eye's the same way, because they are the same
   file.
-- **`mc plan <name>`** is the other way in: read the proposal, then plan it.
-  Nothing automatic carries one there — `mc plan` takes a name, not a file.
+- **`mc plan <programme>`** is the other way in: open the programme the
+  proposal belongs to, with the proposal in front of you. Nothing automatic
+  carries one across — `mc plan` takes a programme, not a file, and a proposal
+  is a candidate for a project rather than a project.
 - **The page (`mc`)** has an INTAKE section: the newest digest and its age,
   what is new in it, how many proposals are waiting — and the `!` lines
   themselves, first, three named and the rest counted. A count is a number

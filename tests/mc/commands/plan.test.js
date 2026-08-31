@@ -34,16 +34,16 @@ const REPOS = [
 ];
 
 describe('the plan role', () => {
-  it('ships with mc, for claude first, and says what a PLAN.json is', () => {
+  // Frontmatter and nothing else. The role used to carry an overlay that told
+  // the session what to deliver and how to land it; none of that is knowable
+  // when the session opens, so what a planning session is told is the first
+  // prompt and only the first prompt.
+  it('is the model and the tools, with no prose behind it', () => {
     const role = readCanonRole('plan');
     assert.equal(role.name, 'plan');
     assert.equal(role.model, 'opus');
     assert.deepEqual(role.tools, ['claude', 'codex']);
-    assert.match(role.overlay, /PLAN\.json/u);
-    assert.match(role.overlay, /\*\*Beslut:\*\*/u);
-    // The role's last instruction: a plan PR is documentation, so it lands
-    // itself instead of waiting for a click.
-    assert.match(role.overlay, /mc merge <repo> <pr> --docs/u);
+    assert.equal(role.overlay, null);
   });
 });
 
@@ -94,7 +94,7 @@ describe('the picker', () => {
 });
 
 describe('the prompt', () => {
-  it('names the programme, both checkouts and the branch — and no workarea', () => {
+  it('names the programme, where it stands, and what to read — and stops', () => {
     const launch = planLaunch({
       programme: 'msr-core', repos: ['memoro', 'memoro-cli'], role: readCanonRole('plan'),
     });
@@ -103,17 +103,24 @@ describe('the prompt', () => {
     assert.match(launch.prompt, /`memoro\/` and `memoro-cli\/`/u);
     assert.match(launch.prompt, /branch `plan\/msr-core`/u);
     assert.match(launch.prompt, /not a workarea/u);
-    // The project it writes is a file, not a directory it makes here.
-    assert.match(launch.prompt, /docs\/project\/msr-core\/<project>\/PLAN\.json/u);
-    assert.match(launch.prompt, /you do not make\neither/u);
-    assert.match(launch.prompt, /"Plan: msr-core"/u);
-    // …and the last thing it is told is the docs merge, so the plan is on
-    // main before the session is closed, not sitting in a PR the runner
-    // cannot queue behind.
-    const last = launch.prompt.split('\n\n').at(-1);
-    assert.match(last, /mc merge <repo> <pr> --docs/u);
-    assert.match(last, /Then stop\.$/u);
+    // The two things to read, and they are the only instruction there is.
+    assert.match(launch.prompt, /docs\/project\/README\.md/u);
+    assert.match(launch.prompt, /docs\/project\/msr-core\//u);
     assert.equal(launch.model, 'opus');
+    assert.equal(launch.overlay, null);
+  });
+
+  // The assertion that keeps this prompt from growing back. None of these is
+  // knowable when the session opens: how many projects the programme needs,
+  // what they are called, whether a plan comes out of it at all, or by what
+  // route it reaches main. A prompt that answers them in advance is guessing.
+  it('predicts nothing about the deliverable or how it lands', () => {
+    const { prompt } = planLaunch({
+      programme: 'msr-core', repos: ['memoro', 'memoro-cli'], role: readCanonRole('plan'),
+    });
+    for (const guess of ['PLAN.json', '<project>', 'PR', 'pull request', 'mc merge', 'push', 'programme document', 'Then stop']) {
+      assert.ok(!prompt.includes(guess), `the prompt should not predict "${guess}": ${prompt}`);
+    }
   });
 
   it('names only the checkout it actually got', () => {
@@ -124,7 +131,7 @@ describe('the prompt', () => {
 });
 
 describe('the launch', () => {
-  it('puts the overlay behind the profile and the prompt last, with no --resume', async () => {
+  it('hands over the profile and the prompt last, with no --resume', async () => {
     const root = mkdtempSync(join(tmpdir(), 'mc-plan-'));
     const areaRoot = join(root, 'area');
     mkdirSync(areaRoot);
@@ -147,7 +154,8 @@ describe('the launch', () => {
     const [call] = calls;
     assert.deepEqual(call.args.slice(0, 2), ['--model', 'opus']);
     assert.equal(call.args[2], '--append-system-prompt');
-    assert.match(call.args[3], /^PROFILE\n\n---\n\nYou are the planning session/u);
+    // The profile alone: there is no role overlay to ride behind it.
+    assert.equal(call.args[3], 'PROFILE');
     assert.equal(call.args.at(-1), launch.prompt);
     assert.ok(!call.args.includes('--resume'));
     assert.equal(call.options.stdio, 'inherit');
@@ -156,15 +164,12 @@ describe('the launch', () => {
   // `--codex` is the same launch with a different instruction channel. Asserted
   // on the argv rather than through `openInWorkArea`, because resolving the
   // codex launch needs the codex binary and a test must not depend on one.
-  it('reaches codex through `-c instructions=`, role text and all', () => {
+  it('reaches codex through `-c instructions=`', () => {
     const launch = planLaunch({ programme: 'x', repos: ['memoro'], role: readCanonRole('plan') });
     const args = profileArgs('codex', instructionsFor('codex', 'PROFILE', launch.overlay));
     assert.equal(args[0], '-c');
     assert.match(args[1], /^instructions=/u);
-    const body = JSON.parse(args[1].slice('instructions='.length));
-    assert.match(body, /^PROFILE\n\n---\n\nYou are the planning session/u);
-    assert.match(body, /PLAN\.json/u);
-    assert.match(body, /mc merge <repo> <pr> --docs/u);
+    assert.equal(JSON.parse(args[1].slice('instructions='.length)), 'PROFILE');
   });
 
   it('opens the programme directory itself, not one of its checkouts', async () => {
