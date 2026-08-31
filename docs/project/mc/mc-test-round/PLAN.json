@@ -141,7 +141,7 @@
         "Report each in the verdict the way `report.extra_gates` already is — name, command, duration, ok — and make the round's `ok` depend on them. Keep `extra_gates` as a separate concept: that is what an operator declares beside the suite, this is what the repository's selector chose for this diff. One list, a field saying which is which.",
         "Verify against a real memoro pull request touching `public/css/`, then contrive the negative. The whole set costs 20.0 s on the pull request measured — this step is cheap and it is the one that stops the gate lying about what it checked."
       ],
-      "pr": null,
+      "pr": 501,
       "blocked_by": null
     },
     {
