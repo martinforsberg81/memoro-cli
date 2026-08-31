@@ -14,19 +14,23 @@
  * source and this file inherits by having no merge code to assert about.
  *
  * What it measures depends on what the repository declares. With a `select`
- * command it is the test files the change reaches, run on both sides; without
- * one it is the whole suite, run on both sides. Either way the verdict is
- * differential — red on the candidate and green on the base — because a red
- * that main already carries is not this change's to answer for.
+ * command it is the test files the change reaches and the command gates the
+ * same selection named beside them; without one it is the whole suite. One
+ * tree either way, and the verdict is that tree's own red: whether main was
+ * already red is not this round's question (ruled 2026-08-31).
+ *
+ * `mc test <repo> --full` is the other reading, and the only one here that is
+ * about the code rather than about a change: the repository's whole suite on
+ * the default branch as fetched. It is asked for, never scheduled.
  */
 import { gate, parseMergeArgs } from './repo.js';
 
 export async function run(argv, deps = {}) {
   const stdout = deps.stdout || process.stdout;
   const stderr = deps.stderr || process.stderr;
-  const opts = parseMergeArgs(argv);
+  const opts = parseMergeArgs(argv, { full: true });
   if (opts.error) {
-    stderr.write(`mc: ${opts.error.replace(/mc merge <repo> <pr>[^\n]*/u, 'mc test <repo> <pr>')}\n`);
+    stderr.write(`mc: ${opts.error.replace(/mc merge <repo> <pr>[^\n]*/u, 'mc test <repo> <pr> | --full')}\n`);
     stderr.write(usage());
     return 2;
   }
@@ -37,5 +41,6 @@ export async function run(argv, deps = {}) {
 export function usage() {
   return [
     'usage — mc test <repo> <pr> [<pr>...] [--json]   measure the change; merge nothing\n',
+    '        mc test <repo> --full [--json]           the repository\'s whole suite, on the default branch\n',
   ].join('');
 }
