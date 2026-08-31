@@ -94,7 +94,7 @@ but nothing retries it afterwards, and the sender is told so. See
 The lease is advisory. `mc repo claim` refuses a repository someone else is
 holding, and that refusal stops exactly one thing: this command. No git or gh
 operation is blocked anywhere, by design — the gate round is
-`claim` → verify against a fresh baseline → merge → deploy pull → `release`,
+`claim` → measure the change on one tree → merge → deploy pull → `release`,
 and following it is the roles' instruction, not a lock. There is no expiry: a
 forgotten lease shows its age in `mc repo status`, and a human or the PM ends
 it with `--force`, which the lease log keeps. The lease is one file under
@@ -228,11 +228,13 @@ reported onward with. The correction was a second word, `NO NEW RED — 55
 standing red names on main`, with the count in the line.
 
 Both are gone with the differential rule itself (2026-08-31). A round measures
-one tree, so a pass is a pass: `GREEN — the test gate passes`, followed by how
-far it reached — the test files this change touches, or the whole suite when
-the selector could not narrow it, or `--full` when that is what was asked for.
-`--json` carries a `verdict` of `green`, `red` or `stopped`, and the round log
-line carries `red` and `red_names` off the one measured tree.
+one tree, so a pass is a pass: `GREEN — the test gate passes`, and the line
+under it says how far that reached as a count — `ran 17 test files (1876 tests)
+and 2 command gates`. Three lines in all, and a red round is the failing names
+and nothing else; the headline takes a clause only when the selector could not
+narrow the change, or when `--full` asked for the whole suite. `--json` carries
+a `verdict` of `green`, `red` or `stopped` and everything the lines dropped, and
+the round log line carries `red` and `red_names` off the one measured tree.
 
 ### `.mc/red-ratchet.json` — the standing red set, read by no round
 

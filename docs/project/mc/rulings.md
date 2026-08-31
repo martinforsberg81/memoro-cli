@@ -130,9 +130,21 @@ Built by [`mc-ui`](mc-ui/PLAN.md).
 
 `ruling · 2026-08-29` · raised as `mc-test-1`, owner `mc-test`
 
-**No `mc-test` plan exists.** This ruling is not carried by any plan, which is
-why it is written out here in more detail than the three above — until a plan
-picks it up, this document is the whole record of it.
+**Carried by `docs/project/mc/mc-test-round/PLAN.json`** since 2026-08-31, which
+is where the work happens; it is written out here in more detail than the three
+above because it was unowned for two days and this document was the whole record
+of it. The plan is named `mc-test-round` rather than `mc-test` for a mechanical
+reason: `repoOf` in `src/mc/run.js` is a literal `[memoro, memoro-cli]` and
+returns the first repository with a worktree in the workarea, so a plan named
+after a workarea that holds both checkouts is looked for in memoro, not found,
+and skipped.
+
+**Its differential half was overruled on 2026-08-31**, and the paragraphs below
+are kept readable rather than rewritten. Martin ruled that a round evaluates the
+diff: it does not run or consult a baseline, and whether main was already red is
+not the round's question. Measurement A stands, without the comparison — one
+tree, and a test the change reaches is either green or the round is red.
+Measurement B is not scheduled; it is `mc test <repo> --full`, asked for.
 
 The sequence was already half split out. `repo-merge.js:66 runMergeRound` is the
 landing round; `repo-gate.js:87 runGate` is the measurement and **cannot** merge,
@@ -187,6 +199,13 @@ The coupling is the point: **B produces exactly what A compares against.**
 > orsaken är den okapade parallelliteten, inte testerna som raderas.
 
 ### The three non-negotiable conditions, in one place
+
+Read against the overrule above: **1** still holds and matters more, because a
+truncated single side under-reports red with nothing to catch it. **2** holds,
+and the reach is now a count in the verdict rather than a sentence — the
+blindness half of it was dropped on 2026-08-31, being a fact about the selector
+that a reader can do nothing with. **3** is void: there is no B for the report
+to carry the age of.
 
 1. **Close the truncation hole first.** `memoro/scripts/testing/runner.mjs:108`
    is `if (result.code !== 0 || result.signal) break;`. The batches are separate

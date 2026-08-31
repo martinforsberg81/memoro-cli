@@ -40,7 +40,7 @@
       "check": "`--full` runs the repository's declared suite command on one tree and reports its red names; the PR form's report names only files the selection chose. Both read off real runs."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "The verdict is short enough to act on without reading twice.",
       "check": "A green round is at most three lines; a red one names the failing tests and commands and nothing else. Everything else moves behind `--json`. Judged on a real round of each kind, pasted into the pull request."
     },
@@ -147,6 +147,30 @@
         "That is the state of main, asked for. Every round used to compute it and report it as `standing_red` on the way past — which is how it came to be believed and never checked. Asking costs 107.4 s and nothing else in the round pays for it.",
         "With no pull request there is no base to inherit, so the tree comes from `git symbolic-ref --short refs/remotes/origin/HEAD`. Assuming `main` would have been a whole-suite answer about a branch nobody asked for on any repository that calls it something else; a remote that will not say is a stop."
       ]
+    },
+    {
+      "title": "The verdict cost 11 lines to say what 3 say",
+      "body": [
+        "Measured 2026-08-31 on two real rounds, run from this worktree with `node src/mc-cli.js`. Green, memoro #11188: **3 lines** — subject, `ran 364 test files (2833 tests) and 6 command gates on d9f15e8`, `119s`. Red, memoro-cli #504, this pull request: **4 lines** — subject with `RED — 2 tests red:`, the two names, the time. The same two reports through the old builder are 11 lines and 8.",
+        "What the cut removed, in order of size: the pull request's own test counts, the per-phase timing line, `prepared with`, one line per passing gate with its duration, the two-line \"a green is not a review\" caveat, and the \"asked to check only\" line. Every one of them is in `--json`, which the round already accepted; nothing was deleted from the report, only from the lines.",
+        "The reach survived the cut as a number. Ruling 4's second condition — a verdict carries its own reach — used to be a sentence in the headline (*\"measured over the 17 test files this change reaches, not the whole suite\"*), and it is now the count on line 2. `tests/mc/commands/gate-verdict.test.js` asserts the line count as a number and `tests/mc/merge-doc.test.js` asserts the doc's green example against `gateLines` line for line, because prose is what grows back when nothing counts it."
+      ]
+    },
+    {
+      "title": "Three documents still describe the mechanism step 3 removed",
+      "body": [
+        "Found while rewriting `docs/technical/mc-merge.md`. `docs/coding-agent-protocol.md:305` and its mirror `canon/coding-agent-protocol.md:305` still say red is measured *\"against a ratchet floor (`src/mc/tap-red.js`, `src/mc/red-ratchet.js`)… so a standing red name does not block an unrelated change but a new one does\"*. Since 2026-08-31 that is exactly backwards: no round reads the ratchet, and a standing red name **does** block an unrelated change.",
+        "`docs/mc-command-matrix.md` had two of the same and they are fixed here, because both describe the verdict: the lease sequence said *\"verify against a fresh baseline\"*, and § *The verdict is one word* described a reach the headline no longer carries. The protocol pair is left alone — it is a mirrored, repo-owned document with its own edit rule, and this step's scope is the round's output.",
+        "The pattern is the one `repo-gate-table.js`'s header already paid for twice: one fact, several places, and the copies do not move together. The pin in `merge-doc.test.js` is the answer for `mc-merge.md`; the protocol pair has no such pin."
+      ]
+    },
+    {
+      "title": "Step 5's defect priced itself on this step's own diff",
+      "body": [
+        "Measured 2026-08-31 on #504, which edits five source and test files and three documents. `node scripts/affected-tests.js --base-ref origin/main` selected **60 of 250** test files. 56 of them carry only a `reads:` reason naming one of the three documents — `docs/mc-command-matrix.md`, `docs/project/mc/rulings.md`, `docs/technical/mc-merge.md` — and nothing else.",
+        "They ran in 31.2 s for 783 tests, and the round came back red on `readPackageCanon › reads all three packaged canon files from the real package`, which is red identically on a clean `origin/main` checkout (confirmed the same day in a detached worktree: 7 tests, 6 pass, 1 fail). That is the second consecutive step of this project refused by a test its diff never touched, and both times the cause is a document being matched as a pin.",
+        "The whole suite on this tree at the same time: 7 test files red, all under `tests/runtime/` and `tests/mc/session-*`. None of them was selected, none of them is this change's, and all of them are red on main."
+      ]
     }
   ],
   "documents": [
@@ -212,7 +236,7 @@
     },
     {
       "title": "Make the verdict short",
-      "status": "ready",
+      "status": "done",
       "done_when": "A green round is at most three lines and a red one names the failing tests and commands and nothing else; everything else moves behind `--json`; and `docs/technical/mc-merge.md` describes the round as it now is.",
       "instruction": [
         "Ruled by Martin on 2026-08-31: do not hand the session information it has to take a position on. It costs tokens and turns a yes/no into a judgement call. The round's output today is the opposite — baseline counts, risen ratchet names, carried-baseline ages, the selector's admissions, per-gate deltas on two sides.",
@@ -222,7 +246,7 @@
         "Rewrite the round's description in `docs/technical/mc-merge.md` to match: one side, the diff's tests, the selector's gates, `--full` for the whole suite. Delete the two-sided description rather than leaving it beside the new one; `repo-gate-table.js`'s header records what two places answering one question about one repository already cost here.",
         "Replace the sentence in `docs/project/mc/rulings.md` § 4 that says no plan carries the ruling, and record there that its differential half was overruled on 2026-08-31 — the ruling stays readable, and a reader is not left believing the comparison still exists."
       ],
-      "pr": null,
+      "pr": 504,
       "blocked_by": null
     },
     {

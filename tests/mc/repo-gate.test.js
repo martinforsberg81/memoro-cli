@@ -1151,10 +1151,11 @@ describe('a repository that selects by diff', () => {
       assert.equal(fx.mark('css-lint'), '');
       assert.equal(fx.mark('css-tokens'), '--base-ref origin/main');
       assert.equal(gates[1].command, 'npm run css:tokens -- --base-ref origin/main');
-      // And the verdict says so, with the time each of them took.
+      // And the verdict counts them. What each one cost is `--json`'s since
+      // 2026-08-31 — a green round says what ran, not how each part of it did.
       const lines = gateLines(report).join('\n');
-      assert.match(lines, /gate css:lint — passed in \d+\.\ds/u);
-      assert.match(lines, /gate css:tokens — passed in \d+\.\ds/u);
+      assert.match(lines, /and 2 command gates/u);
+      assert.doesNotMatch(lines, /passed in/u);
     } finally { fx.cleanup(); }
   });
 
@@ -1180,10 +1181,13 @@ describe('a repository that selects by diff', () => {
       assert.equal(fx.mark('css-lint'), '');
       const gates = report.extra_gates.filter((gate) => gate.source === 'selection');
       assert.deepEqual(gates.map((gate) => gate.ok), [false, true]);
+      // The verdict names the one that failed. The one that passed is in the
+      // report and in `--json`, and not in a red verdict: a reader of one is
+      // repairing, not auditing.
       const lines = gateLines(report).join('\n');
-      assert.match(lines, /RED — 1 command gate the selection chose failed/u);
-      assert.match(lines, /gate i18n:contract — FAILED \(exit 3\)/u);
-      assert.match(lines, /gate css:lint — passed/u);
+      assert.match(lines, /RED — 1 command gate failed:/u);
+      assert.match(lines, /i18n:contract — exit 3 — npm run i18n:contract/u);
+      assert.doesNotMatch(lines, /css:lint/u);
     } finally { fx.cleanup(); }
   });
 
@@ -1321,13 +1325,15 @@ describe('a verdict says how far it reached', () => {
   it('a selected round never says GREEN without saying over what', () => {
     // "GREEN — the test gate passes" over a suite that ran 6 of 257 files is
     // the same overclaim the standing-red count had to correct once. The reach
-    // goes in the sentence, because the sentence is what gets read aloud and
-    // pasted into a pull request.
+    // is still in the verdict and it is now a count on the line under the
+    // headline — `ran 6 test files (…) and 0 command gates` — rather than the
+    // sentence it used to be (ruled 2026-08-31: the prose was the part a
+    // reader had to weigh). Asserted where the lines are built, in
+    // tests/mc/commands/gate-verdict.test.js; what is asserted here is that
+    // the headline stopped carrying it twice.
     const green = verdictHeadline({ selection: { files: 6 }, pr: { base: 'main' } });
-    assert.match(green, /^GREEN/u);
-    assert.match(green, /6 test files this change reaches, not the whole suite/u);
-
-    assert.match(verdictPhrase({ selection: { files: 1 } }), /1 test file this change reaches/u);
+    assert.equal(green, 'GREEN — the test gate passes');
+    assert.equal(verdictPhrase({ selection: { files: 1 } }), 'gate green');
   });
 
   it('there is no third pass any more — a round is green or it is not', () => {
@@ -1349,7 +1355,7 @@ describe('a verdict says how far it reached', () => {
     assert.doesNotMatch(fell, /this change reaches/u);
   });
 
-  it('a full-suite round says nothing extra, because its reach is what a reader assumes', () => {
+  it('a round with no selection says nothing extra, because its reach is what a reader assumes', () => {
     assert.equal(verdictHeadline({ selection: null, pr: { base: 'main' } }), 'GREEN — the test gate passes');
     assert.equal(verdictPhrase({ selection: null }), 'gate green');
   });

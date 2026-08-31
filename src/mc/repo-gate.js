@@ -597,8 +597,8 @@ export function verdictFor(report) {
  * It used to carry a number — the standing red on the base — because "GREEN"
  * over fifty-five red names was the larger claim read out of the smaller one.
  * The round no longer measures the base, so there is no number to carry and no
- * second reading to guard against: green is green, over the reach the same
- * sentence names.
+ * second reading to guard against: green is green. What ran is a count on the
+ * line under it, not a clause in here (2026-08-31).
  */
 export function verdictHeadline(report) {
   return `GREEN — the test gate passes${scopeOf(report)}`;
@@ -610,29 +610,25 @@ export function verdictPhrase(report) {
 }
 
 /**
- * How far the verdict reaches, said in the verdict itself.
+ * How far the verdict reaches — the one clause of it a reader must act on.
  *
- * A selected round measured the files the change touches, not the suite — so
- * "GREEN" here means "nothing this change reaches went red", which is a smaller
- * claim than the one those words used to make. The number goes in the sentence
- * rather than in a field somebody has to know to look up, because the sentence
- * is what gets read aloud and pasted onward. This is the same correction the
- * standing-red count already forced once: a verdict that needs a document
- * beside it to be understood correctly is a verdict that will be misread.
+ * It used to carry the number too: *"measured over the 17 test files this
+ * change reaches, not the whole suite"*. The number is still in the verdict,
+ * as a count on the line saying what ran (`ranPhrase` in `commands/repo.js`),
+ * which meets ruling 4's second condition without the prose around it. Ruled
+ * 2026-08-31: the sentence was the part a reader had to weigh.
  *
- * A full-suite round says nothing extra. Its reach is the suite, which is what
- * a reader already assumes.
+ * What is left is an admission, and it stays because it changes what to do
+ * with the verdict. A selector that gave up and returned everything must not
+ * read as a narrow measurement — "the 258 files this change reaches" when 258
+ * is the whole suite is true and misleading in the same breath. `--full` says
+ * so for the same reason from the other side: it measured a branch, not a
+ * change.
  */
 function scopeOf(report) {
   if (report.full) return ' — over the whole suite, asked for by --full';
-  const selected = report.selection?.files;
-  if (!selected) return '';
-  // A selector that gave up and returned everything must not be reported as a
-  // narrow measurement. Saying "the 258 files this change reaches" when 258 is
-  // the whole suite is true and misleading in the same breath, which is the
-  // exact failure mode this sentence was added to fix.
-  if (report.selection.full_suite) return ' — over the whole suite: the selector could not narrow this change';
-  return ` — measured over the ${selected} test file${selected === 1 ? '' : 's'} this change reaches, not the whole suite`;
+  if (report.selection?.full_suite) return ' — over the whole suite: the selector could not narrow this change';
+  return '';
 }
 
 /**
