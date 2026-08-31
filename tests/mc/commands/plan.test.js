@@ -39,11 +39,29 @@ describe('the plan role', () => {
     assert.equal(role.name, 'plan');
     assert.equal(role.model, 'opus');
     assert.deepEqual(role.tools, ['claude', 'codex']);
-    assert.match(role.overlay, /PLAN\.json/u);
+    assert.match(role.overlay, /docs\/project\/<programme>\/<project>\/PLAN\.json/u);
     assert.match(role.overlay, /\*\*Beslut:\*\*/u);
+    assert.match(role.overlay, /Never create a parallel programme/u);
     // The role's last instruction: a plan PR is documentation, so it lands
     // itself instead of waiting for a click.
     assert.match(role.overlay, /mc merge <repo> <pr> --docs/u);
+  });
+
+  // The role is what a session actually reads, so the decoupling has to be in
+  // it and not only in the prompt: a programme, not a workarea; and the
+  // workarea a project gets is the runner's to make, never this session's.
+  it('is written for a programme, and disclaims the workarea', () => {
+    const { overlay } = readCanonRole('plan');
+    assert.match(overlay, /You are the planning session for one \*\*programme\*\*/u);
+    assert.match(overlay, /~\/mc\/plan\/<programme>\//u);
+    assert.match(overlay, /This is not a workarea/u);
+    assert.match(overlay, /you never make one's workarea|you make neither|Make a workarea/u);
+    assert.match(overlay, /`Plan: <programme>`/u);
+    // The questions it raises live with the session, not in a workarea.
+    assert.match(overlay, /~\/mc\/plan\/<programme>\/decisions\//u);
+    // And nothing in it still points a session at a project workarea's filing.
+    assert.ok(!overlay.includes('HANDOFF.md'), 'the role no longer reads a workarea handoff');
+    assert.ok(!/\.\.\/inbox\//u.test(overlay), 'the role no longer reads a workarea inbox');
   });
 });
 
@@ -103,9 +121,11 @@ describe('the prompt', () => {
     assert.match(launch.prompt, /`memoro\/` and `memoro-cli\/`/u);
     assert.match(launch.prompt, /branch `plan\/msr-core`/u);
     assert.match(launch.prompt, /not a workarea/u);
-    // The project it writes is a file, not a directory it makes here.
+    // The project it writes is a file, not a directory it makes here: the
+    // name goes to the runner, and the runner makes the workarea.
     assert.match(launch.prompt, /docs\/project\/msr-core\/<project>\/PLAN\.json/u);
-    assert.match(launch.prompt, /you do not make\neither/u);
+    assert.match(launch.prompt.replace(/\n/gu, ' '), /you make neither/u);
+    assert.match(launch.prompt.replace(/\n/gu, ' '), /the runner will later call that project's branch and its workarea/u);
     assert.match(launch.prompt, /"Plan: msr-core"/u);
     // …and the last thing it is told is the docs merge, so the plan is on
     // main before the session is closed, not sitting in a PR the runner
