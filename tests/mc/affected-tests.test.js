@@ -169,6 +169,59 @@ describe('which tests a change reaches', () => {
   });
 
   /**
+   * The boundary of *that* widening, measured on this repository 2026-08-30:
+   * one new plan document selected 57 of 250 test files, every one for the same
+   * reason. `run.js` spells the project tree to build a plan's path, so the
+   * directory edge made it a reader of every file under it, and the import
+   * graph handed that to everything reaching it. Building a path under a tree
+   * is not reading a file in it.
+   *
+   * The fixtures below name trees this repository does not have, and the
+   * paragraph above names none of them in backticks — this file is read by the
+   * very index it tests, so a literal here is indistinguishable from a real
+   * one, in prose as much as in a fixture.
+   */
+  it('a tree a module builds paths under is not every test that imports it', () => {
+    const fx = repo({
+      base: {
+        'docs/ledger/prog/proj/PLAN.md': '# a plan\n',
+        'src/plans.js': 'export const planPath = (p) => `docs/ledger/${p}/PLAN.md`;\n',
+        'tests/importer.test.js': "import { planPath } from '../src/plans.js';\nexport default planPath;\n",
+        'tests/scanner.test.js': "import { readdirSync } from 'node:fs';\nreaddirSync('docs/ledger');\n",
+        'tests/other.test.js': "export default 'unrelated';\n",
+      },
+      change: { 'docs/ledger/prog/added/PLAN.md': '# another plan\n' },
+    });
+    try {
+      const { files, why } = fx.select();
+      // Not the whole suite: the tree is read, so the change is explained.
+      assert.equal(why.reason, 'affected');
+      assert.deepEqual(files, ['tests/scanner.test.js']);
+    } finally { fx.cleanup(); }
+  });
+
+  /**
+   * And the token that made the tree edge cheap to trip. `'docs'` on its own is
+   * a segment handed to `join()` far more often than a tree anybody reads —
+   * the same ambiguity `PIN_TOKEN` already refuses for `'index.js'`.
+   */
+  it('a one-segment directory literal is a path segment, not a tree', () => {
+    const fx = repo({
+      base: {
+        'docs/guide/thing.md': '# thing\n',
+        'tests/segment.test.js': "import { join } from 'node:path';\nexport default join('docs', 'guide');\n",
+        'tests/tree.test.js': "import { readdirSync } from 'node:fs';\nreaddirSync('docs/guide');\n",
+      },
+      change: { 'docs/guide/other.md': '# other\n' },
+    });
+    try {
+      const { files, why } = fx.select();
+      assert.equal(why.reason, 'affected');
+      assert.deepEqual(files, ['tests/tree.test.js']);
+    } finally { fx.cleanup(); }
+  });
+
+  /**
    * The boundary of that widening, and the reason it is a list rather than a
    * rule. A manifest changes what every test runs *inside*, so whoever happens
    * to name it understates its reach by a mile.
