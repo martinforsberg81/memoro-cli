@@ -25,7 +25,7 @@
       "check": "`mc test memoro <pr>` on a pull request touching only `public/css/` shows `css:lint` and `css:tokens` in the verdict with their own timings; a branch with a deliberate `i18n:contract` violation comes back red naming that command. Both against a real pull request, not a fixture."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "What to run for a repository is read from a declaration, and mc's shipped table is the fallback.",
       "check": "`declarationFor` returns a repository's own `.mc/test.json` fields over the shipped entry and under `~/mc/repo-gates.json`; `tests/mc/repo-gate-table.test.js` covers all three levels, an unparseable file is a stop with a reason, and a repository with no file produces a declaration byte-identical to today's."
     },
@@ -113,6 +113,16 @@
         "mc follows the instruction rather than the code: every command the selection named runs, and the verdict reports all of them. #11186 is the evidence — `i18n:contract` failed, and `i18n:locale-contract` (5.6 s) and `i18n:validate` (0.3 s) still ran and still reported. On that pull request memoro's own runner would have shown one line where the round shows three.",
         "That is a difference between two tools answering the same question, and it is the kind that goes unnoticed until somebody compares outputs. If the memoro side wants them to agree, `executeCommands` is the one line to change — and the round is the side that already behaves the way the comment describes."
       ]
+    },
+    {
+      "title": "Three files answer one question, and only the repository's may fail loudly",
+      "body": [
+        "The layers merge differently on purpose. `~/mc/repo-gates.json` keeps replacing an entry whole — the D-0135 rule, and its `shadowed` report — but `<repo>/.mc/test.json` merges field by field. A repository writes about itself and cannot know facts that are not its own: `merge_log` resolves under the work root on *this* machine, so a whole-entry replacement would make a file that says `select` drop the merge log in silence, which is the hole this table has already paid for twice.",
+        "The parse failures diverge for the same reason. A broken operator file still lets the shipped declaration answer (asserted since 2026-08-22) because it is additions on top of a declaration; a broken `.mc/test.json` is a stop, because falling back there would run the round on an instruction somebody believes they replaced.",
+        "The new door needed the old lock. A `.mc/test.json` saying only `select`, for a repository mc ships nothing for, would have meant `prepare: null` by omission — the guess the whole file refuses, arriving from the side. It stops unless the file states `prepare`, or the manifest proves there is nothing to install.",
+        "Two facts found while wiring it: `.mc/` already exists in this repository and holds `red-ratchet.json`, so the address sits beside one that is already there; and `declarationFor` is handed the repository path, not the candidate worktree, so a pull request cannot edit the instruction that judges it. Both are worth keeping that way.",
+        "`affected` and `serial_paths` are readable now and no shipped entry fills either. `affected` has no value to ship — ruling 4 said `npm run ci`, which is 554.7 s and was ruled out 2026-08-31. `serial_paths` distinguishes `null` (this repository has not said) from `[]` (it has said, and nothing is serial), which is what lets a round report the honest first one."
+      ]
     }
   ],
   "documents": [
@@ -146,7 +156,7 @@
     },
     {
       "title": "The instruction the repository owns",
-      "status": "ready",
+      "status": "done",
       "done_when": "`declarationFor` reads `.mc/test.json` from the repository under test, layered shipped < repository file < `~/mc/repo-gates.json`; an unparseable file is a stop with a reason; a repository with no file behaves exactly as today; and `affected` is present in `normalise()`.",
       "instruction": [
         "`src/mc/repo-gate-table.js` holds memoro's `prepare`, `select`, `pr_tests_flags` and `merge_log` in mc's own source, so every change to how memoro tests itself is a memoro-cli release. The file's header argues at length that what a repository needs must be *written down* rather than guessed; this step keeps the rule and moves the writing to where the repository can do it.",
@@ -157,7 +167,7 @@
         "Ship no `.mc/test.json` in memoro from here. The reader lands first and changes nothing on its own; memoro's file is a small pull request in that repository, which the memoro-side project can carry.",
         "Cover all three precedence levels in `tests/mc/repo-gate-table.test.js`, plus the unparseable file, the partial file, and the no-file case asserting today's declaration byte for byte."
       ],
-      "pr": null,
+      "pr": 502,
       "blocked_by": null
     },
     {
