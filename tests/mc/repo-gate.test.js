@@ -23,6 +23,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, it } from 'node:test';
 
 import { addArea, fixture as repoFixture } from './_helpers/repo-fixture.js';
+import { gateLines } from '../../src/mc/commands/repo.js';
 import { runMcCli } from './_helpers/mc-cli.js';
 import { gateRoot, runGate, verdictHeadline, verdictPhrase } from '../../src/mc/repo-gate.js';
 import { carriedGate, loadMeasuredGate, lockfileHashAt, saveBaseline, saveMeasuredGate } from '../../src/mc/repo-baseline-cache.js';
@@ -1442,13 +1443,23 @@ describe('a repository that selects by diff', () => {
    * as this change's doing. Asking once and running the answer twice is what
    * keeps the verdict differential.
    */
-  function selecting({ files, baselineRed = [], candidateRed = [], onBaseline = null } = {}) {
+  function selecting({
+    files, baselineRed = [], candidateRed = [], onBaseline = null,
+    commands = undefined, scripts = {},
+  } = {}) {
     const root = mkdtempSync(join(tmpdir(), 'mc-select-'));
     const repoPath = join(root, 'repo');
     const mcHome = join(root, 'home');
     mkdirSync(repoPath, { recursive: true });
     mkdirSync(mcHome, { recursive: true, mode: 0o700 });
-    writeJson(join(repoPath, 'package.json'), { name: 'repo', scripts: { test: 'node --test tests/' } });
+    // The command gates run as `npm run <script>` in the candidate worktree, so
+    // the scripts are real ones in a real manifest. A stub of npm would test
+    // the stub; this tests the invocation the repository will actually get.
+    writeJson(join(repoPath, 'package.json'), { name: 'repo', scripts: { test: 'node --test tests/', ...scripts } });
+    // Where a script records that it ran, and with which arguments. Outside the
+    // worktrees, which the round removes on its way out.
+    const marks = join(root, 'marks');
+    mkdirSync(marks, { recursive: true });
     // The operator table is where a repository says how it selects. `echo` is a
     // real command through a real shell — the same path a real declaration
     // takes — so this exercises the JSON contract rather than a stub of it.
@@ -1456,7 +1467,7 @@ describe('a repository that selects by diff', () => {
       repo: {
         prepare: null,
         prepare_why: 'the fixture installs nothing',
-        select: `echo '${JSON.stringify({ files })}'`,
+        select: `echo '${JSON.stringify(commands === undefined ? { files } : { files, commands })}'`,
         select_why: 'the fixture says so',
         extra_gates: [],
         merge_log: null,
@@ -1503,12 +1514,20 @@ describe('a repository that selects by diff', () => {
     };
     return {
       runs,
+      marks,
+      mark: (name) => (existsSync(join(marks, name)) ? readFileSync(join(marks, name), 'utf8') : null),
       report: () => runGate({
         repoPath, pr: 7, holder: AREA, root: mcHome, git, gh, tests,
+        env: { ...process.env, GATE_MARKS: marks },
         suite: () => { throw new Error('a selecting round must not run the whole suite'); },
       }),
       cleanup: () => rmSync(root, { recursive: true, force: true }),
     };
+  }
+
+  /** A script that records that it ran, with its arguments, and then exits. */
+  function marking(name, exit = 0) {
+    return `sh -c 'printf "%s" "$*" > "$GATE_MARKS/${name}"; exit ${exit}' sh`;
   }
 
   it('runs the candidate’s list on both sides, and never the whole suite', async () => {
@@ -1563,6 +1582,98 @@ describe('a repository that selects by diff', () => {
       assert.equal(report.ok, false);
       assert.equal(report.stopped_at, 'red');
     } finally { fx.cleanup(); }
+  });
+
+  it('runs the command gates the selection named, on the candidate, with the base ref they ask for', async () => {
+    // The gates the selector reports beside the files. They were read and
+    // dropped until 2026-08-31, so no round had ever run one: memoro's
+    // selection named six on #11158 — css:lint and css:tokens among them —
+    // and the verdict said nothing about any of them.
+    const fx = selecting({
+      files: ['tests/a.test.js'],
+      commands: [
+        { id: 'css-lint', packageScript: 'css:lint', passBaseRef: false, resourceClass: 'standard', selectedBy: ['css-contract'] },
+        { id: 'css-tokens', packageScript: 'css:tokens', passBaseRef: true, resourceClass: 'standard', selectedBy: ['css-contract'] },
+      ],
+      scripts: { 'css:lint': marking('css-lint'), 'css:tokens': marking('css-tokens') },
+    });
+    try {
+      const report = await fx.report();
+      assert.equal(report.ok, true, report.reason);
+      assert.equal(report.selection.commands, 2);
+      const gates = report.extra_gates.filter((gate) => gate.source === 'selection');
+      assert.deepEqual(gates.map((gate) => gate.name), ['css:lint', 'css:tokens'], 'in the order the selector gave');
+      assert.ok(gates.every((gate) => gate.ok && gate.ran));
+      assert.ok(gates.every((gate) => typeof gate.duration_ms === 'number'));
+      // `--base-ref` where the selection said so, and nowhere else: a gate that
+      // is differential in itself would otherwise measure the wrong two trees.
+      assert.equal(fx.mark('css-lint'), '');
+      assert.equal(fx.mark('css-tokens'), '--base-ref origin/main');
+      assert.equal(gates[1].command, 'npm run css:tokens -- --base-ref origin/main');
+      // And the verdict says so, with the time each of them took.
+      const lines = gateLines(report).join('\n');
+      assert.match(lines, /gate css:lint — passed in \d+\.\ds/u);
+      assert.match(lines, /gate css:tokens — passed in \d+\.\ds/u);
+    } finally { fx.cleanup(); }
+  });
+
+  it('a command gate that fails is red, and the gates after it still run', async () => {
+    // ci.mjs wrote the reason down where it makes the same choice about tests:
+    // while anything else is red, a skipped command gate hides every contract
+    // regression it would have caught.
+    const fx = selecting({
+      files: ['tests/a.test.js'],
+      commands: [
+        { id: 'i18n-contract', packageScript: 'i18n:contract', passBaseRef: false, resourceClass: 'standard', selectedBy: ['i18n'] },
+        { id: 'css-lint', packageScript: 'css:lint', passBaseRef: false, resourceClass: 'standard', selectedBy: ['css-contract'] },
+      ],
+      scripts: { 'i18n:contract': marking('i18n', 3), 'css:lint': marking('css-lint') },
+    });
+    try {
+      const report = await fx.report();
+      assert.equal(report.ok, false);
+      assert.equal(report.stopped_at, 'selected-gate');
+      assert.equal(report.verdict, 'red');
+      assert.match(report.reason, /i18n:contract \(exit 3\)/u);
+      // The one after it ran anyway, and is reported.
+      assert.equal(fx.mark('css-lint'), '');
+      const gates = report.extra_gates.filter((gate) => gate.source === 'selection');
+      assert.deepEqual(gates.map((gate) => gate.ok), [false, true]);
+      const lines = gateLines(report).join('\n');
+      assert.match(lines, /RED — 1 command gate the selection chose failed/u);
+      assert.match(lines, /gate i18n:contract — FAILED \(exit 3\)/u);
+      assert.match(lines, /gate css:lint — passed/u);
+    } finally { fx.cleanup(); }
+  });
+
+  it('a selector that names no commands is not a fault, and one that cannot be read is', async () => {
+    const none = selecting({ files: ['tests/a.test.js'] });
+    try {
+      const report = await none.report();
+      assert.equal(report.ok, true, report.reason);
+      assert.equal(report.selection.commands, 0);
+      assert.deepEqual(report.extra_gates, []);
+    } finally { none.cleanup(); }
+
+    // A `commands` that is not a list is the same kind of unreadable as a
+    // missing `files`: fewer gates than the repository asked for is the
+    // silence this reading exists to end.
+    const unreadable = selecting({ files: ['tests/a.test.js'], commands: 'all of them' });
+    try {
+      const report = await unreadable.report();
+      assert.equal(report.ok, false);
+      assert.equal(report.stopped_at, 'selection');
+      assert.match(report.reason, /`commands` field that is not a list/u);
+    } finally { unreadable.cleanup(); }
+
+    // And a command with nothing to run under it.
+    const nameless = selecting({ files: ['tests/a.test.js'], commands: [{ id: 'x', passBaseRef: false }] });
+    try {
+      const report = await nameless.report();
+      assert.equal(report.ok, false);
+      assert.equal(report.stopped_at, 'selection');
+      assert.match(report.reason, /no packageScript/u);
+    } finally { nameless.cleanup(); }
   });
 
   it('a selection that cannot be read stops the round instead of measuring nothing', async () => {

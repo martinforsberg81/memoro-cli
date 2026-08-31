@@ -14,8 +14,9 @@
  * source and this file inherits by having no merge code to assert about.
  *
  * What it measures depends on what the repository declares. With a `select`
- * command it is the test files the change reaches, run on both sides; without
- * one it is the whole suite, run on both sides. Either way the verdict is
+ * command it is the test files the change reaches, run on both sides, and the
+ * command gates the same selection named beside them, run on the candidate;
+ * without one it is the whole suite, run on both sides. Either way the verdict is
  * differential — red on the candidate and green on the base — because a red
  * that main already carries is not this change's to answer for.
  */

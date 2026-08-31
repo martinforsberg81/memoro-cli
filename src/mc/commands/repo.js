@@ -423,6 +423,27 @@ function treeIdentityLines(report) {
   return [];
 }
 
+/** The gates of one kind, from the one list the round keeps them all in. */
+function selectedGates(report, source = 'selection') {
+  return (report.extra_gates || []).filter((gate) => (gate.source || 'declaration') === source);
+}
+
+/**
+ * What the selection's own command gates did — name, invocation, time, outcome.
+ *
+ * They ran on the candidate only and there is no delta to report, so each is
+ * one line. The timing is in it because these are the part of a round whose
+ * cost nobody had ever seen: six of them on memoro's #11158 is 20.0 s, and a
+ * number in the verdict is how the next decision about that cost gets made
+ * from evidence rather than from an impression.
+ */
+function selectedGateLines(report) {
+  return selectedGates(report).map((gate) => `mc: gate ${gate.name} — `
+    + `${gate.ran ? (gate.ok ? 'passed' : `FAILED (exit ${gate.exit_code})`) : 'COULD NOT RUN'}`
+    + ` in ${((gate.duration_ms || 0) / 1000).toFixed(1)}s — ${gate.command}`
+    + (!gate.ok && gate.output ? `\n      ${gate.output}` : ''));
+}
+
 /**
  * The verdict in prose — and never the word "approved".
  *
@@ -434,10 +455,11 @@ export function gateLines(report, { checkOnly = false } = {}) {
   const lines = [];
   const pr = report.pr.head ? `#${report.pr.number} (${report.pr.head} → ${report.pr.base})` : `#${report.pr.number}`;
 
-  // `red` and `ratchet` are verdicts the round reached by measuring, and both
-  // have their own block below with the names in it. Everything else stopped
-  // short of a verdict, which is a different thing for a reader to be told.
-  if (report.stopped_at && report.stopped_at !== 'red' && report.stopped_at !== 'ratchet') {
+  // `red`, `ratchet` and `selected-gate` are verdicts the round reached by
+  // measuring, and each has its own block below with the names in it.
+  // Everything else stopped short of a verdict, which is a different thing for
+  // a reader to be told.
+  if (report.stopped_at && !['red', 'ratchet', 'selected-gate'].includes(report.stopped_at)) {
     lines.push(`mc: the round stopped at ${report.stopped_at} — ${report.reason}`);
     // A stop after the suites is a different thing from one before them, and a
     // reader deciding what to do next needs to know which they are looking at.
@@ -461,7 +483,23 @@ export function gateLines(report, { checkOnly = false } = {}) {
     lines.push(`mc: RED — ${report.broke.length} red on the candidate and green on the baseline:`);
     for (const name of report.broke.slice(0, 20)) lines.push(`      ${name}`);
     if (report.broke.length > 20) lines.push(`      … and ${report.broke.length - 20} more`);
+    // The command gates ran before this verdict was reached, and what they
+    // found is said here rather than lost with the stop: a red test and a
+    // broken contract are two repairs, and a reader who sees only the first
+    // comes back for the second.
+    lines.push(...selectedGateLines(report));
     lines.push('mc: not merged — nothing lands a red gate, with or without a flag');
+    return lines;
+  }
+
+  // The command gates the repository's own selector chose for this diff.
+  // `css:tokens`, `i18n:contract` and their kind are contracts about the
+  // change, so one that fails is red however green the tests were.
+  const failedGates = selectedGates(report).filter((gate) => !gate.ok);
+  if (failedGates.length) {
+    lines.push(`mc: RED — ${failedGates.length} command gate${failedGates.length === 1 ? '' : 's'} the selection chose failed:`);
+    lines.push(...selectedGateLines(report));
+    lines.push('mc: not merged — a command gate is a contract this change breaks, not a test that was already red');
     return lines;
   }
 
@@ -510,7 +548,8 @@ export function gateLines(report, { checkOnly = false } = {}) {
   // What the repository asked for beyond the suite, so a pass is not read as
   // "the suite passed" when more than the suite was measured.
   if (report.declaration?.prepare) lines.push(`mc: prepared with ${report.declaration.prepare}`);
-  for (const gate of report.extra_gates || []) {
+  lines.push(...selectedGateLines(report));
+  for (const gate of selectedGates(report, 'declaration')) {
     // Both sides, so a red gate names its culprit: "failed" alone once
     // attributed a red main to the one PR in the room (2026-08-24). Older
     // reports carry only the candidate's outcome, and are said as before.

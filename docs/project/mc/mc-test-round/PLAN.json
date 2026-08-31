@@ -20,7 +20,7 @@
   ],
   "success_criteria": [
     {
-      "met": false,
+      "met": true,
       "criterion": "A round runs the command gates the repository's selection reported.",
       "check": "`mc test memoro <pr>` on a pull request touching only `public/css/` shows `css:lint` and `css:tokens` in the verdict with their own timings; a branch with a deliberate `i18n:contract` violation comes back red naming that command. Both against a real pull request, not a fixture."
     },
@@ -97,6 +97,22 @@
         "The machinery around it is larger than the second run: `src/mc/repo-baseline-cache.js` carries a green baseline forward so it need not be rerun, `compareRed` in `tap-red.js` produces the `broke` set the verdict rests on, and `red-ratchet.js` is consulted for `baseline_risen`. All of it answers \"was main already red?\", and none of it survives the 2026-08-31 ruling.",
         "Ruling 4's condition 1 stops mattering with the baseline: two truncated measurements can no longer match each other and read as \"no new red\", because there is only one measurement. It is still worth confirming that memoro's `scripts/testing/runner.mjs` runs every batch after a red one and that `tapTotals` sums every process's summary — a truncated single side under-reports red just as happily."
       ]
+    },
+    {
+      "title": "The gates run, and what they cost on two real pull requests",
+      "body": [
+        "Measured 2026-08-31 with `mc test memoro <pr>` against two throwaway pull requests opened for it and closed after. #11185, a css-only diff: the selection reported 17 test files **and** two commands, and the round ran them — `css:lint` 15.1 s, `css:tokens` 1.6 s, both green, against 7 s a side for the tests. #11186, one new file under `public/js/` with a hardcoded `textContent`: the selection reported 9 test files and three commands, `i18n:contract` failed in 4.0 s naming the file and the string, and the round came back red on it with 0 red tests on either side.",
+        "So the gates' cost profile is not the tests'. On #11185 the two commands took 17 s against 14 s for both suite runs together — `css:lint` is stylelint over the whole of `public/css/**`, not over the diff, so it does not shrink when the selection does. That is the shape to expect: a narrower selection makes the tests cheaper and leaves the commands where they are.",
+        "`css:lint` measured 15.1 s here against the 7.50 s `npm run ci` timed on #11158. Same command, same machine, twice the number — worth knowing before any decision rests on the 20.0 s figure in this plan's goal."
+      ]
+    },
+    {
+      "title": "memoro's own runner stops at the first failing command; mc no longer does",
+      "body": [
+        "This step's instruction quotes `ci.mjs` as having chosen to run every command even after one fails. The comment it quotes is real — `runCi` runs `executeCommands` whether or not the tests passed — but it is about tests versus commands. Among the commands themselves, `executeCommands` in `scripts/testing/ci.mjs` ends its loop with `if (result.code !== 0 || result.signal) break;`.",
+        "mc follows the instruction rather than the code: every command the selection named runs, and the verdict reports all of them. #11186 is the evidence — `i18n:contract` failed, and `i18n:locale-contract` (5.6 s) and `i18n:validate` (0.3 s) still ran and still reported. On that pull request memoro's own runner would have shown one line where the round shows three.",
+        "That is a difference between two tools answering the same question, and it is the kind that goes unnoticed until somebody compares outputs. If the memoro side wants them to agree, `executeCommands` is the one line to change — and the round is the side that already behaves the way the comment describes."
+      ]
     }
   ],
   "documents": [
@@ -116,7 +132,7 @@
   "steps": [
     {
       "title": "Run the command gates the selection already reported",
-      "status": "ready",
+      "status": "done",
       "done_when": "A round over a pull request touching only `public/css/` reports `css:lint` and `css:tokens` in its verdict with timings and pass/fail, and a branch with a deliberate `i18n:contract` violation comes back red naming that command.",
       "instruction": [
         "`selectFiles` keeps `parsed?.files` and drops `commands`. Keep both. The commands are `{ id, packageScript, passBaseRef, resourceClass, selectedBy }`.",
