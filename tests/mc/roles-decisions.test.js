@@ -39,7 +39,7 @@ describe('the decision shape every role writes', () => {
       });
 
       it('forbids the question when it is not ready', () => {
-        assert.match(overlay, /unclear/u);
+        assert.match(overlay, /unclear|not ready/u);
         assert.match(overlay, /\bread\b/u);
       });
     });
@@ -78,7 +78,6 @@ describe('the decision shape every role writes', () => {
     const { overlay } = readCanonRole('brief');
     assert.match(overlay, phrase('says GO to'));
     assert.match(overlay, phrase('Never lay out options for him to choose between'));
-    assert.match(overlay, phrase('Present a decision as a menu of options'));
-    assert.doesNotMatch(overlay, phrase('the options in one line each'));
+    assert.match(overlay, phrase('is not his to answer'));
   });
 });

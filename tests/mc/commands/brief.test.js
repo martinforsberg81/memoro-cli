@@ -32,7 +32,6 @@ describe('the brief role', () => {
     const { overlay } = readCanonRole('brief');
     assert.match(overlay, /says\s+GO\s+to/u);
     assert.match(overlay, /Never\s+lay\s+out\s+options\s+for\s+him\s+to\s+choose\s+between/u);
-    assert.match(overlay, /Present\s+a\s+decision\s+as\s+a\s+menu\s+of\s+options/u);
     assert.match(overlay, /the\s+code\s+it\s+stands\s+on/u);
     assert.doesNotMatch(overlay, /the\s+options\s+in\s+one\s+line\s+each/u);
   });

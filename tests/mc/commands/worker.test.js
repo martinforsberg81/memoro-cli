@@ -118,10 +118,13 @@ describe('mc worker', () => {
     assert.equal(readFileSync(join(workRoot, 'w3', '.mc-role'), 'utf8'), 'worker\n');
     assert.match(result.stdout, /role from .*canon\/roles\/worker\.md/u);
     assert.ok(newSessionLine(log).includes('You are a worker on one project.'));
-    // The escalation the role now carries: a decision file, not a PM. The
-    // overlay is several lines, so it is read off the whole recording.
+    // The escalation the role carries: the step stops and the question goes in
+    // the pull request. There is no PM and no decision file. The overlay is
+    // several lines, so it is read off the whole recording.
     const recorded = readFileSync(log, 'utf8');
-    assert.match(recorded, /\.\.\/decisions\/<project>-<date>\.md/u);
+    assert.match(recorded, /`status: blocked`/u);
+    assert.match(recorded, /in the pull request/u);
     assert.doesNotMatch(recorded, /escalate to the PM/iu);
+    assert.doesNotMatch(recorded, /decisions\//u);
   });
 });
