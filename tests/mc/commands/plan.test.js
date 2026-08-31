@@ -29,7 +29,8 @@ describe('the plan role', () => {
     assert.deepEqual(role.tools, ['claude', 'codex']);
     assert.match(role.overlay, /docs\/project\/<programme>\/<name>\/PLAN\.json/u);
     assert.match(role.overlay, /Plan: <name>/u);
-    assert.match(role.overlay, /\*\*Beslut:\*\*/u);
+    // No answer line to dictate: mc keeps no decision file to write one in.
+    assert.doesNotMatch(role.overlay, /\*\*Beslut:\*\*/u);
     assert.match(role.overlay, /Never create a parallel programme/u);
     // The role's last instruction: a plan PR is documentation, so it lands
     // itself instead of waiting for a click.

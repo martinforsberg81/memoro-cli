@@ -131,8 +131,8 @@ a project name is dropped, so is a name with no plan on main and a name whose
 plan is `done`, one runner.log line each. A name leaves the file the moment
 its step has *run*, so the file empties itself over a round.
 
-`waiting-decision` and `blocked` keep their place. They have a step ahead of
-them; a name leaves because it ran, never because it was skipped.
+A `blocked` step keeps its place. It has a step ahead of it; a name leaves
+because it ran, never because it was skipped.
 
 ## What is handed to Martin instead
 

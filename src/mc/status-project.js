@@ -1,6 +1,6 @@
 /**
  * `mc status <name>` — one project on one page: what its plan says right
- * now, which decisions belong to it and whether they are answered, the last
+ * now, the last
  * three runner steps, and the open PR on its branch.
  *
  * The plan is read from the workarea's working tree when there is one, and
@@ -16,30 +16,11 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
-import { defaultRepos, runsFor, scanDecisions } from './brief-collect.js';
+import { defaultRepos, runsFor } from './brief-collect.js';
 import { planSummary, readPlanText } from './plan-schema.js';
 import { workRoot } from './paths.js';
 
 /* ---------------------------------------------------------------- builders */
-
-/**
- * The decisions that belong to one project: those written in its own
- * workarea, those named for it, and the programme-wide ones — `mc-2.md`,
- * `docx-editing-surface-6.md` — which are the programme's name and a number.
- *
- * `kindFor` in status-collect.js asks a looser question, any file whose name
- * starts with the programme, because it only has to decide whether the
- * runner may take a step and a false yes there costs nothing. Here the
- * looser rule is wrong: under programme `mc` it would hand `mc-status` the
- * decisions of `mc-run` and `mc-brief`, which are their projects' and not
- * this one's.
- */
-export function decisionsForProject(decisions, { project, programme }) {
-  const programmeWide = programme ? new RegExp(`/decisions/${programme}-\\d+\\.md$`, 'u') : null;
-  return decisions.filter((d) => d.area === project
-    || d.file.includes(`/decisions/${project}-`)
-    || (programmeWide && programmeWide.test(d.file)));
-}
 
 /**
  * The frontmatter as label rows. `next` is not among them: it is a
@@ -63,7 +44,7 @@ export function fieldRows(plan, problems = []) {
 /** One line per step: where the project got to, and where it stopped. */
 export function stepRows(plan) {
   const steps = Array.isArray(plan?.steps) ? plan.steps : [];
-  const mark = { done: '✓', ready: '▸', blocked: '■', 'waiting-decision': '?' };
+  const mark = { done: '✓', ready: '▸', blocked: '■' };
   return steps.map((step, index) => {
     const waiting = step.blocked_by ? ` on ${step.blocked_by.kind} ${step.blocked_by.name}` : '';
     const state = step.status === 'done'
@@ -94,7 +75,7 @@ export function wrap(text, width, pad) {
 }
 
 export function renderProject({
-  name, repo, programme, path, source, unmerged, plan, problems = [], workarea, decisions, runs, prs, notes = [],
+  name, repo, programme, path, source, unmerged, plan, problems = [], workarea, runs, prs, notes = [],
 }) {
   const out = [];
   out.push(`${name} — ${[repo, programme].filter(Boolean).join(' · ') || 'no repository'}`);
@@ -120,13 +101,6 @@ export function renderProject({
     }
   }
 
-  out.push('DECISIONS');
-  if (!decisions.length) out.push('  none');
-  for (const d of decisions) {
-    out.push(`  ${d.answered ? 'answered' : 'waiting '}  ${d.file}  ${clip(d.title, 60)}`);
-    if (!d.answered && d.recommendation) out.push(`            ${wrap(d.recommendation, 76, 12)}`);
-  }
-  out.push('');
 
   out.push('LAST RUNS');
   if (!runs.length) out.push('  none in the runner log');
@@ -251,7 +225,6 @@ export async function collectProject(name, {
     plan,
     problems,
     workarea,
-    decisions: decisionsForProject(scanDecisions(root), { project: name, programme }),
     runs: runsFor(tsv, name, 3),
     prs,
     notes,

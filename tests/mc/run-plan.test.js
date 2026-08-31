@@ -32,7 +32,7 @@ test('assembleQueue: a name with no plan on main is dropped, not skipped', () =>
  */
 test('strictQueue: names of projects that still have a step to run, and nothing else', () => {
   const text = '# the queue\n\n## Martin first\nalpha\nover\nghost\nalpha\nbeta\n';
-  const plans = [{ project: 'alpha', status: 'ready' }, { project: 'beta', status: 'waiting-decision' }, { project: 'over', status: 'done' }];
+  const plans = [{ project: 'alpha', status: 'ready' }, { project: 'beta', status: 'blocked' }, { project: 'over', status: 'done' }];
   const { names, dropped } = strictQueue(text, plans);
   assert.deepEqual(names, ['alpha', 'beta'], 'a plan that is not ready still has a step ahead of it');
   assert.deepEqual(dropped, [
@@ -60,7 +60,7 @@ test('queueFileText: one name per line, and an empty file when every name has ru
  * the first unfinished step now, so a fixture makes that step.
  */
 function record({ status = 'ready', steps } = {}) {
-  const stopped = status === 'blocked' || status === 'waiting-decision';
+  const stopped = status === 'blocked';
   return {
     path: 'docs/project/p/x/PLAN.json',
     legacy: false,
@@ -119,13 +119,13 @@ test('chooseKind: the first unfinished step decides, and it is not skipped past'
   const plan = record({
     steps: [
       { title: 'One', status: 'done', done_when: 'x', instruction: [], pr: 1, blocked_by: null },
-      { title: 'Two', status: 'waiting-decision', done_when: 'y', instruction: ['do'], pr: null, blocked_by: { kind: 'decision', name: 'p-2' } },
+      { title: 'Two', status: 'blocked', done_when: 'y', instruction: ['do'], pr: null, blocked_by: { kind: 'decision', name: 'p-2' } },
       { title: 'Three', status: 'ready', done_when: 'z', instruction: ['do'], pr: null, blocked_by: null },
     ],
   });
   const choice = chooseKind({ plan });
   assert.equal(choice.kind, null);
-  assert.equal(choice.skip, 'step 2 is waiting-decision on decision p-2');
+  assert.equal(choice.skip, 'step 2 is blocked on decision p-2');
 });
 
 /**
@@ -139,16 +139,16 @@ test('chooseKind: no plan does nothing, and says nothing', () => {
 });
 
 /**
- * And the runner has nothing to do with decisions: waiting-decision is not
+ * And the runner has nothing to do with decisions: blocked is not
  * ready, and no answered file anywhere changes that. The plan comes back by
  * being set `ready`.
  */
-test('chooseKind: waiting-decision is simply not ready', () => {
-  const waiting = chooseKind({ plan: record({ status: 'waiting-decision' }) });
+test('chooseKind: blocked is simply not ready', () => {
+  const waiting = chooseKind({ plan: record({ status: 'blocked' }) });
   assert.equal(waiting.kind, null);
-  assert.equal(waiting.skip, 'step 1 is waiting-decision on decision p-1');
+  assert.equal(waiting.skip, 'step 1 is blocked on decision p-1');
   assert.deepEqual(
-    chooseKind({ plan: record({ status: 'waiting-decision' }), answered: ['/d/a-1.md'] }),
+    chooseKind({ plan: record({ status: 'blocked' }), answered: ['/d/a-1.md'] }),
     waiting,
     'an answered decision file is not a parameter any more',
   );
@@ -172,7 +172,7 @@ test('stepPrompt names the step, its done_when, and what the session may edit', 
   // The boundary is in the prompt as well as the role, because it is what the
   // runner checks on the way back in.
   assert.match(p, /not another step, not the goal, the contract or the scope/u);
-  assert.match(p, /decisions\/x-2026-08-29\.md/u, 'it still says where a question it cannot answer goes');
+  assert.match(p, /set this step to\n`blocked` with `blocked_by`/u, 'it still says how to stop on a question it cannot answer');
   assert.match(p, /----- PLAN\.json -----\n\{"schema":"mc-plan"\}/u);
   // The runner only ever starts a plan whose first unfinished step is ready, so
   // a step is never handed an answered decision to apply (Martin, 2026-08-29).

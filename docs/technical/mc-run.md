@@ -185,9 +185,9 @@ with the conflicting paths named in its prompt.
 
 There is no `triage` and there never will be again: the runner runs plans, it
 does not write them. Planning is `mc plan <name>`, a foreground session with
-Martin in it. And `waiting-decision` is simply not `ready` — the runner does
-not read decision files, count them, or start a project because one was
-answered. A plan comes back by being set `ready`, which is the job of whoever
+Martin in it. And a stopped step is simply not `ready` — the runner never read
+decision files, counted them, or started a project because one was answered,
+and there are none to read now. A plan comes back by being set `ready`, which is the job of whoever
 applies the answer.
 
 ### The session
@@ -208,7 +208,7 @@ Fresh, headless, and assembled from the plan's own frontmatter
 The prompt body is the PLAN.json itself, wrapped in `stepPrompt`: you are in
 this workarea, do the step named in `next:`, its "done when" is your success
 criterion, say in the PR body how you verified it, and — if the Contract must
-change — write `../decisions/<name>-<date>.md` instead. It ends "Do not merge.
+change — stop with the step `blocked` and say so in the PR. It ends "Do not merge.
 Do not ask questions. Stop when the PR exists."
 
 Around that body go the Coding Profile and `canon/roles/{step,reconcile}.md`,

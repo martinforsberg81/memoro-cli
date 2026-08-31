@@ -24,7 +24,7 @@
  * the only part that touches the machine, and `renderPage` (page-render.js)
  * is the only part that knows how it looks.
  *
- * The readers are shared: `nowBlock`, `kindFor`, `decisionsBlock`,
+ * The readers are shared: `nowBlock`, `kindFor`,
  * `areasWithCheckout` and `pidAlive` come from status-collect.js, the plan and
  * runs.tsv parsers from brief-collect.js, the digest's shape from
  * helper-collect.js.
@@ -34,14 +34,14 @@ import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
 import {
-  DAY_MS, defaultRepos, queueNames, runsSince, scanDecisions, summariseRuns,
+  DAY_MS, defaultRepos, queueNames, runsSince, summariseRuns,
 } from './brief-collect.js';
 import { intakeDir, proposalsDir } from './helper-collect.js';
 import { ageWords, loadPlans, loadPrs, savePrs } from './page-cache.js';
 import { workRoot } from './paths.js';
 import { PRICES_DATED, estimateCost } from './prices.js';
 import {
-  RUNNER_MODEL, areasWithCheckout, decisionsBlock, kindFor, nowBlock, pidAlive,
+  RUNNER_MODEL, areasWithCheckout, kindFor, nowBlock, pidAlive,
 } from './status-collect.js';
 
 /** How many of each list the page names rather than counts. */
@@ -119,14 +119,6 @@ export function queueSection({ queue = [], plans = [], live = [], named = QUEUE_
     more: Math.max(0, runnable.length - named),
     skipped: { count: skipped.length, reasons },
   };
-}
-
-/* --------------------------------------------------------------- DECISIONS */
-
-/** The open questions: how many, and the first few by file. */
-export function decisionsSection(decisions = [], { named = DECISIONS_NAMED } = {}) {
-  const waiting = decisionsBlock(decisions);
-  return { count: waiting.length, first: waiting.slice(0, named), more: Math.max(0, waiting.length - named) };
 }
 
 /* ------------------------------------------------------------------ INTAKE */
@@ -506,7 +498,6 @@ export async function collectPage({
       alive,
     }),
     queue: queueSection({ queue, plans, live: liveNames }),
-    decisions: decisionsSection(scanDecisions(root)),
     intake: intakeSection({ digest: readDigest(intakeDir(env)), proposals: proposalFiles(proposalsDir(env)), now }),
     projects: projectsSection({
       plans, areas, rows, openPrs: prs.prs, live: liveNames,

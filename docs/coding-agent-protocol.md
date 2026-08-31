@@ -52,7 +52,7 @@ Work is **projects**, and a project is a `PLAN.json` on `main`. This is the same
 shape in memoro; the difference is only which repository the plan lives in.
 
 ```
-mc brief    → Martin answers open questions with a **Beslut:** line
+mc brief    → Martin and a session read what happened and what is waiting
 mc plan     → a foreground session writes docs/project/<programme>/<name>/PLAN.json
 mc run      → the runner takes one step of one ready plan, in a fresh session
 mc merge    → the gate, then the squash
@@ -63,7 +63,7 @@ mc merge    → the gate, then the squash
   programme here, `mc`. One file: the overall part — `goal`, `contract`,
   `out_of_scope`, `success_criteria`, `what_the_code_taught_us`, `documents` —
   then `steps[]`, each carrying its own `instruction`, `done_when` and `status`
-  (`ready` | `done` | `blocked` | `waiting-decision`). The plan has no status of
+  (`ready` | `done` | `blocked`). The plan has no status of
   its own: it is the state of the first step that is not done. See
   [`docs/project/README.md`](project/README.md).
 - **You do not write plan state by hand.** `mc plan <name>` opens the session
@@ -348,7 +348,7 @@ than left to be rediscovered:
 - Don't guess on design with 2+ reasonable options — raise a decision
   file (`~/mc/<workarea>/decisions/<programme>-<n>.md`) with one
   recommendation and let `mc brief` answer it. A menu of options is not a
-  decision file; if you cannot recommend one, investigate further first
+  question; if you cannot recommend one, investigate further first
 - Don't add `--non-interactive` flags to commands that are already
   non-interactive by default
 - Keep `CLAUDE.md` / `AGENTS.md` thin. They are hand-edited wrappers

@@ -8,7 +8,7 @@ import { describe, it } from 'node:test';
 
 import { runsSince } from '../../src/mc/brief-collect.js';
 import { estimateCost, priceFor } from '../../src/mc/prices.js';
-import { decisionsBlock, kindFor, nowBlock, pidAlive } from '../../src/mc/status-collect.js';
+import { kindFor, nowBlock, pidAlive } from '../../src/mc/status-collect.js';
 
 /**
  * Plans as `listPlans` returns them, with the parsed plan on the record: a
@@ -16,7 +16,7 @@ import { decisionsBlock, kindFor, nowBlock, pidAlive } from '../../src/mc/status
  * state it is in by building that step.
  */
 function planRecord({ repo, programme, project, status, title }) {
-  const stopped = status === 'blocked' || status === 'waiting-decision';
+  const stopped = status === 'blocked';
   const plan = {
     schema: 'mc-plan',
     version: 1,
@@ -39,15 +39,10 @@ function planRecord({ repo, programme, project, status, title }) {
 }
 
 const PLANS = [
-  planRecord({ repo: 'memoro', programme: 'assistant-avatar', project: 'avatar-self-serve', status: 'waiting-decision', title: 'Answer decision 4' }),
+  planRecord({ repo: 'memoro', programme: 'assistant-avatar', project: 'avatar-self-serve', status: 'blocked', title: 'Answer decision 4' }),
   planRecord({ repo: 'memoro', programme: 'assistant-avatar', project: 'avatar-image-animation', status: 'ready', title: 'Publish Tim' }),
   planRecord({ repo: 'memoro', programme: 'docx-editing-surface', project: 'docx-editor', status: 'blocked', title: 'Wait' }),
   planRecord({ repo: 'memoro-cli', programme: 'mc', project: 'mc-status', status: 'ready', title: 'The page' }),
-];
-const DECISIONS = [
-  { area: 'avatar-image-animation', file: 'avatar-image-animation/decisions/assistant-avatar-4.md', title: '4. Retention?', answered: true },
-  { area: 'docs-structure', file: 'docs-structure/decisions/docs-navigation-1.md', title: '1. Where do docs go?', answered: false },
-  { area: 'focused-session-ui', file: 'focused-session-ui/decisions/focused-session-ui-2026-08-25.md', title: 'Contract change?', answered: false },
 ];
 const TSV = [
   'ts\tname\tkind\texit\tseconds\tpr\tturns\tinput\toutput\tcache_read\tcache_write\tsession\tnote',
@@ -62,7 +57,7 @@ describe('kind', () => {
     const ctx = { plans: PLANS };
     assert.equal(kindFor('brand-new', ctx), 'skip:no-plan', 'the runner does not write plans');
     assert.equal(kindFor('avatar-image-animation', ctx), 'step');
-    assert.equal(kindFor('avatar-self-serve', ctx), 'skip:waiting-decision', 'an answered decision file does not start it');
+    assert.equal(kindFor('avatar-self-serve', ctx), 'skip:blocked', 'a blocked step is not ready');
     assert.equal(kindFor('docx-editor', ctx), 'skip:blocked');
   });
 });
@@ -156,11 +151,3 @@ describe('NOW', () => {
   });
 });
 
-describe('DECISIONS', () => {
-  it('lists only unanswered files and names what waits on them', () => {
-    assert.deepEqual(decisionsBlock(DECISIONS).map((d) => [d.file.split('/').at(-1), d.waits_on]), [
-      ['docs-navigation-1.md', 'docs-navigation'],
-      ['focused-session-ui-2026-08-25.md', 'focused-session-ui'],
-    ]);
-  });
-});

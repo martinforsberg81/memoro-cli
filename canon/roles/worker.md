@@ -41,16 +41,13 @@ not as a list for him to pick from. He should be able to answer in one word.
 Write no file at all when the question is unclear, or when reading further
 would answer it. Then the work is to read, not to ask: an unclear question
 costs him more than it costs you, and he cannot see what you have not
-understood. A decision file is a thing you have finished thinking about.
+understood. A question you put to Martin is one you have finished thinking
+about.
 
-Then set `status: waiting-decision` in the plan, commit, push, open the pull
-request, and stop. Martin answers by appending a line beginning `**Beslut:**`
-to that file. The next session writes that answer into the plan and sets
-`status:` back to `ready` — that, and nothing else, is what puts the project
-back in front of the runner, which reads no decision file at all. The next
-`mc brief --collect` then deletes the file, once no plan waits on it: the
-plan is where the decision lives afterwards, and `decisions/` never
-accumulates.
+Then set `status: blocked` in the plan with `blocked_by` saying what the
+answer has to be about, commit, push, open the pull request, and stop. Say the
+question in the pull request — that is where it will be read. A plan comes
+back by someone setting the step `ready` again, and by nothing else.
 
 ## What you never do
 

@@ -27,7 +27,7 @@ const REQUIRED = Object.freeze([
   'steps',
 ]);
 
-const STEP_STATUSES = new Set(['ready', 'done', 'blocked', 'waiting-decision']);
+const STEP_STATUSES = new Set(['ready', 'done', 'blocked']);
 
 async function projectDirs() {
   const out = [];
@@ -80,7 +80,7 @@ test('every plan parses and carries every field', async () => {
       if (!step?.title?.trim()) problems.push(`${where}.title is empty`);
       if (!STEP_STATUSES.has(step?.status)) problems.push(`${where}.status is not a step status`);
       if (!step?.done_when?.trim()) problems.push(`${where}.done_when is empty — a session would have nothing to verify`);
-      if ((step?.status === 'blocked' || step?.status === 'waiting-decision') && !step?.blocked_by?.name) {
+      if ((step?.status === 'blocked') && !step?.blocked_by?.name) {
         problems.push(`${where} is ${step.status} and does not name what it waits for`);
       }
     }

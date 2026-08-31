@@ -3,11 +3,10 @@
  * script and written to one file. No model is involved here; the model is
  * the session that reads the file afterwards.
  *
- * Nine sections, in the order the plan fixes them: merged since the last
- * brief · opened, not merged · waiting on Martin · the helper's proposals ·
- * plan status · archived without a note · workareas with no plan · runner ·
- * queue. Every line comes from a file the runner or a session already
- * writes (`~/mc/runner/log/runs.tsv`, `~/mc/<area>/decisions/<n>.md`,
+ * Eight sections, in the order the plan fixes them: merged since the last
+ * brief · opened, not merged · the helper's proposals · plan status ·
+ * archived without a note · workareas with no plan · runner · queue. Every line comes from a file the runner or a session already
+ * writes (`~/mc/runner/log/runs.tsv`,
  * `docs/project/<programme>/<project>/PLAN.md` on origin/main, `~/mc/queue.md`,
  * `~/mc/intake/*.md`) or from GitHub through `gh`. The pure builders take text
  * and return data so the test can feed them fixtures; `collectBrief` is the
@@ -17,7 +16,7 @@
  * first run looks back 24 hours.
  */
 import { execFile, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
@@ -26,24 +25,6 @@ import { planSummary, readPlanText } from './plan-schema.js';
 import { workRoot } from './paths.js';
 
 export const DAY_MS = 24 * 60 * 60 * 1000;
-
-/**
- * The answer line: Martin's word, written into the decision file.
- *
- * It used to be the runner's trigger — a `waiting-decision` project started
- * again the moment any file for its programme carried this line. It is not,
- * any more. The runner runs `ready` plans and nothing else (Martin,
- * 2026-08-29), so the line is read here and nowhere else: it is what marks a
- * question closed, and what lets `retireDecisions` delete the file once the
- * plan carries the answer. `canon/roles/brief.md` fixes the shape a brief
- * session writes, and `tests/mc/commands/brief.test.js` holds the overlay's
- * own template against this pattern. There is no second implementation to
- * keep in step any more: `~/mc/bin/runner.sh` and its own grep are deleted.
- */
-export const ANSWER_LINE = /^\*\*Beslut/u;
-
-/** Bookkeeping that lives under a `decisions/` directory but asks nothing. */
-export const NOT_A_DECISION = new Set(['README.md', 'log.md', 'merge-log.md']);
 
 /** The two repositories that carry projects, checked out on main at home. */
 export function defaultRepos(env = process.env) {
@@ -68,144 +49,6 @@ export function lastBriefTime(dir) {
     if (!newest || time > newest) newest = time;
   }
   return newest;
-}
-
-/* ----------------------------------------------------------------- decisions */
-
-/**
- * One decision file: the question is the first `# ` heading, the session's
- * recommendation is the first paragraph under `## Rekommendation` — or a
- * bold lead, `**Recommendation: option 2.**`, both shapes exist — and it is
- * answered when a line starts with `**Beslut`.
- *
- * A `# ` heading is the whole test. Anything narrower hides an open question
- * from the only person who can answer it, and this file is now the only
- * reader there is — nothing else watches `decisions/` at all. This once also
- * demanded an options-or-recommendation section; measured
- * against ~/mc on 2026-08-29 that dropped five files the runner watches —
- * `swedish-grammar/decisions/language-content-1.md` unanswered among them,
- * its options written as `## Half one …` and its alternatives as bullets —
- * and let in `pm/decisions/log.md`, a 358 kB append-only log, because one of
- * its thousands of lines matched. The bookkeeping names go by name instead,
- * in `scanDecisions`.
- */
-const RECOMMENDATION = /^(##\s+|\*\*)(Rekommendation|Recommendation)\b/iu;
-
-export function parseDecision(text) {
-  const lines = String(text || '').replace(/\r\n/gu, '\n').split('\n');
-  const heading = lines.find((line) => /^# /u.test(line));
-  if (!heading) return null;
-  const answered = lines.some((line) => ANSWER_LINE.test(line));
-  let recommendation = null;
-  const at = lines.findIndex((line) => RECOMMENDATION.test(line));
-  if (at >= 0) {
-    const bold = lines[at].startsWith('**');
-    const para = bold ? [lines[at].replace(/^\*\*(Rekommendation|Recommendation)[:.]?\s*/iu, '**').trim()] : [];
-    for (const line of lines.slice(at + 1)) {
-      if (ANSWER_LINE.test(line) || /^#/u.test(line)) break;
-      if (!line.trim()) { if (para.length) break; continue; }
-      para.push(line.trim());
-    }
-    recommendation = para.join(' ') || null;
-  }
-  const fm = planFields(text);
-  return {
-    title: heading.replace(/^#\s*/u, '').trim(),
-    recommendation,
-    answered,
-    owner: {
-      programme: fm.programme ?? null,
-      project: fm.project ?? null,
-      plan: fm.plan ?? null,
-    },
-  };
-}
-
-/**
- * Every `<work root>/<area>/decisions/*.md` that is a decision, parsed,
- * minus the bookkeeping names.
- */
-export function scanDecisions(root) {
-  const out = [];
-  let areas = [];
-  try { areas = readdirSync(root, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name).sort(); } catch { return out; }
-  for (const area of areas) {
-    const dir = join(root, area, 'decisions');
-    let files = [];
-    try { files = readdirSync(dir).filter((name) => name.endsWith('.md')).sort(); } catch { continue; }
-    for (const file of files) {
-      if (NOT_A_DECISION.has(file)) continue;
-      const path = join(dir, file);
-      const parsed = parseDecision(readFileSync(path, 'utf8'));
-      if (!parsed) continue;
-      out.push({ area, base: file.replace(/\.md$/u, ''), path, file: `${area}/decisions/${file}`, ...parsed });
-    }
-  }
-  return out;
-}
-
-/**
- * Which decision files have done their job and can go.
- *
- * `decisions/` is meant to hold open questions and nothing else. It did not:
- * on 2026-08-29 it held 51 files, 42 of them answered, some for weeks — so
- * every reader had to sort 51 to find the 6 that were live. Martin's rule is
- * that the plan changes for the decision and the file goes, deleted rather
- * than archived ("ALLT GAMMALT AV BESLUT MÅSTE RENSAS BORT").
- *
- * The test is deliberately not "has a `**Beslut:**` line". A file is retired
- * only when its answer has demonstrably landed: every plan that owns it has
- * left `waiting-decision`. Measured against `~/mc` the difference was eleven
- * files — `avatar-image-animation` carries seven answered decisions while its
- * plan still says `waiting-decision` and its `next:` still names one of them.
- * Deleting on the answer alone takes the answer away before whoever must
- * apply it has read it.
- *
- * **A decision file says who owns it, and that is read before anything is
- * guessed.** Its frontmatter carries `plan:`, `project:` or `programme:`, and
- * every file under `~/mc` on 2026-08-29 declared one. Only when none is
- * present does the old heuristic apply: a plan owns a file in its own area,
- * or one named `<programme>-*` or `<project>-*`.
- *
- * The heuristic alone was wrong for any programme whose name prefixes its
- * projects. `mc-test-1` declares `project: mc-test`, and no `mc-test` plan
- * exists — but `'mc-test-1'.startsWith('mc-')` made all eleven `mc` projects
- * its owners, none of them waiting, so a ruling nobody had applied and no
- * document carried was one `--collect` from deletion. Read as declared it is
- * an orphan, which is what it is.
- *
- * A file no plan owns is an **orphan** — the project it belonged to is gone
- * from main, or never existed — and a machine never deletes one: it is
- * reported so a person can decide. Silently deleting a question nobody has
- * answered is the one failure worse than keeping it.
- *
- * This runs from `mc brief --collect`, never from the runner: `mc run` has
- * nothing to do with decisions (Martin, 2026-08-29). So the tidying happens
- * when you sit down to look at the list, which is the moment it matters.
- */
-export function retireDecisions({ decisions = [], plans = [] } = {}) {
-  const owners = (d) => {
-    const own = d.owner || {};
-    if (own.plan) return plans.filter((p) => p.path === own.plan);
-    if (own.project) return plans.filter((p) => p.project === own.project);
-    if (own.programme) return plans.filter((p) => p.programme === own.programme);
-    return plans.filter((p) => d.area === p.project
-      || d.base?.startsWith(`${p.programme}-`)
-      || d.base?.startsWith(`${p.project}-`));
-  };
-
-  const remove = [];
-  const orphans = [];
-  const held = [];
-  for (const d of decisions) {
-    if (!d.answered) continue;                      // an open question stays
-    const mine = owners(d);
-    if (!mine.length) { orphans.push({ ...d, why: 'no plan on main owns it' }); continue; }
-    const waiting = mine.filter((p) => p.status === 'waiting-decision');
-    if (waiting.length) { held.push({ ...d, why: `${waiting.map((p) => p.project).join(', ')} still waiting-decision` }); continue; }
-    remove.push({ ...d, appliedBy: mine.map((p) => p.project).sort() });
-  }
-  return { remove, orphans, held };
 }
 
 /* ---------------------------------------------------------------- proposals */
@@ -486,7 +329,7 @@ const clip = (text, max = 90) => {
 };
 
 export function renderBrief({
-  now, since, firstBrief, merged, opened, decisions, proposals = [], plans,
+  now, since, firstBrief, merged, opened, proposals = [], plans,
   undocumented = null, unplanned = null, runs, queue, notes = [],
 }) {
   const out = [];
@@ -507,16 +350,6 @@ export function renderBrief({
   if (!opened.length) out.push('_nothing_');
   for (const pr of opened) out.push(`- ${pr.repo} #${pr.number} — ${pr.title} (${pr.headRefName}, ${pr.createdAt.slice(0, 10)})`);
   out.push('');
-
-  const waiting = decisions.filter((d) => !d.answered);
-  out.push('## Waiting on Martin', '');
-  if (!waiting.length) out.push('_no decision file without a **Beslut:** line_');
-  else {
-    out.push('| file | question | recommendation |', '|---|---|---|');
-    for (const d of waiting) out.push(`| ${d.file} | ${clip(d.title, 80)} | ${clip(d.recommendation || '—', 120)} |`);
-  }
-  const answered = decisions.length - waiting.length;
-  out.push('', `${waiting.length} waiting, ${answered} answered.`, '');
 
   out.push('## Proposals', '');
   if (!proposals.length) out.push('_none in ~/mc/proposals/_');
@@ -649,20 +482,6 @@ export async function collectBrief({
 
   const plans = present.flatMap((repo) => listPlans(repo, { git }));
 
-  // Tidy before the agenda is built, so the list is only ever open questions.
-  // The runner does not do this — it has nothing to do with decisions — and
-  // a person sitting down to look at the list is exactly when it matters.
-  const scanned = scanDecisions(root);
-  const { remove, orphans } = retireDecisions({ decisions: scanned, plans });
-  const retired = [];
-  for (const d of remove) {
-    try { rmSync(d.path); retired.push(d.file); } catch { notes.push(`could not remove ${d.file}`); }
-  }
-  if (retired.length) notes.push(`retired ${retired.length} answered decision file(s): ${retired.join(', ')}`);
-  for (const d of orphans) notes.push(`orphan decision ${d.file} — ${d.why}; answer it or delete it by hand`);
-  const gone = new Set(retired);
-  const decisions = scanned.filter((d) => !gone.has(d.file));
-
   let tsv = '';
   try { tsv = read(join(root, 'runner', 'log', 'runs.tsv')); } catch { notes.push('no runner/log/runs.tsv'); }
   const rows = runsSince(tsv, new Date(now.getTime() - DAY_MS));
@@ -680,11 +499,11 @@ export async function collectBrief({
   const unplanned = readIntake(read, join(intake, 'unplanned-workareas.md'), UNPLANNED_KEYS);
 
   const text = renderBrief({
-    now, since, firstBrief: !last, merged, opened, decisions, proposals, plans,
+    now, since, firstBrief: !last, merged, opened, proposals, plans,
     undocumented, unplanned, runs, queue, notes,
   });
   mkdirSync(dir, { recursive: true });
   const path = join(dir, `${now.toISOString().replace(/[:.]/gu, '-').replace(/-\d{3}Z$/u, 'Z')}.md`);
   writeFileSync(path, text);
-  return { path, text, data: { since, merged, opened, decisions, proposals, plans, undocumented, unplanned, runs, queue, notes } };
+  return { path, text, data: { since, merged, opened, proposals, plans, undocumented, unplanned, runs, queue, notes } };
 }
