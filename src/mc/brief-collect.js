@@ -23,7 +23,7 @@ import { join } from 'node:path';
 
 import { intakeDir, proposalsDir } from './helper-collect.js';
 import { planSummary, readPlanText } from './plan-schema.js';
-import { workRoot } from './paths.js';
+import { PLAN_HOME, workRoot } from './paths.js';
 
 export const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -125,14 +125,13 @@ export function parseDecision(text) {
  * Every `<work root>/<area>/decisions/*.md` that is a decision, parsed,
  * minus the bookkeeping names.
  *
- * `plan/` is mc's own directory for planning sessions rather than a workarea,
- * so the questions a programme's planning session raises sit one level deeper
- * — `~/mc/plan/<programme>/decisions/`. They are read as everything else here
- * is: a decision is a decision wherever it was written, and the reader who
- * answers it should not have to know which kind of session asked.
+ * `plan/` is mc's own directory for planning sessions rather than a workarea
+ * (`paths.js`), so the questions a programme's planning session raises sit one
+ * level deeper — `~/mc/plan/<programme>/decisions/`. They are read as
+ * everything else here is: a decision is a decision wherever it was written,
+ * and the reader who answers it should not have to know which kind of session
+ * asked.
  */
-export const PLAN_HOME = 'plan';
-
 export function scanDecisions(root) {
   const out = [];
   const areas = [];
