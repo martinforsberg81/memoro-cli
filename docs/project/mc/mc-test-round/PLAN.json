@@ -1,0 +1,179 @@
+{
+  "schema": "mc-plan",
+  "version": 1,
+  "goal": [
+    "`mc test <repo> <pr>` reads that repository's instruction for what to run, runs it **once** on the candidate, and says what it cost. Today it does none of those three: the instruction lives in mc's own source, the round runs the same file list on both sides, and the verdict cannot say where the time went.",
+    "The worst of it is silent. `selectFiles` in `src/mc/repo-gate.js` parses the selector's JSON and keeps `parsed?.files`. The same JSON carries `commands`, and for a real memoro pull request that is six gates — `i18n:contract`, `i18n:locale-contract`, `i18n:validate`, `sdk:check`, `css:lint`, `css:tokens`, **20.0 s together** — which the round reads and discards. Before `select` was declared the round ran `npm test`, which runs its own selected commands, so the move to selection traded away every contract gate the gate had, to save nothing.",
+    "The instruction is deliberately not \"run `npm run ci`\". Measured on pull request #11158, that is 554.7 s. Martin ruled it out on 2026-08-31: too big. The instruction is the list plus the gates the selector itself names, run once."
+  ],
+  "contract": [
+    "`mc test` never merges. `repo-gate.js` asserts against its own source that no merge call exists in it — *\"There is no way to merge a red gate. Not a flag, not an option, not an environment variable.\"* That assertion stays, and `mc merge` keeps paying for the measurement this verb performs rather than growing a second one.",
+    "The verdict stays differential: a name red on the candidate and not on the base is this change's doing, and one red on both is not. Skipping the baseline *run* may not change that rule — it may only change where the base's red set comes from, and a round that has no trustworthy set for its base runs the baseline as it does today.",
+    "The instruction is data about a repository, not logic in mc. This project adds no new hardcoded knowledge about a named repository to mc's source; it moves what is already there behind a declaration.",
+    "A round's report may not overstate what it measured. It already carries the selector's admission that it fell back to the whole suite; anything this project adds carries the same honesty, including how many files were run and against what."
+  ],
+  "out_of_scope": [
+    "What memoro selects, and how fast memoro's own suite is. That is `test-architecture/mc-test` in the memoro repository, and it is where the large numbers are — measured 2026-08-31, one path prefix draws 355 of a change's 395 test files, and removing it takes the run from 233.6 s to 21.1 s. This project cannot make that better and must not try.",
+    "Measurement B from `rulings.md` § 4 — a full suite run when the runner is idle, writing the repository's known red set. Step 3 gets the same 2× from a much smaller mechanism: each round records what it measured, and the next round on the same base reuses it. If that record proves too thin in practice, B is still there to build; it is not built on speculation.",
+    "`mc merge`'s landing sequence, and the worktree form of the verb (no pull request). Ruling 4 settled that the PR form comes first.",
+    "Deleting the `red-ratchet` mechanism or merging it with step 3's record. They answer different questions — the ratchet is a statement about main that never refuses, the record is a comparison set — and `src/mc/red-ratchet.js`'s header is explicit about why conflating them was wrong once already."
+  ],
+  "success_criteria": [
+    {
+      "met": false,
+      "criterion": "A round runs the command gates the repository's selection reported.",
+      "check": "`mc test memoro <pr>` on a pull request touching only `public/css/` shows `css:lint` and `css:tokens` in the verdict with their own timings; a branch with a deliberate `i18n:contract` violation comes back red naming that command. Both against a real pull request, not a fixture."
+    },
+    {
+      "met": false,
+      "criterion": "What to run for a repository is read from a declaration, and mc's shipped table is the fallback.",
+      "check": "`declarationFor` returns a repository's own `.mc/test.json` fields over the shipped entry and under `~/mc/repo-gates.json`; `tests/mc/repo-gate-table.test.js` covers all three levels, an unparseable file is a stop with a reason, and a repository with no file produces a declaration byte-identical to today's."
+    },
+    {
+      "met": false,
+      "criterion": "A second round against the same base does not run the baseline side.",
+      "check": "Two `mc test memoro <pr>` rounds on two pull requests sharing a base: the first runs both sides and records the base's red set, the second runs one and says which commit it compared against and how old the reading is. A round whose base has no record still runs both."
+    },
+    {
+      "met": false,
+      "criterion": "The verdict says what the round cost.",
+      "check": "The report names each phase with a timing, each command gate with its own, the ten most expensive test files, and the reach sentence — files selected, and what the selection is blind to. Read off a real round, not a unit test."
+    },
+    {
+      "met": false,
+      "criterion": "memoro-cli's own selector stops selecting a quarter of its suite for one documentation file.",
+      "check": "`node scripts/affected-tests.js --base-ref origin/main` over a diff adding one file under `docs/project/` selects fewer than 10 test files, against the 57 of 250 measured on 2026-08-30."
+    }
+  ],
+  "what_the_code_taught_us": [
+    {
+      "title": "The round reads `files` and throws away `commands`",
+      "body": [
+        "`selectFiles` in `src/mc/repo-gate.js` (around line 875 on main) takes `parsed?.files` and nothing else. `extra_gates` for memoro in `src/mc/repo-gate-table.js` is `Object.freeze([])`. So no contract gate runs in a round at all.",
+        "Measured 2026-08-31 in a memoro worktree: `node scripts/testing/ci.mjs --list --json --changed-path public/css/molecules/hero-card.css` reports 18 test files **and** `css:lint` and `css:tokens`. A round over that change runs the 18 and neither command.",
+        "On the real pull request #11158 the same selector reported six commands, and `npm run ci` timed each of them: `i18n:contract` 4.98 s, `i18n:locale-contract` 3.87 s, `i18n:validate` 0.25 s, `sdk:check` 1.65 s, `css:lint` 7.50 s, `css:tokens` 1.67 s. Twenty seconds. Martin approved exactly this set on 2026-08-31."
+      ]
+    },
+    {
+      "title": "The instruction may not be \"run the repository's whole gate\"",
+      "body": [
+        "The obvious design — mc runs `npm run ci -- --base-ref <base>` and reads its `--json-report` — was measured and rejected. On #11158 it is **554.7 s**: 530.6 s of tests at memoro's own two-slot cap plus 20.0 s of commands. Martin, 2026-08-31: *\"Full npm run ci ska vi inte köra. Det är för stort.\"*",
+        "The same 395 files run in 233.6 s when spawned the way `measureSelected` already spawns them — `node --test --test-reporter=tap` with no `--test-concurrency`, so Node's default of seven on this eight-core machine. So mc's own execution is already the faster of the two, and the instruction should keep it: list through the selector, run the list here, run the commands the selector named.",
+        "That has a cost mc must not hide. Because it does not go through memoro's runner, mc does not know a file's resource class — `printablePlan` in `ci.mjs` does not report one, even though `buildExecutionBatches` has them — so `sqlite` and `heavy` files have been running seven-wide in every round already. The memoro side of this work is adding that to the selection; until it does, the instruction declares which paths must not run in parallel, or it declares nothing and the round says so."
+      ]
+    },
+    {
+      "title": "`affected` is declared, normalised nowhere, read by dead code",
+      "body": [
+        "`src/mc/repo-freshen.js:9` describes the freshen step as running the repository's declared `affected`. `normalise()` in `src/mc/repo-gate-table.js` returns `prepare`, `prepare_why`, `select`, `select_why`, `extra_gates`, `merge_log` and `pr_tests_flags` — and no `affected`. The field is `undefined` for every repository and that path has never run.",
+        "`rulings.md` § 4 declared memoro's `affected` as `npm run ci -- --base-ref origin/main` and memoro-cli's as `ownTests`. Neither is reachable. Adding the field is one line; what it should hold for memoro is now a different answer than the ruling gave, for the reason above."
+      ]
+    },
+    {
+      "title": "Both sides, every round, and a fresh worktree each",
+      "body": [
+        "`runGate` builds two detached worktrees, runs `prepare` in each (memoro: `npm ci`, measured 7.8 s for a 492 MB `node_modules`), and runs the same file list in both. For #11158 that is two × 233.6 s of tests — about eight minutes for one pull request.",
+        "Ruling 4 already settled that the candidate side alone is the right shape, compared against main's recorded red set, and named three non-negotiable conditions. Condition 1 is satisfied: memoro's `scripts/testing/runner.mjs` no longer stops after a red batch, and `tapTotals` in `src/mc/tap-red.js` sums every process's summary rather than keeping the last. Verify both still hold before skipping a side — two truncated measurements match each other and read as \"no new red\".",
+        "What the ruling did not settle is where the recorded set comes from, and its answer (a full idle run) is a large machine for a 2×. Consecutive rounds usually share a base: main moves at merges, and several pull requests sit on the same `origin/main` between them. So a round that simply records what it measured gives the next round its baseline for free, and degrades to today's behaviour when it cannot."
+      ]
+    },
+    {
+      "title": "memoro-cli's own selector has memoro's disease, smaller",
+      "body": [
+        "Measured 2026-08-30: adding a single file under `docs/project/mc/` made `node scripts/affected-tests.js --base-ref origin/main` select **57 of 250** test files. Every one of them carried the same reason — `reads:docs/project/mc/`. A directory prefix appearing in a test's source is being matched as a pin against a new file underneath it.",
+        "Running those 57 took about 41 s and gave 782 tests, 781 passing. The one failure, `tests/mc/canon.test.js` \"reads all three packaged canon files from the real package\", is red identically on a clean `origin/main` checkout.",
+        "It is the same shape as memoro's blanket and a quarter the size, and it is in this repository's own gate. Worth fixing here rather than pointing at the other repository's version of it."
+      ]
+    },
+    {
+      "title": "Ruling 4 is the design of record, and this plan carries it",
+      "body": [
+        "`docs/project/mc/rulings.md` § 4, ruled 2026-08-29, raised as `mc-test-1`, owner `mc-test`. It says of itself: *\"No `mc-test` plan exists. This ruling is not carried by any plan.\"*",
+        "The project directory is `mc-test-round` and not `mc-test` for a mechanical reason worth writing down: `repoOf` in `src/mc/run.js` is a literal `[memoro, memoro-cli]` and returns the first repository with a worktree in the workarea, and `runStep` then reads the plan out of *that* worktree. The `mc-test` workarea holds both checkouts, so a plan named `mc-test` in this repository is invisible to the runner — it looks in memoro, finds no plan, and skips. A plan named `mc-test` already existed here on 2026-08-30 and had exactly that fault; it is deleted by this project's first commit.",
+        "That is a defect in `run.js`, not only an inconvenience: a project knows which repository its plan was found in, and that should outrank directory order. It is not fixed here — it is named so the next person does not rediscover it by having a plan silently never run."
+      ]
+    }
+  ],
+  "documents": [
+    { "label": "The ruling this project carries", "path": "../rulings.md" },
+    { "label": "What a round measures today", "path": "../../../technical/mc-merge.md" },
+    { "label": "The memoro half — what \"affected\" means, and where the large numbers are", "path": "https://github.com/martinforsberg81/memoro/blob/main/docs/project/test-architecture/mc-test/PLAN.json" }
+  ],
+  "steps": [
+    {
+      "title": "Run the command gates the selection already reported",
+      "status": "ready",
+      "done_when": "A round over a pull request touching only `public/css/` reports `css:lint` and `css:tokens` in its verdict with timings and pass/fail, and a branch with a deliberate `i18n:contract` violation comes back red naming that command.",
+      "instruction": [
+        "`selectFiles` keeps `parsed?.files` and drops `commands`. Keep both. The commands are `{ id, packageScript, passBaseRef, resourceClass, selectedBy }`.",
+        "Run them on the **candidate only**, after the files, in the order the selector gave. They are gates about the change rather than measurements of two trees: `css:tokens` and `i18n:contract` take `--base-ref` and are differential in themselves, so running them on the baseline would measure main against main. Invoke exactly as memoro's own `runPackageCommand` does — `npm run <packageScript>`, plus `-- --base-ref <ref>` when `passBaseRef` is true.",
+        "Run every command even after one fails, and report all of them. `ci.mjs` made that choice explicitly and wrote down the reason: while any selected test is red, a skipped command gate hides every contract regression it would have caught. Copy the behaviour, not the code.",
+        "Report each in the verdict the way `report.extra_gates` already is — name, command, duration, ok — and make the round's `ok` depend on them. Keep `extra_gates` as a separate concept: that is what an operator declares beside the suite, this is what the repository's selector chose for this diff. One list, a field saying which is which.",
+        "Verify against a real memoro pull request touching `public/css/`, then contrive the negative. The whole set costs 20.0 s on the pull request measured — this step is cheap and it is the one that stops the gate lying about what it checked."
+      ],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "The instruction the repository owns",
+      "status": "ready",
+      "done_when": "`declarationFor` reads `.mc/test.json` from the repository under test, layered shipped < repository file < `~/mc/repo-gates.json`; an unparseable file is a stop with a reason; a repository with no file behaves exactly as today; and `affected` is present in `normalise()`.",
+      "instruction": [
+        "`src/mc/repo-gate-table.js` holds memoro's `prepare`, `select`, `pr_tests_flags` and `merge_log` in mc's own source, so every change to how memoro tests itself is a memoro-cli release. The file's header argues at length that what a repository needs must be *written down* rather than guessed; this step keeps the rule and moves the writing to where the repository can do it.",
+        "Add the third layer to `declarationFor`: `SHIPPED`, then `<repoPath>/.mc/test.json`, then `readOverrides(root)`. The operator's file stays the last word — it is how a machine-local fact gets in without a release. A file that will not parse is a stop with a reason and never a silent fall-through, because a partial declaration must stop exactly as hard as a missing one.",
+        "Report which layer each field came from, the way `shadowed` already names the fields an override dropped. A refusal has to tell the reader which of three files to edit.",
+        "Add `affected: entry.affected ?? null` to `normalise()` — one line, and `repo-freshen.js` has been describing a path that does not exist without it.",
+        "What the declaration should hold for memoro is not what ruling 4 assumed. It is not `npm run ci`, which is 554.7 s and which Martin ruled out on 2026-08-31; it is the selector command that lists what the change reaches, the node flags to run that list with, and — until memoro's selection reports a resource class per file — the paths that must not run in parallel. Write the field for that last one even if memoro's file leaves it empty, so the honest answer \"this repository has not said\" is expressible.",
+        "Ship no `.mc/test.json` in memoro from here. The reader lands first and changes nothing on its own; memoro's file is a small pull request in that repository, which the memoro-side project can carry.",
+        "Cover all three precedence levels in `tests/mc/repo-gate-table.test.js`, plus the unparseable file, the partial file, and the no-file case asserting today's declaration byte for byte."
+      ],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "Measure one side, by remembering the other",
+      "status": "ready",
+      "done_when": "Two rounds on two pull requests sharing a base: the first runs both sides and records the base's red set, the second runs one side and names the commit it compared against and the age of the reading. A base with no record still runs both.",
+      "instruction": [
+        "This is the 2× and it is ruling 4's measurement A, reached by a smaller road than the ruling's. Read § 4 of `docs/project/mc/rulings.md` first — the shape, the three conditions and the reasoning are there and this instruction does not repeat them.",
+        "Today `runGate` runs `measureSelected` on the baseline worktree and again on the candidate, and `compareRed` calls the difference. Keep `compareRed` exactly as it is. Change only where the baseline's red names come from: a record written by a previous round, keyed by repository and base commit.",
+        "Write the record every round that runs a baseline, so the mechanism bootstraps itself with no separate job. Record the commit, the timestamp, the red names, the file list they were measured over, and the number of process summaries the run printed. Two of those matter for correctness and are easy to skip: a record measured over a *different file list* is not a baseline for this round's list, and a record whose summary count is lower than the batches the suite should have printed is a truncated run and must be marked unusable rather than trusted.",
+        "Use the record only when the base commit matches exactly. Do not attempt ancestry — main moves at merges and a descendant's red set is a different fact. A miss is not a failure: run the baseline, record it, say in the verdict that this round paid for the next one.",
+        "A missing record is not an empty record. Reading it as empty would call every standing red name on main a new regression introduced by the change under test.",
+        "Verify condition 1 of the ruling still holds before this goes live, rather than assuming: memoro's `scripts/testing/runner.mjs` must still run every batch after a red one, and `tapTotals` in `src/mc/tap-red.js` must still sum every `# tests` line. If either regresses, the record and the candidate are two truncated measurements that match and read as \"no new red\".",
+        "Do not touch `src/mc/red-ratchet.js` or merge the two files. Read its header: the ratchet is a statement about main that is reported and never refuses, and conflating it with the gate's comparison was a mistake once already. The record is a comparison set. They may share a format; they do not share a meaning, and a comment in each should say so."
+      ],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "Say what the round cost and how far it reached",
+      "status": "ready",
+      "done_when": "A round's human verdict names each phase with a timing, each command gate with its own, the ten most expensive test files, and the reach sentence; and `docs/technical/mc-merge.md` describes the round as it now is.",
+      "instruction": [
+        "The round times its phases and already carries a reach sentence for a selected round. This step finishes condition 2 of ruling 4 and makes the cost visible to whoever is waiting on it.",
+        "Per-file cost cannot be parsed from what the round captures: a 395-file run produced 3,317 `duration_ms` lines and **zero** `ok N - tests/…` lines, so the TAP has no file attribution at all. Node's test-runner reporter events carry `data.file`, so a small custom reporter under `src/mc/` is the way. Keep TAP for the red names — the parser in `tap-red.js` is what the verdict rests on — and take timings from the reporter beside it.",
+        "Report, in the text a person reads and not only in the JSON: the phases; the ten most expensive files; each command gate with its duration; and, once step 3 lands, the base commit the comparison used and how old that reading is. A person waiting four minutes should be able to see which four files it was without asking.",
+        "Keep the existing honesty about reach. The verdict must keep saying when the selector fell back to the whole suite, and it must keep naming what the selection cannot see. Do not copy a blindness number forward without re-running `memoro/scripts/testing/blindness.mjs` — a reach sentence that has stopped being true is worse than none.",
+        "Rewrite the round's description in `docs/technical/mc-merge.md` to match: the repository's own instruction, one measured side with a named comparison, the command gates, the timings. Delete the description of the two-sided file-list round rather than leaving it beside the new one; `repo-gate-table.js`'s header records what two places answering one question about one repository already cost here.",
+        "Replace the sentence in `docs/project/mc/rulings.md` § 4 that says no plan carries the ruling."
+      ],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "Stop this repository's own selector matching a directory as a pin",
+      "status": "ready",
+      "done_when": "A diff adding one file under `docs/project/` selects fewer than 10 test files, against the 57 of 250 measured on 2026-08-30, and the tests that genuinely read a plan document are still among them.",
+      "instruction": [
+        "Measured 2026-08-30: one new file under `docs/project/mc/` made `scripts/affected-tests.js` select 57 of this repository's 250 test files, every one with the reason `reads:docs/project/mc/`. The pin index is treating a directory prefix that appears in a test's source as a pin against every file underneath it.",
+        "That is the same defect as memoro's path-prefix blanket, a quarter the size, and in this repository's own gate. It is worth fixing here rather than only pointing at the other one.",
+        "A path literal that names a directory is a different fact from one that names a file. A test holding `'docs/project/mc/'` is almost always building a path or scanning a tree, not asserting on one document's text. Distinguish them — a pin resolves to a tracked *file*, a directory literal selects only when a rule says a test reads that tree — and keep the fail-closed half: a changed path the index cannot reason about must still select rather than silently not.",
+        "Verify both directions. The narrow case: adding one plan document selects the handful of tests that actually read plan documents, and `tests/architecture/plan-file-shape.test.js` had better be one of them. The wide case: changing a source file a test reads as text still selects that test — `merge-doc.test.js` asserting against `repo-gate.js`'s source is the example `repo-gate-table.js` names, and it must keep working.",
+        "Land the measurement: files selected before and after for the same one-document diff, and the reason list for each survivor."
+      ],
+      "pr": null,
+      "blocked_by": null
+    }
+  ]
+}
