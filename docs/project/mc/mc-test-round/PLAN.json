@@ -167,7 +167,7 @@
         "Ship no `.mc/test.json` in memoro from here. The reader lands first and changes nothing on its own; memoro's file is a small pull request in that repository, which the memoro-side project can carry.",
         "Cover all three precedence levels in `tests/mc/repo-gate-table.test.js`, plus the unparseable file, the partial file, and the no-file case asserting today's declaration byte for byte."
       ],
-      "pr": null,
+      "pr": 502,
       "blocked_by": null
     },
     {
