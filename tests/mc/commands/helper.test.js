@@ -138,10 +138,13 @@ describe('the helper role', () => {
   it('ships with mc, on a cheap model, and is the desk — not the digest reader', () => {
     const role = readCanonRole('helper');
     assert.equal(role.model, 'sonnet');
-    assert.match(role.overlay, /~\/mc\/helper\//u);
-    assert.match(role.overlay, /You are not the intake turn/u);
-    assert.match(role.overlay, /You do not triage the proposals already waiting/u);
-    assert.match(role.overlay, /You do not fix it/u);
+    // What the desk must know and cannot derive: it takes Martin's own
+    // reports, it adds, and it does not fix. A role no longer describes the
+    // other role's session — neither can act on the other's existence.
+    assert.match(role.overlay, /desk Martin walks up to/u);
+    assert.match(role.overlay, /do not fix it/u);
+    assert.match(role.overlay, /do not touch the proposals already waiting/u);
+    assert.doesNotMatch(role.overlay, /You are not the intake turn/u);
   });
 
   /**
