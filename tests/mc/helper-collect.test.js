@@ -12,7 +12,7 @@
  * No network, no model, no memoro checkout: every source is injected.
  */
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
@@ -153,7 +153,10 @@ describe('mc helper --collect — the sources', () => {
     const result = await collect(g);
     assert.equal(result.path, join(intakeDir(g.env), 'errors-memoro-2026-08-29.md'));
     assert.ok(readFileSync(result.path, 'utf8').startsWith('# Errors and maintenance'));
-    assert.doesNotThrow(() => readFileSync(join(proposalsDir(g.env), '..', 'errors-memoro-2026-08-29.md')));
+    // Two rooms, not one inside the other: the digest lands in intake, and
+    // proposals is its own directory beside it, made ready the same way.
+    assert.ok(existsSync(proposalsDir(g.env)), 'the proposals directory was not made');
+    assert.notEqual(proposalsDir(g.env), join(intakeDir(g.env), 'proposals'));
   });
 
   it('says in the file itself why the operations projection is absent', async () => {

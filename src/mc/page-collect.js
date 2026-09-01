@@ -518,7 +518,7 @@ export async function collectPage({
   };
 }
 
-/** The proposal files, by name — the page counts them; `mc brief` reads them. */
+/** The proposal files, by name. A count is all mc does with a proposal. */
 function proposalFiles(dir) {
   try { return readdirSync(dir).filter((name) => name.endsWith('.md')).sort(); } catch { return []; }
 }

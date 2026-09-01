@@ -355,7 +355,7 @@ reason this project cannot fix from inside: `mc run` executes from
 at process start — so a runner that merges an improvement to itself keeps
 running the old code for the rest of the round. The supervisor closes that at
 the round boundary. Owned by
-`~/mc/intake/proposals/2026-08-29-runner-runs-stale-code.md`.
+`~/mc/proposals/2026-08-29-runner-runs-stale-code.md`.
 
 ## How it is tested
 

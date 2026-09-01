@@ -15,7 +15,7 @@ import { describe, it } from 'node:test';
 import {
   UNDOCUMENTED_KEYS, UNPLANNED_KEYS,
   collectBrief, intakeRows, lastBriefTime, listPlans, parseCatFileBatch, parseDecision, parsePlanFrontmatter,
-  parseProposal, planFields, scanProposals,
+  listProposals, planFields,
   queueNames, runsFor, runsSince, scanDecisions, showBatch, summariseRuns,
 } from '../../src/mc/brief-collect.js';
 import { UNDOCUMENTED_HEADER, undocumentedRow } from '../../src/mc/archive-plan.js';
@@ -76,7 +76,10 @@ function workRoot() {
     '',
   ].join('\n'));
   writeFileSync(join(root, 'queue.md'), '# round 3\ndocx-editor\n\nsql-readiness-session-A\n');
-  mkdirSync(join(root, 'intake', 'proposals'), { recursive: true });
+  mkdirSync(join(root, 'proposals'), { recursive: true });
+  // Its own room beside intake, not inside it: intake is what the turn
+  // reads, proposals are what came out of reading it.
+  mkdirSync(join(root, 'intake'), { recursive: true });
   // What `mc run` left behind: one project archived with no note, two folders
   // no plan explains. Written through the runner's own row builders, so the
   // brief is read against the exact bytes the runner writes.
@@ -86,8 +89,8 @@ function workRoot() {
     unplannedRow({ name: 'msr-track-1', repo: 'memoro', uncommitted: 0, lastCommit: '2026-08-24', branch: 'ahead' }),
     unplannedRow({ name: 'mc-repo', repo: 'memoro-cli', uncommitted: 2, lastCommit: '2026-08-20', branch: 'landed' }),
   ]));
-  writeFileSync(join(root, 'intake', 'proposals', '2026-08-29-expose-operations.md'), PROPOSAL);
-  writeFileSync(join(root, 'intake', 'proposals', 'README.md'), 'Not a proposal: no title.\n');
+  writeFileSync(join(root, 'proposals', '2026-08-29-expose-operations.md'), PROPOSAL);
+  writeFileSync(join(root, 'proposals', 'a-note.txt'), 'Not markdown, so not counted.\n');
   return root;
 }
 
@@ -114,20 +117,22 @@ saying they cannot be read.
 `;
 
 describe('proposals', () => {
-  it('parses the frontmatter, the title and the one-line done when', () => {
-    const p = parseProposal(PROPOSAL);
-    assert.equal(p.name, 'expose-operations');
-    assert.equal(p.repo, 'memoro');
-    assert.equal(p.kind, 'project');
-    assert.equal(p.project, null);
-    assert.equal(p.title, 'The nightly and morning outcomes reach no script');
-    assert.match(p.doneWhen, /^The nightly task outcomes are a section in the digest/u);
-    assert.match(p.evidence, /answers 401 to an admin token/u);
+  // mc does not read a proposal. It used to parse a frontmatter and fixed
+  // section names, in three places that disagreed — a file whose first prose
+  // line was not marked `# ` was counted by the page, missing from the brief,
+  // and recorded as "wrote nothing" by the turn that had just written it. The
+  // names are the whole of what mc knows now.
+  it('lists the markdown names and nothing about what is in them', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mc-proposals-'));
+    writeFileSync(join(dir, 'b.md'), 'no heading here, and it still counts\n');
+    writeFileSync(join(dir, 'a.md'), '# A title\n');
+    writeFileSync(join(dir, 'notes.txt'), 'not markdown\n');
+    assert.deepEqual(listProposals(dir).map((p) => p.file), ['a.md', 'b.md']);
+    assert.deepEqual(Object.keys(listProposals(dir)[0]).sort(), ['file', 'path']);
   });
 
-  it('is not a proposal without a title, and an absent directory is empty', () => {
-    assert.equal(parseProposal('---\nname: x\n---\n\nno heading here\n'), null);
-    assert.deepEqual(scanProposals(join(tmpdir(), 'mc-no-such-proposals-dir')), []);
+  it('an absent directory is empty, not an error', () => {
+    assert.deepEqual(listProposals(join(tmpdir(), 'mc-no-such-proposals-dir')), []);
   });
 });
 
@@ -277,10 +282,10 @@ describe('collectBrief', () => {
     assert.match(text, /\| avatar\/decisions\/assistant-avatar-2\.md \| 1\. Ska QA-tabellen fortsätta grinda\? \| \*\*B\.\*\* Keeps the veto/u);
     assert.match(text, /\| avatar\/decisions\/language-content-1\.md \| Is the Swedish map accepted[^|]*\| — \|/u);
     assert.match(text, /2 waiting, 1 answered/u);
-    // The helper's own output, listed where Martin decides: one proposal, and
-    // the README beside it is not one.
+    // The helper's own output, listed where Martin decides: the names, and
+    // the .txt beside them is not one.
     assert.equal(result.data.proposals.length, 1);
-    assert.match(text, /\| 2026-08-29-expose-operations\.md \| project · memoro \| The nightly and morning outcomes reach no script \| The nightly task/u);
+    assert.match(text, /- `2026-08-29-expose-operations\.md`/u);
     // The two files the runner writes and nothing read until now.
     assert.deepEqual(result.data.undocumented.map((r) => r.project), ['msr-design']);
     assert.match(text, /\| 2026-08-29 \| memoro \| msr-core \/ msr-design \| #11003 \|/u, 'the URL is dropped, not clipped mid-link');

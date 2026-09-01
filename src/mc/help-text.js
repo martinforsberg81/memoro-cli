@@ -165,7 +165,7 @@ MAINTENANCE
   mc helper                        The desk: a session in ~/mc/helper/ that
                                     takes your report of a bug or something
                                     that should be better and writes it into
-                                    ~/mc/intake/proposals/<date>-<x>.md. It
+                                    ~/mc/proposals/<date>-<x>.md. It
                                     reads no digest, touches no proposal that
                                     is already there, and fixes nothing — you
                                     pick it up at mc brief or mc plan

@@ -34,7 +34,7 @@ writes:
 | Merged since last brief | `gh pr list --state merged --search merged:>=<since>`, per repository |
 | Opened, not merged | `gh pr list --state open` |
 | Waiting on Martin | every `~/mc/<area>/decisions/*.md` with no `**Beslut:**` line |
-| Proposals | `~/mc/intake/proposals/*.md`, what `mc helper`'s turn wrote |
+| Proposals | `~/mc/proposals/*.md`, what `mc helper`'s turn wrote |
 | Plan status | every `docs/project/*/*/PLAN.json` on `origin/main` of both repositories |
 | Archived without a note | `~/mc/intake/undocumented-closures.md` |
 | Workareas with no project on main | `~/mc/intake/unplanned-workareas.md` |

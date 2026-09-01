@@ -2,7 +2,7 @@
 
 Two things get noticed about memoro: what production says, and what Martin
 says. `mc helper` is the door for both, and **the only thing either of them
-produces is a proposal** — a file in `~/mc/intake/proposals/` that nobody
+produces is a proposal** — a file in `~/mc/proposals/` that nobody
 acts on until Martin picks it up at `mc brief` or `mc plan`.
 
 | | what it does |
@@ -220,7 +220,7 @@ trusting it not to.
 `proposals/` before and after and reports the difference. A turn that says it
 filed three and filed none is reported as having filed none.
 
-Its output is zero or more `~/mc/intake/proposals/<date>-<slug>.md`:
+Its output is zero or more `~/mc/proposals/<date>-<slug>.md`:
 
     ---
     name: <slug>
@@ -245,7 +245,7 @@ proposals is a good answer** — a quiet day should cost Martin nothing to
 read.
 
 The role forbids, in the same words: `queue.md`, any plan, any decision
-file, anything outside `~/mc/intake/proposals/`, production, a deploy, a
+file, anything outside `~/mc/proposals/`, production, a deploy, a
 credential, a PR, a session, and a question — there is nobody to answer one.
 
 ## When the eye runs
@@ -327,14 +327,17 @@ Nobody automatic. That is the point.
 | `canon/roles/intake.md` | what the turn is, what it may write, how it judges |
 | `src/mc/run-plan.js` | `helperDue`, `helperNote`, `HELPER_KIND`/`HELPER_NAME` |
 | `src/mc/run.js` | `runHelperDay` — the daily gate inside the round |
-| `src/mc/brief-collect.js` | `parseProposal`, `scanProposals`, the brief's Proposals section |
+| `src/mc/brief-collect.js` | `listProposals` — the names, and nothing about what is in them |
 | `src/mc/page-collect.js`, `page-render.js` | `newErrorLines`, `intakeSection`, the INTAKE block |
 
-Proposal parsing lives in `brief-collect.js` rather than beside the turn
-because it needs `planFields`, and `helper-turn.js` already imports that
-module — the other arrangement would have made the two files import each
-other. It also belongs there by meaning: that file already scans
-`decisions/`, and both are lists of things waiting for Martin.
+mc does not read a proposal. It used to parse a fixed frontmatter and fixed
+section names out of every file, in three places that disagreed with each
+other: a proposal whose first prose line was not marked `# ` was counted by the
+page, missing from the brief, and recorded as "wrote nothing" by the very turn
+that had just written it, with no error anywhere. The parse existed so a script
+could say what kind of thing each file was; nothing needs that. `listProposals`
+returns the markdown names, oldest first, and a session that has to know what
+is in one opens it.
 
 Tests: `tests/mc/helper-collect.test.js` (the digest on stubbed script output
 and stubbed routes, the delta against a previous digest, the failure domains

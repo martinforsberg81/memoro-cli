@@ -6,7 +6,7 @@
  * into `~/mc/intake/errors-<date>.md` without a model. This is the turn that
  * reads it: a fresh, headless session with the `intake` role from
  * `canon/roles/intake.md`, standing in `~/mc/intake/`, whose only output is
- * zero or more `~/mc/intake/proposals/<date>-<slug>.md`.
+ * zero or more `~/mc/proposals/<date>-<slug>.md`.
  *
  * The bare `mc helper` is the other half of the verb and is not here: it is a
  * session with Martin in it, taking his own reports (`commands/helper.js`).
@@ -29,7 +29,7 @@ import { existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { resolveLaunch } from '../adapters/index.js';
-import { defaultRepos, planFields, scanProposals } from './brief-collect.js';
+import { defaultRepos, listProposals, planFields } from './brief-collect.js';
 import { intakeDir, proposalsDir } from './helper-collect.js';
 import { loadProfile, profileArgs } from './portrait.js';
 import { readCanonRole } from './roles.js';
@@ -89,7 +89,7 @@ export function helperPrompt({ digestPath, digestText, proposalsPath = proposals
   out.push('', '----- PROJECT LOG (closed projects) -----', projectLog || '_none read_');
   out.push('', '----- PROPOSALS ALREADY WAITING -----');
   if (!proposals.length) out.push('_none_');
-  else for (const p of proposals) out.push(`- ${p.file} — ${clip(p.title, 90)}`);
+  else for (const p of proposals) out.push(`- ${p.file}`);
   return out.join('\n');
 }
 
@@ -199,7 +199,7 @@ export async function runHelperTurn({
   const dir = intakeDir(env);
   const proposals = proposalsDir(env);
   mkdirSync(proposals, { recursive: true });
-  const before = new Set((deps.list || scanProposals)(proposals).map((p) => p.file));
+  const before = new Set((deps.list || listProposals)(proposals).map((p) => p.file));
 
   const ground = await (deps.ground || helperGround)({ env });
   const prompt = helperPrompt({
@@ -217,7 +217,7 @@ export async function runHelperTurn({
   const read = readSessionOutput({
     toolId: launch.id, stdout: result.stdout, stderr: result.stderr, exitCode: result.status, timedOut: result.timedOut,
   });
-  const after = (deps.list || scanProposals)(proposals);
+  const after = (deps.list || listProposals)(proposals);
   const wrote = after.filter((p) => !before.has(p.file));
   return {
     ok: result.status === 0 && !result.timedOut,

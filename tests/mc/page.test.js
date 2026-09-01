@@ -500,9 +500,10 @@ describe('collectPage', () => {
     writeFileSync(join(root, 'queue.md'), '# the queue\nmc-ui\ndocx-editor\n');
     mkdirSync(join(root, 'org-update', 'decisions'), { recursive: true });
     writeFileSync(join(root, 'org-update', 'decisions', 'network-review-1.md'), '# 1. A durable graph model?\n\n## Rekommendation\n\nA.\n');
-    mkdirSync(join(root, 'intake', 'proposals'), { recursive: true });
+    mkdirSync(join(root, 'proposals'), { recursive: true });
+    mkdirSync(join(root, 'intake'), { recursive: true });
     writeFileSync(join(root, 'intake', 'errors-2026-08-29.md'), '# Errors\n\n## New since the last digest\n\n- ! `abc` — 41x 500 — loud\n');
-    writeFileSync(join(root, 'intake', 'proposals', '2026-08-29-one.md'), '# A proposal\n');
+    writeFileSync(join(root, 'proposals', '2026-08-29-one.md'), 'A proposal, with no heading — mc counts it either way.\n');
     for (const area of ['mc-ui', 'docx-editor']) mkdirSync(join(root, area, 'memoro-cli', '.git'), { recursive: true });
     return root;
   }
