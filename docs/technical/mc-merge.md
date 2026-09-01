@@ -303,6 +303,50 @@ is merged into the next branch *in the batch*, because the squash makes it
 unmergeable to the forge otherwise. Every branch it touches was named on the
 command line.
 
+## Landing a stack
+
+A stack is a delivery in several pull requests over the same files, where each
+branch was cut from the one below it rather than from `main`.
+
+**The batch form does not take one as it stands.** Every pull request in a
+batch must aim at the same base — `repo-gate.js` stops the round at `pr`
+otherwise, before it measures anything:
+
+```
+mc merge memoro-cli 509 510 511
+mc: the round stopped at pr — the batch aims at 3 different bases
+    (main, intake-no-proposal-parsing, decisions-out) — one round per base
+```
+
+The step that makes it work is on the forge, not here: retarget every branch at
+`main` first (`gh pr edit <n> --base main`), and the same command is accepted.
+Each head already contains the ones below it, so the merges into the candidate
+are trivial, and the tree recorded after each one is the tree `main` will have
+after that squash.
+
+**A batch is not atomic.** A red or a conflict drops it to a round per pull
+request, and that fallback can land a prefix and stop. Measured 2026-09-01 on
+the three-step stack above: red on a test already red on `main`, fell back,
+landed #509, refused #510 and #511.
+
+**A squashed base leaves the branches above it conflicting.** Not through
+anything the caller did between rounds — the round itself merges the current
+base into the candidate before measuring, and against a squash of the branch
+below, that merge conflicts wherever the two touched the same lines. Both
+branches left after #509 landed were plain, linear, carrying no merge commits
+of their own, and both reported `CONFLICT (content)` on their next round.
+
+**Rebase is what gets them in.** `git rebase --onto origin/main <the old base's
+head>` replays only what has not landed. Five rebases across that stack: three
+byte-identical in patch, two conflicting on real overlap with what had landed —
+a file two changes had each edited, and a file one change deleted while another
+edited it. Neither conflicted because of the stacking. Compare `git show <old>
+--stat` with `git show <new> --stat` rather than trusting the replay, and push
+with `--force-with-lease`.
+
+The in-batch freshen above is the same repair done inside the round, on
+branches the caller named, for the pull requests a batch does land.
+
 ## One round at a time
 
 Two leases, and between them a merge round cannot overlap another:
