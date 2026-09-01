@@ -21,7 +21,7 @@ const SCRIPT = new URL('../../scripts/affected-tests.js', import.meta.url).pathn
  * A throwaway git repository with the shape this selector reads: sources under
  * `src/`, tests under `tests/`, a base commit, and a change on top of it.
  */
-function repo({ base = {}, change = {} } = {}) {
+function repo({ base = {}, change = {}, remove = [] } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'mc-affected-'));
   const git = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8' });
   const write = (path, body) => {
@@ -39,7 +39,8 @@ function repo({ base = {}, change = {} } = {}) {
   git('commit', '-qm', 'base');
   git('branch', '-f', 'origin-main', 'main');
   for (const [path, body] of Object.entries(change)) write(path, body);
-  if (Object.keys(change).length) { git('add', '-A'); git('commit', '-qm', 'change'); }
+  for (const path of remove) git('rm', '-q', path);
+  if (Object.keys(change).length || remove.length) { git('add', '-A'); git('commit', '-qm', 'change'); }
 
   return {
     root,
@@ -254,6 +255,60 @@ describe('which tests a change reaches', () => {
       const { why } = fx.select();
       assert.equal(why.reason, 'full-suite');
       assert.deepEqual(why.unexplained, ['docs/orphan.md']);
+    } finally { fx.cleanup(); }
+  });
+
+  it('a doc that is deleted, and that nothing reads, reaches nothing', () => {
+    // The companion to the case above, and the reason it is not the same
+    // question. An orphan doc that is still there may have a reader this
+    // script cannot see; an orphan doc that is gone has nothing left to read.
+    const fx = repo({
+      base: {
+        'docs/orphan.md': '# nobody reads me\n',
+        'src/a.js': 'export const a = 1;\n',
+        'tests/a.test.js': "import { a } from '../src/a.js';\nexport default a;\n",
+      },
+      remove: ['docs/orphan.md'],
+    });
+    try {
+      const { files, why } = fx.select();
+      assert.equal(why.reason, 'affected');
+      assert.deepEqual(files, []);
+    } finally { fx.cleanup(); }
+  });
+
+  it('deleting a doc a test does read still selects that test', () => {
+    // The rule above must not swallow a real reach: the deletion that breaks
+    // its reader is exactly the one worth running.
+    const fx = repo({
+      base: {
+        'docs/read.md': '# somebody reads me\n',
+        'tests/a.test.js': "import { readFileSync } from 'node:fs';\nreadFileSync('docs/read.md');\n",
+        'tests/b.test.js': "export default 'unrelated';\n",
+      },
+      remove: ['docs/read.md'],
+    });
+    try {
+      const { files, why } = fx.select();
+      assert.equal(why.reason, 'affected');
+      assert.deepEqual(files, ['tests/a.test.js']);
+    } finally { fx.cleanup(); }
+  });
+
+  it('a deleted root document nothing reads is not the whole suite', () => {
+    // Not under DATA_DIRS, and it does not need to be: the rule is about the
+    // file being gone, not about where it lived.
+    const fx = repo({
+      base: {
+        'LEGACY.md': '# a map nobody loads\n',
+        'src/a.js': 'export const a = 1;\n',
+        'tests/a.test.js': "import { a } from '../src/a.js';\nexport default a;\n",
+      },
+      remove: ['LEGACY.md'],
+    });
+    try {
+      const { why } = fx.select();
+      assert.equal(why.reason, 'affected');
     } finally { fx.cleanup(); }
   });
 
