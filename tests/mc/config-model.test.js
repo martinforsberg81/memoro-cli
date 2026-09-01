@@ -143,7 +143,6 @@ describe('resolveEffectiveConfig', () => {
       grounding: {
         includeMcContext: true,
         includeRoadmap: false,
-        includeCoordinatorRole: false,
         includeMapLifecycle: false,
         includeLens: false,
       },
