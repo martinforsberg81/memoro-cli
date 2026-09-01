@@ -21,7 +21,7 @@ executing the ruling cost.
 |---|---|
 | triage: what to work on next | `mc run` — the queue is `~/mc/queue.md` and every `ready` plan on `origin/main` |
 | holding the queue | the same; `queue.md` is a strict list of names that empties itself |
-| taking decisions to Martin | `mc brief` — a decision file with no `**Beslut:**` line is on the agenda |
+| taking questions to Martin | `mc brief` — the proposals waiting in `~/mc/proposals/` are the agenda |
 | waking the sessions that stalled | nobody; a step session is one fresh headless conversation that ends |
 | the boards | `mc` — the one page (decision mc-3) |
 
@@ -124,11 +124,10 @@ user's rulebook — but it is no longer required for a worker to exist.
 
 The overlay is what the removal is really about. A worker has no PM to
 escalate to, no inbox to write into and nothing watching its pane, so a
-question only Martin can answer becomes a file: `../decisions/<project>-<date>.md`
-at the workarea root, written as a proposal he says GO to, and
-`status: waiting-decision` in the plan. That is the same channel `mc plan`
-and the runner's step sessions use, and [`mc brief`](mc-brief.md) is what
-reads it.
+question only Martin can answer stops the step: `status: blocked` with
+`blocked_by` saying what the answer has to be about, and the question itself in
+the pull request, written as a proposal he says GO to. That is the same channel
+`mc plan` and the runner's step sessions use.
 
 ## How it is tested
 

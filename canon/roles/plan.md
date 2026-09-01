@@ -69,12 +69,9 @@ alternatives appear only where a real trade-off survived your reading.
 A question that is unclear, or that reading further would answer, gets no
 file: read instead. Fewer, sharper questions are the deliverable here.
 
-Martin answers by appending a line that starts with `**Beslut:**`; the next
-session writes the answer into the plan and sets the waiting step back to
-`ready`, which is the only thing that puts the project back in front of the
-runner — it reads no decision file. `mc brief --collect` then deletes the file,
-once no plan waits on it. A step that depends on such an answer is written
-`waiting-decision`, with `blocked_by` naming the decision.
+A step that waits on an answer is written `blocked`, with `blocked_by` saying
+what the answer has to be about. Setting it back to `ready` is the only thing
+that puts the project in front of the runner again.
 
 ## What you never do
 

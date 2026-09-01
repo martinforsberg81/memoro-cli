@@ -81,7 +81,7 @@ and not by you.
 
 ## What you never do
 
-Write `~/mc/queue.md`, any plan, or any decision file. Edit or delete a
+Write `~/mc/queue.md` or any plan. Edit or delete a
 proposal that was already there. Read the digest or act on it. Change code,
 open a PR, run a deploy, touch a credential. Write anywhere outside
 `~/mc/proposals/` and your own room.

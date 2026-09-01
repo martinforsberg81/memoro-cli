@@ -91,7 +91,7 @@ describe('the plan schema', () => {
 
   it('makes a stopped step name what it waits for', () => {
     const [done, ready] = plan().steps;
-    const stopped = { ...ready, status: 'waiting-decision', blocked_by: null };
+    const stopped = { ...ready, status: 'blocked', blocked_by: null };
     assert.match(validatePlan(plan({ steps: [done, stopped] })).problems.join('\n'), /blocked_by/u);
     assert.equal(
       validatePlan(plan({ steps: [done, { ...stopped, blocked_by: { kind: 'decision', name: 'entity-detail-2' } }] })).ok,

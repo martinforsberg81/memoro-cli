@@ -107,10 +107,10 @@ Four things the overlay fixes:
   what is out of scope as well as what may not change. That shape is not
   decoration — it is the interface a headless step session reads at 03:00 with
   nobody to ask.
-- **Decisions are files.** `../decisions/<programme>-<n>.md` at the workarea
-  root, one question each, what the code says and a `## Rekommendation` naming
-  the one thing to do. A proposal Martin says GO to, not a menu. A question
-  that is unclear, or that reading further would answer, gets no file — it
+- **A question is a proposal, not a file.** One question at a time, what the
+  code says and the one thing to do. A proposal Martin says GO to, not a menu.
+  A question that is unclear, or that reading further would answer, is not
+  asked — it
   gets read. [`mc brief`](mc-brief.md) is what puts them to him, and the
   answer travels plan-first: the next session writes it into the plan and sets
   `ready`, which is the only thing that puts a project back in front of the
@@ -142,8 +142,8 @@ gone: the runner runs plans and does not write them, see
 tests, none of which starts a session:
 
 - the role ships, is Opus, claude-first, and its overlay carries the plan
-  path, the `Plan: <name>` title, the `**Beslut:**` shape, the no-parallel-
-  programme rule and the docs merge;
+  path, the `Plan: <name>` title, the no-parallel-programme rule and the docs
+  merge;
 - `planLaunch` names the workarea, the repository and the PR title, and its
   **last line** is the docs merge with the real repository in it;
 - the claude launch, through `openInWorkArea` with a stubbed `spawn`:

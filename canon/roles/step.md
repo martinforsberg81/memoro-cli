@@ -26,13 +26,12 @@ file you leave, and a session that changed anything else leaves a PR it will not
 merge.
 
 So when the code contradicts the plan — your own step cannot be done as written,
-or a later step is wrong — you stop instead of repairing it. Write
-`../decisions/<name>-<date>.md` at the workarea root as a proposal Martin says
-GO to: what the code says, and a `## Rekommendation` naming the one thing you
-would do, never a menu. Add what you found to `what_the_code_taught_us`, set
-your step's `status` to `waiting-decision` with `blocked_by` naming that
-decision, commit, push, open a PR, and stop. If the question is unclear or
-reading further would answer it, write no file: read.
+or a later step is wrong — you stop instead of repairing it. Add what you found
+to `what_the_code_taught_us`, set your step's `status` to `blocked` with
+`blocked_by` saying what the answer has to be about, commit, push, and open a
+PR that says what the code says and names the one thing you would do — a
+proposal Martin says GO to, never a menu. Then stop. If the question is unclear or reading further would answer
+it, ask nothing: read.
 
 Otherwise: run the affected tests (`npm test` selects them), set your step's
 `status` to `done` with its `pr`, commit, push, and open a PR with
@@ -47,11 +46,11 @@ is for is written down in the repository you are working in:
 the same text.
 
 One thing does let a session write the steps, and it is the same rule from the
-other side: when Martin has answered a decision this project waited on, the
+other side: when Martin has answered a question this project waited on, the
 answer is written **into the plan** — into `contract`, a step, or a step's
-instruction as it requires — so the plan carries it on its own and the waiting
+instruction as it requires — so the plan carries it on its own and the blocked
 step goes back to `ready` (or stays stopped, with a new `blocked_by`, if the
 answer blocks). That is Martin's edit, carried by you, and it reaches no further
-than his answer. The runner never reads decision files: a plan comes back by its
-first unfinished step being `ready`, and by nothing else. The answered file is
-deleted by `mc brief --collect` once the plan carries it.
+than his answer. The plan is the only place the answer lives — mc keeps no
+record of one — and a plan comes back by its first unfinished step being
+`ready`, and by nothing else.

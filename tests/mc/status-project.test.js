@@ -1,6 +1,6 @@
 /**
  * `mc status <name>` — one project, built from fixture files: no git, no gh,
- * no network. A work root under /tmp holds the workarea, its decisions and
+ * no network. A work root under /tmp holds the workarea and
  * runs.tsv; origin/main is an injected `git`.
  */
 import assert from 'node:assert/strict';
@@ -10,7 +10,7 @@ import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
 import {
-  collectProject, decisionsForProject, fieldRows, findMainPlan, findWorkareaPlan,
+  collectProject, fieldRows, findMainPlan, findWorkareaPlan,
   renderProject, wrap,
 } from '../../src/mc/status-project.js';
 import { run as project } from '../../src/mc/commands/status-project.js';
@@ -34,18 +34,10 @@ const PLAN = (status, title) => JSON.stringify({
       done_when: 'one project is on one page',
       instruction: ['Do it.'],
       pr: null,
-      blocked_by: status === 'waiting-decision' || status === 'blocked' ? { kind: 'decision', name: 'mc-1' } : null,
+      blocked_by: status === 'blocked' ? { kind: 'decision', name: 'mc-1' } : null,
     },
   ],
 }, null, 2);
-
-const DECISION = (title, answered) => `# ${title}
-
-## Rekommendation
-
-**A.** Do it.
-
-${answered ? '**Beslut:** A (Martin, 2026-08-29).\n' : ''}`;
 
 const TSV = [
   'ts\tname\tkind\texit\tseconds\tpr\tturns\tinput\toutput\tcache_read\tcache_write\tsession\tnote',
@@ -64,38 +56,15 @@ function workRoot() {
   mkdirSync(join(repo, '.git'), { recursive: true });
   mkdirSync(join(repo, 'docs', 'project', 'mc', 'mc-status'), { recursive: true });
   writeFileSync(join(repo, 'docs', 'project', 'mc', 'mc-status', 'PLAN.json'), PLAN('ready', 'One project'));
-  mkdirSync(join(root, 'mc-status', 'decisions'), { recursive: true });
-  writeFileSync(join(root, 'mc-status', 'decisions', 'mc-status-2026-08-29.md'), DECISION('Contract change?', false));
-  mkdirSync(join(root, 'mc-utredning', 'decisions'), { recursive: true });
-  writeFileSync(join(root, 'mc-utredning', 'decisions', 'mc-2.md'), DECISION('2. The programme question', true));
-  mkdirSync(join(root, 'mc-run', 'decisions'), { recursive: true });
-  writeFileSync(join(root, 'mc-run', 'decisions', 'mc-run-1.md'), DECISION('1. Another project question', false));
+  // Areas with no checkout of their own: `mc status` still finds the folder.
+  mkdirSync(join(root, 'mc-run'), { recursive: true });
   mkdirSync(join(root, 'jobbet'), { recursive: true });
   mkdirSync(join(root, 'runner', 'log'), { recursive: true });
   writeFileSync(join(root, 'runner', 'log', 'runs.tsv'), TSV);
   return root;
 }
 
-const DECISIONS = [
-  { area: 'mc-status', file: 'mc-status/decisions/mc-status-2026-08-29.md', title: 'Contract change?', answered: false },
-  { area: 'mc-utredning', file: 'mc-utredning/decisions/mc-2.md', title: '2. The programme question', answered: true },
-  { area: 'mc-run', file: 'mc-run/decisions/mc-run-1.md', title: '1. Another project question', answered: false },
-  { area: 'avatar', file: 'avatar/decisions/assistant-avatar-4.md', title: '4. Retention?', answered: true },
-];
-
-describe('what belongs to one project', () => {
-  it('takes its own area, its own name and the programme-wide numbers — not a sibling project', () => {
-    assert.deepEqual(decisionsForProject(DECISIONS, { project: 'mc-status', programme: 'mc' }).map((d) => d.file), [
-      'mc-status/decisions/mc-status-2026-08-29.md',
-      'mc-utredning/decisions/mc-2.md',
-    ]);
-    assert.deepEqual(decisionsForProject(DECISIONS, { project: 'mc-run', programme: 'mc' }).map((d) => d.file), [
-      'mc-utredning/decisions/mc-2.md',
-      'mc-run/decisions/mc-run-1.md',
-    ]);
-    assert.deepEqual(decisionsForProject(DECISIONS, { project: 'x', programme: null }), []);
-  });
-
+describe('the plan fields', () => {
   it('says the state the steps put the plan in, and anything wrong with the file', () => {
     const plan = JSON.parse(PLAN('ready', 'One project'));
     assert.deepEqual(fieldRows(plan), [['status', 'ready']]);
@@ -154,7 +123,6 @@ describe('collectProject', () => {
     assert.deepEqual(data.problems, []);
     assert.equal(data.plan.steps[1].title, 'One project', 'the workarea plan wins');
     assert.deepEqual(data.runs.map((r) => [r.ts.slice(0, 10), r.pr]), [['2026-08-26', '401'], ['2026-08-27', '402'], ['2026-08-28', '-']]);
-    assert.deepEqual(data.decisions.map((d) => d.answered), [false, true]);
     assert.deepEqual(data.prs, []);
     assert.deepEqual(data.notes, []);
   });
@@ -171,7 +139,7 @@ describe('collectProject', () => {
     assert.equal(data.source, 'origin/main');
     assert.equal(data.unmerged, false);
     assert.equal(data.path, 'docs/project/mc/mc-run/PLAN.json');
-    assert.match(data.workarea, /mc-run$/u, 'the area exists for the decisions, but holds no checkout');
+    assert.match(data.workarea, /mc-run$/u, 'the area exists but holds no checkout');
     assert.deepEqual(data.runs, []);
   });
 
@@ -213,15 +181,14 @@ describe('the project page', () => {
     plan: JSON.parse(PLAN('ready', 'One project')),
     problems: [],
     workarea: '/tmp/mc/mc-status',
-    decisions: [{ file: 'mc-status/decisions/mc-status-2026-08-29.md', title: 'Contract change?', answered: false, recommendation: '**A.** Do it.' }],
     runs: [{ ts: '2026-08-27T18:00:00Z', kind: 'step', seconds: '300', pr: '402', note: 'success,merged' }],
     prs: [{ number: 427, title: 'mc status <name>' }],
     notes: ['gh pr list failed'],
   };
 
-  it('renders the state, the next step, every step, the decisions, the runs and the PR', () => {
+  it('renders the state, the next step, every step, the runs and the PR', () => {
     const text = renderProject(data);
-    const at = ['NEXT', 'STEPS', 'DECISIONS', 'LAST RUNS', 'OPEN PR'].map((h) => text.indexOf(`${h}\n`));
+    const at = ['NEXT', 'STEPS', 'LAST RUNS', 'OPEN PR'].map((h) => text.indexOf(`${h}\n`));
     assert.ok(at.every((i, n) => i >= 0 && (n === 0 || i > at[n - 1])), text);
     assert.match(text, /^mc-status — memoro-cli · mc\n/u);
     assert.match(text, /plan +docs\/project\/mc\/mc-status\/PLAN\.json \(workarea memoro-cli, differs from\n +origin\/main\)/u);
@@ -231,18 +198,16 @@ describe('the project page', () => {
     // The steps are the record: what is finished, with its PR, and where the
     // project is now.
     assert.match(text, /STEPS\n {2}✓ {2}1 {2}The first step\s+#401\n {2}▸ {2}2 {2}One project\s+ready/u);
-    assert.match(text, /waiting {3}mc-status\/decisions\/mc-status-2026-08-29\.md {2}Contract change\?/u);
-    assert.match(text, /\*\*A\.\*\* Do it\./u);
     assert.match(text, /08-27 18:00Z +step +300s +#402 +success,merged/u);
     assert.match(text, /#427 {2}mc status <name>/u);
     assert.match(text, /note: gh pr list failed/u);
   });
 
-  it('says plainly when a workarea has no plan, no decisions, no runs and no PR', () => {
-    const text = renderProject({ ...data, path: null, repo: null, programme: null, plan: null, problems: [], decisions: [], runs: [], prs: [], notes: [] });
+  it('says plainly when a workarea has no plan, no runs and no PR', () => {
+    const text = renderProject({ ...data, path: null, repo: null, programme: null, plan: null, problems: [], runs: [], prs: [], notes: [] });
     assert.match(text, /no plan — this is a workarea without a project/u);
     assert.doesNotMatch(text, /NEXT/u);
-    assert.match(text, /DECISIONS\n {2}none/u);
+    assert.doesNotMatch(text, /DECISIONS/u);
     assert.match(text, /LAST RUNS\n {2}none in the runner log/u);
     assert.match(text, /OPEN PR\n {2}none on this branch/u);
   });

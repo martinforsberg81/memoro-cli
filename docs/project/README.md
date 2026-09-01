@@ -51,8 +51,8 @@ carries:
   needing three pages of interface, order and edge cases gets three pages,
   because the under-specified step is the expensive one. Paragraphs rather than
   one string so a diff stays line-oriented for whoever reads the PR.
-- `status` — `ready`, `done`, `blocked`, `waiting-decision` — with `pr` and
-  `blocked_by` (`{ kind: "decision" | "project", name }`, required when stopped).
+- `status` — `ready`, `done`, `blocked` — with `pr` and `blocked_by`
+  (`{ kind: "decision" | "project", name }`, required when stopped).
 
 The plan has **no status of its own**: it is the state of the first step that is
 not done, and a plan whose steps are all done is done. The runner looks at that
@@ -112,10 +112,10 @@ rather than asked: the runner compares the file before and after, and a session
 that touched anything else fails on the way back in.
 
 When the code says a coming step is wrong, that is not a revision the step
-makes: the step goes `waiting-decision` with `blocked_by` naming the decision,
-which is written at the workarea root with one recommendation, and the session
-stops. A plan comes back to the runner by its first unfinished step being
-`ready`, and by nothing else.
+makes: the step goes `blocked` with `blocked_by` saying what the answer has to
+be about, the question goes in the pull request with one recommendation, and
+the session stops. A plan comes back to the runner by its first unfinished step
+being `ready`, and by nothing else.
 
 ## Citing a decision
 
@@ -126,11 +126,11 @@ path** — `` [`mc-1`](mc/rulings.md) ``, not
 `` `~/mc/mc-utredning/decisions/mc-1.md` ``. A path out of the repository is a
 citation no reader with a checkout can follow.
 
-When a decision is answered, carry the ruling into [`mc/rulings.md`](mc/rulings.md)
-before the file is retired: the question, the options, Martin's answer quoted
-verbatim, and the plan that builds it. `mc brief --collect` deletes an answered
-file once every plan that owns it has left `waiting-decision`, and
-`~/mc/*/decisions/` is outside git — so the carry happens first, not after.
+When a question is answered, carry the ruling into [`mc/rulings.md`](mc/rulings.md):
+the question, the options, Martin's answer quoted verbatim, and the plan that
+builds it. mc keeps no record of an answer — there is no decision file and no
+answer line — so the plan and the ruling are the only two places it survives.
+Carry it at the moment it is given.
 
 The same rule covers any other working material a plan leans on. The programme's
 design source, [`mc/utredning-2026-08-24.md`](mc/utredning-2026-08-24.md), was

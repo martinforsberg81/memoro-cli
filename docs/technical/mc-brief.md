@@ -33,7 +33,6 @@ writes:
 |---|---|
 | Merged since last brief | `gh pr list --state merged --search merged:>=<since>`, per repository |
 | Opened, not merged | `gh pr list --state open` |
-| Waiting on Martin | every `~/mc/<area>/decisions/*.md` with no `**Beslut:**` line |
 | Proposals | `~/mc/proposals/*.md`, what `mc helper`'s turn wrote |
 | Plan status | every `docs/project/*/*/PLAN.json` on `origin/main` of both repositories |
 | Archived without a note | `~/mc/intake/undocumented-closures.md` |
@@ -61,28 +60,15 @@ when nobody has looked.
 
 ## What it writes
 
-`~/mc/brief/<date>.md`, and deletes answered decision files. That is all.
+`~/mc/brief/<date>.md`. That is all.
 
-The deletion is `retireDecisions`, and it is deliberately **not** "has a
-`**Beslut:**` line". `decisions/` is meant to hold open questions and
-nothing else; on 2026-08-29 it held 51 files, 42 of them answered, some for
-weeks, so every reader had to sort 51 to find the 6 that were live. But the
-answer has to land somewhere first. A file goes only when every plan that
-owns it has left `waiting-decision` — measured against `~/mc`, the
-difference was eleven files, `avatar-image-animation` alone carrying seven
-answered decisions while its plan still waited on one of them by name.
-Deleting on the answer alone takes the answer away before whoever must apply
-it has read it.
-
-A plan owns a file in its own area, or one named `<programme>-*` or
-`<project>-*`. **A file no plan owns is an orphan and is never deleted** —
-the project it belonged to is gone from main, and silently removing a
-question nobody answered is the one failure worse than keeping it. It is
-reported in the run's notes instead.
-
-This runs from `mc brief --collect` and nowhere else. `mc run` has nothing
-to do with decisions (Martin, 2026-08-29), so the tidying happens at the
-moment somebody sits down to read the list, which is the moment it matters.
+It used to delete answered decision files too. mc had a decision concept —
+`<area>/decisions/*.md`, a `**Beslut:**` line Martin appended, a scan, a
+render, a retirement rule keyed on which plans still waited — and all of it is
+gone. What is decided with Martin is written into the plan it is about, by
+whoever next opens that plan, and a plan comes back to the runner by its first
+unfinished step being `ready`. There is nothing left for mc to read, count or
+delete.
 
 ## The session
 
@@ -108,50 +94,32 @@ one row at a time. It ends when the lists are empty or Martin says stop.
 
 ## How an answer travels
 
-Three files, in order, and no daemon between them:
+Into the plan, and nowhere else.
 
-1. The brief session appends one line to the decision file, in the shape the
-   overlay fixes:
-   `**Beslut:** <what was decided> (Martin, <YYYY-MM-DD>). <one sentence why>`
-2. The **next step session** writes that decision into the plan — into the
-   Contract, the Steps or `next:` as it requires — and sets `status:` back to
-   `ready`. That, and nothing else, is what puts the project in front of the
-   runner: the runner runs `ready` plans and does not read decision files at
-   all.
-3. The next `mc brief --collect` deletes the decision file, because no plan
-   waits on it any more.
+The brief is where Martin and a session agree what to do. What they agree is
+written into `docs/project/<programme>/<project>/PLAN.json` — the contract, a
+step, or a step's instruction — and setting the stopped step back to `ready` is
+what puts the project in front of the runner again. mc records none of it:
+there is no file to write, no line to grep for, and no state to keep in step.
 
-The brief session never edits a plan. That line is the whole of what it
-writes, and the plan is where a decision lives — `decisions/` holds open
-questions and nothing else.
-
-An earlier design had the answer line as the runner's own trigger, grepped
-out of `~/mc/bin/runner.sh`. It was wrong twice over: it started
-`waiting-decision` projects on the wrong file (any `<programme>-*.md` with a
-line counted), and it let a decision live outside the plan that depends on
-it. The shell runner and its grep are deleted; `ANSWER_LINE` is read in
-`brief-collect.js` and nowhere else.
+That is a deliberate loss of a round trip. The old shape wrote the answer as a
+`**Beslut:**` line in a file mc then parsed, retired and deleted, and the parse
+was the whole reason the line had a fixed shape. Removing the reader removes
+the shape with it.
 
 ## What is deliberately wide
 
-A decision file is anything under `<area>/decisions/` with a `# ` heading,
-minus three bookkeeping names (`README.md`, `log.md`, `merge-log.md`).
+Nothing, any more. The section that stood here explained how loosely a
+decision file was recognised — anything under `<area>/decisions/` with a `# `
+heading, minus three bookkeeping names — and why the looser rule was worth its
+false positives: the narrower one had been hiding unanswered questions from the
+only person who could answer them.
 
-The test used to be narrower — a file also had to carry an options-or-
-recommendation section written as `## Alternativ`, `## Options` or a bold
-lead. Measured against `~/mc` on 2026-08-29 that narrower rule dropped five
-files, one of them unanswered and never once shown to anybody
-(`swedish-grammar/decisions/language-content-1.md`, whose options are
-written as `## Half one …` and a bullet list), while `## Alternativen` — the
-Swedish definite form — failed the `\b` after `Alternativ`. It also let in
-`pm/decisions/log.md`, 358 kB of append-only log, on one matching line among
-thousands. The brief was hiding open questions from the only person who can
-answer them, which is the one thing it exists not to do.
-
-The recommendation is quoted when there is one, in either shape that exists
-in the wild — a `## Rekommendation` heading or a bold lead
-`**Recommendation: option 2.**`. A question with neither shows a dash, which
-is honest.
+That reasoning went with the concept. It is worth keeping the shape of it,
+because the same trap is one directory away: `~/mc/proposals/` is now counted
+and never parsed, for the same reason. A reader that decides what counts as a
+proposal is a reader that can decide wrongly, silently, about a file somebody
+wrote for Martin.
 
 ## Speed
 
@@ -176,12 +144,9 @@ including absent-versus-empty.
 
 `tests/mc/commands/brief.test.js` covers the verb: that `--collect` stops
 after the file, that the bare verb opens a new foreground conversation in
-the work root with the overlay and the brief as its first words, and — the
-round trip that matters — that a `**Beslut:**` line built from
-`canon/roles/brief.md`'s **own template** is the shape `ANSWER_LINE`
-accepts, and closes the question in the next brief. The overlay is the
-specification of that line, so the test reads the overlay rather than a
-copy of it.
+the work root with the overlay and the brief as its first words, and that the
+overlay asks for a proposal rather than a menu. It reads the overlay itself
+rather than a copy of it.
 
 **Not measured:** the interactive launch itself. No headless session can
 watch a program take the terminal, so what is verified is that the right

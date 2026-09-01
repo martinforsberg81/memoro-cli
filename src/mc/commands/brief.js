@@ -1,14 +1,18 @@
 /**
- * `mc brief` — the evaluation and decision session.
+ * `mc brief` — the evaluation session.
  *
  * `--collect` is the script half: gather the ground into
  * `~/mc/brief/<date>.md` with no model. The bare verb does that and then
  * opens a fresh foreground session — the terminal's, never tmux, never
- * `--resume` — standing in the work root so every `../decisions/` file is
- * in reach, with the Coding Profile, the `brief` role from
- * `canon/roles/brief.md` and the brief file as its opening words. Martin
- * closes it when the decisions are done; its only writes are `**Beslut:**`
- * lines.
+ * `--resume` — standing in the work root, with the Coding Profile, the
+ * `brief` role from `canon/roles/brief.md` and the brief file as its opening
+ * words.
+ *
+ * It used to be the *decision* session too: it read `<area>/decisions/*.md`,
+ * listed what waited on Martin, and its one written output was a
+ * `**Beslut:**` line that mc regexed back out again. That apparatus is gone —
+ * the whole of it, not the format. What a session decides with Martin belongs
+ * in the plan it is about.
  */
 import { collectBrief } from '../brief-collect.js';
 import { workRoot } from '../paths.js';
@@ -30,10 +34,9 @@ export async function run(argv, deps = {}) {
   const t0 = Date.now();
   const result = await (deps.collect || collectBrief)({ offline: flags.offline });
   const seconds = ((Date.now() - t0) / 1000).toFixed(1);
-  const { decisions, merged, opened, proposals = [], notes } = result.data;
-  const waiting = decisions.filter((d) => !d.answered).length;
+  const { merged, opened, proposals = [], notes } = result.data;
   const extra = proposals.length ? `, ${proposals.length} proposal${proposals.length === 1 ? '' : 's'}` : '';
-  stdout.write(`mc: ${result.path} (${seconds}s) — ${merged.length} merged, ${opened.length} open, ${waiting} waiting on you${extra}\n`);
+  stdout.write(`mc: ${result.path} (${seconds}s) — ${merged.length} merged, ${opened.length} open${extra}\n`);
   for (const note of notes) stderr.write(`mc: ${note}\n`);
   if (flags.collect) return 0;
 

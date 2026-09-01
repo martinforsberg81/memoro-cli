@@ -6,7 +6,7 @@
  * `nowBlock` turns the files `mc run` keeps into the NOW section;
  * `kindFor` answers what the runner would do with a queued name; `pidAlive`
  * is the one liveness test the page and the foreground register both use;
- * `decisionsBlock` and `areasWithCheckout` name what waits on Martin and
+ * `areasWithCheckout` names
  * what exists on disk.
  *
  * `page-collect.js` assembles the five sections out of these and
@@ -123,16 +123,6 @@ export function nowBlock({ runner = null, currents = [], stop = false, rows = []
     stale,
     quota: { count: quotaRows.length, last: quotaRows.at(-1)?.ts || null },
   };
-}
-
-/* --------------------------------------------------------------- decisions */
-
-export function decisionsBlock(decisions) {
-  return decisions.filter((d) => !d.answered).map((d) => {
-    const file = d.file.split('/').at(-1).replace(/\.md$/u, '');
-    const waits = file.replace(/-\d{4}-\d{2}-\d{2}$/u, '').replace(/-\d+$/u, '');
-    return { file: d.file, title: d.title, waits_on: waits, area: d.area };
-  });
 }
 
 /* ------------------------------------------------------------------- areas */

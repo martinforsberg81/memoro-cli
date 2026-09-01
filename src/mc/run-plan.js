@@ -121,8 +121,8 @@ export function queueFileText(names) {
  *   `assembleQueue` already drops such names, so this branch is only reached
  *   when a plan disappears mid-round; it carries no `skip` text because
  *   nothing would read it.
- * - **`waiting-decision` is simply not ready.** The runner has nothing to do
- *   with decisions — it does not read them, count them, or start a project
+ * - **A stopped step is simply not ready.** The runner starts `ready` steps
+ *   and nothing else — it never read a decision file, counted one, or started
  *   because one was answered. ("Runner genomför planer som är ready. Om
  *   väntande beslut är ej ready.") A plan comes back by being set `ready`,
  *   which is the job of whoever applies the answer.
@@ -203,9 +203,9 @@ export function stepPrompt({ name, repo, planPath, planText, step, index, now = 
     'compares the file before and after and will leave your PR unmerged if you',
     'changed anything else.',
     '',
-    `If the contract must change, or a later step is wrong, the decision file is`,
-    `\`../decisions/${name}-${today(now)}.md\` — set this step to`,
-    '`waiting-decision` with `blocked_by` naming it, and stop.',
+    'If the contract must change, or a later step is wrong, set this step to',
+    '`blocked` with `blocked_by` saying what the answer has to be about, and',
+    'stop. Say it in the pull request too — that is where it will be read.',
     '',
     'Do not merge. Do not ask questions. Stop when the PR exists.',
     '',
