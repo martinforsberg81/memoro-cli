@@ -199,12 +199,18 @@ export function selectAffected({ baseRef = 'origin/main' } = {}) {
   const testFiles = all.filter((path) => TEST_FILE.test(path));
   const { mergeBase, paths: changed } = changedAgainst(baseRef);
   const changedSet = new Set(changed);
+  // What a literal may name. `ls-files` no longer lists a path the change
+  // deleted, but a module that spells one is still its reader — and that
+  // deletion is precisely what breaks it. Indexing pins against the tracked
+  // set alone drops the edge, and a deleted file then looks unread for a
+  // reason that is about bookkeeping rather than about the code.
+  const nameable = new Set([...all, ...changed]);
 
   // Who reads what, computed once: every tracked module's literal file and
   // directory references. This is the third edge, and it is the only one that
   // can see a data file at all — nothing imports `canon/roles/brief.md`, and
   // nothing ever will.
-  const dirSet = trackedDirs(all);
+  const dirSet = trackedDirs([...nameable]);
   const namesFile = new Map();
   const namesDir = new Map();
   // Every module but this one. `DATA_DIRS` above spells `docs/` and `canon/`
@@ -216,7 +222,7 @@ export function selectAffected({ baseRef = 'origin/main' } = {}) {
   // direction that matters.
   const SELF = relative(ROOT, fileURLToPath(import.meta.url));
   for (const file of all.filter((path) => SOURCE_FILE.test(path) && path !== SELF)) {
-    for (const pin of pinsOf(file, trackedSet, new Set())) {
+    for (const pin of pinsOf(file, nameable, new Set())) {
       if (!namesFile.has(pin)) namesFile.set(pin, new Set());
       namesFile.get(pin).add(file);
     }
@@ -272,6 +278,14 @@ export function selectAffected({ baseRef = 'origin/main' } = {}) {
   /** Anything that reads this path at all, either way — the fail-closed question. */
   const readersOf = (path) => new Set([...opensFile(path), ...walksTree(path)]);
 
+  /**
+   * This path is not in the tree any more — deleted by the change, whether the
+   * deletion is committed or still only in the working tree. Asked of the tree
+   * rather than of git's rename/delete bookkeeping, because that is the fact
+   * the rule below needs: nothing can read what is not there.
+   */
+  const gone = (path) => !trackedSet.has(path) && !existsSync(join(ROOT, path));
+
   // Anything the three edges cannot explain. A manifest, a lockfile, a
   // workflow, a config: real changes whose reach is not written down anywhere
   // this script can read, so it stops claiming to know and runs everything.
@@ -281,7 +295,18 @@ export function selectAffected({ baseRef = 'origin/main' } = {}) {
   const unexplained = changed.filter((path) => {
     if (SOURCE_FILE.test(path)
       && (path.startsWith('src/') || path.startsWith('tests/') || path.startsWith('scripts/'))) return false;
-    return !(DATA_DIRS.some((dir) => path.startsWith(dir)) && readersOf(path).size > 0);
+    if (DATA_DIRS.some((dir) => path.startsWith(dir)) && readersOf(path).size > 0) return false;
+    // A file that is **gone**, and that nothing names. The fallback above asks
+    // "does anything read this?" and treats no answer as no knowledge — right
+    // for a file that is still there, because the reader may be an edge this
+    // script cannot see. A deletion is the one case where the empty answer is
+    // the whole answer: there is nothing left to read, and no reader to break.
+    // Scoped to non-source on purpose. A deleted module *can* break its
+    // importers, and would look unread here for the wrong reason — the import
+    // edges resolve against files that exist, so a deleted one has no readers
+    // by construction. Data has no such edge to lose.
+    if (gone(path) && readersOf(path).size === 0) return false;
+    return true;
   });
 
   if (unexplained.length > 0) {
@@ -307,7 +332,7 @@ export function selectAffected({ baseRef = 'origin/main' } = {}) {
     const imported = closureOf(test, cache);
     const hitImports = [...imported].filter((path) => changedSet.has(path));
     if (hitImports.length) reasons.push(`imports:${hitImports.slice(0, 3).join(',')}`);
-    const hitPins = [...pinsOf(test, trackedSet, imported)].filter((path) => changedSet.has(path));
+    const hitPins = [...pinsOf(test, nameable, imported)].filter((path) => changedSet.has(path));
     if (hitPins.length) reasons.push(`pins:${hitPins.slice(0, 3).join(',')}`);
     // Data the test never names itself, but something in its closure opens:
     // `canon/roles/brief.md` is opened by `src/mc/commands/brief.js`, so every
