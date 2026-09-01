@@ -87,27 +87,10 @@ mc merge    → the gate, then the squash
 
 ## Working on this codebase as a coding agent
 
-Load `.claude/skills/agent-coordination.md` only when work is actually
-delegated across sessions or agents. It defines roles and handoffs; it does not
-duplicate repository, testing, or publication rules from this protocol.
-
 For focused work, inspect, implement, verify, and publish directly. For larger
 work, agree on a concise contract covering outcome, scope, non-goals,
 completion criteria, validation, dependencies, and escalation points. Resolve
 uncertainty through read-only inspection before asking or guessing.
-
-**Priming as coordinator** depends on your tool:
-
-- **Claude Code:** run `/be-coordinator` (slash command at
-  `.claude/commands/be-coordinator.md`)
-- **Codex / GPT / any other:** prompt the agent with: *"Read
-  `.claude/skills/agent-coordination.md` and
-  `.claude/commands/be-coordinator.md`, then follow the priming
-  instructions in be-coordinator to enter coordinator mode."*
-
-The command performs one bounded state snapshot through the App-backed
-`mc github` surface. It does not require a personal `gh` login or repeated
-polling.
 
 ### A series of pull requests (normative)
 
