@@ -555,7 +555,7 @@ describe('the page', () => {
     assert.match(text, /■ STOP requested — the runner exits after the steps it is in/u);
     assert.match(text, /HELPER {2}● open 60 min · claude sonnet · pid 99\s+mc helper/u);
     assert.match(text, /BRIEF {2}· {2}not open\s+mc brief/u);
-    assert.match(text, /WORK {2}1 session\s+mc work <name>/u);
+    assert.match(text, /WORK {2}1 session · 1 workarea with no project\s+mc work <name>/u);
     assert.match(text, /◆ docx-editor\s+tmux · open 60 min · mc-docx-editor/u);
     assert.match(text, /runner up 120 min · 3 steps in 24 h — merged 1, open 1, failed 0, timed out 1 · ≈\$7\.\d\d list \(opus, 2026-06\)/u);
     assert.match(text, /QUEUE {2}2 runnable of 3\s+mc status <name>/u);
@@ -567,7 +567,7 @@ describe('the page', () => {
     assert.match(text, /^ {4}2 · docx-editor\s+memoro\s+ready/mu, 'the repository is a column on the row');
     assert.match(text, / {4}4 · mc-ui\s+memoro-cli\s+ready\s+0\/1\s+Step 1, The page — done when the step[^|]*#440/u);
     assert.match(text, /3 of them have no workarea yet/u);
-    assert.match(text, /1 workarea with no project on main — nothing removes them/u);
+    assert.match(text, / {4}5 · ui-fixes\s+—\s+no project on main/u);
     assert.match(text, / {4}5 · ui-fixes\s+—\s+no project on main/u);
     assert.match(text, /offline, PRs 2 h old — --fresh asks GitHub/u);
     assert.match(text, /note: no queue\.md/u);
@@ -778,11 +778,10 @@ describe('the palette', () => {
     'grey grey white dim+grey green grey cyan', //                4 · mc-ui  memoro-cli  ready  0/1  Step 1, …  #440
     'grey', //                                                       3 of them have no workarea yet
     '',
-    'grey', //                                                     1 workarea with no project on main — nothing removes them
-    'grey grey grey dim+grey grey', //                               5 · ui-fixes  —  no project on main
-    '',
-    'bold+cyan grey grey', //                                      WORK  1 session                     mc work <name>
+    'bold+cyan grey grey', //                                      WORK  1 session · 1 workarea with no project
     'yellow bold+white cyan grey grey grey grey', //             ◆ docx-editor  tmux · open 60 min · mc-docx-editor
+    '',
+    'grey grey grey dim+grey grey', //                               5 · ui-fixes  —  no project on main
     '',
     'grey', //                                                     offline, PRs 2 h old — --fresh asks GitHub
     'grey', //                                                     note: no queue.md

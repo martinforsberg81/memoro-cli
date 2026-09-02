@@ -67,6 +67,18 @@
         "Everything else keeps its own line and its own name: `dirty worktree`, the `inFlight` pull-request answer, `syncMain`'s conflicts, a worktree that could not be created, an unpushable branch. Those are facts about this machine at this moment that nothing else records, and they are the ones worth reading.",
         "A plan that does not parse is the one judgement call here. It is plan-shaped, and it is also a thing somebody must fix — five plans on main were in that state on 2026-09-02 and the page draws them as `invalid`. Name them in the summary line rather than only counting them, so the log says which five."
       ],
+      "pr": 532,
+      "blocked_by": null
+    },
+    {
+      "title": "Close it out",
+      "status": "done",
+      "done_when": "`docs/technical/mc-run.md` describes what a round touches and what it only reads, and `project_log.md` has a row.",
+      "instruction": [
+        "`docs/technical/mc-run.md` has the section on what ends a round for a project. Give it the two-stage shape: what the plan on `origin/main` decides before anything is touched, and what the worktree decides after. Say why the second reading exists at all — the plan in the worktree can be one merge ahead of the plan on main, and it is the one a step session will edit.",
+        "Put the before-and-after wall clock in the close-out, measured against the real `~/mc`, and say what the board looked like when it was measured: a round is only slow in proportion to how much of the board it cannot act on.",
+        "A row in `docs/project/project_log.md`."
+      ],
       "comments": [
         "**The round measured: 38 projects considered, one started**",
         "**The round measured: 38 projects considered, one started.** From `~/mc/runner/log/runner.log`, the round beginning 2026-09-02T18:17:41Z — 21 skipped `blocked on decision plan-review`, 7 `blocked on project home-on-msr`, 5 `the plan does not parse`, 2 `dirty worktree`, 1 `every step is done`, 2 waiting on `time-axis` and `inbox-finish`, 1 merge conflict, and one project — `runner-open-prs` — actually run. The walk took from :41 to :32 of the following minute. The round before it, number 32, ended `0 ran`.",
@@ -87,21 +99,12 @@
         "**The one line is the round's, and `done` never reaches it**",
         "**The one line is the round's, not the lane's.** Lanes run in parallel under one `Promise.all`, and a reader of `runner.log` is reading a round rather than a lane — so `runLane` returns its refusals and `round()` says the single line over both. Nothing is said while the lane walks: a refusal that costs no git costs no line either.",
         "**`done` cannot appear in the count.** A plan that says `done` is archived at the top of the round, before any lane starts, so the queue a lane walks never holds one — the reasons that actually reach the line are `blocked`, `unparseable` and `invalid`. `done` is only reachable under `--once`, which skips archiving on purpose. The page counts it because the page does not archive.",
-        "**Letting go of a project is the same refusal.** When a merged step leaves the plan stopped, `runLane` breaks out of the stay-loop on the same `planRefusal`; that answer is counted with the rest rather than given a line of its own, because it is exactly as visible on the page as the twenty at the top of the walk."
+        "**Letting go of a project is the same refusal.** When a merged step leaves the plan stopped, `runLane` breaks out of the stay-loop on the same `planRefusal`; that answer is counted with the rest rather than given a line of its own, because it is exactly as visible on the page as the twenty at the top of the walk.",
+        "**What the round costs is the shape of the board, not a constant**",
+        "**The 51 s was the board, not the code.** The round of 2026-09-02T18:02 — a real `mc run --rounds 1` against `~/mc` — walked 38 names between 18:02:21 and 18:03:12 and started none: 21 blocked on `decision plan-review`, 7 behind `home-on-msr`, 2 behind other projects, 5 unparseable, 1 every-step-done, and 2 `dirty worktree`. Thirty-six of the thirty-eight were plan-shaped, at roughly 1.3 s of git each; the same thirty-eight answered from `~/mc/runner/plans.json` with `kindFor` is 1.2 ms. A board where most plans are `ready` never paid this and does not notice the change, so the close-out says what the board looked like beside the number.",
+        "The live before-and-after the fourth criterion asks for was not run. The runner was up (pid 61846, started 19:13:11Z) and holding this very session, so a second `mc run` against `~/mc` would have spawned step sessions and raced it for `runner.json`. What is written down is the round that was slow, measured live, and the reading that replaces its walk, measured over the real board — not an estimate of a round nobody ran."
       ],
-      "pr": 532,
-      "blocked_by": null
-    },
-    {
-      "title": "Close it out",
-      "status": "ready",
-      "done_when": "`docs/technical/mc-run.md` describes what a round touches and what it only reads, and `project_log.md` has a row.",
-      "instruction": [
-        "`docs/technical/mc-run.md` has the section on what ends a round for a project. Give it the two-stage shape: what the plan on `origin/main` decides before anything is touched, and what the worktree decides after. Say why the second reading exists at all — the plan in the worktree can be one merge ahead of the plan on main, and it is the one a step session will edit.",
-        "Put the before-and-after wall clock in the close-out, measured against the real `~/mc`, and say what the board looked like when it was measured: a round is only slow in proportion to how much of the board it cannot act on.",
-        "A row in `docs/project/project_log.md`."
-      ],
-      "pr": null,
+      "pr": 536,
       "blocked_by": null
     }
   ]

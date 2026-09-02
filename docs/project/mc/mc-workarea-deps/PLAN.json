@@ -32,7 +32,7 @@
       "check": "`mc test memoro-cli <pr>` on a pull request that reaches `tests/runtime/session-host/` reports those files green rather than red, and its log no longer prints the `no node_modules` line."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "`repo-gate-table.js`'s memoro-cli entry describes the repository truthfully.",
       "check": "`tests/mc/repo-gate-table.test.js` asserts the entry, and the assertion is read against `package.json`'s `dependencies` rather than against a sentence."
     }
@@ -46,7 +46,7 @@
   "steps": [
     {
       "title": "Say what is true about the suite",
-      "status": "ready",
+      "status": "done",
       "done_when": "`repo-gate-table.js`'s memoro-cli entry no longer claims the suite runs from a worktree with no dependency tree, and a test holds that claim against `package.json`.",
       "instruction": [
         "`src/mc/repo-gate-table.js:74` declares `prepare: null` for memoro-cli, and `prepare_why` says the suite is source only. It is not: `src/runtime/session-host/terminal-screen.js` imports `@xterm/addon-serialize`, declared in `package.json`. Correct the entry so that it describes the repository as it is.",
@@ -61,9 +61,15 @@
         "**The gate declares something about this repository that is not true.** `src/mc/repo-gate-table.js:74` gives memoro-cli `prepare: null`, with `prepare_why` reading *\"the suite is node:test over source only; verified across every gate round since the verb existed, each of which ran it twice in a worktree with no node_modules\"*. `src/runtime/session-host/terminal-screen.js` imports `@xterm/addon-serialize`, which is one of the three packages `package.json` declares. So every gate round has been running a suite that is five files short and calling it whole — `repo-gate.js:409` even prints the line saying so, once per round, as reassurance.",
         "Measured on a clean `origin/main` worktree, whole suite, twice: **14 failing files without `node_modules`, 9 with**. The five in the difference are `owned-resource-cleanup`, `session-runtime-v1`, `runtime-host`, `socket-e2e` and `terminal-screen`.",
         "**This is why a workarea's tests disagree with the gate's**",
-        "**This is why a workarea's tests disagree with the gate's, and why both disagree with `~/memoro-cli`.** The main checkout has a real `node_modules` and runs 9 red; a workarea mc made has none and runs 14; the gate's candidate has none and reports the same 14 while declaring it ran everything. Three answers to one question, and the one a person sees first is the one that is right for the wrong reason."
+        "**This is why a workarea's tests disagree with the gate's, and why both disagree with `~/memoro-cli`.** The main checkout has a real `node_modules` and runs 9 red; a workarea mc made has none and runs 14; the gate's candidate has none and reports the same 14 while declaring it ran everything. Three answers to one question, and the one a person sees first is the one that is right for the wrong reason.",
+        "**The true answer today costs 17 s a round, and nothing else**",
+        "**The true answer today costs 17 s a round, and nothing else.** `prepare: 'npm ci'` was measured 2026-09-02 on a clean `origin/main` worktree: exit 0 in 17 s real, and the five files that had been red became 27 pass, 1 skip, 0 fail. It is cheap for two reasons a reader should not have to re-derive. The round builds **one** worktree — `repo-gate.js:288` says so, the base-branch side went with the 2026-08-31 ruling — so a prepare runs once, not twice. And `npm ci` runs this repository's `postinstall`, which mints a C1 install generation, but `shouldWriteInstalledC1Receipt` only fires on `npm_config_global`: a local install in a throwaway worktree writes nothing under `mcHome()`. So the expensive-but-true entry is safe to hold for the rounds between here and step 3.",
+        "**Step 3 inherits a field as well as a check, and they disagree**",
+        "**Step 3 inherits a field as well as a check, and they disagree.** `repo-gate.js:391` runs `prepare` whenever it is truthy, *before* it asks `dependencyTree`. So once the tree resolves above the candidate, teaching `dependencyTree` to see it is not enough — the round still pays for an `npm ci` it no longer needs, and the entry still says the suite cannot run without one. Whoever does step 3 has to answer for the field too.",
+        "And the answer collides with the test step 1 was told to add. That test reads `package.json`: a shipped `prepare: null` beside declared dependencies goes red, full stop, because that pairing is the exact shape this table held falsely for months. If step 3 wants `prepare: null` back — truthful then, because the tree is the environment's rather than the round's — it has to change that test, and the reason it changes it is the whole content of the step: `prepare` says what the *round* must run, not whether the suite has dependencies. There is no third field today that says \"the tree comes from above\", and inventing one is a decision, not a repair.",
+        "One smaller thing that follows: criterion 3's second half — that the round stops printing the `no node_modules` line — is already true as of step 1, since `npm ci` leaves a tree in the candidate. Its first half, the session-host files green, is what step 3 still has to measure."
       ],
-      "pr": null,
+      "pr": 537,
       "blocked_by": null
     },
     {
