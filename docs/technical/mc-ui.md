@@ -33,12 +33,14 @@ still accepted on the page and does nothing: offline is what the page does.
 
 In this order, because that is the order the questions come in:
 
-- **NOW** — the runner's steps in flight, one line per lane (kind, tool,
-  model, elapsed against budget, pid), a pending `~/mc/runner/STOP`, the
-  live tmux `mc-<name>`
-  areas with how long they have been open, the foreground verbs somebody is
-  sitting in, and one line of the day behind it: steps, merged, open,
-  failed, timed out, and an estimated **list-price** cost.
+- **RUNNER** — the runner's steps in flight, one line per lane (kind, tool,
+  model, elapsed against budget, pid), a pending `~/mc/runner/STOP`, the lane
+  files whose process is gone, and one line of the day behind it: steps,
+  merged, open, failed, timed out, and an estimated **list-price** cost. The
+  machine, and nothing else.
+- **HELPER** and **BRIEF** — one row each, drawn open or not. They are
+  singletons, so *"is the helper running?"* is a question an empty row answers
+  as well as a full one.
 - **QUEUE** — how deep, how much of it is runnable, the next few by name and
   kind, and the skips counted by reason. Every reason comes from the plan: a
   session somebody has open in the workarea is not one of them, because the
@@ -57,8 +59,8 @@ Two rules the sections keep:
   matters — and every count names the verb that expands it, on the right of
   its own heading.
 - **A count is only honest if the section says what it cannot see.** INTAKE
-  says `first digest — no baseline` rather than `0 new errors`; NOW lists no
-  foreground session rather than claiming nothing is running. A zero that
+  says `first digest — no baseline` rather than `0 new errors`; WORK lists no
+  session rather than claiming nothing is running. A zero that
   looks like health is worse than a gap that says it is one.
 
 ## Where the facts come from
@@ -85,7 +87,7 @@ when their scope ends, the removal paired in a `finally` so a step that
 throws still clears the file.
 
 There is one current file **per lane**: `mc run` drives memoro's queue and
-memoro-cli's at the same time, so NOW is a list rather than a line, and the
+memoro-cli's at the same time, so RUNNER is a list rather than a line, and the
 page reads `runner/current-*.json` by name instead of one fixed file. The
 lanes themselves are in [`docs/technical/mc-run.md`](mc-run.md).
 
@@ -100,9 +102,9 @@ as nothing running.
 
 A session a person opens themselves — `mc brief`, `mc plan <name>`,
 `mc worker <name>`, `mc work <name>` in a terminal — is a child of mc
-holding the terminal, and leaves no trace on disk. NOW would say "nothing
-is running" while the machine was busy, which is the one thing the page must
-never do.
+holding the terminal, and leaves no trace on disk. The page would say
+"nothing is running" while the machine was busy, which is the one thing it
+must never do.
 
 So the verb registers itself: `~/mc/runner/foreground/<pid>.json` (verb,
 area, tool, model, pid, started), written before the call that blocks and
@@ -174,7 +176,7 @@ test can look at one row.
 The page is grey with meaning painted on it, and the meanings are a short
 list. Two of them are tables, and those tables are the rule the rest of the
 page bends to: **a step kind and a plan status have one colour each, wherever
-they are printed.** NOW, QUEUE and PROJECTS all say `reconcile` in the same
+they are printed.** RUNNER, QUEUE and PROJECTS all say `reconcile` in the same
 magenta, so a kind is recognised before it is read. They are `KIND_TONE` and
 `STATUS_TONE` in `page-render.js`, and `tests/mc/page.test.js` walks each one
 through all three sections.
@@ -203,16 +205,19 @@ Everything else is structure, and structure is quiet:
 | header | `MEMORO·CLI` | bold white |
 | header | `N of M queued` | white |
 | header | version, rule, cost today | grey |
-| section titles | `NOW` `QUEUE` `INTAKE` `PROJECTS` | bold cyan |
+| section titles | `RUNNER` `HELPER` `BRIEF` `QUEUE` `INTAKE` `PROJECTS` `WORK` | bold cyan |
 | section titles | the count beside it, the verb hint on the right | grey |
-| NOW | the live step's `●`, its name | green, bold white |
-| NOW | elapsed: under ¾ of budget, from ¾, past it | white, yellow, bold red |
-| NOW | a foreground session — `●`, `mc brief` | cyan |
-| NOW | a live tmux area's `◆` | yellow |
-| NOW | `■ STOP requested` | bold red |
-| NOW | a stale runner file | red |
-| NOW | a quota answer under 6 h old, older | yellow, grey |
-| NOW | between steps, no runner, the day's line, the tool and pid | grey |
+| RUNNER | the live step's `●`, its name | green, bold white |
+| RUNNER | elapsed: under ¾ of budget, from ¾, past it | white, yellow, bold red |
+| RUNNER | `■ STOP requested` | bold red |
+| RUNNER | a stale runner file | red |
+| RUNNER | a quota answer under 6 h old, older | yellow, grey |
+| RUNNER | between steps, no runner, the day's line, the tool and pid | grey |
+| HELPER, BRIEF | the `●` and the verb it is running | cyan |
+| HELPER, BRIEF | `·  not open` | dim grey |
+| WORK | a session's `●` and its area | cyan, bold white |
+| WORK | a tmux window's `◆` | yellow |
+| WORK | how long it has been open, under a day, from a day | grey, yellow |
 | QUEUE | the next name, the first of them | white, bold white |
 | QUEUE | the number, `… N more runnable` | grey |
 | QUEUE | why a project was skipped | dim grey |

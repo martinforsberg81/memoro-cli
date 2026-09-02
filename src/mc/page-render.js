@@ -161,8 +161,18 @@ function row(c, wide, left, middle, right, tone = null) {
 
 /* --------------------------------------------------------------- sections */
 
-function nowLines(lines, c, wide, now) {
-  heading(lines, c, wide, 'NOW', null, null);
+/**
+ * RUNNER — what `mc run` is doing, and nothing else.
+ *
+ * It was NOW, and NOW drew the runner's steps and the sessions a person had
+ * open as one list of dots. The two are stopped by different things and read
+ * for different reasons; together they meant a `mc plan` left open since
+ * Sunday sat in the same column as a step four minutes into its budget. The
+ * sessions have a section of their own now.
+ */
+function runnerLines(lines, c, wide, runner) {
+  const now = runner;
+  heading(lines, c, wide, 'RUNNER', null, 'mc run');
   // One line per lane: `mc run` drives one lane per repository at the same
   // time, and each of them is a step somebody may want to look at.
   const steps = now.steps || [];
@@ -180,7 +190,7 @@ function nowLines(lines, c, wide, now) {
       ], ' · '), wide - 28);
       lines.push(`  ${c(MARK.running, 'green')} ${c(pad(clip(s.name, 21), 22), 'bold', 'white')} ${meta}`);
     }
-  } else if (now.runner?.alive) {
+  } else if (now.process?.alive) {
     lines.push(`  ${c(MARK.quiet, 'grey')} ${c(pad('runner', 22), 'grey')} ${c('between steps — nothing in flight', 'grey')}`);
   } else {
     lines.push(`  ${c(MARK.quiet, 'grey')} ${c('the runner is not running — mc run starts it', 'grey')}`);
@@ -191,26 +201,9 @@ function nowLines(lines, c, wide, now) {
       { text: ' — the runner exits after the steps it is in', styles: ['grey'] },
     ], wide - 2)}`);
   }
-  // A foreground verb is a person's session: cyan, the colour of the verbs
-  // that hold a terminal, and the same cyan wherever `brief` or `plan` is
-  // printed.
-  for (const item of now.foreground) {
-    const meta = paint(c, between([
-      { text: item.area || '', styles: ['grey'] },
-      { text: [item.tool, item.model].filter(Boolean).join(' '), styles: ['grey'] },
-      { text: item.pid ? `pid ${item.pid}` : '', styles: ['grey'] },
-    ], ' · '), wide - 28);
-    lines.push(`  ${c(MARK.running, 'cyan')} ${c(pad(clip(`mc ${item.verb || '?'}`, 21), 22), 'bold', 'cyan')} ${meta}`);
-  }
-  // A tmux area is a person's window, not the runner's: yellow, because what
-  // is in it is waiting for somebody rather than working.
-  for (const area of now.live) {
-    const since = area.opened_ms ? `open ${duration(Math.max(0, Math.round((now.at_ms - area.opened_ms) / 1000)))}` : 'open';
-    lines.push(`  ${c(MARK.waiting, 'yellow')} ${c(pad(clip(area.name, 21), 22), 'bold', 'white')} ${c(`tmux mc-${area.name} · ${since}`, 'grey')}`);
-  }
   for (const line of now.stale) say(lines, c, wide, 2, `${MARK.quiet} stale: ${line}`, 'red');
   const day = now.day;
-  const up = now.runner?.alive ? `runner up ${duration(now.runner.up_seconds)} · ` : '';
+  const up = now.process?.alive ? `runner up ${duration(now.process.up_seconds)} · ` : '';
   const cost = money(day.cost);
   say(lines, c, wide, 2, `${up}${day.steps} steps in 24 h — merged ${day.merged}, open ${day.open}, `
     + `failed ${day.failed}, timed out ${day.timeout}`
@@ -222,6 +215,60 @@ function nowLines(lines, c, wide, now) {
     const recent = Number.isFinite(at) && now.at_ms - at < QUOTA_FRESH_MS;
     say(lines, c, wide, 2, `quota: ${now.quota.count} answer(s) in the last 24 h, last ${when(now.quota.last)}`,
       recent ? 'yellow' : 'grey');
+  }
+}
+
+/** Past this, the age is the thing on the row worth looking at. */
+const STALE_SESSION_S = 24 * 60 * 60;
+const ageTone = (seconds) => (seconds != null && seconds >= STALE_SESSION_S ? ['yellow'] : ['grey']);
+const openFor = (seconds) => (seconds == null ? 'open' : `open ${ageWords(seconds)}`);
+
+/**
+ * One desk — HELPER or BRIEF — as a heading with its state beside it.
+ *
+ * Drawn whether or not anybody is at it. There is exactly one of each, so
+ * *"is the helper running?"* is a question a row answers either way, and a
+ * section that vanishes when nothing is open answers nothing at all.
+ */
+function deskLine(lines, c, wide, title, session, verb) {
+  if (!session) {
+    heading(lines, c, wide, title, [{ text: `${MARK.quiet}  not open`, styles: ['dim', 'grey'] }], verb);
+    return;
+  }
+  heading(lines, c, wide, title, [
+    { text: `${MARK.running} `, styles: ['cyan'] },
+    ...between([
+      { text: openFor(session.age_seconds), styles: ageTone(session.age_seconds) },
+      { text: [session.tool, session.model].filter(Boolean).join(' '), styles: ['grey'] },
+      { text: session.pid ? `pid ${session.pid}` : '', styles: ['grey'] },
+    ], ' · '),
+  ], verb);
+}
+
+/**
+ * WORK — everything running that the runner did not start, oldest first.
+ *
+ * The age is the point of the section. All of these were on the page before;
+ * what was missing was how long each had been there, so on 2026-09-02 seven
+ * live sessions — the oldest three days old — read as a busy afternoon. Past
+ * a day the age turns yellow, because by then it is the thing on the row.
+ */
+function workLines(lines, c, wide, sessions) {
+  const others = sessions.others || [];
+  heading(lines, c, wide, 'WORK', others.length
+    ? `${others.length} session${others.length === 1 ? '' : 's'}`
+    : 'nothing open', 'mc work <name>');
+  for (const item of others) {
+    const meta = paint(c, between([
+      { text: item.verb ? `mc ${item.verb}` : 'tmux', styles: ['cyan'] },
+      { text: openFor(item.age_seconds), styles: ageTone(item.age_seconds) },
+      { text: [item.tool, item.model].filter(Boolean).join(' '), styles: ['grey'] },
+      { text: item.pid ? `pid ${item.pid}` : (item.tmux || ''), styles: ['grey'] },
+    ], ' · '), wide - 28);
+    // Cyan for a verb somebody typed, yellow for a tmux window nobody is
+    // necessarily in — the same two meanings those colours carried before.
+    const mark = item.verb ? c(MARK.running, 'cyan') : c(MARK.waiting, 'yellow');
+    lines.push(`  ${mark} ${c(pad(clip(item.area || '?', 21), 22), 'bold', 'white')} ${meta}`);
   }
 }
 
@@ -402,7 +449,7 @@ export function renderPageLines(data, {
   const at = now instanceof Date ? now.getTime() : Number(now);
   const lines = [];
 
-  const cost = money(data.now?.day?.cost);
+  const cost = money(data.runner?.day?.cost);
   const brand = `${c('MEMORO·CLI', 'bold', 'white')}${version ? c(`  ${version}`, 'grey') : ''}`;
   // Counted on the plain text, and the narrowest terminal keeps the count it
   const parts = [
@@ -417,13 +464,21 @@ export function renderPageLines(data, {
   lines.push(`  ${brand} ${c('─'.repeat(Math.max(2, rule)), 'grey')} ${counts}`);
   lines.push('');
 
-  nowLines(lines, c, wide, { ...data.now, at_ms: at });
+  const sessions = data.sessions || { desks: {}, others: [] };
+  runnerLines(lines, c, wide, { ...data.runner, at_ms: at });
+  lines.push('');
+  // The two desks sit between the machine and the work: one helper, one
+  // brief, each a heading with its own state on the line.
+  deskLine(lines, c, wide, 'HELPER', sessions.desks?.helper, 'mc helper');
+  deskLine(lines, c, wide, 'BRIEF', sessions.desks?.brief, 'mc brief');
   lines.push('');
   queueLines(lines, c, wide, data.queue);
   lines.push('');
   intakeLines(lines, c, wide, data.intake);
   lines.push('');
   projectsLines(lines, c, wide, data.projects);
+  lines.push('');
+  workLines(lines, c, wide, sessions);
 
   const cache = data.caches?.fresh
     ? 'fresh — fetched and asked GitHub'

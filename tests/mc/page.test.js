@@ -11,8 +11,8 @@ import { describe, it } from 'node:test';
 
 import { runsSince } from '../../src/mc/brief-collect.js';
 import {
-  collectPage, countNewErrors, intakeSection, newErrorLines, nowSection, queueSection,
-  projectsSection,
+  collectPage, countNewErrors, intakeSection, newErrorLines, queueSection,
+  projectsSection, runnerSection, sessionsSection,
 } from '../../src/mc/page-collect.js';
 import { colourFor, columnsFor, renderPage, renderPageLines } from '../../src/mc/page-render.js';
 import { width } from '../../src/mc/status-render.js';
@@ -76,39 +76,39 @@ const TSV = [
 const ROWS = runsSince(TSV, new Date('2026-08-28T12:00:00Z'));
 const live = () => true;
 
-describe('NOW', () => {
+describe('RUNNER', () => {
   const RUNNER = { pid: 4242, started: '2026-08-29T10:00:00Z' };
   const CURRENT = {
     name: 'mc-ui', kind: 'step', repo: 'memoro-cli', tool: 'claude', model: 'opus', budget_minutes: 90,
     started: '2026-08-29T11:40:00Z', pid: 4242, worktree: '/w/mc-ui/memoro-cli',
   };
 
-  it('carries the step, the tmux areas, the foreground verbs and the day behind them', () => {
-    const now = nowSection({
-      runner: RUNNER,
-      currents: [CURRENT],
-      stop: true,
-      rows: ROWS,
-      live: [{ name: 'docx-editor', opened_ms: Date.parse('2026-08-29T11:00:00Z') }],
-      foreground: [{ verb: 'brief', area: 'brief', tool: 'claude', model: 'opus', pid: 99 }],
-      now: NOW,
-      alive: live,
+  it('carries the step, a pending STOP, the process and the day behind them', () => {
+    const runner = runnerSection({
+      runner: RUNNER, currents: [CURRENT], stop: true, rows: ROWS, now: NOW, alive: live,
     });
-    assert.equal(now.steps[0].name, 'mc-ui');
-    assert.equal(now.steps[0].elapsed_seconds, 1200);
-    assert.equal(now.steps[0].budget_seconds, 5400);
-    assert.equal(now.stop, true);
-    assert.deepEqual(now.live.map((area) => area.name), ['docx-editor']);
-    assert.deepEqual(now.foreground.map((item) => item.verb), ['brief']);
-    assert.equal(now.day.steps, 3);
-    assert.equal(now.day.timeout, 1);
-    assert.ok(now.day.cost > 7 && now.day.cost < 8, `≈ $7.3 list: ${now.day.cost}`);
+    assert.equal(runner.steps[0].name, 'mc-ui');
+    assert.equal(runner.steps[0].elapsed_seconds, 1200);
+    assert.equal(runner.steps[0].budget_seconds, 5400);
+    assert.equal(runner.stop, true);
+    assert.equal(runner.process.alive, true);
+    assert.equal(runner.day.steps, 3);
+    assert.equal(runner.day.timeout, 1);
+    assert.ok(runner.day.cost > 7 && runner.day.cost < 8, `≈ $7.3 list: ${runner.day.cost}`);
   });
 
-  // `mc run` drives one lane per repository at the same time, so NOW is a
-  // list: one line for memoro's step and one for memoro-cli's.
+  // The section is the machine and nothing else now: a person's session is
+  // not the runner's business and is not carried here at all.
+  it('carries no session a person opened', () => {
+    const runner = runnerSection({ runner: RUNNER, rows: ROWS, now: NOW, alive: live });
+    assert.ok(!('foreground' in runner));
+    assert.ok(!('live' in runner));
+  });
+
+  // `mc run` drives one lane per repository at the same time, so the section
+  // is a list: one line for memoro's step and one for memoro-cli's.
   it('carries one step per lane when two lanes are running', () => {
-    const now = nowSection({
+    const runner = runnerSection({
       runner: RUNNER,
       currents: [CURRENT, {
         name: 'docx-editor', kind: 'step', repo: 'memoro', tool: 'claude', model: 'opus',
@@ -118,19 +118,70 @@ describe('NOW', () => {
       now: NOW,
       alive: live,
     });
-    assert.deepEqual(now.steps.map((step) => step.repo), ['memoro', 'memoro-cli']);
-    assert.deepEqual(now.steps.map((step) => step.name), ['docx-editor', 'mc-ui']);
+    assert.deepEqual(runner.steps.map((step) => step.repo), ['memoro', 'memoro-cli']);
+    assert.deepEqual(runner.steps.map((step) => step.name), ['docx-editor', 'mc-ui']);
+  });
+});
+
+describe('SESSIONS', () => {
+  const HELPER = {
+    verb: 'helper', area: null, tool: 'claude', model: 'sonnet', pid: 99,
+    started: '2026-08-27T12:00:00Z',
+  };
+  const PLAN = {
+    verb: 'plan', area: 'plan/msr-core', tool: 'claude', model: 'opus', pid: 100,
+    started: '2026-08-29T11:30:00Z',
+  };
+
+  it('gives each desk its own slot, and says so when nobody is at one', () => {
+    const s = sessionsSection({ foreground: [HELPER, PLAN], now: NOW, alive: live });
+    assert.equal(s.desks.helper.pid, 99);
+    // A desk nobody is at is `null` rather than missing: the page draws the
+    // row either way, and "is the helper running?" is answered both ways.
+    assert.equal(s.desks.brief, null);
+    assert.deepEqual(s.others.map((item) => item.verb), ['plan']);
+    assert.equal(s.count, 2);
   });
 
-  it('drops a registered foreground session whose process is gone', () => {
-    const now = nowSection({
-      foreground: [{ verb: 'brief', pid: 99 }, { verb: 'plan', pid: 100 }],
+  // The whole point of the section. `started` has been in the register since
+  // it existed and nothing read it, so a session opened on Sunday was drawn
+  // exactly like one opened twenty minutes ago.
+  it('carries how long each session has been open', () => {
+    const s = sessionsSection({ foreground: [HELPER, PLAN], now: NOW, alive: live });
+    assert.equal(s.desks.helper.age_seconds, 2 * 24 * 60 * 60);
+    assert.equal(s.others[0].age_seconds, 1800);
+  });
+
+  it('carries a tmux window as a session with no verb', () => {
+    const s = sessionsSection({
+      live: [{ name: 'docx-editor', opened_ms: Date.parse('2026-08-29T11:00:00Z') }],
+      now: NOW,
+      alive: live,
+    });
+    assert.deepEqual(s.others.map((item) => [item.area, item.verb, item.tmux, item.age_seconds]),
+      [['docx-editor', null, 'mc-docx-editor', 3600]]);
+  });
+
+  // Oldest first: the one open longest is the one most likely to have been
+  // forgotten, which is why the age is on the row at all.
+  it('puts the oldest session first', () => {
+    const s = sessionsSection({
+      foreground: [PLAN, { ...HELPER, verb: 'work', area: 'red' }],
+      live: [{ name: 'docx-editor', opened_ms: Date.parse('2026-08-29T11:00:00Z') }],
+      now: NOW,
+      alive: live,
+    });
+    assert.deepEqual(s.others.map((item) => item.area), ['red', 'docx-editor', 'plan/msr-core']);
+  });
+
+  it('drops a registered session whose process is gone', () => {
+    const s = sessionsSection({
+      foreground: [{ verb: 'brief', pid: 99 }, { verb: 'plan', area: 'x', pid: 100 }],
       now: NOW,
       alive: (pid) => pid === 100,
     });
-    assert.deepEqual(now.foreground.map((item) => item.verb), ['plan']);
-    assert.deepEqual(now.steps, []);
-    assert.equal(now.day.steps, 0);
+    assert.equal(s.desks.brief, null);
+    assert.deepEqual(s.others.map((item) => item.verb), ['plan']);
   });
 });
 
@@ -375,7 +426,8 @@ describe('PROJECTS', () => {
 /** The page's data with one section replaced — everything else is empty. */
 function pageData(over = {}) {
   return {
-    now: nowSection({ rows: [], now: NOW, alive: () => false }),
+    runner: runnerSection({ rows: [], now: NOW, alive: () => false }),
+    sessions: sessionsSection({ now: NOW, alive: () => false }),
     queue: queueSection({ queue: [], plans: [] }),
     intake: intakeSection({ digest: null, proposals: [], now: NOW }),
     projects: projectsSection({ areas: [], plans: [] }),
@@ -387,7 +439,7 @@ function pageData(over = {}) {
 
 /** The whole page, with every section carrying something. */
 const DATA = pageData({
-  now: nowSection({
+  runner: runnerSection({
     runner: { pid: 4242, started: '2026-08-29T10:00:00Z' },
     currents: [{
       name: 'mc-ui', kind: 'step', repo: 'memoro-cli', tool: 'claude', model: 'opus', budget_minutes: 90,
@@ -395,6 +447,14 @@ const DATA = pageData({
     }],
     stop: true,
     rows: ROWS,
+    now: NOW,
+    alive: live,
+  }),
+  sessions: sessionsSection({
+    foreground: [{
+      verb: 'helper', area: null, tool: 'claude', model: 'sonnet', pid: 99,
+      started: '2026-08-29T11:00:00Z',
+    }],
     live: [{ name: 'docx-editor', opened_ms: Date.parse('2026-08-29T11:00:00Z') }],
     now: NOW,
     alive: live,
@@ -424,13 +484,16 @@ const DATA = pageData({
 describe('the page', () => {
   it('prints the four sections in order, with the counts and the verb that expands each', () => {
     const text = renderPage(DATA, { columns: 120, version: '0.7.11', now: NOW });
-    const at = ['NOW', 'QUEUE', 'INTAKE', 'PROJECTS'].map((head) => text.indexOf(`  ${head}`));
+    const at = ['RUNNER', 'HELPER', 'BRIEF', 'QUEUE', 'INTAKE', 'PROJECTS', 'WORK'].map((head) => text.indexOf(`  ${head}`));
     assert.ok(at.every((index, n) => index >= 0 && (n === 0 || index > at[n - 1])), text);
     assert.match(text, /MEMORO·CLI {2}0\.7\.11/u);
     assert.match(text, /2 of 3 queued/u);
     assert.match(text, /● mc-ui\s+step · claude opus · 20 min of 90 min · pid 4242/u);
     assert.match(text, /■ STOP requested — the runner exits after the steps it is in/u);
-    assert.match(text, /◆ docx-editor\s+tmux mc-docx-editor · open 60 min/u);
+    assert.match(text, /HELPER {2}● open 60 min · claude sonnet · pid 99\s+mc helper/u);
+    assert.match(text, /BRIEF {2}· {2}not open\s+mc brief/u);
+    assert.match(text, /WORK {2}1 session\s+mc work <name>/u);
+    assert.match(text, /◆ docx-editor\s+tmux · open 60 min · mc-docx-editor/u);
     assert.match(text, /runner up 120 min · 3 steps in 24 h — merged 1, open 1, failed 0, timed out 1 · ≈\$7\.\d\d list \(opus, 2026-06\)/u);
     assert.match(text, /QUEUE {2}2 runnable of 3\s+mc status <name>/u);
     assert.match(text, /skipped 1 \(done 1\)/u);
@@ -453,7 +516,7 @@ describe('the page', () => {
       const lines = renderPageLines(DATA, { columns, version: '0.7.11', now: NOW });
       const over = lines.filter((line) => width(line) > wide);
       assert.deepEqual(over, [], `${columns} columns: ${over.join('\n')}`);
-      assert.ok(lines.some((line) => /NOW/u.test(line)), `${columns} columns lost NOW`);
+      assert.ok(lines.some((line) => /RUNNER/u.test(line)), `${columns} columns lost RUNNER`);
     }
   });
 
@@ -479,7 +542,7 @@ describe('the page', () => {
     const code = await page(['--json'], { collect: async () => DATA, stdout: { write: (s) => { out += s; } } });
     assert.equal(code, 0);
     const parsed = JSON.parse(out);
-    assert.deepEqual(Object.keys(parsed), ['now', 'queue', 'intake', 'projects', 'caches', 'notes']);
+    assert.deepEqual(Object.keys(parsed), ['runner', 'sessions', 'queue', 'intake', 'projects', 'caches', 'notes']);
     assert.equal(parsed.projects.repos[0].projects[0].name, 'avatar-self-serve');
     assert.equal(parsed.queue.runnable, 2);
     // Rendering the parsed JSON gives the same page: the two cannot drift.
@@ -531,10 +594,10 @@ describe('collectPage', () => {
       },
     });
     assert.deepEqual(asked, ['tmux'], 'the default page runs no fetch and no gh');
-    assert.deepEqual(data.now.steps.map((step) => step.name), ['docx-editor', 'mc-ui'],
+    assert.deepEqual(data.runner.steps.map((step) => step.name), ['docx-editor', 'mc-ui'],
       'one current-<repo>.json per lane, and the page reads every one of them');
-    assert.deepEqual(data.now.foreground.map((item) => item.verb), ['brief']);
-    assert.equal(data.now.day.steps, 3);
+    assert.equal(data.sessions.desks.brief.verb, 'brief');
+    assert.equal(data.runner.day.steps, 3);
     assert.equal(data.queue.depth, 2, 'the comment line is not a project');
     assert.equal(data.queue.runnable, 2);
     assert.equal(data.intake.new_errors, 1);
@@ -625,11 +688,13 @@ describe('the palette', () => {
     '',
     'bold+white grey grey white grey grey', //   MEMORO·CLI 0.7.11 ── 4 decisions · 2 of 3 queued · ≈$7.28 today
     '',
-    'bold+cyan', //                                               NOW
+    'bold+cyan grey', //                                          RUNNER                                mc run
     'green bold+white green grey grey grey white grey grey', //  ● mc-ui  step · claude opus · 20 min of 90 min · pid 4242
     'red+bold grey', //                                          ■ STOP requested — the runner exits after the steps it is in
-    'yellow bold+white grey', //                                 ◆ docx-editor  tmux mc-docx-editor · open 60 min
     'grey', //                                                     runner up 120 min · 3 steps in 24 h — …
+    '',
+    'bold+cyan cyan grey grey grey grey grey grey', //            HELPER  ● open 60 min · claude sonnet · pid 99   mc helper
+    'bold+cyan dim+grey grey', //                                 BRIEF  ·  not open                                mc brief
     '',
     'bold+cyan grey grey', //                                      QUEUE  2 runnable of 3            mc status <name>
     'grey bold+white green', //                                      1  mc-ui  step
@@ -650,6 +715,9 @@ describe('the palette', () => {
     '',
     'grey', //                                                     1 workarea with no project on main — nothing removes them
     'grey grey grey dim+grey grey', //                               5 · ui-fixes  —  no project on main
+    '',
+    'bold+cyan grey grey', //                                      WORK  1 session                     mc work <name>
+    'yellow bold+white cyan grey grey grey grey', //             ◆ docx-editor  tmux · open 60 min · mc-docx-editor
     '',
     'grey', //                                                     offline, PRs 2 h old — --fresh asks GitHub
     'grey', //                                                     note: no queue.md
@@ -697,13 +765,13 @@ describe('the palette', () => {
     });
     assert.equal(code, 0);
     assert.ok(!out.includes(ESC), '--json is bytes for a program, never for an eye');
-    assert.deepEqual(Object.keys(JSON.parse(out)), ['now', 'queue', 'intake', 'projects', 'caches', 'notes']);
+    assert.deepEqual(Object.keys(JSON.parse(out)), ['runner', 'sessions', 'queue', 'intake', 'projects', 'caches', 'notes']);
   });
 
   it('gives a step kind one colour wherever a kind is printed', () => {
     for (const [kind, tone] of [['step', 'green'], ['reconcile', 'magenta'], ['triage', 'blue'], ['brief', 'cyan'], ['plan', 'cyan']]) {
       const data = pageData({
-        now: nowSection({
+        runner: runnerSection({
           runner: { pid: 4242, started: '2026-08-29T11:00:00Z' },
           currents: [{
             name: 'thing', kind, repo: 'memoro-cli', tool: 'claude', model: 'opus', budget_minutes: 90,
@@ -749,7 +817,7 @@ describe('the palette', () => {
 
   it('turns the clock yellow near the budget and red past it', () => {
     const stepAt = (spent) => pageData({
-      now: nowSection({
+      runner: runnerSection({
         runner: { pid: 4242, started: '2026-08-29T10:00:00Z' },
         currents: [{
           name: 'thing', kind: 'step', repo: 'memoro-cli', tool: 'claude', model: 'opus', budget_minutes: 90,
@@ -772,22 +840,22 @@ describe('the palette', () => {
       const rows = [{
         ts: last, name: 'thing', kind: 'step', exit: '1', seconds: '10', pr: '-', note: 'quota,timeout',
       }];
-      const lines = paintedPage(pageData({ now: nowSection({ rows, now: NOW, alive: () => false }) }));
+      const lines = paintedPage(pageData({ runner: runnerSection({ rows, now: NOW, alive: () => false }) }));
       return signature(rowWith(lines, 'quota: 1 answer(s)'));
     };
     assert.equal(quota('2026-08-29T11:00:00Z'), 'yellow', 'an hour ago is why the runner is idle');
     assert.equal(quota('2026-08-29T02:00:00Z'), 'grey', 'ten hours ago is history');
   });
 
-  it('paints a foreground verb in the cyan the verbs are printed in', () => {
+  it('paints a session in the cyan the verbs are printed in', () => {
     const data = pageData({
-      now: nowSection({
-        foreground: [{ verb: 'brief', area: 'brief', tool: 'claude', model: 'opus', pid: 99 }],
+      sessions: sessionsSection({
+        foreground: [{ verb: 'work', area: 'red', tool: 'claude', model: 'opus', pid: 99, started: '2026-08-29T11:00:00Z' }],
         now: NOW,
         alive: live,
       }),
     });
-    assert.deepEqual(signature(rowWith(paintedPage(data), '● mc brief')).split(' ').slice(0, 2), ['cyan', 'bold+cyan']);
+    assert.deepEqual(signature(rowWith(paintedPage(data), '● red')).split(' ').slice(0, 3), ['cyan', 'bold+white', 'cyan']);
   });
 
   // The two tables in `docs/technical/mc-ui.md` are the palette written down;
