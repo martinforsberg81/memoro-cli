@@ -53,9 +53,15 @@ In this order, because that is the order the questions come in:
   of its steps are done, `next`, the open PR. A project's `●` means the runner
   has a step in flight on it, and nothing else. A programme is drawn whether or
   not any of its projects have a plan the runner can read, and a programme that
-  exists only as an open planning session is drawn too. Then the workareas no
-  project explains, under a heading of their own — the first few by name and
-  the rest as a count.
+  exists only as an open planning session is drawn too.
+- **WORK** — everything running that the runner did not start, oldest first:
+  `mc plan` on a programme is not here (it is on that programme's heading), so
+  what is left is `mc work`, a session from before `mc plan` took a programme,
+  and a tmux window. Then the workareas no project explains — the first few by
+  name and the rest as a count. They were the tail of PROGRAMMES, which made
+  that section answer two questions; a folder with nothing to explain it is
+  work in the sense this heading means, and is often the same folder a session
+  is open in.
 
 Two rules the sections keep:
 
