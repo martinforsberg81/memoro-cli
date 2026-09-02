@@ -117,7 +117,7 @@
         "Everything else keeps its own line and its own name: `dirty worktree`, the `inFlight` pull-request answer, `syncMain`'s conflicts, a worktree that could not be created, an unpushable branch. Those are facts about this machine at this moment that nothing else records, and they are the ones worth reading.",
         "A plan that does not parse is the one judgement call here. It is plan-shaped, and it is also a thing somebody must fix — five plans on main were in that state on 2026-09-02 and the page draws them as `invalid`. Name them in the summary line rather than only counting them, so the log says which five."
       ],
-      "pr": null,
+      "pr": 532,
       "blocked_by": null
     },
     {
