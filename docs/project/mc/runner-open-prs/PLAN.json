@@ -93,7 +93,7 @@
         "The second half of the step, in the same place in `runStep` and for the same reason: before a session is started, the worktree must be somewhere it can push from. `branch-landed.js` answers whether a branch's content is already in `origin/main` — by content, because the runner squash-merges and \"ahead by N commits\" says nothing. If it has landed, check out a new branch from `origin/main` named `<name>-<n>`, the smallest `<n>` for which no branch of that name exists locally or on the remote. The `action-window` workarea stood on `action-window`, merged as #11177 and deleted on the remote; had that 04:33 session finished, the push-guard (`src/mc/push-guard.js`, D-0164) would have refused its push and the whole session would have bought nothing. The guard asks the right question at the wrong end. Leave a workarea whose branch has *not* landed exactly where it is — that branch carries work, and the rule above has already decided what happens to it.",
         "Do not read the plan out of the open pull request. The queue stays built from `origin/main`; `mc status` saying `ready` while the truth is `waiting on #<n>` is closed by the line the page prints, not by giving the runner a fourth source of truth to disagree with itself about."
       ],
-      "pr": null,
+      "pr": 519,
       "blocked_by": null
     },
     {
