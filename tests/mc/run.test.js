@@ -336,8 +336,9 @@ test('skips: dirty worktree, a blocked step', async () => {
   assert.equal(r.ran, 0);
   assert.equal(f.calls.sessions.length, 0);
   const log = f.files['/w/runner/log/runner.log'];
-  assert.match(log, /dirty: dirty worktree, skip/u);
-  assert.match(log, /wait: step 1 is blocked on decision prog-1, skip/u);
+  assert.match(log, /dirty: dirty worktree, skip/u, 'the machine gets its own line');
+  assert.match(log, /skipped 1 \(blocked 1\)/u, 'the plan gets a count');
+  assert.doesNotMatch(log, /wait: /u, 'and no line of its own — the page already draws it');
 });
 
 /**
@@ -790,9 +791,10 @@ test('the plan is asked before git: only the ready project\'s workarea is touche
   const touched = [...new Set(f.calls.git.map((call) => call[0]).filter((cwd) => cwd.startsWith('/w/')))];
   assert.deepEqual(touched, ['/w/zeta/memoro'], `git was asked about ${touched.join(', ')}`);
   assert.deepEqual(f.calls.added, ['zeta'], 'no workarea is made for a project the plan already refuses');
-  // And what a person would have read is still there, unchanged, for each.
+  // And the twenty are one line, not twenty.
   const log = f.files['/w/runner/log/runner.log'];
-  for (const name of names) assert.match(log, new RegExp(`${name}: step 1 is blocked on decision prog-1, skip`, 'u'));
+  assert.match(log, /skipped 20 \(blocked 20\)/u);
+  for (const name of names) assert.doesNotMatch(log, new RegExp(`${name}: `, 'u'));
 });
 
 /**
@@ -813,8 +815,87 @@ test('a plan that stopped while the lane stayed on it is not stepped again', asy
   assert.equal(r.ran, 1);
   assert.equal(f.calls.sessions.length, 1, 'the lane stayed on a project whose plan had stopped');
   const log = f.files['/w/runner/log/runner.log'];
-  assert.match(log, /go: step 1 is blocked on decision prog-1, skip/u);
+  assert.match(log, /skipped 1 \(blocked 1\)/u, 'the lane let go, counted like any other refusal on the plan');
   assert.doesNotMatch(log, /staying on go/u);
+});
+
+/**
+ * What a round *says*. A plan-shaped refusal is already drawn by `mc status`'s
+ * QUEUE, from the same `kindFor` — so the twenty-first `blocked on decision
+ * plan-review` in runner.log is a line nobody reads, and it buries the ones
+ * somebody must (Martin, 2026-09-02).
+ */
+test('a round that can start nothing says so in one line, not one line per project', async () => {
+  const stopped = plan({ status: 'blocked' });
+  const names = Array.from({ length: 20 }, (unused, i) => `stopped-${String(i + 1).padStart(2, '0')}`);
+  const plans = { memoro: {} };
+  for (const name of names) plans.memoro[name] = stopped;
+  const f = fixture({ plans, session: okSession() });
+  const r = await createRunner({ deps: f.deps }).round();
+
+  assert.equal(r.ran, 0);
+  assert.equal(f.calls.sessions.length, 0);
+  const lines = (f.files['/w/runner/log/runner.log'] || '').trim().split('\n');
+  const summary = lines.filter((line) => /skipped \d/u.test(line));
+  assert.equal(summary.length, 1, `one line, not ${summary.length}`);
+  assert.match(summary[0], /skipped 20 \(blocked 20\)$/u);
+  for (const name of names) assert.doesNotMatch(lines.join('\n'), new RegExp(`${name}: `, 'u'));
+});
+
+test('the reasons are counted in the shape the page uses, and a plan that does not parse is named', async () => {
+  const f = fixture({
+    plans: {
+      memoro: {
+        wait: plan({ status: 'blocked' }),
+        broken: '{ "schema": "mc-plan"',
+        alsobroken: 'not json at all',
+      },
+    },
+    session: okSession(),
+  });
+  await createRunner({ deps: f.deps }).round();
+
+  // Reasons in the order the queue met them; `done` is not among them because
+  // a plan that says done is archived before the lane starts.
+  const log = f.files['/w/runner/log/runner.log'];
+  assert.match(log, /skipped 3 \(unparseable 2, blocked 1\) — the plans that do not parse: alsobroken, broken$/mu);
+});
+
+/**
+ * The other half of the same rule: a project passed over for something about
+ * this machine rather than about its plan keeps its own named line. A dirty
+ * worktree is usually somebody's unfinished work about to be stepped on;
+ * nothing else records any of these.
+ */
+test('a skip that is about the machine keeps its own line: dirty, in flight, unpushable', async () => {
+  const f = fixture({
+    plans: {
+      memoro: {
+        dirt: ready, flight: ready, stuck: ready, wait: plan({ status: 'blocked' }),
+      },
+    },
+    dirty: ['dirt'],
+    openPrs: { memoro: [{ number: 11246, headRefName: 'flight-2', baseRefName: 'main', isDraft: false, title: 'Step 2' }] },
+    landed: ['stuck'], refs: { stuck: ['stuck'] },
+    session: okSession(),
+  });
+  // The branch `stuck` stands on has landed, and the one it would move to
+  // cannot be made — a session there could not push what it wrote.
+  const git = f.deps.git;
+  f.deps.git = (cwd, args) => (args[0] === 'checkout' && cwd === '/w/stuck/memoro'
+    ? { ok: false, stdout: '', stderr: 'no' }
+    : git(cwd, args));
+
+  const r = await createRunner({ deps: f.deps }).round();
+
+  assert.equal(r.ran, 0);
+  assert.equal(f.calls.sessions.length, 0);
+  const log = f.files['/w/runner/log/runner.log'];
+  assert.match(log, /dirt: dirty worktree, skip/u);
+  assert.match(log, /flight: #11246 is open \(Step 2\) — not starting a step/u);
+  assert.match(log, /stuck: stuck has landed and stuck-2 could not be made, skip/u);
+  // And the one refusal that is on the plan is the only one counted.
+  assert.match(log, /skipped 1 \(blocked 1\)$/mu);
 });
 
 /**
