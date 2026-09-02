@@ -28,6 +28,7 @@ import { PLAN_HOME, workAreaPath, workAreaStatePath, workRoot } from './paths.js
 import { installPushGuard } from './push-guard.js';
 import { areaRoleName, reservedRoleName } from './roles.js';
 import { STOP_MARK } from './work-stop-marker.js';
+import { ensureWorkDeps } from './work-deps.js';
 import { branchLanded } from './branch-landed.js';
 
 /**
@@ -297,6 +298,11 @@ export function addWorktree({ name, repo, branch, from = null, env = process.env
   // Its failure is reported, never fatal — the worktree is the deliverable.
   let guard = null;
   try { guard = installPushGuard(repo); } catch (error) { guard = { ok: false, reason: error?.message || String(error) }; }
+  // And so does the dependency tree the checkout's tests will resolve — one
+  // directory above every workarea, never inside one (work-deps.js). Also
+  // reported rather than fatal: a session with a checkout and no tree can
+  // still work, and it is told which packages it will not find.
+  const dependencies = ensureWorkDeps({ repo, env });
   return {
     ok: true,
     path: target,
@@ -304,6 +310,7 @@ export function addWorktree({ name, repo, branch, from = null, env = process.env
     base: base.ref || (exists ? 'the existing branch' : null),
     base_note: base.why,
     push_guard: guard,
+    dependencies,
   };
 }
 

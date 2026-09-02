@@ -180,6 +180,7 @@ export async function runVerb(opts, { stdout, stderr }) {
     // A guard that did not go in is said once, here, rather than found the
     // day a push to a merged branch goes through unremarked (D-0164).
     if (result.push_guard && !result.push_guard.ok) stderr.write(`mc: pre-push guard not installed — ${result.push_guard.reason}\n`);
+    sayDependencies(result, { stdout, stderr });
     return 0;
   }
 
@@ -347,6 +348,7 @@ export async function startSomething({ stdout, stderr }) {
     stdout.write(`\nmc: ${result.path} on ${result.branch}\n`);
     if (result.base) stdout.write(`mc: from ${result.base}\n`);
     if (result.push_guard && !result.push_guard.ok) stderr.write(`mc: pre-push guard not installed — ${result.push_guard.reason}\n`);
+    sayDependencies(result, { stdout, stderr });
   } else {
     stdout.write(`\nmc: ${createWorkArea(name)}\n`);
   }
@@ -695,6 +697,19 @@ export async function openArea(name, opts, deps) {
  *
  * So it says what would be lost, and when nothing would be, it says that too.
  */
+/**
+ * The dependency tree above the workareas, said only when something happened
+ * to it: an install the user waited for, or a failure that will show up as
+ * five test files that cannot resolve their imports. The ordinary case — the
+ * tree is already the one this repository's lockfile describes — is silence.
+ */
+function sayDependencies(result, { stdout, stderr }) {
+  const deps = result.dependencies;
+  if (!deps) return;
+  if (deps.state === 'installed') stdout.write(`mc: dependencies installed at ${deps.path} — ${deps.why}\n`);
+  if (!deps.ok) stderr.write(`mc: no dependency tree at ${deps.path} — ${deps.why}\n`);
+}
+
 function stakes(result, name) {
   const at = [];
   const total = (key) => result.discarded.reduce((sum, item) => sum + (item[key] || 0), 0);
