@@ -10,13 +10,16 @@
  *
  * So the rule asserted here is a refusal. A repository mc cannot prove is safe
  * to run unprepared, and has not been told about, stops the round — with a
- * reason that says what to write and where. The tempting heuristic is wrong in
- * both directions and there is a test for that too: this repository declares
- * three dependencies, one of them native, and its suite runs perfectly from a
- * clean worktree.
+ * reason that says what to write and where.
+ *
+ * The tempting heuristic still cannot be inferred from a manifest, but the
+ * example this file used to give for that — "memoro-cli declares three
+ * dependencies and runs fine without them" — was false for as long as it was
+ * written down, and no test here could see it: the evidence was a sentence
+ * inside the entry. It is read against `package.json` now.
  */
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
@@ -143,13 +146,31 @@ describe('a repository mc has not been told about', () => {
 });
 
 describe('the heuristic mc deliberately does not use', () => {
-  it('this repository has dependencies and needs no preparation', () => {
-    // "It has dependencies, so install them" would add an install to every
-    // round here for nothing — three dependencies, one native, and a suite that
-    // runs from a clean worktree. The claim is declared, with its evidence,
-    // rather than inferred.
-    assert.equal(SHIPPED['memoro-cli'].prepare, null);
-    assert.match(SHIPPED['memoro-cli'].prepare_why, /no node_modules/u);
+  it('the shipped entry for this repository is held against its own package.json', () => {
+    // What `prepare: null` claims is that the suite runs from a worktree with
+    // no dependency tree. This entry claimed it for months while it was false
+    // — `src/runtime/session-host/` imports `@xterm/addon-serialize`, and five
+    // test files went unrun and uncounted every round — and nothing here could
+    // catch it, because the only evidence was a sentence in the entry itself.
+    // So the manifest is the assertion, whatever names it happens to hold.
+    const manifest = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8'));
+    const declares = [
+      ...Object.keys(manifest.dependencies || {}),
+      ...Object.keys(manifest.devDependencies || {}),
+    ];
+    if (declares.length) {
+      // A command, or UNKNOWN — anything but the claim that nothing is needed.
+      // `null` and a missing field are the same forgotten claim, so the shape
+      // is asserted rather than the value.
+      const { prepare } = SHIPPED['memoro-cli'];
+      assert.ok(
+        typeof prepare === 'string' && prepare.length > 0,
+        `package.json declares ${declares.join(', ')}, and the shipped entry still claims this `
+        + `suite runs from a worktree with no dependency tree (prepare: ${JSON.stringify(prepare)})`,
+      );
+    } else {
+      assert.equal(SHIPPED['memoro-cli'].prepare, null, 'nothing to install, so nothing to prepare');
+    }
   });
 
   it('every shipped declaration explains its preparation, whatever it says', () => {
@@ -178,13 +199,13 @@ describe('the heuristic mc deliberately does not use', () => {
 });
 
 describe('declarations, shipped and overridden', () => {
-  it('memoro-cli keeps behaving exactly as it did', () => {
+  it('memoro-cli is declared, and prepares the tree its manifest asks for', () => {
     const fx = repo('memoro-cli', { name: 'memoro-cli', dependencies: { 'node-pty': '1.0.0' } });
     try {
       const answer = fx.ask();
       assert.equal(answer.ok, true);
       assert.equal(answer.source, 'declared');
-      assert.equal(answer.declaration.prepare, null, 'a prepare step appeared where there was none');
+      assert.equal(answer.declaration.prepare, SHIPPED['memoro-cli'].prepare);
       assert.deepEqual(answer.declaration.extra_gates, [], 'an extra gate appeared where there was none');
       assert.match(answer.declaration.merge_log, /large-scale-llm-project\/merge-log\.md$/u);
     } finally { fx.cleanup(); }
@@ -318,7 +339,7 @@ describe('a repository that declares itself in .mc/test.json', () => {
       const answer = fx.ask();
       assert.equal(answer.ok, true);
       assert.deepEqual(answer.declaration, {
-        prepare: null,
+        prepare: SHIPPED['memoro-cli'].prepare,
         prepare_why: SHIPPED['memoro-cli'].prepare_why,
         select: SHIPPED['memoro-cli'].select,
         select_why: SHIPPED['memoro-cli'].select_why,

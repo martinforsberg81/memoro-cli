@@ -10,12 +10,16 @@
  * The unfinished-run guard catches the first case and not the second, which is
  * why this file exists. It is a table of declarations, not a heuristic:
  *
- * The obvious heuristic — "it has dependencies, so install them" — is wrong in
- * both directions here. This very repository has three dependencies, one of
- * them native, and its suite runs perfectly from a clean worktree; treating
- * dependencies as proof of need would add an install to every round for no
- * reason. And a repository can need a build step that has nothing to do with
- * `npm install` at all. Neither can be read off a manifest.
+ * The obvious heuristic — "it has dependencies, so install them" — still
+ * cannot be read off a manifest. A repository can need a build step that has
+ * nothing to do with `npm install`, and a manifest can name a package no test
+ * file reaches. But the example this file gave for the second half was *this*
+ * repository, and it was false: the entry below declared `prepare: null` beside
+ * three dependencies, one of them native, on the strength of gate rounds that
+ * had every one of them run the same five-files-short suite. So the shape this
+ * table has actually got wrong is a null next to declared dependencies, and
+ * `repo-gate-table.test.js` now reads the shipped entry against `package.json`
+ * rather than against a sentence about it.
  *
  * So the rule is: what a repository needs is written down, or the round stops.
  * Never guessed, never attempted in hope. A guess that works nine times and
@@ -71,9 +75,21 @@ export const UNKNOWN = 'unknown';
  */
 export const SHIPPED = Object.freeze({
   'memoro-cli': Object.freeze({
-    prepare: null,
-    prepare_why: 'the suite is node:test over source only; verified across every gate round '
-      + 'since the verb existed, each of which ran it twice in a worktree with no node_modules',
+    // Not source only, and never was. `src/runtime/session-host/` imports
+    // `@xterm/addon-serialize`, `@xterm/headless` and `node-pty`, so five test
+    // files need a dependency tree to run at all — and the old `prepare: null`
+    // did not make the gate stop, it made the gate *say* the suite runs
+    // without one, once per round, while five files went unrun and uncounted.
+    // `npm ci` is the true answer today and the expensive one; it is here
+    // because it is true, not because it is the answer this repository wants.
+    // The cheaper one is a tree the candidate can already resolve, and that is
+    // a separate question about where a tree lives, not about this field.
+    prepare: 'npm ci',
+    prepare_why: 'measured 2026-09-02 on a clean origin/main worktree: without a dependency tree '
+      + 'owned-resource-cleanup, session-runtime-v1, runtime-host, socket-e2e and terminal-screen '
+      + 'fail with ERR_MODULE_NOT_FOUND; npm ci there is exit 0 in 17 s and the same five files '
+      + 'are 27 pass, 1 skip, 0 fail. Re-run it: git worktree add --detach <dir> origin/main, '
+      + 'run those five, npm ci, run them again',
     // This repository's own answer to "what does this change reach": the import
     // closure of each test file, plus the source files a test reads as *text*
     // — which is a real edge here, not a hypothetical one. `merge-doc.test.js`
