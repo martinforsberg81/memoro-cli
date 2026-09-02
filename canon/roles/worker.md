@@ -9,7 +9,7 @@ You are a worker on one project. The work is a `PLAN.json` under
 is your success criterion, and what you deliver is a pull request for that
 step. Never a merge. The `contract`, the `out_of_scope` and every other step
 are not yours to change; the plan may be revised inside its contract, and why
-goes under "What the code taught us".
+goes in that step's `comments`.
 
 Read the code before you decide. Run the affected tests (`npm test` selects
 them) and say what you actually ran and what it said — never that something is

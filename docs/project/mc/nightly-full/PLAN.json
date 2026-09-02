@@ -47,31 +47,6 @@
       "check": "Take a run's stored result, remove one failing name from it, run again, and confirm the name is gone from the page rather than lingering with an old date."
     }
   ],
-  "what_the_code_taught_us": [
-    {
-      "title": "`--full` is six files, and the code says why in three lines",
-      "body": [
-        "`repo-gate.js:333` — `const selects = Boolean(declared.declaration.select) && !wholeSuite;` — so `--full` turns the selector *off* and falls to `suiteCommand({ repoPath })` at line 334. `suiteCommand` (line 858) reads `package.json` and returns `npm test`, with a comment explaining the choice: mc must not keep its own idea of a repository's suite. The reasoning is right; the assumption underneath it — that a repository's `npm test` runs everything — is not true of memoro.",
-        "With no pull request the round checks out the default branch detached (`repo-gate.js:340`), so `npm test` runs `ci.mjs` against `origin/main` on `origin/main`. Measured in the memoro worktree 2026-09-02: `node scripts/testing/ci.mjs --list --base-ref HEAD` → `changed paths: 0`, `selected test files: 6`, `commands: (none)`. The six are the mandatory core.",
-        "The narrow rule that catches this without mc learning anything about any named repository: **a declaration that carries `select` and no `suite` may not answer a `--full`.** A repository that declares a selector has, by declaring it, said that `npm test` is not the whole thing. Checked against both repositories mc knows: memoro's `npm test` is `node scripts/testing/ci.mjs` (a selector — must declare `suite`), memoro-cli's is `node --test --import ./tests/_isolate-home.mjs 'tests/**/*.test.js'` (a glob over everything — declares `suite: 'npm test'` and is telling the truth)."
-      ]
-    },
-    {
-      "title": "Nothing in memoro is scheduled, and that is #10529's cause",
-      "body": [
-        "Every workflow under memoro's `.github/workflows/` is `on: workflow_dispatch:` except `legal-gate.yml` (`on: pull_request`, paths `public/lang/**`). Checked file by file 2026-09-02. GitHub Actions is billing-blocked for this account since 2026-08-04, so this is not an accident to be corrected by turning a trigger back on — it is the standing condition this project has to work inside.",
-        "So the whole suite runs when a person types `npm run test:full` and at no other time. #10529 is what that produces: four days of merges, 31 surface-runtime tests red on `main`, every pull request green. memoro's answer to that was to make its gate run the whole `msr-contract` profile for any diff under `public/js/msr/` — 325 files on every MSR change, about 213 s of a 234 s round, and 34 % of memoro's last 150 landings touch that directory. **The blanket is a substitute for this net**, paid roughly thirteen times a day instead of once.",
-        "Measured 2026-09-02 on this machine (Apple M1, 8 cores, 8 GB): memoro's `npm run test:full` is 2,018 files, 17,928 tests, 337.42 s wall, ~808 s summed CPU across 7 lanes, six tests red on `main`. One run a day is a twentieth of what the blanket costs a day."
-      ]
-    },
-    {
-      "title": "Where the pieces already are",
-      "body": [
-        "`gate-lock.js` is the one-round-at-a-time guard: a file and a pid under mc's home, `taken` and the pid alive → refused with the round's identity; taken and the pid gone → take it; no expiry, because no clock can tell a slow round from a dead one. It is exactly the door a scheduled run must knock on, and its own header says it never blocks anything but a gate round.",
-        "`repo-watch.js` / `repo-watch-loop.js` / `repo-snapshot.js` are the existing meter: a detached node process with a pid file and a log, a round every `DEFAULT_INTERVAL_MS` (60 s), writing atomically under `~/mc/repo-status/` and never inside a repository. Its round is seconds; a full suite is 337 s. The cadences cannot share a loop — but the shape (detached, pid file, atomic snapshot, optional, and the view says which way it answered) is the shape to copy, and `writeJsonAtomic` is already the one door that makes a file appear whole."
-      ]
-    }
-  ],
   "documents": [
     {
       "label": "The verb this extends, and the round it must not disturb",
@@ -94,6 +69,19 @@
         "Fill both shipped entries, and make the `_why` carry a real measurement rather than a claim. memoro: `suite: 'npm run test:full'`, and the evidence is this project's own measurement of 2026-09-02 — 2,018 files, 17,928 tests, 337.42 s wall, six tests red on `main`, on an Apple M1 with 8 GB, machine not idle. memoro-cli: `suite: 'npm test'`, and the evidence is that its `test` script is `node --test --import ./tests/_isolate-home.mjs 'tests/**/*.test.js'`, a glob over the whole tree, which is why it needs a declaration that says so rather than an exemption from the rule.",
         "Two things in the report have to follow. `report.command` already carries what was run, so a reader can see it; make sure the whole-suite phrasing at `repo-gate.js:624-630` still tells the truth — there are two different \"whole suite\" sentences there, one for `--full` asked for and one for a selector that gave up and fell back, and they must not converge now that `--full` means something different. And the round's own record (`full_suite` at line 427) should say which command produced it, not just that it was full.",
         "Verify by running it, not by reading it: `mc test memoro --full` before the change reports 6 files, after it reports about 2,018 and takes minutes. Then remove memoro's `suite` from the shipped table in a throwaway edit and confirm the round stops rather than falling back to six files — that negative is the one that matters, because it is the shape the bug had."
+      ],
+      "comments": [
+        "**`--full` is six files, and the code says why in three lines**",
+        "`repo-gate.js:333` — `const selects = Boolean(declared.declaration.select) && !wholeSuite;` — so `--full` turns the selector *off* and falls to `suiteCommand({ repoPath })` at line 334. `suiteCommand` (line 858) reads `package.json` and returns `npm test`, with a comment explaining the choice: mc must not keep its own idea of a repository's suite. The reasoning is right; the assumption underneath it — that a repository's `npm test` runs everything — is not true of memoro.",
+        "With no pull request the round checks out the default branch detached (`repo-gate.js:340`), so `npm test` runs `ci.mjs` against `origin/main` on `origin/main`. Measured in the memoro worktree 2026-09-02: `node scripts/testing/ci.mjs --list --base-ref HEAD` → `changed paths: 0`, `selected test files: 6`, `commands: (none)`. The six are the mandatory core.",
+        "The narrow rule that catches this without mc learning anything about any named repository: **a declaration that carries `select` and no `suite` may not answer a `--full`.** A repository that declares a selector has, by declaring it, said that `npm test` is not the whole thing. Checked against both repositories mc knows: memoro's `npm test` is `node scripts/testing/ci.mjs` (a selector — must declare `suite`), memoro-cli's is `node --test --import ./tests/_isolate-home.mjs 'tests/**/*.test.js'` (a glob over everything — declares `suite: 'npm test'` and is telling the truth).",
+        "**Nothing in memoro is scheduled, and that is #10529's cause**",
+        "Every workflow under memoro's `.github/workflows/` is `on: workflow_dispatch:` except `legal-gate.yml` (`on: pull_request`, paths `public/lang/**`). Checked file by file 2026-09-02. GitHub Actions is billing-blocked for this account since 2026-08-04, so this is not an accident to be corrected by turning a trigger back on — it is the standing condition this project has to work inside.",
+        "So the whole suite runs when a person types `npm run test:full` and at no other time. #10529 is what that produces: four days of merges, 31 surface-runtime tests red on `main`, every pull request green. memoro's answer to that was to make its gate run the whole `msr-contract` profile for any diff under `public/js/msr/` — 325 files on every MSR change, about 213 s of a 234 s round, and 34 % of memoro's last 150 landings touch that directory. **The blanket is a substitute for this net**, paid roughly thirteen times a day instead of once.",
+        "Measured 2026-09-02 on this machine (Apple M1, 8 cores, 8 GB): memoro's `npm run test:full` is 2,018 files, 17,928 tests, 337.42 s wall, ~808 s summed CPU across 7 lanes, six tests red on `main`. One run a day is a twentieth of what the blanket costs a day.",
+        "**Where the pieces already are**",
+        "`gate-lock.js` is the one-round-at-a-time guard: a file and a pid under mc's home, `taken` and the pid alive → refused with the round's identity; taken and the pid gone → take it; no expiry, because no clock can tell a slow round from a dead one. It is exactly the door a scheduled run must knock on, and its own header says it never blocks anything but a gate round.",
+        "`repo-watch.js` / `repo-watch-loop.js` / `repo-snapshot.js` are the existing meter: a detached node process with a pid file and a log, a round every `DEFAULT_INTERVAL_MS` (60 s), writing atomically under `~/mc/repo-status/` and never inside a repository. Its round is seconds; a full suite is 337 s. The cadences cannot share a loop — but the shape (detached, pid file, atomic snapshot, optional, and the view says which way it answered) is the shape to copy, and `writeJsonAtomic` is already the one door that makes a file appear whole."
       ],
       "pr": null,
       "blocked_by": null

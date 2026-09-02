@@ -44,7 +44,6 @@ const PLAN_KEYS = Object.freeze([
   'contract',
   'out_of_scope',
   'success_criteria',
-  'what_the_code_taught_us',
   'documents',
   'runner',
   'steps',
@@ -55,12 +54,12 @@ const STEP_KEYS = Object.freeze([
   'status',
   'done_when',
   'instruction',
+  'comments',
   'pr',
   'blocked_by',
 ]);
 
 const CRITERION_KEYS = Object.freeze(['met', 'criterion', 'check']);
-const LESSON_KEYS = Object.freeze(['title', 'body']);
 const DOCUMENT_KEYS = Object.freeze(['label', 'path']);
 const RUNNER_KEYS = Object.freeze(['tool', 'model', 'budget_minutes']);
 const BLOCKER_KEYS = Object.freeze(['kind', 'name']);
@@ -119,20 +118,6 @@ function validateCriteria(list, problems) {
   });
 }
 
-function validateLessons(list, problems) {
-  if (!Array.isArray(list)) {
-    problems.push('what_the_code_taught_us: an array, empty until the code teaches something');
-    return;
-  }
-  list.forEach((item, index) => {
-    const at = `what_the_code_taught_us[${index}]`;
-    if (!plain(item)) { problems.push(`${at}: must be an object`); return; }
-    for (const key of unknownKeys(item, LESSON_KEYS)) problems.push(`${at}.${key}: unknown key`);
-    if (!text(item.title)) problems.push(`${at}.title: what was learned, in a line`);
-    if (!prose(item.body)) problems.push(`${at}.body: at least one paragraph`);
-  });
-}
-
 function validateDocuments(list, problems) {
   if (!Array.isArray(list)) { problems.push('documents: an array, possibly empty'); return; }
   list.forEach((item, index) => {
@@ -181,6 +166,16 @@ function validateSteps(steps, problems) {
     if (!prose(step.instruction, { min: step.status === 'done' ? 0 : 1 })) {
       problems.push(`${at}.instruction: at least one paragraph for a step that has not run`);
     }
+    // What this step's session found in the code. Prose, like `instruction`,
+    // and empty until there is something to say — a step that has not run has
+    // nothing. It is the same shape as every other prose field on purpose:
+    // this used to be `what_the_code_taught_us`, a list of `{ title, body }`
+    // at the top of the plan, and on 2026-09-02 three sessions wrote the wrong
+    // shape into it and invalidated the whole plan for the sake of a
+    // paragraph. `new-user`'s plan was unreadable on main for a day.
+    if (step.comments !== undefined && !prose(step.comments, { min: 0 })) {
+      problems.push(`${at}.comments: an array of paragraphs, possibly empty`);
+    }
     if (step.pr !== null && step.pr !== undefined && !positiveInteger(step.pr)) {
       problems.push(`${at}.pr: a pull request number, or null`);
     }
@@ -211,7 +206,6 @@ export function validatePlan(value) {
   if (!prose(value.out_of_scope)) problems.push('out_of_scope: at least one entry — name what this project does not do');
 
   validateCriteria(value.success_criteria, problems);
-  validateLessons(value.what_the_code_taught_us, problems);
   validateDocuments(value.documents, problems);
   validateRunner(value.runner, problems);
   validateSteps(value.steps, problems);
@@ -294,9 +288,14 @@ export function deliverableStep(plan) {
  * What a step session is allowed to have changed, checked on the way back in.
  *
  * The instruction said it and could be read past; this is the same rule as a
- * comparison. A session edits the step it ran, the criteria it met, and what
- * the code taught it — never a step that has not run, and never the goal, the
- * contract or the scope.
+ * comparison. A session edits the step it ran — its `status`, its `pr`, what
+ * it `comments` — and `met` on the criteria it met. Never a step that has not
+ * run, and never the goal, the contract or the scope.
+ *
+ * Everything a session writes about its own work now sits inside
+ * `steps[index]`, so one skipped index is the whole permission. It used to be
+ * two rules: the step, and a shared `what_the_code_taught_us` at the top of
+ * the plan that every session appended to.
  */
 export function unauthorisedChanges(before, after, index) {
   const problems = [];

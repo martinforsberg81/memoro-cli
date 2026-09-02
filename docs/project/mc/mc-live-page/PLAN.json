@@ -45,29 +45,6 @@
       "check": "A unit test with a collect that resolves after 45 s of fake time: frames are 45 s apart, never two in flight, and no frame is skipped silently without the page saying so."
     }
   ],
-  "what_the_code_taught_us": [
-    {
-      "title": "The renderer already hands back the thing a differ needs",
-      "body": [
-        "**The renderer already hands back the thing a differ needs.** `renderPageLines` returns an array of lines and says why in its own header — *\"Lines rather than one string, so a test can look at a row without splitting a page apart again\"* (`src/mc/page-render.js`). So the frame difference is an array comparison, not a text diff, and it can be a pure function tested with no terminal at all.",
-        "The lines carry escape sequences when colour is on, and `paint` already guarantees a coloured row is exactly as wide as its plain twin. Comparing the strings as written is therefore the right comparison: two rows that differ only in colour *are* different rows, and both are one write."
-      ]
-    },
-    {
-      "title": "The page is not 0.1 s any more, and a live one has to survive that",
-      "body": [
-        "**The page is not 0.1 s any more, and a live one has to survive that.** `docs/technical/mc-ui.md` records 0.09–0.11 s with both caches hit. Measured 2026-09-02 on a machine with the runner and several sessions on it: `mc --json` took **2.4 s, 2.7 s, 4.8 s** in three consecutive runs, and 3.9–6.6 s in a second set. The plans cache is keyed by the `origin/main` sha, and on a machine where the runner is landing pull requests that sha moves between refreshes — so the read is cold most of the time, exactly when the page is most worth watching.",
-        "That is a real problem and it is not this project's (see *Out of scope*). What it forces here is the shape: the refresh cannot be a blocking call in the loop that owns the terminal, and a frame that arrives late must not queue a second one behind it."
-      ]
-    },
-    {
-      "title": "The menu blocks, and that is the thing in the way",
-      "body": [
-        "**The menu blocks, and that is the thing in the way.** `menu()` (`src/mc/commands/home.js:121`) is `for (;;) { … await ask(…) }`: it renders, then waits on a line of input, and nothing else can happen in between. A live page needs the reading and the redrawing to be concurrent, with the redraw writing only above the prompt and putting the cursor back where the person left it. That is the whole engineering problem — the differ is arithmetic by comparison.",
-        "The page is 87 lines at the current `~/mc`, which is taller than many terminals. So the cursor arithmetic cannot assume the whole page is on screen: only the rows still visible can be addressed, and what has scrolled off is not rewritten and not scrolled back to."
-      ]
-    }
-  ],
   "documents": [
     {
       "label": "The page, its sections, and why `--watch` was removed",
@@ -84,6 +61,17 @@
         "The cases that decide the shape. **Unchanged:** no bytes at all, not a redraw of identical text — a terminal that receives nothing is the only way to be sure nothing flickered. **One row changed:** move to that row, clear it to the end of the line, write it. **Fewer rows than before:** the surplus rows are cleared, not left holding an older page. **More rows:** the page has grown past where it started, and the terminal will scroll; this is the case that must be got right or the scrollback is damaged, so decide it deliberately and write down what was decided.",
         "Use `CSI` cursor-position-relative sequences (`\\x1b[<n>A`, `\\x1b[<n>B`, `\\x1b[2K`) rather than absolute positioning: absolute row numbers are wrong the moment anything else writes to the terminal, and the page has no claim on the screen.",
         "Test it as bytes. This is the one part of a live surface that can be tested without a terminal, so it is the part that carries the assertions."
+      ],
+      "comments": [
+        "**The renderer already hands back the thing a differ needs**",
+        "**The renderer already hands back the thing a differ needs.** `renderPageLines` returns an array of lines and says why in its own header — *\"Lines rather than one string, so a test can look at a row without splitting a page apart again\"* (`src/mc/page-render.js`). So the frame difference is an array comparison, not a text diff, and it can be a pure function tested with no terminal at all.",
+        "The lines carry escape sequences when colour is on, and `paint` already guarantees a coloured row is exactly as wide as its plain twin. Comparing the strings as written is therefore the right comparison: two rows that differ only in colour *are* different rows, and both are one write.",
+        "**The page is not 0.1 s any more, and a live one has to survive that**",
+        "**The page is not 0.1 s any more, and a live one has to survive that.** `docs/technical/mc-ui.md` records 0.09–0.11 s with both caches hit. Measured 2026-09-02 on a machine with the runner and several sessions on it: `mc --json` took **2.4 s, 2.7 s, 4.8 s** in three consecutive runs, and 3.9–6.6 s in a second set. The plans cache is keyed by the `origin/main` sha, and on a machine where the runner is landing pull requests that sha moves between refreshes — so the read is cold most of the time, exactly when the page is most worth watching.",
+        "That is a real problem and it is not this project's (see *Out of scope*). What it forces here is the shape: the refresh cannot be a blocking call in the loop that owns the terminal, and a frame that arrives late must not queue a second one behind it.",
+        "**The menu blocks, and that is the thing in the way**",
+        "**The menu blocks, and that is the thing in the way.** `menu()` (`src/mc/commands/home.js:121`) is `for (;;) { … await ask(…) }`: it renders, then waits on a line of input, and nothing else can happen in between. A live page needs the reading and the redrawing to be concurrent, with the redraw writing only above the prompt and putting the cursor back where the person left it. That is the whole engineering problem — the differ is arithmetic by comparison.",
+        "The page is 87 lines at the current `~/mc`, which is taller than many terminals. So the cursor arithmetic cannot assume the whole page is on screen: only the rows still visible can be addressed, and what has scrolled off is not rewritten and not scrolled back to."
       ],
       "pr": null,
       "blocked_by": null

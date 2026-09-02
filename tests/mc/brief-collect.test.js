@@ -18,6 +18,7 @@ import {
 } from '../../src/mc/brief-collect.js';
 import { UNDOCUMENTED_HEADER, undocumentedRow } from '../../src/mc/archive-plan.js';
 import { unplannedFile, unplannedRow } from '../../src/mc/close-workarea.js';
+import { unreadableFile } from '../../src/mc/plan-intake.js';
 
 function workRoot() {
   const root = mkdtempSync(join(tmpdir(), 'mc-brief-'));
@@ -49,6 +50,9 @@ function workRoot() {
   writeFileSync(join(root, 'intake', 'unplanned-workareas.md'), unplannedFile([
     unplannedRow({ name: 'msr-track-1', repo: 'memoro', uncommitted: 0, lastCommit: '2026-08-24', branch: 'ahead' }),
     unplannedRow({ name: 'mc-repo', repo: 'memoro-cli', uncommitted: 2, lastCommit: '2026-08-20', branch: 'landed' }),
+  ]));
+  writeFileSync(join(root, 'intake', 'unreadable-plans.md'), unreadableFile([
+    { project: 'new-user', repo: 'memoro', problem: 'what_the_code_taught_us[0].body: at least one paragraph', path: 'docs/project/onboarding/new-user/PLAN.json' },
   ]));
   writeFileSync(join(root, 'proposals', '2026-08-29-expose-operations.md'), PROPOSAL);
   writeFileSync(join(root, 'proposals', 'a-note.txt'), 'Not markdown, so not counted.\n');
@@ -190,7 +194,7 @@ describe('the intake tables the runner writes', () => {
 });
 
 describe('collectBrief', () => {
-  it('writes the eight sections, offline, with a 24 h window on the first run', async () => {
+  it('writes the nine sections, offline, with a 24 h window on the first run', async () => {
     const root = workRoot();
     const env = { MC_WORK_ROOT: root, MC_REPOS_HOME: join(root, 'no-repos') };
     const now = new Date('2026-08-25T20:00:00Z');
@@ -199,7 +203,8 @@ describe('collectBrief', () => {
     const text = readFileSync(result.path, 'utf8');
     assert.equal(text, result.text);
     const order = ['## Merged since last brief', '## Opened, not merged', '## Proposals',
-      '## Plan status', '## Archived without a note', '## Workareas with no project on main', '## Runner', '## Queue'];
+      '## Plan status', '## Archived without a note', '## Workareas with no project on main',
+      '## Plans that do not parse', '## Runner', '## Queue'];
     let at = -1;
     for (const heading of order) {
       const next = text.indexOf(heading);
@@ -220,6 +225,12 @@ describe('collectBrief', () => {
     assert.deepEqual(result.data.unplanned.map((r) => r.name), ['msr-track-1', 'mc-repo']);
     assert.match(text, /\| mc-repo \| memoro-cli \| 2 \| 2026-08-20 \| landed \|/u);
     assert.match(text, /2 folders under `~\/mc` that no project on main explains — no plan, and no row in `project_log.md` — 1 whose branch is already on main/u);
+    // The third file the runner writes and nobody read: a plan the schema
+    // refuses. `new-user` sat unreadable on origin/main for a day, and the
+    // only place that said so was a `runner.log` line.
+    assert.deepEqual(result.data.unreadable.map((r) => r.project), ['new-user']);
+    assert.match(text, /\| new-user \| memoro \| what_the_code_taught_us\[0\]\.body: at least one paragraph \|/u);
+    assert.match(text, /1 plan on `origin\/main` the schema refuses/u);
     assert.match(text, /Last 24 h: 3 steps \(step 2, triage 1\) — merged 1, left open 1, failed 0, timed out 1/u);
     assert.match(text, /- docx-editor\n- sql-readiness-session-A/u);
     assert.match(text, /memoro: no checkout/u);

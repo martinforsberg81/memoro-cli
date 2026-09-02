@@ -83,20 +83,23 @@ export function listProposals(dir) {
 /* -------------------------------------------------- intake: what mc run left */
 
 /**
- * `mc run` writes two files and reads neither: `undocumented-closures.md`,
+ * `mc run` writes three files and reads none: `undocumented-closures.md`,
  * appended when it archives a project whose `project_log.md` row says
- * `doc: none`, and `unplanned-workareas.md`, rewritten every round with the
- * folders under `~/mc` that no project on main explains. Both exist because the
- * tidying refuses to decide alone — a missing note never stops an archive,
- * and a workarea without a plan is never removed by a machine — and both are
- * therefore questions for the one person who can answer them. This is where
- * they are asked.
+ * `doc: none`; `unplanned-workareas.md`, rewritten every round with the
+ * folders under `~/mc` that no project on main explains; and
+ * `unreadable-plans.md`, rewritten every round with the plans on `origin/main`
+ * the schema refuses. All three exist because the tidying refuses to decide
+ * alone — a missing note never stops an archive, a workarea without a plan is
+ * never removed by a machine, and what a malformed plan meant to say is not
+ * mc's to guess — and all three are therefore questions for the one person who
+ * can answer them. This is where they are asked.
  *
  * The runner is the only writer of either, so the shape is known: a header
  * paragraph saying who writes it, then one table.
  */
 export const UNDOCUMENTED_KEYS = ['date', 'repo', 'programme', 'project', 'pointer'];
 export const UNPLANNED_KEYS = ['name', 'repo', 'uncommitted', 'lastCommit', 'branch'];
+export const UNREADABLE_KEYS = ['project', 'repo', 'problem', 'path'];
 
 /** A row of a pipe table, with `\|` folded back into a cell rather than splitting it. */
 function splitRow(line) {
@@ -333,6 +336,7 @@ const fmt = (n) => Number(n).toLocaleString('en-US');
 /** Named in the brief so the answer is a file Martin can open, not a fact he must trust. */
 const UNDOCUMENTED_FILE = '`~/mc/intake/undocumented-closures.md`';
 const UNPLANNED_FILE = '`~/mc/intake/unplanned-workareas.md`';
+const UNREADABLE_FILE = '`~/mc/intake/unreadable-plans.md`';
 /** The undocumented file is append-only; the brief shows the newest rows and counts the rest. */
 const INTAKE_CAP = 12;
 /**
@@ -349,7 +353,7 @@ const clip = (text, max = 90) => {
 
 export function renderBrief({
   now, since, firstBrief, merged, opened, proposals = [], plans,
-  undocumented = null, unplanned = null, runs, queue, notes = [],
+  undocumented = null, unplanned = null, unreadable = null, runs, queue, notes = [],
 }) {
   const out = [];
   const stamp = (d) => d.toISOString().replace(/\.\d{3}Z$/u, 'Z');
@@ -414,6 +418,18 @@ export function renderBrief({
     out.push('', `${unplanned.length} folder${unplanned.length === 1 ? '' : 's'} under \`~/mc\` that no project on main `
       + `explains — no plan, and no row in \`project_log.md\` — ${landed} whose branch is already on main. `
       + `No machine removes one: give it a plan (\`mc plan <name>\`), or remove the folder by hand.`);
+  }
+  out.push('');
+
+  out.push('## Plans that do not parse', '');
+  if (!unreadable) out.push(`_no ${UNREADABLE_FILE} — \`mc run\` writes it at the end of every round_`);
+  else if (!unreadable.length) out.push('_none_');
+  else {
+    out.push('| project | repo | problem |', '|---|---|---|');
+    for (const r of unreadable) out.push(`| ${r.project} | ${r.repo} | ${clip(r.problem, 80)} |`);
+    out.push('', `${unreadable.length} plan${unreadable.length === 1 ? '' : 's'} on \`origin/main\` the schema refuses. `
+      + `The runner can hand out no step from one and does not guess at what its author meant, so it stops there `
+      + `silently: fix the field the problem names, or the project waits. ${UNREADABLE_FILE} has the plan's path.`);
   }
   out.push('');
 
@@ -511,18 +527,19 @@ export async function collectBrief({
 
   const proposals = listProposals(proposalsDir(env));
 
-  // The two files `mc run` writes and never reads. Absent is its own answer —
+  // The three files `mc run` writes and never reads. Absent is its own answer —
   // the runner has not written one yet — so it is kept apart from empty.
   const intake = intakeDir(env);
   const undocumented = readIntake(read, join(intake, 'undocumented-closures.md'), UNDOCUMENTED_KEYS);
   const unplanned = readIntake(read, join(intake, 'unplanned-workareas.md'), UNPLANNED_KEYS);
+  const unreadable = readIntake(read, join(intake, 'unreadable-plans.md'), UNREADABLE_KEYS);
 
   const text = renderBrief({
     now, since, firstBrief: !last, merged, opened, proposals, plans,
-    undocumented, unplanned, runs, queue, notes,
+    undocumented, unplanned, unreadable, runs, queue, notes,
   });
   mkdirSync(dir, { recursive: true });
   const path = join(dir, `${now.toISOString().replace(/[:.]/gu, '-').replace(/-\d{3}Z$/u, 'Z')}.md`);
   writeFileSync(path, text);
-  return { path, text, data: { since, merged, opened, proposals, plans, undocumented, unplanned, runs, queue, notes } };
+  return { path, text, data: { since, merged, opened, proposals, plans, undocumented, unplanned, unreadable, runs, queue, notes } };
 }
