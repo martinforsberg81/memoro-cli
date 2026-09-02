@@ -135,7 +135,7 @@ everywhere it looks. Proposed: a short session that repairs such a pull request.
 
 Also ruled: only `mc merge` may be used.
 
-## 6 · A step's learning lives on the step
+## 6 · A step's comments live on the step
 
 `ruling · 2026-09-02`
 
@@ -144,6 +144,38 @@ Three of five `plan-trespass` runs on 2026-09-02 were malformed
 unreadable on main for the same reason.
 
 > **Beslut:** "Flytta in i steget: `steps[i].learned`" (Martin, 2026-09-02)
+
+**Amended the same evening, after the move was built.** The move stands; the
+name does not.
+
+> **Beslut:** "Angående what the code så tror jag flytten som är gjord är rätt
+> men att den ska bli bara en 'comments' men att det behövs någonstans att
+> skriva kommentarer." (Martin, 2026-09-02)
+
+So the field is **`comments`**, not `learned`, and its purpose loosens with the
+name: somewhere a session writes what it needs the next reader to know, rather
+than a field whose name prescribes one kind of entry. Keep one sentence of
+guidance in `docs/project/README.md` — what the next session cannot see from the
+code in front of it — and let the name stay plain. A name that is a doctrine
+either goes unused or gets filled with things that are not it, and the shared
+field it replaces was 259 entries across 38 plans, most of them empty.
+
+Nothing plan-level comes back. The shared field was the fault: one bad
+paragraph from one session made the whole plan unreadable for every other. A
+comment about something outside the writer's own step goes in that step's
+`comments`, where it also says who wrote it.
+
+**Carry it inside the pull requests that are already open**, not after them.
+`learned` appears in 17 files of memoro-cli #528 (the schema, the migration
+script, the role file, the documents, the tests, and two filenames —
+`scripts/migrate-plan-learned.js` and `changelog.d/learned-on-the-step.md`) and
+in 34 `PLAN.json` plus `AGENTS.md` and `docs/project/README.md` of memoro
+#11256, every one of which those two pull requests already rewrite. Done there
+it is a rename in files that change anyway. Done afterwards it is a second
+schema version, a second migration across both repositories, and every plan
+file rewritten twice for one word. memoro #11256 has to be rebased regardless —
+it is `CONFLICTING` since 2026-09-02, because memoro #11253 and #11255 removed
+two of the plans it edits.
 
 Both built by [`runner-open-prs`](runner-open-prs/PLAN.json), and both leave this
 file when it lands.
