@@ -16,6 +16,7 @@ import { describe, it } from 'node:test';
 
 import { runMcCli } from './_helpers/mc-cli.js';
 import { menu, parsePageArgs } from '../../src/mc/commands/home.js';
+import { programmesSection } from '../../src/mc/page-collect.js';
 
 /** A work root with two areas and a queue, and nothing that needs a network. */
 function fixture() {
@@ -179,19 +180,38 @@ describe('the page flags', () => {
 });
 
 describe('the menu under the page', () => {
-  /** PROJECTS, as the page hands it over: the numbers are these numbers. */
+  /**
+   * PROGRAMMES as the page actually hands it over — built by the section
+   * itself, not written out by hand.
+   *
+   * It *was* written out by hand, and that is how `mc` shipped broken on
+   * 2026-09-02: the page renamed `projects` to `programmes` and regrouped it,
+   * the menu kept reading `data.projects.repos`, and this fixture kept
+   * agreeing with the menu because it had been written to match. Bare `mc` at
+   * a terminal threw a TypeError at the prompt, and every test was green —
+   * the only one that touched the menu was measuring a shape nothing produced
+   * any more.
+   *
+   * A fixture that is the real builder cannot do that. Rename a key and this
+   * fails on the next run.
+   */
   const DATA = {
-    projects: {
-      count: 2,
-      repos: [
-        { repo: 'memoro-cli', projects: [{ number: 1, name: 'mc-ui', live: true }] },
-        { repo: 'memoro', projects: [{ number: 2, name: 'docx-editor', live: false }] },
+    programmes: programmesSection({
+      plans: [
+        { repo: 'memoro-cli', programme: 'mc', project: 'mc-ui', status: 'ready', next: 'a' },
+        { repo: 'memoro', programme: 'docx-editing-surface', project: 'docx-editor', status: 'ready', next: 'b' },
       ],
-      // Under its own heading on the page, and still openable by its number.
-      unplanned: { count: 1, shown: [{ number: 3, name: 'msr-track-1', live: false }], more: 0 },
-      no_workarea: 0,
-    },
+      areas: [{ name: 'msr-track-1', mtime_ms: 1, repos: ['memoro'] }],
+    }),
   };
+
+  // The numbers the page drew are the numbers the menu opens by, and the
+  // orphan folder is numbered after the projects.
+  it('numbers the projects first and the folders after, once each', () => {
+    assert.deepEqual(DATA.programmes.programmes.flatMap((g) => g.projects).map((p) => [p.number, p.name]),
+      [[1, 'docx-editor'], [2, 'mc-ui']]);
+    assert.deepEqual(DATA.programmes.unplanned.shown.map((a) => [a.number, a.name]), [[3, 'msr-track-1']]);
+  });
 
   function drive(answers) {
     const written = [];
@@ -203,21 +223,21 @@ describe('the menu under the page', () => {
       run: () => menu(DATA, {
         stdout: { columns: 100, write: (text) => written.push(text) },
         stderr: { write: (text) => written.push(text) },
-        page: async () => ({ data: DATA, lines: ['  PROJECTS'] }),
+        page: async () => ({ data: DATA, lines: ['  PROGRAMMES'] }),
         ask: () => queue.shift() ?? null,
         open: async (name) => { opened.push(name); return 0; },
       }),
     };
   }
 
-  it('opens what a number names — PROJECTS\' number, not a list of its own', async () => {
+  it('opens what a number names — PROGRAMMES\' number, not a list of its own', async () => {
     const first = drive(['1']);
     assert.equal(await first.run(), 0);
-    assert.deepEqual(first.opened, ['mc-ui']);
+    assert.deepEqual(first.opened, ['docx-editor']);
 
     const second = drive(['2']);
     assert.equal(await second.run(), 0);
-    assert.deepEqual(second.opened, ['docx-editor']);
+    assert.deepEqual(second.opened, ['mc-ui']);
   });
 
   it('opens it by name too, and quits on q or on nothing', async () => {

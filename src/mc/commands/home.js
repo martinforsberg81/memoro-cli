@@ -123,14 +123,15 @@ export async function menu(first, {
 }) {
   let data = first;
   for (;;) {
-    // Everything PROJECTS numbered, in the order it numbered it: every project
-    // of every repository, then the workareas no project explains, which are
-    // under their own heading but not out of reach. Opening a project that has
-    // no workarea yet is what creates one — `openArea` has always done that,
-    // and it is why a project can be a row before a folder is.
+    // Everything PROGRAMMES numbered, in the order it numbered it: every
+    // project of every programme, then the workareas no project explains,
+    // which are under their own heading but not out of reach. Opening a
+    // project that has no workarea yet is what creates one — `openArea` has
+    // always done that, and it is why a project can be a row before a folder
+    // is.
     const areas = [
-      ...data.projects.repos.flatMap((group) => group.projects),
-      ...(data.projects.unplanned?.shown || []),
+      ...data.programmes.programmes.flatMap((group) => group.projects),
+      ...(data.programmes.unplanned?.shown || []),
     ];
     stdout.write(`\n${KEYS}\n\n`);
     const answer = ask('>', { stdout });
