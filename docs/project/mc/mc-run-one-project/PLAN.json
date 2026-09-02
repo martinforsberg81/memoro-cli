@@ -1,0 +1,114 @@
+{
+  "schema": "mc-plan",
+  "version": 1,
+  "goal": [
+    "`mc run` takes the first project whose plan is `ready`, works it through to `done` or `blocked` — or to a pull request it cannot land — and only then looks at the next one. It stops walking every project on main to discover, one git call at a time, that almost none of them can move."
+  ],
+  "contract": [
+    "**The order does not change.** A round still takes projects in the order `queue()` gives them, and a plan's first unfinished step is still the only step the runner looks at. This is about what a round *touches*, not about which project wins.",
+    "**Nothing a person would have been told goes unsaid.** A project passed over for a reason that is about the machine rather than the plan — a dirty worktree, a branch that cannot be pushed, a pull request in flight — is still reported. What may become quiet is the twenty-first repetition of a reason that is on the plan and visible on the page.",
+    "**No new state.** The runner already re-reads plans from `origin/main` every pass; the answer to *is this project ready* is in what it has already read. This project does not add a file, a cursor or a queue of its own.",
+    "Nothing merges to main without Martin."
+  ],
+  "out_of_scope": [
+    "**The reason 21 projects are blocked.** They wait on `blocked_by: {kind: \"decision\", name: \"plan-review\"}`, which nothing can answer since the decision concept was removed (#510). That is a real problem and it is not this one — this project makes the runner stop *walking* them, not stop *being* blocked.",
+    "The five plans on main that do not parse. Fixing a plan is a plan's own business.",
+    "`runLane`'s stay-on-a-merged-project behaviour, which already works and is not what a round wastes its time on.",
+    "Anything about which project should be picked first — priority, cost, age. The order is `queue()`'s and stays `queue()`'s."
+  ],
+  "success_criteria": [
+    {
+      "met": false,
+      "criterion": "A round touches git for the projects it can act on, and not for the ones its plan already refuses.",
+      "check": "In `tests/mc/run.test.js`, a fixture of one `ready` project among twenty `blocked` ones: the fake git records calls for the ready project's worktree and none for the others."
+    },
+    {
+      "met": false,
+      "criterion": "A round that can start nothing says so in one line rather than in one line per project.",
+      "check": "The same fixture with no ready project: `runner.log` carries a single line naming how many were passed over and why, and the round ends."
+    },
+    {
+      "met": false,
+      "criterion": "What a person needs to know is still written down.",
+      "check": "A project skipped for a dirty worktree, an unpushable branch or a pull request in flight still gets its own named line — asserted per reason in `run.test.js`."
+    },
+    {
+      "met": false,
+      "criterion": "A round is measurably shorter when the board is mostly blocked.",
+      "check": "Wall clock of `mc run --rounds 1 --no-merge` against the current `~/mc`, before and after, in the PR body. The round measured 2026-09-02T18:17 spent 51 s reaching one project out of 38."
+    }
+  ],
+  "what_the_code_taught_us": [
+    {
+      "title": "The round measured: 38 projects considered, one started",
+      "body": [
+        "**The round measured: 38 projects considered, one started.** From `~/mc/runner/log/runner.log`, the round beginning 2026-09-02T18:17:41Z — 21 skipped `blocked on decision plan-review`, 7 `blocked on project home-on-msr`, 5 `the plan does not parse`, 2 `dirty worktree`, 1 `every step is done`, 2 waiting on `time-axis` and `inbox-finish`, 1 merge conflict, and one project — `runner-open-prs` — actually run. The walk took from :41 to :32 of the following minute. The round before it, number 32, ended `0 ran`.",
+        "Martin, 2026-09-02: *\"mc run ska inte köra igenom alla projekt och rapportera blocked; den ska direkta kunna ta nästa i en kö.\"*"
+      ]
+    },
+    {
+      "title": "The answer is already in hand before the walk starts",
+      "body": [
+        "**The answer is already in hand before the walk starts.** `queue()` returns the plans read from `origin/main`, and `status-collect.js`'s `kindFor(name, { plans })` turns one of those into `step`, `reconcile` or `skip:<reason>` from the plan text alone — no git, no worktree. The page already uses exactly this to draw QUEUE. What costs the time is that `runStep` (`src/mc/run.js:873`) re-derives it the expensive way: `repoOf`, then the worktree's existence, then `git status`, then `syncMain`, then `planOf` reading the plan out of the worktree, and only then `chooseKind`.",
+        "So the cheap reading and the expensive one already exist side by side and agree. The work is to let the cheap one decide *whether to start*, and leave the expensive one to decide *what to do* — not to invent a third."
+      ]
+    },
+    {
+      "title": "Two of the skips are not about the plan, and must survive",
+      "body": [
+        "**Two of the skips are not about the plan, and must survive.** `dirty worktree` and the pull-request-in-flight check (`inFlight`, via `openPrsFor`) are facts about the machine and about GitHub that no plan on main can carry, and they are exactly the ones worth reading in the log — a dirty worktree is usually somebody's unfinished work about to be stepped on. `syncMain`'s conflict answer is the same kind of thing. Filtering on the plan first does not remove any of them; it removes the twenty repetitions of a reason already visible on the page."
+      ]
+    },
+    {
+      "title": "The lane already knows how to stay",
+      "body": [
+        "**The lane already knows how to stay.** `runLane` (`src/mc/run.js:1060`) keeps a project after a merged step, re-reading the plan and continuing for up to eight steps before letting go — added because a six-step plan would otherwise have taken six rounds behind twenty other projects. What is missing is the other half: it stays with a project that is moving, but it still *visits* every project that is not."
+      ]
+    }
+  ],
+  "documents": [
+    {
+      "label": "How a round is built, and what a lane is",
+      "path": "../../../technical/mc-run.md"
+    }
+  ],
+  "steps": [
+    {
+      "title": "The round asks the plan before it asks git",
+      "status": "ready",
+      "done_when": "`runLane` reaches `runStep` only for names whose plan on `origin/main` says the runner would act, and `run.test.js` asserts that no git call is made for the others.",
+      "instruction": [
+        "`runLane` (`src/mc/run.js:1060`) iterates its names and calls `runStep` on each. `runStep` then does five pieces of git work before `chooseKind` tells it the plan was never runnable. Put the plan's own answer first: `kindFor(name, { plans })` from `status-collect.js` already returns `skip:<reason>` for a plan that is `blocked`, `done`, unparseable or absent, from the text `queue()` has already read.",
+        "Use it as a filter over the lane's names, not as a new decision inside `runStep`. `runStep` keeps its own reading and keeps deciding — the plan in the worktree after `syncMain` is the one that must be obeyed, because it is the one a step session will edit, and the two can differ by exactly one merge. This step only stops the walk from arriving at a project whose plan on main already refuses it.",
+        "The filter must be re-applied after a merged step, not computed once for the round. `runLane` re-reads with `queue({ only: repo })` when it stays on a project; a plan that came good in that window should not have to wait for the next round.",
+        "Test it in `tests/mc/run.test.js` with the fixture shape already there: a lane of one `ready` project and several stopped ones, asserting on `f.calls` that git was asked about the ready one's worktree and about no other."
+      ],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "One line for what the plan already says",
+      "status": "ready",
+      "done_when": "A round writes one line summarising the projects its plans refused, counted by reason, and a line of its own for every skip that is about the machine rather than the plan.",
+      "instruction": [
+        "The log is the record of a round somebody reads afterwards, so this is not about printing less — it is about printing what is not already on the page. A plan-shaped refusal is: `blocked on <kind> <name>`, `every step is done`, `the plan does not parse`, `no workarea and no plan on main`. Those become one line, counted by reason, in the shape the page's QUEUE section already uses: `skipped 28 (blocked 21, done 1, unparseable 5, no-plan 1)`.",
+        "Everything else keeps its own line and its own name: `dirty worktree`, the `inFlight` pull-request answer, `syncMain`'s conflicts, a worktree that could not be created, an unpushable branch. Those are facts about this machine at this moment that nothing else records, and they are the ones worth reading.",
+        "A plan that does not parse is the one judgement call here. It is plan-shaped, and it is also a thing somebody must fix — five plans on main were in that state on 2026-09-02 and the page draws them as `invalid`. Name them in the summary line rather than only counting them, so the log says which five."
+      ],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "Close it out",
+      "status": "ready",
+      "done_when": "`docs/technical/mc-run.md` describes what a round touches and what it only reads, and `project_log.md` has a row.",
+      "instruction": [
+        "`docs/technical/mc-run.md` has the section on what ends a round for a project. Give it the two-stage shape: what the plan on `origin/main` decides before anything is touched, and what the worktree decides after. Say why the second reading exists at all — the plan in the worktree can be one merge ahead of the plan on main, and it is the one a step session will edit.",
+        "Put the before-and-after wall clock in the close-out, measured against the real `~/mc`, and say what the board looked like when it was measured: a round is only slow in proportion to how much of the board it cannot act on.",
+        "A row in `docs/project/project_log.md`."
+      ],
+      "pr": null,
+      "blocked_by": null
+    }
+  ]
+}

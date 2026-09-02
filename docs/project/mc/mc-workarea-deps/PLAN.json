@@ -1,0 +1,118 @@
+{
+  "schema": "mc-plan",
+  "version": 1,
+  "goal": [
+    "Every place mc runs this repository's tests has its dependencies, without a copy per place. A workarea mc makes, and the throwaway worktree the merge gate builds, both resolve `@xterm/addon-serialize`, `@xterm/headless` and `node-pty` — so a test file goes red because of the change under it and for no other reason."
+  ],
+  "contract": [
+    "**No copy per workarea.** `npm ci` in every workarea is the thing this project exists to avoid: on 2026-09-02 there were 40 directories under `~/mc`, and the dependency tree is the same three packages for all of them.",
+    "**Nothing inside the checkout.** A `node_modules` entry under `<workarea>/<repo>/` is visible to git and to `scripts/affected-tests.js`, and a symlink there does not match `.gitignore`'s `node_modules/`. Measured 2026-09-02: with one, the selector reported `unexplained: [\"node_modules\"]` and fell back to the whole suite — 250 files instead of 41.",
+    "**The declaration says what is true.** `repo-gate-table.js` claims `prepare: null` for memoro-cli. Whatever this project does, that entry and its `prepare_why` end up describing the repository as it actually is.",
+    "Nothing merges to main without Martin."
+  ],
+  "out_of_scope": [
+    "**memoro's** dependency handling. It declares `prepare: 'npm ci'` and is measured (D-0089); this project does not touch it.",
+    "The nine test files that are red on `main` for reasons other than a missing dependency — the broker and managed-session world. They are `mc-cut`'s.",
+    "Making `npm ci` faster, caching it, or vendoring anything into the repository."
+  ],
+  "success_criteria": [
+    {
+      "met": false,
+      "criterion": "A workarea mc has just made runs the five test files that need a dependency, with no `node_modules` inside it.",
+      "check": "In a fresh `mc work add <name> memoro-cli`, with no `node_modules` under the workarea: `node --test --import ./tests/_isolate-home.mjs tests/mc/owned-resource-cleanup.test.js tests/mc/session-runtime-v1.test.js tests/runtime/session-host/runtime-host.test.js tests/runtime/session-host/socket-e2e.test.js tests/runtime/session-host/terminal-screen.test.js` reports 0 fail."
+    },
+    {
+      "met": false,
+      "criterion": "`scripts/affected-tests.js` still narrows: the dependencies are nowhere it can see.",
+      "check": "`node scripts/affected-tests.js --base-ref origin/main` in that workarea reports `why.reason: \"affected\"` and an empty `why.unexplained`, not `full-suite`."
+    },
+    {
+      "met": false,
+      "criterion": "The merge gate's candidate worktree runs the whole declared suite, not the part that happens to import nothing.",
+      "check": "`mc test memoro-cli <pr>` on a pull request that reaches `tests/runtime/session-host/` reports those files green rather than red, and its log no longer prints the `no node_modules` line."
+    },
+    {
+      "met": false,
+      "criterion": "`repo-gate-table.js`'s memoro-cli entry describes the repository truthfully.",
+      "check": "`tests/mc/repo-gate-table.test.js` asserts the entry, and the assertion is read against `package.json`'s `dependencies` rather than against a sentence."
+    }
+  ],
+  "what_the_code_taught_us": [
+    {
+      "title": "One directory above the workareas is the whole mechanism",
+      "body": [
+        "**One directory above the workareas is the whole mechanism.** Node resolves a bare specifier by walking `node_modules` up every parent of the importing file, so `~/mc/node_modules` is found from `~/mc/<area>/<repo>/src/...` with nothing inside the checkout at all. Measured 2026-09-02 in `~/mc/mc-surface/memoro-cli` with its own `node_modules` removed and `~/mc/node_modules` holding symlinks to the three packages: the five files that had been red were 27 pass, 1 skip, 0 fail. `git status` saw nothing, and the selector kept reporting `affected` rather than `full-suite`.",
+        "That is a claim about where the directory sits, not about symlinks: what it holds — real packages, symlinks to another install, or an `npm ci` of its own — is a separate question this project has to answer, and the symlink form used to measure it points into `~/memoro-cli/node_modules`, which a later `npm ci` there could invalidate."
+      ]
+    },
+    {
+      "title": "The gate declares something about this repository that is not true",
+      "body": [
+        "**The gate declares something about this repository that is not true.** `src/mc/repo-gate-table.js:74` gives memoro-cli `prepare: null`, with `prepare_why` reading *\"the suite is node:test over source only; verified across every gate round since the verb existed, each of which ran it twice in a worktree with no node_modules\"*. `src/runtime/session-host/terminal-screen.js` imports `@xterm/addon-serialize`, which is one of the three packages `package.json` declares. So every gate round has been running a suite that is five files short and calling it whole — `repo-gate.js:409` even prints the line saying so, once per round, as reassurance.",
+        "Measured on a clean `origin/main` worktree, whole suite, twice: **14 failing files without `node_modules`, 9 with**. The five in the difference are `owned-resource-cleanup`, `session-runtime-v1`, `runtime-host`, `socket-e2e` and `terminal-screen`."
+      ]
+    },
+    {
+      "title": "This is why a workarea's tests disagree with the gate's",
+      "body": [
+        "**This is why a workarea's tests disagree with the gate's, and why both disagree with `~/memoro-cli`.** The main checkout has a real `node_modules` and runs 9 red; a workarea mc made has none and runs 14; the gate's candidate has none and reports the same 14 while declaring it ran everything. Three answers to one question, and the one a person sees first is the one that is right for the wrong reason."
+      ]
+    }
+  ],
+  "documents": [
+    {
+      "label": "The declaration this project corrects",
+      "path": "../../../technical/mc-merge.md"
+    }
+  ],
+  "steps": [
+    {
+      "title": "Say what is true about the suite",
+      "status": "ready",
+      "done_when": "`repo-gate-table.js`'s memoro-cli entry no longer claims the suite runs from a worktree with no dependency tree, and a test holds that claim against `package.json`.",
+      "instruction": [
+        "`src/mc/repo-gate-table.js:74` declares `prepare: null` for memoro-cli, and `prepare_why` says the suite is source only. It is not: `src/runtime/session-host/terminal-screen.js` imports `@xterm/addon-serialize`, declared in `package.json`. Correct the entry so that it describes the repository as it is.",
+        "Do not reach for `prepare: 'npm ci'` by reflex. That is one answer and it is expensive — it would run per gate round in a throwaway worktree — and step 2 may make it unnecessary by putting the tree where the candidate can already see it. What this step owes is an entry that is true today, and a `prepare_why` whose evidence somebody can re-run.",
+        "Add the assertion to `tests/mc/repo-gate-table.test.js`: a declaration of `prepare: null` for a repository whose `package.json` declares dependencies is a contradiction the table should not be able to hold silently. Read `package.json` in the test rather than restating the three names."
+      ],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "One dependency tree above the workareas",
+      "status": "ready",
+      "done_when": "A workarea mc makes runs the five dependency-needing test files green with no `node_modules` inside it, and `scripts/affected-tests.js` in that workarea still reports `affected` with nothing unexplained.",
+      "instruction": [
+        "Put the tree at `~/mc/node_modules` — one directory, above every workarea, resolved by node's own parent walk. `paths.js` owns the shape of the work root and should own this name too; `work-area.js`'s `addWorktree` is where a workarea is made and is the natural place to make sure the tree is there.",
+        "Decide what the directory holds and write the reason down. The measurement in *What the code taught us* used symlinks into `~/memoro-cli/node_modules`, which is the cheapest form and the most fragile: an `npm ci` in that checkout can replace what the links point at. An `npm ci` run in `~/mc/` against a copy of memoro-cli's `package.json` and `package-lock.json` is self-contained but has to be kept in step with the repository. Both are defensible; a session that picks one without saying why has not finished the step.",
+        "Whatever it holds, it must be kept out of the page and out of the runner. Both list a directory under the work root only when it holds a checkout of a repository mc knows (`status-collect.js`'s `areasWithCheckout`, `run.js`'s `workareas()`), and `~/mc/node_modules` holds none — so this is already true and the step's job is to assert it rather than to build a filter. Add that assertion.",
+        "Nothing goes inside `<workarea>/<repo>/`. Measured 2026-09-02: a `node_modules` symlink there is not matched by `.gitignore`'s `node_modules/`, so `scripts/affected-tests.js` reported it as an unexplained changed path and fell back to the whole suite — 250 files instead of 41. The success criterion for this step names that reading because it is the one that would silently undo the selector's whole value."
+      ],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "The gate's candidate sees the same tree",
+      "status": "ready",
+      "done_when": "`mc test memoro-cli <pr>` on a change reaching `tests/runtime/session-host/` reports those files green, and the round no longer prints the `no node_modules` line for this repository.",
+      "instruction": [
+        "The gate builds its candidate with `git worktree add --detach` into `join(workspace, 'candidate')` (`src/mc/repo-gate.js:289` and `:346`). Where that workspace sits decides whether step 2's tree is above it; if it is not, this step is what puts one there — by the same means, not by a second mechanism.",
+        "`repo-gate.js:407` asks `dependencyTree(headDir)` and, with `prepare: null`, prints `\"N dependencies declared and no node_modules — the declaration vouches the suite runs without one\"`. Once the tree resolves, that branch should not be reached for this repository at all. If `dependencyTree` only looks in `headDir`, it will still report the tree missing while node resolves it perfectly well one level up: make the check answer the question it is actually asking, which is whether the suite can resolve its dependencies, not whether a particular directory exists.",
+        "Re-run the numbers from *What the code taught us* and put them in the PR body: the whole suite on a clean `origin/main` candidate should now report 9 failing files rather than 14."
+      ],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "Close it out",
+      "status": "ready",
+      "done_when": "`docs/technical/` says where a workarea's dependencies come from, and `project_log.md` has a row.",
+      "instruction": [
+        "Say it where somebody would look for it: `docs/technical/mc-work.md` for what a workarea gets when mc makes one, and `docs/technical/mc-merge.md` for what the gate's candidate stands in. Name the directory, say why it is above the workareas rather than in them, and name the failure that made it necessary — a test going red because of where it was run.",
+        "A row in `docs/project/project_log.md`."
+      ],
+      "pr": null,
+      "blocked_by": null
+    }
+  ]
+}
