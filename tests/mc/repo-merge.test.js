@@ -516,7 +516,7 @@ describe('the verb describes itself accurately', () => {
 
 /**
  * Into what. A round on #363 said "merged as 7dcbf96" — true, and into the
- * stacked base `pm-heartbeat`, which everyone read as main. The line names the
+ * stacked base it was aimed at, which everyone read as main. The line names the
  * base every time, and says in its own words when it is not the default.
  */
 describe('the merge line names the base', () => {
@@ -537,29 +537,29 @@ describe('the merge line names the base', () => {
 
   it('on a stacked base: into that branch, and a warning that it is not main', async () => {
     const verdict = green();
-    verdict.pr.base = 'pm-heartbeat';
+    verdict.pr.base = 'stacked-base';
     const fx = fixture({ verdict });
     try {
       const progress = [];
       const report = await fx.run({ onProgress: (line) => progress.push(line) });
       assert.equal(report.merged, true);
-      assert.equal(report.merged_into, 'pm-heartbeat');
+      assert.equal(report.merged_into, 'stacked-base');
       assert.equal(report.off_default, true);
-      assert.ok(progress.some((line) => line.startsWith('merged #400 into pm-heartbeat as')), progress.join('\n'));
-      assert.ok(progress.some((line) => /WARNING: pm-heartbeat is not the default branch \(main\) — this landed on a branch, not on main/u.test(line)), progress.join('\n'));
-      assert.match(report.log_line, /Squash-merge into `pm-heartbeat` → `ccc[0-9a-f]*` \(NOT main\)/u);
+      assert.ok(progress.some((line) => line.startsWith('merged #400 into stacked-base as')), progress.join('\n'));
+      assert.ok(progress.some((line) => /WARNING: stacked-base is not the default branch \(main\) — this landed on a branch, not on main/u.test(line)), progress.join('\n'));
+      assert.match(report.log_line, /Squash-merge into `stacked-base` → `ccc[0-9a-f]*` \(NOT main\)/u);
     } finally { fx.cleanup(); }
   });
 
   it('a default git cannot name is unknown, never assumed to be main', async () => {
     const verdict = green();
-    verdict.pr.base = 'pm-heartbeat';
+    verdict.pr.base = 'stacked-base';
     const fx = fixture({ verdict, defaultBranch: null });
     try {
       const report = await fx.run();
       assert.equal(report.default_branch, null);
       assert.equal(report.off_default, false, 'no warning on a guess');
-      assert.equal(report.merged_into, 'pm-heartbeat', 'but the base is still named');
+      assert.equal(report.merged_into, 'stacked-base', 'but the base is still named');
     } finally { fx.cleanup(); }
   });
 });

@@ -125,7 +125,7 @@ export async function runMergeRound({
     merge_error: null,
     // What the squash landed *in*, and whether that is the branch people mean
     // by "merged". A round on #363 said "merged as 7dcbf96" and was right —
-    // into `pm-heartbeat`, its stacked base — and everyone read "on main".
+    // into the stacked base it was aimed at — and everyone read "on main".
     merged_into: null,
     default_branch: null,
     off_default: false,
