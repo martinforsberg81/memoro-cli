@@ -253,11 +253,14 @@ function deskLine(lines, c, wide, title, session, verb) {
  * live sessions — the oldest three days old — read as a busy afternoon. Past
  * a day the age turns yellow, because by then it is the thing on the row.
  */
-function workLines(lines, c, wide, sessions) {
+function workLines(lines, c, wide, sessions, unplanned) {
   const others = sessions.others || [];
-  heading(lines, c, wide, 'WORK', others.length
-    ? `${others.length} session${others.length === 1 ? '' : 's'}`
-    : 'nothing open', 'mc work <name>');
+  const folders = unplanned || { count: 0, shown: [], more: 0 };
+  const counts = [
+    others.length ? `${others.length} session${others.length === 1 ? '' : 's'}` : '',
+    folders.count ? `${folders.count} workarea${folders.count === 1 ? '' : 's'} with no project` : '',
+  ].filter(Boolean).join(' · ');
+  heading(lines, c, wide, 'WORK', counts || 'nothing open', 'mc work <name>');
   for (const item of others) {
     const meta = paint(c, between([
       { text: item.verb ? `mc ${item.verb}` : 'tmux', styles: ['cyan'] },
@@ -270,6 +273,19 @@ function workLines(lines, c, wide, sessions) {
     const mark = item.verb ? c(MARK.running, 'cyan') : c(MARK.waiting, 'yellow');
     lines.push(`  ${mark} ${c(pad(clip(item.area || '?', 21), 22), 'bold', 'white')} ${meta}`);
   }
+
+  // The folders no project explains, under the same heading as the sessions.
+  // They were the tail of PROJECTS, which made that section answer two
+  // questions — where the work stands, and which directories are left over —
+  // and the second is this one's: a workarea with nothing to explain it is
+  // work in exactly the sense WORK means, and often the same folder somebody
+  // has a session open in. Nothing removes them (close-workarea.js), which is
+  // why they are counted where somebody looks; `mc run` writes the whole list,
+  // with whether each branch has landed, to `~/mc/intake/unplanned-workareas.md`.
+  if (!folders.count) return;
+  if (others.length) lines.push('');
+  for (const area of folders.shown) lines.push(orphanLine(c, wide, area));
+  if (folders.more) say(lines, c, wide, 7, `… ${folders.more} more — ~/mc/intake/unplanned-workareas.md has them all`);
 }
 
 /** How the clock reads: white, then yellow near the budget, then red past it. */
@@ -465,16 +481,6 @@ function programmesLines(lines, c, wide, programmes) {
     say(lines, c, wide, 7, `${programmes.no_workarea} of them ${programmes.no_workarea === 1 ? 'has' : 'have'} no workarea yet — opening by number makes one`);
   }
 
-  // The workareas nothing explains, under one heading rather than scattered
-  // through the rows above. No machine removes them — `mc run` writes the same
-  // list, with whether each branch has landed, to
-  // `~/mc/intake/unplanned-workareas.md` for `mc brief` to raise.
-  const orphans = programmes.unplanned || { count: 0, shown: [], more: 0 };
-  if (!orphans.count) return;
-  lines.push('');
-  say(lines, c, wide, 2, `${orphans.count} workarea${orphans.count === 1 ? '' : 's'} with no project on main — nothing removes them`);
-  for (const area of orphans.shown) lines.push(orphanLine(c, wide, area));
-  if (orphans.more) say(lines, c, wide, 7, `… ${orphans.more} more — ~/mc/intake/unplanned-workareas.md has them all`);
 }
 
 /* ------------------------------------------------------------------- page */
@@ -520,7 +526,7 @@ export function renderPageLines(data, {
   lines.push('');
   programmesLines(lines, c, wide, data.programmes);
   lines.push('');
-  workLines(lines, c, wide, sessions);
+  workLines(lines, c, wide, sessions, data.programmes?.unplanned);
 
   const cache = data.caches?.fresh
     ? 'fresh — fetched and asked GitHub'
