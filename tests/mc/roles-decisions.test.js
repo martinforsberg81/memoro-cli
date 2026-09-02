@@ -16,8 +16,16 @@ import { describe, it } from 'node:test';
 
 import { readCanonRole } from '../../src/mc/roles.js';
 
-/** Every role that may put a question to Martin. `brief` answers them. */
-const AUTHORS = ['worker', 'plan', 'step'];
+/**
+ * Every role that may put a question to Martin. `brief` answers them.
+ *
+ * `plan` is not one any more. Its overlay is gone — the role is frontmatter,
+ * and what a planning session is told is its first prompt and nothing else
+ * (Martin, 2026-08-31) — so there is no text there to hold to a shape. It is
+ * also the one session Martin is sitting in front of: a question does not have
+ * to become anything to reach him, it can be asked.
+ */
+const AUTHORS = ['worker', 'step'];
 
 /** Overlays wrap at 76 columns, so every phrase test has to cross newlines. */
 const phrase = (words) => new RegExp(words.split(' ').join('\\s+'), 'u');

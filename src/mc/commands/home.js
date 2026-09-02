@@ -102,7 +102,7 @@ export function parsePageArgs(argv) {
 /* --------------------------------------------------------------------- menu */
 
 const KEYS = [
-  '  <n>  open it   ·   n  start something new   ·   b  brief   ·   p <name>  plan',
+  '  <n>  open it   ·   n  start something new   ·   b  brief   ·   p  plan a programme',
   '  s <name>  that project   ·   q  quit',
 ].join('\n');
 
@@ -143,9 +143,12 @@ export async function menu(first, {
     }
 
     const words = answer.split(/\s+/u).filter(Boolean);
-    if (words[0] === 'p' && words.length === 2) {
+    // `p` alone is as good an answer as `p <programme>`: `mc plan` asks which
+    // programme when it is not told, and the page is exactly the place
+    // somebody would rather be shown the list than have to remember a name.
+    if (words[0] === 'p' && words.length <= 2) {
       const plan = await import('./plan.js');
-      return plan.run([words[1]], { stdout, stderr });
+      return plan.run(words.slice(1), { stdout, stderr });
     }
     if (words[0] === 's' && words.length === 2) {
       const project = await import('./status-project.js');

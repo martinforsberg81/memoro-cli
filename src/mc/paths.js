@@ -82,6 +82,28 @@ export function workAreaStatePath(name, env = process.env) {
 }
 
 /**
+ * `~/mc/plan/` — mc's own directory for planning sessions, beside `runner/`,
+ * `intake/` and `brief/`. A programme's session is `~/mc/plan/<programme>/`.
+ *
+ * It is deliberately *not* a work area, and the reason is structural rather
+ * than a rule about names: `mc run`'s `workareas()` and `mc status`'s
+ * `areasWithCheckout()` both list top-level directories under the work root
+ * that hold a checkout, and this one holds none — the checkouts are a level
+ * further down, under each programme. So the runner cannot reach a planning
+ * session, and nothing has to remember not to.
+ *
+ * The name lives here, with the rest of the work root's shape, because two
+ * modules need it — `commands/plan.js` to build the directory and
+ * `work-area.js` to keep it off the area list — and two copies of one word is
+ * how the two drift apart.
+ */
+export const PLAN_HOME = 'plan';
+
+export function planHome(env = process.env) {
+  return join(workRoot(env), PLAN_HOME);
+}
+
+/**
  * Best-effort detection of whether MC_HOME exists. Callers create it lazily
  * on first write.
  */

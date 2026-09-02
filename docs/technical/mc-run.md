@@ -184,10 +184,13 @@ with the conflicting paths named in its prompt.
 | no plan in the worktree | nothing, silently |
 
 There is no `triage` and there never will be again: the runner runs plans, it
-does not write them. Planning is `mc plan <name>`, a foreground session with
-Martin in it. And a stopped step is simply not `ready` — the runner never read
-decision files, counted them, or started a project because one was answered,
-and there are none to read now. A plan comes back by being set `ready`, which is the job of whoever
+does not write them. Planning is `mc plan <programme>`, a foreground session
+with Martin in it, and it happens somewhere the runner cannot reach —
+`~/mc/plan/<programme>/`, not a workarea (see [`mc-plan.md`](mc-plan.md)). What
+the two share is a `PLAN.json` on `main`, and nothing else. And a stopped step
+is simply not `ready` — the runner never read decision files, counted them, or
+started a project because one was answered, and there are none to read now. A
+plan comes back by being set `ready`, which is the job of whoever
 applies the answer.
 
 ### The session
