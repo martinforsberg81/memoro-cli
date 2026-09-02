@@ -46,7 +46,6 @@ import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { claimLease, releaseLease } from './repo-lease.js';
-import { tellHolder } from './lease-refusal.js';
 import { redNames, tapTotals } from './tap-red.js';
 import { currentHolder } from './work-identity.js';
 import { describeRunning, releaseGateLock, takeGateLock } from './gate-lock.js';
@@ -103,8 +102,6 @@ export async function runGate({
   suite = null,
   onProgress = () => {},
   clock = () => Date.now(),
-  // How a refused claim reaches the holder (lease-refusal.js); stubbed in tests.
-  tell = tellHolder,
   // Whether the round owns the lease or is running inside somebody else's.
   //
   // The merge step has to hold one lease across the gate *and* the merge — a
@@ -218,8 +215,7 @@ export async function runGate({
     const lease = claimLease({ repoPath, errand: `gate round for ${label}`, holder, ownerPid: process.pid, root });
     if (!lease.ok) {
       const held = lease.lease;
-      const told = tell({ lease: held, asker: holder, what: repoPath, errand: `gate round for ${label}` });
-      return finish('lease', `${repoPath} is held by ${held.holder}${held.errand ? ` for “${held.errand}”` : ''}${told.told ? ` — ${held.holder} has been told` : ''}`);
+      return finish('lease', `${repoPath} is held by ${held.holder}${held.errand ? ` for “${held.errand}”` : ''}`);
     }
     say(`lease taken by ${holder.name}`);
   }

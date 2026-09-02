@@ -2,6 +2,10 @@
  * A session started outside mc's naming is found by where it stands
  * (D-0136 point 2). Nine sessions ran as `clean`, `ops`, `vocab`, … and
  * every wake to them reported "nothing is running" while they ran.
+ *
+ * The wake is gone with the inbox channel it knocked for; what it exposed is
+ * not. `backgroundTarget` is how `mc work` and `mc work stop` find a session
+ * somebody started outside mc, and it is asserted here on its own.
  */
 import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
@@ -12,7 +16,6 @@ import { describe, it } from 'node:test';
 import { installTmuxStub } from './_helpers/tmux-stub.js';
 import { runMcCli } from './_helpers/mc-cli.js';
 import { backgroundTarget, discoveredTarget } from '../../src/mc/work-open.js';
-import { sendToArea } from '../../src/mc/work-send.js';
 
 const SAFE_PATH = '/usr/bin:/bin:/usr/sbin:/sbin';
 
@@ -62,40 +65,3 @@ function fixture(options = {}) {
     cleanup() { try { rmSync(root, { recursive: true, force: true }); } catch { /* gone */ } },
   };
 }
-
-describe('a wake reaches a session started outside mc', () => {
-  it('knocks on the pane found by its path, and says where it knocked', () => {
-    // No mc-alpha; a session called `ops` stands in the area's worktree.
-    const fx = fixture({ panesFor: (workRoot) => [{ session: 'ops', path: join(workRoot, 'alpha', 'memoro') }] });
-    try {
-      const sent = fx.send(['alpha', '--wake', 'read me']);
-      assert.equal(sent.status, 0, sent.stderr);
-      assert.match(sent.stdout, /woke alpha/u, sent.stdout);
-      assert.ok(fx.tmux.keys().some((line) => line.startsWith('send-keys -t ops ')), fx.tmux.keys().join('\n'));
-      assert.equal(fx.tmux.submitted().length, 1);
-    } finally { fx.cleanup(); }
-  });
-
-  it('a tool with no pane at all is said as what it is, never as nothing running', () => {
-    const fx = fixture();
-    try {
-      const result = sendToArea({
-        name: 'alpha', message: 'read me', wake: true, env: fx.env,
-        run: (args) => (args[0] === 'has-session' ? { status: 1 } : { status: 0, stdout: '' }),
-        processes: () => [{ pid: 77, name: 'claude', directory: join(fx.workRoot, 'alpha') }],
-      });
-      assert.equal(result.reason, 'not-addressable');
-      assert.equal(result.processes[0].pid, 77);
-      assert.equal(result.woke, false);
-      assert.equal(fx.messages().length, 1, 'the file is delivered either way');
-    } finally { fx.cleanup(); }
-  });
-
-  it('and nothing running is still nothing running', () => {
-    const fx = fixture();
-    try {
-      const sent = fx.send(['alpha', '--wake', 'read me']);
-      assert.match(sent.stdout, /nothing is running in alpha — it reads its inbox when it starts/u);
-    } finally { fx.cleanup(); }
-  });
-});

@@ -36,7 +36,6 @@ started in it. mc stores nothing else, because nothing else is mc's to know.
 | `mc work remove <name> <repo>` | Take one repository out of it. |
 | `mc work release <name> [--apply]` | Remove what git says can go; keep the rest. |
 | `mc work discard <name> [repo] [--apply]` | Throw it away — worktrees, branches, and all. |
-| `mc work send <name> "<text>"` | A message into that work's `inbox/`. `--wake` also knocks on whatever is running there — or, when a draft is in its prompt, says that nothing was typed and leaves the knock undone (the wake queue went with the session guard, decision mc-1). `--json`. |
 | `mc work stop <name>` | Stop what is running there; keep the work. Leaves a mark (`.mc-stopped`: who, when) so a reader can tell a stopped session from a dead one; `mc work <name>` removes it. |
 | `mc work list` | The page, as bare `mc work` is. |
 | `mc worker <name> [task]` | A project folder that carries the worker role, read from `canon/roles/worker.md` — the roles mc ships — so a machine with no catalogue still gets the overlay. Every conversation started in the area inherits it and the role's model default. `--model`, `--tmux`, `--codex|--claude`. |
@@ -86,10 +85,7 @@ repository, never the registry. It is explicit — no command starts it for you.
 There is no `mc watch`. The PM round and the session guard were removed with
 the resident PM (decision mc-1, 2026-08-26), together with the notices ledger
 and `<mc home>/watch/`; `mc repo watch` above is a different mechanism and is
-the only watcher mc has. `delivered, but did not knock` is still a normal
-outcome of `mc work send --wake` — the client guard refuses to type into a
-pane whose prompt is not empty, and the message is in the inbox either way —
-but nothing retries it afterwards, and the sender is told so. See
+the only watcher mc has. See
 [`docs/technical/mc-dormant.md`](technical/mc-dormant.md).
 
 The lease is advisory. `mc repo claim` refuses a repository someone else is
@@ -277,52 +273,6 @@ laptop's package manager a precondition for merging. The property worth keeping
 is that **every movement of the floor, in either direction, is in somebody's
 diff.**
 
-## Sessions — messaging
-
-| Command | Does |
-|---|---|
-| `mc sessions send <name> <text>` | Write to that terminal. |
-| `mc sessions read <name> [--last N]` | Read its bounded current screen. |
-
-These resolve through the session model below, not through work areas. To
-reach a work area, use `mc work send <name> "<text>"`: it writes the message
-into that area's `inbox/`, so a busy, stopped, or never-started conversation
-costs latency and never the message.
-
-Knocking on the running conversation is a separate thing, asked for with
-`--wake`, because it types into an input box that belongs to somebody else. It
-refuses on a pane a tmux client is attached to — except a singleton role's
-(`pm`, `pm-helper`), which is attached by design and would otherwise never be
-knocked at all; the exception outlives the dormant verbs, since it is the area
-name that carries it — and on any pane whose input box holds text, whoever put
-it there, including a notice an earlier wake gave up on. A refused knock is
-reported and never retried: the queue that used to hold it went with the
-session guard (decision mc-1). Text *drawn* in the box
-is not taken as text in the input: a pane can redraw an order long since
-carried out after the prompt mark (D-0151), so the guard types one character,
-reads the row back and deletes it — a row that became that character alone was
-empty, a row that kept its text is somebody's draft and is left exactly as it
-was. Busy is not a refusal: a notice typed into a mid-answer pane is queued by
-the tool and becomes a turn.
-The notice goes in as text and Enter as separate
-keystrokes, with the submission verified against the pane and retried once, so
-a message can never end up half-typed into somebody's prompt; and the cleanup
-that takes an unsent notice back out is pressed only on a line mc has just read
-and can prove holds nothing but its own notice. Every refusal is printed —
-which guard fired and why — because the file is delivered either way and the
-sender has to know nobody was tapped on the shoulder.
-
-"Verified" means one thing only: the notice appears above the input box as a
-turn the conversation took, one more time than it did before mc typed. Not that
-the box is empty afterwards — a line cleared with Escape leaves it exactly as
-empty as a line that went in — and not merely that the notice is somewhere on
-screen, since it is identical for every wake from the same sender and an
-earlier one is still up there. A busy pane *queues* the turn rather than sending
-it, and then shows a placeholder of its own in the box, so the box says nothing
-useful in the common case anyway. Measured against a real idle pane: the turn
-appears 480–520ms after the notice lands and stays for twenty seconds, while mc
-looks 400ms after Enter.
-
 ## Setup and capabilities
 
 | Command | Does |
@@ -370,8 +320,6 @@ no verb that lists them any more — `mc list`, `mc sessions list` and the old
 | `mc rename <old> <new>` | Rename metadata. |
 | `mc cd <name>` | Print or enter an associated directory. |
 | `mc attach <name>` | Attach to the exact live terminal. |
-| `mc dispatch <name> <text>` | What `mc sessions send` routes to. |
-| `mc read <name>` | What `mc sessions read` routes to. |
 | `mc end <name>` | Stop and archive. Keeps every workspace and Git resource. |
 | `mc delete <name> --force` | Delete an archived session home. |
 | `mc cleanup <name> --dry-run \| --apply` | Remove only resources whose receipt proves mc created them. |

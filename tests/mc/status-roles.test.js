@@ -4,9 +4,11 @@
  * Two things, both about the same misreading. An area that carries a role
  * looked exactly like an ordinary one, so a reader could not answer the
  * question people actually have when several areas are running: which of
- * these is the PM, which is a worker. And the directory the channel writes —
- * `inbox/` — was being listed as a worktree, which announced a repository that
- * is not one. `handoff/` was the other; it had no writer and is gone.
+ * these is the PM, which is a worker.
+ *
+ * The other half was filing — `inbox/` and `handoff/`, listed as worktrees,
+ * announcing a repository that is not one. Both concepts are gone and so is
+ * the filter that hid them: a workarea is a folder that holds checkouts.
  *
  * The rule for both: the model may grow fields, never change them. Everything
  * that reads it today must keep reading exactly what it read. It was asked
@@ -43,9 +45,6 @@ function fixture() {
 
   for (const name of ['marked', 'plain', 'filed']) mkdirSync(join(workRoot, name), { recursive: true });
   writeFileSync(join(workRoot, 'marked', '.mc-role'), 'worker\n');
-  // Filing, in an ordinary area: the channel makes inbox/ on first message.
-  mkdirSync(join(workRoot, 'filed', 'inbox'), { recursive: true });
-  mkdirSync(join(workRoot, 'marked', 'inbox'), { recursive: true });
   // And one directory that is genuinely work, beside the filing.
   mkdirSync(join(workRoot, 'filed', 'some-repo'), { recursive: true });
 
@@ -94,35 +93,6 @@ describe('the work model, on roles and on filing', () => {
     } finally { fx.cleanup(); }
   });
 
-  it('never calls the channel\'s inbox a worktree', async () => {
-    const fx = fixture();
-    try {
-      const areas = await areasByName(fx.env);
-      assert.deepEqual(areas.filed.worktrees.map((worktree) => worktree.repo), ['some-repo']);
-      assert.deepEqual(areas.marked.worktrees, []);
-
-      // Same answer through the work model itself, which is what `mc work`
-      // and every release/discard decision reads.
-      const inspected = inspectWorkArea('filed', fx.env, { conversations: false, git: false });
-      assert.deepEqual(inspected.worktrees.map((worktree) => worktree.repo), ['some-repo']);
-    } finally { fx.cleanup(); }
-  });
-
-  it('leaves filing where it is — the listing hides it, nothing removes it', () => {
-    const fx = fixture();
-    try {
-      const areas = listWorkAreas(fx.env, { conversations: false, git: false });
-      const filed = areas.find((area) => area.name === 'filed');
-      assert.deepEqual(filed.worktrees.map((worktree) => worktree.repo), ['some-repo']);
-      // The directories are still on disk: this is a question of what counts
-      // as work, never of what may be deleted.
-      assert.equal(inspectWorkArea('filed', fx.env, { conversations: false, git: false }).exists, true);
-      assert.deepEqual(
-        ['inbox', 'some-repo'].filter((name) => existsDir(join(fx.workRoot, 'filed', name))),
-        ['inbox', 'some-repo'],
-      );
-    } finally { fx.cleanup(); }
-  });
 });
 
 function existsDir(path) {

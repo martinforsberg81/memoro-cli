@@ -21,7 +21,6 @@ import { basename } from 'node:path';
 
 import { painter } from '../status-render.js';
 import { leaseRow, livenessRow, renderRepoLines, renderWatchLines } from '../repo-render.js';
-import { tellHolder } from '../lease-refusal.js';
 import { claimLease, readLease, releaseLease } from '../repo-lease.js';
 import { installPushGuard, pushCheckLines, pushGuardState, pushVerdict } from '../push-guard.js';
 import { currentHolder } from '../work-identity.js';
@@ -177,11 +176,6 @@ async function lease(opts, { stdout, stderr, tell = null }) {
       const live = livenessRow(c, outcome.lease, answers.get(outcome.lease.holder));
       if (live) stderr.write(`mc: ${live}\n`);
       stderr.write('mc: nothing is blocked; this is mc being strict with itself\n');
-      // The holder is told (lease-refusal.js), so the wait is theirs to end.
-      const told = (tell || tellHolder)({ lease: outcome.lease, asker: holder, what: repoPath, errand: opts.errand });
-      stderr.write(told.told
-        ? `mc: told ${outcome.lease.holder}${told.woke ? ' and woke it' : ` (delivered, not woken: ${told.reason || 'nobody to wake'})`}\n`
-        : `mc: could not tell ${outcome.lease.holder}: ${told.reason}\n`);
       stderr.write(`mc: if that round is over, mc repo release ${opts.repo} --force ends it — and says so in the log\n`);
       return 1;
     }

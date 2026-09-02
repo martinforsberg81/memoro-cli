@@ -35,16 +35,25 @@ function fixture({ inbox = false } = {}) {
 }
 
 describe('one emptiness forecast for both modes', () => {
-  it('an inbox that holds the area is named in the dry run, and the apply tells the same story', () => {
+  // A workarea holds checkouts and nothing else, so a directory that is not one
+  // is not work and the release takes it. The point of the assertion is that it
+  // is *named before it happens*: the dry run reports the same directory the
+  // apply removes, so nothing goes quietly. This used to be the inbox's guard —
+  // `held_by: ['inbox']` — and the inbox is gone, but any leftover directory
+  // reaches the same code and must reach the same promise.
+  it('a directory that is not a checkout is named by the dry run and taken by the apply', () => {
     const fx = fixture({ inbox: true });
     try {
       const dry = releaseWorkArea('x', { env: fx.env, dryRun: true });
-      assert.deepEqual(dry.conversations, [], 'the dry run must not promise conversations the apply will keep');
-      assert.deepEqual(dry.held_by, ['inbox']);
+      assert.deepEqual(dry.removed.map((item) => [item.repo, item.what]), [['inbox', 'directory']]);
+      // Nothing holds the area any more, so the conversations go with it — and
+      // the dry run says so rather than the apply finding them.
+      assert.deepEqual(dry.held_by, []);
+      assert.ok(existsSync(join(fx.areaPath, 'inbox', 'unread.md')), 'a dry run touches nothing');
+
       const applied = releaseWorkArea('x', { env: fx.env, dryRun: false });
-      assert.deepEqual(applied.conversations, []);
-      assert.deepEqual(applied.held_by, ['inbox']);
-      assert.ok(existsSync(join(fx.areaPath, 'inbox', 'unread.md')), 'nothing was touched');
+      assert.deepEqual(applied.removed.map((item) => [item.repo, item.what]), [['inbox', 'directory']]);
+      assert.equal(existsSync(join(fx.areaPath, 'inbox')), false, 'the apply did what the dry run said');
     } finally { fx.cleanup(); }
   });
 
