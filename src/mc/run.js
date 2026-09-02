@@ -28,6 +28,12 @@
  * removed by a machine; it is written to `~/mc/intake/unplanned-workareas.md`
  * instead. The rules are in close-workarea.js.
  *
+ * The same holds for a plan on origin/main that does not parse: the runner can
+ * hand out no step from it and must not guess at what its author meant, so it
+ * goes to `~/mc/intake/unreadable-plans.md` (plan-intake.js) rather than to a
+ * `runner.log` line nobody reads. `new-user` had that line every round for a
+ * day, and the fault was five paragraphs of prose in a validated field.
+ *
  * A round asks GitHub what is open before it acts. An open pull request on a
  * project ends that project's round with a line naming it — the plan on
  * origin/main and the plan in the worktree both say `ready` while the step's
@@ -72,6 +78,7 @@ import { branchLanded } from './branch-landed.js';
 import { defaultRepos, listPlans, showBatch } from './brief-collect.js';
 import { readPlanText, unauthorisedChanges } from './plan-schema.js';
 import { closable, lastRunFor, unplannedFile, unplannedRow } from './close-workarea.js';
+import { unreadableFile, unreadablePlans } from './plan-intake.js';
 import { handOver } from './run-control.js';
 import { collectHelper, describeDigest, HELPER_REPOS, intakeDir, unreadableSections } from './helper-collect.js';
 import { describeTurn, runHelperTurn } from './helper-turn.js';
@@ -223,6 +230,7 @@ export function createRunner({
     // deleted: the folder is what goes, not what somebody wrote in it.
     closed: join(root, 'runner', 'log', 'closed'),
     unplanned: join(intakeDir(deps.env), 'unplanned-workareas.md'),
+    unreadable: join(intakeDir(deps.env), 'unreadable-plans.md'),
   };
   const writeJson = deps.writeJson || ((path, value) => deps.write(path, `${JSON.stringify(value, null, 2)}\n`));
   const remove = deps.remove || (() => {});
@@ -785,6 +793,24 @@ export function createRunner({
     if (next !== text) deps.write(paths.queue, next);
   }
 
+  /**
+   * The plans on `origin/main` the schema refuses, written where the workareas
+   * with no project are written. `chooseKind` says `unparseable` and `runStep`
+   * logs it, and that line is read by nobody: `new-user` had one every round
+   * for a day. Written from the round's own reading, so it costs nothing, and
+   * rewritten whole, so a plan somebody fixed leaves the list by itself.
+   *
+   * Not gated on `--once` as the closing is: this is a write of what the round
+   * has already read, not a pass over every workarea.
+   */
+  function writeUnreadable(plans) {
+    const rows = unreadablePlans(plans);
+    deps.write(paths.unreadable, unreadableFile(rows));
+    for (const row of rows) say(`${row.project}: the plan does not parse on origin/main — ${row.problem}`);
+    if (rows.length) say(`plans: ${rows.length} unreadable on origin/main — ${paths.unreadable}`);
+    return rows.length;
+  }
+
   /** A name leaves the queue the moment its step has run. */
   function dropFromQueue(name) {
     const text = deps.read(paths.queue);
@@ -1198,6 +1224,7 @@ export function createRunner({
     const world = queue();
     const { names, plans } = world;
     if (!once) tidyQueue(plans);
+    writeUnreadable(plans);
     // A plan that says `done` is archived in the round the runner reads it,
     // before any step of that round runs — one PR per repository, and the
     // two repositories never touch. Not under `--once`, for the reason the
@@ -1238,6 +1265,7 @@ export function createRunner({
 
   return {
     paths, say, round, runStep, runLane, splitLanes, runHelperDay, archiveDone, queue, stopRequested,
+    writeUnreadable,
     updateRequested, syncMain, freshBranch, landProject, landDocsPr, planOf, repoOf, markRunner, clearRunner, closeWorkareas,
     closeWorkarea, archivedProjects, workareas, tidyQueue,
   };

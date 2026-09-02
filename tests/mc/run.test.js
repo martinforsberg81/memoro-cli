@@ -279,7 +279,6 @@ function plan({ status = 'ready', title = 'The one step', done_when = 'do x', ru
     contract: ['Not without Martin.'],
     out_of_scope: ['Everything else.'],
     success_criteria: [{ met: false, criterion: 'It is done.', check: 'The row is in runs.tsv.' }],
-    what_the_code_taught_us: [],
     documents,
     ...(runner ? { runner } : {}),
     steps: steps || [{
@@ -1358,6 +1357,34 @@ test('a live workarea is never closed, however done its plan is', async () => {
   await createRunner({ deps: f.deps }).round();
   assert.deepEqual(f.calls.rmdirs, []);
   assert.match(f.files['/w/runner/log/runner.log'], /close: over kept — a live tmux session/u);
+});
+
+/**
+ * A plan on origin/main the schema refuses. `chooseKind` answers `unparseable`
+ * and `runStep` logs it — to `runner.log`, where `new-user`'s line went every
+ * round for a day while the project stopped existing as far as any board
+ * showed. The round writes it beside the workareas with no project instead.
+ */
+test('a plan that does not parse gets a row in ~/mc/intake/, not a line nobody reads', async () => {
+  const broken = JSON.stringify({ ...JSON.parse(ready), goal: [] }, null, 2);
+  const f = fixture({
+    plans: { memoro: { 'new-user': broken, alpha: ready } },
+    session: okSession(),
+    gh: { alpha: { number: 7 } },
+  });
+  await createRunner({ deps: f.deps }).round();
+  const intake = f.files['/w/intake/unreadable-plans.md'];
+  assert.match(intake, /\| new-user \| memoro \| goal: at least one paragraph/u);
+  assert.doesNotMatch(intake, /\| alpha \|/u, 'a plan that parses is not in the table');
+  assert.match(f.files['/w/runner/log/runner.log'], /new-user: the plan does not parse on origin\/main/u);
+});
+
+/** The table is a picture of now, so a plan somebody fixed leaves it by itself. */
+test('the unreadable table is rewritten whole each round', async () => {
+  const f = fixture({ plans: { memoro: { alpha: ready } }, session: okSession(), gh: { alpha: { number: 7 } } });
+  f.files['/w/intake/unreadable-plans.md'] = 'stale\n';
+  await createRunner({ deps: f.deps }).round();
+  assert.doesNotMatch(f.files['/w/intake/unreadable-plans.md'], /stale/u);
 });
 
 test('--once closes nothing', async () => {

@@ -200,10 +200,12 @@ round is where it is said out loud.
 A repository mc has not been told about **stops the round**, with a reason that
 says what to write and where. The one exception is a repository that can be
 *proved* not to need preparation — a manifest asking for nothing has nothing
-that could be missing. The obvious heuristic is deliberately not used: this
-repository declares three dependencies, one of them native, and its suite runs
-perfectly from a clean worktree, so "has dependencies" proves nothing either
-way. A guess that works nine times and quietly produces a green from an
+that could be missing. The obvious heuristic is deliberately not used, because a
+repository can need a build step that has nothing to do with `npm install` and
+a manifest can name a package no test file reaches. What it may not do is claim
+the second without evidence: this repository's own entry said `prepare: null`
+beside three dependencies until 2026-09-02, and five test files went unrun and
+uncounted in every round while it did. A guess that works nine times and quietly produces a green from an
 incomplete suite on the tenth is worse than a stop, because the stop is visible.
 
 Gates beyond the suite are held to the suite's own rule: one that did not reach

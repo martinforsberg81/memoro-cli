@@ -38,56 +38,6 @@
       "check": "Wall clock of `mc run --rounds 1 --no-merge` against the current `~/mc`, before and after, in the PR body. The round measured 2026-09-02T18:17 spent 51 s reaching one project out of 38."
     }
   ],
-  "what_the_code_taught_us": [
-    {
-      "title": "The round measured: 38 projects considered, one started",
-      "body": [
-        "**The round measured: 38 projects considered, one started.** From `~/mc/runner/log/runner.log`, the round beginning 2026-09-02T18:17:41Z — 21 skipped `blocked on decision plan-review`, 7 `blocked on project home-on-msr`, 5 `the plan does not parse`, 2 `dirty worktree`, 1 `every step is done`, 2 waiting on `time-axis` and `inbox-finish`, 1 merge conflict, and one project — `runner-open-prs` — actually run. The walk took from :41 to :32 of the following minute. The round before it, number 32, ended `0 ran`.",
-        "Martin, 2026-09-02: *\"mc run ska inte köra igenom alla projekt och rapportera blocked; den ska direkta kunna ta nästa i en kö.\"*"
-      ]
-    },
-    {
-      "title": "The answer is already in hand before the walk starts",
-      "body": [
-        "**The answer is already in hand before the walk starts.** `queue()` returns the plans read from `origin/main`, and `status-collect.js`'s `kindFor(name, { plans })` turns one of those into `step`, `reconcile` or `skip:<reason>` from the plan text alone — no git, no worktree. The page already uses exactly this to draw QUEUE. What costs the time is that `runStep` (`src/mc/run.js:873`) re-derives it the expensive way: `repoOf`, then the worktree's existence, then `git status`, then `syncMain`, then `planOf` reading the plan out of the worktree, and only then `chooseKind`.",
-        "So the cheap reading and the expensive one already exist side by side and agree. The work is to let the cheap one decide *whether to start*, and leave the expensive one to decide *what to do* — not to invent a third."
-      ]
-    },
-    {
-      "title": "Two of the skips are not about the plan, and must survive",
-      "body": [
-        "**Two of the skips are not about the plan, and must survive.** `dirty worktree` and the pull-request-in-flight check (`inFlight`, via `openPrsFor`) are facts about the machine and about GitHub that no plan on main can carry, and they are exactly the ones worth reading in the log — a dirty worktree is usually somebody's unfinished work about to be stepped on. `syncMain`'s conflict answer is the same kind of thing. Filtering on the plan first does not remove any of them; it removes the twenty repetitions of a reason already visible on the page."
-      ]
-    },
-    {
-      "title": "The lane already knows how to stay",
-      "body": [
-        "**The lane already knows how to stay.** `runLane` (`src/mc/run.js:1060`) keeps a project after a merged step, re-reading the plan and continuing for up to eight steps before letting go — added because a six-step plan would otherwise have taken six rounds behind twenty other projects. What is missing is the other half: it stays with a project that is moving, but it still *visits* every project that is not."
-      ]
-    },
-    {
-      "title": "The lane stayed on a project whose re-read plan had stopped",
-      "body": [
-        "**The lane stayed on a project whose re-read plan had stopped.** After a merged step `runLane` re-reads the plans and breaks only on `!status || status === 'done'` — so a plan the merge left `blocked` kept the lane, and `runStep` opened the worktree, fetched, merged origin/main and read the plan again to say the same thing. The plan filter goes in that place too, not only at the top of the lane, which is what the `re-applied, not computed once` line in this step's instruction turned out to be about: `src/mc/run.js:1128`.",
-        "The other half of the same reading: `runStep` created the workarea *before* it read the plan (`addWorktree` at `src/mc/run.js:899`, `chooseKind` at :919). A blocked project with no workarea got a worktree made for it every round it was refused."
-      ]
-    },
-    {
-      "title": "`reconcile` is the one answer the plan on main cannot give",
-      "body": [
-        "**`reconcile` is the one answer the plan on main cannot give.** A conflicted merge lives in a workarea; `syncMain` leaves it in progress and `chooseKind` turns it into a `reconcile` step whatever the plan says. Filtering on the plan on main therefore also skips the reconcile of a project whose plan is stopped — its half-finished merge waits until the plan is `ready` again, which is the first round it could have used it anyway. This is a choice, made here and written into `planRefuses`, not an oversight.",
-        "A project that is `ready` still reaches `syncMain` exactly as before, so every reconcile that could have led to a step still happens in the round it always did."
-      ]
-    },
-    {
-      "title": "The one line is the round's, and `done` never reaches it",
-      "body": [
-        "**The one line is the round's, not the lane's.** Lanes run in parallel under one `Promise.all`, and a reader of `runner.log` is reading a round rather than a lane — so `runLane` returns its refusals and `round()` says the single line over both. Nothing is said while the lane walks: a refusal that costs no git costs no line either.",
-        "**`done` cannot appear in the count.** A plan that says `done` is archived at the top of the round, before any lane starts, so the queue a lane walks never holds one — the reasons that actually reach the line are `blocked`, `unparseable` and `invalid`. `done` is only reachable under `--once`, which skips archiving on purpose. The page counts it because the page does not archive.",
-        "**Letting go of a project is the same refusal.** When a merged step leaves the plan stopped, `runLane` breaks out of the stay-loop on the same `planRefusal`; that answer is counted with the rest rather than given a line of its own, because it is exactly as visible on the page as the twenty at the top of the walk."
-      ]
-    }
-  ],
   "documents": [
     {
       "label": "How a round is built, and what a lane is",
@@ -122,14 +72,39 @@
     },
     {
       "title": "Close it out",
-      "status": "ready",
+      "status": "done",
       "done_when": "`docs/technical/mc-run.md` describes what a round touches and what it only reads, and `project_log.md` has a row.",
       "instruction": [
         "`docs/technical/mc-run.md` has the section on what ends a round for a project. Give it the two-stage shape: what the plan on `origin/main` decides before anything is touched, and what the worktree decides after. Say why the second reading exists at all — the plan in the worktree can be one merge ahead of the plan on main, and it is the one a step session will edit.",
         "Put the before-and-after wall clock in the close-out, measured against the real `~/mc`, and say what the board looked like when it was measured: a round is only slow in proportion to how much of the board it cannot act on.",
         "A row in `docs/project/project_log.md`."
       ],
-      "pr": null,
+      "comments": [
+        "**The round measured: 38 projects considered, one started**",
+        "**The round measured: 38 projects considered, one started.** From `~/mc/runner/log/runner.log`, the round beginning 2026-09-02T18:17:41Z — 21 skipped `blocked on decision plan-review`, 7 `blocked on project home-on-msr`, 5 `the plan does not parse`, 2 `dirty worktree`, 1 `every step is done`, 2 waiting on `time-axis` and `inbox-finish`, 1 merge conflict, and one project — `runner-open-prs` — actually run. The walk took from :41 to :32 of the following minute. The round before it, number 32, ended `0 ran`.",
+        "Martin, 2026-09-02: *\"mc run ska inte köra igenom alla projekt och rapportera blocked; den ska direkta kunna ta nästa i en kö.\"*",
+        "**The answer is already in hand before the walk starts**",
+        "**The answer is already in hand before the walk starts.** `queue()` returns the plans read from `origin/main`, and `status-collect.js`'s `kindFor(name, { plans })` turns one of those into `step`, `reconcile` or `skip:<reason>` from the plan text alone — no git, no worktree. The page already uses exactly this to draw QUEUE. What costs the time is that `runStep` (`src/mc/run.js:873`) re-derives it the expensive way: `repoOf`, then the worktree's existence, then `git status`, then `syncMain`, then `planOf` reading the plan out of the worktree, and only then `chooseKind`.",
+        "So the cheap reading and the expensive one already exist side by side and agree. The work is to let the cheap one decide *whether to start*, and leave the expensive one to decide *what to do* — not to invent a third.",
+        "**Two of the skips are not about the plan, and must survive**",
+        "**Two of the skips are not about the plan, and must survive.** `dirty worktree` and the pull-request-in-flight check (`inFlight`, via `openPrsFor`) are facts about the machine and about GitHub that no plan on main can carry, and they are exactly the ones worth reading in the log — a dirty worktree is usually somebody's unfinished work about to be stepped on. `syncMain`'s conflict answer is the same kind of thing. Filtering on the plan first does not remove any of them; it removes the twenty repetitions of a reason already visible on the page.",
+        "**The lane already knows how to stay**",
+        "**The lane already knows how to stay.** `runLane` (`src/mc/run.js:1060`) keeps a project after a merged step, re-reading the plan and continuing for up to eight steps before letting go — added because a six-step plan would otherwise have taken six rounds behind twenty other projects. What is missing is the other half: it stays with a project that is moving, but it still *visits* every project that is not.",
+        "**The lane stayed on a project whose re-read plan had stopped**",
+        "**The lane stayed on a project whose re-read plan had stopped.** After a merged step `runLane` re-reads the plans and breaks only on `!status || status === 'done'` — so a plan the merge left `blocked` kept the lane, and `runStep` opened the worktree, fetched, merged origin/main and read the plan again to say the same thing. The plan filter goes in that place too, not only at the top of the lane, which is what the `re-applied, not computed once` line in this step's instruction turned out to be about: `src/mc/run.js:1128`.",
+        "The other half of the same reading: `runStep` created the workarea *before* it read the plan (`addWorktree` at `src/mc/run.js:899`, `chooseKind` at :919). A blocked project with no workarea got a worktree made for it every round it was refused.",
+        "**`reconcile` is the one answer the plan on main cannot give**",
+        "**`reconcile` is the one answer the plan on main cannot give.** A conflicted merge lives in a workarea; `syncMain` leaves it in progress and `chooseKind` turns it into a `reconcile` step whatever the plan says. Filtering on the plan on main therefore also skips the reconcile of a project whose plan is stopped — its half-finished merge waits until the plan is `ready` again, which is the first round it could have used it anyway. This is a choice, made here and written into `planRefuses`, not an oversight.",
+        "A project that is `ready` still reaches `syncMain` exactly as before, so every reconcile that could have led to a step still happens in the round it always did.",
+        "**The one line is the round's, and `done` never reaches it**",
+        "**The one line is the round's, not the lane's.** Lanes run in parallel under one `Promise.all`, and a reader of `runner.log` is reading a round rather than a lane — so `runLane` returns its refusals and `round()` says the single line over both. Nothing is said while the lane walks: a refusal that costs no git costs no line either.",
+        "**`done` cannot appear in the count.** A plan that says `done` is archived at the top of the round, before any lane starts, so the queue a lane walks never holds one — the reasons that actually reach the line are `blocked`, `unparseable` and `invalid`. `done` is only reachable under `--once`, which skips archiving on purpose. The page counts it because the page does not archive.",
+        "**Letting go of a project is the same refusal.** When a merged step leaves the plan stopped, `runLane` breaks out of the stay-loop on the same `planRefusal`; that answer is counted with the rest rather than given a line of its own, because it is exactly as visible on the page as the twenty at the top of the walk.",
+        "**What the round costs is the shape of the board, not a constant**",
+        "**The 51 s was the board, not the code.** The round of 2026-09-02T18:02 — a real `mc run --rounds 1` against `~/mc` — walked 38 names between 18:02:21 and 18:03:12 and started none: 21 blocked on `decision plan-review`, 7 behind `home-on-msr`, 2 behind other projects, 5 unparseable, 1 every-step-done, and 2 `dirty worktree`. Thirty-six of the thirty-eight were plan-shaped, at roughly 1.3 s of git each; the same thirty-eight answered from `~/mc/runner/plans.json` with `kindFor` is 1.2 ms. A board where most plans are `ready` never paid this and does not notice the change, so the close-out says what the board looked like beside the number.",
+        "The live before-and-after the fourth criterion asks for was not run. The runner was up (pid 61846, started 19:13:11Z) and holding this very session, so a second `mc run` against `~/mc` would have spawned step sessions and raced it for `runner.json`. What is written down is the round that was slow, measured live, and the reading that replaces its walk, measured over the real board — not an estimate of a round nobody ran."
+      ],
+      "pr": 536,
       "blocked_by": null
     }
   ]
