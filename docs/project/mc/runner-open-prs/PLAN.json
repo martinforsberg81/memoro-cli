@@ -33,12 +33,12 @@
       "check": "A test: a worktree whose branch is contained in `origin/main` is moved to `<name>-<n>` from `origin/main` before the session starts. Then live, on a workarea standing on a landed branch — its runs.tsv row carries a pull request number rather than `-`."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "The runner lands only through `mc merge`.",
       "check": "`grep -n 'pr., .merge' src/mc/run.js` returns nothing, and a test shows the gated round is what a finished step calls. A red gate leaves the pull request open and the project stopped."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "No merge is reported as landed when it did not land on `main`.",
       "check": "A test over the round's reading of `merged_into` / `off_default`: a pull request based on another branch is not recorded `success,merged`. Then read `runs.tsv` after the first live round — no row claims a merge whose `merged_into` was not `main`."
     },
@@ -71,6 +71,13 @@
       "body": [
         "The contract says the runner starts no step for a project that has an open pull request. When `gh pr list` fails — no auth, no network — the runner does not know, and the plan does not say what to do with not knowing. Decided in the code: the repository whose answer failed starts nothing that round, with one line saying so, and the other repository's lane is untouched. An idle round costs ten minutes of sleep; a blind one bought a 120-minute Opus session on 2026-09-02. `queue()` returns `prsFailed` for this, and step 2 meets the same question when the gated round cannot reach GitHub."
       ]
+    },
+    {
+      "title": "The stack rule earns its keep on a stack of one",
+      "body": [
+        "Step 1 means a project has nothing open when its session starts, so the only stack the runner can meet is one a single session built — rare, and the reason `stackOrder` looks like insurance for a case nobody has seen. It is not. The shape it refuses most often is a stack of one: a single pull request whose base is not `main` and is nobody else's head. That is exactly #11250, which the old merge squashed into the branch of #11249 and logged `success,merged` while `main` received nothing. The ordering rule and the guard against that 13:00 merge are one rule, and reading `merged_into` back afterwards is the second belt rather than the first.",
+        "The one door turned out to be two of `mc merge`'s. The archive pull request removes a plan directory and adds a `project_log.md` row: docs-only by construction, so the gate has no test to reach and a gated round on it would be twenty minutes spent proving nothing. `docs-merge.js` — `mc merge --docs` — already existed for exactly that, checks it against GitHub's own file list rather than a local diff, and reports `merged_into` like the gated round does. The second `gh pr merge` in `run.js` was the archive's, and the door it needed was already built."
+      ]
     }
   ],
   "documents": [
@@ -98,7 +105,7 @@
     },
     {
       "title": "The runner lands only through `mc merge`",
-      "status": "ready",
+      "status": "done",
       "done_when": "`run.js` calls no `gh pr merge`; a finished step's pull request is landed by the gated round, and a merge that did not land on `main` is not recorded as merged.",
       "instruction": [
         "`mergePr` (`run.js:290`) squash-merges with `gh pr merge --squash` and waits only for `mergeable`. Two things follow. A step lands without the gate — while `repo-merge.js`'s own header says there is no way to merge a red gate, \"not a flag, not an option, not an environment variable\". And the base is never read: on 2026-09-02 at 13:00 that merged #11250 into `msr-track-3-capture-command`, the branch of #11249 which the runner itself had left open eighty minutes earlier, logged `success,merged`, and `main` received nothing. Martin, 2026-09-02: only `mc merge` may be used.",

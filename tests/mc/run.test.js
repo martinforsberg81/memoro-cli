@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { createRunner, runLoop } from '../../src/mc/run.js';
@@ -10,7 +11,7 @@ import { createRunner, runLoop } from '../../src/mc/run.js';
  * a "session" that returns what the test says. Nothing starts, nothing is
  * written outside `files`.
  */
-function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], live = [], areas = {}, conflicts = {}, roles = true, now = '2026-08-29T10:00:00Z', runs = null, collect = okCollect, helperTurn = okTurn, projectLog = {}, archive = {}, landed = [], removeFails = [], heads = {}, openPrs = {}, prsFail = [], refs = {} } = {}) {
+function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], live = [], areas = {}, conflicts = {}, roles = true, now = '2026-08-29T10:00:00Z', runs = null, collect = okCollect, helperTurn = okTurn, projectLog = {}, archive = {}, landed = [], removeFails = [], heads = {}, openPrs = {}, prsFail = [], refs = {}, rounds = {}, rebaseFails = [] } = {}) {
   const root = '/w';
   const files = { [`${root}/queue.md`]: queue };
   if (runs != null) files[`${root}/runner/log/runs.tsv`] = runs;
@@ -32,7 +33,7 @@ function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], live = 
     }
   }
   const log = [];
-  const calls = { git: [], gh: [], sessions: [], added: [], removed: [], collects: [], turns: [], rm: [], moved: [], rmdirs: [], checkouts: [] };
+  const calls = { git: [], gh: [], sessions: [], added: [], removed: [], collects: [], turns: [], rm: [], moved: [], rmdirs: [], checkouts: [], rounds: [], docsRounds: [] };
   /** `/w/runner/archive/<repo>` — the worktree the runner archives in. */
   const archiveRoot = `${root}/runner/archive`;
   // A snapshot of the work root taken inside every session call — the only
@@ -91,6 +92,25 @@ function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], live = 
     },
     collect: async (options) => { calls.collects.push(options); return collect(options); },
     helperTurn: async (options) => { calls.turns.push(options); return helperTurn(options); },
+    // The one door, faked: `rounds` is what `mc merge`'s round reports back,
+    // keyed by pull request number. The default is the happy one — landed, on
+    // main — because every test that is not about the merge wants that and
+    // none of them wants to say so.
+    mergeRound: async (options) => {
+      calls.rounds.push(options);
+      const said = rounds[options.pr] || {};
+      return {
+        ok: true, merged: true, merged_into: 'main', default_branch: 'main', off_default: false,
+        stopped_at: null, reason: null, ...said,
+      };
+    },
+    docsMerge: async (options) => {
+      calls.docsRounds.push(options);
+      const a = archive[Object.keys(archive).find((r) => options.repoPath.endsWith(`/${r}`)) || ''] || {};
+      return a.mergeFails
+        ? { ok: false, merged: false, stopped_at: 'merge', reason: 'nope', pr: { number: options.pr } }
+        : { ok: true, merged: true, merged_into: 'main', pr: { number: options.pr } };
+    },
     profile: async () => 'PROFILE',
     role: (kind) => (roles ? { name: kind, overlay: `ROLE ${kind}` } : null),
     // `modelArgs` guards on a missing model exactly as both real adapters do:
@@ -158,6 +178,10 @@ function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], live = 
         return { ok: false, stdout: '' };
       }
       if (args[0] === 'merge-tree') return { ok: true, stdout: landed.includes(args.at(-1)) ? 'basetree' : 'othertree' };
+      // Where a stacked branch left its base, and the replay onto the squash
+      // that landed under it. `rebaseFails` names the branches that conflict.
+      if (args[0] === 'merge-base') return { ok: true, stdout: `forked-${args.at(-1)}` };
+      if (args[0] === 'rebase') return { ok: !rebaseFails.includes(args.at(-1)), stdout: '', stderr: 'CONFLICT' };
       // The branches that already exist, local and on the remote — what
       // `<name>-<n>` has to step over. `refs` names them per workarea.
       if (args[0] === 'for-each-ref') return { ok: true, stdout: (refs[cwd.split('/')[2]] || []).join('\n') };
@@ -193,12 +217,20 @@ function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], live = 
         if (args[1] === 'merge') return a.mergeFails ? { ok: false, stdout: '', stderr: 'nope' } : { ok: true, stdout: '' };
         return { ok: true, stdout: '' };
       }
+      // A workarea's own checkout: what this project has open *now*, asked
+      // again after the session because the session is what changed it.
+      // `gh[name]` is one pull request or a stack of them; a head nobody named
+      // is the branch the workarea stands on.
       const name = cwd.split('/')[2];
-      const pr = gh[name];
-      if (args[1] === 'list') return { ok: true, stdout: pr ? String(pr.number) : '' };
-      if (args[1] === 'view' && args.includes('mergeable')) return { ok: true, stdout: pr?.mergeable || 'MERGEABLE' };
-      if (args[1] === 'view' && args.includes('title')) return { ok: true, stdout: pr?.title || 't' };
-      if (args[1] === 'merge') return pr?.mergeFails ? { ok: false, stdout: '', stderr: 'nope' } : { ok: true, stdout: '' };
+      const opened = [gh[name]].flat().filter(Boolean).map((pr) => ({
+        number: pr.number,
+        title: pr.title || 't',
+        isDraft: Boolean(pr.isDraft),
+        headRefName: pr.head || heads[name] || name,
+        baseRefName: pr.base || 'main',
+      }));
+      if (args[1] === 'list') return { ok: true, stdout: JSON.stringify(opened) };
+      if (args[1] === 'edit') return { ok: true, stdout: '' };
       return { ok: true, stdout: '' };
     },
   };
@@ -284,13 +316,13 @@ test('one step: worktree made from origin/main, session through the adapter, PR 
   assert.match(call.args[1], /`alpha` workarea of memoro[\s\S]*----- PLAN\.json -----\n\{/u);
   assert.match(call.args[1], /Your step is `steps\[0\]` — 1, "The one step"/u);
   assert.match(call.args[call.args.indexOf('--append-system-prompt') + 1], /^PROFILE\n\n---\n\nROLE step$/u);
-  assert.ok(f.calls.gh.some((c) => c.includes('merge') && c.includes('Alpha step (#77)')));
+  assert.deepEqual(f.calls.rounds.map((c) => [c.repoPath, c.pr]), [['/home/memoro', 77]], 'landed through mc merge, not gh pr merge');
   const rows = f.files['/w/runner/log/runs.tsv'].trim().split('\n');
-  assert.equal(rows[0].split('\t').length, 13);
-  assert.equal(rows[1], '2026-08-29T10:00:00Z\talpha\tstep\t0\t0\t77\t4\t1\t2\t3\t4\tsid\tsuccess,merged');
+  assert.equal(rows[0].split('\t').length, 14);
+  assert.equal(rows[1], '2026-08-29T10:00:00Z\talpha\tstep\t0\t0\t77\t4\t1\t2\t3\t4\tsid\tsuccess,merged\t0');
   assert.ok(f.files['/w/alpha-20260829T100000Z.json'] === undefined);
   assert.ok('/w/runner/log/alpha-20260829T100000Z.json' in f.files);
-  assert.match(f.files['/w/runner/log/runner.log'], /alpha: merged #77\n.*alpha: step done rc=0 0s pr=77 turns=4 note=success,merged/u);
+  assert.match(f.files['/w/runner/log/runner.log'], /alpha: merged #77 into main through the gate\n.*alpha: step done rc=0 0s pr=77 turns=4 note=success,merged land=0s/u);
 });
 
 test('skips: live tmux session, dirty worktree, a blocked step', async () => {
@@ -445,8 +477,8 @@ test('a quota answer is logged as quota, not merged, and the runner sleeps 30 mi
   f.deps.sleep = async (ms) => { slept.push(ms); };
   const runner = createRunner({ deps: f.deps });
   await runner.round({ once: true });
-  assert.match(f.files['/w/runner/log/runs.tsv'], /\tq\tstep\t1\t0\t5\t1\t.*\tquota\n/u);
-  assert.ok(!f.calls.gh.some((c) => c.includes('merge')));
+  assert.match(f.files['/w/runner/log/runs.tsv'], /\tq\tstep\t1\t0\t5\t1\t.*\tquota\t-\n/u);
+  assert.equal(f.calls.rounds.length, 0);
   assert.ok(slept.includes(30 * 60 * 1000));
 });
 
@@ -454,17 +486,99 @@ test('a timed-out session is logged as timeout with exit 142', async () => {
   const f = fixture({ plans: { memoro: { t: ready } }, session: () => ({ status: 142, stdout: '', stderr: '', timedOut: true }) });
   const runner = createRunner({ deps: f.deps });
   await runner.round({ once: true });
-  assert.match(f.files['/w/runner/log/runs.tsv'], /\tt\tstep\t142\t0\t-\t-\t-\t-\t-\t-\t-\ttimeout\n/u);
+  assert.match(f.files['/w/runner/log/runs.tsv'], /\tt\tstep\t142\t0\t-\t-\t-\t-\t-\t-\t-\ttimeout\t-\n/u);
 });
 
-test('merge that fails syncs main in, pushes, retries once; still failing leaves it open', async () => {
-  const f = fixture({ plans: { memoro: { m: ready } }, gh: { m: { number: 9, mergeFails: true } }, session: okSession() });
+/**
+ * The landing, since 2026-09-02: `mc merge`'s own round and nothing else.
+ *
+ * What these replace is the old `mergePr` — `gh pr merge --squash` after
+ * waiting for `mergeable`, with a sync-and-retry when it failed. It landed
+ * without the gate, and it never read the base: at 13:00 that day it squashed
+ * #11250 into the branch of #11249 and logged `success,merged` while `main`
+ * received nothing.
+ */
+test('a red gate leaves the pull request open and says so in the row', async () => {
+  const f = fixture({
+    plans: { memoro: { m: ready } }, gh: { m: { number: 9 } }, session: okSession(),
+    rounds: { 9: { ok: false, merged: false, merged_into: null, stopped_at: 'red', reason: 'two tests the change reaches are red' } },
+  });
   const runner = createRunner({ deps: f.deps });
   await runner.round({ once: true });
-  assert.equal(f.calls.gh.filter((c) => c.includes('merge')).length, 2);
-  assert.ok(f.calls.git.some((c) => c.includes('push')));
-  assert.match(f.files['/w/runner/log/runs.tsv'], /success,open\n/u);
-  assert.match(f.files['/w/runner/log/runner.log'], /m: #9 left open — could not merge/u);
+  assert.equal(f.calls.rounds.length, 1);
+  assert.match(f.files['/w/runner/log/runs.tsv'], /\tsuccess,open,gate-red\t\d+\n/u);
+  assert.match(f.files['/w/runner/log/runner.log'], /m: #9 left open — two tests the change reaches are red/u);
+});
+
+test('a merge that landed somewhere other than main is not recorded as merged', async () => {
+  const f = fixture({
+    plans: { memoro: { m: ready } }, gh: { m: { number: 11250 } }, session: okSession(),
+    rounds: { 11250: { ok: true, merged: true, merged_into: 'msr-track-3-capture-command', off_default: true } },
+  });
+  const runner = createRunner({ deps: f.deps });
+  await runner.round({ once: true });
+  assert.match(f.files['/w/runner/log/runs.tsv'], /\tsuccess,off-main\t\d+\n/u);
+  assert.match(f.files['/w/runner/log/runner.log'], /#11250 was merged into msr-track-3-capture-command, NOT main/u);
+});
+
+test('a pull request aimed at a branch that is nobody head lands nothing', async () => {
+  const f = fixture({
+    plans: { memoro: { m: ready } }, gh: { m: { number: 11250, base: 'msr-track-3-capture-command' } }, session: okSession(),
+  });
+  const runner = createRunner({ deps: f.deps });
+  await runner.round({ once: true });
+  assert.equal(f.calls.rounds.length, 0, 'nothing is handed to the merge round');
+  assert.match(f.files['/w/runner/log/runs.tsv'], /\tsuccess,open,not-a-stack\t\d+\n/u);
+  assert.match(f.files['/w/runner/log/runner.log'], /#11250 is aimed at msr-track-3-capture-command — none of them is aimed at main — landing none of them/u);
+});
+
+test('a stack is landed bottom first, each one above it retargeted and replayed', async () => {
+  const f = fixture({
+    plans: { memoro: { m: ready } },
+    gh: { m: [{ number: 3, head: 'm-3', base: 'm-2' }, { number: 1, head: 'm', base: 'main' }, { number: 2, head: 'm-2', base: 'm' }] },
+    session: okSession(),
+  });
+  const runner = createRunner({ deps: f.deps });
+  await runner.round({ once: true });
+  assert.deepEqual(f.calls.rounds.map((c) => c.pr), [1, 2, 3], 'bottom first, whatever order GitHub listed them in');
+  assert.deepEqual(f.calls.rounds.map((c) => c.repoPath), ['/home/memoro', '/home/memoro', '/home/memoro']);
+  assert.deepEqual(f.calls.git.filter((c) => c[1] === 'rebase').map((c) => c.slice(1)), [
+    ['rebase', '--onto', 'origin/main', 'forked-origin/m-2', 'm-2'],
+    ['rebase', '--onto', 'origin/main', 'forked-origin/m-3', 'm-3'],
+  ]);
+  assert.ok(f.calls.gh.some((c) => c.includes('edit') && c.includes('2') && c.includes('--base') && c.includes('main')));
+  assert.match(f.files['/w/runner/log/runs.tsv'], /\tsuccess,merged\t\d+\n/u);
+});
+
+test('a stacked branch that conflicts after the one below lands is aborted, not resolved', async () => {
+  const f = fixture({
+    plans: { memoro: { m: ready } },
+    gh: { m: [{ number: 1, head: 'm', base: 'main' }, { number: 2, head: 'm-2', base: 'm' }] },
+    session: okSession(), rebaseFails: ['m-2'], conflicts: { m: ['a.js'] },
+  });
+  const runner = createRunner({ deps: f.deps });
+  await runner.round({ once: true });
+  assert.deepEqual(f.calls.rounds.map((c) => c.pr), [1], 'the one above it is not handed to the gate');
+  assert.ok(f.calls.git.some((c) => c[1] === 'rebase' && c[2] === '--abort'));
+  assert.match(f.files['/w/runner/log/runs.tsv'], /\tsuccess,open,stack-stopped\t\d+\n/u);
+  assert.match(f.files['/w/runner/log/runner.log'], /m-2 conflicts with what just landed in: a\.js/u);
+});
+
+test('two pull requests aimed at main are not a stack and nothing lands', async () => {
+  const f = fixture({
+    plans: { memoro: { m: ready } },
+    gh: { m: [{ number: 1, head: 'm', base: 'main' }, { number: 2, head: 'm-2', base: 'main' }] },
+    session: okSession(),
+  });
+  const runner = createRunner({ deps: f.deps });
+  await runner.round({ once: true });
+  assert.equal(f.calls.rounds.length, 0);
+  assert.match(f.files['/w/runner/log/runner.log'], /#1 and #2 are both aimed at main — two stacks, not one/u);
+});
+
+test('run.js has no gh pr merge left in it', () => {
+  const source = readFileSync(new URL('../../src/mc/run.js', import.meta.url), 'utf8');
+  assert.equal(/\[\s*'pr',\s*'merge'/u.test(source), false, 'the runner lands through mc merge and nothing else');
 });
 
 test('tool and model come from the project frontmatter', async () => {
@@ -836,7 +950,7 @@ test('a done plan is archived in the round it is read: directory removed, row wr
   assert.equal(row, '| 2026-08-29 | prog | over | delivered | The rule | [docs/technical/d.md](../technical/d.md) | abc1234 |');
 
   assert.ok(f.calls.gh.some((c) => c[0] === wt && c[2] === 'create' && c.includes('Archive 1 done project: over')));
-  assert.ok(f.calls.gh.some((c) => c[0] === wt && c[2] === 'merge' && c.includes('900')), 'the runner merges it like any other PR');
+  assert.deepEqual(f.calls.docsRounds.map((c) => [c.repoPath, c.pr]), [[wt, 900]], 'the archive PR lands through mc merge --docs');
   assert.ok(f.calls.git.some((c) => c[0] === '/home/memoro' && c[1] === 'worktree' && c[2] === 'remove'), 'the archive worktree is taken down again');
 
   const runnerLog = f.files['/w/runner/log/runner.log'];
