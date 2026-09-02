@@ -1,0 +1,131 @@
+{
+  "schema": "mc-plan",
+  "version": 1,
+  "goal": [
+    "`mc test <repo> --full` runs what that repository calls its whole suite, mc runs it on its own on an interval, and the answer says which tests are red on `main` **and since when**. Report only: nothing here refuses a merge, blocks a round, or changes what `mc test <repo> <pr>` decides. Ruled by Martin, 2026-09-02.",
+    "It does none of that today, and the first half is a false green. `repo-gate.js`'s `suiteCommand` defines a repository's whole suite as its `npm test`, verbatim — a deliberate choice, so that mc keeps no second definition of a repository's suite. For memoro that definition is wrong: `npm test` is `node scripts/testing/ci.mjs`, the affected-selection. With `--full` there is no pull request, so the round checks out `origin/main` detached and the selector diffs `origin/main` against itself. Measured 2026-09-02 with `node scripts/testing/ci.mjs --list --base-ref HEAD` in the memoro worktree: `changed paths: 0`, `selected test files: 6`. **`mc test memoro --full` runs 6 files of 2,018 and reports it as the whole suite.** That is precisely the failure `repo-gate-table.js`'s own header was written against — a run that \"runs a *subset* and reports a summary anyway\".",
+    "The second half does not exist at all. Nothing in memoro is scheduled: every workflow under `.github/workflows/` is `workflow_dispatch:` except `legal-gate.yml`, and GitHub Actions is billing-blocked for this account since 2026-08-04. The whole suite runs only when a person types `npm run test:full`. That is the direct cause of #10529 — four days of merges left 31 surface-runtime tests red on memoro's `main` while every pull request's affected-selection passed, because nothing ever looked at the whole. Measured 2026-09-02, memoro's full suite is 2,018 files, 17,928 tests, **337 s** wall clock, and six tests standing red on `main`. A reading that costs five and a half minutes once a day is not the expensive thing here; not having it is."
+  ],
+  "contract": [
+    "Report only. Nothing in this project refuses a merge, delays a round, or changes any verdict `mc test` or `mc merge` produces. A blocking policy — \"main has been red for N days, land nothing\" — is a separate question and is deliberately not taken here. Ruled by Martin, 2026-09-02.",
+    "`--full` never guesses what a repository's whole suite is. It runs a command that was declared, or it stops with a reason — the same rule `repo-gate-table.js` already holds for preparation, and for the same stated reason: a guess that works nine times and quietly reports a green from an incomplete suite on the tenth is worse than a stop, because the stop is visible and the green is not.",
+    "The scheduled run writes only under mc's home. It never commits, never pushes, never writes inside a repository, and never takes a branch. It is a meter, like the watcher beside it.",
+    "One gate round at a time on this machine still holds. A scheduled full run takes `gate-lock.js` like any other round, and when the lock is held it **skips that tick and records the skip** — it never queues behind a merge round, and never makes one wait 337 s.",
+    "No test is added, deleted, weakened or reclassified in any repository by this project. What is red is reported as red."
+  ],
+  "out_of_scope": [
+    "What memoro selects for an ordinary diff, and how long memoro's gate takes. That is `test-architecture/test-value-cleanup` and `test-architecture/mc-test` in the memoro repository. This project is the net, not the gate.",
+    "Fixing the six tests red on memoro's `main`. The net's whole job is to say that they are red and since when; repairing them is the owning project's work, and a net that waits for a green tree is a net that never ships.",
+    "Any blocking or refusing behaviour derived from the nightly answer, including a red-days threshold on `mc merge`. Explicitly deferred by the ruling above.",
+    "Hosted CI of any kind. Actions is billing-blocked and every memoro workflow is `workflow_dispatch:`; nothing here dispatches one, schedules one, or depends on one running.",
+    "`.mc/test.json` in the memoro repository. mc's shipped table can carry memoro's declaration today and the layering already exists (#502), so this project does not need a memoro pull request to be finished. Moving memoro's entry into memoro's own file is memoro's to do when it wants it."
+  ],
+  "success_criteria": [
+    {
+      "met": false,
+      "criterion": "`mc test memoro --full` runs memoro's whole suite.",
+      "check": "Run it. The report names 2,018 test files and a duration in the region of 337 s, against the 6 files it selects today. Cross-check the file count against `npm run test:full` in the memoro worktree."
+    },
+    {
+      "met": false,
+      "criterion": "A declaration that names a selector but no suite cannot produce a whole-suite answer.",
+      "check": "A unit test over `declarationFor` and the `--full` path: a declaration with `select` and no `suite` stops with a reason naming both fields. Verified for real by removing memoro's `suite` and seeing `mc test memoro --full` stop rather than run six files."
+    },
+    {
+      "met": false,
+      "criterion": "The full run happens without anybody asking for it, and never delays a merge round.",
+      "check": "Two scheduled runs observed in the log across one interval boundary. Then start a merge round, and confirm from the log that the tick that overlapped it recorded a skip with the holding round's pid rather than waiting."
+    },
+    {
+      "met": false,
+      "criterion": "A red test on main is named with the date it first went red.",
+      "check": "After two runs that both see `tests/architecture/data-bus.test.js` red, `mc` names it with the timestamp of the first run that saw it, not the latest. Confirmed a second way by hand-editing the stored history to a third, older run and seeing the reported date move back."
+    },
+    {
+      "met": false,
+      "criterion": "A test that stops being red stops being reported.",
+      "check": "Take a run's stored result, remove one failing name from it, run again, and confirm the name is gone from the page rather than lingering with an old date."
+    }
+  ],
+  "what_the_code_taught_us": [
+    {
+      "title": "`--full` is six files, and the code says why in three lines",
+      "body": [
+        "`repo-gate.js:333` — `const selects = Boolean(declared.declaration.select) && !wholeSuite;` — so `--full` turns the selector *off* and falls to `suiteCommand({ repoPath })` at line 334. `suiteCommand` (line 858) reads `package.json` and returns `npm test`, with a comment explaining the choice: mc must not keep its own idea of a repository's suite. The reasoning is right; the assumption underneath it — that a repository's `npm test` runs everything — is not true of memoro.",
+        "With no pull request the round checks out the default branch detached (`repo-gate.js:340`), so `npm test` runs `ci.mjs` against `origin/main` on `origin/main`. Measured in the memoro worktree 2026-09-02: `node scripts/testing/ci.mjs --list --base-ref HEAD` → `changed paths: 0`, `selected test files: 6`, `commands: (none)`. The six are the mandatory core.",
+        "The narrow rule that catches this without mc learning anything about any named repository: **a declaration that carries `select` and no `suite` may not answer a `--full`.** A repository that declares a selector has, by declaring it, said that `npm test` is not the whole thing. Checked against both repositories mc knows: memoro's `npm test` is `node scripts/testing/ci.mjs` (a selector — must declare `suite`), memoro-cli's is `node --test --import ./tests/_isolate-home.mjs 'tests/**/*.test.js'` (a glob over everything — declares `suite: 'npm test'` and is telling the truth)."
+      ]
+    },
+    {
+      "title": "Nothing in memoro is scheduled, and that is #10529's cause",
+      "body": [
+        "Every workflow under memoro's `.github/workflows/` is `on: workflow_dispatch:` except `legal-gate.yml` (`on: pull_request`, paths `public/lang/**`). Checked file by file 2026-09-02. GitHub Actions is billing-blocked for this account since 2026-08-04, so this is not an accident to be corrected by turning a trigger back on — it is the standing condition this project has to work inside.",
+        "So the whole suite runs when a person types `npm run test:full` and at no other time. #10529 is what that produces: four days of merges, 31 surface-runtime tests red on `main`, every pull request green. memoro's answer to that was to make its gate run the whole `msr-contract` profile for any diff under `public/js/msr/` — 325 files on every MSR change, about 213 s of a 234 s round, and 34 % of memoro's last 150 landings touch that directory. **The blanket is a substitute for this net**, paid roughly thirteen times a day instead of once.",
+        "Measured 2026-09-02 on this machine (Apple M1, 8 cores, 8 GB): memoro's `npm run test:full` is 2,018 files, 17,928 tests, 337.42 s wall, ~808 s summed CPU across 7 lanes, six tests red on `main`. One run a day is a twentieth of what the blanket costs a day."
+      ]
+    },
+    {
+      "title": "Where the pieces already are",
+      "body": [
+        "`gate-lock.js` is the one-round-at-a-time guard: a file and a pid under mc's home, `taken` and the pid alive → refused with the round's identity; taken and the pid gone → take it; no expiry, because no clock can tell a slow round from a dead one. It is exactly the door a scheduled run must knock on, and its own header says it never blocks anything but a gate round.",
+        "`repo-watch.js` / `repo-watch-loop.js` / `repo-snapshot.js` are the existing meter: a detached node process with a pid file and a log, a round every `DEFAULT_INTERVAL_MS` (60 s), writing atomically under `~/mc/repo-status/` and never inside a repository. Its round is seconds; a full suite is 337 s. The cadences cannot share a loop — but the shape (detached, pid file, atomic snapshot, optional, and the view says which way it answered) is the shape to copy, and `writeJsonAtomic` is already the one door that makes a file appear whole."
+      ]
+    }
+  ],
+  "documents": [
+    {
+      "label": "The verb this extends, and the round it must not disturb",
+      "path": "../../../technical/mc-merge.md"
+    },
+    {
+      "label": "mc rulings",
+      "path": "../rulings.md"
+    }
+  ],
+  "steps": [
+    {
+      "title": "`--full` runs what the repository calls its whole suite, or it stops",
+      "status": "ready",
+      "done_when": "`mc test memoro --full` reports about 2,018 test files instead of 6; a declaration that carries `select` and no `suite` makes `--full` stop with a reason naming both fields; `mc test memoro-cli --full` behaves exactly as it does today; and the suite command, like `select` and `prepare`, is layered shipped < the repository's `.mc/test.json` < `~/mc/repo-gates.json`.",
+      "instruction": [
+        "Read `repo-gate-table.js`'s header before touching it. Its whole argument is that what a repository needs is written down or the round stops, never guessed, and that a partial declaration which lets a round proceed is \"the guess wearing a uniform\". This step adds one more thing to write down and applies that same rule to it. Nothing about the layering, the `UNKNOWN` third answer, or the rule that a `_why` may never carry a provenance that does not exist changes here.",
+        "The bug, so you do not have to rediscover it: `repo-gate.js:333` sets `selects` false when `--full` is given, line 334 falls to `suiteCommand({ repoPath })`, and `suiteCommand` at line 858 returns the repository's `npm test`. For memoro that is `node scripts/testing/ci.mjs` — the affected-selection — and with no pull request the round measures `origin/main` against `origin/main`, so the diff is empty. Measured 2026-09-02: 6 files. The comment above `suiteCommand` is not wrong about *why* mc should not invent a suite command; it is wrong to assume `npm test` is always the whole one.",
+        "Add `suite` and `suite_why` to the declaration, beside `select` and `select_why`, read through `declarationFor` with the same three layers and the same unknown-key discipline. `suite` is the command to run for `--full`. Then the narrow rule that makes the guess impossible: **a declaration that carries `select` and does not carry `suite` may not answer a `--full` — it stops, and the reason names both fields.** A repository that declares a selector has already said, by declaring one, that `npm test` is not the whole thing. A repository with no `select` keeps today's behaviour exactly: `npm test`, verbatim, no declaration needed.",
+        "Fill both shipped entries, and make the `_why` carry a real measurement rather than a claim. memoro: `suite: 'npm run test:full'`, and the evidence is this project's own measurement of 2026-09-02 — 2,018 files, 17,928 tests, 337.42 s wall, six tests red on `main`, on an Apple M1 with 8 GB, machine not idle. memoro-cli: `suite: 'npm test'`, and the evidence is that its `test` script is `node --test --import ./tests/_isolate-home.mjs 'tests/**/*.test.js'`, a glob over the whole tree, which is why it needs a declaration that says so rather than an exemption from the rule.",
+        "Two things in the report have to follow. `report.command` already carries what was run, so a reader can see it; make sure the whole-suite phrasing at `repo-gate.js:624-630` still tells the truth — there are two different \"whole suite\" sentences there, one for `--full` asked for and one for a selector that gave up and fell back, and they must not converge now that `--full` means something different. And the round's own record (`full_suite` at line 427) should say which command produced it, not just that it was full.",
+        "Verify by running it, not by reading it: `mc test memoro --full` before the change reports 6 files, after it reports about 2,018 and takes minutes. Then remove memoro's `suite` from the shipped table in a throwaway edit and confirm the round stops rather than falling back to six files — that negative is the one that matters, because it is the shape the bug had."
+      ],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "The run nobody asks for, that never gets in a round's way",
+      "status": "ready",
+      "done_when": "A full run happens on an interval with no person involved, recorded in a log with its start, its duration, the commit of `main` it measured, and its result; a tick that finds `gate-lock.js` held records a skip naming the holding round and does not wait; and stopping the scheduler stops it, with no orphan process and no stale pid file.",
+      "instruction": [
+        "This is a second meter, not a second watcher. `repo-watch.js` rounds in seconds every 60 s; a full round is 337 s for one repository. They cannot share a loop, and squeezing a 337 s round into a 60 s cadence is how a machine ends up running two of them at once. Copy the *shape* rather than the loop: a detached node process, a pid file checked against the process table and against the runner's command line (pids are reused — `repo-watch.js:watcherState` already does exactly this check and it is the part that is easy to get wrong), a log capped like `LOG_LIMIT_BYTES`, `writeJsonAtomic` for everything it writes, and everything under mc's home.",
+        "Take `gate-lock.js` for the round, and read its header first — it is the one door the big suites go through, and its argument is that there is no honest expiry because a round is supposed to take minutes. So the scheduled run does not wait, does not retry in a tight loop, and does not force. It attempts the lock; if the lock is held by a live pid, the tick is over and the skip is written down with that pid and the time. A skipped tick is a fact about the day, not an error — a machine that merged all evening should show a night of skips and one run, and that should read as normal rather than as a failure.",
+        "The cadence is Martin's day, not a cron expression pulled from habit. Default it to once a day and make the interval configurable in the same place mc's other intervals live; do not invent a new configuration surface for it. Whether it fires at a wall-clock hour or simply every N hours since the last completed run is yours to choose — but choose the one that behaves sanely when the laptop was asleep at the appointed hour, and say in the code comment which you chose and why, because the other one is what a reader will assume.",
+        "It runs `mc test <repo> --full` for each repository mc knows, through the same code path a person's `--full` goes through. Not a copy of it, and not `npm run test:full` directly: the whole value is that the scheduled reading and the asked-for reading cannot disagree, which is the same argument `repo-watch-loop.js` makes about its own round using the ordinary aggregator.",
+        "Do not build a queue, a retry policy, a backoff, or a notion of a run that is \"overdue\". A missed night is a missed night; the next tick runs. The previous shape of this kind of thing in mc was four hundred lines of vocabulary for \"one at a time\" and Martin threw it out by name (`gate-lock.js`'s header quotes the ruling). Keep this small enough that its whole behaviour fits in the header comment."
+      ],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "Red, and since when",
+      "status": "ready",
+      "done_when": "After two runs that both see the same test red, mc names that test with the timestamp of the **first** run that saw it, not the most recent; a test that passes in the latest run is gone from the report entirely; and a run that could not complete is distinguishable from a run in which everything passed.",
+      "instruction": [
+        "The number that would have prevented #10529 is not \"31 tests are red\". It is \"these 31 tests have been red since Tuesday\". A single run's red list looks exactly like a flake; the same list twice, dated, does not. So the stored thing is a short history of runs — when, which commit of `main`, and the set of failing test names — and the reported thing is derived from it: for each test red in the latest run, the earliest consecutive run that saw it red.",
+        "Keep the history bounded and boring. A fixed number of recent runs, oldest dropped, written atomically, under mc's home beside the other snapshots. Enough to answer \"since when\" over a week; not a time-series database. Failing test *names* are what is stored — not output, not stack traces, not the log. A name is enough to say a thing is still red, and anything more turns a meter into an archive.",
+        "\"Consecutive\" is the load-bearing word and it is where this will be got wrong. A test red on Monday, green on Tuesday, red on Wednesday has been red since Wednesday, not since Monday. Assert that case directly rather than trusting the reading of it, because the wrong version — earliest occurrence anywhere in the history — looks identical on every history where nothing ever went green, which is every history you will have on the day you write it.",
+        "Three run outcomes have to stay distinguishable, and collapsing any two of them is what makes a meter lie: the suite ran and everything passed; the suite ran and named failures; and the run did not produce a suite result at all — the lock was held, the preparation failed, the declaration stopped it, the process died. The third is not zero failures. A day of stopped runs reported as a green streak is the same false green this project's first step exists to remove, arriving by a different road.",
+        "Where it shows: the page mc already prints, in the section that says what a repository's state is — not a new verb, and not a section that appears only when something is wrong. A net that is invisible when everything is fine is a net nobody trusts when it finally says something, and \"last full run: 4 h ago, all green\" is the line that makes the red line credible. Keep it to a line or two per repository; the detail belongs behind whatever `--json` this surface already has.",
+        "Two honest sentences memoro will need on day one: its `main` has six tests red as of 2026-09-02 — in `tests/architecture/data-bus.test.js`, `tests/architecture/s3-1-mutation-inventory.test.js` (two), `tests/architecture/signals-runtime-retirement.test.js`, `tests/ui/theme-contract.test.js` and `tests/mc/context.test.js`, and the report has to be readable rather than alarming with that as its normal state. And the first run has no history to compare against, so \"since when\" for it is \"first seen in this run\" — say that, rather than dating everything to the day the feature shipped."
+      ],
+      "pr": null,
+      "blocked_by": null
+    }
+  ]
+}
