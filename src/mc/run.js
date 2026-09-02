@@ -28,6 +28,15 @@
  * removed by a machine; it is written to `~/mc/intake/unplanned-workareas.md`
  * instead. The rules are in close-workarea.js.
  *
+ * A round asks GitHub what is open before it acts. An open pull request on a
+ * project ends that project's round with a line naming it — the plan on
+ * origin/main and the plan in the worktree both say `ready` while the step's
+ * work sits in an open pull request, and the runner used to believe them and
+ * start the step again. A workarea whose branch has already landed is moved to
+ * `<name>-<n>` from origin/main before a session starts, which is also what
+ * makes the `<name>`/`<name>-<suffix>` convention that matches a pull request
+ * to a project true. The rules are project-prs.js and `inFlight`.
+ *
  * `~/mc/queue.md` is Martin's "these first" and nothing else: names of
  * projects that still have a step to run, one per line. The round rewrites it
  * to that shape and a name leaves it the moment its step has run, so a queue
@@ -67,14 +76,15 @@ import { handOver } from './run-control.js';
 import { collectHelper, describeDigest, HELPER_REPOS, intakeDir, unreadableSections } from './helper-collect.js';
 import { describeTurn, runHelperTurn } from './helper-turn.js';
 import { workRoot } from './paths.js';
+import { PR_LIST_ARGS, openPrsFor } from './project-prs.js';
 import { loadProfile, profileArgs } from './portrait.js';
 import { readCanonRole } from './roles.js';
 import { keepAwake, onACPower } from './stay-awake.js';
 import { addWorktree } from './work-area.js';
 import {
   HELPER_KIND, HELPER_NAME, QUOTA_SLEEP_MS, TIMEOUT_EXIT, assembleQueue, chooseKind, headlessArgs,
-  helperDue, helperNote, queueFileNames, queueFileText, readSessionOutput, reconcilePrompt,
-  sessionSettings, stepPrompt, strictQueue, tsvHeader, tsvRow,
+  helperDue, helperNote, inFlight, nextBranch, queueFileNames, queueFileText, readSessionOutput,
+  reconcilePrompt, sessionSettings, stepPrompt, strictQueue, tsvHeader, tsvRow,
 } from './run-plan.js';
 
 export const REPO_NAMES = ['memoro', 'memoro-cli'];
@@ -275,6 +285,43 @@ export function createRunner({
     }
     say(`${name}: merge conflict in: ${conflicts.join(' ')}`);
     return { ok: false, conflicts };
+  }
+
+  /**
+   * The workarea, moved to a branch it can still push to.
+   *
+   * `action-window` stood on `action-window`, which had merged as #11177 and
+   * been deleted on the remote; the plan the worktree carried therefore read
+   * `ready`, and the 04:33 session of 2026-09-02 would have been refused by
+   * the push-guard (push-guard.js, D-0164) ninety minutes later — the guard
+   * asks the right question at the wrong end. A branch whose *content* is
+   * already in origin/main has nothing left to carry, so the workarea is
+   * checked out on `<name>-<n>` from origin/main before anything is started.
+   * "By content" because the runner squash-merges: "ahead by N commits" says
+   * nothing (branch-landed.js).
+   *
+   * A branch that has not landed is left exactly where it is — it carries
+   * work, and an open pull request on it has already ended this round above.
+   *
+   * Returns `{ ok, moved, why }`: `moved` is the new branch, or null when the
+   * workarea was already somewhere it could push from.
+   */
+  function freshBranch(worktree, name) {
+    deps.git(worktree, ['fetch', '-q', 'origin']);
+    const branch = gitOut(worktree, ['branch', '--show-current']);
+    // Detached, or git could not say: not a branch this can reason about.
+    if (!branch) return { ok: true, moved: null };
+    const landed = branchLanded(worktree, branch, { run: (args) => gitOut(worktree, args) });
+    if (landed !== 'landed') return { ok: true, moved: null };
+    const local = (gitOut(worktree, ['for-each-ref', '--format=%(refname:short)', 'refs/heads']) || '').split('\n');
+    const remote = (gitOut(worktree, ['ls-remote', '--heads', 'origin']) || '').split('\n')
+      .map((line) => line.split('refs/heads/')[1]);
+    const next = nextBranch(name, [...local, ...remote].map((ref) => (ref || '').trim()).filter(Boolean));
+    if (!deps.git(worktree, ['checkout', '-q', '-b', next, 'origin/main']).ok) {
+      return { ok: false, moved: null, why: `${branch} has landed and ${next} could not be made` };
+    }
+    say(`${name}: ${branch} has already landed — moved to ${next} from origin/main`);
+    return { ok: true, moved: next };
   }
 
   async function waitMergeable(worktree, pr) {
@@ -691,8 +738,18 @@ export function createRunner({
     return outcome;
   }
 
-  /** One project. Returns 'merged' | 'ran' | 'skipped' | 'stop'. */
-  async function runStep(name, plans) {
+  /**
+   * One project. Returns 'merged' | 'ran' | 'skipped' | 'stop'.
+   *
+   * `world` is what `queue()` returned: the plans on origin/main and the open
+   * pull requests of both repositories. Everything that can end the round for
+   * this project is asked before a session is spent, in the order it costs:
+   * the STOP file, the quota, a live tmux session, a dirty worktree, an open
+   * pull request, and then whether the branch underneath is one that can still
+   * be pushed.
+   */
+  async function runStep(name, world = {}) {
+    const { plans = [], prs = [], prsFailed = [] } = Array.isArray(world) ? { plans: world } : world;
     if (stopRequested()) { say(`STOP file present (${paths.stop}) — not starting ${name}`); return 'stop'; }
     // A quota answer in the other lane is this lane's answer too: wait it
     // out here, before a worktree is touched or a session is spent.
@@ -708,6 +765,18 @@ export function createRunner({
     }
     if (deps.tmuxHas(`mc-${name}`)) { say(`${name}: live tmux session, skip`); return 'skipped'; }
     if ((gitOut(worktree, ['status', '--porcelain']) || '').trim()) { say(`${name}: dirty worktree, skip`); return 'skipped'; }
+    if (prsFailed.includes(repo.name)) { say(`${name}: what is open on GitHub is unknown this round, skip`); return 'skipped'; }
+
+    // Work already in flight ends the round for this project, whatever the
+    // plan says — the plan on origin/main and the plan in the worktree both
+    // read `ready` while the step's work sits in an open pull request. The
+    // rule itself is `inFlight`, beside `chooseKind` in run-plan.js.
+    const flight = inFlight(openPrsFor({ prs, name, names: plans.map((p) => p.project), repo: repo.name }));
+    if (flight) { say(`${name}: ${flight.skip}`); return 'skipped'; }
+    // And a session must be somewhere it can push from. The push-guard asks
+    // the same question at the wrong end — after ninety minutes of work.
+    const moved = freshBranch(worktree, name);
+    if (!moved.ok) { say(`${name}: ${moved.why}, skip`); return 'skipped'; }
 
     const sync = syncMain(worktree, name);
     if (!sync.ok && !sync.conflicts.length) { say(`${name}: fetch/merge failed, skip`); return 'skipped'; }
@@ -794,19 +863,38 @@ export function createRunner({
   }
 
   /**
-   * The queue, re-read every round: queue.md, then every plan on origin/main.
-   * `only` narrows it to one repository — what a lane re-reads mid-round, so
-   * two lanes never fetch the same repository at the same moment.
+   * The queue, re-read every round: queue.md, then every plan on origin/main,
+   * then what GitHub says is open. `only` narrows it to one repository — what
+   * a lane re-reads mid-round, so two lanes never fetch the same repository at
+   * the same moment.
+   *
+   * The third question is the one the runner never asked before it acted: one
+   * `gh pr list` per repository, where the network is already being paid for
+   * by the fetch beside it, and the answer decides which projects may start
+   * anything at all (`runStep`). A repository GitHub could not be asked for is
+   * named in `prsFailed` and starts nothing this round: not knowing what is
+   * open is what bought a 120-minute session to rebuild work that was already
+   * open as #11241, and an idle round costs ten minutes of sleep.
    */
   function queue({ only = null } = {}) {
     const plans = [];
+    const prs = [];
+    const prsFailed = [];
     for (const repo of repos) {
       if (only && repo.name !== only) continue;
       if (!deps.exists(join(repo.path, '.git'))) continue;
       deps.git(repo.path, ['fetch', '-q', 'origin']);
       plans.push(...listPlans(repo, { git: gitOut, batch: showBatch(gitOut) }));
+      const asked = deps.gh(repo.path, PR_LIST_ARGS);
+      try {
+        if (!asked.ok) throw new Error(asked.stderr.trim().split('\n').at(-1) || 'gh pr list failed');
+        prs.push(...JSON.parse(asked.stdout || '[]').map((pr) => ({ repo: repo.name, ...pr })));
+      } catch (error) {
+        prsFailed.push(repo.name);
+        say(`${repo.name}: GitHub could not be asked what is open (${error?.message || error}) — no step starts in this repository this round`);
+      }
     }
-    return { names: assembleQueue(deps.read(paths.queue) || '', plans), plans };
+    return { names: assembleQueue(deps.read(paths.queue) || '', plans), plans, prs, prsFailed };
   }
 
   /**
@@ -832,8 +920,8 @@ export function createRunner({
    * behind every other project — 2026-08-29 a six-step plan would have taken
    * six rounds of twenty projects. STOP is honoured between those steps too.
    */
-  async function runLane({ repo = null, names = [] }, plans, { once = false } = {}) {
-    let known = plans;
+  async function runLane({ repo = null, names = [] }, world, { once = false } = {}) {
+    let known = Array.isArray(world) ? { plans: world } : world;
     let ran = 0;
     for (const name of names) {
       let r = await runStep(name, known);
@@ -846,8 +934,10 @@ export function createRunner({
         }
         if (stopRequested()) { say(`runner exit on STOP after ${name} (remove ${paths.stop} before the next start)`); return { ran, stop: true }; }
         if (r !== 'merged' || stayed >= 8) break;
-        known = queue({ only: repo }).plans;
-        const status = known.find((p) => p.project === name)?.status;
+        // Re-read: the plan the merge advanced, and what GitHub has open now
+        // — the step that just landed may have left a second pull request.
+        known = queue({ only: repo });
+        const status = known.plans.find((p) => p.project === name)?.status;
         if (!status || status === 'done') break;
         say(`${name}: step merged and the plan is ${status} — staying on ${name}`);
         r = await runStep(name, known);
@@ -872,7 +962,8 @@ export function createRunner({
     // exists to watch a single step, and a two-minute model turn over
     // production is not what somebody typing it asked for.
     if (!once && !stopRequested()) await runHelperDay();
-    const { names, plans } = queue();
+    const world = queue();
+    const { names, plans } = world;
     if (!once) tidyQueue(plans);
     // A plan that says `done` is archived in the round the runner reads it,
     // before any step of that round runs — one PR per repository, and the
@@ -886,7 +977,7 @@ export function createRunner({
     // Martin's order — there is nothing for a second lane to do.
     const lanes = once ? [{ repo: null, names: left }] : splitLanes(left, plans);
     if (lanes.length > 1) say(`lanes: ${lanes.map((lane) => `${lane.repo || 'unplaced'} (${lane.names.length})`).join(', ')}`);
-    const results = await Promise.all(lanes.map((lane) => runLane(lane, plans, { once })));
+    const results = await Promise.all(lanes.map((lane) => runLane(lane, world, { once })));
     const out = {
       ran: results.reduce((sum, r) => sum + r.ran, 0),
       stop: results.some((r) => r.stop),
@@ -909,7 +1000,7 @@ export function createRunner({
 
   return {
     paths, say, round, runStep, runLane, splitLanes, runHelperDay, archiveDone, queue, stopRequested,
-    updateRequested, syncMain, mergePr, planOf, repoOf, markRunner, clearRunner, closeWorkareas,
+    updateRequested, syncMain, freshBranch, mergePr, planOf, repoOf, markRunner, clearRunner, closeWorkareas,
     closeWorkarea, archivedProjects, workareas, tidyQueue,
   };
 }

@@ -10,7 +10,7 @@ import { createRunner, runLoop } from '../../src/mc/run.js';
  * a "session" that returns what the test says. Nothing starts, nothing is
  * written outside `files`.
  */
-function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], live = [], areas = {}, conflicts = {}, roles = true, now = '2026-08-29T10:00:00Z', runs = null, collect = okCollect, helperTurn = okTurn, projectLog = {}, archive = {}, landed = [], removeFails = [], heads = {} } = {}) {
+function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], live = [], areas = {}, conflicts = {}, roles = true, now = '2026-08-29T10:00:00Z', runs = null, collect = okCollect, helperTurn = okTurn, projectLog = {}, archive = {}, landed = [], removeFails = [], heads = {}, openPrs = {}, prsFail = [], refs = {} } = {}) {
   const root = '/w';
   const files = { [`${root}/queue.md`]: queue };
   if (runs != null) files[`${root}/runner/log/runs.tsv`] = runs;
@@ -32,7 +32,7 @@ function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], live = 
     }
   }
   const log = [];
-  const calls = { git: [], gh: [], sessions: [], added: [], removed: [], collects: [], turns: [], rm: [], moved: [], rmdirs: [] };
+  const calls = { git: [], gh: [], sessions: [], added: [], removed: [], collects: [], turns: [], rm: [], moved: [], rmdirs: [], checkouts: [] };
   /** `/w/runner/archive/<repo>` — the worktree the runner archives in. */
   const archiveRoot = `${root}/runner/archive`;
   // A snapshot of the work root taken inside every session call — the only
@@ -158,7 +158,14 @@ function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], live = 
         return { ok: false, stdout: '' };
       }
       if (args[0] === 'merge-tree') return { ok: true, stdout: landed.includes(args.at(-1)) ? 'basetree' : 'othertree' };
-      if (args[0] === 'branch') return { ok: true, stdout: cwd.split('/')[2] };
+      // The branches that already exist, local and on the remote — what
+      // `<name>-<n>` has to step over. `refs` names them per workarea.
+      if (args[0] === 'for-each-ref') return { ok: true, stdout: (refs[cwd.split('/')[2]] || []).join('\n') };
+      if (args[0] === 'ls-remote') return { ok: true, stdout: (refs[cwd.split('/')[2]] || []).map((b) => `deadbee\trefs/heads/${b}`).join('\n') };
+      if (args[0] === 'checkout' && args.includes('-b')) { calls.checkouts.push([cwd, args[args.indexOf('-b') + 1]]); heads[cwd.split('/')[2]] = args[args.indexOf('-b') + 1]; return { ok: true, stdout: '' }; }
+      // `git branch --show-current`: the branch the workarea stands on, which
+      // is the folder's name unless `heads` says otherwise.
+      if (args[0] === 'branch') return { ok: true, stdout: heads[cwd.split('/')[2]] || cwd.split('/')[2] };
       return { ok: true, stdout: '', stderr: '' };
     },
     gh: (cwd, args) => {
@@ -167,6 +174,12 @@ function fixture({ plans = {}, queue = '', session, gh = {}, dirty = [], live = 
       // in the repository itself ("is one still open from an earlier round?").
       const repoName = Object.keys(repos).find((r) => cwd === repos[r]);
       if (repoName) {
+        // The round's own question: every open PR of the repository, asked
+        // once beside the fetch in `queue()`.
+        if (args.includes('--limit')) {
+          if (prsFail.includes(repoName)) return { ok: false, stdout: '', stderr: 'gh: not logged in' };
+          return { ok: true, stdout: JSON.stringify(openPrs[repoName] || []) };
+        }
         const stale = archive[repoName]?.openFromEarlierRound;
         return { ok: true, stdout: stale ? String(stale) : '' };
       }
@@ -296,6 +309,103 @@ test('skips: live tmux session, dirty worktree, a blocked step', async () => {
   assert.match(log, /wait: step 1 is blocked on decision prog-1, skip/u);
 });
 
+
+/**
+ * The round asks GitHub before it acts. The plan on origin/main and the plan
+ * in the worktree both say `ready` while the step's work sits in an open pull
+ * request — on 2026-09-02T04:33 that started a 120-minute Opus session to
+ * rebuild `action-window` step 4 while step 4's work was open as #11241.
+ */
+test('an open pull request on a `<name>-<n>` branch ends that project\'s round, with a line naming it', async () => {
+  const f = fixture({
+    plans: { memoro: { alpha: ready } },
+    openPrs: { memoro: [{ number: 11246, headRefName: 'alpha-4', baseRefName: 'main', isDraft: false, title: 'Step 4' }] },
+    session: okSession(),
+  });
+  const runner = createRunner({ deps: f.deps });
+  const r = await runner.round({ once: true });
+  assert.equal(r.ran, 0);
+  assert.equal(f.calls.sessions.length, 0, 'no session is spent on work that is already open');
+  assert.match(f.files['/w/runner/log/runner.log'], /alpha: #11246 is open \(Step 4\) — not starting a step/u);
+  assert.doesNotMatch(f.files['/w/runner/log/runs.tsv'] || '', /\talpha\t/u, 'a skip is not a run');
+});
+
+test('a pull request on another project\'s branch is not this project\'s', async () => {
+  const f = fixture({
+    plans: { memoro: { mc: ready, 'mc-cut': ready } },
+    queue: 'mc-cut\nmc\n',
+    openPrs: { memoro: [{ number: 51, headRefName: 'mc-cut-2', baseRefName: 'main', title: 'Cut' }] },
+    session: okSession(),
+    gh: { mc: { number: 60, title: 'Mc' } },
+  });
+  const runner = createRunner({ deps: f.deps });
+  await runner.round({ once: true });
+  assert.deepEqual(f.calls.sessions.map((c) => c.cwd), ['/w/mc/memoro'], 'mc-cut stops; mc runs');
+  const log = f.files['/w/runner/log/runner.log'];
+  assert.match(log, /mc-cut: #51 is open \(Cut\) — not starting a step/u);
+  assert.doesNotMatch(log, /^.*\bmc: #51\b/mu);
+});
+
+/**
+ * The push-guard (push-guard.js, D-0164) asks the same question at the wrong
+ * end: after ninety minutes of work. `action-window` stood on a branch
+ * origin/main had already swallowed and whose remote was deleted.
+ */
+test('a workarea whose branch has already landed is moved to `<name>-<n>` before the session starts', async () => {
+  const f = fixture({
+    areas: { beta: { repo: 'memoro', programme: 'prog', plan: ready } },
+    plans: { memoro: { beta: ready } },
+    landed: ['beta'], refs: { beta: ['beta', 'beta-2'] },
+    session: okSession(), gh: { beta: { number: 88, title: 'Beta step' } },
+  });
+  const runner = createRunner({ deps: f.deps });
+  await runner.round({ once: true });
+  assert.deepEqual(f.calls.checkouts, [['/w/beta/memoro', 'beta-3']], 'beta and beta-2 are taken');
+  assert.equal(f.calls.sessions.length, 1, 'the session runs, from a branch it can push');
+  const order = f.calls.git.filter((c) => c[0] === '/w/beta/memoro').findIndex((c) => c.includes('checkout'));
+  assert.ok(order >= 0 && f.calls.sessions.length === 1);
+  assert.match(f.files['/w/runner/log/runner.log'], /beta: beta has already landed — moved to beta-3 from origin\/main/u);
+  assert.match(f.files['/w/runner/log/runs.tsv'], /\tbeta\tstep\t0\t0\t88\t/u);
+});
+
+test('a workarea whose branch carries work is left exactly where it is', async () => {
+  const f = fixture({
+    areas: { beta: { repo: 'memoro', programme: 'prog', plan: ready } },
+    plans: { memoro: { beta: ready } },
+    landed: [], session: okSession(), gh: { beta: { number: 88, title: 'Beta step' } },
+  });
+  const runner = createRunner({ deps: f.deps });
+  await runner.round({ once: true });
+  assert.deepEqual(f.calls.checkouts, []);
+  assert.equal(f.calls.sessions.length, 1);
+});
+
+/**
+ * Not knowing what is open is what bought the 04:33 session. An idle round
+ * costs ten minutes of sleep, so the round that cannot ask starts nothing.
+ */
+test('a repository GitHub could not be asked starts nothing, and says so', async () => {
+  const f = fixture({
+    plans: { memoro: { alpha: ready }, 'memoro-cli': { 'mc-run': ready } },
+    prsFail: ['memoro'], session: okSession(), gh: { 'mc-run': { number: 5, title: 'Run' } },
+  });
+  const runner = createRunner({ deps: f.deps });
+  await runner.round({ once: true });
+  assert.deepEqual(f.calls.sessions.map((c) => c.cwd), ['/w/mc-run/memoro-cli'], 'the other repository is unaffected');
+  const log = f.files['/w/runner/log/runner.log'];
+  assert.match(log, /memoro: GitHub could not be asked what is open \(gh: not logged in\)/u);
+  assert.match(log, /alpha: what is open on GitHub is unknown this round, skip/u);
+});
+
+test('the round asks GitHub once per repository, beside the fetch it already pays for', async () => {
+  const f = fixture({ plans: { memoro: { alpha: ready }, 'memoro-cli': { 'mc-run': ready } } });
+  const runner = createRunner({ deps: f.deps });
+  const asked = runner.queue();
+  const lists = f.calls.gh.filter((c) => c.includes('--limit'));
+  assert.deepEqual(lists.map((c) => c[0]), ['/home/memoro', '/home/memoro-cli']);
+  assert.deepEqual(asked.prs, []);
+  assert.deepEqual(asked.prsFailed, []);
+});
 
 test('a conflicting merge of origin/main becomes a reconcile step with the files named', async () => {
   const f = fixture({ areas: { c: { repo: 'memoro', programme: 'prog', plan: ready } }, plans: { memoro: { c: ready } }, conflicts: { c: ['docs/project/project_log.md'] }, session: okSession() });

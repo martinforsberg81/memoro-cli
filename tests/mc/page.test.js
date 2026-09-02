@@ -275,6 +275,27 @@ describe('PROJECTS', () => {
     assert.deepEqual(projects.statuses, { 'blocked': 1, ready: 2, done: 1 });
   });
 
+  /**
+   * The row used to match `headRefName === name`, so `action-window` had an
+   * empty PR column while three of its branches had one open (2026-09-02). A
+   * project's branches are `<name>` and `<name>-<suffix>`, and the longest
+   * name wins so `mc-run-2` stays out of `mc`'s row.
+   */
+  it('names the pull request a project is waiting on, whichever of its branches carries it', () => {
+    const projects = projectsFixture({
+      openPrs: [
+        { repo: 'memoro-cli', number: 11246, headRefName: 'mc-ui-4' },
+        { repo: 'memoro-cli', number: 11250, headRefName: 'mc-run-2' },
+        { repo: 'memoro-cli', number: 3, headRefName: 'spike/mc-ui' },
+        { repo: 'memoro', number: 2, headRefName: 'mc-ui' },
+      ],
+    });
+    const by = Object.fromEntries(flat(projects).map((p) => [p.name, p.pr]));
+    assert.equal(by['mc-ui'], 11246, 'its own repository, its own family of branches');
+    assert.equal(by['mc-run'], 11250);
+    assert.equal(by['docx-editor'], null, 'a branch no project explains belongs to nobody');
+  });
+
   // A project is what the work is; a folder is where a session runs. mc-run
   // has a plan and no folder, and used to be a count at the foot of the
   // section rather than a row anybody could open.
@@ -524,6 +545,7 @@ describe('collectPage', () => {
     const root = workRootFixture();
     const asked = [];
     let saved = null;
+    let fields = null;
     const data = await collectPage({
       env: { MC_WORK_ROOT: root },
       now: NOW,
@@ -531,7 +553,8 @@ describe('collectPage', () => {
       fresh: true,
       exec: async (cmd, args) => {
         asked.push(`${cmd} ${args[0] === '-C' ? args[2] : args[0]}`);
-        return { ok: true, stdout: cmd === 'gh' ? '[{"number":440,"headRefName":"mc-ui"}]' : '' };
+        if (cmd === 'gh') fields = args[args.indexOf('--json') + 1];
+        return { ok: true, stdout: cmd === 'gh' ? '[{"number":440,"headRefName":"mc-ui","baseRefName":"main","isDraft":false,"title":"The page"}]' : '' };
       },
       run: () => ({ status: 1, stdout: '' }),
       cache: {
@@ -541,7 +564,10 @@ describe('collectPage', () => {
       },
     });
     assert.deepEqual(asked.sort(), ['gh pr', 'git fetch']);
-    assert.deepEqual(saved, [{ repo: 'memoro-cli', number: 440, headRefName: 'mc-ui' }]);
+    // The base and the draft flag ride along with the number: the round asks
+    // the same question, and a stack is ordered by what each PR is based on.
+    assert.equal(fields, 'number,headRefName,baseRefName,isDraft,title');
+    assert.deepEqual(saved, [{ repo: 'memoro-cli', number: 440, headRefName: 'mc-ui', baseRefName: 'main', isDraft: false, title: 'The page' }]);
     assert.equal(data.caches.fresh, true);
     assert.equal(data.projects.repos.flatMap((g) => g.projects).find((p) => p.name === 'mc-ui').pr, 440);
   });

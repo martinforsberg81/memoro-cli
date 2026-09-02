@@ -18,6 +18,7 @@
  */
 import { parseRuns } from './brief-collect.js';
 import { deliverableStep } from './plan-schema.js';
+import { describePr } from './project-prs.js';
 
 export const RUNS_HEADER = ['ts', 'name', 'kind', 'exit', 'seconds', 'pr', 'turns', 'input', 'output', 'cache_read', 'cache_write', 'session', 'note'];
 
@@ -105,9 +106,44 @@ export function queueFileText(names) {
 /* ------------------------------------------------------------------- kind */
 
 /**
- * What a project gets this round. `conflicts` non-empty means the merge of
- * origin/main stopped and is left in progress; `plan` is null when no
- * PLAN.md exists in the worktree.
+ * An open pull request on this project ends its round, whatever the plan
+ * says. Returns the refusal, or null when nothing is open.
+ *
+ * This is the one rule that also covers the two cases nothing else did: a
+ * session that timed out with commits pushed and no pull request (`no-json`,
+ * rc 143), and a step that ended `plan-trespass`. Both leave a branch
+ * carrying unlanded work, and the old runner came back the next round, read
+ * the worktree's plan, found the next step ready and built on top of it —
+ * which is how #11250 came to exist. A draft counts as open: it is work in
+ * flight, and that is the whole question here.
+ */
+export function inFlight(openPrs = []) {
+  if (!openPrs.length) return null;
+  const [pr] = openPrs;
+  const rest = openPrs.length > 1 ? ` (+${openPrs.length - 1} more)` : '';
+  return {
+    kind: null,
+    reason: 'in-flight',
+    skip: `${describePr(pr)}${rest} — not starting a step`,
+    prs: openPrs,
+  };
+}
+
+/**
+ * The branch a workarea moves to when the one it stands on has already
+ * landed: `<name>-<n>`, the smallest `<n>` no branch is using. `<name>` is
+ * the first of them, so the count starts at two.
+ */
+export function nextBranch(name, taken = []) {
+  const held = taken instanceof Set ? taken : new Set(taken);
+  for (let n = 2; ; n += 1) if (!held.has(`${name}-${n}`)) return `${name}-${n}`;
+}
+
+/**
+ * What a project gets this round. `openPrs` non-empty means its work is
+ * already in flight and nothing is started; `conflicts` non-empty means the
+ * merge of origin/main stopped and is left in progress; `plan` is null when
+ * no PLAN.md exists in the worktree.
  *
  * Two things the runner used to do here and does not any more, both on
  * Martin's word of 2026-08-29:
@@ -127,7 +163,9 @@ export function queueFileText(names) {
  *   väntande beslut är ej ready.") A plan comes back by being set `ready`,
  *   which is the job of whoever applies the answer.
  */
-export function chooseKind({ plan, conflicts = [] }) {
+export function chooseKind({ plan, conflicts = [], openPrs = [] }) {
+  const flight = inFlight(openPrs);
+  if (flight) return flight;
   if (conflicts.length) return { kind: 'reconcile' };
   if (!plan) return { kind: null, skip: null };
   if (plan.legacy) return { kind: null, reason: 'unmigrated', skip: 'still a PLAN.md — migrate it to PLAN.json' };
