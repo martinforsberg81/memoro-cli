@@ -49,26 +49,28 @@ import {
 export const QUEUE_NAMED = 6;
 export const DECISIONS_NAMED = 3;
 
-/* --------------------------------------------------------------------- NOW */
+/* ------------------------------------------------------------------ RUNNER */
 
 /**
- * What is happening this second: the runner's steps, one per lane (nowBlock),
- * the tmux areas
- * somebody is sitting in, the foreground verbs that registered themselves, and
- * one line of the day behind it.
+ * The machine: the runner's steps, one per lane (`nowBlock`), a pending STOP,
+ * the lane files whose process is gone, and one line of the day behind it.
  *
- * The foreground register is `~/mc/runner/foreground/<pid>.json`, written by
- * the verbs that hold a terminal — `mc brief`, `mc plan`, `mc worker`,
- * `mc work <name>` — through `foreground.js`. What it says is what somebody
- * is sitting in front of; what it does not say is that nothing else is. An
- * entry whose pid is not alive is dropped here rather than believed: a
- * session killed with its terminal never gets to remove its own file.
+ * This was NOW, and NOW held two different kinds of thing at once — the
+ * runner's steps and the sessions a person had open, drawn as one list of
+ * dots. They answer different questions and are stopped by different things,
+ * so they are two sections now: this one is what `mc run` is doing, and
+ * `sessionsSection` is who is sitting where.
+ *
+ * `nowBlock`'s `runner` — the process, not the section — is carried as
+ * `process`, because `runner.runner.alive` is a sentence nobody should have to
+ * read. The rename is at this boundary only: `nowBlock` is shared with
+ * `mc status` and keeps the shape it had.
  */
-export function nowSection({
-  runner = null, currents = [], stop = false, rows = [], live = [], foreground = [],
+export function runnerSection({
+  runner = null, currents = [], stop = false, rows = [],
   now = new Date(), alive = pidAlive,
 } = {}) {
-  const base = nowBlock({ runner, currents, stop, rows, now, alive });
+  const { runner: process, ...base } = nowBlock({ runner, currents, stop, rows, now, alive });
   const tokens = rows.reduce((acc, r) => ({
     input: acc.input + (Number(r.input) || 0),
     output: acc.output + (Number(r.output) || 0),
@@ -77,8 +79,7 @@ export function nowSection({
   }), { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
   return {
     ...base,
-    live,
-    foreground: foreground.filter((item) => alive(item.pid)),
+    process,
     day: {
       ...summariseRuns(rows),
       tokens,
@@ -86,6 +87,74 @@ export function nowSection({
       model: RUNNER_MODEL,
       prices_dated: PRICES_DATED,
     },
+  };
+}
+
+/* ---------------------------------------------------------------- SESSIONS */
+
+/** The two singleton desks, drawn whether or not anybody is at them. */
+export const DESKS = Object.freeze(['helper', 'brief']);
+
+/**
+ * Who is sitting where — everything running that the runner did not start.
+ *
+ * The two desks are singletons and get a fixed row each, drawn open or not:
+ * there is one helper and one brief, and *"is the helper running?"* is a
+ * question an empty row answers as well as a full one. Everything else is a
+ * list, because how many there are is not knowable in advance and their names
+ * are the content.
+ *
+ * The register is `~/mc/runner/foreground/<pid>.json`, written by the verbs
+ * that hold a terminal through `foreground.js`. An entry whose pid is not
+ * alive is dropped rather than believed: a session killed with its terminal
+ * never gets to remove its own file.
+ *
+ * **Every session carries its age**, which the page used to throw away. The
+ * register has written `started` since it existed and nothing read it, so on
+ * 2026-09-02 a `mc plan` opened three days earlier was drawn exactly like one
+ * opened twenty minutes ago — seven of them, all alive, all looking current.
+ * The age is the whole difference between somebody working here and somebody
+ * having left this open.
+ */
+export function sessionsSection({
+  foreground = [], live = [], now = new Date(), alive = pidAlive,
+} = {}) {
+  const at = now.getTime();
+  const age = (iso) => {
+    const t = Date.parse(iso);
+    return Number.isNaN(t) ? null : Math.max(0, Math.round((at - t) / 1000));
+  };
+  const open = foreground
+    .filter((item) => alive(item.pid))
+    .map((item) => ({ ...item, age_seconds: age(item.started) }));
+
+  const desks = {};
+  for (const verb of DESKS) desks[verb] = open.find((item) => item.verb === verb) || null;
+
+  // A tmux window is a session too, and the only kind mc knows nothing else
+  // about — no verb, no tool, no model, just a name and how long it has been
+  // open. It goes in the same list, so the section is one answer rather than
+  // two lists a reader has to add up.
+  const windows = live.map((area) => ({
+    verb: null,
+    area: area.name,
+    tmux: `mc-${area.name}`,
+    tool: null,
+    model: null,
+    pid: null,
+    age_seconds: area.opened_ms == null ? null : Math.max(0, Math.round((at - area.opened_ms) / 1000)),
+  }));
+
+  // Oldest first: the one that has been open longest is the one most likely to
+  // have been forgotten, and that is the whole reason the age is on the row.
+  const others = [...open.filter((item) => !DESKS.includes(item.verb)), ...windows]
+    .sort((a, b) => (b.age_seconds ?? -1) - (a.age_seconds ?? -1)
+      || String(a.area).localeCompare(String(b.area)));
+
+  return {
+    desks,
+    others,
+    count: DESKS.filter((verb) => desks[verb]).length + others.length,
   };
 }
 
@@ -496,13 +565,17 @@ export async function collectPage({
   const liveNames = live.map((item) => item.name);
   const areas = readAreas(root);
   return {
-    now: nowSection({
+    runner: runnerSection({
       runner: readJson(join(root, 'runner', 'runner.json')),
       currents: readCurrents(join(root, 'runner')),
       stop: existsSync(join(root, 'runner', 'STOP')),
       rows,
-      live,
+      now,
+      alive,
+    }),
+    sessions: sessionsSection({
       foreground: readForeground(join(root, 'runner', 'foreground')),
+      live,
       now,
       alive,
     }),
