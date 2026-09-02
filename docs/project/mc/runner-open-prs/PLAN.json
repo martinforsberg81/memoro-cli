@@ -43,12 +43,12 @@
       "check": "A test over the round's reading of `merged_into` / `off_default`: a pull request based on another branch is not recorded `success,merged`. Then read `runs.tsv` after the first live round — no row claims a merge whose `merged_into` was not `main`."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "A step session cannot make a plan unreadable by writing down what it learned.",
       "check": "`steps[i].learned` is `[paragraph, …]`, the top-level `what_the_code_taught_us` is gone from the schema, from every plan on both origin/mains and from the documents that describe it, and `tests/mc/plan-schema.test.js` fixtures taken verbatim from the three plans refused on 2026-09-02 all validate."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "A plan that cannot be read on `origin/main` is raised where somebody looks.",
       "check": "`new-user` does not parse today and the runner has printed a skip line for it every round since. After this it has a row in `~/mc/intake/` with its first problem — read the file."
     }
