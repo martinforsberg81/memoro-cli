@@ -61,8 +61,8 @@
   "steps": [
     {
       "title": "The handoff concept",
-      "status": "blocked",
-      "done_when": "Not stated in the plan as written — when this step is finished is for the plan review to settle.",
+      "status": "done",
+      "done_when": "The workarea handoff concept is gone from the code, the roles and the documentation: no handoff entry in FILING_DIRECTORIES, no ../HANDOFF.md in any prompt, and nothing describing either as current.",
       "instruction": [
         "**The handoff concept.** Three sites, zero writers — `plan.js:107`, `canon/roles/plan.md:19`, `work-area.js:55`. Then the 5 `HANDOFF.md` and 3 `handoff/` under `~/mc`. Order matters: the files before the `FILING_DIRECTORIES` entry, or the directories surface on the page as repositories that are not repositories in between."
       ],
@@ -77,15 +77,12 @@
         "**Why the first measurement was wrong.** Seeding the graph with the `status` verb pulls `src/cli/status.js`, and from there the entire v1 world: it reported 244 files and 72 703 lines \"live\". `mc status <name>` is live but reaches the page through a v1 shim. Anything measuring this must seed from `mc/commands/home.js` and the `mc/commands/*` verbs, never from the router's `modules` map — the map is the thing being cut."
       ],
       "pr": null,
-      "blocked_by": {
-        "kind": "decision",
-        "name": "plan-review"
-      }
+      "blocked_by": null
     },
     {
       "title": "The inbox channel",
-      "status": "ready",
-      "done_when": "Not stated in the plan as written — when this step is finished is for the plan review to settle.",
+      "status": "done",
+      "done_when": "mc work send, work-send.js and lease-refusal.js are gone, no caller reaches them, FILING_DIRECTORIES is gone with the inbox it filtered, and the command matrix documents no verb that does not exist.",
       "instruction": [
         "**The inbox channel.** `tellHolder` (`src/mc/lease-refusal.js`) stops delivering and only refuses; `src/mc/work-send.js` (736 lines) and the `mc work send` / `mc sessions send` / `mc sessions read` verbs go. Callers to fix: `repo-gate.js:54`, `commands/suite.js:31`, `commands/repo.js:22`. Then the 29 `inbox/` directories in `~/mc`."
       ],

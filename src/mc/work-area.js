@@ -52,24 +52,20 @@ export function listWorkAreas(env = process.env, options = {}) {
 }
 
 /**
- * Directories that belong to the work rather than being work.
+ * A workarea is a directory that holds checkouts, and nothing else.
  *
- * `inbox/` is where the channel drops messages (`mc work send`): filing, not a
- * checkout, and listed as a worktree it turns up on the board as a repository
- * that is not one.
+ * There was a list here — `FILING_DIRECTORIES` — filtering `inbox/` and
+ * `handoff/` out of an area's worktrees so they would not turn up on the board
+ * as repositories that are not repositories. Both concepts are gone (Martin,
+ * 2026-09-02: a workarea is reduced to a folder for repositories, with no
+ * special directories at all), and the filter goes with the second of them,
+ * not before it — a filter removed while the thing it filters is still being
+ * written is exactly the failure it existed to prevent.
  *
- * `handoff/` was the other, and it is gone. A workarea is being reduced to a
- * folder that holds repositories and nothing else (Martin, 2026-09-02), and
- * the handoff was the half of that with no writer — one *read* instruction in
- * `mc plan`'s first prompt, which `mc plan` no longer carries. Nothing under
- * `~/mc` that holds a checkout has one.
- *
- * The list goes with the inbox, and not before it: a filter removed while the
- * thing it filters is still being written is a directory surfacing on the page
- * as a repository that is not a repository, which is the failure it exists to
- * prevent.
+ * What remains is the ordinary rule, which was always enough: a directory that
+ * is not a checkout is not a worktree, and `inspectWorktree` says so for
+ * itself.
  */
-export const FILING_DIRECTORIES = Object.freeze(['inbox']);
 
 /** mc's own marks in an area: state, never litter, and never what keeps an area alive. */
 const OWN_MARKS = new Set(['.mc-role', STOP_MARK]);
@@ -94,7 +90,6 @@ export function inspectWorkArea(name, env = process.env, { conversations = true,
     entries = roleHome ? [] : readdirSync(path, { withFileTypes: true })
       .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'))
       .map((entry) => entry.name)
-      .filter((entry) => !FILING_DIRECTORIES.includes(entry))
       .sort();
   } catch { /* the work area may not exist yet */ }
   for (const entry of entries) {

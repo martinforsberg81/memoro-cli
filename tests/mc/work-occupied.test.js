@@ -19,7 +19,6 @@ const root = mkdtempSync(join(tmpdir(), 'mc-occupied-'));
 process.env.MC_WORK_ROOT = join(root, 'work');
 process.env.MC_HOME = join(root, 'home');
 process.env.PATH = '/usr/bin:/bin';
-mkdirSync(join(root, 'work', 'alpha', 'inbox'), { recursive: true });
 mkdirSync(join(root, 'home'), { recursive: true, mode: 0o700 });
 
 const { openArea, parseArgs } = await import('../../src/mc/commands/work.js');

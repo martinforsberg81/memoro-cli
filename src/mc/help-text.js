@@ -63,14 +63,6 @@ MAINTENANCE
                                     the line is the task. An id that matches
                                     nothing is an error before anything starts,
                                     never a new conversation in its place
-  mc work send <name> "<text>"     A message into that work's inbox/. Nothing
-                                    running is not a failure: it reads the
-                                    inbox when it starts
-  mc work send <name> … --wake     …and knock on the conversation running
-                                    there, so it reads the inbox now. It
-                                    refuses on a pane somebody is attached to
-                                    or one whose prompt is not empty, and says
-                                    so — the message is delivered either way
   mc work add <name> <repo> [branch]
                                     Add a repository's worktree to that work
   mc work stop <name>              Stop what is running there; keep the work

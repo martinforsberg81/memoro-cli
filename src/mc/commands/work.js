@@ -12,7 +12,6 @@
  *                                 running one, which it replaces in place
  *   mc work <name> <id>           one particular conversation; refused while
  *                                 another is running, never silently swapped
- *   mc work send <name> "<message>"  a message into its inbox; --wake knocks
  *   mc work add <name> <repo> [branch] [--from <ref>]
  *   mc work stop <name>              stop what is running; keep the work
  *   mc work remove <name> <repo>
@@ -39,7 +38,6 @@ import {
 } from '../work-area.js';
 import { describeAge, describeSize } from '../conversations.js';
 import { currentHolder } from '../work-identity.js';
-import { sendToArea } from '../work-send.js';
 import { toolProcesses } from '../work-status.js';
 import { stopWork } from '../work-stop.js';
 import { interactive, ask, select } from '../prompt.js';
@@ -53,7 +51,7 @@ import {
   respawnInBackground, startInBackground,
 } from '../work-open.js';
 
-const VERBS = ['add', 'remove', 'release', 'discard', 'stop', 'list', 'send'];
+const VERBS = ['add', 'remove', 'release', 'discard', 'stop', 'list'];
 const NAME = /^[A-Za-z0-9._-]{1,64}$/u;
 
 export async function run(argv, deps = {}) {
@@ -64,7 +62,6 @@ export async function run(argv, deps = {}) {
     stderr.write(`mc: ${opts.error}\n`);
     stderr.write('usage — mc work\n');
     stderr.write('        mc work <name> [new | <conversation id>] [--repo <repo>] [--codex|--claude] [--model <model>]\n');
-    stderr.write('        mc work send <name> "<message>" [--wake] [--json]\n');
     stderr.write('        mc work add <name> <repo> [branch] [--from <ref>]\n');
     stderr.write('        mc work remove <name> <repo>\n');
     stderr.write('        mc work stop <name>\n');
@@ -96,54 +93,6 @@ export async function run(argv, deps = {}) {
  * had run and done nothing.
  */
 export async function runVerb(opts, { stdout, stderr }) {
-  // The file first, the waking second. Once the message is in the recipient's
-  // inbox the send has succeeded — a conversation that is not running, or one
-  // that will not take the keystroke, costs the recipient latency and never
-  // costs the sender the message.
-  if (opts.verb === 'send') {
-    const sender = currentHolder();
-    const now = new Date();
-    const result = sendToArea({
-      name: opts.name, message: opts.message, wake: opts.wake, sender, now,
-    });
-    if (!result.ok) {
-      stderr.write(`mc: nothing called "${opts.name}" under ${workRoot()}\n`);
-      return 1;
-    }
-    if (opts.json) {
-      stdout.write(`${JSON.stringify({ ok: true, ...result }, null, 2)}\n`);
-      return 0;
-    }
-    stdout.write(`mc: ${result.file}\n`);
-    // Every outcome says something. A knock that did not happen is not a
-    // silence: the sender has to know the file is there and that nobody was
-    // tapped on the shoulder, or they will sit waiting for an answer.
-    if (result.woke) {
-      stdout.write(`mc: woke ${opts.name} — it has been told to read its inbox\n`);
-    } else if (result.reason === 'not-asked') {
-      stdout.write(`mc: nobody was woken — ${opts.name} reads it at its next turn (--wake knocks)\n`);
-    } else if (result.reason === 'no-live-conversation') {
-      stdout.write(`mc: nothing is running in ${opts.name} — it reads its inbox when it starts\n`);
-    } else if (result.reason === 'draft-in-prompt') {
-      // Said, not queued: the retry lived in the session guard, and the
-      // guard went with the PM (decision mc-1). Nothing types over a draft,
-      // so the sender is told plainly that the knock did not happen.
-      stdout.write(`mc: a draft is in ${opts.name}'s prompt, so nothing was typed — it reads its inbox at its next turn, or knock again once the prompt is clear\n`);
-    } else if (result.reason === 'not-addressable') {
-      // Not "nothing is running": something is, and mc cannot reach it.
-      const [first] = result.processes;
-      stdout.write(`mc: ${first.name} (pid ${first.pid}) is running in ${opts.name} outside tmux — mc has no pane to knock on; it reads its inbox at its next turn\n`);
-    } else if (result.guard) {
-      stdout.write(`mc: delivered, but did not knock: ${result.reason}\n`);
-    } else {
-      stdout.write(`mc: delivered to the inbox, but could not wake it (${result.reason})\n`);
-    }
-    if (result.left) {
-      stdout.write(`mc: the notice is still in ${opts.name}'s prompt — mc will not clear a line it cannot prove is its own\n`);
-    }
-    return 0;
-  }
-
   if (opts.verb === 'add') {
     // The reserved names never become areas, so there is nothing to add to —
     // and letting `add` conjure one up would be the back door the open-path
@@ -792,14 +741,6 @@ export function parseArgs(argv) {
   if (!opts.name) return { ...opts, error: 'which piece of work?' };
   if (!NAME.test(opts.name)) return { ...opts, error: `"${opts.name}" cannot be a directory name` };
   if (head === 'stop') return opts;
-  if (head === 'send') {
-    // Everything after the name is the message. Requiring quotes around it
-    // would be mc's grammar rather than the user's, and a report typed
-    // straight at a shell is exactly what this is for.
-    opts.message = rest.slice(1).join(' ');
-    if (!opts.message) return { ...opts, error: `what should it say? mc work send ${opts.name} "<message>"` };
-    return opts;
-  }
   if (head === 'discard') {
     opts.repo = opts.repo || rest[1] || null;
     return opts;
