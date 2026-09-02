@@ -106,7 +106,7 @@ export function log(event, fields = {}) {
  * where one would do, deliberately: the filter is the rule, and the list is
  * the admission that the rule is not tight enough on its own.
  */
-const FREE_TEXT_TAILS = new Set(['send', 'dispatch', 'claim', 'helper', 'pm', 'pm-helper']);
+const FREE_TEXT_TAILS = new Set(['claim', 'helper']);
 const IDENTIFIERISH = /^[A-Za-z0-9@#._/-]{1,64}$/u;
 
 export function invocationShape(argv = []) {

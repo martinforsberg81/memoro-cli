@@ -1,7 +1,7 @@
 /**
  * The flag grammar the work-world commands share.
  *
- * `mc work`, `mc worker`, `mc pm` and `mc pm-helper` all read the same kinds
+ * `mc work` and `mc worker` read the same kinds
  * of flags — booleans, value flags, the strict `--model` dance, the
  * `--codex`/`--claude` sugar — and had started growing the same loop each.
  * One scanner, three grammars: each command hands over which flags it knows

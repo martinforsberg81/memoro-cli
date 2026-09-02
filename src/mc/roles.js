@@ -36,16 +36,16 @@ import { canonRoot } from './canon.js';
 import { mcHome } from './paths.js';
 
 /**
- * Reserved as identities, not as words: `mc new pm` succeeding would create
- * an ordinary session wearing the one name whose meaning is "the singleton
- * role's workspace", and everything that later trusts the name — attach,
- * status, send — would be talking to an impostor. `helper` is reserved
- * alongside because `mc helper` owns `~/mc/helper/` outright, and a workarea
- * of that name would be a second thing living in the same directory.
+ * Reserved as an identity, not as a word: `mc helper` owns `~/mc/helper/`
+ * outright, and a workarea of that name would be a second thing living in the
+ * same directory.
+ *
+ * `pm` and `pm-helper` were reserved beside it, for the same reason and for a
+ * pair of roles that no longer exist. They are ordinary names again.
  */
-export const RESERVED_ROLE_NAMES = Object.freeze(['pm', 'pm-helper', 'helper']);
+export const RESERVED_ROLE_NAMES = Object.freeze(['helper']);
 
-const ROLE_COMMANDS = { pm: 'mc pm', 'pm-helper': 'mc pm-helper', helper: 'mc helper' };
+const ROLE_COMMANDS = { helper: 'mc helper' };
 
 export function reservedRoleName(name) {
   // Case-insensitively: the filesystems this runs on mostly are, and `PM`

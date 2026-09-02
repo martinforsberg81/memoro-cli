@@ -253,15 +253,15 @@ function rounds(opts, { stdout }) {
 }
 
 /**
- * The one verb the pm-helper's overlay does not carry, enforced by the tool
+ * The one verb the helper's overlay does not carry, enforced by the tool
  * rather than remembered by the role: merge without --check lands code, and
  * the helper produces evidence — never decisions.
  */
 export function helperMergeRefusal(holder, { check = false } = {}) {
   if (check) return null;
   if (holder?.kind !== 'work-area') return null;
-  if (!['pm-helper', 'helper'].includes(String(holder.name || '').toLowerCase())) return null;
-  return 'REFUSED — the pm-helper\'s tool does not carry mc merge without --check: the helper produces evidence, the PM makes decisions (design note §5)';
+  if (String(holder.name || '').toLowerCase() !== 'helper') return null;
+  return 'REFUSED — the helper\'s tool does not carry mc merge without --check: the helper produces evidence, it does not land code';
 }
 
 export async function gate(opts, { stdout, stderr }) {

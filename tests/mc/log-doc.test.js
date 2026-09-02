@@ -45,9 +45,9 @@ describe('docs/technical/mc-log.md says what the code does', () => {
   });
 
   it('every free-text verb the doc names actually drops its positionals', () => {
-    const named = /`send`, `dispatch`, `claim`,\n`helper`, `pm`/u.exec(DOC);
+    const named = /`claim` and `helper`/u.exec(DOC);
     assert.ok(named, 'the doc no longer lists the free-text verbs');
-    for (const verb of ['send', 'dispatch', 'claim', 'helper', 'pm']) {
+    for (const verb of ['claim', 'helper']) {
       // As a subcommand (`mc work send x "…"`) and as the verb itself.
       assert.deepEqual(invocationShape(['work', verb, 'area', 'a message']).args, []);
       assert.deepEqual(invocationShape([verb, 'anything', 'at all']).args, []);
@@ -56,7 +56,9 @@ describe('docs/technical/mc-log.md says what the code does', () => {
 
   it('makes the promise about messages that the code keeps', () => {
     assert.match(DOC, /must never put a person's words in a file that\nlives forever/u);
-    const shape = invocationShape(['work', 'send', 'pm', 'SLUTRAPPORT — klar']);
+    // Any positional, not only the ones on the list: the filter is the rule
+    // and the list is the admission that the filter alone is not tight enough.
+    const shape = invocationShape(['work', 'alpha', 'SLUTRAPPORT — klar']);
     assert.equal(JSON.stringify(shape).includes('SLUTRAPPORT'), false);
   });
 

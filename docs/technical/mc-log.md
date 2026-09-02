@@ -95,8 +95,8 @@ An invocation is recorded as **shape, never content**:
 - flag **names**. `--model opus` is recorded as `--model`; the value is dropped
   without being inspected.
 
-Verbs whose tail is free text by construction — `send`, `dispatch`, `claim`,
-`helper`, `pm` — drop their positionals outright. That is two mechanisms where
+Verbs whose tail is free text by construction — `claim` and `helper` — drop
+their positionals outright. That is two mechanisms where
 one would do, deliberately: the filter is the rule, and the list is the
 admission that the filter is not tight enough on its own. A one-word message
 would pass the filter.
