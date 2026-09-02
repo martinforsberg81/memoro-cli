@@ -20,7 +20,15 @@ import { parseRuns } from './brief-collect.js';
 import { deliverableStep } from './plan-schema.js';
 import { describePr } from './project-prs.js';
 
-export const RUNS_HEADER = ['ts', 'name', 'kind', 'exit', 'seconds', 'pr', 'turns', 'input', 'output', 'cache_read', 'cache_write', 'session', 'note'];
+/**
+ * The runs.tsv columns. `land_seconds` is last and not beside `seconds` on
+ * purpose: the header is written once, when the file is created, and the file
+ * on this machine still carries the thirteen it was made with. A column
+ * appended is a cell a header-keyed reader ignores; a column inserted would
+ * shift `note` one to the left for every reader of the old header, and
+ * `close-workarea.js` decides whether a workarea may go by reading it.
+ */
+export const RUNS_HEADER = ['ts', 'name', 'kind', 'exit', 'seconds', 'pr', 'turns', 'input', 'output', 'cache_read', 'cache_write', 'session', 'note', 'land_seconds'];
 
 export const DEFAULT_MODEL = 'opus'; // claude's alias, and only claude's — see `sessionSettings`
 export const DEFAULT_TOOL = 'claude';
@@ -176,6 +184,95 @@ export function chooseKind({ plan, conflicts = [], openPrs = [] }) {
   const { step, index, reason, why, problems } = deliverableStep(plan.plan);
   if (!step) return { kind: null, reason, skip: why, problems };
   return { kind: 'step', step, index };
+}
+
+/* --------------------------------------------------------------- landing */
+
+/**
+ * The order a project's open pull requests must land in, bottom first.
+ *
+ * The runner lands what a session left behind, and a session that could not
+ * branch its later steps from `main` leaves a stack. `mc merge` refuses a
+ * batch aimed at several bases, so a stack needs an order rather than a call:
+ * land the bottom, retarget the one above it at `main`, rebase it onto the
+ * squash that just landed, land it, and so on (memoro's `AGENTS.md` §
+ * *Landing a stack*, measured on a three-step memoro-cli stack 2026-09-01).
+ *
+ * The shape a stack has: exactly one pull request aimed at the default
+ * branch, and every other one aimed at the head of exactly one of the
+ * others. Anything else — two aimed at `main`, two aimed at the same branch,
+ * a cycle, a base that is nobody's head — is not a stack this understands,
+ * and then nothing lands. #11250 was the cost of not asking: a pull request
+ * based on the branch of #11249, squash-merged into it, logged
+ * `success,merged`, and `main` received nothing.
+ *
+ * Pure, over the list `queue()` already fetches: `{ number, headRefName,
+ * baseRefName }` and nothing else, so the whole decision is tested with no
+ * network.
+ *
+ * Returns `{ ok: true, order }` bottom first, or `{ ok: false, reason }`.
+ */
+export function stackOrder(prs = [], { defaultBranch = 'main' } = {}) {
+  const list = (prs || []).filter(Boolean);
+  if (!list.length) return { ok: true, order: [] };
+  const heads = new Map();
+  for (const pr of list) {
+    const seen = heads.get(pr.headRefName);
+    if (seen) return { ok: false, reason: `#${seen.number} and #${pr.number} are both on ${pr.headRefName}` };
+    heads.set(pr.headRefName, pr);
+  }
+  const bottom = list.filter((pr) => pr.baseRefName === defaultBranch);
+  if (!bottom.length) {
+    const aimed = list.map((pr) => `#${pr.number} is aimed at ${pr.baseRefName}`).join(', ');
+    return { ok: false, reason: `${aimed} — none of them is aimed at ${defaultBranch}` };
+  }
+  if (bottom.length > 1) {
+    return { ok: false, reason: `${names(bottom)} are both aimed at ${defaultBranch} — two stacks, not one` };
+  }
+  const above = new Map();
+  for (const pr of list) {
+    if (pr === bottom[0]) continue;
+    if (!heads.has(pr.baseRefName)) {
+      return { ok: false, reason: `#${pr.number} is aimed at ${pr.baseRefName}, which is neither ${defaultBranch} nor another open pull request's branch` };
+    }
+    const rival = above.get(pr.baseRefName);
+    if (rival) return { ok: false, reason: `#${rival.number} and #${pr.number} are both aimed at ${pr.baseRefName} — a fork, not a stack` };
+    above.set(pr.baseRefName, pr);
+  }
+  const order = [];
+  for (let at = bottom[0]; at; at = above.get(at.headRefName)) order.push(at);
+  if (order.length !== list.length) {
+    const loose = list.filter((pr) => !order.includes(pr));
+    return { ok: false, reason: `${names(loose)} do not sit above #${bottom[0].number} — the bases form a cycle` };
+  }
+  return { ok: true, order };
+}
+
+const names = (prs) => prs.map((pr) => `#${pr.number}`).join(' and ');
+
+/**
+ * What a landing round leaves in the runs.tsv note, after `success,`.
+ *
+ * The two fields that are read are `merged_into` and `off_default`, and they
+ * exist because a round on #363 said "merged as 7dcbf96" and was right — into
+ * the stacked base it was aimed at — while everyone read "on main". A merge
+ * that did not land on the default branch is not a merge this reports as one:
+ * `off-main` is its own outcome, not `merged` and not `open`.
+ *
+ * A red gate is not a failure to work around. It is `open,gate-red`: the pull
+ * request stays where it is, and `inFlight` then keeps the project from
+ * starting anything else until somebody has dealt with it.
+ */
+export function landingNote(report, { defaultBranch = 'main' } = {}) {
+  if (!report) return 'open';
+  const into = report.merged_into || null;
+  const branch = report.default_branch || defaultBranch;
+  if (report.merged) {
+    if (report.off_default || (into && into !== branch)) return `off-${branch}`;
+    return 'merged';
+  }
+  const stopped = report.stopped_at || 'unknown';
+  return `open,gate-${stopped}`;
 }
 
 /* ----------------------------------------------------------- the helper */
@@ -351,9 +448,13 @@ export function quotaSeen(text) {
 
 /* --------------------------------------------------------------------- log */
 
-export function tsvRow({ ts, name, kind, exit, seconds, pr, turns, input, output, cacheRead, cacheWrite, session, note }) {
+export function tsvRow({ ts, name, kind, exit, seconds, pr, turns, input, output, cacheRead, cacheWrite, session, note, landSeconds }) {
   const cell = (v) => String(v ?? '-').replace(/[\t\n]/gu, ' ');
-  return [ts, name, kind, exit, seconds, pr, turns, input, output, cacheRead, cacheWrite, session, note].map(cell).join('\t');
+  // `seconds` is the session; `land_seconds` is the gated round that followed
+  // it. They are separate because the gate costs 20–35 minutes on memoro where
+  // the old `gh pr merge` cost seconds, and a reader of runs.tsv asking where
+  // a night went can only see that if the two are not added up here.
+  return [ts, name, kind, exit, seconds, pr, turns, input, output, cacheRead, cacheWrite, session, note, landSeconds].map(cell).join('\t');
 }
 
 export function tsvHeader() {

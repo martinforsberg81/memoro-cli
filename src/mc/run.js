@@ -76,6 +76,8 @@ import { handOver } from './run-control.js';
 import { collectHelper, describeDigest, HELPER_REPOS, intakeDir, unreadableSections } from './helper-collect.js';
 import { describeTurn, runHelperTurn } from './helper-turn.js';
 import { workRoot } from './paths.js';
+import { runDocsMerge } from './docs-merge.js';
+import { runMergeRound } from './repo-merge.js';
 import { PR_LIST_ARGS, openPrsFor } from './project-prs.js';
 import { loadProfile, profileArgs } from './portrait.js';
 import { readCanonRole } from './roles.js';
@@ -83,8 +85,9 @@ import { keepAwake, onACPower } from './stay-awake.js';
 import { addWorktree } from './work-area.js';
 import {
   HELPER_KIND, HELPER_NAME, QUOTA_SLEEP_MS, TIMEOUT_EXIT, assembleQueue, chooseKind, headlessArgs,
-  helperDue, helperNote, inFlight, nextBranch, queueFileNames, queueFileText, readSessionOutput,
-  reconcilePrompt, sessionSettings, stepPrompt, strictQueue, tsvHeader, tsvRow,
+  helperDue, helperNote, inFlight, landingNote, nextBranch, queueFileNames, queueFileText,
+  readSessionOutput, reconcilePrompt, sessionSettings, stackOrder, stepPrompt, strictQueue,
+  tsvHeader, tsvRow,
 } from './run-plan.js';
 
 export const REPO_NAMES = ['memoro', 'memoro-cli'];
@@ -131,6 +134,13 @@ export function realDeps(env = process.env) {
     // no production behind it and no model in it.
     collect: (options) => collectHelper({ env, ...options }),
     helperTurn: (options) => runHelperTurn({ env, ...options }),
+    // The one door work lands through. `mc merge`'s round and `mc merge
+    // --docs`', called in process because the runner is mc — not shelled out
+    // to, and not replaced by a `gh pr merge` that skips the gate. A
+    // dependency so a round can be driven in a test without a real suite, a
+    // real lease and a real remote behind it.
+    mergeRound: (options) => runMergeRound({ env, ...options }),
+    docsMerge: (options) => runDocsMerge(options),
     // The session: the adapter's binary with the headless argument list,
     // stdin closed (claude -p reads a piped stdin and would eat it), a
     // wall-clock cap after which it is killed and logged as a timeout.
@@ -324,36 +334,148 @@ export function createRunner({
     return { ok: true, moved: next };
   }
 
-  async function waitMergeable(worktree, pr) {
-    let verdict = 'UNKNOWN';
-    for (let i = 0; i < 12 && verdict === 'UNKNOWN'; i += 1) {
-      const r = deps.gh(worktree, ['pr', 'view', String(pr), '--json', 'mergeable', '-q', '.mergeable']);
-      verdict = (r.ok && r.stdout.trim()) || 'UNKNOWN';
-      if (verdict === 'UNKNOWN') await deps.sleep(5000);
-    }
-    return verdict;
+  /* --------------------------------------------------------------- landing */
+
+  /**
+   * The one door. `mc merge`'s own round, in this process — `repo-merge.js`,
+   * not a shell out to `mc`, because the runner *is* mc.
+   *
+   * There is no `gh pr merge` left in here. The old `mergePr` squash-merged
+   * whatever the branch's pull request was and waited only for `mergeable`, so
+   * a step landed without the gate at all — and never read the base it landed
+   * on: on 2026-09-02 at 13:00 that squashed #11250 into
+   * `msr-track-3-capture-command`, the branch of #11249 the runner had left
+   * open eighty minutes earlier, logged `success,merged`, and `main` received
+   * nothing. Martin, 2026-09-02: only `mc merge` may be used.
+   *
+   * What the round gives back and this reads: `merged_into` and `off_default`,
+   * through `landingNote`. The runner's own "it returned zero" is not evidence
+   * that anything landed on main.
+   *
+   * The gate costs a round — 20–35 minutes on memoro — where the old merge
+   * cost seconds. That is the price of the contract, and `land_seconds` is
+   * where a reader of runs.tsv sees it.
+   */
+  async function landPr(repo, name, pr) {
+    const report = await deps.mergeRound({
+      repoPath: repo.path,
+      pr: Number(pr),
+      // Who holds the repository for the length of the round. `currentHolder()`
+      // would answer `user@host` from wherever the runner process happens to
+      // stand; the workarea is the answer `mc repo who` is asked for.
+      holder: { name, kind: 'work-area' },
+      onProgress: (message) => say(`${name}: merge #${pr} — ${message}`),
+    });
+    const note = landingNote(report);
+    if (note === 'merged') say(`${name}: merged #${pr} into ${report.merged_into} through the gate`);
+    else if (note.startsWith('off-')) say(`${name}: #${pr} was merged into ${report.merged_into}, NOT main — not recorded as merged`);
+    else say(`${name}: #${pr} left open — ${report?.reason || 'the merge round said nothing'}`);
+    return note;
   }
 
-  async function mergePr(worktree, name, pr) {
-    const title = deps.gh(worktree, ['pr', 'view', String(pr), '--json', 'title', '-q', '.title']).stdout.trim();
-    const squash = () => deps.gh(worktree, ['pr', 'merge', String(pr), '--squash', '--subject', `${title} (#${pr})`]);
-    await waitMergeable(worktree, pr);
-    let r = squash();
-    if (r.ok) { say(`${name}: merged #${pr}`); deps.git(worktree, ['fetch', '-q', 'origin']); return true; }
-    say(`${name}: merge of #${pr} failed: ${r.stderr.trim().split('\n').at(-1) || r.stdout.trim()}`);
-    // Usually main moved during the step: bring it in and try once more. A
-    // conflict is aborted here — the next round's reconcile step owns it; a
-    // merge left in progress would make the worktree dirty and skipped forever.
-    const sync = syncMain(worktree, name);
-    if (!sync.ok) { deps.git(worktree, ['merge', '--abort']); say(`${name}: #${pr} needs reconcile next round`); return false; }
-    if (deps.git(worktree, ['push', '-q', 'origin', 'HEAD']).ok) {
-      await waitMergeable(worktree, pr);
-      r = squash();
-      if (r.ok) { say(`${name}: merged #${pr} (after syncing main)`); deps.git(worktree, ['fetch', '-q', 'origin']); return true; }
+  /**
+   * Retarget and replay the branch above one that has just landed.
+   *
+   * A squashed base leaves every branch above it conflicting even when its
+   * author did nothing wrong — the gate merges origin/main into the candidate
+   * before measuring, and against a squash of the branch below that merge
+   * conflicts wherever the two touched the same lines. Measured on a
+   * three-step memoro-cli stack on 2026-09-01: both remaining branches went
+   * from MERGEABLE to CONFLICT the moment the first one landed.
+   *
+   * `git rebase --onto origin/main <the old base's head>` replays only what
+   * has not landed. A conflict is not resolved here and is not what
+   * `reconcile` is for: abort, name the files, and stop on this project.
+   */
+  function replayOnto(worktree, name, pr, wasAt) {
+    if (!wasAt) return { ok: false, why: `where ${pr.headRefName} left ${pr.baseRefName} could not be read` };
+    const edited = deps.gh(worktree, ['pr', 'edit', String(pr.number), '--base', 'main']);
+    if (!edited.ok) return { ok: false, why: `#${pr.number} could not be retargeted at main (${lastLine(edited)})` };
+    deps.git(worktree, ['fetch', '-q', 'origin']);
+    if (deps.git(worktree, ['rebase', '--onto', 'origin/main', wasAt, pr.headRefName]).ok) {
+      const pushed = deps.git(worktree, ['push', '-q', '--force-with-lease', 'origin', pr.headRefName]);
+      if (pushed.ok) return { ok: true };
+      return { ok: false, why: `${pr.headRefName} was rebased onto origin/main but could not be pushed (${lastLine(pushed)})` };
     }
-    say(`${name}: #${pr} left open — could not merge`);
+    const conflicts = (gitOut(worktree, ['diff', '--name-only', '--diff-filter=U']) || '').split('\n').filter(Boolean);
+    deps.git(worktree, ['rebase', '--abort']);
+    return { ok: false, why: `${pr.headRefName} conflicts with what just landed in: ${conflicts.join(' ') || 'unknown files'}` };
+  }
+
+  /**
+   * Everything this project has open, landed through the gate, bottom first.
+   *
+   * Normally that is one pull request — step 1's rule means the project had
+   * none open when the session started. A session that could not branch its
+   * later work from main leaves a stack, and `stackOrder` is the only thing
+   * that decides whether this is one: not a stack it understands means
+   * nothing lands and a line saying why.
+   *
+   * Returns `{ note, seconds }` — the runs.tsv note after `success,`, and how
+   * long the landing itself took.
+   */
+  async function landProject(worktree, repo, name, prs) {
+    const t0 = deps.now().getTime();
+    const took = () => Math.round((deps.now().getTime() - t0) / 1000);
+    const stack = stackOrder(prs);
+    if (!stack.ok) { say(`${name}: ${stack.reason} — landing none of them`); return { note: 'open,not-a-stack', seconds: took() }; }
+    if (!stack.order.length) return { note: 'open', seconds: took() };
+    if (stack.order.length > 1) say(`${name}: a stack of ${stack.order.length}, landing bottom first: ${stack.order.map((pr) => `#${pr.number}`).join(' → ')}`);
+    // Where each branch left its base, read now and not later: a base branch
+    // is gone from the remote the moment the pull request on it is merged, and
+    // this is the commit `--onto` replays the branch above off.
+    const forkedAt = new Map(stack.order.map((pr) => [
+      pr.number, gitOut(worktree, ['merge-base', `origin/${pr.baseRefName}`, `origin/${pr.headRefName}`]),
+    ]));
+    let note = 'open';
+    for (const [i, pr] of stack.order.entries()) {
+      if (i > 0) {
+        const replayed = replayOnto(worktree, name, pr, forkedAt.get(pr.number));
+        // The one below it has landed and this one has not. `open,stack-stopped`
+        // rather than anything with `merged` in it: something of this project's
+        // is still open, and a note that reads as merged would let the round
+        // that closes workareas take this one away.
+        if (!replayed.ok) { say(`${name}: ${replayed.why} — stopping on this project for the round`); return { note: 'open,stack-stopped', seconds: took() }; }
+      }
+      note = await landPr(repo, name, pr.number);
+      deps.git(worktree, ['fetch', '-q', 'origin']);
+      if (note !== 'merged') return { note, seconds: took() };
+    }
+    return { note, seconds: took() };
+  }
+
+  /**
+   * The archive pull request, landed through `mc merge --docs`.
+   *
+   * It removes `docs/project/<programme>/<project>/` and adds a row to
+   * `project_log.md`, so it is documentation by construction and there is no
+   * test for the gate to run on it — `docs-merge.js` checks that against
+   * GitHub's own file list rather than a local diff, and refuses anything
+   * that touches a line of code. Still through mc's own door, and its
+   * `merged_into` is read like any other.
+   */
+  async function landDocsPr(worktree, name, pr) {
+    const report = await deps.docsMerge({
+      repoPath: worktree,
+      pr: Number(pr),
+      gh: (args) => deps.gh(worktree, args),
+      onProgress: (message) => say(`${name}: ${message}`),
+    });
+    const note = landingNote(report);
+    if (note === 'merged') {
+      // The worktree shares its refs with the repository it was added from, so
+      // this is also how everything downstream of the round learns that main
+      // has moved.
+      deps.git(worktree, ['fetch', '-q', 'origin']);
+      say(`${name}: merged #${pr} into ${report.merged_into} (docs only)`);
+      return true;
+    }
+    if (note.startsWith('off-')) say(`${name}: #${pr} was merged into ${report.merged_into}, NOT main`);
+    else say(`${name}: #${pr} left open — ${report?.reason || 'the docs merge said nothing'}`);
     return false;
   }
+
+  const lastLine = (r) => String(r.stderr || '').trim().split('\n').at(-1) || String(r.stdout || '').trim() || 'no reason given';
 
   /** One row in runs.tsv, header written the first time. Steps and the helper. */
   function logRun(row) {
@@ -489,7 +611,7 @@ export function createRunner({
     }
     // Only a merged archive PR lets the workareas go: until the plan is off
     // main, the folder it explains stays where it is.
-    const landed = (merge && await mergePr(worktree, `archive/${repo.name}`, pr)) ? archived : [];
+    const landed = (merge && await landDocsPr(worktree, `archive/${repo.name}`, pr)) ? archived : [];
     return { archived, landed };
   }
 
@@ -827,8 +949,19 @@ export function createRunner({
       say(`${name}: reconcile did not finish — merge aborted`);
     }
     const branch = gitOut(worktree, ['branch', '--show-current']) || name;
-    const prList = deps.gh(worktree, ['pr', 'list', '--head', branch, '--state', 'open', '--json', 'number', '-q', '.[0].number']);
-    const pr = (prList.ok && prList.stdout.trim()) || '-';
+    // What this project has open *now* — the same question `queue()` asked
+    // before the session, asked again because the session is what changed the
+    // answer. One `gh` call, and it gives both the row's `pr` (the one on this
+    // branch) and what there is to land, which for a stack is more than one.
+    const asked = deps.gh(worktree, PR_LIST_ARGS);
+    let openNow = [];
+    try {
+      if (!asked.ok) throw new Error(lastLine(asked));
+      openNow = openPrsFor({ prs: JSON.parse(asked.stdout || '[]'), name, names: plans.map((p) => p.project) });
+    } catch (error) {
+      say(`${name}: GitHub could not be asked what this project has open (${error?.message || error}) — nothing is landed this round`);
+    }
+    const pr = String(openNow.find((item) => item.headRefName === branch)?.number ?? '-');
     const read = readSessionOutput({ toolId: launch.id, stdout: result.stdout, stderr: result.stderr, exitCode: result.status, timedOut: result.timedOut });
     let { note } = read;
 
@@ -849,10 +982,15 @@ export function createRunner({
       }
     }
 
-    if (merge && pr !== '-' && note === 'success') note = (await mergePr(worktree, name, pr)) ? 'success,merged' : 'success,open';
+    let landSeconds = null;
+    if (merge && openNow.length && note === 'success') {
+      const landed = await landProject(worktree, repo, name, openNow);
+      note = `success,${landed.note}`;
+      landSeconds = landed.seconds;
+    }
 
-    logRun({ ts: stamp(), name, kind, exit: result.status, seconds, pr, turns: read.turns, input: read.input, output: read.output, cacheRead: read.cacheRead, cacheWrite: read.cacheWrite, session: read.session, note });
-    say(`${name}: ${kind} done rc=${result.status} ${seconds}s pr=${pr} turns=${read.turns} note=${note}`);
+    logRun({ ts: stamp(), name, kind, exit: result.status, seconds, pr, turns: read.turns, input: read.input, output: read.output, cacheRead: read.cacheRead, cacheWrite: read.cacheWrite, session: read.session, note, landSeconds });
+    say(`${name}: ${kind} done rc=${result.status} ${seconds}s pr=${pr} turns=${read.turns} note=${note}${landSeconds == null ? '' : ` land=${landSeconds}s`}`);
     if (read.quota) await quotaPause();
     // The queue is Martin's "these first", and it empties itself: this
     // project has had its step, so its name leaves the file now.
@@ -1000,7 +1138,7 @@ export function createRunner({
 
   return {
     paths, say, round, runStep, runLane, splitLanes, runHelperDay, archiveDone, queue, stopRequested,
-    updateRequested, syncMain, freshBranch, mergePr, planOf, repoOf, markRunner, clearRunner, closeWorkareas,
+    updateRequested, syncMain, freshBranch, landProject, landDocsPr, planOf, repoOf, markRunner, clearRunner, closeWorkareas,
     closeWorkarea, archivedProjects, workareas, tidyQueue,
   };
 }

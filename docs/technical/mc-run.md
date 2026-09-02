@@ -127,8 +127,8 @@ session opened.
    `origin/main`s.
 3. **Tidy `queue.md`** against that reading.
 4. **Archive** every plan that says `status: done` — the directory removed and
-   a `project_log.md` row left behind it, one PR per repository, merged like
-   any other. See [`mc-tidy.md`](mc-tidy.md).
+   a `project_log.md` row left behind it, one PR per repository, landed through
+   `mc merge --docs`. See [`mc-tidy.md`](mc-tidy.md).
 5. **Run the steps**, one lane per repository at the same time.
 6. **Close** the workareas whose project is finished — whose archive PR merged
    in step 4, or whose plan an earlier round already archived, which
@@ -239,14 +239,55 @@ inside it, and both tools are given the same.
 
 ### The merge
 
-If the session left an open PR for the branch and its own output says success,
-the runner merges it: poll `gh pr view --json mergeable` up to twelve times at
-5 s apart, then squash with the PR title as the subject. If that fails —
-usually because main moved during the step — merge main in, push and try once
-more; a conflict there is aborted rather than left in the worktree, because a
-worktree with a merge in progress is dirty and would be skipped forever, and
-the next round's `reconcile` owns it. Otherwise the PR is left open and the
-row says `success,open`.
+**The runner lands through `mc merge` and nothing else** (Martin, 2026-09-02).
+`repo-merge.js`'s round, called in this process rather than shelled out to,
+because the runner *is* mc: it takes the repository's lease and holds it across
+the whole round, runs the gate inside it, re-checks that the base has not moved
+between the measurement and the merge, squash-merges, and reports what it
+landed in.
+
+There is no `gh pr merge` left in `run.js`. What it replaces squash-merged
+whatever the branch's pull request was after waiting for `mergeable`, so a step
+landed without the gate at all — and it never read the base it landed on: on
+2026-09-02 at 13:00 that squashed #11250 into `msr-track-3-capture-command`,
+the branch of #11249 the runner had left open eighty minutes earlier, logged
+`success,merged`, and `main` received nothing.
+
+So the two fields the runner reads back are **`merged_into`** and
+**`off_default`**, never its own "the call returned zero":
+
+| what the round reported | the row says |
+| --- | --- |
+| merged into `main` | `success,merged` |
+| merged into anything else | `success,off-main` — not a merge this counts |
+| the gate went red | `success,open,gate-red` |
+| the round stopped for another reason | `success,open,gate-<why>` |
+
+A red gate is not a failure to work around. The pull request stays open, and
+the open-pull-request rule above then keeps that project from starting anything
+else until somebody has dealt with it.
+
+The gate costs a round — 20–35 minutes on memoro — where the old merge cost
+seconds. That is the price of the contract; `land_seconds` in runs.tsv is
+where it shows, kept apart from the session's own `seconds`.
+
+The **archive** pull request is the one exception in kind, not in door: it
+removes a plan directory and adds a `project_log.md` row, so it is
+documentation by construction and lands through `mc merge --docs`, which
+checks that against GitHub's own file list and refuses anything touching a
+line of code.
+
+A **stack** needs an order rather than a call — `mc merge` refuses a batch
+aimed at several bases. `stackOrder` in run-plan.js is the whole decision, over
+the list of open pull requests the round already fetched: exactly one aimed at
+`main` is the bottom, and every other one must be aimed at the head of exactly
+one of the others. Land the bottom, `gh pr edit --base main` the one above it,
+`git rebase --onto origin/main <where it left its old base>` — a squashed base
+leaves every branch above it conflicting even when its author did nothing
+wrong — and land that. Two aimed at `main`, a fork, a cycle, or a base that is
+nobody's head is not a stack the runner understands: it lands none of them and
+says so. A rebase that conflicts is aborted, the files are named, and the round
+stops on that project.
 
 Merge direct is the policy for both repositories (Martin, 2026-08-25). The
 runner does not review; `mc brief` is what shows Martin what merged.
@@ -307,7 +348,11 @@ Everything lives under `~/mc/runner/`.
 
 - **`log/runs.tsv`** — one row per step, reconcile and helper run:
   `ts name kind exit seconds pr turns input output cache_read cache_write
-  session note`. The usage columns come from claude's `--output-format json`
+  session note land_seconds`. `seconds` is the session; `land_seconds` is the
+  gated round that followed it, `-` when there was none. It is appended rather
+  than placed beside `seconds` because the header is written once, when the
+  file is created, and a column inserted would shift `note` one to the left for
+  every reader of the old header. The usage columns come from claude's `--output-format json`
   and from codex's `exec --json` event stream; a field the tool does not give
   is `-`, never a guess. `exit` and `note` are independent and are allowed to
   disagree — a process can fail after a session that reported success, and

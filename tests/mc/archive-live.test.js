@@ -69,14 +69,28 @@ function repository() {
   git(repo, ['push', '-q', 'origin', 'HEAD:main']);
   git(repo, ['fetch', '-q', 'origin']);
 
-  // The forge: a PR number on `create`, and a squash onto main on `merge`.
+  // The forge: a PR number on `create`, and a squash onto main on `merge` —
+  // which is `mc merge --docs` asking, since 2026-09-02: it reads the pull
+  // request as JSON, checks GitHub's own file list is all under `docs/`, and
+  // reads the state back after merging rather than trusting the exit code.
   const ghCalls = [];
+  let merged = false;
   const gh = (cwd, args) => {
     ghCalls.push(args);
+    const json = (value) => ({ ok: true, status: 0, stdout: `${JSON.stringify(value)}\n`, stderr: '' });
     if (args[1] === 'list') return { ok: true, status: 0, stdout: '', stderr: '' };
     if (args[1] === 'create') return { ok: true, status: 0, stdout: 'https://github.com/o/r/pull/77\n', stderr: '' };
-    if (args[1] === 'view' && args.includes('mergeable')) return { ok: true, status: 0, stdout: 'MERGEABLE', stderr: '' };
-    if (args[1] === 'view') return { ok: true, status: 0, stdout: 'Archive', stderr: '' };
+    if (args[1] === 'view') {
+      const fields = args[args.indexOf('--json') + 1] || '';
+      if (fields.includes('files')) {
+        const create = ghCalls.find((call) => call[1] === 'create');
+        const branch = create[create.indexOf('--head') + 1];
+        const files = git(repo, ['diff', '--name-only', 'origin/main', `origin/${branch}`]).split('\n').filter(Boolean);
+        return json({ number: 77, title: 'Archive', state: merged ? 'MERGED' : 'OPEN', isDraft: false, baseRefName: 'main', files: files.map((path) => ({ path })) });
+      }
+      if (fields.includes('mergeable')) return json({ mergeable: 'MERGEABLE' });
+      return json({ state: merged ? 'MERGED' : 'OPEN', mergeCommit: merged ? { oid: 'deadbeefdeadbeef' } : null });
+    }
     if (args[1] === 'merge') {
       const forge = join(root, 'forge');
       rmSync(forge, { recursive: true, force: true });
@@ -88,6 +102,7 @@ function repository() {
       git(forge, ['merge', '--squash', `origin/${branch}`]);
       git(forge, ['commit', '-q', '-m', 'Archive done projects (#77)']);
       git(forge, ['push', '-q', 'origin', 'main']);
+      merged = true;
       return { ok: true, status: 0, stdout: '', stderr: '' };
     }
     return { ok: true, status: 0, stdout: '', stderr: '' };
