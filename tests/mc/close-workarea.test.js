@@ -81,7 +81,11 @@ test('a last run that did not merge, and no last run at all, both keep the worka
   assert.equal(closable({ plan: donePlan, lastRun: null }).why, 'no runner step to point at');
 });
 
-test('a live tmux session is the same refusal a step already makes', () => {
+// Removing a directory is not the same question as running a step in it. The
+// runner stopped declining a step for a live session (2026-09-02); this
+// refusal stays, because pulling the ground from under a terminal somebody is
+// standing in is a different kind of harm.
+test('a live tmux session still stops the directory being removed', () => {
   assert.equal(closable({ plan: donePlan, live: true, lastRun: merged }).why, 'a live tmux session');
 });
 
