@@ -23,12 +23,20 @@ import { basename, dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 
 import { deleteConversations, listConversations } from './conversations.js';
-import { workAreaPath, workAreaStatePath, workRoot } from './paths.js';
+import { PLAN_HOME, workAreaPath, workAreaStatePath, workRoot } from './paths.js';
 import { installPushGuard } from './push-guard.js';
 import { areaRoleName, reservedRoleName } from './roles.js';
 import { STOP_MARK } from './work-stop-marker.js';
 import { branchLanded } from './branch-landed.js';
 
+/**
+ * `PLAN_HOME` — `~/mc/plan/` — is skipped, because it is not a work area and
+ * holds none: what is under it are programmes, each with its own checkouts one
+ * level down (`paths.js`). Listed as an area it read as a directory called
+ * `plan` whose "repositories" were programme names, which is the same nonsense
+ * a role home's filing is already kept out of. `mc plan` opens what is under
+ * there; nothing else has business listing it.
+ */
 export function listWorkAreas(env = process.env, options = {}) {
   const root = workRoot(env);
   let names = [];
@@ -36,6 +44,7 @@ export function listWorkAreas(env = process.env, options = {}) {
     names = readdirSync(root, { withFileTypes: true })
       .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'))
       .map((entry) => entry.name)
+      .filter((name) => name !== PLAN_HOME)
       .sort();
   } catch { return []; }
   return names.map((name) => inspectWorkArea(name, env, options));

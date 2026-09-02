@@ -168,6 +168,25 @@ export function parsePlanFrontmatter(text) {
 }
 
 /**
+ * The programmes on a ref: the directories directly under `docs/project/`.
+ *
+ * Asked of the tree rather than derived from the plans, because a programme
+ * outlives its projects. `mc run` archives a project directory the round its
+ * plan says done, so a programme whose work is finished for now holds only its
+ * own document and its rulings — no PLAN.json anywhere under it — and
+ * `listPlans` cannot see it at all. It is still a programme, and still the
+ * place the next piece of that work belongs (`mc plan`).
+ */
+export function listProgrammes(repo, { ref = 'origin/main', git = runGit } = {}) {
+  const tree = git(repo.path, ['ls-tree', '-d', '--name-only', ref, 'docs/project/']);
+  if (tree == null) return [];
+  return tree.split('\n')
+    .map((path) => path.split('/')[2])
+    .filter(Boolean)
+    .sort();
+}
+
+/**
  * `docs/project/<programme>/<project>/PLAN.md` on a ref of one repository,
  * read without a checkout: one `ls-tree` for the names and one
  * `cat-file --batch` for every plan's text. `git` and `batch` are both
