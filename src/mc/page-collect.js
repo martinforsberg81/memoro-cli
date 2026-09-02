@@ -95,21 +95,23 @@ export function nowSection({
  * The queue as the runner would read it: every name with the kind it would be
  * run as, or the reason it would be passed over.
  *
- * A live area is a skip with a reason of its own — the runner will not start a
- * step where somebody is already working — so it is counted beside the plan
- * statuses rather than hidden among them.
+ * A live area used to be a skip with a reason of its own, because the runner
+ * would not start a step where somebody had a session open. It no longer
+ * declines for that (`run.js`), so neither does this — a page that predicts a
+ * skip the runner will not make is worse than one that says nothing, because
+ * it is read as the runner's own answer. What stops a project is what the plan
+ * says, and the plan is the only thing counted here.
  */
-export function queueSection({ queue = [], plans = [], live = [], named = QUEUE_NAMED } = {}) {
+export function queueSection({ queue = [], plans = [], named = QUEUE_NAMED } = {}) {
   const items = queue.map((name) => {
     const kind = kindFor(name, { plans });
-    const isLive = live.includes(name);
-    return { name, kind, live: isLive, runnable: !kind.startsWith('skip') && !isLive };
+    return { name, kind, runnable: !kind.startsWith('skip') };
   });
   const runnable = items.filter((item) => item.runnable);
   const skipped = items.filter((item) => !item.runnable);
   const reasons = {};
   for (const item of skipped) {
-    const reason = item.live ? 'live' : item.kind.slice('skip:'.length);
+    const reason = item.kind.slice('skip:'.length);
     reasons[reason] = (reasons[reason] || 0) + 1;
   }
   return {
@@ -504,7 +506,7 @@ export async function collectPage({
       now,
       alive,
     }),
-    queue: queueSection({ queue, plans, live: liveNames }),
+    queue: queueSection({ queue, plans }),
     intake: intakeSection({ digest: readDigest(intakeDir(env)), proposals: proposalFiles(proposalsDir(env)), now }),
     projects: projectsSection({
       plans, areas, rows, openPrs: prs.prs, live: liveNames,

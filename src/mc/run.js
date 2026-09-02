@@ -744,9 +744,22 @@ export function createRunner({
    * `world` is what `queue()` returned: the plans on origin/main and the open
    * pull requests of both repositories. Everything that can end the round for
    * this project is asked before a session is spent, in the order it costs:
-   * the STOP file, the quota, a live tmux session, a dirty worktree, an open
-   * pull request, and then whether the branch underneath is one that can still
-   * be pushed.
+   * the STOP file, the quota, a dirty worktree, an open pull request, and then
+   * whether the branch underneath is one that can still be pushed.
+   *
+   * A session somebody has open in the workarea is **not** on that list any
+   * more. It used to be — a live `mc-<name>` tmux session skipped the project —
+   * and the rule looked prudent while being a second, undeclared way to stop
+   * work: whether a step runs would depend on which terminals happened to be
+   * open, which is nowhere in the plan and nothing the next round remembers.
+   * A project the runner should leave alone says so where every other such
+   * fact is written down, by being `blocked` in its own `PLAN.json` (Martin,
+   * 2026-09-02). `mc work` and `mc run` now know nothing about each other.
+   *
+   * `closeWorkareas` still asks. That is a different question — whether it is
+   * safe to *delete* the directory — and pulling the ground from under a
+   * terminal somebody is standing in is not the same as declining to run a
+   * step in it.
    */
   async function runStep(name, world = {}) {
     const { plans = [], prs = [], prsFailed = [] } = Array.isArray(world) ? { plans: world } : world;
@@ -763,7 +776,6 @@ export function createRunner({
       const added = deps.addWorktree({ name, repo: repo.path, branch: name, from: 'origin/main', env: deps.env });
       if (!added.ok) { say(`${name}: worktree add failed (${added.reason}), skip`); return 'skipped'; }
     }
-    if (deps.tmuxHas(`mc-${name}`)) { say(`${name}: live tmux session, skip`); return 'skipped'; }
     if ((gitOut(worktree, ['status', '--porcelain']) || '').trim()) { say(`${name}: dirty worktree, skip`); return 'skipped'; }
     if (prsFailed.includes(repo.name)) { say(`${name}: what is open on GitHub is unknown this round, skip`); return 'skipped'; }
 

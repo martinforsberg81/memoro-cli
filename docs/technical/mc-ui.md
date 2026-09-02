@@ -40,7 +40,9 @@ In this order, because that is the order the questions come in:
   sitting in, and one line of the day behind it: steps, merged, open,
   failed, timed out, and an estimated **list-price** cost.
 - **QUEUE** — how deep, how much of it is runnable, the next few by name and
-  kind, and the skips counted by reason. A live area is a reason of its own.
+  kind, and the skips counted by reason. Every reason comes from the plan: a
+  session somebody has open in the workarea is not one of them, because the
+  runner does not decline for it either.
 - **INTAKE** — the newest `~/mc/intake/errors-<date>.md`, its age, what is
   new in it, and how many proposals nobody has queued or dropped.
 - **PROJECTS** — one numbered row per project on `origin/main`, grouped by

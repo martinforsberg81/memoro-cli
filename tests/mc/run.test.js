@@ -293,20 +293,43 @@ test('one step: worktree made from origin/main, session through the adapter, PR 
   assert.match(f.files['/w/runner/log/runner.log'], /alpha: merged #77\n.*alpha: step done rc=0 0s pr=77 turns=4 note=success,merged/u);
 });
 
-test('skips: live tmux session, dirty worktree, a blocked step', async () => {
+test('skips: dirty worktree, a blocked step', async () => {
   const waiting = plan({ status: 'blocked' });
   const f = fixture({
-    plans: { memoro: { live: ready, dirty: ready, wait: waiting } },
-    live: ['live'], dirty: ['dirty'], session: okSession(),
+    plans: { memoro: { dirty: ready, wait: waiting } },
+    dirty: ['dirty'], session: okSession(),
   });
   const runner = createRunner({ deps: f.deps });
   const r = await runner.round();
   assert.equal(r.ran, 0);
   assert.equal(f.calls.sessions.length, 0);
   const log = f.files['/w/runner/log/runner.log'];
-  assert.match(log, /live: live tmux session, skip/u);
   assert.match(log, /dirty: dirty worktree, skip/u);
   assert.match(log, /wait: step 1 is blocked on decision prog-1, skip/u);
+});
+
+/**
+ * A session somebody has open in the workarea is not the runner's business.
+ *
+ * It used to be: a live `mc-<name>` tmux session skipped the project. That was
+ * a second, undeclared way to stop work — whether a step ran depended on which
+ * terminals happened to be open, which is nowhere in the plan and nothing the
+ * next round remembers. A project the runner should leave alone says so where
+ * every other such fact is written down, by being `blocked` in its own
+ * PLAN.json (Martin, 2026-09-02).
+ */
+test('a live tmux session in the workarea does not stop the step', async () => {
+  const f = fixture({
+    plans: { memoro: { live: ready } },
+    live: ['live'], session: okSession(),
+  });
+  const runner = createRunner({ deps: f.deps });
+  const r = await runner.round();
+  assert.equal(r.ran, 1);
+  assert.equal(f.calls.sessions.length, 1);
+  const log = f.files['/w/runner/log/runner.log'];
+  assert.doesNotMatch(log, /live tmux session, skip/u);
+  assert.match(log, /live: step starting/u);
 });
 
 

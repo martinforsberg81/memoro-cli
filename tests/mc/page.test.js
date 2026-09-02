@@ -139,17 +139,25 @@ describe('QUEUE', () => {
     const queue = queueSection({
       queue: ['mc-ui', 'docx-editor', 'avatar-self-serve', 'mc-run', 'brand-new'],
       plans: PLANS,
-      live: ['docx-editor'],
       named: 2,
     });
     assert.equal(queue.depth, 5);
-    assert.equal(queue.runnable, 1);
-    assert.deepEqual(queue.next.map((item) => [item.name, item.kind]), [['mc-ui', 'step']]);
+    assert.equal(queue.runnable, 2);
+    assert.deepEqual(queue.next.map((item) => [item.name, item.kind]), [['mc-ui', 'step'], ['docx-editor', 'step']]);
     assert.equal(queue.more, 0);
-    assert.equal(queue.skipped.count, 4);
-    assert.deepEqual(queue.skipped.reasons, {
-      live: 1, 'blocked': 1, done: 1, 'no-plan': 1,
-    });
+    assert.equal(queue.skipped.count, 3);
+    assert.deepEqual(queue.skipped.reasons, { blocked: 1, done: 1, 'no-plan': 1 });
+  });
+
+  // The page used to answer "somebody has a session open here" as a skip of its
+  // own, because the runner declined for it. The runner does not any more, and
+  // a page that predicts a skip the runner will not make reads as the runner's
+  // own answer while being nobody's.
+  it('does not pass a project over because somebody has a session open in it', () => {
+    const queue = queueSection({ queue: ['docx-editor'], plans: PLANS, live: ['docx-editor'] });
+    assert.equal(queue.runnable, 1);
+    assert.equal(queue.skipped.count, 0);
+    assert.deepEqual(queue.skipped.reasons, {});
   });
 
   it('says how many runnable it did not name', () => {
@@ -391,7 +399,7 @@ const DATA = pageData({
     now: NOW,
     alive: live,
   }),
-  queue: queueSection({ queue: ['mc-ui', 'docx-editor', 'mc-run'], plans: PLANS, live: ['docx-editor'] }),
+  queue: queueSection({ queue: ['mc-ui', 'docx-editor', 'mc-run'], plans: PLANS }),
   intake: intakeSection({
     digest: {
       name: 'errors-2026-08-29.md',
@@ -419,13 +427,13 @@ describe('the page', () => {
     const at = ['NOW', 'QUEUE', 'INTAKE', 'PROJECTS'].map((head) => text.indexOf(`  ${head}`));
     assert.ok(at.every((index, n) => index >= 0 && (n === 0 || index > at[n - 1])), text);
     assert.match(text, /MEMORO·CLI {2}0\.7\.11/u);
-    assert.match(text, /1 of 3 queued/u);
+    assert.match(text, /2 of 3 queued/u);
     assert.match(text, /● mc-ui\s+step · claude opus · 20 min of 90 min · pid 4242/u);
     assert.match(text, /■ STOP requested — the runner exits after the steps it is in/u);
     assert.match(text, /◆ docx-editor\s+tmux mc-docx-editor · open 60 min/u);
     assert.match(text, /runner up 120 min · 3 steps in 24 h — merged 1, open 1, failed 0, timed out 1 · ≈\$7\.\d\d list \(opus, 2026-06\)/u);
-    assert.match(text, /QUEUE {2}1 runnable of 3\s+mc status <name>/u);
-    assert.match(text, /skipped 2 \(live 1, done 1\)/u);
+    assert.match(text, /QUEUE {2}2 runnable of 3\s+mc status <name>/u);
+    assert.match(text, /skipped 1 \(done 1\)/u);
     assert.doesNotMatch(text, /DECISIONS/u);
     assert.match(text, /INTAKE {2}2026-08-29 \(60 min old\) · 1 new error \(1 loud\) · 1 proposal\s+mc helper --intake/u);
     assert.match(text, /PROJECTS {2}4 in 2 repos {2}ready 2 · blocked 1 · done 1\s+mc status <name>/u);
@@ -473,7 +481,7 @@ describe('the page', () => {
     const parsed = JSON.parse(out);
     assert.deepEqual(Object.keys(parsed), ['now', 'queue', 'intake', 'projects', 'caches', 'notes']);
     assert.equal(parsed.projects.repos[0].projects[0].name, 'avatar-self-serve');
-    assert.equal(parsed.queue.runnable, 1);
+    assert.equal(parsed.queue.runnable, 2);
     // Rendering the parsed JSON gives the same page: the two cannot drift.
     assert.equal(renderPage(parsed, { columns: 100, now: NOW }), renderPage(DATA, { columns: 100, now: NOW }));
   });
@@ -615,7 +623,7 @@ describe('the palette', () => {
   // same page with the escapes taken out again.
   const SNAPSHOT = [
     '',
-    'bold+white grey grey white grey grey', //   MEMORO·CLI 0.7.11 ── 4 decisions · 1 of 3 queued · ≈$7.28 today
+    'bold+white grey grey white grey grey', //   MEMORO·CLI 0.7.11 ── 4 decisions · 2 of 3 queued · ≈$7.28 today
     '',
     'bold+cyan', //                                               NOW
     'green bold+white green grey grey grey white grey grey', //  ● mc-ui  step · claude opus · 20 min of 90 min · pid 4242
@@ -623,9 +631,10 @@ describe('the palette', () => {
     'yellow bold+white grey', //                                 ◆ docx-editor  tmux mc-docx-editor · open 60 min
     'grey', //                                                     runner up 120 min · 3 steps in 24 h — …
     '',
-    'bold+cyan grey grey', //                                      QUEUE  1 runnable of 3            mc status <name>
+    'bold+cyan grey grey', //                                      QUEUE  2 runnable of 3            mc status <name>
     'grey bold+white green', //                                      1  mc-ui  step
-    'dim+grey', //                                                   skipped 2 (live 1, done 1)
+    'grey white green', //                                           2  docx-editor  step
+    'dim+grey', //                                                   skipped 1 (done 1)
     '',
     'bold+cyan green grey red grey yellow grey', //                INTAKE  2026-08-29 (60 min old) · 1 new error (1 loud) · 1 proposal
     'red bold+white', //                                           !  `abc` — 41x 500 — loud
