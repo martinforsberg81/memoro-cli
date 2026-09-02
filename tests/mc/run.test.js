@@ -770,6 +770,54 @@ test('one repository with ready plans is one lane, and a round is what it was', 
 });
 
 /**
+ * What a round *touches*. The plans are already in hand when a lane starts —
+ * `queue()` read them off origin/main — so a project its own plan refuses is
+ * passed over before a worktree, a `git status` or a fetch is spent on it.
+ * The round of 2026-09-02T18:17 spent 51 seconds walking 38 projects to
+ * start one, 21 of them blocked on a decision nothing can answer.
+ */
+test('the plan is asked before git: only the ready project\'s workarea is touched', async () => {
+  const stopped = plan({ status: 'blocked' });
+  const names = Array.from({ length: 20 }, (unused, i) => `stopped-${String(i + 1).padStart(2, '0')}`);
+  const plans = { memoro: { zeta: ready } };
+  for (const name of names) plans.memoro[name] = stopped;
+  const f = fixture({ plans, session: okSession() });
+  const r = await createRunner({ deps: f.deps }).round();
+
+  assert.equal(r.ran, 1);
+  assert.deepEqual(f.calls.sessions.map((call) => call.cwd), ['/w/zeta/memoro']);
+  // The whole point: every git call under the work root belongs to `zeta`.
+  const touched = [...new Set(f.calls.git.map((call) => call[0]).filter((cwd) => cwd.startsWith('/w/')))];
+  assert.deepEqual(touched, ['/w/zeta/memoro'], `git was asked about ${touched.join(', ')}`);
+  assert.deepEqual(f.calls.added, ['zeta'], 'no workarea is made for a project the plan already refuses');
+  // And what a person would have read is still there, unchanged, for each.
+  const log = f.files['/w/runner/log/runner.log'];
+  for (const name of names) assert.match(log, new RegExp(`${name}: step 1 is blocked on decision prog-1, skip`, 'u'));
+});
+
+/**
+ * The filter is re-applied, not computed once: `runLane` re-reads the plans
+ * after a step merges, and the plan that merge advanced is the one that
+ * decides whether the lane stays.
+ */
+test('a plan that stopped while the lane stayed on it is not stepped again', async () => {
+  const plans = { memoro: { go: ready } };
+  const f = fixture({
+    plans,
+    gh: { go: { number: 7 } },
+    // What the step did: the plan it edited says `blocked` from now on.
+    session: (call) => { plans.memoro.go = plan({ status: 'blocked' }); return okSession()(call); },
+  });
+  const r = await createRunner({ deps: f.deps }).round();
+
+  assert.equal(r.ran, 1);
+  assert.equal(f.calls.sessions.length, 1, 'the lane stayed on a project whose plan had stopped');
+  const log = f.files['/w/runner/log/runner.log'];
+  assert.match(log, /go: step 1 is blocked on decision prog-1, skip/u);
+  assert.doesNotMatch(log, /staying on go/u);
+});
+
+/**
  * The 5-hour Claude quota is one budget for both lanes: the lane that is
  * refused sleeps, and the other joins that same sleep rather than spending a
  * session to be told the same thing.
