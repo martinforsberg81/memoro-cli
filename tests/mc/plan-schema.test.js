@@ -139,6 +139,14 @@ describe('what a step session may have changed', () => {
     assert.deepEqual(unauthorisedChanges(before, after, 1), { ok: true, problems: [] });
   });
 
+  it('takes a lesson as a plain paragraph, and refuses an empty one', () => {
+    const stringLesson = plan();
+    stringLesson.what_the_code_taught_us = ['The rows were buttons; the grey box was UA chrome, not a missing class.'];
+    assert.deepEqual(validatePlan(stringLesson), { ok: true, problems: [] });
+    stringLesson.what_the_code_taught_us = ['   '];
+    assert.match(validatePlan(stringLesson).problems.join('\n'), /what_the_code_taught_us\[0\]: an empty string says nothing/u);
+  });
+
   it('catches a rewritten step that has not run', () => {
     const after = structuredClone(before);
     after.steps[1].instruction = ['Something else entirely.'];

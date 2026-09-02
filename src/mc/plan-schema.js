@@ -124,9 +124,18 @@ function validateLessons(list, problems) {
     problems.push('what_the_code_taught_us: an array, empty until the code teaches something');
     return;
   }
+  // A lesson is a paragraph, or { title, body } for one that earned a heading.
+  // The field is the only free prose a step session writes into the plan, and
+  // demanding the object shape broke two plans in one day (2026-09-02): the
+  // sessions wrote strings, the plan stopped parsing, and the runner skipped
+  // the project. A plain string is what people write; both are valid.
   list.forEach((item, index) => {
     const at = `what_the_code_taught_us[${index}]`;
-    if (!plain(item)) { problems.push(`${at}: must be an object`); return; }
+    if (typeof item === 'string') {
+      if (!text(item)) problems.push(`${at}: an empty string says nothing`);
+      return;
+    }
+    if (!plain(item)) { problems.push(`${at}: a paragraph, or { title, body }`); return; }
     for (const key of unknownKeys(item, LESSON_KEYS)) problems.push(`${at}.${key}: unknown key`);
     if (!text(item.title)) problems.push(`${at}.title: what was learned, in a line`);
     if (!prose(item.body)) problems.push(`${at}.body: at least one paragraph`);
