@@ -115,7 +115,7 @@
         "A stack is the one case that needs an order rather than a call. `mc merge` refuses a batch aimed at several bases, and memoro's `AGENTS.md` § *Landing a stack* is the recipe, measured on a three-step memoro-cli stack on 2026-09-01: land the bottom, `gh pr edit <n> --base main` on the one above it, then `git rebase --onto origin/main <the old base's head>` on its branch — because a squashed base leaves every branch above it conflicting even when its author did nothing wrong; both remaining branches went from `MERGEABLE` to `CONFLICT (content)` the moment the first landed. Then land it. Order the project's open pull requests by base first: the one aimed at `main` is the bottom, each other one's base names the branch below it. Two aimed at `main`, a cycle, or a base that is nobody's head is not a stack the runner understands — say so and land none. Put the ordering in `run-plan.js` as a pure function over the list step 1 already fetches, so the whole decision is tested with no network.",
         "A rebase that conflicts is not resolved here and is not what `reconcile` is for. `git rebase --abort`, say which files conflicted, leave the branch as it was, and stop on that project for the round."
       ],
-      "pr": null,
+      "pr": 522,
       "blocked_by": null
     },
     {
