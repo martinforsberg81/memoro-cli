@@ -62,17 +62,16 @@ mc merge    → the gate, then the squash
 
 - **Plans live at `docs/project/<programme>/<project>/PLAN.json`.** There is one
   programme here, `mc`. One file: the overall part — `goal`, `contract`,
-  `out_of_scope`, `success_criteria`, `what_the_code_taught_us`, `documents` —
-  then `steps[]`, each carrying its own `instruction`, `done_when` and `status`
-  (`ready` | `done` | `blocked`). The plan has no status of
+  `out_of_scope`, `success_criteria`, `documents` — then `steps[]`, each
+  carrying its own `instruction`, `done_when`, `status`
+  (`ready` | `done` | `blocked`) and `learned`. The plan has no status of
   its own: it is the state of the first step that is not done. See
   [`docs/project/README.md`](project/README.md).
 - **You do not write plan state by hand.** `mc plan <programme>` opens the
   session a plan is written in, with Martin in it. A step session edits its own
-  step's `status` and
-  `pr`, the criteria it met and `what_the_code_taught_us` — and `mc run`
-  compares the file before and after, so a session that touched a step it did
-  not run leaves a PR the runner will not merge.
+  step's `status`, `pr` and `learned`, and `met` on the criteria it met — and
+  `mc run` compares the file before and after, so a session that touched a step
+  it did not run leaves a PR the runner will not merge.
 - **You do not decide.** An open question becomes a
   `decisions/<programme>-<n>.md` file at the root of the session that raised it
   — `~/mc/<workarea>/` for a step session, `~/mc/plan/<programme>/` for a
@@ -122,12 +121,12 @@ a round. Two rules, both cheap:
   within three lines of each other and GitHub's mergeability ignores local
   merge drivers — nine resolutions and two red gate rounds later, the
   conflict class is removed rather than managed. Any other shared document
-  (`docs/mc-command-matrix.md`, this file and its `canon/` copy) still goes
-  in a final commit touching nothing else, and a series against it lands in
-  order with `main` merged in between (a merge commit, no rewritten
-  history). A change to `docs/coding-agent-protocol.md` must carry the same
-  change to `canon/coding-agent-protocol.md`: the gate compares the two
-  copies byte for byte and stopped two pull requests that forgot.
+  (`docs/mc-command-matrix.md`, this file) still goes in a final commit
+  touching nothing else, and a series against it lands in order with `main`
+  merged in between (a merge commit, no rewritten history). This file had a
+  byte-for-byte copy at `canon/coding-agent-protocol.md` once, and a gate that
+  compared them; both are gone — `canon/` holds the role overlays and nothing
+  else, and this file is the only copy.
 
 ## Work Method Updates
 

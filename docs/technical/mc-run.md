@@ -124,8 +124,14 @@ session opened.
    its whole state, which is why a failed collect stays unretried for the rest
    of the day. See [`mc-helper.md`](mc-helper.md).
 2. **Read the queue**: `~/mc/queue.md`, then every `PLAN.json` on both
-   `origin/main`s.
-3. **Tidy `queue.md`** against that reading.
+   `origin/main`s, and — once per repository, on the same trip to the network —
+   `gh pr list --state open`. That third reading is the round's answer to what
+   is in flight, and it is asked *before* anything is started rather than after
+   the session. A repository whose `gh` could not answer starts nothing that
+   round and says so; the other repository's lane is untouched. An idle round
+   costs ten minutes of sleep, a blind one bought a 120-minute Opus session.
+3. **Tidy `queue.md`** against that reading, and write
+   `~/mc/intake/unreadable-plans.md` from it.
 4. **Archive** every plan that says `status: done` — the directory removed and
    a `project_log.md` row left behind it, one PR per repository, landed through
    `mc merge --docs`. See [`mc-tidy.md`](mc-tidy.md).
@@ -134,9 +140,11 @@ session opened.
    in step 4, or whose plan an earlier round already archived, which
    `project_log.md` is what still knows.
 
-Steps 1, 3, 4 and 6 are skipped under `--once`: that flag exists to watch one
-step, and a two-minute model turn over production is not what somebody typing
-it asked for.
+Steps 1, 4 and 6 and the tidying half of 3 are skipped under `--once`: that
+flag exists to watch one step, and a two-minute model turn over production is
+not what somebody typing it asked for. The unreadable-plans table is written
+either way — it is a write of what the round has already read, not a pass over
+anything.
 
 The loop around the round is `runLoop`. It writes `runner.json`, runs rounds
 until `--rounds` is reached or a STOP file appears, sleeps `--idle-sleep`
@@ -161,26 +169,56 @@ list of workareas without a project.
 
 ## One step
 
-Per project, in order, and any of these ends it:
+Per project, in order. The questions are asked in this order, and the first one
+that answers ends the project's round:
 
-- a tmux session `mc-<name>` exists — somebody is in there;
-- the worktree is dirty;
-- there is no workarea *and* no plan on main.
+1. **A tmux session `mc-<name>` exists** — somebody is in there.
+2. **The worktree is dirty.**
+3. **There is no workarea *and* no plan on main.**
+4. **This project has an open pull request.** One line naming it, and nothing
+   is started. The plan on `origin/main` and the plan in the worktree both say
+   `ready` while the step's work sits unlanded in that pull request, and the
+   runner used to believe them: on 2026-09-02T04:33 it spent 120 minutes of
+   Opus rebuilding `action-window` step 4 while step 4's work was open as
+   #11241. A draft counts as open — it is work in flight, which is the whole
+   question. This one rule also covers the two cases nothing else did: a
+   session that timed out with commits pushed and no pull request, and a step
+   that ended `plan-trespass`. `project-prs.js` matches a pull request to a
+   project by its branch, and `inFlight` in run-plan.js is the refusal.
+5. **The worktree's branch has already landed.** Checked by content
+   (`branch-landed.js`), because the runner squash-merges and "ahead by N" says
+   nothing. It is moved to `<name>-<n>` from `origin/main` — the smallest `<n>`
+   no branch local or remote is using — *before* a session starts, because
+   `push-guard.js` would otherwise refuse the push at the end of it and the
+   whole session would buy nothing. Asked of every workarea under `~/mc` on
+   2026-09-02, 44 stood on a landed branch. A branch that has *not* landed
+   carries work and is left exactly where it is.
 
-A missing workarea is created rather than skipped: `mc work add <name> <repo>
-<name> --from origin/main`. Then `git merge origin/main` — **never** a rebase,
-which is what nights 1–2 of the shell runner cost to learn. The one conflict
-resolved without a session is an identical `.gitignore` hunk; anything else is
-left in progress and the project gets a `reconcile` step instead of a `step`,
-with the conflicting paths named in its prompt.
+Then a missing workarea is created rather than skipped: `mc work add <name>
+<repo> <name> --from origin/main`. Then `git merge origin/main` — **never** a
+rebase, which is what nights 1–2 of the shell runner cost to learn. The one
+conflict resolved without a session is an identical `.gitignore` hunk; anything
+else is left in progress and the project gets a `reconcile` step instead of a
+`step`, with the conflicting paths named in its prompt.
+
+**A project's branches are `<name>` or `<name>-<suffix>`.** That convention is
+what lets a pull request be matched back to a project at all, and rule 5 is
+what makes it true rather than hoped for: `projectForBranch` takes the longest
+project name the branch equals or begins with followed by a hyphen — longest,
+because `mc`, `mc-cut`, `mc-log` and `mc-test` are all project names and
+`mc-cut-2` must not resolve to `mc`. A pull request on a differently named
+branch is invisible to this, and there is no second rule for a case nobody has
+seen: every open pull request on 2026-09-02 followed the convention.
 
 `chooseKind` is the whole of what a project gets:
 
 | state | kind |
 |---|---|
+| an open pull request | nothing, one line naming it |
 | merge left in conflict | `reconcile` |
 | plan says `status: ready` | `step` |
 | plan says anything else | nothing, one skip line |
+| the plan does not parse | nothing — and a row in `~/mc/intake/unreadable-plans.md` |
 | no plan in the worktree | nothing, silently |
 
 There is no `triage` and there never will be again: the runner runs plans, it
@@ -372,6 +410,17 @@ Everything lives under `~/mc/runner/`.
   list of lines and not a line.
 - **`log/closed/<name>/`** — whatever a closed workarea kept beside its
   checkout. Moved, never deleted.
+
+Three files go to `~/mc/intake/` instead, where `mc brief` raises them: they
+are questions for Martin rather than records of what the runner did.
+`undocumented-closures.md` is appended when a project is archived with
+`doc: none`; `unplanned-workareas.md` and `unreadable-plans.md` are rewritten
+whole every round, so a folder that got a plan and a plan somebody fixed each
+leave their list by themselves. `unreadable-plans.md` (`plan-intake.js`) is the
+newest of the three and exists for the same reason as the other two: the
+runner can hand out no step from a plan the schema refuses, and what its author
+meant to say is not mc's to guess. It used to be a `runner.log` line, which is
+where `new-user` sat for a day.
 
 ## Sleeping and stopping
 

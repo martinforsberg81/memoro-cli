@@ -24,7 +24,6 @@ const PLAN = (status, title) => JSON.stringify({
   contract: ['Not without Martin.'],
   out_of_scope: ['Everything else.'],
   success_criteria: [{ met: false, criterion: 'It is done.', check: 'The gate is green.' }],
-  what_the_code_taught_us: [],
   documents: [],
   steps: [
     { title: 'The first step', status: 'done', done_when: 'it was done', instruction: [], pr: 401, blocked_by: null },

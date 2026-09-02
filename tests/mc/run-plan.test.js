@@ -73,7 +73,6 @@ function record({ status = 'ready', steps } = {}) {
       contract: ['Not without Martin.'],
       out_of_scope: ['Everything else.'],
       success_criteria: [{ met: false, criterion: 'It is done.', check: 'The gate is green.' }],
-      what_the_code_taught_us: [],
       documents: [],
       steps: steps || [{
         title: 'The one step',
@@ -211,8 +210,15 @@ test('stepPrompt names the step, its done_when, and what the session may edit', 
   assert.match(p, /Done when: the object draws in both themes/u);
   // The boundary is in the prompt as well as the role, because it is what the
   // runner checks on the way back in.
-  assert.match(p, /not another step, not the goal, the contract or the scope/u);
-  assert.match(p, /set this step to\n`blocked` with `blocked_by`/u, 'it still says how to stop on a question it cannot answer');
+  assert.match(p, /not\nanother step, not the goal, the contract or the scope/u);
+  assert.match(p, /set this step to\n`blocked` with `blocked_by:/u, 'it still says how to stop on a question it cannot answer');
+  // The two shapes the prompt never stated, and the two a session got wrong on
+  // 2026-09-02: `action-window` wrote a `blocked_by` that was not
+  // `{ kind, name }` at 10:18, and `msr-track-3` rewrote a criterion's own text
+  // at 12:27. Both are checked on the way back in, so both are said here.
+  assert.match(p, /its\n`learned` — an array of paragraph strings/u);
+  assert.match(p, /"kind": "decision" \| "project", "name"/u);
+  assert.match(p, /only `met` is yours/u);
   assert.match(p, /----- PLAN\.json -----\n\{"schema":"mc-plan"\}/u);
   // The runner only ever starts a plan whose first unfinished step is ready, so
   // a step is never handed an answered decision to apply (Martin, 2026-08-29).

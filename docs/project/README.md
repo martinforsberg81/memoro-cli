@@ -35,8 +35,6 @@ the door.
   criterion is usually missing: the assertion, the query, the measurement — and
   for anything with a surface, the measurement *in the running app*. "Done" is
   never the session's judgement of its own work.
-- `what_the_code_taught_us` — `{ title, body }`, empty until the code teaches
-  something. A step session writes here.
 - `documents` — `{ label, path }`.
 - `runner` — optional: `tool`, `model`, `budget_minutes`. Only what the runner
   actually reads; there is no field here that nothing enforces.
@@ -55,6 +53,15 @@ carries:
   one string so a diff stays line-oriented for whoever reads the PR.
 - `status` — `ready`, `done`, `blocked` — with `pr` and `blocked_by`
   (`{ kind: "decision" | "project", name }`, required when stopped).
+- `learned` — an array of paragraphs, possibly empty: what that step's session
+  found in the code that the next one cannot see from the code in front of it.
+  This is where a session writes, and it is on the step rather than at the top
+  of the plan on purpose. It was `what_the_code_taught_us`, a shared list of
+  `{ title, body }` objects; on 2026-09-02 three sessions wrote the wrong shape
+  into it, and because the shape is validated, one bad paragraph made the whole
+  plan unreadable — `new-user`'s stayed unreadable on `origin/main` for a day,
+  and the runner logged a skip line for it every round that nobody read
+  (Martin, 2026-09-02: "Flytta in i steget: `steps[i].learned`").
 
 The plan has **no status of its own**: it is the state of the first step that is
 not done, and a plan whose steps are all done is done. The runner looks at that
@@ -75,12 +82,12 @@ In full, small:
     { "met": false, "criterion": "The hero draws a visual object.",
       "check": "Seen on a project page in the running app, light and dark." }
   ],
-  "what_the_code_taught_us": [],
   "documents": [{ "label": "Superseded", "path": "../../../plans/project-briefing-redesign.md" }],
   "steps": [
     { "title": "The purpose line", "status": "done",
       "done_when": "The description is edited in the hero.",
-      "instruction": [], "pr": 11085, "blocked_by": null },
+      "instruction": [], "learned": ["The hero hydrates twice: once on mount, once on theme."],
+      "pr": 11085, "blocked_by": null },
     { "title": "The hero object", "status": "ready",
       "done_when": "A project page draws the object in light and in dark.",
       "instruction": ["Generate the light and dark siblings, register the token, wire the hero.",
@@ -116,12 +123,14 @@ planning session and the runner share is a `PLAN.json` on `main`, and nothing
 else; the `<project>` directory name is what the runner will call that
 project's branch and its workarea when it first steps it.
 
-A step session edits its own step's `status` and `pr`, the criteria it actually
-met, and `what_the_code_taught_us`. It **never writes the plan's steps** — not a
-new one, not a rewrite of one that has not run, not a deletion — and never
-`goal`, `contract`, `out_of_scope`, or the criteria themselves. This is checked
-rather than asked: the runner compares the file before and after, and a session
-that touched anything else fails on the way back in.
+A step session edits its own step's `status`, `pr` and `learned`, and `met` on
+the criteria it actually met — the criterion and its check are Martin's words.
+It **never writes the plan's steps** — not a new one, not a rewrite of one that
+has not run, not a deletion — and never `goal`, `contract`, `out_of_scope`, or
+the criteria themselves. This is checked rather than asked: the runner compares
+the file before and after, and a session that touched anything else fails on the
+way back in. Everything a session may write is inside `steps[index]` and `met`,
+which is why that comparison is one skipped index and no shared field.
 
 When the code says a coming step is wrong, that is not a revision the step
 makes: the step goes `blocked` with `blocked_by` saying what the answer has to

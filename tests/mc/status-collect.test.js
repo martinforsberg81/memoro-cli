@@ -24,7 +24,6 @@ function planRecord({ repo, programme, project, status, title }) {
     contract: ['Not without Martin.'],
     out_of_scope: ['Everything else.'],
     success_criteria: [{ met: false, criterion: 'It is done.', check: 'The gate is green.' }],
-    what_the_code_taught_us: [],
     documents: [],
     steps: [{
       title,

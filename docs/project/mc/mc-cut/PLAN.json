@@ -52,32 +52,6 @@
       "check": "Not stated in the plan as written — how this is checked is for the plan review to settle."
     }
   ],
-  "what_the_code_taught_us": [
-    {
-      "title": "The handoff is a reader with no writer",
-      "body": [
-        "**The handoff is a reader with no writer.** `grep -rn \"HANDOFF.md\" src/` returns exactly one line, and it is a *read* instruction in `mc plan`'s first prompt (`src/mc/commands/plan.js:107`), repeated in `canon/roles/plan.md:19`. Nothing in mc has ever written one. It entered with `b4a206a` (#414). Five of ~60 workareas have one, because the prompt told each planning session that the last one might have left one. `src/mc/work-area.js:48` writes the idea down — *\"`handoff/` is where a conversation leaves its baton for the next one\"* — and `FILING_DIRECTORIES` (`:55`) exists to keep that directory off the page. A filter against a directory nothing creates. mc already has the whole chain this was invented to replace: `decisions/` → `**Beslut:**` → `mc plan` → PLAN.md, which has a section called *What the code taught us* → `mc run` → close-out → `project_log.md`. A handoff is what gets written when the plan is not trusted to carry the work, and it dies with the workarea, which is exactly when someone wants it."
-      ]
-    },
-    {
-      "title": "The inbox is real, and still legacy",
-      "body": [
-        "**The inbox is real, and still legacy.** Unlike the handoff it has writers — `work-send.js:176 inboxPath` and `repo-freshen.js` — and one live path in: `repo-gate.js`, `commands/suite.js` and `commands/repo.js` call `tellHolder` (`lease-refusal.js:19`), which drops a line in the suite-lease holder's `inbox/` and knocks on their tmux. That is the PM-era answer to \"another session is holding the lease\". With `mc run` owning both lanes inside one process, the session to be woken is the one asking."
-      ]
-    },
-    {
-      "title": "Two things wear the same word and must not be swept together",
-      "body": [
-        "**Two things wear the same word and must not be swept together.** `src/mc/handoff.js`, `session-runtime-*.js`, `handoff-controller-capability.js` and `src/runtime/broker/handoff-switch-journal.js` are the *provider* handoff — codex↔claude session switching, `mc-session-handoff-v1`. Different feature. It falls in step 4 with the rest of the broker world, on the reachability evidence, not on its name."
-      ]
-    },
-    {
-      "title": "Why the first measurement was wrong",
-      "body": [
-        "**Why the first measurement was wrong.** Seeding the graph with the `status` verb pulls `src/cli/status.js`, and from there the entire v1 world: it reported 244 files and 72 703 lines \"live\". `mc status <name>` is live but reaches the page through a v1 shim. Anything measuring this must seed from `mc/commands/home.js` and the `mc/commands/*` verbs, never from the router's `modules` map — the map is the thing being cut."
-      ]
-    }
-  ],
   "documents": [
     {
       "label": "Ruling `mc-test-1` — [`../rulings.md`](../rulings.md) §4, for the `#410`",
@@ -91,6 +65,16 @@
       "done_when": "Not stated in the plan as written — when this step is finished is for the plan review to settle.",
       "instruction": [
         "**The handoff concept.** Three sites, zero writers — `plan.js:107`, `canon/roles/plan.md:19`, `work-area.js:55`. Then the 5 `HANDOFF.md` and 3 `handoff/` under `~/mc`. Order matters: the files before the `FILING_DIRECTORIES` entry, or the directories surface on the page as repositories that are not repositories in between."
+      ],
+      "learned": [
+        "**The handoff is a reader with no writer**",
+        "**The handoff is a reader with no writer.** `grep -rn \"HANDOFF.md\" src/` returns exactly one line, and it is a *read* instruction in `mc plan`'s first prompt (`src/mc/commands/plan.js:107`), repeated in `canon/roles/plan.md:19`. Nothing in mc has ever written one. It entered with `b4a206a` (#414). Five of ~60 workareas have one, because the prompt told each planning session that the last one might have left one. `src/mc/work-area.js:48` writes the idea down — *\"`handoff/` is where a conversation leaves its baton for the next one\"* — and `FILING_DIRECTORIES` (`:55`) exists to keep that directory off the page. A filter against a directory nothing creates. mc already has the whole chain this was invented to replace: `decisions/` → `**Beslut:**` → `mc plan` → PLAN.md, which has a section called *What the code taught us* → `mc run` → close-out → `project_log.md`. A handoff is what gets written when the plan is not trusted to carry the work, and it dies with the workarea, which is exactly when someone wants it.",
+        "**The inbox is real, and still legacy**",
+        "**The inbox is real, and still legacy.** Unlike the handoff it has writers — `work-send.js:176 inboxPath` and `repo-freshen.js` — and one live path in: `repo-gate.js`, `commands/suite.js` and `commands/repo.js` call `tellHolder` (`lease-refusal.js:19`), which drops a line in the suite-lease holder's `inbox/` and knocks on their tmux. That is the PM-era answer to \"another session is holding the lease\". With `mc run` owning both lanes inside one process, the session to be woken is the one asking.",
+        "**Two things wear the same word and must not be swept together**",
+        "**Two things wear the same word and must not be swept together.** `src/mc/handoff.js`, `session-runtime-*.js`, `handoff-controller-capability.js` and `src/runtime/broker/handoff-switch-journal.js` are the *provider* handoff — codex↔claude session switching, `mc-session-handoff-v1`. Different feature. It falls in step 4 with the rest of the broker world, on the reachability evidence, not on its name.",
+        "**Why the first measurement was wrong**",
+        "**Why the first measurement was wrong.** Seeding the graph with the `status` verb pulls `src/cli/status.js`, and from there the entire v1 world: it reported 244 files and 72 703 lines \"live\". `mc status <name>` is live but reaches the page through a v1 shim. Anything measuring this must seed from `mc/commands/home.js` and the `mc/commands/*` verbs, never from the router's `modules` map — the map is the thing being cut."
       ],
       "pr": null,
       "blocked_by": {

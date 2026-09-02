@@ -60,7 +60,6 @@ const PLAN = {
       "check": "runs.tsv holds its row."
     }
   ],
-  "what_the_code_taught_us": [],
   "documents": [],
   "runner": {
     "tool": "codex"

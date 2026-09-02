@@ -73,7 +73,8 @@ describe('the decision shape every role writes', () => {
   it('step is told which four things are its to edit, and that it is checked', () => {
     const { overlay } = readCanonRole('step');
     assert.match(overlay, phrase('You never write the plan\'s steps'));
-    assert.match(overlay, phrase('your step\'s `status` and `pr`'));
+    assert.match(overlay, phrase('its `status`, its `pr`, and its `learned`'));
+    assert.match(overlay, phrase('`met` on the criteria you actually met'));
     assert.match(overlay, phrase('This is checked, not asked'));
     assert.match(overlay, phrase('a session that changed anything else leaves a PR it will not'));
   });
