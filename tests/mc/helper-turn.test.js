@@ -47,7 +47,9 @@ function env() {
 function fakeSession(seen, { write = PROPOSAL, status = 0, timedOut = false, stdout = CLAUDE_JSON } = {}) {
   return async (call) => {
     Object.assign(seen, call);
-    if (write) writeFileSync(join(call.cwd, 'proposals', '2026-08-29-expose-operations.md'), write);
+    // The turn stands in `intake/` and writes into `../proposals/` — its own
+    // room beside intake, not inside the material it reads.
+    if (write) writeFileSync(join(call.cwd, '..', 'proposals', '2026-08-29-expose-operations.md'), write);
     return { status, stdout, stderr: '', timedOut };
   };
 }
@@ -97,7 +99,7 @@ describe('the helper turn', () => {
     const { result } = await turn();
     assert.equal(result.wrote.length, 1);
     assert.equal(result.wrote[0].file, '2026-08-29-expose-operations.md');
-    assert.equal(result.wrote[0].title, 'The nightly outcomes reach no script');
+    // The name is all mc knows about it. What it says is the reader's business.
     assert.equal(result.waiting.length, 1);
 
     const said = await turn({}, { session: { write: null } });

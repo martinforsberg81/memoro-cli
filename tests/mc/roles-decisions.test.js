@@ -1,16 +1,15 @@
 /**
- * How every role that can put a question to Martin is told to write it.
+ * How every role that can put a question to Martin is told to put it.
  *
- * The five overlays used to agree on a shape that produced the failure this
+ * The overlays used to agree on a shape that produced the failure this
  * project exists to fix: "the options one line each, and a `## Rekommendation`
  * section". A brief opening with six of those is a menu of menus — Martin
- * cannot take a position on it, and two of the six he was shown on 2026-08-29
- * belonged to projects that no longer existed. The shape is a proposal now:
- * one thing to do, defended from the code, that he answers with a word.
+ * cannot take a position on it. The shape is a proposal: one thing to do,
+ * defended from the code, that he answers with a word.
  *
- * The second half is where a decision lives once it is answered. The file is
- * deleted by `mc run`, so the plan has to absorb the answer or it is lost —
- * `step.md` is the role that does the absorbing and is held to it hardest.
+ * There is no decision file any more, and no answer line: what he decides is
+ * written into the plan it is about, and the plan comes back to the runner by
+ * its first unfinished step being `ready`.
  */
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
@@ -18,16 +17,13 @@ import { describe, it } from 'node:test';
 import { readCanonRole } from '../../src/mc/roles.js';
 
 /**
- * Every role whose overlay tells a session how to write a decision file.
- * `brief` answers them instead.
+ * Every role that may put a question to Martin. `brief` answers them.
  *
  * `plan` is not one any more. Its overlay is gone — the role is frontmatter,
  * and what a planning session is told is its first prompt and nothing else
  * (Martin, 2026-08-31) — so there is no text there to hold to a shape. It is
  * also the one session Martin is sitting in front of: a question does not have
- * to become a file to reach him, it can be asked. If one is written anyway,
- * `scanDecisions` reads `~/mc/plan/<programme>/decisions/` and `mc brief` puts
- * it up like any other.
+ * to become anything to reach him, it can be asked.
  */
 const AUTHORS = ['worker', 'step'];
 
@@ -40,8 +36,7 @@ describe('the decision shape every role writes', () => {
       const { overlay } = readCanonRole(name);
 
       it('asks for a proposal, not a menu', () => {
-        assert.match(overlay, phrase('Rekommendation'));
-        assert.match(overlay, /\bGO\b|never as a menu|Never a menu|not a menu/u);
+        assert.match(overlay, /\bGO\b|never as a menu|Never a menu|not a menu|never a menu/u);
         assert.match(overlay, /menu/u);
       });
 
@@ -51,27 +46,24 @@ describe('the decision shape every role writes', () => {
         assert.doesNotMatch(overlay, phrase('question, options, recommendation'));
       });
 
-      it('forbids the file when the question is not ready', () => {
-        assert.match(overlay, /unclear/u);
+      it('forbids the question when it is not ready', () => {
+        assert.match(overlay, /unclear|not ready/u);
         assert.match(overlay, /\bread\b/u);
       });
     });
   }
 
   /**
-   * `step` is the session the runner gives an answered decision to. If it
-   * only "applies" the answer in code, the plan still reads as waiting and
-   * the deletion rule keeps the file forever; if it writes the answer into
-   * PLAN.md, the file has done its job and can go.
+   * What Martin decides goes into the plan it is about — there is nowhere
+   * else for it to live now that mc keeps no decision file.
    */
-  it('step writes the answer into the plan, and the runner never reads one', () => {
+  it('step writes the answer into the plan, and nothing else carries it', () => {
     const { overlay } = readCanonRole('step');
     assert.match(overlay, phrase('the answer is written'));
     assert.match(overlay, phrase('into the plan'));
     assert.match(overlay, phrase('so the plan carries it on its own'));
-    assert.match(overlay, phrase('The runner never reads decision files'));
     assert.match(overlay, phrase('a plan comes back by its first unfinished step being `ready`'));
-    assert.doesNotMatch(overlay, phrase('read them first, apply the answer, set'));
+    assert.doesNotMatch(overlay, /decision file/u);
   });
 
   /**
@@ -94,7 +86,6 @@ describe('the decision shape every role writes', () => {
     const { overlay } = readCanonRole('brief');
     assert.match(overlay, phrase('says GO to'));
     assert.match(overlay, phrase('Never lay out options for him to choose between'));
-    assert.match(overlay, phrase('Present a decision as a menu of options'));
-    assert.doesNotMatch(overlay, phrase('the options in one line each'));
+    assert.match(overlay, phrase('is not his to answer'));
   });
 });

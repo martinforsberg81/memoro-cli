@@ -226,7 +226,7 @@ function runRows(files) {
  * to stop.
  */
 function plan({ status = 'ready', title = 'The one step', done_when = 'do x', runner, steps, documents = [] } = {}) {
-  const stopped = status === 'blocked' || status === 'waiting-decision';
+  const stopped = status === 'blocked';
   return JSON.stringify({
     schema: 'mc-plan',
     version: 1,
@@ -280,8 +280,8 @@ test('one step: worktree made from origin/main, session through the adapter, PR 
   assert.match(f.files['/w/runner/log/runner.log'], /alpha: merged #77\n.*alpha: step done rc=0 0s pr=77 turns=4 note=success,merged/u);
 });
 
-test('skips: live tmux session, dirty worktree, waiting-decision', async () => {
-  const waiting = plan({ status: 'waiting-decision' });
+test('skips: live tmux session, dirty worktree, a blocked step', async () => {
+  const waiting = plan({ status: 'blocked' });
   const f = fixture({
     plans: { memoro: { live: ready, dirty: ready, wait: waiting } },
     live: ['live'], dirty: ['dirty'], session: okSession(),
@@ -293,30 +293,9 @@ test('skips: live tmux session, dirty worktree, waiting-decision', async () => {
   const log = f.files['/w/runner/log/runner.log'];
   assert.match(log, /live: live tmux session, skip/u);
   assert.match(log, /dirty: dirty worktree, skip/u);
-  assert.match(log, /wait: step 1 is waiting-decision on decision prog-1, skip/u);
+  assert.match(log, /wait: step 1 is blocked on decision prog-1, skip/u);
 });
 
-/**
- * The runner has nothing to do with decisions (Martin, 2026-08-29). It used
- * to grep every decisions directory under the work root for a `Beslut` line
- * naming this project or its programme, and start the project when it found
- * one. A plan comes back by being set `ready`, and by nothing else.
- */
-test('an answered decision file does not start a waiting-decision project', async () => {
-  const waiting = plan({ status: 'waiting-decision' });
-  const f = fixture({
-    areas: {
-      other: { repo: 'memoro', decisions: { 'prog-1.md': '# q\n\n**Beslut:** A\n' } },
-      wait: { repo: 'memoro', programme: 'prog', plan: waiting },
-    },
-    plans: { memoro: { wait: waiting } },
-    session: okSession(),
-  });
-  await createRunner({ deps: f.deps }).round();
-  assert.equal(f.calls.sessions.length, 0, 'nothing starts');
-  assert.match(f.files['/w/runner/log/runner.log'], /wait: step 1 is waiting-decision on decision prog-1, skip/u);
-  assert.equal(f.files['/w/other/decisions/prog-1.md'], '# q\n\n**Beslut:** A\n', 'and the runner does not touch the file either');
-});
 
 test('a conflicting merge of origin/main becomes a reconcile step with the files named', async () => {
   const f = fixture({ areas: { c: { repo: 'memoro', programme: 'prog', plan: ready } }, plans: { memoro: { c: ready } }, conflicts: { c: ['docs/project/project_log.md'] }, session: okSession() });
@@ -1048,7 +1027,7 @@ test('queue.md is rewritten to names only, and a name leaves it the moment its s
 test('a name whose project was skipped stays in the queue', async () => {
   const f = fixture({
     queue: 'alpha\nwait\n',
-    plans: { memoro: { alpha: ready, wait: plan({ status: 'waiting-decision' }) } },
+    plans: { memoro: { alpha: ready, wait: plan({ status: 'blocked' }) } },
     session: okSession(),
     gh: { alpha: { number: 7 } },
   });

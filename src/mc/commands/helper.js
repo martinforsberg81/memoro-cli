@@ -4,7 +4,7 @@
  * The bare verb is **the desk**: a fresh foreground session standing in
  * `~/mc/helper/`, with Martin in it, whose whole job is to take what he says
  * is broken or should be better and write it down as a proposal in
- * `~/mc/intake/proposals/`. It reads no digest and it does not touch the
+ * `~/mc/proposals/`. It reads no digest and it does not touch the
  * proposals already waiting — adding is all it does.
  *
  * `--intake` is **the eye**: the script that reads the five sources memoro
@@ -119,7 +119,7 @@ export async function run(argv, deps = {}) {
       continue;
     }
     stdout.write(`mc: ${repo}: ${describeTurn(turn)} (${took}s, ${turn.tool} ${turn.model})\n`);
-    for (const p of turn.wrote) stdout.write(`mc:   ${p.file} — ${p.title}\n`);
+    for (const p of turn.wrote) stdout.write(`mc:   ${p.file}\n`);
     wrote += turn.wrote.length;
   }
   // Only when there is something to read. A quiet day that still points at

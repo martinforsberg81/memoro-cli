@@ -27,7 +27,7 @@ test('done is the whole trigger, and one repository at a time', () => {
     { repo: 'memoro', project: 'a', status: 'done' },
     { repo: 'memoro', project: 'b', status: 'ready' },
     { repo: 'memoro-cli', project: 'mc-ui', status: 'done' },
-    { repo: 'memoro', project: 'c', status: 'waiting-decision' },
+    { repo: 'memoro', project: 'c', status: 'blocked' },
   ];
   assert.deepEqual(donePlans(plans, 'memoro').map((p) => p.project), ['a']);
   assert.deepEqual(donePlans(plans, 'memoro-cli').map((p) => p.project), ['mc-ui']);

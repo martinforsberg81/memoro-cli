@@ -38,7 +38,6 @@ const MARK = { running: '●', waiting: '◆', stopped: '■', quiet: '·' };
 /** Where a plan stands, one colour each, wherever a status is printed. */
 const STATUS_TONE = {
   ready: ['green'],
-  'waiting-decision': ['yellow'],
   blocked: ['red'],
   done: ['grey'],
   // A plan that does not parse is not a quiet state: the runner will refuse it
@@ -257,17 +256,6 @@ function queueLines(lines, c, wide, queue) {
   ], ' · '), wide - 7)}`);
 }
 
-function decisionsLines(lines, c, wide, decisions) {
-  heading(lines, c, wide, 'DECISIONS', decisions.count ? `${decisions.count} waiting` : 'none waiting', 'mc brief');
-  for (const d of decisions.first) {
-    // The mark is yellow and the question white: what waits on a person is
-    // the one thing on the page nothing else can move.
-    const left = `     ${c(MARK.running, 'yellow')} ${c(pad(clip(d.file, 41), 42), 'grey')}`;
-    lines.push(row(c, wide, left, d.title, null, ['white']));
-  }
-  if (decisions.more) say(lines, c, wide, 7, `… ${decisions.more} more`);
-}
-
 /**
  * INTAKE — the helper's block: when it last looked, what it found, and how
  * many proposals nobody has queued or dropped.
@@ -307,7 +295,7 @@ function intakeLines(lines, c, wide, intake) {
  * else, and the one a first draft of this section broke: 41 columns of name
  * plus 17 of status is wider than the 60-column floor all by itself.
  *
- * `waiting-decision` is sixteen characters and the longest status there is, so
+ * `blocked` is the longest status there is, so
  * it gets its whole width the moment the terminal can afford it and is clipped
  * below that. The name is whatever is left once the middle has the eight
  * columns `row` will insist on anyway.
@@ -417,9 +405,7 @@ export function renderPageLines(data, {
   const cost = money(data.now?.day?.cost);
   const brand = `${c('MEMORO·CLI', 'bold', 'white')}${version ? c(`  ${version}`, 'grey') : ''}`;
   // Counted on the plain text, and the narrowest terminal keeps the count it
-  // was opened for: decisions wait on a person, the rest is bookkeeping.
   const parts = [
-    data.decisions.count ? { text: `${data.decisions.count} decisions`, styles: ['yellow', 'bold'] } : null,
     { text: `${data.queue.runnable} of ${data.queue.depth} queued`, styles: ['white'] },
     cost ? { text: `${cost} today`, styles: ['grey'] } : null,
   ].filter(Boolean);
@@ -434,8 +420,6 @@ export function renderPageLines(data, {
   nowLines(lines, c, wide, { ...data.now, at_ms: at });
   lines.push('');
   queueLines(lines, c, wide, data.queue);
-  lines.push('');
-  decisionsLines(lines, c, wide, data.decisions);
   lines.push('');
   intakeLines(lines, c, wide, data.intake);
   lines.push('');

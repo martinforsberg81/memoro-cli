@@ -11,7 +11,7 @@ import { describe, it } from 'node:test';
 
 import { runsSince } from '../../src/mc/brief-collect.js';
 import {
-  collectPage, countNewErrors, decisionsSection, intakeSection, newErrorLines, nowSection, queueSection,
+  collectPage, countNewErrors, intakeSection, newErrorLines, nowSection, queueSection,
   projectsSection,
 } from '../../src/mc/page-collect.js';
 import { colourFor, columnsFor, renderPage, renderPageLines } from '../../src/mc/page-render.js';
@@ -26,7 +26,7 @@ const NOW = new Date('2026-08-29T12:00:00Z');
  * step that is not done — so a fixture says which step it is on by building one.
  */
 function planRecord({ repo, programme, project, status, title }) {
-  const stopped = status === 'blocked' || status === 'waiting-decision';
+  const stopped = status === 'blocked' || status === 'blocked';
   const steps = status === 'done'
     ? [{ title, status: 'done', done_when: 'it was done', instruction: [], pr: null, blocked_by: null }]
     : [{
@@ -62,17 +62,10 @@ function planRecord({ repo, programme, project, status, title }) {
 }
 
 const PLANS = [
-  planRecord({ repo: 'memoro', programme: 'assistant-avatar', project: 'avatar-self-serve', status: 'waiting-decision', title: 'Answer decision 4' }),
+  planRecord({ repo: 'memoro', programme: 'assistant-avatar', project: 'avatar-self-serve', status: 'blocked', title: 'Answer decision 4' }),
   planRecord({ repo: 'memoro', programme: 'docx-editing-surface', project: 'docx-editor', status: 'ready', title: 'Measure paste and IME' }),
   planRecord({ repo: 'memoro-cli', programme: 'mc', project: 'mc-ui', status: 'ready', title: 'The page' }),
   planRecord({ repo: 'memoro-cli', programme: 'mc', project: 'mc-run', status: 'done', title: 'nothing' }),
-];
-const DECISIONS = [
-  { area: 'org-update', file: 'org-update/decisions/network-review-1.md', title: '1. A durable graph model?', answered: false },
-  { area: 'pdf', file: 'pdf/decisions/document-pipeline-1.md', title: '1. How does PDF extraction fit?', answered: false },
-  { area: 'mc-ui', file: 'mc-ui/decisions/mc-3.md', title: '3. What is bare mc?', answered: true },
-  { area: 'swedish-grammar', file: 'swedish-grammar/decisions/language-content-1.md', title: '1. Which corpus?', answered: false },
-  { area: 'legal-work', file: 'legal-work/decisions/legal-2.md', title: '2. Recurrence guard?', answered: false },
 ];
 const TSV = [
   'ts\tname\tkind\texit\tseconds\tpr\tturns\tinput\toutput\tcache_read\tcache_write\tsession\tnote',
@@ -155,7 +148,7 @@ describe('QUEUE', () => {
     assert.equal(queue.more, 0);
     assert.equal(queue.skipped.count, 4);
     assert.deepEqual(queue.skipped.reasons, {
-      live: 1, 'waiting-decision': 1, done: 1, 'no-plan': 1,
+      live: 1, 'blocked': 1, done: 1, 'no-plan': 1,
     });
   });
 
@@ -166,16 +159,6 @@ describe('QUEUE', () => {
   });
 });
 
-describe('DECISIONS', () => {
-  it('counts only the unanswered and names the first few', () => {
-    const decisions = decisionsSection(DECISIONS);
-    assert.equal(decisions.count, 4);
-    assert.deepEqual(decisions.first.map((d) => d.file.split('/').at(-1)), [
-      'network-review-1.md', 'document-pipeline-1.md', 'language-content-1.md',
-    ]);
-    assert.equal(decisions.more, 1);
-  });
-});
 
 describe('INTAKE', () => {
   const DIGEST = [
@@ -289,7 +272,7 @@ describe('PROJECTS', () => {
     assert.equal(ui.pr, 440);
     assert.equal(ui.workarea, true);
     assert.deepEqual(ui.last, { ts: '2026-08-29T10:00:00Z', kind: 'step', pr: '440', note: 'success,merged' });
-    assert.deepEqual(projects.statuses, { 'waiting-decision': 1, ready: 2, done: 1 });
+    assert.deepEqual(projects.statuses, { 'blocked': 1, ready: 2, done: 1 });
   });
 
   // A project is what the work is; a folder is where a session runs. mc-run
@@ -365,7 +348,6 @@ function pageData(over = {}) {
   return {
     now: nowSection({ rows: [], now: NOW, alive: () => false }),
     queue: queueSection({ queue: [], plans: [] }),
-    decisions: decisionsSection([]),
     intake: intakeSection({ digest: null, proposals: [], now: NOW }),
     projects: projectsSection({ areas: [], plans: [] }),
     caches: { fresh: false, plans: [], prs: { fetched: null, age_seconds: null, count: 0 } },
@@ -389,7 +371,6 @@ const DATA = pageData({
     alive: live,
   }),
   queue: queueSection({ queue: ['mc-ui', 'docx-editor', 'mc-run'], plans: PLANS, live: ['docx-editor'] }),
-  decisions: decisionsSection(DECISIONS),
   intake: intakeSection({
     digest: {
       name: 'errors-2026-08-29.md',
@@ -412,22 +393,21 @@ const DATA = pageData({
 });
 
 describe('the page', () => {
-  it('prints the five sections in order, with the counts and the verb that expands each', () => {
+  it('prints the four sections in order, with the counts and the verb that expands each', () => {
     const text = renderPage(DATA, { columns: 120, version: '0.7.11', now: NOW });
-    const at = ['NOW', 'QUEUE', 'DECISIONS', 'INTAKE', 'PROJECTS'].map((head) => text.indexOf(`  ${head}`));
+    const at = ['NOW', 'QUEUE', 'INTAKE', 'PROJECTS'].map((head) => text.indexOf(`  ${head}`));
     assert.ok(at.every((index, n) => index >= 0 && (n === 0 || index > at[n - 1])), text);
     assert.match(text, /MEMORO·CLI {2}0\.7\.11/u);
-    assert.match(text, /4 decisions {2}· {2}1 of 3 queued/u);
+    assert.match(text, /1 of 3 queued/u);
     assert.match(text, /● mc-ui\s+step · claude opus · 20 min of 90 min · pid 4242/u);
     assert.match(text, /■ STOP requested — the runner exits after the steps it is in/u);
     assert.match(text, /◆ docx-editor\s+tmux mc-docx-editor · open 60 min/u);
     assert.match(text, /runner up 120 min · 3 steps in 24 h — merged 1, open 1, failed 0, timed out 1 · ≈\$7\.\d\d list \(opus, 2026-06\)/u);
     assert.match(text, /QUEUE {2}1 runnable of 3\s+mc status <name>/u);
     assert.match(text, /skipped 2 \(live 1, done 1\)/u);
-    assert.match(text, /DECISIONS {2}4 waiting\s+mc brief/u);
-    assert.match(text, /… 1 more/u);
+    assert.doesNotMatch(text, /DECISIONS/u);
     assert.match(text, /INTAKE {2}2026-08-29 \(60 min old\) · 1 new error \(1 loud\) · 1 proposal\s+mc helper --intake/u);
-    assert.match(text, /PROJECTS {2}4 in 2 repos {2}ready 2 · done 1 · waiting-decision 1\s+mc status <name>/u);
+    assert.match(text, /PROJECTS {2}4 in 2 repos {2}ready 2 · blocked 1 · done 1\s+mc status <name>/u);
     assert.match(text, /^ {2}memoro 2$/mu, 'the repository is a heading of its own');
     assert.match(text, / {4}4 · mc\/mc-ui\s+ready\s+0\/1\s+Step 1, The page — done when the step\s?…?\s+#440/u);
     assert.match(text, /3 of them have no workarea yet/u);
@@ -470,7 +450,7 @@ describe('the page', () => {
     const code = await page(['--json'], { collect: async () => DATA, stdout: { write: (s) => { out += s; } } });
     assert.equal(code, 0);
     const parsed = JSON.parse(out);
-    assert.deepEqual(Object.keys(parsed), ['now', 'queue', 'decisions', 'intake', 'projects', 'caches', 'notes']);
+    assert.deepEqual(Object.keys(parsed), ['now', 'queue', 'intake', 'projects', 'caches', 'notes']);
     assert.equal(parsed.projects.repos[0].projects[0].name, 'avatar-self-serve');
     assert.equal(parsed.queue.runnable, 1);
     // Rendering the parsed JSON gives the same page: the two cannot drift.
@@ -498,11 +478,10 @@ describe('collectPage', () => {
     }));
     writeFileSync(join(root, 'runner', 'log', 'runs.tsv'), TSV);
     writeFileSync(join(root, 'queue.md'), '# the queue\nmc-ui\ndocx-editor\n');
-    mkdirSync(join(root, 'org-update', 'decisions'), { recursive: true });
-    writeFileSync(join(root, 'org-update', 'decisions', 'network-review-1.md'), '# 1. A durable graph model?\n\n## Rekommendation\n\nA.\n');
-    mkdirSync(join(root, 'intake', 'proposals'), { recursive: true });
+    mkdirSync(join(root, 'proposals'), { recursive: true });
+    mkdirSync(join(root, 'intake'), { recursive: true });
     writeFileSync(join(root, 'intake', 'errors-2026-08-29.md'), '# Errors\n\n## New since the last digest\n\n- ! `abc` — 41x 500 — loud\n');
-    writeFileSync(join(root, 'intake', 'proposals', '2026-08-29-one.md'), '# A proposal\n');
+    writeFileSync(join(root, 'proposals', '2026-08-29-one.md'), 'A proposal, with no heading — mc counts it either way.\n');
     for (const area of ['mc-ui', 'docx-editor']) mkdirSync(join(root, area, 'memoro-cli', '.git'), { recursive: true });
     return root;
   }
@@ -529,7 +508,6 @@ describe('collectPage', () => {
     assert.equal(data.now.day.steps, 3);
     assert.equal(data.queue.depth, 2, 'the comment line is not a project');
     assert.equal(data.queue.runnable, 2);
-    assert.equal(data.decisions.count, 1);
     assert.equal(data.intake.new_errors, 1);
     assert.deepEqual(data.intake.loud_lines, ['`abc` — 41x 500 — loud']);
     assert.equal(data.intake.proposals, 1);
@@ -611,7 +589,7 @@ describe('the palette', () => {
   // same page with the escapes taken out again.
   const SNAPSHOT = [
     '',
-    'bold+white grey grey yellow+bold grey white grey grey', //   MEMORO·CLI 0.7.11 ── 4 decisions · 1 of 3 queued · ≈$7.28 today
+    'bold+white grey grey white grey grey', //   MEMORO·CLI 0.7.11 ── 4 decisions · 1 of 3 queued · ≈$7.28 today
     '',
     'bold+cyan', //                                               NOW
     'green bold+white green grey grey grey white grey grey', //  ● mc-ui  step · claude opus · 20 min of 90 min · pid 4242
@@ -623,18 +601,12 @@ describe('the palette', () => {
     'grey bold+white green', //                                      1  mc-ui  step
     'dim+grey', //                                                   skipped 2 (live 1, done 1)
     '',
-    'bold+cyan grey grey', //                                      DECISIONS  4 waiting              mc brief
-    'yellow grey white', //                                        ● org-update/…/network-review-1.md  1. A durable graph model?
-    'yellow grey white',
-    'yellow grey white',
-    'grey', //                                                     … 1 more
-    '',
     'bold+cyan green grey red grey yellow grey', //                INTAKE  2026-08-29 (60 min old) · 1 new error (1 loud) · 1 proposal
     'red bold+white', //                                           !  `abc` — 41x 500 — loud
     '',
-    'bold+cyan grey green grey grey grey yellow grey', //          PROJECTS  4 in 2 repos  ready 2 · done 1 · waiting-decision 1
+    'bold+cyan grey green grey red grey grey grey', //          PROJECTS  4 in 2 repos  ready 2 · done 1 · blocked 1
     'bold+cyan dim+grey', //                                       memoro 2
-    'grey grey white yellow grey grey blue', //                      1 · assistant-avatar/avatar-self-serve  waiting-decision  0/1  …  triage
+    'grey grey white red grey grey blue', //                      1 · assistant-avatar/avatar-self-serve  blocked  0/1  …  triage
     'grey grey white green grey grey green', //                      2 · docx-editing-surface/docx-editor  ready  0/1  …  step
     'bold+cyan dim+grey', //                                       memoro-cli 2
     'grey grey white grey grey', //                                  3 · mc/mc-run  done  1/1  nothing
@@ -690,7 +662,7 @@ describe('the palette', () => {
     });
     assert.equal(code, 0);
     assert.ok(!out.includes(ESC), '--json is bytes for a program, never for an eye');
-    assert.deepEqual(Object.keys(JSON.parse(out)), ['now', 'queue', 'decisions', 'intake', 'projects', 'caches', 'notes']);
+    assert.deepEqual(Object.keys(JSON.parse(out)), ['now', 'queue', 'intake', 'projects', 'caches', 'notes']);
   });
 
   it('gives a step kind one colour wherever a kind is printed', () => {
@@ -726,14 +698,13 @@ describe('the palette', () => {
     const plans = [
       { repo: 'memoro-cli', project: 'a-ready', status: 'ready', next: 'one' },
       { repo: 'memoro-cli', project: 'b-blocked', status: 'blocked', next: 'two' },
-      { repo: 'memoro-cli', project: 'c-waiting', status: 'waiting-decision', next: 'three' },
       { repo: 'memoro-cli', project: 'd-done', status: 'done', next: 'four' },
     ];
     const data = pageData({
       projects: projectsSection({ plans, areas: plans.map((plan, n) => ({ name: plan.project, mtime_ms: 100 - n })).concat([{ name: 'e-none', mtime_ms: 0 }]) }),
     });
     const lines = paintedPage(data);
-    for (const [name, tone] of [['a-ready', 'green'], ['b-blocked', 'red'], ['c-waiting', 'yellow'], ['d-done', 'grey']]) {
+    for (const [name, tone] of [['a-ready', 'green'], ['b-blocked', 'red'], ['d-done', 'grey']]) {
       assert.equal(signature(rowWith(lines, name)).split(' ')[3], tone, `${name} is ${tone}`);
     }
     // A workarea no project explains is grey through and through, and the

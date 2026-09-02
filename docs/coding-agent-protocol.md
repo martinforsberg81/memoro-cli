@@ -52,7 +52,7 @@ Work is **projects**, and a project is a `PLAN.json` on `main`. This is the same
 shape in memoro; the difference is only which repository the plan lives in.
 
 ```
-mc brief    → Martin answers open questions with a **Beslut:** line
+mc brief    → Martin and a session read what happened and what is waiting
 mc plan     → a foreground session on one programme, with Martin in it;
               plans come out of it as docs/project/<programme>/<project>/PLAN.json
 mc run      → the runner takes one step of one ready plan, in a fresh session
@@ -64,7 +64,7 @@ mc merge    → the gate, then the squash
   programme here, `mc`. One file: the overall part — `goal`, `contract`,
   `out_of_scope`, `success_criteria`, `what_the_code_taught_us`, `documents` —
   then `steps[]`, each carrying its own `instruction`, `done_when` and `status`
-  (`ready` | `done` | `blocked` | `waiting-decision`). The plan has no status of
+  (`ready` | `done` | `blocked`). The plan has no status of
   its own: it is the state of the first step that is not done. See
   [`docs/project/README.md`](project/README.md).
 - **You do not write plan state by hand.** `mc plan <programme>` opens the
@@ -94,27 +94,10 @@ mc merge    → the gate, then the squash
 
 ## Working on this codebase as a coding agent
 
-Load `.claude/skills/agent-coordination.md` only when work is actually
-delegated across sessions or agents. It defines roles and handoffs; it does not
-duplicate repository, testing, or publication rules from this protocol.
-
 For focused work, inspect, implement, verify, and publish directly. For larger
 work, agree on a concise contract covering outcome, scope, non-goals,
 completion criteria, validation, dependencies, and escalation points. Resolve
 uncertainty through read-only inspection before asking or guessing.
-
-**Priming as coordinator** depends on your tool:
-
-- **Claude Code:** run `/be-coordinator` (slash command at
-  `.claude/commands/be-coordinator.md`)
-- **Codex / GPT / any other:** prompt the agent with: *"Read
-  `.claude/skills/agent-coordination.md` and
-  `.claude/commands/be-coordinator.md`, then follow the priming
-  instructions in be-coordinator to enter coordinator mode."*
-
-The command performs one bounded state snapshot through the App-backed
-`mc github` surface. It does not require a personal `gh` login or repeated
-polling.
 
 ### A series of pull requests (normative)
 
@@ -372,7 +355,7 @@ than left to be rediscovered:
 - Don't guess on design with 2+ reasonable options — raise a decision
   file (`~/mc/<workarea>/decisions/<programme>-<n>.md`) with one
   recommendation and let `mc brief` answer it. A menu of options is not a
-  decision file; if you cannot recommend one, investigate further first
+  question; if you cannot recommend one, investigate further first
 - Don't add `--non-interactive` flags to commands that are already
   non-interactive by default
 - Keep `CLAUDE.md` / `AGENTS.md` thin. They are hand-edited wrappers

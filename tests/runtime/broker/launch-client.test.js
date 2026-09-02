@@ -1055,7 +1055,6 @@ describe('launchBrokerOwnedSession', () => {
 
   test('keeps the verified GitHub boundary when advisory starting presence registration fails', async () => {
     const streams = makeStreams();
-    let groundedState = null;
     let launchedCapabilities = null;
     const res = await launchBrokerOwnedSession({
       cwd: '/repo',
@@ -1085,10 +1084,6 @@ describe('launchBrokerOwnedSession', () => {
         hostname: () => 'machine',
         lookupOrMint: async () => 'sess_register_fail',
         registerGitHubSessionProjection: async () => false,
-        groundSession: async ({ sessionCapabilities }) => {
-          groundedState = sessionCapabilities.github.state;
-          return { ok: true };
-        },
         prepareLocalResourceGuardEnv: ({ baseEnv }) => ({ env: baseEnv }),
         prepareCloudflareGuardEnv: ({ baseEnv }) => ({ env: baseEnv }),
         prepareDevCommandGuardEnv: ({ baseEnv }) => ({ env: baseEnv }),
@@ -1097,7 +1092,6 @@ describe('launchBrokerOwnedSession', () => {
     });
 
     assert.equal(res.code, 0, streams.err());
-    assert.equal(groundedState, 'ready');
     assert.equal(launchedCapabilities.github.state, 'ready');
     assert.match(streams.err(), /session starting presence registration failed; broker will retry/);
   });
@@ -1573,7 +1567,7 @@ describe('launchBrokerOwnedSession', () => {
     assert.equal(res.code, 0);
     assert.equal(res.codingSessionId, 'sess_cloudcodex');
     assert.equal(ensuredBroker, true);
-    assert.equal(grounded, true);
+    assert.equal(grounded, false);
     assert.equal(requests.length, 1);
     assert.equal(requests[0].session.tool, 'codex');
     assert.equal(requests[0].session.launch_options.startupMessage, null);

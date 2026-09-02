@@ -161,17 +161,13 @@ that body is the profile alone. The prompt rides as the **last positional
 argument**, which is how both tools take opening words, and only for a new
 conversation.
 
-## Decisions
+## Questions
 
 A planning session is the one session Martin is sitting in front of, so a
-question does not have to become a file to reach him — it can be asked. Nothing
-tells it to write one.
-
-If one is written anyway, it is read: `scanDecisions` descends one level under
-`plan/`, so `~/mc/plan/<programme>/decisions/*.md` reaches
-[`mc brief`](mc-brief.md)'s *Waiting on Martin* table and `mc status` exactly
-as a workarea's does. A decision is a decision wherever it was written, and
-whoever answers it should not have to know which kind of session asked.
+question does not have to become anything to reach him — it can be asked.
+Nothing tells it to write one down, and there is nowhere for it to go: mc
+keeps no decision file and no reader for one (#510). What Martin answers is
+carried into the plan, which is the only place it survives.
 
 ## How it is tested
 

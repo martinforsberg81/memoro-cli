@@ -92,10 +92,10 @@ export function workAreaStatePath(name, env = process.env) {
  * further down, under each programme. So the runner cannot reach a planning
  * session, and nothing has to remember not to.
  *
- * The name lives here, with the rest of the work root's shape, because three
- * modules need it — `commands/plan.js` to build the directory, `work-area.js`
- * to keep it off the area list, `brief-collect.js` to find the decisions one
- * level deeper — and three copies of one word is how the three drift apart.
+ * The name lives here, with the rest of the work root's shape, because two
+ * modules need it — `commands/plan.js` to build the directory and
+ * `work-area.js` to keep it off the area list — and two copies of one word is
+ * how the two drift apart.
  */
 export const PLAN_HOME = 'plan';
 

@@ -54,7 +54,7 @@ describe('bare mc', () => {
     try {
       const result = runMcCli([], fx.env);
       assert.equal(result.status, 0, result.stderr);
-      for (const section of ['NOW', 'QUEUE', 'DECISIONS', 'INTAKE', 'PROJECTS']) {
+      for (const section of ['NOW', 'QUEUE', 'INTAKE', 'PROJECTS']) {
         assert.match(result.stdout, new RegExp(`^\\s+${section}\\b`, 'mu'), `${section} is missing`);
       }
       // The numbers the menu opens, on the rows the menu opens them from.
@@ -69,7 +69,7 @@ describe('bare mc', () => {
       const result = runMcCli(['--json'], fx.env);
       assert.equal(result.status, 0, result.stderr);
       const page = JSON.parse(result.stdout);
-      assert.deepEqual(Object.keys(page), ['now', 'queue', 'decisions', 'intake', 'projects', 'caches', 'notes']);
+      assert.deepEqual(Object.keys(page), ['now', 'queue', 'intake', 'projects', 'caches', 'notes']);
       // No plan on main here, so there are no projects and both folders are
       // under the heading for the ones nothing explains — numbered from 1,
       // because the projects above them are none.

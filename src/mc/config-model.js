@@ -7,7 +7,6 @@ export const PACKAGE_DEFAULTS = Object.freeze({
   grounding: Object.freeze({
     includeMcContext: true,
     includeRoadmap: false,
-    includeCoordinatorRole: false,
     includeMapLifecycle: false,
     includeLens: false,
   }),
@@ -49,7 +48,6 @@ const PREFERENCE_PATHS = Object.freeze([
   'worktreeRoot',
   'grounding.includeMcContext',
   'grounding.includeRoadmap',
-  'grounding.includeCoordinatorRole',
   'grounding.includeMapLifecycle',
   'grounding.includeLens',
   'permissions.profile',
@@ -149,7 +147,6 @@ export function effectiveConfigValues(effectiveConfig = {}) {
   copyValue(out, effectiveConfig, 'worktreeRoot');
   copyValue(out, effectiveConfig, 'grounding.includeMcContext');
   copyValue(out, effectiveConfig, 'grounding.includeRoadmap');
-  copyValue(out, effectiveConfig, 'grounding.includeCoordinatorRole');
   copyValue(out, effectiveConfig, 'grounding.includeMapLifecycle');
   copyValue(out, effectiveConfig, 'grounding.includeLens');
   copyValue(out, effectiveConfig, 'permissions.profile');

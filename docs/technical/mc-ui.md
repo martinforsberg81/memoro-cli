@@ -41,7 +41,6 @@ In this order, because that is the order the questions come in:
   failed, timed out, and an estimated **list-price** cost.
 - **QUEUE** — how deep, how much of it is runnable, the next few by name and
   kind, and the skips counted by reason. A live area is a reason of its own.
-- **DECISIONS** — how many wait on Martin, the first three by name.
 - **INTAKE** — the newest `~/mc/intake/errors-<date>.md`, its age, what is
   new in it, and how many proposals nobody has queued or dropped.
 - **PROJECTS** — one numbered row per project on `origin/main`, grouped by
@@ -72,8 +71,7 @@ the helper and the sessions already write.
 | stop after this step | `~/mc/runner/STOP` (every lane) | anyone |
 | the day behind it | `~/mc/runner/log/runs.tsv` | `mc run`, after each step |
 | the queue | `~/mc/queue.md` | Martin, at the brief |
-| decisions waiting | `<area>/decisions/*.md` without a `**Beslut:**` line | the sessions |
-| what production said | `~/mc/intake/errors-<date>.md`, `~/mc/intake/proposals/` | `mc helper` |
+| what production said | `~/mc/intake/errors-<date>.md`, `~/mc/proposals/` | `mc helper` |
 | someone is sitting here | `tmux ls`, `~/mc/runner/foreground/<pid>.json` | tmux, `foreground.js` |
 | plans and open PRs | `~/mc/runner/plans.json`, `~/mc/runner/prs.json` | the page itself (below) |
 
@@ -191,7 +189,6 @@ through all three sections.
 | plan status | colour |
 |---|---|
 | `ready` | green |
-| `waiting-decision` | yellow |
 | `blocked` | red |
 | `done` | grey |
 | `invalid` | red bold |
@@ -202,10 +199,9 @@ Everything else is structure, and structure is quiet:
 | where | what | colour |
 |---|---|---|
 | header | `MEMORO·CLI` | bold white |
-| header | decisions waiting, when > 0 | bold yellow |
 | header | `N of M queued` | white |
 | header | version, rule, cost today | grey |
-| section titles | `NOW` `QUEUE` `DECISIONS` `INTAKE` `PROJECTS` | bold cyan |
+| section titles | `NOW` `QUEUE` `INTAKE` `PROJECTS` | bold cyan |
 | section titles | the count beside it, the verb hint on the right | grey |
 | NOW | the live step's `●`, its name | green, bold white |
 | NOW | elapsed: under ¾ of budget, from ¾, past it | white, yellow, bold red |
@@ -218,9 +214,6 @@ Everything else is structure, and structure is quiet:
 | QUEUE | the next name, the first of them | white, bold white |
 | QUEUE | the number, `… N more runnable` | grey |
 | QUEUE | why a project was skipped | dim grey |
-| DECISIONS | the `●` on every row | yellow |
-| DECISIONS | the question | white |
-| DECISIONS | the file path, `… N more` | grey |
 | INTAKE | the digest's date, under 24 h old, older | green, yellow |
 | INTAKE | new errors, when > 0 | red |
 | INTAKE | proposals, when > 0 | yellow |
@@ -247,10 +240,10 @@ Four things hold that table up:
   bookkeeping. Every escape on the page therefore sits outside the width the
   row was clipped to, and a coloured row is exactly as wide as its plain twin.
 - **The plain page gained one glyph, and only one.** A page without a TTY
-  prints what it printed before this palette, with one exception: the yellow
-  `●` on a DECISIONS row is drawn always, not only when colour is on, because
-  a mark that appears with colour would make a coloured row wider than its
-  plain twin. It sits inside the row's own footprint, where two of the seven
+  prints what it printed before this palette, with one exception: a row's mark
+  is drawn always, not only when colour is on, because a mark that appears with
+  colour would make a coloured row wider than its plain twin. It sits inside
+  the row's own footprint, where two of the seven
   leading spaces used to be. Everything else is byte-identical, at six widths,
   against the same fixtures.
 - **`--watch` is gone** (2026-08-29): it cleared and redrew on a timer, which is not a live page. A real live page is later work.
@@ -295,7 +288,7 @@ never reaches it.
 | `src/mc/page-collect.js` | the five sections, built from read data |
 | `src/mc/page-render.js` | how they look |
 | `src/mc/page-cache.js` | `plans.json` and `prs.json` |
-| `src/mc/status-collect.js` | the readers more than one caller needs — `nowBlock`, `kindFor`, `pidAlive`, `decisionsBlock`, `areasWithCheckout` |
+| `src/mc/status-collect.js` | the readers more than one caller needs — `nowBlock`, `kindFor`, `pidAlive`, `areasWithCheckout` |
 | `src/mc/status-render.js` | the drawing primitives — `painter`, `width`, `pad`, `clip`, `elapsed` |
 | `src/mc/foreground.js` | the foreground register |
 | `src/mc/status-project.js` | `mc status <name>`, unchanged by this |

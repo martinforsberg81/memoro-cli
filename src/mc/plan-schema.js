@@ -16,16 +16,22 @@
 export const PLAN_SCHEMA = 'mc-plan';
 export const PLAN_VERSION = 1;
 
-// A step is `ready` (the runner may hand it out), `done`, or stopped: `blocked`
-// on another project, `waiting-decision` on an answer from Martin. The plan has
-// no status of its own — it is the state of the first step that is not done,
-// which is the one fact the two used to disagree about.
-export const STEP_STATUSES = Object.freeze(['ready', 'done', 'blocked', 'waiting-decision']);
+// A step is `ready` (the runner may hand it out), `done`, or `blocked`. The
+// plan has no status of its own — it is the state of the first step that is
+// not done, which is the one fact the two used to disagree about.
+//
+// There was a fourth, `waiting-decision`, for a step that needed an answer
+// from Martin: it wrote a file under `<area>/decisions/`, and mc scanned,
+// rendered, retired and deleted those files. The whole apparatus is gone. A
+// step that cannot go on is `blocked` and says why in `blocked_by` — which is
+// all `waiting-decision` ever meant to the runner, since the runner hands out
+// `ready` steps and reads no decision file.
+export const STEP_STATUSES = Object.freeze(['ready', 'done', 'blocked']);
 export const BLOCKER_KINDS = Object.freeze(['decision', 'project']);
 
 const STATUSES = new Set(STEP_STATUSES);
 const KINDS = new Set(BLOCKER_KINDS);
-const STOPPED = new Set(['blocked', 'waiting-decision']);
+const STOPPED = new Set(['blocked']);
 
 const TOOL_RE = /^[a-z][a-z0-9_-]{0,63}$/u;
 const MODEL_RE = /^[a-z][a-z0-9._-]{0,63}$/u;
@@ -151,7 +157,7 @@ function validateBlocker(step, at, problems) {
     return;
   }
   if (blocker !== null && blocker !== undefined) {
-    problems.push(`${at}.blocked_by: null unless the step is blocked or waiting-decision`);
+    problems.push(`${at}.blocked_by: null unless the step is blocked`);
   }
 }
 

@@ -91,8 +91,8 @@ describe('mc helper — the desk', () => {
     const result = await invoke([]);
     assert.equal(result.made.length, 2);
     assert.match(result.made[0], /\/helper$/u);
-    assert.match(result.made[1], /\/intake\/proposals$/u);
-    assert.match(result.stdout, /tell it what is broken; proposals land in .*\/intake\/proposals/u);
+    assert.match(result.made[1], /\/proposals$/u);
+    assert.match(result.stdout, /tell it what is broken; proposals land in .*\/proposals/u);
   });
 
   it('takes the tool sugar and a model, like every other session verb', async () => {
@@ -125,10 +125,10 @@ describe('mc helper — the desk', () => {
 
   it('opens by asking, and carries the date its filenames need', () => {
     const launch = helperLaunch({
-      proposalsPath: '/work/intake/proposals', role: ROLE, now: new Date('2026-08-30T09:00:00Z'),
+      proposalsPath: '/work/proposals', role: ROLE, now: new Date('2026-08-30T09:00:00Z'),
     });
     assert.match(launch.prompt, /^Today is 2026-08-30\./u);
-    assert.match(launch.prompt, /`\/work\/intake\/proposals` as `2026-08-30-<slug>\.md`/u);
+    assert.match(launch.prompt, /`\/work\/proposals` as `2026-08-30-<slug>\.md`/u);
     assert.match(launch.prompt, /Open by asking what he has\. Write nothing until you have it\./u);
     assert.equal(launch.model, 'sonnet');
   });
@@ -138,10 +138,13 @@ describe('the helper role', () => {
   it('ships with mc, on a cheap model, and is the desk — not the digest reader', () => {
     const role = readCanonRole('helper');
     assert.equal(role.model, 'sonnet');
-    assert.match(role.overlay, /~\/mc\/helper\//u);
-    assert.match(role.overlay, /You are not the intake turn/u);
-    assert.match(role.overlay, /You do not triage the proposals already waiting/u);
-    assert.match(role.overlay, /You do not fix it/u);
+    // What the desk must know and cannot derive: it takes Martin's own
+    // reports, it adds, and it does not fix. A role no longer describes the
+    // other role's session — neither can act on the other's existence.
+    assert.match(role.overlay, /desk Martin walks up to/u);
+    assert.match(role.overlay, /do not fix it/u);
+    assert.match(role.overlay, /do not touch the proposals already waiting/u);
+    assert.doesNotMatch(role.overlay, /You are not the intake turn/u);
   });
 
   /**
@@ -150,11 +153,14 @@ describe('the helper role', () => {
    * write one dictate the same four keys, so the shape is asserted here as
    * well as in the intake role's own test.
    */
-  it('dictates the frontmatter the brief parses', () => {
+  // mc parses nothing out of a proposal any more, so the role dictates no
+  // shape for a parser's sake. What it still has to say is where the file
+  // goes and what its name looks like, because those two are mc's — the
+  // directory it counts, and the date its ordering relies on.
+  it('names where a proposal goes and what it is called, and dictates no format', () => {
     const { overlay } = readCanonRole('helper');
-    for (const key of ['name:', 'repo: memoro | memoro-cli', 'kind: project | step', 'project:']) {
-      assert.ok(overlay.includes(key), `the role no longer dictates ${key}`);
-    }
+    assert.match(overlay, /~\/mc\/proposals\//u);
+    assert.match(overlay, /<date>-<slug>\.md/u);
   });
 
   it('is a different role from the one the intake turn wears', () => {
@@ -168,7 +174,7 @@ describe('the helper role', () => {
 describe('mc helper --intake', () => {
   it('collects and then runs the turn over the digest it just wrote', async () => {
     const result = await invoke(['--intake'], {}, TURN({
-      wrote: [{ file: '2026-08-29-expose-operations.md', title: 'The nightly outcomes reach no script' }],
+      wrote: [{ file: '2026-08-29-expose-operations.md' }],
       waiting: [{ file: '2026-08-29-expose-operations.md' }],
     }));
     assert.equal(result.code, 0);
@@ -177,7 +183,7 @@ describe('mc helper --intake', () => {
     assert.equal(result.turned.digestPath, '/tmp/mc/intake/errors-2026-08-29.md');
     assert.equal(result.turned.digestText, '# Errors and maintenance');
     assert.match(result.stdout, /1 proposal, 1 waiting \(\d+\.\ds, claude sonnet\)/u);
-    assert.match(result.stdout, /2026-08-29-expose-operations\.md — The nightly outcomes reach no script/u);
+    assert.match(result.stdout, /2026-08-29-expose-operations\.md/u);
     assert.match(result.stdout, /read them at the next brief/u);
   });
 

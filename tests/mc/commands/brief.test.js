@@ -7,14 +7,13 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { ANSWER_LINE, parseDecision } from '../../../src/mc/brief-collect.js';
 import { briefLaunch, run } from '../../../src/mc/commands/brief.js';
 import { readCanonRole } from '../../../src/mc/roles.js';
 
 const COLLECTED = {
   path: '/work/brief/2026-08-25T20-00-00Z.md',
   text: '# Brief — 2026-08-25T20:00:00Z\n\n## Waiting on Martin\n\n| a | b |\n',
-  data: { decisions: [{ answered: false }, { answered: true }], merged: [1, 2], opened: [3], notes: ['memoro: no checkout'] },
+  data: { merged: [1, 2], opened: [3], proposals: [], notes: ['memoro: no checkout'] },
 };
 
 function io() {
@@ -23,15 +22,6 @@ function io() {
 }
 
 describe('the brief role', () => {
-  it('ships with mc and fixes the answer line', () => {
-    const role = readCanonRole('brief');
-    assert.equal(role.model, 'opus');
-    assert.deepEqual(role.tools, ['claude', 'codex']);
-    assert.match(role.overlay, /`\*\*Beslut:\*\* <what was decided> \(Martin, <YYYY-MM-DD>\)\. <one sentence why>`/u);
-    assert.match(role.overlay, /one at a time/u);
-    assert.match(role.overlay, /never edit a plan/u);
-  });
-
   /**
    * A decision is put to Martin as one proposal he says GO to. The overlay
    * that told the session to lay out "the options in one line each" is the
@@ -42,25 +32,8 @@ describe('the brief role', () => {
     const { overlay } = readCanonRole('brief');
     assert.match(overlay, /says\s+GO\s+to/u);
     assert.match(overlay, /Never\s+lay\s+out\s+options\s+for\s+him\s+to\s+choose\s+between/u);
-    assert.match(overlay, /Present\s+a\s+decision\s+as\s+a\s+menu\s+of\s+options/u);
     assert.match(overlay, /the\s+code\s+it\s+stands\s+on/u);
     assert.doesNotMatch(overlay, /the\s+options\s+in\s+one\s+line\s+each/u);
-  });
-
-  /**
-   * Where a decision lives once it is answered: in the plan, and nowhere
-   * else. The overlay has to say so, because the file is deleted afterwards
-   * and a plan that did not absorb the answer is the only way to lose it.
-   *
-   * It is `mc brief --collect` that deletes it, not `mc run` — the runner has
-   * nothing to do with decisions (Martin, 2026-08-29), and `retireDecisions`
-   * lives in `brief-collect.js`. The overlay said `mc run` until 2026-08-29
-   * and this test held it there.
-   */
-  it('says the plan carries the decision and the file is deleted', () => {
-    const { overlay } = readCanonRole('brief');
-    assert.match(overlay, /`mc\s+brief\s+--collect`\s+then\s+deletes\s+the\s+file/u);
-    assert.match(overlay, /the\s+plan\s+is\s+where\s+a\s+decision\s+lives/u);
   });
 
   /**
@@ -77,33 +50,6 @@ describe('the brief role', () => {
     assert.match(overlay, /You remove nothing\./u);
   });
 
-  /**
-   * Step 3 of the plan: the answer lands. The line the overlay dictates is
-   * the only thing that moves a `waiting-decision` project, and the same
-   * test for it is written three times — `ANSWER_LINE` here, `grep -l
-   * '^\*\*Beslut'` in `~/mc/bin/runner.sh`, `isAnswered()` in `mc run`.
-   * So take the template out of the overlay itself, fill it the way a
-   * session would, and hold it against all three shapes; then close the
-   * loop, that the next brief stops asking the question.
-   */
-  it('dictates an answer line that the runner already greps for, and that closes the question', () => {
-    const template = /`(\*\*Beslut:\*\* <what was decided>[^`]*)`/u.exec(readCanonRole('brief').overlay)?.[1];
-    assert.equal(template, '**Beslut:** <what was decided> (Martin, <YYYY-MM-DD>). <one sentence why>');
-    const line = template
-      .replace('<what was decided>', 'A — vilande')
-      .replace('<YYYY-MM-DD>', '2026-08-26')
-      .replace('<one sentence why>', 'It costs one Sonnet turn a day and asks for no new daemon.');
-
-    assert.match(line, ANSWER_LINE);                 // the brief's own answered test
-    assert.ok(/^\*\*Beslut/mu.test(line));           // mc run's isAnswered()
-    assert.ok(new RegExp('^\\*\\*Beslut', 'm').test(line)); // runner.sh's grep -l '^\*\*Beslut'
-
-    const open = '# 2. Hur bevakar vi memoro.me?\n\n## Alternativ\n\n**A.** En helper.\n\n## Rekommendation\n\n**A**, med C som senare steg.\n';
-    assert.equal(parseDecision(open).answered, false);
-    assert.equal(parseDecision(`${open}\n${line}\n`).answered, true);
-    assert.equal(parseDecision(`${open}\n${line}\n`).recommendation, '**A**, med C som senare steg.');
-  });
-
   it('opens with the brief as the first words', () => {
     const launch = briefLaunch({ ...COLLECTED, role: readCanonRole('brief') });
     assert.match(launch.prompt, /^This is the brief, from \/work\/brief\/2026-08-25T20-00-00Z\.md\. Start the meeting\.\n\n# Brief/u);
@@ -118,7 +64,7 @@ describe('mc brief', () => {
     const code = await run(['--collect', '--offline'], { stdout, stderr, collect: async ({ offline }) => { assert.equal(offline, true); return COLLECTED; }, open: async () => { opened += 1; return { ok: true }; } });
     assert.equal(code, 0);
     assert.equal(opened, 0);
-    assert.match(out.stdout, /2026-08-25T20-00-00Z\.md \(\d+\.\ds\) — 2 merged, 1 open, 1 waiting on you/u);
+    assert.match(out.stdout, /2026-08-25T20-00-00Z\.md \(\d+\.\ds\) — 2 merged, 1 open/u);
     assert.match(out.stderr, /memoro: no checkout/u);
   });
 
