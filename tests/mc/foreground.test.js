@@ -15,7 +15,7 @@ import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
 import { foregroundDir, registerForeground } from '../../src/mc/foreground.js';
-import { nowSection, readForeground } from '../../src/mc/page-collect.js';
+import { readForeground, sessionsSection } from '../../src/mc/page-collect.js';
 
 function root() {
   return mkdtempSync(join(tmpdir(), 'mc-foreground-'));
@@ -84,14 +84,15 @@ describe('the foreground register', () => {
     assert.equal(existsSync(join(dir, 'notes.md')), true, 'a file that is not a pid is not ours to delete');
   });
 
-  it('round trip: a registered verb is what NOW names, and is gone after release', () => {
+  it('round trip: a registered verb is what the page names, and is gone after release', () => {
     const env = { MC_WORK_ROOT: root() };
     const release = registerForeground({
       verb: 'brief', area: null, tool: 'claude', model: 'opus', env, onExit: () => {},
     });
     const dir = foregroundDir(env);
-    const now = nowSection({ foreground: readForeground(dir), rows: [], now: NOW });
-    assert.deepEqual(now.foreground.map((item) => [item.verb, item.pid]), [['brief', process.pid]]);
+    const sessions = sessionsSection({ foreground: readForeground(dir), now: NOW });
+    // `brief` is one of the two desks, so it is the slot rather than the list.
+    assert.equal(sessions.desks.brief.pid, process.pid);
     release();
     assert.deepEqual(readForeground(dir), []);
   });

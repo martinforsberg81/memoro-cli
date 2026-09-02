@@ -34,11 +34,11 @@ import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
 import {
-  DAY_MS, defaultRepos, queueNames, runsSince, summariseRuns,
+  DAY_MS, defaultRepos, listProgrammes, queueNames, runsSince, summariseRuns,
 } from './brief-collect.js';
 import { intakeDir, proposalsDir } from './helper-collect.js';
 import { ageWords, loadPlans, loadPrs, savePrs } from './page-cache.js';
-import { workRoot } from './paths.js';
+import { PLAN_HOME, workRoot } from './paths.js';
 import { PRICES_DATED, estimateCost } from './prices.js';
 import { PR_LIST_ARGS, openPrsFor } from './project-prs.js';
 import {
@@ -49,26 +49,28 @@ import {
 export const QUEUE_NAMED = 6;
 export const DECISIONS_NAMED = 3;
 
-/* --------------------------------------------------------------------- NOW */
+/* ------------------------------------------------------------------ RUNNER */
 
 /**
- * What is happening this second: the runner's steps, one per lane (nowBlock),
- * the tmux areas
- * somebody is sitting in, the foreground verbs that registered themselves, and
- * one line of the day behind it.
+ * The machine: the runner's steps, one per lane (`nowBlock`), a pending STOP,
+ * the lane files whose process is gone, and one line of the day behind it.
  *
- * The foreground register is `~/mc/runner/foreground/<pid>.json`, written by
- * the verbs that hold a terminal — `mc brief`, `mc plan`, `mc worker`,
- * `mc work <name>` — through `foreground.js`. What it says is what somebody
- * is sitting in front of; what it does not say is that nothing else is. An
- * entry whose pid is not alive is dropped here rather than believed: a
- * session killed with its terminal never gets to remove its own file.
+ * This was NOW, and NOW held two different kinds of thing at once — the
+ * runner's steps and the sessions a person had open, drawn as one list of
+ * dots. They answer different questions and are stopped by different things,
+ * so they are two sections now: this one is what `mc run` is doing, and
+ * `sessionsSection` is who is sitting where.
+ *
+ * `nowBlock`'s `runner` — the process, not the section — is carried as
+ * `process`, because `runner.runner.alive` is a sentence nobody should have to
+ * read. The rename is at this boundary only: `nowBlock` is shared with
+ * `mc status` and keeps the shape it had.
  */
-export function nowSection({
-  runner = null, currents = [], stop = false, rows = [], live = [], foreground = [],
+export function runnerSection({
+  runner = null, currents = [], stop = false, rows = [],
   now = new Date(), alive = pidAlive,
 } = {}) {
-  const base = nowBlock({ runner, currents, stop, rows, now, alive });
+  const { runner: process, ...base } = nowBlock({ runner, currents, stop, rows, now, alive });
   const tokens = rows.reduce((acc, r) => ({
     input: acc.input + (Number(r.input) || 0),
     output: acc.output + (Number(r.output) || 0),
@@ -77,8 +79,7 @@ export function nowSection({
   }), { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
   return {
     ...base,
-    live,
-    foreground: foreground.filter((item) => alive(item.pid)),
+    process,
     day: {
       ...summariseRuns(rows),
       tokens,
@@ -89,27 +90,115 @@ export function nowSection({
   };
 }
 
+/* ---------------------------------------------------------------- SESSIONS */
+
+/** The two singleton desks, drawn whether or not anybody is at them. */
+export const DESKS = Object.freeze(['helper', 'brief']);
+
+/**
+ * Who is sitting where — everything running that the runner did not start.
+ *
+ * The two desks are singletons and get a fixed row each, drawn open or not:
+ * there is one helper and one brief, and *"is the helper running?"* is a
+ * question an empty row answers as well as a full one. Everything else is a
+ * list, because how many there are is not knowable in advance and their names
+ * are the content.
+ *
+ * The register is `~/mc/runner/foreground/<pid>.json`, written by the verbs
+ * that hold a terminal through `foreground.js`. An entry whose pid is not
+ * alive is dropped rather than believed: a session killed with its terminal
+ * never gets to remove its own file.
+ *
+ * **Every session carries its age**, which the page used to throw away. The
+ * register has written `started` since it existed and nothing read it, so on
+ * 2026-09-02 a `mc plan` opened three days earlier was drawn exactly like one
+ * opened twenty minutes ago — seven of them, all alive, all looking current.
+ * The age is the whole difference between somebody working here and somebody
+ * having left this open.
+ */
+export function sessionsSection({
+  foreground = [], live = [], now = new Date(), alive = pidAlive,
+} = {}) {
+  const at = now.getTime();
+  const age = (iso) => {
+    const t = Date.parse(iso);
+    return Number.isNaN(t) ? null : Math.max(0, Math.round((at - t) / 1000));
+  };
+  const open = foreground
+    .filter((item) => alive(item.pid))
+    .map((item) => ({ ...item, age_seconds: age(item.started) }));
+
+  const desks = {};
+  for (const verb of DESKS) desks[verb] = open.find((item) => item.verb === verb) || null;
+
+  // A planning session belongs to its programme, and PROGRAMMES draws it on
+  // that programme's own row rather than among the loose sessions — which is
+  // the whole reason `mc plan` puts one at `plan/<programme>` (paths.js).
+  // Keyed by programme here, so the section that owns programmes never has to
+  // know how a session's area is spelled.
+  //
+  // A `mc plan` from before that change carries a bare project name, belongs
+  // to no programme, and cannot be started again. It stays in the list below
+  // with everything else nothing explains.
+  const planning = {};
+  for (const item of open) {
+    if (item.verb !== 'plan') continue;
+    const [home, programme] = String(item.area || '').split('/');
+    if (home === PLAN_HOME && programme) planning[programme] = item;
+  }
+  const claimed = new Set(Object.values(planning));
+
+  // A tmux window is a session too, and the only kind mc knows nothing else
+  // about — no verb, no tool, no model, just a name and how long it has been
+  // open. It goes in the same list, so the section is one answer rather than
+  // two lists a reader has to add up.
+  const windows = live.map((area) => ({
+    verb: null,
+    area: area.name,
+    tmux: `mc-${area.name}`,
+    tool: null,
+    model: null,
+    pid: null,
+    age_seconds: area.opened_ms == null ? null : Math.max(0, Math.round((at - area.opened_ms) / 1000)),
+  }));
+
+  // Oldest first: the one that has been open longest is the one most likely to
+  // have been forgotten, and that is the whole reason the age is on the row.
+  const others = [...open.filter((item) => !DESKS.includes(item.verb) && !claimed.has(item)), ...windows]
+    .sort((a, b) => (b.age_seconds ?? -1) - (a.age_seconds ?? -1)
+      || String(a.area).localeCompare(String(b.area)));
+
+  return {
+    desks,
+    planning,
+    others,
+    count: DESKS.filter((verb) => desks[verb]).length + Object.keys(planning).length + others.length,
+  };
+}
+
 /* ------------------------------------------------------------------- QUEUE */
 
 /**
  * The queue as the runner would read it: every name with the kind it would be
  * run as, or the reason it would be passed over.
  *
- * A live area is a skip with a reason of its own — the runner will not start a
- * step where somebody is already working — so it is counted beside the plan
- * statuses rather than hidden among them.
+ * A live area used to be a skip with a reason of its own, because the runner
+ * would not start a step where somebody had a session open. It no longer
+ * declines for that (`run.js`), so neither does this — a page that predicts a
+ * skip the runner will not make is worse than one that says nothing, because
+ * it is read as the runner's own answer. What stops a project is what the plan
+ * says, and the plan is the only thing counted here.
  */
-export function queueSection({ queue = [], plans = [], live = [], named = QUEUE_NAMED } = {}) {
+export function queueSection({ queue = [], plans = [], named = QUEUE_NAMED } = {}) {
   const items = queue.map((name) => {
     const kind = kindFor(name, { plans });
-    const isLive = live.includes(name);
-    return { name, kind, live: isLive, runnable: !kind.startsWith('skip') && !isLive };
+    return { name, kind, runnable: !kind.startsWith('skip') };
   });
   const runnable = items.filter((item) => item.runnable);
   const skipped = items.filter((item) => !item.runnable);
   const reasons = {};
   for (const item of skipped) {
-    const reason = item.live ? 'live' : item.kind.slice('skip:'.length);
+    const reason = item.kind.slice('skip:'.length);
     reasons[reason] = (reasons[reason] || 0) + 1;
   }
   return {
@@ -197,17 +286,30 @@ export function intakeSection({ digest = null, proposals = [], now = new Date(),
 export const UNPLANNED_SHOWN = 12;
 
 /**
- * One row per **project**, grouped by repository, sorted repo then programme
- * then project.
+ * One heading per **programme**, its projects under it, sorted programme then
+ * project.
  *
- * This was one row per *workarea*, and a workarea is the wrong unit. Measured
- * 2026-08-30: 81 folders under `~/mc`, of which 24 had a plan on main and 57
- * did not — so the page's longest section was mostly a list of things nobody
- * is working on, the 27 real projects were scattered through it, and two were
- * missing altogether because no folder happened to exist for them. A project
- * is what the work *is*: it lives in `PLAN.json` on `origin/main`, it is what
- * the runner steps and what `mc status` opens, and it exists whether or not a
- * folder does.
+ * The grouping was by repository, and a repository is not a unit of work — it
+ * is where the code happens to live. A programme is: it is what `mc plan`
+ * opens on, what a project belongs to, and the thing several projects add up
+ * to. `msr-core` spanning both repositories read as two unrelated blocks under
+ * two headings; `mc` and `docx-editing-surface` sat interleaved under one.
+ * So the repository moves to a column on the project's own row, where it is a
+ * fact about that project rather than the shape of the page.
+ *
+ * The programme heading carries its **planning session**, open or not — that
+ * is the room `mc plan <programme>` fills, and a programme with none is a
+ * programme nobody is thinking about right now (Martin, 2026-09-02). A
+ * programme is drawn whether or not any of its projects have a plan the runner
+ * can read, and a programme that exists *only* as an open planning session is
+ * drawn too: it is on its way to having projects, and it would otherwise be
+ * the one piece of work the page could not show.
+ *
+ * A project row's `●` means **the runner has a step in flight on it**, and
+ * nothing else. It used to mean a live tmux area — a person sitting in the
+ * folder — which made the row say two things at once: where the plan stands,
+ * and who is standing nearby. `mc work` and `mc run` know nothing about each
+ * other now, and neither do their marks. Sessions are WORK's.
  *
  * The workarea has not stopped mattering — it is where a session runs — so
  * every row says whether the project has one, and the folders that no project
@@ -220,9 +322,9 @@ export const UNPLANNED_SHOWN = 12;
  * is openable by the number beside it. A project with no workarea is numbered
  * like any other: opening it is what creates the folder.
  */
-export function projectsSection({
+export function programmesSection({
   plans = [], areas = [], rows = [], openPrs = [], live = [], detail = () => ({}),
-  repoOrder = [], shown = UNPLANNED_SHOWN,
+  planning = {}, running = [], programmes = [], shown = UNPLANNED_SHOWN,
 } = {}) {
   const lastRun = {};
   for (const row of rows) lastRun[row.name] = row; // rows are in time order; the last wins
@@ -250,22 +352,16 @@ export function projectsSection({
       next: plan.next || null,
       legacy: Boolean(plan.legacy),
       steps: steps.length ? { done: steps.filter((step) => step?.status === 'done').length, total: steps.length } : null,
-      live: live.includes(name),
+      // The runner, and only the runner: a session somebody has open in the
+      // folder is WORK's business and not this row's.
+      running: running.includes(name),
       workarea: held.has(name),
       last: last ? { ts: last.ts, kind: last.kind, pr: last.pr, note: last.note } : null,
       pr: pr ? pr.number : null,
     };
   });
 
-  // Martin's order of repositories, not the alphabet: the lane he watches is
-  // the one he named first.
-  const rank = (repo) => {
-    const at = repoOrder.indexOf(repo);
-    return at === -1 ? repoOrder.length : at;
-  };
-  projects.sort((a, b) => rank(a.repo) - rank(b.repo)
-    || String(a.repo).localeCompare(String(b.repo))
-    || String(a.programme).localeCompare(String(b.programme))
+  projects.sort((a, b) => String(a.programme).localeCompare(String(b.programme))
     || a.name.localeCompare(b.name));
 
   // The folders no project explains, in the order the old WORK list used: live
@@ -300,12 +396,27 @@ export function projectsSection({
   // a wasteful one, so the reading follows the cap.
   for (const orphan of drawn) { number += 1; orphan.number = number; Object.assign(orphan, detail(orphan.name)); }
 
-  const repos = [];
-  for (const project of projects) {
-    let group = repos.find((item) => item.repo === project.repo);
-    if (!group) { group = { repo: project.repo, projects: [] }; repos.push(group); }
-    group.projects.push(project);
-  }
+  // Every programme that has a project, plus every one that exists only as an
+  // open planning session or as a directory on main with nothing runnable
+  // under it yet. `programmes` is the tree's own answer (`listProgrammes`),
+  // which is what keeps a programme whose projects have all been archived on
+  // the page — that is exactly the heading the next piece of its work belongs
+  // under.
+  const names = [...new Set([
+    ...projects.map((project) => project.programme),
+    ...Object.keys(planning),
+    ...programmes,
+  ])].filter(Boolean).sort((a, b) => a.localeCompare(b));
+
+  const groups = names.map((name) => {
+    const own = projects.filter((project) => project.programme === name);
+    return {
+      programme: name,
+      projects: own,
+      repos: [...new Set(own.map((project) => project.repo))].sort(),
+      planning: planning[name] || null,
+    };
+  });
 
   const statuses = {};
   for (const project of projects) {
@@ -315,9 +426,10 @@ export function projectsSection({
 
   return {
     count: projects.length,
-    repos,
+    programmes: groups,
     statuses,
-    live: projects.filter((project) => project.live).length,
+    planning: groups.filter((group) => group.planning).length,
+    running: projects.filter((project) => project.running).length,
     no_workarea: projects.filter((project) => !project.workarea).length,
     unplanned: { count: orphans.length, shown: drawn, more: Math.max(0, orphans.length - drawn.length) },
   };
@@ -493,22 +605,35 @@ export async function collectPage({
   const live = liveAreas(run);
   const liveNames = live.map((item) => item.name);
   const areas = readAreas(root);
+
+  // PROGRAMMES reads from both of these — which programme has a planning
+  // session open, and which projects the runner has a step in flight on — so
+  // they are built before it rather than beside it.
+  const runner = runnerSection({
+    runner: readJson(join(root, 'runner', 'runner.json')),
+    currents: readCurrents(join(root, 'runner')),
+    stop: existsSync(join(root, 'runner', 'STOP')),
+    rows,
+    now,
+    alive,
+  });
+  const sessions = sessionsSection({
+    foreground: readForeground(join(root, 'runner', 'foreground')),
+    live,
+    now,
+    alive,
+  });
+
   return {
-    now: nowSection({
-      runner: readJson(join(root, 'runner', 'runner.json')),
-      currents: readCurrents(join(root, 'runner')),
-      stop: existsSync(join(root, 'runner', 'STOP')),
-      rows,
-      live,
-      foreground: readForeground(join(root, 'runner', 'foreground')),
-      now,
-      alive,
-    }),
-    queue: queueSection({ queue, plans, live: liveNames }),
+    runner,
+    sessions,
+    queue: queueSection({ queue, plans }),
     intake: intakeSection({ digest: readDigest(intakeDir(env)), proposals: proposalFiles(proposalsDir(env)), now }),
-    projects: projectsSection({
+    programmes: programmesSection({
       plans, areas, rows, openPrs: prs.prs, live: liveNames,
-      repoOrder: repos.map((repo) => repo.name),
+      planning: sessions.planning,
+      running: runner.steps.map((step) => step.name).filter(Boolean),
+      programmes: present.flatMap((repo) => listProgrammes(repo)),
       detail: (name) => readUnplanned(root, areas.filter((area) => area.name === name), git)[name] || {},
     }),
     caches: { fresh, plans: sources, prs: { fetched: prs.fetched, age_seconds: prs.age_seconds, count: prs.prs.length } },

@@ -5,7 +5,7 @@
  * The menu reads `/dev/tty` by design, so a subprocess without a terminal
  * never reaches it — which is one of the properties asserted here: no TTY, no
  * prompt, exit 0. The menu itself is driven in process with the reading and
- * the opening handed in, so a number can be shown to open the project PROJECTS
+ * the opening handed in, so a number can be shown to open the project PROGRAMMES
  * gave that number to without a session ever starting.
  */
 import assert from 'node:assert/strict';
@@ -16,6 +16,7 @@ import { describe, it } from 'node:test';
 
 import { runMcCli } from './_helpers/mc-cli.js';
 import { menu, parsePageArgs } from '../../src/mc/commands/home.js';
+import { programmesSection } from '../../src/mc/page-collect.js';
 
 /** A work root with two areas and a queue, and nothing that needs a network. */
 function fixture() {
@@ -36,7 +37,7 @@ function fixture() {
       // The repositories the page reads plans from. Pointed at an empty
       // directory, so the fixture is the whole world: without it the page
       // reads whatever `~/memoro` happens to hold on the machine running the
-      // test, which was invisible while PROJECTS was a list of workareas.
+      // test, which was invisible while the section was a list of workareas.
       MC_REPOS_HOME: join(root, 'repos'),
       MC_ROLES_DIR: join(root, 'roles'),
       CLAUDE_CONFIG_DIR: join(root, 'claude'),
@@ -54,7 +55,7 @@ describe('bare mc', () => {
     try {
       const result = runMcCli([], fx.env);
       assert.equal(result.status, 0, result.stderr);
-      for (const section of ['NOW', 'QUEUE', 'INTAKE', 'PROJECTS']) {
+      for (const section of ['RUNNER', 'HELPER', 'BRIEF', 'QUEUE', 'INTAKE', 'PROGRAMMES', 'WORK']) {
         assert.match(result.stdout, new RegExp(`^\\s+${section}\\b`, 'mu'), `${section} is missing`);
       }
       // The numbers the menu opens, on the rows the menu opens them from.
@@ -69,15 +70,15 @@ describe('bare mc', () => {
       const result = runMcCli(['--json'], fx.env);
       assert.equal(result.status, 0, result.stderr);
       const page = JSON.parse(result.stdout);
-      assert.deepEqual(Object.keys(page), ['now', 'queue', 'intake', 'projects', 'caches', 'notes']);
+      assert.deepEqual(Object.keys(page), ['runner', 'sessions', 'queue', 'intake', 'programmes', 'caches', 'notes']);
       // No plan on main here, so there are no projects and both folders are
       // under the heading for the ones nothing explains — numbered from 1,
       // because the projects above them are none.
-      assert.deepEqual(page.projects.repos, []);
-      assert.equal(page.projects.count, 0);
-      assert.deepEqual(page.projects.unplanned.shown.map((area) => area.name).sort(), ['alpha', 'beta']);
-      assert.deepEqual(page.projects.unplanned.shown.map((area) => area.number), [1, 2]);
-      assert.equal(page.projects.unplanned.count, 2, 'mc\u2019s own brief/ folder is not a workarea');
+      assert.deepEqual(page.programmes.programmes, []);
+      assert.equal(page.programmes.count, 0);
+      assert.deepEqual(page.programmes.unplanned.shown.map((area) => area.name).sort(), ['alpha', 'beta']);
+      assert.deepEqual(page.programmes.unplanned.shown.map((area) => area.number), [1, 2]);
+      assert.equal(page.programmes.unplanned.count, 2, 'mc\u2019s own brief/ folder is not a workarea');
     } finally { fx.cleanup(); }
   });
 
@@ -88,8 +89,8 @@ describe('bare mc', () => {
       const viaWork = runMcCli(['work'], fx.env);
       assert.equal(viaWork.status, 0, viaWork.stderr);
       assert.deepEqual(
-        JSON.parse(runMcCli(['work', '--json'], fx.env).stdout).projects.unplanned.shown.map((a) => a.name),
-        JSON.parse(runMcCli(['--json'], fx.env).stdout).projects.unplanned.shown.map((a) => a.name),
+        JSON.parse(runMcCli(['work', '--json'], fx.env).stdout).programmes.unplanned.shown.map((a) => a.name),
+        JSON.parse(runMcCli(['--json'], fx.env).stdout).programmes.unplanned.shown.map((a) => a.name),
       );
       assert.equal(bare.stdout.split('\n').length, viaWork.stdout.split('\n').length);
     } finally { fx.cleanup(); }
@@ -179,19 +180,38 @@ describe('the page flags', () => {
 });
 
 describe('the menu under the page', () => {
-  /** PROJECTS, as the page hands it over: the numbers are these numbers. */
+  /**
+   * PROGRAMMES as the page actually hands it over — built by the section
+   * itself, not written out by hand.
+   *
+   * It *was* written out by hand, and that is how `mc` shipped broken on
+   * 2026-09-02: the page renamed `projects` to `programmes` and regrouped it,
+   * the menu kept reading `data.projects.repos`, and this fixture kept
+   * agreeing with the menu because it had been written to match. Bare `mc` at
+   * a terminal threw a TypeError at the prompt, and every test was green —
+   * the only one that touched the menu was measuring a shape nothing produced
+   * any more.
+   *
+   * A fixture that is the real builder cannot do that. Rename a key and this
+   * fails on the next run.
+   */
   const DATA = {
-    projects: {
-      count: 2,
-      repos: [
-        { repo: 'memoro-cli', projects: [{ number: 1, name: 'mc-ui', live: true }] },
-        { repo: 'memoro', projects: [{ number: 2, name: 'docx-editor', live: false }] },
+    programmes: programmesSection({
+      plans: [
+        { repo: 'memoro-cli', programme: 'mc', project: 'mc-ui', status: 'ready', next: 'a' },
+        { repo: 'memoro', programme: 'docx-editing-surface', project: 'docx-editor', status: 'ready', next: 'b' },
       ],
-      // Under its own heading on the page, and still openable by its number.
-      unplanned: { count: 1, shown: [{ number: 3, name: 'msr-track-1', live: false }], more: 0 },
-      no_workarea: 0,
-    },
+      areas: [{ name: 'msr-track-1', mtime_ms: 1, repos: ['memoro'] }],
+    }),
   };
+
+  // The numbers the page drew are the numbers the menu opens by, and the
+  // orphan folder is numbered after the projects.
+  it('numbers the projects first and the folders after, once each', () => {
+    assert.deepEqual(DATA.programmes.programmes.flatMap((g) => g.projects).map((p) => [p.number, p.name]),
+      [[1, 'docx-editor'], [2, 'mc-ui']]);
+    assert.deepEqual(DATA.programmes.unplanned.shown.map((a) => [a.number, a.name]), [[3, 'msr-track-1']]);
+  });
 
   function drive(answers) {
     const written = [];
@@ -203,21 +223,21 @@ describe('the menu under the page', () => {
       run: () => menu(DATA, {
         stdout: { columns: 100, write: (text) => written.push(text) },
         stderr: { write: (text) => written.push(text) },
-        page: async () => ({ data: DATA, lines: ['  PROJECTS'] }),
+        page: async () => ({ data: DATA, lines: ['  PROGRAMMES'] }),
         ask: () => queue.shift() ?? null,
         open: async (name) => { opened.push(name); return 0; },
       }),
     };
   }
 
-  it('opens what a number names — PROJECTS\' number, not a list of its own', async () => {
+  it('opens what a number names — PROGRAMMES\' number, not a list of its own', async () => {
     const first = drive(['1']);
     assert.equal(await first.run(), 0);
-    assert.deepEqual(first.opened, ['mc-ui']);
+    assert.deepEqual(first.opened, ['docx-editor']);
 
     const second = drive(['2']);
     assert.equal(await second.run(), 0);
-    assert.deepEqual(second.opened, ['docx-editor']);
+    assert.deepEqual(second.opened, ['mc-ui']);
   });
 
   it('opens it by name too, and quits on q or on nothing', async () => {

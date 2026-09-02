@@ -33,21 +33,29 @@ still accepted on the page and does nothing: offline is what the page does.
 
 In this order, because that is the order the questions come in:
 
-- **NOW** — the runner's steps in flight, one line per lane (kind, tool,
-  model, elapsed against budget, pid), a pending `~/mc/runner/STOP`, the
-  live tmux `mc-<name>`
-  areas with how long they have been open, the foreground verbs somebody is
-  sitting in, and one line of the day behind it: steps, merged, open,
-  failed, timed out, and an estimated **list-price** cost.
+- **RUNNER** — the runner's steps in flight, one line per lane (kind, tool,
+  model, elapsed against budget, pid), a pending `~/mc/runner/STOP`, the lane
+  files whose process is gone, and one line of the day behind it: steps,
+  merged, open, failed, timed out, and an estimated **list-price** cost. The
+  machine, and nothing else.
+- **HELPER** and **BRIEF** — one row each, drawn open or not. They are
+  singletons, so *"is the helper running?"* is a question an empty row answers
+  as well as a full one.
 - **QUEUE** — how deep, how much of it is runnable, the next few by name and
-  kind, and the skips counted by reason. A live area is a reason of its own.
+  kind, and the skips counted by reason. Every reason comes from the plan: a
+  session somebody has open in the workarea is not one of them, because the
+  runner does not decline for it either.
 - **INTAKE** — the newest `~/mc/intake/errors-<date>.md`, its age, what is
   new in it, and how many proposals nobody has queued or dropped.
-- **PROJECTS** — one numbered row per project on `origin/main`, grouped by
-  repository and sorted repo, programme, project: where the plan stands, how
-  many of its steps are done, `next`, the open PR, a live mark. Then the
-  workareas no project explains, under a heading of their own — the first few
-  by name and the rest as a count.
+- **PROGRAMMES** — one heading per programme, with the room for its planning
+  session on the right of it, filled or empty; then one numbered row per
+  project under it: the repository it lives in, where the plan stands, how many
+  of its steps are done, `next`, the open PR. A project's `●` means the runner
+  has a step in flight on it, and nothing else. A programme is drawn whether or
+  not any of its projects have a plan the runner can read, and a programme that
+  exists only as an open planning session is drawn too. Then the workareas no
+  project explains, under a heading of their own — the first few by name and
+  the rest as a count.
 
 Two rules the sections keep:
 
@@ -55,8 +63,8 @@ Two rules the sections keep:
   matters — and every count names the verb that expands it, on the right of
   its own heading.
 - **A count is only honest if the section says what it cannot see.** INTAKE
-  says `first digest — no baseline` rather than `0 new errors`; NOW lists no
-  foreground session rather than claiming nothing is running. A zero that
+  says `first digest — no baseline` rather than `0 new errors`; WORK lists no
+  session rather than claiming nothing is running. A zero that
   looks like health is worse than a gap that says it is one.
 
 ## Where the facts come from
@@ -83,7 +91,7 @@ when their scope ends, the removal paired in a `finally` so a step that
 throws still clears the file.
 
 There is one current file **per lane**: `mc run` drives memoro's queue and
-memoro-cli's at the same time, so NOW is a list rather than a line, and the
+memoro-cli's at the same time, so RUNNER is a list rather than a line, and the
 page reads `runner/current-*.json` by name instead of one fixed file. The
 lanes themselves are in [`docs/technical/mc-run.md`](mc-run.md).
 
@@ -98,9 +106,9 @@ as nothing running.
 
 A session a person opens themselves — `mc brief`, `mc plan <name>`,
 `mc worker <name>`, `mc work <name>` in a terminal — is a child of mc
-holding the terminal, and leaves no trace on disk. NOW would say "nothing
-is running" while the machine was busy, which is the one thing the page must
-never do.
+holding the terminal, and leaves no trace on disk. The page would say
+"nothing is running" while the machine was busy, which is the one thing it
+must never do.
 
 So the verb registers itself: `~/mc/runner/foreground/<pid>.json` (verb,
 area, tool, model, pid, started), written before the call that blocks and
@@ -172,7 +180,7 @@ test can look at one row.
 The page is grey with meaning painted on it, and the meanings are a short
 list. Two of them are tables, and those tables are the rule the rest of the
 page bends to: **a step kind and a plan status have one colour each, wherever
-they are printed.** NOW, QUEUE and PROJECTS all say `reconcile` in the same
+they are printed.** RUNNER, QUEUE and PROGRAMMES all say `reconcile` in the same
 magenta, so a kind is recognised before it is read. They are `KIND_TONE` and
 `STATUS_TONE` in `page-render.js`, and `tests/mc/page.test.js` walks each one
 through all three sections.
@@ -201,16 +209,19 @@ Everything else is structure, and structure is quiet:
 | header | `MEMORO·CLI` | bold white |
 | header | `N of M queued` | white |
 | header | version, rule, cost today | grey |
-| section titles | `NOW` `QUEUE` `INTAKE` `PROJECTS` | bold cyan |
+| section titles | `RUNNER` `HELPER` `BRIEF` `QUEUE` `INTAKE` `PROGRAMMES` `WORK` | bold cyan |
 | section titles | the count beside it, the verb hint on the right | grey |
-| NOW | the live step's `●`, its name | green, bold white |
-| NOW | elapsed: under ¾ of budget, from ¾, past it | white, yellow, bold red |
-| NOW | a foreground session — `●`, `mc brief` | cyan |
-| NOW | a live tmux area's `◆` | yellow |
-| NOW | `■ STOP requested` | bold red |
-| NOW | a stale runner file | red |
-| NOW | a quota answer under 6 h old, older | yellow, grey |
-| NOW | between steps, no runner, the day's line, the tool and pid | grey |
+| RUNNER | the live step's `●`, its name | green, bold white |
+| RUNNER | elapsed: under ¾ of budget, from ¾, past it | white, yellow, bold red |
+| RUNNER | `■ STOP requested` | bold red |
+| RUNNER | a stale runner file | red |
+| RUNNER | a quota answer under 6 h old, older | yellow, grey |
+| RUNNER | between steps, no runner, the day's line, the tool and pid | grey |
+| HELPER, BRIEF | the `●` and the verb it is running | cyan |
+| HELPER, BRIEF | `·  not open` | dim grey |
+| WORK | a session's `●` and its area | cyan, bold white |
+| WORK | a tmux window's `◆` | yellow |
+| WORK | how long it has been open, under a day, from a day | grey, yellow |
 | QUEUE | the next name, the first of them | white, bold white |
 | QUEUE | the number, `… N more runnable` | grey |
 | QUEUE | why a project was skipped | dim grey |
@@ -219,12 +230,15 @@ Everything else is structure, and structure is quiet:
 | INTAKE | proposals, when > 0 | yellow |
 | INTAKE | a `!` line: its mark, its text | red, bold white |
 | INTAKE | no digest yet, no new errors, no proposals | grey |
-| PROJECTS | a live project's `●`, its name | green, bold white |
-| PROJECTS | a quiet project's name and `next` | white, plain |
-| PROJECTS | the repository heading | bold cyan |
-| PROJECTS | the open PR number | cyan |
-| PROJECTS | the number, the steps done, the last-run time, the no-workarea line | grey |
-| PROJECTS | a workarea row with no project on main | grey throughout |
+| PROGRAMMES | a project the runner is stepping — `●`, its name | green, bold white |
+| PROGRAMMES | a quiet project's name and `next` | white, plain |
+| PROGRAMMES | the programme heading | bold cyan |
+| PROGRAMMES | a programme's open planning session | cyan |
+| PROGRAMMES | a programme with no planning session | dim grey |
+| PROGRAMMES | the repository a project lives in | dim grey |
+| PROGRAMMES | the open PR number | cyan |
+| PROGRAMMES | the number, the steps done, the last-run time, the no-workarea line | grey |
+| PROGRAMMES | a workarea row with no project on main | grey throughout |
 | footer | the cache line, the notes | grey |
 
 Four things hold that table up:
@@ -262,7 +276,7 @@ not changed:
 
 | | |
 |---|---|
-| a number | opens that project's workarea, making one if it has none — **PROJECTS’ number**, not a listing of its own |
+| a number | opens that project's workarea, making one if it has none — **PROGRAMMES’ number**, not a listing of its own |
 | a name | opens that workarea |
 | `n` | starts a new one |
 | `b` | `mc brief` |
@@ -272,7 +286,7 @@ not changed:
 | anything else | parsed as an `mc work` command, with or without its first two words |
 
 The menu asks `inspectWorkArea(name).exists` rather than looking for a
-PROJECTS row, because the page draws projects and the folders that hold a
+PROGRAMMES row, because the page draws projects and the folders that hold a
 checkout, and `mc work` offers to make an area with no repository in it.
 Using the rows would have kept the typo guard and stranded the empty area
 under the only name it has.
@@ -302,7 +316,7 @@ parsed JSON and compares, so the two surfaces cannot drift.
 
 `tests/mc/front-door.test.js` drives the menu in process with the reading
 and the opening handed in, so a number can be shown to open the project
-PROJECTS gave that number to without a session ever starting.
+PROGRAMMES gave that number to without a session ever starting.
 
 ## What went, and what did not
 

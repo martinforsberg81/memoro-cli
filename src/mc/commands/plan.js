@@ -36,7 +36,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, readdirSync } from 'node:fs';
 
 import { defaultRepos, listPlans, listProgrammes } from '../brief-collect.js';
-import { addWorktree, createWorkArea, inspectWorkArea } from '../work-area.js';
+import { addWorktree, createWorkArea, dropEmptyArea, inspectWorkArea } from '../work-area.js';
 import { openInWorkArea } from '../work-open.js';
 import { PLAN_HOME, planHome } from '../paths.js';
 import { readCanonRole, reservedRoleHint, reservedRoleName } from '../roles.js';
@@ -145,7 +145,11 @@ export function ensurePlanArea(programme, { repos, env = process.env, stdout, st
   const branch = planBranch(programme);
   const runGit = git || ((args) => spawnSync('git', args, { stdio: 'ignore' }));
   let area = inspectWorkArea(name, env);
-  if (!area.exists) createWorkArea(name, env);
+  // Made here rather than by the first `addWorktree`, so a programme whose
+  // repositories all fail leaves this call holding the empty directory — and
+  // the one that made it is the one that takes it away again.
+  const madeTheArea = !area.exists;
+  if (madeTheArea) createWorkArea(name, env);
 
   for (const repo of repos) {
     if (area.worktrees.some((item) => item.repo === repo.name && item.is_git)) continue;
@@ -168,6 +172,7 @@ export function ensurePlanArea(programme, { repos, env = process.env, stdout, st
   area = inspectWorkArea(name, env);
   const held = area.worktrees.filter((item) => item.is_git).map((item) => item.repo).sort();
   if (!held.length) {
+    if (madeTheArea) dropEmptyArea(area.path);
     stderr.write(`mc: no repository could be checked out for ${name} — nothing to plan in\n`);
     return { ok: false };
   }

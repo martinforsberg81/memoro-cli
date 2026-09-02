@@ -161,8 +161,18 @@ function row(c, wide, left, middle, right, tone = null) {
 
 /* --------------------------------------------------------------- sections */
 
-function nowLines(lines, c, wide, now) {
-  heading(lines, c, wide, 'NOW', null, null);
+/**
+ * RUNNER — what `mc run` is doing, and nothing else.
+ *
+ * It was NOW, and NOW drew the runner's steps and the sessions a person had
+ * open as one list of dots. The two are stopped by different things and read
+ * for different reasons; together they meant a `mc plan` left open since
+ * Sunday sat in the same column as a step four minutes into its budget. The
+ * sessions have a section of their own now.
+ */
+function runnerLines(lines, c, wide, runner) {
+  const now = runner;
+  heading(lines, c, wide, 'RUNNER', null, 'mc run');
   // One line per lane: `mc run` drives one lane per repository at the same
   // time, and each of them is a step somebody may want to look at.
   const steps = now.steps || [];
@@ -180,7 +190,7 @@ function nowLines(lines, c, wide, now) {
       ], ' · '), wide - 28);
       lines.push(`  ${c(MARK.running, 'green')} ${c(pad(clip(s.name, 21), 22), 'bold', 'white')} ${meta}`);
     }
-  } else if (now.runner?.alive) {
+  } else if (now.process?.alive) {
     lines.push(`  ${c(MARK.quiet, 'grey')} ${c(pad('runner', 22), 'grey')} ${c('between steps — nothing in flight', 'grey')}`);
   } else {
     lines.push(`  ${c(MARK.quiet, 'grey')} ${c('the runner is not running — mc run starts it', 'grey')}`);
@@ -191,26 +201,9 @@ function nowLines(lines, c, wide, now) {
       { text: ' — the runner exits after the steps it is in', styles: ['grey'] },
     ], wide - 2)}`);
   }
-  // A foreground verb is a person's session: cyan, the colour of the verbs
-  // that hold a terminal, and the same cyan wherever `brief` or `plan` is
-  // printed.
-  for (const item of now.foreground) {
-    const meta = paint(c, between([
-      { text: item.area || '', styles: ['grey'] },
-      { text: [item.tool, item.model].filter(Boolean).join(' '), styles: ['grey'] },
-      { text: item.pid ? `pid ${item.pid}` : '', styles: ['grey'] },
-    ], ' · '), wide - 28);
-    lines.push(`  ${c(MARK.running, 'cyan')} ${c(pad(clip(`mc ${item.verb || '?'}`, 21), 22), 'bold', 'cyan')} ${meta}`);
-  }
-  // A tmux area is a person's window, not the runner's: yellow, because what
-  // is in it is waiting for somebody rather than working.
-  for (const area of now.live) {
-    const since = area.opened_ms ? `open ${duration(Math.max(0, Math.round((now.at_ms - area.opened_ms) / 1000)))}` : 'open';
-    lines.push(`  ${c(MARK.waiting, 'yellow')} ${c(pad(clip(area.name, 21), 22), 'bold', 'white')} ${c(`tmux mc-${area.name} · ${since}`, 'grey')}`);
-  }
   for (const line of now.stale) say(lines, c, wide, 2, `${MARK.quiet} stale: ${line}`, 'red');
   const day = now.day;
-  const up = now.runner?.alive ? `runner up ${duration(now.runner.up_seconds)} · ` : '';
+  const up = now.process?.alive ? `runner up ${duration(now.process.up_seconds)} · ` : '';
   const cost = money(day.cost);
   say(lines, c, wide, 2, `${up}${day.steps} steps in 24 h — merged ${day.merged}, open ${day.open}, `
     + `failed ${day.failed}, timed out ${day.timeout}`
@@ -222,6 +215,60 @@ function nowLines(lines, c, wide, now) {
     const recent = Number.isFinite(at) && now.at_ms - at < QUOTA_FRESH_MS;
     say(lines, c, wide, 2, `quota: ${now.quota.count} answer(s) in the last 24 h, last ${when(now.quota.last)}`,
       recent ? 'yellow' : 'grey');
+  }
+}
+
+/** Past this, the age is the thing on the row worth looking at. */
+const STALE_SESSION_S = 24 * 60 * 60;
+const ageTone = (seconds) => (seconds != null && seconds >= STALE_SESSION_S ? ['yellow'] : ['grey']);
+const openFor = (seconds) => (seconds == null ? 'open' : `open ${ageWords(seconds)}`);
+
+/**
+ * One desk — HELPER or BRIEF — as a heading with its state beside it.
+ *
+ * Drawn whether or not anybody is at it. There is exactly one of each, so
+ * *"is the helper running?"* is a question a row answers either way, and a
+ * section that vanishes when nothing is open answers nothing at all.
+ */
+function deskLine(lines, c, wide, title, session, verb) {
+  if (!session) {
+    heading(lines, c, wide, title, [{ text: `${MARK.quiet}  not open`, styles: ['dim', 'grey'] }], verb);
+    return;
+  }
+  heading(lines, c, wide, title, [
+    { text: `${MARK.running} `, styles: ['cyan'] },
+    ...between([
+      { text: openFor(session.age_seconds), styles: ageTone(session.age_seconds) },
+      { text: [session.tool, session.model].filter(Boolean).join(' '), styles: ['grey'] },
+      { text: session.pid ? `pid ${session.pid}` : '', styles: ['grey'] },
+    ], ' · '),
+  ], verb);
+}
+
+/**
+ * WORK — everything running that the runner did not start, oldest first.
+ *
+ * The age is the point of the section. All of these were on the page before;
+ * what was missing was how long each had been there, so on 2026-09-02 seven
+ * live sessions — the oldest three days old — read as a busy afternoon. Past
+ * a day the age turns yellow, because by then it is the thing on the row.
+ */
+function workLines(lines, c, wide, sessions) {
+  const others = sessions.others || [];
+  heading(lines, c, wide, 'WORK', others.length
+    ? `${others.length} session${others.length === 1 ? '' : 's'}`
+    : 'nothing open', 'mc work <name>');
+  for (const item of others) {
+    const meta = paint(c, between([
+      { text: item.verb ? `mc ${item.verb}` : 'tmux', styles: ['cyan'] },
+      { text: openFor(item.age_seconds), styles: ageTone(item.age_seconds) },
+      { text: [item.tool, item.model].filter(Boolean).join(' '), styles: ['grey'] },
+      { text: item.pid ? `pid ${item.pid}` : (item.tmux || ''), styles: ['grey'] },
+    ], ' · '), wide - 28);
+    // Cyan for a verb somebody typed, yellow for a tmux window nobody is
+    // necessarily in — the same two meanings those colours carried before.
+    const mark = item.verb ? c(MARK.running, 'cyan') : c(MARK.waiting, 'yellow');
+    lines.push(`  ${mark} ${c(pad(clip(item.area || '?', 21), 22), 'bold', 'white')} ${meta}`);
   }
 }
 
@@ -290,43 +337,60 @@ function intakeLines(lines, c, wide, intake) {
 }
 
 /**
- * The fixed columns of a PROJECTS row, sized to the terminal rather than to a
+ * The fixed columns of a project row, sized to the terminal rather than to a
  * number somebody typed once — which is the rule this file keeps everywhere
  * else, and the one a first draft of this section broke: 41 columns of name
  * plus 17 of status is wider than the 60-column floor all by itself.
  *
- * `blocked` is the longest status there is, so
- * it gets its whole width the moment the terminal can afford it and is clipped
- * below that. The name is whatever is left once the middle has the eight
- * columns `row` will insist on anyway.
+ * `blocked` and `invalid` are the longest statuses there are — seven columns.
+ * The cell was seventeen, sized when `waiting-decision` existed, and ten of
+ * those columns had been empty ever since; they go to `next`, which is the one
+ * cell on the row whose whole value is how much of the sentence survives.
+ *
+ * The repository has a column of its own now: the section groups by programme,
+ * so which of the two a project lives in is a fact about the row rather than
+ * the shape of the page. `memoro-cli` is the longer of the two names.
+ *
+ * The name is the project's alone — the programme is the heading above it — so
+ * it needs `language-voice-transcript-hygiene` and nothing wider.
  */
 function projectColumns(wide) {
   const roomy = wide >= 90;
-  const status = roomy ? 17 : 10;
+  const status = roomy ? 9 : 8;
   const steps = roomy ? 8 : 6;
-  return { status, steps, name: Math.max(16, Math.min(41, wide - 10 - status - steps - 8)) };
+  const repo = roomy ? 12 : 0;
+  return { status, steps, repo, name: Math.max(16, Math.min(34, wide - 10 - status - steps - repo - 8)) };
 }
 
 /**
- * One PROJECTS row: the number the menu opens it by, where the plan stands,
- * how far through its steps it is, and what happens next.
+ * One project row: the number the menu opens it by, which repository it lives
+ * in, where the plan stands, how far through its steps it is, and what happens
+ * next.
  *
- * `programme/project` and not just the name — a project belongs to a
- * programme, and two projects of one programme read as one piece of work only
- * when it is on the row. The steps cell is what a list of names could never
- * say: `3/7` is where the work stands.
+ * The name is the project's alone — the programme is the heading above it now,
+ * and repeating it on every row said the same word four times in a column
+ * eight rows tall. The steps cell is what a list of names could never say:
+ * `3/7` is where the work stands.
+ *
+ * The `●` means the runner has a step in flight on this project. It used to
+ * mean a live tmux area — somebody sitting in the folder — which made one mark
+ * answer two questions. Sessions are WORK's.
  */
 function projectLine(c, wide, project) {
-  const mark = project.live ? c(MARK.running, 'green') : c(MARK.quiet, 'grey');
-  const nameTone = project.live ? ['bold', 'white'] : ['white'];
+  const mark = project.running ? c(MARK.running, 'green') : c(MARK.quiet, 'grey');
+  const nameTone = project.running ? ['bold', 'white'] : ['white'];
   // A plan still on the old markdown file has no steps to count and is said to
   // be what it is, rather than drawn as a fraction of nothing.
   const steps = project.steps
     ? `${project.steps.done}/${project.steps.total}`
     : (project.legacy ? 'PLAN.md' : '—');
   const column = projectColumns(wide);
+  const repo = column.repo
+    ? `${c(pad(clip(project.repo || '—', column.repo), column.repo), 'dim', 'grey')} `
+    : '';
   const left = `  ${c(String(project.number).padStart(3), 'grey')} ${mark} `
-    + `${c(pad(clip(`${project.programme}/${project.name}`, column.name), column.name), ...nameTone)} `
+    + `${c(pad(clip(project.name, column.name), column.name), ...nameTone)} `
+    + repo
     + `${c(pad(clip(project.status || '—', column.status), column.status), ...statusTone(project.status))} `
     + `${c(pad(steps, column.steps), 'grey')}`;
   // The open PR is the actionable half and wins the right-hand column; with
@@ -351,36 +415,61 @@ function orphanLine(c, wide, area) {
   const mark = area.live ? c(MARK.running, 'green') : c(MARK.quiet, 'grey');
   const left = `  ${c(String(area.number).padStart(3), 'grey')} ${mark} `
     + `${c(pad(clip(area.name, column.name), column.name), 'grey')} `
-    + `${c(pad(clip(area.repo || '—', column.status), column.status), 'dim', 'grey')}`;
+    + `${c(pad(clip(area.repo || '—', column.repo || column.status), column.repo || column.status), 'dim', 'grey')}`;
   const parts = [];
   if (area.uncommitted) parts.push(`${area.uncommitted} uncommitted`);
   if (area.last_commit) parts.push(`last commit ${area.last_commit}`);
   return row(c, wide, left, parts.join(' · ') || 'no project on main', null, ['grey']);
 }
 
-function projectsLines(lines, c, wide, projects) {
-  const statuses = Object.entries(projects.statuses || {})
+/**
+ * One programme heading, with the room for its planning session on the right
+ * of it — filled or empty.
+ *
+ * Empty is the point. `mc plan <programme>` is how new work enters, and a
+ * programme with no session open is one nobody is thinking about right now,
+ * which is a thing worth being able to see at a glance rather than to work out
+ * from an absence (Martin, 2026-09-02).
+ */
+function programmeLine(c, wide, group) {
+  const session = group.planning;
+  const left = `  ${c(pad(clip(group.programme, 30), 31), 'bold', 'cyan')}`;
+  const meta = session
+    ? paint(c, [
+      { text: `${MARK.running} `, styles: ['cyan'] },
+      ...between([
+        { text: `plan ${openFor(session.age_seconds).replace(/^open /u, '')}`, styles: ageTone(session.age_seconds) },
+        { text: [session.tool, session.model].filter(Boolean).join(' '), styles: ['grey'] },
+        { text: session.pid ? `pid ${session.pid}` : '', styles: ['grey'] },
+      ], ' · '),
+    ], wide - 34)
+    : c(`${MARK.quiet}  no plan session`, 'dim', 'grey');
+  return `${left} ${meta}`;
+}
+
+function programmesLines(lines, c, wide, programmes) {
+  const statuses = Object.entries(programmes.statuses || {})
     .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
     .map(([status, n]) => ({ text: `${status} ${n}`, styles: statusTone(status) }));
-  const repos = projects.repos || [];
-  heading(lines, c, wide, 'PROJECTS', [
-    { text: `${projects.count} in ${repos.length} repo${repos.length === 1 ? '' : 's'}  `, styles: ['grey'] },
+  const groups = programmes.programmes || [];
+  heading(lines, c, wide, 'PROGRAMMES', [
+    { text: `${groups.length} programme${groups.length === 1 ? '' : 's'} · ${programmes.count} project${programmes.count === 1 ? '' : 's'}  `, styles: ['grey'] },
     ...between(statuses, ' · '),
-  ], 'mc status <name>');
+  ], 'p  plan a programme');
 
-  for (const group of repos) {
-    lines.push(`  ${c(group.repo, 'bold', 'cyan')} ${c(String(group.projects.length), 'dim', 'grey')}`);
+  for (const group of groups) {
+    lines.push(programmeLine(c, wide, group));
     for (const project of group.projects) lines.push(projectLine(c, wide, project));
   }
-  if (projects.no_workarea) {
-    say(lines, c, wide, 7, `${projects.no_workarea} of them ${projects.no_workarea === 1 ? 'has' : 'have'} no workarea yet — opening by number makes one`);
+  if (programmes.no_workarea) {
+    say(lines, c, wide, 7, `${programmes.no_workarea} of them ${programmes.no_workarea === 1 ? 'has' : 'have'} no workarea yet — opening by number makes one`);
   }
 
   // The workareas nothing explains, under one heading rather than scattered
   // through the rows above. No machine removes them — `mc run` writes the same
   // list, with whether each branch has landed, to
   // `~/mc/intake/unplanned-workareas.md` for `mc brief` to raise.
-  const orphans = projects.unplanned || { count: 0, shown: [], more: 0 };
+  const orphans = programmes.unplanned || { count: 0, shown: [], more: 0 };
   if (!orphans.count) return;
   lines.push('');
   say(lines, c, wide, 2, `${orphans.count} workarea${orphans.count === 1 ? '' : 's'} with no project on main — nothing removes them`);
@@ -402,7 +491,7 @@ export function renderPageLines(data, {
   const at = now instanceof Date ? now.getTime() : Number(now);
   const lines = [];
 
-  const cost = money(data.now?.day?.cost);
+  const cost = money(data.runner?.day?.cost);
   const brand = `${c('MEMORO·CLI', 'bold', 'white')}${version ? c(`  ${version}`, 'grey') : ''}`;
   // Counted on the plain text, and the narrowest terminal keeps the count it
   const parts = [
@@ -417,13 +506,21 @@ export function renderPageLines(data, {
   lines.push(`  ${brand} ${c('─'.repeat(Math.max(2, rule)), 'grey')} ${counts}`);
   lines.push('');
 
-  nowLines(lines, c, wide, { ...data.now, at_ms: at });
+  const sessions = data.sessions || { desks: {}, others: [] };
+  runnerLines(lines, c, wide, { ...data.runner, at_ms: at });
+  lines.push('');
+  // The two desks sit between the machine and the work: one helper, one
+  // brief, each a heading with its own state on the line.
+  deskLine(lines, c, wide, 'HELPER', sessions.desks?.helper, 'mc helper');
+  deskLine(lines, c, wide, 'BRIEF', sessions.desks?.brief, 'mc brief');
   lines.push('');
   queueLines(lines, c, wide, data.queue);
   lines.push('');
   intakeLines(lines, c, wide, data.intake);
   lines.push('');
-  projectsLines(lines, c, wide, data.projects);
+  programmesLines(lines, c, wide, data.programmes);
+  lines.push('');
+  workLines(lines, c, wide, sessions);
 
   const cache = data.caches?.fresh
     ? 'fresh — fetched and asked GitHub'

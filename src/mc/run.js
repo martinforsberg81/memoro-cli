@@ -85,6 +85,7 @@ import { describeTurn, runHelperTurn } from './helper-turn.js';
 import { workRoot } from './paths.js';
 import { runDocsMerge } from './docs-merge.js';
 import { runMergeRound } from './repo-merge.js';
+import { kindFor } from './status-collect.js';
 import { PR_LIST_ARGS, openPrsFor } from './project-prs.js';
 import { loadProfile, profileArgs } from './portrait.js';
 import { readCanonRole } from './roles.js';
@@ -892,9 +893,22 @@ export function createRunner({
    * `world` is what `queue()` returned: the plans on origin/main and the open
    * pull requests of both repositories. Everything that can end the round for
    * this project is asked before a session is spent, in the order it costs:
-   * the STOP file, the quota, a live tmux session, a dirty worktree, an open
-   * pull request, and then whether the branch underneath is one that can still
-   * be pushed.
+   * the STOP file, the quota, a dirty worktree, an open pull request, and then
+   * whether the branch underneath is one that can still be pushed.
+   *
+   * A session somebody has open in the workarea is **not** on that list any
+   * more. It used to be — a live `mc-<name>` tmux session skipped the project —
+   * and the rule looked prudent while being a second, undeclared way to stop
+   * work: whether a step runs would depend on which terminals happened to be
+   * open, which is nowhere in the plan and nothing the next round remembers.
+   * A project the runner should leave alone says so where every other such
+   * fact is written down, by being `blocked` in its own `PLAN.json` (Martin,
+   * 2026-09-02). `mc work` and `mc run` now know nothing about each other.
+   *
+   * `closeWorkareas` still asks. That is a different question — whether it is
+   * safe to *delete* the directory — and pulling the ground from under a
+   * terminal somebody is standing in is not the same as declining to run a
+   * step in it.
    */
   async function runStep(name, world = {}) {
     const { plans = [], prs = [], prsFailed = [] } = Array.isArray(world) ? { plans: world } : world;
@@ -911,7 +925,6 @@ export function createRunner({
       const added = deps.addWorktree({ name, repo: repo.path, branch: name, from: 'origin/main', env: deps.env });
       if (!added.ok) { say(`${name}: worktree add failed (${added.reason}), skip`); return 'skipped'; }
     }
-    if (deps.tmuxHas(`mc-${name}`)) { say(`${name}: live tmux session, skip`); return 'skipped'; }
     if ((gitOut(worktree, ['status', '--porcelain']) || '').trim()) { say(`${name}: dirty worktree, skip`); return 'skipped'; }
     if (prsFailed.includes(repo.name)) { say(`${name}: what is open on GitHub is unknown this round, skip`); return 'skipped'; }
 
@@ -1078,36 +1091,118 @@ export function createRunner({
   }
 
   /**
+   * What the plan on `origin/main` already says about a name, asked before
+   * anything is touched. `{ name, reason }` means the lane does not go there
+   * this pass, and the reason is the word the round counts in `refusedLine`;
+   * null means it does.
+   *
+   * `kindFor` is the page's reading — `chooseKind` over the plan text
+   * `queue()` has already fetched — and it answers `skip:<reason>` for a plan
+   * that is blocked, done, unparseable or unmigrated without a worktree, a
+   * `git status`, a fetch or a merge. `runStep` used to be where that answer
+   * arrived, five pieces of git work later: 2026-09-02 a round spent 51
+   * seconds walking 38 projects to start one, and 21 of those refusals were
+   * on the page before the round began.
+   *
+   * It does not replace `runStep`'s own reading, which stays exactly where it
+   * was. The plan in the worktree after `syncMain` is the one that must be
+   * obeyed — it is the one a step session will edit, and it can be one merge
+   * ahead of this one. This only stops the walk from arriving at a project
+   * whose plan on main already refuses it.
+   *
+   * Two things it deliberately does not answer:
+   *
+   * - **A name with no plan on main at all.** `assembleQueue` drops those, so
+   *   it can only happen when a plan leaves main mid-round; `runStep` has the
+   *   line for it, and this leaves it there.
+   * - **A conflicted merge left in a workarea.** That is `reconcile`, and it
+   *   lives in a worktree no plan on main can see. A project whose plan is
+   *   stopped keeps its half-finished merge until the plan is `ready` again —
+   *   which is the round it would have been able to use it in anyway.
+   */
+  function planRefusal(name, plans = []) {
+    const plan = plans.find((p) => p.project === name) || null;
+    if (!plan) return null;
+    const kind = kindFor(name, { plans });
+    if (!kind.startsWith('skip:')) return null;
+    return { name, reason: kind.slice('skip:'.length) };
+  }
+
+  /**
+   * The one line a round leaves about what its plans refused, or null when
+   * they refused nothing.
+   *
+   * A plan-shaped refusal is already on the page — `mc status`'s QUEUE draws
+   * it from the same `kindFor` — so the twenty-first `blocked on decision
+   * plan-review` in runner.log tells a reader nothing the first one did not.
+   * What it costs is the lines that are *not* on the page: a dirty worktree,
+   * a pull request in flight, a merge that conflicted. Those are facts about
+   * this machine at this moment, they keep their own named line in `runStep`,
+   * and they are what this line exists to leave room for.
+   *
+   * The shape is the page's: `skipped 28 (blocked 21, unparseable 5, done
+   * 1)`, reasons in the order the queue met them. One reason is named rather
+   * than only counted — a plan that does not parse is a thing somebody must
+   * go and fix, and a count of five does not say which five.
+   */
+  function refusedLine(refusals = []) {
+    if (!refusals.length) return null;
+    const counts = new Map();
+    for (const { reason } of refusals) counts.set(reason, (counts.get(reason) || 0) + 1);
+    const by = [...counts].map(([reason, n]) => `${reason} ${n}`).join(', ');
+    const unparseable = refusals.filter((r) => r.reason === 'unparseable').map((r) => r.name);
+    const named = unparseable.length ? ` — the plans that do not parse: ${unparseable.join(', ')}` : '';
+    return `skipped ${refusals.length} (${by})${named}`;
+  }
+
+  /**
    * One lane: its names in order, one step at a time. A project whose step
    * merged keeps the lane — its next step follows at once (plans re-read, so
    * the merged status is what decides) instead of waiting a whole round
    * behind every other project — 2026-08-29 a six-step plan would have taken
    * six rounds of twenty projects. STOP is honoured between those steps too.
+   *
+   * The names it does not stop at are `planRefusal`: a project whose plan on
+   * origin/main already says the runner would do nothing is passed over here,
+   * before `runStep` opens a worktree to find out the same thing. It says
+   * nothing about them one at a time — they are collected and returned as
+   * `refused`, and the round leaves the one line (`refusedLine`).
    */
   async function runLane({ repo = null, names = [] }, world, { once = false } = {}) {
     let known = Array.isArray(world) ? { plans: world } : world;
     let ran = 0;
+    const refused = [];
     for (const name of names) {
+      // The plan first, git second: a project its own plan on main refuses is
+      // never reached, and no worktree, status or fetch is spent on it. Asked
+      // per name against `known`, which a merged step re-reads — a plan that
+      // came good in that window does not wait for the next round.
+      const no = planRefusal(name, known.plans);
+      if (no) { refused.push(no); continue; }
       let r = await runStep(name, known);
       for (let stayed = 0; ; stayed += 1) {
-        if (r === 'stop') return { ran, stop: true };
+        if (r === 'stop') return { ran, stop: true, refused };
         if (r === 'ran' || r === 'merged') {
           ran += 1;
-          if (once) return { ran, stop: false, once: true };
+          if (once) return { ran, stop: false, once: true, refused };
           await deps.sleep(60_000);
         }
-        if (stopRequested()) { say(`runner exit on STOP after ${name} (remove ${paths.stop} before the next start)`); return { ran, stop: true }; }
+        if (stopRequested()) { say(`runner exit on STOP after ${name} (remove ${paths.stop} before the next start)`); return { ran, stop: true, refused }; }
         if (r !== 'merged' || stayed >= 8) break;
         // Re-read: the plan the merge advanced, and what GitHub has open now
         // — the step that just landed may have left a second pull request.
         known = queue({ only: repo });
+        // The plan the merge advanced says stop: the lane lets go, and the
+        // count is the round's, same as any other refusal on the plan.
+        const stopped = planRefusal(name, known.plans);
+        if (stopped) { refused.push(stopped); break; }
         const status = known.plans.find((p) => p.project === name)?.status;
         if (!status || status === 'done') break;
         say(`${name}: step merged and the plan is ${status} — staying on ${name}`);
         r = await runStep(name, known);
       }
     }
-    return { ran, stop: false };
+    return { ran, stop: false, refused };
   }
 
   /**
@@ -1147,6 +1242,11 @@ export function createRunner({
       ran: results.reduce((sum, r) => sum + r.ran, 0),
       stop: results.some((r) => r.stop),
     };
+    // What the plans refused, in one line for the whole round rather than one
+    // line per project: both lanes' refusals counted together, because a
+    // reader of runner.log is reading a round, not a lane.
+    const line = refusedLine(results.flatMap((r) => r.refused || []));
+    if (line) say(line);
     // Last of all, and only in a whole round that was not cut short: the
     // workareas whose plan left main this round are taken down, and the ones
     // with no plan at all are written where Martin looks. `--once` changes

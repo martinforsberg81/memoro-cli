@@ -10,13 +10,13 @@
  * moved.
  */
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
 import {
-  planArea, planBranch, planLaunch, programmeLabel, programmeRows, run,
+  ensurePlanArea, planArea, planBranch, planLaunch, programmeLabel, programmeRows, run,
 } from '../../../src/mc/commands/plan.js';
 import { profileArgs } from '../../../src/mc/portrait.js';
 import { instructionsFor, readCanonRole } from '../../../src/mc/roles.js';
@@ -60,6 +60,24 @@ describe('where a planning session lives', () => {
 });
 
 describe('the picker', () => {
+  /**
+   * An empty work root of this test's own, and `MC_WORK_ROOT` is the key that
+   * makes it one.
+   *
+   * This used to name `MC_HOME`, which reads as isolation and is not:
+   * `programmeRows` asks `openPlanAreas`, which resolves `MC_WORK_ROOT` and
+   * falls back to `homedir()/mc` when the object it was handed carries none.
+   * So the picker read the user's real `~/mc/plan/`, and the test passed only
+   * while that directory was empty. It stopped being empty the first time
+   * somebody ran `mc plan`, and the assertion then failed on a machine rather
+   * than on a change.
+   *
+   * `tests/_isolate-home.mjs` cannot catch this. It points `process.env` at a
+   * throwaway directory, and a caller passing its own env object never looks
+   * there — the literal has to carry the key itself.
+   */
+  const env = { MC_WORK_ROOT: mkdtempSync(join(tmpdir(), 'mc-plan-picker-')) };
+
   const read = (repo) => (repo.name === 'memoro'
     ? {
       programmes: ['entity-detail', 'msr-core'],
@@ -71,7 +89,7 @@ describe('the picker', () => {
     : { programmes: ['mc'], plans: [{ programme: 'mc', project: 'mc-cut', status: 'done' }] });
 
   it('offers every programme on main in either repository', () => {
-    const rows = programmeRows({ repos: REPOS, env: { MC_HOME: '/nowhere' }, read });
+    const rows = programmeRows({ repos: REPOS, env, read });
     assert.deepEqual(rows.map((r) => r.name), ['entity-detail', 'mc', 'msr-core']);
     assert.deepEqual(rows.find((r) => r.name === 'mc').repos, ['memoro-cli']);
   });
@@ -80,14 +98,14 @@ describe('the picker', () => {
   // document on main — `listPlans` cannot see it, and it is exactly the one
   // the next piece of that work belongs under.
   it('keeps a programme whose projects are all gone', () => {
-    const rows = programmeRows({ repos: REPOS, env: { MC_HOME: '/nowhere' }, read });
+    const rows = programmeRows({ repos: REPOS, env, read });
     const empty = rows.find((r) => r.name === 'entity-detail');
     assert.equal(empty.projects, 0);
     assert.match(programmeLabel(empty), /no projects on main/u);
   });
 
   it('counts what is unfinished, and says when everything is done', () => {
-    const rows = programmeRows({ repos: REPOS, env: { MC_HOME: '/nowhere' }, read });
+    const rows = programmeRows({ repos: REPOS, env, read });
     assert.match(programmeLabel(rows.find((r) => r.name === 'msr-core')), /2 projects, 1 unfinished/u);
     assert.match(programmeLabel(rows.find((r) => r.name === 'mc')), /1 project, all done/u);
   });
@@ -222,5 +240,39 @@ describe('what it refuses', () => {
   it('is listed in the help', () => {
     const r = runMcCli(['--help']);
     assert.match(r.stdout, /mc plan \[<programme>\]/u);
+  });
+});
+
+/**
+ * A programme nothing could be checked out for gets no directory.
+ *
+ * The area is made before the first checkout, because `git worktree add` wants
+ * its parent to exist. When every repository fails, what is left is a folder
+ * that exists only because something went wrong — and the picker would then
+ * offer that programme back as one already being planned.
+ */
+describe('a planning area nothing could be checked out into', () => {
+  const missing = (root) => [{ name: 'memoro', path: join(root, 'no-such-repo') }];
+  const area = (root, programme) => join(root, 'plan', programme);
+
+  it('is taken away again, and says why', () => {
+    const root = mkdtempSync(join(tmpdir(), 'mc-plan-empty-'));
+    const stderr = sink();
+    const result = ensurePlanArea('nowhere', {
+      repos: missing(root), env: { MC_WORK_ROOT: root }, stdout: sink(), stderr,
+    });
+    assert.equal(result.ok, false);
+    assert.match(stderr.out.text, /nothing to plan in/u);
+    assert.equal(existsSync(area(root, 'nowhere')), false);
+  });
+
+  it('is kept when it was already there', () => {
+    const root = mkdtempSync(join(tmpdir(), 'mc-plan-standing-'));
+    mkdirSync(area(root, 'standing'), { recursive: true });
+    const result = ensurePlanArea('standing', {
+      repos: missing(root), env: { MC_WORK_ROOT: root }, stdout: sink(), stderr: sink(),
+    });
+    assert.equal(result.ok, false);
+    assert.equal(existsSync(area(root, 'standing')), true);
   });
 });
