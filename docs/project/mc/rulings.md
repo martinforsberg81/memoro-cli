@@ -232,7 +232,79 @@ to carry the age of.
   cap is one line and addresses the cause; deleting 22 test files addresses the
   symptom.
 
+## 5 · An open pull request stops its project; no session repairs one
+
+`ruling · 2026-09-02` · raised and answered in the `mc plan` session for
+`runner-open-prs`; no decision file was written
+
+`mc run` looks in two places — `origin/main` for the queue (`run.js:807`) and
+the worktree for the plan it acts on (`run.js:237`) — and asks GitHub about pull
+requests once, *after* the session (`run.js:761`). A step whose work is sitting
+in an open pull request is therefore still `ready` everywhere the runner reads,
+and on 2026-09-02T04:33 a 120-minute Opus session started to rebuild step 4 of
+`action-window` while that step's work was open as #11241. The same blindness
+let msr-track-3 stack: #11249 left open at 12:27, #11250 opened on top of it and
+squash-merged at 13:00 into `msr-track-3-capture-command`, logged
+`success,merged`, `main` receiving nothing.
+
+The proposal was a short `land` session that would repair a pull request the
+runner had left open.
+
+> **Beslut:** "Inget av alternativen går att använda. Låt oss fundera på vilka
+> olika scenarion det kan vara för en PR. När kan de inte landas? Vad bör hända
+> då? Fundera igenom olika scenarion. Vi ska absolut inte ha en separat session;
+> då kan vi lika gärna utöka behörigheter för runner." (Martin, 2026-09-02)
+
+Seven scenarios were then enumerated against the code and `runs.tsv`, and six of
+them are deterministic: a base that is not `main`, a stack of the runner's own
+making, a malformed but permitted plan edit, a branch that has already landed and
+cannot be pushed to, a session that timed out with commits and no pull request,
+and a plan on main that does not parse. Only one needs a person — a session that
+changed a field it may not touch — and on that:
+
+> **Beslut:** "Projektet stannar tills du tittat" — the pull request stays open
+> and the project starts nothing more until it is merged, closed or fixed by
+> Martin. The runner never rewrites such a plan file on the session's behalf.
+> (Martin, 2026-09-02)
+
+`reconcile` is untouched: it already exists and resolving a merge conflict is the
+right job for a session.
+
+Built by [`runner-open-prs`](runner-open-prs/PLAN.json).
+
+## 6 · A step's learning lives on the step, as `steps[i].learned`
+
+`ruling · 2026-09-02` · raised and answered in the same session; no decision
+file was written
+
+Five of seven step runs on 2026-09-02 ended `plan-trespass`, and three of them
+were not trespasses: `what_the_code_taught_us[0].body: at least one paragraph`
+(`email-window-layout`), `what_the_code_taught_us[0]: must be an object`
+(`inbox-finish`), and the same fault on `new-user`, whose plan has therefore sat
+unreadable on `origin/main` while the runner printed a skip line nobody reads.
+Prose in a schema-validated file, where the wrong shape invalidates the whole
+plan, is prose in the wrong place. The offered alternatives were a `NOTES.md`
+outside the schema, or the same field flattened to an array of strings.
+
+> **Beslut:** "Flytta in i steget: `steps[i].learned`" (Martin, 2026-09-02)
+
+The top-level `what_the_code_taught_us` goes. A session writes `learned` on its
+own step as an array of paragraphs, which puts everything a step session may
+touch inside `steps[index]` — `status`, `pr`, `learned` — so `unauthorisedChanges`
+becomes a comparison of one index rather than of a shared field, and a lesson
+carries the provenance of the step that found it. 37 plans on memoro's main and
+one here carry the old key and are migrated by script.
+
+Built by [`runner-open-prs`](runner-open-prs/PLAN.json).
+
 ## What is still open
 
-Nothing here. The eight open questions across `~/mc` on 2026-08-29 all belong to
-memoro's programmes, not to `mc`.
+**Should the runner's own merge run the gate?** `mergePr` (`run.js:290`)
+squash-merges through `gh pr merge` and waits only for `mergeable`, so a step
+lands without the gate `mc merge` exists to be — and `repo-merge.js`'s own header
+says there is no way to merge a red gate. The two statements cannot both be true.
+Named as out of scope by [`runner-open-prs`](runner-open-prs/PLAN.json) so it is
+not lost; it needs a project of its own.
+
+Otherwise nothing. The eight open questions across `~/mc` on 2026-08-29 all
+belong to memoro's programmes, not to `mc`.

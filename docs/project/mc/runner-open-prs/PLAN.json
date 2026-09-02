@@ -1,0 +1,168 @@
+{
+  "schema": "mc-plan",
+  "version": 1,
+  "goal": [
+    "The runner never rebuilds work that is already in an open pull request, and every reason a pull request could not land has an answer in code rather than in a session or in Martin's evening.",
+    "Measured on 2026-09-02: seven step runs, five of them ending `plan-trespass`, six pull requests left open, one step \"merged\" into a branch that was not `main`, and one 120-minute session started at 04:33 to rebuild a step whose work was sitting in an open pull request. None of that was reported anywhere a person looks."
+  ],
+  "contract": [
+    "The runner starts no step for a project that has an open pull request. That single rule is what this project exists for; everything else here serves it.",
+    "Nothing here spends a session or a model on an unlanded pull request. Every repair is deterministic code. The one exception is `reconcile`, which already exists, is the right job for a session, and is not touched.",
+    "A session that changed a field it may not touch keeps its pull request open and its project stopped until Martin has seen it. The runner never rewrites such a plan file on the session's behalf (Martin, 2026-09-02).",
+    "No merge lands into a base that is not `main`, and `mc merge`'s gate is not weakened, bypassed or given a flag."
+  ],
+  "out_of_scope": [
+    "Whether the runner's own squash-merge should run the local gate. `mergePr` (`run.js:290`) calls `gh pr merge --squash` directly and waits only for `mergeable`, so a step lands without the gate `mc merge` exists to be. That is a real open question and it is named here so it is not lost, but answering it belongs to its own project.",
+    "How `reconcile` resolves conflicts, and when it runs.",
+    "Closing or landing by hand the six pull requests that are open on 2026-09-02. Step 7 measures what the finished runner does with whatever is still open then; it does not tidy them.",
+    "memoro. Nothing in this project changes anything in that repository except the plan files, and those only as step 3's mechanical migration."
+  ],
+  "success_criteria": [
+    {
+      "met": false,
+      "criterion": "The runner starts no step for a project that has an open pull request.",
+      "check": "A `tests/mc/run.test.js` case: plan `ready` on main, one open pull request on a `<name>-…` branch, and `deps.session` is never called while the log line names the pull request. Then live: with #11246 open, `mc run --once` on the memoro lane starts no `action-window` step — read the line in `~/mc/runner/log/runner.log`."
+    },
+    {
+      "met": false,
+      "criterion": "The board says which pull request a stopped project is waiting on.",
+      "check": "`mc --fresh` prints #11246 on the `action-window` row and `mc status action-window` names it. Read in the terminal, not asserted from the collector, because today the collector matches `headRefName === name` and prints nothing for a project whose three branches all have open pull requests."
+    },
+    {
+      "met": false,
+      "criterion": "No merge lands into a base that is not `main`.",
+      "check": "A unit test on the merge path: a pull request whose `baseRefName` is another branch is refused by name and no `gh pr merge` is issued. Plus a read of `runs.tsv` after the first live round — no row says `success,merged` for a pull request whose base was not `main`."
+    },
+    {
+      "met": false,
+      "criterion": "A stack the runner made by leaving its bottom open lands bottom-first, or stops with a reason.",
+      "check": "A test over the ordering function with #11249 (base `main`) and #11250 (base `msr-track-3-capture-command`): bottom first, retarget, rebase, then the top. A cycle and two pull requests both aimed at `main` each return \"not a stack I understand\" and land nothing."
+    },
+    {
+      "met": false,
+      "criterion": "A step session cannot make a plan unreadable by writing down what it learned.",
+      "check": "`steps[i].learned` is `[paragraph, …]` and the top-level `what_the_code_taught_us` is gone from the schema, from every plan on both origin/mains, and from the four documents that describe it. `tests/mc/plan-schema.test.js` fixtures taken verbatim from the three plans refused on 2026-09-02 all validate under the new shape."
+    },
+    {
+      "met": false,
+      "criterion": "A session that changes a field it may not touch still stops the project.",
+      "check": "A test: a session that edits `steps[7]` while running step 9 — the msr-track-3 case of 2026-09-02T12:27 — leaves `plan-trespass`, and the following `runStep` for that project starts nothing and says which field it was."
+    },
+    {
+      "met": false,
+      "criterion": "A session is never started on a branch it cannot push to.",
+      "check": "A test: a worktree whose branch is contained in `origin/main` is moved to `<name>-<n>` from `origin/main` before the session starts. Then live, on a workarea standing on a landed branch: the runs.tsv row for that step carries a pull request number rather than `-`."
+    },
+    {
+      "met": false,
+      "criterion": "A plan that cannot be read on `origin/main` is raised where somebody looks.",
+      "check": "`new-user`'s plan does not parse today and the runner has printed a skip line for it every round since. After this, it has a row in `~/mc/intake/` with its first problem — read the file."
+    }
+  ],
+  "what_the_code_taught_us": [],
+  "documents": [
+    { "label": "The runner, as it stands", "path": "../../../technical/mc-run.md" },
+    { "label": "The merge door and its gate", "path": "../../../technical/mc-merge.md" },
+    { "label": "What a PLAN.json is", "path": "../../README.md" },
+    { "label": "The rulings this programme has taken", "path": "../rulings.md" }
+  ],
+  "runner": { "tool": "claude", "model": "opus", "budget_minutes": 90 },
+  "steps": [
+    {
+      "title": "Whose pull request is it — the matcher, one query a round, and the page",
+      "status": "ready",
+      "done_when": "A unit test resolves `action-window-step5` to `action-window` and `mc-cut-2` to `mc-cut` rather than to `mc`, and `mc --fresh` shows #11246 on the `action-window` row.",
+      "instruction": [
+        "Write `src/mc/project-prs.js`. `projectForBranch(branch, names)` returns the longest name in `names` that either equals `branch` or that `branch` begins with followed by a hyphen, and null otherwise. Longest wins because `mc`, `mc-cut`, `mc-log` and `mc-test` are all project names, and `mc-cut-2` resolving to `mc` would attach a pull request to the wrong project. `openPrsFor(name, repo, prs)` filters a list of `{ repo, number, headRefName, baseRefName, isDraft, title }` by repository and then by that matcher.",
+        "The convention this rests on is that a project's branches are `<name>` or `<name>-<suffix>`. It holds for every open pull request on 2026-09-02 — `action-window`, `action-window-list`, `action-window-step5`, `action-window-step4-superseded`, `msr-track-3-capture-command`, `inbox-finish`, `email-window-layout` — and step 5 makes the runner cut branches that way from now on. Nothing enforces it for a branch made by hand, so say plainly in the module's header that a pull request on a differently named branch is invisible to this and the runner will behave for that project exactly as it does today. Do not add a second matching rule to cover it; a rule that fires on a case nobody has seen is a rule nobody can reason about.",
+        "The open pull requests are already asked for once per repository, but only by the page: `page-collect.js:464`, `gh pr list --state open --limit 100 --json number,headRefName`. Add `baseRefName,isDraft,title` to that query. Then make `run.js`'s `queue()` ask the same question, once per repository per round, and return the answer beside `plans` — `queue()` is re-read per lane (`queue({ only: repo })`) and already runs a `git fetch` there, so this is one `gh` call in a place that already pays for the network.",
+        "Then use the matcher at `page-collect.js:233`, which today matches `headRefName === name` exactly. That is why the board showed no pull request at all for `action-window` while three of its branches had one open, and it is the first thing to verify by eye rather than by test.",
+        "This step changes no runner behaviour. The functions are pure and get a test file of their own in `tests/mc/`; the page change is proved in the terminal."
+      ],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "The runner starts no step while the project has an open pull request",
+      "status": "ready",
+      "done_when": "With an open pull request on the project, a round starts no step for it and `runner.log` names the pull request it is waiting on.",
+      "instruction": [
+        "In `runStep`, after the tmux and dirty-worktree checks and before the kind is chosen, ask `openPrsFor`. A non-empty answer means this round's answer for that project is not a step: say one line — `<name>: #<n> is open (<title>) — not starting a step` — and return `'skipped'`.",
+        "Put the decision itself in `run-plan.js` beside `chooseKind` rather than inline in `run.js`, so it is covered without spending a session: `chooseKind({ plan, conflicts, openPrs })` returns `{ kind: null, reason: 'in-flight', skip: '#<n> is open …' }`. `run-plan.test.js` proves the rule and `run.test.js` proves that `deps.session` is never reached.",
+        "This is the rule the whole project exists for, and it is what would have stopped 2026-09-02T04:33. The `action-window` workarea's worktree stood on a branch `origin/main` had already swallowed, so the plan the runner read there said step 4 was `ready` — while step 4's work sat in #11241, open on `action-window-list`. The runner has only ever looked in two places, `origin/main` for the queue (`run.js:807`) and the worktree for the plan it acts on (`run.js:237`), and it asks GitHub about pull requests exactly once, *after* the session (`run.js:761`). A third place to look is the whole fix.",
+        "The same rule covers two cases nothing else does. A session that timed out with commits pushed and no pull request — `no-json`, rc 143, 04:34 that morning — leaves a branch carrying unlanded work. So does a step that ended `plan-trespass`. In both, today's runner comes back the next round, reads the worktree's plan, finds the next step ready and builds on top of an unlanded branch; msr-track-3 did exactly that at 13:00 and the result is step 4's subject.",
+        "One thing to leave alone deliberately: do not read the plan out of the open pull request. The queue stays built from `origin/main`, which means `mc status` will still say a step is `ready` when the truth is `waiting on #<n>`. That is a reporting gap, not a correctness one, and the line the page prints is what closes it. Reading a plan out of a pull request would give the runner a fourth source of truth to disagree with itself about."
+      ],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "`steps[i].learned` replaces `what_the_code_taught_us`",
+      "status": "ready",
+      "done_when": "The top-level field is gone from the schema, from every plan on both origin/mains and from every document that describes it; a session's learning lives on the step that found it, as an array of paragraphs.",
+      "instruction": [
+        "Five of the seven step runs on 2026-09-02 ended `plan-trespass`, and three of them were not trespasses at all. `email-window-layout` left `what_the_code_taught_us[0].body: at least one paragraph`, `inbox-finish` left `what_the_code_taught_us[0]: must be an object`, and `new-user`'s plan sits on `origin/main` unreadable for the same reason — the runner has printed `the plan does not parse … skip` for it every round since. Prose written into a schema-validated file, where getting the shape wrong invalidates the whole plan, is the wrong place for prose. Martin's ruling on 2026-09-02: move it into the step.",
+        "In `plan-schema.js`: remove `what_the_code_taught_us` and `validateLessons`, add `learned` to `STEP_KEYS` as prose — an array of paragraph strings, the same shape `goal`, `contract` and `instruction` already use, possibly empty. Nothing else about a step changes. Then `unauthorisedChanges` gets simpler rather than more complicated: everything a step session may write is now inside `steps[index]` — `status`, `pr`, `learned` — plus `met` on the criteria it actually met. A comparison of one index replaces a comparison of a shared field.",
+        "Then migrate. 37 plans on memoro's `origin/main` and one here (`docs/project/mc/mc-cut/PLAN.json`) carry the key, most of them with it empty. Write the migration as a one-off script under `scripts/`, run it, and commit the result — do not hand-edit 38 files. An entry `{ title, body: [...] }` becomes paragraphs on the step it belongs to; where the entry does not say which step it came from, put it on the last step whose `status` is `done`, and where no step is done, on the first step. Say in the pull request how many entries moved and where the ambiguous ones went.",
+        "The migration touches every plan file in memoro, so it conflicts with every step pull request open at that moment. Land it when the board is quiet — check `mc` first — and if something is open, land that first or accept that its author rebases. This is the one step in this plan that is cheaper to do at the right moment than to do carefully.",
+        "Then the four places that describe the field, and they must all move together or the next session reads the old shape: `run-plan.js`'s `stepPrompt`, `canon/roles/step.md`, `docs/project/README.md` in *both* repositories (the two files carry the same text on purpose), `docs/technical/mc-plan.md`, and `canon/coding-agent-protocol.md` with its copy at `docs/coding-agent-protocol.md`.",
+        "While the prompt is open, fix the two other shapes it never states. `stepPrompt` today names the fields a session may write and never says what they look like; the schema is only in `docs/project/README.md`, which a headless session has not read. State inline that `blocked` requires `blocked_by: { kind: \"decision\" | \"project\", name }` — that is what `action-window` got wrong at 10:18 — and that a criterion's own text is Martin's while only `met` is the session's, which is what `msr-track-3` got wrong at 12:27. Do not soften `blocked_by` to make it optional: a blocked step that does not say what it waits for is a step nobody can unblock.",
+        "The boundary itself does not move. `unauthorisedChanges` still refuses a session that touched `goal`, `contract`, `out_of_scope`, another step, or the text of a criterion; the pull request stays open, and by step 2 the project starts nothing more until Martin has dealt with it."
+      ],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "Landing: never into a base that is not `main`, and a stack bottom-first",
+      "status": "ready",
+      "done_when": "A pull request whose base is not `main` is refused by name and not merged; a project whose open pull requests form a stack lands the bottom one, retargets and rebases the one above it, and lands that.",
+      "instruction": [
+        "`mergePr` (`run.js:290`) squash-merges with `gh pr merge --squash` and never reads the base. On 2026-09-02 at 13:00 that merged #11250 into `msr-track-3-capture-command` — the branch of #11249, which the runner itself had left open eighty minutes earlier — and logged `success,merged`. `main` received nothing, the lane moved on believing the step had landed, and #11249 is still open. Read `baseRefName` before merging: anything but `main` means do not merge, and say which branch it was.",
+        "When the base is another open pull request *of the same project*, that is a stack the runner made by leaving the bottom open, and it has a deterministic answer that is already written down. `mc merge` refuses a batch aimed at several bases, and memoro's `AGENTS.md` § *Landing a stack* is the recipe, measured on a three-step memoro-cli stack on 2026-09-01: land the bottom; `gh pr edit <n> --base main` on the one above it; then `git rebase --onto origin/main <the old base's head>` on its branch, because a squashed base leaves every branch above it conflicting even when its author did nothing wrong — on that stack both remaining branches went from `MERGEABLE` to `CONFLICT (content)` the moment the first one landed. Then land it. One pull request at a time, stopping at the first that does not land cleanly.",
+        "Order the project's open pull requests by base before touching anything: the one aimed at `main` is the bottom, and each other one's base names the branch below it. Two aimed at `main`, a cycle, or a base that is nobody's head is not a stack the runner understands — say so and land none of them. Put that ordering in `run-plan.js` as a pure function over the list step 1 already fetches, so the whole decision is tested with no network.",
+        "A rebase that conflicts is not something to resolve here and it is not what `reconcile` is for either. `git rebase --abort`, say which files conflicted, leave the branch exactly as it was, and stop on that project for the round. Step 2 has already guaranteed no new step will start on it.",
+        "A draft pull request is left alone, said in one line, and counts as open for step 2's purposes."
+      ],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "A branch the session can push to",
+      "status": "ready",
+      "done_when": "A workarea whose branch is already contained in `origin/main` is moved to a fresh `<name>-<n>` from `origin/main` before a session is started, and that step's runs.tsv row carries a pull request number rather than `-`.",
+      "instruction": [
+        "Before the session starts — after the dirty-worktree check, which has already run — ask whether the worktree's current branch still has anywhere to go. `branch-landed.js` answers that by content rather than by commit count, which matters because the runner squash-merges and \"ahead by N commits\" says nothing. If the branch has landed, check out a new branch from `origin/main` named `<name>-<n>`, where `<n>` is the smallest integer for which no branch of that name exists locally or on the remote.",
+        "The reason is 2026-09-02T04:33. The `action-window` workarea stood on `action-window`, which had merged as #11177 and been deleted on the remote. Had that session run its full 120 minutes, the push-guard would have refused its push (`src/mc/push-guard.js`, D-0164) and the whole session would have bought nothing. The guard asks the right question at the wrong end of the session; this asks it before the money is spent.",
+        "`<name>-<n>` is also what makes step 1's matcher true by construction rather than by convention: every branch the runner creates from here on is named after the project it belongs to.",
+        "Leave a workarea whose branch has *not* landed exactly where it is. That branch carries work, and step 2 has already decided what happens to a project in that state — nothing starts."
+      ],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "A plan that cannot be read is raised where somebody looks",
+      "status": "ready",
+      "done_when": "Every project whose plan on `origin/main` does not parse has a row in `~/mc/intake/` naming its first problem, rewritten each round.",
+      "instruction": [
+        "`chooseKind` already returns `{ reason: 'unparseable', skip: 'the plan does not parse: …', problems }` and `runStep` prints it to `runner.log`. Nobody reads `runner.log`: `new-user` has had that line every round for at least a day and is, as far as anyone looking at the board can tell, simply not a project any more.",
+        "Write it where the unplanned workareas already go. `close-workarea.js` has the pattern — `unplannedRow` and `unplannedFile`, a table rewritten whole every round rather than appended to, so a project that gets fixed leaves the list by itself. One row per project: name, repository, the first problem, the plan path. Same directory, its own file.",
+        "Raise it in `mc brief --collect` beside the other things a machine must not decide, and put the count on the page if there is a natural place for it. A plan that does not parse is not a runner error; it is a project that has silently left the queue, which is exactly the class of thing the intake directory exists for."
+      ],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "Close-out",
+      "status": "ready",
+      "done_when": "`docs/technical/mc-run.md` describes the round's decision order and the landing rules, `project_log.md` has the row, and the plan is `done`.",
+      "instruction": [
+        "Update `docs/technical/mc-run.md`. What it has to say that it does not say today: the order in which a round decides what a project gets — an open pull request means land it or wait, a landed branch means cut a new one, and only then a step; the `<name>-<n>` branch convention and what the matcher does with it and cannot do without it; base-order landing and the refusal to merge into anything but `main`; and where a plan that cannot be read now shows up.",
+        "Add the row to `docs/project/project_log.md` per `docs/project/README.md` — outcome, one line on what it built, the doc, and every pull request.",
+        "Then measure the thing the project was for, against the real board rather than against the tests. Read `~/mc/runner/log/runs.tsv` from the day step 2 landed: how many rows ended `success,open` or `plan-trespass`, and how many open pull requests each left standing. On 2026-09-02 the answer was five trespasses in one day and six open pull requests. Put the new number in this step's `learned`, and say in the pull request whether the rule held.",
+        "Set the plan `done` so `mc run` archives it in the round it reads it."
+      ],
+      "pr": null,
+      "blocked_by": null
+    }
+  ]
+}
