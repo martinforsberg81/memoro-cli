@@ -211,8 +211,7 @@ MAINTENANCE
   mc worker <name> [task]          A project folder that carries the worker
                                     role, read from the roles mc ships: every
                                     conversation started in it gets the
-                                    overlay and the model default, and
-                                    escalates by writing ../decisions/
+                                    overlay and the model default
   mc roles list                    The defined roles, read from their files
   mc roles show <role>             One role whole: facts, then overlay text
   mc migrate [--dry-run] [--stop-legacy-runtimes]

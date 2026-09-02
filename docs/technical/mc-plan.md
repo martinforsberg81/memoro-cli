@@ -200,9 +200,6 @@ of which starts a session:
   each refused;
 - `mc --help` lists the verb.
 
-`tests/mc/brief-collect.test.js` carries the decisions half: a file written at
-`plan/<programme>/decisions/` is scanned and reaches the brief.
-
 **Not measured, and honestly so.** No headless session can watch a program take
 the terminal, so what is verified is that the right argv is built and spawned
 with `stdio: 'inherit'`. `ensurePlanArea` and the picker were run live against

@@ -100,30 +100,6 @@ A name that has a workarea but no plan anywhere is answered too — with
 candidates `mc run` will not remove by itself; the page lists them and
 `~/mc/intake/unplanned-workareas.md` keeps them.
 
-## Which decisions belong to a project
-
-Three tests, any of which is enough (`decisionsForProject`):
-
-1. the file is in the project's **own** area — `~/mc/<name>/decisions/*.md`,
-2. its name begins `<name>-` — `mc-status-2026-08-30.md`,
-3. or it is the **programme's**, name and number — `mc-3.md`,
-   `docx-editing-surface-6.md`.
-
-This is deliberately narrower than `kindFor`, which asks whether the runner
-may take a step and treats any file starting with the programme as the
-programme's. A false yes costs the runner nothing — it only lets a step
-start — but on a page it is wrong: under programme `mc` the loose rule handed
-`mc-status` the open questions of `mc-run` and `mc-brief`, which are their
-projects' and not this one's.
-
-**Known gap.** `parseDecision` also reads an `owner` — the `plan:`,
-`project:` or `programme:` frontmatter every decision file under `~/mc`
-carries — and `decisionsForProject` does not ask for it. The three name tests
-above have been right on every file so far, but the file says who owns it and
-this verb still guesses. Whoever next opens this code should read `owner`
-first and fall back to the names, the way `retiredDecisions` in
-`brief-collect.js` already does.
-
 ## The cost estimate
 
 `prices.js` is a dated list-price table — `PRICES_DATED = '2026-06'` — with
@@ -194,7 +170,7 @@ offers**, so it cannot rot back into a menu of things that exit 2.
 | `src/mc/status-render.js` | the drawing primitives — `painter`, `width`, `pad`, `clip`, `elapsed` |
 | `src/mc/prices.js` | the dated list-price table |
 
-The builders are pure — `decisionsForProject`, `fieldRows`, `wrap`,
+The builders are pure — `fieldRows`, `wrap`,
 `renderProject`, `findWorkareaPlan`, `findMainPlan` each take read data and
 return their part — so `tests/mc/status-project.test.js` and
 `tests/mc/status-collect.test.js` build every case from fixture files, with

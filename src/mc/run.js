@@ -627,7 +627,7 @@ export function createRunner({
    * Every directory under `~/mc` that is a workarea, sorted.
    *
    * A folder without `memoro/` or `memoro-cli/` in it is not a workarea:
-   * `bin/`, `brief/`, `decisions/`, `inbox/`, `intake/`, `runner/`, `status/`
+   * `bin/`, `brief/`, `inbox/`, `intake/`, `runner/`, `status/`
    * and the two role homes are mc's own, and the runner has no business
    * looking at them.
    */
