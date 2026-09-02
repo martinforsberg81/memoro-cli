@@ -18,7 +18,7 @@
   ],
   "success_criteria": [
     {
-      "met": false,
+      "met": true,
       "criterion": "A round touches git for the projects it can act on, and not for the ones its plan already refuses.",
       "check": "In `tests/mc/run.test.js`, a fixture of one `ready` project among twenty `blocked` ones: the fake git records calls for the ready project's worktree and none for the others."
     },
@@ -64,6 +64,20 @@
       "body": [
         "**The lane already knows how to stay.** `runLane` (`src/mc/run.js:1060`) keeps a project after a merged step, re-reading the plan and continuing for up to eight steps before letting go — added because a six-step plan would otherwise have taken six rounds behind twenty other projects. What is missing is the other half: it stays with a project that is moving, but it still *visits* every project that is not."
       ]
+    },
+    {
+      "title": "The lane stayed on a project whose re-read plan had stopped",
+      "body": [
+        "**The lane stayed on a project whose re-read plan had stopped.** After a merged step `runLane` re-reads the plans and breaks only on `!status || status === 'done'` — so a plan the merge left `blocked` kept the lane, and `runStep` opened the worktree, fetched, merged origin/main and read the plan again to say the same thing. The plan filter goes in that place too, not only at the top of the lane, which is what the `re-applied, not computed once` line in this step's instruction turned out to be about: `src/mc/run.js:1128`.",
+        "The other half of the same reading: `runStep` created the workarea *before* it read the plan (`addWorktree` at `src/mc/run.js:899`, `chooseKind` at :919). A blocked project with no workarea got a worktree made for it every round it was refused."
+      ]
+    },
+    {
+      "title": "`reconcile` is the one answer the plan on main cannot give",
+      "body": [
+        "**`reconcile` is the one answer the plan on main cannot give.** A conflicted merge lives in a workarea; `syncMain` leaves it in progress and `chooseKind` turns it into a `reconcile` step whatever the plan says. Filtering on the plan on main therefore also skips the reconcile of a project whose plan is stopped — its half-finished merge waits until the plan is `ready` again, which is the first round it could have used it anyway. This is a choice, made here and written into `planRefuses`, not an oversight.",
+        "A project that is `ready` still reaches `syncMain` exactly as before, so every reconcile that could have led to a step still happens in the round it always did."
+      ]
     }
   ],
   "documents": [
@@ -75,7 +89,7 @@
   "steps": [
     {
       "title": "The round asks the plan before it asks git",
-      "status": "ready",
+      "status": "done",
       "done_when": "`runLane` reaches `runStep` only for names whose plan on `origin/main` says the runner would act, and `run.test.js` asserts that no git call is made for the others.",
       "instruction": [
         "`runLane` (`src/mc/run.js:1060`) iterates its names and calls `runStep` on each. `runStep` then does five pieces of git work before `chooseKind` tells it the plan was never runnable. Put the plan's own answer first: `kindFor(name, { plans })` from `status-collect.js` already returns `skip:<reason>` for a plan that is `blocked`, `done`, unparseable or absent, from the text `queue()` has already read.",

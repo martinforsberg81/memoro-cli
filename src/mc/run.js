@@ -78,6 +78,7 @@ import { describeTurn, runHelperTurn } from './helper-turn.js';
 import { workRoot } from './paths.js';
 import { runDocsMerge } from './docs-merge.js';
 import { runMergeRound } from './repo-merge.js';
+import { kindFor } from './status-collect.js';
 import { PR_LIST_ARGS, openPrsFor } from './project-prs.js';
 import { loadProfile, profileArgs } from './portrait.js';
 import { readCanonRole } from './roles.js';
@@ -1064,16 +1065,64 @@ export function createRunner({
   }
 
   /**
+   * What the plan on `origin/main` already says about a name, asked before
+   * anything is touched. True means the lane does not go there this pass.
+   *
+   * `kindFor` is the page's reading — `chooseKind` over the plan text
+   * `queue()` has already fetched — and it answers `skip:<reason>` for a plan
+   * that is blocked, done, unparseable or unmigrated without a worktree, a
+   * `git status`, a fetch or a merge. `runStep` used to be where that answer
+   * arrived, five pieces of git work later: 2026-09-02 a round spent 51
+   * seconds walking 38 projects to start one, and 21 of those refusals were
+   * on the page before the round began.
+   *
+   * It does not replace `runStep`'s own reading, which stays exactly where it
+   * was. The plan in the worktree after `syncMain` is the one that must be
+   * obeyed — it is the one a step session will edit, and it can be one merge
+   * ahead of this one. This only stops the walk from arriving at a project
+   * whose plan on main already refuses it.
+   *
+   * Two things it deliberately does not answer:
+   *
+   * - **A name with no plan on main at all.** `assembleQueue` drops those, so
+   *   it can only happen when a plan leaves main mid-round; `runStep` has the
+   *   line for it, and this leaves it there.
+   * - **A conflicted merge left in a workarea.** That is `reconcile`, and it
+   *   lives in a worktree no plan on main can see. A project whose plan is
+   *   stopped keeps its half-finished merge until the plan is `ready` again —
+   *   which is the round it would have been able to use it in anyway.
+   */
+  function planRefuses(name, plans = []) {
+    const plan = plans.find((p) => p.project === name) || null;
+    if (!plan) return false;
+    if (!kindFor(name, { plans }).startsWith('skip:')) return false;
+    // The same sentence `runStep` said, from the same function — a skip with
+    // no sentence is one nobody would read (see `chooseKind`).
+    const { skip } = chooseKind({ plan });
+    if (skip) say(`${name}: ${skip}, skip`);
+    return true;
+  }
+
+  /**
    * One lane: its names in order, one step at a time. A project whose step
    * merged keeps the lane — its next step follows at once (plans re-read, so
    * the merged status is what decides) instead of waiting a whole round
    * behind every other project — 2026-08-29 a six-step plan would have taken
    * six rounds of twenty projects. STOP is honoured between those steps too.
+   *
+   * The names it does not stop at are `planRefuses`: a project whose plan on
+   * origin/main already says the runner would do nothing is passed over here,
+   * before `runStep` opens a worktree to find out the same thing.
    */
   async function runLane({ repo = null, names = [] }, world, { once = false } = {}) {
     let known = Array.isArray(world) ? { plans: world } : world;
     let ran = 0;
     for (const name of names) {
+      // The plan first, git second: a project its own plan on main refuses is
+      // never reached, and no worktree, status or fetch is spent on it. Asked
+      // per name against `known`, which a merged step re-reads — a plan that
+      // came good in that window does not wait for the next round.
+      if (planRefuses(name, known.plans)) continue;
       let r = await runStep(name, known);
       for (let stayed = 0; ; stayed += 1) {
         if (r === 'stop') return { ran, stop: true };
@@ -1087,6 +1136,7 @@ export function createRunner({
         // Re-read: the plan the merge advanced, and what GitHub has open now
         // — the step that just landed may have left a second pull request.
         known = queue({ only: repo });
+        if (planRefuses(name, known.plans)) break;
         const status = known.plans.find((p) => p.project === name)?.status;
         if (!status || status === 'done') break;
         say(`${name}: step merged and the plan is ${status} — staying on ${name}`);
