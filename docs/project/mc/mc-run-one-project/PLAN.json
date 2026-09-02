@@ -136,7 +136,7 @@
         "Put the before-and-after wall clock in the close-out, measured against the real `~/mc`, and say what the board looked like when it was measured: a round is only slow in proportion to how much of the board it cannot act on.",
         "A row in `docs/project/project_log.md`."
       ],
-      "pr": null,
+      "pr": 536,
       "blocked_by": null
     }
   ]
