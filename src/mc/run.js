@@ -1066,7 +1066,9 @@ export function createRunner({
 
   /**
    * What the plan on `origin/main` already says about a name, asked before
-   * anything is touched. True means the lane does not go there this pass.
+   * anything is touched. `{ name, reason }` means the lane does not go there
+   * this pass, and the reason is the word the round counts in `refusedLine`;
+   * null means it does.
    *
    * `kindFor` is the page's reading — `chooseKind` over the plan text
    * `queue()` has already fetched — and it answers `skip:<reason>` for a plan
@@ -1092,15 +1094,39 @@ export function createRunner({
    *   stopped keeps its half-finished merge until the plan is `ready` again —
    *   which is the round it would have been able to use it in anyway.
    */
-  function planRefuses(name, plans = []) {
+  function planRefusal(name, plans = []) {
     const plan = plans.find((p) => p.project === name) || null;
-    if (!plan) return false;
-    if (!kindFor(name, { plans }).startsWith('skip:')) return false;
-    // The same sentence `runStep` said, from the same function — a skip with
-    // no sentence is one nobody would read (see `chooseKind`).
-    const { skip } = chooseKind({ plan });
-    if (skip) say(`${name}: ${skip}, skip`);
-    return true;
+    if (!plan) return null;
+    const kind = kindFor(name, { plans });
+    if (!kind.startsWith('skip:')) return null;
+    return { name, reason: kind.slice('skip:'.length) };
+  }
+
+  /**
+   * The one line a round leaves about what its plans refused, or null when
+   * they refused nothing.
+   *
+   * A plan-shaped refusal is already on the page — `mc status`'s QUEUE draws
+   * it from the same `kindFor` — so the twenty-first `blocked on decision
+   * plan-review` in runner.log tells a reader nothing the first one did not.
+   * What it costs is the lines that are *not* on the page: a dirty worktree,
+   * a pull request in flight, a merge that conflicted. Those are facts about
+   * this machine at this moment, they keep their own named line in `runStep`,
+   * and they are what this line exists to leave room for.
+   *
+   * The shape is the page's: `skipped 28 (blocked 21, unparseable 5, done
+   * 1)`, reasons in the order the queue met them. One reason is named rather
+   * than only counted — a plan that does not parse is a thing somebody must
+   * go and fix, and a count of five does not say which five.
+   */
+  function refusedLine(refusals = []) {
+    if (!refusals.length) return null;
+    const counts = new Map();
+    for (const { reason } of refusals) counts.set(reason, (counts.get(reason) || 0) + 1);
+    const by = [...counts].map(([reason, n]) => `${reason} ${n}`).join(', ');
+    const unparseable = refusals.filter((r) => r.reason === 'unparseable').map((r) => r.name);
+    const named = unparseable.length ? ` — the plans that do not parse: ${unparseable.join(', ')}` : '';
+    return `skipped ${refusals.length} (${by})${named}`;
   }
 
   /**
@@ -1110,40 +1136,47 @@ export function createRunner({
    * behind every other project — 2026-08-29 a six-step plan would have taken
    * six rounds of twenty projects. STOP is honoured between those steps too.
    *
-   * The names it does not stop at are `planRefuses`: a project whose plan on
+   * The names it does not stop at are `planRefusal`: a project whose plan on
    * origin/main already says the runner would do nothing is passed over here,
-   * before `runStep` opens a worktree to find out the same thing.
+   * before `runStep` opens a worktree to find out the same thing. It says
+   * nothing about them one at a time — they are collected and returned as
+   * `refused`, and the round leaves the one line (`refusedLine`).
    */
   async function runLane({ repo = null, names = [] }, world, { once = false } = {}) {
     let known = Array.isArray(world) ? { plans: world } : world;
     let ran = 0;
+    const refused = [];
     for (const name of names) {
       // The plan first, git second: a project its own plan on main refuses is
       // never reached, and no worktree, status or fetch is spent on it. Asked
       // per name against `known`, which a merged step re-reads — a plan that
       // came good in that window does not wait for the next round.
-      if (planRefuses(name, known.plans)) continue;
+      const no = planRefusal(name, known.plans);
+      if (no) { refused.push(no); continue; }
       let r = await runStep(name, known);
       for (let stayed = 0; ; stayed += 1) {
-        if (r === 'stop') return { ran, stop: true };
+        if (r === 'stop') return { ran, stop: true, refused };
         if (r === 'ran' || r === 'merged') {
           ran += 1;
-          if (once) return { ran, stop: false, once: true };
+          if (once) return { ran, stop: false, once: true, refused };
           await deps.sleep(60_000);
         }
-        if (stopRequested()) { say(`runner exit on STOP after ${name} (remove ${paths.stop} before the next start)`); return { ran, stop: true }; }
+        if (stopRequested()) { say(`runner exit on STOP after ${name} (remove ${paths.stop} before the next start)`); return { ran, stop: true, refused }; }
         if (r !== 'merged' || stayed >= 8) break;
         // Re-read: the plan the merge advanced, and what GitHub has open now
         // — the step that just landed may have left a second pull request.
         known = queue({ only: repo });
-        if (planRefuses(name, known.plans)) break;
+        // The plan the merge advanced says stop: the lane lets go, and the
+        // count is the round's, same as any other refusal on the plan.
+        const stopped = planRefusal(name, known.plans);
+        if (stopped) { refused.push(stopped); break; }
         const status = known.plans.find((p) => p.project === name)?.status;
         if (!status || status === 'done') break;
         say(`${name}: step merged and the plan is ${status} — staying on ${name}`);
         r = await runStep(name, known);
       }
     }
-    return { ran, stop: false };
+    return { ran, stop: false, refused };
   }
 
   /**
@@ -1182,6 +1215,11 @@ export function createRunner({
       ran: results.reduce((sum, r) => sum + r.ran, 0),
       stop: results.some((r) => r.stop),
     };
+    // What the plans refused, in one line for the whole round rather than one
+    // line per project: both lanes' refusals counted together, because a
+    // reader of runner.log is reading a round, not a lane.
+    const line = refusedLine(results.flatMap((r) => r.refused || []));
+    if (line) say(line);
     // Last of all, and only in a whole round that was not cut short: the
     // workareas whose plan left main this round are taken down, and the ones
     // with no plan at all are written where Martin looks. `--once` changes

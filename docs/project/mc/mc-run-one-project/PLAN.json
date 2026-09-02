@@ -23,12 +23,12 @@
       "check": "In `tests/mc/run.test.js`, a fixture of one `ready` project among twenty `blocked` ones: the fake git records calls for the ready project's worktree and none for the others."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "A round that can start nothing says so in one line rather than in one line per project.",
       "check": "The same fixture with no ready project: `runner.log` carries a single line naming how many were passed over and why, and the round ends."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "What a person needs to know is still written down.",
       "check": "A project skipped for a dirty worktree, an unpushable branch or a pull request in flight still gets its own named line — asserted per reason in `run.test.js`."
     },
@@ -78,6 +78,14 @@
         "**`reconcile` is the one answer the plan on main cannot give.** A conflicted merge lives in a workarea; `syncMain` leaves it in progress and `chooseKind` turns it into a `reconcile` step whatever the plan says. Filtering on the plan on main therefore also skips the reconcile of a project whose plan is stopped — its half-finished merge waits until the plan is `ready` again, which is the first round it could have used it anyway. This is a choice, made here and written into `planRefuses`, not an oversight.",
         "A project that is `ready` still reaches `syncMain` exactly as before, so every reconcile that could have led to a step still happens in the round it always did."
       ]
+    },
+    {
+      "title": "The one line is the round's, and `done` never reaches it",
+      "body": [
+        "**The one line is the round's, not the lane's.** Lanes run in parallel under one `Promise.all`, and a reader of `runner.log` is reading a round rather than a lane — so `runLane` returns its refusals and `round()` says the single line over both. Nothing is said while the lane walks: a refusal that costs no git costs no line either.",
+        "**`done` cannot appear in the count.** A plan that says `done` is archived at the top of the round, before any lane starts, so the queue a lane walks never holds one — the reasons that actually reach the line are `blocked`, `unparseable` and `invalid`. `done` is only reachable under `--once`, which skips archiving on purpose. The page counts it because the page does not archive.",
+        "**Letting go of a project is the same refusal.** When a merged step leaves the plan stopped, `runLane` breaks out of the stay-loop on the same `planRefusal`; that answer is counted with the rest rather than given a line of its own, because it is exactly as visible on the page as the twenty at the top of the walk."
+      ]
     }
   ],
   "documents": [
@@ -102,14 +110,14 @@
     },
     {
       "title": "One line for what the plan already says",
-      "status": "ready",
+      "status": "done",
       "done_when": "A round writes one line summarising the projects its plans refused, counted by reason, and a line of its own for every skip that is about the machine rather than the plan.",
       "instruction": [
         "The log is the record of a round somebody reads afterwards, so this is not about printing less — it is about printing what is not already on the page. A plan-shaped refusal is: `blocked on <kind> <name>`, `every step is done`, `the plan does not parse`, `no workarea and no plan on main`. Those become one line, counted by reason, in the shape the page's QUEUE section already uses: `skipped 28 (blocked 21, done 1, unparseable 5, no-plan 1)`.",
         "Everything else keeps its own line and its own name: `dirty worktree`, the `inFlight` pull-request answer, `syncMain`'s conflicts, a worktree that could not be created, an unpushable branch. Those are facts about this machine at this moment that nothing else records, and they are the ones worth reading.",
         "A plan that does not parse is the one judgement call here. It is plan-shaped, and it is also a thing somebody must fix — five plans on main were in that state on 2026-09-02 and the page draws them as `invalid`. Name them in the summary line rather than only counting them, so the log says which five."
       ],
-      "pr": null,
+      "pr": 532,
       "blocked_by": null
     },
     {
