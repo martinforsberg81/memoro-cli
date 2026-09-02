@@ -18,12 +18,12 @@
   ],
   "success_criteria": [
     {
-      "met": false,
+      "met": true,
       "criterion": "The runner starts no step for a project that has an open pull request.",
       "check": "`tests/mc/run.test.js`: plan `ready` on main, one open pull request on a `<name>-…` branch, `deps.session` never called, the log line names the pull request. Then live — with #11246 open, `mc run --once` starts no `action-window` step; read the line in `~/mc/runner/log/runner.log`."
     },
     {
-      "met": false,
+      "met": true,
       "criterion": "The board says which pull request a stopped project is waiting on.",
       "check": "`mc --fresh` prints #11246 on the `action-window` row and `mc status action-window` names it. Read in the terminal — today the collector matches `headRefName === name` and prints nothing for a project whose three branches all have one open."
     },
@@ -53,7 +53,26 @@
       "check": "`new-user` does not parse today and the runner has printed a skip line for it every round since. After this it has a row in `~/mc/intake/` with its first problem — read the file."
     }
   ],
-  "what_the_code_taught_us": [],
+  "what_the_code_taught_us": [
+    {
+      "title": "A landed branch is the normal state of a workarea, not an accident",
+      "body": [
+        "The step was written from one workarea — `action-window`, standing on a branch `origin/main` had already swallowed. Asked of every workarea under `~/mc` on 2026-09-02 with `branchLanded`, 44 of them stand on a branch whose content is already in `origin/main`, in both repositories — and this project's own workarea was one of them: `runner-open-prs` carries merged #516, so the push-guard would have refused this step's own push the moment it tried to open a pull request. The move to `<name>-<n>` is therefore not a repair for one bad night; it is what almost every workarea's next round will do on its first pass, and the `<name>-<suffix>` convention the matcher rests on is about to become true forty-four times over."
+      ]
+    },
+    {
+      "title": "The three places the runner reads were never in disagreement — nobody had asked the third",
+      "body": [
+        "Live on 2026-09-02: 39 plans across the two origin/mains, 16 open pull requests, and four of the six `ready` projects each waiting on one of them (`action-window` #11246, `email-window-layout` #11247, `inbox-finish` #11248, `msr-track-3` #11249). Every one of those pull requests sits on a branch named `<name>` or `<name>-<suffix>`; the old matcher, `headRefName === name`, found nothing at all for `action-window`, whose branch is `action-window-step5`. The convention held everywhere before anything enforced it, which is why the longest-name rule needs no second rule for a case nobody has seen."
+      ]
+    },
+    {
+      "title": "A `gh` that cannot answer is a third state, and this step chose to stop on it",
+      "body": [
+        "The contract says the runner starts no step for a project that has an open pull request. When `gh pr list` fails — no auth, no network — the runner does not know, and the plan does not say what to do with not knowing. Decided in the code: the repository whose answer failed starts nothing that round, with one line saying so, and the other repository's lane is untouched. An idle round costs ten minutes of sleep; a blind one bought a 120-minute Opus session on 2026-09-02. `queue()` returns `prsFailed` for this, and step 2 meets the same question when the gated round cannot reach GitHub."
+      ]
+    }
+  ],
   "documents": [
     { "label": "The runner, as it stands", "path": "../../../technical/mc-run.md" },
     { "label": "The merge door and its gate", "path": "../../../technical/mc-merge.md" },
@@ -63,7 +82,7 @@
   "steps": [
     {
       "title": "A round asks GitHub before it acts",
-      "status": "ready",
+      "status": "done",
       "done_when": "An open pull request on a project ends that project's round with a line naming it, and a workarea whose branch has already landed is moved to a fresh branch before any session is started.",
       "instruction": [
         "The runner looks in two places — `origin/main` for the queue (`run.js:807`) and the worktree for the plan it acts on (`run.js:237`) — and asks GitHub about pull requests exactly once, *after* the session (`run.js:761`). So a step whose work is sitting in an open pull request is still `ready` everywhere the runner reads. On 2026-09-02T04:33 that started a 120-minute Opus session to rebuild `action-window` step 4 while step 4's work was open as #11241: the workarea's worktree stood on a branch `origin/main` had already swallowed, so the plan it read said `ready`. A third place to look is the whole fix.",
@@ -74,7 +93,7 @@
         "The second half of the step, in the same place in `runStep` and for the same reason: before a session is started, the worktree must be somewhere it can push from. `branch-landed.js` answers whether a branch's content is already in `origin/main` — by content, because the runner squash-merges and \"ahead by N commits\" says nothing. If it has landed, check out a new branch from `origin/main` named `<name>-<n>`, the smallest `<n>` for which no branch of that name exists locally or on the remote. The `action-window` workarea stood on `action-window`, merged as #11177 and deleted on the remote; had that 04:33 session finished, the push-guard (`src/mc/push-guard.js`, D-0164) would have refused its push and the whole session would have bought nothing. The guard asks the right question at the wrong end. Leave a workarea whose branch has *not* landed exactly where it is — that branch carries work, and the rule above has already decided what happens to it.",
         "Do not read the plan out of the open pull request. The queue stays built from `origin/main`; `mc status` saying `ready` while the truth is `waiting on #<n>` is closed by the line the page prints, not by giving the runner a fourth source of truth to disagree with itself about."
       ],
-      "pr": null,
+      "pr": 519,
       "blocked_by": null
     },
     {

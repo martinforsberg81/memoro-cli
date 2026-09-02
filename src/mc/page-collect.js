@@ -40,6 +40,7 @@ import { intakeDir, proposalsDir } from './helper-collect.js';
 import { ageWords, loadPlans, loadPrs, savePrs } from './page-cache.js';
 import { workRoot } from './paths.js';
 import { PRICES_DATED, estimateCost } from './prices.js';
+import { PR_LIST_ARGS, openPrsFor } from './project-prs.js';
 import {
   RUNNER_MODEL, areasWithCheckout, kindFor, nowBlock, pidAlive,
 } from './status-collect.js';
@@ -226,11 +227,17 @@ export function projectsSection({
   const lastRun = {};
   for (const row of rows) lastRun[row.name] = row; // rows are in time order; the last wins
   const held = new Set(areas.map((area) => (typeof area === 'string' ? area : area.name)));
+  // A project's branches are `<name>` or `<name>-<suffix>`, so the row can say
+  // what the project is waiting on rather than only what sits on a branch of
+  // its own name: `action-window` had three branches with an open pull request
+  // and an empty PR column on 2026-09-02. The siblings are what tell
+  // `mc-cut-2` from `mc`'s, so the whole repository's names go in.
+  const namesIn = (repo) => plans.filter((p) => p.repo === repo).map((p) => p.project);
 
   const projects = plans.map((plan) => {
     const name = plan.project;
     const last = lastRun[name] || null;
-    const pr = openPrs.find((item) => item.headRefName === name && item.repo === plan.repo) || null;
+    const pr = openPrsFor({ prs: openPrs, name, names: namesIn(plan.repo), repo: plan.repo })[0] || null;
     // The steps are on the plan the cache already holds, so how far a project
     // has got costs nothing to say — and "3 of 7" is the one number that turns
     // a list of names into a picture of where the work stands.
@@ -461,7 +468,7 @@ export async function collectPage({
     const asked = [];
     await Promise.all(present.flatMap((repo) => [
       exec('git', ['-C', repo.path, 'fetch', '-q', 'origin']).then((r) => { if (!r.ok) notes.push(`${repo.name}: git fetch failed — plans may be stale`); }),
-      exec('gh', ['pr', 'list', '--state', 'open', '--limit', '100', '--json', 'number,headRefName'], { cwd: repo.path }).then((r) => {
+      exec('gh', PR_LIST_ARGS, { cwd: repo.path }).then((r) => {
         try {
           if (r.ok) asked.push(...JSON.parse(r.stdout).map((pr) => ({ repo: repo.name, ...pr })));
           else notes.push(`${repo.name}: gh pr list failed`);

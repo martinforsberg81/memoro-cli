@@ -19,6 +19,7 @@ import { join } from 'node:path';
 import { defaultRepos, runsFor } from './brief-collect.js';
 import { planSummary, readPlanText } from './plan-schema.js';
 import { workRoot } from './paths.js';
+import { PR_LIST_ARGS, openPrsFor } from './project-prs.js';
 
 /* ---------------------------------------------------------------- builders */
 
@@ -111,8 +112,8 @@ export function renderProject({
   out.push('');
 
   out.push('OPEN PR');
-  if (!prs.length) out.push('  none on this branch');
-  for (const pr of prs) out.push(`  #${pr.number}  ${clip(pr.title, 70)}`);
+  if (!prs.length) out.push('  none for this project');
+  for (const pr of prs) out.push(`  #${pr.number}  ${clip(pr.title, 70)}${pr.headRefName ? `  (${pr.headRefName})` : ''}`);
   for (const note of notes) out.push('', `note: ${note}`);
   return `${out.join('\n')}\n`;
 }
@@ -147,6 +148,14 @@ export function findWorkareaPlan(dir, name) {
   return null;
 }
 
+/** Every project with a plan in an `ls-tree` of `docs/project` on origin/main. */
+function names(tree) {
+  return (tree || '').split('\n')
+    .map((p) => p.split('/'))
+    .filter((parts) => parts.length === 5 && parts[4] === 'PLAN.json')
+    .map((parts) => parts[3]);
+}
+
 /** The plan on origin/main, if the project has one there. */
 export function findMainPlan(repos, name, { git = runGit } = {}) {
   for (const repo of repos) {
@@ -157,7 +166,19 @@ export function findMainPlan(repos, name, { git = runGit } = {}) {
       const parts = p.split('/');
       return parts.length === 5 && parts[3] === name && parts[4] === 'PLAN.json';
     });
-    if (path) return { repo: repo.name, path: repo.path, programme: path.split('/')[2], plan: path, text: git(repo.path, ['show', `origin/main:${path}`]) || '' };
+    if (path) {
+      return {
+        repo: repo.name,
+        path: repo.path,
+        programme: path.split('/')[2],
+        plan: path,
+        text: git(repo.path, ['show', `origin/main:${path}`]) || '',
+        // Every project of this repository, because a pull request is matched
+        // to a project by the longest name its branch begins with — without
+        // the siblings, `mc-cut-2` would read as `mc`'s (project-prs.js).
+        names: names(tree),
+      };
+    }
   }
   return null;
 }
@@ -205,12 +226,15 @@ export async function collectProject(name, {
   let tsv = '';
   try { tsv = read(join(root, 'runner', 'log', 'runs.tsv')); } catch { notes.push('no runner/log/runs.tsv'); }
 
+  // The project's open pull requests, not its branch's: a project's work sits
+  // on `<name>` or on `<name>-<n>`, and asking `--head <name>` printed nothing
+  // for a project whose three branches all had one open (2026-09-02).
   const prs = [];
   const repoPath = main?.path || (local ? join(dir, local.repo) : present[0]?.path);
   if (!offline && repoPath) {
-    const r = await exec('gh', ['pr', 'list', '--state', 'open', '--limit', '100', '--head', name, '--json', 'number,title'], { cwd: repoPath });
+    const r = await exec('gh', PR_LIST_ARGS, { cwd: repoPath });
     try {
-      if (r.ok) prs.push(...JSON.parse(r.stdout));
+      if (r.ok) prs.push(...openPrsFor({ prs: JSON.parse(r.stdout || '[]'), name, names: main?.names || [name] }));
       else notes.push('gh pr list failed');
     } catch { notes.push('gh pr list unreadable'); }
   }

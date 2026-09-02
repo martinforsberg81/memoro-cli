@@ -2,8 +2,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  assembleQueue, chooseKind, headlessArgs, helperDue, helperNote, queueFileNames, queueFileText,
-  quotaSeen, readSessionOutput, sessionSettings, stepPrompt, strictQueue, tsvHeader, tsvRow,
+  assembleQueue, chooseKind, headlessArgs, helperDue, helperNote, inFlight, nextBranch,
+  queueFileNames, queueFileText, quotaSeen, readSessionOutput, sessionSettings, stepPrompt,
+  strictQueue, tsvHeader, tsvRow,
 } from '../../src/mc/run-plan.js';
 import { profileArgs } from '../../src/mc/portrait.js';
 import { parseRunArgs } from '../../src/mc/commands/run.js';
@@ -85,6 +86,45 @@ function record({ status = 'ready', steps } = {}) {
     },
   };
 }
+
+/**
+ * The rule this project exists for, proved without spending a session: an
+ * open pull request ends the project's round whatever the plan says. On
+ * 2026-09-02T04:33 a 120-minute Opus session rebuilt `action-window` step 4
+ * while step 4's work was open as #11241.
+ */
+test('inFlight: an open pull request beats a ready plan, and names itself', () => {
+  const open = [{ number: 11241, title: 'Step 4', headRefName: 'action-window' }];
+  const flight = inFlight(open);
+  assert.equal(flight.kind, null);
+  assert.equal(flight.reason, 'in-flight');
+  assert.equal(flight.skip, '#11241 is open (Step 4) — not starting a step');
+  assert.deepEqual(flight.prs, open);
+  assert.equal(inFlight([]), null);
+  assert.equal(inFlight(), null);
+});
+
+test('inFlight: a draft counts as open, and the rest are counted', () => {
+  assert.equal(
+    inFlight([{ number: 9, title: 'Half', isDraft: true }, { number: 10, title: 'Other' }]).skip,
+    '#9 is open (draft: Half) (+1 more) — not starting a step',
+  );
+});
+
+test('chooseKind: an open pull request comes before the plan and before a conflict', () => {
+  const open = [{ number: 11246, title: 'Step 4' }];
+  assert.equal(chooseKind({ plan: record(), openPrs: open }).reason, 'in-flight');
+  assert.equal(chooseKind({ plan: record(), conflicts: ['x.md'], openPrs: open }).reason, 'in-flight');
+  assert.equal(chooseKind({ plan: record(), openPrs: [] }).kind, 'step');
+});
+
+/** `<name>` is the first branch, so the next one is 2. */
+test('nextBranch: the smallest number no branch is using', () => {
+  assert.equal(nextBranch('action-window', ['action-window']), 'action-window-2');
+  assert.equal(nextBranch('action-window', ['action-window', 'action-window-2', 'action-window-3']), 'action-window-4');
+  assert.equal(nextBranch('action-window', new Set(['action-window-2'])), 'action-window-3');
+  assert.equal(nextBranch('action-window'), 'action-window-2');
+});
 
 test('chooseKind: reconcile beats everything; a ready first step is the only thing that runs', () => {
   assert.equal(chooseKind({ plan: null, conflicts: ['x.md'] }).kind, 'reconcile');

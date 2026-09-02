@@ -153,20 +153,32 @@ describe('collectProject', () => {
     assert.equal(await collectProject('never-existed', opts), null);
   });
 
-  it('asks gh for the open PR on the branch of the same name', async () => {
+  // `--head <name>` printed nothing for a project whose three branches all
+  // had an open PR (`action-window`, 2026-09-02). The project's branches are
+  // `<name>` and `<name>-<n>`, and its siblings on main are what keep
+  // `mc-status-2` out of `mc`'s row.
+  it('asks gh for the whole project: its own branch and every `<name>-<n>`', async () => {
     const root = workRoot();
     const calls = [];
+    const open = [
+      { number: 427, title: 'mc status <name>', headRefName: 'mc-status' },
+      { number: 428, title: 'mc status, again', headRefName: 'mc-status-2' },
+      { number: 429, title: 'somewhere else', headRefName: 'mc-run' },
+      { number: 430, title: 'a branch of its own', headRefName: 'spike/mc-status' },
+    ];
     const exec = async (cmd, args) => {
       calls.push([cmd, ...args].join(' '));
-      if (cmd === 'gh') return { ok: true, stdout: JSON.stringify([{ number: 427, title: 'mc status <name>' }]) };
+      if (cmd === 'gh') return { ok: true, stdout: JSON.stringify(open) };
       return { ok: true, stdout: '' };
     };
+    const tree = ['docs/project/mc/mc-status/PLAN.json', 'docs/project/mc/mc-run/PLAN.json'].join('\n');
+    const many = (cwd, args) => (args[0] === 'ls-tree' ? tree : git(cwd, args));
     const data = await collectProject('mc-status', {
-      env: { MC_WORK_ROOT: root }, repos: [{ name: 'memoro-cli', path: join(root, 'mc-status', 'memoro-cli') }], git, exec,
+      env: { MC_WORK_ROOT: root }, repos: [{ name: 'memoro-cli', path: join(root, 'mc-status', 'memoro-cli') }], git: many, exec,
     });
-    assert.deepEqual(data.prs, [{ number: 427, title: 'mc status <name>' }]);
+    assert.deepEqual(data.prs.map((pr) => pr.number), [427, 428]);
     assert.ok(calls.some((c) => c.includes('fetch')), calls.join('\n'));
-    assert.ok(calls.some((c) => c.startsWith('gh pr list') && c.includes('--head mc-status')), calls.join('\n'));
+    assert.ok(calls.some((c) => c.startsWith('gh pr list') && !c.includes('--head')), calls.join('\n'));
   });
 });
 
@@ -209,7 +221,7 @@ describe('the project page', () => {
     assert.doesNotMatch(text, /NEXT/u);
     assert.doesNotMatch(text, /DECISIONS/u);
     assert.match(text, /LAST RUNS\n {2}none in the runner log/u);
-    assert.match(text, /OPEN PR\n {2}none on this branch/u);
+    assert.match(text, /OPEN PR\n {2}none for this project/u);
   });
 
   it('prints the data with --json, refuses an unknown flag, and reports an unknown name', async () => {
