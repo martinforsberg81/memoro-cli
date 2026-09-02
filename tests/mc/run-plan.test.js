@@ -2,9 +2,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  assembleQueue, chooseKind, headlessArgs, helperDue, helperNote, inFlight, nextBranch,
-  queueFileNames, queueFileText, quotaSeen, readSessionOutput, sessionSettings, stepPrompt,
-  strictQueue, tsvHeader, tsvRow,
+  assembleQueue, chooseKind, headlessArgs, helperDue, helperNote, inFlight, landingNote,
+  nextBranch, queueFileNames, queueFileText, quotaSeen, readSessionOutput, sessionSettings,
+  stackOrder, stepPrompt, strictQueue, tsvHeader, tsvRow,
 } from '../../src/mc/run-plan.js';
 import { profileArgs } from '../../src/mc/portrait.js';
 import { parseRunArgs } from '../../src/mc/commands/run.js';
@@ -265,12 +265,21 @@ test('readSessionOutput: codex events give what they give', () => {
   assert.deepEqual(r, { turns: '-', session: 't9', input: '5', output: '3', cacheRead: '2', cacheWrite: '-', note: 'success', quota: false });
 });
 
-test('tsvRow has the shell runner\'s thirteen columns in order', () => {
-  assert.equal(tsvHeader(), 'ts\tname\tkind\texit\tseconds\tpr\tturns\tinput\toutput\tcache_read\tcache_write\tsession\tnote');
-  const row = tsvRow({ ts: 'T', name: 'n', kind: 'step', exit: 0, seconds: 9, pr: '12', turns: '3', input: '1', output: '2', cacheRead: '3', cacheWrite: '4', session: 's', note: 'success,merged' });
-  assert.equal(row.split('\t').length, 13);
-  assert.equal(row, 'T\tn\tstep\t0\t9\t12\t3\t1\t2\t3\t4\ts\tsuccess,merged');
-  assert.equal(tsvRow({ ts: 'T', note: 'a\tb' }).split('\t').length, 13);
+/**
+ * The shell runner's thirteen, and `land_seconds` appended after them: the
+ * gate costs 20–35 minutes on memoro where the old `gh pr merge` cost
+ * seconds, and a reader of runs.tsv can only see where a night went if the
+ * session's time and the landing's are not added up into one cell. Appended
+ * and not inserted beside `seconds`, because the header is written once, when
+ * the file is created, and the one on this machine still carries thirteen.
+ */
+test('tsvRow has the shell runner\'s thirteen columns in order, then the landing\'s own time', () => {
+  assert.equal(tsvHeader(), 'ts\tname\tkind\texit\tseconds\tpr\tturns\tinput\toutput\tcache_read\tcache_write\tsession\tnote\tland_seconds');
+  const row = tsvRow({ ts: 'T', name: 'n', kind: 'step', exit: 0, seconds: 9, pr: '12', turns: '3', input: '1', output: '2', cacheRead: '3', cacheWrite: '4', session: 's', note: 'success,merged', landSeconds: 1830 });
+  assert.equal(row.split('\t').length, 14);
+  assert.equal(row, 'T\tn\tstep\t0\t9\t12\t3\t1\t2\t3\t4\ts\tsuccess,merged\t1830');
+  assert.equal(tsvRow({ ts: 'T', note: 'a\tb' }).split('\t').length, 14);
+  assert.match(tsvRow({ ts: 'T', note: 'timeout' }), /\ttimeout\t-$/u, 'a step that never reached a landing says so');
 });
 
 test('sessionSettings: frontmatter tool/model/budget_minutes with the runner defaults', () => {
@@ -351,4 +360,74 @@ test('helperNote keeps the success, shape every other row uses', () => {
   assert.equal(helperNote({ ok: true, wrote: [1, 2, 3] }), 'success,3-proposals');
   assert.equal(helperNote({ ok: false, reason: 'no-role' }), 'no-role');
   assert.equal(helperNote({ ok: false, note: 'timeout' }), 'timeout');
+});
+
+/* --------------------------------------------------------------- landing */
+
+const pr = (number, headRefName, baseRefName = 'main') => ({ number, headRefName, baseRefName });
+
+test('stackOrder: one pull request aimed at main is the whole answer', () => {
+  assert.deepEqual(stackOrder([]), { ok: true, order: [] });
+  const one = pr(77, 'alpha');
+  assert.deepEqual(stackOrder([one]), { ok: true, order: [one] });
+});
+
+test('stackOrder: a stack is bottom first, whatever order GitHub listed it in', () => {
+  const bottom = pr(1, 'm');
+  const middle = pr(2, 'm-2', 'm');
+  const top = pr(3, 'm-3', 'm-2');
+  assert.deepEqual(stackOrder([top, bottom, middle]).order, [bottom, middle, top]);
+});
+
+/**
+ * The four shapes that are not a stack, and #11250 is the first of them: a
+ * pull request based on the branch of #11249, which the runner squash-merged
+ * into that branch and logged `success,merged` while main received nothing.
+ */
+test('stackOrder: what is not a stack lands nothing, and says which', () => {
+  const alone = stackOrder([pr(11250, 'msr-track-3-capture', 'msr-track-3-capture-command')]);
+  assert.equal(alone.ok, false);
+  assert.match(alone.reason, /#11250 is aimed at msr-track-3-capture-command — none of them is aimed at main/u);
+
+  const two = stackOrder([pr(1, 'm'), pr(2, 'm-2')]);
+  assert.equal(two.ok, false);
+  assert.match(two.reason, /both aimed at main — two stacks, not one/u);
+
+  const fork = stackOrder([pr(1, 'm'), pr(2, 'm-2', 'm'), pr(3, 'm-3', 'm')]);
+  assert.equal(fork.ok, false);
+  assert.match(fork.reason, /#2 and #3 are both aimed at m — a fork, not a stack/u);
+
+  const cycle = stackOrder([pr(1, 'm'), pr(2, 'm-2', 'm-3'), pr(3, 'm-3', 'm-2')]);
+  assert.equal(cycle.ok, false);
+  assert.match(cycle.reason, /the bases form a cycle/u);
+
+  const twice = stackOrder([pr(1, 'm'), pr(2, 'm')]);
+  assert.equal(twice.ok, false);
+  assert.match(twice.reason, /#1 and #2 are both on m/u);
+});
+
+test('stackOrder: a base outside the list is not a stack even when one is aimed at main', () => {
+  const stray = stackOrder([pr(1, 'm'), pr(2, 'm-2', 'somebody-else')]);
+  assert.equal(stray.ok, false);
+  assert.match(stray.reason, /#2 is aimed at somebody-else, which is neither main nor another open pull request's branch/u);
+});
+
+/**
+ * `merged_into` and `off_default` are what the round reports and what the
+ * runner reads. Its own "the call returned zero" is not evidence that
+ * anything landed on main — a round on #363 said "merged as 7dcbf96" and was
+ * right, into the stacked base it was aimed at, and everyone read "on main".
+ */
+test('landingNote: a merge that did not land on main is not recorded as merged', () => {
+  assert.equal(landingNote({ merged: true, merged_into: 'main', default_branch: 'main' }), 'merged');
+  assert.equal(landingNote({ merged: true, merged_into: 'msr-track-3', default_branch: 'main', off_default: true }), 'off-main');
+  assert.equal(landingNote({ merged: true, merged_into: 'msr-track-3', off_default: false }), 'off-main', 'the base is read even when the round did not flag it');
+});
+
+test('landingNote: a red gate is the pull request left open, and says so', () => {
+  assert.equal(landingNote({ merged: false, stopped_at: 'red', reason: 'two tests are red' }), 'open,gate-red');
+  assert.equal(landingNote({ merged: false, stopped_at: 'lease', reason: 'held' }), 'open,gate-lease');
+  assert.equal(landingNote({ merged: false, stopped_at: 'drift' }), 'open,gate-drift');
+  assert.equal(landingNote({ merged: false }), 'open,gate-unknown');
+  assert.equal(landingNote(null), 'open');
 });
