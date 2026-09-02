@@ -11,9 +11,9 @@ It read differently until 2026-08-29. Alongside those verbs the help offered
 a resident PM (`mc pm`), its research assistant (`mc pm-helper`), and a
 `mc watch` programme with two legs — a PM round every 30 minutes and a
 watchman over every running conversation, feeding a notices ledger and a
-wake queue. Decision mc-1 (`~/mc/mc-utredning/decisions/mc-1.md`,
-2026-08-26, option A) had already given that work away. This note is what
-executing the ruling cost.
+wake queue. Ruling `mc-1` (2026-08-26, option A) had already given that work
+away. This note is what executing it cost. Cited by name and not by path: it
+was written in a workarea, which no checkout contains and nothing keeps.
 
 ## Where each job went
 

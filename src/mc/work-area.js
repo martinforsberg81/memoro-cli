@@ -54,15 +54,22 @@ export function listWorkAreas(env = process.env, options = {}) {
 /**
  * Directories that belong to the work rather than being work.
  *
- * `inbox/` is where the channel drops messages (`mc work send`) and
- * `handoff/` is where a conversation leaves its baton for the next one. Both
- * are filing: they hold what has been said about the work, never a checkout
- * of it. Listed as worktrees they turned up on the status board as
- * repositories that are not repositories — the same nonsense a role home's
- * subdirectories were already kept out of, arriving through the front door
- * once ordinary areas started having filing too.
+ * `inbox/` is where the channel drops messages (`mc work send`): filing, not a
+ * checkout, and listed as a worktree it turns up on the board as a repository
+ * that is not one.
+ *
+ * `handoff/` was the other, and it is gone. A workarea is being reduced to a
+ * folder that holds repositories and nothing else (Martin, 2026-09-02), and
+ * the handoff was the half of that with no writer — one *read* instruction in
+ * `mc plan`'s first prompt, which `mc plan` no longer carries. Nothing under
+ * `~/mc` that holds a checkout has one.
+ *
+ * The list goes with the inbox, and not before it: a filter removed while the
+ * thing it filters is still being written is a directory surfacing on the page
+ * as a repository that is not a repository, which is the failure it exists to
+ * prevent.
  */
-export const FILING_DIRECTORIES = Object.freeze(['inbox', 'handoff']);
+export const FILING_DIRECTORIES = Object.freeze(['inbox']);
 
 /** mc's own marks in an area: state, never litter, and never what keeps an area alive. */
 const OWN_MARKS = new Set(['.mc-role', STOP_MARK]);

@@ -4,9 +4,9 @@
  * Two things, both about the same misreading. An area that carries a role
  * looked exactly like an ordinary one, so a reader could not answer the
  * question people actually have when several areas are running: which of
- * these is the PM, which is a worker. And the directories the channel and the
- * handoff protocol write — `inbox/`, `handoff/` — were being listed as
- * worktrees, which announced a repository that is not one.
+ * these is the PM, which is a worker. And the directory the channel writes —
+ * `inbox/` — was being listed as a worktree, which announced a repository that
+ * is not one. `handoff/` was the other; it had no writer and is gone.
  *
  * The rule for both: the model may grow fields, never change them. Everything
  * that reads it today must keep reading exactly what it read. It was asked
@@ -43,10 +43,8 @@ function fixture() {
 
   for (const name of ['marked', 'plain', 'filed']) mkdirSync(join(workRoot, name), { recursive: true });
   writeFileSync(join(workRoot, 'marked', '.mc-role'), 'worker\n');
-  // Filing, in an ordinary area: the channel makes inbox/ on first message,
-  // the handoff protocol makes handoff/ on first baton.
+  // Filing, in an ordinary area: the channel makes inbox/ on first message.
   mkdirSync(join(workRoot, 'filed', 'inbox'), { recursive: true });
-  mkdirSync(join(workRoot, 'filed', 'handoff'), { recursive: true });
   mkdirSync(join(workRoot, 'marked', 'inbox'), { recursive: true });
   // And one directory that is genuinely work, beside the filing.
   mkdirSync(join(workRoot, 'filed', 'some-repo'), { recursive: true });
@@ -96,7 +94,7 @@ describe('the work model, on roles and on filing', () => {
     } finally { fx.cleanup(); }
   });
 
-  it('never calls the channel\'s inbox or the handoff baton a worktree', async () => {
+  it('never calls the channel\'s inbox a worktree', async () => {
     const fx = fixture();
     try {
       const areas = await areasByName(fx.env);
@@ -120,8 +118,8 @@ describe('the work model, on roles and on filing', () => {
       // as work, never of what may be deleted.
       assert.equal(inspectWorkArea('filed', fx.env, { conversations: false, git: false }).exists, true);
       assert.deepEqual(
-        ['inbox', 'handoff', 'some-repo'].filter((name) => existsDir(join(fx.workRoot, 'filed', name))),
-        ['inbox', 'handoff', 'some-repo'],
+        ['inbox', 'some-repo'].filter((name) => existsDir(join(fx.workRoot, 'filed', name))),
+        ['inbox', 'some-repo'],
       );
     } finally { fx.cleanup(); }
   });

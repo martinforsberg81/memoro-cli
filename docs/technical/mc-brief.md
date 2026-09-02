@@ -81,10 +81,9 @@ adapter, the Coding Profile appended, the overlay from
 the first prompt. NOW says `brief` for exactly as long as it holds the
 terminal.
 
-It stands in `~/mc`, the work root, and not in a repository. Its writes are
-`~/mc/<area>/decisions/*.md`, which no checkout contains, and giving it a
-worktree would only put a branch under a conversation that must never
-commit anything.
+It stands in `~/mc`, the work root, and not in a repository. It writes one
+file, `~/mc/brief/<date>.md`, and giving it a worktree would only put a branch
+under a conversation that must never commit anything.
 
 The role tells it to take the decisions **one at a time**, each as a
 proposal Martin says GO to — never a menu of options, and never a question

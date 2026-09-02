@@ -119,8 +119,8 @@ folder's close and says so; the next round tries again.
 
 A folder is a workarea when it holds `memoro/` or `memoro-cli/`, and nothing
 else is. That rule is the same in the runner (`areaRepos`) and on the page
-(`areasWithCheckout`), and it is what keeps `bin/`, `brief/`, `decisions/`,
-`inbox/`, `intake/`, `runner/`, `status/` and the role homes off the board
+(`areasWithCheckout`), and it is what keeps `bin/`, `brief/`, `inbox/`,
+`intake/`, `runner/`, `status/` and the role homes off the board
 and out of reach of the close.
 
 ## The strict queue

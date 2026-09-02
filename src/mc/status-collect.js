@@ -132,7 +132,7 @@ export function nowBlock({ runner = null, currents = [], stop = false, rows = []
  * each with the repositories it holds.
  *
  * A folder without `memoro/` or `memoro-cli/` in it is not a workarea and is
- * never listed: `bin/`, `brief/`, `decisions/`, `inbox/`, `intake/`,
+ * never listed: `bin/`, `brief/`, `inbox/`, `intake/`,
  * `runner/`, `status/` and the two role homes are mc's own filing. They were
  * off the page already, but by accident — nothing under them happens to hold
  * a `.git` — and a repository mirror dropped into one would have put mc's own
