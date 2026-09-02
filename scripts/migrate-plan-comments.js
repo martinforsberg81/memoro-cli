@@ -9,9 +9,9 @@
  * — whose five entries carry a `body` string rather than an array — sat
  * unreadable on `origin/main` for a day while the runner logged a skip line
  * nobody reads. Prose in a schema-validated shared field is prose in the wrong
- * place (Martin, 2026-09-02: "Flytta in i steget: `steps[i].learned`").
+ * place (Martin, 2026-09-02: "Flytta in i steget: `steps[i].learned`", renamed to `comments` by his amendment the same evening).
  *
- * `learned` is the same shape as `goal`, `contract` and `instruction`: an array
+ * `comments` is the same shape as `goal`, `contract` and `instruction`: an array
  * of paragraph strings. An entry becomes its title as a bold paragraph followed
  * by its body paragraphs, which is lossless and keeps the diff line-oriented.
  *
@@ -19,11 +19,11 @@
  * so this puts every entry on the last `done` step — the one that most recently
  * ran — and, where no step is done, on the first. That is a rule, not a
  * reading: it is right about the plan's shape and silent about which session
- * actually learned what.
+ * actually comments what.
  *
  * Idempotent: a plan with no `what_the_code_taught_us` is left byte for byte.
  *
- *   node scripts/migrate-plan-learned.js [<repo-root> …] [--dry-run]
+ *   node scripts/migrate-plan-comments.js [<repo-root> …] [--dry-run]
  *
  * With no root, the repository this script lives in.
  */
@@ -66,19 +66,19 @@ export function targetStep(steps = []) {
   return 0;
 }
 
-/** `learned` goes straight after `instruction`, so a step reads in the order it happened. */
+/** `comments` goes straight after `instruction`, so a step reads in the order it happened. */
 function withLearned(step, paragraphs) {
   const out = {};
   let placed = false;
   for (const [key, value] of Object.entries(step)) {
-    if (key === 'learned') continue;
+    if (key === 'comments') continue;
     out[key] = value;
     if (key === 'instruction') {
-      out.learned = [...(Array.isArray(step.learned) ? step.learned : []), ...paragraphs];
+      out.comments = [...(Array.isArray(step.comments) ? step.comments : []), ...paragraphs];
       placed = true;
     }
   }
-  if (!placed) out.learned = [...(Array.isArray(step.learned) ? step.learned : []), ...paragraphs];
+  if (!placed) out.comments = [...(Array.isArray(step.comments) ? step.comments : []), ...paragraphs];
   return out;
 }
 
@@ -133,4 +133,4 @@ function main(argv) {
   console.log(`\n${files} plan(s), ${moved} entr${moved === 1 ? 'y' : 'ies'} moved, ${ambiguous} plan(s) with no done step`);
 }
 
-if (process.argv[1] && process.argv[1].endsWith('migrate-plan-learned.js')) main(process.argv.slice(2));
+if (process.argv[1] && process.argv[1].endsWith('migrate-plan-comments.js')) main(process.argv.slice(2));

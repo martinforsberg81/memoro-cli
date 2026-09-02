@@ -66,7 +66,7 @@
       "instruction": [
         "**The handoff concept.** Three sites, zero writers — `plan.js:107`, `canon/roles/plan.md:19`, `work-area.js:55`. Then the 5 `HANDOFF.md` and 3 `handoff/` under `~/mc`. Order matters: the files before the `FILING_DIRECTORIES` entry, or the directories surface on the page as repositories that are not repositories in between."
       ],
-      "learned": [
+      "comments": [
         "**The handoff is a reader with no writer**",
         "**The handoff is a reader with no writer.** `grep -rn \"HANDOFF.md\" src/` returns exactly one line, and it is a *read* instruction in `mc plan`'s first prompt (`src/mc/commands/plan.js:107`), repeated in `canon/roles/plan.md:19`. Nothing in mc has ever written one. It entered with `b4a206a` (#414). Five of ~60 workareas have one, because the prompt told each planning session that the last one might have left one. `src/mc/work-area.js:48` writes the idea down — *\"`handoff/` is where a conversation leaves its baton for the next one\"* — and `FILING_DIRECTORIES` (`:55`) exists to keep that directory off the page. A filter against a directory nothing creates. mc already has the whole chain this was invented to replace: `decisions/` → `**Beslut:**` → `mc plan` → PLAN.md, which has a section called *What the code taught us* → `mc run` → close-out → `project_log.md`. A handoff is what gets written when the plan is not trusted to carry the work, and it dies with the workarea, which is exactly when someone wants it.",
         "**The inbox is real, and still legacy**",

@@ -1,10 +1,10 @@
 section: Changed
 
-- **A step session's learning lives on its own step.** `steps[i].learned` is an
+- **A step session's learning lives on its own step.** `steps[i].comments` is an
   array of paragraphs, the shape `goal`, `contract` and `instruction` already
   use, and the top-level `what_the_code_taught_us` — a shared list of
   `{ title, body }` objects — is gone from the schema and from all 38 plans on
-  the two `origin/main`s (259 entries moved by `scripts/migrate-plan-learned.js`).
+  the two `origin/main`s (259 entries moved by `scripts/migrate-plan-comments.js`).
   It was prose in a schema-validated shared field: on 2026-09-02 three of five
   `plan-trespass` runs were malformed entries in it rather than trespasses, and
   `new-user`'s plan was unreadable on `origin/main` for a day because five

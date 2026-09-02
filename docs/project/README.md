@@ -53,15 +53,18 @@ carries:
   one string so a diff stays line-oriented for whoever reads the PR.
 - `status` — `ready`, `done`, `blocked` — with `pr` and `blocked_by`
   (`{ kind: "decision" | "project", name }`, required when stopped).
-- `learned` — an array of paragraphs, possibly empty: what that step's session
-  found in the code that the next one cannot see from the code in front of it.
-  This is where a session writes, and it is on the step rather than at the top
-  of the plan on purpose. It was `what_the_code_taught_us`, a shared list of
+- `comments` — an array of paragraphs, possibly empty: whatever that step's
+  session needs the next reader to know that the code in front of them does not
+  show. This is where a session writes, and it is on the step rather than at the
+  top of the plan on purpose. It was `what_the_code_taught_us`, a shared list of
   `{ title, body }` objects; on 2026-09-02 three sessions wrote the wrong shape
   into it, and because the shape is validated, one bad paragraph made the whole
   plan unreadable — `new-user`'s stayed unreadable on `origin/main` for a day,
   and the runner logged a skip line for it every round that nobody read
-  (Martin, 2026-09-02: "Flytta in i steget: `steps[i].learned`").
+  (Martin, 2026-09-02: "Flytta in i steget: `steps[i].learned`", and the same
+  evening: "den ska bli bara en 'comments' … det behövs någonstans att skriva
+  kommentarer"). The name is plain on purpose: a field whose name is a doctrine
+  is either left empty or filled with what it is not.
 
 The plan has **no status of its own**: it is the state of the first step that is
 not done, and a plan whose steps are all done is done. The runner looks at that
@@ -86,7 +89,7 @@ In full, small:
   "steps": [
     { "title": "The purpose line", "status": "done",
       "done_when": "The description is edited in the hero.",
-      "instruction": [], "learned": ["The hero hydrates twice: once on mount, once on theme."],
+      "instruction": [], "comments": ["The hero hydrates twice: once on mount, once on theme."],
       "pr": 11085, "blocked_by": null },
     { "title": "The hero object", "status": "ready",
       "done_when": "A project page draws the object in light and in dark.",
@@ -123,7 +126,7 @@ planning session and the runner share is a `PLAN.json` on `main`, and nothing
 else; the `<project>` directory name is what the runner will call that
 project's branch and its workarea when it first steps it.
 
-A step session edits its own step's `status`, `pr` and `learned`, and `met` on
+A step session edits its own step's `status`, `pr` and `comments`, and `met` on
 the criteria it actually met — the criterion and its check are Martin's words.
 It **never writes the plan's steps** — not a new one, not a rewrite of one that
 has not run, not a deletion — and never `goal`, `contract`, `out_of_scope`, or

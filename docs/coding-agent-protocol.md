@@ -64,12 +64,12 @@ mc merge    → the gate, then the squash
   programme here, `mc`. One file: the overall part — `goal`, `contract`,
   `out_of_scope`, `success_criteria`, `documents` — then `steps[]`, each
   carrying its own `instruction`, `done_when`, `status`
-  (`ready` | `done` | `blocked`) and `learned`. The plan has no status of
+  (`ready` | `done` | `blocked`) and `comments`. The plan has no status of
   its own: it is the state of the first step that is not done. See
   [`docs/project/README.md`](project/README.md).
 - **You do not write plan state by hand.** `mc plan <programme>` opens the
   session a plan is written in, with Martin in it. A step session edits its own
-  step's `status`, `pr` and `learned`, and `met` on the criteria it met — and
+  step's `status`, `pr` and `comments`, and `met` on the criteria it met — and
   `mc run` compares the file before and after, so a session that touched a step
   it did not run leaves a PR the runner will not merge.
 - **You do not decide.** An open question becomes a

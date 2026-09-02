@@ -128,6 +128,6 @@ Rulings 5 (*an open pull request stops its project*, and with it "only `mc
 merge` may be used") and 6 (*a step's learning lives on the step*) were here
 until the `runner-open-prs` project landed them. A ruling lives only until the
 code carries it: the first is `inFlight` and the gated round in
-`src/mc/run.js`, the second is `steps[i].learned` in `src/mc/plan-schema.js`,
+`src/mc/run.js`, the second is `steps[i].comments` in `src/mc/plan-schema.js`,
 both are described in [`docs/technical/mc-run.md`](../../technical/mc-run.md),
 and the row is in [`project_log.md`](../project_log.md).

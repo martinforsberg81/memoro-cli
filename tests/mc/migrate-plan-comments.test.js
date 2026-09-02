@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { lessonParagraphs, migratePlan, targetStep } from '../../scripts/migrate-plan-learned.js';
+import { lessonParagraphs, migratePlan, targetStep } from '../../scripts/migrate-plan-comments.js';
 import { validatePlan } from '../../src/mc/plan-schema.js';
 
 /**
@@ -57,10 +57,10 @@ test('the key goes, the paragraphs land on the step, and the result validates', 
   assert.equal(entries, 1);
   assert.equal(step, 0);
   assert.equal('what_the_code_taught_us' in after, false);
-  assert.deepEqual(after.steps[0].learned, lessonParagraphs(entry));
-  assert.deepEqual(after.steps[1].learned, undefined);
-  // `learned` sits after `instruction`, so a step reads in the order it happened.
-  assert.deepEqual(Object.keys(after.steps[0]), ['title', 'status', 'done_when', 'instruction', 'learned', 'pr', 'blocked_by']);
+  assert.deepEqual(after.steps[0].comments, lessonParagraphs(entry));
+  assert.deepEqual(after.steps[1].comments, undefined);
+  // `comments` sits after `instruction`, so a step reads in the order it happened.
+  assert.deepEqual(Object.keys(after.steps[0]), ['title', 'status', 'done_when', 'instruction', 'comments', 'pr', 'blocked_by']);
   assert.deepEqual(validatePlan(after), { ok: true, problems: [] });
 });
 

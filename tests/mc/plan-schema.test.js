@@ -37,7 +37,7 @@ function plan(overrides = {}) {
         status: 'done',
         done_when: 'The description is edited in the hero.',
         instruction: [],
-        learned: ['The hero hydrates twice: once on mount, once on theme.'],
+        comments: ['The hero hydrates twice: once on mount, once on theme.'],
         pr: 11085,
         blocked_by: null,
       },
@@ -99,13 +99,13 @@ describe('the plan schema', () => {
     );
   });
 
-  it('takes `learned` on a step as prose, and refuses the old shared field', () => {
+  it('takes `comments` on a step as prose, and refuses the old shared field', () => {
     const [done, ready] = plan().steps;
-    assert.equal(validatePlan(plan({ steps: [{ ...done, learned: [] }, ready] })).ok, true);
-    assert.equal(validatePlan(plan({ steps: [{ ...done, learned: 'One paragraph.' }, ready] })).ok, false);
+    assert.equal(validatePlan(plan({ steps: [{ ...done, comments: [] }, ready] })).ok, true);
+    assert.equal(validatePlan(plan({ steps: [{ ...done, comments: 'One paragraph.' }, ready] })).ok, false);
     assert.match(
-      validatePlan(plan({ steps: [{ ...done, learned: [{ title: 'x', body: ['y'] }] }, ready] })).problems.join('\n'),
-      /steps\[0\]\.learned: an array of paragraphs/u,
+      validatePlan(plan({ steps: [{ ...done, comments: [{ title: 'x', body: ['y'] }] }, ready] })).problems.join('\n'),
+      /steps\[0\]\.comments: an array of paragraphs/u,
     );
     assert.match(
       validatePlan({ ...plan(), what_the_code_taught_us: [] }).problems.join('\n'),
@@ -121,16 +121,16 @@ describe('the plan schema', () => {
   it('validates what made three plans unreadable on 2026-09-02', () => {
     const [done, ready] = plan().steps;
     // email-window-layout: `what_the_code_taught_us[0].body: at least one paragraph`
-    const emptyBody = { ...done, learned: [] };
+    const emptyBody = { ...done, comments: [] };
     // inbox-finish: `what_the_code_taught_us[0]: must be an object` — a bare paragraph
     const bareParagraph = {
       ...done,
-      learned: ['THE CANONICAL G7a CASE: the automation run rows were not under-dressed. The row was a `<button>`, and `.item-row.email-row` was written for the `<div>` the deleted view drew.'],
+      comments: ['THE CANONICAL G7a CASE: the automation run rows were not under-dressed. The row was a `<button>`, and `.item-row.email-row` was written for the `<div>` the deleted view drew.'],
     };
     // new-user: five entries whose `body` was a string, not an array
     const wasAString = {
       ...done,
-      learned: [
+      comments: [
         '**The onboarding section was dead on both sides**',
         '`home-onboarding-step-view.js` hardcoded `const data = null` and `src/users/lifecycle.js` returned `phase: null`, `gaps: []`, `nextStep: null` for every user.',
         '**Number(null) is 0, so the age gate has to check the type**',
@@ -177,7 +177,7 @@ describe('what a step session may have changed', () => {
     after.steps[1].status = 'done';
     after.steps[1].pr = 11150;
     after.success_criteria[0].met = true;
-    after.steps[1].learned = ['The token had to be registered before the hero could name it.'];
+    after.steps[1].comments = ['The token had to be registered before the hero could name it.'];
     assert.deepEqual(unauthorisedChanges(before, after, 1), { ok: true, problems: [] });
   });
 

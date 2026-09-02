@@ -216,7 +216,7 @@ test('stepPrompt names the step, its done_when, and what the session may edit', 
   // 2026-09-02: `action-window` wrote a `blocked_by` that was not
   // `{ kind, name }` at 10:18, and `msr-track-3` rewrote a criterion's own text
   // at 12:27. Both are checked on the way back in, so both are said here.
-  assert.match(p, /its\n`learned` — an array of paragraph strings/u);
+  assert.match(p, /its\n`comments` — an array of paragraph strings/u);
   assert.match(p, /"kind": "decision" \| "project", "name"/u);
   assert.match(p, /only `met` is yours/u);
   assert.match(p, /----- PLAN\.json -----\n\{"schema":"mc-plan"\}/u);

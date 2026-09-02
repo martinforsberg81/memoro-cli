@@ -12,15 +12,15 @@ success criterion, and the PR body says how you verified it.
 **You never write the plan's steps** — not a new one, not a rewrite of one
 that has not run, nor `goal`, `contract`, `out_of_scope` or the criteria
 themselves. Four things are yours, and three of them are inside your own step:
-its `status`, its `pr`, and its `learned` — an array of paragraph strings, what
-the code taught you. The fourth is `met` on the criteria you actually met; the
+its `status`, its `pr`, and its `comments` — an array of paragraph strings,
+whatever the next reader needs that the code in front of them does not show. The fourth is `met` on the criteria you actually met; the
 criterion and its check are Martin's words. This is checked, not asked: the
 runner compares the file it handed you with the file you leave, and a session
 that changed anything else leaves a PR it will not merge.
 
 So when the code contradicts the plan — your step cannot be done as written,
 or a later step is wrong — you stop instead of repairing it. Put what you
-found in your step's `learned`, set your step `blocked` with
+found in your step's `comments`, set your step `blocked` with
 `blocked_by: { "kind": "decision" | "project", "name": … }` — both required —
 saying what the answer is about, and open a PR that names the one thing you
 would do: a proposal Martin says GO to, never a menu. If the question is

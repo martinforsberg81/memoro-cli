@@ -54,7 +54,7 @@ const STEP_KEYS = Object.freeze([
   'status',
   'done_when',
   'instruction',
-  'learned',
+  'comments',
   'pr',
   'blocked_by',
 ]);
@@ -173,8 +173,8 @@ function validateSteps(steps, problems) {
     // at the top of the plan, and on 2026-09-02 three sessions wrote the wrong
     // shape into it and invalidated the whole plan for the sake of a
     // paragraph. `new-user`'s plan was unreadable on main for a day.
-    if (step.learned !== undefined && !prose(step.learned, { min: 0 })) {
-      problems.push(`${at}.learned: an array of paragraphs, possibly empty`);
+    if (step.comments !== undefined && !prose(step.comments, { min: 0 })) {
+      problems.push(`${at}.comments: an array of paragraphs, possibly empty`);
     }
     if (step.pr !== null && step.pr !== undefined && !positiveInteger(step.pr)) {
       problems.push(`${at}.pr: a pull request number, or null`);
@@ -289,7 +289,7 @@ export function deliverableStep(plan) {
  *
  * The instruction said it and could be read past; this is the same rule as a
  * comparison. A session edits the step it ran — its `status`, its `pr`, what
- * it `learned` — and `met` on the criteria it met. Never a step that has not
+ * it `comments` — and `met` on the criteria it met. Never a step that has not
  * run, and never the goal, the contract or the scope.
  *
  * Everything a session writes about its own work now sits inside
