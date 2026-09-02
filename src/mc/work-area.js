@@ -16,6 +16,7 @@ import {
   existsSync,
   mkdirSync,
   readdirSync,
+  rmdirSync,
   rmSync,
 } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
@@ -176,6 +177,24 @@ export function createWorkArea(name, env = process.env) {
 }
 
 /**
+ * Undo an area that was made for a checkout that never arrived.
+ *
+ * The area comes first — `git worktree add` wants its parent to exist — so a
+ * failed add left `~/mc/<name>/` behind, empty. `mc plan mc` failing on a
+ * branch name git would not take still made `~/mc/mc/`, and the next `mc`
+ * counted it among the workareas nobody is working on. A directory that only
+ * exists because something went wrong is not a piece of work.
+ *
+ * `rmdirSync` is the guard rather than a check before it: it refuses a
+ * directory that is not empty, so anything that did arrive — another
+ * repository's worktree, a file somebody put there — keeps the area. Failing
+ * to tidy up is never worth reporting over the failure that caused it.
+ */
+export function dropEmptyArea(path) {
+  try { rmdirSync(path); return true; } catch { return false; }
+}
+
+/**
  * Take one repository out of a piece of work, leaving the rest of it alone.
  *
  * Doing this by hand — `git worktree remove` and then a branch delete — is
@@ -243,6 +262,9 @@ function baseFor(repo) {
 }
 
 export function addWorktree({ name, repo, branch, from = null, env = process.env } = {}) {
+  // Whether the area was already there decides who has to clean up after a
+  // failure: an area this call made and could not fill is this call's litter.
+  const madeTheArea = !existsSync(workAreaPath(name, env));
   const area = createWorkArea(name, env);
   const target = join(area, repoName(repo));
   if (existsSync(target)) return { ok: false, reason: 'worktree-already-there', path: target };
@@ -260,7 +282,8 @@ export function addWorktree({ name, repo, branch, from = null, env = process.env
   try {
     execFileSync('git', args, { stdio: ['ignore', 'pipe', 'pipe'] });
   } catch (error) {
-    return { ok: false, reason: firstLine(error), path: target };
+    if (madeTheArea) dropEmptyArea(workAreaPath(name, env));
+    return { ok: false, reason: whyItFailed(error), path: target };
   }
   // The pre-push guard (push-guard.js) rides along with every worktree mc
   // adds: one file in the repository's common hooks, covering all of them.
@@ -524,7 +547,28 @@ function run(args) {
   try { execFileSync('git', args, { stdio: ['ignore', 'ignore', 'ignore'] }); return true; } catch { return false; }
 }
 
-function firstLine(error) {
+/**
+ * What went wrong, out of the noise a command made on its way there.
+ *
+ * `git worktree add` narrates before it fails. Its first line of stderr is
+ * always `Preparing worktree (new branch '<name>')`, so taking the first
+ * non-empty line reported every worktree failure as the progress message that
+ * preceded it — `mc plan mc` said *"could not add memoro to mc (Preparing
+ * worktree (new branch 'mc'))"*, which names no cause and suggests nothing to
+ * do. The line under it was the answer:
+ *
+ *     fatal: 'refs/heads/mc/github-write-flag' exists; cannot create 'refs/heads/mc'
+ *
+ * — a branch called `mc` cannot exist while `mc/` is a directory in the ref
+ * namespace, which is a real and fixable thing to be told.
+ *
+ * So the diagnosis is asked for by name: git prefixes one with `fatal:` or
+ * `error:`, and only when there is none does the narration stand in for it.
+ * A thrown error with no stderr at all still answers from its message.
+ */
+function whyItFailed(error) {
   const text = error?.stderr?.toString?.() || error?.message || String(error);
-  return text.split('\n').find(Boolean)?.slice(0, 200) || 'unknown';
+  const lines = text.split('\n').map((line) => line.trim()).filter(Boolean);
+  const said = lines.find((line) => /^(fatal|error):/iu.test(line));
+  return (said || lines[0] || 'unknown').slice(0, 200);
 }
