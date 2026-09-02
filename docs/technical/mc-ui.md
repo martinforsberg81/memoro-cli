@@ -47,11 +47,15 @@ In this order, because that is the order the questions come in:
   runner does not decline for it either.
 - **INTAKE** — the newest `~/mc/intake/errors-<date>.md`, its age, what is
   new in it, and how many proposals nobody has queued or dropped.
-- **PROJECTS** — one numbered row per project on `origin/main`, grouped by
-  repository and sorted repo, programme, project: where the plan stands, how
-  many of its steps are done, `next`, the open PR, a live mark. Then the
-  workareas no project explains, under a heading of their own — the first few
-  by name and the rest as a count.
+- **PROGRAMMES** — one heading per programme, with the room for its planning
+  session on the right of it, filled or empty; then one numbered row per
+  project under it: the repository it lives in, where the plan stands, how many
+  of its steps are done, `next`, the open PR. A project's `●` means the runner
+  has a step in flight on it, and nothing else. A programme is drawn whether or
+  not any of its projects have a plan the runner can read, and a programme that
+  exists only as an open planning session is drawn too. Then the workareas no
+  project explains, under a heading of their own — the first few by name and
+  the rest as a count.
 
 Two rules the sections keep:
 
@@ -176,7 +180,7 @@ test can look at one row.
 The page is grey with meaning painted on it, and the meanings are a short
 list. Two of them are tables, and those tables are the rule the rest of the
 page bends to: **a step kind and a plan status have one colour each, wherever
-they are printed.** RUNNER, QUEUE and PROJECTS all say `reconcile` in the same
+they are printed.** RUNNER, QUEUE and PROGRAMMES all say `reconcile` in the same
 magenta, so a kind is recognised before it is read. They are `KIND_TONE` and
 `STATUS_TONE` in `page-render.js`, and `tests/mc/page.test.js` walks each one
 through all three sections.
@@ -205,7 +209,7 @@ Everything else is structure, and structure is quiet:
 | header | `MEMORO·CLI` | bold white |
 | header | `N of M queued` | white |
 | header | version, rule, cost today | grey |
-| section titles | `RUNNER` `HELPER` `BRIEF` `QUEUE` `INTAKE` `PROJECTS` `WORK` | bold cyan |
+| section titles | `RUNNER` `HELPER` `BRIEF` `QUEUE` `INTAKE` `PROGRAMMES` `WORK` | bold cyan |
 | section titles | the count beside it, the verb hint on the right | grey |
 | RUNNER | the live step's `●`, its name | green, bold white |
 | RUNNER | elapsed: under ¾ of budget, from ¾, past it | white, yellow, bold red |
@@ -226,12 +230,15 @@ Everything else is structure, and structure is quiet:
 | INTAKE | proposals, when > 0 | yellow |
 | INTAKE | a `!` line: its mark, its text | red, bold white |
 | INTAKE | no digest yet, no new errors, no proposals | grey |
-| PROJECTS | a live project's `●`, its name | green, bold white |
-| PROJECTS | a quiet project's name and `next` | white, plain |
-| PROJECTS | the repository heading | bold cyan |
-| PROJECTS | the open PR number | cyan |
-| PROJECTS | the number, the steps done, the last-run time, the no-workarea line | grey |
-| PROJECTS | a workarea row with no project on main | grey throughout |
+| PROGRAMMES | a project the runner is stepping — `●`, its name | green, bold white |
+| PROGRAMMES | a quiet project's name and `next` | white, plain |
+| PROGRAMMES | the programme heading | bold cyan |
+| PROGRAMMES | a programme's open planning session | cyan |
+| PROGRAMMES | a programme with no planning session | dim grey |
+| PROGRAMMES | the repository a project lives in | dim grey |
+| PROGRAMMES | the open PR number | cyan |
+| PROGRAMMES | the number, the steps done, the last-run time, the no-workarea line | grey |
+| PROGRAMMES | a workarea row with no project on main | grey throughout |
 | footer | the cache line, the notes | grey |
 
 Four things hold that table up:
@@ -269,7 +276,7 @@ not changed:
 
 | | |
 |---|---|
-| a number | opens that project's workarea, making one if it has none — **PROJECTS’ number**, not a listing of its own |
+| a number | opens that project's workarea, making one if it has none — **PROGRAMMES’ number**, not a listing of its own |
 | a name | opens that workarea |
 | `n` | starts a new one |
 | `b` | `mc brief` |
@@ -279,7 +286,7 @@ not changed:
 | anything else | parsed as an `mc work` command, with or without its first two words |
 
 The menu asks `inspectWorkArea(name).exists` rather than looking for a
-PROJECTS row, because the page draws projects and the folders that hold a
+PROGRAMMES row, because the page draws projects and the folders that hold a
 checkout, and `mc work` offers to make an area with no repository in it.
 Using the rows would have kept the typo guard and stranded the empty area
 under the only name it has.
@@ -309,7 +316,7 @@ parsed JSON and compares, so the two surfaces cannot drift.
 
 `tests/mc/front-door.test.js` drives the menu in process with the reading
 and the opening handed in, so a number can be shown to open the project
-PROJECTS gave that number to without a session ever starting.
+PROGRAMMES gave that number to without a session ever starting.
 
 ## What went, and what did not
 

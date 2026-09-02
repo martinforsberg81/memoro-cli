@@ -12,7 +12,7 @@ import { describe, it } from 'node:test';
 import { runsSince } from '../../src/mc/brief-collect.js';
 import {
   collectPage, countNewErrors, intakeSection, newErrorLines, queueSection,
-  projectsSection, runnerSection, sessionsSection,
+  programmesSection, runnerSection, sessionsSection,
 } from '../../src/mc/page-collect.js';
 import { colourFor, columnsFor, renderPage, renderPageLines } from '../../src/mc/page-render.js';
 import { width } from '../../src/mc/status-render.js';
@@ -139,8 +139,26 @@ describe('SESSIONS', () => {
     // A desk nobody is at is `null` rather than missing: the page draws the
     // row either way, and "is the helper running?" is answered both ways.
     assert.equal(s.desks.brief, null);
-    assert.deepEqual(s.others.map((item) => item.verb), ['plan']);
     assert.equal(s.count, 2);
+  });
+
+  // A planning session belongs to its programme, and PROGRAMMES draws it on
+  // that programme's own row. It is keyed by programme here so that section
+  // never has to know how `mc plan` spells an area.
+  it('keys a planning session by its programme, and keeps it out of the list', () => {
+    const s = sessionsSection({ foreground: [HELPER, PLAN], now: NOW, alive: live });
+    assert.equal(s.planning['msr-core'].pid, 100);
+    assert.deepEqual(s.others, []);
+  });
+
+  // A `mc plan` from before the programme change carries a bare project name,
+  // belongs to no programme and cannot be started again.
+  it('leaves a plan session with no programme in the list', () => {
+    const s = sessionsSection({
+      foreground: [{ ...PLAN, area: 'mc-test' }], now: NOW, alive: live,
+    });
+    assert.deepEqual(s.planning, {});
+    assert.deepEqual(s.others.map((item) => item.area), ['mc-test']);
   });
 
   // The whole point of the section. `started` has been in the register since
@@ -149,7 +167,7 @@ describe('SESSIONS', () => {
   it('carries how long each session has been open', () => {
     const s = sessionsSection({ foreground: [HELPER, PLAN], now: NOW, alive: live });
     assert.equal(s.desks.helper.age_seconds, 2 * 24 * 60 * 60);
-    assert.equal(s.others[0].age_seconds, 1800);
+    assert.equal(s.planning['msr-core'].age_seconds, 1800);
   });
 
   it('carries a tmux window as a session with no verb', () => {
@@ -171,7 +189,8 @@ describe('SESSIONS', () => {
       now: NOW,
       alive: live,
     });
-    assert.deepEqual(s.others.map((item) => item.area), ['red', 'docx-editor', 'plan/msr-core']);
+    // The planning session is not here at all — it is on its programme's row.
+    assert.deepEqual(s.others.map((item) => item.area), ['red', 'docx-editor']);
   });
 
   it('drops a registered session whose process is gone', () => {
@@ -298,28 +317,73 @@ describe('PROJECTS', () => {
     { name: 'avatar-self-serve', mtime_ms: Date.parse('2026-08-29T09:00:00Z') },
   ];
 
-  const projectsFixture = (over = {}) => projectsSection({
+  const projectsFixture = (over = {}) => programmesSection({
     plans: PLANS,
     areas: AREAS,
     rows: ROWS,
     openPrs: [{ repo: 'memoro-cli', number: 440, headRefName: 'mc-ui' }, { repo: 'memoro', number: 2, headRefName: 'elsewhere' }],
     live: ['ui-fixes'],
-    repoOrder: ['memoro', 'memoro-cli'],
     ...over,
   });
 
-  const flat = (projects) => projects.repos.flatMap((group) => group.projects);
+  const flat = (projects) => projects.programmes.flatMap((group) => group.projects);
 
-  it('groups by repository in the order given, then programme, then project', () => {
+  it('groups by programme, then project, and says which repository each lives in', () => {
     const projects = projectsFixture();
-    assert.deepEqual(projects.repos.map((group) => group.repo), ['memoro', 'memoro-cli']);
-    assert.deepEqual(flat(projects).map((p) => [p.number, `${p.programme}/${p.name}`]), [
-      [1, 'assistant-avatar/avatar-self-serve'],
-      [2, 'docx-editing-surface/docx-editor'],
-      [3, 'mc/mc-run'],
-      [4, 'mc/mc-ui'],
+    assert.deepEqual(projects.programmes.map((group) => group.programme),
+      ['assistant-avatar', 'docx-editing-surface', 'mc']);
+    assert.deepEqual(flat(projects).map((p) => [p.number, p.programme, p.name, p.repo]), [
+      [1, 'assistant-avatar', 'avatar-self-serve', 'memoro'],
+      [2, 'docx-editing-surface', 'docx-editor', 'memoro'],
+      [3, 'mc', 'mc-run', 'memoro-cli'],
+      [4, 'mc', 'mc-ui', 'memoro-cli'],
     ]);
     assert.equal(projects.count, 4);
+  });
+
+  // A programme spanning both repositories is one heading, not two blocks
+  // under two repository names — which is the whole reason the grouping moved.
+  it('keeps a programme whole across repositories', () => {
+    const projects = projectsFixture({
+      plans: [
+        planRecord({ repo: 'memoro', programme: 'msr-core', project: 'home-on-msr', status: 'ready', title: 'a' }),
+        planRecord({ repo: 'memoro-cli', programme: 'msr-core', project: 'msr-cli-bits', status: 'ready', title: 'b' }),
+      ],
+    });
+    assert.deepEqual(projects.programmes.map((group) => group.programme), ['msr-core']);
+    assert.deepEqual(projects.programmes[0].repos, ['memoro', 'memoro-cli']);
+  });
+
+  // The room `mc plan <programme>` fills. A programme with none is drawn all
+  // the same: that is a programme nobody is thinking about right now.
+  it('puts a planning session on its programme, and says when there is none', () => {
+    const projects = projectsFixture({ planning: { mc: { pid: 7, age_seconds: 600 } } });
+    const byName = Object.fromEntries(projects.programmes.map((g) => [g.programme, g]));
+    assert.equal(byName.mc.planning.pid, 7);
+    assert.equal(byName['assistant-avatar'].planning, null);
+    assert.equal(projects.planning, 1);
+  });
+
+  // A programme that exists only as an open planning session has no project to
+  // be found by, and is the one piece of work the page could otherwise not show.
+  it('draws a programme that is only a planning session, or only a directory on main', () => {
+    const projects = projectsFixture({
+      plans: [],
+      planning: { 'brand-new': { pid: 7, age_seconds: 60 } },
+      programmes: ['archived-programme'],
+    });
+    assert.deepEqual(projects.programmes.map((g) => g.programme), ['archived-programme', 'brand-new']);
+    assert.deepEqual(projects.programmes.map((g) => g.projects.length), [0, 0]);
+  });
+
+  // The mark means the runner, and only the runner. It used to mean a live
+  // tmux area, which made one mark answer two questions.
+  it('marks a project the runner has a step in flight on, and no other', () => {
+    const projects = projectsFixture({ running: ['mc-ui'], live: ['docx-editor'] });
+    const byName = Object.fromEntries(flat(projects).map((p) => [p.name, p]));
+    assert.equal(byName['mc-ui'].running, true);
+    assert.equal(byName['docx-editor'].running, false);
+    assert.equal(projects.running, 1);
   });
 
   it('carries the plan state, how far it has got, its PR and its last step', () => {
@@ -386,7 +450,7 @@ describe('PROJECTS', () => {
   // again, so the page draws a few and counts the rest.
   it('draws the first few orphans and counts the others', () => {
     const many = Array.from({ length: 20 }, (_, n) => ({ name: `old-${String(n).padStart(2, '0')}`, mtime_ms: 1000 - n }));
-    const projects = projectsSection({ plans: [], areas: many, shown: 3 });
+    const projects = programmesSection({ plans: [], areas: many, shown: 3 });
     assert.deepEqual(projects.unplanned.shown.map((area) => area.name), ['old-00', 'old-01', 'old-02']);
     assert.equal(projects.unplanned.more, 17);
     assert.equal(projects.unplanned.count, 20);
@@ -397,7 +461,7 @@ describe('PROJECTS', () => {
   it('asks git about the orphans it draws, and no others', () => {
     const asked = [];
     const many = Array.from({ length: 20 }, (_, n) => ({ name: `old-${String(n).padStart(2, '0')}`, mtime_ms: 1000 - n }));
-    projectsSection({ plans: [], areas: many, shown: 3, detail: (name) => { asked.push(name); return {}; } });
+    programmesSection({ plans: [], areas: many, shown: 3, detail: (name) => { asked.push(name); return {}; } });
     assert.deepEqual(asked, ['old-00', 'old-01', 'old-02']);
   });
 
@@ -408,16 +472,16 @@ describe('PROJECTS', () => {
   });
 
   it('names the repository an orphan workarea holds', () => {
-    const projects = projectsSection({ areas: [{ name: 'msr-track-1', mtime_ms: 1, repos: ['memoro'] }], plans: [] });
+    const projects = programmesSection({ areas: [{ name: 'msr-track-1', mtime_ms: 1, repos: ['memoro'] }], plans: [] });
     assert.equal(projects.unplanned.shown[0].repo, 'memoro');
   });
 
   it('says a plan still on the old markdown file is one, rather than a fraction of nothing', () => {
-    const projects = projectsSection({
+    const projects = programmesSection({
       plans: [{ repo: 'memoro', programme: 'mc', project: 'old', legacy: true, plan: null, status: 'ready', next: 'x' }],
       areas: [],
     });
-    const [project] = projects.repos[0].projects;
+    const [project] = projects.programmes[0].projects;
     assert.equal(project.steps, null);
     assert.equal(project.legacy, true);
   });
@@ -430,7 +494,7 @@ function pageData(over = {}) {
     sessions: sessionsSection({ now: NOW, alive: () => false }),
     queue: queueSection({ queue: [], plans: [] }),
     intake: intakeSection({ digest: null, proposals: [], now: NOW }),
-    projects: projectsSection({ areas: [], plans: [] }),
+    programmes: programmesSection({ areas: [], plans: [] }),
     caches: { fresh: false, plans: [], prs: { fetched: null, age_seconds: null, count: 0 } },
     notes: [],
     ...over,
@@ -469,7 +533,7 @@ const DATA = pageData({
     proposals: ['a.md'],
     now: NOW,
   }),
-  projects: projectsSection({
+  programmes: programmesSection({
     plans: PLANS,
     areas: [{ name: 'mc-ui', mtime_ms: Date.parse('2026-08-29T11:50:00Z') }, { name: 'ui-fixes', mtime_ms: 0 }],
     rows: ROWS,
@@ -484,7 +548,7 @@ const DATA = pageData({
 describe('the page', () => {
   it('prints the four sections in order, with the counts and the verb that expands each', () => {
     const text = renderPage(DATA, { columns: 120, version: '0.7.11', now: NOW });
-    const at = ['RUNNER', 'HELPER', 'BRIEF', 'QUEUE', 'INTAKE', 'PROJECTS', 'WORK'].map((head) => text.indexOf(`  ${head}`));
+    const at = ['RUNNER', 'HELPER', 'BRIEF', 'QUEUE', 'INTAKE', 'PROGRAMMES', 'WORK'].map((head) => text.indexOf(`  ${head}`));
     assert.ok(at.every((index, n) => index >= 0 && (n === 0 || index > at[n - 1])), text);
     assert.match(text, /MEMORO·CLI {2}0\.7\.11/u);
     assert.match(text, /2 of 3 queued/u);
@@ -499,9 +563,10 @@ describe('the page', () => {
     assert.match(text, /skipped 1 \(done 1\)/u);
     assert.doesNotMatch(text, /DECISIONS/u);
     assert.match(text, /INTAKE {2}2026-08-29 \(60 min old\) · 1 new error \(1 loud\) · 1 proposal\s+mc helper --intake/u);
-    assert.match(text, /PROJECTS {2}4 in 2 repos {2}ready 2 · blocked 1 · done 1\s+mc status <name>/u);
-    assert.match(text, /^ {2}memoro 2$/mu, 'the repository is a heading of its own');
-    assert.match(text, / {4}4 · mc\/mc-ui\s+ready\s+0\/1\s+Step 1, The page — done when the step\s?…?\s+#440/u);
+    assert.match(text, /PROGRAMMES {2}3 programmes · 4 projects {2}ready 2 · blocked 1 · done 1\s+p {2}plan a programme/u);
+    assert.match(text, /^ {2}docx-editing-surface\s+·\s{2}no plan session$/mu, 'the programme is a heading of its own');
+    assert.match(text, /^ {4}2 · docx-editor\s+memoro\s+ready/mu, 'the repository is a column on the row');
+    assert.match(text, / {4}4 · mc-ui\s+memoro-cli\s+ready\s+0\/1\s+Step 1, The page — done when the step[^|]*#440/u);
     assert.match(text, /3 of them have no workarea yet/u);
     assert.match(text, /1 workarea with no project on main — nothing removes them/u);
     assert.match(text, / {4}5 · ui-fixes\s+—\s+no project on main/u);
@@ -542,8 +607,8 @@ describe('the page', () => {
     const code = await page(['--json'], { collect: async () => DATA, stdout: { write: (s) => { out += s; } } });
     assert.equal(code, 0);
     const parsed = JSON.parse(out);
-    assert.deepEqual(Object.keys(parsed), ['runner', 'sessions', 'queue', 'intake', 'projects', 'caches', 'notes']);
-    assert.equal(parsed.projects.repos[0].projects[0].name, 'avatar-self-serve');
+    assert.deepEqual(Object.keys(parsed), ['runner', 'sessions', 'queue', 'intake', 'programmes', 'caches', 'notes']);
+    assert.equal(parsed.programmes.programmes[0].projects[0].name, 'avatar-self-serve');
     assert.equal(parsed.queue.runnable, 2);
     // Rendering the parsed JSON gives the same page: the two cannot drift.
     assert.equal(renderPage(parsed, { columns: 100, now: NOW }), renderPage(DATA, { columns: 100, now: NOW }));
@@ -603,13 +668,13 @@ describe('collectPage', () => {
     assert.equal(data.intake.new_errors, 1);
     assert.deepEqual(data.intake.loud_lines, ['`abc` — 41x 500 — loud']);
     assert.equal(data.intake.proposals, 1);
-    assert.deepEqual(data.projects.repos.flatMap((g) => g.projects).map((p) => p.name), ['avatar-self-serve', 'docx-editor', 'mc-run', 'mc-ui']);
-    assert.equal(data.projects.repos.flatMap((g) => g.projects).find((p) => p.name === 'mc-ui').pr, 440);
-    assert.equal(data.projects.no_workarea, 2);
+    assert.deepEqual(data.programmes.programmes.flatMap((g) => g.projects).map((p) => p.name), ['avatar-self-serve', 'docx-editor', 'mc-run', 'mc-ui']);
+    assert.equal(data.programmes.programmes.flatMap((g) => g.projects).find((p) => p.name === 'mc-ui').pr, 440);
+    assert.equal(data.programmes.no_workarea, 2);
     assert.equal(data.caches.fresh, false);
     assert.equal(data.caches.prs.age_seconds, 7200);
     // The whole page renders from it without throwing.
-    assert.match(renderPage(data, { columns: 100, now: NOW }), /PROJECTS {2}4 in 2 repos/u);
+    assert.match(renderPage(data, { columns: 100, now: NOW }), /PROGRAMMES {2}3 programmes · 4 projects/u);
   });
 
   it('--fresh fetches, asks GitHub and refills the PR cache', async () => {
@@ -640,7 +705,7 @@ describe('collectPage', () => {
     assert.equal(fields, 'number,headRefName,baseRefName,isDraft,title');
     assert.deepEqual(saved, [{ repo: 'memoro-cli', number: 440, headRefName: 'mc-ui', baseRefName: 'main', isDraft: false, title: 'The page' }]);
     assert.equal(data.caches.fresh, true);
-    assert.equal(data.projects.repos.flatMap((g) => g.projects).find((p) => p.name === 'mc-ui').pr, 440);
+    assert.equal(data.programmes.programmes.flatMap((g) => g.projects).find((p) => p.name === 'mc-ui').pr, 440);
   });
 });
 
@@ -704,13 +769,14 @@ describe('the palette', () => {
     'bold+cyan green grey red grey yellow grey', //                INTAKE  2026-08-29 (60 min old) · 1 new error (1 loud) · 1 proposal
     'red bold+white', //                                           !  `abc` — 41x 500 — loud
     '',
-    'bold+cyan grey green grey red grey grey grey', //          PROJECTS  4 in 2 repos  ready 2 · done 1 · blocked 1
-    'bold+cyan dim+grey', //                                       memoro 2
-    'grey grey white red grey grey blue', //                      1 · assistant-avatar/avatar-self-serve  blocked  0/1  …  triage
-    'grey grey white green grey grey green', //                      2 · docx-editing-surface/docx-editor  ready  0/1  …  step
-    'bold+cyan dim+grey', //                                       memoro-cli 2
-    'grey grey white grey grey', //                                  3 · mc/mc-run  done  1/1  nothing
-    'grey grey white green grey cyan', //                            4 · mc/mc-ui  ready  0/1  Step 1, The page — …  #440
+    'bold+cyan grey green grey red grey grey grey', //          PROGRAMMES  3 programmes · 4 projects  ready 2 · done 1 · blocked 1
+    'bold+cyan dim+grey', //                                       assistant-avatar   ·  no plan session
+    'grey grey white dim+grey red grey grey blue', //             1 · avatar-self-serve  memoro  blocked  0/1  …  triage
+    'bold+cyan dim+grey', //                                       docx-editing-surface   ·  no plan session
+    'grey grey white dim+grey green grey grey green', //          2 · docx-editor  memoro  ready  0/1  …  step
+    'bold+cyan dim+grey', //                                       mc   ·  no plan session
+    'grey grey white dim+grey grey grey', //                      3 · mc-run  memoro-cli  done  1/1  nothing
+    'grey grey white dim+grey green grey cyan', //                4 · mc-ui  memoro-cli  ready  0/1  Step 1, …  #440
     'grey', //                                                       3 of them have no workarea yet
     '',
     'grey', //                                                     1 workarea with no project on main — nothing removes them
@@ -765,7 +831,7 @@ describe('the palette', () => {
     });
     assert.equal(code, 0);
     assert.ok(!out.includes(ESC), '--json is bytes for a program, never for an eye');
-    assert.deepEqual(Object.keys(JSON.parse(out)), ['runner', 'sessions', 'queue', 'intake', 'projects', 'caches', 'notes']);
+    assert.deepEqual(Object.keys(JSON.parse(out)), ['runner', 'sessions', 'queue', 'intake', 'programmes', 'caches', 'notes']);
   });
 
   it('gives a step kind one colour wherever a kind is printed', () => {
@@ -783,7 +849,7 @@ describe('the palette', () => {
         queue: {
           depth: 1, runnable: 1, items: [], next: [{ name: 'thing', kind }], more: 0, skipped: { count: 0, reasons: {} },
         },
-        projects: projectsSection({
+        programmes: programmesSection({
           plans: [{ repo: 'memoro-cli', programme: 'mc', project: 'thing', status: 'ready', next: 'go on' }],
           areas: [{ name: 'thing', mtime_ms: 1 }],
           rows: [{ ts: '2026-08-29T10:00:00Z', name: 'thing', kind, pr: '-', note: '' }],
@@ -799,16 +865,17 @@ describe('the palette', () => {
 
   it('gives a plan status one colour wherever a status is printed', () => {
     const plans = [
-      { repo: 'memoro-cli', project: 'a-ready', status: 'ready', next: 'one' },
-      { repo: 'memoro-cli', project: 'b-blocked', status: 'blocked', next: 'two' },
-      { repo: 'memoro-cli', project: 'd-done', status: 'done', next: 'four' },
+      { repo: 'memoro-cli', programme: 'mc', project: 'a-ready', status: 'ready', next: 'one' },
+      { repo: 'memoro-cli', programme: 'mc', project: 'b-blocked', status: 'blocked', next: 'two' },
+      { repo: 'memoro-cli', programme: 'mc', project: 'd-done', status: 'done', next: 'four' },
     ];
     const data = pageData({
-      projects: projectsSection({ plans, areas: plans.map((plan, n) => ({ name: plan.project, mtime_ms: 100 - n })).concat([{ name: 'e-none', mtime_ms: 0 }]) }),
+      programmes: programmesSection({ plans, areas: plans.map((plan, n) => ({ name: plan.project, mtime_ms: 100 - n })).concat([{ name: 'e-none', mtime_ms: 0 }]) }),
     });
     const lines = paintedPage(data);
+    // Index 4: the number, the mark, the name, the repository, then the status.
     for (const [name, tone] of [['a-ready', 'green'], ['b-blocked', 'red'], ['d-done', 'grey']]) {
-      assert.equal(signature(rowWith(lines, name)).split(' ')[3], tone, `${name} is ${tone}`);
+      assert.equal(signature(rowWith(lines, name)).split(' ')[4], tone, `${name} is ${tone}`);
     }
     // A workarea no project explains is grey through and through, and the
     // repository it holds is the dimmest thing on the page.
@@ -880,7 +947,7 @@ describe('the palette', () => {
     assert.ok(/\| anything else \| grey \|/u.test(doc));
     assert.ok(/\| no plan on main \| dim grey \|/u.test(doc));
     assert.deepEqual(signature(rowWith(paintedPage(pageData({
-      projects: projectsSection({
+      programmes: programmesSection({
         plans: [],
         areas: [{ name: 'unplanned', mtime_ms: 1 }],
         rows: [{ ts: '2026-08-29T10:00:00Z', name: 'unplanned', kind: 'rebase', pr: '-', note: '' }],

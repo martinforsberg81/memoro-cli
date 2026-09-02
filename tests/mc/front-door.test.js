@@ -5,7 +5,7 @@
  * The menu reads `/dev/tty` by design, so a subprocess without a terminal
  * never reaches it — which is one of the properties asserted here: no TTY, no
  * prompt, exit 0. The menu itself is driven in process with the reading and
- * the opening handed in, so a number can be shown to open the project PROJECTS
+ * the opening handed in, so a number can be shown to open the project PROGRAMMES
  * gave that number to without a session ever starting.
  */
 import assert from 'node:assert/strict';
@@ -36,7 +36,7 @@ function fixture() {
       // The repositories the page reads plans from. Pointed at an empty
       // directory, so the fixture is the whole world: without it the page
       // reads whatever `~/memoro` happens to hold on the machine running the
-      // test, which was invisible while PROJECTS was a list of workareas.
+      // test, which was invisible while the section was a list of workareas.
       MC_REPOS_HOME: join(root, 'repos'),
       MC_ROLES_DIR: join(root, 'roles'),
       CLAUDE_CONFIG_DIR: join(root, 'claude'),
@@ -54,7 +54,7 @@ describe('bare mc', () => {
     try {
       const result = runMcCli([], fx.env);
       assert.equal(result.status, 0, result.stderr);
-      for (const section of ['RUNNER', 'HELPER', 'BRIEF', 'QUEUE', 'INTAKE', 'PROJECTS', 'WORK']) {
+      for (const section of ['RUNNER', 'HELPER', 'BRIEF', 'QUEUE', 'INTAKE', 'PROGRAMMES', 'WORK']) {
         assert.match(result.stdout, new RegExp(`^\\s+${section}\\b`, 'mu'), `${section} is missing`);
       }
       // The numbers the menu opens, on the rows the menu opens them from.
@@ -69,15 +69,15 @@ describe('bare mc', () => {
       const result = runMcCli(['--json'], fx.env);
       assert.equal(result.status, 0, result.stderr);
       const page = JSON.parse(result.stdout);
-      assert.deepEqual(Object.keys(page), ['runner', 'sessions', 'queue', 'intake', 'projects', 'caches', 'notes']);
+      assert.deepEqual(Object.keys(page), ['runner', 'sessions', 'queue', 'intake', 'programmes', 'caches', 'notes']);
       // No plan on main here, so there are no projects and both folders are
       // under the heading for the ones nothing explains — numbered from 1,
       // because the projects above them are none.
-      assert.deepEqual(page.projects.repos, []);
-      assert.equal(page.projects.count, 0);
-      assert.deepEqual(page.projects.unplanned.shown.map((area) => area.name).sort(), ['alpha', 'beta']);
-      assert.deepEqual(page.projects.unplanned.shown.map((area) => area.number), [1, 2]);
-      assert.equal(page.projects.unplanned.count, 2, 'mc\u2019s own brief/ folder is not a workarea');
+      assert.deepEqual(page.programmes.programmes, []);
+      assert.equal(page.programmes.count, 0);
+      assert.deepEqual(page.programmes.unplanned.shown.map((area) => area.name).sort(), ['alpha', 'beta']);
+      assert.deepEqual(page.programmes.unplanned.shown.map((area) => area.number), [1, 2]);
+      assert.equal(page.programmes.unplanned.count, 2, 'mc\u2019s own brief/ folder is not a workarea');
     } finally { fx.cleanup(); }
   });
 
@@ -88,8 +88,8 @@ describe('bare mc', () => {
       const viaWork = runMcCli(['work'], fx.env);
       assert.equal(viaWork.status, 0, viaWork.stderr);
       assert.deepEqual(
-        JSON.parse(runMcCli(['work', '--json'], fx.env).stdout).projects.unplanned.shown.map((a) => a.name),
-        JSON.parse(runMcCli(['--json'], fx.env).stdout).projects.unplanned.shown.map((a) => a.name),
+        JSON.parse(runMcCli(['work', '--json'], fx.env).stdout).programmes.unplanned.shown.map((a) => a.name),
+        JSON.parse(runMcCli(['--json'], fx.env).stdout).programmes.unplanned.shown.map((a) => a.name),
       );
       assert.equal(bare.stdout.split('\n').length, viaWork.stdout.split('\n').length);
     } finally { fx.cleanup(); }
