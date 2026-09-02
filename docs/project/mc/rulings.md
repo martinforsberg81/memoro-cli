@@ -1,130 +1,18 @@
 # mc: the rulings
 
-Martin's answers to the questions the `mc` programme raised, recorded in the
-repository because they outlive the workarea that asked them.
+Martin's answers to the questions the `mc` programme raised, held here only until
+the code carries them — a ruling whose plan has been built is deleted at that
+plan's close-out, and what it settled then lives in `docs/technical/` and in the
+`project_log.md` row. Keep each entry short: the question in a sentence or two,
+the answer quoted, and the plan that builds it.
 
-Each was raised as a decision file under a `decisions/` directory at the `mc`
-workarea root. That directory is not part of this repository, is not in git, and
-does not survive the workarea being closed — so the answer is quoted here and
-the file is cited by name, never by path. See
+Each was raised in an `mc plan` session or as a decision file under a
+`decisions/` directory at the `mc` workarea root. That directory is not part of
+this repository and does not survive the workarea, so an answer is quoted here
+and a file cited by name, never by path. See
 [`docs/project/README.md`](../README.md) § *Citing a decision*.
 
-Where a plan already builds on a ruling, that plan is named, so a reader can
-check the ruling against the thing rather than against a memory of it.
-
 ---
-
-## 1 · `pm` and `pm-helper` go dormant; `worker` stays
-
-`ruling · 2026-08-26` · raised as `mc-1`, owner `mc-brief`
-
-The runner and `mc brief` replaced the resident PM and pm-helper — the
-investigation §9–13 says so, and the runner had run two nights without them —
-but the code, the role files and the reserved names were all still there, and
-the help text still advertised them. `mc worker <name>` is different: it is a
-surface that carries a role, not a daemon, and it is what Martin would use to
-drive a project himself.
-
-Options: **A** dormant now, deleted when #410 lands · **B** delete now in its own
-PR · **C** leave it advertised.
-
-> **Beslut:** A — vilande (Martin, 2026-08-26). `pm` and `pm-helper` leave the
-> help text and `mc status` and answer "dormant" if typed, `worker` is kept as
-> the surface Martin uses to drive a project himself and gets its role from
-> `canon/roles/`; separately, the whole `mc watch` programme plus all of its
-> sessions is to be removed — `~/.memoro/mc/watch/sessions-seen.json` holds 1197
-> session records untouched since 2026-08-24T19:26Z, alongside `notices.jsonl`
-> and `pm.log`, all debris from the world this ruling makes dormant; #410
-> (`cut-old-surface`) was never coupled to this anyway, since it deletes 17 test
-> files and edits four sources but does not touch `pm.js` or `pm-helper.js`, so
-> its test deletions belong in the test-architecture discussion, where the aim is
-> to clear out old tests that do not concern the new `mc`; if pm/pm-helper ever
-> return it will be in modified form, not as they were.
-
-Three things this settles beyond the question asked: `mc watch` and its 1197
-stored session records go; #410 is **not** a prerequisite, because it never
-touched `pm.js` or `pm-helper.js`; and its test deletions belong to the
-test-architecture discussion rather than to this one.
-
-Built by [`mc-dormant`](mc-dormant/PLAN.md).
-
-## 2 · `mc helper`, and what to take from `/improve`
-
-`ruling · 2026-08-29` · raised as `mc-2`, owner `mc-helper`
-
-memoro already records what is needed — grouped errors in D1 `worker_errors`,
-AI provider failures, nightly outcomes in `operational_events`, deploy age, D1/R2/KV
-health behind the admin routes, and `scripts/admin/survey-errors.mjs`. **Nothing
-read any of it without a human, and nothing alerted.**
-
-Options: **A** `mc helper` per investigation §12.3 — a script writes a daily
-digest, one Sonnet turn writes *proposals*, the runner runs it once a day, no
-resident · **B** the admin UI alone · **C** an external alerting service first.
-
-> **Beslut:** A (Martin, 2026-08-29) — sätt upp `mc helper` med intake enligt
-> planen. Om `/improve`, utvärderat 2026-08-29: `/improve`
-> (`~/memoro/.claude/commands/improve.md`) är en interaktiv TODO-genomgång —
-> `npm run improve:sync` (`scripts/sync-todo.mjs`) hämtar `GET
-> /admin/analysis` (JSON: fel + användarfeedback, prioriterade
-> critical/high/medium/low, med fingerprint-referenser och berörda filer;
-> `--run` kör serverns LLM-analys först) och skriver in dem i
-> sentinel-regioner i `docs/TODO.md` (1511 rader, senast synkad 2026-08-26).
-> Utvärdering: **maskinen bakom är bra och ska återanvändas, ytan ska inte.**
-> Helperns `--collect` läser `GET /admin/analysis` direkt (samma token-läsning
-> som `sync-todo.mjs`: `--token`, `ADMIN_TOKEN`, `.dev.vars`) och lägger
-> analysposterna i digesten bredvid råfelen från `survey-errors.mjs`, hälsan
-> och operations-status; `--run`-analysen körs på serverns egen cadence, inte
-> av helpern varje dygn (den är en LLM-körning). `/improve`-kommandot och
-> TODO.md-sentinelerna används inte: de gör en människa i en terminal till
-> kön, kräver ett repo-commit per synk, och förslag hör hemma i
-> `~/mc/intake/proposals/` där `mc brief` ser dem. Steg 1 i planen uppdateras
-> med källan `/admin/analysis`; `sync-todo.mjs` avvecklas i ett senare steg
-> när helpern har gått en vecka (utredningen §9: "två system som gör samma sak
-> — den ena bör avvecklas").
-
-The `/improve` half in English, since it is the part a future session acts on —
-**the machinery behind it is good and should be reused; the surface should not.**
-
-- `mc helper --collect` reads `GET /admin/analysis` directly, with the same token
-  resolution `sync-todo.mjs` uses (`--token`, `ADMIN_TOKEN`, `.dev.vars`), and
-  puts the analysis entries in the digest beside the raw errors from
-  `survey-errors.mjs`, the health and the operations status.
-- The `--run` analysis stays on the server's own cadence — it is an LLM run, and
-  the helper does not pay for it daily.
-- The `/improve` command and the `docs/TODO.md` sentinel regions are **not**
-  used: they make a human in a terminal into the queue, cost a repository commit
-  per sync, and proposals belong in `~/mc/intake/proposals/` where `mc brief`
-  sees them.
-- `sync-todo.mjs` is retired in a later step, once the helper has run a week —
-  investigation §9, *"two systems doing the same thing; one should go."*
-
-Built by [`mc-helper`](mc-helper/PLAN.md).
-
-## 3 · Bare `mc` is the page, and the surfaces are two
-
-`ruling · 2026-08-29` · raised as `mc-3`, owner `mc-ui`
-
-Measured 2026-08-29: bare `mc` routed to the V1 sessions table and printed one
-row — a session nobody had opened since June — in 0.10 s, saying nothing about
-the runner, the queue or the work.
-
-> **Beslut:** A, sharpened (Martin, 2026-08-29, decided in session — not sent
-> on). Two surfaces and no more: **`mc`** is the page followed, at a TTY, by the
-> menu `mc work` has today (a number or a name opens the workarea, `n` starts
-> one, `b` = `mc brief`, `p <name>` = `mc plan`, `s <name>` = `mc status <name>`,
-> `w` = watch, `q`); without a TTY, or with `--json`, it prints and exits.
-> **`mc --watch [seconds]`** is the same page redrawn until ctrl-c, no prompt.
-> Everything else that lists goes in the same project, not deferred to #410: bare
-> `mc work` becomes `mc`; `mc list`, bare `mc status`, `mc status
-> --sessions|--watch|--wait` and the old board (`status-board.js`,
-> `status-render.js`'s board, `work-status.js`) are removed; `mc status <name>`
-> stays as the one-project detail (a detail, not a list); `mc work <name> …` and
-> its verbs stay. The PROJECTS section becomes WORK: one numbered row per
-> workarea with the plan's status and `next`, and one count line for projects on
-> main without a workarea. The plan `docs/project/mc/mc-ui/PLAN.md` is `ready`
-> with this design written in; the runner executes it.
-
-Built by [`mc-ui`](mc-ui/PLAN.md).
 
 ## 4 · `mc test` is one measurement with two runs
 
@@ -232,79 +120,35 @@ to carry the age of.
   cap is one line and addresses the cause; deleting 22 test files addresses the
   symptom.
 
-## 5 · An open pull request stops its project; no session repairs one
+## 5 · An open pull request stops its project
 
-`ruling · 2026-09-02` · raised and answered in the `mc plan` session for
-`runner-open-prs`; no decision file was written
+`ruling · 2026-09-02`
 
-`mc run` looks in two places — `origin/main` for the queue (`run.js:807`) and
-the worktree for the plan it acts on (`run.js:237`) — and asks GitHub about pull
-requests once, *after* the session (`run.js:761`). A step whose work is sitting
-in an open pull request is therefore still `ready` everywhere the runner reads,
-and on 2026-09-02T04:33 a 120-minute Opus session started to rebuild step 4 of
-`action-window` while that step's work was open as #11241. The same blindness
-let msr-track-3 stack: #11249 left open at 12:27, #11250 opened on top of it and
-squash-merged at 13:00 into `msr-track-3-capture-command`, logged
-`success,merged`, `main` receiving nothing.
+The runner reads `origin/main` and the worktree and asks GitHub only after the
+session, so a step whose work is in an open pull request is still `ready`
+everywhere it looks. Proposed: a short session that repairs such a pull request.
 
-The proposal was a short `land` session that would repair a pull request the
-runner had left open.
+> **Beslut:** "Vi ska absolut inte ha en separat session; då kan vi lika gärna
+> utöka behörigheter för runner." — and for the one case that is not
+> deterministic, a session that changed a field it may not touch: "Projektet
+> stannar tills du tittat." (Martin, 2026-09-02)
 
-> **Beslut:** "Inget av alternativen går att använda. Låt oss fundera på vilka
-> olika scenarion det kan vara för en PR. När kan de inte landas? Vad bör hända
-> då? Fundera igenom olika scenarion. Vi ska absolut inte ha en separat session;
-> då kan vi lika gärna utöka behörigheter för runner." (Martin, 2026-09-02)
+Also ruled: only `mc merge` may be used.
 
-Seven scenarios were then enumerated against the code and `runs.tsv`, and six of
-them are deterministic: a base that is not `main`, a stack of the runner's own
-making, a malformed but permitted plan edit, a branch that has already landed and
-cannot be pushed to, a session that timed out with commits and no pull request,
-and a plan on main that does not parse. Only one needs a person — a session that
-changed a field it may not touch — and on that:
+## 6 · A step's learning lives on the step
 
-> **Beslut:** "Projektet stannar tills du tittat" — the pull request stays open
-> and the project starts nothing more until it is merged, closed or fixed by
-> Martin. The runner never rewrites such a plan file on the session's behalf.
-> (Martin, 2026-09-02)
+`ruling · 2026-09-02`
 
-`reconcile` is untouched: it already exists and resolving a merge conflict is the
-right job for a session.
-
-Built by [`runner-open-prs`](runner-open-prs/PLAN.json).
-
-## 6 · A step's learning lives on the step, as `steps[i].learned`
-
-`ruling · 2026-09-02` · raised and answered in the same session; no decision
-file was written
-
-Five of seven step runs on 2026-09-02 ended `plan-trespass`, and three of them
-were not trespasses: `what_the_code_taught_us[0].body: at least one paragraph`
-(`email-window-layout`), `what_the_code_taught_us[0]: must be an object`
-(`inbox-finish`), and the same fault on `new-user`, whose plan has therefore sat
-unreadable on `origin/main` while the runner printed a skip line nobody reads.
-Prose in a schema-validated file, where the wrong shape invalidates the whole
-plan, is prose in the wrong place. The offered alternatives were a `NOTES.md`
-outside the schema, or the same field flattened to an array of strings.
+Three of five `plan-trespass` runs on 2026-09-02 were malformed
+`what_the_code_taught_us` entries, not trespasses; `new-user`'s plan is
+unreadable on main for the same reason.
 
 > **Beslut:** "Flytta in i steget: `steps[i].learned`" (Martin, 2026-09-02)
 
-The top-level `what_the_code_taught_us` goes. A session writes `learned` on its
-own step as an array of paragraphs, which puts everything a step session may
-touch inside `steps[index]` — `status`, `pr`, `learned` — so `unauthorisedChanges`
-becomes a comparison of one index rather than of a shared field, and a lesson
-carries the provenance of the step that found it. 37 plans on memoro's main and
-one here carry the old key and are migrated by script.
-
-Built by [`runner-open-prs`](runner-open-prs/PLAN.json).
+Both built by [`runner-open-prs`](runner-open-prs/PLAN.json), and both leave this
+file when it lands.
 
 ## What is still open
 
-**Should the runner's own merge run the gate?** `mergePr` (`run.js:290`)
-squash-merges through `gh pr merge` and waits only for `mergeable`, so a step
-lands without the gate `mc merge` exists to be — and `repo-merge.js`'s own header
-says there is no way to merge a red gate. The two statements cannot both be true.
-Named as out of scope by [`runner-open-prs`](runner-open-prs/PLAN.json) so it is
-not lost; it needs a project of its own.
-
-Otherwise nothing. The eight open questions across `~/mc` on 2026-08-29 all
-belong to memoro's programmes, not to `mc`.
+Nothing. The gate question — whether the runner's own merge runs one — was
+answered by ruling 5: only `mc merge`.
