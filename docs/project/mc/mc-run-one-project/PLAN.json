@@ -97,7 +97,7 @@
         "The filter must be re-applied after a merged step, not computed once for the round. `runLane` re-reads with `queue({ only: repo })` when it stays on a project; a plan that came good in that window should not have to wait for the next round.",
         "Test it in `tests/mc/run.test.js` with the fixture shape already there: a lane of one `ready` project and several stopped ones, asserting on `f.calls` that git was asked about the ready one's worktree and about no other."
       ],
-      "pr": null,
+      "pr": 529,
       "blocked_by": null
     },
     {
