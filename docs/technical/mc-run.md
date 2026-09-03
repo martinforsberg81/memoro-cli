@@ -372,9 +372,16 @@ codex's workspace-write sandbox: no network, so no `git push` and no `gh pr
 create`, and no writes outside the working directory — which takes the commit
 too, because a workarea's `.git` is a file pointing into the main checkout's
 `.git/worktrees/<name>`. A codex step under it could never reach the last
-sentence of its own prompt. The claude lane has had `--permission-mode auto`
-all along: **the workarea is the boundary the runner trusts**, not a sandbox
-inside it, and both tools are given the same.
+sentence of its own prompt. The claude lane is `--permission-mode acceptEdits`
+— it was `auto` until 2026-09-03, and auto routed every Bash call through a
+classifier and told the session to work through Bash rather than the native
+tools: over 59 step sessions that was 5 598 Bash calls against 255
+`Read`/`Grep`/`Edit`/`Write`, most of them a screen of a file at a time, and
+about half of every step's turns (`docs/project/mc/step-parallelism/measurements.md`).
+Either way **the workarea is the boundary the runner trusts**, not a sandbox
+inside it, and both tools are given the same. The session's Bash also gets a
+ten-minute ceiling (`BASH_DEFAULT_TIMEOUT_MS`), so a suite run is one call
+rather than a background job polled in two-minute `sleep` loops.
 
 ### The merge
 
@@ -484,8 +491,32 @@ behaves exactly as it did before — it does not even log the word `lanes`.
   prefixed by project name, so two lanes writing at once interleave by line,
   never within one.
 
-Two lanes, not N: a third repository would be a third lane, but nothing ever
-makes two lanes inside one repository — they would race for main.
+**Since 2026-09-03 each lane runs its own rounds.** Until then the two lanes
+ran under one `Promise.all` and a round ended when both had: memoro-cli's lane
+sat idle for hours while memoro's walked thirty names, and a memoro-cli step
+that became ready in that time waited for a round boundary nobody needed. Now
+the unattended loop (`runLoop`, `rounds === 0`) runs one loop per lane, each
+calling `round({ only: repo })` and sleeping on its own clock; the chores a
+shared round did around its lanes — the helper, `tidyQueue`, the unreadable
+plans, archiving, closing workareas — run in `chores()` in a loop beside them,
+from the whole queue. `--rounds N` and `--once` keep the shared round, for a
+person watching one.
+
+**And a repository may have more than one — `mc run lanes <n>`.** The count
+lives in `~/.memoro/mc/lanes.json` (`lane-count.js`), 1 to 8, default 1, read
+once at start; a running runner takes a new count on `mc run --update`. With
+n above one, n loops run on each repository and each takes every nth name of
+that repository's queue from its own index (`round({ lane, count })`), so two
+never hold one project and Martin's order still holds within each. Each has a
+current file of its own — the first keeps `current-<repo>.json`, the rest are
+`current-<repo>-<k>.json`, and the page reads them by name. What they share
+is the repository's main, and that is where two steps meet: **a landing that
+finds the gate lock or the repository lease held waits for it** — `landPr`
+asks the merge round again every 30 s for up to 45 minutes — instead of
+logging `left open` and parking the project behind its own pull request,
+which is what a refused round did until 2026-09-03. The lock and the lease
+themselves still refuse: one suite at a time is the guarantee, and it is the
+caller that learnt to wait.
 
 ### Why the session is spawned, not `spawnSync`
 
