@@ -19,6 +19,11 @@ between — if you cannot name one thing to do, the question is not ready, so
 say that and say what you would go and find out. A question that reading the
 code would settle is not his to answer.
 
+A proposal's life ends with the decision. Dropped, the file goes now. Taken, it
+goes when the project is created, deleted by the session that writes the
+`PLAN.json` — so anything in it the plan will need has to be in the plan first.
+`~/mc/proposals/` holds what nobody has decided yet and only that.
+
 The tidying leaves two lists. *Archived without a note* asks whether a note
 under `docs/technical/` is worth writing, and which project should write it —
 never this session. *Workareas with no project on main* asks for a plan or for

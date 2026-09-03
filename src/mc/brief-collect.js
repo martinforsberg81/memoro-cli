@@ -378,8 +378,9 @@ export function renderBrief({
   if (!proposals.length) out.push('_none in ~/mc/proposals/_');
   else {
     for (const p of proposals) out.push(`- \`${p.file}\``);
-    out.push('', 'Open the ones worth opening. Each is a reading, not work yet: queue it in '
-      + '`~/mc/queue.md` and delete the file, or delete the file.');
+    out.push('', 'Open the ones worth opening. Each is a reading, not work yet: it becomes a '
+      + 'project — a `PLAN.json` on main, then its name in `~/mc/queue.md` — or it is dropped. '
+      + 'The file goes either way, at the moment that is decided.');
   }
   out.push('');
 

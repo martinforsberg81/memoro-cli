@@ -1,0 +1,114 @@
+{
+  "schema": "mc-plan",
+  "version": 1,
+  "goal": [
+    "The runner and the digest that reports it say what is actually true. A failing condition in `mc helper --collect` fires because it is the case and not because a field was never computed; two runners cannot start the same step in the same worktree; the only supervisor mc documents is the one it has; and a runner that merges a change to its own code hands over to it instead of judging the next step with the code it just replaced.",
+    "Four faults, each measured and each with its fix already named a few lines from the fault. They are one project because they are one kind of defect — mc reporting or acting on state it never actually read — and because three of the four are single-digit line changes whose cost is entirely in the reading that has already been done."
+  ],
+  "contract": [
+    "**Every step is a repair, not a redesign.** Each of the four has a named fix in the source it touches. A step that finds the fix is wrong says so and stops; a step that finds a larger design underneath it books that finding in `comments` and still ships the repair.",
+    "**A test per repair, and each one fails before the fix.** Three of these four are faults that shipped with green suites: the assertion that would have caught it is part of the work, not a follow-up.",
+    "**`mc run --update` stays a human order.** Step 4 adds one automatic writer of `runner/UPDATE` for the case where the runner merged mc's own code. It does not make the runner update on its own for any other reason, and it does not change what `--update` means.",
+    "Nothing merges to main without Martin."
+  ],
+  "out_of_scope": [
+    "**A per-workarea lock.** Step 2 makes `runner.json` a claim that is checked. Two lanes in one workarea is a different problem and did not happen; the fault was two runners.",
+    "**Why a second runner was started on 2026-09-02.** `runner.log` shows no `--update` handover before the `19:13:11Z runner start`, so it was started by hand or by something outside mc. Worth knowing, and the guard in step 2 holds either way.",
+    "**Making the digest quieter in general.** Step 1 fixes one condition that is wrong. The `DEFAULT_LIMIT = 50` crowding, and which fingerprints deserve `!`, are not this project's.",
+    "**The `reconcile` kind, `mc plan`'s lifecycle, and the rest of the waiting proposals.** They are their own projects."
+  ],
+  "success_criteria": [
+    {
+      "met": false,
+      "criterion": "`gate-round-lease-held` fires only when a died round's lease really was never reaped.",
+      "check": "A test in `tests/mc/helper-cli-collect.test.js` that runs a died round with a matching `reap` line in the lease fixture through `collect()`/`cliRows()` — not through a hand-built object — and asserts `gate-round-lease-held` is absent while `gate-round-died` is present. It fails on the code as it stands today."
+    },
+    {
+      "met": false,
+      "criterion": "A second `mc run` refuses to start while a first one is alive, and says which pid holds it.",
+      "check": "With a runner running, a second `mc run` exits non-zero and names the live pid; `mc run --update`'s handover still starts its successor with no refusal, asserted in `tests/mc/` against the handover path that clears `runner.json` before starting the new runner."
+    },
+    {
+      "met": false,
+      "criterion": "The only supervisor mc documents is `mc run --update`.",
+      "check": "`grep -rn runner-loop ~/memoro-cli ~/mc` returns nothing, and `docs/technical/mc-run.md` sends a reader from where that section stood to `mc run --update`. The runner comes up and completes a round after the change."
+    },
+    {
+      "met": false,
+      "criterion": "A merge round that lands a change to mc's own code leaves the runner running that code by the next round.",
+      "check": "A test that runs a round whose landing reports a merged file under `src/mc/` and asserts `runner/UPDATE` exists afterwards, and one whose landing touches neither `src/mc/` nor `canon/` and asserts it does not. Then, on this machine: land a `src/mc/` change through the runner and read `runner.log` for the handover line in the round after it."
+    }
+  ],
+  "documents": [
+    {
+      "label": "The runner, and what `--update` is for",
+      "path": "../../../technical/mc-run.md"
+    },
+    {
+      "label": "The digest and its failing conditions",
+      "path": "../../../technical/mc-helper.md"
+    }
+  ],
+  "steps": [
+    {
+      "title": "`gate-round-lease-held` says what it means",
+      "status": "ready",
+      "done_when": "`cliFailing` raises `gate-round-lease-held` only for a died round with no `reap` line for its pid, and a test drives that through `collect()`/`cliRows()` with a real lease fixture rather than by injecting `reaped`.",
+      "instruction": [
+        "The fault, measured 2026-09-01 and unchanged today. `src/mc/helper-cli-collect.js:129` builds the open rounds as `unfinishedRounds(rounds).filter((round) => inWindow(round.at) && round.verdict === 'died')`. `unfinishedRounds` (`src/mc/repo-round-log.js`) only ever attaches `verdict` — `running` or `died`, from whether the pid is alive — so no object in `open` has a `reaped` field at all. `cliFailing` (`helper-cli-collect.js:194`) then does `open.filter((round) => !round.reaped)`, which is true for every died round unconditionally. `gate-round-lease-held` is therefore a synonym for `gate-round-died` and fires whether the reaper cleaned up in two minutes or the lease is still stuck an hour later.",
+        "It has already cried wolf twice with the evidence to prove it. `errors-memoro-cli-2026-09-01.md` raised `gate-round-lease-held (2)` for memoro #11177 and #11188 and said of both **\"its lease was never reaped\"**. `~/.memoro/mc/repo-leases/leases.log` shows both leases reaped by the machine's own reaper after 124 s and 119 s, with the retry claiming and releasing normally in each case. The rounds did die — `gate-round-died` was right both times — but the stronger claim was wrong both times.",
+        "The join that is missing already exists and is never called from here: `abandoned()` in `src/mc/log-read.js:185` takes `unfinishedRounds(rounds)`, reads the lease log with `readLeaseLog` — already imported at `helper-cli-collect.js:48` for the reaps section — and sets `reaped: leases.some((entry) => entry.verb === 'reap' && entry.pid === round.pid)`. Either call `abandoned()` from where `open` is built, or inline the same `leases.some(...)` check there. Prefer whichever leaves one implementation of the join rather than two; if `abandoned()`'s own `readRounds` call makes it the wrong shape for this caller, say so in `comments` rather than quietly copying the line.",
+        "`renderCliSections` (`helper-cli-collect.js:230`) already renders `round.reaped` correctly — `'lease since reaped'` against `'**its lease was never reaped**'`. It has only ever been fed the wrong value, so it needs no change and its output becomes true as a consequence.",
+        "The test suite does not catch this because it never exercises the real path: `tests/mc/helper-cli-collect.test.js` calls `cliFailing` with `open.map((r) => ({ ...r, reaped: false }))`, injecting by hand the field production never computes, and tests the `reaped: true` case by handing `cliFailing` a hand-built object. Nothing asserts that a round which really was reaped comes out of `collect()` with `reaped: true`. Add that case end to end, with a `reap` line in the lease fixture, and check it goes red against the current code before the fix.",
+        "This is the section of the digest whose whole job is separating *worth waking up for* from *happened once, handled itself*. A condition that fires regardless gets learned as noise, and the day it is real it will read exactly like the two days it was not."
+      ],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "`runner.json` is a claim that is checked",
+      "status": "ready",
+      "done_when": "`runLoop` refuses to start when `runner.json` names a live pid, saying which pid holds it and how to end it, and `mc run --update`'s handover still starts its successor without tripping the refusal.",
+      "instruction": [
+        "What happened, measured 2026-09-02: two runner processes were alive at once — pid 72779 started 06:33:25 (PPID 1) and pid 61846 started 21:13:11 — and each started a headless step session for `runner-open-prs` step 3 in the same worktree, `~/mc/runner-open-prs/memoro-cli`, 100 seconds apart. Both were given the identical prompt. The second session's only safe move was to stand down, because the first was already editing six files in the shared checkout: two agents in one working tree share one `git add -A` and one branch. That is a whole Opus session spent on nothing.",
+        "Three guards exist and none of them is the one needed. `runLoop` calls `runner.markRunner()` (`src/mc/run.js:1303`, the function at `:1260`) as a statement — `writeJson(paths.runner, { pid, started })` — so runner B simply overwrote runner A's `runner.json` and A became invisible to every reader of mc's state. The dirty-worktree check is not a lock: `runStep` skips on `git status --porcelain`, which is asked before the session, and A had written nothing yet at the moment B looked. The `mc-<name>` tmux check does not see runner sessions at all, because the runner's steps are `claude -p` children rather than tmux sessions.",
+        "The liveness test already exists next door and `runLoop` does not call it: `readRunner({ paths, read, alive })` (`src/mc/run-control.js:115`) returns the pid `runner.json` names and whether it is alive. `startRunner` (`:141`) already refuses on exactly this — *\"a runner is already running — pid N\"*, with `mc run stop` and `mc run --update` named as the two ways on — and `requestUpdate` (`:293`) reads it the same way. Give `runLoop` the same refusal before `markRunner()`, in the same shape as the STOP refusal one line above it, and exit non-zero. Reuse `readRunner` rather than re-reading the file: the reason `mc run start` and a bare `mc run` disagreed is that only one of them asked.",
+        "`startRunner` clears a `runner.json` whose pid is gone before starting, and says so. Decide whether `runLoop` should do the same or only refuse when the pid is alive, and write the reason down — a stale file from a killed runner must not become a reason nothing can start.",
+        "The handover is the one path that must keep working. `runLoop` clears `runner.json` before starting the successor precisely so the two never race for the file (`run.js`, the `updateRequested()` branch, with the `handedOver` flag that keeps the `finally` from clearing it). The new runner therefore sees no holder and must not be refused — assert that, because it is the failure this guard could plausibly introduce.",
+        "Where the refusal is written matters for `--once`: `mc run --once` is a person watching one step. Say whether it is subject to the same refusal and why."
+      ],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "Delete the supervisor mc does not run",
+      "status": "ready",
+      "done_when": "`~/mc/bin/runner-loop.sh` is gone, `grep -rn runner-loop` over `~/memoro-cli` and `~/mc` returns nothing, `docs/technical/mc-run.md` sends the reader to `mc run --update` where that section stood, and the runner comes up and completes a round after the change.",
+      "instruction": [
+        "This is a removal, not a feature. `~/mc/bin/runner-loop.sh` (2207 bytes, written 2026-08-29) does from outside what `mc run --update` now does properly from inside: fetch, `merge --ff-only`, `mc run --rounds 1`, sleep, repeat. It was the answer to a real problem — a runner executing from `~/memoro-cli` via the `/opt/homebrew/bin/mc` symlink, with node's module graph cached at process start, kept running old code after merging an improvement to itself; four self-improvement PRs sat merged and unused for two hours on 2026-08-29.",
+        "mc has since grown the fix. `mc run --update` is an order on its own, it writes `~/mc/runner/UPDATE`, and `runLoop` reads it at a round boundary — never mid-session — then fast-forwards mc's checkout and hands over to a fresh process. The process boundary the script was built to provide exists in the product.",
+        "The script is left over, and measurably so: measured 2026-08-31, `pgrep -f runner-loop` found nothing and there was no tmux server on the machine at all; the runner that was up had been started directly as `mc run`. Nothing in `memoro-cli/src/` references it. Its only mention anywhere is `docs/technical/mc-run.md`, a section called *\"What runs beside it\"* that documents the script as mc's supervisor — and names the proposal file this step comes from as its owner. Re-run both checks before deleting; the point of this step is that the answer is still nothing.",
+        "Delete the file, delete that section, and make sure `mc run --update` is documented where the section used to send a reader — as the way the runner picks up a merge of its own code. Deleting a section that names a proposal file takes the pointer with it.",
+        "Deliberately not in scope: making mc detect on its own that its code was merged. Step 4 does exactly one bounded version of that, and it is a different mechanism from a shell loop outside the product."
+      ],
+      "pr": null,
+      "blocked_by": null
+    },
+    {
+      "title": "A runner that merges its own code hands over to it",
+      "status": "ready",
+      "done_when": "A round that lands a pull request whose merged files touch `src/mc/` or `canon/` writes `~/mc/runner/UPDATE` itself, so the existing round-boundary reader fast-forwards and hands over; a landing that touches neither writes nothing. Both cases are asserted in tests, and `mc run --update` is unchanged as a human order.",
+      "instruction": [
+        "The problem, in the shape that made it concrete. On 2026-09-02 `runner-open-prs` step 3 moved `what_the_code_taught_us` into `steps[i].learned` and migrated every plan on both `origin/main`s, including its own. The runner then re-read those plans with the `plan-schema.js` it had loaded at process start — node caches the module graph, and both runners alive that night predated the change — so the migrated plans did not parse, `after.plan` was null, and the run was logged `plan-trespass`: ruling 5 working exactly as written, against a session that did nothing wrong. Nothing was lost but a hand-merge and a false failure row in `runs.tsv`.",
+        "The general shape is what this step is for: a step may change the rules the runner judges it by, the runner is the code being changed, and the process is older than the change. Three fields make it concrete today — the plan schema, `unauthorisedChanges`, and the step prompt — and there will be others.",
+        "The mechanism already exists and has a reader. `runLoop` reads `~/mc/runner/UPDATE` between rounds, with no session in flight, then clears `runner.json`, fast-forwards mc's checkout and hands over to a fresh process. Today the only writer is `requestUpdate` (`src/mc/run-control.js:316`), reached by a person typing `mc run --update`. Add one more writer: after a landing whose merged files touch `src/mc/` or `canon/`, the runner writes the same file. One write of a file that already has a reader — no new mechanism, no new state.",
+        "The file list is the open question this step has to settle, and it is where the reading should go. `landPr` (`src/mc/run.js:368`) goes through `deps.mergeRound`, whose report's `files` are the *test* files the selection ran, not the diff. `landDocsPr` goes through `docs-merge.js`, which asks GitHub for the pull request's own file list (`view(gh, pr, 'number,title,state,isDraft,baseRefName,files')`, then `report.files = (info.files || []).map((f) => f.path)`) and uses it to refuse anything outside `docs/`. Follow that pattern rather than inventing one: read the merged pull request's files from GitHub the way the docs merge already does, or state in `comments` why the gate's report should carry the diff instead. Note that a docs-only merge can also matter here — `canon/` is not under `docs/`, so check what `docs-merge.js` actually admits before assuming which of the two paths can trigger this.",
+        "Bound it tightly. `src/mc/` and `canon/` are the two trees whose contents a running runner has already loaded or will quote into a prompt; a change anywhere else does not need a handover and should not cost one. Write the reason beside the check, because the next person to widen it will widen it by reflex.",
+        "Two things this must not disturb. The handover happens at the round boundary, never mid-session, and the write must not change that. And `mc run --update` stays exactly what it is — a human order, with its own refusals when no runner is running or STOP is already written; this step adds a second writer of the flag, not a second meaning for it.",
+        "It does not save the round that produced the change — the trespass is judged inside the same round — so also say, where a reader of `runs.tsv` would look, that a `plan-trespass` on a step that changed the runner's own rules is worth checking before it is believed."
+      ],
+      "pr": null,
+      "blocked_by": null
+    }
+  ]
+}
