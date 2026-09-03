@@ -18,7 +18,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
-import { cliFailing, cliRows, fingerprintOf, signature, RUNNER_SILENT_HOURS } from '../../src/mc/helper-cli-collect.js';
+import { cliFailing, cliRows, fingerprintOf, renderCliSections, signature, RUNNER_SILENT_HOURS } from '../../src/mc/helper-cli-collect.js';
 import { setLogPath } from '../../src/mc/logger.js';
 
 const NOW = new Date('2026-08-30T12:00:00Z');
@@ -155,25 +155,70 @@ describe('the four sources', () => {
 });
 
 describe('conditions failing now, not counts of things that went wrong', () => {
+  // `reaped` is read from the lease log, never handed in. The version of these
+  // tests that injected it — `out.open.map((r) => ({ ...r, reaped: false }))`
+  // — asserted the renderer's arithmetic over a field production never
+  // computed, and passed for a week while `gate-round-lease-held` was a
+  // synonym for `gate-round-died`. So the fixture below is the lease log, and
+  // the only thing under test is what mc reads out of it.
+  const DIED = { phase: 'start', at: '2026-08-30T09:48:22Z', repo: 'memoro', prs: [11082, 11085], pid: 999_999, run: 'r' };
+  const CLAIM = '2026-08-30T09:48:22.097Z  claim    /Users/m/memoro  holder=icon-assets  errand="merge round"  pid=999999';
+  const REAP = '2026-08-30T09:50:26.412Z  reap     /Users/m/memoro  by=week-focus  was=icon-assets  pid=999999 gone  after=124s  errand="merge round"';
+
   it('a round that died with its lease never reaped is the one that blocks the next round', () => {
     const g = ground();
     try {
-      rounds(g, [{ phase: 'start', at: '2026-08-30T09:48:22Z', repo: 'memoro', prs: [11082, 11085], pid: 999_999, run: 'r' }]);
-      const out = cliRows({ root: g.root, work: g.work, since: SINCE, now: NOW });
+      rounds(g, [DIED]);
+      leases(g, [CLAIM]);
+      const out = collect(g);
       assert.equal(out.open.length, 1);
       assert.equal(out.open[0].verdict, 'died');
-      const failing = cliFailing({ open: out.open.map((r) => ({ ...r, reaped: false })), lastRun: '2026-08-30T11:00:00Z', now: NOW });
+      assert.equal(out.open[0].reaped, false, 'no reap line for that pid — the lease really is still held');
+      const failing = cliFailing({ open: out.open, lastRun: '2026-08-30T11:00:00Z', now: NOW });
       assert.ok(failing.includes('gate-round-lease-held (1)'));
       assert.ok(failing.includes('gate-round-died (1)'));
     } finally { g.cleanup(); }
   });
 
   it('a died round whose lease was taken back is reported, but not as still held', () => {
-    const failing = cliFailing({
-      open: [{ verdict: 'died', reaped: true }], lastRun: '2026-08-30T11:00:00Z', now: NOW,
-    });
-    assert.ok(failing.includes('gate-round-died (1)'));
-    assert.equal(failing.some((f) => f.startsWith('gate-round-lease-held')), false);
+    const g = ground();
+    try {
+      // The 2026-09-01 digest's two rounds, in miniature: they died, and the
+      // machine's own reaper had the lease back inside two minutes. Died was
+      // true of both; still held was true of neither.
+      rounds(g, [DIED]);
+      leases(g, [CLAIM, REAP]);
+      const out = collect(g);
+      assert.equal(out.open.length, 1);
+      assert.equal(out.open[0].reaped, true, 'the reap line names that pid');
+      const failing = cliFailing({ open: out.open, lastRun: '2026-08-30T11:00:00Z', now: NOW });
+      assert.ok(failing.includes('gate-round-died (1)'));
+      assert.equal(failing.some((f) => f.startsWith('gate-round-lease-held')), false,
+        'a lease the reaper already took back is not a condition failing now');
+    } finally { g.cleanup(); }
+  });
+
+  it('a reap for some other pid is not this round\'s reap', () => {
+    const g = ground();
+    try {
+      rounds(g, [DIED]);
+      leases(g, [CLAIM, REAP.replace(/pid=999999/u, 'pid=424242')]);
+      const out = collect(g);
+      assert.equal(out.open[0].reaped, false);
+      assert.ok(cliFailing({ open: out.open, lastRun: '2026-08-30T11:00:00Z', now: NOW })
+        .includes('gate-round-lease-held (1)'));
+    } finally { g.cleanup(); }
+  });
+
+  it('the round that was reaped renders as reaped', () => {
+    const g = ground();
+    try {
+      rounds(g, [DIED]);
+      leases(g, [CLAIM, REAP]);
+      const text = renderCliSections({ cli: collect(g), threshold: 3 }).join('\n');
+      assert.match(text, /lease since reaped/u);
+      assert.equal(/its lease was never reaped/u.test(text), false);
+    } finally { g.cleanup(); }
   });
 
   it('a runner that has been silent too long is itself a failing condition', () => {

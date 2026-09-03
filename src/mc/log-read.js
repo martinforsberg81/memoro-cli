@@ -189,8 +189,28 @@ export function abandoned({ root = mcHome(), alive = isAlive } = {}) {
   return open.map((round) => ({
     ...round,
     lease: leases.filter((entry) => entry.pid === round.pid),
-    reaped: leases.some((entry) => entry.verb === 'reap' && entry.pid === round.pid),
+    reaped: reapedFor(leases, round.pid),
   }));
+}
+
+/**
+ * Did the lease this pid was holding ever get taken back?
+ *
+ * The join is on the pid the round wrote down, because the lease log carries
+ * no run id — the same bridge `storyOf` uses. It is a function of its own
+ * because two callers ask the question: `abandoned()` above, and the digest's
+ * `gate-round-lease-held` condition, which for a week asked it of a field
+ * nothing computed and so answered "still held" for every round that died.
+ * One implementation, or two answers waiting to disagree.
+ *
+ * A round with no pid joins to nothing. `readLeaseLog` writes `pid: null` for
+ * a line that carried none, so without this guard `null === null` would make
+ * "we cannot tell" read as "it was reaped" — the one direction a lease check
+ * must not fail in silently.
+ */
+export function reapedFor(leases, pid) {
+  if (!pid) return false;
+  return leases.some((entry) => entry.verb === 'reap' && entry.pid === pid);
 }
 
 /**

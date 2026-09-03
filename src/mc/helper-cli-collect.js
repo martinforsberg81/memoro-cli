@@ -45,7 +45,7 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { readEvents, readLeaseLog } from './log-read.js';
+import { readEvents, readLeaseLog, reapedFor } from './log-read.js';
 import { mcHome, workRoot } from './paths.js';
 import { readRounds, unfinishedRounds } from './repo-round-log.js';
 
@@ -117,7 +117,25 @@ export function cliRows({ root = mcHome(), work = workRoot(), since, now = new D
     }
   } catch (error) { notes.push(`mc.log: ${error.message}`); }
 
-  // 2. Gate rounds that stopped, and rounds that never ended at all.
+  // 2. Leases reaped: every one is a holder that went away without giving it
+  //    back, which is the same event as (3) seen from the other side and is
+  //    worth counting separately — a reap with no died round means something
+  //    outside a gate round is dying.
+  //
+  //    Read before the rounds and not after them, because whether a died
+  //    round's lease was taken back is part of what that round *is*, and this
+  //    file is the only place that says. It stays one read: the rounds join
+  //    against `leaseLog`, so the answer they get and the reaps counted here
+  //    cannot come apart.
+  let leaseLog = [];
+  let reaps = [];
+  try {
+    leaseLog = readLeaseLog({ root });
+    reaps = leaseLog.filter((entry) => entry.verb === 'reap' && inWindow(entry.at));
+    for (const entry of reaps) bump('lease reaped', `${entry.repo} — holder ${entry.holder} was gone`, entry.at, 'lease');
+  } catch (error) { notes.push(`leases.log: ${error.message}`); }
+
+  // 3. Gate rounds that stopped, and rounds that never ended at all.
   let open = [];
   try {
     const { rounds } = readRounds({ root });
@@ -126,19 +144,17 @@ export function cliRows({ root = mcHome(), work = workRoot(), since, now = new D
       if (round.phase === 'start') continue;
       if (round.stopped_at) bump('round stopped', `${round.repo} at ${round.stopped_at}`, round.at, 'gate');
     }
-    open = unfinishedRounds(rounds).filter((round) => inWindow(round.at) && round.verdict === 'died');
+    open = unfinishedRounds(rounds)
+      .filter((round) => inWindow(round.at) && round.verdict === 'died')
+      // `unfinishedRounds` attaches `verdict` and nothing else, so until this
+      // line no round here had a `reaped` field at all and everything
+      // downstream that asked read `undefined`. The whole lease log is the
+      // right side of the join, not the window-filtered `reaps`: a round that
+      // died just inside the window is often reaped just outside it, and that
+      // reap is no less real for being a minute late.
+      .map((round) => ({ ...round, reaped: reapedFor(leaseLog, round.pid) }));
     for (const round of open) bump('round died', `${round.repo} — started and never ended`, round.at, 'gate');
   } catch (error) { notes.push(`gate-rounds.jsonl: ${error.message}`); }
-
-  // 3. Leases reaped: every one is a holder that went away without giving it
-  //    back, which is the same event as (2) seen from the other side and is
-  //    worth counting separately — a reap with no died round means something
-  //    outside a gate round is dying.
-  let reaps = [];
-  try {
-    reaps = readLeaseLog({ root }).filter((entry) => entry.verb === 'reap' && inWindow(entry.at));
-    for (const entry of reaps) bump('lease reaped', `${entry.repo} — holder ${entry.holder} was gone`, entry.at, 'lease');
-  } catch (error) { notes.push(`leases.log: ${error.message}`); }
 
   // 4. The runner's own steps.
   let lastRun = null;
@@ -190,7 +206,10 @@ export function cliRows({ root = mcHome(), work = workRoot(), since, now = new D
 export function cliFailing({ open = [], lastRun = null, now = new Date(), silentHours = RUNNER_SILENT_HOURS } = {}) {
   const failing = [];
   // A round that died and whose lease was never taken back is the state that
-  // blocks the next round, and the one worth waking up to.
+  // blocks the next round, and the one worth waking up to. `reaped` is the
+  // lease log's answer, joined on the round's pid by `cliRows` — this
+  // condition is only ever as true as what it is handed, and on 2026-09-01 it
+  // was handed a field nothing computed and cried wolf twice.
   const held = open.filter((round) => !round.reaped);
   if (held.length) failing.push(`gate-round-lease-held (${held.length})`);
   if (open.length) failing.push(`gate-round-died (${open.length})`);
