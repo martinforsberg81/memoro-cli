@@ -129,7 +129,7 @@
         "Two things this must not disturb. The handover happens at the round boundary, never mid-session, and the write must not change that. And `mc run --update` stays exactly what it is — a human order, with its own refusals when no runner is running or STOP is already written; this step adds a second writer of the flag, not a second meaning for it.",
         "It does not save the round that produced the change — the trespass is judged inside the same round — so also say, where a reader of `runs.tsv` would look, that a `plan-trespass` on a step that changed the runner's own rules is worth checking before it is believed."
       ],
-      "pr": null,
+      "pr": 556,
       "blocked_by": null,
       "comments": [
         "The writer is `askForUpdate` in `src/mc/run.js`, called from `landPr` the moment a landing reports `merged`, and the predicate is `mcOwnFiles`/`MC_OWN_TREES` in `run-plan.js` where the rest of the rules live. The gate is the only door mc's own code can come through, so it is the only place this had to go: the instruction asked me to check what `docs-merge.js` admits before assuming, and the answer is that `runDocsMerge` refuses on the first path outside `docs/` (`firstNonDoc`), so neither `src/mc/` nor `canon/` can reach `landDocsPr` at all. `canon/` not being under `docs/` turns out to make the docs path irrelevant here rather than a second trigger.",
