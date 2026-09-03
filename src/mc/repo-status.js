@@ -1,6 +1,7 @@
 /**
- * A repository, seen whole: what main is, what is in the air against it, who
- * is standing on it, and whether the installation on this machine is in step.
+ * A repository, seen whole: what main is, what the last full run of its own
+ * suite found on it and since when, what is in the air against it, who is
+ * standing on it, and whether the installation on this machine is in step.
  *
  * The board (`mc status`) answers "what is each piece of work doing". This
  * answers the other question people were assembling by hand out of `git`,
@@ -18,6 +19,7 @@ import { accessSync, constants, realpathSync } from 'node:fs';
 import { basename, delimiter, dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 
+import { nightlyReading } from './nightly-history.js';
 import { mcHome } from './paths.js';
 import { readLease } from './repo-lease.js';
 import { livenessForLeases } from './lease-liveness.js';
@@ -167,7 +169,16 @@ export async function repoView({
       // lease is read to decide whether to start a round right now, and a
       // picture from before somebody claimed it would send two rounds at the
       // same repository. It costs one file read, so it is always current.
-      repos: fromSnapshot.repos.map((repo) => ({ ...repo, lease: readLease(repo.path, { root, now }) })),
+      // The nightly reading is read fresh for the lease's reason and one of
+      // its own: it costs a file read, and it is the answer to "is main red
+      // right now" — a minute-old copy of it in a picture taken before the
+      // night's run finished would be the one section of this page that is
+      // old for no saving at all.
+      repos: fromSnapshot.repos.map((repo) => ({
+        ...repo,
+        lease: readLease(repo.path, { root, now }),
+        nightly: nightlyReading(repo.path, { root }),
+      })),
       unknown: fromSnapshot.unknown,
     }, { env, now });
   }
@@ -260,6 +271,13 @@ async function gatherRepo({ root, worktrees, install, offline }) {
     worktrees: worktrees.sort((a, b) => `${a.area}${a.repo}`.localeCompare(`${b.area}${b.repo}`)),
     deploy: install ? await deployState(root, base, install) : null,
     lease: readLease(root),
+    // What the last full runs of this repository's own suite found, and since
+    // when (`nightly-history.js`). One file read under mc's home: the page
+    // that says what a repository's state is should say whether anything is
+    // standing red on main, and say it whether or not something is wrong —
+    // "last full run 4h ago, all green" is the line that makes the red line
+    // credible when it finally appears.
+    nightly: nightlyReading(root),
   };
 }
 

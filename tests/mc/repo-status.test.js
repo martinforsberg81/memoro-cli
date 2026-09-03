@@ -20,6 +20,7 @@ import {
 } from './_helpers/repo-fixture.js';
 import { runMcCli } from './_helpers/mc-cli.js';
 import { board as workModel } from './_helpers/board.js';
+import { recordNightlyRun } from '../../src/mc/nightly-history.js';
 
 describe('mc repo status — the view', () => {
   it('groups the work model\'s own worktree inspection by repository', async () => {
@@ -181,6 +182,55 @@ describe('mc repo status — the view', () => {
       assert.equal(view.repos.length, 1);
       assert.equal(view.repos[0].name, 'repo');
       assert.deepEqual(view.unknown, []);
+    } finally { fx.cleanup(); }
+  });
+});
+
+/**
+ * What the nightly found, on the page that says what a repository's state is.
+ *
+ * Not behind a verb somebody has to know to type, and not a section that
+ * appears only when something is wrong: "last full run 4h ago, all green" is
+ * the line that makes the red line credible when it finally appears.
+ */
+describe('mc repo status — red, and since when', () => {
+  const run = (fx, at, red, commit) => recordNightlyRun({
+    repo: 'repo', path: fx.dir, started_at: at, duration_ms: 302_300,
+    commit, verdict: red.length ? 'red' : 'green', stopped_at: red.length ? 'red' : null,
+    reason: null, red, tests: 2445,
+  }, { root: fx.mcHome });
+
+  it('names a test red in two runs with the first run that saw it, on the page and in --json', () => {
+    const fx = fixture();
+    addArea(fx, 'alpha', 'alpha');
+    try {
+      // A green run first, so the date below is the day it broke rather than
+      // the edge of the history — which the page words differently, and does.
+      run(fx, '2026-08-31T03:00:00.000Z', [], 'c'.repeat(40));
+      run(fx, '2026-09-01T03:00:00.000Z', ['data-bus event names'], 'a'.repeat(40));
+      run(fx, '2026-09-02T03:00:00.000Z', ['data-bus event names'], 'b'.repeat(40));
+
+      const view = json(runMcCli(['repo', 'status', '--offline', '--json'], fx.env));
+      const { nightly } = view.repos[0];
+      assert.equal(nightly.runs, 3);
+      assert.equal(nightly.measured.commit, 'b'.repeat(40));
+      assert.equal(nightly.red[0].name, 'data-bus event names');
+      assert.equal(nightly.red[0].since, '2026-09-01T03:00:00.000Z');
+
+      const page = runMcCli(['repo', 'status', '--offline'], fx.env);
+      assert.equal(page.status, 0, page.stderr);
+      assert.match(page.stdout, /full run\s+.*1 red of 2,445\s+bbbbbbb/u);
+      assert.match(page.stdout, /red since .* \(2 runs\)\s+data-bus event names/u);
+    } finally { fx.cleanup(); }
+  });
+
+  it('a repository nobody has measured says so rather than nothing', () => {
+    const fx = fixture();
+    addArea(fx, 'alpha', 'alpha');
+    try {
+      const view = json(runMcCli(['repo', 'status', '--offline', '--json'], fx.env));
+      assert.deepEqual(view.repos[0].nightly, { runs: 0, last: null, measured: null, red: [] });
+      assert.match(runMcCli(['repo', 'status', '--offline'], fx.env).stdout, /full run\s+never — mc repo nightly start/u);
     } finally { fx.cleanup(); }
   });
 });

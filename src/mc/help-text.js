@@ -70,12 +70,13 @@ MAINTENANCE
   mc work release <name> [--apply] Remove what git says can go; keep the rest
   mc work discard <name> [--apply] Throw it away — worktrees, branches, and the
                                     conversations, which nothing brings back
-  mc repo status [repo]            One repository seen whole: main, the open
-                                    pull requests and how far behind main each
-                                    one is, the work areas standing on it, and
-                                    whether this machine's installation is in
-                                    step. Without a name, every repository mc
-                                    can see
+  mc repo status [repo]            One repository seen whole: main, what the
+                                    last full run found on it and since when,
+                                    the open pull requests and how far behind
+                                    main each one is, the work areas standing on
+                                    it, and whether this machine's installation
+                                    is in step. Without a name, every repository
+                                    mc can see
   mc repo status --offline         The same without touching the network; the
                                     page says which parts are last-seen
   mc repo status --json            The same, for a session rather than a person
@@ -97,7 +98,8 @@ MAINTENANCE
                                     finds refuses a merge or delays a round
   mc repo nightly stop             Stop it; a round in flight ends with it
   mc repo nightly status [--json]  Whether it is running, how often, and where
-                                    it writes
+                                    it writes. What it found is on mc repo
+                                    status: what is red on main, and since when
   mc repo claim <repo> "<what for>"
                                     Say you are holding a round on it: verify,
                                     merge, deploy. mc refuses a second claim

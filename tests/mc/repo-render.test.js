@@ -185,3 +185,86 @@ describe('the repository view, as a page', () => {
     assert.ok(text.some((line) => line.includes('…')), 'expected a clipped row');
   });
 });
+
+/**
+ * What is red on main, and since when.
+ *
+ * The section is on the page whether or not anything is wrong: a net that is
+ * invisible when everything is fine is a net nobody trusts when it finally
+ * says something. And a run that could not happen must never read as a run
+ * that found nothing.
+ */
+describe('the full run, on the page', () => {
+  const reading = (overrides = {}) => report({
+    nightly: {
+      runs: 2,
+      last: { at: '2026-08-14T08:00:00Z', outcome: 'failed', stopped_at: 'red', reason: null, commit: 'f'.repeat(40), tests: 17_982, duration_ms: 302_300, red: 1 },
+      measured: { at: '2026-08-14T08:00:00Z', outcome: 'failed', stopped_at: 'red', reason: null, commit: 'f'.repeat(40), tests: 17_982, duration_ms: 302_300, red: 1 },
+      red: [{ name: 'data-bus event names', since: '2026-08-12T08:00:00Z', since_commit: 'a'.repeat(40), runs: 3, bounded: false }],
+      ...overrides,
+    },
+  });
+
+  it('says what the last full run found, and when', () => {
+    assert.match(page(reading()), /full run\s+4h ago\s+1 red of 17,982\s+fffffff/u);
+  });
+
+  it('names the longest-standing red test with the date it went red', () => {
+    assert.match(page(reading()), /red since 2d ago \(3 runs\)\s+data-bus event names/u);
+  });
+
+  it('a green run is said out loud — that is the line that makes the red one credible', () => {
+    const text = page(reading({
+      measured: { at: '2026-08-14T08:00:00Z', outcome: 'passed', stopped_at: null, reason: null, commit: 'b'.repeat(40), tests: 2445, duration_ms: 67_400, red: 0 },
+      red: [],
+    }));
+    assert.match(text, /full run\s+4h ago\s+all 2,445 green\s+bbbbbbb/u);
+  });
+
+  it('a first run says so rather than dating a test to the day this shipped', () => {
+    const text = page(reading({
+      red: [{ name: 'data-bus event names', since: '2026-08-14T08:00:00Z', since_commit: 'f'.repeat(40), runs: 1, bounded: true }],
+    }));
+    assert.match(text, /first seen in this run\s+data-bus event names/u);
+    assert.doesNotMatch(text, /red since/u);
+  });
+
+  it('a streak that reaches the oldest run kept says "at least"', () => {
+    const text = page(reading({
+      red: [{ name: 'data-bus event names', since: '2026-08-12T08:00:00Z', since_commit: 'a'.repeat(40), runs: 14, bounded: true }],
+    }));
+    assert.match(text, /red in all 14 runs kept, since at least 2d ago/u);
+  });
+
+  it('a last attempt that measured nothing is its own row, never a green one', () => {
+    const text = page(reading({
+      last: {
+        at: '2026-08-14T11:00:00Z', outcome: 'incomplete', stopped_at: 'busy',
+        reason: 'another gate round is running on this machine (pid 77336) — one at a time',
+        commit: null, tests: null, duration_ms: 9000, red: null,
+      },
+    }));
+    assert.match(text, /last tried 1h ago — busy: another gate round is running/u);
+    // And the measurement it could not replace still stands, still dated.
+    assert.match(text, /4h ago\s+1 red of 17,982/u);
+  });
+
+  it('the rest of the red names are counted, not listed — the detail is --json', () => {
+    const text = page(reading({
+      red: [
+        { name: 'data-bus event names', since: '2026-08-12T08:00:00Z', since_commit: 'a'.repeat(40), runs: 3, bounded: false },
+        { name: 'S3.1 canonical mutation inventory', since: '2026-08-14T08:00:00Z', since_commit: 'f'.repeat(40), runs: 1, bounded: false },
+      ],
+    }));
+    assert.match(text, /data-bus event names\s+\+1 more/u);
+    assert.doesNotMatch(text, /S3\.1/u);
+  });
+
+  it('never run says that, and how to start it', () => {
+    assert.match(page(reading({ runs: 0, last: null, measured: null, red: [] })), /full run\s+never — mc repo nightly start/u);
+  });
+
+  it('a page from a version that had no reading shows no section at all', () => {
+    assert.doesNotMatch(page(report()), /full run/u);
+  });
+});

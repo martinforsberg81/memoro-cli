@@ -429,3 +429,40 @@ Measured 2026-09-03 on this machine: a tick that found a `mc test memoro-cli
 --full` round holding the lock recorded `memoro  skipped  another gate round is
 running on this machine (pid 77336, memoro-cli-1d5e7a04, since …) — one at a
 time` and did not wait.
+
+### Red, and since when
+
+The number that would have prevented #10529 is not "31 tests are red". It is
+"these 31 tests have been red since Tuesday": one run's red list looks exactly
+like a flake, and the same list twice, dated, does not. So every tick appends to
+a bounded history per repository under `~/.memoro/mc/nightly/` — when, which
+commit of the branch, and the failing test *names* — and `mc repo status` reads
+it back:
+
+```
+    full run   4h ago  8 red of 17,982  fc19465
+               red since 2d ago (3 runs)  data-bus event names…  +7 more
+```
+
+- **Since when is the first run of the *consecutive* streak.** A test red on
+  Monday, green on Tuesday and red on Wednesday has been red since Wednesday.
+  The other reading — earliest occurrence anywhere in the history — is identical
+  on every history where nothing ever went green, which is every history there
+  is on the day it ships, so it is asserted directly.
+- **Names only, and never capped.** Not output, not stack traces: a name is
+  enough to say a thing is still red, and more turns a meter into an archive.
+  The names are deliberately not capped the way `gate-rounds.jsonl` caps its
+  own, because a dropped name comes back next run looking like a test that had
+  gone green and broken again. The bound is the number of runs kept — fourteen,
+  two weeks at the default cadence.
+- **A run that measured nothing is transparent, never green.** It neither
+  continues a streak nor breaks one, and it is stored as what it was: the last
+  *attempt* is its own row on the page, above the last *measurement* it could
+  not replace.
+- **When the streak reaches the oldest run kept**, the date is a floor and the
+  page says "since at least"; with one run in the whole history it says "first
+  seen in this run" rather than dating a test to the day this shipped.
+- **Only the scheduled run writes there.** `mc test <repo> --full` typed by a
+  person is the same reading, but it can be asked about a pull request, and red
+  names from a candidate merge tree would make "since when" a sentence about
+  somebody's branch.

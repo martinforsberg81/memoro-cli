@@ -6,9 +6,10 @@
  * untouched when nobody is watching a terminal.
  *
  * One section per fact, in the order a person asks for them: what main is,
- * what is in the air against it, who is standing on it, and what is actually
- * installed here. A section that could not be read says so on its own line —
- * an empty section and an unreachable one must never look alike.
+ * whether anything is standing red on it and since when, what is in the air
+ * against it, who is standing on it, and what is actually installed here. A
+ * section that could not be read says so on its own line — an empty section and
+ * an unreachable one must never look alike.
  */
 import { orphanLine } from './lease-owner.js';
 import { painter, width } from './status-render.js';
@@ -41,6 +42,7 @@ export function renderRepoLines(report, {
   for (const repo of report.repos) {
     lines.push(`  ${c(repo.name, 'bold')}  ${c(repo.path, 'grey')}`);
     lines.push(...section(c, wide, 'main', mainRows(c, repo, now)));
+    lines.push(...section(c, wide, 'full run', nightlyRows(c, repo, now)));
     lines.push(...section(c, wide, 'pull', prRows(c, repo)));
     lines.push(...section(c, wide, 'worktrees', worktreeRows(c, repo)));
     if (repo.deploy) lines.push(...section(c, wide, 'deploy', deployRows(c, repo)));
@@ -152,6 +154,72 @@ function mainRows(c, repo, now) {
   const rows = [parts.filter(Boolean).join('  ')];
   if (main.degraded) rows.push(c(main.degraded, 'yellow'));
   return rows;
+}
+
+/**
+ * What the last full runs of this repository's own suite found, and since when.
+ *
+ * Here rather than behind a verb, and here whether or not anything is wrong. A
+ * net that is invisible when everything is fine is a net nobody trusts when it
+ * finally says something, and "4h ago, all 2,445 green" is the line that makes
+ * the red line credible. Two rows in the ordinary case: what the last
+ * measurement was, and — when something is red — the test that has been red
+ * longest, with the date. The rest is `--json`'s.
+ *
+ * The third row appears only when the last *attempt* measured nothing: a tick
+ * that skipped behind a merge round, a preparation that failed, a round that
+ * died. It is deliberately not merged into the first, because a stopped run
+ * shown as a green one is the false green this whole meter exists to remove.
+ */
+function nightlyRows(c, repo, now) {
+  const state = repo.nightly;
+  // A page from a version that had none, or a snapshot taken by one.
+  if (!state) return [];
+  if (!state.runs) return [c('never — mc repo nightly start', 'grey')];
+
+  const rows = [];
+  const { measured } = state;
+  rows.push(measured
+    ? [
+      c(ago(measured.at, now) || 'just now', 'grey'),
+      measured.red
+        ? c(`${count(measured.red)} red of ${count(measured.tests)}`, 'yellow')
+        : c(`all ${count(measured.tests)} green`, 'green'),
+      measured.commit ? c(measured.commit.slice(0, 7), 'cyan') : '',
+    ].filter(Boolean).join('  ')
+    : c(`${state.runs} run${state.runs === 1 ? '' : 's'}, none of them measured anything`, 'yellow'));
+
+  // Only when it is not the run above: the same run said twice reads as two.
+  if (state.last && state.last.outcome === 'incomplete') {
+    rows.push(`${c(`last tried ${ago(state.last.at, now) || 'just now'} — ${state.last.stopped_at || 'stopped'}`, 'yellow')}`
+      + `${state.last.reason ? c(`: ${state.last.reason}`, 'grey') : ''}`);
+  }
+
+  const oldest = state.red[0];
+  if (oldest) {
+    const more = state.red.length > 1 ? c(`  +${state.red.length - 1} more`, 'grey') : '';
+    rows.push(`${c(sinceLine(oldest, now), 'yellow')}  ${oldest.name}${more}`);
+  }
+  return rows;
+}
+
+/**
+ * How long a test has been red, and how sure the date is.
+ *
+ * `bounded` means the streak reaches the oldest run kept, so the date is a
+ * floor rather than the day it broke — and with one run in the whole history
+ * there is nothing to compare against at all, which is said as that rather
+ * than dated to the day this shipped.
+ */
+function sinceLine(red, now) {
+  if (red.runs === 1 && red.bounded) return 'first seen in this run';
+  const when = ago(red.since, now) || 'just now';
+  if (red.bounded) return `red in all ${red.runs} runs kept, since at least ${when}`;
+  return `red since ${when} (${red.runs} runs)`;
+}
+
+function count(value) {
+  return Number.isFinite(Number(value)) ? Number(value).toLocaleString('en-US') : '?';
 }
 
 function prRows(c, repo) {
